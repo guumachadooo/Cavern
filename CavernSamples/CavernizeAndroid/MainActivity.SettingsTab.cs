@@ -66,7 +66,7 @@ public partial class MainActivity {
         page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
 
         // 1. Spatial 3D Upmixing
-        LinearLayout upmixCard = Card(S["UpmixTitle"], OneUiIconType.Sparkles, OneUiTheme.FunctionalIndigo);
+        LinearLayout upmixCard = Card(S["UpmixTitle"], OneUiIconType.Sparkles, OneUiTheme.Tertiary);
         matrixUpmixSwitch = AddSwitchRow(upmixCard, S["MatrixUpmix"], store.MatrixUpmixing, v => {
             store.MatrixUpmixing = v;
             ReattachPlayerTrack();
@@ -308,7 +308,7 @@ public partial class MainActivity {
         LinearLayout thdCard = Card();
         LinearLayout thdHeader = HRow();
         thdHeader.SetPadding(0, 0, 0, Dp(10));
-        thdHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Sparkles, OneUiTheme.Primary));
+        thdHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Sparkles, OneUiTheme.Tertiary));
         TextView thdTitleTv = SectionTitle(S["TruehddCardTitle"]);
         thdTitleTv.SetPadding(Dp(10), 0, Dp(8), 0);
         thdHeader.AddView(thdTitleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -370,7 +370,7 @@ public partial class MainActivity {
         page.AddView(logCard);
 
         // 7. Language, About & App Version Updater
-        LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.Primary);
+        LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.Secondary);
         OneUiInlineSelector langSelector = new(this, S["LanguageLabel"]);
         string[] langLabels = ["Auto (System)", "Português (Brasil)", "English", "Magyar", "简体中文"];
         string[] langCodes = ["", "pt-BR", "en-US", "hu-HU", "zh-CN"];

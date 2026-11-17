@@ -102,7 +102,8 @@ namespace Cavern.Format.Container {
             if (cue != null) {
                 clusterId = segments[0].GetIndexByPosition(reader, MatroskaTree.Segment_Cluster, cue.Position);
             }
-            if (clusterId == -1) {
+            if (clusterId < 0) {
+                clusterId = 0;
                 while (true) {
                     cluster = GetCluster(clusterId++);
                     if (cluster == null) {

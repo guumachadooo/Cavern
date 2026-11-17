@@ -59,6 +59,9 @@ namespace Cavern.Format.Container.Matroska {
         /// <param name="reader">Matroska stream to read from</param>
         /// <param name="endPosition">Location of the final byte in the stream (exclusive).</param>
         public static MatroskaTree TryCreate(Stream reader, long endPosition) {
+            if (reader.Position >= endPosition) {
+                return null;
+            }
             MatroskaTree result = new MatroskaTree(reader, endPosition, out bool valid);
             return valid ? result : null;
         }
@@ -75,12 +78,16 @@ namespace Cavern.Format.Container.Matroska {
 
             reader.Position = nextTag;
             while (nextTag < end) {
-                MatroskaTree subtree = new MatroskaTree(reader);
+                MatroskaTree subtree = TryCreate(reader, end);
+                if (subtree == null) {
+                    nextTag = end;
+                    return null;
+                }
                 children.Add(subtree);
+                nextTag = reader.Position;
                 if (subtree.Tag == tag) {
                     return subtree;
                 }
-                nextTag = reader.Position;
             }
             return null;
         }
@@ -125,16 +132,15 @@ namespace Cavern.Format.Container.Matroska {
                 }
 
                 children.Add(subtree);
+                nextTag = reader.Position;
                 if (subtree.Tag == tag) {
                     indices.Add(tagIndex);
                     if (c++ == index) {
-                        nextTag = reader.Position;
                         return subtree;
                     }
                 }
                 ++tagIndex;
             }
-            nextTag = reader.Position;
             return null;
         }
 

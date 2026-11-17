@@ -229,6 +229,7 @@ public static class TrueHDDecoderService {
                 } catch {
                     // Best-effort kill
                 }
+                CleanUpPartialFile(outputPath);
                 token.ThrowIfCancellationRequested();
             }
         }
@@ -237,7 +238,21 @@ public static class TrueHDDecoderService {
         string stdout = outSb.ToString().Trim();
         string stderr = errSb.ToString().Trim();
         AppLogger.LogFFmpeg(ffmpegPath, args, proc.ExitCode, stdout, stderr);
-        return proc.ExitCode == 0 && File.Exists(outputPath) && new FileInfo(outputPath).Length > 0;
+        bool ok = proc.ExitCode == 0 && File.Exists(outputPath) && new FileInfo(outputPath).Length > 0;
+        if (!ok) {
+            CleanUpPartialFile(outputPath);
+        }
+        return ok;
+    }
+
+    static void CleanUpPartialFile(string path) {
+        try {
+            if (!string.IsNullOrEmpty(path) && File.Exists(path)) {
+                File.Delete(path);
+            }
+        } catch {
+            // Best-effort cleanup
+        }
     }
 
     public static TrueHDDecodeResult DecodeTrack(
@@ -276,35 +291,11 @@ public static class TrueHDDecoderService {
                 onProgress?.Invoke(0.02, "Extraindo faixa Dolby TrueHD...");
 
                 bool extracted = false;
-                if (sourceTrack.Track != null) {
-                    try {
-                        sourceTrack.Track.Source.Seek(0);
-                        double dur = sourceTrack.Track.Source.Duration;
-                        long blocks = 0;
-                        using (ExtractTrackFromContainer extractor = new(sourceTrack.Track, File.Create(thdPath))) {
-                            while (extractor.Process()) {
-                                token.ThrowIfCancellationRequested();
-                                if ((++blocks & 63) == 0 && dur > 0) {
-                                    double offset = sourceTrack.Track.GetNextBlockOffset();
-                                    if (offset >= 0) {
-                                        double frac = Math.Clamp(offset / dur * 0.24, 0.02, 0.24);
-                                        onProgress?.Invoke(frac, $"Extraindo TrueHD ({offset / dur:0%})...");
-                                    }
-                                }
-                            }
-                        }
-                        extracted = File.Exists(thdPath) && new FileInfo(thdPath).Length > 0;
-                    } catch (OperationCanceledException) {
-                        throw;
-                    } catch (Exception ex) {
-                        AppLogger.Warn($"ExtractTrackFromContainer fallback triggered: {ex.Message}");
-                        QFile.DeleteIfExists(thdPath);
-                        extracted = false;
-                    }
-                }
+                string containerInput = !string.IsNullOrEmpty(originalContainerPath) ? originalContainerPath : sourceTrack.Path;
 
-                if (!extracted && !string.IsNullOrEmpty(ffmpegPath) && File.Exists(ffmpegPath)) {
-                    string containerInput = !string.IsNullOrEmpty(originalContainerPath) ? originalContainerPath : sourceTrack.Path;
+                // Prefer native FFmpeg stream copy first when installed: avoids slow block-by-block C# reads on large MKVs and cancels immediately.
+                if (!string.IsNullOrEmpty(ffmpegPath) && File.Exists(ffmpegPath) &&
+                    !string.IsNullOrEmpty(containerInput) && File.Exists(containerInput)) {
                     ContainerProbeResult probe = ProbeContainerWithFFmpeg(ffmpegPath, containerInput);
                     ProbedAudioStream targetStream = probe.AudioStreams
                         .FirstOrDefault(s => s.IsTrueHD && s.AudioOrdinal == sourceTrack.Index)
@@ -317,8 +308,41 @@ public static class TrueHDDecoderService {
                             thdPath,
                             "truehd",
                             probe.DurationSeconds,
-                            (p, msg) => onProgress?.Invoke(Math.Clamp(p * 0.24, 0.02, 0.24), msg),
+                            (p, _) => {
+                                double extRatio = Math.Clamp(p, 0, 0.99);
+                                double totalFrac = Math.Clamp(0.02 + extRatio * 0.22, 0.02, 0.24);
+                                onProgress?.Invoke(totalFrac, $"Extraindo TrueHD ({extRatio:0%})...");
+                            },
                             token);
+                    }
+                }
+
+                if (!extracted && sourceTrack.Track != null) {
+                    try {
+                        sourceTrack.Track.Source.Seek(0);
+                        double dur = sourceTrack.Track.Source.Duration;
+                        long blocks = 0;
+                        using (ExtractTrackFromContainer extractor = new(sourceTrack.Track, File.Create(thdPath))) {
+                            while (extractor.Process()) {
+                                token.ThrowIfCancellationRequested();
+                                if ((++blocks & 63) == 0 && dur > 0) {
+                                    double offset = sourceTrack.Track.GetNextBlockOffset();
+                                    if (offset >= 0) {
+                                        double extRatio = Math.Clamp(offset / dur, 0, 0.99);
+                                        double frac = Math.Clamp(0.02 + extRatio * 0.22, 0.02, 0.24);
+                                        onProgress?.Invoke(frac, $"Extraindo TrueHD ({extRatio:0%})...");
+                                    }
+                                }
+                            }
+                        }
+                        extracted = File.Exists(thdPath) && new FileInfo(thdPath).Length > 0;
+                    } catch (OperationCanceledException) {
+                        CleanUpPartialFile(thdPath);
+                        throw;
+                    } catch (Exception ex) {
+                        AppLogger.Warn($"ExtractTrackFromContainer fallback triggered: {ex.Message}");
+                        CleanUpPartialFile(thdPath);
+                        extracted = false;
                     }
                 }
 

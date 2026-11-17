@@ -224,7 +224,7 @@ public partial class MainActivity {
         page.AddView(transportCard);
 
         // 3. One UI 9 Quick Spatial Panel Card (2x2 Bento Toggles + Fat Dynamic Capsules + In-App Rolloff Selector)
-        LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.FunctionalIndigo);
+        LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.Tertiary);
 
         LinearLayout bentoRow1 = HRow();
         LinearLayout bentoRow2 = HRow();
@@ -309,7 +309,7 @@ public partial class MainActivity {
         page.AddView(quickCard);
 
         // 4. Live Channel & 3D Object Mixer Card (Filter buttons visibly toggle Solo state)
-        LinearLayout mixerCard = Card(S["MixerTitle"], OneUiIconType.Queue, OneUiTheme.CoralStart);
+        LinearLayout mixerCard = Card(S["MixerTitle"], OneUiIconType.Queue, OneUiTheme.Secondary);
 
         HorizontalScrollView filterScroll = new(this) { HorizontalScrollBarEnabled = false };
         LinearLayout filterRow = HRow();

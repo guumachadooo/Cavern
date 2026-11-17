@@ -114,6 +114,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     string activeFallbackSessionDir;
     readonly HashSet<string> protectedQueuePaths = new(StringComparer.OrdinalIgnoreCase);
     CancellationTokenSource truehdPrepareCts;
+    int truehdPrepareGeneration;
     volatile bool isPreparingTrueHD;
     volatile bool suppressAutoTrueHDPrepare;
 
@@ -1167,6 +1168,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     }
 
     void ClearDecodedTrueHDState() {
+        truehdPrepareGeneration++;
         truehdPrepareCts?.Cancel();
         truehdPrepareCts?.Dispose();
         truehdPrepareCts = null;
@@ -1346,6 +1348,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         if (uiDestroyed || selectedTrack != sourceTrack) {
             return;
         }
+        int myGen = ++truehdPrepareGeneration;
         truehdPrepareCts?.Cancel();
         truehdPrepareCts?.Dispose();
         truehdPrepareCts = new CancellationTokenSource();
@@ -1368,15 +1371,23 @@ public partial class MainActivity : Activity, ICavernizeApp {
             S["TrueHDTitle"],
             customContent: dlgContent,
             icon: OneUiIconType.Sparkles,
-            iconBadgeColor: OneUiTheme.Primary,
+            iconBadgeColor: OneUiTheme.Tertiary,
             positiveText: null,
             negativeText: S["CancelBtn"],
-            onNegative: () => truehdPrepareCts?.Cancel(),
+            onNegative: () => {
+                if (myGen == truehdPrepareGeneration) {
+                    truehdPrepareGeneration++;
+                    isPreparingTrueHD = false;
+                }
+                truehdPrepareCts?.Cancel();
+                SetConvertStatus(S["TrueHDCancelled"], 0);
+                BindActiveTrackToUiAndPlayer(sourceTrack);
+            },
             cancelable: false);
 
         void UpdatePrepUi(double p, string msg) {
             RunOnUiThread(() => {
-                if (uiDestroyed) return;
+                if (uiDestroyed || myGen != truehdPrepareGeneration) return;
                 dlgStatus.Text = msg ?? "";
                 if (p < 0) {
                     dlgProgress.Indeterminate = true;
@@ -1405,6 +1416,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     });
                 }
 
+                token.ThrowIfCancellationRequested();
                 int? forcedPres = store.MlpPresentation >= 0 ? store.MlpPresentation : null;
                 TrueHDDecodeResult res = TrueHDDecoderService.DecodeTrack(
                     this,
@@ -1417,9 +1429,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     token);
 
                 RunOnUiThread(() => {
-                    isPreparingTrueHD = false;
+                    if (myGen == truehdPrepareGeneration) {
+                        isPreparingTrueHD = false;
+                    }
                     try { progressDlg?.Dismiss(); } catch { }
-                    if (uiDestroyed || selectedTrack != sourceTrack) {
+                    if (uiDestroyed || selectedTrack != sourceTrack || myGen != truehdPrepareGeneration) {
                         TrueHDDecoderService.CleanupWorkDirectory(res.SessionDirectory);
                         res.DecodedTrack?.Dispose();
                         return;
@@ -1435,19 +1449,23 @@ public partial class MainActivity : Activity, ICavernizeApp {
             } catch (System.OperationCanceledException) {
                 AppLogger.Info("TrueHD decode cancelled by user.");
                 RunOnUiThread(() => {
-                    isPreparingTrueHD = false;
                     try { progressDlg?.Dismiss(); } catch { }
-                    SetConvertStatus(S["TrueHDCancelled"], 0);
-                    BindActiveTrackToUiAndPlayer(sourceTrack);
+                    if (myGen == truehdPrepareGeneration) {
+                        isPreparingTrueHD = false;
+                        SetConvertStatus(S["TrueHDCancelled"], 0);
+                        BindActiveTrackToUiAndPlayer(sourceTrack);
+                    }
                 });
             } catch (Exception ex) {
                 AppLogger.Error("PrepareSelectedTrueHDTrackAsync", ex);
                 RunOnUiThread(() => {
-                    isPreparingTrueHD = false;
                     try { progressDlg?.Dismiss(); } catch { }
-                    SetConvertStatus(ex.Message, 0);
-                    BindActiveTrackToUiAndPlayer(sourceTrack);
-                    ShowError(ex.Message);
+                    if (myGen == truehdPrepareGeneration) {
+                        isPreparingTrueHD = false;
+                        SetConvertStatus(ex.Message, 0);
+                        BindActiveTrackToUiAndPlayer(sourceTrack);
+                        ShowError(ex.Message);
+                    }
                 });
             }
         });

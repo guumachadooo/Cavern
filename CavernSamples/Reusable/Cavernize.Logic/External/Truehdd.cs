@@ -147,7 +147,18 @@ public class Truehdd : ExternalConverter {
             UpdateStatusMessage(language["PrgRB"]);
             UpdateProgressValue(-1);
             bool extracted = false;
-            if (source.Track != null) {
+            if (FallbackTrackExtractor != null) {
+                try {
+                    extracted = FallbackTrackExtractor(source, tempTrack, p => UpdateProgressValue(Math.Clamp(p * 0.25, 0, 0.25)), cancellationToken);
+                } catch (OperationCanceledException) {
+                    QFile.DeleteIfExists(tempTrack);
+                    throw;
+                } catch {
+                    QFile.DeleteIfExists(tempTrack);
+                    extracted = false;
+                }
+            }
+            if (!extracted && source.Track != null) {
                 try {
                     source.Track.Source.Seek(0);
                     double duration = source.Track.Source.Duration;
@@ -164,14 +175,13 @@ public class Truehdd : ExternalConverter {
                         }
                     }
                     extracted = File.Exists(tempTrack) && new FileInfo(tempTrack).Length > 0;
-                } catch when (FallbackTrackExtractor != null) {
+                } catch (OperationCanceledException) {
+                    QFile.DeleteIfExists(tempTrack);
+                    throw;
+                } catch {
                     QFile.DeleteIfExists(tempTrack);
                     extracted = false;
                 }
-            }
-
-            if (!extracted && FallbackTrackExtractor != null) {
-                extracted = FallbackTrackExtractor(source, tempTrack, p => UpdateProgressValue(Math.Clamp(p * 0.25, 0, 0.25)), cancellationToken);
             }
             if (!extracted || !File.Exists(tempTrack) || new FileInfo(tempTrack).Length == 0) {
                 throw new InvalidOperationException("Failed to extract TrueHD bitstream from container.");

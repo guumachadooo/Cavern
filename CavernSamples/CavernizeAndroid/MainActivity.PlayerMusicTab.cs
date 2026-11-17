@@ -362,8 +362,10 @@ public partial class MainActivity {
             musicArtistText.Text = S["PlayerEmptySub"];
             musicSpatialBadgeText.Text = S["PlayerBadgeSpatial"];
             musicTrackBtn.Visibility = ViewStates.Gone;
-            musicWaveSeekBar?.SetThemeByColor(OneUiTheme.Primary);
+            musicWaveSeekBar?.SetThemeByColor(OneUiTheme.Tertiary);
             musicPlayCircleBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, 99f);
+            musicSpatialPill.Background = OneUiTheme.CreateGlassCardDrawable(
+                this, OneUiTheme.WithAlpha(OneUiTheme.Tertiary, 56), OneUiTheme.PillCornerDp, OneUiTheme.WithAlpha(OneUiTheme.Tertiary, 150));
         } else {
             musicTitleText.Text = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
                 ? currentMediaMeta.Title
@@ -394,11 +396,13 @@ public partial class MainActivity {
                 musicTrackBtn.Visibility = ViewStates.Gone;
             }
 
-            Color playAccent = currentMediaMeta?.HasEmbeddedArtwork == true ? accent : ColAccent;
-            musicWaveSeekBar?.SetThemeByColor(playAccent);
+            bool hasArt = currentMediaMeta?.HasEmbeddedArtwork == true;
+            Color playAccent = hasArt ? accent : ColAccent;
+            Color sliderTone = hasArt ? accent : OneUiTheme.Tertiary;
+            musicWaveSeekBar?.SetThemeByColor(sliderTone);
             musicPlayCircleBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, playAccent, 99f);
             musicSpatialPill.Background = OneUiTheme.CreateGlassCardDrawable(
-                this, OneUiTheme.WithAlpha(playAccent, 56), OneUiTheme.PillCornerDp, OneUiTheme.WithAlpha(playAccent, 150));
+                this, OneUiTheme.WithAlpha(sliderTone, 56), OneUiTheme.PillCornerDp, OneUiTheme.WithAlpha(sliderTone, 150));
         }
 
         RefreshMusicPlayerControlsUi();
@@ -423,8 +427,8 @@ public partial class MainActivity {
         }
 
         StyleQuickChip(musicChipHrtf, store.HeadphoneVirtualizer, OneUiTheme.Primary);
-        StyleQuickChip(musicChipCavern, store.CavernizeUpmix, OneUiTheme.FunctionalIndigo);
-        StyleQuickChip(musicChipMatrix, store.MatrixUpmixing, OneUiTheme.FunctionalCyan);
+        StyleQuickChip(musicChipCavern, store.CavernizeUpmix, OneUiTheme.Tertiary);
+        StyleQuickChip(musicChipMatrix, store.MatrixUpmixing, OneUiTheme.Secondary);
 
         CavernizeTrack active = GetActiveTrack();
         if (active == null || playerEngine == null) {
