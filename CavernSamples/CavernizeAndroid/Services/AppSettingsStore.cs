@@ -209,6 +209,11 @@ public sealed class AppSettingsStore {
         set => Edit().PutString("ffmpegPath", value ?? "").Apply();
     }
 
+    public string InstalledFFmpegVersion {
+        get => prefs.GetString("ffmpegVer", "");
+        set => Edit().PutString("ffmpegVer", value ?? "").Apply();
+    }
+
     public string FFmpegExtraArgs {
         get => prefs.GetString("ffmpegArgs", "");
         set => Edit().PutString("ffmpegArgs", value ?? "").Apply();

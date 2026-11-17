@@ -191,12 +191,14 @@ public static class AppUpdateService {
     }
 
     static bool IsRemoteNewer(string localVer, string remoteVer) {
-        if (string.IsNullOrWhiteSpace(remoteVer)) {
+        string cleanLocal = ExtractVersionString(localVer);
+        string cleanRemote = ExtractVersionString(remoteVer);
+        if (string.IsNullOrWhiteSpace(cleanRemote) || string.IsNullOrWhiteSpace(cleanLocal)) {
             return false;
         }
-        if (Version.TryParse(localVer, out Version lv) && Version.TryParse(remoteVer, out Version rv)) {
+        if (Version.TryParse(cleanLocal, out Version lv) && Version.TryParse(cleanRemote, out Version rv)) {
             return rv > lv;
         }
-        return !string.Equals(localVer?.Trim(), remoteVer.Trim(), StringComparison.OrdinalIgnoreCase);
+        return false;
     }
 }

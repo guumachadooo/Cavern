@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          package="hu.sbence.cavern.cavernize"
-          android:versionCode="1"
-          android:versionName="2.1.0">
+          package="hu.sbence.cavern.cavernize">
+  <!-- targetSdkVersion 28 places app in untrusted_app_27 SELinux domain so downloaded static FFmpeg can execute from FilesDir -->
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
+
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
