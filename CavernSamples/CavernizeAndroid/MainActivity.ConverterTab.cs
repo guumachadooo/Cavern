@@ -45,10 +45,10 @@ public partial class MainActivity {
 
     LinearLayout BuildConverterTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(12), Dp(6), Dp(12), Dp(16));
+        page.SetPadding(Dp(14), Dp(4), Dp(14), Dp(88));
 
-        // 1. System & RenderTarget Card
-        LinearLayout sysCard = Card(S["SystemTitle"]);
+        // 1. System & RenderTarget Hero Card
+        LinearLayout sysCard = Card(S["SystemTitle"], "🔊", OneUiTheme.Primary);
         LinearLayout sysRow = new(this) { Orientation = Orientation.Horizontal };
         sysRow.SetGravity(GravityFlags.CenterVertical);
 
@@ -66,7 +66,7 @@ public partial class MainActivity {
         page.AddView(sysCard);
 
         // 2. Content & Export Card
-        LinearLayout expCard = Card("Export");
+        LinearLayout expCard = Card("Export", "⚡", OneUiTheme.CoralStart);
         converterTrackInfoText = Label(S["NoTrack"], 12f, ColMuted);
         converterTrackInfoText.SetPadding(0, 0, 0, Dp(8));
         expCard.AddView(converterTrackInfoText);
@@ -130,7 +130,7 @@ public partial class MainActivity {
             Progress = 0
         };
         OneUiTheme.StyleProgressBar(this, convertProgressBar);
-        LinearLayout.LayoutParams pbLp = new(ViewGroup.LayoutParams.MatchParent, Dp(8)) { TopMargin = Dp(10) };
+        LinearLayout.LayoutParams pbLp = new(ViewGroup.LayoutParams.MatchParent, Dp(14)) { TopMargin = Dp(10) };
         expCard.AddView(convertProgressBar, pbLp);
 
         convertStatusText = Label(S["Ready"], 12f, ColCyan);

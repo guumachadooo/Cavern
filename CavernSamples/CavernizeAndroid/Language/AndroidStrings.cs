@@ -44,10 +44,10 @@ public sealed class AndroidStrings {
         ["OpenFile"] = "Open File",
         ["NoFile"] = "No file loaded (supports EAC3, AC3, MKV, MP4, WAV/ADM, CAF, LAF, ATMOS, MP3/FLAC)",
         ["TrackLabel"] = "Track:",
-        ["TabPlayer"] = "3D Player",
+        ["TabPlayer"] = "3D Room",
         ["TabConvert"] = "Convert",
-        ["TabExtract"] = "Extractor",
-        ["TabSettings"] = "Queue & Setup",
+        ["TabExtract"] = "Stems",
+        ["TabSettings"] = "Settings",
 
         // Player & Room
         ["RoomTitle"] = "3D Room Simulator (drag listener to move)",
@@ -196,16 +196,38 @@ public sealed class AndroidStrings {
         ["AutoCheckSwitch"] = "Check for updates automatically",
         ["AllowUnknownSourcesMsg"] = "Allow 'Install unknown apps' for Cavernize, then return to complete the installation.",
         ["DismissBtn"] = "Later",
+
+        // FFmpeg Auto-Downloader & Updater
+        ["FFmpegCardTitle"] = "FFmpeg Audio Engine",
+        ["FFmpegNotInstalled"] = "Not installed (needed for E-AC-3, AC-3, FLAC, Opus, MKV muxing)",
+        ["FFmpegInstalledVer"] = "Installed: {0}",
+        ["FFmpegUpdateAvail"] = "FFmpeg update available: {0}",
+        ["FFmpegDownloadBtn"] = "Download FFmpeg",
+        ["FFmpegUpdateBtn"] = "Update FFmpeg",
+        ["FFmpegCheckBtn"] = "Check FFmpeg",
+        ["FFmpegManualBtn"] = "Locate Manual Binary",
+        ["FFmpegDownloading"] = "Downloading static FFmpeg...",
+        ["FFmpegUpToDate"] = "FFmpeg is up to date ({0}).",
+
+        // One UI 9 Section Titles & Bento Tiles
+        ["QuickPanelTitle"] = "Quick Spatial Panel",
+        ["BentoHrtf"] = "HRTF 3D",
+        ["BentoDist"] = "Ear Distance",
+        ["Bento3DOnly"] = "3D Objects",
+        ["BentoHeightOnly"] = "Height Only",
+        ["TimelineLabel"] = "Playback Position",
+        ["CalibTitle"] = "HRIR & QuickEQ Calibration",
+        ["AboutVerSection"] = "About & App Version",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
         d["OpenFile"] = "Abrir Arquivo";
         d["NoFile"] = "Nenhum arquivo aberto (EAC3, AC3, MKV, MP4, WAV/ADM, CAF, LAF, ATMOS, MP3/FLAC)";
         d["TrackLabel"] = "Faixa:";
-        d["TabPlayer"] = "Player 3D";
-        d["TabConvert"] = "Converter";
-        d["TabExtract"] = "Extrator";
-        d["TabSettings"] = "Fila & Config";
+        d["TabPlayer"] = "Sala 3D";
+        d["TabConvert"] = "Estúdio";
+        d["TabExtract"] = "Stems";
+        d["TabSettings"] = "Ajustes";
 
         d["RoomTitle"] = "Simulador de Sala 3D (arraste o ouvinte pela sala)";
         d["PresetCenter"] = "Centro";
@@ -347,6 +369,26 @@ public sealed class AndroidStrings {
         d["AutoCheckSwitch"] = "Verificar atualizações automaticamente ao abrir";
         d["AllowUnknownSourcesMsg"] = "Ative 'Instalar apps desconhecidos' para o Cavernize e volte ao app para instalar automaticamente.";
         d["DismissBtn"] = "Depois";
+
+        d["FFmpegCardTitle"] = "Motor de Áudio FFmpeg";
+        d["FFmpegNotInstalled"] = "Não instalado (necessário para E-AC-3, AC-3, FLAC, Opus e MKV)";
+        d["FFmpegInstalledVer"] = "Instalado: {0}";
+        d["FFmpegUpdateAvail"] = "Atualização do FFmpeg disponível: {0}";
+        d["FFmpegDownloadBtn"] = "Baixar FFmpeg Auto";
+        d["FFmpegUpdateBtn"] = "Atualizar FFmpeg";
+        d["FFmpegCheckBtn"] = "Checar FFmpeg";
+        d["FFmpegManualBtn"] = "Selecionar Manualmente";
+        d["FFmpegDownloading"] = "Baixando FFmpeg estático ARM64...";
+        d["FFmpegUpToDate"] = "FFmpeg atualizado ({0}).";
+
+        d["QuickPanelTitle"] = "Painel Rápido Espacial";
+        d["BentoHrtf"] = "HRTF 3D";
+        d["BentoDist"] = "Distância";
+        d["Bento3DOnly"] = "Só Obj. 3D";
+        d["BentoHeightOnly"] = "Só Teto";
+        d["TimelineLabel"] = "Linha do Tempo";
+        d["CalibTitle"] = "Calibração HRIR e Filtros QuickEQ";
+        d["AboutVerSection"] = "Sobre e Versão do App";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

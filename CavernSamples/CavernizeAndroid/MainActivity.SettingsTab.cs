@@ -29,13 +29,19 @@ using VoidX.WPF.Language;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    // FFmpeg auto-downloader & updater views
+    TextView ffmpegStatusText;
+    ProgressBar ffmpegProgressBar;
+    Button ffmpegAutoBtn, ffmpegCheckBtn, ffmpegBtn;
+
+    // App version & updater views (inside About section at bottom of Settings)
     TextView updateCurrentVerLabel, updateSettingsStatusText;
     ProgressBar updateSettingsProgressBar;
     Button checkUpdatesBtn, downloadInstallBtn;
     Switch autoCheckUpdatesSwitch;
 
     LinearLayout queueListContainer;
-    Button hrirBtn, filtersBtn, ffmpegBtn;
+    Button hrirBtn, filtersBtn;
     Switch muteBedSwitch, muteGroundSwitch, speakerVirtSwitch, force24Switch, surroundSwapSwitch, wavSkipSwitch, reportModeSwitch, gradingSwitch;
     Switch pedanticSwitch, unsafeSwitch, keepTempSwitch, normSwitch, limiterOnlySwitch;
     SeekBar upmixEffectBar, upmixSmoothBar;
@@ -43,41 +49,47 @@ public partial class MainActivity {
 
     LinearLayout BuildSettingsTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(12), Dp(6), Dp(12), Dp(16));
+        page.SetPadding(Dp(14), Dp(4), Dp(14), Dp(88));
 
-        // 0. Software Update Section (One UI 9)
-        LinearLayout updateCard = Card(S["UpdateCardTitle"]);
-        (string curVer, _) = AppUpdateService.GetInstalledVersion(this);
-        updateCurrentVerLabel = Label(string.Format(S["CurrentVersionLabel"], curVer), 13f, ColText);
-        updateCurrentVerLabel.SetTypeface(null, TypefaceStyle.Bold);
-        updateCard.AddView(updateCurrentVerLabel);
+        // 1. FFmpeg Audio Engine (1-Click Download & Auto-Updater)
+        LinearLayout ffCard = Card(S["FFmpegCardTitle"], "⚙", OneUiTheme.CoralStart);
+        ffmpegStatusText = Label(S["FFmpegNotInstalled"], 12.5f, OneUiTheme.TextSub);
+        ffmpegStatusText.SetPadding(0, 0, 0, Dp(8));
+        ffCard.AddView(ffmpegStatusText);
 
-        updateSettingsStatusText = Label(S["Ready"], 12f, ColCyan);
-        updateSettingsStatusText.SetPadding(0, Dp(2), 0, Dp(6));
-        updateCard.AddView(updateSettingsStatusText);
-
-        updateSettingsProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
+        ffmpegProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
             Max = 1000,
             Progress = 0,
             Visibility = ViewStates.Gone
         };
-        OneUiTheme.StyleProgressBar(this, updateSettingsProgressBar);
-        updateCard.AddView(updateSettingsProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(8)) { BottomMargin = Dp(8) });
+        OneUiTheme.StyleProgressBar(this, ffmpegProgressBar);
+        ffCard.AddView(ffmpegProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { BottomMargin = Dp(8) });
 
-        LinearLayout updBtns = new(this) { Orientation = Orientation.Horizontal };
-        checkUpdatesBtn = PillButton(S["CheckUpdateBtn"], () => _ = CheckForUpdatesAsync(silent: false));
-        downloadInstallBtn = PrimaryButton(S["DownloadInstallBtn"], StartUpdateDownloadAndInstall);
-        downloadInstallBtn.Visibility = ViewStates.Gone;
-        updBtns.AddView(checkUpdatesBtn, new LinearLayout.LayoutParams(0, Dp(40), 1f));
-        updBtns.AddView(downloadInstallBtn, new LinearLayout.LayoutParams(0, Dp(40), 1.2f) { LeftMargin = Dp(8) });
-        updateCard.AddView(updBtns);
+        LinearLayout ffBtns = new(this) { Orientation = Orientation.Horizontal };
+        ffmpegAutoBtn = PrimaryButton(S["FFmpegDownloadBtn"], StartFFmpegDownloadOrUpdate);
+        ffmpegCheckBtn = PillButton(S["FFmpegCheckBtn"], () => _ = CheckFFmpegUpdateAsync(silent: false));
+        ffBtns.AddView(ffmpegAutoBtn, new LinearLayout.LayoutParams(0, Dp(42), 1.35f) { RightMargin = Dp(8) });
+        ffBtns.AddView(ffmpegCheckBtn, new LinearLayout.LayoutParams(0, Dp(42), 1f));
+        ffCard.AddView(ffBtns);
 
-        AddDivider(updateCard);
-        autoCheckUpdatesSwitch = AddSwitchRow(updateCard, S["AutoCheckSwitch"], store.AutoCheckUpdates, v => store.AutoCheckUpdates = v);
-        page.AddView(updateCard);
+        AddDivider(ffCard);
+        ffmpegBtn = PillButton(S["FFmpegManualBtn"], () => LaunchFilePicker(ReqLocateFFmpeg, false));
+        ffCard.AddView(ffmpegBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(38)) { BottomMargin = Dp(8) });
 
-        // 1. Queue Section
-        LinearLayout queueCard = Card(S["QueueTitle"]);
+        ffCard.AddView(Label(S["FFmpegArgsLabel"], 12f, ColMuted));
+        EditText ffArgsBox = new(this) { Text = store.FFmpegExtraArgs, TextSize = 12.5f };
+        ffArgsBox.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
+        ffArgsBox.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
+        ffArgsBox.SetTextColor(ColText);
+        ffArgsBox.TextChanged += (_, _) => {
+            store.FFmpegExtraArgs = ffArgsBox.Text;
+            ParseFFmpegExtraArgs(ffArgsBox.Text);
+        };
+        ffCard.AddView(ffArgsBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
+        page.AddView(ffCard);
+
+        // 2. Render Queue Card
+        LinearLayout queueCard = Card(S["QueueTitle"], "☰", OneUiTheme.Primary);
         queueListContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
         queueCard.AddView(queueListContainer);
 
@@ -92,8 +104,8 @@ public partial class MainActivity {
         queueCard.AddView(qBtns);
         page.AddView(queueCard);
 
-        // 2. Upmixing Setup Section
-        LinearLayout upmixCard = Card(S["UpmixTitle"]);
+        // 3. Upmixing Setup Card
+        LinearLayout upmixCard = Card(S["UpmixTitle"], "✦", OneUiTheme.FunctionalIndigo);
         matrixUpmixSwitch = AddSwitchRow(upmixCard, S["MatrixUpmix"], store.MatrixUpmixing, v => {
             store.MatrixUpmixing = v;
             ReattachPlayerTrack();
@@ -107,12 +119,11 @@ public partial class MainActivity {
         (upmixEffectBar, _) = AddSliderRow(upmixCard, S["UpmixEffect"], 0, 100, (int)Math.Round(store.UpmixEffect * 100), v => {
             store.UpmixEffect = v * 0.01f;
             ReattachPlayerTrack();
-        });
-        AddDivider(upmixCard);
+        }, "%");
         (upmixSmoothBar, _) = AddSliderRow(upmixCard, S["UpmixSmooth"], 0, 100, (int)Math.Round(store.UpmixSmoothness * 100), v => {
             store.UpmixSmoothness = v * 0.01f;
             ReattachPlayerTrack();
-        });
+        }, "%");
         Button resetUpmixBtn = PillButton(S["ResetUpmix"], () => {
             store.MatrixUpmixing = false;
             store.CavernizeUpmix = false;
@@ -124,11 +135,11 @@ public partial class MainActivity {
             upmixSmoothBar.Progress = 80;
             ReattachPlayerTrack();
         });
-        upmixCard.AddView(resetUpmixBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(38)) { TopMargin = Dp(6) });
+        upmixCard.AddView(resetUpmixBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(38)) { TopMargin = Dp(4) });
         page.AddView(upmixCard);
 
-        // 3. Rendering Settings & Filters Section
-        LinearLayout rendCard = Card(S["RenderingTitle"]);
+        // 4. Calibration, Rendering & Filters Card
+        LinearLayout rendCard = Card(S["CalibTitle"], "🎧", OneUiTheme.FunctionalGreen);
         hrirBtn = PillButton(S["LoadHRIR"], () => {
             if (!string.IsNullOrEmpty(store.HrirPath)) {
                 VirtualizerFilter.Reset();
@@ -138,9 +149,7 @@ public partial class MainActivity {
                 LaunchFilePicker(ReqLoadHrir, false);
             }
         });
-        rendCard.AddView(hrirBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { BottomMargin = Dp(6) });
-
-        speakerVirtSwitch = AddSwitchRow(rendCard, S["SpeakerVirt"], store.SpeakerVirtualizer, v => store.SpeakerVirtualizer = v);
+        rendCard.AddView(hrirBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { BottomMargin = Dp(8) });
 
         filtersBtn = PillButton(S["LoadFilters"], () => {
             if (renderingSettings.RoomCorrection != null) {
@@ -151,16 +160,20 @@ public partial class MainActivity {
                 LaunchFilePicker(ReqLoadFilters, false);
             }
         });
-        rendCard.AddView(filtersBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { TopMargin = Dp(4), BottomMargin = Dp(6) });
+        rendCard.AddView(filtersBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { BottomMargin = Dp(8) });
 
+        speakerVirtSwitch = AddSwitchRow(rendCard, S["SpeakerVirt"], store.SpeakerVirtualizer, v => store.SpeakerVirtualizer = v);
+        AddDivider(rendCard);
         muteBedSwitch = AddSwitchRow(rendCard, S["MuteBed"], store.MuteBed, v => {
             store.MuteBed = v;
             playerEngine.MuteBed = v;
+            refreshBentoTilesUi?.Invoke();
         });
         AddDivider(rendCard);
         muteGroundSwitch = AddSwitchRow(rendCard, S["MuteGround"], store.MuteGround, v => {
             store.MuteGround = v;
             playerEngine.MuteGround = v;
+            refreshBentoTilesUi?.Invoke();
         });
         AddDivider(rendCard);
         force24Switch = AddSwitchRow(rendCard, S["Force24Bit"], store.Force24Bit, v => store.Force24Bit = v);
@@ -174,21 +187,21 @@ public partial class MainActivity {
         gradingSwitch = AddSwitchRow(rendCard, S["QualityGrading"], store.QualityGrading, v => store.QualityGrading = v);
         page.AddView(rendCard);
 
-        // 4. Advanced & CLI Settings Section
-        LinearLayout advCard = Card(S["AdvancedTitle"]);
+        // 5. Advanced & Room Acoustics CLI Settings Card
+        LinearLayout advCard = Card(S["AdvancedTitle"], "🔧", OneUiTheme.FunctionalAmber);
 
         AddSliderRow(advCard, S["RenderGain"], -24, 24, (int)Math.Round(store.RenderGainDb), v => {
             store.RenderGainDb = v;
             store.ApplyGlobals();
-        });
+        }, " dB");
         AddSliderRow(advCard, S["HeightSqueeze"], 0, 100, (int)Math.Round(store.HeightSqueezePercent), v => {
             store.HeightSqueezePercent = v;
             store.ApplyGlobals();
-        });
+        }, "%");
         AddSliderRow(advCard, S["MlpPres"], -1, 4, store.MlpPresentation, v => {
             store.MlpPresentation = v;
             store.ApplyGlobals();
-        });
+        }, "", useBlue: true);
 
         advCard.AddView(Label(S["EnvType"], 12f, ColMuted));
         Spinner envSpinner = new(this);
@@ -205,8 +218,10 @@ public partial class MainActivity {
         };
         advCard.AddView(envSpinner);
 
+        AddDivider(advCard);
         advCard.AddView(Label(S["RoomSize"], 12f, ColMuted));
         LinearLayout roomDimRow = new(this) { Orientation = Orientation.Horizontal };
+        roomDimRow.SetPadding(0, Dp(4), 0, Dp(4));
         EditText rx = NumBox(store.RoomSizeX.ToString("0.0", CultureInfo.InvariantCulture));
         EditText ry = NumBox(store.RoomSizeY.ToString("0.0", CultureInfo.InvariantCulture));
         EditText rz = NumBox(store.RoomSizeZ.ToString("0.0", CultureInfo.InvariantCulture));
@@ -254,20 +269,6 @@ public partial class MainActivity {
         AddDivider(advCard);
         limiterOnlySwitch = AddSwitchRow(advCard, S["LimiterOnlyCheck"], store.LimiterOnly, v => { store.LimiterOnly = v; playerEngine.LimiterOnly = v; });
 
-        ffmpegBtn = PillButton(S["FFmpegBtn"], () => LaunchFilePicker(ReqLocateFFmpeg, false));
-        advCard.AddView(ffmpegBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { TopMargin = Dp(6), BottomMargin = Dp(8) });
-
-        advCard.AddView(Label(S["FFmpegArgsLabel"], 12f, ColMuted));
-        EditText ffArgsBox = new(this) { Text = store.FFmpegExtraArgs, TextSize = 12.5f };
-        ffArgsBox.Background = OneUiTheme.CreateRoundedDrawable(this, ColCardAlt, 14f);
-        ffArgsBox.SetPadding(Dp(12), Dp(8), Dp(12), Dp(8));
-        ffArgsBox.SetTextColor(ColText);
-        ffArgsBox.TextChanged += (_, _) => {
-            store.FFmpegExtraArgs = ffArgsBox.Text;
-            ParseFFmpegExtraArgs(ffArgsBox.Text);
-        };
-        advCard.AddView(ffArgsBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
-
         if (Build.VERSION.SdkInt >= BuildVersionCodes.R) {
             Button permBtn = PillButton(S["StoragePermBtn"], RequestAllFilesAccess);
             advCard.AddView(permBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { TopMargin = Dp(8) });
@@ -275,8 +276,8 @@ public partial class MainActivity {
 
         page.AddView(advCard);
 
-        // 5. Language & Help Section
-        LinearLayout helpCard = Card(S["LanguageTitle"]);
+        // 6. Language, About & App Version Updater Card (discreetly kept in About section only)
+        LinearLayout helpCard = Card(S["AboutVerSection"], "ℹ", OneUiTheme.FunctionalCyan);
         helpCard.AddView(Label(S["LanguageLabel"], 12f, ColMuted));
         Spinner langSpinner = new(this);
         string[] langLabels = ["Auto (System)", "Português (Brasil)", "English", "Magyar", "简体中文"];
@@ -295,7 +296,7 @@ public partial class MainActivity {
         helpCard.AddView(langSpinner);
 
         LinearLayout helpBtns = new(this) { Orientation = Orientation.Horizontal };
-        helpBtns.SetPadding(0, Dp(10), 0, 0);
+        helpBtns.SetPadding(0, Dp(10), 0, Dp(4));
         Button guideBtn = PillButton(S["UserGuideBtn"], () => {
             Intent browser = new(Intent.ActionView, Android.Net.Uri.Parse("https://cavern.sbence.hu/cavern/doc.php?p=Cavernize"));
             StartActivity(browser);
@@ -309,12 +310,106 @@ public partial class MainActivity {
         helpBtns.AddView(guideBtn, new LinearLayout.LayoutParams(0, Dp(40), 1f) { RightMargin = Dp(8) });
         helpBtns.AddView(aboutBtn, new LinearLayout.LayoutParams(0, Dp(40), 1f));
         helpCard.AddView(helpBtns);
+
+        AddDivider(helpCard);
+        (string curVer, long buildNo) = AppUpdateService.GetInstalledVersion(this);
+        updateCurrentVerLabel = Label(string.Format(S["CurrentVersionLabel"], $"{curVer} (build {buildNo})"), 13f, ColText);
+        updateCurrentVerLabel.SetTypeface(null, TypefaceStyle.Bold);
+        helpCard.AddView(updateCurrentVerLabel);
+
+        updateSettingsStatusText = Label(S["Ready"], 12f, ColCyan);
+        updateSettingsStatusText.SetPadding(0, Dp(2), 0, Dp(6));
+        helpCard.AddView(updateSettingsStatusText);
+
+        updateSettingsProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
+            Max = 1000,
+            Progress = 0,
+            Visibility = ViewStates.Gone
+        };
+        OneUiTheme.StyleProgressBar(this, updateSettingsProgressBar);
+        helpCard.AddView(updateSettingsProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { BottomMargin = Dp(8) });
+
+        LinearLayout updBtns = new(this) { Orientation = Orientation.Horizontal };
+        checkUpdatesBtn = PillButton(S["CheckUpdateBtn"], () => _ = CheckForUpdatesAsync(silent: false));
+        downloadInstallBtn = PrimaryButton(S["DownloadInstallBtn"], StartUpdateDownloadAndInstall);
+        downloadInstallBtn.Visibility = ViewStates.Gone;
+        updBtns.AddView(checkUpdatesBtn, new LinearLayout.LayoutParams(0, Dp(40), 1f));
+        updBtns.AddView(downloadInstallBtn, new LinearLayout.LayoutParams(0, Dp(40), 1.2f) { LeftMargin = Dp(8) });
+        helpCard.AddView(updBtns);
+
+        AddDivider(helpCard);
+        autoCheckUpdatesSwitch = AddSwitchRow(helpCard, S["AutoCheckSwitch"], store.AutoCheckUpdates, v => store.AutoCheckUpdates = v);
         page.AddView(helpCard);
 
         RefreshQueueList();
         RefreshSettingsTabButtons();
+        RefreshFFmpegCardUi();
         RefreshSettingsUpdateUi();
         return page;
+    }
+
+    void SetFFmpegStatus(string msg, double progress) {
+        if (ffmpegStatusText != null) {
+            ffmpegStatusText.Text = msg ?? "";
+        }
+        if (ffmpegProgressBar != null) {
+            if (progress < 0) {
+                ffmpegProgressBar.Visibility = ViewStates.Visible;
+                ffmpegProgressBar.Indeterminate = true;
+            } else if (isFFmpegDownloading) {
+                ffmpegProgressBar.Visibility = ViewStates.Visible;
+                ffmpegProgressBar.Indeterminate = false;
+                ffmpegProgressBar.Progress = Math.Clamp((int)Math.Round(progress * 1000.0), 0, 1000);
+            } else {
+                ffmpegProgressBar.Indeterminate = false;
+                ffmpegProgressBar.Visibility = ViewStates.Gone;
+            }
+        }
+    }
+
+    void RefreshFFmpegCardUi() {
+        if (ffmpegStatusText == null || ffmpegAutoBtn == null) {
+            return;
+        }
+        bool hasLocal = ffmpeg.Found || !string.IsNullOrEmpty(FFmpegInstallerService.ResolveExistingFFmpegPath(this, store));
+        if (latestFFmpegStatus != null) {
+            if (latestFFmpegStatus.IsUpdateAvailable) {
+                ffmpegStatusText.Text = string.Format(S["FFmpegUpdateAvail"], latestFFmpegStatus.RemoteVersion);
+                ffmpegStatusText.SetTextColor(OneUiTheme.FunctionalOrange);
+                ffmpegAutoBtn.Text = $"{S["FFmpegUpdateBtn"]} ({latestFFmpegStatus.RemoteVersion})";
+                ffmpegAutoBtn.Visibility = ViewStates.Visible;
+            } else if (hasLocal) {
+                string ver = !string.IsNullOrEmpty(store.InstalledFFmpegVersion)
+                    ? store.InstalledFFmpegVersion
+                    : latestFFmpegStatus.RemoteVersion;
+                ffmpegStatusText.Text = string.Format(S["FFmpegInstalledVer"], string.IsNullOrEmpty(ver) ? "OK" : ver);
+                ffmpegStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
+                ffmpegAutoBtn.Text = S["FFmpegDownloadBtn"];
+                ffmpegAutoBtn.Visibility = ViewStates.Gone;
+            } else {
+                ffmpegStatusText.Text = S["FFmpegNotInstalled"];
+                ffmpegStatusText.SetTextColor(OneUiTheme.TextSub);
+                ffmpegAutoBtn.Text = S["FFmpegDownloadBtn"];
+                ffmpegAutoBtn.Visibility = ViewStates.Visible;
+            }
+        } else if (hasLocal) {
+            string ver = !string.IsNullOrEmpty(store.InstalledFFmpegVersion)
+                ? store.InstalledFFmpegVersion
+                : System.IO.Path.GetFileName(ffmpeg.Location ?? "ffmpeg");
+            ffmpegStatusText.Text = string.Format(S["FFmpegInstalledVer"], ver);
+            ffmpegStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
+            ffmpegAutoBtn.Visibility = ViewStates.Gone;
+        } else {
+            ffmpegStatusText.Text = S["FFmpegNotInstalled"];
+            ffmpegStatusText.SetTextColor(OneUiTheme.TextSub);
+            ffmpegAutoBtn.Text = S["FFmpegDownloadBtn"];
+            ffmpegAutoBtn.Visibility = ViewStates.Visible;
+        }
+
+        if (ffmpegProgressBar != null && !isFFmpegDownloading) {
+            ffmpegProgressBar.Indeterminate = false;
+            ffmpegProgressBar.Visibility = ViewStates.Gone;
+        }
     }
 
     void SetSettingsUpdateStatus(string msg, double progress) {
@@ -343,12 +438,14 @@ public partial class MainActivity {
         if (latestUpdateInfo?.IsUpdateAvailable == true) {
             double sizeMb = latestUpdateInfo.AssetSizeBytes > 0 ? latestUpdateInfo.AssetSizeBytes / (1024.0 * 1024.0) : 70.0;
             updateSettingsStatusText.Text = string.Format(S["UpdateAvailableBanner"], latestUpdateInfo.RemoteVersion) + $" ({sizeMb:0.1} MB)";
+            updateSettingsStatusText.SetTextColor(OneUiTheme.FunctionalOrange);
             downloadInstallBtn.Visibility = ViewStates.Visible;
             downloadInstallBtn.Text = !string.IsNullOrEmpty(downloadedUpdateApkPath) && File.Exists(downloadedUpdateApkPath)
                 ? S["InstallReadyBtn"]
                 : S["DownloadInstallBtn"];
         } else if (latestUpdateInfo != null) {
             updateSettingsStatusText.Text = S["UpToDateMsg"];
+            updateSettingsStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
             downloadInstallBtn.Visibility = ViewStates.Gone;
         }
         if (updateSettingsProgressBar != null && !isUpdateDownloading) {
@@ -363,7 +460,7 @@ public partial class MainActivity {
             TextSize = 13f,
             InputType = Android.Text.InputTypes.ClassNumber | Android.Text.InputTypes.NumberFlagDecimal
         };
-        et.Background = OneUiTheme.CreateRoundedDrawable(this, ColCardAlt, 14f);
+        et.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 14f);
         et.SetPadding(Dp(10), Dp(6), Dp(10), Dp(6));
         et.Gravity = GravityFlags.CenterHorizontal;
         et.SetTextColor(ColText);
@@ -422,8 +519,8 @@ public partial class MainActivity {
         }
         if (ffmpegBtn != null) {
             ffmpegBtn.Text = ffmpeg.Found
-                ? $"FFmpeg: OK ({System.IO.Path.GetFileName(ffmpeg.Location)})"
-                : S["FFmpegBtn"];
+                ? $"{S["FFmpegManualBtn"]}: {System.IO.Path.GetFileName(ffmpeg.Location)}"
+                : S["FFmpegManualBtn"];
         }
         if (muteBedSwitch != null && muteBedSwitch.Checked != store.MuteBed) {
             muteBedSwitch.Checked = store.MuteBed;

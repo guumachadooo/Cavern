@@ -1,4 +1,5 @@
 using Android.App;
+using Android.Graphics;
 using Android.Views;
 using Android.Widget;
 
@@ -14,7 +15,11 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
-    Spinner extractModeSpinner, extractBitsSpinner;
+    int selectedExtractMode;
+    int selectedExtractBitDepth = 1; // 0 = 16-bit, 1 = 24-bit, 2 = 32-bit float
+    readonly List<(LinearLayout row, View radioDot, TextView title)> extractModeRows = [];
+    readonly List<Button> extractBitButtons = [];
+
     CheckBox extractJsonCheck;
     LinearLayout extractorChecklistContainer, extractedFilesContainer;
     Button extractBtn, cancelExtractBtn;
@@ -24,31 +29,69 @@ public partial class MainActivity {
 
     LinearLayout BuildExtractorTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(12), Dp(6), Dp(12), Dp(16));
+        page.SetPadding(Dp(14), Dp(4), Dp(14), Dp(88));
 
-        LinearLayout card = Card(S["ExtractTitle"]);
-        TextView desc = Label(S["ExtractDesc"], 12f, ColMuted);
-        desc.SetPadding(0, 0, 0, Dp(8));
+        LinearLayout card = Card(S["ExtractTitle"], "✂", OneUiTheme.FunctionalIndigo);
+        TextView desc = Label(S["ExtractDesc"], 12f, OneUiTheme.TextSub);
+        desc.SetPadding(0, 0, 0, Dp(10));
         card.AddView(desc);
-        AddDivider(card);
 
+        // One UI 9 Visual Radio Rows for Extraction Modes (matching Panel Settings Screenshot 12)
         card.AddView(Label(S["ExtractMode"], 12f, ColMuted));
-        extractModeSpinner = new Spinner(this);
-        string[] modes = [S["ModeRawStems"], S["ModeSpatialEach"], S["Mode3DCombined"], S["ModeRawBitstream"]];
-        ArrayAdapter<string> modeAdapter = new(this, Android.Resource.Layout.SimpleSpinnerItem, modes);
-        modeAdapter.SetDropDownViewResource(Android.Resource.Layout.SimpleSpinnerDropDownItem);
-        extractModeSpinner.Adapter = modeAdapter;
-        card.AddView(extractModeSpinner);
+        LinearLayout modeGroup = new(this) { Orientation = Orientation.Vertical };
+        modeGroup.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 20f);
+        modeGroup.SetPadding(Dp(10), Dp(4), Dp(10), Dp(4));
+        extractModeRows.Clear();
 
-        AddDivider(card);
+        string[] modes = [S["ModeRawStems"], S["ModeSpatialEach"], S["Mode3DCombined"], S["ModeRawBitstream"]];
+        for (int i = 0; i < modes.Length; i++) {
+            int modeIdx = i;
+            if (i > 0) {
+                AddDivider(modeGroup);
+            }
+            LinearLayout row = new(this) { Orientation = Orientation.Horizontal };
+            row.SetGravity(GravityFlags.CenterVertical);
+            row.SetPadding(Dp(6), Dp(10), Dp(6), Dp(10));
+            OneUiTheme.AttachRecoil(row, 0.98f);
+
+            View radioDot = new(this);
+            TextView modeTv = Label(modes[i], 13f, ColText);
+            row.AddView(radioDot, new LinearLayout.LayoutParams(Dp(18), Dp(18)) { RightMargin = Dp(10) });
+            row.AddView(modeTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+            row.Click += (_, _) => {
+                selectedExtractMode = modeIdx;
+                RefreshExtractModeUi();
+            };
+            extractModeRows.Add((row, radioDot, modeTv));
+            modeGroup.AddView(row);
+        }
+        card.AddView(modeGroup, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(6),
+            BottomMargin = Dp(10)
+        });
+        RefreshExtractModeUi();
+
+        // One UI 9 Segmented Capsule Pills for Bit Depth
         card.AddView(Label(S["BitDepthLabel"], 12f, ColMuted));
-        extractBitsSpinner = new Spinner(this);
+        LinearLayout bitRow = new(this) { Orientation = Orientation.Horizontal };
+        bitRow.SetPadding(0, Dp(6), 0, Dp(8));
+        extractBitButtons.Clear();
         string[] bitLabels = ["16-bit PCM", "24-bit PCM", "32-bit Float"];
-        ArrayAdapter<string> bitsAdapter = new(this, Android.Resource.Layout.SimpleSpinnerItem, bitLabels);
-        bitsAdapter.SetDropDownViewResource(Android.Resource.Layout.SimpleSpinnerDropDownItem);
-        extractBitsSpinner.Adapter = bitsAdapter;
-        extractBitsSpinner.SetSelection(1); // 24-bit default
-        card.AddView(extractBitsSpinner);
+        for (int i = 0; i < bitLabels.Length; i++) {
+            int bitIdx = i;
+            Button bb = PillButton(bitLabels[i], () => {
+                selectedExtractBitDepth = bitIdx;
+                RefreshExtractBitButtonsUi();
+            });
+            bb.TextSize = 12f;
+            extractBitButtons.Add(bb);
+            bitRow.AddView(bb, new LinearLayout.LayoutParams(0, Dp(36), 1f) {
+                RightMargin = i < bitLabels.Length - 1 ? Dp(6) : 0
+            });
+        }
+        card.AddView(bitRow);
+        RefreshExtractBitButtonsUi();
 
         AddDivider(card);
         extractJsonCheck = new CheckBox(this) {
@@ -57,7 +100,7 @@ public partial class MainActivity {
             TextSize = 12.5f
         };
         extractJsonCheck.SetTextColor(ColText);
-        extractJsonCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
+        extractJsonCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(OneUiTheme.CoralStart);
         card.AddView(extractJsonCheck);
 
         // Quick selection pills
@@ -77,11 +120,11 @@ public partial class MainActivity {
         card.AddView(extractorChecklistContainer);
 
         LinearLayout actionRow = new(this) { Orientation = Orientation.Horizontal };
-        actionRow.SetPadding(0, Dp(10), 0, Dp(6));
+        actionRow.SetPadding(0, Dp(12), 0, Dp(8));
         extractBtn = PrimaryButton(S["ExtractBtn"], StartExtraction);
         cancelExtractBtn = PillButton(S["CancelBtn"], () => activeCts?.Cancel());
         cancelExtractBtn.Enabled = false;
-        actionRow.AddView(extractBtn, new LinearLayout.LayoutParams(0, Dp(44), 2.2f) { RightMargin = Dp(6) });
+        actionRow.AddView(extractBtn, new LinearLayout.LayoutParams(0, Dp(44), 2.2f) { RightMargin = Dp(8) });
         actionRow.AddView(cancelExtractBtn, new LinearLayout.LayoutParams(0, Dp(44), 1f));
         card.AddView(actionRow);
 
@@ -90,7 +133,7 @@ public partial class MainActivity {
             Progress = 0
         };
         OneUiTheme.StyleProgressBar(this, extractProgressBar);
-        card.AddView(extractProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(8)) { TopMargin = Dp(4) });
+        card.AddView(extractProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { TopMargin = Dp(4) });
 
         extractStatusText = Label(S["Ready"], 12f, ColCyan);
         extractStatusText.SetPadding(0, Dp(6), 0, Dp(4));
@@ -98,13 +141,36 @@ public partial class MainActivity {
 
         page.AddView(card);
 
-        LinearLayout outCard = Card("Arquivos Extraídos / Output");
+        LinearLayout outCard = Card("Arquivos Extraídos / Output", "📁", OneUiTheme.FunctionalGreen);
         extractedFilesContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
         outCard.AddView(extractedFilesContainer);
         page.AddView(outCard);
 
         RefreshExtractorChecklist();
         return page;
+    }
+
+    void RefreshExtractModeUi() {
+        for (int i = 0; i < extractModeRows.Count; i++) {
+            bool sel = i == selectedExtractMode;
+            var (_, dot, title) = extractModeRows[i];
+            dot.Background = sel
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.CoralStart, OneUiTheme.PillCornerDp, ColText, 3f)
+                : OneUiTheme.CreateRoundedDrawable(this, Color.Transparent, OneUiTheme.PillCornerDp, OneUiTheme.TextMuted, 1.5f);
+            title.SetTypeface(null, sel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+            title.SetTextColor(sel ? ColText : OneUiTheme.TextSub);
+        }
+    }
+
+    void RefreshExtractBitButtonsUi() {
+        for (int i = 0; i < extractBitButtons.Count; i++) {
+            bool sel = i == selectedExtractBitDepth;
+            Button b = extractBitButtons[i];
+            b.Background = sel
+                ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            b.SetTypeface(null, sel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+        }
     }
 
     Button QuickSelBtn(string text, Func<TrackSourceItem, bool> predicate) {
@@ -167,8 +233,8 @@ public partial class MainActivity {
         }
 
         StopPlayback();
-        int mode = extractModeSpinner.SelectedItemPosition;
-        BitDepth bits = extractBitsSpinner.SelectedItemPosition switch {
+        int mode = selectedExtractMode;
+        BitDepth bits = selectedExtractBitDepth switch {
             0 => BitDepth.Int16,
             2 => BitDepth.Float32,
             _ => BitDepth.Int24
@@ -261,8 +327,8 @@ public partial class MainActivity {
             string localPath = path;
             LinearLayout row = new(this) { Orientation = Orientation.Horizontal };
             row.SetGravity(GravityFlags.CenterVertical);
-            row.Background = OneUiTheme.CreateRoundedDrawable(this, ColCardAlt, 18f);
-            row.SetPadding(Dp(12), Dp(8), Dp(10), Dp(8));
+            row.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f);
+            row.SetPadding(Dp(12), Dp(9), Dp(10), Dp(9));
             LinearLayout.LayoutParams lp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
                 BottomMargin = Dp(6)
             };
