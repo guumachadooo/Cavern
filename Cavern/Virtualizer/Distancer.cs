@@ -91,7 +91,8 @@ namespace Cavern.Virtualizer {
             Vector3 sourceForward = new Vector3(0, dirMul, 0).RotateInverse(source.listener.Rotation).PlaceInSphere(),
                 dir = source.Position - source.listener.Position;
             float distance = dir.Length(),
-                rawAngle = (float)Math.Acos(Vector3.Dot(sourceForward, dir) / distance),
+                rawAngle = distance < 1e-5f ? 0 :
+                    MathF.Acos(Math.Clamp(Vector3.Dot(sourceForward, dir) / distance, -1f, 1f)),
                 angle = rawAngle * VectorExtensions.Rad2Deg;
             distance /= distanceFactor;
 
@@ -147,8 +148,9 @@ namespace Cavern.Virtualizer {
 
             // Apply gains
             float angleDiff = MathF.Sin(rawAngle) * .097f;
-            float ratioDiff = (distance + angleDiff) * (VirtualizerFilter.ReferenceDistance - angleDiff) /
-                             ((distance - angleDiff) * (VirtualizerFilter.ReferenceDistance + angleDiff));
+            float safeDistance = MathF.Max(distance, MathF.Abs(angleDiff) + .01f);
+            float ratioDiff = (safeDistance + angleDiff) * (VirtualizerFilter.ReferenceDistance - angleDiff) /
+                             ((safeDistance - angleDiff) * (VirtualizerFilter.ReferenceDistance + angleDiff));
             ratioDiff *= ratioDiff;
             if (right) {
                 if (ratioDiff < 1) {
