@@ -1432,7 +1432,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                         TogglePlayPause();
                     }
                 });
-            } catch (OperationCanceledException) {
+            } catch (System.OperationCanceledException) {
                 AppLogger.Info("TrueHD decode cancelled by user.");
                 RunOnUiThread(() => {
                     isPreparingTrueHD = false;
