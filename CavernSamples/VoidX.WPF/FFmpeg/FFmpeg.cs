@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 
 namespace VoidX.WPF.FFmpeg;
 
@@ -41,6 +42,26 @@ public abstract class FFmpeg {
     string location;
 
     /// <summary>
+    /// Full command line arguments of the most recent <see cref="Launch"/> call.
+    /// </summary>
+    public string LastCommand { get; protected set; } = string.Empty;
+
+    /// <summary>
+    /// Exit code of the most recent <see cref="Launch"/> call.
+    /// </summary>
+    public int LastExitCode { get; protected set; }
+
+    /// <summary>
+    /// Captured standard output of the most recent <see cref="Launch"/> call.
+    /// </summary>
+    public string LastOutput { get; protected set; } = string.Empty;
+
+    /// <summary>
+    /// Captured standard error or exception details of the most recent <see cref="Launch"/> call.
+    /// </summary>
+    public string LastError { get; protected set; } = string.Empty;
+
+    /// <summary>
     /// If the program exists in PATH, its full path is returned.
     /// </summary>
     static string GetPathOfProgram(string key) {
@@ -70,6 +91,11 @@ public abstract class FFmpeg {
     public abstract void UpdateStatusText(string text);
 
     /// <summary>
+    /// Optional hook invoked after each FFmpeg invocation completes or fails.
+    /// </summary>
+    protected virtual void OnCommandCompleted(string executable, string arguments, int exitCode, string stdout, string stderr) { }
+
+    /// <summary>
     /// Checks if FFmpeg's executable is located at the selected directory and update the UI accordingly.
     /// </summary>
     public void CheckFFmpeg() {
@@ -84,17 +110,51 @@ public abstract class FFmpeg {
     /// Launch the FFmpeg to process a file with the given arguments.
     /// </summary>
     public bool Launch(string arguments) {
-        Console.WriteLine("Launching FFmpeg with the following arguments: " + arguments);
+        string finalArgs = ConsoleMode ? arguments + lesserOutput : arguments;
+        LastCommand = finalArgs;
+        LastExitCode = -1;
+        LastOutput = string.Empty;
+        LastError = string.Empty;
+        Console.WriteLine("Launching FFmpeg with the following arguments: " + finalArgs);
+
+        if (string.IsNullOrEmpty(Location) || !File.Exists(Location)) {
+            LastError = $"FFmpeg executable not found at '{Location}'.";
+            OnCommandCompleted(Location, finalArgs, -1, string.Empty, LastError);
+            return false;
+        }
+
         ProcessStartInfo start = new() {
-            Arguments = ConsoleMode ? arguments + lesserOutput : arguments,
+            Arguments = finalArgs,
             FileName = Location,
-            UseShellExecute = false
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
         };
         try {
             using Process proc = Process.Start(start);
+            if (proc == null) {
+                LastError = "Process.Start returned null.";
+                OnCommandCompleted(Location, finalArgs, -1, string.Empty, LastError);
+                return false;
+            }
+            StringBuilder outSb = new();
+            StringBuilder errSb = new();
+            proc.OutputDataReceived += (_, e) => { if (e.Data != null) outSb.AppendLine(e.Data); };
+            proc.ErrorDataReceived += (_, e) => { if (e.Data != null) errSb.AppendLine(e.Data); };
+            proc.BeginOutputReadLine();
+            proc.BeginErrorReadLine();
             proc.WaitForExit();
-            return proc.ExitCode == 0;
-        } catch {
+
+            LastExitCode = proc.ExitCode;
+            LastOutput = outSb.ToString().Trim();
+            LastError = errSb.ToString().Trim();
+            OnCommandCompleted(Location, finalArgs, LastExitCode, LastOutput, LastError);
+            return LastExitCode == 0;
+        } catch (Exception ex) {
+            LastExitCode = -1;
+            LastError = ex.ToString();
+            OnCommandCompleted(Location, finalArgs, -1, string.Empty, LastError);
             return false;
         }
     }

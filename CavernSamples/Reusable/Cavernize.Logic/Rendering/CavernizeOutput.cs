@@ -14,10 +14,10 @@ namespace Cavernize.Logic.Rendering {
         /// Create the output file(s) for regular conversions, and write the header(s).
         /// </summary>
         public static AudioWriter CreateRenderOutput(ICavernizeApp app, string path, ConversionEnvironment environment, CavernizeTrack target, Codec codec, BitDepth bits) {
-            string exportFormat = path[^4..].ToLowerInvariant();
+            string exportFormat = Path.GetExtension(path).ToLowerInvariant();
             bool mkvTarget = exportFormat.Equals(".mkv");
             string exportName = mkvTarget || exportFormat.IsNative() ?
-                path[..^4] + waveExtension :
+                Path.ChangeExtension(path, waveExtension) :
                 path;
             int channelCount = app.RenderTarget.OutputChannels;
             AudioWriter writer;

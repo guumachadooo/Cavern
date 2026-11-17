@@ -42,6 +42,7 @@ namespace Cavern.Format.Common {
                 Codec.EnhancedAC3 => "Enhanced AC-3|*.ec3;*.eac3",
                 Codec.PCM_Float => pcmResult,
                 Codec.PCM_LE => pcmResult,
+                Codec.FLAC => "FLAC|*.flac",
                 Codec.Opus => "Opus|*.ogg;*.opus",
                 Codec.AC3 => "AC-3|*.ac3",
                 _ => null
@@ -78,6 +79,7 @@ namespace Cavern.Format.Common {
                 case ".caf":
                 case ".eac3":
                 case ".ec3":
+                case ".flac":
                 case ".laf":
                 case ".ogg":
                 case ".opus":
