@@ -304,9 +304,9 @@ public partial class MainActivity {
         }
         StringBuilder sb = new();
         foreach (var hdr in meta.Headers) {
-            sb.AppendLine($"=== {hdr.Name} ===");
-            foreach (var row in hdr.Contents) {
-                sb.AppendLine($"  {row.Key}: {row.Value}");
+            sb.AppendLine($"=== {hdr.Name} ({hdr.Fields.Count}) ===");
+            foreach (var row in hdr.Fields) {
+                sb.AppendLine($"  {row}");
             }
             sb.AppendLine();
         }

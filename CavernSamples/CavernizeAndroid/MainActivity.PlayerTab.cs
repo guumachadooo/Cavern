@@ -156,7 +156,7 @@ public partial class MainActivity {
         (seekBarLfe, _) = AddSliderRow(transportCard, S["LfeVol"], 0, 200, (int)(store.LfeVolume * 100), v => {
             float vol = v / 100f;
             store.LfeVolume = vol;
-            playerEngine.LfeVolume = vol;
+            playerEngine.LFEVolume = vol;
         });
         page.AddView(transportCard);
 

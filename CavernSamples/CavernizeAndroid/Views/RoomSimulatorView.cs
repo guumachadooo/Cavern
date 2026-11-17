@@ -4,6 +4,7 @@ using Android.Content;
 using Android.Graphics;
 using Android.Views;
 
+using Cavern.Channels;
 using Cavernize.Logic.Models;
 
 namespace CavernizeAndroid.Views;

@@ -15,6 +15,7 @@ using Cavern.Utilities;
 using Cavern.Virtualizer;
 using Cavern.Waveforms;
 
+using Cavernize.Logic.Language;
 using Cavernize.Logic.Models;
 using Cavernize.Logic.Models.RenderTargets;
 using CavernizeAndroid.Language;

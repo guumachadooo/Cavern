@@ -291,8 +291,8 @@ public sealed class AndroidRenderingSettings(AppSettingsStore store) : Rendering
     }
 
     public override bool WAVChannelSkip {
-        get => store.WAVChannelSkip;
-        set => store.WAVChannelSkip = value;
+        get => store.WavChannelSkip;
+        set => store.WavChannelSkip = value;
     }
 }
 
