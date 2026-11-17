@@ -5,6 +5,7 @@ using Android.Widget;
 
 using Cavern.Format.Common;
 
+using Cavernize.Logic.Models;
 using CavernizeAndroid.Services;
 using CavernizeAndroid.Theme;
 using CavernizeAndroid.Views;
@@ -122,9 +123,10 @@ public partial class MainActivity {
         page.SetPadding(Dp(18), Dp(6), Dp(18), Dp(116));
 
         // 1. Elevated Apple-Music Style Cover Artwork Card
-        musicArtworkView = new RoundedArtworkView(this);
-        musicArtworkView.SetScaleX(0.92f);
-        musicArtworkView.SetScaleY(0.92f);
+        musicArtworkView = new RoundedArtworkView(this) {
+            ScaleX = 0.92f,
+            ScaleY = 0.92f
+        };
         musicArtworkView.Click += (_, _) => {
             if (LoadedFile == null) {
                 LaunchFilePicker(ReqOpenMedia, allowMultiple: false);
@@ -347,13 +349,11 @@ public partial class MainActivity {
             LoadedFile != null ? accent : null,
             LoadedFile != null ? accent2 : null);
 
-        Bitmap fallbackArt = null;
         if (LoadedFile != null && currentMediaMeta?.ArtworkBitmap != null && !currentMediaMeta.ArtworkBitmap.IsRecycled) {
             musicArtworkView.SetArtwork(currentMediaMeta.ArtworkBitmap, accent);
         } else {
             defaultFallbackCover ??= MediaMetadataHelper.CreateSpatialFallbackArtwork("Cavernize", OneUiTheme.PrimaryHigh, OneUiTheme.Secondary, 512);
-            fallbackArt = defaultFallbackCover;
-            musicArtworkView.SetArtwork(fallbackArt, OneUiTheme.Primary);
+            musicArtworkView.SetArtwork(defaultFallbackCover, OneUiTheme.Primary);
         }
 
         if (LoadedFile == null || selectedTrack == null) {

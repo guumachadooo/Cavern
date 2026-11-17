@@ -80,7 +80,7 @@ public static class MediaMetadataHelper {
                 }
 
                 if (OperatingSystem.IsAndroidVersionAtLeast(31)) {
-                    string srRaw = retriever.ExtractMetadata(MetadataKey.Samplerate);
+                    string srRaw = retriever.ExtractMetadata((MetadataKey)38); // METADATA_KEY_SAMPLERATE
                     if (int.TryParse(srRaw, out int sr) && sr > 0) {
                         sampleRate = sr;
                     }
@@ -92,7 +92,7 @@ public static class MediaMetadataHelper {
                     hasEmbedded = artwork != null;
                 }
             } catch (Exception ex) {
-                AppLogger.Error("Metadata", "MediaMetadataRetriever extraction warning", ex);
+                AppLogger.Error("MediaMetadataHelper.Extract", ex);
             }
         }
 
