@@ -9,3 +9,5 @@ Tests/Test.CavernAmp/Test.CavernAmp.exe
 Tests/TestResults/
 Tests/coverage.json
 packages/
+*.apk
+*.keystore

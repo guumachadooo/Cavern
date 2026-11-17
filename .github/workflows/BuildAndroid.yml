@@ -1,0 +1,84 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install .NET Android workload
+        run: dotnet workload install android
+
+      - name: Install Android SDK dependencies
+        run: |
+          dotnet build CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
+            -t:InstallAndroidDependencies -f net8.0-android -c Release \
+            -p:AcceptAndroidSDKLicenses=true
+
+      - name: Generate signing keystore
+        run: |
+          keytool -genkeypair -v -keystore "$GITHUB_WORKSPACE/cavernize.keystore" -alias cavernize \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass cavernize -keypass cavernize \
+            -dname "CN=Cavernize, OU=Audio, O=Cavern, L=Internet, S=Internet, C=BR"
+
+      - name: Build and sign CavernizeAndroid APK
+        run: |
+          dotnet publish CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
+            -c Release -f net8.0-android \
+            -p:AndroidPackageFormat=apk \
+            -p:AndroidKeyStore=true \
+            -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/cavernize.keystore" \
+            -p:AndroidSigningKeyAlias=cavernize \
+            -p:AndroidSigningKeyPass=cavernize \
+            -p:AndroidSigningStorePass=cavernize \
+            -p:AcceptAndroidSDKLicenses=true
+
+      - name: Collect signed APK
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          APK_PATH=$(find CavernSamples/CavernizeAndroid/bin/Release/net8.0-android -name "*-Signed.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            APK_PATH=$(find CavernSamples/CavernizeAndroid/bin/Release/net8.0-android -name "*.apk" | head -n 1)
+          fi
+          echo "Found APK: $APK_PATH"
+          cp "$APK_PATH" "$GITHUB_WORKSPACE/build/Cavernize-Android.apk"
+          ls -lh "$GITHUB_WORKSPACE/build/Cavernize-Android.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cavernize-APK
+          path: build/Cavernize-Android.apk
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: "Cavernize Android APK"
+          prerelease: false
+          files: build/Cavernize-Android.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
