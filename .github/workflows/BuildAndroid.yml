@@ -17,16 +17,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java 17
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
-      - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
+      - name: Verify .NET SDK
+        run: dotnet --info
 
       - name: Install .NET Android workload
         run: dotnet workload install android
@@ -34,7 +32,7 @@ jobs:
       - name: Install Android SDK dependencies
         run: |
           dotnet build CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
-            -t:InstallAndroidDependencies -f net8.0-android -c Release \
+            -t:InstallAndroidDependencies -f net11.0-android -c Release \
             -p:AcceptAndroidSDKLicenses=true
 
       - name: Generate signing keystore
@@ -47,7 +45,7 @@ jobs:
       - name: Build and sign CavernizeAndroid APK
         run: |
           dotnet publish CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
-            -c Release -f net8.0-android \
+            -c Release -f net11.0-android \
             -p:AndroidPackageFormat=apk \
             -p:AndroidKeyStore=true \
             -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/cavernize.keystore" \
@@ -59,9 +57,9 @@ jobs:
       - name: Collect signed APK
         run: |
           mkdir -p "$GITHUB_WORKSPACE/build"
-          APK_PATH=$(find CavernSamples/CavernizeAndroid/bin/Release/net8.0-android -name "*-Signed.apk" | head -n 1)
+          APK_PATH=$(find CavernSamples/CavernizeAndroid/bin/Release/net11.0-android -name "*-Signed.apk" | head -n 1)
           if [ -z "$APK_PATH" ]; then
-            APK_PATH=$(find CavernSamples/CavernizeAndroid/bin/Release/net8.0-android -name "*.apk" | head -n 1)
+            APK_PATH=$(find CavernSamples/CavernizeAndroid/bin/Release/net11.0-android -name "*.apk" | head -n 1)
           fi
           echo "Found APK: $APK_PATH"
           cp "$APK_PATH" "$GITHUB_WORKSPACE/build/Cavernize-Android.apk"
