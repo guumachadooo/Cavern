@@ -27,6 +27,7 @@ public static class OneUiTheme {
     public static readonly Color GlassRimTop = Color.ParseColor("#48FFFFFF");
     public static readonly Color GlassRimMid = Color.ParseColor("#14FFFFFF");
     public static readonly Color GlassRimBottom = Color.ParseColor("#2BFFFFFF");
+    public static readonly Color FloatingBorder = Color.ParseColor("#26FFFFFF");
 
     // Brand & Accent Tokens
     public static readonly Color Primary = Color.ParseColor("#387AFF");             // basic_token_primary_50
@@ -373,8 +374,8 @@ public sealed class OneUiGlassDrawable : Drawable {
 }
 
 /// <summary>
-/// Full-capsule 46dp One UI 9 slider (matching Galaxy S25 Ultra Brightness/Volume & Media capsules)
-/// with gradient pill fill, embedded label & value readout, Recoil press feedback, and vertical scroll protection.
+/// Full-capsule 44dp One UI 9 slider (matching Galaxy S25 Ultra Brightness/Volume &amp; Media capsules)
+/// with gradient pill fill, embedded label &amp; value readout, Recoil press feedback, and vertical scroll protection.
 /// </summary>
 public sealed class OneUiSeekBar : SeekBar {
     readonly int touchSlop;

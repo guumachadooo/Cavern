@@ -889,8 +889,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 .SetPositiveButton("OK", (_, _) => AppUpdateService.OpenUnknownSourcesSettings(this))
                 .SetNegativeButton(S["DismissBtn"], (_, _) => { })
                 .Create();
-            dlg.Window?.SetBackgroundDrawable(OneUiTheme.CreateRoundedDrawable(
-                this, OneUiTheme.SurfaceElevated, OneUiTheme.CardCornerDp, OneUiTheme.FloatingBorder, 1f));
+            dlg.Window?.SetBackgroundDrawable(OneUiTheme.CreateGlassCardDrawable(
+                this, OneUiTheme.SurfaceElevated, OneUiTheme.CardCornerDp));
             dlg.Show();
             return;
         }
@@ -910,8 +910,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
             .SetMessage(msg)
             .SetPositiveButton("OK", (_, _) => { })
             .Create();
-        dlg.Window?.SetBackgroundDrawable(OneUiTheme.CreateRoundedDrawable(
-            this, OneUiTheme.SurfaceElevated, OneUiTheme.CardCornerDp, OneUiTheme.FloatingBorder, 1f));
+        dlg.Window?.SetBackgroundDrawable(OneUiTheme.CreateGlassCardDrawable(
+            this, OneUiTheme.SurfaceElevated, OneUiTheme.CardCornerDp));
         dlg.Show();
     }
 }

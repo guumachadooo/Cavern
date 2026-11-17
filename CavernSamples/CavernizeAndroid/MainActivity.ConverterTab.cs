@@ -265,8 +265,8 @@ public partial class MainActivity {
             .SetView(sv)
             .SetNegativeButton(S["CancelBtn"], (_, _) => { })
             .Create();
-        dialog.Window?.SetBackgroundDrawable(OneUiTheme.CreateRoundedDrawable(
-            this, OneUiTheme.SurfaceElevated, OneUiTheme.CardCornerDp, OneUiTheme.FloatingBorder, 1f));
+        dialog.Window?.SetBackgroundDrawable(OneUiTheme.CreateGlassCardDrawable(
+            this, OneUiTheme.SurfaceElevated, OneUiTheme.CardCornerDp));
         dialog.Show();
     }
 
