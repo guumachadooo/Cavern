@@ -229,37 +229,6 @@ public static class AndroidFileHelper {
         return null;
     }
 
-    /// <summary>
-    /// Returns a shareable <see cref="Android.Net.Uri"/> (content:// on API 29+) for <paramref name="localPath"/>.
-    /// </summary>
-    public static Android.Net.Uri GetShareableUri(Context context, string localPath) {
-        if (string.IsNullOrEmpty(localPath) || !File.Exists(localPath)) {
-            return null;
-        }
-        if (Build.VERSION.SdkInt >= BuildVersionCodes.Q) {
-            string fileName = Path.GetFileName(localPath);
-            ContentValues values = new();
-            values.Put(MediaStore.IMediaColumns.DisplayName, fileName);
-            values.Put(MediaStore.IMediaColumns.MimeType, GetMimeType(fileName));
-            values.Put(MediaStore.IMediaColumns.RelativePath, "Download/Cavernize/Shared/");
-            values.Put(MediaStore.IMediaColumns.IsPending, 1);
-
-            ContentResolver resolver = context.ContentResolver;
-            Android.Net.Uri uri = resolver.Insert(MediaStore.Downloads.ExternalContentUri, values);
-            if (uri != null) {
-                using (System.IO.Stream dst = resolver.OpenOutputStream(uri))
-                using (FileStream src = File.OpenRead(localPath)) {
-                    src.CopyTo(dst);
-                }
-                values.Clear();
-                values.Put(MediaStore.IMediaColumns.IsPending, 0);
-                resolver.Update(uri, values, null, null);
-                return uri;
-            }
-        }
-        return Android.Net.Uri.FromFile(new Java.IO.File(localPath));
-    }
-
     static bool CanOpenForRead(string path) {
         try {
             if (!File.Exists(path)) {
