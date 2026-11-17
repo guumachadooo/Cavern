@@ -90,7 +90,7 @@ jobs:
           body: |
             Automated signed Android APK build for Cavernize (`${{ github.sha }}`).
             - Version: `v2.1.${{ github.run_number }}` (Build `${{ github.run_number }}`)
-            - Features: Samsung One UI 9 Dark UI, 3D Room Simulator (with scroll-safe lock & sliders), Stem/Object Extractor, Full Cavernize Converter, and 1-Click In-App Auto-Updater.
+            - Features: True Samsung One UI 9 Dark UI (blurred depth backdrop, frosted glass specular rims, 44dp fat capsule sliders, floating glass pill nav, Recoil physics), 1-click FFmpeg Auto-Downloader & Auto-Updater, 3D Room Simulator (scroll-safe + lock), Stem/Object Extractor, Full Cavernize Converter, and In-About App Updater.
           prerelease: false
           files: build/Cavernize-Android.apk
         env:
