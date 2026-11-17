@@ -3,6 +3,7 @@ using Cavern.CavernSettings;
 using Cavern.Channels;
 using Cavern.Format;
 using Cavern.Format.Common;
+using Cavern.Format.Common.Metadata;
 using Cavern.Format.Renderers;
 using Cavern.Remapping;
 using Cavern.Remapping.Exceptions;
@@ -19,7 +20,7 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     /// <summary>
     /// This track can be rendered.
     /// </summary>
-    public bool Supported { get; }
+    public bool Supported { get; protected set; }
 
     /// <summary>
     /// Track audio coding type.
@@ -29,7 +30,17 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     /// <summary>
     /// The track's container's file format.
     /// </summary>
-    public Container Container => reader is AudioTrackReader trackReader ? trackReader.Source.Type : Container.NotContainer;
+    public virtual Container Container => reader is AudioTrackReader trackReader ? trackReader.Source.Type : Container.NotContainer;
+
+    /// <summary>
+    /// Original codec when this track was pre-decoded externally (for example <see cref="Codec.TrueHD"/> -> <see cref="Codec.DAMF"/>).
+    /// </summary>
+    public virtual Codec SourceCodec => Codec;
+
+    /// <summary>
+    /// Optional raw bitstream path on disk when already extracted from a container.
+    /// </summary>
+    public virtual string RawBitstreamPath => null;
 
     /// <summary>
     /// The renderer starting at the first sample of the track after construction.
@@ -39,17 +50,17 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     /// <summary>
     /// Number of samples to render by the <see cref="Listener"/> to reach the end of the stream.
     /// </summary>
-    public long Length => reader.Length;
+    public virtual long Length => reader.Length;
 
     /// <summary>
     /// Sampling rate of the track.
     /// </summary>
-    public int SampleRate => reader.SampleRate;
+    public virtual int SampleRate => reader.SampleRate;
 
     /// <summary>
     /// Order in the tracks of the input container.
     /// </summary>
-    public int Index { get; }
+    public int Index { get; protected set; }
 
     /// <summary>
     /// Language code.
@@ -69,12 +80,12 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     /// <summary>
     /// The file in which this track is stored, or null if it's a network stream.
     /// </summary>
-    public string Path => reader.Path;
+    public virtual string Path => reader?.Path;
 
     /// <summary>
     /// Raw access to the track's stream.
     /// </summary>
-    public Track Track => reader is AudioTrackReader trackReader ? trackReader.track : null;
+    public virtual Track Track => reader is AudioTrackReader trackReader ? trackReader.track : null;
 
     /// <summary>
     /// Raw access to the underlying <see cref="AudioReader"/>.
@@ -85,8 +96,12 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     /// Current sample position in the stream per channel, or -1 if unsupported.
     /// </summary>
     public long Position {
-        get => reader.Position;
-        set => reader.Position = value;
+        get => reader?.Position ?? -1;
+        set {
+            if (reader != null) {
+                reader.Position = value;
+            }
+        }
     }
 
     /// <summary>
@@ -239,17 +254,17 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     /// <summary>
     /// Get the video tracks this audio track is accompanying.
     /// </summary>
-    public Track[] GetVideoTracks() => reader is AudioTrackReader trackReader ? [.. trackReader.Source.Tracks.Where(x => x.Format.IsVideo())] : null;
+    public virtual Track[] GetVideoTracks() => reader is AudioTrackReader trackReader ? [.. trackReader.Source.Tracks.Where(x => x.Format.IsVideo())] : null;
 
     /// <summary>
     /// Gets the metadata for this codec in a human-readable format.
     /// </summary>
-    public ReadableMetadata GetMetadata() => reader is IMetadataSupplier meta ? meta.GetMetadata() : null;
+    public virtual ReadableMetadata GetMetadata() => reader is IMetadataSupplier meta ? meta.GetMetadata() : null;
 
     /// <summary>
     /// Free up resources.
     /// </summary>
-    public void Dispose() {
+    public virtual void Dispose() {
         if (reader is AudioTrackReader track) {
             track.Source.Dispose();
         }
@@ -301,9 +316,160 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     /// </summary>
     static readonly Dictionary<Codec, string> formatNames = new() {
         [Codec.DAMF] = "Dolby Atmos Master Format",
+        [Codec.TrueHD] = "Dolby TrueHD",
         [Codec.DTS] = "DTS Coherent Acoustics",
         [Codec.DTS_HD] = "DTS-HD",
         [Codec.AC3] = "AC-3",
         [Codec.EnhancedAC3] = "Enhanced AC-3",
     };
+}
+
+/// <summary>
+/// Wraps a decoded <see cref="AudioReader"/> (such as DAMF or CAF produced by truehdd) while preserving
+/// original container metadata, video tracks, and raw bitstream paths for remuxing and --extract.
+/// </summary>
+public sealed class ExternalDecodedTrack : CavernizeTrack {
+    readonly CavernizeTrack originalTrack;
+    readonly Container originalContainer;
+    readonly Track[] originalVideoTracks;
+    readonly string rawBitstreamPath;
+    readonly Codec sourceCodec;
+    readonly ReadableMetadata extraMetadata;
+
+    /// <inheritdoc/>
+    public override Container Container => originalTrack?.Container ?? originalContainer;
+
+    /// <inheritdoc/>
+    public override Codec SourceCodec => sourceCodec;
+
+    /// <inheritdoc/>
+    public override string RawBitstreamPath => rawBitstreamPath;
+
+    /// <inheritdoc/>
+    public override Track Track => originalTrack?.Track;
+
+    /// <summary>
+    /// Creates an externally decoded track wrapping <paramref name="decodedReader"/>.
+    /// </summary>
+    public ExternalDecodedTrack(
+        AudioReader decodedReader,
+        Codec decodedCodec,
+        Codec sourceCodec,
+        CavernizeTrack originalTrack,
+        Container originalContainer,
+        Track[] originalVideoTracks,
+        string rawBitstreamPath,
+        string language = null,
+        ReadableMetadata extraMetadata = null)
+        : base(decodedReader, decodedCodec, originalTrack?.Index ?? 0, language ?? originalTrack?.Language) {
+        this.sourceCodec = sourceCodec;
+        this.originalTrack = originalTrack;
+        this.originalContainer = originalContainer;
+        this.originalVideoTracks = originalVideoTracks;
+        this.rawBitstreamPath = rawBitstreamPath;
+        this.extraMetadata = extraMetadata;
+
+        if (sourceCodec == Codec.TrueHD) {
+            string durText = $"{TimeSpan.FromSeconds(Length / (double)Math.Max(1, SampleRate)):h\\:mm\\:ss}";
+            FormatHeader = Renderer != null && Renderer.HasObjects
+                ? $"Dolby TrueHD Atmos ({durText})"
+                : $"Dolby TrueHD ({durText})";
+        }
+    }
+
+    /// <inheritdoc/>
+    public override Track[] GetVideoTracks() => originalTrack?.GetVideoTracks() ?? originalVideoTracks;
+
+    /// <inheritdoc/>
+    public override ReadableMetadata GetMetadata() => extraMetadata ?? originalTrack?.GetMetadata() ?? base.GetMetadata();
+
+    /// <inheritdoc/>
+    public override void Dispose() {
+        base.Dispose();
+    }
+}
+
+/// <summary>
+/// Represents a TrueHD (or externally decodable) track inside a container or pre-extracted raw bitstream
+/// when native header inspection threw or the container used FFmpeg fallback extraction.
+/// </summary>
+public sealed class ExternalPendingTrack : CavernizeTrack {
+    readonly Track containerTrack;
+    readonly Container container;
+    readonly string filePath;
+    readonly string rawBitstreamPath;
+    readonly int sampleRate;
+    readonly long length;
+
+    /// <inheritdoc/>
+    public override Container Container => containerTrack?.Source?.Type ?? container;
+
+    /// <inheritdoc/>
+    public override long Length => length;
+
+    /// <inheritdoc/>
+    public override int SampleRate => sampleRate;
+
+    /// <inheritdoc/>
+    public override string Path => filePath;
+
+    /// <inheritdoc/>
+    public override string RawBitstreamPath => rawBitstreamPath;
+
+    /// <inheritdoc/>
+    public override Track Track => containerTrack;
+
+    /// <summary>
+    /// Creates a pending external track directly from a parsed container <see cref="Track"/>.
+    /// </summary>
+    public ExternalPendingTrack(Track containerTrack, TrackExtraAudio audioExtra, int index, string filePath) {
+        this.containerTrack = containerTrack;
+        container = containerTrack?.Source?.Type ?? Container.NotContainer;
+        this.filePath = filePath;
+        Index = index;
+        Codec = containerTrack?.Format ?? Codec.TrueHD;
+        Language = containerTrack?.Language;
+        Supported = true;
+        sampleRate = audioExtra != null && audioExtra.SampleRate > 0 ? (int)audioExtra.SampleRate : 48000;
+        double dur = containerTrack?.Source?.Duration ?? 0;
+        length = dur > 0 ? (long)(dur * sampleRate) : -1;
+        string durText = dur > 0 ? $"{TimeSpan.FromSeconds(dur):h\\:mm\\:ss}" : "--:--";
+        FormatHeader = $"Dolby TrueHD ({durText})";
+        int ch = audioExtra?.ChannelCount ?? 0;
+        Details = ch > 0
+            ? [(TrackStrings.Active["Chans"], $"{ch} (truehdd)")]
+            : [(TrackStrings.Active["Chans"], "truehdd")];
+    }
+
+    /// <summary>
+    /// Creates a pending external track from a pre-extracted raw bitstream (e.g. FFmpeg fallback from MKV/MP4/M2TS).
+    /// </summary>
+    public ExternalPendingTrack(string containerPath, string rawBitstreamPath, Codec codec, Container container,
+        int index, string language, int sampleRate, double durationSeconds, string channelSummary) {
+        filePath = containerPath;
+        this.rawBitstreamPath = rawBitstreamPath;
+        this.container = container;
+        Index = index;
+        Codec = codec;
+        Language = language;
+        Supported = true;
+        this.sampleRate = sampleRate > 0 ? sampleRate : 48000;
+        length = durationSeconds > 0 ? (long)(durationSeconds * this.sampleRate) : -1;
+        string durText = durationSeconds > 0 ? $"{TimeSpan.FromSeconds(durationSeconds):h\\:mm\\:ss}" : "--:--";
+        FormatHeader = $"Dolby TrueHD ({durText})";
+        Details = !string.IsNullOrWhiteSpace(channelSummary)
+            ? [(TrackStrings.Active["Chans"], channelSummary)]
+            : [(TrackStrings.Active["Chans"], "truehdd")];
+    }
+
+    /// <inheritdoc/>
+    public override Track[] GetVideoTracks() => containerTrack != null
+        ? [.. containerTrack.Source.Tracks.Where(x => x.Format.IsVideo())]
+        : null;
+
+    /// <inheritdoc/>
+    public override void Dispose() {
+        containerTrack?.Source?.Dispose();
+        GC.SuppressFinalize(this);
+    }
 }

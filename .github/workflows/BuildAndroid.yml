@@ -49,7 +49,7 @@ jobs:
           dotnet publish CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
             -c Release -f net11.0-android \
             -p:ApplicationVersion=${{ github.run_number }} \
-            -p:ApplicationDisplayVersion=2.4.${{ github.run_number }} \
+            -p:ApplicationDisplayVersion=2.5.${{ github.run_number }} \
             -p:AndroidPackageFormat=apk \
             -p:AndroidKeyStore=true \
             -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/cavernize.keystore" \
@@ -86,11 +86,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
-          name: "Cavernize Android v2.4.${{ github.run_number }}"
+          name: "Cavernize Android v2.5.${{ github.run_number }}"
           body: |
             Automated signed Android APK build for Cavernize (`${{ github.sha }}`).
-            - Version: `v2.4.${{ github.run_number }}` (Build `${{ github.run_number }}`)
-            - Highlights: Embedded Album Art & Metadata Extraction (`MediaMetadataRetriever` -> Player UI & System Lock Screen Notification), Casual Music Player Tab (`Player` with Apple/One UI 9 wave seekbar + DSP quick controls), Unified Orbitable 3D Room (`3D`/`Topo`/`Frente` camera interpolation, 60fps smoothing + object motion trails), Frosted Blurred Bottom Capsule Bar & Animated Tab Transitions, Refined One UI 9 Seekbar Touch Thumb, Individualized Inline `?` Technical Explanations.
+            - Version: `v2.5.${{ github.run_number }}` (Build `${{ github.run_number }}`)
+            - Highlights: Full Dolby TrueHD & Dolby Atmos TrueHD Support via Official Static `truehdd` (`aarch64-unknown-linux-musl` Auto-Installer/Updater in `FilesDir/bin/truehdd`), Real-time TrueHD Atmos 3D Playback / Studio Export / Stem Extraction (`--extract` + `.json`), Smart FFmpeg MKV/M2TS/MP4 Container Probe & Demux Fallback, Automatic Temporary Cache Cleanup, Plus All v2.4 Spatial Player & One UI 9 Features.
           prerelease: false
           files: build/Cavernize-Android.apk
         env:

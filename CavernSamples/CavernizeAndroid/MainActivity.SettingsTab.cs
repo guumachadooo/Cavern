@@ -37,6 +37,11 @@ public partial class MainActivity {
     ProgressBar ffmpegProgressBar;
     Button ffmpegAutoBtn, ffmpegCheckBtn, ffmpegBtn;
 
+    // truehdd auto-downloader & updater views
+    TextView truehddStatusText;
+    ProgressBar truehddProgressBar;
+    Button truehddAutoBtn, truehddCheckBtn, truehddManualBtn;
+
     // App version & updater views (inside About section at bottom of Settings)
     TextView updateCurrentVerLabel, updateSettingsStatusText;
     ProgressBar updateSettingsProgressBar;
@@ -232,6 +237,10 @@ public partial class MainActivity {
         AddSliderRow(advContentContainer, S["MlpPres"], -1, 4, store.MlpPresentation, v => {
             store.MlpPresentation = v;
             store.ApplyGlobals();
+            if (decodedTrueHDTrack != null && !isPreparingTrueHD) {
+                ClearDecodedTrueHDState();
+                BindActiveTrackToUiAndPlayer(selectedTrack);
+            }
         }, "", useBlue: true, defaultValue: -1, helpBody: S["TipMlpPres"]);
 
         OneUiInlineSelector qualSelector = new(this, S["AudioQuality"]);
@@ -294,6 +303,41 @@ public partial class MainActivity {
         };
         ffCard.AddView(ffArgsBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
         page.AddView(ffCard);
+
+        // 5b. truehdd Dolby TrueHD Engine (Auto-Download & Updater)
+        LinearLayout thdCard = Card();
+        LinearLayout thdHeader = HRow();
+        thdHeader.SetPadding(0, 0, 0, Dp(10));
+        thdHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Sparkles, OneUiTheme.Primary));
+        TextView thdTitleTv = SectionTitle(S["TruehddCardTitle"]);
+        thdTitleTv.SetPadding(Dp(10), 0, Dp(8), 0);
+        thdHeader.AddView(thdTitleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        thdHeader.AddView(CreateInlineHelpBtn(S["TruehddCardTitle"], S["TipTruehdd"]), new LinearLayout.LayoutParams(Dp(26), Dp(26)));
+        thdCard.AddView(thdHeader);
+
+        truehddStatusText = Label(S["TruehddNotInstalled"], 12.5f, OneUiTheme.TextSub);
+        truehddStatusText.SetPadding(0, 0, 0, Dp(8));
+        thdCard.AddView(truehddStatusText);
+
+        truehddProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
+            Max = 1000,
+            Progress = 0,
+            Visibility = ViewStates.Gone
+        };
+        OneUiTheme.StyleProgressBar(this, truehddProgressBar);
+        thdCard.AddView(truehddProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { BottomMargin = Dp(8) });
+
+        LinearLayout thdBtns = HRow();
+        truehddAutoBtn = PrimaryButton(S["TruehddDownloadBtn"], StartTruehddDownloadOrUpdate);
+        truehddCheckBtn = PillButton(S["TruehddCheckBtn"], () => _ = CheckTruehddUpdateAsync(silent: false));
+        thdBtns.AddView(truehddAutoBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.35f) { RightMargin = Dp(8) });
+        thdBtns.AddView(truehddCheckBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        thdCard.AddView(thdBtns);
+
+        AddDivider(thdCard);
+        truehddManualBtn = PillButton(S["TruehddManualBtn"], () => LaunchFilePicker(ReqLocateTruehdd, false));
+        thdCard.AddView(truehddManualBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        page.AddView(thdCard);
 
         // 6. Diagnostics & Shared Logs
         LinearLayout logCard = Card(S["DiagnosticsTitle"], OneUiIconType.Logs, OneUiTheme.FunctionalCyan);
@@ -389,6 +433,7 @@ public partial class MainActivity {
 
         RefreshSettingsTabButtons();
         RefreshFFmpegCardUi();
+        RefreshTruehddCardUi();
         RefreshSettingsUpdateUi();
         return page;
     }
@@ -461,6 +506,71 @@ public partial class MainActivity {
         if (ffmpegProgressBar != null && !isFFmpegDownloading) {
             ffmpegProgressBar.Indeterminate = false;
             ffmpegProgressBar.Visibility = ViewStates.Gone;
+        }
+    }
+
+    void SetTruehddStatus(string msg, double progress) {
+        if (truehddStatusText != null) {
+            truehddStatusText.Text = msg ?? "";
+        }
+        if (truehddProgressBar != null) {
+            if (progress < 0) {
+                truehddProgressBar.Visibility = ViewStates.Visible;
+                truehddProgressBar.Indeterminate = true;
+            } else if (isTruehddDownloading) {
+                truehddProgressBar.Visibility = ViewStates.Visible;
+                truehddProgressBar.Indeterminate = false;
+                truehddProgressBar.Progress = Math.Clamp((int)Math.Round(progress * 1000.0), 0, 1000);
+            } else {
+                truehddProgressBar.Indeterminate = false;
+                truehddProgressBar.Visibility = ViewStates.Gone;
+            }
+        }
+    }
+
+    void RefreshTruehddCardUi() {
+        if (truehddStatusText == null || truehddAutoBtn == null) {
+            return;
+        }
+        string localPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
+        bool hasLocal = !string.IsNullOrEmpty(localPath) && File.Exists(localPath);
+        if (latestTruehddStatus != null) {
+            if (latestTruehddStatus.IsUpdateAvailable) {
+                truehddStatusText.Text = string.Format(S["TruehddUpdateAvail"], latestTruehddStatus.RemoteVersion);
+                truehddStatusText.SetTextColor(OneUiTheme.FunctionalOrange);
+                truehddAutoBtn.Text = $"{S["TruehddUpdateBtn"]} (v{latestTruehddStatus.RemoteVersion})";
+                truehddAutoBtn.Visibility = ViewStates.Visible;
+            } else if (hasLocal) {
+                string ver = !string.IsNullOrEmpty(store.InstalledTruehddVersion)
+                    ? store.InstalledTruehddVersion
+                    : latestTruehddStatus.RemoteVersion;
+                truehddStatusText.Text = string.Format(S["TruehddInstalledVer"], string.IsNullOrEmpty(ver) ? "OK" : ver);
+                truehddStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
+                truehddAutoBtn.Text = S["TruehddDownloadBtn"];
+                truehddAutoBtn.Visibility = ViewStates.Gone;
+            } else {
+                truehddStatusText.Text = S["TruehddNotInstalled"];
+                truehddStatusText.SetTextColor(OneUiTheme.TextSub);
+                truehddAutoBtn.Text = S["TruehddDownloadBtn"];
+                truehddAutoBtn.Visibility = ViewStates.Visible;
+            }
+        } else if (hasLocal) {
+            string ver = !string.IsNullOrEmpty(store.InstalledTruehddVersion)
+                ? store.InstalledTruehddVersion
+                : Path.GetFileName(localPath);
+            truehddStatusText.Text = string.Format(S["TruehddInstalledVer"], ver);
+            truehddStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
+            truehddAutoBtn.Visibility = ViewStates.Gone;
+        } else {
+            truehddStatusText.Text = S["TruehddNotInstalled"];
+            truehddStatusText.SetTextColor(OneUiTheme.TextSub);
+            truehddAutoBtn.Text = S["TruehddDownloadBtn"];
+            truehddAutoBtn.Visibility = ViewStates.Visible;
+        }
+
+        if (truehddProgressBar != null && !isTruehddDownloading) {
+            truehddProgressBar.Indeterminate = false;
+            truehddProgressBar.Visibility = ViewStates.Gone;
         }
     }
 
@@ -541,10 +651,11 @@ public partial class MainActivity {
     }
 
     void ReattachPlayerTrack() {
-        if (selectedTrack != null && selectedTrack.Supported && selectedTrack.Codec != Codec.TrueHD) {
+        CavernizeTrack active = GetActiveTrack();
+        if (active != null && active.Supported && active.Codec != Codec.TrueHD) {
             bool wasPlaying = playerEngine.IsPlaying;
             double sec = playerEngine.CurrentSeconds;
-            playerEngine.Load(selectedTrack, upmixingSettings, renderingSettings);
+            playerEngine.Load(active, upmixingSettings, renderingSettings);
             if (sec > 0) {
                 playerEngine.Seek(sec);
             }
@@ -573,6 +684,12 @@ public partial class MainActivity {
             ffmpegBtn.Text = ffmpeg.Found
                 ? $"{S["FFmpegManualBtn"]}: {Path.GetFileName(ffmpeg.Location)}"
                 : S["FFmpegManualBtn"];
+        }
+        if (truehddManualBtn != null) {
+            string thdPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
+            truehddManualBtn.Text = !string.IsNullOrEmpty(thdPath)
+                ? $"{S["TruehddManualBtn"]}: {Path.GetFileName(thdPath)}"
+                : S["TruehddManualBtn"];
         }
         if (muteBedSwitch != null && muteBedSwitch.Checked != store.MuteBed) {
             muteBedSwitch.Checked = store.MuteBed;
@@ -645,6 +762,15 @@ public partial class MainActivity {
     // Queue Helpers
     void AddCurrentToQueue() {
         if (renderQueue.AddCurrent(null)) {
+            if (!string.IsNullOrEmpty(activeTrueHDSessionDir)) {
+                protectedQueuePaths.Add(Path.GetFullPath(activeTrueHDSessionDir));
+            }
+            if (!string.IsNullOrEmpty(activeFallbackSessionDir)) {
+                protectedQueuePaths.Add(Path.GetFullPath(activeFallbackSessionDir));
+            }
+            if (!string.IsNullOrEmpty(LoadedFile?.Path)) {
+                protectedQueuePaths.Add(Path.GetFullPath(LoadedFile.Path));
+            }
             RefreshQueueList();
             Toast.MakeText(this, S["AddQueueBtn"], ToastLength.Short).Show();
         }
@@ -657,6 +783,9 @@ public partial class MainActivity {
         }
         if (renderQueue.Jobs.Count > 0) {
             renderQueue.Jobs.RemoveAt(renderQueue.Jobs.Count - 1);
+            if (renderQueue.Jobs.Count == 0) {
+                protectedQueuePaths.Clear();
+            }
             RefreshQueueList();
         }
     }
@@ -667,14 +796,23 @@ public partial class MainActivity {
             StringCollection paths = [];
             foreach (Android.Net.Uri uri in uris) {
                 try {
-                    paths.Add(AndroidFileHelper.ResolveReadablePath(this, uri));
+                    string resolved = AndroidFileHelper.ResolveReadablePath(this, uri);
+                    if (!string.IsNullOrEmpty(resolved)) {
+                        paths.Add(resolved);
+                        protectedQueuePaths.Add(Path.GetFullPath(resolved));
+                    }
                 } catch {
                     // Skip unreadable
                 }
             }
             RunOnUiThread(() => {
                 List<string> invalids = [];
-                renderQueue.AddRange(paths, targetFolder, invalids, ffmpeg);
+                suppressAutoTrueHDPrepare = true;
+                try {
+                    renderQueue.AddRange(paths, targetFolder, invalids, ffmpeg);
+                } finally {
+                    suppressAutoTrueHDPrepare = false;
+                }
                 RefreshQueueList();
                 if (invalids.Count > 0) {
                     ShowError("Unsupported files:\n" + string.Join('\n', invalids));
@@ -684,7 +822,7 @@ public partial class MainActivity {
     }
 
     void StartQueueProcessing() {
-        if (isOperationRunning || renderQueue.Jobs.Count == 0) {
+        if (isOperationRunning || isPreparingTrueHD || renderQueue.Jobs.Count == 0) {
             return;
         }
         StopPlayback();
@@ -694,8 +832,16 @@ public partial class MainActivity {
                 token.ThrowIfCancellationRequested();
                 QueuedJob job = jobs[i];
                 RunOnUiThreadSync(() => {
-                    job.Prepare(this);
-                    AttachToListener();
+                    suppressAutoTrueHDPrepare = true;
+                    try {
+                        job.Prepare(this);
+                        CavernizeTrack active = GetActiveTrack();
+                        if (active != null && active.Codec != Codec.TrueHD) {
+                            AttachToListener(active);
+                        }
+                    } finally {
+                        suppressAutoTrueHDPrepare = false;
+                    }
                 });
                 job.Run();
                 RunOnUiThreadSync(() => {
@@ -703,7 +849,11 @@ public partial class MainActivity {
                     RefreshQueueList();
                 });
             }
-            RunOnUiThreadSync(() => Reset());
+            RunOnUiThreadSync(() => {
+                protectedQueuePaths.Clear();
+                Reset();
+                TrueHDDecoderService.CleanupOrphanedCache(this);
+            });
         }, null);
     }
 

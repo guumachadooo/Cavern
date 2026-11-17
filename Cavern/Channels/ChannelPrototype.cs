@@ -80,23 +80,79 @@ namespace Cavern.Channels {
                     return ReferenceChannel.FrontCenter;
                 case screenLFEMark:
                 case subwooferMark:
+                case "LFE2":
                     return ReferenceChannel.ScreenLFE;
                 case rearLeftMark:
                 case rearLeftMarkDCI:
+                case "Lb":
+                case "BL":
                     return ReferenceChannel.RearLeft;
                 case rearRightMark:
                 case rearRightMarkDCI:
+                case "Rb":
+                case "BR":
                     return ReferenceChannel.RearRight;
                 case sideLeftMark:
                 case sideLeftMarkDCI:
+                case "Ls":
                     return ReferenceChannel.SideLeft;
                 case sideRightMark:
                 case sideRightMarkDCI:
+                case "Rs":
                     return ReferenceChannel.SideRight;
                 case topSideLeftMarkDCI:
+                case "Ltm":
+                case "TSL":
                     return ReferenceChannel.TopSideLeft;
                 case topSideRightMarkDCI:
+                case "Rtm":
+                case "TSR":
                     return ReferenceChannel.TopSideRight;
+                case "Ltf":
+                case "Tfl":
+                case "TFL":
+                    return ReferenceChannel.TopFrontLeft;
+                case "Rtf":
+                case "Tfr":
+                case "TFR":
+                    return ReferenceChannel.TopFrontRight;
+                case "Ltr":
+                case "Tbl":
+                case "TRL":
+                    return ReferenceChannel.TopRearLeft;
+                case "Rtr":
+                case "Tbr":
+                case "TRR":
+                    return ReferenceChannel.TopRearRight;
+                case "Tfc":
+                case "TFC":
+                case "Ltc":
+                    return ReferenceChannel.TopFrontCenter;
+                case "Trc":
+                case "TRC":
+                    return ReferenceChannel.TopRearCenter;
+                case "Tc":
+                case "GV":
+                    return ReferenceChannel.GodsVoice;
+                case "Lw":
+                case "WL":
+                    return ReferenceChannel.WideLeft;
+                case "Rw":
+                case "WR":
+                    return ReferenceChannel.WideRight;
+                case "Lsc":
+                case "Lc":
+                case "FLC":
+                    return ReferenceChannel.FrontLeftCenter;
+                case "Rsc":
+                case "Rc":
+                case "FRC":
+                    return ReferenceChannel.FrontRightCenter;
+                case "Cb":
+                case "Cs":
+                case "RC":
+                case "BC":
+                    return ReferenceChannel.RearCenter;
                 default:
                     return ReferenceChannel.Unknown;
             }

@@ -28,9 +28,17 @@ namespace Cavern.Format.Renderers.CoreAudioFormat {
                 movement[i] = new List<MovementTimeframe>();
             }
 
-            if (!(source.Data.TryGetValue("events", out object rawEvents) &&
-                rawEvents is List<YAMLObject> events)) {
+            if (!source.Data.TryGetValue("events", out object rawEvents) ||
+                (rawEvents is string rawEvtStr && rawEvtStr == "[]")) {
+                Movement = new MovementTimeframe[mapping.Length][];
+                return;
+            }
+            if (!(rawEvents is List<YAMLObject> events)) {
                 throw new CorruptionException("No events found in the metadata file.");
+            }
+            if (events.Count == 0) {
+                Movement = new MovementTimeframe[mapping.Length][];
+                return;
             }
 
             int id = -1;
@@ -46,7 +54,10 @@ namespace Cavern.Format.Renderers.CoreAudioFormat {
                         throw new CorruptionException("Invalid channel ID in the metadata file.");
                     }
                 }
-                id = inverseMapping[id];
+                if (!inverseMapping.TryGetValue(id, out int mappedId)) {
+                    continue;
+                }
+                id = mappedId;
 
                 if (current.TryGetValue("samplePos", out object rawOffset) &&
                     rawOffset is string offsetSource) {

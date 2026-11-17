@@ -108,21 +108,28 @@ namespace Cavern.Format.Transcoders {
                 throw new CorruptionException(nameof(rawPresentations));
             }
             YAMLObject presentation = presentations[0];
-            if (!(presentation.TryGetValue("bedInstances", out object rawBedInstances) &&
+            if (presentation.TryGetValue("bedInstances", out object rawBedInstances) &&
                 rawBedInstances is List<YAMLObject> bedInstances &&
-                bedInstances.Count == 1 &&
-                bedInstances[0] is YAMLObject bedInstance &&
-                bedInstance.TryGetValue("channels", out object rawChannels))) {
-                throw new CorruptionException(nameof(rawBedInstances));
-            }
-
-            if (rawChannels is List<YAMLObject> channelsSource) {
-                if (channelsSource.Count > channelCount) {
-                    throw new CorruptionException(nameof(channelsSource));
+                bedInstances.Count > 0) {
+                List<ReferenceChannel> parsedBeds = new List<ReferenceChannel>();
+                for (int b = 0; b < bedInstances.Count; b++) {
+                    if (bedInstances[b] != null &&
+                        bedInstances[b].TryGetValue("channels", out object rawChannels) &&
+                        rawChannels is List<YAMLObject> channelsSource) {
+                        if (parsedBeds.Count + channelsSource.Count > channelCount) {
+                            throw new CorruptionException(nameof(channelsSource));
+                        }
+                        ReferenceChannel[] bedSlice = ParseChannels(channelsSource, parsedBeds.Count);
+                        parsedBeds.AddRange(bedSlice);
+                    }
                 }
-                Channels = ParseChannels(channelsSource);
-            } else {
+                Channels = parsedBeds.ToArray();
+            } else if (!presentation.TryGetValue("bedInstances", out rawBedInstances) ||
+                       (rawBedInstances is string rawBedsText && rawBedsText == "[]") ||
+                       (rawBedInstances is List<YAMLObject> emptyBeds && emptyBeds.Count == 0)) {
                 Channels = Array.Empty<ReferenceChannel>();
+            } else {
+                throw new CorruptionException(nameof(rawBedInstances));
             }
 
             int expectedObjectCount = channelCount - Channels.Length;
@@ -238,7 +245,7 @@ namespace Cavern.Format.Transcoders {
         /// <summary>
         /// Convert the bed channels to <see cref="ReferenceChannel"/>s.
         /// </summary>
-        ReferenceChannel[] ParseChannels(List<YAMLObject> channels) {
+        ReferenceChannel[] ParseChannels(List<YAMLObject> channels, int mappingOffset = 0) {
             ReferenceChannel[] result = new ReferenceChannel[channels.Count];
             for (int i = 0; i < result.Length; i++) {
                 if (!(channels[i] is YAMLObject channel &&
@@ -254,7 +261,7 @@ namespace Cavern.Format.Transcoders {
                 if (result[i] == ReferenceChannel.Unknown) {
                     throw new CorruptionException($"{nameof(result)}[{i}] = {name}");
                 }
-                ObjectMapping[i] = id;
+                ObjectMapping[mappingOffset + i] = id;
             }
             return result;
         }

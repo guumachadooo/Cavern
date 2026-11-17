@@ -24,12 +24,14 @@ public class AudioFile : IDisposable {
     /// <summary>
     /// All native tracks of the file, including video and subtitle tracks.
     /// </summary>
-    public IReadOnlyList<Track> AllTracks => tracks.FirstOrDefault(x => x.Supported)?.Track.Source.Tracks ?? throw new NoSupportedTracksException();
+    public IReadOnlyList<Track> AllTracks => tracks.Select(x => x.Track?.Source?.Tracks).FirstOrDefault(x => x != null) ?? throw new NoSupportedTracksException();
 
     /// <summary>
     /// List of track handlers.
     /// </summary>
     protected readonly List<CavernizeTrack> tracks = [];
+
+    readonly bool customTracksMode;
 
     /// <summary>
     /// Loads an audio file.
@@ -40,9 +42,26 @@ public class AudioFile : IDisposable {
     }
 
     /// <summary>
+    /// Wraps pre-resolved tracks (for example from FFmpeg container fallback) under an original container <paramref name="path"/>.
+    /// </summary>
+    AudioFile(string path, IEnumerable<CavernizeTrack> customTracks) {
+        Path = path ?? throw new ArgumentNullException(nameof(path));
+        customTracksMode = true;
+        tracks.AddRange(customTracks);
+    }
+
+    /// <summary>
+    /// Creates an <see cref="AudioFile"/> backed by externally probed/extracted tracks while keeping <paramref name="path"/> as container source.
+    /// </summary>
+    public static AudioFile FromCustomTracks(string path, IEnumerable<CavernizeTrack> customTracks) => new(path, customTracks);
+
+    /// <summary>
     /// Reloads the tracklist to be able to start reading from the beginning.
     /// </summary>
     public virtual void Reset() {
+        if (customTracksMode) {
+            return;
+        }
         Dispose();
         tracks.Clear();
         int index = Path.LastIndexOf('.') + 1;
@@ -124,12 +143,16 @@ public class AudioFile : IDisposable {
     void AddTracksFromContainer(ContainerReader reader) {
         int trackId = 0;
         for (int i = 0; i < reader.Tracks.Length; i++) {
-            if (reader.Tracks[i].Extra is TrackExtraAudio) {
+            if (reader.Tracks[i].Extra is TrackExtraAudio audioExtra) {
                 try {
                     tracks.Add(new CavernizeTrack(new AudioTrackReader(reader.Tracks[i]), reader.Tracks[i].Format,
                         trackId, reader.Tracks[i].Language));
                 } catch (Exception e) {
-                    tracks.Add(new InvalidTrack(e.Message, reader.Tracks[i].Format, reader.Tracks[i].Language));
+                    if (reader.Tracks[i].Format == Codec.TrueHD) {
+                        tracks.Add(new ExternalPendingTrack(reader.Tracks[i], audioExtra, trackId, Path));
+                    } else {
+                        tracks.Add(new InvalidTrack(e.Message, reader.Tracks[i].Format, reader.Tracks[i].Language));
+                    }
                 }
                 trackId++;
             }

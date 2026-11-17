@@ -42,7 +42,7 @@ public sealed class AndroidStrings {
     static Dictionary<string, string> CreateEnglish() => new() {
         ["AppTitle"] = "Cavernize",
         ["OpenFile"] = "Open File",
-        ["NoFile"] = "No file loaded (supports EAC3, AC3, MKV, MP4, WAV/ADM, CAF, LAF, ATMOS, MP3/FLAC)",
+        ["NoFile"] = "No file loaded (supports TrueHD Atmos, EAC3, AC3, MKV, MP4, WAV/ADM, CAF, LAF, ATMOS, MP3/FLAC)",
         ["TrackLabel"] = "Track:",
         ["TabMusicPlayer"] = "Player",
         ["TabPlayer"] = "3D Room",
@@ -52,7 +52,7 @@ public sealed class AndroidStrings {
 
         // Casual Music Player
         ["PlayerEmptyTitle"] = "Ready to Listen",
-        ["PlayerEmptySub"] = "Open E-AC-3 Atmos, AC-3, MKV, MP4, FLAC, or WAV",
+        ["PlayerEmptySub"] = "Open TrueHD Atmos, E-AC-3 Atmos, MKV, MP4, FLAC, or WAV",
         ["PlayerOpenRoom"] = "Customize in 3D Room",
         ["PlayerSwitchTrack"] = "Audio Track",
         ["PlayerBadgeSpatial"] = "Spatial 3D",
@@ -111,7 +111,7 @@ public sealed class AndroidStrings {
 
         // Extractor
         ["ExtractTitle"] = "Channel & 3D Object Stem Extractor",
-        ["ExtractDesc"] = "Separate every bed channel and every 3D object into individual WAV files (works with Dolby Digital Plus Atmos E-AC-3 JOC, ADM BWF, DAMF, LAF, WAV, CAF).",
+        ["ExtractDesc"] = "Separate every bed channel and every 3D object into individual WAV files (works with Dolby TrueHD Atmos, E-AC-3 JOC, ADM BWF, DAMF, LAF, WAV, CAF).",
         ["ExtractMode"] = "Extraction mode:",
         ["ModeRawStems"] = "Extract All Original Separated (Mono WAV per Channel & Object + 3D JSON)",
         ["ModeSpatialEach"] = "Render Each Selected Item in 3D Separately (HRTF / Target Layout)",
@@ -180,9 +180,19 @@ public sealed class AndroidStrings {
         ["NoTrack"] = "Please load a file with a supported track first.",
         ["OpRunning"] = "An operation is already running.",
         ["FFmpegNeeded"] = "The selected output codec ({0}) requires FFmpeg. Configure FFmpeg in Setup or choose PCM / ADM BWF / DAMF / LAF.",
-        ["TrueHDUnsupported"] = "TrueHD MLP decoding requires truehdd. Convert to E-AC-3, ADM BWF, or DAMF on PC, or locate truehdd if supported.",
+        ["TrueHDUnsupported"] = "Dolby TrueHD requires the truehdd decoder. Tap Download to set it up automatically.",
         ["CopyingMedia"] = "Preparing media file...",
         ["DecodingFallback"] = "Decoding audio via Android MediaCodec...",
+        ["ProbingContainer"] = "Inspecting container streams with FFmpeg...",
+        ["ExtractingTrueHD"] = "Extracting Dolby TrueHD track...",
+        ["TrueHDTitle"] = "Dolby TrueHD / Atmos",
+        ["TrueHDDecoding"] = "Decoding TrueHD / Atmos with truehdd...",
+        ["TrueHDLicenceTitle"] = "truehdd Decoder License (Apache 2.0)",
+        ["TrueHDLicenceDesc"] = "Cavernize uses the official static truehdd binary (aarch64-unknown-linux-musl) to decode Dolby TrueHD and Atmos 3D object metadata locally on your device (~1.4 MB download).",
+        ["TrueHDDownloadDecode"] = "Accept & Download",
+        ["TrueHDCancelled"] = "TrueHD decoding cancelled.",
+        ["TrueHDContainerNeedTools"] = "This video/MKV uses an audio format (such as Dolby TrueHD or DTS) that Android cannot decode natively. Install FFmpeg and truehdd in Settings for full support.",
+        ["OpenSettingsBtn"] = "Open Settings",
 
         // Room Stability & Fine-Tuning
         ["LockRoom"] = "Lock Position",
@@ -224,6 +234,19 @@ public sealed class AndroidStrings {
         ["FFmpegManualBtn"] = "Locate Manual Binary",
         ["FFmpegDownloading"] = "Downloading static FFmpeg...",
         ["FFmpegUpToDate"] = "FFmpeg is up to date ({0}).",
+
+        // TrueHD Auto-Downloader & Updater
+        ["TruehddCardTitle"] = "Dolby TrueHD Engine (truehdd)",
+        ["TruehddNotInstalled"] = "Not installed (needed for Dolby TrueHD & TrueHD Atmos playback/stems/export)",
+        ["TruehddInstalledVer"] = "Installed: v{0}",
+        ["TruehddUpdateAvail"] = "truehdd update available: v{0}",
+        ["TruehddDownloadBtn"] = "Download truehdd",
+        ["TruehddUpdateBtn"] = "Update truehdd",
+        ["TruehddCheckBtn"] = "Check truehdd",
+        ["TruehddManualBtn"] = "Locate Manual Binary",
+        ["TruehddDownloading"] = "Downloading static truehdd...",
+        ["TruehddUpToDate"] = "truehdd is up to date (v{0}).",
+        ["TipTruehdd"] = "Official static ARM64 musl build of truehdd/truehdd. Decodes lossless Dolby TrueHD and Atmos 3D objects into DAMF/CAF in private app storage, cleaning temp cache automatically.",
 
         // One UI 9 Section Titles & Bento Tiles
         ["QuickPanelTitle"] = "Quick Spatial Panel",
@@ -274,7 +297,7 @@ public sealed class AndroidStrings {
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
         d["OpenFile"] = "Abrir Arquivo";
-        d["NoFile"] = "Nenhum arquivo aberto (EAC3, AC3, MKV, MP4, WAV/ADM, CAF, LAF, ATMOS, MP3/FLAC)";
+        d["NoFile"] = "Nenhum arquivo aberto (TrueHD Atmos, EAC3, AC3, MKV, MP4, WAV/ADM, CAF, LAF, ATMOS, MP3/FLAC)";
         d["TrackLabel"] = "Faixa:";
         d["TabMusicPlayer"] = "Player";
         d["TabPlayer"] = "Sala 3D";
@@ -283,7 +306,7 @@ public sealed class AndroidStrings {
         d["TabSettings"] = "Ajustes";
 
         d["PlayerEmptyTitle"] = "Pronto para ouvir";
-        d["PlayerEmptySub"] = "Abra E-AC-3 Atmos, AC-3, MKV, MP4, FLAC ou WAV";
+        d["PlayerEmptySub"] = "Abra TrueHD Atmos, E-AC-3 Atmos, MKV, MP4, FLAC ou WAV";
         d["PlayerOpenRoom"] = "Personalizar na Sala 3D";
         d["PlayerSwitchTrack"] = "Faixa de Áudio";
         d["PlayerBadgeSpatial"] = "Espacial 3D";
@@ -339,7 +362,7 @@ public sealed class AndroidStrings {
         d["OpenPlayer"] = "Ouvir no Player";
 
         d["ExtractTitle"] = "Extrator de Canais e Objetos 3D";
-        d["ExtractDesc"] = "Separe cada canal base e objeto 3D em arquivos WAV individuais (E-AC-3 JOC, ADM BWF, DAMF, LAF, WAV, CAF).";
+        d["ExtractDesc"] = "Separe cada canal base e objeto 3D em arquivos WAV individuais (TrueHD Atmos, E-AC-3 JOC, ADM BWF, DAMF, LAF, WAV, CAF).";
         d["ExtractMode"] = "Modo de extração:";
         d["ModeRawStems"] = "Extrair Tudo Separado Original (1 WAV Mono por Canal e Objeto + JSON 3D)";
         d["ModeSpatialEach"] = "Renderizar Cada Item Selecionado em 3D Separado (HRTF / Layout)";
@@ -406,9 +429,19 @@ public sealed class AndroidStrings {
         d["NoTrack"] = "Abra primeiro um arquivo com uma faixa suportada.";
         d["OpRunning"] = "Já existe uma operação em andamento.";
         d["FFmpegNeeded"] = "O codec escolhido ({0}) precisa do FFmpeg. Configure o FFmpeg em Configurações ou escolha PCM / ADM BWF / DAMF / LAF.";
-        d["TrueHDUnsupported"] = "A decodificação TrueHD MLP requer o truehdd. Converta no PC ou selecione outra faixa (ex: E-AC-3 JOC).";
+        d["TrueHDUnsupported"] = "Dolby TrueHD requer o decodificador truehdd. Toque para baixar automaticamente.";
         d["CopyingMedia"] = "Preparando arquivo de mídia...";
         d["DecodingFallback"] = "Decodificando áudio via MediaCodec do Android...";
+        d["ProbingContainer"] = "Analisando faixas do contêiner com FFmpeg...";
+        d["ExtractingTrueHD"] = "Extraindo faixa Dolby TrueHD...";
+        d["TrueHDTitle"] = "Dolby TrueHD / Atmos";
+        d["TrueHDDecoding"] = "Decodificando TrueHD / Atmos com truehdd...";
+        d["TrueHDLicenceTitle"] = "Licença do Decodificador truehdd (Apache 2.0)";
+        d["TrueHDLicenceDesc"] = "O Cavernize usa o binário estático oficial truehdd (aarch64-unknown-linux-musl) para decodificar Dolby TrueHD e metadados 3D Atmos localmente no aparelho (~1,4 MB).";
+        d["TrueHDDownloadDecode"] = "Aceitar e Baixar";
+        d["TrueHDCancelled"] = "Decodificação TrueHD cancelada.";
+        d["TrueHDContainerNeedTools"] = "Este vídeo/MKV usa uma faixa de áudio (como Dolby TrueHD ou DTS) não suportada nativamente pelo Android. Instale o FFmpeg e o truehdd em Ajustes para abrir com suporte completo.";
+        d["OpenSettingsBtn"] = "Ir para Ajustes";
 
         d["LockRoom"] = "Mover Ouvinte";
         d["UnlockRoom"] = "Posição Travada";
@@ -447,6 +480,18 @@ public sealed class AndroidStrings {
         d["FFmpegManualBtn"] = "Selecionar Manualmente";
         d["FFmpegDownloading"] = "Baixando FFmpeg estático ARM64...";
         d["FFmpegUpToDate"] = "FFmpeg atualizado ({0}).";
+
+        d["TruehddCardTitle"] = "Motor Dolby TrueHD (truehdd)";
+        d["TruehddNotInstalled"] = "Não instalado (necessário para reproduzir, converter e extrair Stems de Dolby TrueHD / Atmos)";
+        d["TruehddInstalledVer"] = "Instalado: v{0}";
+        d["TruehddUpdateAvail"] = "Atualização do truehdd disponível: v{0}";
+        d["TruehddDownloadBtn"] = "Baixar truehdd Auto";
+        d["TruehddUpdateBtn"] = "Atualizar truehdd";
+        d["TruehddCheckBtn"] = "Checar truehdd";
+        d["TruehddManualBtn"] = "Selecionar Binário Manual";
+        d["TruehddDownloading"] = "Baixando truehdd estático ARM64...";
+        d["TruehddUpToDate"] = "truehdd atualizado (v{0}).";
+        d["TipTruehdd"] = "Binário estático musl oficial do projeto truehdd/truehdd. Decodifica Dolby TrueHD e objetos 3D Atmos em DAMF/CAF direto no armazenamento privado do app, limpando o cache automaticamente.";
 
         d["QuickPanelTitle"] = "Painel Rápido Espacial";
         d["BentoHrtf"] = "HRTF 3D";

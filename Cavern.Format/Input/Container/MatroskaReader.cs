@@ -224,9 +224,15 @@ namespace Cavern.Format.Container {
             List<double> blockLengths = new List<double>();
             for (int i = 0; i < segments.Length; i++) {
                 MatroskaTree segmentInfo = segments[i].GetChild(reader, MatroskaTree.Segment_Info);
-                double length = segmentInfo.GetChild(reader, MatroskaTree.Segment_Info_Duration).GetFloatBE(reader);
-                timestampScale = segmentInfo.GetChildValue(reader, MatroskaTree.Segment_Info_TimestampScale);
-                blockLengths.Add(length * timestampScale);
+                if (segmentInfo != null) {
+                    MatroskaTree durationTree = segmentInfo.GetChild(reader, MatroskaTree.Segment_Info_Duration);
+                    double length = durationTree != null ? durationTree.GetFloatBE(reader) : 0;
+                    long tsScale = segmentInfo.GetChildValue(reader, MatroskaTree.Segment_Info_TimestampScale);
+                    timestampScale = tsScale > 0 ? tsScale : 1000000;
+                    blockLengths.Add(length * timestampScale);
+                } else if (timestampScale <= 0) {
+                    timestampScale = 1000000;
+                }
 
                 cues = Cue.GetCues(segments[i], reader);
                 MatroskaTree tracklist = segments[i].GetChild(reader, MatroskaTree.Segment_Tracks);

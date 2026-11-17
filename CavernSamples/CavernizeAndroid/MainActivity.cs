@@ -16,6 +16,7 @@ using Cavern.Format.Common;
 using Cavern.Utilities;
 
 using Cavernize.Logic.CavernSettings;
+using Cavernize.Logic.External;
 using Cavernize.Logic.Language;
 using Cavernize.Logic.Models;
 using Cavernize.Logic.Models.RenderTargets;
@@ -49,6 +50,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     const int ReqLoadHrir = 1003;
     const int ReqLoadFilters = 1004;
     const int ReqLocateFFmpeg = 1005;
+    const int ReqLocateTruehdd = 1006;
     const int ReqPermissions = 1007;
 
     AppSettingsStore store;
@@ -100,10 +102,20 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     UpdateCheckResult latestUpdateInfo;
     FFmpegStatusResult latestFFmpegStatus;
+    TruehddStatusResult latestTruehddStatus;
     string downloadedUpdateApkPath;
     string pendingInstallApkPath;
     bool isUpdateDownloading;
     bool isFFmpegDownloading;
+    bool isTruehddDownloading;
+
+    ExternalDecodedTrack decodedTrueHDTrack;
+    string activeTrueHDSessionDir;
+    string activeFallbackSessionDir;
+    readonly HashSet<string> protectedQueuePaths = new(StringComparer.OrdinalIgnoreCase);
+    CancellationTokenSource truehdPrepareCts;
+    volatile bool isPreparingTrueHD;
+    volatile bool suppressAutoTrueHDPrepare;
 
     OneUiBackdropView backdropView;
     OneUiFrostedCapsuleView navFrostedHost;
@@ -152,6 +164,34 @@ public partial class MainActivity : Activity, ICavernizeApp {
             ffmpeg.Location = resolvedFfmpeg;
             AppLogger.Info($"FFmpeg resolved at '{resolvedFfmpeg}' (Found={ffmpeg.Found})");
         }
+
+        string resolvedTruehdd = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
+        if (!string.IsNullOrEmpty(resolvedTruehdd)) {
+            TruehddInstallerService.EnsureExecutable(resolvedTruehdd);
+            Truehdd.CustomExecutablePath = resolvedTruehdd;
+            AppLogger.Info($"truehdd resolved at '{resolvedTruehdd}'");
+        }
+        Truehdd.TempWorkingDirectory = TrueHDDecoderService.GetWorkRoot(this);
+        Truehdd.OnCommandCompleted = AppLogger.LogTruehdd;
+        Truehdd.FallbackTrackExtractor = (srcTrack, destThd, prog, ct) => {
+            if (!ffmpeg.Found) {
+                return false;
+            }
+            string inputPath = LoadedFile?.Path ?? srcTrack.Path;
+            if (string.IsNullOrEmpty(inputPath) || !File.Exists(inputPath)) {
+                return false;
+            }
+            ContainerProbeResult probe = TrueHDDecoderService.ProbeContainerWithFFmpeg(ffmpeg.Location, inputPath);
+            ProbedAudioStream stream = probe.AudioStreams.FirstOrDefault(s => s.IsTrueHD && s.AudioOrdinal == srcTrack.Index)
+                ?? probe.AudioStreams.FirstOrDefault(s => s.IsTrueHD);
+            if (stream == null) {
+                return false;
+            }
+            return TrueHDDecoderService.ExtractAudioStreamWithFFmpeg(
+                ffmpeg.Location, inputPath, stream.StreamIndex, destThd, "truehd", probe.DurationSeconds,
+                (p, _) => prog?.Invoke(p), ct);
+        };
+        TrueHDDecoderService.CleanupOrphanedCache(this);
 
         RenderTarget[] allTargets = RenderTarget.Targets;
         RenderTarget = allTargets[Math.Clamp(store.RenderTargetIndex, 0, allTargets.Length - 1)];
@@ -204,6 +244,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             HandleIncomingIntent(Intent);
         }
         _ = CheckFFmpegUpdateAsync(silent: true);
+        _ = CheckTruehddUpdateAsync(silent: true);
         if (store.AutoCheckUpdates) {
             _ = CheckForUpdatesAsync(silent: true);
         }
@@ -229,6 +270,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
         uiDestroyed = true;
         activeCts?.Cancel();
         activeCts?.Dispose();
+        truehdPrepareCts?.Cancel();
+        truehdPrepareCts?.Dispose();
         tabPillAnimator?.Cancel();
         tabPillAnimator?.Dispose();
         mediaNotification?.Dispose();
@@ -236,7 +279,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         defaultFallbackCover?.Dispose();
         audioOutput?.Dispose();
         playerEngine?.Dispose();
+        decodedTrueHDTrack?.Dispose();
         LoadedFile?.Dispose();
+        TrueHDDecoderService.CleanupWorkDirectory(activeTrueHDSessionDir);
+        TrueHDDecoderService.CleanupWorkDirectory(activeFallbackSessionDir);
         base.OnDestroy();
     }
 
@@ -568,7 +614,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     bool ShouldShowSettingsDot() =>
         latestUpdateInfo?.IsUpdateAvailable == true ||
-        latestFFmpegStatus?.IsUpdateAvailable == true;
+        latestFFmpegStatus?.IsUpdateAvailable == true ||
+        latestTruehddStatus?.IsUpdateAvailable == true;
 
     void SwitchTab(int idx) {
         if (tabPages == null || idx < 0 || idx >= tabPages.Length) {
@@ -772,11 +819,27 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     RefreshFFmpegCardUi();
                 });
             });
+        } else if (requestCode == ReqLocateTruehdd && data.Data != null) {
+            Task.Run(() => {
+                string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
+                TruehddInstallerService.EnsureExecutable(path);
+                string ver = TruehddInstallerService.ProbeTruehddVersion(path);
+                AppLogger.Info($"Manual truehdd selected: '{path}' (ver={ver})");
+                RunOnUiThread(() => {
+                    store.TruehddLocation = path;
+                    if (!string.IsNullOrEmpty(ver)) {
+                        store.InstalledTruehddVersion = ver;
+                    }
+                    Truehdd.CustomExecutablePath = path;
+                    RefreshSettingsTabButtons();
+                    RefreshTruehddCardUi();
+                });
+            });
         }
     }
 
     void LoadUriAsync(Android.Net.Uri uri) {
-        if (isOperationRunning) {
+        if (isOperationRunning || isPreparingTrueHD) {
             ShowError(S["OpRunning"]);
             return;
         }
@@ -796,40 +859,180 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 MediaArtworkMetadata extractedMeta = MediaMetadataHelper.Extract(
                     this, uri, resolved, Path.GetFileName(resolved));
 
-                AudioFile file;
+                string newFallbackSessionDir = null;
+                AudioFile file = null;
                 try {
                     file = new AudioFile(resolved);
                     if (file.Tracks.Count == 0 || file.Tracks.All(t => !t.Supported)) {
+                        file.Dispose();
+                        file = null;
                         throw new NotSupportedException("Fallback required for container/codec");
                     }
                 } catch (Exception nativeEx) {
-                    AppLogger.Info($"Native Cavern reader fallback ({nativeEx.GetType().Name}), decoding via Android MediaCodec...");
-                    RunOnUiThread(() => {
-                        headerFileText.Text = S["DecodingFallback"];
-                        SetConvertStatus(S["DecodingFallback"], -1);
-                    });
-                    string wavCacheDir = Path.Combine(CacheDir.AbsolutePath, "decoded_fallback");
-                    string decodedWav = AndroidMediaFallbackDecoder.DecodeToWav(resolved, wavCacheDir,
-                        p => RunOnUiThread(() => {
-                            string msg = $"{S["DecodingFallback"]} ({p:0%})";
-                            headerFileText.Text = msg;
-                            SetConvertStatus(msg, p);
-                        }));
-                    file = new AudioFile(decodedWav);
+                    AppLogger.Info($"Native Cavern reader fallback ({nativeEx.GetType().Name}): inspecting container/codec...");
+                    file = TryOpenWithSmartFallbacks(resolved, out newFallbackSessionDir);
                 }
 
                 RunOnUiThread(() => {
+                    string oldFallback = activeFallbackSessionDir;
+                    activeFallbackSessionDir = newFallbackSessionDir;
                     OpenContent(file, extractedMeta);
+                    if (!string.IsNullOrEmpty(oldFallback) &&
+                        !string.Equals(oldFallback, newFallbackSessionDir, StringComparison.Ordinal) &&
+                        !IsSessionProtectedByQueue(oldFallback)) {
+                        TrueHDDecoderService.CleanupWorkDirectory(oldFallback);
+                    }
+                    TrueHDDecoderService.CleanupOrphanedCache(this, CollectActiveProtectedFiles(resolved));
                     SetConvertStatus(S["Ready"], 0);
                 });
             } catch (Exception ex) {
                 AppLogger.Error("LoadUriAsync", ex);
                 RunOnUiThread(() => {
+                    headerFileText.Text = LoadedFile != null ? Path.GetFileName(LoadedFile.Path) : S["SelectFilePill"];
                     SetConvertStatus(ex.Message, 0);
-                    ShowError(ex.Message);
+                    ShowLoadFailureDialog(ex);
                 });
             }
         });
+    }
+
+    AudioFile TryOpenWithSmartFallbacks(string resolved, out string fallbackSessionDir) {
+        fallbackSessionDir = null;
+        string containerExt = Path.GetExtension(resolved).ToLowerInvariant();
+        Container guessedContainer = containerExt switch {
+            ".mkv" or ".mka" or ".webm" or ".weba" => Container.Matroska,
+            ".mp4" or ".m4a" or ".m4v" or ".mov" or ".qt" => Container.MP4,
+            ".mxf" => Container.MXF,
+            _ => Container.NotContainer
+        };
+
+        ContainerProbeResult probe = null;
+        if (ffmpeg.Found) {
+            RunOnUiThread(() => {
+                headerFileText.Text = S["ProbingContainer"];
+                SetConvertStatus(S["ProbingContainer"], -1);
+            });
+            probe = TrueHDDecoderService.ProbeContainerWithFFmpeg(ffmpeg.Location, resolved);
+            ProbedAudioStream spatialStream = probe.AudioStreams.FirstOrDefault(s => s.IsTrueHD)
+                ?? probe.AudioStreams.FirstOrDefault(s => s.IsEnhancedAC3)
+                ?? probe.AudioStreams.FirstOrDefault(s => s.IsAC3);
+
+            if (spatialStream != null) {
+                string workDir = Path.Combine(TrueHDDecoderService.GetWorkRoot(this), $"probe_{Guid.NewGuid():N}");
+                Directory.CreateDirectory(workDir);
+                fallbackSessionDir = workDir;
+
+                if (spatialStream.IsTrueHD) {
+                    RunOnUiThread(() => {
+                        headerFileText.Text = S["ExtractingTrueHD"];
+                        SetConvertStatus(S["ExtractingTrueHD"], -1);
+                    });
+                    string rawThd = Path.Combine(workDir, "extracted.thd");
+                    bool ok = TrueHDDecoderService.ExtractAudioStreamWithFFmpeg(
+                        ffmpeg.Location, resolved, spatialStream.StreamIndex, rawThd, "truehd",
+                        probe.DurationSeconds,
+                        (p, msg) => RunOnUiThread(() => {
+                            headerFileText.Text = msg;
+                            SetConvertStatus(msg, p);
+                        }));
+                    if (ok) {
+                        ExternalPendingTrack pending = new(
+                            resolved, rawThd, Codec.TrueHD, guessedContainer,
+                            spatialStream.AudioOrdinal, spatialStream.Language,
+                            spatialStream.SampleRate, probe.DurationSeconds, spatialStream.ChannelSummary);
+                        return AudioFile.FromCustomTracks(resolved, [pending]);
+                    }
+                } else {
+                    string fmt = spatialStream.IsEnhancedAC3 ? "eac3" : "ac3";
+                    string ext = "." + fmt;
+                    string rawPath = Path.Combine(workDir, "extracted" + ext);
+                    bool ok = TrueHDDecoderService.ExtractAudioStreamWithFFmpeg(
+                        ffmpeg.Location, resolved, spatialStream.StreamIndex, rawPath, fmt,
+                        probe.DurationSeconds,
+                        (p, msg) => RunOnUiThread(() => {
+                            headerFileText.Text = msg;
+                            SetConvertStatus(msg, p);
+                        }));
+                    if (ok) {
+                        AudioReader extractedReader = AudioReader.Open(rawPath);
+                        Codec c = spatialStream.IsEnhancedAC3 ? Codec.EnhancedAC3 : Codec.AC3;
+                        ExternalDecodedTrack decoded = new(
+                            extractedReader, c, c, null, guessedContainer, null, rawPath, spatialStream.Language);
+                        return AudioFile.FromCustomTracks(resolved, [decoded]);
+                    }
+                }
+            }
+        }
+
+        // Standard Android MediaCodec fallback (AAC, MP3, FLAC, OGG, Opus, etc.)
+        RunOnUiThread(() => {
+            headerFileText.Text = S["DecodingFallback"];
+            SetConvertStatus(S["DecodingFallback"], -1);
+        });
+        string wavCacheDir = Path.Combine(CacheDir.AbsolutePath, "decoded_fallback");
+        try {
+            string decodedWav = AndroidMediaFallbackDecoder.DecodeToWav(resolved, wavCacheDir,
+                p => RunOnUiThread(() => {
+                    string msg = $"{S["DecodingFallback"]} ({p:0%})";
+                    headerFileText.Text = msg;
+                    SetConvertStatus(msg, p);
+                }));
+            return new AudioFile(decodedWav);
+        } catch (Exception mediaEx) {
+            AppLogger.Warn($"Android MediaCodec fallback failed ({mediaEx.GetType().Name}): {mediaEx.Message}");
+
+            // Final universal fallback: decode audio stream via FFmpeg to WAV (handles DTS, DTS-HD, WMA, etc.)
+            if (ffmpeg.Found && probe != null && probe.AudioStreams.Count > 0) {
+                ProbedAudioStream firstAudio = probe.AudioStreams[0];
+                string workDir = Path.Combine(TrueHDDecoderService.GetWorkRoot(this), $"ffwav_{Guid.NewGuid():N}");
+                Directory.CreateDirectory(workDir);
+                fallbackSessionDir = workDir;
+                string outWav = Path.Combine(workDir, "decoded.wav");
+                RunOnUiThread(() => {
+                    headerFileText.Text = "FFmpeg: decodificando áudio...";
+                    SetConvertStatus("FFmpeg: decodificando áudio...", -1);
+                });
+                bool wavOk = TrueHDDecoderService.ExtractAudioStreamWithFFmpeg(
+                    ffmpeg.Location, resolved, firstAudio.StreamIndex, outWav, "wav",
+                    probe.DurationSeconds,
+                    (p, msg) => RunOnUiThread(() => {
+                        headerFileText.Text = msg;
+                        SetConvertStatus(msg, p);
+                    }));
+                if (wavOk) {
+                    AudioReader wavReader = AudioReader.Open(outWav);
+                    ExternalDecodedTrack wavTrack = new(
+                        wavReader, wavReader.Bits == BitDepth.Float32 ? Codec.PCM_Float : Codec.PCM_LE,
+                        Codec.PCM_LE, null, guessedContainer, null, null, firstAudio.Language);
+                    return AudioFile.FromCustomTracks(resolved, [wavTrack]);
+                }
+            }
+
+            if (!ffmpeg.Found && containerExt is ".mkv" or ".mka" or ".m2ts" or ".ts" or ".mp4" or ".thd" or ".mlp" or ".truehd") {
+                throw new NotSupportedException(S["TrueHDContainerNeedTools"], mediaEx);
+            }
+            throw;
+        }
+    }
+
+    void ShowLoadFailureDialog(Exception ex) {
+        if (uiDestroyed) {
+            return;
+        }
+        bool suggestSettings = !ffmpeg.Found || string.IsNullOrEmpty(TruehddInstallerService.ResolveExistingTruehddPath(this, store));
+        if (suggestSettings) {
+            OneUiModalDialog.Show(
+                this,
+                S["ErrorTitle"],
+                ex.Message,
+                icon: OneUiIconType.Info,
+                iconBadgeColor: ColDanger,
+                positiveText: S["OpenSettingsBtn"],
+                onPositive: () => SwitchTab(4),
+                negativeText: S["DismissBtn"]);
+        } else {
+            ShowError(ex.Message);
+        }
     }
 
     // ICavernizeApp implementation
@@ -837,7 +1040,69 @@ public partial class MainActivity : Activity, ICavernizeApp {
         Reset();
         ffmpeg.CheckFFmpeg();
         MediaArtworkMetadata meta = MediaMetadataHelper.Extract(this, null, path, Path.GetFileName(path));
-        OpenContent(new AudioFile(path), meta);
+        AudioFile file;
+        string fallbackDir = null;
+        try {
+            file = new AudioFile(path);
+            if (file.Tracks.Count == 0 || file.Tracks.All(t => !t.Supported)) {
+                file.Dispose();
+                throw new NotSupportedException("Fallback required for container/codec");
+            }
+        } catch {
+            file = TryOpenWithSmartFallbacks(path, out fallbackDir);
+        }
+        if (!string.IsNullOrEmpty(fallbackDir)) {
+            if (suppressAutoTrueHDPrepare) {
+                protectedQueuePaths.Add(Path.GetFullPath(fallbackDir));
+            } else {
+                activeFallbackSessionDir = fallbackDir;
+            }
+        }
+        OpenContent(file, meta);
+    }
+
+    void OpenLocalPathWithFallbackAsync(string path, int? switchToTab = null) {
+        if (isOperationRunning || isPreparingTrueHD) {
+            ShowError(S["OpRunning"]);
+            return;
+        }
+        SetConvertStatus(S["CopyingMedia"], -1);
+        Task.Run(() => {
+            try {
+                MediaArtworkMetadata meta = MediaMetadataHelper.Extract(this, null, path, Path.GetFileName(path));
+                string newFallbackSessionDir = null;
+                AudioFile file;
+                try {
+                    file = new AudioFile(path);
+                    if (file.Tracks.Count == 0 || file.Tracks.All(t => !t.Supported)) {
+                        file.Dispose();
+                        throw new NotSupportedException("Fallback required for container/codec");
+                    }
+                } catch {
+                    file = TryOpenWithSmartFallbacks(path, out newFallbackSessionDir);
+                }
+                RunOnUiThread(() => {
+                    string oldFallback = activeFallbackSessionDir;
+                    activeFallbackSessionDir = newFallbackSessionDir;
+                    OpenContent(file, meta);
+                    if (!string.IsNullOrEmpty(oldFallback) &&
+                        !string.Equals(oldFallback, newFallbackSessionDir, StringComparison.Ordinal) &&
+                        !IsSessionProtectedByQueue(oldFallback)) {
+                        TrueHDDecoderService.CleanupWorkDirectory(oldFallback);
+                    }
+                    SetConvertStatus(S["Ready"], 0);
+                    if (switchToTab.HasValue) {
+                        SwitchTab(switchToTab.Value);
+                    }
+                });
+            } catch (Exception ex) {
+                AppLogger.Error("OpenLocalPathWithFallbackAsync", ex);
+                RunOnUiThread(() => {
+                    SetConvertStatus(ex.Message, 0);
+                    ShowLoadFailureDialog(ex);
+                });
+            }
+        });
     }
 
     public void OpenContent(AudioFile file) => OpenContent(file, null);
@@ -871,12 +1136,71 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshMusicPlayerUi();
     }
 
+    CavernizeTrack GetActiveTrack() => decodedTrueHDTrack ?? selectedTrack;
+
+    bool IsSessionProtectedByQueue(string sessionDir) {
+        if (string.IsNullOrEmpty(sessionDir)) {
+            return false;
+        }
+        string full = Path.GetFullPath(sessionDir);
+        return protectedQueuePaths.Any(p => p.StartsWith(full, StringComparison.OrdinalIgnoreCase));
+    }
+
+    IEnumerable<string> CollectActiveProtectedFiles(string alsoKeep = null) {
+        List<string> list = [];
+        if (!string.IsNullOrEmpty(alsoKeep)) {
+            list.Add(alsoKeep);
+        }
+        if (LoadedFile != null && !string.IsNullOrEmpty(LoadedFile.Path)) {
+            list.Add(LoadedFile.Path);
+        }
+        if (!string.IsNullOrEmpty(activeTrueHDSessionDir)) {
+            list.Add(activeTrueHDSessionDir);
+        }
+        if (!string.IsNullOrEmpty(activeFallbackSessionDir)) {
+            list.Add(activeFallbackSessionDir);
+        }
+        foreach (string p in protectedQueuePaths) {
+            list.Add(p);
+        }
+        return list;
+    }
+
+    void ClearDecodedTrueHDState() {
+        truehdPrepareCts?.Cancel();
+        truehdPrepareCts?.Dispose();
+        truehdPrepareCts = null;
+        isPreparingTrueHD = false;
+
+        ExternalDecodedTrack oldDecoded = decodedTrueHDTrack;
+        decodedTrueHDTrack = null;
+        string oldSession = activeTrueHDSessionDir;
+        activeTrueHDSessionDir = null;
+
+        if (oldDecoded != null && !protectedQueuePaths.Contains(oldDecoded.RawBitstreamPath ?? "") &&
+            !IsSessionProtectedByQueue(oldSession)) {
+            try {
+                oldDecoded.Dispose();
+            } catch {
+                // Ignore
+            }
+        }
+        if (!string.IsNullOrEmpty(oldSession) && !IsSessionProtectedByQueue(oldSession)) {
+            TrueHDDecoderService.CleanupWorkDirectory(oldSession);
+        }
+    }
+
     public void Reset() {
         StopPlayback();
+        ClearDecodedTrueHDState();
         environment.Reset();
         if (LoadedFile != null && renderQueue.Jobs.FirstOrDefault(x => x.IsUsingFile(LoadedFile)) == null) {
             LoadedFile.Dispose();
             LoadedFile = null;
+        }
+        if (!string.IsNullOrEmpty(activeFallbackSessionDir) && !IsSessionProtectedByQueue(activeFallbackSessionDir)) {
+            TrueHDDecoderService.CleanupWorkDirectory(activeFallbackSessionDir);
+            activeFallbackSessionDir = null;
         }
         MediaArtworkMetadata oldMeta = currentMediaMeta;
         currentMediaMeta = null;
@@ -898,6 +1222,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     void OnSelectedTrackChanged() {
         StopPlayback();
+        ClearDecodedTrueHDState();
         if (selectedTrack == null) {
             fileDetailsExpanded = false;
             if (trackSummaryText != null) {
@@ -913,24 +1238,43 @@ public partial class MainActivity : Activity, ICavernizeApp {
             return;
         }
 
-        AppLogger.Info($"Selected track: {selectedTrack.FormatHeader}");
-        string details = string.Join(" | ", selectedTrack.Details.Select(d => $"{d.property}: {d.value}"));
+        if (selectedTrack.Codec == Codec.TrueHD) {
+            AppLogger.Info($"Selected TrueHD track: {selectedTrack.FormatHeader}");
+            RebuildInlineTrackList();
+            RefreshConverterTrackInfo();
+            RefreshContainerOptions();
+            RefreshMusicPlayerUi();
+            if (!suppressAutoTrueHDPrepare) {
+                PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
+            }
+            return;
+        }
+
+        BindActiveTrackToUiAndPlayer(selectedTrack);
+    }
+
+    void BindActiveTrackToUiAndPlayer(CavernizeTrack activeTrack) {
+        if (activeTrack == null) {
+            return;
+        }
+        AppLogger.Info($"Active track ready: {activeTrack.FormatHeader}");
+        string details = string.Join(" | ", activeTrack.Details.Select(d => $"{d.property}: {d.value}"));
         if (trackSummaryText != null) {
-            trackSummaryText.Text = $"{selectedTrack.FormatHeader}\n{details}";
+            trackSummaryText.Text = $"{activeTrack.FormatHeader}\n{details}";
         }
         RebuildInlineTrackList();
 
-        if (selectedTrack.Supported && selectedTrack.Codec != Codec.TrueHD) {
+        if (activeTrack.Supported && activeTrack.Codec != Codec.TrueHD) {
             try {
-                playerEngine.Load(selectedTrack, upmixingSettings, renderingSettings);
+                playerEngine.Load(activeTrack, upmixingSettings, renderingSettings);
                 trackSourceItems = [.. playerEngine.SourceItems];
             } catch (Exception ex) {
                 AppLogger.Error("PlayerEngine.Load", ex);
-                trackSourceItems = TrackSourceItem.BuildFromTrack(selectedTrack);
+                trackSourceItems = TrackSourceItem.BuildFromTrack(activeTrack);
                 ShowError(ex.Message);
             }
         } else {
-            trackSourceItems = TrackSourceItem.BuildFromTrack(selectedTrack);
+            trackSourceItems = TrackSourceItem.BuildFromTrack(activeTrack);
         }
 
         string metaTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
@@ -938,10 +1282,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
             : (LoadedFile != null ? Path.GetFileNameWithoutExtension(LoadedFile.Path) : "Cavernize 3D");
         string metaArtist = !string.IsNullOrWhiteSpace(currentMediaMeta?.Artist)
             ? currentMediaMeta.Artist
-            : $"Cavernize 3D • {selectedTrack.FormatHeader}";
+            : $"Cavernize 3D • {activeTrack.FormatHeader}";
         string metaAlbum = !string.IsNullOrWhiteSpace(currentMediaMeta?.Album)
             ? currentMediaMeta.Album
-            : selectedTrack.FormatHeader;
+            : activeTrack.FormatHeader;
 
         mediaNotification?.UpdateMetadata(
             metaTitle,
@@ -959,6 +1303,156 @@ public partial class MainActivity : Activity, ICavernizeApp {
         UpdateRoomCanvas();
     }
 
+    void PrepareSelectedTrueHDTrackAsync(CavernizeTrack sourceTrack, bool autoPlayAfter) {
+        if (sourceTrack == null || isPreparingTrueHD || uiDestroyed) {
+            return;
+        }
+        string existingBin = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
+        bool needsDownload = string.IsNullOrEmpty(existingBin) || !File.Exists(existingBin);
+
+        if (needsDownload || !store.TruehddLicenceAccepted) {
+            _ = Task.Run(async () => {
+                string licText = await TruehddInstallerService.FetchLicenceTextAsync(this).ConfigureAwait(false);
+                RunOnUiThread(() => {
+                    if (uiDestroyed || selectedTrack != sourceTrack) {
+                        return;
+                    }
+                    OneUiModalDialog.Show(
+                        this,
+                        S["TrueHDLicenceTitle"],
+                        $"{S["TrueHDLicenceDesc"]}\n\n{licText}",
+                        icon: OneUiIconType.Sparkles,
+                        iconBadgeColor: OneUiTheme.Primary,
+                        positiveText: S["TrueHDDownloadDecode"],
+                        onPositive: () => {
+                            store.TruehddLicenceAccepted = true;
+                            StartTrueHDPrepareWorker(sourceTrack, autoPlayAfter);
+                        },
+                        negativeText: S["CancelBtn"],
+                        onNegative: () => {
+                            SetConvertStatus(S["TrueHDCancelled"], 0);
+                            BindActiveTrackToUiAndPlayer(sourceTrack);
+                        },
+                        cancelable: false);
+                });
+            });
+            return;
+        }
+
+        StartTrueHDPrepareWorker(sourceTrack, autoPlayAfter);
+    }
+
+    void StartTrueHDPrepareWorker(CavernizeTrack sourceTrack, bool autoPlayAfter) {
+        if (uiDestroyed || selectedTrack != sourceTrack) {
+            return;
+        }
+        truehdPrepareCts?.Cancel();
+        truehdPrepareCts?.Dispose();
+        truehdPrepareCts = new CancellationTokenSource();
+        CancellationToken token = truehdPrepareCts.Token;
+        isPreparingTrueHD = true;
+
+        LinearLayout dlgContent = new(this) { Orientation = Orientation.Vertical };
+        TextView dlgStatus = Label(S["TrueHDDecoding"], 12.5f, OneUiTheme.TextSecondary);
+        dlgStatus.SetPadding(0, 0, 0, Dp(10));
+        ProgressBar dlgProgress = new(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
+            Max = 1000,
+            Indeterminate = true
+        };
+        OneUiTheme.StyleProgressBar(this, dlgProgress);
+        dlgContent.AddView(dlgStatus);
+        dlgContent.AddView(dlgProgress, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)));
+
+        Android.App.Dialog progressDlg = OneUiModalDialog.Show(
+            this,
+            S["TrueHDTitle"],
+            customContent: dlgContent,
+            icon: OneUiIconType.Sparkles,
+            iconBadgeColor: OneUiTheme.Primary,
+            positiveText: null,
+            negativeText: S["CancelBtn"],
+            onNegative: () => truehdPrepareCts?.Cancel(),
+            cancelable: false);
+
+        void UpdatePrepUi(double p, string msg) {
+            RunOnUiThread(() => {
+                if (uiDestroyed) return;
+                dlgStatus.Text = msg ?? "";
+                if (p < 0) {
+                    dlgProgress.Indeterminate = true;
+                } else {
+                    dlgProgress.Indeterminate = false;
+                    dlgProgress.Progress = Math.Clamp((int)Math.Round(p * 1000.0), 0, 1000);
+                }
+                SetConvertStatus(msg, p);
+            });
+        }
+
+        Task.Run(async () => {
+            try {
+                string truehddPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
+                if (string.IsNullOrEmpty(truehddPath) || !File.Exists(truehddPath)) {
+                    UpdatePrepUi(-1, S["TruehddDownloading"]);
+                    TruehddStatusResult status = await TruehddInstallerService.CheckStatusAsync(this, store, token).ConfigureAwait(false);
+                    truehddPath = await TruehddInstallerService.DownloadAndInstallAsync(
+                        this, store, status,
+                        (frac, msg) => UpdatePrepUi(frac * 0.25, msg),
+                        token).ConfigureAwait(false);
+                    latestTruehddStatus = await TruehddInstallerService.CheckStatusAsync(this, store, token).ConfigureAwait(false);
+                    RunOnUiThread(() => {
+                        RefreshSettingsDot();
+                        RefreshTruehddCardUi();
+                    });
+                }
+
+                int? forcedPres = store.MlpPresentation >= 0 ? store.MlpPresentation : null;
+                TrueHDDecodeResult res = TrueHDDecoderService.DecodeTrack(
+                    this,
+                    sourceTrack,
+                    LoadedFile?.Path,
+                    ffmpeg.Found ? ffmpeg.Location : null,
+                    truehddPath,
+                    forcedPres,
+                    UpdatePrepUi,
+                    token);
+
+                RunOnUiThread(() => {
+                    isPreparingTrueHD = false;
+                    try { progressDlg?.Dismiss(); } catch { }
+                    if (uiDestroyed || selectedTrack != sourceTrack) {
+                        TrueHDDecoderService.CleanupWorkDirectory(res.SessionDirectory);
+                        res.DecodedTrack?.Dispose();
+                        return;
+                    }
+                    decodedTrueHDTrack = res.DecodedTrack;
+                    activeTrueHDSessionDir = res.SessionDirectory;
+                    SetConvertStatus(S["Ready"], 0);
+                    BindActiveTrackToUiAndPlayer(decodedTrueHDTrack);
+                    if (autoPlayAfter && decodedTrueHDTrack != null) {
+                        TogglePlayPause();
+                    }
+                });
+            } catch (OperationCanceledException) {
+                AppLogger.Info("TrueHD decode cancelled by user.");
+                RunOnUiThread(() => {
+                    isPreparingTrueHD = false;
+                    try { progressDlg?.Dismiss(); } catch { }
+                    SetConvertStatus(S["TrueHDCancelled"], 0);
+                    BindActiveTrackToUiAndPlayer(sourceTrack);
+                });
+            } catch (Exception ex) {
+                AppLogger.Error("PrepareSelectedTrueHDTrackAsync", ex);
+                RunOnUiThread(() => {
+                    isPreparingTrueHD = false;
+                    try { progressDlg?.Dismiss(); } catch { }
+                    SetConvertStatus(ex.Message, 0);
+                    BindActiveTrackToUiAndPlayer(sourceTrack);
+                    ShowError(ex.Message);
+                });
+            }
+        });
+    }
+
     void RefreshAllUiState() {
         RefreshConverterTabState();
         RefreshPlayerSourcesList();
@@ -967,6 +1461,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshSettingsTabButtons();
         RefreshSettingsDot();
         RefreshFFmpegCardUi();
+        RefreshTruehddCardUi();
         RefreshSettingsUpdateUi();
         UpdateRoomCanvas();
     }
@@ -1179,6 +1674,96 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     isFFmpegDownloading = false;
                     SetFFmpegStatus(ex.Message, 0);
                     RefreshFFmpegCardUi();
+                    ShowError(ex.Message);
+                });
+            }
+        });
+    }
+
+    async Task CheckTruehddUpdateAsync(bool silent) {
+        try {
+            RunOnUiThread(() => SetTruehddStatus(S["CheckingUpdate"], -1));
+            TruehddStatusResult status = await TruehddInstallerService.CheckStatusAsync(this, store);
+            latestTruehddStatus = status;
+            AppLogger.Info($"truehdd status: installed={status.IsInstalled}, local='{status.LocalPath}', ver='{status.InstalledVersion}', remote='{status.RemoteVersion}'");
+
+            RunOnUiThread(() => {
+                RefreshSettingsDot();
+                RefreshTruehddCardUi();
+                if (!silent && !status.IsUpdateAvailable && status.IsInstalled) {
+                    string ver = string.IsNullOrEmpty(status.InstalledVersion) ? status.RemoteVersion : status.InstalledVersion;
+                    Toast.MakeText(this, string.Format(S["TruehddUpToDate"], ver), ToastLength.Short).Show();
+                }
+            });
+        } catch (Exception ex) {
+            AppLogger.Error("CheckTruehddUpdateAsync", ex);
+            RunOnUiThread(() => {
+                RefreshTruehddCardUi();
+                if (!silent) {
+                    ShowError(ex.Message);
+                }
+            });
+        }
+    }
+
+    void StartTruehddDownloadOrUpdate() {
+        if (isTruehddDownloading) {
+            return;
+        }
+        if (!store.TruehddLicenceAccepted) {
+            _ = Task.Run(async () => {
+                string licText = await TruehddInstallerService.FetchLicenceTextAsync(this).ConfigureAwait(false);
+                RunOnUiThread(() => {
+                    OneUiModalDialog.Show(
+                        this,
+                        S["TrueHDLicenceTitle"],
+                        $"{S["TrueHDLicenceDesc"]}\n\n{licText}",
+                        icon: OneUiIconType.Sparkles,
+                        iconBadgeColor: OneUiTheme.Primary,
+                        positiveText: S["TrueHDDownloadDecode"],
+                        onPositive: () => {
+                            store.TruehddLicenceAccepted = true;
+                            LaunchTruehddDownloadWorker();
+                        },
+                        negativeText: S["CancelBtn"]);
+                });
+            });
+            return;
+        }
+        LaunchTruehddDownloadWorker();
+    }
+
+    void LaunchTruehddDownloadWorker() {
+        if (isTruehddDownloading) {
+            return;
+        }
+        isTruehddDownloading = true;
+        RunOnUiThread(() => SetTruehddStatus(S["TruehddDownloading"], 0));
+
+        _ = Task.Run(async () => {
+            try {
+                string path = await TruehddInstallerService.DownloadAndInstallAsync(
+                    this, store, latestTruehddStatus,
+                    (frac, msg) => RunOnUiThread(() => SetTruehddStatus(msg, frac)));
+
+                TruehddStatusResult refreshed = await TruehddInstallerService.CheckStatusAsync(this, store);
+                latestTruehddStatus = refreshed;
+                AppLogger.Info($"truehdd installed at '{path}'");
+
+                RunOnUiThread(() => {
+                    isTruehddDownloading = false;
+                    Truehdd.CustomExecutablePath = path;
+                    RefreshSettingsDot();
+                    RefreshSettingsTabButtons();
+                    RefreshTruehddCardUi();
+                    Toast.MakeText(this, S["Ready"], ToastLength.Short).Show();
+                });
+            } catch (Exception ex) {
+                AppLogger.Error("StartTruehddDownloadOrUpdate", ex);
+                RunOnUiThread(() => {
+                    isTruehddDownloading = false;
+                    SetTruehddStatus(ex.Message, 0);
+                    RefreshTruehddCardUi();
                     ShowError(ex.Message);
                 });
             }

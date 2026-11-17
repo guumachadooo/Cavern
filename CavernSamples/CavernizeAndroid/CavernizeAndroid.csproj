@@ -8,8 +8,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
     <ApplicationId>hu.sbence.cavern.cavernize</ApplicationId>
-    <ApplicationVersion>16</ApplicationVersion>
-    <ApplicationDisplayVersion>2.4.0</ApplicationDisplayVersion>
+    <ApplicationVersion>17</ApplicationVersion>
+    <ApplicationDisplayVersion>2.5.0</ApplicationDisplayVersion>
     <ApplicationTitle>Cavernize</ApplicationTitle>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
     <AndroidUseAapt2>true</AndroidUseAapt2>

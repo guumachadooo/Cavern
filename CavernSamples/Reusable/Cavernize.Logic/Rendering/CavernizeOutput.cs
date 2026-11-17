@@ -21,9 +21,10 @@ namespace Cavernize.Logic.Rendering {
                 path;
             int channelCount = app.RenderTarget.OutputChannels;
             AudioWriter writer;
-            if (mkvTarget && target.Container == Container.Matroska && (codec == Codec.PCM_LE || codec == Codec.PCM_Float)) {
+            Track[] videoTracks = mkvTarget && target.Container == Container.Matroska ? target.GetVideoTracks() : null;
+            if (mkvTarget && target.Container == Container.Matroska && videoTracks != null && (codec == Codec.PCM_LE || codec == Codec.PCM_Float)) {
                 int blockSize = GetBlockSize(app.RenderTarget, environment);
-                writer = new AudioWriterIntoContainer(path, target.GetVideoTracks(), codec, blockSize, channelCount, target.Length, target.SampleRate, bits) {
+                writer = new AudioWriterIntoContainer(path, videoTracks, codec, blockSize, channelCount, target.Length, target.SampleRate, bits) {
                     NewTrackName = $"Cavern {app.RenderTarget.Name} render"
                 };
             } else if (exportFormat.Equals(waveExtension) && !app.RenderingSettings.WAVChannelSkip) {

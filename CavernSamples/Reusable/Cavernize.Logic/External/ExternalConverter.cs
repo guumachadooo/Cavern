@@ -13,6 +13,11 @@ public abstract class ExternalConverter {
     public event Action<string> UpdateStatus;
 
     /// <summary>
+    /// Relay normalized progress updates [0; 1] or -1 when indeterminate.
+    /// </summary>
+    public event Action<double> UpdateProgress;
+
+    /// <summary>
     /// Provides an interface to show the licence of the external converter.
     /// </summary>
     public ILicence LicenceDisplay { get; set; }
@@ -33,6 +38,11 @@ public abstract class ExternalConverter {
     public abstract CavernizeTrack Convert(CavernizeTrack source);
 
     /// <summary>
+    /// Convert the <paramref name="source"/> track to a format Cavern can render, observing <paramref name="cancellationToken"/>.
+    /// </summary>
+    public virtual CavernizeTrack Convert(CavernizeTrack source, CancellationToken cancellationToken) => Convert(source);
+
+    /// <summary>
     /// Remove the intermediate files after rendering is finished.
     /// </summary>
     public abstract void Cleanup();
@@ -42,4 +52,9 @@ public abstract class ExternalConverter {
     /// </summary>
     /// <param name="message"></param>
     protected void UpdateStatusMessage(string message) => UpdateStatus?.Invoke(message);
+
+    /// <summary>
+    /// Update the progress value in the UI.
+    /// </summary>
+    protected void UpdateProgressValue(double progress) => UpdateProgress?.Invoke(progress);
 }

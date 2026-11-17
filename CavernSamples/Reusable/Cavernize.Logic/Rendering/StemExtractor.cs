@@ -381,9 +381,31 @@ public static class StemExtractor {
         Action<double, string> onProgress,
         CancellationToken token = default) {
         ArgumentNullException.ThrowIfNull(track);
+        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
+
+        if (!string.IsNullOrEmpty(track.RawBitstreamPath) && File.Exists(track.RawBitstreamPath)) {
+            long totalLen = new FileInfo(track.RawBitstreamPath).Length;
+            long copied = 0;
+            byte[] buf = new byte[262144];
+            using (FileStream src = File.OpenRead(track.RawBitstreamPath))
+            using (FileStream dst = File.Create(outputPath)) {
+                int read;
+                while ((read = src.Read(buf, 0, buf.Length)) > 0) {
+                    token.ThrowIfCancellationRequested();
+                    dst.Write(buf, 0, read);
+                    copied += read;
+                    if (totalLen > 0) {
+                        double prog = Math.Clamp(copied / (double)totalLen, 0, 1);
+                        onProgress?.Invoke(prog, $"Extraindo bitstream bruto ({prog:0.0%})...");
+                    }
+                }
+            }
+            onProgress?.Invoke(1, "Bitstream bruto extraído!");
+            return copied;
+        }
+
         Track rawTrack = track.Track ?? throw new InvalidOperationException("Only container tracks (MKV/MP4/MXF) support raw bitstream extraction.");
 
-        Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? ".");
         rawTrack.Source.Seek(0);
         double duration = rawTrack.Source.Duration;
         long totalBytes = 0;

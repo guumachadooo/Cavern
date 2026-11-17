@@ -529,12 +529,13 @@ public partial class MainActivity {
     }
 
     void TogglePlayPause() {
-        if (selectedTrack == null || !selectedTrack.Supported) {
+        CavernizeTrack active = GetActiveTrack();
+        if (active == null || !active.Supported) {
             ShowError(S["NoTrack"]);
             return;
         }
-        if (selectedTrack.Codec == Cavern.Format.Common.Codec.TrueHD) {
-            ShowError(S["TrueHDUnsupported"]);
+        if (active.Codec == Cavern.Format.Common.Codec.TrueHD) {
+            PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: true);
             return;
         }
         if (playerEngine.IsPlaying) {

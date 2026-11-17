@@ -26,14 +26,18 @@ internal static class Downloader {
 
         latest = HTTP.GET($"{gitHubUrl}{repo}/releases/expanded_assets/{tag}");
 
-        int index;
-        while ((index = latest.IndexOf(platform, StringComparison.Ordinal)) != -1) {
+        int index = 0;
+        string exactPattern = platform + "\"";
+        while ((index = latest.IndexOf(exactPattern, index, StringComparison.Ordinal)) != -1) {
             int begin = latest.LastIndexOf('"', index) + 2;
-            int end = latest.IndexOf('"', index);
-            string link = latest[begin..end];
-            if (link.StartsWith(repo)) {
-                return gitHubUrl + link;
+            int end = index + platform.Length;
+            if (begin > 1 && end > begin) {
+                string link = latest[begin..end];
+                if (link.StartsWith(repo, StringComparison.Ordinal)) {
+                    return gitHubUrl + link;
+                }
             }
+            index += platform.Length;
         }
         throw new NoValidReleaseException();
     }

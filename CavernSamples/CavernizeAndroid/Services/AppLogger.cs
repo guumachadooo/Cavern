@@ -81,6 +81,18 @@ public static class AppLogger {
         WriteRaw(exitCode == 0 ? "FFMPEG" : "ERROR", sb.ToString());
     }
 
+    public static void LogTruehdd(string executable, string arguments, int exitCode, string stdout, string stderr) {
+        StringBuilder sb = new();
+        sb.Append($"truehdd exit={exitCode} bin=\"{executable}\" args={arguments}");
+        if (!string.IsNullOrWhiteSpace(stdout)) {
+            sb.Append($"\n  stdout: {stdout}");
+        }
+        if (!string.IsNullOrWhiteSpace(stderr)) {
+            sb.Append($"\n  stderr: {stderr}");
+        }
+        WriteRaw(exitCode == 0 ? "TRUEHDD" : "ERROR", sb.ToString());
+    }
+
     public static string ReadAll() {
         lock (sync) {
             foreach (string path in new[] { sharedLogPath, internalLogPath }) {

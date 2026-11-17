@@ -219,6 +219,21 @@ public sealed class AppSettingsStore {
         set => Edit().PutString("ffmpegArgs", value ?? "").Apply();
     }
 
+    public string TruehddLocation {
+        get => prefs.GetString("truehddPath", "");
+        set => Edit().PutString("truehddPath", value ?? "").Apply();
+    }
+
+    public string InstalledTruehddVersion {
+        get => prefs.GetString("truehddVer", "");
+        set => Edit().PutString("truehddVer", value ?? "").Apply();
+    }
+
+    public bool TruehddLicenceAccepted {
+        get => prefs.GetBoolean("truehddLicenceAccepted", false);
+        set => Edit().PutBoolean("truehddLicenceAccepted", value).Apply();
+    }
+
     public bool AutoCheckUpdates {
         get => prefs.GetBoolean("autoCheckUpdates", true);
         set => Edit().PutBoolean("autoCheckUpdates", value).Apply();

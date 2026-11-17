@@ -226,21 +226,22 @@ public partial class MainActivity {
     }
 
     void StartExtraction() {
-        if (isOperationRunning) {
+        if (isOperationRunning || isPreparingTrueHD) {
             ShowError(S["OpRunning"]);
             return;
         }
-        if (selectedTrack == null || !selectedTrack.Supported) {
+        CavernizeTrack active = GetActiveTrack();
+        if (active == null || !active.Supported) {
             ShowError(S["NoTrack"]);
             return;
         }
-        if (selectedTrack.Codec == Cavern.Format.Common.Codec.TrueHD) {
-            ShowError(S["TrueHDUnsupported"]);
+        int mode = selectedExtractMode;
+        if (active.Codec == Cavern.Format.Common.Codec.TrueHD && mode != 3) {
+            PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
             return;
         }
 
         StopPlayback();
-        int mode = selectedExtractMode;
         BitDepth bits = selectedExtractBitDepth switch {
             0 => BitDepth.Int16,
             2 => BitDepth.Float32,
@@ -255,7 +256,8 @@ public partial class MainActivity {
         }
 
         string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "track");
-        string relSubfolder = Path.Combine("Stems", $"{baseName}_{DateTime.Now:HHmmss}");
+        string folderTag = $"{baseName}_{DateTime.Now:HHmmss}";
+        string relSubfolder = Path.Combine("Stems", folderTag);
         string outDir = AndroidFileHelper.GetWorkingOutputDir(this, relSubfolder);
         AppLogger.Info($"Starting stem extraction: mode={mode}, count={selectedIndices.Count}, out='{outDir}'");
 
@@ -278,7 +280,7 @@ public partial class MainActivity {
 
                 if (mode == 0) {
                     StemExtractionResult res = StemExtractor.ExtractRawStems(
-                        selectedTrack, outDir, bits, selectedIndices, exportJson, ReportProg, token);
+                        active, outDir, bits, selectedIndices, exportJson, ReportProg, token);
                     created.AddRange(res.CreatedFiles);
                     if (!string.IsNullOrEmpty(res.TrajectoryJsonPath)) {
                         created.Add(res.TrajectoryJsonPath);
@@ -286,24 +288,27 @@ public partial class MainActivity {
                 } else if (mode == 1 || mode == 2) {
                     bool combine = mode == 2;
                     StemExtractionResult res = StemExtractor.ExtractSpatialStems(
-                        this, selectedTrack, outDir, bits, selectedIndices, combine,
+                        this, active, outDir, bits, selectedIndices, combine,
                         playerEngine.ListenerPosition, playerEngine.ListenerRotation,
                         playerEngine.DistanceSimulation, playerEngine.VolumeRolloff,
                         ReportProg, token);
                     created.AddRange(res.CreatedFiles);
                 } else {
-                    string rawExt = selectedTrack.Codec switch {
+                    Cavern.Format.Common.Codec rawCodec = active.SourceCodec != Cavern.Format.Common.Codec.Unknown
+                        ? active.SourceCodec
+                        : active.Codec;
+                    string rawExt = rawCodec switch {
                         Cavern.Format.Common.Codec.EnhancedAC3 => ".eac3",
                         Cavern.Format.Common.Codec.AC3 => ".ac3",
                         Cavern.Format.Common.Codec.TrueHD => ".thd",
                         _ => ".bin"
                     };
                     string rawPath = Path.Combine(outDir, baseName + rawExt);
-                    StemExtractor.ExtractRawBitstream(selectedTrack, rawPath, ReportProg, token);
+                    StemExtractor.ExtractRawBitstream(active, rawPath, ReportProg, token);
                     created.Add(rawPath);
                 }
 
-                string publishRel = $"Stems/{baseName}_{DateTime.Now:HHmmss}";
+                string publishRel = $"Stems/{folderTag}";
                 foreach (string f in created) {
                     AndroidFileHelper.PublishToDownloads(this, f, publishRel);
                 }
@@ -349,8 +354,7 @@ public partial class MainActivity {
             if (localPath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase)) {
                 LinearLayout playBtn = OneUiPillFactory.CreateIconActionPill(this, OneUiIconType.Play, null, () => {
                     try {
-                        OpenContent(localPath);
-                        SwitchTab(0);
+                        OpenLocalPathWithFallbackAsync(localPath, switchToTab: 0);
                     } catch (Exception ex) {
                         ShowError(ex.Message);
                     }

@@ -35,7 +35,8 @@ namespace Cavern.Format.Container.Matroska {
         /// </summary>
         public MatroskaTree(Stream reader) : base(reader) {
             nextTag = reader.Position;
-            end = nextTag + Length;
+            long rawEnd = nextTag + Length;
+            end = rawEnd > reader.Length || rawEnd < nextTag ? reader.Length : rawEnd;
             reader.Position = end;
         }
 
@@ -44,8 +45,9 @@ namespace Cavern.Format.Container.Matroska {
         /// </summary>
         MatroskaTree(Stream reader, long endPosition, out bool valid) : base(reader) {
             nextTag = reader.Position;
-            end = nextTag + Length;
-            valid = end < endPosition;
+            long rawEnd = nextTag + Length;
+            end = rawEnd > endPosition || rawEnd < nextTag ? endPosition : rawEnd;
+            valid = rawEnd >= nextTag && rawEnd <= endPosition;
             if (valid) {
                 reader.Position = end;
             }

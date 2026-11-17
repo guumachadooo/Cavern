@@ -142,8 +142,7 @@ public partial class MainActivity {
         shareExportBtn = PillButton(S["ShareFile"], () => ShareLocalFile(lastRenderedFilePath));
         playExportBtn = PillButton(S["OpenPlayer"], () => {
             if (!string.IsNullOrEmpty(lastRenderedFilePath) && File.Exists(lastRenderedFilePath)) {
-                OpenContent(lastRenderedFilePath);
-                SwitchTab(0);
+                OpenLocalPathWithFallbackAsync(lastRenderedFilePath, switchToTab: 0);
             }
         }, active: true);
         shareExportBtn.Visibility = ViewStates.Gone;
@@ -191,12 +190,13 @@ public partial class MainActivity {
         if (converterTrackInfoText == null) {
             return;
         }
-        if (selectedTrack == null) {
+        CavernizeTrack active = GetActiveTrack();
+        if (active == null) {
             converterTrackInfoText.Text = S["NoTrack"];
             return;
         }
-        StringBuilder sb = new(selectedTrack.FormatHeader);
-        foreach (var (prop, val) in selectedTrack.Details) {
+        StringBuilder sb = new(active.FormatHeader);
+        foreach (var (prop, val) in active.Details) {
             sb.Append('\n').Append(prop).Append(": ").Append(val);
         }
         converterTrackInfoText.Text = sb.ToString();
@@ -209,9 +209,10 @@ public partial class MainActivity {
         List<string> labels = [];
         List<string> exts = [];
 
-        if (selectedTrack != null) {
+        CavernizeTrack active = GetActiveTrack();
+        if (active != null) {
             try {
-                string filter = MergeToContainer.GetPossibleContainers(selectedTrack, ExportFormat.Codec, ffmpeg);
+                string filter = MergeToContainer.GetPossibleContainers(active, ExportFormat.Codec, ffmpeg);
                 string[] parts = filter.Split('|');
                 for (int i = 0; i + 1 < parts.Length; i += 2) {
                     string pattern = parts[i + 1].Trim();
@@ -241,7 +242,7 @@ public partial class MainActivity {
 
         // Default to native audio extension (.flac / .eac3 / .opus) when source is audio-only rather than video container
         int defaultIdx = 0;
-        if (selectedTrack == null || selectedTrack.Container != Container.Matroska) {
+        if (active == null || active.Container != Container.Matroska) {
             int nonMkv = exts.FindIndex(e => !e.Equals(".mkv", StringComparison.OrdinalIgnoreCase));
             if (nonMkv >= 0) {
                 defaultIdx = nonMkv;
@@ -332,11 +333,12 @@ public partial class MainActivity {
     }
 
     void ShowMetadataDialog() {
-        if (selectedTrack == null) {
+        CavernizeTrack active = GetActiveTrack();
+        if (active == null) {
             ShowError(S["NoTrack"]);
             return;
         }
-        ReadableMetadata meta = selectedTrack.GetMetadata();
+        ReadableMetadata meta = active.GetMetadata();
         if (meta == null) {
             ShowError("No detailed codec metadata available for this track.");
             return;
@@ -358,35 +360,42 @@ public partial class MainActivity {
 
     // ICavernizeApp Render Pipeline
     void PreRender() {
-        if (isOperationRunning) {
+        if (isOperationRunning || isPreparingTrueHD) {
             throw new ConcurrencyException(S["OpRunning"]);
         }
-        if (selectedTrack == null || !selectedTrack.Supported) {
+        CavernizeTrack active = GetActiveTrack();
+        if (active == null || !active.Supported) {
             throw new TrackException(S["NoTrack"]);
         }
+        string chosenExt = containerSelector != null && containerSelector.SelectedIndex >= 0 && containerSelector.SelectedIndex < availableContainerExts.Count
+            ? availableContainerExts[containerSelector.SelectedIndex]
+            : ".wav";
         bool needsFFmpeg = !string.IsNullOrEmpty(ExportFormat.FFName) &&
             ExportFormat.Codec != Codec.PCM_Float && ExportFormat.Codec != Codec.PCM_LE;
-        if (needsFFmpeg && ExportFormat.Codec == Codec.FLAC) {
-            string chosenExt = containerSelector != null && containerSelector.SelectedIndex >= 0 && containerSelector.SelectedIndex < availableContainerExts.Count
-                ? availableContainerExts[containerSelector.SelectedIndex]
-                : ".flac";
-            if (chosenExt.Equals(".flac", StringComparison.OrdinalIgnoreCase)) {
-                needsFFmpeg = false; // Built-in pure-C# FlacAudioConverter guarantees lossless .flac export
-            }
+        if ((ExportFormat.Codec == Codec.PCM_LE || ExportFormat.Codec == Codec.PCM_Float) &&
+            chosenExt.Equals(".mkv", StringComparison.OrdinalIgnoreCase) &&
+            active.GetVideoTracks() == null) {
+            needsFFmpeg = true;
+        }
+        if (needsFFmpeg && ExportFormat.Codec == Codec.FLAC && chosenExt.Equals(".flac", StringComparison.OrdinalIgnoreCase)) {
+            needsFFmpeg = false; // Built-in pure-C# FlacAudioConverter guarantees lossless .flac export
         }
         if (needsFFmpeg && !ffmpeg.Found) {
             throw new TrackException(string.Format(S["FFmpegNeeded"], ExportFormat.Codec));
         }
-        AttachToListener();
+        if (active.Codec != Codec.TrueHD) {
+            AttachToListener(active);
+        }
     }
 
-    void AttachToListener() {
+    void AttachToListener(CavernizeTrack track = null) {
+        CavernizeTrack target = track ?? GetActiveTrack();
         store.ApplyGlobals();
-        environment.AttachToListener(selectedTrack);
-        if (applyRoomToExportCheck != null && applyRoomToExportCheck.Checked) {
+        environment.AttachToListener(target);
+        if (applyRoomToExportCheck != null && applyRoomToExportCheck.Checked && target.Renderer != null) {
             environment.Listener.Position = playerEngine.ListenerPosition;
             environment.Listener.Rotation = playerEngine.ListenerRotation;
-            foreach (Source s in selectedTrack.Renderer.Objects) {
+            foreach (Source s in target.Renderer.Objects) {
                 s.DistanceSimulation = playerEngine.DistanceSimulation && RenderTarget is VirtualizerRenderTarget;
                 s.VolumeRolloff = playerEngine.VolumeRolloff;
             }
@@ -401,13 +410,13 @@ public partial class MainActivity {
             return null;
         }
 
-        CavernizeTrack target = selectedTrack;
+        CavernizeTrack target = GetActiveTrack();
         if (!store.ReportOnlyMode) {
             if (string.IsNullOrEmpty(path)) {
                 path = BuildDefaultExportPath(target);
             }
             try {
-                return CreateRenderAction(path);
+                return CreateRenderAction(path, target);
             } catch (Exception e) {
                 ShowError(e.Message);
                 return null;
@@ -426,8 +435,13 @@ public partial class MainActivity {
     }
 
     void StartSingleRender() {
-        if (isOperationRunning) {
+        if (isOperationRunning || isPreparingTrueHD) {
             ShowError(S["OpRunning"]);
+            return;
+        }
+        CavernizeTrack active = GetActiveTrack();
+        if (active != null && active.Codec == Codec.TrueHD) {
+            PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
             return;
         }
         StopPlayback();
@@ -439,11 +453,11 @@ public partial class MainActivity {
             return;
         }
 
-        string outPath = store.ReportOnlyMode ? null : BuildDefaultExportPath(selectedTrack);
+        string outPath = store.ReportOnlyMode ? null : BuildDefaultExportPath(active);
         AppLogger.Info($"Starting single render: codec={ExportFormat.Codec}, target={RenderTarget?.Name}, out='{outPath}'");
         Action task = store.ReportOnlyMode
-            ? () => RenderTask(selectedTrack, null, null, activeCts.Token)
-            : CreateRenderAction(outPath);
+            ? () => RenderTask(active, null, null, activeCts?.Token ?? CancellationToken.None)
+            : CreateRenderAction(outPath, active);
 
         RunBackgroundOperation(_ => task(), outPath);
     }
@@ -461,10 +475,18 @@ public partial class MainActivity {
         return candidate;
     }
 
-    Action CreateRenderAction(string path) {
-        CavernizeTrack target = selectedTrack;
+    Action CreateRenderAction(string path, CavernizeTrack target = null) {
+        target ??= GetActiveTrack();
         Codec codec = ExportFormat.Codec;
         BitDepth bits = codec == Codec.PCM_Float ? BitDepth.Float32 : store.Force24Bit ? BitDepth.Int24 : BitDepth.Int16;
+
+        if (target.Codec == Codec.TrueHD) {
+            if (codec.IsEnvironmental()) {
+                return () => TranscodeDeferredTrueHDTask(target, path, codec, bits, activeCts?.Token ?? CancellationToken.None);
+            }
+            blockSize = CavernizeOutput.GetBlockSize(RenderTarget, environment);
+            return () => RenderDeferredTrueHDTask(target, path, codec, bits, activeCts?.Token ?? CancellationToken.None);
+        }
 
         if (codec.IsEnvironmental()) {
             return () => {
@@ -478,13 +500,56 @@ public partial class MainActivity {
         return () => RenderTask(target, writer, path, activeCts?.Token ?? CancellationToken.None);
     }
 
-    void RenderTask(CavernizeTrack target, AudioWriter writer, string finalName, CancellationToken token) {
-        using ExternalConverterHandler external = CreateExternalHandler(target, 0);
+    void RenderDeferredTrueHDTask(CavernizeTrack rawTrueHDTarget, string finalName, Codec codec, BitDepth bits, CancellationToken token) {
+        using ExternalConverterHandler external = CreateExternalHandler(rawTrueHDTarget, 0, token);
         if (external.Failed) {
-            writer?.Dispose();
+            if (external.Error != null) {
+                throw external.Error;
+            }
             return;
         }
 
+        CavernizeTrack effective = external.IntermediateTrack ?? rawTrueHDTarget;
+        AttachToListener(effective);
+        blockSize = CavernizeOutput.GetBlockSize(RenderTarget, environment);
+        AudioWriter writer = !string.IsNullOrEmpty(finalName)
+            ? CavernizeOutput.CreateRenderOutput(this, finalName, environment, effective, codec, bits)
+            : null;
+        ExecuteRenderBody(effective, writer, finalName, token);
+    }
+
+    void TranscodeDeferredTrueHDTask(CavernizeTrack rawTrueHDTarget, string path, Codec codec, BitDepth bits, CancellationToken token) {
+        int keepFirst = codec == Codec.ADM_BWF || codec == Codec.ADM_BWF_Atmos ? 10 : 0;
+        using ExternalConverterHandler external = CreateExternalHandler(rawTrueHDTarget, keepFirst, token);
+        if (external.Failed) {
+            if (external.Error != null) {
+                throw external.Error;
+            }
+            return;
+        }
+
+        CavernizeTrack effective = external.IntermediateTrack ?? rawTrueHDTarget;
+        AttachToListener(effective);
+        EnvironmentWriter transcoder = EnvironmentWriter.Create(path, codec, environment.Listener, effective.Length, bits, effective.Renderer);
+        ExecuteTranscodeBody(effective, transcoder, token);
+    }
+
+    void RenderTask(CavernizeTrack target, AudioWriter writer, string finalName, CancellationToken token) {
+        using ExternalConverterHandler external = CreateExternalHandler(target, 0, token);
+        if (external.Failed) {
+            writer?.Dispose();
+            if (external.Error != null) {
+                throw external.Error;
+            }
+            return;
+        }
+        if (!external.ExternalConverterNeeded && target != GetActiveTrack()) {
+            AttachToListener(target);
+        }
+        ExecuteRenderBody(target, writer, finalName, token);
+    }
+
+    void ExecuteRenderBody(CavernizeTrack target, AudioWriter writer, string finalName, CancellationToken token) {
         RunOnUiThread(() => SetConvertStatus(S["Starting"], 0));
         RenderStats stats = WriteRender(target, writer, RenderTarget, token);
         report.Generate(stats);
@@ -492,7 +557,8 @@ public partial class MainActivity {
         if (writer is RIFFWaveWriter && !string.IsNullOrEmpty(finalName) && !finalName.EndsWith(waveExtension, StringComparison.OrdinalIgnoreCase)) {
             RunOnUiThread(() => SetConvertStatus("Finalizando formato de saída...", 0.96));
             string exportedAudio = Path.ChangeExtension(finalName, waveExtension);
-            MergeToContainer merger = new(LoadedFile.Path, exportedAudio, ExportFormat.FFName);
+            string ffCodec = ExportFormat.Codec == Codec.PCM_LE && store.Force24Bit ? "pcm_s24le" : ExportFormat.FFName;
+            MergeToContainer merger = new(LoadedFile.Path, exportedAudio, ffCodec);
             merger.AddArguments(RenderingSettings.MergeArguments);
             merger.SetTrackName($"Cavern {RenderTarget.Name} render");
             if (writer.ChannelCount > 8) {
@@ -524,12 +590,18 @@ public partial class MainActivity {
         if (writer is DolbyAtmosBWFWriter bwfWriter) {
             bwfWriter.ExtendWithMuteTarget();
         }
-        using ExternalConverterHandler external = CreateExternalHandler(target, writer is DolbyAtmosBWFWriter ? 10 : 0);
+        using ExternalConverterHandler external = CreateExternalHandler(target, writer is DolbyAtmosBWFWriter ? 10 : 0, token);
         if (external.Failed) {
             writer.Dispose();
+            if (external.Error != null) {
+                throw external.Error;
+            }
             return;
         }
+        ExecuteTranscodeBody(target, writer, token);
+    }
 
+    void ExecuteTranscodeBody(CavernizeTrack target, EnvironmentWriter writer, CancellationToken token) {
         RunOnUiThread(() => SetConvertStatus(S["Starting"], 0));
         RenderStats stats = writer is BroadcastWaveFormatWriter bwf
             ? WriteTranscodeBwf(target, bwf, token)
@@ -537,19 +609,27 @@ public partial class MainActivity {
         report.Generate(stats);
     }
 
-    ExternalConverterHandler CreateExternalHandler(CavernizeTrack target, int keepFirstSources) {
+    ExternalConverterHandler CreateExternalHandler(CavernizeTrack target, int keepFirstSources, CancellationToken token = default) {
         AndroidLicencePrompt prompt = new((desc, text) => {
+            if (store.TruehddLicenceAccepted) {
+                return true;
+            }
             bool accepted = false;
             using ManualResetEventSlim mre = new(false);
             RunOnUiThread(() => {
                 OneUiModalDialog.Show(
                     this,
-                    "External Decoder Licence",
+                    S["TrueHDLicenceTitle"],
                     $"{desc}\n\n{text}",
-                    icon: OneUiIconType.Info,
-                    positiveText: "Accept",
-                    onPositive: () => { accepted = true; mre.Set(); },
-                    negativeText: "Decline",
+                    icon: OneUiIconType.Sparkles,
+                    iconBadgeColor: OneUiTheme.Primary,
+                    positiveText: S["TrueHDDownloadDecode"],
+                    onPositive: () => {
+                        store.TruehddLicenceAccepted = true;
+                        accepted = true;
+                        mre.Set();
+                    },
+                    negativeText: S["CancelBtn"],
                     onNegative: () => { accepted = false; mre.Set(); },
                     cancelable: false);
             });
@@ -560,8 +640,11 @@ public partial class MainActivity {
         ExternalConverterHandler external = new(target, prompt,
             p => RunOnUiThread(() => SetConvertStatus(convertStatusText.Text, p)),
             msg => RunOnUiThread(() => SetConvertStatus(msg, convertProgressBar.Progress / 1000.0)),
-            RunOnUiThreadSync);
-        if (!external.Failed) {
+            RunOnUiThreadSync,
+            token);
+        if (!external.Failed && external.ExternalConverterNeeded && target.Codec == Codec.TrueHD) {
+            // Attachment for deferred TrueHD happens in RenderDeferredTrueHDTask / TranscodeDeferredTrueHDTask
+        } else if (!external.Failed) {
             external.Attach(environment.Listener, upmixingSettings, keepFirstSources);
         }
         return external;

@@ -65,8 +65,12 @@ public class Queue(ICavernizeApp app) {
             }
 
             string container = MergeToContainer.GetPossibleContainers(app.SelectedTrack, app.ExportFormat.Codec, ffmpeg);
-            container = container.Substring(container.IndexOf('|') + 2, 4);
-            string outputPath = Path.Combine(targetFolder, Path.GetFileNameWithoutExtension(files[i])) + container;
+            string[] parts = container.Split('|');
+            string ext = parts.Length > 1 ? parts[1].Split(';')[0].Replace("*", "").Trim() : ".wav";
+            if (string.IsNullOrEmpty(ext)) {
+                ext = ".wav";
+            }
+            string outputPath = Path.Combine(targetFolder, Path.GetFileNameWithoutExtension(files[i])) + ext;
             QueueRenderTask(app.GetRenderTask(outputPath), invalids, Path.GetFileName(files[i]));
         }
         if (c > 1) {

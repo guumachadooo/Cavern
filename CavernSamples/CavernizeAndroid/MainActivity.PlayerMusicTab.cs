@@ -356,7 +356,8 @@ public partial class MainActivity {
             musicArtworkView.SetArtwork(defaultFallbackCover, OneUiTheme.Primary);
         }
 
-        if (LoadedFile == null || selectedTrack == null) {
+        CavernizeTrack active = GetActiveTrack();
+        if (LoadedFile == null || active == null) {
             musicTitleText.Text = S["PlayerEmptyTitle"];
             musicArtistText.Text = S["PlayerEmptySub"];
             musicSpatialBadgeText.Text = S["PlayerBadgeSpatial"];
@@ -371,13 +372,19 @@ public partial class MainActivity {
             string sub = string.Join(" — ", new[] { currentMediaMeta?.Artist, currentMediaMeta?.Album }.Where(s => !string.IsNullOrWhiteSpace(s)));
             musicArtistText.Text = !string.IsNullOrWhiteSpace(sub)
                 ? sub
-                : selectedTrack.FormatHeader;
+                : active.FormatHeader;
 
             int beds = trackSourceItems.Count(x => x.IsBed);
             int objs = trackSourceItems.Count(x => x.IsDynamicObject);
-            musicSpatialBadgeText.Text = objs > 0
-                ? $"Spatial 3D • {objs} Obj"
-                : selectedTrack.Codec.ToString().ToUpperInvariant();
+            if (active.SourceCodec == Codec.TrueHD) {
+                musicSpatialBadgeText.Text = objs > 0
+                    ? $"TrueHD Atmos • {objs} Obj"
+                    : "Dolby TrueHD";
+            } else {
+                musicSpatialBadgeText.Text = objs > 0
+                    ? $"Spatial 3D • {objs} Obj"
+                    : active.Codec.ToString().ToUpperInvariant();
+            }
 
             if (LoadedFile.Tracks.Count > 1) {
                 int idx = Math.Max(0, LoadedFile.Tracks.ToList().IndexOf(selectedTrack));
@@ -419,15 +426,21 @@ public partial class MainActivity {
         StyleQuickChip(musicChipCavern, store.CavernizeUpmix, OneUiTheme.FunctionalIndigo);
         StyleQuickChip(musicChipMatrix, store.MatrixUpmixing, OneUiTheme.FunctionalCyan);
 
-        if (selectedTrack == null || playerEngine == null) {
+        CavernizeTrack active = GetActiveTrack();
+        if (active == null || playerEngine == null) {
             musicTelemetryText.Text = $"{RenderTarget?.Name ?? "Binaural"} • {Math.Round(store.PlayerVolume * 100)}%";
         } else {
-            int sr = currentMediaMeta?.EmbeddedSampleRate > 0 ? currentMediaMeta.EmbeddedSampleRate : 48000;
+            int sr = active.SampleRate > 0
+                ? active.SampleRate
+                : (currentMediaMeta?.EmbeddedSampleRate > 0 ? currentMediaMeta.EmbeddedSampleRate : 48000);
             int beds = trackSourceItems.Count(x => x.IsBed);
             int objs = trackSourceItems.Count(x => x.IsDynamicObject);
             string srStr = $"{sr / 1000.0:0.#} kHz";
+            string codecLabel = active.SourceCodec == Codec.TrueHD
+                ? (objs > 0 ? "TrueHD Atmos" : "TrueHD")
+                : active.Codec.ToString();
             string chStr = objs > 0 ? $"{beds} ch + {objs} obj" : $"{trackSourceItems.Count} ch";
-            musicTelemetryText.Text = $"{selectedTrack.Codec} • {srStr} • {chStr} • {Math.Round(store.PlayerVolume * 100)}%";
+            musicTelemetryText.Text = $"{codecLabel} • {srStr} • {chStr} • {Math.Round(store.PlayerVolume * 100)}%";
         }
     }
 

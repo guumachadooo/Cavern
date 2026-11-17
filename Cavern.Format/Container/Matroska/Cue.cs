@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System.Collections.Generic;
+using System.IO;
 
 namespace Cavern.Format.Container.Matroska {
     /// <summary>
@@ -45,17 +46,20 @@ namespace Cavern.Format.Container.Matroska {
             long offset = reader.Position;
 
             MatroskaTree[] sources = cues.GetChildren(reader, MatroskaTree.Segment_Cues_CuePoint);
-            Cue[] results = new Cue[sources.Length];
+            List<Cue> results = new List<Cue>(sources.Length);
             for (int i = 0; i < sources.Length; ++i) {
                 long time = sources[i].GetChildValue(reader, MatroskaTree.Segment_Cues_CuePoint_CueTime);
                 MatroskaTree position = sources[i].GetChild(reader, MatroskaTree.Segment_Cues_CuePoint_CueTrackPositions);
-                results[i] = new Cue(
+                if (position == null) {
+                    continue;
+                }
+                results.Add(new Cue(
                     time, position.GetChildValue(reader, MatroskaTree.Segment_Cues_CuePoint_CueTrackPositions_CueTrack),
                     offset +
                     position.GetChildValue(reader, MatroskaTree.Segment_Cues_CuePoint_CueTrackPositions_CueClusterPosition)
-                );
+                ));
             }
-            return results;
+            return results.ToArray();
         }
 
         /// <summary>
