@@ -72,6 +72,12 @@ public sealed class ConversionEnvironment {
 
         Reset();
         target.Attach(Listener, app.UpmixingSettings);
+
+        if (app.RenderTarget is VirtualizerRenderTarget || app.RenderingSettings.SpeakerVirtualizer) {
+            Listener.SampleRate = VirtualizerFilter.FilterSampleRate;
+        } else if (app.RenderingSettings.RoomCorrection != null) {
+            Listener.SampleRate = app.RenderingSettings.RoomCorrection.SampleRate;
+        }
     }
 
     /// <summary>

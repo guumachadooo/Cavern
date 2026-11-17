@@ -53,6 +53,11 @@ public sealed class ExportFormat(Codec codec, string ffName, int maxChannels, st
     }
 
     /// <summary>
+    /// Clears the cached export format list so translations reload on language change.
+    /// </summary>
+    public static void ReloadFormats() => formats = null;
+
+    /// <summary>
     /// Cache for <see cref="Formats"/>, allocated on the first call.
     /// </summary>
     static ExportFormat[] formats;

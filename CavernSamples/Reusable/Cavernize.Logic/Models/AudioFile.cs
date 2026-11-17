@@ -49,7 +49,7 @@ public class AudioFile : IDisposable {
         if (index == 0 || index == Path.Length) {
             throw new NotSupportedException();
         }
-        switch (Path[index..]) {
+        switch (Path[index..].ToLowerInvariant()) {
             case "ac3":
             case "eac3":
             case "ec3":

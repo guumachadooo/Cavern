@@ -30,7 +30,7 @@ public class RenderReportStrings() : LanguageBase<RenderReportStrings>(new() {
     ["Grad5"] = "F",
 }) {
     /// <inheritdoc/>
-    protected override LanguageBase<RenderReportStrings>[] GetTranslations() => [new RenderReportStringsHU(), new RenderReportStringsZH()];
+    protected override LanguageBase<RenderReportStrings>[] GetTranslations() => [new RenderReportStringsHU(), new RenderReportStringsZH(), new RenderReportStringsPT()];
 
     /// <summary>
     /// 6 grades from best to worst.

@@ -40,6 +40,11 @@ namespace VoidX.WPF.Language {
         static T active;
 
         /// <summary>
+        /// Clears the cached active translation so the next access loads <see cref="LanguageSettings.CultureOverride"/>.
+        /// </summary>
+        public static void Reload() => active = null;
+
+        /// <summary>
         /// Translated strings to the user's language.
         /// </summary>
         Dictionary<string, string> language;
@@ -82,6 +87,14 @@ namespace VoidX.WPF.Language {
             LanguageBase<T>[] translations = GetTranslations();
             for (int i = 0; i < translations.Length; i++) {
                 if (translations[i].CultureCode == targetCulture) {
+                    translations[i].ApplyTranslation();
+                    language = translations[i].language;
+                    return;
+                }
+            }
+            string twoLetter = targetCulture.Split('-')[0];
+            for (int i = 0; i < translations.Length; i++) {
+                if (translations[i].CultureCode.Split('-')[0].Equals(twoLetter, System.StringComparison.OrdinalIgnoreCase)) {
                     translations[i].ApplyTranslation();
                     language = translations[i].language;
                     return;

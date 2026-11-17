@@ -18,5 +18,5 @@ public class ExternalConverterStrings() : LanguageBase<ExternalConverterStrings>
     ["ErrNe"] = "Downloading failed because of a network error.",
 }) {
     /// <inheritdoc/>
-    protected override LanguageBase<ExternalConverterStrings>[] GetTranslations() => [new ExternalConverterStringsHU(), new ExternalConverterStringsZH()];
+    protected override LanguageBase<ExternalConverterStrings>[] GetTranslations() => [new ExternalConverterStringsHU(), new ExternalConverterStringsZH(), new ExternalConverterStringsPT()];
 }

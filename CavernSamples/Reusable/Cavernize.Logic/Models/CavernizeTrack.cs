@@ -77,9 +77,27 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     public Track Track => reader is AudioTrackReader trackReader ? trackReader.track : null;
 
     /// <summary>
+    /// Raw access to the underlying <see cref="AudioReader"/>.
+    /// </summary>
+    public AudioReader Reader => reader;
+
+    /// <summary>
+    /// Current sample position in the stream per channel, or -1 if unsupported.
+    /// </summary>
+    public long Position {
+        get => reader.Position;
+        set => reader.Position = value;
+    }
+
+    /// <summary>
+    /// Optional per-source mute mask indexed by <see cref="Renderer.Objects"/> order.
+    /// </summary>
+    public bool[] CustomMuteMask { get; set; }
+
+    /// <summary>
     /// Source of audio data.
     /// </summary>
-    readonly AudioReader reader;
+    AudioReader reader;
 
     /// <summary>
     /// Reads information from a track's renderer.
@@ -148,6 +166,15 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     /// <param name="upmixingSettings">Optionally create new <see cref="Source"/>s to expand the soundstage</param>
     public void Attach(Listener listener, UpmixingSettings upmixingSettings) {
         reader.Reset();
+        AttachFromCurrentPosition(listener, upmixingSettings);
+    }
+
+    /// <summary>
+    /// Attach this track to a rendering environment starting from the reader's current position.
+    /// </summary>
+    /// <param name="listener">Listener to attach the track's <see cref="Source"/>s to</param>
+    /// <param name="upmixingSettings">Optionally create new <see cref="Source"/>s to expand the soundstage</param>
+    public void AttachFromCurrentPosition(Listener listener, UpmixingSettings upmixingSettings) {
         Renderer = reader.GetRenderer();
         listener.SampleRate = SampleRate;
         Source[] attachables = SetupUpmixer(listener, upmixingSettings);
@@ -160,7 +187,53 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
             attachables = cavernizer.IntermediateSources;
         }
 
+        if (CustomMuteMask != null && attachables.Length == Renderer.Objects.Count) {
+            for (int i = 0; i < CustomMuteMask.Length && i < attachables.Length; i++) {
+                if (CustomMuteMask[i]) {
+                    attachables[i].Mute = true;
+                }
+            }
+        }
+
         listener.AttachSources(attachables);
+    }
+
+    /// <summary>
+    /// Seek the underlying audio stream to <paramref name="targetSample"/> per channel and return the actual sample position.
+    /// </summary>
+    public long Seek(long targetSample) {
+        long maxSample = Length > 0 ? Length - 1 : 0;
+        targetSample = Math.Clamp(targetSample, 0, maxSample);
+
+        if (targetSample <= 0) {
+            if (reader is EnhancedAC3Reader && !string.IsNullOrEmpty(Path)) {
+                string path = Path;
+                reader.Dispose();
+                reader = new EnhancedAC3Reader(path);
+                reader.ReadHeader();
+            } else {
+                reader.Reset();
+            }
+            return 0;
+        }
+
+        if (reader is AudioTrackReader trackReader) {
+            double actualSeconds = trackReader.Source.Seek(targetSample / (double)SampleRate);
+            trackReader.ReadHeader();
+            return actualSeconds >= 0 ? (long)(actualSeconds * SampleRate) : targetSample;
+        }
+
+        if (reader is EnhancedAC3Reader && !string.IsNullOrEmpty(Path)) {
+            string path = Path;
+            reader.Dispose();
+            reader = new EnhancedAC3Reader(path);
+            reader.ReadHeader();
+            reader.Position = targetSample;
+            return targetSample;
+        }
+
+        reader.Position = targetSample;
+        return reader.Position >= 0 ? reader.Position : targetSample;
     }
 
     /// <summary>
