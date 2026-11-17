@@ -174,6 +174,28 @@ public sealed class AndroidStrings {
         ["TrueHDUnsupported"] = "TrueHD MLP decoding requires truehdd. Convert to E-AC-3, ADM BWF, or DAMF on PC, or locate truehdd if supported.",
         ["CopyingMedia"] = "Preparing media file...",
         ["DecodingFallback"] = "Decoding audio via Android MediaCodec...",
+
+        // Room Stability & Fine-Tuning
+        ["LockRoom"] = "Lock Position",
+        ["UnlockRoom"] = "Position Locked",
+        ["FineTuneBtn"] = "Fine-tune Position & Head (Sliders) ▾",
+        ["FineTuneHideBtn"] = "Hide Fine-tune Sliders ▴",
+        ["RoomTouchHint"] = "Drag the blue listener icon directly to move around the room",
+
+        // App Auto-Updater
+        ["UpdateCardTitle"] = "Software Update",
+        ["CurrentVersionLabel"] = "Installed version: v{0}",
+        ["CheckUpdateBtn"] = "Check for updates",
+        ["CheckingUpdate"] = "Checking GitHub Releases...",
+        ["UpdateAvailableBanner"] = "Update available: v{0}",
+        ["UpdateAvailableDesc"] = "A newer build of Cavernize is ready ({0:0.1} MB).",
+        ["UpToDateMsg"] = "You have the latest version installed.",
+        ["DownloadInstallBtn"] = "Download & Install",
+        ["DownloadingUpdate"] = "Downloading update...",
+        ["InstallReadyBtn"] = "Install Update",
+        ["AutoCheckSwitch"] = "Check for updates automatically",
+        ["AllowUnknownSourcesMsg"] = "Allow 'Install unknown apps' for Cavernize, then return to complete the installation.",
+        ["DismissBtn"] = "Later",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -305,6 +327,26 @@ public sealed class AndroidStrings {
         d["TrueHDUnsupported"] = "A decodificação TrueHD MLP requer o truehdd. Converta no PC ou selecione outra faixa (ex: E-AC-3 JOC).";
         d["CopyingMedia"] = "Preparando arquivo de mídia...";
         d["DecodingFallback"] = "Decodificando áudio via MediaCodec do Android...";
+
+        d["LockRoom"] = "Mover Ouvinte";
+        d["UnlockRoom"] = "Posição Travada";
+        d["FineTuneBtn"] = "Ajuste fino de posição e cabeça (Sliders) ▾";
+        d["FineTuneHideBtn"] = "Ocultar sliders de ajuste fino ▴";
+        d["RoomTouchHint"] = "Segure no ponto azul para mover sem puxar a rolagem da tela";
+
+        d["UpdateCardTitle"] = "Atualização do Aplicativo";
+        d["CurrentVersionLabel"] = "Versão instalada: v{0}";
+        d["CheckUpdateBtn"] = "Verificar atualizações";
+        d["CheckingUpdate"] = "Verificando nova versão no GitHub...";
+        d["UpdateAvailableBanner"] = "Nova versão disponível: v{0}";
+        d["UpdateAvailableDesc"] = "Há uma atualização pronta para baixar ({0:0.1} MB).";
+        d["UpToDateMsg"] = "Seu aplicativo já está na versão mais recente.";
+        d["DownloadInstallBtn"] = "Baixar e Instalar";
+        d["DownloadingUpdate"] = "Baixando atualização...";
+        d["InstallReadyBtn"] = "Instalar Atualização";
+        d["AutoCheckSwitch"] = "Verificar atualizações automaticamente ao abrir";
+        d["AllowUnknownSourcesMsg"] = "Ative 'Instalar apps desconhecidos' para o Cavernize e volte ao app para instalar automaticamente.";
+        d["DismissBtn"] = "Depois";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {
@@ -323,6 +365,13 @@ public sealed class AndroidStrings {
         d["ShowReportBtn"] = "Renderelési jelentés";
         d["WrGui"] = "Bekötési útmutató";
         d["ErrorTitle"] = "Hiba";
+        d["UpdateCardTitle"] = "Szoftverfrissítés";
+        d["CheckUpdateBtn"] = "Frissítések keresése";
+        d["DownloadInstallBtn"] = "Letöltés és telepítés";
+        d["LockRoom"] = "Hallgató mozgatása";
+        d["UnlockRoom"] = "Pozíció zárolva";
+        d["FineTuneBtn"] = "Finomhangolás (csúszkák) ▾";
+        d["FineTuneHideBtn"] = "Csúszkák elrejtése ▴";
     }
 
     static void ApplyChinese(Dictionary<string, string> d) {
@@ -341,5 +390,12 @@ public sealed class AndroidStrings {
         d["ShowReportBtn"] = "渲染后报告";
         d["WrGui"] = "接线指南";
         d["ErrorTitle"] = "错误";
+        d["UpdateCardTitle"] = "软件更新";
+        d["CheckUpdateBtn"] = "检查更新";
+        d["DownloadInstallBtn"] = "下载并安装";
+        d["LockRoom"] = "自由移动位置";
+        d["UnlockRoom"] = "位置已锁定";
+        d["FineTuneBtn"] = "微调位置与头部朝向 ▾";
+        d["FineTuneHideBtn"] = "隐藏微调滑块 ▴";
     }
 }

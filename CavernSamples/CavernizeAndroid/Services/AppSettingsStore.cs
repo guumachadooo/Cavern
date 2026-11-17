@@ -214,6 +214,16 @@ public sealed class AppSettingsStore {
         set => Edit().PutString("ffmpegArgs", value ?? "").Apply();
     }
 
+    public bool AutoCheckUpdates {
+        get => prefs.GetBoolean("autoCheckUpdates", true);
+        set => Edit().PutBoolean("autoCheckUpdates", value).Apply();
+    }
+
+    public bool RoomPositionLocked {
+        get => prefs.GetBoolean("roomPosLocked", false);
+        set => Edit().PutBoolean("roomPosLocked", value).Apply();
+    }
+
     public AppSettingsStore(Context context) {
         prefs = context.GetSharedPreferences(PrefsName, FileCreationMode.Private);
         if (!string.IsNullOrEmpty(LanguageCode)) {
