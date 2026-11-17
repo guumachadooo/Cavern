@@ -49,7 +49,7 @@ jobs:
           dotnet publish CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
             -c Release -f net11.0-android \
             -p:ApplicationVersion=${{ github.run_number }} \
-            -p:ApplicationDisplayVersion=2.1.${{ github.run_number }} \
+            -p:ApplicationDisplayVersion=2.2.${{ github.run_number }} \
             -p:AndroidPackageFormat=apk \
             -p:AndroidKeyStore=true \
             -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/cavernize.keystore" \
@@ -86,11 +86,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
-          name: "Cavernize Android v2.1.${{ github.run_number }}"
+          name: "Cavernize Android v2.2.${{ github.run_number }}"
           body: |
             Automated signed Android APK build for Cavernize (`${{ github.sha }}`).
-            - Version: `v2.1.${{ github.run_number }}` (Build `${{ github.run_number }}`)
-            - Features: True Samsung One UI 9 Dark UI (blurred depth backdrop, frosted glass specular rims, 44dp fat capsule sliders, floating glass pill nav, Recoil physics), 1-click FFmpeg Auto-Downloader & Auto-Updater, 3D Room Simulator (scroll-safe + lock), Stem/Object Extractor, Full Cavernize Converter, and In-About App Updater.
+            - Version: `v2.2.${{ github.run_number }}` (Build `${{ github.run_number }}`)
+            - Features: One UI 9 WaveSeekbar (SystemUI multi-wave media progress), Dynamic Wallpaper Color Palette (Monet API 31+ / One UI Blue fallback), In-App One UI Selectors & Modals (no stock Android Spinners/AlertDialogs), Unified Media Header + Track Picker, 3D Interactive Head Gimbal Sphere + Tap-to-Solo Map, Category Solo Quick Filters, Double-Tap Slider Reset, Shared AppLogger (`Download/Cavernize/Logs`), Fixed FLAC/MKV Export + Native Lossless FLAC Fallback.
           prerelease: false
           files: build/Cavernize-Android.apk
         env:

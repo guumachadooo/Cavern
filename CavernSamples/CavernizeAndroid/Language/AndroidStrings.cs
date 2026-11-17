@@ -178,9 +178,17 @@ public sealed class AndroidStrings {
         // Room Stability & Fine-Tuning
         ["LockRoom"] = "Lock Position",
         ["UnlockRoom"] = "Position Locked",
-        ["FineTuneBtn"] = "Fine-tune Position & Head (Sliders) ▾",
-        ["FineTuneHideBtn"] = "Hide Fine-tune Sliders ▴",
-        ["RoomTouchHint"] = "Drag the blue listener icon directly to move around the room",
+        ["FineTuneBtn"] = "Fine-tune Position & Head (Sliders)",
+        ["FineTuneHideBtn"] = "Hide Fine-tune Sliders",
+        ["RoomTouchHint"] = "Tap an object/speaker to Solo • Drag 3D Head sphere in corner to rotate/tilt",
+        ["SliderResetHint"] = "Double-tap any slider to reset to its default value",
+        ["TrackMultiBadge"] = "Track {0}/{1}",
+        ["SelectTrackHeader"] = "Audio Tracks in File",
+        ["DiagnosticsTitle"] = "Diagnostics & Shared Logs",
+        ["ViewLogBtn"] = "View Log",
+        ["ExportLogBtn"] = "Share Log",
+        ["ClearLogBtn"] = "Reset Log",
+        ["LogClearedMsg"] = "Diagnostic log cleared.",
 
         // App Auto-Updater
         ["UpdateCardTitle"] = "Software Update",
@@ -352,9 +360,17 @@ public sealed class AndroidStrings {
 
         d["LockRoom"] = "Mover Ouvinte";
         d["UnlockRoom"] = "Posição Travada";
-        d["FineTuneBtn"] = "Ajuste fino de posição e cabeça (Sliders) ▾";
-        d["FineTuneHideBtn"] = "Ocultar sliders de ajuste fino ▴";
-        d["RoomTouchHint"] = "Segure no ponto azul para mover sem puxar a rolagem da tela";
+        d["FineTuneBtn"] = "Ajuste fino de posição e cabeça (Sliders)";
+        d["FineTuneHideBtn"] = "Ocultar sliders de ajuste fino";
+        d["RoomTouchHint"] = "Toque num objeto para Solo • Arraste a esfera 3D no canto para girar/inclinar";
+        d["SliderResetHint"] = "Toque 2x rápido em qualquer slider para restaurar o padrão";
+        d["TrackMultiBadge"] = "Faixa {0}/{1}";
+        d["SelectTrackHeader"] = "Faixas de Áudio do Arquivo";
+        d["DiagnosticsTitle"] = "Diagnóstico e Logs Compartilhados";
+        d["ViewLogBtn"] = "Ver Log";
+        d["ExportLogBtn"] = "Exportar Log";
+        d["ClearLogBtn"] = "Resetar Log";
+        d["LogClearedMsg"] = "Log de diagnóstico limpo.";
 
         d["UpdateCardTitle"] = "Atualização do Aplicativo";
         d["CurrentVersionLabel"] = "Versão instalada: v{0}";

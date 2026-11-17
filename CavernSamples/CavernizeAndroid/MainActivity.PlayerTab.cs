@@ -15,24 +15,28 @@ namespace CavernizeAndroid;
 
 public partial class MainActivity {
     RoomSimulatorView roomView;
-    Button roomLockBtn, fineTuneToggleBtn;
+    LinearLayout roomLockBtn;
+    OneUiIconView roomLockIcon;
+    TextView roomLockText;
+    Button fineTuneToggleBtn;
     LinearLayout fineTuneContainer;
     bool isFineTuneExpanded;
-    SeekBar seekBarPosX, seekBarPosZ, seekBarPosY, seekBarYaw, seekBarPitch;
-    OneUiSeekBar playbackSeekBar;
-    SeekBar seekBarVolume, seekBarLfe;
+    OneUiSeekBar seekBarPosX, seekBarPosZ, seekBarPosY, seekBarYaw, seekBarPitch;
+    OneUiWaveMediaSeekBar playbackSeekBar;
+    OneUiSeekBar seekBarVolume, seekBarLfe;
     TextView roomTelemetryText;
     Button playPauseBtn;
     Switch loopSwitch;
-    Spinner rolloffSpinner;
+    OneUiInlineSelector rolloffSelector;
     LinearLayout mixerContainer;
+    Button filterAllBtn, filter3DBtn, filterHeightBtn, filterBedsBtn;
     bool isUserSeeking;
 
     Action refreshBentoTilesUi;
 
     LinearLayout BuildPlayerTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(4), Dp(14), Dp(88));
+        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(88));
 
         // 1. 3D Room Simulator Card (One UI 9 Frosted Surface)
         LinearLayout roomCard = Card();
@@ -40,22 +44,30 @@ public partial class MainActivity {
         LinearLayout roomHeader = new(this) { Orientation = Orientation.Horizontal };
         roomHeader.SetGravity(GravityFlags.CenterVertical);
         roomHeader.SetPadding(0, 0, 0, Dp(6));
-        roomHeader.AddView(OneUiTheme.CreateIconBadge(this, "◎", OneUiTheme.Primary, 30));
+        roomHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Room3D, OneUiTheme.Primary, 30));
         TextView roomTitleTv = SectionTitle(S["RoomTitle"]);
         roomTitleTv.SetPadding(Dp(8), 0, Dp(8), 0);
         roomHeader.AddView(roomTitleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
-        roomLockBtn = PillButton("", () => {
+        roomLockBtn = new LinearLayout(this) { Orientation = Orientation.Horizontal };
+        roomLockBtn.SetGravity(GravityFlags.CenterVertical);
+        roomLockBtn.SetPadding(Dp(12), Dp(7), Dp(12), Dp(7));
+        OneUiTheme.AttachRecoil(roomLockBtn, 0.94f);
+        roomLockIcon = new OneUiIconView(this, OneUiIconType.Unlock, ColText);
+        roomLockText = Label("", 11.5f, ColText);
+        roomLockText.SetIncludeFontPadding(false);
+        roomLockText.SetTypeface(null, TypefaceStyle.Bold);
+        roomLockBtn.AddView(roomLockIcon, new LinearLayout.LayoutParams(Dp(14), Dp(14)) { RightMargin = Dp(5) });
+        roomLockBtn.AddView(roomLockText);
+        roomLockBtn.Click += (_, _) => {
             store.RoomPositionLocked = !store.RoomPositionLocked;
             if (roomView != null) {
                 roomView.IsPositionLocked = store.RoomPositionLocked;
                 roomView.Invalidate();
             }
             UpdateRoomLockButtonUi();
-        });
-        roomLockBtn.TextSize = 11.5f;
-        roomLockBtn.SetPadding(Dp(12), Dp(2), Dp(12), Dp(2));
-        roomHeader.AddView(roomLockBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(34)));
+        };
+        roomHeader.AddView(roomLockBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
         roomCard.AddView(roomHeader);
 
         TextView hintTv = Label(S["RoomTouchHint"], 11.5f, OneUiTheme.TextMuted);
@@ -69,6 +81,17 @@ public partial class MainActivity {
         roomView.ListenerPositionChanged += pos => {
             playerEngine.ListenerPosition = new Vector3(pos.X, playerEngine.ListenerPosition.Y, pos.Z);
             SyncRoomSlidersFromEngine();
+            UpdateRoomTelemetryText();
+        };
+        roomView.ListenerRotationChanged += rot => {
+            playerEngine.ListenerRotation = new Vector3(rot.X, rot.Y, 0);
+            SyncRoomSlidersFromEngine();
+            UpdateRoomTelemetryText();
+        };
+        roomView.SourceSoloToggled += _ => {
+            RefreshPlayerSourcesList();
+            RefreshFilterButtonsUi();
+            refreshBentoTilesUi?.Invoke();
         };
         roomCard.AddView(roomView);
 
@@ -93,8 +116,9 @@ public partial class MainActivity {
                 SyncRoomSlidersFromEngine();
                 UpdateRoomCanvas();
             });
-            pb.SetPadding(Dp(14), Dp(2), Dp(14), Dp(2));
-            presetRow.AddView(pb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(34)) { RightMargin = Dp(6) });
+            pb.SetPadding(Dp(14), Dp(6), Dp(14), Dp(6));
+            pb.SetMinimumHeight(Dp(36));
+            presetRow.AddView(pb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
         }
         presetScroll.AddView(presetRow);
         roomCard.AddView(presetScroll);
@@ -109,56 +133,62 @@ public partial class MainActivity {
             fineTuneContainer.Visibility = isFineTuneExpanded ? ViewStates.Visible : ViewStates.Gone;
             fineTuneToggleBtn.Text = isFineTuneExpanded ? S["FineTuneHideBtn"] : S["FineTuneBtn"];
         });
-        roomCard.AddView(fineTuneToggleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(38)));
+        roomCard.AddView(fineTuneToggleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         fineTuneContainer = new LinearLayout(this) {
             Orientation = Orientation.Vertical,
             Visibility = isFineTuneExpanded ? ViewStates.Visible : ViewStates.Gone
         };
         fineTuneContainer.SetPadding(0, Dp(10), 0, 0);
+
+        TextView resetHint = Label(S["SliderResetHint"], 11f, ColMuted);
+        resetHint.SetPadding(Dp(4), 0, 0, Dp(8));
+        fineTuneContainer.AddView(resetHint);
+
         (seekBarPosX, _) = AddSliderRow(fineTuneContainer, S["PosX"], -100, 100, 0, v => {
             float nx = v / 100f;
             playerEngine.ListenerPosition = new Vector3(nx * playerEngine.EnvironmentSize.X, playerEngine.ListenerPosition.Y, playerEngine.ListenerPosition.Z);
             UpdateRoomCanvas();
-        }, "%", useBlue: true);
+        }, "%", useBlue: true, defaultValue: 0);
         (seekBarPosZ, _) = AddSliderRow(fineTuneContainer, S["PosZ"], -100, 100, 0, v => {
             float nz = v / 100f;
             playerEngine.ListenerPosition = new Vector3(playerEngine.ListenerPosition.X, playerEngine.ListenerPosition.Y, nz * playerEngine.EnvironmentSize.Z);
             UpdateRoomCanvas();
-        }, "%", useBlue: true);
+        }, "%", useBlue: true, defaultValue: 0);
         (seekBarPosY, _) = AddSliderRow(fineTuneContainer, S["PosY"], -100, 100, 0, v => {
             float ny = v / 100f;
             playerEngine.ListenerPosition = new Vector3(playerEngine.ListenerPosition.X, ny * playerEngine.EnvironmentSize.Y, playerEngine.ListenerPosition.Z);
             UpdateRoomCanvas();
-        }, "%", useBlue: true);
+        }, "%", useBlue: true, defaultValue: 0);
         (seekBarYaw, _) = AddSliderRow(fineTuneContainer, S["RotYaw"], -180, 180, 0, v => {
             playerEngine.ListenerRotation = new Vector3(playerEngine.ListenerRotation.X, v, 0);
             UpdateRoomCanvas();
-        }, "°");
+        }, "°", defaultValue: 0);
         (seekBarPitch, _) = AddSliderRow(fineTuneContainer, S["RotPitch"], -90, 90, 0, v => {
             playerEngine.ListenerRotation = new Vector3(v, playerEngine.ListenerRotation.Y, 0);
             UpdateRoomCanvas();
-        }, "°");
+        }, "°", defaultValue: 0);
         roomCard.AddView(fineTuneContainer);
         page.AddView(roomCard);
 
-        // 2. Voice Recorder-style Transport & Capsule Timeline Card
+        // 2. Transport Card featuring authentic One UI 9 Lock Screen / Quick Panel WaveSeekbar
         LinearLayout transportCard = Card();
-        playbackSeekBar = new OneUiSeekBar(this) {
+        playbackSeekBar = new OneUiWaveMediaSeekBar(this) {
             Max = 1000,
-            LabelText = S["TimelineLabel"],
-            ValueText = "00:00 / 00:00",
-            UseBlueAccent = true
+            CurrentTimeText = "00:00",
+            TotalTimeText = "00:00"
         };
-        playbackSeekBar.StartTrackingTouch += (_, _) => isUserSeeking = true;
-        playbackSeekBar.ProgressChanged += (_, e) => {
-            if (e.FromUser && playerEngine.TotalSeconds > 0) {
-                double preview = e.Progress / 1000.0 * playerEngine.TotalSeconds;
-                playbackSeekBar.ValueText = $"{TimeSpan.FromSeconds(preview):mm\\:ss} / {TimeSpan.FromSeconds(playerEngine.TotalSeconds):mm\\:ss}";
+        playbackSeekBar.SetThemeByColor(OneUiTheme.Primary);
+        playbackSeekBar.StartTrackingTouch += () => isUserSeeking = true;
+        playbackSeekBar.ProgressChanged += (prog, fromUser) => {
+            if (fromUser && playerEngine.TotalSeconds > 0) {
+                double preview = prog / 1000.0 * playerEngine.TotalSeconds;
+                playbackSeekBar.CurrentTimeText = $"{TimeSpan.FromSeconds(preview):mm\\:ss}";
+                playbackSeekBar.TotalTimeText = $"{TimeSpan.FromSeconds(playerEngine.TotalSeconds):mm\\:ss}";
                 playbackSeekBar.Invalidate();
             }
         };
-        playbackSeekBar.StopTrackingTouch += (_, _) => {
+        playbackSeekBar.StopTrackingTouch += () => {
             isUserSeeking = false;
             if (playerEngine.TotalSeconds > 0) {
                 playerEngine.Seek(playbackSeekBar.Progress / 1000.0 * playerEngine.TotalSeconds);
@@ -174,18 +204,18 @@ public partial class MainActivity {
         playPauseBtn = PrimaryButton(S["Play"], TogglePlayPause);
         Button stopBtn = PillButton(S["Stop"], StopPlayback);
         Button fwd10 = PillButton("+10s", () => SeekRelative(10));
-        btnRow.AddView(back10, new LinearLayout.LayoutParams(0, Dp(44), 1f) { RightMargin = Dp(6) });
-        btnRow.AddView(playPauseBtn, new LinearLayout.LayoutParams(0, Dp(46), 1.45f) { RightMargin = Dp(6) });
-        btnRow.AddView(stopBtn, new LinearLayout.LayoutParams(0, Dp(44), 1f) { RightMargin = Dp(6) });
-        btnRow.AddView(fwd10, new LinearLayout.LayoutParams(0, Dp(44), 1f));
+        btnRow.AddView(back10, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        btnRow.AddView(playPauseBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.45f) { RightMargin = Dp(6) });
+        btnRow.AddView(stopBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        btnRow.AddView(fwd10, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         transportCard.AddView(btnRow);
 
         AddDivider(transportCard);
         loopSwitch = AddSwitchRow(transportCard, S["Loop"], false, val => playerEngine.Loop = val);
         page.AddView(transportCard);
 
-        // 3. One UI 9 Quick Spatial Panel Card (2x2 Bento Toggles + Fat Coral Volume Capsules)
-        LinearLayout quickCard = Card(S["QuickPanelTitle"], "🎛", OneUiTheme.FunctionalIndigo);
+        // 3. One UI 9 Quick Spatial Panel Card (2x2 Bento Toggles + Fat Dynamic Capsules + In-App Rolloff Selector)
+        LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.FunctionalIndigo);
 
         LinearLayout bentoRow1 = new(this) { Orientation = Orientation.Horizontal };
         LinearLayout bentoRow2 = new(this) { Orientation = Orientation.Horizontal };
@@ -193,7 +223,7 @@ public partial class MainActivity {
         bentoRow2.SetPadding(0, 0, 0, Dp(10));
 
         var tileHrtf = CreateBentoToggle(
-            "🎧", S["BentoHrtf"],
+            OneUiIconType.Headphones, S["BentoHrtf"],
             () => store.HeadphoneVirtualizer,
             () => {
                 bool next = !store.HeadphoneVirtualizer;
@@ -203,7 +233,7 @@ public partial class MainActivity {
             OneUiTheme.Primary);
 
         var tileDist = CreateBentoToggle(
-            "📏", S["BentoDist"],
+            OneUiIconType.Distance, S["BentoDist"],
             () => store.DistanceSimulation,
             () => {
                 bool next = !store.DistanceSimulation;
@@ -213,21 +243,27 @@ public partial class MainActivity {
             OneUiTheme.FunctionalCyan);
 
         var tile3DOnly = CreateBentoToggle(
-            "✦", S["Bento3DOnly"],
-            () => store.MuteBed,
-            () => ApplyQuickFilter(muteBed: !store.MuteBed, muteGround: false, onlyBeds: false),
+            OneUiIconType.Sparkles, S["Bento3DOnly"],
+            () => IsCategorySoloActive(item => item.IsDynamicObject) || store.MuteBed,
+            () => ToggleCategorySolo(item => item.IsDynamicObject, flag => {
+                store.MuteBed = flag;
+                playerEngine.MuteBed = flag;
+            }),
             OneUiTheme.CoralStart);
 
         var tileHeight = CreateBentoToggle(
-            "↑", S["BentoHeightOnly"],
-            () => store.MuteGround,
-            () => ApplyQuickFilter(muteBed: false, muteGround: !store.MuteGround, onlyBeds: false),
+            OneUiIconType.HeightUp, S["BentoHeightOnly"],
+            () => IsCategorySoloActive(item => item.NormalizedPosition.Y > 0.15f) || store.MuteGround,
+            () => ToggleCategorySolo(item => item.NormalizedPosition.Y > 0.15f, flag => {
+                store.MuteGround = flag;
+                playerEngine.MuteGround = flag;
+            }),
             OneUiTheme.FunctionalGreen);
 
-        bentoRow1.AddView(tileHrtf.view, new LinearLayout.LayoutParams(0, Dp(62), 1f) { RightMargin = Dp(8) });
-        bentoRow1.AddView(tileDist.view, new LinearLayout.LayoutParams(0, Dp(62), 1f));
-        bentoRow2.AddView(tile3DOnly.view, new LinearLayout.LayoutParams(0, Dp(62), 1f) { RightMargin = Dp(8) });
-        bentoRow2.AddView(tileHeight.view, new LinearLayout.LayoutParams(0, Dp(62), 1f));
+        bentoRow1.AddView(tileHrtf.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+        bentoRow1.AddView(tileDist.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        bentoRow2.AddView(tile3DOnly.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+        bentoRow2.AddView(tileHeight.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
         quickCard.AddView(bentoRow1);
         quickCard.AddView(bentoRow2);
@@ -244,46 +280,61 @@ public partial class MainActivity {
             float vol = v / 100f;
             store.PlayerVolume = vol;
             playerEngine.Volume = vol;
-        }, "%");
+        }, "%", defaultValue: 100);
 
         (seekBarLfe, _) = AddSliderRow(quickCard, S["LfeVol"], 0, 200, (int)Math.Round(store.LfeVolume * 100), v => {
             float vol = v / 100f;
             store.LfeVolume = vol;
             playerEngine.LFEVolume = vol;
-        }, "%");
+        }, "%", defaultValue: 100);
 
         AddDivider(quickCard);
-        LinearLayout rolloffRow = new(this) { Orientation = Orientation.Horizontal };
-        rolloffRow.SetGravity(GravityFlags.CenterVertical);
-        rolloffRow.AddView(Label(S["RolloffLabel"], 12.5f, OneUiTheme.TextSub), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(8) });
-        rolloffSpinner = new Spinner(this);
+        rolloffSelector = new OneUiInlineSelector(this, S["RolloffLabel"]);
         string[] rolloffNames = ["Disabled", "Logarithmic", "Linear", "Real (1/d)"];
-        ArrayAdapter<string> rolloffAdapter = new(this, Android.Resource.Layout.SimpleSpinnerItem, rolloffNames);
-        rolloffAdapter.SetDropDownViewResource(Android.Resource.Layout.SimpleSpinnerDropDownItem);
-        rolloffSpinner.Adapter = rolloffAdapter;
-        rolloffSpinner.SetSelection(Math.Clamp(store.VolumeRolloffIndex, 0, 3));
-        rolloffSpinner.ItemSelected += (_, e) => {
-            store.VolumeRolloffIndex = e.Position;
-            playerEngine.VolumeRolloff = (Rolloffs)e.Position;
+        rolloffSelector.SetItems(rolloffNames, Math.Clamp(store.VolumeRolloffIndex, 0, 3));
+        rolloffSelector.SelectionChanged += pos => {
+            store.VolumeRolloffIndex = pos;
+            playerEngine.VolumeRolloff = (Rolloffs)pos;
         };
-        rolloffRow.AddView(rolloffSpinner, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        quickCard.AddView(rolloffRow);
+        quickCard.AddView(rolloffSelector);
         page.AddView(quickCard);
 
-        // 4. Live Channel & 3D Object Mixer Card
-        LinearLayout mixerCard = Card(S["MixerTitle"], "🎚", OneUiTheme.CoralStart);
+        // 4. Live Channel & 3D Object Mixer Card (Filter buttons visibly toggle Solo state)
+        LinearLayout mixerCard = Card(S["MixerTitle"], OneUiIconType.Queue, OneUiTheme.CoralStart);
 
         HorizontalScrollView filterScroll = new(this) { HorizontalScrollBarEnabled = false };
         LinearLayout filterRow = new(this) { Orientation = Orientation.Horizontal };
-        filterRow.AddView(FilterBtn(S["FilterAll"], () => ApplyQuickFilter(muteBed: false, muteGround: false, onlyBeds: false)));
-        filterRow.AddView(FilterBtn(S["Filter3DOnly"], () => ApplyQuickFilter(muteBed: true, muteGround: false, onlyBeds: false)));
-        filterRow.AddView(FilterBtn(S["FilterHeightOnly"], () => ApplyQuickFilter(muteBed: false, muteGround: true, onlyBeds: false)));
-        filterRow.AddView(FilterBtn(S["FilterBedsOnly"], () => ApplyQuickFilter(muteBed: false, muteGround: false, onlyBeds: true)));
-        filterRow.AddView(FilterBtn(S["ClearSoloMute"], () => {
-            playerEngine.ClearSoloMute();
-            ApplyQuickFilter(false, false, false);
-            RefreshPlayerSourcesList();
+        filterAllBtn = FilterBtn(S["FilterAll"], ClearAllSoloFilters);
+        filter3DBtn = FilterBtn(S["Filter3DOnly"], () => ToggleCategorySolo(item => item.IsDynamicObject, flag => {
+            store.MuteBed = flag;
+            playerEngine.MuteBed = flag;
         }));
+        filterHeightBtn = FilterBtn(S["FilterHeightOnly"], () => ToggleCategorySolo(item => item.NormalizedPosition.Y > 0.15f, flag => {
+            store.MuteGround = flag;
+            playerEngine.MuteGround = flag;
+        }));
+        filterBedsBtn = FilterBtn(S["FilterBedsOnly"], () => ToggleCategorySolo(item => item.IsBed, flag => {
+            playerEngine.OnlyBeds = flag;
+        }));
+        Button clearSoloBtn = FilterBtn(S["ClearSoloMute"], () => {
+            playerEngine.ClearSoloMute();
+            store.MuteBed = false;
+            store.MuteGround = false;
+            playerEngine.MuteBed = false;
+            playerEngine.MuteGround = false;
+            playerEngine.OnlyBeds = false;
+            RefreshPlayerSourcesList();
+            RefreshFilterButtonsUi();
+            refreshBentoTilesUi?.Invoke();
+            RefreshSettingsTabButtons();
+            UpdateRoomCanvas();
+        });
+
+        filterRow.AddView(filterAllBtn);
+        filterRow.AddView(filter3DBtn);
+        filterRow.AddView(filterHeightBtn);
+        filterRow.AddView(filterBedsBtn);
+        filterRow.AddView(clearSoloBtn);
         filterScroll.AddView(filterRow);
         mixerCard.AddView(filterScroll);
 
@@ -292,23 +343,26 @@ public partial class MainActivity {
         mixerCard.AddView(mixerContainer);
         page.AddView(mixerCard);
 
+        RefreshFilterButtonsUi();
         return page;
     }
 
     (LinearLayout view, Action refresh) CreateBentoToggle(
-        string glyph,
+        OneUiIconType iconType,
         string title,
         Func<bool> getState,
         Action onToggle,
         Color activeColor) {
         LinearLayout tile = new(this) { Orientation = Orientation.Horizontal };
         tile.SetGravity(GravityFlags.CenterVertical);
-        tile.SetPadding(Dp(12), Dp(8), Dp(10), Dp(8));
+        tile.SetMinimumHeight(Dp(62));
+        tile.SetPadding(Dp(12), Dp(10), Dp(10), Dp(10));
         OneUiTheme.AttachRecoil(tile, 0.95f);
 
-        TextView badge = OneUiTheme.CreateIconBadge(this, glyph, activeColor, 34);
+        OneUiIconBadge badge = OneUiTheme.CreateVectorIconBadge(this, iconType, activeColor, 34);
         LinearLayout col = new(this) { Orientation = Orientation.Vertical };
-        TextView titleTv = Label(title, 13f, ColText);
+        TextView titleTv = Label(title, 12.5f, ColText);
+        titleTv.SetIncludeFontPadding(false);
         titleTv.SetTypeface(null, TypefaceStyle.Bold);
         TextView stateTv = Label("", 11f, OneUiTheme.TextSub);
         col.AddView(titleTv);
@@ -327,10 +381,7 @@ public partial class MainActivity {
                 tileTint,
                 OneUiTheme.TileCornerDp,
                 on ? activeColor : null);
-            badge.Background = OneUiTheme.CreateRoundedDrawable(
-                this,
-                on ? activeColor : OneUiTheme.ControlStroke,
-                OneUiTheme.PillCornerDp);
+            badge.UpdateColors(on ? activeColor : OneUiTheme.ControlStroke, ColText);
             stateTv.Text = on ? "ON" : "OFF";
             stateTv.SetTextColor(on ? ColText : OneUiTheme.TextMuted);
         }
@@ -347,9 +398,109 @@ public partial class MainActivity {
 
     Button FilterBtn(string text, Action onClick) {
         Button b = PillButton(text, onClick);
-        b.SetPadding(Dp(12), Dp(2), Dp(12), Dp(2));
-        b.LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(34)) { RightMargin = Dp(6) };
+        b.TextSize = 12f;
+        b.SetPadding(Dp(13), Dp(7), Dp(13), Dp(7));
+        b.SetMinimumHeight(Dp(38));
+        b.LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
+            RightMargin = Dp(6)
+        };
         return b;
+    }
+
+    void ClearAllSoloFilters() {
+        foreach (TrackSourceItem item in trackSourceItems) {
+            item.IsSolo = false;
+        }
+        store.MuteBed = false;
+        store.MuteGround = false;
+        playerEngine.MuteBed = false;
+        playerEngine.MuteGround = false;
+        playerEngine.OnlyBeds = false;
+        RefreshPlayerSourcesList();
+        RefreshFilterButtonsUi();
+        refreshBentoTilesUi?.Invoke();
+        RefreshSettingsTabButtons();
+        UpdateRoomCanvas();
+    }
+
+    bool IsCategorySoloActive(Func<TrackSourceItem, bool> predicate) {
+        if (trackSourceItems == null || trackSourceItems.Count == 0) {
+            return false;
+        }
+        bool anyMatch = false;
+        for (int i = 0; i < trackSourceItems.Count; i++) {
+            bool matches = predicate(trackSourceItems[i]);
+            if (matches) {
+                anyMatch = true;
+            }
+            if (trackSourceItems[i].IsSolo != matches) {
+                return false;
+            }
+        }
+        return anyMatch;
+    }
+
+    void ToggleCategorySolo(Func<TrackSourceItem, bool> predicate, Action<bool> fallbackWhenNoTrack) {
+        if (trackSourceItems == null || trackSourceItems.Count == 0) {
+            fallbackWhenNoTrack?.Invoke(true);
+            refreshBentoTilesUi?.Invoke();
+            RefreshFilterButtonsUi();
+            RefreshSettingsTabButtons();
+            UpdateRoomCanvas();
+            return;
+        }
+
+        bool alreadyActive = IsCategorySoloActive(predicate);
+        // Clear hard category mutes so individual visual Solo state controls what plays and renders
+        store.MuteBed = false;
+        store.MuteGround = false;
+        playerEngine.MuteBed = false;
+        playerEngine.MuteGround = false;
+        playerEngine.OnlyBeds = false;
+
+        if (alreadyActive) {
+            for (int i = 0; i < trackSourceItems.Count; i++) {
+                trackSourceItems[i].IsSolo = false;
+            }
+        } else {
+            int matchedCount = 0;
+            for (int i = 0; i < trackSourceItems.Count; i++) {
+                bool m = predicate(trackSourceItems[i]);
+                trackSourceItems[i].IsSolo = m;
+                if (m) {
+                    matchedCount++;
+                }
+            }
+            if (matchedCount == 0) {
+                Toast.MakeText(this, "Nenhum item nesta categoria na faixa atual.", ToastLength.Short).Show();
+            }
+        }
+
+        RefreshPlayerSourcesList();
+        RefreshFilterButtonsUi();
+        refreshBentoTilesUi?.Invoke();
+        RefreshSettingsTabButtons();
+        UpdateRoomCanvas();
+    }
+
+    void RefreshFilterButtonsUi() {
+        bool solo3D = IsCategorySoloActive(item => item.IsDynamicObject);
+        bool soloH = IsCategorySoloActive(item => item.NormalizedPosition.Y > 0.15f);
+        bool soloBeds = IsCategorySoloActive(item => item.IsBed);
+        bool noneActive = !solo3D && !soloH && !soloBeds && !trackSourceItems.Any(x => x.IsSolo);
+
+        void Style(Button b, bool active, Color accent) {
+            if (b == null) return;
+            b.Background = active
+                ? OneUiTheme.CreateRippleRoundedDrawable(this, accent, OneUiTheme.PillCornerDp)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            b.SetTypeface(null, active ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+        }
+
+        Style(filterAllBtn, noneActive, ColAccent);
+        Style(filter3DBtn, solo3D, OneUiTheme.CoralStart);
+        Style(filterHeightBtn, soloH, OneUiTheme.FunctionalGreen);
+        Style(filterBedsBtn, soloBeds, OneUiTheme.Primary);
     }
 
     void UpdateRoomLockButtonUi() {
@@ -357,22 +508,11 @@ public partial class MainActivity {
             return;
         }
         bool locked = store.RoomPositionLocked;
-        roomLockBtn.Text = locked ? $"🔒 {S["UnlockRoom"]}" : $"↔ {S["LockRoom"]}";
+        roomLockIcon.IconType = locked ? OneUiIconType.Lock : OneUiIconType.Unlock;
+        roomLockText.Text = locked ? S["UnlockRoom"] : S["LockRoom"];
         roomLockBtn.Background = locked
             ? OneUiTheme.CreateRippleRoundedDrawable(this, OneUiTheme.Primary, OneUiTheme.PillCornerDp)
             : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
-        roomLockBtn.SetTextColor(OneUiTheme.TextPrimary);
-    }
-
-    void ApplyQuickFilter(bool muteBed, bool muteGround, bool onlyBeds) {
-        playerEngine.MuteBed = muteBed;
-        playerEngine.MuteGround = muteGround;
-        playerEngine.OnlyBeds = onlyBeds;
-        store.MuteBed = muteBed;
-        store.MuteGround = muteGround;
-        refreshBentoTilesUi?.Invoke();
-        RefreshSettingsTabButtons();
-        UpdateRoomCanvas();
     }
 
     void TogglePlayPause() {
@@ -388,6 +528,9 @@ public partial class MainActivity {
             playerEngine.IsPlaying = false;
             audioOutput.Pause();
             playPauseBtn.Text = S["Play"];
+            if (playbackSeekBar != null) {
+                playbackSeekBar.IsWavePlaying = false;
+            }
         } else {
             if (playerEngine.TotalSeconds > 0 && playerEngine.CurrentSeconds >= playerEngine.TotalSeconds - 0.05) {
                 playerEngine.Seek(0);
@@ -395,6 +538,9 @@ public partial class MainActivity {
             playerEngine.IsPlaying = true;
             audioOutput.Start();
             playPauseBtn.Text = S["Pause"];
+            if (playbackSeekBar != null) {
+                playbackSeekBar.IsWavePlaying = true;
+            }
         }
     }
 
@@ -408,8 +554,10 @@ public partial class MainActivity {
             playPauseBtn.Text = S["Play"];
         }
         if (playbackSeekBar != null) {
+            playbackSeekBar.IsWavePlaying = false;
             playbackSeekBar.Progress = 0;
-            playbackSeekBar.ValueText = $"00:00 / {TimeSpan.FromSeconds(playerEngine?.TotalSeconds ?? 0):mm\\:ss}";
+            playbackSeekBar.CurrentTimeText = "00:00";
+            playbackSeekBar.TotalTimeText = $"{TimeSpan.FromSeconds(playerEngine?.TotalSeconds ?? 0):mm\\:ss}";
             playbackSeekBar.Invalidate();
         }
     }
@@ -422,7 +570,8 @@ public partial class MainActivity {
         playerEngine.Seek(target);
         if (playbackSeekBar != null) {
             playbackSeekBar.Progress = Math.Clamp((int)(target / playerEngine.TotalSeconds * 1000.0), 0, 1000);
-            playbackSeekBar.ValueText = $"{TimeSpan.FromSeconds(target):mm\\:ss} / {TimeSpan.FromSeconds(playerEngine.TotalSeconds):mm\\:ss}";
+            playbackSeekBar.CurrentTimeText = $"{TimeSpan.FromSeconds(target):mm\\:ss}";
+            playbackSeekBar.TotalTimeText = $"{TimeSpan.FromSeconds(playerEngine.TotalSeconds):mm\\:ss}";
             playbackSeekBar.Invalidate();
         }
     }
@@ -430,6 +579,9 @@ public partial class MainActivity {
     void OnPlayerCompleted() {
         if (playPauseBtn != null) {
             playPauseBtn.Text = S["Play"];
+        }
+        if (playbackSeekBar != null) {
+            playbackSeekBar.IsWavePlaying = false;
         }
     }
 
@@ -444,16 +596,20 @@ public partial class MainActivity {
         if (seekBarPitch != null) seekBarPitch.Progress = Math.Clamp((int)Math.Round(rot.X) + 90, 0, 180);
     }
 
+    void UpdateRoomTelemetryText() {
+        if (roomTelemetryText != null && playerEngine != null) {
+            Vector3 p = playerEngine.ListenerPosition;
+            Vector3 r = playerEngine.ListenerRotation;
+            roomTelemetryText.Text = $"X: {p.X:0.0}m  •  Y: {p.Y:0.0}m  •  Z: {p.Z:0.0}m  •  Yaw: {r.Y:0}°  •  Pitch: {r.X:0}°";
+        }
+    }
+
     void UpdateRoomCanvas() {
         if (roomView == null || playerEngine == null) {
             return;
         }
         roomView.UpdateState(trackSourceItems, playerEngine.EnvironmentSize, playerEngine.ListenerPosition, playerEngine.ListenerRotation);
-        if (roomTelemetryText != null) {
-            Vector3 p = playerEngine.ListenerPosition;
-            Vector3 r = playerEngine.ListenerRotation;
-            roomTelemetryText.Text = $"X: {p.X:0.0}m  •  Y: {p.Y:0.0}m  •  Z: {p.Z:0.0}m  •  Yaw: {r.Y:0}°  •  Pitch: {r.X:0}°";
-        }
+        UpdateRoomTelemetryText();
     }
 
     void RefreshPlayerSourcesList() {
@@ -469,7 +625,7 @@ public partial class MainActivity {
         foreach (TrackSourceItem item in trackSourceItems) {
             LinearLayout row = new(this) { Orientation = Orientation.Horizontal };
             row.SetGravity(GravityFlags.CenterVertical);
-            row.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f);
+            row.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f, item.IsSolo ? OneUiTheme.SoloGold : null);
             row.SetPadding(Dp(12), Dp(9), Dp(10), Dp(9));
             LinearLayout.LayoutParams rlp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
                 BottomMargin = Dp(6)
@@ -484,21 +640,32 @@ public partial class MainActivity {
 
             Button soloBtn = new(this) { Text = "S", TextSize = 11.5f };
             Button muteBtn = new(this) { Text = "M", TextSize = 11.5f };
-            soloBtn.SetPadding(0, 0, 0, 0);
-            muteBtn.SetPadding(0, 0, 0, 0);
+            soloBtn.SetIncludeFontPadding(false);
+            muteBtn.SetIncludeFontPadding(false);
+            soloBtn.SetMinimumWidth(0);
+            muteBtn.SetMinimumWidth(0);
+            soloBtn.SetMinimumHeight(Dp(34));
+            muteBtn.SetMinimumHeight(Dp(34));
+            soloBtn.SetPadding(Dp(10), Dp(4), Dp(10), Dp(4));
+            muteBtn.SetPadding(Dp(10), Dp(4), Dp(10), Dp(4));
             OneUiTheme.AttachRecoil(soloBtn, 0.90f);
             OneUiTheme.AttachRecoil(muteBtn, 0.90f);
             void UpdateBtns() {
                 soloBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
                     this, item.IsSolo ? OneUiTheme.SoloGold : OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
                 soloBtn.SetTextColor(item.IsSolo ? Color.Black : ColText);
+                soloBtn.SetTypeface(null, item.IsSolo ? TypefaceStyle.Bold : TypefaceStyle.Normal);
                 muteBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
                     this, item.IsMuted ? ColDanger : OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
                 muteBtn.SetTextColor(ColText);
+                row.Background = OneUiTheme.CreateGlassCardDrawable(
+                    this, OneUiTheme.SurfaceSubTile, 18f, item.IsSolo ? OneUiTheme.SoloGold : null);
             }
             soloBtn.Click += (_, _) => {
                 item.IsSolo = !item.IsSolo;
                 UpdateBtns();
+                RefreshFilterButtonsUi();
+                refreshBentoTilesUi?.Invoke();
                 UpdateRoomCanvas();
             };
             muteBtn.Click += (_, _) => {
@@ -508,8 +675,8 @@ public partial class MainActivity {
             };
             UpdateBtns();
 
-            row.AddView(soloBtn, new LinearLayout.LayoutParams(Dp(38), Dp(34)) { RightMargin = Dp(6) });
-            row.AddView(muteBtn, new LinearLayout.LayoutParams(Dp(38), Dp(34)));
+            row.AddView(soloBtn, new LinearLayout.LayoutParams(Dp(38), ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+            row.AddView(muteBtn, new LinearLayout.LayoutParams(Dp(38), ViewGroup.LayoutParams.WrapContent));
             mixerContainer.AddView(row, rlp);
         }
     }
@@ -524,7 +691,8 @@ public partial class MainActivity {
                 double tot = playerEngine.TotalSeconds;
                 if (!isUserSeeking && playbackSeekBar != null && tot > 0) {
                     playbackSeekBar.Progress = Math.Clamp((int)(cur / tot * 1000.0), 0, 1000);
-                    playbackSeekBar.ValueText = $"{TimeSpan.FromSeconds(cur):mm\\:ss} / {TimeSpan.FromSeconds(tot):mm\\:ss}";
+                    playbackSeekBar.CurrentTimeText = $"{TimeSpan.FromSeconds(cur):mm\\:ss}";
+                    playbackSeekBar.TotalTimeText = $"{TimeSpan.FromSeconds(tot):mm\\:ss}";
                     playbackSeekBar.Invalidate();
                 }
                 UpdateRoomCanvas();
@@ -534,7 +702,7 @@ public partial class MainActivity {
         uiHandler?.PostDelayed(Tick, 65);
     }
 
-    (SeekBar bar, TextView valLabel) AddSliderRow(
+    (OneUiSeekBar bar, TextView valLabel) AddSliderRow(
         LinearLayout parent,
         string label,
         int min,
@@ -542,10 +710,14 @@ public partial class MainActivity {
         int initial,
         Action<int> onChanged,
         string suffix = "",
-        bool useBlue = false) {
+        bool useBlue = false,
+        int? defaultValue = null) {
+        int def = defaultValue ?? initial;
         OneUiSeekBar bar = new(this) {
             Max = max - min,
             Progress = Math.Clamp(initial - min, 0, max - min),
+            DefaultProgress = Math.Clamp(def - min, 0, max - min),
+            HasDefaultReset = true,
             LabelText = label,
             ValueText = $"{initial}{suffix}",
             UseBlueAccent = useBlue
@@ -557,6 +729,12 @@ public partial class MainActivity {
             if (e.FromUser) {
                 onChanged?.Invoke(val);
             }
+        };
+        bar.ResetRequested += prog => {
+            int val = prog + min;
+            bar.ValueText = $"{val}{suffix}";
+            bar.Invalidate();
+            onChanged?.Invoke(val);
         };
         parent.AddView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)

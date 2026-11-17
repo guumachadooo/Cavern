@@ -24,6 +24,7 @@ using CavernizeAndroid.Audio;
 using CavernizeAndroid.Language;
 using CavernizeAndroid.Services;
 using CavernizeAndroid.Theme;
+using CavernizeAndroid.Views;
 
 using VoidX.WPF.FFmpeg;
 
@@ -82,10 +83,17 @@ public partial class MainActivity : Activity, ICavernizeApp {
     CancellationTokenSource activeCts;
     string lastRenderedFilePath;
 
-    // Shell views
+    // Unified Smart Media Header Views (replaces redundant File + Spinner bar)
     TextView headerFileText;
-    Spinner trackSpinner;
+    View mediaMetaDivider;
+    LinearLayout mediaMetaRow;
     TextView trackSummaryText;
+    LinearLayout trackPickerBadge;
+    TextView trackPickerLabel;
+    OneUiIconView trackPickerChevron;
+    LinearLayout inlineTrackList;
+    bool trackPickerExpanded;
+
     UpdateCheckResult latestUpdateInfo;
     FFmpegStatusResult latestFFmpegStatus;
     string downloadedUpdateApkPath;
@@ -100,19 +108,23 @@ public partial class MainActivity : Activity, ICavernizeApp {
     Handler uiHandler;
     bool uiDestroyed;
 
-    // Official Samsung One UI 9 (Galaxy S25 Ultra / SESL9) Color Tokens
-    static readonly Color ColBg = OneUiTheme.BgScreen;
-    static readonly Color ColCard = OneUiTheme.SurfaceCard;
-    static readonly Color ColCardAlt = OneUiTheme.SurfaceElevated;
-    static readonly Color ColAccent = OneUiTheme.Primary;
-    static readonly Color ColCyan = OneUiTheme.PrimaryHigh;
-    static readonly Color ColCoral = OneUiTheme.CoralStart;
-    static readonly Color ColText = OneUiTheme.TextPrimary;
-    static readonly Color ColMuted = OneUiTheme.TextMuted;
-    static readonly Color ColDanger = OneUiTheme.FunctionalRedFill;
+    // Dynamic One UI 9 Color Tokens (automatically adapt to system Wallpaper Palette on API 31+)
+    static Color ColBg => OneUiTheme.BgScreen;
+    static Color ColCard => OneUiTheme.SurfaceCard;
+    static Color ColCardAlt => OneUiTheme.SurfaceElevated;
+    static Color ColAccent => OneUiTheme.Primary;
+    static Color ColCyan => OneUiTheme.PrimaryHigh;
+    static Color ColCoral => OneUiTheme.CoralStart;
+    static Color ColText => OneUiTheme.TextPrimary;
+    static Color ColMuted => OneUiTheme.TextMuted;
+    static Color ColDanger => OneUiTheme.FunctionalRedFill;
 
     protected override void OnCreate(Bundle savedInstanceState) {
         base.OnCreate(savedInstanceState);
+
+        OneUiTheme.Initialize(this);
+        AppLogger.Initialize(this);
+
         if (Window != null) {
             Window.DecorView?.SetBackgroundColor(ColBg);
 #pragma warning disable CS0618, CA1422
@@ -130,6 +142,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         if (!string.IsNullOrEmpty(resolvedFfmpeg)) {
             FFmpegInstallerService.EnsureExecutable(resolvedFfmpeg);
             ffmpeg.Location = resolvedFfmpeg;
+            AppLogger.Info($"FFmpeg resolved at '{resolvedFfmpeg}' (Found={ffmpeg.Found})");
         }
 
         RenderTarget[] allTargets = RenderTarget.Targets;
@@ -223,6 +236,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
     }
 
     void BuildRootUi() {
+        OneUiTheme.Initialize(this);
+
         FrameLayout rootFrame = new(this);
         rootFrame.SetBackgroundColor(ColBg);
 
@@ -237,24 +252,32 @@ public partial class MainActivity : Activity, ICavernizeApp {
         root.SetBackgroundColor(Color.Transparent);
         root.SetFitsSystemWindows(true);
 
-        // One UI 9 Viewing Header Bar (transparent over ambient depth backdrop)
-        LinearLayout topBar = new(this) {
-            Orientation = Orientation.Horizontal
+        // Smart Unified Media Header Card (File Picker + Active Track Summary + Inline Multi-Track Drawer)
+        LinearLayout mediaHeaderCard = new(this) { Orientation = Orientation.Vertical };
+        mediaHeaderCard.Background = OneUiTheme.CreateGlassCardDrawable(this, null, 22f);
+        mediaHeaderCard.Elevation = Dp(6);
+        mediaHeaderCard.SetPadding(Dp(14), Dp(12), Dp(14), Dp(12));
+        LinearLayout.LayoutParams headerCardLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            LeftMargin = Dp(14),
+            RightMargin = Dp(14),
+            TopMargin = Dp(10),
+            BottomMargin = Dp(8)
         };
-        topBar.SetBackgroundColor(Color.Transparent);
-        topBar.SetPadding(Dp(18), Dp(14), Dp(16), Dp(8));
-        topBar.SetGravity(GravityFlags.CenterVertical);
+
+        LinearLayout topRow = new(this) { Orientation = Orientation.Horizontal };
+        topRow.SetGravity(GravityFlags.CenterVertical);
 
         ImageView logo = new(this);
         logo.SetImageResource(Resource.Drawable.cavern_logo);
         LinearLayout.LayoutParams logoLp = new(Dp(34), Dp(34)) { RightMargin = Dp(10) };
-        topBar.AddView(logo, logoLp);
+        topRow.AddView(logo, logoLp);
 
         LinearLayout titleCol = new(this) { Orientation = Orientation.Vertical };
         TextView titleTv = new(this) {
             Text = "Cavernize",
-            TextSize = 22f
+            TextSize = 20f
         };
+        titleTv.SetIncludeFontPadding(false);
         titleTv.SetTextColor(OneUiTheme.PeachText);
         titleTv.SetTypeface(null, TypefaceStyle.Bold);
 
@@ -268,46 +291,61 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         titleCol.AddView(titleTv);
         titleCol.AddView(headerFileText);
-        topBar.AddView(titleCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        topRow.AddView(titleCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
 
-        Button openBtn = PillButton(S["OpenFile"], () => LaunchFilePicker(ReqOpenMedia, allowMultiple: false), active: true);
-        openBtn.SetPadding(Dp(16), Dp(6), Dp(16), Dp(6));
-        topBar.AddView(openBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(38)) { LeftMargin = Dp(8) });
-        root.AddView(topBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        LinearLayout openBtn = OneUiPillFactory.CreateIconActionPill(
+            this, OneUiIconType.Folder, S["OpenFile"],
+            () => LaunchFilePicker(ReqOpenMedia, allowMultiple: false),
+            primary: true);
+        topRow.AddView(openBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        mediaHeaderCard.AddView(topRow);
 
-        // Track selector frosted pill card
-        LinearLayout trackBar = new(this) { Orientation = Orientation.Vertical };
-        trackBar.Background = OneUiTheme.CreateGlassCardDrawable(this, null, 22f);
-        trackBar.Elevation = Dp(4);
-        trackBar.SetPadding(Dp(14), Dp(6), Dp(14), Dp(6));
-        LinearLayout.LayoutParams trackBarLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            LeftMargin = Dp(14),
-            RightMargin = Dp(14),
-            BottomMargin = Dp(6)
+        mediaMetaDivider = OneUiTheme.CreateDivider(this);
+        mediaMetaDivider.Visibility = ViewStates.Gone;
+        mediaHeaderCard.AddView(mediaMetaDivider);
+
+        mediaMetaRow = new LinearLayout(this) {
+            Orientation = Orientation.Horizontal,
+            Visibility = ViewStates.Gone
         };
-
-        LinearLayout trackRow = new(this) { Orientation = Orientation.Horizontal };
-        trackRow.SetGravity(GravityFlags.CenterVertical);
-        TextView trLbl = Label(S["TrackLabel"], 12.5f, OneUiTheme.TextSub);
-        trackSpinner = new Spinner(this);
-        trackSpinner.ItemSelected += (_, e) => {
-            if (LoadedFile != null && e.Position >= 0 && e.Position < LoadedFile.Tracks.Count) {
-                if (SelectedTrack != LoadedFile.Tracks[e.Position]) {
-                    SelectedTrack = LoadedFile.Tracks[e.Position];
-                }
-            }
-        };
-        trackRow.AddView(trLbl, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(8) });
-        trackRow.AddView(trackSpinner, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        trackBar.AddView(trackRow);
+        mediaMetaRow.SetGravity(GravityFlags.CenterVertical);
 
         trackSummaryText = Label("", 11.5f, ColCyan);
-        trackSummaryText.SetPadding(0, Dp(2), 0, Dp(2));
-        trackSummaryText.Visibility = ViewStates.Gone;
-        trackBar.AddView(trackSummaryText);
-        root.AddView(trackBar, trackBarLp);
+        trackSummaryText.SetPadding(Dp(2), 0, Dp(6), 0);
+        mediaMetaRow.AddView(trackSummaryText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
-        // Tab content frame (leaves room for floating frosted glass nav pill underneath)
+        trackPickerBadge = new LinearLayout(this) {
+            Orientation = Orientation.Horizontal,
+            Visibility = ViewStates.Gone
+        };
+        trackPickerBadge.SetGravity(GravityFlags.CenterVertical);
+        trackPickerBadge.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp, OneUiTheme.WithAlpha(ColAccent, 140));
+        trackPickerBadge.SetPadding(Dp(10), Dp(6), Dp(10), Dp(6));
+        OneUiTheme.AttachRecoil(trackPickerBadge, 0.95f);
+
+        trackPickerLabel = Label("", 11.5f, ColText);
+        trackPickerLabel.SetIncludeFontPadding(false);
+        trackPickerLabel.SetTypeface(null, TypefaceStyle.Bold);
+        trackPickerChevron = new OneUiIconView(this, OneUiIconType.ChevronDown, OneUiTheme.PeachText);
+        trackPickerBadge.AddView(trackPickerLabel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(5) });
+        trackPickerBadge.AddView(trackPickerChevron, new LinearLayout.LayoutParams(Dp(14), Dp(14)));
+        trackPickerBadge.Click += (_, _) => {
+            trackPickerExpanded = !trackPickerExpanded;
+            UpdateInlineTrackListVisibility();
+        };
+        mediaMetaRow.AddView(trackPickerBadge, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        mediaHeaderCard.AddView(mediaMetaRow);
+
+        inlineTrackList = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        inlineTrackList.SetPadding(0, Dp(8), 0, 0);
+        mediaHeaderCard.AddView(inlineTrackList);
+
+        root.AddView(mediaHeaderCard, headerCardLp);
+
+        // Tab content frame
         FrameLayout contentFrame = new(this);
         LinearLayout playerTab = BuildPlayerTab();
         LinearLayout convertTab = BuildConverterTab();
@@ -329,7 +367,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         root.AddView(contentFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
         rootFrame.AddView(root, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
 
-        // Layer 2: Floating Frosted Glass Capsule Bottom Navigation Bar (Voice Recorder / Search style)
+        // Layer 2: Floating Frosted Glass Capsule Bottom Navigation Bar
         LinearLayout navBar = new(this) { Orientation = Orientation.Horizontal };
         navBar.Background = OneUiTheme.CreateFloatingGlassPill(this);
         navBar.Elevation = Dp(12);
@@ -345,32 +383,34 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 TextSize = 12f
             };
             tb.SetAllCaps(false);
+            tb.SetIncludeFontPadding(false);
             tb.SetSingleLine(true);
-            tb.SetPadding(Dp(4), 0, Dp(4), 0);
+            tb.SetMinimumHeight(Dp(40));
+            tb.SetPadding(Dp(6), Dp(6), Dp(6), Dp(6));
             OneUiTheme.AttachRecoil(tb, 0.94f);
             tb.Click += (_, _) => SwitchTab(idx);
             tabButtons[i] = tb;
 
             if (i == 3) {
                 FrameLayout tabCell = new(this);
-                tabCell.AddView(tb, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(44)));
+                tabCell.AddView(tb, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
                 settingsUpdateDot = new View(this);
                 settingsUpdateDot.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.FunctionalOrange, 99f);
                 settingsUpdateDot.Visibility = ShouldShowSettingsDot() ? ViewStates.Visible : ViewStates.Gone;
                 FrameLayout.LayoutParams dotLp = new(Dp(8), Dp(8)) {
                     Gravity = GravityFlags.Top | GravityFlags.End,
-                    TopMargin = Dp(7),
+                    TopMargin = Dp(6),
                     RightMargin = Dp(9)
                 };
                 tabCell.AddView(settingsUpdateDot, dotLp);
-                navBar.AddView(tabCell, new LinearLayout.LayoutParams(0, Dp(44), 1f) { LeftMargin = Dp(2), RightMargin = Dp(2) });
+                navBar.AddView(tabCell, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { LeftMargin = Dp(2), RightMargin = Dp(2) });
             } else {
-                navBar.AddView(tb, new LinearLayout.LayoutParams(0, Dp(44), 1f) { LeftMargin = Dp(2), RightMargin = Dp(2) });
+                navBar.AddView(tb, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { LeftMargin = Dp(2), RightMargin = Dp(2) });
             }
         }
 
-        FrameLayout.LayoutParams floatingNavLp = new(ViewGroup.LayoutParams.MatchParent, Dp(56)) {
+        FrameLayout.LayoutParams floatingNavLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             Gravity = GravityFlags.Bottom | GravityFlags.CenterHorizontal,
             LeftMargin = Dp(16),
             RightMargin = Dp(16),
@@ -381,6 +421,74 @@ public partial class MainActivity : Activity, ICavernizeApp {
         SetContentView(rootFrame);
         UpdateTabButtonStyles();
         RefreshAllUiState();
+    }
+
+    void RebuildInlineTrackList() {
+        if (inlineTrackList == null || trackPickerBadge == null) {
+            return;
+        }
+        inlineTrackList.RemoveAllViews();
+        if (LoadedFile == null || LoadedFile.Tracks.Count <= 1) {
+            trackPickerBadge.Visibility = ViewStates.Gone;
+            trackPickerExpanded = false;
+            inlineTrackList.Visibility = ViewStates.Gone;
+            return;
+        }
+
+        int selIdx = Math.Max(0, LoadedFile.Tracks.ToList().IndexOf(selectedTrack));
+        trackPickerBadge.Visibility = ViewStates.Visible;
+        trackPickerLabel.Text = string.Format(S["TrackMultiBadge"], selIdx + 1, LoadedFile.Tracks.Count);
+
+        TextView hdr = Label(S["SelectTrackHeader"], 11.5f, ColMuted);
+        hdr.SetPadding(Dp(2), 0, 0, Dp(6));
+        inlineTrackList.AddView(hdr);
+
+        for (int i = 0; i < LoadedFile.Tracks.Count; i++) {
+            CavernizeTrack tr = LoadedFile.Tracks[i];
+            bool isSel = tr == selectedTrack;
+
+            LinearLayout row = new(this) { Orientation = Orientation.Horizontal };
+            row.SetGravity(GravityFlags.CenterVertical);
+            row.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
+            row.Background = isSel
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 72), 14f)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 14f);
+            OneUiTheme.AttachRecoil(row, 0.98f);
+
+            View dot = new(this) {
+                Background = isSel
+                    ? OneUiTheme.CreateRoundedDrawable(this, ColAccent, 99f, ColText, 2.5f)
+                    : OneUiTheme.CreateRoundedDrawable(this, Color.Transparent, 99f, ColMuted, 1.5f)
+            };
+
+            TextView nameTv = Label($"#{i + 1}: {tr}", 12.5f, isSel ? ColText : OneUiTheme.TextSecondary);
+            nameTv.SetIncludeFontPadding(false);
+            nameTv.SetTypeface(null, isSel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+
+            row.AddView(dot, new LinearLayout.LayoutParams(Dp(14), Dp(14)) { RightMargin = Dp(8) });
+            row.AddView(nameTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            row.Click += (_, _) => {
+                trackPickerExpanded = false;
+                if (SelectedTrack != tr) {
+                    SelectedTrack = tr;
+                } else {
+                    UpdateInlineTrackListVisibility();
+                }
+            };
+            inlineTrackList.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(4)
+            });
+        }
+        UpdateInlineTrackListVisibility();
+    }
+
+    void UpdateInlineTrackListVisibility() {
+        if (inlineTrackList == null || trackPickerChevron == null) {
+            return;
+        }
+        bool show = trackPickerExpanded && LoadedFile != null && LoadedFile.Tracks.Count > 1;
+        inlineTrackList.Visibility = show ? ViewStates.Visible : ViewStates.Gone;
+        trackPickerChevron.IconType = show ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown;
     }
 
     bool ShouldShowSettingsDot() =>
@@ -404,7 +512,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         for (int i = 0; i < tabButtons.Length; i++) {
             bool active = i == activeTab;
             tabButtons[i].Background = active
-                ? OneUiTheme.CreateRoundedDrawable(this, Color.Argb(225, 56, 122, 255), OneUiTheme.PillCornerDp)
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 225), OneUiTheme.PillCornerDp)
                 : OneUiTheme.CreateRippleRoundedDrawable(this, Color.Transparent, OneUiTheme.PillCornerDp);
             tabButtons[i].SetTextColor(active ? ColText : OneUiTheme.TextSecondary);
             tabButtons[i].SetTypeface(null, active ? TypefaceStyle.Bold : TypefaceStyle.Normal);
@@ -494,6 +602,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
                 FFmpegInstallerService.EnsureExecutable(path);
                 string ver = FFmpegInstallerService.ProbeFFmpegVersion(path);
+                AppLogger.Info($"Manual FFmpeg selected: '{path}' (ver={ver})");
                 RunOnUiThread(() => {
                     store.FFmpegLocation = path;
                     if (!string.IsNullOrEmpty(ver)) {
@@ -512,6 +621,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             ShowError(S["OpRunning"]);
             return;
         }
+        AppLogger.Info($"Loading URI: {uri}");
         SetConvertStatus(S["CopyingMedia"], -1);
         headerFileText.Text = S["CopyingMedia"];
         Task.Run(() => {
@@ -522,15 +632,16 @@ public partial class MainActivity : Activity, ICavernizeApp {
                         headerFileText.Text = msg;
                         SetConvertStatus(msg, p);
                     }));
+                AppLogger.Info($"Resolved file path: '{resolved}'");
 
                 AudioFile file;
                 try {
                     file = new AudioFile(resolved);
                     if (file.Tracks.Count == 0 || file.Tracks.All(t => !t.Supported)) {
-                        throw new NotSupportedException();
+                        throw new NotSupportedException("Fallback required for container/codec");
                     }
-                } catch {
-                    // Fallback to Android MediaExtractor/MediaCodec for standard music formats (MP3, AAC, FLAC, OGG, etc.)
+                } catch (Exception nativeEx) {
+                    AppLogger.Info($"Native Cavern reader fallback ({nativeEx.GetType().Name}), decoding via Android MediaCodec...");
                     RunOnUiThread(() => {
                         headerFileText.Text = S["DecodingFallback"];
                         SetConvertStatus(S["DecodingFallback"], -1);
@@ -550,6 +661,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     SetConvertStatus(S["Ready"], 0);
                 });
             } catch (Exception ex) {
+                AppLogger.Error("LoadUriAsync", ex);
                 RunOnUiThread(() => {
                     SetConvertStatus(ex.Message, 0);
                     ShowError(ex.Message);
@@ -569,22 +681,15 @@ public partial class MainActivity : Activity, ICavernizeApp {
         StopPlayback();
         LoadedFile = file;
         headerFileText.Text = Path.GetFileName(file.Path);
+        AppLogger.Info($"Opened file: '{file.Path}', tracks={file.Tracks.Count}");
 
         if (file.Tracks.Count > 0) {
-            string[] trackNames = file.Tracks.Select((t, idx) => $"#{idx + 1}: {t}").ToArray();
-            ArrayAdapter<string> adapter = new(this, Android.Resource.Layout.SimpleSpinnerItem, trackNames);
-            adapter.SetDropDownViewResource(Android.Resource.Layout.SimpleSpinnerDropDownItem);
-            trackSpinner.Adapter = adapter;
-
             CavernizeTrack best = file.Tracks
                 .Where(x => x.Codec != Codec.Unknown && x.Supported)
                 .OrderBy(x => x.Codec)
                 .FirstOrDefault() ?? file.Tracks[0];
-            int bestIdx = file.Tracks.ToList().IndexOf(best);
-            trackSpinner.SetSelection(Math.Max(0, bestIdx));
             SelectedTrack = best;
         } else {
-            trackSpinner.Adapter = null;
             SelectedTrack = null;
         }
     }
@@ -598,38 +703,48 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         selectedTrack = null;
         trackSourceItems = [];
+        trackPickerExpanded = false;
         if (headerFileText != null) {
             headerFileText.Text = S["NoFile"];
         }
-        if (trackSpinner != null) {
-            trackSpinner.Adapter = null;
+        if (mediaMetaRow != null) {
+            mediaMetaRow.Visibility = ViewStates.Gone;
+            mediaMetaDivider.Visibility = ViewStates.Gone;
         }
-        if (trackSummaryText != null) {
-            trackSummaryText.Visibility = ViewStates.Gone;
-        }
+        RebuildInlineTrackList();
         report = new PostRenderReport(environment.Listener);
     }
 
     void OnSelectedTrackChanged() {
         StopPlayback();
         if (selectedTrack == null) {
-            trackSummaryText.Visibility = ViewStates.Gone;
+            if (mediaMetaRow != null) {
+                mediaMetaRow.Visibility = ViewStates.Gone;
+                mediaMetaDivider.Visibility = ViewStates.Gone;
+            }
             trackSourceItems = [];
             RefreshPlayerSourcesList();
             RefreshExtractorChecklist();
             RefreshConverterTrackInfo();
+            RebuildInlineTrackList();
             return;
         }
 
+        AppLogger.Info($"Selected track: {selectedTrack.FormatHeader}");
         string details = string.Join(" | ", selectedTrack.Details.Select(d => $"{d.property}: {d.value}"));
-        trackSummaryText.Text = $"{selectedTrack.FormatHeader} — {details}";
-        trackSummaryText.Visibility = ViewStates.Visible;
+        if (trackSummaryText != null) {
+            trackSummaryText.Text = $"{selectedTrack.FormatHeader} — {details}";
+            mediaMetaRow.Visibility = ViewStates.Visible;
+            mediaMetaDivider.Visibility = ViewStates.Visible;
+        }
+        RebuildInlineTrackList();
 
         if (selectedTrack.Supported && selectedTrack.Codec != Codec.TrueHD) {
             try {
                 playerEngine.Load(selectedTrack, upmixingSettings, renderingSettings);
                 trackSourceItems = [.. playerEngine.SourceItems];
             } catch (Exception ex) {
+                AppLogger.Error("PlayerEngine.Load", ex);
                 trackSourceItems = TrackSourceItem.BuildFromTrack(selectedTrack);
                 ShowError(ex.Message);
             }
@@ -640,9 +755,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshPlayerSourcesList();
         RefreshExtractorChecklist();
         RefreshConverterTrackInfo();
+        RefreshContainerOptions();
         if (playbackSeekBar != null) {
+            playbackSeekBar.IsWavePlaying = false;
             playbackSeekBar.Progress = 0;
-            playbackSeekBar.ValueText = $"00:00 / {TimeSpan.FromSeconds(playerEngine.TotalSeconds):mm\\:ss}";
+            playbackSeekBar.CurrentTimeText = "00:00";
+            playbackSeekBar.TotalTimeText = $"{TimeSpan.FromSeconds(playerEngine.TotalSeconds):mm\\:ss}";
             playbackSeekBar.Invalidate();
         }
         UpdateRoomCanvas();
@@ -665,10 +783,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
     }
 
-    // Shared One UI 9 (Galaxy S25 Ultra) Frosted UI Helpers
+    // Shared One UI 9 Frosted UI Helpers (zero emojis, non-clipping pills)
     int Dp(int dp) => (int)Math.Round(dp * Resources.DisplayMetrics.Density);
 
-    LinearLayout Card(string title = null, string iconGlyph = null, Color? badgeColor = null) {
+    LinearLayout Card(string title = null, OneUiIconType? icon = null, Color? badgeColor = null) {
         LinearLayout card = new(this) { Orientation = Orientation.Vertical };
         card.Background = OneUiTheme.CreateGlassCardDrawable(this, null, OneUiTheme.CardCornerDp);
         card.Elevation = Dp(6);
@@ -678,11 +796,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
         };
         card.LayoutParameters = lp;
         if (!string.IsNullOrEmpty(title)) {
-            if (!string.IsNullOrEmpty(iconGlyph) && badgeColor.HasValue) {
+            if (icon.HasValue && badgeColor.HasValue) {
                 LinearLayout hdr = new(this) { Orientation = Orientation.Horizontal };
                 hdr.SetGravity(GravityFlags.CenterVertical);
                 hdr.SetPadding(0, 0, 0, Dp(10));
-                hdr.AddView(OneUiTheme.CreateIconBadge(this, iconGlyph, badgeColor.Value));
+                hdr.AddView(OneUiTheme.CreateVectorIconBadge(this, icon.Value, badgeColor.Value));
                 TextView tv = SectionTitle(title);
                 tv.SetPadding(Dp(10), 0, 0, 0);
                 hdr.AddView(tv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -717,10 +835,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
     Button PrimaryButton(string text, Action onClick) {
         Button b = new(this) { Text = text, TextSize = 13.5f };
         b.SetAllCaps(false);
+        b.SetIncludeFontPadding(false);
+        b.Gravity = GravityFlags.Center;
+        b.SetMinimumWidth(0);
+        b.SetMinimumHeight(Dp(42));
         b.Background = OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp);
         b.SetTextColor(ColText);
         b.SetTypeface(null, TypefaceStyle.Bold);
-        b.SetPadding(Dp(14), Dp(4), Dp(14), Dp(4));
+        b.SetPadding(Dp(16), Dp(8), Dp(16), Dp(8));
         OneUiTheme.AttachRecoil(b);
         b.Click += (_, _) => onClick?.Invoke();
         return b;
@@ -729,9 +851,13 @@ public partial class MainActivity : Activity, ICavernizeApp {
     Button SecondaryButton(string text, Action onClick) {
         Button b = new(this) { Text = text, TextSize = 12.5f };
         b.SetAllCaps(false);
+        b.SetIncludeFontPadding(false);
+        b.Gravity = GravityFlags.Center;
+        b.SetMinimumWidth(0);
+        b.SetMinimumHeight(Dp(40));
         b.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.ButtonCornerDp);
         b.SetTextColor(ColText);
-        b.SetPadding(Dp(12), Dp(4), Dp(12), Dp(4));
+        b.SetPadding(Dp(14), Dp(8), Dp(14), Dp(8));
         OneUiTheme.AttachRecoil(b);
         b.Click += (_, _) => onClick?.Invoke();
         return b;
@@ -740,12 +866,16 @@ public partial class MainActivity : Activity, ICavernizeApp {
     Button PillButton(string text, Action onClick, bool active = false) {
         Button b = new(this) { Text = text, TextSize = 12.5f };
         b.SetAllCaps(false);
+        b.SetIncludeFontPadding(false);
+        b.Gravity = GravityFlags.Center;
+        b.SetMinimumWidth(0);
+        b.SetMinimumHeight(Dp(38));
         b.Background = active
             ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
             : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
         b.SetTextColor(ColText);
         b.SetTypeface(null, active ? TypefaceStyle.Bold : TypefaceStyle.Normal);
-        b.SetPadding(Dp(14), Dp(4), Dp(14), Dp(4));
+        b.SetPadding(Dp(14), Dp(7), Dp(14), Dp(7));
         OneUiTheme.AttachRecoil(b);
         b.Click += (_, _) => onClick?.Invoke();
         return b;
@@ -760,6 +890,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             RunOnUiThread(() => SetFFmpegStatus(S["CheckingUpdate"], -1));
             FFmpegStatusResult status = await FFmpegInstallerService.CheckStatusAsync(this, store);
             latestFFmpegStatus = status;
+            AppLogger.Info($"FFmpeg status: installed={status.IsInstalled}, local='{status.LocalPath}', ver='{status.InstalledVersion}', remote='{status.RemoteVersion}'");
 
             RunOnUiThread(() => {
                 RefreshSettingsDot();
@@ -770,6 +901,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 }
             });
         } catch (Exception ex) {
+            AppLogger.Error("CheckFFmpegUpdateAsync", ex);
             RunOnUiThread(() => {
                 RefreshFFmpegCardUi();
                 if (!silent) {
@@ -794,6 +926,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
                 FFmpegStatusResult refreshed = await FFmpegInstallerService.CheckStatusAsync(this, store);
                 latestFFmpegStatus = refreshed;
+                AppLogger.Info($"FFmpeg installed at '{path}'");
 
                 RunOnUiThread(() => {
                     isFFmpegDownloading = false;
@@ -805,6 +938,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     Toast.MakeText(this, S["Ready"], ToastLength.Short).Show();
                 });
             } catch (Exception ex) {
+                AppLogger.Error("StartFFmpegDownloadOrUpdate", ex);
                 RunOnUiThread(() => {
                     isFFmpegDownloading = false;
                     SetFFmpegStatus(ex.Message, 0);
@@ -829,6 +963,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 }
             });
         } catch (Exception ex) {
+            AppLogger.Error("CheckForUpdatesAsync", ex);
             RunOnUiThread(() => {
                 SetSettingsUpdateStatus(ex.Message, 0);
                 if (!silent) {
@@ -868,6 +1003,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     InstallDownloadedApk(apkPath);
                 });
             } catch (Exception ex) {
+                AppLogger.Error("StartUpdateDownloadAndInstall", ex);
                 RunOnUiThread(() => {
                     isUpdateDownloading = false;
                     SetSettingsUpdateStatus(ex.Message, 0);
@@ -883,35 +1019,41 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         if (!AppUpdateService.CanInstallPackages(this)) {
             pendingInstallApkPath = apkPath;
-            AlertDialog dlg = new AlertDialog.Builder(this)
-                .SetTitle(S["UpdateCardTitle"])
-                .SetMessage(S["AllowUnknownSourcesMsg"])
-                .SetPositiveButton("OK", (_, _) => AppUpdateService.OpenUnknownSourcesSettings(this))
-                .SetNegativeButton(S["DismissBtn"], (_, _) => { })
-                .Create();
-            dlg.Window?.SetBackgroundDrawable(OneUiTheme.CreateGlassCardDrawable(
-                this, OneUiTheme.SurfaceElevated, OneUiTheme.CardCornerDp));
-            dlg.Show();
+            OneUiModalDialog.Show(
+                this,
+                S["UpdateCardTitle"],
+                S["AllowUnknownSourcesMsg"],
+                icon: OneUiIconType.Info,
+                positiveText: "OK",
+                onPositive: () => AppUpdateService.OpenUnknownSourcesSettings(this),
+                negativeText: S["DismissBtn"]);
             return;
         }
         AppUpdateService.LaunchInstaller(this, apkPath);
     }
 
     void ShowError(string msg) {
-        ShowMessageDialog(S["ErrorTitle"], msg);
-    }
-
-    void ShowMessageDialog(string title, string msg) {
+        AppLogger.Error($"UI Error shown: {msg}");
         if (uiDestroyed) {
             return;
         }
-        AlertDialog dlg = new AlertDialog.Builder(this)
-            .SetTitle(title)
-            .SetMessage(msg)
-            .SetPositiveButton("OK", (_, _) => { })
-            .Create();
-        dlg.Window?.SetBackgroundDrawable(OneUiTheme.CreateGlassCardDrawable(
-            this, OneUiTheme.SurfaceElevated, OneUiTheme.CardCornerDp));
-        dlg.Show();
+        OneUiModalDialog.Show(
+            this,
+            S["ErrorTitle"],
+            msg,
+            icon: OneUiIconType.Info,
+            iconBadgeColor: ColDanger);
+    }
+
+    void ShowMessageDialog(string title, string msg, OneUiIconType icon = OneUiIconType.Info, bool monospace = false) {
+        if (uiDestroyed) {
+            return;
+        }
+        OneUiModalDialog.Show(
+            this,
+            title,
+            msg,
+            icon: icon,
+            monospaceBody: monospace);
     }
 }

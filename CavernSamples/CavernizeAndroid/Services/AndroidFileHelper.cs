@@ -265,6 +265,7 @@ public static class AndroidFileHelper {
             ".mka" => "audio/x-matroska",
             ".mp4" => "video/mp4",
             ".json" => "application/json",
+            ".txt" or ".log" => "text/plain",
             _ => "application/octet-stream"
         };
     }

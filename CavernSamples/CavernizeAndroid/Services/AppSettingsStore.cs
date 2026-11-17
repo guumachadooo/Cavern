@@ -313,6 +313,10 @@ public sealed class AndroidRenderingSettings(AppSettingsStore store) : Rendering
 
 public sealed class AndroidFFmpegRunner(Action<string> onStatus) : FFmpeg {
     public override void UpdateStatusText(string text) => onStatus?.Invoke(text);
+
+    protected override void OnCommandCompleted(string executable, string arguments, int exitCode, string stdout, string stderr) {
+        AppLogger.LogFFmpeg(executable, arguments, exitCode, stdout, stderr);
+    }
 }
 
 public sealed class AndroidLicencePrompt(Func<string, string, bool> promptUser) : ILicence {

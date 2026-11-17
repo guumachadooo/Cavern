@@ -3,6 +3,7 @@ using System.Text;
 
 using Android.App;
 using Android.Content;
+using Android.Graphics;
 using Android.Views;
 using Android.Widget;
 
@@ -33,7 +34,7 @@ public partial class MainActivity {
     Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, shareExportBtn, playExportBtn;
     LayoutDiagramView layoutDiagram;
     TextView converterTrackInfoText, convertStatusText;
-    Spinner exportFormatSpinner, containerSpinner;
+    OneUiInlineSelector exportFormatSelector, containerSelector;
     CheckBox applyRoomToExportCheck;
     ProgressBar convertProgressBar;
 
@@ -45,19 +46,19 @@ public partial class MainActivity {
 
     LinearLayout BuildConverterTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(4), Dp(14), Dp(88));
+        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(88));
 
         // 1. System & RenderTarget Hero Card
-        LinearLayout sysCard = Card(S["SystemTitle"], "🔊", OneUiTheme.Primary);
+        LinearLayout sysCard = Card(S["SystemTitle"], OneUiIconType.Speaker, OneUiTheme.Primary);
         LinearLayout sysRow = new(this) { Orientation = Orientation.Horizontal };
         sysRow.SetGravity(GravityFlags.CenterVertical);
 
         LinearLayout sysLeft = new(this) { Orientation = Orientation.Vertical };
         sysLeft.AddView(Label(S["RenderTarget"], 12f, ColMuted));
         selectTargetBtn = SecondaryButton(RenderTarget?.Name ?? S["SelectTarget"], ShowRenderTargetDialog);
-        sysLeft.AddView(selectTargetBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(42)) { TopMargin = Dp(4), BottomMargin = Dp(6) });
+        sysLeft.AddView(selectTargetBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4), BottomMargin = Dp(6) });
         wiringBtn = PillButton(S["DisplayWiring"], DisplayWiringDialog);
-        sysLeft.AddView(wiringBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(38)));
+        sysLeft.AddView(wiringBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         sysRow.AddView(sysLeft, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(10) });
 
         layoutDiagram = new LayoutDiagramView(this);
@@ -65,34 +66,31 @@ public partial class MainActivity {
         sysCard.AddView(sysRow);
         page.AddView(sysCard);
 
-        // 2. Content & Export Card
-        LinearLayout expCard = Card("Export", "⚡", OneUiTheme.CoralStart);
+        // 2. Content & Export Card (In-App One UI 9 Selectors — no native Spinner popups)
+        LinearLayout expCard = Card("Export", OneUiIconType.Bolt, OneUiTheme.CoralStart);
         converterTrackInfoText = Label(S["NoTrack"], 12f, ColMuted);
         converterTrackInfoText.SetPadding(0, 0, 0, Dp(8));
         expCard.AddView(converterTrackInfoText);
         AddDivider(expCard);
 
-        expCard.AddView(Label(S["ExportFormat"], 12f, ColMuted));
-        exportFormatSpinner = new Spinner(this);
+        exportFormatSelector = new OneUiInlineSelector(this, S["ExportFormat"]);
         ExportFormat[] formats = ExportFormat.GetFormats();
-        ArrayAdapter<string> fmtAdapter = new(this, Android.Resource.Layout.SimpleSpinnerItem, formats.Select(f => f.Description).ToArray());
-        fmtAdapter.SetDropDownViewResource(Android.Resource.Layout.SimpleSpinnerDropDownItem);
-        exportFormatSpinner.Adapter = fmtAdapter;
-        exportFormatSpinner.SetSelection(Math.Clamp(Array.IndexOf(formats, ExportFormat), 0, formats.Length - 1));
-        exportFormatSpinner.ItemSelected += (_, e) => {
+        exportFormatSelector.SetItems(
+            formats.Select(f => f.Description).ToArray(),
+            Math.Clamp(Array.IndexOf(formats, ExportFormat), 0, formats.Length - 1));
+        exportFormatSelector.SelectionChanged += pos => {
             ExportFormat[] curFormats = ExportFormat.GetFormats();
-            if (e.Position >= 0 && e.Position < curFormats.Length) {
-                ExportFormat = curFormats[e.Position];
-                store.ExportFormatIndex = e.Position;
+            if (pos >= 0 && pos < curFormats.Length) {
+                ExportFormat = curFormats[pos];
+                store.ExportFormatIndex = pos;
                 RefreshContainerOptions();
             }
         };
-        expCard.AddView(exportFormatSpinner);
+        expCard.AddView(exportFormatSelector);
 
         AddDivider(expCard);
-        expCard.AddView(Label(S["Container"], 12f, ColMuted));
-        containerSpinner = new Spinner(this);
-        expCard.AddView(containerSpinner);
+        containerSelector = new OneUiInlineSelector(this, S["Container"]);
+        expCard.AddView(containerSelector);
 
         AddDivider(expCard);
         applyRoomToExportCheck = new CheckBox(this) {
@@ -104,24 +102,24 @@ public partial class MainActivity {
         applyRoomToExportCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
         expCard.AddView(applyRoomToExportCheck);
 
-        // Action Buttons
+        // Action Buttons (adaptive heights, zero text clipping)
         LinearLayout actRow1 = new(this) { Orientation = Orientation.Horizontal };
         actRow1.SetPadding(0, Dp(10), 0, Dp(6));
         renderBtn = PrimaryButton(S["RenderBtn"], () => StartSingleRender());
         cancelRenderBtn = PillButton(S["CancelBtn"], () => activeCts?.Cancel());
         cancelRenderBtn.Enabled = false;
-        actRow1.AddView(renderBtn, new LinearLayout.LayoutParams(0, Dp(44), 2f) { RightMargin = Dp(6) });
-        actRow1.AddView(cancelRenderBtn, new LinearLayout.LayoutParams(0, Dp(44), 1f));
+        actRow1.AddView(renderBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 2f) { RightMargin = Dp(6) });
+        actRow1.AddView(cancelRenderBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         expCard.AddView(actRow1);
 
         Button queueAddBtn = PillButton(S["AddQueueBtn"], AddCurrentToQueue);
-        expCard.AddView(queueAddBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { BottomMargin = Dp(8) });
+        expCard.AddView(queueAddBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
 
         LinearLayout infoBtns = new(this) { Orientation = Orientation.Horizontal };
         Button metaBtn = PillButton(S["ShowMetaBtn"], ShowMetadataDialog);
         Button repBtn = PillButton(S["ShowReportBtn"], ShowPostRenderReportDialog);
-        infoBtns.AddView(metaBtn, new LinearLayout.LayoutParams(0, Dp(38), 1f) { RightMargin = Dp(6) });
-        infoBtns.AddView(repBtn, new LinearLayout.LayoutParams(0, Dp(38), 1f));
+        infoBtns.AddView(metaBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        infoBtns.AddView(repBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         expCard.AddView(infoBtns);
 
         // Progress & Result
@@ -147,8 +145,8 @@ public partial class MainActivity {
         }, active: true);
         shareExportBtn.Visibility = ViewStates.Gone;
         playExportBtn.Visibility = ViewStates.Gone;
-        postBtns.AddView(shareExportBtn, new LinearLayout.LayoutParams(0, Dp(38), 1f) { RightMargin = Dp(6) });
-        postBtns.AddView(playExportBtn, new LinearLayout.LayoutParams(0, Dp(38), 1f));
+        postBtns.AddView(shareExportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        postBtns.AddView(playExportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         expCard.AddView(postBtns);
 
         page.AddView(expCard);
@@ -184,7 +182,7 @@ public partial class MainActivity {
     }
 
     void RefreshContainerOptions() {
-        if (containerSpinner == null || ExportFormat == null) {
+        if (containerSelector == null || ExportFormat == null) {
             return;
         }
         List<string> labels = [];
@@ -207,23 +205,36 @@ public partial class MainActivity {
             }
         }
         if (exts.Count == 0) {
-            exts.Add(ExportFormat.Codec == Codec.LimitlessAudio ? ".laf" :
-                     ExportFormat.Codec == Codec.DAMF ? ".atmos" : ".wav");
-            labels.Add(exts[0]);
+            string ext = ExportFormat.Codec switch {
+                Codec.LimitlessAudio => ".laf",
+                Codec.DAMF => ".atmos",
+                Codec.FLAC => ".flac",
+                Codec.Opus => ".opus",
+                Codec.EnhancedAC3 => ".eac3",
+                Codec.AC3 => ".ac3",
+                _ => ".wav"
+            };
+            exts.Add(ext);
+            labels.Add($"{ExportFormat.Codec} ({ext})");
+        }
+
+        // Default to native audio extension (.flac / .eac3 / .opus) when source is audio-only rather than video container
+        int defaultIdx = 0;
+        if (selectedTrack == null || selectedTrack.Container != Container.Matroska) {
+            int nonMkv = exts.FindIndex(e => !e.Equals(".mkv", StringComparison.OrdinalIgnoreCase));
+            if (nonMkv >= 0) {
+                defaultIdx = nonMkv;
+            }
         }
 
         availableContainerExts = exts;
-        ArrayAdapter<string> adapter = new(this, Android.Resource.Layout.SimpleSpinnerItem, labels.ToArray());
-        adapter.SetDropDownViewResource(Android.Resource.Layout.SimpleSpinnerDropDownItem);
-        containerSpinner.Adapter = adapter;
+        containerSelector.SetItems(labels.ToArray(), defaultIdx);
     }
 
     void ShowRenderTargetDialog() {
-        ScrollView sv = new(this);
         LinearLayout list = new(this) { Orientation = Orientation.Vertical };
-        list.SetPadding(Dp(16), Dp(10), Dp(16), Dp(10));
 
-        AlertDialog dialog = null;
+        Dialog dialog = null;
         RenderTarget[] all = RenderTarget.Targets;
         List<RenderTarget> pc = [], matrix = [], multi = [];
         foreach (RenderTarget t in all) {
@@ -240,7 +251,7 @@ public partial class MainActivity {
 
         void AddCategory(string header, List<RenderTarget> items) {
             TextView hdr = SectionTitle(header);
-            hdr.SetPadding(0, Dp(8), 0, Dp(4));
+            hdr.SetPadding(0, Dp(10), 0, Dp(6));
             list.AddView(hdr);
             foreach (RenderTarget item in items) {
                 bool isSel = item == RenderTarget;
@@ -251,23 +262,21 @@ public partial class MainActivity {
                     RefreshConverterTabState();
                     dialog?.Dismiss();
                 };
-                list.AddView(b, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(38)) { BottomMargin = Dp(4) });
+                list.AddView(b, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
             }
         }
 
         AddCategory(S["CatPC"], pc);
         AddCategory(S["CatMatrix"], matrix);
         AddCategory(S["CatMulti"], multi);
-        sv.AddView(list);
 
-        dialog = new AlertDialog.Builder(this)
-            .SetTitle(S["RenderTarget"])
-            .SetView(sv)
-            .SetNegativeButton(S["CancelBtn"], (_, _) => { })
-            .Create();
-        dialog.Window?.SetBackgroundDrawable(OneUiTheme.CreateGlassCardDrawable(
-            this, OneUiTheme.SurfaceElevated, OneUiTheme.CardCornerDp));
-        dialog.Show();
+        dialog = OneUiModalDialog.Show(
+            this,
+            S["RenderTarget"],
+            customContent: list,
+            icon: OneUiIconType.Speaker,
+            positiveText: null,
+            negativeText: S["CancelBtn"]);
     }
 
     void DisplayWiringDialog() {
@@ -278,7 +287,7 @@ public partial class MainActivity {
         ChannelPrototype[] prototypes = ChannelPrototype.Get(channels);
         if (channels.Length > 8) {
             string order = string.Join("", prototypes.Select(x => "\n- " + x.Name));
-            ShowMessageDialog(S["WrGui"], string.Format(S["Over8"], order));
+            ShowMessageDialog(S["WrGui"], string.Format(S["Over8"], order), OneUiIconType.Speaker);
             return;
         }
 
@@ -298,7 +307,7 @@ public partial class MainActivity {
                     ChannelPrototype.Mapping[(int)matrixed[i].negPhase].Name));
             }
         }
-        ShowMessageDialog(S["WrGui"], output.ToString());
+        ShowMessageDialog(S["WrGui"], output.ToString(), OneUiIconType.Speaker);
     }
 
     void ShowMetadataDialog() {
@@ -319,11 +328,11 @@ public partial class MainActivity {
             }
             sb.AppendLine();
         }
-        ShowMessageDialog(S["ShowMetaBtn"], sb.ToString());
+        ShowMessageDialog(S["ShowMetaBtn"], sb.ToString(), OneUiIconType.Info, monospace: true);
     }
 
     void ShowPostRenderReportDialog() {
-        ShowMessageDialog(S["ShowReportBtn"], report?.Report ?? "");
+        ShowMessageDialog(S["ShowReportBtn"], report?.Report ?? "", OneUiIconType.Logs, monospace: true);
     }
 
     // ICavernizeApp Render Pipeline
@@ -336,6 +345,14 @@ public partial class MainActivity {
         }
         bool needsFFmpeg = !string.IsNullOrEmpty(ExportFormat.FFName) &&
             ExportFormat.Codec != Codec.PCM_Float && ExportFormat.Codec != Codec.PCM_LE;
+        if (needsFFmpeg && ExportFormat.Codec == Codec.FLAC) {
+            string chosenExt = containerSelector != null && containerSelector.SelectedIndex >= 0 && containerSelector.SelectedIndex < availableContainerExts.Count
+                ? availableContainerExts[containerSelector.SelectedIndex]
+                : ".flac";
+            if (chosenExt.Equals(".flac", StringComparison.OrdinalIgnoreCase)) {
+                needsFFmpeg = false; // Built-in pure-C# FlacAudioConverter guarantees lossless .flac export
+            }
+        }
         if (needsFFmpeg && !ffmpeg.Found) {
             throw new TrackException(string.Format(S["FFmpegNeeded"], ExportFormat.Codec));
         }
@@ -396,11 +413,13 @@ public partial class MainActivity {
         try {
             PreRender();
         } catch (Exception e) {
+            AppLogger.Error("StartSingleRender.PreRender", e);
             ShowError(e.Message);
             return;
         }
 
         string outPath = store.ReportOnlyMode ? null : BuildDefaultExportPath(selectedTrack);
+        AppLogger.Info($"Starting single render: codec={ExportFormat.Codec}, target={RenderTarget?.Name}, out='{outPath}'");
         Action task = store.ReportOnlyMode
             ? () => RenderTask(selectedTrack, null, null, activeCts.Token)
             : CreateRenderAction(outPath);
@@ -409,10 +428,10 @@ public partial class MainActivity {
     }
 
     string BuildDefaultExportPath(CavernizeTrack track) {
-        string dir = AndroidFileHelper.GetWorkingOutputDir(this);
+        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
         string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "render");
-        int selIdx = containerSpinner != null ? Math.Clamp(containerSpinner.SelectedItemPosition, 0, availableContainerExts.Count - 1) : 0;
-        string ext = availableContainerExts[selIdx];
+        int selIdx = containerSelector != null ? Math.Clamp(containerSelector.SelectedIndex, 0, Math.Max(0, availableContainerExts.Count - 1)) : 0;
+        string ext = availableContainerExts.Count > 0 ? availableContainerExts[selIdx] : ".wav";
         string candidate = Path.Combine(dir, $"{baseName}_cavernized{ext}");
         int n = 1;
         while (File.Exists(candidate)) {
@@ -450,8 +469,8 @@ public partial class MainActivity {
         report.Generate(stats);
 
         if (writer is RIFFWaveWriter && !string.IsNullOrEmpty(finalName) && !finalName.EndsWith(waveExtension, StringComparison.OrdinalIgnoreCase)) {
-            RunOnUiThread(() => SetConvertStatus("Merging with FFmpeg...", 0.96));
-            string exportedAudio = finalName[..^4] + waveExtension;
+            RunOnUiThread(() => SetConvertStatus("Finalizando formato de saída...", 0.96));
+            string exportedAudio = Path.ChangeExtension(finalName, waveExtension);
             MergeToContainer merger = new(LoadedFile.Path, exportedAudio, ExportFormat.FFName);
             merger.AddArguments(RenderingSettings.MergeArguments);
             merger.SetTrackName($"Cavern {RenderTarget.Name} render");
@@ -460,13 +479,16 @@ public partial class MainActivity {
             }
             merger.MakeSafe(finalName);
             if (!merger.Merge(ffmpeg, finalName)) {
-                throw new IOException("FFmpeg merge failed.");
+                string reason = string.IsNullOrWhiteSpace(merger.LastError) ? "Unknown error" : merger.LastError;
+                AppLogger.Error($"RenderTask merge failed for '{finalName}': {reason}");
+                throw new IOException($"FFmpeg merge failed.\n{reason}");
             }
         }
 
         if (!string.IsNullOrEmpty(finalName)) {
-            AndroidFileHelper.PublishToDownloads(this, finalName);
+            AndroidFileHelper.PublishToDownloads(this, finalName, "Renderizados");
             lastRenderedFilePath = finalName;
+            AppLogger.Info($"Render finished successfully: '{finalName}'");
             RunOnUiThread(() => {
                 SetConvertStatus(string.Format(S["ExportDone"], finalName), 1);
                 shareExportBtn.Visibility = ViewStates.Visible;
@@ -499,13 +521,16 @@ public partial class MainActivity {
             bool accepted = false;
             using ManualResetEventSlim mre = new(false);
             RunOnUiThread(() => {
-                new AlertDialog.Builder(this)
-                    .SetTitle("External Decoder Licence")
-                    .SetMessage($"{desc}\n\n{text}")
-                    .SetPositiveButton("Accept", (_, _) => { accepted = true; mre.Set(); })
-                    .SetNegativeButton("Decline", (_, _) => { accepted = false; mre.Set(); })
-                    .SetCancelable(false)
-                    .Show();
+                OneUiModalDialog.Show(
+                    this,
+                    "External Decoder Licence",
+                    $"{desc}\n\n{text}",
+                    icon: OneUiIconType.Info,
+                    positiveText: "Accept",
+                    onPositive: () => { accepted = true; mre.Set(); },
+                    negativeText: "Decline",
+                    onNegative: () => { accepted = false; mre.Set(); },
+                    cancelable: false);
             });
             mre.Wait();
             return accepted;
@@ -535,7 +560,6 @@ public partial class MainActivity {
         bool useDistSim = applyRoomToExportCheck != null && applyRoomToExportCheck.Checked && playerEngine.DistanceSimulation;
 
         if (virtualizerState && useDistSim) {
-            // Keep Listener.HeadphoneVirtualizer = true so Source.Distancer runs, then extract L/R
             new VirtualizerFilter().SetLayout();
             normalizer = new Normalizer(true) {
                 decayFactor = 10f * updateRate / environment.Listener.SampleRate
@@ -691,7 +715,7 @@ public partial class MainActivity {
             try {
                 work(token);
                 if (!string.IsNullOrEmpty(singleOutputPath) && File.Exists(singleOutputPath)) {
-                    AndroidFileHelper.PublishToDownloads(this, singleOutputPath);
+                    AndroidFileHelper.PublishToDownloads(this, singleOutputPath, "Renderizados");
                     lastRenderedFilePath = singleOutputPath;
                     RunOnUiThread(() => {
                         shareExportBtn.Visibility = ViewStates.Visible;
@@ -699,8 +723,10 @@ public partial class MainActivity {
                     });
                 }
             } catch (OperationCanceledException) {
+                AppLogger.Info("Background render operation cancelled by user.");
                 RunOnUiThread(() => SetConvertStatus("Cancelled.", 0));
             } catch (Exception ex) {
+                AppLogger.Error("RunBackgroundOperation", ex);
                 RunOnUiThread(() => {
                     SetConvertStatus(ex.Message, 0);
                     ShowError(ex.Message);
@@ -742,7 +768,9 @@ public partial class MainActivity {
             return;
         }
         Intent share = new(Intent.ActionSend);
-        share.SetType("*/*");
+        share.SetType(path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".log", StringComparison.OrdinalIgnoreCase)
+            ? "text/plain"
+            : "*/*");
         share.PutExtra(Intent.ExtraStream, uri);
         share.AddFlags(ActivityFlags.GrantReadUriPermission);
         StartActivity(Intent.CreateChooser(share, S["ShareFile"]));

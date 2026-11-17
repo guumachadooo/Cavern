@@ -9,6 +9,7 @@ using Cavernize.Logic.Models;
 using Cavernize.Logic.Rendering;
 using CavernizeAndroid.Services;
 using CavernizeAndroid.Theme;
+using CavernizeAndroid.Views;
 
 using Path = System.IO.Path;
 
@@ -29,14 +30,14 @@ public partial class MainActivity {
 
     LinearLayout BuildExtractorTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(4), Dp(14), Dp(88));
+        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(88));
 
-        LinearLayout card = Card(S["ExtractTitle"], "✂", OneUiTheme.FunctionalIndigo);
+        LinearLayout card = Card(S["ExtractTitle"], OneUiIconType.Scissors, OneUiTheme.FunctionalIndigo);
         TextView desc = Label(S["ExtractDesc"], 12f, OneUiTheme.TextSub);
         desc.SetPadding(0, 0, 0, Dp(10));
         card.AddView(desc);
 
-        // One UI 9 Visual Radio Rows for Extraction Modes (matching Panel Settings Screenshot 12)
+        // One UI 9 Visual Radio Rows for Extraction Modes
         card.AddView(Label(S["ExtractMode"], 12f, ColMuted));
         LinearLayout modeGroup = new(this) { Orientation = Orientation.Vertical };
         modeGroup.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 20f);
@@ -84,9 +85,10 @@ public partial class MainActivity {
                 selectedExtractBitDepth = bitIdx;
                 RefreshExtractBitButtonsUi();
             });
-            bb.TextSize = 12f;
+            bb.TextSize = 11.5f;
+            bb.SetPadding(Dp(6), Dp(7), Dp(6), Dp(7));
             extractBitButtons.Add(bb);
-            bitRow.AddView(bb, new LinearLayout.LayoutParams(0, Dp(36), 1f) {
+            bitRow.AddView(bb, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
                 RightMargin = i < bitLabels.Length - 1 ? Dp(6) : 0
             });
         }
@@ -100,10 +102,10 @@ public partial class MainActivity {
             TextSize = 12.5f
         };
         extractJsonCheck.SetTextColor(ColText);
-        extractJsonCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(OneUiTheme.CoralStart);
+        extractJsonCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
         card.AddView(extractJsonCheck);
 
-        // Quick selection pills
+        // Quick selection pills (adaptive height, zero clipping)
         LinearLayout selRow = new(this) { Orientation = Orientation.Horizontal };
         selRow.SetPadding(0, Dp(8), 0, Dp(8));
         selRow.AddView(QuickSelBtn(S["SelectAll"], () => SetExtractSelection(_ => true)));
@@ -124,8 +126,8 @@ public partial class MainActivity {
         extractBtn = PrimaryButton(S["ExtractBtn"], StartExtraction);
         cancelExtractBtn = PillButton(S["CancelBtn"], () => activeCts?.Cancel());
         cancelExtractBtn.Enabled = false;
-        actionRow.AddView(extractBtn, new LinearLayout.LayoutParams(0, Dp(44), 2.2f) { RightMargin = Dp(8) });
-        actionRow.AddView(cancelExtractBtn, new LinearLayout.LayoutParams(0, Dp(44), 1f));
+        actionRow.AddView(extractBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 2.2f) { RightMargin = Dp(8) });
+        actionRow.AddView(cancelExtractBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         card.AddView(actionRow);
 
         extractProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
@@ -141,7 +143,7 @@ public partial class MainActivity {
 
         page.AddView(card);
 
-        LinearLayout outCard = Card("Arquivos Extraídos / Output", "📁", OneUiTheme.FunctionalGreen);
+        LinearLayout outCard = Card("Arquivos Extraídos / Output", OneUiIconType.Folder, OneUiTheme.FunctionalGreen);
         extractedFilesContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
         outCard.AddView(extractedFilesContainer);
         page.AddView(outCard);
@@ -155,7 +157,7 @@ public partial class MainActivity {
             bool sel = i == selectedExtractMode;
             var (_, dot, title) = extractModeRows[i];
             dot.Background = sel
-                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.CoralStart, OneUiTheme.PillCornerDp, ColText, 3f)
+                ? OneUiTheme.CreateRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp, ColText, 3f)
                 : OneUiTheme.CreateRoundedDrawable(this, Color.Transparent, OneUiTheme.PillCornerDp, OneUiTheme.TextMuted, 1.5f);
             title.SetTypeface(null, sel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
             title.SetTextColor(sel ? ColText : OneUiTheme.TextSub);
@@ -180,8 +182,9 @@ public partial class MainActivity {
     Button QuickSelBtn(string text, Action onClick) {
         Button b = PillButton(text, onClick);
         b.TextSize = 11.5f;
-        b.SetPadding(Dp(6), Dp(2), Dp(6), Dp(2));
-        b.LayoutParameters = new LinearLayout.LayoutParams(0, Dp(34), 1f) { RightMargin = Dp(4) };
+        b.SetPadding(Dp(6), Dp(6), Dp(6), Dp(6));
+        b.SetMinimumHeight(Dp(36));
+        b.LayoutParameters = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) };
         return b;
     }
 
@@ -248,8 +251,9 @@ public partial class MainActivity {
         }
 
         string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "track");
-        string subfolder = $"{baseName}_stems_{DateTime.Now:HHmmss}";
-        string outDir = AndroidFileHelper.GetWorkingOutputDir(this, subfolder);
+        string relSubfolder = Path.Combine("Stems", $"{baseName}_{DateTime.Now:HHmmss}");
+        string outDir = AndroidFileHelper.GetWorkingOutputDir(this, relSubfolder);
+        AppLogger.Info($"Starting stem extraction: mode={mode}, count={selectedIndices.Count}, out='{outDir}'");
 
         activeCts?.Dispose();
         activeCts = new CancellationTokenSource();
@@ -295,10 +299,12 @@ public partial class MainActivity {
                     created.Add(rawPath);
                 }
 
+                string publishRel = $"Stems/{baseName}_{DateTime.Now:HHmmss}";
                 foreach (string f in created) {
-                    AndroidFileHelper.PublishToDownloads(this, f, subfolder);
+                    AndroidFileHelper.PublishToDownloads(this, f, publishRel);
                 }
 
+                AppLogger.Info($"Stem extraction complete: {created.Count} files in '{outDir}'");
                 RunOnUiThread(() => {
                     extractProgressBar.Progress = 1000;
                     extractStatusText.Text = string.Format(S["ExtractDone"], created.Count, outDir);
@@ -310,6 +316,7 @@ public partial class MainActivity {
                     extractStatusText.Text = S["CancelBtn"];
                 });
             } catch (Exception ex) {
+                AppLogger.Error("StartExtraction", ex);
                 RunOnUiThread(() => {
                     extractStatusText.Text = ex.Message;
                     ShowError(ex.Message);
@@ -337,21 +344,19 @@ public partial class MainActivity {
             row.AddView(nameTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
             if (localPath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase)) {
-                Button playBtn = PillButton("▶", () => {
+                LinearLayout playBtn = OneUiPillFactory.CreateIconActionPill(this, OneUiIconType.Play, null, () => {
                     try {
                         OpenContent(localPath);
                         SwitchTab(0);
                     } catch (Exception ex) {
                         ShowError(ex.Message);
                     }
-                }, active: true);
-                playBtn.SetPadding(0, 0, 0, 0);
-                row.AddView(playBtn, new LinearLayout.LayoutParams(Dp(40), Dp(34)) { RightMargin = Dp(6) });
+                }, primary: true);
+                row.AddView(playBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
             }
 
-            Button shareBtn = PillButton("↗", () => ShareLocalFile(localPath));
-            shareBtn.SetPadding(0, 0, 0, 0);
-            row.AddView(shareBtn, new LinearLayout.LayoutParams(Dp(40), Dp(34)));
+            LinearLayout shareBtn = OneUiPillFactory.CreateIconActionPill(this, OneUiIconType.Share, null, () => ShareLocalFile(localPath));
+            row.AddView(shareBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
             extractedFilesContainer.AddView(row, lp);
         }
     }

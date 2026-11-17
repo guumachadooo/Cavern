@@ -10,42 +10,43 @@ namespace CavernizeAndroid.Theme;
 
 /// <summary>
 /// True Samsung One UI 9 (Galaxy S25 Ultra / SESL9) design system:
-/// deep blurred atmospheric backdrop, frosted glass surfaces with diagonal specular rims,
-/// Samsung Recoil press physics, warm coral + One UI blue accents, Bento tiles, and 46dp fat capsule sliders.
+/// dynamically adapts to the device's One UI Wallpaper Color Palette (Monet API 31+) with genuine
+/// Samsung Blue fallback, blurred atmospheric backdrop, frosted glass specular rims,
+/// Samsung Recoil press physics, vector icon badges, and 44dp fat capsule sliders with double-tap reset.
 /// </summary>
 public static class OneUiTheme {
-    // One UI 9 Atmospheric Dark + Frosted Glass Palette (verified from device screenshots & SystemUI/SoundAlive ARSC)
-    public static readonly Color BgScreen = Color.ParseColor("#080A10");            // Deep ambient canvas base
-    public static readonly Color SurfaceCard = Color.ParseColor("#C4171820");         // Frosted card surface (~77% opacity)
-    public static readonly Color SurfaceElevated = Color.ParseColor("#D622232D");     // Elevated popup / active group card
-    public static readonly Color SurfaceFloating = Color.ParseColor("#42FFFFFF");     // Translucent pill / capsule track (~26% white)
-    public static readonly Color SurfaceSubTile = Color.ParseColor("#29FFFFFF");      // Subtle pill fill (~16% white)
-    public static readonly Color SurfaceBlurTint = Color.ParseColor("#3A3A44");
-    public static readonly Color ControlStroke = Color.ParseColor("#5A5B66");
+    // Dynamic Atmospheric Dark + Frosted Glass Palette (refreshed in Initialize)
+    public static Color BgScreen { get; private set; } = Color.ParseColor("#080A10");
+    public static Color SurfaceCard { get; private set; } = Color.ParseColor("#C4171820");
+    public static Color SurfaceElevated { get; private set; } = Color.ParseColor("#D622232D");
+    public static Color SurfaceFloating { get; private set; } = Color.ParseColor("#3DFFFFFF");
+    public static Color SurfaceSubTile { get; private set; } = Color.ParseColor("#29FFFFFF");
+    public static Color SurfaceBlurTint { get; private set; } = Color.ParseColor("#3A3A44");
+    public static Color ControlStroke { get; private set; } = Color.ParseColor("#5A5B66");
 
     // Specular Glass Borders
-    public static readonly Color GlassRimTop = Color.ParseColor("#48FFFFFF");
-    public static readonly Color GlassRimMid = Color.ParseColor("#14FFFFFF");
-    public static readonly Color GlassRimBottom = Color.ParseColor("#2BFFFFFF");
-    public static readonly Color FloatingBorder = Color.ParseColor("#26FFFFFF");
+    public static Color GlassRimTop { get; private set; } = Color.ParseColor("#48FFFFFF");
+    public static Color GlassRimMid { get; private set; } = Color.ParseColor("#14FFFFFF");
+    public static Color GlassRimBottom { get; private set; } = Color.ParseColor("#2BFFFFFF");
+    public static Color FloatingBorder { get; private set; } = Color.ParseColor("#26FFFFFF");
 
-    // Brand & Accent Tokens
-    public static readonly Color Primary = Color.ParseColor("#387AFF");             // basic_token_primary_50
-    public static readonly Color PrimaryHigh = Color.ParseColor("#598FFF");         // basic_token_primary_40
-    public static readonly Color PrimaryPressed = Color.ParseColor("#2E65D4");      // basic_token_primary_60
-    public static readonly Color CoralStart = Color.ParseColor("#DF8D7E");          // One UI 9 warm coral pill highlight (Screenshots 7/11/13)
-    public static readonly Color CoralEnd = Color.ParseColor("#BA6F7D");            // One UI 9 warm rose pill gradient end
-    public static readonly Color PeachText = Color.ParseColor("#E6B59C");           // Warm Samsung header accent (Screenshots 1/2/4)
+    // Dynamic Brand & Wallpaper Accent Tokens (default: Samsung One UI Blue #387AFF)
+    public static Color Primary { get; private set; } = Color.ParseColor("#387AFF");
+    public static Color PrimaryHigh { get; private set; } = Color.ParseColor("#598FFF");
+    public static Color PrimaryPressed { get; private set; } = Color.ParseColor("#2E65D4");
+    public static Color CoralStart { get; private set; } = Color.ParseColor("#598FFF");
+    public static Color CoralEnd { get; private set; } = Color.ParseColor("#2E65D4");
+    public static Color PeachText { get; private set; } = Color.ParseColor("#C2D8FF");
 
-    public static readonly Color TextPrimary = Color.ParseColor("#FCFCFF");         // basic_token_gray_01
-    public static readonly Color TextSecondary = Color.ParseColor("#E9E9EC");       // basic_token_gray_10
-    public static readonly Color TextSub = Color.ParseColor("#B7B7BB");             // sesl_text4_dark
-    public static readonly Color TextMuted = Color.ParseColor("#99999E");           // sesl_text6_dark
-    public static readonly Color Divider = Color.ParseColor("#26FFFFFF");           // Subtle translucent glass hairline divider
+    public static Color TextPrimary { get; private set; } = Color.ParseColor("#FCFCFF");
+    public static Color TextSecondary { get; private set; } = Color.ParseColor("#E9E9EC");
+    public static Color TextSub { get; private set; } = Color.ParseColor("#B7B7BB");
+    public static Color TextMuted { get; private set; } = Color.ParseColor("#99999E");
+    public static Color Divider { get; private set; } = Color.ParseColor("#26FFFFFF");
 
-    // Functional Badge Colors (Samsung Settings / SoundAlive palette)
+    // Functional Semantic Colors (harmonized to avoid clashing while staying clear)
     public static readonly Color FunctionalGreen = Color.ParseColor("#34D399");
-    public static readonly Color FunctionalOrange = Color.ParseColor("#E65B17");
+    public static readonly Color FunctionalOrange = Color.ParseColor("#F97316");
     public static readonly Color FunctionalIndigo = Color.ParseColor("#7C6CF6");
     public static readonly Color FunctionalAmber = Color.ParseColor("#F59E0B");
     public static readonly Color FunctionalCyan = Color.ParseColor("#38BDF8");
@@ -53,17 +54,122 @@ public static class OneUiTheme {
     public static readonly Color FunctionalRedFill = Color.ParseColor("#D93E36");
 
     // Room Canvas & Spatial Source Tokens
-    public static readonly Color RoomBg = Color.ParseColor("#99101219");
-    public static readonly Color BedChannel = Color.ParseColor("#598FFF");
+    public static Color RoomBg { get; private set; } = Color.ParseColor("#99101219");
+    public static Color BedChannel { get; private set; } = Color.ParseColor("#598FFF");
     public static readonly Color LfeChannel = Color.ParseColor("#A855F7");
     public static readonly Color DynamicObject = Color.ParseColor("#F56962");
     public static readonly Color SoloGold = Color.ParseColor("#FACC15");
+
+    public static bool IsDynamicWallpaperActive { get; private set; }
 
     // SESL9 Dimensions (dp)
     public const float CardCornerDp = 26f;
     public const float ButtonCornerDp = 18f;
     public const float TileCornerDp = 22f;
     public const float PillCornerDp = 999f;
+
+    /// <summary>
+    /// Reads Samsung One UI / Android Material You dynamic wallpaper colors from <paramref name="ctx"/>
+    /// (API 31+) with clean Samsung One UI 9 Blue as fallback.
+    /// </summary>
+    public static void Initialize(Context ctx) {
+        Color defaultBlue = Color.ParseColor("#387AFF");
+        Color defaultBlueHigh = Color.ParseColor("#598FFF");
+        Color defaultBluePressed = Color.ParseColor("#2E65D4");
+        Color defaultHeaderTint = Color.ParseColor("#C2D8FF");
+        Color defaultBaseBg = Color.ParseColor("#080A10");
+        Color defaultCard = Color.ParseColor("#C4171820");
+        Color defaultElevated = Color.ParseColor("#D622232D");
+
+        Primary = defaultBlue;
+        PrimaryHigh = defaultBlueHigh;
+        PrimaryPressed = defaultBluePressed;
+        CoralStart = defaultBlueHigh;
+        CoralEnd = defaultBluePressed;
+        PeachText = defaultHeaderTint;
+        BedChannel = defaultBlueHigh;
+        BgScreen = defaultBaseBg;
+        SurfaceCard = defaultCard;
+        SurfaceElevated = defaultElevated;
+        RoomBg = Color.ParseColor("#99101219");
+        IsDynamicWallpaperActive = false;
+
+        if (ctx == null || !OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            return;
+        }
+
+        try {
+            Color? sysA1_400 = TryGetFrameworkColor(ctx, "system_accent1_400");
+            Color? sysA1_300 = TryGetFrameworkColor(ctx, "system_accent1_300");
+            Color? sysA1_500 = TryGetFrameworkColor(ctx, "system_accent1_500");
+            Color? sysA1_200 = TryGetFrameworkColor(ctx, "system_accent1_200");
+            Color? sysA2_300 = TryGetFrameworkColor(ctx, "system_accent2_300");
+            Color? sysA3_300 = TryGetFrameworkColor(ctx, "system_accent3_300");
+            Color? sysN1_900 = TryGetFrameworkColor(ctx, "system_neutral1_900");
+            Color? sysN2_800 = TryGetFrameworkColor(ctx, "system_neutral2_800");
+
+            if (sysA1_400.HasValue && IsChromatic(sysA1_400.Value)) {
+                IsDynamicWallpaperActive = true;
+                Primary = sysA1_400.Value;
+                PrimaryHigh = sysA1_300 ?? AdjustBrightness(Primary, 1.18f);
+                PrimaryPressed = sysA1_500 ?? AdjustBrightness(Primary, 0.80f);
+                CoralStart = sysA3_300 ?? sysA2_300 ?? PrimaryHigh;
+                CoralEnd = PrimaryPressed;
+                PeachText = sysA1_200 ?? AdjustBrightness(PrimaryHigh, 1.25f);
+                BedChannel = PrimaryHigh;
+            }
+
+            if (sysN1_900.HasValue) {
+                Color n = sysN1_900.Value;
+                BgScreen = Blend(defaultBaseBg, Color.Argb(255, n.R, n.G, n.B), 0.35f);
+                RoomBg = WithAlpha(Blend(Color.ParseColor("#101219"), n, 0.35f), 0x9E);
+            }
+            if (sysN2_800.HasValue) {
+                Color n2 = sysN2_800.Value;
+                SurfaceCard = WithAlpha(Blend(Color.ParseColor("#171820"), n2, 0.40f), 0xC4);
+                SurfaceElevated = WithAlpha(Blend(Color.ParseColor("#22232D"), n2, 0.45f), 0xE0);
+            }
+        } catch {
+            // Fall back cleanly to Samsung One UI 9 Blue palette
+        }
+    }
+
+    static Color? TryGetFrameworkColor(Context ctx, string name) {
+        int id = ctx.Resources?.GetIdentifier(name, "color", "android") ?? 0;
+        if (id == 0) {
+            return null;
+        }
+        int argb = ctx.GetColor(id);
+        return new Color(argb);
+    }
+
+    static bool IsChromatic(Color c) {
+        float[] hsv = new float[3];
+        Color.ColorToHSV(c, hsv);
+        return hsv[1] >= 0.08f && hsv[2] >= 0.15f;
+    }
+
+    static Color AdjustBrightness(Color c, float factor) {
+        float[] hsv = new float[3];
+        Color.ColorToHSV(c, hsv);
+        hsv[2] = Math.Clamp(hsv[2] * factor, 0f, 1f);
+        if (factor > 1.05f) {
+            hsv[1] = Math.Clamp(hsv[1] * 0.82f, 0f, 1f);
+        }
+        int rgb = Color.HSVToColor(c.A, hsv);
+        return new Color(rgb);
+    }
+
+    static Color Blend(Color a, Color b, float t) {
+        t = Math.Clamp(t, 0f, 1f);
+        return Color.Argb(
+            (int)Math.Round(a.A + (b.A - a.A) * t),
+            (int)Math.Round(a.R + (b.R - a.R) * t),
+            (int)Math.Round(a.G + (b.G - a.G) * t),
+            (int)Math.Round(a.B + (b.B - a.B) * t));
+    }
+
+    public static Color WithAlpha(Color c, byte alpha) => Color.Argb(alpha, c.R, c.G, c.B);
 
     public static int Dp(Context ctx, float dp) =>
         (int)Math.Round(dp * ctx.Resources.DisplayMetrics.Density);
@@ -109,12 +215,13 @@ public static class OneUiTheme {
     }
 
     /// <summary>
-    /// Creates a floating frosted glass capsule with diagonal specular edge sheen (as seen in One UI 9 Media/Nav/Search bars).
+    /// Creates a floating frosted glass capsule with diagonal specular edge sheen (One UI 9 Media/Nav/Search bars).
     /// </summary>
     public static Drawable CreateFloatingGlassPill(Context ctx) {
+        Color tint = WithAlpha(SurfaceElevated, 232);
         return new OneUiGlassDrawable(
             ctx,
-            Color.Argb(228, 34, 35, 44),
+            tint,
             Dp(ctx, PillCornerDp),
             null,
             isFloatingCapsule: true);
@@ -139,24 +246,22 @@ public static class OneUiTheme {
     }
 
     /// <summary>
-    /// Creates a colored circular Samsung Settings-style icon badge (e.g., green, blue, coral, indigo).
+    /// Creates a colored circular/squircle Samsung Settings-style crisp vector icon badge.
     /// </summary>
-    public static TextView CreateIconBadge(Context ctx, string glyph, Color badgeColor, int sizeDp = 32) {
+    public static Views.OneUiIconBadge CreateVectorIconBadge(
+        Context ctx,
+        Views.OneUiIconType iconType,
+        Color badgeColor,
+        int sizeDp = 32) {
         int px = Dp(ctx, sizeDp);
-        TextView tv = new(ctx) {
-            Text = glyph,
-            TextSize = sizeDp * 0.45f,
-            Gravity = GravityFlags.Center
+        Views.OneUiIconBadge badge = new(ctx, iconType, badgeColor) {
+            LayoutParameters = new LinearLayout.LayoutParams(px, px)
         };
-        tv.SetTextColor(TextPrimary);
-        tv.SetTypeface(null, TypefaceStyle.Bold);
-        tv.Background = CreateRoundedDrawable(ctx, badgeColor, PillCornerDp);
-        tv.LayoutParameters = new LinearLayout.LayoutParams(px, px);
-        return tv;
+        return badge;
     }
 
     /// <summary>
-    /// Applies One UI 9 pill progress bar styling (thick capsule track with rounded gradient fill).
+    /// Applies One UI 9 pill progress bar styling (thick capsule track with dynamic gradient fill).
     /// </summary>
     public static void StyleProgressBar(Context ctx, ProgressBar bar) {
         int trackH = Dp(ctx, 14f);
@@ -169,7 +274,7 @@ public static class OneUiTheme {
 
         GradientDrawable progressFill = new(
             GradientDrawable.Orientation.LeftRight,
-            [CoralStart.ToArgb(), Primary.ToArgb()]);
+            [Primary.ToArgb(), PrimaryHigh.ToArgb()]);
         progressFill.SetShape(ShapeType.Rectangle);
         progressFill.SetCornerRadius(radius);
 
@@ -185,7 +290,7 @@ public static class OneUiTheme {
     }
 
     /// <summary>
-    /// Applies SESL9 switch thumb/track colors with soft luminous off-track.
+    /// Applies SESL9 switch thumb/track colors using the active dynamic accent.
     /// </summary>
     public static void StyleSwitch(Switch sw) {
         int[][] states = [
@@ -197,7 +302,7 @@ public static class OneUiTheme {
             TextPrimary.ToArgb()
         ]);
         sw.TrackTintList = new ColorStateList(states, [
-            CoralStart.ToArgb(),
+            Primary.ToArgb(),
             Color.ParseColor("#52525E").ToArgb()
         ]);
         sw.SetTextColor(TextPrimary);
@@ -221,7 +326,8 @@ public static class OneUiTheme {
 }
 
 /// <summary>
-/// Multi-layered atmospheric depth & RenderEffect-blurred radial backdrop inspired by One UI 9's Quick Panel and Settings.
+/// Multi-layered atmospheric depth &amp; RenderEffect-blurred radial backdrop inspired by One UI 9's Quick Panel and Settings,
+/// reacting dynamically to the active wallpaper palette colors.
 /// </summary>
 public sealed class OneUiBackdropView : View {
     readonly Paint basePaint = new(PaintFlags.AntiAlias);
@@ -243,19 +349,24 @@ public sealed class OneUiBackdropView : View {
             return;
         }
 
+        basePaint.Color = OneUiTheme.BgScreen;
         canvas.DrawRect(0, 0, w, h, basePaint);
 
-        // Top cool indigo-blue ambient depth glow
+        Color p1 = OneUiTheme.Primary;
+        Color p2 = OneUiTheme.CoralStart;
+        Color p3 = OneUiTheme.PrimaryPressed;
+
+        // Top ambient wallpaper depth glow
         DrawGlow(canvas, w * 0.25f, h * 0.08f, Math.Max(w, h) * 0.55f,
-            Color.Argb(95, 56, 122, 255));
+            Color.Argb(85, p1.R, p1.G, p1.B));
 
-        // Mid-right warm coral bokeh depth sphere (matching One UI 9 palette)
+        // Mid-right secondary harmonic bokeh sphere
         DrawGlow(canvas, w * 0.88f, h * 0.42f, Math.Max(w, h) * 0.50f,
-            Color.Argb(75, 223, 141, 126));
+            Color.Argb(68, p2.R, p2.G, p2.B));
 
-        // Bottom-left deep cyan-slate sphere behind floating nav capsule
+        // Bottom-left deep ambient sphere behind floating nav capsule
         DrawGlow(canvas, w * 0.18f, h * 0.86f, Math.Max(w, h) * 0.48f,
-            Color.Argb(80, 40, 95, 160));
+            Color.Argb(75, p3.R, p3.G, p3.B));
     }
 
     void DrawGlow(Canvas canvas, float cx, float cy, float radius, Color centerColor) {
@@ -374,8 +485,8 @@ public sealed class OneUiGlassDrawable : Drawable {
 }
 
 /// <summary>
-/// Full-capsule 44dp One UI 9 slider (matching Galaxy S25 Ultra Brightness/Volume &amp; Media capsules)
-/// with gradient pill fill, embedded label &amp; value readout, Recoil press feedback, and vertical scroll protection.
+/// Full-capsule 44dp One UI 9 slider with dynamic accent fill, embedded label &amp; value readout,
+/// double-tap-to-reset support, Recoil press feedback, and vertical scroll protection.
 /// </summary>
 public sealed class OneUiSeekBar : SeekBar {
     readonly int touchSlop;
@@ -389,14 +500,20 @@ public sealed class OneUiSeekBar : SeekBar {
 
     float downX;
     float downY;
+    float maxMoveDist;
     int initialProgress;
     bool isHorizontalDrag;
     bool isCancelledToScroll;
     MotionEvent pendingDown;
+    DateTime lastTapTime = DateTime.MinValue;
 
     public string LabelText { get; set; } = "";
     public string ValueText { get; set; } = "";
     public bool UseBlueAccent { get; set; }
+    public int DefaultProgress { get; set; }
+    public bool HasDefaultReset { get; set; } = true;
+
+    public event Action<int> ResetRequested;
 
     public OneUiSeekBar(Context context) : base(context) {
         touchSlop = ViewConfiguration.Get(context)?.ScaledTouchSlop ?? 24;
@@ -463,13 +580,12 @@ public sealed class OneUiSeekBar : SeekBar {
 
             float fillRight = Math.Max(h * 0.65f, ratio * w);
             Color c1 = UseBlueAccent ? OneUiTheme.PrimaryHigh : OneUiTheme.CoralStart;
-            Color c2 = UseBlueAccent ? OneUiTheme.Primary : OneUiTheme.CoralEnd;
+            Color c2 = UseBlueAccent ? OneUiTheme.PrimaryPressed : OneUiTheme.CoralEnd;
             using LinearGradient fillShader = new(0, 0, w, 0, [c2.ToArgb(), c1.ToArgb()], [0f, 1f], Shader.TileMode.Clamp);
             fillPaint.SetShader(fillShader);
             canvas.DrawRoundRect(0f, 0f, fillRight, h, radius, radius, fillPaint);
             fillPaint.SetShader(null);
 
-            // Signature bright pill cap indicator inside slider tip
             if (fillRight > 16f * dp) {
                 float dotX = Math.Clamp(fillRight - radius * 0.48f, radius * 0.45f, w - radius * 0.45f);
                 canvas.DrawCircle(dotX, radius, 2.8f * dp, capDotPaint);
@@ -477,15 +593,26 @@ public sealed class OneUiSeekBar : SeekBar {
             canvas.Restore();
         }
 
+        // Subtle tick notch indicating default reset point
+        if (HasDefaultReset && Max > 0 && DefaultProgress > 0 && DefaultProgress < Max) {
+            float defX = DefaultProgress / (float)Max * w;
+            canvas.DrawLine(defX, h - 6f * dp, defX, h - 2f * dp, trackRimPaint);
+        }
+
         canvas.DrawRoundRect(bounds, radius, radius, trackRimPaint);
 
         // 3. Embedded label & live value centered vertically inside the capsule
         float textY = radius - (labelPaint.Ascent() + labelPaint.Descent()) * 0.5f;
+        string valText = string.IsNullOrEmpty(ValueText) ? Progress.ToString() : ValueText;
+        float valW = valuePaint.MeasureText(valText);
 
         if (!string.IsNullOrEmpty(LabelText)) {
+            float maxLabelW = Math.Max(40f * dp, w - 38f * dp - valW);
+            canvas.Save();
+            canvas.ClipRect(14f * dp, 0f, 14f * dp + maxLabelW, h);
             canvas.DrawText(LabelText, 16f * dp, textY, labelPaint);
+            canvas.Restore();
         }
-        string valText = string.IsNullOrEmpty(ValueText) ? Progress.ToString() : ValueText;
         canvas.DrawText(valText, w - 16f * dp, textY, valuePaint);
     }
 
@@ -498,6 +625,7 @@ public sealed class OneUiSeekBar : SeekBar {
             case MotionEventActions.Down:
                 downX = e.GetX();
                 downY = e.GetY();
+                maxMoveDist = 0f;
                 initialProgress = Progress;
                 isHorizontalDrag = false;
                 isCancelledToScroll = false;
@@ -511,6 +639,10 @@ public sealed class OneUiSeekBar : SeekBar {
                 }
                 float dx = Math.Abs(e.GetX() - downX);
                 float dy = Math.Abs(e.GetY() - downY);
+                float moveDist = MathF.Sqrt(dx * dx + dy * dy);
+                if (moveDist > maxMoveDist) {
+                    maxMoveDist = moveDist;
+                }
                 if (!isHorizontalDrag) {
                     if (dy > touchSlop && dy > dx) {
                         isCancelledToScroll = true;
@@ -548,6 +680,26 @@ public sealed class OneUiSeekBar : SeekBar {
                     isCancelledToScroll = false;
                     return false;
                 }
+
+                bool wasTap = !isHorizontalDrag && maxMoveDist < touchSlop;
+                if (wasTap && HasDefaultReset) {
+                    DateTime now = DateTime.UtcNow;
+                    if ((now - lastTapTime).TotalMilliseconds <= 320) {
+                        lastTapTime = DateTime.MinValue;
+                        pendingDown?.Recycle();
+                        pendingDown = null;
+                        isHorizontalDrag = false;
+                        int target = Math.Clamp(DefaultProgress, 0, Max);
+                        Progress = target;
+                        ResetRequested?.Invoke(target);
+                        Animate().ScaleY(0.90f).SetDuration(90).WithEndAction(
+                            new Java.Lang.Runnable(() => Animate().ScaleY(1f).SetDuration(260).Start())).Start();
+                        Invalidate();
+                        return true;
+                    }
+                    lastTapTime = now;
+                }
+
                 if (pendingDown != null) {
                     base.OnTouchEvent(pendingDown);
                     pendingDown.Recycle();
