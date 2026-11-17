@@ -65,7 +65,7 @@ public static class OneUiTheme {
         d.SetColor(fillColor.ToArgb());
         d.SetCornerRadius(Dp(ctx, cornerDp));
         if (strokeColor.HasValue && strokeDp > 0f) {
-            d.SetStroke(Math.Max(1, Dp(ctx, strokeDp)), strokeColor.Value.ToArgb());
+            d.SetStroke(Math.Max(1, Dp(ctx, strokeDp)), ColorStateList.ValueOf(strokeColor.Value));
         }
         return d;
     }
@@ -130,7 +130,7 @@ public static class OneUiTheme {
         GradientDrawable thumb = new();
         thumb.SetShape(ShapeType.Oval);
         thumb.SetColor(TextPrimary.ToArgb());
-        thumb.SetStroke(Dp(ctx, 2.5f), Primary.ToArgb());
+        thumb.SetStroke(Dp(ctx, 2.5f), ColorStateList.ValueOf(Primary));
         thumb.SetSize(thumbSize, thumbSize);
         bar.SetThumb(thumb);
         bar.SplitTrack = false;
