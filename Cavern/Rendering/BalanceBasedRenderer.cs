@@ -78,7 +78,7 @@ namespace Cavern.Rendering {
             if (a == b) {
                 return 0;
             }
-            return (x - a) / (b - a);
+            return Math.Clamp((x - a) / (b - a), 0f, 1f);
         }
 
         /// <inheritdoc/>
@@ -208,7 +208,7 @@ namespace Cavern.Rendering {
             Vector2 layerVol = new Vector2(1, 0); // (bottom; top)
             if (topFrontLeft != bottomFrontLeft) { // Height ratio calculation
                 float bottomY = channels[bottomFrontLeft].CubicalPos.Y;
-                layerVol.Y = (direction.Y - bottomY) / (channels[topFrontLeft].CubicalPos.Y - bottomY);
+                layerVol.Y = Math.Clamp((direction.Y - bottomY) / (channels[topFrontLeft].CubicalPos.Y - bottomY), 0f, 1f);
                 layerVol.X = 1f - layerVol.Y;
             }
 

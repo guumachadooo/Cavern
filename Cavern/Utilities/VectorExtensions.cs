@@ -34,7 +34,7 @@ namespace Cavern.Utilities {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3 MapToCube(this Vector3 vector) {
             float max = Math.Max(Math.Abs(vector.X), Math.Max(Math.Abs(vector.Y), Math.Abs(vector.Z)));
-            return vector / max;
+            return max == 0 ? Vector3.Zero : vector / max;
         }
 
         /// <summary>
@@ -132,7 +132,7 @@ namespace Cavern.Utilities {
         public static Vector3 WarpToCube(this Vector3 vector) {
             float length = vector.Length();
             float max = Math.Max(Math.Abs(vector.X), Math.Max(Math.Abs(vector.Y), Math.Abs(vector.Z)));
-            return vector * length / max;
+            return max == 0 ? Vector3.Zero : vector * length / max;
         }
 
         /// <summary>
@@ -140,7 +140,7 @@ namespace Cavern.Utilities {
         /// </summary>
         public static Vector3 WarpNormalToCube(this Vector3 vector) {
             float max = Math.Max(Math.Abs(vector.X), Math.Max(Math.Abs(vector.Y), Math.Abs(vector.Z)));
-            return vector / max;
+            return max == 0 ? Vector3.Zero : vector / max;
         }
     }
 }
