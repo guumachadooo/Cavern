@@ -1,6 +1,0 @@
-{
-  "name": "Cavernize Spatial Audio",
-  "description": "Conversor, decodificador e suite DSP de áudio espacial 3D (Dolby Atmos, E-AC3 JOC, ADM BWF, LAF, MKV/MP4/WAV) baseado no motor Cavern.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
