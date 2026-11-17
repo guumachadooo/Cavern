@@ -7,6 +7,7 @@ using Cavern.Format;
 using Cavernize.Logic.Models;
 using Cavernize.Logic.Rendering;
 using CavernizeAndroid.Services;
+using CavernizeAndroid.Theme;
 
 using Path = System.IO.Path;
 
@@ -23,12 +24,13 @@ public partial class MainActivity {
 
     LinearLayout BuildExtractorTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(10), Dp(10), Dp(10), Dp(16));
+        page.SetPadding(Dp(12), Dp(6), Dp(12), Dp(16));
 
         LinearLayout card = Card(S["ExtractTitle"]);
         TextView desc = Label(S["ExtractDesc"], 12f, ColMuted);
         desc.SetPadding(0, 0, 0, Dp(8));
         card.AddView(desc);
+        AddDivider(card);
 
         card.AddView(Label(S["ExtractMode"], 12f, ColMuted));
         extractModeSpinner = new Spinner(this);
@@ -38,6 +40,7 @@ public partial class MainActivity {
         extractModeSpinner.Adapter = modeAdapter;
         card.AddView(extractModeSpinner);
 
+        AddDivider(card);
         card.AddView(Label(S["BitDepthLabel"], 12f, ColMuted));
         extractBitsSpinner = new Spinner(this);
         string[] bitLabels = ["16-bit PCM", "24-bit PCM", "32-bit Float"];
@@ -47,17 +50,19 @@ public partial class MainActivity {
         extractBitsSpinner.SetSelection(1); // 24-bit default
         card.AddView(extractBitsSpinner);
 
+        AddDivider(card);
         extractJsonCheck = new CheckBox(this) {
             Text = S["ExportJsonCheck"],
             Checked = true,
             TextSize = 12.5f
         };
         extractJsonCheck.SetTextColor(ColText);
+        extractJsonCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
         card.AddView(extractJsonCheck);
 
-        // Quick selection buttons
+        // Quick selection pills
         LinearLayout selRow = new(this) { Orientation = Orientation.Horizontal };
-        selRow.SetPadding(0, Dp(6), 0, Dp(6));
+        selRow.SetPadding(0, Dp(8), 0, Dp(8));
         selRow.AddView(QuickSelBtn(S["SelectAll"], () => SetExtractSelection(_ => true)));
         selRow.AddView(QuickSelBtn(S["Select3D"], item => item.IsDynamicObject));
         selRow.AddView(QuickSelBtn(S["SelectBeds"], item => item.IsBed));
@@ -72,9 +77,9 @@ public partial class MainActivity {
         card.AddView(extractorChecklistContainer);
 
         LinearLayout actionRow = new(this) { Orientation = Orientation.Horizontal };
-        actionRow.SetPadding(0, Dp(8), 0, Dp(4));
+        actionRow.SetPadding(0, Dp(10), 0, Dp(6));
         extractBtn = PrimaryButton(S["ExtractBtn"], StartExtraction);
-        cancelExtractBtn = SecondaryButton(S["CancelBtn"], () => activeCts?.Cancel());
+        cancelExtractBtn = PillButton(S["CancelBtn"], () => activeCts?.Cancel());
         cancelExtractBtn.Enabled = false;
         actionRow.AddView(extractBtn, new LinearLayout.LayoutParams(0, Dp(44), 2.2f) { RightMargin = Dp(6) });
         actionRow.AddView(cancelExtractBtn, new LinearLayout.LayoutParams(0, Dp(44), 1f));
@@ -84,10 +89,11 @@ public partial class MainActivity {
             Max = 1000,
             Progress = 0
         };
-        card.AddView(extractProgressBar);
+        OneUiTheme.StyleProgressBar(this, extractProgressBar);
+        card.AddView(extractProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(8)) { TopMargin = Dp(4) });
 
         extractStatusText = Label(S["Ready"], 12f, ColCyan);
-        extractStatusText.SetPadding(0, Dp(4), 0, Dp(4));
+        extractStatusText.SetPadding(0, Dp(6), 0, Dp(4));
         card.AddView(extractStatusText);
 
         page.AddView(card);
@@ -106,7 +112,8 @@ public partial class MainActivity {
     }
 
     Button QuickSelBtn(string text, Action onClick) {
-        Button b = SecondaryButton(text, onClick);
+        Button b = PillButton(text, onClick);
+        b.TextSize = 11.5f;
         b.SetPadding(Dp(6), Dp(2), Dp(6), Dp(2));
         b.LayoutParameters = new LinearLayout.LayoutParams(0, Dp(34), 1f) { RightMargin = Dp(4) };
         return b;
@@ -138,7 +145,8 @@ public partial class MainActivity {
                 Checked = true,
                 TextSize = 12.5f
             };
-            cb.SetTextColor(item.IsDynamicObject ? Android.Graphics.Color.ParseColor("#F472B6") : ColText);
+            cb.SetTextColor(item.IsDynamicObject ? OneUiTheme.DynamicObject : ColText);
+            cb.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(item.IsDynamicObject ? OneUiTheme.DynamicObject : ColAccent);
             extractorChecklistContainer.AddView(cb);
             extractCheckboxes.Add((item.Index, cb));
         }
@@ -253,28 +261,30 @@ public partial class MainActivity {
             string localPath = path;
             LinearLayout row = new(this) { Orientation = Orientation.Horizontal };
             row.SetGravity(GravityFlags.CenterVertical);
-            row.SetBackgroundColor(ColCardAlt);
-            row.SetPadding(Dp(8), Dp(6), Dp(8), Dp(6));
+            row.Background = OneUiTheme.CreateRoundedDrawable(this, ColCardAlt, 18f);
+            row.SetPadding(Dp(12), Dp(8), Dp(10), Dp(8));
             LinearLayout.LayoutParams lp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-                BottomMargin = Dp(4)
+                BottomMargin = Dp(6)
             };
 
             TextView nameTv = Label(Path.GetFileName(localPath), 12f, ColText);
             row.AddView(nameTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
             if (localPath.EndsWith(".wav", StringComparison.OrdinalIgnoreCase)) {
-                Button playBtn = SecondaryButton("▶", () => {
+                Button playBtn = PillButton("▶", () => {
                     try {
                         OpenContent(localPath);
                         SwitchTab(0);
                     } catch (Exception ex) {
                         ShowError(ex.Message);
                     }
-                });
-                row.AddView(playBtn, new LinearLayout.LayoutParams(Dp(40), Dp(34)) { RightMargin = Dp(4) });
+                }, active: true);
+                playBtn.SetPadding(0, 0, 0, 0);
+                row.AddView(playBtn, new LinearLayout.LayoutParams(Dp(40), Dp(34)) { RightMargin = Dp(6) });
             }
 
-            Button shareBtn = SecondaryButton("↗", () => ShareLocalFile(localPath));
+            Button shareBtn = PillButton("↗", () => ShareLocalFile(localPath));
+            shareBtn.SetPadding(0, 0, 0, 0);
             row.AddView(shareBtn, new LinearLayout.LayoutParams(Dp(40), Dp(34)));
             extractedFilesContainer.AddView(row, lp);
         }

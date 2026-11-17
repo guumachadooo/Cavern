@@ -6,12 +6,13 @@ using Android.Views;
 
 using Cavern.Channels;
 using Cavernize.Logic.Models;
+using CavernizeAndroid.Theme;
 
 namespace CavernizeAndroid.Views;
 
 /// <summary>
-/// Interactive top-down 3D room canvas showing audio bed speakers, live moving 3D objects with elevation/RMS energy,
-/// and a draggable listener with directional head orientation cone.
+/// Interactive top-down 3D room canvas styled for Samsung One UI 9 showing audio bed speakers,
+/// live moving 3D objects with elevation/RMS energy, and a scroll-safe draggable listener avatar.
 /// </summary>
 public sealed class RoomSimulatorView : View {
     readonly Paint roomBgPaint = new(PaintFlags.AntiAlias);
@@ -26,9 +27,13 @@ public sealed class RoomSimulatorView : View {
     readonly Paint mutedPaint = new(PaintFlags.AntiAlias);
     readonly Paint soloRingPaint = new(PaintFlags.AntiAlias);
     readonly Paint listenerPaint = new(PaintFlags.AntiAlias);
+    readonly Paint listenerRingPaint = new(PaintFlags.AntiAlias);
     readonly Paint listenerConePaint = new(PaintFlags.AntiAlias);
     readonly Paint textPaint = new(PaintFlags.AntiAlias);
     readonly Paint subTextPaint = new(PaintFlags.AntiAlias);
+    readonly Paint hudChipPaint = new(PaintFlags.AntiAlias);
+
+    readonly int touchSlop;
 
     IReadOnlyList<TrackSourceItem> sources = [];
     Vector3 environmentSize = new(10, 7, 10);
@@ -36,62 +41,78 @@ public sealed class RoomSimulatorView : View {
     Vector3 listenerRotation = Vector3.Zero;
     DateTime lastTapTime = DateTime.MinValue;
 
+    bool isDraggingListener;
+    float downX;
+    float downY;
+    float maxMoveDist;
+
+    public bool IsPositionLocked { get; set; }
+
     public event Action<Vector3> ListenerPositionChanged;
 
     public RoomSimulatorView(Context context) : base(context) {
+        touchSlop = ViewConfiguration.Get(context)?.ScaledTouchSlop ?? 24;
         float dp = context.Resources.DisplayMetrics.Density;
 
-        roomBgPaint.Color = Color.ParseColor("#0E131D");
+        roomBgPaint.Color = OneUiTheme.RoomBg;
         roomBgPaint.SetStyle(Paint.Style.Fill);
 
-        roomBorderPaint.Color = Color.ParseColor("#334155");
-        roomBorderPaint.StrokeWidth = 2f * dp;
+        roomBorderPaint.Color = OneUiTheme.Divider;
+        roomBorderPaint.StrokeWidth = 1.5f * dp;
         roomBorderPaint.SetStyle(Paint.Style.Stroke);
 
-        gridPaint.Color = Color.ParseColor("#1E293B");
+        gridPaint.Color = Color.ParseColor("#1D1D22");
         gridPaint.StrokeWidth = 1f * dp;
         gridPaint.SetStyle(Paint.Style.Stroke);
 
-        screenPaint.Color = Color.ParseColor("#38BDF8");
+        screenPaint.Color = OneUiTheme.Primary;
         screenPaint.StrokeWidth = 4f * dp;
+        screenPaint.StrokeCap = Paint.Cap.Round;
         screenPaint.SetStyle(Paint.Style.Stroke);
 
-        bedPaint.Color = Color.ParseColor("#0EA5E9");
+        bedPaint.Color = OneUiTheme.BedChannel;
         bedPaint.SetStyle(Paint.Style.Fill);
 
-        lfePaint.Color = Color.ParseColor("#A855F7");
+        lfePaint.Color = OneUiTheme.LfeChannel;
         lfePaint.SetStyle(Paint.Style.Fill);
 
-        objPaint.Color = Color.ParseColor("#F43F5E");
+        objPaint.Color = OneUiTheme.DynamicObject;
         objPaint.SetStyle(Paint.Style.Fill);
 
-        objGlowPaint.Color = Color.Argb(75, 244, 63, 94);
+        objGlowPaint.Color = Color.Argb(70, OneUiTheme.DynamicObject.R, OneUiTheme.DynamicObject.G, OneUiTheme.DynamicObject.B);
         objGlowPaint.SetStyle(Paint.Style.Fill);
 
-        heightRingPaint.Color = Color.ParseColor("#22D3EE");
+        heightRingPaint.Color = OneUiTheme.FunctionalGreen;
         heightRingPaint.StrokeWidth = 2f * dp;
         heightRingPaint.SetStyle(Paint.Style.Stroke);
 
-        mutedPaint.Color = Color.ParseColor("#475569");
+        mutedPaint.Color = OneUiTheme.SurfaceBlurTint;
         mutedPaint.SetStyle(Paint.Style.Fill);
 
-        soloRingPaint.Color = Color.ParseColor("#FACC15");
+        soloRingPaint.Color = OneUiTheme.SoloGold;
         soloRingPaint.StrokeWidth = 2.5f * dp;
         soloRingPaint.SetStyle(Paint.Style.Stroke);
 
-        listenerPaint.Color = Color.ParseColor("#10B981");
+        listenerPaint.Color = OneUiTheme.Primary;
         listenerPaint.SetStyle(Paint.Style.Fill);
 
-        listenerConePaint.Color = Color.Argb(70, 16, 185, 129);
+        listenerRingPaint.Color = OneUiTheme.PrimaryHigh;
+        listenerRingPaint.StrokeWidth = 2.5f * dp;
+        listenerRingPaint.SetStyle(Paint.Style.Stroke);
+
+        listenerConePaint.Color = Color.Argb(75, OneUiTheme.Primary.R, OneUiTheme.Primary.G, OneUiTheme.Primary.B);
         listenerConePaint.SetStyle(Paint.Style.Fill);
 
-        textPaint.Color = Color.White;
-        textPaint.TextSize = 10.5f * dp;
+        textPaint.Color = OneUiTheme.TextPrimary;
+        textPaint.TextSize = 10f * dp;
         textPaint.TextAlign = Paint.Align.Center;
 
-        subTextPaint.Color = Color.ParseColor("#94A3B8");
+        subTextPaint.Color = OneUiTheme.TextMuted;
         subTextPaint.TextSize = 10f * dp;
         subTextPaint.TextAlign = Paint.Align.Left;
+
+        hudChipPaint.Color = Color.Argb(180, OneUiTheme.SurfaceElevated.R, OneUiTheme.SurfaceElevated.G, OneUiTheme.SurfaceElevated.B);
+        hudChipPaint.SetStyle(Paint.Style.Fill);
     }
 
     public void UpdateState(IReadOnlyList<TrackSourceItem> sourceItems, Vector3 envSize, Vector3 pos, Vector3 rot) {
@@ -106,9 +127,9 @@ public sealed class RoomSimulatorView : View {
 
     protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         int w = MeasureSpec.GetSize(widthMeasureSpec);
-        int desiredH = (int)(w * 0.78f);
-        if (desiredH < 360) {
-            desiredH = 360;
+        int desiredH = (int)(w * 0.74f);
+        if (desiredH < 340) {
+            desiredH = 340;
         }
         SetMeasuredDimension(w, ResolveSize(desiredH, heightMeasureSpec));
     }
@@ -116,7 +137,7 @@ public sealed class RoomSimulatorView : View {
     protected override void OnDraw(Canvas canvas) {
         base.OnDraw(canvas);
         float dp = Resources.DisplayMetrics.Density;
-        float pad = 18f * dp;
+        float pad = 14f * dp;
         float w = Width - pad * 2;
         float h = Height - pad * 2;
         if (w <= 0 || h <= 0) {
@@ -124,10 +145,11 @@ public sealed class RoomSimulatorView : View {
         }
 
         RectF rect = new(pad, pad, pad + w, pad + h);
-        canvas.DrawRoundRect(rect, 14f * dp, 14f * dp, roomBgPaint);
-        canvas.DrawRoundRect(rect, 14f * dp, 14f * dp, roomBorderPaint);
+        float corner = 22f * dp;
+        canvas.DrawRoundRect(rect, corner, corner, roomBgPaint);
+        canvas.DrawRoundRect(rect, corner, corner, roomBorderPaint);
 
-        // Grid lines
+        // Subtle acoustic room grid
         for (int i = 1; i <= 3; i++) {
             float gx = pad + w * (i / 4f);
             float gy = pad + h * (i / 4f);
@@ -136,10 +158,10 @@ public sealed class RoomSimulatorView : View {
         }
 
         // Front screen bar (+Z top)
-        float screenHalf = w * 0.34f;
+        float screenHalf = w * 0.30f;
         float cx = pad + w * 0.5f;
-        canvas.DrawLine(cx - screenHalf, pad + 3f * dp, cx + screenHalf, pad + 3f * dp, screenPaint);
-        canvas.DrawText("TELA / FRENTE (+Z)", cx, pad + 15f * dp, subTextPaint.CenterCopy());
+        canvas.DrawLine(cx - screenHalf, pad + 5f * dp, cx + screenHalf, pad + 5f * dp, screenPaint);
+        canvas.DrawText("FRENTE / TELA (+Z)", cx, pad + 18f * dp, subTextPaint.CenterCopy());
 
         // Draw audio beds & 3D objects
         bool anySolo = false;
@@ -153,8 +175,8 @@ public sealed class RoomSimulatorView : View {
         for (int i = 0; i < sources.Count; i++) {
             TrackSourceItem item = sources[i];
             Vector3 np = item.NormalizedPosition;
-            float px = pad + Math.Clamp((np.X + 1f) * 0.5f, 0.03f, 0.97f) * w;
-            float py = pad + Math.Clamp(1f - (np.Z + 1f) * 0.5f, 0.05f, 0.95f) * h;
+            float px = pad + Math.Clamp((np.X + 1f) * 0.5f, 0.04f, 0.96f) * w;
+            float py = pad + Math.Clamp(1f - (np.Z + 1f) * 0.5f, 0.07f, 0.93f) * h;
 
             bool effectivelyMuted = item.IsMuted || (anySolo && !item.IsSolo);
             float rmsBoost = effectivelyMuted ? 0f : Math.Clamp(item.RmsLevel * 18f, 0f, 12f) * dp;
@@ -163,23 +185,23 @@ public sealed class RoomSimulatorView : View {
                 float sz = 7f * dp;
                 Paint p = effectivelyMuted ? mutedPaint : (item.IsLFE ? lfePaint : bedPaint);
                 if (rmsBoost > 1f) {
-                    canvas.DrawCircle(px, py, sz + rmsBoost, objGlowPaint.WithAlphaColor(Color.Argb(65, 14, 165, 233)));
+                    canvas.DrawCircle(px, py, sz + rmsBoost, objGlowPaint.WithColor(Color.Argb(65, p.Color.R, p.Color.G, p.Color.B)));
                 }
-                canvas.DrawRoundRect(px - sz, py - sz, px + sz, py + sz, 3f * dp, 3f * dp, p);
+                canvas.DrawRoundRect(px - sz, py - sz, px + sz, py + sz, 4f * dp, 4f * dp, p);
                 if (np.Y > 0.25f) {
-                    canvas.DrawCircle(px, py, sz + 4f * dp, heightRingPaint);
+                    canvas.DrawCircle(px, py, sz + 3.5f * dp, heightRingPaint);
                 }
                 if (item.IsSolo) {
                     canvas.DrawCircle(px, py, sz + 5f * dp, soloRingPaint);
                 }
-                string shortLabel = item.Channel.HasValue && item.Channel.Value != Cavern.Channels.ReferenceChannel.Unknown
+                string shortLabel = item.Channel.HasValue && item.Channel.Value != ReferenceChannel.Unknown
                     ? item.Channel.Value.GetShortName()
                     : $"B{item.Index + 1}";
                 canvas.DrawText(shortLabel, px, py + sz + 11f * dp, textPaint);
             } else {
                 float r = 8.5f * dp;
                 if (!effectivelyMuted && rmsBoost > 0.5f) {
-                    canvas.DrawCircle(px, py, r + rmsBoost, objGlowPaint);
+                    canvas.DrawCircle(px, py, r + rmsBoost, objGlowPaint.WithColor(Color.Argb(75, OneUiTheme.DynamicObject.R, OneUiTheme.DynamicObject.G, OneUiTheme.DynamicObject.B)));
                 }
                 canvas.DrawCircle(px, py, r, effectivelyMuted ? mutedPaint : objPaint);
                 if (np.Y > 0.15f) {
@@ -199,14 +221,11 @@ public sealed class RoomSimulatorView : View {
         }
 
         // Draw listener + head FOV cone
-        float lnx = Math.Clamp(listenerPosition.X / environmentSize.X, -1f, 1f);
-        float lnz = Math.Clamp(listenerPosition.Z / environmentSize.Z, -1f, 1f);
-        float lx = pad + (lnx + 1f) * 0.5f * w;
-        float ly = pad + (1f - (lnz + 1f) * 0.5f) * h;
+        (float lx, float ly) = GetListenerCanvasCoords(pad, w, h);
 
         float yawRad = listenerRotation.Y * (MathF.PI / 180f);
         float coneLen = 46f * dp;
-        float spread = 0.45f; // ~26 deg half-angle
+        float spread = 0.44f;
 
         using (Android.Graphics.Path cone = new()) {
             cone.MoveTo(lx, ly);
@@ -216,54 +235,122 @@ public sealed class RoomSimulatorView : View {
             canvas.DrawPath(cone, listenerConePaint);
         }
 
-        float lr = 12f * dp;
-        canvas.DrawCircle(lx, ly, lr + 3f * dp, soloRingPaint.WithColor(Color.ParseColor("#6EE7B7")));
+        float lr = 13.5f * dp;
+        canvas.DrawCircle(lx, ly, lr + 3.5f * dp, listenerRingPaint);
         canvas.DrawCircle(lx, ly, lr, listenerPaint);
 
-        // Nose indicator
-        float nxDir = lx + MathF.Sin(yawRad) * (lr + 4f * dp);
-        float nyDir = ly - MathF.Cos(yawRad) * (lr + 4f * dp);
-        canvas.DrawLine(lx, ly, nxDir, nyDir, roomBorderPaint.WithColor(Color.White));
-        canvas.DrawText("VOCÊ", lx, ly + 4f * dp, textPaint);
+        // Nose / heading direction indicator
+        float nxDir = lx + MathF.Sin(yawRad) * (lr + 5f * dp);
+        float nyDir = ly - MathF.Cos(yawRad) * (lr + 5f * dp);
+        canvas.DrawLine(lx, ly, nxDir, nyDir, roomBorderPaint.WithColor(OneUiTheme.TextPrimary));
+        canvas.DrawText("VOCÊ", lx, ly + 3.8f * dp, textPaint);
 
-        // Telemetry overlay
-        string hud = $"Pos: ({listenerPosition.X:0.0}, {listenerPosition.Y:0.0}, {listenerPosition.Z:0.0})  Yaw: {listenerRotation.Y:0}°";
-        canvas.DrawText(hud, pad + 8f * dp, pad + h - 8f * dp, subTextPaint);
+        // Bottom HUD telemetry pill
+        string lockState = IsPositionLocked ? "🔒" : "↔";
+        string hud = $"{lockState} ({listenerPosition.X:0.0}, {listenerPosition.Y:0.0}, {listenerPosition.Z:0.0})  Yaw {listenerRotation.Y:0}°";
+        float hudWidth = Math.Min(w - 16f * dp, subTextPaint.MeasureText(hud) + 18f * dp);
+        RectF chip = new(pad + 8f * dp, pad + h - 24f * dp, pad + 8f * dp + hudWidth, pad + h - 6f * dp);
+        canvas.DrawRoundRect(chip, 10f * dp, 10f * dp, hudChipPaint);
+        subTextPaint.TextAlign = Paint.Align.Left;
+        canvas.DrawText(hud, pad + 16f * dp, pad + h - 11.5f * dp, subTextPaint);
+    }
+
+    (float lx, float ly) GetListenerCanvasCoords(float pad, float w, float h) {
+        float lnx = Math.Clamp(listenerPosition.X / environmentSize.X, -1f, 1f);
+        float lnz = Math.Clamp(listenerPosition.Z / environmentSize.Z, -1f, 1f);
+        float lx = pad + (lnx + 1f) * 0.5f * w;
+        float ly = pad + (1f - (lnz + 1f) * 0.5f) * h;
+        return (lx, ly);
     }
 
     public override bool OnTouchEvent(MotionEvent e) {
+        if (IsPositionLocked) {
+            return false;
+        }
+
         float dp = Resources.DisplayMetrics.Density;
-        float pad = 18f * dp;
+        float pad = 14f * dp;
         float w = Width - pad * 2;
         float h = Height - pad * 2;
         if (w <= 0 || h <= 0) {
-            return base.OnTouchEvent(e);
+            return false;
         }
+
+        float tx = e.GetX();
+        float ty = e.GetY();
 
         switch (e.ActionMasked) {
             case MotionEventActions.Down:
-                Parent?.RequestDisallowInterceptTouchEvent(true);
-                DateTime now = DateTime.UtcNow;
-                if ((now - lastTapTime).TotalMilliseconds < 280) {
-                    listenerPosition = new Vector3(0, listenerPosition.Y, 0);
-                    ListenerPositionChanged?.Invoke(listenerPosition);
-                    Invalidate();
-                    lastTapTime = DateTime.MinValue;
-                    return true;
+                downX = tx;
+                downY = ty;
+                maxMoveDist = 0f;
+                (float lx, float ly) = GetListenerCanvasCoords(pad, w, h);
+                float hitDist = MathF.Sqrt((tx - lx) * (tx - lx) + (ty - ly) * (ty - ly));
+
+                // Only hijack ScrollView immediately when touching directly on the listener avatar.
+                if (hitDist <= 40f * dp) {
+                    isDraggingListener = true;
+                    Parent?.RequestDisallowInterceptTouchEvent(true);
+                    UpdateListenerFromTouch(tx, ty, pad, w, h);
+                } else {
+                    isDraggingListener = false;
                 }
-                lastTapTime = now;
-                UpdateListenerFromTouch(e.GetX(), e.GetY(), pad, w, h);
                 return true;
 
             case MotionEventActions.Move:
-                UpdateListenerFromTouch(e.GetX(), e.GetY(), pad, w, h);
+                float dx = tx - downX;
+                float dy = ty - downY;
+                float dist = MathF.Sqrt(dx * dx + dy * dy);
+                if (dist > maxMoveDist) {
+                    maxMoveDist = dist;
+                }
+
+                if (isDraggingListener) {
+                    Parent?.RequestDisallowInterceptTouchEvent(true);
+                    UpdateListenerFromTouch(tx, ty, pad, w, h);
+                    return true;
+                }
+
+                // If finger moves vertically outside the avatar, yield cleanly to ScrollView!
+                if (Math.Abs(dy) > touchSlop && Math.Abs(dy) > Math.Abs(dx)) {
+                    Parent?.RequestDisallowInterceptTouchEvent(false);
+                    return false;
+                }
+
+                // Deliberate horizontal drag inside room
+                if (Math.Abs(dx) > touchSlop * 1.5f && Math.Abs(dx) > Math.Abs(dy) * 1.5f) {
+                    isDraggingListener = true;
+                    Parent?.RequestDisallowInterceptTouchEvent(true);
+                    UpdateListenerFromTouch(tx, ty, pad, w, h);
+                    return true;
+                }
                 return true;
 
             case MotionEventActions.Up:
+                Parent?.RequestDisallowInterceptTouchEvent(false);
+                if (maxMoveDist < touchSlop) {
+                    DateTime now = DateTime.UtcNow;
+                    if ((now - lastTapTime).TotalMilliseconds < 280) {
+                        listenerPosition = new Vector3(0, listenerPosition.Y, 0);
+                        ListenerPositionChanged?.Invoke(listenerPosition);
+                        Invalidate();
+                        lastTapTime = DateTime.MinValue;
+                    } else {
+                        lastTapTime = now;
+                        if (!isDraggingListener) {
+                            UpdateListenerFromTouch(tx, ty, pad, w, h);
+                        }
+                    }
+                }
+                isDraggingListener = false;
+                return true;
+
             case MotionEventActions.Cancel:
                 Parent?.RequestDisallowInterceptTouchEvent(false);
-                return true;
+                isDraggingListener = false;
+                return false;
         }
+
         return base.OnTouchEvent(e);
     }
 
@@ -283,11 +370,6 @@ internal static class PaintExtensions {
     }
 
     public static Paint WithColor(this Paint p, Color c) {
-        p.Color = c;
-        return p;
-    }
-
-    public static Paint WithAlphaColor(this Paint p, Color c) {
         p.Color = c;
         return p;
     }

@@ -5,6 +5,7 @@ using Android.Views;
 using Cavern.Channels;
 
 using Cavernize.Logic.Models.RenderTargets;
+using CavernizeAndroid.Theme;
 
 namespace CavernizeAndroid.Views;
 
@@ -43,17 +44,17 @@ public sealed class LayoutDiagramView : View {
 
     public LayoutDiagramView(Context context) : base(context) {
         float dp = context.Resources.DisplayMetrics.Density;
-        boxPaint.Color = Color.ParseColor("#94A3B8");
+        boxPaint.Color = OneUiTheme.TextMuted;
         boxPaint.StrokeWidth = 1.5f * dp;
         boxPaint.SetStyle(Paint.Style.Stroke);
 
-        linePaint.Color = Color.ParseColor("#475569");
+        linePaint.Color = OneUiTheme.ControlStroke;
         linePaint.StrokeWidth = 1.2f * dp;
         linePaint.SetStyle(Paint.Style.Stroke);
 
         speakerPaint.SetStyle(Paint.Style.Fill);
 
-        labelPaint.Color = Color.ParseColor("#CBD5E1");
+        labelPaint.Color = OneUiTheme.TextSecondary;
         labelPaint.TextSize = 9.5f * dp;
         labelPaint.TextAlign = Paint.Align.Center;
     }
@@ -62,14 +63,14 @@ public sealed class LayoutDiagramView : View {
         channelColors.Clear();
         if (target is DriverRenderTarget || target is VirtualizerRenderTarget) {
             isDynamicMode = true;
-            Color dyn = Color.ParseColor("#38BDF8");
+            Color dyn = OneUiTheme.PrimaryHigh;
             foreach (var s in speakerLayout) {
                 channelColors[s.ch] = dyn;
             }
         } else {
             isDynamicMode = false;
-            Color inactive = Color.ParseColor("#475569");
-            Color active = Color.ParseColor("#10B981");
+            Color inactive = OneUiTheme.ControlStroke;
+            Color active = OneUiTheme.Primary;
             foreach (var s in speakerLayout) {
                 channelColors[s.ch] = inactive;
             }

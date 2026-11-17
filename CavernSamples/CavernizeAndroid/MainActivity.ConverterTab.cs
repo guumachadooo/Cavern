@@ -22,6 +22,7 @@ using Cavernize.Logic.Models;
 using Cavernize.Logic.Models.RenderTargets;
 using Cavernize.Logic.Rendering;
 using CavernizeAndroid.Services;
+using CavernizeAndroid.Theme;
 using CavernizeAndroid.Views;
 
 using Path = System.IO.Path;
@@ -44,7 +45,7 @@ public partial class MainActivity {
 
     LinearLayout BuildConverterTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(10), Dp(10), Dp(10), Dp(16));
+        page.SetPadding(Dp(12), Dp(6), Dp(12), Dp(16));
 
         // 1. System & RenderTarget Card
         LinearLayout sysCard = Card(S["SystemTitle"]);
@@ -55,7 +56,7 @@ public partial class MainActivity {
         sysLeft.AddView(Label(S["RenderTarget"], 12f, ColMuted));
         selectTargetBtn = SecondaryButton(RenderTarget?.Name ?? S["SelectTarget"], ShowRenderTargetDialog);
         sysLeft.AddView(selectTargetBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(42)) { TopMargin = Dp(4), BottomMargin = Dp(6) });
-        wiringBtn = SecondaryButton(S["DisplayWiring"], DisplayWiringDialog);
+        wiringBtn = PillButton(S["DisplayWiring"], DisplayWiringDialog);
         sysLeft.AddView(wiringBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(38)));
         sysRow.AddView(sysLeft, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(10) });
 
@@ -69,6 +70,7 @@ public partial class MainActivity {
         converterTrackInfoText = Label(S["NoTrack"], 12f, ColMuted);
         converterTrackInfoText.SetPadding(0, 0, 0, Dp(8));
         expCard.AddView(converterTrackInfoText);
+        AddDivider(expCard);
 
         expCard.AddView(Label(S["ExportFormat"], 12f, ColMuted));
         exportFormatSpinner = new Spinner(this);
@@ -87,34 +89,37 @@ public partial class MainActivity {
         };
         expCard.AddView(exportFormatSpinner);
 
+        AddDivider(expCard);
         expCard.AddView(Label(S["Container"], 12f, ColMuted));
         containerSpinner = new Spinner(this);
         expCard.AddView(containerSpinner);
 
+        AddDivider(expCard);
         applyRoomToExportCheck = new CheckBox(this) {
             Text = S["ApplyRoomToExport"],
             Checked = false,
             TextSize = 12.5f
         };
         applyRoomToExportCheck.SetTextColor(ColText);
+        applyRoomToExportCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
         expCard.AddView(applyRoomToExportCheck);
 
         // Action Buttons
         LinearLayout actRow1 = new(this) { Orientation = Orientation.Horizontal };
-        actRow1.SetPadding(0, Dp(8), 0, Dp(4));
+        actRow1.SetPadding(0, Dp(10), 0, Dp(6));
         renderBtn = PrimaryButton(S["RenderBtn"], () => StartSingleRender());
-        cancelRenderBtn = SecondaryButton(S["CancelBtn"], () => activeCts?.Cancel());
+        cancelRenderBtn = PillButton(S["CancelBtn"], () => activeCts?.Cancel());
         cancelRenderBtn.Enabled = false;
         actRow1.AddView(renderBtn, new LinearLayout.LayoutParams(0, Dp(44), 2f) { RightMargin = Dp(6) });
         actRow1.AddView(cancelRenderBtn, new LinearLayout.LayoutParams(0, Dp(44), 1f));
         expCard.AddView(actRow1);
 
-        Button queueAddBtn = SecondaryButton(S["AddQueueBtn"], AddCurrentToQueue);
-        expCard.AddView(queueAddBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { BottomMargin = Dp(6) });
+        Button queueAddBtn = PillButton(S["AddQueueBtn"], AddCurrentToQueue);
+        expCard.AddView(queueAddBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { BottomMargin = Dp(8) });
 
         LinearLayout infoBtns = new(this) { Orientation = Orientation.Horizontal };
-        Button metaBtn = SecondaryButton(S["ShowMetaBtn"], ShowMetadataDialog);
-        Button repBtn = SecondaryButton(S["ShowReportBtn"], ShowPostRenderReportDialog);
+        Button metaBtn = PillButton(S["ShowMetaBtn"], ShowMetadataDialog);
+        Button repBtn = PillButton(S["ShowReportBtn"], ShowPostRenderReportDialog);
         infoBtns.AddView(metaBtn, new LinearLayout.LayoutParams(0, Dp(38), 1f) { RightMargin = Dp(6) });
         infoBtns.AddView(repBtn, new LinearLayout.LayoutParams(0, Dp(38), 1f));
         expCard.AddView(infoBtns);
@@ -124,21 +129,22 @@ public partial class MainActivity {
             Max = 1000,
             Progress = 0
         };
-        LinearLayout.LayoutParams pbLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(8) };
+        OneUiTheme.StyleProgressBar(this, convertProgressBar);
+        LinearLayout.LayoutParams pbLp = new(ViewGroup.LayoutParams.MatchParent, Dp(8)) { TopMargin = Dp(10) };
         expCard.AddView(convertProgressBar, pbLp);
 
         convertStatusText = Label(S["Ready"], 12f, ColCyan);
-        convertStatusText.SetPadding(0, Dp(4), 0, Dp(6));
+        convertStatusText.SetPadding(0, Dp(6), 0, Dp(6));
         expCard.AddView(convertStatusText);
 
         LinearLayout postBtns = new(this) { Orientation = Orientation.Horizontal };
-        shareExportBtn = SecondaryButton(S["ShareFile"], () => ShareLocalFile(lastRenderedFilePath));
-        playExportBtn = SecondaryButton(S["OpenPlayer"], () => {
+        shareExportBtn = PillButton(S["ShareFile"], () => ShareLocalFile(lastRenderedFilePath));
+        playExportBtn = PillButton(S["OpenPlayer"], () => {
             if (!string.IsNullOrEmpty(lastRenderedFilePath) && File.Exists(lastRenderedFilePath)) {
                 OpenContent(lastRenderedFilePath);
                 SwitchTab(0);
             }
-        });
+        }, active: true);
         shareExportBtn.Visibility = ViewStates.Gone;
         playExportBtn.Visibility = ViewStates.Gone;
         postBtns.AddView(shareExportBtn, new LinearLayout.LayoutParams(0, Dp(38), 1f) { RightMargin = Dp(6) });
@@ -258,7 +264,10 @@ public partial class MainActivity {
             .SetTitle(S["RenderTarget"])
             .SetView(sv)
             .SetNegativeButton(S["CancelBtn"], (_, _) => { })
-            .Show();
+            .Create();
+        dialog.Window?.SetBackgroundDrawable(OneUiTheme.CreateRoundedDrawable(
+            this, OneUiTheme.SurfaceElevated, OneUiTheme.CardCornerDp, OneUiTheme.FloatingBorder, 1f));
+        dialog.Show();
     }
 
     void DisplayWiringDialog() {

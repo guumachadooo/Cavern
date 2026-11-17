@@ -20,6 +20,7 @@ using Cavernize.Logic.Models;
 using Cavernize.Logic.Models.RenderTargets;
 using CavernizeAndroid.Language;
 using CavernizeAndroid.Services;
+using CavernizeAndroid.Theme;
 
 using VoidX.WPF.FFmpeg;
 using VoidX.WPF.Language;
@@ -27,6 +28,11 @@ using VoidX.WPF.Language;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    TextView updateCurrentVerLabel, updateSettingsStatusText;
+    ProgressBar updateSettingsProgressBar;
+    Button checkUpdatesBtn, downloadInstallBtn;
+    Switch autoCheckUpdatesSwitch;
+
     LinearLayout queueListContainer;
     Button hrirBtn, filtersBtn, ffmpegBtn;
     Switch muteBedSwitch, muteGroundSwitch, speakerVirtSwitch, force24Switch, surroundSwapSwitch, wavSkipSwitch, reportModeSwitch, gradingSwitch;
@@ -36,7 +42,38 @@ public partial class MainActivity {
 
     LinearLayout BuildSettingsTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(10), Dp(10), Dp(10), Dp(16));
+        page.SetPadding(Dp(12), Dp(6), Dp(12), Dp(16));
+
+        // 0. Software Update Section (One UI 9)
+        LinearLayout updateCard = Card(S["UpdateCardTitle"]);
+        (string curVer, _) = AppUpdateService.GetInstalledVersion(this);
+        updateCurrentVerLabel = Label(string.Format(S["CurrentVersionLabel"], curVer), 13f, ColText);
+        updateCurrentVerLabel.SetTypeface(null, TypefaceStyle.Bold);
+        updateCard.AddView(updateCurrentVerLabel);
+
+        updateSettingsStatusText = Label(S["Ready"], 12f, ColCyan);
+        updateSettingsStatusText.SetPadding(0, Dp(2), 0, Dp(6));
+        updateCard.AddView(updateSettingsStatusText);
+
+        updateSettingsProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
+            Max = 1000,
+            Progress = 0,
+            Visibility = ViewStates.Gone
+        };
+        OneUiTheme.StyleProgressBar(this, updateSettingsProgressBar);
+        updateCard.AddView(updateSettingsProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(8)) { BottomMargin = Dp(8) });
+
+        LinearLayout updBtns = new(this) { Orientation = Orientation.Horizontal };
+        checkUpdatesBtn = PillButton(S["CheckUpdateBtn"], () => _ = CheckForUpdatesAsync(silent: false));
+        downloadInstallBtn = PrimaryButton(S["DownloadInstallBtn"], StartUpdateDownloadAndInstall);
+        downloadInstallBtn.Visibility = ViewStates.Gone;
+        updBtns.AddView(checkUpdatesBtn, new LinearLayout.LayoutParams(0, Dp(40), 1f));
+        updBtns.AddView(downloadInstallBtn, new LinearLayout.LayoutParams(0, Dp(40), 1.2f) { LeftMargin = Dp(8) });
+        updateCard.AddView(updBtns);
+
+        AddDivider(updateCard);
+        autoCheckUpdatesSwitch = AddSwitchRow(updateCard, S["AutoCheckSwitch"], store.AutoCheckUpdates, v => store.AutoCheckUpdates = v);
+        page.AddView(updateCard);
 
         // 1. Queue Section
         LinearLayout queueCard = Card(S["QueueTitle"]);
@@ -44,12 +81,12 @@ public partial class MainActivity {
         queueCard.AddView(queueListContainer);
 
         LinearLayout qBtns = new(this) { Orientation = Orientation.Horizontal };
-        qBtns.SetPadding(0, Dp(6), 0, 0);
-        Button batchBtn = SecondaryButton(S["BatchAddBtn"], () => LaunchFilePicker(ReqBatchMedia, allowMultiple: true));
-        Button remBtn = SecondaryButton(S["RemoveQueueBtn"], RemoveLastFromQueue);
+        qBtns.SetPadding(0, Dp(8), 0, 0);
+        Button batchBtn = PillButton(S["BatchAddBtn"], () => LaunchFilePicker(ReqBatchMedia, allowMultiple: true));
+        Button remBtn = PillButton(S["RemoveQueueBtn"], RemoveLastFromQueue);
         Button runQBtn = PrimaryButton(S["ProcessQueueBtn"], StartQueueProcessing);
-        qBtns.AddView(batchBtn, new LinearLayout.LayoutParams(0, Dp(40), 1f) { RightMargin = Dp(4) });
-        qBtns.AddView(remBtn, new LinearLayout.LayoutParams(0, Dp(40), 0.8f) { RightMargin = Dp(4) });
+        qBtns.AddView(batchBtn, new LinearLayout.LayoutParams(0, Dp(40), 1f) { RightMargin = Dp(6) });
+        qBtns.AddView(remBtn, new LinearLayout.LayoutParams(0, Dp(40), 0.8f) { RightMargin = Dp(6) });
         qBtns.AddView(runQBtn, new LinearLayout.LayoutParams(0, Dp(40), 1.2f));
         queueCard.AddView(qBtns);
         page.AddView(queueCard);
@@ -60,19 +97,22 @@ public partial class MainActivity {
             store.MatrixUpmixing = v;
             ReattachPlayerTrack();
         });
+        AddDivider(upmixCard);
         cavernizeUpmixSwitch = AddSwitchRow(upmixCard, S["CavernizeUpmix"], store.CavernizeUpmix, v => {
             store.CavernizeUpmix = v;
             ReattachPlayerTrack();
         });
+        AddDivider(upmixCard);
         (upmixEffectBar, _) = AddSliderRow(upmixCard, S["UpmixEffect"], 0, 100, (int)Math.Round(store.UpmixEffect * 100), v => {
             store.UpmixEffect = v * 0.01f;
             ReattachPlayerTrack();
         });
+        AddDivider(upmixCard);
         (upmixSmoothBar, _) = AddSliderRow(upmixCard, S["UpmixSmooth"], 0, 100, (int)Math.Round(store.UpmixSmoothness * 100), v => {
             store.UpmixSmoothness = v * 0.01f;
             ReattachPlayerTrack();
         });
-        Button resetUpmixBtn = SecondaryButton(S["ResetUpmix"], () => {
+        Button resetUpmixBtn = PillButton(S["ResetUpmix"], () => {
             store.MatrixUpmixing = false;
             store.CavernizeUpmix = false;
             store.UpmixEffect = 0.75f;
@@ -83,12 +123,12 @@ public partial class MainActivity {
             upmixSmoothBar.Progress = 80;
             ReattachPlayerTrack();
         });
-        upmixCard.AddView(resetUpmixBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(38)) { TopMargin = Dp(4) });
+        upmixCard.AddView(resetUpmixBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(38)) { TopMargin = Dp(6) });
         page.AddView(upmixCard);
 
         // 3. Rendering Settings & Filters Section
         LinearLayout rendCard = Card(S["RenderingTitle"]);
-        hrirBtn = SecondaryButton(S["LoadHRIR"], () => {
+        hrirBtn = PillButton(S["LoadHRIR"], () => {
             if (!string.IsNullOrEmpty(store.HrirPath)) {
                 VirtualizerFilter.Reset();
                 store.HrirPath = "";
@@ -101,7 +141,7 @@ public partial class MainActivity {
 
         speakerVirtSwitch = AddSwitchRow(rendCard, S["SpeakerVirt"], store.SpeakerVirtualizer, v => store.SpeakerVirtualizer = v);
 
-        filtersBtn = SecondaryButton(S["LoadFilters"], () => {
+        filtersBtn = PillButton(S["LoadFilters"], () => {
             if (renderingSettings.RoomCorrection != null) {
                 renderingSettings.RoomCorrection = null;
                 store.RoomCorrectionPath = "";
@@ -110,20 +150,26 @@ public partial class MainActivity {
                 LaunchFilePicker(ReqLoadFilters, false);
             }
         });
-        rendCard.AddView(filtersBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { BottomMargin = Dp(6) });
+        rendCard.AddView(filtersBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { TopMargin = Dp(4), BottomMargin = Dp(6) });
 
         muteBedSwitch = AddSwitchRow(rendCard, S["MuteBed"], store.MuteBed, v => {
             store.MuteBed = v;
             playerEngine.MuteBed = v;
         });
+        AddDivider(rendCard);
         muteGroundSwitch = AddSwitchRow(rendCard, S["MuteGround"], store.MuteGround, v => {
             store.MuteGround = v;
             playerEngine.MuteGround = v;
         });
+        AddDivider(rendCard);
         force24Switch = AddSwitchRow(rendCard, S["Force24Bit"], store.Force24Bit, v => store.Force24Bit = v);
+        AddDivider(rendCard);
         surroundSwapSwitch = AddSwitchRow(rendCard, S["SurroundSwap"], store.SurroundSwap, v => store.SurroundSwap = v);
+        AddDivider(rendCard);
         wavSkipSwitch = AddSwitchRow(rendCard, S["WavSkip"], store.WavChannelSkip, v => store.WavChannelSkip = v);
+        AddDivider(rendCard);
         reportModeSwitch = AddSwitchRow(rendCard, S["ReportMode"], store.ReportOnlyMode, v => store.ReportOnlyMode = v);
+        AddDivider(rendCard);
         gradingSwitch = AddSwitchRow(rendCard, S["QualityGrading"], store.QualityGrading, v => store.QualityGrading = v);
         page.AddView(rendCard);
 
@@ -163,7 +209,7 @@ public partial class MainActivity {
         EditText rx = NumBox(store.RoomSizeX.ToString("0.0", CultureInfo.InvariantCulture));
         EditText ry = NumBox(store.RoomSizeY.ToString("0.0", CultureInfo.InvariantCulture));
         EditText rz = NumBox(store.RoomSizeZ.ToString("0.0", CultureInfo.InvariantCulture));
-        Button applyRoomBtn = SecondaryButton("OK", () => {
+        Button applyRoomBtn = PillButton("OK", () => {
             if (float.TryParse(rx.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vx) &&
                 float.TryParse(ry.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vy) &&
                 float.TryParse(rz.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vz)) {
@@ -175,13 +221,14 @@ public partial class MainActivity {
                 SyncRoomSlidersFromEngine();
                 UpdateRoomCanvas();
             }
-        });
+        }, active: true);
         roomDimRow.AddView(rx, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
         roomDimRow.AddView(ry, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
         roomDimRow.AddView(rz, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
         roomDimRow.AddView(applyRoomBtn, new LinearLayout.LayoutParams(Dp(56), Dp(40)));
         advCard.AddView(roomDimRow);
 
+        AddDivider(advCard);
         advCard.AddView(Label(S["AudioQuality"], 12f, ColMuted));
         Spinner qualSpinner = new(this);
         string[] qualNames = Enum.GetNames(typeof(QualityModes));
@@ -195,27 +242,34 @@ public partial class MainActivity {
         };
         advCard.AddView(qualSpinner);
 
+        AddDivider(advCard);
         pedanticSwitch = AddSwitchRow(advCard, S["Pedantic"], store.Pedantic, v => { store.Pedantic = v; store.ApplyGlobals(); });
+        AddDivider(advCard);
         unsafeSwitch = AddSwitchRow(advCard, S["Unsafe"], store.Unsafe, v => { store.Unsafe = v; store.ApplyGlobals(); });
+        AddDivider(advCard);
         keepTempSwitch = AddSwitchRow(advCard, S["KeepTemp"], store.KeepTempFiles, v => { store.KeepTempFiles = v; store.ApplyGlobals(); });
+        AddDivider(advCard);
         normSwitch = AddSwitchRow(advCard, S["NormalizerCheck"], store.NormalizerEnabled, v => { store.NormalizerEnabled = v; playerEngine.NormalizerEnabled = v; });
+        AddDivider(advCard);
         limiterOnlySwitch = AddSwitchRow(advCard, S["LimiterOnlyCheck"], store.LimiterOnly, v => { store.LimiterOnly = v; playerEngine.LimiterOnly = v; });
 
-        ffmpegBtn = SecondaryButton(S["FFmpegBtn"], () => LaunchFilePicker(ReqLocateFFmpeg, false));
-        advCard.AddView(ffmpegBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { TopMargin = Dp(4), BottomMargin = Dp(6) });
+        ffmpegBtn = PillButton(S["FFmpegBtn"], () => LaunchFilePicker(ReqLocateFFmpeg, false));
+        advCard.AddView(ffmpegBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { TopMargin = Dp(6), BottomMargin = Dp(8) });
 
         advCard.AddView(Label(S["FFmpegArgsLabel"], 12f, ColMuted));
         EditText ffArgsBox = new(this) { Text = store.FFmpegExtraArgs, TextSize = 12.5f };
+        ffArgsBox.Background = OneUiTheme.CreateRoundedDrawable(this, ColCardAlt, 14f);
+        ffArgsBox.SetPadding(Dp(12), Dp(8), Dp(12), Dp(8));
         ffArgsBox.SetTextColor(ColText);
         ffArgsBox.TextChanged += (_, _) => {
             store.FFmpegExtraArgs = ffArgsBox.Text;
             ParseFFmpegExtraArgs(ffArgsBox.Text);
         };
-        advCard.AddView(ffArgsBox);
+        advCard.AddView(ffArgsBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
 
         if (Build.VERSION.SdkInt >= BuildVersionCodes.R) {
-            Button permBtn = SecondaryButton(S["StoragePermBtn"], RequestAllFilesAccess);
-            advCard.AddView(permBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { TopMargin = Dp(6) });
+            Button permBtn = PillButton(S["StoragePermBtn"], RequestAllFilesAccess);
+            advCard.AddView(permBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(40)) { TopMargin = Dp(8) });
         }
 
         page.AddView(advCard);
@@ -240,24 +294,66 @@ public partial class MainActivity {
         helpCard.AddView(langSpinner);
 
         LinearLayout helpBtns = new(this) { Orientation = Orientation.Horizontal };
-        helpBtns.SetPadding(0, Dp(8), 0, 0);
-        Button guideBtn = SecondaryButton(S["UserGuideBtn"], () => {
+        helpBtns.SetPadding(0, Dp(10), 0, 0);
+        Button guideBtn = PillButton(S["UserGuideBtn"], () => {
             Intent browser = new(Intent.ActionView, Android.Net.Uri.Parse("https://cavern.sbence.hu/cavern/doc.php?p=Cavernize"));
             StartActivity(browser);
         });
-        Button aboutBtn = SecondaryButton(S["AboutBtn"], () => {
-            string msg = $"{Listener.Info}\nCavernize Android 2.1.0\n" +
+        Button aboutBtn = PillButton(S["AboutBtn"], () => {
+            (string verName, long verCode) = AppUpdateService.GetInstalledVersion(this);
+            string msg = $"{Listener.Info}\nCavernize Android v{verName} (build {verCode})\n" +
                 (CavernAmp.Available ? "CavernAmp: Active" : "Managed Pure-C# DSP (ARM64 Ready)");
             ShowMessageDialog(S["AboutBtn"], msg);
         });
-        helpBtns.AddView(guideBtn, new LinearLayout.LayoutParams(0, Dp(40), 1f) { RightMargin = Dp(6) });
+        helpBtns.AddView(guideBtn, new LinearLayout.LayoutParams(0, Dp(40), 1f) { RightMargin = Dp(8) });
         helpBtns.AddView(aboutBtn, new LinearLayout.LayoutParams(0, Dp(40), 1f));
         helpCard.AddView(helpBtns);
         page.AddView(helpCard);
 
         RefreshQueueList();
         RefreshSettingsTabButtons();
+        RefreshSettingsUpdateUi();
         return page;
+    }
+
+    void SetSettingsUpdateStatus(string msg, double progress) {
+        if (updateSettingsStatusText != null) {
+            updateSettingsStatusText.Text = msg ?? "";
+        }
+        if (updateSettingsProgressBar != null) {
+            if (progress < 0) {
+                updateSettingsProgressBar.Visibility = ViewStates.Visible;
+                updateSettingsProgressBar.Indeterminate = true;
+            } else if (progress > 0 && isUpdateDownloading) {
+                updateSettingsProgressBar.Visibility = ViewStates.Visible;
+                updateSettingsProgressBar.Indeterminate = false;
+                updateSettingsProgressBar.Progress = Math.Clamp((int)Math.Round(progress * 1000.0), 0, 1000);
+            } else {
+                updateSettingsProgressBar.Indeterminate = false;
+                updateSettingsProgressBar.Visibility = ViewStates.Gone;
+            }
+        }
+    }
+
+    void RefreshSettingsUpdateUi() {
+        if (downloadInstallBtn == null || updateSettingsStatusText == null) {
+            return;
+        }
+        if (latestUpdateInfo?.IsUpdateAvailable == true) {
+            double sizeMb = latestUpdateInfo.AssetSizeBytes > 0 ? latestUpdateInfo.AssetSizeBytes / (1024.0 * 1024.0) : 70.0;
+            updateSettingsStatusText.Text = string.Format(S["UpdateAvailableBanner"], latestUpdateInfo.RemoteVersion) + $" ({sizeMb:0.1} MB)";
+            downloadInstallBtn.Visibility = ViewStates.Visible;
+            downloadInstallBtn.Text = !string.IsNullOrEmpty(downloadedUpdateApkPath) && File.Exists(downloadedUpdateApkPath)
+                ? S["InstallReadyBtn"]
+                : S["DownloadInstallBtn"];
+        } else if (latestUpdateInfo != null) {
+            updateSettingsStatusText.Text = S["UpToDateMsg"];
+            downloadInstallBtn.Visibility = ViewStates.Gone;
+        }
+        if (updateSettingsProgressBar != null && !isUpdateDownloading) {
+            updateSettingsProgressBar.Indeterminate = false;
+            updateSettingsProgressBar.Visibility = ViewStates.Gone;
+        }
     }
 
     EditText NumBox(string value) {
@@ -266,6 +362,9 @@ public partial class MainActivity {
             TextSize = 13f,
             InputType = Android.Text.InputTypes.ClassNumber | Android.Text.InputTypes.NumberFlagDecimal
         };
+        et.Background = OneUiTheme.CreateRoundedDrawable(this, ColCardAlt, 14f);
+        et.SetPadding(Dp(10), Dp(6), Dp(10), Dp(6));
+        et.Gravity = GravityFlags.CenterHorizontal;
         et.SetTextColor(ColText);
         return et;
     }
