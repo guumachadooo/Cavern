@@ -345,7 +345,10 @@ public static class OneUiPillFactory {
         string text,
         Action onClick,
         bool primary = false) {
-        LinearLayout pill = new(ctx) { Orientation = Orientation.Horizontal };
+        LinearLayout pill = new(ctx) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false
+        };
         pill.SetGravity(GravityFlags.Center);
         int dp1 = OneUiTheme.Dp(ctx, 1);
         pill.SetPadding(dp1 * 12, dp1 * 8, dp1 * 14, dp1 * 8);

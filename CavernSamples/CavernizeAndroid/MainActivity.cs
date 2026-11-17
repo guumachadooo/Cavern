@@ -83,16 +83,17 @@ public partial class MainActivity : Activity, ICavernizeApp {
     CancellationTokenSource activeCts;
     string lastRenderedFilePath;
 
-    // Unified Smart Media Header Views (replaces redundant File + Spinner bar)
+    // Minimalist Compact Top Bar Views + Collapsible Stream Details Drawer
+    LinearLayout filePillBtn;
     TextView headerFileText;
-    View mediaMetaDivider;
-    LinearLayout mediaMetaRow;
+    LinearLayout fileDetailsDrawer;
     TextView trackSummaryText;
     LinearLayout trackPickerBadge;
     TextView trackPickerLabel;
-    OneUiIconView trackPickerChevron;
+    OneUiIconView fileDetailsChevron;
     LinearLayout inlineTrackList;
-    bool trackPickerExpanded;
+    bool fileDetailsExpanded;
+    MediaPlaybackNotificationManager mediaNotification;
 
     UpdateCheckResult latestUpdateInfo;
     FFmpegStatusResult latestFFmpegStatus;
@@ -169,6 +170,20 @@ public partial class MainActivity : Activity, ICavernizeApp {
         playerEngine.PlaybackCompleted += () => RunOnUiThread(OnPlayerCompleted);
         audioOutput = new AndroidAudioOutput(playerEngine);
 
+        mediaNotification?.Dispose();
+        mediaNotification = new MediaPlaybackNotificationManager(this);
+        mediaNotification.PlayRequested += () => {
+            if (!playerEngine.IsPlaying) TogglePlayPause();
+        };
+        mediaNotification.PauseRequested += () => {
+            if (playerEngine.IsPlaying) TogglePlayPause();
+        };
+        mediaNotification.PlayPauseRequested += TogglePlayPause;
+        mediaNotification.StopRequested += StopPlayback;
+        mediaNotification.Rewind10Requested += () => SeekRelative(-10);
+        mediaNotification.Forward10Requested += () => SeekRelative(10);
+        mediaNotification.SeekRequestedMs += ms => SeekAbsoluteSeconds(ms / 1000.0);
+
         if (!string.IsNullOrEmpty(store.HrirPath) && File.Exists(store.HrirPath)) {
             TryLoadHrir(store.HrirPath, showError: false);
         }
@@ -207,6 +222,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         uiDestroyed = true;
         activeCts?.Cancel();
         activeCts?.Dispose();
+        mediaNotification?.Dispose();
         audioOutput?.Dispose();
         playerEngine?.Dispose();
         LoadedFile?.Dispose();
@@ -252,98 +268,90 @@ public partial class MainActivity : Activity, ICavernizeApp {
         root.SetBackgroundColor(Color.Transparent);
         root.SetFitsSystemWindows(true);
 
-        // Smart Unified Media Header Card (File Picker + Active Track Summary + Inline Multi-Track Drawer)
-        LinearLayout mediaHeaderCard = new(this) { Orientation = Orientation.Vertical };
-        mediaHeaderCard.Background = OneUiTheme.CreateGlassCardDrawable(this, null, 22f);
-        mediaHeaderCard.Elevation = Dp(6);
-        mediaHeaderCard.SetPadding(Dp(14), Dp(12), Dp(14), Dp(12));
-        LinearLayout.LayoutParams headerCardLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            LeftMargin = Dp(14),
-            RightMargin = Dp(14),
-            TopMargin = Dp(10),
-            BottomMargin = Dp(8)
-        };
+        // Minimalist One UI 9 Compact Header Bar (title + frosted file pill + Open action; technical stream details stay hidden until tapped)
+        LinearLayout topBarWrap = new(this) { Orientation = Orientation.Vertical };
+        topBarWrap.SetPadding(Dp(14), Dp(8), Dp(14), Dp(6));
 
-        LinearLayout topRow = new(this) { Orientation = Orientation.Horizontal };
-        topRow.SetGravity(GravityFlags.CenterVertical);
+        LinearLayout topRow = HRow();
 
-        ImageView logo = new(this);
-        logo.SetImageResource(Resource.Drawable.cavern_logo);
-        LinearLayout.LayoutParams logoLp = new(Dp(34), Dp(34)) { RightMargin = Dp(10) };
-        topRow.AddView(logo, logoLp);
-
-        LinearLayout titleCol = new(this) { Orientation = Orientation.Vertical };
         TextView titleTv = new(this) {
             Text = "Cavernize",
-            TextSize = 20f
+            TextSize = 18f
         };
         titleTv.SetIncludeFontPadding(false);
-        titleTv.SetTextColor(OneUiTheme.PeachText);
+        titleTv.SetTextColor(ColText);
         titleTv.SetTypeface(null, TypefaceStyle.Bold);
+        topRow.AddView(titleTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(10) });
 
+        filePillBtn = HRow();
+        filePillBtn.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
+        filePillBtn.SetPadding(Dp(11), Dp(7), Dp(11), Dp(7));
+        OneUiTheme.AttachRecoil(filePillBtn, 0.97f);
+
+        OneUiIconView fileNoteIcon = new(this, OneUiIconType.MusicFile, OneUiTheme.PrimaryHigh);
         headerFileText = new TextView(this) {
-            Text = S["NoFile"],
-            TextSize = 11.5f
+            Text = S["SelectFilePill"],
+            TextSize = 12f
         };
-        headerFileText.SetTextColor(OneUiTheme.TextSub);
+        headerFileText.SetIncludeFontPadding(false);
+        headerFileText.SetTextColor(OneUiTheme.TextSecondary);
         headerFileText.SetSingleLine(true);
         headerFileText.Ellipsize = Android.Text.TextUtils.TruncateAt.Middle;
 
-        titleCol.AddView(titleTv);
-        titleCol.AddView(headerFileText);
-        topRow.AddView(titleCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
-
-        LinearLayout openBtn = OneUiPillFactory.CreateIconActionPill(
-            this, OneUiIconType.Folder, S["OpenFile"],
-            () => LaunchFilePicker(ReqOpenMedia, allowMultiple: false),
-            primary: true);
-        topRow.AddView(openBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
-        mediaHeaderCard.AddView(topRow);
-
-        mediaMetaDivider = OneUiTheme.CreateDivider(this);
-        mediaMetaDivider.Visibility = ViewStates.Gone;
-        mediaHeaderCard.AddView(mediaMetaDivider);
-
-        mediaMetaRow = new LinearLayout(this) {
-            Orientation = Orientation.Horizontal,
-            Visibility = ViewStates.Gone
-        };
-        mediaMetaRow.SetGravity(GravityFlags.CenterVertical);
-
-        trackSummaryText = Label("", 11.5f, ColCyan);
-        trackSummaryText.SetPadding(Dp(2), 0, Dp(6), 0);
-        mediaMetaRow.AddView(trackSummaryText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-
-        trackPickerBadge = new LinearLayout(this) {
-            Orientation = Orientation.Horizontal,
-            Visibility = ViewStates.Gone
-        };
-        trackPickerBadge.SetGravity(GravityFlags.CenterVertical);
-        trackPickerBadge.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp, OneUiTheme.WithAlpha(ColAccent, 140));
-        trackPickerBadge.SetPadding(Dp(10), Dp(6), Dp(10), Dp(6));
-        OneUiTheme.AttachRecoil(trackPickerBadge, 0.95f);
-
-        trackPickerLabel = Label("", 11.5f, ColText);
+        trackPickerBadge = HRow();
+        trackPickerBadge.Visibility = ViewStates.Gone;
+        trackPickerBadge.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 195), OneUiTheme.PillCornerDp);
+        trackPickerBadge.SetPadding(Dp(7), Dp(2), Dp(7), Dp(2));
+        trackPickerLabel = Label("", 10.5f, ColText);
         trackPickerLabel.SetIncludeFontPadding(false);
         trackPickerLabel.SetTypeface(null, TypefaceStyle.Bold);
-        trackPickerChevron = new OneUiIconView(this, OneUiIconType.ChevronDown, OneUiTheme.PeachText);
-        trackPickerBadge.AddView(trackPickerLabel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(5) });
-        trackPickerBadge.AddView(trackPickerChevron, new LinearLayout.LayoutParams(Dp(14), Dp(14)));
-        trackPickerBadge.Click += (_, _) => {
-            trackPickerExpanded = !trackPickerExpanded;
-            UpdateInlineTrackListVisibility();
+        trackPickerBadge.AddView(trackPickerLabel);
+
+        fileDetailsChevron = new OneUiIconView(this, OneUiIconType.ChevronDown, OneUiTheme.TextSub) {
+            Visibility = ViewStates.Gone
         };
-        mediaMetaRow.AddView(trackPickerBadge, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
-        mediaHeaderCard.AddView(mediaMetaRow);
+
+        filePillBtn.AddView(fileNoteIcon, new LinearLayout.LayoutParams(Dp(14), Dp(14)) { RightMargin = Dp(6) });
+        filePillBtn.AddView(headerFileText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
+        filePillBtn.AddView(trackPickerBadge, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(4) });
+        filePillBtn.AddView(fileDetailsChevron, new LinearLayout.LayoutParams(Dp(13), Dp(13)));
+        filePillBtn.Click += (_, _) => {
+            if (LoadedFile == null) {
+                LaunchFilePicker(ReqOpenMedia, allowMultiple: false);
+            } else {
+                fileDetailsExpanded = !fileDetailsExpanded;
+                UpdateInlineTrackListVisibility();
+            }
+        };
+        topRow.AddView(filePillBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+
+        LinearLayout openBtn = OneUiPillFactory.CreateIconActionPill(
+            this, OneUiIconType.Folder, S["OpenShort"],
+            () => LaunchFilePicker(ReqOpenMedia, allowMultiple: false),
+            primary: true);
+        openBtn.SetPadding(Dp(11), Dp(7), Dp(13), Dp(7));
+        topRow.AddView(openBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        topBarWrap.AddView(topRow);
+
+        fileDetailsDrawer = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        fileDetailsDrawer.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceCard, 20f);
+        fileDetailsDrawer.SetPadding(Dp(14), Dp(10), Dp(14), Dp(10));
+
+        trackSummaryText = Label("", 11.5f, OneUiTheme.TextSub);
+        fileDetailsDrawer.AddView(trackSummaryText);
 
         inlineTrackList = new LinearLayout(this) {
             Orientation = Orientation.Vertical,
             Visibility = ViewStates.Gone
         };
         inlineTrackList.SetPadding(0, Dp(8), 0, 0);
-        mediaHeaderCard.AddView(inlineTrackList);
+        fileDetailsDrawer.AddView(inlineTrackList);
 
-        root.AddView(mediaHeaderCard, headerCardLp);
+        topBarWrap.AddView(fileDetailsDrawer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(6) });
+        root.AddView(topBarWrap, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         // Tab content frame
         FrameLayout contentFrame = new(this);
@@ -368,11 +376,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         rootFrame.AddView(root, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
 
         // Layer 2: Floating Frosted Glass Capsule Bottom Navigation Bar
-        LinearLayout navBar = new(this) { Orientation = Orientation.Horizontal };
+        LinearLayout navBar = HRow();
         navBar.Background = OneUiTheme.CreateFloatingGlassPill(this);
         navBar.Elevation = Dp(12);
         navBar.SetPadding(Dp(6), Dp(6), Dp(6), Dp(6));
-        navBar.SetGravity(GravityFlags.CenterVertical);
 
         string[] tabTitles = [S["TabPlayer"], S["TabConvert"], S["TabExtract"], S["TabSettings"]];
         tabButtons = new Button[4];
@@ -430,14 +437,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
         inlineTrackList.RemoveAllViews();
         if (LoadedFile == null || LoadedFile.Tracks.Count <= 1) {
             trackPickerBadge.Visibility = ViewStates.Gone;
-            trackPickerExpanded = false;
             inlineTrackList.Visibility = ViewStates.Gone;
+            UpdateInlineTrackListVisibility();
             return;
         }
 
         int selIdx = Math.Max(0, LoadedFile.Tracks.ToList().IndexOf(selectedTrack));
         trackPickerBadge.Visibility = ViewStates.Visible;
-        trackPickerLabel.Text = string.Format(S["TrackMultiBadge"], selIdx + 1, LoadedFile.Tracks.Count);
+        trackPickerLabel.Text = $"{selIdx + 1}/{LoadedFile.Tracks.Count}";
 
         TextView hdr = Label(S["SelectTrackHeader"], 11.5f, ColMuted);
         hdr.SetPadding(Dp(2), 0, 0, Dp(6));
@@ -447,8 +454,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             CavernizeTrack tr = LoadedFile.Tracks[i];
             bool isSel = tr == selectedTrack;
 
-            LinearLayout row = new(this) { Orientation = Orientation.Horizontal };
-            row.SetGravity(GravityFlags.CenterVertical);
+            LinearLayout row = HRow();
             row.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
             row.Background = isSel
                 ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 72), 14f)
@@ -468,7 +474,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             row.AddView(dot, new LinearLayout.LayoutParams(Dp(14), Dp(14)) { RightMargin = Dp(8) });
             row.AddView(nameTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             row.Click += (_, _) => {
-                trackPickerExpanded = false;
+                fileDetailsExpanded = false;
                 if (SelectedTrack != tr) {
                     SelectedTrack = tr;
                 } else {
@@ -483,12 +489,17 @@ public partial class MainActivity : Activity, ICavernizeApp {
     }
 
     void UpdateInlineTrackListVisibility() {
-        if (inlineTrackList == null || trackPickerChevron == null) {
+        if (fileDetailsDrawer == null || fileDetailsChevron == null) {
             return;
         }
-        bool show = trackPickerExpanded && LoadedFile != null && LoadedFile.Tracks.Count > 1;
-        inlineTrackList.Visibility = show ? ViewStates.Visible : ViewStates.Gone;
-        trackPickerChevron.IconType = show ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown;
+        bool hasFile = LoadedFile != null;
+        fileDetailsChevron.Visibility = hasFile ? ViewStates.Visible : ViewStates.Gone;
+        bool showDrawer = fileDetailsExpanded && hasFile;
+        fileDetailsDrawer.Visibility = showDrawer ? ViewStates.Visible : ViewStates.Gone;
+        if (inlineTrackList != null) {
+            inlineTrackList.Visibility = (showDrawer && LoadedFile.Tracks.Count > 1) ? ViewStates.Visible : ViewStates.Gone;
+        }
+        fileDetailsChevron.IconType = showDrawer ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown;
     }
 
     bool ShouldShowSettingsDot() =>
@@ -527,6 +538,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
             if (CheckSelfPermission(Manifest.Permission.ReadMediaVideo) != Permission.Granted) {
                 needed.Add(Manifest.Permission.ReadMediaVideo);
+            }
+            if (CheckSelfPermission(Manifest.Permission.PostNotifications) != Permission.Granted) {
+                needed.Add(Manifest.Permission.PostNotifications);
             }
         } else {
             if (CheckSelfPermission(Manifest.Permission.ReadExternalStorage) != Permission.Granted) {
@@ -703,14 +717,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         selectedTrack = null;
         trackSourceItems = [];
-        trackPickerExpanded = false;
+        fileDetailsExpanded = false;
         if (headerFileText != null) {
-            headerFileText.Text = S["NoFile"];
+            headerFileText.Text = S["SelectFilePill"];
         }
-        if (mediaMetaRow != null) {
-            mediaMetaRow.Visibility = ViewStates.Gone;
-            mediaMetaDivider.Visibility = ViewStates.Gone;
+        if (trackSummaryText != null) {
+            trackSummaryText.Text = "";
         }
+        mediaNotification?.CancelNotification();
         RebuildInlineTrackList();
         report = new PostRenderReport(environment.Listener);
     }
@@ -718,11 +732,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
     void OnSelectedTrackChanged() {
         StopPlayback();
         if (selectedTrack == null) {
-            if (mediaMetaRow != null) {
-                mediaMetaRow.Visibility = ViewStates.Gone;
-                mediaMetaDivider.Visibility = ViewStates.Gone;
+            fileDetailsExpanded = false;
+            if (trackSummaryText != null) {
+                trackSummaryText.Text = "";
             }
             trackSourceItems = [];
+            mediaNotification?.CancelNotification();
             RefreshPlayerSourcesList();
             RefreshExtractorChecklist();
             RefreshConverterTrackInfo();
@@ -733,9 +748,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         AppLogger.Info($"Selected track: {selectedTrack.FormatHeader}");
         string details = string.Join(" | ", selectedTrack.Details.Select(d => $"{d.property}: {d.value}"));
         if (trackSummaryText != null) {
-            trackSummaryText.Text = $"{selectedTrack.FormatHeader} — {details}";
-            mediaMetaRow.Visibility = ViewStates.Visible;
-            mediaMetaDivider.Visibility = ViewStates.Visible;
+            trackSummaryText.Text = $"{selectedTrack.FormatHeader}\n{details}";
         }
         RebuildInlineTrackList();
 
@@ -751,6 +764,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
         } else {
             trackSourceItems = TrackSourceItem.BuildFromTrack(selectedTrack);
         }
+
+        mediaNotification?.UpdateMetadata(
+            LoadedFile != null ? Path.GetFileNameWithoutExtension(LoadedFile.Path) : "Cavernize 3D",
+            $"Cavernize 3D • {selectedTrack.FormatHeader}",
+            details,
+            playerEngine.TotalSeconds);
 
         RefreshPlayerSourcesList();
         RefreshExtractorChecklist();
@@ -783,10 +802,19 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
     }
 
-    // Shared One UI 9 Frosted UI Helpers (zero emojis, non-clipping pills)
+    // Shared One UI 9 Frosted UI Helpers (zero emojis, non-clipping pills, contextual '?' help bubbles)
     int Dp(int dp) => (int)Math.Round(dp * Resources.DisplayMetrics.Density);
 
-    LinearLayout Card(string title = null, OneUiIconType? icon = null, Color? badgeColor = null) {
+    LinearLayout HRow() {
+        LinearLayout row = new(this) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false
+        };
+        row.SetGravity(GravityFlags.CenterVertical);
+        return row;
+    }
+
+    LinearLayout Card(string title = null, OneUiIconType? icon = null, Color? badgeColor = null, string helpText = null) {
         LinearLayout card = new(this) { Orientation = Orientation.Vertical };
         card.Background = OneUiTheme.CreateGlassCardDrawable(this, null, OneUiTheme.CardCornerDp);
         card.Elevation = Dp(6);
@@ -796,20 +824,60 @@ public partial class MainActivity : Activity, ICavernizeApp {
         };
         card.LayoutParameters = lp;
         if (!string.IsNullOrEmpty(title)) {
+            LinearLayout hdr = HRow();
+            hdr.SetPadding(0, 0, 0, Dp(10));
             if (icon.HasValue && badgeColor.HasValue) {
-                LinearLayout hdr = new(this) { Orientation = Orientation.Horizontal };
-                hdr.SetGravity(GravityFlags.CenterVertical);
-                hdr.SetPadding(0, 0, 0, Dp(10));
                 hdr.AddView(OneUiTheme.CreateVectorIconBadge(this, icon.Value, badgeColor.Value));
-                TextView tv = SectionTitle(title);
-                tv.SetPadding(Dp(10), 0, 0, 0);
-                hdr.AddView(tv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-                card.AddView(hdr);
-            } else {
-                card.AddView(SectionTitle(title));
+            }
+            TextView tv = SectionTitle(title);
+            tv.SetPadding(icon.HasValue ? Dp(10) : 0, 0, Dp(8), 0);
+            hdr.AddView(tv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            card.AddView(hdr);
+
+            if (!string.IsNullOrEmpty(helpText)) {
+                AttachCardHelp(card, hdr, helpText);
             }
         }
         return card;
+    }
+
+    void AttachCardHelp(LinearLayout card, LinearLayout headerRow, string helpText) {
+        if (card == null || headerRow == null || string.IsNullOrEmpty(helpText)) {
+            return;
+        }
+        TextView qBtn = new(this) {
+            Text = "?",
+            TextSize = 12.5f
+        };
+        qBtn.Gravity = GravityFlags.Center;
+        qBtn.SetIncludeFontPadding(false);
+        qBtn.SetTypeface(null, TypefaceStyle.Bold);
+        qBtn.SetTextColor(OneUiTheme.TextSub);
+        qBtn.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceSubTile, 99f);
+        OneUiTheme.AttachRecoil(qBtn, 0.90f);
+
+        LinearLayout helpBox = new(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        helpBox.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceElevated, 16f, OneUiTheme.WithAlpha(ColAccent, 95));
+        helpBox.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+        TextView helpTv = Label(helpText, 12f, OneUiTheme.TextSecondary);
+        helpTv.SetLineSpacing(Dp(2), 1.12f);
+        helpBox.AddView(helpTv);
+
+        bool open = false;
+        qBtn.Click += (_, _) => {
+            open = !open;
+            helpBox.Visibility = open ? ViewStates.Visible : ViewStates.Gone;
+            qBtn.Background = OneUiTheme.CreateRoundedDrawable(this, open ? ColAccent : OneUiTheme.SurfaceSubTile, 99f);
+            qBtn.SetTextColor(open ? ColText : OneUiTheme.TextSub);
+        };
+
+        headerRow.AddView(qBtn, new LinearLayout.LayoutParams(Dp(26), Dp(26)) { LeftMargin = Dp(6) });
+        card.AddView(helpBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(10)
+        });
     }
 
     TextView SectionTitle(string text) {
@@ -833,8 +901,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
     }
 
     Button PrimaryButton(string text, Action onClick) {
-        Button b = new(this) { Text = text, TextSize = 13.5f };
+        Button b = new(this) { Text = text, TextSize = 13f };
         b.SetAllCaps(false);
+        b.SetSingleLine(true);
+        b.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         b.SetIncludeFontPadding(false);
         b.Gravity = GravityFlags.Center;
         b.SetMinimumWidth(0);
@@ -842,7 +912,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         b.Background = OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp);
         b.SetTextColor(ColText);
         b.SetTypeface(null, TypefaceStyle.Bold);
-        b.SetPadding(Dp(16), Dp(8), Dp(16), Dp(8));
+        b.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
         OneUiTheme.AttachRecoil(b);
         b.Click += (_, _) => onClick?.Invoke();
         return b;
@@ -851,31 +921,35 @@ public partial class MainActivity : Activity, ICavernizeApp {
     Button SecondaryButton(string text, Action onClick) {
         Button b = new(this) { Text = text, TextSize = 12.5f };
         b.SetAllCaps(false);
+        b.SetSingleLine(true);
+        b.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         b.SetIncludeFontPadding(false);
         b.Gravity = GravityFlags.Center;
         b.SetMinimumWidth(0);
         b.SetMinimumHeight(Dp(40));
         b.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.ButtonCornerDp);
         b.SetTextColor(ColText);
-        b.SetPadding(Dp(14), Dp(8), Dp(14), Dp(8));
+        b.SetPadding(Dp(12), Dp(8), Dp(12), Dp(8));
         OneUiTheme.AttachRecoil(b);
         b.Click += (_, _) => onClick?.Invoke();
         return b;
     }
 
     Button PillButton(string text, Action onClick, bool active = false) {
-        Button b = new(this) { Text = text, TextSize = 12.5f };
+        Button b = new(this) { Text = text, TextSize = 12f };
         b.SetAllCaps(false);
+        b.SetSingleLine(true);
+        b.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         b.SetIncludeFontPadding(false);
         b.Gravity = GravityFlags.Center;
         b.SetMinimumWidth(0);
-        b.SetMinimumHeight(Dp(38));
+        b.SetMinimumHeight(Dp(40));
         b.Background = active
             ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
             : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
         b.SetTextColor(ColText);
         b.SetTypeface(null, active ? TypefaceStyle.Bold : TypefaceStyle.Normal);
-        b.SetPadding(Dp(14), Dp(7), Dp(14), Dp(7));
+        b.SetPadding(Dp(11), Dp(8), Dp(11), Dp(8));
         OneUiTheme.AttachRecoil(b);
         b.Click += (_, _) => onClick?.Invoke();
         return b;

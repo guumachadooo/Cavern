@@ -180,7 +180,6 @@ public sealed class AndroidStrings {
         ["UnlockRoom"] = "Position Locked",
         ["FineTuneBtn"] = "Fine-tune Position & Head (Sliders)",
         ["FineTuneHideBtn"] = "Hide Fine-tune Sliders",
-        ["RoomTouchHint"] = "Tap an object/speaker to Solo • Drag 3D Head sphere in corner to rotate/tilt",
         ["SliderResetHint"] = "Double-tap any slider to reset to its default value",
         ["TrackMultiBadge"] = "Track {0}/{1}",
         ["SelectTrackHeader"] = "Audio Tracks in File",
@@ -226,6 +225,28 @@ public sealed class AndroidStrings {
         ["TimelineLabel"] = "Playback Position",
         ["CalibTitle"] = "HRIR & QuickEQ Calibration",
         ["AboutVerSection"] = "About & App Version",
+        ["RoomAcousticsTitle"] = "Room Acoustics, Gain & Limiter",
+        ["SelectFilePill"] = "Tap Abrir to select audio or video...",
+        ["FileDetailsHint"] = "Technical stream details",
+        ["OpenShort"] = "Open",
+        ["RoomTouchHint"] = "Switch 3D / Top / Front view • Drag listener • Rotate Head & adjust Height (Y) in dock",
+
+        // Contextual '?' Card Help Explanations
+        ["HelpRoom"] = "Interactive 3D acoustic room simulator. Switch between '3D + Altura' (perspective box with vertical stalks), 'Topo + Altura' (top map + side elevation column), and 'Frente (X/Y)' to see speakers and 3D objects moving up/down and side-to-side. Tap any speaker/object to Solo it, and use the bottom dock to rotate head Yaw/Pitch or change Height Y.",
+        ["HelpTransport"] = "Play, pause, or scrub across the audio timeline. Active playback also publishes an Android Media Notification and Lock Screen player so you can control playback anywhere on your phone.",
+        ["HelpQuickPanel"] = "Instant spatial toggles: HRTF 3D simulates surround speakers over headphones; Ear Distance adds acoustic depth cues; 3D Objects / Height Only isolate immersive elements; Volume, LFE Subwoofer boost, and Rolloff adjust distance decay.",
+        ["HelpMixer"] = "Inspect every fixed bed channel and dynamic 3D object inside the file in real time. Tap 'S' to Solo or 'M' to Mute individual audio sources.",
+        ["HelpSystem"] = "Select your target speaker configuration (from stereo/headphones up to 7.1.4 or custom layouts) and inspect exact physical amplifier wiring connections.",
+        ["HelpExport"] = "Choose output audio codec and container format, then render and save to Downloads/Cavernize. Enable the checkbox above Render to bake your 3D room seat position & Solo/Mute edits into the exported file.",
+        ["HelpQueue"] = "Add multiple media files to render sequentially in the background using the chosen speaker target and codec.",
+        ["HelpExtract"] = "Isolate and export every bed channel and 3D audio object as separate WAV stems or combined 3D stems, along with JSON 3D object trajectory metadata.",
+        ["HelpUpmix"] = "Convert stereo or 5.1 sources into 7.1 surround (Matrix Upmix) or synthesize overhead 3D ceiling objects automatically (Cavernize 3D).",
+        ["HelpRoomAcoustics"] = "Tune overall render gain, vertical Height Squeeze, acoustic damping environment (Home/Hall/Studio), physical room dimensions (X/Y/Z), and dynamic limiter protection.",
+        ["HelpCalib"] = "Load a custom binaural headphone HRIR (.wav) or QuickEQ room calibration filter file (.txt) to personalize the 3D soundstage.",
+        ["HelpAdvanced"] = "Specialized rendering flags: channel isolation (mute bed/ground), 24-bit PCM forcing, surround swap, WAV channel mask bypass, quality grading reports, MLP stream selection, and strict standard checks.",
+        ["HelpFFmpeg"] = "FFmpeg handles encoding/muxing for E-AC-3, AC-3, Opus, and MKV. Tap Download FFmpeg once to install a static ARM64 binary automatically—no root or external Termux setup needed.",
+        ["HelpDiagnostics"] = "View or share internal diagnostic logs if an import, decode, or mux error occurs.",
+        ["HelpAbout"] = "Change the app language, open the online manual, view engine info, or check GitHub Releases for newer APK versions.",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -362,7 +383,6 @@ public sealed class AndroidStrings {
         d["UnlockRoom"] = "Posição Travada";
         d["FineTuneBtn"] = "Ajuste fino de posição e cabeça (Sliders)";
         d["FineTuneHideBtn"] = "Ocultar sliders de ajuste fino";
-        d["RoomTouchHint"] = "Toque num objeto para Solo • Arraste a esfera 3D no canto para girar/inclinar";
         d["SliderResetHint"] = "Toque 2x rápido em qualquer slider para restaurar o padrão";
         d["TrackMultiBadge"] = "Faixa {0}/{1}";
         d["SelectTrackHeader"] = "Faixas de Áudio do Arquivo";
@@ -405,6 +425,27 @@ public sealed class AndroidStrings {
         d["TimelineLabel"] = "Linha do Tempo";
         d["CalibTitle"] = "Calibração HRIR e Filtros QuickEQ";
         d["AboutVerSection"] = "Sobre e Versão do App";
+        d["RoomAcousticsTitle"] = "Acústica da Sala, Ganho e Limitador";
+        d["SelectFilePill"] = "Toque em Abrir para escolher mídia...";
+        d["FileDetailsHint"] = "Detalhes técnicos da faixa";
+        d["OpenShort"] = "Abrir";
+        d["RoomTouchHint"] = "Alterne 3D / Topo / Frente • Arraste ouvinte • Use o painel abaixo para Cabeça e Altura (Y)";
+
+        d["HelpRoom"] = "Simulador acústico 3D interativo. Alterne entre '3D + Altura' (cubo 3D com hastes do chão ao teto para ver altura Y), 'Topo + Altura' (mapa + torre lateral de elevação) e 'Frente (X/Y)'. Toque em qualquer caixa ou objeto para dar Solo e use os controles abaixo do mapa para girar a cabeça ou ajustar a altura Y sem cobrir as caixas.";
+        d["HelpTransport"] = "Reproduza, pause ou navegue pela faixa em tempo real. Durante a reprodução, o Cavernize também aparece nas notificações e na tela de bloqueio (igual ao Spotify) com controles rápidos.";
+        d["HelpQuickPanel"] = "Atalhos espaciais rápidos: 'HRTF 3D' simula caixas ao redor em fones de ouvido; 'Distância' aplica profundidade acústica realista; 'Só Obj. 3D' e 'Só Teto' isolam elementos imersivos; os sliders ajustam Volume, Subwoofer (LFE) e queda sonora por distância.";
+        d["HelpMixer"] = "Lista ao vivo de todos os canais fixos (beds) e objetos dinâmicos 3D do arquivo. Toque em 'S' (Solo) para ouvir apenas aquele som ou 'M' (Mute) para silenciá-lo.";
+        d["HelpSystem"] = "Escolha para qual configuração de caixas ou fones deseja converter o áudio e veja exatamente como conectar os fios de cada canal no amplificador.";
+        d["HelpExport"] = "Defina o codec e formato do arquivo de saída e salve em Downloads/Cavernize. Marque a caixa acima do botão para gravar no arquivo final a sua posição na sala 3D e os Solos/Mutes ativos.";
+        d["HelpQueue"] = "Adicione vários arquivos em lote para processar um após o outro automaticamente usando o mesmo alvo e codec escolhidos.";
+        d["HelpExtract"] = "Separe cada canal de chão e cada objeto 3D em arquivos WAV individuais (ou renderize cada objeto em 3D/HRTF), com opção de salvar as trajetórias 3D em JSON.";
+        d["HelpUpmix"] = "Transforme áudios estéreo ou 5.1 comuns em surround 7.1 (Matrix Upmix) ou crie objetos de teto virtuais automaticamente (Cavernize 3D).";
+        d["HelpRoomAcoustics"] = "Configure o ganho geral em dB, compressão vertical de teto (Height Squeeze), tipo de ambiente acústico (Casa/Estúdio/Cinema), medidas reais da sala (X, Y, Z) e normalizador/limitador dinâmico.";
+        d["HelpCalib"] = "Carregue uma resposta binaural HRIR personalizada (.wav) para fones ou filtros de correção acústica QuickEQ (.txt) da sua sala.";
+        d["HelpAdvanced"] = "Opções técnicas avançadas: silenciar chão ou canais base, forçar 24 bits, inverter surrounds, ignorar máscara RIFF WAVE, modo apenas relatório, análise de qualidade, apresentação TrueHD MLP e travas estritas.";
+        d["HelpFFmpeg"] = "O FFmpeg permite codificar/empacotar formatos comprimidos como E-AC-3, AC-3, Opus e MKV. Clique em 'Baixar FFmpeg Auto' uma única vez para instalar automaticamente (sem precisar de configuração externa).";
+        d["HelpDiagnostics"] = "Visualize ou compartilhe o arquivo de log completo caso ocorra qualquer erro ao abrir, decodificar ou exportar uma mídia.";
+        d["HelpAbout"] = "Altere o idioma, acesse o manual online oficial, veja detalhes do motor Cavern ou verifique e instale novas versões do aplicativo pelo GitHub.";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

@@ -60,61 +60,8 @@ public partial class MainActivity {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
         page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(88));
 
-        // 1. FFmpeg Audio Engine (1-Click Download & Auto-Updater)
-        LinearLayout ffCard = Card(S["FFmpegCardTitle"], OneUiIconType.Gear, OneUiTheme.CoralStart);
-        ffmpegStatusText = Label(S["FFmpegNotInstalled"], 12.5f, OneUiTheme.TextSub);
-        ffmpegStatusText.SetPadding(0, 0, 0, Dp(8));
-        ffCard.AddView(ffmpegStatusText);
-
-        ffmpegProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
-            Max = 1000,
-            Progress = 0,
-            Visibility = ViewStates.Gone
-        };
-        OneUiTheme.StyleProgressBar(this, ffmpegProgressBar);
-        ffCard.AddView(ffmpegProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { BottomMargin = Dp(8) });
-
-        LinearLayout ffBtns = new(this) { Orientation = Orientation.Horizontal };
-        ffmpegAutoBtn = PrimaryButton(S["FFmpegDownloadBtn"], StartFFmpegDownloadOrUpdate);
-        ffmpegCheckBtn = PillButton(S["FFmpegCheckBtn"], () => _ = CheckFFmpegUpdateAsync(silent: false));
-        ffBtns.AddView(ffmpegAutoBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.35f) { RightMargin = Dp(8) });
-        ffBtns.AddView(ffmpegCheckBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        ffCard.AddView(ffBtns);
-
-        AddDivider(ffCard);
-        ffmpegBtn = PillButton(S["FFmpegManualBtn"], () => LaunchFilePicker(ReqLocateFFmpeg, false));
-        ffCard.AddView(ffmpegBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
-
-        ffCard.AddView(Label(S["FFmpegArgsLabel"], 12f, ColMuted));
-        EditText ffArgsBox = new(this) { Text = store.FFmpegExtraArgs, TextSize = 12.5f };
-        ffArgsBox.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
-        ffArgsBox.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
-        ffArgsBox.SetTextColor(ColText);
-        ffArgsBox.TextChanged += (_, _) => {
-            store.FFmpegExtraArgs = ffArgsBox.Text;
-            ParseFFmpegExtraArgs(ffArgsBox.Text);
-        };
-        ffCard.AddView(ffArgsBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
-        page.AddView(ffCard);
-
-        // 2. Render Queue Card
-        LinearLayout queueCard = Card(S["QueueTitle"], OneUiIconType.Queue, OneUiTheme.Primary);
-        queueListContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
-        queueCard.AddView(queueListContainer);
-
-        LinearLayout qBtns = new(this) { Orientation = Orientation.Horizontal };
-        qBtns.SetPadding(0, Dp(8), 0, 0);
-        Button batchBtn = PillButton(S["BatchAddBtn"], () => LaunchFilePicker(ReqBatchMedia, allowMultiple: true));
-        Button remBtn = PillButton(S["RemoveQueueBtn"], RemoveLastFromQueue);
-        Button runQBtn = PrimaryButton(S["ProcessQueueBtn"], StartQueueProcessing);
-        qBtns.AddView(batchBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        qBtns.AddView(remBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.8f) { RightMargin = Dp(6) });
-        qBtns.AddView(runQBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.2f));
-        queueCard.AddView(qBtns);
-        page.AddView(queueCard);
-
-        // 3. Upmixing Setup Card
-        LinearLayout upmixCard = Card(S["UpmixTitle"], OneUiIconType.Sparkles, OneUiTheme.FunctionalIndigo);
+        // 1. Most Frequently Adjusted: Spatial 3D Upmixing
+        LinearLayout upmixCard = Card(S["UpmixTitle"], OneUiIconType.Sparkles, OneUiTheme.FunctionalIndigo, S["HelpUpmix"]);
         matrixUpmixSwitch = AddSwitchRow(upmixCard, S["MatrixUpmix"], store.MatrixUpmixing, v => {
             store.MatrixUpmixing = v;
             ReattachPlayerTrack();
@@ -147,8 +94,67 @@ public partial class MainActivity {
         upmixCard.AddView(resetUpmixBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
         page.AddView(upmixCard);
 
-        // 4. Calibration, Rendering & Filters Card
-        LinearLayout rendCard = Card(S["CalibTitle"], OneUiIconType.Headphones, OneUiTheme.FunctionalGreen);
+        // 2. Room Acoustics, Gain & Dynamic Limiter
+        LinearLayout acousticsCard = Card(S["RoomAcousticsTitle"], OneUiIconType.Sliders, OneUiTheme.Primary, S["HelpRoomAcoustics"]);
+        normSwitch = AddSwitchRow(acousticsCard, S["NormalizerCheck"], store.NormalizerEnabled, v => {
+            store.NormalizerEnabled = v;
+            playerEngine.NormalizerEnabled = v;
+        });
+        AddDivider(acousticsCard);
+        limiterOnlySwitch = AddSwitchRow(acousticsCard, S["LimiterOnlyCheck"], store.LimiterOnly, v => {
+            store.LimiterOnly = v;
+            playerEngine.LimiterOnly = v;
+        });
+        AddDivider(acousticsCard);
+        AddSliderRow(acousticsCard, S["RenderGain"], -24, 24, (int)Math.Round(store.RenderGainDb), v => {
+            store.RenderGainDb = v;
+            store.ApplyGlobals();
+        }, " dB", defaultValue: 0);
+        AddSliderRow(acousticsCard, S["HeightSqueeze"], 0, 100, (int)Math.Round(store.HeightSqueezePercent), v => {
+            store.HeightSqueezePercent = v;
+            store.ApplyGlobals();
+        }, "%", defaultValue: 0);
+
+        OneUiInlineSelector envSelector = new(this, S["EnvType"]);
+        string[] envNames = Enum.GetNames(typeof(Environments));
+        envSelector.SetItems(envNames, Math.Clamp(store.EnvironmentTypeIndex, 0, envNames.Length - 1));
+        envSelector.SelectionChanged += pos => {
+            store.EnvironmentTypeIndex = pos;
+            store.ApplyGlobals();
+            playerEngine.EnvironmentType = (Environments)pos;
+            UpdateRoomCanvas();
+        };
+        acousticsCard.AddView(envSelector);
+
+        AddDivider(acousticsCard);
+        acousticsCard.AddView(Label(S["RoomSize"], 12f, ColMuted));
+        LinearLayout roomDimRow = HRow();
+        roomDimRow.SetPadding(0, Dp(4), 0, Dp(2));
+        EditText rx = NumBox(store.RoomSizeX.ToString("0.0", CultureInfo.InvariantCulture));
+        EditText ry = NumBox(store.RoomSizeY.ToString("0.0", CultureInfo.InvariantCulture));
+        EditText rz = NumBox(store.RoomSizeZ.ToString("0.0", CultureInfo.InvariantCulture));
+        Button applyRoomBtn = PillButton("OK", () => {
+            if (float.TryParse(rx.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vx) &&
+                float.TryParse(ry.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vy) &&
+                float.TryParse(rz.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vz)) {
+                store.RoomSizeX = Math.Clamp(vx, 1f, 50f);
+                store.RoomSizeY = Math.Clamp(vy, 1f, 50f);
+                store.RoomSizeZ = Math.Clamp(vz, 1f, 50f);
+                store.ApplyGlobals();
+                playerEngine.EnvironmentSize = Listener.EnvironmentSize;
+                SyncRoomSlidersFromEngine();
+                UpdateRoomCanvas();
+            }
+        }, active: true);
+        roomDimRow.AddView(rx, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
+        roomDimRow.AddView(ry, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
+        roomDimRow.AddView(rz, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
+        roomDimRow.AddView(applyRoomBtn, new LinearLayout.LayoutParams(Dp(60), ViewGroup.LayoutParams.WrapContent));
+        acousticsCard.AddView(roomDimRow);
+        page.AddView(acousticsCard);
+
+        // 3. Headphone HRIR & QuickEQ Calibration
+        LinearLayout rendCard = Card(S["CalibTitle"], OneUiIconType.Headphones, OneUiTheme.FunctionalGreen, S["HelpCalib"]);
         hrirBtn = PillButton(S["LoadHRIR"], () => {
             if (!string.IsNullOrEmpty(store.HrirPath)) {
                 VirtualizerFilter.Reset();
@@ -172,34 +178,11 @@ public partial class MainActivity {
         rendCard.AddView(filtersBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
 
         speakerVirtSwitch = AddSwitchRow(rendCard, S["SpeakerVirt"], store.SpeakerVirtualizer, v => store.SpeakerVirtualizer = v);
-        AddDivider(rendCard);
-        muteBedSwitch = AddSwitchRow(rendCard, S["MuteBed"], store.MuteBed, v => {
-            store.MuteBed = v;
-            playerEngine.MuteBed = v;
-            refreshBentoTilesUi?.Invoke();
-        });
-        AddDivider(rendCard);
-        muteGroundSwitch = AddSwitchRow(rendCard, S["MuteGround"], store.MuteGround, v => {
-            store.MuteGround = v;
-            playerEngine.MuteGround = v;
-            refreshBentoTilesUi?.Invoke();
-        });
-        AddDivider(rendCard);
-        force24Switch = AddSwitchRow(rendCard, S["Force24Bit"], store.Force24Bit, v => store.Force24Bit = v);
-        AddDivider(rendCard);
-        surroundSwapSwitch = AddSwitchRow(rendCard, S["SurroundSwap"], store.SurroundSwap, v => store.SurroundSwap = v);
-        AddDivider(rendCard);
-        wavSkipSwitch = AddSwitchRow(rendCard, S["WavSkip"], store.WavChannelSkip, v => store.WavChannelSkip = v);
-        AddDivider(rendCard);
-        reportModeSwitch = AddSwitchRow(rendCard, S["ReportMode"], store.ReportOnlyMode, v => store.ReportOnlyMode = v);
-        AddDivider(rendCard);
-        gradingSwitch = AddSwitchRow(rendCard, S["QualityGrading"], store.QualityGrading, v => store.QualityGrading = v);
         page.AddView(rendCard);
 
-        // 5. Collapsible Advanced & Room Acoustics Folder Card
+        // 4. Collapsible Advanced Rendering & CLI Options
         LinearLayout advCard = Card();
-        LinearLayout advHeader = new(this) { Orientation = Orientation.Horizontal };
-        advHeader.SetGravity(GravityFlags.CenterVertical);
+        LinearLayout advHeader = HRow();
         OneUiTheme.AttachRecoil(advHeader, 0.98f);
         advHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Wrench, OneUiTheme.FunctionalAmber, 32));
         TextView advTitleTv = SectionTitle(S["AdvancedTitle"]);
@@ -208,6 +191,7 @@ public partial class MainActivity {
         advChevron = new OneUiIconView(this, isAdvancedExpanded ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown, OneUiTheme.PeachText);
         advHeader.AddView(advChevron, new LinearLayout.LayoutParams(Dp(18), Dp(18)));
         advCard.AddView(advHeader);
+        AttachCardHelp(advCard, advHeader, S["HelpAdvanced"]);
 
         advContentContainer = new LinearLayout(this) {
             Orientation = Orientation.Vertical,
@@ -220,57 +204,34 @@ public partial class MainActivity {
             advChevron.IconType = isAdvancedExpanded ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown;
         };
 
-        AddSliderRow(advContentContainer, S["RenderGain"], -24, 24, (int)Math.Round(store.RenderGainDb), v => {
-            store.RenderGainDb = v;
-            store.ApplyGlobals();
-        }, " dB", defaultValue: 0);
-        AddSliderRow(advContentContainer, S["HeightSqueeze"], 0, 100, (int)Math.Round(store.HeightSqueezePercent), v => {
-            store.HeightSqueezePercent = v;
-            store.ApplyGlobals();
-        }, "%", defaultValue: 0);
+        muteBedSwitch = AddSwitchRow(advContentContainer, S["MuteBed"], store.MuteBed, v => {
+            store.MuteBed = v;
+            playerEngine.MuteBed = v;
+            refreshBentoTilesUi?.Invoke();
+        });
+        AddDivider(advContentContainer);
+        muteGroundSwitch = AddSwitchRow(advContentContainer, S["MuteGround"], store.MuteGround, v => {
+            store.MuteGround = v;
+            playerEngine.MuteGround = v;
+            refreshBentoTilesUi?.Invoke();
+        });
+        AddDivider(advContentContainer);
+        force24Switch = AddSwitchRow(advContentContainer, S["Force24Bit"], store.Force24Bit, v => store.Force24Bit = v);
+        AddDivider(advContentContainer);
+        surroundSwapSwitch = AddSwitchRow(advContentContainer, S["SurroundSwap"], store.SurroundSwap, v => store.SurroundSwap = v);
+        AddDivider(advContentContainer);
+        wavSkipSwitch = AddSwitchRow(advContentContainer, S["WavSkip"], store.WavChannelSkip, v => store.WavChannelSkip = v);
+        AddDivider(advContentContainer);
+        reportModeSwitch = AddSwitchRow(advContentContainer, S["ReportMode"], store.ReportOnlyMode, v => store.ReportOnlyMode = v);
+        AddDivider(advContentContainer);
+        gradingSwitch = AddSwitchRow(advContentContainer, S["QualityGrading"], store.QualityGrading, v => store.QualityGrading = v);
+        AddDivider(advContentContainer);
+
         AddSliderRow(advContentContainer, S["MlpPres"], -1, 4, store.MlpPresentation, v => {
             store.MlpPresentation = v;
             store.ApplyGlobals();
         }, "", useBlue: true, defaultValue: -1);
 
-        OneUiInlineSelector envSelector = new(this, S["EnvType"]);
-        string[] envNames = Enum.GetNames(typeof(Environments));
-        envSelector.SetItems(envNames, Math.Clamp(store.EnvironmentTypeIndex, 0, envNames.Length - 1));
-        envSelector.SelectionChanged += pos => {
-            store.EnvironmentTypeIndex = pos;
-            store.ApplyGlobals();
-            playerEngine.EnvironmentType = (Environments)pos;
-            UpdateRoomCanvas();
-        };
-        advContentContainer.AddView(envSelector);
-
-        AddDivider(advContentContainer);
-        advContentContainer.AddView(Label(S["RoomSize"], 12f, ColMuted));
-        LinearLayout roomDimRow = new(this) { Orientation = Orientation.Horizontal };
-        roomDimRow.SetPadding(0, Dp(4), 0, Dp(4));
-        EditText rx = NumBox(store.RoomSizeX.ToString("0.0", CultureInfo.InvariantCulture));
-        EditText ry = NumBox(store.RoomSizeY.ToString("0.0", CultureInfo.InvariantCulture));
-        EditText rz = NumBox(store.RoomSizeZ.ToString("0.0", CultureInfo.InvariantCulture));
-        Button applyRoomBtn = PillButton("OK", () => {
-            if (float.TryParse(rx.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vx) &&
-                float.TryParse(ry.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vy) &&
-                float.TryParse(rz.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vz)) {
-                store.RoomSizeX = Math.Clamp(vx, 1f, 50f);
-                store.RoomSizeY = Math.Clamp(vy, 1f, 50f);
-                store.RoomSizeZ = Math.Clamp(vz, 1f, 50f);
-                store.ApplyGlobals();
-                playerEngine.EnvironmentSize = Listener.EnvironmentSize;
-                SyncRoomSlidersFromEngine();
-                UpdateRoomCanvas();
-            }
-        }, active: true);
-        roomDimRow.AddView(rx, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
-        roomDimRow.AddView(ry, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
-        roomDimRow.AddView(rz, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
-        roomDimRow.AddView(applyRoomBtn, new LinearLayout.LayoutParams(Dp(60), ViewGroup.LayoutParams.WrapContent));
-        advContentContainer.AddView(roomDimRow);
-
-        AddDivider(advContentContainer);
         OneUiInlineSelector qualSelector = new(this, S["AudioQuality"]);
         string[] qualNames = Enum.GetNames(typeof(QualityModes));
         qualSelector.SetItems(qualNames, Math.Clamp(store.AudioQualityIndex, 0, qualNames.Length - 1));
@@ -286,10 +247,6 @@ public partial class MainActivity {
         unsafeSwitch = AddSwitchRow(advContentContainer, S["Unsafe"], store.Unsafe, v => { store.Unsafe = v; store.ApplyGlobals(); });
         AddDivider(advContentContainer);
         keepTempSwitch = AddSwitchRow(advContentContainer, S["KeepTemp"], store.KeepTempFiles, v => { store.KeepTempFiles = v; store.ApplyGlobals(); });
-        AddDivider(advContentContainer);
-        normSwitch = AddSwitchRow(advContentContainer, S["NormalizerCheck"], store.NormalizerEnabled, v => { store.NormalizerEnabled = v; playerEngine.NormalizerEnabled = v; });
-        AddDivider(advContentContainer);
-        limiterOnlySwitch = AddSwitchRow(advContentContainer, S["LimiterOnlyCheck"], store.LimiterOnly, v => { store.LimiterOnly = v; playerEngine.LimiterOnly = v; });
 
         if (Build.VERSION.SdkInt >= BuildVersionCodes.R) {
             Button permBtn = PillButton(S["StoragePermBtn"], RequestAllFilesAccess);
@@ -299,14 +256,51 @@ public partial class MainActivity {
         advCard.AddView(advContentContainer);
         page.AddView(advCard);
 
-        // 6. Diagnostics & Shared Logs Card (accessible via App, Termux, or Export)
-        LinearLayout logCard = Card(S["DiagnosticsTitle"], OneUiIconType.Logs, OneUiTheme.FunctionalCyan);
+        // 5. One-Time Setup: FFmpeg Audio Engine (Auto-Download & Updater)
+        LinearLayout ffCard = Card(S["FFmpegCardTitle"], OneUiIconType.Gear, OneUiTheme.CoralStart, S["HelpFFmpeg"]);
+        ffmpegStatusText = Label(S["FFmpegNotInstalled"], 12.5f, OneUiTheme.TextSub);
+        ffmpegStatusText.SetPadding(0, 0, 0, Dp(8));
+        ffCard.AddView(ffmpegStatusText);
+
+        ffmpegProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
+            Max = 1000,
+            Progress = 0,
+            Visibility = ViewStates.Gone
+        };
+        OneUiTheme.StyleProgressBar(this, ffmpegProgressBar);
+        ffCard.AddView(ffmpegProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { BottomMargin = Dp(8) });
+
+        LinearLayout ffBtns = HRow();
+        ffmpegAutoBtn = PrimaryButton(S["FFmpegDownloadBtn"], StartFFmpegDownloadOrUpdate);
+        ffmpegCheckBtn = PillButton(S["FFmpegCheckBtn"], () => _ = CheckFFmpegUpdateAsync(silent: false));
+        ffBtns.AddView(ffmpegAutoBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.35f) { RightMargin = Dp(8) });
+        ffBtns.AddView(ffmpegCheckBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        ffCard.AddView(ffBtns);
+
+        AddDivider(ffCard);
+        ffmpegBtn = PillButton(S["FFmpegManualBtn"], () => LaunchFilePicker(ReqLocateFFmpeg, false));
+        ffCard.AddView(ffmpegBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+
+        ffCard.AddView(Label(S["FFmpegArgsLabel"], 12f, ColMuted));
+        EditText ffArgsBox = new(this) { Text = store.FFmpegExtraArgs, TextSize = 12.5f };
+        ffArgsBox.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
+        ffArgsBox.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
+        ffArgsBox.SetTextColor(ColText);
+        ffArgsBox.TextChanged += (_, _) => {
+            store.FFmpegExtraArgs = ffArgsBox.Text;
+            ParseFFmpegExtraArgs(ffArgsBox.Text);
+        };
+        ffCard.AddView(ffArgsBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
+        page.AddView(ffCard);
+
+        // 6. Diagnostics & Shared Logs
+        LinearLayout logCard = Card(S["DiagnosticsTitle"], OneUiIconType.Logs, OneUiTheme.FunctionalCyan, S["HelpDiagnostics"]);
         logPathInfoText = Label("", 11.5f, ColMuted);
         logPathInfoText.SetPadding(0, 0, 0, Dp(8));
         RefreshLogSummaryLabel();
         logCard.AddView(logPathInfoText);
 
-        LinearLayout logBtns = new(this) { Orientation = Orientation.Horizontal };
+        LinearLayout logBtns = HRow();
         Button viewLogBtn = PillButton(S["ViewLogBtn"], () => {
             ShowMessageDialog(S["DiagnosticsTitle"], AppLogger.ReadAll(), OneUiIconType.Logs, monospace: true);
         }, active: true);
@@ -329,8 +323,8 @@ public partial class MainActivity {
         logCard.AddView(logBtns);
         page.AddView(logCard);
 
-        // 7. Language, About & App Version Updater Card
-        LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.Primary);
+        // 7. Language, About & App Version Updater
+        LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.Primary, S["HelpAbout"]);
         OneUiInlineSelector langSelector = new(this, S["LanguageLabel"]);
         string[] langLabels = ["Auto (System)", "Português (Brasil)", "English", "Magyar", "简体中文"];
         string[] langCodes = ["", "pt-BR", "en-US", "hu-HU", "zh-CN"];
@@ -344,7 +338,7 @@ public partial class MainActivity {
         };
         helpCard.AddView(langSelector);
 
-        LinearLayout helpBtns = new(this) { Orientation = Orientation.Horizontal };
+        LinearLayout helpBtns = HRow();
         helpBtns.SetPadding(0, Dp(10), 0, Dp(4));
         Button guideBtn = PillButton(S["UserGuideBtn"], () => {
             Intent browser = new(Intent.ActionView, Android.Net.Uri.Parse("https://cavern.sbence.hu/cavern/doc.php?p=Cavernize"));
@@ -379,7 +373,7 @@ public partial class MainActivity {
         OneUiTheme.StyleProgressBar(this, updateSettingsProgressBar);
         helpCard.AddView(updateSettingsProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { BottomMargin = Dp(8) });
 
-        LinearLayout updBtns = new(this) { Orientation = Orientation.Horizontal };
+        LinearLayout updBtns = HRow();
         checkUpdatesBtn = PillButton(S["CheckUpdateBtn"], () => _ = CheckForUpdatesAsync(silent: false));
         downloadInstallBtn = PrimaryButton(S["DownloadInstallBtn"], StartUpdateDownloadAndInstall);
         downloadInstallBtn.Visibility = ViewStates.Gone;
@@ -391,7 +385,6 @@ public partial class MainActivity {
         autoCheckUpdatesSwitch = AddSwitchRow(helpCard, S["AutoCheckSwitch"], store.AutoCheckUpdates, v => store.AutoCheckUpdates = v);
         page.AddView(helpCard);
 
-        RefreshQueueList();
         RefreshSettingsTabButtons();
         RefreshFFmpegCardUi();
         RefreshSettingsUpdateUi();

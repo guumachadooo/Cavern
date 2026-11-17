@@ -41,21 +41,20 @@ public partial class MainActivity {
         // 1. 3D Room Simulator Card (One UI 9 Frosted Surface)
         LinearLayout roomCard = Card();
 
-        LinearLayout roomHeader = new(this) { Orientation = Orientation.Horizontal };
-        roomHeader.SetGravity(GravityFlags.CenterVertical);
+        LinearLayout roomHeader = HRow();
         roomHeader.SetPadding(0, 0, 0, Dp(6));
         roomHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Room3D, OneUiTheme.Primary, 30));
         TextView roomTitleTv = SectionTitle(S["RoomTitle"]);
         roomTitleTv.SetPadding(Dp(8), 0, Dp(8), 0);
         roomHeader.AddView(roomTitleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
-        roomLockBtn = new LinearLayout(this) { Orientation = Orientation.Horizontal };
-        roomLockBtn.SetGravity(GravityFlags.CenterVertical);
+        roomLockBtn = HRow();
         roomLockBtn.SetPadding(Dp(12), Dp(7), Dp(12), Dp(7));
         OneUiTheme.AttachRecoil(roomLockBtn, 0.94f);
         roomLockIcon = new OneUiIconView(this, OneUiIconType.Unlock, ColText);
         roomLockText = Label("", 11.5f, ColText);
         roomLockText.SetIncludeFontPadding(false);
+        roomLockText.SetSingleLine(true);
         roomLockText.SetTypeface(null, TypefaceStyle.Bold);
         roomLockBtn.AddView(roomLockIcon, new LinearLayout.LayoutParams(Dp(14), Dp(14)) { RightMargin = Dp(5) });
         roomLockBtn.AddView(roomLockText);
@@ -69,6 +68,7 @@ public partial class MainActivity {
         };
         roomHeader.AddView(roomLockBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
         roomCard.AddView(roomHeader);
+        AttachCardHelp(roomCard, roomHeader, S["HelpRoom"]);
 
         TextView hintTv = Label(S["RoomTouchHint"], 11.5f, OneUiTheme.TextMuted);
         hintTv.SetPadding(0, 0, 0, Dp(6));
@@ -79,7 +79,7 @@ public partial class MainActivity {
         };
         UpdateRoomLockButtonUi();
         roomView.ListenerPositionChanged += pos => {
-            playerEngine.ListenerPosition = new Vector3(pos.X, playerEngine.ListenerPosition.Y, pos.Z);
+            playerEngine.ListenerPosition = pos;
             SyncRoomSlidersFromEngine();
             UpdateRoomTelemetryText();
         };
@@ -97,7 +97,7 @@ public partial class MainActivity {
 
         // Seat Presets Pill Row
         HorizontalScrollView presetScroll = new(this) { HorizontalScrollBarEnabled = false };
-        LinearLayout presetRow = new(this) { Orientation = Orientation.Horizontal };
+        LinearLayout presetRow = HRow();
         presetRow.SetPadding(0, Dp(10), 0, Dp(6));
         (string label, Func<Vector3, Vector3> posFn)[] presets = [
             (S["PresetCenter"], e => Vector3.Zero),
@@ -172,7 +172,7 @@ public partial class MainActivity {
         page.AddView(roomCard);
 
         // 2. Transport Card featuring authentic One UI 9 Lock Screen / Quick Panel WaveSeekbar
-        LinearLayout transportCard = Card();
+        LinearLayout transportCard = Card(S["TimelineLabel"], OneUiIconType.Play, OneUiTheme.Primary, S["HelpTransport"]);
         playbackSeekBar = new OneUiWaveMediaSeekBar(this) {
             Max = 1000,
             CurrentTimeText = "00:00",
@@ -191,15 +191,14 @@ public partial class MainActivity {
         playbackSeekBar.StopTrackingTouch += () => {
             isUserSeeking = false;
             if (playerEngine.TotalSeconds > 0) {
-                playerEngine.Seek(playbackSeekBar.Progress / 1000.0 * playerEngine.TotalSeconds);
+                SeekAbsoluteSeconds(playbackSeekBar.Progress / 1000.0 * playerEngine.TotalSeconds);
             }
         };
         transportCard.AddView(playbackSeekBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(10)
         });
 
-        LinearLayout btnRow = new(this) { Orientation = Orientation.Horizontal };
-        btnRow.SetGravity(GravityFlags.CenterVertical);
+        LinearLayout btnRow = HRow();
         Button back10 = PillButton("-10s", () => SeekRelative(-10));
         playPauseBtn = PrimaryButton(S["Play"], TogglePlayPause);
         Button stopBtn = PillButton(S["Stop"], StopPlayback);
@@ -215,10 +214,10 @@ public partial class MainActivity {
         page.AddView(transportCard);
 
         // 3. One UI 9 Quick Spatial Panel Card (2x2 Bento Toggles + Fat Dynamic Capsules + In-App Rolloff Selector)
-        LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.FunctionalIndigo);
+        LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.FunctionalIndigo, S["HelpQuickPanel"]);
 
-        LinearLayout bentoRow1 = new(this) { Orientation = Orientation.Horizontal };
-        LinearLayout bentoRow2 = new(this) { Orientation = Orientation.Horizontal };
+        LinearLayout bentoRow1 = HRow();
+        LinearLayout bentoRow2 = HRow();
         bentoRow1.SetPadding(0, 0, 0, Dp(8));
         bentoRow2.SetPadding(0, 0, 0, Dp(10));
 
@@ -300,10 +299,10 @@ public partial class MainActivity {
         page.AddView(quickCard);
 
         // 4. Live Channel & 3D Object Mixer Card (Filter buttons visibly toggle Solo state)
-        LinearLayout mixerCard = Card(S["MixerTitle"], OneUiIconType.Queue, OneUiTheme.CoralStart);
+        LinearLayout mixerCard = Card(S["MixerTitle"], OneUiIconType.Queue, OneUiTheme.CoralStart, S["HelpMixer"]);
 
         HorizontalScrollView filterScroll = new(this) { HorizontalScrollBarEnabled = false };
-        LinearLayout filterRow = new(this) { Orientation = Orientation.Horizontal };
+        LinearLayout filterRow = HRow();
         filterAllBtn = FilterBtn(S["FilterAll"], ClearAllSoloFilters);
         filter3DBtn = FilterBtn(S["Filter3DOnly"], () => ToggleCategorySolo(item => item.IsDynamicObject, flag => {
             store.MuteBed = flag;
@@ -353,8 +352,7 @@ public partial class MainActivity {
         Func<bool> getState,
         Action onToggle,
         Color activeColor) {
-        LinearLayout tile = new(this) { Orientation = Orientation.Horizontal };
-        tile.SetGravity(GravityFlags.CenterVertical);
+        LinearLayout tile = HRow();
         tile.SetMinimumHeight(Dp(62));
         tile.SetPadding(Dp(12), Dp(10), Dp(10), Dp(10));
         OneUiTheme.AttachRecoil(tile, 0.95f);
@@ -531,6 +529,7 @@ public partial class MainActivity {
             if (playbackSeekBar != null) {
                 playbackSeekBar.IsWavePlaying = false;
             }
+            mediaNotification?.UpdatePlaybackState(false, playerEngine.CurrentSeconds, showNotification: true);
         } else {
             if (playerEngine.TotalSeconds > 0 && playerEngine.CurrentSeconds >= playerEngine.TotalSeconds - 0.05) {
                 playerEngine.Seek(0);
@@ -541,6 +540,7 @@ public partial class MainActivity {
             if (playbackSeekBar != null) {
                 playbackSeekBar.IsWavePlaying = true;
             }
+            mediaNotification?.UpdatePlaybackState(true, playerEngine.CurrentSeconds, showNotification: true);
         }
     }
 
@@ -550,6 +550,7 @@ public partial class MainActivity {
             playerEngine.Seek(0);
         }
         audioOutput?.Stop();
+        mediaNotification?.UpdatePlaybackState(false, 0, showNotification: false);
         if (playPauseBtn != null) {
             playPauseBtn.Text = S["Play"];
         }
@@ -566,7 +567,14 @@ public partial class MainActivity {
         if (selectedTrack == null || playerEngine.TotalSeconds <= 0) {
             return;
         }
-        double target = Math.Clamp(playerEngine.CurrentSeconds + deltaSeconds, 0, Math.Max(0, playerEngine.TotalSeconds - 0.1));
+        SeekAbsoluteSeconds(playerEngine.CurrentSeconds + deltaSeconds);
+    }
+
+    void SeekAbsoluteSeconds(double seconds) {
+        if (selectedTrack == null || playerEngine.TotalSeconds <= 0) {
+            return;
+        }
+        double target = Math.Clamp(seconds, 0, Math.Max(0, playerEngine.TotalSeconds - 0.05));
         playerEngine.Seek(target);
         if (playbackSeekBar != null) {
             playbackSeekBar.Progress = Math.Clamp((int)(target / playerEngine.TotalSeconds * 1000.0), 0, 1000);
@@ -574,6 +582,7 @@ public partial class MainActivity {
             playbackSeekBar.TotalTimeText = $"{TimeSpan.FromSeconds(playerEngine.TotalSeconds):mm\\:ss}";
             playbackSeekBar.Invalidate();
         }
+        mediaNotification?.UpdatePlaybackState(playerEngine.IsPlaying, target, showNotification: true);
     }
 
     void OnPlayerCompleted() {
@@ -583,6 +592,7 @@ public partial class MainActivity {
         if (playbackSeekBar != null) {
             playbackSeekBar.IsWavePlaying = false;
         }
+        mediaNotification?.UpdatePlaybackState(false, playerEngine?.TotalSeconds ?? 0, showNotification: selectedTrack != null);
     }
 
     void SyncRoomSlidersFromEngine() {
@@ -623,8 +633,7 @@ public partial class MainActivity {
         }
 
         foreach (TrackSourceItem item in trackSourceItems) {
-            LinearLayout row = new(this) { Orientation = Orientation.Horizontal };
-            row.SetGravity(GravityFlags.CenterVertical);
+            LinearLayout row = HRow();
             row.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f, item.IsSolo ? OneUiTheme.SoloGold : null);
             row.SetPadding(Dp(12), Dp(9), Dp(10), Dp(9));
             LinearLayout.LayoutParams rlp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {

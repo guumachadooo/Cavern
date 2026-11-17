@@ -32,7 +32,7 @@ public partial class MainActivity {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
         page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(88));
 
-        LinearLayout card = Card(S["ExtractTitle"], OneUiIconType.Scissors, OneUiTheme.FunctionalIndigo);
+        LinearLayout card = Card(S["ExtractTitle"], OneUiIconType.Scissors, OneUiTheme.FunctionalIndigo, S["HelpExtract"]);
         TextView desc = Label(S["ExtractDesc"], 12f, OneUiTheme.TextSub);
         desc.SetPadding(0, 0, 0, Dp(10));
         card.AddView(desc);
@@ -50,8 +50,7 @@ public partial class MainActivity {
             if (i > 0) {
                 AddDivider(modeGroup);
             }
-            LinearLayout row = new(this) { Orientation = Orientation.Horizontal };
-            row.SetGravity(GravityFlags.CenterVertical);
+            LinearLayout row = HRow();
             row.SetPadding(Dp(6), Dp(10), Dp(6), Dp(10));
             OneUiTheme.AttachRecoil(row, 0.98f);
 
@@ -75,7 +74,7 @@ public partial class MainActivity {
 
         // One UI 9 Segmented Capsule Pills for Bit Depth
         card.AddView(Label(S["BitDepthLabel"], 12f, ColMuted));
-        LinearLayout bitRow = new(this) { Orientation = Orientation.Horizontal };
+        LinearLayout bitRow = HRow();
         bitRow.SetPadding(0, Dp(6), 0, Dp(8));
         extractBitButtons.Clear();
         string[] bitLabels = ["16-bit PCM", "24-bit PCM", "32-bit Float"];
@@ -86,7 +85,7 @@ public partial class MainActivity {
                 RefreshExtractBitButtonsUi();
             });
             bb.TextSize = 11.5f;
-            bb.SetPadding(Dp(6), Dp(7), Dp(6), Dp(7));
+            bb.SetPadding(Dp(6), Dp(8), Dp(6), Dp(8));
             extractBitButtons.Add(bb);
             bitRow.AddView(bb, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
                 RightMargin = i < bitLabels.Length - 1 ? Dp(6) : 0
@@ -105,8 +104,9 @@ public partial class MainActivity {
         extractJsonCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
         card.AddView(extractJsonCheck);
 
-        // Quick selection pills (adaptive height, zero clipping)
-        LinearLayout selRow = new(this) { Orientation = Orientation.Horizontal };
+        // Quick selection pills (horizontally scrollable so full labels never clip or wrap)
+        HorizontalScrollView selScroll = new(this) { HorizontalScrollBarEnabled = false };
+        LinearLayout selRow = HRow();
         selRow.SetPadding(0, Dp(8), 0, Dp(8));
         selRow.AddView(QuickSelBtn(S["SelectAll"], () => SetExtractSelection(_ => true)));
         selRow.AddView(QuickSelBtn(S["Select3D"], item => item.IsDynamicObject));
@@ -116,12 +116,13 @@ public partial class MainActivity {
                 box.Checked = !box.Checked;
             }
         }));
-        card.AddView(selRow);
+        selScroll.AddView(selRow);
+        card.AddView(selScroll);
 
         extractorChecklistContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
         card.AddView(extractorChecklistContainer);
 
-        LinearLayout actionRow = new(this) { Orientation = Orientation.Horizontal };
+        LinearLayout actionRow = HRow();
         actionRow.SetPadding(0, Dp(12), 0, Dp(8));
         extractBtn = PrimaryButton(S["ExtractBtn"], StartExtraction);
         cancelExtractBtn = PillButton(S["CancelBtn"], () => activeCts?.Cancel());
@@ -182,9 +183,9 @@ public partial class MainActivity {
     Button QuickSelBtn(string text, Action onClick) {
         Button b = PillButton(text, onClick);
         b.TextSize = 11.5f;
-        b.SetPadding(Dp(6), Dp(6), Dp(6), Dp(6));
+        b.SetPadding(Dp(13), Dp(7), Dp(13), Dp(7));
         b.SetMinimumHeight(Dp(36));
-        b.LayoutParameters = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) };
+        b.LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) };
         return b;
     }
 
@@ -332,8 +333,7 @@ public partial class MainActivity {
         extractedFilesContainer.RemoveAllViews();
         foreach (string path in paths) {
             string localPath = path;
-            LinearLayout row = new(this) { Orientation = Orientation.Horizontal };
-            row.SetGravity(GravityFlags.CenterVertical);
+            LinearLayout row = HRow();
             row.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f);
             row.SetPadding(Dp(12), Dp(9), Dp(10), Dp(9));
             LinearLayout.LayoutParams lp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {

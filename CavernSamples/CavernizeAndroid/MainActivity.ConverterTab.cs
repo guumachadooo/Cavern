@@ -49,9 +49,8 @@ public partial class MainActivity {
         page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(88));
 
         // 1. System & RenderTarget Hero Card
-        LinearLayout sysCard = Card(S["SystemTitle"], OneUiIconType.Speaker, OneUiTheme.Primary);
-        LinearLayout sysRow = new(this) { Orientation = Orientation.Horizontal };
-        sysRow.SetGravity(GravityFlags.CenterVertical);
+        LinearLayout sysCard = Card(S["SystemTitle"], OneUiIconType.Speaker, OneUiTheme.Primary, S["HelpSystem"]);
+        LinearLayout sysRow = HRow();
 
         LinearLayout sysLeft = new(this) { Orientation = Orientation.Vertical };
         sysLeft.AddView(Label(S["RenderTarget"], 12f, ColMuted));
@@ -67,7 +66,7 @@ public partial class MainActivity {
         page.AddView(sysCard);
 
         // 2. Content & Export Card (In-App One UI 9 Selectors — no native Spinner popups)
-        LinearLayout expCard = Card("Export", OneUiIconType.Bolt, OneUiTheme.CoralStart);
+        LinearLayout expCard = Card("Export", OneUiIconType.Bolt, OneUiTheme.CoralStart, S["HelpExport"]);
         converterTrackInfoText = Label(S["NoTrack"], 12f, ColMuted);
         converterTrackInfoText.SetPadding(0, 0, 0, Dp(8));
         expCard.AddView(converterTrackInfoText);
@@ -102,8 +101,8 @@ public partial class MainActivity {
         applyRoomToExportCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
         expCard.AddView(applyRoomToExportCheck);
 
-        // Action Buttons (adaptive heights, zero text clipping)
-        LinearLayout actRow1 = new(this) { Orientation = Orientation.Horizontal };
+        // Action Buttons (non-clipping single-line horizontal rows with BaselineAligned = false)
+        LinearLayout actRow1 = HRow();
         actRow1.SetPadding(0, Dp(10), 0, Dp(6));
         renderBtn = PrimaryButton(S["RenderBtn"], () => StartSingleRender());
         cancelRenderBtn = PillButton(S["CancelBtn"], () => activeCts?.Cancel());
@@ -115,7 +114,7 @@ public partial class MainActivity {
         Button queueAddBtn = PillButton(S["AddQueueBtn"], AddCurrentToQueue);
         expCard.AddView(queueAddBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
 
-        LinearLayout infoBtns = new(this) { Orientation = Orientation.Horizontal };
+        LinearLayout infoBtns = HRow();
         Button metaBtn = PillButton(S["ShowMetaBtn"], ShowMetadataDialog);
         Button repBtn = PillButton(S["ShowReportBtn"], ShowPostRenderReportDialog);
         infoBtns.AddView(metaBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
@@ -135,7 +134,7 @@ public partial class MainActivity {
         convertStatusText.SetPadding(0, Dp(6), 0, Dp(6));
         expCard.AddView(convertStatusText);
 
-        LinearLayout postBtns = new(this) { Orientation = Orientation.Horizontal };
+        LinearLayout postBtns = HRow();
         shareExportBtn = PillButton(S["ShareFile"], () => ShareLocalFile(lastRenderedFilePath));
         playExportBtn = PillButton(S["OpenPlayer"], () => {
             if (!string.IsNullOrEmpty(lastRenderedFilePath) && File.Exists(lastRenderedFilePath)) {
@@ -150,6 +149,24 @@ public partial class MainActivity {
         expCard.AddView(postBtns);
 
         page.AddView(expCard);
+
+        // 3. Batch Render Queue Card (contextual to Studio/Converter tab, zero button clipping)
+        LinearLayout queueCard = Card(S["QueueTitle"], OneUiIconType.Queue, OneUiTheme.Primary, S["HelpQueue"]);
+        queueListContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        queueCard.AddView(queueListContainer);
+
+        LinearLayout qBtns = HRow();
+        qBtns.SetPadding(0, Dp(10), 0, 0);
+        Button batchBtn = PillButton(S["BatchAddBtn"], () => LaunchFilePicker(ReqBatchMedia, allowMultiple: true));
+        Button remBtn = PillButton(S["RemoveQueueBtn"], RemoveLastFromQueue);
+        Button runQBtn = PrimaryButton(S["ProcessQueueBtn"], StartQueueProcessing);
+        qBtns.AddView(batchBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(6) });
+        qBtns.AddView(remBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.85f) { RightMargin = Dp(6) });
+        qBtns.AddView(runQBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.25f));
+        queueCard.AddView(qBtns);
+        page.AddView(queueCard);
+
+        RefreshQueueList();
         RefreshConverterTabState();
         return page;
     }

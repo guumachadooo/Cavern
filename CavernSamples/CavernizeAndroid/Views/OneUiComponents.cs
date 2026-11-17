@@ -242,8 +242,11 @@ public static class OneUiModalDialog {
             }
         });
 
-        LinearLayout btnRow = new(ctx) { Orientation = Orientation.Horizontal };
-        btnRow.SetGravity(GravityFlags.End);
+        LinearLayout btnRow = new(ctx) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false
+        };
+        btnRow.SetGravity(GravityFlags.CenterVertical | GravityFlags.End);
 
         if (!string.IsNullOrEmpty(negativeText)) {
             Button negBtn = MakeDialogButton(ctx, negativeText, primary: false, () => {
@@ -283,6 +286,8 @@ public static class OneUiModalDialog {
         int dp(float v) => OneUiTheme.Dp(ctx, v);
         Button b = new(ctx) { Text = text, TextSize = 13f };
         b.SetAllCaps(false);
+        b.SetSingleLine(true);
+        b.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         b.SetIncludeFontPadding(false);
         b.SetMinimumHeight(dp(42));
         b.SetPadding(dp(14), dp(8), dp(14), dp(8));

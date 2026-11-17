@@ -76,10 +76,12 @@ public static class OneUiTheme {
         Color defaultBlue = Color.ParseColor("#387AFF");
         Color defaultBlueHigh = Color.ParseColor("#598FFF");
         Color defaultBluePressed = Color.ParseColor("#2E65D4");
-        Color defaultHeaderTint = Color.ParseColor("#C2D8FF");
-        Color defaultBaseBg = Color.ParseColor("#080A10");
-        Color defaultCard = Color.ParseColor("#C4171820");
-        Color defaultElevated = Color.ParseColor("#D622232D");
+        Color defaultHeaderTint = Color.ParseColor("#D6E4FF");
+        // Native One UI 9 Dark Mode neutral surfaces (clean dark glass like Settings & Voice Recorder)
+        Color defaultBaseBg = Color.Rgb(8, 8, 11);
+        Color defaultCard = Color.Argb(215, 22, 22, 27);
+        Color defaultElevated = Color.Argb(232, 32, 33, 40);
+        Color defaultRoomBg = Color.Argb(185, 13, 14, 19);
 
         Primary = defaultBlue;
         PrimaryHigh = defaultBlueHigh;
@@ -91,7 +93,7 @@ public static class OneUiTheme {
         BgScreen = defaultBaseBg;
         SurfaceCard = defaultCard;
         SurfaceElevated = defaultElevated;
-        RoomBg = Color.ParseColor("#99101219");
+        RoomBg = defaultRoomBg;
         IsDynamicWallpaperActive = false;
 
         if (ctx == null || !OperatingSystem.IsAndroidVersionAtLeast(31)) {
@@ -103,35 +105,36 @@ public static class OneUiTheme {
             Color? sysA1_300 = TryGetFrameworkColor(ctx, "system_accent1_300");
             Color? sysA1_500 = TryGetFrameworkColor(ctx, "system_accent1_500");
             Color? sysA1_200 = TryGetFrameworkColor(ctx, "system_accent1_200");
-            Color? sysA2_300 = TryGetFrameworkColor(ctx, "system_accent2_300");
-            Color? sysA3_300 = TryGetFrameworkColor(ctx, "system_accent3_300");
-            Color? sysN1_900 = TryGetFrameworkColor(ctx, "system_neutral1_900");
-            Color? sysN2_800 = TryGetFrameworkColor(ctx, "system_neutral2_800");
 
             if (sysA1_400.HasValue && IsChromatic(sysA1_400.Value)) {
                 IsDynamicWallpaperActive = true;
-                Primary = sysA1_400.Value;
-                PrimaryHigh = sysA1_300 ?? AdjustBrightness(Primary, 1.18f);
-                PrimaryPressed = sysA1_500 ?? AdjustBrightness(Primary, 0.80f);
-                CoralStart = sysA3_300 ?? sysA2_300 ?? PrimaryHigh;
-                CoralEnd = PrimaryPressed;
-                PeachText = sysA1_200 ?? AdjustBrightness(PrimaryHigh, 1.25f);
-                BedChannel = PrimaryHigh;
-            }
+                Color baseAccent = RefineAccent(sysA1_400.Value);
+                Color highAccent = sysA1_300.HasValue ? RefineAccent(sysA1_300.Value) : AdjustBrightness(baseAccent, 1.18f);
+                Color lowAccent = sysA1_500 ?? AdjustBrightness(baseAccent, 0.78f);
 
-            if (sysN1_900.HasValue) {
-                Color n = sysN1_900.Value;
-                BgScreen = Blend(defaultBaseBg, Color.Argb(255, n.R, n.G, n.B), 0.35f);
-                RoomBg = WithAlpha(Blend(Color.ParseColor("#101219"), n, 0.35f), 0x9E);
-            }
-            if (sysN2_800.HasValue) {
-                Color n2 = sysN2_800.Value;
-                SurfaceCard = WithAlpha(Blend(Color.ParseColor("#171820"), n2, 0.40f), 0xC4);
-                SurfaceElevated = WithAlpha(Blend(Color.ParseColor("#22232D"), n2, 0.45f), 0xE0);
+                Primary = baseAccent;
+                PrimaryHigh = highAccent;
+                PrimaryPressed = lowAccent;
+                CoralStart = highAccent;
+                CoralEnd = lowAccent;
+                PeachText = Blend(Color.Rgb(242, 243, 249), sysA1_200 ?? highAccent, 0.36f);
+                BedChannel = Blend(highAccent, Color.Rgb(108, 178, 255), 0.32f);
+
+                // Subtle 3% accent whisper on elevated cards only; backgrounds stay clean neutral dark
+                SurfaceCard = WithAlpha(Blend(Color.Rgb(22, 22, 27), baseAccent, 0.03f), 218);
+                SurfaceElevated = WithAlpha(Blend(Color.Rgb(32, 33, 40), baseAccent, 0.04f), 235);
             }
         } catch {
             // Fall back cleanly to Samsung One UI 9 Blue palette
         }
+    }
+
+    static Color RefineAccent(Color c) {
+        float[] hsv = new float[3];
+        Color.ColorToHSV(c, hsv);
+        hsv[1] = Math.Clamp(hsv[1] * 0.90f, 0.25f, 0.78f);
+        hsv[2] = Math.Clamp(hsv[2], 0.62f, 0.95f);
+        return new Color(Color.HSVToColor(255, hsv));
     }
 
     static Color? TryGetFrameworkColor(Context ctx, string name) {
@@ -356,17 +359,17 @@ public sealed class OneUiBackdropView : View {
         Color p2 = OneUiTheme.CoralStart;
         Color p3 = OneUiTheme.PrimaryPressed;
 
-        // Top ambient wallpaper depth glow
+        // Top ambient wallpaper depth glow (whisper-subtle so One UI 9 dark surfaces stay crisp neutral)
         DrawGlow(canvas, w * 0.25f, h * 0.08f, Math.Max(w, h) * 0.55f,
-            Color.Argb(85, p1.R, p1.G, p1.B));
+            Color.Argb(22, p1.R, p1.G, p1.B));
 
         // Mid-right secondary harmonic bokeh sphere
         DrawGlow(canvas, w * 0.88f, h * 0.42f, Math.Max(w, h) * 0.50f,
-            Color.Argb(68, p2.R, p2.G, p2.B));
+            Color.Argb(16, p2.R, p2.G, p2.B));
 
         // Bottom-left deep ambient sphere behind floating nav capsule
         DrawGlow(canvas, w * 0.18f, h * 0.86f, Math.Max(w, h) * 0.48f,
-            Color.Argb(75, p3.R, p3.G, p3.B));
+            Color.Argb(18, p3.R, p3.G, p3.B));
     }
 
     void DrawGlow(Canvas canvas, float cx, float cy, float radius, Color centerColor) {
@@ -485,15 +488,18 @@ public sealed class OneUiGlassDrawable : Drawable {
 }
 
 /// <summary>
-/// Full-capsule 44dp One UI 9 slider with dynamic accent fill, embedded label &amp; value readout,
-/// double-tap-to-reset support, Recoil press feedback, and vertical scroll protection.
+/// Full-capsule 44dp One UI 9 slider (matching SystemUI Brightness &amp; SoundCraft Volume seekbars):
+/// continuous pixel-smooth float tracking (zero stepping jitter), blooming circular touch "ball" thumb
+/// with spring animation on press/drag, embedded label &amp; value readout, double-tap reset, and scroll safety.
 /// </summary>
 public sealed class OneUiSeekBar : SeekBar {
     readonly int touchSlop;
     readonly Paint trackPaint = new(PaintFlags.AntiAlias);
     readonly Paint trackRimPaint = new(PaintFlags.AntiAlias);
     readonly Paint fillPaint = new(PaintFlags.AntiAlias);
-    readonly Paint capDotPaint = new(PaintFlags.AntiAlias);
+    readonly Paint thumbHaloPaint = new(PaintFlags.AntiAlias);
+    readonly Paint thumbBallPaint = new(PaintFlags.AntiAlias);
+    readonly Paint thumbBallRimPaint = new(PaintFlags.AntiAlias);
     readonly Paint labelPaint = new(PaintFlags.AntiAlias);
     readonly Paint valuePaint = new(PaintFlags.AntiAlias);
     readonly Android.Graphics.Path clipPath = new();
@@ -503,9 +509,16 @@ public sealed class OneUiSeekBar : SeekBar {
     float maxMoveDist;
     int initialProgress;
     bool isHorizontalDrag;
+    bool isTouchDown;
     bool isCancelledToScroll;
     MotionEvent pendingDown;
     DateTime lastTapTime = DateTime.MinValue;
+
+    float renderedRatio;
+    float touchRatio;
+    float thumbExpansion;
+    bool hasInitializedRatio;
+    long lastFrameMs;
 
     public string LabelText { get; set; } = "";
     public string ValueText { get; set; } = "";
@@ -527,17 +540,19 @@ public sealed class OneUiSeekBar : SeekBar {
         SplitTrack = false;
         SetPadding(0, 0, 0, 0);
 
-        trackPaint.Color = Color.Argb(82, 255, 255, 255);
+        trackPaint.Color = Color.Argb(58, 255, 255, 255);
         trackPaint.SetStyle(Paint.Style.Fill);
 
-        trackRimPaint.Color = Color.Argb(45, 255, 255, 255);
+        trackRimPaint.Color = Color.Argb(36, 255, 255, 255);
         trackRimPaint.StrokeWidth = Math.Max(1f, dp);
         trackRimPaint.SetStyle(Paint.Style.Stroke);
 
         fillPaint.SetStyle(Paint.Style.Fill);
 
-        capDotPaint.Color = Color.Argb(220, 252, 252, 255);
-        capDotPaint.SetStyle(Paint.Style.Fill);
+        thumbHaloPaint.SetStyle(Paint.Style.Fill);
+        thumbBallPaint.SetStyle(Paint.Style.Fill);
+        thumbBallRimPaint.SetStyle(Paint.Style.Stroke);
+        thumbBallRimPaint.StrokeWidth = Math.Max(1.2f, 1.2f * dp);
 
         labelPaint.Color = OneUiTheme.TextPrimary;
         labelPaint.TextSize = 13f * dp;
@@ -563,32 +578,76 @@ public sealed class OneUiSeekBar : SeekBar {
             return;
         }
 
+        long nowMs = SystemClock.UptimeMillis();
+        if (lastFrameMs == 0) {
+            lastFrameMs = nowMs;
+        }
+        float dt = Math.Clamp((nowMs - lastFrameMs) / 1000f, 0.001f, 0.05f);
+        lastFrameMs = nowMs;
+
+        float discreteRatio = Max > 0 ? Math.Clamp(Progress / (float)Max, 0f, 1f) : 0f;
+        float targetRatio = isHorizontalDrag ? touchRatio : discreteRatio;
+        if (!hasInitializedRatio) {
+            renderedRatio = targetRatio;
+            hasInitializedRatio = true;
+        } else {
+            float ratioSpeed = isHorizontalDrag ? 30f : 16f;
+            renderedRatio += (targetRatio - renderedRatio) * Math.Min(1f, dt * ratioSpeed);
+            if (MathF.Abs(targetRatio - renderedRatio) < 0.0006f) {
+                renderedRatio = targetRatio;
+            }
+        }
+
+        float targetThumb = isTouchDown ? 1f : 0f;
+        float thumbSpeed = isTouchDown ? 18f : 12f;
+        thumbExpansion += (targetThumb - thumbExpansion) * Math.Min(1f, dt * thumbSpeed);
+        if (MathF.Abs(targetThumb - thumbExpansion) < 0.004f) {
+            thumbExpansion = targetThumb;
+        }
+
         float dp = Resources.DisplayMetrics.Density;
         float radius = h * 0.5f;
         RectF bounds = new(0.5f, 0.5f, w - 0.5f, h - 0.5f);
 
-        // 1. Background translucent glass track
+        // 1. Background translucent neutral glass track
         canvas.DrawRoundRect(bounds, radius, radius, trackPaint);
 
-        // 2. Active capsule fill clipped to pill bounds
-        float ratio = Max > 0 ? Math.Clamp(Progress / (float)Max, 0f, 1f) : 0f;
-        if (ratio > 0.001f) {
+        // 2. Active capsule fill + One UI 9 SoundCraft/Brightness blooming circular ball thumb
+        if (renderedRatio > 0.001f || thumbExpansion > 0.01f) {
             clipPath.Reset();
             clipPath.AddRoundRect(bounds, radius, radius, Android.Graphics.Path.Direction.Cw);
             canvas.Save();
             canvas.ClipPath(clipPath);
 
-            float fillRight = Math.Max(h * 0.65f, ratio * w);
+            float fillRight = Math.Max(h * 0.72f, renderedRatio * w);
             Color c1 = UseBlueAccent ? OneUiTheme.PrimaryHigh : OneUiTheme.CoralStart;
             Color c2 = UseBlueAccent ? OneUiTheme.PrimaryPressed : OneUiTheme.CoralEnd;
             using LinearGradient fillShader = new(0, 0, w, 0, [c2.ToArgb(), c1.ToArgb()], [0f, 1f], Shader.TileMode.Clamp);
             fillPaint.SetShader(fillShader);
-            canvas.DrawRoundRect(0f, 0f, fillRight, h, radius, radius, fillPaint);
+            if (renderedRatio > 0.001f) {
+                canvas.DrawRoundRect(0f, 0f, fillRight, h, radius, radius, fillPaint);
+            }
             fillPaint.SetShader(null);
 
-            if (fillRight > 16f * dp) {
-                float dotX = Math.Clamp(fillRight - radius * 0.48f, radius * 0.45f, w - radius * 0.45f);
-                canvas.DrawCircle(dotX, radius, 2.8f * dp, capDotPaint);
+            // Signature One UI 9 slider ball inside active capsule tip
+            float ballX = Math.Clamp(fillRight - radius * 0.50f, radius * 0.50f, w - radius * 0.50f);
+            float ballY = radius;
+            float idleR = 2.6f * dp;
+            float activeR = radius * 0.60f;
+            float ballR = idleR + (activeR - idleR) * thumbExpansion;
+
+            if (thumbExpansion > 0.02f) {
+                float haloR = ballR + 5.5f * dp * thumbExpansion;
+                thumbHaloPaint.Color = Color.Argb((int)(56 * thumbExpansion), 255, 255, 255);
+                canvas.DrawCircle(ballX, ballY, haloR, thumbHaloPaint);
+            }
+
+            thumbBallPaint.Color = Color.Argb((int)(185 + 70 * thumbExpansion), 252, 252, 255);
+            canvas.DrawCircle(ballX, ballY, ballR, thumbBallPaint);
+
+            if (thumbExpansion > 0.05f) {
+                thumbBallRimPaint.Color = Color.Argb((int)(145 * thumbExpansion), c2.R, c2.G, c2.B);
+                canvas.DrawCircle(ballX, ballY, ballR, thumbBallRimPaint);
             }
             canvas.Restore();
         }
@@ -596,12 +655,12 @@ public sealed class OneUiSeekBar : SeekBar {
         // Subtle tick notch indicating default reset point
         if (HasDefaultReset && Max > 0 && DefaultProgress > 0 && DefaultProgress < Max) {
             float defX = DefaultProgress / (float)Max * w;
-            canvas.DrawLine(defX, h - 6f * dp, defX, h - 2f * dp, trackRimPaint);
+            canvas.DrawLine(defX, h - 5.5f * dp, defX, h - 1.5f * dp, trackRimPaint);
         }
 
         canvas.DrawRoundRect(bounds, radius, radius, trackRimPaint);
 
-        // 3. Embedded label & live value centered vertically inside the capsule
+        // 3. Embedded label & live value centered vertically inside the capsule (always crisp above fill & ball)
         float textY = radius - (labelPaint.Ascent() + labelPaint.Descent()) * 0.5f;
         string valText = string.IsNullOrEmpty(ValueText) ? Progress.ToString() : ValueText;
         float valW = valuePaint.MeasureText(valText);
@@ -614,12 +673,21 @@ public sealed class OneUiSeekBar : SeekBar {
             canvas.Restore();
         }
         canvas.DrawText(valText, w - 16f * dp, textY, valuePaint);
+
+        bool needsNextFrame =
+            MathF.Abs(targetRatio - renderedRatio) > 0.0006f ||
+            MathF.Abs(targetThumb - thumbExpansion) > 0.004f;
+        if (needsNextFrame) {
+            PostInvalidateOnAnimation();
+        }
     }
 
     public override bool OnTouchEvent(MotionEvent e) {
         if (!Enabled) {
             return false;
         }
+
+        float w = Math.Max(1f, Width);
 
         switch (e.ActionMasked) {
             case MotionEventActions.Down:
@@ -628,56 +696,68 @@ public sealed class OneUiSeekBar : SeekBar {
                 maxMoveDist = 0f;
                 initialProgress = Progress;
                 isHorizontalDrag = false;
+                isTouchDown = true;
                 isCancelledToScroll = false;
+                touchRatio = Math.Clamp(downX / w, 0f, 1f);
+                lastFrameMs = SystemClock.UptimeMillis();
                 pendingDown?.Recycle();
                 pendingDown = MotionEvent.Obtain(e);
+                PostInvalidateOnAnimation();
                 return true;
 
             case MotionEventActions.Move:
                 if (isCancelledToScroll) {
                     return false;
                 }
-                float dx = Math.Abs(e.GetX() - downX);
-                float dy = Math.Abs(e.GetY() - downY);
+                float curX = e.GetX();
+                float curY = e.GetY();
+                float dx = Math.Abs(curX - downX);
+                float dy = Math.Abs(curY - downY);
                 float moveDist = MathF.Sqrt(dx * dx + dy * dy);
                 if (moveDist > maxMoveDist) {
                     maxMoveDist = moveDist;
                 }
+                touchRatio = Math.Clamp(curX / w, 0f, 1f);
+
                 if (!isHorizontalDrag) {
                     if (dy > touchSlop && dy > dx) {
                         isCancelledToScroll = true;
+                        isTouchDown = false;
                         Parent?.RequestDisallowInterceptTouchEvent(false);
                         Progress = initialProgress;
                         pendingDown?.Recycle();
                         pendingDown = null;
-                        Invalidate();
+                        PostInvalidateOnAnimation();
                         return false;
                     }
-                    if (dx > touchSlop && dx >= dy * 1.15f) {
+                    if (dx > touchSlop * 0.55f && dx >= dy * 1.1f) {
                         isHorizontalDrag = true;
                         Parent?.RequestDisallowInterceptTouchEvent(true);
-                        Animate().ScaleY(0.95f).SetDuration(100).Start();
+                        Animate().ScaleY(0.95f).SetDuration(110).Start();
                         if (pendingDown != null) {
                             base.OnTouchEvent(pendingDown);
                             pendingDown.Recycle();
                             pendingDown = null;
                         }
                         bool res = base.OnTouchEvent(e);
-                        Invalidate();
+                        PostInvalidateOnAnimation();
                         return res;
                     }
+                    PostInvalidateOnAnimation();
                     return true;
                 }
                 Parent?.RequestDisallowInterceptTouchEvent(true);
                 bool handled = base.OnTouchEvent(e);
-                Invalidate();
+                PostInvalidateOnAnimation();
                 return handled;
 
             case MotionEventActions.Up:
                 Parent?.RequestDisallowInterceptTouchEvent(false);
-                Animate().ScaleY(1f).SetDuration(350).Start();
+                Animate().ScaleY(1f).SetDuration(320).Start();
+                isTouchDown = false;
                 if (isCancelledToScroll) {
                     isCancelledToScroll = false;
+                    PostInvalidateOnAnimation();
                     return false;
                 }
 
@@ -694,7 +774,7 @@ public sealed class OneUiSeekBar : SeekBar {
                         ResetRequested?.Invoke(target);
                         Animate().ScaleY(0.90f).SetDuration(90).WithEndAction(
                             new Java.Lang.Runnable(() => Animate().ScaleY(1f).SetDuration(260).Start())).Start();
-                        Invalidate();
+                        PostInvalidateOnAnimation();
                         return true;
                     }
                     lastTapTime = now;
@@ -707,20 +787,23 @@ public sealed class OneUiSeekBar : SeekBar {
                 }
                 isHorizontalDrag = false;
                 bool upHandled = base.OnTouchEvent(e);
-                Invalidate();
+                PostInvalidateOnAnimation();
                 return upHandled;
 
             case MotionEventActions.Cancel:
                 Parent?.RequestDisallowInterceptTouchEvent(false);
-                Animate().ScaleY(1f).SetDuration(350).Start();
+                Animate().ScaleY(1f).SetDuration(320).Start();
+                isTouchDown = false;
                 pendingDown?.Recycle();
                 pendingDown = null;
                 if (!isHorizontalDrag) {
                     isCancelledToScroll = false;
+                    PostInvalidateOnAnimation();
                     return false;
                 }
                 isHorizontalDrag = false;
                 isCancelledToScroll = false;
+                PostInvalidateOnAnimation();
                 return base.OnTouchEvent(e);
         }
 
