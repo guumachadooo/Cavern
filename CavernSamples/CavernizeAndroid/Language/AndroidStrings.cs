@@ -44,13 +44,22 @@ public sealed class AndroidStrings {
         ["OpenFile"] = "Open File",
         ["NoFile"] = "No file loaded (supports EAC3, AC3, MKV, MP4, WAV/ADM, CAF, LAF, ATMOS, MP3/FLAC)",
         ["TrackLabel"] = "Track:",
+        ["TabMusicPlayer"] = "Player",
         ["TabPlayer"] = "3D Room",
-        ["TabConvert"] = "Convert",
+        ["TabConvert"] = "Studio",
         ["TabExtract"] = "Stems",
         ["TabSettings"] = "Settings",
 
+        // Casual Music Player
+        ["PlayerEmptyTitle"] = "Ready to Listen",
+        ["PlayerEmptySub"] = "Open E-AC-3 Atmos, AC-3, MKV, MP4, FLAC, or WAV",
+        ["PlayerOpenRoom"] = "Customize in 3D Room",
+        ["PlayerSwitchTrack"] = "Audio Track",
+        ["PlayerBadgeSpatial"] = "Spatial 3D",
+        ["PlayerQuickMatrix"] = "Matrix 7.1",
+
         // Player & Room
-        ["RoomTitle"] = "3D Room Simulator (drag listener to move)",
+        ["RoomTitle"] = "3D Room",
         ["PresetCenter"] = "Center",
         ["PresetFront"] = "Front",
         ["PresetBack"] = "Back",
@@ -178,8 +187,8 @@ public sealed class AndroidStrings {
         // Room Stability & Fine-Tuning
         ["LockRoom"] = "Lock Position",
         ["UnlockRoom"] = "Position Locked",
-        ["FineTuneBtn"] = "Fine-tune Position & Head (Sliders)",
-        ["FineTuneHideBtn"] = "Hide Fine-tune Sliders",
+        ["FineTuneBtn"] = "Fine-tune Position & Head",
+        ["FineTuneHideBtn"] = "Hide Sliders",
         ["SliderResetHint"] = "Double-tap any slider to reset to its default value",
         ["TrackMultiBadge"] = "Track {0}/{1}",
         ["SelectTrackHeader"] = "Audio Tracks in File",
@@ -226,39 +235,61 @@ public sealed class AndroidStrings {
         ["CalibTitle"] = "HRIR & QuickEQ Calibration",
         ["AboutVerSection"] = "About & App Version",
         ["RoomAcousticsTitle"] = "Room Acoustics, Gain & Limiter",
-        ["SelectFilePill"] = "Tap Abrir to select audio or video...",
+        ["SelectFilePill"] = "Open audio or video...",
         ["FileDetailsHint"] = "Technical stream details",
         ["OpenShort"] = "Open",
-        ["RoomTouchHint"] = "Switch 3D / Top / Front view • Drag listener • Rotate Head & adjust Height (Y) in dock",
+        ["RoomTouchHint"] = "Drag room to orbit camera • Drag listener • Tap speakers for Solo",
 
-        // Contextual '?' Card Help Explanations
-        ["HelpRoom"] = "Interactive 3D acoustic room simulator. Switch between '3D + Altura' (perspective box with vertical stalks), 'Topo + Altura' (top map + side elevation column), and 'Frente (X/Y)' to see speakers and 3D objects moving up/down and side-to-side. Tap any speaker/object to Solo it, and use the bottom dock to rotate head Yaw/Pitch or change Height Y.",
-        ["HelpTransport"] = "Play, pause, or scrub across the audio timeline. Active playback also publishes an Android Media Notification and Lock Screen player so you can control playback anywhere on your phone.",
-        ["HelpQuickPanel"] = "Instant spatial toggles: HRTF 3D simulates surround speakers over headphones; Ear Distance adds acoustic depth cues; 3D Objects / Height Only isolate immersive elements; Volume, LFE Subwoofer boost, and Rolloff adjust distance decay.",
-        ["HelpMixer"] = "Inspect every fixed bed channel and dynamic 3D object inside the file in real time. Tap 'S' to Solo or 'M' to Mute individual audio sources.",
-        ["HelpSystem"] = "Select your target speaker configuration (from stereo/headphones up to 7.1.4 or custom layouts) and inspect exact physical amplifier wiring connections.",
-        ["HelpExport"] = "Choose output audio codec and container format, then render and save to Downloads/Cavernize. Enable the checkbox above Render to bake your 3D room seat position & Solo/Mute edits into the exported file.",
-        ["HelpQueue"] = "Add multiple media files to render sequentially in the background using the chosen speaker target and codec.",
-        ["HelpExtract"] = "Isolate and export every bed channel and 3D audio object as separate WAV stems or combined 3D stems, along with JSON 3D object trajectory metadata.",
-        ["HelpUpmix"] = "Convert stereo or 5.1 sources into 7.1 surround (Matrix Upmix) or synthesize overhead 3D ceiling objects automatically (Cavernize 3D).",
-        ["HelpRoomAcoustics"] = "Tune overall render gain, vertical Height Squeeze, acoustic damping environment (Home/Hall/Studio), physical room dimensions (X/Y/Z), and dynamic limiter protection.",
-        ["HelpCalib"] = "Load a custom binaural headphone HRIR (.wav) or QuickEQ room calibration filter file (.txt) to personalize the 3D soundstage.",
-        ["HelpAdvanced"] = "Specialized rendering flags: channel isolation (mute bed/ground), 24-bit PCM forcing, surround swap, WAV channel mask bypass, quality grading reports, MLP stream selection, and strict standard checks.",
-        ["HelpFFmpeg"] = "FFmpeg handles encoding/muxing for E-AC-3, AC-3, Opus, and MKV. Tap Download FFmpeg once to install a static ARM64 binary automatically—no root or external Termux setup needed.",
-        ["HelpDiagnostics"] = "View or share internal diagnostic logs if an import, decode, or mux error occurs.",
-        ["HelpAbout"] = "Change the app language, open the online manual, view engine info, or check GitHub Releases for newer APK versions.",
+        // Individual Technical Option Tooltips (cause & effect)
+        ["TipHrtf"] = "Simulates virtual surround speakers around your head on headphones.\n\n• On: full 3D binaural staging.\n• Off: direct mix without ear HRTF filtering (use on physical speakers).",
+        ["TipDistSim"] = "Applies micro-delays and ear cues based on virtual distance.\n\n• On: deeper acoustic room realism.\n• Off: drier soundstage with flatter depth.",
+        ["TipRolloff"] = "Sets how fast distant objects drop in volume:\n• Logarithmic / Real (1/d): stronger near-vs-far depth contrast.\n• Linear: gentle uniform decay.\n• Disabled: constant loudness regardless of distance.",
+        ["TipMatrixUpmix"] = "Fills surround channels from stereo or 5.1 audio.\n\n• On: widens side and rear staging.\n• Off: preserves only channels present in the source file.",
+        ["TipCavernizeUpmix"] = "Synthesizes overhead 3D ceiling objects dynamically.\n\n• On: harmonic and ambient layers lift above ear level.\n• Off: height speakers stay silent unless native Atmos objects exist.",
+        ["TipUpmixEffect"] = "Controls extraction aggressiveness during upmixing.\n\n• Higher (%): stronger separation to surrounds and ceiling.\n• Lower (%): preserves closer fidelity to the original stereo/5.1 mix.",
+        ["TipUpmixSmooth"] = "Smooths motion speed of synthesized 3D objects.\n\n• Higher (%): calmer, steadier movement without abrupt shifts.\n• Lower (%): fast tracking for sharp transient effects.",
+        ["TipRenderGain"] = "Master digital gain offset applied when mixing and exporting.\n\n• Positive (+dB): louder signal (watch for clipping above 0 dB).\n• Negative (-dB): adds headroom to prevent peak distortion.",
+        ["TipHeightSqueeze"] = "Compresses elevated objects down toward ear height.\n\n• 0%: full vertical 3D ceiling spread.\n• Near 100%: folds ceiling sounds down onto ground channels.",
+        ["TipNormalizer"] = "Dynamic volume control during playback.\n\n• Normalizer On: raises quiet detail and caps harsh peaks.\n• Limiter Only: keeps native loudness untouched, capping peaks at 0 dB.",
+        ["TipEnvType"] = "Changes room acoustic scale presets (Home, Concert Hall, Cinema, Studio), shifting perceived wall depth.",
+        ["TipHrir"] = "Loads a custom measured Head-Related Impulse Response (.wav) to personalize headphone spatialization.",
+        ["TipQuickEQ"] = "Loads EQ calibration filters (.txt from QuickEQ / Equalizer APO) to flatten room or headphone peaks.",
+        ["TipSpeakerVirt"] = "Simulates virtual overhead channels across ground speakers when no physical height speakers exist.",
+        ["TipMuteBed"] = "Mutes fixed bed channels (5.1 / 7.1) so only dynamic 3D objects stay audible.",
+        ["TipMuteGround"] = "Mutes ear-level bed and object audio so only overhead height layers play.",
+        ["TipForce24Bit"] = "Forces 24-bit integer PCM instead of 16-bit when exporting lossless WAV/PCM.",
+        ["TipSurroundSwap"] = "Swaps Side Surround and Rear Surround channels for receivers using inverted surround mapping.",
+        ["TipWavSkip"] = "Omits extended WAV channel masks; improves compatibility with legacy multichannel players.",
+        ["TipReportMode"] = "Analyzes objects and dynamics without writing any audio file to disk.",
+        ["TipQualityGrading"] = "Calculates dynamic crest factor, object activity, and spatial usage metrics in Post-Render Report.",
+        ["TipMlpPres"] = "Selects a specific Dolby TrueHD MLP substream presentation (0–3; -1 picks the richest stream automatically).",
+        ["TipPedantic"] = "Enforces strict standard checks; stops immediately on malformed frames.",
+        ["TipUnsafe"] = "Bypasses stream safety locks; helps rescue damaged files at higher risk of audio glitches.",
+        ["TipRenderTarget"] = "Sets the target speaker configuration or headphone profile used for amplifier wiring and final export mixdown.",
+        ["TipApplyRoomExport"] = "When enabled, permanently bakes your 3D room seat position, head orientation, and Solo/Mute edits into the exported file.",
+        ["TipExtractModes"] = "• Original Separated: 1 raw mono WAV per bed channel and 3D object.\n• Render Each in 3D: renders each selected item separately in your target 3D layout.\n• 3D Combined: exports all checked 3D objects together.\n• Raw Bitstream: demuxes untouched stream via --extract.",
+        ["TipExtractJson"] = "Saves a .json sidecar with frame-by-frame (X, Y, Z) 3D trajectories for dynamic objects.",
+        ["TipFFmpegArgs"] = "Additional CLI arguments forwarded directly to FFmpeg when encoding output (e.g. -b:a 960k for higher bitrate).",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
         d["OpenFile"] = "Abrir Arquivo";
         d["NoFile"] = "Nenhum arquivo aberto (EAC3, AC3, MKV, MP4, WAV/ADM, CAF, LAF, ATMOS, MP3/FLAC)";
         d["TrackLabel"] = "Faixa:";
+        d["TabMusicPlayer"] = "Player";
         d["TabPlayer"] = "Sala 3D";
         d["TabConvert"] = "Estúdio";
         d["TabExtract"] = "Stems";
         d["TabSettings"] = "Ajustes";
 
-        d["RoomTitle"] = "Simulador de Sala 3D (arraste o ouvinte pela sala)";
+        d["PlayerEmptyTitle"] = "Pronto para ouvir";
+        d["PlayerEmptySub"] = "Abra E-AC-3 Atmos, AC-3, MKV, MP4, FLAC ou WAV";
+        d["PlayerOpenRoom"] = "Personalizar na Sala 3D";
+        d["PlayerSwitchTrack"] = "Faixa de Áudio";
+        d["PlayerBadgeSpatial"] = "Espacial 3D";
+        d["PlayerQuickMatrix"] = "Matrix 7.1";
+
+        d["RoomTitle"] = "Sala 3D";
         d["PresetCenter"] = "Centro";
         d["PresetFront"] = "Frente";
         d["PresetBack"] = "Fundo";
@@ -307,8 +338,8 @@ public sealed class AndroidStrings {
         d["ShareFile"] = "Compartilhar";
         d["OpenPlayer"] = "Ouvir no Player";
 
-        d["ExtractTitle"] = "Extrator Separado de Canais e Objetos 3D";
-        d["ExtractDesc"] = "Separe cada canal fixo e cada objeto 3D em arquivos WAV individuais (funciona inclusive em Dolby Digital Plus Atmos comprimido E-AC-3 JOC, ADM BWF, DAMF, LAF, WAV, CAF).";
+        d["ExtractTitle"] = "Extrator de Canais e Objetos 3D";
+        d["ExtractDesc"] = "Separe cada canal base e objeto 3D em arquivos WAV individuais (E-AC-3 JOC, ADM BWF, DAMF, LAF, WAV, CAF).";
         d["ExtractMode"] = "Modo de extração:";
         d["ModeRawStems"] = "Extrair Tudo Separado Original (1 WAV Mono por Canal e Objeto + JSON 3D)";
         d["ModeSpatialEach"] = "Renderizar Cada Item Selecionado em 3D Separado (HRTF / Layout)";
@@ -381,8 +412,8 @@ public sealed class AndroidStrings {
 
         d["LockRoom"] = "Mover Ouvinte";
         d["UnlockRoom"] = "Posição Travada";
-        d["FineTuneBtn"] = "Ajuste fino de posição e cabeça (Sliders)";
-        d["FineTuneHideBtn"] = "Ocultar sliders de ajuste fino";
+        d["FineTuneBtn"] = "Ajuste fino dos eixos";
+        d["FineTuneHideBtn"] = "Ocultar ajuste fino";
         d["SliderResetHint"] = "Toque 2x rápido em qualquer slider para restaurar o padrão";
         d["TrackMultiBadge"] = "Faixa {0}/{1}";
         d["SelectTrackHeader"] = "Faixas de Áudio do Arquivo";
@@ -426,32 +457,47 @@ public sealed class AndroidStrings {
         d["CalibTitle"] = "Calibração HRIR e Filtros QuickEQ";
         d["AboutVerSection"] = "Sobre e Versão do App";
         d["RoomAcousticsTitle"] = "Acústica da Sala, Ganho e Limitador";
-        d["SelectFilePill"] = "Toque em Abrir para escolher mídia...";
+        d["SelectFilePill"] = "Abrir arquivo de áudio ou vídeo...";
         d["FileDetailsHint"] = "Detalhes técnicos da faixa";
         d["OpenShort"] = "Abrir";
-        d["RoomTouchHint"] = "Alterne 3D / Topo / Frente • Arraste ouvinte • Use o painel abaixo para Cabeça e Altura (Y)";
+        d["RoomTouchHint"] = "Arraste o fundo para girar em 3D • Arraste o ouvinte • Toque nas caixas para Solo";
 
-        d["HelpRoom"] = "Simulador acústico 3D interativo. Alterne entre '3D + Altura' (cubo 3D com hastes do chão ao teto para ver altura Y), 'Topo + Altura' (mapa + torre lateral de elevação) e 'Frente (X/Y)'. Toque em qualquer caixa ou objeto para dar Solo e use os controles abaixo do mapa para girar a cabeça ou ajustar a altura Y sem cobrir as caixas.";
-        d["HelpTransport"] = "Reproduza, pause ou navegue pela faixa em tempo real. Durante a reprodução, o Cavernize também aparece nas notificações e na tela de bloqueio (igual ao Spotify) com controles rápidos.";
-        d["HelpQuickPanel"] = "Atalhos espaciais rápidos: 'HRTF 3D' simula caixas ao redor em fones de ouvido; 'Distância' aplica profundidade acústica realista; 'Só Obj. 3D' e 'Só Teto' isolam elementos imersivos; os sliders ajustam Volume, Subwoofer (LFE) e queda sonora por distância.";
-        d["HelpMixer"] = "Lista ao vivo de todos os canais fixos (beds) e objetos dinâmicos 3D do arquivo. Toque em 'S' (Solo) para ouvir apenas aquele som ou 'M' (Mute) para silenciá-lo.";
-        d["HelpSystem"] = "Escolha para qual configuração de caixas ou fones deseja converter o áudio e veja exatamente como conectar os fios de cada canal no amplificador.";
-        d["HelpExport"] = "Defina o codec e formato do arquivo de saída e salve em Downloads/Cavernize. Marque a caixa acima do botão para gravar no arquivo final a sua posição na sala 3D e os Solos/Mutes ativos.";
-        d["HelpQueue"] = "Adicione vários arquivos em lote para processar um após o outro automaticamente usando o mesmo alvo e codec escolhidos.";
-        d["HelpExtract"] = "Separe cada canal de chão e cada objeto 3D em arquivos WAV individuais (ou renderize cada objeto em 3D/HRTF), com opção de salvar as trajetórias 3D em JSON.";
-        d["HelpUpmix"] = "Transforme áudios estéreo ou 5.1 comuns em surround 7.1 (Matrix Upmix) ou crie objetos de teto virtuais automaticamente (Cavernize 3D).";
-        d["HelpRoomAcoustics"] = "Configure o ganho geral em dB, compressão vertical de teto (Height Squeeze), tipo de ambiente acústico (Casa/Estúdio/Cinema), medidas reais da sala (X, Y, Z) e normalizador/limitador dinâmico.";
-        d["HelpCalib"] = "Carregue uma resposta binaural HRIR personalizada (.wav) para fones ou filtros de correção acústica QuickEQ (.txt) da sua sala.";
-        d["HelpAdvanced"] = "Opções técnicas avançadas: silenciar chão ou canais base, forçar 24 bits, inverter surrounds, ignorar máscara RIFF WAVE, modo apenas relatório, análise de qualidade, apresentação TrueHD MLP e travas estritas.";
-        d["HelpFFmpeg"] = "O FFmpeg permite codificar/empacotar formatos comprimidos como E-AC-3, AC-3, Opus e MKV. Clique em 'Baixar FFmpeg Auto' uma única vez para instalar automaticamente (sem precisar de configuração externa).";
-        d["HelpDiagnostics"] = "Visualize ou compartilhe o arquivo de log completo caso ocorra qualquer erro ao abrir, decodificar ou exportar uma mídia.";
-        d["HelpAbout"] = "Altere o idioma, acesse o manual online oficial, veja detalhes do motor Cavern ou verifique e instale novas versões do aplicativo pelo GitHub.";
+        d["TipHrtf"] = "Simula caixas surround ao redor da cabeça nos fones de ouvido.\n\n• Ativo: cria palco sonoro 3D binaural.\n• Desativado: saída sem filtro HRTF (use ao reproduzir em caixas acústicas físicas).";
+        d["TipDistSim"] = "Calcula microatrasos e sombreamento acústico entre os dois ouvidos.\n\n• Ativo: aumenta a sensação realista de profundidade.\n• Desativado: som mais seco e próximo ao centro.";
+        d["TipRolloff"] = "Define a rapidez com que sons distantes perdem volume:\n• Logarítmica / Real (1/d): contraste nítido entre objetos próximos e no fundo.\n• Linear: queda suave e uniforme.\n• Desativado: mantém o mesmo volume em toda a sala.";
+        d["TipMatrixUpmix"] = "Expande faixas estéreo ou 5.1 preenchendo canais surround 7.1.\n\n• Ativo: abre o palco lateral e traseiro.\n• Desativado: mantém somente os canais originais do arquivo.";
+        d["TipCavernizeUpmix"] = "Gera objetos de teto virtuais em 3D a partir de mixagens comuns.\n\n• Ativo: ambiências e camadas sobem para cima do ouvinte.\n• Desativado: caixas de altura tocam apenas quando há objetos Atmos nativos.";
+        d["TipUpmixEffect"] = "Força de separação usada ao extrair sons para surround e teto.\n\n• Subir (%): movimentação e altura 3D mais intensas (valores muito altos podem alterar timbres vocais).\n• Descer (%): preserva o equilíbrio original.";
+        d["TipUpmixSmooth"] = "Estabiliza a velocidade de deslocamento dos objetos gerados.\n\n• Subir (%): transições suaves e calmas sem saltos rápidos.\n• Descer (%): resposta imediata para efeitos rápidos.";
+        d["TipRenderGain"] = "Ajuste mestre de ganho digital aplicado na renderização.\n\n• Subir (+dB): saída mais alta (cuidado com saturação acima de 0 dB).\n• Descer (-dB): cria margem contra distorção em trilhas comprimidas.";
+        d["TipHeightSqueeze"] = "Comprime a altura dos sons do teto em direção ao plano horizontal.\n\n• 0%: aproveita toda a elevação vertical até o teto.\n• Perto de 100%: abaixa efeitos de teto para o nível das caixas comuns.";
+        d["TipNormalizer"] = "Controle automático de intensidade durante a reprodução.\n\n• Normalizador ativo: equilibra trechos baixos e contém picos.\n• Apenas limitador: não amplifica trechos suaves, só evita clipping acima de 0 dB.";
+        d["TipEnvType"] = "Altera a escala acústica virtual da sala (Casa, Sala, Cinema ou Estúdio), modificando distância e reverberação percebida.";
+        d["TipHrir"] = "Carrega um arquivo HRIR medido (.wav) para substituir o perfil padrão dos fones pela resposta de outro fone ou ouvido real.";
+        d["TipQuickEQ"] = "Aplica curvas de correção acústica (.txt gerados pelo QuickEQ / Equalizer APO) para corrigir picos da sala ou do fone.";
+        d["TipSpeakerVirt"] = "Virtualiza canais de teto em sistemas sem caixas físicas acima usando filtragem direcional nas caixas do chão.";
+        d["TipMuteBed"] = "Silencia os canais base fixos (5.1/7.1) deixando apenas os objetos dinâmicos 3D audíveis.";
+        d["TipMuteGround"] = "Silencia os canais do chão mantendo apenas os sons elevados no plano superior.";
+        d["TipForce24Bit"] = "Força exportação em PCM inteiro 24-bit em vez de 16-bit quando compatibilidade sem float é necessária.";
+        d["TipSurroundSwap"] = "Troca os canais Side Surround pelos Rear Surround caso seu amplificador ou arquivo use ordem invertida.";
+        d["TipWavSkip"] = "Omite a máscara avançada de canais WAV para evitar falhas em players antigos com áudio multicanal.";
+        d["TipReportMode"] = "Processa o arquivo apenas para medir objetos, canais e dinâmica no relatório pós-render sem salvar áudio.";
+        d["TipQualityGrading"] = "Calcula notas e métricas extras de faixa dinâmica e uso espacial ao terminar o render.";
+        d["TipMlpPres"] = "Escolhe qual apresentação interna Dolby TrueHD MLP usar (0 a 3; -1 seleciona a mais completa automaticamente).";
+        d["TipPedantic"] = "Exige conformidade estrita do bitstream; interrompe em vez de tentar corrigir pacotes irregulares.";
+        d["TipUnsafe"] = "Ignora travas de validação para tentar decodificar arquivos danificados, com risco de falhas sonoras.";
+        d["TipRenderTarget"] = "Escolhe o layout físico de caixas ou perfil de fones usado tanto na guia de cabeamento quanto na mixagem exportada.";
+        d["TipApplyRoomExport"] = "Quando ativo, grava definitivamente na exportação a posição do ouvinte, inclinação da cabeça e Solos/Mutes da Sala 3D.";
+        d["TipExtractModes"] = "• Tudo Separado: extrai 1 WAV mono para cada canal base e objeto 3D.\n• Cada Item em 3D: renderiza cada item selecionado no seu layout 3D.\n• Objetos 3D Combinados: junta apenas os objetos 3D marcados.\n• Bitstream Bruto: extrai a faixa intacta via --extract.";
+        d["TipExtractJson"] = "Exporta um arquivo .json com todas as trajetórias 3D (X, Y, Z) quadro a quadro dos objetos.";
+        d["TipFFmpegArgs"] = "Argumentos extras passados ao FFmpeg na codificação de saída (ex.: -b:a 960k aumenta o bitrate).";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {
         d["OpenFile"] = "Fájl megnyitása";
         d["TrackLabel"] = "Sáv:";
-        d["TabPlayer"] = "3D Lejátszó";
+        d["TabMusicPlayer"] = "Lejátszó";
+        d["TabPlayer"] = "3D Szoba";
         d["TabConvert"] = "Konvertálás";
         d["TabExtract"] = "Kivonó";
         d["TabSettings"] = "Sor & Beáll.";
@@ -476,7 +522,8 @@ public sealed class AndroidStrings {
     static void ApplyChinese(Dictionary<string, string> d) {
         d["OpenFile"] = "打开文件";
         d["TrackLabel"] = "音轨:";
-        d["TabPlayer"] = "3D 播放器";
+        d["TabMusicPlayer"] = "播放器";
+        d["TabPlayer"] = "3D 房间";
         d["TabConvert"] = "转换导出";
         d["TabExtract"] = "分轨提取";
         d["TabSettings"] = "队列与设置";

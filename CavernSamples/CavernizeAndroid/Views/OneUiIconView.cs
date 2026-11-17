@@ -32,7 +32,12 @@ public enum OneUiIconType {
     ChevronDown,
     ChevronUp,
     Check,
-    MusicFile
+    MusicFile,
+    HelpQuestion,
+    Rewind10,
+    Forward10,
+    RepeatLoop,
+    PlayerDisc
 }
 
 /// <summary>
@@ -254,6 +259,42 @@ public static class OneUiVectorIcons {
                 canvas.DrawCircle(cx - r * 0.30f, cy + r * 0.46f, r * 0.30f, stroke);
                 canvas.DrawLine(cx, cy + r * 0.46f, cx, cy - r * 0.72f, stroke);
                 canvas.DrawLine(cx, cy - r * 0.72f, cx + r * 0.62f, cy - r * 0.45f, stroke);
+                break;
+
+            case OneUiIconType.HelpQuestion:
+                canvas.DrawArc(new RectF(cx - r * 0.36f, cy - r * 0.76f, cx + r * 0.38f, cy - r * 0.04f), 195f, 225f, false, stroke);
+                canvas.DrawLine(cx + r * 0.14f, cy - r * 0.08f, cx, cy + r * 0.16f, stroke);
+                canvas.DrawCircle(cx, cy + r * 0.56f, size * 0.068f, fill);
+                break;
+
+            case OneUiIconType.Rewind10:
+                canvas.DrawArc(new RectF(cx - r * 0.78f, cy - r * 0.78f, cx + r * 0.78f, cy + r * 0.78f), 225f, -265f, false, stroke);
+                p.MoveTo(cx - r * 0.62f, cy - r * 0.72f);
+                p.LineTo(cx - r * 0.62f, cy - r * 0.24f);
+                p.LineTo(cx - r * 0.18f, cy - r * 0.42f);
+                canvas.DrawPath(p, stroke);
+                break;
+
+            case OneUiIconType.Forward10:
+                canvas.DrawArc(new RectF(cx - r * 0.78f, cy - r * 0.78f, cx + r * 0.78f, cy + r * 0.78f), -45f, 265f, false, stroke);
+                p.MoveTo(cx + r * 0.62f, cy - r * 0.72f);
+                p.LineTo(cx + r * 0.62f, cy - r * 0.24f);
+                p.LineTo(cx + r * 0.18f, cy - r * 0.42f);
+                canvas.DrawPath(p, stroke);
+                break;
+
+            case OneUiIconType.RepeatLoop:
+                canvas.DrawRoundRect(new RectF(cx - r * 0.78f, cy - r * 0.48f, cx + r * 0.78f, cy + r * 0.48f), r * 0.36f, r * 0.36f, stroke);
+                p.MoveTo(cx + r * 0.18f, cy - r * 0.74f);
+                p.LineTo(cx + r * 0.48f, cy - r * 0.48f);
+                p.LineTo(cx + r * 0.18f, cy - r * 0.22f);
+                canvas.DrawPath(p, stroke);
+                break;
+
+            case OneUiIconType.PlayerDisc:
+                canvas.DrawCircle(cx, cy, r * 0.86f, stroke);
+                canvas.DrawCircle(cx, cy, r * 0.24f, stroke);
+                canvas.DrawArc(new RectF(cx - r * 0.52f, cy - r * 0.52f, cx + r * 0.52f, cy + r * 0.52f), -65f, 95f, false, stroke);
                 break;
         }
     }

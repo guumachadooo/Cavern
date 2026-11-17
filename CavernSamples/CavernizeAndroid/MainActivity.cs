@@ -1,4 +1,5 @@
 using Android;
+using Android.Animation;
 using Android.App;
 using Android.Content;
 using Android.Content.PM;
@@ -94,6 +95,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
     LinearLayout inlineTrackList;
     bool fileDetailsExpanded;
     MediaPlaybackNotificationManager mediaNotification;
+    MediaArtworkMetadata currentMediaMeta;
+    Bitmap defaultFallbackCover;
 
     UpdateCheckResult latestUpdateInfo;
     FFmpegStatusResult latestFFmpegStatus;
@@ -102,6 +105,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
     bool isUpdateDownloading;
     bool isFFmpegDownloading;
 
+    OneUiBackdropView backdropView;
+    OneUiFrostedCapsuleView navFrostedHost;
+    View tabIndicatorPill;
+    ValueAnimator tabPillAnimator;
     LinearLayout[] tabPages;
     Button[] tabButtons;
     View settingsUpdateDot;
@@ -222,7 +229,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
         uiDestroyed = true;
         activeCts?.Cancel();
         activeCts?.Dispose();
+        tabPillAnimator?.Cancel();
+        tabPillAnimator?.Dispose();
         mediaNotification?.Dispose();
+        currentMediaMeta?.ArtworkBitmap?.Dispose();
+        defaultFallbackCover?.Dispose();
         audioOutput?.Dispose();
         playerEngine?.Dispose();
         LoadedFile?.Dispose();
@@ -257,9 +268,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
         FrameLayout rootFrame = new(this);
         rootFrame.SetBackgroundColor(ColBg);
 
-        // Layer 0: Atmospheric blurred One UI 9 depth backdrop
-        OneUiBackdropView backdrop = new(this);
-        rootFrame.AddView(backdrop, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
+        // Layer 0: Atmospheric blurred One UI 9 depth backdrop (also breathes with loaded album art palette)
+        backdropView = new OneUiBackdropView(this);
+        rootFrame.AddView(backdropView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
 
         // Layer 1: Main content column
         LinearLayout root = new(this) {
@@ -355,11 +366,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         // Tab content frame
         FrameLayout contentFrame = new(this);
+        LinearLayout musicTab = BuildMusicPlayerTab();
         LinearLayout playerTab = BuildPlayerTab();
         LinearLayout convertTab = BuildConverterTab();
         LinearLayout extractTab = BuildExtractorTab();
         LinearLayout settingsTab = BuildSettingsTab();
-        tabPages = [playerTab, convertTab, extractTab, settingsTab];
+        tabPages = [musicTab, playerTab, convertTab, extractTab, settingsTab];
 
         for (int i = 0; i < tabPages.Length; i++) {
             ScrollView sv = new(this) {
@@ -368,6 +380,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             };
             sv.SetClipToPadding(false);
             sv.SetBackgroundColor(Color.Transparent);
+            sv.ScrollChange += (_, _) => navFrostedHost?.RefreshBlur();
             sv.AddView(tabPages[i]);
             sv.Visibility = i == activeTab ? ViewStates.Visible : ViewStates.Gone;
             contentFrame.AddView(sv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
@@ -375,58 +388,85 @@ public partial class MainActivity : Activity, ICavernizeApp {
         root.AddView(contentFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
         rootFrame.AddView(root, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
 
-        // Layer 2: Floating Frosted Glass Capsule Bottom Navigation Bar
-        LinearLayout navBar = HRow();
-        navBar.Background = OneUiTheme.CreateFloatingGlassPill(this);
-        navBar.Elevation = Dp(12);
-        navBar.SetPadding(Dp(6), Dp(6), Dp(6), Dp(6));
+        // Bottom edge fade scrim so scrolled cards recede smoothly behind the frosted capsule
+        View bottomScrim = new(this) {
+            Background = new Android.Graphics.Drawables.GradientDrawable(
+                Android.Graphics.Drawables.GradientDrawable.Orientation.TopBottom,
+                [Color.Transparent.ToArgb(), Color.Argb(205, ColBg.R, ColBg.G, ColBg.B).ToArgb()])
+        };
+        rootFrame.AddView(bottomScrim, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(98)) {
+            Gravity = GravityFlags.Bottom
+        });
 
-        string[] tabTitles = [S["TabPlayer"], S["TabConvert"], S["TabExtract"], S["TabSettings"]];
-        tabButtons = new Button[4];
-        for (int i = 0; i < 4; i++) {
+        // Layer 2: Live Frosted Glass Capsule Bottom Navigation Bar + Sliding Pill Indicator
+        navFrostedHost = new OneUiFrostedCapsuleView(this) {
+            CornerRadiusDp = 30f,
+            BehindViewsProvider = () => [backdropView, contentFrame],
+            Elevation = Dp(14)
+        };
+        navFrostedHost.SetPadding(Dp(6), Dp(6), Dp(6), Dp(6));
+
+        FrameLayout navLayer = new(this);
+        tabIndicatorPill = new View(this) {
+            Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 232), OneUiTheme.PillCornerDp)
+        };
+        navLayer.AddView(tabIndicatorPill, new FrameLayout.LayoutParams(Dp(56), Dp(40)) {
+            Gravity = GravityFlags.CenterVertical | GravityFlags.Start
+        });
+
+        LinearLayout navRow = HRow();
+        string[] tabTitles = [S["TabMusicPlayer"], S["TabPlayer"], S["TabConvert"], S["TabExtract"], S["TabSettings"]];
+        tabButtons = new Button[5];
+        for (int i = 0; i < 5; i++) {
             int idx = i;
             Button tb = new(this) {
                 Text = tabTitles[i],
-                TextSize = 12f
+                TextSize = 11.5f
             };
             tb.SetAllCaps(false);
             tb.SetIncludeFontPadding(false);
             tb.SetSingleLine(true);
+            tb.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
             tb.SetMinimumHeight(Dp(40));
-            tb.SetPadding(Dp(6), Dp(6), Dp(6), Dp(6));
+            tb.SetMinimumWidth(0);
+            tb.SetPadding(Dp(2), Dp(6), Dp(2), Dp(6));
+            tb.Background = OneUiTheme.CreateRippleRoundedDrawable(this, Color.Transparent, OneUiTheme.PillCornerDp);
             OneUiTheme.AttachRecoil(tb, 0.94f);
             tb.Click += (_, _) => SwitchTab(idx);
             tabButtons[i] = tb;
 
-            if (i == 3) {
+            if (i == 4) {
                 FrameLayout tabCell = new(this);
                 tabCell.AddView(tb, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
                 settingsUpdateDot = new View(this);
                 settingsUpdateDot.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.FunctionalOrange, 99f);
                 settingsUpdateDot.Visibility = ShouldShowSettingsDot() ? ViewStates.Visible : ViewStates.Gone;
-                FrameLayout.LayoutParams dotLp = new(Dp(8), Dp(8)) {
+                FrameLayout.LayoutParams dotLp = new(Dp(7), Dp(7)) {
                     Gravity = GravityFlags.Top | GravityFlags.End,
                     TopMargin = Dp(6),
-                    RightMargin = Dp(9)
+                    RightMargin = Dp(7)
                 };
                 tabCell.AddView(settingsUpdateDot, dotLp);
-                navBar.AddView(tabCell, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { LeftMargin = Dp(2), RightMargin = Dp(2) });
+                navRow.AddView(tabCell, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             } else {
-                navBar.AddView(tb, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { LeftMargin = Dp(2), RightMargin = Dp(2) });
+                navRow.AddView(tb, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             }
         }
+        navLayer.AddView(navRow, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        navFrostedHost.AddView(navLayer);
 
         FrameLayout.LayoutParams floatingNavLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             Gravity = GravityFlags.Bottom | GravityFlags.CenterHorizontal,
-            LeftMargin = Dp(16),
-            RightMargin = Dp(16),
+            LeftMargin = Dp(14),
+            RightMargin = Dp(14),
             BottomMargin = Dp(14)
         };
-        rootFrame.AddView(navBar, floatingNavLp);
+        rootFrame.AddView(navFrostedHost, floatingNavLp);
 
         SetContentView(rootFrame);
-        UpdateTabButtonStyles();
+        UpdateTabButtonStyles(animate: false);
+        navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
         RefreshAllUiState();
     }
 
@@ -495,11 +535,35 @@ public partial class MainActivity : Activity, ICavernizeApp {
         bool hasFile = LoadedFile != null;
         fileDetailsChevron.Visibility = hasFile ? ViewStates.Visible : ViewStates.Gone;
         bool showDrawer = fileDetailsExpanded && hasFile;
-        fileDetailsDrawer.Visibility = showDrawer ? ViewStates.Visible : ViewStates.Gone;
+        SetExpandedWithAnimation(fileDetailsDrawer, showDrawer);
         if (inlineTrackList != null) {
             inlineTrackList.Visibility = (showDrawer && LoadedFile.Tracks.Count > 1) ? ViewStates.Visible : ViewStates.Gone;
         }
         fileDetailsChevron.IconType = showDrawer ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown;
+    }
+
+    void SetExpandedWithAnimation(View panel, bool expanded) {
+        if (panel == null) {
+            return;
+        }
+        panel.Animate()?.Cancel();
+        if (expanded) {
+            if (panel.Visibility != ViewStates.Visible) {
+                panel.Visibility = ViewStates.Visible;
+                panel.Alpha = 0f;
+                panel.TranslationY = -Dp(6);
+            }
+            panel.Animate()
+                .Alpha(1f)
+                .TranslationY(0f)
+                .SetDuration(190)
+                .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.5f))
+                .Start();
+        } else {
+            panel.Visibility = ViewStates.Gone;
+            panel.Alpha = 1f;
+            panel.TranslationY = 0f;
+        }
     }
 
     bool ShouldShowSettingsDot() =>
@@ -507,27 +571,108 @@ public partial class MainActivity : Activity, ICavernizeApp {
         latestFFmpegStatus?.IsUpdateAvailable == true;
 
     void SwitchTab(int idx) {
-        activeTab = idx;
-        if (tabPages == null) {
+        if (tabPages == null || idx < 0 || idx >= tabPages.Length) {
             return;
         }
-        for (int i = 0; i < tabPages.Length; i++) {
-            if (tabPages[i].Parent is View sv) {
-                sv.Visibility = i == idx ? ViewStates.Visible : ViewStates.Gone;
+        int prevTab = activeTab;
+        activeTab = idx;
+        if (prevTab != idx) {
+            int dir = idx > prevTab ? 1 : -1;
+            for (int i = 0; i < tabPages.Length; i++) {
+                if (tabPages[i].Parent is not View sv) {
+                    continue;
+                }
+                sv.Animate()?.Cancel();
+                if (i == idx) {
+                    sv.Visibility = ViewStates.Visible;
+                    sv.Alpha = 0f;
+                    sv.TranslationX = dir * Dp(20);
+                    sv.Animate()
+                        .Alpha(1f)
+                        .TranslationX(0f)
+                        .SetDuration(220)
+                        .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.6f))
+                        .WithEndAction(new Java.Lang.Runnable(() => navFrostedHost?.RefreshBlur(force: true)))
+                        .Start();
+                } else {
+                    sv.Visibility = ViewStates.Gone;
+                    sv.Alpha = 1f;
+                    sv.TranslationX = 0f;
+                }
             }
+        } else if (tabPages[idx].Parent is View svCur) {
+            svCur.Visibility = ViewStates.Visible;
+            svCur.Alpha = 1f;
+            svCur.TranslationX = 0f;
         }
-        UpdateTabButtonStyles();
+        UpdateTabButtonStyles(animate: true);
+        if (idx == 1) {
+            UpdateRoomCanvas();
+        } else if (idx == 0) {
+            RefreshMusicPlayerUi();
+        }
+        navFrostedHost?.RefreshBlur(force: true);
     }
 
-    void UpdateTabButtonStyles() {
+    void UpdateTabButtonStyles(bool animate = true) {
+        if (tabButtons == null || tabButtons.Length == 0) {
+            return;
+        }
         for (int i = 0; i < tabButtons.Length; i++) {
             bool active = i == activeTab;
-            tabButtons[i].Background = active
-                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 225), OneUiTheme.PillCornerDp)
-                : OneUiTheme.CreateRippleRoundedDrawable(this, Color.Transparent, OneUiTheme.PillCornerDp);
             tabButtons[i].SetTextColor(active ? ColText : OneUiTheme.TextSecondary);
             tabButtons[i].SetTypeface(null, active ? TypefaceStyle.Bold : TypefaceStyle.Normal);
         }
+        PositionTabIndicator(animate);
+    }
+
+    void PositionTabIndicator(bool animate) {
+        if (tabIndicatorPill == null || tabButtons == null || activeTab < 0 || activeTab >= tabButtons.Length) {
+            return;
+        }
+        View targetHost = activeTab == 4 && tabButtons[4].Parent is View parentCell
+            ? parentCell
+            : tabButtons[activeTab];
+        int targetW = targetHost.Width;
+        int targetH = targetHost.Height;
+        if (targetW <= 0 || targetH <= 0) {
+            targetHost.Post(() => PositionTabIndicator(animate: false));
+            return;
+        }
+
+        float startX = tabIndicatorPill.TranslationX;
+        float endX = targetHost.Left;
+        int startW = tabIndicatorPill.Width > 0 ? tabIndicatorPill.Width : targetW;
+
+        var lp = tabIndicatorPill.LayoutParameters;
+        if (lp != null && lp.Height != targetH) {
+            lp.Height = targetH;
+            tabIndicatorPill.LayoutParameters = lp;
+        }
+
+        tabPillAnimator?.Cancel();
+        if (!animate) {
+            tabIndicatorPill.TranslationX = endX;
+            if (lp != null) {
+                lp.Width = targetW;
+                tabIndicatorPill.LayoutParameters = lp;
+            }
+            return;
+        }
+
+        tabPillAnimator = ValueAnimator.OfFloat(0f, 1f);
+        tabPillAnimator.SetDuration(250);
+        tabPillAnimator.SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.7f));
+        tabPillAnimator.Update += (_, e) => {
+            float f = (float)(e.Animation?.AnimatedValue ?? 1f);
+            tabIndicatorPill.TranslationX = startX + (endX - startX) * f;
+            var curLp = tabIndicatorPill.LayoutParameters;
+            if (curLp != null) {
+                curLp.Width = (int)Math.Round(startW + (targetW - startW) * f);
+                tabIndicatorPill.LayoutParameters = curLp;
+            }
+        };
+        tabPillAnimator.Start();
     }
 
     void RequestMediaPermissionsIfNeeded() {
@@ -648,6 +793,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     }));
                 AppLogger.Info($"Resolved file path: '{resolved}'");
 
+                MediaArtworkMetadata extractedMeta = MediaMetadataHelper.Extract(
+                    this, uri, resolved, Path.GetFileName(resolved));
+
                 AudioFile file;
                 try {
                     file = new AudioFile(resolved);
@@ -671,7 +819,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 }
 
                 RunOnUiThread(() => {
-                    OpenContent(file);
+                    OpenContent(file, extractedMeta);
                     SetConvertStatus(S["Ready"], 0);
                 });
             } catch (Exception ex) {
@@ -688,14 +836,24 @@ public partial class MainActivity : Activity, ICavernizeApp {
     public void OpenContent(string path) {
         Reset();
         ffmpeg.CheckFFmpeg();
-        OpenContent(new AudioFile(path));
+        MediaArtworkMetadata meta = MediaMetadataHelper.Extract(this, null, path, Path.GetFileName(path));
+        OpenContent(new AudioFile(path), meta);
     }
 
-    public void OpenContent(AudioFile file) {
+    public void OpenContent(AudioFile file) => OpenContent(file, null);
+
+    void OpenContent(AudioFile file, MediaArtworkMetadata meta) {
         StopPlayback();
+        MediaArtworkMetadata prevMeta = currentMediaMeta;
+        currentMediaMeta = meta ?? (!string.IsNullOrEmpty(file?.Path)
+            ? MediaMetadataHelper.Extract(this, null, file.Path, Path.GetFileName(file.Path))
+            : null);
+
         LoadedFile = file;
-        headerFileText.Text = Path.GetFileName(file.Path);
-        AppLogger.Info($"Opened file: '{file.Path}', tracks={file.Tracks.Count}");
+        headerFileText.Text = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+            ? currentMediaMeta.Title
+            : Path.GetFileName(file.Path);
+        AppLogger.Info($"Opened file: '{file.Path}', tracks={file.Tracks.Count}, embeddedArt={currentMediaMeta?.HasEmbeddedArtwork}");
 
         if (file.Tracks.Count > 0) {
             CavernizeTrack best = file.Tracks
@@ -706,6 +864,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
         } else {
             SelectedTrack = null;
         }
+
+        if (!ReferenceEquals(prevMeta, currentMediaMeta)) {
+            prevMeta?.ArtworkBitmap?.Dispose();
+        }
+        RefreshMusicPlayerUi();
     }
 
     public void Reset() {
@@ -715,6 +878,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
             LoadedFile.Dispose();
             LoadedFile = null;
         }
+        MediaArtworkMetadata oldMeta = currentMediaMeta;
+        currentMediaMeta = null;
         selectedTrack = null;
         trackSourceItems = [];
         fileDetailsExpanded = false;
@@ -725,6 +890,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
             trackSummaryText.Text = "";
         }
         mediaNotification?.CancelNotification();
+        RefreshMusicPlayerUi();
+        oldMeta?.ArtworkBitmap?.Dispose();
         RebuildInlineTrackList();
         report = new PostRenderReport(environment.Listener);
     }
@@ -739,6 +906,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             trackSourceItems = [];
             mediaNotification?.CancelNotification();
             RefreshPlayerSourcesList();
+            RefreshMusicPlayerUi();
             RefreshExtractorChecklist();
             RefreshConverterTrackInfo();
             RebuildInlineTrackList();
@@ -765,29 +933,36 @@ public partial class MainActivity : Activity, ICavernizeApp {
             trackSourceItems = TrackSourceItem.BuildFromTrack(selectedTrack);
         }
 
+        string metaTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+            ? currentMediaMeta.Title
+            : (LoadedFile != null ? Path.GetFileNameWithoutExtension(LoadedFile.Path) : "Cavernize 3D");
+        string metaArtist = !string.IsNullOrWhiteSpace(currentMediaMeta?.Artist)
+            ? currentMediaMeta.Artist
+            : $"Cavernize 3D • {selectedTrack.FormatHeader}";
+        string metaAlbum = !string.IsNullOrWhiteSpace(currentMediaMeta?.Album)
+            ? currentMediaMeta.Album
+            : selectedTrack.FormatHeader;
+
         mediaNotification?.UpdateMetadata(
-            LoadedFile != null ? Path.GetFileNameWithoutExtension(LoadedFile.Path) : "Cavernize 3D",
-            $"Cavernize 3D • {selectedTrack.FormatHeader}",
-            details,
-            playerEngine.TotalSeconds);
+            metaTitle,
+            metaArtist,
+            metaAlbum,
+            playerEngine.TotalSeconds,
+            currentMediaMeta?.ArtworkBitmap);
 
         RefreshPlayerSourcesList();
+        RefreshMusicPlayerUi();
         RefreshExtractorChecklist();
         RefreshConverterTrackInfo();
         RefreshContainerOptions();
-        if (playbackSeekBar != null) {
-            playbackSeekBar.IsWavePlaying = false;
-            playbackSeekBar.Progress = 0;
-            playbackSeekBar.CurrentTimeText = "00:00";
-            playbackSeekBar.TotalTimeText = $"{TimeSpan.FromSeconds(playerEngine.TotalSeconds):mm\\:ss}";
-            playbackSeekBar.Invalidate();
-        }
+        SyncPlaybackUi(false, 0, playerEngine.TotalSeconds);
         UpdateRoomCanvas();
     }
 
     void RefreshAllUiState() {
         RefreshConverterTabState();
         RefreshPlayerSourcesList();
+        RefreshMusicPlayerUi();
         RefreshExtractorChecklist();
         RefreshSettingsTabButtons();
         RefreshSettingsDot();
@@ -814,7 +989,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         return row;
     }
 
-    LinearLayout Card(string title = null, OneUiIconType? icon = null, Color? badgeColor = null, string helpText = null) {
+    LinearLayout Card(string title = null, OneUiIconType? icon = null, Color? badgeColor = null) {
         LinearLayout card = new(this) { Orientation = Orientation.Vertical };
         card.Background = OneUiTheme.CreateGlassCardDrawable(this, null, OneUiTheme.CardCornerDp);
         card.Elevation = Dp(6);
@@ -833,51 +1008,38 @@ public partial class MainActivity : Activity, ICavernizeApp {
             tv.SetPadding(icon.HasValue ? Dp(10) : 0, 0, Dp(8), 0);
             hdr.AddView(tv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             card.AddView(hdr);
-
-            if (!string.IsNullOrEmpty(helpText)) {
-                AttachCardHelp(card, hdr, helpText);
-            }
         }
         return card;
     }
 
-    void AttachCardHelp(LinearLayout card, LinearLayout headerRow, string helpText) {
-        if (card == null || headerRow == null || string.IsNullOrEmpty(helpText)) {
-            return;
+    View CreateInlineHelpBtn(string optionTitle, string causeEffectHelp) {
+        FrameLayout badge = new(this);
+        badge.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceSubTile, 99f);
+        OneUiTheme.AttachRecoil(badge, 0.88f);
+        OneUiIconView ico = new(this, OneUiIconType.HelpQuestion, OneUiTheme.TextSub);
+        badge.AddView(ico, new FrameLayout.LayoutParams(Dp(14), Dp(14)) { Gravity = GravityFlags.Center });
+        badge.Click += (_, _) => OneUiModalDialog.Show(
+            this,
+            optionTitle,
+            causeEffectHelp,
+            icon: OneUiIconType.Info,
+            iconBadgeColor: ColAccent,
+            positiveText: "OK");
+        return badge;
+    }
+
+    LinearLayout WrapControlWithHelp(View control, string helpTitle, string helpBody, int bottomMarginDp = 6) {
+        LinearLayout row = HRow();
+        row.AddView(control, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        if (!string.IsNullOrEmpty(helpBody)) {
+            row.AddView(CreateInlineHelpBtn(helpTitle, helpBody), new LinearLayout.LayoutParams(Dp(26), Dp(26)) {
+                LeftMargin = Dp(8)
+            });
         }
-        TextView qBtn = new(this) {
-            Text = "?",
-            TextSize = 12.5f
+        row.LayoutParameters = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(bottomMarginDp)
         };
-        qBtn.Gravity = GravityFlags.Center;
-        qBtn.SetIncludeFontPadding(false);
-        qBtn.SetTypeface(null, TypefaceStyle.Bold);
-        qBtn.SetTextColor(OneUiTheme.TextSub);
-        qBtn.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceSubTile, 99f);
-        OneUiTheme.AttachRecoil(qBtn, 0.90f);
-
-        LinearLayout helpBox = new(this) {
-            Orientation = Orientation.Vertical,
-            Visibility = ViewStates.Gone
-        };
-        helpBox.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceElevated, 16f, OneUiTheme.WithAlpha(ColAccent, 95));
-        helpBox.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
-        TextView helpTv = Label(helpText, 12f, OneUiTheme.TextSecondary);
-        helpTv.SetLineSpacing(Dp(2), 1.12f);
-        helpBox.AddView(helpTv);
-
-        bool open = false;
-        qBtn.Click += (_, _) => {
-            open = !open;
-            helpBox.Visibility = open ? ViewStates.Visible : ViewStates.Gone;
-            qBtn.Background = OneUiTheme.CreateRoundedDrawable(this, open ? ColAccent : OneUiTheme.SurfaceSubTile, 99f);
-            qBtn.SetTextColor(open ? ColText : OneUiTheme.TextSub);
-        };
-
-        headerRow.AddView(qBtn, new LinearLayout.LayoutParams(Dp(26), Dp(26)) { LeftMargin = Dp(6) });
-        card.AddView(helpBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(10)
-        });
+        return row;
     }
 
     TextView SectionTitle(string text) {

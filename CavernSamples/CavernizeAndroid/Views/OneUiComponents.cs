@@ -279,6 +279,16 @@ public static class OneUiModalDialog {
             dialog.Window.SetGravity(GravityFlags.Center);
         }
         dialog.Show();
+        card.Alpha = 0f;
+        card.ScaleX = 0.94f;
+        card.ScaleY = 0.94f;
+        card.Animate()
+            .Alpha(1f)
+            .ScaleX(1f)
+            .ScaleY(1f)
+            .SetDuration(210)
+            .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.6f))
+            .Start();
         return dialog;
     }
 

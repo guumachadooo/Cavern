@@ -30,15 +30,18 @@ public partial class MainActivity {
 
     LinearLayout BuildExtractorTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(88));
+        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
 
-        LinearLayout card = Card(S["ExtractTitle"], OneUiIconType.Scissors, OneUiTheme.FunctionalIndigo, S["HelpExtract"]);
+        LinearLayout card = Card(S["ExtractTitle"], OneUiIconType.Scissors, OneUiTheme.FunctionalIndigo);
         TextView desc = Label(S["ExtractDesc"], 12f, OneUiTheme.TextSub);
         desc.SetPadding(0, 0, 0, Dp(10));
         card.AddView(desc);
 
         // One UI 9 Visual Radio Rows for Extraction Modes
-        card.AddView(Label(S["ExtractMode"], 12f, ColMuted));
+        LinearLayout modeHeaderRow = HRow();
+        modeHeaderRow.AddView(Label(S["ExtractMode"], 12f, ColMuted), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        modeHeaderRow.AddView(CreateInlineHelpBtn(S["ExtractMode"].TrimEnd(':'), S["TipExtractModes"]), new LinearLayout.LayoutParams(Dp(24), Dp(24)));
+        card.AddView(modeHeaderRow);
         LinearLayout modeGroup = new(this) { Orientation = Orientation.Vertical };
         modeGroup.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 20f);
         modeGroup.SetPadding(Dp(10), Dp(4), Dp(10), Dp(4));
@@ -102,7 +105,7 @@ public partial class MainActivity {
         };
         extractJsonCheck.SetTextColor(ColText);
         extractJsonCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
-        card.AddView(extractJsonCheck);
+        card.AddView(WrapControlWithHelp(extractJsonCheck, S["ExportJsonCheck"], S["TipExtractJson"], bottomMarginDp: 4));
 
         // Quick selection pills (horizontally scrollable so full labels never clip or wrap)
         HorizontalScrollView selScroll = new(this) { HorizontalScrollBarEnabled = false };
@@ -144,7 +147,7 @@ public partial class MainActivity {
 
         page.AddView(card);
 
-        LinearLayout outCard = Card("Arquivos Extraídos / Output", OneUiIconType.Folder, OneUiTheme.FunctionalGreen);
+        LinearLayout outCard = Card("Output / Stems", OneUiIconType.Folder, OneUiTheme.FunctionalGreen);
         extractedFilesContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
         outCard.AddView(extractedFilesContainer);
         page.AddView(outCard);

@@ -34,7 +34,8 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
     readonly MediaSession mediaSession;
     readonly Handler mainHandler;
     readonly MediaActionReceiver actionReceiver;
-    readonly Bitmap artworkBitmap;
+    readonly Bitmap defaultArtworkBitmap;
+    Bitmap customArtworkBitmap;
     readonly Bitmap iconRewind;
     readonly Bitmap iconPlay;
     readonly Bitmap iconPause;
@@ -72,7 +73,7 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
 #pragma warning restore CS0618, CA1422
         mediaSession.SetCallback(new SessionCallback(this), mainHandler);
 
-        artworkBitmap = CreateSpatialArtworkBitmap();
+        defaultArtworkBitmap = MediaMetadataHelper.CreateSpatialFallbackArtwork("Cavernize", OneUiTheme.PrimaryHigh, OneUiTheme.Secondary, 256);
         iconRewind = CreateActionBitmap("rew");
         iconPlay = CreateActionBitmap("play");
         iconPause = CreateActionBitmap("pause");
@@ -112,7 +113,7 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         notificationManager.CreateNotificationChannel(ch);
     }
 
-    public void UpdateMetadata(string title, string artist, string album, double durationSeconds) {
+    public void UpdateMetadata(string title, string artist, string album, double durationSeconds, Bitmap artwork = null) {
         if (disposed) {
             return;
         }
@@ -121,11 +122,17 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         currentAlbum = string.IsNullOrWhiteSpace(album) ? "3D Room Player" : album;
         currentDurationMs = Math.Max(0L, (long)Math.Round(durationSeconds * 1000.0));
 
+        Bitmap previousCustom = customArtworkBitmap;
+        customArtworkBitmap = CloneArtworkForNotification(artwork);
+        previousCustom?.Dispose();
+
+        Bitmap artToUse = customArtworkBitmap ?? defaultArtworkBitmap;
+
         MediaMetadata.Builder meta = new MediaMetadata.Builder()
             .PutString(MediaMetadata.MetadataKeyTitle, currentTitle)
             .PutString(MediaMetadata.MetadataKeyArtist, currentArtist)
             .PutString(MediaMetadata.MetadataKeyAlbum, currentAlbum)
-            .PutBitmap(MediaMetadata.MetadataKeyAlbumArt, artworkBitmap);
+            .PutBitmap(MediaMetadata.MetadataKeyAlbumArt, artToUse);
         if (currentDurationMs > 0) {
             meta.PutLong(MediaMetadata.MetadataKeyDuration, currentDurationMs);
         }
@@ -133,6 +140,24 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
 
         if (isNotificationPosted) {
             PostOrUpdateNotification(currentIsPlaying);
+        }
+    }
+
+    static Bitmap CloneArtworkForNotification(Bitmap source) {
+        if (source == null || source.IsRecycled) {
+            return null;
+        }
+        try {
+            const int maxSize = 384;
+            int w = source.Width;
+            int h = source.Height;
+            if (w <= maxSize && h <= maxSize) {
+                return source.Copy(Bitmap.Config.Argb8888!, false);
+            }
+            float scale = maxSize / (float)Math.Max(w, h);
+            return Bitmap.CreateScaledBitmap(source, Math.Max(1, (int)Math.Round(w * scale)), Math.Max(1, (int)Math.Round(h * scale)), true);
+        } catch {
+            return null;
         }
     }
 
@@ -232,9 +257,11 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
             : new Notification.Builder(appContext);
 #pragma warning restore CS0618
 
+        Bitmap artToUse = customArtworkBitmap ?? defaultArtworkBitmap;
+
         builder
             .SetSmallIcon(Resource.Drawable.cavern_logo)
-            .SetLargeIcon(artworkBitmap)
+            .SetLargeIcon(artToUse)
             .SetContentTitle(currentTitle)
             .SetContentText(currentArtist)
             .SetSubText("Cavernize 3D")
@@ -251,33 +278,6 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
             .SetStyle(style);
 
         return builder.Build();
-    }
-
-    static Bitmap CreateSpatialArtworkBitmap() {
-        const int sz = 256;
-        Bitmap bmp = Bitmap.CreateBitmap(sz, sz, Bitmap.Config.Argb8888);
-        using Canvas c = new(bmp);
-
-        using LinearGradient bg = new(
-            0, 0, sz, sz,
-            [Color.Rgb(16, 18, 28).ToArgb(), Color.Rgb(34, 48, 86).ToArgb(), Color.Rgb(14, 15, 22).ToArgb()],
-            [0f, 0.55f, 1f],
-            Shader.TileMode.Clamp);
-        using Paint bgPaint = new(PaintFlags.AntiAlias);
-        bgPaint.SetShader(bg);
-        c.DrawRect(0, 0, sz, sz, bgPaint);
-
-        using Paint ringPaint = new(PaintFlags.AntiAlias) {
-            Color = Color.Argb(95, OneUiTheme.PrimaryHigh.R, OneUiTheme.PrimaryHigh.G, OneUiTheme.PrimaryHigh.B),
-            StrokeWidth = 3f
-        };
-        ringPaint.SetStyle(Paint.Style.Stroke);
-        c.DrawCircle(sz * 0.5f, sz * 0.5f, sz * 0.38f, ringPaint);
-        ringPaint.Color = Color.Argb(55, 255, 255, 255);
-        c.DrawCircle(sz * 0.5f, sz * 0.5f, sz * 0.25f, ringPaint);
-
-        OneUiVectorIcons.DrawIcon(c, OneUiIconType.Room3D, sz * 0.5f, sz * 0.5f, sz * 0.44f, Color.White);
-        return bmp;
     }
 
     static Bitmap CreateActionBitmap(string kind) {
@@ -362,7 +362,9 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         } catch {
             // Ignore
         }
-        artworkBitmap?.Dispose();
+        customArtworkBitmap?.Dispose();
+        customArtworkBitmap = null;
+        defaultArtworkBitmap?.Dispose();
         iconRewind?.Dispose();
         iconPlay?.Dispose();
         iconPause?.Dispose();

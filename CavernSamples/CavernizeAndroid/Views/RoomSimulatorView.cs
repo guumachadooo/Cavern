@@ -2,6 +2,7 @@ using System.Numerics;
 
 using Android.Content;
 using Android.Graphics;
+using Android.OS;
 using Android.Views;
 
 using Cavern.Channels;
@@ -13,29 +14,35 @@ using CavernizeAndroid.Theme;
 namespace CavernizeAndroid.Views;
 
 /// <summary>
-/// Interactive One UI 9 Spatial Room Visualizer featuring:
-/// - Three selectable room perspectives: 3D Perspective Box (with vertical floor-to-ceiling height stalks),
-///   Top-Down + Dedicated Vertical Height (Y) Elevation Tower, and Front (X/Y) Elevation Cross-Section
-/// - Dedicated Bottom Control Dock housing the 3D Head Gimbal (Yaw/Pitch) + Listener Height (Y) control,
-///   completely separated from the speaker area so speakers are never obscured
-/// - Direct tap-to-Solo on any speaker or 3D object across all three views
+/// Unified One UI 9 Orbitable 3D Spatial Room Visualizer:
+/// - Single cohesive 3D perspective stage: drag room background to freely orbit azimuth &amp; elevation
+///   (smoothly transitioning between 3D isometric, Top-Down, and Front Elevation) with 3 instant preset chips
+/// - 60 FPS continuous object/RMS interpolation with fading motion trails and vertical height drop-stalks
+/// - Dedicated Bottom Dock housing the 3D Head Gimbal (Yaw/Pitch) and Listener Height (Y) scrubber,
+///   completely separated below the 3D acoustic room so speakers are never obscured
+/// - Direct tap-to-Solo on any speaker or 3D object and drag Listener across the floor (or Y height in front view)
 /// </summary>
 public sealed class RoomSimulatorView : View {
-    public enum RoomViewMode {
-        Perspective3D,
-        TopWithHeight,
-        FrontElevation
+    sealed class SmoothedSourceState {
+        public Vector3 SmoothedPos;
+        public float SmoothedRms;
+        public readonly Vector3[] Trail = new Vector3[7];
+        public int TrailHead;
+        public int TrailCount;
+        public long LastTrailMs;
+        public bool Initialized;
     }
 
     readonly Paint roomBgPaint = new(PaintFlags.AntiAlias);
     readonly Paint roomBorderPaint = new(PaintFlags.AntiAlias);
     readonly Paint dockBgPaint = new(PaintFlags.AntiAlias);
-    readonly Paint tabActivePaint = new(PaintFlags.AntiAlias);
-    readonly Paint tabInactivePaint = new(PaintFlags.AntiAlias);
+    readonly Paint pillActivePaint = new(PaintFlags.AntiAlias);
+    readonly Paint pillInactivePaint = new(PaintFlags.AntiAlias);
     readonly Paint gridPaint = new(PaintFlags.AntiAlias);
     readonly Paint floorQuadPaint = new(PaintFlags.AntiAlias);
     readonly Paint ceilingWirePaint = new(PaintFlags.AntiAlias);
     readonly Paint stalkPaint = new(PaintFlags.AntiAlias);
+    readonly Paint trailPaint = new(PaintFlags.AntiAlias);
     readonly Paint shadowDotPaint = new(PaintFlags.AntiAlias);
     readonly Paint screenPaint = new(PaintFlags.AntiAlias);
     readonly Paint bedPaint = new(PaintFlags.AntiAlias);
@@ -53,37 +60,46 @@ public sealed class RoomSimulatorView : View {
     readonly Paint nosePaint = new(PaintFlags.AntiAlias);
     readonly Paint textPaint = new(PaintFlags.AntiAlias);
     readonly Paint subTextPaint = new(PaintFlags.AntiAlias);
-    readonly Paint hudChipPaint = new(PaintFlags.AntiAlias);
 
     readonly int touchSlop;
     readonly List<(TrackSourceItem item, float x, float y, float nx, float ny, float nz)> hitTargets = [];
-    readonly RectF[] modeTabRects = [new(), new(), new()];
+    readonly Dictionary<TrackSourceItem, SmoothedSourceState> smoothedStates = [];
+    readonly RectF[] camPresetRects = [new(), new(), new()];
+
     RectF roomCanvasRect = new();
-    RectF sideHeightRect = new();
     RectF dockGimbalRect = new();
     RectF dockGimbalResetRect = new();
     RectF dockHeightRect = new();
     RectF dockHeightResetRect = new();
 
-    RoomViewMode viewMode = RoomViewMode.Perspective3D;
     IReadOnlyList<TrackSourceItem> sources = [];
     Vector3 environmentSize = new(10, 7, 10);
     Vector3 listenerPosition = Vector3.Zero;
     Vector3 listenerRotation = Vector3.Zero; // X=Pitch (-90..90), Y=Yaw (-180..180)
+    bool isAudioPlaying;
+
+    // Smoothly orbitable camera (defaults to clean 3/4 oblique 3D perspective)
+    float camYawDeg = -20f;
+    float camPitchDeg = 30f;
+    float targetCamYawDeg = -20f;
+    float targetCamPitchDeg = 30f;
+    bool cameraAnimating;
+    long lastFrameMs;
+
     DateTime lastRoomTapTime = DateTime.MinValue;
     DateTime lastGimbalTapTime = DateTime.MinValue;
 
     enum TouchDragMode {
         None,
-        ListenerMap,
-        HeightBar,
+        OrbitCamera,
+        ListenerMove,
         HeadGimbal,
         DockHeight,
-        TabClick
+        PresetClick
     }
 
     TouchDragMode dragMode = TouchDragMode.None;
-    int pressedTabIdx = -1;
+    int pressedPresetIdx = -1;
     float downX;
     float downY;
     float lastX;
@@ -91,16 +107,6 @@ public sealed class RoomSimulatorView : View {
     float maxMoveDist;
 
     public bool IsPositionLocked { get; set; }
-
-    public RoomViewMode ActiveViewMode {
-        get => viewMode;
-        set {
-            if (viewMode != value) {
-                viewMode = value;
-                Invalidate();
-            }
-        }
-    }
 
     public event Action<Vector3> ListenerPositionChanged;
     public event Action<Vector3> ListenerRotationChanged;
@@ -114,37 +120,41 @@ public sealed class RoomSimulatorView : View {
         roomBgPaint.SetStyle(Paint.Style.Fill);
 
         roomBorderPaint.Color = OneUiTheme.Divider;
-        roomBorderPaint.StrokeWidth = 1.2f * dp;
+        roomBorderPaint.StrokeWidth = 1.15f * dp;
         roomBorderPaint.SetStyle(Paint.Style.Stroke);
 
-        dockBgPaint.Color = Color.Argb(205, OneUiTheme.SurfaceElevated.R, OneUiTheme.SurfaceElevated.G, OneUiTheme.SurfaceElevated.B);
+        dockBgPaint.Color = Color.Argb(208, OneUiTheme.SurfaceElevated.R, OneUiTheme.SurfaceElevated.G, OneUiTheme.SurfaceElevated.B);
         dockBgPaint.SetStyle(Paint.Style.Fill);
 
-        tabActivePaint.Color = OneUiTheme.Primary;
-        tabActivePaint.SetStyle(Paint.Style.Fill);
+        pillActivePaint.Color = OneUiTheme.Primary;
+        pillActivePaint.SetStyle(Paint.Style.Fill);
 
-        tabInactivePaint.Color = Color.Argb(34, 255, 255, 255);
-        tabInactivePaint.SetStyle(Paint.Style.Fill);
+        pillInactivePaint.Color = Color.Argb(34, 255, 255, 255);
+        pillInactivePaint.SetStyle(Paint.Style.Fill);
 
-        gridPaint.Color = Color.Argb(36, 255, 255, 255);
+        gridPaint.Color = Color.Argb(34, 255, 255, 255);
         gridPaint.StrokeWidth = 1f * dp;
         gridPaint.SetStyle(Paint.Style.Stroke);
 
-        floorQuadPaint.Color = Color.Argb(22, 255, 255, 255);
+        floorQuadPaint.Color = Color.Argb(20, 255, 255, 255);
         floorQuadPaint.SetStyle(Paint.Style.Fill);
 
-        ceilingWirePaint.Color = Color.Argb(62, OneUiTheme.FunctionalCyan.R, OneUiTheme.FunctionalCyan.G, OneUiTheme.FunctionalCyan.B);
-        ceilingWirePaint.StrokeWidth = 1.1f * dp;
+        ceilingWirePaint.Color = Color.Argb(56, OneUiTheme.FunctionalCyan.R, OneUiTheme.FunctionalCyan.G, OneUiTheme.FunctionalCyan.B);
+        ceilingWirePaint.StrokeWidth = 1f * dp;
         ceilingWirePaint.SetStyle(Paint.Style.Stroke);
 
-        stalkPaint.StrokeWidth = 1.5f * dp;
+        stalkPaint.StrokeWidth = 1.4f * dp;
         stalkPaint.SetStyle(Paint.Style.Stroke);
 
-        shadowDotPaint.Color = Color.Argb(95, 0, 0, 0);
+        trailPaint.StrokeWidth = 2.2f * dp;
+        trailPaint.StrokeCap = Paint.Cap.Round;
+        trailPaint.SetStyle(Paint.Style.Stroke);
+
+        shadowDotPaint.Color = Color.Argb(96, 0, 0, 0);
         shadowDotPaint.SetStyle(Paint.Style.Fill);
 
         screenPaint.Color = OneUiTheme.Primary;
-        screenPaint.StrokeWidth = 3.6f * dp;
+        screenPaint.StrokeWidth = 3.8f * dp;
         screenPaint.StrokeCap = Paint.Cap.Round;
         screenPaint.SetStyle(Paint.Style.Stroke);
 
@@ -160,30 +170,30 @@ public sealed class RoomSimulatorView : View {
         objGlowPaint.SetStyle(Paint.Style.Fill);
 
         heightRingPaint.Color = OneUiTheme.FunctionalGreen;
-        heightRingPaint.StrokeWidth = 1.9f * dp;
+        heightRingPaint.StrokeWidth = 1.8f * dp;
         heightRingPaint.SetStyle(Paint.Style.Stroke);
 
         mutedPaint.Color = OneUiTheme.SurfaceBlurTint;
         mutedPaint.SetStyle(Paint.Style.Fill);
 
         soloRingPaint.Color = OneUiTheme.SoloGold;
-        soloRingPaint.StrokeWidth = 2.5f * dp;
+        soloRingPaint.StrokeWidth = 2.4f * dp;
         soloRingPaint.SetStyle(Paint.Style.Stroke);
 
         listenerPaint.SetStyle(Paint.Style.Fill);
 
         listenerRingPaint.Color = OneUiTheme.PrimaryHigh;
-        listenerRingPaint.StrokeWidth = 2f * dp;
+        listenerRingPaint.StrokeWidth = 1.9f * dp;
         listenerRingPaint.SetStyle(Paint.Style.Stroke);
 
         listenerConePaint.SetStyle(Paint.Style.Fill);
 
-        sphereWirePaint.Color = Color.Argb(210, 245, 248, 255);
+        sphereWirePaint.Color = Color.Argb(215, 246, 249, 255);
         sphereWirePaint.StrokeWidth = 1.25f * dp;
         sphereWirePaint.SetStyle(Paint.Style.Stroke);
 
-        sphereWireBackPaint.Color = Color.Argb(68, 220, 230, 255);
-        sphereWireBackPaint.StrokeWidth = 1f * dp;
+        sphereWireBackPaint.Color = Color.Argb(64, 220, 230, 255);
+        sphereWireBackPaint.StrokeWidth = 0.95f * dp;
         sphereWireBackPaint.SetStyle(Paint.Style.Stroke);
 
         nosePaint.Color = Color.White;
@@ -197,26 +207,47 @@ public sealed class RoomSimulatorView : View {
 
         subTextPaint.Color = OneUiTheme.TextMuted;
         subTextPaint.TextSize = 9.5f * dp;
-        subTextPaint.TextAlign = Paint.Align.Left;
-
-        hudChipPaint.Color = Color.Argb(215, 18, 19, 24);
-        hudChipPaint.SetStyle(Paint.Style.Fill);
+        subTextPaint.TextAlign = Paint.Align.Center;
     }
 
-    public void UpdateState(IReadOnlyList<TrackSourceItem> sourceItems, Vector3 envSize, Vector3 pos, Vector3 rot) {
+    public void UpdateState(IReadOnlyList<TrackSourceItem> sourceItems, Vector3 envSize, Vector3 pos, Vector3 rot, bool isPlaying = false) {
         sources = sourceItems ?? [];
         if (envSize.X > 0.1f && envSize.Y > 0.1f && envSize.Z > 0.1f) {
             environmentSize = envSize;
         }
         listenerPosition = pos;
         listenerRotation = rot;
-        PostInvalidate();
+        isAudioPlaying = isPlaying;
+
+        // Prune removed source tracking state when track list changes
+        if (smoothedStates.Count > sources.Count + 8) {
+            HashSet<TrackSourceItem> activeSet = [.. sources];
+            List<TrackSourceItem> stale = [];
+            foreach (TrackSourceItem key in smoothedStates.Keys) {
+                if (!activeSet.Contains(key)) {
+                    stale.Add(key);
+                }
+            }
+            foreach (TrackSourceItem k in stale) {
+                smoothedStates.Remove(k);
+            }
+        }
+
+        PostInvalidateOnAnimation();
+    }
+
+    public void AnimateToCameraPreset(float yawDeg, float pitchDeg) {
+        targetCamYawDeg = NormalizeDeg(yawDeg);
+        targetCamPitchDeg = Math.Clamp(pitchDeg, 6f, 86f);
+        cameraAnimating = true;
+        lastFrameMs = SystemClock.UptimeMillis();
+        PostInvalidateOnAnimation();
     }
 
     protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         float dp = Resources.DisplayMetrics.Density;
         int w = MeasureSpec.GetSize(widthMeasureSpec);
-        int desiredH = Math.Max((int)(w * 0.94f), (int)(382f * dp));
+        int desiredH = Math.Max((int)(w * 0.95f), (int)(384f * dp));
         SetMeasuredDimension(w, ResolveSize(desiredH, heightMeasureSpec));
     }
 
@@ -230,113 +261,170 @@ public sealed class RoomSimulatorView : View {
             return;
         }
 
-        // Zone 1: Top View Mode Switcher Bar (32dp)
-        float tabH = 30f * dp;
-        float tabGap = 6f * dp;
-        float tabY = outerPad;
-        float singleTabW = (w - tabGap * 2f) / 3f;
-        string[] tabNames = ["3D + Altura", "Topo + Altura", "Frente (X/Y)"];
-        for (int i = 0; i < 3; i++) {
-            float tx = outerPad + i * (singleTabW + tabGap);
-            modeTabRects[i] = new RectF(tx, tabY, tx + singleTabW, tabY + tabH);
-            bool active = (int)viewMode == i;
-            canvas.DrawRoundRect(modeTabRects[i], tabH * 0.5f, tabH * 0.5f, active ? tabActivePaint : tabInactivePaint);
+        long nowMs = SystemClock.UptimeMillis();
+        if (lastFrameMs == 0) {
+            lastFrameMs = nowMs;
+        }
+        float dt = Math.Clamp((nowMs - lastFrameMs) / 1000f, 0.001f, 0.05f);
+        lastFrameMs = nowMs;
 
-            textPaint.TextSize = 11f * dp;
-            textPaint.Color = active ? OneUiTheme.TextPrimary : OneUiTheme.TextSub;
-            textPaint.SetTypeface(Typeface.Create(Typeface.Default, active ? TypefaceStyle.Bold : TypefaceStyle.Normal));
-            float textCy = modeTabRects[i].CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f;
-            canvas.DrawText(tabNames[i], modeTabRects[i].CenterX(), textCy, textPaint);
+        // Smooth camera transition toward selected angle preset
+        if (cameraAnimating) {
+            float yawDiff = NormalizeDeg(targetCamYawDeg - camYawDeg);
+            float pitchDiff = targetCamPitchDeg - camPitchDeg;
+            float camStep = Math.Min(1f, dt * 13f);
+            camYawDeg = NormalizeDeg(camYawDeg + yawDiff * camStep);
+            camPitchDeg += pitchDiff * camStep;
+            if (MathF.Abs(yawDiff) < 0.25f && MathF.Abs(pitchDiff) < 0.25f) {
+                camYawDeg = targetCamYawDeg;
+                camPitchDeg = targetCamPitchDeg;
+                cameraAnimating = false;
+            }
+        }
+
+        // Zone 1: Compact top row — subtle camera hint + 3 crisp angle shortcuts ("3D", "Topo", "Frente")
+        float topBarH = 26f * dp;
+        float topY = outerPad;
+        float presetW = 54f * dp;
+        float presetGap = 5f * dp;
+        float presetsTotalW = presetW * 3f + presetGap * 2f;
+        float presetsStartX = outerPad + w - presetsTotalW;
+
+        subTextPaint.TextAlign = Paint.Align.Left;
+        subTextPaint.TextSize = 10f * dp;
+        subTextPaint.Color = OneUiTheme.TextMuted;
+        canvas.DrawText(
+            $"Câmera {camPitchDeg:0}° • Arraste para girar",
+            outerPad + 6f * dp,
+            topY + topBarH * 0.5f - (subTextPaint.Ascent() + subTextPaint.Descent()) * 0.5f,
+            subTextPaint);
+
+        (string label, float py, float pp)[] presets = [
+            ("3D", -20f, 30f),
+            ("Topo", 0f, 84f),
+            ("Frente", 0f, 10f)
+        ];
+        for (int i = 0; i < 3; i++) {
+            float px = presetsStartX + i * (presetW + presetGap);
+            camPresetRects[i] = new RectF(px, topY, px + presetW, topY + topBarH);
+            bool isClose = MathF.Abs(NormalizeDeg(camYawDeg - presets[i].py)) < 8f
+                && MathF.Abs(camPitchDeg - presets[i].pp) < 8f;
+            canvas.DrawRoundRect(camPresetRects[i], topBarH * 0.5f, topBarH * 0.5f, isClose ? pillActivePaint : pillInactivePaint);
+
+            textPaint.TextAlign = Paint.Align.Center;
+            textPaint.TextSize = 10.5f * dp;
+            textPaint.Color = isClose ? OneUiTheme.TextPrimary : OneUiTheme.TextSub;
+            textPaint.SetTypeface(Typeface.Create(Typeface.Default, isClose ? TypefaceStyle.Bold : TypefaceStyle.Normal));
+            canvas.DrawText(presets[i].label, camPresetRects[i].CenterX(),
+                camPresetRects[i].CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
         }
         textPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Normal));
 
-        // Zone 3: Dedicated Bottom Control Dock (76dp, completely clear of all speakers!)
+        // Zone 3: Dedicated Bottom Control Dock (74dp, safely separated from room speakers)
         float dockH = 74f * dp;
         float dockGap = 8f * dp;
         float dockY = outerPad + h - dockH;
-        float gimbalW = w * 0.59f;
+        float gimbalW = w * 0.58f;
         dockGimbalRect = new RectF(outerPad, dockY, outerPad + gimbalW, dockY + dockH);
         dockHeightRect = new RectF(outerPad + gimbalW + dockGap, dockY, outerPad + w, dockY + dockH);
 
-        // Zone 2: Main Acoustic Room Canvas (between top tabs and bottom dock)
-        float roomTop = tabY + tabH + 8f * dp;
+        // Zone 2: Main 3D Orbitable Room Viewport
+        float roomTop = topY + topBarH + 8f * dp;
         float roomBottom = dockY - dockGap;
-        float roomH = Math.Max(120f * dp, roomBottom - roomTop);
+        roomCanvasRect = new RectF(outerPad, roomTop, outerPad + w, Math.Max(roomTop + 130f * dp, roomBottom));
 
-        if (viewMode == RoomViewMode.TopWithHeight) {
-            float heightColW = Math.Clamp(w * 0.22f, 54f * dp, 74f * dp);
-            float colGap = 6f * dp;
-            roomCanvasRect = new RectF(outerPad, roomTop, outerPad + w - heightColW - colGap, roomBottom);
-            sideHeightRect = new RectF(roomCanvasRect.Right + colGap, roomTop, outerPad + w, roomBottom);
-        } else {
-            roomCanvasRect = new RectF(outerPad, roomTop, outerPad + w, roomBottom);
-            sideHeightRect = new RectF();
-        }
-
-        // Draw Room Map according to active perspective
         hitTargets.Clear();
         bool anySolo = SourcesAnySolo();
-        float yawRad = listenerRotation.Y * (MathF.PI / 180f);
-        float pitchRad = listenerRotation.X * (MathF.PI / 180f);
+        float camYawRad = camYawDeg * (MathF.PI / 180f);
+        float camPitchRad = camPitchDeg * (MathF.PI / 180f);
+        float headYawRad = listenerRotation.Y * (MathF.PI / 180f);
+        float headPitchRad = listenerRotation.X * (MathF.PI / 180f);
 
-        switch (viewMode) {
-            case RoomViewMode.Perspective3D:
-                DrawPerspective3DRoom(canvas, roomCanvasRect, anySolo, yawRad, pitchRad, dp);
-                break;
-            case RoomViewMode.TopWithHeight:
-                DrawTopDownRoom(canvas, roomCanvasRect, anySolo, yawRad, pitchRad, dp);
-                DrawVerticalHeightTower(canvas, sideHeightRect, anySolo, dp);
-                break;
-            case RoomViewMode.FrontElevation:
-                DrawFrontElevationRoom(canvas, roomCanvasRect, anySolo, dp);
-                break;
-        }
+        bool stillAnimating = DrawOrbitable3DRoom(
+            canvas, roomCanvasRect, anySolo, nowMs, dt, camYawRad, camPitchRad, headYawRad, headPitchRad, dp);
 
-        // Bottom HUD telemetry chip inside bottom-left of main room canvas
-        DrawRoomHudTelemetry(canvas, roomCanvasRect, dp);
-
-        // Draw Bottom Dock Controls (Zero overlap with room speakers)
-        DrawDockHeadGimbal(canvas, dockGimbalRect, yawRad, pitchRad, dp);
+        // Draw Bottom Dock Controls
+        DrawDockHeadGimbal(canvas, dockGimbalRect, headYawRad, headPitchRad, dp);
         DrawDockHeightControl(canvas, dockHeightRect, dp);
-    }
 
-    bool SourcesAnySolo() {
-        for (int i = 0; i < sources.Count; i++) {
-            if (sources[i].IsSolo) {
-                return true;
-            }
+        if ((isAudioPlaying || cameraAnimating || stillAnimating)
+            && Visibility == ViewStates.Visible
+            && WindowVisibility == ViewStates.Visible) {
+            PostInvalidateOnAnimation();
         }
-        return false;
     }
 
-    (float sx, float sy, float persp) Project3D(RectF r, float nx, float ny, float nz) {
-        float cx = r.CenterX();
-        float cy = r.Top + r.Height() * 0.52f;
-        float persp = 2.6f / (3.1f + nz * 0.65f);
-        float sx = cx + nx * (r.Width() * 0.39f) * persp;
-        float sy = cy + (-nz * 0.27f - ny * 0.16f) * r.Height() * persp;
-        return (sx, sy, persp);
+    (float cx, float cy, float radiusPx) GetCameraFraming(RectF r) {
+        return (r.CenterX(), r.CenterY(), Math.Min(r.Width(), r.Height()) * 0.355f);
     }
 
-    (float nx, float nz) Unproject3DHorizontal(RectF r, float sx, float sy, float fixedNy) {
-        float cy = r.Top + r.Height() * 0.52f;
-        float k = (sy - cy) / (Math.Max(1f, r.Height()) * 2.6f);
-        float nz = Math.Clamp(-(3.1f * k + 0.16f * fixedNy) / Math.Max(0.05f, 0.65f * k + 0.27f), -1f, 1f);
-        float persp = 2.6f / (3.1f + nz * 0.65f);
-        float nx = Math.Clamp((sx - r.CenterX()) / Math.Max(1f, r.Width() * 0.39f * persp), -1f, 1f);
+    Vector3 TransformWorldToCamera(float x, float y, float z, float camYawRad, float camPitchRad) {
+        float cosA = MathF.Cos(camYawRad);
+        float sinA = MathF.Sin(camYawRad);
+        float x1 = x * cosA - z * sinA;
+        float z1 = x * sinA + z * cosA;
+
+        float cosB = MathF.Cos(camPitchRad);
+        float sinB = MathF.Sin(camPitchRad);
+        float y2 = y * cosB + z1 * sinB;
+        float z2 = -y * sinB + z1 * cosB;
+        return new Vector3(x1, y2, z2);
+    }
+
+    (float sx, float sy, float persp, float depth) ProjectOrbit3D(
+        RectF r, float nx, float ny, float nz, float camYawRad, float camPitchRad) {
+        const float camDist = 3.65f;
+        var (cx, cy, rad) = GetCameraFraming(r);
+        Vector3 cam = TransformWorldToCamera(nx, ny, nz, camYawRad, camPitchRad);
+        float denom = Math.Max(1.35f, camDist + cam.Z);
+        float persp = camDist / denom;
+        float sx = cx + cam.X * rad * persp;
+        float sy = cy - cam.Y * rad * persp;
+        return (sx, sy, persp, cam.Z);
+    }
+
+    (float nx, float nz) UnprojectHorizontalPlane(
+        RectF r, float sx, float sy, float fixedNy, float camYawRad, float camPitchRad) {
+        const float camDist = 3.65f;
+        var (cx, cy, rad) = GetCameraFraming(r);
+        float u = (sx - cx) / Math.Max(1f, rad);
+        float v = (cy - sy) / Math.Max(1f, rad);
+
+        float cosB = MathF.Cos(camPitchRad);
+        float sinB = MathF.Sin(camPitchRad);
+        float denom = camDist * sinB - v * cosB;
+        if (MathF.Abs(denom) < 0.08f) {
+            denom = denom >= 0 ? 0.08f : -0.08f;
+        }
+        float z1 = (v * camDist - v * fixedNy * sinB - camDist * fixedNy * cosB) / denom;
+        float z2 = -fixedNy * sinB + z1 * cosB;
+        float x1 = u * Math.Max(1.35f, camDist + z2) / camDist;
+
+        float cosA = MathF.Cos(camYawRad);
+        float sinA = MathF.Sin(camYawRad);
+        float nx = Math.Clamp(x1 * cosA + z1 * sinA, -1f, 1f);
+        float nz = Math.Clamp(-x1 * sinA + z1 * cosA, -1f, 1f);
         return (nx, nz);
     }
 
-    void DrawPerspective3DRoom(Canvas canvas, RectF r, bool anySolo, float yawRad, float pitchRad, float dp) {
+    bool DrawOrbitable3DRoom(
+        Canvas canvas, RectF r, bool anySolo, long nowMs, float dt,
+        float camYawRad, float camPitchRad, float headYawRad, float headPitchRad, float dp) {
+
         float corner = 22f * dp;
         canvas.DrawRoundRect(r, corner, corner, roomBgPaint);
         canvas.DrawRoundRect(r, corner, corner, roomBorderPaint);
 
-        // Floor quad (-1 floor, +1/-1 X/Z)
-        var fl_bl = Project3D(r, -1f, -1f, -1f);
-        var fl_br = Project3D(r, 1f, -1f, -1f);
-        var fl_fr = Project3D(r, 1f, -1f, 1f);
-        var fl_fl = Project3D(r, -1f, -1f, 1f);
+        canvas.Save();
+        Android.Graphics.Path clipRoom = new();
+        clipRoom.AddRoundRect(r, corner, corner, Android.Graphics.Path.Direction.Cw);
+        canvas.ClipPath(clipRoom);
+
+        // 1. Floor (-1 Y) Quad & Grid
+        var fl_bl = ProjectOrbit3D(r, -1f, -1f, -1f, camYawRad, camPitchRad);
+        var fl_br = ProjectOrbit3D(r, 1f, -1f, -1f, camYawRad, camPitchRad);
+        var fl_fr = ProjectOrbit3D(r, 1f, -1f, 1f, camYawRad, camPitchRad);
+        var fl_fl = ProjectOrbit3D(r, -1f, -1f, 1f, camYawRad, camPitchRad);
         using (Android.Graphics.Path floorPath = new()) {
             floorPath.MoveTo(fl_bl.sx, fl_bl.sy);
             floorPath.LineTo(fl_br.sx, fl_br.sy);
@@ -347,29 +435,22 @@ public sealed class RoomSimulatorView : View {
             canvas.DrawPath(floorPath, gridPaint);
         }
 
-        // Floor Perspective Grid Lines
-        for (int g = -1; g <= 1; g += 2) {
+        for (int g = -1; g <= 1; g++) {
             float t = g * 0.5f;
-            var a = Project3D(r, t, -1f, -1f);
-            var b = Project3D(r, t, -1f, 1f);
-            canvas.DrawLine(a.sx, a.sy, b.sx, b.sy, gridPaint);
+            var ax = ProjectOrbit3D(r, t, -1f, -1f, camYawRad, camPitchRad);
+            var bx = ProjectOrbit3D(r, t, -1f, 1f, camYawRad, camPitchRad);
+            canvas.DrawLine(ax.sx, ax.sy, bx.sx, bx.sy, gridPaint);
 
-            var c = Project3D(r, -1f, -1f, t);
-            var d = Project3D(r, 1f, -1f, t);
-            canvas.DrawLine(c.sx, c.sy, d.sx, d.sy, gridPaint);
+            var az = ProjectOrbit3D(r, -1f, -1f, t, camYawRad, camPitchRad);
+            var bz = ProjectOrbit3D(r, 1f, -1f, t, camYawRad, camPitchRad);
+            canvas.DrawLine(az.sx, az.sy, bz.sx, bz.sy, gridPaint);
         }
-        var midX1 = Project3D(r, 0f, -1f, -1f);
-        var midX2 = Project3D(r, 0f, -1f, 1f);
-        canvas.DrawLine(midX1.sx, midX1.sy, midX2.sx, midX2.sy, gridPaint);
-        var midZ1 = Project3D(r, -1f, -1f, 0f);
-        var midZ2 = Project3D(r, 1f, -1f, 0f);
-        canvas.DrawLine(midZ1.sx, midZ1.sy, midZ2.sx, midZ2.sy, gridPaint);
 
-        // Ceiling Frame (+1 Y) + Corner Pillars
-        var ce_bl = Project3D(r, -1f, 1f, -1f);
-        var ce_br = Project3D(r, 1f, 1f, -1f);
-        var ce_fr = Project3D(r, 1f, 1f, 1f);
-        var ce_fl = Project3D(r, -1f, 1f, 1f);
+        // 2. Ceiling (+1 Y) Wireframe + Vertical Pillars
+        var ce_bl = ProjectOrbit3D(r, -1f, 1f, -1f, camYawRad, camPitchRad);
+        var ce_br = ProjectOrbit3D(r, 1f, 1f, -1f, camYawRad, camPitchRad);
+        var ce_fr = ProjectOrbit3D(r, 1f, 1f, 1f, camYawRad, camPitchRad);
+        var ce_fl = ProjectOrbit3D(r, -1f, 1f, 1f, camYawRad, camPitchRad);
         using (Android.Graphics.Path ceilPath = new()) {
             ceilPath.MoveTo(ce_bl.sx, ce_bl.sy);
             ceilPath.LineTo(ce_br.sx, ce_br.sy);
@@ -383,53 +464,143 @@ public sealed class RoomSimulatorView : View {
         canvas.DrawLine(fl_fr.sx, fl_fr.sy, ce_fr.sx, ce_fr.sy, gridPaint);
         canvas.DrawLine(fl_fl.sx, fl_fl.sy, ce_fl.sx, ce_fl.sy, gridPaint);
 
-        // Front Screen Banner on Front Wall (+Z)
-        var scrL = Project3D(r, -0.55f, 0.35f, 1f);
-        var scrR = Project3D(r, 0.55f, 0.35f, 1f);
+        // 3. Front Screen Bar (+Z wall) orbiting cleanly with the room
+        var scrL = ProjectOrbit3D(r, -0.58f, 0.25f, 1f, camYawRad, camPitchRad);
+        var scrR = ProjectOrbit3D(r, 0.58f, 0.25f, 1f, camYawRad, camPitchRad);
         screenPaint.Color = OneUiTheme.Primary;
         canvas.DrawLine(scrL.sx, scrL.sy, scrR.sx, scrR.sy, screenPaint);
+        var scrMid = ProjectOrbit3D(r, 0f, 0.42f, 1.02f, camYawRad, camPitchRad);
         subTextPaint.TextAlign = Paint.Align.Center;
-        canvas.DrawText("FRENTE / TELA (+Z) • TETO (+Y)", r.CenterX(), r.Top + 17f * dp, subTextPaint);
+        subTextPaint.TextSize = 8.5f * dp;
+        subTextPaint.Color = OneUiTheme.PeachText;
+        canvas.DrawText("TELA", scrMid.sx, scrMid.sy - 2f * dp, subTextPaint);
 
-        // Draw sources back-to-front (largest +Z first) with floor shadow + vertical Y height stalk!
-        List<(TrackSourceItem item, int idx, Vector3 np)> ordered = new(sources.Count);
+        // 4. Smooth 60 FPS Object Interpolation + Motion Trails + Depth Sort
+        bool anyInterpolating = false;
+        List<(bool isListener, TrackSourceItem item, int idx, Vector3 np, float rms, SmoothedSourceState st, float depth)> renderQueue = new(sources.Count + 1);
+
+        float posBlend = Math.Min(1f, dt * 18f);
+        float rmsRise = Math.Min(1f, dt * 24f);
+        float rmsFall = Math.Min(1f, dt * 10f);
+
         for (int i = 0; i < sources.Count; i++) {
-            Vector3 np = sources[i].NormalizedPosition;
-            ordered.Add((sources[i], i, np));
+            TrackSourceItem item = sources[i];
+            Vector3 targetPos = new(
+                Math.Clamp(item.NormalizedPosition.X, -1f, 1f),
+                Math.Clamp(item.NormalizedPosition.Y, -1f, 1f),
+                Math.Clamp(item.NormalizedPosition.Z, -1f, 1f));
+            bool effectivelyMuted = item.IsMuted || (anySolo && !item.IsSolo);
+            float targetRms = effectivelyMuted ? 0f : item.RmsLevel;
+
+            if (!smoothedStates.TryGetValue(item, out SmoothedSourceState st)) {
+                st = new SmoothedSourceState();
+                smoothedStates[item] = st;
+            }
+
+            if (!st.Initialized) {
+                st.SmoothedPos = targetPos;
+                st.SmoothedRms = targetRms;
+                st.Initialized = true;
+                st.LastTrailMs = nowMs;
+            } else {
+                Vector3 delta = targetPos - st.SmoothedPos;
+                if (delta.LengthSquared() > 0.00001f) {
+                    st.SmoothedPos = Vector3.Lerp(st.SmoothedPos, targetPos, posBlend);
+                    anyInterpolating = true;
+                } else {
+                    st.SmoothedPos = targetPos;
+                }
+
+                float rmsDiff = targetRms - st.SmoothedRms;
+                if (MathF.Abs(rmsDiff) > 0.002f) {
+                    st.SmoothedRms += rmsDiff * (rmsDiff > 0 ? rmsRise : rmsFall);
+                    anyInterpolating = true;
+                } else {
+                    st.SmoothedRms = targetRms;
+                }
+
+                // Append trail dot when a dynamic object glides visibly
+                if (!item.IsBed && nowMs - st.LastTrailMs >= 28) {
+                    int prevIdx = (st.TrailHead + st.Trail.Length - 1) % st.Trail.Length;
+                    if (st.TrailCount == 0 || (st.SmoothedPos - st.Trail[prevIdx]).LengthSquared() > 0.0012f) {
+                        st.Trail[st.TrailHead] = st.SmoothedPos;
+                        st.TrailHead = (st.TrailHead + 1) % st.Trail.Length;
+                        st.TrailCount = Math.Min(st.TrailCount + 1, st.Trail.Length);
+                        st.LastTrailMs = nowMs;
+                    } else if (st.TrailCount > 0 && nowMs - st.LastTrailMs >= 160) {
+                        st.TrailCount = Math.Max(0, st.TrailCount - 1);
+                        st.LastTrailMs = nowMs;
+                    }
+                }
+            }
+
+            var pt = ProjectOrbit3D(r, st.SmoothedPos.X, st.SmoothedPos.Y, st.SmoothedPos.Z, camYawRad, camPitchRad);
+            renderQueue.Add((false, item, i, st.SmoothedPos, st.SmoothedRms, st, pt.depth));
         }
-        ordered.Sort((a, b) => b.np.Z.CompareTo(a.np.Z));
 
-        foreach (var (item, idx, np) in ordered) {
-            float nx = Math.Clamp(np.X, -1f, 1f);
-            float ny = Math.Clamp(np.Y, -1f, 1f);
-            float nz = Math.Clamp(np.Z, -1f, 1f);
+        float lnx = Math.Clamp(listenerPosition.X / environmentSize.X, -1f, 1f);
+        float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
+        float lnz = Math.Clamp(listenerPosition.Z / environmentSize.Z, -1f, 1f);
+        var lCenter = ProjectOrbit3D(r, lnx, lny, lnz, camYawRad, camPitchRad);
+        renderQueue.Add((true, null, -1, new Vector3(lnx, lny, lnz), 0f, null, lCenter.depth));
 
-            var floorPt = Project3D(r, nx, -1f, nz);
-            var posPt = Project3D(r, nx, ny, nz);
-            hitTargets.Add((item, posPt.sx, posPt.sy, nx, ny, nz));
+        // Sort back-to-front (largest depth first, nearest last)
+        renderQueue.Sort((a, b) => b.depth.CompareTo(a.depth));
+
+        foreach (var entry in renderQueue) {
+            if (entry.isListener) {
+                DrawListenerIn3DRoom(canvas, r, lnx, lny, lnz, camYawRad, camPitchRad, headYawRad, headPitchRad, dp);
+                continue;
+            }
+
+            TrackSourceItem item = entry.item;
+            Vector3 np = entry.np;
+            SmoothedSourceState st = entry.st;
+
+            var floorPt = ProjectOrbit3D(r, np.X, -1f, np.Z, camYawRad, camPitchRad);
+            var posPt = ProjectOrbit3D(r, np.X, np.Y, np.Z, camYawRad, camPitchRad);
+            hitTargets.Add((item, posPt.sx, posPt.sy, np.X, np.Y, np.Z));
 
             bool effectivelyMuted = item.IsMuted || (anySolo && !item.IsSolo);
-            float rmsBoost = effectivelyMuted ? 0f : Math.Clamp(item.RmsLevel * 16f, 0f, 10f) * dp;
+            float rmsBoost = effectivelyMuted ? 0f : Math.Clamp(entry.rms * 16f, 0f, 11f) * dp;
 
-            // Floor shadow & vertical height stalk showing exact Floor -> Ceiling Y position!
-            canvas.DrawCircle(floorPt.sx, floorPt.sy, 3.2f * dp * floorPt.persp, shadowDotPaint);
+            // Smooth fading motion trail behind moving dynamic objects
+            if (!item.IsBed && !effectivelyMuted && st.TrailCount >= 2) {
+                int start = (st.TrailHead - st.TrailCount + st.Trail.Length) % st.Trail.Length;
+                var prevProj = ProjectOrbit3D(r, st.Trail[start].X, st.Trail[start].Y, st.Trail[start].Z, camYawRad, camPitchRad);
+                for (int t = 1; t < st.TrailCount; t++) {
+                    int tidx = (start + t) % st.Trail.Length;
+                    var curProj = ProjectOrbit3D(r, st.Trail[tidx].X, st.Trail[tidx].Y, st.Trail[tidx].Z, camYawRad, camPitchRad);
+                    float frac = t / (float)st.TrailCount;
+                    trailPaint.Color = Color.Argb((int)(135 * frac), OneUiTheme.DynamicObject.R, OneUiTheme.DynamicObject.G, OneUiTheme.DynamicObject.B);
+                    trailPaint.StrokeWidth = (1.2f + 1.8f * frac) * dp;
+                    canvas.DrawLine(prevProj.sx, prevProj.sy, curProj.sx, curProj.sy, trailPaint);
+                    prevProj = curProj;
+                }
+                trailPaint.Color = Color.Argb(150, OneUiTheme.DynamicObject.R, OneUiTheme.DynamicObject.G, OneUiTheme.DynamicObject.B);
+                canvas.DrawLine(prevProj.sx, prevProj.sy, posPt.sx, posPt.sy, trailPaint);
+            }
+
+            // Floor shadow + vertical elevation drop-stalk
+            canvas.DrawCircle(floorPt.sx, floorPt.sy, 3f * dp * floorPt.persp, shadowDotPaint);
             Color baseCol = effectivelyMuted
                 ? OneUiTheme.TextMuted
                 : (item.IsBed ? (item.IsLFE ? OneUiTheme.LfeChannel : OneUiTheme.BedChannel) : OneUiTheme.DynamicObject);
-            stalkPaint.Color = ny > 0.15f
-                ? Color.Argb(145, OneUiTheme.FunctionalGreen.R, OneUiTheme.FunctionalGreen.G, OneUiTheme.FunctionalGreen.B)
-                : Color.Argb(95, baseCol.R, baseCol.G, baseCol.B);
+            stalkPaint.Color = np.Y > 0.16f
+                ? Color.Argb(135, OneUiTheme.FunctionalGreen.R, OneUiTheme.FunctionalGreen.G, OneUiTheme.FunctionalGreen.B)
+                : Color.Argb(88, baseCol.R, baseCol.G, baseCol.B);
             canvas.DrawLine(floorPt.sx, floorPt.sy, posPt.sx, posPt.sy, stalkPaint);
 
-            float scale = Math.Clamp(posPt.persp * 1.05f, 0.72f, 1.25f);
+            float scale = Math.Clamp(posPt.persp * 1.05f, 0.72f, 1.28f);
             if (item.IsBed) {
                 float sz = 7.2f * dp * scale;
                 Paint p = effectivelyMuted ? mutedPaint : (item.IsLFE ? lfePaint : bedPaint);
-                if (rmsBoost > 1f) {
-                    canvas.DrawCircle(posPt.sx, posPt.sy, sz + rmsBoost, objGlowPaint.WithColor(Color.Argb(65, p.Color.R, p.Color.G, p.Color.B)));
+                if (rmsBoost > 0.8f) {
+                    canvas.DrawCircle(posPt.sx, posPt.sy, sz + rmsBoost,
+                        objGlowPaint.WithColor(Color.Argb(68, p.Color.R, p.Color.G, p.Color.B)));
                 }
                 canvas.DrawRoundRect(posPt.sx - sz, posPt.sy - sz, posPt.sx + sz, posPt.sy + sz, 4f * dp, 4f * dp, p);
-                if (ny > 0.20f) {
+                if (np.Y > 0.18f) {
                     canvas.DrawCircle(posPt.sx, posPt.sy, sz + 3f * dp, heightRingPaint);
                 }
                 if (item.IsSolo) {
@@ -438,47 +609,55 @@ public sealed class RoomSimulatorView : View {
                 string shortLabel = item.Channel.HasValue && item.Channel.Value != ReferenceChannel.Unknown
                     ? item.Channel.Value.GetShortName()
                     : $"B{item.Index + 1}";
+                textPaint.TextAlign = Paint.Align.Center;
                 textPaint.TextSize = 9.5f * dp;
                 textPaint.Color = OneUiTheme.TextPrimary;
                 canvas.DrawText(shortLabel, posPt.sx, posPt.sy + sz + 10.5f * dp, textPaint);
             } else {
                 float rad = 8f * dp * scale;
                 if (!effectivelyMuted && rmsBoost > 0.5f) {
-                    canvas.DrawCircle(posPt.sx, posPt.sy, rad + rmsBoost, objGlowPaint.WithColor(Color.Argb(75, OneUiTheme.DynamicObject.R, OneUiTheme.DynamicObject.G, OneUiTheme.DynamicObject.B)));
+                    canvas.DrawCircle(posPt.sx, posPt.sy, rad + rmsBoost,
+                        objGlowPaint.WithColor(Color.Argb(78, OneUiTheme.DynamicObject.R, OneUiTheme.DynamicObject.G, OneUiTheme.DynamicObject.B)));
                 }
                 canvas.DrawCircle(posPt.sx, posPt.sy, rad, effectivelyMuted ? mutedPaint : objPaint);
-                if (ny > 0.15f) {
+                if (np.Y > 0.16f) {
                     canvas.DrawCircle(posPt.sx, posPt.sy, rad + 3f * dp, heightRingPaint);
                 }
                 if (item.IsSolo) {
                     canvas.DrawCircle(posPt.sx, posPt.sy, rad + 5f * dp, soloRingPaint);
                 }
-                string label = $"O{idx + 1}";
-                if (ny > 0.25f) label += " ↑";
-                else if (ny < -0.25f) label += " ↓";
+                string label = $"O{entry.idx + 1}";
+                if (np.Y > 0.25f) label += " ↑";
+                else if (np.Y < -0.25f) label += " ↓";
+                textPaint.TextAlign = Paint.Align.Center;
                 textPaint.TextSize = 9.5f * dp;
                 textPaint.Color = OneUiTheme.TextPrimary;
                 canvas.DrawText(label, posPt.sx, posPt.sy - rad - 4f * dp, textPaint);
             }
         }
 
-        // Listener Shadow + Height Stalk + 3D Head Sphere at real (X, Y, Z)!
-        float lnx = Math.Clamp(listenerPosition.X / environmentSize.X, -1f, 1f);
-        float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
-        float lnz = Math.Clamp(listenerPosition.Z / environmentSize.Z, -1f, 1f);
+        canvas.Restore();
+        return anyInterpolating;
+    }
 
-        var lFloor = Project3D(r, lnx, -1f, lnz);
-        var lPos = Project3D(r, lnx, lny, lnz);
+    void DrawListenerIn3DRoom(
+        Canvas canvas, RectF r, float lnx, float lny, float lnz,
+        float camYawRad, float camPitchRad, float headYawRad, float headPitchRad, float dp) {
 
-        canvas.DrawCircle(lFloor.sx, lFloor.sy, 5f * dp, shadowDotPaint);
-        stalkPaint.Color = Color.Argb(175, OneUiTheme.PrimaryHigh.R, OneUiTheme.PrimaryHigh.G, OneUiTheme.PrimaryHigh.B);
+        var lFloor = ProjectOrbit3D(r, lnx, -1f, lnz, camYawRad, camPitchRad);
+        var lPos = ProjectOrbit3D(r, lnx, lny, lnz, camYawRad, camPitchRad);
+
+        canvas.DrawCircle(lFloor.sx, lFloor.sy, 5f * dp * lFloor.persp, shadowDotPaint);
+        stalkPaint.Color = Color.Argb(180, OneUiTheme.PrimaryHigh.R, OneUiTheme.PrimaryHigh.G, OneUiTheme.PrimaryHigh.B);
         canvas.DrawLine(lFloor.sx, lFloor.sy, lPos.sx, lPos.sy, stalkPaint);
 
-        // Projected 3D FOV Cone on horizontal plane at listener height
-        float spread = 0.44f;
-        var fovL = Project3D(r, Math.Clamp(lnx + MathF.Sin(yawRad - spread) * 0.42f, -1f, 1f), lny, Math.Clamp(lnz + MathF.Cos(yawRad - spread) * 0.42f, -1f, 1f));
-        var fovR = Project3D(r, Math.Clamp(lnx + MathF.Sin(yawRad + spread) * 0.42f, -1f, 1f), lny, Math.Clamp(lnz + MathF.Cos(yawRad + spread) * 0.42f, -1f, 1f));
-        var fovC = Project3D(r, Math.Clamp(lnx + MathF.Sin(yawRad) * 0.42f, -1f, 1f), lny, Math.Clamp(lnz + MathF.Cos(yawRad) * 0.42f, -1f, 1f));
+        // Projected 3D FOV Cone aligned with listener yaw
+        const float spread = 0.44f;
+        const float reach = 0.44f;
+        var fovL = ProjectOrbit3D(r, Math.Clamp(lnx + MathF.Sin(headYawRad - spread) * reach, -1f, 1f), lny, Math.Clamp(lnz + MathF.Cos(headYawRad - spread) * reach, -1f, 1f), camYawRad, camPitchRad);
+        var fovR = ProjectOrbit3D(r, Math.Clamp(lnx + MathF.Sin(headYawRad + spread) * reach, -1f, 1f), lny, Math.Clamp(lnz + MathF.Cos(headYawRad + spread) * reach, -1f, 1f), camYawRad, camPitchRad);
+        var fovC = ProjectOrbit3D(r, Math.Clamp(lnx + MathF.Sin(headYawRad) * reach, -1f, 1f), lny, Math.Clamp(lnz + MathF.Cos(headYawRad) * reach, -1f, 1f), camYawRad, camPitchRad);
+
         using (Android.Graphics.Path cone = new()) {
             cone.MoveTo(lPos.sx, lPos.sy);
             cone.LineTo(fovL.sx, fovL.sy);
@@ -486,308 +665,21 @@ public sealed class RoomSimulatorView : View {
             cone.Close();
             using LinearGradient coneGrad = new(
                 lPos.sx, lPos.sy, fovC.sx, fovC.sy,
-                [Color.Argb(115, OneUiTheme.PrimaryHigh.R, OneUiTheme.PrimaryHigh.G, OneUiTheme.PrimaryHigh.B).ToArgb(), Color.Transparent.ToArgb()],
+                [Color.Argb(118, OneUiTheme.PrimaryHigh.R, OneUiTheme.PrimaryHigh.G, OneUiTheme.PrimaryHigh.B).ToArgb(), Color.Transparent.ToArgb()],
                 [0f, 1f], Shader.TileMode.Clamp);
             listenerConePaint.SetShader(coneGrad);
             canvas.DrawPath(cone, listenerConePaint);
             listenerConePaint.SetShader(null);
         }
 
-        Draw3DHeadSphere(canvas, lPos.sx, lPos.sy, 15.5f * dp * Math.Clamp(lPos.persp, 0.8f, 1.18f), yawRad, pitchRad, viewTilt: 0.48f, dp);
+        Draw3DHeadSphere(canvas, lPos.sx, lPos.sy, 15.5f * dp * Math.Clamp(lPos.persp, 0.8f, 1.18f),
+            headYawRad, headPitchRad, camYawRad, camPitchRad);
     }
 
-    void DrawTopDownRoom(Canvas canvas, RectF r, bool anySolo, float yawRad, float pitchRad, float dp) {
-        float corner = 22f * dp;
-        canvas.DrawRoundRect(r, corner, corner, roomBgPaint);
-        canvas.DrawRoundRect(r, corner, corner, roomBorderPaint);
+    void Draw3DHeadSphere(
+        Canvas canvas, float cx, float cy, float r,
+        float headYawRad, float headPitchRad, float camYawRad, float camPitchRad) {
 
-        for (int i = 1; i <= 3; i++) {
-            float gx = r.Left + r.Width() * (i / 4f);
-            float gy = r.Top + r.Height() * (i / 4f);
-            canvas.DrawLine(gx, r.Top, gx, r.Bottom, gridPaint);
-            canvas.DrawLine(r.Left, gy, r.Right, gy, gridPaint);
-        }
-
-        float screenHalf = r.Width() * 0.28f;
-        screenPaint.Color = OneUiTheme.Primary;
-        canvas.DrawLine(r.CenterX() - screenHalf, r.Top + 5f * dp, r.CenterX() + screenHalf, r.Top + 5f * dp, screenPaint);
-        subTextPaint.TextAlign = Paint.Align.Center;
-        canvas.DrawText("FRENTE / TELA (+Z)", r.CenterX(), r.Top + 18f * dp, subTextPaint);
-
-        for (int i = 0; i < sources.Count; i++) {
-            TrackSourceItem item = sources[i];
-            Vector3 np = item.NormalizedPosition;
-            float px = r.Left + Math.Clamp((np.X + 1f) * 0.5f, 0.06f, 0.94f) * r.Width();
-            float py = r.Top + Math.Clamp(1f - (np.Z + 1f) * 0.5f, 0.10f, 0.90f) * r.Height();
-            hitTargets.Add((item, px, py, np.X, np.Y, np.Z));
-
-            bool effectivelyMuted = item.IsMuted || (anySolo && !item.IsSolo);
-            float rmsBoost = effectivelyMuted ? 0f : Math.Clamp(item.RmsLevel * 18f, 0f, 12f) * dp;
-
-            if (item.IsBed) {
-                float sz = 7.5f * dp;
-                Paint p = effectivelyMuted ? mutedPaint : (item.IsLFE ? lfePaint : bedPaint);
-                if (rmsBoost > 1f) {
-                    canvas.DrawCircle(px, py, sz + rmsBoost, objGlowPaint.WithColor(Color.Argb(65, p.Color.R, p.Color.G, p.Color.B)));
-                }
-                canvas.DrawRoundRect(px - sz, py - sz, px + sz, py + sz, 4.5f * dp, 4.5f * dp, p);
-                if (np.Y > 0.25f) canvas.DrawCircle(px, py, sz + 3.5f * dp, heightRingPaint);
-                if (item.IsSolo) canvas.DrawCircle(px, py, sz + 5.5f * dp, soloRingPaint);
-                string shortLabel = item.Channel.HasValue && item.Channel.Value != ReferenceChannel.Unknown
-                    ? item.Channel.Value.GetShortName()
-                    : $"B{item.Index + 1}";
-                textPaint.TextSize = 10f * dp;
-                textPaint.Color = OneUiTheme.TextPrimary;
-                canvas.DrawText(shortLabel, px, py + sz + 11f * dp, textPaint);
-            } else {
-                float rad = 8.5f * dp;
-                if (!effectivelyMuted && rmsBoost > 0.5f) {
-                    canvas.DrawCircle(px, py, rad + rmsBoost, objGlowPaint.WithColor(Color.Argb(75, OneUiTheme.DynamicObject.R, OneUiTheme.DynamicObject.G, OneUiTheme.DynamicObject.B)));
-                }
-                canvas.DrawCircle(px, py, rad, effectivelyMuted ? mutedPaint : objPaint);
-                if (np.Y > 0.15f) canvas.DrawCircle(px, py, rad + 3.5f * dp, heightRingPaint);
-                if (item.IsSolo) canvas.DrawCircle(px, py, rad + 5.5f * dp, soloRingPaint);
-                string label = $"O{i + 1}";
-                if (np.Y > 0.25f) label += " ↑";
-                else if (np.Y < -0.25f) label += " ↓";
-                textPaint.TextSize = 10f * dp;
-                textPaint.Color = OneUiTheme.TextPrimary;
-                canvas.DrawText(label, px, py - rad - 4f * dp, textPaint);
-            }
-        }
-
-        (float lx, float ly) = GetListenerTopDownCoords(r);
-        float pitchForeshorten = Math.Clamp(MathF.Cos(pitchRad), 0.35f, 1f);
-        float coneLen = 44f * dp * (0.55f + 0.45f * pitchForeshorten);
-        float spread = 0.44f;
-        using (Android.Graphics.Path cone = new()) {
-            cone.MoveTo(lx, ly);
-            cone.LineTo(lx + MathF.Sin(yawRad - spread) * coneLen, ly - MathF.Cos(yawRad - spread) * coneLen);
-            cone.LineTo(lx + MathF.Sin(yawRad + spread) * coneLen, ly - MathF.Cos(yawRad + spread) * coneLen);
-            cone.Close();
-            using LinearGradient coneGrad = new(
-                lx, ly, lx + MathF.Sin(yawRad) * coneLen, ly - MathF.Cos(yawRad) * coneLen,
-                [Color.Argb(110, OneUiTheme.PrimaryHigh.R, OneUiTheme.PrimaryHigh.G, OneUiTheme.PrimaryHigh.B).ToArgb(), Color.Transparent.ToArgb()],
-                [0f, 1f], Shader.TileMode.Clamp);
-            listenerConePaint.SetShader(coneGrad);
-            canvas.DrawPath(cone, listenerConePaint);
-            listenerConePaint.SetShader(null);
-        }
-
-        Draw3DHeadSphere(canvas, lx, ly, 16f * dp, yawRad, pitchRad, viewTilt: 0.62f, dp);
-    }
-
-    void DrawVerticalHeightTower(Canvas canvas, RectF r, bool anySolo, float dp) {
-        float corner = 18f * dp;
-        canvas.DrawRoundRect(r, corner, corner, roomBgPaint);
-        canvas.DrawRoundRect(r, corner, corner, roomBorderPaint);
-
-        textPaint.TextSize = 8.5f * dp;
-        textPaint.Color = OneUiTheme.FunctionalGreen;
-        canvas.DrawText("ALTURA", r.CenterX(), r.Top + 13f * dp, textPaint);
-        subTextPaint.TextAlign = Paint.Align.Center;
-        canvas.DrawText("Teto +Y", r.CenterX(), r.Top + 24f * dp, subTextPaint);
-        canvas.DrawText("Chão -Y", r.CenterX(), r.Bottom - 6f * dp, subTextPaint);
-
-        float plotTop = r.Top + 30f * dp;
-        float plotBot = r.Bottom - 16f * dp;
-        float plotH = Math.Max(40f * dp, plotBot - plotTop);
-        float earY = plotTop + plotH * 0.5f;
-
-        // Vertical axis spine & ear midline
-        canvas.DrawLine(r.CenterX(), plotTop, r.CenterX(), plotBot, gridPaint);
-        canvas.DrawLine(r.Left + 8f * dp, earY, r.Right - 8f * dp, earY, ceilingWirePaint);
-
-        // Plot each source at its exact vertical height Y
-        for (int i = 0; i < sources.Count; i++) {
-            TrackSourceItem item = sources[i];
-            Vector3 np = item.NormalizedPosition;
-            float ny = Math.Clamp(np.Y, -1f, 1f);
-            float sy = plotTop + (1f - (ny + 1f) * 0.5f) * plotH;
-            float sx = r.CenterX() + Math.Clamp(np.X, -1f, 1f) * (r.Width() * 0.28f);
-
-            bool muted = item.IsMuted || (anySolo && !item.IsSolo);
-            Paint p = muted ? mutedPaint : (item.IsBed ? (item.IsLFE ? lfePaint : bedPaint) : objPaint);
-            canvas.DrawCircle(sx, sy, item.IsDynamicObject ? 4.5f * dp : 3.8f * dp, p);
-        }
-
-        // Plot Listener vertical height bar
-        float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
-        float ly = plotTop + (1f - (lny + 1f) * 0.5f) * plotH;
-        listenerPaint.Color = OneUiTheme.PrimaryHigh;
-        canvas.DrawRoundRect(r.Left + 10f * dp, ly - 4f * dp, r.Right - 10f * dp, ly + 4f * dp, 4f * dp, 4f * dp, listenerPaint);
-        canvas.DrawRoundRect(r.Left + 10f * dp, ly - 4f * dp, r.Right - 10f * dp, ly + 4f * dp, 4f * dp, 4f * dp, listenerRingPaint);
-    }
-
-    void DrawFrontElevationRoom(Canvas canvas, RectF r, bool anySolo, float dp) {
-        float corner = 22f * dp;
-        canvas.DrawRoundRect(r, corner, corner, roomBgPaint);
-        canvas.DrawRoundRect(r, corner, corner, roomBorderPaint);
-
-        float plotLeft = r.Left + 18f * dp;
-        float plotRight = r.Right - 18f * dp;
-        float plotW = plotRight - plotLeft;
-        float plotTop = r.Top + 26f * dp;
-        float plotBot = r.Bottom - 36f * dp;
-        float plotH = Math.Max(60f * dp, plotBot - plotTop);
-
-        float earY = plotTop + plotH * 0.5f;
-        screenPaint.Color = OneUiTheme.Primary;
-        canvas.DrawLine(r.Left + r.Width() * 0.24f, plotTop + 2f * dp, r.Right - r.Width() * 0.24f, plotTop + 2f * dp, ceilingWirePaint);
-        canvas.DrawLine(plotLeft, earY, plotRight, earY, gridPaint);
-        canvas.DrawLine(plotLeft, plotBot, plotRight, plotBot, screenPaint);
-        canvas.DrawLine(r.CenterX(), plotTop, r.CenterX(), plotBot, gridPaint);
-
-        subTextPaint.TextAlign = Paint.Align.Center;
-        canvas.DrawText("VISÃO FRONTAL • ESQ/DIR (X) × CHÃO/TETO (Y)", r.CenterX(), r.Top + 17f * dp, subTextPaint);
-        subTextPaint.TextAlign = Paint.Align.Left;
-        canvas.DrawText("Teto (+Y)", plotLeft, plotTop + 12f * dp, subTextPaint);
-        canvas.DrawText("Ouvido (0)", plotLeft, earY - 4f * dp, subTextPaint);
-        canvas.DrawText("Chão (-Y)", plotLeft, plotBot - 5f * dp, subTextPaint);
-
-        for (int i = 0; i < sources.Count; i++) {
-            TrackSourceItem item = sources[i];
-            Vector3 np = item.NormalizedPosition;
-            float px = plotLeft + Math.Clamp((np.X + 1f) * 0.5f, 0.04f, 0.96f) * plotW;
-            float py = plotTop + Math.Clamp(1f - (np.Y + 1f) * 0.5f, 0.05f, 0.95f) * plotH;
-            hitTargets.Add((item, px, py, np.X, np.Y, np.Z));
-
-            bool muted = item.IsMuted || (anySolo && !item.IsSolo);
-            float rmsBoost = muted ? 0f : Math.Clamp(item.RmsLevel * 18f, 0f, 12f) * dp;
-
-            // Drop vertical guide line to ear/floor
-            Paint p = muted ? mutedPaint : (item.IsBed ? (item.IsLFE ? lfePaint : bedPaint) : objPaint);
-            stalkPaint.Color = Color.Argb(75, p.Color.R, p.Color.G, p.Color.B);
-            canvas.DrawLine(px, earY, px, py, stalkPaint);
-
-            if (item.IsBed) {
-                float sz = 7.5f * dp;
-                if (rmsBoost > 1f) canvas.DrawCircle(px, py, sz + rmsBoost, objGlowPaint.WithColor(Color.Argb(65, p.Color.R, p.Color.G, p.Color.B)));
-                canvas.DrawRoundRect(px - sz, py - sz, px + sz, py + sz, 4.5f * dp, 4.5f * dp, p);
-                if (item.IsSolo) canvas.DrawCircle(px, py, sz + 5.5f * dp, soloRingPaint);
-                string shortLabel = item.Channel.HasValue && item.Channel.Value != ReferenceChannel.Unknown
-                    ? item.Channel.Value.GetShortName()
-                    : $"B{item.Index + 1}";
-                textPaint.TextSize = 10f * dp;
-                textPaint.Color = OneUiTheme.TextPrimary;
-                canvas.DrawText(shortLabel, px, py + sz + 11f * dp, textPaint);
-            } else {
-                float rad = 8.5f * dp;
-                if (!muted && rmsBoost > 0.5f) canvas.DrawCircle(px, py, rad + rmsBoost, objGlowPaint.WithColor(Color.Argb(75, OneUiTheme.DynamicObject.R, OneUiTheme.DynamicObject.G, OneUiTheme.DynamicObject.B)));
-                canvas.DrawCircle(px, py, rad, p);
-                if (item.IsSolo) canvas.DrawCircle(px, py, rad + 5.5f * dp, soloRingPaint);
-                textPaint.TextSize = 10f * dp;
-                textPaint.Color = OneUiTheme.TextPrimary;
-                canvas.DrawText($"O{i + 1}", px, py - rad - 4f * dp, textPaint);
-            }
-        }
-
-        // Listener avatar at (X, Y)
-        float lnx = Math.Clamp(listenerPosition.X / environmentSize.X, -1f, 1f);
-        float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
-        float lx = plotLeft + (lnx + 1f) * 0.5f * plotW;
-        float ly = plotTop + (1f - (lny + 1f) * 0.5f) * plotH;
-        float yawRad = listenerRotation.Y * (MathF.PI / 180f);
-        float pitchRad = listenerRotation.X * (MathF.PI / 180f);
-        Draw3DHeadSphere(canvas, lx, ly, 15.5f * dp, yawRad, pitchRad, viewTilt: 0.08f, dp);
-    }
-
-    void DrawRoomHudTelemetry(Canvas canvas, RectF r, float dp) {
-        float chipH = 22f * dp;
-        float chipY = r.Bottom - chipH - 7f * dp;
-        float chipX = r.Left + 8f * dp;
-        string hud = $"({listenerPosition.X:0.0}, {listenerPosition.Y:0.0}, {listenerPosition.Z:0.0})m";
-        subTextPaint.TextSize = 9.5f * dp;
-        float hudWidth = Math.Min(r.Width() - 16f * dp, subTextPaint.MeasureText(hud) + 32f * dp);
-        RectF chip = new(chipX, chipY, chipX + hudWidth, chipY + chipH);
-        canvas.DrawRoundRect(chip, chipH * 0.5f, chipH * 0.5f, hudChipPaint);
-
-        OneUiVectorIcons.DrawIcon(
-            canvas,
-            IsPositionLocked ? OneUiIconType.Lock : OneUiIconType.Unlock,
-            chipX + 12f * dp,
-            chipY + chipH * 0.5f,
-            11.5f * dp,
-            IsPositionLocked ? OneUiTheme.PrimaryHigh : OneUiTheme.TextPrimary);
-
-        subTextPaint.TextAlign = Paint.Align.Left;
-        canvas.DrawText(hud, chipX + 22f * dp, chipY + chipH * 0.5f - (subTextPaint.Ascent() + subTextPaint.Descent()) * 0.5f, subTextPaint);
-    }
-
-    void DrawDockHeadGimbal(Canvas canvas, RectF r, float yawRad, float pitchRad, float dp) {
-        float corner = 20f * dp;
-        canvas.DrawRoundRect(r, corner, corner, dockBgPaint);
-        canvas.DrawRoundRect(r, corner, corner, roomBorderPaint);
-
-        float sphereR = Math.Min(23f * dp, (r.Height() - 16f * dp) * 0.5f);
-        float sphereCx = r.Left + 14f * dp + sphereR;
-        float sphereCy = r.CenterY();
-        Draw3DHeadSphere(canvas, sphereCx, sphereCy, sphereR, yawRad, pitchRad, viewTilt: 0.16f, dp);
-
-        float textLeft = sphereCx + sphereR + 10f * dp;
-        textPaint.TextAlign = Paint.Align.Left;
-        textPaint.TextSize = 11f * dp;
-        textPaint.Color = OneUiTheme.TextPrimary;
-        textPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Bold));
-        canvas.DrawText("Cabeça 3D", textLeft, r.Top + 21f * dp, textPaint);
-
-        textPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Normal));
-        textPaint.TextSize = 10f * dp;
-        textPaint.Color = OneUiTheme.PeachText;
-        canvas.DrawText($"G {listenerRotation.Y:0}° • I {listenerRotation.X:0}°", textLeft, r.Top + 37f * dp, textPaint);
-
-        // Reset pill at bottom-right inside gimbal dock
-        float rstH = 20f * dp;
-        float rstW = Math.Max(46f * dp, r.Right - textLeft - 10f * dp);
-        dockGimbalResetRect = new RectF(textLeft, r.Bottom - rstH - 8f * dp, textLeft + Math.Min(68f * dp, rstW), r.Bottom - 8f * dp);
-        canvas.DrawRoundRect(dockGimbalResetRect, rstH * 0.5f, rstH * 0.5f, tabInactivePaint);
-        textPaint.TextAlign = Paint.Align.Center;
-        textPaint.TextSize = 9.5f * dp;
-        textPaint.Color = OneUiTheme.TextSub;
-        canvas.DrawText("Centralizar", dockGimbalResetRect.CenterX(), dockGimbalResetRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
-    }
-
-    void DrawDockHeightControl(Canvas canvas, RectF r, float dp) {
-        float corner = 20f * dp;
-        canvas.DrawRoundRect(r, corner, corner, dockBgPaint);
-        canvas.DrawRoundRect(r, corner, corner, roomBorderPaint);
-
-        textPaint.TextAlign = Paint.Align.Center;
-        textPaint.TextSize = 10.5f * dp;
-        textPaint.Color = OneUiTheme.TextPrimary;
-        textPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Bold));
-        canvas.DrawText($"Altura: {listenerPosition.Y:+0.0;-0.0;0.0}m", r.CenterX(), r.Top + 19f * dp, textPaint);
-        textPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Normal));
-
-        // Interactive capsule bar inside dock height box
-        float barLeft = r.Left + 12f * dp;
-        float barRight = r.Right - 12f * dp;
-        float barCy = r.Top + 38f * dp;
-        float barH = 12f * dp;
-        RectF barRect = new(barLeft, barCy - barH * 0.5f, barRight, barCy + barH * 0.5f);
-        canvas.DrawRoundRect(barRect, barH * 0.5f, barH * 0.5f, tabInactivePaint);
-
-        float ny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
-        float fillFrac = (ny + 1f) * 0.5f;
-        float knobX = barLeft + fillFrac * barRect.Width();
-
-        canvas.DrawLine(barRect.CenterX(), barRect.Top, barRect.CenterX(), barRect.Bottom, gridPaint);
-        tabActivePaint.Color = OneUiTheme.FunctionalGreen;
-        canvas.DrawRoundRect(new RectF(Math.Min(barRect.CenterX(), knobX), barRect.Top, Math.Max(barRect.CenterX(), knobX), barRect.Bottom),
-            barH * 0.5f, barH * 0.5f, tabActivePaint);
-        tabActivePaint.Color = OneUiTheme.Primary;
-
-        canvas.DrawCircle(knobX, barCy, 7.5f * dp, objGlowPaint.WithColor(Color.White));
-
-        // Quick 0m center button
-        float zBtnH = 18f * dp;
-        dockHeightResetRect = new RectF(r.CenterX() - 28f * dp, r.Bottom - zBtnH - 6f * dp, r.CenterX() + 28f * dp, r.Bottom - 6f * dp);
-        textPaint.TextSize = 9.5f * dp;
-        textPaint.Color = OneUiTheme.TextSub;
-        canvas.DrawText("Arraste Y • 0m", r.CenterX(), dockHeightResetRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
-    }
-
-    void Draw3DHeadSphere(Canvas canvas, float cx, float cy, float r, float yawRad, float pitchRad, float viewTilt, float dp) {
         Color p = OneUiTheme.Primary;
         Color hi = OneUiTheme.PrimaryHigh;
         Color dk = OneUiTheme.PrimaryPressed;
@@ -802,32 +694,33 @@ public sealed class RoomSimulatorView : View {
         }
         canvas.DrawCircle(cx, cy, r, listenerRingPaint);
 
-        Vector3 ProjectPoint(float x, float y, float z) {
-            float cosP = MathF.Cos(pitchRad);
-            float sinP = MathF.Sin(pitchRad);
-            float y1 = y * cosP - z * sinP;
-            float z1 = y * sinP + z * cosP;
+        Vector3 ProjectHeadPoint(float lx, float ly, float lz) {
+            // 1. Local Pitch (positive pitch tilts nose +Z up toward +Y)
+            float cosP = MathF.Cos(headPitchRad);
+            float sinP = MathF.Sin(headPitchRad);
+            float y1 = ly * cosP + lz * sinP;
+            float z1 = -ly * sinP + lz * cosP;
 
-            float cosY = MathF.Cos(yawRad);
-            float sinY = MathF.Sin(yawRad);
-            float x2 = x * cosY + z1 * sinY;
-            float z2 = -x * sinY + z1 * cosY;
+            // 2. Local Yaw (positive yaw turns nose +Z clockwise toward +X)
+            float cosY = MathF.Cos(headYawRad);
+            float sinY = MathF.Sin(headYawRad);
+            float x2 = lx * cosY + z1 * sinY;
+            float z2 = -lx * sinY + z1 * cosY;
 
-            float cosV = MathF.Cos(viewTilt);
-            float sinV = MathF.Sin(viewTilt);
-            float sy = y1 * cosV - z2 * sinV;
-            float depth = y1 * sinV + z2 * cosV;
-            return new Vector3(cx + x2 * r, cy - sy * r, depth);
+            // 3. Apply Active Room Camera Transform
+            Vector3 cam = TransformWorldToCamera(x2, y1, z2, camYawRad, camPitchRad);
+            return new Vector3(cx + cam.X * r, cy - cam.Y * r, -cam.Z);
         }
 
         void Draw3DRing(Func<float, Vector3> ringFn) {
             const int segs = 20;
-            Vector3 prev = ProjectPoint(ringFn(0).X, ringFn(0).Y, ringFn(0).Z);
+            Vector3 pt0 = ringFn(0f);
+            Vector3 prev = ProjectHeadPoint(pt0.X, pt0.Y, pt0.Z);
             for (int i = 1; i <= segs; i++) {
                 float a = i / (float)segs * MathF.PI * 2f;
                 Vector3 pt = ringFn(a);
-                Vector3 cur = ProjectPoint(pt.X, pt.Y, pt.Z);
-                Paint wp = (prev.Z + cur.Z) >= 0 ? sphereWirePaint : sphereWireBackPaint;
+                Vector3 cur = ProjectHeadPoint(pt.X, pt.Y, pt.Z);
+                Paint wp = (prev.Z + cur.Z) >= 0f ? sphereWirePaint : sphereWireBackPaint;
                 canvas.DrawLine(prev.X, prev.Y, cur.X, cur.Y, wp);
                 prev = cur;
             }
@@ -836,24 +729,97 @@ public sealed class RoomSimulatorView : View {
         Draw3DRing(a => new Vector3(MathF.Cos(a), 0f, MathF.Sin(a)));
         Draw3DRing(a => new Vector3(0f, MathF.Sin(a), MathF.Cos(a)));
 
-        Vector3 leftEar = ProjectPoint(-1.04f, 0f, 0f);
-        Vector3 rightEar = ProjectPoint(1.04f, 0f, 0f);
+        Vector3 leftEar = ProjectHeadPoint(-1.04f, 0f, 0f);
+        Vector3 rightEar = ProjectHeadPoint(1.04f, 0f, 0f);
         Paint earPaint = objGlowPaint.WithColor(Color.Argb(240, 252, 252, 255));
         canvas.DrawCircle(leftEar.X, leftEar.Y, r * 0.23f, earPaint);
         canvas.DrawCircle(rightEar.X, rightEar.Y, r * 0.23f, earPaint);
 
-        Vector3 noseBase = ProjectPoint(0f, 0f, 0.72f);
-        Vector3 noseTip = ProjectPoint(0f, 0f, 1.40f);
+        Vector3 noseBase = ProjectHeadPoint(0f, 0f, 0.72f);
+        Vector3 noseTip = ProjectHeadPoint(0f, 0f, 1.38f);
         canvas.DrawLine(noseBase.X, noseBase.Y, noseTip.X, noseTip.Y, nosePaint);
         canvas.DrawCircle(noseTip.X, noseTip.Y, r * 0.20f, objGlowPaint.WithColor(Color.White));
     }
 
-    (float lx, float ly) GetListenerTopDownCoords(RectF r) {
-        float lnx = Math.Clamp(listenerPosition.X / environmentSize.X, -1f, 1f);
-        float lnz = Math.Clamp(listenerPosition.Z / environmentSize.Z, -1f, 1f);
-        float lx = r.Left + (lnx + 1f) * 0.5f * r.Width();
-        float ly = r.Top + (1f - (lnz + 1f) * 0.5f) * r.Height();
-        return (lx, ly);
+    void DrawDockHeadGimbal(Canvas canvas, RectF r, float headYawRad, float headPitchRad, float dp) {
+        float corner = 20f * dp;
+        canvas.DrawRoundRect(r, corner, corner, dockBgPaint);
+        canvas.DrawRoundRect(r, corner, corner, roomBorderPaint);
+
+        float sphereR = Math.Min(23f * dp, (r.Height() - 16f * dp) * 0.5f);
+        float sphereCx = r.Left + 14f * dp + sphereR;
+        float sphereCy = r.CenterY();
+        Draw3DHeadSphere(canvas, sphereCx, sphereCy, sphereR, headYawRad, headPitchRad, camYawRad: 0f, camPitchRad: 0.16f);
+
+        float textLeft = sphereCx + sphereR + 10f * dp;
+        textPaint.TextAlign = Paint.Align.Left;
+        textPaint.TextSize = 11f * dp;
+        textPaint.Color = OneUiTheme.TextPrimary;
+        textPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Bold));
+        canvas.DrawText("Cabeça 3D", textLeft, r.Top + 21f * dp, textPaint);
+
+        textPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Normal));
+        textPaint.TextSize = 10f * dp;
+        textPaint.Color = OneUiTheme.PeachText;
+        canvas.DrawText($"G {listenerRotation.Y:0}° • I {listenerRotation.X:0}°", textLeft, r.Top + 37f * dp, textPaint);
+
+        float rstH = 20f * dp;
+        float rstW = Math.Max(46f * dp, r.Right - textLeft - 10f * dp);
+        dockGimbalResetRect = new RectF(textLeft, r.Bottom - rstH - 8f * dp, textLeft + Math.Min(68f * dp, rstW), r.Bottom - 8f * dp);
+        canvas.DrawRoundRect(dockGimbalResetRect, rstH * 0.5f, rstH * 0.5f, pillInactivePaint);
+        textPaint.TextAlign = Paint.Align.Center;
+        textPaint.TextSize = 9.5f * dp;
+        textPaint.Color = OneUiTheme.TextSub;
+        canvas.DrawText("Zerar", dockGimbalResetRect.CenterX(),
+            dockGimbalResetRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
+    }
+
+    void DrawDockHeightControl(Canvas canvas, RectF r, float dp) {
+        float corner = 20f * dp;
+        canvas.DrawRoundRect(r, corner, corner, dockBgPaint);
+        canvas.DrawRoundRect(r, corner, corner, roomBorderPaint);
+
+        textPaint.TextAlign = Paint.Align.Center;
+        textPaint.TextSize = 10.5f * dp;
+        textPaint.Color = OneUiTheme.TextPrimary;
+        textPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Bold));
+        canvas.DrawText($"Altura: {listenerPosition.Y:+0.0;-0.0;0.0}m", r.CenterX(), r.Top + 19f * dp, textPaint);
+        textPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Normal));
+
+        float barLeft = r.Left + 12f * dp;
+        float barRight = r.Right - 12f * dp;
+        float barCy = r.Top + 38f * dp;
+        float barH = 12f * dp;
+        RectF barRect = new(barLeft, barCy - barH * 0.5f, barRight, barCy + barH * 0.5f);
+        canvas.DrawRoundRect(barRect, barH * 0.5f, barH * 0.5f, pillInactivePaint);
+
+        float ny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
+        float fillFrac = (ny + 1f) * 0.5f;
+        float knobX = barLeft + fillFrac * barRect.Width();
+
+        canvas.DrawLine(barRect.CenterX(), barRect.Top, barRect.CenterX(), barRect.Bottom, gridPaint);
+        pillActivePaint.Color = OneUiTheme.FunctionalGreen;
+        canvas.DrawRoundRect(new RectF(Math.Min(barRect.CenterX(), knobX), barRect.Top, Math.Max(barRect.CenterX(), knobX), barRect.Bottom),
+            barH * 0.5f, barH * 0.5f, pillActivePaint);
+        pillActivePaint.Color = OneUiTheme.Primary;
+
+        canvas.DrawCircle(knobX, barCy, 7.2f * dp, objGlowPaint.WithColor(Color.White));
+
+        float zBtnH = 18f * dp;
+        dockHeightResetRect = new RectF(r.CenterX() - 34f * dp, r.Bottom - zBtnH - 6f * dp, r.CenterX() + 34f * dp, r.Bottom - 6f * dp);
+        textPaint.TextSize = 9.5f * dp;
+        textPaint.Color = OneUiTheme.TextSub;
+        canvas.DrawText("Tocar • 0m", r.CenterX(),
+            dockHeightResetRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
+    }
+
+    bool SourcesAnySolo() {
+        for (int i = 0; i < sources.Count; i++) {
+            if (sources[i].IsSolo) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public override bool OnTouchEvent(MotionEvent e) {
@@ -868,12 +834,12 @@ public sealed class RoomSimulatorView : View {
                 lastX = tx;
                 lastY = ty;
                 maxMoveDist = 0f;
-                pressedTabIdx = -1;
+                pressedPresetIdx = -1;
 
                 for (int i = 0; i < 3; i++) {
-                    if (modeTabRects[i].Contains(tx, ty)) {
-                        pressedTabIdx = i;
-                        dragMode = TouchDragMode.TabClick;
+                    if (camPresetRects[i].Contains(tx, ty)) {
+                        pressedPresetIdx = i;
+                        dragMode = TouchDragMode.PresetClick;
                         return true;
                     }
                 }
@@ -887,37 +853,44 @@ public sealed class RoomSimulatorView : View {
                 if (dockHeightRect.Contains(tx, ty)) {
                     dragMode = TouchDragMode.DockHeight;
                     Parent?.RequestDisallowInterceptTouchEvent(true);
-                    UpdateHeightFromDockTouch(tx);
-                    return true;
-                }
-
-                if (viewMode == RoomViewMode.TopWithHeight && sideHeightRect.Contains(tx, ty)) {
-                    dragMode = TouchDragMode.HeightBar;
-                    Parent?.RequestDisallowInterceptTouchEvent(true);
-                    UpdateHeightFromTowerTouch(ty);
+                    if (!dockHeightResetRect.Contains(tx, ty)) {
+                        UpdateHeightFromDockTouch(tx);
+                    }
                     return true;
                 }
 
                 if (roomCanvasRect.Contains(tx, ty)) {
-                    (float lx, float ly) = GetListenerScreenPos();
-                    if (!IsPositionLocked && MathF.Sqrt((tx - lx) * (tx - lx) + (ty - ly) * (ty - ly)) <= 42f * dp) {
-                        dragMode = TouchDragMode.ListenerMap;
+                    float lnx = Math.Clamp(listenerPosition.X / environmentSize.X, -1f, 1f);
+                    float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
+                    float lnz = Math.Clamp(listenerPosition.Z / environmentSize.Z, -1f, 1f);
+                    var lPt = ProjectOrbit3D(roomCanvasRect, lnx, lny, lnz,
+                        camYawDeg * (MathF.PI / 180f), camPitchDeg * (MathF.PI / 180f));
+
+                    if (!IsPositionLocked && MathF.Sqrt((tx - lPt.sx) * (tx - lPt.sx) + (ty - lPt.sy) * (ty - lPt.sy)) <= 36f * dp) {
+                        dragMode = TouchDragMode.ListenerMove;
                         Parent?.RequestDisallowInterceptTouchEvent(true);
-                        UpdateListenerFromMapTouch(tx, ty);
                         return true;
                     }
+
+                    // Dragging anywhere else inside the 3D room orbits the camera freely!
+                    dragMode = TouchDragMode.OrbitCamera;
+                    Parent?.RequestDisallowInterceptTouchEvent(true);
+                    cameraAnimating = false;
+                    return true;
                 }
 
                 dragMode = TouchDragMode.None;
-                return true;
+                return false;
 
             case MotionEventActions.Move: {
                 float dx = tx - downX;
                 float dy = ty - downY;
                 float dist = MathF.Sqrt(dx * dx + dy * dy);
-                if (dist > maxMoveDist) maxMoveDist = dist;
+                if (dist > maxMoveDist) {
+                    maxMoveDist = dist;
+                }
 
-                if (dragMode == TouchDragMode.TabClick) {
+                if (dragMode == TouchDragMode.PresetClick) {
                     return true;
                 }
 
@@ -925,7 +898,7 @@ public sealed class RoomSimulatorView : View {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
                     float stepX = tx - lastX;
                     float stepY = ty - lastY;
-                    float newYaw = NormalizeYaw(listenerRotation.Y + stepX * 1.35f / dp);
+                    float newYaw = NormalizeDeg(listenerRotation.Y + stepX * 1.35f / dp);
                     float newPitch = Math.Clamp(listenerRotation.X - stepY * 1.15f / dp, -90f, 90f);
                     listenerRotation = new Vector3(newPitch, newYaw, listenerRotation.Z);
                     ListenerRotationChanged?.Invoke(listenerRotation);
@@ -943,35 +916,21 @@ public sealed class RoomSimulatorView : View {
                     return true;
                 }
 
-                if (dragMode == TouchDragMode.HeightBar) {
+                if (dragMode == TouchDragMode.ListenerMove && !IsPositionLocked) {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
-                    UpdateHeightFromTowerTouch(ty);
+                    UpdateListenerFromRoomTouch(tx, ty, lastX, lastY, dp);
                     lastX = tx;
                     lastY = ty;
                     return true;
                 }
 
-                if (dragMode == TouchDragMode.ListenerMap) {
-                    if (!IsPositionLocked) {
-                        Parent?.RequestDisallowInterceptTouchEvent(true);
-                        UpdateListenerFromMapTouch(tx, ty);
-                    }
-                    lastX = tx;
-                    lastY = ty;
-                    return true;
-                }
-
-                // Vertical scroll protection when starting outside dock controls / avatar
-                if (Math.Abs(dy) > touchSlop && Math.Abs(dy) > Math.Abs(dx)) {
-                    Parent?.RequestDisallowInterceptTouchEvent(false);
-                    return false;
-                }
-
-                if (!IsPositionLocked && roomCanvasRect.Contains(tx, ty) &&
-                    Math.Abs(dx) > touchSlop * 1.2f && Math.Abs(dx) > Math.Abs(dy) * 1.25f) {
-                    dragMode = TouchDragMode.ListenerMap;
+                if (dragMode == TouchDragMode.OrbitCamera) {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
-                    UpdateListenerFromMapTouch(tx, ty);
+                    float stepX = tx - lastX;
+                    float stepY = ty - lastY;
+                    camYawDeg = NormalizeDeg(camYawDeg + stepX * 0.55f / dp);
+                    camPitchDeg = Math.Clamp(camPitchDeg + stepY * 0.45f / dp, 6f, 86f);
+                    Invalidate();
                     lastX = tx;
                     lastY = ty;
                     return true;
@@ -986,16 +945,20 @@ public sealed class RoomSimulatorView : View {
                 Parent?.RequestDisallowInterceptTouchEvent(false);
                 bool wasTap = maxMoveDist < touchSlop;
                 TouchDragMode endedMode = dragMode;
-                int tab = pressedTabIdx;
+                int preset = pressedPresetIdx;
                 dragMode = TouchDragMode.None;
-                pressedTabIdx = -1;
+                pressedPresetIdx = -1;
 
                 if (!wasTap) {
                     return true;
                 }
 
-                if (endedMode == TouchDragMode.TabClick && tab >= 0 && tab < 3) {
-                    ActiveViewMode = (RoomViewMode)tab;
+                if (endedMode == TouchDragMode.PresetClick && preset >= 0 && preset < 3) {
+                    switch (preset) {
+                        case 0: AnimateToCameraPreset(-20f, 30f); break;
+                        case 1: AnimateToCameraPreset(0f, 84f); break;
+                        case 2: AnimateToCameraPreset(0f, 10f); break;
+                    }
                     return true;
                 }
 
@@ -1044,7 +1007,7 @@ public sealed class RoomSimulatorView : View {
                             Invalidate();
                         } else {
                             lastRoomTapTime = now;
-                            UpdateListenerFromMapTouch(tx, ty);
+                            UpdateListenerFromRoomTouch(tx, ty, tx, ty, dp);
                         }
                     }
                 }
@@ -1054,64 +1017,34 @@ public sealed class RoomSimulatorView : View {
             case MotionEventActions.Cancel:
                 Parent?.RequestDisallowInterceptTouchEvent(false);
                 dragMode = TouchDragMode.None;
-                pressedTabIdx = -1;
+                pressedPresetIdx = -1;
                 return false;
         }
 
         return base.OnTouchEvent(e);
     }
 
-    (float lx, float ly) GetListenerScreenPos() {
-        float lnx = Math.Clamp(listenerPosition.X / environmentSize.X, -1f, 1f);
-        float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
-        float lnz = Math.Clamp(listenerPosition.Z / environmentSize.Z, -1f, 1f);
-        float dp = Resources.DisplayMetrics.Density;
-
-        switch (viewMode) {
-            case RoomViewMode.Perspective3D:
-                var pt = Project3D(roomCanvasRect, lnx, lny, lnz);
-                return (pt.sx, pt.sy);
-            case RoomViewMode.FrontElevation:
-                float plotLeft = roomCanvasRect.Left + 18f * dp;
-                float plotW = roomCanvasRect.Right - 18f * dp - plotLeft;
-                float plotTop = roomCanvasRect.Top + 26f * dp;
-                float plotH = Math.Max(60f * dp, roomCanvasRect.Bottom - 36f * dp - plotTop);
-                return (plotLeft + (lnx + 1f) * 0.5f * plotW, plotTop + (1f - (lny + 1f) * 0.5f) * plotH);
-            default:
-                return GetListenerTopDownCoords(roomCanvasRect);
-        }
-    }
-
-    void UpdateListenerFromMapTouch(float tx, float ty) {
+    void UpdateListenerFromRoomTouch(float tx, float ty, float prevX, float prevY, float dp) {
         if (roomCanvasRect.Width() <= 0 || roomCanvasRect.Height() <= 0) {
             return;
         }
-        float dp = Resources.DisplayMetrics.Density;
-        float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
+        float camYawRad = camYawDeg * (MathF.PI / 180f);
+        float camPitchRad = camPitchDeg * (MathF.PI / 180f);
 
-        switch (viewMode) {
-            case RoomViewMode.Perspective3D: {
-                var (nx, nz) = Unproject3DHorizontal(roomCanvasRect, tx, ty, lny);
-                listenerPosition = new Vector3(nx * environmentSize.X, listenerPosition.Y, nz * environmentSize.Z);
-                break;
-            }
-            case RoomViewMode.FrontElevation: {
-                float plotLeft = roomCanvasRect.Left + 18f * dp;
-                float plotW = Math.Max(1f, roomCanvasRect.Right - 18f * dp - plotLeft);
-                float plotTop = roomCanvasRect.Top + 26f * dp;
-                float plotH = Math.Max(1f, roomCanvasRect.Bottom - 36f * dp - plotTop);
-                float nx = Math.Clamp((tx - plotLeft) / plotW * 2f - 1f, -1f, 1f);
-                float ny = Math.Clamp((1f - (ty - plotTop) / plotH) * 2f - 1f, -1f, 1f);
-                listenerPosition = new Vector3(nx * environmentSize.X, ny * environmentSize.Y, listenerPosition.Z);
-                break;
-            }
-            default: {
-                float nx = Math.Clamp((tx - roomCanvasRect.Left) / roomCanvasRect.Width() * 2f - 1f, -1f, 1f);
-                float nz = Math.Clamp((1f - (ty - roomCanvasRect.Top) / roomCanvasRect.Height()) * 2f - 1f, -1f, 1f);
-                listenerPosition = new Vector3(nx * environmentSize.X, listenerPosition.Y, nz * environmentSize.Z);
-                break;
-            }
+        if (camPitchDeg < 16f) {
+            // Low front/horizon angle: horizontal drag moves X/Z projected lateral, vertical drag adjusts Listener Height Y directly
+            float dyNorm = -(ty - prevY) / Math.Max(40f * dp, roomCanvasRect.Height() * 0.35f);
+            float dxNorm = (tx - prevX) / Math.Max(40f * dp, roomCanvasRect.Width() * 0.35f);
+            float lnx = Math.Clamp(listenerPosition.X / environmentSize.X + dxNorm * MathF.Cos(camYawRad), -1f, 1f);
+            float lnz = Math.Clamp(listenerPosition.Z / environmentSize.Z - dxNorm * MathF.Sin(camYawRad), -1f, 1f);
+            float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y + dyNorm, -1f, 1f);
+            listenerPosition = new Vector3(lnx * environmentSize.X, lny * environmentSize.Y, lnz * environmentSize.Z);
+        } else {
+            float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
+            var (nx, nz) = UnprojectHorizontalPlane(roomCanvasRect, tx, ty, lny, camYawRad, camPitchRad);
+            listenerPosition = new Vector3(nx * environmentSize.X, listenerPosition.Y, nz * environmentSize.Z);
         }
+
         ListenerPositionChanged?.Invoke(listenerPosition);
         Invalidate();
     }
@@ -1121,16 +1054,6 @@ public sealed class RoomSimulatorView : View {
         float barLeft = dockHeightRect.Left + 12f * dp;
         float barW = Math.Max(1f, dockHeightRect.Right - 12f * dp - barLeft);
         float ny = Math.Clamp((tx - barLeft) / barW * 2f - 1f, -1f, 1f);
-        listenerPosition = new Vector3(listenerPosition.X, ny * environmentSize.Y, listenerPosition.Z);
-        ListenerPositionChanged?.Invoke(listenerPosition);
-        Invalidate();
-    }
-
-    void UpdateHeightFromTowerTouch(float ty) {
-        float dp = Resources.DisplayMetrics.Density;
-        float plotTop = sideHeightRect.Top + 30f * dp;
-        float plotH = Math.Max(1f, sideHeightRect.Bottom - 16f * dp - plotTop);
-        float ny = Math.Clamp((1f - (ty - plotTop) / plotH) * 2f - 1f, -1f, 1f);
         listenerPosition = new Vector3(listenerPosition.X, ny * environmentSize.Y, listenerPosition.Z);
         ListenerPositionChanged?.Invoke(listenerPosition);
         Invalidate();
@@ -1150,7 +1073,7 @@ public sealed class RoomSimulatorView : View {
         return best;
     }
 
-    static float NormalizeYaw(float deg) {
+    static float NormalizeDeg(float deg) {
         while (deg > 180f) deg -= 360f;
         while (deg < -180f) deg += 360f;
         return deg;

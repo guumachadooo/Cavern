@@ -34,6 +34,7 @@ public static class OneUiTheme {
     public static Color Primary { get; private set; } = Color.ParseColor("#387AFF");
     public static Color PrimaryHigh { get; private set; } = Color.ParseColor("#598FFF");
     public static Color PrimaryPressed { get; private set; } = Color.ParseColor("#2E65D4");
+    public static Color Secondary { get; private set; } = Color.ParseColor("#7C6CF6");
     public static Color CoralStart { get; private set; } = Color.ParseColor("#598FFF");
     public static Color CoralEnd { get; private set; } = Color.ParseColor("#2E65D4");
     public static Color PeachText { get; private set; } = Color.ParseColor("#C2D8FF");
@@ -86,6 +87,7 @@ public static class OneUiTheme {
         Primary = defaultBlue;
         PrimaryHigh = defaultBlueHigh;
         PrimaryPressed = defaultBluePressed;
+        Secondary = Color.ParseColor("#7C6CF6");
         CoralStart = defaultBlueHigh;
         CoralEnd = defaultBluePressed;
         PeachText = defaultHeaderTint;
@@ -115,6 +117,10 @@ public static class OneUiTheme {
                 Primary = baseAccent;
                 PrimaryHigh = highAccent;
                 PrimaryPressed = lowAccent;
+                Color? sysA2_400 = TryGetFrameworkColor(ctx, "system_accent2_400");
+                Secondary = sysA2_400.HasValue && IsChromatic(sysA2_400.Value)
+                    ? RefineAccent(sysA2_400.Value)
+                    : Blend(highAccent, Color.Rgb(142, 130, 248), 0.45f);
                 CoralStart = highAccent;
                 CoralEnd = lowAccent;
                 PeachText = Blend(Color.Rgb(242, 243, 249), sysA1_200 ?? highAccent, 0.36f);
@@ -221,7 +227,7 @@ public static class OneUiTheme {
     /// Creates a floating frosted glass capsule with diagonal specular edge sheen (One UI 9 Media/Nav/Search bars).
     /// </summary>
     public static Drawable CreateFloatingGlassPill(Context ctx) {
-        Color tint = WithAlpha(SurfaceElevated, 232);
+        Color tint = WithAlpha(SurfaceElevated, 240);
         return new OneUiGlassDrawable(
             ctx,
             tint,
@@ -335,6 +341,8 @@ public static class OneUiTheme {
 public sealed class OneUiBackdropView : View {
     readonly Paint basePaint = new(PaintFlags.AntiAlias);
     readonly Paint orbPaint = new(PaintFlags.AntiAlias);
+    Color? mediaPrimary;
+    Color? mediaSecondary;
 
     public OneUiBackdropView(Context context) : base(context) {
         basePaint.Color = OneUiTheme.BgScreen;
@@ -342,6 +350,12 @@ public sealed class OneUiBackdropView : View {
         if (OperatingSystem.IsAndroidVersionAtLeast(31)) {
             SetRenderEffect(RenderEffect.CreateBlurEffect(96f, 96f, Shader.TileMode.Clamp));
         }
+    }
+
+    public void SetMediaAccent(Color? primary, Color? secondary) {
+        mediaPrimary = primary;
+        mediaSecondary = secondary;
+        PostInvalidateOnAnimation();
     }
 
     protected override void OnDraw(Canvas canvas) {
@@ -355,21 +369,24 @@ public sealed class OneUiBackdropView : View {
         basePaint.Color = OneUiTheme.BgScreen;
         canvas.DrawRect(0, 0, w, h, basePaint);
 
-        Color p1 = OneUiTheme.Primary;
-        Color p2 = OneUiTheme.CoralStart;
-        Color p3 = OneUiTheme.PrimaryPressed;
+        Color p1 = mediaPrimary ?? OneUiTheme.Primary;
+        Color p2 = mediaSecondary ?? OneUiTheme.CoralStart;
+        Color p3 = mediaPrimary ?? OneUiTheme.PrimaryPressed;
+        int alpha1 = mediaPrimary.HasValue ? 46 : 22;
+        int alpha2 = mediaSecondary.HasValue ? 34 : 16;
+        int alpha3 = mediaPrimary.HasValue ? 28 : 18;
 
-        // Top ambient wallpaper depth glow (whisper-subtle so One UI 9 dark surfaces stay crisp neutral)
-        DrawGlow(canvas, w * 0.25f, h * 0.08f, Math.Max(w, h) * 0.55f,
-            Color.Argb(22, p1.R, p1.G, p1.B));
+        // Top ambient wallpaper / cover art depth glow
+        DrawGlow(canvas, w * 0.30f, h * 0.12f, Math.Max(w, h) * 0.58f,
+            Color.Argb(alpha1, p1.R, p1.G, p1.B));
 
         // Mid-right secondary harmonic bokeh sphere
-        DrawGlow(canvas, w * 0.88f, h * 0.42f, Math.Max(w, h) * 0.50f,
-            Color.Argb(16, p2.R, p2.G, p2.B));
+        DrawGlow(canvas, w * 0.86f, h * 0.44f, Math.Max(w, h) * 0.50f,
+            Color.Argb(alpha2, p2.R, p2.G, p2.B));
 
         // Bottom-left deep ambient sphere behind floating nav capsule
-        DrawGlow(canvas, w * 0.18f, h * 0.86f, Math.Max(w, h) * 0.48f,
-            Color.Argb(18, p3.R, p3.G, p3.B));
+        DrawGlow(canvas, w * 0.22f, h * 0.86f, Math.Max(w, h) * 0.48f,
+            Color.Argb(alpha3, p3.R, p3.G, p3.B));
     }
 
     void DrawGlow(Canvas canvas, float cx, float cy, float radius, Color centerColor) {
@@ -381,6 +398,196 @@ public sealed class OneUiBackdropView : View {
         orbPaint.SetShader(grad);
         canvas.DrawCircle(cx, cy, radius, orbPaint);
         orbPaint.SetShader(null);
+    }
+}
+
+/// <summary>
+/// Frosted glass capsule container that samples and blurs the content behind itself in real time
+/// (matching One UI 9 bottom navigation &amp; media control pills) while keeping foreground children razor-sharp.
+/// </summary>
+public sealed class OneUiFrostedCapsuleView : FrameLayout {
+    readonly Paint frostOverlayPaint = new(PaintFlags.AntiAlias);
+    readonly Paint rimPaint = new(PaintFlags.AntiAlias);
+    readonly Paint bitmapPaint = new(PaintFlags.AntiAlias | PaintFlags.FilterBitmap);
+    readonly Android.Graphics.Path clipPath = new();
+    readonly int[] selfLoc = new int[2];
+    readonly int[] targetLoc = new int[2];
+
+    Bitmap blurBitmap;
+    int[] pixelScratch;
+    Canvas captureCanvas;
+    bool isCapturing;
+    long lastCaptureMs;
+
+    public Func<View[]> BehindViewsProvider { get; set; }
+    public float CornerRadiusDp { get; set; } = 30f;
+
+    public OneUiFrostedCapsuleView(Context context) : base(context) {
+        SetWillNotDraw(false);
+        frostOverlayPaint.SetStyle(Paint.Style.Fill);
+        rimPaint.SetStyle(Paint.Style.Stroke);
+        rimPaint.StrokeWidth = Math.Max(1.5f, OneUiTheme.Dp(context, 1.0f));
+    }
+
+    public void RefreshBlur(bool force = false) {
+        if (isCapturing || Width <= 0 || Height <= 0 || Visibility != ViewStates.Visible) {
+            return;
+        }
+        long now = SystemClock.UptimeMillis();
+        if (!force && now - lastCaptureMs < 24) {
+            return;
+        }
+        CaptureBehindRegion();
+        PostInvalidateOnAnimation();
+    }
+
+    void CaptureBehindRegion() {
+        View[] behind = BehindViewsProvider?.Invoke();
+        if (behind == null || behind.Length == 0) {
+            return;
+        }
+
+        const int downscale = 10;
+        int bw = Math.Clamp(Width / downscale, 16, 160);
+        int bh = Math.Clamp(Height / downscale, 8, 48);
+
+        if (blurBitmap == null || blurBitmap.IsRecycled || blurBitmap.Width != bw || blurBitmap.Height != bh) {
+            captureCanvas?.Dispose();
+            blurBitmap?.Recycle();
+            blurBitmap?.Dispose();
+            blurBitmap = Bitmap.CreateBitmap(bw, bh, Bitmap.Config.Argb8888!);
+            captureCanvas = new Canvas(blurBitmap);
+            pixelScratch = new int[bw * bh];
+        }
+
+        isCapturing = true;
+        try {
+            lastCaptureMs = SystemClock.UptimeMillis();
+            blurBitmap.EraseColor(OneUiTheme.BgScreen.ToArgb());
+            GetLocationInWindow(selfLoc);
+
+            float sx = bw / (float)Width;
+            float sy = bh / (float)Height;
+
+            foreach (View v in behind) {
+                if (v == null || v.Visibility != ViewStates.Visible || v.Width <= 0 || v.Height <= 0) {
+                    continue;
+                }
+                v.GetLocationInWindow(targetLoc);
+                int save = captureCanvas.Save();
+                captureCanvas.Scale(sx, sy);
+                captureCanvas.Translate(targetLoc[0] - selfLoc[0], targetLoc[1] - selfLoc[1]);
+                v.Draw(captureCanvas);
+                captureCanvas.RestoreToCount(save);
+            }
+
+            FastBoxBlur(blurBitmap, pixelScratch, 3);
+            FastBoxBlur(blurBitmap, pixelScratch, 2);
+        } catch {
+            // Keep smooth frosted surface fallback if any child cannot draw offscreen
+        } finally {
+            isCapturing = false;
+        }
+    }
+
+    protected override void OnDraw(Canvas canvas) {
+        float w = Width;
+        float h = Height;
+        if (w <= 0 || h <= 0) {
+            base.OnDraw(canvas);
+            return;
+        }
+
+        if (blurBitmap == null) {
+            CaptureBehindRegion();
+        }
+
+        float rad = Math.Min(Math.Min(w, h) * 0.5f, OneUiTheme.Dp(Context, CornerRadiusDp));
+        float halfStroke = rimPaint.StrokeWidth * 0.5f;
+        RectF bounds = new(halfStroke, halfStroke, w - halfStroke, h - halfStroke);
+
+        clipPath.Reset();
+        clipPath.AddRoundRect(bounds, rad, rad, Android.Graphics.Path.Direction.Cw);
+
+        int save = canvas.Save();
+        canvas.ClipPath(clipPath);
+
+        if (blurBitmap != null && !blurBitmap.IsRecycled) {
+            canvas.DrawBitmap(blurBitmap, null, new RectF(0f, 0f, w, h), bitmapPaint);
+        }
+
+        // Translucent smoked One UI 9 frosted glaze + top subtle reflection highlight
+        using LinearGradient glaze = new(
+            0f, 0f, 0f, h,
+            [Color.Argb(204, 34, 36, 44).ToArgb(), Color.Argb(228, 16, 17, 22).ToArgb()],
+            [0f, 1f],
+            Shader.TileMode.Clamp!);
+        frostOverlayPaint.SetShader(glaze);
+        canvas.DrawRect(0f, 0f, w, h, frostOverlayPaint);
+        frostOverlayPaint.SetShader(null);
+        canvas.RestoreToCount(save);
+
+        using LinearGradient rimGrad = new(
+            0f, 0f, 0f, h,
+            [Color.Argb(105, 255, 255, 255).ToArgb(), Color.Argb(22, 255, 255, 255).ToArgb(), Color.Argb(58, 255, 255, 255).ToArgb()],
+            [0f, 0.45f, 1f],
+            Shader.TileMode.Clamp!);
+        rimPaint.SetShader(rimGrad);
+        canvas.DrawRoundRect(bounds, rad, rad, rimPaint);
+        rimPaint.SetShader(null);
+
+        base.OnDraw(canvas);
+    }
+
+    static void FastBoxBlur(Bitmap bmp, int[] pixels, int radius) {
+        int w = bmp.Width;
+        int h = bmp.Height;
+        if (w < 3 || h < 3 || radius <= 0 || pixels == null || pixels.Length < w * h) {
+            return;
+        }
+        bmp.GetPixels(pixels, 0, w, 0, 0, w, h);
+        int window = radius * 2 + 1;
+
+        for (int y = 0; y < h; y++) {
+            int row = y * w;
+            for (int x = 0; x < w; x++) {
+                int rSum = 0, gSum = 0, bSum = 0;
+                for (int k = -radius; k <= radius; k++) {
+                    int sx = Math.Clamp(x + k, 0, w - 1);
+                    int c = pixels[row + sx];
+                    rSum += (c >> 16) & 0xFF;
+                    gSum += (c >> 8) & 0xFF;
+                    bSum += c & 0xFF;
+                }
+                pixels[row + x] = unchecked((int)0xFF000000) | ((rSum / window) << 16) | ((gSum / window) << 8) | (bSum / window);
+            }
+        }
+
+        for (int x = 0; x < w; x++) {
+            for (int y = 0; y < h; y++) {
+                int rSum = 0, gSum = 0, bSum = 0;
+                for (int k = -radius; k <= radius; k++) {
+                    int sy = Math.Clamp(y + k, 0, h - 1);
+                    int c = pixels[sy * w + x];
+                    rSum += (c >> 16) & 0xFF;
+                    gSum += (c >> 8) & 0xFF;
+                    bSum += c & 0xFF;
+                }
+                pixels[y * w + x] = unchecked((int)0xFF000000) | ((rSum / window) << 16) | ((gSum / window) << 8) | (bSum / window);
+            }
+        }
+        bmp.SetPixels(pixels, 0, w, 0, 0, w, h);
+    }
+
+    protected override void Dispose(bool disposing) {
+        if (disposing) {
+            captureCanvas?.Dispose();
+            captureCanvas = null;
+            blurBitmap?.Recycle();
+            blurBitmap?.Dispose();
+            blurBitmap = null;
+        }
+        base.Dispose(disposing);
     }
 }
 
@@ -612,42 +819,49 @@ public sealed class OneUiSeekBar : SeekBar {
         // 1. Background translucent neutral glass track
         canvas.DrawRoundRect(bounds, radius, radius, trackPaint);
 
-        // 2. Active capsule fill + One UI 9 SoundCraft/Brightness blooming circular ball thumb
+        // 2. Active capsule fill + SoundCraft One UI 9 internal pearl thumb + shock tip highlight
         if (renderedRatio > 0.001f || thumbExpansion > 0.01f) {
             clipPath.Reset();
             clipPath.AddRoundRect(bounds, radius, radius, Android.Graphics.Path.Direction.Cw);
             canvas.Save();
             canvas.ClipPath(clipPath);
 
-            float fillRight = Math.Max(h * 0.72f, renderedRatio * w);
+            float minVisibleRight = renderedRatio > 0.002f ? h * 0.55f : 0f;
+            float fillRight = Math.Clamp(renderedRatio * w, minVisibleRight, w);
             Color c1 = UseBlueAccent ? OneUiTheme.PrimaryHigh : OneUiTheme.CoralStart;
             Color c2 = UseBlueAccent ? OneUiTheme.PrimaryPressed : OneUiTheme.CoralEnd;
-            using LinearGradient fillShader = new(0, 0, w, 0, [c2.ToArgb(), c1.ToArgb()], [0f, 1f], Shader.TileMode.Clamp);
-            fillPaint.SetShader(fillShader);
-            if (renderedRatio > 0.001f) {
+            // Brighten tip slightly during touch (One UI 9 shock value transition)
+            Color tipColor = Color.Argb(
+                255,
+                Math.Min(255, (int)(c1.R + (255 - c1.R) * 0.24f * thumbExpansion)),
+                Math.Min(255, (int)(c1.G + (255 - c1.G) * 0.24f * thumbExpansion)),
+                Math.Min(255, (int)(c1.B + (255 - c1.B) * 0.24f * thumbExpansion)));
+
+            if (fillRight > 1f) {
+                using LinearGradient fillShader = new(0, 0, Math.Max(h, fillRight), 0, [c2.ToArgb(), tipColor.ToArgb()], [0f, 1f], Shader.TileMode.Clamp);
+                fillPaint.SetShader(fillShader);
                 canvas.DrawRoundRect(0f, 0f, fillRight, h, radius, radius, fillPaint);
+                fillPaint.SetShader(null);
             }
-            fillPaint.SetShader(null);
 
-            // Signature One UI 9 slider ball inside active capsule tip
-            float ballX = Math.Clamp(fillRight - radius * 0.50f, radius * 0.50f, w - radius * 0.50f);
-            float ballY = radius;
-            float idleR = 2.6f * dp;
-            float activeR = radius * 0.60f;
-            float ballR = idleR + (activeR - idleR) * thumbExpansion;
+            // Signature One UI 9 touch sphere fades gently inside the pill tip ONLY on touch/drag (zero idle dot clutter)
+            if (thumbExpansion > 0.01f && fillRight > h * 0.35f) {
+                float ballX = Math.Clamp(fillRight - radius * 0.54f, radius * 0.54f, w - radius * 0.54f);
+                float ballY = radius;
+                float ballR = radius * (0.44f + 0.14f * thumbExpansion);
+                float haloR = ballR * 1.45f;
 
-            if (thumbExpansion > 0.02f) {
-                float haloR = ballR + 5.5f * dp * thumbExpansion;
-                thumbHaloPaint.Color = Color.Argb((int)(56 * thumbExpansion), 255, 255, 255);
+                using RadialGradient haloGrad = new(
+                    ballX, ballY, haloR,
+                    [Color.Argb((int)(54 * thumbExpansion), 255, 255, 255).ToArgb(), Color.Transparent.ToArgb()],
+                    [0f, 1f],
+                    Shader.TileMode.Clamp);
+                thumbHaloPaint.SetShader(haloGrad);
                 canvas.DrawCircle(ballX, ballY, haloR, thumbHaloPaint);
-            }
+                thumbHaloPaint.SetShader(null);
 
-            thumbBallPaint.Color = Color.Argb((int)(185 + 70 * thumbExpansion), 252, 252, 255);
-            canvas.DrawCircle(ballX, ballY, ballR, thumbBallPaint);
-
-            if (thumbExpansion > 0.05f) {
-                thumbBallRimPaint.Color = Color.Argb((int)(145 * thumbExpansion), c2.R, c2.G, c2.B);
-                canvas.DrawCircle(ballX, ballY, ballR, thumbBallRimPaint);
+                thumbBallPaint.Color = Color.Argb((int)(142 * thumbExpansion), 255, 255, 255);
+                canvas.DrawCircle(ballX, ballY, ballR, thumbBallPaint);
             }
             canvas.Restore();
         }
@@ -733,7 +947,7 @@ public sealed class OneUiSeekBar : SeekBar {
                     if (dx > touchSlop * 0.55f && dx >= dy * 1.1f) {
                         isHorizontalDrag = true;
                         Parent?.RequestDisallowInterceptTouchEvent(true);
-                        Animate().ScaleY(0.95f).SetDuration(110).Start();
+                        Animate().ScaleX(1.008f).ScaleY(1.032f).SetDuration(120).Start();
                         if (pendingDown != null) {
                             base.OnTouchEvent(pendingDown);
                             pendingDown.Recycle();
@@ -753,7 +967,7 @@ public sealed class OneUiSeekBar : SeekBar {
 
             case MotionEventActions.Up:
                 Parent?.RequestDisallowInterceptTouchEvent(false);
-                Animate().ScaleY(1f).SetDuration(320).Start();
+                Animate().ScaleX(1f).ScaleY(1f).SetDuration(280).Start();
                 isTouchDown = false;
                 if (isCancelledToScroll) {
                     isCancelledToScroll = false;
@@ -772,8 +986,8 @@ public sealed class OneUiSeekBar : SeekBar {
                         int target = Math.Clamp(DefaultProgress, 0, Max);
                         Progress = target;
                         ResetRequested?.Invoke(target);
-                        Animate().ScaleY(0.90f).SetDuration(90).WithEndAction(
-                            new Java.Lang.Runnable(() => Animate().ScaleY(1f).SetDuration(260).Start())).Start();
+                        Animate().ScaleX(0.99f).ScaleY(0.95f).SetDuration(80).WithEndAction(
+                            new Java.Lang.Runnable(() => Animate().ScaleX(1f).ScaleY(1f).SetDuration(240).Start())).Start();
                         PostInvalidateOnAnimation();
                         return true;
                     }
@@ -787,12 +1001,13 @@ public sealed class OneUiSeekBar : SeekBar {
                 }
                 isHorizontalDrag = false;
                 bool upHandled = base.OnTouchEvent(e);
+                touchRatio = Max > 0 ? Math.Clamp(Progress / (float)Max, 0f, 1f) : 0f;
                 PostInvalidateOnAnimation();
                 return upHandled;
 
             case MotionEventActions.Cancel:
                 Parent?.RequestDisallowInterceptTouchEvent(false);
-                Animate().ScaleY(1f).SetDuration(320).Start();
+                Animate().ScaleX(1f).ScaleY(1f).SetDuration(280).Start();
                 isTouchDown = false;
                 pendingDown?.Recycle();
                 pendingDown = null;

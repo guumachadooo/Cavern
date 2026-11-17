@@ -36,7 +36,7 @@ public partial class MainActivity {
 
     LinearLayout BuildPlayerTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(88));
+        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
 
         // 1. 3D Room Simulator Card (One UI 9 Frosted Surface)
         LinearLayout roomCard = Card();
@@ -68,7 +68,6 @@ public partial class MainActivity {
         };
         roomHeader.AddView(roomLockBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
         roomCard.AddView(roomHeader);
-        AttachCardHelp(roomCard, roomHeader, S["HelpRoom"]);
 
         TextView hintTv = Label(S["RoomTouchHint"], 11.5f, OneUiTheme.TextMuted);
         hintTv.SetPadding(0, 0, 0, Dp(6));
@@ -130,7 +129,7 @@ public partial class MainActivity {
         // Collapsible Fine-Tune Capsule Sliders
         fineTuneToggleBtn = PillButton(isFineTuneExpanded ? S["FineTuneHideBtn"] : S["FineTuneBtn"], () => {
             isFineTuneExpanded = !isFineTuneExpanded;
-            fineTuneContainer.Visibility = isFineTuneExpanded ? ViewStates.Visible : ViewStates.Gone;
+            SetExpandedWithAnimation(fineTuneContainer, isFineTuneExpanded);
             fineTuneToggleBtn.Text = isFineTuneExpanded ? S["FineTuneHideBtn"] : S["FineTuneBtn"];
         });
         roomCard.AddView(fineTuneToggleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
@@ -171,8 +170,8 @@ public partial class MainActivity {
         roomCard.AddView(fineTuneContainer);
         page.AddView(roomCard);
 
-        // 2. Transport Card featuring authentic One UI 9 Lock Screen / Quick Panel WaveSeekbar
-        LinearLayout transportCard = Card(S["TimelineLabel"], OneUiIconType.Play, OneUiTheme.Primary, S["HelpTransport"]);
+        // 2. Transport Card featuring One UI 9 WaveSeekbar
+        LinearLayout transportCard = Card(S["TimelineLabel"], OneUiIconType.Play, OneUiTheme.Primary);
         playbackSeekBar = new OneUiWaveMediaSeekBar(this) {
             Max = 1000,
             CurrentTimeText = "00:00",
@@ -183,9 +182,17 @@ public partial class MainActivity {
         playbackSeekBar.ProgressChanged += (prog, fromUser) => {
             if (fromUser && playerEngine.TotalSeconds > 0) {
                 double preview = prog / 1000.0 * playerEngine.TotalSeconds;
-                playbackSeekBar.CurrentTimeText = $"{TimeSpan.FromSeconds(preview):mm\\:ss}";
-                playbackSeekBar.TotalTimeText = $"{TimeSpan.FromSeconds(playerEngine.TotalSeconds):mm\\:ss}";
+                string curStr = $"{TimeSpan.FromSeconds(preview):mm\\:ss}";
+                string totStr = $"{TimeSpan.FromSeconds(playerEngine.TotalSeconds):mm\\:ss}";
+                playbackSeekBar.CurrentTimeText = curStr;
+                playbackSeekBar.TotalTimeText = totStr;
                 playbackSeekBar.Invalidate();
+                if (musicWaveSeekBar != null) {
+                    musicWaveSeekBar.Progress = prog;
+                    musicWaveSeekBar.CurrentTimeText = curStr;
+                    musicWaveSeekBar.TotalTimeText = totStr;
+                    musicWaveSeekBar.Invalidate();
+                }
             }
         };
         playbackSeekBar.StopTrackingTouch += () => {
@@ -210,11 +217,14 @@ public partial class MainActivity {
         transportCard.AddView(btnRow);
 
         AddDivider(transportCard);
-        loopSwitch = AddSwitchRow(transportCard, S["Loop"], false, val => playerEngine.Loop = val);
+        loopSwitch = AddSwitchRow(transportCard, S["Loop"], false, val => {
+            playerEngine.Loop = val;
+            RefreshMusicPlayerControlsUi();
+        });
         page.AddView(transportCard);
 
         // 3. One UI 9 Quick Spatial Panel Card (2x2 Bento Toggles + Fat Dynamic Capsules + In-App Rolloff Selector)
-        LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.FunctionalIndigo, S["HelpQuickPanel"]);
+        LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.FunctionalIndigo);
 
         LinearLayout bentoRow1 = HRow();
         LinearLayout bentoRow2 = HRow();
@@ -228,8 +238,10 @@ public partial class MainActivity {
                 bool next = !store.HeadphoneVirtualizer;
                 store.HeadphoneVirtualizer = next;
                 playerEngine.HeadphoneVirtualizer = next;
+                RefreshMusicPlayerControlsUi();
             },
-            OneUiTheme.Primary);
+            OneUiTheme.Primary,
+            helpBody: S["TipHrtf"]);
 
         var tileDist = CreateBentoToggle(
             OneUiIconType.Distance, S["BentoDist"],
@@ -239,7 +251,8 @@ public partial class MainActivity {
                 store.DistanceSimulation = next;
                 playerEngine.DistanceSimulation = next;
             },
-            OneUiTheme.FunctionalCyan);
+            OneUiTheme.FunctionalCyan,
+            helpBody: S["TipDistSim"]);
 
         var tile3DOnly = CreateBentoToggle(
             OneUiIconType.Sparkles, S["Bento3DOnly"],
@@ -275,11 +288,8 @@ public partial class MainActivity {
         };
         refreshBentoTilesUi();
 
-        (seekBarVolume, _) = AddSliderRow(quickCard, S["MasterVol"], 0, 200, (int)Math.Round(store.PlayerVolume * 100), v => {
-            float vol = v / 100f;
-            store.PlayerVolume = vol;
-            playerEngine.Volume = vol;
-        }, "%", defaultValue: 100);
+        (seekBarVolume, _) = AddSliderRow(quickCard, S["MasterVol"], 0, 200, (int)Math.Round(store.PlayerVolume * 100),
+            v => SetMasterVolumePercent(v), "%", defaultValue: 100);
 
         (seekBarLfe, _) = AddSliderRow(quickCard, S["LfeVol"], 0, 200, (int)Math.Round(store.LfeVolume * 100), v => {
             float vol = v / 100f;
@@ -295,11 +305,11 @@ public partial class MainActivity {
             store.VolumeRolloffIndex = pos;
             playerEngine.VolumeRolloff = (Rolloffs)pos;
         };
-        quickCard.AddView(rolloffSelector);
+        quickCard.AddView(WrapControlWithHelp(rolloffSelector, S["RolloffLabel"].TrimEnd(':'), S["TipRolloff"]));
         page.AddView(quickCard);
 
         // 4. Live Channel & 3D Object Mixer Card (Filter buttons visibly toggle Solo state)
-        LinearLayout mixerCard = Card(S["MixerTitle"], OneUiIconType.Queue, OneUiTheme.CoralStart, S["HelpMixer"]);
+        LinearLayout mixerCard = Card(S["MixerTitle"], OneUiIconType.Queue, OneUiTheme.CoralStart);
 
         HorizontalScrollView filterScroll = new(this) { HorizontalScrollBarEnabled = false };
         LinearLayout filterRow = HRow();
@@ -351,10 +361,11 @@ public partial class MainActivity {
         string title,
         Func<bool> getState,
         Action onToggle,
-        Color activeColor) {
+        Color activeColor,
+        string helpBody = null) {
         LinearLayout tile = HRow();
         tile.SetMinimumHeight(Dp(62));
-        tile.SetPadding(Dp(12), Dp(10), Dp(10), Dp(10));
+        tile.SetPadding(Dp(12), Dp(10), Dp(8), Dp(10));
         OneUiTheme.AttachRecoil(tile, 0.95f);
 
         OneUiIconBadge badge = OneUiTheme.CreateVectorIconBadge(this, iconType, activeColor, 34);
@@ -366,8 +377,12 @@ public partial class MainActivity {
         col.AddView(titleTv);
         col.AddView(stateTv);
 
-        tile.AddView(badge, new LinearLayout.LayoutParams(Dp(34), Dp(34)) { RightMargin = Dp(10) });
+        tile.AddView(badge, new LinearLayout.LayoutParams(Dp(34), Dp(34)) { RightMargin = Dp(9) });
         tile.AddView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        if (!string.IsNullOrEmpty(helpBody)) {
+            tile.AddView(CreateInlineHelpBtn(title, helpBody), new LinearLayout.LayoutParams(Dp(24), Dp(24)) { LeftMargin = Dp(4) });
+        }
 
         void Refresh() {
             bool on = getState();
@@ -525,10 +540,7 @@ public partial class MainActivity {
         if (playerEngine.IsPlaying) {
             playerEngine.IsPlaying = false;
             audioOutput.Pause();
-            playPauseBtn.Text = S["Play"];
-            if (playbackSeekBar != null) {
-                playbackSeekBar.IsWavePlaying = false;
-            }
+            SyncPlaybackUi(false, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
             mediaNotification?.UpdatePlaybackState(false, playerEngine.CurrentSeconds, showNotification: true);
         } else {
             if (playerEngine.TotalSeconds > 0 && playerEngine.CurrentSeconds >= playerEngine.TotalSeconds - 0.05) {
@@ -536,10 +548,7 @@ public partial class MainActivity {
             }
             playerEngine.IsPlaying = true;
             audioOutput.Start();
-            playPauseBtn.Text = S["Pause"];
-            if (playbackSeekBar != null) {
-                playbackSeekBar.IsWavePlaying = true;
-            }
+            SyncPlaybackUi(true, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
             mediaNotification?.UpdatePlaybackState(true, playerEngine.CurrentSeconds, showNotification: true);
         }
     }
@@ -551,16 +560,7 @@ public partial class MainActivity {
         }
         audioOutput?.Stop();
         mediaNotification?.UpdatePlaybackState(false, 0, showNotification: false);
-        if (playPauseBtn != null) {
-            playPauseBtn.Text = S["Play"];
-        }
-        if (playbackSeekBar != null) {
-            playbackSeekBar.IsWavePlaying = false;
-            playbackSeekBar.Progress = 0;
-            playbackSeekBar.CurrentTimeText = "00:00";
-            playbackSeekBar.TotalTimeText = $"{TimeSpan.FromSeconds(playerEngine?.TotalSeconds ?? 0):mm\\:ss}";
-            playbackSeekBar.Invalidate();
-        }
+        SyncPlaybackUi(false, 0, playerEngine?.TotalSeconds ?? 0);
     }
 
     void SeekRelative(double deltaSeconds) {
@@ -576,23 +576,37 @@ public partial class MainActivity {
         }
         double target = Math.Clamp(seconds, 0, Math.Max(0, playerEngine.TotalSeconds - 0.05));
         playerEngine.Seek(target);
-        if (playbackSeekBar != null) {
-            playbackSeekBar.Progress = Math.Clamp((int)(target / playerEngine.TotalSeconds * 1000.0), 0, 1000);
-            playbackSeekBar.CurrentTimeText = $"{TimeSpan.FromSeconds(target):mm\\:ss}";
-            playbackSeekBar.TotalTimeText = $"{TimeSpan.FromSeconds(playerEngine.TotalSeconds):mm\\:ss}";
-            playbackSeekBar.Invalidate();
-        }
+        SyncPlaybackUi(playerEngine.IsPlaying, target, playerEngine.TotalSeconds);
         mediaNotification?.UpdatePlaybackState(playerEngine.IsPlaying, target, showNotification: true);
     }
 
     void OnPlayerCompleted() {
-        if (playPauseBtn != null) {
-            playPauseBtn.Text = S["Play"];
-        }
-        if (playbackSeekBar != null) {
-            playbackSeekBar.IsWavePlaying = false;
-        }
+        SyncPlaybackUi(false, playerEngine?.TotalSeconds ?? 0, playerEngine?.TotalSeconds ?? 0);
         mediaNotification?.UpdatePlaybackState(false, playerEngine?.TotalSeconds ?? 0, showNotification: selectedTrack != null);
+    }
+
+    void SyncPlaybackUi(bool isPlaying, double curSeconds, double totSeconds) {
+        if (playPauseBtn != null) {
+            playPauseBtn.Text = isPlaying ? S["Pause"] : S["Play"];
+        }
+        int prog = totSeconds > 0 ? Math.Clamp((int)(curSeconds / totSeconds * 1000.0), 0, 1000) : 0;
+        string curStr = $"{TimeSpan.FromSeconds(Math.Max(0, curSeconds)):mm\\:ss}";
+        string totStr = $"{TimeSpan.FromSeconds(Math.Max(0, totSeconds)):mm\\:ss}";
+
+        void ApplyToWaveBar(OneUiWaveMediaSeekBar bar) {
+            if (bar == null) return;
+            bar.IsWavePlaying = isPlaying;
+            if (!isUserSeeking) {
+                bar.Progress = prog;
+                bar.CurrentTimeText = curStr;
+                bar.TotalTimeText = totStr;
+                bar.Invalidate();
+            }
+        }
+        ApplyToWaveBar(playbackSeekBar);
+        ApplyToWaveBar(musicWaveSeekBar);
+        RefreshMusicPlayerControlsUi();
+        UpdateRoomCanvas();
     }
 
     void SyncRoomSlidersFromEngine() {
@@ -618,7 +632,12 @@ public partial class MainActivity {
         if (roomView == null || playerEngine == null) {
             return;
         }
-        roomView.UpdateState(trackSourceItems, playerEngine.EnvironmentSize, playerEngine.ListenerPosition, playerEngine.ListenerRotation);
+        roomView.UpdateState(
+            trackSourceItems,
+            playerEngine.EnvironmentSize,
+            playerEngine.ListenerPosition,
+            playerEngine.ListenerRotation,
+            playerEngine.IsPlaying);
         UpdateRoomTelemetryText();
     }
 
@@ -696,15 +715,7 @@ public partial class MainActivity {
                 return;
             }
             if (playerEngine != null && playerEngine.IsPlaying) {
-                double cur = playerEngine.CurrentSeconds;
-                double tot = playerEngine.TotalSeconds;
-                if (!isUserSeeking && playbackSeekBar != null && tot > 0) {
-                    playbackSeekBar.Progress = Math.Clamp((int)(cur / tot * 1000.0), 0, 1000);
-                    playbackSeekBar.CurrentTimeText = $"{TimeSpan.FromSeconds(cur):mm\\:ss}";
-                    playbackSeekBar.TotalTimeText = $"{TimeSpan.FromSeconds(tot):mm\\:ss}";
-                    playbackSeekBar.Invalidate();
-                }
-                UpdateRoomCanvas();
+                SyncPlaybackUi(true, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
             }
             uiHandler?.PostDelayed(Tick, 65);
         }
@@ -720,7 +731,8 @@ public partial class MainActivity {
         Action<int> onChanged,
         string suffix = "",
         bool useBlue = false,
-        int? defaultValue = null) {
+        int? defaultValue = null,
+        string helpBody = null) {
         int def = defaultValue ?? initial;
         OneUiSeekBar bar = new(this) {
             Max = max - min,
@@ -745,22 +757,46 @@ public partial class MainActivity {
             bar.Invalidate();
             onChanged?.Invoke(val);
         };
-        parent.AddView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
+        if (string.IsNullOrEmpty(helpBody)) {
+            parent.AddView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(8)
+            });
+        } else {
+            parent.AddView(WrapControlWithHelp(bar, label, helpBody, bottomMarginDp: 8));
+        }
         return (bar, null);
     }
 
-    Switch AddSwitchRow(LinearLayout parent, string label, bool initial, Action<bool> onChanged) {
-        Switch sw = new(this) {
-            Text = label,
-            Checked = initial,
-            TextSize = 13.5f
+    Switch AddSwitchRow(LinearLayout parent, string label, bool initial, Action<bool> onChanged, string helpBody = null) {
+        if (string.IsNullOrEmpty(helpBody)) {
+            Switch sw = new(this) {
+                Text = label,
+                Checked = initial,
+                TextSize = 13.5f
+            };
+            OneUiTheme.StyleSwitch(sw);
+            sw.SetPadding(0, Dp(8), 0, Dp(8));
+            sw.CheckedChange += (_, e) => onChanged?.Invoke(e.IsChecked);
+            parent.AddView(sw);
+            return sw;
+        }
+
+        LinearLayout row = HRow();
+        row.SetPadding(0, Dp(6), 0, Dp(6));
+        TextView lbl = Label(label, 13.5f, ColText);
+        View helpBtn = CreateInlineHelpBtn(label, helpBody);
+        Switch swCompact = new(this) {
+            Text = "",
+            Checked = initial
         };
-        OneUiTheme.StyleSwitch(sw);
-        sw.SetPadding(0, Dp(8), 0, Dp(8));
-        sw.CheckedChange += (_, e) => onChanged?.Invoke(e.IsChecked);
-        parent.AddView(sw);
-        return sw;
+        OneUiTheme.StyleSwitch(swCompact);
+        swCompact.CheckedChange += (_, e) => onChanged?.Invoke(e.IsChecked);
+        lbl.Click += (_, _) => swCompact.Checked = !swCompact.Checked;
+
+        row.AddView(lbl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        row.AddView(helpBtn, new LinearLayout.LayoutParams(Dp(26), Dp(26)) { LeftMargin = Dp(6), RightMargin = Dp(8) });
+        row.AddView(swCompact, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        parent.AddView(row);
+        return swCompact;
     }
 }

@@ -46,14 +46,18 @@ public partial class MainActivity {
 
     LinearLayout BuildConverterTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(88));
+        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
 
         // 1. System & RenderTarget Hero Card
-        LinearLayout sysCard = Card(S["SystemTitle"], OneUiIconType.Speaker, OneUiTheme.Primary, S["HelpSystem"]);
+        LinearLayout sysCard = Card(S["SystemTitle"], OneUiIconType.Speaker, OneUiTheme.Primary);
         LinearLayout sysRow = HRow();
 
         LinearLayout sysLeft = new(this) { Orientation = Orientation.Vertical };
-        sysLeft.AddView(Label(S["RenderTarget"], 12f, ColMuted));
+        LinearLayout rtLabelRow = HRow();
+        rtLabelRow.AddView(Label(S["RenderTarget"], 12f, ColMuted), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        rtLabelRow.AddView(CreateInlineHelpBtn(S["RenderTarget"].TrimEnd(':'), S["TipRenderTarget"]), new LinearLayout.LayoutParams(Dp(24), Dp(24)));
+        sysLeft.AddView(rtLabelRow);
+
         selectTargetBtn = SecondaryButton(RenderTarget?.Name ?? S["SelectTarget"], ShowRenderTargetDialog);
         sysLeft.AddView(selectTargetBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4), BottomMargin = Dp(6) });
         wiringBtn = PillButton(S["DisplayWiring"], DisplayWiringDialog);
@@ -66,7 +70,7 @@ public partial class MainActivity {
         page.AddView(sysCard);
 
         // 2. Content & Export Card (In-App One UI 9 Selectors — no native Spinner popups)
-        LinearLayout expCard = Card("Export", OneUiIconType.Bolt, OneUiTheme.CoralStart, S["HelpExport"]);
+        LinearLayout expCard = Card("Export", OneUiIconType.Bolt, OneUiTheme.CoralStart);
         converterTrackInfoText = Label(S["NoTrack"], 12f, ColMuted);
         converterTrackInfoText.SetPadding(0, 0, 0, Dp(8));
         expCard.AddView(converterTrackInfoText);
@@ -99,7 +103,7 @@ public partial class MainActivity {
         };
         applyRoomToExportCheck.SetTextColor(ColText);
         applyRoomToExportCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
-        expCard.AddView(applyRoomToExportCheck);
+        expCard.AddView(WrapControlWithHelp(applyRoomToExportCheck, S["ApplyRoomToExport"], S["TipApplyRoomExport"], bottomMarginDp: 2));
 
         // Action Buttons (non-clipping single-line horizontal rows with BaselineAligned = false)
         LinearLayout actRow1 = HRow();
@@ -150,8 +154,8 @@ public partial class MainActivity {
 
         page.AddView(expCard);
 
-        // 3. Batch Render Queue Card (contextual to Studio/Converter tab, zero button clipping)
-        LinearLayout queueCard = Card(S["QueueTitle"], OneUiIconType.Queue, OneUiTheme.Primary, S["HelpQueue"]);
+        // 3. Batch Render Queue Card
+        LinearLayout queueCard = Card(S["QueueTitle"], OneUiIconType.Queue, OneUiTheme.Primary);
         queueListContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
         queueCard.AddView(queueListContainer);
 

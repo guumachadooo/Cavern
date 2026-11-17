@@ -49,7 +49,7 @@ jobs:
           dotnet publish CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
             -c Release -f net11.0-android \
             -p:ApplicationVersion=${{ github.run_number }} \
-            -p:ApplicationDisplayVersion=2.3.${{ github.run_number }} \
+            -p:ApplicationDisplayVersion=2.4.${{ github.run_number }} \
             -p:AndroidPackageFormat=apk \
             -p:AndroidKeyStore=true \
             -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/cavernize.keystore" \
@@ -86,11 +86,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
-          name: "Cavernize Android v2.3.${{ github.run_number }}"
+          name: "Cavernize Android v2.4.${{ github.run_number }}"
           body: |
             Automated signed Android APK build for Cavernize (`${{ github.sha }}`).
-            - Version: `v2.3.${{ github.run_number }}` (Build `${{ github.run_number }}`)
-            - Features: Refined Neutral One UI 9 Dark Palette, Pixel-Smooth OneUiSeekBar with Touch Ball Animation, Non-Overlapping 3D Room Perspective + Vertical Height (Y) Elevation View & Docked Head Gimbal, System MediaSession Notification & Lock Screen Controls, Minimalist Header Bar, Contextual Help (?) Bubbles, Non-Clipping Pills, Reordered Settings.
+            - Version: `v2.4.${{ github.run_number }}` (Build `${{ github.run_number }}`)
+            - Highlights: Embedded Album Art & Metadata Extraction (`MediaMetadataRetriever` -> Player UI & System Lock Screen Notification), Casual Music Player Tab (`Player` with Apple/One UI 9 wave seekbar + DSP quick controls), Unified Orbitable 3D Room (`3D`/`Topo`/`Frente` camera interpolation, 60fps smoothing + object motion trails), Frosted Blurred Bottom Capsule Bar & Animated Tab Transitions, Refined One UI 9 Seekbar Touch Thumb, Individualized Inline `?` Technical Explanations.
           prerelease: false
           files: build/Cavernize-Android.apk
         env:
