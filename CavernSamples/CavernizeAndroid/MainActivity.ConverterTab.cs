@@ -33,7 +33,7 @@ namespace CavernizeAndroid;
 public partial class MainActivity {
     Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, shareExportBtn, playExportBtn;
     LayoutDiagramView layoutDiagram;
-    TextView converterTrackInfoText, convertStatusText;
+    TextView convertStatusText;
     OneUiInlineSelector exportFormatSelector, containerSelector;
     CheckBox applyRoomToExportCheck;
     ProgressBar convertProgressBar;
@@ -46,7 +46,12 @@ public partial class MainActivity {
 
     LinearLayout BuildConverterTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
+        page.SetPadding(Dp(14), Dp(6), Dp(14), Dp(116));
+
+        // 0. Active File Source Bar (Clean workspace context & track selector)
+        page.AddView(CreateWorkspaceSourceBar(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
 
         // 1. System & RenderTarget Hero Card
         LinearLayout sysCard = Card(S["SystemTitle"], OneUiIconType.Speaker, OneUiTheme.IconSpatial);
@@ -71,10 +76,6 @@ public partial class MainActivity {
 
         // 2. Content & Export Card (In-App One UI 9 Selectors — no native Spinner popups)
         LinearLayout expCard = Card("Export", OneUiIconType.Bolt, OneUiTheme.IconStudioExport);
-        converterTrackInfoText = Label(S["NoTrack"], 12f, ColMuted);
-        converterTrackInfoText.SetPadding(0, 0, 0, Dp(8));
-        expCard.AddView(converterTrackInfoText);
-        AddDivider(expCard);
 
         exportFormatSelector = new OneUiInlineSelector(this, S["ExportFormat"]);
         ExportFormat[] formats = ExportFormat.GetFormats();
@@ -160,7 +161,7 @@ public partial class MainActivity {
 
         LinearLayout qBtns = HRow();
         qBtns.SetPadding(0, Dp(10), 0, 0);
-        Button batchBtn = PillButton(S["BatchAddBtn"], () => LaunchFilePicker(ReqBatchMedia, allowMultiple: true));
+        Button batchBtn = PillButton(S["BatchAddBtn"], () => OpenMultiFilesWithExplorer(AddLocalPathsToQueue));
         Button remBtn = PillButton(S["RemoveQueueBtn"], RemoveLastFromQueue);
         Button runQBtn = PrimaryButton(S["ProcessQueueBtn"], StartQueueProcessing);
         qBtns.AddView(batchBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(6) });
@@ -182,24 +183,11 @@ public partial class MainActivity {
         if (wiringBtn != null) {
             wiringBtn.Enabled = RenderTarget is not DriverRenderTarget && RenderTarget is not VirtualizerRenderTarget;
         }
-        RefreshConverterTrackInfo();
         RefreshContainerOptions();
     }
 
     void RefreshConverterTrackInfo() {
-        if (converterTrackInfoText == null) {
-            return;
-        }
-        CavernizeTrack active = GetActiveTrack();
-        if (active == null) {
-            converterTrackInfoText.Text = S["NoTrack"];
-            return;
-        }
-        StringBuilder sb = new(active.FormatHeader);
-        foreach (var (prop, val) in active.Details) {
-            sb.Append('\n').Append(prop).Append(": ").Append(val);
-        }
-        converterTrackInfoText.Text = sb.ToString();
+        // Track details & stream switcher are now presented cleanly via WorkspaceSourceBar and ShowTechnicalStreamDialog
     }
 
     void RefreshContainerOptions() {

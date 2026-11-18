@@ -60,7 +60,9 @@ public enum OneUiIconType {
     LibraryGrid,
     Globe,
     ChevronLeft,
-    Refresh
+    Refresh,
+    FolderFilter,
+    CleanFilter
 }
 
 public enum OneUiTabKind {
@@ -75,10 +77,39 @@ public enum OneUiTabKind {
 /// Renders crisp vector-stroked One UI 9 icons using Android Canvas &amp; Path (zero emojis).
 /// </summary>
 public static class OneUiVectorIcons {
+    static void AddRoundedPolygon(Android.Graphics.Path p, float radius, params (float x, float y)[] pts) {
+        int n = pts.Length;
+        if (n < 3) return;
+        for (int i = 0; i < n; i++) {
+            var prev = pts[(i - 1 + n) % n];
+            var cur = pts[i];
+            var next = pts[(i + 1) % n];
+
+            float dx1 = prev.x - cur.x;
+            float dy1 = prev.y - cur.y;
+            float len1 = MathF.Sqrt(dx1 * dx1 + dy1 * dy1);
+
+            float dx2 = next.x - cur.x;
+            float dy2 = next.y - cur.y;
+            float len2 = MathF.Sqrt(dx2 * dx2 + dy2 * dy2);
+
+            float d = Math.Min(radius, Math.Min(len1, len2) * 0.42f);
+            float sx = cur.x + (len1 > 0.001f ? dx1 / len1 * d : 0f);
+            float sy = cur.y + (len1 > 0.001f ? dy1 / len1 * d : 0f);
+            float ex = cur.x + (len2 > 0.001f ? dx2 / len2 * d : 0f);
+            float ey = cur.y + (len2 > 0.001f ? dy2 / len2 * d : 0f);
+
+            if (i == 0) p.MoveTo(sx, sy);
+            else p.LineTo(sx, sy);
+            p.QuadTo(cur.x, cur.y, ex, ey);
+        }
+        p.Close();
+    }
+
     public static void DrawIcon(Canvas canvas, OneUiIconType type, float cx, float cy, float size, Color color) {
         using Paint stroke = new(PaintFlags.AntiAlias) {
             Color = color,
-            StrokeWidth = Math.Max(1.6f, size * 0.105f),
+            StrokeWidth = Math.Max(1.6f, size * 0.095f),
             StrokeCap = Paint.Cap.Round,
             StrokeJoin = Paint.Join.Round
         };
@@ -89,7 +120,7 @@ public static class OneUiVectorIcons {
         };
         fill.SetStyle(Paint.Style.Fill);
 
-        float r = size * 0.40f;
+        float r = size * 0.41f;
         using Android.Graphics.Path p = new();
 
         switch (type) {
@@ -241,20 +272,20 @@ public static class OneUiVectorIcons {
                 break;
 
             case OneUiIconType.Play:
-                p.MoveTo(cx - r * 0.46f, cy - r * 0.70f);
-                p.LineTo(cx + r * 0.74f, cy);
-                p.LineTo(cx - r * 0.46f, cy + r * 0.70f);
-                p.Close();
+                AddRoundedPolygon(p, r * 0.24f,
+                    (cx - r * 0.42f, cy - r * 0.68f),
+                    (cx + r * 0.72f, cy),
+                    (cx - r * 0.42f, cy + r * 0.68f));
                 canvas.DrawPath(p, fill);
                 break;
 
             case OneUiIconType.Pause:
-                canvas.DrawRoundRect(new RectF(cx - r * 0.56f, cy - r * 0.68f, cx - r * 0.16f, cy + r * 0.68f), r * 0.15f, r * 0.15f, fill);
-                canvas.DrawRoundRect(new RectF(cx + r * 0.16f, cy - r * 0.68f, cx + r * 0.56f, cy + r * 0.68f), r * 0.15f, r * 0.15f, fill);
+                canvas.DrawRoundRect(new RectF(cx - r * 0.56f, cy - r * 0.66f, cx - r * 0.15f, cy + r * 0.66f), r * 0.20f, r * 0.20f, fill);
+                canvas.DrawRoundRect(new RectF(cx + r * 0.15f, cy - r * 0.66f, cx + r * 0.56f, cy + r * 0.66f), r * 0.20f, r * 0.20f, fill);
                 break;
 
             case OneUiIconType.Stop:
-                canvas.DrawRoundRect(new RectF(cx - r * 0.58f, cy - r * 0.58f, cx + r * 0.58f, cy + r * 0.58f), r * 0.20f, r * 0.20f, fill);
+                canvas.DrawRoundRect(new RectF(cx - r * 0.56f, cy - r * 0.56f, cx + r * 0.56f, cy + r * 0.56f), r * 0.26f, r * 0.26f, fill);
                 break;
 
             case OneUiIconType.Share:
@@ -298,29 +329,78 @@ public static class OneUiVectorIcons {
                 canvas.DrawCircle(cx, cy + r * 0.56f, size * 0.068f, fill);
                 break;
 
-            case OneUiIconType.Rewind10:
-                canvas.DrawArc(new RectF(cx - r * 0.78f, cy - r * 0.78f, cx + r * 0.78f, cy + r * 0.78f), 225f, -265f, false, stroke);
-                p.MoveTo(cx - r * 0.62f, cy - r * 0.72f);
-                p.LineTo(cx - r * 0.62f, cy - r * 0.24f);
-                p.LineTo(cx - r * 0.18f, cy - r * 0.42f);
+            case OneUiIconType.Rewind10: {
+                float arcR = r * 0.76f;
+                canvas.DrawArc(new RectF(cx - arcR, cy - arcR * 0.92f + r * 0.08f, cx + arcR, cy + arcR * 0.92f + r * 0.08f),
+                    -108f, -252f, false, stroke);
+                float tipX = cx - arcR * 0.28f;
+                float tipY = cy - arcR * 0.84f;
+                p.MoveTo(tipX + r * 0.20f, tipY - r * 0.20f);
+                p.LineTo(tipX - r * 0.04f, tipY + r * 0.04f);
+                p.LineTo(tipX + r * 0.22f, tipY + r * 0.20f);
                 canvas.DrawPath(p, stroke);
-                break;
 
-            case OneUiIconType.Forward10:
-                canvas.DrawArc(new RectF(cx - r * 0.78f, cy - r * 0.78f, cx + r * 0.78f, cy + r * 0.78f), -45f, 265f, false, stroke);
-                p.MoveTo(cx + r * 0.62f, cy - r * 0.72f);
-                p.LineTo(cx + r * 0.62f, cy - r * 0.24f);
-                p.LineTo(cx + r * 0.18f, cy - r * 0.42f);
-                canvas.DrawPath(p, stroke);
+                using Paint numPaint = new(PaintFlags.AntiAlias) {
+                    Color = color,
+                    TextSize = size * 0.30f,
+                    TextAlign = Paint.Align.Center
+                };
+                numPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Bold));
+                canvas.DrawText("10", cx, cy + r * 0.12f - (numPaint.Ascent() + numPaint.Descent()) * 0.5f, numPaint);
                 break;
+            }
 
-            case OneUiIconType.RepeatLoop:
-                canvas.DrawRoundRect(new RectF(cx - r * 0.78f, cy - r * 0.48f, cx + r * 0.78f, cy + r * 0.48f), r * 0.36f, r * 0.36f, stroke);
-                p.MoveTo(cx + r * 0.18f, cy - r * 0.74f);
-                p.LineTo(cx + r * 0.48f, cy - r * 0.48f);
-                p.LineTo(cx + r * 0.18f, cy - r * 0.22f);
+            case OneUiIconType.Forward10: {
+                float arcR = r * 0.76f;
+                canvas.DrawArc(new RectF(cx - arcR, cy - arcR * 0.92f + r * 0.08f, cx + arcR, cy + arcR * 0.92f + r * 0.08f),
+                    -72f, 252f, false, stroke);
+                float tipX = cx + arcR * 0.28f;
+                float tipY = cy - arcR * 0.84f;
+                p.MoveTo(tipX - r * 0.20f, tipY - r * 0.20f);
+                p.LineTo(tipX + r * 0.04f, tipY + r * 0.04f);
+                p.LineTo(tipX - r * 0.22f, tipY + r * 0.20f);
+                canvas.DrawPath(p, stroke);
+
+                using Paint numPaint = new(PaintFlags.AntiAlias) {
+                    Color = color,
+                    TextSize = size * 0.30f,
+                    TextAlign = Paint.Align.Center
+                };
+                numPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Bold));
+                canvas.DrawText("10", cx, cy + r * 0.12f - (numPaint.Ascent() + numPaint.Descent()) * 0.5f, numPaint);
+                break;
+            }
+
+            case OneUiIconType.RepeatLoop: {
+                float rx = r * 0.80f;
+                float ry = r * 0.50f;
+                float cr = r * 0.34f;
+                // Top strand: curves up from left-mid, crosses top, ends in right arrowhead
+                p.MoveTo(cx - rx, cy + ry * 0.08f);
+                p.LineTo(cx - rx, cy - ry + cr);
+                p.QuadTo(cx - rx, cy - ry, cx - rx + cr, cy - ry);
+                p.LineTo(cx + rx * 0.72f, cy - ry);
+                canvas.DrawPath(p, stroke);
+                p.Reset();
+                p.MoveTo(cx + rx * 0.44f, cy - ry - r * 0.24f);
+                p.LineTo(cx + rx * 0.78f, cy - ry);
+                p.LineTo(cx + rx * 0.44f, cy - ry + r * 0.24f);
+                canvas.DrawPath(p, stroke);
+
+                // Bottom strand: curves down from right-mid, crosses bottom, ends in left arrowhead
+                p.Reset();
+                p.MoveTo(cx + rx, cy - ry * 0.08f);
+                p.LineTo(cx + rx, cy + ry - cr);
+                p.QuadTo(cx + rx, cy + ry, cx + rx - cr, cy + ry);
+                p.LineTo(cx - rx * 0.72f, cy + ry);
+                canvas.DrawPath(p, stroke);
+                p.Reset();
+                p.MoveTo(cx - rx * 0.44f, cy + ry - r * 0.24f);
+                p.LineTo(cx - rx * 0.78f, cy + ry);
+                p.LineTo(cx - rx * 0.44f, cy + ry + r * 0.24f);
                 canvas.DrawPath(p, stroke);
                 break;
+            }
 
             case OneUiIconType.PlayerDisc:
                 canvas.DrawCircle(cx, cy, r * 0.86f, stroke);
@@ -328,15 +408,15 @@ public static class OneUiVectorIcons {
                 canvas.DrawArc(new RectF(cx - r * 0.52f, cy - r * 0.52f, cx + r * 0.52f, cy + r * 0.52f), -65f, 95f, false, stroke);
                 break;
 
-            case OneUiIconType.RewindStart:
-                float barX = cx - r * 0.62f;
-                canvas.DrawLine(barX, cy - r * 0.58f, barX, cy + r * 0.58f, stroke);
-                p.MoveTo(cx + r * 0.62f, cy - r * 0.60f);
-                p.LineTo(cx - r * 0.34f, cy);
-                p.LineTo(cx + r * 0.62f, cy + r * 0.60f);
-                p.Close();
+            case OneUiIconType.RewindStart: {
+                canvas.DrawRoundRect(new RectF(cx - r * 0.76f, cy - r * 0.56f, cx - r * 0.54f, cy + r * 0.56f), r * 0.11f, r * 0.11f, fill);
+                AddRoundedPolygon(p, r * 0.18f,
+                    (cx + r * 0.68f, cy - r * 0.58f),
+                    (cx - r * 0.34f, cy),
+                    (cx + r * 0.68f, cy + r * 0.58f));
                 canvas.DrawPath(p, fill);
                 break;
+            }
 
             case OneUiIconType.LyricsQuote:
                 // Apple Music ic_nowplaying_lyrics rounded quote bubble with crisp quote commas
@@ -497,22 +577,22 @@ public static class OneUiVectorIcons {
             }
 
             case OneUiIconType.SkipPrevious: {
-                canvas.DrawRoundRect(new RectF(cx - r * 0.78f, cy - r * 0.56f, cx - r * 0.54f, cy + r * 0.56f), r * 0.12f, r * 0.12f, fill);
-                p.MoveTo(cx + r * 0.74f, cy - r * 0.56f);
-                p.LineTo(cx - r * 0.34f, cy);
-                p.LineTo(cx + r * 0.74f, cy + r * 0.56f);
-                p.Close();
+                canvas.DrawRoundRect(new RectF(cx - r * 0.78f, cy - r * 0.54f, cx - r * 0.54f, cy + r * 0.54f), r * 0.12f, r * 0.12f, fill);
+                AddRoundedPolygon(p, r * 0.18f,
+                    (cx + r * 0.74f, cy - r * 0.56f),
+                    (cx - r * 0.36f, cy),
+                    (cx + r * 0.74f, cy + r * 0.56f));
                 canvas.DrawPath(p, fill);
                 break;
             }
 
             case OneUiIconType.SkipNext: {
-                p.MoveTo(cx - r * 0.74f, cy - r * 0.56f);
-                p.LineTo(cx + r * 0.34f, cy);
-                p.LineTo(cx - r * 0.74f, cy + r * 0.56f);
-                p.Close();
+                AddRoundedPolygon(p, r * 0.18f,
+                    (cx - r * 0.74f, cy - r * 0.56f),
+                    (cx + r * 0.36f, cy),
+                    (cx - r * 0.74f, cy + r * 0.56f));
                 canvas.DrawPath(p, fill);
-                canvas.DrawRoundRect(new RectF(cx + r * 0.54f, cy - r * 0.56f, cx + r * 0.78f, cy + r * 0.56f), r * 0.12f, r * 0.12f, fill);
+                canvas.DrawRoundRect(new RectF(cx + r * 0.54f, cy - r * 0.54f, cx + r * 0.78f, cy + r * 0.54f), r * 0.12f, r * 0.12f, fill);
                 break;
             }
 
@@ -554,6 +634,30 @@ public static class OneUiVectorIcons {
                 p.MoveTo(cx + r * 0.22f, cy - r * 0.72f);
                 p.LineTo(cx + r * 0.66f, cy - r * 0.72f);
                 p.LineTo(cx + r * 0.66f, cy - r * 0.28f);
+                canvas.DrawPath(p, stroke);
+                break;
+
+            case OneUiIconType.FolderFilter:
+                p.MoveTo(cx - r * 0.88f, cy - r * 0.62f);
+                p.LineTo(cx - r * 0.20f, cy - r * 0.62f);
+                p.LineTo(cx + r * 0.02f, cy - r * 0.35f);
+                p.LineTo(cx + r * 0.88f, cy - r * 0.35f);
+                p.LineTo(cx + r * 0.88f, cy + r * 0.68f);
+                p.LineTo(cx - r * 0.88f, cy + r * 0.68f);
+                p.Close();
+                canvas.DrawPath(p, stroke);
+                canvas.DrawLine(cx - r * 0.36f, cy + r * 0.08f, cx + r * 0.36f, cy + r * 0.08f, stroke);
+                canvas.DrawLine(cx - r * 0.20f, cy + r * 0.34f, cx + r * 0.20f, cy + r * 0.34f, stroke);
+                break;
+
+            case OneUiIconType.CleanFilter:
+                p.MoveTo(cx - r * 0.84f, cy - r * 0.54f);
+                p.LineTo(cx + r * 0.84f, cy - r * 0.54f);
+                p.LineTo(cx + r * 0.20f, cy + r * 0.14f);
+                p.LineTo(cx + r * 0.20f, cy + r * 0.76f);
+                p.LineTo(cx - r * 0.20f, cy + r * 0.56f);
+                p.LineTo(cx - r * 0.20f, cy + r * 0.14f);
+                p.Close();
                 canvas.DrawPath(p, stroke);
                 break;
         }

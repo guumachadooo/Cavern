@@ -169,7 +169,16 @@ public partial class MainActivity {
                 store.HrirPath = "";
                 RefreshSettingsTabButtons();
             } else {
-                LaunchFilePicker(ReqLoadHrir, false);
+                OpenFileWithExplorerForExtensions(
+                    S["LoadHRIR"],
+                    [".wav"],
+                    path => {
+                        if (TryLoadHrir(path, showError: true)) {
+                            store.HrirPath = path;
+                            RefreshSettingsTabButtons();
+                        }
+                    },
+                    ReqLoadHrir);
             }
         });
         rendCard.AddView(WrapControlWithHelp(hrirBtn, S["LoadHRIR"], S["TipHrir"], bottomMarginDp: 8));
@@ -180,7 +189,11 @@ public partial class MainActivity {
                 store.RoomCorrectionPath = "";
                 RefreshSettingsTabButtons();
             } else {
-                LaunchFilePicker(ReqLoadFilters, false);
+                OpenFileWithExplorerForExtensions(
+                    S["LoadFilters"],
+                    [".txt", ".cfg"],
+                    TryLoadRoomFilters,
+                    ReqLoadFilters);
             }
         });
         rendCard.AddView(WrapControlWithHelp(filtersBtn, S["LoadFilters"], S["TipQuickEQ"], bottomMarginDp: 8));
@@ -289,7 +302,8 @@ public partial class MainActivity {
         ffCard.AddView(ffBtns);
 
         AddDivider(ffCard);
-        ffmpegBtn = PillButton(S["FFmpegManualBtn"], () => LaunchFilePicker(ReqLocateFFmpeg, false));
+        ffmpegBtn = PillButton(S["FFmpegManualBtn"], () =>
+            OpenFileWithExplorerForExtensions(S["FFmpegManualBtn"], null, ApplyManualFFmpegPath, ReqLocateFFmpeg, allowAllFiles: true));
         ffCard.AddView(ffmpegBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
 
         ffCard.AddView(WrapControlWithHelp(Label(S["FFmpegArgsLabel"], 12f, ColMuted), S["FFmpegCardTitle"], S["TipFFmpegArgs"], bottomMarginDp: 2));
@@ -335,7 +349,8 @@ public partial class MainActivity {
         thdCard.AddView(thdBtns);
 
         AddDivider(thdCard);
-        truehddManualBtn = PillButton(S["TruehddManualBtn"], () => LaunchFilePicker(ReqLocateTruehdd, false));
+        truehddManualBtn = PillButton(S["TruehddManualBtn"], () =>
+            OpenFileWithExplorerForExtensions(S["TruehddManualBtn"], null, ApplyManualTruehddPath, ReqLocateTruehdd, allowAllFiles: true));
         thdCard.AddView(truehddManualBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         page.AddView(thdCard);
 
@@ -429,8 +444,6 @@ public partial class MainActivity {
 
         AddDivider(helpCard);
         autoCheckUpdatesSwitch = AddSwitchRow(helpCard, S["AutoCheckSwitch"], store.AutoCheckUpdates, v => store.AutoCheckUpdates = v);
-        AddDivider(helpCard);
-        AddSwitchRow(helpCard, S["OnlineAutoBestSwitch"], store.OnlineAutoSelectBestMatch, v => store.OnlineAutoSelectBestMatch = v);
         page.AddView(helpCard);
 
         RefreshSettingsTabButtons();
@@ -792,8 +805,21 @@ public partial class MainActivity {
         }
     }
 
+    void AddLocalPathsToQueue(IReadOnlyList<string> rawPaths) {
+        if (rawPaths == null || rawPaths.Count == 0) return;
+        StringCollection paths = [];
+        foreach (string p in rawPaths) {
+            if (!string.IsNullOrEmpty(p) && File.Exists(p)) {
+                paths.Add(p);
+                protectedQueuePaths.Add(Path.GetFullPath(p));
+            }
+        }
+        if (paths.Count > 0) {
+            EnqueueResolvedPaths(paths);
+        }
+    }
+
     void AddUrisToQueueAsync(List<Android.Net.Uri> uris) {
-        string targetFolder = AndroidFileHelper.GetWorkingOutputDir(this, "Queue");
         Task.Run(() => {
             StringCollection paths = [];
             foreach (Android.Net.Uri uri in uris) {
@@ -807,20 +833,23 @@ public partial class MainActivity {
                     // Skip unreadable
                 }
             }
-            RunOnUiThread(() => {
-                List<string> invalids = [];
-                suppressAutoTrueHDPrepare = true;
-                try {
-                    renderQueue.AddRange(paths, targetFolder, invalids, ffmpeg);
-                } finally {
-                    suppressAutoTrueHDPrepare = false;
-                }
-                RefreshQueueList();
-                if (invalids.Count > 0) {
-                    ShowError("Unsupported files:\n" + string.Join('\n', invalids));
-                }
-            });
+            RunOnUiThread(() => EnqueueResolvedPaths(paths));
         });
+    }
+
+    void EnqueueResolvedPaths(StringCollection paths) {
+        string targetFolder = AndroidFileHelper.GetWorkingOutputDir(this, "Queue");
+        List<string> invalids = [];
+        suppressAutoTrueHDPrepare = true;
+        try {
+            renderQueue.AddRange(paths, targetFolder, invalids, ffmpeg);
+        } finally {
+            suppressAutoTrueHDPrepare = false;
+        }
+        RefreshQueueList();
+        if (invalids.Count > 0) {
+            ShowError("Unsupported files:\n" + string.Join('\n', invalids));
+        }
     }
 
     void StartQueueProcessing() {

@@ -87,16 +87,25 @@ public partial class MainActivity : Activity, ICavernizeApp {
     CancellationTokenSource activeCts;
     string lastRenderedFilePath;
 
-    // Minimalist Compact Top Bar Views + Collapsible Stream Details Drawer
-    LinearLayout filePillBtn;
-    TextView headerFileText;
-    LinearLayout fileDetailsDrawer;
-    TextView trackSummaryText;
-    LinearLayout trackPickerBadge;
-    TextView trackPickerLabel;
-    OneUiIconView fileDetailsChevron;
-    LinearLayout inlineTrackList;
+    // Workspace Source Header Bars (shown in Sala 3D, Estúdio, Stems — removed from global top to avoid Play/Library redundancy)
+    sealed class WorkspaceSourceBar {
+        public LinearLayout Root;
+        public LinearLayout FilePillBtn;
+        public TextView FileText;
+        public LinearLayout TrackBadge;
+        public TextView TrackBadgeLabel;
+        public OneUiIconView Chevron;
+        public LinearLayout DetailsDrawer;
+        public TextView SummaryText;
+        public LinearLayout InlineTrackList;
+    }
+
+    readonly List<WorkspaceSourceBar> workspaceSourceBars = [];
     bool fileDetailsExpanded;
+    string currentHeaderStatusText = "";
+    string currentTrackSummaryText = "";
+    double pendingSeekAfterLoadSeconds = -1;
+    string preferredFormatVariantKey = "";
     MediaPlaybackNotificationManager mediaNotification;
     MediaArtworkMetadata currentMediaMeta;
     Android.Net.Uri currentMediaUri;
@@ -338,91 +347,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
         root.SetBackgroundColor(Color.Transparent);
         root.SetFitsSystemWindows(true);
 
-        // Minimalist One UI 9 Compact Header Bar (title + frosted file pill + Open action; technical stream details stay hidden until tapped)
-        LinearLayout topBarWrap = new(this) { Orientation = Orientation.Vertical };
-        topBarWrap.SetPadding(Dp(14), Dp(8), Dp(14), Dp(6));
-
-        LinearLayout topRow = HRow();
-
-        TextView titleTv = new(this) {
-            Text = "Cavernize",
-            TextSize = 18f
-        };
-        titleTv.SetIncludeFontPadding(false);
-        titleTv.SetTextColor(ColText);
-        titleTv.Typeface = OneUiTheme.GetAppleFontBold(this);
-        topRow.AddView(titleTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(10) });
-
-        filePillBtn = HRow();
-        filePillBtn.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
-        filePillBtn.SetPadding(Dp(11), Dp(7), Dp(11), Dp(7));
-        OneUiTheme.AttachRecoil(filePillBtn, 0.97f);
-
-        OneUiIconView fileNoteIcon = new(this, OneUiIconType.MusicFile, OneUiTheme.IconSliderMedia);
-        headerFileText = new TextView(this) {
-            Text = S["SelectFilePill"],
-            TextSize = 12f
-        };
-        headerFileText.SetIncludeFontPadding(false);
-        headerFileText.SetTextColor(OneUiTheme.TextSecondary);
-        headerFileText.Typeface = OneUiTheme.GetAppleFontMedium(this);
-        headerFileText.SetSingleLine(true);
-        headerFileText.Ellipsize = Android.Text.TextUtils.TruncateAt.Middle;
-
-        trackPickerBadge = HRow();
-        trackPickerBadge.Visibility = ViewStates.Gone;
-        trackPickerBadge.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 195), OneUiTheme.PillCornerDp);
-        trackPickerBadge.SetPadding(Dp(7), Dp(2), Dp(7), Dp(2));
-        trackPickerLabel = Label("", 10.5f, ColText);
-        trackPickerLabel.SetIncludeFontPadding(false);
-        trackPickerLabel.Typeface = OneUiTheme.GetAppleFontBold(this);
-        trackPickerBadge.AddView(trackPickerLabel);
-
-        fileDetailsChevron = new OneUiIconView(this, OneUiIconType.ChevronDown, OneUiTheme.TextSub) {
-            Visibility = ViewStates.Gone
-        };
-
-        filePillBtn.AddView(fileNoteIcon, new LinearLayout.LayoutParams(Dp(14), Dp(14)) { RightMargin = Dp(6) });
-        filePillBtn.AddView(headerFileText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
-        filePillBtn.AddView(trackPickerBadge, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(4) });
-        filePillBtn.AddView(fileDetailsChevron, new LinearLayout.LayoutParams(Dp(13), Dp(13)));
-        filePillBtn.Click += (_, _) => {
-            if (LoadedFile == null) {
-                LaunchFilePicker(ReqOpenMedia, allowMultiple: false);
-            } else {
-                fileDetailsExpanded = !fileDetailsExpanded;
-                UpdateInlineTrackListVisibility();
-            }
-        };
-        topRow.AddView(filePillBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
-
-        LinearLayout openBtn = OneUiPillFactory.CreateIconActionPill(
-            this, OneUiIconType.Folder, S["OpenShort"],
-            () => LaunchFilePicker(ReqOpenMedia, allowMultiple: false),
-            primary: true);
-        openBtn.SetPadding(Dp(11), Dp(7), Dp(13), Dp(7));
-        topRow.AddView(openBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
-        topBarWrap.AddView(topRow);
-
-        fileDetailsDrawer = new LinearLayout(this) {
-            Orientation = Orientation.Vertical,
-            Visibility = ViewStates.Gone
-        };
-        fileDetailsDrawer.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceCard, 20f);
-        fileDetailsDrawer.SetPadding(Dp(14), Dp(10), Dp(14), Dp(10));
-
-        trackSummaryText = Label("", 11.5f, OneUiTheme.TextSub);
-        fileDetailsDrawer.AddView(trackSummaryText);
-
-        inlineTrackList = new LinearLayout(this) {
-            Orientation = Orientation.Vertical,
-            Visibility = ViewStates.Gone
-        };
-        inlineTrackList.SetPadding(0, Dp(8), 0, 0);
-        fileDetailsDrawer.AddView(inlineTrackList);
-
-        topBarWrap.AddView(fileDetailsDrawer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(6) });
-        root.AddView(topBarWrap, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        workspaceSourceBars.Clear();
+        currentHeaderStatusText = S["SelectFilePill"];
+        currentTrackSummaryText = "";
 
         // Tab content frame
         FrameLayout contentFrame = new(this);
@@ -553,76 +480,308 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshAllUiState();
     }
 
+    LinearLayout CreateWorkspaceSourceBar() {
+        LinearLayout barWrap = new(this) { Orientation = Orientation.Vertical };
+
+        LinearLayout row = HRow();
+        LinearLayout pillBtn = HRow();
+        pillBtn.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
+        pillBtn.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
+        OneUiTheme.AttachRecoil(pillBtn, 0.98f);
+
+        OneUiIconView fileNoteIcon = new(this, OneUiIconType.MusicFile, OneUiTheme.IconSliderMedia);
+        TextView fileTv = new(this) {
+            Text = string.IsNullOrEmpty(currentHeaderStatusText) ? S["SelectFilePill"] : currentHeaderStatusText,
+            TextSize = 12.5f
+        };
+        fileTv.SetIncludeFontPadding(false);
+        fileTv.SetTextColor(OneUiTheme.TextSecondary);
+        fileTv.Typeface = OneUiTheme.GetAppleFontMedium(this);
+        fileTv.SetSingleLine(true);
+        fileTv.Ellipsize = Android.Text.TextUtils.TruncateAt.Middle;
+
+        LinearLayout badge = HRow();
+        badge.Visibility = ViewStates.Gone;
+        badge.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 195), OneUiTheme.PillCornerDp);
+        badge.SetPadding(Dp(7), Dp(2), Dp(7), Dp(2));
+        TextView badgeTv = Label("", 10.5f, ColText);
+        badgeTv.SetIncludeFontPadding(false);
+        badgeTv.Typeface = OneUiTheme.GetAppleFontBold(this);
+        badge.AddView(badgeTv);
+
+        OneUiIconView chev = new(this, OneUiIconType.ChevronDown, OneUiTheme.TextSub) {
+            Visibility = ViewStates.Gone
+        };
+
+        pillBtn.AddView(fileNoteIcon, new LinearLayout.LayoutParams(Dp(15), Dp(15)) { RightMargin = Dp(8) });
+        pillBtn.AddView(fileTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        pillBtn.AddView(badge, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+        pillBtn.AddView(chev, new LinearLayout.LayoutParams(Dp(13), Dp(13)));
+        pillBtn.Click += (_, _) => {
+            if (LoadedFile == null) {
+                OpenMediaWithExplorer();
+            } else {
+                fileDetailsExpanded = !fileDetailsExpanded;
+                UpdateInlineTrackListVisibility();
+            }
+        };
+        row.AddView(pillBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+
+        LinearLayout openBtn = OneUiPillFactory.CreateIconActionPill(
+            this, OneUiIconType.Folder, S["OpenShort"],
+            () => OpenMediaWithExplorer(),
+            primary: true);
+        openBtn.SetPadding(Dp(12), Dp(9), Dp(14), Dp(9));
+        row.AddView(openBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        barWrap.AddView(row);
+
+        LinearLayout drawer = new(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        drawer.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceCard, 20f);
+        drawer.SetPadding(Dp(14), Dp(10), Dp(14), Dp(10));
+
+        TextView sumTv = Label(currentTrackSummaryText, 11.5f, OneUiTheme.TextSub);
+        drawer.AddView(sumTv);
+
+        LinearLayout trackList = new(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        trackList.SetPadding(0, Dp(8), 0, 0);
+        drawer.AddView(trackList);
+
+        barWrap.AddView(drawer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(6) });
+
+        WorkspaceSourceBar ws = new() {
+            Root = barWrap,
+            FilePillBtn = pillBtn,
+            FileText = fileTv,
+            TrackBadge = badge,
+            TrackBadgeLabel = badgeTv,
+            Chevron = chev,
+            DetailsDrawer = drawer,
+            SummaryText = sumTv,
+            InlineTrackList = trackList
+        };
+        workspaceSourceBars.Add(ws);
+        return barWrap;
+    }
+
+    void SetWorkspaceHeaderText(string text) {
+        currentHeaderStatusText = text ?? "";
+        foreach (WorkspaceSourceBar ws in workspaceSourceBars) {
+            if (ws?.FileText != null) {
+                ws.FileText.Text = currentHeaderStatusText;
+            }
+        }
+    }
+
+    void SetWorkspaceSummaryText(string text) {
+        currentTrackSummaryText = text ?? "";
+        foreach (WorkspaceSourceBar ws in workspaceSourceBars) {
+            if (ws?.SummaryText != null) {
+                ws.SummaryText.Text = currentTrackSummaryText;
+            }
+        }
+    }
+
     void RebuildInlineTrackList() {
-        if (inlineTrackList == null || trackPickerBadge == null) {
-            return;
-        }
-        inlineTrackList.RemoveAllViews();
-        if (LoadedFile == null || LoadedFile.Tracks.Count <= 1) {
-            trackPickerBadge.Visibility = ViewStates.Gone;
-            inlineTrackList.Visibility = ViewStates.Gone;
-            UpdateInlineTrackListVisibility();
-            return;
-        }
+        foreach (WorkspaceSourceBar ws in workspaceSourceBars) {
+            if (ws?.InlineTrackList == null || ws.TrackBadge == null) {
+                continue;
+            }
+            ws.InlineTrackList.RemoveAllViews();
+            if (LoadedFile == null || LoadedFile.Tracks.Count <= 1) {
+                ws.TrackBadge.Visibility = ViewStates.Gone;
+                ws.InlineTrackList.Visibility = ViewStates.Gone;
+                continue;
+            }
 
-        int selIdx = Math.Max(0, LoadedFile.Tracks.ToList().IndexOf(selectedTrack));
-        trackPickerBadge.Visibility = ViewStates.Visible;
-        trackPickerLabel.Text = $"{selIdx + 1}/{LoadedFile.Tracks.Count}";
+            int selIdx = Math.Max(0, LoadedFile.Tracks.ToList().IndexOf(selectedTrack));
+            ws.TrackBadge.Visibility = ViewStates.Visible;
+            ws.TrackBadgeLabel.Text = $"{selIdx + 1}/{LoadedFile.Tracks.Count}";
 
-        TextView hdr = Label(S["SelectTrackHeader"], 11.5f, ColMuted);
-        hdr.SetPadding(Dp(2), 0, 0, Dp(6));
-        inlineTrackList.AddView(hdr);
+            TextView hdr = Label(S["SelectTrackHeader"], 11.5f, ColMuted);
+            hdr.SetPadding(Dp(2), 0, 0, Dp(6));
+            ws.InlineTrackList.AddView(hdr);
 
-        for (int i = 0; i < LoadedFile.Tracks.Count; i++) {
-            CavernizeTrack tr = LoadedFile.Tracks[i];
-            bool isSel = tr == selectedTrack;
+            for (int i = 0; i < LoadedFile.Tracks.Count; i++) {
+                CavernizeTrack tr = LoadedFile.Tracks[i];
+                bool isSel = tr == selectedTrack;
 
-            LinearLayout row = HRow();
-            row.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
-            row.Background = isSel
-                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 72), 14f)
-                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 14f);
-            OneUiTheme.AttachRecoil(row, 0.98f);
+                LinearLayout row = HRow();
+                row.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
+                row.Background = isSel
+                    ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 72), 14f)
+                    : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 14f);
+                OneUiTheme.AttachRecoil(row, 0.98f);
 
-            View dot = new(this) {
-                Background = isSel
-                    ? OneUiTheme.CreateRoundedDrawable(this, ColAccent, 99f, ColText, 2.5f)
-                    : OneUiTheme.CreateRoundedDrawable(this, Color.Transparent, 99f, ColMuted, 1.5f)
-            };
+                View dot = new(this) {
+                    Background = isSel
+                        ? OneUiTheme.CreateRoundedDrawable(this, ColAccent, 99f, ColText, 2.5f)
+                        : OneUiTheme.CreateRoundedDrawable(this, Color.Transparent, 99f, ColMuted, 1.5f)
+                };
 
-            TextView nameTv = Label($"#{i + 1}: {tr}", 12.5f, isSel ? ColText : OneUiTheme.TextSecondary);
-            nameTv.SetIncludeFontPadding(false);
-            nameTv.SetTypeface(null, isSel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+                TextView nameTv = Label($"#{i + 1}: {tr}", 12.5f, isSel ? ColText : OneUiTheme.TextSecondary);
+                nameTv.SetIncludeFontPadding(false);
+                nameTv.SetTypeface(null, isSel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
 
-            row.AddView(dot, new LinearLayout.LayoutParams(Dp(14), Dp(14)) { RightMargin = Dp(8) });
-            row.AddView(nameTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-            row.Click += (_, _) => {
-                fileDetailsExpanded = false;
-                if (SelectedTrack != tr) {
-                    SelectedTrack = tr;
-                } else {
-                    UpdateInlineTrackListVisibility();
-                }
-            };
-            inlineTrackList.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-                BottomMargin = Dp(4)
-            });
+                row.AddView(dot, new LinearLayout.LayoutParams(Dp(14), Dp(14)) { RightMargin = Dp(8) });
+                row.AddView(nameTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+                row.Click += (_, _) => {
+                    fileDetailsExpanded = false;
+                    if (SelectedTrack != tr) {
+                        SelectedTrack = tr;
+                    } else {
+                        UpdateInlineTrackListVisibility();
+                    }
+                };
+                ws.InlineTrackList.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    BottomMargin = Dp(4)
+                });
+            }
         }
         UpdateInlineTrackListVisibility();
     }
 
     void UpdateInlineTrackListVisibility() {
-        if (fileDetailsDrawer == null || fileDetailsChevron == null) {
+        bool hasFile = LoadedFile != null;
+        bool showDrawer = fileDetailsExpanded && hasFile;
+        foreach (WorkspaceSourceBar ws in workspaceSourceBars) {
+            if (ws?.DetailsDrawer == null || ws.Chevron == null) {
+                continue;
+            }
+            ws.Chevron.Visibility = hasFile ? ViewStates.Visible : ViewStates.Gone;
+            SetExpandedWithAnimation(ws.DetailsDrawer, showDrawer);
+            if (ws.InlineTrackList != null) {
+                ws.InlineTrackList.Visibility = (showDrawer && LoadedFile.Tracks.Count > 1) ? ViewStates.Visible : ViewStates.Gone;
+            }
+            ws.Chevron.IconType = showDrawer ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown;
+        }
+    }
+
+    void OpenMediaWithExplorer(Action<string> onSelected = null, int? switchToTab = null, bool autoPlay = false) {
+        string startDir = !string.IsNullOrEmpty(LoadedFile?.Path)
+            ? Path.GetDirectoryName(LoadedFile.Path)
+            : store.LastExplorerDirectory;
+        OneUiFileExplorerDialog.Show(this, new FileExplorerOptions {
+            Title = S["ExplorerTitle"],
+            Mode = ExplorerPickMode.SingleFile,
+            InitialDirectory = startDir,
+            OnConfirm = paths => {
+                if (paths == null || paths.Count == 0) {
+                    return;
+                }
+                string path = paths[0];
+                store.LastExplorerDirectory = Path.GetDirectoryName(path) ?? "";
+                if (onSelected != null) {
+                    onSelected(path);
+                } else {
+                    OpenLocalPathWithFallbackAsync(path, switchToTab, autoPlay);
+                }
+            },
+            OnFallbackSystemPicker = () => LaunchFilePicker(ReqOpenMedia, allowMultiple: false)
+        });
+    }
+
+    void OpenMultiFilesWithExplorer(Action<IReadOnlyList<string>> onSelected) {
+        OneUiFileExplorerDialog.Show(this, new FileExplorerOptions {
+            Title = S["ExplorerTitleMultiFiles"],
+            Mode = ExplorerPickMode.MultiFile,
+            InitialDirectory = store.LastExplorerDirectory,
+            OnConfirm = paths => {
+                if (paths != null && paths.Count > 0) {
+                    store.LastExplorerDirectory = Path.GetDirectoryName(paths[0]) ?? "";
+                    onSelected?.Invoke(paths);
+                }
+            },
+            OnFallbackSystemPicker = () => LaunchFilePicker(ReqBatchMedia, allowMultiple: true)
+        });
+    }
+
+    void OpenFileWithExplorerForExtensions(string title, IEnumerable<string> extensions, Action<string> onSelected, int fallbackRequestCode, bool allowAllFiles = false) {
+        HashSet<string> allowed = extensions != null
+            ? new HashSet<string>(extensions, StringComparer.OrdinalIgnoreCase)
+            : null;
+        OneUiFileExplorerDialog.Show(this, new FileExplorerOptions {
+            Title = string.IsNullOrWhiteSpace(title) ? S["ExplorerTitle"] : title,
+            Mode = ExplorerPickMode.SingleFile,
+            InitialDirectory = store.LastExplorerDirectory,
+            AllowedExtensions = allowed,
+            AllowAllFiles = allowAllFiles,
+            OnConfirm = paths => {
+                if (paths != null && paths.Count > 0) {
+                    store.LastExplorerDirectory = Path.GetDirectoryName(paths[0]) ?? "";
+                    onSelected?.Invoke(paths[0]);
+                }
+            },
+            OnFallbackSystemPicker = () => LaunchFilePicker(fallbackRequestCode, allowMultiple: false)
+        });
+    }
+
+    void ShowTechnicalStreamDialog() {
+        if (LoadedFile == null || selectedTrack == null) {
+            ShowToast(S["ActiveSourceEmpty"]);
             return;
         }
-        bool hasFile = LoadedFile != null;
-        fileDetailsChevron.Visibility = hasFile ? ViewStates.Visible : ViewStates.Gone;
-        bool showDrawer = fileDetailsExpanded && hasFile;
-        SetExpandedWithAnimation(fileDetailsDrawer, showDrawer);
-        if (inlineTrackList != null) {
-            inlineTrackList.Visibility = (showDrawer && LoadedFile.Tracks.Count > 1) ? ViewStates.Visible : ViewStates.Gone;
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
+        TextView pathTv = Label(LoadedFile.Path ?? "", 11f, OneUiTheme.TextMuted);
+        pathTv.SetPadding(0, 0, 0, Dp(8));
+        content.AddView(pathTv);
+
+        string details = string.Join("\n", selectedTrack.Details.Select(d => $"• {d.property}: {d.value}"));
+        TextView techTv = Label($"{selectedTrack.FormatHeader}\n\n{details}", 12f, OneUiTheme.TextSecondary);
+        techTv.SetPadding(0, 0, 0, Dp(12));
+        content.AddView(techTv);
+
+        if (LoadedFile.Tracks.Count > 1) {
+            TextView hdr = Label(S["SelectTrackHeader"], 12.5f, OneUiTheme.TextPrimary);
+            hdr.Typeface = OneUiTheme.GetAppleFontBold(this);
+            hdr.SetPadding(0, Dp(4), 0, Dp(8));
+            content.AddView(hdr);
+
+            Android.App.Dialog activeDlg = null;
+            for (int i = 0; i < LoadedFile.Tracks.Count; i++) {
+                CavernizeTrack tr = LoadedFile.Tracks[i];
+                bool isSel = tr == selectedTrack;
+                LinearLayout row = HRow();
+                row.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+                row.Background = isSel
+                    ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 82), 14f)
+                    : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
+                OneUiTheme.AttachRecoil(row, 0.98f);
+                TextView nameTv = Label($"#{i + 1}: {tr}", 12.5f, isSel ? ColText : OneUiTheme.TextSecondary);
+                nameTv.Typeface = isSel ? OneUiTheme.GetAppleFontBold(this) : OneUiTheme.GetAppleFontMedium(this);
+                row.AddView(nameTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+                row.Click += (_, _) => {
+                    activeDlg?.Dismiss();
+                    if (SelectedTrack != tr) {
+                        SelectedTrack = tr;
+                    }
+                };
+                content.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    BottomMargin = Dp(6)
+                });
+            }
+            activeDlg = OneUiModalDialog.Show(
+                this,
+                S["PlayerTechInfo"],
+                customContent: content,
+                icon: OneUiIconType.Info,
+                iconBadgeColor: OneUiTheme.Tertiary,
+                positiveText: S["CloseBtn"]);
+            return;
         }
-        fileDetailsChevron.IconType = showDrawer ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown;
+
+        OneUiModalDialog.Show(
+            this,
+            S["PlayerTechInfo"],
+            customContent: content,
+            icon: OneUiIconType.Info,
+            iconBadgeColor: OneUiTheme.Tertiary,
+            positiveText: S["CloseBtn"]);
     }
 
     void SetExpandedWithAnimation(View panel, bool expanded) {
@@ -853,60 +1012,78 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 RunOnUiThread(() => TryLoadRoomFilters(path));
             });
         } else if (requestCode == ReqLocateFFmpeg && data.Data != null) {
-            Task.Run(() => {
-                string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
-                FFmpegInstallerService.EnsureExecutable(path);
-                string ver = FFmpegInstallerService.ProbeFFmpegVersion(path);
-                AppLogger.Info($"Manual FFmpeg selected: '{path}' (ver={ver})");
-                RunOnUiThread(() => {
-                    store.FFmpegLocation = path;
-                    if (!string.IsNullOrEmpty(ver)) {
-                        store.InstalledFFmpegVersion = ver;
-                    }
-                    ffmpeg.Location = path;
-                    RefreshSettingsTabButtons();
-                    RefreshFFmpegCardUi();
-                });
-            });
+            Task.Run(() => ApplyManualFFmpegPath(AndroidFileHelper.ResolveReadablePath(this, data.Data)));
         } else if (requestCode == ReqLocateTruehdd && data.Data != null) {
-            Task.Run(() => {
-                string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
-                TruehddInstallerService.EnsureExecutable(path);
-                string ver = TruehddInstallerService.ProbeTruehddVersion(path);
-                AppLogger.Info($"Manual truehdd selected: '{path}' (ver={ver})");
-                RunOnUiThread(() => {
-                    store.TruehddLocation = path;
-                    if (!string.IsNullOrEmpty(ver)) {
-                        store.InstalledTruehddVersion = ver;
-                    }
-                    Truehdd.CustomExecutablePath = path;
-                    RefreshSettingsTabButtons();
-                    RefreshTruehddCardUi();
-                });
-            });
+            Task.Run(() => ApplyManualTruehddPath(AndroidFileHelper.ResolveReadablePath(this, data.Data)));
         } else if (requestCode == ReqLoadSubtitles && data.Data != null) {
             Task.Run(() => {
                 string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
-                List<SubtitleCue> cues = SubtitleService.LoadFromFilePath(path);
-                RunOnUiThread(() => {
-                    if (uiDestroyed) return;
-                    if (cues.Count == 0) {
-                        ShowError(S["SubtitlesNoneFound"]);
-                        return;
-                    }
-                    SubtitleTrackInfo imported = new() {
-                        Id = "ext:" + path,
-                        Title = Path.GetFileName(path),
-                        ExternalFilePath = path
-                    };
-                    discoveredSubtitles.RemoveAll(s => string.Equals(s.Id, imported.Id, StringComparison.OrdinalIgnoreCase));
-                    discoveredSubtitles.Insert(0, imported);
-                    activeSubtitleTrackId = imported.Id;
-                    activeSubtitleCues = cues;
-                    musicVideoStage?.SetSubtitles(activeSubtitleCues);
-                });
+                RunOnUiThread(() => LoadExternalSubtitleFromPath(path));
             });
         }
+    }
+
+    void ApplyManualFFmpegPath(string path) {
+        if (string.IsNullOrEmpty(path)) return;
+        Task.Run(() => {
+            FFmpegInstallerService.EnsureExecutable(path);
+            string ver = FFmpegInstallerService.ProbeFFmpegVersion(path);
+            AppLogger.Info($"Manual FFmpeg selected: '{path}' (ver={ver})");
+            RunOnUiThread(() => {
+                if (uiDestroyed) return;
+                store.FFmpegLocation = path;
+                if (!string.IsNullOrEmpty(ver)) {
+                    store.InstalledFFmpegVersion = ver;
+                }
+                ffmpeg.Location = path;
+                RefreshSettingsTabButtons();
+                RefreshFFmpegCardUi();
+            });
+        });
+    }
+
+    void ApplyManualTruehddPath(string path) {
+        if (string.IsNullOrEmpty(path)) return;
+        Task.Run(() => {
+            TruehddInstallerService.EnsureExecutable(path);
+            string ver = TruehddInstallerService.ProbeTruehddVersion(path);
+            AppLogger.Info($"Manual truehdd selected: '{path}' (ver={ver})");
+            RunOnUiThread(() => {
+                if (uiDestroyed) return;
+                store.TruehddLocation = path;
+                if (!string.IsNullOrEmpty(ver)) {
+                    store.InstalledTruehddVersion = ver;
+                }
+                Truehdd.CustomExecutablePath = path;
+                RefreshSettingsTabButtons();
+                RefreshTruehddCardUi();
+            });
+        });
+    }
+
+    void LoadExternalSubtitleFromPath(string path) {
+        if (string.IsNullOrEmpty(path)) return;
+        Task.Run(() => {
+            List<SubtitleCue> cues = SubtitleService.LoadFromFilePath(path);
+            RunOnUiThread(() => {
+                if (uiDestroyed) return;
+                if (cues.Count == 0) {
+                    ShowError(S["SubtitlesNoneFound"]);
+                    return;
+                }
+                SubtitleTrackInfo imported = new() {
+                    Id = "ext:" + path,
+                    Title = Path.GetFileName(path),
+                    ExternalFilePath = path
+                };
+                discoveredSubtitles.RemoveAll(s => string.Equals(s.Id, imported.Id, StringComparison.OrdinalIgnoreCase));
+                discoveredSubtitles.Insert(0, imported);
+                activeSubtitleTrackId = imported.Id;
+                activeSubtitleCues = cues;
+                musicVideoStage?.SetSubtitles(activeSubtitleCues);
+                RefreshBottomActionBarVisuals();
+            });
+        });
     }
 
     void LoadUriAsync(Android.Net.Uri uri) {
@@ -917,13 +1094,13 @@ public partial class MainActivity : Activity, ICavernizeApp {
         AppLogger.Info($"Loading URI: {uri}");
         currentMediaUri = uri;
         SetConvertStatus(S["CopyingMedia"], -1);
-        headerFileText.Text = S["CopyingMedia"];
+        SetWorkspaceHeaderText(S["CopyingMedia"]);
         Task.Run(() => {
             try {
                 string resolved = AndroidFileHelper.ResolveReadablePath(this, uri,
                     (p, name) => RunOnUiThread(() => {
                         string msg = $"{S["CopyingMedia"]} ({name}: {p:0%})";
-                        headerFileText.Text = msg;
+                        SetWorkspaceHeaderText(msg);
                         SetConvertStatus(msg, p);
                     }));
                 AppLogger.Info($"Resolved file path: '{resolved}'");
@@ -931,19 +1108,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 MediaArtworkMetadata extractedMeta = MediaMetadataHelper.Extract(
                     this, uri, resolved, Path.GetFileName(resolved));
 
-                string newFallbackSessionDir = null;
-                AudioFile file = null;
-                try {
-                    file = new AudioFile(resolved);
-                    if (file.Tracks.Count == 0 || file.Tracks.All(t => !t.Supported)) {
-                        file.Dispose();
-                        file = null;
-                        throw new NotSupportedException("Fallback required for container/codec");
-                    }
-                } catch (Exception nativeEx) {
-                    AppLogger.Info($"Native Cavern reader fallback ({nativeEx.GetType().Name}): inspecting container/codec...");
-                    file = TryOpenWithSmartFallbacks(resolved, out newFallbackSessionDir);
-                }
+                AudioFile file = OpenAudioFileResilient(resolved, out string newFallbackSessionDir);
 
                 RunOnUiThread(() => {
                     string queueSeed = !string.IsNullOrEmpty(extractedMeta?.SourceMediaPath) && File.Exists(extractedMeta.SourceMediaPath)
@@ -964,12 +1129,63 @@ public partial class MainActivity : Activity, ICavernizeApp {
             } catch (Exception ex) {
                 AppLogger.Error("LoadUriAsync", ex);
                 RunOnUiThread(() => {
-                    headerFileText.Text = LoadedFile != null ? Path.GetFileName(LoadedFile.Path) : S["SelectFilePill"];
+                    SetWorkspaceHeaderText(LoadedFile != null ? Path.GetFileName(LoadedFile.Path) : S["SelectFilePill"]);
                     SetConvertStatus(ex.Message, 0);
                     ShowLoadFailureDialog(ex);
                 });
             }
         });
+    }
+
+    static bool HasVideoOnlyTrackViaMediaExtractor(string resolved) {
+        if (string.IsNullOrEmpty(resolved) || !File.Exists(resolved)) {
+            return false;
+        }
+        Android.Media.MediaExtractor extractor = null;
+        try {
+            extractor = new Android.Media.MediaExtractor();
+            extractor.SetDataSource(resolved);
+            bool hasVideo = false;
+            bool hasAudio = false;
+            for (int i = 0; i < extractor.TrackCount; i++) {
+                string mime = extractor.GetTrackFormat(i)?.GetString(Android.Media.MediaFormat.KeyMime) ?? "";
+                if (mime.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) {
+                    hasAudio = true;
+                } else if (mime.StartsWith("video/", StringComparison.OrdinalIgnoreCase)) {
+                    hasVideo = true;
+                }
+            }
+            return hasVideo && !hasAudio;
+        } catch {
+            return false;
+        } finally {
+            try { extractor?.Release(); } catch { }
+            try { extractor?.Dispose(); } catch { }
+        }
+    }
+
+    AudioFile OpenAudioFileResilient(string resolved, out string fallbackSessionDir) {
+        fallbackSessionDir = null;
+        string ext = Path.GetExtension(resolved);
+        if (ext.Equals(".atmos", StringComparison.OrdinalIgnoreCase)) {
+            if (!File.Exists(resolved + ".audio")) {
+                throw new InvalidDataException(S["DamfMissingAudioError"]);
+            }
+            // DAMF (.atmos + .atmos.audio) must never enter FFmpeg/MediaCodec video/audio fallbacks
+            return new AudioFile(resolved);
+        }
+
+        try {
+            AudioFile file = new(resolved);
+            if (file.Tracks.Count > 0 && file.Tracks.Any(t => t.Supported)) {
+                return file;
+            }
+            file.Dispose();
+            throw new NotSupportedException("Fallback required for container/codec");
+        } catch (Exception nativeEx) {
+            AppLogger.Info($"Native Cavern reader fallback ({nativeEx.GetType().Name}): inspecting container/codec...");
+            return TryOpenWithSmartFallbacks(resolved, out fallbackSessionDir);
+        }
     }
 
     AudioFile TryOpenWithSmartFallbacks(string resolved, out string fallbackSessionDir) {
@@ -985,7 +1201,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         ContainerProbeResult probe = null;
         if (ffmpeg.Found) {
             RunOnUiThread(() => {
-                headerFileText.Text = S["ProbingContainer"];
+                SetWorkspaceHeaderText(S["ProbingContainer"]);
                 SetConvertStatus(S["ProbingContainer"], -1);
             });
             probe = TrueHDDecoderService.ProbeContainerWithFFmpeg(ffmpeg.Location, resolved);
@@ -1000,7 +1216,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
                 if (spatialStream.IsTrueHD) {
                     RunOnUiThread(() => {
-                        headerFileText.Text = S["ExtractingTrueHD"];
+                        SetWorkspaceHeaderText(S["ExtractingTrueHD"]);
                         SetConvertStatus(S["ExtractingTrueHD"], -1);
                     });
                     string rawThd = Path.Combine(workDir, "extracted.thd");
@@ -1008,7 +1224,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                         ffmpeg.Location, resolved, spatialStream.StreamIndex, rawThd, "truehd",
                         probe.DurationSeconds,
                         (p, msg) => RunOnUiThread(() => {
-                            headerFileText.Text = msg;
+                            SetWorkspaceHeaderText(msg);
                             SetConvertStatus(msg, p);
                         }));
                     if (ok) {
@@ -1026,7 +1242,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                         ffmpeg.Location, resolved, spatialStream.StreamIndex, rawPath, fmt,
                         probe.DurationSeconds,
                         (p, msg) => RunOnUiThread(() => {
-                            headerFileText.Text = msg;
+                            SetWorkspaceHeaderText(msg);
                             SetConvertStatus(msg, p);
                         }));
                     if (ok) {
@@ -1040,9 +1256,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
         }
 
+        if ((probe != null && probe.AudioStreams.Count == 0 && guessedContainer != Container.NotContainer) ||
+            HasVideoOnlyTrackViaMediaExtractor(resolved)) {
+            throw new InvalidOperationException(S["VideoNoAudioTrack"]);
+        }
+
         // Standard Android MediaCodec fallback (AAC, MP3, FLAC, OGG, Opus, etc.)
         RunOnUiThread(() => {
-            headerFileText.Text = S["DecodingFallback"];
+            SetWorkspaceHeaderText(S["DecodingFallback"]);
             SetConvertStatus(S["DecodingFallback"], -1);
         });
         string wavCacheDir = Path.Combine(CacheDir.AbsolutePath, "decoded_fallback");
@@ -1050,7 +1271,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             string decodedWav = AndroidMediaFallbackDecoder.DecodeToWav(resolved, wavCacheDir,
                 p => RunOnUiThread(() => {
                     string msg = $"{S["DecodingFallback"]} ({p:0%})";
-                    headerFileText.Text = msg;
+                    SetWorkspaceHeaderText(msg);
                     SetConvertStatus(msg, p);
                 }));
             return new AudioFile(decodedWav);
@@ -1065,14 +1286,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 fallbackSessionDir = workDir;
                 string outWav = Path.Combine(workDir, "decoded.wav");
                 RunOnUiThread(() => {
-                    headerFileText.Text = "FFmpeg: decodificando áudio...";
+                    SetWorkspaceHeaderText("FFmpeg: decodificando áudio...");
                     SetConvertStatus("FFmpeg: decodificando áudio...", -1);
                 });
                 bool wavOk = TrueHDDecoderService.ExtractAudioStreamWithFFmpeg(
                     ffmpeg.Location, resolved, firstAudio.StreamIndex, outWav, "wav",
                     probe.DurationSeconds,
                     (p, msg) => RunOnUiThread(() => {
-                        headerFileText.Text = msg;
+                        SetWorkspaceHeaderText(msg);
                         SetConvertStatus(msg, p);
                     }));
                 if (wavOk) {
@@ -1116,17 +1337,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         Reset();
         ffmpeg.CheckFFmpeg();
         MediaArtworkMetadata meta = MediaMetadataHelper.Extract(this, null, path, Path.GetFileName(path));
-        AudioFile file;
-        string fallbackDir = null;
-        try {
-            file = new AudioFile(path);
-            if (file.Tracks.Count == 0 || file.Tracks.All(t => !t.Supported)) {
-                file.Dispose();
-                throw new NotSupportedException("Fallback required for container/codec");
-            }
-        } catch {
-            file = TryOpenWithSmartFallbacks(path, out fallbackDir);
-        }
+        AudioFile file = OpenAudioFileResilient(path, out string fallbackDir);
         if (!string.IsNullOrEmpty(fallbackDir)) {
             if (suppressAutoTrueHDPrepare) {
                 protectedQueuePaths.Add(Path.GetFullPath(fallbackDir));
@@ -1137,27 +1348,18 @@ public partial class MainActivity : Activity, ICavernizeApp {
         OpenContent(file, meta);
     }
 
-    void OpenLocalPathWithFallbackAsync(string path, int? switchToTab = null, bool autoPlay = false) {
-        if (isOperationRunning || isPreparingTrueHD) {
+    void OpenLocalPathWithFallbackAsync(string path, int? switchToTab = null, bool autoPlay = false, bool bypassBusyGuard = false) {
+        if (!bypassBusyGuard && (isOperationRunning || isPreparingTrueHD)) {
             ShowError(S["OpRunning"]);
             return;
         }
         currentMediaUri = null;
         SetConvertStatus(S["CopyingMedia"], -1);
+        SetWorkspaceHeaderText(Path.GetFileName(path));
         Task.Run(() => {
             try {
                 MediaArtworkMetadata meta = MediaMetadataHelper.Extract(this, null, path, Path.GetFileName(path));
-                string newFallbackSessionDir = null;
-                AudioFile file;
-                try {
-                    file = new AudioFile(path);
-                    if (file.Tracks.Count == 0 || file.Tracks.All(t => !t.Supported)) {
-                        file.Dispose();
-                        throw new NotSupportedException("Fallback required for container/codec");
-                    }
-                } catch {
-                    file = TryOpenWithSmartFallbacks(path, out newFallbackSessionDir);
-                }
+                AudioFile file = OpenAudioFileResilient(path, out string newFallbackSessionDir);
                 RunOnUiThread(() => {
                     EnsureActiveQueueForCurrentFile(path);
                     string oldFallback = activeFallbackSessionDir;
@@ -1176,14 +1378,35 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     }
                 });
             } catch (Exception ex) {
+                pendingSeekAfterLoadSeconds = -1;
                 AppLogger.Error("OpenLocalPathWithFallbackAsync", ex);
                 RunOnUiThread(() => {
                     pendingAutoPlayAfterLoad = false;
+                    SetWorkspaceHeaderText(LoadedFile != null ? Path.GetFileName(LoadedFile.Path) : S["SelectFilePill"]);
                     SetConvertStatus(ex.Message, 0);
                     ShowLoadFailureDialog(ex);
                 });
             }
         });
+    }
+
+    void SwitchActiveTrackVariant(LibraryTrackItem targetVariant, IReadOnlyList<LibraryTrackItem> allVariants) {
+        if (targetVariant == null || string.IsNullOrEmpty(targetVariant.FilePath)) {
+            return;
+        }
+        if (LoadedFile != null && string.Equals(LoadedFile.Path, targetVariant.FilePath, StringComparison.OrdinalIgnoreCase)) {
+            return;
+        }
+        bool wasPlaying = playerEngine?.IsPlaying ?? false;
+        double resumeSec = (playerEngine != null && playerEngine.TotalSeconds > 0) ? playerEngine.CurrentSeconds : 0;
+        pendingSeekAfterLoadSeconds = resumeSec > 0.25 ? resumeSec : -1;
+        preferredFormatVariantKey = MediaLibraryService.GetDistinctVariantLabel(targetVariant, allVariants);
+
+        if (activeLibraryQueueIndex >= 0 && activeLibraryQueueIndex < activeLibraryQueue.Count) {
+            activeLibraryQueue[activeLibraryQueueIndex] = targetVariant;
+        }
+        ShowToast(string.Format(S["FormatSwitchedToast"], preferredFormatVariantKey));
+        OpenLocalPathWithFallbackAsync(targetVariant.FilePath, switchToTab: null, autoPlay: wasPlaying, bypassBusyGuard: true);
     }
 
     public void OpenContent(AudioFile file) => OpenContent(file, null);
@@ -1196,9 +1419,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
             : null);
 
         LoadedFile = file;
-        headerFileText.Text = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+        SetWorkspaceHeaderText(!string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
             ? currentMediaMeta.Title
-            : Path.GetFileName(file.Path);
+            : Path.GetFileName(file.Path));
         AppLogger.Info($"Opened file: '{file.Path}', tracks={file.Tracks.Count}, embeddedArt={currentMediaMeta?.HasEmbeddedArtwork}");
 
         if (file.Tracks.Count > 0) {
@@ -1318,12 +1541,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
         selectedTrack = null;
         trackSourceItems = [];
         fileDetailsExpanded = false;
-        if (headerFileText != null) {
-            headerFileText.Text = S["SelectFilePill"];
-        }
-        if (trackSummaryText != null) {
-            trackSummaryText.Text = "";
-        }
+        SetWorkspaceHeaderText(S["SelectFilePill"]);
+        SetWorkspaceSummaryText("");
         mediaNotification?.CancelNotification();
         RefreshMusicPlayerUi();
         _ = oldMeta;
@@ -1341,21 +1560,42 @@ public partial class MainActivity : Activity, ICavernizeApp {
             return;
         }
 
-        activeLibraryQueue.Clear();
-        activeLibraryQueueIndex = -1;
-
         MediaLibrarySnapshot snap = librarySnapshot ?? MediaLibraryService.CachedSnapshot ?? MediaLibraryService.TryLoadCachedSnapshot(this);
         if (snap != null) {
             LibraryTrackItem match = snap.Tracks.FirstOrDefault(t => string.Equals(t.FilePath, targetPath, StringComparison.OrdinalIgnoreCase));
             if (match != null) {
+                // Check if current activeLibraryQueue already contains another format variant of this exact song
+                if (activeLibraryQueue.Count > 0) {
+                    List<LibraryTrackItem> matchVariants = MediaLibraryService.FindVariantsForTrack(
+                        snap, targetPath, match.Title, match.EffectiveAlbumArtist, match.Album);
+                    for (int i = 0; i < activeLibraryQueue.Count; i++) {
+                        if (matchVariants.Any(v => string.Equals(v.FilePath, activeLibraryQueue[i].FilePath, StringComparison.OrdinalIgnoreCase))) {
+                            activeLibraryQueue[i] = match;
+                            activeLibraryQueueIndex = i;
+                            return;
+                        }
+                    }
+                }
+
+                activeLibraryQueue.Clear();
+                activeLibraryQueueIndex = -1;
+
                 LibraryAlbumGroup alb = snap.Albums.FirstOrDefault(a => a.Tracks.Contains(match));
                 List<LibraryTrackItem> group = alb != null && alb.Tracks.Count > 1
                     ? alb.Tracks
                     : snap.Tracks.Where(t => string.Equals(t.FolderPath, match.FolderPath, StringComparison.OrdinalIgnoreCase)).ToList();
 
-                List<LibraryTrackItem> filteredGroup = group.Where(t => MediaLibraryService.PassesFilter(t, store.LibraryFilterMode)).ToList();
+                List<string> selectedFolders = store.GetLibraryFilterFolders();
+                List<LibraryTrackItem> filteredGroup = group
+                    .Where(t => MediaLibraryService.PassesAllFilters(
+                        t, store.LibraryFilterMode, store.LibraryHideNonMusic, store.LibraryFolderFilterMode, selectedFolders))
+                    .ToList();
                 List<LibraryTrackItem> useList = filteredGroup.Contains(match) ? filteredGroup : group;
-                activeLibraryQueue.AddRange(useList);
+                List<LibraryMergedTrack> merged = MediaLibraryService.MergeAlbumTrackVariants(useList);
+                foreach (LibraryMergedTrack m in merged) {
+                    LibraryTrackItem pick = m.Variants.Contains(match) ? match : m.Primary;
+                    activeLibraryQueue.Add(pick);
+                }
                 activeLibraryQueueIndex = activeLibraryQueue.IndexOf(match);
                 if (activeLibraryQueue.Count > 0 && activeLibraryQueueIndex >= 0) {
                     return;
@@ -1364,19 +1604,17 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
         }
 
+        activeLibraryQueue.Clear();
+        activeLibraryQueueIndex = -1;
+
         // Fallback: enumerate sibling media files in the same folder outside app cache
         try {
             string dir = Path.GetDirectoryName(targetPath);
             string cacheRoot = CacheDir?.AbsolutePath ?? "";
             if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir) &&
                 (string.IsNullOrEmpty(cacheRoot) || !dir.StartsWith(cacheRoot, StringComparison.OrdinalIgnoreCase))) {
-                HashSet<string> exts = new(StringComparer.OrdinalIgnoreCase) {
-                    ".flac", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".opus",
-                    ".ac3", ".eac3", ".ec3", ".thd", ".mlp", ".atmos", ".caf", ".laf",
-                    ".mka", ".mkv", ".mp4", ".m4v", ".mov"
-                };
                 List<string> siblings = Directory.EnumerateFiles(dir)
-                    .Where(f => exts.Contains(Path.GetExtension(f)))
+                    .Where(f => MediaLibraryService.IsSupportedMediaExtension(Path.GetExtension(f)))
                     .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                     .ToList();
                 foreach (string s in siblings) {
@@ -1400,9 +1638,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         ClearDecodedTrueHDState();
         if (selectedTrack == null) {
             fileDetailsExpanded = false;
-            if (trackSummaryText != null) {
-                trackSummaryText.Text = "";
-            }
+            SetWorkspaceSummaryText("");
             trackSourceItems = [];
             mediaNotification?.CancelNotification();
             RefreshPlayerSourcesList();
@@ -1440,9 +1676,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         AppLogger.Info($"Active track ready: {activeTrack.FormatHeader}");
         string details = string.Join(" | ", activeTrack.Details.Select(d => $"{d.property}: {d.value}"));
-        if (trackSummaryText != null) {
-            trackSummaryText.Text = $"{activeTrack.FormatHeader}\n{details}";
-        }
+        SetWorkspaceSummaryText($"{activeTrack.FormatHeader}\n{details}");
         RebuildInlineTrackList();
 
         if (activeTrack.Supported && activeTrack.Codec != Codec.TrueHD) {
@@ -1456,6 +1690,16 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
         } else {
             trackSourceItems = TrackSourceItem.BuildFromTrack(activeTrack);
+        }
+
+        double initialSeekSec = 0;
+        if (pendingSeekAfterLoadSeconds >= 0 && activeTrack.Supported && activeTrack.Codec != Codec.TrueHD && playerEngine.TotalSeconds > 0) {
+            initialSeekSec = Math.Clamp(pendingSeekAfterLoadSeconds, 0, Math.Max(0, playerEngine.TotalSeconds - 0.1));
+            pendingSeekAfterLoadSeconds = -1;
+            playerEngine.Seek(initialSeekSec);
+            musicVideoStage?.SeekTo(initialSeekSec);
+        } else {
+            pendingSeekAfterLoadSeconds = -1;
         }
 
         string metaTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
@@ -1480,7 +1724,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshExtractorChecklist();
         RefreshConverterTrackInfo();
         RefreshContainerOptions();
-        SyncPlaybackUi(false, 0, playerEngine.TotalSeconds);
+        SyncPlaybackUi(false, initialSeekSec, playerEngine.TotalSeconds);
         UpdateRoomCanvas();
     }
 

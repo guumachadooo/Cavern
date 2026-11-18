@@ -30,7 +30,12 @@ public partial class MainActivity {
 
     LinearLayout BuildExtractorTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
+        page.SetPadding(Dp(14), Dp(6), Dp(14), Dp(116));
+
+        // 0. Active File Source Bar (Clean workspace context & track selector)
+        page.AddView(CreateWorkspaceSourceBar(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
 
         LinearLayout card = Card(S["ExtractTitle"], OneUiIconType.Scissors, OneUiTheme.IconStemsCalib);
         TextView desc = Label(S["ExtractDesc"], 12f, OneUiTheme.TextSub);

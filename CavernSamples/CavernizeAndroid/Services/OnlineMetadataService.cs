@@ -73,6 +73,9 @@ public static partial class OnlineMetadataService {
     [GeneratedRegex(@"[\[\(].*?[\]\)]", RegexOptions.Compiled)]
     private static partial Regex BracketNoiseRegex();
 
+    [GeneratedRegex(@"\[[^\]]*(?:bit|khz|hz|flac|aac|eac3|e-ac-3|ac3|atmos|joc|truehd|qobuz|tidal|web-dl|webrip|explicit|clean|mvsep|spatial|binaural|kbps|kbits|\d+ch)[^\]]*\]", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex TechnicalBracketRegex();
+
     [GeneratedRegex(@"^\d{1,3}\s*[-._]\s*", RegexOptions.Compiled)]
     private static partial Regex LeadingTrackNumRegex();
 
@@ -82,7 +85,7 @@ public static partial class OnlineMetadataService {
     static HttpClient CreateHttpClient() {
         HttpClient client = new() { Timeout = TimeSpan.FromSeconds(14) };
         client.DefaultRequestHeaders.UserAgent.Clear();
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", "2.8"));
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", "2.9"));
         client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("(https://github.com/guumachadooo/Cavern)"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return client;
@@ -109,6 +112,18 @@ public static partial class OnlineMetadataService {
         return s;
     }
 
+    /// <summary>
+    /// Cleans technical rip/codec tags while PRESERVING edition qualifiers like (Deluxe),
+    /// (The Til Dawn Edition), (Taylor's Version), (3am Edition), (Expanded Edition), etc.
+    /// </summary>
+    public static string CleanAlbumForSearch(string album) {
+        if (string.IsNullOrWhiteSpace(album)) return "";
+        string s = album.Replace('_', ' ');
+        s = TechnicalBracketRegex().Replace(s, " ");
+        s = MultiSpaceRegex().Replace(s, " ").Trim();
+        return s;
+    }
+
     static bool IsGenericAlbumName(string album) {
         if (string.IsNullOrWhiteSpace(album)) return true;
         return album.Equals("Download", StringComparison.OrdinalIgnoreCase)
@@ -121,6 +136,15 @@ public static partial class OnlineMetadataService {
 
     static string NormalizeCompare(string raw) {
         string clean = CleanSearchTerm(raw);
+        return NormalizeAlnumSpaces(clean);
+    }
+
+    static string NormalizeCompareFull(string raw) {
+        string clean = CleanAlbumForSearch(raw);
+        return NormalizeAlnumSpaces(clean);
+    }
+
+    static string NormalizeAlnumSpaces(string clean) {
         if (string.IsNullOrEmpty(clean)) return "";
         string decomposed = clean.Normalize(NormalizationForm.FormD);
         StringBuilder sb = new(decomposed.Length);
@@ -155,13 +179,18 @@ public static partial class OnlineMetadataService {
         if (!string.IsNullOrEmpty(ovr)) return ovr;
 
         string dir = GetCacheSubdir(ctx, "covers");
-        if (!string.IsNullOrWhiteSpace(title)) {
+        string cleanAlb = IsGenericAlbumName(album) ? "" : album.Trim();
+        if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrEmpty(cleanAlb)) {
+            string pEd = IOPath.Combine(dir, HashKey($"trk|{artist}|{cleanAlb}|{title}") + ".jpg");
+            if (IOFile.Exists(pEd)) return pEd;
+        }
+        if (!string.IsNullOrWhiteSpace(artist) && !string.IsNullOrEmpty(cleanAlb)) {
+            string pAlb = IOPath.Combine(dir, HashKey($"alb|{artist}|{cleanAlb}") + ".jpg");
+            if (IOFile.Exists(pAlb)) return pAlb;
+        }
+        if (!string.IsNullOrWhiteSpace(title) && string.IsNullOrEmpty(cleanAlb)) {
             string pTrk = IOPath.Combine(dir, HashKey($"trk|{artist}|{title}") + ".jpg");
             if (IOFile.Exists(pTrk)) return pTrk;
-        }
-        if (!string.IsNullOrWhiteSpace(artist) && !IsGenericAlbumName(album)) {
-            string pAlb = IOPath.Combine(dir, HashKey($"alb|{artist}|{album}") + ".jpg");
-            if (IOFile.Exists(pAlb)) return pAlb;
         }
         return null;
     }
@@ -190,8 +219,9 @@ public static partial class OnlineMetadataService {
         List<OnlineCoverCandidate> raw = [];
         string cleanQuery = CleanSearchTerm(query);
         string cleanArtist = CleanSearchTerm(artist);
-        string cleanAlbum = IsGenericAlbumName(album) ? "" : CleanSearchTerm(album);
-        if (string.IsNullOrWhiteSpace(cleanQuery) && string.IsNullOrWhiteSpace(cleanAlbum)) {
+        string fullAlbum = IsGenericAlbumName(album) ? "" : CleanAlbumForSearch(album);
+        string baseAlbum = IsGenericAlbumName(album) ? "" : CleanSearchTerm(album);
+        if (string.IsNullOrWhiteSpace(cleanQuery) && string.IsNullOrWhiteSpace(fullAlbum)) {
             return raw;
         }
 
@@ -199,20 +229,35 @@ public static partial class OnlineMetadataService {
             await TrySearchTmdbAsync(cleanQuery, raw, ct).ConfigureAwait(false);
         }
 
-        string searchTerm = string.IsNullOrWhiteSpace(cleanArtist)
-            ? cleanQuery
-            : $"{cleanArtist} {(string.IsNullOrWhiteSpace(cleanQuery) ? cleanAlbum : cleanQuery)}";
+        if (!isVideo && !string.IsNullOrWhiteSpace(fullAlbum)) {
+            // Search exact album (preserving Deluxe / Edition / Anthology qualifiers!) first
+            string albumQuery = string.IsNullOrWhiteSpace(cleanArtist) ? fullAlbum : $"{cleanArtist} {fullAlbum}";
+            await TrySearchItunesAsync(albumQuery, "album", 8, raw, ct).ConfigureAwait(false);
+        }
 
-        await TrySearchItunesAsync(searchTerm, raw, ct).ConfigureAwait(false);
+        string songQuery = !string.IsNullOrWhiteSpace(fullAlbum)
+            ? $"{cleanArtist} {cleanQuery} {fullAlbum}".Trim()
+            : (string.IsNullOrWhiteSpace(cleanArtist) ? cleanQuery : $"{cleanArtist} {cleanQuery}");
+        await TrySearchItunesAsync(songQuery, "song", 8, raw, ct).ConfigureAwait(false);
 
-        if (!string.IsNullOrWhiteSpace(cleanArtist) && !string.IsNullOrWhiteSpace(cleanAlbum)) {
-            await TrySearchAudioDbAsync(cleanArtist, cleanAlbum, raw, ct).ConfigureAwait(false);
-            await TrySearchMusicBrainzAsync(cleanArtist, cleanAlbum, raw, ct).ConfigureAwait(false);
+        // If including the full edition name produced too few iTunes results, query artist+song as secondary fallback
+        if (raw.Count < 2 && !string.IsNullOrWhiteSpace(cleanQuery)) {
+            string fbTerm = string.IsNullOrWhiteSpace(cleanArtist) ? cleanQuery : $"{cleanArtist} {cleanQuery}";
+            if (!string.Equals(fbTerm, songQuery, StringComparison.OrdinalIgnoreCase)) {
+                await TrySearchItunesAsync(fbTerm, "song", 6, raw, ct).ConfigureAwait(false);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(cleanArtist) && !string.IsNullOrWhiteSpace(fullAlbum)) {
+            await TrySearchAudioDbAsync(cleanArtist, fullAlbum, raw, ct).ConfigureAwait(false);
+            await TrySearchMusicBrainzAsync(cleanArtist, fullAlbum, raw, ct).ConfigureAwait(false);
         }
 
         string normTitle = NormalizeCompare(cleanQuery);
         string normArtist = NormalizeCompare(cleanArtist);
-        string normAlbum = NormalizeCompare(cleanAlbum);
+        string normFullAlbum = NormalizeCompareFull(fullAlbum);
+        string normBaseAlbum = NormalizeCompare(baseAlbum);
+        bool hasEditionQualifier = !string.IsNullOrEmpty(normFullAlbum) && normFullAlbum != normBaseAlbum;
 
         List<OnlineCoverCandidate> ranked = raw
             .GroupBy(r => r.ImageUrl, StringComparer.OrdinalIgnoreCase)
@@ -226,19 +271,27 @@ public static partial class OnlineMetadataService {
                     _ => 4
                 };
                 string cTitle = NormalizeCompare(c.Title);
-                string cAlbum = NormalizeCompare(c.Album);
+                string cFullAlbum = NormalizeCompareFull(c.Album);
+                string cBaseAlbum = NormalizeCompare(c.Album);
+
                 bool titleMatch = !string.IsNullOrEmpty(normTitle) && cTitle == normTitle;
-                bool albumMatch = !string.IsNullOrEmpty(normAlbum) && (cAlbum == normAlbum || cTitle == normAlbum);
+                bool fullAlbumMatch = !string.IsNullOrEmpty(normFullAlbum) &&
+                    (cFullAlbum == normFullAlbum || NormalizeCompareFull(c.Title) == normFullAlbum);
+                bool baseAlbumMatch = !string.IsNullOrEmpty(normBaseAlbum) &&
+                    (cBaseAlbum == normBaseAlbum || cTitle == normBaseAlbum);
+                bool editionMismatch = hasEditionQualifier && !fullAlbumMatch && baseAlbumMatch;
                 bool artistMatch = !string.IsNullOrEmpty(normArtist) && ArtistExactMatch(c.Artist, cleanArtist);
 
-                int score = (titleMatch ? 500 : (!string.IsNullOrEmpty(normTitle) && cTitle.Contains(normTitle) ? 200 : 0))
-                    + (artistMatch ? 400 : 0)
-                    + (albumMatch ? 120 : 0)
+                int score = (titleMatch ? 450 : (!string.IsNullOrEmpty(normTitle) && cTitle.Contains(normTitle) ? 180 : 0))
+                    + (artistMatch ? 380 : 0)
+                    + (fullAlbumMatch ? 650 : (baseAlbumMatch ? (editionMismatch ? -220 : 180) : 0))
                     - (rank - 1) * 35;
 
                 bool exact = isVideo
                     ? titleMatch
-                    : artistMatch && (titleMatch || albumMatch);
+                    : (!string.IsNullOrEmpty(normFullAlbum)
+                        ? artistMatch && fullAlbumMatch && (titleMatch || string.IsNullOrEmpty(cTitle) || cFullAlbum == normFullAlbum)
+                        : artistMatch && (titleMatch || baseAlbumMatch));
 
                 return new OnlineCoverCandidate {
                     Title = c.Title,
@@ -252,17 +305,17 @@ public static partial class OnlineMetadataService {
                 };
             })
             .OrderByDescending(c => c.IsExactMatch)
-            .ThenBy(c => c.SourceRank)
             .ThenByDescending(c => c.MatchScore)
-            .Take(10)
+            .ThenBy(c => c.SourceRank)
+            .Take(12)
             .ToList();
 
         return ranked;
     }
 
-    static async Task TrySearchItunesAsync(string term, List<OnlineCoverCandidate> results, CancellationToken ct) {
+    static async Task TrySearchItunesAsync(string term, string entity, int limit, List<OnlineCoverCandidate> results, CancellationToken ct) {
         try {
-            string url = $"https://itunes.apple.com/search?term={Uri.EscapeDataString(term)}&media=music&entity=song&limit=6";
+            string url = $"https://itunes.apple.com/search?term={Uri.EscapeDataString(term)}&media=music&entity={entity}&limit={limit}";
             using HttpResponseMessage resp = await http.GetAsync(url, ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode) return;
             string json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -272,10 +325,12 @@ public static partial class OnlineMetadataService {
                 string art100 = item.TryGetProperty("artworkUrl100", out JsonElement aEl) ? (aEl.GetString() ?? "") : "";
                 if (string.IsNullOrEmpty(art100)) continue;
                 string hiRes = art100.Replace("100x100bb", "1000x1000bb");
+                string trackName = item.TryGetProperty("trackName", out JsonElement tEl) ? (tEl.GetString() ?? "") : "";
+                string albumName = item.TryGetProperty("collectionName", out JsonElement alEl) ? (alEl.GetString() ?? "") : "";
                 results.Add(new OnlineCoverCandidate {
-                    Title = item.TryGetProperty("trackName", out JsonElement tEl) ? (tEl.GetString() ?? "") : "",
+                    Title = !string.IsNullOrWhiteSpace(trackName) ? trackName : albumName,
                     Artist = item.TryGetProperty("artistName", out JsonElement arEl) ? (arEl.GetString() ?? "") : "",
-                    Album = item.TryGetProperty("collectionName", out JsonElement alEl) ? (alEl.GetString() ?? "") : "",
+                    Album = albumName,
                     Source = "iTunes HD",
                     ImageUrl = hiRes
                 });
@@ -398,10 +453,13 @@ public static partial class OnlineMetadataService {
         if (bmp == null) return (null, null);
 
         string dir = GetCacheSubdir(ctx, "covers");
-        string savedPath = IOPath.Combine(dir, HashKey($"trk|{artist}|{title}") + ".jpg");
+        string cleanAlb = IsGenericAlbumName(album) ? "" : album.Trim();
+        string savedPath = !string.IsNullOrEmpty(cleanAlb)
+            ? IOPath.Combine(dir, HashKey($"trk|{artist}|{cleanAlb}|{title}") + ".jpg")
+            : IOPath.Combine(dir, HashKey($"trk|{artist}|{title}") + ".jpg");
         IOFile.WriteAllBytes(savedPath, bytes);
-        if (!string.IsNullOrWhiteSpace(artist) && !IsGenericAlbumName(album)) {
-            string albPath = IOPath.Combine(dir, HashKey($"alb|{artist}|{album}") + ".jpg");
+        if (!string.IsNullOrWhiteSpace(artist) && !string.IsNullOrEmpty(cleanAlb)) {
+            string albPath = IOPath.Combine(dir, HashKey($"alb|{artist}|{cleanAlb}") + ".jpg");
             IOFile.WriteAllBytes(albPath, bytes);
         }
         if (!string.IsNullOrWhiteSpace(filePathOverride)) {
@@ -423,18 +481,30 @@ public static partial class OnlineMetadataService {
         List<OnlineLyricsCandidate> list = [];
         string cleanTitle = CleanSearchTerm(title);
         string cleanArtist = CleanSearchTerm(artist);
+        string fullAlbum = IsGenericAlbumName(album) ? "" : CleanAlbumForSearch(album);
         if (string.IsNullOrWhiteSpace(cleanTitle)) return list;
 
-        // Source 1 & 3: LRCLIB (exact endpoint + broad search)
+        // Source 1 & 3: LRCLIB (exact endpoint with album_name + broad search)
         try {
             if (!string.IsNullOrWhiteSpace(cleanArtist)) {
-                string exactUrl = $"https://lrclib.net/api/get?track_name={Uri.EscapeDataString(cleanTitle)}&artist_name={Uri.EscapeDataString(cleanArtist)}";
+                string exactUrl = !string.IsNullOrWhiteSpace(fullAlbum)
+                    ? $"https://lrclib.net/api/get?track_name={Uri.EscapeDataString(cleanTitle)}&artist_name={Uri.EscapeDataString(cleanArtist)}&album_name={Uri.EscapeDataString(fullAlbum)}"
+                    : $"https://lrclib.net/api/get?track_name={Uri.EscapeDataString(cleanTitle)}&artist_name={Uri.EscapeDataString(cleanArtist)}";
                 using HttpResponseMessage resp = await http.GetAsync(exactUrl, ct).ConfigureAwait(false);
                 if (resp.IsSuccessStatusCode) {
                     string json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
                     using JsonDocument doc = JsonDocument.Parse(json);
                     OnlineLyricsCandidate cand = ParseLrcLibItem(doc.RootElement);
                     if (cand != null) list.Add(cand);
+                } else if (!string.IsNullOrWhiteSpace(fullAlbum)) {
+                    string fbUrl = $"https://lrclib.net/api/get?track_name={Uri.EscapeDataString(cleanTitle)}&artist_name={Uri.EscapeDataString(cleanArtist)}";
+                    using HttpResponseMessage fbResp = await http.GetAsync(fbUrl, ct).ConfigureAwait(false);
+                    if (fbResp.IsSuccessStatusCode) {
+                        string json = await fbResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                        using JsonDocument doc = JsonDocument.Parse(json);
+                        OnlineLyricsCandidate cand = ParseLrcLibItem(doc.RootElement);
+                        if (cand != null) list.Add(cand);
+                    }
                 }
             }
         } catch {
@@ -472,11 +542,13 @@ public static partial class OnlineMetadataService {
 
         string normTitle = NormalizeCompare(cleanTitle);
         string normArtist = NormalizeCompare(cleanArtist);
+        string normAlbum = NormalizeCompareFull(fullAlbum);
 
         return list
             .Select(c => {
                 bool titleMatch = !string.IsNullOrEmpty(normTitle) && NormalizeCompare(c.TrackName) == normTitle;
                 bool artistMatch = !string.IsNullOrEmpty(normArtist) && ArtistExactMatch(c.ArtistName, cleanArtist);
+                bool albumMatch = !string.IsNullOrEmpty(normAlbum) && NormalizeCompareFull(c.AlbumName) == normAlbum;
                 bool durOk = expectedDurationSec <= 1 || c.DurationSec <= 1 || Math.Abs(c.DurationSec - expectedDurationSec) <= 15.0;
                 bool durTight = expectedDurationSec > 1 && c.DurationSec > 1 && Math.Abs(c.DurationSec - expectedDurationSec) <= 4.5;
 
@@ -491,6 +563,7 @@ public static partial class OnlineMetadataService {
 
                 int score = (titleMatch ? 500 : (NormalizeCompare(c.TrackName).Contains(normTitle) ? 180 : 0))
                     + (artistMatch ? 400 : 0)
+                    + (albumMatch ? 120 : 0)
                     + (c.IsSynced ? 220 : 0)
                     + (durTight ? 150 : (durOk ? 30 : -200))
                     - (rank - 1) * 40;

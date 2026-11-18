@@ -254,6 +254,45 @@ public sealed class AppSettingsStore {
         set => Edit().PutInt("libraryFilterMode", value).Apply();
     }
 
+    public bool LibraryHideNonMusic {
+        get => prefs.GetBoolean("libraryHideNonMusic", true);
+        set => Edit().PutBoolean("libraryHideNonMusic", value).Apply();
+    }
+
+    public int LibraryFolderFilterMode {
+        get => prefs.GetInt("libraryFolderFilterMode", 0); // 0 = All, 1 = AllExcept, 2 = OnlySelected
+        set => Edit().PutInt("libraryFolderFilterMode", value).Apply();
+    }
+
+    public string LibraryFilterFoldersJson {
+        get => prefs.GetString("libraryFilterFolders", "[]");
+        set => Edit().PutString("libraryFilterFolders", value ?? "[]").Apply();
+    }
+
+    public List<string> GetLibraryFilterFolders() {
+        try {
+            List<string> list = System.Text.Json.JsonSerializer.Deserialize<List<string>>(LibraryFilterFoldersJson);
+            return list?.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToList() ?? [];
+        } catch {
+            return [];
+        }
+    }
+
+    public void SetLibraryFilterFolders(IEnumerable<string> folders) {
+        List<string> clean = folders?
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.TrimEnd('/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .ToList() ?? [];
+        LibraryFilterFoldersJson = System.Text.Json.JsonSerializer.Serialize(clean);
+    }
+
+    public string LastExplorerDirectory {
+        get => prefs.GetString("lastExplorerDir", "");
+        set => Edit().PutString("lastExplorerDir", value ?? "").Apply();
+    }
+
     public AppSettingsStore(Context context) {
         prefs = context.GetSharedPreferences(PrefsName, FileCreationMode.Private);
         if (!string.IsNullOrEmpty(LanguageCode)) {

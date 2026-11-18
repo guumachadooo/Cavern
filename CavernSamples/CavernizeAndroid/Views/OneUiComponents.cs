@@ -165,8 +165,12 @@ public sealed class OneUiInlineSelector : LinearLayout {
 
 /// <summary>
 /// Full One UI 9 frosted-glass modal dialog replacing all unstyled Android AlertDialogs.
+/// Softly blurs the live background window on API 31+ and uses smoked frosted surface opacity
+/// so foreground controls stay crisp and never visually clash with content behind the dialog.
 /// </summary>
 public static class OneUiModalDialog {
+    static int activeBlurDialogDepth;
+
     public static Dialog Show(
         Context ctx,
         string title,
@@ -187,8 +191,8 @@ public static class OneUiModalDialog {
         int dp(float v) => OneUiTheme.Dp(ctx, v);
 
         LinearLayout card = new(ctx) { Orientation = Orientation.Vertical };
-        card.Background = OneUiTheme.CreateGlassCardDrawable(ctx, OneUiTheme.SurfaceElevated, 28f);
-        card.Elevation = dp(18);
+        card.Background = OneUiTheme.CreateGlassCardDrawable(ctx, OneUiTheme.SurfaceModal, 28f);
+        card.Elevation = dp(20);
         card.SetPadding(dp(20), dp(18), dp(20), dp(16));
 
         // Header with crisp One UI 9 vector badge
@@ -229,7 +233,7 @@ public static class OneUiModalDialog {
         }
 
         scroll.AddView(bodyWrap);
-        int maxBodyH = (int)((ctx.Resources?.DisplayMetrics?.HeightPixels ?? 1600) * 0.56f);
+        int maxBodyH = (int)((ctx.Resources?.DisplayMetrics?.HeightPixels ?? 1600) * 0.62f);
         card.AddView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = dp(14)
         });
@@ -275,9 +279,27 @@ public static class OneUiModalDialog {
         dialog.SetContentView(frame);
         if (dialog.Window != null) {
             dialog.Window.SetBackgroundDrawable(new ColorDrawable(Color.Transparent));
+            dialog.Window.SetDimAmount(0.68f);
             dialog.Window.SetLayout(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
             dialog.Window.SetGravity(GravityFlags.Center);
         }
+
+        View bgRoot = (ctx as Activity)?.Window?.DecorView;
+        if (bgRoot != null && OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            activeBlurDialogDepth++;
+            bgRoot.SetRenderEffect(RenderEffect.CreateBlurEffect(28f, 28f, Shader.TileMode.Clamp));
+            dialog.DismissEvent += (_, _) => {
+                activeBlurDialogDepth = Math.Max(0, activeBlurDialogDepth - 1);
+                if (activeBlurDialogDepth == 0 && OperatingSystem.IsAndroidVersionAtLeast(31)) {
+                    try {
+                        bgRoot.SetRenderEffect(null);
+                    } catch {
+                        // Ignore teardown race
+                    }
+                }
+            };
+        }
+
         dialog.Show();
         card.Alpha = 0f;
         card.ScaleX = 0.94f;
@@ -303,7 +325,7 @@ public static class OneUiModalDialog {
         b.SetPadding(dp(14), dp(8), dp(14), dp(8));
         b.Background = primary
             ? OneUiTheme.CreateRippleRoundedDrawable(ctx, OneUiTheme.Primary, OneUiTheme.PillCornerDp)
-            : OneUiTheme.CreateGlassCardDrawable(ctx, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            : OneUiTheme.CreateGlassCardDrawable(ctx, OneUiTheme.SurfaceModalRow, OneUiTheme.PillCornerDp);
         b.SetTextColor(OneUiTheme.TextPrimary);
         b.Typeface = primary ? OneUiTheme.GetAppleFontBold(ctx) : OneUiTheme.GetAppleFontMedium(ctx);
         OneUiTheme.AttachRecoil(b);

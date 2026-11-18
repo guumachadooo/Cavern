@@ -38,7 +38,12 @@ public partial class MainActivity {
 
     LinearLayout BuildPlayerTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
+        page.SetPadding(Dp(14), Dp(6), Dp(14), Dp(116));
+
+        // 0. Active File Source Bar (Clean workspace context & track selector)
+        page.AddView(CreateWorkspaceSourceBar(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
 
         // 1. 3D Room Simulator Card (One UI 9 Frosted Surface)
         LinearLayout roomCard = Card();
@@ -220,28 +225,39 @@ public partial class MainActivity {
         btnRow.SetGravity(GravityFlags.CenterHorizontal | GravityFlags.CenterVertical);
         btnRow.SetPadding(0, Dp(2), 0, Dp(2));
 
-        LinearLayout restartBtn = MakeCircleIconBtn(OneUiIconType.RewindStart, 42, false, StopPlayback, out _);
-        LinearLayout back10Btn = MakeCircleIconBtn(OneUiIconType.Rewind10, 46, false, () => SeekRelative(-10), out _);
-        roomTransportPlayBtn = MakeCircleIconBtn(OneUiIconType.Play, 58, true, TogglePlayPause, out roomTransportPlayIcon);
-        LinearLayout fwd10Btn = MakeCircleIconBtn(OneUiIconType.Forward10, 46, false, () => SeekRelative(10), out _);
-        roomTransportLoopBtn = MakeCircleIconBtn(OneUiIconType.RepeatLoop, 42, false, ToggleLoopMode, out roomTransportLoopIcon);
+        LinearLayout MakeRoomGlassBtn(OneUiIconType iconType, int iconDp, bool isCenterPlay, Color tint, Action onClick, out OneUiIconView iconOut) {
+            LinearLayout btn = new(this) { Orientation = Orientation.Horizontal };
+            btn.SetGravity(GravityFlags.Center);
+            btn.Background = isCenterPlay
+                ? OneUiTheme.CreateGlassCardDrawable(this, Color.Argb(58, 255, 255, 255), 999f, OneUiTheme.WithAlpha(ColAccent, 185))
+                : OneUiTheme.CreateGlassCardDrawable(this, Color.Argb(30, 255, 255, 255), 999f, Color.Argb(46, 255, 255, 255));
+            OneUiTheme.AttachRecoil(btn, 0.88f);
+            iconOut = new OneUiIconView(this, iconType, tint);
+            btn.AddView(iconOut, new LinearLayout.LayoutParams(Dp(iconDp), Dp(iconDp)));
+            btn.Click += (_, _) => onClick?.Invoke();
+            return btn;
+        }
+
+        LinearLayout restartBtn = MakeRoomGlassBtn(OneUiIconType.RewindStart, 19, false, Color.Argb(215, 252, 252, 255), StopPlayback, out _);
+        LinearLayout back10Btn = MakeRoomGlassBtn(OneUiIconType.Rewind10, 21, false, Color.Argb(200, 252, 252, 255), () => SeekRelative(-10), out _);
+        roomTransportPlayBtn = MakeRoomGlassBtn(OneUiIconType.Play, 29, true, Color.White, TogglePlayPause, out roomTransportPlayIcon);
+        LinearLayout fwd10Btn = MakeRoomGlassBtn(OneUiIconType.Forward10, 21, false, Color.Argb(200, 252, 252, 255), () => SeekRelative(10), out _);
+        roomTransportLoopBtn = MakeRoomGlassBtn(OneUiIconType.RepeatLoop, 19, false, Color.Argb(215, 252, 252, 255), ToggleLoopMode, out roomTransportLoopIcon);
 
         btnRow.AddView(restartBtn, new LinearLayout.LayoutParams(Dp(42), Dp(42)) { RightMargin = Dp(10) });
         btnRow.AddView(back10Btn, new LinearLayout.LayoutParams(Dp(46), Dp(46)) { RightMargin = Dp(12) });
-        btnRow.AddView(roomTransportPlayBtn, new LinearLayout.LayoutParams(Dp(58), Dp(58)) { RightMargin = Dp(12) });
+        btnRow.AddView(roomTransportPlayBtn, new LinearLayout.LayoutParams(Dp(60), Dp(60)) { RightMargin = Dp(12) });
         btnRow.AddView(fwd10Btn, new LinearLayout.LayoutParams(Dp(46), Dp(46)) { RightMargin = Dp(10) });
         btnRow.AddView(roomTransportLoopBtn, new LinearLayout.LayoutParams(Dp(42), Dp(42)));
         transportCard.AddView(btnRow);
         RefreshRoomTransportButtons();
         page.AddView(transportCard);
 
-        // 3. One UI 9 Quick Spatial Panel Card (2x2 Bento Toggles + Fat Dynamic Capsules + In-App Rolloff Selector)
+        // 3. One UI 9 Quick Spatial Panel Card (1x2 Bento Toggles + Fat Dynamic Capsules + In-App Rolloff Selector)
         LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.IconAtmosUpmix);
 
         LinearLayout bentoRow1 = HRow();
-        LinearLayout bentoRow2 = HRow();
-        bentoRow1.SetPadding(0, 0, 0, Dp(8));
-        bentoRow2.SetPadding(0, 0, 0, Dp(10));
+        bentoRow1.SetPadding(0, 0, 0, Dp(10));
 
         var tileHrtf = CreateBentoToggle(
             OneUiIconType.Headphones, S["BentoHrtf"],
@@ -266,37 +282,14 @@ public partial class MainActivity {
             OneUiTheme.IconSliderMedia,
             helpBody: S["TipDistSim"]);
 
-        var tile3DOnly = CreateBentoToggle(
-            OneUiIconType.Sparkles, S["Bento3DOnly"],
-            () => IsCategorySoloActive(item => item.IsDynamicObject) || store.MuteBed,
-            () => ToggleCategorySolo(item => item.IsDynamicObject, flag => {
-                store.MuteBed = flag;
-                playerEngine.MuteBed = flag;
-            }),
-            OneUiTheme.IconAtmosUpmix);
-
-        var tileHeight = CreateBentoToggle(
-            OneUiIconType.HeightUp, S["BentoHeightOnly"],
-            () => IsCategorySoloActive(item => item.NormalizedPosition.Y > 0.15f) || store.MuteGround,
-            () => ToggleCategorySolo(item => item.NormalizedPosition.Y > 0.15f, flag => {
-                store.MuteGround = flag;
-                playerEngine.MuteGround = flag;
-            }),
-            OneUiTheme.IconStemsCalib);
-
         bentoRow1.AddView(tileHrtf.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
         bentoRow1.AddView(tileDist.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        bentoRow2.AddView(tile3DOnly.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
-        bentoRow2.AddView(tileHeight.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
         quickCard.AddView(bentoRow1);
-        quickCard.AddView(bentoRow2);
 
         refreshBentoTilesUi = () => {
             tileHrtf.refresh();
             tileDist.refresh();
-            tile3DOnly.refresh();
-            tileHeight.refresh();
         };
         refreshBentoTilesUi();
 
@@ -337,25 +330,10 @@ public partial class MainActivity {
         filterBedsBtn = FilterBtn(S["FilterBedsOnly"], () => ToggleCategorySolo(item => item.IsBed, flag => {
             playerEngine.OnlyBeds = flag;
         }));
-        Button clearSoloBtn = FilterBtn(S["ClearSoloMute"], () => {
-            playerEngine.ClearSoloMute();
-            store.MuteBed = false;
-            store.MuteGround = false;
-            playerEngine.MuteBed = false;
-            playerEngine.MuteGround = false;
-            playerEngine.OnlyBeds = false;
-            RefreshPlayerSourcesList();
-            RefreshFilterButtonsUi();
-            refreshBentoTilesUi?.Invoke();
-            RefreshSettingsTabButtons();
-            UpdateRoomCanvas();
-        });
-
         filterRow.AddView(filterAllBtn);
         filterRow.AddView(filter3DBtn);
         filterRow.AddView(filterHeightBtn);
         filterRow.AddView(filterBedsBtn);
-        filterRow.AddView(clearSoloBtn);
         filterScroll.AddView(filterRow);
         mixerCard.AddView(filterScroll);
 
@@ -433,8 +411,10 @@ public partial class MainActivity {
     }
 
     void ClearAllSoloFilters() {
+        playerEngine?.ClearSoloMute();
         foreach (TrackSourceItem item in trackSourceItems) {
             item.IsSolo = false;
+            item.IsMuted = false;
         }
         store.MuteBed = false;
         store.MuteGround = false;

@@ -66,6 +66,8 @@ public static class OneUiTheme {
     public static Color BgScreen { get; private set; } = Color.ParseColor("#080A10");
     public static Color SurfaceCard { get; private set; } = Color.ParseColor("#B816171F");
     public static Color SurfaceElevated { get; private set; } = Color.ParseColor("#CE20212B");
+    public static Color SurfaceModal { get; private set; } = Color.ParseColor("#EC1D1E27");
+    public static Color SurfaceModalRow { get; private set; } = Color.ParseColor("#E02A2C38");
     public static Color SurfaceFloating { get; private set; } = Color.ParseColor("#36FFFFFF");
     public static Color SurfaceSubTile { get; private set; } = Color.ParseColor("#24FFFFFF");
     public static Color SurfaceBlurTint { get; private set; } = Color.ParseColor("#3A3A44");
@@ -177,6 +179,8 @@ public static class OneUiTheme {
         BgScreen = defaultBaseBg;
         SurfaceCard = defaultCard;
         SurfaceElevated = defaultElevated;
+        SurfaceModal = Color.Argb(236, 28, 29, 38);
+        SurfaceModalRow = Color.Argb(224, 40, 42, 54);
         RoomBg = defaultRoomBg;
         SurfaceFloatingBar = Color.Argb(230, 58, 58, 61);
         SelectedTabPill = Color.Argb(26, 255, 255, 255);
@@ -253,6 +257,8 @@ public static class OneUiTheme {
                 // Subtle 3% accent whisper on elevated frosted cards; ambient cover art flows cleanly behind
                 SurfaceCard = WithAlpha(Blend(Color.Rgb(21, 22, 28), Primary, 0.03f), 188);
                 SurfaceElevated = WithAlpha(Blend(Color.Rgb(30, 31, 39), exactQuickPanelSlider, 0.04f), 210);
+                SurfaceModal = WithAlpha(Blend(Color.Rgb(26, 27, 36), exactQuickPanelSlider, 0.04f), 236);
+                SurfaceModalRow = WithAlpha(Blend(Color.Rgb(38, 40, 52), exactQuickPanelSlider, 0.04f), 226);
             }
         } catch {
             // Fall back cleanly to Samsung One UI 9 Blue palette

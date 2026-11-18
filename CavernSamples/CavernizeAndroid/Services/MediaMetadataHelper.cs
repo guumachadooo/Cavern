@@ -152,6 +152,23 @@ public static class MediaMetadataHelper {
             }
         }
 
+        // Fallback binary tag reader (especially critical for MP4 Atmos / M4A / FLAC where MediaMetadataRetriever omits tags)
+        if (!string.IsNullOrEmpty(resolvedPath) && IOFile.Exists(resolvedPath) &&
+            (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(artist) || string.IsNullOrWhiteSpace(album))) {
+            ParsedAudioTags binTags = AudioTagReader.TryReadTags(resolvedPath);
+            if (binTags != null) {
+                if (string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(binTags.Title)) {
+                    title = binTags.Title;
+                }
+                if (string.IsNullOrWhiteSpace(artist)) {
+                    artist = !string.IsNullOrWhiteSpace(binTags.Artist) ? binTags.Artist : binTags.AlbumArtist;
+                }
+                if (string.IsNullOrWhiteSpace(album) && !string.IsNullOrWhiteSpace(binTags.Album)) {
+                    album = binTags.Album;
+                }
+            }
+        }
+
         if (artwork == null && !string.IsNullOrEmpty(resolvedPath)) {
             artwork = TryLoadAdjacentFolderCover(context, sourceUri, resolvedPath, 640);
             hasEmbedded = artwork != null;

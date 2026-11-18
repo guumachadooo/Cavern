@@ -39,7 +39,16 @@ namespace Cavern.Format.Renderers {
         /// <summary>
         /// Renders an object-based Core Audio Format stream (Dolby Atmos Master Format).
         /// </summary>
-        internal CoreAudioFormatRenderer(Decoder stream, YAML rootSource, YAML metadataSource) : base(stream) {
+        internal CoreAudioFormatRenderer(Decoder stream, YAML rootSource, YAML metadataSource) :
+            this(stream, rootSource, (DolbyAtmosMasterMetadataFile)null, metadataSource) { }
+
+        /// <summary>
+        /// Renders an object-based Core Audio Format or RIFF WAVE stream (Dolby Atmos Master Format).
+        /// </summary>
+        internal CoreAudioFormatRenderer(Decoder stream, YAML rootSource, DolbyAtmosMasterMetadataFile parsedMetadata) :
+            this(stream, rootSource, parsedMetadata, null) { }
+
+        CoreAudioFormatRenderer(Decoder stream, YAML rootSource, DolbyAtmosMasterMetadataFile parsedMetadata, YAML metadataSource) : base(stream) {
             SetupObjects(Channels);
             objectSamples[0] = Array.Empty<float>();
 
@@ -51,7 +60,7 @@ namespace Cavern.Format.Renderers {
                 objects[i].LFE = ChannelPrototype.Mapping[(int)channels[i]].LFE;
             }
 
-            DolbyAtmosMasterMetadataFile metadata = new DolbyAtmosMasterMetadataFile(metadataSource, root.ObjectMapping);
+            DolbyAtmosMasterMetadataFile metadata = parsedMetadata ?? new DolbyAtmosMasterMetadataFile(metadataSource, root.ObjectMapping);
             movement = metadata.Movement;
             movementFrames = new int[movement.Length];
         }

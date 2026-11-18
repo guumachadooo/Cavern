@@ -11,6 +11,10 @@ description: >-
 
 Follow these steps in order whenever shipping or testing changes to `CavernizeAndroid`.
 
+## 0. Check Extra Parallel Requests First (`.agents/docs/EXTRA_REQUESTS.md`)
+Before running final checks, committing, pushing, or building the APK, **always read** [EXTRA_REQUESTS.md](../../docs/EXTRA_REQUESTS.md):
+- If `## Pedidos Extras Pendentes` has any pending requests (added from parallel `/btw` chats while you worked), **stop before committing/building**, create a new staged plan, implement and verify every extra item as if it were a fresh conversation, move them to `## Pedidos Concluídos`, and only then proceed to Step 1.
+
 ## 1. Local Pre-Check in Termux / PRoot ARM64
 This environment has `.NET 8` at `/root/.dotnet/dotnet` without the Android workload (`net11.0-android` builds run on GitHub Actions). Validate shared logic (`Cavernize.Logic`, `Cavern.Format`, `Cavern`) before committing:
 

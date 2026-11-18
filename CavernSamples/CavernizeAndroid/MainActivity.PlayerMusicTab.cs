@@ -140,6 +140,7 @@ public partial class MainActivity {
     int activeLibraryQueueIndex = -1;
 
     // Section switcher inside Play tab (Now Playing vs In-App Library)
+    LinearLayout musicTabRootPage;
     LinearLayout musicNowPlayingSection;
     LinearLayout musicLibrarySection;
     TextView segNowPlayingBtn, segLibraryBtn;
@@ -148,6 +149,9 @@ public partial class MainActivity {
     EditText librarySearchInput;
     Button[] libCatButtons;
     Button[] libFilterButtons;
+    LinearLayout libNoiseToggleBtn, libFolderFilterBtn;
+    OneUiIconView libNoiseToggleIcon, libFolderFilterIcon;
+    TextView libNoiseToggleText, libFolderFilterText;
     LinearLayout libraryListHost;
     TextView libraryStatusText;
     bool isIncrementalSyncRunning;
@@ -173,11 +177,12 @@ public partial class MainActivity {
     TextView musicTrackBtnText;
     FrameLayout musicMoreBtn;
 
-    // Seekbar + Centered Spatial Badge + Borderless Transport + Slim Volume
+    // Seekbar + Centered Spatial Badge + Live Format Switcher + Unified Transport + Slim Volume
     OneUiWaveMediaSeekBar musicWaveSeekBar;
     LinearLayout musicSpatialBadgePill;
     OneUiIconView musicSpatialBadgeIcon;
     TextView musicSpatialBadgeText;
+    LinearLayout musicFormatSwitchRow;
 
     FrameLayout musicSeekBackBtn, musicRewBtn, musicPlayCircleBtn, musicFwdBtn, musicSeekFwdBtn;
     OneUiIconView musicPlayIcon;
@@ -193,8 +198,14 @@ public partial class MainActivity {
 
     LinearLayout BuildMusicPlayerTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
+        musicTabRootPage = page;
         page.SetGravity(GravityFlags.CenterHorizontal);
-        page.SetPadding(Dp(20), Dp(4), Dp(20), Dp(116));
+        page.SetPadding(Dp(20), Dp(6), Dp(20), Dp(84));
+
+        // Responsive stage height so entire Apple Music Now Playing screen fits comfortably on ONE viewport
+        float density = Math.Max(1f, Resources?.DisplayMetrics?.Density ?? 3f);
+        int screenHeightDp = (int)((Resources?.DisplayMetrics?.HeightPixels ?? 2200) / density);
+        int stageSizeDp = Math.Clamp(screenHeightDp - 500, 184, 272);
 
         Typeface sfBold = OneUiTheme.GetAppleFontBold(this);
         Typeface sfSemi = OneUiTheme.GetAppleFontSemibold(this);
@@ -215,7 +226,7 @@ public partial class MainActivity {
         };
         segNowPlayingBtn.SetTypeface(sfSemi, TypefaceStyle.Bold);
         segNowPlayingBtn.SetSingleLine(true);
-        segNowPlayingBtn.SetPadding(Dp(12), Dp(6), Dp(12), Dp(6));
+        segNowPlayingBtn.SetPadding(Dp(12), Dp(5), Dp(12), Dp(5));
         OneUiTheme.AttachRecoil(segNowPlayingBtn, 0.94f);
         segNowPlayingBtn.Click += (_, _) => SetMusicPlayerSection(openLibrary: false);
 
@@ -226,18 +237,18 @@ public partial class MainActivity {
         };
         segLibraryBtn.SetTypeface(sfSemi, TypefaceStyle.Bold);
         segLibraryBtn.SetSingleLine(true);
-        segLibraryBtn.SetPadding(Dp(12), Dp(6), Dp(12), Dp(6));
+        segLibraryBtn.SetPadding(Dp(12), Dp(5), Dp(12), Dp(5));
         OneUiTheme.AttachRecoil(segLibraryBtn, 0.94f);
         segLibraryBtn.Click += (_, _) => SetMusicPlayerSection(openLibrary: true);
 
         segWrap.AddView(segNowPlayingBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         segWrap.AddView(segLibraryBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         page.AddView(segWrap, new LinearLayout.LayoutParams(Dp(236), ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
+            BottomMargin = Dp(6)
         });
 
         // ============================================================
-        // SECTION A: NOW PLAYING (Exact Apple Music + Samsung Video)
+        // SECTION A: NOW PLAYING (Exact Apple Music + Unified One UI 9)
         // ============================================================
         musicNowPlayingSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         musicNowPlayingSection.SetGravity(GravityFlags.CenterHorizontal);
@@ -247,10 +258,10 @@ public partial class MainActivity {
 
         musicArtworkSlot = new FrameLayout(this);
         musicArtworkView = new RoundedArtworkView(this) {
-            PreferredSizeDp = 286,
+            PreferredSizeDp = stageSizeDp,
             CornerDp = 16f,
-            ScaleX = 0.88f,
-            ScaleY = 0.88f
+            ScaleX = 0.89f,
+            ScaleY = 0.89f
         };
         musicArtworkView.Click += (_, _) => {
             if (LoadedFile == null) {
@@ -263,8 +274,8 @@ public partial class MainActivity {
             ViewGroup.LayoutParams.WrapContent,
             ViewGroup.LayoutParams.WrapContent) {
             Gravity = GravityFlags.Center,
-            TopMargin = Dp(6),
-            BottomMargin = Dp(6)
+            TopMargin = Dp(2),
+            BottomMargin = Dp(2)
         });
         mediaStageFrame.AddView(musicArtworkSlot, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
@@ -287,9 +298,9 @@ public partial class MainActivity {
             ViewGroup.LayoutParams.MatchParent));
         mediaStageFrame.AddView(musicVideoSlot, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
-            Dp(240)) {
-            TopMargin = Dp(8),
-            BottomMargin = Dp(6)
+            Dp(Math.Clamp(stageSizeDp - 16, 175, 240))) {
+            TopMargin = Dp(4),
+            BottomMargin = Dp(4)
         });
 
         // Borderless Apple Music Live Lyrics Sheet (with SF Pro Bold, Depth-of-Field Blur & Wave Scroll)
@@ -303,30 +314,27 @@ public partial class MainActivity {
             BaselineAligned = false
         };
         lyricsHeader.SetGravity(GravityFlags.CenterVertical);
-        lyricsHeader.SetPadding(0, Dp(2), 0, Dp(8));
+        lyricsHeader.SetPadding(0, Dp(2), 0, Dp(6));
 
         musicLyricsMiniArt = new RoundedArtworkView(this) {
-            PreferredSizeDp = 50,
+            PreferredSizeDp = 46,
             CornerDp = 10f
         };
         musicLyricsMiniArt.Click += (_, _) => SetPlayerStageMode(PlayerStageMode.Cover);
-        lyricsHeader.AddView(musicLyricsMiniArt, new LinearLayout.LayoutParams(Dp(50), Dp(50)) { RightMargin = Dp(12) });
+        lyricsHeader.AddView(musicLyricsMiniArt, new LinearLayout.LayoutParams(Dp(46), Dp(46)) { RightMargin = Dp(10) });
 
         LinearLayout lyricsMetaCol = new(this) { Orientation = Orientation.Vertical };
-        musicLyricsHeaderTitle = Label(S["PlayerEmptyTitle"], 16.5f, ColText);
+        musicLyricsHeaderTitle = Label(S["PlayerEmptyTitle"], 16f, ColText);
         musicLyricsHeaderTitle.SetTypeface(sfBold, TypefaceStyle.Bold);
         musicLyricsHeaderTitle.SetSingleLine(true);
         musicLyricsHeaderTitle.Ellipsize = TextUtils.TruncateAt.End;
-        musicLyricsHeaderSub = Label(S["LyricsTapHint"], 13f, Color.Argb(182, 252, 252, 255));
+        musicLyricsHeaderSub = Label(S["LyricsTapHint"], 12.5f, Color.Argb(182, 252, 252, 255));
         musicLyricsHeaderSub.SetTypeface(sfReg, TypefaceStyle.Normal);
         musicLyricsHeaderSub.SetSingleLine(true);
         musicLyricsHeaderSub.Ellipsize = TextUtils.TruncateAt.End;
         lyricsMetaCol.AddView(musicLyricsHeaderTitle);
         lyricsMetaCol.AddView(musicLyricsHeaderSub);
         lyricsHeader.AddView(lyricsMetaCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
-
-        FrameLayout lyricsOnlineBtn = MakeAppleCircleIconBtn(OneUiIconType.Globe, ShowOnlineMetadataDialog);
-        lyricsHeader.AddView(lyricsOnlineBtn, new LinearLayout.LayoutParams(Dp(32), Dp(32)) { RightMargin = Dp(6) });
 
         FrameLayout lyricsMoreBtn = MakeAppleCircleOverflowBtn(ShowPlayerMoreSheet);
         lyricsHeader.AddView(lyricsMoreBtn, new LinearLayout.LayoutParams(Dp(32), Dp(32)));
@@ -338,12 +346,12 @@ public partial class MainActivity {
 
         mediaStageFrame.AddView(musicLyricsContainer, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
-            Dp(400)));
+            Dp(stageSizeDp + 16)));
 
         musicNowPlayingSection.AddView(mediaStageFrame, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
             ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(12)
+            BottomMargin = Dp(8)
         });
 
         // 2. Apple Music Title + Artist + Overflow Row
@@ -353,7 +361,7 @@ public partial class MainActivity {
         LinearLayout titleMetaCol = new(this) { Orientation = Orientation.Vertical };
         musicTitleText = new TextView(this) {
             Text = S["PlayerEmptyTitle"],
-            TextSize = 20.5f
+            TextSize = 19.5f
         };
         musicTitleText.SetTextColor(ColText);
         musicTitleText.SetTypeface(sfBold, TypefaceStyle.Bold);
@@ -363,14 +371,14 @@ public partial class MainActivity {
 
         musicArtistText = new TextView(this) {
             Text = S["PlayerEmptySub"],
-            TextSize = 15f
+            TextSize = 14f
         };
         musicArtistText.SetTextColor(Color.Argb(182, 252, 252, 255));
         musicArtistText.SetTypeface(sfReg, TypefaceStyle.Normal);
         musicArtistText.SetSingleLine(true);
         musicArtistText.Ellipsize = TextUtils.TruncateAt.End;
         titleMetaCol.AddView(musicArtistText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(2)
+            TopMargin = Dp(1)
         });
         musicTitleRow.AddView(titleMetaCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(10) });
 
@@ -385,13 +393,13 @@ public partial class MainActivity {
         musicTrackBtnText.SetSingleLine(true);
         musicTrackBtn.AddView(musicTrackBtnText);
         musicTrackBtn.Click += (_, _) => ShowTrackSelectorDialog();
-        musicTitleRow.AddView(musicTrackBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(30)) { RightMargin = Dp(8) });
+        musicTitleRow.AddView(musicTrackBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(28)) { RightMargin = Dp(8) });
 
         musicMoreBtn = MakeAppleCircleOverflowBtn(ShowPlayerMoreSheet);
         musicTitleRow.AddView(musicMoreBtn, new LinearLayout.LayoutParams(Dp(32), Dp(32)));
 
         musicNowPlayingSection.AddView(musicTitleRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(14)
+            BottomMargin = Dp(8)
         });
 
         // 3. One UI 9 Wave Media Seekbar + Apple Music centered Audio Badge
@@ -429,7 +437,7 @@ public partial class MainActivity {
         musicSpatialBadgePill = HRow();
         musicSpatialBadgePill.SetGravity(GravityFlags.Center);
         musicSpatialBadgePill.SetPadding(Dp(10), Dp(3), Dp(10), Dp(3));
-        musicSpatialBadgePill.Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 8f);
+        musicSpatialBadgePill.Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(38, 255, 255, 255), 0.8f);
         OneUiTheme.AttachRecoil(musicSpatialBadgePill, 0.94f);
         musicSpatialBadgeIcon = new OneUiIconView(this, OneUiIconType.Sparkles, Color.Argb(220, 252, 252, 255));
         musicSpatialBadgeText = Label(S["PlayerBadgeSpatial"], 11f, Color.Argb(228, 252, 252, 255));
@@ -439,30 +447,45 @@ public partial class MainActivity {
         musicSpatialBadgePill.AddView(musicSpatialBadgeIcon, new LinearLayout.LayoutParams(Dp(11), Dp(11)) { RightMargin = Dp(5) });
         musicSpatialBadgePill.AddView(musicSpatialBadgeText);
         musicSpatialBadgePill.Click += (_, _) => ShowPlayerMoreSheet();
-        musicNowPlayingSection.AddView(musicSpatialBadgePill, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
+
+        musicFormatSwitchRow = new LinearLayout(this) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false,
+            Visibility = ViewStates.Gone
+        };
+        musicFormatSwitchRow.SetGravity(GravityFlags.CenterVertical);
+        musicFormatSwitchRow.SetPadding(Dp(3), Dp(3), Dp(3), Dp(3));
+        musicFormatSwitchRow.Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(36, 255, 255, 255), 99f, Color.Argb(44, 255, 255, 255), 0.8f);
+
+        LinearLayout badgeFormatRow = HRow();
+        badgeFormatRow.SetGravity(GravityFlags.Center);
+        badgeFormatRow.AddView(musicSpatialBadgePill);
+        badgeFormatRow.AddView(musicFormatSwitchRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
+            LeftMargin = Dp(8)
+        });
+        musicNowPlayingSection.AddView(badgeFormatRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(2),
-            BottomMargin = Dp(18)
+            BottomMargin = Dp(10)
         });
 
-        // 4. Unified Borderless Transport Row (-10s | Skip Prev | Play/Pause | Skip Next | +10s)
+        // 4. Unified One UI 9 + Apple Music Transport Row:
+        // Track Skip buttons OUTER [SkipPrevious] | Seek seconds INNER [-10s] | [Play/Pause] | [+10s] | [SkipNext]
         LinearLayout transportRow = HRow();
         transportRow.SetGravity(GravityFlags.Center);
 
-        musicSeekBackBtn = MakeBorderlessAppleIconBtn(OneUiIconType.Rewind10, 22, () => SeekRelative(-10), out OneUiIconView seekBackIco);
-        seekBackIco.IconColor = Color.Argb(175, 252, 252, 255);
-        musicRewBtn = MakeBorderlessAppleIconBtn(OneUiIconType.SkipPrevious, 30, HandleMusicSkipPrevious, out _);
-        musicPlayCircleBtn = MakeBorderlessAppleIconBtn(OneUiIconType.Play, 44, TogglePlayPause, out musicPlayIcon);
-        musicFwdBtn = MakeBorderlessAppleIconBtn(OneUiIconType.SkipNext, 30, HandleMusicSkipNext, out _);
-        musicSeekFwdBtn = MakeBorderlessAppleIconBtn(OneUiIconType.Forward10, 22, () => SeekRelative(10), out OneUiIconView seekFwdIco);
-        seekFwdIco.IconColor = Color.Argb(175, 252, 252, 255);
+        musicRewBtn = MakeUnifiedGlassTransportBtn(OneUiIconType.SkipPrevious, 48, 26, frostedCircle: false, Color.Argb(245, 252, 252, 255), HandleMusicSkipPrevious, out _);
+        musicSeekBackBtn = MakeUnifiedGlassTransportBtn(OneUiIconType.Rewind10, 44, 21, frostedCircle: false, Color.Argb(186, 252, 252, 255), () => SeekRelative(-10), out _);
+        musicPlayCircleBtn = MakeUnifiedGlassTransportBtn(OneUiIconType.Play, 62, 31, frostedCircle: true, Color.White, TogglePlayPause, out musicPlayIcon);
+        musicSeekFwdBtn = MakeUnifiedGlassTransportBtn(OneUiIconType.Forward10, 44, 21, frostedCircle: false, Color.Argb(186, 252, 252, 255), () => SeekRelative(10), out _);
+        musicFwdBtn = MakeUnifiedGlassTransportBtn(OneUiIconType.SkipNext, 48, 26, frostedCircle: false, Color.Argb(245, 252, 252, 255), HandleMusicSkipNext, out _);
 
-        transportRow.AddView(musicSeekBackBtn, new LinearLayout.LayoutParams(Dp(44), Dp(48)) { RightMargin = Dp(8) });
-        transportRow.AddView(musicRewBtn, new LinearLayout.LayoutParams(Dp(54), Dp(56)) { RightMargin = Dp(14) });
-        transportRow.AddView(musicPlayCircleBtn, new LinearLayout.LayoutParams(Dp(68), Dp(62)) { RightMargin = Dp(14) });
-        transportRow.AddView(musicFwdBtn, new LinearLayout.LayoutParams(Dp(54), Dp(56)) { RightMargin = Dp(8) });
-        transportRow.AddView(musicSeekFwdBtn, new LinearLayout.LayoutParams(Dp(44), Dp(48)));
+        transportRow.AddView(musicRewBtn, new LinearLayout.LayoutParams(Dp(48), Dp(50)) { RightMargin = Dp(8) });
+        transportRow.AddView(musicSeekBackBtn, new LinearLayout.LayoutParams(Dp(44), Dp(46)) { RightMargin = Dp(12) });
+        transportRow.AddView(musicPlayCircleBtn, new LinearLayout.LayoutParams(Dp(62), Dp(62)) { RightMargin = Dp(12) });
+        transportRow.AddView(musicSeekFwdBtn, new LinearLayout.LayoutParams(Dp(44), Dp(46)) { RightMargin = Dp(8) });
+        transportRow.AddView(musicFwdBtn, new LinearLayout.LayoutParams(Dp(48), Dp(50)));
         musicNowPlayingSection.AddView(transportRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(18)
+            BottomMargin = Dp(10)
         });
 
         // 5. Apple Music Volume Row (SpeakerLow + slim Samsung relative-drag slider + SpeakerHigh)
@@ -489,7 +512,7 @@ public partial class MainActivity {
         volRow.AddView(highSpk, new LinearLayout.LayoutParams(Dp(20), Dp(20)) { LeftMargin = Dp(10) });
 
         musicNowPlayingSection.AddView(volRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(14)
+            BottomMargin = Dp(8)
         });
 
         // 6. Flanking Spatial Toggles: [ Cavernize 3D ]  [ HRTF 3D / Direto ]  [ Matrix 7.1 ]
@@ -522,21 +545,21 @@ public partial class MainActivity {
                 RefreshMusicPlayerControlsUi();
             });
 
-        spatialToggleRow.AddView(musicCavernizeToggleBtn, new LinearLayout.LayoutParams(0, Dp(34), 1f) { RightMargin = Dp(6) });
-        spatialToggleRow.AddView(musicBottomSpatialBtn, new LinearLayout.LayoutParams(0, Dp(34), 1f) { RightMargin = Dp(6) });
-        spatialToggleRow.AddView(musicMatrixToggleBtn, new LinearLayout.LayoutParams(0, Dp(34), 1f));
+        spatialToggleRow.AddView(musicCavernizeToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(6) });
+        spatialToggleRow.AddView(musicBottomSpatialBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(6) });
+        spatialToggleRow.AddView(musicMatrixToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f));
         musicNowPlayingSection.AddView(spatialToggleRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(12)
+            BottomMargin = Dp(8)
         });
 
-        // 7. Apple Music 3-Icon Bottom Utility Bar ([ Letra / CC ] | [ Buscar Capa/Letra ] | [ Repetir ])
+        // 7. Apple Music 3-Icon Bottom Utility Bar ([ Letra / CC ] | [ Buscar Online / Legenda Online ] | [ Repetir ])
         LinearLayout bottomActionRow = HRow();
         bottomActionRow.SetGravity(GravityFlags.CenterVertical);
 
         musicBottomLeftBtn = new FrameLayout(this);
         OneUiTheme.AttachRecoil(musicBottomLeftBtn, 0.88f);
         musicBottomLeftIcon = new OneUiIconView(this, OneUiIconType.LyricsQuote, Color.Argb(195, 252, 252, 255));
-        musicBottomLeftBtn.AddView(musicBottomLeftIcon, new FrameLayout.LayoutParams(Dp(22), Dp(22)) { Gravity = GravityFlags.Center });
+        musicBottomLeftBtn.AddView(musicBottomLeftIcon, new FrameLayout.LayoutParams(Dp(21), Dp(21)) { Gravity = GravityFlags.Center });
         musicBottomLeftBtn.Click += (_, _) => {
             if (currentMediaMeta?.HasVideo == true) {
                 ShowSubtitlesDialog();
@@ -551,7 +574,7 @@ public partial class MainActivity {
         musicBottomOnlineBtn.AddView(musicBottomOnlineIcon, new FrameLayout.LayoutParams(Dp(21), Dp(21)) { Gravity = GravityFlags.Center });
         musicBottomOnlineBtn.Click += (_, _) => {
             if (currentMediaMeta?.HasVideo == true) {
-                ShowSubtitlesDialog();
+                ShowOnlineSubtitlesSearchDialog();
             } else {
                 ShowOnlineMetadataDialog();
             }
@@ -560,7 +583,7 @@ public partial class MainActivity {
         musicBottomLoopBtn = new FrameLayout(this);
         OneUiTheme.AttachRecoil(musicBottomLoopBtn, 0.88f);
         musicBottomLoopIcon = new OneUiIconView(this, OneUiIconType.RepeatLoop, Color.Argb(195, 252, 252, 255));
-        musicBottomLoopBtn.AddView(musicBottomLoopIcon, new FrameLayout.LayoutParams(Dp(22), Dp(22)) { Gravity = GravityFlags.Center });
+        musicBottomLoopBtn.AddView(musicBottomLoopIcon, new FrameLayout.LayoutParams(Dp(21), Dp(21)) { Gravity = GravityFlags.Center });
         musicBottomLoopBtn.Click += (_, _) => ToggleLoopMode();
 
         LinearLayout leftWrap = HRow(); leftWrap.SetGravity(GravityFlags.Center); leftWrap.AddView(musicBottomLeftBtn, new LinearLayout.LayoutParams(Dp(48), Dp(34)));
@@ -615,6 +638,23 @@ public partial class MainActivity {
         OneUiTheme.AttachRecoil(btn, 0.88f);
         OneUiIconView ico = new(this, iconType, ColText);
         btn.AddView(ico, new FrameLayout.LayoutParams(Dp(17), Dp(17)) { Gravity = GravityFlags.Center });
+        btn.Click += (_, _) => onClick?.Invoke();
+        return btn;
+    }
+
+    FrameLayout MakeUnifiedGlassTransportBtn(
+        OneUiIconType iconType, int sizeDp, int iconDp, bool frostedCircle,
+        Color iconColor, Action onClick, out OneUiIconView iconOut) {
+        FrameLayout btn = new(this);
+        if (frostedCircle) {
+            btn.Background = OneUiTheme.CreateGlassCardDrawable(
+                this, Color.Argb(58, 255, 255, 255), 999f, Color.Argb(96, 255, 255, 255));
+        } else {
+            btn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, Color.Argb(10, 255, 255, 255), 999f);
+        }
+        OneUiTheme.AttachRecoil(btn, 0.86f);
+        iconOut = new OneUiIconView(this, iconType, iconColor);
+        btn.AddView(iconOut, new FrameLayout.LayoutParams(Dp(iconDp), Dp(iconDp)) { Gravity = GravityFlags.Center });
         btn.Click += (_, _) => onClick?.Invoke();
         return btn;
     }
@@ -676,11 +716,26 @@ public partial class MainActivity {
         if (nextIdx >= activeLibraryQueue.Count) nextIdx = 0;
         activeLibraryQueueIndex = nextIdx;
         LibraryTrackItem item = activeLibraryQueue[nextIdx];
+
+        if (!string.IsNullOrEmpty(preferredFormatVariantKey)) {
+            MediaLibrarySnapshot snap = librarySnapshot ?? MediaLibraryService.CachedSnapshot;
+            if (snap != null) {
+                List<LibraryTrackItem> variants = MediaLibraryService.FindVariantsForTrack(
+                    snap, item.FilePath, item.Title, item.EffectiveAlbumArtist, item.Album);
+                LibraryTrackItem preferred = variants.FirstOrDefault(v =>
+                    string.Equals(MediaLibraryService.GetDistinctVariantLabel(v, variants), preferredFormatVariantKey, StringComparison.OrdinalIgnoreCase));
+                if (preferred != null) {
+                    item = preferred;
+                    activeLibraryQueue[nextIdx] = preferred;
+                }
+            }
+        }
         OpenLibraryTrack(item, activeLibraryQueue, autoPlay: true);
     }
 
     void SetMusicPlayerSection(bool openLibrary) {
         isLibrarySectionOpen = openLibrary;
+        musicTabRootPage?.SetPadding(Dp(20), Dp(6), Dp(20), Dp(openLibrary ? 114 : 84));
         UpdateSectionSwitcherStyle();
 
         if (musicNowPlayingSection != null && musicLibrarySection != null) {
@@ -924,7 +979,61 @@ public partial class MainActivity {
             SetPlayerStageMode(musicStageMode);
         }
 
+        RefreshActiveTrackFormatSwitcher();
         RefreshMusicPlayerControlsUi();
+    }
+
+    void RefreshActiveTrackFormatSwitcher() {
+        if (musicFormatSwitchRow == null) return;
+        musicFormatSwitchRow.RemoveAllViews();
+        if (LoadedFile == null) {
+            musicFormatSwitchRow.Visibility = ViewStates.Gone;
+            return;
+        }
+        MediaLibrarySnapshot snap = librarySnapshot ?? MediaLibraryService.CachedSnapshot;
+        if (snap == null) {
+            musicFormatSwitchRow.Visibility = ViewStates.Gone;
+            return;
+        }
+        string curPath = currentMediaMeta?.SourceMediaPath ?? LoadedFile.Path ?? "";
+        List<LibraryTrackItem> variants = MediaLibraryService.FindVariantsForTrack(
+            snap, curPath, currentMediaMeta?.Title ?? "", currentMediaMeta?.Artist ?? "", currentMediaMeta?.Album ?? "");
+        if (variants.Count <= 1) {
+            musicFormatSwitchRow.Visibility = ViewStates.Gone;
+            return;
+        }
+
+        musicFormatSwitchRow.Visibility = ViewStates.Visible;
+        Typeface sfBold = OneUiTheme.GetAppleFontBold(this);
+        for (int i = 0; i < variants.Count; i++) {
+            LibraryTrackItem v = variants[i];
+            bool isActive = string.Equals(v.FilePath, curPath, StringComparison.OrdinalIgnoreCase) ||
+                            string.Equals(v.FilePath, LoadedFile.Path, StringComparison.OrdinalIgnoreCase);
+            string lbl = MediaLibraryService.GetDistinctVariantLabel(v, variants);
+
+            TextView chip = new(this) {
+                Text = lbl,
+                TextSize = 10.5f,
+                Gravity = GravityFlags.Center
+            };
+            chip.SetTypeface(sfBold, TypefaceStyle.Bold);
+            chip.SetIncludeFontPadding(false);
+            chip.SetSingleLine(true);
+            chip.SetPadding(Dp(9), Dp(3), Dp(9), Dp(3));
+            chip.SetTextColor(isActive ? Color.Rgb(18, 20, 26) : (v.IsSpatial ? OneUiTheme.PrimaryHigh : Color.Argb(220, 240, 242, 248)));
+            chip.Background = isActive
+                ? OneUiTheme.CreateRoundedDrawable(this, Color.Argb(236, 252, 252, 255), 99f)
+                : null;
+            OneUiTheme.AttachRecoil(chip, 0.92f);
+            chip.Click += (_, _) => {
+                if (!isActive) {
+                    SwitchActiveTrackVariant(v, variants);
+                }
+            };
+            musicFormatSwitchRow.AddView(chip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
+                RightMargin = i < variants.Count - 1 ? Dp(2) : 0
+            });
+        }
     }
 
     void RefreshMusicPlayerControlsUi() {
@@ -1034,14 +1143,14 @@ public partial class MainActivity {
         FrameLayout refreshBtn = MakeAppleCircleIconBtn(OneUiIconType.Refresh, () => RefreshLibraryScanAsync(force: true));
         searchRow.AddView(refreshBtn, new LinearLayout.LayoutParams(Dp(38), Dp(38)) { RightMargin = Dp(6) });
 
-        FrameLayout sysPickBtn = MakeAppleCircleIconBtn(OneUiIconType.Folder, () => LaunchFilePicker(ReqOpenMedia, allowMultiple: false));
+        FrameLayout sysPickBtn = MakeAppleCircleIconBtn(OneUiIconType.Folder, () => OpenMediaWithExplorer(switchToTab: 0));
         searchRow.AddView(sysPickBtn, new LinearLayout.LayoutParams(Dp(38), Dp(38)));
         box.AddView(searchRow);
 
         // Category pills: Álbuns | Faixas | Artistas | Pastas
         HorizontalScrollView catScroll = new(this) { HorizontalScrollBarEnabled = false };
         LinearLayout catRow = HRow();
-        catRow.SetPadding(0, 0, 0, Dp(10));
+        catRow.SetPadding(0, 0, 0, Dp(8));
         (LibraryCategory cat, string title)[] cats = [
             (LibraryCategory.Albums, S["LibAlbums"]),
             (LibraryCategory.Tracks, S["LibTracks"]),
@@ -1071,7 +1180,7 @@ public partial class MainActivity {
         catScroll.AddView(catRow);
         box.AddView(catScroll);
 
-        // Spatial / Surround Filter Chips: [ Todas ] [ Espacial / Surround ] [ Só Espacial / Atmos ]
+        // Smart Library Filter Chips: [ Todas | Espacial / Surround | Só Atmos ] + [ Limpeza Smart ] + [ Pastas ]
         HorizontalScrollView filtScroll = new(this) { HorizontalScrollBarEnabled = false };
         LinearLayout filtRow = HRow();
         filtRow.SetPadding(0, 0, 0, Dp(8));
@@ -1097,6 +1206,22 @@ public partial class MainActivity {
             libFilterButtons[idx] = fb;
             filtRow.AddView(fb, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
         }
+
+        (libNoiseToggleBtn, libNoiseToggleIcon, libNoiseToggleText) = MakeCompactSpatialPill(
+            OneUiIconType.CleanFilter, S["LibHideNoise"], sfSemi, () => {
+                store.LibraryHideNonMusic = !store.LibraryHideNonMusic;
+                libraryRenderLimit = 72;
+                UpdateLibraryFilterStyles();
+                RenderLibraryView();
+            });
+        libNoiseToggleBtn.SetPadding(Dp(11), Dp(5), Dp(11), Dp(5));
+        filtRow.AddView(libNoiseToggleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(30)) { RightMargin = Dp(6) });
+
+        (libFolderFilterBtn, libFolderFilterIcon, libFolderFilterText) = MakeCompactSpatialPill(
+            OneUiIconType.FolderFilter, S["LibFoldersChipLabel"], sfSemi, ShowLibraryFolderFilterDialog);
+        libFolderFilterBtn.SetPadding(Dp(11), Dp(5), Dp(11), Dp(5));
+        filtRow.AddView(libFolderFilterBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(30)));
+
         filtScroll.AddView(filtRow);
         box.AddView(filtScroll);
 
@@ -1113,14 +1238,134 @@ public partial class MainActivity {
     }
 
     void UpdateLibraryFilterStyles() {
-        if (libFilterButtons == null) return;
-        for (int i = 0; i < libFilterButtons.Length; i++) {
-            bool sel = store.LibraryFilterMode == i;
-            libFilterButtons[i].Background = sel
-                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.Primary, 145), OneUiTheme.PillCornerDp, OneUiTheme.PrimaryHigh, 1f)
-                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
-            libFilterButtons[i].SetTextColor(sel ? Color.White : OneUiTheme.TextSub);
+        if (libFilterButtons != null) {
+            for (int i = 0; i < libFilterButtons.Length; i++) {
+                bool sel = store.LibraryFilterMode == i;
+                libFilterButtons[i].Background = sel
+                    ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.Primary, 145), OneUiTheme.PillCornerDp, OneUiTheme.PrimaryHigh, 1f)
+                    : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+                libFilterButtons[i].SetTextColor(sel ? Color.White : OneUiTheme.TextSub);
+            }
         }
+        if (libNoiseToggleBtn != null) {
+            bool on = store.LibraryHideNonMusic;
+            libNoiseToggleBtn.Background = on
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.Secondary, 110), OneUiTheme.PillCornerDp, OneUiTheme.Secondary, 1f)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            Color fg = on ? Color.White : OneUiTheme.TextSub;
+            libNoiseToggleIcon.IconColor = fg;
+            libNoiseToggleText.SetTextColor(fg);
+        }
+        if (libFolderFilterBtn != null) {
+            int fMode = store.LibraryFolderFilterMode;
+            List<string> dirs = store.GetLibraryFilterFolders();
+            bool active = fMode > 0 && dirs.Count > 0;
+            libFolderFilterText.Text = active
+                ? string.Format(S["LibFoldersChipActive"], dirs.Count)
+                : S["LibFoldersChipLabel"];
+            libFolderFilterBtn.Background = active
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.Tertiary, 120), OneUiTheme.PillCornerDp, OneUiTheme.Tertiary, 1f)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            Color fg = active ? Color.White : OneUiTheme.TextSub;
+            libFolderFilterIcon.IconColor = fg;
+            libFolderFilterText.SetTextColor(fg);
+        }
+    }
+
+    List<LibraryTrackItem> FilterLibraryTracks(IEnumerable<LibraryTrackItem> tracks) {
+        if (tracks == null) return [];
+        int fMode = Math.Clamp(store.LibraryFilterMode, 0, 2);
+        bool hideNoise = store.LibraryHideNonMusic;
+        int fldMode = store.LibraryFolderFilterMode;
+        List<string> folders = store.GetLibraryFilterFolders();
+        return tracks.Where(t => MediaLibraryService.PassesAllFilters(t, fMode, hideNoise, fldMode, folders)).ToList();
+    }
+
+    void ShowLibraryFolderFilterDialog() {
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
+        int chosenMode = store.LibraryFolderFilterMode;
+        List<string> chosenFolders = store.GetLibraryFilterFolders();
+        Android.App.Dialog dlg = null;
+
+        LinearLayout[] modeRows = new LinearLayout[3];
+        TextView[] modeLabels = new TextView[3];
+        string[] labels = [S["LibFoldersAll"], S["LibFoldersExcept"], S["LibFoldersOnly"]];
+        TextView summaryTv = Label("", 11.5f, OneUiTheme.TextSub);
+
+        void RefreshFolderFilterModalUi() {
+            for (int i = 0; i < 3; i++) {
+                bool sel = chosenMode == i;
+                modeRows[i].Background = sel
+                    ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.Primary, 95), 14f, OneUiTheme.PrimaryHigh, 1.2f)
+                    : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
+                modeLabels[i].SetTextColor(sel ? Color.White : OneUiTheme.TextSecondary);
+            }
+            string listPreview = chosenFolders.Count == 0
+                ? "—"
+                : string.Join("\n", chosenFolders.Take(6).Select(p => $"• {p}")) +
+                  (chosenFolders.Count > 6 ? $"\n(+{chosenFolders.Count - 6})" : "");
+            summaryTv.Text = $"{string.Format(S["LibFoldersCountBadge"], chosenFolders.Count, labels[Math.Clamp(chosenMode, 0, 2)])}\n{listPreview}";
+        }
+
+        for (int i = 0; i < 3; i++) {
+            int m = i;
+            LinearLayout row = HRow();
+            row.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+            OneUiTheme.AttachRecoil(row, 0.98f);
+            TextView tv = Label(labels[i], 13f, OneUiTheme.TextSecondary);
+            tv.SetTypeface(OneUiTheme.GetAppleFontSemibold(this), TypefaceStyle.Bold);
+            row.AddView(tv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            row.Click += (_, _) => {
+                chosenMode = m;
+                RefreshFolderFilterModalUi();
+            };
+            modeRows[i] = row;
+            modeLabels[i] = tv;
+            content.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(6)
+            });
+        }
+
+        summaryTv.SetPadding(Dp(4), Dp(6), Dp(4), Dp(10));
+        content.AddView(summaryTv);
+
+        Button pickFoldersBtn = PrimaryButton(S["LibFoldersPickBtn"], () => {
+            OneUiFileExplorerDialog.Show(this, new FileExplorerOptions {
+                Title = S["ExplorerTitleFolders"],
+                Mode = ExplorerPickMode.MultiFolder,
+                InitialDirectory = store.LastExplorerDirectory,
+                InitiallySelectedPaths = chosenFolders,
+                ConfirmLabel = S["ExplorerApplyFolders"],
+                OnConfirm = picked => {
+                    chosenFolders = picked?.ToList() ?? [];
+                    if (chosenFolders.Count > 0 && chosenMode == 0) {
+                        chosenMode = 2; // Auto-activate "Only Selected" when user explicitly selects folders
+                    }
+                    RefreshFolderFilterModalUi();
+                }
+            });
+        });
+        content.AddView(pickFoldersBtn);
+        RefreshFolderFilterModalUi();
+
+        dlg = OneUiModalDialog.Show(
+            this,
+            S["LibFoldersFilter"],
+            customContent: content,
+            icon: OneUiIconType.FolderFilter,
+            iconBadgeColor: OneUiTheme.Tertiary,
+            positiveText: "OK",
+            onPositive: () => {
+                store.LibraryFolderFilterMode = chosenFolders.Count == 0 ? 0 : chosenMode;
+                store.SetLibraryFilterFolders(chosenFolders);
+                selectedLibraryAlbum = null;
+                selectedLibraryArtist = null;
+                selectedLibraryFolder = null;
+                libraryRenderLimit = 72;
+                UpdateLibraryFilterStyles();
+                RenderLibraryView();
+            },
+            negativeText: S["CancelBtn"]);
     }
 
     void UpdateLibraryCatStyles() {
@@ -1181,8 +1426,15 @@ public partial class MainActivity {
         string q = (librarySearchQuery ?? "").Trim();
         bool hasQuery = !string.IsNullOrEmpty(q);
         int filterMode = Math.Clamp(store.LibraryFilterMode, 0, 2);
-        int totalSpatial = librarySnapshot.Tracks.Count(t => t.IsSurround);
-        string cacheTag = isIncrementalSyncRunning ? "Sincronizando..." : string.Format(S["LibCacheSynced"], librarySnapshot.Tracks.Count, totalSpatial);
+        List<LibraryTrackItem> allVisibleTracks = FilterLibraryTracks(librarySnapshot.Tracks);
+        int visibleSpatial = allVisibleTracks.Count(t => t.IsSurround);
+        int hiddenNoise = store.LibraryHideNonMusic ? librarySnapshot.Tracks.Count(t => t.IsLikelyNonMusic && !t.IsSurround) : 0;
+        string cacheTag = isIncrementalSyncRunning
+            ? "Sincronizando..."
+            : string.Format(S["LibCacheSynced"], allVisibleTracks.Count, visibleSpatial);
+        if (hiddenNoise > 0 && !isIncrementalSyncRunning) {
+            cacheTag = $"{cacheTag} • {string.Format(S["LibHiddenNoiseCount"], hiddenNoise)}";
+        }
 
         // Detail Drill-Down inside Album / Artist / Folder
         if (selectedLibraryAlbum != null) {
@@ -1190,9 +1442,7 @@ public partial class MainActivity {
             return;
         }
         if (selectedLibraryFolder != null) {
-            List<LibraryTrackItem> fldTracks = selectedLibraryFolder.Tracks
-                .Where(t => MediaLibraryService.PassesFilter(t, filterMode))
-                .ToList();
+            List<LibraryTrackItem> fldTracks = FilterLibraryTracks(selectedLibraryFolder.Tracks);
             RenderGroupTracksDrilldown(
                 selectedLibraryFolder.FolderName,
                 $"{fldTracks.Count} faixa(s) • {selectedLibraryFolder.FolderPath}",
@@ -1203,9 +1453,7 @@ public partial class MainActivity {
         if (!string.IsNullOrEmpty(selectedLibraryArtist)) {
             LibraryArtistGroup art = librarySnapshot.Artists.FirstOrDefault(a => string.Equals(a.Artist, selectedLibraryArtist, StringComparison.OrdinalIgnoreCase));
             if (art != null) {
-                List<LibraryTrackItem> artTracks = art.Tracks
-                    .Where(t => MediaLibraryService.PassesFilter(t, filterMode))
-                    .ToList();
+                List<LibraryTrackItem> artTracks = FilterLibraryTracks(art.Tracks);
                 RenderGroupTracksDrilldown(
                     art.Artist,
                     string.Format(S["LibSongsCount"], artTracks.Count),
@@ -1215,17 +1463,20 @@ public partial class MainActivity {
             }
         }
 
+        bool hasAnyActiveFilter = filterMode > 0 || store.LibraryFolderFilterMode > 0;
+
         if (libraryCategory == LibraryCategory.Albums) {
-            List<LibraryAlbumGroup> filtered = librarySnapshot.Albums
-                .Where(a => a.Tracks.Any(t => MediaLibraryService.PassesFilter(t, filterMode)))
-                .Where(a => !hasQuery ||
-                    a.AlbumTitle.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    a.Artist.Contains(q, StringComparison.OrdinalIgnoreCase))
+            List<(LibraryAlbumGroup Alb, List<LibraryMergedTrack> Merged)> filtered = librarySnapshot.Albums
+                .Select(a => (Alb: a, Merged: MediaLibraryService.MergeAlbumTrackVariants(FilterLibraryTracks(a.Tracks))))
+                .Where(x => x.Merged.Count > 0)
+                .Where(x => !hasQuery ||
+                    x.Alb.AlbumTitle.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                    x.Alb.Artist.Contains(q, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             libraryStatusText.Text = $"{filtered.Count} {S["LibAlbums"].ToLowerInvariant()} • {cacheTag}";
             if (filtered.Count == 0) {
-                RenderLibraryEmptyCard(filterMode > 0 && librarySnapshot.Tracks.Count > 0);
+                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0);
                 return;
             }
 
@@ -1235,9 +1486,9 @@ public partial class MainActivity {
                     Orientation = Orientation.Horizontal,
                     BaselineAligned = false
                 };
-                gridRow.AddView(BuildAlbumTileCard(filtered[i]), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+                gridRow.AddView(BuildAlbumTileCard(filtered[i].Alb, filtered[i].Merged), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
                 if (i + 1 < showCount) {
-                    gridRow.AddView(BuildAlbumTileCard(filtered[i + 1]), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+                    gridRow.AddView(BuildAlbumTileCard(filtered[i + 1].Alb, filtered[i + 1].Merged), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
                 } else {
                     gridRow.AddView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
                 }
@@ -1247,8 +1498,7 @@ public partial class MainActivity {
             }
             AddLoadMoreIfNeeded(filtered.Count, showCount);
         } else if (libraryCategory == LibraryCategory.Tracks) {
-            List<LibraryTrackItem> filtered = librarySnapshot.Tracks
-                .Where(t => MediaLibraryService.PassesFilter(t, filterMode))
+            List<LibraryTrackItem> filtered = allVisibleTracks
                 .Where(t => !hasQuery ||
                     t.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                     t.Artist.Contains(q, StringComparison.OrdinalIgnoreCase) ||
@@ -1257,7 +1507,7 @@ public partial class MainActivity {
 
             libraryStatusText.Text = $"{string.Format(S["LibSongsCount"], filtered.Count)} • {cacheTag}";
             if (filtered.Count == 0) {
-                RenderLibraryEmptyCard(filterMode > 0 && librarySnapshot.Tracks.Count > 0);
+                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0);
                 return;
             }
 
@@ -1269,25 +1519,28 @@ public partial class MainActivity {
             }
             AddLoadMoreIfNeeded(filtered.Count, showCount);
         } else if (libraryCategory == LibraryCategory.Artists) {
-            List<LibraryArtistGroup> filtered = librarySnapshot.Artists
-                .Where(a => a.Tracks.Any(t => MediaLibraryService.PassesFilter(t, filterMode)))
-                .Where(a => !hasQuery || a.Artist.Contains(q, StringComparison.OrdinalIgnoreCase))
+            List<(LibraryArtistGroup Art, List<LibraryTrackItem> VisTracks)> filtered = librarySnapshot.Artists
+                .Select(a => (Art: a, VisTracks: FilterLibraryTracks(a.Tracks)))
+                .Where(x => x.VisTracks.Count > 0)
+                .Where(x => !hasQuery || x.Art.Artist.Contains(q, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             libraryStatusText.Text = $"{filtered.Count} {S["LibArtists"].ToLowerInvariant()} • {cacheTag}";
             if (filtered.Count == 0) {
-                RenderLibraryEmptyCard(filterMode > 0 && librarySnapshot.Tracks.Count > 0);
+                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0);
                 return;
             }
 
             int showCount = Math.Min(filtered.Count, libraryRenderLimit);
             for (int i = 0; i < showCount; i++) {
-                LibraryArtistGroup art = filtered[i];
-                List<LibraryTrackItem> visTracks = art.Tracks.Where(t => MediaLibraryService.PassesFilter(t, filterMode)).ToList();
+                LibraryArtistGroup art = filtered[i].Art;
+                List<LibraryTrackItem> visTracks = filtered[i].VisTracks;
+                int albumCnt = visTracks.Select(t => string.IsNullOrWhiteSpace(t.Album) ? t.FolderPath : t.Album)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count();
                 LinearLayout row = BuildGroupRow(
                     art.Artist,
-                    $"{art.AlbumCount} álbum(ns) • {visTracks.Count} faixa(s)",
-                    visTracks.FirstOrDefault() ?? art.Tracks.FirstOrDefault(),
+                    $"{Math.Max(1, albumCnt)} álbum(ns) • {visTracks.Count} faixa(s)",
+                    visTracks.FirstOrDefault(),
                     () => { selectedLibraryArtist = art.Artist; RenderLibraryView(); });
                 libraryListHost.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
                     BottomMargin = Dp(6)
@@ -1295,27 +1548,28 @@ public partial class MainActivity {
             }
             AddLoadMoreIfNeeded(filtered.Count, showCount);
         } else {
-            List<LibraryFolderGroup> filtered = librarySnapshot.Folders
-                .Where(f => f.Tracks.Any(t => MediaLibraryService.PassesFilter(t, filterMode)))
-                .Where(f => !hasQuery ||
-                    f.FolderName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    f.FolderPath.Contains(q, StringComparison.OrdinalIgnoreCase))
+            List<(LibraryFolderGroup Fld, List<LibraryTrackItem> VisTracks)> filtered = librarySnapshot.Folders
+                .Select(f => (Fld: f, VisTracks: FilterLibraryTracks(f.Tracks)))
+                .Where(x => x.VisTracks.Count > 0)
+                .Where(x => !hasQuery ||
+                    x.Fld.FolderName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                    x.Fld.FolderPath.Contains(q, StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             libraryStatusText.Text = $"{filtered.Count} {S["LibFolders"].ToLowerInvariant()} • {cacheTag}";
             if (filtered.Count == 0) {
-                RenderLibraryEmptyCard(filterMode > 0 && librarySnapshot.Tracks.Count > 0);
+                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0);
                 return;
             }
 
             int showCount = Math.Min(filtered.Count, libraryRenderLimit);
             for (int i = 0; i < showCount; i++) {
-                LibraryFolderGroup fld = filtered[i];
-                List<LibraryTrackItem> visTracks = fld.Tracks.Where(t => MediaLibraryService.PassesFilter(t, filterMode)).ToList();
+                LibraryFolderGroup fld = filtered[i].Fld;
+                List<LibraryTrackItem> visTracks = filtered[i].VisTracks;
                 LinearLayout row = BuildGroupRow(
                     fld.FolderName,
                     $"{visTracks.Count} faixa(s) • {fld.FolderPath}",
-                    visTracks.FirstOrDefault() ?? fld.Tracks.FirstOrDefault(),
+                    visTracks.FirstOrDefault(),
                     () => { selectedLibraryFolder = fld; RenderLibraryView(); },
                     isFolder: true);
                 libraryListHost.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
@@ -1345,18 +1599,19 @@ public partial class MainActivity {
         if (isFilteredEmpty) {
             Button showAllBtn = PrimaryButton(S["LibFilterAll"], () => {
                 store.LibraryFilterMode = 0;
+                store.LibraryFolderFilterMode = 0;
                 UpdateLibraryFilterStyles();
                 RenderLibraryView();
             });
             card.AddView(showAllBtn);
         } else {
-            Button openPicker = PrimaryButton(S["LibSystemPicker"], () => LaunchFilePicker(ReqOpenMedia, allowMultiple: false));
+            Button openPicker = PrimaryButton(S["LibOpenExplorer"], () => OpenMediaWithExplorer(switchToTab: 0));
             card.AddView(openPicker);
         }
         libraryListHost.AddView(card);
     }
 
-    LinearLayout BuildAlbumTileCard(LibraryAlbumGroup alb) {
+    LinearLayout BuildAlbumTileCard(LibraryAlbumGroup alb, List<LibraryMergedTrack> visibleMerged) {
         Typeface sfBold = OneUiTheme.GetAppleFontBold(this);
         Typeface sfReg = OneUiTheme.GetAppleFontRegular(this);
 
@@ -1365,11 +1620,14 @@ public partial class MainActivity {
         tile.SetPadding(Dp(10), Dp(10), Dp(10), Dp(10));
         OneUiTheme.AttachRecoil(tile, 0.96f);
 
+        LibraryTrackItem thumbSample = visibleMerged?.FirstOrDefault()?.Primary ?? alb.Tracks.FirstOrDefault();
+        int trackCount = visibleMerged?.Count ?? alb.Tracks.Count;
+
         RoundedArtworkView art = new(this) {
             PreferredSizeDp = 148,
             CornerDp = 12f
         };
-        BindThumbAsync(art, alb.Tracks.FirstOrDefault(), alb.AlbumTitle);
+        BindThumbAsync(art, thumbSample, alb.AlbumTitle);
         tile.AddView(art, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
@@ -1380,7 +1638,7 @@ public partial class MainActivity {
         titleTv.Ellipsize = TextUtils.TruncateAt.End;
         tile.AddView(titleTv);
 
-        TextView subTv = Label($"{alb.Artist} • {alb.Tracks.Count}", 11f, OneUiTheme.TextMuted);
+        TextView subTv = Label($"{alb.Artist} • {trackCount}", 11f, OneUiTheme.TextMuted);
         subTv.SetTypeface(sfReg, TypefaceStyle.Normal);
         subTv.SetSingleLine(true);
         subTv.Ellipsize = TextUtils.TruncateAt.End;
@@ -1393,13 +1651,24 @@ public partial class MainActivity {
         return tile;
     }
 
+    LibraryTrackItem PickPreferredVariant(LibraryMergedTrack m) {
+        if (m == null) return null;
+        if (!string.IsNullOrEmpty(preferredFormatVariantKey) && m.Variants.Count > 1) {
+            LibraryTrackItem pref = m.Variants.FirstOrDefault(v =>
+                string.Equals(MediaLibraryService.GetDistinctVariantLabel(v, m.Variants), preferredFormatVariantKey, StringComparison.OrdinalIgnoreCase));
+            if (pref != null) return pref;
+        }
+        return m.Primary;
+    }
+
     void RenderAlbumDetailView(LibraryAlbumGroup alb) {
         Typeface sfBold = OneUiTheme.GetAppleFontBold(this);
-        List<LibraryTrackItem> tracks = alb.Tracks
-            .Where(t => MediaLibraryService.PassesFilter(t, store.LibraryFilterMode))
-            .ToList();
-        if (tracks.Count == 0) tracks = alb.Tracks;
-        libraryStatusText.Text = $"{alb.AlbumTitle} — {tracks.Count} faixa(s)";
+        List<LibraryTrackItem> filteredRaw = FilterLibraryTracks(alb.Tracks);
+        if (filteredRaw.Count == 0) filteredRaw = alb.Tracks;
+        List<LibraryMergedTrack> merged = MediaLibraryService.MergeAlbumTrackVariants(filteredRaw);
+        List<LibraryTrackItem> albumQueue = merged.Select(PickPreferredVariant).Where(t => t != null).ToList();
+
+        libraryStatusText.Text = $"{alb.AlbumTitle} — {merged.Count} faixa(s)";
 
         LinearLayout hdrCard = Card();
         LinearLayout backRow = HRow();
@@ -1413,7 +1682,7 @@ public partial class MainActivity {
 
         LinearLayout hero = HRow();
         RoundedArtworkView cover = new(this) { PreferredSizeDp = 88, CornerDp = 14f };
-        BindThumbAsync(cover, tracks.FirstOrDefault(), alb.AlbumTitle);
+        BindThumbAsync(cover, albumQueue.FirstOrDefault(), alb.AlbumTitle);
         hero.AddView(cover, new LinearLayout.LayoutParams(Dp(88), Dp(88)) { RightMargin = Dp(12) });
 
         LinearLayout meta = new(this) { Orientation = Orientation.Vertical };
@@ -1424,8 +1693,8 @@ public partial class MainActivity {
         meta.AddView(aTv);
 
         Button playAllBtn = PrimaryButton(S["Play"], () => {
-            if (tracks.Count > 0) {
-                OpenLibraryTrack(tracks[0], tracks, autoPlay: true);
+            if (albumQueue.Count > 0) {
+                OpenLibraryTrack(albumQueue[0], albumQueue, autoPlay: true);
             }
         });
         playAllBtn.SetMinimumHeight(Dp(34));
@@ -1435,8 +1704,26 @@ public partial class MainActivity {
         hdrCard.AddView(hero);
         libraryListHost.AddView(hdrCard);
 
-        for (int i = 0; i < tracks.Count; i++) {
-            libraryListHost.AddView(BuildLibraryTrackRow(tracks[i], tracks, i, showThumb: false),
+        bool multiDisc = merged.Select(m => m.Primary.DiscNumber).Where(d => d > 0).Distinct().Count() > 1;
+        int lastDisc = -1;
+        for (int i = 0; i < merged.Count; i++) {
+            LibraryMergedTrack m = merged[i];
+            if (multiDisc && m.Primary.DiscNumber > 0 && m.Primary.DiscNumber != lastDisc) {
+                lastDisc = m.Primary.DiscNumber;
+                TextView discTv = Label(string.Format(S["LibDiscHeader"], lastDisc), 11.5f, OneUiTheme.PeachText);
+                discTv.SetTypeface(sfBold, TypefaceStyle.Bold);
+                discTv.SetPadding(Dp(6), Dp(8), Dp(6), Dp(4));
+                libraryListHost.AddView(discTv);
+            }
+            LibraryTrackItem chosen = albumQueue[i];
+            libraryListHost.AddView(
+                BuildLibraryTrackRow(
+                    chosen,
+                    albumQueue,
+                    i,
+                    showThumb: false,
+                    badgeOverride: m.Variants.Count > 1 ? m.CombinedBadgeLabel : null,
+                    allVariantsForHighlight: m.Variants),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
         }
     }
@@ -1485,9 +1772,16 @@ public partial class MainActivity {
         return row;
     }
 
-    LinearLayout BuildLibraryTrackRow(LibraryTrackItem item, IReadOnlyList<LibraryTrackItem> queue, int indexInQueue, bool showThumb = true) {
-        bool isPlayingThis = LoadedFile != null &&
-            string.Equals(LoadedFile.Path, item.FilePath, StringComparison.OrdinalIgnoreCase);
+    LinearLayout BuildLibraryTrackRow(
+        LibraryTrackItem item,
+        IReadOnlyList<LibraryTrackItem> queue,
+        int indexInQueue,
+        bool showThumb = true,
+        string badgeOverride = null,
+        IReadOnlyList<LibraryTrackItem> allVariantsForHighlight = null) {
+        bool isPlayingThis = LoadedFile != null && (
+            string.Equals(LoadedFile.Path, item.FilePath, StringComparison.OrdinalIgnoreCase) ||
+            (allVariantsForHighlight != null && allVariantsForHighlight.Any(v => string.Equals(LoadedFile.Path, v.FilePath, StringComparison.OrdinalIgnoreCase))));
 
         LinearLayout row = HRow();
         row.Background = isPlayingThis
@@ -1523,16 +1817,20 @@ public partial class MainActivity {
         col.AddView(subTv);
         row.AddView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
 
-        // Spatial / Container format badge & duration column
+        // Spatial / Container format badge (or merged ATMOS + FLAC badge) & duration column
         LinearLayout rightCol = new(this) { Orientation = Orientation.Vertical };
         rightCol.SetGravity(GravityFlags.End);
-        string badgeLabel = !string.IsNullOrEmpty(item.AudioBadge) && item.AudioBadge != item.FormatBadge
-            ? $"{item.FormatBadge} • {item.AudioBadge}"
-            : item.FormatBadge;
-        Color badgeTextCol = item.IsSpatial
+        string badgeLabel = !string.IsNullOrEmpty(badgeOverride)
+            ? badgeOverride
+            : (!string.IsNullOrEmpty(item.AudioBadge) && item.AudioBadge != item.FormatBadge
+                ? $"{item.FormatBadge} • {item.AudioBadge}"
+                : item.FormatBadge);
+        bool anySpatial = item.IsSpatial || (allVariantsForHighlight?.Any(v => v.IsSpatial) ?? false);
+        bool anySurround = item.IsSurround || (allVariantsForHighlight?.Any(v => v.IsSurround) ?? false);
+        Color badgeTextCol = anySpatial
             ? OneUiTheme.PrimaryHigh
-            : (item.IsSurround ? OneUiTheme.PeachText : OneUiTheme.TextMuted);
-        Color badgeBgCol = item.IsSpatial
+            : (anySurround ? OneUiTheme.PeachText : OneUiTheme.TextMuted);
+        Color badgeBgCol = anySpatial
             ? OneUiTheme.WithAlpha(OneUiTheme.Primary, 52)
             : Color.Argb(40, 255, 255, 255);
         TextView fmtTv = Label(badgeLabel, 9.5f, badgeTextCol);
@@ -1600,20 +1898,49 @@ public partial class MainActivity {
     // ============================================================
     void ShowOnlineMetadataDialog() {
         LinearLayout box = new(this) { Orientation = Orientation.Vertical };
-        string defaultQuery = !string.IsNullOrWhiteSpace(currentMediaMeta?.Artist)
-            ? $"{currentMediaMeta.Artist} {currentMediaMeta.Title}"
-            : (currentMediaMeta?.Title ?? (LoadedFile != null ? Path.GetFileNameWithoutExtension(LoadedFile.Path) : ""));
 
-        EditText queryInput = new(this) {
-            Text = OnlineMetadataService.CleanSearchTerm(defaultQuery),
-            Hint = S["OnlineSearchQueryHint"],
-            TextSize = 13.5f
-        };
-        queryInput.SetTextColor(ColText);
-        queryInput.SetHintTextColor(ColMuted);
-        queryInput.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
-        queryInput.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 14f);
+        EditText MakeModalInput(string initialText, string hint) {
+            EditText et = new(this) {
+                Text = initialText ?? "",
+                Hint = hint ?? "",
+                TextSize = 13f
+            };
+            et.SetTextColor(ColText);
+            et.SetHintTextColor(ColMuted);
+            et.SetSingleLine(true);
+            et.SetPadding(Dp(12), Dp(8), Dp(12), Dp(8));
+            et.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
+            return et;
+        }
+
+        string defTrack = OnlineMetadataService.CleanSearchTerm(
+            !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+                ? currentMediaMeta.Title
+                : (LoadedFile != null ? Path.GetFileNameWithoutExtension(LoadedFile.Path) : ""));
+        string defArtist = currentMediaMeta?.Artist ?? "";
+        string defAlbum = currentMediaMeta?.Album ?? "";
+
+        TextView trackLbl = Label(S["OnlineTrackLabel"], 11f, OneUiTheme.TextMuted);
+        trackLbl.SetPadding(Dp(2), 0, Dp(2), Dp(3));
+        box.AddView(trackLbl);
+        EditText queryInput = MakeModalInput(defTrack, S["OnlineSearchQueryHint"]);
         box.AddView(queryInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        TextView artistLbl = Label(S["OnlineArtistLabel"], 11f, OneUiTheme.TextMuted);
+        artistLbl.SetPadding(Dp(2), 0, Dp(2), Dp(3));
+        box.AddView(artistLbl);
+        EditText artistInput = MakeModalInput(defArtist, "");
+        box.AddView(artistInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        TextView albumLbl = Label(S["OnlineAlbumLabel"], 11f, OneUiTheme.TextMuted);
+        albumLbl.SetPadding(Dp(2), 0, Dp(2), Dp(3));
+        box.AddView(albumLbl);
+        EditText albumInput = MakeModalInput(defAlbum, "");
+        box.AddView(albumInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
 
@@ -1624,9 +1951,10 @@ public partial class MainActivity {
 
         void ApplyCoverCandidate(OnlineCoverCandidate c, string fallbackTitle) {
             dlg?.Dismiss();
-            string tName = currentMediaMeta?.Title ?? fallbackTitle;
+            string tName = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title) ? currentMediaMeta.Title : fallbackTitle;
             string arName = !string.IsNullOrWhiteSpace(currentMediaMeta?.Artist) ? currentMediaMeta.Artist : c.Artist;
-            string alName = !string.IsNullOrWhiteSpace(currentMediaMeta?.Album) ? currentMediaMeta.Album : c.Album;
+            string alName = !string.IsNullOrWhiteSpace(albumInput.Text) ? albumInput.Text.Trim()
+                : (!string.IsNullOrWhiteSpace(currentMediaMeta?.Album) ? currentMediaMeta.Album : c.Album);
             string pathOvr = currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path;
             bool autoPicked = store.OnlineAutoSelectBestMatch && c.IsExactMatch;
             Task.Run(async () => {
@@ -1634,6 +1962,9 @@ public partial class MainActivity {
                     this, c.ImageUrl, tName, arName, alName, filePathOverride: pathOvr).ConfigureAwait(false);
                 RunOnUiThread(() => {
                     if (uiDestroyed || !IsBitmapUsable(bmp)) return;
+                    if (!string.IsNullOrEmpty(pathOvr)) {
+                        MediaLibraryService.InvalidateThumbCache(pathOvr);
+                    }
                     if (currentMediaMeta != null) {
                         currentMediaMeta.ArtworkBitmap = bmp;
                         currentMediaMeta.HasEmbeddedArtwork = true;
@@ -1642,6 +1973,9 @@ public partial class MainActivity {
                         currentMediaMeta.SecondaryAccent = s;
                     }
                     RefreshMusicPlayerUi();
+                    if (isLibrarySectionOpen) {
+                        RenderLibraryView();
+                    }
                     mediaNotification?.UpdateMetadata(
                         currentMediaMeta?.Title ?? tName,
                         string.IsNullOrWhiteSpace(arName) ? "Cavernize 3D" : arName,
@@ -1674,15 +2008,15 @@ public partial class MainActivity {
         }
 
         void RunCoverSearch() {
-            string q = queryInput.Text?.Trim() ?? "";
-            if (string.IsNullOrEmpty(q)) return;
+            string searchTitle = queryInput.Text?.Trim() ?? "";
+            string searchArtist = artistInput.Text?.Trim() ?? "";
+            string searchAlbum = albumInput.Text?.Trim() ?? "";
+            if (string.IsNullOrEmpty(searchTitle) && string.IsNullOrEmpty(searchAlbum)) return;
             resultsHost.RemoveAllViews();
             resultsHost.AddView(Label(S["OnlineSearching"], 12f, OneUiTheme.PeachText));
 
-            string searchTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title) ? currentMediaMeta.Title : q;
-            string searchArtist = currentMediaMeta?.Artist ?? "";
-            string searchAlbum = currentMediaMeta?.Album ?? "";
             bool isVid = currentMediaMeta?.HasVideo == true;
+            string q = string.IsNullOrWhiteSpace(searchTitle) ? searchAlbum : searchTitle;
 
             Task.Run(async () => {
                 List<OnlineCoverCandidate> covers = await OnlineMetadataService.SearchCoverCandidatesAsync(
@@ -1699,7 +2033,7 @@ public partial class MainActivity {
                         ? covers.FirstOrDefault(c => c.IsExactMatch)
                         : null;
                     if (exactBest != null) {
-                        ApplyCoverCandidate(exactBest, searchTitle);
+                        ApplyCoverCandidate(exactBest, q);
                         return;
                     }
 
@@ -1712,7 +2046,7 @@ public partial class MainActivity {
                     foreach (OnlineCoverCandidate c in covers) {
                         LinearLayout row = HRow();
                         row.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
-                        row.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 14f);
+                        row.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
                         OneUiTheme.AttachRecoil(row, 0.97f);
 
                         LinearLayout col = new(this) { Orientation = Orientation.Vertical };
@@ -1724,7 +2058,7 @@ public partial class MainActivity {
                         col.AddView(t2);
                         row.AddView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
-                        row.Click += (_, _) => ApplyCoverCandidate(c, searchTitle);
+                        row.Click += (_, _) => ApplyCoverCandidate(c, q);
                         resultsHost.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
                             BottomMargin = Dp(6)
                         });
@@ -1734,21 +2068,20 @@ public partial class MainActivity {
         }
 
         void RunLyricsSearch() {
-            string q = queryInput.Text?.Trim() ?? "";
-            if (string.IsNullOrEmpty(q)) return;
+            string titleArg = queryInput.Text?.Trim() ?? "";
+            string artistArg = artistInput.Text?.Trim() ?? "";
+            string albumArg = albumInput.Text?.Trim() ?? "";
+            if (string.IsNullOrEmpty(titleArg)) return;
             resultsHost.RemoveAllViews();
             resultsHost.AddView(Label(S["OnlineSearching"], 12f, OneUiTheme.PeachText));
 
-            string titleArg = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title) ? currentMediaMeta.Title : q;
-            string artistArg = currentMediaMeta?.Artist ?? "";
-            string albumArg = currentMediaMeta?.Album ?? "";
             double durArg = playerEngine?.TotalSeconds ?? 0;
 
             Task.Run(async () => {
                 List<OnlineLyricsCandidate> cands = await OnlineMetadataService.SearchLyricsAsync(
                     titleArg, artistArg, albumArg, expectedDurationSec: durArg).ConfigureAwait(false);
-                if (cands.Count == 0 && !string.Equals(titleArg, q, StringComparison.OrdinalIgnoreCase)) {
-                    cands = await OnlineMetadataService.SearchLyricsAsync(q, "", "", expectedDurationSec: durArg).ConfigureAwait(false);
+                if (cands.Count == 0 && (!string.IsNullOrEmpty(artistArg) || !string.IsNullOrEmpty(albumArg))) {
+                    cands = await OnlineMetadataService.SearchLyricsAsync(titleArg, "", "", expectedDurationSec: durArg).ConfigureAwait(false);
                 }
                 RunOnUiThread(() => {
                     if (uiDestroyed) return;
@@ -1775,7 +2108,7 @@ public partial class MainActivity {
                     foreach (OnlineLyricsCandidate c in cands) {
                         LinearLayout row = HRow();
                         row.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
-                        row.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 14f);
+                        row.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
                         OneUiTheme.AttachRecoil(row, 0.97f);
 
                         LinearLayout col = new(this) { Orientation = Orientation.Vertical };
@@ -1825,29 +2158,22 @@ public partial class MainActivity {
             ? $"{RenderTarget?.Name ?? "Binaural"} • {Math.Round(store.PlayerVolume * 100)}%"
             : $"{active.FormatHeader} • {trackSourceItems.Count(x => x.IsBed)} ch + {trackSourceItems.Count(x => x.IsDynamicObject)} obj • {Math.Round(store.PlayerVolume * 100)}%";
         TextView telTv = Label(tel, 12f, OneUiTheme.PeachText);
-        telTv.SetPadding(Dp(4), 0, Dp(4), Dp(12));
+        telTv.SetPadding(Dp(4), 0, Dp(4), Dp(10));
         box.AddView(telTv);
 
-        AddSwitchRow(box, S["HeadphoneVirt"], store.HeadphoneVirtualizer, v => {
-            store.HeadphoneVirtualizer = v;
-            playerEngine.HeadphoneVirtualizer = v;
-            refreshBentoTilesUi?.Invoke();
-            RefreshMusicPlayerControlsUi();
+        Button openExpBtn = PillButton(S["ExplorerTitle"], () => {
+            dlg?.Dismiss();
+            OpenMediaWithExplorer(switchToTab: 0);
         });
-        AddSwitchRow(box, "Cavernize 3D", store.CavernizeUpmix, v => {
-            store.CavernizeUpmix = v;
-            if (cavernizeUpmixSwitch != null) cavernizeUpmixSwitch.Checked = v;
-            ReattachPlayerTrack();
-            RefreshMusicPlayerControlsUi();
-        });
-        AddSwitchRow(box, S["PlayerQuickMatrix"], store.MatrixUpmixing, v => {
-            store.MatrixUpmixing = v;
-            if (matrixUpmixSwitch != null) matrixUpmixSwitch.Checked = v;
-            ReattachPlayerTrack();
-            RefreshMusicPlayerControlsUi();
-        });
+        box.AddView(openExpBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
 
-        AddDivider(box);
+        if (active != null) {
+            Button techBtn = PillButton(S["PlayerTechInfo"], () => {
+                dlg?.Dismiss();
+                ShowTechnicalStreamDialog();
+            });
+            box.AddView(techBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+        }
 
         Button onlineBtn = PillButton(S["OnlineSearchTitle"], () => {
             dlg?.Dismiss();
@@ -1896,8 +2222,8 @@ public partial class MainActivity {
             LinearLayout row = HRow();
             row.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
             row.Background = selected
-                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 85), 16f)
-                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 85), 16f, OneUiTheme.PrimaryHigh, 1f)
+                : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 16f, OneUiTheme.BorderSubtle, 1f);
             OneUiTheme.AttachRecoil(row, 0.97f);
             TextView tv = Label(labelText, 13f, selected ? ColText : OneUiTheme.TextSecondary);
             tv.SetTypeface(null, selected ? TypefaceStyle.Bold : TypefaceStyle.Normal);
@@ -1941,7 +2267,11 @@ public partial class MainActivity {
 
         Button importBtn = PillButton(S["SubtitlesImportBtn"], () => {
             dlg?.Dismiss();
-            LaunchFilePicker(ReqLoadSubtitles, allowMultiple: false);
+            OpenFileWithExplorerForExtensions(
+                S["VideoSubtitlesTitle"],
+                [".srt", ".vtt", ".ass", ".ssa", ".sub", ".txt"],
+                LoadExternalSubtitleFromPath,
+                ReqLoadSubtitles);
         });
         list.AddView(importBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
@@ -1968,7 +2298,7 @@ public partial class MainActivity {
         qInput.SetTextColor(ColText);
         qInput.SetHintTextColor(ColMuted);
         qInput.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
-        qInput.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 14f);
+        qInput.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
         box.AddView(qInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
@@ -2039,7 +2369,7 @@ public partial class MainActivity {
                     foreach (OnlineSubtitleCandidate cand in list) {
                         LinearLayout row = HRow();
                         row.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
-                        row.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 14f);
+                        row.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
                         OneUiTheme.AttachRecoil(row, 0.97f);
 
                         LinearLayout col = new(this) { Orientation = Orientation.Vertical };

@@ -94,6 +94,63 @@ def strip_env_prefix(segment: str) -> tuple[dict[str, str], str]:
     return envs, rest
 
 
+def resolve_repo_root(payload: dict) -> Path:
+    repo = Path(__file__).resolve().parents[2]
+    ws_paths = payload.get("workspacePaths") or []
+    if ws_paths and (Path(ws_paths[0]) / ".git").exists():
+        repo = Path(ws_paths[0])
+    return repo
+
+
+def get_pending_extra_requests(repo: Path) -> list[str]:
+    extra_file = repo / ".agents/docs/EXTRA_REQUESTS.md"
+    if not extra_file.exists():
+        return []
+    try:
+        text = extra_file.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return []
+    m = re.search(r"^##\s+Pedidos Extras Pendentes\s*\n(.*?)(?=^##\s+|\Z)", text, flags=re.MULTILINE | re.DOTALL)
+    if not m:
+        return []
+    pending: list[str] = []
+    for ln in m.group(1).splitlines():
+        s = ln.strip()
+        if not s or s.startswith("<!--") or s.lower().startswith("(nenhum pedido"):
+            continue
+        pending.append(s)
+    return pending
+
+
+def check_extra_requests_before_ship(segments: list[str], payload: dict) -> str | None:
+    """Block git commit / git push whenever .agents/docs/EXTRA_REQUESTS.md has pending items."""
+    is_ship_cmd = False
+    for seg in segments:
+        _, rest = strip_env_prefix(seg)
+        if re.match(r"^git(?:\s+-C\s+\S+)?\s+(commit|push)\b", rest):
+            is_ship_cmd = True
+            break
+    if not is_ship_cmd:
+        return None
+
+    repo = resolve_repo_root(payload)
+    pending = get_pending_extra_requests(repo)
+    if not pending:
+        return None
+
+    preview = "\n".join(f"  - {line[:120]}" for line in pending[:5])
+    if len(pending) > 5:
+        preview += f"\n  (+{len(pending) - 5} linha(s))"
+    return (
+        "BLOQUEADO ANTES DE COMMITAR/COMPILAR: existem pedidos extras pendentes em "
+        "`.agents/docs/EXTRA_REQUESTS.md` adicionados durante conversas paralelas:\n"
+        f"{preview}\n\n"
+        "Leia `.agents/docs/EXTRA_REQUESTS.md`, elabore um novo plano em etapas (como uma nova conversa), "
+        "implemente e valide todos os pedidos extras, mova-os para `## Pedidos Concluídos` "
+        "(deixando `## Pedidos Extras Pendentes` limpa) e só então commite/compile o APK."
+    )
+
+
 def check_commit_memory_feedback(segments: list[str], payload: dict) -> str | None:
     """Remind once per code delivery if PROJECT_HISTORY.md was not updated recently."""
     commit_seg = None
@@ -108,10 +165,7 @@ def check_commit_memory_feedback(segments: list[str], payload: dict) -> str | No
     if "--amend" in commit_seg or "[skip-history]" in commit_seg:
         return None
 
-    repo = Path(__file__).resolve().parents[2]
-    ws_paths = payload.get("workspacePaths") or []
-    if ws_paths and (Path(ws_paths[0]) / ".git").exists():
-        repo = Path(ws_paths[0])
+    repo = resolve_repo_root(payload)
 
     try:
         res = subprocess.run(
@@ -171,6 +225,11 @@ def main() -> None:
         return
 
     segments = split_shell_segments(cmd)
+
+    extra_msg = check_extra_requests_before_ship(segments, payload)
+    if extra_msg:
+        deny(extra_msg)
+        return
 
     feedback_msg = check_commit_memory_feedback(segments, payload)
     if feedback_msg:

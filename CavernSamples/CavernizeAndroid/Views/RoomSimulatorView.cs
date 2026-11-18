@@ -14,14 +14,14 @@ using CavernizeAndroid.Theme;
 namespace CavernizeAndroid.Views;
 
 /// <summary>
-/// Next-generation Interactive Dolby Atmos 3D Spatial Room Visualizer:
-/// - Volumetric 3D room with shaded translucent walls, floor sweet-spot rings, ear-level horizon frame,
-///   ceiling grid, luminous front cinema screen, and subtle RMS acoustic energy rays toward the listener
-/// - Articulated 3D Listener Head (L/R earcups, rotating 3D Yaw/Pitch wireframe, tilting 3D FOV cone,
-///   and interactive Aim Orb handle) allowing direct drag of Head Yaw (-180°..+180°), Head Pitch (-90°..+90°),
-///   and 3D Listener Position (X, Y, Z) directly on the chart with zero extra buttons needed
-/// - Integrated translucent Left (Height Y) &amp; Right (Head Tilt Pitch) edge rails + [Sala]/[Cabeça] mode pill
-/// - Structured Bed speaker monitor nodes (dB color rings) &amp; clean translucent 3D Object spheres with drop-lines
+/// Interactive Dolby Atmos 3D Spatial Room Visualizer &amp; Dedicated One UI 9 Control Dock:
+/// - Unobstructed volumetric 3D room (shaded acoustic walls, floor sweet-spot rings, ear horizon,
+///   ceiling cage, live RMS rays, dB-ring bed monitors, moving object trails &amp; idle fade-out)
+/// - Direct touch on the 3D head moves Listener X/Z/Y freely with zero obstructing handles;
+///   dragging empty room orbits camera; tapping any speaker/object toggles Solo; pinch zooms
+/// - Dedicated frosted Control Dock below the room:
+///   Left: Articulated 3D Head Trackball with attitude horizon ring for free Yaw &amp; Pitch steering
+///   Right: One UI 9 vertical capsule elevation slider for Listener Height (Y)
 /// </summary>
 public sealed class RoomSimulatorView : View {
     sealed class SmoothedSourceState {
@@ -48,11 +48,9 @@ public sealed class RoomSimulatorView : View {
         OrbitCamera,
         PinchZoom,
         ListenerMove,
-        HeadAim,
-        HeightRail,
-        PitchRail,
+        HeadDock,
+        HeightDock,
         PresetClick,
-        ModeToggleClick,
         LabelsClick,
         ZoomOutClick,
         ZoomInClick,
@@ -60,6 +58,7 @@ public sealed class RoomSimulatorView : View {
     }
 
     readonly Paint roomBgPaint = new(PaintFlags.AntiAlias);
+    readonly Paint dockBgPaint = new(PaintFlags.AntiAlias);
     readonly Paint roomBorderPaint = new(PaintFlags.AntiAlias);
     readonly Paint pillActivePaint = new(PaintFlags.AntiAlias);
     readonly Paint pillInactivePaint = new(PaintFlags.AntiAlias);
@@ -78,8 +77,8 @@ public sealed class RoomSimulatorView : View {
     readonly Paint listenerConePaint = new(PaintFlags.AntiAlias);
     readonly Paint headWireFrontPaint = new(PaintFlags.AntiAlias);
     readonly Paint headWireBackPaint = new(PaintFlags.AntiAlias);
-    readonly Paint railTrackPaint = new(PaintFlags.AntiAlias);
-    readonly Paint railFillPaint = new(PaintFlags.AntiAlias);
+    readonly Paint capsuleTrackPaint = new(PaintFlags.AntiAlias);
+    readonly Paint capsuleFillPaint = new(PaintFlags.AntiAlias);
     readonly Paint textPaint = new(PaintFlags.AntiAlias);
     readonly Paint subTextPaint = new(PaintFlags.AntiAlias);
 
@@ -87,17 +86,19 @@ public sealed class RoomSimulatorView : View {
     readonly List<(TrackSourceItem item, float x, float y)> hitTargets = [];
     readonly Dictionary<TrackSourceItem, SmoothedSourceState> smoothedStates = [];
     readonly RectF[] camPresetRects = [new(), new(), new()];
-    RectF camModeBtnRect = new();
     RectF camLabelsBtnRect = new();
     RectF camZoomOutRect = new();
     RectF camZoomInRect = new();
     RectF camResetLabelRect = new();
     RectF roomCanvasRect = new();
-    RectF heightRailRect = new();
-    RectF pitchRailRect = new();
 
-    float aimOrbScreenX;
-    float aimOrbScreenY;
+    // Dedicated external Control Dock rectangles (safely outside the 3D room)
+    RectF dockHeadRect = new();
+    RectF dockHeadResetRect = new();
+    RectF dockHeightRect = new();
+    RectF dockHeightCapsuleRect = new();
+    RectF dockHeightResetRect = new();
+
     float listenerScreenX;
     float listenerScreenY;
 
@@ -109,9 +110,8 @@ public sealed class RoomSimulatorView : View {
     bool hasPlayedOnce;
 
     LabelVisibilityMode labelMode = LabelVisibilityMode.ActiveOnly;
-    bool headTouchMode; // false = [Sala] (drag empty orbits, drag AimOrb steers head, drag Head moves X/Z); true = [Cabeça] (drag anywhere steers Yaw+Pitch)
 
-    const float DefaultRoomZoom = 0.86f;
+    const float DefaultRoomZoom = 0.88f;
     float roomZoom = DefaultRoomZoom;
     float pinchStartDist;
     float pinchStartZoom = DefaultRoomZoom;
@@ -124,7 +124,6 @@ public sealed class RoomSimulatorView : View {
 
     DateTime lastRoomTapTime = DateTime.MinValue;
     DateTime lastHeightTapTime = DateTime.MinValue;
-    DateTime lastPitchTapTime = DateTime.MinValue;
     DateTime lastHeadTapTime = DateTime.MinValue;
 
     TouchDragMode dragMode = TouchDragMode.None;
@@ -149,6 +148,9 @@ public sealed class RoomSimulatorView : View {
 
         roomBgPaint.Color = Color.Argb(205, 9, 11, 17);
         roomBgPaint.SetStyle(Paint.Style.Fill);
+
+        dockBgPaint.Color = Color.Argb(212, OneUiTheme.SurfaceElevated.R, OneUiTheme.SurfaceElevated.G, OneUiTheme.SurfaceElevated.B);
+        dockBgPaint.SetStyle(Paint.Style.Fill);
 
         roomBorderPaint.Color = OneUiTheme.Divider;
         roomBorderPaint.StrokeWidth = 1.1f * dp;
@@ -200,18 +202,18 @@ public sealed class RoomSimulatorView : View {
 
         listenerConePaint.SetStyle(Paint.Style.Fill);
 
-        headWireFrontPaint.Color = Color.Argb(165, 255, 255, 255);
+        headWireFrontPaint.Color = Color.Argb(172, 255, 255, 255);
         headWireFrontPaint.StrokeWidth = 1.05f * dp;
         headWireFrontPaint.SetStyle(Paint.Style.Stroke);
 
-        headWireBackPaint.Color = Color.Argb(45, 255, 255, 255);
+        headWireBackPaint.Color = Color.Argb(48, 255, 255, 255);
         headWireBackPaint.StrokeWidth = 0.85f * dp;
         headWireBackPaint.SetStyle(Paint.Style.Stroke);
 
-        railTrackPaint.Color = Color.Argb(44, 255, 255, 255);
-        railTrackPaint.SetStyle(Paint.Style.Fill);
+        capsuleTrackPaint.Color = Color.Argb(48, 255, 255, 255);
+        capsuleTrackPaint.SetStyle(Paint.Style.Fill);
 
-        railFillPaint.SetStyle(Paint.Style.Fill);
+        capsuleFillPaint.SetStyle(Paint.Style.Fill);
 
         textPaint.Color = OneUiTheme.TextPrimary;
         textPaint.TextSize = 9.5f * dp;
@@ -268,7 +270,7 @@ public sealed class RoomSimulatorView : View {
     protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         float dp = Resources.DisplayMetrics.Density;
         int w = MeasureSpec.GetSize(widthMeasureSpec);
-        int desiredH = Math.Max((int)(w * 0.86f), (int)(336f * dp));
+        int desiredH = Math.Max((int)(w * 1.02f), (int)(386f * dp));
         SetMeasuredDimension(w, ResolveSize(desiredH, heightMeasureSpec));
     }
 
@@ -278,14 +280,10 @@ public sealed class RoomSimulatorView : View {
         float outerPad = 4f * dp;
         float w = Width - outerPad * 2f;
         float h = Height - outerPad * 2f;
-        if (w <= 0 || h <= 0) {
-            return;
-        }
+        if (w <= 0 || h <= 0) return;
 
         long nowMs = SystemClock.UptimeMillis();
-        if (lastFrameMs == 0) {
-            lastFrameMs = nowMs;
-        }
+        if (lastFrameMs == 0) lastFrameMs = nowMs;
         float dt = Math.Clamp((nowMs - lastFrameMs) / 1000f, 0.001f, 0.05f);
         lastFrameMs = nowMs;
 
@@ -302,51 +300,38 @@ public sealed class RoomSimulatorView : View {
             }
         }
 
-        // Top toolbar: [Mode: Cabeça/Sala] | [Labels] | [- / +] | [3D] [Topo] [Frente]
+        // Zone 1: Clean Top Camera Bar ([Zoom %] ... [Labels] [- / +] [3D] [Topo] [Frente])
         float topBarH = 26f * dp;
         float topY = outerPad;
-        float presetW = 39f * dp;
-        float presetGap = 3.5f * dp;
-        float zoomBtnSz = 23f * dp;
+        float presetW = 42f * dp;
+        float presetGap = 4f * dp;
+        float zoomBtnSz = 24f * dp;
         float presetsTotalW = presetW * 3f + presetGap * 2f;
         float presetsStartX = outerPad + w - presetsTotalW;
 
-        float zInX = presetsStartX - 5f * dp - zoomBtnSz;
-        float zOutX = zInX - 3.5f * dp - zoomBtnSz;
+        float zInX = presetsStartX - 6f * dp - zoomBtnSz;
+        float zOutX = zInX - 4f * dp - zoomBtnSz;
         float zTop = topY + (topBarH - zoomBtnSz) * 0.5f;
         camZoomOutRect = new RectF(zOutX, zTop, zOutX + zoomBtnSz, zTop + zoomBtnSz);
         camZoomInRect = new RectF(zInX, zTop, zInX + zoomBtnSz, zTop + zoomBtnSz);
 
-        float lblBtnW = 44f * dp;
-        float lblBtnX = zOutX - 5f * dp - lblBtnW;
+        float lblBtnW = 48f * dp;
+        float lblBtnX = zOutX - 6f * dp - lblBtnW;
         camLabelsBtnRect = new RectF(lblBtnX, topY, lblBtnX + lblBtnW, topY + topBarH);
-
-        float modeBtnW = 58f * dp;
-        float modeBtnX = lblBtnX - 5f * dp - modeBtnW;
-        camModeBtnRect = new RectF(Math.Max(outerPad + 54f * dp, modeBtnX), topY, lblBtnX - 5f * dp, topY + topBarH);
-        camResetLabelRect = new RectF(outerPad, topY, camModeBtnRect.Left - 3f * dp, topY + topBarH);
+        camResetLabelRect = new RectF(outerPad, topY, camLabelsBtnRect.Left - 6f * dp, topY + topBarH);
 
         subTextPaint.TextAlign = Paint.Align.Left;
-        subTextPaint.TextSize = 9.5f * dp;
+        subTextPaint.TextSize = 10f * dp;
         subTextPaint.Color = OneUiTheme.TextMuted;
         canvas.DrawText(
-            $"{Math.Round(roomZoom * 100)}%",
-            outerPad + 3f * dp,
+            $"Zoom {Math.Round(roomZoom * 100)}%",
+            outerPad + 4f * dp,
             topY + topBarH * 0.5f - (subTextPaint.Ascent() + subTextPaint.Descent()) * 0.5f,
             subTextPaint);
 
-        // Mode toggle pill: [Cabeça] vs [Sala]
-        canvas.DrawRoundRect(camModeBtnRect, topBarH * 0.5f, topBarH * 0.5f,
-            headTouchMode ? pillActivePaint : pillInactivePaint);
+        canvas.DrawRoundRect(camLabelsBtnRect, topBarH * 0.5f, topBarH * 0.5f, pillInactivePaint);
         textPaint.TextAlign = Paint.Align.Center;
         textPaint.TextSize = 9.2f * dp;
-        textPaint.Color = headTouchMode ? OneUiTheme.TextPrimary : OneUiTheme.PrimaryHigh;
-        canvas.DrawText(headTouchMode ? "Cabeça" : "Sala", camModeBtnRect.CenterX(),
-            camModeBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
-
-        // Labels toggle pill
-        canvas.DrawRoundRect(camLabelsBtnRect, topBarH * 0.5f, topBarH * 0.5f, pillInactivePaint);
-        textPaint.TextSize = 9.0f * dp;
         textPaint.Color = labelMode == LabelVisibilityMode.All ? OneUiTheme.PrimaryHigh : OneUiTheme.TextSub;
         string lblTag = labelMode switch {
             LabelVisibilityMode.All => "Todos",
@@ -356,7 +341,6 @@ public sealed class RoomSimulatorView : View {
         canvas.DrawText(lblTag, camLabelsBtnRect.CenterX(),
             camLabelsBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
 
-        // Zoom - / + buttons
         canvas.DrawOval(camZoomOutRect, dragMode == TouchDragMode.ZoomOutClick ? pillActivePaint : pillInactivePaint);
         canvas.DrawOval(camZoomInRect, dragMode == TouchDragMode.ZoomInClick ? pillActivePaint : pillInactivePaint);
         float arm = zoomBtnSz * 0.22f;
@@ -379,21 +363,24 @@ public sealed class RoomSimulatorView : View {
             canvas.DrawRoundRect(camPresetRects[i], topBarH * 0.5f, topBarH * 0.5f, isClose ? pillActivePaint : pillInactivePaint);
 
             textPaint.TextAlign = Paint.Align.Center;
-            textPaint.TextSize = 9.3f * dp;
+            textPaint.TextSize = 9.4f * dp;
             textPaint.Color = isClose ? OneUiTheme.TextPrimary : OneUiTheme.TextSub;
             canvas.DrawText(presets[i].label, camPresetRects[i].CenterX(),
                 camPresetRects[i].CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
         }
 
-        // Full 3D Viewport + Side HUD Rails (Left = Height Y, Right = Head Pitch)
-        float roomTop = topY + topBarH + 8f * dp;
-        float roomBottom = outerPad + h;
-        roomCanvasRect = new RectF(outerPad, roomTop, outerPad + w, Math.Max(roomTop + 170f * dp, roomBottom));
+        // Zone 3: Dedicated Frosted Control Dock OUTSIDE the 3D room (Left: 3D Head Trackball | Right: Vertical Height Y Capsule)
+        float dockH = 98f * dp;
+        float dockGap = 10f * dp;
+        float dockTop = outerPad + h - dockH;
+        float headDockW = w * 0.61f;
+        dockHeadRect = new RectF(outerPad, dockTop, outerPad + headDockW, dockTop + dockH);
+        dockHeightRect = new RectF(outerPad + headDockW + dockGap, dockTop, outerPad + w, dockTop + dockH);
 
-        float railPadTop = roomCanvasRect.Top + 34f * dp;
-        float railPadBot = roomCanvasRect.Bottom - 30f * dp;
-        heightRailRect = new RectF(roomCanvasRect.Left + 4f * dp, railPadTop, roomCanvasRect.Left + 30f * dp, railPadBot);
-        pitchRailRect = new RectF(roomCanvasRect.Right - 30f * dp, railPadTop, roomCanvasRect.Right - 4f * dp, railPadBot);
+        // Zone 2: Unobstructed 3D Viewport above the dock
+        float roomTop = topY + topBarH + 8f * dp;
+        float roomBottom = dockTop - dockGap;
+        roomCanvasRect = new RectF(outerPad, roomTop, outerPad + w, Math.Max(roomTop + 170f * dp, roomBottom));
 
         hitTargets.Clear();
         bool anySolo = SourcesAnySolo();
@@ -405,6 +392,9 @@ public sealed class RoomSimulatorView : View {
         bool stillAnimating = DrawDolbyStyle3DRoom(
             canvas, roomCanvasRect, anySolo, dt, nowMs, camYawRad, camPitchRad, headYawRad, headPitchRad, dp);
 
+        DrawExternalHeadTrackballDock(canvas, dockHeadRect, headYawRad, headPitchRad, dp);
+        DrawExternalHeightCapsuleDock(canvas, dockHeightRect, dp);
+
         if ((isAudioPlaying || cameraAnimating || stillAnimating)
             && Visibility == ViewStates.Visible
             && WindowVisibility == ViewStates.Visible) {
@@ -413,7 +403,7 @@ public sealed class RoomSimulatorView : View {
     }
 
     (float cx, float cy, float radiusPx) GetCameraFraming(RectF r) {
-        return (r.CenterX(), r.CenterY() + r.Height() * 0.02f, Math.Min(r.Width() - 48f * Resources.DisplayMetrics.Density, r.Height()) * 0.375f * roomZoom);
+        return (r.CenterX(), r.CenterY() + r.Height() * 0.03f, Math.Min(r.Width() - 18f * Resources.DisplayMetrics.Density, r.Height()) * 0.40f * roomZoom);
     }
 
     Vector3 TransformWorldToCamera(float x, float y, float z, float camYawRad, float camPitchRad) {
@@ -486,7 +476,6 @@ public sealed class RoomSimulatorView : View {
         clipRoom.AddRoundRect(r, corner, corner, Android.Graphics.Path.Direction.Cw);
         canvas.ClipPath(clipRoom);
 
-        // Corner vertices for floor (-1) and ceiling (+1)
         var fl_bl = ProjectOrbit3D(r, -1f, -1f, -1f, camYawRad, camPitchRad);
         var fl_br = ProjectOrbit3D(r, 1f, -1f, -1f, camYawRad, camPitchRad);
         var fl_fr = ProjectOrbit3D(r, 1f, -1f, 1f, camYawRad, camPitchRad);
@@ -497,7 +486,6 @@ public sealed class RoomSimulatorView : View {
         var ce_fr = ProjectOrbit3D(r, 1f, 1f, 1f, camYawRad, camPitchRad);
         var ce_fl = ProjectOrbit3D(r, -1f, 1f, 1f, camYawRad, camPitchRad);
 
-        // 1. Subtle Depth-Shaded Acoustic Walls (only far walls behind camera for true 3D room depth)
         void DrawWallQuad(
             (float sx, float sy, float persp, float depth) a,
             (float sx, float sy, float persp, float depth) b,
@@ -505,7 +493,7 @@ public sealed class RoomSimulatorView : View {
             (float sx, float sy, float persp, float depth) d,
             int alpha) {
             float avgDepth = (a.depth + b.depth + c.depth + d.depth) * 0.25f;
-            if (avgDepth < -0.15f) return; // Skip near wall facing camera so view stays open
+            if (avgDepth < -0.15f) return;
             using Android.Graphics.Path wp = new();
             wp.MoveTo(a.sx, a.sy);
             wp.LineTo(b.sx, b.sy);
@@ -515,12 +503,11 @@ public sealed class RoomSimulatorView : View {
             wallShadePaint.Color = Color.Argb(alpha, 150, 178, 235);
             canvas.DrawPath(wp, wallShadePaint);
         }
-        DrawWallQuad(fl_bl, fl_br, ce_br, ce_bl, 12); // Back wall
-        DrawWallQuad(fl_fl, fl_bl, ce_bl, ce_fl, 9);  // Left wall
-        DrawWallQuad(fl_br, fl_fr, ce_fr, ce_br, 9);  // Right wall
-        DrawWallQuad(fl_fl, fl_fr, ce_fr, ce_fl, 14); // Front wall
+        DrawWallQuad(fl_bl, fl_br, ce_br, ce_bl, 12);
+        DrawWallQuad(fl_fl, fl_bl, ce_bl, ce_fl, 9);
+        DrawWallQuad(fl_br, fl_fr, ce_fr, ce_br, 9);
+        DrawWallQuad(fl_fl, fl_fr, ce_fr, ce_fl, 14);
 
-        // 2. Floor Quad + Architectural Grid + Concentric Sweet-Spot Rings
         using (Android.Graphics.Path floorPath = new()) {
             floorPath.MoveTo(fl_bl.sx, fl_bl.sy);
             floorPath.LineTo(fl_br.sx, fl_br.sy);
@@ -542,10 +529,8 @@ public sealed class RoomSimulatorView : View {
             canvas.DrawLine(az.sx, az.sy, bz.sx, bz.sy, gridPaint);
         }
 
-        // Sweet-spot polar ring on floor
         DrawProjectedRing(canvas, r, 0f, -1f, 0f, 0.45f, camYawRad, camPitchRad, gridPaint);
 
-        // 3. Ear-level Horizon Reference Plane (Y = 0) & Ceiling Cage (+1 Y)
         var ear_bl = ProjectOrbit3D(r, -1f, 0f, -1f, camYawRad, camPitchRad);
         var ear_br = ProjectOrbit3D(r, 1f, 0f, -1f, camYawRad, camPitchRad);
         var ear_fr = ProjectOrbit3D(r, 1f, 0f, 1f, camYawRad, camPitchRad);
@@ -572,7 +557,6 @@ public sealed class RoomSimulatorView : View {
         canvas.DrawLine(fl_fr.sx, fl_fr.sy, ce_fr.sx, ce_fr.sy, gridPaint);
         canvas.DrawLine(fl_fl.sx, fl_fl.sy, ce_fl.sx, ce_fl.sy, gridPaint);
 
-        // 4. Front Cinema Screen Bar (+Z wall) + Ambient Light Wash
         var scrL = ProjectOrbit3D(r, -0.58f, 0.16f, 1f, camYawRad, camPitchRad);
         var scrR = ProjectOrbit3D(r, 0.58f, 0.16f, 1f, camYawRad, camPitchRad);
         var scrBotL = ProjectOrbit3D(r, -0.46f, -1f, 0.98f, camYawRad, camPitchRad);
@@ -594,7 +578,6 @@ public sealed class RoomSimulatorView : View {
         subTextPaint.Color = OneUiTheme.PrimaryHigh;
         canvas.DrawText("TELA / FRONT", scrMid.sx, scrMid.sy - 2f * dp, subTextPaint);
 
-        // 5. Smooth Source State Interpolation, Idle Visibility & Depth Sort
         bool anyInterpolating = false;
         List<(bool isListener, TrackSourceItem item, int objNumber, Vector3 np, float rms, float visAlpha, SmoothedSourceState state, float depth)> renderQueue = new(sources.Count + 1);
 
@@ -650,9 +633,7 @@ public sealed class RoomSimulatorView : View {
             }
 
             bool hasVolumeNow = targetRms > 0.0025f || st.SmoothedRms > 0.0035f;
-            if (hasVolumeNow) {
-                st.SoundUntilMs = nowMs + 380;
-            }
+            if (hasVolumeNow) st.SoundUntilMs = nowMs + 380;
 
             float targetVis;
             if (item.IsBed || !hasPlayedOnce) {
@@ -699,7 +680,6 @@ public sealed class RoomSimulatorView : View {
 
         renderQueue.Sort((a, b) => b.depth.CompareTo(a.depth));
 
-        // 6. Subtle Acoustic Energy Rays from active objects/beds to the Listener Head
         for (int i = 0; i < renderQueue.Count; i++) {
             var e = renderQueue[i];
             if (e.isListener || e.visAlpha <= 0.04f || e.rms < 0.04f) continue;
@@ -712,15 +692,12 @@ public sealed class RoomSimulatorView : View {
             canvas.DrawLine(sPt.sx, sPt.sy, lCenter.sx, lCenter.sy, rayPaint);
         }
 
-        // 7. Depth-Sorted Sources & Volumetric 3D Listener Head
         foreach (var entry in renderQueue) {
             if (entry.isListener) {
                 DrawListenerInRoom(canvas, r, lnx, lny, lnz, camYawRad, camPitchRad, headYawRad, headPitchRad, dp);
                 continue;
             }
-            if (entry.visAlpha <= 0.02f) {
-                continue;
-            }
+            if (entry.visAlpha <= 0.02f) continue;
 
             TrackSourceItem item = entry.item;
             Vector3 np = entry.np;
@@ -759,9 +736,7 @@ public sealed class RoomSimulatorView : View {
                 fillPaint.Color = meterCol;
                 canvas.DrawCircle(posPt.sx, posPt.sy, (2.2f + Math.Clamp(entry.rms * 2.4f, 0f, 2.0f)) * dp * scale, fillPaint);
 
-                if (effectivelyMuted) {
-                    DrawMuteCross(canvas, posPt.sx, posPt.sy, hw * 0.55f, dp);
-                }
+                if (effectivelyMuted) DrawMuteCross(canvas, posPt.sx, posPt.sy, hw * 0.55f, dp);
                 if (item.IsSolo) {
                     canvas.DrawRoundRect(new RectF(box.Left - 3f * dp, box.Top - 3f * dp, box.Right + 3f * dp, box.Bottom + 3f * dp),
                         4.5f * dp, 4.5f * dp, soloRingPaint);
@@ -777,7 +752,6 @@ public sealed class RoomSimulatorView : View {
                     canvas.DrawText(shortLabel, posPt.sx, posPt.sy + hh + 9.5f * dp, textPaint);
                 }
             } else {
-                // Subtle v2.6 motion trails behind moving 3D objects
                 if (entry.state != null && entry.state.TrailCount > 0) {
                     SmoothedSourceState tState = entry.state;
                     int oldestIdx = (tState.TrailHead - tState.TrailCount + tState.Trail.Length) % tState.Trail.Length;
@@ -802,7 +776,6 @@ public sealed class RoomSimulatorView : View {
                     : Color.Argb((int)Math.Round(115 * va), meterCol.R, meterCol.G, meterCol.B);
                 canvas.DrawLine(floorPt.sx, floorPt.sy, posPt.sx, posPt.sy, dropLinePaint);
 
-                // Tick mark where drop-line intersects Y=0 ear horizon
                 var earTick = ProjectOrbit3D(r, np.X, 0f, np.Z, camYawRad, camPitchRad);
                 fillPaint.SetShader(null);
                 fillPaint.Color = dropLinePaint.Color;
@@ -848,9 +821,7 @@ public sealed class RoomSimulatorView : View {
                         posPt.sy - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
                 }
 
-                if (item.IsSolo) {
-                    canvas.DrawCircle(posPt.sx, posPt.sy, rad + 3.2f * dp, soloRingPaint);
-                }
+                if (item.IsSolo) canvas.DrawCircle(posPt.sx, posPt.sy, rad + 3.2f * dp, soloRingPaint);
 
                 if (labelMode == LabelVisibilityMode.All) {
                     textPaint.TextAlign = Paint.Align.Center;
@@ -861,101 +832,8 @@ public sealed class RoomSimulatorView : View {
             }
         }
 
-        // 8. Integrated Side Translucent HUD Rails (Left = Height Y, Right = Head Pitch) + Live Status Chip
-        DrawEdgeRail(canvas, heightRailRect, "ALT Y", lny, $"{lny * environmentSize.Y:+0.0;-0.0;0.0}m", OneUiTheme.IconStemsCalib, dp);
-        float pitchNorm = Math.Clamp(listenerRotation.X / 90f, -1f, 1f);
-        DrawEdgeRail(canvas, pitchRailRect, "INCL", pitchNorm, $"{listenerRotation.X:+0;-0;0}°", OneUiTheme.PrimaryHigh, dp);
-
-        // Bottom live orientation & position pill
-        subTextPaint.TextAlign = Paint.Align.Center;
-        subTextPaint.TextSize = 9.0f * dp;
-        subTextPaint.Color = Color.Argb(215, 226, 232, 246);
-        string statusLine = $"Giro {listenerRotation.Y:+0;-0;0}°  •  Incl {listenerRotation.X:+0;-0;0}°  •  Arraste o alvo na frente da cabeça ou ative [Cabeça]";
-        canvas.DrawText(statusLine, r.CenterX(), r.Bottom - 8f * dp, subTextPaint);
-
         canvas.Restore();
         return anyInterpolating;
-    }
-
-    void DrawProjectedRing(
-        Canvas canvas, RectF r, float cx, float cy, float cz, float radNorm,
-        float camYawRad, float camPitchRad, Paint paint) {
-        const int segs = 28;
-        var p0 = ProjectOrbit3D(r, cx + radNorm, cy, cz, camYawRad, camPitchRad);
-        using Android.Graphics.Path ringPath = new();
-        ringPath.MoveTo(p0.sx, p0.sy);
-        for (int i = 1; i <= segs; i++) {
-            float a = i / (float)segs * MathF.PI * 2f;
-            var pi = ProjectOrbit3D(r, cx + MathF.Cos(a) * radNorm, cy, cz + MathF.Sin(a) * radNorm, camYawRad, camPitchRad);
-            ringPath.LineTo(pi.sx, pi.sy);
-        }
-        ringPath.Close();
-        canvas.DrawPath(ringPath, paint);
-    }
-
-    void DrawEdgeRail(Canvas canvas, RectF rect, string topTitle, float normVal, string valLabel, Color accent, float dp) {
-        float trackW = 5f * dp;
-        float trackX = rect.CenterX();
-        float trackTop = rect.Top + 16f * dp;
-        float trackBot = rect.Bottom - 16f * dp;
-        float trackH = Math.Max(20f * dp, trackBot - trackTop);
-        float midY = trackTop + trackH * 0.5f;
-
-        RectF track = new(trackX - trackW * 0.5f, trackTop, trackX + trackW * 0.5f, trackBot);
-        canvas.DrawRoundRect(track, trackW * 0.5f, trackW * 0.5f, railTrackPaint);
-
-        // Center zero notch
-        strokePaint.StrokeWidth = 1.2f * dp;
-        strokePaint.Color = Color.Argb(95, 255, 255, 255);
-        canvas.DrawLine(trackX - 5f * dp, midY, trackX + 5f * dp, midY, strokePaint);
-
-        // Active fill bar from center (0) to normVal (-1..+1, +1 is UP)
-        float knobY = midY - Math.Clamp(normVal, -1f, 1f) * (trackH * 0.5f);
-        railFillPaint.Color = Color.Argb(185, accent.R, accent.G, accent.B);
-        float fillTop = Math.Min(midY, knobY);
-        float fillBot = Math.Max(midY, knobY);
-        if (fillBot - fillTop > 1f) {
-            canvas.DrawRoundRect(new RectF(track.Left, fillTop, track.Right, fillBot), trackW * 0.5f, trackW * 0.5f, railFillPaint);
-        }
-
-        // Thumb dot
-        fillPaint.SetShader(null);
-        fillPaint.Color = Color.White;
-        canvas.DrawCircle(trackX, knobY, 5.2f * dp, fillPaint);
-        strokePaint.StrokeWidth = 1.8f * dp;
-        strokePaint.Color = accent;
-        canvas.DrawCircle(trackX, knobY, 5.2f * dp, strokePaint);
-
-        subTextPaint.TextAlign = Paint.Align.Center;
-        subTextPaint.TextSize = 7.8f * dp;
-        subTextPaint.Color = Color.Argb(180, 220, 226, 240);
-        canvas.DrawText(topTitle, trackX, rect.Top + 9f * dp, subTextPaint);
-        subTextPaint.Color = accent;
-        canvas.DrawText(valLabel, trackX, rect.Bottom - 2f * dp, subTextPaint);
-    }
-
-    static Color ResolveDolbyMeterColor(float rms, bool muted, bool isBed, bool isLfe) {
-        if (muted) {
-            return Color.Rgb(72, 76, 88);
-        }
-        if (rms >= 0.55f) {
-            return Color.Rgb(255, 84, 84);
-        }
-        if (rms >= 0.24f) {
-            return Color.Rgb(248, 196, 62);
-        }
-        if (rms >= 0.015f) {
-            return isLfe ? OneUiTheme.LfeChannel : Color.Rgb(58, 214, 132);
-        }
-        if (isLfe) return Color.Argb(180, OneUiTheme.LfeChannel.R, OneUiTheme.LfeChannel.G, OneUiTheme.LfeChannel.B);
-        return isBed ? Color.Rgb(98, 118, 148) : Color.Rgb(126, 178, 255);
-    }
-
-    void DrawMuteCross(Canvas canvas, float cx, float cy, float halfArm, float dp) {
-        strokePaint.StrokeWidth = 1.6f * dp;
-        strokePaint.Color = OneUiTheme.FunctionalRedFill;
-        canvas.DrawLine(cx - halfArm, cy - halfArm, cx + halfArm, cy + halfArm, strokePaint);
-        canvas.DrawLine(cx + halfArm, cy - halfArm, cx - halfArm, cy + halfArm, strokePaint);
     }
 
     void DrawListenerInRoom(
@@ -970,7 +848,6 @@ public sealed class RoomSimulatorView : View {
         dropRingPaint.Color = dropLinePaint.Color;
         canvas.DrawCircle(lFloor.sx, lFloor.sy, 4.5f * dp * lFloor.persp, dropRingPaint);
 
-        // 3D Volumetric Listening Cone tilting with both Head Yaw and Head Pitch
         const float yawSpread = 0.40f;
         const float pitchSpread = 0.22f;
         const float coneReach = 0.44f;
@@ -1009,23 +886,28 @@ public sealed class RoomSimulatorView : View {
             listenerConePaint.SetShader(null);
         }
 
-        // Articulated 3D Shaded Head Sphere + Wireframe + L/R Earcups
-        float rad = 13.5f * dp * Math.Clamp(lPos.persp, 0.78f, 1.18f);
+        float rad = 14.5f * dp * Math.Clamp(lPos.persp, 0.78f, 1.18f);
+        Draw3DHeadSphere(canvas, lPos.sx, lPos.sy, rad, headYawRad, headPitchRad, camYawRad, camPitchRad, dp, showNoseStick: true);
+    }
+
+    void Draw3DHeadSphere(
+        Canvas canvas, float cx, float cy, float rad,
+        float headYawRad, float headPitchRad, float camYawRad, float camPitchRad, float dp, bool showNoseStick = false) {
         Color p = OneUiTheme.Primary;
         Color hi = OneUiTheme.PrimaryHigh;
         Color dk = OneUiTheme.PrimaryPressed;
 
         using (RadialGradient sphereGrad = new(
-            lPos.sx - rad * 0.28f, lPos.sy - rad * 0.28f, Math.Max(1f, rad * 1.15f),
+            cx - rad * 0.28f, cy - rad * 0.28f, Math.Max(1f, rad * 1.15f),
             [Color.Argb(245, hi.R, hi.G, hi.B).ToArgb(), Color.Argb(232, p.R, p.G, p.B).ToArgb(), Color.Argb(240, dk.R, dk.G, dk.B).ToArgb()],
             [0f, 0.55f, 1f], Shader.TileMode.Clamp)) {
             fillPaint.SetShader(sphereGrad);
-            canvas.DrawCircle(lPos.sx, lPos.sy, rad, fillPaint);
+            canvas.DrawCircle(cx, cy, rad, fillPaint);
             fillPaint.SetShader(null);
         }
-        strokePaint.StrokeWidth = 1.5f * dp;
+        strokePaint.StrokeWidth = 1.4f * dp;
         strokePaint.Color = hi;
-        canvas.DrawCircle(lPos.sx, lPos.sy, rad, strokePaint);
+        canvas.DrawCircle(cx, cy, rad, strokePaint);
 
         Vector3 ProjectHeadPoint(float lx, float ly, float lz) {
             float cosP = MathF.Cos(headPitchRad);
@@ -1039,11 +921,11 @@ public sealed class RoomSimulatorView : View {
             float z2 = -lx * sinY + z1 * cosY;
 
             Vector3 cam = TransformWorldToCamera(x2, y1, z2, camYawRad, camPitchRad);
-            return new Vector3(lPos.sx + cam.X * rad, lPos.sy - cam.Y * rad, -cam.Z);
+            return new Vector3(cx + cam.X * rad, cy - cam.Y * rad, -cam.Z);
         }
 
         void Draw3DRing(Func<float, Vector3> ringFn) {
-            const int segs = 18;
+            const int segs = 20;
             Vector3 pt0 = ringFn(0f);
             Vector3 prev = ProjectHeadPoint(pt0.X, pt0.Y, pt0.Z);
             for (int i = 1; i <= segs; i++) {
@@ -1062,27 +944,186 @@ public sealed class RoomSimulatorView : View {
         Vector3 leftEar = ProjectHeadPoint(-1.05f, 0f, 0f);
         Vector3 rightEar = ProjectHeadPoint(1.05f, 0f, 0f);
         fillPaint.SetShader(null);
-        fillPaint.Color = Color.Argb(240, 252, 252, 255);
-        canvas.DrawCircle(leftEar.X, leftEar.Y, rad * 0.22f, fillPaint);
-        canvas.DrawCircle(rightEar.X, rightEar.Y, rad * 0.22f, fillPaint);
+        fillPaint.Color = Color.Argb(242, 252, 252, 255);
+        canvas.DrawCircle(leftEar.X, leftEar.Y, rad * 0.21f, fillPaint);
+        canvas.DrawCircle(rightEar.X, rightEar.Y, rad * 0.21f, fillPaint);
 
-        // Interactive Aim Orb Handle extending from the listener's nose vector
-        var aimOrbPt = ProjVec(lookC, 0.42f);
-        aimOrbScreenX = aimOrbPt.sx;
-        aimOrbScreenY = aimOrbPt.sy;
-
-        strokePaint.StrokeWidth = 1.6f * dp;
-        strokePaint.Color = Color.Argb(215, 255, 255, 255);
-        canvas.DrawLine(lPos.sx, lPos.sy, aimOrbScreenX, aimOrbScreenY, strokePaint);
-
-        float orbR = (dragMode == TouchDragMode.HeadAim ? 9.5f : 7.5f) * dp;
-        fillPaint.Color = dragMode == TouchDragMode.HeadAim ? OneUiTheme.SoloGold : Color.Argb(230, hi.R, hi.G, hi.B);
-        canvas.DrawCircle(aimOrbScreenX, aimOrbScreenY, orbR, fillPaint);
-        strokePaint.StrokeWidth = 1.6f * dp;
+        Vector3 noseBase = ProjectHeadPoint(0f, 0f, 0.72f);
+        Vector3 noseTip = ProjectHeadPoint(0f, 0f, showNoseStick ? 1.32f : 1.44f);
+        strokePaint.StrokeWidth = 1.8f * dp;
         strokePaint.Color = Color.White;
-        canvas.DrawCircle(aimOrbScreenX, aimOrbScreenY, orbR, strokePaint);
+        canvas.DrawLine(noseBase.X, noseBase.Y, noseTip.X, noseTip.Y, strokePaint);
         fillPaint.Color = Color.White;
-        canvas.DrawCircle(aimOrbScreenX, aimOrbScreenY, 2.3f * dp, fillPaint);
+        canvas.DrawCircle(noseTip.X, noseTip.Y, rad * 0.18f, fillPaint);
+    }
+
+    /// <summary>
+    /// External 3D Head Trackball Dock (outside the 3D chart) with orbital compass &amp; horizon attitude ring
+    /// so Yaw and Pitch feel completely natural without cluttering or blocking the 3D room.
+    /// </summary>
+    void DrawExternalHeadTrackballDock(Canvas canvas, RectF r, float headYawRad, float headPitchRad, float dp) {
+        float corner = 20f * dp;
+        canvas.DrawRoundRect(r, corner, corner, dockBgPaint);
+        canvas.DrawRoundRect(r, corner, corner, roomBorderPaint);
+
+        float sphereR = Math.Min(26f * dp, (r.Height() - 22f * dp) * 0.5f);
+        float sphereCx = r.Left + 16f * dp + sphereR;
+        float sphereCy = r.CenterY();
+
+        // Outer compass / attitude gimbal ring around the trackball
+        float ringR = sphereR + 5.5f * dp;
+        strokePaint.StrokeWidth = 1.3f * dp;
+        strokePaint.Color = dragMode == TouchDragMode.HeadDock
+            ? OneUiTheme.PrimaryHigh
+            : Color.Argb(75, 255, 255, 255);
+        canvas.DrawCircle(sphereCx, sphereCy, ringR, strokePaint);
+
+        // Azimuth compass dot riding the outer ring
+        float azX = sphereCx + MathF.Sin(headYawRad) * ringR;
+        float azY = sphereCy - MathF.Cos(headYawRad) * ringR;
+        fillPaint.SetShader(null);
+        fillPaint.Color = OneUiTheme.PrimaryHigh;
+        canvas.DrawCircle(azX, azY, 3.0f * dp, fillPaint);
+
+        Draw3DHeadSphere(canvas, sphereCx, sphereCy, sphereR, headYawRad, headPitchRad, camYawRad: 0f, camPitchRad: 0.18f, dp);
+
+        float textLeft = sphereCx + sphereR + 13f * dp;
+        textPaint.TextAlign = Paint.Align.Left;
+        textPaint.TextSize = 11.5f * dp;
+        textPaint.Color = OneUiTheme.TextPrimary;
+        canvas.DrawText("Cabeça 3D", textLeft, r.Top + 25f * dp, textPaint);
+
+        subTextPaint.TextAlign = Paint.Align.Left;
+        subTextPaint.TextSize = 9.8f * dp;
+        subTextPaint.Color = OneUiTheme.PrimaryHigh;
+        canvas.DrawText($"Giro {listenerRotation.Y:+0;-0;0}°  •  Incl {listenerRotation.X:+0;-0;0}°", textLeft, r.Top + 44f * dp, subTextPaint);
+
+        subTextPaint.TextSize = 8.4f * dp;
+        subTextPaint.Color = OneUiTheme.TextMuted;
+        canvas.DrawText("Arraste livremente", textLeft, r.Top + 59f * dp, subTextPaint);
+
+        float rstW = Math.Max(46f * dp, r.Right - textLeft - 14f * dp);
+        float rstH = 22f * dp;
+        dockHeadResetRect = new RectF(textLeft, r.Bottom - rstH - 10f * dp, textLeft + Math.Min(64f * dp, rstW), r.Bottom - 10f * dp);
+        canvas.DrawRoundRect(dockHeadResetRect, rstH * 0.5f, rstH * 0.5f, pillInactivePaint);
+        textPaint.TextAlign = Paint.Align.Center;
+        textPaint.TextSize = 9.2f * dp;
+        textPaint.Color = OneUiTheme.TextSecondary;
+        canvas.DrawText("Zerar", dockHeadResetRect.CenterX(),
+            dockHeadResetRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
+    }
+
+    /// <summary>
+    /// Dedicated One UI 9 Vertical Elevation Capsule Dock (outside the 3D chart):
+    /// true vertical orientation matching physical height (Y) from Floor to Ceiling.
+    /// </summary>
+    void DrawExternalHeightCapsuleDock(Canvas canvas, RectF r, float dp) {
+        float corner = 20f * dp;
+        canvas.DrawRoundRect(r, corner, corner, dockBgPaint);
+        canvas.DrawRoundRect(r, corner, corner, roomBorderPaint);
+
+        float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
+        float alphaScale = IsPositionLocked ? 0.45f : 1f;
+
+        // Vertical One UI 9 capsule pill on the right edge of this card
+        float capW = 20f * dp;
+        float capRight = r.Right - 14f * dp;
+        float capLeft = capRight - capW;
+        float capTop = r.Top + 12f * dp;
+        float capBot = r.Bottom - 12f * dp;
+        dockHeightCapsuleRect = new RectF(capLeft, capTop, capRight, capBot);
+
+        float capRad = capW * 0.5f;
+        canvas.DrawRoundRect(dockHeightCapsuleRect, capRad, capRad, capsuleTrackPaint);
+
+        float midY = dockHeightCapsuleRect.CenterY();
+        float halfH = dockHeightCapsuleRect.Height() * 0.5f;
+        float fillEdgeY = midY - lny * (halfH - capRad * 0.35f);
+
+        Color accent = OneUiTheme.SliderAccent;
+        capsuleFillPaint.Color = Color.Argb((int)(235 * alphaScale), accent.R, accent.G, accent.B);
+        float fillTop = Math.Min(midY, fillEdgeY);
+        float fillBot = Math.Max(midY, fillEdgeY);
+        if (fillBot - fillTop >= 2f * dp) {
+            canvas.Save();
+            using Android.Graphics.Path capClip = new();
+            capClip.AddRoundRect(dockHeightCapsuleRect, capRad, capRad, Android.Graphics.Path.Direction.Cw);
+            canvas.ClipPath(capClip);
+            canvas.DrawRoundRect(new RectF(capLeft, fillTop, capRight, fillBot), capRad * 0.6f, capRad * 0.6f, capsuleFillPaint);
+            canvas.Restore();
+        }
+
+        // Center ear-horizon 0m mark
+        strokePaint.StrokeWidth = 1.2f * dp;
+        strokePaint.Color = Color.Argb(135, 255, 255, 255);
+        canvas.DrawLine(capLeft + 4f * dp, midY, capRight - 4f * dp, midY, strokePaint);
+
+        // Subtle glowing thumb dot only while dragging (matches One UI 9 slider physics)
+        if (dragMode == TouchDragMode.HeightDock && !IsPositionLocked) {
+            fillPaint.SetShader(null);
+            fillPaint.Color = Color.White;
+            canvas.DrawCircle(dockHeightCapsuleRect.CenterX(), fillEdgeY, capW * 0.44f, fillPaint);
+        }
+
+        // Left info column
+        float infoLeft = r.Left + 12f * dp;
+        textPaint.TextAlign = Paint.Align.Left;
+        textPaint.TextSize = 11f * dp;
+        textPaint.Color = OneUiTheme.TextPrimary;
+        canvas.DrawText("Altura Y", infoLeft, r.Top + 25f * dp, textPaint);
+
+        float meters = lny * environmentSize.Y;
+        subTextPaint.TextAlign = Paint.Align.Left;
+        subTextPaint.TextSize = 10.5f * dp;
+        subTextPaint.Color = IsPositionLocked ? OneUiTheme.TextMuted : accent;
+        canvas.DrawText(MathF.Abs(meters) < 0.05f ? "0.0m" : $"{meters:+0.0;-0.0}m", infoLeft, r.Top + 44f * dp, subTextPaint);
+
+        subTextPaint.TextSize = 8.2f * dp;
+        subTextPaint.Color = OneUiTheme.TextMuted;
+        canvas.DrawText(IsPositionLocked ? "Travada" : (meters > 0.1f ? "Teto" : (meters < -0.1f ? "Chão" : "Ouvido")),
+            infoLeft, r.Top + 59f * dp, subTextPaint);
+
+        float rstW = Math.Max(36f * dp, capLeft - infoLeft - 8f * dp);
+        float rstH = 22f * dp;
+        dockHeightResetRect = new RectF(infoLeft, r.Bottom - rstH - 10f * dp, infoLeft + Math.Min(48f * dp, rstW), r.Bottom - 10f * dp);
+        canvas.DrawRoundRect(dockHeightResetRect, rstH * 0.5f, rstH * 0.5f, pillInactivePaint);
+        textPaint.TextAlign = Paint.Align.Center;
+        textPaint.TextSize = 9.0f * dp;
+        textPaint.Color = OneUiTheme.TextSecondary;
+        canvas.DrawText("0m", dockHeightResetRect.CenterX(),
+            dockHeightResetRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
+    }
+
+    void DrawProjectedRing(
+        Canvas canvas, RectF r, float cx, float cy, float cz, float radNorm,
+        float camYawRad, float camPitchRad, Paint paint) {
+        const int segs = 28;
+        var p0 = ProjectOrbit3D(r, cx + radNorm, cy, cz, camYawRad, camPitchRad);
+        using Android.Graphics.Path ringPath = new();
+        ringPath.MoveTo(p0.sx, p0.sy);
+        for (int i = 1; i <= segs; i++) {
+            float a = i / (float)segs * MathF.PI * 2f;
+            var pi = ProjectOrbit3D(r, cx + MathF.Cos(a) * radNorm, cy, cz + MathF.Sin(a) * radNorm, camYawRad, camPitchRad);
+            ringPath.LineTo(pi.sx, pi.sy);
+        }
+        ringPath.Close();
+        canvas.DrawPath(ringPath, paint);
+    }
+
+    static Color ResolveDolbyMeterColor(float rms, bool muted, bool isBed, bool isLfe) {
+        if (muted) return Color.Rgb(72, 76, 88);
+        if (rms >= 0.55f) return Color.Rgb(255, 84, 84);
+        if (rms >= 0.24f) return Color.Rgb(248, 196, 62);
+        if (rms >= 0.015f) return isLfe ? OneUiTheme.LfeChannel : Color.Rgb(58, 214, 132);
+        if (isLfe) return Color.Argb(180, OneUiTheme.LfeChannel.R, OneUiTheme.LfeChannel.G, OneUiTheme.LfeChannel.B);
+        return isBed ? Color.Rgb(98, 118, 148) : Color.Rgb(126, 178, 255);
+    }
+
+    void DrawMuteCross(Canvas canvas, float cx, float cy, float halfArm, float dp) {
+        strokePaint.StrokeWidth = 1.6f * dp;
+        strokePaint.Color = OneUiTheme.FunctionalRedFill;
+        canvas.DrawLine(cx - halfArm, cy - halfArm, cx + halfArm, cy + halfArm, strokePaint);
+        canvas.DrawLine(cx + halfArm, cy - halfArm, cx - halfArm, cy + halfArm, strokePaint);
     }
 
     bool SourcesAnySolo() {
@@ -1114,68 +1155,47 @@ public sealed class RoomSimulatorView : View {
                     }
                 }
 
-                if (camModeBtnRect.Contains(tx, ty)) {
-                    dragMode = TouchDragMode.ModeToggleClick;
-                    return true;
-                }
-
                 if (camLabelsBtnRect.Contains(tx, ty)) {
                     dragMode = TouchDragMode.LabelsClick;
                     return true;
                 }
-
                 if (camZoomOutRect.Contains(tx, ty)) {
                     dragMode = TouchDragMode.ZoomOutClick;
                     Invalidate();
                     return true;
                 }
-
                 if (camZoomInRect.Contains(tx, ty)) {
                     dragMode = TouchDragMode.ZoomInClick;
                     Invalidate();
                     return true;
                 }
-
                 if (camResetLabelRect.Contains(tx, ty)) {
                     dragMode = TouchDragMode.ResetZoomClick;
                     return true;
                 }
 
-                if (!IsPositionLocked && heightRailRect.Contains(tx, ty)) {
-                    dragMode = TouchDragMode.HeightRail;
+                if (dockHeadRect.Contains(tx, ty)) {
+                    dragMode = TouchDragMode.HeadDock;
                     Parent?.RequestDisallowInterceptTouchEvent(true);
-                    UpdateHeightFromRailTouch(ty);
+                    Invalidate();
                     return true;
                 }
 
-                if (pitchRailRect.Contains(tx, ty)) {
-                    dragMode = TouchDragMode.PitchRail;
+                if (dockHeightRect.Contains(tx, ty)) {
+                    dragMode = TouchDragMode.HeightDock;
                     Parent?.RequestDisallowInterceptTouchEvent(true);
-                    UpdatePitchFromRailTouch(ty);
+                    if (!IsPositionLocked && !dockHeightResetRect.Contains(tx, ty)) {
+                        UpdateHeightFromCapsuleTouch(ty);
+                    }
+                    Invalidate();
                     return true;
                 }
 
                 if (roomCanvasRect.Contains(tx, ty)) {
-                    // Priority 1: Aim Orb Handle always steers Head Yaw + Pitch directly
-                    float orbDist = MathF.Sqrt((tx - aimOrbScreenX) * (tx - aimOrbScreenX) + (ty - aimOrbScreenY) * (ty - aimOrbScreenY));
-                    if (orbDist <= 28f * dp) {
-                        dragMode = TouchDragMode.HeadAim;
-                        Parent?.RequestDisallowInterceptTouchEvent(true);
-                        Invalidate();
-                        return true;
-                    }
-
-                    // Priority 2: Dragging Head Sphere moves listener position (even if headTouchMode is off)
+                    // Direct listener position drag with ZERO obstructing Aim Orb
                     float headDist = MathF.Sqrt((tx - listenerScreenX) * (tx - listenerScreenX) + (ty - listenerScreenY) * (ty - listenerScreenY));
-                    if (!IsPositionLocked && headDist <= 30f * dp) {
+                    if (!IsPositionLocked && headDist <= 34f * dp) {
                         dragMode = TouchDragMode.ListenerMove;
-                        Parent?.RequestDisallowInterceptTouchEvent(true);
-                        return true;
-                    }
-
-                    // Priority 3: [Cabeça] mode lets you drag anywhere in room to steer Head Yaw & Pitch!
-                    if (headTouchMode) {
-                        dragMode = TouchDragMode.HeadAim;
                         Parent?.RequestDisallowInterceptTouchEvent(true);
                         return true;
                     }
@@ -1214,35 +1234,31 @@ public sealed class RoomSimulatorView : View {
                 float dist = MathF.Sqrt(dx * dx + dy * dy);
                 if (dist > maxMoveDist) maxMoveDist = dist;
 
-                if (dragMode is TouchDragMode.PresetClick or TouchDragMode.ModeToggleClick or TouchDragMode.LabelsClick or TouchDragMode.ZoomOutClick or TouchDragMode.ZoomInClick or TouchDragMode.ResetZoomClick) {
+                if (dragMode is TouchDragMode.PresetClick or TouchDragMode.LabelsClick or TouchDragMode.ZoomOutClick or TouchDragMode.ZoomInClick or TouchDragMode.ResetZoomClick) {
                     return true;
                 }
 
-                if (dragMode == TouchDragMode.HeightRail && !IsPositionLocked) {
+                if (dragMode == TouchDragMode.HeadDock) {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
-                    UpdateHeightFromRailTouch(ty);
+                    if (!dockHeadResetRect.Contains(downX, downY)) {
+                        float stepX = tx - lastX;
+                        float stepY = ty - lastY;
+                        float newYaw = NormalizeDeg(listenerRotation.Y + stepX * 1.30f / dp);
+                        float newPitch = Math.Clamp(listenerRotation.X - stepY * 1.05f / dp, -90f, 90f);
+                        listenerRotation = new Vector3(newPitch, newYaw, listenerRotation.Z);
+                        ListenerRotationChanged?.Invoke(listenerRotation);
+                        Invalidate();
+                    }
                     lastX = tx;
                     lastY = ty;
                     return true;
                 }
 
-                if (dragMode == TouchDragMode.PitchRail) {
+                if (dragMode == TouchDragMode.HeightDock && !IsPositionLocked) {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
-                    UpdatePitchFromRailTouch(ty);
-                    lastX = tx;
-                    lastY = ty;
-                    return true;
-                }
-
-                if (dragMode == TouchDragMode.HeadAim) {
-                    Parent?.RequestDisallowInterceptTouchEvent(true);
-                    float stepX = tx - lastX;
-                    float stepY = ty - lastY;
-                    float newYaw = NormalizeDeg(listenerRotation.Y + stepX * 1.10f / dp);
-                    float newPitch = Math.Clamp(listenerRotation.X - stepY * 0.90f / dp, -90f, 90f);
-                    listenerRotation = new Vector3(newPitch, newYaw, listenerRotation.Z);
-                    ListenerRotationChanged?.Invoke(listenerRotation);
-                    Invalidate();
+                    if (!dockHeightResetRect.Contains(downX, downY)) {
+                        UpdateHeightFromCapsuleTouch(ty);
+                    }
                     lastX = tx;
                     lastY = ty;
                     return true;
@@ -1293,12 +1309,6 @@ public sealed class RoomSimulatorView : View {
                     return true;
                 }
 
-                if (endedMode == TouchDragMode.ModeToggleClick) {
-                    headTouchMode = !headTouchMode;
-                    Invalidate();
-                    return true;
-                }
-
                 if (endedMode == TouchDragMode.LabelsClick) {
                     labelMode = labelMode switch {
                         LabelVisibilityMode.ActiveOnly => LabelVisibilityMode.All,
@@ -1314,13 +1324,11 @@ public sealed class RoomSimulatorView : View {
                     Invalidate();
                     return true;
                 }
-
                 if (endedMode == TouchDragMode.ZoomInClick) {
                     roomZoom = Math.Clamp(roomZoom + 0.14f, 0.45f, 1.85f);
                     Invalidate();
                     return true;
                 }
-
                 if (endedMode == TouchDragMode.ResetZoomClick) {
                     roomZoom = DefaultRoomZoom;
                     Invalidate();
@@ -1336,41 +1344,41 @@ public sealed class RoomSimulatorView : View {
                     return true;
                 }
 
-                if (endedMode == TouchDragMode.HeightRail && !IsPositionLocked) {
-                    DateTime now = DateTime.UtcNow;
-                    if ((now - lastHeightTapTime).TotalMilliseconds < 280) {
-                        lastHeightTapTime = DateTime.MinValue;
-                        listenerPosition = new Vector3(listenerPosition.X, 0f, listenerPosition.Z);
-                        ListenerPositionChanged?.Invoke(listenerPosition);
-                        Invalidate();
-                    } else {
-                        lastHeightTapTime = now;
-                    }
-                    return true;
-                }
-
-                if (endedMode == TouchDragMode.PitchRail) {
-                    DateTime now = DateTime.UtcNow;
-                    if ((now - lastPitchTapTime).TotalMilliseconds < 280) {
-                        lastPitchTapTime = DateTime.MinValue;
-                        listenerRotation = new Vector3(0f, listenerRotation.Y, 0f);
+                if (endedMode == TouchDragMode.HeadDock) {
+                    if (dockHeadResetRect.Contains(tx, ty)) {
+                        listenerRotation = Vector3.Zero;
                         ListenerRotationChanged?.Invoke(listenerRotation);
                         Invalidate();
-                    } else {
-                        lastPitchTapTime = now;
+                        return true;
                     }
-                    return true;
-                }
-
-                if (endedMode == TouchDragMode.HeadAim) {
                     DateTime now = DateTime.UtcNow;
-                    if ((now - lastHeadTapTime).TotalMilliseconds < 280) {
+                    if ((now - lastHeadTapTime).TotalMilliseconds < 320) {
                         lastHeadTapTime = DateTime.MinValue;
                         listenerRotation = Vector3.Zero;
                         ListenerRotationChanged?.Invoke(listenerRotation);
                         Invalidate();
                     } else {
                         lastHeadTapTime = now;
+                    }
+                    return true;
+                }
+
+                if (endedMode == TouchDragMode.HeightDock) {
+                    if (IsPositionLocked) return true;
+                    if (dockHeightResetRect.Contains(tx, ty)) {
+                        listenerPosition = new Vector3(listenerPosition.X, 0f, listenerPosition.Z);
+                        ListenerPositionChanged?.Invoke(listenerPosition);
+                        Invalidate();
+                        return true;
+                    }
+                    DateTime now = DateTime.UtcNow;
+                    if ((now - lastHeightTapTime).TotalMilliseconds < 320) {
+                        lastHeightTapTime = DateTime.MinValue;
+                        listenerPosition = new Vector3(listenerPosition.X, 0f, listenerPosition.Z);
+                        ListenerPositionChanged?.Invoke(listenerPosition);
+                        Invalidate();
+                    } else {
+                        lastHeightTapTime = now;
                     }
                     return true;
                 }
@@ -1403,40 +1411,27 @@ public sealed class RoomSimulatorView : View {
                 Parent?.RequestDisallowInterceptTouchEvent(false);
                 dragMode = TouchDragMode.None;
                 pressedPresetIdx = -1;
+                Invalidate();
                 return false;
         }
 
         return base.OnTouchEvent(e);
     }
 
-    void UpdateHeightFromRailTouch(float ty) {
-        float dp = Resources.DisplayMetrics.Density;
-        float trackTop = heightRailRect.Top + 16f * dp;
-        float trackBot = heightRailRect.Bottom - 16f * dp;
-        float trackH = Math.Max(20f * dp, trackBot - trackTop);
-        float frac = Math.Clamp((ty - trackTop) / trackH, 0f, 1f);
-        float ny = 1f - frac * 2f; // Top = +1 (ceiling), Bottom = -1 (floor)
+    void UpdateHeightFromCapsuleTouch(float ty) {
+        float pad = dockHeightCapsuleRect.Width() * 0.35f;
+        float top = dockHeightCapsuleRect.Top + pad;
+        float bot = dockHeightCapsuleRect.Bottom - pad;
+        float h = Math.Max(12f, bot - top);
+        float frac = Math.Clamp((ty - top) / h, 0f, 1f);
+        float ny = 1f - frac * 2f;
         listenerPosition = new Vector3(listenerPosition.X, ny * environmentSize.Y, listenerPosition.Z);
         ListenerPositionChanged?.Invoke(listenerPosition);
         Invalidate();
     }
 
-    void UpdatePitchFromRailTouch(float ty) {
-        float dp = Resources.DisplayMetrics.Density;
-        float trackTop = pitchRailRect.Top + 16f * dp;
-        float trackBot = pitchRailRect.Bottom - 16f * dp;
-        float trackH = Math.Max(20f * dp, trackBot - trackTop);
-        float frac = Math.Clamp((ty - trackTop) / trackH, 0f, 1f);
-        float newPitch = Math.Clamp((1f - frac * 2f) * 90f, -90f, 90f);
-        listenerRotation = new Vector3(newPitch, listenerRotation.Y, 0f);
-        ListenerRotationChanged?.Invoke(listenerRotation);
-        Invalidate();
-    }
-
     void UpdateListenerFromRoomTouch(float tx, float ty, float prevX, float prevY, float dp) {
-        if (roomCanvasRect.Width() <= 0 || roomCanvasRect.Height() <= 0) {
-            return;
-        }
+        if (roomCanvasRect.Width() <= 0 || roomCanvasRect.Height() <= 0) return;
         float camYawRad = camYawDeg * (MathF.PI / 180f);
         float camPitchRad = camPitchDeg * (MathF.PI / 180f);
 

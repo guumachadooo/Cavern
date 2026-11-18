@@ -79,6 +79,21 @@ def main() -> None:
         lines.append(f"- Log compartilhado do aparelho disponível em: `{log_path}`")
     lines.append("- Memória histórica & referência One UI 9 sob demanda: `.agents/docs/PROJECT_HISTORY.md` e `.agents/docs/ONEUI9_REFERENCE.md`.")
 
+    extra_raw = read_text(repo / ".agents/docs/EXTRA_REQUESTS.md")
+    pending_extras: list[str] = []
+    if extra_raw:
+        m_sec = re.search(r"^##\s+Pedidos Extras Pendentes\s*\n(.*?)(?=^##\s+|\Z)", extra_raw, flags=re.MULTILINE | re.DOTALL)
+        if m_sec:
+            for ln in m_sec.group(1).splitlines():
+                s = ln.strip()
+                if not s or s.startswith("<!--") or s.lower().startswith("(nenhum pedido"):
+                    continue
+                pending_extras.append(s)
+    if pending_extras:
+        lines.append(f"- ATENÇÃO — Pedidos extras pendentes em `.agents/docs/EXTRA_REQUESTS.md` ({len(pending_extras)} linha(s)): leia e planeje-os antes de compilar/commitar!")
+    else:
+        lines.append("- Pedidos extras (conversas paralelas): leia `.agents/docs/EXTRA_REQUESTS.md` ao final da tarefa antes de commitar ou compilar o APK.")
+
     out = {
         "injectSteps": [
             {
