@@ -43,7 +43,17 @@ public enum OneUiIconType {
     VideoCamera,
     PictureArt,
     ZoomIn,
-    ZoomOut
+    ZoomOut,
+    MoreHorizontal,
+    SubtitlesCc,
+    FullscreenEnter,
+    FullscreenExit,
+    AspectRatioFit,
+    SpeakerLow,
+    SpeakerHigh,
+    AppleRewind,
+    AppleForward,
+    LabelsTag
 }
 
 public enum OneUiTabKind {
@@ -322,14 +332,16 @@ public static class OneUiVectorIcons {
                 break;
 
             case OneUiIconType.LyricsQuote:
-                // Apple Music ic_nowplaying_lyrics rounded quote bubble
+                // Apple Music ic_nowplaying_lyrics rounded quote bubble with crisp quote commas
                 canvas.DrawRoundRect(new RectF(cx - r * 0.84f, cy - r * 0.72f, cx + r * 0.84f, cy + r * 0.50f), r * 0.30f, r * 0.30f, stroke);
                 p.MoveTo(cx - r * 0.36f, cy + r * 0.50f);
                 p.LineTo(cx - r * 0.42f, cy + r * 0.86f);
                 p.LineTo(cx - r * 0.04f, cy + r * 0.50f);
                 canvas.DrawPath(p, stroke);
-                canvas.DrawCircle(cx - r * 0.28f, cy - r * 0.14f, r * 0.15f, fill);
-                canvas.DrawCircle(cx + r * 0.28f, cy - r * 0.14f, r * 0.15f, fill);
+                canvas.DrawCircle(cx - r * 0.28f, cy - r * 0.16f, r * 0.14f, fill);
+                canvas.DrawLine(cx - r * 0.22f, cy - r * 0.04f, cx - r * 0.32f, cy + r * 0.14f, stroke);
+                canvas.DrawCircle(cx + r * 0.26f, cy - r * 0.16f, r * 0.14f, fill);
+                canvas.DrawLine(cx + r * 0.32f, cy - r * 0.04f, cx + r * 0.22f, cy + r * 0.14f, stroke);
                 break;
 
             case OneUiIconType.VideoCamera:
@@ -364,6 +376,123 @@ public static class OneUiVectorIcons {
                 canvas.DrawCircle(cx - r * 0.14f, cy - r * 0.14f, r * 0.58f, stroke);
                 canvas.DrawLine(cx + r * 0.28f, cy + r * 0.28f, cx + r * 0.78f, cy + r * 0.78f, stroke);
                 canvas.DrawLine(cx - r * 0.36f, cy - r * 0.14f, cx + r * 0.08f, cy - r * 0.14f, stroke);
+                break;
+
+            case OneUiIconType.MoreHorizontal:
+                float dotR = Math.Max(1.6f, r * 0.16f);
+                canvas.DrawCircle(cx - r * 0.52f, cy, dotR, fill);
+                canvas.DrawCircle(cx, cy, dotR, fill);
+                canvas.DrawCircle(cx + r * 0.52f, cy, dotR, fill);
+                break;
+
+            case OneUiIconType.SubtitlesCc:
+                canvas.DrawRoundRect(new RectF(cx - r * 0.88f, cy - r * 0.62f, cx + r * 0.88f, cy + r * 0.62f), r * 0.22f, r * 0.22f, stroke);
+                // Two crisp "C" glyphs inside box
+                canvas.DrawArc(new RectF(cx - r * 0.58f, cy - r * 0.30f, cx - r * 0.08f, cy + r * 0.30f), 45f, 270f, false, stroke);
+                canvas.DrawArc(new RectF(cx + r * 0.08f, cy - r * 0.30f, cx + r * 0.58f, cy + r * 0.30f), 45f, 270f, false, stroke);
+                break;
+
+            case OneUiIconType.FullscreenEnter: {
+                float arm = r * 0.36f;
+                float m = r * 0.78f;
+                // Top-left
+                canvas.DrawLine(cx - m, cy - m + arm, cx - m, cy - m, stroke);
+                canvas.DrawLine(cx - m, cy - m, cx - m + arm, cy - m, stroke);
+                // Top-right
+                canvas.DrawLine(cx + m - arm, cy - m, cx + m, cy - m, stroke);
+                canvas.DrawLine(cx + m, cy - m, cx + m, cy - m + arm, stroke);
+                // Bottom-left
+                canvas.DrawLine(cx - m, cy + m - arm, cx - m, cy + m, stroke);
+                canvas.DrawLine(cx - m, cy + m, cx - m + arm, cy + m, stroke);
+                // Bottom-right
+                canvas.DrawLine(cx + m - arm, cy + m, cx + m, cy + m, stroke);
+                canvas.DrawLine(cx + m, cy + m, cx + m, cy + m - arm, stroke);
+                break;
+            }
+
+            case OneUiIconType.FullscreenExit: {
+                float arm = r * 0.34f;
+                float inGap = r * 0.26f;
+                float outM = r * 0.82f;
+                // Top-left inner corner
+                canvas.DrawLine(cx - outM, cy - inGap, cx - inGap, cy - inGap, stroke);
+                canvas.DrawLine(cx - inGap, cy - outM, cx - inGap, cy - inGap, stroke);
+                // Top-right inner corner
+                canvas.DrawLine(cx + inGap, cy - outM, cx + inGap, cy - inGap, stroke);
+                canvas.DrawLine(cx + inGap, cy - inGap, cx + outM, cy - inGap, stroke);
+                // Bottom-left inner corner
+                canvas.DrawLine(cx - outM, cy + inGap, cx - inGap, cy + inGap, stroke);
+                canvas.DrawLine(cx - inGap, cy + inGap, cx - inGap, cy + outM, stroke);
+                // Bottom-right inner corner
+                canvas.DrawLine(cx + inGap, cy + inGap, cx + outM, cy + inGap, stroke);
+                canvas.DrawLine(cx + inGap, cy + inGap, cx + inGap, cy + outM, stroke);
+                break;
+            }
+
+            case OneUiIconType.AspectRatioFit:
+                canvas.DrawRoundRect(new RectF(cx - r * 0.88f, cy - r * 0.58f, cx + r * 0.88f, cy + r * 0.58f), r * 0.20f, r * 0.20f, stroke);
+                canvas.DrawLine(cx - r * 0.52f, cy - r * 0.22f, cx - r * 0.24f, cy - r * 0.22f, stroke);
+                canvas.DrawLine(cx - r * 0.52f, cy - r * 0.22f, cx - r * 0.52f, cy + r * 0.06f, stroke);
+                canvas.DrawLine(cx + r * 0.52f, cy + r * 0.22f, cx + r * 0.24f, cy + r * 0.22f, stroke);
+                canvas.DrawLine(cx + r * 0.52f, cy + r * 0.22f, cx + r * 0.52f, cy - r * 0.06f, stroke);
+                break;
+
+            case OneUiIconType.SpeakerLow:
+                p.MoveTo(cx - r * 0.58f, cy - r * 0.26f);
+                p.LineTo(cx - r * 0.20f, cy - r * 0.26f);
+                p.LineTo(cx + r * 0.24f, cy - r * 0.62f);
+                p.LineTo(cx + r * 0.24f, cy + r * 0.62f);
+                p.LineTo(cx - r * 0.20f, cy + r * 0.26f);
+                p.LineTo(cx - r * 0.58f, cy + r * 0.26f);
+                p.Close();
+                canvas.DrawPath(p, fill);
+                break;
+
+            case OneUiIconType.SpeakerHigh:
+                p.MoveTo(cx - r * 0.80f, cy - r * 0.26f);
+                p.LineTo(cx - r * 0.44f, cy - r * 0.26f);
+                p.LineTo(cx - r * 0.02f, cy - r * 0.62f);
+                p.LineTo(cx - r * 0.02f, cy + r * 0.62f);
+                p.LineTo(cx - r * 0.44f, cy + r * 0.26f);
+                p.LineTo(cx - r * 0.80f, cy + r * 0.26f);
+                p.Close();
+                canvas.DrawPath(p, fill);
+                canvas.DrawArc(new RectF(cx - r * 0.14f, cy - r * 0.42f, cx + r * 0.42f, cy + r * 0.42f), -48, 96, false, stroke);
+                canvas.DrawArc(new RectF(cx - r * 0.10f, cy - r * 0.72f, cx + r * 0.76f, cy + r * 0.72f), -50, 100, false, stroke);
+                break;
+
+            case OneUiIconType.AppleRewind: {
+                // Two solid rounded left-pointing triangles (Apple Music style)
+                p.MoveTo(cx - r * 0.04f, cy - r * 0.48f);
+                p.LineTo(cx - r * 0.86f, cy);
+                p.LineTo(cx - r * 0.04f, cy + r * 0.48f);
+                p.Close();
+                p.MoveTo(cx + r * 0.78f, cy - r * 0.48f);
+                p.LineTo(cx - r * 0.04f, cy);
+                p.LineTo(cx + r * 0.78f, cy + r * 0.48f);
+                p.Close();
+                canvas.DrawPath(p, fill);
+                break;
+            }
+
+            case OneUiIconType.AppleForward: {
+                // Two solid rounded right-pointing triangles (Apple Music style)
+                p.MoveTo(cx - r * 0.78f, cy - r * 0.48f);
+                p.LineTo(cx + r * 0.04f, cy);
+                p.LineTo(cx - r * 0.78f, cy + r * 0.48f);
+                p.Close();
+                p.MoveTo(cx + r * 0.04f, cy - r * 0.48f);
+                p.LineTo(cx + r * 0.86f, cy);
+                p.LineTo(cx + r * 0.04f, cy + r * 0.48f);
+                p.Close();
+                canvas.DrawPath(p, fill);
+                break;
+            }
+
+            case OneUiIconType.LabelsTag:
+                canvas.DrawRoundRect(new RectF(cx - r * 0.82f, cy - r * 0.56f, cx + r * 0.82f, cy + r * 0.56f), r * 0.24f, r * 0.24f, stroke);
+                canvas.DrawLine(cx - r * 0.48f, cy - r * 0.14f, cx + r * 0.48f, cy - r * 0.14f, stroke);
+                canvas.DrawLine(cx - r * 0.48f, cy + r * 0.18f, cx + r * 0.18f, cy + r * 0.18f, stroke);
                 break;
         }
     }

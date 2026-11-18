@@ -789,8 +789,10 @@ public sealed class OneUiGlassDrawable : Drawable {
 
 /// <summary>
 /// Full-capsule 44dp One UI 9 slider (matching SystemUI Brightness &amp; SoundCraft Volume seekbars):
-/// continuous pixel-smooth float tracking (zero stepping jitter), blooming circular touch "ball" thumb
-/// with spring animation on press/drag, embedded label &amp; value readout, double-tap reset, and scroll safety.
+/// - Exact Samsung ToggleSeekBar.onTouchEvent relative-drag mechanism (touching anywhere keeps the
+///   bar &amp; ball in place and adjusts proportionally from the initial touch point)
+/// - Blooming circular touch "ball" thumb with spring animation on press/drag, optional SlimVolumeMode
+///   for Apple Music's volume bar, embedded label &amp; value readout, double-tap reset, and scroll safety.
 /// </summary>
 public sealed class OneUiSeekBar : SeekBar {
     readonly int touchSlop;
@@ -806,12 +808,13 @@ public sealed class OneUiSeekBar : SeekBar {
 
     float downX;
     float downY;
+    float dragAnchorX;
+    float startDragRatio;
     float maxMoveDist;
     int initialProgress;
     bool isHorizontalDrag;
     bool isTouchDown;
     bool isCancelledToScroll;
-    MotionEvent pendingDown;
     DateTime lastTapTime = DateTime.MinValue;
 
     float renderedRatio;
@@ -823,10 +826,13 @@ public sealed class OneUiSeekBar : SeekBar {
     public string LabelText { get; set; } = "";
     public string ValueText { get; set; } = "";
     public bool UseBlueAccent { get; set; }
+    public bool SlimVolumeMode { get; set; }
+    public Color? CustomFillColor { get; set; }
     public int DefaultProgress { get; set; }
     public bool HasDefaultReset { get; set; } = true;
 
     public event Action<int> ResetRequested;
+    public event Action<int> UserProgressChanged;
 
     public OneUiSeekBar(Context context) : base(context) {
         touchSlop = ViewConfiguration.Get(context)?.ScaledTouchSlop ?? 24;
@@ -866,7 +872,7 @@ public sealed class OneUiSeekBar : SeekBar {
     }
 
     protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        int desiredH = OneUiTheme.Dp(Context, 44f);
+        int desiredH = OneUiTheme.Dp(Context, SlimVolumeMode ? 28f : 44f);
         int w = MeasureSpec.GetSize(widthMeasureSpec);
         SetMeasuredDimension(ResolveSize(w, widthMeasureSpec), ResolveSize(desiredH, heightMeasureSpec));
     }
@@ -906,6 +912,18 @@ public sealed class OneUiSeekBar : SeekBar {
         }
 
         float dp = Resources.DisplayMetrics.Density;
+
+        if (SlimVolumeMode) {
+            DrawSlimVolumeTrack(canvas, w, h, dp);
+            bool slimAnim =
+                MathF.Abs(targetRatio - renderedRatio) > 0.0006f ||
+                MathF.Abs(targetThumb - thumbExpansion) > 0.004f;
+            if (slimAnim) {
+                PostInvalidateOnAnimation();
+            }
+            return;
+        }
+
         float radius = h * 0.5f;
         RectF bounds = new(0.5f, 0.5f, w - 0.5f, h - 0.5f);
 
@@ -922,7 +940,7 @@ public sealed class OneUiSeekBar : SeekBar {
             canvas.ClipPath(clipPath);
 
             float fillRight = Math.Clamp(renderedRatio * w, 0f, w);
-            Color accent = UseBlueAccent ? OneUiTheme.Primary : OneUiTheme.SliderAccent;
+            Color accent = CustomFillColor ?? (UseBlueAccent ? OneUiTheme.Primary : OneUiTheme.SliderAccent);
 
             if (thumbExpansion <= 0.004f) {
                 fillPaint.SetShader(null);
@@ -994,26 +1012,60 @@ public sealed class OneUiSeekBar : SeekBar {
         }
     }
 
+    void DrawSlimVolumeTrack(Canvas canvas, float w, float h, float dp) {
+        float barH = (7f + 5f * thumbExpansion) * dp;
+        float cy = h * 0.5f;
+        float top = cy - barH * 0.5f;
+        float bot = cy + barH * 0.5f;
+        float rad = barH * 0.5f;
+
+        RectF trackRect = new(0f, top, w, bot);
+        fillPaint.SetShader(null);
+        fillPaint.Color = Color.Argb(54, 255, 255, 255);
+        canvas.DrawRoundRect(trackRect, rad, rad, fillPaint);
+
+        if (renderedRatio > 0.002f) {
+            clipPath.Reset();
+            clipPath.AddRoundRect(trackRect, rad, rad, Android.Graphics.Path.Direction.Cw);
+            canvas.Save();
+            canvas.ClipPath(clipPath);
+
+            float fillRight = Math.Clamp(renderedRatio * w, 0f, w);
+            Color c = CustomFillColor ?? Color.Argb(228, 255, 255, 255);
+            fillPaint.Color = Color.Argb((int)Math.Round(185 + 70 * thumbExpansion), c.R, c.G, c.B);
+            canvas.DrawRoundRect(0f, top, Math.Max(rad * 1.4f, fillRight), bot, rad, rad, fillPaint);
+            canvas.Restore();
+        }
+
+        if (HasDefaultReset && Max > 0 && DefaultProgress > 0 && DefaultProgress < Max) {
+            float defX = DefaultProgress / (float)Max * w;
+            canvas.DrawLine(defX, top + 1f * dp, defX, bot - 1f * dp, trackRimPaint);
+        }
+    }
+
     public override bool OnTouchEvent(MotionEvent e) {
         if (!Enabled) {
             return false;
         }
 
         float w = Math.Max(1f, Width);
+        float dp = Resources.DisplayMetrics.Density;
 
         switch (e.ActionMasked) {
             case MotionEventActions.Down:
+                // Exact Samsung ToggleSeekBar.onTouchEvent mechanism:
+                // Do NOT jump progress to downX; record downX & current ratio and anchor relative drag.
                 downX = e.GetX();
                 downY = e.GetY();
+                dragAnchorX = downX;
                 maxMoveDist = 0f;
                 initialProgress = Progress;
+                startDragRatio = Max > 0 ? Math.Clamp(Progress / (float)Max, 0f, 1f) : 0f;
+                touchRatio = startDragRatio;
                 isHorizontalDrag = false;
                 isTouchDown = true;
                 isCancelledToScroll = false;
-                touchRatio = Math.Clamp(downX / w, 0f, 1f);
                 lastFrameMs = SystemClock.UptimeMillis();
-                pendingDown?.Recycle();
-                pendingDown = MotionEvent.Obtain(e);
                 PostInvalidateOnAnimation();
                 return true;
 
@@ -1023,45 +1075,58 @@ public sealed class OneUiSeekBar : SeekBar {
                 }
                 float curX = e.GetX();
                 float curY = e.GetY();
-                float dx = Math.Abs(curX - downX);
-                float dy = Math.Abs(curY - downY);
-                float moveDist = MathF.Sqrt(dx * dx + dy * dy);
+                float dxAbs = Math.Abs(curX - downX);
+                float dyAbs = Math.Abs(curY - downY);
+                float moveDist = MathF.Sqrt(dxAbs * dxAbs + dyAbs * dyAbs);
                 if (moveDist > maxMoveDist) {
                     maxMoveDist = moveDist;
                 }
-                touchRatio = Math.Clamp(curX / w, 0f, 1f);
 
                 if (!isHorizontalDrag) {
-                    if (dy > touchSlop && dy > dx) {
+                    if (dyAbs > touchSlop && dyAbs > dxAbs) {
                         isCancelledToScroll = true;
                         isTouchDown = false;
                         Parent?.RequestDisallowInterceptTouchEvent(false);
                         Progress = initialProgress;
-                        pendingDown?.Recycle();
-                        pendingDown = null;
                         PostInvalidateOnAnimation();
                         return false;
                     }
-                    if (dx > touchSlop * 0.55f && dx >= dy * 1.1f) {
+                    if (dxAbs > touchSlop * 0.5f && dxAbs >= dyAbs * 1.05f) {
                         isHorizontalDrag = true;
+                        dragAnchorX = curX;
+                        startDragRatio = Max > 0 ? Math.Clamp(Progress / (float)Max, 0f, 1f) : renderedRatio;
+                        touchRatio = startDragRatio;
                         Parent?.RequestDisallowInterceptTouchEvent(true);
-                        Animate().ScaleX(1.008f).ScaleY(1.032f).SetDuration(120).Start();
-                        if (pendingDown != null) {
-                            base.OnTouchEvent(pendingDown);
-                            pendingDown.Recycle();
-                            pendingDown = null;
+                        if (!SlimVolumeMode) {
+                            Animate().ScaleX(1.008f).ScaleY(1.032f).SetDuration(120).Start();
                         }
-                        bool res = base.OnTouchEvent(e);
+                    } else {
                         PostInvalidateOnAnimation();
-                        return res;
+                        return true;
                     }
-                    PostInvalidateOnAnimation();
-                    return true;
                 }
+
                 Parent?.RequestDisallowInterceptTouchEvent(true);
-                bool handled = base.OnTouchEvent(e);
+                float usableW = Math.Max(1f, w - (SlimVolumeMode ? 12f * dp : Height * 0.45f));
+                float rawRatio = startDragRatio + (curX - dragAnchorX) / usableW;
+                if (rawRatio > 1f) {
+                    rawRatio = 1f;
+                    startDragRatio = 1f;
+                    dragAnchorX = curX;
+                } else if (rawRatio < 0f) {
+                    rawRatio = 0f;
+                    startDragRatio = 0f;
+                    dragAnchorX = curX;
+                }
+                touchRatio = rawRatio;
+
+                int newProg = Max > 0 ? Math.Clamp((int)Math.Round(touchRatio * Max), 0, Max) : 0;
+                if (newProg != Progress) {
+                    Progress = newProg;
+                    UserProgressChanged?.Invoke(newProg);
+                }
                 PostInvalidateOnAnimation();
-                return handled;
+                return true;
 
             case MotionEventActions.Up:
                 Parent?.RequestDisallowInterceptTouchEvent(false);
@@ -1078,11 +1143,10 @@ public sealed class OneUiSeekBar : SeekBar {
                     DateTime now = DateTime.UtcNow;
                     if ((now - lastTapTime).TotalMilliseconds <= 320) {
                         lastTapTime = DateTime.MinValue;
-                        pendingDown?.Recycle();
-                        pendingDown = null;
                         isHorizontalDrag = false;
                         int target = Math.Clamp(DefaultProgress, 0, Max);
                         Progress = target;
+                        touchRatio = Max > 0 ? Math.Clamp(target / (float)Max, 0f, 1f) : 0f;
                         ResetRequested?.Invoke(target);
                         Animate().ScaleX(0.99f).ScaleY(0.95f).SetDuration(80).WithEndAction(
                             new Java.Lang.Runnable(() => Animate().ScaleX(1f).ScaleY(1f).SetDuration(240).Start())).Start();
@@ -1092,32 +1156,22 @@ public sealed class OneUiSeekBar : SeekBar {
                     lastTapTime = now;
                 }
 
-                if (pendingDown != null) {
-                    base.OnTouchEvent(pendingDown);
-                    pendingDown.Recycle();
-                    pendingDown = null;
-                }
+                // On single tap without horizontal drag, keep current Progress intact (ToggleSeekBar behavior)
                 isHorizontalDrag = false;
-                bool upHandled = base.OnTouchEvent(e);
                 touchRatio = Max > 0 ? Math.Clamp(Progress / (float)Max, 0f, 1f) : 0f;
                 PostInvalidateOnAnimation();
-                return upHandled;
+                return true;
 
             case MotionEventActions.Cancel:
                 Parent?.RequestDisallowInterceptTouchEvent(false);
                 Animate().ScaleX(1f).ScaleY(1f).SetDuration(280).Start();
                 isTouchDown = false;
-                pendingDown?.Recycle();
-                pendingDown = null;
-                if (!isHorizontalDrag) {
-                    isCancelledToScroll = false;
-                    PostInvalidateOnAnimation();
-                    return false;
-                }
+                bool wasDragging = isHorizontalDrag;
                 isHorizontalDrag = false;
                 isCancelledToScroll = false;
+                touchRatio = Max > 0 ? Math.Clamp(Progress / (float)Max, 0f, 1f) : 0f;
                 PostInvalidateOnAnimation();
-                return base.OnTouchEvent(e);
+                return wasDragging;
         }
 
         return base.OnTouchEvent(e);
@@ -1130,12 +1184,182 @@ public sealed class OneUiSeekBar : SeekBar {
         float t = Math.Clamp((x - edge0) / (edge1 - edge0), 0f, 1f);
         return t * t * (3f - 2f * t);
     }
+}
 
-    protected override void Dispose(bool disposing) {
-        if (disposing) {
-            pendingDown?.Recycle();
-            pendingDown = null;
+/// <summary>
+/// Faithful Samsung One UI 9 / Gallery SESL9 Switch (extracted from SamsungGallery2018.apk sesl_switch_*):
+/// - Track capsule: 32dp x 20dp (corner radius 10dp), track off #636368, track on Dynamic Primary
+/// - Thumb: 20dp outer ring (2dp stroke in #8F8F8F off / Primary on) + 16dp #FCFCFF inner circle
+/// - Tactile press animation: thumb core scales cleanly from 1.0 to 0.80 while pressed, and glides 180ms on toggle.
+/// </summary>
+public sealed class OneUiSwitch : Switch {
+    readonly Paint trackPaint = new(PaintFlags.AntiAlias);
+    readonly Paint thumbCorePaint = new(PaintFlags.AntiAlias);
+    readonly Paint thumbRingPaint = new(PaintFlags.AntiAlias);
+    readonly int touchSlop;
+
+    float thumbPos;
+    float pressFrac;
+    bool hasDrawnOnce;
+    bool isPressedDown;
+    bool didSwipe;
+    float downX;
+    float downY;
+    long lastFrameMs;
+
+    public OneUiSwitch(Context context) : base(context) {
+        touchSlop = ViewConfiguration.Get(context)?.ScaledTouchSlop ?? 20;
+        SetBackgroundColor(Color.Transparent);
+#pragma warning disable CS0618
+        ThumbDrawable = new ColorDrawable(Color.Transparent);
+        TrackDrawable = new ColorDrawable(Color.Transparent);
+#pragma warning restore CS0618
+        SplitTrack = false;
+        ShowText = false;
+        SetPadding(0, 0, 0, 0);
+        SetMinWidth(0);
+        SetMinHeight(0);
+        Clickable = true;
+        Focusable = true;
+
+        trackPaint.SetStyle(Paint.Style.Fill);
+        thumbCorePaint.SetStyle(Paint.Style.Fill);
+        thumbRingPaint.SetStyle(Paint.Style.Stroke);
+
+        CheckedChange += (_, _) => {
+            if (hasDrawnOnce) {
+                lastFrameMs = SystemClock.UptimeMillis();
+                PostInvalidateOnAnimation();
+            } else {
+                thumbPos = Checked ? 1f : 0f;
+            }
+        };
+    }
+
+    protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        int w = OneUiTheme.Dp(Context, 40f);
+        int h = OneUiTheme.Dp(Context, 26f);
+        SetMeasuredDimension(ResolveSize(w, widthMeasureSpec), ResolveSize(h, heightMeasureSpec));
+    }
+
+    protected override void OnDraw(Canvas canvas) {
+        float w = Width;
+        float h = Height;
+        if (w <= 0 || h <= 0) {
+            return;
         }
-        base.Dispose(disposing);
+
+        if (!hasDrawnOnce) {
+            hasDrawnOnce = true;
+            thumbPos = Checked ? 1f : 0f;
+            pressFrac = 0f;
+            lastFrameMs = SystemClock.UptimeMillis();
+        }
+
+        long nowMs = SystemClock.UptimeMillis();
+        float dt = Math.Clamp((nowMs - lastFrameMs) / 1000f, 0.001f, 0.05f);
+        lastFrameMs = nowMs;
+
+        float targetPos = Checked ? 1f : 0f;
+        thumbPos += (targetPos - thumbPos) * Math.Min(1f, dt * 16f);
+        if (MathF.Abs(targetPos - thumbPos) < 0.004f) {
+            thumbPos = targetPos;
+        }
+
+        float targetPress = isPressedDown ? 1f : 0f;
+        pressFrac += (targetPress - pressFrac) * Math.Min(1f, dt * 22f);
+        if (MathF.Abs(targetPress - pressFrac) < 0.004f) {
+            pressFrac = targetPress;
+        }
+
+        float dp = Resources.DisplayMetrics.Density;
+        float trackW = 32f * dp;
+        float trackH = 20f * dp;
+        float trackLeft = (w - trackW) * 0.5f;
+        float trackTop = (h - trackH) * 0.5f;
+        float corner = trackH * 0.5f;
+
+        Color trackOff = Color.Rgb(99, 99, 104); // #636368 Samsung Gallery dark track off
+        Color trackOn = OneUiTheme.Primary;
+        trackPaint.Color = OneUiTheme.BlendColor(trackOff, trackOn, thumbPos);
+        canvas.DrawRoundRect(
+            new RectF(trackLeft, trackTop, trackLeft + trackW, trackTop + trackH),
+            corner, corner, trackPaint);
+
+        // Thumb travels cleanly inside the 32x20 capsule (outer diameter 20dp, inner white circle 16dp)
+        float outerR = 10f * dp;
+        float cy = h * 0.5f;
+        float startCx = trackLeft + outerR;
+        float endCx = trackLeft + trackW - outerR;
+        float cx = startCx + (endCx - startCx) * thumbPos;
+
+        float strokeW = 2f * dp;
+        float scale = 1f - 0.16f * pressFrac;
+        float coreR = (8.2f * dp) * scale;
+        float ringR = (9.0f * dp) * (1f - 0.10f * pressFrac);
+
+        Color ringOff = Color.Rgb(143, 143, 148); // #8F8F8F sesl_switch_thumb_off stroke
+        thumbRingPaint.StrokeWidth = strokeW;
+        thumbRingPaint.Color = OneUiTheme.BlendColor(ringOff, trackOn, thumbPos);
+        thumbCorePaint.Color = Color.Rgb(252, 252, 255); // #FCFCFF sesl_switch_thumb fill
+
+        canvas.DrawCircle(cx, cy, coreR, thumbCorePaint);
+        canvas.DrawCircle(cx, cy, ringR, thumbRingPaint);
+
+        if (MathF.Abs(targetPos - thumbPos) > 0.004f || MathF.Abs(targetPress - pressFrac) > 0.004f) {
+            PostInvalidateOnAnimation();
+        }
+    }
+
+    public override bool OnTouchEvent(MotionEvent e) {
+        if (!Enabled) {
+            return false;
+        }
+        switch (e.ActionMasked) {
+            case MotionEventActions.Down:
+                downX = e.GetX();
+                downY = e.GetY();
+                didSwipe = false;
+                isPressedDown = true;
+                lastFrameMs = SystemClock.UptimeMillis();
+                PostInvalidateOnAnimation();
+                return true;
+
+            case MotionEventActions.Move:
+                float dx = e.GetX() - downX;
+                float dy = e.GetY() - downY;
+                if (!didSwipe && MathF.Abs(dx) > touchSlop * 0.45f && MathF.Abs(dx) >= MathF.Abs(dy)) {
+                    didSwipe = true;
+                    Parent?.RequestDisallowInterceptTouchEvent(true);
+                }
+                if (didSwipe) {
+                    bool desired = dx > 0f;
+                    if (Checked != desired) {
+                        Checked = desired;
+                    }
+                    PostInvalidateOnAnimation();
+                    return true;
+                }
+                return true;
+
+            case MotionEventActions.Up:
+                Parent?.RequestDisallowInterceptTouchEvent(false);
+                isPressedDown = false;
+                if (!didSwipe && MathF.Abs(e.GetY() - downY) <= touchSlop) {
+                    PerformClick();
+                }
+                lastFrameMs = SystemClock.UptimeMillis();
+                PostInvalidateOnAnimation();
+                return true;
+
+            case MotionEventActions.Cancel:
+                Parent?.RequestDisallowInterceptTouchEvent(false);
+                isPressedDown = false;
+                didSwipe = false;
+                lastFrameMs = SystemClock.UptimeMillis();
+                PostInvalidateOnAnimation();
+                return true;
+        }
+        return base.OnTouchEvent(e);
     }
 }

@@ -64,6 +64,18 @@ public sealed class AndroidStrings {
         ["LyricsTapHint"] = "Synced Live Lyrics • Tap a line to jump",
         ["LyricsUnsyncedHint"] = "Static Lyrics (.txt / tags)",
         ["VideoSyncBadge"] = "Synced Video + Spatial 3D • Double-tap ±10s",
+        ["PlayerMoreTitle"] = "Playback & Spatial 3D",
+        ["VideoSubtitlesTitle"] = "Subtitles (CC)",
+        ["SubtitlesOff"] = "Subtitles Off",
+        ["SubtitlesImportBtn"] = "Load External .srt / .vtt / .ass...",
+        ["SubtitlesNoneFound"] = "No embedded or adjacent subtitle files found.",
+        ["SubtitlesEmbeddedTag"] = "Embedded Track #{0}",
+        ["AspectFit"] = "Fit",
+        ["AspectCrop"] = "Fill",
+        ["AspectStretch"] = "Stretch",
+        ["VideoLockedMsg"] = "Controls Locked",
+        ["VideoUnlockHint"] = "Unlock",
+        ["RoomResetAll"] = "Reset Position & Head",
 
         // Player & Room
         ["RoomTitle"] = "3D Room",
@@ -325,6 +337,18 @@ public sealed class AndroidStrings {
         d["LyricsTapHint"] = "Letra Sincronizada • Toque em um verso para pular";
         d["LyricsUnsyncedHint"] = "Letra Estática (.txt / tags)";
         d["VideoSyncBadge"] = "Vídeo + Áudio 3D • Toque duplo ±10s";
+        d["PlayerMoreTitle"] = "Reprodução e Áudio Espacial 3D";
+        d["VideoSubtitlesTitle"] = "Legendas (CC)";
+        d["SubtitlesOff"] = "Desativar Legendas";
+        d["SubtitlesImportBtn"] = "Importar arquivo .srt / .vtt / .ass...";
+        d["SubtitlesNoneFound"] = "Nenhuma legenda embutida ou na mesma pasta foi encontrada.";
+        d["SubtitlesEmbeddedTag"] = "Faixa Embutida #{0}";
+        d["AspectFit"] = "Ajustar";
+        d["AspectCrop"] = "Preencher";
+        d["AspectStretch"] = "Esticar";
+        d["VideoLockedMsg"] = "Tela Travada";
+        d["VideoUnlockHint"] = "Destravar";
+        d["RoomResetAll"] = "Zerar Posição e Cabeça";
 
         d["RoomTitle"] = "Sala 3D";
         d["PresetCenter"] = "Centro";

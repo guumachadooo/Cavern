@@ -10,15 +10,15 @@ Spatial audio player, multi-format converter, and 3D object stem extractor for A
 ## Key Capabilities
 
 ### 1. Spatial Multimedia Player (`Player`)
-- Reads embedded tags (`Title`, `Artist`, `Album`, sample rate, bitrate) and album cover art directly via Android `MediaMetadataRetriever` (extracting real frames for video files or generating clean spatial artwork when absent) and harmonizes the player palette and wave progress bar.
-- **Synced Video Stage (YouTube / Samsung Video Player style):** Plays video files muted inside a rounded `TextureView` locked to Cavern's real-time spatial `AudioTrack` clock (`SetVolume(0f, 0f)`), complete with single-tap HUD overlay and left/right double-tap `±10s` radial bloom seeking.
-- **Synced Live Lyrics (Apple Music style):** Loads timed `.lrc` / static `.txt` lyrics placed alongside the media (or embedded ID3v2 `USLT`/`SYLT`, Vorbis comments, MP4 `©lyr`, and FFmpeg metadata tags) with glowing active line tracking, breathing `•••` instrumental dots, and tap-any-line seeking.
+- Reads embedded tags (`Title`, `Artist`, `Album`, sample rate, bitrate) and album cover art directly via Android `MediaMetadataRetriever` (or generates procedural spatial art when absent) and harmonizes the backdrop & One UI 9 wave seekbar.
+- **Apple Music Now Playing & Full-Bleed Live Lyrics:** Faithfully mirrors Apple Music's cover layout (`1:1` spring-scaled artwork, left-aligned title/artist, circular `•••` DSP sheet, wave progress bar with Dolby/Spatial badge, borderless transport, slim relative-drag volume bar, and 3-icon bottom bar) and expands into borderless live `.lrc`/`.txt`/embedded lyrics with true scrolling `•••` instrumental rows and tap-any-line seeking.
+- **Samsung Video Player + YouTube Video Mode (with Subtitles & Fullscreen):** Automatically switches video files into a rich video player with `CC` subtitles (`.srt`, `.vtt`, `.ass`/`.ssa` external files + FFmpeg-extracted MKV/MP4 subtitle streams + manual subtitle import), audio track switcher, aspect ratio cycling (`Fit` / `Fill` / `Stretch`), center `-10s` / `+10s` & double-tap radial bloom gestures, touch lock, and true landscape fullscreen playback.
 - Publishes `MediaSession` metadata, album art, and transport actions (`-10s`, `Play/Pause`, `+10s`, `Stop`, timeline scrubbing) to the Android system notification shade and lock screen.
-- Includes live codec/channel telemetry (`kHz`, bed channels, 3D objects) and instant DSP switches (`HRTF 3D`, `Cavernize 3D`, `Matrix 7.1`).
 
 ### 2. Interactive 3D Acoustic Room (`Sala 3D` / `3D Room`)
-- **Orbitable & Zoomable 3D Camera:** Drag anywhere in the room canvas to orbit azimuth and elevation (`3D`, `Topo`, `Frente`), pinch with two fingers or tap `-/+` to zoom cleanly (tap the angle readout to reset), with 60 FPS smoothed dynamic object motion trails.
-- **Listener Placement & Head Tracking:** Drag the listener across the floor (or vertical Y plane in low-angle front view), adjust ear height via the dock slider, rotate head yaw/pitch via the bottom gimbal, or fine-tune every axis numerically with double-tap-reset capsule sliders.
+- **Dolby Atmos Renderer-Inspired 3D Stage:** Clean architectural 3D wireframe room with floor grid, ear-level horizon ring, ceiling cage, monitor bed nodes with dB level rings (Green / Amber / Red, Mute `X`, Solo gold ring), and numbered translucent 3D object spheres with vertical floor drop-lines and a `Labels` filter (`Active` / `All` / `Min`).
+- **Orbitable & Zoomable 3D Camera:** Drag anywhere in the room canvas to orbit azimuth and elevation (`3D`, `Topo`, `Frente`), pinch with two fingers or tap `-/+` to zoom cleanly (tap the angle readout to reset).
+- **Listener Placement & Fine-Tuning:** Drag the listener across the floor (or vertical Y plane in low-angle front view), reset seat/head orientation in one tap, or fine-tune every axis numerically with Samsung relative-drag double-tap-reset capsule sliders.
 - **Live Source Mixer & Symmetric Transport:** Tap any speaker/object sphere inside the room to Solo, control playback via the symmetric 5-icon transport bar (`Restart`, `-10s`, `Play/Pause`, `+10s`, `Loop`), toggle binaural HRTF virtualizer + distance cues, configure attenuation rolloff (`Disabled`, `Logarithmic`, `Linear`, `Real 1/d`), and boost LFE.
 
 ### 3. Spatial Converter & Render Studio (`Estúdio` / `Studio`)

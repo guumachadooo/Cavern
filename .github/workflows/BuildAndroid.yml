@@ -50,7 +50,7 @@ jobs:
           dotnet publish CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
             -c Release -f net11.0-android \
             -p:ApplicationVersion=${{ github.run_number }} \
-            -p:ApplicationDisplayVersion=2.6.${{ github.run_number }} \
+            -p:ApplicationDisplayVersion=2.7.${{ github.run_number }} \
             -p:AndroidPackageFormat=apk \
             -p:AndroidKeyStore=true \
             -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/cavernize.keystore" \
@@ -79,14 +79,15 @@ jobs:
       - name: Publish versioned GitHub Release (permanent archive)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v2.6.${{ github.run_number }}"
+          tag_name: "v2.7.${{ github.run_number }}"
           target_commitish: ${{ github.sha }}
-          name: "Cavernize Android v2.6.${{ github.run_number }}"
+          name: "Cavernize Android v2.7.${{ github.run_number }}"
           body: |
-            Permanent archive release for Cavernize Android `v2.6.${{ github.run_number }}` (Build `${{ github.run_number }}`, commit `${{ github.sha }}`).
-            - Exact One UI 9 Quick Panel Slider Palette & Resting Solid State (`system_accent2_300`), Harmonized 6-Role Vector Icon Badges, and Samsung Gallery Translucent Floating Pill Navigation Bar.
-            - Player Tab: Synced Video Stage (muted `TextureView` + `MediaPlayer` with YouTube/Samsung single-tap HUD & double-tap `±10s` radial bloom) and Apple Music-inspired Live Lyrics sheet (`.lrc`/`.txt`/embedded ID3v2/Vorbis/MP4/FFmpeg tags with tap-to-seek).
-            - 3D Room Tab: Pinch-to-zoom, `-/+` zoom controls, label-tap zoom reset, harmonized `SliderAccent` height bar, and symmetric 5-icon transport bar.
+            Permanent archive release for Cavernize Android `v2.7.${{ github.run_number }}` (Build `${{ github.run_number }}`, commit `${{ github.sha }}`).
+            - **Apple Music Exact Now Playing Layout & Full-Screen Lyrics (`music_player.xml`, `constraint_player_media_controls.xml`, `fragment_player_lyrics_sheet.xml`, `lyrics_line_instrumental.xml`):** 1:1 spring-animated album cover, left-aligned title/artist + `•••` overflow sheet, One UI 9 Wave SeekBar with spatial badge, borderless transport icons, slim volume slider, and 3-icon bottom bar (toggling full-bleed borderless lyrics with true inline `• • •` instrumental rows).
+            - **Samsung Video Player + YouTube Video Mode (`SamsungVideoPlayer`):** Live external `.srt`/`.vtt`/`.ass` & FFmpeg-extracted MKV/MP4 CC subtitles, audio track switcher, Fit/Fill/Stretch aspect toggle, touch lock toggle, and immersive landscape fullscreen mode.
+            - **Samsung Brightness Slider Relative Drag & Gallery Switch:** `ToggleSeekBar.onTouchEvent` relative-drag physics in `OneUiSeekBar` plus exact `SeslSwitch` (`32dp × 20dp`) capsule switches (`OneUiSwitch`).
+            - **Dolby Atmos Renderer-Inspired 3D Room (`RoomSimulatorView`):** Clean 3D acoustic wireframe with ear-level horizon ring, monitor bed nodes with dB meter color rings, numbered translucent object spheres with floor drop-lines, and unobstructed viewport.
           prerelease: false
           make_latest: false
           files: build/Cavernize-Android.apk

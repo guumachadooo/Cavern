@@ -26,11 +26,16 @@ Recursos decodificados: `res/ii.xml` (`menu_bottom_tab`), `res/Ll1.xml` (`sesl_b
 - **Indicador de aba selecionada**: pílula interna sutil **`basic_token_state_selected_on_surface_dark = 0x1AFFFFFF`** (`#FFFFFF` a ~10% de opacidade) — **nunca um bloco sólido laranja/azul**.
 - **Item da aba (`sesl_bottom_navigation_item`)**: ícone `24dp` em cima + label `10sp–10.5sp` embaixo (`singleLine`). Ícone alterna entre traço vazado/semi-transparente (`_line`) no estado inativo e preenchido com recortes internos (`_solid`) no estado selecionado.
 
-## 4. Referências de Player & Letras (`Apple Music`, `YouTube.apk`, `SamsungVideoPlayer.apk`)
-- **Apple Music (`music_player.xml`, `fragment_player_lyrics_sheet.xml`, `lyrics_header.xml`, `lyrics_line.xml`)**:
-  - Arte `1:1` arredondada (`corner_radius_l`, elevação `15dp`, margens `24dp`), títulos alinhados à esquerda com badges inline (`Dolby Atmos` / `Lossless`), linha ativa da letra destacada em branco vivo (`24sp Bold`), linhas inativas em `alpha = 0.35f`, pontos pulsantes para interlúdios (`lyrics_instrumental_dot`), cabeçalho compacto (`60dp` thumb + título/artista) quando a letra expande, gradiente alfa superior/inferior no `RecyclerView` das letras.
-- **YouTube (`res/zmf.xml`, `res/FZD.xml`) + SamsungVideoPlayer (`res/Nc.xml`, `res/Cs.xml`)**:
-  - Gestos em vídeo: toque simples alterna controles overlay (`Play/Pause`, `-10s`/`+10s`, chip de velocidade); duplo toque na esquerda/direita busca `-10s`/`+10s` com bloom circular (`CircularClipTapBloomView`).
+## 4. Referências de Player, Switch, Sliders & Vídeo (`Apple Music`, `SamsungGallery2018.apk`, `SystemUI.apk`, `SamsungVideoPlayer.apk`)
+- **Mecanismo de Arrasto Relativo do Slider de Brilho (`SystemUI.apk` `ToggleSeekBar.onTouchEvent` @ `classes3.dex`):**
+  - Ao tocar (`ACTION_DOWN`), registra `touchedX` e `currentProgress` **sem saltar** a bola ou progresso para a coordenada de toque; em `ACTION_MOVE` após ultrapassar `scaledTouchSlop`, desloca proporcionalmente `(x - touchedX) / usableWidth * max` mantendo a interação precisa sem saltos acidentais.
+- **`SeslSwitch` (`SamsungGallery2018.apk` `sesl_switch_*`):**
+  - Trilha em cápsula `32dp × 20dp` (`cornerRadius = 10dp`, cor `#636368` desligado / `Primary` ligado); thumb de `20dp` com borda `2dp` (`#8F8F8F` desligado / `Primary` ligado) e núcleo `#FCFCFF` (`16dp`) que comprime para `~0.80` ao pressionar.
+- **Apple Music (`music_player.xml`, `constraint_player_media_controls.xml`, `fragment_player_lyrics_sheet.xml`, `lyrics_header.xml`, `lyrics_line.xml`, `lyrics_line_instrumental.xml`):**
+  - Arte `1:1` arredondada com escala dinâmica play/pause, títulos alinhados à esquerda + botão circular `•••` + badges inline (`Dolby Atmos`), transporte limpo sem bordas, barra de volume fina com ícones de alto-falante, e barra inferior de 3 ícones (balão de letras à esquerda, rota/áudio espacial ao centro, repetição/fila à direita).
+  - No modo Letras: cabeçalho `lyrics_header` (`52dp` mini-capa + título/artista + `•••`), lista de letras sem bordas/card ocupando toda a largura sobre o fundo borrado, e os 3 pontos `• • •` de introdução/interlúdio (`lyrics_line_instrumental.xml`) como **linha real na lista vertical** para rolar naturalmente sem espremer frases.
+- **SamsungVideoPlayer (`videoplayer_titlelayout`, `videoplayer_controllayout`, `player_controller_button_normal`) + YouTube:**
+  - Barra superior (título, CC/legendas, faixa de áudio, proporção Fit/Fill/Stretch), transporte central (`-10s`, `Play/Pause`, `+10s`), duplo toque lateral `±10s` com bloom circular, barra inferior com trava de tela (`Lock`), loop e tela cheia imersiva horizontal (`Fullscreen`).
 
 ## 5. Barra de Mídia com Ondas (`WaveSeekbar` — `SystemUI.apk`)
 - `WaveSeekbarProgressDrawable` + `MultiWaveAreaTrackRenderer`: ondas coloridas translúcidas animadas em reprodução, linha plana em pausa e intervalo de `8dp` após o polegar.

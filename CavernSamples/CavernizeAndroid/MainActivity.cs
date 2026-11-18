@@ -52,6 +52,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     const int ReqLocateFFmpeg = 1005;
     const int ReqLocateTruehdd = 1006;
     const int ReqPermissions = 1007;
+    const int ReqLoadSubtitles = 1008;
 
     AppSettingsStore store;
     AndroidUpmixingSettings upmixingSettings;
@@ -98,6 +99,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
     bool fileDetailsExpanded;
     MediaPlaybackNotificationManager mediaNotification;
     MediaArtworkMetadata currentMediaMeta;
+    Android.Net.Uri currentMediaUri;
+    List<SubtitleTrackInfo> discoveredSubtitles = [];
+    string activeSubtitleTrackId;
+    IReadOnlyList<SubtitleCue> activeSubtitleCues = [];
     Bitmap defaultFallbackCover;
 
     UpdateCheckResult latestUpdateInfo;
@@ -278,6 +283,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         tabPillAnimator?.Cancel();
         tabPillAnimator?.Dispose();
         mediaNotification?.Dispose();
+        ExitVideoFullscreenIfNeeded();
         musicVideoStage?.ReleasePlayer();
         currentMediaMeta?.ArtworkBitmap?.Dispose();
         defaultFallbackCover?.Dispose();
@@ -873,6 +879,28 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     RefreshTruehddCardUi();
                 });
             });
+        } else if (requestCode == ReqLoadSubtitles && data.Data != null) {
+            Task.Run(() => {
+                string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
+                List<SubtitleCue> cues = SubtitleService.LoadFromFilePath(path);
+                RunOnUiThread(() => {
+                    if (uiDestroyed) return;
+                    if (cues.Count == 0) {
+                        ShowError(S["SubtitlesNoneFound"]);
+                        return;
+                    }
+                    SubtitleTrackInfo imported = new() {
+                        Id = "ext:" + path,
+                        Title = Path.GetFileName(path),
+                        ExternalFilePath = path
+                    };
+                    discoveredSubtitles.RemoveAll(s => string.Equals(s.Id, imported.Id, StringComparison.OrdinalIgnoreCase));
+                    discoveredSubtitles.Insert(0, imported);
+                    activeSubtitleTrackId = imported.Id;
+                    activeSubtitleCues = cues;
+                    musicVideoStage?.SetSubtitles(activeSubtitleCues);
+                });
+            });
         }
     }
 
@@ -882,6 +910,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             return;
         }
         AppLogger.Info($"Loading URI: {uri}");
+        currentMediaUri = uri;
         SetConvertStatus(S["CopyingMedia"], -1);
         headerFileText.Text = S["CopyingMedia"];
         Task.Run(() => {
@@ -1171,7 +1200,33 @@ public partial class MainActivity : Activity, ICavernizeApp {
         if (!ReferenceEquals(prevMeta, currentMediaMeta)) {
             prevMeta?.ArtworkBitmap?.Dispose();
         }
+        discoveredSubtitles = [];
+        activeSubtitleTrackId = null;
+        activeSubtitleCues = [];
+        musicVideoStage?.SetSubtitles(activeSubtitleCues);
+        if (currentMediaMeta?.HasVideo == true) {
+            StartBackgroundSubtitleDiscovery(file?.Path);
+        }
         RefreshMusicPlayerUi();
+    }
+
+    void StartBackgroundSubtitleDiscovery(string fallbackPath) {
+        string mediaPath = currentMediaMeta?.SourceMediaPath;
+        if (string.IsNullOrEmpty(mediaPath)) mediaPath = fallbackPath;
+        string title = currentMediaMeta?.Title ?? "";
+        Android.Net.Uri uriSnap = currentMediaUri;
+        Task.Run(() => {
+            List<SubtitleTrackInfo> tracks = SubtitleService.DiscoverTracks(this, uriSnap, mediaPath, title, ffmpeg);
+            RunOnUiThread(() => {
+                if (uiDestroyed) return;
+                discoveredSubtitles = tracks;
+                // Auto-enable first external subtitle if found alongside video
+                SubtitleTrackInfo autoExt = tracks.FirstOrDefault(t => !string.IsNullOrEmpty(t.ExternalFilePath));
+                if (autoExt != null && string.IsNullOrEmpty(activeSubtitleTrackId)) {
+                    SelectSubtitleTrack(autoExt);
+                }
+            });
+        });
     }
 
     CavernizeTrack GetActiveTrack() => decodedTrueHDTrack ?? selectedTrack;
@@ -1243,6 +1298,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         MediaArtworkMetadata oldMeta = currentMediaMeta;
         currentMediaMeta = null;
+        currentMediaUri = null;
+        discoveredSubtitles = [];
+        activeSubtitleTrackId = null;
+        activeSubtitleCues = [];
         selectedTrack = null;
         trackSourceItems = [];
         fileDetailsExpanded = false;

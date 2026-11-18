@@ -128,13 +128,22 @@ public partial class MainActivity {
         roomTelemetryText.SetPadding(0, 0, 0, Dp(8));
         roomCard.AddView(roomTelemetryText);
 
-        // Collapsible Fine-Tune Capsule Sliders
+        // Collapsible Fine-Tune Capsule Sliders + Quick Reset
+        LinearLayout roomCtrlRow = HRow();
         fineTuneToggleBtn = PillButton(isFineTuneExpanded ? S["FineTuneHideBtn"] : S["FineTuneBtn"], () => {
             isFineTuneExpanded = !isFineTuneExpanded;
             SetExpandedWithAnimation(fineTuneContainer, isFineTuneExpanded);
             fineTuneToggleBtn.Text = isFineTuneExpanded ? S["FineTuneHideBtn"] : S["FineTuneBtn"];
         });
-        roomCard.AddView(fineTuneToggleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        Button resetRoomBtn = PillButton(S["RoomResetAll"], () => {
+            playerEngine.ListenerPosition = Vector3.Zero;
+            playerEngine.ListenerRotation = Vector3.Zero;
+            SyncRoomSlidersFromEngine();
+            UpdateRoomCanvas();
+        });
+        roomCtrlRow.AddView(fineTuneToggleBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.25f) { RightMargin = Dp(8) });
+        roomCtrlRow.AddView(resetRoomBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        roomCard.AddView(roomCtrlRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         fineTuneContainer = new LinearLayout(this) {
             Orientation = Orientation.Vertical,
@@ -779,6 +788,12 @@ public partial class MainActivity {
                 onChanged?.Invoke(val);
             }
         };
+        bar.UserProgressChanged += prog => {
+            int val = prog + min;
+            bar.ValueText = $"{val}{suffix}";
+            bar.Invalidate();
+            onChanged?.Invoke(val);
+        };
         bar.ResetRequested += prog => {
             int val = prog + min;
             bar.ValueText = $"{val}{suffix}";
@@ -796,35 +811,24 @@ public partial class MainActivity {
     }
 
     Switch AddSwitchRow(LinearLayout parent, string label, bool initial, Action<bool> onChanged, string helpBody = null) {
-        if (string.IsNullOrEmpty(helpBody)) {
-            Switch sw = new(this) {
-                Text = label,
-                Checked = initial,
-                TextSize = 13.5f
-            };
-            OneUiTheme.StyleSwitch(sw);
-            sw.SetPadding(0, Dp(8), 0, Dp(8));
-            sw.CheckedChange += (_, e) => onChanged?.Invoke(e.IsChecked);
-            parent.AddView(sw);
-            return sw;
-        }
-
         LinearLayout row = HRow();
-        row.SetPadding(0, Dp(6), 0, Dp(6));
+        row.SetPadding(0, Dp(7), 0, Dp(7));
         TextView lbl = Label(label, 13.5f, ColText);
-        View helpBtn = CreateInlineHelpBtn(label, helpBody);
-        Switch swCompact = new(this) {
-            Text = "",
+        OneUiSwitch sw = new(this) {
             Checked = initial
         };
-        OneUiTheme.StyleSwitch(swCompact);
-        swCompact.CheckedChange += (_, e) => onChanged?.Invoke(e.IsChecked);
-        lbl.Click += (_, _) => swCompact.Checked = !swCompact.Checked;
+        sw.CheckedChange += (_, e) => onChanged?.Invoke(e.IsChecked);
+        lbl.Click += (_, _) => sw.Checked = !sw.Checked;
 
         row.AddView(lbl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        row.AddView(helpBtn, new LinearLayout.LayoutParams(Dp(26), Dp(26)) { LeftMargin = Dp(6), RightMargin = Dp(8) });
-        row.AddView(swCompact, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        if (!string.IsNullOrEmpty(helpBody)) {
+            View helpBtn = CreateInlineHelpBtn(label, helpBody);
+            row.AddView(helpBtn, new LinearLayout.LayoutParams(Dp(26), Dp(26)) { LeftMargin = Dp(6), RightMargin = Dp(8) });
+        } else {
+            lbl.SetPadding(0, 0, Dp(10), 0);
+        }
+        row.AddView(sw, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
         parent.AddView(row);
-        return swCompact;
+        return sw;
     }
 }
