@@ -26,6 +26,9 @@ public partial class MainActivity {
         Color accentTint = OneUiTheme.Primary;
         bool isPlayingState;
 
+        public int PreferredSizeDp { get; set; } = 232;
+        public float CornerDp { get; set; } = 22f;
+
         public RoundedArtworkView(Context ctx) : base(ctx) {
             bgPaint.SetStyle(Paint.Style.Fill);
             rimPaint.SetStyle(Paint.Style.Stroke);
@@ -58,7 +61,8 @@ public partial class MainActivity {
 
         protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
             int maxW = MeasureSpec.GetSize(widthMeasureSpec);
-            int target = Math.Min(maxW > 0 ? maxW : OneUiTheme.Dp(Context, 232f), OneUiTheme.Dp(Context, 232f));
+            int prefPx = OneUiTheme.Dp(Context, PreferredSizeDp);
+            int target = maxW > 0 ? Math.Min(maxW, prefPx) : prefPx;
             SetMeasuredDimension(target, target);
         }
 
@@ -70,7 +74,7 @@ public partial class MainActivity {
                 return;
             }
 
-            float rad = OneUiTheme.Dp(Context, 22f);
+            float rad = OneUiTheme.Dp(Context, CornerDp);
             RectF rect = new(0f, 0f, w, h);
 
             clipPath.Reset();
@@ -107,6 +111,21 @@ public partial class MainActivity {
         }
     }
 
+    enum PlayerStageMode { Cover, Video, Lyrics }
+
+    PlayerStageMode musicStageMode = PlayerStageMode.Cover;
+    string lastStageBoundPath;
+    LinearLayout musicModeBar;
+    LinearLayout modeBtnCover, modeBtnVideo, modeBtnLyrics;
+    TextView modeLabelCover, modeLabelVideo, modeLabelLyrics;
+    OneUiIconView modeIconCover, modeIconVideo, modeIconLyrics;
+    FrameLayout mediaStageFrame;
+    SyncedVideoStageView musicVideoStage;
+    LinearLayout musicLyricsContainer;
+    RoundedArtworkView musicLyricsMiniArt;
+    TextView musicLyricsHeaderTitle, musicLyricsHeaderSub;
+    AppleMusicLyricsView musicLyricsView;
+
     RoundedArtworkView musicArtworkView;
     TextView musicTitleText, musicArtistText, musicSpatialBadgeText, musicTelemetryText;
     LinearLayout musicBadgeRow, musicSpatialPill, musicTrackBtn;
@@ -120,9 +139,33 @@ public partial class MainActivity {
     LinearLayout BuildMusicPlayerTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
         page.SetGravity(GravityFlags.CenterHorizontal);
-        page.SetPadding(Dp(18), Dp(6), Dp(18), Dp(116));
+        page.SetPadding(Dp(18), Dp(4), Dp(18), Dp(116));
 
-        // 1. Elevated Apple-Music Style Cover Artwork Card
+        // 0. Apple Music / One UI 9 Multimedia Mode Bar ([ Cover | Video | Lyrics ])
+        musicModeBar = new LinearLayout(this) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false
+        };
+        musicModeBar.SetGravity(GravityFlags.CenterVertical);
+        musicModeBar.SetPadding(Dp(4), Dp(4), Dp(4), Dp(4));
+        musicModeBar.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+
+        (modeBtnCover, modeIconCover, modeLabelCover) = MakeStageModeBtn(OneUiIconType.PictureArt, S["ModeCover"], () => SetPlayerStageMode(PlayerStageMode.Cover));
+        (modeBtnVideo, modeIconVideo, modeLabelVideo) = MakeStageModeBtn(OneUiIconType.VideoCamera, S["ModeVideo"], () => SetPlayerStageMode(PlayerStageMode.Video));
+        (modeBtnLyrics, modeIconLyrics, modeLabelLyrics) = MakeStageModeBtn(OneUiIconType.LyricsQuote, S["ModeLyrics"], () => SetPlayerStageMode(PlayerStageMode.Lyrics));
+        modeBtnVideo.Visibility = ViewStates.Gone;
+
+        musicModeBar.AddView(modeBtnCover, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(30)));
+        musicModeBar.AddView(modeBtnVideo, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(30)) { LeftMargin = Dp(4) });
+        musicModeBar.AddView(modeBtnLyrics, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(30)) { LeftMargin = Dp(4) });
+        page.AddView(musicModeBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(2),
+            BottomMargin = Dp(12)
+        });
+
+        // 1. Unified Stage Container: Apple Music Artwork / YouTube Synced Video / Apple Music Live Lyrics
+        mediaStageFrame = new FrameLayout(this);
+
         musicArtworkView = new RoundedArtworkView(this) {
             ScaleX = 0.92f,
             ScaleY = 0.92f
@@ -134,11 +177,71 @@ public partial class MainActivity {
                 TogglePlayPause();
             }
         };
-        page.AddView(musicArtworkView, new LinearLayout.LayoutParams(
+        mediaStageFrame.AddView(musicArtworkView, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WrapContent,
             ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(6),
-            BottomMargin = Dp(16)
+            Gravity = GravityFlags.Center
+        });
+
+        musicVideoStage = new SyncedVideoStageView(this, S["VideoSyncBadge"]) {
+            Visibility = ViewStates.Gone
+        };
+        musicVideoStage.PlayPauseRequested += TogglePlayPause;
+        musicVideoStage.SeekDeltaRequested += SeekRelative;
+        mediaStageFrame.AddView(musicVideoStage, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            Dp(220)));
+
+        // Apple Music Live Lyrics Sheet (inspired by fragment_player_lyrics_sheet.xml & lyrics_header.xml)
+        musicLyricsContainer = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        musicLyricsContainer.SetPadding(Dp(12), Dp(12), Dp(12), Dp(8));
+        musicLyricsContainer.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceCard, 24f);
+
+        LinearLayout lyricsHeader = new(this) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false
+        };
+        lyricsHeader.SetGravity(GravityFlags.CenterVertical);
+        lyricsHeader.SetPadding(Dp(4), 0, Dp(4), Dp(8));
+
+        musicLyricsMiniArt = new RoundedArtworkView(this) {
+            PreferredSizeDp = 42,
+            CornerDp = 10f
+        };
+        lyricsHeader.AddView(musicLyricsMiniArt, new LinearLayout.LayoutParams(Dp(42), Dp(42)) { RightMargin = Dp(10) });
+
+        LinearLayout lyricsMetaCol = new(this) { Orientation = Orientation.Vertical };
+        musicLyricsHeaderTitle = Label(S["PlayerEmptyTitle"], 14.5f, ColText);
+        musicLyricsHeaderTitle.SetTypeface(null, TypefaceStyle.Bold);
+        musicLyricsHeaderTitle.SetSingleLine(true);
+        musicLyricsHeaderTitle.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        musicLyricsHeaderSub = Label(S["LyricsTapHint"], 11.5f, OneUiTheme.TextSub);
+        musicLyricsHeaderSub.SetSingleLine(true);
+        musicLyricsHeaderSub.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        lyricsMetaCol.AddView(musicLyricsHeaderTitle);
+        lyricsMetaCol.AddView(musicLyricsHeaderSub);
+        lyricsHeader.AddView(lyricsMetaCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        musicLyricsContainer.AddView(lyricsHeader);
+
+        View lyricsDiv = new(this);
+        lyricsDiv.SetBackgroundColor(OneUiTheme.Divider);
+        musicLyricsContainer.AddView(lyricsDiv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Math.Max(1, Dp(1))) { BottomMargin = Dp(4) });
+
+        musicLyricsView = new AppleMusicLyricsView(this);
+        musicLyricsView.LineSeekRequested += sec => SeekAbsoluteSeconds(sec);
+        musicLyricsContainer.AddView(musicLyricsView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
+
+        mediaStageFrame.AddView(musicLyricsContainer, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            Dp(306)));
+
+        page.AddView(mediaStageFrame, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(14)
         });
 
         // 2. Spatial Codec Badge + Inline Container Track Switcher Pill
@@ -236,9 +339,7 @@ public partial class MainActivity {
         musicLoopBtn = MakeCircleIconBtn(OneUiIconType.RepeatLoop, 42, false, () => {
             bool next = !playerEngine.Loop;
             playerEngine.Loop = next;
-            if (loopSwitch != null) {
-                loopSwitch.Checked = next;
-            }
+            RefreshRoomTransportButtons();
             RefreshMusicPlayerControlsUi();
         }, out musicLoopIcon);
 
@@ -339,6 +440,77 @@ public partial class MainActivity {
         return chip;
     }
 
+    (LinearLayout btn, OneUiIconView icon, TextView label) MakeStageModeBtn(OneUiIconType iconType, string text, Action onClick) {
+        LinearLayout btn = new(this) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false
+        };
+        btn.SetGravity(GravityFlags.Center);
+        btn.SetPadding(Dp(12), Dp(4), Dp(12), Dp(4));
+        OneUiTheme.AttachRecoil(btn, 0.94f);
+        OneUiIconView ico = new(this, iconType, OneUiTheme.TextSecondary);
+        TextView tv = new(this) {
+            Text = text,
+            TextSize = 11.5f
+        };
+        tv.SetIncludeFontPadding(false);
+        tv.SetSingleLine(true);
+        tv.SetTextColor(OneUiTheme.TextSecondary);
+        btn.AddView(ico, new LinearLayout.LayoutParams(Dp(14), Dp(14)) { RightMargin = Dp(5) });
+        btn.AddView(tv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        btn.Click += (_, _) => onClick?.Invoke();
+        return (btn, ico, tv);
+    }
+
+    void SetPlayerStageMode(PlayerStageMode mode) {
+        if (mode == PlayerStageMode.Video && currentMediaMeta?.HasVideo != true) {
+            mode = PlayerStageMode.Cover;
+        }
+        musicStageMode = mode;
+
+        if (musicArtworkView != null) {
+            musicArtworkView.Visibility = mode == PlayerStageMode.Cover ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (musicVideoStage != null) {
+            musicVideoStage.Visibility = mode == PlayerStageMode.Video ? ViewStates.Visible : ViewStates.Gone;
+            if (mode == PlayerStageMode.Video && activeTab == 0) {
+                musicVideoStage.SyncPlaybackState(playerEngine?.IsPlaying == true, playerEngine?.CurrentSeconds ?? 0);
+            } else {
+                musicVideoStage.PauseVideoDecoderOnly();
+            }
+        }
+        if (musicLyricsContainer != null) {
+            musicLyricsContainer.Visibility = mode == PlayerStageMode.Lyrics ? ViewStates.Visible : ViewStates.Gone;
+            if (mode == PlayerStageMode.Lyrics) {
+                musicLyricsView?.UpdatePlayback(playerEngine?.CurrentSeconds ?? 0, playerEngine?.IsPlaying == true);
+            }
+        }
+        if (musicTitleText != null) {
+            musicTitleText.Visibility = mode == PlayerStageMode.Lyrics ? ViewStates.Gone : ViewStates.Visible;
+        }
+        if (musicArtistText != null) {
+            musicArtistText.Visibility = mode == PlayerStageMode.Lyrics ? ViewStates.Gone : ViewStates.Visible;
+        }
+
+        StyleStageModeBtn(modeBtnCover, modeIconCover, modeLabelCover, mode == PlayerStageMode.Cover);
+        StyleStageModeBtn(modeBtnVideo, modeIconVideo, modeLabelVideo, mode == PlayerStageMode.Video);
+        StyleStageModeBtn(modeBtnLyrics, modeIconLyrics, modeLabelLyrics, mode == PlayerStageMode.Lyrics);
+    }
+
+    void StyleStageModeBtn(LinearLayout btn, OneUiIconView ico, TextView tv, bool selected) {
+        if (btn == null) return;
+        Color activeColor = currentMediaMeta?.PrimaryAccent ?? OneUiTheme.SliderAccent;
+        btn.Background = selected
+            ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(activeColor, 200), OneUiTheme.PillCornerDp)
+            : null;
+        Color fg = selected ? ColText : OneUiTheme.TextSecondary;
+        if (ico != null) ico.IconColor = fg;
+        if (tv != null) {
+            tv.SetTextColor(fg);
+            tv.SetTypeface(null, selected ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+        }
+    }
+
     void RefreshMusicPlayerUi() {
         if (musicArtworkView == null) {
             return;
@@ -349,17 +521,30 @@ public partial class MainActivity {
             LoadedFile != null ? accent : null,
             LoadedFile != null ? accent2 : null);
 
-        if (LoadedFile != null && currentMediaMeta?.ArtworkBitmap != null && !currentMediaMeta.ArtworkBitmap.IsRecycled) {
-            musicArtworkView.SetArtwork(currentMediaMeta.ArtworkBitmap, accent);
-        } else {
-            defaultFallbackCover ??= MediaMetadataHelper.CreateSpatialFallbackArtwork("Cavernize", OneUiTheme.PrimaryHigh, OneUiTheme.Secondary, 512);
-            musicArtworkView.SetArtwork(defaultFallbackCover, OneUiTheme.Primary);
+        Bitmap activeArt = (LoadedFile != null && currentMediaMeta?.ArtworkBitmap != null && !currentMediaMeta.ArtworkBitmap.IsRecycled)
+            ? currentMediaMeta.ArtworkBitmap
+            : (defaultFallbackCover ??= MediaMetadataHelper.CreateSpatialFallbackArtwork("Cavernize", OneUiTheme.PrimaryHigh, OneUiTheme.Secondary, 512));
+        musicArtworkView.SetArtwork(activeArt, LoadedFile != null ? accent : OneUiTheme.Primary);
+        musicLyricsMiniArt?.SetArtwork(activeArt, LoadedFile != null ? accent : OneUiTheme.Primary);
+
+        bool hasVideo = LoadedFile != null && currentMediaMeta?.HasVideo == true && !string.IsNullOrEmpty(currentMediaMeta.SourceMediaPath);
+        if (modeBtnVideo != null) {
+            modeBtnVideo.Visibility = hasVideo ? ViewStates.Visible : ViewStates.Gone;
         }
+        if (hasVideo) {
+            musicVideoStage?.BindVideoSource(currentMediaMeta.SourceMediaPath, currentMediaMeta.VideoWidth, currentMediaMeta.VideoHeight);
+        } else {
+            musicVideoStage?.ReleasePlayer();
+        }
+
+        musicLyricsView?.SetLyrics(currentMediaMeta?.Lyrics, S["NoLyricsFound"], accent);
 
         CavernizeTrack active = GetActiveTrack();
         if (LoadedFile == null || active == null) {
             musicTitleText.Text = S["PlayerEmptyTitle"];
             musicArtistText.Text = S["PlayerEmptySub"];
+            if (musicLyricsHeaderTitle != null) musicLyricsHeaderTitle.Text = S["PlayerEmptyTitle"];
+            if (musicLyricsHeaderSub != null) musicLyricsHeaderSub.Text = S["ModeLyrics"];
             musicSpatialBadgeText.Text = S["PlayerBadgeSpatial"];
             musicTrackBtn.Visibility = ViewStates.Gone;
             musicWaveSeekBar?.SetThemeByColor(OneUiTheme.Tertiary);
@@ -367,14 +552,27 @@ public partial class MainActivity {
             musicSpatialPill.Background = OneUiTheme.CreateGlassCardDrawable(
                 this, OneUiTheme.WithAlpha(OneUiTheme.Tertiary, 56), OneUiTheme.PillCornerDp, OneUiTheme.WithAlpha(OneUiTheme.Tertiary, 150));
         } else {
-            musicTitleText.Text = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+            string title = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
                 ? currentMediaMeta.Title
                 : Path.GetFileNameWithoutExtension(LoadedFile.Path);
+            musicTitleText.Text = title;
 
             string sub = string.Join(" — ", new[] { currentMediaMeta?.Artist, currentMediaMeta?.Album }.Where(s => !string.IsNullOrWhiteSpace(s)));
             musicArtistText.Text = !string.IsNullOrWhiteSpace(sub)
                 ? sub
                 : active.FormatHeader;
+
+            if (musicLyricsHeaderTitle != null) {
+                musicLyricsHeaderTitle.Text = title;
+            }
+            if (musicLyricsHeaderSub != null) {
+                bool hasLyr = currentMediaMeta?.Lyrics?.HasLyrics == true;
+                bool syncedLyr = hasLyr && currentMediaMeta.Lyrics.IsSynced;
+                string srcTag = hasLyr && !string.IsNullOrWhiteSpace(currentMediaMeta.Lyrics.SourceLabel)
+                    ? $" • {currentMediaMeta.Lyrics.SourceLabel}"
+                    : "";
+                musicLyricsHeaderSub.Text = (syncedLyr ? S["LyricsTapHint"] : S["LyricsUnsyncedHint"]) + srcTag;
+            }
 
             int beds = trackSourceItems.Count(x => x.IsBed);
             int objs = trackSourceItems.Count(x => x.IsDynamicObject);
@@ -405,6 +603,14 @@ public partial class MainActivity {
                 this, OneUiTheme.WithAlpha(sliderTone, 56), OneUiTheme.PillCornerDp, OneUiTheme.WithAlpha(sliderTone, 150));
         }
 
+        string boundKey = LoadedFile != null ? (currentMediaMeta?.SourceMediaPath ?? LoadedFile.Path ?? "") : "";
+        if (!string.Equals(lastStageBoundPath, boundKey, StringComparison.Ordinal)) {
+            lastStageBoundPath = boundKey;
+            SetPlayerStageMode(hasVideo ? PlayerStageMode.Video : PlayerStageMode.Cover);
+        } else {
+            SetPlayerStageMode(musicStageMode);
+        }
+
         RefreshMusicPlayerControlsUi();
     }
 
@@ -413,7 +619,13 @@ public partial class MainActivity {
             return;
         }
         bool isPlaying = playerEngine?.IsPlaying ?? false;
+        double curSec = playerEngine?.CurrentSeconds ?? 0;
         musicArtworkView?.SetPlaying(isPlaying);
+        if (musicStageMode == PlayerStageMode.Video && activeTab == 0) {
+            musicVideoStage?.SyncPlaybackState(isPlaying, curSec);
+        } else if (musicStageMode == PlayerStageMode.Lyrics && activeTab == 0) {
+            musicLyricsView?.UpdatePlayback(curSec, isPlaying);
+        }
         if (musicPlayIcon != null) {
             musicPlayIcon.IconType = isPlaying ? OneUiIconType.Pause : OneUiIconType.Play;
         }

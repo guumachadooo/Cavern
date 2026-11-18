@@ -200,7 +200,7 @@ public static class AndroidFileHelper {
         return -1;
     }
 
-    static string TryGetDirectPath(Context context, Android.Net.Uri uri) {
+    public static string TryGetDirectPath(Context context, Android.Net.Uri uri) {
         try {
             if (DocumentsContract.IsDocumentUri(context, uri)) {
                 string docId = DocumentsContract.GetDocumentId(uri);
@@ -225,6 +225,29 @@ public static class AndroidFileHelper {
             }
         } catch {
             // Scoped storage or non-file provider
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the original readable directory of <paramref name="uri"/> (before cache fallback copy) if known,
+    /// otherwise falls back to the directory of <paramref name="resolvedPath"/> when it is not an app cache folder.
+    /// </summary>
+    public static string TryGetOriginalDirectory(Context context, Android.Net.Uri uri, string resolvedPath) {
+        string direct = uri != null ? TryGetDirectPath(context, uri) : null;
+        if (!string.IsNullOrEmpty(direct)) {
+            string dir = Path.GetDirectoryName(direct);
+            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) {
+                return dir;
+            }
+        }
+        if (!string.IsNullOrEmpty(resolvedPath)) {
+            string dir = Path.GetDirectoryName(resolvedPath);
+            string cacheRoot = context?.CacheDir?.AbsolutePath;
+            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir) &&
+                (string.IsNullOrEmpty(cacheRoot) || !dir.StartsWith(cacheRoot, StringComparison.OrdinalIgnoreCase))) {
+                return dir;
+            }
         }
         return null;
     }

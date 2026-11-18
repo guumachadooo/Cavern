@@ -25,8 +25,10 @@ public partial class MainActivity {
     OneUiWaveMediaSeekBar playbackSeekBar;
     OneUiSeekBar seekBarVolume, seekBarLfe;
     TextView roomTelemetryText;
-    Button playPauseBtn;
-    Switch loopSwitch;
+    LinearLayout roomTransportPlayBtn;
+    OneUiIconView roomTransportPlayIcon;
+    LinearLayout roomTransportLoopBtn;
+    OneUiIconView roomTransportLoopIcon;
     OneUiInlineSelector rolloffSelector;
     LinearLayout mixerContainer;
     Button filterAllBtn, filter3DBtn, filterHeightBtn, filterBedsBtn;
@@ -43,7 +45,7 @@ public partial class MainActivity {
 
         LinearLayout roomHeader = HRow();
         roomHeader.SetPadding(0, 0, 0, Dp(6));
-        roomHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Room3D, OneUiTheme.Primary, 30));
+        roomHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Room3D, OneUiTheme.IconSpatial, 30));
         TextView roomTitleTv = SectionTitle(S["RoomTitle"]);
         roomTitleTv.SetPadding(Dp(8), 0, Dp(8), 0);
         roomHeader.AddView(roomTitleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -171,7 +173,7 @@ public partial class MainActivity {
         page.AddView(roomCard);
 
         // 2. Transport Card featuring One UI 9 WaveSeekbar
-        LinearLayout transportCard = Card(S["TimelineLabel"], OneUiIconType.Play, OneUiTheme.Primary);
+        LinearLayout transportCard = Card(S["TimelineLabel"], OneUiIconType.Play, OneUiTheme.IconSliderMedia);
         playbackSeekBar = new OneUiWaveMediaSeekBar(this) {
             Max = 1000,
             CurrentTimeText = "00:00",
@@ -206,25 +208,26 @@ public partial class MainActivity {
         });
 
         LinearLayout btnRow = HRow();
-        Button back10 = PillButton("-10s", () => SeekRelative(-10));
-        playPauseBtn = PrimaryButton(S["Play"], TogglePlayPause);
-        Button stopBtn = PillButton(S["Stop"], StopPlayback);
-        Button fwd10 = PillButton("+10s", () => SeekRelative(10));
-        btnRow.AddView(back10, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        btnRow.AddView(playPauseBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.45f) { RightMargin = Dp(6) });
-        btnRow.AddView(stopBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        btnRow.AddView(fwd10, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        transportCard.AddView(btnRow);
+        btnRow.SetGravity(GravityFlags.CenterHorizontal | GravityFlags.CenterVertical);
+        btnRow.SetPadding(0, Dp(2), 0, Dp(2));
 
-        AddDivider(transportCard);
-        loopSwitch = AddSwitchRow(transportCard, S["Loop"], false, val => {
-            playerEngine.Loop = val;
-            RefreshMusicPlayerControlsUi();
-        });
+        LinearLayout restartBtn = MakeCircleIconBtn(OneUiIconType.RewindStart, 42, false, StopPlayback, out _);
+        LinearLayout back10Btn = MakeCircleIconBtn(OneUiIconType.Rewind10, 46, false, () => SeekRelative(-10), out _);
+        roomTransportPlayBtn = MakeCircleIconBtn(OneUiIconType.Play, 58, true, TogglePlayPause, out roomTransportPlayIcon);
+        LinearLayout fwd10Btn = MakeCircleIconBtn(OneUiIconType.Forward10, 46, false, () => SeekRelative(10), out _);
+        roomTransportLoopBtn = MakeCircleIconBtn(OneUiIconType.RepeatLoop, 42, false, ToggleLoopMode, out roomTransportLoopIcon);
+
+        btnRow.AddView(restartBtn, new LinearLayout.LayoutParams(Dp(42), Dp(42)) { RightMargin = Dp(10) });
+        btnRow.AddView(back10Btn, new LinearLayout.LayoutParams(Dp(46), Dp(46)) { RightMargin = Dp(12) });
+        btnRow.AddView(roomTransportPlayBtn, new LinearLayout.LayoutParams(Dp(58), Dp(58)) { RightMargin = Dp(12) });
+        btnRow.AddView(fwd10Btn, new LinearLayout.LayoutParams(Dp(46), Dp(46)) { RightMargin = Dp(10) });
+        btnRow.AddView(roomTransportLoopBtn, new LinearLayout.LayoutParams(Dp(42), Dp(42)));
+        transportCard.AddView(btnRow);
+        RefreshRoomTransportButtons();
         page.AddView(transportCard);
 
         // 3. One UI 9 Quick Spatial Panel Card (2x2 Bento Toggles + Fat Dynamic Capsules + In-App Rolloff Selector)
-        LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.Tertiary);
+        LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.IconAtmosUpmix);
 
         LinearLayout bentoRow1 = HRow();
         LinearLayout bentoRow2 = HRow();
@@ -240,7 +243,7 @@ public partial class MainActivity {
                 playerEngine.HeadphoneVirtualizer = next;
                 RefreshMusicPlayerControlsUi();
             },
-            OneUiTheme.Primary,
+            OneUiTheme.IconSpatial,
             helpBody: S["TipHrtf"]);
 
         var tileDist = CreateBentoToggle(
@@ -251,7 +254,7 @@ public partial class MainActivity {
                 store.DistanceSimulation = next;
                 playerEngine.DistanceSimulation = next;
             },
-            OneUiTheme.FunctionalCyan,
+            OneUiTheme.IconSliderMedia,
             helpBody: S["TipDistSim"]);
 
         var tile3DOnly = CreateBentoToggle(
@@ -261,7 +264,7 @@ public partial class MainActivity {
                 store.MuteBed = flag;
                 playerEngine.MuteBed = flag;
             }),
-            OneUiTheme.CoralStart);
+            OneUiTheme.IconAtmosUpmix);
 
         var tileHeight = CreateBentoToggle(
             OneUiIconType.HeightUp, S["BentoHeightOnly"],
@@ -270,7 +273,7 @@ public partial class MainActivity {
                 store.MuteGround = flag;
                 playerEngine.MuteGround = flag;
             }),
-            OneUiTheme.FunctionalGreen);
+            OneUiTheme.IconStemsCalib);
 
         bentoRow1.AddView(tileHrtf.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
         bentoRow1.AddView(tileDist.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -309,7 +312,7 @@ public partial class MainActivity {
         page.AddView(quickCard);
 
         // 4. Live Channel & 3D Object Mixer Card (Filter buttons visibly toggle Solo state)
-        LinearLayout mixerCard = Card(S["MixerTitle"], OneUiIconType.Queue, OneUiTheme.Secondary);
+        LinearLayout mixerCard = Card(S["MixerTitle"], OneUiIconType.Queue, OneUiTheme.IconStudioExport);
 
         HorizontalScrollView filterScroll = new(this) { HorizontalScrollBarEnabled = false };
         LinearLayout filterRow = HRow();
@@ -394,7 +397,7 @@ public partial class MainActivity {
                 tileTint,
                 OneUiTheme.TileCornerDp,
                 on ? activeColor : null);
-            badge.UpdateColors(on ? activeColor : OneUiTheme.ControlStroke, ColText);
+            badge.UpdateColors(on ? activeColor : OneUiTheme.ControlStroke, ColText, solidOverride: on);
             stateTv.Text = on ? "ON" : "OFF";
             stateTv.SetTextColor(on ? ColText : OneUiTheme.TextMuted);
         }
@@ -510,10 +513,10 @@ public partial class MainActivity {
             b.SetTypeface(null, active ? TypefaceStyle.Bold : TypefaceStyle.Normal);
         }
 
-        Style(filterAllBtn, noneActive, ColAccent);
-        Style(filter3DBtn, solo3D, OneUiTheme.CoralStart);
-        Style(filterHeightBtn, soloH, OneUiTheme.FunctionalGreen);
-        Style(filterBedsBtn, soloBeds, OneUiTheme.Primary);
+        Style(filterAllBtn, noneActive, OneUiTheme.IconSpatial);
+        Style(filter3DBtn, solo3D, OneUiTheme.IconAtmosUpmix);
+        Style(filterHeightBtn, soloH, OneUiTheme.IconStemsCalib);
+        Style(filterBedsBtn, soloBeds, OneUiTheme.IconStudioExport);
     }
 
     void UpdateRoomLockButtonUi() {
@@ -560,6 +563,8 @@ public partial class MainActivity {
             playerEngine.Seek(0);
         }
         audioOutput?.Stop();
+        musicVideoStage?.SeekTo(0);
+        musicVideoStage?.SyncPlaybackState(false, 0);
         mediaNotification?.UpdatePlaybackState(false, 0, showNotification: false);
         SyncPlaybackUi(false, 0, playerEngine?.TotalSeconds ?? 0);
     }
@@ -577,6 +582,7 @@ public partial class MainActivity {
         }
         double target = Math.Clamp(seconds, 0, Math.Max(0, playerEngine.TotalSeconds - 0.05));
         playerEngine.Seek(target);
+        musicVideoStage?.SeekTo(target);
         SyncPlaybackUi(playerEngine.IsPlaying, target, playerEngine.TotalSeconds);
         mediaNotification?.UpdatePlaybackState(playerEngine.IsPlaying, target, showNotification: true);
     }
@@ -586,10 +592,31 @@ public partial class MainActivity {
         mediaNotification?.UpdatePlaybackState(false, playerEngine?.TotalSeconds ?? 0, showNotification: selectedTrack != null);
     }
 
-    void SyncPlaybackUi(bool isPlaying, double curSeconds, double totSeconds) {
-        if (playPauseBtn != null) {
-            playPauseBtn.Text = isPlaying ? S["Pause"] : S["Play"];
+    void ToggleLoopMode() {
+        if (playerEngine == null) {
+            return;
         }
+        playerEngine.Loop = !playerEngine.Loop;
+        RefreshRoomTransportButtons();
+        RefreshMusicPlayerControlsUi();
+    }
+
+    void RefreshRoomTransportButtons() {
+        bool isPlaying = playerEngine?.IsPlaying ?? false;
+        if (roomTransportPlayIcon != null) {
+            roomTransportPlayIcon.IconType = isPlaying ? OneUiIconType.Pause : OneUiIconType.Play;
+        }
+        if (roomTransportLoopBtn != null && roomTransportLoopIcon != null) {
+            bool loop = playerEngine?.Loop ?? false;
+            roomTransportLoopBtn.Background = loop
+                ? OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.WithAlpha(ColAccent, 90), 99f, ColAccent)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceElevated, 99f);
+            roomTransportLoopIcon.IconColor = loop ? ColText : OneUiTheme.TextSub;
+        }
+    }
+
+    void SyncPlaybackUi(bool isPlaying, double curSeconds, double totSeconds) {
+        RefreshRoomTransportButtons();
         int prog = totSeconds > 0 ? Math.Clamp((int)(curSeconds / totSeconds * 1000.0), 0, 1000) : 0;
         string curStr = $"{TimeSpan.FromSeconds(Math.Max(0, curSeconds)):mm\\:ss}";
         string totStr = $"{TimeSpan.FromSeconds(Math.Max(0, totSeconds)):mm\\:ss}";

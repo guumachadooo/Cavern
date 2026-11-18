@@ -19,4 +19,6 @@ Estas regras complementam o `AGENTS.md` da raiz quando você estiver trabalhando
 
 ## 3. Referências de Contexto Atual
 - Consulte `.agents/docs/PROJECT_HISTORY.md` para ver decisões recentes (paleta neutra vs. wallpaper, cabeçalho compacto, altura 3D na sala, ordem atual de abas/cards, balões `?` explicativos).
-- Consulte `.agents/docs/ONEUI9_REFERENCE.md` antes de replicar ou ajustar animações nativas da One UI 9 (inspecionadas na `SystemUI.apk`).
+- Consulte `.agents/docs/ONEUI9_REFERENCE.md` antes de replicar ou ajustar componentes e animações nativas da One UI 9 (inspecionadas em `SystemUI.apk`, `framework-res.apk`, `SamsungGallery2018.apk`, `SamsungVideoPlayer.apk`).
+- Consulte `.agents/docs/SAVED_IDEAS.md` para ideias/animações arquivadas que o usuário gostou mas não estão ativas no momento, e atualize `README.md` quando adicionar recursos inéditos.
+- Lembrete crítico: se não conseguir descompilar/encontrar um comportamento exato pedido pelo usuário em algum APK, **avise antes de intuir ou aproximar**.

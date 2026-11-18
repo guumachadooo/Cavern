@@ -195,7 +195,7 @@ public static class OneUiModalDialog {
         LinearLayout header = new(ctx) { Orientation = Orientation.Horizontal };
         header.SetGravity(GravityFlags.CenterVertical);
         header.SetPadding(0, 0, 0, dp(12));
-        header.AddView(OneUiTheme.CreateVectorIconBadge(ctx, icon, iconBadgeColor ?? OneUiTheme.Primary, 32));
+        header.AddView(OneUiTheme.CreateVectorIconBadge(ctx, icon, iconBadgeColor ?? OneUiTheme.IconSpatial, 32));
 
         TextView titleTv = new(ctx) {
             Text = title ?? "",

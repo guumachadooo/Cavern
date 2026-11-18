@@ -65,6 +65,9 @@ public sealed class RoomSimulatorView : View {
     readonly List<(TrackSourceItem item, float x, float y, float nx, float ny, float nz)> hitTargets = [];
     readonly Dictionary<TrackSourceItem, SmoothedSourceState> smoothedStates = [];
     readonly RectF[] camPresetRects = [new(), new(), new()];
+    RectF camZoomOutRect = new();
+    RectF camZoomInRect = new();
+    RectF camResetLabelRect = new();
 
     RectF roomCanvasRect = new();
     RectF dockGimbalRect = new();
@@ -78,7 +81,11 @@ public sealed class RoomSimulatorView : View {
     Vector3 listenerRotation = Vector3.Zero; // X=Pitch (-90..90), Y=Yaw (-180..180)
     bool isAudioPlaying;
 
-    // Smoothly orbitable camera (defaults to clean 3/4 oblique 3D perspective)
+    // Smoothly orbitable camera (defaults to clean 3/4 oblique 3D perspective & relaxed framing zoom)
+    const float DefaultRoomZoom = 0.84f;
+    float roomZoom = DefaultRoomZoom;
+    float pinchStartDist;
+    float pinchStartZoom = DefaultRoomZoom;
     float camYawDeg = -20f;
     float camPitchDeg = 30f;
     float targetCamYawDeg = -20f;
@@ -92,10 +99,14 @@ public sealed class RoomSimulatorView : View {
     enum TouchDragMode {
         None,
         OrbitCamera,
+        PinchZoom,
         ListenerMove,
         HeadGimbal,
         DockHeight,
-        PresetClick
+        PresetClick,
+        ZoomOutClick,
+        ZoomInClick,
+        ResetZoomClick
     }
 
     TouchDragMode dragMode = TouchDragMode.None;
@@ -139,7 +150,7 @@ public sealed class RoomSimulatorView : View {
         floorQuadPaint.Color = Color.Argb(20, 255, 255, 255);
         floorQuadPaint.SetStyle(Paint.Style.Fill);
 
-        ceilingWirePaint.Color = Color.Argb(56, OneUiTheme.FunctionalCyan.R, OneUiTheme.FunctionalCyan.G, OneUiTheme.FunctionalCyan.B);
+        ceilingWirePaint.Color = Color.Argb(58, OneUiTheme.IconSliderMedia.R, OneUiTheme.IconSliderMedia.G, OneUiTheme.IconSliderMedia.B);
         ceilingWirePaint.StrokeWidth = 1f * dp;
         ceilingWirePaint.SetStyle(Paint.Style.Stroke);
 
@@ -169,7 +180,7 @@ public sealed class RoomSimulatorView : View {
 
         objGlowPaint.SetStyle(Paint.Style.Fill);
 
-        heightRingPaint.Color = OneUiTheme.FunctionalGreen;
+        heightRingPaint.Color = OneUiTheme.IconStemsCalib;
         heightRingPaint.StrokeWidth = 1.8f * dp;
         heightRingPaint.SetStyle(Paint.Style.Stroke);
 
@@ -247,7 +258,7 @@ public sealed class RoomSimulatorView : View {
     protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         float dp = Resources.DisplayMetrics.Density;
         int w = MeasureSpec.GetSize(widthMeasureSpec);
-        int desiredH = Math.Max((int)(w * 0.95f), (int)(384f * dp));
+        int desiredH = Math.Max((int)(w * 0.84f), (int)(350f * dp));
         SetMeasuredDimension(w, ResolveSize(desiredH, heightMeasureSpec));
     }
 
@@ -282,22 +293,45 @@ public sealed class RoomSimulatorView : View {
             }
         }
 
-        // Zone 1: Compact top row — subtle camera hint + 3 crisp angle shortcuts ("3D", "Topo", "Frente")
+        // Zone 1: Compact top row — subtle camera hint + zoom (-/+) buttons + 3 crisp angle shortcuts ("3D", "Topo", "Frente")
         float topBarH = 26f * dp;
         float topY = outerPad;
-        float presetW = 54f * dp;
-        float presetGap = 5f * dp;
+        float presetW = 44f * dp;
+        float presetGap = 4f * dp;
+        float zoomBtnSz = 24f * dp;
+        float zoomGap = 4f * dp;
         float presetsTotalW = presetW * 3f + presetGap * 2f;
         float presetsStartX = outerPad + w - presetsTotalW;
+
+        float zInX = presetsStartX - 6f * dp - zoomBtnSz;
+        float zOutX = zInX - zoomGap - zoomBtnSz;
+        float zTop = topY + (topBarH - zoomBtnSz) * 0.5f;
+        camZoomOutRect = new RectF(zOutX, zTop, zOutX + zoomBtnSz, zTop + zoomBtnSz);
+        camZoomInRect = new RectF(zInX, zTop, zInX + zoomBtnSz, zTop + zoomBtnSz);
+        camResetLabelRect = new RectF(outerPad, topY, camZoomOutRect.Left - 4f * dp, topY + topBarH);
 
         subTextPaint.TextAlign = Paint.Align.Left;
         subTextPaint.TextSize = 10f * dp;
         subTextPaint.Color = OneUiTheme.TextMuted;
         canvas.DrawText(
-            $"Câmera {camPitchDeg:0}° • Arraste para girar",
+            $"Câm {camPitchDeg:0}° • {Math.Round(roomZoom * 100)}%",
             outerPad + 6f * dp,
             topY + topBarH * 0.5f - (subTextPaint.Ascent() + subTextPaint.Descent()) * 0.5f,
             subTextPaint);
+
+        // Draw crisp - and + zoom circular buttons
+        canvas.DrawOval(camZoomOutRect, dragMode == TouchDragMode.ZoomOutClick ? pillActivePaint : pillInactivePaint);
+        canvas.DrawOval(camZoomInRect, dragMode == TouchDragMode.ZoomInClick ? pillActivePaint : pillInactivePaint);
+        float arm = zoomBtnSz * 0.22f;
+        float prevStroke = sphereWirePaint.StrokeWidth;
+        Color prevColor = sphereWirePaint.Color;
+        sphereWirePaint.StrokeWidth = 1.7f * dp;
+        sphereWirePaint.Color = OneUiTheme.TextPrimary;
+        canvas.DrawLine(camZoomOutRect.CenterX() - arm, camZoomOutRect.CenterY(), camZoomOutRect.CenterX() + arm, camZoomOutRect.CenterY(), sphereWirePaint);
+        canvas.DrawLine(camZoomInRect.CenterX() - arm, camZoomInRect.CenterY(), camZoomInRect.CenterX() + arm, camZoomInRect.CenterY(), sphereWirePaint);
+        canvas.DrawLine(camZoomInRect.CenterX(), camZoomInRect.CenterY() - arm, camZoomInRect.CenterX(), camZoomInRect.CenterY() + arm, sphereWirePaint);
+        sphereWirePaint.StrokeWidth = prevStroke;
+        sphereWirePaint.Color = prevColor;
 
         (string label, float py, float pp)[] presets = [
             ("3D", -20f, 30f),
@@ -355,7 +389,7 @@ public sealed class RoomSimulatorView : View {
     }
 
     (float cx, float cy, float radiusPx) GetCameraFraming(RectF r) {
-        return (r.CenterX(), r.CenterY(), Math.Min(r.Width(), r.Height()) * 0.355f);
+        return (r.CenterX(), r.CenterY(), Math.Min(r.Width(), r.Height()) * 0.355f * roomZoom);
     }
 
     Vector3 TransformWorldToCamera(float x, float y, float z, float camYawRad, float camPitchRad) {
@@ -587,7 +621,7 @@ public sealed class RoomSimulatorView : View {
                 ? OneUiTheme.TextMuted
                 : (item.IsBed ? (item.IsLFE ? OneUiTheme.LfeChannel : OneUiTheme.BedChannel) : OneUiTheme.DynamicObject);
             stalkPaint.Color = np.Y > 0.16f
-                ? Color.Argb(135, OneUiTheme.FunctionalGreen.R, OneUiTheme.FunctionalGreen.G, OneUiTheme.FunctionalGreen.B)
+                ? Color.Argb(135, OneUiTheme.IconStemsCalib.R, OneUiTheme.IconStemsCalib.G, OneUiTheme.IconStemsCalib.B)
                 : Color.Argb(88, baseCol.R, baseCol.G, baseCol.B);
             canvas.DrawLine(floorPt.sx, floorPt.sy, posPt.sx, posPt.sy, stalkPaint);
 
@@ -798,12 +832,18 @@ public sealed class RoomSimulatorView : View {
         float knobX = barLeft + fillFrac * barRect.Width();
 
         canvas.DrawLine(barRect.CenterX(), barRect.Top, barRect.CenterX(), barRect.Bottom, gridPaint);
-        pillActivePaint.Color = OneUiTheme.FunctionalGreen;
+        Color sliderAccent = OneUiTheme.SliderAccent;
+        bool isDraggingHeight = dragMode == TouchDragMode.DockHeight;
+        pillActivePaint.Color = isDraggingHeight
+            ? Color.Argb(135, sliderAccent.R, sliderAccent.G, sliderAccent.B)
+            : Color.Argb(255, sliderAccent.R, sliderAccent.G, sliderAccent.B);
         canvas.DrawRoundRect(new RectF(Math.Min(barRect.CenterX(), knobX), barRect.Top, Math.Max(barRect.CenterX(), knobX), barRect.Bottom),
             barH * 0.5f, barH * 0.5f, pillActivePaint);
         pillActivePaint.Color = OneUiTheme.Primary;
 
-        canvas.DrawCircle(knobX, barCy, 7.2f * dp, objGlowPaint.WithColor(Color.White));
+        if (isDraggingHeight) {
+            canvas.DrawCircle(knobX, barCy, barH * 0.5f, objGlowPaint.WithColor(Color.Argb(255, sliderAccent.R, sliderAccent.G, sliderAccent.B)));
+        }
 
         float zBtnH = 18f * dp;
         dockHeightResetRect = new RectF(r.CenterX() - 34f * dp, r.Bottom - zBtnH - 6f * dp, r.CenterX() + 34f * dp, r.Bottom - 6f * dp);
@@ -844,6 +884,23 @@ public sealed class RoomSimulatorView : View {
                     }
                 }
 
+                if (camZoomOutRect.Contains(tx, ty)) {
+                    dragMode = TouchDragMode.ZoomOutClick;
+                    Invalidate();
+                    return true;
+                }
+
+                if (camZoomInRect.Contains(tx, ty)) {
+                    dragMode = TouchDragMode.ZoomInClick;
+                    Invalidate();
+                    return true;
+                }
+
+                if (camResetLabelRect.Contains(tx, ty)) {
+                    dragMode = TouchDragMode.ResetZoomClick;
+                    return true;
+                }
+
                 if (dockGimbalRect.Contains(tx, ty)) {
                     dragMode = TouchDragMode.HeadGimbal;
                     Parent?.RequestDisallowInterceptTouchEvent(true);
@@ -882,7 +939,26 @@ public sealed class RoomSimulatorView : View {
                 dragMode = TouchDragMode.None;
                 return false;
 
+            case MotionEventActions.PointerDown:
+                if (e.PointerCount >= 2 && (roomCanvasRect.Contains(tx, ty) || dragMode == TouchDragMode.OrbitCamera || dragMode == TouchDragMode.ListenerMove)) {
+                    pinchStartDist = PointerDist(e);
+                    pinchStartZoom = roomZoom;
+                    dragMode = TouchDragMode.PinchZoom;
+                    Parent?.RequestDisallowInterceptTouchEvent(true);
+                    return true;
+                }
+                break;
+
             case MotionEventActions.Move: {
+                if (dragMode == TouchDragMode.PinchZoom && e.PointerCount >= 2 && pinchStartDist > 12f * dp) {
+                    Parent?.RequestDisallowInterceptTouchEvent(true);
+                    float curDist = PointerDist(e);
+                    roomZoom = Math.Clamp(pinchStartZoom * (curDist / pinchStartDist), 0.45f, 1.85f);
+                    maxMoveDist = touchSlop + 1f;
+                    Invalidate();
+                    return true;
+                }
+
                 float dx = tx - downX;
                 float dy = ty - downY;
                 float dist = MathF.Sqrt(dx * dx + dy * dy);
@@ -890,7 +966,7 @@ public sealed class RoomSimulatorView : View {
                     maxMoveDist = dist;
                 }
 
-                if (dragMode == TouchDragMode.PresetClick) {
+                if (dragMode == TouchDragMode.PresetClick || dragMode == TouchDragMode.ZoomOutClick || dragMode == TouchDragMode.ZoomInClick || dragMode == TouchDragMode.ResetZoomClick) {
                     return true;
                 }
 
@@ -941,6 +1017,13 @@ public sealed class RoomSimulatorView : View {
                 return true;
             }
 
+            case MotionEventActions.PointerUp:
+                if (dragMode == TouchDragMode.PinchZoom && e.PointerCount <= 2) {
+                    dragMode = TouchDragMode.None;
+                    maxMoveDist = touchSlop + 1f;
+                }
+                return true;
+
             case MotionEventActions.Up: {
                 Parent?.RequestDisallowInterceptTouchEvent(false);
                 bool wasTap = maxMoveDist < touchSlop;
@@ -950,6 +1033,25 @@ public sealed class RoomSimulatorView : View {
                 pressedPresetIdx = -1;
 
                 if (!wasTap) {
+                    Invalidate();
+                    return true;
+                }
+
+                if (endedMode == TouchDragMode.ZoomOutClick) {
+                    roomZoom = Math.Clamp(roomZoom - 0.14f, 0.45f, 1.85f);
+                    Invalidate();
+                    return true;
+                }
+
+                if (endedMode == TouchDragMode.ZoomInClick) {
+                    roomZoom = Math.Clamp(roomZoom + 0.14f, 0.45f, 1.85f);
+                    Invalidate();
+                    return true;
+                }
+
+                if (endedMode == TouchDragMode.ResetZoomClick) {
+                    roomZoom = DefaultRoomZoom;
+                    Invalidate();
                     return true;
                 }
 
@@ -1071,6 +1173,15 @@ public sealed class RoomSimulatorView : View {
             }
         }
         return best;
+    }
+
+    static float PointerDist(MotionEvent e) {
+        if (e == null || e.PointerCount < 2) {
+            return 0f;
+        }
+        float dx = e.GetX(0) - e.GetX(1);
+        float dy = e.GetY(0) - e.GetY(1);
+        return MathF.Sqrt(dx * dx + dy * dy);
     }
 
     static float NormalizeDeg(float deg) {

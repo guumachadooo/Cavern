@@ -123,7 +123,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
     View tabIndicatorPill;
     ValueAnimator tabPillAnimator;
     LinearLayout[] tabPages;
-    Button[] tabButtons;
+    LinearLayout[] tabCells;
+    OneUiTabIconView[] tabIcons;
+    TextView[] tabLabels;
     View settingsUpdateDot;
     int activeTab;
     Handler uiHandler;
@@ -276,6 +278,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         tabPillAnimator?.Cancel();
         tabPillAnimator?.Dispose();
         mediaNotification?.Dispose();
+        musicVideoStage?.ReleasePlayer();
         currentMediaMeta?.ArtworkBitmap?.Dispose();
         defaultFallbackCover?.Dispose();
         audioOutput?.Dispose();
@@ -346,7 +349,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         filePillBtn.SetPadding(Dp(11), Dp(7), Dp(11), Dp(7));
         OneUiTheme.AttachRecoil(filePillBtn, 0.97f);
 
-        OneUiIconView fileNoteIcon = new(this, OneUiIconType.MusicFile, OneUiTheme.PrimaryHigh);
+        OneUiIconView fileNoteIcon = new(this, OneUiIconType.MusicFile, OneUiTheme.IconSliderMedia);
         headerFileText = new TextView(this) {
             Text = S["SelectFilePill"],
             TextSize = 12f
@@ -445,59 +448,81 @@ public partial class MainActivity : Activity, ICavernizeApp {
             Gravity = GravityFlags.Bottom
         });
 
-        // Layer 2: Live Frosted Glass Capsule Bottom Navigation Bar + Sliding Pill Indicator
+        // Layer 2: Samsung Gallery Floating Capsule Bottom Navigation Bar (56dp frosted pill + translucent #1AFFFFFF selection pill)
         navFrostedHost = new OneUiFrostedCapsuleView(this) {
-            CornerRadiusDp = 30f,
+            CornerRadiusDp = 999f,
+            GlazeTopColor = OneUiTheme.SurfaceFloatingBar,
+            GlazeBottomColor = OneUiTheme.SurfaceFloatingBar,
             BehindViewsProvider = () => [backdropView, contentFrame],
             Elevation = Dp(14)
         };
-        navFrostedHost.SetPadding(Dp(6), Dp(6), Dp(6), Dp(6));
+        navFrostedHost.SetPadding(Dp(5), Dp(4), Dp(5), Dp(4));
 
         FrameLayout navLayer = new(this);
         tabIndicatorPill = new View(this) {
-            Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 232), OneUiTheme.PillCornerDp)
+            Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SelectedTabPill, OneUiTheme.PillCornerDp)
         };
-        navLayer.AddView(tabIndicatorPill, new FrameLayout.LayoutParams(Dp(56), Dp(40)) {
+        navLayer.AddView(tabIndicatorPill, new FrameLayout.LayoutParams(Dp(58), Dp(48)) {
             Gravity = GravityFlags.CenterVertical | GravityFlags.Start
         });
 
         LinearLayout navRow = HRow();
         string[] tabTitles = [S["TabMusicPlayer"], S["TabPlayer"], S["TabConvert"], S["TabExtract"], S["TabSettings"]];
-        tabButtons = new Button[5];
+        OneUiTabKind[] tabKinds = [
+            OneUiTabKind.Player,
+            OneUiTabKind.Room3D,
+            OneUiTabKind.Studio,
+            OneUiTabKind.Stems,
+            OneUiTabKind.Settings
+        ];
+        tabCells = new LinearLayout[5];
+        tabIcons = new OneUiTabIconView[5];
+        tabLabels = new TextView[5];
         for (int i = 0; i < 5; i++) {
             int idx = i;
-            Button tb = new(this) {
+            LinearLayout cell = new(this) { Orientation = Orientation.Vertical };
+            cell.SetGravity(GravityFlags.Center);
+            cell.SetMinimumHeight(Dp(48));
+            cell.SetPadding(Dp(2), Dp(4), Dp(2), Dp(4));
+            cell.Background = OneUiTheme.CreateRippleRoundedDrawable(this, Color.Transparent, OneUiTheme.PillCornerDp);
+            OneUiTheme.AttachRecoil(cell, 0.94f);
+
+            OneUiTabIconView iconView = new(this, tabKinds[i]);
+            cell.AddView(iconView, new LinearLayout.LayoutParams(Dp(22), Dp(22)));
+
+            TextView labelTv = new(this) {
                 Text = tabTitles[i],
-                TextSize = 11.5f
+                TextSize = 10.5f,
+                Gravity = GravityFlags.Center
             };
-            tb.SetAllCaps(false);
-            tb.SetIncludeFontPadding(false);
-            tb.SetSingleLine(true);
-            tb.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-            tb.SetMinimumHeight(Dp(40));
-            tb.SetMinimumWidth(0);
-            tb.SetPadding(Dp(2), Dp(6), Dp(2), Dp(6));
-            tb.Background = OneUiTheme.CreateRippleRoundedDrawable(this, Color.Transparent, OneUiTheme.PillCornerDp);
-            OneUiTheme.AttachRecoil(tb, 0.94f);
-            tb.Click += (_, _) => SwitchTab(idx);
-            tabButtons[i] = tb;
+            labelTv.SetIncludeFontPadding(false);
+            labelTv.SetSingleLine(true);
+            labelTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+            cell.AddView(labelTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                TopMargin = Dp(2)
+            });
+
+            cell.Click += (_, _) => SwitchTab(idx);
+            tabCells[i] = cell;
+            tabIcons[i] = iconView;
+            tabLabels[i] = labelTv;
 
             if (i == 4) {
                 FrameLayout tabCell = new(this);
-                tabCell.AddView(tb, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+                tabCell.AddView(cell, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(48)));
 
                 settingsUpdateDot = new View(this);
-                settingsUpdateDot.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.FunctionalOrange, 99f);
+                settingsUpdateDot.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.IconAtmosUpmix, 99f);
                 settingsUpdateDot.Visibility = ShouldShowSettingsDot() ? ViewStates.Visible : ViewStates.Gone;
                 FrameLayout.LayoutParams dotLp = new(Dp(7), Dp(7)) {
                     Gravity = GravityFlags.Top | GravityFlags.End,
-                    TopMargin = Dp(6),
-                    RightMargin = Dp(7)
+                    TopMargin = Dp(4),
+                    RightMargin = Dp(12)
                 };
                 tabCell.AddView(settingsUpdateDot, dotLp);
                 navRow.AddView(tabCell, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             } else {
-                navRow.AddView(tb, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+                navRow.AddView(cell, new LinearLayout.LayoutParams(0, Dp(48), 1f));
             }
         }
         navLayer.AddView(navRow, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
@@ -624,6 +649,13 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         int prevTab = activeTab;
         activeTab = idx;
+        if (idx != 0) {
+            musicVideoStage?.PauseVideoDecoderOnly();
+        } else if (musicStageMode == PlayerStageMode.Video) {
+            musicVideoStage?.SyncPlaybackState(playerEngine?.IsPlaying == true, playerEngine?.CurrentSeconds ?? 0);
+        } else if (musicStageMode == PlayerStageMode.Lyrics) {
+            musicLyricsView?.UpdatePlayback(playerEngine?.CurrentSeconds ?? 0, playerEngine?.IsPlaying == true);
+        }
         if (prevTab != idx) {
             int dir = idx > prevTab ? 1 : -1;
             for (int i = 0; i < tabPages.Length; i++) {
@@ -663,24 +695,29 @@ public partial class MainActivity : Activity, ICavernizeApp {
     }
 
     void UpdateTabButtonStyles(bool animate = true) {
-        if (tabButtons == null || tabButtons.Length == 0) {
+        if (tabCells == null || tabCells.Length == 0) {
             return;
         }
-        for (int i = 0; i < tabButtons.Length; i++) {
+        for (int i = 0; i < tabCells.Length; i++) {
             bool active = i == activeTab;
-            tabButtons[i].SetTextColor(active ? ColText : OneUiTheme.TextSecondary);
-            tabButtons[i].SetTypeface(null, active ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+            if (tabIcons != null && i < tabIcons.Length && tabIcons[i] != null) {
+                tabIcons[i].IsTabSelected = active;
+            }
+            if (tabLabels != null && i < tabLabels.Length && tabLabels[i] != null) {
+                tabLabels[i].SetTextColor(active ? ColText : Color.Argb(184, 210, 212, 220));
+                tabLabels[i].SetTypeface(null, active ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+            }
         }
         PositionTabIndicator(animate);
     }
 
     void PositionTabIndicator(bool animate) {
-        if (tabIndicatorPill == null || tabButtons == null || activeTab < 0 || activeTab >= tabButtons.Length) {
+        if (tabIndicatorPill == null || tabCells == null || activeTab < 0 || activeTab >= tabCells.Length) {
             return;
         }
-        View targetHost = activeTab == 4 && tabButtons[4].Parent is View parentCell
+        View targetHost = activeTab == 4 && tabCells[4].Parent is View parentCell
             ? parentCell
-            : tabButtons[activeTab];
+            : tabCells[activeTab];
         int targetW = targetHost.Width;
         int targetH = targetHost.Height;
         if (targetW <= 0 || targetH <= 0) {

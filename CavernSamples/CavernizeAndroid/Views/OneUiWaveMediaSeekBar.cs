@@ -49,6 +49,7 @@ public sealed class OneUiWaveMediaSeekBar : View {
     bool isDragging;
     bool isCancelledToScroll;
     float motionActivity; // 0 = paused flat pill line, 1 = animated flowing wave ribbons
+    float dragExpand;     // 0 = sleek flush rest state, 1 = interactive expanded thumb ring & halo
     long lastFrameMs;
     float accumPhaseSec;
 
@@ -189,6 +190,14 @@ public sealed class OneUiWaveMediaSeekBar : View {
             motionActivity = targetActivity;
         }
 
+        float targetDrag = isDragging ? 1f : 0f;
+        if (MathF.Abs(dragExpand - targetDrag) > 0.004f) {
+            float dRate = isDragging ? 18f : 12f;
+            dragExpand += (targetDrag - dragExpand) * Math.Min(1f, dt * dRate);
+        } else {
+            dragExpand = targetDrag;
+        }
+
         if (isPlaying || motionActivity > 0.004f) {
             accumPhaseSec += dt;
         }
@@ -203,8 +212,8 @@ public sealed class OneUiWaveMediaSeekBar : View {
         float ratio = max > 0 ? Math.Clamp(progress / (float)max, 0f, 1f) : 0f;
         float thumbX = trackLeft + ratio * trackWidth;
 
-        // 1. Remaining Track (with Samsung's 8dp gap after the thumb)
-        float remainStart = thumbX + 8f * dp;
+        // 1. Remaining Track (with smooth gap only when thumb expands)
+        float remainStart = thumbX + (3f + 5f * dragExpand) * dp;
         if (remainStart < trackRight) {
             canvas.DrawLine(remainStart, centerY, trackRight, centerY, remainPaint);
         }
@@ -214,41 +223,47 @@ public sealed class OneUiWaveMediaSeekBar : View {
             if (motionActivity > 0.01f && thumbX - trackLeft > 12f * dp) {
                 DrawMultiWaveRibbons(canvas, trackLeft, thumbX, centerY, dp);
             }
-            // Core glowing baseline keeps the center continuous like One UI 9's WaveSeekbar
-            using LinearGradient lineGrad = new(
-                trackLeft, centerY, thumbX, centerY,
-                [layers[0].StartColor.ToArgb(), layers[0].EndColor.ToArgb()],
-                [0f, 1f],
-                Shader.TileMode.Clamp);
-            baseTrackPaint.SetShader(lineGrad);
+            if (dragExpand > 0.05f || motionActivity > 0.05f) {
+                using LinearGradient lineGrad = new(
+                    trackLeft, centerY, thumbX, centerY,
+                    [layers[0].StartColor.ToArgb(), layers[0].EndColor.ToArgb()],
+                    [0f, 1f],
+                    Shader.TileMode.Clamp);
+                baseTrackPaint.SetShader(lineGrad);
+            } else {
+                baseTrackPaint.SetShader(null);
+                baseTrackPaint.Color = thumbCenterColor;
+            }
             canvas.DrawLine(trackLeft, centerY, thumbX, centerY, baseTrackPaint);
             baseTrackPaint.SetShader(null);
         }
 
-        // 3. Signature One UI 9 Thumb (Radial Glow + Translucent Fill + 2dp White Ring)
-        float thumbScale = isDragging ? 1.18f : 1.0f;
-        float glowRadius = 11f * dp * thumbScale;
-        using (RadialGradient glow = new(
-            thumbX, centerY, glowRadius,
-            [Color.Argb(135, thumbGlowColor.R, thumbGlowColor.G, thumbGlowColor.B).ToArgb(), Color.Transparent.ToArgb()],
-            [0f, 1f],
-            Shader.TileMode.Clamp)) {
-            thumbGlowPaint.SetShader(glow);
-            canvas.DrawCircle(thumbX, centerY, glowRadius, thumbGlowPaint);
-            thumbGlowPaint.SetShader(null);
-        }
+        // 3. Signature One UI 9 Thumb: sleek flush cap at rest; radial glow + translucent ring during drag
+        if (dragExpand > 0.01f) {
+            float glowRadius = 11f * dp * dragExpand;
+            using (RadialGradient glow = new(
+                thumbX, centerY, Math.Max(1f, glowRadius),
+                [Color.Argb((int)(135 * dragExpand), thumbGlowColor.R, thumbGlowColor.G, thumbGlowColor.B).ToArgb(), Color.Transparent.ToArgb()],
+                [0f, 1f],
+                Shader.TileMode.Clamp)) {
+                thumbGlowPaint.SetShader(glow);
+                canvas.DrawCircle(thumbX, centerY, glowRadius, thumbGlowPaint);
+                thumbGlowPaint.SetShader(null);
+            }
 
-        float thumbR = 5.4f * dp * thumbScale;
-        thumbFillPaint.Color = Color.Argb(215, thumbCenterColor.R, thumbCenterColor.G, thumbCenterColor.B);
-        canvas.DrawCircle(thumbX, centerY, thumbR, thumbFillPaint);
-        canvas.DrawCircle(thumbX, centerY, thumbR, thumbRingPaint);
+            float thumbR = (2.6f + 3.2f * dragExpand) * dp;
+            thumbFillPaint.Color = Color.Argb(235, thumbCenterColor.R, thumbCenterColor.G, thumbCenterColor.B);
+            canvas.DrawCircle(thumbX, centerY, thumbR, thumbFillPaint);
+            thumbRingPaint.Color = Color.Argb((int)(255 * dragExpand), 255, 255, 255);
+            canvas.DrawCircle(thumbX, centerY, thumbR, thumbRingPaint);
+        }
 
         // 4. Time Labels cleanly positioned below the wave track
         float timeY = h - 7f * dp;
         canvas.DrawText(CurrentTimeText ?? "00:00", trackLeft, timeY, timeLeftPaint);
         canvas.DrawText(TotalTimeText ?? "00:00", trackRight, timeY, timeRightPaint);
 
-        if (isPlaying || MathF.Abs(motionActivity - targetActivity) > 0.004f) {
+        if (isPlaying || MathF.Abs(motionActivity - targetActivity) > 0.004f || MathF.Abs(dragExpand - targetDrag) > 0.004f) {
             PostInvalidateOnAnimation();
         }
     }

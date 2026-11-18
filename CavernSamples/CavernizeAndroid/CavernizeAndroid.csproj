@@ -9,7 +9,7 @@
 
     <ApplicationId>hu.sbence.cavern.cavernize</ApplicationId>
     <ApplicationVersion>17</ApplicationVersion>
-    <ApplicationDisplayVersion>2.5.0</ApplicationDisplayVersion>
+    <ApplicationDisplayVersion>2.6.17</ApplicationDisplayVersion>
     <ApplicationTitle>Cavernize</ApplicationTitle>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
     <AndroidUseAapt2>true</AndroidUseAapt2>

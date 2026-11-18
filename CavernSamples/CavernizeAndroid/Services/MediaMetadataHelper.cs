@@ -15,17 +15,22 @@ public sealed class MediaArtworkMetadata {
     public string Artist { get; init; } = "";
     public string Album { get; init; } = "";
     public string MimeType { get; init; } = "";
+    public string SourceMediaPath { get; init; } = "";
     public int EmbeddedSampleRate { get; init; }
     public int EmbeddedBitrateKbps { get; init; }
+    public bool HasVideo { get; init; }
+    public int VideoWidth { get; init; }
+    public int VideoHeight { get; init; }
     public bool HasEmbeddedArtwork { get; init; }
     public Bitmap ArtworkBitmap { get; init; }
     public Color PrimaryAccent { get; init; }
     public Color SecondaryAccent { get; init; }
+    public LyricsDocument Lyrics { get; init; }
 }
 
 /// <summary>
-/// Reads embedded audio/video tags and cover art via Android's <see cref="MediaMetadataRetriever"/>,
-/// falling back to adjacent folder art or procedural spatial cover generation when missing.
+/// Reads embedded audio/video tags, video dimensions/thumbnails, cover art via Android's
+/// <see cref="MediaMetadataRetriever"/>, and adjacent/embedded lyrics via <see cref="LyricsService"/>.
 /// </summary>
 public static class MediaMetadataHelper {
     static readonly string[] ExternalCoverNames = [
@@ -34,6 +39,10 @@ public static class MediaMetadataHelper {
         "front.jpg", "front.png", "artwork.jpg", "artwork.png"
     ];
 
+    static readonly HashSet<string> VideoExtensions = new(StringComparer.OrdinalIgnoreCase) {
+        ".mkv", ".mp4", ".m4v", ".webm", ".mov", ".avi", ".ts", ".m2ts"
+    };
+
     public static MediaArtworkMetadata Extract(Context context, Android.Net.Uri sourceUri, string resolvedPath, string fallbackTitle) {
         string title = "";
         string artist = "";
@@ -41,6 +50,9 @@ public static class MediaMetadataHelper {
         string mime = "";
         int sampleRate = 0;
         int bitrateKbps = 0;
+        bool hasVideo = false;
+        int videoWidth = 0;
+        int videoHeight = 0;
         Bitmap artwork = null;
         bool hasEmbedded = false;
 
@@ -79,6 +91,15 @@ public static class MediaMetadataHelper {
                     bitrateKbps = bps / 1000;
                 }
 
+                string hasVideoRaw = (retriever.ExtractMetadata(MetadataKey.HasVideo) ?? "").Trim();
+                string vwRaw = retriever.ExtractMetadata(MetadataKey.VideoWidth);
+                string vhRaw = retriever.ExtractMetadata(MetadataKey.VideoHeight);
+                int.TryParse(vwRaw, out videoWidth);
+                int.TryParse(vhRaw, out videoHeight);
+                hasVideo = "yes".Equals(hasVideoRaw, StringComparison.OrdinalIgnoreCase)
+                    || "true".Equals(hasVideoRaw, StringComparison.OrdinalIgnoreCase)
+                    || (videoWidth > 0 && videoHeight > 0);
+
                 if (OperatingSystem.IsAndroidVersionAtLeast(31)) {
                     string srRaw = retriever.ExtractMetadata((MetadataKey)38); // METADATA_KEY_SAMPLERATE
                     if (int.TryParse(srRaw, out int sr) && sr > 0) {
@@ -91,13 +112,29 @@ public static class MediaMetadataHelper {
                     artwork = DecodeScaledBitmap(embeddedBytes, 640);
                     hasEmbedded = artwork != null;
                 }
+
+                if (artwork == null && hasVideo) {
+                    using Bitmap rawFrame = retriever.GetFrameAtTime(2_000_000, Option.ClosestSync)
+                        ?? retriever.GetFrameAtTime();
+                    if (rawFrame != null && !rawFrame.IsRecycled && rawFrame.Width > 0 && rawFrame.Height > 0) {
+                        artwork = ScaleBitmapToMax(rawFrame, 640);
+                        hasEmbedded = artwork != null;
+                    }
+                }
             } catch (Exception ex) {
                 AppLogger.Error("MediaMetadataHelper.Extract", ex);
             }
         }
 
+        if (!hasVideo && !string.IsNullOrEmpty(resolvedPath)) {
+            string ext = IOPath.GetExtension(resolvedPath);
+            if (!string.IsNullOrEmpty(ext) && VideoExtensions.Contains(ext) && !"audio/mp4".Equals(mime, StringComparison.OrdinalIgnoreCase)) {
+                hasVideo = !mime.StartsWith("audio/", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
         if (artwork == null && !string.IsNullOrEmpty(resolvedPath)) {
-            artwork = TryLoadAdjacentFolderCover(context, resolvedPath, 640);
+            artwork = TryLoadAdjacentFolderCover(context, sourceUri, resolvedPath, 640);
             hasEmbedded = artwork != null;
         }
 
@@ -114,17 +151,24 @@ public static class MediaMetadataHelper {
             artwork = CreateSpatialFallbackArtwork(effectiveTitle, primary, secondary, 512);
         }
 
+        LyricsDocument lyrics = LyricsService.LoadForMedia(context, sourceUri, resolvedPath, effectiveTitle);
+
         return new MediaArtworkMetadata {
             Title = effectiveTitle,
             Artist = artist,
             Album = album,
             MimeType = mime,
+            SourceMediaPath = resolvedPath ?? "",
             EmbeddedSampleRate = sampleRate,
             EmbeddedBitrateKbps = bitrateKbps,
+            HasVideo = hasVideo,
+            VideoWidth = videoWidth,
+            VideoHeight = videoHeight,
             HasEmbeddedArtwork = hasEmbedded,
             ArtworkBitmap = artwork,
             PrimaryAccent = primary,
-            SecondaryAccent = secondary
+            SecondaryAccent = secondary,
+            Lyrics = lyrics
         };
     }
 
@@ -205,15 +249,10 @@ public static class MediaMetadataHelper {
         return bmp;
     }
 
-    static Bitmap TryLoadAdjacentFolderCover(Context context, string resolvedPath, int maxDim) {
+    static Bitmap TryLoadAdjacentFolderCover(Context context, Android.Net.Uri sourceUri, string resolvedPath, int maxDim) {
         try {
-            string dir = IOPath.GetDirectoryName(resolvedPath);
+            string dir = AndroidFileHelper.TryGetOriginalDirectory(context, sourceUri, resolvedPath);
             if (string.IsNullOrEmpty(dir)) {
-                return null;
-            }
-            // Do not scan shared cache folder used for content:// copies
-            string cacheRoot = context?.CacheDir?.AbsolutePath;
-            if (!string.IsNullOrEmpty(cacheRoot) && dir.StartsWith(cacheRoot, StringComparison.OrdinalIgnoreCase)) {
                 return null;
             }
 
@@ -231,6 +270,17 @@ public static class MediaMetadataHelper {
             // Optional fallback cover only
         }
         return null;
+    }
+
+    static Bitmap ScaleBitmapToMax(Bitmap source, int maxDim) {
+        int longest = Math.Max(source.Width, source.Height);
+        if (longest <= maxDim) {
+            return source.Copy(Bitmap.Config.Argb8888!, false);
+        }
+        float scale = maxDim / (float)longest;
+        int w = Math.Max(1, (int)Math.Round(source.Width * scale));
+        int h = Math.Max(1, (int)Math.Round(source.Height * scale));
+        return Bitmap.CreateScaledBitmap(source, w, h, true);
     }
 
     static Bitmap DecodeScaledBitmap(byte[] bytes, int maxDim) {

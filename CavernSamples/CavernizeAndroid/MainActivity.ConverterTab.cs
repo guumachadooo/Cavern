@@ -49,7 +49,7 @@ public partial class MainActivity {
         page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
 
         // 1. System & RenderTarget Hero Card
-        LinearLayout sysCard = Card(S["SystemTitle"], OneUiIconType.Speaker, OneUiTheme.Primary);
+        LinearLayout sysCard = Card(S["SystemTitle"], OneUiIconType.Speaker, OneUiTheme.IconSpatial);
         LinearLayout sysRow = HRow();
 
         LinearLayout sysLeft = new(this) { Orientation = Orientation.Vertical };
@@ -70,7 +70,7 @@ public partial class MainActivity {
         page.AddView(sysCard);
 
         // 2. Content & Export Card (In-App One UI 9 Selectors — no native Spinner popups)
-        LinearLayout expCard = Card("Export", OneUiIconType.Bolt, OneUiTheme.CoralStart);
+        LinearLayout expCard = Card("Export", OneUiIconType.Bolt, OneUiTheme.IconStudioExport);
         converterTrackInfoText = Label(S["NoTrack"], 12f, ColMuted);
         converterTrackInfoText.SetPadding(0, 0, 0, Dp(8));
         expCard.AddView(converterTrackInfoText);
@@ -134,7 +134,7 @@ public partial class MainActivity {
         LinearLayout.LayoutParams pbLp = new(ViewGroup.LayoutParams.MatchParent, Dp(14)) { TopMargin = Dp(10) };
         expCard.AddView(convertProgressBar, pbLp);
 
-        convertStatusText = Label(S["Ready"], 12f, ColCyan);
+        convertStatusText = Label(S["Ready"], 12f, OneUiTheme.IconSystemInfo);
         convertStatusText.SetPadding(0, Dp(6), 0, Dp(6));
         expCard.AddView(convertStatusText);
 
@@ -154,7 +154,7 @@ public partial class MainActivity {
         page.AddView(expCard);
 
         // 3. Batch Render Queue Card
-        LinearLayout queueCard = Card(S["QueueTitle"], OneUiIconType.Queue, OneUiTheme.Primary);
+        LinearLayout queueCard = Card(S["QueueTitle"], OneUiIconType.Queue, OneUiTheme.IconAtmosUpmix);
         queueListContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
         queueCard.AddView(queueListContainer);
 

@@ -30,22 +30,35 @@ public static class OneUiTheme {
     public static Color GlassRimBottom { get; private set; } = Color.ParseColor("#2BFFFFFF");
     public static Color FloatingBorder { get; private set; } = Color.ParseColor("#26FFFFFF");
 
-    // Dynamic Brand & Wallpaper Accent Tokens (default: Samsung One UI Blue #387AFF + Harmonic Rose-Indigo Subtones)
+    // Dynamic Brand & Wallpaper Accent Tokens (resolved verbatim from framework-res wallpapertheme_template.json on API 31+)
     public static Color Primary { get; private set; } = Color.ParseColor("#387AFF");
     public static Color PrimaryHigh { get; private set; } = Color.ParseColor("#598FFF");
     public static Color PrimaryPressed { get; private set; } = Color.ParseColor("#2E65D4");
     public static Color Secondary { get; private set; } = Color.ParseColor("#6E7CF6");
     public static Color SecondaryHigh { get; private set; } = Color.ParseColor("#8995FA");
     public static Color SecondaryPressed { get; private set; } = Color.ParseColor("#4F5CE0");
-    public static Color Tertiary { get; private set; } = Color.ParseColor("#B86CF2");
-    public static Color TertiaryHigh { get; private set; } = Color.ParseColor("#D18AF8");
-    public static Color TertiaryPressed { get; private set; } = Color.ParseColor("#924BD0");
-    public static Color SliderAccent => Tertiary;
-    public static Color SliderAccentHigh => TertiaryHigh;
-    public static Color SliderAccentEnd => TertiaryPressed;
-    public static Color CoralStart { get; private set; } = Color.ParseColor("#D18AF8");
-    public static Color CoralEnd { get; private set; } = Color.ParseColor("#924BD0");
+    public static Color HighlightAccent { get; private set; } = Color.ParseColor("#8E96FA");
+    public static Color Tertiary { get; private set; } = Color.ParseColor("#6E9CFF");
+    public static Color TertiaryHigh { get; private set; } = Color.ParseColor("#89B0FF");
+    public static Color TertiaryPressed { get; private set; } = Color.ParseColor("#4B7BE5");
+    public static Color SliderAccent { get; private set; } = Color.ParseColor("#6E9CFF");
+    public static Color SliderAccentHigh => SliderAccent;
+    public static Color SliderAccentEnd => SliderAccent;
+    public static Color CoralStart { get; private set; } = Color.ParseColor("#8E96FA");
+    public static Color CoralEnd { get; private set; } = Color.ParseColor("#6E9CFF");
     public static Color PeachText { get; private set; } = Color.ParseColor("#C2D8FF");
+
+    // Samsung Gallery Bottom Bar & Floating Tab Capsule Tokens
+    public static Color SurfaceFloatingBar { get; private set; } = Color.Argb(230, 58, 58, 61);
+    public static Color SelectedTabPill { get; private set; } = Color.Argb(26, 255, 255, 255);
+
+    // 6 Harmonic Semantic Icon Palette Tokens (wallpaper-adaptive so icons share tonal unity yet stay visually distinct)
+    public static Color IconSpatial { get; private set; } = Color.ParseColor("#387AFF");
+    public static Color IconSliderMedia { get; private set; } = Color.ParseColor("#6E9CFF");
+    public static Color IconAtmosUpmix { get; private set; } = Color.ParseColor("#8E96FA");
+    public static Color IconStudioExport { get; private set; } = Color.ParseColor("#4FB5E8");
+    public static Color IconStemsCalib { get; private set; } = Color.ParseColor("#56B8A8");
+    public static Color IconSystemInfo { get; private set; } = Color.ParseColor("#8A97B8");
 
     public static Color TextPrimary { get; private set; } = Color.ParseColor("#FCFCFF");
     public static Color TextSecondary { get; private set; } = Color.ParseColor("#E9E9EC");
@@ -88,9 +101,10 @@ public static class OneUiTheme {
         Color defaultSec = Color.ParseColor("#6E7CF6");
         Color defaultSecHigh = Color.ParseColor("#8995FA");
         Color defaultSecPressed = Color.ParseColor("#4F5CE0");
-        Color defaultTert = Color.ParseColor("#B86CF2");
-        Color defaultTertHigh = Color.ParseColor("#D18AF8");
-        Color defaultTertPressed = Color.ParseColor("#924BD0");
+        Color defaultTert = Color.ParseColor("#6E9CFF");
+        Color defaultTertHigh = Color.ParseColor("#89B0FF");
+        Color defaultTertPressed = Color.ParseColor("#4B7BE5");
+        Color defaultHighlight = Color.ParseColor("#8E96FA");
         Color defaultHeaderTint = Color.ParseColor("#D6E4FF");
         // Native One UI 9 Dark Mode neutral surfaces (clean dark glass like Settings & Voice Recorder)
         Color defaultBaseBg = Color.Rgb(8, 8, 11);
@@ -104,17 +118,27 @@ public static class OneUiTheme {
         Secondary = defaultSec;
         SecondaryHigh = defaultSecHigh;
         SecondaryPressed = defaultSecPressed;
+        HighlightAccent = defaultHighlight;
+        SliderAccent = defaultTert;
         Tertiary = defaultTert;
         TertiaryHigh = defaultTertHigh;
         TertiaryPressed = defaultTertPressed;
-        CoralStart = defaultTertHigh;
-        CoralEnd = defaultTertPressed;
+        CoralStart = defaultHighlight;
+        CoralEnd = defaultTert;
         PeachText = defaultHeaderTint;
         BedChannel = defaultBlueHigh;
         BgScreen = defaultBaseBg;
         SurfaceCard = defaultCard;
         SurfaceElevated = defaultElevated;
         RoomBg = defaultRoomBg;
+        SurfaceFloatingBar = Color.Argb(230, 58, 58, 61);
+        SelectedTabPill = Color.Argb(26, 255, 255, 255);
+        IconSpatial = defaultBlue;
+        IconSliderMedia = defaultTert;
+        IconAtmosUpmix = defaultHighlight;
+        IconStudioExport = Color.ParseColor("#4FB5E8");
+        IconStemsCalib = Color.ParseColor("#56B8A8");
+        IconSystemInfo = Color.ParseColor("#8A97B8");
         IsDynamicWallpaperActive = false;
 
         if (ctx == null || !OperatingSystem.IsAndroidVersionAtLeast(31)) {
@@ -122,127 +146,78 @@ public static class OneUiTheme {
         }
 
         try {
-            Color? sysPrimary = TryGetFrameworkColor(ctx, "system_accent1_400") ?? TryGetFrameworkColor(ctx, "system_primary_dark");
-            Color? sysA1_300 = TryGetFrameworkColor(ctx, "system_accent1_300");
-            Color? sysA1_500 = TryGetFrameworkColor(ctx, "system_accent1_500");
+            // Exact Samsung One UI 9 ColorPalette template mappings (wallpapertheme_template.json + SystemUI metadata_colorpalette.xml):
+            // - quickpanel_btn_on (4-2-3) & primary -> system_accent1_300
+            // - quickpanel_progress (4-8-5 / tw_progress_color_control_activated) -> system_accent2_300
+            // - secondary / single_track -> system_accent2_500
+            // - highlight -> system_accent3_300
             Color? sysA1_200 = TryGetFrameworkColor(ctx, "system_accent1_200");
+            Color? sysA1_300 = TryGetFrameworkColor(ctx, "system_accent1_300");
+            Color? sysA1_400 = TryGetFrameworkColor(ctx, "system_accent1_400") ?? TryGetFrameworkColor(ctx, "system_primary_dark");
+            Color? sysA1_500 = TryGetFrameworkColor(ctx, "system_accent1_500");
 
+            Color? sysA2_200 = TryGetFrameworkColor(ctx, "system_accent2_200");
             Color? sysA2_300 = TryGetFrameworkColor(ctx, "system_accent2_300") ?? TryGetFrameworkColor(ctx, "system_secondary_dark");
             Color? sysA2_400 = TryGetFrameworkColor(ctx, "system_accent2_400");
             Color? sysA2_500 = TryGetFrameworkColor(ctx, "system_accent2_500");
 
+            Color? sysA3_200 = TryGetFrameworkColor(ctx, "system_accent3_200");
             Color? sysA3_300 = TryGetFrameworkColor(ctx, "system_accent3_300") ?? TryGetFrameworkColor(ctx, "system_tertiary_dark");
             Color? sysA3_400 = TryGetFrameworkColor(ctx, "system_accent3_400");
             Color? sysA3_500 = TryGetFrameworkColor(ctx, "system_accent3_500");
-            Color? sysA3_200 = TryGetFrameworkColor(ctx, "system_accent3_200");
 
-            if (sysPrimary.HasValue && IsChromatic(sysPrimary.Value)) {
+            Color? rawPrimary = sysA1_300 ?? sysA1_400;
+            if (rawPrimary.HasValue && IsChromatic(rawPrimary.Value)) {
                 IsDynamicWallpaperActive = true;
-                Color baseAccent = RefineAccent(sysPrimary.Value);
-                Color highAccent = sysA1_300.HasValue ? RefineAccent(sysA1_300.Value) : AdjustBrightness(baseAccent, 1.15f);
-                Color lowAccent = sysA1_500.HasValue ? RefineDeepAccent(sysA1_500.Value) : AdjustBrightness(baseAccent, 0.78f);
 
-                Primary = baseAccent;
-                PrimaryHigh = highAccent;
-                PrimaryPressed = lowAccent;
+                // Preserve exact system_accent1_300 & system_accent2_300 without mutating hue or saturation
+                Primary = rawPrimary.Value;
+                PrimaryHigh = sysA1_200 ?? AdjustBrightness(Primary, 1.14f);
+                PrimaryPressed = sysA1_400 ?? sysA1_500 ?? AdjustBrightness(Primary, 0.82f);
 
-                // Resolve One UI multi-tone Tertiary subtone (e.g., rose/pink sliders paired with orange buttons)
-                Color rawTertiary = sysA3_400 ?? sysA3_300 ?? sysA3_500 ?? ShiftHueHarmonic(baseAccent, -26f);
-                if (!IsChromatic(rawTertiary) || HueDistance(baseAccent, rawTertiary) < 12f) {
-                    // Preserve real Samsung Monet duality when accent3 collapses near accent1
-                    rawTertiary = Blend(rawTertiary, ShiftHueHarmonic(baseAccent, IsWarmHue(baseAccent) ? -28f : 26f), 0.72f);
-                }
-                Color tertBase = RefineSliderSubtone(rawTertiary);
-                Color tertHigh = sysA3_300.HasValue && HueDistance(baseAccent, sysA3_300.Value) >= 12f
-                    ? RefineSliderSubtone(sysA3_300.Value, boostValue: 1.06f)
-                    : AdjustBrightness(tertBase, 1.12f);
-                Color tertLow = sysA3_500.HasValue && HueDistance(baseAccent, sysA3_500.Value) >= 12f
-                    ? RefineDeepAccent(sysA3_500.Value)
-                    : AdjustBrightness(tertBase, 0.78f);
+                Color exactQuickPanelSlider = sysA2_300 ?? sysA2_400 ?? sysA3_300 ?? Primary;
+                SliderAccent = exactQuickPanelSlider;
+                Tertiary = exactQuickPanelSlider;
+                TertiaryHigh = sysA2_200 ?? AdjustBrightness(exactQuickPanelSlider, 1.10f);
+                TertiaryPressed = sysA2_400 ?? AdjustBrightness(exactQuickPanelSlider, 0.84f);
 
-                Tertiary = tertBase;
-                TertiaryHigh = tertHigh;
-                TertiaryPressed = tertLow;
-                CoralStart = tertHigh;
-                CoralEnd = tertLow;
+                HighlightAccent = sysA3_300 ?? sysA3_400 ?? exactQuickPanelSlider;
+                Secondary = sysA2_500 ?? sysA2_400 ?? exactQuickPanelSlider;
+                SecondaryHigh = sysA2_400 ?? exactQuickPanelSlider;
+                SecondaryPressed = sysA2_500 ?? AdjustBrightness(Secondary, 0.80f);
 
-                // Secondary tonal bridge (accent2 if vibrant enough, or refined blend between accent1 and accent3)
-                Color rawSec = sysA2_400 ?? sysA2_300 ?? Blend(baseAccent, tertBase, 0.45f);
-                Color secBase = IsChromatic(rawSec) && GetSaturation(rawSec) >= 0.24f
-                    ? RefineAccent(rawSec)
-                    : RefineAccent(Blend(highAccent, tertHigh, 0.48f));
-                Secondary = secBase;
-                SecondaryHigh = sysA2_300.HasValue && GetSaturation(sysA2_300.Value) >= 0.24f
-                    ? RefineAccent(sysA2_300.Value)
-                    : AdjustBrightness(secBase, 1.12f);
-                SecondaryPressed = sysA2_500.HasValue && GetSaturation(sysA2_500.Value) >= 0.24f
-                    ? RefineDeepAccent(sysA2_500.Value)
-                    : AdjustBrightness(secBase, 0.80f);
+                CoralStart = HighlightAccent;
+                CoralEnd = exactQuickPanelSlider;
 
-                Color tintSrc = sysA3_200 ?? sysA1_200 ?? highAccent;
-                PeachText = Blend(Color.Rgb(242, 243, 249), tintSrc, 0.34f);
-                BedChannel = Blend(highAccent, Color.Rgb(108, 178, 255), 0.32f);
+                Color tintSrc = sysA2_200 ?? sysA1_200 ?? PrimaryHigh;
+                PeachText = Blend(Color.Rgb(242, 243, 249), tintSrc, 0.36f);
+                BedChannel = Blend(PrimaryHigh, Color.Rgb(108, 178, 255), 0.28f);
+
+                // Harmonized 6-role semantic icon colors (share the wallpaper palette's saturation/luminance envelope)
+                IconSpatial = Primary;
+                IconSliderMedia = exactQuickPanelSlider;
+                IconAtmosUpmix = IsChromatic(HighlightAccent) && HueDistance(Primary, HighlightAccent) >= 10f
+                    ? HighlightAccent
+                    : HarmonizeIconVariant(Primary, +28f);
+                IconStudioExport = HarmonizeIconVariant(Primary, +44f);
+                IconStemsCalib = HarmonizeIconVariant(exactQuickPanelSlider, -56f);
+                IconSystemInfo = sysA2_400 ?? Blend(exactQuickPanelSlider, Color.Rgb(185, 192, 208), 0.35f);
 
                 // Subtle 3% accent whisper on elevated cards only; backgrounds stay clean neutral dark
-                SurfaceCard = WithAlpha(Blend(Color.Rgb(22, 22, 27), baseAccent, 0.03f), 218);
-                SurfaceElevated = WithAlpha(Blend(Color.Rgb(32, 33, 40), tertBase, 0.04f), 235);
+                SurfaceCard = WithAlpha(Blend(Color.Rgb(22, 22, 27), Primary, 0.03f), 218);
+                SurfaceElevated = WithAlpha(Blend(Color.Rgb(32, 33, 40), exactQuickPanelSlider, 0.04f), 235);
             }
         } catch {
             // Fall back cleanly to Samsung One UI 9 Blue palette
         }
     }
 
-    static Color RefineAccent(Color c) {
+    static Color HarmonizeIconVariant(Color referenceAccent, float hueShiftDeg) {
         float[] hsv = new float[3];
-        Color.ColorToHSV(c, hsv);
-        hsv[1] = Math.Clamp(hsv[1] * 0.92f, 0.28f, 0.80f);
-        hsv[2] = Math.Clamp(hsv[2], 0.62f, 0.90f);
-        return new Color(Color.HSVToColor(255, hsv));
-    }
-
-    static Color RefineSliderSubtone(Color c, float boostValue = 1.0f) {
-        float[] hsv = new float[3];
-        Color.ColorToHSV(c, hsv);
-        hsv[1] = Math.Clamp(Math.Max(hsv[1], 0.36f) * 1.04f, 0.36f, 0.82f);
-        hsv[2] = Math.Clamp(hsv[2] * boostValue, 0.68f, 0.90f);
-        return new Color(Color.HSVToColor(255, hsv));
-    }
-
-    static Color RefineDeepAccent(Color c) {
-        float[] hsv = new float[3];
-        Color.ColorToHSV(c, hsv);
-        hsv[1] = Math.Clamp(hsv[1] * 0.95f, 0.30f, 0.84f);
-        hsv[2] = Math.Clamp(hsv[2], 0.48f, 0.78f);
-        return new Color(Color.HSVToColor(255, hsv));
-    }
-
-    static float GetSaturation(Color c) {
-        float[] hsv = new float[3];
-        Color.ColorToHSV(c, hsv);
-        return hsv[1];
-    }
-
-    static bool IsWarmHue(Color c) {
-        float[] hsv = new float[3];
-        Color.ColorToHSV(c, hsv);
-        return hsv[0] < 72f || hsv[0] >= 315f;
-    }
-
-    static float HueDistance(Color a, Color b) {
-        float[] ha = new float[3];
-        float[] hb = new float[3];
-        Color.ColorToHSV(a, ha);
-        Color.ColorToHSV(b, hb);
-        float diff = Math.Abs(ha[0] - hb[0]);
-        return Math.Min(diff, 360f - diff);
-    }
-
-    static Color ShiftHueHarmonic(Color c, float degrees) {
-        float[] hsv = new float[3];
-        Color.ColorToHSV(c, hsv);
-        hsv[0] = (hsv[0] + degrees + 360f) % 360f;
-        hsv[1] = Math.Clamp(Math.Max(0.45f, hsv[1]), 0.40f, 0.82f);
-        hsv[2] = Math.Clamp(Math.Max(0.72f, hsv[2]), 0.70f, 0.90f);
+        Color.ColorToHSV(referenceAccent, hsv);
+        hsv[0] = (hsv[0] + hueShiftDeg + 360f) % 360f;
+        hsv[1] = Math.Clamp(hsv[1] * 0.92f, 0.32f, 0.72f);
+        hsv[2] = Math.Clamp(hsv[2] * 0.98f, 0.68f, 0.92f);
         return new Color(Color.HSVToColor(255, hsv));
     }
 
@@ -259,6 +234,15 @@ public static class OneUiTheme {
         float[] hsv = new float[3];
         Color.ColorToHSV(c, hsv);
         return hsv[1] >= 0.08f && hsv[2] >= 0.15f;
+    }
+
+    static float HueDistance(Color a, Color b) {
+        float[] ha = new float[3];
+        float[] hb = new float[3];
+        Color.ColorToHSV(a, ha);
+        Color.ColorToHSV(b, hb);
+        float diff = Math.Abs(ha[0] - hb[0]);
+        return Math.Min(diff, 360f - diff);
     }
 
     static Color AdjustBrightness(Color c, float factor) {
@@ -515,7 +499,6 @@ public sealed class OneUiFrostedCapsuleView : FrameLayout {
     readonly Paint rimPaint = new(PaintFlags.AntiAlias);
     readonly Paint bitmapPaint = new(PaintFlags.AntiAlias | PaintFlags.FilterBitmap);
     readonly Android.Graphics.Path clipPath = new();
-    readonly Android.Graphics.Path wallPath = new();
     readonly int[] selfLoc = new int[2];
     readonly int[] targetLoc = new int[2];
 
@@ -527,6 +510,8 @@ public sealed class OneUiFrostedCapsuleView : FrameLayout {
 
     public Func<View[]> BehindViewsProvider { get; set; }
     public float CornerRadiusDp { get; set; } = 30f;
+    public Color? GlazeTopColor { get; set; }
+    public Color? GlazeBottomColor { get; set; }
 
     public OneUiFrostedCapsuleView(Context context) : base(context) {
         SetWillNotDraw(false);
@@ -622,10 +607,12 @@ public sealed class OneUiFrostedCapsuleView : FrameLayout {
             canvas.DrawBitmap(blurBitmap, null, new RectF(0f, 0f, w, h), bitmapPaint);
         }
 
-        // Translucent smoked One UI 9 frosted glaze + top subtle reflection highlight
+        // Translucent smoked One UI 9 frosted glaze + top subtle reflection highlight (supports Samsung Gallery #E63A3A3D)
+        Color gTop = GlazeTopColor ?? Color.Argb(204, 34, 36, 44);
+        Color gBot = GlazeBottomColor ?? Color.Argb(228, 16, 17, 22);
         using LinearGradient glaze = new(
             0f, 0f, 0f, h,
-            [Color.Argb(204, 34, 36, 44).ToArgb(), Color.Argb(228, 16, 17, 22).ToArgb()],
+            [gTop.ToArgb(), gBot.ToArgb()],
             [0f, 1f],
             Shader.TileMode.Clamp!);
         frostOverlayPaint.SetShader(glaze);
@@ -816,7 +803,6 @@ public sealed class OneUiSeekBar : SeekBar {
     readonly Paint labelPaint = new(PaintFlags.AntiAlias);
     readonly Paint valuePaint = new(PaintFlags.AntiAlias);
     readonly Android.Graphics.Path clipPath = new();
-    readonly Android.Graphics.Path wallPath = new();
 
     float downX;
     float downY;
@@ -913,7 +899,7 @@ public sealed class OneUiSeekBar : SeekBar {
         }
 
         float targetThumb = isTouchDown ? 1f : 0f;
-        float thumbSpeed = isTouchDown ? 22f : 9f;
+        float thumbSpeed = isTouchDown ? 24f : 18f;
         thumbExpansion += (targetThumb - thumbExpansion) * Math.Min(1f, dt * thumbSpeed);
         if (MathF.Abs(targetThumb - thumbExpansion) < 0.004f) {
             thumbExpansion = targetThumb;
@@ -926,7 +912,9 @@ public sealed class OneUiSeekBar : SeekBar {
         // 1. Background translucent neutral glass track
         canvas.DrawRoundRect(bounds, radius, radius, trackPaint);
 
-        // 2. Active capsule fill + One UI 9 opacity reveal + full-height thumb + left-wall morph
+        // 2. Faithful Samsung SystemUI Control Slider Fill:
+        //    - Resting (!isTouchDown / thumbExpansion == 0) OR at Max: 100% solid uniform fill, ZERO visible ball
+        //    - Active dragging/pressing below Max: left fade 0.50 alpha -> full alpha ball (r = h/2) of exact same RGB
         if (renderedRatio > 0.0005f || (isTouchDown && Progress > 0)) {
             clipPath.Reset();
             clipPath.AddRoundRect(bounds, radius, radius, Android.Graphics.Path.Direction.Cw);
@@ -934,69 +922,43 @@ public sealed class OneUiSeekBar : SeekBar {
             canvas.ClipPath(clipPath);
 
             float fillRight = Math.Clamp(renderedRatio * w, 0f, w);
-            Color cHi = UseBlueAccent ? OneUiTheme.SecondaryHigh : OneUiTheme.SliderAccentHigh;
-            Color cLo = UseBlueAccent ? OneUiTheme.SecondaryPressed : OneUiTheme.SliderAccentEnd;
+            Color accent = UseBlueAccent ? OneUiTheme.Primary : OneUiTheme.SliderAccent;
 
-            // At 100% (Max): completely solid opaque bar so thumb merges invisibly.
-            // Dropping below 100% during interaction dims the filled track slightly while the thumb ball stays 100% opaque.
-            float maxSolidity = SmoothStep(0.945f, 0.996f, renderedRatio);
-            float reveal = thumbExpansion * (1f - maxSolidity);
-
-            Color ballColor = OneUiTheme.BlendColor(cHi, Color.White, 0.14f * reveal);
-            byte bodyLeftAlpha = (byte)Math.Round(255f - 147f * reveal);   // 255 at Max/idle -> ~108 (42%) while revealing
-            byte bodyRightAlpha = (byte)Math.Round(255f - 85f * reveal);   // 255 at Max/idle -> ~170 (67%) while revealing
-            Color bodyLeft = Color.Argb(bodyLeftAlpha, cLo.R, cLo.G, cLo.B);
-            Color bodyRight = Color.Argb(bodyRightAlpha, cHi.R, cHi.G, cHi.B);
-
-            if (fillRight >= h) {
-                using LinearGradient fillShader = new(0f, 0f, fillRight, 0f, [bodyLeft.ToArgb(), bodyRight.ToArgb()], [0f, 1f], Shader.TileMode.Clamp);
-                fillPaint.SetShader(fillShader);
-                canvas.DrawRoundRect(0f, 0f, fillRight, h, radius, radius, fillPaint);
+            if (thumbExpansion <= 0.004f) {
                 fillPaint.SetShader(null);
+                fillPaint.Color = Color.Argb(255, accent.R, accent.G, accent.B);
+                float cornerR = Math.Min(radius, Math.Max(0.5f, fillRight * 0.5f));
+                canvas.DrawRoundRect(0f, 0f, fillRight, h, cornerR, cornerR, fillPaint);
+            } else {
+                float maxSolidity = SmoothStep(0.96f, 0.999f, renderedRatio);
+                float reveal = thumbExpansion * (1f - maxSolidity);
+                byte bodyLeftAlpha = (byte)Math.Round(255f - 128f * reveal);   // 255 -> 127 (0.50f like tw_progress_color_control_activated_start)
+                byte bodyRightAlpha = (byte)Math.Round(255f - 70f * reveal);   // 255 -> 185 (0.72f near thumb)
 
-                // Full-height One UI 9 circular ball (diameter == slider height, centered at fillRight - radius)
-                float ballX = Math.Clamp(fillRight - radius, radius, w - radius);
-                float ballY = radius;
+                if (fillRight >= h) {
+                    if (reveal > 0.005f) {
+                        Color bodyLeft = Color.Argb(bodyLeftAlpha, accent.R, accent.G, accent.B);
+                        Color bodyRight = Color.Argb(bodyRightAlpha, accent.R, accent.G, accent.B);
+                        using LinearGradient fillShader = new(0f, 0f, fillRight, 0f, [bodyLeft.ToArgb(), bodyRight.ToArgb()], [0f, 1f], Shader.TileMode.Clamp);
+                        fillPaint.SetShader(fillShader);
+                    } else {
+                        fillPaint.SetShader(null);
+                        fillPaint.Color = Color.Argb(255, accent.R, accent.G, accent.B);
+                    }
+                    canvas.DrawRoundRect(0f, 0f, fillRight, h, radius, radius, fillPaint);
+                    fillPaint.SetShader(null);
 
-                if (reveal > 0.05f) {
-                    float haloR = radius * 1.25f;
-                    using RadialGradient haloGrad = new(
-                        ballX, ballY, haloR,
-                        [Color.Argb((int)(40 * reveal), 255, 255, 255).ToArgb(), Color.Transparent.ToArgb()],
-                        [0f, 1f],
-                        Shader.TileMode.Clamp);
-                    thumbHaloPaint.SetShader(haloGrad);
-                    canvas.DrawCircle(ballX, ballY, haloR, thumbHaloPaint);
-                    thumbHaloPaint.SetShader(null);
+                    if (reveal > 0.005f) {
+                        float ballX = Math.Clamp(fillRight - radius, radius, w - radius);
+                        thumbBallPaint.Color = Color.Argb((int)Math.Round(255f * reveal), accent.R, accent.G, accent.B);
+                        canvas.DrawCircle(ballX, radius, radius, thumbBallPaint);
+                    }
+                } else if (fillRight > 0.5f) {
+                    fillPaint.SetShader(null);
+                    fillPaint.Color = Color.Argb(255, accent.R, accent.G, accent.B);
+                    float cornerR = Math.Max(0.5f, fillRight * 0.5f);
+                    canvas.DrawRoundRect(0f, 0f, fillRight, h, cornerR, cornerR, fillPaint);
                 }
-
-                thumbBallPaint.Color = ballColor;
-                canvas.DrawCircle(ballX, ballY, radius, thumbBallPaint);
-
-                if (reveal > 0.05f) {
-                    thumbBallRimPaint.Color = Color.Argb((int)(56 * reveal), 255, 255, 255);
-                    canvas.DrawCircle(ballX, ballY, Math.Max(1f, radius - thumbBallRimPaint.StrokeWidth * 0.5f), thumbBallRimPaint);
-                }
-            } else if (fillRight > 0.5f) {
-                // Ball has collided with the left capsule wall (0 < fillRight < h):
-                // flattens across center first with rounded corners, curves into a subtle concave arc ("barriga ao contrário"), then finishes flat.
-                float t = Math.Clamp(fillRight / h, 0f, 1f);
-                const int steps = 28;
-                wallPath.Reset();
-                wallPath.MoveTo(0f, 0f);
-                wallPath.LineTo(EvalWallRightX(t, -1f, radius), 0f);
-                for (int s = 1; s <= steps; s++) {
-                    float u = -1f + 2f * (s / (float)steps);
-                    float y = radius * (1f + u);
-                    float x = EvalWallRightX(t, u, radius);
-                    wallPath.LineTo(x, y);
-                }
-                wallPath.LineTo(0f, h);
-                wallPath.Close();
-
-                fillPaint.SetShader(null);
-                fillPaint.Color = ballColor;
-                canvas.DrawPath(wallPath, fillPaint);
             }
 
             canvas.Restore();
@@ -1167,27 +1129,6 @@ public sealed class OneUiSeekBar : SeekBar {
         }
         float t = Math.Clamp((x - edge0) / (edge1 - edge0), 0f, 1f);
         return t * t * (3f - 2f * t);
-    }
-
-    static float EvalWallRightX(float t, float u, float r) {
-        float au = Math.Clamp(MathF.Abs(u), 0f, 1f);
-        if (t >= 0.50f) {
-            float s = (t - 0.50f) / 0.50f;
-            float p = 2.0f + 1.4f * (1.0f - s);
-            float shoulder = r * (0.90f + 0.10f * s);
-            float sag = r * MathF.Pow(s, 0.85f);
-            float prof = MathF.Sqrt(Math.Max(0f, 1.0f - MathF.Pow(au, p)));
-            return shoulder + sag * prof;
-        }
-        if (t >= 0.12f) {
-            float s = (t - 0.12f) / 0.38f;
-            float bell = MathF.Sin(MathF.PI * s);
-            float shoulder = r * (0.32f + 0.58f * s);
-            float ear = 0.06f * r * bell * MathF.Pow(au, 2.2f);
-            float dent = -0.18f * r * bell * (1.0f - au * au);
-            return shoulder + dent + ear;
-        }
-        return r * 0.32f * (t / 0.12f);
     }
 
     protected override void Dispose(bool disposing) {

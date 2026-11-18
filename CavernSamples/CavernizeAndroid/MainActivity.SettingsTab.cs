@@ -66,7 +66,7 @@ public partial class MainActivity {
         page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
 
         // 1. Spatial 3D Upmixing
-        LinearLayout upmixCard = Card(S["UpmixTitle"], OneUiIconType.Sparkles, OneUiTheme.Tertiary);
+        LinearLayout upmixCard = Card(S["UpmixTitle"], OneUiIconType.Sparkles, OneUiTheme.IconAtmosUpmix);
         matrixUpmixSwitch = AddSwitchRow(upmixCard, S["MatrixUpmix"], store.MatrixUpmixing, v => {
             store.MatrixUpmixing = v;
             ReattachPlayerTrack();
@@ -103,7 +103,7 @@ public partial class MainActivity {
         page.AddView(upmixCard);
 
         // 2. Room Acoustics, Gain & Dynamic Limiter
-        LinearLayout acousticsCard = Card(S["RoomAcousticsTitle"], OneUiIconType.Sliders, OneUiTheme.Primary);
+        LinearLayout acousticsCard = Card(S["RoomAcousticsTitle"], OneUiIconType.Sliders, OneUiTheme.IconSpatial);
         normSwitch = AddSwitchRow(acousticsCard, S["NormalizerCheck"], store.NormalizerEnabled, v => {
             store.NormalizerEnabled = v;
             playerEngine.NormalizerEnabled = v;
@@ -162,7 +162,7 @@ public partial class MainActivity {
         page.AddView(acousticsCard);
 
         // 3. Headphone HRIR & QuickEQ Calibration
-        LinearLayout rendCard = Card(S["CalibTitle"], OneUiIconType.Headphones, OneUiTheme.FunctionalGreen);
+        LinearLayout rendCard = Card(S["CalibTitle"], OneUiIconType.Headphones, OneUiTheme.IconStemsCalib);
         hrirBtn = PillButton(S["LoadHRIR"], () => {
             if (!string.IsNullOrEmpty(store.HrirPath)) {
                 VirtualizerFilter.Reset();
@@ -192,7 +192,7 @@ public partial class MainActivity {
         LinearLayout advCard = Card();
         LinearLayout advHeader = HRow();
         OneUiTheme.AttachRecoil(advHeader, 0.98f);
-        advHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Wrench, OneUiTheme.FunctionalAmber, 32));
+        advHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Wrench, OneUiTheme.IconStudioExport, 32));
         TextView advTitleTv = SectionTitle(S["AdvancedTitle"]);
         advTitleTv.SetPadding(Dp(10), 0, Dp(8), 0);
         advHeader.AddView(advTitleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -268,7 +268,7 @@ public partial class MainActivity {
         page.AddView(advCard);
 
         // 5. FFmpeg Audio Engine (Auto-Download & Updater)
-        LinearLayout ffCard = Card(S["FFmpegCardTitle"], OneUiIconType.Gear, OneUiTheme.CoralStart);
+        LinearLayout ffCard = Card(S["FFmpegCardTitle"], OneUiIconType.Gear, OneUiTheme.IconSliderMedia);
         ffmpegStatusText = Label(S["FFmpegNotInstalled"], 12.5f, OneUiTheme.TextSub);
         ffmpegStatusText.SetPadding(0, 0, 0, Dp(8));
         ffCard.AddView(ffmpegStatusText);
@@ -308,7 +308,7 @@ public partial class MainActivity {
         LinearLayout thdCard = Card();
         LinearLayout thdHeader = HRow();
         thdHeader.SetPadding(0, 0, 0, Dp(10));
-        thdHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Sparkles, OneUiTheme.Tertiary));
+        thdHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Sparkles, OneUiTheme.IconAtmosUpmix));
         TextView thdTitleTv = SectionTitle(S["TruehddCardTitle"]);
         thdTitleTv.SetPadding(Dp(10), 0, Dp(8), 0);
         thdHeader.AddView(thdTitleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -340,7 +340,7 @@ public partial class MainActivity {
         page.AddView(thdCard);
 
         // 6. Diagnostics & Shared Logs
-        LinearLayout logCard = Card(S["DiagnosticsTitle"], OneUiIconType.Logs, OneUiTheme.FunctionalCyan);
+        LinearLayout logCard = Card(S["DiagnosticsTitle"], OneUiIconType.Logs, OneUiTheme.IconSystemInfo);
         logPathInfoText = Label("", 11.5f, ColMuted);
         logPathInfoText.SetPadding(0, 0, 0, Dp(8));
         RefreshLogSummaryLabel();
@@ -370,7 +370,7 @@ public partial class MainActivity {
         page.AddView(logCard);
 
         // 7. Language, About & App Version Updater
-        LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.Secondary);
+        LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.IconSystemInfo);
         OneUiInlineSelector langSelector = new(this, S["LanguageLabel"]);
         string[] langLabels = ["Auto (System)", "Português (Brasil)", "English", "Magyar", "简体中文"];
         string[] langCodes = ["", "pt-BR", "en-US", "hu-HU", "zh-CN"];
@@ -407,7 +407,7 @@ public partial class MainActivity {
         updateCurrentVerLabel.SetTypeface(null, TypefaceStyle.Bold);
         helpCard.AddView(updateCurrentVerLabel);
 
-        updateSettingsStatusText = Label(S["Ready"], 12f, ColCyan);
+        updateSettingsStatusText = Label(S["Ready"], 12f, OneUiTheme.IconSystemInfo);
         updateSettingsStatusText.SetPadding(0, Dp(2), 0, Dp(6));
         helpCard.AddView(updateSettingsStatusText);
 

@@ -37,7 +37,21 @@ public enum OneUiIconType {
     Rewind10,
     Forward10,
     RepeatLoop,
-    PlayerDisc
+    PlayerDisc,
+    RewindStart,
+    LyricsQuote,
+    VideoCamera,
+    PictureArt,
+    ZoomIn,
+    ZoomOut
+}
+
+public enum OneUiTabKind {
+    Player,
+    Room3D,
+    Studio,
+    Stems,
+    Settings
 }
 
 /// <summary>
@@ -296,6 +310,61 @@ public static class OneUiVectorIcons {
                 canvas.DrawCircle(cx, cy, r * 0.24f, stroke);
                 canvas.DrawArc(new RectF(cx - r * 0.52f, cy - r * 0.52f, cx + r * 0.52f, cy + r * 0.52f), -65f, 95f, false, stroke);
                 break;
+
+            case OneUiIconType.RewindStart:
+                float barX = cx - r * 0.62f;
+                canvas.DrawLine(barX, cy - r * 0.58f, barX, cy + r * 0.58f, stroke);
+                p.MoveTo(cx + r * 0.62f, cy - r * 0.60f);
+                p.LineTo(cx - r * 0.34f, cy);
+                p.LineTo(cx + r * 0.62f, cy + r * 0.60f);
+                p.Close();
+                canvas.DrawPath(p, fill);
+                break;
+
+            case OneUiIconType.LyricsQuote:
+                // Apple Music ic_nowplaying_lyrics rounded quote bubble
+                canvas.DrawRoundRect(new RectF(cx - r * 0.84f, cy - r * 0.72f, cx + r * 0.84f, cy + r * 0.50f), r * 0.30f, r * 0.30f, stroke);
+                p.MoveTo(cx - r * 0.36f, cy + r * 0.50f);
+                p.LineTo(cx - r * 0.42f, cy + r * 0.86f);
+                p.LineTo(cx - r * 0.04f, cy + r * 0.50f);
+                canvas.DrawPath(p, stroke);
+                canvas.DrawCircle(cx - r * 0.28f, cy - r * 0.14f, r * 0.15f, fill);
+                canvas.DrawCircle(cx + r * 0.28f, cy - r * 0.14f, r * 0.15f, fill);
+                break;
+
+            case OneUiIconType.VideoCamera:
+                canvas.DrawRoundRect(new RectF(cx - r * 0.86f, cy - r * 0.54f, cx + r * 0.36f, cy + r * 0.54f), r * 0.24f, r * 0.24f, stroke);
+                p.MoveTo(cx + r * 0.38f, cy - r * 0.22f);
+                p.LineTo(cx + r * 0.88f, cy - r * 0.48f);
+                p.LineTo(cx + r * 0.88f, cy + r * 0.48f);
+                p.LineTo(cx + r * 0.38f, cy + r * 0.22f);
+                p.Close();
+                canvas.DrawPath(p, stroke);
+                break;
+
+            case OneUiIconType.PictureArt:
+                canvas.DrawRoundRect(new RectF(cx - r * 0.80f, cy - r * 0.80f, cx + r * 0.80f, cy + r * 0.80f), r * 0.28f, r * 0.28f, stroke);
+                canvas.DrawCircle(cx - r * 0.28f, cy - r * 0.24f, r * 0.16f, fill);
+                p.MoveTo(cx - r * 0.62f, cy + r * 0.56f);
+                p.LineTo(cx - r * 0.14f, cy + r * 0.10f);
+                p.LineTo(cx + r * 0.16f, cy + r * 0.34f);
+                p.LineTo(cx + r * 0.46f, cy + r * 0.02f);
+                p.LineTo(cx + r * 0.68f, cy + r * 0.56f);
+                canvas.DrawPath(p, stroke);
+                break;
+
+            case OneUiIconType.ZoomIn:
+                canvas.DrawCircle(cx - r * 0.14f, cy - r * 0.14f, r * 0.58f, stroke);
+                canvas.DrawLine(cx + r * 0.28f, cy + r * 0.28f, cx + r * 0.78f, cy + r * 0.78f, stroke);
+                canvas.DrawLine(cx - r * 0.36f, cy - r * 0.14f, cx + r * 0.08f, cy - r * 0.14f, stroke);
+                canvas.DrawLine(cx - r * 0.14f, cy - r * 0.36f, cx - r * 0.14f, cy + r * 0.08f, stroke);
+                break;
+
+            case OneUiIconType.ZoomOut:
+                canvas.DrawCircle(cx - r * 0.14f, cy - r * 0.14f, r * 0.58f, stroke);
+                canvas.DrawLine(cx + r * 0.28f, cy + r * 0.28f, cx + r * 0.78f, cy + r * 0.78f, stroke);
+                canvas.DrawLine(cx - r * 0.36f, cy - r * 0.14f, cx + r * 0.08f, cy - r * 0.14f, stroke);
+                break;
         }
     }
 }
@@ -338,28 +407,48 @@ public sealed class OneUiIconView : View {
 }
 
 /// <summary>
-/// Samsung One UI 9 squircle/circle colored icon badge containing a crisp anti-aliased vector glyph.
+/// Samsung One UI 9 squircle icon badge containing a crisp anti-aliased vector glyph.
+/// Uses frosted translucent squircle tinting for section headers and solid fill when highlighted (e.g. active Bento tiles).
 /// </summary>
 public sealed class OneUiIconBadge : View {
     readonly Paint bgPaint = new(PaintFlags.AntiAlias);
+    readonly Paint rimPaint = new(PaintFlags.AntiAlias);
     OneUiIconType iconType;
     Color badgeColor;
     Color glyphColor = OneUiTheme.TextPrimary;
+    bool isSolid;
 
-    public OneUiIconBadge(Context ctx, OneUiIconType type, Color badgeColor) : base(ctx) {
+    public OneUiIconBadge(Context ctx, OneUiIconType type, Color badgeColor, bool solid = false) : base(ctx) {
         iconType = type;
         this.badgeColor = badgeColor;
-        bgPaint.Color = badgeColor;
+        isSolid = solid;
         bgPaint.SetStyle(Paint.Style.Fill);
+        rimPaint.SetStyle(Paint.Style.Stroke);
+        rimPaint.StrokeWidth = Math.Max(1.2f, OneUiTheme.Dp(ctx, 1.0f));
+        ApplyPaintState();
     }
 
-    public void UpdateColors(Color newBadgeColor, Color? newGlyphColor = null) {
+    public void UpdateColors(Color newBadgeColor, Color? newGlyphColor = null, bool? solidOverride = null) {
         badgeColor = newBadgeColor;
-        bgPaint.Color = newBadgeColor;
+        if (solidOverride.HasValue) {
+            isSolid = solidOverride.Value;
+        }
         if (newGlyphColor.HasValue) {
             glyphColor = newGlyphColor.Value;
         }
+        ApplyPaintState();
         Invalidate();
+    }
+
+    void ApplyPaintState() {
+        if (isSolid) {
+            bgPaint.Color = badgeColor;
+            rimPaint.Color = Color.Transparent;
+        } else {
+            bgPaint.Color = Color.Argb(44, badgeColor.R, badgeColor.G, badgeColor.B);
+            rimPaint.Color = Color.Argb(115, badgeColor.R, badgeColor.G, badgeColor.B);
+            glyphColor = OneUiTheme.BlendColor(badgeColor, Color.White, 0.28f);
+        }
     }
 
     protected override void OnDraw(Canvas canvas) {
@@ -371,8 +460,193 @@ public sealed class OneUiIconBadge : View {
         }
 
         float rad = Math.Min(w, h) * 0.36f; // One UI squircle curvature
-        canvas.DrawRoundRect(new RectF(0, 0, w, h), rad, rad, bgPaint);
-        OneUiVectorIcons.DrawIcon(canvas, iconType, w * 0.5f, h * 0.5f, Math.Min(w, h) * 0.62f, glyphColor);
+        float inset = rimPaint.StrokeWidth * 0.5f;
+        RectF r = new(inset, inset, w - inset, h - inset);
+        canvas.DrawRoundRect(r, rad, rad, bgPaint);
+        if (!isSolid) {
+            canvas.DrawRoundRect(r, rad, rad, rimPaint);
+        }
+        OneUiVectorIcons.DrawIcon(canvas, iconType, w * 0.5f, h * 0.5f, Math.Min(w, h) * 0.58f, glyphColor);
+    }
+}
+
+/// <summary>
+/// Semi-transparent frosted line / even-odd cutout solid icon modeled directly after Samsung Gallery's bottom tab bar
+/// (SamsungGallery2018.apk sesl_bottom_navigation_item: semi-transparent glass line unselected, crisp solid cutout selected).
+/// </summary>
+public sealed class OneUiTabIconView : View {
+    readonly Paint solidPaint = new(PaintFlags.AntiAlias);
+    readonly Paint glassFillPaint = new(PaintFlags.AntiAlias);
+    readonly Paint linePaint = new(PaintFlags.AntiAlias);
+    readonly Android.Graphics.Path evenOddPath = new();
+
+    OneUiTabKind kind;
+    bool isTabSelected;
+
+    public bool IsTabSelected {
+        get => isTabSelected;
+        set {
+            if (isTabSelected != value) {
+                isTabSelected = value;
+                Invalidate();
+            }
+        }
+    }
+
+    public OneUiTabIconView(Context ctx, OneUiTabKind kind) : base(ctx) {
+        this.kind = kind;
+        float dp = ctx.Resources.DisplayMetrics.Density;
+
+        solidPaint.Color = Color.Argb(245, 252, 252, 255); // #FCFCFF
+        solidPaint.SetStyle(Paint.Style.Fill);
+
+        glassFillPaint.Color = Color.Argb(38, 255, 255, 255); // translucent frosted interior
+        glassFillPaint.SetStyle(Paint.Style.Fill);
+
+        linePaint.Color = Color.Argb(196, 188, 190, 196); // semi-transparent frosted stroke
+        linePaint.StrokeWidth = Math.Max(1.4f, 1.55f * dp);
+        linePaint.StrokeCap = Paint.Cap.Round;
+        linePaint.StrokeJoin = Paint.Join.Round;
+        linePaint.SetStyle(Paint.Style.Stroke);
+    }
+
+    protected override void OnDraw(Canvas canvas) {
+        base.OnDraw(canvas);
+        float w = Width;
+        float h = Height;
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+
+        float cx = w * 0.5f;
+        float cy = h * 0.5f;
+        float r = Math.Min(w, h) * 0.36f;
+
+        if (isTabSelected) {
+            evenOddPath.Reset();
+            evenOddPath.SetFillType(Android.Graphics.Path.FillType.EvenOdd);
+            BuildSelectedCutoutPath(evenOddPath, cx, cy, r);
+            canvas.DrawPath(evenOddPath, solidPaint);
+        } else {
+            DrawUnselectedGlassIcon(canvas, cx, cy, r);
+        }
+    }
+
+    void DrawUnselectedGlassIcon(Canvas canvas, float cx, float cy, float r) {
+        RectF outer = new(cx - r * 0.88f, cy - r * 0.88f, cx + r * 0.88f, cy + r * 0.88f);
+        float rr = r * 0.34f;
+        using Android.Graphics.Path p = new();
+
+        switch (kind) {
+            case OneUiTabKind.Player:
+                canvas.DrawRoundRect(outer, rr, rr, glassFillPaint);
+                canvas.DrawRoundRect(outer, rr, rr, linePaint);
+                p.MoveTo(cx - r * 0.24f, cy - r * 0.36f);
+                p.LineTo(cx + r * 0.42f, cy);
+                p.LineTo(cx - r * 0.24f, cy + r * 0.36f);
+                p.Close();
+                canvas.DrawPath(p, linePaint);
+                break;
+
+            case OneUiTabKind.Room3D:
+                p.MoveTo(cx, cy - r * 0.94f);
+                p.LineTo(cx + r * 0.84f, cy - r * 0.47f);
+                p.LineTo(cx + r * 0.84f, cy + r * 0.47f);
+                p.LineTo(cx, cy + r * 0.94f);
+                p.LineTo(cx - r * 0.84f, cy + r * 0.47f);
+                p.LineTo(cx - r * 0.84f, cy - r * 0.47f);
+                p.Close();
+                canvas.DrawPath(p, glassFillPaint);
+                canvas.DrawPath(p, linePaint);
+                canvas.DrawLine(cx, cy, cx + r * 0.84f, cy - r * 0.47f, linePaint);
+                canvas.DrawLine(cx, cy, cx - r * 0.84f, cy - r * 0.47f, linePaint);
+                canvas.DrawLine(cx, cy, cx, cy + r * 0.94f, linePaint);
+                break;
+
+            case OneUiTabKind.Studio:
+                canvas.DrawRoundRect(outer, rr, rr, glassFillPaint);
+                canvas.DrawRoundRect(outer, rr, rr, linePaint);
+                canvas.DrawLine(cx - r * 0.42f, cy - r * 0.16f, cx - r * 0.42f, cy + r * 0.38f, linePaint);
+                canvas.DrawLine(cx, cy - r * 0.44f, cx, cy + r * 0.38f, linePaint);
+                canvas.DrawLine(cx + r * 0.42f, cy - r * 0.26f, cx + r * 0.42f, cy + r * 0.38f, linePaint);
+                break;
+
+            case OneUiTabKind.Stems:
+                canvas.DrawRoundRect(new RectF(cx - r * 0.88f, cy - r * 0.86f, cx - r * 0.14f, cy + r * 0.86f), rr * 0.7f, rr * 0.7f, glassFillPaint);
+                canvas.DrawRoundRect(new RectF(cx - r * 0.88f, cy - r * 0.86f, cx - r * 0.14f, cy + r * 0.86f), rr * 0.7f, rr * 0.7f, linePaint);
+                canvas.DrawRoundRect(new RectF(cx + r * 0.14f, cy - r * 0.86f, cx + r * 0.88f, cy - r * 0.10f), rr * 0.7f, rr * 0.7f, glassFillPaint);
+                canvas.DrawRoundRect(new RectF(cx + r * 0.14f, cy - r * 0.86f, cx + r * 0.88f, cy - r * 0.10f), rr * 0.7f, rr * 0.7f, linePaint);
+                canvas.DrawRoundRect(new RectF(cx + r * 0.14f, cy + r * 0.12f, cx + r * 0.88f, cy + r * 0.86f), rr * 0.7f, rr * 0.7f, glassFillPaint);
+                canvas.DrawRoundRect(new RectF(cx + r * 0.14f, cy + r * 0.12f, cx + r * 0.88f, cy + r * 0.86f), rr * 0.7f, rr * 0.7f, linePaint);
+                break;
+
+            case OneUiTabKind.Settings:
+                canvas.DrawCircle(cx, cy, r * 0.72f, glassFillPaint);
+                canvas.DrawCircle(cx, cy, r * 0.72f, linePaint);
+                canvas.DrawCircle(cx, cy, r * 0.28f, linePaint);
+                for (int i = 0; i < 6; i++) {
+                    float a = i * MathF.PI / 3f;
+                    canvas.DrawLine(
+                        cx + MathF.Cos(a) * r * 0.72f, cy + MathF.Sin(a) * r * 0.72f,
+                        cx + MathF.Cos(a) * r * 0.96f, cy + MathF.Sin(a) * r * 0.96f,
+                        linePaint);
+                }
+                break;
+        }
+    }
+
+    void BuildSelectedCutoutPath(Android.Graphics.Path path, float cx, float cy, float r) {
+        RectF outer = new(cx - r * 0.92f, cy - r * 0.92f, cx + r * 0.92f, cy + r * 0.92f);
+        float rr = r * 0.36f;
+
+        switch (kind) {
+            case OneUiTabKind.Player:
+                path.AddRoundRect(outer, rr, rr, Android.Graphics.Path.Direction.Cw);
+                path.MoveTo(cx - r * 0.24f, cy - r * 0.40f);
+                path.LineTo(cx + r * 0.46f, cy);
+                path.LineTo(cx - r * 0.24f, cy + r * 0.40f);
+                path.Close();
+                break;
+
+            case OneUiTabKind.Room3D:
+                path.MoveTo(cx, cy - r * 0.96f);
+                path.LineTo(cx + r * 0.88f, cy - r * 0.48f);
+                path.LineTo(cx + r * 0.88f, cy + r * 0.48f);
+                path.LineTo(cx, cy + r * 0.96f);
+                path.LineTo(cx - r * 0.88f, cy + r * 0.48f);
+                path.LineTo(cx - r * 0.88f, cy - r * 0.48f);
+                path.Close();
+                // Cutout Y-axes inside solid hexagon cube
+                float lw = r * 0.11f;
+                path.AddCircle(cx, cy, r * 0.20f, Android.Graphics.Path.Direction.Cw);
+                path.AddRoundRect(new RectF(cx - lw, cy + r * 0.16f, cx + lw, cy + r * 0.86f), lw, lw, Android.Graphics.Path.Direction.Cw);
+                break;
+
+            case OneUiTabKind.Studio:
+                path.AddRoundRect(outer, rr, rr, Android.Graphics.Path.Direction.Cw);
+                float bw = r * 0.12f;
+                path.AddRoundRect(new RectF(cx - r * 0.46f - bw, cy - r * 0.16f, cx - r * 0.46f + bw, cy + r * 0.44f), bw, bw, Android.Graphics.Path.Direction.Cw);
+                path.AddRoundRect(new RectF(cx - bw, cy - r * 0.46f, cx + bw, cy + r * 0.44f), bw, bw, Android.Graphics.Path.Direction.Cw);
+                path.AddRoundRect(new RectF(cx + r * 0.46f - bw, cy - r * 0.28f, cx + r * 0.46f + bw, cy + r * 0.44f), bw, bw, Android.Graphics.Path.Direction.Cw);
+                break;
+
+            case OneUiTabKind.Stems:
+                path.AddRoundRect(new RectF(cx - r * 0.90f, cy - r * 0.88f, cx - r * 0.10f, cy + r * 0.88f), rr * 0.65f, rr * 0.65f, Android.Graphics.Path.Direction.Cw);
+                path.AddRoundRect(new RectF(cx + r * 0.12f, cy - r * 0.88f, cx + r * 0.90f, cy - r * 0.10f), rr * 0.65f, rr * 0.65f, Android.Graphics.Path.Direction.Cw);
+                path.AddRoundRect(new RectF(cx + r * 0.12f, cy + r * 0.12f, cx + r * 0.90f, cy + r * 0.88f), rr * 0.65f, rr * 0.65f, Android.Graphics.Path.Direction.Cw);
+                break;
+
+            case OneUiTabKind.Settings:
+                path.AddCircle(cx, cy, r * 0.78f, Android.Graphics.Path.Direction.Cw);
+                for (int i = 0; i < 6; i++) {
+                    float a = i * MathF.PI / 3f;
+                    float tx = cx + MathF.Cos(a) * r * 0.82f;
+                    float ty = cy + MathF.Sin(a) * r * 0.82f;
+                    path.AddCircle(tx, ty, r * 0.20f, Android.Graphics.Path.Direction.Cw);
+                }
+                path.AddCircle(cx, cy, r * 0.34f, Android.Graphics.Path.Direction.Ccw);
+                break;
+        }
     }
 }
 

@@ -32,7 +32,7 @@ public partial class MainActivity {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
         page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
 
-        LinearLayout card = Card(S["ExtractTitle"], OneUiIconType.Scissors, OneUiTheme.FunctionalIndigo);
+        LinearLayout card = Card(S["ExtractTitle"], OneUiIconType.Scissors, OneUiTheme.IconStemsCalib);
         TextView desc = Label(S["ExtractDesc"], 12f, OneUiTheme.TextSub);
         desc.SetPadding(0, 0, 0, Dp(10));
         card.AddView(desc);
@@ -141,13 +141,13 @@ public partial class MainActivity {
         OneUiTheme.StyleProgressBar(this, extractProgressBar);
         card.AddView(extractProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { TopMargin = Dp(4) });
 
-        extractStatusText = Label(S["Ready"], 12f, ColCyan);
+        extractStatusText = Label(S["Ready"], 12f, OneUiTheme.IconSystemInfo);
         extractStatusText.SetPadding(0, Dp(6), 0, Dp(4));
         card.AddView(extractStatusText);
 
         page.AddView(card);
 
-        LinearLayout outCard = Card("Output / Stems", OneUiIconType.Folder, OneUiTheme.FunctionalGreen);
+        LinearLayout outCard = Card("Output / Stems", OneUiIconType.Folder, OneUiTheme.IconStudioExport);
         extractedFilesContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
         outCard.AddView(extractedFilesContainer);
         page.AddView(outCard);

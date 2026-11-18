@@ -49,7 +49,7 @@ jobs:
           dotnet publish CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
             -c Release -f net11.0-android \
             -p:ApplicationVersion=${{ github.run_number }} \
-            -p:ApplicationDisplayVersion=2.5.${{ github.run_number }} \
+            -p:ApplicationDisplayVersion=2.6.${{ github.run_number }} \
             -p:AndroidPackageFormat=apk \
             -p:AndroidKeyStore=true \
             -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/cavernize.keystore" \
@@ -75,6 +75,23 @@ jobs:
           name: Cavernize-APK
           path: build/Cavernize-Android.apk
 
+      - name: Publish versioned GitHub Release (permanent archive)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v2.6.${{ github.run_number }}"
+          target_commitish: ${{ github.sha }}
+          name: "Cavernize Android v2.6.${{ github.run_number }}"
+          body: |
+            Permanent archive release for Cavernize Android `v2.6.${{ github.run_number }}` (Build `${{ github.run_number }}`, commit `${{ github.sha }}`).
+            - Exact One UI 9 Quick Panel Slider Palette & Resting Solid State (`system_accent2_300`), Harmonized 6-Role Vector Icon Badges, and Samsung Gallery Translucent Floating Pill Navigation Bar.
+            - Player Tab: Synced Video Stage (muted `TextureView` + `MediaPlayer` with YouTube/Samsung single-tap HUD & double-tap `±10s` radial bloom) and Apple Music-inspired Live Lyrics sheet (`.lrc`/`.txt`/embedded ID3v2/Vorbis/MP4/FFmpeg tags with tap-to-seek).
+            - 3D Room Tab: Pinch-to-zoom, `-/+` zoom controls, label-tap zoom reset, harmonized `SliderAccent` height bar, and symmetric 5-icon transport bar.
+          prerelease: false
+          make_latest: false
+          files: build/Cavernize-Android.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Update android-latest tag
         run: |
           git config user.name "github-actions[bot]"
@@ -82,16 +99,17 @@ jobs:
           git tag -f android-latest HEAD
           git push origin refs/tags/android-latest --force
 
-      - name: Publish GitHub Release
+      - name: Publish GitHub Release (OTA android-latest)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
-          name: "Cavernize Android v2.5.${{ github.run_number }}"
+          name: "Cavernize Android v2.6.${{ github.run_number }}"
           body: |
             Automated signed Android APK build for Cavernize (`${{ github.sha }}`).
-            - Version: `v2.5.${{ github.run_number }}` (Build `${{ github.run_number }}`)
-            - Highlights: Full Dolby TrueHD & Dolby Atmos TrueHD Support via Official Static `truehdd` (`aarch64-unknown-linux-musl` Auto-Installer/Updater in `FilesDir/bin/truehdd`), Real-time TrueHD Atmos 3D Playback / Studio Export / Stem Extraction (`--extract` + `.json`), Smart FFmpeg MKV/M2TS/MP4 Container Probe & Demux Fallback, Automatic Temporary Cache Cleanup, Plus All v2.4 Spatial Player & One UI 9 Features.
+            - Version: `v2.6.${{ github.run_number }}` (Build `${{ github.run_number }}`)
+            - Highlights: Exact One UI 9 Palette (`system_accent2_300` sliders + harmonized semantic badges), Samsung Gallery Floating Pill Nav Bar, Synced YouTube/Samsung Video Player (`±10s` double-tap bloom), Apple Music-inspired Synced Live Lyrics (`.lrc`/`.txt`/embedded), 3D Room Pinch & Button Zoom, Symmetric 3D Room Transport Bar, Plus Full Dolby TrueHD Atmos (`truehdd`) & All Previous Releases Preserved Individually.
           prerelease: false
+          make_latest: true
           files: build/Cavernize-Android.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

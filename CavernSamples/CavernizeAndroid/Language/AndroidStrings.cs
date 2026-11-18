@@ -57,6 +57,13 @@ public sealed class AndroidStrings {
         ["PlayerSwitchTrack"] = "Audio Track",
         ["PlayerBadgeSpatial"] = "Spatial 3D",
         ["PlayerQuickMatrix"] = "Matrix 7.1",
+        ["ModeCover"] = "Cover",
+        ["ModeVideo"] = "Video",
+        ["ModeLyrics"] = "Lyrics",
+        ["NoLyricsFound"] = "No lyrics found.\nPlace an adjacent .lrc or .txt file with the same name as this track, or open media with embedded lyrics.",
+        ["LyricsTapHint"] = "Synced Live Lyrics • Tap a line to jump",
+        ["LyricsUnsyncedHint"] = "Static Lyrics (.txt / tags)",
+        ["VideoSyncBadge"] = "Synced Video + Spatial 3D • Double-tap ±10s",
 
         // Player & Room
         ["RoomTitle"] = "3D Room",
@@ -311,6 +318,13 @@ public sealed class AndroidStrings {
         d["PlayerSwitchTrack"] = "Faixa de Áudio";
         d["PlayerBadgeSpatial"] = "Espacial 3D";
         d["PlayerQuickMatrix"] = "Matrix 7.1";
+        d["ModeCover"] = "Capa";
+        d["ModeVideo"] = "Vídeo";
+        d["ModeLyrics"] = "Letra";
+        d["NoLyricsFound"] = "Nenhuma letra encontrada.\nColoque um arquivo .lrc ou .txt com o mesmo nome na pasta da música, ou abra mídia com letra embutida.";
+        d["LyricsTapHint"] = "Letra Sincronizada • Toque em um verso para pular";
+        d["LyricsUnsyncedHint"] = "Letra Estática (.txt / tags)";
+        d["VideoSyncBadge"] = "Vídeo + Áudio 3D • Toque duplo ±10s";
 
         d["RoomTitle"] = "Sala 3D";
         d["PresetCenter"] = "Centro";
@@ -546,6 +560,9 @@ public sealed class AndroidStrings {
         d["TabConvert"] = "Konvertálás";
         d["TabExtract"] = "Kivonó";
         d["TabSettings"] = "Sor & Beáll.";
+        d["ModeCover"] = "Borító";
+        d["ModeVideo"] = "Videó";
+        d["ModeLyrics"] = "Dalszöveg";
         d["Play"] = "Lejátszás";
         d["Pause"] = "Szünet";
         d["Stop"] = "Leállítás";
@@ -572,6 +589,9 @@ public sealed class AndroidStrings {
         d["TabConvert"] = "转换导出";
         d["TabExtract"] = "分轨提取";
         d["TabSettings"] = "队列与设置";
+        d["ModeCover"] = "封面";
+        d["ModeVideo"] = "视频";
+        d["ModeLyrics"] = "歌词";
         d["Play"] = "播放";
         d["Pause"] = "暂停";
         d["Stop"] = "停止";
