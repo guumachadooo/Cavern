@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   android:
@@ -91,6 +92,104 @@ jobs:
           files: build/Cavernize-Android.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure historical GitHub Releases are preserved
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - << 'PY'
+          import io, json, os, urllib.error, urllib.parse, urllib.request, zipfile
+
+          owner, repo = "guumachadooo", "Cavern"
+          token = os.environ["GITHUB_TOKEN"]
+          historical = [
+              {"run_id": 44092514428, "run_number": 5,  "sha": "5c3888bb537d0eb4b4cb46db0a9ad5e6a40b3056", "tag": "v2.1.0-r5", "title": "Cavernize Android v2.1.0 (Build 5)"},
+              {"run_id": 44108117984, "run_number": 7,  "sha": "35f488da135077550a888097023c6c477f5169c4", "tag": "v2.1.7",    "title": "Cavernize Android v2.1.7"},
+              {"run_id": 44128159220, "run_number": 9,  "sha": "810e831823833290e532b2d5b762a3d455825fc4", "tag": "v2.1.9",    "title": "Cavernize Android v2.1.9"},
+              {"run_id": 44145020315, "run_number": 10, "sha": "52bd815b79f89614e3d76d0996cb76c1f1bb76b1", "tag": "v2.2.10",   "title": "Cavernize Android v2.2.10"},
+              {"run_id": 44155950178, "run_number": 11, "sha": "9dab265fdf9f3e2fa4517a5cd8ed08328bd6f5e5", "tag": "v2.3.11",   "title": "Cavernize Android v2.3.11"},
+              {"run_id": 44172998290, "run_number": 13, "sha": "46d17a61643d7b38bf15d790497c1ed90bf963f6", "tag": "v2.4.13",   "title": "Cavernize Android v2.4.13"},
+              {"run_id": 44189543697, "run_number": 15, "sha": "330fd03b5822a2a89813f22b43723d6ea78f5c70", "tag": "v2.5.15",   "title": "Cavernize Android v2.5.15"},
+              {"run_id": 44196075428, "run_number": 16, "sha": "9b724bb776887efcb08351c0fb544162b7701d9e", "tag": "v2.5.16",   "title": "Cavernize Android v2.5.16"},
+          ]
+
+          class NoRedir(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          def api(method, url, payload=None):
+              body = json.dumps(payload).encode() if payload is not None else None
+              headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+              if body is not None:
+                  headers["Content-Type"] = "application/json"
+              req = urllib.request.Request(url, data=body, headers=headers, method=method)
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  return json.loads(resp.read().decode())
+
+          existing = {r["tag_name"]: r for r in api("GET", f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=50")}
+          opener = urllib.request.build_opener(NoRedir())
+
+          for item in historical:
+              tag = item["tag"]
+              rel = existing.get(tag)
+              if rel is None:
+                  rel = api("POST", f"https://api.github.com/repos/{owner}/{repo}/releases", {
+                      "tag_name": tag,
+                      "target_commitish": item["sha"],
+                      "name": item["title"],
+                      "body": f"Restored historical CI Build #{item['run_number']} (`{item['sha']}`).",
+                      "draft": False,
+                      "prerelease": False,
+                      "make_latest": "false",
+                  })
+                  print(f"Created release {tag}", flush=True)
+
+              if any(a["name"] == "Cavernize-Android.apk" for a in rel.get("assets", [])):
+                  print(f"Release {tag} already has Cavernize-Android.apk", flush=True)
+                  continue
+
+              try:
+                  arts = api("GET", f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{item['run_id']}/artifacts")
+                  apk_bytes = None
+                  for art in arts.get("artifacts", []):
+                      if art.get("expired"):
+                          continue
+                      req = urllib.request.Request(art["archive_download_url"], headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"})
+                      try:
+                          zip_bytes = opener.open(req, timeout=60).read()
+                      except urllib.error.HTTPError as e:
+                          if e.code in (301, 302, 303, 307, 308):
+                              zip_bytes = urllib.request.urlopen(urllib.request.Request(e.headers["Location"]), timeout=60).read()
+                          else:
+                              raise
+                      with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                          for name in zf.namelist():
+                              if name.endswith(".apk"):
+                                  apk_bytes = zf.read(name)
+                                  break
+                      if apk_bytes:
+                          break
+                  if not apk_bytes:
+                      print(f"No live APK artifact for {tag} (run {item['run_id']})", flush=True)
+                      continue
+                  upload_url = rel["upload_url"].split("{", 1)[0] + "?name=Cavernize-Android.apk"
+                  up_req = urllib.request.Request(
+                      upload_url,
+                      data=apk_bytes,
+                      headers={
+                          "Authorization": f"token {token}",
+                          "Accept": "application/vnd.github+json",
+                          "Content-Type": "application/vnd.android.package-archive",
+                          "Content-Length": str(len(apk_bytes)),
+                      },
+                      method="POST",
+                  )
+                  with urllib.request.urlopen(up_req, timeout=90) as resp:
+                      res = json.loads(resp.read().decode())
+                  print(f"Uploaded Cavernize-Android.apk to {tag} ({len(apk_bytes)} bytes, asset={res['id']})", flush=True)
+              except Exception as ex:
+                  print(f"Warning restoring {tag}: {ex}", flush=True)
+          PY
 
       - name: Update android-latest tag
         run: |

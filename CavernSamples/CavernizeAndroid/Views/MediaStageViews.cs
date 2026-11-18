@@ -9,7 +9,6 @@ using CavernizeAndroid.Services;
 using CavernizeAndroid.Theme;
 
 using AndroidMediaPlayer = Android.Media.MediaPlayer;
-using AndroidMediaSeekMode = Android.Media.MediaSeekMode;
 
 namespace CavernizeAndroid.Views;
 
@@ -306,7 +305,7 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
 
     void SeekInternal(long ms) {
         lastDriftCorrectionMs = SystemClock.UptimeMillis();
-        mediaPlayer?.SeekTo(ms, AndroidMediaSeekMode.ClosestSync);
+        mediaPlayer?.SeekTo((int)Math.Clamp(ms, 0, int.MaxValue));
     }
 
     void CreateAndPreparePlayer(SurfaceTexture st) {
