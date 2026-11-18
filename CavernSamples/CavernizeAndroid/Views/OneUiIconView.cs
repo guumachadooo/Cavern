@@ -53,7 +53,12 @@ public enum OneUiIconType {
     SpeakerHigh,
     AppleRewind,
     AppleForward,
-    LabelsTag
+    LabelsTag,
+    Search,
+    LibraryGrid,
+    Globe,
+    ChevronLeft,
+    Refresh
 }
 
 public enum OneUiTabKind {
@@ -493,6 +498,41 @@ public static class OneUiVectorIcons {
                 canvas.DrawRoundRect(new RectF(cx - r * 0.82f, cy - r * 0.56f, cx + r * 0.82f, cy + r * 0.56f), r * 0.24f, r * 0.24f, stroke);
                 canvas.DrawLine(cx - r * 0.48f, cy - r * 0.14f, cx + r * 0.48f, cy - r * 0.14f, stroke);
                 canvas.DrawLine(cx - r * 0.48f, cy + r * 0.18f, cx + r * 0.18f, cy + r * 0.18f, stroke);
+                break;
+
+            case OneUiIconType.Search:
+                canvas.DrawCircle(cx - r * 0.14f, cy - r * 0.14f, r * 0.56f, stroke);
+                canvas.DrawLine(cx + r * 0.26f, cy + r * 0.26f, cx + r * 0.80f, cy + r * 0.80f, stroke);
+                break;
+
+            case OneUiIconType.LibraryGrid:
+                float gGap = r * 0.14f;
+                float gRad = r * 0.18f;
+                canvas.DrawRoundRect(new RectF(cx - r * 0.84f, cy - r * 0.84f, cx - gGap, cy - gGap), gRad, gRad, stroke);
+                canvas.DrawRoundRect(new RectF(cx + gGap, cy - r * 0.84f, cx + r * 0.84f, cy - gGap), gRad, gRad, stroke);
+                canvas.DrawRoundRect(new RectF(cx - r * 0.84f, cy + gGap, cx - gGap, cy + r * 0.84f), gRad, gRad, stroke);
+                canvas.DrawRoundRect(new RectF(cx + gGap, cy + gGap, cx + r * 0.84f, cy + r * 0.84f), gRad, gRad, stroke);
+                break;
+
+            case OneUiIconType.Globe:
+                canvas.DrawCircle(cx, cy, r * 0.82f, stroke);
+                canvas.DrawOval(new RectF(cx - r * 0.36f, cy - r * 0.82f, cx + r * 0.36f, cy + r * 0.82f), stroke);
+                canvas.DrawLine(cx - r * 0.80f, cy, cx + r * 0.80f, cy, stroke);
+                break;
+
+            case OneUiIconType.ChevronLeft:
+                p.MoveTo(cx + r * 0.26f, cy - r * 0.64f);
+                p.LineTo(cx - r * 0.36f, cy);
+                p.LineTo(cx + r * 0.26f, cy + r * 0.64f);
+                canvas.DrawPath(p, stroke);
+                break;
+
+            case OneUiIconType.Refresh:
+                canvas.DrawArc(new RectF(cx - r * 0.72f, cy - r * 0.72f, cx + r * 0.72f, cy + r * 0.72f), -35f, 290f, false, stroke);
+                p.MoveTo(cx + r * 0.22f, cy - r * 0.72f);
+                p.LineTo(cx + r * 0.66f, cy - r * 0.72f);
+                p.LineTo(cx + r * 0.66f, cy - r * 0.28f);
+                canvas.DrawPath(p, stroke);
                 break;
         }
     }

@@ -122,6 +122,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     int truehdPrepareGeneration;
     volatile bool isPreparingTrueHD;
     volatile bool suppressAutoTrueHDPrepare;
+    volatile bool pendingAutoPlayAfterLoad;
 
     OneUiBackdropView backdropView;
     OneUiFrostedCapsuleView navFrostedHost;
@@ -347,7 +348,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         };
         titleTv.SetIncludeFontPadding(false);
         titleTv.SetTextColor(ColText);
-        titleTv.SetTypeface(null, TypefaceStyle.Bold);
+        titleTv.Typeface = OneUiTheme.GetAppleFontBold(this);
         topRow.AddView(titleTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(10) });
 
         filePillBtn = HRow();
@@ -362,6 +363,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         };
         headerFileText.SetIncludeFontPadding(false);
         headerFileText.SetTextColor(OneUiTheme.TextSecondary);
+        headerFileText.Typeface = OneUiTheme.GetAppleFontMedium(this);
         headerFileText.SetSingleLine(true);
         headerFileText.Ellipsize = Android.Text.TextUtils.TruncateAt.Middle;
 
@@ -371,7 +373,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         trackPickerBadge.SetPadding(Dp(7), Dp(2), Dp(7), Dp(2));
         trackPickerLabel = Label("", 10.5f, ColText);
         trackPickerLabel.SetIncludeFontPadding(false);
-        trackPickerLabel.SetTypeface(null, TypefaceStyle.Bold);
+        trackPickerLabel.Typeface = OneUiTheme.GetAppleFontBold(this);
         trackPickerBadge.AddView(trackPickerLabel);
 
         fileDetailsChevron = new OneUiIconView(this, OneUiIconType.ChevronDown, OneUiTheme.TextSub) {
@@ -502,6 +504,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 Gravity = GravityFlags.Center
             };
             labelTv.SetIncludeFontPadding(false);
+            labelTv.Typeface = OneUiTheme.GetAppleFontRegular(this);
             labelTv.SetSingleLine(true);
             labelTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
             cell.AddView(labelTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
@@ -711,7 +714,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
             if (tabLabels != null && i < tabLabels.Length && tabLabels[i] != null) {
                 tabLabels[i].SetTextColor(active ? ColText : Color.Argb(184, 210, 212, 220));
-                tabLabels[i].SetTypeface(null, active ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+                tabLabels[i].Typeface = active ? OneUiTheme.GetAppleFontBold(this) : OneUiTheme.GetAppleFontRegular(this);
             }
         }
         PositionTabIndicator(animate);
@@ -941,6 +944,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 }
 
                 RunOnUiThread(() => {
+                    activeLibraryQueue.Clear();
+                    activeLibraryQueueIndex = -1;
                     string oldFallback = activeFallbackSessionDir;
                     activeFallbackSessionDir = newFallbackSessionDir;
                     OpenContent(file, extractedMeta);
@@ -1128,11 +1133,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
         OpenContent(file, meta);
     }
 
-    void OpenLocalPathWithFallbackAsync(string path, int? switchToTab = null) {
+    void OpenLocalPathWithFallbackAsync(string path, int? switchToTab = null, bool autoPlay = false) {
         if (isOperationRunning || isPreparingTrueHD) {
             ShowError(S["OpRunning"]);
             return;
         }
+        currentMediaUri = null;
         SetConvertStatus(S["CopyingMedia"], -1);
         Task.Run(() => {
             try {
@@ -1151,7 +1157,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 RunOnUiThread(() => {
                     string oldFallback = activeFallbackSessionDir;
                     activeFallbackSessionDir = newFallbackSessionDir;
+                    pendingAutoPlayAfterLoad = autoPlay;
                     OpenContent(file, meta);
+                    pendingAutoPlayAfterLoad = false;
                     if (!string.IsNullOrEmpty(oldFallback) &&
                         !string.Equals(oldFallback, newFallbackSessionDir, StringComparison.Ordinal) &&
                         !IsSessionProtectedByQueue(oldFallback)) {
@@ -1165,6 +1173,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             } catch (Exception ex) {
                 AppLogger.Error("OpenLocalPathWithFallbackAsync", ex);
                 RunOnUiThread(() => {
+                    pendingAutoPlayAfterLoad = false;
                     SetConvertStatus(ex.Message, 0);
                     ShowLoadFailureDialog(ex);
                 });
@@ -1207,6 +1216,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         if (currentMediaMeta?.HasVideo == true) {
             StartBackgroundSubtitleDiscovery(file?.Path);
         }
+        StartBackgroundOnlineEnrichment(currentMediaMeta);
         RefreshMusicPlayerUi();
     }
 
@@ -1336,6 +1346,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
             return;
         }
 
+        bool shouldAutoPlay = pendingAutoPlayAfterLoad;
+        pendingAutoPlayAfterLoad = false;
+
         if (selectedTrack.Codec == Codec.TrueHD) {
             AppLogger.Info($"Selected TrueHD track: {selectedTrack.FormatHeader}");
             RebuildInlineTrackList();
@@ -1343,12 +1356,15 @@ public partial class MainActivity : Activity, ICavernizeApp {
             RefreshContainerOptions();
             RefreshMusicPlayerUi();
             if (!suppressAutoTrueHDPrepare) {
-                PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
+                PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: shouldAutoPlay);
             }
             return;
         }
 
         BindActiveTrackToUiAndPlayer(selectedTrack);
+        if (shouldAutoPlay && selectedTrack.Supported && !(playerEngine?.IsPlaying ?? false)) {
+            TogglePlayPause();
+        }
     }
 
     void BindActiveTrackToUiAndPlayer(CavernizeTrack activeTrack) {
@@ -1657,7 +1673,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             TextSize = 15.5f
         };
         tv.SetTextColor(ColText);
-        tv.SetTypeface(null, TypefaceStyle.Bold);
+        tv.Typeface = OneUiTheme.GetAppleFontBold(this);
         tv.SetPadding(0, 0, 0, Dp(8));
         return tv;
     }
@@ -1667,6 +1683,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             Text = text,
             TextSize = sizeSp
         };
+        tv.Typeface = OneUiTheme.GetAppleFontRegular(this);
         tv.SetTextColor(color ?? ColText);
         return tv;
     }
@@ -1682,7 +1699,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         b.SetMinimumHeight(Dp(42));
         b.Background = OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp);
         b.SetTextColor(ColText);
-        b.SetTypeface(null, TypefaceStyle.Bold);
+        b.Typeface = OneUiTheme.GetAppleFontBold(this);
         b.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
         OneUiTheme.AttachRecoil(b);
         b.Click += (_, _) => onClick?.Invoke();
@@ -1700,6 +1717,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         b.SetMinimumHeight(Dp(40));
         b.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.ButtonCornerDp);
         b.SetTextColor(ColText);
+        b.Typeface = OneUiTheme.GetAppleFontMedium(this);
         b.SetPadding(Dp(12), Dp(8), Dp(12), Dp(8));
         OneUiTheme.AttachRecoil(b);
         b.Click += (_, _) => onClick?.Invoke();
@@ -1719,7 +1737,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
             : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
         b.SetTextColor(ColText);
-        b.SetTypeface(null, active ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+        b.Typeface = active ? OneUiTheme.GetAppleFontBold(this) : OneUiTheme.GetAppleFontMedium(this);
         b.SetPadding(Dp(11), Dp(8), Dp(11), Dp(8));
         OneUiTheme.AttachRecoil(b);
         b.Click += (_, _) => onClick?.Invoke();

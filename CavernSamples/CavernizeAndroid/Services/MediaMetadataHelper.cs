@@ -21,11 +21,11 @@ public sealed class MediaArtworkMetadata {
     public bool HasVideo { get; init; }
     public int VideoWidth { get; init; }
     public int VideoHeight { get; init; }
-    public bool HasEmbeddedArtwork { get; init; }
-    public Bitmap ArtworkBitmap { get; init; }
-    public Color PrimaryAccent { get; init; }
-    public Color SecondaryAccent { get; init; }
-    public LyricsDocument Lyrics { get; init; }
+    public bool HasEmbeddedArtwork { get; set; }
+    public Bitmap ArtworkBitmap { get; set; }
+    public Color PrimaryAccent { get; set; }
+    public Color SecondaryAccent { get; set; }
+    public LyricsDocument Lyrics { get; set; }
 }
 
 /// <summary>
@@ -142,6 +142,18 @@ public static class MediaMetadataHelper {
             ? title
             : CleanTitleFromFilename(fallbackTitle);
 
+        if (artwork == null && context != null) {
+            string cachedCover = OnlineMetadataService.GetCachedCoverPath(context, effectiveTitle, artist, album);
+            if (!string.IsNullOrEmpty(cachedCover) && IOFile.Exists(cachedCover)) {
+                try {
+                    artwork = DecodeScaledBitmap(IOFile.ReadAllBytes(cachedCover), 640);
+                    hasEmbedded = artwork != null;
+                } catch {
+                    // Ignore invalid cache
+                }
+            }
+        }
+
         Color primary;
         Color secondary;
         if (artwork != null) {
@@ -151,7 +163,7 @@ public static class MediaMetadataHelper {
             artwork = CreateSpatialFallbackArtwork(effectiveTitle, primary, secondary, 512);
         }
 
-        LyricsDocument lyrics = LyricsService.LoadForMedia(context, sourceUri, resolvedPath, effectiveTitle);
+        LyricsDocument lyrics = LyricsService.LoadForMedia(context, sourceUri, resolvedPath, effectiveTitle, artist);
 
         return new MediaArtworkMetadata {
             Title = effectiveTitle,
@@ -283,7 +295,7 @@ public static class MediaMetadataHelper {
         return Bitmap.CreateScaledBitmap(source, w, h, true);
     }
 
-    static Bitmap DecodeScaledBitmap(byte[] bytes, int maxDim) {
+    internal static Bitmap DecodeScaledBitmap(byte[] bytes, int maxDim) {
         BitmapFactory.Options bounds = new() { InJustDecodeBounds = true };
         BitmapFactory.DecodeByteArray(bytes, 0, bytes.Length, bounds);
         if (bounds.OutWidth <= 0 || bounds.OutHeight <= 0) {
@@ -319,7 +331,7 @@ public static class MediaMetadataHelper {
         return scaled;
     }
 
-    static void ExtractPalette(Bitmap source, out Color primary, out Color secondary) {
+    internal static void ExtractPalette(Bitmap source, out Color primary, out Color secondary) {
         Bitmap tiny = Bitmap.CreateScaledBitmap(source, 24, 24, true);
         try {
             double bestScore = -1;

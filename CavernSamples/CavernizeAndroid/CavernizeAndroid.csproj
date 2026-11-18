@@ -8,8 +8,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
     <ApplicationId>hu.sbence.cavern.cavernize</ApplicationId>
-    <ApplicationVersion>23</ApplicationVersion>
-    <ApplicationDisplayVersion>2.7.23</ApplicationDisplayVersion>
+    <ApplicationVersion>24</ApplicationVersion>
+    <ApplicationDisplayVersion>2.8.24</ApplicationDisplayVersion>
     <ApplicationTitle>Cavernize</ApplicationTitle>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
     <AndroidUseAapt2>true</AndroidUseAapt2>
@@ -23,6 +23,10 @@
     <PublishTrimmed>false</PublishTrimmed>
     <AndroidLinkMode>None</AndroidLinkMode>
   </PropertyGroup>
+
+  <ItemGroup>
+    <AndroidAsset Update="Assets\fonts\sf_pro_android_ui.ttf" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\Cavern\Cavern.csproj" />

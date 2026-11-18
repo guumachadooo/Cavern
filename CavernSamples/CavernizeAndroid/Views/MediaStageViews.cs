@@ -272,7 +272,7 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
             TextSize = 13.5f
         };
         hudTitleText.SetTextColor(OneUiTheme.TextPrimary);
-        hudTitleText.SetTypeface(null, TypefaceStyle.Bold);
+        hudTitleText.SetTypeface(OneUiTheme.GetAppleFontBold(ctx), TypefaceStyle.Bold);
         hudTitleText.SetSingleLine(true);
         hudTitleText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         topBar.AddView(hudTitleText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
@@ -410,34 +410,42 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
         });
         actionRow.AddView(loopBtn, new LinearLayout.LayoutParams(Dp(34), Dp(34)) { RightMargin = Dp(8) });
 
-        spatialPillBtn = new LinearLayout(ctx) { Orientation = Orientation.Horizontal };
-        spatialPillBtn.SetGravity(GravityFlags.Center);
-        spatialPillBtn.SetPadding(Dp(10), Dp(5), Dp(10), Dp(5));
+        spatialPillBtn = new LinearLayout(ctx) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false
+        };
+        spatialPillBtn.SetGravity(GravityFlags.CenterVertical);
+        spatialPillBtn.SetPadding(Dp(9), Dp(5), Dp(9), Dp(5));
         spatialPillBtn.Background = OneUiTheme.CreateRoundedDrawable(ctx, Color.Argb(150, 26, 28, 38), 99f, Color.Argb(75, 255, 255, 255), 1f);
         OneUiTheme.AttachRecoil(spatialPillBtn, 0.93f);
         OneUiIconView spIco = new(ctx, OneUiIconType.Sparkles, OneUiTheme.PrimaryHigh);
-        spatialPillText = new TextView(ctx) { Text = "Spatial 3D", TextSize = 11f };
+        spatialPillText = new TextView(ctx) { Text = "Spatial 3D", TextSize = 10.5f };
         spatialPillText.SetTextColor(OneUiTheme.TextPrimary);
-        spatialPillText.SetTypeface(null, TypefaceStyle.Bold);
+        spatialPillText.SetTypeface(OneUiTheme.GetAppleFontSemibold(ctx), TypefaceStyle.Bold);
         spatialPillText.SetIncludeFontPadding(false);
         spatialPillText.SetSingleLine(true);
-        spatialPillBtn.AddView(spIco, new LinearLayout.LayoutParams(Dp(12), Dp(12)) { RightMargin = Dp(4) });
-        spatialPillBtn.AddView(spatialPillText);
+        spatialPillText.Ellipsize = TextUtils.TruncateAt.End;
+        spatialPillBtn.AddView(spIco, new LinearLayout.LayoutParams(Dp(11), Dp(11)) { RightMargin = Dp(4) });
+        spatialPillBtn.AddView(spatialPillText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
         spatialPillBtn.Click += (_, _) => {
             SpatialOptionsRequested?.Invoke();
             ScheduleHudAutoHide();
         };
-        actionRow.AddView(spatialPillBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(28)));
 
-        View spacer = new(ctx);
-        actionRow.AddView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
+        LinearLayout spatialPillWrap = new(ctx) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false
+        };
+        spatialPillWrap.SetGravity(GravityFlags.CenterVertical | GravityFlags.Start);
+        spatialPillWrap.AddView(spatialPillBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(28)));
+        actionRow.AddView(spatialPillWrap, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
 
-        inlineTimeText = new TextView(ctx) { Text = "00:00 / 00:00", TextSize = 11.5f };
+        inlineTimeText = new TextView(ctx) { Text = "00:00 / 00:00", TextSize = 10.5f };
         inlineTimeText.SetTextColor(Color.Argb(225, 240, 242, 250));
-        inlineTimeText.SetTypeface(null, TypefaceStyle.Bold);
+        inlineTimeText.SetTypeface(OneUiTheme.GetAppleFontSemibold(ctx), TypefaceStyle.Bold);
         inlineTimeText.SetIncludeFontPadding(false);
         inlineTimeText.SetSingleLine(true);
-        actionRow.AddView(inlineTimeText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(8) });
+        actionRow.AddView(inlineTimeText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
 
         (fullscreenBtn, fullscreenIcon) = MakeHudIconCircle(ctx, OneUiIconType.FullscreenEnter, 36, 18, () => {
             FullscreenToggleRequested?.Invoke();
@@ -959,28 +967,43 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
 }
 
 /// <summary>
-/// Faithful Apple Music Live-Lyrics sheet view (modeled on fragment_player_lyrics_sheet.xml
-/// + lyrics_line_instrumental.xml):
-/// - Borderless full-bleed scrolling directly over the dynamic ambient backdrop
-/// - Instrumental intro / interlude waiting dots (• • •) inserted as true list rows with identical
-///   spacing so they push lyrics naturally and scroll off-screen seamlessly when singing starts
-/// - Crisp high-contrast active lyric typography + smooth vertical edge fade + tap-to-seek
+/// Faithful Apple Music Live-Lyrics view combining Apple Music Android (SF Pro Display Bold,
+/// 24sp sizing, instrumental • • • rows) and Apple Music Web transitions:
+/// - Smooth cubic-bezier(0.16, 1, 0.3, 1) focus animation for scale (0.94 -> 1.01), opacity (0.28 -> 1.0),
+///   and real depth-of-field blur (3.2dp -> 0dp) via GPU-cached blurred line bitmaps
+/// - Staggered organic spring wave scroll as active verses advance
+/// - Manual browse automatically clears depth blur so all lines stay crisp while scrolling
 /// </summary>
 public sealed class AppleMusicLyricsView : View {
     sealed class LineLayoutInfo {
         public LyricCue Cue;
         public StaticLayout Layout;
+        public Bitmap BlurBitmap;
+        public int BlurBmpW;
+        public int BlurBmpH;
+        public float BlurPadPx;
         public bool IsInstrumental;
         public double StartSec;
         public double EndSec;
         public float TopY;
         public float Height;
+        public float FocusProgress;
+        public float CurrentDrawY;
+        public bool YInitialized;
+
+        public void DisposeBitmap() {
+            BlurBitmap?.Recycle();
+            BlurBitmap?.Dispose();
+            BlurBitmap = null;
+        }
     }
 
     readonly List<LineLayoutInfo> cachedLines = [];
     readonly List<(RectF rect, double seekSec)> hitBoxes = [];
     readonly TextPaint linePaint = new(PaintFlags.AntiAlias);
+    readonly TextPaint blurBuildPaint = new(PaintFlags.AntiAlias);
     readonly TextPaint emptyPaint = new(PaintFlags.AntiAlias);
+    readonly Paint blurBmpPaint = new(PaintFlags.AntiAlias | PaintFlags.FilterBitmap);
     readonly Paint dotPaint = new(PaintFlags.AntiAlias);
     readonly int touchSlop;
 
@@ -993,6 +1016,7 @@ public sealed class AppleMusicLyricsView : View {
     float totalContentHeight;
     float scrollOffsetPx;
     float targetScrollOffsetPx;
+    float manualClarity;
     long manualBrowseUntilMs;
     bool isDragging;
     float downY;
@@ -1005,7 +1029,12 @@ public sealed class AppleMusicLyricsView : View {
     public AppleMusicLyricsView(Context ctx) : base(ctx) {
         touchSlop = ViewConfiguration.Get(ctx)?.ScaledTouchSlop ?? 24;
         float dp = ctx.Resources.DisplayMetrics.Density;
-        linePaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Bold));
+        Typeface sfBold = OneUiTheme.GetAppleFontBold(ctx);
+        linePaint.SetTypeface(sfBold);
+        blurBuildPaint.SetTypeface(sfBold);
+        blurBuildPaint.Color = Color.White;
+        blurBuildPaint.SetMaskFilter(new BlurMaskFilter(3.0f * dp, BlurMaskFilter.Blur.Normal!));
+        emptyPaint.SetTypeface(OneUiTheme.GetAppleFontMedium(ctx));
         emptyPaint.TextSize = 14.5f * dp;
         emptyPaint.Color = OneUiTheme.TextSub;
         dotPaint.SetStyle(Paint.Style.Fill);
@@ -1018,12 +1047,13 @@ public sealed class AppleMusicLyricsView : View {
         scrollOffsetPx = 0f;
         targetScrollOffsetPx = 0f;
         manualBrowseUntilMs = 0;
+        manualClarity = 0f;
         RebuildLayouts();
         Invalidate();
     }
 
     public void UpdatePlayback(double seconds, bool playing) {
-        bool stateChanged = Math.Abs(currentSeconds - seconds) > 0.04 || isPlaying != playing;
+        bool stateChanged = Math.Abs(currentSeconds - seconds) > 0.03 || isPlaying != playing;
         currentSeconds = seconds;
         isPlaying = playing;
         if (stateChanged && Visibility == ViewStates.Visible) {
@@ -1031,20 +1061,31 @@ public sealed class AppleMusicLyricsView : View {
         }
     }
 
+    void DisposeCachedBitmaps() {
+        for (int i = 0; i < cachedLines.Count; i++) {
+            cachedLines[i].DisposeBitmap();
+        }
+    }
+
     void RebuildLayouts() {
+        DisposeCachedBitmaps();
         cachedLines.Clear();
         totalContentHeight = 0f;
         float dp = Resources.DisplayMetrics.Density;
-        int availW = Math.Max(40, Width - (int)(24f * dp));
+        float sp = Resources.DisplayMetrics.ScaledDensity > 0 ? Resources.DisplayMetrics.ScaledDensity : dp;
+        int availW = Math.Max(40, Width - (int)(12f * dp));
         if (availW <= 40 || !document.HasLyrics) {
             return;
         }
         lastBuiltWidth = Width;
 
-        linePaint.TextSize = 22.5f * dp;
+        float fontSize = Math.Clamp(23.5f * sp, 18f * dp, 28f * dp);
+        linePaint.TextSize = fontSize;
+        blurBuildPaint.TextSize = fontSize;
+
         float y = 20f * dp;
-        float lineSpacing = 18f * dp;
-        float instrH = 34f * dp;
+        float lineSpacing = 22f * dp;
+        float instrH = 32f * dp;
 
         if (document.IsSynced && document.Lines.Count > 0 && document.Lines[0].TimeSeconds >= 3.0) {
             cachedLines.Add(new LineLayoutInfo {
@@ -1053,7 +1094,9 @@ public sealed class AppleMusicLyricsView : View {
                 StartSec = 0,
                 EndSec = document.Lines[0].TimeSeconds,
                 TopY = y,
-                Height = instrH
+                Height = instrH,
+                FocusProgress = 1f,
+                CurrentDrawY = y
             });
             y += instrH + lineSpacing;
         }
@@ -1081,7 +1124,7 @@ public sealed class AppleMusicLyricsView : View {
             StaticLayout sl = StaticLayout.Builder
                 .Obtain(txt, 0, txt.Length, linePaint, availW)
                 .SetAlignment(Android.Text.Layout.Alignment.AlignNormal)
-                .SetLineSpacing(2f * dp, 1.05f)
+                .SetLineSpacing(2f * dp, 1.06f)
                 .SetIncludePad(false)
                 .Build();
             float h = sl.Height;
@@ -1112,7 +1155,53 @@ public sealed class AppleMusicLyricsView : View {
                 }
             }
         }
-        totalContentHeight = y + 90f * dp;
+        totalContentHeight = y + 96f * dp;
+
+        int initActive = ResolveActiveIndex();
+        for (int i = 0; i < cachedLines.Count; i++) {
+            cachedLines[i].FocusProgress = (!document.IsSynced || i == initActive) ? 1f : 0f;
+            cachedLines[i].CurrentDrawY = cachedLines[i].TopY;
+            cachedLines[i].YInitialized = true;
+        }
+    }
+
+    static Bitmap EnsureBlurredLineBitmap(LineLayoutInfo info, float dp, TextPaint blurPaint) {
+        if (info.BlurBitmap != null && !info.BlurBitmap.IsRecycled) {
+            return info.BlurBitmap;
+        }
+        if (info.Layout == null || info.Layout.Width <= 0 || info.Height <= 0) {
+            return null;
+        }
+
+        const float scale = 0.5f;
+        float pad = 6f * dp;
+        int srcW = info.Layout.Width;
+        int srcH = (int)Math.Ceiling(info.Height);
+        int bw = Math.Clamp((int)Math.Ceiling((srcW + pad * 2f) * scale), 4, 1024);
+        int bh = Math.Clamp((int)Math.Ceiling((srcH + pad * 2f) * scale), 4, 512);
+
+        try {
+            StaticLayout blurSl = StaticLayout.Builder
+                .Obtain(info.Layout.Text ?? "", 0, info.Layout.Text?.Length ?? 0, blurPaint, srcW)
+                .SetAlignment(Android.Text.Layout.Alignment.AlignNormal)
+                .SetLineSpacing(2f * dp, 1.06f)
+                .SetIncludePad(false)
+                .Build();
+
+            Bitmap bmp = Bitmap.CreateBitmap(bw, bh, Bitmap.Config.Argb8888!);
+            using Canvas c = new(bmp);
+            c.Scale(scale, scale);
+            c.Translate(pad, pad);
+            blurSl.Draw(c);
+
+            info.BlurBitmap = bmp;
+            info.BlurBmpW = srcW;
+            info.BlurBmpH = srcH;
+            info.BlurPadPx = pad;
+            return bmp;
+        } catch {
+            return null;
+        }
     }
 
     int ResolveActiveIndex() {
@@ -1169,36 +1258,72 @@ public sealed class AppleMusicLyricsView : View {
         float maxScroll = Math.Max(0f, totalContentHeight - h * 0.55f);
         bool manualActive = isDragging || nowMs < manualBrowseUntilMs;
 
+        float targetClarity = manualActive ? 1f : 0f;
+        manualClarity += (targetClarity - manualClarity) * Math.Min(1f, dt * 8f);
+        if (MathF.Abs(targetClarity - manualClarity) < 0.005f) {
+            manualClarity = targetClarity;
+        }
+
         if (!manualActive && document.IsSynced && activeIdx >= 0 && activeIdx < cachedLines.Count) {
             LineLayoutInfo act = cachedLines[activeIdx];
-            float focalAnchor = h * 0.28f;
+            float focalAnchor = h * 0.27f;
             targetScrollOffsetPx = Math.Clamp(act.TopY + act.Height * 0.5f - focalAnchor, 0f, maxScroll);
         } else if (!manualActive && document.IsSynced && activeIdx < 0) {
             targetScrollOffsetPx = 0f;
         }
 
         float diff = targetScrollOffsetPx - scrollOffsetPx;
-        if (Math.Abs(diff) > 0.5f && !isDragging) {
-            scrollOffsetPx += diff * Math.Min(1f, dt * 8.5f);
+        if (Math.Abs(diff) > 0.4f && !isDragging) {
+            scrollOffsetPx += diff * Math.Min(1f, dt * 8.2f);
         } else if (!isDragging) {
             scrollOffsetPx = targetScrollOffsetPx;
         }
 
         hitBoxes.Clear();
-        float padX = 12f * dp;
+        float padX = 4f * dp;
         bool hasActiveInstrumental = false;
+        bool anyAnimating = MathF.Abs(targetClarity - manualClarity) > 0.005f || Math.Abs(diff) > 0.4f;
 
         for (int i = 0; i < cachedLines.Count; i++) {
             LineLayoutInfo info = cachedLines[i];
-            float drawY = info.TopY - scrollOffsetPx;
-            if (drawY + info.Height < -12f * dp || drawY > h + 12f * dp) {
+            bool isActive = !document.IsSynced || i == activeIdx;
+            float targetFocus = isActive ? 1f : 0f;
+
+            float focusDiff = targetFocus - info.FocusProgress;
+            if (MathF.Abs(focusDiff) > 0.004f) {
+                float speed = focusDiff > 0 ? 7.8f : 5.8f;
+                info.FocusProgress = Math.Clamp(info.FocusProgress + focusDiff * Math.Min(1f, dt * speed), 0f, 1f);
+                anyAnimating = true;
+            } else {
+                info.FocusProgress = targetFocus;
+            }
+
+            float targetDrawY = info.TopY - targetScrollOffsetPx;
+            if (!info.YInitialized || manualActive) {
+                info.CurrentDrawY = info.TopY - scrollOffsetPx;
+                info.YInitialized = true;
+            } else {
+                int dist = activeIdx >= 0 ? Math.Abs(i - activeIdx) : 0;
+                float staggerSpeed = Math.Clamp(11.2f - dist * 0.85f, 5.4f, 11.2f);
+                float yDiff = targetDrawY - info.CurrentDrawY;
+                if (MathF.Abs(yDiff) > 0.35f) {
+                    info.CurrentDrawY += yDiff * Math.Min(1f, dt * staggerSpeed);
+                    anyAnimating = true;
+                } else {
+                    info.CurrentDrawY = targetDrawY;
+                }
+            }
+
+            float drawY = info.CurrentDrawY;
+            if (drawY + info.Height < -24f * dp || drawY > h + 24f * dp) {
                 continue;
             }
 
-            bool isActive = document.IsSynced && i == activeIdx;
+            // Apple cubic-bezier(0.16, 1, 0.3, 1) ease curve for focus & scale
+            float easedFocus = 1f - MathF.Pow(1f - info.FocusProgress, 3.2f);
             float centerY = drawY + info.Height * 0.5f;
 
-            // Vertical edge fade (top 28dp and bottom 54dp) matching Apple Music AlphaGradientFrameLayout
+            // Vertical edge fade matching Apple Music AlphaGradientFrameLayout
             float edgeFactor = 1f;
             float topFadeH = 26f * dp;
             float botFadeH = 54f * dp;
@@ -1209,49 +1334,87 @@ public sealed class AppleMusicLyricsView : View {
             }
 
             if (info.IsInstrumental) {
-                if (isActive) {
-                    hasActiveInstrumental = true;
+                if (isActive || easedFocus > 0.08f) {
+                    hasActiveInstrumental = hasActiveInstrumental || isActive;
                     double dur = Math.Max(0.8, info.EndSec - info.StartSec);
                     float prog = Math.Clamp((float)((currentSeconds - info.StartSec) / dur), 0f, 1f);
                     float breathe = (float)(0.5 + 0.5 * Math.Sin(nowMs * 0.0046));
+                    float scaleInst = 0.84f + 0.16f * easedFocus;
                     for (int d = 0; d < 3; d++) {
                         float stepGate = Math.Clamp((prog - d * 0.25f) / 0.35f, 0.32f, 1f);
                         float dotPulse = (float)(0.5 + 0.5 * Math.Sin(nowMs * 0.0046 - d * 0.78));
-                        float r = (4.8f + dotPulse * 1.4f + breathe * 0.4f) * dp;
-                        int a = Math.Clamp((int)((135 + 120 * stepGate) * edgeFactor), 20, 255);
+                        float r = (4.6f + dotPulse * 1.4f + breathe * 0.4f) * dp * scaleInst;
+                        int a = Math.Clamp((int)((60 + 195 * stepGate * easedFocus) * edgeFactor), 18, 255);
                         dotPaint.Color = Color.Argb(a, 252, 252, 255);
-                        canvas.DrawCircle(padX + 10f * dp + d * 18f * dp, centerY, r, dotPaint);
+                        canvas.DrawCircle(padX + 10f * dp + d * 17f * dp, centerY, r, dotPaint);
                     }
                 } else {
                     int baseDotA = i < activeIdx ? 42 : 76;
                     dotPaint.Color = Color.Argb(Math.Clamp((int)(baseDotA * edgeFactor), 8, 255), 230, 232, 240);
                     for (int d = 0; d < 3; d++) {
-                        canvas.DrawCircle(padX + 10f * dp + d * 18f * dp, centerY, 4.0f * dp, dotPaint);
+                        canvas.DrawCircle(padX + 10f * dp + d * 17f * dp, centerY, 3.8f * dp, dotPaint);
                     }
                 }
                 hitBoxes.Add((new RectF(0f, drawY - 4f * dp, w, drawY + info.Height + 4f * dp), info.StartSec));
                 continue;
             }
 
-            int baseAlpha = !document.IsSynced
-                ? 235
-                : (isActive ? 255 : (i < activeIdx ? 72 : 118));
-            int finalAlpha = Math.Clamp((int)(baseAlpha * edgeFactor), 12, 255);
-            linePaint.Color = isActive
-                ? Color.Argb(finalAlpha, 255, 255, 255)
-                : Color.Argb(finalAlpha, 236, 238, 246);
+            // Opacity smoothly transitions: past=0.28, upcoming=0.38, active=1.0, manual-browse=0.75
+            float inactiveAlpha = (activeIdx >= 0 && i < activeIdx) ? 0.28f : 0.38f;
+            if (activeIdx >= 0 && Math.Abs(i - activeIdx) == 1) {
+                inactiveAlpha += 0.10f; // Immediate neighbor slightly clearer like Apple Music depth curve
+            }
+            float baseFrac = inactiveAlpha + (1f - inactiveAlpha) * easedFocus;
+            baseFrac = baseFrac + (Math.Max(baseFrac, 0.74f) - baseFrac) * manualClarity;
+            int totalAlpha = Math.Clamp((int)Math.Round(255f * baseFrac * edgeFactor), 10, 255);
 
-            float scale = isActive ? 1.035f : 0.945f;
+            // Scale smoothly from 0.945 -> 1.01 anchored on the left edge (transform-origin: left center)
+            float scale = 0.945f + 0.065f * easedFocus;
+
+            // Depth-of-field blur fraction (1 = blurred when unfocused, 0 = razor sharp when active or browsing)
+            float blurMix = document.IsSynced
+                ? (1f - easedFocus) * (1f - manualClarity)
+                : 0f;
+
             canvas.Save();
             canvas.Translate(padX, drawY);
             canvas.Scale(scale, scale, 0f, info.Height * 0.5f);
-            info.Layout.Draw(canvas);
+
+            if (blurMix > 0.04f) {
+                Bitmap blurBmp = EnsureBlurredLineBitmap(info, dp, blurBuildPaint);
+                if (blurBmp != null) {
+                    int blurAlpha = Math.Clamp((int)Math.Round(totalAlpha * blurMix), 0, 255);
+                    if (blurAlpha > 2) {
+                        blurBmpPaint.Alpha = blurAlpha;
+                        RectF dst = new(
+                            -info.BlurPadPx,
+                            -info.BlurPadPx,
+                            info.BlurBmpW + info.BlurPadPx,
+                            info.BlurBmpH + info.BlurPadPx);
+                        canvas.DrawBitmap(blurBmp, null, dst, blurBmpPaint);
+                    }
+                }
+            }
+
+            int sharpAlpha = Math.Clamp((int)Math.Round(totalAlpha * (1f - blurMix * 0.88f)), 0, 255);
+            if (sharpAlpha > 2) {
+                linePaint.Color = Color.Argb(sharpAlpha, 255, 255, 255);
+                if (easedFocus > 0.25f) {
+                    linePaint.SetShadowLayer(10f * dp * easedFocus, 0f, 0f,
+                        Color.Argb((int)Math.Round(65f * easedFocus * edgeFactor), 255, 255, 255));
+                } else {
+                    linePaint.ClearShadowLayer();
+                }
+                info.Layout.Draw(canvas);
+                linePaint.ClearShadowLayer();
+            }
+
             canvas.Restore();
 
             hitBoxes.Add((new RectF(0f, drawY - 6f * dp, w, drawY + info.Height + 6f * dp), info.Cue.TimeSeconds));
         }
 
-        if ((Math.Abs(targetScrollOffsetPx - scrollOffsetPx) > 0.5f || hasActiveInstrumental || isPlaying)
+        if ((anyAnimating || hasActiveInstrumental || isPlaying)
             && Visibility == ViewStates.Visible) {
             PostInvalidateOnAnimation();
         }
@@ -1273,6 +1436,7 @@ public sealed class AppleMusicLyricsView : View {
                 lastTouchY = ty;
                 maxMoveDist = 0f;
                 Parent?.RequestDisallowInterceptTouchEvent(true);
+                PostInvalidateOnAnimation();
                 return true;
 
             case MotionEventActions.Move: {
@@ -1296,13 +1460,13 @@ public sealed class AppleMusicLyricsView : View {
                         if (rect.Contains(e.GetX(), ty)) {
                             manualBrowseUntilMs = 0;
                             LineSeekRequested?.Invoke(seekSec);
-                            Invalidate();
+                            PostInvalidateOnAnimation();
                             return true;
                         }
                     }
                 }
                 manualBrowseUntilMs = SystemClock.UptimeMillis() + 3400;
-                Invalidate();
+                PostInvalidateOnAnimation();
                 return true;
             }
 
@@ -1312,5 +1476,12 @@ public sealed class AppleMusicLyricsView : View {
                 return false;
         }
         return base.OnTouchEvent(e);
+    }
+
+    protected override void Dispose(bool disposing) {
+        if (disposing) {
+            DisposeCachedBitmaps();
+        }
+        base.Dispose(disposing);
     }
 }

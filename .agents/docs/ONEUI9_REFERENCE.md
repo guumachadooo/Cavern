@@ -39,3 +39,8 @@ Recursos decodificados: `res/ii.xml` (`menu_bottom_tab`), `res/Ll1.xml` (`sesl_b
 
 ## 5. Barra de Mídia com Ondas (`WaveSeekbar` — `SystemUI.apk`)
 - `WaveSeekbarProgressDrawable` + `MultiWaveAreaTrackRenderer`: ondas coloridas translúcidas animadas em reprodução, linha plana em pausa e intervalo de `8dp` após o polegar.
+
+## Referências Extraídas de APKs Analisados (v2.8.x)
+- **Apple Music 7.0.0 (`base.apk`):** Fonte oficial `res/font/sf_pro_android_ui.ttf` (eixo variável `'wght' 700` para título/letras), interpolação `PathInterpolator(0.16f, 1f, 0.3f, 1f)`, escala ancorada à esquerda `0.945 -> 1.01`, blur de profundidade (`3dp -> 0dp`) pré-escalado a 0.5x fora da GPU para compatibilidade total em canvas hardware-accelerated, além de deslocamento escalonado entre linhas durante o scroll automático.
+- **Samsung Music 16.2.46 + Poweramp build 1035:** Estrutura de biblioteca `Álbuns` (grade 2 colunas com drilldown para faixas numeradas e duração), `Faixas` (badge de codec), `Artistas` e `Pastas` combinando `MediaStore` (`MediaStore.Audio`/`Video`) com varredura direta de diretórios (`Music`, `Download`, `Movies`, `Audiobooks`).
+- **Kodi 22 (`metadata.generic.albums` / `tmdbapi.py`) + Poweramp (`LyricsChain2`):** Pipelines de scrapers para capas e metadados (MusicBrainz + CoverArtArchive, TheAudioDB, iTunes Search API HD `600x600`, TMDb), letras sincronizadas LRC (LRCLIB API) e legendas `.srt` (Podnapisi XML + extração ZIP).

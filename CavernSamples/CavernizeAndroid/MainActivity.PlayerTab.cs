@@ -597,6 +597,10 @@ public partial class MainActivity {
     }
 
     void OnPlayerCompleted() {
+        if (activeLibraryQueue.Count > 1 && currentMediaMeta?.HasVideo != true && !(playerEngine?.Loop ?? false)) {
+            PlayLibraryQueueStep(+1);
+            return;
+        }
         SyncPlaybackUi(false, playerEngine?.TotalSeconds ?? 0, playerEngine?.TotalSeconds ?? 0);
         mediaNotification?.UpdatePlaybackState(false, playerEngine?.TotalSeconds ?? 0, showNotification: selectedTrack != null);
     }

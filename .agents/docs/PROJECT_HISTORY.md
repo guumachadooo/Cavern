@@ -63,3 +63,7 @@ Feedbacks diretos do usuário após testar no S25 Ultra e soluções aplicadas:
 - **Testes no aparelho:** o agente analisa erros pelo log em `/sdcard/Download/Cavernize/Logs/cavernize_log.txt` e pode consultar `SystemUI.apk` em modo leitura; não tentar instalar silenciosamente nem contornar permissões/SELinux.
 
 *(Agentes: mantenham esta seção atualizada de forma enxuta quando novos ciclos de versão ou lições relevantes surgirem.)*
+
+- **v2.8.x (Estúdio Apple SF Pro, Biblioteca Integrada Samsung Music/Poweramp, Scrapers Online Poweramp/Kodi e Cabeça 3D Articulada):**
+  - Bundlado `Assets/fonts/sf_pro_android_ui.ttf` extraído do APK Apple Music 7.0.0 (`'wght' 700`), transições orgânicas escalonadas com `BlurMaskFilter` 0.5x pré-renderizado (`cubic-bezier(0.16, 1, 0.3, 1)`, escala `0.945->1.01`) em todas as linhas líricas e tipografia unificada SF Pro + translucidez suave nos painéis One UI.
+  - Player ganhou alternador `Tocando Agora | Biblioteca` (`MediaLibraryService` varrendo `MediaStore` + pastas locais com fila automática contínua em `OnPlayerCompleted`), toque na capa abrindo letras, toggles laterais inline `Cavernize 3D | HRTF 3D | Matrix 7.1` flanqueando `HRTF 3D`, busca/enriquecimento online (`OnlineMetadataService` com iTunes HD, TheAudioDB, MusicBrainz/CoverArtArchive, TMDb, LRCLIB `.lrc` e Podnapisi `.srt`), fullscreen de vídeo automático em retrato com retorno à orientação original e trilhos interativos `[Sala]/[Cabeça]` + Aim Orb + sliders finos `33dp` no `RoomSimulatorView`.

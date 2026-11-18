@@ -53,7 +53,7 @@ public sealed class OneUiInlineSelector : LinearLayout {
             TextSize = 13f
         };
         currentValueView.SetTextColor(OneUiTheme.TextPrimary);
-        currentValueView.SetTypeface(null, TypefaceStyle.Bold);
+        currentValueView.Typeface = OneUiTheme.GetAppleFontBold(ctx);
         currentValueView.SetIncludeFontPadding(false);
 
         chevronView = new OneUiIconView(ctx, OneUiIconType.ChevronDown, OneUiTheme.PeachText);
@@ -140,7 +140,7 @@ public sealed class OneUiInlineSelector : LinearLayout {
             };
             tv.SetIncludeFontPadding(false);
             tv.SetTextColor(isSel ? OneUiTheme.TextPrimary : OneUiTheme.TextSecondary);
-            tv.SetTypeface(null, isSel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+            tv.Typeface = isSel ? OneUiTheme.GetAppleFontBold(Context) : OneUiTheme.GetAppleFontRegular(Context);
 
             row.AddView(radio, new LayoutParams(dp(16), dp(16)) { RightMargin = dp(10) });
             row.AddView(tv, new LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -202,7 +202,7 @@ public static class OneUiModalDialog {
             TextSize = 16.5f
         };
         titleTv.SetTextColor(OneUiTheme.TextPrimary);
-        titleTv.SetTypeface(null, TypefaceStyle.Bold);
+        titleTv.Typeface = OneUiTheme.GetAppleFontBold(ctx);
         titleTv.SetPadding(dp(12), 0, 0, 0);
         header.AddView(titleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         card.AddView(header);
@@ -305,7 +305,7 @@ public static class OneUiModalDialog {
             ? OneUiTheme.CreateRippleRoundedDrawable(ctx, OneUiTheme.Primary, OneUiTheme.PillCornerDp)
             : OneUiTheme.CreateGlassCardDrawable(ctx, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
         b.SetTextColor(OneUiTheme.TextPrimary);
-        b.SetTypeface(null, primary ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+        b.Typeface = primary ? OneUiTheme.GetAppleFontBold(ctx) : OneUiTheme.GetAppleFontMedium(ctx);
         OneUiTheme.AttachRecoil(b);
         b.Click += (_, _) => onClick?.Invoke();
         return b;

@@ -15,12 +15,59 @@ namespace CavernizeAndroid.Theme;
 /// Samsung Recoil press physics, vector icon badges, and 44dp fat capsule sliders with double-tap reset.
 /// </summary>
 public static class OneUiTheme {
+    static Typeface appleFontBold;
+    static Typeface appleFontSemibold;
+    static Typeface appleFontMedium;
+    static Typeface appleFontRegular;
+
+    /// <summary>
+    /// Returns Apple Music's native SF Pro Android UI variable typeface tuned to the requested weight.
+    /// </summary>
+    public static Typeface GetAppleFontBold(Context ctx) =>
+        appleFontBold ??= LoadVariableAppleFont(ctx, 700, TypefaceStyle.Bold);
+
+    public static Typeface GetAppleFontSemibold(Context ctx) =>
+        appleFontSemibold ??= LoadVariableAppleFont(ctx, 600, TypefaceStyle.Bold);
+
+    public static Typeface GetAppleFontMedium(Context ctx) =>
+        appleFontMedium ??= LoadVariableAppleFont(ctx, 500, TypefaceStyle.Normal);
+
+    public static Typeface GetAppleFontRegular(Context ctx) =>
+        appleFontRegular ??= LoadVariableAppleFont(ctx, 400, TypefaceStyle.Normal);
+
+    static Typeface LoadVariableAppleFont(Context ctx, int weight, TypefaceStyle fallbackStyle) {
+        try {
+            if (ctx?.Assets != null && OperatingSystem.IsAndroidVersionAtLeast(26)) {
+                Typeface.Builder builder = new(ctx.Assets, "fonts/sf_pro_android_ui.ttf");
+                builder.SetWeight(weight);
+                builder.SetFontVariationSettings($"'wght' {weight}");
+                Typeface tf = builder.Build();
+                if (tf != null) {
+                    return tf;
+                }
+            }
+        } catch {
+            // Fallback to CreateFromAsset below
+        }
+        try {
+            if (ctx?.Assets != null) {
+                Typeface assetTf = Typeface.CreateFromAsset(ctx.Assets, "fonts/sf_pro_android_ui.ttf");
+                if (assetTf != null) {
+                    return Typeface.Create(assetTf, fallbackStyle);
+                }
+            }
+        } catch {
+            // Fallback to system default
+        }
+        return Typeface.Create(Typeface.Default, fallbackStyle);
+    }
+
     // Dynamic Atmospheric Dark + Frosted Glass Palette (refreshed in Initialize)
     public static Color BgScreen { get; private set; } = Color.ParseColor("#080A10");
-    public static Color SurfaceCard { get; private set; } = Color.ParseColor("#C4171820");
-    public static Color SurfaceElevated { get; private set; } = Color.ParseColor("#D622232D");
-    public static Color SurfaceFloating { get; private set; } = Color.ParseColor("#3DFFFFFF");
-    public static Color SurfaceSubTile { get; private set; } = Color.ParseColor("#29FFFFFF");
+    public static Color SurfaceCard { get; private set; } = Color.ParseColor("#B816171F");
+    public static Color SurfaceElevated { get; private set; } = Color.ParseColor("#CE20212B");
+    public static Color SurfaceFloating { get; private set; } = Color.ParseColor("#36FFFFFF");
+    public static Color SurfaceSubTile { get; private set; } = Color.ParseColor("#24FFFFFF");
     public static Color SurfaceBlurTint { get; private set; } = Color.ParseColor("#3A3A44");
     public static Color ControlStroke { get; private set; } = Color.ParseColor("#5A5B66");
 
@@ -106,11 +153,11 @@ public static class OneUiTheme {
         Color defaultTertPressed = Color.ParseColor("#4B7BE5");
         Color defaultHighlight = Color.ParseColor("#8E96FA");
         Color defaultHeaderTint = Color.ParseColor("#D6E4FF");
-        // Native One UI 9 Dark Mode neutral surfaces (clean dark glass like Settings & Voice Recorder)
-        Color defaultBaseBg = Color.Rgb(8, 8, 11);
-        Color defaultCard = Color.Argb(215, 22, 22, 27);
-        Color defaultElevated = Color.Argb(232, 32, 33, 40);
-        Color defaultRoomBg = Color.Argb(185, 13, 14, 19);
+        // Native One UI 9 Dark Mode neutral frosted surfaces (harmonized with ambient cover glow)
+        Color defaultBaseBg = Color.Rgb(8, 8, 12);
+        Color defaultCard = Color.Argb(186, 21, 22, 28);
+        Color defaultElevated = Color.Argb(208, 30, 31, 39);
+        Color defaultRoomBg = Color.Argb(172, 12, 14, 20);
 
         Primary = defaultBlue;
         PrimaryHigh = defaultBlueHigh;
@@ -203,9 +250,9 @@ public static class OneUiTheme {
                 IconStemsCalib = HarmonizeIconVariant(exactQuickPanelSlider, -56f);
                 IconSystemInfo = sysA2_400 ?? Blend(exactQuickPanelSlider, Color.Rgb(185, 192, 208), 0.35f);
 
-                // Subtle 3% accent whisper on elevated cards only; backgrounds stay clean neutral dark
-                SurfaceCard = WithAlpha(Blend(Color.Rgb(22, 22, 27), Primary, 0.03f), 218);
-                SurfaceElevated = WithAlpha(Blend(Color.Rgb(32, 33, 40), exactQuickPanelSlider, 0.04f), 235);
+                // Subtle 3% accent whisper on elevated frosted cards; ambient cover art flows cleanly behind
+                SurfaceCard = WithAlpha(Blend(Color.Rgb(21, 22, 28), Primary, 0.03f), 188);
+                SurfaceElevated = WithAlpha(Blend(Color.Rgb(30, 31, 39), exactQuickPanelSlider, 0.04f), 210);
             }
         } catch {
             // Fall back cleanly to Samsung One UI 9 Blue palette
@@ -461,9 +508,9 @@ public sealed class OneUiBackdropView : View {
         Color p1 = mediaPrimary ?? OneUiTheme.Primary;
         Color p2 = mediaSecondary ?? OneUiTheme.Tertiary;
         Color p3 = mediaPrimary ?? OneUiTheme.Secondary;
-        int alpha1 = mediaPrimary.HasValue ? 46 : 22;
-        int alpha2 = mediaSecondary.HasValue ? 34 : 20;
-        int alpha3 = mediaPrimary.HasValue ? 28 : 18;
+        int alpha1 = mediaPrimary.HasValue ? 64 : 24;
+        int alpha2 = mediaSecondary.HasValue ? 46 : 20;
+        int alpha3 = mediaPrimary.HasValue ? 36 : 18;
 
         // Top ambient wallpaper / cover art depth glow
         DrawGlow(canvas, w * 0.30f, h * 0.12f, Math.Max(w, h) * 0.58f,
@@ -861,18 +908,19 @@ public sealed class OneUiSeekBar : SeekBar {
         thumbBallRimPaint.StrokeWidth = Math.Max(1.2f, 1.2f * dp);
 
         labelPaint.Color = OneUiTheme.TextPrimary;
-        labelPaint.TextSize = 13f * dp;
-        labelPaint.SetShadowLayer(3f * dp, 0f, 1f * dp, Color.Argb(140, 0, 0, 0));
+        labelPaint.TextSize = 11.8f * dp;
+        labelPaint.SetTypeface(OneUiTheme.GetAppleFontMedium(context));
+        labelPaint.SetShadowLayer(2.5f * dp, 0f, 1f * dp, Color.Argb(140, 0, 0, 0));
 
         valuePaint.Color = OneUiTheme.TextPrimary;
-        valuePaint.TextSize = 13f * dp;
-        valuePaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Bold));
+        valuePaint.TextSize = 11.8f * dp;
+        valuePaint.SetTypeface(OneUiTheme.GetAppleFontBold(context));
         valuePaint.TextAlign = Paint.Align.Right;
-        valuePaint.SetShadowLayer(3f * dp, 0f, 1f * dp, Color.Argb(140, 0, 0, 0));
+        valuePaint.SetShadowLayer(2.5f * dp, 0f, 1f * dp, Color.Argb(140, 0, 0, 0));
     }
 
     protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        int desiredH = OneUiTheme.Dp(Context, SlimVolumeMode ? 28f : 44f);
+        int desiredH = OneUiTheme.Dp(Context, SlimVolumeMode ? 24f : 33f);
         int w = MeasureSpec.GetSize(widthMeasureSpec);
         SetMeasuredDimension(ResolveSize(w, widthMeasureSpec), ResolveSize(desiredH, heightMeasureSpec));
     }
@@ -996,13 +1044,13 @@ public sealed class OneUiSeekBar : SeekBar {
         float valW = valuePaint.MeasureText(valText);
 
         if (!string.IsNullOrEmpty(LabelText)) {
-            float maxLabelW = Math.Max(40f * dp, w - 38f * dp - valW);
+            float maxLabelW = Math.Max(40f * dp, w - 34f * dp - valW);
             canvas.Save();
-            canvas.ClipRect(14f * dp, 0f, 14f * dp + maxLabelW, h);
-            canvas.DrawText(LabelText, 16f * dp, textY, labelPaint);
+            canvas.ClipRect(12f * dp, 0f, 12f * dp + maxLabelW, h);
+            canvas.DrawText(LabelText, 14f * dp, textY, labelPaint);
             canvas.Restore();
         }
-        canvas.DrawText(valText, w - 16f * dp, textY, valuePaint);
+        canvas.DrawText(valText, w - 14f * dp, textY, valuePaint);
 
         bool needsNextFrame =
             MathF.Abs(targetRatio - renderedRatio) > 0.0006f ||

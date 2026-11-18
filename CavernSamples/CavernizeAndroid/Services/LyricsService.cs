@@ -42,7 +42,7 @@ public static partial class LyricsService {
 
     static readonly string[] LyricExtensions = [".lrc", ".txt"];
 
-    public static LyricsDocument LoadForMedia(Context ctx, Android.Net.Uri sourceUri, string sourceMediaPath, string fallbackTitle) {
+    public static LyricsDocument LoadForMedia(Context ctx, Android.Net.Uri sourceUri, string sourceMediaPath, string fallbackTitle, string artist = "") {
         // 1. Adjacent external .lrc / .txt files in original folder or media folder
         LyricsDocument external = TryLoadAdjacentFile(ctx, sourceUri, sourceMediaPath, fallbackTitle);
         if (external != null && external.HasLyrics) {
@@ -60,6 +60,16 @@ public static partial class LyricsService {
             LyricsDocument ffLyrics = TryExtractWithFFmpeg(ctx, sourceMediaPath);
             if (ffLyrics != null && ffLyrics.HasLyrics) {
                 return ffLyrics;
+            }
+        }
+
+        // 4. Online-fetched cached .lrc in app storage
+        string cachedLrcPath = OnlineMetadataService.GetCachedLyricsPath(ctx, fallbackTitle, artist);
+        if (!string.IsNullOrEmpty(cachedLrcPath) && IOFile.Exists(cachedLrcPath)) {
+            string raw = ReadTextAutoEncoding(cachedLrcPath);
+            LyricsDocument doc = ParseLyricsText(raw, "Online Cache");
+            if (doc.HasLyrics) {
+                return doc;
             }
         }
 

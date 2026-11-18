@@ -77,6 +77,31 @@ public sealed class AndroidStrings {
         ["VideoUnlockHint"] = "Unlock",
         ["RoomResetAll"] = "Reset Position & Head",
 
+        // In-App Library & Online Metadata Search (Samsung Music + Poweramp + Kodi)
+        ["PlayerNowPlaying"] = "Now Playing",
+        ["PlayerLibrary"] = "Library",
+        ["LibAlbums"] = "Albums",
+        ["LibTracks"] = "Tracks",
+        ["LibArtists"] = "Artists",
+        ["LibFolders"] = "Folders",
+        ["LibSearchHint"] = "Search song, album, artist, or folder...",
+        ["LibScanning"] = "Scanning device media & spatial folders...",
+        ["LibEmpty"] = "No tracks found yet. Grant storage permission, tap Refresh, or use System Picker.",
+        ["LibSystemPicker"] = "System Picker",
+        ["LibRefresh"] = "Refresh",
+        ["LibSongsCount"] = "{0} track(s)",
+        ["OnlineSearchTitle"] = "Online Cover & Lyrics Search",
+        ["OnlineCoverBtn"] = "Find Cover Online",
+        ["OnlineLyricsBtn"] = "Find Lyrics Online",
+        ["OnlineSubsBtn"] = "Search Online Subtitles",
+        ["OnlineSearching"] = "Searching online...",
+        ["OnlineNoResults"] = "No online matches found for this query.",
+        ["OnlineAppliedCover"] = "Online cover art applied!",
+        ["OnlineAppliedLyrics"] = "Online lyrics applied!",
+        ["OnlineAppliedSub"] = "Online subtitle downloaded & active!",
+        ["OnlineSearchQueryHint"] = "Artist, song, album, or movie...",
+        ["OnlineSearchAction"] = "Search",
+
         // Player & Room
         ["RoomTitle"] = "3D Room",
         ["PresetCenter"] = "Center",
@@ -349,6 +374,30 @@ public sealed class AndroidStrings {
         d["VideoLockedMsg"] = "Tela Travada";
         d["VideoUnlockHint"] = "Destravar";
         d["RoomResetAll"] = "Zerar Posição e Cabeça";
+
+        d["PlayerNowPlaying"] = "Tocando Agora";
+        d["PlayerLibrary"] = "Biblioteca";
+        d["LibAlbums"] = "Álbuns";
+        d["LibTracks"] = "Faixas";
+        d["LibArtists"] = "Artistas";
+        d["LibFolders"] = "Pastas";
+        d["LibSearchHint"] = "Buscar música, álbum, artista ou pasta...";
+        d["LibScanning"] = "Escaneando músicas e pastas espaciais...";
+        d["LibEmpty"] = "Nenhuma música listada ainda. Toque em Atualizar ou abra pelo Seletor Android.";
+        d["LibSystemPicker"] = "Seletor Android";
+        d["LibRefresh"] = "Atualizar";
+        d["LibSongsCount"] = "{0} faixa(s)";
+        d["OnlineSearchTitle"] = "Buscar Capas e Letras Online";
+        d["OnlineCoverBtn"] = "Buscar Capa Online";
+        d["OnlineLyricsBtn"] = "Buscar Letra Online";
+        d["OnlineSubsBtn"] = "Buscar Legendas Online";
+        d["OnlineSearching"] = "Pesquisando na internet...";
+        d["OnlineNoResults"] = "Nenhum resultado encontrado na internet.";
+        d["OnlineAppliedCover"] = "Capa da internet aplicada!";
+        d["OnlineAppliedLyrics"] = "Letra aplicada com sucesso!";
+        d["OnlineAppliedSub"] = "Legenda online ativada!";
+        d["OnlineSearchQueryHint"] = "Música, artista, álbum ou filme...";
+        d["OnlineSearchAction"] = "Buscar";
 
         d["RoomTitle"] = "Sala 3D";
         d["PresetCenter"] = "Centro";
