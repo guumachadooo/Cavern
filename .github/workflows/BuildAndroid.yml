@@ -103,14 +103,14 @@ jobs:
           owner, repo = "guumachadooo", "Cavern"
           token = os.environ["GITHUB_TOKEN"]
           historical = [
-              {"run_id": 44092514428, "run_number": 5,  "sha": "5c3888bb537d0eb4b4cb46db0a9ad5e6a40b3056", "tag": "v2.1.0-r5", "title": "Cavernize Android v2.1.0 (Build 5)"},
-              {"run_id": 44108117984, "run_number": 7,  "sha": "35f488da135077550a888097023c6c477f5169c4", "tag": "v2.1.7",    "title": "Cavernize Android v2.1.7"},
-              {"run_id": 44128159220, "run_number": 9,  "sha": "810e831823833290e532b2d5b762a3d455825fc4", "tag": "v2.1.9",    "title": "Cavernize Android v2.1.9"},
-              {"run_id": 44145020315, "run_number": 10, "sha": "52bd815b79f89614e3d76d0996cb76c1f1bb76b1", "tag": "v2.2.10",   "title": "Cavernize Android v2.2.10"},
-              {"run_id": 44155950178, "run_number": 11, "sha": "9dab265fdf9f3e2fa4517a5cd8ed08328bd6f5e5", "tag": "v2.3.11",   "title": "Cavernize Android v2.3.11"},
-              {"run_id": 44172998290, "run_number": 13, "sha": "46d17a61643d7b38bf15d790497c1ed90bf963f6", "tag": "v2.4.13",   "title": "Cavernize Android v2.4.13"},
-              {"run_id": 44189543697, "run_number": 15, "sha": "330fd03b5822a2a89813f22b43723d6ea78f5c70", "tag": "v2.5.15",   "title": "Cavernize Android v2.5.15"},
-              {"run_id": 44196075428, "run_number": 16, "sha": "9b724bb776887efcb08351c0fb544162b7701d9e", "tag": "v2.5.16",   "title": "Cavernize Android v2.5.16"},
+              {"run_id": 44092514428, "run_number": 5,  "sha": "5c3888bb0e97b7712bcb35a759aeb1cc058fa01f", "tag": "v2.1.0-r5", "title": "Cavernize Android v2.1.0 (Build 5)"},
+              {"run_id": 44108117984, "run_number": 7,  "sha": "35f488daf7b73c6edf8f9cafc879a3dfdb05c052", "tag": "v2.1.7",    "title": "Cavernize Android v2.1.7"},
+              {"run_id": 44128159220, "run_number": 9,  "sha": "810e8318a66ead0d396b2f087d08ee035eb4736e", "tag": "v2.1.9",    "title": "Cavernize Android v2.1.9"},
+              {"run_id": 44145020315, "run_number": 10, "sha": "52bd815b6b9a0c447661c16c56d5a5384a8cc4dc", "tag": "v2.2.10",   "title": "Cavernize Android v2.2.10"},
+              {"run_id": 44155950178, "run_number": 11, "sha": "9dab265fdbc2252a2a3bd55701e1164f57d414ed", "tag": "v2.3.11",   "title": "Cavernize Android v2.3.11"},
+              {"run_id": 44172998290, "run_number": 13, "sha": "46d17a61928c4c04868d90f8f58652ab9ddb4548", "tag": "v2.4.13",   "title": "Cavernize Android v2.4.13"},
+              {"run_id": 44189543697, "run_number": 15, "sha": "330fd03b23b0c889313c89dc52eee0efaff88676", "tag": "v2.5.15",   "title": "Cavernize Android v2.5.15"},
+              {"run_id": 44196075428, "run_number": 16, "sha": "9b724bb72046200a206b033372a2d7720aea8ec9", "tag": "v2.5.16",   "title": "Cavernize Android v2.5.16"},
           ]
 
           class NoRedir(urllib.request.HTTPRedirectHandler):
@@ -131,24 +131,24 @@ jobs:
 
           for item in historical:
               tag = item["tag"]
-              rel = existing.get(tag)
-              if rel is None:
-                  rel = api("POST", f"https://api.github.com/repos/{owner}/{repo}/releases", {
-                      "tag_name": tag,
-                      "target_commitish": item["sha"],
-                      "name": item["title"],
-                      "body": f"Restored historical CI Build #{item['run_number']} (`{item['sha']}`).",
-                      "draft": False,
-                      "prerelease": False,
-                      "make_latest": "false",
-                  })
-                  print(f"Created release {tag}", flush=True)
-
-              if any(a["name"] == "Cavernize-Android.apk" for a in rel.get("assets", [])):
-                  print(f"Release {tag} already has Cavernize-Android.apk", flush=True)
-                  continue
-
               try:
+                  rel = existing.get(tag)
+                  if rel is None:
+                      rel = api("POST", f"https://api.github.com/repos/{owner}/{repo}/releases", {
+                          "tag_name": tag,
+                          "target_commitish": item["sha"],
+                          "name": item["title"],
+                          "body": f"Restored historical CI Build #{item['run_number']} (`{item['sha']}`).",
+                          "draft": False,
+                          "prerelease": False,
+                          "make_latest": "false",
+                      })
+                      print(f"Created release {tag}", flush=True)
+
+                  if any(a["name"] == "Cavernize-Android.apk" for a in rel.get("assets", [])):
+                      print(f"Release {tag} already has Cavernize-Android.apk", flush=True)
+                      continue
+
                   arts = api("GET", f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{item['run_id']}/artifacts")
                   apk_bytes = None
                   for art in arts.get("artifacts", []):
