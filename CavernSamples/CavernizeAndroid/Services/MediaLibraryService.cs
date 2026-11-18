@@ -840,7 +840,7 @@ public static partial class MediaLibraryService {
             if (buf[0] != 'R' || buf[1] != 'I' || buf[2] != 'F' || buf[3] != 'F') return;
             int offset = 12;
             while (offset + 8 <= read) {
-                string chunkId = Encoding.ASCII.GetString(buf, offset, 4);
+                string chunkId = System.Text.Encoding.ASCII.GetString(buf, offset, 4);
                 int chunkSize = BitConverter.ToInt32(buf, offset + 4);
                 if (chunkId == "fmt " && offset + 12 <= read) {
                     channels = BitConverter.ToUInt16(buf, offset + 10);

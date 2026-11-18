@@ -72,6 +72,7 @@ public static class OneUiTheme {
     public static Color SurfaceSubTile { get; private set; } = Color.ParseColor("#24FFFFFF");
     public static Color SurfaceBlurTint { get; private set; } = Color.ParseColor("#3A3A44");
     public static Color ControlStroke { get; private set; } = Color.ParseColor("#5A5B66");
+    public static Color BorderSubtle { get; private set; } = Color.ParseColor("#22FFFFFF");
 
     // Specular Glass Borders
     public static Color GlassRimTop { get; private set; } = Color.ParseColor("#48FFFFFF");

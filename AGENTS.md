@@ -1,44 +1,56 @@
-# Diretrizes Estruturais do Projeto (Cavern / CavernizeAndroid)
+# Project Structural Guidelines (Cavern / CavernizeAndroid)
 
-Este repositório é o fork pessoal (`guumachadooo/Cavern`) focado no aplicativo Android **Cavernize** (`CavernSamples/CavernizeAndroid`, pacote `hu.sbence.cavern.cavernize`), mantendo o motor espacial **Cavern** completo no celular.
+This repository is the personal fork (`guumachadooo/Cavern`) focused on the Android app **Cavernize** (`CavernSamples/CavernizeAndroid`, package `hu.sbence.cavern.cavernize`), running the full **Cavern** spatial audio engine on mobile.
 
-## 1. Idioma e Comunicação
-- **Responda sempre ao usuário em Português (Brasil)**, de forma direta e objetiva.
-- Use links Markdown clicáveis com esquema `file://` ao citar qualquer arquivo ou intervalo de linhas.
-- Reporte apenas arquivos, símbolos, comportamentos e resultados de builds/comandos realmente observados na sessão.
+## 1. Language & Communication
+- **Always reply to the USER in Brazilian Portuguese (`pt-BR`)**, directly and objectively.
+- **Keep all internal agent files** (`AGENTS.md`, `.agents/docs/*`, `.agents/skills/*`, `.agents/hooks/*`) in **English** so LLMs parse technical instructions cleanly (without translating UI strings in `AndroidStrings.cs` or literal device paths).
+- Use clickable Markdown links with the `file://` scheme whenever referencing any file or line range.
+- Report only file paths, symbols, implemented behavior, and command/build results directly observed in tool output or read files during the current session.
 
-## 2. Preservação de Funcionalidades Originais
-- **Mantenha 100% das funcionalidades do Cavernize original** (renderização para múltiplos targets/layouts, upmixing Matrix e Cavernize 3D, calibração HRIR e filtros QuickEQ, extração separada de canais/objetos/stems e `.json`, fila de renderização em lote, metadados de codec, relatórios pós-renderização, delay/qualidade/opções CLI) além dos recursos espaciais interativos para fone de ouvido e player Android.
-- **Histórico de arquivos removidos no fork:** commits antigos antes da porta Android ainda guardam arquivos originais do Cavern/PC; pesquise no histórico Git (`git log`) se precisar recuperar alguma referência original.
-- **Decodificação externa:** codecs que dependem de binários externos no Android (`FFmpeg` em `FilesDir/bin/ffmpeg` e `truehdd` oficial `aarch64-unknown-linux-musl` em `FilesDir/bin/truehdd` para Dolby TrueHD / Atmos TrueHD) devem usar os serviços gerenciados de download/execução segura em `FilesDir`, preservando limpeza de cache temporário e fallbacks seguros.
+## 2. Instruction & Memory Loading Order (How New Chats Boot)
+When a new session starts, context is loaded in strict layers so rules never duplicate or go stale:
 
-## 3. Regras Críticas ("Nunca Quebre")
-1. **NUNCA altere `android:targetSdkVersion="28"`** em `CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml`. Essa configuração coloca o app no domínio SELinux `untrusted_app_27`, permitindo executar os binários estáticos (`ffmpeg` e `truehdd`) baixados pelo app dentro de `FilesDir`.
-2. **Build local no Termux/Ubuntu PRoot (ARM64):** não há workload Android instalado localmente (o APK final é compilado no GitHub Actions). Ao compilar `Cavernize.Logic` ou projetos .NET localmente com `/root/.dotnet/dotnet`, use **obrigatoriamente** as variáveis de memória/globalização e flags single-proc:
+| Layer | File / Mechanism | When Loaded | Purpose |
+| :--- | :--- | :--- | :--- |
+| **1. Permanent Root Rules** | `AGENTS.md` (this file) | **Always** at startup (`<user_rules>`) | Immutable project invariants, critical rules, language policy, and memory structure |
+| **2. Live Runtime Briefing** | `.agents/hooks/session_start.py` (`SessionStart` hook) | **Auto-executed** at startup | **Single source of truth for live state:** git branch, dirty files, `csproj` & CI versions, recent commits, Termux `.NET` flags, Downloads APK size, device log path, and `EXTRA_REQUESTS.md` pending items |
+| **3. Path-Scoped Rules** | `CavernSamples/CavernizeAndroid/AGENTS.md` | **Auto-loaded** when working in `CavernizeAndroid/` | Android UI partial map, custom views/services, One UI 9 layout & anti-clipping guards |
+| **4. Tool Guardrails** | `.agents/hooks/guard_files.py` & `guard_command.py` | **Auto-executed** on `PreToolUse` | Enforces `targetSdkVersion="28"`, Termux `.NET` flags/scope, `EXTRA_REQUESTS.md` gate before shipping, and `PROJECT_HISTORY.md` feedback reminders |
+| **5. Task Skills** | `.agents/skills/*/SKILL.md` | Descriptions always visible in `<skills>`; body loaded on demand | Step-by-step runbooks (`cavernize-build-and-deliver`, `cavernize-ui-oneui9`, `cavernize-device-debug`) |
+| **6. On-Demand Reference Docs** | `.agents/docs/PROJECT_HISTORY.md`, `ONEUI9_REFERENCE.md`, `SAVED_IDEAS.md`, `EXTRA_REQUESTS.md` | **Read on demand** (or before shipping for `EXTRA_REQUESTS.md`) | Reverse-chronological changelog & pitfalls, One UI/APK specs, shelved ideas/code, parallel `/btw` queue |
+
+## 3. Original Feature Preservation
+- **Preserve 100% of original Cavernize capabilities** (rendering to multiple speaker targets/layouts, Matrix and Cavernize 3D upmixing, HRIR calibration and QuickEQ filters, separate channel/object/stem extraction and `.json` reports, batch render queue, codec metadata, post-render reports, delay/quality/CLI options) alongside the mobile spatial headphone engine and Android media player.
+- **Pre-Android reference history:** Early commits prior to the Android port still contain original desktop Cavern/PC files; search `git log` if an original desktop reference is needed.
+- **External binary decoders:** Codecs relying on external binaries on Android (`FFmpeg` NDK build + shared libs in `FilesDir/bin/` and official `truehdd` `aarch64-unknown-linux-musl` in `FilesDir/bin/truehdd` for Dolby TrueHD / Atmos TrueHD) must use the managed download/execution services inside `FilesDir`, preserving temp cache cleanup and safe fallbacks.
+
+## 4. Critical Rules ("Never Break")
+1. **NEVER change `android:targetSdkVersion="28"`** in `CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml`. This keeps the app in the `untrusted_app_27` SELinux domain so downloaded native binaries (`ffmpeg` and `truehdd`) can execute from `FilesDir`.
+2. **Local builds in Termux / Ubuntu PRoot (ARM64):** No Android workload is installed locally (signed `.apk` builds run in GitHub Actions). Whenever compiling `Cavernize.Logic`, `Cavern.Format`, or `Cavern` locally with `/root/.dotnet/dotnet`, you **must** pass these memory/globalization env vars and single-proc flags:
    ```bash
    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_EnableDiagnostics=0 /root/.dotnet/dotnet build <proj> -m:1 /p:UseSharedCompilation=false
    ```
-3. **Versionamento sincronizado para Auto-Update OTA + preservação de todas as releases:** `CavernizeAndroid` verifica atualizações na release `android-latest` do GitHub comparando versões numéricas (`AppUpdateService.IsRemoteNewer`). Sempre mantenha `ApplicationDisplayVersion` coerente entre `CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj` e `.github/workflows/BuildAndroid.yml` (nunca regrida nem repita a versão em releases públicas). Além de atualizar a tag/release `android-latest` para o OTA, **crie sempre uma release versionada individual (`vX.Y.Z`) no GitHub Releases para cada build pública — nunca apague nem substitua apenas as versões anteriores**.
-4. **Entrega do APK:** o APK assinado final produzido pelo workflow `.github/workflows/BuildAndroid.yml` deve ser salvo em `/root/.gemini/antigravity/scratch/Cavern/Cavernize-Android.apk` e copiado para `/sdcard/Download/Cavernize-Android.apk` quando disponível no ambiente do usuário.
-5. **Estilo de código:** respeite `CavernSamples/Coding style.txt` (chaves na mesma linha, PascalCase em métodos/propriedades, camelCase em variáveis, sumários XML claros). Preserve correções existentes como o fallback lossless em C# para FLAC (`FlacAudioConverter.cs`) e logging completo do FFmpeg e do `truehdd`.
-6. **Planejamento prévio em etapas e auditoria final:** antes de implementar qualquer mudança, recurso novo ou correção não trivial, elabore primeiro um plano dividido por etapas, siga-o passo a passo e, ao concluir, faça uma verificação rigorosa item a item confirmando que tudo foi implementado e validado corretamente.
-7. **Aviso obrigatório antes de deduzir ao analisar pacotes/APKs:** sempre que o usuário pedir para analisar ou descompilar um aplicativo/pacote ou buscar um comportamento exato no sistema e **não for possível acessá-lo ou extrair a informação exata**, **NUNCA deduza ou improvise silenciosamente** — avise o usuário primeiro, explique o que faltou/bloqueou e pergunte se ele deseja fornecer o APK/captura, tentar outro método ou autorizar uma aproximação.
-8. **Documentação de novas funcionalidades no `README.md`:** sempre que adicionar uma funcionalidade nova ao app (recursos visuais/funcionais inéditos para o usuário final), atualize a seção correspondente em `README.md` (raiz do repositório). Correções de bug puras ou ajustes estéticos internos da One UI não precisam ser listados como nova função no `README.md`.
-9. **Repositório de ideias boas guardadas (`.agents/docs/SAVED_IDEAS.md`):** quando uma ideia, shader ou animação interessante desenvolvida ou discutida não for utilizada no app naquele momento (para manter fidelidade a outra especificação ou por decisão temporária), registre o conceito e o código completo em `.agents/docs/SAVED_IDEAS.md` para poder recuperá-los facilmente quando o usuário pedir.
-10. **Fila de pedidos extras de conversas paralelas (`.agents/docs/EXTRA_REQUESTS.md`):** antes de concluir qualquer tarefa, commitar, dar push ou compilar o aplicativo (`.apk`), **leia obrigatoriamente** `.agents/docs/EXTRA_REQUESTS.md`. Se houver pedidos pendentes em `## Pedidos Extras Pendentes` (enviados pelo usuário em conversas paralelas `/btw` enquanto você já trabalhava), **não compile nem commite ainda**: elabore um novo plano dividido por etapas como se fosse uma nova solicitação, implemente e valide tudo, mova os itens resolvidos para `## Pedidos Concluídos` (deixando a lista pendente vazia) e só então finalize e compile o APK.
+3. **Synced OTA Versioning + Preserve All GitHub Releases:** `CavernizeAndroid` checks updates on GitHub release tag `android-latest` using numeric comparison (`AppUpdateService.IsRemoteNewer`). Keep `ApplicationDisplayVersion` synchronized between `CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj` and `.github/workflows/BuildAndroid.yml` (never regress or reuse a public version). Alongside updating the `android-latest` OTA release, **always create an individual versioned GitHub Release (`vX.Y.Z`) for every public build — never delete or overwrite prior versioned releases**.
+4. **APK Delivery:** The final signed APK produced by `.github/workflows/BuildAndroid.yml` must be saved to `/root/.gemini/antigravity/scratch/Cavern/Cavernize-Android.apk` and copied to `/sdcard/Download/Cavernize-Android.apk` when accessible on the user's device.
+5. **Coding Style & Core Safeguards:** Follow `CavernSamples/Coding style.txt` (opening braces on the same line, `PascalCase` for methods/properties, `camelCase` for variables, clear XML summaries). Preserve existing fixes such as the pure C# lossless FLAC fallback (`FlacAudioConverter.cs`) and complete logging for FFmpeg and `truehdd`.
+6. **Staged Planning & Final Audit:** Before implementing any new feature, non-trivial fix, or multi-file change, write a clear staged plan first, execute it step by step, and perform a strict item-by-item verification before finishing.
+7. **Mandatory Disclosure Before Guessing on APKs/Packages:** Whenever the user asks to analyze/decompile an APK or extract exact system behavior and **the package/resource cannot be accessed or extracted cleanly**, **NEVER silently guess or improvise** — inform the user first, explain what was blocked/missing, and ask whether they want to supply the APK/capture, try another approach, or authorize an approximation.
+8. **User-Facing Documentation in `README.md`:** Whenever adding a new user-facing feature (new screens, playback/library/spatial capabilities), update the matching section in root `README.md`. Pure bug fixes or internal One UI visual refinements do not need new entries.
+9. **Archived Good Ideas (`.agents/docs/SAVED_IDEAS.md`):** Whenever an interesting visual idea, shader, or animation is deferred or replaced (e.g., to stay faithful to another UI spec), archive the concept and full reference snippet in `.agents/docs/SAVED_IDEAS.md`.
+10. **Parallel Extra Request Queue (`.agents/docs/EXTRA_REQUESTS.md`):** Before finishing any task, running `git commit`/`git push`, or triggering an APK build, **always read** `.agents/docs/EXTRA_REQUESTS.md`. If any items exist under `## Pending Extra Requests` (queued from parallel `/btw` threads while you worked), **stop before committing/building**, formulate a new staged plan as if it were a fresh request, implement and verify everything, move resolved items to `## Completed Requests` (leaving the pending section empty), and only then ship and build the APK.
 
-## 4. Memória Histórica vs. Regras Permanentes (Retroalimentação Contínua)
-- Este arquivo (`AGENTS.md`) contém apenas **invariantes estruturais permanentes**.
-- Para entender decisões evolutivas de design, preferências atuais de interface e lições de versões anteriores sem tratá-las como regras imutáveis caso o usuário peça mudanças futuras, leia `.agents/docs/PROJECT_HISTORY.md` e `.agents/docs/ONEUI9_REFERENCE.md` sob demanda.
-- **Retroalimentação obrigatória pelos agentes:** sempre que resolver um bug não óbvio (Android, FFmpeg, CI, assinaturas `.NET`, layout), descobrir uma nova restrição técnica do ambiente ou implementar uma nova preferência/funcionalidade pedida pelo usuário:
-  1. Adicione um resumo objetivo (1 a 4 linhas) em `.agents/docs/PROJECT_HISTORY.md` (consolidando entradas antigas se necessário para mantê-lo enxuto).
-  2. Registre achados técnicos de componentes nativos Samsung One UI / `SystemUI.apk` em `.agents/docs/ONEUI9_REFERENCE.md`.
-  3. Só edite `AGENTS.md` (raiz ou subpasta Android) se surgir uma **nova invariante permanente** ("nunca quebre") ou novo módulo estrutural do projeto — nunca transforme preferências estéticas pontuais em regras eternas.
-  4. Mantenha `.agents/skills/` e `.agents/hooks/` atualizados se o pipeline de build, caminhos ou SDKs mudarem.
+## 5. Memory Maintenance & Anti-Rot Rules
+Keep internal documentation organized so sections never contradict each other as versions evolve:
+- **Never hardcode "Current Version" or "Current State" labels in static Markdown docs.** Live version and working tree status come dynamically from `SessionStart` (`session_start.py`), `CavernizeAndroid.csproj`, and `BuildAndroid.yml`.
+- **`.agents/docs/PROJECT_HISTORY.md` (Newest First):** Whenever solving a non-obvious bug, learning a new environment constraint, or shipping a UX/version milestone, **prepend** a concise 1–4 line summary at the **top** of `## 3. Version History (Newest First)` and place reusable engineering pitfalls under `## 2. Technical Lessons & Known Pitfalls`. Consolidate very old milestones at the bottom if the file gets long.
+- **`.agents/docs/ONEUI9_REFERENCE.md` (Component-Organized):** Update the matching native UI/APK component section **in place** when refining One UI / Apple Music / Samsung Media specs instead of appending contradicting version blocks at the bottom.
+- **`AGENTS.md` (Root & Android):** Edit only when a **new permanent invariant** ("never break") or structural module is added — never turn temporary layout preferences into permanent rules.
+- **`.agents/skills/` & `.agents/hooks/`:** Update immediately whenever build pipelines, tool paths, or SDK constraints change.
 
-## 5. Mapa Rápido do Código
-- `Cavern/` e `Cavern.Format/`: motor DSP espacial, formatos e decodificadores base.
-- `CavernSamples/Reusable/Cavernize.Logic/`: lógica compartilhada multiplataforma (`RealtimePlayerEngine`, `StemExtractor`, `FlacAudioConverter`, `CavernizeOutput`, `MergeToContainer`, modelos e strings).
-- `CavernSamples/CavernizeAndroid/`: app Android completo em `.NET` (`net11.0-android`, APIs nativas Android sem AndroidX externo). Há um `AGENTS.md` específico dentro desta pasta carregado automaticamente quando você editar o app.
-- `.github/workflows/BuildAndroid.yml`: pipeline oficial de build, assinatura com keystore persistente e publicação da release `android-latest`.
-- `SystemUI.apk` e logs do dispositivo: para depuração segura e leitura de logs em `/sdcard/Download/Cavernize/Logs/cavernize_log.txt`, siga a skill `.agents/skills/cavernize-device-debug/SKILL.md` (sempre respeitando limites de acesso/SELinux, sem tentar bypass).
+## 6. Quick Code Map
+- `Cavern/` and `Cavern.Format/`: spatial DSP engine, container/codec readers, and writers.
+- `CavernSamples/Reusable/Cavernize.Logic/`: cross-platform shared logic (`RealtimePlayerEngine`, `StemExtractor`, `FlacAudioConverter`, `CavernizeOutput`, `MergeToContainer`, models, and localization strings).
+- `CavernSamples/CavernizeAndroid/`: full `.NET` Android app (`net11.0-android`, native Android APIs without external AndroidX; see `CavernSamples/CavernizeAndroid/AGENTS.md` for detailed partial/service map).
+- `.github/workflows/BuildAndroid.yml`: official CI build, persistent-keystore signing, and GitHub Releases publishing workflow (`android-latest` + `vX.Y.Z`).
+- Device logs & read-only APK inspection: `/sdcard/Download/Cavernize/Logs/cavernize_log.txt`; follow `.agents/skills/cavernize-device-debug/SKILL.md` strictly within SELinux/sandbox boundaries.

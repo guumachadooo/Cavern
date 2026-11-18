@@ -30,18 +30,18 @@ def main() -> None:
         if "targetSdkVersion" in target or "targetSdkVersion" in replacement:
             if not re.search(r'android:targetSdkVersion\s*=\s*"28"', replacement):
                 force_ask(
-                    'AVISO DO PROJETO: AndroidManifest.xml precisa manter android:targetSdkVersion="28" '
-                    '(domínio SELinux untrusted_app_27) para o executável estático do FFmpeg rodar em FilesDir. '
-                    'Confirme manualmente apenas se quiser alterar o targetSdkVersion de propósito.'
+                    'PROJECT SAFETY GUARD: AndroidManifest.xml must keep android:targetSdkVersion="28" '
+                    '(SELinux untrusted_app_27 domain) so static binaries (ffmpeg/truehdd) can execute inside FilesDir. '
+                    'Confirm manually only if you intend to change targetSdkVersion.'
                 )
                 return
     elif tool_name == "write_file":
         content = args.get("Content") or ""
         if not re.search(r'android:targetSdkVersion\s*=\s*"28"', content):
             force_ask(
-                'AVISO DO PROJETO: AndroidManifest.xml reescrito sem android:targetSdkVersion="28" '
-                '(necessário para executar o FFmpeg estático em FilesDir no SELinux). '
-                'Confirme apenas se essa alteração for intencional.'
+                'PROJECT SAFETY GUARD: AndroidManifest.xml rewritten without android:targetSdkVersion="28" '
+                '(required for executing static binaries from FilesDir under SELinux). '
+                'Confirm manually only if intentional.'
             )
             return
 

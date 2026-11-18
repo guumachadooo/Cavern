@@ -11,3 +11,4 @@ Tests/coverage.json
 packages/
 *.apk
 *.keystore
+**/__pycache__/

@@ -721,6 +721,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
         });
     }
 
+    void ShowToast(string msg) {
+        if (!string.IsNullOrEmpty(msg) && !uiDestroyed) {
+            Toast.MakeText(this, msg, ToastLength.Short).Show();
+        }
+    }
+
     void ShowTechnicalStreamDialog() {
         if (LoadedFile == null || selectedTrack == null) {
             ShowToast(S["ActiveSourceEmpty"]);

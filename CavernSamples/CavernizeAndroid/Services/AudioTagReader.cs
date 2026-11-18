@@ -107,43 +107,41 @@ public static partial class AudioTagReader {
     }
 
     static void ParseMp4Tags(FileStream fs, ParsedAudioTags tags) {
-        long fileLen = fs.Length;
+        WalkMp4Box(fs, fs.Length, 0, tags);
+    }
+
+    static void WalkMp4Box(FileStream fs, long endPos, int depth, ParsedAudioTags tags) {
+        if (depth > 8) return;
         Span<byte> hdr = stackalloc byte[8];
         Span<byte> extSize = stackalloc byte[8];
-
-        void Walk(long endPos, int depth) {
-            if (depth > 8) return;
-            while (fs.Position + 8 <= endPos) {
-                long boxStart = fs.Position;
-                if (fs.Read(hdr) < 8) break;
-                uint sz32 = BinaryPrimitives.ReadUInt32BigEndian(hdr[..4]);
-                long boxSize = sz32;
-                if (sz32 == 1) {
-                    if (fs.Read(extSize) < 8) break;
-                    boxSize = (long)BinaryPrimitives.ReadUInt64BigEndian(extSize);
-                } else if (sz32 == 0) {
-                    boxSize = endPos - boxStart;
-                }
-                if (boxSize < 8) break;
-                long boxEnd = Math.Min(endPos, boxStart + boxSize);
-                string boxType = Encoding.Latin1.GetString(hdr[4..8]);
-
-                if (boxType is "moov" or "udta" or "trak" or "mdia") {
-                    Walk(boxEnd, depth + 1);
-                } else if (boxType == "meta") {
-                    if (fs.Position + 4 <= boxEnd) {
-                        fs.Position += 4; // FullBox version + flags
-                        Walk(boxEnd, depth + 1);
-                    }
-                } else if (boxType == "ilst") {
-                    ParseMp4Ilst(fs, boxEnd, tags);
-                }
-
-                fs.Position = boxEnd;
+        while (fs.Position + 8 <= endPos) {
+            long boxStart = fs.Position;
+            if (fs.Read(hdr) < 8) break;
+            uint sz32 = BinaryPrimitives.ReadUInt32BigEndian(hdr[..4]);
+            long boxSize = sz32;
+            if (sz32 == 1) {
+                if (fs.Read(extSize) < 8) break;
+                boxSize = (long)BinaryPrimitives.ReadUInt64BigEndian(extSize);
+            } else if (sz32 == 0) {
+                boxSize = endPos - boxStart;
             }
-        }
+            if (boxSize < 8) break;
+            long boxEnd = Math.Min(endPos, boxStart + boxSize);
+            string boxType = Encoding.Latin1.GetString(hdr[4..8]);
 
-        Walk(fileLen, 0);
+            if (boxType is "moov" or "udta" or "trak" or "mdia") {
+                WalkMp4Box(fs, boxEnd, depth + 1, tags);
+            } else if (boxType == "meta") {
+                if (fs.Position + 4 <= boxEnd) {
+                    fs.Position += 4; // FullBox version + flags
+                    WalkMp4Box(fs, boxEnd, depth + 1, tags);
+                }
+            } else if (boxType == "ilst") {
+                ParseMp4Ilst(fs, boxEnd, tags);
+            }
+
+            fs.Position = boxEnd;
+        }
     }
 
     static void ParseMp4Ilst(FileStream fs, long ilstEnd, ParsedAudioTags tags) {

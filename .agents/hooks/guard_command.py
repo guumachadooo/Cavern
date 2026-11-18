@@ -18,7 +18,7 @@ def deny(reason: str) -> None:
 
 
 def split_shell_segments(cmd: str) -> list[str]:
-    """Split a shell command on unquoted separators (; && || | newline) skipping heredoc bodies."""
+    """Split a shell command on unquoted separators (; && || | newline)."""
     segments: list[str] = []
     buf: list[str] = []
     in_sq = False
@@ -110,13 +110,24 @@ def get_pending_extra_requests(repo: Path) -> list[str]:
         text = extra_file.read_text(encoding="utf-8", errors="ignore")
     except Exception:
         return []
-    m = re.search(r"^##\s+Pedidos Extras Pendentes\s*\n(.*?)(?=^##\s+|\Z)", text, flags=re.MULTILINE | re.DOTALL)
+    m = re.search(
+        r"^##\s+(?:Pending Extra Requests|Pedidos Extras Pendentes)\s*\n(.*?)(?=^##\s+|\Z)",
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    )
     if not m:
         return []
     pending: list[str] = []
     for ln in m.group(1).splitlines():
         s = ln.strip()
-        if not s or s.startswith("<!--") or s.lower().startswith("(nenhum pedido"):
+        sl = s.lower()
+        if (
+            not s
+            or s.startswith("<!--")
+            or sl.startswith("(no pending")
+            or sl.startswith("(none")
+            or sl.startswith("(nenhum pedido")
+        ):
             continue
         pending.append(s)
     return pending
@@ -140,14 +151,14 @@ def check_extra_requests_before_ship(segments: list[str], payload: dict) -> str 
 
     preview = "\n".join(f"  - {line[:120]}" for line in pending[:5])
     if len(pending) > 5:
-        preview += f"\n  (+{len(pending) - 5} linha(s))"
+        preview += f"\n  (+{len(pending) - 5} line(s))"
     return (
-        "BLOQUEADO ANTES DE COMMITAR/COMPILAR: existem pedidos extras pendentes em "
-        "`.agents/docs/EXTRA_REQUESTS.md` adicionados durante conversas paralelas:\n"
+        "BLOCKED BEFORE COMMIT/BUILD: there are pending extra requests in "
+        "`.agents/docs/EXTRA_REQUESTS.md` queued from parallel `/btw` conversations:\n"
         f"{preview}\n\n"
-        "Leia `.agents/docs/EXTRA_REQUESTS.md`, elabore um novo plano em etapas (como uma nova conversa), "
-        "implemente e valide todos os pedidos extras, mova-os para `## Pedidos Concluídos` "
-        "(deixando `## Pedidos Extras Pendentes` limpa) e só então commite/compile o APK."
+        "Read `.agents/docs/EXTRA_REQUESTS.md`, write a new staged plan (as if starting a fresh prompt), "
+        "implement and verify every item, move them to `## Completed Requests` "
+        "(restoring `(No pending requests.)` under `## Pending Extra Requests`), and only then commit/build the APK."
     )
 
 
@@ -206,11 +217,11 @@ def check_commit_memory_feedback(segments: list[str], payload: dict) -> str | No
         pass
 
     return (
-        "Lembrete de Retroalimentação: há múltiplos arquivos de código alterados neste commit "
-        "sem atualização recente em `.agents/docs/PROJECT_HISTORY.md`. "
-        "Se este ciclo resolveu algum bug não óbvio, mudou comportamento/UX ou adicionou versão nova, "
-        "registre 1–4 linhas no `PROJECT_HISTORY.md` (e em `ONEUI9_REFERENCE.md` / `AGENTS.md` se aplicável) "
-        "antes de commitar — ou repita o `git commit` caso não haja lição nova a registrar."
+        "Memory Feedback Reminder: multiple code files are modified in this commit "
+        "without a recent update to `.agents/docs/PROJECT_HISTORY.md`. "
+        "If this cycle fixed a non-obvious bug, changed UX/architecture, or shipped a new version, "
+        "prepend a concise 1–4 line summary under `## 3. Version History (Newest First)` in `PROJECT_HISTORY.md` "
+        "(and update `ONEUI9_REFERENCE.md` / `AGENTS.md` if applicable) before committing — or retry `git commit` if no new entry is needed."
     )
 
 
@@ -262,10 +273,9 @@ def main() -> None:
         )
         if targets_android and not has_android_pack:
             deny(
-                "Ambiente Termux ARM64 local não possui Android SDK / workload `net11.0-android` instalado. "
-                "Para validar localmente, compile `CavernSamples/Reusable/Cavernize.Logic/Cavernize.Logic.csproj` "
-                "(ou `Cavern`/`Cavern.Format`), e gere o APK assinado enviando para o GitHub Actions "
-                "(`.github/workflows/BuildAndroid.yml`)."
+                "Local Termux ARM64 PRoot lacks the Android SDK / `net11.0-android` workload. "
+                "Validate shared logic locally by building `CavernSamples/Reusable/Cavernize.Logic/Cavernize.Logic.csproj` "
+                "(or `Cavern`/`Cavern.Format`), and build the signed APK via GitHub Actions (`.github/workflows/BuildAndroid.yml`)."
             )
             return
 
@@ -277,11 +287,11 @@ def main() -> None:
             missing.append("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1")
         if missing:
             deny(
-                "No Termux PRoot ARM64 o CoreCLR falha sem variáveis de ambiente ("
+                "CoreCLR fails in Termux ARM64 PRoot without required env vars ("
                 + ", ".join(missing)
-                + "). Execute assim:\n"
+                + "). Run with:\n"
                 "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_EnableDiagnostics=0 "
-                "/root/.dotnet/dotnet <subcomando> -m:1 /p:UseSharedCompilation=false"
+                "/root/.dotnet/dotnet <subcommand> -m:1 /p:UseSharedCompilation=false"
             )
             return
 

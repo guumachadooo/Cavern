@@ -1,16 +1,16 @@
-# Fila de Pedidos Extras (Conversas Paralelas / `/btw`)
+# Extra Request Queue (Parallel `/btw` Threads)
 
-> **Instrução para o agente principal:**
-> Antes de finalizar a tarefa, fazer `git commit`, `git push` ou disparar a compilação do APK no GitHub Actions, **leia este arquivo por completo**.
-> - Se houver itens abaixo em **Pedidos Extras Pendentes** (diferentes de `(Nenhum pedido pendente no momento.)`):
->   1. **Pare antes de compilar/commitar.**
->   2. Trate os pedidos pendentes como uma **nova solicitação formal** (como se fosse uma nova conversa).
->   3. Elabore primeiro um **novo plano em etapas** (Regra 6 do `AGENTS.md`), implemente cada item com qualidade, teste localmente (`Cavernize.Logic` / `Cavern.Format`) e valide tudo item a item.
->   4. Ao concluir cada pedido extra, mova-o de **Pedidos Extras Pendentes** para **Pedidos Concluídos** (deixando a seção pendente limpa com `(Nenhum pedido pendente no momento.)`).
->   5. Só depois disso faça a verificação final, commit, push e acompanhe a compilação do APK.
+> **Instructions for the Primary Agent:**
+> Before finishing any task, running `git commit`, `git push`, or triggering an Android APK build in GitHub Actions, **read this entire file**.
+> - If there are items listed under **Pending Extra Requests** (anything other than `(No pending requests.)`):
+>   1. **Stop before committing or compiling.**
+>   2. Treat the pending requests as a **formal new user prompt** (as if starting a fresh task).
+>   3. Create a **new staged plan** first (Rule 6 in `AGENTS.md`), implement every item cleanly, test shared logic locally (`Cavernize.Logic` / `Cavern.Format`), and audit item by item.
+>   4. Move completed items from **Pending Extra Requests** to **Completed Requests**, restoring `(No pending requests.)` under pending.
+>   5. Only then perform final checks, commit, push, and monitor the APK build.
 
-## Pedidos Extras Pendentes
-(Nenhum pedido pendente no momento.)
+## Pending Extra Requests
+(No pending requests.)
 
-## Pedidos Concluídos
-(Nenhum registro ainda.)
+## Completed Requests
+(No completed requests recorded yet.)

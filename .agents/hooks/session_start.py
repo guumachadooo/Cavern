@@ -34,7 +34,7 @@ def main() -> None:
     except Exception:
         payload = {}
 
-    # Working directory of hooks.json is .agents/; repo root is one level up unless cwd says otherwise.
+    # Working directory of hooks.json is .agents/; repo root is two levels above scripts.
     repo = Path(__file__).resolve().parents[2]
     ws_paths = payload.get("workspacePaths") or []
     if ws_paths:
@@ -59,40 +59,62 @@ def main() -> None:
     apk_dl = Path("/sdcard/Download/Cavernize-Android.apk")
 
     lines = [
-        "[CavernizeAndroid — Estado Atual do Workspace]",
-        f"- Repo: {repo} | Branch: {branch} | Working tree: {'limpa' if not dirty_lines else f'{len(dirty_lines)} arquivo(s) pendente(s)'}",
-        f"- Versões configuradas: csproj={csproj_ver} | CI={wf_ver}",
+        "[CavernizeAndroid — Live Workspace Status]",
+        f"- Repo: {repo} | Branch: {branch} | Working tree: {'clean' if not dirty_lines else f'{len(dirty_lines)} modified/untracked file(s)'}",
+        f"- Configured versions (live): csproj={csproj_ver} | CI={wf_ver}",
     ]
     if recent_commits:
-        lines.append("- Últimos commits:\n  " + "\n  ".join(recent_commits.splitlines()))
+        lines.append("- Recent commits:\n  " + "\n  ".join(recent_commits.splitlines()))
     if dirty_lines:
         preview = ", ".join(l.strip() for l in dirty_lines[:6])
         if len(dirty_lines) > 6:
-            preview += f" (+{len(dirty_lines) - 6})"
-        lines.append(f"- Pendências locais (possível trabalho em andamento): {preview}")
+            preview += f" (+{len(dirty_lines) - 6} more)"
+        lines.append(f"- Local dirty files (possible concurrent work): {preview}")
     if has_termux_dotnet:
-        lines.append("- Ambiente Termux ARM64: `/root/.dotnet/dotnet` requer `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_EnableDiagnostics=0 ... -m:1 /p:UseSharedCompilation=false`; APK assinado final é gerado via `.github/workflows/BuildAndroid.yml`.")
+        lines.append(
+            "- Termux ARM64 PRoot env: `/root/.dotnet/dotnet` requires "
+            "`DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_EnableDiagnostics=0 ... -m:1 /p:UseSharedCompilation=false`; "
+            "final signed APK builds via `.github/workflows/BuildAndroid.yml`."
+        )
     if apk_dl.exists():
         mb = apk_dl.stat().st_size / (1024 * 1024)
-        lines.append(f"- Último APK em Downloads: `{apk_dl}` ({mb:.1f} MB)")
+        lines.append(f"- Latest APK in Downloads: `{apk_dl}` ({mb:.1f} MB)")
     if log_path.exists():
-        lines.append(f"- Log compartilhado do aparelho disponível em: `{log_path}`")
-    lines.append("- Memória histórica & referência One UI 9 sob demanda: `.agents/docs/PROJECT_HISTORY.md` e `.agents/docs/ONEUI9_REFERENCE.md`.")
+        lines.append(f"- Shared device log available at: `{log_path}`")
+    lines.append(
+        "- On-demand memory & specs: `.agents/docs/PROJECT_HISTORY.md` (newest first) & `.agents/docs/ONEUI9_REFERENCE.md`."
+    )
 
     extra_raw = read_text(repo / ".agents/docs/EXTRA_REQUESTS.md")
     pending_extras: list[str] = []
     if extra_raw:
-        m_sec = re.search(r"^##\s+Pedidos Extras Pendentes\s*\n(.*?)(?=^##\s+|\Z)", extra_raw, flags=re.MULTILINE | re.DOTALL)
+        m_sec = re.search(
+            r"^##\s+(?:Pending Extra Requests|Pedidos Extras Pendentes)\s*\n(.*?)(?=^##\s+|\Z)",
+            extra_raw,
+            flags=re.MULTILINE | re.DOTALL,
+        )
         if m_sec:
             for ln in m_sec.group(1).splitlines():
                 s = ln.strip()
-                if not s or s.startswith("<!--") or s.lower().startswith("(nenhum pedido"):
+                sl = s.lower()
+                if (
+                    not s
+                    or s.startswith("<!--")
+                    or sl.startswith("(no pending")
+                    or sl.startswith("(none")
+                    or sl.startswith("(nenhum pedido")
+                ):
                     continue
                 pending_extras.append(s)
     if pending_extras:
-        lines.append(f"- ATENÇÃO — Pedidos extras pendentes em `.agents/docs/EXTRA_REQUESTS.md` ({len(pending_extras)} linha(s)): leia e planeje-os antes de compilar/commitar!")
+        lines.append(
+            f"- ATTENTION — Pending extra requests in `.agents/docs/EXTRA_REQUESTS.md` ({len(pending_extras)} line(s)): "
+            "read, plan, implement, and clear them before committing or building the APK!"
+        )
     else:
-        lines.append("- Pedidos extras (conversas paralelas): leia `.agents/docs/EXTRA_REQUESTS.md` ao final da tarefa antes de commitar ou compilar o APK.")
+        lines.append(
+            "- Parallel `/btw` queue: always read `.agents/docs/EXTRA_REQUESTS.md` before finishing, committing, or building the APK."
+        )
 
     out = {
         "injectSteps": [

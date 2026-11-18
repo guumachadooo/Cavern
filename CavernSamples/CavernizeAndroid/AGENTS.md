@@ -1,24 +1,40 @@
-# Diretrizes de Desenvolvimento — CavernizeAndroid
+# Development Guidelines — CavernizeAndroid
 
-Estas regras complementam o `AGENTS.md` da raiz quando você estiver trabalhando dentro de `CavernSamples/CavernizeAndroid/`.
+These rules supplement the root `AGENTS.md` whenever working inside `CavernSamples/CavernizeAndroid/`.
 
-## 1. Organização dos Arquivos
-- **Parciais da UI (5 abas):** `MainActivity.cs` (ciclo de vida, cabeçalho compacto, navegação inferior e helpers visuais), `MainActivity.PlayerMusicTab.cs` (Player casual com capa/metadados), `MainActivity.PlayerTab.cs` (Sala 3D, controles espaciais e mixer), `MainActivity.ConverterTab.cs` (Estúdio: targets, exportação, fila em lote), `MainActivity.ExtractorTab.cs` (Stems), `MainActivity.SettingsTab.cs` (Ajustes, FFmpeg, diagnósticos, sobre/atualização).
-- **Tema e Componentes Customizados (`Canvas`):** `Theme/OneUiTheme.cs` (tokens dinâmicos, vidro fosco, `OneUiBackdropView`, `OneUiSeekBar`), `Views/OneUiIconView.cs`, `Views/OneUiComponents.cs` (`OneUiInlineSelector`, `OneUiModalDialog`), `Views/OneUiWaveMediaSeekBar.cs`, `Views/RoomSimulatorView.cs`, `Views/LayoutDiagramView.cs`.
-- **Áudio e Serviços:** `Audio/AndroidAudioOutput.cs`, `Audio/AndroidMediaFallbackDecoder.cs`, `Services/AppSettingsStore.cs`, `Services/AppLogger.cs`, `Services/FFmpegInstallerService.cs`, `Services/TruehddInstallerService.cs`, `Services/TrueHDDecoderService.cs`, `Services/AppUpdateService.cs`, `Services/AndroidFileHelper.cs`, `Services/ApkFileProvider.cs`, `Services/MediaMetadataHelper.cs`, `Services/MediaPlaybackNotificationManager.cs`.
-- **Localização:** `Language/AndroidStrings.cs` (`pt-BR`, `en-US`, `hu-HU`, `zh-CN`). Nunca deixe texto visível hardcoded em inglês se houver versão em português; mantenha todos os idiomas consistentes ao alterar a UI.
+## 1. Codebase Map (`CavernSamples/CavernizeAndroid/`)
+- **UI Partials (5 Tabs):**
+  - `MainActivity.cs` (lifecycle, bottom navigation, frosted layout shell, video/orientation helpers, shared modal/UI helpers)
+  - `MainActivity.PlayerMusicTab.cs` (`Play` tab: Apple Music-inspired Now Playing + Samsung Video Player HUD + integrated Media Library/Albums/Smart Explorer)
+  - `MainActivity.PlayerTab.cs` (`3D Room` tab: workspace source bar, spatial controls, 3D room, channel mixer)
+  - `MainActivity.ConverterTab.cs` (`Studio` tab: target layouts, batch render queue, container/codec export)
+  - `MainActivity.ExtractorTab.cs` (`Stems` tab: channel/object/stem extraction and `.json` metadata)
+  - `MainActivity.SettingsTab.cs` (`Settings` tab: audio preferences, FFmpeg/`truehdd` installers, diagnostics, OTA updates)
+- **Theme & Custom Views (`Canvas`):**
+  - `Theme/OneUiTheme.cs` (dynamic Monet/neutral dark tokens, frosted glass, `OneUiBackdropView`, `OneUiSeekBar`, `OneUiSwitch`)
+  - `Views/OneUiIconView.cs` (`OneUiVectorIcons`, `OneUiIconBadge`, crisp vector controls)
+  - `Views/OneUiComponents.cs` (`OneUiInlineSelector`, `OneUiModalDialog`, `AttachRecoil`, pill controls)
+  - `Views/OneUiFileExplorerDialog.cs` (smart directory/folder explorer with empty-branch pruning and SAF fallback)
+  - `Views/OneUiWaveMediaSeekBar.cs`, `Views/MediaStageViews.cs`, `Views/RoomSimulatorView.cs`, `Views/LayoutDiagramView.cs`
+- **Audio & Services:**
+  - `Audio/AndroidAudioOutput.cs`, `Audio/AndroidMediaFallbackDecoder.cs`
+  - `Services/AppSettingsStore.cs`, `Services/AppLogger.cs`, `Services/FFmpegInstallerService.cs`, `Services/TruehddInstallerService.cs`, `Services/TrueHDDecoderService.cs`, `Services/AppUpdateService.cs`, `Services/AndroidFileHelper.cs`, `Services/ApkFileProvider.cs`
+  - `Services/MediaLibraryService.cs`, `Services/AudioTagReader.cs`, `Services/MediaMetadataHelper.cs`, `Services/OnlineMetadataService.cs`, `Services/LyricsService.cs`, `Services/SubtitleService.cs`, `Services/MediaPlaybackNotificationManager.cs`
+- **Localization:**
+  - `Language/AndroidStrings.cs` (`pt-BR`, `en-US`, `hu-HU`, `zh-CN`). Never leave visible hardcoded English strings when `pt-BR` is active; keep every supported locale consistent when modifying UI text.
 
-## 2. Padrão Visual Samsung One UI 9 & Boas Práticas de UI
-- **Identidade One UI 9 fiel:** evite diálogos padrão antigos do Android (`AlertDialog`, `Spinner` popup nativo) — utilize `OneUiModalDialog`, `OneUiInlineSelector`, botões em pílula com física `AttachRecoil`, ícones vetoriais próprios (`OneUiVectorIcons`, zero emojis soltos na UI) e controles inspirados na One UI 9.
-- **Compatibilidade com `.NET Android` (`net11.0-android`, `SupportedOSPlatformVersion` 26.0):** o projeto não usa pacotes AndroidX externos; utilize apenas APIs nativas do namespace `Android.*` respeitando guardas de versão (`Build.VERSION.SdkInt` / `OperatingSystem.IsAndroidVersionAtLeast(...)`) e lembrando que `targetSdkVersion` no manifest deve permanecer `28`.
-- **Prevenção obrigatória de corte de botões (Anti-Clipping):**
-  - Todo `LinearLayout` com `Orientation.Horizontal` contendo botões ou pílulas **deve** definir `BaselineAligned = false` e `SetGravity(GravityFlags.CenterVertical)`. Sem isso, se qualquer botão quebrar em duas linhas, o Android alinha pela baseline da 1ª linha e corta metade do botão embaixo.
-  - Botões em barra horizontal (`PrimaryButton`, `SecondaryButton`, `PillButton`, etc.) devem usar `SetSingleLine(true)` e `Ellipsize = TextUtils.TruncateAt.End`, ou usar `HorizontalScrollView` quando houver muitos chips.
-- **Touch em controles dentro de `ScrollView`:** `RoomSimulatorView`, `OneUiSeekBar` e `OneUiWaveMediaSeekBar` implementam proteção contra interceptação acidental de rolagem vertical (`Parent?.RequestDisallowInterceptTouchEvent(...)` e limiar `touchSlop`). Preserve essa lógica ao mexer neles.
-- **Diagnósticos:** registre erros e eventos importantes de arquivo/FFmpeg/mídia com `AppLogger` (gravado em `Downloads/Cavernize/Logs/cavernize_log.txt`) para facilitar depuração direta no aparelho do usuário.
+## 2. Samsung One UI 9 Standards & Safety Guards
+- **Faithful One UI 9 UI:** Avoid stock legacy Android dialogs/popups (`AlertDialog`, native `Spinner` popup) — use `OneUiModalDialog`, `OneUiInlineSelector`, pill buttons with `AttachRecoil` physics, custom vector icons (`OneUiIconView` — zero loose emojis in UI), and One UI 9 controls.
+- **`.NET Android` Compatibility (`net11.0-android`, `SupportedOSPlatformVersion` 26.0):** No external AndroidX packages are used; rely strictly on native `Android.*` APIs with proper API-level guards (`Build.VERSION.SdkInt` / `OperatingSystem.IsAndroidVersionAtLeast(...)`), and keep `android:targetSdkVersion="28"` untouched in `Properties/AndroidManifest.xml`.
+- **Mandatory Button Anti-Clipping:**
+  - Every horizontal `LinearLayout` (`Orientation.Horizontal`) containing buttons or multi-element pills **must** set `BaselineAligned = false` and `SetGravity(GravityFlags.CenterVertical)`. Without this, any two-line wrap causes Android to align on line 1's baseline and clip the bottom half.
+  - Action buttons inside horizontal rows (`PrimaryButton`, `SecondaryButton`, `PillButton`, etc.) must use `SetSingleLine(true)` and `Ellipsize = TextUtils.TruncateAt.End`, or sit inside a `HorizontalScrollView` when displaying multiple chips.
+- **Touch Disambiguation Inside `ScrollView`:** `RoomSimulatorView`, `OneUiSeekBar`, and `OneUiWaveMediaSeekBar` guard against accidental vertical scroll interception (`Parent?.RequestDisallowInterceptTouchEvent(...)` + `touchSlop`). Preserve that logic whenever modifying them.
+- **Diagnostics:** Log file, FFmpeg, `truehdd`, DAMF, and media failures cleanly with `AppLogger` (written to `/sdcard/Download/Cavernize/Logs/cavernize_log.txt`) for direct device debugging.
 
-## 3. Referências de Contexto Atual
-- Consulte `.agents/docs/PROJECT_HISTORY.md` para ver decisões recentes (paleta neutra vs. wallpaper, cabeçalho compacto, altura 3D na sala, ordem atual de abas/cards, balões `?` explicativos).
-- Consulte `.agents/docs/ONEUI9_REFERENCE.md` antes de replicar ou ajustar componentes e animações nativas da One UI 9 (inspecionadas em `SystemUI.apk`, `framework-res.apk`, `SamsungGallery2018.apk`, `SamsungVideoPlayer.apk`).
-- Consulte `.agents/docs/SAVED_IDEAS.md` para ideias/animações arquivadas que o usuário gostou mas não estão ativas no momento, e atualize `README.md` quando adicionar recursos inéditos.
-- Lembrete crítico: se não conseguir descompilar/encontrar um comportamento exato pedido pelo usuário em algum APK, **avise antes de intuir ou aproximar**.
+## 3. Contextual References
+- Read `.agents/docs/PROJECT_HISTORY.md` for reverse-chronological evolution and technical pitfalls (start from the top for the latest milestones).
+- Read `.agents/docs/ONEUI9_REFERENCE.md` before tuning native One UI 9 / Apple Music / Samsung Media specs extracted from device APKs.
+- Read `.agents/docs/SAVED_IDEAS.md` for shelved visual effects/code that the user may ask to bring back, and update root `README.md` when shipping new user-facing features.
+- Read `.agents/docs/EXTRA_REQUESTS.md` before committing, pushing, or compiling the APK.
+- Critical reminder: if decompiling or inspecting a requested APK/system behavior fails or is blocked, **warn the user before guessing or approximating**.

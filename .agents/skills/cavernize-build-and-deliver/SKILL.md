@@ -13,7 +13,7 @@ Follow these steps in order whenever shipping or testing changes to `CavernizeAn
 
 ## 0. Check Extra Parallel Requests First (`.agents/docs/EXTRA_REQUESTS.md`)
 Before running final checks, committing, pushing, or building the APK, **always read** [EXTRA_REQUESTS.md](../../docs/EXTRA_REQUESTS.md):
-- If `## Pedidos Extras Pendentes` has any pending requests (added from parallel `/btw` chats while you worked), **stop before committing/building**, create a new staged plan, implement and verify every extra item as if it were a fresh conversation, move them to `## Pedidos Concluídos`, and only then proceed to Step 1.
+- If `## Pending Extra Requests` has any pending items (added from parallel `/btw` chats while you worked), **stop before committing/building**, create a new staged plan, implement and verify every extra item as if it were a fresh conversation, move them to `## Completed Requests`, and only then proceed to Step 1.
 
 ## 1. Local Pre-Check in Termux / PRoot ARM64
 This environment has `.NET 8` at `/root/.dotnet/dotnet` without the Android workload (`net11.0-android` builds run on GitHub Actions). Validate shared logic (`Cavernize.Logic`, `Cavern.Format`, `Cavern`) before committing:
@@ -29,10 +29,10 @@ DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_E
 [AppUpdateService.cs](../../../CavernSamples/CavernizeAndroid/Services/AppUpdateService.cs) checks GitHub release tag `android-latest` and compares versions numerically (`IsRemoteNewer`).
 
 1. Check [CavernizeAndroid.csproj](../../../CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj) (`<ApplicationDisplayVersion>`) and [.github/workflows/BuildAndroid.yml](../../../.github/workflows/BuildAndroid.yml) (`ApplicationDisplayVersion` and release title).
-2. Ensure the version produced by `BuildAndroid.yml` increases monotonically over previously published releases (keep minor prefix aligned, e.g., `2.4.${{ github.run_number }}`).
+2. Ensure the version produced by `BuildAndroid.yml` increases monotonically over previously published releases (keep minor prefix aligned, e.g. `X.Y.${{ github.run_number }}`), and ensure each public build creates its own individual `vX.Y.Z` GitHub Release in addition to updating `android-latest` (never delete older releases).
 
 ## 3. Update Project Memory (Feedback Loop) & Clean Commit
-- If this release introduces new features, UX decisions, CI changes, or non-obvious bug fixes, append a concise 1–4 line summary to [PROJECT_HISTORY.md](../../docs/PROJECT_HISTORY.md) (and [ONEUI9_REFERENCE.md](../../docs/ONEUI9_REFERENCE.md) or `AGENTS.md` if applicable) before committing.
+- If this release introduces new features, UX decisions, CI changes, or non-obvious bug fixes, **prepend** a concise 1–4 line summary under `## 3. Version History (Newest First)` in [PROJECT_HISTORY.md](../../docs/PROJECT_HISTORY.md) (and update [ONEUI9_REFERENCE.md](../../docs/ONEUI9_REFERENCE.md) in place or `AGENTS.md` if applicable) before committing.
 - Check `git status` and review diffs (`git diff --stat`) before staging.
 - Never force-push over collaborator/concurrent work or commit temporary logs/APKs unless already tracked (note `*.apk` is in `.gitignore`).
 - Keep commits organized on `master` with clear messages and push to `origin/master`.
