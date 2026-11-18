@@ -22,6 +22,8 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
     public const int NotificationId = 9021;
     const string ChannelId = "cavernize_media_playback";
     const string ActionPlayPause = "hu.sbence.cavern.cavernize.ACTION_PLAY_PAUSE";
+    const string ActionSkipPrev = "hu.sbence.cavern.cavernize.ACTION_SKIP_PREV";
+    const string ActionSkipNext = "hu.sbence.cavern.cavernize.ACTION_SKIP_NEXT";
     const string ActionRewind = "hu.sbence.cavern.cavernize.ACTION_REWIND_10";
     const string ActionForward = "hu.sbence.cavern.cavernize.ACTION_FWD_10";
     const string ActionStop = "hu.sbence.cavern.cavernize.ACTION_STOP";
@@ -36,6 +38,8 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
     readonly MediaActionReceiver actionReceiver;
     readonly Bitmap defaultArtworkBitmap;
     Bitmap customArtworkBitmap;
+    readonly Bitmap iconPrev;
+    readonly Bitmap iconNext;
     readonly Bitmap iconRewind;
     readonly Bitmap iconPlay;
     readonly Bitmap iconPause;
@@ -55,6 +59,8 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
     public event Action PauseRequested;
     public event Action PlayPauseRequested;
     public event Action StopRequested;
+    public event Action SkipPreviousRequested;
+    public event Action SkipNextRequested;
     public event Action Rewind10Requested;
     public event Action Forward10Requested;
     public event Action<long> SeekRequestedMs;
@@ -74,6 +80,8 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         mediaSession.SetCallback(new SessionCallback(this), mainHandler);
 
         defaultArtworkBitmap = MediaMetadataHelper.CreateSpatialFallbackArtwork("Cavernize", OneUiTheme.PrimaryHigh, OneUiTheme.Secondary, 256);
+        iconPrev = CreateActionBitmap("prev");
+        iconNext = CreateActionBitmap("next");
         iconRewind = CreateActionBitmap("rew");
         iconPlay = CreateActionBitmap("play");
         iconPause = CreateActionBitmap("pause");
@@ -83,6 +91,8 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         actionReceiver = new MediaActionReceiver(this);
         IntentFilter filter = new();
         filter.AddAction(ActionPlayPause);
+        filter.AddAction(ActionSkipPrev);
+        filter.AddAction(ActionSkipNext);
         filter.AddAction(ActionRewind);
         filter.AddAction(ActionForward);
         filter.AddAction(ActionStop);
@@ -124,9 +134,8 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
 
         Bitmap previousCustom = customArtworkBitmap;
         customArtworkBitmap = CloneArtworkForNotification(artwork);
-        previousCustom?.Dispose();
 
-        Bitmap artToUse = customArtworkBitmap ?? defaultArtworkBitmap;
+        Bitmap artToUse = IsBitmapUsable(customArtworkBitmap) ? customArtworkBitmap : defaultArtworkBitmap;
 
         MediaMetadata.Builder meta = new MediaMetadata.Builder()
             .PutString(MediaMetadata.MetadataKeyTitle, currentTitle)
@@ -141,10 +150,28 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         if (isNotificationPosted) {
             PostOrUpdateNotification(currentIsPlaying);
         }
+        if (previousCustom != null && !ReferenceEquals(previousCustom, customArtworkBitmap)) {
+            try {
+                previousCustom.Dispose();
+            } catch {
+                // Ignore
+            }
+        }
+    }
+
+    static bool IsBitmapUsable(Bitmap source) {
+        if (source == null) {
+            return false;
+        }
+        try {
+            return source.Handle != IntPtr.Zero && !source.IsRecycled;
+        } catch {
+            return false;
+        }
     }
 
     static Bitmap CloneArtworkForNotification(Bitmap source) {
-        if (source == null || source.IsRecycled) {
+        if (!IsBitmapUsable(source)) {
             return null;
         }
         try {
@@ -172,6 +199,8 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
             PlaybackState.ActionPlay |
             PlaybackState.ActionPause |
             PlaybackState.ActionPlayPause |
+            PlaybackState.ActionSkipToPrevious |
+            PlaybackState.ActionSkipToNext |
             PlaybackState.ActionSeekTo |
             PlaybackState.ActionRewind |
             PlaybackState.ActionFastForward |
@@ -242,14 +271,16 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         PendingIntentFlags flags = PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable;
         PendingIntent contentPi = PendingIntent.GetActivity(appContext, 0, launchIntent, flags);
 
+        PendingIntent prevPi = PendingIntent.GetBroadcast(appContext, 5, new Intent(ActionSkipPrev).SetPackage(appContext.PackageName), flags);
         PendingIntent rewPi = PendingIntent.GetBroadcast(appContext, 1, new Intent(ActionRewind).SetPackage(appContext.PackageName), flags);
         PendingIntent playPausePi = PendingIntent.GetBroadcast(appContext, 2, new Intent(ActionPlayPause).SetPackage(appContext.PackageName), flags);
         PendingIntent fwdPi = PendingIntent.GetBroadcast(appContext, 3, new Intent(ActionForward).SetPackage(appContext.PackageName), flags);
+        PendingIntent nextPi = PendingIntent.GetBroadcast(appContext, 6, new Intent(ActionSkipNext).SetPackage(appContext.PackageName), flags);
         PendingIntent stopPi = PendingIntent.GetBroadcast(appContext, 4, new Intent(ActionStop).SetPackage(appContext.PackageName), flags);
 
         Notification.MediaStyle style = new Notification.MediaStyle()
             .SetMediaSession(mediaSession.SessionToken)
-            .SetShowActionsInCompactView(0, 1, 2);
+            .SetShowActionsInCompactView(0, 2, 4);
 
         Notification.Builder builder = Build.VERSION.SdkInt >= BuildVersionCodes.O
             ? new Notification.Builder(appContext, ChannelId)
@@ -257,7 +288,7 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
             : new Notification.Builder(appContext);
 #pragma warning restore CS0618
 
-        Bitmap artToUse = customArtworkBitmap ?? defaultArtworkBitmap;
+        Bitmap artToUse = IsBitmapUsable(customArtworkBitmap) ? customArtworkBitmap : defaultArtworkBitmap;
 
         builder
             .SetSmallIcon(Resource.Drawable.cavern_logo)
@@ -271,10 +302,11 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
             .SetShowWhen(false)
             .SetContentIntent(contentPi)
             .SetDeleteIntent(stopPi)
+            .AddAction(new Notification.Action.Builder(DrawableIcon.CreateWithBitmap(iconPrev), "Anterior", prevPi).Build())
             .AddAction(new Notification.Action.Builder(DrawableIcon.CreateWithBitmap(iconRewind), "-10s", rewPi).Build())
             .AddAction(new Notification.Action.Builder(DrawableIcon.CreateWithBitmap(isPlaying ? iconPause : iconPlay), isPlaying ? "Pausar" : "Tocar", playPausePi).Build())
             .AddAction(new Notification.Action.Builder(DrawableIcon.CreateWithBitmap(iconForward), "+10s", fwdPi).Build())
-            .AddAction(new Notification.Action.Builder(DrawableIcon.CreateWithBitmap(iconStop), "Parar", stopPi).Build())
+            .AddAction(new Notification.Action.Builder(DrawableIcon.CreateWithBitmap(iconNext), "Próxima", nextPi).Build())
             .SetStyle(style);
 
         return builder.Build();
@@ -307,6 +339,26 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
             case "stop":
                 OneUiVectorIcons.DrawIcon(c, OneUiIconType.Stop, sz * 0.5f, sz * 0.5f, sz * 0.65f, Color.White);
                 break;
+            case "prev": {
+                c.DrawRoundRect(new RectF(13f, 16f, 19.5f, 48f), 2.5f, 2.5f, fill);
+                using Android.Graphics.Path p = new();
+                p.MoveTo(48f, 16f);
+                p.LineTo(24f, 32f);
+                p.LineTo(48f, 48f);
+                p.Close();
+                c.DrawPath(p, fill);
+                break;
+            }
+            case "next": {
+                using Android.Graphics.Path p = new();
+                p.MoveTo(16f, 16f);
+                p.LineTo(40f, 32f);
+                p.LineTo(16f, 48f);
+                p.Close();
+                c.DrawPath(p, fill);
+                c.DrawRoundRect(new RectF(44.5f, 16f, 51f, 48f), 2.5f, 2.5f, fill);
+                break;
+            }
             case "rew": {
                 using Android.Graphics.Path p = new();
                 p.MoveTo(30f, 16f);
@@ -365,6 +417,8 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         customArtworkBitmap?.Dispose();
         customArtworkBitmap = null;
         defaultArtworkBitmap?.Dispose();
+        iconPrev?.Dispose();
+        iconNext?.Dispose();
         iconRewind?.Dispose();
         iconPlay?.Dispose();
         iconPause?.Dispose();
@@ -377,6 +431,8 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         public override void OnPlay() => mgr.mainHandler.Post(() => mgr.PlayRequested?.Invoke());
         public override void OnPause() => mgr.mainHandler.Post(() => mgr.PauseRequested?.Invoke());
         public override void OnStop() => mgr.mainHandler.Post(() => mgr.StopRequested?.Invoke());
+        public override void OnSkipToPrevious() => mgr.mainHandler.Post(() => mgr.SkipPreviousRequested?.Invoke());
+        public override void OnSkipToNext() => mgr.mainHandler.Post(() => mgr.SkipNextRequested?.Invoke());
         public override void OnRewind() => mgr.mainHandler.Post(() => mgr.Rewind10Requested?.Invoke());
         public override void OnFastForward() => mgr.mainHandler.Post(() => mgr.Forward10Requested?.Invoke());
         public override void OnSeekTo(long pos) => mgr.mainHandler.Post(() => mgr.SeekRequestedMs?.Invoke(pos));
@@ -387,6 +443,12 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
             switch (intent?.Action) {
                 case ActionPlayPause:
                     mgr.mainHandler.Post(() => mgr.PlayPauseRequested?.Invoke());
+                    break;
+                case ActionSkipPrev:
+                    mgr.mainHandler.Post(() => mgr.SkipPreviousRequested?.Invoke());
+                    break;
+                case ActionSkipNext:
+                    mgr.mainHandler.Post(() => mgr.SkipNextRequested?.Invoke());
                     break;
                 case ActionRewind:
                     mgr.mainHandler.Post(() => mgr.Rewind10Requested?.Invoke());

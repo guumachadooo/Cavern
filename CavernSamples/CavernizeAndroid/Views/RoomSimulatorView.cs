@@ -26,7 +26,14 @@ namespace CavernizeAndroid.Views;
 public sealed class RoomSimulatorView : View {
     sealed class SmoothedSourceState {
         public Vector3 SmoothedPos;
+        public Vector3 LastRawPos;
         public float SmoothedRms;
+        public float VisibilityAlpha = 1f;
+        public long MovingUntilMs;
+        public long SoundUntilMs;
+        public readonly (Vector3 Pos, long TimeMs)[] Trail = new (Vector3, long)[8];
+        public int TrailHead;
+        public int TrailCount;
         public bool Initialized;
     }
 
@@ -99,6 +106,7 @@ public sealed class RoomSimulatorView : View {
     Vector3 listenerPosition = Vector3.Zero;
     Vector3 listenerRotation = Vector3.Zero; // X=Pitch (-90..90), Y=Yaw (-180..180)
     bool isAudioPlaying;
+    bool hasPlayedOnce;
 
     LabelVisibilityMode labelMode = LabelVisibilityMode.ActiveOnly;
     bool headTouchMode; // false = [Sala] (drag empty orbits, drag AimOrb steers head, drag Head moves X/Z); true = [Cabeça] (drag anywhere steers Yaw+Pitch)
@@ -217,7 +225,15 @@ public sealed class RoomSimulatorView : View {
     }
 
     public void UpdateState(IReadOnlyList<TrackSourceItem> sourceItems, Vector3 envSize, Vector3 pos, Vector3 rot, bool isPlaying = false) {
-        sources = sourceItems ?? [];
+        IReadOnlyList<TrackSourceItem> nextSources = sourceItems ?? [];
+        bool trackReplaced = sources.Count != nextSources.Count
+            || (sources.Count > 0 && nextSources.Count > 0 && !ReferenceEquals(sources[0], nextSources[0]));
+        if (trackReplaced) {
+            hasPlayedOnce = isPlaying;
+        } else if (isPlaying) {
+            hasPlayedOnce = true;
+        }
+        sources = nextSources;
         if (envSize.X > 0.1f && envSize.Y > 0.1f && envSize.Z > 0.1f) {
             environmentSize = envSize;
         }
@@ -578,9 +594,9 @@ public sealed class RoomSimulatorView : View {
         subTextPaint.Color = OneUiTheme.PrimaryHigh;
         canvas.DrawText("TELA / FRONT", scrMid.sx, scrMid.sy - 2f * dp, subTextPaint);
 
-        // 5. Smooth Source State Interpolation & Depth Sort
+        // 5. Smooth Source State Interpolation, Idle Visibility & Depth Sort
         bool anyInterpolating = false;
-        List<(bool isListener, TrackSourceItem item, int objNumber, Vector3 np, float rms, float depth)> renderQueue = new(sources.Count + 1);
+        List<(bool isListener, TrackSourceItem item, int objNumber, Vector3 np, float rms, float visAlpha, SmoothedSourceState state, float depth)> renderQueue = new(sources.Count + 1);
 
         float posBlend = Math.Min(1f, dt * 18f);
         float rmsRise = Math.Min(1f, dt * 26f);
@@ -605,9 +621,17 @@ public sealed class RoomSimulatorView : View {
 
             if (!st.Initialized) {
                 st.SmoothedPos = targetPos;
+                st.LastRawPos = targetPos;
                 st.SmoothedRms = targetRms;
+                st.VisibilityAlpha = 1f;
                 st.Initialized = true;
             } else {
+                Vector3 rawMove = targetPos - st.LastRawPos;
+                if (rawMove.LengthSquared() > 0.000004f) {
+                    st.MovingUntilMs = nowMs + 480;
+                }
+                st.LastRawPos = targetPos;
+
                 Vector3 delta = targetPos - st.SmoothedPos;
                 if (delta.LengthSquared() > 0.00001f) {
                     st.SmoothedPos = Vector3.Lerp(st.SmoothedPos, targetPos, posBlend);
@@ -625,8 +649,44 @@ public sealed class RoomSimulatorView : View {
                 }
             }
 
+            bool hasVolumeNow = targetRms > 0.0025f || st.SmoothedRms > 0.0035f;
+            if (hasVolumeNow) {
+                st.SoundUntilMs = nowMs + 380;
+            }
+
+            float targetVis;
+            if (item.IsBed || !hasPlayedOnce) {
+                targetVis = 1f;
+            } else if (!isAudioPlaying) {
+                targetVis = st.VisibilityAlpha;
+            } else {
+                bool isActive = item.IsSolo || hasVolumeNow || nowMs < st.SoundUntilMs || nowMs < st.MovingUntilMs;
+                targetVis = isActive ? 1f : 0f;
+            }
+
+            float visDiff = targetVis - st.VisibilityAlpha;
+            if (MathF.Abs(visDiff) > 0.008f) {
+                float visRate = visDiff > 0 ? 16f : 4.8f;
+                st.VisibilityAlpha = Math.Clamp(st.VisibilityAlpha + visDiff * Math.Min(1f, dt * visRate), 0f, 1f);
+                anyInterpolating = true;
+            } else {
+                st.VisibilityAlpha = targetVis;
+            }
+
+            if (isAudioPlaying && !item.IsBed && st.VisibilityAlpha > 0.08f) {
+                int lastIdx = (st.TrailHead + st.Trail.Length - 1) % st.Trail.Length;
+                bool emptyTrail = st.TrailCount == 0;
+                long elapsedTrail = emptyTrail ? 9999 : nowMs - st.Trail[lastIdx].TimeMs;
+                float movedSq = emptyTrail ? 1f : (st.SmoothedPos - st.Trail[lastIdx].Pos).LengthSquared();
+                if (elapsedTrail >= 55 && movedSq > 0.00055f) {
+                    st.Trail[st.TrailHead] = (st.SmoothedPos, nowMs);
+                    st.TrailHead = (st.TrailHead + 1) % st.Trail.Length;
+                    if (st.TrailCount < st.Trail.Length) st.TrailCount++;
+                }
+            }
+
             var pt = ProjectOrbit3D(r, st.SmoothedPos.X, st.SmoothedPos.Y, st.SmoothedPos.Z, camYawRad, camPitchRad);
-            renderQueue.Add((false, item, item.IsBed ? 0 : objSeq, st.SmoothedPos, st.SmoothedRms, pt.depth));
+            renderQueue.Add((false, item, item.IsBed ? 0 : objSeq, st.SmoothedPos, st.SmoothedRms, st.VisibilityAlpha, st, pt.depth));
         }
 
         float lnx = Math.Clamp(listenerPosition.X / environmentSize.X, -1f, 1f);
@@ -635,19 +695,19 @@ public sealed class RoomSimulatorView : View {
         var lCenter = ProjectOrbit3D(r, lnx, lny, lnz, camYawRad, camPitchRad);
         listenerScreenX = lCenter.sx;
         listenerScreenY = lCenter.sy;
-        renderQueue.Add((true, null, 0, new Vector3(lnx, lny, lnz), 0f, lCenter.depth));
+        renderQueue.Add((true, null, 0, new Vector3(lnx, lny, lnz), 0f, 1f, null, lCenter.depth));
 
         renderQueue.Sort((a, b) => b.depth.CompareTo(a.depth));
 
         // 6. Subtle Acoustic Energy Rays from active objects/beds to the Listener Head
         for (int i = 0; i < renderQueue.Count; i++) {
             var e = renderQueue[i];
-            if (e.isListener || e.rms < 0.04f) continue;
+            if (e.isListener || e.visAlpha <= 0.04f || e.rms < 0.04f) continue;
             bool effMuted = e.item.IsMuted || (anySolo && !e.item.IsSolo);
             if (effMuted) continue;
             var sPt = ProjectOrbit3D(r, e.np.X, e.np.Y, e.np.Z, camYawRad, camPitchRad);
             Color mc = ResolveDolbyMeterColor(e.rms, false, e.item.IsBed, e.item.IsLFE);
-            int rayAlpha = Math.Clamp((int)Math.Round(e.rms * 78f), 14, 72);
+            int rayAlpha = Math.Clamp((int)Math.Round(e.rms * 78f * e.visAlpha), 6, 72);
             rayPaint.Color = Color.Argb(rayAlpha, mc.R, mc.G, mc.B);
             canvas.DrawLine(sPt.sx, sPt.sy, lCenter.sx, lCenter.sy, rayPaint);
         }
@@ -658,9 +718,13 @@ public sealed class RoomSimulatorView : View {
                 DrawListenerInRoom(canvas, r, lnx, lny, lnz, camYawRad, camPitchRad, headYawRad, headPitchRad, dp);
                 continue;
             }
+            if (entry.visAlpha <= 0.02f) {
+                continue;
+            }
 
             TrackSourceItem item = entry.item;
             Vector3 np = entry.np;
+            float va = entry.visAlpha;
             bool effectivelyMuted = item.IsMuted || (anySolo && !item.IsSolo);
             var posPt = ProjectOrbit3D(r, np.X, np.Y, np.Z, camYawRad, camPitchRad);
             hitTargets.Add((item, posPt.sx, posPt.sy));
@@ -713,10 +777,29 @@ public sealed class RoomSimulatorView : View {
                     canvas.DrawText(shortLabel, posPt.sx, posPt.sy + hh + 9.5f * dp, textPaint);
                 }
             } else {
+                // Subtle v2.6 motion trails behind moving 3D objects
+                if (entry.state != null && entry.state.TrailCount > 0) {
+                    SmoothedSourceState tState = entry.state;
+                    int oldestIdx = (tState.TrailHead - tState.TrailCount + tState.Trail.Length) % tState.Trail.Length;
+                    for (int k = 0; k < tState.TrailCount; k++) {
+                        int idx = (oldestIdx + k) % tState.Trail.Length;
+                        var sample = tState.Trail[idx];
+                        long ageMs = nowMs - sample.TimeMs;
+                        if (ageMs < 0 || ageMs > 520) continue;
+                        float ageFade = 1f - ageMs / 520f;
+                        var tPt = ProjectOrbit3D(r, sample.Pos.X, sample.Pos.Y, sample.Pos.Z, camYawRad, camPitchRad);
+                        int tAlpha = Math.Clamp((int)Math.Round(105f * ageFade * va), 4, 120);
+                        fillPaint.SetShader(null);
+                        fillPaint.Color = Color.Argb(tAlpha, meterCol.R, meterCol.G, meterCol.B);
+                        canvas.DrawCircle(tPt.sx, tPt.sy, (1.4f + 2.4f * ageFade) * dp * tPt.persp, fillPaint);
+                        anyInterpolating = true;
+                    }
+                }
+
                 var floorPt = ProjectOrbit3D(r, np.X, -1f, np.Z, camYawRad, camPitchRad);
                 dropLinePaint.Color = effectivelyMuted
-                    ? Color.Argb(35, 160, 165, 180)
-                    : Color.Argb(115, meterCol.R, meterCol.G, meterCol.B);
+                    ? Color.Argb((int)Math.Round(35 * va), 160, 165, 180)
+                    : Color.Argb((int)Math.Round(115 * va), meterCol.R, meterCol.G, meterCol.B);
                 canvas.DrawLine(floorPt.sx, floorPt.sy, posPt.sx, posPt.sy, dropLinePaint);
 
                 // Tick mark where drop-line intersects Y=0 ear horizon
@@ -728,19 +811,20 @@ public sealed class RoomSimulatorView : View {
                 dropRingPaint.Color = dropLinePaint.Color;
                 canvas.DrawCircle(floorPt.sx, floorPt.sy, 3.8f * dp * floorPt.persp, dropRingPaint);
 
-                float rad = (7.2f + Math.Clamp(entry.rms * 3.8f, 0f, 3.2f)) * dp * scale;
+                float appearScale = 0.72f + 0.28f * va;
+                float rad = (7.2f + Math.Clamp(entry.rms * 3.8f, 0f, 3.2f)) * dp * scale * appearScale;
                 if (!effectivelyMuted && entry.rms > 0.08f) {
                     float wave = (float)(0.5 + 0.5 * Math.Sin(nowMs * 0.008 + entry.objNumber));
                     float haloR = rad + (3f + wave * 4f * entry.rms) * dp;
-                    fillPaint.Color = Color.Argb(Math.Clamp((int)(entry.rms * 58f), 12, 52), meterCol.R, meterCol.G, meterCol.B);
+                    fillPaint.Color = Color.Argb(Math.Clamp((int)(entry.rms * 58f * va), 6, 52), meterCol.R, meterCol.G, meterCol.B);
                     canvas.DrawCircle(posPt.sx, posPt.sy, haloR, fillPaint);
                 }
 
                 using (RadialGradient objGrad = new(
                     posPt.sx - rad * 0.25f, posPt.sy - rad * 0.25f, Math.Max(1f, rad * 1.15f),
                     [
-                        Color.Argb(effectivelyMuted ? 95 : 235, Math.Min(255, meterCol.R + 40), Math.Min(255, meterCol.G + 40), Math.Min(255, meterCol.B + 40)).ToArgb(),
-                        Color.Argb(effectivelyMuted ? 65 : 195, meterCol.R, meterCol.G, meterCol.B).ToArgb()
+                        Color.Argb((int)Math.Round((effectivelyMuted ? 95 : 235) * va), Math.Min(255, meterCol.R + 40), Math.Min(255, meterCol.G + 40), Math.Min(255, meterCol.B + 40)).ToArgb(),
+                        Color.Argb((int)Math.Round((effectivelyMuted ? 65 : 195) * va), meterCol.R, meterCol.G, meterCol.B).ToArgb()
                     ],
                     [0f, 1f], Shader.TileMode.Clamp)) {
                     fillPaint.SetShader(objGrad);
@@ -749,15 +833,17 @@ public sealed class RoomSimulatorView : View {
                 }
 
                 strokePaint.StrokeWidth = 1.25f * dp;
-                strokePaint.Color = effectivelyMuted ? OneUiTheme.TextMuted : Color.Argb(200, 255, 255, 255);
+                strokePaint.Color = effectivelyMuted
+                    ? Color.Argb((int)Math.Round(130 * va), OneUiTheme.TextMuted.R, OneUiTheme.TextMuted.G, OneUiTheme.TextMuted.B)
+                    : Color.Argb((int)Math.Round(200 * va), 255, 255, 255);
                 canvas.DrawCircle(posPt.sx, posPt.sy, rad, strokePaint);
 
                 if (effectivelyMuted) {
                     DrawMuteCross(canvas, posPt.sx, posPt.sy, rad * 0.55f, dp);
                 } else {
                     textPaint.TextAlign = Paint.Align.Center;
-                    textPaint.TextSize = Math.Clamp(8.2f * scale, 7f, 10f) * dp;
-                    textPaint.Color = Color.Rgb(12, 14, 20);
+                    textPaint.TextSize = Math.Clamp(8.2f * scale * appearScale, 6f, 10f) * dp;
+                    textPaint.Color = Color.Argb((int)Math.Round(255 * va), 12, 14, 20);
                     canvas.DrawText(entry.objNumber.ToString(), posPt.sx,
                         posPt.sy - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
                 }
@@ -769,7 +855,7 @@ public sealed class RoomSimulatorView : View {
                 if (labelMode == LabelVisibilityMode.All) {
                     textPaint.TextAlign = Paint.Align.Center;
                     textPaint.TextSize = 8.2f * dp;
-                    textPaint.Color = OneUiTheme.TextSecondary;
+                    textPaint.Color = Color.Argb((int)Math.Round(210 * va), OneUiTheme.TextSecondary.R, OneUiTheme.TextSecondary.G, OneUiTheme.TextSecondary.B);
                     canvas.DrawText($"O{entry.objNumber}", posPt.sx, posPt.sy - rad - 3.5f * dp, textPaint);
                 }
             }

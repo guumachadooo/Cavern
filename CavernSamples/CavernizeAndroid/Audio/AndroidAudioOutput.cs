@@ -104,7 +104,17 @@ public sealed class AndroidAudioOutput : IDisposable {
 
             int frames = engine.RenderNextInterleavedBlock(buffer, FramesPerWrite);
             if (frames > 0 && audioTrack != null && running) {
-                audioTrack.Write(buffer, 0, frames * 2, WriteMode.Blocking);
+                int written = audioTrack.Write(buffer, 0, frames * 2, WriteMode.Blocking);
+                if (written < 0) {
+                    // Recover cleanly when Android invalidates AudioTrack (e.g. Bluetooth/headphone route change)
+                    RecreateTrack(targetRate);
+                    try {
+                        audioTrack?.Play();
+                        audioTrack?.Write(buffer, 0, frames * 2, WriteMode.Blocking);
+                    } catch {
+                        Thread.Sleep(25);
+                    }
+                }
             } else {
                 Thread.Sleep(10);
             }

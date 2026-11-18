@@ -84,11 +84,10 @@ jobs:
           name: "Cavernize Android v2.8.${{ github.run_number }}"
           body: |
             Permanent archive release for Cavernize Android `v2.8.${{ github.run_number }}` (Build `${{ github.run_number }}`, commit `${{ github.sha }}`).
-            - **Apple Music Authentic Typography & Smooth Lyrics Transitions (`sf_pro_android_ui.ttf`):** Extracted and bundled Apple SF Pro Rounded/Display UI font (`'wght' 700` active lyrics + unified frosted One UI typography), organic staggered line waves, smooth continuous focus crossfade, and 0.5x software-cached depth-of-field blur transitions across every lyric row (`• • •` and vocals).
-            - **In-App Music Library (`Samsung Music` + `Poweramp` Architecture) & Auto-Queue:** Full Albums grid + album drilldown, Tracks with format badges, Artists, Folders scanner, queue playback with auto-advance, cover tap -> Lyrics, and flanking `Cavernize 3D | HRTF 3D | Matrix 7.1` quick spatial toggles.
-            - **Online Cover, Synced Lyrics & Subtitles Search (`Poweramp` + `Kodi` Scrapers):** Automatic and manual lookup via iTunes HD, TheAudioDB, MusicBrainz/CoverArtArchive, TMDb, LRCLIB synced `.lrc`, and Podnapisi `.srt` subtitles.
-            - **Interactive 3D Acoustic Room (`RoomSimulatorView`) & Slim Sliders:** Direct 3D Head Aim Orb (Yaw/Pitch gimbal), Left Height `ALT Y` rail, Right Tilt `INCL` pitch rail, `[Sala]/[Cabeça]` drag mode toggle, sweet-spot waves, acoustic rays, and slimmer `33dp` One UI sliders.
-            - **Vertical Video Auto-Fullscreen:** Fixed portrait fullscreen toggle clipping with auto-landscape lock on enter and automatic portrait restore on exit.
+            - **Android 17 NDK FFmpeg & Crash-Free Lifecycle:** Migrated from desktop glibc FFmpeg (which suffered `exit=159` `SIGSYS` seccomp kills) to native Android NDK builds (`husen-hn/ffmpeg-android-binary` `v2.0.0` with `ffmpeg_lib/` `LD_LIBRARY_PATH` + auto-repair), added pipe EOF barriers eliminating `SafePipeHandle`/`SafeSocketHandle` `UnobservedTaskException`, and eliminated `ObjectDisposedException` bitmap races across `RoundedArtworkView` & LRU thumbnail cache.
+            - **Smooth Animations & Auto-Hiding Silent 3D Objects:** Restored glitch-free unified scrolling and crisp typography in `AppleMusicLyricsView`, 120Hz interpolated `OneUiWaveMediaSeekBar`, `40dp` `OneUiSeekBar` without zero-edge opacity pop, motion trails on moving 3D objects, and automatic fade-out for silent & stationary dynamic objects in `RoomSimulatorView`.
+            - **Library Persistent Cache, Spatial/Surround Filter & Exact Cover Isolation:** Added `library_cache_v2.json` disk cache with incremental content scanning, **Espacial / Surround** filter pills (excluding stereo across Albums/Tracks/Artists/Folders), and per-file cover isolation fixing cross-song/folder artwork mismatches.
+            - **Ranked Multi-Source Online Lookup & End-Aware Lyrics:** Added `iTunes HD` / `TMDb` / `TheAudioDB` / `CoverArtArchive` cover ranking, `LRCLIB Synced` / `Netease Synced` / `LRCLIB Plain` / `Lyrics.ovh` lyrics ranking, working `OpenSubtitles` REST + GZip `.srt` subtitle search, toggleable automatic exact-match selection, Enhanced LRC `<mm:ss.xx>` / TTML / SRT end-marker `• • •` handling, and 5-button Player transport (`-10s | Skip Prev | Play/Pause | Skip Next | +10s` + lockscreen skip).
           prerelease: false
           make_latest: false
           files: build/Cavernize-Android.apk
@@ -208,7 +207,7 @@ jobs:
           body: |
             Automated signed Android APK build for Cavernize (`${{ github.sha }}`).
             - Version: `v2.8.${{ github.run_number }}` (Build `${{ github.run_number }}`)
-            - Highlights: Authentic Apple Music `sf_pro_android_ui.ttf` Typography + Smooth Staggered/Blur Lyrics Transitions, In-App Samsung Music + Poweramp Library & Auto-Queue, Inline `Cavernize 3D | HRTF 3D | Matrix 7.1` Toggles, Cover Click to Lyrics, Online Metadata/Cover/Lyrics/Subtitles Lookup (iTunes/TheAudioDB/MusicBrainz/TMDb/LRCLIB/Podnapisi), Interactive 3D Head Gimbal/Rails Room + Slim 33dp Sliders, Auto-Rotate Portrait Fullscreen Video, Plus Full Dolby TrueHD Atmos (`truehdd`) & All Previous Releases Preserved Individually.
+            - Highlights: Native Android NDK FFmpeg (Fixes exit=159 SIGSYS) & SafePipeHandle EOF Barriers, Zero-Crash Bitmap Lifecycle, Restored Silk-Smooth Lyrics/WaveSeekBar/OneUiSeekBar Animations, Auto-Hiding Silent/Stationary 3D Objects + Motion Trails, Persistent Incremental Library Cache + Spatial/Surround Filter (Exclude Stereo), Exact Per-Track Cover Isolation, Ranked Multi-Source Online Lookup with Toggleable Auto-Pick (iTunes HD/TMDb/LRCLIB/Netease/Lyrics.ovh/OpenSubtitles), End-Aware Lyrics Instrumental Breaks (`• • •`), and Player Track Skip (`|◀` / `▶|`) + `-10s`/`+10s` + MediaSession Lockscreen Track Controls.
           prerelease: false
           make_latest: true
           files: build/Cavernize-Android.apk

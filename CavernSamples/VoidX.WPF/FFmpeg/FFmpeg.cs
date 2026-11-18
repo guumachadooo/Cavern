@@ -91,6 +91,11 @@ public abstract class FFmpeg {
     public abstract void UpdateStatusText(string text);
 
     /// <summary>
+    /// Optional hook to customize the <see cref="ProcessStartInfo"/> before launching FFmpeg (e.g., LD_LIBRARY_PATH on Android).
+    /// </summary>
+    protected virtual void ConfigureStartInfo(ProcessStartInfo startInfo) { }
+
+    /// <summary>
     /// Optional hook invoked after each FFmpeg invocation completes or fails.
     /// </summary>
     protected virtual void OnCommandCompleted(string executable, string arguments, int exitCode, string stdout, string stderr) { }
@@ -131,6 +136,7 @@ public abstract class FFmpeg {
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        ConfigureStartInfo(start);
         try {
             using Process proc = Process.Start(start);
             if (proc == null) {
@@ -140,11 +146,27 @@ public abstract class FFmpeg {
             }
             StringBuilder outSb = new();
             StringBuilder errSb = new();
-            proc.OutputDataReceived += (_, e) => { if (e.Data != null) outSb.AppendLine(e.Data); };
-            proc.ErrorDataReceived += (_, e) => { if (e.Data != null) errSb.AppendLine(e.Data); };
+            using System.Threading.ManualResetEventSlim outDone = new(false);
+            using System.Threading.ManualResetEventSlim errDone = new(false);
+            proc.OutputDataReceived += (_, e) => {
+                if (e.Data == null) {
+                    outDone.Set();
+                } else {
+                    outSb.AppendLine(e.Data);
+                }
+            };
+            proc.ErrorDataReceived += (_, e) => {
+                if (e.Data == null) {
+                    errDone.Set();
+                } else {
+                    errSb.AppendLine(e.Data);
+                }
+            };
             proc.BeginOutputReadLine();
             proc.BeginErrorReadLine();
             proc.WaitForExit();
+            outDone.Wait(2000);
+            errDone.Wait(2000);
 
             LastExitCode = proc.ExitCode;
             LastOutput = outSb.ToString().Trim();

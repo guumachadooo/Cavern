@@ -45,6 +45,8 @@ public sealed class OneUiWaveMediaSeekBar : View {
 
     int max = 1000;
     int progress;
+    float renderedRatio;
+    bool hasInitializedRatio;
     bool isPlaying;
     bool isDragging;
     bool isCancelledToScroll;
@@ -65,6 +67,7 @@ public sealed class OneUiWaveMediaSeekBar : View {
         set {
             max = Math.Max(1, value);
             progress = Math.Clamp(progress, 0, max);
+            renderedRatio = max > 0 ? Math.Clamp(progress / (float)max, 0f, 1f) : 0f;
             Invalidate();
         }
     }
@@ -75,7 +78,12 @@ public sealed class OneUiWaveMediaSeekBar : View {
             int clamped = Math.Clamp(value, 0, max);
             if (progress != clamped) {
                 progress = clamped;
-                Invalidate();
+                float targetRatio = max > 0 ? Math.Clamp(progress / (float)max, 0f, 1f) : 0f;
+                if (!hasInitializedRatio || isDragging || MathF.Abs(targetRatio - renderedRatio) > 0.04f) {
+                    renderedRatio = targetRatio;
+                    hasInitializedRatio = true;
+                }
+                PostInvalidateOnAnimation();
             }
         }
     }
@@ -209,8 +217,19 @@ public sealed class OneUiWaveMediaSeekBar : View {
         float trackWidth = Math.Max(1f, trackRight - trackLeft);
         float centerY = 18f * dp;
 
-        float ratio = max > 0 ? Math.Clamp(progress / (float)max, 0f, 1f) : 0f;
-        float thumbX = trackLeft + ratio * trackWidth;
+        float targetRatio = max > 0 ? Math.Clamp(progress / (float)max, 0f, 1f) : 0f;
+        if (!hasInitializedRatio) {
+            renderedRatio = targetRatio;
+            hasInitializedRatio = true;
+        } else if (isDragging || MathF.Abs(targetRatio - renderedRatio) > 0.045f) {
+            renderedRatio = targetRatio;
+        } else {
+            renderedRatio += (targetRatio - renderedRatio) * Math.Min(1f, dt * 18f);
+            if (MathF.Abs(targetRatio - renderedRatio) < 0.0004f) {
+                renderedRatio = targetRatio;
+            }
+        }
+        float thumbX = trackLeft + renderedRatio * trackWidth;
 
         // 1. Remaining Track (with smooth gap only when thumb expands)
         float remainStart = thumbX + (3f + 5f * dragExpand) * dp;
@@ -263,7 +282,7 @@ public sealed class OneUiWaveMediaSeekBar : View {
         canvas.DrawText(CurrentTimeText ?? "00:00", trackLeft, timeY, timeLeftPaint);
         canvas.DrawText(TotalTimeText ?? "00:00", trackRight, timeY, timeRightPaint);
 
-        if (isPlaying || MathF.Abs(motionActivity - targetActivity) > 0.004f || MathF.Abs(dragExpand - targetDrag) > 0.004f) {
+        if (isPlaying || MathF.Abs(motionActivity - targetActivity) > 0.004f || MathF.Abs(dragExpand - targetDrag) > 0.004f || MathF.Abs(targetRatio - renderedRatio) > 0.0004f) {
             PostInvalidateOnAnimation();
         }
     }

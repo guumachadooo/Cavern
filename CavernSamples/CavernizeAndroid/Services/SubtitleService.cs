@@ -135,12 +135,7 @@ public static partial class SubtitleService {
         psi.ArgumentList.Add("-i");
         psi.ArgumentList.Add(mediaPath);
 
-        using Process proc = Process.Start(psi);
-        if (proc == null) {
-            return list;
-        }
-        string err = proc.StandardError.ReadToEnd();
-        proc.WaitForExit(8000);
+        var (_, _, err) = FFmpegInstallerService.RunProcessSafe(psi, 8000);
 
         foreach (string line in err.Split('\n')) {
             Match m = FFmpegSubStreamRegex().Match(line);
@@ -214,11 +209,7 @@ public static partial class SubtitleService {
             psi.ArgumentList.Add("srt");
             psi.ArgumentList.Add(outSrt);
 
-            using Process proc = Process.Start(psi);
-            if (proc != null) {
-                proc.StandardError.ReadToEnd();
-                proc.WaitForExit(25000);
-            }
+            FFmpegInstallerService.RunProcessSafe(psi, 25000);
 
             if (IOFile.Exists(outSrt)) {
                 string raw = ReadTextAutoEncoding(outSrt);

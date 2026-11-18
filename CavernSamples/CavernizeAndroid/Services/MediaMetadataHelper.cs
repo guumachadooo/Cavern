@@ -21,6 +21,7 @@ public sealed class MediaArtworkMetadata {
     public bool HasVideo { get; init; }
     public int VideoWidth { get; init; }
     public int VideoHeight { get; init; }
+    public double DurationSeconds { get; init; }
     public bool HasEmbeddedArtwork { get; set; }
     public Bitmap ArtworkBitmap { get; set; }
     public Color PrimaryAccent { get; set; }
@@ -50,11 +51,22 @@ public static class MediaMetadataHelper {
         string mime = "";
         int sampleRate = 0;
         int bitrateKbps = 0;
+        double durationSec = 0;
         bool hasVideo = false;
         int videoWidth = 0;
         int videoHeight = 0;
         Bitmap artwork = null;
         bool hasEmbedded = false;
+
+        string manualOverride = OnlineMetadataService.GetManualCoverOverridePath(context, resolvedPath);
+        if (!string.IsNullOrEmpty(manualOverride) && IOFile.Exists(manualOverride)) {
+            try {
+                artwork = DecodeScaledBitmap(IOFile.ReadAllBytes(manualOverride), 640);
+                hasEmbedded = artwork != null;
+            } catch {
+                // Fall back to embedded/folder art below
+            }
+        }
 
         using MediaMetadataRetriever retriever = new();
         bool sourceOpened = false;
@@ -91,6 +103,11 @@ public static class MediaMetadataHelper {
                     bitrateKbps = bps / 1000;
                 }
 
+                string durRaw = retriever.ExtractMetadata(MetadataKey.Duration);
+                if (long.TryParse(durRaw, out long durMs) && durMs > 0) {
+                    durationSec = durMs / 1000.0;
+                }
+
                 string hasVideoRaw = (retriever.ExtractMetadata(MetadataKey.HasVideo) ?? "").Trim();
                 string vwRaw = retriever.ExtractMetadata(MetadataKey.VideoWidth);
                 string vhRaw = retriever.ExtractMetadata(MetadataKey.VideoHeight);
@@ -107,10 +124,12 @@ public static class MediaMetadataHelper {
                     }
                 }
 
-                byte[] embeddedBytes = retriever.GetEmbeddedPicture();
-                if (embeddedBytes != null && embeddedBytes.Length > 0) {
-                    artwork = DecodeScaledBitmap(embeddedBytes, 640);
-                    hasEmbedded = artwork != null;
+                if (artwork == null) {
+                    byte[] embeddedBytes = retriever.GetEmbeddedPicture();
+                    if (embeddedBytes != null && embeddedBytes.Length > 0) {
+                        artwork = DecodeScaledBitmap(embeddedBytes, 640);
+                        hasEmbedded = artwork != null;
+                    }
                 }
 
                 if (artwork == null && hasVideo) {
@@ -143,7 +162,7 @@ public static class MediaMetadataHelper {
             : CleanTitleFromFilename(fallbackTitle);
 
         if (artwork == null && context != null) {
-            string cachedCover = OnlineMetadataService.GetCachedCoverPath(context, effectiveTitle, artist, album);
+            string cachedCover = OnlineMetadataService.GetCachedCoverPath(context, effectiveTitle, artist, album, resolvedPath);
             if (!string.IsNullOrEmpty(cachedCover) && IOFile.Exists(cachedCover)) {
                 try {
                     artwork = DecodeScaledBitmap(IOFile.ReadAllBytes(cachedCover), 640);
@@ -176,6 +195,7 @@ public static class MediaMetadataHelper {
             HasVideo = hasVideo,
             VideoWidth = videoWidth,
             VideoHeight = videoHeight,
+            DurationSeconds = durationSec,
             HasEmbeddedArtwork = hasEmbedded,
             ArtworkBitmap = artwork,
             PrimaryAccent = primary,
@@ -265,6 +285,15 @@ public static class MediaMetadataHelper {
         try {
             string dir = AndroidFileHelper.TryGetOriginalDirectory(context, sourceUri, resolvedPath);
             if (string.IsNullOrEmpty(dir)) {
+                return null;
+            }
+            string lastFolder = IOPath.GetFileName(dir.TrimEnd('/')) ?? "";
+            if (lastFolder.Equals("Download", StringComparison.OrdinalIgnoreCase)
+                || lastFolder.Equals("Downloads", StringComparison.OrdinalIgnoreCase)
+                || lastFolder.Equals("Music", StringComparison.OrdinalIgnoreCase)
+                || lastFolder.Equals("Movies", StringComparison.OrdinalIgnoreCase)
+                || lastFolder.Equals("Audiobooks", StringComparison.OrdinalIgnoreCase)
+                || lastFolder.Equals("0", StringComparison.OrdinalIgnoreCase)) {
                 return null;
             }
 

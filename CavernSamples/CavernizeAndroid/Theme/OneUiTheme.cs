@@ -920,7 +920,7 @@ public sealed class OneUiSeekBar : SeekBar {
     }
 
     protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        int desiredH = OneUiTheme.Dp(Context, SlimVolumeMode ? 24f : 33f);
+        int desiredH = OneUiTheme.Dp(Context, SlimVolumeMode ? 26f : 40f);
         int w = MeasureSpec.GetSize(widthMeasureSpec);
         SetMeasuredDimension(ResolveSize(w, widthMeasureSpec), ResolveSize(desiredH, heightMeasureSpec));
     }
@@ -1001,29 +1001,26 @@ public sealed class OneUiSeekBar : SeekBar {
                 byte bodyLeftAlpha = (byte)Math.Round(255f - 128f * reveal);   // 255 -> 127 (0.50f like tw_progress_color_control_activated_start)
                 byte bodyRightAlpha = (byte)Math.Round(255f - 70f * reveal);   // 255 -> 185 (0.72f near thumb)
 
-                if (fillRight >= h) {
+                if (fillRight > 0.5f) {
                     if (reveal > 0.005f) {
                         Color bodyLeft = Color.Argb(bodyLeftAlpha, accent.R, accent.G, accent.B);
                         Color bodyRight = Color.Argb(bodyRightAlpha, accent.R, accent.G, accent.B);
-                        using LinearGradient fillShader = new(0f, 0f, fillRight, 0f, [bodyLeft.ToArgb(), bodyRight.ToArgb()], [0f, 1f], Shader.TileMode.Clamp);
+                        using LinearGradient fillShader = new(0f, 0f, Math.Max(2f, fillRight), 0f, [bodyLeft.ToArgb(), bodyRight.ToArgb()], [0f, 1f], Shader.TileMode.Clamp);
                         fillPaint.SetShader(fillShader);
                     } else {
                         fillPaint.SetShader(null);
                         fillPaint.Color = Color.Argb(255, accent.R, accent.G, accent.B);
                     }
-                    canvas.DrawRoundRect(0f, 0f, fillRight, h, radius, radius, fillPaint);
+                    float cornerR = Math.Min(radius, Math.Max(0.5f, fillRight * 0.5f));
+                    canvas.DrawRoundRect(0f, 0f, fillRight, h, cornerR, cornerR, fillPaint);
                     fillPaint.SetShader(null);
 
                     if (reveal > 0.005f) {
-                        float ballX = Math.Clamp(fillRight - radius, radius, w - radius);
-                        thumbBallPaint.Color = Color.Argb((int)Math.Round(255f * reveal), accent.R, accent.G, accent.B);
+                        float edgeFade = Math.Clamp(fillRight / Math.Max(1f, h), 0f, 1f);
+                        float ballX = Math.Clamp(fillRight - radius, 0f, w - radius);
+                        thumbBallPaint.Color = Color.Argb((int)Math.Round(255f * reveal * edgeFade), accent.R, accent.G, accent.B);
                         canvas.DrawCircle(ballX, radius, radius, thumbBallPaint);
                     }
-                } else if (fillRight > 0.5f) {
-                    fillPaint.SetShader(null);
-                    fillPaint.Color = Color.Argb(255, accent.R, accent.G, accent.B);
-                    float cornerR = Math.Max(0.5f, fillRight * 0.5f);
-                    canvas.DrawRoundRect(0f, 0f, fillRight, h, cornerR, cornerR, fillPaint);
                 }
             }
 

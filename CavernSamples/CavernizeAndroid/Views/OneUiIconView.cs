@@ -53,6 +53,8 @@ public enum OneUiIconType {
     SpeakerHigh,
     AppleRewind,
     AppleForward,
+    SkipPrevious,
+    SkipNext,
     LabelsTag,
     Search,
     LibraryGrid,
@@ -491,6 +493,26 @@ public static class OneUiVectorIcons {
                 p.LineTo(cx + r * 0.04f, cy + r * 0.48f);
                 p.Close();
                 canvas.DrawPath(p, fill);
+                break;
+            }
+
+            case OneUiIconType.SkipPrevious: {
+                canvas.DrawRoundRect(new RectF(cx - r * 0.78f, cy - r * 0.56f, cx - r * 0.54f, cy + r * 0.56f), r * 0.12f, r * 0.12f, fill);
+                p.MoveTo(cx + r * 0.74f, cy - r * 0.56f);
+                p.LineTo(cx - r * 0.34f, cy);
+                p.LineTo(cx + r * 0.74f, cy + r * 0.56f);
+                p.Close();
+                canvas.DrawPath(p, fill);
+                break;
+            }
+
+            case OneUiIconType.SkipNext: {
+                p.MoveTo(cx - r * 0.74f, cy - r * 0.56f);
+                p.LineTo(cx + r * 0.34f, cy);
+                p.LineTo(cx - r * 0.74f, cy + r * 0.56f);
+                p.Close();
+                canvas.DrawPath(p, fill);
+                canvas.DrawRoundRect(new RectF(cx + r * 0.54f, cy - r * 0.56f, cx + r * 0.78f, cy + r * 0.56f), r * 0.12f, r * 0.12f, fill);
                 break;
             }
 

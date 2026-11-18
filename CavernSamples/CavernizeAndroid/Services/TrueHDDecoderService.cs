@@ -189,17 +189,23 @@ public static class TrueHDDecoderService {
             RedirectStandardError = true,
             CreateNoWindow = true
         };
+        FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpegPath);
 
         StringBuilder outSb = new();
         StringBuilder errSb = new();
+        using ManualResetEventSlim outDone = new(false);
+        using ManualResetEventSlim errDone = new(false);
         using Process proc = new() { StartInfo = psi };
         proc.OutputDataReceived += (_, e) => {
-            if (e.Data != null) {
+            if (e.Data == null) {
+                outDone.Set();
+            } else {
                 outSb.AppendLine(e.Data);
             }
         };
         proc.ErrorDataReceived += (_, e) => {
             if (e.Data == null) {
+                errDone.Set();
                 return;
             }
             errSb.AppendLine(e.Data);
@@ -229,11 +235,16 @@ public static class TrueHDDecoderService {
                 } catch {
                     // Best-effort kill
                 }
+                try { proc.WaitForExit(1000); } catch { }
+                outDone.Wait(1000);
+                errDone.Wait(1000);
                 CleanUpPartialFile(outputPath);
                 token.ThrowIfCancellationRequested();
             }
         }
         proc.WaitForExit();
+        outDone.Wait(2000);
+        errDone.Wait(2000);
 
         string stdout = outSb.ToString().Trim();
         string stderr = errSb.ToString().Trim();
@@ -378,14 +389,20 @@ public static class TrueHDDecoderService {
                 : 0;
             string decodeJsonStdout;
 
+            using ManualResetEventSlim outDone = new(false);
+            using ManualResetEventSlim errDone = new(false);
             using (Process proc = new() { StartInfo = psi }) {
                 proc.OutputDataReceived += (_, e) => {
-                    if (e.Data != null) {
+                    if (e.Data == null) {
+                        outDone.Set();
+                    } else {
                         stdoutSb.AppendLine(e.Data);
                     }
                 };
                 proc.ErrorDataReceived += (_, e) => {
-                    if (e.Data != null) {
+                    if (e.Data == null) {
+                        errDone.Set();
+                    } else {
                         stderrSb.AppendLine(e.Data);
                     }
                 };
@@ -402,6 +419,9 @@ public static class TrueHDDecoderService {
                         } catch {
                             // Best-effort kill
                         }
+                        try { proc.WaitForExit(1000); } catch { }
+                        outDone.Wait(1000);
+                        errDone.Wait(1000);
                         token.ThrowIfCancellationRequested();
                     }
 
@@ -412,6 +432,8 @@ public static class TrueHDDecoderService {
                     }
                 }
                 proc.WaitForExit();
+                outDone.Wait(2000);
+                errDone.Wait(2000);
 
                 decodeJsonStdout = stdoutSb.ToString().Trim();
                 string stderr = stderrSb.ToString().Trim();
@@ -558,24 +580,7 @@ public static class TrueHDDecoderService {
             RedirectStandardError = true,
             CreateNoWindow = true
         };
-        using Process proc = Process.Start(psi);
-        if (proc == null) {
-            return (-1, "", "Failed to start process.");
-        }
-        StringBuilder outSb = new();
-        StringBuilder errSb = new();
-        proc.OutputDataReceived += (_, e) => { if (e.Data != null) outSb.AppendLine(e.Data); };
-        proc.ErrorDataReceived += (_, e) => { if (e.Data != null) errSb.AppendLine(e.Data); };
-        proc.BeginOutputReadLine();
-        proc.BeginErrorReadLine();
-        if (!proc.WaitForExit(timeoutMs)) {
-            try {
-                proc.Kill(entireProcessTree: true);
-            } catch {
-                // Ignore
-            }
-        }
-        return (proc.ExitCode, outSb.ToString(), errSb.ToString());
+        return FFmpegInstallerService.RunProcessSafe(psi, timeoutMs);
     }
 
     static string ExtractLastLines(string text, int maxLines) {

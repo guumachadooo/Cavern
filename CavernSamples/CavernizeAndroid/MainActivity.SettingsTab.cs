@@ -429,6 +429,8 @@ public partial class MainActivity {
 
         AddDivider(helpCard);
         autoCheckUpdatesSwitch = AddSwitchRow(helpCard, S["AutoCheckSwitch"], store.AutoCheckUpdates, v => store.AutoCheckUpdates = v);
+        AddDivider(helpCard);
+        AddSwitchRow(helpCard, S["OnlineAutoBestSwitch"], store.OnlineAutoSelectBestMatch, v => store.OnlineAutoSelectBestMatch = v);
         page.AddView(helpCard);
 
         RefreshSettingsTabButtons();

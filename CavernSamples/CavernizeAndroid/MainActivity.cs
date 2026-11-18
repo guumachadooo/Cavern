@@ -236,6 +236,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
         };
         mediaNotification.PlayPauseRequested += TogglePlayPause;
         mediaNotification.StopRequested += StopPlayback;
+        mediaNotification.SkipPreviousRequested += HandleMusicSkipPrevious;
+        mediaNotification.SkipNextRequested += HandleMusicSkipNext;
         mediaNotification.Rewind10Requested += () => SeekRelative(-10);
         mediaNotification.Forward10Requested += () => SeekRelative(10);
         mediaNotification.SeekRequestedMs += ms => SeekAbsoluteSeconds(ms / 1000.0);
@@ -944,8 +946,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 }
 
                 RunOnUiThread(() => {
-                    activeLibraryQueue.Clear();
-                    activeLibraryQueueIndex = -1;
+                    string queueSeed = !string.IsNullOrEmpty(extractedMeta?.SourceMediaPath) && File.Exists(extractedMeta.SourceMediaPath)
+                        ? extractedMeta.SourceMediaPath
+                        : resolved;
+                    EnsureActiveQueueForCurrentFile(queueSeed);
                     string oldFallback = activeFallbackSessionDir;
                     activeFallbackSessionDir = newFallbackSessionDir;
                     OpenContent(file, extractedMeta);
@@ -1155,6 +1159,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     file = TryOpenWithSmartFallbacks(path, out newFallbackSessionDir);
                 }
                 RunOnUiThread(() => {
+                    EnsureActiveQueueForCurrentFile(path);
                     string oldFallback = activeFallbackSessionDir;
                     activeFallbackSessionDir = newFallbackSessionDir;
                     pendingAutoPlayAfterLoad = autoPlay;
@@ -1206,9 +1211,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             SelectedTrack = null;
         }
 
-        if (!ReferenceEquals(prevMeta, currentMediaMeta)) {
-            prevMeta?.ArtworkBitmap?.Dispose();
-        }
+        _ = prevMeta;
         discoveredSubtitles = [];
         activeSubtitleTrackId = null;
         activeSubtitleCues = [];
@@ -1323,9 +1326,73 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         mediaNotification?.CancelNotification();
         RefreshMusicPlayerUi();
-        oldMeta?.ArtworkBitmap?.Dispose();
+        _ = oldMeta;
         RebuildInlineTrackList();
         report = new PostRenderReport(environment.Listener);
+    }
+
+    void EnsureActiveQueueForCurrentFile(string targetPath) {
+        if (string.IsNullOrWhiteSpace(targetPath)) {
+            return;
+        }
+        int existingIdx = activeLibraryQueue.FindIndex(x => string.Equals(x.FilePath, targetPath, StringComparison.OrdinalIgnoreCase));
+        if (existingIdx >= 0) {
+            activeLibraryQueueIndex = existingIdx;
+            return;
+        }
+
+        activeLibraryQueue.Clear();
+        activeLibraryQueueIndex = -1;
+
+        MediaLibrarySnapshot snap = librarySnapshot ?? MediaLibraryService.CachedSnapshot ?? MediaLibraryService.TryLoadCachedSnapshot(this);
+        if (snap != null) {
+            LibraryTrackItem match = snap.Tracks.FirstOrDefault(t => string.Equals(t.FilePath, targetPath, StringComparison.OrdinalIgnoreCase));
+            if (match != null) {
+                LibraryAlbumGroup alb = snap.Albums.FirstOrDefault(a => a.Tracks.Contains(match));
+                List<LibraryTrackItem> group = alb != null && alb.Tracks.Count > 1
+                    ? alb.Tracks
+                    : snap.Tracks.Where(t => string.Equals(t.FolderPath, match.FolderPath, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                List<LibraryTrackItem> filteredGroup = group.Where(t => MediaLibraryService.PassesFilter(t, store.LibraryFilterMode)).ToList();
+                List<LibraryTrackItem> useList = filteredGroup.Contains(match) ? filteredGroup : group;
+                activeLibraryQueue.AddRange(useList);
+                activeLibraryQueueIndex = activeLibraryQueue.IndexOf(match);
+                if (activeLibraryQueue.Count > 0 && activeLibraryQueueIndex >= 0) {
+                    return;
+                }
+                activeLibraryQueue.Clear();
+            }
+        }
+
+        // Fallback: enumerate sibling media files in the same folder outside app cache
+        try {
+            string dir = Path.GetDirectoryName(targetPath);
+            string cacheRoot = CacheDir?.AbsolutePath ?? "";
+            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir) &&
+                (string.IsNullOrEmpty(cacheRoot) || !dir.StartsWith(cacheRoot, StringComparison.OrdinalIgnoreCase))) {
+                HashSet<string> exts = new(StringComparer.OrdinalIgnoreCase) {
+                    ".flac", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".opus",
+                    ".ac3", ".eac3", ".ec3", ".thd", ".mlp", ".atmos", ".caf", ".laf",
+                    ".mka", ".mkv", ".mp4", ".m4v", ".mov"
+                };
+                List<string> siblings = Directory.EnumerateFiles(dir)
+                    .Where(f => exts.Contains(Path.GetExtension(f)))
+                    .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                foreach (string s in siblings) {
+                    activeLibraryQueue.Add(new LibraryTrackItem {
+                        FilePath = s,
+                        Title = Path.GetFileNameWithoutExtension(s),
+                        FolderPath = dir,
+                        FolderName = Path.GetFileName(dir) ?? "",
+                        FormatBadge = Path.GetExtension(s).TrimStart('.').ToUpperInvariant()
+                    });
+                }
+                activeLibraryQueueIndex = activeLibraryQueue.FindIndex(x => string.Equals(x.FilePath, targetPath, StringComparison.OrdinalIgnoreCase));
+            }
+        } catch {
+            // Keep queue empty on scoped folder error
+        }
     }
 
     void OnSelectedTrackChanged() {
@@ -1753,12 +1820,15 @@ public partial class MainActivity : Activity, ICavernizeApp {
             RunOnUiThread(() => SetFFmpegStatus(S["CheckingUpdate"], -1));
             FFmpegStatusResult status = await FFmpegInstallerService.CheckStatusAsync(this, store);
             latestFFmpegStatus = status;
-            AppLogger.Info($"FFmpeg status: installed={status.IsInstalled}, local='{status.LocalPath}', ver='{status.InstalledVersion}', remote='{status.RemoteVersion}'");
+            AppLogger.Info($"FFmpeg status: installed={status.IsInstalled}, working={status.IsWorking}, local='{status.LocalPath}', ver='{status.InstalledVersion}', remote='{status.RemoteVersion}'");
 
             RunOnUiThread(() => {
                 RefreshSettingsDot();
                 RefreshFFmpegCardUi();
-                if (!silent && !status.IsUpdateAvailable && status.IsInstalled) {
+                if (status.IsInstalled && !status.IsWorking && !isFFmpegDownloading && !string.IsNullOrEmpty(status.DownloadUrl)) {
+                    AppLogger.Warn("Broken FFmpeg binary detected on launch (SIGSYS/incompatible ABI) — auto-repairing to native Android NDK build...");
+                    StartFFmpegDownloadOrUpdate();
+                } else if (!silent && !status.IsUpdateAvailable && status.IsInstalled && status.IsWorking) {
                     string ver = string.IsNullOrEmpty(status.InstalledVersion) ? status.RemoteVersion : status.InstalledVersion;
                     Toast.MakeText(this, string.Format(S["FFmpegUpToDate"], ver), ToastLength.Short).Show();
                 }

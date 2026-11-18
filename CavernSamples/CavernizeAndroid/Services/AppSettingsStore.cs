@@ -244,6 +244,16 @@ public sealed class AppSettingsStore {
         set => Edit().PutBoolean("roomPosLocked", value).Apply();
     }
 
+    public bool OnlineAutoSelectBestMatch {
+        get => prefs.GetBoolean("onlineAutoBestMatch", true);
+        set => Edit().PutBoolean("onlineAutoBestMatch", value).Apply();
+    }
+
+    public int LibraryFilterMode {
+        get => prefs.GetInt("libraryFilterMode", 0);
+        set => Edit().PutInt("libraryFilterMode", value).Apply();
+    }
+
     public AppSettingsStore(Context context) {
         prefs = context.GetSharedPreferences(PrefsName, FileCreationMode.Private);
         if (!string.IsNullOrEmpty(LanguageCode)) {
@@ -328,6 +338,10 @@ public sealed class AndroidRenderingSettings(AppSettingsStore store) : Rendering
 
 public sealed class AndroidFFmpegRunner(Action<string> onStatus) : FFmpeg {
     public override void UpdateStatusText(string text) => onStatus?.Invoke(text);
+
+    protected override void ConfigureStartInfo(System.Diagnostics.ProcessStartInfo startInfo) {
+        FFmpegInstallerService.ConfigureProcessStartInfo(startInfo, Location);
+    }
 
     protected override void OnCommandCompleted(string executable, string arguments, int exitCode, string stdout, string stderr) {
         AppLogger.LogFFmpeg(executable, arguments, exitCode, stdout, stderr);

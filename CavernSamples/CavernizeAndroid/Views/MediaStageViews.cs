@@ -978,32 +978,18 @@ public sealed class AppleMusicLyricsView : View {
     sealed class LineLayoutInfo {
         public LyricCue Cue;
         public StaticLayout Layout;
-        public Bitmap BlurBitmap;
-        public int BlurBmpW;
-        public int BlurBmpH;
-        public float BlurPadPx;
         public bool IsInstrumental;
         public double StartSec;
         public double EndSec;
         public float TopY;
         public float Height;
         public float FocusProgress;
-        public float CurrentDrawY;
-        public bool YInitialized;
-
-        public void DisposeBitmap() {
-            BlurBitmap?.Recycle();
-            BlurBitmap?.Dispose();
-            BlurBitmap = null;
-        }
     }
 
     readonly List<LineLayoutInfo> cachedLines = [];
     readonly List<(RectF rect, double seekSec)> hitBoxes = [];
     readonly TextPaint linePaint = new(PaintFlags.AntiAlias);
-    readonly TextPaint blurBuildPaint = new(PaintFlags.AntiAlias);
     readonly TextPaint emptyPaint = new(PaintFlags.AntiAlias);
-    readonly Paint blurBmpPaint = new(PaintFlags.AntiAlias | PaintFlags.FilterBitmap);
     readonly Paint dotPaint = new(PaintFlags.AntiAlias);
     readonly int touchSlop;
 
@@ -1031,9 +1017,6 @@ public sealed class AppleMusicLyricsView : View {
         float dp = ctx.Resources.DisplayMetrics.Density;
         Typeface sfBold = OneUiTheme.GetAppleFontBold(ctx);
         linePaint.SetTypeface(sfBold);
-        blurBuildPaint.SetTypeface(sfBold);
-        blurBuildPaint.Color = Color.White;
-        blurBuildPaint.SetMaskFilter(new BlurMaskFilter(3.0f * dp, BlurMaskFilter.Blur.Normal!));
         emptyPaint.SetTypeface(OneUiTheme.GetAppleFontMedium(ctx));
         emptyPaint.TextSize = 14.5f * dp;
         emptyPaint.Color = OneUiTheme.TextSub;
@@ -1061,14 +1044,7 @@ public sealed class AppleMusicLyricsView : View {
         }
     }
 
-    void DisposeCachedBitmaps() {
-        for (int i = 0; i < cachedLines.Count; i++) {
-            cachedLines[i].DisposeBitmap();
-        }
-    }
-
     void RebuildLayouts() {
-        DisposeCachedBitmaps();
         cachedLines.Clear();
         totalContentHeight = 0f;
         float dp = Resources.DisplayMetrics.Density;
@@ -1081,7 +1057,6 @@ public sealed class AppleMusicLyricsView : View {
 
         float fontSize = Math.Clamp(23.5f * sp, 18f * dp, 28f * dp);
         linePaint.TextSize = fontSize;
-        blurBuildPaint.TextSize = fontSize;
 
         float y = 20f * dp;
         float lineSpacing = 22f * dp;
@@ -1095,8 +1070,7 @@ public sealed class AppleMusicLyricsView : View {
                 EndSec = document.Lines[0].TimeSeconds,
                 TopY = y,
                 Height = instrH,
-                FocusProgress = 1f,
-                CurrentDrawY = y
+                FocusProgress = 1f
             });
             y += instrH + lineSpacing;
         }
@@ -1139,19 +1113,36 @@ public sealed class AppleMusicLyricsView : View {
             });
             y += h + lineSpacing;
 
-            // Insert true instrumental row for long gaps (modeled on Apple Music lyrics_line_instrumental.xml)
+            // Only transition to instrumental dots AFTER vocals end (respect explicit end timestamps; never cut off mid-singing on start-only LRC)
             if (document.IsSynced && i + 1 < document.Lines.Count) {
-                double gap = document.Lines[i + 1].TimeSeconds - cue.TimeSeconds;
-                if (gap >= 9.0) {
-                    cachedLines.Add(new LineLayoutInfo {
-                        Cue = new LyricCue(cue.TimeSeconds + 4.2, ""),
-                        IsInstrumental = true,
-                        StartSec = cue.TimeSeconds + 4.2,
-                        EndSec = document.Lines[i + 1].TimeSeconds,
-                        TopY = y,
-                        Height = instrH
-                    });
-                    y += instrH + lineSpacing;
+                LyricCue nextCue = document.Lines[i + 1];
+                string nextTrimmed = (nextCue.Text ?? "").Trim();
+                bool nextIsExplicitInstr = string.IsNullOrWhiteSpace(nextTrimmed) || nextTrimmed is "..." or "…" or "• • •" or "•";
+                if (!nextIsExplicitInstr) {
+                    double? instrStart = null;
+                    if (cue.EndTimeSeconds.HasValue && cue.EndTimeSeconds.Value > cue.TimeSeconds) {
+                        if (nextCue.TimeSeconds - cue.EndTimeSeconds.Value >= 4.0) {
+                            instrStart = cue.EndTimeSeconds.Value + 0.12;
+                        }
+                    } else {
+                        double gap = nextCue.TimeSeconds - cue.TimeSeconds;
+                        double estVocal = Math.Clamp(4.0 + txt.Length * 0.14, 6.0, 11.5);
+                        if (gap >= 16.0 && nextCue.TimeSeconds - (cue.TimeSeconds + estVocal) >= 6.0) {
+                            instrStart = cue.TimeSeconds + estVocal;
+                        }
+                    }
+
+                    if (instrStart.HasValue) {
+                        cachedLines.Add(new LineLayoutInfo {
+                            Cue = new LyricCue(instrStart.Value, ""),
+                            IsInstrumental = true,
+                            StartSec = instrStart.Value,
+                            EndSec = nextCue.TimeSeconds,
+                            TopY = y,
+                            Height = instrH
+                        });
+                        y += instrH + lineSpacing;
+                    }
                 }
             }
         }
@@ -1160,47 +1151,6 @@ public sealed class AppleMusicLyricsView : View {
         int initActive = ResolveActiveIndex();
         for (int i = 0; i < cachedLines.Count; i++) {
             cachedLines[i].FocusProgress = (!document.IsSynced || i == initActive) ? 1f : 0f;
-            cachedLines[i].CurrentDrawY = cachedLines[i].TopY;
-            cachedLines[i].YInitialized = true;
-        }
-    }
-
-    static Bitmap EnsureBlurredLineBitmap(LineLayoutInfo info, float dp, TextPaint blurPaint) {
-        if (info.BlurBitmap != null && !info.BlurBitmap.IsRecycled) {
-            return info.BlurBitmap;
-        }
-        if (info.Layout == null || info.Layout.Width <= 0 || info.Height <= 0) {
-            return null;
-        }
-
-        const float scale = 0.5f;
-        float pad = 6f * dp;
-        int srcW = info.Layout.Width;
-        int srcH = (int)Math.Ceiling(info.Height);
-        int bw = Math.Clamp((int)Math.Ceiling((srcW + pad * 2f) * scale), 4, 1024);
-        int bh = Math.Clamp((int)Math.Ceiling((srcH + pad * 2f) * scale), 4, 512);
-
-        try {
-            StaticLayout blurSl = StaticLayout.Builder
-                .Obtain(info.Layout.Text ?? "", 0, info.Layout.Text?.Length ?? 0, blurPaint, srcW)
-                .SetAlignment(Android.Text.Layout.Alignment.AlignNormal)
-                .SetLineSpacing(2f * dp, 1.06f)
-                .SetIncludePad(false)
-                .Build();
-
-            Bitmap bmp = Bitmap.CreateBitmap(bw, bh, Bitmap.Config.Argb8888!);
-            using Canvas c = new(bmp);
-            c.Scale(scale, scale);
-            c.Translate(pad, pad);
-            blurSl.Draw(c);
-
-            info.BlurBitmap = bmp;
-            info.BlurBmpW = srcW;
-            info.BlurBmpH = srcH;
-            info.BlurPadPx = pad;
-            return bmp;
-        } catch {
-            return null;
         }
     }
 
@@ -1273,8 +1223,8 @@ public sealed class AppleMusicLyricsView : View {
         }
 
         float diff = targetScrollOffsetPx - scrollOffsetPx;
-        if (Math.Abs(diff) > 0.4f && !isDragging) {
-            scrollOffsetPx += diff * Math.Min(1f, dt * 8.2f);
+        if (Math.Abs(diff) > 0.35f && !isDragging) {
+            scrollOffsetPx += diff * Math.Min(1f, dt * 8.8f);
         } else if (!isDragging) {
             scrollOffsetPx = targetScrollOffsetPx;
         }
@@ -1282,7 +1232,7 @@ public sealed class AppleMusicLyricsView : View {
         hitBoxes.Clear();
         float padX = 4f * dp;
         bool hasActiveInstrumental = false;
-        bool anyAnimating = MathF.Abs(targetClarity - manualClarity) > 0.005f || Math.Abs(diff) > 0.4f;
+        bool anyAnimating = MathF.Abs(targetClarity - manualClarity) > 0.005f || Math.Abs(diff) > 0.35f;
 
         for (int i = 0; i < cachedLines.Count; i++) {
             LineLayoutInfo info = cachedLines[i];
@@ -1291,30 +1241,14 @@ public sealed class AppleMusicLyricsView : View {
 
             float focusDiff = targetFocus - info.FocusProgress;
             if (MathF.Abs(focusDiff) > 0.004f) {
-                float speed = focusDiff > 0 ? 7.8f : 5.8f;
+                float speed = focusDiff > 0 ? 8.6f : 6.4f;
                 info.FocusProgress = Math.Clamp(info.FocusProgress + focusDiff * Math.Min(1f, dt * speed), 0f, 1f);
                 anyAnimating = true;
             } else {
                 info.FocusProgress = targetFocus;
             }
 
-            float targetDrawY = info.TopY - targetScrollOffsetPx;
-            if (!info.YInitialized || manualActive) {
-                info.CurrentDrawY = info.TopY - scrollOffsetPx;
-                info.YInitialized = true;
-            } else {
-                int dist = activeIdx >= 0 ? Math.Abs(i - activeIdx) : 0;
-                float staggerSpeed = Math.Clamp(11.2f - dist * 0.85f, 5.4f, 11.2f);
-                float yDiff = targetDrawY - info.CurrentDrawY;
-                if (MathF.Abs(yDiff) > 0.35f) {
-                    info.CurrentDrawY += yDiff * Math.Min(1f, dt * staggerSpeed);
-                    anyAnimating = true;
-                } else {
-                    info.CurrentDrawY = targetDrawY;
-                }
-            }
-
-            float drawY = info.CurrentDrawY;
+            float drawY = info.TopY - scrollOffsetPx;
             if (drawY + info.Height < -24f * dp || drawY > h + 24f * dp) {
                 continue;
             }
@@ -1368,46 +1302,22 @@ public sealed class AppleMusicLyricsView : View {
             baseFrac = baseFrac + (Math.Max(baseFrac, 0.74f) - baseFrac) * manualClarity;
             int totalAlpha = Math.Clamp((int)Math.Round(255f * baseFrac * edgeFactor), 10, 255);
 
-            // Scale smoothly from 0.945 -> 1.01 anchored on the left edge (transform-origin: left center)
-            float scale = 0.945f + 0.065f * easedFocus;
-
-            // Depth-of-field blur fraction (1 = blurred when unfocused, 0 = razor sharp when active or browsing)
-            float blurMix = document.IsSynced
-                ? (1f - easedFocus) * (1f - manualClarity)
-                : 0f;
+            // Scale smoothly from 0.945 -> 1.02 anchored on the left edge (transform-origin: left center)
+            float scale = 0.945f + 0.075f * easedFocus;
 
             canvas.Save();
             canvas.Translate(padX, drawY);
             canvas.Scale(scale, scale, 0f, info.Height * 0.5f);
 
-            if (blurMix > 0.04f) {
-                Bitmap blurBmp = EnsureBlurredLineBitmap(info, dp, blurBuildPaint);
-                if (blurBmp != null) {
-                    int blurAlpha = Math.Clamp((int)Math.Round(totalAlpha * blurMix), 0, 255);
-                    if (blurAlpha > 2) {
-                        blurBmpPaint.Alpha = blurAlpha;
-                        RectF dst = new(
-                            -info.BlurPadPx,
-                            -info.BlurPadPx,
-                            info.BlurBmpW + info.BlurPadPx,
-                            info.BlurBmpH + info.BlurPadPx);
-                        canvas.DrawBitmap(blurBmp, null, dst, blurBmpPaint);
-                    }
-                }
-            }
-
-            int sharpAlpha = Math.Clamp((int)Math.Round(totalAlpha * (1f - blurMix * 0.88f)), 0, 255);
-            if (sharpAlpha > 2) {
-                linePaint.Color = Color.Argb(sharpAlpha, 255, 255, 255);
-                if (easedFocus > 0.25f) {
-                    linePaint.SetShadowLayer(10f * dp * easedFocus, 0f, 0f,
-                        Color.Argb((int)Math.Round(65f * easedFocus * edgeFactor), 255, 255, 255));
-                } else {
-                    linePaint.ClearShadowLayer();
-                }
-                info.Layout.Draw(canvas);
+            linePaint.Color = Color.Argb(totalAlpha, 255, 255, 255);
+            if (easedFocus > 0.25f) {
+                linePaint.SetShadowLayer(8f * dp * easedFocus, 0f, 0f,
+                    Color.Argb((int)Math.Round(56f * easedFocus * edgeFactor), 255, 255, 255));
+            } else {
                 linePaint.ClearShadowLayer();
             }
+            info.Layout.Draw(canvas);
+            linePaint.ClearShadowLayer();
 
             canvas.Restore();
 
@@ -1479,9 +1389,6 @@ public sealed class AppleMusicLyricsView : View {
     }
 
     protected override void Dispose(bool disposing) {
-        if (disposing) {
-            DisposeCachedBitmaps();
-        }
         base.Dispose(disposing);
     }
 }

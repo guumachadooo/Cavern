@@ -11,9 +11,9 @@ using IOPath = System.IO.Path;
 namespace CavernizeAndroid.Services;
 
 /// <summary>
-/// Single timed (or untimed) lyric line parsed from LRC, TXT, or embedded media tags.
+/// Single timed (or untimed) lyric line parsed from LRC, ELRC, TTML, SRT/VTT, TXT, or embedded media tags.
 /// </summary>
-public readonly record struct LyricCue(double TimeSeconds, string Text);
+public readonly record struct LyricCue(double TimeSeconds, string Text, double? EndTimeSeconds = null);
 
 /// <summary>
 /// Parsed lyrics payload ready for Apple Music-style synced scrolling or static display.
@@ -31,8 +31,11 @@ public sealed class LyricsDocument {
 /// (ID3v2 USLT/SYLT, FLAC/Vorbis comments, MP4 ©lyr, and FFmpeg metadata fallback).
 /// </summary>
 public static partial class LyricsService {
-    [GeneratedRegex(@"\[(\d{1,2}):(\d{2})(?:[.:](\d{1,3}))?\]", RegexOptions.Compiled)]
+    [GeneratedRegex(@"\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]", RegexOptions.Compiled)]
     private static partial Regex TimestampRegex();
+
+    [GeneratedRegex(@"<(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?>", RegexOptions.Compiled)]
+    private static partial Regex WordTimestampRegex();
 
     [GeneratedRegex(@"^\[(ti|ar|al|au|by|re|ve|length|la):(.*)\]$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex MetaTagRegex();
@@ -40,7 +43,13 @@ public static partial class LyricsService {
     [GeneratedRegex(@"^\[offset:([+-]?\d+)\]$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex OffsetTagRegex();
 
-    static readonly string[] LyricExtensions = [".lrc", ".txt"];
+    [GeneratedRegex(@"<p\b[^>]*\bbegin\s*=\s*[""']([^""']+)[""'][^>]*?(?:\bend\s*=\s*[""']([^""']+)[""'])?[^>]*>(.*?)</p>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled)]
+    private static partial Regex TtmlLineRegex();
+
+    [GeneratedRegex(@"(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})", RegexOptions.Compiled)]
+    private static partial Regex SrtTimingRegex();
+
+    static readonly string[] LyricExtensions = [".lrc", ".elrc", ".ttml", ".srt", ".vtt", ".txt"];
 
     public static LyricsDocument LoadForMedia(Context ctx, Android.Net.Uri sourceUri, string sourceMediaPath, string fallbackTitle, string artist = "") {
         // 1. Adjacent external .lrc / .txt files in original folder or media folder
@@ -421,15 +430,10 @@ public static partial class LyricsService {
             psi.ArgumentList.Add("-f");
             psi.ArgumentList.Add("ffmetadata");
             psi.ArgumentList.Add("-");
-            using Process proc = new() { StartInfo = psi };
-            if (!proc.Start()) return null;
-            string output = proc.StandardOutput.ReadToEnd();
-            if (!proc.WaitForExit(3500)) {
-                try { proc.Kill(); } catch { }
-            }
-            if (string.IsNullOrWhiteSpace(output)) return null;
+            var run = FFmpegInstallerService.RunProcessSafe(psi, 4000);
+            if (!run.Started || string.IsNullOrWhiteSpace(run.StdOut)) return null;
 
-            string rawVal = ExtractKeyFromFFMetadata(output, "lyrics");
+            string rawVal = ExtractKeyFromFFMetadata(run.StdOut, "lyrics");
             if (string.IsNullOrWhiteSpace(rawVal)) {
                 return null;
             }
@@ -468,6 +472,33 @@ public static partial class LyricsService {
             return new LyricsDocument();
         }
         string normalized = raw.Replace("\r\n", "\n").Replace('\r', '\n').Trim();
+
+        // Check TTML XML format (explicit begin + end markers)
+        if (normalized.Contains("<p", StringComparison.OrdinalIgnoreCase) && normalized.Contains("begin=", StringComparison.OrdinalIgnoreCase)) {
+            List<LyricCue> ttmlCues = ParseTtmlCues(normalized);
+            if (ttmlCues.Count >= 1) {
+                return new LyricsDocument {
+                    IsSynced = true,
+                    Lines = ttmlCues,
+                    RawUnsyncedText = string.Join("\n", ttmlCues.Select(c => c.Text)),
+                    SourceLabel = string.IsNullOrWhiteSpace(sourceLabel) ? "TTML" : sourceLabel
+                };
+            }
+        }
+
+        // Check SRT / WebVTT format (explicit start --> end markers)
+        if (normalized.Contains("-->", StringComparison.Ordinal)) {
+            List<LyricCue> srtCues = ParseSrtOrVttCues(normalized);
+            if (srtCues.Count >= 1) {
+                return new LyricsDocument {
+                    IsSynced = true,
+                    Lines = srtCues,
+                    RawUnsyncedText = string.Join("\n", srtCues.Select(c => c.Text)),
+                    SourceLabel = string.IsNullOrWhiteSpace(sourceLabel) ? "Timed Subtitles" : sourceLabel
+                };
+            }
+        }
+
         string[] rawLines = normalized.Split('\n');
 
         double offsetSec = 0;
@@ -492,21 +523,37 @@ public static partial class LyricsService {
             MatchCollection matches = TimestampRegex().Matches(line);
             if (matches.Count > 0) {
                 int textStart = matches[^1].Index + matches[^1].Length;
-                string lyricText = TimestampRegex().Replace(line[textStart..], "").Trim();
+                string rawAfter = TimestampRegex().Replace(line[textStart..], "");
+
+                // Extract Enhanced LRC inline word/end timestamps (<mm:ss.xx>) if present
+                double? inlineEndSec = null;
+                MatchCollection wordMatches = WordTimestampRegex().Matches(rawAfter);
+                if (wordMatches.Count > 0) {
+                    Match lastWord = wordMatches[^1];
+                    if (TryParseMinSecMatch(lastWord, out double wSec)) {
+                        inlineEndSec = Math.Max(0, wSec + offsetSec);
+                    }
+                    rawAfter = WordTimestampRegex().Replace(rawAfter, "");
+                }
+
+                string lyricText = Regex.Replace(rawAfter, @"\s{2,}", " ").Trim();
                 foreach (Match m in matches) {
-                    if (!int.TryParse(m.Groups[1].Value, out int mins) ||
-                        !int.TryParse(m.Groups[2].Value, out int secs)) {
+                    if (!TryParseMinSecMatch(m, out double baseSec)) {
                         continue;
                     }
-                    double frac = 0;
-                    if (m.Groups[3].Success) {
-                        string fs = m.Groups[3].Value;
-                        if (double.TryParse(fs, out double fVal)) {
-                            frac = fVal / Math.Pow(10, fs.Length);
+                    double t = Math.Max(0, baseSec + offsetSec);
+                    bool isEmptyBreak = string.IsNullOrEmpty(lyricText) || lyricText is "..." or "…" or "• • •" or "•";
+                    if (isEmptyBreak) {
+                        // Empty LRC break line marks the end of the previous sung phrase
+                        if (synced.Count > 0 && !synced[^1].EndTimeSeconds.HasValue && t > synced[^1].TimeSeconds) {
+                            LyricCue prev = synced[^1];
+                            synced[^1] = prev with { EndTimeSeconds = t };
                         }
+                        synced.Add(new LyricCue(t, "• • •"));
+                    } else {
+                        double? endT = inlineEndSec.HasValue && inlineEndSec.Value > t + 0.15 ? inlineEndSec : null;
+                        synced.Add(new LyricCue(t, lyricText, endT));
                     }
-                    double t = Math.Max(0, mins * 60.0 + secs + frac + offsetSec);
-                    synced.Add(new LyricCue(t, string.IsNullOrEmpty(lyricText) ? "• • •" : lyricText));
                 }
             } else {
                 unsynced.Add(line);
@@ -515,7 +562,6 @@ public static partial class LyricsService {
 
         if (synced.Count >= 2) {
             synced.Sort((a, b) => a.TimeSeconds.CompareTo(b.TimeSeconds));
-            // Drop trailing empty instrument dots if followed immediately by nothing
             return new LyricsDocument {
                 IsSynced = true,
                 Lines = synced,
@@ -534,5 +580,102 @@ public static partial class LyricsService {
             RawUnsyncedText = string.Join("\n", unsynced),
             SourceLabel = sourceLabel
         };
+    }
+
+    static bool TryParseMinSecMatch(Match m, out double seconds) {
+        seconds = 0;
+        if (!int.TryParse(m.Groups[1].Value, out int mins) ||
+            !int.TryParse(m.Groups[2].Value, out int secs)) {
+            return false;
+        }
+        double frac = 0;
+        if (m.Groups[3].Success) {
+            string fs = m.Groups[3].Value;
+            if (double.TryParse(fs, out double fVal)) {
+                frac = fVal / Math.Pow(10, fs.Length);
+            }
+        }
+        seconds = mins * 60.0 + secs + frac;
+        return true;
+    }
+
+    static List<LyricCue> ParseTtmlCues(string normalized) {
+        List<LyricCue> cues = [];
+        foreach (Match m in TtmlLineRegex().Matches(normalized)) {
+            if (!TryParseClockTimestamp(m.Groups[1].Value, out double start)) continue;
+            double? end = m.Groups[2].Success && TryParseClockTimestamp(m.Groups[2].Value, out double e) && e > start
+                ? e
+                : null;
+            string inner = WordTimestampRegex().Replace(m.Groups[3].Value, " ");
+            inner = Regex.Replace(inner, @"<[^>]+>", " ");
+            inner = System.Net.WebUtility.HtmlDecode(inner);
+            inner = Regex.Replace(inner, @"\s+", " ").Trim();
+            if (!string.IsNullOrWhiteSpace(inner)) {
+                cues.Add(new LyricCue(start, inner, end));
+            }
+        }
+        cues.Sort((a, b) => a.TimeSeconds.CompareTo(b.TimeSeconds));
+        return cues;
+    }
+
+    static List<LyricCue> ParseSrtOrVttCues(string normalized) {
+        List<LyricCue> cues = [];
+        string[] blocks = normalized.Split("\n\n", StringSplitOptions.RemoveEmptyEntries);
+        foreach (string blk in blocks) {
+            string[] lines = blk.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            int timingIdx = -1;
+            double start = 0;
+            double end = 0;
+            for (int i = 0; i < Math.Min(3, lines.Length); i++) {
+                Match tm = SrtTimingRegex().Match(lines[i]);
+                if (!tm.Success) continue;
+                int h1 = tm.Groups[1].Success ? int.Parse(tm.Groups[1].Value) : 0;
+                int m1 = int.Parse(tm.Groups[2].Value);
+                int s1 = int.Parse(tm.Groups[3].Value);
+                double f1 = double.Parse(tm.Groups[4].Value) / Math.Pow(10, tm.Groups[4].Value.Length);
+                int h2 = tm.Groups[5].Success ? int.Parse(tm.Groups[5].Value) : 0;
+                int m2 = int.Parse(tm.Groups[6].Value);
+                int s2 = int.Parse(tm.Groups[7].Value);
+                double f2 = double.Parse(tm.Groups[8].Value) / Math.Pow(10, tm.Groups[8].Value.Length);
+                start = h1 * 3600 + m1 * 60 + s1 + f1;
+                end = h2 * 3600 + m2 * 60 + s2 + f2;
+                timingIdx = i;
+                break;
+            }
+            if (timingIdx < 0 || timingIdx + 1 >= lines.Length) continue;
+            string txt = string.Join(" ", lines[(timingIdx + 1)..]);
+            txt = Regex.Replace(txt, @"<[^>]+>", "").Trim();
+            if (!string.IsNullOrWhiteSpace(txt)) {
+                cues.Add(new LyricCue(start, txt, end > start ? end : null));
+            }
+        }
+        cues.Sort((a, b) => a.TimeSeconds.CompareTo(b.TimeSeconds));
+        return cues;
+    }
+
+    static bool TryParseClockTimestamp(string raw, out double seconds) {
+        seconds = 0;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        string s = raw.Trim();
+        if (s.EndsWith("s", StringComparison.OrdinalIgnoreCase) &&
+            double.TryParse(s[..^1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double secOnly)) {
+            seconds = secOnly;
+            return true;
+        }
+        string[] parts = s.Split(':');
+        if (parts.Length == 2 &&
+            double.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double m) &&
+            double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double sc)) {
+            seconds = m * 60.0 + sc;
+            return true;
+        }
+        if (parts.Length == 3 &&
+            double.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double hr) &&
+            double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double mn) &&
+            double.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double sc3)) {
+            seconds = hr * 3600.0 + mn * 60.0 + sc3;
+            return true;
+        }
+        return false;
     }
 }
