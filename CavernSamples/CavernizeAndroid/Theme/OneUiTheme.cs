@@ -1222,9 +1222,9 @@ public sealed class OneUiSwitch : Switch {
         Clickable = true;
         Focusable = true;
 
-        trackPaint.SetStyle(Paint.Style.Fill);
-        thumbCorePaint.SetStyle(Paint.Style.Fill);
-        thumbRingPaint.SetStyle(Paint.Style.Stroke);
+        trackPaint.SetStyle(Android.Graphics.Paint.Style.Fill);
+        thumbCorePaint.SetStyle(Android.Graphics.Paint.Style.Fill);
+        thumbRingPaint.SetStyle(Android.Graphics.Paint.Style.Stroke);
 
         CheckedChange += (_, _) => {
             if (hasDrawnOnce) {
