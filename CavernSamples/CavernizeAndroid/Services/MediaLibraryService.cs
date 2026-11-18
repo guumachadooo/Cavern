@@ -198,8 +198,9 @@ public static class MediaLibraryService {
                 current.FileSizeBytes = len;
                 current.LastModifiedTicks = modTicks;
 
+                bool hasPrev = previousByPath.TryGetValue(current.FilePath, out LibraryTrackItem prev);
                 bool matchedCache = !forceFullRescan
-                    && previousByPath.TryGetValue(current.FilePath, out LibraryTrackItem prev)
+                    && hasPrev
                     && prev.FileSizeBytes == len
                     && prev.LastModifiedTicks == modTicks
                     && (!string.IsNullOrEmpty(prev.AudioBadge) || prev.ChannelCount > 0 || prev.IsSpatial);

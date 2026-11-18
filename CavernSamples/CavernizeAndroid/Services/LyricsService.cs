@@ -431,9 +431,9 @@ public static partial class LyricsService {
             psi.ArgumentList.Add("ffmetadata");
             psi.ArgumentList.Add("-");
             var run = FFmpegInstallerService.RunProcessSafe(psi, 4000);
-            if (!run.Started || string.IsNullOrWhiteSpace(run.StdOut)) return null;
+            if (run.exitCode != 0 || string.IsNullOrWhiteSpace(run.stdout)) return null;
 
-            string rawVal = ExtractKeyFromFFMetadata(run.StdOut, "lyrics");
+            string rawVal = ExtractKeyFromFFMetadata(run.stdout, "lyrics");
             if (string.IsNullOrWhiteSpace(rawVal)) {
                 return null;
             }

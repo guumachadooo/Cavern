@@ -102,7 +102,7 @@ public static class FFmpegInstallerService {
             return (-1, "", "Null ProcessStartInfo");
         }
         ConfigureProcessStartInfo(psi, psi.FileName);
-        using Process proc = Process.Start(psi);
+        using System.Diagnostics.Process proc = System.Diagnostics.Process.Start(psi);
         if (proc == null) {
             return (-1, "", "Failed to start process.");
         }
