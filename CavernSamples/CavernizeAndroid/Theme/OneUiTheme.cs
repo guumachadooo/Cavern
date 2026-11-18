@@ -1236,7 +1236,7 @@ public sealed class OneUiSwitch : Switch {
         };
     }
 
-    protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+    public override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         int w = OneUiTheme.Dp(Context, 40f);
         int h = OneUiTheme.Dp(Context, 26f);
         SetMeasuredDimension(ResolveSize(w, widthMeasureSpec), ResolveSize(h, heightMeasureSpec));
