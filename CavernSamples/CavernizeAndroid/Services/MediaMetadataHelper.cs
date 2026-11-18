@@ -115,7 +115,7 @@ public static class MediaMetadataHelper {
 
                 if (artwork == null && hasVideo) {
                     using Bitmap rawFrame = retriever.GetFrameAtTime(2_000_000, Option.ClosestSync)
-                        ?? retriever.GetFrameAtTime();
+                        ?? retriever.GetFrameAtTime(0, Option.ClosestSync);
                     if (rawFrame != null && !rawFrame.IsRecycled && rawFrame.Width > 0 && rawFrame.Height > 0) {
                         artwork = ScaleBitmapToMax(rawFrame, 640);
                         hasEmbedded = artwork != null;
