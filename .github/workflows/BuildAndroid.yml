@@ -203,11 +203,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
-          name: "Cavernize Android v2.6.${{ github.run_number }}"
+          name: "Cavernize Android v2.7.${{ github.run_number }}"
           body: |
             Automated signed Android APK build for Cavernize (`${{ github.sha }}`).
-            - Version: `v2.6.${{ github.run_number }}` (Build `${{ github.run_number }}`)
-            - Highlights: Exact One UI 9 Palette (`system_accent2_300` sliders + harmonized semantic badges), Samsung Gallery Floating Pill Nav Bar, Synced YouTube/Samsung Video Player (`±10s` double-tap bloom), Apple Music-inspired Synced Live Lyrics (`.lrc`/`.txt`/embedded), 3D Room Pinch & Button Zoom, Symmetric 3D Room Transport Bar, Plus Full Dolby TrueHD Atmos (`truehdd`) & All Previous Releases Preserved Individually.
+            - Version: `v2.7.${{ github.run_number }}` (Build `${{ github.run_number }}`)
+            - Highlights: Apple Music Exact Now Playing Layout & Borderless Live Lyrics (`• • •` inline instrumental rows), Samsung Video Player + YouTube Video Mode (CC subtitles `.srt`/`.vtt`/`.ass` + embedded MKV/MP4 via FFmpeg, Lock Controls, Fit/Fill/Stretch, Immersive Fullscreen), Exact `ToggleSeekBar` Relative-Drag Sliders, Samsung Gallery `SeslSwitch` (`32dp × 20dp`), and Dolby Atmos Renderer-Inspired 3D Room (`RoomSimulatorView`), Plus Full Dolby TrueHD Atmos (`truehdd`) & All Previous Releases Preserved Individually.
           prerelease: false
           make_latest: true
           files: build/Cavernize-Android.apk
