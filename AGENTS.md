@@ -3,7 +3,7 @@
 This repository is the personal fork (`guumachadooo/Cavern`) focused on the Android app **Cavernize** (`CavernSamples/CavernizeAndroid`, package `hu.sbence.cavern.cavernize`), running the full **Cavern** spatial audio engine on mobile.
 
 ## 1. Language & Communication
-- **Always reply to the USER in Brazilian Portuguese (`pt-BR`)**, directly and objectively.
+- **Always reply to the USER in the same language they wrote in**, concisely and objectively.
 - **Keep all internal agent files** (`AGENTS.md`, `.agents/docs/*`, `.agents/skills/*`, `.agents/hooks/*`) in **English** so LLMs parse technical instructions cleanly (without translating UI strings in `AndroidStrings.cs` or literal device paths).
 - Use clickable Markdown links with the `file://` scheme whenever referencing any file or line range.
 - Report only file paths, symbols, implemented behavior, and command/build results directly observed in tool output or read files during the current session.
@@ -27,19 +27,18 @@ When a new session starts, context is loaded in strict layers so rules never dup
 
 ## 4. Critical Rules ("Never Break")
 1. **NEVER change `android:targetSdkVersion="28"`** in `CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml`. This keeps the app in the `untrusted_app_27` SELinux domain so downloaded native binaries (`ffmpeg` and `truehdd`) can execute from `FilesDir`.
-2. **Local builds in Termux / Ubuntu PRoot (ARM64):** No Android workload is installed locally (signed `.apk` builds run in GitHub Actions). Whenever compiling `Cavernize.Logic`, `Cavern.Format`, or `Cavern` locally with `/root/.dotnet/dotnet`, you **must** pass these memory/globalization env vars and single-proc flags:
+2. **Local builds in Termux / Ubuntu PRoot (ARM64):** No Android APK packaging workload is installed locally (signed `.apk` builds run in GitHub Actions). Whenever compiling `Cavernize.Logic`, `Cavern.Format`, or `Cavern` locally with `/root/.dotnet/dotnet`, you **must** pass these memory/globalization env vars and single-proc flags:
    ```bash
    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_EnableDiagnostics=0 /root/.dotnet/dotnet build <proj> -m:1 /p:UseSharedCompilation=false
    ```
+   For `CavernSamples/CavernizeAndroid/*.cs`, run `python3 .agents/scripts/check_android_cs.py` (cached `Microsoft.Android.Ref.34` + Roslyn 4.12 shadow type-check in `/tmp`, catching C# errors in seconds before CI packaging).
 3. **Synced OTA Versioning + Preserve All GitHub Releases:** `CavernizeAndroid` checks updates on GitHub release tag `android-latest` using numeric comparison (`AppUpdateService.IsRemoteNewer`). Keep `ApplicationDisplayVersion` synchronized between `CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj` and `.github/workflows/BuildAndroid.yml` (never regress or reuse a public version). Alongside updating the `android-latest` OTA release, **always create an individual versioned GitHub Release (`vX.Y.Z`) for every public build — never delete or overwrite prior versioned releases**.
 4. **APK Delivery:** The final signed APK produced by `.github/workflows/BuildAndroid.yml` must be saved to `/root/.gemini/antigravity/scratch/Cavern/Cavernize-Android.apk` and copied to `/sdcard/Download/Cavernize-Android.apk` when accessible on the user's device.
 5. **Coding Style & Core Safeguards:** Follow `CavernSamples/Coding style.txt` (opening braces on the same line, `PascalCase` for methods/properties, `camelCase` for variables, clear XML summaries). Preserve existing fixes such as the pure C# lossless FLAC fallback (`FlacAudioConverter.cs`) and complete logging for FFmpeg and `truehdd`.
-6. **Dynamic Fractal Planning & Strict Verification:** Powered globally by `~/.gemini/config/plugins/dynamic-fractal-planner/` configured with Cavern's `.agents/planner_profile.json`:
-   - **Tier 0 (`DIRECT`):** Trivial Q&A or obvious 1-line fix — execute and verify directly.
-   - **Tier 1 (`STANDARD`):** 1–2 focused edits — write a staged plan and verify every item.
-   - **Tier 2 (`META_MODULES` — Plan-of-Plans):** `>= 3` requirements or `>= 2` subsystems — **Phase 0 BEFORE deep file reading:** lock every `REQ-01..REQ-N` first (`plan_tool.py init`), compose domain Planning Modules, and keep discovery lean (`grep` + `<=150`-line slices or `research` subagent).
-   - **Tier 3 (`FRACTAL_DEEP` — Recursive Sub-Plans):** Even for a **single very complex task**, decompose into specialized modules (`MOD-DISCOVERY -> MOD-CONTRACT -> MOD-IMPL-* -> MOD-HARDEN -> MOD-AUDIT`), and expand tricky steps dynamically mid-flight (`expand-step` / `add-module`).
-   - **End Verification:** Run `python3 ~/.gemini/config/plugins/dynamic-fractal-planner/scripts/verify_universal.py --build` (when `.cs`/`.csproj` changed) and verify every `REQ-XX` (`plan_tool.py audit`) before finishing.
+6. **Dynamic Fractal Planning & Strict Verification:** Powered globally by `~/.gemini/config/plugins/dynamic-fractal-planner/` configured with Cavern's v3 `.agents/planner_profile.json` (`planner_mode: "lean"` default; override with `PLANNER_MODE=strict`):
+   - **Lean vs Strict:** In `lean` mode, `PreInvocation` injects auto-REQs and domain JIT checklists directly without blocking edits (`Blast Radius Guard` asks on 4th code file in `Tier <= 1`). In `strict` mode, lock every `REQ-01..REQ-N` first (`plan_tool.py init`) and close via `plan_tool.py finish --evidence "..."`.
+   - **Tiers 0–3:** `Tier 0 (DIRECT)` for trivial fixes; `Tier 1 (STANDARD)` for 1–2 edits; `Tier 2 (META_MODULES)` for `>= 3` requirements or `>= 2` subsystems; `Tier 3 (FRACTAL_DEEP)` for single high-complexity tasks (`MOD-DISCOVERY -> MOD-CONTRACT -> MOD-IMPL-* -> MOD-HARDEN -> MOD-AUDIT`). Keep discovery lean (`read_guard` symbol maps + bounded slices `<= 250L`).
+   - **End Verification:** Run `python3 ~/.gemini/config/plugins/dynamic-fractal-planner/scripts/verify_universal.py --build` when compiled C# files changed (Stop auto-runs fast static checks when only `needs_verify` is active).
 7. **Mandatory Disclosure Before Guessing on APKs/Packages:** Whenever the user asks to analyze/decompile an APK or extract exact system behavior and **the package/resource cannot be accessed or extracted cleanly**, **NEVER silently guess or improvise** — inform the user first, explain what was blocked/missing, and ask whether they want to supply the APK/capture, try another approach, or authorize an approximation.
 8. **User-Facing Documentation in `README.md`:** Whenever adding a new user-facing feature (new screens, playback/library/spatial capabilities), update the matching section in root `README.md`. Pure bug fixes or internal One UI visual refinements do not need new entries.
 9. **Archived Good Ideas (`.agents/docs/SAVED_IDEAS.md`):** Whenever an interesting visual idea, shader, or animation is deferred or replaced (e.g., to stay faithful to another UI spec), archive the concept and full reference snippet in `.agents/docs/SAVED_IDEAS.md`.

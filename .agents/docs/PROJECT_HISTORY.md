@@ -9,7 +9,7 @@
 ## 1. Environment & Build Pipeline
 - **Primary Test Device:** Samsung Galaxy S25 Ultra running Android 17 / One UI 9 (device `SystemUI.apk` and Samsung APKs were inspected read-only to verify native slider physics and layout dimensions).
 - **Agent Workspace:** Ubuntu PRoot container inside Termux on the user's device (`/root/.gemini/antigravity/scratch/Cavern`), with direct APK delivery to `/sdcard/Download/Cavernize-Android.apk` after CI builds.
-- **Compilation Split:** No Android SDK or `net11.0-android` workload exists in local ARM64 PRoot. Signed `.apk` builds run via `git push` to `master` -> `.github/workflows/BuildAndroid.yml`. Local validation uses `/root/.dotnet/dotnet` (`.NET 8`) with GC heap caps on shared logic (`Cavernize.Logic`, `Cavern.Format`, `Cavern`).
+- **Compilation Split:** Local Termux ARM64 PRoot validates `Cavernize.Logic`, `Cavern.Format`, and `Cavern` with `/root/.dotnet/dotnet` (`.NET 8`) + GC heap caps, and type-checks all `CavernSamples/CavernizeAndroid/*.cs` files locally in seconds via `python3 .agents/scripts/check_android_cs.py` (cached `Microsoft.Android.Ref.34` + Roslyn `4.12.0` shadow build in `/tmp`). Signed `.apk` packaging runs on `master` push via `.github/workflows/BuildAndroid.yml`.
 
 ## 2. Technical Lessons & Known Pitfalls
 - **`MatroskaTree.GetChild(reader, tag, index)`:** Always advance `nextTag = reader.Position` inside the child read loop and guard `TryCreate` against `reader.Position >= endPosition`; otherwise trailing MKV tags after `Cluster`s (such as `Cues`/`Tags`) trigger an infinite loop at `100%` during extraction.
@@ -28,6 +28,10 @@
 
 ## 3. Version History (Newest First)
 <!-- MAINTENANCE RULE: Always PREPEND new version entries immediately below this comment (newest first). Consolidate older entries near the bottom if needed. Never label any phase as "Current State". -->
+
+### Agent Infrastructure — Plugin v3 (`lean` Mode, Token Diet) & Local `CavernizeAndroid` Roslyn Type-Check
+- **Local `CavernizeAndroid` C# Type-Check (`.agents/scripts/check_android_cs.py`):** Caches `Microsoft.Android.Ref.34` (`34.0.154`) and `Microsoft.Net.Compilers.Toolset 4.12.0` (C# 13 Roslyn on `.NET 8`) under `~/.cache/cavern-android-ref/` and compiles all 32 `CavernSamples/CavernizeAndroid/**/*.cs` files via `/tmp/cavern-android-typecheck/` (`0 Error(s)`), wired into `.agents/planner_profile.json` `build_rules` while keeping GitHub Actions for final APK signing/packaging.
+- **Global Plugin v3 & Language Policy:** Upgraded `.agents/planner_profile.json` to `schema_version: 3` (`planner_mode: "lean"`, `read_budget`, `secret_guard`, `blast_radius`) and updated `AGENTS.md` Rule 1 to reply dynamically in the user's language (preserving `AndroidStrings.cs` localization coverage).
 
 ### Agent Infrastructure — Universal Global Plugin (v2 Schema, Auto-Bootstrap & Regression Gate)
 - **Full Universalization (`~/.gemini/config/plugins/dynamic-fractal-planner/`):** Consolidated all generic tools into the global Antigravity plugin: 4-tier adaptive planning (`complexity_triage.py`, `plan_tool.py`), zero-AI chained schema migration (`schema_migrations.py`, `v1 -> v2 -> ... -> vN`), automatic `SessionStart` project memory/profile bootstrap (`PROJECT_HISTORY.md`, `SAVED_IDEAS.md`, `EXTRA_REQUESTS.md`, `planner_profile.json`), `project-memory` skill + anti-rot reminders, `/btw` `EXTRA_REQUESTS.md` gating, declarative `file_guards`/`command_guards`/`diff_rules`/`key_parity_rules`/`build_rules`, `verify_universal.py`, and mandatory plugin self-protection regression suite (`tests/run_plugin_tests.py`).

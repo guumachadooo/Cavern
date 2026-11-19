@@ -1,6 +1,17 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "project_name": "Cavern / CavernizeAndroid",
+  "planner_mode": "lean",
+  "read_budget": {
+    "max_full_read_lines": 300,
+    "max_slice_lines": 250
+  },
+  "secret_guard": {
+    "enabled": true
+  },
+  "blast_radius": {
+    "simple_tier_max_files": 3
+  },
   "code_path_prefixes": [
     "Cavern/",
     "Cavern.Format/",
@@ -41,7 +52,7 @@
         "conditions": {
           "exists_path": "/root/.dotnet/dotnet"
         },
-        "text": "Termux ARM64 PRoot env: `/root/.dotnet/dotnet` requires `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_EnableDiagnostics=0 ... -m:1 /p:UseSharedCompilation=false`; final signed APK builds via `.github/workflows/BuildAndroid.yml`."
+        "text": "Termux ARM64 PRoot env: `/root/.dotnet/dotnet` requires `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_EnableDiagnostics=0 ... -m:1 /p:UseSharedCompilation=false`; run `python3 .agents/scripts/check_android_cs.py` for local Roslyn type-checking of `CavernizeAndroid`; final signed APK builds via `.github/workflows/BuildAndroid.yml`."
       }
     ],
     "watch_paths": [
@@ -215,6 +226,20 @@
         "DOTNET_GCHeapHardLimit": "20000000",
         "DOTNET_EnableDiagnostics": "0"
       }
+    },
+    {
+      "label": "CavernizeAndroid C# Roslyn Type-Check",
+      "conditions": {
+        "exists_path": "/root/.dotnet/dotnet"
+      },
+      "trigger_path_prefixes": [
+        "CavernSamples/CavernizeAndroid/"
+      ],
+      "trigger_extensions": [
+        ".cs"
+      ],
+      "run_on_force": true,
+      "command": "python3 .agents/scripts/check_android_cs.py"
     }
   ],
   "domains": {
