@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
   "project_name": "Cavern / CavernizeAndroid",
-  "planner_mode": "lean",
+  "planner_mode": "auto",
   "read_budget": {
     "max_full_read_lines": 300,
     "max_slice_lines": 250
