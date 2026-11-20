@@ -23,6 +23,7 @@ namespace Cavernize.Logic.Rendering;
 public sealed class RealtimePlayerEngine : IDisposable {
     const int updateRate = 256;
     const int framesPerChunk = 4; // 1024 samples per render block (~21.3 ms at 48 kHz)
+    const int crossfadeFrames = 1536; // ~32 ms at 48 kHz for clickless equal-power transitions
 
     readonly object renderLock = new();
 
@@ -34,6 +35,16 @@ public sealed class RealtimePlayerEngine : IDisposable {
     float[] stereoNormBuffer = [];
     bool virtualizerInitialized;
     int appliedProfileVersion = -1;
+
+    // Clickless crossfade state (prevents pops/clicks on profile switch, toggle, seek, filter change, or variant hot-swap)
+    readonly float[] lastOutputRing = new float[crossfadeFrames * 2];
+    int lastOutputRingWrite;
+    bool hasRenderedAudio;
+    readonly float[] fadeOutSnapshot = new float[crossfadeFrames * 2];
+    int crossfadeRemaining;
+    int crossfadeTotal;
+    long lastSourceMaskHash;
+    bool lastDynamicCeilingState;
 
     /// <summary>
     /// Fired when non-looping playback reaches the end of the track.
@@ -128,6 +139,11 @@ public sealed class RealtimePlayerEngine : IDisposable {
     public bool MuteGround { get; set; }
 
     /// <summary>
+    /// Real-time dynamic ceiling filter: continuously follows each object's live Y elevation (&gt; 0.15) frame by frame.
+    /// </summary>
+    public bool DynamicCeilingOnly { get; set; }
+
+    /// <summary>
     /// Mute all dynamic 3D objects (render only fixed bed channels).
     /// </summary>
     public bool OnlyBeds { get; set; }
@@ -153,6 +169,15 @@ public sealed class RealtimePlayerEngine : IDisposable {
     public bool LimiterOnly { get; set; } = true;
 
     /// <summary>
+    /// Requests a smooth clickless crossfade on the next rendered audio block.
+    /// </summary>
+    public void RequestSmoothTransition() {
+        lock (renderLock) {
+            ArmCrossfadeLocked();
+        }
+    }
+
+    /// <summary>
     /// Loads a <see cref="CavernizeTrack"/> into the real-time spatial engine.
     /// </summary>
     public void Load(CavernizeTrack track, UpmixingSettings upmixing = null, RenderingSettings rendering = null) {
@@ -170,9 +195,51 @@ public sealed class RealtimePlayerEngine : IDisposable {
             upmixingSettings = upmixing ?? new UpmixingSettings(true);
             renderingSettings = rendering ?? new RenderingSettings();
             currentTrackSample = 0;
+            hasRenderedAudio = false;
+            crossfadeRemaining = 0;
+            lastSourceMaskHash = 0;
 
             ConfigureListener(resetToStart: true);
             sourceItems = TrackSourceItem.BuildFromTrack(track);
+        }
+    }
+
+    /// <summary>
+    /// Atomically swaps the playing track (e.g., switching Atmos ↔ FLAC ↔ Opus variant) at <paramref name="startSeconds"/>
+    /// without stopping playback hardware, blending smoothly via cosine crossfade from the previous audio tail.
+    /// </summary>
+    public void HotSwapTrackSeamless(
+        CavernizeTrack track,
+        double startSeconds,
+        UpmixingSettings upmixing = null,
+        RenderingSettings rendering = null) {
+        ArgumentNullException.ThrowIfNull(track);
+        if (!track.Supported) {
+            throw new NotSupportedException("Track format is not supported by Cavern.");
+        }
+        if (track.Codec == Codec.TrueHD) {
+            throw new NotSupportedException("TrueHD MLP real-time playback requires an external decoder (truehdd).");
+        }
+
+        lock (renderLock) {
+            bool wasPlaying = IsPlaying;
+            if (wasPlaying && hasRenderedAudio) {
+                ArmCrossfadeLocked();
+            }
+
+            currentTrack = track;
+            upmixingSettings = upmixing ?? new UpmixingSettings(true);
+            renderingSettings = rendering ?? new RenderingSettings();
+
+            double maxSec = track.SampleRate > 0 ? Math.Max(0, track.Length / (double)track.SampleRate - 0.1) : 0;
+            double clampedSec = Math.Clamp(startSeconds, 0, maxSec);
+            long targetSample = (long)Math.Round(clampedSec * track.SampleRate);
+            currentTrackSample = track.Seek(targetSample);
+            lastSourceMaskHash = 0;
+
+            ConfigureListener(resetToStart: false);
+            sourceItems = TrackSourceItem.BuildFromTrack(track);
+            IsPlaying = wasPlaying;
         }
     }
 
@@ -181,20 +248,31 @@ public sealed class RealtimePlayerEngine : IDisposable {
     /// </summary>
     public void ClearSoloMute() {
         lock (renderLock) {
+            if (hasRenderedAudio) {
+                ArmCrossfadeLocked();
+            }
+            DynamicCeilingOnly = false;
+            MuteGround = false;
+            MuteBed = false;
+            OnlyBeds = false;
             foreach (TrackSourceItem item in sourceItems) {
                 item.IsMuted = false;
                 item.IsSolo = false;
+                item.IsDynamicallyFilteredOut = false;
             }
         }
     }
 
     /// <summary>
-    /// Seeks playback to <paramref name="seconds"/>.
+    /// Seeks playback to <paramref name="seconds"/> with a clickless crossfade transition.
     /// </summary>
     public void Seek(double seconds) {
         lock (renderLock) {
             if (currentTrack == null) {
                 return;
+            }
+            if (IsPlaying && hasRenderedAudio) {
+                ArmCrossfadeLocked();
             }
             long targetSample = (long)Math.Round(seconds * currentTrack.SampleRate);
             currentTrackSample = currentTrack.Seek(targetSample);
@@ -272,9 +350,27 @@ public sealed class RealtimePlayerEngine : IDisposable {
                     Array.Copy(stereoNormBuffer, 0, stereoOutput, outOffset, sliceLen);
                 }
 
+                if (crossfadeRemaining > 0 && crossfadeTotal > 0) {
+                    int blendCount = Math.Min(blockFrames, crossfadeRemaining);
+                    int doneSoFar = crossfadeTotal - crossfadeRemaining;
+                    for (int s = 0; s < blendCount; s++) {
+                        int step = doneSoFar + s;
+                        float t = (step + 1f) / crossfadeTotal;
+                        float gainIn = 0.5f * (1f - MathF.Cos(MathF.PI * t));
+                        float gainOut = 1f - gainIn;
+                        int snapIdx = step * 2;
+                        int dstIdx = outOffset + s * 2;
+                        stereoOutput[dstIdx] = stereoOutput[dstIdx] * gainIn + fadeOutSnapshot[snapIdx] * gainOut;
+                        stereoOutput[dstIdx + 1] = stereoOutput[dstIdx + 1] * gainIn + fadeOutSnapshot[snapIdx + 1] * gainOut;
+                    }
+                    crossfadeRemaining -= blendCount;
+                }
+
                 for (int i = 0; i < blockFrames * 2; i++) {
                     stereoOutput[outOffset + i] = Math.Clamp(stereoOutput[outOffset + i], -1f, 1f);
                 }
+
+                RecordTailLocked(stereoOutput, outOffset, blockFrames);
 
                 double sampleAdvance = blockFrames * (currentTrack.SampleRate / (double)listener.SampleRate);
                 currentTrackSample += (long)Math.Round(sampleAdvance);
@@ -288,6 +384,36 @@ public sealed class RealtimePlayerEngine : IDisposable {
             PlaybackCompleted?.Invoke();
         }
         return totalFramesWritten;
+    }
+
+    void RecordTailLocked(float[] stereoOutput, int outOffset, int blockFrames) {
+        for (int s = 0; s < blockFrames; s++) {
+            int dst = lastOutputRingWrite * 2;
+            lastOutputRing[dst] = stereoOutput[outOffset + s * 2];
+            lastOutputRing[dst + 1] = stereoOutput[outOffset + s * 2 + 1];
+            lastOutputRingWrite++;
+            if (lastOutputRingWrite >= crossfadeFrames) {
+                lastOutputRingWrite = 0;
+            }
+        }
+        hasRenderedAudio = true;
+    }
+
+    void ArmCrossfadeLocked() {
+        if (!hasRenderedAudio) {
+            return;
+        }
+        for (int s = 0; s < crossfadeFrames; s++) {
+            int ringIdx = lastOutputRingWrite - crossfadeFrames + s;
+            if (ringIdx < 0) {
+                ringIdx += crossfadeFrames;
+            }
+            float decay = 1f - (float)s / crossfadeFrames;
+            fadeOutSnapshot[s * 2] = lastOutputRing[ringIdx * 2] * decay;
+            fadeOutSnapshot[s * 2 + 1] = lastOutputRing[ringIdx * 2 + 1] * decay;
+        }
+        crossfadeTotal = crossfadeFrames;
+        crossfadeRemaining = crossfadeFrames;
     }
 
     void ConfigureListener(bool resetToStart) {
@@ -353,7 +479,17 @@ public sealed class RealtimePlayerEngine : IDisposable {
 
         if (HeadphoneVirtualizer != virtualizerInitialized ||
             (HeadphoneVirtualizer && appliedProfileVersion != VirtualizerFilter.ProfileVersion)) {
+            if (hasRenderedAudio) {
+                ArmCrossfadeLocked();
+            }
             SetupOutputLayout();
+        }
+
+        if (DynamicCeilingOnly != lastDynamicCeilingState) {
+            if (hasRenderedAudio) {
+                ArmCrossfadeLocked();
+            }
+            lastDynamicCeilingState = DynamicCeilingOnly;
         }
 
         listener.Position = ListenerPosition;
@@ -385,6 +521,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             }
         }
 
+        long maskHash = (MuteBed ? 1L : 0L) | (OnlyBeds ? 2L : 0L) | (MuteGround ? 4L : 0L) | (DynamicCeilingOnly ? 8L : 0L);
         Vector3 invEnv = Vector3.One / Listener.EnvironmentSize;
         if (listener.ActiveSources.Count == rendererObjects.Count && sourceItems.Count == rendererObjects.Count) {
             for (int i = 0; i < rendererObjects.Count; i++) {
@@ -392,7 +529,10 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 TrackSourceItem item = sourceItems[i];
                 Vector3 rawPos = src.Position * invEnv;
 
-                bool mute = item.IsMuted || (anySolo && !item.IsSolo);
+                bool dynFiltered = DynamicCeilingOnly && rawPos.Y <= 0.15f;
+                item.IsDynamicallyFilteredOut = dynFiltered;
+
+                bool mute = item.IsMuted || (anySolo && !item.IsSolo) || dynFiltered;
                 if (MuteBed && item.IsBed) {
                     mute = true;
                 }
@@ -403,20 +543,35 @@ public sealed class RealtimePlayerEngine : IDisposable {
                     mute = true;
                 }
 
+                if (mute) {
+                    maskHash ^= 1L << ((i % 56) + 6);
+                }
+
                 src.Mute = mute;
                 src.DistanceSimulation = DistanceSimulation && HeadphoneVirtualizer;
                 src.VolumeRolloff = VolumeRolloff;
             }
         } else {
+            int idx = 0;
             foreach (Source src in listener.ActiveSources) {
                 Vector3 rawPos = src.Position * invEnv;
                 bool isBedPos = MathF.Abs(rawPos.X) % 1 < .01f && MathF.Abs(rawPos.Y) % 1 < .01f && MathF.Abs(rawPos.Z) % 1 < .01f;
-                bool mute = (MuteBed && isBedPos) || (OnlyBeds && !isBedPos) || (MuteGround && MathF.Abs(rawPos.Y) < .05f);
+                bool dynFiltered = DynamicCeilingOnly && rawPos.Y <= 0.15f;
+                bool mute = (MuteBed && isBedPos) || (OnlyBeds && !isBedPos) || (MuteGround && MathF.Abs(rawPos.Y) < 0.05f) || dynFiltered;
+                if (mute) {
+                    maskHash ^= 1L << ((idx % 56) + 6);
+                }
+                idx++;
                 src.Mute = mute;
                 src.DistanceSimulation = DistanceSimulation && HeadphoneVirtualizer;
                 src.VolumeRolloff = VolumeRolloff;
             }
         }
+
+        if (hasRenderedAudio && lastSourceMaskHash != 0 && maskHash != lastSourceMaskHash && crossfadeRemaining == 0) {
+            ArmCrossfadeLocked();
+        }
+        lastSourceMaskHash = maskHash;
     }
 
     void UpdateSourceTelemetry() {

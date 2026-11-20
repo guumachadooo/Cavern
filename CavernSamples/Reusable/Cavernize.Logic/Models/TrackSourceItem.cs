@@ -57,6 +57,11 @@ public sealed class TrackSourceItem {
     public Vector3 NormalizedPosition { get; set; }
 
     /// <summary>
+    /// True when temporarily muted by a live dynamic filter (e.g. Dynamic Ceiling-Only mode).
+    /// </summary>
+    public bool IsDynamicallyFilteredOut { get; set; }
+
+    /// <summary>
     /// Latest RMS amplitude [0; 1+] for live metering.
     /// </summary>
     public float RmsLevel { get; set; }

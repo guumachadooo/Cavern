@@ -111,7 +111,20 @@ namespace Cavern.Virtualizer {
         /// </summary>
         public static VirtualChannel FromMeasured(float x, float y, float[] leftEarIR, float[] rightEarIR,
             int sampleRate, float crossoverFrequency = 0) =>
-            new VirtualChannel(x, y, leftEarIR, rightEarIR, sampleRate, crossoverFrequency, 0, 0);
+            FromMeasured(x, y, leftEarIR, rightEarIR, sampleRate, crossoverFrequency, false);
+
+        /// <summary>
+        /// Constructs a virtualizable channel from real laboratory-measured HRIR/BRIR impulse responses,
+        /// optionally converting anechoic HRIRs (&lt;= 1024 taps) to mathematically exact Minimum-Phase + measured ITD.
+        /// Long BRIRs (&gt; 1024 taps) automatically bypass minimum-phase conversion so room reflections stay intact.
+        /// </summary>
+        public static VirtualChannel FromMeasured(float x, float y, float[] leftEarIR, float[] rightEarIR,
+            int sampleRate, float crossoverFrequency, bool minimumPhase) {
+            if (minimumPhase && leftEarIR.Length <= MinimumPhaseHrir.MaxAnechoicTaps && rightEarIR.Length <= MinimumPhaseHrir.MaxAnechoicTaps) {
+                MinimumPhaseHrir.ConvertPair(leftEarIR, rightEarIR, out leftEarIR, out rightEarIR);
+            }
+            return new VirtualChannel(x, y, leftEarIR, rightEarIR, sampleRate, crossoverFrequency, 0, 0);
+        }
 
         /// <summary>
         /// Constructs a virtualizable channel with impulse responses for both ears, recalibrating gains by the position's angles
@@ -149,18 +162,33 @@ namespace Cavern.Virtualizer {
                     }
                 }
             }
+            if (applyMinimumPhaseOnSubpar && leftCopy.Length <= MinimumPhaseHrir.MaxAnechoicTaps && rightCopy.Length <= MinimumPhaseHrir.MaxAnechoicTaps) {
+                MinimumPhaseHrir.ConvertPair(leftCopy, rightCopy, out leftCopy, out rightCopy);
+            }
             return new VirtualChannel(x, y, leftCopy, rightCopy, sampleRate, crossoverFrequency);
         }
 
         /// <summary>
+        /// Internal flag used by <see cref="VirtualizerFilter.Reset(bool)"/> to apply minimum-phase conversion to the default HRIR set.
+        /// </summary>
+        internal static bool applyMinimumPhaseOnSubpar;
+
+        /// <summary>
         /// Parse the virtual channels from a multichannel HRIR set in full-band mode (unity global L2 energy).
         /// </summary>
-        public static VirtualChannel[] Parse(MultichannelWaveform hrir, int sampleRate) => Parse(hrir, sampleRate, 0);
+        public static VirtualChannel[] Parse(MultichannelWaveform hrir, int sampleRate) => Parse(hrir, sampleRate, 0, false);
 
         /// <summary>
         /// Parse the virtual channels from a multichannel HRIR set, optionally crossing over at a set frequency.
         /// </summary>
-        public static VirtualChannel[] Parse(MultichannelWaveform hrir, int sampleRate, float crossoverFrequency) {
+        public static VirtualChannel[] Parse(MultichannelWaveform hrir, int sampleRate, float crossoverFrequency) =>
+            Parse(hrir, sampleRate, crossoverFrequency, false);
+
+        /// <summary>
+        /// Parse the virtual channels from a multichannel HRIR set, optionally crossing over at a set frequency
+        /// and converting anechoic impulses to mathematical Minimum-Phase + measured ITD.
+        /// </summary>
+        public static VirtualChannel[] Parse(MultichannelWaveform hrir, int sampleRate, float crossoverFrequency, bool minimumPhase) {
             hrir.TrimStart();
             hrir.Normalize();
 
@@ -229,7 +257,7 @@ namespace Cavern.Virtualizer {
                         float[] rightIr = (float[])splits[i][1].Clone();
                         WaveformUtils.Gain(leftIr, globalScale);
                         WaveformUtils.Gain(rightIr, globalScale);
-                        result[i] = FromMeasured(prototype.X, prototype.Y, leftIr, rightIr, sampleRate, crossoverFrequency);
+                        result[i] = FromMeasured(prototype.X, prototype.Y, leftIr, rightIr, sampleRate, crossoverFrequency, minimumPhase);
                     }
                 }
                 return result;

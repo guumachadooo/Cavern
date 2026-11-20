@@ -106,6 +106,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
     string currentTrackSummaryText = "";
     double pendingSeekAfterLoadSeconds = -1;
     string preferredFormatVariantKey = "";
+    AudioTierCategory? preferredAudioCategory;
+    int variantSwitchGeneration;
     MediaPlaybackNotificationManager mediaNotification;
     MediaArtworkMetadata currentMediaMeta;
     Android.Net.Uri currentMediaUri;
@@ -133,8 +135,15 @@ public partial class MainActivity : Activity, ICavernizeApp {
     volatile bool suppressAutoTrueHDPrepare;
     volatile bool pendingAutoPlayAfterLoad;
 
+    FrameLayout rootFrameHost;
+    View bottomScrimView;
     OneUiBackdropView backdropView;
     OneUiFrostedCapsuleView navFrostedHost;
+    FrameLayout navLayer;
+    LinearLayout navCollapsedPill;
+    View settingsUpdateDotCollapsed;
+    bool isNavBarCollapsed;
+    ValueAnimator navCollapseAnimator;
     View tabIndicatorPill;
     ValueAnimator tabPillAnimator;
     LinearLayout[] tabPages;
@@ -162,6 +171,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         OneUiTheme.Initialize(this);
         AppLogger.Initialize(this);
+        AudioQualityAnalyzer.EnsureCacheLoaded(this);
 
         if (Window != null) {
             Window.DecorView?.SetBackgroundColor(ColBg);
@@ -293,6 +303,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         truehdPrepareCts?.Dispose();
         tabPillAnimator?.Cancel();
         tabPillAnimator?.Dispose();
+        navCollapseAnimator?.Cancel();
+        navCollapseAnimator?.Dispose();
+        formatPillAnimator?.Cancel();
+        formatPillAnimator?.Dispose();
         mediaNotification?.Dispose();
         ExitVideoFullscreenIfNeeded();
         musicVideoStage?.ReleasePlayer();
@@ -333,6 +347,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         OneUiTheme.Initialize(this);
 
         FrameLayout rootFrame = new(this);
+        rootFrameHost = rootFrame;
         rootFrame.SetBackgroundColor(ColBg);
 
         // Layer 0: Atmospheric blurred One UI 9 depth backdrop (also breathes with loaded album art palette)
@@ -380,11 +395,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 Android.Graphics.Drawables.GradientDrawable.Orientation.TopBottom,
                 [Color.Transparent.ToArgb(), Color.Argb(205, ColBg.R, ColBg.G, ColBg.B).ToArgb()])
         };
+        bottomScrimView = bottomScrim;
         rootFrame.AddView(bottomScrim, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(98)) {
             Gravity = GravityFlags.Bottom
         });
 
-        // Layer 2: Samsung Gallery Floating Capsule Bottom Navigation Bar (56dp frosted pill + translucent #1AFFFFFF selection pill)
+        // Layer 2: Samsung Gallery Floating Capsule Bottom Navigation Bar (auto-retracts into compact pill on Play tab)
         navFrostedHost = new OneUiFrostedCapsuleView(this) {
             CornerRadiusDp = 999f,
             GlazeTopColor = OneUiTheme.SurfaceFloatingBar,
@@ -394,7 +410,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
         };
         navFrostedHost.SetPadding(Dp(5), Dp(4), Dp(5), Dp(4));
 
-        FrameLayout navLayer = new(this);
+        FrameLayout navInnerStack = new(this);
+
+        navLayer = new FrameLayout(this);
         tabIndicatorPill = new View(this) {
             Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SelectedTabPill, OneUiTheme.PillCornerDp)
         };
@@ -439,7 +457,13 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 TopMargin = Dp(2)
             });
 
-            cell.Click += (_, _) => SwitchTab(idx);
+            cell.Click += (_, _) => {
+                if (idx == 0 && activeTab == 0 && !isNavBarCollapsed) {
+                    SetNavBarCollapsed(true, animate: true);
+                } else {
+                    SwitchTab(idx);
+                }
+            };
             tabCells[i] = cell;
             tabIcons[i] = iconView;
             tabLabels[i] = labelTv;
@@ -463,18 +487,53 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
         }
         navLayer.AddView(navRow, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        navFrostedHost.AddView(navLayer);
+        navInnerStack.AddView(navLayer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+        // Retracted minimalist pill shown on Play tab to free vertical space
+        navCollapsedPill = HRow();
+        navCollapsedPill.SetGravity(GravityFlags.Center);
+        navCollapsedPill.SetPadding(Dp(12), Dp(4), Dp(12), Dp(4));
+        navCollapsedPill.Visibility = ViewStates.Gone;
+        navCollapsedPill.Alpha = 0f;
+        OneUiTheme.AttachRecoil(navCollapsedPill, 0.92f);
+
+        OneUiIconView morePillIcon = new(this, OneUiIconType.LibraryGrid, Color.Argb(238, 252, 252, 255));
+        TextView morePillLabel = new(this) {
+            Text = S["NavMorePill"],
+            TextSize = 12f,
+            Gravity = GravityFlags.Center
+        };
+        morePillLabel.SetIncludeFontPadding(false);
+        morePillLabel.SetTextColor(Color.Argb(242, 252, 252, 255));
+        morePillLabel.Typeface = OneUiTheme.GetAppleFontSemibold(this);
+        morePillLabel.SetSingleLine(true);
+
+        settingsUpdateDotCollapsed = new View(this) {
+            Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.IconAtmosUpmix, 99f),
+            Visibility = ShouldShowSettingsDot() ? ViewStates.Visible : ViewStates.Gone
+        };
+
+        navCollapsedPill.AddView(morePillIcon, new LinearLayout.LayoutParams(Dp(15), Dp(15)) { RightMargin = Dp(6) });
+        navCollapsedPill.AddView(morePillLabel);
+        navCollapsedPill.AddView(settingsUpdateDotCollapsed, new LinearLayout.LayoutParams(Dp(6), Dp(6)) { LeftMargin = Dp(5) });
+        navCollapsedPill.Click += (_, _) => SetNavBarCollapsed(false, animate: true);
+
+        navInnerStack.AddView(navCollapsedPill, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(34)) {
+            Gravity = GravityFlags.Center
+        });
+        navFrostedHost.AddView(navInnerStack, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         FrameLayout.LayoutParams floatingNavLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             Gravity = GravityFlags.Bottom | GravityFlags.CenterHorizontal,
             LeftMargin = Dp(14),
             RightMargin = Dp(14),
-            BottomMargin = Dp(14)
+            BottomMargin = Dp(12)
         };
         rootFrame.AddView(navFrostedHost, floatingNavLp);
 
         SetContentView(rootFrame);
         UpdateTabButtonStyles(animate: false);
+        SetNavBarCollapsed(activeTab == 0, animate: false);
         navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
         RefreshAllUiState();
     }
@@ -861,12 +920,107 @@ public partial class MainActivity : Activity, ICavernizeApp {
             svCur.TranslationX = 0f;
         }
         UpdateTabButtonStyles(animate: true);
+        if (idx == 0) {
+            SetNavBarCollapsed(true, animate: prevTab != 0 || !isNavBarCollapsed);
+        } else {
+            SetNavBarCollapsed(false, animate: isNavBarCollapsed);
+        }
         if (idx == 1) {
             UpdateRoomCanvas();
         } else if (idx == 0) {
             RefreshMusicPlayerUi();
         }
         navFrostedHost?.RefreshBlur(force: true);
+    }
+
+    void SetNavBarCollapsed(bool collapsed, bool animate) {
+        if (navFrostedHost == null || navLayer == null || navCollapsedPill == null) {
+            return;
+        }
+        isNavBarCollapsed = collapsed;
+        navCollapseAnimator?.Cancel();
+
+        int hostWidth = rootFrameHost?.Width > 0 ? rootFrameHost.Width : (Resources?.DisplayMetrics?.WidthPixels ?? 1080);
+        int fullW = Math.Max(Dp(280), hostWidth - Dp(28));
+        int pillW = Dp(104);
+        int fullH = Dp(56);
+        int pillH = Dp(42);
+
+        if (navFrostedHost.LayoutParameters is not FrameLayout.LayoutParams lp) {
+            return;
+        }
+
+        if (!animate) {
+            lp.Width = collapsed ? pillW : ViewGroup.LayoutParams.MatchParent;
+            lp.Height = collapsed ? pillH : ViewGroup.LayoutParams.WrapContent;
+            lp.BottomMargin = collapsed ? Dp(10) : Dp(14);
+            navFrostedHost.LayoutParameters = lp;
+            navLayer.Visibility = collapsed ? ViewStates.Gone : ViewStates.Visible;
+            navLayer.Alpha = collapsed ? 0f : 1f;
+            navCollapsedPill.Visibility = collapsed ? ViewStates.Visible : ViewStates.Gone;
+            navCollapsedPill.Alpha = collapsed ? 1f : 0f;
+            if (bottomScrimView != null) {
+                bottomScrimView.Alpha = collapsed ? 0.35f : 1f;
+            }
+            if (!collapsed) {
+                navFrostedHost.Post(() => PositionTabIndicator(animate: false));
+            }
+            navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
+            return;
+        }
+
+        int startW = navFrostedHost.Width > 0 ? navFrostedHost.Width : (collapsed ? fullW : pillW);
+        int endW = collapsed ? pillW : fullW;
+        int startH = navFrostedHost.Height > 0 ? navFrostedHost.Height : (collapsed ? fullH : pillH);
+        int endH = collapsed ? pillH : fullH;
+        int startBottom = lp.BottomMargin;
+        int endBottom = collapsed ? Dp(10) : Dp(14);
+        float startScrim = bottomScrimView?.Alpha ?? (collapsed ? 1f : 0.35f);
+        float endScrim = collapsed ? 0.35f : 1f;
+
+        navLayer.Visibility = ViewStates.Visible;
+        navCollapsedPill.Visibility = ViewStates.Visible;
+
+        navCollapseAnimator = ValueAnimator.OfFloat(0f, 1f);
+        navCollapseAnimator.SetDuration(260);
+        navCollapseAnimator.SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.75f));
+        navCollapseAnimator.Update += (_, e) => {
+            float f = (float)(e.Animation?.AnimatedValue ?? 1f);
+            if (navFrostedHost.LayoutParameters is FrameLayout.LayoutParams curLp) {
+                curLp.Width = Math.Max(pillW, (int)Math.Round(startW + (endW - startW) * f));
+                curLp.Height = Math.Max(pillH, (int)Math.Round(startH + (endH - startH) * f));
+                curLp.BottomMargin = (int)Math.Round(startBottom + (endBottom - startBottom) * f);
+                navFrostedHost.LayoutParameters = curLp;
+            }
+            if (collapsed) {
+                navLayer.Alpha = Math.Clamp(1f - f * 1.9f, 0f, 1f);
+                navCollapsedPill.Alpha = Math.Clamp((f - 0.32f) / 0.68f, 0f, 1f);
+            } else {
+                navCollapsedPill.Alpha = Math.Clamp(1f - f * 2.1f, 0f, 1f);
+                navLayer.Alpha = Math.Clamp((f - 0.28f) / 0.72f, 0f, 1f);
+            }
+            if (bottomScrimView != null) {
+                bottomScrimView.Alpha = startScrim + (endScrim - startScrim) * f;
+            }
+        };
+        navCollapseAnimator.AnimationEnd += (_, _) => {
+            if (uiDestroyed || navFrostedHost == null) return;
+            if (navFrostedHost.LayoutParameters is FrameLayout.LayoutParams endLp) {
+                endLp.Width = collapsed ? pillW : ViewGroup.LayoutParams.MatchParent;
+                endLp.Height = collapsed ? pillH : ViewGroup.LayoutParams.WrapContent;
+                endLp.BottomMargin = endBottom;
+                navFrostedHost.LayoutParameters = endLp;
+            }
+            navLayer.Visibility = collapsed ? ViewStates.Gone : ViewStates.Visible;
+            navLayer.Alpha = collapsed ? 0f : 1f;
+            navCollapsedPill.Visibility = collapsed ? ViewStates.Visible : ViewStates.Gone;
+            navCollapsedPill.Alpha = collapsed ? 1f : 0f;
+            if (!collapsed) {
+                navFrostedHost.Post(() => PositionTabIndicator(animate: false));
+            }
+            navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
+        };
+        navCollapseAnimator.Start();
     }
 
     void UpdateTabButtonStyles(bool animate = true) {
@@ -1397,16 +1551,207 @@ public partial class MainActivity : Activity, ICavernizeApp {
         if (LoadedFile != null && string.Equals(LoadedFile.Path, targetVariant.FilePath, StringComparison.OrdinalIgnoreCase)) {
             return;
         }
+
+        int myGen = ++variantSwitchGeneration;
         bool wasPlaying = playerEngine?.IsPlaying ?? false;
-        double resumeSec = (playerEngine != null && playerEngine.TotalSeconds > 0) ? playerEngine.CurrentSeconds : 0;
-        pendingSeekAfterLoadSeconds = resumeSec > 0.25 ? resumeSec : -1;
+        double baseSec = (playerEngine != null && playerEngine.TotalSeconds > 0) ? playerEngine.CurrentSeconds : 0;
+        long startElapsedMs = SystemClock.ElapsedRealtime();
+        preferredAudioCategory = AudioQualityAnalyzer.ClassifyCategory(targetVariant);
         preferredFormatVariantKey = MediaLibraryService.GetDistinctVariantLabel(targetVariant, allVariants);
 
         if (activeLibraryQueueIndex >= 0 && activeLibraryQueueIndex < activeLibraryQueue.Count) {
             activeLibraryQueue[activeLibraryQueueIndex] = targetVariant;
         }
-        ShowToast(string.Format(S["FormatSwitchedToast"], preferredFormatVariantKey));
-        OpenLocalPathWithFallbackAsync(targetVariant.FilePath, switchToTab: null, autoPlay: wasPlaying, bypassBusyGuard: true);
+
+        string targetPath = targetVariant.FilePath;
+        string prevTitle = currentMediaMeta?.Title;
+        MediaArtworkMetadata prevMetaSnap = currentMediaMeta;
+
+        // Keep current track playing seamlessly in the background while loading & decoding the target variant
+        Task.Run(() => {
+            AudioFile newFile = null;
+            string newFallbackDir = null;
+            ExternalDecodedTrack newDecodedTrueHD = null;
+            string newTrueHDSession = null;
+            try {
+                MediaArtworkMetadata meta = MediaMetadataHelper.Extract(this, null, targetPath, Path.GetFileName(targetPath));
+                newFile = OpenAudioFileResilient(targetPath, out newFallbackDir);
+                if (newFile == null || newFile.Tracks.Count == 0) {
+                    throw new InvalidOperationException("No playable audio tracks in selected variant.");
+                }
+                CavernizeTrack bestTrack = newFile.Tracks
+                    .Where(x => x.Codec != Codec.Unknown && x.Supported)
+                    .OrderBy(x => x.Codec)
+                    .FirstOrDefault() ?? newFile.Tracks[0];
+
+                CavernizeTrack readyTrack = bestTrack;
+                if (bestTrack.Codec == Codec.TrueHD) {
+                    string truehddPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
+                    if (string.IsNullOrEmpty(truehddPath) || !File.Exists(truehddPath) || !store.TruehddLicenceAccepted) {
+                        // Needs interactive truehdd download/licence modal -> fall back cleanly with elapsed-time compensation
+                        newFile.Dispose();
+                        if (!string.IsNullOrEmpty(newFallbackDir)) {
+                            TrueHDDecoderService.CleanupWorkDirectory(newFallbackDir);
+                        }
+                        RunOnUiThread(() => {
+                            if (uiDestroyed || myGen != variantSwitchGeneration) return;
+                            double liveSec = (wasPlaying && playerEngine.IsPlaying)
+                                ? playerEngine.CurrentSeconds
+                                : (wasPlaying ? baseSec + (SystemClock.ElapsedRealtime() - startElapsedMs) / 1000.0 : baseSec);
+                            pendingSeekAfterLoadSeconds = liveSec > 0.25 ? liveSec : -1;
+                            ShowToast(string.Format(S["FormatSwitchedToast"], preferredFormatVariantKey));
+                            OpenLocalPathWithFallbackAsync(targetPath, switchToTab: null, autoPlay: wasPlaying, bypassBusyGuard: true);
+                        });
+                        return;
+                    }
+
+                    int? forcedPres = store.MlpPresentation >= 0 ? store.MlpPresentation : null;
+                    TrueHDDecodeResult decRes = TrueHDDecoderService.DecodeTrack(
+                        this,
+                        bestTrack,
+                        newFile.Path,
+                        ffmpeg.Found ? ffmpeg.Location : null,
+                        truehddPath,
+                        forcedPres,
+                        null,
+                        CancellationToken.None);
+                    newDecodedTrueHD = decRes.DecodedTrack;
+                    newTrueHDSession = decRes.SessionDirectory;
+                    readyTrack = newDecodedTrueHD;
+                }
+
+                RunOnUiThread(() => {
+                    if (uiDestroyed || myGen != variantSwitchGeneration || readyTrack == null) {
+                        newDecodedTrueHD?.Dispose();
+                        newFile?.Dispose();
+                        if (!string.IsNullOrEmpty(newTrueHDSession)) TrueHDDecoderService.CleanupWorkDirectory(newTrueHDSession);
+                        if (!string.IsNullOrEmpty(newFallbackDir)) TrueHDDecoderService.CleanupWorkDirectory(newFallbackDir);
+                        return;
+                    }
+
+                    // Preserve high-res artwork & synced lyrics from current song to prevent visual flash
+                    bool sameSong = prevMetaSnap != null &&
+                        (string.Equals(prevTitle, meta?.Title, StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(meta?.Title));
+                    if (meta != null && sameSong) {
+                        if (!meta.HasEmbeddedArtwork && IsBitmapUsable(prevMetaSnap.ArtworkBitmap)) {
+                            meta.ArtworkBitmap = prevMetaSnap.ArtworkBitmap;
+                            meta.HasEmbeddedArtwork = prevMetaSnap.HasEmbeddedArtwork;
+                            meta.PrimaryAccent = prevMetaSnap.PrimaryAccent;
+                            meta.SecondaryAccent = prevMetaSnap.SecondaryAccent;
+                        }
+                        if ((meta.Lyrics == null || !meta.Lyrics.HasLyrics) && prevMetaSnap.Lyrics?.HasLyrics == true) {
+                            meta.Lyrics = prevMetaSnap.Lyrics;
+                        }
+                        if (string.IsNullOrWhiteSpace(meta.Title)) meta.Title = prevMetaSnap.Title;
+                        if (string.IsNullOrWhiteSpace(meta.Artist)) meta.Artist = prevMetaSnap.Artist;
+                        if (string.IsNullOrWhiteSpace(meta.Album)) meta.Album = prevMetaSnap.Album;
+                    }
+
+                    // Exact real-time elapsed timestamp so playback NEVER jumps backward
+                    double liveSec = (wasPlaying && playerEngine.IsPlaying)
+                        ? playerEngine.CurrentSeconds
+                        : (wasPlaying ? baseSec + (SystemClock.ElapsedRealtime() - startElapsedMs) / 1000.0 : baseSec);
+
+                    AudioFile oldFile = LoadedFile;
+                    ExternalDecodedTrack oldDecoded = decodedTrueHDTrack;
+                    string oldTrueHDSession = activeTrueHDSessionDir;
+                    string oldFallback = activeFallbackSessionDir;
+
+                    bool swapped = false;
+                    if (readyTrack.Supported && readyTrack.Codec != Codec.TrueHD) {
+                        try {
+                            playerEngine.HotSwapTrackSeamless(readyTrack, liveSec, upmixingSettings, renderingSettings);
+                            swapped = true;
+                        } catch (Exception swapEx) {
+                            AppLogger.Warn($"HotSwapTrackSeamless fallback: {swapEx.Message}");
+                            swapped = false;
+                        }
+                    }
+
+                    if (!swapped) {
+                        // Safe fallback if seamless swap couldn't initialize
+                        pendingSeekAfterLoadSeconds = liveSec > 0.25 ? liveSec : -1;
+                        pendingAutoPlayAfterLoad = wasPlaying;
+                        activeFallbackSessionDir = newFallbackDir;
+                        OpenContent(newFile, meta);
+                        pendingAutoPlayAfterLoad = false;
+                        return;
+                    }
+
+                    // Update active references without stopping AudioTrack or tearing down playback
+                    LoadedFile = newFile;
+                    selectedTrack = bestTrack;
+                    decodedTrueHDTrack = newDecodedTrueHD;
+                    activeTrueHDSessionDir = newTrueHDSession;
+                    activeFallbackSessionDir = newFallbackDir;
+                    currentMediaMeta = meta;
+                    currentMediaUri = targetVariant.ContentUri;
+                    trackSourceItems = [.. playerEngine.SourceItems];
+
+                    // Keep current stage mode (Cover or Lyrics) intact without flashing
+                    if (sameSong && meta?.HasVideo != true && musicStageMode != PlayerStageMode.Video) {
+                        lastStageBoundPath = meta?.SourceMediaPath ?? newFile.Path ?? "";
+                    }
+
+                    if (wasPlaying && !playerEngine.IsPlaying) {
+                        playerEngine.IsPlaying = true;
+                        audioOutput.Start();
+                    }
+                    if (meta?.HasVideo == true) {
+                        musicVideoStage?.SeekTo(liveSec);
+                    }
+
+                    EnsureActiveQueueForCurrentFile(targetPath);
+                    SetWorkspaceHeaderText(!string.IsNullOrWhiteSpace(meta?.Title) ? meta.Title : Path.GetFileName(newFile.Path));
+                    string details = string.Join(" | ", readyTrack.Details.Select(d => $"{d.property}: {d.value}"));
+                    SetWorkspaceSummaryText($"{readyTrack.FormatHeader}\n{details}");
+
+                    mediaNotification?.UpdateMetadata(
+                        !string.IsNullOrWhiteSpace(meta?.Title) ? meta.Title : Path.GetFileNameWithoutExtension(newFile.Path),
+                        !string.IsNullOrWhiteSpace(meta?.Artist) ? meta.Artist : $"Cavernize 3D • {readyTrack.FormatHeader}",
+                        !string.IsNullOrWhiteSpace(meta?.Album) ? meta.Album : readyTrack.FormatHeader,
+                        playerEngine.TotalSeconds,
+                        meta?.ArtworkBitmap);
+
+                    RebuildInlineTrackList();
+                    RefreshPlayerSourcesList();
+                    RefreshMusicPlayerUi();
+                    RefreshExtractorChecklist();
+                    RefreshConverterTrackInfo();
+                    RefreshContainerOptions();
+                    SyncPlaybackUi(playerEngine.IsPlaying, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
+                    UpdateRoomCanvas();
+                    ShowToast(string.Format(S["FormatSwitchedToast"], preferredFormatVariantKey));
+
+                    // Clean up previous file/session resources AFTER engine has atomically switched
+                    if (oldDecoded != null && oldDecoded != newDecodedTrueHD && !IsSessionProtectedByQueue(oldTrueHDSession)) {
+                        try { oldDecoded.Dispose(); } catch { }
+                    }
+                    if (oldFile != null && oldFile != newFile && renderQueue.Jobs.FirstOrDefault(x => x.IsUsingFile(oldFile)) == null) {
+                        try { oldFile.Dispose(); } catch { }
+                    }
+                    if (!string.IsNullOrEmpty(oldTrueHDSession) && !string.Equals(oldTrueHDSession, newTrueHDSession, StringComparison.Ordinal) &&
+                        !IsSessionProtectedByQueue(oldTrueHDSession)) {
+                        TrueHDDecoderService.CleanupWorkDirectory(oldTrueHDSession);
+                    }
+                    if (!string.IsNullOrEmpty(oldFallback) && !string.Equals(oldFallback, newFallbackDir, StringComparison.Ordinal) &&
+                        !IsSessionProtectedByQueue(oldFallback)) {
+                        TrueHDDecoderService.CleanupWorkDirectory(oldFallback);
+                    }
+                });
+            } catch (Exception ex) {
+                newDecodedTrueHD?.Dispose();
+                newFile?.Dispose();
+                if (!string.IsNullOrEmpty(newTrueHDSession)) TrueHDDecoderService.CleanupWorkDirectory(newTrueHDSession);
+                if (!string.IsNullOrEmpty(newFallbackDir)) TrueHDDecoderService.CleanupWorkDirectory(newFallbackDir);
+                AppLogger.Error("SwitchActiveTrackVariant", ex);
+                RunOnUiThread(() => {
+                    if (!uiDestroyed && myGen == variantSwitchGeneration) {
+                        ShowLoadFailureDialog(ex);
+                    }
+                });
+            }
+        });
     }
 
     public void OpenContent(AudioFile file) => OpenContent(file, null);
@@ -1593,8 +1938,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 List<LibraryTrackItem> useList = filteredGroup.Contains(match) ? filteredGroup : group;
                 List<LibraryMergedTrack> merged = MediaLibraryService.MergeAlbumTrackVariants(useList);
                 foreach (LibraryMergedTrack m in merged) {
-                    LibraryTrackItem pick = m.Variants.Contains(match) ? match : m.Primary;
-                    activeLibraryQueue.Add(pick);
+                    LibraryTrackItem pick = m.Variants.Contains(match)
+                        ? match
+                        : (preferredAudioCategory.HasValue
+                            ? AudioQualityAnalyzer.PickBestVariantForNextTrack(m.Variants, preferredAudioCategory.Value, this)
+                            : m.Primary);
+                    activeLibraryQueue.Add(pick ?? m.Primary);
                 }
                 activeLibraryQueueIndex = activeLibraryQueue.IndexOf(match);
                 if (activeLibraryQueue.Count > 0 && activeLibraryQueueIndex >= 0) {
@@ -1908,8 +2257,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
     }
 
     void RefreshSettingsDot() {
+        ViewStates vis = ShouldShowSettingsDot() ? ViewStates.Visible : ViewStates.Gone;
         if (settingsUpdateDot != null) {
-            settingsUpdateDot.Visibility = ShouldShowSettingsDot() ? ViewStates.Visible : ViewStates.Gone;
+            settingsUpdateDot.Visibility = vis;
+        }
+        if (settingsUpdateDotCollapsed != null) {
+            settingsUpdateDotCollapsed.Visibility = vis;
         }
     }
 

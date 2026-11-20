@@ -1,0 +1,5 @@
+{
+  "name": "Cavernize Spatial Audio Studio",
+  "description": "Interactive spatial audio player, 3D acoustic room simulator, multi-layout studio converter, and 3D object stem extractor powered by the Cavern acoustic architecture.",
+  "requestFramePermissions": []
+}

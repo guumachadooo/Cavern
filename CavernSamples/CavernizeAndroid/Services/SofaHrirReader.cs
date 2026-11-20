@@ -44,18 +44,18 @@ public static class SofaHrirReader {
     /// <summary>
     /// Loads a .sofa (AES69 / HDF5) HRIR or BRIR file from disk and maps it to Cavern's 16 virtual speaker layout.
     /// </summary>
-    public static SofaLoadResult Load(string filePath) {
+    public static SofaLoadResult Load(string filePath, bool minimumPhase = false) {
         if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) {
             throw new FileNotFoundException("SOFA file not found.", filePath);
         }
         byte[] data = File.ReadAllBytes(filePath);
-        return Parse(data);
+        return Parse(data, minimumPhase);
     }
 
     /// <summary>
     /// Parses raw SOFA (HDF5 v2/v3) file bytes into Cavern <see cref="VirtualChannel"/> instances.
     /// </summary>
-    public static SofaLoadResult Parse(byte[] data) {
+    public static SofaLoadResult Parse(byte[] data, bool minimumPhase = false) {
         Hdf5Reader reader = new(data);
         Dictionary<string, ulong> links = reader.ListGroup(reader.RootAddress);
 
@@ -188,6 +188,7 @@ public static class SofaHrirReader {
         }
 
         VirtualChannel[] channels = new VirtualChannel[CavernSpeakers.Length];
+        bool applyMinPhase = minimumPhase && tapCount <= MinimumPhaseHrir.MaxAnechoicTaps;
         for (int s = 0; s < CavernSpeakers.Length; s++) {
             channels[s] = VirtualChannel.FromMeasured(
                 CavernSpeakers[s].x,
@@ -195,7 +196,8 @@ public static class SofaHrirReader {
                 leftEars[s],
                 rightEars[s],
                 sampleRate,
-                crossoverFrequency: 0f);
+                crossoverFrequency: 0f,
+                minimumPhase: applyMinPhase);
         }
 
         float refDist = (float)Math.Clamp(refDistSum / CavernSpeakers.Length, 0.25, 10.0);

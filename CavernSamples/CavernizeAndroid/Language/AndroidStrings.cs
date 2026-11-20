@@ -361,7 +361,7 @@ public sealed class AndroidStrings {
 
         // Individual Technical Option Tooltips (cause & effect)
         ["TipHrtf"] = "Simulates virtual surround speakers around your head on headphones.\n\n• On: full 3D binaural staging.\n• Off: direct mix without ear HRTF filtering (use on physical speakers).",
-        ["TipDistSim"] = "Applies micro-delays and ear cues based on virtual distance.\n\n• On: deeper acoustic room realism.\n• Off: drier soundstage with flatter depth.",
+        ["TipDistSim"] = "Selects the real laboratory loudspeaker measurement distance (TH Köln KU100 DFC: 0.50 m, 0.75 m, 1.00 m, 1.50 m, or 3.25 m).\n\nUses genuine acoustic measurements instead of synthetic artificial distance filters.",
         ["TipRolloff"] = "Sets how fast distant objects drop in volume:\n• Logarithmic / Real (1/d): stronger near-vs-far depth contrast.\n• Linear: gentle uniform decay.\n• Disabled: constant loudness regardless of distance.",
         ["TipMatrixUpmix"] = "Fills surround channels from stereo or 5.1 audio.\n\n• On: widens side and rear staging.\n• Off: preserves only channels present in the source file.",
         ["TipCavernizeUpmix"] = "Synthesizes overhead 3D ceiling objects dynamically.\n\n• On: harmonic and ambient layers lift above ear level.\n• Off: height speakers stay silent unless native Atmos objects exist.",
@@ -370,7 +370,8 @@ public sealed class AndroidStrings {
         ["TipRenderGain"] = "Master digital gain offset applied when mixing and exporting.\n\n• Positive (+dB): louder signal (watch for clipping above 0 dB).\n• Negative (-dB): adds headroom to prevent peak distortion.",
         ["TipHeightSqueeze"] = "Compresses elevated objects down toward ear height.\n\n• 0%: full vertical 3D ceiling spread.\n• Near 100%: folds ceiling sounds down onto ground channels.",
         ["TipNormalizer"] = "Dynamic volume control during playback.\n\n• Normalizer On: raises quiet detail and caps harsh peaks.\n• Limiter Only: keeps native loudness untouched, capping peaks at 0 dB.",
-        ["TipEnvType"] = "Changes room acoustic scale presets (Home, Concert Hall, Cinema, Studio), shifting perceived wall depth.",
+        ["TipEnvType"] = "Selects the Cavern speaker-geometry layout mode (Home, Theatre, Studio).\n\n• Primarily designed for physical Home Theater speaker placement and export.\n• On headphones, acoustic room character comes from your chosen laboratory HRIR/BRIR profile.",
+        ["TipRoomSize"] = "Defines the 3D spatial coordinate box (Width × Height × Depth in meters) used to place Dolby Atmos 3D objects and compute distance rolloff.\n\n• Primarily calibrates physical Home Theater speaker geometry.\n• On headphones, larger dimensions gently alter how far objects travel before volume rolloff applies, while acoustic timbre remains controlled by your laboratory HRIR/BRIR.",
         ["TipHrir"] = "Imports a custom laboratory-measured Head-Related Impulse Response (.sofa or .wav) to personalize headphone spatialization.",
         ["TipQuickEQ"] = "Loads EQ calibration filters (.txt from QuickEQ / Equalizer APO) to flatten room or headphone peaks.",
         ["TipSpeakerVirt"] = "Simulates virtual overhead channels across ground speakers when no physical height speakers exist.",
@@ -408,7 +409,7 @@ public sealed class AndroidStrings {
         ["ProfSadieD1Min"] = "SADIE II D1 — Minimum Phase",
         ["ProfSadieD1MinSub"] = "Minimum-phase response + measured ITD • 256 taps • 1.2 m",
         ["ProfSadieD1Brir"] = "SADIE II D1 — Studio Control Room (BRIR)",
-        ["ProfSadieD1BrirSub"] = "Real studio room acoustics • 0.30 s (14,400 taps) • 1.5 m",
+        ["ProfSadieD1BrirSub"] = "Diffuse-field compensated real studio acoustics • 0.30 s • 1.5 m",
         ["ProfThkFfDfc"] = "TH Köln KU100 — Far-Field DFC",
         ["ProfThkFfDfcSub"] = "Official diffuse-field compensated • 384 taps • 3.25 m",
         ["ProfThkFfRaw"] = "TH Köln KU100 — Far-Field Raw",
@@ -426,14 +427,51 @@ public sealed class AndroidStrings {
         ["ProfSadieD2Min"] = "SADIE II D2 — KEMAR Minimum Phase",
         ["ProfSadieD2MinSub"] = "Minimum-phase KEMAR + measured ITD • 256 taps • 1.2 m",
         ["ProfSadieD2Brir"] = "SADIE II D2 — KEMAR Studio Room (BRIR)",
-        ["ProfSadieD2BrirSub"] = "Real studio room acoustics on KEMAR • 0.30 s • 1.5 m",
+        ["ProfSadieD2BrirSub"] = "Diffuse-field compensated studio acoustics (KEMAR) • 0.30 s • 1.5 m",
         ["ProfCavernClassic"] = "Cavern Classic (Fixed)",
         ["ProfCavernClassicSub"] = "Built-in Cavern HRIR with fixed unity bass & aligned phase",
         ["ProfDirect20"] = "Direct 2.0 (No HRTF)",
         ["ProfDirect20Sub"] = "Clean ITU stereo fold-down with full LFE bass & no HRTF",
         ["ProfCustom"] = "Custom HRIR / SOFA",
         ["ProfCustomSub"] = "User-imported .sofa or .wav measurement file",
-        ["TipBinauralProfile"] = "Selects the laboratory-measured HRIR or BRIR dataset used to spatialize surround and Dolby Atmos audio on headphones (100% offline, neutral unity-gain engine, zero artificial EQ).\n\n• HRIR: clean anechoic headphone staging.\n• BRIR: includes real measured studio room reflections.\n• Direct 2.0: bypasses HRTF cleanly while keeping full LFE bass.",
+        ["TipBinauralProfile"] = "Selects the laboratory-measured HRIR or BRIR dataset used to spatialize surround and Dolby Atmos audio on headphones (100% offline, neutral unity-gain engine, zero artificial EQ).\n\n• HRIR: clean anechoic headphone staging.\n• BRIR: includes diffuse-field compensated real measured studio room reflections.\n• Direct 2.0: bypasses HRTF cleanly while keeping full LFE bass.",
+
+        // Laboratory Distance Selector, Global Minimum-Phase + ITD, Dynamic Ceiling Filter & Scientific Audio Quality UI
+        ["BinauralDistDirect"] = "Direct 2.0",
+        ["BinauralDistFixedTag"] = "Fixed",
+        ["BinauralDistModalTitle"] = "Laboratory Distance (HRIR)",
+        ["BinauralDistDirectHint"] = "HRTF 3D is currently off (Direct 2.0). Select a TH Köln KU100 DFC laboratory distance below to enable spatial virtualization at that exact distance.",
+        ["BinauralDistSeriesActiveHint"] = "Active TH Köln KU100 DFC laboratory measurement: {0:0.00} m. Switch seamlessly between all 5 real anechoic distances below.",
+        ["BinauralDistFixedHint"] = "Current profile uses a single fixed laboratory distance ({0:0.00} m). Select any TH Köln KU100 DFC distance below to use multi-distance staging.",
+        ["BinauralDistSeriesHeader"] = "TH Köln KU100 DFC — Real Measured Distances",
+        ["BinauralDistDesc050"] = "Ultra-near monitor • intimate head-adjacent stage",
+        ["BinauralDistDesc075"] = "Near-field close • tight studio monitor focus",
+        ["BinauralDistDesc100"] = "Studio desk • balanced near-field separation",
+        ["BinauralDistDesc150"] = "Mid-field • natural listening room width",
+        ["BinauralDistDesc325"] = "Far-field • open reference stage (3.25 m)",
+        ["BinauralDistAllProfilesBtn"] = "View All Binaural Profiles",
+        ["BinauralMinPhaseTitle"] = "Minimum-Phase + ITD (All HRIRs)",
+        ["BinauralMinPhaseSub"] = "Mathematically removes excess phase dispersion via real cepstrum while preserving exact measured Interaural Time Delay. Automatically skipped on BRIR room profiles.",
+        ["ProfThkDfcSeriesTitle"] = "TH Köln KU100 — Diffuse-Field (5 Distances)",
+        ["ProfThkDfcSeriesSub"] = "Official laboratory DFC series • 384 taps • choose exact distance below",
+        ["FilterNoMatchToast"] = "No matching 3D objects found in this track.",
+        ["CeilingLiveBadge"] = "Active Ceiling",
+        ["NavMorePill"] = "More",
+        ["AudioSpecTitle"] = "Audio Specification",
+        ["TierAtmos"] = "Dolby Atmos / 3D",
+        ["TierSurround"] = "Surround",
+        ["TierStereo"] = "Stereo",
+        ["QualityScoreLabel"] = "Quality Score: {0}/100",
+        ["QualityEffectiveBits"] = "Effective resolution: {0}-bit PCM",
+        ["QualityTrue24BitOk"] = "Verified true Hi-Res: {0}-bit active depth",
+        ["QualityFake24BitWarn"] = "Fake 24-bit detected (zero-padded 16-bit container)",
+        ["QualitySpectralCutoff"] = "Measured spectral cutoff: ~{0} kHz",
+        ["QualityFakeLosslessWarn"] = "Warning: Lossy transcode detected inside lossless container",
+        ["QualityUpsampledHiResWarn"] = "Note: Upsampled Hi-Res (no ultrasonic content above ~22 kHz)",
+        ["QualityDynamicRange"] = "Dynamic Range (crest): DR {0} dB",
+        ["QualityClippingWarn"] = "Hard clipping detected ({0}% full-scale peaks)",
+        ["QualityAnalyzing"] = "Analyzing real PCM spectrum and bit-depth in background...",
+        ["AudioStreamsSection"] = "Audio Streams in File",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -744,7 +782,7 @@ public sealed class AndroidStrings {
         d["RoomTouchHint"] = "Arraste o fundo para girar em 3D • Arraste o ouvinte • Toque nas caixas para Solo";
 
         d["TipHrtf"] = "Simula caixas surround ao redor da cabeça nos fones de ouvido.\n\n• Ativo: cria palco sonoro 3D binaural.\n• Desativado: saída sem filtro HRTF (use ao reproduzir em caixas acústicas físicas).";
-        d["TipDistSim"] = "Calcula microatrasos e sombreamento acústico entre os dois ouvidos.\n\n• Ativo: aumenta a sensação realista de profundidade.\n• Desativado: som mais seco e próximo ao centro.";
+        d["TipDistSim"] = "Seleciona a distância real medida em laboratório (série TH Köln KU100 DFC: 0,50 m, 0,75 m, 1,00 m, 1,50 m ou 3,25 m).\n\nUsa medições acústicas reais em vez de filtros artificiais de distância.";
         d["TipRolloff"] = "Define a rapidez com que sons distantes perdem volume:\n• Logarítmica / Real (1/d): contraste nítido entre objetos próximos e no fundo.\n• Linear: queda suave e uniforme.\n• Desativado: mantém o mesmo volume em toda a sala.";
         d["TipMatrixUpmix"] = "Expande faixas estéreo ou 5.1 preenchendo canais surround 7.1.\n\n• Ativo: abre o palco lateral e traseiro.\n• Desativado: mantém somente os canais originais do arquivo.";
         d["TipCavernizeUpmix"] = "Gera objetos de teto virtuais em 3D a partir de mixagens comuns.\n\n• Ativo: ambiências e camadas sobem para cima do ouvinte.\n• Desativado: caixas de altura tocam apenas quando há objetos Atmos nativos.";
@@ -753,7 +791,8 @@ public sealed class AndroidStrings {
         d["TipRenderGain"] = "Ajuste mestre de ganho digital aplicado na renderização.\n\n• Subir (+dB): saída mais alta (cuidado com saturação acima de 0 dB).\n• Descer (-dB): cria margem contra distorção em trilhas comprimidas.";
         d["TipHeightSqueeze"] = "Comprime a altura dos sons do teto em direção ao plano horizontal.\n\n• 0%: aproveita toda a elevação vertical até o teto.\n• Perto de 100%: abaixa efeitos de teto para o nível das caixas comuns.";
         d["TipNormalizer"] = "Controle automático de intensidade durante a reprodução.\n\n• Normalizador ativo: equilibra trechos baixos e contém picos.\n• Apenas limitador: não amplifica trechos suaves, só evita clipping acima de 0 dB.";
-        d["TipEnvType"] = "Altera a escala acústica virtual da sala (Casa, Sala, Cinema ou Estúdio), modificando distância e reverberação percebida.";
+        d["TipEnvType"] = "Define o modo geométrico de caixas do Cavern (Casa, Cinema, Estúdio).\n\n• Pensado principalmente para layouts físicos de Home Theater e exportação.\n• Nos fones de ouvido, a acústica real vem do perfil de laboratório HRIR/BRIR escolhido.";
+        d["TipRoomSize"] = "Define a caixa de coordenadas 3D (Largura × Altura × Profundidade em metros) usada para posicionar objetos Dolby Atmos e calcular a atenuação de volume (rolloff).\n\n• Calibra principalmente a geometria de um Home Theater físico.\n• Nos fones, dimensões maiores suavizam a queda de volume dos objetos distantes, mantendo o timbre real do perfil HRIR/BRIR.";
         d["TipHrir"] = "Importa um arquivo HRIR/BRIR medido (.sofa ou .wav) para personalizar a espacialização nos fones de ouvido.";
         d["TipQuickEQ"] = "Aplica curvas de correção acústica (.txt gerados pelo QuickEQ / Equalizer APO) para corrigir picos da sala ou do fone.";
         d["TipSpeakerVirt"] = "Virtualiza canais de teto em sistemas sem caixas físicas acima usando filtragem direcional nas caixas do chão.";
@@ -791,7 +830,7 @@ public sealed class AndroidStrings {
         d["ProfSadieD1Min"] = "SADIE II D1 — Fase Mínima (Min-Phase)";
         d["ProfSadieD1MinSub"] = "Resposta de fase mínima + ITD real medido • 256 taps • 1,2 m";
         d["ProfSadieD1Brir"] = "SADIE II D1 — Sala de Estúdio (BRIR)";
-        d["ProfSadieD1BrirSub"] = "Acústica real de sala de controle • 0,30 s (14.400 taps) • 1,5 m";
+        d["ProfSadieD1BrirSub"] = "Acústica real de estúdio compensada (DFC) • 0,30 s • 1,5 m";
         d["ProfThkFfDfc"] = "TH Köln KU100 — Campo Distante (DFC)";
         d["ProfThkFfDfcSub"] = "Compensação diffuse-field oficial • 384 taps • 3,25 m";
         d["ProfThkFfRaw"] = "TH Köln KU100 — Campo Distante (Raw)";
@@ -809,14 +848,51 @@ public sealed class AndroidStrings {
         d["ProfSadieD2Min"] = "SADIE II D2 — KEMAR Fase Mínima";
         d["ProfSadieD2MinSub"] = "KEMAR fase mínima + ITD real medido • 256 taps • 1,2 m";
         d["ProfSadieD2Brir"] = "SADIE II D2 — KEMAR Sala de Estúdio (BRIR)";
-        d["ProfSadieD2BrirSub"] = "Acústica real de estúdio no KEMAR • 0,30 s • 1,5 m";
+        d["ProfSadieD2BrirSub"] = "Acústica real de estúdio compensada (KEMAR DFC) • 0,30 s • 1,5 m";
         d["ProfCavernClassic"] = "Cavern Clássico (Corrigido)";
         d["ProfCavernClassicSub"] = "HRIR original do Cavern com graves corrigidos e fase alinhada";
         d["ProfDirect20"] = "Direto 2.0 (Sem HRTF)";
         d["ProfDirect20Sub"] = "Downmix estéreo ITU limpo com grave LFE completo e sem HRTF";
         d["ProfCustom"] = "HRIR / SOFA Personalizado";
         d["ProfCustomSub"] = "Arquivo de medição .sofa ou .wav importado pelo usuário";
-        d["TipBinauralProfile"] = "Escolhe o banco oficial medido em laboratório (HRIR ou BRIR) usado para espacializar áudio surround e Dolby Atmos nos fones (100% offline, motor neutro sem EQ artificial).\n\n• HRIR: palco limpo e seco de fones.\n• BRIR: inclui a acústica real medida de uma sala de estúdio.\n• Direto 2.0: desativa o HRTF mantendo o grave LFE completo.";
+        d["TipBinauralProfile"] = "Escolhe o banco oficial medido em laboratório (HRIR ou BRIR) usado para espacializar áudio surround e Dolby Atmos nos fones (100% offline, motor neutro sem EQ artificial).\n\n• HRIR: palco limpo e seco de fones.\n• BRIR: inclui a acústica real medida de uma sala de estúdio com compensação DFC.\n• Direto 2.0: desativa o HRTF mantendo o grave LFE completo.";
+
+        // Seletor de Distância Real, Fase Mínima Global + ITD, Filtro Dinâmico de Teto e Qualidade Científica
+        d["BinauralDistDirect"] = "Direto 2.0";
+        d["BinauralDistFixedTag"] = "Fixa";
+        d["BinauralDistModalTitle"] = "Distância de Laboratório (HRIR)";
+        d["BinauralDistDirectHint"] = "O HRTF 3D está desativado (Direto 2.0). Escolha uma distância real da série TH Köln KU100 DFC abaixo para ativar a espacialização nessa distância exata.";
+        d["BinauralDistSeriesActiveHint"] = "Medição real ativa (TH Köln KU100 DFC): {0:0.00} m. Alterne suavemente entre as 5 distâncias de laboratório abaixo.";
+        d["BinauralDistFixedHint"] = "O perfil atual usa uma distância fixa de laboratório ({0:0.00} m). Escolha abaixo qualquer distância da série TH Köln KU100 DFC para palco progressivo.";
+        d["BinauralDistSeriesHeader"] = "TH Köln KU100 DFC — Distâncias Reais Medidas";
+        d["BinauralDistDesc050"] = "Monitor ultra-próximo • palco íntimo bem perto";
+        d["BinauralDistDesc075"] = "Campo próximo • foco preciso de monitores";
+        d["BinauralDistDesc100"] = "Mesa de estúdio • separação próxima equilibrada";
+        d["BinauralDistDesc150"] = "Campo médio • largura natural de sala de audição";
+        d["BinauralDistDesc325"] = "Campo distante • palco aberto de referência (3,25 m)";
+        d["BinauralDistAllProfilesBtn"] = "Ver Todos os Perfis Binaurais";
+        d["BinauralMinPhaseTitle"] = "Fase Mínima + ITD (Todos os HRIRs)";
+        d["BinauralMinPhaseSub"] = "Remove matematicamente a dispersão de fase via cepstro real mantendo o atraso exato entre ouvidos (ITD). Ignorado automaticamente em salas BRIR.";
+        d["ProfThkDfcSeriesTitle"] = "TH Köln KU100 — Diffuse-Field (5 Distâncias)";
+        d["ProfThkDfcSeriesSub"] = "Série oficial DFC de laboratório • 384 taps • escolha a distância abaixo";
+        d["FilterNoMatchToast"] = "Nenhum objeto 3D correspondente encontrado nesta faixa.";
+        d["CeilingLiveBadge"] = "Teto Ativo";
+        d["NavMorePill"] = "Mais";
+        d["AudioSpecTitle"] = "Especificação de Áudio";
+        d["TierAtmos"] = "Dolby Atmos / 3D";
+        d["TierSurround"] = "Surround";
+        d["TierStereo"] = "Estéreo";
+        d["QualityScoreLabel"] = "Nota de Qualidade: {0}/100";
+        d["QualityEffectiveBits"] = "Resolução efetiva: {0}-bit PCM";
+        d["QualityTrue24BitOk"] = "Hi-Res real confirmado: {0} bits ativos";
+        d["QualityFake24BitWarn"] = "24-bit falso detectado (16-bit preenchido com zeros)";
+        d["QualitySpectralCutoff"] = "Corte espectral medido: ~{0} kHz";
+        d["QualityFakeLosslessWarn"] = "Alerta: Arquivo lossy transcodificado em container lossless";
+        d["QualityUpsampledHiResWarn"] = "Nota: Hi-Res upsampled (sem energia ultrassônica acima de ~22 kHz)";
+        d["QualityDynamicRange"] = "Faixa Dinâmica (crista): DR {0} dB";
+        d["QualityClippingWarn"] = "Clipping rígido detectado ({0}% de picos saturados)";
+        d["QualityAnalyzing"] = "Analisando espectro PCM real e bits efetivos em segundo plano...";
+        d["AudioStreamsSection"] = "Faixas de Áudio no Arquivo";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

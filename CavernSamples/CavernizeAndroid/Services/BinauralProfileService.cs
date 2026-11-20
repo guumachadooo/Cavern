@@ -34,6 +34,8 @@ public sealed class BinauralProfileInfo {
     public string SubtitleKey { get; init; }
     public string ShortBadge { get; init; }
     public string AssetFile { get; init; }
+    public float ReferenceDistanceMeters { get; init; }
+    public bool IsThKolnDistanceSeries { get; init; }
     public bool IsDirectStereo { get; init; }
     public bool IsClassic { get; init; }
     public bool IsCustom { get; init; }
@@ -44,7 +46,8 @@ public sealed class BinauralProfileInfo {
 
 /// <summary>
 /// Manages official offline laboratory HRIR/BRIR profiles (SADIE II D1/D2, TH Köln KU100 Far-Field &amp; Near-Field),
-/// Cavern Classic, Direct 2.0, and custom .wav / .sofa imports.
+/// global mathematical Minimum-Phase + ITD conversion, laboratory distance selection, Cavern Classic, Direct 2.0,
+/// and custom .wav / .sofa imports.
 /// </summary>
 public static class BinauralProfileService {
     public const string DefaultProfileId = "sadie_d1_dfc";
@@ -55,7 +58,18 @@ public static class BinauralProfileService {
     static readonly byte[] ChrirMagic = Encoding.ASCII.GetBytes("CHRIR1");
 
     /// <summary>
-    /// Complete catalog of official and built-in binaural profiles.
+    /// Official laboratory distance progression measured on the same TH Köln Neumann KU100 DFC setup.
+    /// </summary>
+    public static readonly (string ProfileId, float Meters, string ShortLabel)[] ThKolnDistanceSeries = [
+        ("thk_ku100_nf050", 0.50f, "0.50 m"),
+        ("thk_ku100_nf075", 0.75f, "0.75 m"),
+        ("thk_ku100_nf100", 1.00f, "1.00 m"),
+        ("thk_ku100_nf150", 1.50f, "1.50 m"),
+        ("thk_ku100_ff_dfc", 3.25f, "3.25 m")
+    ];
+
+    /// <summary>
+    /// Complete catalog of official and built-in binaural profiles (Min-Phase + ITD is now a universal toggle).
     /// </summary>
     public static IReadOnlyList<BinauralProfileInfo> Profiles { get; } = [
         // SADIE II — D1 (Neumann KU100, Apache 2.0)
@@ -65,15 +79,8 @@ public static class BinauralProfileService {
             TitleKey = "ProfSadieD1Dfc",
             SubtitleKey = "ProfSadieD1DfcSub",
             ShortBadge = "KU100 DFC",
-            AssetFile = "sadie_d1_dfc.chrir"
-        },
-        new BinauralProfileInfo {
-            Id = "sadie_d1_minphase",
-            Group = BinauralProfileGroup.SadieD1,
-            TitleKey = "ProfSadieD1Min",
-            SubtitleKey = "ProfSadieD1MinSub",
-            ShortBadge = "KU100 MinPh",
-            AssetFile = "sadie_d1_minphase.chrir"
+            AssetFile = "sadie_d1_dfc.chrir",
+            ReferenceDistanceMeters = 1.20f
         },
         new BinauralProfileInfo {
             Id = "sadie_d1_brir",
@@ -82,33 +89,40 @@ public static class BinauralProfileService {
             SubtitleKey = "ProfSadieD1BrirSub",
             ShortBadge = "KU100 BRIR",
             AssetFile = "sadie_d1_brir.chrirz",
+            ReferenceDistanceMeters = 1.50f,
             IsBrir = true
         },
 
-        // TH Köln / Bernschütz (Neumann KU100, CC BY)
+        // TH Köln / Bernschütz (Neumann KU100, CC BY) — Real Laboratory Distance Series
         new BinauralProfileInfo {
             Id = "thk_ku100_ff_dfc",
             Group = BinauralProfileGroup.ThKoln,
             TitleKey = "ProfThkFfDfc",
             SubtitleKey = "ProfThkFfDfcSub",
-            ShortBadge = "THK FF DFC",
-            AssetFile = "thk_ku100_ff_dfc.chrir"
+            ShortBadge = "THK 3.25m",
+            AssetFile = "thk_ku100_ff_dfc.chrir",
+            ReferenceDistanceMeters = 3.25f,
+            IsThKolnDistanceSeries = true
         },
         new BinauralProfileInfo {
-            Id = "thk_ku100_ff_raw",
+            Id = "thk_ku100_nf150",
             Group = BinauralProfileGroup.ThKoln,
-            TitleKey = "ProfThkFfRaw",
-            SubtitleKey = "ProfThkFfRawSub",
-            ShortBadge = "THK FF Raw",
-            AssetFile = "thk_ku100_ff_raw.chrir"
+            TitleKey = "ProfThkNf150",
+            SubtitleKey = "ProfThkNf150Sub",
+            ShortBadge = "THK 1.50m",
+            AssetFile = "thk_ku100_nf150.chrir",
+            ReferenceDistanceMeters = 1.50f,
+            IsThKolnDistanceSeries = true
         },
         new BinauralProfileInfo {
-            Id = "thk_ku100_nf050",
+            Id = "thk_ku100_nf100",
             Group = BinauralProfileGroup.ThKoln,
-            TitleKey = "ProfThkNf050",
-            SubtitleKey = "ProfThkNf050Sub",
-            ShortBadge = "THK 0.5m",
-            AssetFile = "thk_ku100_nf050.chrir"
+            TitleKey = "ProfThkNf100",
+            SubtitleKey = "ProfThkNf100Sub",
+            ShortBadge = "THK 1.00m",
+            AssetFile = "thk_ku100_nf100.chrir",
+            ReferenceDistanceMeters = 1.00f,
+            IsThKolnDistanceSeries = true
         },
         new BinauralProfileInfo {
             Id = "thk_ku100_nf075",
@@ -116,23 +130,28 @@ public static class BinauralProfileService {
             TitleKey = "ProfThkNf075",
             SubtitleKey = "ProfThkNf075Sub",
             ShortBadge = "THK 0.75m",
-            AssetFile = "thk_ku100_nf075.chrir"
+            AssetFile = "thk_ku100_nf075.chrir",
+            ReferenceDistanceMeters = 0.75f,
+            IsThKolnDistanceSeries = true
         },
         new BinauralProfileInfo {
-            Id = "thk_ku100_nf100",
+            Id = "thk_ku100_nf050",
             Group = BinauralProfileGroup.ThKoln,
-            TitleKey = "ProfThkNf100",
-            SubtitleKey = "ProfThkNf100Sub",
-            ShortBadge = "THK 1.0m",
-            AssetFile = "thk_ku100_nf100.chrir"
+            TitleKey = "ProfThkNf050",
+            SubtitleKey = "ProfThkNf050Sub",
+            ShortBadge = "THK 0.50m",
+            AssetFile = "thk_ku100_nf050.chrir",
+            ReferenceDistanceMeters = 0.50f,
+            IsThKolnDistanceSeries = true
         },
         new BinauralProfileInfo {
-            Id = "thk_ku100_nf150",
+            Id = "thk_ku100_ff_raw",
             Group = BinauralProfileGroup.ThKoln,
-            TitleKey = "ProfThkNf150",
-            SubtitleKey = "ProfThkNf150Sub",
-            ShortBadge = "THK 1.5m",
-            AssetFile = "thk_ku100_nf150.chrir"
+            TitleKey = "ProfThkFfRaw",
+            SubtitleKey = "ProfThkFfRawSub",
+            ShortBadge = "THK Raw",
+            AssetFile = "thk_ku100_ff_raw.chrir",
+            ReferenceDistanceMeters = 3.25f
         },
 
         // SADIE II — D2 (KEMAR 45BB, Apache 2.0)
@@ -142,15 +161,8 @@ public static class BinauralProfileService {
             TitleKey = "ProfSadieD2Dfc",
             SubtitleKey = "ProfSadieD2DfcSub",
             ShortBadge = "KEMAR DFC",
-            AssetFile = "sadie_d2_dfc.chrir"
-        },
-        new BinauralProfileInfo {
-            Id = "sadie_d2_minphase",
-            Group = BinauralProfileGroup.SadieD2,
-            TitleKey = "ProfSadieD2Min",
-            SubtitleKey = "ProfSadieD2MinSub",
-            ShortBadge = "KEMAR MinPh",
-            AssetFile = "sadie_d2_minphase.chrir"
+            AssetFile = "sadie_d2_dfc.chrir",
+            ReferenceDistanceMeters = 1.20f
         },
         new BinauralProfileInfo {
             Id = "sadie_d2_brir",
@@ -159,6 +171,7 @@ public static class BinauralProfileService {
             SubtitleKey = "ProfSadieD2BrirSub",
             ShortBadge = "KEMAR BRIR",
             AssetFile = "sadie_d2_brir.chrirz",
+            ReferenceDistanceMeters = 1.50f,
             IsBrir = true
         },
 
@@ -169,6 +182,7 @@ public static class BinauralProfileService {
             TitleKey = "ProfCavernClassic",
             SubtitleKey = "ProfCavernClassicSub",
             ShortBadge = "Classic",
+            ReferenceDistanceMeters = 1.00f,
             IsClassic = true
         },
         new BinauralProfileInfo {
@@ -177,6 +191,7 @@ public static class BinauralProfileService {
             TitleKey = "ProfDirect20",
             SubtitleKey = "ProfDirect20Sub",
             ShortBadge = "Direct 2.0",
+            ReferenceDistanceMeters = 0f,
             IsDirectStereo = true
         },
 
@@ -187,6 +202,7 @@ public static class BinauralProfileService {
             TitleKey = "ProfCustom",
             SubtitleKey = "ProfCustomSub",
             ShortBadge = "Custom",
+            ReferenceDistanceMeters = 0f,
             IsCustom = true
         }
     ];
@@ -205,11 +221,21 @@ public static class BinauralProfileService {
     }
 
     /// <summary>
-    /// Resolves the stored HRTF profile ID (preserving legacy <see cref="AppSettingsStore.HrirPath"/> when upgrading).
+    /// Resolves the stored HRTF profile ID, seamlessly migrating legacy Min-Phase IDs to DFC + MinimumPhaseHrir toggle.
     /// </summary>
     public static string ResolveStoredHrtfProfileId(AppSettingsStore store) {
         string stored = store.BinauralProfileId;
         if (!string.IsNullOrEmpty(stored)) {
+            if (string.Equals(stored, "sadie_d1_minphase", StringComparison.OrdinalIgnoreCase)) {
+                store.BinauralProfileId = "sadie_d1_dfc";
+                store.MinimumPhaseHrir = true;
+                return "sadie_d1_dfc";
+            }
+            if (string.Equals(stored, "sadie_d2_minphase", StringComparison.OrdinalIgnoreCase)) {
+                store.BinauralProfileId = "sadie_d2_dfc";
+                store.MinimumPhaseHrir = true;
+                return "sadie_d2_dfc";
+            }
             BinauralProfileInfo info = FindById(stored);
             if (info != null && !info.IsDirectStereo) {
                 if (info.IsCustom && (string.IsNullOrEmpty(store.HrirPath) || !File.Exists(store.HrirPath))) {
@@ -231,15 +257,29 @@ public static class BinauralProfileService {
         store.HeadphoneVirtualizer ? ResolveStoredHrtfProfileId(store) : Direct20Id;
 
     /// <summary>
+    /// True when the active profile is an anechoic HRIR using mathematical Minimum-Phase + ITD.
+    /// </summary>
+    public static bool IsMinimumPhaseEffective(AppSettingsStore store) {
+        if (!store.HeadphoneVirtualizer || !store.MinimumPhaseHrir) {
+            return false;
+        }
+        BinauralProfileInfo info = FindById(ResolveStoredHrtfProfileId(store));
+        return info != null && !info.IsBrir && !info.IsDirectStereo;
+    }
+
+    /// <summary>
     /// Gets the localized display title for the currently active profile.
     /// </summary>
     public static string GetActiveDisplayTitle(AppSettingsStore store, AndroidStrings s) {
         string id = GetEffectiveProfileId(store);
         BinauralProfileInfo info = FindById(id) ?? FindById(DefaultProfileId);
-        if (info.IsCustom && !string.IsNullOrEmpty(store.HrirPath)) {
-            return $"{s[info.TitleKey]} ({Path.GetFileName(store.HrirPath)})";
+        string title = info.IsCustom && !string.IsNullOrEmpty(store.HrirPath)
+            ? $"{s[info.TitleKey]} ({Path.GetFileName(store.HrirPath)})"
+            : s[info.TitleKey];
+        if (IsMinimumPhaseEffective(store)) {
+            return $"{title} • MinPh";
         }
-        return s[info.TitleKey];
+        return title;
     }
 
     /// <summary>
@@ -251,7 +291,40 @@ public static class BinauralProfileService {
         }
         string id = ResolveStoredHrtfProfileId(store);
         BinauralProfileInfo info = FindById(id);
-        return info != null ? info.ShortBadge : s["BentoHrtf"];
+        string baseBadge = info != null ? info.ShortBadge : s["BentoHrtf"];
+        return IsMinimumPhaseEffective(store) ? $"{baseBadge} MP" : baseBadge;
+    }
+
+    /// <summary>
+    /// Returns the real laboratory measurement distance (meters) of the active profile, or 0 when Direct 2.0 is active.
+    /// </summary>
+    public static float GetActiveDistanceMeters(AppSettingsStore store) {
+        if (!store.HeadphoneVirtualizer) {
+            return 0f;
+        }
+        BinauralProfileInfo info = FindById(ResolveStoredHrtfProfileId(store));
+        if (info == null || info.IsDirectStereo) {
+            return 0f;
+        }
+        if (info.ReferenceDistanceMeters > 0f) {
+            return info.ReferenceDistanceMeters;
+        }
+        return VirtualizerFilter.ReferenceDistance > 0f ? VirtualizerFilter.ReferenceDistance : 1.00f;
+    }
+
+    /// <summary>
+    /// Gets a short human-readable laboratory distance label for the 3D Room Distance tile.
+    /// </summary>
+    public static string GetActiveDistanceShortText(AppSettingsStore store, AndroidStrings s) {
+        if (!store.HeadphoneVirtualizer) {
+            return s["BinauralDistDirect"];
+        }
+        float dist = GetActiveDistanceMeters(store);
+        BinauralProfileInfo info = FindById(ResolveStoredHrtfProfileId(store));
+        if (info != null && info.IsThKolnDistanceSeries) {
+            return $"{dist:0.00} m";
+        }
+        return $"{dist:0.00} m • {s["BinauralDistFixedTag"]}";
     }
 
     /// <summary>
@@ -262,7 +335,7 @@ public static class BinauralProfileService {
         bool wantsHrtf = store.HeadphoneVirtualizer;
         if (!ApplyHrtfFilterOnly(ctx, store, hrtfId, out string err)) {
             AppLogger.Warn($"Startup binaural profile '{hrtfId}' failed ({err}); falling back to Cavern Classic.");
-            VirtualizerFilter.Reset();
+            VirtualizerFilter.Reset(store.MinimumPhaseHrir);
             if (hrtfId == CustomId) {
                 store.BinauralProfileId = DefaultProfileId;
             }
@@ -296,6 +369,24 @@ public static class BinauralProfileService {
     }
 
     /// <summary>
+    /// Toggles global mathematical Minimum-Phase + ITD mode and immediately rebuilds the active anechoic HRIR filter.
+    /// </summary>
+    public static bool SetMinimumPhase(Context ctx, AppSettingsStore store, bool enabled, out string errorMessage) {
+        errorMessage = null;
+        store.MinimumPhaseHrir = enabled;
+        if (!store.HeadphoneVirtualizer) {
+            return true;
+        }
+        string activeId = ResolveStoredHrtfProfileId(store);
+        BinauralProfileInfo info = FindById(activeId);
+        if (info != null && info.IsBrir) {
+            AppLogger.Info($"Minimum-Phase + ITD set to {enabled} (automatically bypassed while BRIR '{info.Id}' is active).");
+            return true;
+        }
+        return ApplyHrtfFilterOnly(ctx, store, activeId, out errorMessage);
+    }
+
+    /// <summary>
     /// Imports a user-selected custom .wav or .sofa file into private storage and activates it immediately.
     /// </summary>
     public static bool ImportCustomFile(Context ctx, AppSettingsStore store, string sourcePath, out string errorMessage) {
@@ -324,11 +415,11 @@ public static class BinauralProfileService {
                 File.Copy(sourcePath, destPath, overwrite: true);
             }
 
-            LoadAndOverrideCustom(destPath);
+            LoadAndOverrideCustom(destPath, store.MinimumPhaseHrir);
             store.HrirPath = destPath;
             store.BinauralProfileId = CustomId;
             store.HeadphoneVirtualizer = true;
-            AppLogger.Info($"Imported and activated custom binaural profile: '{destPath}'");
+            AppLogger.Info($"Imported and activated custom binaural profile: '{destPath}' (minPhase={store.MinimumPhaseHrir})");
             return true;
         } catch (Exception ex) {
             AppLogger.Error("BinauralProfileService.ImportCustomFile", ex);
@@ -355,9 +446,10 @@ public static class BinauralProfileService {
         errorMessage = null;
         try {
             BinauralProfileInfo info = FindById(profileId);
+            bool useMinPhase = store.MinimumPhaseHrir && !(info?.IsBrir ?? false);
             if (info == null || info.IsClassic) {
-                VirtualizerFilter.Reset();
-                AppLogger.Info("Activated binaural profile: Cavern Classic");
+                VirtualizerFilter.Reset(useMinPhase);
+                AppLogger.Info($"Activated binaural profile: Cavern Classic (minPhase={useMinPhase})");
                 return true;
             }
 
@@ -366,15 +458,15 @@ public static class BinauralProfileService {
                     errorMessage = "Custom HRIR/SOFA file not found.";
                     return false;
                 }
-                LoadAndOverrideCustom(store.HrirPath);
-                AppLogger.Info($"Activated custom binaural profile: '{store.HrirPath}'");
+                LoadAndOverrideCustom(store.HrirPath, useMinPhase);
+                AppLogger.Info($"Activated custom binaural profile: '{store.HrirPath}' (minPhase={useMinPhase})");
                 return true;
             }
 
             using Stream assetStream = ctx.Assets.Open("hrir/" + info.AssetFile);
-            (VirtualChannel[] channels, int sampleRate, float refDist, int taps) = ReadChrirStream(assetStream, info.IsGzipped);
+            (VirtualChannel[] channels, int sampleRate, float refDist, int taps) = ReadChrirStream(assetStream, info.IsGzipped, useMinPhase);
             VirtualizerFilter.Override(channels, sampleRate, refDist);
-            AppLogger.Info($"Activated official binaural profile '{info.Id}' ({channels.Length} ch, {taps} taps @ {sampleRate} Hz, d={refDist:0.00} m)");
+            AppLogger.Info($"Activated official binaural profile '{info.Id}' ({channels.Length} ch, {taps} taps @ {sampleRate} Hz, d={refDist:0.00} m, minPhase={useMinPhase})");
             return true;
         } catch (Exception ex) {
             AppLogger.Error($"BinauralProfileService.Apply({profileId})", ex);
@@ -383,25 +475,27 @@ public static class BinauralProfileService {
         }
     }
 
-    static void LoadAndOverrideCustom(string path) {
+    static void LoadAndOverrideCustom(string path, bool minimumPhase) {
         string ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext == ".sofa") {
-            SofaHrirReader.SofaLoadResult result = SofaHrirReader.Load(path);
+            SofaHrirReader.SofaLoadResult result = SofaHrirReader.Load(path, minimumPhase);
             VirtualizerFilter.Override(result.Channels, result.SampleRate, result.ReferenceDistance);
         } else {
             using RIFFWaveReader reader = new(path);
             reader.ReadHeader();
             VirtualChannel[] channels = VirtualChannel.Parse(
                 new MultichannelWaveform(reader.ReadMultichannelAfterHeader()),
-                reader.SampleRate);
+                reader.SampleRate,
+                0f,
+                minimumPhase);
             VirtualizerFilter.Override(channels, reader.SampleRate);
         }
     }
 
     /// <summary>
-    /// Parses a binary CHRIR1 stream (plain .chrir or GZip-compressed .chrir.gz) into <see cref="VirtualChannel"/> instances.
+    /// Parses a binary CHRIR1 stream (plain .chrir or GZip-compressed .chrirz) into <see cref="VirtualChannel"/> instances.
     /// </summary>
-    static (VirtualChannel[] channels, int sampleRate, float refDist, int tapCount) ReadChrirStream(Stream source, bool gzipped) {
+    static (VirtualChannel[] channels, int sampleRate, float refDist, int tapCount) ReadChrirStream(Stream source, bool gzipped, bool minimumPhase) {
         Stream dataStream = gzipped ? new GZipStream(source, CompressionMode.Decompress, leaveOpen: true) : source;
         try {
             using BinaryReader br = new(dataStream, Encoding.ASCII, leaveOpen: true);
@@ -431,6 +525,7 @@ public static class BinauralProfileService {
                 throw new InvalidDataException($"Invalid CHRIR1 parameters (fmt={sampleFormat}, ch={channelCount}, taps={tapCount}, sr={sampleRate}).");
             }
 
+            bool applyMinPhase = minimumPhase && tapCount <= MinimumPhaseHrir.MaxAnechoicTaps;
             VirtualChannel[] channels = new VirtualChannel[channelCount];
             for (int c = 0; c < channelCount; c++) {
                 float x = br.ReadSingle();
@@ -443,7 +538,7 @@ public static class BinauralProfileService {
                 for (int n = 0; n < tapCount; n++) {
                     right[n] = br.ReadSingle();
                 }
-                channels[c] = VirtualChannel.FromMeasured(x, y, left, right, sampleRate, crossoverHz);
+                channels[c] = VirtualChannel.FromMeasured(x, y, left, right, sampleRate, crossoverHz, applyMinPhase);
             }
 
             return (channels, sampleRate, refDist, tapCount);

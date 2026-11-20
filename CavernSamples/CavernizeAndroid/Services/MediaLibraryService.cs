@@ -544,10 +544,7 @@ public static partial class MediaLibraryService {
 
         List<LibraryMergedTrack> finalized = new(merged.Count);
         foreach (LibraryMergedTrack m in merged) {
-            m.Variants.Sort((a, b) => {
-                int p = VariantSortPriority(a).CompareTo(VariantSortPriority(b));
-                return p != 0 ? p : string.Compare(a.FormatBadge, b.FormatBadge, StringComparison.OrdinalIgnoreCase);
-            });
+            AudioQualityAnalyzer.SortVariantsIntelligently(m.Variants);
             LibraryTrackItem bestPrimary = m.Variants[0];
             List<string> labels = m.Variants
                 .Select(GetVariantShortLabel)
@@ -601,10 +598,7 @@ public static partial class MediaLibraryService {
         if (current != null && !matches.Contains(current)) {
             matches.Add(current);
         }
-        matches.Sort((a, b) => {
-            int p = VariantSortPriority(a).CompareTo(VariantSortPriority(b));
-            return p != 0 ? p : string.Compare(a.FormatBadge, b.FormatBadge, StringComparison.OrdinalIgnoreCase);
-        });
+        AudioQualityAnalyzer.SortVariantsIntelligently(matches);
         return matches;
     }
 

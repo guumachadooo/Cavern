@@ -118,12 +118,28 @@ namespace Cavern.Virtualizer {
         /// <summary>
         /// Restore the default HRIR filter set.
         /// </summary>
-        public static void Reset() {
-            SpatialChannels = GetDefaultHRIRSet();
+        public static void Reset() => Reset(false);
+
+        /// <summary>
+        /// Restore the default HRIR filter set, optionally converted to mathematical Minimum-Phase + ITD.
+        /// </summary>
+        public static void Reset(bool minimumPhase) {
+            VirtualChannel[] defaults;
+            lock (resetLock) {
+                VirtualChannel.applyMinimumPhaseOnSubpar = minimumPhase;
+                try {
+                    defaults = GetDefaultHRIRSet();
+                } finally {
+                    VirtualChannel.applyMinimumPhaseOnSubpar = false;
+                }
+            }
+            SpatialChannels = defaults;
             FilterSampleRate = defaultSampleRate;
             ReferenceDistance = defaultDistance;
             ProfileVersion++;
         }
+
+        static readonly object resetLock = new object();
 
         /// <summary>
         /// Change the virtualized layout based on <see cref="Listener.Channels"/>, with added virtualized heights. Ground channels

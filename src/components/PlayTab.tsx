@@ -1,0 +1,621 @@
+import React, { useMemo, useState } from 'react';
+import {
+  Box,
+  Disc3,
+  FolderOpen,
+  Pause,
+  Play,
+  Repeat,
+  RotateCcw,
+  RotateCw,
+  Search,
+  SkipBack,
+  SkipForward,
+  Sparkles,
+  Volume2,
+} from 'lucide-react';
+import { HRIR_PROFILES } from '../data/catalog';
+import type { StringKey } from '../i18n/strings';
+import type { CavernSettings, SpatialTrack, TrackFormatVariant } from '../types/cavern';
+import { formatTime } from '../utils/spatialMath';
+import { ProceduralArtwork } from './ProceduralArtwork';
+
+interface PlayTabProps {
+  t: Record<StringKey, string>;
+  tracks: SpatialTrack[];
+  activeTrack: SpatialTrack;
+  activeVariant: TrackFormatVariant;
+  isPlaying: boolean;
+  isLooping: boolean;
+  currentTimeSec: number;
+  masterVolume: number;
+  settings: CavernSettings;
+  onSelectTrack: (trackId: string) => void;
+  onSelectVariant: (variantId: string) => void;
+  onTogglePlay: () => void;
+  onSeek: (timeSec: number) => void;
+  onSkipRelative: (deltaSec: number) => void;
+  onPrevTrack: () => void;
+  onNextTrack: () => void;
+  onToggleLoop: () => void;
+  onVolumeChange: (vol: number) => void;
+  onUpdateSettings: (patch: Partial<CavernSettings>) => void;
+  onOpenRoomTab: () => void;
+  onUploadLocalFile: (file: File) => void;
+}
+
+export const PlayTab: React.FC<PlayTabProps> = ({
+  t,
+  tracks,
+  activeTrack,
+  activeVariant,
+  isPlaying,
+  isLooping,
+  currentTimeSec,
+  masterVolume,
+  settings,
+  onSelectTrack,
+  onSelectVariant,
+  onTogglePlay,
+  onSeek,
+  onSkipRelative,
+  onPrevTrack,
+  onNextTrack,
+  onToggleLoop,
+  onVolumeChange,
+  onUpdateSettings,
+  onOpenRoomTab,
+  onUploadLocalFile,
+}) => {
+  const [subView, setSubView] = useState<'now-playing' | 'library'>('now-playing');
+  const [stageMode, setStageMode] = useState<'cover' | 'lyrics'>('cover');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [libraryFilter, setLibraryFilter] = useState<'all' | 'spatial'>('all');
+  const [smartClean, setSmartClean] = useState(true);
+
+  const activeProfile = useMemo(
+    () => HRIR_PROFILES.find((p) => p.id === settings.hrirProfileId) ?? HRIR_PROFILES[0],
+    [settings.hrirProfileId],
+  );
+
+  const activeLyricIdx = useMemo(() => {
+    if (activeTrack.lyrics.length === 0) return -1;
+    let idx = 0;
+    for (let i = 0; i < activeTrack.lyrics.length; i += 1) {
+      if (currentTimeSec >= activeTrack.lyrics[i].timeSec) {
+        idx = i;
+      }
+    }
+    return idx;
+  }, [activeTrack.lyrics, currentTimeSec]);
+
+  const filteredTracks = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return tracks.filter((tr) => {
+      if (smartClean && tr.isNonMusicNoise && !tr.isSpatial) return false;
+      if (libraryFilter === 'spatial' && !tr.isSpatial) return false;
+      if (!q) return true;
+      return (
+        tr.title.toLowerCase().includes(q) ||
+        tr.artist.toLowerCase().includes(q) ||
+        tr.album.toLowerCase().includes(q) ||
+        tr.folder.toLowerCase().includes(q)
+      );
+    });
+  }, [tracks, searchQuery, libraryFilter, smartClean]);
+
+  const hiddenNoiseCount = useMemo(
+    () => (smartClean ? tracks.filter((tr) => tr.isNonMusicNoise && !tr.isSpatial).length : 0),
+    [tracks, smartClean],
+  );
+
+  const waveformBars = useMemo(() => {
+    const seed = activeTrack.waveformSeed;
+    return Array.from({ length: 48 }, (_, i) => {
+      const h = 24 + Math.abs(Math.sin((i + seed) * 0.43) * 52 + Math.cos(i * 0.19) * 20);
+      return Math.round(Math.min(100, h));
+    });
+  }, [activeTrack.waveformSeed]);
+
+  const progressRatio = activeTrack.durationSec > 0 ? currentTimeSec / activeTrack.durationSec : 0;
+
+  return (
+    <section aria-label={t.tabPlay} className="space-y-6">
+      {/* Sub-navigation bar: Now Playing | Library + Open Audio File */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div
+          role="tablist"
+          aria-label="Player view"
+          className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#15161C] border border-white/10"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={subView === 'now-playing'}
+            onClick={() => setSubView('now-playing')}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+              subView === 'now-playing'
+                ? 'bg-[#387AFF] text-white'
+                : 'text-[#B7B7BB] hover:text-white'
+            }`}
+          >
+            {t.nowPlaying}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={subView === 'library'}
+            onClick={() => setSubView('library')}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+              subView === 'library'
+                ? 'bg-[#387AFF] text-white'
+                : 'text-[#B7B7BB] hover:text-white'
+            }`}
+          >
+            {t.library} ({filteredTracks.length})
+          </button>
+        </div>
+
+        <label className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-[#1E1F27] hover:bg-[#272936] text-[#FCFCFF] border border-white/10 cursor-pointer transition-colors whitespace-nowrap shrink-0">
+          <FolderOpen className="w-4 h-4 text-[#6E9CFF]" />
+          <span>{t.openFile}</span>
+          <input
+            type="file"
+            accept="audio/*,.wav,.flac,.mp3,.m4a,.ogg,.webm,.mp4"
+            className="sr-only"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) {
+                onUploadLocalFile(file);
+                setSubView('now-playing');
+              }
+              e.target.value = '';
+            }}
+          />
+        </label>
+      </div>
+
+      {subView === 'now-playing' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Left column: Artwork / Live Lyrics Stage */}
+          <div className="lg:col-span-5 bg-[#15161C] border border-white/10 rounded-2xl p-5 space-y-4">
+            <div className="flex items-center justify-between gap-2">
+              <div className="inline-flex items-center gap-1 p-1 rounded-lg bg-[#0C0E14] border border-white/8">
+                <button
+                  type="button"
+                  onClick={() => setStageMode('cover')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    stageMode === 'cover'
+                      ? 'bg-white/12 text-white'
+                      : 'text-[#99999E] hover:text-white'
+                  }`}
+                >
+                  {t.modeCover}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStageMode('lyrics')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    stageMode === 'lyrics'
+                      ? 'bg-white/12 text-white'
+                      : 'text-[#99999E] hover:text-white'
+                  }`}
+                >
+                  {t.modeLyrics}
+                </button>
+              </div>
+              <span className="text-xs text-[#99999E] font-mono tabular-nums truncate">
+                {activeVariant.channels}
+              </span>
+            </div>
+
+            {stageMode === 'cover' ? (
+              <ProceduralArtwork track={activeTrack} isPlaying={isPlaying} size="lg" />
+            ) : (
+              <div className="aspect-square rounded-2xl bg-[#0C0E14] border border-white/8 p-5 flex flex-col justify-between overflow-hidden">
+                <p className="text-xs text-[#99999E]">{t.lyricsHint}</p>
+                {activeTrack.lyrics.length === 0 ? (
+                  <p className="text-sm text-[#99999E] my-auto text-center px-4">
+                    {t.noLyrics}
+                  </p>
+                ) : (
+                  <div className="space-y-2.5 overflow-y-auto pr-1 my-3 flex-1">
+                    {activeTrack.lyrics.map((line, idx) => {
+                      const isActive = idx === activeLyricIdx;
+                      return (
+                        <button
+                          key={`${line.timeSec}-${idx}`}
+                          type="button"
+                          onClick={() => onSeek(line.timeSec)}
+                          className={`w-full text-left px-3 py-2 rounded-lg transition-colors text-sm leading-relaxed ${
+                            isActive
+                              ? 'bg-[#387AFF]/20 text-white font-semibold'
+                              : 'text-[#99999E] hover:text-[#E9E9EC] hover:bg-white/5'
+                          }`}
+                        >
+                          <span className="font-mono tabular-nums text-xs text-[#6E9CFF] mr-2">
+                            {formatTime(line.timeSec)}
+                          </span>
+                          {line.text}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Right column: Metadata, Format Switcher, Spatial Toggles, Wave Seekbar & Transport */}
+          <div className="lg:col-span-7 bg-[#15161C] border border-white/10 rounded-2xl p-6 space-y-6">
+            {/* Track title & unboxed metadata */}
+            <div className="space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white leading-snug">
+                    {activeTrack.title}
+                  </h2>
+                  <p className="text-sm text-[#B7B7BB] mt-1">
+                    {activeTrack.artist} · {activeTrack.album}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onOpenRoomTab}
+                  className="self-start inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold rounded-lg bg-[#387AFF]/15 text-[#89B0FF] hover:bg-[#387AFF]/25 border border-[#387AFF]/30 transition-colors whitespace-nowrap shrink-0"
+                >
+                  <Box className="w-3.5 h-3.5" />
+                  <span>{t.openInRoom}</span>
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#99999E] font-mono tabular-nums pt-1">
+                <span>{activeVariant.codec}</span>
+                <span aria-hidden="true">·</span>
+                <span>{(activeVariant.sampleRateHz / 1000).toFixed(1)} kHz</span>
+                <span aria-hidden="true">·</span>
+                <span>{activeVariant.bitDepth}-bit</span>
+                <span aria-hidden="true">·</span>
+                <span>{activeVariant.bitrateKbps} kbps</span>
+                {activeVariant.objectCount > 0 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="text-[#F56962]">
+                      {activeVariant.objectCount} Dynamic 3D Objects
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Live Multi-Format Switcher (preserves exact playback timestamp) */}
+            {activeTrack.variants.length > 1 && (
+              <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-white/8">
+                <span className="text-xs font-medium text-[#99999E] mr-1">
+                  {t.formatLabel}:
+                </span>
+                {activeTrack.variants.map((variant) => {
+                  const selected = variant.id === activeVariant.id;
+                  return (
+                    <button
+                      key={variant.id}
+                      type="button"
+                      onClick={() => onSelectVariant(variant.id)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                        selected
+                          ? 'bg-[#387AFF] border-[#598FFF] text-white'
+                          : 'bg-[#1E1F27] border-white/10 text-[#B7B7BB] hover:text-white'
+                      }`}
+                    >
+                      {variant.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Quick Spatial DSP Toggles (matching CavernizeAndroid flanking bar) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <button
+                type="button"
+                aria-pressed={settings.cavernize3D}
+                onClick={() => onUpdateSettings({ cavernize3D: !settings.cavernize3D })}
+                className={`px-3.5 py-3 rounded-xl border text-left transition-colors ${
+                  settings.cavernize3D
+                    ? 'bg-[#387AFF]/18 border-[#598FFF]/50 text-white'
+                    : 'bg-[#1E1F27] border-white/8 text-[#B7B7BB] hover:text-white'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold">{t.cavernize3D}</span>
+                  <Sparkles className="w-3.5 h-3.5 text-[#8E96FA]" />
+                </div>
+                <p className="text-[11px] text-[#99999E] mt-1">
+                  {settings.cavernize3D ? 'Height synthesis active' : 'Bypassed'}
+                </p>
+              </button>
+
+              <button
+                type="button"
+                aria-pressed={settings.headphoneVirtualizer && settings.hrirProfileId !== 'direct_2_0'}
+                onClick={() =>
+                  onUpdateSettings({
+                    headphoneVirtualizer: !settings.headphoneVirtualizer,
+                    hrirProfileId:
+                      settings.hrirProfileId === 'direct_2_0'
+                        ? 'sadie_d1_dfc'
+                        : settings.hrirProfileId,
+                  })
+                }
+                className={`px-3.5 py-3 rounded-xl border text-left transition-colors ${
+                  settings.headphoneVirtualizer && settings.hrirProfileId !== 'direct_2_0'
+                    ? 'bg-[#387AFF]/18 border-[#598FFF]/50 text-white'
+                    : 'bg-[#1E1F27] border-white/8 text-[#B7B7BB] hover:text-white'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold">
+                    {settings.headphoneVirtualizer && settings.hrirProfileId !== 'direct_2_0'
+                      ? t.binauralProfile
+                      : t.directStereo}
+                  </span>
+                  <Disc3 className="w-3.5 h-3.5 text-[#598FFF]" />
+                </div>
+                <p className="text-[11px] text-[#99999E] mt-1 truncate">
+                  {settings.headphoneVirtualizer ? activeProfile.dataset : 'No HRTF'}
+                </p>
+              </button>
+
+              <button
+                type="button"
+                aria-pressed={settings.matrixUpmix}
+                onClick={() => onUpdateSettings({ matrixUpmix: !settings.matrixUpmix })}
+                className={`px-3.5 py-3 rounded-xl border text-left transition-colors ${
+                  settings.matrixUpmix
+                    ? 'bg-[#387AFF]/18 border-[#598FFF]/50 text-white'
+                    : 'bg-[#1E1F27] border-white/8 text-[#B7B7BB] hover:text-white'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold">{t.matrix71}</span>
+                  <span className="text-[11px] font-mono text-[#56B8A8]">
+                    {settings.matrixUpmix ? 'ON' : 'OFF'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-[#99999E] mt-1">
+                  {settings.matrixUpmix ? '7.1 bed expansion' : 'Native channel count'}
+                </p>
+              </button>
+            </div>
+
+            {/* Interactive Wave Seekbar */}
+            <div className="space-y-2 pt-2">
+              <div
+                className="relative h-12 flex items-end gap-1 cursor-pointer select-none px-1"
+                onClick={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                  onSeek(ratio * activeTrack.durationSec);
+                }}
+              >
+                {waveformBars.map((heightPct, idx) => {
+                  const barRatio = idx / waveformBars.length;
+                  const played = barRatio <= progressRatio;
+                  return (
+                    <div
+                      key={idx}
+                      className={`flex-1 rounded-full transition-colors ${
+                        played ? 'bg-[#598FFF]' : 'bg-white/15 hover:bg-white/25'
+                      }`}
+                      style={{ height: `${heightPct}%` }}
+                    />
+                  );
+                })}
+              </div>
+
+              <div className="flex items-center justify-between text-xs font-mono tabular-nums text-[#99999E]">
+                <span>{formatTime(currentTimeSec)}</span>
+                <input
+                  type="range"
+                  aria-label="Seek playback position"
+                  min={0}
+                  max={Math.max(1, activeTrack.durationSec)}
+                  step={0.5}
+                  value={Math.min(currentTimeSec, activeTrack.durationSec)}
+                  onChange={(e) => onSeek(Number(e.target.value))}
+                  className="cavern-slider mx-4 flex-1"
+                />
+                <span>{formatTime(activeTrack.durationSec)}</span>
+              </div>
+            </div>
+
+            {/* Unified Frosted Transport Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-white/8">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  aria-label="Previous track"
+                  onClick={onPrevTrack}
+                  className="w-10 h-10 rounded-full flex items-center justify-center bg-[#1E1F27] hover:bg-[#2B2D3B] text-[#E9E9EC] border border-white/10 transition-colors"
+                >
+                  <SkipBack className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Rewind 10 seconds"
+                  onClick={() => onSkipRelative(-10)}
+                  className="w-10 h-10 rounded-full flex items-center justify-center bg-[#1E1F27] hover:bg-[#2B2D3B] text-[#E9E9EC] border border-white/10 transition-colors"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  aria-label={isPlaying ? 'Pause playback' : 'Play spatial audio'}
+                  onClick={onTogglePlay}
+                  className="w-12 h-12 rounded-full flex items-center justify-center bg-[#387AFF] hover:bg-[#598FFF] text-white transition-colors"
+                >
+                  {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Forward 10 seconds"
+                  onClick={() => onSkipRelative(10)}
+                  className="w-10 h-10 rounded-full flex items-center justify-center bg-[#1E1F27] hover:bg-[#2B2D3B] text-[#E9E9EC] border border-white/10 transition-colors"
+                >
+                  <RotateCw className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Next track"
+                  onClick={onNextTrack}
+                  className="w-10 h-10 rounded-full flex items-center justify-center bg-[#1E1F27] hover:bg-[#2B2D3B] text-[#E9E9EC] border border-white/10 transition-colors"
+                >
+                  <SkipForward className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Toggle loop"
+                  aria-pressed={isLooping}
+                  onClick={onToggleLoop}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center border transition-colors ${
+                    isLooping
+                      ? 'bg-[#387AFF]/20 border-[#598FFF]/50 text-[#89B0FF]'
+                      : 'bg-[#1E1F27] border-white/10 text-[#99999E] hover:text-white'
+                  }`}
+                >
+                  <Repeat className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Volume control */}
+              <div className="flex items-center gap-3 min-w-[180px] flex-1 max-w-xs">
+                <Volume2 className="w-4 h-4 text-[#99999E] shrink-0" />
+                <input
+                  type="range"
+                  aria-label={t.masterVolume}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={masterVolume}
+                  onChange={(e) => onVolumeChange(Number(e.target.value))}
+                  className="cavern-slider w-full"
+                />
+                <span className="text-xs font-mono tabular-nums text-[#B7B7BB] w-9 text-right">
+                  {Math.round(masterVolume * 100)}%
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* In-App Media Library View */
+        <div className="bg-[#15161C] border border-white/10 rounded-2xl p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="relative flex-1 min-w-[240px]">
+              <Search className="w-4 h-4 text-[#99999E] absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={t.searchLibrary}
+                aria-label={t.searchLibrary}
+                className="w-full pl-10 pr-4 py-2.5 text-sm rounded-xl bg-[#0C0E14] border border-white/10 text-white placeholder:text-[#99999E] focus:outline-none focus:border-[#598FFF]"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="inline-flex items-center gap-1 p-1 rounded-lg bg-[#0C0E14] border border-white/8">
+                <button
+                  type="button"
+                  onClick={() => setLibraryFilter('all')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    libraryFilter === 'all'
+                      ? 'bg-[#387AFF] text-white'
+                      : 'text-[#B7B7BB] hover:text-white'
+                  }`}
+                >
+                  {t.filterAll}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLibraryFilter('spatial')}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
+                    libraryFilter === 'spatial'
+                      ? 'bg-[#387AFF] text-white'
+                      : 'text-[#B7B7BB] hover:text-white'
+                  }`}
+                >
+                  {t.filterSpatial}
+                </button>
+              </div>
+
+              <button
+                type="button"
+                aria-pressed={smartClean}
+                onClick={() => setSmartClean((v) => !v)}
+                className={`px-3 py-2 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap shrink-0 ${
+                  smartClean
+                    ? 'bg-[#56B8A8]/18 border-[#56B8A8]/45 text-[#88E0D1]'
+                    : 'bg-[#1E1F27] border-white/10 text-[#99999E] hover:text-white'
+                }`}
+              >
+                {t.smartClean}
+                {hiddenNoiseCount > 0 ? ` (-${hiddenNoiseCount})` : ''}
+              </button>
+            </div>
+          </div>
+
+          {filteredTracks.length === 0 ? (
+            <div className="py-12 text-center text-sm text-[#99999E]">
+              No tracks matched your current filter. Try switching to All or clearing your search.
+            </div>
+          ) : (
+            <div className="divide-y divide-white/8">
+              {filteredTracks.map((track) => {
+                const isSelected = track.id === activeTrack.id;
+                const primaryFmt = track.variants[0];
+                return (
+                  <button
+                    key={track.id}
+                    type="button"
+                    onClick={() => {
+                      onSelectTrack(track.id);
+                      setSubView('now-playing');
+                    }}
+                    className={`w-full flex items-center justify-between gap-4 py-3 px-3 rounded-xl text-left transition-colors ${
+                      isSelected ? 'bg-[#387AFF]/15' : 'hover:bg-white/[0.04]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3.5 min-w-0">
+                      <ProceduralArtwork track={track} isPlaying={isSelected && isPlaying} size="sm" />
+                      <div className="min-w-0">
+                        <p className={`text-sm font-semibold truncate ${isSelected ? 'text-[#89B0FF]' : 'text-white'}`}>
+                          {track.title}
+                        </p>
+                        <p className="text-xs text-[#99999E] truncate mt-0.5">
+                          {track.artist} · {track.album} · {track.folder}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-4 shrink-0 text-xs font-mono tabular-nums">
+                      <span className="hidden sm:inline text-[#B7B7BB]">
+                        {track.variants.map((v) => v.label).join(' + ')}
+                      </span>
+                      <span className="text-[#99999E]">
+                        {primaryFmt.channels}
+                      </span>
+                      <span className="text-[#B7B7BB] w-10 text-right">
+                        {formatTime(track.durationSec)}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+};

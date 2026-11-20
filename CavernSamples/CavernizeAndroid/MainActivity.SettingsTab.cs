@@ -136,7 +136,10 @@ public partial class MainActivity {
         acousticsCard.AddView(WrapControlWithHelp(envSelector, S["EnvType"].TrimEnd(':'), S["TipEnvType"]));
 
         AddDivider(acousticsCard);
-        acousticsCard.AddView(Label(S["RoomSize"], 12f, ColMuted));
+        LinearLayout roomSizeHeader = HRow();
+        roomSizeHeader.AddView(Label(S["RoomSize"], 12f, ColMuted), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        roomSizeHeader.AddView(CreateInlineHelpBtn(S["RoomSize"], S["TipRoomSize"]), new LinearLayout.LayoutParams(Dp(24), Dp(24)));
+        acousticsCard.AddView(roomSizeHeader);
         LinearLayout roomDimRow = HRow();
         roomDimRow.SetPadding(0, Dp(4), 0, Dp(2));
         EditText rx = NumBox(store.RoomSizeX.ToString("0.0", CultureInfo.InvariantCulture));
@@ -739,6 +742,7 @@ public partial class MainActivity {
         if (roomBinauralProfileText != null) {
             roomBinauralProfileText.Text = title;
         }
+        refreshBentoTilesUi?.Invoke();
     }
 
     void LaunchCustomHrirImporter() {
@@ -754,13 +758,13 @@ public partial class MainActivity {
             return;
         }
         Task.Run(() => {
+            playerEngine?.RequestSmoothTransition();
             bool ok = BinauralProfileService.ImportCustomFile(this, store, path, out string err);
             RunOnUiThread(() => {
                 if (uiDestroyed) return;
                 if (ok) {
                     playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
                     RefreshBinauralProfileUi();
-                    refreshBentoTilesUi?.Invoke();
                     RefreshMusicPlayerControlsUi();
                     ShowToast(string.Format(S["BinauralProfileApplied"], BinauralProfileService.GetActiveDisplayTitle(store, S)));
                 } else {
@@ -772,17 +776,33 @@ public partial class MainActivity {
 
     void ApplyBinauralProfileAsync(string profileId) {
         Task.Run(() => {
+            playerEngine?.RequestSmoothTransition();
             bool ok = BinauralProfileService.ApplyProfile(this, store, profileId, out string err);
             RunOnUiThread(() => {
                 if (uiDestroyed) return;
                 if (ok) {
                     playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
                     RefreshBinauralProfileUi();
-                    refreshBentoTilesUi?.Invoke();
                     RefreshMusicPlayerControlsUi();
                     ShowToast(string.Format(S["BinauralProfileApplied"], BinauralProfileService.GetActiveDisplayTitle(store, S)));
                 } else {
                     ShowError(err ?? "Failed to apply binaural profile.");
+                }
+            });
+        });
+    }
+
+    void ApplyMinimumPhaseAsync(bool enabled) {
+        Task.Run(() => {
+            playerEngine?.RequestSmoothTransition();
+            bool ok = BinauralProfileService.SetMinimumPhase(this, store, enabled, out string err);
+            RunOnUiThread(() => {
+                if (uiDestroyed) return;
+                if (ok) {
+                    RefreshBinauralProfileUi();
+                    RefreshMusicPlayerControlsUi();
+                } else {
+                    ShowError(err ?? "Failed to update Minimum-Phase mode.");
                 }
             });
         });
@@ -793,10 +813,146 @@ public partial class MainActivity {
         ShowMessageDialog(S["BinauralProfileCreditsBtn"], credits, OneUiIconType.Info, monospace: false);
     }
 
+    void ShowBinauralDistanceSelectorDialog() {
+        LinearLayout list = new(this) { Orientation = Orientation.Vertical };
+        Dialog activeDlg = null;
+        string currentId = BinauralProfileService.GetEffectiveProfileId(store);
+        BinauralProfileInfo curInfo = BinauralProfileService.FindById(currentId);
+        bool isThkSeries = curInfo != null && curInfo.IsThKolnDistanceSeries && store.HeadphoneVirtualizer;
+
+        // Current active profile distance status card
+        LinearLayout statusBox = new(this) { Orientation = Orientation.Vertical };
+        statusBox.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+        statusBox.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 16f, OneUiTheme.BorderSubtle, 1f);
+        TextView statusTitle = Label(
+            $"{S["BinauralProfileActive"]}: {BinauralProfileService.GetActiveDisplayTitle(store, S)}",
+            12.5f, ColText);
+        statusTitle.Typeface = OneUiTheme.GetAppleFontBold(this);
+        statusTitle.SetSingleLine(true);
+        statusTitle.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        string statusSubStr = !store.HeadphoneVirtualizer
+            ? S["BinauralDistDirectHint"]
+            : (isThkSeries
+                ? string.Format(S["BinauralDistSeriesActiveHint"], BinauralProfileService.GetActiveDistanceMeters(store))
+                : string.Format(S["BinauralDistFixedHint"], BinauralProfileService.GetActiveDistanceMeters(store)));
+        TextView statusSub = Label(statusSubStr, 11.2f, OneUiTheme.TextSecondary);
+        statusBox.AddView(statusTitle);
+        statusBox.AddView(statusSub, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(3) });
+        list.AddView(statusBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
+
+        TextView grpHdr = Label(S["BinauralDistSeriesHeader"], 11.5f, OneUiTheme.PeachText);
+        grpHdr.Typeface = OneUiTheme.GetAppleFontBold(this);
+        grpHdr.SetPadding(Dp(4), 0, Dp(4), Dp(6));
+        list.AddView(grpHdr);
+
+        (string id, string descKey)[] distEntries = [
+            ("thk_ku100_nf050", "BinauralDistDesc050"),
+            ("thk_ku100_nf075", "BinauralDistDesc075"),
+            ("thk_ku100_nf100", "BinauralDistDesc100"),
+            ("thk_ku100_nf150", "BinauralDistDesc150"),
+            ("thk_ku100_ff_dfc", "BinauralDistDesc325")
+        ];
+
+        for (int i = 0; i < distEntries.Length; i++) {
+            string pid = distEntries[i].id;
+            string dKey = distEntries[i].descKey;
+            BinauralProfileInfo p = BinauralProfileService.FindById(pid);
+            if (p == null) continue;
+            bool isSel = store.HeadphoneVirtualizer && string.Equals(currentId, pid, StringComparison.OrdinalIgnoreCase);
+
+            LinearLayout row = HRow();
+            row.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+            row.Background = isSel
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 82), 16f, OneUiTheme.PrimaryHigh, 1f)
+                : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 16f, OneUiTheme.BorderSubtle, 1f);
+            OneUiTheme.AttachRecoil(row, 0.98f);
+
+            TextView badgeTv = Label($"{p.ReferenceDistanceMeters:0.00} m", 12.5f, isSel ? Color.White : OneUiTheme.PeachText);
+            badgeTv.SetIncludeFontPadding(false);
+            badgeTv.Typeface = OneUiTheme.GetAppleFontBold(this);
+            badgeTv.Gravity = GravityFlags.Center;
+            badgeTv.SetPadding(Dp(10), Dp(6), Dp(10), Dp(6));
+            badgeTv.Background = OneUiTheme.CreateRoundedDrawable(
+                this,
+                isSel ? OneUiTheme.Primary : OneUiTheme.WithAlpha(OneUiTheme.IconSliderMedia, 36),
+                12f);
+            row.AddView(badgeTv, new LinearLayout.LayoutParams(Dp(68), ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(10) });
+
+            LinearLayout col = new(this) { Orientation = Orientation.Vertical };
+            TextView titleTv = Label(S[dKey], 12.8f, isSel ? ColText : OneUiTheme.TextPrimary);
+            titleTv.SetIncludeFontPadding(false);
+            titleTv.Typeface = isSel ? OneUiTheme.GetAppleFontBold(this) : OneUiTheme.GetAppleFontMedium(this);
+            titleTv.SetSingleLine(true);
+            titleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+            TextView subTv = Label(S[p.SubtitleKey], 10.8f, isSel ? OneUiTheme.TextSecondary : OneUiTheme.TextMuted);
+            subTv.SetSingleLine(true);
+            subTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+            col.AddView(titleTv);
+            col.AddView(subTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(2) });
+
+            row.AddView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+            if (isSel) {
+                row.AddView(new OneUiIconView(this, OneUiIconType.Check, OneUiTheme.PrimaryHigh), new LinearLayout.LayoutParams(Dp(16), Dp(16)));
+            }
+
+            row.Click += (_, _) => {
+                activeDlg?.Dismiss();
+                ApplyBinauralProfileAsync(pid);
+            };
+            list.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
+        }
+
+        Button allProfilesBtn = PillButton(S["BinauralDistAllProfilesBtn"], () => {
+            activeDlg?.Dismiss();
+            ShowBinauralProfileSelectorDialog();
+        });
+        list.AddView(allProfilesBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
+
+        activeDlg = OneUiModalDialog.Show(
+            this,
+            S["BinauralDistModalTitle"],
+            customContent: list,
+            icon: OneUiIconType.Distance,
+            iconBadgeColor: OneUiTheme.IconSliderMedia,
+            positiveText: S["CloseBtn"]);
+    }
+
     void ShowBinauralProfileSelectorDialog() {
         LinearLayout list = new(this) { Orientation = Orientation.Vertical };
         Dialog activeDlg = null;
         string currentId = BinauralProfileService.GetEffectiveProfileId(store);
+
+        // Universal Mathematical Minimum-Phase + ITD toggle card (applies to all anechoic HRIRs, auto-bypassed on BRIRs)
+        LinearLayout minPhaseCard = HRow();
+        minPhaseCard.SetPadding(Dp(12), Dp(10), Dp(10), Dp(10));
+        minPhaseCard.Background = OneUiTheme.CreateRoundedDrawable(
+            this,
+            store.MinimumPhaseHrir ? OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 48) : OneUiTheme.SurfaceModalRow,
+            16f,
+            store.MinimumPhaseHrir ? OneUiTheme.IconSpatial : OneUiTheme.BorderSubtle,
+            1f);
+        LinearLayout mpTextCol = new(this) { Orientation = Orientation.Vertical };
+        TextView mpTitle = Label(S["BinauralMinPhaseTitle"], 12.8f, ColText);
+        mpTitle.SetIncludeFontPadding(false);
+        mpTitle.Typeface = OneUiTheme.GetAppleFontBold(this);
+        TextView mpSub = Label(S["BinauralMinPhaseSub"], 10.8f, OneUiTheme.TextSecondary);
+        mpTextCol.AddView(mpTitle);
+        mpTextCol.AddView(mpSub, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(2) });
+        OneUiSwitch mpSwitch = new(this) { Checked = store.MinimumPhaseHrir };
+        mpSwitch.CheckedChange += (_, e) => {
+            bool on = e.IsChecked;
+            minPhaseCard.Background = OneUiTheme.CreateRoundedDrawable(
+                this,
+                on ? OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 48) : OneUiTheme.SurfaceModalRow,
+                16f,
+                on ? OneUiTheme.IconSpatial : OneUiTheme.BorderSubtle,
+                1f);
+            ApplyMinimumPhaseAsync(on);
+        };
+        mpTextCol.Click += (_, _) => mpSwitch.Checked = !mpSwitch.Checked;
+        minPhaseCard.AddView(mpTextCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+        minPhaseCard.AddView(mpSwitch, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        list.AddView(minPhaseCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
 
         (BinauralProfileGroup group, string headerKey)[] groupOrder = [
             (BinauralProfileGroup.SadieD1, "BinauralGroupSadieD1"),
@@ -812,14 +968,78 @@ public partial class MainActivity {
                 BinauralProfileInfo p = BinauralProfileService.Profiles[i];
                 if (p.Group != group) continue;
                 if (p.IsCustom && (string.IsNullOrEmpty(store.HrirPath) || !File.Exists(store.HrirPath))) continue;
+                if (p.IsThKolnDistanceSeries) continue; // Rendered as one unified multi-distance card below
                 items.Add(p);
             }
-            if (items.Count == 0) continue;
+            bool hasThkSeries = group == BinauralProfileGroup.ThKoln;
+            if (items.Count == 0 && !hasThkSeries) continue;
 
             TextView grpHdr = Label(S[headerKey], 11.5f, OneUiTheme.PeachText);
             grpHdr.Typeface = OneUiTheme.GetAppleFontBold(this);
-            grpHdr.SetPadding(Dp(4), list.ChildCount == 0 ? 0 : Dp(8), Dp(4), Dp(6));
+            grpHdr.SetPadding(Dp(4), Dp(6), Dp(4), Dp(6));
             list.AddView(grpHdr);
+
+            // Unified TH Köln KU100 DFC card with inline laboratory distance selector pills
+            if (hasThkSeries) {
+                BinauralProfileInfo activeCur = BinauralProfileService.FindById(currentId);
+                bool anyThkSelected = activeCur != null && activeCur.IsThKolnDistanceSeries;
+
+                LinearLayout seriesCard = new(this) { Orientation = Orientation.Vertical };
+                seriesCard.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+                seriesCard.Background = anyThkSelected
+                    ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 72), 16f, OneUiTheme.PrimaryHigh, 1f)
+                    : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 16f, OneUiTheme.BorderSubtle, 1f);
+
+                LinearLayout sHead = HRow();
+                LinearLayout sCol = new(this) { Orientation = Orientation.Vertical };
+                TextView sTitle = Label(S["ProfThkDfcSeriesTitle"], 13f, anyThkSelected ? ColText : OneUiTheme.TextPrimary);
+                sTitle.SetIncludeFontPadding(false);
+                sTitle.Typeface = anyThkSelected ? OneUiTheme.GetAppleFontBold(this) : OneUiTheme.GetAppleFontMedium(this);
+                sTitle.SetSingleLine(true);
+                sTitle.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+                TextView sSub = Label(S["ProfThkDfcSeriesSub"], 11f, anyThkSelected ? OneUiTheme.TextSecondary : OneUiTheme.TextMuted);
+                sSub.SetSingleLine(true);
+                sSub.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+                sCol.AddView(sTitle);
+                sCol.AddView(sSub, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(2) });
+                sHead.AddView(sCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+                if (anyThkSelected) {
+                    sHead.AddView(new OneUiIconView(this, OneUiIconType.Check, OneUiTheme.PrimaryHigh), new LinearLayout.LayoutParams(Dp(16), Dp(16)));
+                }
+                seriesCard.AddView(sHead);
+
+                LinearLayout distPillRow = HRow();
+                distPillRow.SetPadding(0, Dp(8), 0, 0);
+                for (int d = 0; d < BinauralProfileService.ThKolnDistanceSeries.Length; d++) {
+                    var (distId, _, shortLbl) = BinauralProfileService.ThKolnDistanceSeries[d];
+                    bool dSel = string.Equals(currentId, distId, StringComparison.OrdinalIgnoreCase);
+                    TextView dpBtn = Label(shortLbl, 10.8f, dSel ? Color.White : OneUiTheme.TextSecondary);
+                    dpBtn.SetIncludeFontPadding(false);
+                    dpBtn.Typeface = dSel ? OneUiTheme.GetAppleFontBold(this) : OneUiTheme.GetAppleFontMedium(this);
+                    dpBtn.Gravity = GravityFlags.Center;
+                    dpBtn.SetSingleLine(true);
+                    dpBtn.SetPadding(Dp(4), Dp(6), Dp(4), Dp(6));
+                    dpBtn.Background = OneUiTheme.CreateRoundedDrawable(
+                        this,
+                        dSel ? OneUiTheme.Primary : Color.Argb(34, 255, 255, 255),
+                        10f,
+                        dSel ? OneUiTheme.PrimaryHigh : OneUiTheme.BorderSubtle,
+                        0.8f);
+                    OneUiTheme.AttachRecoil(dpBtn, 0.94f);
+                    string chosenDistId = distId;
+                    dpBtn.Click += (_, _) => {
+                        activeDlg?.Dismiss();
+                        ApplyBinauralProfileAsync(chosenDistId);
+                    };
+                    distPillRow.AddView(dpBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
+                        RightMargin = d < BinauralProfileService.ThKolnDistanceSeries.Length - 1 ? Dp(5) : 0
+                    });
+                }
+                seriesCard.AddView(distPillRow);
+                list.AddView(seriesCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    BottomMargin = Dp(6)
+                });
+            }
 
             foreach (BinauralProfileInfo prof in items) {
                 bool isSel = string.Equals(currentId, prof.Id, StringComparison.OrdinalIgnoreCase);

@@ -31,6 +31,7 @@ public partial class MainActivity {
     OneUiIconView roomTransportLoopIcon;
     OneUiInlineSelector rolloffSelector;
     LinearLayout mixerContainer;
+    readonly List<(TrackSourceItem item, LinearLayout row, TextView subTv)> mixerRowRefs = [];
     TextView roomBinauralProfileText;
     Button filterAllBtn, filter3DBtn, filterHeightBtn, filterBedsBtn;
     bool isUserSeeking;
@@ -273,14 +274,11 @@ public partial class MainActivity {
             OneUiTheme.IconSpatial,
             helpBody: S["TipHrtf"]);
 
-        var tileDist = CreateBentoToggle(
+        var tileDist = CreateBentoActionTile(
             OneUiIconType.Distance, S["BentoDist"],
-            () => store.DistanceSimulation,
-            () => {
-                bool next = !store.DistanceSimulation;
-                store.DistanceSimulation = next;
-                playerEngine.DistanceSimulation = next;
-            },
+            () => Services.BinauralProfileService.GetActiveDistanceShortText(store, S),
+            () => store.HeadphoneVirtualizer,
+            ShowBinauralDistanceSelectorDialog,
             OneUiTheme.IconSliderMedia,
             helpBody: S["TipDistSim"]);
 
@@ -341,10 +339,7 @@ public partial class MainActivity {
             store.MuteBed = flag;
             playerEngine.MuteBed = flag;
         }));
-        filterHeightBtn = FilterBtn(S["FilterHeightOnly"], () => ToggleCategorySolo(item => item.NormalizedPosition.Y > 0.15f, flag => {
-            store.MuteGround = flag;
-            playerEngine.MuteGround = flag;
-        }));
+        filterHeightBtn = FilterBtn(S["FilterHeightOnly"], ToggleDynamicCeilingFilter);
         filterBedsBtn = FilterBtn(S["FilterBedsOnly"], () => ToggleCategorySolo(item => item.IsBed, flag => {
             playerEngine.OnlyBeds = flag;
         }));
@@ -417,6 +412,59 @@ public partial class MainActivity {
         return (tile, Refresh);
     }
 
+    (LinearLayout view, Action refresh) CreateBentoActionTile(
+        OneUiIconType iconType,
+        string title,
+        Func<string> getSubtitle,
+        Func<bool> getActive,
+        Action onClick,
+        Color activeColor,
+        string helpBody = null) {
+        LinearLayout tile = HRow();
+        tile.SetMinimumHeight(Dp(62));
+        tile.SetPadding(Dp(12), Dp(10), Dp(8), Dp(10));
+        OneUiTheme.AttachRecoil(tile, 0.95f);
+
+        OneUiIconBadge badge = OneUiTheme.CreateVectorIconBadge(this, iconType, activeColor, 34);
+        LinearLayout col = new(this) { Orientation = Orientation.Vertical };
+        TextView titleTv = Label(title, 12.5f, ColText);
+        titleTv.SetIncludeFontPadding(false);
+        titleTv.SetTypeface(null, TypefaceStyle.Bold);
+        titleTv.SetSingleLine(true);
+        titleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        TextView stateTv = Label("", 10.8f, OneUiTheme.TextSub);
+        stateTv.SetSingleLine(true);
+        stateTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        col.AddView(titleTv);
+        col.AddView(stateTv);
+
+        tile.AddView(badge, new LinearLayout.LayoutParams(Dp(34), Dp(34)) { RightMargin = Dp(9) });
+        tile.AddView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        if (!string.IsNullOrEmpty(helpBody)) {
+            tile.AddView(CreateInlineHelpBtn(title, helpBody), new LinearLayout.LayoutParams(Dp(24), Dp(24)) { LeftMargin = Dp(4) });
+        }
+
+        void Refresh() {
+            bool on = getActive();
+            Color tileTint = on
+                ? Color.Argb(78, activeColor.R, activeColor.G, activeColor.B)
+                : OneUiTheme.SurfaceSubTile;
+            tile.Background = OneUiTheme.CreateGlassCardDrawable(
+                this,
+                tileTint,
+                OneUiTheme.TileCornerDp,
+                on ? OneUiTheme.WithAlpha(activeColor, 175) : null);
+            badge.UpdateColors(on ? activeColor : OneUiTheme.ControlStroke, ColText, solidOverride: on);
+            stateTv.Text = getSubtitle();
+            stateTv.SetTextColor(on ? ColText : OneUiTheme.TextMuted);
+        }
+
+        tile.Click += (_, _) => onClick?.Invoke();
+        Refresh();
+        return (tile, Refresh);
+    }
+
     Button FilterBtn(string text, Action onClick) {
         Button b = PillButton(text, onClick);
         b.TextSize = 12f;
@@ -430,15 +478,43 @@ public partial class MainActivity {
 
     void ClearAllSoloFilters() {
         playerEngine?.ClearSoloMute();
+        if (playerEngine != null) {
+            playerEngine.DynamicCeilingOnly = false;
+        }
         foreach (TrackSourceItem item in trackSourceItems) {
             item.IsSolo = false;
             item.IsMuted = false;
+            item.IsDynamicallyFilteredOut = false;
         }
         store.MuteBed = false;
         store.MuteGround = false;
         playerEngine.MuteBed = false;
         playerEngine.MuteGround = false;
         playerEngine.OnlyBeds = false;
+        RefreshPlayerSourcesList();
+        RefreshFilterButtonsUi();
+        refreshBentoTilesUi?.Invoke();
+        RefreshSettingsTabButtons();
+        UpdateRoomCanvas();
+    }
+
+    void ToggleDynamicCeilingFilter() {
+        if (playerEngine == null) {
+            return;
+        }
+        bool next = !playerEngine.DynamicCeilingOnly;
+        store.MuteBed = false;
+        store.MuteGround = false;
+        playerEngine.MuteBed = false;
+        playerEngine.MuteGround = false;
+        playerEngine.OnlyBeds = false;
+        for (int i = 0; i < trackSourceItems.Count; i++) {
+            trackSourceItems[i].IsSolo = false;
+            if (!next) {
+                trackSourceItems[i].IsDynamicallyFilteredOut = false;
+            }
+        }
+        playerEngine.DynamicCeilingOnly = next;
         RefreshPlayerSourcesList();
         RefreshFilterButtonsUi();
         refreshBentoTilesUi?.Invoke();
@@ -464,6 +540,9 @@ public partial class MainActivity {
     }
 
     void ToggleCategorySolo(Func<TrackSourceItem, bool> predicate, Action<bool> fallbackWhenNoTrack) {
+        if (playerEngine != null) {
+            playerEngine.DynamicCeilingOnly = false;
+        }
         if (trackSourceItems == null || trackSourceItems.Count == 0) {
             fallbackWhenNoTrack?.Invoke(true);
             refreshBentoTilesUi?.Invoke();
@@ -495,7 +574,7 @@ public partial class MainActivity {
                 }
             }
             if (matchedCount == 0) {
-                Toast.MakeText(this, "Nenhum item nesta categoria na faixa atual.", ToastLength.Short).Show();
+                Toast.MakeText(this, S["FilterNoMatchToast"], ToastLength.Short).Show();
             }
         }
 
@@ -507,10 +586,10 @@ public partial class MainActivity {
     }
 
     void RefreshFilterButtonsUi() {
-        bool solo3D = IsCategorySoloActive(item => item.IsDynamicObject);
-        bool soloH = IsCategorySoloActive(item => item.NormalizedPosition.Y > 0.15f);
-        bool soloBeds = IsCategorySoloActive(item => item.IsBed);
-        bool noneActive = !solo3D && !soloH && !soloBeds && !trackSourceItems.Any(x => x.IsSolo);
+        bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
+        bool solo3D = !dynCeil && IsCategorySoloActive(item => item.IsDynamicObject);
+        bool soloBeds = !dynCeil && IsCategorySoloActive(item => item.IsBed);
+        bool noneActive = !dynCeil && !solo3D && !soloBeds && !trackSourceItems.Any(x => x.IsSolo);
 
         void Style(Button b, bool active, Color accent) {
             if (b == null) return;
@@ -522,7 +601,7 @@ public partial class MainActivity {
 
         Style(filterAllBtn, noneActive, OneUiTheme.IconSpatial);
         Style(filter3DBtn, solo3D, OneUiTheme.IconAtmosUpmix);
-        Style(filterHeightBtn, soloH, OneUiTheme.IconStemsCalib);
+        Style(filterHeightBtn, dynCeil, OneUiTheme.IconStemsCalib);
         Style(filterBedsBtn, soloBeds, OneUiTheme.IconStudioExport);
     }
 
@@ -678,6 +757,27 @@ public partial class MainActivity {
             playerEngine.ListenerRotation,
             playerEngine.IsPlaying);
         UpdateRoomTelemetryText();
+        UpdateMixerRowsLive();
+    }
+
+    void UpdateMixerRowsLive() {
+        if (mixerRowRefs.Count == 0 || activeTab != 1) {
+            return;
+        }
+        bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
+        for (int i = 0; i < mixerRowRefs.Count; i++) {
+            var (item, row, subTv) = mixerRowRefs[i];
+            float targetAlpha = (item.IsMuted || item.IsDynamicallyFilteredOut) ? 0.42f : 1f;
+            if (MathF.Abs(row.Alpha - targetAlpha) > 0.05f) {
+                row.Alpha = targetAlpha;
+            }
+            if (item.IsDynamicObject || dynCeil) {
+                Vector3 p = item.NormalizedPosition;
+                subTv.Text = dynCeil && !item.IsDynamicallyFilteredOut
+                    ? $"Pos: ({p.X:0.0}, {p.Y:0.0}, {p.Z:0.0}) • {S["CeilingLiveBadge"]}"
+                    : $"Pos: ({p.X:0.0}, {p.Y:0.0}, {p.Z:0.0})";
+            }
+        }
     }
 
     void RefreshPlayerSourcesList() {
@@ -685,6 +785,7 @@ public partial class MainActivity {
             return;
         }
         mixerContainer.RemoveAllViews();
+        mixerRowRefs.Clear();
         if (trackSourceItems.Count == 0) {
             mixerContainer.AddView(Label(S["NoTrack"], 12f, ColMuted));
             return;
@@ -727,8 +828,12 @@ public partial class MainActivity {
                 muteBtn.SetTextColor(ColText);
                 row.Background = OneUiTheme.CreateGlassCardDrawable(
                     this, OneUiTheme.SurfaceSubTile, 18f, item.IsSolo ? OneUiTheme.SoloGold : null);
+                row.Alpha = (item.IsMuted || item.IsDynamicallyFilteredOut) ? 0.42f : 1f;
             }
             soloBtn.Click += (_, _) => {
+                if (playerEngine != null && playerEngine.DynamicCeilingOnly) {
+                    playerEngine.DynamicCeilingOnly = false;
+                }
                 item.IsSolo = !item.IsSolo;
                 UpdateBtns();
                 RefreshFilterButtonsUi();
@@ -745,6 +850,7 @@ public partial class MainActivity {
             row.AddView(soloBtn, new LinearLayout.LayoutParams(Dp(38), ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
             row.AddView(muteBtn, new LinearLayout.LayoutParams(Dp(38), ViewGroup.LayoutParams.WrapContent));
             mixerContainer.AddView(row, rlp);
+            mixerRowRefs.Add((item, row, subTv));
         }
     }
 

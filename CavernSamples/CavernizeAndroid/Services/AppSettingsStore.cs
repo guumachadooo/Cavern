@@ -67,9 +67,22 @@ public sealed class AppSettingsStore {
         set => Edit().PutBoolean("headphoneVirt", value).Apply();
     }
 
+    /// <summary>
+    /// Legacy synthetic moving-average Distancer filter is permanently disabled; real binaural distance is
+    /// controlled via laboratory-measured near/mid/far-field HRIR profiles.
+    /// </summary>
     public bool DistanceSimulation {
-        get => prefs.GetBoolean("distanceSim", false);
-        set => Edit().PutBoolean("distanceSim", value).Apply();
+        get => false;
+        set => Edit().PutBoolean("distanceSim", false).Apply();
+    }
+
+    /// <summary>
+    /// Converts all anechoic HRIR profiles to mathematically exact Minimum-Phase + measured ITD (zero EQ alteration).
+    /// Automatically bypassed on studio BRIR profiles to preserve room reflections.
+    /// </summary>
+    public bool MinimumPhaseHrir {
+        get => prefs.GetBoolean("minPhaseHrir", false);
+        set => Edit().PutBoolean("minPhaseHrir", value).Apply();
     }
 
     public int VolumeRolloffIndex {
