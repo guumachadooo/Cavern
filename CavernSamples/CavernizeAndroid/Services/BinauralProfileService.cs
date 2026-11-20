@@ -7,6 +7,8 @@ using Cavern.Format;
 using Cavern.Virtualizer;
 using Cavern.Waveforms;
 
+using Cavernize.Logic.Spatial;
+
 using CavernizeAndroid.Language;
 
 using Path = System.IO.Path;
@@ -328,6 +330,33 @@ public static class BinauralProfileService {
     }
 
     /// <summary>
+    /// True when HRTF virtualization is enabled and the active profile supports multiple real laboratory distances.
+    /// </summary>
+    public static bool HasVariableDistance(AppSettingsStore store) {
+        if (store == null || !store.HeadphoneVirtualizer) {
+            return false;
+        }
+        BinauralProfileInfo info = FindById(ResolveStoredHrtfProfileId(store));
+        return info != null && info.IsThKolnDistanceSeries;
+    }
+
+    /// <summary>
+    /// Returns the next laboratory distance profile ID in the TH Köln KU100 DFC progression (wrapping around).
+    /// </summary>
+    public static string GetNextDistanceProfileId(AppSettingsStore store) {
+        if (ThKolnDistanceSeries.Length == 0) {
+            return DefaultProfileId;
+        }
+        string curId = ResolveStoredHrtfProfileId(store);
+        for (int i = 0; i < ThKolnDistanceSeries.Length; i++) {
+            if (string.Equals(ThKolnDistanceSeries[i].ProfileId, curId, StringComparison.OrdinalIgnoreCase)) {
+                return ThKolnDistanceSeries[(i + 1) % ThKolnDistanceSeries.Length].ProfileId;
+            }
+        }
+        return ThKolnDistanceSeries[0].ProfileId;
+    }
+
+    /// <summary>
     /// Applies the user's saved binaural profile at app startup, safely falling back to Cavern Classic if an asset fails.
     /// </summary>
     public static void ApplySavedProfile(Context ctx, AppSettingsStore store) {
@@ -341,6 +370,23 @@ public static class BinauralProfileService {
             }
         }
         store.HeadphoneVirtualizer = wantsHrtf;
+    }
+
+    /// <summary>
+    /// Mirrors the currently active binaural profile ID and display label into Slot 3 (<see cref="SpatialSceneHub"/>).
+    /// </summary>
+    public static void SyncToSceneHub(SpatialSceneHub hub, AppSettingsStore store, AndroidStrings s = null) {
+        if (hub == null || store == null) {
+            return;
+        }
+        string effectiveId = GetEffectiveProfileId(store);
+        hub.ActiveBinauralProfileId = effectiveId;
+        if (s != null) {
+            hub.ActiveBinauralProfileName = GetActiveDisplayTitle(store, s);
+        } else {
+            BinauralProfileInfo info = FindById(effectiveId);
+            hub.ActiveBinauralProfileName = info != null ? info.ShortBadge : effectiveId;
+        }
     }
 
     /// <summary>

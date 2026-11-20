@@ -140,13 +140,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
     OneUiBackdropView backdropView;
     OneUiFrostedCapsuleView navFrostedHost;
     FrameLayout navLayer;
-    LinearLayout navCollapsedPill;
     View settingsUpdateDotCollapsed;
-    bool isNavBarCollapsed;
-    ValueAnimator navCollapseAnimator;
+    bool isBottomNavVisible = true;
+    int navVisAnimGen;
+    int tabSwitchAnimGen;
     View tabIndicatorPill;
     ValueAnimator tabPillAnimator;
     LinearLayout[] tabPages;
+    View[] tabContainers;
     LinearLayout[] tabCells;
     OneUiTabIconView[] tabIcons;
     TextView[] tabLabels;
@@ -262,6 +263,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         mediaNotification.SeekRequestedMs += ms => SeekAbsoluteSeconds(ms / 1000.0);
 
         BinauralProfileService.ApplySavedProfile(this, store);
+        BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
         playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
 
         uiHandler = new Handler(Looper.MainLooper);
@@ -303,8 +305,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
         truehdPrepareCts?.Dispose();
         tabPillAnimator?.Cancel();
         tabPillAnimator?.Dispose();
-        navCollapseAnimator?.Cancel();
-        navCollapseAnimator?.Dispose();
         formatPillAnimator?.Cancel();
         formatPillAnimator?.Dispose();
         mediaNotification?.Dispose();
@@ -365,26 +365,40 @@ public partial class MainActivity : Activity, ICavernizeApp {
         currentHeaderStatusText = S["SelectFilePill"];
         currentTrackSummaryText = "";
 
-        // Tab content frame
-        FrameLayout contentFrame = new(this);
+        // Tab content frame with horizontal swipe between non-Play tabs (can swipe into Play, never away from Play)
+        TabSwipeHostLayout contentFrame = new(
+            this,
+            () => activeTab,
+            () => tabContainers?.Length ?? 0,
+            () => (tabContainers != null && activeTab >= 0 && activeTab < tabContainers.Length) ? tabContainers[activeTab] : null,
+            SwitchTab);
         LinearLayout musicTab = BuildMusicPlayerTab();
         LinearLayout playerTab = BuildPlayerTab();
         LinearLayout convertTab = BuildConverterTab();
         LinearLayout extractTab = BuildExtractorTab();
         LinearLayout settingsTab = BuildSettingsTab();
         tabPages = [musicTab, playerTab, convertTab, extractTab, settingsTab];
+        tabContainers = new View[tabPages.Length];
 
         for (int i = 0; i < tabPages.Length; i++) {
-            ScrollView sv = new(this) {
-                FillViewport = true,
-                VerticalScrollBarEnabled = true
-            };
-            sv.SetClipToPadding(false);
-            sv.SetBackgroundColor(Color.Transparent);
-            sv.ScrollChange += (_, _) => navFrostedHost?.RefreshBlur();
-            sv.AddView(tabPages[i]);
-            sv.Visibility = i == activeTab ? ViewStates.Visible : ViewStates.Gone;
-            contentFrame.AddView(sv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
+            if (i == 0) {
+                // Play tab manages its own zero-scroll Now Playing viewport and internal scrollable Library
+                tabPages[i].Visibility = i == activeTab ? ViewStates.Visible : ViewStates.Gone;
+                tabContainers[i] = tabPages[i];
+                contentFrame.AddView(tabPages[i], new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
+            } else {
+                ScrollView sv = new(this) {
+                    FillViewport = true,
+                    VerticalScrollBarEnabled = true
+                };
+                sv.SetClipToPadding(false);
+                sv.SetBackgroundColor(Color.Transparent);
+                sv.ScrollChange += (_, _) => navFrostedHost?.RefreshBlur();
+                sv.AddView(tabPages[i]);
+                sv.Visibility = i == activeTab ? ViewStates.Visible : ViewStates.Gone;
+                tabContainers[i] = sv;
+                contentFrame.AddView(sv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
+            }
         }
         root.AddView(contentFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
         rootFrame.AddView(root, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
@@ -400,7 +414,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             Gravity = GravityFlags.Bottom
         });
 
-        // Layer 2: Samsung Gallery Floating Capsule Bottom Navigation Bar (auto-retracts into compact pill on Play tab)
+        // Layer 2: Samsung Gallery Floating Capsule Bottom Navigation Bar (hidden on Play Now Playing so integrated '+' pill saves 100% vertical space)
         navFrostedHost = new OneUiFrostedCapsuleView(this) {
             CornerRadiusDp = 999f,
             GlazeTopColor = OneUiTheme.SurfaceFloatingBar,
@@ -409,8 +423,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
             Elevation = Dp(14)
         };
         navFrostedHost.SetPadding(Dp(5), Dp(4), Dp(5), Dp(4));
-
-        FrameLayout navInnerStack = new(this);
 
         navLayer = new FrameLayout(this);
         tabIndicatorPill = new View(this) {
@@ -457,13 +469,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 TopMargin = Dp(2)
             });
 
-            cell.Click += (_, _) => {
-                if (idx == 0 && activeTab == 0 && !isNavBarCollapsed) {
-                    SetNavBarCollapsed(true, animate: true);
-                } else {
-                    SwitchTab(idx);
-                }
-            };
+            cell.Click += (_, _) => SwitchTab(idx);
             tabCells[i] = cell;
             tabIcons[i] = iconView;
             tabLabels[i] = labelTv;
@@ -487,41 +493,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
         }
         navLayer.AddView(navRow, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        navInnerStack.AddView(navLayer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-
-        // Retracted minimalist pill shown on Play tab to free vertical space
-        navCollapsedPill = HRow();
-        navCollapsedPill.SetGravity(GravityFlags.Center);
-        navCollapsedPill.SetPadding(Dp(12), Dp(4), Dp(12), Dp(4));
-        navCollapsedPill.Visibility = ViewStates.Gone;
-        navCollapsedPill.Alpha = 0f;
-        OneUiTheme.AttachRecoil(navCollapsedPill, 0.92f);
-
-        OneUiIconView morePillIcon = new(this, OneUiIconType.LibraryGrid, Color.Argb(238, 252, 252, 255));
-        TextView morePillLabel = new(this) {
-            Text = S["NavMorePill"],
-            TextSize = 12f,
-            Gravity = GravityFlags.Center
-        };
-        morePillLabel.SetIncludeFontPadding(false);
-        morePillLabel.SetTextColor(Color.Argb(242, 252, 252, 255));
-        morePillLabel.Typeface = OneUiTheme.GetAppleFontSemibold(this);
-        morePillLabel.SetSingleLine(true);
-
-        settingsUpdateDotCollapsed = new View(this) {
-            Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.IconAtmosUpmix, 99f),
-            Visibility = ShouldShowSettingsDot() ? ViewStates.Visible : ViewStates.Gone
-        };
-
-        navCollapsedPill.AddView(morePillIcon, new LinearLayout.LayoutParams(Dp(15), Dp(15)) { RightMargin = Dp(6) });
-        navCollapsedPill.AddView(morePillLabel);
-        navCollapsedPill.AddView(settingsUpdateDotCollapsed, new LinearLayout.LayoutParams(Dp(6), Dp(6)) { LeftMargin = Dp(5) });
-        navCollapsedPill.Click += (_, _) => SetNavBarCollapsed(false, animate: true);
-
-        navInnerStack.AddView(navCollapsedPill, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(34)) {
-            Gravity = GravityFlags.Center
-        });
-        navFrostedHost.AddView(navInnerStack, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        navFrostedHost.AddView(navLayer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         FrameLayout.LayoutParams floatingNavLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             Gravity = GravityFlags.Bottom | GravityFlags.CenterHorizontal,
@@ -533,7 +505,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         SetContentView(rootFrame);
         UpdateTabButtonStyles(animate: false);
-        SetNavBarCollapsed(activeTab == 0, animate: false);
+        SetBottomNavBarVisible(activeTab != 0 || isLibrarySectionOpen, animate: false);
         navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
         RefreshAllUiState();
     }
@@ -848,28 +820,30 @@ public partial class MainActivity : Activity, ICavernizeApp {
             positiveText: S["CloseBtn"]);
     }
 
+    static Android.Views.Animations.PathInterpolator CreateOneUiEase() =>
+        new(0.22f, 1f, 0.36f, 1f);
+
     void SetExpandedWithAnimation(View panel, bool expanded) {
         if (panel == null) {
             return;
         }
-        panel.Animate()?.Cancel();
-        if (expanded) {
-            if (panel.Visibility != ViewStates.Visible) {
-                panel.Visibility = ViewStates.Visible;
-                panel.Alpha = 0f;
-                panel.TranslationY = -Dp(6);
-            }
-            panel.Animate()
-                .Alpha(1f)
-                .TranslationY(0f)
-                .SetDuration(190)
-                .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.5f))
-                .Start();
-        } else {
-            panel.Visibility = ViewStates.Gone;
-            panel.Alpha = 1f;
-            panel.TranslationY = 0f;
+        bool isCurrentlyVisible = panel.Visibility == ViewStates.Visible;
+        if (isCurrentlyVisible == expanded) {
+            return;
         }
+        panel.Animate()?.Cancel();
+        if (panel.Parent is ViewGroup vg) {
+            Android.Transitions.TransitionSet ts = new();
+            ts.SetOrdering(Android.Transitions.TransitionOrdering.Together);
+            ts.AddTransition(new Android.Transitions.ChangeBounds());
+            ts.AddTransition(new Android.Transitions.Fade());
+            ts.SetDuration(240);
+            ts.SetInterpolator(CreateOneUiEase());
+            Android.Transitions.TransitionManager.BeginDelayedTransition(vg, ts);
+        }
+        panel.Visibility = expanded ? ViewStates.Visible : ViewStates.Gone;
+        panel.Alpha = 1f;
+        panel.TranslationY = 0f;
     }
 
     bool ShouldShowSettingsDot() =>
@@ -878,53 +852,82 @@ public partial class MainActivity : Activity, ICavernizeApp {
         latestTruehddStatus?.IsUpdateAvailable == true;
 
     void SwitchTab(int idx) {
-        if (tabPages == null || idx < 0 || idx >= tabPages.Length) {
+        if (tabContainers == null || idx < 0 || idx >= tabContainers.Length) {
             return;
         }
         int prevTab = activeTab;
         activeTab = idx;
         if (idx != 0) {
             musicVideoStage?.PauseVideoDecoderOnly();
-        } else if (musicStageMode == PlayerStageMode.Video) {
+        } else if (musicStageMode == PlayerStageMode.Video && !isLibrarySectionOpen) {
             musicVideoStage?.SyncPlaybackState(playerEngine?.IsPlaying == true, playerEngine?.CurrentSeconds ?? 0);
-        } else if (musicStageMode == PlayerStageMode.Lyrics) {
+        } else if (musicStageMode == PlayerStageMode.Lyrics && !isLibrarySectionOpen) {
             musicLyricsView?.UpdatePlayback(playerEngine?.CurrentSeconds ?? 0, playerEngine?.IsPlaying == true);
         }
+
+        int myGen = ++tabSwitchAnimGen;
         if (prevTab != idx) {
             int dir = idx > prevTab ? 1 : -1;
-            for (int i = 0; i < tabPages.Length; i++) {
-                if (tabPages[i].Parent is not View sv) {
+            for (int i = 0; i < tabContainers.Length; i++) {
+                View container = tabContainers[i];
+                if (container == null) {
                     continue;
                 }
-                sv.Animate()?.Cancel();
+                container.Animate()?.Cancel();
                 if (i == idx) {
-                    sv.Visibility = ViewStates.Visible;
-                    sv.Alpha = 0f;
-                    sv.TranslationX = dir * Dp(20);
-                    sv.Animate()
+                    container.Visibility = ViewStates.Visible;
+                    container.Alpha = 0f;
+                    container.ScaleX = 0.985f;
+                    container.ScaleY = 0.985f;
+                    container.TranslationX = dir * Dp(26);
+                    container.Animate()
                         .Alpha(1f)
+                        .ScaleX(1f)
+                        .ScaleY(1f)
                         .TranslationX(0f)
-                        .SetDuration(220)
-                        .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.6f))
-                        .WithEndAction(new Java.Lang.Runnable(() => navFrostedHost?.RefreshBlur(force: true)))
+                        .SetDuration(290)
+                        .SetInterpolator(CreateOneUiEase())
+                        .WithEndAction(new Java.Lang.Runnable(() => {
+                            if (uiDestroyed || myGen != tabSwitchAnimGen) return;
+                            navFrostedHost?.RefreshBlur(force: true);
+                        }))
+                        .Start();
+                } else if (i == prevTab) {
+                    View outgoing = container;
+                    outgoing.Visibility = ViewStates.Visible;
+                    outgoing.Animate()
+                        .Alpha(0f)
+                        .TranslationX(-dir * Dp(18))
+                        .SetDuration(175)
+                        .SetInterpolator(new Android.Views.Animations.AccelerateInterpolator(1.2f))
+                        .WithEndAction(new Java.Lang.Runnable(() => {
+                            if (uiDestroyed || myGen != tabSwitchAnimGen) return;
+                            outgoing.Visibility = ViewStates.Gone;
+                            outgoing.Alpha = 1f;
+                            outgoing.ScaleX = 1f;
+                            outgoing.ScaleY = 1f;
+                            outgoing.TranslationX = 0f;
+                        }))
                         .Start();
                 } else {
-                    sv.Visibility = ViewStates.Gone;
-                    sv.Alpha = 1f;
-                    sv.TranslationX = 0f;
+                    container.Visibility = ViewStates.Gone;
+                    container.Alpha = 1f;
+                    container.ScaleX = 1f;
+                    container.ScaleY = 1f;
+                    container.TranslationX = 0f;
                 }
             }
-        } else if (tabPages[idx].Parent is View svCur) {
+        } else if (tabContainers[idx] is View svCur) {
+            svCur.Animate()?.Cancel();
             svCur.Visibility = ViewStates.Visible;
             svCur.Alpha = 1f;
+            svCur.ScaleX = 1f;
+            svCur.ScaleY = 1f;
             svCur.TranslationX = 0f;
         }
         UpdateTabButtonStyles(animate: true);
-        if (idx == 0) {
-            SetNavBarCollapsed(true, animate: prevTab != 0 || !isNavBarCollapsed);
-        } else {
-            SetNavBarCollapsed(false, animate: isNavBarCollapsed);
-        }
+        bool wantsNav = idx != 0 || isLibrarySectionOpen;
+        SetBottomNavBarVisible(wantsNav, animate: prevTab != idx || isBottomNavVisible != wantsNav);
         if (idx == 1) {
             UpdateRoomCanvas();
         } else if (idx == 0) {
@@ -933,94 +936,87 @@ public partial class MainActivity : Activity, ICavernizeApp {
         navFrostedHost?.RefreshBlur(force: true);
     }
 
-    void SetNavBarCollapsed(bool collapsed, bool animate) {
-        if (navFrostedHost == null || navLayer == null || navCollapsedPill == null) {
+    void SetBottomNavBarVisible(bool visible, bool animate) {
+        if (navFrostedHost == null) {
             return;
         }
-        isNavBarCollapsed = collapsed;
-        navCollapseAnimator?.Cancel();
-
-        int hostWidth = rootFrameHost?.Width > 0 ? rootFrameHost.Width : (Resources?.DisplayMetrics?.WidthPixels ?? 1080);
-        int fullW = Math.Max(Dp(280), hostWidth - Dp(28));
-        int pillW = Dp(104);
-        int fullH = Dp(56);
-        int pillH = Dp(42);
-
-        if (navFrostedHost.LayoutParameters is not FrameLayout.LayoutParams lp) {
-            return;
-        }
+        isBottomNavVisible = visible;
+        int myGen = ++navVisAnimGen;
+        navFrostedHost.Animate()?.Cancel();
+        bottomScrimView?.Animate()?.Cancel();
 
         if (!animate) {
-            lp.Width = collapsed ? pillW : ViewGroup.LayoutParams.MatchParent;
-            lp.Height = collapsed ? pillH : ViewGroup.LayoutParams.WrapContent;
-            lp.BottomMargin = collapsed ? Dp(10) : Dp(14);
-            navFrostedHost.LayoutParameters = lp;
-            navLayer.Visibility = collapsed ? ViewStates.Gone : ViewStates.Visible;
-            navLayer.Alpha = collapsed ? 0f : 1f;
-            navCollapsedPill.Visibility = collapsed ? ViewStates.Visible : ViewStates.Gone;
-            navCollapsedPill.Alpha = collapsed ? 1f : 0f;
+            navFrostedHost.Visibility = visible ? ViewStates.Visible : ViewStates.Gone;
+            navFrostedHost.Alpha = visible ? 1f : 0f;
+            navFrostedHost.TranslationY = visible ? 0f : Dp(34);
+            navFrostedHost.ScaleX = visible ? 1f : 0.94f;
+            navFrostedHost.ScaleY = visible ? 1f : 0.94f;
             if (bottomScrimView != null) {
-                bottomScrimView.Alpha = collapsed ? 0.35f : 1f;
+                bottomScrimView.Visibility = visible ? ViewStates.Visible : ViewStates.Gone;
+                bottomScrimView.Alpha = visible ? 1f : 0f;
             }
-            if (!collapsed) {
-                navFrostedHost.Post(() => PositionTabIndicator(animate: false));
+            if (visible) {
+                navFrostedHost.Post(() => {
+                    PositionTabIndicator(animate: false);
+                    navFrostedHost?.RefreshBlur(force: true);
+                });
             }
-            navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
             return;
         }
 
-        int startW = navFrostedHost.Width > 0 ? navFrostedHost.Width : (collapsed ? fullW : pillW);
-        int endW = collapsed ? pillW : fullW;
-        int startH = navFrostedHost.Height > 0 ? navFrostedHost.Height : (collapsed ? fullH : pillH);
-        int endH = collapsed ? pillH : fullH;
-        int startBottom = lp.BottomMargin;
-        int endBottom = collapsed ? Dp(10) : Dp(14);
-        float startScrim = bottomScrimView?.Alpha ?? (collapsed ? 1f : 0.35f);
-        float endScrim = collapsed ? 0.35f : 1f;
-
-        navLayer.Visibility = ViewStates.Visible;
-        navCollapsedPill.Visibility = ViewStates.Visible;
-
-        navCollapseAnimator = ValueAnimator.OfFloat(0f, 1f);
-        navCollapseAnimator.SetDuration(260);
-        navCollapseAnimator.SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.75f));
-        navCollapseAnimator.Update += (_, e) => {
-            float f = (float)(e.Animation?.AnimatedValue ?? 1f);
-            if (navFrostedHost.LayoutParameters is FrameLayout.LayoutParams curLp) {
-                curLp.Width = Math.Max(pillW, (int)Math.Round(startW + (endW - startW) * f));
-                curLp.Height = Math.Max(pillH, (int)Math.Round(startH + (endH - startH) * f));
-                curLp.BottomMargin = (int)Math.Round(startBottom + (endBottom - startBottom) * f);
-                navFrostedHost.LayoutParameters = curLp;
+        if (visible) {
+            if (navFrostedHost.Visibility != ViewStates.Visible) {
+                navFrostedHost.Visibility = ViewStates.Visible;
+                navFrostedHost.Alpha = 0f;
+                navFrostedHost.TranslationY = Dp(32);
+                navFrostedHost.ScaleX = 0.94f;
+                navFrostedHost.ScaleY = 0.94f;
             }
-            if (collapsed) {
-                navLayer.Alpha = Math.Clamp(1f - f * 1.9f, 0f, 1f);
-                navCollapsedPill.Alpha = Math.Clamp((f - 0.32f) / 0.68f, 0f, 1f);
-            } else {
-                navCollapsedPill.Alpha = Math.Clamp(1f - f * 2.1f, 0f, 1f);
-                navLayer.Alpha = Math.Clamp((f - 0.28f) / 0.72f, 0f, 1f);
-            }
+            navFrostedHost.Animate()
+                .Alpha(1f)
+                .TranslationY(0f)
+                .ScaleX(1f)
+                .ScaleY(1f)
+                .SetDuration(290)
+                .SetInterpolator(CreateOneUiEase())
+                .WithEndAction(new Java.Lang.Runnable(() => {
+                    if (uiDestroyed || myGen != navVisAnimGen) return;
+                    PositionTabIndicator(animate: false);
+                    navFrostedHost?.RefreshBlur(force: true);
+                }))
+                .Start();
             if (bottomScrimView != null) {
-                bottomScrimView.Alpha = startScrim + (endScrim - startScrim) * f;
+                bottomScrimView.Visibility = ViewStates.Visible;
+                bottomScrimView.Animate()
+                    .Alpha(1f)
+                    .SetDuration(250)
+                    .SetInterpolator(CreateOneUiEase())
+                    .Start();
             }
-        };
-        navCollapseAnimator.AnimationEnd += (_, _) => {
-            if (uiDestroyed || navFrostedHost == null) return;
-            if (navFrostedHost.LayoutParameters is FrameLayout.LayoutParams endLp) {
-                endLp.Width = collapsed ? pillW : ViewGroup.LayoutParams.MatchParent;
-                endLp.Height = collapsed ? pillH : ViewGroup.LayoutParams.WrapContent;
-                endLp.BottomMargin = endBottom;
-                navFrostedHost.LayoutParameters = endLp;
+        } else {
+            navFrostedHost.Animate()
+                .Alpha(0f)
+                .TranslationY(Dp(34))
+                .ScaleX(0.94f)
+                .ScaleY(0.94f)
+                .SetDuration(220)
+                .SetInterpolator(new Android.Views.Animations.AccelerateInterpolator(1.3f))
+                .WithEndAction(new Java.Lang.Runnable(() => {
+                    if (uiDestroyed || myGen != navVisAnimGen) return;
+                    navFrostedHost.Visibility = ViewStates.Gone;
+                }))
+                .Start();
+            if (bottomScrimView != null) {
+                bottomScrimView.Animate()
+                    .Alpha(0f)
+                    .SetDuration(200)
+                    .WithEndAction(new Java.Lang.Runnable(() => {
+                        if (uiDestroyed || myGen != navVisAnimGen) return;
+                        bottomScrimView.Visibility = ViewStates.Gone;
+                    }))
+                    .Start();
             }
-            navLayer.Visibility = collapsed ? ViewStates.Gone : ViewStates.Visible;
-            navLayer.Alpha = collapsed ? 0f : 1f;
-            navCollapsedPill.Visibility = collapsed ? ViewStates.Visible : ViewStates.Gone;
-            navCollapsedPill.Alpha = collapsed ? 1f : 0f;
-            if (!collapsed) {
-                navFrostedHost.Post(() => PositionTabIndicator(animate: false));
-            }
-            navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
-        };
-        navCollapseAnimator.Start();
+        }
     }
 
     void UpdateTabButtonStyles(bool animate = true) {
@@ -1075,8 +1071,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
 
         tabPillAnimator = ValueAnimator.OfFloat(0f, 1f);
-        tabPillAnimator.SetDuration(250);
-        tabPillAnimator.SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.7f));
+        tabPillAnimator.SetDuration(270);
+        tabPillAnimator.SetInterpolator(CreateOneUiEase());
         tabPillAnimator.Update += (_, e) => {
             float f = (float)(e.Animation?.AnimatedValue ?? 1f);
             tabIndicatorPill.TranslationX = startX + (endX - startX) * f;
@@ -2675,5 +2671,164 @@ public partial class MainActivity : Activity, ICavernizeApp {
             msg,
             icon: icon,
             monospaceBody: monospace);
+    }
+
+    /// <summary>
+    /// Tab container supporting horizontal swipe navigation between tabs when outside the Play tab
+    /// (allows swiping from 3D Room into Play, while disabling swipe away from Play), with strict touch
+    /// disambiguation so 3D Room orbit, sliders, and scrollable chips are never intercepted.
+    /// </summary>
+    sealed class TabSwipeHostLayout : FrameLayout {
+        readonly Func<int> getActiveTab;
+        readonly Func<int> getTabCount;
+        readonly Func<View> getActiveContainer;
+        readonly Action<int> switchTab;
+        readonly float touchSlop;
+        readonly float commitDistPx;
+        readonly float flingVelPxPerSec;
+
+        float downRawX;
+        float downRawY;
+        long downTimeMs;
+        bool ignoreGesture;
+        bool isSwiping;
+
+        public TabSwipeHostLayout(
+            Context ctx,
+            Func<int> getActiveTab,
+            Func<int> getTabCount,
+            Func<View> getActiveContainer,
+            Action<int> switchTab) : base(ctx) {
+            this.getActiveTab = getActiveTab;
+            this.getTabCount = getTabCount;
+            this.getActiveContainer = getActiveContainer;
+            this.switchTab = switchTab;
+            float density = ctx.Resources?.DisplayMetrics?.Density ?? 3f;
+            touchSlop = ViewConfiguration.Get(ctx)?.ScaledTouchSlop ?? (int)(8f * density);
+            commitDistPx = 56f * density;
+            flingVelPxPerSec = 380f * density;
+        }
+
+        public override bool OnInterceptTouchEvent(MotionEvent ev) {
+            if (ev == null) {
+                return false;
+            }
+            int curTab = getActiveTab();
+            // Never allow horizontal swipe away from Play (tab 0)
+            if (curTab <= 0) {
+                isSwiping = false;
+                ignoreGesture = true;
+                return false;
+            }
+
+            switch (ev.ActionMasked) {
+                case MotionEventActions.Down:
+                    downRawX = ev.RawX;
+                    downRawY = ev.RawY;
+                    downTimeMs = SystemClock.UptimeMillis();
+                    isSwiping = false;
+                    ignoreGesture = IsTouchInsideHorizontalControl(getActiveContainer(), downRawX, downRawY);
+                    return false;
+
+                case MotionEventActions.Move:
+                    if (ignoreGesture) {
+                        return false;
+                    }
+                    float dx = ev.RawX - downRawX;
+                    float dy = ev.RawY - downRawY;
+                    if (MathF.Abs(dy) > touchSlop * 1.25f && MathF.Abs(dy) > MathF.Abs(dx)) {
+                        ignoreGesture = true;
+                        return false;
+                    }
+                    if (MathF.Abs(dx) > touchSlop * 1.45f && MathF.Abs(dx) > MathF.Abs(dy) * 1.65f) {
+                        int count = getTabCount();
+                        bool canGoLeft = dx > 0 && curTab > 0;
+                        bool canGoRight = dx < 0 && curTab < count - 1;
+                        if (canGoLeft || canGoRight) {
+                            isSwiping = true;
+                            return true;
+                        }
+                    }
+                    return false;
+
+                case MotionEventActions.Up:
+                case MotionEventActions.Cancel:
+                    isSwiping = false;
+                    ignoreGesture = false;
+                    return false;
+            }
+            return false;
+        }
+
+        public override bool OnTouchEvent(MotionEvent ev) {
+            if (ev == null || !isSwiping) {
+                return base.OnTouchEvent(ev);
+            }
+            int curTab = getActiveTab();
+            int count = getTabCount();
+            View activeView = getActiveContainer();
+            float dx = ev.RawX - downRawX;
+
+            switch (ev.ActionMasked) {
+                case MotionEventActions.Move:
+                    if (activeView != null) {
+                        bool allowed = (dx > 0 && curTab > 0) || (dx < 0 && curTab < count - 1);
+                        activeView.TranslationX = allowed ? dx * 0.24f : dx * 0.06f;
+                    }
+                    return true;
+
+                case MotionEventActions.Up:
+                case MotionEventActions.Cancel:
+                    isSwiping = false;
+                    long dt = Math.Max(16, SystemClock.UptimeMillis() - downTimeMs);
+                    float vel = MathF.Abs(dx) * 1000f / dt;
+                    bool commit = ev.ActionMasked == MotionEventActions.Up &&
+                                  (MathF.Abs(dx) >= commitDistPx || (MathF.Abs(dx) >= touchSlop * 2f && vel >= flingVelPxPerSec));
+                    int target = curTab;
+                    if (commit) {
+                        if (dx > 0 && curTab > 0) {
+                            target = curTab - 1;
+                        } else if (dx < 0 && curTab < count - 1) {
+                            target = curTab + 1;
+                        }
+                    }
+                    if (target != curTab) {
+                        switchTab(target);
+                    } else if (activeView != null) {
+                        activeView.Animate()
+                            .TranslationX(0f)
+                            .SetDuration(200)
+                            .SetInterpolator(CreateOneUiEase())
+                            .Start();
+                    }
+                    return true;
+            }
+            return true;
+        }
+
+        static bool IsTouchInsideHorizontalControl(View root, float rawX, float rawY) {
+            if (root == null || root.Visibility != ViewStates.Visible) {
+                return false;
+            }
+            int[] loc = new int[2];
+            root.GetLocationOnScreen(loc);
+            if (rawX < loc[0] || rawX > loc[0] + root.Width || rawY < loc[1] || rawY > loc[1] + root.Height) {
+                return false;
+            }
+            if (root is RoomSimulatorView or OneUiSeekBar or OneUiWaveMediaSeekBar or EditText) {
+                return true;
+            }
+            if (root is HorizontalScrollView hsv && (hsv.CanScrollHorizontally(-1) || hsv.CanScrollHorizontally(1))) {
+                return true;
+            }
+            if (root is ViewGroup vg) {
+                for (int i = vg.ChildCount - 1; i >= 0; i--) {
+                    if (IsTouchInsideHorizontalControl(vg.GetChildAt(i), rawX, rawY)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
     }
 }

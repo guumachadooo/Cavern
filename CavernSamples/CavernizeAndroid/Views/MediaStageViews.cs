@@ -152,7 +152,6 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
     readonly LinearLayout trackPillBtn;
     readonly TextView trackPillLabel;
     readonly FrameLayout aspectBtn;
-    readonly FrameLayout hudMoreBtn;
 
     readonly LinearLayout centerRow;
     readonly FrameLayout centerRewBtn;
@@ -216,7 +215,6 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
     public event Action AudioTrackRequested;
     public event Action LoopToggleRequested;
     public event Action SpatialOptionsRequested;
-    public event Action MoreOptionsRequested;
     public event Action FullscreenToggleRequested;
 
     public SyncedVideoStageView(Context ctx, string titlePlaceholder) : base(ctx) {
@@ -303,19 +301,14 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
             SubtitlesRequested?.Invoke();
             ScheduleHudAutoHide();
         });
+        ccBtn.Visibility = ViewStates.Gone; // Shown in fullscreen; portrait uses bottom utility bar
         topBar.AddView(ccBtn, new LinearLayout.LayoutParams(Dp(34), Dp(34)) { RightMargin = Dp(4) });
 
         (aspectBtn, _) = MakeHudIconCircle(ctx, OneUiIconType.AspectRatioFit, 34, 17, () => {
             CycleAspectMode();
             ScheduleHudAutoHide();
         });
-        topBar.AddView(aspectBtn, new LinearLayout.LayoutParams(Dp(34), Dp(34)) { RightMargin = Dp(4) });
-
-        (hudMoreBtn, _) = MakeHudIconCircle(ctx, OneUiIconType.MoreHorizontal, 34, 17, () => {
-            MoreOptionsRequested?.Invoke();
-            ScheduleHudAutoHide();
-        });
-        topBar.AddView(hudMoreBtn, new LinearLayout.LayoutParams(Dp(34), Dp(34)));
+        topBar.AddView(aspectBtn, new LinearLayout.LayoutParams(Dp(34), Dp(34)));
 
         hudOverlay.AddView(topBar, new LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             Gravity = GravityFlags.Top
@@ -408,6 +401,7 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
             LoopToggleRequested?.Invoke();
             ScheduleHudAutoHide();
         });
+        loopBtn.Visibility = ViewStates.Gone; // Shown in fullscreen; portrait uses bottom utility bar
         actionRow.AddView(loopBtn, new LinearLayout.LayoutParams(Dp(34), Dp(34)) { RightMargin = Dp(8) });
 
         spatialPillBtn = new LinearLayout(ctx) {
@@ -579,6 +573,8 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
         fullscreenIcon.IconType = fullscreen ? OneUiIconType.FullscreenExit : OneUiIconType.FullscreenEnter;
         fullscreenSeekRow.Visibility = fullscreen ? ViewStates.Visible : ViewStates.Gone;
         inlineTimeText.Visibility = fullscreen ? ViewStates.Gone : ViewStates.Visible;
+        ccBtn.Visibility = fullscreen ? ViewStates.Visible : ViewStates.Gone;
+        loopBtn.Visibility = fullscreen ? ViewStates.Visible : ViewStates.Gone;
         subtitleOverlayView.TextSize = fullscreen ? 17f : 13.5f;
         UpdateSubtitleMargin();
         ShowHudOverlay(autoHide: desiredPlaying);

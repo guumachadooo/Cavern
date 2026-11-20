@@ -61,6 +61,16 @@ public sealed class AppSettingsStore {
         set => Edit().PutFloat("upmixSmooth", value).Apply();
     }
 
+    public bool ParametricStftUpmix {
+        get => prefs.GetBoolean("parametricStftUpmix", true);
+        set => Edit().PutBoolean("parametricStftUpmix", value).Apply();
+    }
+
+    public bool AtmosAwareUpmix {
+        get => prefs.GetBoolean("atmosAwareUpmix", true);
+        set => Edit().PutBoolean("atmosAwareUpmix", value).Apply();
+    }
+
     // Player & Virtualization
     public bool HeadphoneVirtualizer {
         get => prefs.GetBoolean("headphoneVirt", true);
@@ -353,6 +363,16 @@ public sealed class AndroidUpmixingSettings(AppSettingsStore store) : UpmixingSe
     public override float Smoothness {
         get => store.UpmixSmoothness;
         set => store.UpmixSmoothness = value;
+    }
+
+    public override bool ParametricStft {
+        get => store.ParametricStftUpmix;
+        set => store.ParametricStftUpmix = value;
+    }
+
+    public override bool AtmosAware {
+        get => store.AtmosAwareUpmix;
+        set => store.AtmosAwareUpmix = value;
     }
 }
 

@@ -361,7 +361,7 @@ public sealed class AndroidStrings {
 
         // Individual Technical Option Tooltips (cause & effect)
         ["TipHrtf"] = "Simulates virtual surround speakers around your head on headphones.\n\n• On: full 3D binaural staging.\n• Off: direct mix without ear HRTF filtering (use on physical speakers).",
-        ["TipDistSim"] = "Selects the real laboratory loudspeaker measurement distance (TH Köln KU100 DFC: 0.50 m, 0.75 m, 1.00 m, 1.50 m, or 3.25 m).\n\nUses genuine acoustic measurements instead of synthetic artificial distance filters.",
+        ["TipDistSim"] = "Tap to cycle directly through the 5 real laboratory loudspeaker distances (TH Köln KU100 DFC: 0.50 m, 0.75 m, 1.00 m, 1.50 m, and 3.25 m).\n\nShown only when a profile with variable laboratory distances is active.",
         ["TipRolloff"] = "Sets how fast distant objects drop in volume:\n• Logarithmic / Real (1/d): stronger near-vs-far depth contrast.\n• Linear: gentle uniform decay.\n• Disabled: constant loudness regardless of distance.",
         ["TipMatrixUpmix"] = "Fills surround channels from stereo or 5.1 audio.\n\n• On: widens side and rear staging.\n• Off: preserves only channels present in the source file.",
         ["TipCavernizeUpmix"] = "Synthesizes overhead 3D ceiling objects dynamically.\n\n• On: harmonic and ambient layers lift above ear level.\n• Off: height speakers stay silent unless native Atmos objects exist.",
@@ -782,7 +782,7 @@ public sealed class AndroidStrings {
         d["RoomTouchHint"] = "Arraste o fundo para girar em 3D • Arraste o ouvinte • Toque nas caixas para Solo";
 
         d["TipHrtf"] = "Simula caixas surround ao redor da cabeça nos fones de ouvido.\n\n• Ativo: cria palco sonoro 3D binaural.\n• Desativado: saída sem filtro HRTF (use ao reproduzir em caixas acústicas físicas).";
-        d["TipDistSim"] = "Seleciona a distância real medida em laboratório (série TH Köln KU100 DFC: 0,50 m, 0,75 m, 1,00 m, 1,50 m ou 3,25 m).\n\nUsa medições acústicas reais em vez de filtros artificiais de distância.";
+        d["TipDistSim"] = "Toque para alternar diretamente entre as 5 distâncias reais medidas em laboratório (série TH Köln KU100 DFC: 0,50 m, 0,75 m, 1,00 m, 1,50 m e 3,25 m).\n\nAparece apenas quando um perfil com distâncias variáveis de laboratório está ativo.";
         d["TipRolloff"] = "Define a rapidez com que sons distantes perdem volume:\n• Logarítmica / Real (1/d): contraste nítido entre objetos próximos e no fundo.\n• Linear: queda suave e uniforme.\n• Desativado: mantém o mesmo volume em toda a sala.";
         d["TipMatrixUpmix"] = "Expande faixas estéreo ou 5.1 preenchendo canais surround 7.1.\n\n• Ativo: abre o palco lateral e traseiro.\n• Desativado: mantém somente os canais originais do arquivo.";
         d["TipCavernizeUpmix"] = "Gera objetos de teto virtuais em 3D a partir de mixagens comuns.\n\n• Ativo: ambiências e camadas sobem para cima do ouvinte.\n• Desativado: caixas de altura tocam apenas quando há objetos Atmos nativos.";

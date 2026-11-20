@@ -29,9 +29,30 @@ public partial class MainActivity {
     OneUiIconView roomTransportPlayIcon;
     LinearLayout roomTransportLoopBtn;
     OneUiIconView roomTransportLoopIcon;
+    sealed class MixerRowRef {
+        public TrackSourceItem Item;
+        public LinearLayout Row;
+        public TextView SubTv;
+        public Button SoloBtn;
+        public Button MuteBtn;
+        public bool LastSoloVisual;
+        public bool LastMuteVisual;
+    }
+
     OneUiInlineSelector rolloffSelector;
     LinearLayout mixerContainer;
-    readonly List<(TrackSourceItem item, LinearLayout row, TextView subTv)> mixerRowRefs = [];
+    readonly List<MixerRowRef> mixerRowRefs = [];
+    readonly Dictionary<int, long> ceilingActiveSinceMs = [];
+    readonly Dictionary<int, long> ceilingPinUntilMs = [];
+    long lastMixerReorderMs;
+    bool pendingMixerReorder;
+    bool roomScrollMixerHooked;
+    const long CeilingPromoteHoldMs = 350;
+    const long CeilingPinHoldMs = 1500;
+    const long MixerReorderCooldownMs = 450;
+
+    LinearLayout bentoRow1;
+    bool? lastDistTileVisible;
     TextView roomBinauralProfileText;
     Button filterAllBtn, filter3DBtn, filterHeightBtn, filterBedsBtn;
     bool isUserSeeking;
@@ -97,7 +118,7 @@ public partial class MainActivity {
             UpdateRoomTelemetryText();
         };
         roomView.SourceSoloToggled += _ => {
-            RefreshPlayerSourcesList();
+            SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
             RefreshFilterButtonsUi();
             refreshBentoTilesUi?.Invoke();
         };
@@ -258,7 +279,7 @@ public partial class MainActivity {
         // 3. One UI 9 Quick Spatial Panel Card (1x2 Bento Toggles + Fat Dynamic Capsules + In-App Rolloff Selector)
         LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.IconAtmosUpmix);
 
-        LinearLayout bentoRow1 = HRow();
+        bentoRow1 = HRow();
         bentoRow1.SetPadding(0, 0, 0, Dp(10));
 
         var tileHrtf = CreateBentoToggle(
@@ -278,7 +299,7 @@ public partial class MainActivity {
             OneUiIconType.Distance, S["BentoDist"],
             () => Services.BinauralProfileService.GetActiveDistanceShortText(store, S),
             () => store.HeadphoneVirtualizer,
-            ShowBinauralDistanceSelectorDialog,
+            CycleThKolnDistance,
             OneUiTheme.IconSliderMedia,
             helpBody: S["TipDistSim"]);
 
@@ -304,8 +325,35 @@ public partial class MainActivity {
         quickCard.AddView(roomProfRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
 
         refreshBentoTilesUi = () => {
+            bool showDist = Services.BinauralProfileService.HasVariableDistance(store);
+            if (lastDistTileVisible.HasValue && lastDistTileVisible.Value != showDist && bentoRow1 != null && bentoRow1.IsLaidOut) {
+                try {
+                    Android.Transitions.TransitionSet ts = new();
+                    ts.SetOrdering(Android.Transitions.TransitionOrdering.Together);
+                    Android.Transitions.ChangeBounds cb = new();
+                    cb.SetDuration(280);
+                    Android.Transitions.Fade fd = new();
+                    fd.SetDuration(200);
+                    ts.AddTransition(cb);
+                    ts.AddTransition(fd);
+                    ts.SetInterpolator(CreateOneUiEase());
+                    Android.Transitions.TransitionManager.BeginDelayedTransition(bentoRow1, ts);
+                } catch { }
+            }
+            lastDistTileVisible = showDist;
+
+            tileDist.view.Visibility = showDist ? ViewStates.Visible : ViewStates.Gone;
+            if (tileHrtf.view.LayoutParameters is LinearLayout.LayoutParams hlp) {
+                int targetRight = showDist ? Dp(8) : 0;
+                if (hlp.RightMargin != targetRight) {
+                    hlp.RightMargin = targetRight;
+                    tileHrtf.view.LayoutParameters = hlp;
+                }
+            }
             tileHrtf.refresh();
-            tileDist.refresh();
+            if (showDist) {
+                tileDist.refresh();
+            }
         };
         refreshBentoTilesUi();
 
@@ -456,8 +504,21 @@ public partial class MainActivity {
                 OneUiTheme.TileCornerDp,
                 on ? OneUiTheme.WithAlpha(activeColor, 175) : null);
             badge.UpdateColors(on ? activeColor : OneUiTheme.ControlStroke, ColText, solidOverride: on);
-            stateTv.Text = getSubtitle();
+            string nextSub = getSubtitle();
+            bool textChanged = !string.IsNullOrEmpty(stateTv.Text) && !string.Equals(stateTv.Text, nextSub, StringComparison.Ordinal);
+            stateTv.Text = nextSub;
             stateTv.SetTextColor(on ? ColText : OneUiTheme.TextMuted);
+            if (textChanged && tile.IsLaidOut) {
+                stateTv.Animate()?.Cancel();
+                stateTv.Alpha = 0.35f;
+                stateTv.TranslationY = Dp(3);
+                stateTv.Animate()
+                    .Alpha(1f)
+                    .TranslationY(0f)
+                    .SetDuration(190)
+                    .SetInterpolator(CreateOneUiEase())
+                    .Start();
+            }
         }
 
         tile.Click += (_, _) => onClick?.Invoke();
@@ -481,6 +542,9 @@ public partial class MainActivity {
         if (playerEngine != null) {
             playerEngine.DynamicCeilingOnly = false;
         }
+        ceilingActiveSinceMs.Clear();
+        ceilingPinUntilMs.Clear();
+        pendingMixerReorder = false;
         foreach (TrackSourceItem item in trackSourceItems) {
             item.IsSolo = false;
             item.IsMuted = false;
@@ -491,7 +555,7 @@ public partial class MainActivity {
         playerEngine.MuteBed = false;
         playerEngine.MuteGround = false;
         playerEngine.OnlyBeds = false;
-        RefreshPlayerSourcesList();
+        SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
         RefreshFilterButtonsUi();
         refreshBentoTilesUi?.Invoke();
         RefreshSettingsTabButtons();
@@ -503,6 +567,9 @@ public partial class MainActivity {
             return;
         }
         bool next = !playerEngine.DynamicCeilingOnly;
+        ceilingActiveSinceMs.Clear();
+        ceilingPinUntilMs.Clear();
+        pendingMixerReorder = false;
         store.MuteBed = false;
         store.MuteGround = false;
         playerEngine.MuteBed = false;
@@ -515,7 +582,7 @@ public partial class MainActivity {
             }
         }
         playerEngine.DynamicCeilingOnly = next;
-        RefreshPlayerSourcesList();
+        SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
         RefreshFilterButtonsUi();
         refreshBentoTilesUi?.Invoke();
         RefreshSettingsTabButtons();
@@ -543,6 +610,9 @@ public partial class MainActivity {
         if (playerEngine != null) {
             playerEngine.DynamicCeilingOnly = false;
         }
+        ceilingActiveSinceMs.Clear();
+        ceilingPinUntilMs.Clear();
+        pendingMixerReorder = false;
         if (trackSourceItems == null || trackSourceItems.Count == 0) {
             fallbackWhenNoTrack?.Invoke(true);
             refreshBentoTilesUi?.Invoke();
@@ -563,12 +633,14 @@ public partial class MainActivity {
         if (alreadyActive) {
             for (int i = 0; i < trackSourceItems.Count; i++) {
                 trackSourceItems[i].IsSolo = false;
+                trackSourceItems[i].IsDynamicallyFilteredOut = false;
             }
         } else {
             int matchedCount = 0;
             for (int i = 0; i < trackSourceItems.Count; i++) {
                 bool m = predicate(trackSourceItems[i]);
                 trackSourceItems[i].IsSolo = m;
+                trackSourceItems[i].IsDynamicallyFilteredOut = false;
                 if (m) {
                     matchedCount++;
                 }
@@ -578,7 +650,7 @@ public partial class MainActivity {
             }
         }
 
-        RefreshPlayerSourcesList();
+        SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
         RefreshFilterButtonsUi();
         refreshBentoTilesUi?.Invoke();
         RefreshSettingsTabButtons();
@@ -760,23 +832,205 @@ public partial class MainActivity {
         UpdateMixerRowsLive();
     }
 
+    void ApplyMixerRowVisualState(MixerRowRef r, bool dynCeil, bool forceRedraw = false) {
+        TrackSourceItem item = r.Item;
+        bool isVisuallySolo = item.IsSolo || (dynCeil && !item.IsDynamicallyFilteredOut);
+        bool isMuted = item.IsMuted;
+
+        if (forceRedraw || isVisuallySolo != r.LastSoloVisual || isMuted != r.LastMuteVisual) {
+            r.LastSoloVisual = isVisuallySolo;
+            r.LastMuteVisual = isMuted;
+
+            r.SoloBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
+                this, isVisuallySolo ? OneUiTheme.SoloGold : OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
+            r.SoloBtn.SetTextColor(isVisuallySolo ? Color.Black : ColText);
+            r.SoloBtn.SetTypeface(null, isVisuallySolo ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+
+            r.MuteBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
+                this, isMuted ? ColDanger : OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
+            r.MuteBtn.SetTextColor(ColText);
+
+            r.Row.Background = OneUiTheme.CreateGlassCardDrawable(
+                this, OneUiTheme.SurfaceSubTile, 18f, isVisuallySolo ? OneUiTheme.SoloGold : null);
+        }
+
+        // Only manually muted rows dim; inactive rows under Solo / Ceiling stay crisp at full contrast
+        float targetAlpha = isMuted ? 0.42f : 1f;
+        if (MathF.Abs(r.Row.Alpha - targetAlpha) > 0.04f) {
+            r.Row.Alpha = targetAlpha;
+        }
+    }
+
+    bool IsMixerTopVisibleInViewport() {
+        if (mixerContainer == null || tabContainers == null || tabContainers.Length <= 1) {
+            return true;
+        }
+        if (tabContainers[1] is not ScrollView roomScroll) {
+            return true;
+        }
+        int topInScroll = 0;
+        View cur = mixerContainer;
+        while (cur != null && cur != roomScroll) {
+            topInScroll += cur.Top;
+            cur = cur.Parent as View;
+        }
+        return roomScroll.ScrollY <= topInScroll + Dp(56);
+    }
+
+    void EnsureRoomScrollMixerHook() {
+        if (roomScrollMixerHooked || tabContainers == null || tabContainers.Length <= 1) {
+            return;
+        }
+        if (tabContainers[1] is ScrollView roomScroll) {
+            roomScrollMixerHooked = true;
+            roomScroll.ScrollChange += (_, _) => {
+                if (pendingMixerReorder && activeTab == 1 && IsMixerTopVisibleInViewport()) {
+                    pendingMixerReorder = false;
+                    ReorderMixerRows(animate: true, forceImmediate: false);
+                }
+            };
+        }
+    }
+
+    void SyncMixerRowsVisualAndOrder(bool animate, bool forceImmediate) {
+        if (mixerContainer == null) {
+            return;
+        }
+        if (mixerRowRefs.Count != trackSourceItems.Count) {
+            RefreshPlayerSourcesList();
+            return;
+        }
+        bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
+        for (int i = 0; i < mixerRowRefs.Count; i++) {
+            ApplyMixerRowVisualState(mixerRowRefs[i], dynCeil);
+        }
+        ReorderMixerRows(animate, forceImmediate);
+    }
+
+    void ReorderMixerRows(bool animate, bool forceImmediate) {
+        if (mixerContainer == null || mixerRowRefs.Count <= 1) {
+            return;
+        }
+        EnsureRoomScrollMixerHook();
+
+        long nowMs = Android.OS.SystemClock.UptimeMillis();
+        bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
+        bool anyManualSolo = false;
+        for (int i = 0; i < mixerRowRefs.Count; i++) {
+            if (mixerRowRefs[i].Item.IsSolo) {
+                anyManualSolo = true;
+                break;
+            }
+        }
+
+        // Anti-chaos protection for live dynamic ceiling updates:
+        // 1) Pause automatic reordering while user is scrolled further down inspecting lower channels.
+        // 2) Apply cooldown + promote/pin hysteresis so fast-moving ceiling objects don't bounce rows chaotically.
+        if (!forceImmediate) {
+            if (!IsMixerTopVisibleInViewport()) {
+                pendingMixerReorder = true;
+                return;
+            }
+            if (nowMs - lastMixerReorderMs < MixerReorderCooldownMs) {
+                return;
+            }
+        }
+
+        HashSet<int> promoted = [];
+        if (dynCeil) {
+            for (int i = 0; i < mixerRowRefs.Count; i++) {
+                TrackSourceItem item = mixerRowRefs[i].Item;
+                bool activeNow = !item.IsDynamicallyFilteredOut;
+                if (activeNow) {
+                    if (!ceilingActiveSinceMs.TryGetValue(item.Index, out long since)) {
+                        since = nowMs;
+                        ceilingActiveSinceMs[item.Index] = since;
+                    }
+                    if (forceImmediate || (nowMs - since) >= CeilingPromoteHoldMs) {
+                        promoted.Add(item.Index);
+                        ceilingPinUntilMs[item.Index] = nowMs + CeilingPinHoldMs;
+                    }
+                } else {
+                    ceilingActiveSinceMs.Remove(item.Index);
+                    if (!forceImmediate &&
+                        ceilingPinUntilMs.TryGetValue(item.Index, out long pinUntil) &&
+                        nowMs < pinUntil) {
+                        promoted.Add(item.Index);
+                    } else {
+                        ceilingPinUntilMs.Remove(item.Index);
+                    }
+                }
+            }
+        } else if (anyManualSolo) {
+            for (int i = 0; i < mixerRowRefs.Count; i++) {
+                if (mixerRowRefs[i].Item.IsSolo) {
+                    promoted.Add(mixerRowRefs[i].Item.Index);
+                }
+            }
+        }
+
+        List<MixerRowRef> desired = new(mixerRowRefs);
+        desired.Sort((a, b) => {
+            int pa = promoted.Contains(a.Item.Index) ? 0 : 1;
+            int pb = promoted.Contains(b.Item.Index) ? 0 : 1;
+            int cmp = pa.CompareTo(pb);
+            return cmp != 0 ? cmp : a.Item.Index.CompareTo(b.Item.Index);
+        });
+
+        bool changed = mixerContainer.ChildCount != desired.Count;
+        if (!changed) {
+            for (int i = 0; i < desired.Count; i++) {
+                if (mixerContainer.GetChildAt(i) != desired[i].Row) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        if (!changed) {
+            pendingMixerReorder = false;
+            return;
+        }
+
+        lastMixerReorderMs = nowMs;
+        pendingMixerReorder = false;
+
+        if (animate && mixerContainer.IsLaidOut) {
+            try {
+                Android.Transitions.ChangeBounds cb = new();
+                cb.SetDuration(300);
+                cb.SetInterpolator(CreateOneUiEase());
+                Android.Transitions.TransitionManager.BeginDelayedTransition(mixerContainer, cb);
+            } catch { }
+        }
+
+        for (int i = 0; i < desired.Count; i++) {
+            View row = desired[i].Row;
+            if (i < mixerContainer.ChildCount && mixerContainer.GetChildAt(i) == row) {
+                continue;
+            }
+            mixerContainer.RemoveView(row);
+            mixerContainer.AddView(row, i);
+        }
+    }
+
     void UpdateMixerRowsLive() {
         if (mixerRowRefs.Count == 0 || activeTab != 1) {
             return;
         }
         bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
         for (int i = 0; i < mixerRowRefs.Count; i++) {
-            var (item, row, subTv) = mixerRowRefs[i];
-            float targetAlpha = (item.IsMuted || item.IsDynamicallyFilteredOut) ? 0.42f : 1f;
-            if (MathF.Abs(row.Alpha - targetAlpha) > 0.05f) {
-                row.Alpha = targetAlpha;
-            }
+            MixerRowRef r = mixerRowRefs[i];
+            TrackSourceItem item = r.Item;
+            ApplyMixerRowVisualState(r, dynCeil);
             if (item.IsDynamicObject || dynCeil) {
                 Vector3 p = item.NormalizedPosition;
-                subTv.Text = dynCeil && !item.IsDynamicallyFilteredOut
+                r.SubTv.Text = dynCeil && !item.IsDynamicallyFilteredOut
                     ? $"Pos: ({p.X:0.0}, {p.Y:0.0}, {p.Z:0.0}) • {S["CeilingLiveBadge"]}"
                     : $"Pos: ({p.X:0.0}, {p.Y:0.0}, {p.Z:0.0})";
             }
+        }
+        if (dynCeil || pendingMixerReorder) {
+            ReorderMixerRows(animate: true, forceImmediate: false);
         }
     }
 
@@ -786,14 +1040,18 @@ public partial class MainActivity {
         }
         mixerContainer.RemoveAllViews();
         mixerRowRefs.Clear();
+        ceilingActiveSinceMs.Clear();
+        ceilingPinUntilMs.Clear();
+        pendingMixerReorder = false;
         if (trackSourceItems.Count == 0) {
             mixerContainer.AddView(Label(S["NoTrack"], 12f, ColMuted));
             return;
         }
 
+        bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
+
         foreach (TrackSourceItem item in trackSourceItems) {
             LinearLayout row = HRow();
-            row.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f, item.IsSolo ? OneUiTheme.SoloGold : null);
             row.SetPadding(Dp(12), Dp(9), Dp(10), Dp(9));
             LinearLayout.LayoutParams rlp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
                 BottomMargin = Dp(6)
@@ -818,40 +1076,44 @@ public partial class MainActivity {
             muteBtn.SetPadding(Dp(10), Dp(4), Dp(10), Dp(4));
             OneUiTheme.AttachRecoil(soloBtn, 0.90f);
             OneUiTheme.AttachRecoil(muteBtn, 0.90f);
-            void UpdateBtns() {
-                soloBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
-                    this, item.IsSolo ? OneUiTheme.SoloGold : OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
-                soloBtn.SetTextColor(item.IsSolo ? Color.Black : ColText);
-                soloBtn.SetTypeface(null, item.IsSolo ? TypefaceStyle.Bold : TypefaceStyle.Normal);
-                muteBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
-                    this, item.IsMuted ? ColDanger : OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
-                muteBtn.SetTextColor(ColText);
-                row.Background = OneUiTheme.CreateGlassCardDrawable(
-                    this, OneUiTheme.SurfaceSubTile, 18f, item.IsSolo ? OneUiTheme.SoloGold : null);
-                row.Alpha = (item.IsMuted || item.IsDynamicallyFilteredOut) ? 0.42f : 1f;
-            }
+
+            MixerRowRef rowRef = new() {
+                Item = item,
+                Row = row,
+                SubTv = subTv,
+                SoloBtn = soloBtn,
+                MuteBtn = muteBtn
+            };
+
             soloBtn.Click += (_, _) => {
                 if (playerEngine != null && playerEngine.DynamicCeilingOnly) {
                     playerEngine.DynamicCeilingOnly = false;
+                    ceilingActiveSinceMs.Clear();
+                    ceilingPinUntilMs.Clear();
+                    for (int k = 0; k < trackSourceItems.Count; k++) {
+                        trackSourceItems[k].IsDynamicallyFilteredOut = false;
+                    }
                 }
                 item.IsSolo = !item.IsSolo;
-                UpdateBtns();
+                SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
                 RefreshFilterButtonsUi();
                 refreshBentoTilesUi?.Invoke();
                 UpdateRoomCanvas();
             };
             muteBtn.Click += (_, _) => {
                 item.IsMuted = !item.IsMuted;
-                UpdateBtns();
+                ApplyMixerRowVisualState(rowRef, playerEngine?.DynamicCeilingOnly ?? false, forceRedraw: true);
                 UpdateRoomCanvas();
             };
-            UpdateBtns();
+            ApplyMixerRowVisualState(rowRef, dynCeil, forceRedraw: true);
 
             row.AddView(soloBtn, new LinearLayout.LayoutParams(Dp(38), ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
             row.AddView(muteBtn, new LinearLayout.LayoutParams(Dp(38), ViewGroup.LayoutParams.WrapContent));
             mixerContainer.AddView(row, rlp);
-            mixerRowRefs.Add((item, row, subTv));
+            mixerRowRefs.Add(rowRef);
         }
+
+        ReorderMixerRows(animate: false, forceImmediate: true);
     }
 
     void StartTelemetryTimer() {

@@ -51,21 +51,31 @@ public partial class MainActivity {
                 return;
             }
             isPlayingState = playing;
-            float targetScale = playing ? 1.0f : 0.88f;
+            float targetScale = playing ? 1.0f : 0.89f;
             float targetElev = OneUiTheme.Dp(Context, playing ? 18f : 7f);
             Animate()
                 .ScaleX(targetScale)
                 .ScaleY(targetScale)
-                .SetDuration(360)
-                .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.7f))
+                .SetDuration(380)
+                .SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f))
                 .Start();
             Elevation = targetElev;
         }
 
         protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            MeasureSpecMode wMode = MeasureSpec.GetMode(widthMeasureSpec);
+            MeasureSpecMode hMode = MeasureSpec.GetMode(heightMeasureSpec);
             int maxW = MeasureSpec.GetSize(widthMeasureSpec);
+            int maxH = MeasureSpec.GetSize(heightMeasureSpec);
             int prefPx = OneUiTheme.Dp(Context, PreferredSizeDp);
-            int target = maxW > 0 ? Math.Min(maxW, prefPx) : prefPx;
+            int target = prefPx;
+            if (wMode != MeasureSpecMode.Unspecified && maxW > 0) {
+                target = Math.Min(target, maxW);
+            }
+            if (hMode != MeasureSpecMode.Unspecified && maxH > 0) {
+                target = Math.Min(target, maxH);
+            }
+            target = Math.Max(OneUiTheme.Dp(Context, 40), target);
             SetMeasuredDimension(target, target);
         }
 
@@ -143,6 +153,7 @@ public partial class MainActivity {
     // Section switcher inside Play tab (Now Playing vs In-App Library)
     LinearLayout musicTabRootPage;
     LinearLayout musicNowPlayingSection;
+    ScrollView musicLibraryScrollView;
     LinearLayout musicLibrarySection;
     TextView segNowPlayingBtn, segLibraryBtn;
 
@@ -171,12 +182,9 @@ public partial class MainActivity {
     TextView musicLyricsHeaderTitle, musicLyricsHeaderSub;
     AppleMusicLyricsView musicLyricsView;
 
-    // Apple Music Title + Overflow Row
+    // Apple Music Title Row
     LinearLayout musicTitleRow;
     TextView musicTitleText, musicArtistText;
-    LinearLayout musicTrackBtn;
-    TextView musicTrackBtnText;
-    FrameLayout musicMoreBtn;
 
     // Seekbar + Centered Spatial Badge + Expandable Format Switcher + Unified Transport + Slim Volume
     OneUiWaveMediaSeekBar musicWaveSeekBar;
@@ -188,9 +196,12 @@ public partial class MainActivity {
     HorizontalScrollView musicFormatScrollView;
     LinearLayout musicFormatSwitchRow;
     bool isFormatPillExpanded;
+    bool isFormatPillShowingExpandedChips;
     ValueAnimator formatPillAnimator;
     float formatExpandFraction;
     int spatialBadgeFullTextWidthPx;
+    int formatCollapsedWidthPx;
+    int formatExpandedWidthPx;
     List<LibraryTrackItem> currentTrackVariants = [];
     int stageAnimGen;
     int lastMusicViewportHeightPx;
@@ -200,24 +211,19 @@ public partial class MainActivity {
     OneUiIconView musicPlayIcon;
     OneUiSeekBar musicVolSeekBar;
 
-    // Flanking Spatial Toggles ([Cavernize 3D] | [HRTF 3D] | [Matrix 7.1]) + Apple Music 3-Icon Bottom Bar
+    // Flanking Spatial Toggles ([Cavernize 3D] | [HRTF 3D] | [Matrix 7.1]) + Integrated Bottom Utility Row
     LinearLayout musicCavernizeToggleBtn, musicBottomSpatialBtn, musicMatrixToggleBtn;
     OneUiIconView musicCavernizeIcon, musicBottomSpatialIcon, musicMatrixIcon;
     TextView musicCavernizeText, musicBottomSpatialText, musicMatrixText;
 
-    FrameLayout musicBottomLeftBtn, musicBottomOnlineBtn, musicBottomLoopBtn;
-    OneUiIconView musicBottomLeftIcon, musicBottomOnlineIcon, musicBottomLoopIcon;
+    FrameLayout musicBottomLeftBtn, musicBottomOnlineBtn, musicBottomLoopBtn, musicBottomMoreBtn;
+    OneUiIconView musicBottomLeftIcon, musicBottomOnlineIcon, musicBottomLoopIcon, musicBottomMoreIcon;
 
     LinearLayout BuildMusicPlayerTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
         musicTabRootPage = page;
         page.SetGravity(GravityFlags.CenterHorizontal);
-        page.SetPadding(Dp(20), Dp(6), Dp(20), Dp(66));
-
-        // Initial responsive stage height (refined dynamically once actual viewport height is measured)
-        float density = Math.Max(1f, Resources?.DisplayMetrics?.Density ?? 3f);
-        int screenHeightDp = (int)((Resources?.DisplayMetrics?.HeightPixels ?? 2200) / density);
-        int stageSizeDp = Math.Clamp(screenHeightDp - 445, 206, 312);
+        page.SetPadding(Dp(20), Dp(6), Dp(20), Dp(10));
 
         Typeface sfBold = OneUiTheme.GetAppleFontBold(this);
         Typeface sfSemi = OneUiTheme.GetAppleFontSemibold(this);
@@ -260,17 +266,17 @@ public partial class MainActivity {
         });
 
         // ============================================================
-        // SECTION A: NOW PLAYING (Exact Apple Music + Unified One UI 9)
+        // SECTION A: NOW PLAYING (Zero-Scroll Exact Viewport Fit)
         // ============================================================
         musicNowPlayingSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         musicNowPlayingSection.SetGravity(GravityFlags.CenterHorizontal);
 
-        // 1. Unified Stage Container: Artwork / Video Stage / Live Lyrics
+        // 1. Unified Flexible Stage Container (weight = 1f: fills exact remaining height with 0px scroll)
         mediaStageFrame = new FrameLayout(this);
 
         musicArtworkSlot = new FrameLayout(this);
         musicArtworkView = new RoundedArtworkView(this) {
-            PreferredSizeDp = stageSizeDp,
+            PreferredSizeDp = 340,
             CornerDp = 16f,
             ScaleX = 0.89f,
             ScaleY = 0.89f
@@ -286,12 +292,12 @@ public partial class MainActivity {
             ViewGroup.LayoutParams.WrapContent,
             ViewGroup.LayoutParams.WrapContent) {
             Gravity = GravityFlags.Center,
-            TopMargin = Dp(2),
-            BottomMargin = Dp(2)
+            TopMargin = Dp(4),
+            BottomMargin = Dp(4)
         });
         mediaStageFrame.AddView(musicArtworkSlot, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
-            ViewGroup.LayoutParams.WrapContent));
+            ViewGroup.LayoutParams.MatchParent));
 
         // Video Stage (Samsung Video Player + YouTube HUD + CC Subtitles + Portrait/Landscape Fullscreen)
         musicVideoSlot = new FrameLayout(this) { Visibility = ViewStates.Gone };
@@ -302,20 +308,21 @@ public partial class MainActivity {
         musicVideoStage.SubtitlesRequested += ShowSubtitlesDialog;
         musicVideoStage.AudioTrackRequested += ShowTrackSelectorDialog;
         musicVideoStage.LoopToggleRequested += ToggleLoopMode;
-        musicVideoStage.SpatialOptionsRequested += ShowPlayerMoreSheet;
-        musicVideoStage.MoreOptionsRequested += ShowPlayerMoreSheet;
+        musicVideoStage.SpatialOptionsRequested += ShowAudioSpecDialog;
         musicVideoStage.FullscreenToggleRequested += ToggleVideoFullscreen;
         musicVideoSlot.AddView(musicVideoStage, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
-            ViewGroup.LayoutParams.MatchParent));
+            ViewGroup.LayoutParams.MatchParent) {
+            Gravity = GravityFlags.Center
+        });
         mediaStageFrame.AddView(musicVideoSlot, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
-            Dp(Math.Clamp(stageSizeDp - 16, 175, 240))) {
+            ViewGroup.LayoutParams.MatchParent) {
             TopMargin = Dp(4),
             BottomMargin = Dp(4)
         });
 
-        // Borderless Apple Music Live Lyrics Sheet (with SF Pro Bold, Depth-of-Field Blur & Wave Scroll)
+        // Borderless Apple Music Live Lyrics Sheet (expands to fill freed height in Simplified Lyrics Mode)
         musicLyricsContainer = new LinearLayout(this) {
             Orientation = Orientation.Vertical,
             Visibility = ViewStates.Gone
@@ -326,7 +333,7 @@ public partial class MainActivity {
             BaselineAligned = false
         };
         lyricsHeader.SetGravity(GravityFlags.CenterVertical);
-        lyricsHeader.SetPadding(0, Dp(2), 0, Dp(6));
+        lyricsHeader.SetPadding(0, Dp(2), 0, Dp(8));
 
         musicLyricsMiniArt = new RoundedArtworkView(this) {
             PreferredSizeDp = 46,
@@ -346,10 +353,8 @@ public partial class MainActivity {
         musicLyricsHeaderSub.Ellipsize = TextUtils.TruncateAt.End;
         lyricsMetaCol.AddView(musicLyricsHeaderTitle);
         lyricsMetaCol.AddView(musicLyricsHeaderSub);
-        lyricsHeader.AddView(lyricsMetaCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
-
-        FrameLayout lyricsMoreBtn = MakeAppleCircleOverflowBtn(ShowPlayerMoreSheet);
-        lyricsHeader.AddView(lyricsMoreBtn, new LinearLayout.LayoutParams(Dp(32), Dp(32)));
+        lyricsMetaCol.Click += (_, _) => SetPlayerStageMode(PlayerStageMode.Cover);
+        lyricsHeader.AddView(lyricsMetaCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         musicLyricsContainer.AddView(lyricsHeader);
 
         musicLyricsView = new AppleMusicLyricsView(this);
@@ -358,15 +363,16 @@ public partial class MainActivity {
 
         mediaStageFrame.AddView(musicLyricsContainer, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
-            Dp(stageSizeDp + 16)));
+            ViewGroup.LayoutParams.MatchParent));
 
         musicNowPlayingSection.AddView(mediaStageFrame, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
-            ViewGroup.LayoutParams.WrapContent) {
+            0,
+            1f) {
             BottomMargin = Dp(8)
         });
 
-        // 2. Apple Music Title + Artist + Overflow Row
+        // 2. Apple Music Title + Artist Row (clean, zero duplicate buttons)
         musicTitleRow = HRow();
         musicTitleRow.SetGravity(GravityFlags.CenterVertical);
 
@@ -392,29 +398,13 @@ public partial class MainActivity {
         titleMetaCol.AddView(musicArtistText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(1)
         });
-        musicTitleRow.AddView(titleMetaCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(10) });
-
-        musicTrackBtn = HRow();
-        musicTrackBtn.Visibility = ViewStates.Gone;
-        musicTrackBtn.SetPadding(Dp(9), Dp(5), Dp(9), Dp(5));
-        musicTrackBtn.Background = OneUiTheme.CreateGlassCardDrawable(this, Color.Argb(48, 255, 255, 255), OneUiTheme.PillCornerDp);
-        OneUiTheme.AttachRecoil(musicTrackBtn, 0.93f);
-        musicTrackBtnText = Label("1/2", 11.5f, ColText);
-        musicTrackBtnText.SetIncludeFontPadding(false);
-        musicTrackBtnText.SetTypeface(sfBold, TypefaceStyle.Bold);
-        musicTrackBtnText.SetSingleLine(true);
-        musicTrackBtn.AddView(musicTrackBtnText);
-        musicTrackBtn.Click += (_, _) => ShowTrackSelectorDialog();
-        musicTitleRow.AddView(musicTrackBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(28)) { RightMargin = Dp(8) });
-
-        musicMoreBtn = MakeAppleCircleOverflowBtn(ShowPlayerMoreSheet);
-        musicTitleRow.AddView(musicMoreBtn, new LinearLayout.LayoutParams(Dp(32), Dp(32)));
+        musicTitleRow.AddView(titleMetaCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
         musicNowPlayingSection.AddView(musicTitleRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
+            BottomMargin = Dp(6)
         });
 
-        // 3. One UI 9 Wave Media Seekbar + Apple Music centered Audio Badge
+        // 3. One UI 9 Wave Media Seekbar + Compact Centered Audio Spec Badge & Format Variant Pill (26dp)
         musicWaveSeekBar = new OneUiWaveMediaSeekBar(this) {
             Max = 1000,
             CurrentTimeText = "00:00",
@@ -448,53 +438,63 @@ public partial class MainActivity {
 
         musicSpatialBadgePill = HRow();
         musicSpatialBadgePill.SetGravity(GravityFlags.Center);
-        musicSpatialBadgePill.SetMinimumWidth(Dp(30));
-        musicSpatialBadgePill.SetMinimumHeight(Dp(30));
-        musicSpatialBadgePill.SetPadding(Dp(10), Dp(3), Dp(10), Dp(3));
+        musicSpatialBadgePill.SetMinimumWidth(Dp(26));
+        musicSpatialBadgePill.SetMinimumHeight(Dp(26));
+        musicSpatialBadgePill.SetPadding(Dp(9), 0, Dp(9), 0);
         musicSpatialBadgePill.Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(38, 255, 255, 255), 0.8f);
+        musicSpatialBadgePill.ClipToOutline = true;
+        musicSpatialBadgePill.OutlineProvider = new RoundedClipOutlineProvider(Dp(13));
         OneUiTheme.AttachRecoil(musicSpatialBadgePill, 0.94f);
         musicSpatialBadgeIcon = new OneUiIconView(this, OneUiIconType.Sparkles, Color.Argb(228, 252, 252, 255));
-        musicSpatialBadgeText = Label(S["PlayerBadgeSpatial"], 11f, Color.Argb(230, 252, 252, 255));
+        musicSpatialBadgeText = Label(S["PlayerBadgeSpatial"], 10.5f, Color.Argb(232, 252, 252, 255));
+        musicSpatialBadgeText.Gravity = GravityFlags.Center;
         musicSpatialBadgeText.SetIncludeFontPadding(false);
         musicSpatialBadgeText.SetSingleLine(true);
         musicSpatialBadgeText.Ellipsize = TextUtils.TruncateAt.End;
         musicSpatialBadgeText.SetTypeface(sfSemi, TypefaceStyle.Bold);
         musicSpatialBadgePill.AddView(musicSpatialBadgeIcon, new LinearLayout.LayoutParams(Dp(12), Dp(12)) { RightMargin = Dp(5) });
-        musicSpatialBadgePill.AddView(musicSpatialBadgeText);
+        musicSpatialBadgePill.AddView(musicSpatialBadgeText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.MatchParent));
         musicSpatialBadgePill.Click += (_, _) => ShowAudioSpecDialog();
 
         musicFormatSwitchRow = new LinearLayout(this) {
             Orientation = Orientation.Horizontal,
             BaselineAligned = false
         };
-        musicFormatSwitchRow.SetGravity(GravityFlags.CenterVertical);
-        musicFormatSwitchRow.SetPadding(Dp(3), Dp(3), Dp(3), Dp(3));
+        musicFormatSwitchRow.SetGravity(GravityFlags.Center);
+        musicFormatSwitchRow.SetPadding(Dp(2), Dp(2), Dp(2), Dp(2));
 
         musicFormatScrollView = new HorizontalScrollView(this) {
             HorizontalScrollBarEnabled = false,
-            OverScrollMode = OverScrollMode.Never
+            OverScrollMode = OverScrollMode.Never,
+            FillViewport = true
         };
         musicFormatScrollView.AddView(musicFormatSwitchRow, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.WrapContent,
-            ViewGroup.LayoutParams.WrapContent));
+            ViewGroup.LayoutParams.MatchParent) {
+            Gravity = GravityFlags.Center
+        });
 
         musicFormatPillContainer = new FrameLayout(this) {
-            Visibility = ViewStates.Gone
+            Visibility = ViewStates.Gone,
+            ClipToOutline = true,
+            OutlineProvider = new RoundedClipOutlineProvider(Dp(13))
         };
         musicFormatPillContainer.Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(36, 255, 255, 255), 99f, Color.Argb(44, 255, 255, 255), 0.8f);
         musicFormatPillContainer.AddView(musicFormatScrollView, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WrapContent,
-            ViewGroup.LayoutParams.WrapContent));
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.MatchParent) {
+            Gravity = GravityFlags.Center
+        });
 
         badgeFormatRow = HRow();
         badgeFormatRow.SetGravity(GravityFlags.Center);
-        badgeFormatRow.AddView(musicSpatialBadgePill, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(30)));
-        badgeFormatRow.AddView(musicFormatPillContainer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(30)) {
-            LeftMargin = Dp(8)
+        badgeFormatRow.AddView(musicSpatialBadgePill, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(26)));
+        badgeFormatRow.AddView(musicFormatPillContainer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, Dp(26)) {
+            LeftMargin = Dp(7)
         });
         musicNowPlayingSection.AddView(badgeFormatRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(2),
-            BottomMargin = Dp(10)
+            BottomMargin = Dp(8)
         });
 
         // 4. Unified One UI 9 + Apple Music Transport Row:
@@ -515,7 +515,7 @@ public partial class MainActivity {
         transportRow.AddView(musicSeekFwdBtn, new LinearLayout.LayoutParams(Dp(44), Dp(46)) { RightMargin = Dp(8) });
         transportRow.AddView(musicFwdBtn, new LinearLayout.LayoutParams(Dp(48), Dp(50)));
         musicNowPlayingSection.AddView(transportRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(10)
+            BottomMargin = Dp(8)
         });
 
         // 5. Apple Music Volume Row (SpeakerLow + slim Samsung relative-drag slider + SpeakerHigh)
@@ -589,7 +589,7 @@ public partial class MainActivity {
             BottomMargin = Dp(8)
         });
 
-        // 7. Apple Music 3-Icon Bottom Utility Bar ([ Letra / CC ] | [ Buscar Online / Legenda Online ] | [ Repetir ])
+        // 7. Integrated 4-Slot Bottom Utility Row: [ Letra / CC ] | [ Buscar Online ] | [ Repetir ] | [ + (Sala 3D & Nav Bar) ]
         LinearLayout bottomActionRow = HRow();
         musicBottomActionRow = bottomActionRow;
         bottomActionRow.SetGravity(GravityFlags.CenterVertical);
@@ -624,70 +624,77 @@ public partial class MainActivity {
         musicBottomLoopBtn.AddView(musicBottomLoopIcon, new FrameLayout.LayoutParams(Dp(21), Dp(21)) { Gravity = GravityFlags.Center });
         musicBottomLoopBtn.Click += (_, _) => ToggleLoopMode();
 
-        LinearLayout leftWrap = HRow(); leftWrap.SetGravity(GravityFlags.Center); leftWrap.AddView(musicBottomLeftBtn, new LinearLayout.LayoutParams(Dp(48), Dp(34)));
-        LinearLayout midWrap = HRow(); midWrap.SetGravity(GravityFlags.Center); midWrap.AddView(musicBottomOnlineBtn, new LinearLayout.LayoutParams(Dp(48), Dp(34)));
-        LinearLayout rightWrap = HRow(); rightWrap.SetGravity(GravityFlags.Center); rightWrap.AddView(musicBottomLoopBtn, new LinearLayout.LayoutParams(Dp(48), Dp(34)));
+        // Compact frosted '+' pill integrated directly on the right side of the utility row (1-click jump to Sala 3D + full nav bar)
+        musicBottomMoreBtn = new FrameLayout(this);
+        musicBottomMoreBtn.Background = OneUiTheme.CreateRoundedDrawable(
+            this, Color.Argb(54, 255, 255, 255), 999f, Color.Argb(84, 255, 255, 255), 1f);
+        OneUiTheme.AttachRecoil(musicBottomMoreBtn, 0.88f);
+        musicBottomMoreIcon = new OneUiIconView(this, OneUiIconType.Plus, Color.Argb(248, 252, 252, 255));
+        musicBottomMoreBtn.AddView(musicBottomMoreIcon, new FrameLayout.LayoutParams(Dp(18), Dp(18)) { Gravity = GravityFlags.Center });
 
-        bottomActionRow.AddView(leftWrap, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        bottomActionRow.AddView(midWrap, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        bottomActionRow.AddView(rightWrap, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        settingsUpdateDotCollapsed = new View(this) { Visibility = ViewStates.Gone };
+        settingsUpdateDotCollapsed.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.UpdateGreen, 99f);
+        musicBottomMoreBtn.AddView(settingsUpdateDotCollapsed, new FrameLayout.LayoutParams(Dp(6), Dp(6)) {
+            Gravity = GravityFlags.Top | GravityFlags.End,
+            TopMargin = Dp(4),
+            RightMargin = Dp(7)
+        });
+        musicBottomMoreBtn.Click += (_, _) => SwitchTab(1);
+
+        LinearLayout slot1 = HRow(); slot1.SetGravity(GravityFlags.Center); slot1.AddView(musicBottomLeftBtn, new LinearLayout.LayoutParams(Dp(46), Dp(34)));
+        LinearLayout slot2 = HRow(); slot2.SetGravity(GravityFlags.Center); slot2.AddView(musicBottomOnlineBtn, new LinearLayout.LayoutParams(Dp(46), Dp(34)));
+        LinearLayout slot3 = HRow(); slot3.SetGravity(GravityFlags.Center); slot3.AddView(musicBottomLoopBtn, new LinearLayout.LayoutParams(Dp(46), Dp(34)));
+        LinearLayout slot4 = HRow(); slot4.SetGravity(GravityFlags.Center); slot4.AddView(musicBottomMoreBtn, new LinearLayout.LayoutParams(Dp(48), Dp(34)));
+
+        bottomActionRow.AddView(slot1, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        bottomActionRow.AddView(slot2, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        bottomActionRow.AddView(slot3, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        bottomActionRow.AddView(slot4, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         musicNowPlayingSection.AddView(bottomActionRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
-        page.AddView(musicNowPlayingSection, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        page.AddView(musicNowPlayingSection, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
 
         // ============================================================
-        // SECTION B: IN-APP LIBRARY (Samsung Music + Poweramp Style)
+        // SECTION B: IN-APP LIBRARY (Internally Scrollable, Full Nav Bar Visible)
         // ============================================================
         musicLibrarySection = BuildInAppLibrarySection(sfBold, sfSemi, sfReg);
-        musicLibrarySection.Visibility = ViewStates.Gone;
-        page.AddView(musicLibrarySection, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        musicLibraryScrollView = new ScrollView(this) {
+            FillViewport = true,
+            VerticalScrollBarEnabled = false,
+            OverScrollMode = OverScrollMode.Never,
+            Visibility = ViewStates.Gone
+        };
+        musicLibraryScrollView.SetClipToPadding(false);
+        musicLibraryScrollView.SetPadding(0, 0, 0, Dp(106));
+        musicLibraryScrollView.ScrollChange += (_, _) => navFrostedHost?.RefreshBlur();
+        musicLibraryScrollView.AddView(musicLibrarySection, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.WrapContent));
+        page.AddView(musicLibraryScrollView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
 
-        page.LayoutChange += (_, _) => ApplyIntelligentPlayTabLayout();
+        page.LayoutChange += (_, _) => UpdatePlayTabSpacingForViewport();
 
         UpdateSectionSwitcherStyle();
         RefreshMusicPlayerUi();
         return page;
     }
 
-    void ApplyIntelligentPlayTabLayout() {
-        if (musicTabRootPage == null || musicArtworkView == null || musicLyricsContainer == null) {
+    void UpdatePlayTabSpacingForViewport() {
+        if (musicTabRootPage == null || musicNowPlayingSection == null) {
             return;
         }
-        int vpH = (musicTabRootPage.Parent as View)?.Height ?? 0;
-        int vpW = (musicTabRootPage.Parent as View)?.Width ?? 0;
-        if (vpH <= 0 || vpW <= 0 || Math.Abs(vpH - lastMusicViewportHeightPx) < Dp(8)) {
+        int vpH = musicTabRootPage.Height;
+        if (vpH <= 0 || Math.Abs(vpH - lastMusicViewportHeightPx) < Dp(8)) {
             return;
         }
         lastMusicViewportHeightPx = vpH;
 
         float density = Math.Max(1f, Resources?.DisplayMetrics?.Density ?? 3f);
         int availHDp = (int)(vpH / density);
-        int availWDp = (int)(vpW / density);
 
-        // Controls chrome height excluding artwork stage & flexible margins (~382dp with compact bottom pill)
-        int freeStageAndMarginDp = Math.Max(220, availHDp - 382);
-        int maxSquareW = Math.Max(196, availWDp - 44);
-        int targetArtDp = Math.Clamp((int)(freeStageAndMarginDp * 0.78f), 196, Math.Min(334, maxSquareW));
-        int extraMarginDp = Math.Clamp((freeStageAndMarginDp - targetArtDp) / 5, 6, 15);
-
-        if (musicArtworkView.PreferredSizeDp != targetArtDp) {
-            musicArtworkView.PreferredSizeDp = targetArtDp;
-            musicArtworkView.RequestLayout();
-        }
-        if (musicLyricsContainer.LayoutParameters is FrameLayout.LayoutParams lyrLp) {
-            int lyrH = Dp(Math.Clamp(targetArtDp + 54, 240, 392));
-            if (lyrLp.Height != lyrH) {
-                lyrLp.Height = lyrH;
-                musicLyricsContainer.LayoutParameters = lyrLp;
-            }
-        }
-        if (musicVideoSlot?.LayoutParameters is FrameLayout.LayoutParams vidLp) {
-            int vidH = Dp(Math.Clamp(targetArtDp - 14, 180, 260));
-            if (vidLp.Height != vidH) {
-                vidLp.Height = vidH;
-                musicVideoSlot.LayoutParameters = vidLp;
-            }
-        }
+        // Adaptive breathing room scaled cleanly to viewport height while mediaStageFrame (weight=1f) guarantees 0px scroll
+        int gapDp = availHDp < 610 ? 4 : (availHDp < 690 ? 6 : (availHDp < 780 ? 8 : 11));
+        int stageGapDp = availHDp < 610 ? 5 : (availHDp < 690 ? 7 : 10);
 
         void SetBottomMarginDp(View v, int dpVal) {
             if (v?.LayoutParameters is LinearLayout.LayoutParams lp && lp.BottomMargin != Dp(dpVal)) {
@@ -696,12 +703,12 @@ public partial class MainActivity {
             }
         }
 
-        SetBottomMarginDp(mediaStageFrame, extraMarginDp);
-        SetBottomMarginDp(musicTitleRow, Math.Max(6, extraMarginDp - 1));
-        SetBottomMarginDp(badgeFormatRow, extraMarginDp);
-        SetBottomMarginDp(musicTransportRow, extraMarginDp);
-        SetBottomMarginDp(musicVolRow, Math.Max(6, extraMarginDp - 1));
-        SetBottomMarginDp(musicSpatialToggleRow, Math.Max(6, extraMarginDp - 2));
+        SetBottomMarginDp(mediaStageFrame, stageGapDp);
+        SetBottomMarginDp(musicTitleRow, Math.Max(4, gapDp - 1));
+        SetBottomMarginDp(badgeFormatRow, gapDp);
+        SetBottomMarginDp(musicTransportRow, gapDp);
+        SetBottomMarginDp(musicVolRow, Math.Max(4, gapDp - 1));
+        SetBottomMarginDp(musicSpatialToggleRow, Math.Max(4, gapDp - 1));
     }
 
     (LinearLayout pill, OneUiIconView ico, TextView txt) MakeCompactSpatialPill(
@@ -723,9 +730,6 @@ public partial class MainActivity {
         pill.Click += (_, _) => onClick?.Invoke();
         return (pill, ico, tv);
     }
-
-    FrameLayout MakeAppleCircleOverflowBtn(Action onClick) =>
-        MakeAppleCircleIconBtn(OneUiIconType.MoreHorizontal, onClick);
 
     FrameLayout MakeAppleCircleIconBtn(OneUiIconType iconType, Action onClick) {
         FrameLayout btn = new(this);
@@ -840,24 +844,31 @@ public partial class MainActivity {
         if (openLibrary && isFormatPillExpanded) {
             SetFormatPillExpanded(false, animate: false);
         }
-        musicTabRootPage?.SetPadding(Dp(20), Dp(6), Dp(20), Dp(openLibrary ? 112 : 66));
+        musicTabRootPage?.SetPadding(Dp(20), Dp(6), Dp(20), Dp(openLibrary ? 0 : 10));
         UpdateSectionSwitcherStyle();
 
-        if (musicNowPlayingSection != null && musicLibrarySection != null) {
-            View entering = openLibrary ? musicLibrarySection : musicNowPlayingSection;
-            View leaving = openLibrary ? musicNowPlayingSection : musicLibrarySection;
+        // Show full bottom nav bar when browsing Library; hide it on Now Playing (integrated '+' pill handles navigation)
+        if (activeTab == 0) {
+            SetBottomNavBarVisible(openLibrary, animate: true);
+        }
+
+        if (musicNowPlayingSection != null && musicLibraryScrollView != null) {
+            View entering = openLibrary ? (View)musicLibraryScrollView : musicNowPlayingSection;
+            View leaving = openLibrary ? (View)musicNowPlayingSection : musicLibraryScrollView;
 
             leaving.Animate()?.Cancel();
             leaving.Visibility = ViewStates.Gone;
+            leaving.Alpha = 1f;
+            leaving.TranslationX = 0f;
 
             entering.Visibility = ViewStates.Visible;
             entering.Alpha = 0f;
-            entering.TranslationX = openLibrary ? Dp(16) : -Dp(16);
+            entering.TranslationX = openLibrary ? Dp(18) : -Dp(18);
             entering.Animate()
                 .Alpha(1f)
                 .TranslationX(0f)
-                .SetDuration(200)
-                .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.6f))
+                .SetDuration(260)
+                .SetInterpolator(CreateOneUiEase())
                 .Start();
         }
 
@@ -901,6 +912,10 @@ public partial class MainActivity {
         PlayerStageMode prevMode = musicStageMode;
         musicStageMode = mode;
 
+        if (mode == PlayerStageMode.Lyrics && isFormatPillExpanded) {
+            SetFormatPillExpanded(false, animate: false);
+        }
+
         bool canAnimateCoverLyrics = animate &&
             prevMode != mode &&
             musicArtworkSlot != null &&
@@ -911,7 +926,6 @@ public partial class MainActivity {
         int myAnimGen = ++stageAnimGen;
         musicArtworkSlot?.Animate()?.Cancel();
         musicLyricsContainer?.Animate()?.Cancel();
-        musicTitleRow?.Animate()?.Cancel();
 
         if (musicVideoSlot != null) {
             musicVideoSlot.Visibility = mode == PlayerStageMode.Video ? ViewStates.Visible : ViewStates.Gone;
@@ -920,6 +934,40 @@ public partial class MainActivity {
             } else {
                 musicVideoStage?.PauseVideoDecoderOnly();
             }
+        }
+
+        // Simplified Lyrics Mode: hide non-essential rows so Lyrics expands smoothly across the entire viewport
+        ViewStates chromeVis = mode == PlayerStageMode.Lyrics ? ViewStates.Gone : ViewStates.Visible;
+        if (canAnimateCoverLyrics && musicNowPlayingSection != null) {
+            try {
+                Android.Transitions.TransitionSet ts = new();
+                ts.SetOrdering(Android.Transitions.TransitionOrdering.Together);
+                Android.Transitions.ChangeBounds cb = new();
+                cb.SetDuration(340);
+                Android.Transitions.Fade fd = new();
+                fd.SetDuration(220);
+                ts.AddTransition(cb);
+                ts.AddTransition(fd);
+                ts.SetInterpolator(CreateOneUiEase());
+                Android.Transitions.TransitionManager.BeginDelayedTransition(musicNowPlayingSection, ts);
+            } catch { }
+        }
+
+        if (musicTitleRow != null) {
+            musicTitleRow.Visibility = chromeVis;
+            musicTitleRow.Alpha = 1f;
+        }
+        if (badgeFormatRow != null) {
+            badgeFormatRow.Visibility = chromeVis;
+            badgeFormatRow.Alpha = 1f;
+        }
+        if (musicVolRow != null) {
+            musicVolRow.Visibility = chromeVis;
+            musicVolRow.Alpha = 1f;
+        }
+        if (musicSpatialToggleRow != null) {
+            musicSpatialToggleRow.Visibility = chromeVis;
+            musicSpatialToggleRow.Alpha = 1f;
         }
 
         if (canAnimateCoverLyrics) {
@@ -934,11 +982,11 @@ public partial class MainActivity {
             outgoing.Visibility = ViewStates.Visible;
             outgoing.Animate()
                 .Alpha(0f)
-                .ScaleX(0.94f)
-                .ScaleY(0.94f)
-                .TranslationY(toLyrics ? -Dp(10) : Dp(10))
-                .SetDuration(165)
-                .SetInterpolator(new Android.Views.Animations.AccelerateInterpolator(1.3f))
+                .ScaleX(0.95f)
+                .ScaleY(0.95f)
+                .TranslationY(toLyrics ? -Dp(12) : Dp(12))
+                .SetDuration(190)
+                .SetInterpolator(CreateOneUiEase())
                 .WithEndAction(new Java.Lang.Runnable(() => {
                     if (uiDestroyed || myAnimGen != stageAnimGen) return;
                     outgoing.Visibility = ViewStates.Gone;
@@ -951,41 +999,18 @@ public partial class MainActivity {
 
             incoming.Visibility = ViewStates.Visible;
             incoming.Alpha = 0f;
-            incoming.ScaleX = 0.95f;
-            incoming.ScaleY = 0.95f;
-            incoming.TranslationY = toLyrics ? Dp(14) : -Dp(14);
+            incoming.ScaleX = 0.96f;
+            incoming.ScaleY = 0.96f;
+            incoming.TranslationY = toLyrics ? Dp(16) : -Dp(16);
             incoming.Animate()
                 .Alpha(1f)
                 .ScaleX(1f)
                 .ScaleY(1f)
                 .TranslationY(0f)
-                .SetStartDelay(55)
-                .SetDuration(260)
-                .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.7f))
+                .SetStartDelay(45)
+                .SetDuration(320)
+                .SetInterpolator(new Android.Views.Animations.PathInterpolator(0.16f, 1f, 0.3f, 1f))
                 .Start();
-
-            if (musicTitleRow != null) {
-                if (toLyrics) {
-                    musicTitleRow.Animate()
-                        .Alpha(0f)
-                        .SetDuration(140)
-                        .WithEndAction(new Java.Lang.Runnable(() => {
-                            if (uiDestroyed || myAnimGen != stageAnimGen) return;
-                            musicTitleRow.Visibility = ViewStates.Gone;
-                            musicTitleRow.Alpha = 1f;
-                        }))
-                        .Start();
-                } else {
-                    musicTitleRow.Visibility = ViewStates.Visible;
-                    musicTitleRow.Alpha = 0f;
-                    musicTitleRow.Animate()
-                        .Alpha(1f)
-                        .SetStartDelay(65)
-                        .SetDuration(220)
-                        .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.5f))
-                        .Start();
-                }
-            }
         } else {
             if (musicArtworkSlot != null) {
                 musicArtworkSlot.Visibility = mode == PlayerStageMode.Cover ? ViewStates.Visible : ViewStates.Gone;
@@ -1003,10 +1028,6 @@ public partial class MainActivity {
                 if (mode == PlayerStageMode.Lyrics) {
                     musicLyricsView?.UpdatePlayback(playerEngine?.CurrentSeconds ?? 0, playerEngine?.IsPlaying == true);
                 }
-            }
-            if (musicTitleRow != null) {
-                musicTitleRow.Visibility = mode == PlayerStageMode.Lyrics ? ViewStates.Gone : ViewStates.Visible;
-                musicTitleRow.Alpha = 1f;
             }
         }
 
@@ -1101,7 +1122,6 @@ public partial class MainActivity {
             if (musicLyricsHeaderSub != null) musicLyricsHeaderSub.Text = S["ModeLyrics"];
             badgeStr = S["PlayerBadgeSpatial"];
             musicSpatialBadgeText.Text = badgeStr;
-            musicTrackBtn.Visibility = ViewStates.Gone;
             musicWaveSeekBar?.SetThemeByColor(OneUiTheme.Tertiary);
         } else {
             string title = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
@@ -1137,14 +1157,6 @@ public partial class MainActivity {
                 badgeStr = $"{badgeStr} • {activeLibraryQueueIndex + 1}/{activeLibraryQueue.Count}";
             }
             musicSpatialBadgeText.Text = badgeStr;
-
-            if (LoadedFile.Tracks.Count > 1) {
-                int idx = Math.Max(0, LoadedFile.Tracks.ToList().IndexOf(selectedTrack));
-                musicTrackBtnText.Text = $"{idx + 1}/{LoadedFile.Tracks.Count}";
-                musicTrackBtn.Visibility = ViewStates.Visible;
-            } else {
-                musicTrackBtn.Visibility = ViewStates.Gone;
-            }
 
             bool hasArt = currentMediaMeta?.HasEmbeddedArtwork == true;
             Color sliderTone = hasArt ? accent : OneUiTheme.Tertiary;
@@ -1223,14 +1235,15 @@ public partial class MainActivity {
         }
     }
 
-    void RebuildFormatPillChips() {
+    void RebuildFormatPillChips(bool? forceExpandedChips = null) {
         if (musicFormatSwitchRow == null || currentTrackVariants.Count <= 1 || LoadedFile == null) {
             return;
         }
+        bool showExpanded = forceExpandedChips ?? isFormatPillExpanded;
+        isFormatPillShowingExpandedChips = showExpanded;
         musicFormatSwitchRow.RemoveAllViews();
         string curPath = currentMediaMeta?.SourceMediaPath ?? LoadedFile.Path ?? "";
         Typeface sfBold = OneUiTheme.GetAppleFontBold(this);
-        Typeface sfSemi = OneUiTheme.GetAppleFontSemibold(this);
 
         int activeIdx = 0;
         for (int i = 0; i < currentTrackVariants.Count; i++) {
@@ -1242,44 +1255,51 @@ public partial class MainActivity {
             }
         }
 
-        if (!isFormatPillExpanded) {
-            // Compact collapsed pill: [ Active Format ] +N
+        if (!showExpanded) {
+            // Compact collapsed pill (26dp total height; chips fill exact 22dp inner height for mathematical centering)
             LibraryTrackItem activeVar = currentTrackVariants[activeIdx];
             string activeLabel = MediaLibraryService.GetDistinctVariantLabel(activeVar, currentTrackVariants);
 
             TextView activeChip = new(this) {
                 Text = activeLabel,
-                TextSize = 10.5f,
+                TextSize = 10f,
                 Gravity = GravityFlags.Center
             };
             activeChip.SetTypeface(sfBold, TypefaceStyle.Bold);
             activeChip.SetIncludeFontPadding(false);
             activeChip.SetSingleLine(true);
-            activeChip.SetPadding(Dp(9), Dp(3), Dp(9), Dp(3));
+            activeChip.SetPadding(Dp(8), 0, Dp(8), 0);
             activeChip.SetTextColor(Color.Rgb(18, 20, 26));
-            activeChip.Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(238, 252, 252, 255), 99f);
+            activeChip.Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(240, 252, 252, 255), 99f);
 
             TextView moreCountTv = new(this) {
                 Text = $"+{currentTrackVariants.Count - 1}",
-                TextSize = 10f,
+                TextSize = 9.8f,
                 Gravity = GravityFlags.Center
             };
             moreCountTv.SetTypeface(sfBold, TypefaceStyle.Bold);
             moreCountTv.SetIncludeFontPadding(false);
             moreCountTv.SetSingleLine(true);
-            moreCountTv.SetPadding(Dp(6), Dp(3), Dp(7), Dp(3));
+            moreCountTv.SetPadding(Dp(5), 0, Dp(6), 0);
             moreCountTv.SetTextColor(Color.Argb(232, 245, 248, 255));
 
-            musicFormatSwitchRow.AddView(activeChip);
-            musicFormatSwitchRow.AddView(moreCountTv);
+            musicFormatSwitchRow.AddView(activeChip, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.MatchParent));
+            musicFormatSwitchRow.AddView(moreCountTv, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.MatchParent));
 
             void ExpandHandler(object s, EventArgs e) => SetFormatPillExpanded(true, animate: true);
             activeChip.Click += ExpandHandler;
             moreCountTv.Click += ExpandHandler;
+
+            musicFormatSwitchRow.Measure(
+                View.MeasureSpec.MakeMeasureSpec(0, MeasureSpecMode.Unspecified),
+                View.MeasureSpec.MakeMeasureSpec(Dp(26), MeasureSpecMode.Exactly));
+            formatCollapsedWidthPx = Math.Max(Dp(54), musicFormatSwitchRow.MeasuredWidth);
             return;
         }
 
-        // Expanded mode: show all variants preserving active variant's true relative index (left items stay left, right items stay right)
+        // Expanded mode: show all variants preserving active variant's relative index + 3 bespoke category vector logos
         bool hasMultipleCategories = currentTrackVariants
             .Select(AudioQualityAnalyzer.ClassifyCategory)
             .Distinct()
@@ -1295,35 +1315,33 @@ public partial class MainActivity {
             if (hasMultipleCategories && lastCategory != cat) {
                 if (lastCategory.HasValue) {
                     View divider = new(this) {
-                        Background = new Android.Graphics.Drawables.ColorDrawable(Color.Argb(54, 255, 255, 255))
+                        Background = new Android.Graphics.Drawables.ColorDrawable(Color.Argb(54, 255, 255, 255)),
+                        Tag = "extra"
                     };
-                    musicFormatSwitchRow.AddView(divider, new LinearLayout.LayoutParams(Dp(1), Dp(14)) {
+                    musicFormatSwitchRow.AddView(divider, new LinearLayout.LayoutParams(Dp(1), Dp(12)) {
+                        Gravity = GravityFlags.CenterVertical,
                         LeftMargin = Dp(4),
-                        RightMargin = Dp(4)
+                        RightMargin = Dp(3)
                     });
                 }
-                string microCode = cat switch {
-                    AudioTierCategory.Atmos => "3D",
-                    AudioTierCategory.Surround => "SUR",
-                    _ => "2.0"
+
+                OneUiIconType logoIcon = cat switch {
+                    AudioTierCategory.Atmos => OneUiIconType.AudioLogoAtmos,
+                    AudioTierCategory.Surround => OneUiIconType.AudioLogoSurround,
+                    _ => OneUiIconType.AudioLogoStereo
                 };
-                Color microColor = cat switch {
+                Color logoColor = cat switch {
                     AudioTierCategory.Atmos => OneUiTheme.PrimaryHigh,
                     AudioTierCategory.Surround => OneUiTheme.PeachText,
-                    _ => Color.Argb(182, 224, 228, 238)
+                    _ => Color.Argb(204, 232, 236, 245)
                 };
-                TextView microTag = new(this) {
-                    Text = microCode,
-                    TextSize = 8f,
-                    Gravity = GravityFlags.Center
+                OneUiIconView catLogo = new(this, logoIcon, logoColor) {
+                    Tag = "extra"
                 };
-                microTag.SetTypeface(sfSemi, TypefaceStyle.Bold);
-                microTag.SetIncludeFontPadding(false);
-                microTag.SetSingleLine(true);
-                microTag.SetTextColor(microColor);
-                microTag.SetPadding(Dp(4), Dp(1), Dp(3), Dp(1));
-                musicFormatSwitchRow.AddView(microTag, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
-                    RightMargin = Dp(2)
+                musicFormatSwitchRow.AddView(catLogo, new LinearLayout.LayoutParams(Dp(14), Dp(14)) {
+                    Gravity = GravityFlags.CenterVertical,
+                    LeftMargin = Dp(4),
+                    RightMargin = Dp(3)
                 });
                 lastCategory = cat;
             }
@@ -1333,21 +1351,22 @@ public partial class MainActivity {
 
             TextView chip = new(this) {
                 Text = lbl,
-                TextSize = 10.5f,
-                Gravity = GravityFlags.Center
+                TextSize = 10f,
+                Gravity = GravityFlags.Center,
+                Tag = isActive ? "active" : "extra"
             };
             chip.SetTypeface(sfBold, TypefaceStyle.Bold);
             chip.SetIncludeFontPadding(false);
             chip.SetSingleLine(true);
-            chip.SetPadding(Dp(9), Dp(3), Dp(9), Dp(3));
+            chip.SetPadding(Dp(8), 0, Dp(8), 0);
             Color inactiveFg = cat switch {
                 AudioTierCategory.Atmos => OneUiTheme.PrimaryHigh,
                 AudioTierCategory.Surround => OneUiTheme.PeachText,
-                _ => Color.Argb(222, 240, 242, 248)
+                _ => Color.Argb(224, 240, 242, 248)
             };
             chip.SetTextColor(isActive ? Color.Rgb(18, 20, 26) : inactiveFg);
             chip.Background = isActive
-                ? OneUiTheme.CreateRoundedDrawable(this, Color.Argb(238, 252, 252, 255), 99f)
+                ? OneUiTheme.CreateRoundedDrawable(this, Color.Argb(240, 252, 252, 255), 99f)
                 : null;
             OneUiTheme.AttachRecoil(chip, 0.92f);
 
@@ -1359,13 +1378,20 @@ public partial class MainActivity {
                     SwitchActiveTrackVariant(capturedVar, currentTrackVariants);
                 }
             };
-            musicFormatSwitchRow.AddView(chip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
+            musicFormatSwitchRow.AddView(chip, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WrapContent,
+                ViewGroup.LayoutParams.MatchParent) {
                 RightMargin = i < currentTrackVariants.Count - 1 ? Dp(2) : 0
             });
             if (isActive) {
                 activeChipView = chip;
             }
         }
+
+        musicFormatSwitchRow.Measure(
+            View.MeasureSpec.MakeMeasureSpec(0, MeasureSpecMode.Unspecified),
+            View.MeasureSpec.MakeMeasureSpec(Dp(26), MeasureSpecMode.Exactly));
+        formatExpandedWidthPx = Math.Max(formatCollapsedWidthPx, musicFormatSwitchRow.MeasuredWidth);
 
         if (activeChipView != null) {
             musicFormatScrollView?.Post(() => {
@@ -1381,29 +1407,48 @@ public partial class MainActivity {
             isFormatPillExpanded = false;
             return;
         }
-        bool changed = isFormatPillExpanded != expanded;
+        bool wasExpanded = isFormatPillExpanded;
         isFormatPillExpanded = expanded;
         formatPillAnimator?.Cancel();
 
-        if (changed) {
-            RebuildFormatPillChips();
-        }
-
         float target = expanded ? 1f : 0f;
-        if (!animate) {
+        if (!animate || currentTrackVariants.Count <= 1) {
+            RebuildFormatPillChips(forceExpandedChips: expanded);
             formatExpandFraction = target;
             ApplyFormatPillExpandFraction(target);
             return;
         }
 
+        if (expanded) {
+            // Capture exact collapsed width before swapping to expanded chips so the pill morphs from collapsedW -> expandedW with zero jump
+            if (!isFormatPillShowingExpandedChips && musicFormatPillContainer.Width > Dp(40)) {
+                formatCollapsedWidthPx = musicFormatPillContainer.Width;
+            }
+            RebuildFormatPillChips(forceExpandedChips: true);
+        } else if (!wasExpanded && !isFormatPillShowingExpandedChips) {
+            RebuildFormatPillChips(forceExpandedChips: false);
+            formatExpandFraction = 0f;
+            ApplyFormatPillExpandFraction(0f);
+            return;
+        }
+
         float startF = formatExpandFraction;
+        bool targetExpanded = expanded;
         formatPillAnimator = ValueAnimator.OfFloat(startF, target);
-        formatPillAnimator.SetDuration(280);
-        formatPillAnimator.SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.75f));
+        formatPillAnimator.SetDuration(expanded ? 320 : 280);
+        formatPillAnimator.SetInterpolator(CreateOneUiEase());
         formatPillAnimator.Update += (_, e) => {
             float f = (float)(e.Animation?.AnimatedValue ?? target);
             formatExpandFraction = f;
             ApplyFormatPillExpandFraction(f);
+        };
+        formatPillAnimator.AnimationEnd += (_, _) => {
+            if (uiDestroyed) return;
+            if (!targetExpanded && !isFormatPillExpanded) {
+                RebuildFormatPillChips(forceExpandedChips: false);
+                formatExpandFraction = 0f;
+                ApplyFormatPillExpandFraction(0f);
+            }
         };
         formatPillAnimator.Start();
     }
@@ -1414,41 +1459,25 @@ public partial class MainActivity {
         }
         f = Math.Clamp(f, 0f, 1f);
 
-        // Measure full natural width of badge text once for proportional contraction
+        // Measure natural full width of spatial badge text
         string txt = musicSpatialBadgeText.Text ?? "";
-        int measuredTextW = Math.Max(Dp(24), (int)Math.Ceiling(musicSpatialBadgeText.Paint.MeasureText(txt)) + Dp(4));
+        int measuredTextW = Math.Max(Dp(20), (int)Math.Ceiling(musicSpatialBadgeText.Paint.MeasureText(txt)) + Dp(4));
         spatialBadgeFullTextWidthPx = measuredTextW;
 
         int rowW = badgeFormatRow?.Width > 0
             ? badgeFormatRow.Width
             : Math.Max(Dp(280), (Resources?.DisplayMetrics?.WidthPixels ?? 1080) - Dp(40));
 
-        // Measure desired width of the format pill content
-        musicFormatSwitchRow?.Measure(
-            View.MeasureSpec.MakeMeasureSpec(0, MeasureSpecMode.Unspecified),
-            View.MeasureSpec.MakeMeasureSpec(Dp(30), MeasureSpecMode.AtMost));
-        int desiredFormatW = musicFormatSwitchRow?.MeasuredWidth ?? Dp(90);
+        int floorSpatialW = Dp(26); // Guaranteed 26dp x 26dp circular icon floor
+        int fullSpatialW = Dp(18) + Dp(12) + Dp(5) + spatialBadgeFullTextWidthPx;
+        int gapPx = musicFormatPillContainer?.Visibility == ViewStates.Visible ? Dp(7) : 0;
 
-        int floorSpatialW = Dp(30); // Guaranteed 30dp x 30dp circular icon floor (never vanishes!)
-        int fullSpatialW = Dp(20) + Dp(12) + Dp(5) + spatialBadgeFullTextWidthPx;
-        int gapPx = musicFormatPillContainer?.Visibility == ViewStates.Visible ? Dp(8) : 0;
-
-        // Compute how much contraction is needed so the expanded pill fits cleanly alongside the badge
-        int availableForSpatialAtFullExpand = Math.Max(floorSpatialW, rowW - gapPx - desiredFormatW);
-        int targetExpandedSpatialW = Math.Clamp(availableForSpatialAtFullExpand, floorSpatialW, fullSpatialW);
-
-        // Interpolate badge width proportionally in lockstep with format expansion
-        int curSpatialW = (int)Math.Round(fullSpatialW + (targetExpandedSpatialW - fullSpatialW) * f);
-        float shrinkProgress = fullSpatialW > floorSpatialW
-            ? Math.Clamp((fullSpatialW - curSpatialW) / (float)(fullSpatialW - floorSpatialW), 0f, 1f)
-            : 0f;
-
-        if (f <= 0.001f || musicFormatPillContainer?.Visibility != ViewStates.Visible) {
+        if ((f <= 0.001f && !isFormatPillShowingExpandedChips) || musicFormatPillContainer?.Visibility != ViewStates.Visible) {
             if (musicSpatialBadgePill.LayoutParameters is LinearLayout.LayoutParams spLp0) {
                 spLp0.Width = ViewGroup.LayoutParams.WrapContent;
                 musicSpatialBadgePill.LayoutParameters = spLp0;
             }
-            musicSpatialBadgePill.SetPadding(Dp(10), Dp(3), Dp(10), Dp(3));
+            musicSpatialBadgePill.SetPadding(Dp(9), 0, Dp(9), 0);
             if (musicSpatialBadgeIcon.LayoutParameters is LinearLayout.LayoutParams icoLp0) {
                 icoLp0.RightMargin = Dp(5);
                 musicSpatialBadgeIcon.LayoutParameters = icoLp0;
@@ -1467,8 +1496,20 @@ public partial class MainActivity {
             return;
         }
 
-        // Smooth proportional contraction down to circular 30dp icon floor
-        int padH = (int)Math.Round(Dp(10) * (1f - shrinkProgress));
+        // Smooth clipped width interpolation for the format pill (collapsedW -> targetExpandedFormatW)
+        int maxExpandedFormatW = Math.Max(Dp(72), rowW - gapPx - floorSpatialW);
+        int targetExpandedFormatW = Math.Min(Math.Max(formatExpandedWidthPx, Dp(72)), maxExpandedFormatW);
+        int startCollapsedFormatW = Math.Clamp(formatCollapsedWidthPx > 0 ? formatCollapsedWidthPx : Dp(68), Dp(52), targetExpandedFormatW);
+        int curFormatW = (int)Math.Round(startCollapsedFormatW + (targetExpandedFormatW - startCollapsedFormatW) * f);
+
+        // Spatial badge contracts only as much as needed to make room, smoothly down to the 26dp circular icon floor
+        int availableSpatialW = Math.Max(floorSpatialW, rowW - gapPx - curFormatW);
+        int curSpatialW = Math.Clamp(availableSpatialW, floorSpatialW, fullSpatialW);
+        float shrinkProgress = fullSpatialW > floorSpatialW
+            ? Math.Clamp((fullSpatialW - curSpatialW) / (float)(fullSpatialW - floorSpatialW), 0f, 1f)
+            : 0f;
+
+        int padH = (int)Math.Round(Dp(9) * (1f - shrinkProgress));
         int icoRight = (int)Math.Round(Dp(5) * (1f - shrinkProgress));
         int textAreaW = Math.Max(0, curSpatialW - (padH * 2) - Dp(12) - icoRight);
 
@@ -1476,7 +1517,7 @@ public partial class MainActivity {
             spLp.Width = Math.Max(floorSpatialW, curSpatialW);
             musicSpatialBadgePill.LayoutParameters = spLp;
         }
-        musicSpatialBadgePill.SetPadding(padH, Dp(3), padH, Dp(3));
+        musicSpatialBadgePill.SetPadding(padH, 0, padH, 0);
         if (musicSpatialBadgeIcon.LayoutParameters is LinearLayout.LayoutParams icoLp) {
             icoLp.RightMargin = icoRight;
             musicSpatialBadgeIcon.LayoutParameters = icoLp;
@@ -1494,9 +1535,19 @@ public partial class MainActivity {
         }
 
         if (musicFormatPillContainer?.LayoutParameters is LinearLayout.LayoutParams fmtLp) {
-            int maxFmtW = Math.Max(Dp(72), rowW - gapPx - Math.Max(floorSpatialW, curSpatialW));
-            fmtLp.Width = Math.Min(desiredFormatW, maxFmtW);
+            fmtLp.Width = curFormatW;
             musicFormatPillContainer.LayoutParameters = fmtLp;
+        }
+
+        // Cross-fade secondary variants & category logos smoothly while keeping the active variant anchored at full opacity
+        if (musicFormatSwitchRow != null && isFormatPillShowingExpandedChips) {
+            float extraAlpha = Math.Clamp((f - 0.10f) / 0.75f, 0f, 1f);
+            for (int i = 0; i < musicFormatSwitchRow.ChildCount; i++) {
+                View child = musicFormatSwitchRow.GetChildAt(i);
+                if (child != null && string.Equals(child.Tag?.ToString(), "extra", StringComparison.Ordinal)) {
+                    child.Alpha = extraAlpha;
+                }
+            }
         }
     }
 
@@ -1513,7 +1564,7 @@ public partial class MainActivity {
         Typeface sfBold = OneUiTheme.GetAppleFontBold(this);
         Typeface sfSemi = OneUiTheme.GetAppleFontSemibold(this);
 
-        // 1. Primary Format & Spatial Engine Summary Card
+        // 1. Primary Format & Spatial Engine Summary Card (read-only binaural engine line, no redundant profile button)
         LinearLayout specCard = new(this) { Orientation = Orientation.Vertical };
         specCard.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 16f, OneUiTheme.BorderSubtle, 1f);
         specCard.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
@@ -1529,8 +1580,11 @@ public partial class MainActivity {
             : $"{beds} ch • {playerEngine?.OutputSampleRate ?? 48000} Hz";
         TextView spatialTv = Label(spatialLine, 12f, OneUiTheme.PrimaryHigh);
         spatialTv.SetTypeface(sfSemi, TypefaceStyle.Bold);
-        spatialTv.SetPadding(0, Dp(2), 0, Dp(6));
+        spatialTv.SetPadding(0, Dp(2), 0, Dp(4));
         specCard.AddView(spatialTv);
+
+        TextView binLineTv = Label($"• {S["BinauralProfileActive"]}: {BinauralProfileService.GetActiveDisplayTitle(store, S)}", 11.5f, OneUiTheme.TextSecondary);
+        specCard.AddView(binLineTv);
 
         foreach (var d in active.Details.Take(6)) {
             TextView dTv = Label($"• {d.property}: {d.value}", 11.5f, OneUiTheme.TextSecondary);
@@ -1602,19 +1656,10 @@ public partial class MainActivity {
         }
 
         box.AddView(qualCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
-
-        // 3. Active Binaural Profile Quick Row
-        Button binauralBtn = PillButton($"{S["BinauralProfileActive"]}: {BinauralProfileService.GetActiveDisplayTitle(store, S)}", () => {
-            dlg?.Dismiss();
-            ShowBinauralProfileSelectorDialog();
-        });
-        box.AddView(binauralBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = LoadedFile.Tracks.Count > 1 ? Dp(10) : 0
         });
 
-        // 4. Audio Streams Selector (only if container holds multiple audio tracks)
+        // 3. Audio Streams Selector (only if container holds multiple audio tracks)
         if (LoadedFile.Tracks.Count > 1) {
             TextView stHdr = Label(S["AudioStreamsSection"], 12.5f, ColText);
             stHdr.SetTypeface(sfBold, TypefaceStyle.Bold);
@@ -1665,11 +1710,14 @@ public partial class MainActivity {
 
         musicArtworkView?.SetPlaying(isPlaying);
         if (musicStageMode == PlayerStageMode.Video && ((activeTab == 0 && !isLibrarySectionOpen) || fullscreenVideoDlg != null)) {
+            string trkStr = LoadedFile != null && LoadedFile.Tracks.Count > 1
+                ? $"{Math.Max(1, LoadedFile.Tracks.ToList().IndexOf(selectedTrack) + 1)}/{LoadedFile.Tracks.Count}"
+                : "";
             musicVideoStage?.SyncPlaybackState(isPlaying, curSec, totSec);
             musicVideoStage?.ConfigureMetadata(
                 musicTitleText.Text,
                 musicSpatialBadgeText.Text,
-                musicTrackBtnText?.Text ?? "",
+                trkStr,
                 LoadedFile?.Tracks.Count > 1,
                 activeSubtitleCues.Count > 0,
                 playerEngine?.Loop ?? false,
@@ -2774,77 +2822,6 @@ public partial class MainActivity {
             icon: OneUiIconType.Globe,
             iconBadgeColor: OneUiTheme.Primary,
             positiveText: S["DismissBtn"],
-            customContent: box);
-    }
-
-    void ShowPlayerMoreSheet() {
-        LinearLayout box = new(this) { Orientation = Orientation.Vertical };
-        Android.App.Dialog dlg = null;
-
-        CavernizeTrack active = GetActiveTrack();
-        string tel = active == null
-            ? $"{RenderTarget?.Name ?? "Binaural"} • {Math.Round(store.PlayerVolume * 100)}%"
-            : $"{active.FormatHeader} • {trackSourceItems.Count(x => x.IsBed)} ch + {trackSourceItems.Count(x => x.IsDynamicObject)} obj • {Math.Round(store.PlayerVolume * 100)}%";
-        TextView telTv = Label(tel, 12f, OneUiTheme.PeachText);
-        telTv.SetPadding(Dp(4), 0, Dp(4), Dp(10));
-        box.AddView(telTv);
-
-        Button binauralBtn = PillButton($"{S["BinauralProfileActive"]}: {BinauralProfileService.GetActiveDisplayTitle(store, S)}", () => {
-            dlg?.Dismiss();
-            ShowBinauralProfileSelectorDialog();
-        });
-        box.AddView(binauralBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
-
-        Button openExpBtn = PillButton(S["ExplorerTitle"], () => {
-            dlg?.Dismiss();
-            OpenMediaWithExplorer(switchToTab: 0);
-        });
-        box.AddView(openExpBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
-
-        if (active != null) {
-            Button techBtn = PillButton(S["PlayerTechInfo"], () => {
-                dlg?.Dismiss();
-                ShowTechnicalStreamDialog();
-            });
-            box.AddView(techBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
-        }
-
-        Button onlineBtn = PillButton(S["OnlineSearchTitle"], () => {
-            dlg?.Dismiss();
-            ShowOnlineMetadataDialog();
-        });
-        box.AddView(onlineBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
-
-        if (currentMediaMeta?.HasVideo == true) {
-            Button subBtn = PillButton(S["VideoSubtitlesTitle"], () => {
-                dlg?.Dismiss();
-                ShowSubtitlesDialog();
-            });
-            box.AddView(subBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
-        }
-
-        if (LoadedFile != null && LoadedFile.Tracks.Count > 1) {
-            Button trkBtn = PillButton(S["SelectTrackHeader"], () => {
-                dlg?.Dismiss();
-                ShowTrackSelectorDialog();
-            });
-            box.AddView(trkBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
-        }
-
-        Button roomBtn = PrimaryButton(S["PlayerOpenRoom"], () => {
-            dlg?.Dismiss();
-            ExitVideoFullscreenIfNeeded();
-            SwitchTab(1);
-        });
-        box.AddView(roomBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-
-        dlg = OneUiModalDialog.Show(
-            this,
-            S["PlayerMoreTitle"],
-            null,
-            icon: OneUiIconType.Sparkles,
-            iconBadgeColor: OneUiTheme.Primary,
-            positiveText: "OK",
             customContent: box);
     }
 
