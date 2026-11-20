@@ -695,7 +695,7 @@ public static class AudioQualityAnalyzer {
             long dataOffset = -1;
             long dataLen = 0;
             while (pos + 8 <= hRead) {
-                string id = Encoding.ASCII.GetString(hdr, pos, 4);
+                string id = System.Text.Encoding.ASCII.GetString(hdr, pos, 4);
                 int sz = BinaryPrimitives.ReadInt32LittleEndian(hdr.AsSpan(pos + 4, 4));
                 if (id == "fmt " && pos + 24 <= hRead) {
                     audioFmt = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(pos + 8, 2));
@@ -906,7 +906,7 @@ public static class AudioQualityAnalyzer {
                                 }
                                 mono.Add(sum / outChannels);
                             }
-                        } else if (pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked) {
+                        } else if (OperatingSystem.IsAndroidVersionAtLeast(31) && pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked) {
                             int frames = chunk.Length / (3 * outChannels);
                             for (int f = 0; f < frames && mono.Count < targetSamples; f++) {
                                 float sum = 0f;
@@ -938,7 +938,7 @@ public static class AudioQualityAnalyzer {
                 }
             }
 
-            if (pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked && nonSilent >= 2048) {
+            if (OperatingSystem.IsAndroidVersionAtLeast(31) && pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked && nonSilent >= 2048) {
                 inspected24 = true;
                 lsbZero = (double)zeroLsb / nonSilent > 0.992;
             }

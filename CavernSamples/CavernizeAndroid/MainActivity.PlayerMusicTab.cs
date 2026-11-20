@@ -1550,7 +1550,6 @@ public partial class MainActivity {
                 AudioBadge = active.FormatHeader,
                 ChannelCount = beds + objs,
                 IsSpatial = objs > 0,
-                IsSurround = beds > 2,
                 FileSizeBytes = File.Exists(activePath) ? new FileInfo(activePath).Length : 0,
                 LastModifiedTicks = File.Exists(activePath) ? File.GetLastWriteTimeUtc(activePath).Ticks : 0
             };
