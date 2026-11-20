@@ -549,10 +549,10 @@ public static class SofaHrirReader {
             foreach (var (mt, md) in msgs) {
                 if (mt == 0x01 && md.Length >= 4) {
                     byte ver = md[0];
-                    byte rank = md[1];
+                    byte dsRank = md[1];
                     int p = ver == 1 ? 8 : 4;
-                    dims = new int[rank];
-                    for (int i = 0; i < rank; i++) {
+                    dims = new int[dsRank];
+                    for (int i = 0; i < dsRank; i++) {
                         dims[i] = (int)ReadUIntFrom(md, p + i * szLen, szLen);
                     }
                 } else if (mt == 0x03 && md.Length >= 8) {
