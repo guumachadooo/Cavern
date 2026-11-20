@@ -1,0 +1,214 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Verify .NET SDK
+        run: dotnet --info
+
+      - name: Install .NET Android workload
+        run: dotnet workload install android
+
+      - name: Install Android SDK dependencies
+        run: |
+          dotnet build CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
+            -t:InstallAndroidDependencies -f net11.0-android -c Release \
+            -p:AcceptAndroidSDKLicenses=true
+
+      - name: Restore persistent signing keystore
+        run: |
+          base64 -d .github/signing/cavernize.keystore.b64 > "$GITHUB_WORKSPACE/cavernize.p12"
+          keytool -importkeystore \
+            -srckeystore "$GITHUB_WORKSPACE/cavernize.p12" -srcstoretype PKCS12 -srcstorepass cavernize \
+            -destkeystore "$GITHUB_WORKSPACE/cavernize.keystore" -deststoretype PKCS12 -deststorepass cavernize \
+            -destkeypass cavernize -noprompt
+          keytool -list -v -keystore "$GITHUB_WORKSPACE/cavernize.keystore" -storepass cavernize | head -n 25
+
+      - name: Build and sign CavernizeAndroid APK
+        run: |
+          dotnet publish CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
+            -c Release -f net11.0-android \
+            -p:ApplicationVersion=${{ github.run_number }} \
+            -p:ApplicationDisplayVersion=2.8.${{ github.run_number }} \
+            -p:AndroidPackageFormat=apk \
+            -p:AndroidKeyStore=true \
+            -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/cavernize.keystore" \
+            -p:AndroidSigningKeyAlias=cavernize \
+            -p:AndroidSigningKeyPass=cavernize \
+            -p:AndroidSigningStorePass=cavernize \
+            -p:AcceptAndroidSDKLicenses=true
+
+      - name: Collect signed APK
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          APK_PATH=$(find CavernSamples/CavernizeAndroid/bin/Release/net11.0-android -name "*-Signed.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            APK_PATH=$(find CavernSamples/CavernizeAndroid/bin/Release/net11.0-android -name "*.apk" | head -n 1)
+          fi
+          echo "Found APK: $APK_PATH"
+          cp "$APK_PATH" "$GITHUB_WORKSPACE/build/Cavernize-Android.apk"
+          ls -lh "$GITHUB_WORKSPACE/build/Cavernize-Android.apk"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cavernize-APK
+          path: build/Cavernize-Android.apk
+
+      - name: Publish versioned GitHub Release (permanent archive)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v2.8.${{ github.run_number }}"
+          target_commitish: ${{ github.sha }}
+          name: "Cavernize Android v2.8.${{ github.run_number }}"
+          body: |
+            Permanent archive release for Cavernize Android `v2.8.${{ github.run_number }}` (Build `${{ github.run_number }}`, commit `${{ github.sha }}`).
+            - **One-Screen Play UI, Unified Visual Identity & Swapped Transport:** Compacted `Now Playing` to fit cleanly inside a single viewport with unified frosted One UI 9 + Apple Glass icons (`|◀` `-10s` `▶` `+10s` `▶|`), removed cross-tab UI redundancies (moving active source header into `Sala 3D`, `Estúdio`, and `Stems`), and added smoked frosted modal readability (`SurfaceModal` + API 31+ backdrop blur).
+            - **In-App Smart File Explorer, Directory Filtering & Smart Non-Music Cleaner:** Added `OneUiFileExplorerDialog` replacing stock SAF pickers with dead-end folder pruning, recursive media counts, multi-folder inclusion/exclusion filters, and offline rule-based **Limpeza Smart** filtering (keeping all Spatial/Surround audio).
+            - **Multi-Format Track Merging, Live FLAC ↔ Atmos Switching & MP4 Track Sorting:** Pure C# binary MP4 (`trkn`/`disk`/`©alb`/`©ART`), FLAC & ID3v2 tag parsing for accurate disc/track sorting, filtered album track counts, merged multi-format album rows (e.g. `ATMOS + FLAC`), live format toggle preserving exact playback timestamp, Deluxe/edition-aware online cover/lyrics matching, external 3D Head Trackball & Vertical Elevation dock (`RoomSimulatorView`), and streaming DAMF `.metadata` + RIFF WAVE `.atmos.audio` decoding.
+          prerelease: false
+          make_latest: false
+          files: build/Cavernize-Android.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure historical GitHub Releases are preserved
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - << 'PY'
+          import io, json, os, urllib.error, urllib.parse, urllib.request, zipfile
+
+          owner, repo = "guumachadooo", "Cavern"
+          token = os.environ["GITHUB_TOKEN"]
+          historical = [
+              {"run_id": 44092514428, "run_number": 5,  "sha": "5c3888bb0e97b7712bcb35a759aeb1cc058fa01f", "tag": "v2.1.0-r5", "title": "Cavernize Android v2.1.0 (Build 5)"},
+              {"run_id": 44108117984, "run_number": 7,  "sha": "35f488daf7b73c6edf8f9cafc879a3dfdb05c052", "tag": "v2.1.7",    "title": "Cavernize Android v2.1.7"},
+              {"run_id": 44128159220, "run_number": 9,  "sha": "810e8318a66ead0d396b2f087d08ee035eb4736e", "tag": "v2.1.9",    "title": "Cavernize Android v2.1.9"},
+              {"run_id": 44145020315, "run_number": 10, "sha": "52bd815b6b9a0c447661c16c56d5a5384a8cc4dc", "tag": "v2.2.10",   "title": "Cavernize Android v2.2.10"},
+              {"run_id": 44155950178, "run_number": 11, "sha": "9dab265fdbc2252a2a3bd55701e1164f57d414ed", "tag": "v2.3.11",   "title": "Cavernize Android v2.3.11"},
+              {"run_id": 44172998290, "run_number": 13, "sha": "46d17a61928c4c04868d90f8f58652ab9ddb4548", "tag": "v2.4.13",   "title": "Cavernize Android v2.4.13"},
+              {"run_id": 44189543697, "run_number": 15, "sha": "330fd03b23b0c889313c89dc52eee0efaff88676", "tag": "v2.5.15",   "title": "Cavernize Android v2.5.15"},
+              {"run_id": 44196075428, "run_number": 16, "sha": "9b724bb72046200a206b033372a2d7720aea8ec9", "tag": "v2.5.16",   "title": "Cavernize Android v2.5.16"},
+          ]
+
+          class NoRedir(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          def api(method, url, payload=None):
+              body = json.dumps(payload).encode() if payload is not None else None
+              headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+              if body is not None:
+                  headers["Content-Type"] = "application/json"
+              req = urllib.request.Request(url, data=body, headers=headers, method=method)
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  return json.loads(resp.read().decode())
+
+          existing = {r["tag_name"]: r for r in api("GET", f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=50")}
+          opener = urllib.request.build_opener(NoRedir())
+
+          for item in historical:
+              tag = item["tag"]
+              try:
+                  rel = existing.get(tag)
+                  if rel is None:
+                      rel = api("POST", f"https://api.github.com/repos/{owner}/{repo}/releases", {
+                          "tag_name": tag,
+                          "target_commitish": item["sha"],
+                          "name": item["title"],
+                          "body": f"Restored historical CI Build #{item['run_number']} (`{item['sha']}`).",
+                          "draft": False,
+                          "prerelease": False,
+                          "make_latest": "false",
+                      })
+                      print(f"Created release {tag}", flush=True)
+
+                  if any(a["name"] == "Cavernize-Android.apk" for a in rel.get("assets", [])):
+                      print(f"Release {tag} already has Cavernize-Android.apk", flush=True)
+                      continue
+
+                  arts = api("GET", f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{item['run_id']}/artifacts")
+                  apk_bytes = None
+                  for art in arts.get("artifacts", []):
+                      if art.get("expired"):
+                          continue
+                      req = urllib.request.Request(art["archive_download_url"], headers={"Authorization": f"token {token}", "Accept": "application/vnd.github+json"})
+                      try:
+                          zip_bytes = opener.open(req, timeout=60).read()
+                      except urllib.error.HTTPError as e:
+                          if e.code in (301, 302, 303, 307, 308):
+                              zip_bytes = urllib.request.urlopen(urllib.request.Request(e.headers["Location"]), timeout=60).read()
+                          else:
+                              raise
+                      with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+                          for name in zf.namelist():
+                              if name.endswith(".apk"):
+                                  apk_bytes = zf.read(name)
+                                  break
+                      if apk_bytes:
+                          break
+                  if not apk_bytes:
+                      print(f"No live APK artifact for {tag} (run {item['run_id']})", flush=True)
+                      continue
+                  upload_url = rel["upload_url"].split("{", 1)[0] + "?name=Cavernize-Android.apk"
+                  up_req = urllib.request.Request(
+                      upload_url,
+                      data=apk_bytes,
+                      headers={
+                          "Authorization": f"token {token}",
+                          "Accept": "application/vnd.github+json",
+                          "Content-Type": "application/vnd.android.package-archive",
+                          "Content-Length": str(len(apk_bytes)),
+                      },
+                      method="POST",
+                  )
+                  with urllib.request.urlopen(up_req, timeout=90) as resp:
+                      res = json.loads(resp.read().decode())
+                  print(f"Uploaded Cavernize-Android.apk to {tag} ({len(apk_bytes)} bytes, asset={res['id']})", flush=True)
+              except Exception as ex:
+                  print(f"Warning restoring {tag}: {ex}", flush=True)
+          PY
+
+      - name: Update android-latest tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f android-latest HEAD
+          git push origin refs/tags/android-latest --force
+
+      - name: Publish GitHub Release (OTA android-latest)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-latest
+          name: "Cavernize Android v2.8.${{ github.run_number }}"
+          body: |
+            Automated signed Android APK build for Cavernize (`${{ github.sha }}`).
+            - Version: `v2.8.${{ github.run_number }}` (Build `${{ github.run_number }}`)
+            - Highlights: Single-Viewport One UI 9 + Apple Glass `Now Playing` with `[|◀] [-10s] [▶] [+10s] [▶|]` & Live FLAC ↔ Atmos Format Switcher, In-App Smart File Explorer (Dead-End Pruning) & Folder/Non-Music Filters, Filtered & Multi-Format Merged Library Albums, MP4 `trkn`/`disk` Track Sorting, Deluxe/Edition Cover Matching, External 3D Head Trackball & Height Capsule Dock (`RoomSimulatorView`), Frosted Smoked Modals, and Streaming DAMF RIFF-WAVE Atmos Decoding.
+          prerelease: false
+          make_latest: true
+          files: build/Cavernize-Android.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

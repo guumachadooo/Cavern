@@ -1,0 +1,35 @@
+Cavernize Android — Official Binaural HRIR / BRIR Dataset Licenses
+==================================================================
+
+1. SADIE II Database (Subjects D1 — Neumann KU100, D2 — KEMAR 45BB)
+   Source: University of York, Audio Lab — https://www.york.ac.uk/sadie-project/
+   Zenodo Archive: https://zenodo.org/records/12092466
+   Copyright 2018, University of York.
+   License: Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+   Citation: Armstrong, C., Thresh, L., Murphy, D., & Kearney, G. (2018).
+   "A Perceptual Evaluation of Individual and Non-Individual HRTFs: A Case Study
+   of the SADIE II Database." Applied Sciences, 8(11), 2029.
+   Files: sadie_d1_dfc.chrir, sadie_d1_minphase.chrir, sadie_d1_brir.chrirz,
+          sadie_d2_dfc.chrir, sadie_d2_minphase.chrir, sadie_d2_brir.chrirz
+
+2. TH Köln / Cologne University of Applied Sciences — Neumann KU100 HRIR Sets
+   (Far-Field L2702 + Official KU100_CDFC Diffuse-Field Compensation, Near-Field L2702)
+   Source: Audio Group, TH Köln — https://zenodo.org/records/3928297 (Far-Field)
+           https://zenodo.org/records/4297951 (Near-Field)
+   License: Creative Commons Attribution (CC BY 4.0 / CC BY 3.0)
+   Citations:
+   - Bernschütz, B. (2013). "A Spherical Far Field HRIR/HRTF Compilation of the
+     Neumann KU 100." Proceedings of the 40th Italian (AIA) Annual Conference on
+     Acoustics and the 39th German Annual Conference on Acoustics (DAGA), Merano.
+   - Arend, J. M., Neidhardt, A., & Pörschmann, C. (2016). "Measurement and
+     Perceptual Evaluation of a Spherical Near-Field HRTF Set." Proceedings of the
+     29th Tonmeistertagung — VDT International Convention, Cologne.
+   Files: thk_ku100_ff_dfc.chrir, thk_ku100_ff_raw.chrir,
+          thk_ku100_nf050.chrir, thk_ku100_nf075.chrir,
+          thk_ku100_nf100.chrir, thk_ku100_nf150.chrir
+
+All bundled files are extracted verbatim from the official 48 kHz laboratory SOFA
+and MAT archives listed above, with only single-scalar global unity-energy
+normalization across the 16 virtual speaker directions to preserve exact measured
+inter-aural time differences (ITD), inter-aural level differences (ILD), and
+spectral cues without artificial equalization.

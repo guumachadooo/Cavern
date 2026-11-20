@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          package="hu.sbence.cavern.cavernize">
+  <!-- targetSdkVersion 28 places app in untrusted_app_27 SELinux domain so downloaded static FFmpeg can execute from FilesDir -->
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
+
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+  <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+  <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+  <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+  <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+  <application
+      android:allowBackup="true"
+      android:icon="@drawable/cavern_logo"
+      android:label="Cavernize"
+      android:requestLegacyExternalStorage="true"
+      android:supportsRtl="true"
+      android:theme="@android:style/Theme.Material.NoActionBar">
+  </application>
+</manifest>
