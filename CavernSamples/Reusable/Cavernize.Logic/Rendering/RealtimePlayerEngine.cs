@@ -37,6 +37,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
     readonly ManualHeadTrackerProvider manualHeadTracker = new();
     readonly ParametricUpmixerStageProcessor parametricUpmixerStage = new(new UpmixingSettings(true));
     readonly CavernVirtualizerRendererAdapter virtualizerRenderer = new();
+    readonly AutoEqPostProcessingStage autoEqPostStage = new();
     readonly NormalizerPostProcessingAdapter limiterPostStage = new(true);
     readonly SpatialSceneFrame activeSceneFrame = new();
 
@@ -64,6 +65,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
         sceneHub.BindHeadTracker(manualHeadTracker);
         sceneHub.BindRenderer(virtualizerRenderer);
         sceneHub.RegisterStageProcessor(parametricUpmixerStage);
+        sceneHub.RegisterPostProcessingStage(autoEqPostStage);
         sceneHub.RegisterPostProcessingStage(limiterPostStage);
     }
 
@@ -72,6 +74,11 @@ public sealed class RealtimePlayerEngine : IDisposable {
     /// and extensible Slot 2 / Slot 4 / Slot 5 / Slot 6 pipeline registrations.
     /// </summary>
     public SpatialSceneHub SceneHub => sceneHub;
+
+    /// <summary>
+    /// Slot 6A neutral AutoEq parametric headphone compensation stage (Priority 100, before safety limiter).
+    /// </summary>
+    public AutoEqPostProcessingStage AutoEqStage => autoEqPostStage;
 
     /// <summary>
     /// Active Slot 4 head-tracking provider. Defaults to <see cref="ManualHeadTrackerProvider"/> synced with
@@ -393,9 +400,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
                     break;
                 }
 
-                // Slot 6: Ordered transparent post-processing stages (AutoEq, ISO 226, BS.1770, Soft-Knee Limiter)
+                // Slot 6: Ordered transparent post-processing stages (AutoEq Priority 100, ISO 226, BS.1770, Soft-Knee Limiter Priority 900)
                 limiterPostStage.LimiterOnly = LimiterOnly;
-                limiterPostStage.IsEnabled = HeadphoneVirtualizer && NormalizerEnabled;
+                limiterPostStage.IsEnabled = (HeadphoneVirtualizer || autoEqPostStage.IsEnabled) && NormalizerEnabled;
                 IReadOnlyList<IPostProcessingStage> postStages = sceneHub.PostProcessingStages;
                 for (int p = 0; p < postStages.Count; p++) {
                     if (postStages[p].IsEnabled) {

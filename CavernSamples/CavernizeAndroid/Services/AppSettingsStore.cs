@@ -232,6 +232,107 @@ public sealed class AppSettingsStore {
         set => Edit().PutString("roomCorrPath", value ?? "").Apply();
     }
 
+    // Slot 6A: AutoEq Neutral Headphone Engine & Per-Device Auto-Profile
+    public bool AutoEqEnabled {
+        get => prefs.GetBoolean("autoEqEnabled", false);
+        set => Edit().PutBoolean("autoEqEnabled", value).Apply();
+    }
+
+    public string AutoEqProfileId {
+        get => prefs.GetString("autoEqProfileId", "");
+        set => Edit().PutString("autoEqProfileId", value ?? "").Apply();
+    }
+
+    public string AutoEqProfileName {
+        get => prefs.GetString("autoEqProfileName", "");
+        set => Edit().PutString("autoEqProfileName", value ?? "").Apply();
+    }
+
+    public string AutoEqCustomPath {
+        get => prefs.GetString("autoEqCustomPath", "");
+        set => Edit().PutString("autoEqCustomPath", value ?? "").Apply();
+    }
+
+    public int AutoEqTargetIndex {
+        get => prefs.GetInt("autoEqTargetIndex", (int)Cavern.Filters.AutoEqNeutralTarget.DiffuseFieldNeutral);
+        set => Edit().PutInt("autoEqTargetIndex", value).Apply();
+    }
+
+    public bool AutoEqDoubleEqGuard {
+        get => prefs.GetBoolean("autoEqDoubleEqGuard", true);
+        set => Edit().PutBoolean("autoEqDoubleEqGuard", value).Apply();
+    }
+
+    public bool AutoEqAutoSwitchByDevice {
+        get => prefs.GetBoolean("autoEqAutoSwitchByDevice", true);
+        set => Edit().PutBoolean("autoEqAutoSwitchByDevice", value).Apply();
+    }
+
+    public bool HeadTrackingEnabled {
+        get => prefs.GetBoolean("headTrackingEnabled", false);
+        set => Edit().PutBoolean("headTrackingEnabled", value).Apply();
+    }
+
+    public string DeviceProfilesJson {
+        get => prefs.GetString("deviceProfilesV1", "[]");
+        set => Edit().PutString("deviceProfilesV1", value ?? "[]").Apply();
+    }
+
+    public List<Cavernize.Logic.Spatial.AudioDeviceProfileBinding> GetDeviceProfiles() {
+        try {
+            List<Cavernize.Logic.Spatial.AudioDeviceProfileBinding> list =
+                System.Text.Json.JsonSerializer.Deserialize<List<Cavernize.Logic.Spatial.AudioDeviceProfileBinding>>(DeviceProfilesJson);
+            return list?.Where(b => b != null && !string.IsNullOrWhiteSpace(b.DeviceKey)).ToList() ?? [];
+        } catch {
+            return [];
+        }
+    }
+
+    public Cavernize.Logic.Spatial.AudioDeviceProfileBinding FindDeviceProfile(string deviceKey) {
+        if (string.IsNullOrWhiteSpace(deviceKey)) {
+            return null;
+        }
+        List<Cavernize.Logic.Spatial.AudioDeviceProfileBinding> all = GetDeviceProfiles();
+        for (int i = 0; i < all.Count; i++) {
+            if (string.Equals(all[i].DeviceKey, deviceKey, StringComparison.OrdinalIgnoreCase)) {
+                return all[i];
+            }
+        }
+        return null;
+    }
+
+    public void UpsertDeviceProfile(Cavernize.Logic.Spatial.AudioDeviceProfileBinding binding) {
+        if (binding == null || string.IsNullOrWhiteSpace(binding.DeviceKey)) {
+            return;
+        }
+        List<Cavernize.Logic.Spatial.AudioDeviceProfileBinding> all = GetDeviceProfiles();
+        bool replaced = false;
+        for (int i = 0; i < all.Count; i++) {
+            if (string.Equals(all[i].DeviceKey, binding.DeviceKey, StringComparison.OrdinalIgnoreCase)) {
+                all[i] = binding;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            all.Add(binding);
+        }
+        DeviceProfilesJson = System.Text.Json.JsonSerializer.Serialize(all);
+    }
+
+    public bool RemoveDeviceProfile(string deviceKey) {
+        if (string.IsNullOrWhiteSpace(deviceKey)) {
+            return false;
+        }
+        List<Cavernize.Logic.Spatial.AudioDeviceProfileBinding> all = GetDeviceProfiles();
+        int removed = all.RemoveAll(b => string.Equals(b.DeviceKey, deviceKey, StringComparison.OrdinalIgnoreCase));
+        if (removed > 0) {
+            DeviceProfilesJson = System.Text.Json.JsonSerializer.Serialize(all);
+            return true;
+        }
+        return false;
+    }
+
     public string FFmpegLocation {
         get => prefs.GetString("ffmpegPath", "");
         set => Edit().PutString("ffmpegPath", value ?? "").Apply();

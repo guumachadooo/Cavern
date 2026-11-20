@@ -54,6 +54,33 @@ public sealed class SpatialSceneHub {
     public string ActiveBinauralProfileName { get; set; } = string.Empty;
 
     /// <summary>
+    /// Acoustic compensation state of the active binaural profile (DFC HRIR, Raw HRIR, or Direct 2.0)
+    /// used by Slot 6A (<see cref="Adapters.AutoEqPostProcessingStage"/>) to enforce the Zero Double-EQ Guard.
+    /// </summary>
+    public Cavern.Filters.BinauralCompensationMode ActiveBinauralCompensationMode { get; set; } =
+        Cavern.Filters.BinauralCompensationMode.DiffuseFieldCompensatedHrir;
+
+    /// <summary>
+    /// Active AutoEq headphone profile identifier (empty when AutoEq is bypassed/flat).
+    /// </summary>
+    public string ActiveAutoEqProfileId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Active AutoEq headphone profile display name.
+    /// </summary>
+    public string ActiveAutoEqProfileName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Normalized hardware key of the active output audio device (e.g., "bt:galaxy_buds2_pro", "usb:dac", "wired:35mm").
+    /// </summary>
+    public string ActiveAudioDeviceKey { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Human-readable display name of the active output audio device.
+    /// </summary>
+    public string ActiveAudioDeviceName { get; set; } = string.Empty;
+
+    /// <summary>
     /// Current 6DoF listener pose (thread-safe snapshot).
     /// </summary>
     public ListenerPose6DoF ListenerPose {
