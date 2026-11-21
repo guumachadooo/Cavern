@@ -31,10 +31,12 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
-    Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, shareExportBtn, playExportBtn;
+    Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, shareExportBtn, playExportBtn, studioW12ExportBtn;
     LayoutDiagramView layoutDiagram;
-    TextView convertStatusText;
+    TextView convertStatusText, studioW12ContextText;
     OneUiInlineSelector exportFormatSelector, containerSelector, studioW12PresetSelector;
+    LinearLayout studioW12KaraokeContainer;
+    OneUiSeekBar studioW12KaraokeBar;
     CheckBox applyRoomToExportCheck;
     ProgressBar convertProgressBar;
 
@@ -154,7 +156,7 @@ public partial class MainActivity {
 
         page.AddView(expCard);
 
-        // 2B. W12 Studio Master Presets Card (IAMF / HOA 3rd-Order / ADM BWF / Personalized Binaural / Karaoke / Hybrid Master)
+        // 2B. W12/W14 Studio Master Presets Card (IAMF / HOA 3rd-Order / ADM BWF / Personalized Binaural / Karaoke / Hybrid Master)
         LinearLayout w12Card = Card(S["StudioW12CardTitle"], OneUiIconType.Sparkles, OneUiTheme.IconStudioExport);
         studioW12PresetSelector = new OneUiInlineSelector(this, S["StudioW12PresetLabel"]);
         studioW12PresetSelector.SetItems(new[] {
@@ -167,12 +169,41 @@ public partial class MainActivity {
             S["StudioW12PresetLiveMixdown"],
             S["StudioW12PresetFlacAtmos"]
         }, 1);
+        studioW12PresetSelector.SelectionChanged += _ => RefreshStudioW12ContextUi();
         w12Card.AddView(studioW12PresetSelector);
 
+        studioW12ContextText = Label("", 11.4f, OneUiTheme.TextSub);
+        studioW12ContextText.SetPadding(0, Dp(6), 0, Dp(4));
+        w12Card.AddView(studioW12ContextText);
+
+        studioW12KaraokeContainer = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        (studioW12KaraokeBar, _) = AddSliderRow(
+            studioW12KaraokeContainer,
+            S["StudioW12KaraokeLevelTitle"],
+            0,
+            100,
+            Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100),
+            v => {
+                store.KaraokeVocalLevel = v * 0.01f;
+                playerEngine?.SetKaraokeVocalLevel(store.KaraokeVocalLevel);
+                if (karaokeVocalLevelBar != null) {
+                    karaokeVocalLevelBar.Progress = v;
+                    karaokeVocalLevelBar.Invalidate();
+                }
+                RefreshLyricsSingDockUi();
+                RefreshStudioW12ContextUi();
+            },
+            "%",
+            defaultValue: 5);
+        w12Card.AddView(studioW12KaraokeContainer);
+
         LinearLayout w12BtnRow = HRow();
-        w12BtnRow.SetPadding(0, Dp(10), 0, 0);
-        Button w12ExportBtn = PrimaryButton(S["StudioW12ExportBtn"], StartStudioW12PresetExport);
-        w12BtnRow.AddView(w12ExportBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        w12BtnRow.SetPadding(0, Dp(8), 0, 0);
+        studioW12ExportBtn = PrimaryButton(S["StudioW12ExportBtn"], StartStudioW12PresetExport);
+        w12BtnRow.AddView(studioW12ExportBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         w12Card.AddView(w12BtnRow);
         page.AddView(w12Card);
 
@@ -206,6 +237,44 @@ public partial class MainActivity {
             wiringBtn.Enabled = RenderTarget is not DriverRenderTarget && RenderTarget is not VirtualizerRenderTarget;
         }
         RefreshContainerOptions();
+        RefreshStudioW12ContextUi();
+    }
+
+    void RefreshStudioW12ContextUi() {
+        if (studioW12ContextText == null || studioW12PresetSelector == null || store == null) {
+            return;
+        }
+        StudioExportPreset preset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector.SelectedIndex, 0, 7);
+        bool isKaraokePreset = preset == StudioExportPreset.SpatialKaraokeInstrumental ||
+                               preset == StudioExportPreset.LiveKaraokePerformanceMixdown;
+        if (studioW12KaraokeContainer != null) {
+            studioW12KaraokeContainer.Visibility = isKaraokePreset ? ViewStates.Visible : ViewStates.Gone;
+        }
+        int vocPct = Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100);
+        if (studioW12KaraokeBar != null && studioW12KaraokeBar.Progress != vocPct) {
+            studioW12KaraokeBar.Progress = vocPct;
+            studioW12KaraokeBar.Invalidate();
+        }
+        if (preset == StudioExportPreset.FlacAtmosHybridSpatialMaster) {
+            Cavernize.Logic.Spatial.LgsrDiagnostics lgsr = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
+            if (lgsr.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.Synced) {
+                studioW12ContextText.Text = string.Format(S["StudioW12ContextHybridReady"],
+                    string.IsNullOrEmpty(lgsr.TwinFormatSummary) ? lgsr.TwinFileName : lgsr.TwinFormatSummary);
+                studioW12ContextText.SetTextColor(OneUiTheme.IconSystemInfo);
+            } else {
+                studioW12ContextText.Text = S["StudioW12ContextHybridNoTwin"];
+                studioW12ContextText.SetTextColor(OneUiTheme.PeachText);
+            }
+        } else if (isKaraokePreset) {
+            studioW12ContextText.Text = string.Format(
+                S["StudioW12ContextKaraoke"],
+                vocPct,
+                store.KaraokePreserveBackingVocals ? "ON" : "OFF");
+            studioW12ContextText.SetTextColor(OneUiTheme.PrimaryHigh);
+        } else {
+            studioW12ContextText.Text = string.Format(S["StudioW12ContextGeneral"], store.ResolveTruePeakCeilingDbtp());
+            studioW12ContextText.SetTextColor(OneUiTheme.TextSub);
+        }
     }
 
     void RefreshConverterTrackInfo() {
@@ -352,7 +421,7 @@ public partial class MainActivity {
         }
         ReadableMetadata meta = active.GetMetadata();
         if (meta == null) {
-            ShowError("No detailed codec metadata available for this track.");
+            ShowError(S["NoCodecMetadata"]);
             return;
         }
         StringBuilder sb = new();
@@ -500,8 +569,11 @@ public partial class MainActivity {
             Preset = preset,
             OutputPath = outPath,
             BitDepth = store.Force24Bit ? BitDepth.Int24 : BitDepth.Int16,
-            KaraokeVocalLevel = 0.05f,
-            PreserveBackingVocals = true,
+            TruePeakCeilingDbtp = store.ResolveTruePeakCeilingDbtp(),
+            KaraokeVocalLevel = Math.Clamp(store.KaraokeVocalLevel, 0f, 1f),
+            PreserveBackingVocals = store.KaraokePreserveBackingVocals,
+            VocalDnaProfile = playerEngine?.VocalMixMatchStage?.ActiveDna,
+            LosslessTwinProvider = playerEngine?.SceneHub?.ActiveLosslessReference,
             HoaOrder = 3
         };
 
@@ -614,7 +686,7 @@ public partial class MainActivity {
         report.Generate(stats);
 
         if (writer is RIFFWaveWriter && !string.IsNullOrEmpty(finalName) && !finalName.EndsWith(waveExtension, StringComparison.OrdinalIgnoreCase)) {
-            RunOnUiThread(() => SetConvertStatus("Finalizando formato de saída...", 0.96));
+            RunOnUiThread(() => SetConvertStatus(S["FinalizingFormat"], 0.96));
             string exportedAudio = Path.ChangeExtension(finalName, waveExtension);
             string ffCodec = ExportFormat.Codec == Codec.PCM_LE && store.Force24Bit ? "pcm_s24le" : ExportFormat.FFName;
             MergeToContainer merger = new(LoadedFile.Path, exportedAudio, ffCodec);
@@ -907,7 +979,7 @@ public partial class MainActivity {
                 }
             } catch (OperationCanceledException) {
                 AppLogger.Info("Background render operation cancelled by user.");
-                RunOnUiThread(() => SetConvertStatus("Cancelled.", 0));
+                RunOnUiThread(() => SetConvertStatus(S["CancelledStatus"], 0));
             } catch (Exception ex) {
                 AppLogger.Error("RunBackgroundOperation", ex);
                 RunOnUiThread(() => {
@@ -923,6 +995,7 @@ public partial class MainActivity {
 
     void SetRunningUiState(bool running) {
         if (renderBtn != null) renderBtn.Enabled = !running;
+        if (studioW12ExportBtn != null) studioW12ExportBtn.Enabled = !running;
         if (cancelRenderBtn != null) cancelRenderBtn.Enabled = running;
         if (extractBtn != null) extractBtn.Enabled = !running;
         if (cancelExtractBtn != null) cancelExtractBtn.Enabled = running;

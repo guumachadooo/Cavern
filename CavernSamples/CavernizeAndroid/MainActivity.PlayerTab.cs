@@ -804,10 +804,12 @@ public partial class MainActivity {
         xrayLgsrBypassBtn = PillButton(S["XRayLgsrBypassBtn"], () => {
             playerEngine.LgsrBypassed = !playerEngine.LgsrBypassed;
             RefreshSpatialXRayHud();
+            RefreshLgsrUi();
         });
         xrayVocalBypassBtn = PillButton(S["XRayVocalBypassBtn"], () => {
             playerEngine.VocalChainBypassed = !playerEngine.VocalChainBypassed;
             RefreshSpatialXRayHud();
+            RefreshLyricsSingDockUi();
         });
         Button resetPinsBtn = PillButton(S["XRayResetPinsBtn"], () => {
             playerEngine.ResetAllCustomPositions();

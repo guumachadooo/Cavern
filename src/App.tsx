@@ -51,6 +51,13 @@ const DEFAULT_SETTINGS: CavernSettings = {
   roomSize: { x: 10, y: 7, z: 10 },
   quickEqFilters: [],
   quickEqFileName: null,
+  lgsrEnabled: true,
+  lgsrFusionPct: 80,
+  lgsrEnvelopeLock: true,
+  lgsrClippingGuard: true,
+  proAudioPath: 'auto',
+  proAudioBufferFrames: 128,
+  liveMicEnabled: false,
 };
 
 export function App() {
@@ -557,6 +564,8 @@ export function App() {
             onUploadLocalFile={handleUploadLocalFile}
             scarlett={scarlett}
             vocalRack={vocalRack}
+            lgsrBypassed={lgsrBypassed}
+            onToggleLgsrBypass={() => setLgsrBypassed((v) => !v)}
             onUpdateVocalRack={(patch) => setVocalRack((prev) => ({ ...prev, ...patch }))}
             onOpenScarlettConsole={() => {
               setStudioSubMode('scarlett-vocal');
@@ -628,7 +637,13 @@ export function App() {
           <SettingsTab
             t={t}
             settings={settings}
+            lgsrBypassed={lgsrBypassed}
+            onToggleLgsrBypass={() => setLgsrBypassed((v) => !v)}
             onUpdateSettings={handleUpdateSettings}
+            onOpenScarlettConsole={() => {
+              setStudioSubMode('scarlett-vocal');
+              setActiveTab('studio');
+            }}
           />
         )}
       </main>

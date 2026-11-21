@@ -71,7 +71,7 @@ public partial class MainActivity {
     OneUiInlineSelector proAudioPathSelector, proAudioBufferSelector, proAudioSrSelector, proAudioMicRouteSelector;
     OneUiSeekBar proAudioMicGainBar, proAudioMicMonitorBar;
     TextView proAudioStatusText, proAudioTelemetryText;
-    Button proAudioGrantUsbBtn, proAudioScarlettBtn;
+    Button proAudioGrantUsbBtn, proAudioScarlettBtn, proAudioVocalChainBtn;
     Switch ismRoomEnabledSwitch, nearFieldEnabledSwitch, airAbsorptionEnabledSwitch;
     OneUiInlineSelector ismRoomPresetSelector, ismWallMaterialSelector, ismOrderSelector;
     OneUiSeekBar ismLevelBar, airTempBar, airHumidityBar;
@@ -95,6 +95,7 @@ public partial class MainActivity {
     Switch lgsrEnabledSwitch, lgsrAutoDiscoverSwitch, lgsrEnvelopeLockSwitch, lgsrClippingGuardSwitch;
     Switch lgsrBitstreamGuideSwitch, lgsrRejectFakeSwitch, lgsrTier3CleanupSwitch;
     OneUiSeekBar lgsrFusionBar;
+    Button lgsrAbBypassBtn;
     CancellationTokenSource calibrationAudioCts;
     int personalizationRebuildSeq;
     Button filtersBtn;
@@ -587,10 +588,17 @@ public partial class MainActivity {
 
         LinearLayout proAudioRow2 = HRow();
         proAudioScarlettBtn = PillButton(S["ScarlettControlsBtn"], ShowScarlett2i2ControlsModal);
+        proAudioVocalChainBtn = PillButton(S["ProAudioVocalChainBtn"], ShowAutoVocalMixMatchModal, active: true);
+        proAudioRow2.AddView(proAudioScarlettBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+        proAudioRow2.AddView(proAudioVocalChainBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        proAudioCard.AddView(proAudioRow2, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        LinearLayout proAudioRow3 = HRow();
         Button proAudioCreditsBtn = PillButton(S["ProAudioCreditsBtn"], ShowProAudioCreditsModal);
-        proAudioRow2.AddView(proAudioScarlettBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(8) });
-        proAudioRow2.AddView(proAudioCreditsBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.95f));
-        proAudioCard.AddView(proAudioRow2, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        proAudioRow3.AddView(proAudioCreditsBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        proAudioCard.AddView(proAudioRow3, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         page.AddView(proAudioCard);
 
         // 3D. Slot 5A: Physical Externalization (Allen & Berkley ISM Room, Duda & Martens Near-Field DVF & ISO 9613-1)
@@ -1089,6 +1097,8 @@ public partial class MainActivity {
             v => {
                 store.KaraokeVocalLevel = v * 0.01f;
                 playerEngine?.SetKaraokeVocalLevel(store.KaraokeVocalLevel);
+                RefreshLyricsSingDockUi();
+                RefreshStudioW12ContextUi();
             },
             "%",
             defaultValue: 100);
@@ -1096,6 +1106,7 @@ public partial class MainActivity {
         karaokePreserveBackingSwitch = AddSwitchRow(slot2bCard, S["KaraokePreserveBackingTitle"], store.KaraokePreserveBackingVocals, v => {
             store.KaraokePreserveBackingVocals = v;
             ApplyAndRefreshNeuralAudio();
+            RefreshStudioW12ContextUi();
         });
         AddDivider(slot2bCard);
 
@@ -1190,6 +1201,13 @@ public partial class MainActivity {
         }, helpBody: S["TipLgsrTier3Cleanup"]);
 
         LinearLayout lgsrBtns = HRow();
+        lgsrAbBypassBtn = PillButton(S["LgsrAbToggleBtn"], () => {
+            if (playerEngine != null) {
+                playerEngine.LgsrBypassed = !playerEngine.LgsrBypassed;
+                RefreshLgsrUi();
+                RefreshSpatialXRayUi();
+            }
+        });
         Button lgsrRescanBtn = PillButton(S["LgsrRescanTwinBtn"], () => {
             CavernizeTrack active = GetActiveTrack();
             if (active != null) {
@@ -1199,8 +1217,9 @@ public partial class MainActivity {
             }
         });
         Button lgsrLicBtn = PillButton(S["LgsrLicensesBtn"], ShowLgsrLicensesModal);
-        lgsrBtns.AddView(lgsrRescanBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
-        lgsrBtns.AddView(lgsrLicBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        lgsrBtns.AddView(lgsrAbBypassBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(6) });
+        lgsrBtns.AddView(lgsrRescanBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(6) });
+        lgsrBtns.AddView(lgsrLicBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.90f));
         slot2cCard.AddView(lgsrBtns, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(10)
         });
@@ -3388,6 +3407,18 @@ public partial class MainActivity {
                 lgsrStatusText.SetTextColor(OneUiTheme.TextSub);
                 break;
         }
+        if (lgsrAbBypassBtn != null) {
+            bool byp = playerEngine?.LgsrBypassed ?? false;
+            bool synced = diag.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.Synced;
+            lgsrAbBypassBtn.Text = $"{S["LgsrAbToggleBtn"]}: {(byp ? S["XRayBypassActive"] : S["XRayActiveLive"])}";
+            lgsrAbBypassBtn.Background = synced
+                ? (byp
+                    ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.PeachText, 68), 14f, OneUiTheme.WithAlpha(OneUiTheme.PeachText, 165), 1f)
+                    : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 68), 14f, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 165), 1f))
+                : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
+        }
+        UpdateSpatialBadgePillVisuals();
+        RefreshStudioW12ContextUi();
     }
 
     void ShowLgsrLicensesModal() {
@@ -3488,6 +3519,159 @@ public partial class MainActivity {
                 proAudioTelemetryText.SetTextColor(OneUiTheme.TextMuted);
             }
         }
+        RefreshLyricsSingDockUi();
+    }
+
+    // Slot 2D: W11/W14 Auto-Vocal Mix-Match & Live Mastering Vocal Chain Modal + Persistence Sync
+    void ApplyAndRefreshVocalChain() {
+        if (store == null || playerEngine == null) {
+            return;
+        }
+        Cavern.VocalChain.VocalMacroSettings macros = store.BuildVocalMacroSettings();
+        macros.Bypass = playerEngine.VocalChainBypassed;
+        playerEngine.VocalMixMatchStage.ApplyVocalProfile(playerEngine.VocalMixMatchStage.ActiveDna, macros);
+        RefreshLyricsSingDockUi();
+        RefreshSpatialXRayUi();
+    }
+
+    void ShowAutoVocalMixMatchModal() {
+        if (store == null || playerEngine == null) {
+            return;
+        }
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
+
+        Cavern.VocalChain.VocalChainTelemetry tel = playerEngine.SceneHub.VocalChainDiagnostics;
+        TextView telLabel = Label(
+            string.Format(
+                S["VocalLiveTelemetryFormat"],
+                tel.InputDbfs,
+                tel.OutputDbfs,
+                tel.CompressorReductionDb,
+                tel.DeEsserReductionDb,
+                tel.SidechainPocketDuckDb),
+            11.2f,
+            OneUiTheme.IconSystemInfo);
+        telLabel.SetPadding(0, 0, 0, Dp(8));
+        content.AddView(telLabel);
+
+        AddSwitchRow(content, S["ProAudioLiveMicTitle"], store.LiveMicEnabled, v => {
+            store.LiveMicEnabled = v;
+            if (v) {
+                RequestRecordAudioPermissionIfNeeded();
+                if (!store.ProAudioEnabled) {
+                    store.ProAudioEnabled = true;
+                }
+            }
+            ApplyAndRefreshProAudio();
+        });
+        AddDivider(content);
+
+        AddSwitchRow(content, S["VocalEnableTitle"], store.VocalMixMatchEnabled, v => {
+            store.VocalMixMatchEnabled = v;
+            ApplyAndRefreshVocalChain();
+        });
+        AddDivider(content);
+
+        AddSwitchRow(content, S["VocalBypassAbTitle"], playerEngine.VocalChainBypassed, v => {
+            playerEngine.VocalChainBypassed = v;
+            ApplyAndRefreshVocalChain();
+        });
+        AddDivider(content);
+
+        AddSliderRow(
+            content,
+            S["VocalMixMatchPctTitle"],
+            0,
+            100,
+            Math.Clamp((int)MathF.Round(store.VocalMixMatchPct), 0, 100),
+            v => {
+                store.VocalMixMatchPct = v;
+                ApplyAndRefreshVocalChain();
+            },
+            "%",
+            defaultValue: 75);
+
+        AddSliderRow(
+            content,
+            S["VocalReverbPctTitle"],
+            0,
+            150,
+            Math.Clamp((int)MathF.Round(store.VocalReverbPct), 0, 150),
+            v => {
+                store.VocalReverbPct = v;
+                ApplyAndRefreshVocalChain();
+            },
+            "%",
+            defaultValue: 100);
+
+        AddSliderRow(
+            content,
+            S["VocalDynamicsPctTitle"],
+            0,
+            150,
+            Math.Clamp((int)MathF.Round(store.VocalDynamicsPct), 0, 150),
+            v => {
+                store.VocalDynamicsPct = v;
+                ApplyAndRefreshVocalChain();
+            },
+            "%",
+            defaultValue: 100);
+
+        AddSliderRow(
+            content,
+            S["VocalWarmthPctTitle"],
+            0,
+            100,
+            Math.Clamp((int)MathF.Round(store.VocalWarmthPct), 0, 100),
+            v => {
+                store.VocalWarmthPct = v;
+                ApplyAndRefreshVocalChain();
+            },
+            "%",
+            defaultValue: 35);
+
+        AddSliderRow(
+            content,
+            S["VocalLevelDbTitle"],
+            -18,
+            12,
+            Math.Clamp((int)MathF.Round(store.VocalLevelDb), -18, 12),
+            v => {
+                store.VocalLevelDb = v;
+                ApplyAndRefreshVocalChain();
+            },
+            " dB",
+            defaultValue: 0);
+
+        AddDivider(content);
+        AddSwitchRow(content, S["VocalSidechainGlueTitle"], store.VocalSidechainPocketGlue, v => {
+            store.VocalSidechainPocketGlue = v;
+            ApplyAndRefreshVocalChain();
+        });
+        AddDivider(content);
+        AddSwitchRow(content, S["VocalNoiseGateTitle"], store.VocalNoiseGate, v => {
+            store.VocalNoiseGate = v;
+            ApplyAndRefreshVocalChain();
+        });
+        AddDivider(content);
+        AddSwitchRow(content, S["VocalDeEsserTitle"], store.VocalDeEsser, v => {
+            store.VocalDeEsser = v;
+            ApplyAndRefreshVocalChain();
+        });
+
+        LinearLayout scarlettRow = HRow();
+        scarlettRow.SetPadding(0, Dp(8), 0, 0);
+        Button scarlettQuickBtn = PillButton(S["ScarlettControlsBtn"], ShowScarlett2i2ControlsModal);
+        scarlettRow.AddView(scarlettQuickBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        content.AddView(scarlettRow);
+
+        OneUiModalDialog.Show(
+            this,
+            S["VocalModalTitle"],
+            customContent: content,
+            icon: OneUiIconType.Microphone,
+            iconBadgeColor: OneUiTheme.Primary,
+            positiveText: S["CloseBtn"]);
     }
 
     void ShowCalibrateRttModal() {

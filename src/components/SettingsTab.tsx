@@ -1,14 +1,25 @@
 import React from 'react';
-import { Globe, Headphones, RotateCcw, SlidersHorizontal, Upload } from 'lucide-react';
+import {
+  Activity,
+  Globe,
+  Headphones,
+  Mic,
+  RotateCcw,
+  SlidersHorizontal,
+  Upload,
+} from 'lucide-react';
 import { HRIR_PROFILES } from '../data/catalog';
 import type { StringKey } from '../i18n/strings';
-import type { CavernSettings, Locale } from '../types/cavern';
+import type { CavernSettings, Locale, ProAudioEnginePath } from '../types/cavern';
 import { parseQuickEqText } from '../utils/spatialMath';
 
 interface SettingsTabProps {
   t: Record<StringKey, string>;
   settings: CavernSettings;
+  lgsrBypassed: boolean;
+  onToggleLgsrBypass: () => void;
   onUpdateSettings: (patch: Partial<CavernSettings>) => void;
+  onOpenScarlettConsole: () => void;
 }
 
 const SAMPLE_QUICKEQ = `Preamp: -3.5 dB
@@ -20,7 +31,10 @@ Filter 4: ON PK Fc 3200 Hz Gain -1.6 dB Q 1.8`;
 export const SettingsTab: React.FC<SettingsTabProps> = ({
   t,
   settings,
+  lgsrBypassed,
+  onToggleLgsrBypass,
   onUpdateSettings,
+  onOpenScarlettConsole,
 }) => {
   const handleQuickEqFile = async (file: File) => {
     const text = await file.text();
@@ -420,6 +434,164 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
               <span>{t.speakerHeightVirtLabel}</span>
             </label>
           </div>
+        </div>
+      </div>
+
+      {/* W14 Row: Slot 2C Lossless Twin (LGSR) & Slot 1/4 USB Pro-Audio / Scarlett / Auto-Vocal */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Slot 2C: Lossless Twin Restoration (LGSR) */}
+        <div className="bg-[#15161C] border border-white/10 rounded-2xl p-5 space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Activity className="w-4 h-4 text-[#56B8A8]" />
+                <h3 className="text-sm font-semibold text-white">{t.settingsLgsrSection}</h3>
+              </div>
+              <p className="text-xs text-[#99999E] mt-1">{t.settingsLgsrDesc}</p>
+            </div>
+            <button
+              type="button"
+              data-testid="settings-lgsr-ab-btn"
+              onClick={onToggleLgsrBypass}
+              disabled={!settings.lgsrEnabled}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-lg border transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 ${
+                lgsrBypassed
+                  ? 'bg-[#F59E0B]/18 border-[#F59E0B]/50 text-[#FCD34D]'
+                  : 'bg-[#56B8A8]/18 border-[#56B8A8]/50 text-[#88E0D1]'
+              }`}
+            >
+              {t.settingsLgsrAbBtn}:{' '}
+              {lgsrBypassed ? t.audioSpecBadgeAtmosAb : t.audioSpecBadgeAtmosFlac}
+            </button>
+          </div>
+
+          <label className="flex items-center justify-between gap-4 p-3 rounded-xl bg-[#1C1E27] border border-white/8 cursor-pointer">
+            <span className="text-sm font-medium text-white">{t.settingsLgsrEnable}</span>
+            <input
+              type="checkbox"
+              checked={settings.lgsrEnabled}
+              onChange={(e) => onUpdateSettings({ lgsrEnabled: e.target.checked })}
+              className="rounded accent-[#56B8A8]"
+            />
+          </label>
+
+          <div>
+            <div className="flex justify-between text-xs text-[#99999E] mb-1">
+              <span>{t.settingsLgsrFusion}</span>
+              <span className="font-mono tabular-nums text-white">{settings.lgsrFusionPct}%</span>
+            </div>
+            <input
+              type="range"
+              aria-label={t.settingsLgsrFusion}
+              min={0}
+              max={100}
+              value={settings.lgsrFusionPct}
+              disabled={!settings.lgsrEnabled}
+              onChange={(e) => onUpdateSettings({ lgsrFusionPct: Number(e.target.value) })}
+              className="cavern-slider w-full"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-5 pt-1 text-xs text-[#E9E9EC]">
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings.lgsrEnvelopeLock}
+                disabled={!settings.lgsrEnabled}
+                onChange={(e) => onUpdateSettings({ lgsrEnvelopeLock: e.target.checked })}
+                className="rounded accent-[#56B8A8]"
+              />
+              <span>{t.settingsLgsrEnvelopeLock}</span>
+            </label>
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={settings.lgsrClippingGuard}
+                disabled={!settings.lgsrEnabled}
+                onChange={(e) => onUpdateSettings({ lgsrClippingGuard: e.target.checked })}
+                className="rounded accent-[#56B8A8]"
+              />
+              <span>{t.settingsLgsrClippingGuard}</span>
+            </label>
+          </div>
+        </div>
+
+        {/* Slot 1/4 & 2D: USB Pro-Audio, Scarlett & Live Vocal */}
+        <div className="bg-[#15161C] border border-white/10 rounded-2xl p-5 space-y-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Mic className="w-4 h-4 text-[#FCA5A5]" />
+                <h3 className="text-sm font-semibold text-white">{t.settingsProAudioSection}</h3>
+              </div>
+              <p className="text-xs text-[#99999E] mt-1">{t.settingsProAudioDesc}</p>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenScarlettConsole}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#DC2626]/20 hover:bg-[#DC2626]/32 text-[#FCA5A5] border border-[#DC2626]/45 transition-colors whitespace-nowrap shrink-0"
+            >
+              {t.settingsOpenScarlettVocalBtn}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label
+                htmlFor="pro-audio-path"
+                className="block text-xs text-[#99999E] mb-1.5"
+              >
+                {t.settingsProAudioPathLabel}
+              </label>
+              <select
+                id="pro-audio-path"
+                value={settings.proAudioPath}
+                onChange={(e) =>
+                  onUpdateSettings({ proAudioPath: e.target.value as ProAudioEnginePath })
+                }
+                className="w-full px-3 py-2 text-xs rounded-xl bg-[#1C1E27] border border-white/10 text-white focus:outline-none focus:border-[#598FFF]"
+              >
+                <option value="auto">{t.settingsProAudioPathAuto}</option>
+                <option value="libusb-uac2">{t.settingsProAudioPathLibusb}</option>
+                <option value="aaudio">{t.settingsProAudioPathAaudio}</option>
+              </select>
+            </div>
+
+            <div>
+              <span className="block text-xs text-[#99999E] mb-1.5">
+                {t.settingsProAudioBufferLabel}
+              </span>
+              <div className="grid grid-cols-3 gap-1.5">
+                {([64, 128, 256] as const).map((frames) => {
+                  const active = settings.proAudioBufferFrames === frames;
+                  return (
+                    <button
+                      key={frames}
+                      type="button"
+                      onClick={() => onUpdateSettings({ proAudioBufferFrames: frames })}
+                      className={`py-2 text-xs font-mono tabular-nums font-semibold rounded-xl border transition-colors ${
+                        active
+                          ? 'bg-[#387AFF]/20 border-[#598FFF] text-white'
+                          : 'bg-[#1C1E27] border-white/10 text-[#99999E] hover:text-white'
+                      }`}
+                    >
+                      {frames}f
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          <label className="flex items-center justify-between gap-4 p-3 rounded-xl bg-[#1C1E27] border border-white/8 cursor-pointer">
+            <span className="text-sm font-medium text-white">{t.settingsLiveMicToggle}</span>
+            <input
+              type="checkbox"
+              checked={settings.liveMicEnabled}
+              onChange={(e) => onUpdateSettings({ liveMicEnabled: e.target.checked })}
+              className="rounded accent-[#387AFF]"
+            />
+          </label>
         </div>
       </div>
     </section>

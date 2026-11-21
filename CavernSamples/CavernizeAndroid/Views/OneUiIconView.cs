@@ -66,7 +66,8 @@ public enum OneUiIconType {
     Plus,
     AudioLogoAtmos,
     AudioLogoSurround,
-    AudioLogoStereo
+    AudioLogoStereo,
+    Microphone
 }
 
 public enum OneUiTabKind {
@@ -705,6 +706,18 @@ public static class OneUiVectorIcons {
                 canvas.DrawCircle(cx + r * 0.36f, cy, r * 0.48f, stroke);
                 canvas.DrawCircle(cx - r * 0.36f, cy, Math.Max(1.1f, r * 0.12f), fill);
                 canvas.DrawCircle(cx + r * 0.36f, cy, Math.Max(1.1f, r * 0.12f), fill);
+                break;
+
+            case OneUiIconType.Microphone:
+                // Studio vocal microphone: rounded capsule + cradle arc + vertical stem + stand base
+                canvas.DrawRoundRect(
+                    new RectF(cx - r * 0.34f, cy - r * 0.86f, cx + r * 0.34f, cy + r * 0.14f),
+                    r * 0.34f, r * 0.34f, stroke);
+                canvas.DrawArc(
+                    new RectF(cx - r * 0.62f, cy - r * 0.34f, cx + r * 0.62f, cy + r * 0.46f),
+                    10f, 160f, false, stroke);
+                canvas.DrawLine(cx, cy + r * 0.46f, cx, cy + r * 0.84f, stroke);
+                canvas.DrawLine(cx - r * 0.38f, cy + r * 0.84f, cx + r * 0.38f, cy + r * 0.84f, stroke);
                 break;
         }
     }

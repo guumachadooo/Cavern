@@ -153,6 +153,8 @@ export interface QuickEqFilter {
   q: number;
 }
 
+export type ProAudioEnginePath = 'auto' | 'libusb-uac2' | 'aaudio';
+
 export interface CavernSettings {
   locale: Locale;
   hrirProfileId: string;
@@ -174,4 +176,13 @@ export interface CavernSettings {
   roomSize: Vec3;
   quickEqFilters: QuickEqFilter[];
   quickEqFileName: string | null;
+  /** Slot 2C: Universal Lossless Twin (LGSR) controls */
+  lgsrEnabled: boolean;
+  lgsrFusionPct: number;
+  lgsrEnvelopeLock: boolean;
+  lgsrClippingGuard: boolean;
+  /** Slot 1/4: Full-Duplex USB Pro-Audio & Live Mic controls */
+  proAudioPath: ProAudioEnginePath;
+  proAudioBufferFrames: 64 | 128 | 256;
+  liveMicEnabled: boolean;
 }

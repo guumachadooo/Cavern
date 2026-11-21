@@ -855,6 +855,40 @@ public sealed class AndroidStrings {
         ["XRayLgsrBypassBtn"] = "LGSR A/B",
         ["XRayVocalBypassBtn"] = "Vocal A/B",
         ["FilterStemsMicOnly"] = "Stems & Mic",
+
+        // W14 Full One UI 9 UX Integration (Lyrics Sing, ATMOS+FLAC A/B, Auto-Vocal Mix-Match, Studio & Settings)
+        ["SingVocalLevelTitle"] = "Vocals",
+        ["SingMicMixMatchBtn"] = "Mix-Match",
+        ["SingMicLiveBadge"] = "MIC ON",
+        ["SingScarlettQuickBtn"] = "Scarlett",
+        ["AudioSpecAtmosFlacBadge"] = "ATMOS+FLAC",
+        ["AudioSpecAtmosAbBadge"] = "ATMOS (A/B)",
+        ["AudioSpecLgsrAbToOriginal"] = "A/B: Listening ATMOS+FLAC",
+        ["AudioSpecLgsrAbToRestored"] = "A/B: Listening Original Atmos",
+        ["AudioSpecLgsrAbRestoredHint"] = "Active mode: Lossless-Guided Atmos (FLAC Twin restored pre-HRTF)",
+        ["AudioSpecLgsrAbOriginalHint"] = "Active mode: Original Lossy Atmos (instant A/B bypass)",
+        ["VocalModalTitle"] = "Auto-Vocal Mix-Match & Live Chain",
+        ["VocalEnableTitle"] = "Enable Live Vocal Chain (Slot 2D)",
+        ["VocalBypassAbTitle"] = "Instant A/B Dry Mic Bypass",
+        ["VocalMixMatchPctTitle"] = "Mix Match Intensity",
+        ["VocalReverbPctTitle"] = "Matched FDN Reverb & Delay",
+        ["VocalDynamicsPctTitle"] = "FET 1176 + Optical LA-2A Dynamics",
+        ["VocalWarmthPctTitle"] = "ADAA Tube/Tape Warmth",
+        ["VocalLevelDbTitle"] = "Vocal Trim Level",
+        ["VocalSidechainGlueTitle"] = "Vocal-Pocket Sidechain Glue (1-4 kHz)",
+        ["VocalNoiseGateTitle"] = "Soft Noise Gate / Expander",
+        ["VocalDeEsserTitle"] = "Split-Band De-Esser (5-10 kHz)",
+        ["VocalLiveTelemetryFormat"] = "In {0:0.0} -> Out {1:0.0} dBFS · Comp {2:0.0} dB · DeEss {3:0.0} dB · Pocket {4:0.0} dB",
+        ["ProAudioVocalChainBtn"] = "Auto-Vocal Mix-Match",
+        ["LgsrAbToggleBtn"] = "A/B Compare",
+        ["StudioW12ContextHybridReady"] = "ATMOS+FLAC Twin synced ({0}) — ready for Tier 2 EM-MWF Hybrid Master.",
+        ["StudioW12ContextHybridNoTwin"] = "No verified FLAC Twin paired yet — will export lossless 7.1.4 spatial master.",
+        ["StudioW12ContextKaraoke"] = "Spatial Karaoke export: Lead Vocals {0}% · Backing Vocals {1}.",
+        ["StudioW12ContextGeneral"] = "Standards-mastered offline export (ITU-R BS.1770-5 & True-Peak ceiling {0:0.1} dBTP).",
+        ["StudioW12KaraokeLevelTitle"] = "Export Lead Vocal Level",
+        ["NoCodecMetadata"] = "No detailed codec metadata available for this track.",
+        ["FinalizingFormat"] = "Finalizing output format...",
+        ["CancelledStatus"] = "Cancelled.",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -1660,6 +1694,40 @@ public sealed class AndroidStrings {
         d["XRayLgsrBypassBtn"] = "LGSR A/B";
         d["XRayVocalBypassBtn"] = "Vocal A/B";
         d["FilterStemsMicOnly"] = "Stems e Mic";
+
+        // W14 Full One UI 9 UX Integration (Lyrics Sing, ATMOS+FLAC A/B, Auto-Vocal Mix-Match, Studio & Settings)
+        d["SingVocalLevelTitle"] = "Vocais";
+        d["SingMicMixMatchBtn"] = "Mix-Match";
+        d["SingMicLiveBadge"] = "MIC ON";
+        d["SingScarlettQuickBtn"] = "Scarlett";
+        d["AudioSpecAtmosFlacBadge"] = "ATMOS+FLAC";
+        d["AudioSpecAtmosAbBadge"] = "ATMOS (A/B)";
+        d["AudioSpecLgsrAbToOriginal"] = "A/B: Ouvindo ATMOS+FLAC";
+        d["AudioSpecLgsrAbToRestored"] = "A/B: Ouvindo Atmos Original";
+        d["AudioSpecLgsrAbRestoredHint"] = "Modo ativo: Atmos Guiado por Lossless (Gêmeo FLAC restaurado pré-HRTF)";
+        d["AudioSpecLgsrAbOriginalHint"] = "Modo ativo: Atmos Lossy Original (bypass A/B instantâneo)";
+        d["VocalModalTitle"] = "Auto-Vocal Mix-Match e Cadeia ao Vivo";
+        d["VocalEnableTitle"] = "Ativar Cadeia Vocal ao Vivo (Slot 2D)";
+        d["VocalBypassAbTitle"] = "Bypass A/B Instantâneo (Mic Limpo)";
+        d["VocalMixMatchPctTitle"] = "Intensidade do Mix Match";
+        d["VocalReverbPctTitle"] = "Reverb FDN e Delay Casados";
+        d["VocalDynamicsPctTitle"] = "Dinâmica FET 1176 + Óptico LA-2A";
+        d["VocalWarmthPctTitle"] = "Calor Analógico ADAA (Válvula/Fita)";
+        d["VocalLevelDbTitle"] = "Nível de Saída Vocal";
+        d["VocalSidechainGlueTitle"] = "Sidechain Vocal-Pocket (1-4 kHz)";
+        d["VocalNoiseGateTitle"] = "Noise Gate / Expander Suave";
+        d["VocalDeEsserTitle"] = "De-Esser Split-Band (5-10 kHz)";
+        d["VocalLiveTelemetryFormat"] = "Ent {0:0.0} -> Saí {1:0.0} dBFS · Comp {2:0.0} dB · DeEss {3:0.0} dB · Pocket {4:0.0} dB";
+        d["ProAudioVocalChainBtn"] = "Auto-Vocal Mix-Match";
+        d["LgsrAbToggleBtn"] = "Comparar A/B";
+        d["StudioW12ContextHybridReady"] = "Gêmeo ATMOS+FLAC sincronizado ({0}) — pronto para Master Híbrido EM-MWF.";
+        d["StudioW12ContextHybridNoTwin"] = "Sem Gêmeo FLAC verificado — exportará master espacial 7.1.4 lossless.";
+        d["StudioW12ContextKaraoke"] = "Exportação Karaokê Espacial: Vocal Principal {0}% · Backings {1}.";
+        d["StudioW12ContextGeneral"] = "Exportação masterizada por normas (ITU-R BS.1770-5 e teto True-Peak {0:0.1} dBTP).";
+        d["StudioW12KaraokeLevelTitle"] = "Nível do Vocal Principal na Exportação";
+        d["NoCodecMetadata"] = "Nenhum metadado detalhado de codec disponível para esta faixa.";
+        d["FinalizingFormat"] = "Finalizando formato de saída...";
+        d["CancelledStatus"] = "Cancelado.";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

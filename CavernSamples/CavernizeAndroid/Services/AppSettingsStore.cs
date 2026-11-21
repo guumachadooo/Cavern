@@ -744,6 +744,65 @@ public sealed class AppSettingsStore {
         CalibratedRoundTripMs = CalibratedRoundTripMs
     }.Sanitize();
 
+    // Slot 2D: Auto-Vocal Mix-Match & Live Mastering Vocal Chain (W11 / W14)
+    public bool VocalMixMatchEnabled {
+        get => prefs.GetBoolean("vocalMixMatchEnabled", true);
+        set => Edit().PutBoolean("vocalMixMatchEnabled", value).Apply();
+    }
+
+    public float VocalMixMatchPct {
+        get => prefs.GetFloat("vocalMixMatchPct", 75f);
+        set => Edit().PutFloat("vocalMixMatchPct", Math.Clamp(value, 0f, 100f)).Apply();
+    }
+
+    public float VocalReverbPct {
+        get => prefs.GetFloat("vocalReverbPct", 100f);
+        set => Edit().PutFloat("vocalReverbPct", Math.Clamp(value, 0f, 150f)).Apply();
+    }
+
+    public float VocalDynamicsPct {
+        get => prefs.GetFloat("vocalDynamicsPct", 100f);
+        set => Edit().PutFloat("vocalDynamicsPct", Math.Clamp(value, 0f, 150f)).Apply();
+    }
+
+    public float VocalWarmthPct {
+        get => prefs.GetFloat("vocalWarmthPct", 35f);
+        set => Edit().PutFloat("vocalWarmthPct", Math.Clamp(value, 0f, 100f)).Apply();
+    }
+
+    public float VocalLevelDb {
+        get => prefs.GetFloat("vocalLevelDb", 0f);
+        set => Edit().PutFloat("vocalLevelDb", Math.Clamp(value, -18f, 12f)).Apply();
+    }
+
+    public bool VocalSidechainPocketGlue {
+        get => prefs.GetBoolean("vocalSidechainGlue", true);
+        set => Edit().PutBoolean("vocalSidechainGlue", value).Apply();
+    }
+
+    public bool VocalNoiseGate {
+        get => prefs.GetBoolean("vocalNoiseGate", true);
+        set => Edit().PutBoolean("vocalNoiseGate", value).Apply();
+    }
+
+    public bool VocalDeEsser {
+        get => prefs.GetBoolean("vocalDeEsser", true);
+        set => Edit().PutBoolean("vocalDeEsser", value).Apply();
+    }
+
+    public Cavern.VocalChain.VocalMacroSettings BuildVocalMacroSettings() => new() {
+        Enabled = VocalMixMatchEnabled,
+        Bypass = false,
+        MixMatchPct = Math.Clamp(VocalMixMatchPct, 0f, 100f),
+        ReverbPct = Math.Clamp(VocalReverbPct, 0f, 150f),
+        DynamicsPct = Math.Clamp(VocalDynamicsPct, 0f, 150f),
+        WarmthPct = Math.Clamp(VocalWarmthPct, 0f, 100f),
+        VocalLevelDb = Math.Clamp(VocalLevelDb, -18f, 12f),
+        EnableSidechainPocketGlue = VocalSidechainPocketGlue,
+        EnableNoiseGate = VocalNoiseGate,
+        EnableDeEsser = VocalDeEsser
+    };
+
     public string DeviceProfilesJson {
         get => prefs.GetString("deviceProfilesV1", "[]");
         set => Edit().PutString("deviceProfilesV1", value ?? "[]").Apply();

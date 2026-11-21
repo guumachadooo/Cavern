@@ -298,6 +298,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
         neuralRuntime = new NativeOnnxRuntimeBridge(this);
         playerEngine.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
         playerEngine.ApplyLgsrConfig(store.BuildLgsrConfig());
+        playerEngine.VocalMixMatchStage.ApplyVocalProfile(
+            playerEngine.VocalMixMatchStage.ActiveDna,
+            store.BuildVocalMacroSettings());
         SyncNeuralRuntimeDiagnostics();
 
         AutoEqService.EnsureLoaded(this);
