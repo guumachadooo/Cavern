@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 
 using Cavern;
@@ -8,17 +9,21 @@ using Cavern.Format;
 using Cavern.Format.Common;
 using Cavern.Format.Renderers;
 using Cavern.Listeners;
+using Cavern.Spatial;
 using Cavern.Utilities;
 using Cavern.Virtualizer;
 
 using Cavernize.Logic.CavernSettings;
 using Cavernize.Logic.Models;
+using Cavernize.Logic.Spatial;
+using Cavernize.Logic.Spatial.Adapters;
 
 namespace Cavernize.Logic.Rendering;
 
 /// <summary>
 /// Real-time 3D spatial audio playback engine for <see cref="CavernizeTrack"/> with interactive room position,
-/// listener head rotation, HRTF headphone virtualization, distance simulation, and per-source solo/mute.
+/// listener head rotation, HRTF headphone virtualization, distance simulation, per-source solo/mute,
+/// and the unified 6-slot spatial pipeline backbone (<see cref="SceneHub"/>).
 /// </summary>
 public sealed class RealtimePlayerEngine : IDisposable {
     const int updateRate = 256;
@@ -27,12 +32,19 @@ public sealed class RealtimePlayerEngine : IDisposable {
 
     readonly object renderLock = new();
 
+    // Unified 6-slot backbone & stage processors
+    readonly SpatialSceneHub sceneHub = new();
+    readonly ManualHeadTrackerProvider manualHeadTracker = new();
+    readonly ParametricUpmixerStageProcessor parametricUpmixerStage = new(new UpmixingSettings(true));
+    readonly CavernVirtualizerRendererAdapter virtualizerRenderer = new();
+    readonly AutoEqPostProcessingStage autoEqPostStage = new();
+    readonly NormalizerPostProcessingAdapter limiterPostStage = new(true);
+    readonly SpatialSceneFrame activeSceneFrame = new();
+
     CavernizeTrack currentTrack;
     UpmixingSettings upmixingSettings = new(true);
     RenderingSettings renderingSettings = new();
     Listener listener;
-    Normalizer virtNormalizer;
-    float[] stereoNormBuffer = [];
     bool virtualizerInitialized;
     int appliedProfileVersion = -1;
 
@@ -45,6 +57,39 @@ public sealed class RealtimePlayerEngine : IDisposable {
     int crossfadeTotal;
     long lastSourceMaskHash;
     bool lastDynamicCeilingState;
+    Source[] cachedActiveSources = Array.Empty<Source>();
+    int activeNativeSampleRateRequest;
+
+    /// <summary>
+    /// Creates a real-time spatial audio engine wired with Slot 1–6 processors.
+    /// </summary>
+    public RealtimePlayerEngine() {
+        sceneHub.BindHeadTracker(manualHeadTracker);
+        sceneHub.BindRenderer(virtualizerRenderer);
+        sceneHub.RegisterStageProcessor(parametricUpmixerStage);
+        sceneHub.RegisterPostProcessingStage(autoEqPostStage);
+        sceneHub.RegisterPostProcessingStage(limiterPostStage);
+    }
+
+    /// <summary>
+    /// Slot 3 unified scene hub exposing active sources, 6DoF listener pose, programme metadata, telemetry,
+    /// and extensible Slot 2 / Slot 4 / Slot 5 / Slot 6 pipeline registrations.
+    /// </summary>
+    public SpatialSceneHub SceneHub => sceneHub;
+
+    /// <summary>
+    /// Slot 6A neutral AutoEq parametric headphone compensation stage (Priority 100, before safety limiter).
+    /// </summary>
+    public AutoEqPostProcessingStage AutoEqStage => autoEqPostStage;
+
+    /// <summary>
+    /// Active Slot 4 head-tracking provider. Defaults to <see cref="ManualHeadTrackerProvider"/> synced with
+    /// <see cref="ListenerPosition"/> and <see cref="ListenerRotation"/>.
+    /// </summary>
+    public IHeadTrackerProvider HeadTracker {
+        get => sceneHub.ActiveHeadTracker ?? manualHeadTracker;
+        set => sceneHub.BindHeadTracker(value ?? manualHeadTracker);
+    }
 
     /// <summary>
     /// Fired when non-looping playback reaches the end of the track.
@@ -169,6 +214,32 @@ public sealed class RealtimePlayerEngine : IDisposable {
     public bool LimiterOnly { get; set; } = true;
 
     /// <summary>
+    /// Look-ahead prediction horizon (milliseconds) passed to the active Slot 4 <see cref="IHeadTrackerProvider"/>
+    /// to compensate Bluetooth/USB/HAL audio buffer latency during head movement.
+    /// </summary>
+    public float HeadTrackingPredictionMs { get; set; } = 25f;
+
+    /// <summary>
+    /// Enables native high-resolution sample-rate pass-through (44.1..192 kHz) when outputting Direct 2.0 to a USB DAC.
+    /// When headphone HRTF virtualization is active, output remains locked to <see cref="VirtualizerFilter.FilterSampleRate"/> (48 kHz)
+    /// to preserve laboratory HRIR/BRIR measurement accuracy without resampling coloration.
+    /// </summary>
+    public bool UsbDacNativeSampleRateEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Optional preferred hardware sample rate reported by an attached USB DAC (0 = automatic from track).
+    /// </summary>
+    public int PreferredHardwareSampleRate { get; set; }
+
+    /// <summary>
+    /// Updates the cached <see cref="PreferredHardwareSampleRate"/> negotiated with the hardware DAC without stopping playback.
+    /// </summary>
+    public void SetPreferredHardwareSampleRate(int sampleRate) {
+        int clamped = sampleRate >= 44100 && sampleRate <= 192000 ? sampleRate : 0;
+        PreferredHardwareSampleRate = clamped;
+    }
+
+    /// <summary>
     /// Requests a smooth clickless crossfade on the next rendered audio block.
     /// </summary>
     public void RequestSmoothTransition() {
@@ -201,6 +272,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
 
             ConfigureListener(resetToStart: true);
             sourceItems = TrackSourceItem.BuildFromTrack(track);
+            BindTrackToSceneHubLocked(track);
         }
     }
 
@@ -239,6 +311,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
 
             ConfigureListener(resetToStart: false);
             sourceItems = TrackSourceItem.BuildFromTrack(track);
+            BindTrackToSceneHubLocked(track);
             IsPlaying = wasPlaying;
         }
     }
@@ -260,6 +333,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 item.IsSolo = false;
                 item.IsDynamicallyFilteredOut = false;
             }
+            sceneHub.ClearSourceOverrides();
         }
     }
 
@@ -277,6 +351,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             long targetSample = (long)Math.Round(seconds * currentTrack.SampleRate);
             currentTrackSample = currentTrack.Seek(targetSample);
             ConfigureListener(resetToStart: false);
+            sceneHub.ResetStatefulStages();
         }
     }
 
@@ -321,33 +396,46 @@ public sealed class RealtimePlayerEngine : IDisposable {
 
                 ApplySourceMutesAndProperties();
 
-                float[] rendered = listener.Render(chunks);
-                if (rendered == null) {
+                int requestedFrames = chunks * updateRate;
+                int outOffset = totalFramesWritten * 2;
+                activeSceneFrame.BeginBlock(
+                    listener.SampleRate,
+                    requestedFrames,
+                    currentTrackSample,
+                    Stopwatch.GetTimestamp(),
+                    Listener.EnvironmentSize,
+                    Listener.EnvironmentType,
+                    HeadphoneVirtualizer,
+                    sceneHub.ListenerPose,
+                    sceneHub.ProgramMetadata,
+                    sceneHub.Sources,
+                    stereoOutput,
+                    outOffset,
+                    2);
+
+                // Slot 2: Ordered spatial stage processors (pass-through until Wave W02/W08)
+                IReadOnlyList<ISpatialStageProcessor> stageProcessors = sceneHub.StageProcessors;
+                for (int p = 0; p < stageProcessors.Count; p++) {
+                    if (stageProcessors[p].IsEnabled) {
+                        stageProcessors[p].Process(activeSceneFrame);
+                    }
+                }
+
+                // Slot 5: Binaural / Stereo renderer (delegates to Cavern Listener + VirtualizerFilter)
+                IBinauralRenderer renderer = sceneHub.ActiveRenderer ?? virtualizerRenderer;
+                int blockFrames = renderer.RenderFrame(activeSceneFrame, stereoOutput, outOffset, requestedFrames);
+                if (blockFrames <= 0) {
                     break;
                 }
 
-                int stride = Listener.Channels.Length;
-                int blockFrames = chunks * updateRate;
-                int outOffset = totalFramesWritten * 2;
-                for (int s = 0; s < blockFrames; s++) {
-                    float left = rendered[s * stride];
-                    float right = stride > 1 ? rendered[s * stride + 1] : left;
-                    stereoOutput[outOffset + s * 2] = float.IsFinite(left) ? left : 0f;
-                    stereoOutput[outOffset + s * 2 + 1] = float.IsFinite(right) ? right : 0f;
-                }
-
-                if (HeadphoneVirtualizer && NormalizerEnabled && virtNormalizer != null) {
-                    virtNormalizer.limiterOnly = LimiterOnly;
-                    virtNormalizer.SampleRate = listener.SampleRate;
-                    virtNormalizer.Channels = 2;
-                    virtNormalizer.decayFactor = 10f * blockFrames / listener.SampleRate;
-                    int sliceLen = blockFrames * 2;
-                    if (stereoNormBuffer.Length != sliceLen) {
-                        stereoNormBuffer = new float[sliceLen];
+                // Slot 6: Ordered transparent post-processing stages (AutoEq Priority 100, ISO 226, BS.1770, Soft-Knee Limiter Priority 900)
+                limiterPostStage.LimiterOnly = LimiterOnly;
+                limiterPostStage.IsEnabled = (HeadphoneVirtualizer || autoEqPostStage.IsEnabled) && NormalizerEnabled;
+                IReadOnlyList<IPostProcessingStage> postStages = sceneHub.PostProcessingStages;
+                for (int p = 0; p < postStages.Count; p++) {
+                    if (postStages[p].IsEnabled) {
+                        postStages[p].ProcessInterleaved(stereoOutput, outOffset, blockFrames, 2, activeSceneFrame);
                     }
-                    Array.Copy(stereoOutput, outOffset, stereoNormBuffer, 0, sliceLen);
-                    virtNormalizer.Process(stereoNormBuffer);
-                    Array.Copy(stereoNormBuffer, 0, stereoOutput, outOffset, sliceLen);
                 }
 
                 if (crossfadeRemaining > 0 && crossfadeTotal > 0) {
@@ -366,9 +454,19 @@ public sealed class RealtimePlayerEngine : IDisposable {
                     crossfadeRemaining -= blendCount;
                 }
 
+                float blockPeak = 0f;
                 for (int i = 0; i < blockFrames * 2; i++) {
-                    stereoOutput[outOffset + i] = Math.Clamp(stereoOutput[outOffset + i], -1f, 1f);
+                    float clamped = Math.Clamp(stereoOutput[outOffset + i], -1f, 1f);
+                    stereoOutput[outOffset + i] = clamped;
+                    float abs = MathF.Abs(clamped);
+                    if (abs > blockPeak) {
+                        blockPeak = abs;
+                    }
                 }
+
+                SoundfieldTelemetry telemetry = activeSceneFrame.Telemetry;
+                telemetry.TruePeakDbfs = blockPeak > 1e-6f ? 20f * MathF.Log10(blockPeak) : -120f;
+                activeSceneFrame.Telemetry = telemetry;
 
                 RecordTailLocked(stereoOutput, outOffset, blockFrames);
 
@@ -377,6 +475,8 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 totalFramesWritten += blockFrames;
 
                 UpdateSourceTelemetry();
+                parametricUpmixerStage.SyncTelemetry(activeSceneFrame);
+                sceneHub.Telemetry = activeSceneFrame.Telemetry;
             }
         }
 
@@ -442,43 +542,87 @@ public sealed class RealtimePlayerEngine : IDisposable {
             currentTrack.AttachFromCurrentPosition(listener, upmixingSettings);
         }
 
+        parametricUpmixerStage.BindTelemetryProvider(currentTrack.ActiveTelemetryProvider);
+        RebuildCachedActiveSourcesLocked();
         SetupOutputLayout();
+    }
+
+    void RebuildCachedActiveSourcesLocked() {
+        if (listener == null || listener.ActiveSources.Count == 0) {
+            cachedActiveSources = Array.Empty<Source>();
+            return;
+        }
+        Source[] arr = new Source[listener.ActiveSources.Count];
+        int i = 0;
+        foreach (Source s in listener.ActiveSources) {
+            arr[i++] = s;
+        }
+        cachedActiveSources = arr;
     }
 
     void SetupOutputLayout() {
         if (HeadphoneVirtualizer) {
-            Listener.HeadphoneVirtualizer = true;
+            if (!Listener.HeadphoneVirtualizer) {
+                Listener.HeadphoneVirtualizer = true;
+            }
             new VirtualizerFilter().SetLayout();
             listener.SampleRate = VirtualizerFilter.FilterSampleRate;
             listener.LFESeparation = true;
-            virtNormalizer = new Normalizer(LimiterOnly) {
-                SampleRate = listener.SampleRate,
-                Channels = 2,
-                decayFactor = 10f * updateRate / listener.SampleRate
-            };
+            limiterPostStage.LimiterOnly = LimiterOnly;
+            limiterPostStage.Reset();
             virtualizerInitialized = true;
             appliedProfileVersion = VirtualizerFilter.ProfileVersion;
+            activeNativeSampleRateRequest = listener.SampleRate;
         } else {
-            Listener.HeadphoneVirtualizer = false;
+            if (Listener.HeadphoneVirtualizer) {
+                Listener.HeadphoneVirtualizer = false;
+            }
             Listener.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.ref200));
             listener.LFESeparation = true;
-            listener.SampleRate = renderingSettings.RoomCorrectionUsable
-                ? renderingSettings.RoomCorrection.SampleRate
-                : Math.Max(44100, currentTrack.SampleRate);
+            int desiredRate = ResolveDirectOutputSampleRate();
+            listener.SampleRate = desiredRate;
             virtualizerInitialized = false;
             appliedProfileVersion = -1;
+            activeNativeSampleRateRequest = desiredRate;
         }
         OutputSampleRate = listener.SampleRate;
+        virtualizerRenderer.Bind(listener, HeadphoneVirtualizer, sceneHub.ActiveBinauralProfileName);
+        sceneHub.ConfigurePostProcessingStages(listener.SampleRate, 2);
+    }
+
+    int ResolveDirectOutputSampleRate() {
+        if (renderingSettings.RoomCorrectionUsable) {
+            return renderingSettings.RoomCorrection.SampleRate;
+        }
+        int trackRate = currentTrack != null ? Math.Clamp(currentTrack.SampleRate, 44100, 192000) : Listener.DefaultSampleRate;
+        if (UsbDacNativeSampleRateEnabled && PreferredHardwareSampleRate >= 44100 && PreferredHardwareSampleRate <= 192000) {
+            return PreferredHardwareSampleRate;
+        }
+        return trackRate;
+    }
+
+    void BindTrackToSceneHubLocked(CavernizeTrack track) {
+        CavernTrackDecoderAdapter decoderAdapter = new(track, sourceItems);
+        parametricUpmixerStage.UpdateSettings(upmixingSettings);
+        parametricUpmixerStage.BindTelemetryProvider(track.ActiveTelemetryProvider);
+        sceneHub.BindDecoder(decoderAdapter, decoderAdapter.DescribeSources());
+        sceneHub.ConfigureStageProcessors(OutputSampleRate, decoderAdapter.Metadata);
+        sceneHub.ConfigurePostProcessingStages(OutputSampleRate, 2);
     }
 
     void ApplyLiveParameters() {
-        Listener.EnvironmentType = EnvironmentType;
-        if (EnvironmentSize.X > 0.1f && EnvironmentSize.Y > 0.1f && EnvironmentSize.Z > 0.1f) {
+        if (Listener.EnvironmentType != EnvironmentType) {
+            Listener.EnvironmentType = EnvironmentType;
+        }
+        if (EnvironmentSize.X > 0.1f && EnvironmentSize.Y > 0.1f && EnvironmentSize.Z > 0.1f &&
+            Listener.EnvironmentSize != EnvironmentSize) {
             Listener.EnvironmentSize = EnvironmentSize;
         }
 
+        int desiredDirectRate = !HeadphoneVirtualizer ? ResolveDirectOutputSampleRate() : VirtualizerFilter.FilterSampleRate;
         if (HeadphoneVirtualizer != virtualizerInitialized ||
-            (HeadphoneVirtualizer && appliedProfileVersion != VirtualizerFilter.ProfileVersion)) {
+            (HeadphoneVirtualizer && appliedProfileVersion != VirtualizerFilter.ProfileVersion) ||
+            (!HeadphoneVirtualizer && desiredDirectRate != activeNativeSampleRateRequest)) {
             if (hasRenderedAudio) {
                 ArmCrossfadeLocked();
             }
@@ -492,8 +636,39 @@ public sealed class RealtimePlayerEngine : IDisposable {
             lastDynamicCeilingState = DynamicCeilingOnly;
         }
 
-        listener.Position = ListenerPosition;
-        listener.Rotation = ListenerRotation;
+        manualHeadTracker.SetPose(ListenerPosition, ListenerRotation);
+        IHeadTrackerProvider activeTracker = sceneHub.ActiveHeadTracker ?? manualHeadTracker;
+        bool externalLive = !ReferenceEquals(activeTracker, manualHeadTracker) && activeTracker.IsConnected;
+        float horizonMs = Math.Clamp(HeadTrackingPredictionMs, 0f, 120f);
+        ListenerPose6DoF pose = externalLive
+            ? activeTracker.GetCurrentPose(horizonMs)
+            : manualHeadTracker.GetCurrentPose(0f);
+
+        if (externalLive) {
+            // Preserve user's 3D Room translational offset if the hardware tracker is 3DoF-only
+            Vector3 effectivePos = activeTracker.Supports6DoF && pose.Position.LengthSquared() > 1e-6f
+                ? ListenerPosition + pose.Position
+                : ListenerPosition;
+            if (effectivePos != pose.Position) {
+                pose = new ListenerPose6DoF(
+                    effectivePos,
+                    pose.Orientation,
+                    pose.EulerDegrees,
+                    pose.AngularVelocityRadPerSec,
+                    pose.TimestampTicks,
+                    pose.PredictionHorizonMs,
+                    isTrackingActive: true);
+            }
+            // Mirror live tracked Euler orientation so 3D Room canvas & telemetry follow smoothly
+            ListenerRotation = pose.EulerDegrees;
+        }
+
+        sceneHub.IsHeadTrackingLive = externalLive;
+        sceneHub.ActiveHeadTrackerName = activeTracker.DisplayName;
+        sceneHub.ListenerPose = pose;
+
+        listener.Position = pose.Position;
+        listener.Rotation = pose.EulerDegrees;
         listener.AudioQuality = AudioQuality;
         listener.Range = Math.Max(50f, EnvironmentSize.Length() * 5f);
 
@@ -510,7 +685,14 @@ public sealed class RealtimePlayerEngine : IDisposable {
     }
 
     void ApplySourceMutesAndProperties() {
-        Listener.HeadphoneVirtualizer = HeadphoneVirtualizer;
+        if (Listener.HeadphoneVirtualizer != HeadphoneVirtualizer) {
+            Listener.HeadphoneVirtualizer = HeadphoneVirtualizer;
+        }
+
+        // Keep cached flat source array synchronized without per-block enumerator boxing
+        if (cachedActiveSources.Length != listener.ActiveSources.Count) {
+            RebuildCachedActiveSourcesLocked();
+        }
 
         IReadOnlyList<Source> rendererObjects = currentTrack.Renderer.Objects;
         bool anySolo = false;
@@ -523,7 +705,40 @@ public sealed class RealtimePlayerEngine : IDisposable {
 
         long maskHash = (MuteBed ? 1L : 0L) | (OnlyBeds ? 2L : 0L) | (MuteGround ? 4L : 0L) | (DynamicCeilingOnly ? 8L : 0L);
         Vector3 invEnv = Vector3.One / Listener.EnvironmentSize;
-        if (listener.ActiveSources.Count == rendererObjects.Count && sourceItems.Count == rendererObjects.Count) {
+        SourceLayer[] activeLayers = currentTrack.ActiveSourceLayers;
+        Source[] flatSources = cachedActiveSources;
+
+        if (activeLayers != null && flatSources.Length == activeLayers.Length && sourceItems.Count == rendererObjects.Count) {
+            for (int idx = 0; idx < flatSources.Length; idx++) {
+                Source src = flatSources[idx];
+                Vector3 rawPos = src.Position * invEnv;
+                bool dynFiltered = DynamicCeilingOnly && rawPos.Y <= 0.15f;
+                bool mute;
+                if (idx < sourceItems.Count) {
+                    TrackSourceItem item = sourceItems[idx];
+                    item.IsDynamicallyFilteredOut = dynFiltered;
+                    mute = item.IsMuted || (anySolo && !item.IsSolo) || dynFiltered;
+                    if (MuteBed && item.IsBed) {
+                        mute = true;
+                    }
+                    if (OnlyBeds && !item.IsBed) {
+                        mute = true;
+                    }
+                    if (MuteGround && MathF.Abs(rawPos.Y) < 0.05f) {
+                        mute = true;
+                    }
+                } else {
+                    bool isVirtualBed = activeLayers[idx] == SourceLayer.VirtualMatrix;
+                    mute = anySolo || dynFiltered || (MuteBed && isVirtualBed) || (OnlyBeds && !isVirtualBed) || (MuteGround && MathF.Abs(rawPos.Y) < 0.05f);
+                }
+                if (mute) {
+                    maskHash ^= 1L << ((idx % 56) + 6);
+                }
+                src.Mute = mute;
+                src.DistanceSimulation = DistanceSimulation && HeadphoneVirtualizer;
+                src.VolumeRolloff = VolumeRolloff;
+            }
+        } else if (flatSources.Length == rendererObjects.Count && sourceItems.Count == rendererObjects.Count) {
             for (int i = 0; i < rendererObjects.Count; i++) {
                 Source src = rendererObjects[i];
                 TrackSourceItem item = sourceItems[i];
@@ -552,8 +767,8 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 src.VolumeRolloff = VolumeRolloff;
             }
         } else {
-            int idx = 0;
-            foreach (Source src in listener.ActiveSources) {
+            for (int idx = 0; idx < flatSources.Length; idx++) {
+                Source src = flatSources[idx];
                 Vector3 rawPos = src.Position * invEnv;
                 bool isBedPos = MathF.Abs(rawPos.X) % 1 < .01f && MathF.Abs(rawPos.Y) % 1 < .01f && MathF.Abs(rawPos.Z) % 1 < .01f;
                 bool dynFiltered = DynamicCeilingOnly && rawPos.Y <= 0.15f;
@@ -561,7 +776,6 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 if (mute) {
                     maskHash ^= 1L << ((idx % 56) + 6);
                 }
-                idx++;
                 src.Mute = mute;
                 src.DistanceSimulation = DistanceSimulation && HeadphoneVirtualizer;
                 src.VolumeRolloff = VolumeRolloff;
@@ -599,6 +813,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 sourceItems[i].RmsLevel = 0f;
             }
         }
+        sceneHub.SyncTelemetryFromTrackItems(sourceItems, Listener.EnvironmentSize);
     }
 
     /// <inheritdoc/>
@@ -608,6 +823,11 @@ public sealed class RealtimePlayerEngine : IDisposable {
             listener?.DetachAllSources();
             listener = null;
             currentTrack = null;
+            sceneHub.BindDecoder(null);
+            virtualizerRenderer.Dispose();
+            limiterPostStage.Dispose();
+            parametricUpmixerStage.Dispose();
+            manualHeadTracker.Dispose();
         }
         GC.SuppressFinalize(this);
     }

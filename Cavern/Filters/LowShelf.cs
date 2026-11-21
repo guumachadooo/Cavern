@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 using Cavern.Filters.Utilities;
@@ -37,16 +37,31 @@ namespace Cavern.Filters {
         public LowShelf(int sampleRate, double centerFreq, double q, double gain) : base(sampleRate, centerFreq, q, gain) { }
 
         /// <summary>
-        /// Parse a Filter line of Equalizer APO which was split at spaces to a Cavern <see cref="LowShelf"/> filter.<br />
-        /// Sample with fixed shelf: Filter: ON LS Fc 100 Hz Gain 0 dB
-        /// Sample with custom shelf: Filter: ON LSC 12 dB Fc 100 Hz Gain 0 dB
+        /// Parse a Filter line of Equalizer APO or AutoEq which was split at spaces to a Cavern <see cref="LowShelf"/> filter.<br />
+        /// Sample with fixed shelf: Filter: ON LS Fc 100 Hz Gain 0 dB<br />
+        /// Sample with AutoEq Q shelf: Filter 1: ON LSC Fc 105 Hz Gain 5.0 dB Q 0.70<br />
+        /// Sample with custom slope: Filter: ON LSC 12 dB Fc 100 Hz Gain 0 dB
         /// </summary>
         public static new LowShelf FromEqualizerAPO(string[] splitLine, int sampleRate) {
-            string type = splitLine[2].ToLowerInvariant();
-            if (type == "ls" && QMath.TryParseDouble(splitLine[4], out double freq) && QMath.TryParseDouble(splitLine[5], out double gain)) {
-                return new LowShelf(sampleRate, freq, QFactor.FromSlope(0.9, gain));
-            } else if (type == "lsc" && QMath.TryParseDouble(splitLine[3], out double slope) &&
-                QMath.TryParseDouble(splitLine[6], out freq) && QMath.TryParseDouble(splitLine[9], out gain)) {
+            int typeIndex = splitLine.Length > 2 && splitLine[1].Equals("ON", StringComparison.OrdinalIgnoreCase) ? 2 : 3;
+            if (splitLine.Length <= typeIndex) {
+                throw new FormatException(nameof(splitLine));
+            }
+            string type = splitLine[typeIndex].ToLowerInvariant();
+            if ((type == "ls" || type == "lsc") && splitLine.Length >= typeIndex + 6 &&
+                splitLine[typeIndex + 1].Equals("Fc", StringComparison.OrdinalIgnoreCase) &&
+                QMath.TryParseDouble(splitLine[typeIndex + 2], out double freq) &&
+                QMath.TryParseDouble(splitLine[typeIndex + 5], out double gain)) {
+                if (splitLine.Length >= typeIndex + 9 &&
+                    splitLine[typeIndex + 7].Equals("Q", StringComparison.OrdinalIgnoreCase) &&
+                    QMath.TryParseDouble(splitLine[typeIndex + 8], out double qVal) && qVal > 0) {
+                    return new LowShelf(sampleRate, freq, qVal, gain);
+                }
+                return new LowShelf(sampleRate, freq, QFactor.FromSlope(0.9, gain), gain);
+            } else if (type == "lsc" && splitLine.Length >= typeIndex + 8 &&
+                QMath.TryParseDouble(splitLine[typeIndex + 1], out double slope) &&
+                QMath.TryParseDouble(splitLine[typeIndex + 4], out freq) &&
+                QMath.TryParseDouble(splitLine[typeIndex + 7], out gain)) {
                 return new LowShelf(sampleRate, freq, QFactor.FromSlopeDecibels(slope, gain), gain);
             }
             throw new FormatException(nameof(splitLine));

@@ -472,6 +472,39 @@ public sealed class AndroidStrings {
         ["QualityClippingWarn"] = "Hard clipping detected ({0}% full-scale peaks)",
         ["QualityAnalyzing"] = "Analyzing real PCM spectrum and bit-depth in background...",
         ["AudioStreamsSection"] = "Audio Streams in File",
+
+        // Slot 6A: AutoEq Neutral Headphone Engine & Auto-Profile per Device
+        ["AutoEqEnableTitle"] = "AutoEq Neutral Headphone EQ",
+        ["AutoEqModalTitle"] = "Select Headphone (AutoEq)",
+        ["AutoEqNoneSelected"] = "No headphone profile selected",
+        ["AutoEqCatalogCountSub"] = "Tap to search {0:N0} official laboratory profiles (127 offline)",
+        ["AutoEqActiveSummary"] = "{0} SOS bands • Preamp {1:+0.0;-0.0;0.0} dB{2}",
+        ["AutoEqGuardEngagedTag"] = "Raw HRIR Guard",
+        ["AutoEqTargetTitle"] = "Neutral Compensation Target",
+        ["AutoEqTargetDfNeutral"] = "Diffuse-Field Neutral (Recommended)",
+        ["AutoEqTargetBk5128Df"] = "B&K 5128 Diffuse-Field (Flat)",
+        ["AutoEqTargetBk5128Jm1"] = "B&K 5128 JM-1 Neutral",
+        ["AutoEqTargetHarmanNoBass"] = "Harman Studio (No Bass Boost)",
+        ["AutoEqTargetNative"] = "AutoEq Original Target",
+        ["AutoEqDoubleEqGuardTitle"] = "Zero Double-EQ Guard (Raw HRIR)",
+        ["AutoEqAutoDeviceTitle"] = "Auto-Profile per Audio Device",
+        ["AutoEqDetectedDevice"] = "Active output: {0}",
+        ["AutoEqUnknownDevice"] = "Default Audio Output",
+        ["AutoEqImportBtn"] = "Import EQ (.txt)",
+        ["AutoEqCreditsBtn"] = "AutoEq Licenses",
+        ["AutoEqClearBtn"] = "Disable / Clear",
+        ["AutoEqSearchHint"] = "Search 8,850+ models (e.g. Galaxy Buds2 Pro, HD 650, XM5)...",
+        ["AutoEqNoResults"] = "No matching headphone models found.",
+        ["AutoEqOfflineTag"] = "Offline",
+        ["AutoEqOnlineTag"] = "Online cache",
+        ["AutoEqDownloadingToast"] = "Downloading AutoEq measurement for {0}...",
+        ["AutoEqDownloadFail"] = "Could not load AutoEq profile. Check internet connection or import a local .txt file.",
+        ["AutoEqAppliedToast"] = "AutoEq applied: {0}",
+        ["AutoEqAutoMatchedToast"] = "{0} connected — AutoEq applied: {1}",
+        ["TipAutoEq"] = "Applies zero-GC double-precision parametric equalization measured from jaakkopasanen/AutoEq (oratory1990, crinacle, Rtings) to flatten headphone frequency errors with automatic clipping-free preamp headroom.",
+        ["TipAutoEqTarget"] = "Transforms AutoEq measurements into a strictly neutral reference curve without artificial bass or treble coloration:\n• Diffuse-Field Neutral: ideal match for DFC HRIR/BRIR spatial profiles.\n• B&K 5128 DF / JM-1: modern Type 4.3 ear-simulator neutral targets.\n• Harman Studio (No Bass): flat sub-bass reference.",
+        ["TipAutoEqDoubleEqGuard"] = "Automatically detects when a Raw uncompensated HRIR (such as TH Köln Far-Field Raw) is active and applies the exact inverse ISO 11904-1 Diffuse-Field transform so ear-canal/pinna resonance is never double-equalized.",
+        ["TipAutoEqAutoDevice"] = "Uses Android's native AudioDeviceCallback to remember and automatically switch your AutoEq model, target curve, binaural HRIR profile, and head-tracking preference whenever Bluetooth, USB-C DAC, 3.5mm, or Built-in Speaker connects.",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -893,6 +926,39 @@ public sealed class AndroidStrings {
         d["QualityClippingWarn"] = "Clipping rígido detectado ({0}% de picos saturados)";
         d["QualityAnalyzing"] = "Analisando espectro PCM real e bits efetivos em segundo plano...";
         d["AudioStreamsSection"] = "Faixas de Áudio no Arquivo";
+
+        // Slot 6A: Motor AutoEq Neutro e Perfil Automático por Dispositivo
+        d["AutoEqEnableTitle"] = "AutoEq Neutro para Fones";
+        d["AutoEqModalTitle"] = "Escolher Fone (AutoEq)";
+        d["AutoEqNoneSelected"] = "Nenhum modelo de fone selecionado";
+        d["AutoEqCatalogCountSub"] = "Toque para buscar {0:N0} perfis oficiais de laboratório (127 offline)";
+        d["AutoEqActiveSummary"] = "{0} bandas SOS • Pré-amp {1:+0.0;-0.0;0.0} dB{2}";
+        d["AutoEqGuardEngagedTag"] = "Guarda HRIR Raw";
+        d["AutoEqTargetTitle"] = "Curva Alvo Neutra";
+        d["AutoEqTargetDfNeutral"] = "Diffuse-Field Neutro (Recomendado)";
+        d["AutoEqTargetBk5128Df"] = "B&K 5128 Diffuse-Field (Plano)";
+        d["AutoEqTargetBk5128Jm1"] = "B&K 5128 JM-1 Neutro";
+        d["AutoEqTargetHarmanNoBass"] = "Harman Estúdio (Sem Reforço Grave)";
+        d["AutoEqTargetNative"] = "Alvo Original do AutoEq";
+        d["AutoEqDoubleEqGuardTitle"] = "Proteção Zero Duplo-EQ (HRIR Raw)";
+        d["AutoEqAutoDeviceTitle"] = "Perfil Automático por Dispositivo";
+        d["AutoEqDetectedDevice"] = "Saída ativa: {0}";
+        d["AutoEqUnknownDevice"] = "Saída de Áudio Padrão";
+        d["AutoEqImportBtn"] = "Importar EQ (.txt)";
+        d["AutoEqCreditsBtn"] = "Licenças AutoEq";
+        d["AutoEqClearBtn"] = "Desativar / Limpar";
+        d["AutoEqSearchHint"] = "Buscar em 8.850+ modelos (ex.: Galaxy Buds2 Pro, HD 650, XM5)...";
+        d["AutoEqNoResults"] = "Nenhum modelo de fone correspondente encontrado.";
+        d["AutoEqOfflineTag"] = "Offline";
+        d["AutoEqOnlineTag"] = "Cache online";
+        d["AutoEqDownloadingToast"] = "Baixando medição oficial AutoEq para {0}...";
+        d["AutoEqDownloadFail"] = "Não foi possível carregar o perfil AutoEq. Verifique a conexão ou importe um arquivo .txt local.";
+        d["AutoEqAppliedToast"] = "AutoEq aplicado: {0}";
+        d["AutoEqAutoMatchedToast"] = "{0} conectado — AutoEq aplicado: {1}";
+        d["TipAutoEq"] = "Aplica equalização paramétrica de precisão dupla (zero-GC) baseada nas medições oficiais do jaakkopasanen/AutoEq (oratory1990, crinacle, Rtings) para corrigir erros do fone com pré-amplificador automático contra clipping.";
+        d["TipAutoEqTarget"] = "Converte as medições AutoEq para uma curva neutra científica sem reforços artificiais:\n• Diffuse-Field Neutro: par exato para perfis espaciais HRIR/BRIR DFC.\n• B&K 5128 DF / JM-1: alvos neutros modernos do simulador Type 4.3.\n• Harman Estúdio (Sem Grave): referência plana de graves.";
+        d["TipAutoEqDoubleEqGuard"] = "Detecta automaticamente quando um HRIR Raw sem compensação (como TH Köln Campo Distante Raw) está ativo e aplica a inversa exata do Diffuse-Field ISO 11904-1 para nunca aplicar ganho de canal auditivo/pina duas vezes.";
+        d["TipAutoEqAutoDevice"] = "Usa o AudioDeviceCallback nativo do Android para lembrar e alternar automaticamente seu modelo AutoEq, curva alvo, perfil binaural HRIR e rastreamento de cabeça ao conectar fones Bluetooth, DAC USB-C, P2 3,5 mm ou Alto-falante.";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

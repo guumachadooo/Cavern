@@ -1,4 +1,4 @@
-﻿namespace Cavern.CavernSettings {
+namespace Cavern.CavernSettings {
     /// <summary>
     /// Holds how to apply the Cavernize 3D upmixing method.
     /// </summary>
@@ -25,6 +25,18 @@
         public virtual float Smoothness { get; set; }
 
         /// <summary>
+        /// Use the DirAC/COMPASS-inspired parametric STFT core with orthogonal decorrelation for Matrix 7.1 and Cavernize 3D.
+        /// When false, falls back to the legacy time-domain upmixer behavior.
+        /// </summary>
+        public virtual bool ParametricStft { get; set; } = true;
+
+        /// <summary>
+        /// Preserve native Dolby Atmos / object-based beds, heights, and dynamic objects transparently when upmixing is active,
+        /// expanding only missing surround beds or sparse/silent ceiling passages with sample-accurate delay alignment.
+        /// </summary>
+        public virtual bool AtmosAware { get; set; } = true;
+
+        /// <summary>
         /// Holds how to apply the Cavernize 3D upmixing method.
         /// </summary>
         public UpmixingSettings(bool loadDefaults) {
@@ -33,6 +45,8 @@
                 Cavernize = false;
                 Effect = .75f;
                 Smoothness = .8f;
+                ParametricStft = true;
+                AtmosAware = true;
             }
         }
     }
