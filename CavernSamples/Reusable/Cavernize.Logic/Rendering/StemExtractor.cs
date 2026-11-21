@@ -459,7 +459,9 @@ public static class StemExtractor {
         bool exportHybrid714,
         Action<double, string> onProgress,
         CancellationToken token = default,
-        ILosslessReferenceProvider losslessTwin = null) {
+        ILosslessReferenceProvider losslessTwin = null,
+        NeuralPipelineOrchestrator orchestrator = null,
+        Action<NeuralSeparatedTrack> onSeparatedTrackReady = null) {
         ArgumentNullException.ThrowIfNull(track);
         if (!track.Supported) {
             throw new NotSupportedException("The selected track format is not supported by Cavern.");
@@ -473,6 +475,16 @@ public static class StemExtractor {
         string baseName = SanitizeFilePart(Path.GetFileNameWithoutExtension(track.Path) ?? "track");
         List<TrackSourceItem> allItems = TrackSourceItem.BuildFromTrack(track);
         int sampleRate = track.SampleRate > 0 ? track.SampleRate : Listener.DefaultSampleRate;
+
+        long sourceFileSize = 0L;
+        long sourceLastModifiedTicks = 0L;
+        try {
+            if (!string.IsNullOrEmpty(track.Path) && File.Exists(track.Path)) {
+                FileInfo fi = new(track.Path);
+                sourceFileSize = fi.Length;
+                sourceLastModifiedTicks = fi.LastWriteTimeUtc.Ticks;
+            }
+        } catch { }
 
         // 1. Decode track audio (all discrete channels/objects if Spatial Karaoke Atmos is requested, else clean stereo downmix)
         onProgress?.Invoke(0.05, "Decodificando áudio de origem...");
@@ -503,6 +515,7 @@ public static class StemExtractor {
         }
 
         int totalSamples = mixLeft.Length;
+        bool derivedFromTwin = false;
         // W09 Universal Lossless Twin acceleration: when a synced FLAC/WAV/ALAC twin is available,
         // run neural separation directly on the sample-aligned lossless stereo buffer for cleaner stems & karaoke mask!
         float[] neuralInputLeft = mixLeft;
@@ -512,12 +525,14 @@ public static class StemExtractor {
                 universalTwin.TryExtractFullAlignedStereo(totalSamples, out float[] alignedL, out float[] alignedR)) {
                 neuralInputLeft = alignedL;
                 neuralInputRight = alignedR;
+                derivedFromTwin = true;
             } else {
                 float[] alignedL2 = new float[totalSamples];
                 float[] alignedR2 = new float[totalSamples];
                 if (losslessTwin.TryReadAlignedStereoBlock(0L, alignedL2, alignedR2, totalSamples)) {
                     neuralInputLeft = alignedL2;
                     neuralInputRight = alignedR2;
+                    derivedFromTwin = true;
                 }
             }
         }
@@ -528,11 +543,30 @@ public static class StemExtractor {
             float[] neuralLeadRef = null;
             float[] neuralBackingRef = null;
 
-            if (runtime != null && runtime.GetRuntimeInfo().IsAvailable && !string.IsNullOrEmpty(modelFilePath) && File.Exists(modelFilePath)) {
+            NeuralExecutionPlan karaokePlan = orchestrator?.BuildPlan(NeuralPipelineGoal.SpatialKaraoke, safeConfig);
+            if (orchestrator != null && karaokePlan != null && karaokePlan.IsRunnable && runtime != null && runtime.GetRuntimeInfo().IsAvailable) {
+                onProgress?.Invoke(0.22, $"Orchestrator: {karaokePlan.Summary}");
+                (NeuralSeparatedTrack separated, _, _) = orchestrator.ExecuteTrackPipeline(
+                    track.Path ?? baseName,
+                    sourceFileSize,
+                    sourceLastModifiedTicks,
+                    neuralInputLeft,
+                    neuralInputRight,
+                    sampleRate,
+                    NeuralPipelineGoal.SpatialKaraoke,
+                    safeConfig,
+                    derivedFromTwin,
+                    (p, msg) => onProgress?.Invoke(0.22 + p * 0.48, msg),
+                    token);
+                onSeparatedTrackReady?.Invoke(separated);
+                neuralLeadRef = separated?.MonoLeadVocalRef;
+                neuralBackingRef = safeConfig.KaraokePreserveBackingVocals ? separated?.MonoBackingVocalRef : null;
+            } else if (runtime != null && runtime.GetRuntimeInfo().IsAvailable && !string.IsNullOrEmpty(modelFilePath) && File.Exists(modelFilePath)) {
                 onProgress?.Invoke(0.22, "Separando guia vocal neural (MVSEP)...");
                 NeuralModelCatalogEntry entry = modelEntry ?? NeuralModelCatalog.FindById(safeConfig.ActiveKaraokeModelId);
                 string[] karaokeStemNames = entry?.OutputStemNames is { Length: > 0 } ? entry.OutputStemNames : ["lead_vocal", "backing_vocals"];
                 int karaokeChunk = entry?.RecommendedChunkSamples > 0 ? entry.RecommendedChunkSamples : 352800;
+                int karaokeSr = entry?.ExpectedSampleRate > 0 ? entry.ExpectedSampleRate : 44100;
                 (StereoStemBuffer[] vocalStems, _) = NeuralAudioOfflinePipeline.RunSeparation(
                     runtime,
                     [modelFilePath],
@@ -544,13 +578,16 @@ public static class StemExtractor {
                     safeConfig,
                     karaokeChunk,
                     (p, msg) => onProgress?.Invoke(0.22 + p * 0.48, msg),
-                    token);
+                    token,
+                    expectedSampleRatesPerModel: [karaokeSr],
+                    chunkSamplesPerModel: [karaokeChunk]);
                 NeuralSeparatedTrack separated = NeuralAudioOfflinePipeline.BuildSeparatedTrack(
                     track.Path ?? baseName,
                     sampleRate,
                     vocalStems,
                     dereverb: null,
-                    derivedFromLosslessTwin: losslessTwin != null && losslessTwin.HasSyncedLosslessTwin);
+                    derivedFromLosslessTwin: derivedFromTwin);
+                onSeparatedTrackReady?.Invoke(separated);
                 neuralLeadRef = separated.MonoLeadVocalRef;
                 neuralBackingRef = safeConfig.KaraokePreserveBackingVocals ? separated.MonoBackingVocalRef : null;
             }
@@ -582,31 +619,63 @@ public static class StemExtractor {
             };
         }
 
-        // 3. Standard Neural AI Stem Separation via ONNX Runtime + MVSEP anti-artifact pipeline
+        // 3. Standard Neural AI Stem Separation via Slot 7A Orchestrator (+ Slot 7B Disk Cache) or direct ONNX Runtime
         if (runtime == null || !runtime.GetRuntimeInfo().IsAvailable) {
             throw new InvalidOperationException("ONNX Runtime is not installed. Install it in Settings -> Neural Audio first.");
         }
-        if (string.IsNullOrEmpty(modelFilePath) || !File.Exists(modelFilePath)) {
-            throw new FileNotFoundException("Selected ONNX neural model is not installed.", modelFilePath);
+
+        StereoStemBuffer[] stems;
+        NeuralExecutionPlan stemPlan = orchestrator?.BuildPlan(NeuralPipelineGoal.StemSeparation, safeConfig);
+        if (orchestrator != null && stemPlan != null && stemPlan.IsRunnable) {
+            onProgress?.Invoke(0.22, $"Orchestrator: {stemPlan.Summary}");
+            (NeuralSeparatedTrack separated, _, _) = orchestrator.ExecuteTrackPipeline(
+                track.Path ?? baseName,
+                sourceFileSize,
+                sourceLastModifiedTicks,
+                neuralInputLeft,
+                neuralInputRight,
+                sampleRate,
+                NeuralPipelineGoal.StemSeparation,
+                safeConfig,
+                derivedFromTwin,
+                (p, msg) => onProgress?.Invoke(0.25 + p * 0.55, msg),
+                token);
+            onSeparatedTrackReady?.Invoke(separated);
+            stems = separated?.Stems != null ? separated.Stems.ToArray() : Array.Empty<StereoStemBuffer>();
+        } else {
+            if (string.IsNullOrEmpty(modelFilePath) || !File.Exists(modelFilePath)) {
+                throw new FileNotFoundException("Selected ONNX neural model is not installed.", modelFilePath);
+            }
+
+            onProgress?.Invoke(0.22, "Carregando sessão ONNX Runtime...");
+            NeuralModelCatalogEntry catalogEntry = modelEntry ?? NeuralModelCatalog.FindById(safeConfig.ActiveStemModelId);
+            string[] stemNames = catalogEntry?.OutputStemNames is { Length: > 0 } ? catalogEntry.OutputStemNames : ["drums", "bass", "other", "vocals"];
+            int stemChunk = catalogEntry?.RecommendedChunkSamples > 0 ? catalogEntry.RecommendedChunkSamples : 131072;
+            int stemSr = catalogEntry?.ExpectedSampleRate > 0 ? catalogEntry.ExpectedSampleRate : 44100;
+
+            (stems, _) = NeuralAudioOfflinePipeline.RunSeparation(
+                runtime,
+                [modelFilePath],
+                [stemNames],
+                null,
+                neuralInputLeft,
+                neuralInputRight,
+                sampleRate,
+                safeConfig,
+                stemChunk,
+                (p, msg) => onProgress?.Invoke(0.25 + p * 0.55, msg),
+                token,
+                expectedSampleRatesPerModel: [stemSr],
+                chunkSamplesPerModel: [stemChunk]);
+
+            NeuralSeparatedTrack separated = NeuralAudioOfflinePipeline.BuildSeparatedTrack(
+                track.Path ?? baseName,
+                sampleRate,
+                stems,
+                dereverb: null,
+                derivedFromLosslessTwin: derivedFromTwin);
+            onSeparatedTrackReady?.Invoke(separated);
         }
-
-        onProgress?.Invoke(0.22, "Carregando sessão ONNX Runtime...");
-        NeuralModelCatalogEntry catalogEntry = modelEntry ?? NeuralModelCatalog.FindById(safeConfig.ActiveStemModelId);
-        string[] stemNames = catalogEntry?.OutputStemNames is { Length: > 0 } ? catalogEntry.OutputStemNames : ["drums", "bass", "other", "vocals"];
-        int stemChunk = catalogEntry?.RecommendedChunkSamples > 0 ? catalogEntry.RecommendedChunkSamples : 131072;
-
-        (StereoStemBuffer[] stems, _) = NeuralAudioOfflinePipeline.RunSeparation(
-            runtime,
-            [modelFilePath],
-            [stemNames],
-            null,
-            neuralInputLeft,
-            neuralInputRight,
-            sampleRate,
-            safeConfig,
-            stemChunk,
-            (p, msg) => onProgress?.Invoke(0.25 + p * 0.55, msg),
-            token);
 
         for (int i = 0; i < stems.Length; i++) {
             token.ThrowIfCancellationRequested();

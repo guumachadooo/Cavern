@@ -94,23 +94,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor {
     public void SetKaraokeVocalLevel(float level01) {
         float clamped = Math.Clamp(level01, 0f, 1f);
         lock (stateLock) {
-            config = new NeuralAudioConfig {
-                PreferredProvider = config.PreferredProvider,
-                OverlapFactor = config.OverlapFactor,
-                EnableTta = config.EnableTta,
-                EnsembleMode = config.EnsembleMode,
-                EnablePhaseFix = config.EnablePhaseFix,
-                EnforceEnergyConservation = config.EnforceEnergyConservation,
-                SpatialKaraokeEnabled = config.SpatialKaraokeEnabled,
-                KaraokeVocalLevel = clamped,
-                KaraokePreserveBackingVocals = config.KaraokePreserveBackingVocals,
-                UseLosslessTwinForKaraoke = config.UseLosslessTwinForKaraoke,
-                SpatialUpmixMode = config.SpatialUpmixMode,
-                ActiveStemModelId = config.ActiveStemModelId,
-                ActiveKaraokeModelId = config.ActiveKaraokeModelId,
-                ActiveDereverbModelId = config.ActiveDereverbModelId,
-                ActiveRestorerModelId = config.ActiveRestorerModelId
-            };
+            config = config.WithKaraokeVocalLevel(clamped);
             karaokeEngine.VocalLevel = clamped;
         }
     }
@@ -130,7 +114,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor {
         }
     }
 
-    /// <summary>Updates platform runtime &amp; model cache status mirrored from <c>OnnxRuntimeInstallerService</c>.</summary>
+    /// <summary>Updates platform runtime, orchestrator summary &amp; model/track cache status mirrored from Slot 7 services.</summary>
     public void UpdateRuntimeDiagnostics(
         bool isRuntimeInstalled,
         string runtimeVersion,
@@ -138,7 +122,10 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor {
         bool isQnnAvailable,
         int installedModelCount,
         long cacheSizeBytes,
-        float lastInferenceRtf = -1f) {
+        float lastInferenceRtf = -1f,
+        int trackCacheEntryCount = 0,
+        long trackCacheSizeBytes = 0L,
+        string orchestrationSummary = "") {
         lock (stateLock) {
             runtimeSnapshot.IsRuntimeInstalled = isRuntimeInstalled;
             runtimeSnapshot.RuntimeVersion = runtimeVersion ?? string.Empty;
@@ -148,6 +135,9 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor {
             runtimeSnapshot.IsQnnAvailable = isQnnAvailable;
             runtimeSnapshot.InstalledModelCount = Math.Max(0, installedModelCount);
             runtimeSnapshot.CacheSizeBytes = Math.Max(0L, cacheSizeBytes);
+            runtimeSnapshot.TrackCacheEntryCount = Math.Max(0, trackCacheEntryCount);
+            runtimeSnapshot.TrackCacheSizeBytes = Math.Max(0L, trackCacheSizeBytes);
+            runtimeSnapshot.OrchestrationSummary = orchestrationSummary ?? string.Empty;
             if (lastInferenceRtf >= 0f) {
                 runtimeSnapshot.LastInferenceRtf = lastInferenceRtf;
             }
@@ -170,6 +160,9 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor {
                 IsQnnAvailable = runtimeSnapshot.IsQnnAvailable,
                 InstalledModelCount = runtimeSnapshot.InstalledModelCount,
                 CacheSizeBytes = runtimeSnapshot.CacheSizeBytes,
+                TrackCacheEntryCount = runtimeSnapshot.TrackCacheEntryCount,
+                TrackCacheSizeBytes = runtimeSnapshot.TrackCacheSizeBytes,
+                OrchestrationSummary = runtimeSnapshot.OrchestrationSummary,
                 IsKaraokeActive = activeKaraoke,
                 KaraokeVocalLevel = config.KaraokeVocalLevel,
                 HasNeuralVocalReference = hasNeuralLead,

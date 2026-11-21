@@ -296,12 +296,19 @@ namespace Cavern.Neural {
                 return Array.Empty<StereoStemBuffer>();
             }
 
-            if (opt.EnablePhaseFix) {
-                ApplyPhaseFixWiener(mixLeft, mixRight, stems, opt.StftSize, opt.WienerExponent, token);
-            }
-
+            // CRITICAL ORDER (W17): Enforce residual conservation BEFORE Wiener phase_fix so 1-stem models
+            // (e.g. Mel-Band RoFormer Vocals) form a 2-stem [target, instrumental] partition of unity.
+            // Running Wiener phase_fix on 1 stem alone would compute mask = 1.0 and overwrite the stem with 100% mix.
             if (opt.EnforceEnergyConservation) {
                 stems = AppendOrUpdateConservedResidual(mixLeft, mixRight, stems);
+            }
+
+            if (opt.EnablePhaseFix && stems.Length > 1) {
+                ApplyPhaseFixWiener(mixLeft, mixRight, stems, opt.StftSize, opt.WienerExponent, token);
+                if (opt.EnforceEnergyConservation) {
+                    // Refresh conserved residual in-place after WOLA phase_fix so sum(stems) == mix to float precision
+                    stems = AppendOrUpdateConservedResidual(mixLeft, mixRight, stems);
+                }
             }
 
             onProgress?.Invoke(1.0);
@@ -358,7 +365,8 @@ namespace Cavern.Neural {
             int stftSize = 2048,
             float exponent = 2.0f,
             CancellationToken token = default) {
-            if (mixLeft == null || mixRight == null || stems == null || stems.Length == 0) {
+            if (mixLeft == null || mixRight == null || stems == null || stems.Length <= 1) {
+                // Guard: Wiener partition-of-unity requires >= 2 stems; a 1-stem mask is identically 1.0 (destroys isolation).
                 return;
             }
             int length = mixLeft.Length;
@@ -548,16 +556,31 @@ namespace Cavern.Neural {
             int length = mixLeft.Length;
             double passWeight = 0.90 / totalPasses;
 
-            // Pass 0: Original (L, R)
-            StereoStemBuffer[] pass0 = RunSingleChunkedPass(mixLeft, mixRight, evaluator, opt, 0.0, passWeight, onProgress, token);
-            if (pass0 == null || pass0.Length == 0) {
+            // Pass 0: Original (L, R) — reuse pass0 buffers directly as in-place TTA accumulators to avoid 4x RAM OOM
+            StereoStemBuffer[] accum = RunSingleChunkedPass(mixLeft, mixRight, evaluator, opt, 0.0, passWeight, onProgress, token);
+            if (accum == null || accum.Length == 0) {
                 return Array.Empty<StereoStemBuffer>();
             }
+            int stemCount = accum.Length;
 
-            // Pass 1: Channel Swap (R, L) -> swap outputs back to (L, R)
+            // Pass 1: Channel Swap (R, L) -> swap outputs back to (L, R) and accumulate in-place
             StereoStemBuffer[] pass1 = RunSingleChunkedPass(mixRight, mixLeft, evaluator, opt, passWeight, passWeight * 2.0, onProgress, token);
+            if (pass1 != null && pass1.Length >= stemCount) {
+                for (int s = 0; s < stemCount; s++) {
+                    float[] accL = accum[s].Left;
+                    float[] accR = accum[s].Right;
+                    float[] p1L = pass1[s].Left;
+                    float[] p1R = pass1[s].Right;
+                    for (int n = 0; n < length; n++) {
+                        // pass1 ran on (R, L), so pass1[s].Right is original Left and pass1[s].Left is original Right
+                        accL[n] += p1R[n];
+                        accR[n] += p1L[n];
+                    }
+                }
+            }
+            pass1 = null;
 
-            // Pass 2: Polarity Inversion (-L, -R) -> invert outputs back
+            // Pass 2: Polarity Inversion (-L, -R) -> subtract negated output in-place and release temp arrays
             float[] invL = new float[length];
             float[] invR = new float[length];
             for (int i = 0; i < length; i++) {
@@ -565,11 +588,25 @@ namespace Cavern.Neural {
                 invR[i] = -mixRight[i];
             }
             StereoStemBuffer[] pass2 = RunSingleChunkedPass(invL, invR, evaluator, opt, passWeight * 2.0, passWeight * 3.0, onProgress, token);
+            invL = null;
+            invR = null;
+            if (pass2 != null && pass2.Length >= stemCount) {
+                for (int s = 0; s < stemCount; s++) {
+                    float[] accL = accum[s].Left;
+                    float[] accR = accum[s].Right;
+                    float[] p2L = pass2[s].Left;
+                    float[] p2R = pass2[s].Right;
+                    for (int n = 0; n < length; n++) {
+                        accL[n] -= p2L[n];
+                        accR[n] -= p2R[n];
+                    }
+                }
+            }
+            pass2 = null;
 
-            // Optional Pass 3: Half-hop time shift (reflect-padded) -> unshift outputs back
-            StereoStemBuffer[] pass3 = null;
-            int shift = Math.Max(1, (opt.ChunkSamples / opt.OverlapFactor) / 2);
+            // Optional Pass 3: Half-hop time shift (reflect-padded) -> unshift and accumulate in-place
             if (opt.EnableShiftTta) {
+                int shift = Math.Max(1, (opt.ChunkSamples / opt.OverlapFactor) / 2);
                 float[] shiftL = new float[length + shift];
                 float[] shiftR = new float[length + shift];
                 for (int i = 0; i < shift; i++) {
@@ -579,29 +616,35 @@ namespace Cavern.Neural {
                 }
                 Array.Copy(mixLeft, 0, shiftL, shift, length);
                 Array.Copy(mixRight, 0, shiftR, shift, length);
-                pass3 = RunSingleChunkedPass(shiftL, shiftR, evaluator, opt, passWeight * 3.0, 0.90, onProgress, token);
+                StereoStemBuffer[] pass3 = RunSingleChunkedPass(shiftL, shiftR, evaluator, opt, passWeight * 3.0, 0.90, onProgress, token);
+                shiftL = null;
+                shiftR = null;
+                if (pass3 != null && pass3.Length >= stemCount) {
+                    for (int s = 0; s < stemCount; s++) {
+                        float[] accL = accum[s].Left;
+                        float[] accR = accum[s].Right;
+                        float[] p3L = pass3[s].Left;
+                        float[] p3R = pass3[s].Right;
+                        for (int n = 0; n < length; n++) {
+                            accL[n] += p3L[n + shift];
+                            accR[n] += p3R[n + shift];
+                        }
+                    }
+                }
+                pass3 = null;
             }
 
-            int stemCount = pass0.Length;
+            // Final in-place average normalization
             float invCount = 1f / totalPasses;
-            StereoStemBuffer[] averaged = new StereoStemBuffer[stemCount];
             for (int s = 0; s < stemCount; s++) {
-                float[] outL = new float[length];
-                float[] outR = new float[length];
+                float[] accL = accum[s].Left;
+                float[] accR = accum[s].Right;
                 for (int n = 0; n < length; n++) {
-                    // pass1 ran on (R, L), so pass1[s].Right is original Left and pass1[s].Left is original Right
-                    float sumL = pass0[s].Left[n] + pass1[s].Right[n] - pass2[s].Left[n];
-                    float sumR = pass0[s].Right[n] + pass1[s].Left[n] - pass2[s].Right[n];
-                    if (pass3 != null) {
-                        sumL += pass3[s].Left[n + shift];
-                        sumR += pass3[s].Right[n + shift];
-                    }
-                    outL[n] = sumL * invCount;
-                    outR[n] = sumR * invCount;
+                    accL[n] *= invCount;
+                    accR[n] *= invCount;
                 }
-                averaged[s] = new StereoStemBuffer(pass0[s].Name, outL, outR);
             }
-            return averaged;
+            return accum;
         }
 
         static StereoStemBuffer[] RunSingleChunkedPass(
@@ -708,12 +751,17 @@ namespace Cavern.Neural {
             return result;
         }
 
-        static StereoStemBuffer[] AppendOrUpdateConservedResidual(
+        /// <summary>
+        /// Appends or refreshes the conserved residual stem (<c>instrumental</c> for 1-stem models or <c>residual</c> for
+        /// multi-stem models) so <c>sum(all returned stems) == mix</c> without duplicating an existing residual slot.
+        /// </summary>
+        public static StereoStemBuffer[] AppendOrUpdateConservedResidual(
             float[] mixLeft,
             float[] mixRight,
             StereoStemBuffer[] stems) {
-            // If the model already produced a "residual" or "other" stem as the last entry when multi-stem,
-            // compute explicit residual so sum(all returned stems) == mix identically.
+            if (stems == null || stems.Length == 0) {
+                return Array.Empty<StereoStemBuffer>();
+            }
             if (stems.Length == 1) {
                 StereoStemBuffer residual = ComputeConservedResidual(mixLeft, mixRight, stems, "instrumental");
                 return new StereoStemBuffer[] { stems[0], residual };
@@ -725,6 +773,10 @@ namespace Cavern.Neural {
                     residualIdx = i;
                     break;
                 }
+            }
+            if (residualIdx < 0 && stems.Length == 2 &&
+                string.Equals(stems[1].Name, "instrumental", StringComparison.OrdinalIgnoreCase)) {
+                residualIdx = 1;
             }
 
             if (residualIdx >= 0) {

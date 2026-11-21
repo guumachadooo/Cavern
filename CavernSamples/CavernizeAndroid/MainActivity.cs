@@ -71,6 +71,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
     UsbProAudioDeviceManager usbProAudioManager;
     HeadTrackingManager headTrackingManager;
     NativeOnnxRuntimeBridge neuralRuntime;
+    NeuralTrackCacheService neuralTrackCache;
+    Cavernize.Logic.Spatial.NeuralPipelineOrchestrator neuralOrchestrator;
 
     AndroidStrings S => AndroidStrings.Active;
 
@@ -135,6 +137,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
     bool isTruehddDownloading;
     bool isOnnxDownloading;
     string pendingOnnxImportModelId = Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId;
+    Cavernize.Logic.Spatial.NeuralModelTask pendingCustomOnnxTask = Cavernize.Logic.Spatial.NeuralModelTask.StemSeparation4;
+    bool pendingStandaloneCustomOnnxImport;
     Cavernize.Logic.Spatial.UniversalLosslessTwinProvider activeLosslessTwin;
     CancellationTokenSource losslessTwinCts;
     int losslessTwinGeneration;
@@ -296,6 +300,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
         playerEngine.ApplyPersonalizationConfig(store.BuildPersonalizationConfig());
         playerEngine.ApplyLoudnessConfig(store.BuildLoudnessConfig());
         neuralRuntime = new NativeOnnxRuntimeBridge(this);
+        neuralTrackCache = new NeuralTrackCacheService(this, (long)store.NeuralTrackCacheMaxMb * 1024L * 1024L);
+        neuralTrackCache.EvictToLimit((long)store.NeuralTrackCacheMaxMb * 1024L * 1024L);
+        neuralOrchestrator = new Cavernize.Logic.Spatial.NeuralPipelineOrchestrator(neuralRuntime, neuralRuntime, neuralTrackCache);
         playerEngine.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
         playerEngine.ApplyLgsrConfig(store.BuildLgsrConfig());
         playerEngine.VocalMixMatchStage.ApplyVocalProfile(

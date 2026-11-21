@@ -281,6 +281,10 @@ public static class LosslessTwinDiscoveryService {
         return false;
     }
 
+    static readonly byte[] WaveExtensibleGuidTail = [
+        0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71
+    ];
+
     static bool TryDecodeWavStereo(
         string path,
         CancellationToken ct,
@@ -292,7 +296,7 @@ public static class LosslessTwinDiscoveryService {
         sampleRate = 48000;
         try {
             using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            byte[] hdr = new byte[4096];
+            byte[] hdr = new byte[Math.Min(65536, (int)Math.Min(fs.Length, 65536))];
             int hRead = fs.Read(hdr, 0, hdr.Length);
             if (hRead < 44 || hdr[0] != 'R' || hdr[1] != 'I' || hdr[2] != 'F' || hdr[3] != 'F') {
                 return false;
@@ -301,6 +305,8 @@ public static class LosslessTwinDiscoveryService {
             int channels = 2;
             int audioFmt = 1;
             int bits = 16;
+            bool isFloat = false;
+            bool fmtValid = false;
             int pos = 12;
             long dataOffset = -1;
             long dataLen = 0;
@@ -313,6 +319,24 @@ public static class LosslessTwinDiscoveryService {
                     channels = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(pos + 10, 2));
                     sampleRate = BinaryPrimitives.ReadInt32LittleEndian(hdr.AsSpan(pos + 12, 4));
                     bits = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(pos + 22, 2));
+                    if (audioFmt == 1) {
+                        isFloat = false;
+                        fmtValid = true;
+                    } else if (audioFmt == 3) {
+                        isFloat = bits == 32;
+                        fmtValid = bits == 32;
+                    } else if (audioFmt == 0xFFFE && sz >= 40 && pos + 8 + 40 <= hRead) {
+                        // WAVE_FORMAT_EXTENSIBLE SubFormat GUID sits at fmt payload offset +24 (pos + 32)
+                        uint subFormatData1 = BinaryPrimitives.ReadUInt32LittleEndian(hdr.AsSpan(pos + 32, 4));
+                        bool tailMatches = hdr.AsSpan(pos + 36, 12).SequenceEqual(WaveExtensibleGuidTail);
+                        if (tailMatches && subFormatData1 == 3u && bits == 32) {
+                            isFloat = true;
+                            fmtValid = true;
+                        } else if (tailMatches && subFormatData1 == 1u) {
+                            isFloat = false;
+                            fmtValid = true;
+                        }
+                    }
                 } else if (id == "data") {
                     dataOffset = pos + 8;
                     dataLen = sz > 0 ? Math.Min(sz, fs.Length - dataOffset) : (fs.Length - dataOffset);
@@ -322,7 +346,7 @@ public static class LosslessTwinDiscoveryService {
                 pos += 8 + sz + (sz & 1);
             }
 
-            if (dataOffset < 0 || channels <= 0 || bits < 16 || (audioFmt != 1 && audioFmt != 3 && audioFmt != 0xFFFE)) {
+            if (!fmtValid || dataOffset < 0 || channels <= 0 || bits < 16) {
                 return false;
             }
             int bytesPerSample = bits / 8;
@@ -347,7 +371,6 @@ public static class LosslessTwinDiscoveryService {
                 return false;
             }
 
-            bool isFloat = bits == 32 && audioFmt == 3;
             KaiserSincResampler.UnifyPcmBytesToStereoFloat(raw, frames * frameBytes, channels, bits, isFloat, out left, out right);
             return left.Length >= SubSampleSyncEngine.GccFftSize;
         } catch (OperationCanceledException) {
@@ -380,20 +403,30 @@ public static class LosslessTwinDiscoveryService {
             using Process proc = Process.Start(psi);
             if (proc == null) return false;
 
+            // Drain stderr asynchronously so FFmpeg never deadlocks on a full 64 KB pipe buffer
+            Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
+
             using MemoryStream ms = new();
             byte[] buf = new byte[65536];
             long maxBytes = (long)MaxDecodedTwinFrames * 8L;
-            int read;
-            while ((read = proc.StandardOutput.BaseStream.Read(buf, 0, buf.Length)) > 0) {
-                ct.ThrowIfCancellationRequested();
-                long remaining = maxBytes - ms.Length;
-                if (remaining <= 0) {
-                    try { proc.Kill(); } catch { }
-                    break;
+            try {
+                int read;
+                while ((read = proc.StandardOutput.BaseStream.Read(buf, 0, buf.Length)) > 0) {
+                    ct.ThrowIfCancellationRequested();
+                    long remaining = maxBytes - ms.Length;
+                    if (remaining <= 0) {
+                        try { proc.Kill(); } catch { }
+                        break;
+                    }
+                    ms.Write(buf, 0, (int)Math.Min(read, remaining));
                 }
-                ms.Write(buf, 0, (int)Math.Min(read, remaining));
+            } catch (OperationCanceledException) {
+                try { proc.Kill(); } catch { }
+                throw;
+            } finally {
+                try { proc.WaitForExit(2000); } catch { }
+                try { stderrTask.Wait(400); } catch { }
             }
-            proc.WaitForExit(2000);
 
             byte[] raw = ms.ToArray();
             int frames = raw.Length / 8;
@@ -451,6 +484,7 @@ public static class LosslessTwinDiscoveryService {
             MediaCodec.BufferInfo info = new();
             bool inputDone = false;
             int pcmEncoding = (int)Android.Media.Encoding.Pcm16bit;
+            int drainRetries = 0;
 
             while (listL.Count < MaxDecodedTwinFrames) {
                 ct.ThrowIfCancellationRequested();
@@ -471,25 +505,20 @@ public static class LosslessTwinDiscoveryService {
 
                 int outIdx = codec.DequeueOutputBuffer(info, 10000);
                 if (outIdx == (int)MediaCodecInfoState.OutputFormatChanged) {
+                    drainRetries = 0;
                     MediaFormat outFmt = codec.OutputFormat;
                     if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) sampleRate = Math.Max(8000, outFmt.GetInteger(MediaFormat.KeySampleRate));
                     if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) outChannels = Math.Max(1, outFmt.GetInteger(MediaFormat.KeyChannelCount));
                     if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
                 } else if (outIdx >= 0) {
+                    drainRetries = 0;
                     if (info.Size > 0) {
                         Java.Nio.ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
                         outBuf.Position(info.Offset);
                         byte[] chunk = new byte[info.Size];
                         outBuf.Get(chunk);
 
-                        int bits = 16;
-                        bool isFloat = false;
-                        if (pcmEncoding == (int)Android.Media.Encoding.PcmFloat) {
-                            bits = 32;
-                            isFloat = true;
-                        } else if (OperatingSystem.IsAndroidVersionAtLeast(31) && pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked) {
-                            bits = 24;
-                        }
+                        ResolveMediaCodecPcmFormat(pcmEncoding, out int bits, out bool isFloat);
                         int frameBytes = (bits / 8) * outChannels;
                         int frames = frameBytes > 0 ? chunk.Length / frameBytes : 0;
                         if (frames > 0) {
@@ -506,7 +535,9 @@ public static class LosslessTwinDiscoveryService {
                         break;
                     }
                 } else if (inputDone && outIdx == (int)MediaCodecInfoState.TryAgainLater) {
-                    break;
+                    if (++drainRetries >= 40) {
+                        break;
+                    }
                 }
             }
 
@@ -552,14 +583,22 @@ public static class LosslessTwinDiscoveryService {
 
                 using Process proc = Process.Start(psi);
                 if (proc != null) {
+                    Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
                     using MemoryStream ms = new();
                     byte[] buf = new byte[32768];
-                    int read;
-                    while ((read = proc.StandardOutput.BaseStream.Read(buf, 0, buf.Length)) > 0) {
-                        ct.ThrowIfCancellationRequested();
-                        ms.Write(buf, 0, read);
+                    try {
+                        int read;
+                        while ((read = proc.StandardOutput.BaseStream.Read(buf, 0, buf.Length)) > 0) {
+                            ct.ThrowIfCancellationRequested();
+                            ms.Write(buf, 0, read);
+                        }
+                    } catch (OperationCanceledException) {
+                        try { proc.Kill(); } catch { }
+                        throw;
+                    } finally {
+                        try { proc.WaitForExit(1500); } catch { }
+                        try { stderrTask.Wait(400); } catch { }
                     }
-                    proc.WaitForExit(1500);
                     byte[] raw = ms.ToArray();
                     int samples = raw.Length / 4;
                     if (samples >= SubSampleSyncEngine.GccFftSize) {
@@ -610,6 +649,7 @@ public static class LosslessTwinDiscoveryService {
             bool inputDone = false;
             int pcmEncoding = (int)Android.Media.Encoding.Pcm16bit;
             int guard = 0;
+            int drainRetries = 0;
 
             while (mono.Count < wantSamples && guard++ < 4000) {
                 ct.ThrowIfCancellationRequested();
@@ -630,39 +670,35 @@ public static class LosslessTwinDiscoveryService {
 
                 int outIdx = codec.DequeueOutputBuffer(info, 8000);
                 if (outIdx == (int)MediaCodecInfoState.OutputFormatChanged) {
+                    drainRetries = 0;
                     MediaFormat outFmt = codec.OutputFormat;
                     if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) srcSr = Math.Max(8000, outFmt.GetInteger(MediaFormat.KeySampleRate));
                     if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) outChannels = Math.Max(1, outFmt.GetInteger(MediaFormat.KeyChannelCount));
                     if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
                 } else if (outIdx >= 0) {
+                    drainRetries = 0;
                     if (info.Size > 0) {
                         Java.Nio.ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
                         outBuf.Position(info.Offset);
                         byte[] chunk = new byte[info.Size];
                         outBuf.Get(chunk);
 
-                        if (pcmEncoding == (int)Android.Media.Encoding.PcmFloat) {
-                            int frames = chunk.Length / (4 * outChannels);
-                            for (int f = 0; f < frames && mono.Count < wantSamples; f++) {
-                                float sum = 0f;
-                                for (int c = 0; c < outChannels; c++) {
-                                    sum += BinaryPrimitives.ReadSingleLittleEndian(chunk.AsSpan((f * outChannels + c) * 4, 4));
-                                }
-                                mono.Add(sum / outChannels);
-                            }
-                        } else {
-                            int frames = chunk.Length / (2 * outChannels);
-                            for (int f = 0; f < frames && mono.Count < wantSamples; f++) {
-                                float sum = 0f;
-                                for (int c = 0; c < outChannels; c++) {
-                                    sum += BinaryPrimitives.ReadInt16LittleEndian(chunk.AsSpan((f * outChannels + c) * 2, 2)) / 32768f;
-                                }
-                                mono.Add(sum / outChannels);
+                        ResolveMediaCodecPcmFormat(pcmEncoding, out int bits, out bool isFloat);
+                        int bytesPerSample = bits / 8;
+                        int frameBytes = bytesPerSample * outChannels;
+                        int frames = frameBytes > 0 ? chunk.Length / frameBytes : 0;
+                        if (frames > 0) {
+                            KaiserSincResampler.UnifyPcmBytesToStereoFloat(chunk, frames * frameBytes, outChannels, bits, isFloat, out float[] cL, out float[] cR);
+                            int take = Math.Min(frames, wantSamples - mono.Count);
+                            for (int f = 0; f < take; f++) {
+                                mono.Add(0.5f * (cL[f] + cR[f]));
                             }
                         }
                     }
                     codec.ReleaseOutputBuffer(outIdx, false);
                     if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) break;
+                } else if (inputDone && outIdx == (int)MediaCodecInfoState.TryAgainLater) {
+                    if (++drainRetries >= 40) break;
                 }
             }
 
@@ -681,6 +717,28 @@ public static class LosslessTwinDiscoveryService {
             try { codec?.Stop(); } catch { }
             try { codec?.Release(); } catch { }
         }
+    }
+
+    static void ResolveMediaCodecPcmFormat(int pcmEncoding, out int bits, out bool isFloat) {
+        if (pcmEncoding == (int)Android.Media.Encoding.PcmFloat) {
+            bits = 32;
+            isFloat = true;
+            return;
+        }
+        if (OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            if (pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked) {
+                bits = 24;
+                isFloat = false;
+                return;
+            }
+            if (pcmEncoding == (int)Android.Media.Encoding.Pcm32bit) {
+                bits = 32;
+                isFloat = false;
+                return;
+            }
+        }
+        bits = 16;
+        isFloat = false;
     }
 
     static string NormalizeBaseName(string raw) {

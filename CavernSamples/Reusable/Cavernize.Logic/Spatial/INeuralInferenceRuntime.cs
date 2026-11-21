@@ -2,6 +2,8 @@ using System.Diagnostics;
 
 using Cavern.Neural;
 
+using Cavern.Restoration;
+
 namespace Cavernize.Logic.Spatial;
 
 /// <summary>
@@ -75,19 +77,20 @@ public interface INeuralInferenceRuntime : IDisposable {
     /// <summary>Creates a new ONNX inference session for <paramref name="modelPath"/> using <paramref name="preferredProvider"/>.</summary>
     INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 4);
 
-    /// <summary>Resolves the local file path of an installed catalog model, or null if not yet downloaded.</summary>
+    /// <summary>Resolves the local file path of an installed catalog or custom model, or null if not yet installed.</summary>
     string ResolveInstalledModelPath(string modelId);
 }
 
 /// <summary>
-/// High-level Slot 2B offline neural processor combining <see cref="INeuralInferenceRuntime"/> with
-/// <see cref="MvsepAntiArtifactPipeline"/> (2x–8x overlap-add, TTA, <c>avg_wave</c>/<c>min_fft</c> ensembling,
-/// Wiener <c>phase_fix</c>, and exact <c>residual = mix - sum(stems)</c> energy conservation).
+/// High-level Slot 7B offline neural processor combining <see cref="INeuralInferenceRuntime"/> with
+/// <see cref="MvsepAntiArtifactPipeline"/> (exact Kaiser polyphase sample-rate matching, 2x–8x overlap-add, TTA,
+/// semantic <see cref="NeuralStemRole"/>-matched <c>avg_wave</c>/<c>min_fft</c>/<c>avg_fft</c> ensembling,
+/// conservation-before-Wiener <c>phase_fix</c>, and exact <c>residual = mix - sum(stems)</c> energy conservation).
 /// </summary>
 public static class NeuralAudioOfflinePipeline {
     /// <summary>
-    /// Separates a stereo waveform using one or more ONNX checkpoints and ensembles them using
-    /// <paramref name="config"/>.<see cref="NeuralAudioConfig.EnsembleMode"/> (<c>avg_wave</c>, <c>min_fft</c>, or <c>avg_fft</c>).
+    /// Separates a stereo waveform using one or more ONNX checkpoints with automatic <see cref="KaiserSincResampler"/>
+    /// rate conversion to/from each model's native sample rate and semantic <see cref="NeuralStemRole"/>-matched ensembling.
     /// </summary>
     public static (StereoStemBuffer[] Stems, float RealTimeFactor) RunSeparation(
         INeuralInferenceRuntime runtime,
@@ -100,7 +103,9 @@ public static class NeuralAudioOfflinePipeline {
         NeuralAudioConfig config,
         int chunkSamples,
         Action<double, string> onProgress = null,
-        CancellationToken token = default) {
+        CancellationToken token = default,
+        IReadOnlyList<int> expectedSampleRatesPerModel = null,
+        IReadOnlyList<int> chunkSamplesPerModel = null) {
         ArgumentNullException.ThrowIfNull(runtime);
         ArgumentNullException.ThrowIfNull(modelPaths);
         ArgumentNullException.ThrowIfNull(mixLeft);
@@ -113,77 +118,204 @@ public static class NeuralAudioOfflinePipeline {
         NeuralAudioConfig safeCfg = (config ?? NeuralAudioConfig.Default).Sanitize();
         Stopwatch sw = Stopwatch.StartNew();
         int modelCount = modelPaths.Count;
+        int nativeSr = sampleRate >= 8000 ? sampleRate : 48000;
+        int nativeLength = mixLeft.Length;
         StereoStemBuffer[][] perModelResults = new StereoStemBuffer[modelCount][];
+        Dictionary<int, (float[] Left, float[] Right)> resampledMixCache = [];
 
-        // When ensembling multiple models, apply phase_fix & conservation ONCE after ensembling so stems stay exact.
-        MvsepPipelineOptions baseOpt = safeCfg.ToMvsepOptions(chunkSamples);
-        if (modelCount > 1) {
-            baseOpt.EnablePhaseFix = false;
-            baseOpt.EnforceEnergyConservation = false;
-        }
-
+        // Always apply residual conservation & Wiener phase_fix ONCE at native sample rate against original mixLeft/mixRight
+        // whenever ensembling (>1 model) OR when sample-rate conversion occurred (prevents phase smear across resamplers).
         int threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
+        bool anyResampled = false;
+
         for (int m = 0; m < modelCount; m++) {
             token.ThrowIfCancellationRequested();
             string path = modelPaths[m];
             string[] stemNames = expectedStemNamesPerModel != null && m < expectedStemNamesPerModel.Count
                 ? expectedStemNamesPerModel[m]
                 : ["vocals"];
+            int modelSr = expectedSampleRatesPerModel != null && m < expectedSampleRatesPerModel.Count && expectedSampleRatesPerModel[m] >= 8000
+                ? expectedSampleRatesPerModel[m]
+                : ResolveModelExpectedSampleRate(path, nativeSr);
+            int modelChunk = chunkSamplesPerModel != null && m < chunkSamplesPerModel.Count && chunkSamplesPerModel[m] >= 4096
+                ? chunkSamplesPerModel[m]
+                : chunkSamples;
+
+            bool needsResample = modelSr != nativeSr;
+            if (needsResample) {
+                anyResampled = true;
+            }
+
+            MvsepPipelineOptions passOpt = safeCfg.ToMvsepOptions(modelChunk);
+            if (modelCount > 1 || needsResample) {
+                passOpt.EnablePhaseFix = false;
+                passOpt.EnforceEnergyConservation = false;
+            }
+
+            float[] inL = mixLeft;
+            float[] inR = mixRight;
+            if (needsResample) {
+                if (!resampledMixCache.TryGetValue(modelSr, out (float[] Left, float[] Right) cached)) {
+                    KaiserSincResampler.ResampleStereo(mixLeft, mixRight, nativeSr, modelSr, out float[] rL, out float[] rR);
+                    cached = (rL, rR);
+                    resampledMixCache[modelSr] = cached;
+                }
+                inL = cached.Left;
+                inR = cached.Right;
+            }
 
             using INeuralSession session = runtime.CreateSession(path, safeCfg.PreferredProvider, threads);
             int modelIdx = m;
             string modelLabel = Path.GetFileNameWithoutExtension(path);
 
-            perModelResults[m] = MvsepAntiArtifactPipeline.ProcessTrack(
-                mixLeft,
-                mixRight,
+            StereoStemBuffer[] rawModelStems = MvsepAntiArtifactPipeline.ProcessTrack(
+                inL,
+                inR,
                 (chunkL, chunkR, len) => EvaluateStereoChunk(session, chunkL, chunkR, len, stemNames),
-                baseOpt,
+                passOpt,
                 p => {
                     double totalP = (modelIdx + p) / modelCount;
-                    onProgress?.Invoke(totalP * (modelCount > 1 ? 0.90 : 1.0), $"ONNX [{session.ExecutionProvider}] {modelLabel}: {p:0%}");
+                    double scale = (modelCount > 1 || needsResample) ? 0.90 : 1.0;
+                    onProgress?.Invoke(totalP * scale, $"ONNX [{session.ExecutionProvider}] {modelLabel}: {p:0%}");
                 },
                 token);
+
+            if (needsResample && rawModelStems != null && rawModelStems.Length > 0) {
+                KaiserSincResampler backResampler = new(modelSr, nativeSr);
+                StereoStemBuffer[] nativeStems = new StereoStemBuffer[rawModelStems.Length];
+                for (int s = 0; s < rawModelStems.Length; s++) {
+                    token.ThrowIfCancellationRequested();
+                    float[] outL = new float[nativeLength];
+                    float[] outR = new float[nativeLength];
+                    backResampler.ResampleMonoInto(rawModelStems[s].Left, rawModelStems[s].Length, outL, nativeLength);
+                    backResampler.ResampleMonoInto(rawModelStems[s].Right, rawModelStems[s].Length, outR, nativeLength);
+                    nativeStems[s] = new StereoStemBuffer(rawModelStems[s].Name, outL, outR);
+                }
+                perModelResults[m] = nativeStems;
+            } else {
+                perModelResults[m] = rawModelStems ?? Array.Empty<StereoStemBuffer>();
+            }
         }
 
         StereoStemBuffer[] finalStems;
+        MvsepPipelineOptions postOpt = safeCfg.ToMvsepOptions(chunkSamples);
         if (modelCount == 1) {
             finalStems = perModelResults[0];
+            if (anyResampled && finalStems.Length > 0) {
+                finalStems = ApplyNativePostConservationAndPhaseFix(mixLeft, mixRight, finalStems, safeCfg, postOpt, token);
+                onProgress?.Invoke(1.0, "MVSEP Separation Complete");
+            }
         } else {
-            onProgress?.Invoke(0.92, $"MVSEP Ensemble ({safeCfg.EnsembleMode})...");
-            int stemCount = perModelResults[0].Length;
-            finalStems = new StereoStemBuffer[stemCount];
-            for (int s = 0; s < stemCount; s++) {
-                StereoStemBuffer[] candidates = new StereoStemBuffer[modelCount];
-                for (int m = 0; m < modelCount; m++) {
-                    candidates[m] = s < perModelResults[m].Length ? perModelResults[m][s] : perModelResults[0][s];
-                }
-                finalStems[s] = MvsepAntiArtifactPipeline.EnsembleStems(
-                    candidates,
-                    ensembleWeights,
-                    safeCfg.EnsembleMode,
-                    baseOpt.StftSize,
-                    candidates[0].Name,
-                    token);
-            }
-
-            if (safeCfg.EnablePhaseFix) {
-                MvsepAntiArtifactPipeline.ApplyPhaseFixWiener(mixLeft, mixRight, finalStems, baseOpt.StftSize, baseOpt.WienerExponent, token);
-            }
-            if (safeCfg.EnforceEnergyConservation) {
-                StereoStemBuffer res = MvsepAntiArtifactPipeline.ComputeConservedResidual(mixLeft, mixRight, finalStems, "residual");
-                StereoStemBuffer[] withRes = new StereoStemBuffer[finalStems.Length + 1];
-                Array.Copy(finalStems, withRes, finalStems.Length);
-                withRes[finalStems.Length] = res;
-                finalStems = withRes;
+            onProgress?.Invoke(0.92, $"MVSEP Semantic Ensemble ({safeCfg.EnsembleMode})...");
+            finalStems = EnsembleBySemanticRole(perModelResults, ensembleWeights, safeCfg.EnsembleMode, postOpt.StftSize, token);
+            if (finalStems.Length > 0) {
+                finalStems = ApplyNativePostConservationAndPhaseFix(mixLeft, mixRight, finalStems, safeCfg, postOpt, token);
             }
             onProgress?.Invoke(1.0, "MVSEP Separation Complete");
         }
 
         sw.Stop();
-        double audioSec = sampleRate > 0 ? mixLeft.Length / (double)sampleRate : 1.0;
+        double audioSec = nativeSr > 0 ? nativeLength / (double)nativeSr : 1.0;
         float rtf = audioSec > 1e-3 ? (float)(sw.Elapsed.TotalSeconds / audioSec) : 0f;
         return (finalStems, rtf);
+    }
+
+    static int ResolveModelExpectedSampleRate(string modelPath, int fallbackSampleRate) {
+        if (!string.IsNullOrWhiteSpace(modelPath)) {
+            string fileName = Path.GetFileName(modelPath);
+            for (int i = 0; i < NeuralModelCatalog.Entries.Count; i++) {
+                NeuralModelCatalogEntry e = NeuralModelCatalog.Entries[i];
+                if (string.Equals(e.FileName, fileName, StringComparison.OrdinalIgnoreCase)) {
+                    return e.ExpectedSampleRate;
+                }
+            }
+        }
+        return fallbackSampleRate;
+    }
+
+    static StereoStemBuffer[] EnsembleBySemanticRole(
+        StereoStemBuffer[][] perModelResults,
+        float[] ensembleWeights,
+        MvsepEnsembleMethod method,
+        int stftSize,
+        CancellationToken token) {
+        List<NeuralStemRole> encounteredRoles = [];
+        Dictionary<NeuralStemRole, List<(StereoStemBuffer Stem, float Weight)>> roleBuckets = [];
+
+        for (int m = 0; m < perModelResults.Length; m++) {
+            StereoStemBuffer[] modelStems = perModelResults[m];
+            if (modelStems == null) {
+                continue;
+            }
+            float modelWeight = (ensembleWeights != null && m < ensembleWeights.Length && ensembleWeights[m] > 0f)
+                ? ensembleWeights[m]
+                : 1f;
+
+            for (int s = 0; s < modelStems.Length; s++) {
+                StereoStemBuffer stem = modelStems[s];
+                if (stem == null) {
+                    continue;
+                }
+                NeuralStemRole role = NeuralStemSpatializer.ClassifyStemName(stem.Name);
+                // Defer synthetic residual stems so final exact conservation computes residual = mix - sum(ensembled)
+                if (role == NeuralStemRole.Residual && string.Equals(stem.Name, "residual", StringComparison.OrdinalIgnoreCase)) {
+                    continue;
+                }
+                if (!roleBuckets.TryGetValue(role, out List<(StereoStemBuffer Stem, float Weight)> bucket)) {
+                    bucket = [];
+                    roleBuckets[role] = bucket;
+                    encounteredRoles.Add(role);
+                }
+                bucket.Add((stem, modelWeight));
+            }
+        }
+
+        List<StereoStemBuffer> fused = new(encounteredRoles.Count);
+        for (int r = 0; r < encounteredRoles.Count; r++) {
+            token.ThrowIfCancellationRequested();
+            NeuralStemRole role = encounteredRoles[r];
+            List<(StereoStemBuffer Stem, float Weight)> bucket = roleBuckets[role];
+            if (bucket.Count == 1) {
+                fused.Add(bucket[0].Stem);
+            } else {
+                StereoStemBuffer[] candidates = new StereoStemBuffer[bucket.Count];
+                float[] weights = new float[bucket.Count];
+                for (int i = 0; i < bucket.Count; i++) {
+                    candidates[i] = bucket[i].Stem;
+                    weights[i] = bucket[i].Weight;
+                }
+                fused.Add(MvsepAntiArtifactPipeline.EnsembleStems(
+                    candidates,
+                    weights,
+                    method,
+                    stftSize,
+                    candidates[0].Name,
+                    token));
+            }
+        }
+        return fused.ToArray();
+    }
+
+    static StereoStemBuffer[] ApplyNativePostConservationAndPhaseFix(
+        float[] mixLeft,
+        float[] mixRight,
+        StereoStemBuffer[] stems,
+        NeuralAudioConfig safeCfg,
+        MvsepPipelineOptions opt,
+        CancellationToken token) {
+        if (stems == null || stems.Length == 0) {
+            return Array.Empty<StereoStemBuffer>();
+        }
+        if (safeCfg.EnforceEnergyConservation) {
+            stems = MvsepAntiArtifactPipeline.AppendOrUpdateConservedResidual(mixLeft, mixRight, stems);
+        }
+        if (safeCfg.EnablePhaseFix && stems.Length > 1) {
+            MvsepAntiArtifactPipeline.ApplyPhaseFixWiener(mixLeft, mixRight, stems, opt.StftSize, opt.WienerExponent, token);
+            if (safeCfg.EnforceEnergyConservation) {
+                stems = MvsepAntiArtifactPipeline.AppendOrUpdateConservedResidual(mixLeft, mixRight, stems);
+            }
+        }
+        return stems;
     }
 
     /// <summary>
@@ -198,7 +330,8 @@ public static class NeuralAudioOfflinePipeline {
         NeuralAudioConfig config,
         int chunkSamples = 352800,
         Action<double, string> onProgress = null,
-        CancellationToken token = default) {
+        CancellationToken token = default,
+        int expectedModelSampleRate = 44100) {
         ArgumentNullException.ThrowIfNull(vocalStem);
         NeuralAudioConfig dereverbCfg = new() {
             PreferredProvider = config?.PreferredProvider ?? NeuralExecutionProvider.Auto,
@@ -219,7 +352,8 @@ public static class NeuralAudioOfflinePipeline {
             dereverbCfg,
             chunkSamples,
             onProgress,
-            token);
+            token,
+            expectedSampleRatesPerModel: [expectedModelSampleRate > 0 ? expectedModelSampleRate : 44100]);
 
         StereoStemBuffer dry = stems.Length > 0 ? stems[0] : new StereoStemBuffer("dry_vocal", vocalStem.Length);
         DereverbDecompositionResult decomp = MvsepAntiArtifactPipeline.ComputeDryWetDecomposition(vocalStem, dry);
@@ -235,7 +369,8 @@ public static class NeuralAudioOfflinePipeline {
         int sampleRate,
         StereoStemBuffer[] stems,
         DereverbDecompositionResult dereverb = null,
-        bool derivedFromLosslessTwin = false) {
+        bool derivedFromLosslessTwin = false,
+        string planSignature = "") {
         float[] monoLead = null;
         float[] monoBacking = null;
 
@@ -271,7 +406,8 @@ public static class NeuralAudioOfflinePipeline {
             MonoLeadVocalRef = monoLead,
             MonoBackingVocalRef = monoBacking,
             DereverbAnalysis = dereverb,
-            DerivedFromLosslessTwin = derivedFromLosslessTwin
+            DerivedFromLosslessTwin = derivedFromLosslessTwin,
+            PlanSignature = planSignature ?? string.Empty
         };
     }
 

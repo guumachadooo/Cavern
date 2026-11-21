@@ -49,6 +49,34 @@ public enum NeuralModelTask {
 }
 
 /// <summary>
+/// Orchestration mode for Slot 7A (<see cref="NeuralPipelineOrchestrator"/>).
+/// </summary>
+public enum NeuralOrchestrationMode {
+    /// <summary>Automatically selects, ensembles, and chains installed ONNX checkpoints per task based on quality &amp; priority.</summary>
+    Auto = 0,
+
+    /// <summary>Strictly uses only the explicit user-configured model IDs stored in <see cref="NeuralAudioConfig.TaskModelSlots"/>.</summary>
+    Manual = 1
+}
+
+/// <summary>
+/// High-level pipeline goal resolved by Slot 7A (<see cref="NeuralPipelineOrchestrator"/>).
+/// </summary>
+public enum NeuralPipelineGoal {
+    /// <summary>Full music stem separation (4/6-stem or vocal separation + optional Debleed/Denoise).</summary>
+    StemSeparation = 0,
+
+    /// <summary>Zero-phase Spatial Karaoke preparation (Lead vs. Backing split or Vocal separation + optional Dereverb).</summary>
+    SpatialKaraoke = 1,
+
+    /// <summary>Vocal Mix-Match DNA extraction (Isolated Vocal + Dereverb dry/wet RIR/DRR analysis).</summary>
+    VocalMixDna = 2,
+
+    /// <summary>Lossy codec artifact restoration &amp; bandwidth extension (Apollo + optional AP-BWE/FlashSR).</summary>
+    LosslessResidualRestore = 3
+}
+
+/// <summary>
 /// Spatial playback placement mode for Slot 2B neural stems.
 /// </summary>
 public enum NeuralSpatialUpmixMode {
@@ -88,10 +116,10 @@ public interface ILosslessReferenceProvider {
 }
 
 /// <summary>
-/// Metadata entry describing an open-source ONNX audio checkpoint curated for on-device Slot 2B inference.
+/// Metadata entry describing an open-source or user-imported ONNX audio checkpoint registered in Slot 7A.
 /// </summary>
 public sealed class NeuralModelCatalogEntry {
-    /// <summary>Stable machine identifier (e.g., "scnet_4stem_mobile", "mbr_karaoke_becruily").</summary>
+    /// <summary>Stable machine identifier (e.g., "scnet_4stem_mobile", "mbr_karaoke_becruily", "custom_my_roformer").</summary>
     public string Id { get; init; } = string.Empty;
 
     /// <summary>Human-readable display name.</summary>
@@ -100,7 +128,7 @@ public sealed class NeuralModelCatalogEntry {
     /// <summary>Upstream open-source architecture &amp; repository credit.</summary>
     public string SourceRepository { get; init; } = string.Empty;
 
-    /// <summary>Open-source license identifier (MIT, Apache-2.0).</summary>
+    /// <summary>Open-source license identifier (MIT, Apache-2.0, Custom).</summary>
     public string License { get; init; } = "MIT";
 
     /// <summary>Task classification for this checkpoint.</summary>
@@ -109,8 +137,14 @@ public sealed class NeuralModelCatalogEntry {
     /// <summary>Expected ONNX file name under <c>FilesDir/neural_models/</c>.</summary>
     public string FileName { get; init; } = string.Empty;
 
-    /// <summary>Direct download URL for pre-exported ONNX weights (HuggingFace / GitHub release).</summary>
+    /// <summary>Direct download URL for pre-exported ONNX weights (HuggingFace / GitHub release), or empty for manual import.</summary>
     public string DownloadUrl { get; init; } = string.Empty;
+
+    /// <summary>Optional ordered mirror/fallback ONNX download URLs tried if <see cref="DownloadUrl"/> returns 404/network error.</summary>
+    public string[] FallbackDownloadUrls { get; init; } = Array.Empty<string>();
+
+    /// <summary>True when no verified pre-exported community ONNX mirror is guaranteed and local <c>.onnx</c> import is the primary path.</summary>
+    public bool RequiresManualOnnxImport { get; init; }
 
     /// <summary>Approximate download size in megabytes for user display before lazy download.</summary>
     public float ApproxSizeMb { get; init; }
@@ -126,6 +160,12 @@ public sealed class NeuralModelCatalogEntry {
 
     /// <summary>True if this checkpoint is optimized for fast ARM64 mobile inference.</summary>
     public bool IsMobileFast { get; init; }
+
+    /// <summary>Priority ranking used by <see cref="NeuralPipelineOrchestrator"/> in <c>Auto</c> mode (higher = preferred).</summary>
+    public int PriorityRank { get; init; } = 100;
+
+    /// <summary>True when this descriptor represents a user-imported standalone custom <c>.onnx</c> model.</summary>
+    public bool IsCustomImported { get; init; }
 }
 
 /// <summary>
@@ -142,24 +182,35 @@ public static class NeuralModelCatalog {
     /// <summary>Default Dereverb model identifier (<c>Mel-Band RoFormer Dereverb</c>).</summary>
     public const string DefaultDereverbModelId = "mbr_dereverb_echo";
 
+    /// <summary>Default Debleed/Denoise model identifier (<c>Mel-Band RoFormer Debleed</c>).</summary>
+    public const string DefaultDebleedModelId = "mbr_debleed_denoise";
+
     /// <summary>Default Codec Restorer model identifier (<c>Apollo Band-Split</c>).</summary>
     public const string DefaultRestorerModelId = "apollo_codec_restore";
 
-    /// <summary>All curated open-source ONNX checkpoints registered in Slot 2B.</summary>
+    /// <summary>Default Bandwidth Extension model identifier (<c>AP-BWE / FlashSR 48 kHz</c>).</summary>
+    public const string DefaultBweModelId = "ap_bwe_flashsr_48k";
+
+    /// <summary>All curated open-source ONNX checkpoints registered in Slot 7A.</summary>
     public static IReadOnlyList<NeuralModelCatalogEntry> Entries { get; } = [
         new NeuralModelCatalogEntry {
             Id = DefaultStemModelId,
             DisplayName = "SCNet 4-Stem (Fast Mobile)",
-            SourceRepository = "starrytong/SCNet + ZFTurbo/MSST",
+            SourceRepository = "starrytong/SCNet + ZFTurbo/MSST (ONNX)",
             License = "MIT",
             Task = NeuralModelTask.StemSeparation4,
             FileName = "scnet_4stem_fp16.onnx",
-            DownloadUrl = "https://huggingface.co/ZFTurbo/Music-Source-Separation-Training/resolve/main/scnet_4stem_fp16.onnx",
+            DownloadUrl = "https://huggingface.co/onnx-community/scnet-4stem-onnx/resolve/main/model_fp16.onnx",
+            FallbackDownloadUrls = [
+                "https://huggingface.co/ZFTurbo/Music-Source-Separation-Training/resolve/main/scnet_4stem_fp16.onnx"
+            ],
+            RequiresManualOnnxImport = false,
             ApproxSizeMb = 42f,
             ExpectedSampleRate = 44100,
             RecommendedChunkSamples = 131072,
             OutputStemNames = ["drums", "bass", "other", "vocals"],
-            IsMobileFast = true
+            IsMobileFast = true,
+            PriorityRank = 110
         },
         new NeuralModelCatalogEntry {
             Id = "mbr_vocals_studio",
@@ -169,11 +220,16 @@ public static class NeuralModelCatalog {
             Task = NeuralModelTask.VocalSeparation,
             FileName = "mel_band_roformer_vocals_kim.onnx",
             DownloadUrl = "https://huggingface.co/santiquiroz/port-bs-roformer-onnx/resolve/main/mel_band_roformer_vocals_kim.onnx",
+            FallbackDownloadUrls = [
+                "https://huggingface.co/onnx-community/mel-band-roformer-vocals-onnx/resolve/main/model.onnx"
+            ],
+            RequiresManualOnnxImport = false,
             ApproxSizeMb = 185f,
             ExpectedSampleRate = 44100,
             RecommendedChunkSamples = 352800,
             OutputStemNames = ["vocals"],
-            IsMobileFast = false
+            IsMobileFast = false,
+            PriorityRank = 140
         },
         new NeuralModelCatalogEntry {
             Id = "bs_roformer_6stem_studio",
@@ -183,25 +239,35 @@ public static class NeuralModelCatalog {
             Task = NeuralModelTask.StemSeparation6,
             FileName = "bs_roformer_6stem.onnx",
             DownloadUrl = "https://huggingface.co/santiquiroz/port-bs-roformer-onnx/resolve/main/bs_roformer_6stem.onnx",
+            FallbackDownloadUrls = [
+                "https://huggingface.co/onnx-community/bs-roformer-6stem-onnx/resolve/main/model.onnx"
+            ],
+            RequiresManualOnnxImport = false,
             ApproxSizeMb = 215f,
             ExpectedSampleRate = 44100,
             RecommendedChunkSamples = 352800,
             OutputStemNames = ["vocals", "drums", "bass", "guitar", "piano", "other"],
-            IsMobileFast = false
+            IsMobileFast = false,
+            PriorityRank = 160
         },
         new NeuralModelCatalogEntry {
             Id = DefaultKaraokeModelId,
             DisplayName = "Mel-Band RoFormer Karaoke (Lead vs Backing)",
-            SourceRepository = "becruily/mel-band-roformer-karaoke + aufr33/viperx (ONNX)",
+            SourceRepository = "becruily/mel-band-roformer-karaoke + Acapellas ONNX",
             License = "MIT",
             Task = NeuralModelTask.KaraokeLeadBacking,
             FileName = "mel_band_roformer_karaoke_lead_backing.onnx",
             DownloadUrl = "https://huggingface.co/Acapellas/mel-band-roformer-karaoke-webgpu/resolve/main/model.onnx",
+            FallbackDownloadUrls = [
+                "https://huggingface.co/santiquiroz/port-bs-roformer-onnx/resolve/main/mel_band_roformer_karaoke.onnx"
+            ],
+            RequiresManualOnnxImport = false,
             ApproxSizeMb = 178f,
             ExpectedSampleRate = 44100,
             RecommendedChunkSamples = 352800,
             OutputStemNames = ["lead_vocal", "backing_vocals"],
-            IsMobileFast = false
+            IsMobileFast = false,
+            PriorityRank = 150
         },
         new NeuralModelCatalogEntry {
             Id = DefaultDereverbModelId,
@@ -210,26 +276,36 @@ public static class NeuralModelCatalog {
             License = "MIT",
             Task = NeuralModelTask.Dereverb,
             FileName = "mel_band_roformer_dereverb_echo.onnx",
-            DownloadUrl = "https://huggingface.co/ZFTurbo/Music-Source-Separation-Training/resolve/main/mel_band_roformer_dereverb_echo.onnx",
+            DownloadUrl = "https://huggingface.co/santiquiroz/port-bs-roformer-onnx/resolve/main/mel_band_roformer_dereverb_echo.onnx",
+            FallbackDownloadUrls = [
+                "https://huggingface.co/onnx-community/mel-band-roformer-dereverb-onnx/resolve/main/model.onnx"
+            ],
+            RequiresManualOnnxImport = true,
             ApproxSizeMb = 172f,
             ExpectedSampleRate = 44100,
             RecommendedChunkSamples = 352800,
             OutputStemNames = ["dry_vocal"],
-            IsMobileFast = false
+            IsMobileFast = false,
+            PriorityRank = 130
         },
         new NeuralModelCatalogEntry {
-            Id = "mbr_debleed_denoise",
+            Id = DefaultDebleedModelId,
             DisplayName = "Mel-Band RoFormer Debleed / Denoise",
             SourceRepository = "ZFTurbo/Music-Source-Separation-Training",
             License = "MIT",
             Task = NeuralModelTask.DebleedDenoise,
             FileName = "mel_band_roformer_debleed.onnx",
-            DownloadUrl = "https://huggingface.co/ZFTurbo/Music-Source-Separation-Training/resolve/main/mel_band_roformer_debleed.onnx",
+            DownloadUrl = "https://huggingface.co/santiquiroz/port-bs-roformer-onnx/resolve/main/mel_band_roformer_debleed.onnx",
+            FallbackDownloadUrls = [
+                "https://huggingface.co/onnx-community/mel-band-roformer-debleed-onnx/resolve/main/model.onnx"
+            ],
+            RequiresManualOnnxImport = true,
             ApproxSizeMb = 168f,
             ExpectedSampleRate = 44100,
             RecommendedChunkSamples = 352800,
             OutputStemNames = ["clean"],
-            IsMobileFast = false
+            IsMobileFast = false,
+            PriorityRank = 120
         },
         new NeuralModelCatalogEntry {
             Id = DefaultRestorerModelId,
@@ -238,26 +314,36 @@ public static class NeuralModelCatalog {
             License = "MIT",
             Task = NeuralModelTask.CodecRestoreApollo,
             FileName = "apollo_band_split_44k.onnx",
-            DownloadUrl = "https://huggingface.co/JusperLee/Apollo/resolve/main/apollo_band_split_44k.onnx",
+            DownloadUrl = "https://huggingface.co/onnx-community/apollo-audio-restore-onnx/resolve/main/model.onnx",
+            FallbackDownloadUrls = [
+                "https://huggingface.co/JusperLee/Apollo/resolve/main/apollo_band_split_44k.onnx"
+            ],
+            RequiresManualOnnxImport = true,
             ApproxSizeMb = 76f,
             ExpectedSampleRate = 44100,
             RecommendedChunkSamples = 262144,
             OutputStemNames = ["restored"],
-            IsMobileFast = true
+            IsMobileFast = true,
+            PriorityRank = 135
         },
         new NeuralModelCatalogEntry {
-            Id = "ap_bwe_flashsr_48k",
+            Id = DefaultBweModelId,
             DisplayName = "AP-BWE / FlashSR 48 kHz Bandwidth Extension",
             SourceRepository = "yxlu-0102/AP-BWE + ysharma3501/FlashSR",
             License = "Apache-2.0",
             Task = NeuralModelTask.BandwidthExtension,
             FileName = "ap_bwe_48k.onnx",
-            DownloadUrl = "https://huggingface.co/ysharma3501/FlashSR/resolve/main/ap_bwe_48k.onnx",
+            DownloadUrl = "https://huggingface.co/onnx-community/flashsr-bwe-48k-onnx/resolve/main/model.onnx",
+            FallbackDownloadUrls = [
+                "https://huggingface.co/ysharma3501/FlashSR/resolve/main/ap_bwe_48k.onnx"
+            ],
+            RequiresManualOnnxImport = true,
             ApproxSizeMb = 28f,
             ExpectedSampleRate = 48000,
             RecommendedChunkSamples = 192000,
             OutputStemNames = ["extended_48k"],
-            IsMobileFast = true
+            IsMobileFast = true,
+            PriorityRank = 115
         }
     ];
 
@@ -274,9 +360,62 @@ public static class NeuralModelCatalog {
         return null;
     }
 
-    /// <summary>Builds a human-readable attribution notice covering ONNX Runtime and all curated Slot 2B model repositories.</summary>
+    /// <summary>Returns all curated catalog entries matching <paramref name="task"/> ordered by descending <see cref="NeuralModelCatalogEntry.PriorityRank"/>.</summary>
+    public static IReadOnlyList<NeuralModelCatalogEntry> FindByTask(NeuralModelTask task) {
+        List<NeuralModelCatalogEntry> matches = [];
+        for (int i = 0; i < Entries.Count; i++) {
+            if (Entries[i].Task == task) {
+                matches.Add(Entries[i]);
+            }
+        }
+        matches.Sort((a, b) => b.PriorityRank.CompareTo(a.PriorityRank));
+        return matches;
+    }
+
+    /// <summary>Returns canonical default output stem names for a <see cref="NeuralModelTask"/> when importing a custom <c>.onnx</c> model.</summary>
+    public static string[] GetDefaultOutputStemNames(NeuralModelTask task) => task switch {
+        NeuralModelTask.StemSeparation4 => ["drums", "bass", "other", "vocals"],
+        NeuralModelTask.StemSeparation6 => ["vocals", "drums", "bass", "guitar", "piano", "other"],
+        NeuralModelTask.VocalSeparation => ["vocals"],
+        NeuralModelTask.KaraokeLeadBacking => ["lead_vocal", "backing_vocals"],
+        NeuralModelTask.Dereverb => ["dry_vocal"],
+        NeuralModelTask.DebleedDenoise => ["clean"],
+        NeuralModelTask.CodecRestoreApollo => ["restored"],
+        NeuralModelTask.BandwidthExtension => ["extended_48k"],
+        _ => ["stem_0"]
+    };
+
+    /// <summary>Builds a first-class <see cref="NeuralModelCatalogEntry"/> descriptor for a user-imported custom <c>.onnx</c> checkpoint.</summary>
+    public static NeuralModelCatalogEntry CreateCustomEntry(
+        string id,
+        string displayName,
+        NeuralModelTask task,
+        string fileName,
+        int expectedSampleRate = 44100,
+        int recommendedChunkSamples = 131072,
+        string[] outputStemNames = null,
+        float approxSizeMb = 0f) => new() {
+            Id = string.IsNullOrWhiteSpace(id) ? $"custom_{Guid.NewGuid():N}" : id.Trim(),
+            DisplayName = string.IsNullOrWhiteSpace(displayName) ? Path.GetFileNameWithoutExtension(fileName ?? "Custom ONNX") : displayName.Trim(),
+            SourceRepository = "Local Custom ONNX",
+            License = "Custom",
+            Task = task,
+            FileName = string.IsNullOrWhiteSpace(fileName) ? $"{id}.onnx" : fileName.Trim(),
+            DownloadUrl = string.Empty,
+            FallbackDownloadUrls = Array.Empty<string>(),
+            RequiresManualOnnxImport = true,
+            ApproxSizeMb = Math.Max(0f, approxSizeMb),
+            ExpectedSampleRate = expectedSampleRate >= 8000 ? expectedSampleRate : (task == NeuralModelTask.BandwidthExtension ? 48000 : 44100),
+            RecommendedChunkSamples = Math.Max(4096, recommendedChunkSamples),
+            OutputStemNames = outputStemNames != null && outputStemNames.Length > 0 ? outputStemNames : GetDefaultOutputStemNames(task),
+            IsMobileFast = approxSizeMb > 0f && approxSizeMb <= 90f,
+            PriorityRank = 125,
+            IsCustomImported = true
+        };
+
+    /// <summary>Builds a human-readable attribution notice covering ONNX Runtime and all curated Slot 7A/7B model repositories.</summary>
     public static string BuildAttributionNotice() =>
-        "Slot 2B On-Device Neural Audio & MVSEP Pipeline Licenses:\n\n" +
+        "Slot 7 On-Device Neural Audio & MVSEP Pipeline Licenses:\n\n" +
         "• Microsoft ONNX Runtime (ARM64 XNNPACK / QNN EP) — MIT License (github.com/microsoft/onnxruntime)\n" +
         "• ZFTurbo Music-Source-Separation-Training & MVSEP-MDX23 (Mel-Band/BS-RoFormer, TTA, avg_wave/min_fft) — MIT License\n" +
         "• santiquiroz/port-bs-roformer-onnx — MIT License\n" +
@@ -288,14 +427,17 @@ public static class NeuralModelCatalog {
 }
 
 /// <summary>
-/// Immutable configuration snapshot for Slot 2B (Neural Audio Runtime, MVSEP Anti-Artifact Engine, Spatial Karaoke &amp; Hybrid Neural+DirAC).
+/// Immutable configuration snapshot for Slot 2B / Slot 7A (Dynamic Neural Task-Slot Registry, Orchestrator, MVSEP Anti-Artifact Engine, Spatial Karaoke &amp; Hybrid Neural+DirAC).
 /// </summary>
 public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
-    /// <summary>Neutral default configuration: bit-transparent (Karaoke OFF, 100% vocal level, MVSEP 4x overlap + PhaseFix + Conservation armed).</summary>
-    public static NeuralAudioConfig Default { get; } = new();
+    /// <summary>Neutral default configuration: bit-transparent (Karaoke OFF, 100% vocal level, Auto orchestration, MVSEP 4x overlap + PhaseFix + Conservation armed).</summary>
+    public static NeuralAudioConfig Default { get; } = new NeuralAudioConfig().Sanitize();
 
     /// <summary>Preferred ONNX Runtime Execution Provider (Auto: QNN HTP -> XNNPACK -> CPU).</summary>
     public NeuralExecutionProvider PreferredProvider { get; init; } = NeuralExecutionProvider.Auto;
+
+    /// <summary>Slot 7A orchestration mode (<c>Auto</c> chains best installed checkpoints; <c>Manual</c> uses explicit <see cref="TaskModelSlots"/>).</summary>
+    public NeuralOrchestrationMode OrchestrationMode { get; init; } = NeuralOrchestrationMode.Auto;
 
     /// <summary>MVSEP chunk overlap factor in [2..8] (default 4x = 75% overlap).</summary>
     public int OverlapFactor { get; init; } = MvsepPipelineOptions.DefaultOverlap;
@@ -327,36 +469,151 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
     /// <summary>Spatial 3D placement / Hybrid Neural+DirAC upmix mode for separated stems.</summary>
     public NeuralSpatialUpmixMode SpatialUpmixMode { get; init; } = NeuralSpatialUpmixMode.Off;
 
-    /// <summary>Selected stem separator model ID from <see cref="NeuralModelCatalog"/>.</summary>
+    /// <summary>Maximum disk budget in megabytes for Slot 7B <c>CacheDir/neural_tracks/</c> LRU cache.</summary>
+    public int TrackCacheMaxSizeMb { get; init; } = 512;
+
+    /// <summary>Extensible task-keyed model registry supporting 1 or more (ensemble) model IDs per <see cref="NeuralModelTask"/>.</summary>
+    public IReadOnlyDictionary<NeuralModelTask, IReadOnlyList<string>> TaskModelSlots { get; init; }
+
+    /// <summary>Primary stem separator model ID (synchronized with stem separation entries in <see cref="TaskModelSlots"/>).</summary>
     public string ActiveStemModelId { get; init; } = NeuralModelCatalog.DefaultStemModelId;
 
-    /// <summary>Selected karaoke Lead-vs-Backing model ID from <see cref="NeuralModelCatalog"/>.</summary>
+    /// <summary>Primary karaoke Lead-vs-Backing model ID (synchronized with <see cref="NeuralModelTask.KaraokeLeadBacking"/>).</summary>
     public string ActiveKaraokeModelId { get; init; } = NeuralModelCatalog.DefaultKaraokeModelId;
 
-    /// <summary>Selected dereverb model ID from <see cref="NeuralModelCatalog"/>.</summary>
+    /// <summary>Primary dereverb model ID (synchronized with <see cref="NeuralModelTask.Dereverb"/>).</summary>
     public string ActiveDereverbModelId { get; init; } = NeuralModelCatalog.DefaultDereverbModelId;
 
-    /// <summary>Selected codec restorer / BWE model ID from <see cref="NeuralModelCatalog"/>.</summary>
+    /// <summary>Primary debleed/denoise model ID (synchronized with <see cref="NeuralModelTask.DebleedDenoise"/>).</summary>
+    public string ActiveDebleedModelId { get; init; } = NeuralModelCatalog.DefaultDebleedModelId;
+
+    /// <summary>Primary codec restorer / BWE model ID (synchronized with <see cref="NeuralModelTask.CodecRestoreApollo"/> / <see cref="NeuralModelTask.BandwidthExtension"/>).</summary>
     public string ActiveRestorerModelId { get; init; } = NeuralModelCatalog.DefaultRestorerModelId;
 
-    /// <summary>Returns a clamped, validated copy of this configuration.</summary>
-    public NeuralAudioConfig Sanitize() => new() {
-        PreferredProvider = Enum.IsDefined(PreferredProvider) ? PreferredProvider : NeuralExecutionProvider.Auto,
-        OverlapFactor = Math.Clamp(OverlapFactor, MvsepPipelineOptions.MinOverlap, MvsepPipelineOptions.MaxOverlap),
+    /// <summary>Returns the configured ordered list of model IDs assigned to <paramref name="task"/>.</summary>
+    public IReadOnlyList<string> GetModelsForTask(NeuralModelTask task) {
+        if (TaskModelSlots != null && TaskModelSlots.TryGetValue(task, out IReadOnlyList<string> configured) && configured != null && configured.Count > 0) {
+            return configured;
+        }
+        string fallback = task switch {
+            NeuralModelTask.StemSeparation4 => ActiveStemModelId,
+            NeuralModelTask.StemSeparation6 => ActiveStemModelId,
+            NeuralModelTask.VocalSeparation => ActiveStemModelId,
+            NeuralModelTask.KaraokeLeadBacking => ActiveKaraokeModelId,
+            NeuralModelTask.Dereverb => ActiveDereverbModelId,
+            NeuralModelTask.DebleedDenoise => ActiveDebleedModelId,
+            NeuralModelTask.CodecRestoreApollo => ActiveRestorerModelId,
+            NeuralModelTask.BandwidthExtension => ActiveRestorerModelId,
+            _ => string.Empty
+        };
+        return string.IsNullOrWhiteSpace(fallback) ? Array.Empty<string>() : [fallback.Trim()];
+    }
+
+    /// <summary>Returns a copy of this configuration with only <see cref="KaraokeVocalLevel"/> updated, preserving all task slots.</summary>
+    public NeuralAudioConfig WithKaraokeVocalLevel(float level01) => new NeuralAudioConfig {
+        PreferredProvider = PreferredProvider,
+        OrchestrationMode = OrchestrationMode,
+        OverlapFactor = OverlapFactor,
         EnableTta = EnableTta,
-        EnsembleMode = Enum.IsDefined(EnsembleMode) ? EnsembleMode : MvsepEnsembleMethod.AverageWave,
+        EnsembleMode = EnsembleMode,
         EnablePhaseFix = EnablePhaseFix,
         EnforceEnergyConservation = EnforceEnergyConservation,
         SpatialKaraokeEnabled = SpatialKaraokeEnabled,
-        KaraokeVocalLevel = Math.Clamp(KaraokeVocalLevel, 0f, 1f),
+        KaraokeVocalLevel = Math.Clamp(level01, 0f, 1f),
         KaraokePreserveBackingVocals = KaraokePreserveBackingVocals,
         UseLosslessTwinForKaraoke = UseLosslessTwinForKaraoke,
-        SpatialUpmixMode = Enum.IsDefined(SpatialUpmixMode) ? SpatialUpmixMode : NeuralSpatialUpmixMode.Off,
-        ActiveStemModelId = string.IsNullOrWhiteSpace(ActiveStemModelId) ? NeuralModelCatalog.DefaultStemModelId : ActiveStemModelId.Trim(),
-        ActiveKaraokeModelId = string.IsNullOrWhiteSpace(ActiveKaraokeModelId) ? NeuralModelCatalog.DefaultKaraokeModelId : ActiveKaraokeModelId.Trim(),
-        ActiveDereverbModelId = string.IsNullOrWhiteSpace(ActiveDereverbModelId) ? NeuralModelCatalog.DefaultDereverbModelId : ActiveDereverbModelId.Trim(),
-        ActiveRestorerModelId = string.IsNullOrWhiteSpace(ActiveRestorerModelId) ? NeuralModelCatalog.DefaultRestorerModelId : ActiveRestorerModelId.Trim()
-    };
+        SpatialUpmixMode = SpatialUpmixMode,
+        TrackCacheMaxSizeMb = TrackCacheMaxSizeMb,
+        TaskModelSlots = TaskModelSlots,
+        ActiveStemModelId = ActiveStemModelId,
+        ActiveKaraokeModelId = ActiveKaraokeModelId,
+        ActiveDereverbModelId = ActiveDereverbModelId,
+        ActiveDebleedModelId = ActiveDebleedModelId,
+        ActiveRestorerModelId = ActiveRestorerModelId
+    }.Sanitize();
+
+    /// <summary>Returns a clamped, validated copy of this configuration with synchronized <see cref="TaskModelSlots"/>.</summary>
+    public NeuralAudioConfig Sanitize() {
+        string stemId = string.IsNullOrWhiteSpace(ActiveStemModelId) ? NeuralModelCatalog.DefaultStemModelId : ActiveStemModelId.Trim();
+        string karaokeId = string.IsNullOrWhiteSpace(ActiveKaraokeModelId) ? NeuralModelCatalog.DefaultKaraokeModelId : ActiveKaraokeModelId.Trim();
+        string dereverbId = string.IsNullOrWhiteSpace(ActiveDereverbModelId) ? NeuralModelCatalog.DefaultDereverbModelId : ActiveDereverbModelId.Trim();
+        string debleedId = string.IsNullOrWhiteSpace(ActiveDebleedModelId) ? NeuralModelCatalog.DefaultDebleedModelId : ActiveDebleedModelId.Trim();
+        string restorerId = string.IsNullOrWhiteSpace(ActiveRestorerModelId) ? NeuralModelCatalog.DefaultRestorerModelId : ActiveRestorerModelId.Trim();
+
+        Dictionary<NeuralModelTask, IReadOnlyList<string>> normalizedSlots = [];
+        if (TaskModelSlots != null) {
+            foreach (KeyValuePair<NeuralModelTask, IReadOnlyList<string>> kv in TaskModelSlots) {
+                if (kv.Value == null) {
+                    continue;
+                }
+                List<string> clean = [];
+                HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < kv.Value.Count; i++) {
+                    string id = kv.Value[i]?.Trim();
+                    if (!string.IsNullOrEmpty(id) && seen.Add(id)) {
+                        clean.Add(id);
+                    }
+                }
+                if (clean.Count > 0) {
+                    normalizedSlots[kv.Key] = clean;
+                }
+            }
+        }
+
+        // Ensure canonical single-ID properties and dynamic task slots remain synchronized in both directions
+        EnsurePrimarySlot(normalizedSlots, ResolveStemTask(stemId), stemId);
+        EnsurePrimarySlot(normalizedSlots, NeuralModelTask.KaraokeLeadBacking, karaokeId);
+        EnsurePrimarySlot(normalizedSlots, NeuralModelTask.Dereverb, dereverbId);
+        EnsurePrimarySlot(normalizedSlots, NeuralModelTask.DebleedDenoise, debleedId);
+        EnsurePrimarySlot(normalizedSlots, ResolveRestorerTask(restorerId), restorerId);
+
+        return new NeuralAudioConfig {
+            PreferredProvider = Enum.IsDefined(PreferredProvider) ? PreferredProvider : NeuralExecutionProvider.Auto,
+            OrchestrationMode = Enum.IsDefined(OrchestrationMode) ? OrchestrationMode : NeuralOrchestrationMode.Auto,
+            OverlapFactor = Math.Clamp(OverlapFactor, MvsepPipelineOptions.MinOverlap, MvsepPipelineOptions.MaxOverlap),
+            EnableTta = EnableTta,
+            EnsembleMode = Enum.IsDefined(EnsembleMode) ? EnsembleMode : MvsepEnsembleMethod.AverageWave,
+            EnablePhaseFix = EnablePhaseFix,
+            EnforceEnergyConservation = EnforceEnergyConservation,
+            SpatialKaraokeEnabled = SpatialKaraokeEnabled,
+            KaraokeVocalLevel = Math.Clamp(KaraokeVocalLevel, 0f, 1f),
+            KaraokePreserveBackingVocals = KaraokePreserveBackingVocals,
+            UseLosslessTwinForKaraoke = UseLosslessTwinForKaraoke,
+            SpatialUpmixMode = Enum.IsDefined(SpatialUpmixMode) ? SpatialUpmixMode : NeuralSpatialUpmixMode.Off,
+            TrackCacheMaxSizeMb = Math.Clamp(TrackCacheMaxSizeMb, 128, 4096),
+            TaskModelSlots = normalizedSlots,
+            ActiveStemModelId = stemId,
+            ActiveKaraokeModelId = karaokeId,
+            ActiveDereverbModelId = dereverbId,
+            ActiveDebleedModelId = debleedId,
+            ActiveRestorerModelId = restorerId
+        };
+    }
+
+    static NeuralModelTask ResolveStemTask(string modelId) {
+        NeuralModelCatalogEntry e = NeuralModelCatalog.FindById(modelId);
+        if (e != null && (e.Task == NeuralModelTask.StemSeparation4 || e.Task == NeuralModelTask.StemSeparation6 || e.Task == NeuralModelTask.VocalSeparation)) {
+            return e.Task;
+        }
+        return NeuralModelTask.StemSeparation4;
+    }
+
+    static NeuralModelTask ResolveRestorerTask(string modelId) {
+        NeuralModelCatalogEntry e = NeuralModelCatalog.FindById(modelId);
+        if (e != null && (e.Task == NeuralModelTask.CodecRestoreApollo || e.Task == NeuralModelTask.BandwidthExtension)) {
+            return e.Task;
+        }
+        return NeuralModelTask.CodecRestoreApollo;
+    }
+
+    static void EnsurePrimarySlot(Dictionary<NeuralModelTask, IReadOnlyList<string>> slots, NeuralModelTask task, string primaryId) {
+        if (string.IsNullOrWhiteSpace(primaryId)) {
+            return;
+        }
+        if (!slots.TryGetValue(task, out IReadOnlyList<string> existing) || existing == null || existing.Count == 0) {
+            slots[task] = [primaryId];
+        }
+    }
 
     /// <summary>Builds <see cref="MvsepPipelineOptions"/> from this configuration and a target chunk size.</summary>
     public MvsepPipelineOptions ToMvsepOptions(int chunkSamples = 131072) => new() {
@@ -376,21 +633,57 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
         if (other is null) {
             return false;
         }
-        return PreferredProvider == other.PreferredProvider
-            && OverlapFactor == other.OverlapFactor
-            && EnableTta == other.EnableTta
-            && EnsembleMode == other.EnsembleMode
-            && EnablePhaseFix == other.EnablePhaseFix
-            && EnforceEnergyConservation == other.EnforceEnergyConservation
-            && SpatialKaraokeEnabled == other.SpatialKaraokeEnabled
-            && MathF.Abs(KaraokeVocalLevel - other.KaraokeVocalLevel) < 0.002f
-            && KaraokePreserveBackingVocals == other.KaraokePreserveBackingVocals
-            && UseLosslessTwinForKaraoke == other.UseLosslessTwinForKaraoke
-            && SpatialUpmixMode == other.SpatialUpmixMode
-            && string.Equals(ActiveStemModelId, other.ActiveStemModelId, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(ActiveKaraokeModelId, other.ActiveKaraokeModelId, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(ActiveDereverbModelId, other.ActiveDereverbModelId, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(ActiveRestorerModelId, other.ActiveRestorerModelId, StringComparison.OrdinalIgnoreCase);
+        if (PreferredProvider != other.PreferredProvider
+            || OrchestrationMode != other.OrchestrationMode
+            || OverlapFactor != other.OverlapFactor
+            || EnableTta != other.EnableTta
+            || EnsembleMode != other.EnsembleMode
+            || EnablePhaseFix != other.EnablePhaseFix
+            || EnforceEnergyConservation != other.EnforceEnergyConservation
+            || SpatialKaraokeEnabled != other.SpatialKaraokeEnabled
+            || MathF.Abs(KaraokeVocalLevel - other.KaraokeVocalLevel) >= 0.002f
+            || KaraokePreserveBackingVocals != other.KaraokePreserveBackingVocals
+            || UseLosslessTwinForKaraoke != other.UseLosslessTwinForKaraoke
+            || SpatialUpmixMode != other.SpatialUpmixMode
+            || TrackCacheMaxSizeMb != other.TrackCacheMaxSizeMb
+            || !string.Equals(ActiveStemModelId, other.ActiveStemModelId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(ActiveKaraokeModelId, other.ActiveKaraokeModelId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(ActiveDereverbModelId, other.ActiveDereverbModelId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(ActiveDebleedModelId, other.ActiveDebleedModelId, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(ActiveRestorerModelId, other.ActiveRestorerModelId, StringComparison.OrdinalIgnoreCase)) {
+            return false;
+        }
+        return TaskSlotsEqual(TaskModelSlots, other.TaskModelSlots);
+    }
+
+    static bool TaskSlotsEqual(
+        IReadOnlyDictionary<NeuralModelTask, IReadOnlyList<string>> a,
+        IReadOnlyDictionary<NeuralModelTask, IReadOnlyList<string>> b) {
+        int countA = a?.Count ?? 0;
+        int countB = b?.Count ?? 0;
+        if (countA != countB) {
+            return false;
+        }
+        if (countA == 0) {
+            return true;
+        }
+        foreach (KeyValuePair<NeuralModelTask, IReadOnlyList<string>> kv in a) {
+            if (!b.TryGetValue(kv.Key, out IReadOnlyList<string> listB)) {
+                return false;
+            }
+            IReadOnlyList<string> listA = kv.Value;
+            int lenA = listA?.Count ?? 0;
+            int lenB = listB?.Count ?? 0;
+            if (lenA != lenB) {
+                return false;
+            }
+            for (int i = 0; i < lenA; i++) {
+                if (!string.Equals(listA[i], listB[i], StringComparison.OrdinalIgnoreCase)) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     /// <inheritdoc/>
@@ -400,6 +693,7 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
     public override int GetHashCode() {
         HashCode hc = new();
         hc.Add(PreferredProvider);
+        hc.Add(OrchestrationMode);
         hc.Add(OverlapFactor);
         hc.Add(EnableTta);
         hc.Add(EnsembleMode);
@@ -410,16 +704,28 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
         hc.Add(KaraokePreserveBackingVocals);
         hc.Add(UseLosslessTwinForKaraoke);
         hc.Add(SpatialUpmixMode);
-        hc.Add(ActiveStemModelId);
-        hc.Add(ActiveKaraokeModelId);
-        hc.Add(ActiveDereverbModelId);
-        hc.Add(ActiveRestorerModelId);
+        hc.Add(TrackCacheMaxSizeMb);
+        hc.Add(ActiveStemModelId, StringComparer.OrdinalIgnoreCase);
+        hc.Add(ActiveKaraokeModelId, StringComparer.OrdinalIgnoreCase);
+        hc.Add(ActiveDereverbModelId, StringComparer.OrdinalIgnoreCase);
+        hc.Add(ActiveDebleedModelId, StringComparer.OrdinalIgnoreCase);
+        hc.Add(ActiveRestorerModelId, StringComparer.OrdinalIgnoreCase);
+        if (TaskModelSlots != null) {
+            foreach (NeuralModelTask task in Enum.GetValues<NeuralModelTask>()) {
+                if (TaskModelSlots.TryGetValue(task, out IReadOnlyList<string> list) && list != null) {
+                    hc.Add(task);
+                    for (int i = 0; i < list.Count; i++) {
+                        hc.Add(list[i], StringComparer.OrdinalIgnoreCase);
+                    }
+                }
+            }
+        }
         return hc.ToHashCode();
     }
 }
 
 /// <summary>
-/// Live telemetry snapshot for Slot 2B Neural Audio Runtime, MVSEP Pipeline, and Spatial Karaoke.
+/// Live telemetry snapshot for Slot 2B / Slot 7 Neural Audio Runtime, Orchestrator, Track Cache, MVSEP Pipeline, and Spatial Karaoke.
 /// Published into <see cref="SpatialSceneHub.NeuralDiagnostics"/>.
 /// </summary>
 public struct NeuralAudioDiagnostics {
@@ -435,11 +741,20 @@ public struct NeuralAudioDiagnostics {
     /// <summary>True when Qualcomm QNN HTP libraries are available alongside ONNX Runtime.</summary>
     public bool IsQnnAvailable { get; set; }
 
-    /// <summary>Number of ONNX audio checkpoints installed locally in <c>FilesDir/neural_models/</c>.</summary>
+    /// <summary>Number of ONNX audio checkpoints installed locally in <c>FilesDir/neural_models/</c> (curated + custom).</summary>
     public int InstalledModelCount { get; set; }
 
-    /// <summary>Total disk space used by downloaded models &amp; temporary inference cache in bytes.</summary>
+    /// <summary>Total disk space used by downloaded models &amp; runtime in bytes.</summary>
     public long CacheSizeBytes { get; set; }
+
+    /// <summary>Number of pre-separated tracks stored in Slot 7B disk cache (<c>CacheDir/neural_tracks/</c>).</summary>
+    public int TrackCacheEntryCount { get; set; }
+
+    /// <summary>Total disk space used by Slot 7B separated track cache in bytes.</summary>
+    public long TrackCacheSizeBytes { get; set; }
+
+    /// <summary>Human-readable summary of the active Slot 7A orchestrator mode &amp; model chain.</summary>
+    public string OrchestrationSummary { get; set; }
 
     /// <summary>True when Spatial Karaoke multichannel masking is actively attenuating vocals.</summary>
     public bool IsKaraokeActive { get; set; }
@@ -473,6 +788,9 @@ public struct NeuralAudioDiagnostics {
         IsQnnAvailable = false,
         InstalledModelCount = 0,
         CacheSizeBytes = 0L,
+        TrackCacheEntryCount = 0,
+        TrackCacheSizeBytes = 0L,
+        OrchestrationSummary = string.Empty,
         IsKaraokeActive = false,
         KaraokeVocalLevel = 1f,
         HasNeuralVocalReference = false,
@@ -486,7 +804,7 @@ public struct NeuralAudioDiagnostics {
 
 /// <summary>
 /// Holds a track's pre-separated neural stems (and optional mono Lead/Backing karaoke references) for
-/// real-time Spatial Karaoke projection and 3D object placement inside <see cref="SpatialSceneHub"/>.
+/// real-time Spatial Karaoke projection, 3D object placement inside <see cref="SpatialSceneHub"/>, and Slot 7B disk caching.
 /// </summary>
 public sealed class NeuralSeparatedTrack {
     /// <summary>Track path or identifier this stem set belongs to.</summary>
@@ -509,4 +827,7 @@ public sealed class NeuralSeparatedTrack {
 
     /// <summary>True when generated from a synced W09 lossless FLAC twin.</summary>
     public bool DerivedFromLosslessTwin { get; init; }
+
+    /// <summary>Slot 7A orchestrator plan signature used to generate this stem bundle (for cache validation).</summary>
+    public string PlanSignature { get; init; } = string.Empty;
 }

@@ -581,6 +581,16 @@ public sealed class AppSettingsStore {
         set => Edit().PutInt("neuralSpatialUpmixMode", Math.Clamp(value, 0, 2)).Apply();
     }
 
+    public int NeuralOrchestrationModeIndex {
+        get => prefs.GetInt("neuralOrchestrationMode", (int)Cavernize.Logic.Spatial.NeuralOrchestrationMode.Auto);
+        set => Edit().PutInt("neuralOrchestrationMode", Math.Clamp(value, 0, 1)).Apply();
+    }
+
+    public int NeuralTrackCacheMaxMb {
+        get => prefs.GetInt("neuralTrackCacheMaxMb", 512);
+        set => Edit().PutInt("neuralTrackCacheMaxMb", Math.Clamp(value, 128, 4096)).Apply();
+    }
+
     public string ActiveStemModelId {
         get => prefs.GetString("activeStemModelId", Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId);
         set => Edit().PutString("activeStemModelId", value ?? Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId).Apply();
@@ -596,13 +606,100 @@ public sealed class AppSettingsStore {
         set => Edit().PutString("activeDereverbModelId", value ?? Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultDereverbModelId).Apply();
     }
 
+    public string ActiveDebleedModelId {
+        get => prefs.GetString("activeDebleedModelId", Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultDebleedModelId);
+        set => Edit().PutString("activeDebleedModelId", value ?? Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultDebleedModelId).Apply();
+    }
+
     public string ActiveRestorerModelId {
         get => prefs.GetString("activeRestorerModelId", Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultRestorerModelId);
         set => Edit().PutString("activeRestorerModelId", value ?? Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultRestorerModelId).Apply();
     }
 
-    public Cavernize.Logic.Spatial.NeuralAudioConfig BuildNeuralAudioConfig() => new() {
+    public string NeuralTaskSlotsJson {
+        get => prefs.GetString("neuralTaskSlotsV1", "{}");
+        set => Edit().PutString("neuralTaskSlotsV1", string.IsNullOrWhiteSpace(value) ? "{}" : value).Apply();
+    }
+
+    public Dictionary<Cavernize.Logic.Spatial.NeuralModelTask, IReadOnlyList<string>> GetAllNeuralTaskModelSlots() {
+        Dictionary<Cavernize.Logic.Spatial.NeuralModelTask, IReadOnlyList<string>> result = [];
+        try {
+            Dictionary<string, List<string>> raw =
+                System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, List<string>>>(NeuralTaskSlotsJson);
+            if (raw != null) {
+                foreach (KeyValuePair<string, List<string>> kv in raw) {
+                    if (Enum.TryParse<Cavernize.Logic.Spatial.NeuralModelTask>(kv.Key, ignoreCase: true, out Cavernize.Logic.Spatial.NeuralModelTask task) &&
+                        kv.Value != null) {
+                        List<string> clean = kv.Value
+                            .Where(s => !string.IsNullOrWhiteSpace(s))
+                            .Select(s => s.Trim())
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToList();
+                        if (clean.Count > 0) {
+                            result[task] = clean;
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Fall back to canonical active slot properties
+        }
+        return result;
+    }
+
+    public List<string> GetNeuralTaskModelIds(Cavernize.Logic.Spatial.NeuralModelTask task) {
+        Dictionary<Cavernize.Logic.Spatial.NeuralModelTask, IReadOnlyList<string>> all = GetAllNeuralTaskModelSlots();
+        if (all.TryGetValue(task, out IReadOnlyList<string> list) && list.Count > 0) {
+            return list.ToList();
+        }
+        return [];
+    }
+
+    public void SetNeuralTaskModelIds(Cavernize.Logic.Spatial.NeuralModelTask task, IEnumerable<string> modelIds) {
+        Dictionary<string, List<string>> raw = LoadRawTaskSlots();
+        List<string> clean = modelIds?
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .Select(s => s.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList() ?? [];
+        if (clean.Count > 0) {
+            raw[task.ToString()] = clean;
+        } else {
+            raw.Remove(task.ToString());
+        }
+        NeuralTaskSlotsJson = System.Text.Json.JsonSerializer.Serialize(raw);
+    }
+
+    public bool ToggleNeuralTaskModelId(Cavernize.Logic.Spatial.NeuralModelTask task, string modelId) {
+        if (string.IsNullOrWhiteSpace(modelId)) {
+            return false;
+        }
+        List<string> list = GetNeuralTaskModelIds(task);
+        int existing = list.FindIndex(id => string.Equals(id, modelId, StringComparison.OrdinalIgnoreCase));
+        bool added;
+        if (existing >= 0) {
+            list.RemoveAt(existing);
+            added = false;
+        } else {
+            list.Add(modelId.Trim());
+            added = true;
+        }
+        SetNeuralTaskModelIds(task, list);
+        return added;
+    }
+
+    Dictionary<string, List<string>> LoadRawTaskSlots() {
+        try {
+            return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, List<string>>>(NeuralTaskSlotsJson)
+                ?? new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        } catch {
+            return new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    public Cavernize.Logic.Spatial.NeuralAudioConfig BuildNeuralAudioConfig() => new Cavernize.Logic.Spatial.NeuralAudioConfig {
         PreferredProvider = (Cavernize.Logic.Spatial.NeuralExecutionProvider)Math.Clamp(NeuralProviderIndex, 0, 3),
+        OrchestrationMode = (Cavernize.Logic.Spatial.NeuralOrchestrationMode)Math.Clamp(NeuralOrchestrationModeIndex, 0, 1),
         OverlapFactor = Math.Clamp(NeuralOverlapFactor, 2, 8),
         EnableTta = NeuralTtaEnabled,
         EnsembleMode = (Cavern.Neural.MvsepEnsembleMethod)Math.Clamp(NeuralEnsembleModeIndex, 0, 2),
@@ -613,11 +710,14 @@ public sealed class AppSettingsStore {
         KaraokePreserveBackingVocals = KaraokePreserveBackingVocals,
         UseLosslessTwinForKaraoke = UseLosslessTwinForKaraoke,
         SpatialUpmixMode = (Cavernize.Logic.Spatial.NeuralSpatialUpmixMode)Math.Clamp(NeuralSpatialUpmixModeIndex, 0, 2),
+        TrackCacheMaxSizeMb = Math.Clamp(NeuralTrackCacheMaxMb, 128, 4096),
+        TaskModelSlots = GetAllNeuralTaskModelSlots(),
         ActiveStemModelId = ActiveStemModelId,
         ActiveKaraokeModelId = ActiveKaraokeModelId,
         ActiveDereverbModelId = ActiveDereverbModelId,
+        ActiveDebleedModelId = ActiveDebleedModelId,
         ActiveRestorerModelId = ActiveRestorerModelId
-    };
+    }.Sanitize();
 
     // Slot 2C: Universal Lossless Twin & Lossless-Guided Atmos Restoration (LGSR, W09)
     public bool LgsrEnabled {

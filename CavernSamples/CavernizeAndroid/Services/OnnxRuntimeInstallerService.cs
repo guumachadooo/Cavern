@@ -1,5 +1,7 @@
 using System.IO.Compression;
 using System.Net.Http.Headers;
+using System.Reflection;
+using System.Text.Json;
 using System.Xml.Linq;
 
 using Android.Content;
@@ -7,6 +9,8 @@ using Android.OS;
 using Android.Systems;
 
 using Cavernize.Logic.Spatial;
+
+using CavernizeAndroid.Language;
 
 using Path = System.IO.Path;
 
@@ -29,21 +33,52 @@ public sealed class OnnxRuntimeStatusResult {
 }
 
 /// <summary>
-/// Manages on-demand download, extraction, update checking, and storage hygiene for the native ARM64/x64
-/// ONNX Runtime shared libraries (<c>FilesDir/bin/onnxruntime/libonnxruntime.so</c> + optional Snapdragon QNN HTP),
-/// C API header (<c>onnxruntime_c_api.h</c>), lazy ONNX audio models (<c>FilesDir/neural_models/</c>),
-/// and temporary inference cache (<c>CacheDir/neural_work/</c>).
+/// Manages on-demand download, extraction, update checking, custom <c>.onnx</c> registration, and storage hygiene
+/// for the native ARM64/x64 ONNX Runtime shared libraries (<c>FilesDir/bin/onnxruntime/libonnxruntime.so</c> +
+/// optional Snapdragon QNN HTP), C API header (<c>onnxruntime_c_api.h</c>), lazy ONNX audio models
+/// (<c>FilesDir/neural_models/</c>), and temporary inference cache (<c>CacheDir/neural_work/</c>).
 /// </summary>
 public static class OnnxRuntimeInstallerService {
     const string MavenBaseUrl = "https://repo1.maven.org/maven2/com/microsoft/onnxruntime";
     const string StandardArtifactId = "onnxruntime-android";
     const string QnnArtifactId = "onnxruntime-android-qnn";
+    const string CustomMetaSuffix = ".meta.json";
 
+    sealed class CustomOnnxModelMetadata {
+        public string Id { get; set; } = "";
+        public string DisplayName { get; set; } = "";
+        public string FileName { get; set; } = "";
+        public int Task { get; set; } = (int)NeuralModelTask.StemSeparation4;
+        public int ExpectedSampleRate { get; set; } = 44100;
+        public int DefaultChunkSamples { get; set; } = 262144;
+        public string[] OutputStemNames { get; set; } = Array.Empty<string>();
+    }
+
+    static readonly string appUserAgentVersion = ResolveAppUserAgentVersion();
     static readonly HttpClient http = CreateHttpClient();
 
-    static HttpClient CreateHttpClient() {
-        HttpClient client = new() { Timeout = TimeSpan.FromSeconds(45) };
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", "2.6"));
+    static string ResolveAppUserAgentVersion() {
+        try {
+            Assembly asm = typeof(OnnxRuntimeInstallerService).Assembly;
+            string infoVer = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            if (!string.IsNullOrWhiteSpace(infoVer)) {
+                int plus = infoVer.IndexOf('+');
+                string clean = (plus > 0 ? infoVer[..plus] : infoVer).Trim();
+                if (!string.IsNullOrEmpty(clean)) {
+                    return clean;
+                }
+            }
+            Version v = asm.GetName().Version;
+            if (v != null && (v.Major > 0 || v.Minor > 0)) {
+                return $"{v.Major}.{v.Minor}.{Math.Max(0, v.Build)}";
+            }
+        } catch { }
+        return "2.8";
+    }
+
+    static HttpClient CreateHttpClient(TimeSpan? timeout = null) {
+        HttpClient client = new() { Timeout = timeout ?? TimeSpan.FromSeconds(45) };
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", appUserAgentVersion));
         return client;
     }
 
@@ -186,8 +221,7 @@ public static class OnnxRuntimeInstallerService {
         string jniPrefix = $"jni/{abi}/";
 
         try {
-            using HttpClient dlClient = new() { Timeout = TimeSpan.FromMinutes(6) };
-            dlClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", "2.6"));
+            using HttpClient dlClient = CreateHttpClient(TimeSpan.FromMinutes(6));
 
             using HttpResponseMessage resp = await dlClient.GetAsync(status.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
@@ -215,7 +249,7 @@ public static class OnnxRuntimeInstallerService {
                 }
             }
 
-            onProgress?.Invoke(0.90, "ONNX Runtime: Extraindo bibliotecas nativas...");
+            onProgress?.Invoke(0.90, AndroidStrings.Active["NeuralExtractingLibs"]);
             bool extractedMainLib = false;
             bool extractedQnn = false;
 
@@ -265,32 +299,112 @@ public static class OnnxRuntimeInstallerService {
         }
     }
 
+    /// <summary>
+    /// Returns all registered ONNX models: the curated <see cref="NeuralModelCatalog"/> plus any user-imported
+    /// standalone custom <c>.onnx</c> checkpoints in <c>FilesDir/neural_models/</c>.
+    /// </summary>
+    public static List<NeuralModelCatalogEntry> GetAllRegisteredModels(Context context) {
+        List<NeuralModelCatalogEntry> result = new(NeuralModelCatalog.Entries.Count + 4);
+        HashSet<string> curatedFileNames = new(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> seenIds = new(StringComparer.OrdinalIgnoreCase);
+
+        for (int i = 0; i < NeuralModelCatalog.Entries.Count; i++) {
+            NeuralModelCatalogEntry entry = NeuralModelCatalog.Entries[i];
+            result.Add(entry);
+            curatedFileNames.Add(entry.FileName);
+            seenIds.Add(entry.Id);
+        }
+
+        if (context == null) {
+            return result;
+        }
+
+        try {
+            string modelsDir = GetModelsDir(context);
+            foreach (string onnxPath in Directory.GetFiles(modelsDir, "*.onnx")) {
+                string fileName = Path.GetFileName(onnxPath);
+                if (string.IsNullOrEmpty(fileName) || curatedFileNames.Contains(fileName)) {
+                    continue;
+                }
+                FileInfo fi = new(onnxPath);
+                if (fi.Length <= 1024) {
+                    continue;
+                }
+                NeuralModelCatalogEntry custom = LoadCustomEntry(onnxPath, fi.Length);
+                if (custom != null && seenIds.Add(custom.Id)) {
+                    result.Add(custom);
+                }
+            }
+        } catch (Exception ex) {
+            AppLogger.Warn($"Custom ONNX model scan warning: {ex.Message}");
+        }
+
+        return result;
+    }
+
+    /// <summary>Returns all currently installed models (curated catalog + standalone custom <c>.onnx</c>).</summary>
+    public static List<NeuralModelCatalogEntry> GetInstalledModelEntries(Context context) {
+        List<NeuralModelCatalogEntry> installed = [];
+        if (context == null) {
+            return installed;
+        }
+        List<NeuralModelCatalogEntry> all = GetAllRegisteredModels(context);
+        for (int i = 0; i < all.Count; i++) {
+            if (!string.IsNullOrEmpty(ResolveModelPath(context, all[i].Id))) {
+                installed.Add(all[i]);
+            }
+        }
+        return installed;
+    }
+
     /// <summary>Resolves the local path of a curated or custom ONNX model if installed on disk.</summary>
     public static string ResolveModelPath(Context context, string modelId) {
         if (context == null || string.IsNullOrWhiteSpace(modelId)) {
             return "";
         }
+        string modelsDir = GetModelsDir(context);
         NeuralModelCatalogEntry entry = NeuralModelCatalog.FindById(modelId);
-        string fileName = entry != null ? entry.FileName : $"{SanitizeId(modelId)}.onnx";
-        string path = Path.Combine(GetModelsDir(context), fileName);
-        if (File.Exists(path) && new FileInfo(path).Length > 1024) {
-            return path;
+        if (entry != null) {
+            string curatedPath = Path.Combine(modelsDir, entry.FileName);
+            return File.Exists(curatedPath) && new FileInfo(curatedPath).Length > 1024 ? curatedPath : "";
         }
+
+        string directName = modelId.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase)
+            ? SanitizeId(modelId)
+            : $"{SanitizeId(modelId)}.onnx";
+        string directPath = Path.Combine(modelsDir, directName);
+        if (File.Exists(directPath) && new FileInfo(directPath).Length > 1024) {
+            return directPath;
+        }
+
+        // Fallback: check custom .meta.json sidecars whose Id matches modelId
+        try {
+            foreach (string metaPath in Directory.GetFiles(modelsDir, "*" + CustomMetaSuffix)) {
+                CustomOnnxModelMetadata meta = ReadCustomMeta(metaPath);
+                if (meta != null && string.Equals(meta.Id, modelId, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(meta.FileName)) {
+                    string p = Path.Combine(modelsDir, meta.FileName);
+                    if (File.Exists(p) && new FileInfo(p).Length > 1024) {
+                        return p;
+                    }
+                }
+            }
+        } catch { }
+
         return "";
     }
 
     public static bool IsModelInstalled(Context context, string modelId) =>
         !string.IsNullOrEmpty(ResolveModelPath(context, modelId));
 
+    /// <summary>Returns the IDs of all installed ONNX models on disk, including both curated catalog entries and custom imported checkpoints.</summary>
     public static List<string> GetInstalledModelIds(Context context) {
         List<string> ids = [];
         if (context == null) {
             return ids;
         }
-        foreach (NeuralModelCatalogEntry entry in NeuralModelCatalog.Entries) {
-            if (IsModelInstalled(context, entry.Id)) {
-                ids.Add(entry.Id);
-            }
+        List<NeuralModelCatalogEntry> installed = GetInstalledModelEntries(context);
+        for (int i = 0; i < installed.Count; i++) {
+            ids.Add(installed[i].Id);
         }
         return ids;
     }
@@ -302,69 +416,154 @@ public static class OnnxRuntimeInstallerService {
         CancellationToken token = default) {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(entry);
-        if (string.IsNullOrWhiteSpace(entry.DownloadUrl)) {
-            throw new InvalidOperationException($"Model '{entry.DisplayName}' does not have an automatic download URL; import a local .onnx file instead.");
+
+        List<string> candidateUrls = [];
+        if (!string.IsNullOrWhiteSpace(entry.DownloadUrl)) {
+            candidateUrls.Add(entry.DownloadUrl.Trim());
+        }
+        if (entry.FallbackDownloadUrls != null) {
+            for (int i = 0; i < entry.FallbackDownloadUrls.Count; i++) {
+                string fb = entry.FallbackDownloadUrls[i]?.Trim();
+                if (!string.IsNullOrWhiteSpace(fb) && !candidateUrls.Contains(fb, StringComparison.OrdinalIgnoreCase)) {
+                    candidateUrls.Add(fb);
+                }
+            }
+        }
+        if (candidateUrls.Count == 0) {
+            throw new InvalidOperationException(
+                string.Format(AndroidStrings.Active["NeuralModelDownloadFallbackErr"], entry.DisplayName));
         }
 
         string destPath = Path.Combine(GetModelsDir(context), entry.FileName);
         string partPath = destPath + ".part";
-        if (File.Exists(partPath)) {
-            File.Delete(partPath);
-        }
+        Exception lastError = null;
 
-        try {
-            using HttpClient dlClient = new() { Timeout = TimeSpan.FromMinutes(15) };
-            dlClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", "2.6"));
-            using HttpResponseMessage resp = await dlClient.GetAsync(entry.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-            resp.EnsureSuccessStatusCode();
+        using HttpClient dlClient = CreateHttpClient(TimeSpan.FromMinutes(15));
+        for (int u = 0; u < candidateUrls.Count; u++) {
+            token.ThrowIfCancellationRequested();
+            string url = candidateUrls[u];
+            try {
+                if (File.Exists(partPath)) {
+                    File.Delete(partPath);
+                }
+                using HttpResponseMessage resp = await dlClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+                resp.EnsureSuccessStatusCode();
 
-            long totalBytes = resp.Content.Headers.ContentLength ?? (long)Math.Round(entry.ApproxSizeMb * 1024.0 * 1024.0);
-            await using (Stream netStream = await resp.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
-            await using (FileStream outStream = File.Create(partPath)) {
-                byte[] buf = new byte[131072];
-                long received = 0;
-                long nextUi = 0;
-                int read;
-                while ((read = await netStream.ReadAsync(buf, token).ConfigureAwait(false)) > 0) {
-                    await outStream.WriteAsync(buf.AsMemory(0, read), token).ConfigureAwait(false);
-                    received += read;
-                    if (received >= nextUi || (totalBytes > 0 && received >= totalBytes)) {
-                        double frac = totalBytes > 0 ? Math.Clamp(received / (double)totalBytes, 0, 0.99) : 0.4;
-                        double rxMb = received / (1024.0 * 1024.0);
-                        double totMb = totalBytes / (1024.0 * 1024.0);
-                        string msg = totalBytes > 0
-                            ? $"{entry.DisplayName}: {rxMb:0.0} / {totMb:0.0} MB ({frac:0%})"
-                            : $"{entry.DisplayName}: {rxMb:0.0} MB";
-                        onProgress?.Invoke(frac, msg);
-                        nextUi = received + 262_144;
+                long totalBytes = resp.Content.Headers.ContentLength ?? (long)Math.Round(entry.ApproxSizeMb * 1024.0 * 1024.0);
+                await using (Stream netStream = await resp.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
+                await using (FileStream outStream = File.Create(partPath)) {
+                    byte[] buf = new byte[131072];
+                    long received = 0;
+                    long nextUi = 0;
+                    int read;
+                    while ((read = await netStream.ReadAsync(buf, token).ConfigureAwait(false)) > 0) {
+                        await outStream.WriteAsync(buf.AsMemory(0, read), token).ConfigureAwait(false);
+                        received += read;
+                        if (received >= nextUi || (totalBytes > 0 && received >= totalBytes)) {
+                            double frac = totalBytes > 0 ? Math.Clamp(received / (double)totalBytes, 0, 0.99) : 0.4;
+                            double rxMb = received / (1024.0 * 1024.0);
+                            double totMb = totalBytes / (1024.0 * 1024.0);
+                            string msg = totalBytes > 0
+                                ? $"{entry.DisplayName}: {rxMb:0.0} / {totMb:0.0} MB ({frac:0%})"
+                                : $"{entry.DisplayName}: {rxMb:0.0} MB";
+                            onProgress?.Invoke(frac, msg);
+                            nextUi = received + 262_144;
+                        }
                     }
                 }
-            }
 
-            if (File.Exists(destPath)) {
-                File.Delete(destPath);
+                if (File.Exists(destPath)) {
+                    File.Delete(destPath);
+                }
+                File.Move(partPath, destPath);
+                AppLogger.Info($"Downloaded neural model '{entry.Id}' from mirror #{u + 1} to {destPath}");
+                onProgress?.Invoke(1.0, $"{entry.DisplayName} Ready");
+                return destPath;
+            } catch (System.OperationCanceledException) {
+                try { if (File.Exists(partPath)) File.Delete(partPath); } catch { }
+                throw;
+            } catch (Exception ex) {
+                lastError = ex;
+                AppLogger.Warn($"Neural model '{entry.Id}' mirror #{u + 1} failed ({url}): {ex.Message}");
+                try { if (File.Exists(partPath)) File.Delete(partPath); } catch { }
             }
-            File.Move(partPath, destPath);
-            AppLogger.Info($"Downloaded neural model '{entry.Id}' to {destPath}");
-            onProgress?.Invoke(1.0, $"{entry.DisplayName} Ready");
-            return destPath;
-        } finally {
-            try { if (File.Exists(partPath)) File.Delete(partPath); } catch { }
         }
+
+        string friendly = string.Format(AndroidStrings.Active["NeuralModelDownloadFallbackErr"], entry.DisplayName);
+        throw new InvalidOperationException(
+            lastError != null ? $"{friendly} ({lastError.Message})" : friendly,
+            lastError);
     }
 
-    /// <summary>Imports a user-supplied local <c>.onnx</c> checkpoint into managed storage for the chosen catalog slot.</summary>
-    public static string ImportCustomOnnxModel(Context context, string sourceFilePath, string targetModelId) {
+    /// <summary>
+    /// Imports a user-supplied local <c>.onnx</c> checkpoint into managed storage either into an existing curated
+    /// catalog slot (<paramref name="targetModelId"/> matches a catalog entry) or as a first-class standalone
+    /// custom model with a persistent <c>.meta.json</c> descriptor so the Slot 7A orchestrator can use it.
+    /// </summary>
+    public static NeuralModelCatalogEntry ImportCustomOnnxModel(
+        Context context,
+        string sourceFilePath,
+        string targetModelId,
+        NeuralModelTask? customTask = null,
+        string customDisplayName = null,
+        int expectedSampleRate = 44100) {
         ArgumentNullException.ThrowIfNull(context);
         if (string.IsNullOrEmpty(sourceFilePath) || !File.Exists(sourceFilePath)) {
             throw new FileNotFoundException("ONNX model file not found.", sourceFilePath);
         }
-        NeuralModelCatalogEntry entry = NeuralModelCatalog.FindById(targetModelId);
-        string destName = entry != null ? entry.FileName : $"{SanitizeId(targetModelId)}.onnx";
-        string destPath = Path.Combine(GetModelsDir(context), destName);
-        File.Copy(sourceFilePath, destPath, overwrite: true);
-        AppLogger.Info($"Imported local ONNX model '{Path.GetFileName(sourceFilePath)}' as '{targetModelId}'");
-        return destPath;
+
+        string modelsDir = GetModelsDir(context);
+        NeuralModelCatalogEntry catalogEntry = !string.IsNullOrWhiteSpace(targetModelId)
+            ? NeuralModelCatalog.FindById(targetModelId)
+            : null;
+        if (catalogEntry != null) {
+            string destPath = Path.Combine(modelsDir, catalogEntry.FileName);
+            File.Copy(sourceFilePath, destPath, overwrite: true);
+            AppLogger.Info($"Imported local ONNX model '{Path.GetFileName(sourceFilePath)}' into catalog slot '{catalogEntry.Id}'");
+            return catalogEntry;
+        }
+
+        string rawBaseName = Path.GetFileNameWithoutExtension(sourceFilePath);
+        string safeId = !string.IsNullOrWhiteSpace(targetModelId)
+            ? SanitizeId(targetModelId)
+            : $"custom_{SanitizeId(rawBaseName)}";
+        if (string.IsNullOrWhiteSpace(safeId)) {
+            safeId = $"custom_{DateTime.UtcNow:yyyyMMddHHmmss}";
+        }
+        // Avoid colliding with any curated catalog ID or filename
+        if (NeuralModelCatalog.FindById(safeId) != null) {
+            safeId = "custom_" + safeId;
+        }
+
+        string destFileName = safeId.EndsWith(".onnx", StringComparison.OrdinalIgnoreCase) ? safeId : $"{safeId}.onnx";
+        string customDestPath = Path.Combine(modelsDir, destFileName);
+        File.Copy(sourceFilePath, customDestPath, overwrite: true);
+
+        NeuralModelTask task = customTask ?? InferTaskFromFileName(rawBaseName);
+        int sr = expectedSampleRate >= 8000 ? expectedSampleRate : 44100;
+        string displayName = !string.IsNullOrWhiteSpace(customDisplayName)
+            ? customDisplayName.Trim()
+            : rawBaseName.Replace('_', ' ').Trim();
+        if (string.IsNullOrEmpty(displayName)) {
+            displayName = safeId;
+        }
+
+        IReadOnlyList<string> defaultStems = NeuralModelCatalog.GetDefaultOutputStemNames(task);
+        CustomOnnxModelMetadata meta = new() {
+            Id = safeId,
+            DisplayName = displayName,
+            FileName = destFileName,
+            Task = (int)task,
+            ExpectedSampleRate = sr,
+            DefaultChunkSamples = task == NeuralModelTask.CodecRestoreApollo || task == NeuralModelTask.BandwidthExtension ? 131072 : 262144,
+            OutputStemNames = defaultStems.ToArray()
+        };
+        string metaPath = customDestPath + CustomMetaSuffix;
+        File.WriteAllText(metaPath, JsonSerializer.Serialize(meta));
+
+        long fileBytes = new FileInfo(customDestPath).Length;
+        AppLogger.Info($"Registered custom ONNX model '{safeId}' (Task={task}, SR={sr} Hz, {fileBytes / (1024.0 * 1024.0):0.1} MB)");
+        return NeuralModelCatalog.CreateCustomEntry(safeId, displayName, destFileName, task, fileBytes, sr, defaultStems);
     }
 
     public static bool DeleteModel(Context context, string modelId) {
@@ -373,6 +572,8 @@ public static class OnnxRuntimeInstallerService {
             return false;
         }
         File.Delete(path);
+        string metaPath = path + CustomMetaSuffix;
+        try { if (File.Exists(metaPath)) File.Delete(metaPath); } catch { }
         return true;
     }
 
@@ -419,6 +620,77 @@ public static class OnnxRuntimeInstallerService {
         }
     }
 
+    static NeuralModelCatalogEntry LoadCustomEntry(string onnxPath, long fileBytes) {
+        string fileName = Path.GetFileName(onnxPath);
+        string metaPath = onnxPath + CustomMetaSuffix;
+        CustomOnnxModelMetadata meta = ReadCustomMeta(metaPath);
+        if (meta != null && !string.IsNullOrWhiteSpace(meta.Id)) {
+            NeuralModelTask task = Enum.IsDefined(typeof(NeuralModelTask), meta.Task)
+                ? (NeuralModelTask)meta.Task
+                : InferTaskFromFileName(fileName);
+            int sr = meta.ExpectedSampleRate >= 8000 ? meta.ExpectedSampleRate : 44100;
+            IReadOnlyList<string> stems = meta.OutputStemNames != null && meta.OutputStemNames.Length > 0
+                ? meta.OutputStemNames
+                : NeuralModelCatalog.GetDefaultOutputStemNames(task);
+            return NeuralModelCatalog.CreateCustomEntry(
+                meta.Id,
+                string.IsNullOrWhiteSpace(meta.DisplayName) ? Path.GetFileNameWithoutExtension(fileName) : meta.DisplayName,
+                fileName,
+                task,
+                fileBytes,
+                sr,
+                stems);
+        }
+
+        string baseName = Path.GetFileNameWithoutExtension(fileName);
+        NeuralModelTask inferred = InferTaskFromFileName(baseName);
+        return NeuralModelCatalog.CreateCustomEntry(
+            SanitizeId(baseName),
+            baseName.Replace('_', ' '),
+            fileName,
+            inferred,
+            fileBytes,
+            expectedSampleRate: 44100,
+            outputStemNames: NeuralModelCatalog.GetDefaultOutputStemNames(inferred));
+    }
+
+    static CustomOnnxModelMetadata ReadCustomMeta(string metaPath) {
+        try {
+            if (!File.Exists(metaPath)) {
+                return null;
+            }
+            return JsonSerializer.Deserialize<CustomOnnxModelMetadata>(File.ReadAllText(metaPath));
+        } catch {
+            return null;
+        }
+    }
+
+    static NeuralModelTask InferTaskFromFileName(string name) {
+        string lower = (name ?? "").ToLowerInvariant();
+        if (lower.Contains("karaoke") || lower.Contains("lead_back") || lower.Contains("backing")) {
+            return NeuralModelTask.KaraokeLeadBacking;
+        }
+        if (lower.Contains("dereverb") || lower.Contains("echo") || lower.Contains("reverb")) {
+            return NeuralModelTask.Dereverb;
+        }
+        if (lower.Contains("debleed") || lower.Contains("denoise") || lower.Contains("bleed")) {
+            return NeuralModelTask.DebleedDenoise;
+        }
+        if (lower.Contains("apollo") || lower.Contains("restore")) {
+            return NeuralModelTask.CodecRestoreApollo;
+        }
+        if (lower.Contains("bwe") || lower.Contains("flashsr") || lower.Contains("bandwidth") || lower.Contains("superres")) {
+            return NeuralModelTask.BandwidthExtension;
+        }
+        if (lower.Contains("6stem") || lower.Contains("6s") || lower.Contains("6_stem") || lower.Contains("htdemucs_6")) {
+            return NeuralModelTask.StemSeparation6;
+        }
+        if (lower.Contains("vocal") || lower.Contains("viperx") || lower.Contains("kim_vocal")) {
+            return NeuralModelTask.VocalSeparation;
+        }
+        return NeuralModelTask.StemSeparation4;
+    }
+
     static async Task<string> FetchLatestMavenReleaseAsync(string artifactId, CancellationToken token) {
         string metaUrl = $"{MavenBaseUrl}/{artifactId}/maven-metadata.xml";
         string xml = await http.GetStringAsync(metaUrl, token).ConfigureAwait(false);
@@ -451,9 +723,13 @@ public static class OnnxRuntimeInstallerService {
     }
 
     static string SanitizeId(string id) {
-        foreach (char c in Path.GetInvalidFileNameChars()) {
-            id = id.Replace(c, '_');
+        if (string.IsNullOrWhiteSpace(id)) {
+            return "";
         }
-        return id.Trim();
+        string clean = id;
+        foreach (char c in Path.GetInvalidFileNameChars()) {
+            clean = clean.Replace(c, '_');
+        }
+        return clean.Replace(' ', '_').Trim();
     }
 }

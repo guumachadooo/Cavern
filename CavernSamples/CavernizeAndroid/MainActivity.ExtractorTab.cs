@@ -262,17 +262,23 @@ public partial class MainActivity {
 
         Cavernize.Logic.Spatial.NeuralAudioConfig neuralCfg = store.BuildNeuralAudioConfig();
         bool neuralKaraokeAtmos = mode == 4 && neuralCfg.SpatialKaraokeEnabled && trackSourceItems.Count > 2;
+        Cavernize.Logic.Spatial.NeuralPipelineGoal neuralGoal = neuralKaraokeAtmos
+            ? Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke
+            : Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation;
+        Cavernize.Logic.Spatial.NeuralExecutionPlan neuralPlan = neuralOrchestrator?.BuildPlan(neuralGoal, neuralCfg);
         string neuralModelId = neuralKaraokeAtmos ? neuralCfg.ActiveKaraokeModelId : neuralCfg.ActiveStemModelId;
         string neuralModelPath = OnnxRuntimeInstallerService.ResolveModelPath(this, neuralModelId);
         Cavernize.Logic.Spatial.NeuralModelCatalogEntry neuralModelEntry =
-            Cavernize.Logic.Spatial.NeuralModelCatalog.FindById(neuralModelId);
+            OnnxRuntimeInstallerService.GetAllRegisteredModels(this)
+                .FirstOrDefault(m => string.Equals(m.Id, neuralModelId, StringComparison.OrdinalIgnoreCase))
+            ?? Cavernize.Logic.Spatial.NeuralModelCatalog.FindById(neuralModelId);
 
         if (mode == 4 && !neuralKaraokeAtmos) {
             if (!OnnxRuntimeInstallerService.IsRuntimeInstalled(this)) {
                 ShowError(S["NeuralRuntimeNeedInstall"]);
                 return;
             }
-            if (string.IsNullOrEmpty(neuralModelPath)) {
+            if ((neuralPlan == null || !neuralPlan.IsRunnable) && string.IsNullOrEmpty(neuralModelPath)) {
                 ShowError(S["NeuralModelNeedInstall"]);
                 return;
             }
@@ -343,7 +349,17 @@ public partial class MainActivity {
                         exportHybrid714: exportHybrid,
                         onProgress: ReportProg,
                         token: token,
-                        losslessTwin: activeLosslessTwin);
+                        losslessTwin: activeLosslessTwin,
+                        orchestrator: neuralOrchestrator,
+                        onSeparatedTrackReady: separated => {
+                            if (separated != null) {
+                                playerEngine?.NeuralStage.BindSeparatedTrack(separated);
+                                RunOnUiThread(() => {
+                                    SyncNeuralRuntimeDiagnostics();
+                                    RefreshNeuralAudioUi();
+                                });
+                            }
+                        });
                     created.AddRange(res.CreatedFiles);
                 }
 

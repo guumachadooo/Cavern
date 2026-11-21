@@ -16,99 +16,98 @@ namespace Cavernize.Logic.Spatial;
 /// </list>
 /// </summary>
 public sealed class UniversalLosslessTwinProvider : ILosslessReferenceProvider, IDisposable {
-    readonly object syncLock = new();
-    float[] resampledLeft;
-    float[] resampledRight;
-    int targetSampleRate = 48000;
-    LosslessTwinMetadata metadata;
-    SubSampleSyncResult syncResult = SubSampleSyncResult.Unsynced();
-    LosslessTwinVerificationState verificationState = LosslessTwinVerificationState.None;
+    sealed class SyncSnapshot {
+        public static readonly SyncSnapshot Empty = new(
+            LosslessTwinVerificationState.None,
+            null,
+            48000,
+            SubSampleSyncResult.Unsynced(),
+            null,
+            null);
 
-    /// <inheritdoc/>
-    public bool HasSyncedLosslessTwin {
-        get {
-            lock (syncLock) {
-                return verificationState == LosslessTwinVerificationState.Synced
-                    && syncResult.IsSynced
-                    && resampledLeft != null
-                    && resampledRight != null
-                    && resampledLeft.Length >= 4;
-            }
+        public LosslessTwinVerificationState VerificationState { get; }
+        public LosslessTwinMetadata Metadata { get; }
+        public int TargetSampleRate { get; }
+        public SubSampleSyncResult SyncResult { get; }
+        public float[] ResampledLeft { get; }
+        public float[] ResampledRight { get; }
+
+        public bool IsReadyForAudioThread =>
+            VerificationState == LosslessTwinVerificationState.Synced
+            && SyncResult.IsSynced
+            && ResampledLeft != null
+            && ResampledRight != null
+            && ResampledLeft.Length >= 4
+            && ResampledRight.Length == ResampledLeft.Length;
+
+        public SyncSnapshot(
+            LosslessTwinVerificationState verificationState,
+            LosslessTwinMetadata metadata,
+            int targetSampleRate,
+            SubSampleSyncResult syncResult,
+            float[] resampledLeft,
+            float[] resampledRight) {
+            VerificationState = verificationState;
+            Metadata = metadata;
+            TargetSampleRate = targetSampleRate > 0 ? targetSampleRate : 48000;
+            SyncResult = syncResult;
+            ResampledLeft = resampledLeft;
+            ResampledRight = resampledRight;
         }
     }
 
-    /// <inheritdoc/>
-    public string TwinFilePath {
-        get {
-            lock (syncLock) {
-                return metadata?.FilePath ?? string.Empty;
-            }
-        }
-    }
+    readonly object writeLock = new();
+    volatile SyncSnapshot activeSnapshot = SyncSnapshot.Empty;
 
     /// <inheritdoc/>
-    public int SampleRate {
-        get {
-            lock (syncLock) {
-                return targetSampleRate;
-            }
-        }
-    }
+    public bool HasSyncedLosslessTwin => activeSnapshot.IsReadyForAudioThread;
 
     /// <inheritdoc/>
-    public float SyncConfidence {
-        get {
-            lock (syncLock) {
-                return syncResult.Confidence;
-            }
-        }
-    }
+    public string TwinFilePath => activeSnapshot.Metadata?.FilePath ?? string.Empty;
+
+    /// <inheritdoc/>
+    public int SampleRate => activeSnapshot.TargetSampleRate;
+
+    /// <inheritdoc/>
+    public float SyncConfidence => activeSnapshot.SyncResult.Confidence;
 
     /// <summary>Current verification state (Synced, BypassedAlreadyLossless, BypassedFakeLossless, BypassedLowConfidence, etc.).</summary>
-    public LosslessTwinVerificationState VerificationState {
-        get {
-            lock (syncLock) {
-                return verificationState;
-            }
-        }
-    }
+    public LosslessTwinVerificationState VerificationState => activeSnapshot.VerificationState;
 
     /// <summary>Metadata of the paired lossless twin candidate (or null when unpaired).</summary>
-    public LosslessTwinMetadata Metadata {
-        get {
-            lock (syncLock) {
-                return metadata;
-            }
-        }
-    }
+    public LosslessTwinMetadata Metadata => activeSnapshot.Metadata;
 
     /// <summary>Complete 3-stage sub-sample alignment &amp; Theil-Sen drift solution.</summary>
-    public SubSampleSyncResult SyncResult {
-        get {
-            lock (syncLock) {
-                return syncResult;
-            }
-        }
-    }
+    public SubSampleSyncResult SyncResult => activeSnapshot.SyncResult;
 
     /// <summary>Total sample count of the rate-matched lossless reference buffer.</summary>
     public int ReferenceLengthSamples {
         get {
-            lock (syncLock) {
-                return resampledLeft != null ? resampledLeft.Length : 0;
-            }
+            float[] left = activeSnapshot.ResampledLeft;
+            return left != null ? left.Length : 0;
         }
     }
 
     /// <summary>Updates the verification state cleanly (e.g., Searching, BypassedAlreadyLossless, BypassedFakeLossless) and clears stale buffers.</summary>
     public void SetState(LosslessTwinVerificationState state, LosslessTwinMetadata candidateMetadata = null) {
-        lock (syncLock) {
-            verificationState = state;
-            metadata = candidateMetadata;
-            if (state != LosslessTwinVerificationState.Synced) {
-                resampledLeft = null;
-                resampledRight = null;
-                syncResult = SubSampleSyncResult.Unsynced();
+        lock (writeLock) {
+            SyncSnapshot prev = activeSnapshot;
+            if (state == LosslessTwinVerificationState.Synced && prev.IsReadyForAudioThread) {
+                activeSnapshot = new SyncSnapshot(
+                    state,
+                    candidateMetadata ?? prev.Metadata,
+                    prev.TargetSampleRate,
+                    prev.SyncResult,
+                    prev.ResampledLeft,
+                    prev.ResampledRight);
+            } else {
+                activeSnapshot = new SyncSnapshot(
+                    state,
+                    candidateMetadata,
+                    prev.TargetSampleRate,
+                    SubSampleSyncResult.Unsynced(),
+                    null,
+                    null);
             }
         }
     }
@@ -185,18 +184,24 @@ public sealed class UniversalLosslessTwinProvider : ILosslessReferenceProvider, 
         result.BaseOffsetSamples = losslessProbeStart + result.BaseOffsetSamples - atmosProbeStartSample * rateScale;
         result.MacroOffsetSamples = losslessProbeStart + result.MacroOffsetSamples - atmosProbeStartSample;
 
-        lock (syncLock) {
-            targetSampleRate = targetSr;
-            metadata = candidateMeta;
-            syncResult = result;
+        // Publish immutable snapshot atomically (single volatile reference write, ARM64 release semantics)
+        lock (writeLock) {
             if (result.IsSynced) {
-                resampledLeft = alignedL;
-                resampledRight = alignedR;
-                verificationState = LosslessTwinVerificationState.Synced;
+                activeSnapshot = new SyncSnapshot(
+                    LosslessTwinVerificationState.Synced,
+                    candidateMeta,
+                    targetSr,
+                    result,
+                    alignedL,
+                    alignedR);
             } else {
-                resampledLeft = null;
-                resampledRight = null;
-                verificationState = LosslessTwinVerificationState.BypassedLowConfidence;
+                activeSnapshot = new SyncSnapshot(
+                    LosslessTwinVerificationState.BypassedLowConfidence,
+                    candidateMeta,
+                    targetSr,
+                    result,
+                    null,
+                    null);
             }
         }
         return result.IsSynced;
@@ -204,19 +209,17 @@ public sealed class UniversalLosslessTwinProvider : ILosslessReferenceProvider, 
 
     /// <inheritdoc/>
     public bool TryReadAlignedStereoBlock(long trackSamplePosition, float[] outLeft, float[] outRight, int frameCount) {
-        // Lock-free snapshot read on the real-time audio thread (atomic reference reads)
-        float[] refL = resampledLeft;
-        float[] refR = resampledRight;
-        SubSampleSyncResult sr = syncResult;
-        if (verificationState != LosslessTwinVerificationState.Synced || !sr.IsSynced || refL == null || refR == null) {
+        // Single atomic volatile snapshot read on real-time audio thread (ARM64 acquire semantics, zero torn structs, zero GC)
+        SyncSnapshot snap = activeSnapshot;
+        if (!snap.IsReadyForAudioThread) {
             return false;
         }
         return FarrowLagrangeDelay.ReadAlignedStereoBlock(
-            refL,
-            refR,
+            snap.ResampledLeft,
+            snap.ResampledRight,
             trackSamplePosition,
-            sr.BaseOffsetSamples,
-            sr.DriftPpm,
+            snap.SyncResult.BaseOffsetSamples,
+            snap.SyncResult.DriftPpm,
             outLeft,
             outRight,
             frameCount);
@@ -232,27 +235,19 @@ public sealed class UniversalLosslessTwinProvider : ILosslessReferenceProvider, 
         if (atmosLengthSamples <= 0) {
             return false;
         }
-        float[] refL;
-        float[] refR;
-        SubSampleSyncResult sr;
-        lock (syncLock) {
-            if (verificationState != LosslessTwinVerificationState.Synced || !syncResult.IsSynced ||
-                resampledLeft == null || resampledRight == null) {
-                return false;
-            }
-            refL = resampledLeft;
-            refR = resampledRight;
-            sr = syncResult;
+        SyncSnapshot snap = activeSnapshot;
+        if (!snap.IsReadyForAudioThread) {
+            return false;
         }
 
         alignedLeft = new float[atmosLengthSamples];
         alignedRight = new float[atmosLengthSamples];
         FarrowLagrangeDelay.ReadAlignedStereoBlock(
-            refL,
-            refR,
+            snap.ResampledLeft,
+            snap.ResampledRight,
             0L,
-            sr.BaseOffsetSamples,
-            sr.DriftPpm,
+            snap.SyncResult.BaseOffsetSamples,
+            snap.SyncResult.DriftPpm,
             alignedLeft,
             alignedRight,
             atmosLengthSamples);
@@ -261,12 +256,8 @@ public sealed class UniversalLosslessTwinProvider : ILosslessReferenceProvider, 
 
     /// <inheritdoc/>
     public void Dispose() {
-        lock (syncLock) {
-            resampledLeft = null;
-            resampledRight = null;
-            metadata = null;
-            syncResult = SubSampleSyncResult.Unsynced();
-            verificationState = LosslessTwinVerificationState.None;
+        lock (writeLock) {
+            activeSnapshot = SyncSnapshot.Empty;
         }
     }
 }
