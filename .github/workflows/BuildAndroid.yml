@@ -46,8 +46,14 @@ jobs:
           keytool -list -v -keystore "$GITHUB_WORKSPACE/cavernize.keystore" -storepass cavernize | head -n 25
 
       - name: Build native ARM64 libcavernize_proaudio.so (Path A AAudio + Path B libusb UAC2)
+        id: ndk_build
+        continue-on-error: true
         run: |
           set -euo pipefail
+          NDK_LOG="$RUNNER_TEMP/ci_00_ndk.log"
+          : > "$NDK_LOG"
+          exec > >(tee -a "$NDK_LOG") 2>&1
+
           NDK_DIR="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}}"
           if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
             NDK_DIR=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort -V | tail -n 1 || true)
@@ -85,6 +91,105 @@ jobs:
           mkdir -p "CavernSamples/CavernizeAndroid/NativeLibs/arm64-v8a"
           cp "$WORK_DIR/cmake_arm64/libcavernize_proaudio.so" "CavernSamples/CavernizeAndroid/NativeLibs/arm64-v8a/libcavernize_proaudio.so"
           ls -lh "CavernSamples/CavernizeAndroid/NativeLibs/arm64-v8a/libcavernize_proaudio.so"
+
+      - name: Full multi-layer compile check & consolidated error report
+        env:
+          NDK_OUTCOME: ${{ steps.ndk_build.outcome }}
+        run: |
+          set +e
+          dotnet restore CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj -p:AcceptAndroidSDKLicenses=true
+
+          LAYERS=(
+            "01_Cavern|Cavern/Cavern.csproj|-c Release -v:minimal -p:GenerateFullPaths=true"
+            "02_Cavern.Format|Cavern.Format/Cavern.Format.csproj|-c Release -v:minimal -p:GenerateFullPaths=true"
+            "03_Cavernize.Logic|CavernSamples/Reusable/Cavernize.Logic/Cavernize.Logic.csproj|-c Release -v:minimal -p:GenerateFullPaths=true"
+            "04_CavernizeAndroid|CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj|-c Release -f net11.0-android -v:minimal -p:GenerateFullPaths=true -p:AcceptAndroidSDKLicenses=true -p:ApplicationVersion=${{ github.run_number }} -p:ApplicationDisplayVersion=2.8.${{ github.run_number }}"
+          )
+
+          STATUS_FILE="$RUNNER_TEMP/ci_layer_status.txt"
+          : > "$STATUS_FILE"
+          UPSTREAM_FAILED=0
+
+          for entry in "${LAYERS[@]}"; do
+            IFS='|' read -r name proj args <<< "$entry"
+            log="$RUNNER_TEMP/ci_${name}.log"
+            : > "$log"
+            if [ "$UPSTREAM_FAILED" -eq 1 ]; then
+              echo "$name|SKIPPED_UPSTREAM|0" >> "$STATUS_FILE"
+              continue
+            fi
+            echo "=== Building $name ($proj) ==="
+            # shellcheck disable=SC2086
+            dotnet build "$proj" $args --no-restore 2>&1 | tee "$log"
+            rc=${PIPESTATUS[0]}
+            if [ "$rc" -eq 0 ]; then
+              echo "$name|PASS|0" >> "$STATUS_FILE"
+            else
+              echo "$name|FAIL|$rc" >> "$STATUS_FILE"
+              UPSTREAM_FAILED=1
+            fi
+          done
+
+          python3 - "$RUNNER_TEMP" "$NDK_OUTCOME" "$GITHUB_STEP_SUMMARY" << 'PY'
+          import glob, os, re, sys
+
+          runner_temp, ndk_outcome, summary_path = sys.argv[1], sys.argv[2], sys.argv[3]
+          status_path = os.path.join(runner_temp, "ci_layer_status.txt")
+          layers = []
+          if os.path.exists(status_path):
+              for line in open(status_path, encoding="utf-8"):
+                  parts = line.strip().split("|")
+                  if len(parts) == 3:
+                      layers.append(tuple(parts))
+
+          err_pat = re.compile(r"(?::\s*error\b|\berror\s+[A-Z]{2,}[0-9]+:|\bfatal error:)", re.I)
+          all_errors = []
+
+          def collect(label, log_file):
+              if not os.path.exists(log_file):
+                  return []
+              seen = set()
+              found = []
+              for raw in open(log_file, encoding="utf-8", errors="ignore"):
+                  line = raw.strip()
+                  if err_pat.search(line) and line not in seen:
+                      seen.add(line)
+                      found.append(line)
+              if found:
+                  all_errors.append((label, found))
+              return found
+
+          collect("00_Native_NDK", os.path.join(runner_temp, "ci_00_ndk.log"))
+          for name, st, _ in layers:
+              collect(name, os.path.join(runner_temp, f"ci_{name}.log"))
+
+          failed = (ndk_outcome != "success") or any(st == "FAIL" for _, st, _ in layers)
+          lines = []
+          lines.append("## Cavernize CI Multi-Layer Build Report")
+          lines.append(f"- **00_Native_NDK**: `{ndk_outcome.upper()}`")
+          for name, st, _ in layers:
+              lines.append(f"- **{name}**: `{st}`")
+
+          if all_errors:
+              total = sum(len(errs) for _, errs in all_errors)
+              lines.append(f"\n### Consolidated Errors ({total} unique)")
+              for label, errs in all_errors:
+                  lines.append(f"\n#### {label} ({len(errs)})")
+                  lines.append("```text")
+                  lines.extend(errs)
+                  lines.append("```")
+          elif not failed:
+              lines.append("\nAll native NDK and C# layers compiled with **0 errors**.")
+
+          report = "\n".join(lines) + "\n"
+          print("\n================ ALL CI ERRORS SUMMARY ================")
+          print(report)
+          print("=======================================================")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as sf:
+                  sf.write(report)
+          sys.exit(1 if failed else 0)
+          PY
 
       - name: Build and sign CavernizeAndroid APK
         run: |

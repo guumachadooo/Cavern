@@ -104,14 +104,10 @@ namespace Cavern.Format.Decoders {
         readonly List<long> frameOffsets = new List<long>();
         readonly List<int> frameByteLengths = new List<int>();
         readonly List<int> substreamChannelCounts = new List<int>();
-        long samplePosition;
         int currentFrameIndex;
         float[] frameCache = Array.Empty<float>();
         int frameCacheSampleOffset;
         int frameCacheSampleCount;
-
-        /// <summary>Current playback sample position per channel.</summary>
-        public override long Position => samplePosition;
 
         /// <summary>
         /// Decodes an AOMedia IAMF (Eclipsa Audio) OBU stream.
@@ -221,7 +217,7 @@ namespace Cavern.Format.Decoders {
                 Array.Copy(frameCache, frameCacheSampleOffset, target, (int)(from + written), copy);
                 frameCacheSampleOffset += copy;
                 written += copy;
-                samplePosition += copy / Math.Max(1, ChannelCount);
+                Position += copy / Math.Max(1, ChannelCount);
             }
         }
 
@@ -232,7 +228,7 @@ namespace Cavern.Format.Decoders {
             int targetFrame = (int)(clamped / samplesPerFrame);
             int remainder = (int)(clamped % samplesPerFrame);
             currentFrameIndex = Math.Min(targetFrame, frameOffsets.Count);
-            samplePosition = clamped;
+            Position = clamped;
             frameCacheSampleOffset = 0;
             frameCacheSampleCount = 0;
             if (remainder > 0 && DecodeNextFrame()) {
