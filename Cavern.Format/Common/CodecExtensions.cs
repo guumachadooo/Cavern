@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 namespace Cavern.Format.Common {
     /// <summary>
@@ -8,8 +8,8 @@ namespace Cavern.Format.Common {
         /// <summary>
         /// List of known (not neccessarily supported) audio codecs.
         /// </summary>
-        static readonly Codec[] audioCodecs = { Codec.LimitlessAudio, Codec.ADM_BWF, Codec.ADM_BWF_Atmos, Codec.DAMF, Codec.TrueHD,
-            Codec.EnhancedAC3, Codec.PCM_Float, Codec.PCM_LE, Codec.DTS_HD, Codec.FLAC, Codec.Opus, Codec.DTS, Codec.AC3 };
+        static readonly Codec[] audioCodecs = { Codec.LimitlessAudio, Codec.ADM_BWF, Codec.ADM_BWF_Atmos, Codec.IAMF, Codec.AmbisonicsHOA,
+            Codec.DAMF, Codec.TrueHD, Codec.EnhancedAC3, Codec.PCM_Float, Codec.PCM_LE, Codec.DTS_HD, Codec.FLAC, Codec.Opus, Codec.DTS, Codec.AC3 };
 
         /// <summary>
         /// List of known video codecs.
@@ -19,13 +19,13 @@ namespace Cavern.Format.Common {
         /// <summary>
         /// List of supported audio codecs.
         /// </summary>
-        static readonly Codec[] supportedAudioCodecs = { Codec.LimitlessAudio, Codec.ADM_BWF, Codec.ADM_BWF_Atmos, Codec.DAMF, Codec.TrueHD,
-            Codec.EnhancedAC3, Codec.PCM_Float, Codec.PCM_LE, Codec.AC3 };
+        static readonly Codec[] supportedAudioCodecs = { Codec.LimitlessAudio, Codec.ADM_BWF, Codec.ADM_BWF_Atmos, Codec.IAMF, Codec.AmbisonicsHOA,
+            Codec.DAMF, Codec.TrueHD, Codec.EnhancedAC3, Codec.PCM_Float, Codec.PCM_LE, Codec.AC3 };
 
         /// <summary>
         /// List of audio codecs that can export rendered audio environments.
         /// </summary>
-        static readonly Codec[] environmentalAudioCodecs = { Codec.LimitlessAudio, Codec.ADM_BWF, Codec.ADM_BWF_Atmos, Codec.DAMF };
+        static readonly Codec[] environmentalAudioCodecs = { Codec.LimitlessAudio, Codec.ADM_BWF, Codec.ADM_BWF_Atmos, Codec.IAMF, Codec.AmbisonicsHOA, Codec.DAMF };
 
         /// <summary>
         /// For a given <paramref name="codec"/>, returns the supported native outputs in save file dialog format.
@@ -38,6 +38,8 @@ namespace Cavern.Format.Common {
                 Codec.LimitlessAudio => "Limitless Audio Format|*.laf",
                 Codec.ADM_BWF => admResult,
                 Codec.ADM_BWF_Atmos => admResult,
+                Codec.IAMF => "Eclipsa Audio (IAMF)|*.iamf",
+                Codec.AmbisonicsHOA => "Ambisonics HOA B-Format|*.amb|Ambisonics WAVE-EX|*.wav",
                 Codec.DAMF => "Dolby Atmos Master Format|*.atmos",
                 Codec.EnhancedAC3 => "Enhanced AC-3|*.ec3;*.eac3",
                 Codec.PCM_Float => pcmResult,
@@ -75,11 +77,13 @@ namespace Cavern.Format.Common {
         public static bool IsNative(this string extension) {
             switch (extension.ToLower()) {
                 case ".ac3":
+                case ".amb":
                 case ".atmos":
                 case ".caf":
                 case ".eac3":
                 case ".ec3":
                 case ".flac":
+                case ".iamf":
                 case ".laf":
                 case ".ogg":
                 case ".opus":

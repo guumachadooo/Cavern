@@ -91,7 +91,7 @@ export function App() {
     }
   });
   const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const [studioSubMode, setStudioSubMode] = useState<'scarlett-vocal' | 'converter'>('scarlett-vocal');
+  const [studioSubMode, setStudioSubMode] = useState<'scarlett-vocal' | 'w12-master' | 'converter'>('w12-master');
   const [scarlett, setScarlett] = useState<ScarlettHardwareControlState>(() => {
     try {
       const raw = window.localStorage.getItem(SCARLETT_STORAGE_KEY);
@@ -607,7 +607,7 @@ export function App() {
         <div
           role="status"
           aria-live="polite"
-          className="fixed bottom-5 right-5 z-50 px-4 py-2.5 rounded-xl bg-[#1E1F27] border border-[#598FFF]/40 text-xs font-medium text-white shadow-lg"
+          className="fixed bottom-5 left-4 right-4 sm:left-auto sm:right-5 sm:max-w-md z-50 px-4 py-2.5 rounded-xl bg-[#1E1F27] border border-[#598FFF]/40 text-xs font-medium text-white shadow-lg break-words"
         >
           {toastMessage}
         </div>

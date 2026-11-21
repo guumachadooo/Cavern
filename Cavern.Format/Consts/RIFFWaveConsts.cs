@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 using Cavern.Channels;
@@ -148,6 +148,46 @@ namespace Cavern.Format.Consts {
         /// Dolby audio Metadata chunk marker.
         /// </summary>
         public const int dbmdSync = 0x646d6264;
+
+        /// <summary>
+        /// Standard WAVEFORMATEXTENSIBLE PCM/IEEE_FLOAT SubFormat GUID trailing 14 bytes.
+        /// </summary>
+        public static readonly byte[] standardSubFormatGuidTail = { 0, 0, 0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113 };
+
+        /// <summary>
+        /// Ambisonics B-Format (AMB / ambiX) WAVEFORMATEXTENSIBLE SubFormat GUID trailing 14 bytes:
+        /// <c>{00000001-0721-11d3-8644-c8c1ca000000}</c> (PCM) / <c>{00000003-0721-11d3-8644-c8c1ca000000}</c> (IEEE Float).
+        /// </summary>
+        public static readonly byte[] ambisonicSubFormatGuidTail = { 0x00, 0x00, 0x21, 0x07, 0xD3, 0x11, 0x86, 0x44, 0xC8, 0xC1, 0xCA, 0x00, 0x00, 0x00 };
+
+        /// <summary>
+        /// Checks whether a 14-byte WAVEFORMATEXTENSIBLE SubFormat GUID tail matches the Ambisonic B-Format GUID.
+        /// </summary>
+        public static bool IsAmbisonicSubFormatGuidTail(byte[] tail14) {
+            if (tail14 == null || tail14.Length < ambisonicSubFormatGuidTail.Length) {
+                return false;
+            }
+            for (int i = 0; i < ambisonicSubFormatGuidTail.Length; i++) {
+                if (tail14[i] != ambisonicSubFormatGuidTail[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Returns the exact Ambisonic spherical harmonic order N if <paramref name="channelCount"/> equals <c>(N + 1)^2</c>
+        /// for orders 1..5 (4, 9, 16, 25, 36 channels), otherwise 0.
+        /// </summary>
+        public static int GetHoaOrderForChannelCount(int channelCount) {
+            for (int order = 1; order <= 5; order++) {
+                int expected = (order + 1) * (order + 1);
+                if (channelCount == expected) {
+                    return order;
+                }
+            }
+            return 0;
+        }
 
         /// <summary>
         /// Converts the <see cref="ReferenceChannel"/> values to a <see cref="WaveExtensibleChannel"/>.

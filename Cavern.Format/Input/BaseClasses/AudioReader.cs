@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 
 using Cavern.Format.Common;
@@ -18,7 +18,7 @@ namespace Cavern.Format {
         /// <summary>
         /// Filter to all supported file types for open file dialogs. These are the containers supported by <see cref="Open(string)"/>.
         /// </summary>
-        public static readonly string filter = "*.ac3;*.atmos;*.caf;*.eac3;*.ec3;*.laf;*.m4a;*.m4v;*.mka;*.mkv;*.mov;*.mp4;*.mxf;*.qt;*.wav;*.weba;*.webm";
+        public static readonly string filter = "*.ac3;*.amb;*.atmos;*.caf;*.eac3;*.ec3;*.iamf;*.laf;*.m4a;*.m4v;*.mka;*.mkv;*.mov;*.mp4;*.mxf;*.qt;*.wav;*.weba;*.webm";
 
         /// <summary>
         /// Content channel count.
@@ -74,6 +74,16 @@ namespace Cavern.Format {
         public static AudioReader Open(Stream reader) {
             if (reader is FileStream file && file.Name.EndsWith(".atmos", StringComparison.OrdinalIgnoreCase)) {
                 return new DolbyAtmosMasterFormatReader(file.Name);
+            }
+
+            if (reader.CanSeek) {
+                long startPos = reader.Position;
+                byte[] probe = new byte[12];
+                int probeRead = reader.Read(probe, 0, probe.Length);
+                reader.Position = startPos;
+                if (Decoders.IamfDecoder.IsIamfHeader(probe, probeRead)) {
+                    return new IamfReader(reader);
+                }
             }
 
             int syncWord = reader.ReadInt32();

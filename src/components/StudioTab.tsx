@@ -21,6 +21,7 @@ import type {
 } from '../types/cavern';
 import { LayoutDiagram } from './LayoutDiagram';
 import { ScarlettVocalConsole } from './ScarlettVocalConsole';
+import { W12StudioMasterPanel } from './W12StudioMasterPanel';
 import type {
   ScarlettHardwareControlState,
   VocalRackState,
@@ -35,8 +36,8 @@ interface StudioTabProps {
   listenerYawDeg: number;
   lfeBoostDb: number;
   settings: CavernSettings;
-  studioSubMode: 'scarlett-vocal' | 'converter';
-  onStudioSubModeChange: (mode: 'scarlett-vocal' | 'converter') => void;
+  studioSubMode: 'scarlett-vocal' | 'w12-master' | 'converter';
+  onStudioSubModeChange: (mode: 'scarlett-vocal' | 'w12-master' | 'converter') => void;
   scarlett: ScarlettHardwareControlState;
   vocalRack: VocalRackState;
   onUpdateScarlett: (next: ScarlettHardwareControlState) => void;
@@ -166,14 +167,27 @@ export const StudioTab: React.FC<StudioTabProps> = ({
         <div
           role="tablist"
           aria-label="Studio mode"
-          className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#15161C] border border-white/10"
+          className="inline-flex flex-wrap items-center gap-1 p-1 rounded-xl bg-[#15161C] border border-white/10 max-w-full"
         >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={studioSubMode === 'w12-master'}
+            onClick={() => onStudioSubModeChange('w12-master')}
+            className={`px-3.5 py-2 text-xs sm:text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+              studioSubMode === 'w12-master'
+                ? 'bg-[#387AFF] text-white'
+                : 'text-[#B7B7BB] hover:text-white'
+            }`}
+          >
+            {t.studioModeW12Master}
+          </button>
           <button
             type="button"
             role="tab"
             aria-selected={studioSubMode === 'scarlett-vocal'}
             onClick={() => onStudioSubModeChange('scarlett-vocal')}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-3.5 py-2 text-xs sm:text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
               studioSubMode === 'scarlett-vocal'
                 ? 'bg-[#387AFF] text-white'
                 : 'text-[#B7B7BB] hover:text-white'
@@ -186,7 +200,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({
             role="tab"
             aria-selected={studioSubMode === 'converter'}
             onClick={() => onStudioSubModeChange('converter')}
-            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+            className={`px-3.5 py-2 text-xs sm:text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
               studioSubMode === 'converter'
                 ? 'bg-[#387AFF] text-white'
                 : 'text-[#B7B7BB] hover:text-white'
@@ -207,7 +221,16 @@ export const StudioTab: React.FC<StudioTabProps> = ({
         )}
       </div>
 
-      {studioSubMode === 'scarlett-vocal' ? (
+      {studioSubMode === 'w12-master' ? (
+        <W12StudioMasterPanel
+          t={t}
+          activeTrack={activeTrack}
+          activeVariant={activeVariant}
+          sources={sources}
+          listenerPosition={listenerPosition}
+          onNotify={onNotify}
+        />
+      ) : studioSubMode === 'scarlett-vocal' ? (
         <ScarlettVocalConsole
           t={t}
           activeTrack={activeTrack}

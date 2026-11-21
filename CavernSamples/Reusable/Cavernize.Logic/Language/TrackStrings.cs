@@ -32,6 +32,8 @@ public class TrackStrings() : LanguageBase<TrackStrings>(new() {
     ["CPCMI"] = "PCM, integer (lossless, larger size)",
     ["CADMC"] = "ADM Broadcast Wave Format (compact)",
     ["CADMA"] = "ADM Broadcast Wave Format (Dolby Atmos)",
+    ["CIAMF"] = "Eclipsa Audio — IAMF v1.0 (3D OBU)",
+    ["CHOA3"] = "Ambisonics HOA B-Format (3rd-Order ACN/SN3D)",
     ["CDAMF"] = "Dolby Atmos Master Format",
     ["C_LAF"] = "Limitless Audio Format",
 }) {
@@ -59,6 +61,8 @@ public class TrackStrings() : LanguageBase<TrackStrings>(new() {
         { Codec.PCM_LE, this["CPCMI"] },
         { Codec.ADM_BWF, this["CADMC"] },
         { Codec.ADM_BWF_Atmos, this["CADMA"] },
+        { Codec.IAMF, this["CIAMF"] },
+        { Codec.AmbisonicsHOA, this["CHOA3"] },
         { Codec.DAMF, this["CDAMF"] },
         { Codec.LimitlessAudio, this["C_LAF"] },
     };

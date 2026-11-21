@@ -1,4 +1,4 @@
-﻿namespace Cavern.Format.Common {
+namespace Cavern.Format.Common {
     /// <summary>
     /// Codecs detected (not neccessarily supported) by Cavern.Format.
     /// Video codecs come before audio, and higher quality (newer, immersive, better overall quality) codecs also come first.
@@ -32,6 +32,14 @@
         /// Audio Definition Model Broadcast Wave Format - Dolby Atmos subset, audio.
         /// </summary>
         ADM_BWF_Atmos,
+        /// <summary>
+        /// AOMedia Immersive Audio Model and Formats (Eclipsa Audio), audio.
+        /// </summary>
+        IAMF,
+        /// <summary>
+        /// Higher-Order Ambisonics B-Format (ACN/SN3D up to 3rd order), audio.
+        /// </summary>
+        AmbisonicsHOA,
         /// <summary>
         /// Dolby Atmos Master Format, audio.
         /// </summary>

@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.IO;
 
 using Cavern.Channels;
@@ -19,6 +19,17 @@ namespace Cavern.Format.Decoders {
         /// Object metadata for Broadcast Wave Files.
         /// </summary>
         public AudioDefinitionModel ADM { get; private set; }
+
+        /// <summary>
+        /// True when the WAV header carries an Ambisonics B-Format <c>WAVEFORMATEXTENSIBLE</c> SubFormat GUID
+        /// (<c>SUBTYPE_AMBISONIC_B_FORMAT_PCM</c> or <c>SUBTYPE_AMBISONIC_B_FORMAT_IEEE_FLOAT</c>).
+        /// </summary>
+        public bool IsAmbisonicsHoa { get; private set; }
+
+        /// <summary>
+        /// Detected Ambisonics spherical harmonic order N (1..5) when <see cref="IsAmbisonicsHoa"/> is true, otherwise 0.
+        /// </summary>
+        public int AmbisonicsOrder { get; private set; }
 
         /// <summary>
         /// WAVEFORMATEXTENSIBLE channel mask if available.
@@ -131,7 +142,10 @@ namespace Cavern.Format.Decoders {
         /// Get the custom channel layout or the standard layout corresponding to this file's channel count.
         /// </summary>
         public ReferenceChannel[] GetChannels() {
-            if (channelMask == -1) {
+            if (IsAmbisonicsHoa) {
+                return Renderers.AmbisonicsHoaSpatialDecoder.VirtualLayout714;
+            }
+            if (channelMask == -1 || channelMask == 0) {
                 return ChannelPrototype.GetStandardMatrix(ChannelCount);
             } else {
                 return RIFFWaveConsts.ParseChannelMask(channelMask);
@@ -141,7 +155,22 @@ namespace Cavern.Format.Decoders {
         /// <summary>
         /// Gets the metadata for this codec in a human-readable format.
         /// </summary>
-        public ReadableMetadata GetMetadata() => ADMMetadataExporter.GenerateMetadata(ADM);
+        public ReadableMetadata GetMetadata() {
+            if (ADM != null) {
+                return ADMMetadataExporter.GenerateMetadata(ADM);
+            }
+            if (IsAmbisonicsHoa) {
+                return new ReadableMetadata(new List<ReadableMetadataHeader> {
+                    new ReadableMetadataHeader("Ambisonics HOA B-Format (WAVE-EX)", new List<ReadableMetadataField> {
+                        new ReadableMetadataField("Order", $"Order {AmbisonicsOrder} (ACN/SN3D)"),
+                        new ReadableMetadataField("Harmonic Channels", ChannelCount.ToString()),
+                        new ReadableMetadataField("Sample Rate", $"{SampleRate} Hz"),
+                        new ReadableMetadataField("Bit Depth", Bits.ToString())
+                    })
+                });
+            }
+            return ADMMetadataExporter.GenerateMetadata(ADM);
+        }
 
         /// <summary>
         /// Finish header reading, start data reading.
@@ -166,6 +195,17 @@ namespace Cavern.Format.Decoders {
                 bitDepth = reader.ReadInt16();
                 channelMask = reader.ReadInt32();
                 sampleFormat = reader.ReadInt16();
+                if (endPosition - reader.Position >= 14) {
+                    byte[] guidTail = new byte[14];
+                    int read = reader.Read(guidTail, 0, 14);
+                    if (read == 14 && RIFFWaveConsts.IsAmbisonicSubFormatGuidTail(guidTail)) {
+                        int detectedOrder = RIFFWaveConsts.GetHoaOrderForChannelCount(ChannelCount);
+                        if (detectedOrder > 0) {
+                            IsAmbisonicsHoa = true;
+                            AmbisonicsOrder = detectedOrder;
+                        }
+                    }
+                }
                 reader.Position = endPosition;
             }
             if (sampleFormat == 1) {

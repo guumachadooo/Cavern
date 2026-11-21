@@ -819,6 +819,20 @@ public sealed class AndroidStrings {
         ["ScarlettExitMsdDoneToast"] = "Scarlett MSD disabled & saved. Reconnect USB if needed.",
         ["ScarlettReadMetersBtn"] = "Read HW Meters",
         ["ScarlettMetersFormat"] = "HW Peak Meters: In 1 {0:0.1} dBFS · In 2 {1:0.1} dBFS",
+
+        // W12 Next-Gen Formats & Studio Batch Exporter
+        ["StudioW12CardTitle"] = "Studio Master Presets (W12)",
+        ["StudioW12PresetLabel"] = "Master Workflow",
+        ["StudioW12ExportBtn"] = "Export Master",
+        ["StudioW12PresetBinaural"] = "Personalized Lossless Binaural (HRTF + ISM + AutoEq)",
+        ["StudioW12PresetIamf"] = "Eclipsa Audio — IAMF v1.0 (.iamf OBU)",
+        ["StudioW12PresetHoa"] = "Ambisonics HOA B-Format (3rd-Order ACN/SN3D .amb)",
+        ["StudioW12PresetAdm"] = "ADM BWF Master (ITU-R BS.2076 .wav)",
+        ["StudioW12PresetHybrid714"] = "Hybrid Neural + DirAC Stereo → 7.1.4 Atmos",
+        ["StudioW12PresetKaraoke"] = "Spatial Karaoke / Instrumental Atmos",
+        ["StudioW12PresetLiveMixdown"] = "Live Karaoke Performance Spatial Mixdown",
+        ["StudioW12PresetFlacAtmos"] = "FLAC + Atmos Hybrid Lossless Spatial Master",
+        ["StudioW12DoneFormat"] = "Master exported: {0} ({1:0.1} LUFS · {2:0.1} dBTP)",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -1588,6 +1602,20 @@ public sealed class AndroidStrings {
         d["ScarlettExitMsdDoneToast"] = "Modo MSD da Scarlett desativado e salvo. Reconecte o USB se necessário.";
         d["ScarlettReadMetersBtn"] = "Ler Medidores HW";
         d["ScarlettMetersFormat"] = "Picos de Hardware: Ent 1 {0:0.1} dBFS · Ent 2 {1:0.1} dBFS";
+
+        // W12 Next-Gen Formats & Studio Batch Exporter
+        d["StudioW12CardTitle"] = "Presets Master de Estúdio (W12)";
+        d["StudioW12PresetLabel"] = "Fluxo de Masterização";
+        d["StudioW12ExportBtn"] = "Exportar Master";
+        d["StudioW12PresetBinaural"] = "Binaural Personalizado Lossless (HRTF + ISM + AutoEq)";
+        d["StudioW12PresetIamf"] = "Eclipsa Audio — IAMF v1.0 (.iamf OBU)";
+        d["StudioW12PresetHoa"] = "Ambisonics HOA B-Format (3ª Ordem ACN/SN3D .amb)";
+        d["StudioW12PresetAdm"] = "ADM BWF Master (ITU-R BS.2076 .wav)";
+        d["StudioW12PresetHybrid714"] = "Híbrido Neural + DirAC Estéreo → 7.1.4 Atmos";
+        d["StudioW12PresetKaraoke"] = "Karaokê Espacial / Instrumental Atmos";
+        d["StudioW12PresetLiveMixdown"] = "Mixdown Espacial de Performance Karaokê ao Vivo";
+        d["StudioW12PresetFlacAtmos"] = "Master Espacial Híbrido FLAC + Atmos Lossless";
+        d["StudioW12DoneFormat"] = "Master exportado: {0} ({1:0.1} LUFS · {2:0.1} dBTP)";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

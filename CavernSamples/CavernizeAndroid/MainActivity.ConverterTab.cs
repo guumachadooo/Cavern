@@ -34,7 +34,7 @@ public partial class MainActivity {
     Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, shareExportBtn, playExportBtn;
     LayoutDiagramView layoutDiagram;
     TextView convertStatusText;
-    OneUiInlineSelector exportFormatSelector, containerSelector;
+    OneUiInlineSelector exportFormatSelector, containerSelector, studioW12PresetSelector;
     CheckBox applyRoomToExportCheck;
     ProgressBar convertProgressBar;
 
@@ -154,6 +154,28 @@ public partial class MainActivity {
 
         page.AddView(expCard);
 
+        // 2B. W12 Studio Master Presets Card (IAMF / HOA 3rd-Order / ADM BWF / Personalized Binaural / Karaoke / Hybrid Master)
+        LinearLayout w12Card = Card(S["StudioW12CardTitle"], OneUiIconType.Sparkles, OneUiTheme.IconStudioExport);
+        studioW12PresetSelector = new OneUiInlineSelector(this, S["StudioW12PresetLabel"]);
+        studioW12PresetSelector.SetItems(new[] {
+            S["StudioW12PresetBinaural"],
+            S["StudioW12PresetIamf"],
+            S["StudioW12PresetHoa"],
+            S["StudioW12PresetAdm"],
+            S["StudioW12PresetHybrid714"],
+            S["StudioW12PresetKaraoke"],
+            S["StudioW12PresetLiveMixdown"],
+            S["StudioW12PresetFlacAtmos"]
+        }, 1);
+        w12Card.AddView(studioW12PresetSelector);
+
+        LinearLayout w12BtnRow = HRow();
+        w12BtnRow.SetPadding(0, Dp(10), 0, 0);
+        Button w12ExportBtn = PrimaryButton(S["StudioW12ExportBtn"], StartStudioW12PresetExport);
+        w12BtnRow.AddView(w12ExportBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        w12Card.AddView(w12BtnRow);
+        page.AddView(w12Card);
+
         // 3. Batch Render Queue Card
         LinearLayout queueCard = Card(S["QueueTitle"], OneUiIconType.Queue, OneUiTheme.IconAtmosUpmix);
         queueListContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
@@ -217,6 +239,8 @@ public partial class MainActivity {
         if (exts.Count == 0) {
             string ext = ExportFormat.Codec switch {
                 Codec.LimitlessAudio => ".laf",
+                Codec.IAMF => ".iamf",
+                Codec.AmbisonicsHOA => ".amb",
                 Codec.DAMF => ".atmos",
                 Codec.FLAC => ".flac",
                 Codec.Opus => ".opus",
@@ -448,6 +472,53 @@ public partial class MainActivity {
             : CreateRenderAction(outPath, active);
 
         RunBackgroundOperation(_ => task(), outPath);
+    }
+
+    void StartStudioW12PresetExport() {
+        if (isOperationRunning || isPreparingTrueHD) {
+            ShowError(S["OpRunning"]);
+            return;
+        }
+        CavernizeTrack active = GetActiveTrack();
+        if (active == null || !active.Supported) {
+            ShowError(S["NoTrack"]);
+            return;
+        }
+        StopPlayback();
+        StudioExportPreset preset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, 7);
+        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
+        string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
+        string ext = StudioBatchExporter.GetDefaultExtension(preset);
+        string outPath = Path.Combine(dir, $"{baseName}_{preset}{ext}");
+        int n = 1;
+        while (File.Exists(outPath)) {
+            outPath = Path.Combine(dir, $"{baseName}_{preset}_{n++}{ext}");
+        }
+
+        StudioBatchExportJob job = new() {
+            TrackName = baseName,
+            Preset = preset,
+            OutputPath = outPath,
+            BitDepth = store.Force24Bit ? BitDepth.Int24 : BitDepth.Int16,
+            KaraokeVocalLevel = 0.05f,
+            PreserveBackingVocals = true,
+            HoaOrder = 3
+        };
+
+        RunBackgroundOperation(token => {
+            RunOnUiThread(() => SetConvertStatus(S["Starting"], 0));
+            StudioBatchExportResult res = StudioBatchExporter.ExportSingle(
+                active,
+                job,
+                p => RunOnUiThread(() => SetConvertStatus(preset.ToString(), p)),
+                token);
+            if (!res.Succeeded) {
+                throw new InvalidOperationException(res.ErrorMessage);
+            }
+            RunOnUiThread(() => SetConvertStatus(
+                string.Format(S["StudioW12DoneFormat"], Path.GetFileName(res.OutputPath), res.IntegratedLufs, res.MaxTruePeakDbtp),
+                1.0));
+        }, outPath);
     }
 
     string BuildDefaultExportPath(CavernizeTrack track) {
