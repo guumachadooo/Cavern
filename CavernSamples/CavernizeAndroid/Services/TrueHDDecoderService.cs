@@ -15,6 +15,8 @@ using Cavern.Utilities;
 using Cavernize.Logic.CavernSettings;
 using Cavernize.Logic.Models;
 
+using CavernizeAndroid.Language;
+
 using Path = System.IO.Path;
 
 namespace CavernizeAndroid.Services;
@@ -280,7 +282,7 @@ public static class TrueHDDecoderService {
             throw new ArgumentNullException(nameof(sourceTrack));
         }
         if (string.IsNullOrEmpty(truehddPath) || !File.Exists(truehddPath)) {
-            throw new FileNotFoundException("truehdd binary is not installed.", truehddPath);
+            throw new FileNotFoundException(AndroidStrings.Active["TruehdBinaryNotInstalled"], truehddPath);
         }
         TruehddInstallerService.EnsureExecutable(truehddPath);
 
@@ -300,7 +302,7 @@ public static class TrueHDDecoderService {
             } else {
                 thdPath = Path.Combine(sessionDir, "source.thd");
                 deleteRawOnCleanup = true;
-                onProgress?.Invoke(0.02, "Extraindo faixa Dolby TrueHD...");
+                onProgress?.Invoke(0.02, AndroidStrings.Active["TruehdExtractingTrack"]);
 
                 bool extracted = false;
                 string containerInput = !string.IsNullOrEmpty(originalContainerPath) ? originalContainerPath : sourceTrack.Path;
@@ -323,7 +325,7 @@ public static class TrueHDDecoderService {
                             (p, _) => {
                                 double extRatio = Math.Clamp(p, 0, 0.99);
                                 double totalFrac = Math.Clamp(0.02 + extRatio * 0.22, 0.02, 0.24);
-                                onProgress?.Invoke(totalFrac, $"Extraindo TrueHD ({extRatio:0%})...");
+                                onProgress?.Invoke(totalFrac, string.Format(AndroidStrings.Active["TruehdExtractingPct"], $"{extRatio:0%}"));
                             },
                             token);
                     }
@@ -342,7 +344,7 @@ public static class TrueHDDecoderService {
                                     if (offset >= 0) {
                                         double extRatio = Math.Clamp(offset / dur, 0, 0.99);
                                         double frac = Math.Clamp(0.02 + extRatio * 0.22, 0.02, 0.24);
-                                        onProgress?.Invoke(frac, $"Extraindo TrueHD ({extRatio:0%})...");
+                                        onProgress?.Invoke(frac, string.Format(AndroidStrings.Active["TruehdExtractingPct"], $"{extRatio:0%}"));
                                     }
                                 }
                             }
@@ -359,11 +361,11 @@ public static class TrueHDDecoderService {
                 }
 
                 if (!extracted || !File.Exists(thdPath) || new FileInfo(thdPath).Length == 0) {
-                    throw new InvalidOperationException("Não foi possível extrair o fluxo Dolby TrueHD do contêiner.");
+                    throw new InvalidOperationException(AndroidStrings.Active["TruehdExtractFailed"]);
                 }
             }
 
-            onProgress?.Invoke(0.25, "Decodificando Dolby TrueHD com truehdd...");
+            onProgress?.Invoke(0.25, AndroidStrings.Active["TruehdDecodingTrack"]);
             string outputPrefix = Path.Combine(sessionDir, "decoded");
             StringBuilder argBuilder = new();
             argBuilder.Append($"decode --progress --json --log-format json \"{thdPath}\" --output-path \"{outputPrefix}\"");
@@ -408,7 +410,7 @@ public static class TrueHDDecoderService {
                     }
                 };
                 if (!proc.Start()) {
-                    throw new InvalidOperationException($"Falha ao iniciar truehdd em '{truehddPath}'.");
+                    throw new InvalidOperationException(string.Format(AndroidStrings.Active["TruehdLaunchFailed"], truehddPath));
                 }
                 proc.BeginOutputReadLine();
                 proc.BeginErrorReadLine();
@@ -442,14 +444,14 @@ public static class TrueHDDecoderService {
 
                 if (proc.ExitCode != 0) {
                     string summary = ExtractLastLines(stderr, 6);
-                    throw new InvalidOperationException($"truehdd falhou (código {proc.ExitCode}).\n{summary}");
+                    throw new InvalidOperationException(string.Format(AndroidStrings.Active["TruehdExitFailed"], proc.ExitCode, summary));
                 }
             }
 
-            onProgress?.Invoke(0.98, "Abrindo áudio espacial decodificado...");
+            onProgress?.Invoke(0.98, AndroidStrings.Active["TruehdOpeningDecoded"]);
             (string entryPath, Codec decodedCodec) = ResolveDecodedEntry(sessionDir, outputPrefix);
             if (string.IsNullOrEmpty(entryPath) || !File.Exists(entryPath)) {
-                throw new FileNotFoundException("O truehdd terminou sem gerar saída .atmos ou .caf legível.", outputPrefix);
+                throw new FileNotFoundException(AndroidStrings.Active["TruehdNoReadableOutput"], outputPrefix);
             }
 
             // If we extracted a standalone temporary .thd inside sessionDir, keep it until session cleanup so --extract works
@@ -468,7 +470,7 @@ public static class TrueHDDecoderService {
                 sourceTrack.Language,
                 truehdMeta);
 
-            onProgress?.Invoke(1.0, decodedCodec == Codec.DAMF ? "Dolby Atmos TrueHD pronto!" : "Dolby TrueHD pronto!");
+            onProgress?.Invoke(1.0, AndroidStrings.Active[decodedCodec == Codec.DAMF ? "TruehdAtmosReady" : "TruehdReady"]);
             return new TrueHDDecodeResult {
                 DecodedTrack = decodedTrack,
                 SessionDirectory = sessionDir,

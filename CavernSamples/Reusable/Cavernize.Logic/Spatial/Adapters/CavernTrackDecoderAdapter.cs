@@ -107,9 +107,31 @@ public sealed class CavernTrackDecoderAdapter : ISpatialDecoder {
         }
 
         Renderer renderer = track.Renderer;
+        Codec effectiveCodec = track.SourceCodec != Codec.Unknown ? track.SourceCodec : track.Codec;
+        int hoaOrder = 0;
+        bool isHoaStream = effectiveCodec == Codec.AmbisonicsHOA;
+        if (renderer is IamfRenderer iamfRenderer && iamfRenderer.IsSceneBasedHoa) {
+            isHoaStream = true;
+            hoaOrder = iamfRenderer.AmbisonicsOrder;
+        } else if (renderer is RIFFWaveRenderer wavRenderer && wavRenderer.IsAmbisonicsHoa) {
+            isHoaStream = true;
+            hoaOrder = wavRenderer.AmbisonicsOrder;
+        }
+        if (isHoaStream) {
+            if (hoaOrder <= 0) {
+                int rawOrder = (int)Math.Floor(Math.Sqrt(Math.Max(1, track.Channels))) - 1;
+                hoaOrder = Math.Max(1, rawOrder);
+            }
+            for (int i = 0; i < descriptors.Count; i++) {
+                descriptors[i].Layer = SourceLayer.AmbisonicsHoa;
+            }
+        }
+
         bool hasObjects = renderer != null && renderer.HasObjects;
         SpatialContentKind contentKind;
-        if (hasObjects && bedCount > 0) {
+        if (isHoaStream) {
+            contentKind = SpatialContentKind.Hoa;
+        } else if (hasObjects && bedCount > 0) {
             contentKind = SpatialContentKind.HybridBedAndObjects;
         } else if (hasObjects) {
             contentKind = SpatialContentKind.Objects;
@@ -121,10 +143,14 @@ public sealed class CavernTrackDecoderAdapter : ISpatialDecoder {
         metadata.ContentKind = contentKind;
         metadata.BedChannelCount = bedCount;
         metadata.DynamicObjectCount = dynamicCount;
-        metadata.HasNativeObjects = hasObjects;
-        metadata.HasNativeHeights = hasHeights;
+        metadata.HasNativeObjects = hasObjects && !isHoaStream;
+        metadata.HasNativeHeights = hasHeights || isHoaStream;
         metadata.HasLfe = hasLfe;
-        Codec effectiveCodec = track.SourceCodec != Codec.Unknown ? track.SourceCodec : track.Codec;
+        if (isHoaStream) {
+            metadata.HoaOrder = hoaOrder;
+            metadata.HoaOrderScheme = HoaChannelOrder.Acn;
+            metadata.HoaNormalization = HoaNormalization.Sn3d;
+        }
         metadata.IsLossySpatialStream = track.IsLossySource ||
             effectiveCodec == Codec.EnhancedAC3 ||
             effectiveCodec == Codec.AC3 ||

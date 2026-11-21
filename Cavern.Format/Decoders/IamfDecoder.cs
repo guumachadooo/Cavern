@@ -106,6 +106,7 @@ namespace Cavern.Format.Decoders {
         readonly List<int> substreamChannelCounts = new List<int>();
         int currentFrameIndex;
         float[] frameCache = Array.Empty<float>();
+        byte[] rawFrameScratch = Array.Empty<byte>();
         int frameCacheSampleOffset;
         int frameCacheSampleCount;
 
@@ -227,7 +228,9 @@ namespace Cavern.Format.Decoders {
             int samplesPerFrame = Math.Max(1, Info.SamplesPerFrame);
             int targetFrame = (int)(clamped / samplesPerFrame);
             int remainder = (int)(clamped % samplesPerFrame);
-            currentFrameIndex = Math.Min(targetFrame, frameOffsets.Count);
+            int subs = Math.Max(1, substreamChannelCounts.Count);
+            long entryIndex = (long)targetFrame * subs;
+            currentFrameIndex = entryIndex >= frameOffsets.Count ? frameOffsets.Count : (int)entryIndex;
             Position = clamped;
             frameCacheSampleOffset = 0;
             frameCacheSampleCount = 0;
@@ -249,7 +252,7 @@ namespace Cavern.Format.Decoders {
                         : $"Channel-Based (Layout {Info.LoudspeakerLayoutCode})"),
                     new ReadableMetadataField("channels", "Channel count", ChannelCount),
                     new ReadableMetadataField("sample_rate", "Sample rate", $"{SampleRate} Hz"),
-                    new ReadableMetadataField("sample_size", "Bit depth", $"{Info.BitDepthBits}-bit"),
+                    new ReadableMetadataField("sample_size", "Bit depth", $"{Info.BitDepthBits}-bit Int PCM"),
                     new ReadableMetadataField("num_samples_per_frame", "Frame size", $"{Info.SamplesPerFrame} samples"),
                     new ReadableMetadataField("mix_label", "Mix label", Info.MixLabel),
                     new ReadableMetadataField("integrated_loudness", "Integrated loudness", $"{Info.IntegratedLoudnessLkfs:0.00} LKFS"),
@@ -340,10 +343,14 @@ namespace Cavern.Format.Decoders {
             SampleRate = Math.Max(8000, Info.SampleRate);
             Info.FrameCount = (int)audioFrameUnits;
             Length = audioFrameUnits * Info.SamplesPerFrame;
+            // AOMedia IAMF ipcm carries signed integer PCM (16, 24, or 32-bit int — never IEEE Float32).
+            // Because Cavern.Format.Common.BitDepth reserves 32 exclusively for IEEE Float32, map 32-bit
+            // integer ipcm to BitDepth.Int24 for downstream integer-PCM contracts while DecodePcmSample
+            // continues decoding full 32-bit signed integer precision using Info.BitDepthBits.
             Bits = Info.BitDepthBits switch {
                 16 => BitDepth.Int16,
                 24 => BitDepth.Int24,
-                32 => BitDepth.Float32,
+                32 => BitDepth.Int24,
                 _ => BitDepth.Int24
             };
         }
@@ -503,8 +510,8 @@ namespace Cavern.Format.Decoders {
                 long offset = frameOffsets[currentFrameIndex + s];
                 int byteLen = frameByteLengths[currentFrameIndex + s];
                 inputStream.Position = offset;
-                byte[] raw = ReadExact(inputStream, byteLen);
-                int framesInSub = Math.Min(spf, raw.Length / Math.Max(1, subCh * bytesPerSample));
+                int rawLen = ReadExactInto(inputStream, byteLen, ref rawFrameScratch);
+                int framesInSub = Math.Min(spf, rawLen / Math.Max(1, subCh * bytesPerSample));
 
                 for (int f = 0; f < framesInSub; f++) {
                     for (int c = 0; c < subCh; c++) {
@@ -513,7 +520,7 @@ namespace Cavern.Format.Decoders {
                             continue;
                         }
                         int byteIdx = (f * subCh + c) * bytesPerSample;
-                        frameCache[f * ChannelCount + dstCh] = DecodePcmSample(raw, byteIdx, bytesPerSample, Info.IsLittleEndian);
+                        frameCache[f * ChannelCount + dstCh] = DecodePcmSample(rawFrameScratch, rawLen, byteIdx, bytesPerSample, Info.IsLittleEndian);
                     }
                 }
                 channelCursor += subCh;
@@ -525,8 +532,8 @@ namespace Cavern.Format.Decoders {
             return true;
         }
 
-        static float DecodePcmSample(byte[] raw, int idx, int bytesPerSample, bool littleEndian) {
-            if (idx + bytesPerSample > raw.Length) {
+        static float DecodePcmSample(byte[] raw, int rawLen, int idx, int bytesPerSample, bool littleEndian) {
+            if (idx + bytesPerSample > rawLen) {
                 return 0f;
             }
             if (bytesPerSample == 2) {
@@ -588,6 +595,24 @@ namespace Cavern.Format.Decoders {
                 }
             }
             return false;
+        }
+
+        static int ReadExactInto(Stream stream, int count, ref byte[] scratch) {
+            if (count <= 0) {
+                return 0;
+            }
+            if (scratch == null || scratch.Length < count) {
+                scratch = new byte[count];
+            }
+            int total = 0;
+            while (total < count) {
+                int n = stream.Read(scratch, total, count - total);
+                if (n <= 0) {
+                    break;
+                }
+                total += n;
+            }
+            return total;
         }
 
         static byte[] ReadExact(Stream stream, int count) {

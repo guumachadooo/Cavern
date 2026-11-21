@@ -148,9 +148,19 @@ namespace Cavern.Restoration {
                     stemTotalSq += m * m;
                 }
             }
+            // Because spatialShare[j][c][k] sums to 1 across non-LFE channels per stem & bin,
+            // total explained power summed across all Atmos channels equals total lossless stem power
+            // scaled by globalEnvLock^2 — do NOT divide by chCount (which depresses sparse Atmos objects).
             float globalEnvLock = (atmosTotalSq > 1e-9 && stemTotalSq > 1e-9)
-                ? Math.Clamp((float)Math.Sqrt(atmosTotalSq / (stemTotalSq * Math.Max(1, chCount))), 0.1f, 10f)
+                ? Math.Clamp((float)Math.Sqrt(atmosTotalSq / stemTotalSq), 0.1f, 10f)
                 : 1f;
+
+            int effectiveSr = sampleRate > 0 ? sampleRate : 48000;
+            int hfStartBin = Math.Max(1, Math.Min(bins - 1, (int)Math.Ceiling(14000.0 * nFft / effectiveSr)));
+            int hfAnchorStartBin = Math.Max(1, Math.Min(hfStartBin - 1, (int)Math.Floor(10000.0 * nFft / effectiveSr)));
+            int hfAnchorEndBin = Math.Max(hfAnchorStartBin, Math.Min(hfStartBin - 1, (int)Math.Floor(13500.0 * nFft / effectiveSr)));
+            double[] totalAtmosBinPow = new double[bins];
+            double[] totalStemBinPow = new double[bins];
 
             ThreadSafeFFTCache fft = new ThreadSafeFFTCache(nFft);
             try {
@@ -181,6 +191,11 @@ namespace Cavern.Restoration {
                 }
 
                 for (int iter = 0; iter < iters; iter++) {
+                    bool trackBinEnergy = iter == iters - 1;
+                    if (trackBinEnergy) {
+                        Array.Clear(totalAtmosBinPow, 0, bins);
+                        Array.Clear(totalStemBinPow, 0, bins);
+                    }
                     for (int j = 0; j < stemCount; j++) {
                         Array.Clear(accumDen[j], 0, bins);
                         for (int c = 0; c < chCount; c++) {
@@ -209,7 +224,11 @@ namespace Cavern.Restoration {
                             for (int k = 0; k < bins; k++) {
                                 float re = stemSpecs[j][k].Real;
                                 float im = stemSpecs[j][k].Imaginary;
-                                stemPsd[j][k] = re * re + im * im;
+                                float psd = re * re + im * im;
+                                stemPsd[j][k] = psd;
+                                if (trackBinEnergy) {
+                                    totalStemBinPow[k] += psd;
+                                }
                             }
                         }
 
@@ -221,6 +240,9 @@ namespace Cavern.Restoration {
                                 float xRe = atmSpecs[c][k].Real;
                                 float xIm = atmSpecs[c][k].Imaginary;
                                 float xPow = xRe * xRe + xIm * xIm;
+                                if (trackBinEnergy) {
+                                    totalAtmosBinPow[k] += xPow;
+                                }
 
                                 float mixVar = RegularizationEps;
                                 for (int j = 0; j < stemCount; j++) {
@@ -256,6 +278,40 @@ namespace Cavern.Restoration {
                     }
 
                     onProgress?.Invoke(0.55 * ((iter + 1) / (double)iters));
+                }
+
+                // Propagate converged upper-mid (10–13.5 kHz) spatial distribution into brickwalled HF bins (>14 kHz)
+                // where lossy E-AC-3/Atmos has collapsed to near-zero energy while the lossless twin carries real HF harmonics.
+                if (hfAnchorEndBin >= hfAnchorStartBin) {
+                    int anchorSpan = hfAnchorEndBin - hfAnchorStartBin + 1;
+                    for (int k = hfStartBin; k < bins; k++) {
+                        if (totalStemBinPow[k] <= 1e-10 || totalAtmosBinPow[k] >= totalStemBinPow[k] * 0.04) {
+                            continue;
+                        }
+                        for (int j = 0; j < stemCount; j++) {
+                            float sumAnchor = 0f;
+                            for (int c = 0; c < chCount; c++) {
+                                if (isLfe != null && c < isLfe.Length && isLfe[c]) {
+                                    spatialShare[j][c][k] = 0f;
+                                    continue;
+                                }
+                                float avg = 0f;
+                                for (int ak = hfAnchorStartBin; ak <= hfAnchorEndBin; ak++) {
+                                    avg += spatialShare[j][c][ak];
+                                }
+                                avg /= anchorSpan;
+                                spatialShare[j][c][k] = avg;
+                                sumAnchor += avg;
+                            }
+                            if (sumAnchor > RegularizationEps) {
+                                for (int c = 0; c < chCount; c++) {
+                                    if (isLfe == null || c >= isLfe.Length || !isLfe[c]) {
+                                        spatialShare[j][c][k] /= sumAnchor;
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Final synthesis pass: reconstruct multichannel Atmos using EM-MWF projected clean lossless stems
@@ -308,14 +364,46 @@ namespace Cavern.Restoration {
                             float residualRatio = 1f - explainedRatio;
 
                             // Reconstructed magnitude blends lossless stem spatial projection (bounded to avoid clipping)
-                            // with Atmos-exclusive residual, strictly locked to Atmos phase (xRe / xMag, xIm / xMag)
+                            // with Atmos-exclusive residual, strictly locked to Atmos phase where Atmos carries signal.
+                            // Above 14 kHz, when lossy E-AC-3/Atmos has brickwalled zeros (xMag << explainedMag),
+                            // synthesize the missing HF directly from the spatially-projected complex lossless twin
+                            // spectrum bounded by the exact lossless HF envelope.
                             float explainedMag = MathF.Sqrt(explainedPow);
-                            float clampedExplained = Math.Min(explainedMag, xMag * 1.85f + 1e-5f);
-                            float restoredMag = explainedRatio * clampedExplained + residualRatio * xMag;
+                            Complex fused;
+                            Complex res;
+                            float hfThresh = explainedMag * 0.35f;
+                            if (k >= hfStartBin && explainedMag > 1e-6f && xMag < hfThresh) {
+                                float projRe = 0f;
+                                float projIm = 0f;
+                                for (int j = 0; j < stemCount; j++) {
+                                    float wShare = MathF.Sqrt(Math.Max(0f, spatialShare[j][c][k]));
+                                    projRe += stemSpecs[j][k].Real * wShare;
+                                    projIm += stemSpecs[j][k].Imaginary * wShare;
+                                }
+                                float projMag = MathF.Sqrt(projRe * projRe + projIm * projIm);
+                                float hfTargetMag = explainedMag;
+                                float hfScale = projMag > 1e-9f ? (hfTargetMag / projMag) : 0f;
+                                float hfRe = projRe * hfScale;
+                                float hfIm = projIm * hfScale;
 
-                            float scale = xMag > 1e-9f ? (restoredMag / xMag) : 1f;
-                            Complex fused = new Complex(xRe * scale, xIm * scale);
-                            Complex res = new Complex(xRe * residualRatio, xIm * residualRatio);
+                                float hfBlend = Math.Clamp(1f - (xMag / (hfThresh + 1e-9f)), 0f, 1f);
+                                float atmosClamped = Math.Min(explainedMag, xMag * 1.85f + 1e-5f);
+                                float atmosMag = explainedRatio * atmosClamped + residualRatio * xMag;
+                                float aScale = xMag > 1e-9f ? (atmosMag / xMag) : 0f;
+                                float aRe = xRe * aScale;
+                                float aIm = xIm * aScale;
+
+                                fused = new Complex(
+                                    aRe * (1f - hfBlend) + hfRe * hfBlend,
+                                    aIm * (1f - hfBlend) + hfIm * hfBlend);
+                                res = new Complex(xRe * residualRatio * (1f - hfBlend), xIm * residualRatio * (1f - hfBlend));
+                            } else {
+                                float clampedExplained = Math.Min(explainedMag, xMag * 1.85f + 1e-5f);
+                                float restoredMag = explainedRatio * clampedExplained + residualRatio * xMag;
+                                float scale = xMag > 1e-9f ? (restoredMag / xMag) : 1f;
+                                fused = new Complex(xRe * scale, xIm * scale);
+                                res = new Complex(xRe * residualRatio, xIm * residualRatio);
+                            }
 
                             oSpec[k] = fused;
                             rSpec[k] = res;
@@ -364,6 +452,19 @@ namespace Cavern.Restoration {
                             tier3Cleaned = true;
                         }
                         first = -1;
+                    }
+                }
+                // Handle the final unpaired non-LFE channel on odd layouts (5.1 = 5, 7.1 = 7, 7.1.4 = 11 non-LFE)
+                if (first >= 0) {
+                    StereoStemBuffer cleanedMono = tier3ResidualRestorer(residual[first], residual[first]);
+                    if (cleanedMono != null && cleanedMono.Left != null && cleanedMono.Right != null &&
+                        cleanedMono.Left.Length >= length && cleanedMono.Right.Length >= length) {
+                        for (int i = 0; i < length; i++) {
+                            float cleanedSample = 0.5f * (cleanedMono.Left[i] + cleanedMono.Right[i]);
+                            restored[first][i] += cleanedSample - residual[first][i];
+                            residual[first][i] = cleanedSample;
+                        }
+                        tier3Cleaned = true;
                     }
                 }
             }

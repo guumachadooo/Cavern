@@ -31,7 +31,7 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
-    Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, shareExportBtn, playExportBtn, studioW12ExportBtn;
+    Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, shareExportBtn, playExportBtn, studioW12ExportBtn, studioW12BatchBtn;
     LayoutDiagramView layoutDiagram;
     TextView convertStatusText, studioW12ContextText;
     OneUiInlineSelector exportFormatSelector, containerSelector, studioW12PresetSelector;
@@ -77,7 +77,7 @@ public partial class MainActivity {
         page.AddView(sysCard);
 
         // 2. Content & Export Card (In-App One UI 9 Selectors — no native Spinner popups)
-        LinearLayout expCard = Card("Export", OneUiIconType.Bolt, OneUiTheme.IconStudioExport);
+        LinearLayout expCard = Card(S["ExportCardTitle"], OneUiIconType.Bolt, OneUiTheme.IconStudioExport);
 
         exportFormatSelector = new OneUiInlineSelector(this, S["ExportFormat"]);
         ExportFormat[] formats = ExportFormat.GetFormats();
@@ -205,6 +205,11 @@ public partial class MainActivity {
         studioW12ExportBtn = PrimaryButton(S["StudioW12ExportBtn"], StartStudioW12PresetExport);
         w12BtnRow.AddView(studioW12ExportBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         w12Card.AddView(w12BtnRow);
+
+        studioW12BatchBtn = PillButton(S["StudioW12BatchBtn"], ShowStudioW12BatchDialog);
+        w12Card.AddView(studioW12BatchBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(6)
+        });
         page.AddView(w12Card);
 
         // 3. Batch Render Queue Card
@@ -543,6 +548,54 @@ public partial class MainActivity {
         RunBackgroundOperation(_ => task(), outPath);
     }
 
+    StudioBatchExportJob BuildStudioW12Job(StudioExportPreset preset, string dir, string baseName) {
+        string ext = StudioBatchExporter.GetDefaultExtension(preset);
+        string outPath = Path.Combine(dir, $"{baseName}_{preset}{ext}");
+        int n = 1;
+        while (File.Exists(outPath)) {
+            outPath = Path.Combine(dir, $"{baseName}_{preset}_{n++}{ext}");
+        }
+
+        return new StudioBatchExportJob {
+            TrackName = baseName,
+            Preset = preset,
+            OutputPath = outPath,
+            BitDepth = store.Force24Bit ? BitDepth.Int24 : BitDepth.Int16,
+            TruePeakCeilingDbtp = store.ResolveTruePeakCeilingDbtp(),
+            KaraokeVocalLevel = Math.Clamp(store.KaraokeVocalLevel, 0f, 1f),
+            PreserveBackingVocals = store.KaraokePreserveBackingVocals,
+            VocalDnaProfile = playerEngine?.VocalMixMatchStage?.ActiveDna,
+            LosslessTwinProvider = activeLosslessTwin ?? playerEngine?.SceneHub?.ActiveLosslessReference,
+            NeuralRuntime = neuralRuntime,
+            NeuralOrchestrator = neuralOrchestrator,
+            NeuralConfig = store.BuildNeuralAudioConfig(),
+            LgsrConfig = store.BuildLgsrConfig(),
+            PostProcessingStages = playerEngine?.SceneHub?.PostProcessingStages,
+            OnSeparatedTrackReady = separated => {
+                if (separated != null) {
+                    playerEngine?.BindSeparatedNeuralTrack(separated);
+                    RunOnUiThread(() => {
+                        SyncNeuralRuntimeDiagnostics();
+                        RefreshNeuralAudioUi();
+                    });
+                }
+            },
+            HoaOrder = 3
+        };
+    }
+
+    string GetStudioW12PresetLabel(StudioExportPreset preset) => preset switch {
+        StudioExportPreset.PersonalizedLosslessBinaural => S["StudioW12PresetBinaural"],
+        StudioExportPreset.EclipsaAudioIamf => S["StudioW12PresetIamf"],
+        StudioExportPreset.AmbisonicsHoa3rdOrder => S["StudioW12PresetHoa"],
+        StudioExportPreset.AdmBwfItuBs2076 => S["StudioW12PresetAdm"],
+        StudioExportPreset.HybridNeuralDirAc714 => S["StudioW12PresetHybrid714"],
+        StudioExportPreset.SpatialKaraokeInstrumental => S["StudioW12PresetKaraoke"],
+        StudioExportPreset.LiveKaraokePerformanceMixdown => S["StudioW12PresetLiveMixdown"],
+        StudioExportPreset.FlacAtmosHybridSpatialMaster => S["StudioW12PresetFlacAtmos"],
+        _ => preset.ToString()
+    };
+
     void StartStudioW12PresetExport() {
         if (isOperationRunning || isPreparingTrueHD) {
             ShowError(S["OpRunning"]);
@@ -557,32 +610,15 @@ public partial class MainActivity {
         StudioExportPreset preset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, 7);
         string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
         string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
-        string ext = StudioBatchExporter.GetDefaultExtension(preset);
-        string outPath = Path.Combine(dir, $"{baseName}_{preset}{ext}");
-        int n = 1;
-        while (File.Exists(outPath)) {
-            outPath = Path.Combine(dir, $"{baseName}_{preset}_{n++}{ext}");
-        }
-
-        StudioBatchExportJob job = new() {
-            TrackName = baseName,
-            Preset = preset,
-            OutputPath = outPath,
-            BitDepth = store.Force24Bit ? BitDepth.Int24 : BitDepth.Int16,
-            TruePeakCeilingDbtp = store.ResolveTruePeakCeilingDbtp(),
-            KaraokeVocalLevel = Math.Clamp(store.KaraokeVocalLevel, 0f, 1f),
-            PreserveBackingVocals = store.KaraokePreserveBackingVocals,
-            VocalDnaProfile = playerEngine?.VocalMixMatchStage?.ActiveDna,
-            LosslessTwinProvider = playerEngine?.SceneHub?.ActiveLosslessReference,
-            HoaOrder = 3
-        };
+        StudioBatchExportJob job = BuildStudioW12Job(preset, dir, baseName);
+        string label = GetStudioW12PresetLabel(preset);
 
         RunBackgroundOperation(token => {
             RunOnUiThread(() => SetConvertStatus(S["Starting"], 0));
             StudioBatchExportResult res = StudioBatchExporter.ExportSingle(
                 active,
                 job,
-                p => RunOnUiThread(() => SetConvertStatus(preset.ToString(), p)),
+                p => RunOnUiThread(() => SetConvertStatus(label, p)),
                 token);
             if (!res.Succeeded) {
                 throw new InvalidOperationException(res.ErrorMessage);
@@ -590,7 +626,129 @@ public partial class MainActivity {
             RunOnUiThread(() => SetConvertStatus(
                 string.Format(S["StudioW12DoneFormat"], Path.GetFileName(res.OutputPath), res.IntegratedLufs, res.MaxTruePeakDbtp),
                 1.0));
-        }, outPath);
+        }, job.OutputPath);
+    }
+
+    void ShowStudioW12BatchDialog() {
+        if (isOperationRunning || isPreparingTrueHD) {
+            ShowError(S["OpRunning"]);
+            return;
+        }
+        CavernizeTrack active = GetActiveTrack();
+        if (active == null || !active.Supported) {
+            ShowError(S["NoTrack"]);
+            return;
+        }
+
+        StudioExportPreset[] allPresets = [
+            StudioExportPreset.PersonalizedLosslessBinaural,
+            StudioExportPreset.EclipsaAudioIamf,
+            StudioExportPreset.AmbisonicsHoa3rdOrder,
+            StudioExportPreset.AdmBwfItuBs2076,
+            StudioExportPreset.HybridNeuralDirAc714,
+            StudioExportPreset.SpatialKaraokeInstrumental,
+            StudioExportPreset.LiveKaraokePerformanceMixdown,
+            StudioExportPreset.FlacAtmosHybridSpatialMaster
+        ];
+
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
+        CheckBox[] boxes = new CheckBox[allPresets.Length];
+        int currentSelected = Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, allPresets.Length - 1);
+        for (int i = 0; i < allPresets.Length; i++) {
+            StudioExportPreset preset = allPresets[i];
+            CheckBox cb = new(this) {
+                Text = GetStudioW12PresetLabel(preset),
+                Checked = i == currentSelected || preset == StudioExportPreset.PersonalizedLosslessBinaural || preset == StudioExportPreset.EclipsaAudioIamf,
+                TextSize = 13f
+            };
+            cb.SetTextColor(ColText);
+            cb.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
+            cb.SetPadding(Dp(6), Dp(6), Dp(4), Dp(6));
+            content.AddView(cb);
+            boxes[i] = cb;
+        }
+
+        OneUiModalDialog.Show(
+            this,
+            S["StudioW12BatchDialogTitle"],
+            S["StudioW12BatchDialogDesc"],
+            customContent: content,
+            icon: OneUiIconType.Sparkles,
+            iconBadgeColor: OneUiTheme.IconStudioExport,
+            positiveText: S["StudioW12BatchBtn"],
+            onPositive: () => {
+                List<StudioExportPreset> chosen = new();
+                for (int i = 0; i < allPresets.Length; i++) {
+                    if (boxes[i].Checked) {
+                        chosen.Add(allPresets[i]);
+                    }
+                }
+                if (chosen.Count == 0) {
+                    ShowError(S["StudioW12BatchSelectAtLeastOne"]);
+                    return;
+                }
+                StartStudioW12BatchExport(active, chosen);
+            },
+            negativeText: S["CancelBtn"]);
+    }
+
+    void StartStudioW12BatchExport(CavernizeTrack active, List<StudioExportPreset> presets) {
+        if (isOperationRunning || isPreparingTrueHD) {
+            ShowError(S["OpRunning"]);
+            return;
+        }
+        StopPlayback();
+        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
+        string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
+        List<StudioBatchExportJob> jobs = new(presets.Count);
+        for (int i = 0; i < presets.Count; i++) {
+            jobs.Add(BuildStudioW12Job(presets[i], dir, baseName));
+        }
+
+        RunBackgroundOperation(token => {
+            RunOnUiThread(() => SetConvertStatus(S["Starting"], 0));
+            List<StudioBatchExportResult> results = StudioBatchExporter.ExportBatch(
+                active,
+                jobs,
+                (idx, total, prog) => {
+                    string label = idx >= 0 && idx < jobs.Count
+                        ? GetStudioW12PresetLabel(jobs[idx].Preset)
+                        : string.Empty;
+                    double overall = total > 0 ? Math.Clamp((idx + prog) / total, 0.0, 1.0) : prog;
+                    RunOnUiThread(() => SetConvertStatus(
+                        string.Format(S["StudioW12BatchProgressFormat"], idx + 1, total, label),
+                        overall));
+                },
+                token);
+
+            int okCount = 0;
+            string lastOkPath = null;
+            string firstError = null;
+            for (int i = 0; i < results.Count; i++) {
+                StudioBatchExportResult r = results[i];
+                if (r.Succeeded && !string.IsNullOrEmpty(r.OutputPath) && File.Exists(r.OutputPath)) {
+                    okCount++;
+                    lastOkPath = r.OutputPath;
+                    AndroidFileHelper.PublishToDownloads(this, r.OutputPath, "Renderizados");
+                } else if (firstError == null && !string.IsNullOrEmpty(r.ErrorMessage)) {
+                    firstError = r.ErrorMessage;
+                }
+            }
+
+            if (okCount == 0 && !string.IsNullOrEmpty(firstError)) {
+                throw new InvalidOperationException(firstError);
+            }
+            if (!string.IsNullOrEmpty(lastOkPath)) {
+                lastRenderedFilePath = lastOkPath;
+            }
+            RunOnUiThread(() => {
+                SetConvertStatus(string.Format(S["StudioW12BatchDoneFormat"], okCount, results.Count), 1.0);
+                if (!string.IsNullOrEmpty(lastOkPath)) {
+                    shareExportBtn.Visibility = ViewStates.Visible;
+                    playExportBtn.Visibility = ViewStates.Visible;
+                }
+            });
+        }, null);
     }
 
     string BuildDefaultExportPath(CavernizeTrack track) {
@@ -996,6 +1154,7 @@ public partial class MainActivity {
     void SetRunningUiState(bool running) {
         if (renderBtn != null) renderBtn.Enabled = !running;
         if (studioW12ExportBtn != null) studioW12ExportBtn.Enabled = !running;
+        if (studioW12BatchBtn != null) studioW12BatchBtn.Enabled = !running;
         if (cancelRenderBtn != null) cancelRenderBtn.Enabled = running;
         if (extractBtn != null) extractBtn.Enabled = !running;
         if (cancelExtractBtn != null) cancelExtractBtn.Enabled = running;

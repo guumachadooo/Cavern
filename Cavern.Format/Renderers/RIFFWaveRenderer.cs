@@ -29,6 +29,16 @@ namespace Cavern.Format.Renderers {
         float[] hoaScratch = Array.Empty<float>();
 
         /// <summary>
+        /// True when the WAV stream is rendered through the Ambisonics HOA B-Format decoder (ACN/SN3D).
+        /// </summary>
+        public bool IsAmbisonicsHoa => hoaDecoder != null;
+
+        /// <summary>
+        /// Active Ambisonics spherical harmonic order when <see cref="IsAmbisonicsHoa"/> is true, otherwise 0.
+        /// </summary>
+        public int AmbisonicsOrder => hoaDecoder != null ? ((RIFFWaveDecoder)stream).AmbisonicsOrder : 0;
+
+        /// <summary>
         /// Renders a decoded RIFF WAVE stream.
         /// </summary>
         public RIFFWaveRenderer(RIFFWaveDecoder stream) : base(stream) {

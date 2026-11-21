@@ -14,6 +14,16 @@ namespace Cavern.Format.Renderers {
         float[] rawInterleaved = Array.Empty<float>();
 
         /// <summary>
+        /// True when this IAMF stream carries a Scene-Based HOA Ambisonics element (ACN/SN3D).
+        /// </summary>
+        public bool IsSceneBasedHoa => hoaDecoder != null;
+
+        /// <summary>
+        /// Active Ambisonics spherical harmonic order (1..3) when <see cref="IsSceneBasedHoa"/> is true, otherwise 0.
+        /// </summary>
+        public int AmbisonicsOrder => hoaDecoder != null ? Math.Max(1, Math.Min(3, iamfDecoder.Info.AmbisonicsOrder)) : 0;
+
+        /// <summary>
         /// Renders a decoded AOMedia IAMF stream.
         /// </summary>
         public IamfRenderer(IamfDecoder stream) : base(stream) {

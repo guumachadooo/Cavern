@@ -316,6 +316,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         playerEngine.ApplyExternalizationConfig(store.BuildExternalizationConfig());
         playerEngine.ApplyPersonalizationConfig(store.BuildPersonalizationConfig());
         playerEngine.ApplyLoudnessConfig(store.BuildLoudnessConfig());
+        StemExtractor.TextResolver = key => AndroidStrings.Active[key];
         neuralRuntime = new NativeOnnxRuntimeBridge(this);
         neuralTrackCache = new NeuralTrackCacheService(this, (long)store.NeuralTrackCacheMaxMb * 1024L * 1024L);
         neuralTrackCache.EvictToLimit((long)store.NeuralTrackCacheMaxMb * 1024L * 1024L);

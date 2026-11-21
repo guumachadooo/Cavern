@@ -978,6 +978,57 @@ public sealed class AndroidStrings {
         ["VocalSingDockNeutralFmt"] = "Live Vocal Chain: Neutral baseline · {0}",
         ["VocalSingDockVpOn"] = "Voiceprint ON",
         ["VocalSingDockVpOff"] = "Flat 0 dB EQ",
+
+        // W20 Offline Studio Batch Exporter, EM-MWF & Extractor Neural Chain, TrueHD & Decoder Localization
+        ["ExportCardTitle"] = "Export",
+        ["StudioW12BatchBtn"] = "Batch Export Presets...",
+        ["StudioW12BatchDialogTitle"] = "Studio Batch Export",
+        ["StudioW12BatchDialogDesc"] = "Select one or more W12 Studio Master presets to render sequentially and save to Downloads/Cavernize/Renderizados.",
+        ["StudioW12BatchSelectAtLeastOne"] = "Select at least one Studio Master preset.",
+        ["StudioW12BatchProgressFormat"] = "Batch {0}/{1}: {2}",
+        ["StudioW12BatchDoneFormat"] = "Batch complete: {0}/{1} Studio masters saved to Downloads!",
+        ["ModeNeuralRestorer"] = "Neural Audio Restorer (Apollo / AP-BWE)",
+        ["ModeLgsrHybridStems"] = "Lossless-Guided EM-MWF Atmos Master Stems",
+        ["ExtractOutputCardTitle"] = "Output / Stems",
+        ["ExtractSelectAtLeastOne"] = "Select at least one channel or 3D object.",
+        ["LgsrMasterNeedsTwin"] = "Pair a verified lossless FLAC/WAV twin (LGSR) in Settings or Player first.",
+        ["StemProgExtractingTracks"] = "Extracting {0} tracks ({1})...",
+        ["StemProgRender3D"] = "3D Render ({0}/{1}): {2}",
+        ["StemProgExtractingBitstream"] = "Extracting raw bitstream ({0})...",
+        ["StemProgBitstreamDone"] = "Raw bitstream extracted!",
+        ["StemProgDecodingSource"] = "Decoding source audio...",
+        ["StemProgDecodingMultichannel"] = "Decoding {0} channels/objects ({1})...",
+        ["StemProgDecodingStereo"] = "Decoding stereo ({0})...",
+        ["StemProgSeparatingKaraoke"] = "Separating neural vocal guide (MVSEP)...",
+        ["StemProgApplyingKaraoke"] = "Applying zero-phase multichannel Spatial Karaoke...",
+        ["StemProgWritingKaraoke"] = "Writing karaoke {0}/{1}...",
+        ["StemProgKaraokeDone"] = "Atmos Spatial Karaoke exported!",
+        ["StemProgRestoringStandalone"] = "Restoring audio via Slot 7A ({0})...",
+        ["StemProgRestorerDone"] = "Neural restoration exported!",
+        ["StemProgLoadingOnnx"] = "Loading ONNX Runtime session...",
+        ["StemProgWritingStem"] = "Writing stem {0}...",
+        ["StemProgRenderingHybrid714"] = "Rendering Hybrid Neural + DirAC 7.1.4...",
+        ["StemProgNeuralDone"] = "Neural stems extracted!",
+        ["StemProgDecodingAtmos"] = "Decoding Atmos beds and objects...",
+        ["StemProgDecodingAtmosPct"] = "Decoding Atmos ({0})...",
+        ["StemProgSeparatingLossless"] = "Separating lossless stems (MVSEP)...",
+        ["StemProgProjectingEmMwf"] = "Projecting lossless stems via EM-MWF (norbert)...",
+        ["StemProgEmMwfPct"] = "EM-MWF Studio Master ({0})...",
+        ["StemProgWritingMaster"] = "Writing master {0}/{1}...",
+        ["StemProgMasterDone"] = "LGSR Studio Master (EM-MWF) complete!",
+        ["StemErrOnnxNotInstalled"] = "ONNX Runtime is not installed. Install it in Settings -> Neural Audio first.",
+        ["StemErrModelNotInstalled"] = "Selected ONNX neural model is not installed.",
+        ["TruehdBinaryNotInstalled"] = "truehdd is not installed. Open Settings -> External Decoders and install truehdd.",
+        ["TruehdExtractingTrack"] = "Extracting TrueHD track...",
+        ["TruehdExtractingPct"] = "Extracting TrueHD ({0})...",
+        ["TruehdExtractFailed"] = "Failed to extract TrueHD track from container.",
+        ["TruehdDecodingTrack"] = "Decoding TrueHD / Atmos with truehdd...",
+        ["TruehdLaunchFailed"] = "Failed to launch truehdd binary: {0}",
+        ["TruehdExitFailed"] = "truehdd exited with code {0}.\n{1}",
+        ["TruehdOpeningDecoded"] = "Opening decoded Atmos Master...",
+        ["TruehdNoReadableOutput"] = "truehdd did not produce a readable Atmos Master (.atmos) or PCM output.",
+        ["TruehdAtmosReady"] = "Dolby TrueHD Atmos ready!",
+        ["TruehdReady"] = "Dolby TrueHD ready!",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -1906,6 +1957,57 @@ public sealed class AndroidStrings {
         d["VocalSingDockNeutralFmt"] = "Cadeia Vocal ao Vivo: Base neutra · {0}";
         d["VocalSingDockVpOn"] = "Voiceprint ON";
         d["VocalSingDockVpOff"] = "EQ Plano 0 dB";
+
+        // W20 Exportador Studio em Lote, Cadeia Neural EM-MWF & Extrator, Localização TrueHD e Decoders
+        d["ExportCardTitle"] = "Exportação";
+        d["StudioW12BatchBtn"] = "Exportar em Lote (Presets)...";
+        d["StudioW12BatchDialogTitle"] = "Exportação Studio em Lote";
+        d["StudioW12BatchDialogDesc"] = "Selecione um ou mais presets Studio Master W12 para renderizar em sequência e salvar em Downloads/Cavernize/Renderizados.";
+        d["StudioW12BatchSelectAtLeastOne"] = "Selecione pelo menos um preset Studio Master.";
+        d["StudioW12BatchProgressFormat"] = "Lote {0}/{1}: {2}";
+        d["StudioW12BatchDoneFormat"] = "Lote concluído: {0}/{1} masters Studio salvos em Downloads!";
+        d["ModeNeuralRestorer"] = "Restaurador Neural IA (Apollo / AP-BWE)";
+        d["ModeLgsrHybridStems"] = "Stems Master Atmos Híbrido EM-MWF (LGSR)";
+        d["ExtractOutputCardTitle"] = "Saída / Stems";
+        d["ExtractSelectAtLeastOne"] = "Selecione pelo menos um canal ou objeto 3D.";
+        d["LgsrMasterNeedsTwin"] = "Pareie um gêmeo lossless FLAC/WAV verificado (LGSR) em Ajustes ou no Player primeiro.";
+        d["StemProgExtractingTracks"] = "Extraindo {0} faixas ({1})...";
+        d["StemProgRender3D"] = "Render 3D ({0}/{1}): {2}";
+        d["StemProgExtractingBitstream"] = "Extraindo bitstream bruto ({0})...";
+        d["StemProgBitstreamDone"] = "Bitstream bruto extraído!";
+        d["StemProgDecodingSource"] = "Decodificando áudio de origem...";
+        d["StemProgDecodingMultichannel"] = "Decodificando {0} canais/objetos ({1})...";
+        d["StemProgDecodingStereo"] = "Decodificando estéreo ({0})...";
+        d["StemProgSeparatingKaraoke"] = "Separando guia vocal neural (MVSEP)...";
+        d["StemProgApplyingKaraoke"] = "Aplicando Karaokê Espacial multicanal fase-zero...";
+        d["StemProgWritingKaraoke"] = "Gravando karaokê {0}/{1}...";
+        d["StemProgKaraokeDone"] = "Karaokê Espacial Atmos exportado!";
+        d["StemProgRestoringStandalone"] = "Restaurando áudio via Slot 7A ({0})...";
+        d["StemProgRestorerDone"] = "Restauração neural exportada!";
+        d["StemProgLoadingOnnx"] = "Carregando sessão ONNX Runtime...";
+        d["StemProgWritingStem"] = "Gravando stem {0}...";
+        d["StemProgRenderingHybrid714"] = "Renderizando Híbrido Neural + DirAC 7.1.4...";
+        d["StemProgNeuralDone"] = "Stems neurais extraídos!";
+        d["StemProgDecodingAtmos"] = "Decodificando beds e objetos Atmos...";
+        d["StemProgDecodingAtmosPct"] = "Decodificando Atmos ({0})...";
+        d["StemProgSeparatingLossless"] = "Separando stems lossless (MVSEP)...";
+        d["StemProgProjectingEmMwf"] = "Projetando stems lossless via EM-MWF (norbert)...";
+        d["StemProgEmMwfPct"] = "Studio Master EM-MWF ({0})...";
+        d["StemProgWritingMaster"] = "Gravando master {0}/{1}...";
+        d["StemProgMasterDone"] = "LGSR Studio Master (EM-MWF) concluído!";
+        d["StemErrOnnxNotInstalled"] = "ONNX Runtime não instalado. Instale em Ajustes -> Áudio Neural primeiro.";
+        d["StemErrModelNotInstalled"] = "Modelo neural ONNX selecionado não está instalado.";
+        d["TruehdBinaryNotInstalled"] = "truehdd não instalado. Abra Ajustes -> Decodificadores Externos e instale o truehdd.";
+        d["TruehdExtractingTrack"] = "Extraindo faixa TrueHD...";
+        d["TruehdExtractingPct"] = "Extraindo TrueHD ({0})...";
+        d["TruehdExtractFailed"] = "Falha ao extrair a faixa TrueHD do container.";
+        d["TruehdDecodingTrack"] = "Decodificando TrueHD / Atmos com truehdd...";
+        d["TruehdLaunchFailed"] = "Falha ao iniciar binário truehdd: {0}";
+        d["TruehdExitFailed"] = "truehdd encerrou com código {0}.\n{1}";
+        d["TruehdOpeningDecoded"] = "Abrindo Atmos Master decodificado...";
+        d["TruehdNoReadableOutput"] = "truehdd não gerou um Atmos Master (.atmos) ou PCM legível.";
+        d["TruehdAtmosReady"] = "Dolby TrueHD Atmos pronto!";
+        d["TruehdReady"] = "Dolby TrueHD pronto!";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

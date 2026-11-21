@@ -326,6 +326,53 @@ public sealed class NeuralPipelineOrchestrator {
         return (track, totalRtf, false);
     }
 
+    /// <summary>
+    /// Runs the Slot 7A <see cref="NeuralPipelineGoal.LosslessResidualRestore"/> chain (<c>Apollo</c> -&gt; <c>AP-BWE</c>)
+    /// directly on an arbitrary stereo buffer (such as an Atmos-exclusive EM-MWF residual pair) without writing
+    /// intermediate per-channel pairs into the disk track cache.
+    /// </summary>
+    public StereoStemBuffer RestoreStereoBuffer(
+        float[] inLeft,
+        float[] inRight,
+        int sampleRate,
+        NeuralAudioConfig config,
+        Action<double, string> onProgress = null,
+        CancellationToken token = default) {
+        if (inLeft == null || inRight == null || inLeft.Length == 0 || inRight.Length == 0) {
+            return new StereoStemBuffer("restored", inLeft ?? Array.Empty<float>(), inRight ?? Array.Empty<float>());
+        }
+        NeuralAudioConfig safeCfg = (config ?? NeuralAudioConfig.Default).Sanitize();
+        NeuralExecutionPlan plan = BuildPlan(NeuralPipelineGoal.LosslessResidualRestore, safeCfg);
+        if (!plan.IsRunnable || !runtime.GetRuntimeInfo().IsAvailable) {
+            return new StereoStemBuffer("restored", inLeft, inRight);
+        }
+
+        float[] curL = inLeft;
+        float[] curR = inRight;
+        NeuralAudioConfig restoreCfg = new() {
+            PreferredProvider = safeCfg.PreferredProvider,
+            OverlapFactor = safeCfg.OverlapFactor,
+            EnableTta = false,
+            EnablePhaseFix = false,
+            EnforceEnergyConservation = false
+        };
+        int stepCount = Math.Max(1, plan.Steps.Count);
+        for (int s = 0; s < plan.Steps.Count; s++) {
+            token.ThrowIfCancellationRequested();
+            NeuralExecutionStep step = plan.Steps[s];
+            double stepStart = s / (double)stepCount;
+            double stepSpan = 1.0 / stepCount;
+            (StereoStemBuffer[] restored, _) = RunStepSeparation(
+                step, curL, curR, sampleRate, restoreCfg,
+                (p, msg) => onProgress?.Invoke(stepStart + p * stepSpan, msg), token);
+            if (restored.Length > 0 && restored[0].Left != null && restored[0].Right != null) {
+                curL = restored[0].Left;
+                curR = restored[0].Right;
+            }
+        }
+        return new StereoStemBuffer("restored", curL, curR);
+    }
+
     (StereoStemBuffer[] Stems, float RealTimeFactor) RunStepSeparation(
         NeuralExecutionStep step,
         float[] inLeft,
