@@ -15,7 +15,21 @@ import type {
   TabId,
   Vec3,
 } from './types/cavern';
-import { clamp, evaluateSourcePosition, formatTime } from './utils/spatialMath';
+import {
+  clamp,
+  evaluateSourcePosition,
+  formatTime,
+  isSourceActiveForVariant,
+} from './utils/spatialMath';
+import {
+  createDefaultScarlettState,
+  createDefaultVocalRackState,
+  type ScarlettHardwareControlState,
+  type VocalRackState,
+} from './utils/scarlettVocalDsp';
+
+const SETTINGS_STORAGE_KEY = 'cavernize_web_settings_v1';
+const SCARLETT_STORAGE_KEY = 'cavernize_web_scarlett_v1';
 
 const DEFAULT_SETTINGS: CavernSettings = {
   locale: 'en-US',
@@ -58,8 +72,44 @@ export function App() {
   const [listenerYawDeg, setListenerYawDeg] = useState<number>(0);
   const [listenerPitchDeg, setListenerPitchDeg] = useState<number>(0);
   const [sources, setSources] = useState<SpatialSourceNode[]>(() => createDefaultSpatialSources());
-  const [settings, setSettings] = useState<CavernSettings>(DEFAULT_SETTINGS);
+  const [settings, setSettings] = useState<CavernSettings>(() => {
+    try {
+      const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (!raw) return DEFAULT_SETTINGS;
+      const parsed = JSON.parse(raw) as Partial<CavernSettings>;
+      return {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        roomSize: {
+          ...DEFAULT_SETTINGS.roomSize,
+          ...(parsed.roomSize ?? {}),
+        },
+        quickEqFilters: Array.isArray(parsed.quickEqFilters) ? parsed.quickEqFilters : [],
+      };
+    } catch {
+      return DEFAULT_SETTINGS;
+    }
+  });
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [studioSubMode, setStudioSubMode] = useState<'scarlett-vocal' | 'converter'>('scarlett-vocal');
+  const [scarlett, setScarlett] = useState<ScarlettHardwareControlState>(() => {
+    try {
+      const raw = window.localStorage.getItem(SCARLETT_STORAGE_KEY);
+      if (!raw) return createDefaultScarlettState();
+      return { ...createDefaultScarlettState(), ...(JSON.parse(raw) as Partial<ScarlettHardwareControlState>) };
+    } catch {
+      return createDefaultScarlettState();
+    }
+  });
+  const [vocalRack, setVocalRack] = useState<VocalRackState>(() => createDefaultVocalRackState());
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SCARLETT_STORAGE_KEY, JSON.stringify(scarlett));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [scarlett]);
 
   const t = useMemo(() => getStrings(settings.locale), [settings.locale]);
 
@@ -83,6 +133,7 @@ export function App() {
     lfeBoostDb,
     settings,
     activeTrack,
+    activeVariant,
     isLooping,
     currentTimeSec,
   });
@@ -95,6 +146,7 @@ export function App() {
     lfeBoostDb,
     settings,
     activeTrack,
+    activeVariant,
     isLooping,
     currentTimeSec,
   };
@@ -116,6 +168,15 @@ export function App() {
       engine?.stop();
     };
   }, []);
+
+  // Persist settings cleanly across sessions
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [settings]);
 
   // Sync live QuickEQ filter edits while playing
   useEffect(() => {
@@ -149,15 +210,18 @@ export function App() {
       }
       playbackClockRef.current = nextTime;
 
-      // Compute updated 3D object positions & RMS meters
+      // Compute updated 3D object positions & RMS meters gated by active variant / upmix state
       const updatedSources = s.sources.map((src) => {
         const pos = evaluateSourcePosition(src, nextTime);
+        const activeByFormat = isSourceActiveForVariant(src, s.activeVariant, s.settings);
         const rmsBase = src.kind === 'object' ? 0.48 : src.kind === 'lfe' ? 0.52 : 0.3;
-        const rms = clamp(
-          rmsBase + 0.28 * Math.sin(nextTime * (src.kind === 'object' ? 2.4 : 1.1) + src.synthFreqHz * 0.02),
-          0.08,
-          0.95,
-        );
+        const rms = activeByFormat
+          ? clamp(
+              rmsBase + 0.28 * Math.sin(nextTime * (src.kind === 'object' ? 2.4 : 1.1) + src.synthFreqHz * 0.02),
+              0.08,
+              0.95,
+            )
+          : 0.02;
         return { ...src, position: pos, rms };
       });
 
@@ -170,6 +234,7 @@ export function App() {
         s.masterVolume,
         s.lfeBoostDb,
         s.settings,
+        s.activeVariant,
         nextTime,
       );
 
@@ -200,6 +265,8 @@ export function App() {
         masterVolume,
         lfeBoostDb,
         settings,
+        activeVariant,
+        isLooping,
         activeTrack.localBuffer,
         currentTimeSec,
       );
@@ -223,6 +290,8 @@ export function App() {
         masterVolume,
         lfeBoostDb,
         settings,
+        next.variants[0],
+        isLooping,
         next.localBuffer,
         0,
       );
@@ -252,6 +321,8 @@ export function App() {
         masterVolume,
         lfeBoostDb,
         settings,
+        activeVariant,
+        isLooping,
         activeTrack.localBuffer,
         clamped,
       );
@@ -312,9 +383,9 @@ export function App() {
       setActiveVariantId(newTrack.variants[0].id);
       playbackClockRef.current = 0;
       setCurrentTimeSec(0);
-      showToast(`Loaded ${file.name}`);
+      showToast(t.loadedLocalFile.replace('{file}', file.name));
     } catch {
-      showToast(`Could not decode ${file.name} in browser audio decoder`);
+      showToast(t.decodeLocalFailed.replace('{file}', file.name));
     }
   };
 
@@ -454,6 +525,13 @@ export function App() {
             onUpdateSettings={handleUpdateSettings}
             onOpenRoomTab={() => setActiveTab('room')}
             onUploadLocalFile={handleUploadLocalFile}
+            scarlett={scarlett}
+            vocalRack={vocalRack}
+            onUpdateVocalRack={(patch) => setVocalRack((prev) => ({ ...prev, ...patch }))}
+            onOpenScarlettConsole={() => {
+              setStudioSubMode('scarlett-vocal');
+              setActiveTab('studio');
+            }}
           />
         )}
 
@@ -488,7 +566,16 @@ export function App() {
             activeVariant={activeVariant}
             sources={sources}
             listenerPosition={listenerPosition}
+            listenerYawDeg={listenerYawDeg}
+            lfeBoostDb={lfeBoostDb}
             settings={settings}
+            studioSubMode={studioSubMode}
+            onStudioSubModeChange={setStudioSubMode}
+            scarlett={scarlett}
+            vocalRack={vocalRack}
+            onUpdateScarlett={setScarlett}
+            onUpdateVocalRack={(patch) => setVocalRack((prev) => ({ ...prev, ...patch }))}
+            onNotify={showToast}
           />
         )}
 
@@ -508,7 +595,7 @@ export function App() {
       {/* Quiet footer with active track readout */}
       <footer className="border-t border-white/8 bg-[#0A0C12]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[#99999E]">
-          <span>Cavernize Spatial Audio Studio · Built on the Cavern Acoustic Architecture</span>
+          <span>{t.footerTagline}</span>
           <span className="font-mono tabular-nums text-[#B7B7BB]">
             {activeTrack.title} · {formatTime(currentTimeSec)} / {formatTime(activeTrack.durationSec)}
           </span>

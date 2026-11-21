@@ -122,6 +122,7 @@ export interface RenderQueueItem {
   bakeRoomState: boolean;
   status: 'queued' | 'rendering' | 'done';
   progress: number;
+  report?: PostRenderReport;
 }
 
 export interface PostRenderReport {

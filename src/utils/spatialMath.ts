@@ -110,6 +110,50 @@ export function evaluateSourcePosition(source: SpatialSourceNode, timeSec: numbe
 }
 
 /**
+ * Transforms a world-space source coordinate into listener-relative coordinates
+ * taking listener position and horizontal head yaw rotation into account.
+ */
+export function transformToListenerFrame(
+  sourcePos: Vec3,
+  listenerPos: Vec3,
+  yawDeg: number,
+): Vec3 {
+  const dx = sourcePos.x - listenerPos.x;
+  const dy = sourcePos.y - listenerPos.y;
+  const dz = sourcePos.z - listenerPos.z;
+  const yawRad = (yawDeg * Math.PI) / 180;
+  const cosY = Math.cos(yawRad);
+  const sinY = Math.sin(yawRad);
+  // Rotate world vector inversely by listener yaw so +X is listener's right ear and +Z is ahead
+  return {
+    x: Number((dx * cosY - dz * sinY).toFixed(4)),
+    y: Number(dy.toFixed(4)),
+    z: Number((dx * sinY + dz * cosY).toFixed(4)),
+  };
+}
+
+/**
+ * Determines whether a spatial source channel/object should be active for the
+ * currently selected track format variant and Matrix 7.1 / Cavernize 3D upmixing settings.
+ */
+export function isSourceActiveForVariant(
+  source: Pick<SpatialSourceNode, 'id' | 'kind'>,
+  variant: { isSpatial: boolean; objectCount: number },
+  upmix: { matrixUpmix: boolean; cavernize3D: boolean },
+): boolean {
+  if (variant.isSpatial) {
+    if (source.kind === 'object') return variant.objectCount > 0;
+    return true;
+  }
+  // Stereo / non-spatial variant: L and R are always native
+  if (source.id === 'L' || source.id === 'R') return true;
+  if (source.kind === 'lfe' || source.kind === 'bed') return upmix.matrixUpmix;
+  if (source.kind === 'height') return upmix.cavernize3D;
+  if (source.kind === 'object') return upmix.cavernize3D;
+  return false;
+}
+
+/**
  * Projects a 3D world point in the Cavern room onto 2D viewport coordinates.
  */
 export function projectRoomPoint(

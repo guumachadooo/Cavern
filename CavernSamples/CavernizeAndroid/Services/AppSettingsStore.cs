@@ -673,6 +673,77 @@ public sealed class AppSettingsStore {
         MinSyncConfidence = 0.35f
     };
 
+    // Slot 1 / Slot 4: Pro-Audio Full-Duplex USB Engine (Path B libusb UAC2 + Path A AAudio/Oboe Exclusive, W10)
+    public bool ProAudioEnabled {
+        get => prefs.GetBoolean("proAudioEnabled", false);
+        set => Edit().PutBoolean("proAudioEnabled", value).Apply();
+    }
+
+    public int ProAudioPreferredPathIndex {
+        get => prefs.GetInt("proAudioPathIdx", (int)Cavernize.Logic.Spatial.ProAudioEnginePath.Auto);
+        set => Edit().PutInt("proAudioPathIdx", Math.Clamp(value, 0, 3)).Apply();
+    }
+
+    public int ProAudioBufferFrames {
+        get => prefs.GetInt("proAudioBufferFrames", (int)Cavernize.Logic.Spatial.ProAudioBufferPreset.Frames128);
+        set {
+            int safe = value <= 64 ? 64 : (value <= 128 ? 128 : 256);
+            Edit().PutInt("proAudioBufferFrames", safe).Apply();
+        }
+    }
+
+    public int ProAudioLockedSampleRate {
+        get => prefs.GetInt("proAudioLockedSr", 0);
+        set => Edit().PutInt("proAudioLockedSr", value).Apply();
+    }
+
+    public bool LiveMicEnabled {
+        get => prefs.GetBoolean("liveMicEnabled", false);
+        set => Edit().PutBoolean("liveMicEnabled", value).Apply();
+    }
+
+    public int LiveMicRoutingIndex {
+        get => prefs.GetInt("liveMicRoutingIdx", (int)Cavernize.Logic.Spatial.LiveMicRoutingMode.MonoChannel1);
+        set => Edit().PutInt("liveMicRoutingIdx", Math.Clamp(value, 0, 3)).Apply();
+    }
+
+    public float LiveMicInputGainDb {
+        get => prefs.GetFloat("liveMicInputGainDb", 0f);
+        set => Edit().PutFloat("liveMicInputGainDb", Math.Clamp(value, -18f, 24f)).Apply();
+    }
+
+    public float LiveMicMonitorLevel {
+        get => prefs.GetFloat("liveMicMonitorLevel", 0.85f);
+        set => Edit().PutFloat("liveMicMonitorLevel", Math.Clamp(value, 0f, 1.25f)).Apply();
+    }
+
+    public float CalibratedRoundTripSamples {
+        get => prefs.GetFloat("proAudioCalRttSamples", 0f);
+        set => Edit().PutFloat("proAudioCalRttSamples", Math.Clamp(value, 0f, 48000f)).Apply();
+    }
+
+    public float CalibratedRoundTripMs {
+        get => prefs.GetFloat("proAudioCalRttMs", 0f);
+        set => Edit().PutFloat("proAudioCalRttMs", Math.Clamp(value, 0f, 500f)).Apply();
+    }
+
+    public Cavernize.Logic.Spatial.ProAudioDuplexConfig BuildProAudioConfig() => new Cavernize.Logic.Spatial.ProAudioDuplexConfig {
+        Enabled = ProAudioEnabled,
+        PreferredPath = (Cavernize.Logic.Spatial.ProAudioEnginePath)Math.Clamp(ProAudioPreferredPathIndex, 0, 3),
+        BufferFrames = ProAudioBufferFrames <= 64
+            ? Cavernize.Logic.Spatial.ProAudioBufferPreset.Frames64
+            : (ProAudioBufferFrames <= 128
+                ? Cavernize.Logic.Spatial.ProAudioBufferPreset.Frames128
+                : Cavernize.Logic.Spatial.ProAudioBufferPreset.Frames256),
+        LockedSampleRateHz = ProAudioLockedSampleRate,
+        LiveMicEnabled = LiveMicEnabled,
+        MicRouting = (Cavernize.Logic.Spatial.LiveMicRoutingMode)Math.Clamp(LiveMicRoutingIndex, 0, 3),
+        MicInputGainDb = LiveMicInputGainDb,
+        MicMonitorLevel = LiveMicMonitorLevel,
+        CalibratedRoundTripSamples = CalibratedRoundTripSamples,
+        CalibratedRoundTripMs = CalibratedRoundTripMs
+    }.Sanitize();
+
     public string DeviceProfilesJson {
         get => prefs.GetString("deviceProfilesV1", "[]");
         set => Edit().PutString("deviceProfilesV1", value ?? "[]").Apply();

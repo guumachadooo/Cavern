@@ -29,13 +29,13 @@ interface RoomTabProps {
   onResetSoloMute: () => void;
 }
 
-const POSITION_PRESETS: Array<{ id: string; label: string; pos: Vec3 }> = [
-  { id: 'center', label: 'Center', pos: { x: 0, y: 0, z: 0 } },
-  { id: 'front', label: 'Front', pos: { x: 0, y: 0, z: 2.8 } },
-  { id: 'back', label: 'Back', pos: { x: 0, y: 0, z: -2.8 } },
-  { id: 'left', label: 'Left', pos: { x: -2.8, y: 0, z: 0 } },
-  { id: 'right', label: 'Right', pos: { x: 2.8, y: 0, z: 0 } },
-  { id: 'high', label: 'High', pos: { x: 0, y: 2.2, z: 0 } },
+const POSITION_PRESETS: Array<{ id: string; labelKey: StringKey; pos: Vec3 }> = [
+  { id: 'center', labelKey: 'presetCenter', pos: { x: 0, y: 0, z: 0 } },
+  { id: 'front', labelKey: 'presetFront', pos: { x: 0, y: 0, z: 2.8 } },
+  { id: 'back', labelKey: 'presetBack', pos: { x: 0, y: 0, z: -2.8 } },
+  { id: 'left', labelKey: 'presetLeft', pos: { x: -2.8, y: 0, z: 0 } },
+  { id: 'right', labelKey: 'presetRight', pos: { x: 2.8, y: 0, z: 0 } },
+  { id: 'high', labelKey: 'presetHigh', pos: { x: 0, y: 2.2, z: 0 } },
 ];
 
 export const RoomTab: React.FC<RoomTabProps> = ({
@@ -95,6 +95,7 @@ export const RoomTab: React.FC<RoomTabProps> = ({
         {/* Left 8 cols: 3D Volumetric Stage + Dedicated Head Gimbal & Height Dock */}
         <div className="xl:col-span-8 space-y-4">
           <RoomSimulatorCanvas
+            t={t}
             sources={sources}
             roomSize={settings.roomSize}
             listenerPosition={listenerPosition}
@@ -121,7 +122,7 @@ export const RoomTab: React.FC<RoomTabProps> = ({
                   onClick={() => onListenerOrientationChange(0, 0)}
                   className="text-xs text-[#89B0FF] hover:text-white"
                 >
-                  Center
+                  {t.centerBtn}
                 </button>
               </div>
 
@@ -202,7 +203,7 @@ export const RoomTab: React.FC<RoomTabProps> = ({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Sliders className="w-4 h-4 text-[#598FFF]" />
-                  <h3 className="text-sm font-semibold text-white">Sweet-Spot & Acoustics</h3>
+                  <h3 className="text-sm font-semibold text-white">{t.sweetSpotTitle}</h3>
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   {POSITION_PRESETS.map((preset) => (
@@ -213,7 +214,7 @@ export const RoomTab: React.FC<RoomTabProps> = ({
                       onClick={() => onListenerPositionChange(clampToRoom(preset.pos, settings.roomSize))}
                       className="px-2.5 py-1 text-xs font-medium rounded-md bg-[#1E1F27] hover:bg-[#387AFF]/25 disabled:opacity-40 text-[#E9E9EC] border border-white/8 transition-colors whitespace-nowrap shrink-0"
                     >
-                      {preset.label}
+                      {t[preset.labelKey]}
                     </button>
                   ))}
                 </div>
@@ -272,7 +273,7 @@ export const RoomTab: React.FC<RoomTabProps> = ({
                     onChange={(e) => onUpdateSettings({ distanceSimulation: e.target.checked })}
                     className="rounded accent-[#387AFF]"
                   />
-                  <span>Distance Cues (HRTF)</span>
+                  <span>{t.distanceCuesHrtf}</span>
                 </label>
 
                 <div className="flex items-center gap-2">
@@ -285,10 +286,10 @@ export const RoomTab: React.FC<RoomTabProps> = ({
                     onChange={(e) => onUpdateSettings({ rolloffMode: e.target.value as RolloffMode })}
                     className="px-2.5 py-1.5 text-xs rounded-lg bg-[#0C0E14] border border-white/12 text-white focus:outline-none focus:border-[#598FFF]"
                   >
-                    <option value="disabled">Disabled</option>
-                    <option value="logarithmic">Logarithmic</option>
-                    <option value="linear">Linear</option>
-                    <option value="real">Real (1/d)</option>
+                    <option value="disabled">{t.rolloffDisabled}</option>
+                    <option value="logarithmic">{t.rolloffLog}</option>
+                    <option value="linear">{t.rolloffLinear}</option>
+                    <option value="real">{t.rolloffReal}</option>
                   </select>
                 </div>
               </div>
@@ -302,7 +303,10 @@ export const RoomTab: React.FC<RoomTabProps> = ({
             <div>
               <h3 className="text-sm font-semibold text-white">{t.mixerTitle}</h3>
               <p className="text-xs text-[#99999E] font-mono tabular-nums mt-0.5">
-                {sources.length} sources · {soloCount} solo · {muteCount} muted
+                {t.mixerSummary
+                  .replace('{total}', String(sources.length))
+                  .replace('{solo}', String(soloCount))
+                  .replace('{muted}', String(muteCount))}
               </p>
             </div>
             {(soloCount > 0 || muteCount > 0) && (

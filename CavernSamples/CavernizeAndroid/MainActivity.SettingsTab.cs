@@ -13,6 +13,7 @@ using Cavern;
 using Cavern.Filters;
 using Cavern.Format;
 using Cavern.Format.Common;
+using Cavern.ProAudio;
 using Cavern.Utilities;
 using Cavern.Virtualizer;
 using Cavern.Waveforms;
@@ -66,6 +67,11 @@ public partial class MainActivity {
     OneUiSeekBar headTrackingPredictBar;
     TextView audioOutputDiagText, headTrackingStatusText;
     Button headTrackingOscPortBtn;
+    Switch proAudioEnabledSwitch, proAudioLiveMicSwitch;
+    OneUiInlineSelector proAudioPathSelector, proAudioBufferSelector, proAudioSrSelector, proAudioMicRouteSelector;
+    OneUiSeekBar proAudioMicGainBar, proAudioMicMonitorBar;
+    TextView proAudioStatusText, proAudioTelemetryText;
+    Button proAudioGrantUsbBtn, proAudioScarlettBtn;
     Switch ismRoomEnabledSwitch, nearFieldEnabledSwitch, airAbsorptionEnabledSwitch;
     OneUiInlineSelector ismRoomPresetSelector, ismWallMaterialSelector, ismOrderSelector;
     OneUiSeekBar ismLevelBar, airTempBar, airHumidityBar;
@@ -443,6 +449,149 @@ public partial class MainActivity {
         htActionsRow.AddView(headTrackingOscPortBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         slot4Card.AddView(htActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         page.AddView(slot4Card);
+
+        // 3C2. Slot 1 / Slot 4: W10 Pro-Audio Full-Duplex USB Engine (Path B libusb UAC2 + Path A AAudio Exclusive + Scarlett 2i2)
+        LinearLayout proAudioCard = Card(S["ProAudioCardTitle"], OneUiIconType.Sliders, OneUiTheme.IconSpatial);
+        proAudioEnabledSwitch = AddSwitchRow(proAudioCard, S["ProAudioEnableTitle"], store.ProAudioEnabled, v => {
+            store.ProAudioEnabled = v;
+            ApplyAndRefreshProAudio();
+        }, helpBody: S["TipProAudioEngine"]);
+
+        proAudioStatusText = Label("", 11.4f, OneUiTheme.TextPrimary);
+        proAudioStatusText.SetSingleLine(true);
+        proAudioStatusText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        proAudioCard.AddView(proAudioStatusText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(2),
+            BottomMargin = Dp(2)
+        });
+
+        proAudioTelemetryText = Label("", 10.8f, OneUiTheme.TextMuted);
+        proAudioTelemetryText.SetSingleLine(true);
+        proAudioTelemetryText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        proAudioCard.AddView(proAudioTelemetryText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        proAudioPathSelector = new OneUiInlineSelector(this, S["ProAudioPathTitle"]);
+        string[] proAudioPathLabels = [
+            S["ProAudioPathAuto"],
+            S["ProAudioPathB"],
+            S["ProAudioPathA"],
+            S["ProAudioPathLegacy"]
+        ];
+        proAudioPathSelector.SetItems(proAudioPathLabels, Math.Clamp(store.ProAudioPreferredPathIndex, 0, proAudioPathLabels.Length - 1));
+        proAudioPathSelector.SelectionChanged += pos => {
+            store.ProAudioPreferredPathIndex = pos;
+            ApplyAndRefreshProAudio();
+        };
+        proAudioCard.AddView(proAudioPathSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        proAudioBufferSelector = new OneUiInlineSelector(this, S["ProAudioBufferTitle"]);
+        string[] proAudioBufLabels = [S["ProAudioBuf64"], S["ProAudioBuf128"], S["ProAudioBuf256"]];
+        int initialBufIdx = store.ProAudioBufferFrames <= 64 ? 0 : (store.ProAudioBufferFrames <= 128 ? 1 : 2);
+        proAudioBufferSelector.SetItems(proAudioBufLabels, initialBufIdx);
+        proAudioBufferSelector.SelectionChanged += pos => {
+            store.ProAudioBufferFrames = pos == 0 ? 64 : (pos == 1 ? 128 : 256);
+            ApplyAndRefreshProAudio();
+        };
+        proAudioCard.AddView(proAudioBufferSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        proAudioSrSelector = new OneUiInlineSelector(this, S["ProAudioSampleRateTitle"]);
+        string[] proAudioSrLabels = [S["ProAudioSrAuto"], "44.1 kHz", "48 kHz", "96 kHz", "192 kHz"];
+        int[] proAudioSrValues = [0, 44100, 48000, 96000, 192000];
+        int initialSrIdx = Array.IndexOf(proAudioSrValues, store.ProAudioLockedSampleRate);
+        proAudioSrSelector.SetItems(proAudioSrLabels, initialSrIdx >= 0 ? initialSrIdx : 0);
+        proAudioSrSelector.SelectionChanged += pos => {
+            store.ProAudioLockedSampleRate = proAudioSrValues[Math.Clamp(pos, 0, proAudioSrValues.Length - 1)];
+            ApplyAndRefreshProAudio();
+        };
+        proAudioCard.AddView(proAudioSrSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        AddDivider(proAudioCard);
+        proAudioLiveMicSwitch = AddSwitchRow(proAudioCard, S["ProAudioLiveMicTitle"], store.LiveMicEnabled, v => {
+            store.LiveMicEnabled = v;
+            if (v) {
+                RequestRecordAudioPermissionIfNeeded();
+                if (!store.ProAudioEnabled) {
+                    store.ProAudioEnabled = true;
+                }
+            }
+            ApplyAndRefreshProAudio();
+        }, helpBody: S["TipProAudioLiveMic"]);
+
+        proAudioMicRouteSelector = new OneUiInlineSelector(this, S["ProAudioMicRouteTitle"]);
+        string[] micRouteLabels = [
+            S["ProAudioMicOff"],
+            S["ProAudioMicCh1"],
+            S["ProAudioMicCh2"],
+            S["ProAudioMicStereo"]
+        ];
+        proAudioMicRouteSelector.SetItems(micRouteLabels, Math.Clamp(store.LiveMicRoutingIndex, 0, micRouteLabels.Length - 1));
+        proAudioMicRouteSelector.SelectionChanged += pos => {
+            store.LiveMicRoutingIndex = pos;
+            ApplyAndRefreshProAudio();
+        };
+        proAudioCard.AddView(proAudioMicRouteSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(4),
+            BottomMargin = Dp(8)
+        });
+
+        (proAudioMicGainBar, _) = AddSliderRow(
+            proAudioCard,
+            S["ProAudioMicGainTitle"],
+            -18,
+            24,
+            Math.Clamp((int)MathF.Round(store.LiveMicInputGainDb), -18, 24),
+            v => {
+                store.LiveMicInputGainDb = v;
+                ApplyAndRefreshProAudio();
+            },
+            " dB",
+            defaultValue: 0);
+
+        (proAudioMicMonitorBar, _) = AddSliderRow(
+            proAudioCard,
+            S["ProAudioMicMonitorTitle"],
+            0,
+            125,
+            Math.Clamp((int)MathF.Round(store.LiveMicMonitorLevel * 100f), 0, 125),
+            v => {
+                store.LiveMicMonitorLevel = v * 0.01f;
+                ApplyAndRefreshProAudio();
+            },
+            "%",
+            defaultValue: 85);
+
+        LinearLayout proAudioRow1 = HRow();
+        proAudioGrantUsbBtn = PillButton(S["ProAudioGrantUsbBtn"], () => {
+            if (usbProAudioManager != null && usbProAudioManager.RequestUsbPermission()) {
+                ShowToast(S["ProAudioUsbRequestedToast"]);
+            } else {
+                ShowToast(S["ProAudioUsbNoDeviceToast"]);
+            }
+            RefreshProAudioUi();
+        }, active: true);
+        Button calibrateRttBtn = PillButton(S["ProAudioCalibrateRttBtn"], ShowCalibrateRttModal);
+        proAudioRow1.AddView(proAudioGrantUsbBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(8) });
+        proAudioRow1.AddView(calibrateRttBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.95f));
+        proAudioCard.AddView(proAudioRow1, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(4),
+            BottomMargin = Dp(8)
+        });
+
+        LinearLayout proAudioRow2 = HRow();
+        proAudioScarlettBtn = PillButton(S["ScarlettControlsBtn"], ShowScarlett2i2ControlsModal);
+        Button proAudioCreditsBtn = PillButton(S["ProAudioCreditsBtn"], ShowProAudioCreditsModal);
+        proAudioRow2.AddView(proAudioScarlettBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.05f) { RightMargin = Dp(8) });
+        proAudioRow2.AddView(proAudioCreditsBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.95f));
+        proAudioCard.AddView(proAudioRow2, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        page.AddView(proAudioCard);
 
         // 3D. Slot 5A: Physical Externalization (Allen & Berkley ISM Room, Duda & Martens Near-Field DVF & ISO 9613-1)
         LinearLayout slot5aCard = Card(S["Slot5ACardTitle"], OneUiIconType.Speaker, OneUiTheme.IconSpatial);
@@ -3247,6 +3396,419 @@ public partial class MainActivity {
             S["LgsrLicensesTitle"],
             Cavernize.Logic.Spatial.LgsrDiagnostics.BuildAttributionNotice(),
             icon: OneUiIconType.Sliders,
+            iconBadgeColor: OneUiTheme.IconSystemInfo,
+            positiveText: S["CloseBtn"]);
+    }
+
+    // Slot 1 / Slot 4: W10 Pro-Audio Full-Duplex USB Engine & Focusrite Scarlett 2i2 Helpers
+    void ApplyAndRefreshProAudio() {
+        if (store == null) {
+            return;
+        }
+        Cavernize.Logic.Spatial.ProAudioDuplexConfig cfg = store.BuildProAudioConfig();
+        audioOutput?.ApplyProAudioConfig(cfg);
+        if (cfg.Enabled && cfg.LiveMicEnabled && audioOutput != null) {
+            audioOutput.Start();
+        }
+        RefreshProAudioUi();
+    }
+
+    void RefreshProAudioUi() {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        if (proAudioEnabledSwitch != null && proAudioEnabledSwitch.Checked != store.ProAudioEnabled) {
+            proAudioEnabledSwitch.Checked = store.ProAudioEnabled;
+        }
+        if (proAudioLiveMicSwitch != null && proAudioLiveMicSwitch.Checked != store.LiveMicEnabled) {
+            proAudioLiveMicSwitch.Checked = store.LiveMicEnabled;
+        }
+        if (proAudioPathSelector != null) {
+            int pIdx = Math.Clamp(store.ProAudioPreferredPathIndex, 0, 3);
+            if (proAudioPathSelector.SelectedIndex != pIdx) {
+                proAudioPathSelector.SetSelection(pIdx, notify: false);
+            }
+        }
+        if (proAudioBufferSelector != null) {
+            int bIdx = store.ProAudioBufferFrames <= 64 ? 0 : (store.ProAudioBufferFrames <= 128 ? 1 : 2);
+            if (proAudioBufferSelector.SelectedIndex != bIdx) {
+                proAudioBufferSelector.SetSelection(bIdx, notify: false);
+            }
+        }
+        if (proAudioMicRouteSelector != null) {
+            int mIdx = Math.Clamp(store.LiveMicRoutingIndex, 0, 3);
+            if (proAudioMicRouteSelector.SelectedIndex != mIdx) {
+                proAudioMicRouteSelector.SetSelection(mIdx, notify: false);
+            }
+        }
+
+        Cavernize.Logic.Spatial.ProAudioDuplexDiagnostics diag =
+            audioOutput?.ProAudioDiagnostics ?? Cavernize.Logic.Spatial.ProAudioDuplexDiagnostics.Default;
+        UsbProAudioDeviceSnapshot usbSnap = usbProAudioManager?.CurrentSnapshot;
+
+        if (proAudioStatusText != null) {
+            string backendLabel = diag.ActiveBackend switch {
+                Cavernize.Logic.Spatial.ActiveProAudioBackendKind.LibUsbUac2Direct => S["ProAudioBackendPathB"],
+                Cavernize.Logic.Spatial.ActiveProAudioBackendKind.AAudioOboeFullDuplex => S["ProAudioBackendPathA"],
+                _ => S["ProAudioBackendLegacy"]
+            };
+            string calTag = diag.IsLatencyCalibrated ? S["ProAudioCalibratedTag"] : string.Empty;
+            proAudioStatusText.Text = string.Format(
+                S["ProAudioStatusFormat"],
+                backendLabel,
+                diag.SampleRate / 1000.0,
+                diag.BitDepth,
+                diag.BufferFrames,
+                diag.RoundTripLatencyMs,
+                calTag);
+            proAudioStatusText.SetTextColor(
+                diag.ActiveBackend == Cavernize.Logic.Spatial.ActiveProAudioBackendKind.LibUsbUac2Direct
+                    ? OneUiTheme.IconSystemInfo
+                    : (diag.ActiveBackend == Cavernize.Logic.Spatial.ActiveProAudioBackendKind.AAudioOboeFullDuplex
+                        ? OneUiTheme.Primary
+                        : OneUiTheme.TextSub));
+        }
+
+        if (proAudioTelemetryText != null) {
+            if (usbSnap != null && usbSnap.IsAttached && !usbSnap.HasPermission) {
+                proAudioTelemetryText.Text = string.Format(S["ProAudioUsbWaitingPerm"], usbSnap.DisplayName);
+                proAudioTelemetryText.SetTextColor(OneUiTheme.PeachText);
+            } else if (!store.ProAudioEnabled && (usbSnap == null || !usbSnap.IsAttached)) {
+                proAudioTelemetryText.Text = S["ProAudioNoUsbAttached"];
+                proAudioTelemetryText.SetTextColor(OneUiTheme.TextMuted);
+            } else {
+                string syncMode = string.IsNullOrEmpty(diag.ClockSyncMode) ? "-" : diag.ClockSyncMode;
+                proAudioTelemetryText.Text = string.Format(
+                    S["ProAudioTelemetryFormat"],
+                    syncMode,
+                    diag.AsyncClockDriftPpm,
+                    diag.OutputXRuns,
+                    diag.InputXRuns,
+                    diag.MicPeakDbfs);
+                proAudioTelemetryText.SetTextColor(OneUiTheme.TextMuted);
+            }
+        }
+    }
+
+    void ShowCalibrateRttModal() {
+        OneUiModalDialog.Show(
+            this,
+            S["ProAudioCalibrateModalTitle"],
+            S["ProAudioCalibrateModalBody"],
+            icon: OneUiIconType.Bolt,
+            iconBadgeColor: OneUiTheme.IconSpatial,
+            positiveText: S["ProAudioCalibrateStartBtn"],
+            onPositive: () => {
+                RequestRecordAudioPermissionIfNeeded();
+                if (!store.ProAudioEnabled) {
+                    store.ProAudioEnabled = true;
+                }
+                audioOutput?.ApplyProAudioConfig(store.BuildProAudioConfig());
+                audioOutput?.Start();
+                ShowToast(S["ProAudioCalibrateRunningToast"]);
+                playerEngine?.StartRoundTripLatencyCalibration(result => RunOnUiThread(() => {
+                    if (uiDestroyed || result == null) {
+                        return;
+                    }
+                    if (result.IsValid) {
+                        store.CalibratedRoundTripSamples = (float)result.DelaySamples;
+                        store.CalibratedRoundTripMs = (float)result.RoundTripMs;
+                        ApplyAndRefreshProAudio();
+                        ShowToast(string.Format(
+                            S["ProAudioCalibrateSuccessToast"],
+                            result.RoundTripMs,
+                            result.DelaySamples,
+                            result.ConfidenceSnr));
+                    } else {
+                        ShowToast(string.Format(S["ProAudioCalibrateFailedToast"], result.ConfidenceSnr));
+                    }
+                }));
+            },
+            negativeText: S["CancelBtn"]);
+    }
+
+    void ShowScarlett2i2ControlsModal() {
+        UsbProAudioDeviceSnapshot snap = usbProAudioManager?.ScanAttachedDevices(autoOpenIfPermitted: true);
+        ScarlettHardwareState st = usbProAudioManager?.ScarlettState;
+
+        if (snap == null || !snap.IsAttached || !snap.HasPermission || st == null || st.Generation == ScarlettGeneration.None) {
+            OneUiModalDialog.Show(
+                this,
+                S["ScarlettModalTitle"],
+                S["ScarlettNotConnectedMsg"],
+                icon: OneUiIconType.Sliders,
+                iconBadgeColor: OneUiTheme.IconSpatial,
+                positiveText: S["ProAudioGrantUsbBtn"],
+                onPositive: () => {
+                    usbProAudioManager?.RequestUsbPermission();
+                    RefreshProAudioUi();
+                },
+                negativeText: S["CloseBtn"]);
+            return;
+        }
+
+        if (st.Generation == ScarlettGeneration.Gen2) {
+            OneUiModalDialog.Show(
+                this,
+                st.ModelName,
+                S["ScarlettGen2Notice"],
+                icon: OneUiIconType.Sliders,
+                iconBadgeColor: OneUiTheme.IconSpatial,
+                positiveText: S["CloseBtn"]);
+            return;
+        }
+
+        usbProAudioManager.TryInitializeScarlettControl(exitMsdMode: false);
+        usbProAudioManager.ReadScarlettHardwareState();
+        st = usbProAudioManager.ScarlettState;
+
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
+        TextView modelHdr = Label($"{st.ModelName} (PID 0x{st.ProductId:X4})", 13f, OneUiTheme.Primary, bold: true);
+        content.AddView(modelHdr, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(4)
+        });
+
+        TextView safetyNote = Label(S["Scarlett48vSafetyNote"], 11.2f, OneUiTheme.PeachText);
+        content.AddView(safetyNote, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        bool linked = st.InputsLinked;
+        if (st.SupportsStereoLink) {
+            AddSwitchRow(content, S["ScarlettLinkTitle"], linked, v => {
+                linked = v;
+                usbProAudioManager.SetScarlettGen4InputLink(v);
+            });
+            AddDivider(content);
+        }
+
+        bool ch1Phantom = st.PhantomPowerCh1;
+        bool ch2Phantom = st.PhantomPowerCh2;
+        AddSwitchRow(content, S["Scarlett48vCh1Title"], ch1Phantom, v => {
+            ch1Phantom = v;
+            if (!st.SupportsIndependentPreampGain || linked) {
+                ch2Phantom = v;
+            }
+            usbProAudioManager.SetScarlettPhantomPower(ch1Phantom, ch2Phantom);
+        });
+
+        if (st.SupportsIndependentPreampGain) {
+            AddDivider(content);
+            AddSwitchRow(content, S["Scarlett48vCh2Title"], ch2Phantom, v => {
+                ch2Phantom = v;
+                if (linked) {
+                    ch1Phantom = v;
+                }
+                usbProAudioManager.SetScarlettPhantomPower(ch1Phantom, ch2Phantom);
+            });
+        }
+
+        AddDivider(content);
+        ScarlettAirMode air1 = st.AirCh1;
+        ScarlettAirMode air2 = st.AirCh2;
+        string[] airLabels = st.Generation == ScarlettGeneration.Gen4
+            ? [S["ScarlettAirOff"], S["ScarlettAirPresence"], S["ScarlettAirDrive"]]
+            : [S["ScarlettAirOff"], S["ScarlettAirPresence"]];
+
+        OneUiInlineSelector air1Sel = new(this, S["ScarlettAirCh1Title"]);
+        air1Sel.SetItems(airLabels, Math.Clamp((int)air1, 0, airLabels.Length - 1));
+        air1Sel.SelectionChanged += pos => {
+            air1 = (ScarlettAirMode)pos;
+            if (linked) {
+                air2 = air1;
+            }
+            usbProAudioManager.SetScarlettAirMode(air1, air2);
+        };
+        content.AddView(air1Sel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(4),
+            BottomMargin = Dp(6)
+        });
+
+        OneUiInlineSelector air2Sel = new(this, S["ScarlettAirCh2Title"]);
+        air2Sel.SetItems(airLabels, Math.Clamp((int)air2, 0, airLabels.Length - 1));
+        air2Sel.SelectionChanged += pos => {
+            air2 = (ScarlettAirMode)pos;
+            if (linked) {
+                air1 = air2;
+            }
+            usbProAudioManager.SetScarlettAirMode(air1, air2);
+        };
+        content.AddView(air2Sel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(6)
+        });
+
+        bool inst1 = st.InstrumentModeCh1;
+        bool inst2 = st.InstrumentModeCh2;
+        AddSwitchRow(content, S["ScarlettInstCh1Title"], inst1, v => {
+            inst1 = v;
+            if (linked) {
+                inst2 = v;
+            }
+            usbProAudioManager.SetScarlettInstrumentMode(inst1, inst2);
+        });
+        AddDivider(content);
+        AddSwitchRow(content, S["ScarlettInstCh2Title"], inst2, v => {
+            inst2 = v;
+            if (linked) {
+                inst1 = v;
+            }
+            usbProAudioManager.SetScarlettInstrumentMode(inst1, inst2);
+        });
+
+        AddDivider(content);
+        OneUiInlineSelector dmSel = new(this, S["ScarlettDirectMonTitle"]);
+        string[] dmLabels = [S["ScarlettDirectMonOff"], S["ScarlettDirectMonMono"], S["ScarlettDirectMonStereo"]];
+        dmSel.SetItems(dmLabels, Math.Clamp((int)st.DirectMonitor, 0, dmLabels.Length - 1));
+        dmSel.SelectionChanged += pos => {
+            usbProAudioManager.SetScarlettDirectMonitor((ScarlettDirectMonitorMode)pos);
+        };
+        content.AddView(dmSel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(4),
+            BottomMargin = Dp(6)
+        });
+
+        if (st.SupportsIndependentPreampGain) {
+            float g1 = st.InputGainCh1Db;
+            float g2 = st.InputGainCh2Db;
+            bool safe1 = st.ClipSafeCh1;
+            bool safe2 = st.ClipSafeCh2;
+            bool outMute = st.OutputMute;
+            bool outDim = st.OutputDim;
+
+            AddDivider(content);
+            AddSliderRow(content, S["ScarlettGainCh1Title"], 0, 69, (int)MathF.Round(g1), v => {
+                g1 = v;
+                if (linked) {
+                    g2 = v;
+                }
+                usbProAudioManager.SetScarlettGen4PreampGain(g1, g2);
+            }, " dB", defaultValue: 24);
+            AddSliderRow(content, S["ScarlettGainCh2Title"], 0, 69, (int)MathF.Round(g2), v => {
+                g2 = v;
+                if (linked) {
+                    g1 = v;
+                }
+                usbProAudioManager.SetScarlettGen4PreampGain(g1, g2);
+            }, " dB", defaultValue: 24);
+
+            // Gen 4 Hardware Auto Gain controls (Ch 1, Ch 2, Cancel + live status)
+            TextView autoGainStatusLabel = Label(
+                string.Format(S["ScarlettAutoGainStatusFormat"], st.AutoGainStatusCh1, st.AutoGainStatusCh2),
+                11.2f,
+                OneUiTheme.TextSub);
+            content.AddView(autoGainStatusLabel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                TopMargin = Dp(4),
+                BottomMargin = Dp(4)
+            });
+
+            LinearLayout autoRow = HRow();
+            Button auto1Btn = PillButton(S["ScarlettAutoGainCh1Btn"], () => {
+                if (usbProAudioManager.StartScarlettGen4AutoGain(linked ? -1 : 0)) {
+                    autoGainStatusLabel.Text = string.Format(S["ScarlettAutoGainStatusFormat"],
+                        usbProAudioManager.ScarlettState.AutoGainStatusCh1,
+                        usbProAudioManager.ScarlettState.AutoGainStatusCh2);
+                    ShowToast(S["ScarlettAutoGainRunningToast"]);
+                }
+            }, active: true);
+            Button auto2Btn = PillButton(S["ScarlettAutoGainCh2Btn"], () => {
+                if (usbProAudioManager.StartScarlettGen4AutoGain(linked ? -1 : 1)) {
+                    autoGainStatusLabel.Text = string.Format(S["ScarlettAutoGainStatusFormat"],
+                        usbProAudioManager.ScarlettState.AutoGainStatusCh1,
+                        usbProAudioManager.ScarlettState.AutoGainStatusCh2);
+                    ShowToast(S["ScarlettAutoGainRunningToast"]);
+                }
+            });
+            Button autoStopBtn = PillButton(S["ScarlettAutoGainCancelBtn"], () => {
+                usbProAudioManager.CancelScarlettGen4AutoGain();
+                usbProAudioManager.PollScarlettGen4AutoGainStatus(out ScarlettAutoGainStatus s1, out ScarlettAutoGainStatus s2);
+                autoGainStatusLabel.Text = string.Format(S["ScarlettAutoGainStatusFormat"], s1, s2);
+            });
+            autoRow.AddView(auto1Btn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+            autoRow.AddView(auto2Btn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+            autoRow.AddView(autoStopBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.85f));
+            content.AddView(autoRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(6)
+            });
+
+            AddSwitchRow(content, S["ScarlettClipSafeCh1Title"], safe1, v => {
+                safe1 = v;
+                if (linked) {
+                    safe2 = v;
+                }
+                usbProAudioManager.SetScarlettGen4ClipSafe(safe1, safe2);
+            });
+            AddDivider(content);
+            AddSwitchRow(content, S["ScarlettClipSafeCh2Title"], safe2, v => {
+                safe2 = v;
+                if (linked) {
+                    safe1 = v;
+                }
+                usbProAudioManager.SetScarlettGen4ClipSafe(safe1, safe2);
+            });
+            AddDivider(content);
+            AddSliderRow(content, S["ScarlettDirectMonMixTitle"], 0, 100, st.DirectMonitorMixPct, v => {
+                usbProAudioManager.SetScarlettDirectMonitorMix(v);
+            }, "%", defaultValue: 50);
+            AddSwitchRow(content, S["ScarlettOutputMuteTitle"], outMute, v => {
+                outMute = v;
+                usbProAudioManager.SetScarlettOutputMuteDim(outMute, outDim);
+            });
+            AddDivider(content);
+            AddSwitchRow(content, S["ScarlettOutputDimTitle"], outDim, v => {
+                outDim = v;
+                usbProAudioManager.SetScarlettOutputMuteDim(outMute, outDim);
+            });
+            AddDivider(content);
+            AddSwitchRow(content, S["ScarlettLoopbackTitle"], st.LoopbackEnabled, v => {
+                usbProAudioManager.SetScarlettLoopback(v);
+            });
+        }
+
+        TextView meterLabel = Label(
+            string.Format(S["ScarlettMetersFormat"], st.InputMeterCh1Dbfs, st.InputMeterCh2Dbfs),
+            11.4f,
+            OneUiTheme.TextSub);
+        content.AddView(meterLabel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(6),
+            BottomMargin = Dp(8)
+        });
+
+        LinearLayout actionRow = HRow();
+        Button metersBtn = PillButton(S["ScarlettReadMetersBtn"], () => {
+            if (usbProAudioManager.PollScarlettHardwareMeters(out float m1, out float m2)) {
+                meterLabel.Text = string.Format(S["ScarlettMetersFormat"], m1, m2);
+            }
+        }, active: true);
+        Button saveBtn = PillButton(S["ScarlettSaveNvramBtn"], () => {
+            if (usbProAudioManager.SaveScarlettConfigToNvram()) {
+                ShowToast(S["ScarlettSaveNvramDoneToast"]);
+            }
+        });
+        Button msdBtn = PillButton(S["ScarlettExitMsdBtn"], () => {
+            if (usbProAudioManager.TryInitializeScarlettControl(exitMsdMode: true)) {
+                ShowToast(S["ScarlettExitMsdDoneToast"]);
+            }
+        });
+        actionRow.AddView(metersBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        actionRow.AddView(saveBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        actionRow.AddView(msdBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        content.AddView(actionRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+        OneUiModalDialog.Show(
+            this,
+            S["ScarlettModalTitle"],
+            customContent: content,
+            icon: OneUiIconType.Sliders,
+            iconBadgeColor: OneUiTheme.IconSpatial,
+            positiveText: S["CloseBtn"]);
+    }
+
+    void ShowProAudioCreditsModal() {
+        OneUiModalDialog.Show(
+            this,
+            S["ProAudioCreditsTitle"],
+            Cavernize.Logic.Spatial.ProAudioDuplexDiagnostics.BuildAttributionNotice(),
+            icon: OneUiIconType.Info,
             iconBadgeColor: OneUiTheme.IconSystemInfo,
             positiveText: S["CloseBtn"]);
     }

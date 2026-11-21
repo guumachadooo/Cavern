@@ -8,8 +8,10 @@ import {
   encodeWavPcm16,
   evaluateSourcePosition,
   formatTime,
+  isSourceActiveForVariant,
   parseQuickEqText,
   projectRoomPoint,
+  transformToListenerFrame,
 } from './spatialMath';
 import { createDefaultSpatialSources } from '../data/catalog';
 
@@ -45,6 +47,22 @@ test('computeListenerOrientation maps 0 yaw/pitch to forward +Z and up +Y', () =
   assert.equal(forward.y, 0);
   assert.equal(forward.z, 1);
   assert.equal(up.y, 1);
+});
+
+test('transformToListenerFrame rotates front source to left ear when listener turns right 90 deg', () => {
+  const rel = transformToListenerFrame({ x: 0, y: 0, z: 4 }, { x: 0, y: 0, z: 0 }, 90);
+  assert.ok(rel.x < -3.9);
+  assert.ok(Math.abs(rel.z) < 0.01);
+});
+
+test('isSourceActiveForVariant gates surround and height channels on stereo variants by upmix toggles', () => {
+  const stereo = { isSpatial: false, objectCount: 0 };
+  assert.equal(isSourceActiveForVariant({ id: 'L', kind: 'bed' }, stereo, { matrixUpmix: false, cavernize3D: false }), true);
+  assert.equal(isSourceActiveForVariant({ id: 'Ls', kind: 'bed' }, stereo, { matrixUpmix: false, cavernize3D: false }), false);
+  assert.equal(isSourceActiveForVariant({ id: 'Ls', kind: 'bed' }, stereo, { matrixUpmix: true, cavernize3D: false }), true);
+  assert.equal(isSourceActiveForVariant({ id: 'Ltf', kind: 'height' }, stereo, { matrixUpmix: true, cavernize3D: false }), false);
+  assert.equal(isSourceActiveForVariant({ id: 'Ltf', kind: 'height' }, stereo, { matrixUpmix: false, cavernize3D: true }), true);
+  assert.equal(isSourceActiveForVariant({ id: 'Obj1', kind: 'object' }, { isSpatial: true, objectCount: 4 }, { matrixUpmix: false, cavernize3D: false }), true);
 });
 
 test('evaluateSourcePosition moves dynamic 3D objects over time while keeping beds fixed', () => {

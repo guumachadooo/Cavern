@@ -36,9 +36,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-white">{t.settingsTitle}</h2>
-          <p className="text-sm text-[#99999E] mt-0.5">
-            12 laboratory-measured 48 kHz HRIR/BRIR profiles, Cavernize 3D upmixing, and QuickEQ room correction
-          </p>
+          <p className="text-sm text-[#99999E] mt-0.5">{t.settingsSubtitle}</p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -104,7 +102,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
         {settings.customHrirName && (
           <div className="px-3.5 py-2.5 rounded-xl bg-[#387AFF]/15 border border-[#598FFF]/40 text-xs text-[#C2D8FF]">
-            Custom imported HRIR active: <span className="font-mono font-semibold">{settings.customHrirName}</span>
+            {t.customHrirActive} <span className="font-mono font-semibold">{settings.customHrirName}</span>
           </div>
         )}
 
@@ -225,18 +223,18 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
           </div>
         </div>
 
-        {/* Calibration, QuickEQ & Dynamics */}
+        {/* Calibration, QuickEQ, Room Geometry & Dynamics */}
         <div className="bg-[#15161C] border border-white/10 rounded-2xl p-5 space-y-4">
           <h3 className="text-sm font-semibold text-white">{t.calibrationSection}</h3>
 
           <div className="p-3.5 rounded-xl bg-[#1C1E27] border border-white/8 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-medium text-white">
-                QuickEQ / Equalizer APO Filters ({settings.quickEqFilters.length} active)
+                {t.quickEqTitle.replace('{count}', String(settings.quickEqFilters.length))}
               </span>
               <div className="flex items-center gap-2">
                 <label className="px-2.5 py-1 text-xs rounded-md bg-[#387AFF]/20 hover:bg-[#387AFF]/35 text-[#89B0FF] cursor-pointer">
-                  Load .txt
+                  {t.loadTxt}
                   <input
                     type="file"
                     accept=".txt"
@@ -258,7 +256,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                   }
                   className="px-2.5 py-1 text-xs rounded-md bg-white/8 hover:bg-white/14 text-[#E9E9EC]"
                 >
-                  Load Reference Curve
+                  {t.loadRefCurve}
                 </button>
                 {settings.quickEqFilters.length > 0 && (
                   <button
@@ -288,23 +286,21 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-[#99999E]">
-                No room calibration EQ loaded. Import a QuickEQ `.txt` file or load the reference curve.
-              </p>
+              <p className="text-xs text-[#99999E]">{t.quickEqEmpty}</p>
             )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <div className="flex justify-between text-xs text-[#99999E] mb-1">
-                <span>Render Gain</span>
+                <span>{t.renderGainLabel}</span>
                 <span className="font-mono tabular-nums text-white">
                   {settings.renderGainDb >= 0 ? `+${settings.renderGainDb}` : settings.renderGainDb} dB
                 </span>
               </div>
               <input
                 type="range"
-                aria-label="Render Gain dB"
+                aria-label={t.renderGainLabel}
                 min={-12}
                 max={6}
                 step={0.5}
@@ -316,12 +312,12 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
 
             <div>
               <div className="flex justify-between text-xs text-[#99999E] mb-1">
-                <span>Height Squeeze</span>
+                <span>{t.heightSqueezeLabel}</span>
                 <span className="font-mono tabular-nums text-white">{settings.heightSqueezePct}%</span>
               </div>
               <input
                 type="range"
-                aria-label="Height Squeeze percent"
+                aria-label={t.heightSqueezeLabel}
                 min={0}
                 max={100}
                 step={5}
@@ -329,6 +325,78 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 onChange={(e) => onUpdateSettings({ heightSqueezePct: Number(e.target.value) })}
                 className="cavern-slider w-full"
               />
+            </div>
+          </div>
+
+          {/* Acoustic Room Dimensions wired directly to 3D Room Canvas */}
+          <div className="p-3.5 rounded-xl bg-[#1C1E27] border border-white/8 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-white">{t.roomDimensionsTitle}</span>
+              <span className="text-[11px] font-mono tabular-nums text-[#89B0FF]">
+                {settings.roomSize.x} × {settings.roomSize.y} × {settings.roomSize.z} m
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <div className="flex justify-between text-[11px] text-[#99999E] mb-1">
+                  <span>{t.roomWidth}</span>
+                  <span className="font-mono tabular-nums text-white">{settings.roomSize.x}m</span>
+                </div>
+                <input
+                  type="range"
+                  aria-label={t.roomWidth}
+                  min={6}
+                  max={16}
+                  step={1}
+                  value={settings.roomSize.x}
+                  onChange={(e) =>
+                    onUpdateSettings({
+                      roomSize: { ...settings.roomSize, x: Number(e.target.value) },
+                    })
+                  }
+                  className="cavern-slider w-full"
+                />
+              </div>
+              <div>
+                <div className="flex justify-between text-[11px] text-[#99999E] mb-1">
+                  <span>{t.roomHeight}</span>
+                  <span className="font-mono tabular-nums text-white">{settings.roomSize.y}m</span>
+                </div>
+                <input
+                  type="range"
+                  aria-label={t.roomHeight}
+                  min={4}
+                  max={12}
+                  step={1}
+                  value={settings.roomSize.y}
+                  onChange={(e) =>
+                    onUpdateSettings({
+                      roomSize: { ...settings.roomSize, y: Number(e.target.value) },
+                    })
+                  }
+                  className="cavern-slider w-full"
+                />
+              </div>
+              <div>
+                <div className="flex justify-between text-[11px] text-[#99999E] mb-1">
+                  <span>{t.roomDepth}</span>
+                  <span className="font-mono tabular-nums text-white">{settings.roomSize.z}m</span>
+                </div>
+                <input
+                  type="range"
+                  aria-label={t.roomDepth}
+                  min={6}
+                  max={16}
+                  step={1}
+                  value={settings.roomSize.z}
+                  onChange={(e) =>
+                    onUpdateSettings({
+                      roomSize: { ...settings.roomSize, z: Number(e.target.value) },
+                    })
+                  }
+                  className="cavern-slider w-full"
+                />
+              </div>
             </div>
           </div>
 
@@ -340,7 +408,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 onChange={(e) => onUpdateSettings({ dynamicNormalizer: e.target.checked })}
                 className="rounded accent-[#387AFF]"
               />
-              <span>Dynamic Normalizer / Soft-Knee Limiter</span>
+              <span>{t.dynNormalizerLabel}</span>
             </label>
             <label className="inline-flex items-center gap-2 cursor-pointer">
               <input
@@ -349,7 +417,7 @@ export const SettingsTab: React.FC<SettingsTabProps> = ({
                 onChange={(e) => onUpdateSettings({ speakerHeightVirt: e.target.checked })}
                 className="rounded accent-[#387AFF]"
               />
-              <span>Speaker Height Virtualization</span>
+              <span>{t.speakerHeightVirtLabel}</span>
             </label>
           </div>
         </div>

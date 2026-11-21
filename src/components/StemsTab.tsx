@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Download, FileJson, Layers } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Download, FileJson, Layers, Play, Square } from 'lucide-react';
 import { renderCombinedStemsWav, renderStemWav } from '../audio/spatialEngine';
 import type { StringKey } from '../i18n/strings';
 import type { SpatialSourceNode, SpatialTrack } from '../types/cavern';
@@ -28,6 +28,8 @@ export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) =
   const [extractedStems, setExtractedStems] = useState<ExtractedStemResult[]>([]);
   const [trajectoryPreview, setTrajectoryPreview] = useState<string | null>(null);
   const [trajectoryUrl, setTrajectoryUrl] = useState<string | null>(null);
+  const [playingStemId, setPlayingStemId] = useState<string | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const selectedSources = useMemo(
     () => sources.filter((s) => selectedIds.includes(s.id)),
@@ -40,8 +42,30 @@ export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) =
     );
   };
 
+  const stopPreview = () => {
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    setPlayingStemId(null);
+  };
+
+  const handleToggleStemPreview = (stem: ExtractedStemResult) => {
+    if (playingStemId === stem.id) {
+      stopPreview();
+      return;
+    }
+    stopPreview();
+    const audio = new Audio(stem.url);
+    audio.onended = () => setPlayingStemId(null);
+    previewAudioRef.current = audio;
+    setPlayingStemId(stem.id);
+    void audio.play().catch(() => setPlayingStemId(null));
+  };
+
   useEffect(() => {
     return () => {
+      stopPreview();
       for (const s of extractedStems) URL.revokeObjectURL(s.url);
       if (trajectoryUrl) URL.revokeObjectURL(trajectoryUrl);
     };
@@ -49,6 +73,7 @@ export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) =
 
   const handleExtract = () => {
     if (selectedSources.length === 0) return;
+    stopPreview();
 
     const depthLabel = bitDepth === '32f' ? '32-bit float' : `${bitDepth}-bit PCM`;
 
@@ -111,9 +136,9 @@ export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) =
                 onChange={(e) => setExtractMode(e.target.value as typeof extractMode)}
                 className="w-full px-3 py-2 text-sm rounded-xl bg-[#0C0E14] border border-white/12 text-white focus:outline-none focus:border-[#598FFF]"
               >
-                <option value="mono-stems">Separated Mono WAV per Channel & Object + 3D JSON</option>
-                <option value="spatial-each">Render Each Selected Item in 3D Separately (HRTF)</option>
-                <option value="3d-combined">Render Selected 3D Objects Combined (1 Spatial File)</option>
+                <option value="mono-stems">{t.modeMonoStems}</option>
+                <option value="spatial-each">{t.modeSpatialEach}</option>
+                <option value="3d-combined">{t.mode3DCombined}</option>
               </select>
             </div>
 
@@ -147,7 +172,9 @@ export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) =
           {/* Selection quick actions */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-white/8">
             <span className="text-xs font-mono tabular-nums text-[#B7B7BB]">
-              {selectedIds.length} of {sources.length} selected
+              {t.selectedCount
+                .replace('{selected}', String(selectedIds.length))
+                .replace('{total}', String(sources.length))}
             </span>
             <div className="flex flex-wrap items-center gap-1.5">
               <button
@@ -235,34 +262,49 @@ export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) =
         {/* Right 5 cols: Extracted Stems Download List & 3D Trajectory JSON Output */}
         <div className="xl:col-span-5 space-y-5">
           <div className="bg-[#15161C] border border-white/10 rounded-2xl p-5 space-y-3">
-            <h3 className="text-sm font-semibold text-white">Extracted Audio Stems</h3>
+            <h3 className="text-sm font-semibold text-white">{t.extractedStemsTitle}</h3>
             {extractedStems.length === 0 ? (
-              <p className="text-xs text-[#99999E] py-4">
-                Select bed channels or dynamic 3D objects on the left and click Extract Selected Stems to generate downloadable mono WAV files.
-              </p>
+              <p className="text-xs text-[#99999E] py-4">{t.extractedStemsEmpty}</p>
             ) : (
               <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
-                {extractedStems.map((stem) => (
-                  <div
-                    key={stem.id}
-                    className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-[#1C1E27] border border-white/8 text-xs"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-medium text-white truncate">{stem.name}</p>
-                      <p className="font-mono text-[#99999E] tabular-nums">
-                        {stem.fileName} · {stem.sizeKb} KB · {stem.meta}
-                      </p>
-                    </div>
-                    <a
-                      href={stem.url}
-                      download={stem.fileName}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#387AFF]/20 hover:bg-[#387AFF]/35 text-[#89B0FF] font-medium shrink-0"
+                {extractedStems.map((stem) => {
+                  const isPreviewing = playingStemId === stem.id;
+                  return (
+                    <div
+                      key={stem.id}
+                      className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-[#1C1E27] border border-white/8 text-xs"
                     >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>WAV</span>
-                    </a>
-                  </div>
-                ))}
+                      <div className="min-w-0">
+                        <p className="font-medium text-white truncate">{stem.name}</p>
+                        <p className="font-mono text-[#99999E] tabular-nums truncate">
+                          {stem.fileName} · {stem.sizeKb} KB · {stem.meta}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          aria-label={isPreviewing ? `Stop preview ${stem.name}` : `Preview ${stem.name}`}
+                          onClick={() => handleToggleStemPreview(stem)}
+                          className={`p-1.5 rounded-lg border transition-colors ${
+                            isPreviewing
+                              ? 'bg-[#387AFF] border-[#598FFF] text-white'
+                              : 'bg-[#12141D] border-white/10 text-[#E9E9EC] hover:bg-white/10'
+                          }`}
+                        >
+                          {isPreviewing ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                        </button>
+                        <a
+                          href={stem.url}
+                          download={stem.fileName}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#387AFF]/20 hover:bg-[#387AFF]/35 text-[#89B0FF] font-medium shrink-0"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>WAV</span>
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -271,7 +313,7 @@ export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) =
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <FileJson className="w-4 h-4 text-[#56B8A8]" />
-                <h3 className="text-sm font-semibold text-white">3D Trajectory Metadata (.json)</h3>
+                <h3 className="text-sm font-semibold text-white">{t.trajectoryTitle}</h3>
               </div>
               {trajectoryUrl && (
                 <a
@@ -280,7 +322,7 @@ export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) =
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#56B8A8] hover:bg-[#48A696] text-[#080A10]"
                 >
                   <Download className="w-3.5 h-3.5" />
-                  <span>Download JSON</span>
+                  <span>{t.downloadJson}</span>
                 </a>
               )}
             </div>
@@ -291,9 +333,7 @@ export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) =
                 {trajectoryPreview.length > 2000 ? '\n... (truncated preview — download full JSON above)' : ''}
               </pre>
             ) : (
-              <p className="text-xs text-[#99999E] py-3">
-                Frame-by-frame (X, Y, Z) 3D object coordinates will appear here after extraction.
-              </p>
+              <p className="text-xs text-[#99999E] py-3">{t.trajectoryEmpty}</p>
             )}
           </div>
         </div>

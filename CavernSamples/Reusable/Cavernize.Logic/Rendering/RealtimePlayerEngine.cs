@@ -46,7 +46,14 @@ public sealed class RealtimePlayerEngine : IDisposable {
     readonly SpatialDialogPostProcessingStage spatialDialogPostStage = new();
     readonly NormalizerPostProcessingAdapter limiterPostStage = new(true);
     readonly TruePeakLimiterPostProcessingStage truePeakLimiterPostStage = new();
+    readonly LiveMicrophoneBridge liveMicBridge = new();
     readonly SpatialSceneFrame activeSceneFrame = new();
+
+    // Zero-GC sub-block staging buffer enabling exact 64-frame / 128-frame Path B/A pro-audio bursts
+    // over Cavern's 256-sample spatial update rate without stalls or allocations.
+    readonly float[] subBlockStaging = new float[updateRate * 2];
+    int subBlockReadOffset;
+    int subBlockAvailableFrames;
 
     CavernizeTrack currentTrack;
     UpmixingSettings upmixingSettings = new(true);
@@ -70,6 +77,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
     PhysicalExternalizationConfig externalizationConfig = PhysicalExternalizationConfig.Default;
     HrtfPersonalizationConfig personalizationConfig = HrtfPersonalizationConfig.Default;
     PsychoacousticLoudnessConfig loudnessConfig = PsychoacousticLoudnessConfig.Default;
+    ProAudioDuplexConfig proAudioConfig = ProAudioDuplexConfig.Default;
     bool lastExternalizationBrirState;
     Vector3 lastExternalizationEnvSize;
 
@@ -79,6 +87,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
     public RealtimePlayerEngine() {
         sceneHub.BindHeadTracker(manualHeadTracker);
         sceneHub.BindRenderer(virtualizerRenderer);
+        sceneHub.BindLiveMicrophone(liveMicBridge);
         sceneHub.RegisterStageProcessor(parametricUpmixerStage);
         sceneHub.RegisterStageProcessor(neuralStemStage);
         sceneHub.RegisterStageProcessor(lgsrStage);
@@ -96,6 +105,58 @@ public sealed class RealtimePlayerEngine : IDisposable {
     /// and extensible Slot 2 / Slot 4 / Slot 5 / Slot 6 pipeline registrations.
     /// </summary>
     public SpatialSceneHub SceneHub => sceneHub;
+
+    /// <summary>
+    /// Slot 1 zero-GC live microphone bridge (W10 Path B <c>libusb</c> UAC2 / Path A <c>AAudio/Oboe</c> Exclusive).
+    /// </summary>
+    public LiveMicrophoneBridge LiveMicBridge => liveMicBridge;
+
+    /// <summary>
+    /// Active Slot 1 / Slot 4 Pro-Audio full-duplex USB configuration.
+    /// </summary>
+    public ProAudioDuplexConfig ProAudioConfig => proAudioConfig;
+
+    /// <summary>
+    /// Live Slot 1 / Slot 4 Pro-Audio full-duplex USB &amp; Scarlett 2i2 telemetry snapshot.
+    /// </summary>
+    public ProAudioDuplexDiagnostics ProAudioDiagnostics => sceneHub.ProAudioDiagnostics;
+
+    /// <summary>
+    /// True when live microphone monitoring or MLS loopback RTT calibration requires the audio engine to remain active even while track playback is paused.
+    /// </summary>
+    public bool IsLiveMonitoringOrCalibrating =>
+        (proAudioConfig.Enabled && proAudioConfig.LiveMicEnabled && proAudioConfig.MicRouting != LiveMicRoutingMode.Off) ||
+        liveMicBridge.IsCalibratingLatency;
+
+    /// <summary>
+    /// Applies updated W10 Pro-Audio full-duplex &amp; live microphone parameters cleanly in real time.
+    /// </summary>
+    public void ApplyProAudioConfig(ProAudioDuplexConfig config) {
+        ProAudioDuplexConfig safe = (config ?? ProAudioDuplexConfig.Default).Sanitize();
+        lock (renderLock) {
+            proAudioConfig = safe;
+            liveMicBridge.ApplyConfig(safe, OutputSampleRate);
+            if (safe.Enabled && safe.LiveMicEnabled && safe.MicRouting != LiveMicRoutingMode.Off) {
+                sceneHub.SetLiveMicrophoneDescriptor(liveMicBridge.BuildSceneDescriptor(EnvironmentSize, sceneHub.Sources.Count));
+            } else {
+                sceneHub.SetLiveMicrophoneDescriptor(null);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Arms a pure-physics MLS loopback round-trip latency calibration measurement on the active full-duplex stream.
+    /// </summary>
+    public void StartRoundTripLatencyCalibration(Action<Cavern.ProAudio.RoundTripLatencyResult> onCompleted) {
+        liveMicBridge.StartRoundTripCalibration(OutputSampleRate, onCompleted);
+    }
+
+    /// <summary>
+    /// Cancels any active MLS loopback round-trip latency calibration measurement.
+    /// </summary>
+    public void CancelRoundTripLatencyCalibration() {
+        liveMicBridge.CancelRoundTripCalibration();
+    }
 
     /// <summary>
     /// Slot 2B Neural Audio, MVSEP anti-artifact &amp; Spatial Karaoke stage processor (Priority 300).
@@ -527,6 +588,8 @@ public sealed class RealtimePlayerEngine : IDisposable {
             upmixingSettings = upmixing ?? new UpmixingSettings(true);
             renderingSettings = rendering ?? new RenderingSettings();
             currentTrackSample = 0;
+            subBlockAvailableFrames = 0;
+            subBlockReadOffset = 0;
             hasRenderedAudio = false;
             crossfadeRemaining = 0;
             lastSourceMaskHash = 0;
@@ -575,6 +638,8 @@ public sealed class RealtimePlayerEngine : IDisposable {
             double clampedSec = Math.Clamp(startSeconds, 0, maxSec);
             long targetSample = (long)Math.Round(clampedSec * track.SampleRate);
             currentTrackSample = track.Seek(targetSample);
+            subBlockAvailableFrames = 0;
+            subBlockReadOffset = 0;
             lastSourceMaskHash = 0;
 
             ConfigureListener(resetToStart: false);
@@ -619,6 +684,8 @@ public sealed class RealtimePlayerEngine : IDisposable {
             }
             long targetSample = (long)Math.Round(seconds * currentTrack.SampleRate);
             currentTrackSample = currentTrack.Seek(targetSample);
+            subBlockAvailableFrames = 0;
+            subBlockReadOffset = 0;
             ConfigureListener(resetToStart: false);
             sceneHub.ResetStatefulStages();
         }
@@ -626,6 +693,8 @@ public sealed class RealtimePlayerEngine : IDisposable {
 
     /// <summary>
     /// Renders the next block of stereo interleaved float samples into <paramref name="stereoOutput"/>.
+    /// Supports arbitrary pro-audio burst sizes (64, 128, 256, 1024 frames) via zero-GC sub-block staging,
+    /// sample-locked W10 live microphone mixing, and MLS loopback latency calibration.
     /// Returns the number of stereo sample frames written (0 if stopped or finished).
     /// </summary>
     public int RenderNextInterleavedBlock(float[] stereoOutput, int maxStereoFrames) {
@@ -637,14 +706,64 @@ public sealed class RealtimePlayerEngine : IDisposable {
         int totalFramesWritten = 0;
 
         lock (renderLock) {
+            // Standalone live-microphone monitoring or MLS RTT calibration when track playback is paused
             if (!IsPlaying || currentTrack == null || listener == null) {
-                Array.Clear(stereoOutput, 0, Math.Min(stereoOutput.Length, maxStereoFrames * 2));
+                int safeFrames = Math.Min(maxStereoFrames, stereoOutput.Length / 2);
+                Array.Clear(stereoOutput, 0, safeFrames * 2);
+                if (liveMicBridge.IsCalibratingLatency || liveMicBridge.IsActive) {
+                    liveMicBridge.MixIntoStereoOutputZeroGc(stereoOutput, 0, safeFrames, sceneHub.ListenerPose);
+                    SoundfieldTelemetry micTel = sceneHub.Telemetry;
+                    micTel.LiveMicRmsDbfs = liveMicBridge.RmsDbfs;
+                    micTel.LiveMicPeakDbfs = liveMicBridge.PeakDbfs;
+                    micTel.FullDuplexRoundTripMs = liveMicBridge.RoundTripLatencyMs;
+                    micTel.IsLiveMicActive = liveMicBridge.IsActive;
+                    sceneHub.Telemetry = micTel;
+                    return safeFrames;
+                }
                 return 0;
             }
 
             ApplyLiveParameters();
 
-            while (totalFramesWritten + updateRate <= maxStereoFrames) {
+            // Drain any previously staged sub-block frames first (used when Path B/A requests 64f or 128f bursts)
+            if (subBlockAvailableFrames > 0) {
+                int take = Math.Min(subBlockAvailableFrames, maxStereoFrames);
+                Array.Copy(subBlockStaging, subBlockReadOffset * 2, stereoOutput, 0, take * 2);
+                subBlockReadOffset += take;
+                subBlockAvailableFrames -= take;
+                totalFramesWritten += take;
+                if (totalFramesWritten >= maxStereoFrames) {
+                    return totalFramesWritten;
+                }
+            }
+
+            // If remaining request is smaller than updateRate (e.g., 64f/128f Path B/A burst),
+            // render one 256-frame block into subBlockStaging and deliver exact requested frames.
+            if (maxStereoFrames - totalFramesWritten < updateRate) {
+                int staged = RenderAlignedBlocksLocked(subBlockStaging, 0, updateRate, ref reachedEnd);
+                if (staged > 0) {
+                    int take = Math.Min(staged, maxStereoFrames - totalFramesWritten);
+                    Array.Copy(subBlockStaging, 0, stereoOutput, totalFramesWritten * 2, take * 2);
+                    subBlockReadOffset = take;
+                    subBlockAvailableFrames = staged - take;
+                    totalFramesWritten += take;
+                }
+            } else {
+                int alignedFrames = ((maxStereoFrames - totalFramesWritten) / updateRate) * updateRate;
+                totalFramesWritten += RenderAlignedBlocksLocked(stereoOutput, totalFramesWritten * 2, alignedFrames, ref reachedEnd);
+            }
+        }
+
+        if (reachedEnd) {
+            PlaybackCompleted?.Invoke();
+        }
+        return totalFramesWritten;
+    }
+
+    int RenderAlignedBlocksLocked(float[] stereoOutput, int baseSampleOffset, int maxAlignedFrames, ref bool reachedEnd) {
+        int totalFramesWritten = 0;
+
+            while (totalFramesWritten + updateRate <= maxAlignedFrames) {
                 if (currentTrack.Length > 0 && currentTrackSample >= currentTrack.Length) {
                     if (Loop) {
                         currentTrackSample = currentTrack.Seek(0);
@@ -657,7 +776,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                     }
                 }
 
-                int remainingFrames = maxStereoFrames - totalFramesWritten;
+                int remainingFrames = maxAlignedFrames - totalFramesWritten;
                 int chunks = Math.Min(framesPerChunk, remainingFrames / updateRate);
                 if (chunks <= 0) {
                     chunks = 1;
@@ -674,7 +793,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 }
 
                 int requestedFrames = chunks * updateRate;
-                int outOffset = totalFramesWritten * 2;
+                int outOffset = baseSampleOffset + totalFramesWritten * 2;
                 activeSceneFrame.BeginBlock(
                     listener.SampleRate,
                     requestedFrames,
@@ -726,6 +845,12 @@ public sealed class RealtimePlayerEngine : IDisposable {
                     spatialDialogPostStage.ExternalSpeechActivity = float.NaN;
                 }
 
+                // Slot 1 / W10 Sample-Locked Live Microphone injection (SourceLayer.LiveMicrophone)
+                // Mixed right before Slot 6 4x True-Peak Limiter so live vocal + Karaoke never clips.
+                if (liveMicBridge.IsActive || liveMicBridge.IsCalibratingLatency) {
+                    liveMicBridge.MixIntoStereoOutputZeroGc(stereoOutput, outOffset, blockFrames, sceneHub.ListenerPose);
+                }
+
                 // Slot 6: Ordered transparent post-processing stages
                 // (100 AutoEq, 110 HpTF, 300 ISO 226:2023, 400 BS.1770/Dialnorm, 500 Dialog Path B, 890 Legacy AGC, 900 4x True-Peak Limiter)
                 iso226PostStage.UpdatePlaybackVolume(Volume);
@@ -767,11 +892,15 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 }
 
                 // Preserve 4x-oversampled dBTP measured by BS.1770 stage; only fall back to sample peak if meter is disabled
+                SoundfieldTelemetry blockTelemetry = activeSceneFrame.Telemetry;
                 if (!bs1770PostStage.IsEnabled) {
-                    SoundfieldTelemetry telemetry = activeSceneFrame.Telemetry;
-                    telemetry.TruePeakDbfs = blockPeak > 1e-6f ? 20f * MathF.Log10(blockPeak) : -120f;
-                    activeSceneFrame.Telemetry = telemetry;
+                    blockTelemetry.TruePeakDbfs = blockPeak > 1e-6f ? 20f * MathF.Log10(blockPeak) : -120f;
                 }
+                blockTelemetry.LiveMicRmsDbfs = liveMicBridge.RmsDbfs;
+                blockTelemetry.LiveMicPeakDbfs = liveMicBridge.PeakDbfs;
+                blockTelemetry.FullDuplexRoundTripMs = liveMicBridge.RoundTripLatencyMs;
+                blockTelemetry.IsLiveMicActive = liveMicBridge.IsActive;
+                activeSceneFrame.Telemetry = blockTelemetry;
 
                 RecordTailLocked(stereoOutput, outOffset, blockFrames);
 
@@ -780,6 +909,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 totalFramesWritten += blockFrames;
 
                 UpdateSourceTelemetry();
+                if (liveMicBridge.IsActive) {
+                    sceneHub.SetLiveMicrophoneDescriptor(liveMicBridge.BuildSceneDescriptor(Listener.EnvironmentSize, sceneHub.Sources.Count));
+                }
                 parametricUpmixerStage.SyncTelemetry(activeSceneFrame);
                 sceneHub.Telemetry = activeSceneFrame.Telemetry;
                 sceneHub.ExternalizationDiagnostics = virtualizerRenderer.Diagnostics;
@@ -787,11 +919,6 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
                 sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
             }
-        }
-
-        if (reachedEnd) {
-            PlaybackCompleted?.Invoke();
-        }
         return totalFramesWritten;
     }
 

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Lock, RotateCcw, Unlock, ZoomIn, ZoomOut } from 'lucide-react';
+import type { StringKey } from '../i18n/strings';
 import type {
   CameraPreset,
   LabelVisibilityMode,
@@ -9,6 +10,7 @@ import type {
 import { clamp, clampToRoom, projectRoomPoint } from '../utils/spatialMath';
 
 interface RoomSimulatorCanvasProps {
+  t: Record<StringKey, string>;
   sources: SpatialSourceNode[];
   roomSize: Vec3;
   listenerPosition: Vec3;
@@ -29,6 +31,7 @@ interface HitTarget {
 }
 
 export const RoomSimulatorCanvas: React.FC<RoomSimulatorCanvasProps> = ({
+  t,
   sources,
   roomSize,
   listenerPosition,
@@ -57,6 +60,15 @@ export const RoomSimulatorCanvas: React.FC<RoomSimulatorCanvasProps> = ({
   const [camPitch, setCamPitch] = useState(28);
   const [zoom, setZoom] = useState(1.0);
   const [labelMode, setLabelMode] = useState<LabelVisibilityMode>('active');
+  const [resizeTick, setResizeTick] = useState(0);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setResizeTick((n) => n + 1));
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
 
   const applyCameraPreset = (preset: CameraPreset) => {
     if (preset === 'iso') {
@@ -437,7 +449,7 @@ export const RoomSimulatorCanvas: React.FC<RoomSimulatorCanvasProps> = ({
         ctx.stroke();
       }
 
-      // Node label
+      // Node label: render object indices cleanly inside their coral spheres; draw subtle backing for speaker labels
       const showLabel =
         labelMode === 'all' ||
         (labelMode === 'active' &&
@@ -445,17 +457,35 @@ export const RoomSimulatorCanvas: React.FC<RoomSimulatorCanvasProps> = ({
         (labelMode === 'minimal' && (source.kind === 'object' || source.solo));
 
       if (showLabel) {
-        ctx.fillStyle = isAudible ? '#FCFCFF' : '#99999E';
-        ctx.font = '600 10px "JetBrains Mono", monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(source.shortLabel, sp.x, sp.y - radius - 5);
+        if (source.kind === 'object' && !source.mute) {
+          ctx.fillStyle = '#080A10';
+          ctx.font = '700 10.5px "JetBrains Mono", monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(source.shortLabel, sp.x, sp.y + 0.5);
+          ctx.textBaseline = 'alphabetic';
+        } else {
+          ctx.font = '600 9.5px "JetBrains Mono", monospace';
+          const textW = ctx.measureText(source.shortLabel).width;
+          const padX = 4;
+          const boxW = textW + padX * 2;
+          const boxH = 14;
+          const labelY = sp.y - radius - 7;
+          ctx.fillStyle = 'rgba(9, 11, 18, 0.78)';
+          ctx.beginPath();
+          ctx.roundRect(sp.x - boxW / 2, labelY - 10, boxW, boxH, 4);
+          ctx.fill();
+          ctx.fillStyle = isAudible ? '#FCFCFF' : '#99999E';
+          ctx.textAlign = 'center';
+          ctx.fillText(source.shortLabel, sp.x, labelY);
+        }
       }
 
       newHits.push({ id: source.id, x: sp.x, y: sp.y, radius: radius + 6 });
     }
 
     hitTargetsRef.current = newHits;
-  }, [sources, roomSize, listenerPosition, listenerYawDeg, listenerPitchDeg, isPlaying, isLocked, camYaw, camPitch, zoom, labelMode]);
+  }, [sources, roomSize, listenerPosition, listenerYawDeg, listenerPitchDeg, isPlaying, isLocked, camYaw, camPitch, zoom, labelMode, resizeTick]);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -548,7 +578,12 @@ export const RoomSimulatorCanvas: React.FC<RoomSimulatorCanvasProps> = ({
             }
             className="px-2.5 py-1 text-xs font-medium rounded-md bg-white/6 hover:bg-white/12 text-[#B7B7BB] transition-colors whitespace-nowrap shrink-0"
           >
-            Labels: {labelMode}
+            {t.labelsPrefix}:{' '}
+            {labelMode === 'active'
+              ? t.labelModeActive
+              : labelMode === 'all'
+                ? t.labelModeAll
+                : t.labelModeMinimal}
           </button>
         </div>
 
@@ -588,7 +623,7 @@ export const RoomSimulatorCanvas: React.FC<RoomSimulatorCanvasProps> = ({
             }`}
           >
             {isLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
-            <span>{isLocked ? 'Locked' : 'Unlocked'}</span>
+            <span>{isLocked ? t.lockPosition : t.unlockPosition}</span>
           </button>
         </div>
       </div>
@@ -611,23 +646,23 @@ export const RoomSimulatorCanvas: React.FC<RoomSimulatorCanvasProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2 bg-[#10121A] border-t border-white/8 text-[11px] text-[#99999E]">
         <div className="flex flex-wrap items-center gap-4">
           <span className="inline-flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#598FFF]" /> Bed Speakers
+            <span className="w-2.5 h-2.5 rounded-full bg-[#598FFF]" /> {t.legendBeds}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#38BDF8]" /> Height Array
+            <span className="w-2.5 h-2.5 rounded-full bg-[#38BDF8]" /> {t.legendHeight}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#A855F7]" /> LFE Sub
+            <span className="w-2.5 h-2.5 rounded-full bg-[#A855F7]" /> {t.legendLfe}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-[#F56962]" /> Dynamic 3D Objects
+            <span className="w-2.5 h-2.5 rounded-full bg-[#F56962]" /> {t.legendObjects}
           </span>
           <span className="inline-flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full border-2 border-[#FACC15]" /> Solo
+            <span className="w-2.5 h-2.5 rounded-full border-2 border-[#FACC15]" /> {t.legendSolo}
           </span>
         </div>
         <span className="font-mono tabular-nums text-[#B7B7BB]">
-          Listener X:{listenerPosition.x.toFixed(1)}m · Y:{listenerPosition.y.toFixed(1)}m · Z:{listenerPosition.z.toFixed(1)}m
+          {t.listenerLabel} X:{listenerPosition.x.toFixed(1)}m · Y:{listenerPosition.y.toFixed(1)}m · Z:{listenerPosition.z.toFixed(1)}m
         </span>
       </div>
     </div>

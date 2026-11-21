@@ -4,6 +4,7 @@ import type {
   PostRenderReport,
   SpatialSourceNode,
   SpeakerLayout,
+  TrackFormatVariant,
   Vec3,
 } from '../types/cavern';
 import {
@@ -13,6 +14,8 @@ import {
   distance3D,
   encodeWavPcm16,
   evaluateSourcePosition,
+  isSourceActiveForVariant,
+  transformToListenerFrame,
 } from '../utils/spatialMath';
 
 interface ActiveVoice {
@@ -88,6 +91,8 @@ export class CavernSpatialAudioEngine {
     masterVol: number,
     lfeBoostDb: number,
     settings: CavernSettings,
+    activeVariant: Pick<TrackFormatVariant, 'isSpatial' | 'objectCount'>,
+    isLooping: boolean,
     localBuffer?: AudioBuffer,
     offsetSec = 0,
   ): void {
@@ -106,7 +111,7 @@ export class CavernSpatialAudioEngine {
     if (localBuffer) {
       const srcNode = ctx.createBufferSource();
       srcNode.buffer = localBuffer;
-      srcNode.loop = true;
+      srcNode.loop = isLooping;
 
       const panner = ctx.createPanner();
       panner.panningModel = settings.headphoneVirtualizer && settings.hrirProfileId !== 'direct_2_0' ? 'HRTF' : 'equalpower';
@@ -169,6 +174,7 @@ export class CavernSpatialAudioEngine {
       masterVol,
       lfeBoostDb,
       settings,
+      activeVariant,
       offsetSec,
     );
   }
@@ -222,6 +228,7 @@ export class CavernSpatialAudioEngine {
     masterVol: number,
     lfeBoostDb: number,
     settings: CavernSettings,
+    activeVariant: Pick<TrackFormatVariant, 'isSpatial' | 'objectCount'>,
     playbackTimeSec: number,
   ): void {
     if (!this.ctx || !this.masterGain || !this.profileToneFilter || !this.isPlaying) {
@@ -275,7 +282,8 @@ export class CavernSpatialAudioEngine {
       );
       voice.panner.positionZ.setTargetAtTime(-src.position.z, now, 0.03);
 
-      const audible = !src.mute && (!anySolo || src.solo);
+      const activeByFormat = isSourceActiveForVariant(src, activeVariant, settings);
+      const audible = activeByFormat && !src.mute && (!anySolo || src.solo);
       const dist = distance3D(listenerPos, src.position);
       const rolloff = settings.distanceSimulation ? computeRolloffGain(dist, settings.rolloffMode) : 1;
 
@@ -341,6 +349,8 @@ export function renderSpatialMixWav(
   container: string,
   sources: SpatialSourceNode[],
   listenerPos: Vec3,
+  listenerYawDeg: number,
+  lfeBoostDb: number,
   bakeRoomState: boolean,
   rolloffMode: CavernSettings['rolloffMode'],
 ): PostRenderReport {
@@ -352,6 +362,7 @@ export function renderSpatialMixWav(
 
   const anySolo = bakeRoomState && sources.some((s) => s.solo);
   const activeSources = sources.filter((s) => !bakeRoomState || (!s.mute && (!anySolo || s.solo)));
+  const lfeLinear = Math.pow(10, lfeBoostDb / 20);
 
   let peakAbs = 0.0001;
   let sumSquares = 0;
@@ -365,10 +376,14 @@ export function renderSpatialMixWav(
       const pos = evaluateSourcePosition(src, t);
       const dist = bakeRoomState ? distance3D(listenerPos, pos) : distance3D({ x: 0, y: 0, z: 0 }, pos);
       const atten = bakeRoomState ? computeRolloffGain(dist, rolloffMode) : 1;
-      const sample = Math.sin(2 * Math.PI * src.synthFreqHz * t) * 0.075 * atten * env;
+      const lfeGain = src.kind === 'lfe' ? lfeLinear : 1;
+      const sample = Math.sin(2 * Math.PI * src.synthFreqHz * t) * 0.075 * atten * lfeGain * env;
 
       if (outChannels === 2) {
-        const pan = clamp((pos.x - (bakeRoomState ? listenerPos.x : 0)) / 5, -1, 1);
+        const rel = bakeRoomState
+          ? transformToListenerFrame(pos, listenerPos, listenerYawDeg)
+          : pos;
+        const pan = clamp(rel.x / 5, -1, 1);
         const leftGain = Math.cos(((pan + 1) * Math.PI) / 4);
         const rightGain = Math.sin(((pan + 1) * Math.PI) / 4);
         buffers[0][i] += sample * leftGain;

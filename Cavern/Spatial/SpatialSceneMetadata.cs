@@ -303,6 +303,26 @@ namespace Cavern.Spatial {
         public float LgsrSpxHz { get; set; }
 
         /// <summary>
+        /// Live W10 USB/AAudio full-duplex microphone RMS level in dBFS (-120..0 dBFS).
+        /// </summary>
+        public float LiveMicRmsDbfs { get; set; }
+
+        /// <summary>
+        /// Live W10 USB/AAudio full-duplex microphone peak level in dBFS (-120..0 dBFS).
+        /// </summary>
+        public float LiveMicPeakDbfs { get; set; }
+
+        /// <summary>
+        /// Active W10 full-duplex round-trip latency in milliseconds (measured via MLS loopback or hardware timestamps).
+        /// </summary>
+        public float FullDuplexRoundTripMs { get; set; }
+
+        /// <summary>
+        /// True when a live microphone stream (<see cref="SourceLayer.LiveMicrophone"/>) is actively routed into the scene.
+        /// </summary>
+        public bool IsLiveMicActive { get; set; }
+
+        /// <summary>
         /// Returns an empty telemetry snapshot.
         /// </summary>
         public static SoundfieldTelemetry Empty() {
@@ -326,7 +346,11 @@ namespace Cavern.Spatial {
                 LgsrSyncOffsetSamples = 0f,
                 LgsrDriftPpm = 0f,
                 LgsrCouplingHz = 0f,
-                LgsrSpxHz = 0f
+                LgsrSpxHz = 0f,
+                LiveMicRmsDbfs = -120f,
+                LiveMicPeakDbfs = -120f,
+                FullDuplexRoundTripMs = 0f,
+                IsLiveMicActive = false
             };
         }
     }

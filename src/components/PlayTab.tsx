@@ -18,6 +18,10 @@ import { HRIR_PROFILES } from '../data/catalog';
 import type { StringKey } from '../i18n/strings';
 import type { CavernSettings, SpatialTrack, TrackFormatVariant } from '../types/cavern';
 import { formatTime } from '../utils/spatialMath';
+import type {
+  ScarlettHardwareControlState,
+  VocalRackState,
+} from '../utils/scarlettVocalDsp';
 import { ProceduralArtwork } from './ProceduralArtwork';
 
 interface PlayTabProps {
@@ -42,6 +46,10 @@ interface PlayTabProps {
   onUpdateSettings: (patch: Partial<CavernSettings>) => void;
   onOpenRoomTab: () => void;
   onUploadLocalFile: (file: File) => void;
+  scarlett: ScarlettHardwareControlState;
+  vocalRack: VocalRackState;
+  onUpdateVocalRack: (patch: Partial<VocalRackState>) => void;
+  onOpenScarlettConsole: () => void;
 }
 
 export const PlayTab: React.FC<PlayTabProps> = ({
@@ -66,6 +74,10 @@ export const PlayTab: React.FC<PlayTabProps> = ({
   onUpdateSettings,
   onOpenRoomTab,
   onUploadLocalFile,
+  scarlett,
+  vocalRack,
+  onUpdateVocalRack,
+  onOpenScarlettConsole,
 }) => {
   const [subView, setSubView] = useState<'now-playing' | 'library'>('now-playing');
   const [stageMode, setStageMode] = useState<'cover' | 'lyrics'>('cover');
@@ -242,6 +254,35 @@ export const PlayTab: React.FC<PlayTabProps> = ({
                     })}
                   </div>
                 )}
+                {/* Compact Karaoke Vocal Level & Scarlett Preamp Shortcut Bar */}
+                <div className="pt-3 mt-2 border-t border-white/8 space-y-2">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-[#B7B7BB] font-medium">{t.karaokeVocalLevel}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono tabular-nums text-white">
+                        {vocalRack.karaokeBackingVocalPct}%
+                      </span>
+                      <button
+                        type="button"
+                        onClick={onOpenScarlettConsole}
+                        className="px-2.5 py-1 text-[11px] font-semibold rounded-md bg-[#DC2626]/20 hover:bg-[#DC2626]/35 text-[#FCA5A5] border border-[#DC2626]/40 whitespace-nowrap"
+                      >
+                        {t.openScarlettConsole} · Air {scarlett.channels[0].airMode.toUpperCase()}
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    aria-label={t.karaokeVocalLevel}
+                    min={0}
+                    max={100}
+                    value={vocalRack.karaokeBackingVocalPct}
+                    onChange={(e) =>
+                      onUpdateVocalRack({ karaokeBackingVocalPct: Number(e.target.value) })
+                    }
+                    className="cavern-slider w-full"
+                  />
+                </div>
               </div>
             )}
           </div>
@@ -281,7 +322,7 @@ export const PlayTab: React.FC<PlayTabProps> = ({
                   <>
                     <span aria-hidden="true">·</span>
                     <span className="text-[#F56962]">
-                      {activeVariant.objectCount} Dynamic 3D Objects
+                      {t.dynamicObjectsLabel.replace('{count}', String(activeVariant.objectCount))}
                     </span>
                   </>
                 )}
@@ -331,7 +372,7 @@ export const PlayTab: React.FC<PlayTabProps> = ({
                   <Sparkles className="w-3.5 h-3.5 text-[#8E96FA]" />
                 </div>
                 <p className="text-[11px] text-[#99999E] mt-1">
-                  {settings.cavernize3D ? 'Height synthesis active' : 'Bypassed'}
+                  {settings.cavernize3D ? t.cavernize3DActive : t.cavernize3DBypassed}
                 </p>
               </button>
 
@@ -362,7 +403,7 @@ export const PlayTab: React.FC<PlayTabProps> = ({
                   <Disc3 className="w-3.5 h-3.5 text-[#598FFF]" />
                 </div>
                 <p className="text-[11px] text-[#99999E] mt-1 truncate">
-                  {settings.headphoneVirtualizer ? activeProfile.dataset : 'No HRTF'}
+                  {settings.headphoneVirtualizer ? activeProfile.dataset : t.noHrtf}
                 </p>
               </button>
 
@@ -379,11 +420,11 @@ export const PlayTab: React.FC<PlayTabProps> = ({
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold">{t.matrix71}</span>
                   <span className="text-[11px] font-mono text-[#56B8A8]">
-                    {settings.matrixUpmix ? 'ON' : 'OFF'}
+                    {settings.matrixUpmix ? t.onLabel : t.offLabel}
                   </span>
                 </div>
                 <p className="text-[11px] text-[#99999E] mt-1">
-                  {settings.matrixUpmix ? '7.1 bed expansion' : 'Native channel count'}
+                  {settings.matrixUpmix ? t.matrix71Active : t.matrix71Bypassed}
                 </p>
               </button>
             </div>
@@ -567,7 +608,7 @@ export const PlayTab: React.FC<PlayTabProps> = ({
 
           {filteredTracks.length === 0 ? (
             <div className="py-12 text-center text-sm text-[#99999E]">
-              No tracks matched your current filter. Try switching to All or clearing your search.
+              {t.noTracksMatched}
             </div>
           ) : (
             <div className="divide-y divide-white/8">

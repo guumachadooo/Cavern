@@ -30,8 +30,17 @@ public sealed class AudioDeviceRouteInfo {
         Transport == AudioDeviceTransport.UsbDac ||
         Transport == AudioDeviceTransport.WiredJack;
 
-    /// <summary>Underlying Android <see cref="AudioDeviceInfo"/> handle for preferred USB DAC routing.</summary>
+    /// <summary>Underlying Android <see cref="AudioDeviceInfo"/> handle for preferred USB DAC output routing.</summary>
     public AudioDeviceInfo NativeDevice { get; init; }
+
+    /// <summary>Underlying Android <see cref="AudioDeviceInfo"/> handle for preferred pro-audio/USB microphone input routing.</summary>
+    public AudioDeviceInfo NativeInputDevice { get; init; }
+
+    /// <summary>Android <see cref="AudioDeviceInfo.Id"/> for output device (0 = system default).</summary>
+    public int OutputDeviceId { get; init; }
+
+    /// <summary>Android <see cref="AudioDeviceInfo.Id"/> for matched microphone input device (0 = system default).</summary>
+    public int InputDeviceId { get; init; }
 
     /// <summary>Hardware sample rates advertised by this output route (empty = arbitrary rates supported).</summary>
     public int[] SupportedSampleRates { get; init; } = Array.Empty<int>();
@@ -97,8 +106,11 @@ public sealed class AudioDeviceProfileManager : IDisposable {
         }
         try {
             AudioDeviceInfo[] outputs = audioManager.GetDevices(GetDevicesTargets.Outputs);
-            AudioDeviceRouteInfo detected = SelectPrimaryOutputRoute(outputs);
-            bool changed = !string.Equals(detected.DeviceKey, currentDevice.DeviceKey, StringComparison.OrdinalIgnoreCase);
+            AudioDeviceInfo[] inputs = audioManager.GetDevices(GetDevicesTargets.Inputs);
+            AudioDeviceRouteInfo detected = SelectPrimaryOutputRoute(outputs, inputs);
+            bool changed = !string.Equals(detected.DeviceKey, currentDevice.DeviceKey, StringComparison.OrdinalIgnoreCase) ||
+                           detected.OutputDeviceId != currentDevice.OutputDeviceId ||
+                           detected.InputDeviceId != currentDevice.InputDeviceId;
             currentDevice = detected;
 
             engine.SceneHub.ActiveAudioDeviceKey = detected.DeviceKey;
@@ -269,7 +281,7 @@ public sealed class AudioDeviceProfileManager : IDisposable {
         }
     }
 
-    static AudioDeviceRouteInfo SelectPrimaryOutputRoute(AudioDeviceInfo[] outputs) {
+    static AudioDeviceRouteInfo SelectPrimaryOutputRoute(AudioDeviceInfo[] outputs, AudioDeviceInfo[] inputs) {
         if (outputs == null || outputs.Length == 0) {
             return new AudioDeviceRouteInfo();
         }
@@ -304,13 +316,55 @@ public sealed class AudioDeviceProfileManager : IDisposable {
         } catch {
             rates = Array.Empty<int>();
         }
+
+        AudioDeviceInfo bestInput = SelectBestInputDevice(inputs, bestTransport, rawName);
+
         return new AudioDeviceRouteInfo {
             DeviceKey = key,
             DisplayName = displayName,
             Transport = bestTransport,
             NativeDevice = best,
+            NativeInputDevice = bestInput,
+            OutputDeviceId = best.Id,
+            InputDeviceId = bestInput?.Id ?? 0,
             SupportedSampleRates = rates
         };
+    }
+
+    static AudioDeviceInfo SelectBestInputDevice(AudioDeviceInfo[] inputs, AudioDeviceTransport outputTransport, string outputName) {
+        if (inputs == null || inputs.Length == 0) {
+            return null;
+        }
+        AudioDeviceInfo best = null;
+        int bestScore = -1;
+        for (int i = 0; i < inputs.Length; i++) {
+            AudioDeviceInfo dev = inputs[i];
+            if (dev == null || !dev.IsSource) {
+                continue;
+            }
+            int score = dev.Type switch {
+                AudioDeviceType.UsbDevice => 100,
+                AudioDeviceType.UsbHeadset => 95,
+                AudioDeviceType.WiredHeadset => 70,
+                AudioDeviceType.LineAnalog or AudioDeviceType.LineDigital => 65,
+                AudioDeviceType.BuiltinMic => 20,
+                _ => 5
+            };
+            if (outputTransport == AudioDeviceTransport.UsbDac &&
+                (dev.Type == AudioDeviceType.UsbDevice || dev.Type == AudioDeviceType.UsbHeadset)) {
+                score += 40;
+                string inName = dev.ProductName?.ToString()?.Trim() ?? string.Empty;
+                if (!string.IsNullOrEmpty(outputName) &&
+                    string.Equals(inName, outputName, StringComparison.OrdinalIgnoreCase)) {
+                    score += 30;
+                }
+            }
+            if (score > bestScore) {
+                bestScore = score;
+                best = dev;
+            }
+        }
+        return best;
     }
 
     static (AudioDeviceTransport Transport, int Priority) ClassifyDevice(AudioDeviceType type) {

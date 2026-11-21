@@ -211,6 +211,35 @@ public sealed class SpatialSceneHub {
     LgsrDiagnostics lgsrDiagnostics = LgsrDiagnostics.Default;
 
     /// <summary>
+    /// Active Slot 1 live microphone provider (<see cref="SourceLayer.LiveMicrophone"/>) fed by W10 Path B `libusb` UAC2 or Path A `AAudio/Oboe`.
+    /// </summary>
+    public ILiveMicrophoneProvider ActiveLiveMicrophone {
+        get {
+            lock (syncLock) {
+                return activeLiveMicrophone;
+            }
+        }
+    }
+    ILiveMicrophoneProvider activeLiveMicrophone;
+
+    /// <summary>
+    /// Live Slot 1 / Slot 4 Pro-Audio full-duplex USB &amp; Scarlett 2i2 telemetry snapshot.
+    /// </summary>
+    public ProAudioDuplexDiagnostics ProAudioDiagnostics {
+        get {
+            lock (syncLock) {
+                return proAudioDiagnostics;
+            }
+        }
+        set {
+            lock (syncLock) {
+                proAudioDiagnostics = value ?? ProAudioDuplexDiagnostics.Default;
+            }
+        }
+    }
+    ProAudioDuplexDiagnostics proAudioDiagnostics = ProAudioDuplexDiagnostics.Default;
+
+    /// <summary>
     /// Current 6DoF listener pose (thread-safe snapshot).
     /// </summary>
     public ListenerPose6DoF ListenerPose {

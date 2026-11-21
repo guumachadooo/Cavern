@@ -56,6 +56,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     const int ReqLoadAutoEq = 1009;
     const int ReqBluetoothPermissions = 1010;
     const int ReqLoadOnnxModel = 1011;
+    const int ReqRecordAudioPermission = 1012;
 
     AppSettingsStore store;
     AndroidUpmixingSettings upmixingSettings;
@@ -67,6 +68,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     RealtimePlayerEngine playerEngine;
     AndroidAudioOutput audioOutput;
     AudioDeviceProfileManager audioDeviceProfileManager;
+    UsbProAudioDeviceManager usbProAudioManager;
     HeadTrackingManager headTrackingManager;
     NativeOnnxRuntimeBridge neuralRuntime;
 
@@ -263,6 +265,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
             UsbDacNativeSampleRate = store.UsbDacNativeSampleRate
         };
         audioOutput.DiagnosticsUpdated += _ => RunOnUiThread(RefreshHeadTrackingUi);
+        audioOutput.ProAudioDiagnosticsUpdated += _ => RunOnUiThread(RefreshProAudioUi);
+
+        usbProAudioManager = new UsbProAudioDeviceManager(this);
+        usbProAudioManager.DeviceStateChanged += _ => RunOnUiThread(RefreshProAudioUi);
+        audioOutput.AttachUsbManager(usbProAudioManager);
+        audioOutput.ApplyProAudioConfig(store.BuildProAudioConfig());
 
         mediaNotification?.Dispose();
         mediaNotification = new MediaPlaybackNotificationManager(this);
@@ -302,9 +310,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
         uiHandler = new Handler(Looper.MainLooper);
         BuildRootUi();
         audioDeviceProfileManager.Start();
+        usbProAudioManager.Start();
         audioOutput.UpdateOutputRoute(audioDeviceProfileManager.CurrentDevice);
         headTrackingManager.ApplySettings();
         RefreshHeadTrackingUi();
+        RefreshProAudioUi();
         RefreshExternalizationUi();
         RefreshPersonalizationUi();
         RefreshLoudnessUi();
@@ -363,6 +373,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         headTrackingManager?.Dispose();
         audioDeviceProfileManager?.Dispose();
         audioOutput?.Dispose();
+        usbProAudioManager?.Dispose();
         neuralRuntime?.Dispose();
         playerEngine?.Dispose();
         decodedTrueHDTrack?.Dispose();
@@ -1180,6 +1191,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
     }
 
+    bool RequestRecordAudioPermissionIfNeeded() {
+        if (CheckSelfPermission(Manifest.Permission.RecordAudio) == Permission.Granted) {
+            return true;
+        }
+        RequestPermissions([Manifest.Permission.RecordAudio], ReqRecordAudioPermission);
+        return false;
+    }
+
     public override void OnRequestPermissionsResult(int requestCode, string[] permissions, Permission[] grantResults) {
         base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == ReqBluetoothPermissions) {
@@ -1189,6 +1208,13 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
             headTrackingManager?.ApplySettings();
             RefreshHeadTrackingUi();
+        } else if (requestCode == ReqRecordAudioPermission) {
+            bool granted = grantResults != null && grantResults.Length > 0 && grantResults[0] == Permission.Granted;
+            if (!granted) {
+                ShowToast(S["ProAudioMicPermNeededToast"]);
+            }
+            audioOutput?.ApplyProAudioConfig(store.BuildProAudioConfig());
+            RefreshProAudioUi();
         }
     }
 

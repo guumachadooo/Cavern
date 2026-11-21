@@ -3,9 +3,10 @@ import type { SpeakerChannelSpec, SpeakerLayout } from '../types/cavern';
 
 interface LayoutDiagramProps {
   layout: SpeakerLayout;
+  channelsLabel?: string;
 }
 
-export const LayoutDiagram: React.FC<LayoutDiagramProps> = ({ layout }) => {
+export const LayoutDiagram: React.FC<LayoutDiagramProps> = ({ layout, channelsLabel = 'channels' }) => {
   const [selectedSpeakerId, setSelectedSpeakerId] = useState<string | null>(
     layout.speakers[0]?.id ?? null,
   );
@@ -20,7 +21,7 @@ export const LayoutDiagram: React.FC<LayoutDiagramProps> = ({ layout }) => {
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-semibold text-white">{layout.name}</span>
         <span className="text-xs font-mono tabular-nums text-[#89B0FF]">
-          {layout.channelCount} channels
+          {layout.channelCount} {channelsLabel}
         </span>
       </div>
 

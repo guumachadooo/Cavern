@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CheckCircle2,
   Download,
@@ -20,6 +20,11 @@ import type {
   Vec3,
 } from '../types/cavern';
 import { LayoutDiagram } from './LayoutDiagram';
+import { ScarlettVocalConsole } from './ScarlettVocalConsole';
+import type {
+  ScarlettHardwareControlState,
+  VocalRackState,
+} from '../utils/scarlettVocalDsp';
 
 interface StudioTabProps {
   t: Record<StringKey, string>;
@@ -27,7 +32,16 @@ interface StudioTabProps {
   activeVariant: TrackFormatVariant;
   sources: SpatialSourceNode[];
   listenerPosition: Vec3;
+  listenerYawDeg: number;
+  lfeBoostDb: number;
   settings: CavernSettings;
+  studioSubMode: 'scarlett-vocal' | 'converter';
+  onStudioSubModeChange: (mode: 'scarlett-vocal' | 'converter') => void;
+  scarlett: ScarlettHardwareControlState;
+  vocalRack: VocalRackState;
+  onUpdateScarlett: (next: ScarlettHardwareControlState) => void;
+  onUpdateVocalRack: (patch: Partial<VocalRackState>) => void;
+  onNotify: (msg: string) => void;
 }
 
 const OUTPUT_CODECS = [
@@ -46,7 +60,16 @@ export const StudioTab: React.FC<StudioTabProps> = ({
   activeVariant,
   sources,
   listenerPosition,
+  listenerYawDeg,
+  lfeBoostDb,
   settings,
+  studioSubMode,
+  onStudioSubModeChange,
+  scarlett,
+  vocalRack,
+  onUpdateScarlett,
+  onUpdateVocalRack,
+  onNotify,
 }) => {
   const [selectedLayoutId, setSelectedLayoutId] = useState<string>('7.1.4');
   const [outputCodec, setOutputCodec] = useState<string>(OUTPUT_CODECS[1]);
@@ -55,6 +78,17 @@ export const StudioTab: React.FC<StudioTabProps> = ({
   const [showMetadata, setShowMetadata] = useState<boolean>(false);
   const [report, setReport] = useState<PostRenderReport | null>(null);
   const [queue, setQueue] = useState<RenderQueueItem[]>([]);
+  const blobUrlsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const urls = blobUrlsRef.current;
+    return () => {
+      for (const url of urls) {
+        URL.revokeObjectURL(url);
+      }
+      urls.clear();
+    };
+  }, []);
 
   const selectedLayout = useMemo(
     () => SPEAKER_LAYOUTS.find((l) => l.id === selectedLayoutId) ?? SPEAKER_LAYOUTS[0],
@@ -69,9 +103,12 @@ export const StudioTab: React.FC<StudioTabProps> = ({
       container,
       sources,
       listenerPosition,
+      listenerYawDeg,
+      lfeBoostDb,
       bakeRoomState,
       settings.rolloffMode,
     );
+    blobUrlsRef.current.add(result.downloadUrl);
     setReport(result);
   };
 
@@ -93,50 +130,121 @@ export const StudioTab: React.FC<StudioTabProps> = ({
 
   const handleProcessQueue = () => {
     if (queue.length === 0) return;
-    setQueue((prev) =>
-      prev.map((item) => ({ ...item, status: 'done', progress: 100 })),
-    );
-    handleRenderNow();
+    let latestReport: PostRenderReport | null = null;
+    const processed = queue.map((item) => {
+      if (item.status === 'done' && item.report) {
+        latestReport = item.report;
+        return item;
+      }
+      const layout =
+        SPEAKER_LAYOUTS.find((l) => l.id === item.targetLayoutId) ?? selectedLayout;
+      const rendered = renderSpatialMixWav(
+        item.trackTitle,
+        layout,
+        item.outputCodec,
+        item.container,
+        sources,
+        listenerPosition,
+        listenerYawDeg,
+        lfeBoostDb,
+        item.bakeRoomState,
+        settings.rolloffMode,
+      );
+      blobUrlsRef.current.add(rendered.downloadUrl);
+      latestReport = rendered;
+      return { ...item, status: 'done' as const, progress: 100, report: rendered };
+    });
+    setQueue(processed);
+    if (latestReport) {
+      setReport(latestReport);
+    }
   };
 
   return (
     <section aria-label={t.tabStudio} className="space-y-6">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-white">{t.studioTitle}</h2>
-          <p className="text-sm text-[#99999E] mt-0.5">
-            Active Source: <span className="text-[#E9E9EC] font-medium">{activeTrack.title}</span> ·{' '}
-            <span className="font-mono text-xs">{activeVariant.codec}</span>
-          </p>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div
+          role="tablist"
+          aria-label="Studio mode"
+          className="inline-flex items-center gap-1 p-1 rounded-xl bg-[#15161C] border border-white/10"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={studioSubMode === 'scarlett-vocal'}
+            onClick={() => onStudioSubModeChange('scarlett-vocal')}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+              studioSubMode === 'scarlett-vocal'
+                ? 'bg-[#387AFF] text-white'
+                : 'text-[#B7B7BB] hover:text-white'
+            }`}
+          >
+            {t.studioModeScarlettVocal}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={studioSubMode === 'converter'}
+            onClick={() => onStudioSubModeChange('converter')}
+            className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
+              studioSubMode === 'converter'
+                ? 'bg-[#387AFF] text-white'
+                : 'text-[#B7B7BB] hover:text-white'
+            }`}
+          >
+            {t.studioModeConverter}
+          </button>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setShowMetadata((v) => !v)}
-          className="px-3.5 py-2 text-xs font-medium rounded-lg bg-[#1E1F27] hover:bg-[#2A2C39] text-[#E9E9EC] border border-white/10 transition-colors whitespace-nowrap shrink-0"
-        >
-          {t.codecMetadata}
-        </button>
+        {studioSubMode === 'converter' && (
+          <button
+            type="button"
+            onClick={() => setShowMetadata((v) => !v)}
+            className="px-3.5 py-2 text-xs font-medium rounded-lg bg-[#1E1F27] hover:bg-[#2A2C39] text-[#E9E9EC] border border-white/10 transition-colors whitespace-nowrap shrink-0"
+          >
+            {t.codecMetadata}
+          </button>
+        )}
       </div>
 
-      {showMetadata && (
+      {studioSubMode === 'scarlett-vocal' ? (
+        <ScarlettVocalConsole
+          t={t}
+          activeTrack={activeTrack}
+          scarlett={scarlett}
+          vocalRack={vocalRack}
+          onUpdateScarlett={onUpdateScarlett}
+          onUpdateVocalRack={onUpdateVocalRack}
+          onNotify={onNotify}
+        />
+      ) : (
+        <>
+          <div>
+            <h2 className="text-xl font-bold text-white">{t.studioTitle}</h2>
+            <p className="text-sm text-[#99999E] mt-0.5">
+              {t.activeSourceLabel}: <span className="text-[#E9E9EC] font-medium">{activeTrack.title}</span> ·{' '}
+              <span className="font-mono text-xs">{activeVariant.codec}</span>
+            </p>
+          </div>
+
+          {showMetadata && (
         <div className="bg-[#15161C] border border-white/10 rounded-2xl p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
           <div>
-            <p className="text-[#99999E]">Codec</p>
+            <p className="text-[#99999E]">{t.metaCodec}</p>
             <p className="font-mono text-white mt-1">{activeVariant.codec}</p>
           </div>
           <div>
-            <p className="text-[#99999E]">Container</p>
+            <p className="text-[#99999E]">{t.metaContainer}</p>
             <p className="font-mono text-white mt-1">{activeVariant.container}</p>
           </div>
           <div>
-            <p className="text-[#99999E]">Sample Rate / Depth</p>
+            <p className="text-[#99999E]">{t.metaRateDepth}</p>
             <p className="font-mono tabular-nums text-white mt-1">
               {activeVariant.sampleRateHz} Hz · {activeVariant.bitDepth}-bit
             </p>
           </div>
           <div>
-            <p className="text-[#99999E]">Channel Bed / Objects</p>
+            <p className="text-[#99999E]">{t.metaBedObjects}</p>
             <p className="font-mono text-white mt-1">{activeVariant.channels}</p>
           </div>
         </div>
@@ -150,9 +258,9 @@ export const StudioTab: React.FC<StudioTabProps> = ({
 
             {(
               [
-                ['pc', 'PC / Standard (<= 8 ch)'],
-                ['matrix', 'Matrix Wired'],
-                ['multichannel', 'Multichannel (> 8 ch)'],
+                ['pc', t.catPc],
+                ['matrix', t.catMatrix],
+                ['multichannel', t.catMultichannel],
               ] as const
             ).map(([catKey, catTitle]) => {
               const items = SPEAKER_LAYOUTS.filter((l) => l.category === catKey);
@@ -266,7 +374,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({
         <div className="xl:col-span-5 space-y-5">
           <div className="bg-[#15161C] border border-white/10 rounded-2xl p-5 space-y-3">
             <h3 className="text-sm font-semibold text-white">{t.wiringGuide}</h3>
-            <LayoutDiagram layout={selectedLayout} />
+            <LayoutDiagram layout={selectedLayout} channelsLabel={t.channelsWord} />
           </div>
 
           {report && (
@@ -283,19 +391,19 @@ export const StudioTab: React.FC<StudioTabProps> = ({
 
               <div className="grid grid-cols-3 gap-3 text-xs">
                 <div className="p-2.5 rounded-lg bg-[#0C0E14] border border-white/8">
-                  <p className="text-[#99999E]">True Peak</p>
+                  <p className="text-[#99999E]">{t.metricTruePeak}</p>
                   <p className="font-mono tabular-nums text-white font-semibold mt-1">
                     {report.peakDbfs} dBFS
                   </p>
                 </div>
                 <div className="p-2.5 rounded-lg bg-[#0C0E14] border border-white/8">
-                  <p className="text-[#99999E]">Integrated</p>
+                  <p className="text-[#99999E]">{t.metricIntegrated}</p>
                   <p className="font-mono tabular-nums text-white font-semibold mt-1">
                     {report.rmsLufs} LUFS
                   </p>
                 </div>
                 <div className="p-2.5 rounded-lg bg-[#0C0E14] border border-white/8">
-                  <p className="text-[#99999E]">Headroom</p>
+                  <p className="text-[#99999E]">{t.metricHeadroom}</p>
                   <p className="font-mono tabular-nums text-[#34D399] font-semibold mt-1">
                     +{report.headroomDb} dB
                   </p>
@@ -307,7 +415,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({
                 <span>·</span>
                 <span>{report.sampleRateHz} Hz</span>
                 <span>·</span>
-                <span>{report.bakedRoomPosition ? '3D Room Baked' : 'Neutral Origin'}</span>
+                <span>{report.bakedRoomPosition ? t.bakedRoomBadge : t.neutralOriginBadge}</span>
               </div>
 
               <a
@@ -316,7 +424,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({
                 className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-xl bg-[#34D399] hover:bg-[#22C58B] text-[#080A10] transition-colors"
               >
                 <Download className="w-4 h-4" />
-                <span>Download {report.downloadFileName}</span>
+                <span>{t.downloadFile.replace('{file}', report.downloadFileName)}</span>
               </a>
             </div>
           )}
@@ -341,7 +449,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({
 
             {queue.length === 0 ? (
               <p className="text-xs text-[#99999E] py-3">
-                Queue is empty. Configure a speaker layout and click Add to Queue for batch conversion.
+                {t.queueEmpty}
               </p>
             ) : (
               <div className="space-y-2">
@@ -357,13 +465,19 @@ export const StudioTab: React.FC<StudioTabProps> = ({
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <span
-                        className={`font-mono ${
-                          item.status === 'done' ? 'text-[#34D399]' : 'text-[#89B0FF]'
-                        }`}
-                      >
-                        {item.status === 'done' ? 'Done' : 'Queued'}
-                      </span>
+                      {item.status === 'done' && item.report ? (
+                        <a
+                          href={item.report.downloadUrl}
+                          download={item.report.downloadFileName}
+                          aria-label={`Download ${item.report.downloadFileName}`}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[#34D399]/18 hover:bg-[#34D399]/30 text-[#34D399] font-mono font-semibold"
+                        >
+                          <Download className="w-3 h-3" />
+                          <span>WAV</span>
+                        </a>
+                      ) : (
+                        <span className="font-mono text-[#89B0FF]">{t.statusQueued}</span>
+                      )}
                       <button
                         type="button"
                         aria-label={`Remove ${item.trackTitle} from queue`}
@@ -380,6 +494,8 @@ export const StudioTab: React.FC<StudioTabProps> = ({
           </div>
         </div>
       </div>
+        </>
+      )}
     </section>
   );
 };

@@ -45,6 +45,47 @@ jobs:
             -destkeypass cavernize -noprompt
           keytool -list -v -keystore "$GITHUB_WORKSPACE/cavernize.keystore" -storepass cavernize | head -n 25
 
+      - name: Build native ARM64 libcavernize_proaudio.so (Path A AAudio + Path B libusb UAC2)
+        run: |
+          set -euo pipefail
+          NDK_DIR="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}}"
+          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
+            NDK_DIR=$(find /usr/local/lib/android/sdk/ndk -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort -V | tail -n 1 || true)
+          fi
+          echo "Using Android NDK: ${NDK_DIR:-<none>}"
+          if [ -z "$NDK_DIR" ] || [ ! -f "$NDK_DIR/build/cmake/android.toolchain.cmake" ]; then
+            echo "Warning: Android NDK toolchain not found; skipping native pro-audio build (AudioTrack fallback stays active)."
+            exit 0
+          fi
+
+          WORK_DIR="$RUNNER_TEMP/cavernize_proaudio_build"
+          rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
+
+          LIBUSB_CMAKE_ARG=""
+          if curl -fsSL "https://github.com/libusb/libusb/releases/download/v1.0.27/libusb-1.0.27.tar.bz2" -o "$WORK_DIR/libusb.tar.bz2"; then
+            tar -xjf "$WORK_DIR/libusb.tar.bz2" -C "$WORK_DIR"
+            LIBUSB_SRC=$(find "$WORK_DIR" -maxdepth 1 -type d -name "libusb-*" | head -n 1)
+            if [ -n "$LIBUSB_SRC" ]; then
+              LIBUSB_CMAKE_ARG="-DCAVERNIZE_LIBUSB_DIR=$LIBUSB_SRC"
+              echo "Bundling unrooted Android libusb from: $LIBUSB_SRC"
+            fi
+          else
+            echo "Warning: Could not download libusb-1.0.27 tarball; compiling Path A AAudio Exclusive only."
+          fi
+
+          cmake -S "CavernSamples/CavernizeAndroid/Native/cavernize_proaudio" \
+            -B "$WORK_DIR/cmake_arm64" \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            $LIBUSB_CMAKE_ARG
+          cmake --build "$WORK_DIR/cmake_arm64" --config Release -- -j"$(nproc)"
+
+          mkdir -p "CavernSamples/CavernizeAndroid/NativeLibs/arm64-v8a"
+          cp "$WORK_DIR/cmake_arm64/libcavernize_proaudio.so" "CavernSamples/CavernizeAndroid/NativeLibs/arm64-v8a/libcavernize_proaudio.so"
+          ls -lh "CavernSamples/CavernizeAndroid/NativeLibs/arm64-v8a/libcavernize_proaudio.so"
+
       - name: Build and sign CavernizeAndroid APK
         run: |
           dotnet publish CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
