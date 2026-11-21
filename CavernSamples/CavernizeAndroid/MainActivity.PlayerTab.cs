@@ -166,6 +166,7 @@ public partial class MainActivity {
         Button resetRoomBtn = PillButton(S["RoomResetAll"], () => {
             playerEngine.ListenerPosition = Vector3.Zero;
             playerEngine.ListenerRotation = Vector3.Zero;
+            headTrackingManager?.Recenter();
             SyncRoomSlidersFromEngine();
             UpdateRoomCanvas();
         });
@@ -814,7 +815,10 @@ public partial class MainActivity {
         if (roomTelemetryText != null && playerEngine != null) {
             Vector3 p = playerEngine.ListenerPosition;
             Vector3 r = playerEngine.ListenerRotation;
-            roomTelemetryText.Text = $"X: {p.X:0.0}m  •  Y: {p.Y:0.0}m  •  Z: {p.Z:0.0}m  •  Yaw: {r.Y:0}°  •  Pitch: {r.X:0}°";
+            string htSuffix = playerEngine.SceneHub.IsHeadTrackingLive
+                ? $"  •  HT: {playerEngine.SceneHub.ActiveHeadTrackerName}"
+                : string.Empty;
+            roomTelemetryText.Text = $"X: {p.X:0.0}m  •  Y: {p.Y:0.0}m  •  Z: {p.Z:0.0}m  •  Yaw: {r.Y:0}°  •  Pitch: {r.X:0}°{htSuffix}";
         }
     }
 

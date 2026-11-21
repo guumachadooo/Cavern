@@ -91,6 +91,46 @@ public sealed class SpatialSceneHub {
     public bool IsHeadTrackingLive { get; set; }
 
     /// <summary>
+    /// True when the active binaural profile is a measured room BRIR (&gt; 1024 taps or flagged BRIR),
+    /// triggering Slot 5A's automatic double-room bypass guard for synthetic ISM reflections.
+    /// </summary>
+    public bool IsMeasuredBrirActive { get; set; }
+
+    /// <summary>
+    /// Live Slot 5A physical externalization telemetry (ISM room active/BRIR guard state, Sabine/Eyring RT60, near-field, ISO 9613-1).
+    /// </summary>
+    public PhysicalExternalizationDiagnostics ExternalizationDiagnostics {
+        get {
+            lock (syncLock) {
+                return externalizationDiagnostics;
+            }
+        }
+        set {
+            lock (syncLock) {
+                externalizationDiagnostics = value;
+            }
+        }
+    }
+    PhysicalExternalizationDiagnostics externalizationDiagnostics = PhysicalExternalizationDiagnostics.Default;
+
+    /// <summary>
+    /// Live Slot 5B HRTF personalization telemetry (MagLS Ambisonic order/cutoff/HF error, Woodworth-Schlosberg biometric ITD, HpTF notch).
+    /// </summary>
+    public HrtfPersonalizationDiagnostics PersonalizationDiagnostics {
+        get {
+            lock (syncLock) {
+                return personalizationDiagnostics;
+            }
+        }
+        set {
+            lock (syncLock) {
+                personalizationDiagnostics = value;
+            }
+        }
+    }
+    HrtfPersonalizationDiagnostics personalizationDiagnostics = HrtfPersonalizationDiagnostics.Default;
+
+    /// <summary>
     /// Live Slot 4 audio output telemetry (sample rate, Float32, LowLatency, USB DAC preference, estimated latency, underruns).
     /// </summary>
     public AudioOutputDiagnostics AudioDiagnostics {

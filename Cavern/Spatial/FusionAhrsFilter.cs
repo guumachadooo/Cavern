@@ -12,7 +12,6 @@ namespace Cavern.Spatial {
         const float InitialStartupGain = 10f;
         const float StartupPeriodSeconds = 3f;
         const float StationaryGyroThresholdRadPerSec = 0.05235988f; // ~3 deg/s
-        const float StationaryAccelVarianceLimit = 0.08f;
 
         Quaternion orientation = Quaternion.Identity;
         Vector3 gyroBiasRadPerSec = Vector3.Zero;

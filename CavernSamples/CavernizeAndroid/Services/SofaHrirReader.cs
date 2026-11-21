@@ -4,11 +4,15 @@ using System.Text;
 
 using Cavern.Virtualizer;
 
+using Cavernize.Logic.Spatial;
+
 namespace CavernizeAndroid.Services;
 
 /// <summary>
 /// Pure C# AES69 SOFA (HDF5 v2/v3) reader for loading laboratory-measured HRIR and BRIR files directly on Android.
-/// Preserves exact measured ITD, ILD, and full-band frequency response without inventing synthetic filters.
+/// Supports full spherical-grid extraction for Slot 5B MagLS Ambisonics decoding, optional <c>Data.Delay</c>
+/// compensation, automatic sample-rate conversion to 48 kHz, and Woodworth-Schlosberg biometric ITD scaling
+/// while preserving exact measured ITD, ILD, and full-band frequency response without inventing synthetic filters.
 /// </summary>
 public static class SofaHrirReader {
     /// <summary>
@@ -32,30 +36,78 @@ public static class SofaHrirReader {
     static readonly int[] FrontRefIndices = [0, 2, 3];
 
     /// <summary>
+    /// Full spherical grid of measured HRIR/BRIR pairs extracted directly from an AES69 SOFA file.
+    /// Used as exact input to <see cref="MagLsAmbisonicDecoder"/> and nearest-neighbor mapping.
+    /// </summary>
+    public sealed class SofaRawGrid {
+        public double[] AzimuthsRad { get; init; }
+        public double[] ElevationsRad { get; init; }
+        public (double vx, double vy, double vz, double dist)[] UnitVectors { get; init; }
+        public float[][] LeftIrs { get; init; }
+        public float[][] RightIrs { get; init; }
+        public int SampleRate { get; init; }
+        public int OriginalSampleRate { get; init; }
+        public float ReferenceDistance { get; init; }
+        public int TapCount { get; init; }
+        public bool IsBrir => TapCount > MinimumPhaseHrir.MaxAnechoicTaps;
+    }
+
+    /// <summary>
     /// Result of loading a SOFA HRIR/BRIR file.
     /// </summary>
-    public readonly struct SofaLoadResult(VirtualChannel[] channels, int sampleRate, float referenceDistance, int tapCount) {
+    public readonly struct SofaLoadResult(
+        VirtualChannel[] channels,
+        int sampleRate,
+        float referenceDistance,
+        int tapCount,
+        MagLsDesignMetrics? magLsMetrics = null,
+        bool biometricItdApplied = false,
+        bool brirBypassed = false,
+        int measuredDirectionCount = 0) {
         public VirtualChannel[] Channels { get; } = channels;
         public int SampleRate { get; } = sampleRate;
         public float ReferenceDistance { get; } = referenceDistance;
         public int TapCount { get; } = tapCount;
+        public MagLsDesignMetrics? MagLsMetrics { get; } = magLsMetrics;
+        public bool BiometricItdApplied { get; } = biometricItdApplied;
+        public bool BrirBypassed { get; } = brirBypassed;
+        public int MeasuredDirectionCount { get; } = measuredDirectionCount;
+        public bool IsBrir => TapCount > MinimumPhaseHrir.MaxAnechoicTaps;
     }
 
     /// <summary>
     /// Loads a .sofa (AES69 / HDF5) HRIR or BRIR file from disk and maps it to Cavern's 16 virtual speaker layout.
     /// </summary>
-    public static SofaLoadResult Load(string filePath, bool minimumPhase = false) {
+    public static SofaLoadResult Load(string filePath, bool minimumPhase = false) =>
+        Load(filePath, minimumPhase, HrtfPersonalizationConfig.Default);
+
+    /// <summary>
+    /// Loads a .sofa (AES69 / HDF5) HRIR or BRIR file from disk with Slot 5B MagLS &amp; Biometric ITD personalization.
+    /// </summary>
+    public static SofaLoadResult Load(string filePath, bool minimumPhase, HrtfPersonalizationConfig personalization) {
         if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) {
             throw new FileNotFoundException("SOFA file not found.", filePath);
         }
         byte[] data = File.ReadAllBytes(filePath);
-        return Parse(data, minimumPhase);
+        return Parse(data, minimumPhase, personalization);
     }
 
     /// <summary>
-    /// Parses raw SOFA (HDF5 v2/v3) file bytes into Cavern <see cref="VirtualChannel"/> instances.
+    /// Loads the complete measured spherical grid from a .sofa file on disk (optionally resampled to 48 kHz).
     /// </summary>
-    public static SofaLoadResult Parse(byte[] data, bool minimumPhase = false) {
+    public static SofaRawGrid LoadRawGrid(string filePath, int targetSampleRate = VirtualizerFilter.FilterSampleRate) {
+        if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) {
+            throw new FileNotFoundException("SOFA file not found.", filePath);
+        }
+        return ParseRawGrid(File.ReadAllBytes(filePath), targetSampleRate);
+    }
+
+    /// <summary>
+    /// Parses raw SOFA (HDF5 v2/v3) file bytes into the complete spherical measurement grid.
+    /// Applies optional AES69 <c>Data.Delay</c> interaural offsets and resamples non-48 kHz files (e.g. 96 kHz SONICOM
+    /// or 44.1 kHz HUTUBS) to <paramref name="targetSampleRate"/> using energy-preserving linear resampling.
+    /// </summary>
+    public static SofaRawGrid ParseRawGrid(byte[] data, int targetSampleRate = VirtualizerFilter.FilterSampleRate) {
         Hdf5Reader reader = new(data);
         Dictionary<string, ulong> links = reader.ListGroup(reader.RootAddress);
 
@@ -69,7 +121,7 @@ public static class SofaHrirReader {
         if (srVals.Length == 0 || srVals[0] <= 0) {
             throw new InvalidDataException("Invalid Data.SamplingRate in SOFA file.");
         }
-        int sampleRate = (int)Math.Round(srVals[0]);
+        int originalSampleRate = (int)Math.Round(srVals[0]);
 
         (int[] spDims, double[] spVals) = reader.ReadFloatArray(spAddr);
         (int[] irDims, double[] irVals) = reader.ReadFloatArray(irAddr);
@@ -80,9 +132,21 @@ public static class SofaHrirReader {
 
         int mCount = irDims[0];
         int rCount = irDims[1];
-        int tapCount = irDims[2];
+        int rawTapCount = irDims[2];
         if (spDims.Length < 2 || spDims[0] < mCount || spDims[1] < 3) {
             throw new InvalidDataException($"Unsupported SourcePosition dimensions ({string.Join("x", spDims)}).");
+        }
+
+        // Optional AES69 Data.Delay dataset: shape [1, R] or [M, R] in samples
+        int[] delayDims = null;
+        double[] delayVals = null;
+        if (links.TryGetValue("Data.Delay", out ulong delayAddr)) {
+            try {
+                (delayDims, delayVals) = reader.ReadFloatArray(delayAddr);
+            } catch {
+                delayDims = null;
+                delayVals = null;
+            }
         }
 
         // Detect spherical (az, el, r > 0) vs Cartesian (x, y, z) coordinates
@@ -102,7 +166,10 @@ public static class SofaHrirReader {
             looksCartesian = true;
         }
 
+        double[] azRads = new double[mCount];
+        double[] elRads = new double[mCount];
         (double vx, double vy, double vz, double dist)[] unitVectors = new (double, double, double, double)[mCount];
+        double distSum = 0;
         for (int i = 0; i < mCount; i++) {
             double c0 = spVals[i * spDims[1]];
             double c1 = spVals[i * spDims[1] + 1];
@@ -110,56 +177,173 @@ public static class SofaHrirReader {
             if (looksCartesian) {
                 double r = Math.Sqrt(c0 * c0 + c1 * c1 + c2 * c2);
                 if (r > 1e-9) {
-                    unitVectors[i] = (c0 / r, c1 / r, c2 / r, r);
+                    double vx = c0 / r, vy = c1 / r, vz = c2 / r;
+                    unitVectors[i] = (vx, vy, vz, r);
+                    azRads[i] = Math.Atan2(vy, vx);
+                    elRads[i] = Math.Asin(Math.Clamp(vz, -1.0, 1.0));
+                    distSum += r;
                 } else {
                     unitVectors[i] = (1, 0, 0, 1);
+                    azRads[i] = 0;
+                    elRads[i] = 0;
+                    distSum += 1.0;
                 }
             } else {
                 double azRad = c0 * (Math.PI / 180.0);
                 double elRad = c1 * (Math.PI / 180.0);
                 double cosEl = Math.Cos(elRad);
-                unitVectors[i] = (cosEl * Math.Cos(azRad), cosEl * Math.Sin(azRad), Math.Sin(elRad), c2 > 0 ? c2 : 1.0);
+                double dist = c2 > 0 ? c2 : 1.0;
+                unitVectors[i] = (cosEl * Math.Cos(azRad), cosEl * Math.Sin(azRad), Math.Sin(elRad), dist);
+                azRads[i] = azRad;
+                elRads[i] = elRad;
+                distSum += dist;
             }
         }
 
-        float[][] leftEars = new float[CavernSpeakers.Length][];
-        float[][] rightEars = new float[CavernSpeakers.Length][];
-        double refDistSum = 0;
+        int finalSampleRate = targetSampleRate > 0 ? targetSampleRate : originalSampleRate;
+        bool needsResample = finalSampleRate != originalSampleRate;
+        float[][] leftIrs = new float[mCount][];
+        float[][] rightIrs = new float[mCount][];
+        int maxFinalTap = 0;
 
-        for (int s = 0; s < CavernSpeakers.Length; s++) {
-            (float cx, float cy) = CavernSpeakers[s];
-            // Cavern: x = elevation (-45 is UP +45), y = clockwise azimuth (-90 is LEFT, +90 is RIGHT)
-            // SOFA: az = counter-clockwise (+90 is LEFT, 270/-90 is RIGHT), el = +UP
-            double targetAzRad = (((-cy) % 360.0 + 360.0) % 360.0) * (Math.PI / 180.0);
-            double targetElRad = (-cx) * (Math.PI / 180.0);
-            double cosEl = Math.Cos(targetElRad);
-            double tx = cosEl * Math.Cos(targetAzRad);
-            double ty = cosEl * Math.Sin(targetAzRad);
-            double tz = Math.Sin(targetElRad);
-
-            int bestIdx = 0;
-            double bestDot = -2.0;
-            for (int i = 0; i < mCount; i++) {
-                double dot = tx * unitVectors[i].vx + ty * unitVectors[i].vy + tz * unitVectors[i].vz;
-                if (dot > bestDot) {
-                    bestDot = dot;
-                    bestIdx = i;
-                }
-            }
-            refDistSum += unitVectors[bestIdx].dist;
-
-            float[] l = new float[tapCount];
-            float[] r = new float[tapCount];
-            long baseIdx = (long)bestIdx * rCount * tapCount;
-            long rightOffset = baseIdx + tapCount;
-            for (int n = 0; n < tapCount; n++) {
+        for (int i = 0; i < mCount; i++) {
+            float[] l = new float[rawTapCount];
+            float[] r = new float[rawTapCount];
+            long baseIdx = (long)i * rCount * rawTapCount;
+            long rightOffset = baseIdx + rawTapCount;
+            for (int n = 0; n < rawTapCount; n++) {
                 double lv = irVals[baseIdx + n];
                 double rv = irVals[rightOffset + n];
                 l[n] = double.IsFinite(lv) ? (float)lv : 0f;
                 r[n] = double.IsFinite(rv) ? (float)rv : 0f;
             }
-            leftEars[s] = l;
-            rightEars[s] = r;
+
+            // Apply relative interaural Data.Delay if present in the SOFA file (common in minimum-phase / KEMAR SOFAs)
+            if (delayVals != null && delayDims != null && delayDims.Length >= 2 && delayDims[1] >= 2) {
+                int delayRow = delayDims[0] > i ? i : 0;
+                double dL = delayVals[delayRow * delayDims[1]];
+                double dR = delayVals[delayRow * delayDims[1] + 1];
+                if (double.IsFinite(dL) && double.IsFinite(dR)) {
+                    double diff = dR - dL;
+                    if (Math.Abs(diff) > 1e-4 && Math.Abs(diff) < rawTapCount) {
+                        int extra = (int)Math.Ceiling(Math.Abs(diff)) + 4;
+                        int delayedLen = rawTapCount + extra;
+                        if (diff > 0) {
+                            l = PadZero(l, delayedLen);
+                            r = BiometricItdScaler.ApplyCausalFractionalDelay(r, diff, delayedLen);
+                        } else {
+                            l = BiometricItdScaler.ApplyCausalFractionalDelay(l, -diff, delayedLen);
+                            r = PadZero(r, delayedLen);
+                        }
+                    }
+                }
+            }
+
+            if (needsResample) {
+                l = ImpulciferHrirParser.ResampleImpulse(l, originalSampleRate, finalSampleRate);
+                r = ImpulciferHrirParser.ResampleImpulse(r, originalSampleRate, finalSampleRate);
+            }
+
+            leftIrs[i] = l;
+            rightIrs[i] = r;
+            if (l.Length > maxFinalTap) maxFinalTap = l.Length;
+            if (r.Length > maxFinalTap) maxFinalTap = r.Length;
+        }
+
+        // Ensure uniform tap length across all M directions for MagLS FFT matrices
+        for (int i = 0; i < mCount; i++) {
+            if (leftIrs[i].Length < maxFinalTap) leftIrs[i] = PadZero(leftIrs[i], maxFinalTap);
+            if (rightIrs[i].Length < maxFinalTap) rightIrs[i] = PadZero(rightIrs[i], maxFinalTap);
+        }
+
+        return new SofaRawGrid {
+            AzimuthsRad = azRads,
+            ElevationsRad = elRads,
+            UnitVectors = unitVectors,
+            LeftIrs = leftIrs,
+            RightIrs = rightIrs,
+            SampleRate = finalSampleRate,
+            OriginalSampleRate = originalSampleRate,
+            ReferenceDistance = (float)Math.Clamp(distSum / Math.Max(1, mCount), 0.25, 10.0),
+            TapCount = maxFinalTap
+        };
+    }
+
+    /// <summary>
+    /// Parses raw SOFA (HDF5 v2/v3) file bytes into Cavern <see cref="VirtualChannel"/> instances.
+    /// </summary>
+    public static SofaLoadResult Parse(byte[] data, bool minimumPhase = false) =>
+        Parse(data, minimumPhase, HrtfPersonalizationConfig.Default);
+
+    /// <summary>
+    /// Parses raw SOFA (HDF5 v2/v3) file bytes into Cavern <see cref="VirtualChannel"/> instances with
+    /// optional Slot 5B MagLS Ambisonics decoding (over the full measured spherical grid) and
+    /// Woodworth-Schlosberg biometric ITD scaling. Automatically bypasses both on measured BRIRs (&gt; 1024 taps).
+    /// </summary>
+    public static SofaLoadResult Parse(byte[] data, bool minimumPhase, HrtfPersonalizationConfig personalization) {
+        SofaRawGrid grid = ParseRawGrid(data, VirtualizerFilter.FilterSampleRate);
+        int mCount = grid.AzimuthsRad.Length;
+        bool isBrir = grid.IsBrir;
+
+        bool wantsMagLs = personalization.MagLsMode != MagLsDecodeMode.Off;
+        bool wantsBioItd = personalization.BiometricItdEnabled &&
+            !BiometricItdScaler.IsBypass(personalization.HeadWidthCm, personalization.ManualItdOffsetUs);
+        bool brirBypassed = isBrir && (wantsMagLs || wantsBioItd || minimumPhase);
+
+        float[][] leftEars;
+        float[][] rightEars;
+        MagLsDesignMetrics? magLsMetrics = null;
+        double refDistSum = 0;
+
+        if (!isBrir && wantsMagLs && mCount >= 4) {
+            float[] targetElevs = new float[CavernSpeakers.Length];
+            float[] targetAzs = new float[CavernSpeakers.Length];
+            for (int s = 0; s < CavernSpeakers.Length; s++) {
+                targetElevs[s] = CavernSpeakers[s].x;
+                targetAzs[s] = CavernSpeakers[s].y;
+            }
+            MagLsAmbisonicDecoder.SynthesizeVirtualSpeakerHrirs(
+                grid.AzimuthsRad,
+                grid.ElevationsRad,
+                grid.LeftIrs,
+                grid.RightIrs,
+                targetElevs,
+                targetAzs,
+                grid.SampleRate,
+                (int)personalization.MagLsMode,
+                out leftEars,
+                out rightEars,
+                out MagLsDesignMetrics metrics,
+                personalization.MagLsCutoffHz);
+            magLsMetrics = metrics;
+            refDistSum = grid.ReferenceDistance * CavernSpeakers.Length;
+        } else {
+            leftEars = new float[CavernSpeakers.Length][];
+            rightEars = new float[CavernSpeakers.Length][];
+            for (int s = 0; s < CavernSpeakers.Length; s++) {
+                (float cx, float cy) = CavernSpeakers[s];
+                // Cavern: x = elevation (-45 is UP +45), y = clockwise azimuth (-90 is LEFT, +90 is RIGHT)
+                // SOFA: az = counter-clockwise (+90 is LEFT, 270/-90 is RIGHT), el = +UP
+                double targetAzRad = (((-cy) % 360.0 + 360.0) % 360.0) * (Math.PI / 180.0);
+                double targetElRad = (-cx) * (Math.PI / 180.0);
+                double cosEl = Math.Cos(targetElRad);
+                double tx = cosEl * Math.Cos(targetAzRad);
+                double ty = cosEl * Math.Sin(targetAzRad);
+                double tz = Math.Sin(targetElRad);
+
+                int bestIdx = 0;
+                double bestDot = -2.0;
+                for (int i = 0; i < mCount; i++) {
+                    double dot = tx * grid.UnitVectors[i].vx + ty * grid.UnitVectors[i].vy + tz * grid.UnitVectors[i].vz;
+                    if (dot > bestDot) {
+                        bestDot = dot;
+                        bestIdx = i;
+                    }
+                }
+                refDistSum += grid.UnitVectors[bestIdx].dist;
+                leftEars[s] = (float[])grid.LeftIrs[bestIdx].Clone();
+                rightEars[s] = (float[])grid.RightIrs[bestIdx].Clone();
+            }
         }
 
         // Single-scalar global unity-energy normalization across front reference speakers
@@ -169,7 +353,8 @@ public static class SofaHrirReader {
             double e = 0;
             float[] l = leftEars[idx];
             float[] r = rightEars[idx];
-            for (int n = 0; n < tapCount; n++) {
+            int len = Math.Min(l.Length, r.Length);
+            for (int n = 0; n < len; n++) {
                 e += (double)l[n] * l[n] + (double)r[n] * r[n];
             }
             frontEnergy += e;
@@ -180,28 +365,60 @@ public static class SofaHrirReader {
             for (int s = 0; s < CavernSpeakers.Length; s++) {
                 float[] l = leftEars[s];
                 float[] r = rightEars[s];
-                for (int n = 0; n < tapCount; n++) {
-                    l[n] *= scale;
-                    r[n] *= scale;
-                }
+                for (int n = 0; n < l.Length; n++) l[n] *= scale;
+                for (int n = 0; n < r.Length; n++) r[n] *= scale;
             }
         }
 
+        bool applyBioItd = !isBrir && wantsBioItd;
+        bool applyMinPhase = minimumPhase && !isBrir;
         VirtualChannel[] channels = new VirtualChannel[CavernSpeakers.Length];
-        bool applyMinPhase = minimumPhase && tapCount <= MinimumPhaseHrir.MaxAnechoicTaps;
+        int maxOutTap = grid.TapCount;
         for (int s = 0; s < CavernSpeakers.Length; s++) {
+            float[] irL = leftEars[s];
+            float[] irR = rightEars[s];
+            if (applyBioItd) {
+                BiometricItdScaler.ApplyToPair(
+                    irL,
+                    irR,
+                    CavernSpeakers[s].x,
+                    CavernSpeakers[s].y,
+                    grid.SampleRate,
+                    personalization.HeadWidthCm,
+                    personalization.ManualItdOffsetUs,
+                    out irL,
+                    out irR);
+                if (irL.Length > maxOutTap) maxOutTap = irL.Length;
+            }
             channels[s] = VirtualChannel.FromMeasured(
                 CavernSpeakers[s].x,
                 CavernSpeakers[s].y,
-                leftEars[s],
-                rightEars[s],
-                sampleRate,
+                irL,
+                irR,
+                grid.SampleRate,
                 crossoverFrequency: 0f,
                 minimumPhase: applyMinPhase);
         }
 
         float refDist = (float)Math.Clamp(refDistSum / CavernSpeakers.Length, 0.25, 10.0);
-        return new SofaLoadResult(channels, sampleRate, refDist, tapCount);
+        return new SofaLoadResult(
+            channels,
+            grid.SampleRate,
+            refDist,
+            maxOutTap,
+            magLsMetrics,
+            applyBioItd,
+            brirBypassed,
+            mCount);
+    }
+
+    static float[] PadZero(float[] src, int targetLen) {
+        if (src.Length >= targetLen) {
+            return src;
+        }
+        float[] dst = new float[targetLen];
+        Array.Copy(src, dst, src.Length);
+        return dst;
     }
 
     sealed class Hdf5Reader {

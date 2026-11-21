@@ -31,6 +31,11 @@ namespace Cavern {
         Distancer distancer;
 
         /// <summary>
+        /// Pure-physics ISO 9613-1 atmospheric air absorption filter (lazy-allocated only when physical distance exceeds 5 m).
+        /// </summary>
+        AirAbsorptionFilter airAbsorptionFilter;
+
+        /// <summary>
         /// <see cref="PitchedUpdateRate"/> without resampling.
         /// </summary>
         int baseUpdateRate;
@@ -218,6 +223,29 @@ namespace Cavern {
                     baseUpdateRate = samples.Length;
                     // Apply filter if set
                     SpatialFilter?.Process(samples);
+
+                    // Pure-physics ISO 9613-1 atmospheric air absorption for physical source distances > 5.0 m (unity bypass <= 5.0 m)
+                    if (AirAbsorptionFilter.GlobalEnabled && !LFE) {
+                        Vector3 physDelta = (position - listener.Position) * Listener.EnvironmentSizeInverse * AirAbsorptionFilter.PhysicalRoomHalfSize;
+                        float physicalDist = physDelta.Length();
+                        if (physicalDist > AirAbsorptionFilter.DirectPathThresholdMeters) {
+                            if (airAbsorptionFilter == null) {
+                                airAbsorptionFilter = new AirAbsorptionFilter();
+                            }
+                            airAbsorptionFilter.ConfigureDirectPath(
+                                physicalDist,
+                                listener.SampleRate,
+                                AirAbsorptionFilter.GlobalTemperatureCelsius,
+                                AirAbsorptionFilter.GlobalRelativeHumidityPct);
+                            airAbsorptionFilter.Process(samples, 0, samples.Length);
+                        } else if (airAbsorptionFilter != null && airAbsorptionFilter.IsActive) {
+                            airAbsorptionFilter.ConfigureDirectPath(
+                                0f,
+                                listener.SampleRate,
+                                AirAbsorptionFilter.GlobalTemperatureCelsius,
+                                AirAbsorptionFilter.GlobalRelativeHumidityPct);
+                        }
+                    }
 
                     // Distance simulation for HRTF (skip on dedicated LFE subwoofer sources)
                     if (DistanceSimulation && Listener.HeadphoneVirtualizer && !LFE) {

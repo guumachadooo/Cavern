@@ -54,6 +54,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     const int ReqPermissions = 1007;
     const int ReqLoadSubtitles = 1008;
     const int ReqLoadAutoEq = 1009;
+    const int ReqBluetoothPermissions = 1010;
 
     AppSettingsStore store;
     AndroidUpmixingSettings upmixingSettings;
@@ -65,6 +66,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     RealtimePlayerEngine playerEngine;
     AndroidAudioOutput audioOutput;
     AudioDeviceProfileManager audioDeviceProfileManager;
+    HeadTrackingManager headTrackingManager;
 
     AndroidStrings S => AndroidStrings.Active;
 
@@ -243,10 +245,16 @@ public partial class MainActivity : Activity, ICavernizeApp {
             LimiterOnly = store.LimiterOnly,
             EnvironmentType = (Environments)Math.Clamp(store.EnvironmentTypeIndex, 0, 3),
             EnvironmentSize = new System.Numerics.Vector3(store.RoomSizeX, store.RoomSizeY, store.RoomSizeZ),
-            AudioQuality = (QualityModes)Math.Clamp(store.AudioQualityIndex, 0, 3)
+            AudioQuality = (QualityModes)Math.Clamp(store.AudioQualityIndex, 0, 3),
+            UsbDacNativeSampleRateEnabled = store.UsbDacNativeSampleRate,
+            HeadTrackingPredictionMs = store.HeadTrackingPredictionMs
         };
         playerEngine.PlaybackCompleted += () => RunOnUiThread(OnPlayerCompleted);
-        audioOutput = new AndroidAudioOutput(playerEngine);
+        audioOutput = new AndroidAudioOutput(playerEngine) {
+            LowLatencyMode = store.LowLatencyAudio,
+            UsbDacNativeSampleRate = store.UsbDacNativeSampleRate
+        };
+        audioOutput.DiagnosticsUpdated += _ => RunOnUiThread(RefreshHeadTrackingUi);
 
         mediaNotification?.Dispose();
         mediaNotification = new MediaPlaybackNotificationManager(this);
@@ -267,15 +275,25 @@ public partial class MainActivity : Activity, ICavernizeApp {
         BinauralProfileService.ApplySavedProfile(this, store);
         BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
         playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
+        playerEngine.ApplyExternalizationConfig(store.BuildExternalizationConfig());
+        playerEngine.ApplyPersonalizationConfig(store.BuildPersonalizationConfig());
 
         AutoEqService.EnsureLoaded(this);
         AutoEqService.ApplySavedToEngine(this, store, playerEngine);
         audioDeviceProfileManager = new AudioDeviceProfileManager(this, store, playerEngine);
         audioDeviceProfileManager.ActiveDeviceChanged += OnAudioDeviceRouteChanged;
 
+        headTrackingManager = new HeadTrackingManager(this, store, playerEngine, audioOutput);
+        headTrackingManager.StatusChanged += () => RunOnUiThread(RefreshHeadTrackingUi);
+
         uiHandler = new Handler(Looper.MainLooper);
         BuildRootUi();
         audioDeviceProfileManager.Start();
+        audioOutput.UpdateOutputRoute(audioDeviceProfileManager.CurrentDevice);
+        headTrackingManager.ApplySettings();
+        RefreshHeadTrackingUi();
+        RefreshExternalizationUi();
+        RefreshPersonalizationUi();
         RequestMediaPermissionsIfNeeded();
         StartTelemetryTimer();
 
@@ -307,6 +325,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     protected override void OnDestroy() {
         uiDestroyed = true;
+        StopCalibrationTonePlayback();
         activeCts?.Cancel();
         activeCts?.Dispose();
         truehdPrepareCts?.Cancel();
@@ -320,6 +339,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         musicVideoStage?.ReleasePlayer();
         currentMediaMeta?.ArtworkBitmap?.Dispose();
         defaultFallbackCover?.Dispose();
+        headTrackingManager?.Dispose();
         audioDeviceProfileManager?.Dispose();
         audioOutput?.Dispose();
         playerEngine?.Dispose();
@@ -1117,6 +1137,35 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         if (needed.Count > 0) {
             RequestPermissions(needed.ToArray(), ReqPermissions);
+        }
+    }
+
+    void RequestBluetoothPermissionsIfNeeded(Cavernize.Logic.Spatial.HeadTrackerSourceKind source) {
+        if (!OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            return;
+        }
+        List<string> needed = [];
+        if (CheckSelfPermission(Manifest.Permission.BluetoothConnect) != Permission.Granted) {
+            needed.Add(Manifest.Permission.BluetoothConnect);
+        }
+        if (source == Cavernize.Logic.Spatial.HeadTrackerSourceKind.BleOsc &&
+            CheckSelfPermission(Manifest.Permission.BluetoothScan) != Permission.Granted) {
+            needed.Add(Manifest.Permission.BluetoothScan);
+        }
+        if (needed.Count > 0) {
+            RequestPermissions(needed.ToArray(), ReqBluetoothPermissions);
+        }
+    }
+
+    public override void OnRequestPermissionsResult(int requestCode, string[] permissions, Permission[] grantResults) {
+        base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == ReqBluetoothPermissions) {
+            bool allGranted = grantResults != null && grantResults.Length > 0 && grantResults.All(r => r == Permission.Granted);
+            if (!allGranted) {
+                ShowToast(S["HeadTrackingPermNeededToast"]);
+            }
+            headTrackingManager?.ApplySettings();
+            RefreshHeadTrackingUi();
         }
     }
 

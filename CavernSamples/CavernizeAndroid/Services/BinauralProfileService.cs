@@ -65,6 +65,11 @@ public static class BinauralProfileService {
     static readonly byte[] ChrirMagic = Encoding.ASCII.GetBytes("CHRIR1");
 
     /// <summary>
+    /// Live Slot 5B personalization diagnostics snapshot from the most recent HRIR/BRIR load.
+    /// </summary>
+    public static HrtfPersonalizationDiagnostics LastPersonalizationDiagnostics { get; private set; } = HrtfPersonalizationDiagnostics.Default;
+
+    /// <summary>
     /// Official laboratory distance progression measured on the same TH Köln Neumann KU100 DFC setup.
     /// </summary>
     public static readonly (string ProfileId, float Meters, string ShortLabel)[] ThKolnDistanceSeries = [
@@ -272,7 +277,18 @@ public static class BinauralProfileService {
             return false;
         }
         BinauralProfileInfo info = FindById(ResolveStoredHrtfProfileId(store));
-        return info != null && !info.IsBrir && !info.IsDirectStereo;
+        return info != null && !info.IsBrir && !info.IsDirectStereo && !VirtualizerFilter.IsMeasuredBrirActive;
+    }
+
+    /// <summary>
+    /// True when Slot 5B MagLS Ambisonic decoding is actively applied to the current anechoic HRIR.
+    /// </summary>
+    public static bool IsMagLsEffective(AppSettingsStore store) {
+        if (store == null || !store.HeadphoneVirtualizer || store.MagLsModeIndex <= 0) {
+            return false;
+        }
+        BinauralProfileInfo info = FindById(ResolveStoredHrtfProfileId(store));
+        return info != null && !info.IsBrir && !info.IsDirectStereo && !info.IsClassic && !VirtualizerFilter.IsMeasuredBrirActive;
     }
 
     /// <summary>
@@ -284,7 +300,15 @@ public static class BinauralProfileService {
         string title = info.IsCustom && !string.IsNullOrEmpty(store.HrirPath)
             ? $"{s[info.TitleKey]} ({Path.GetFileName(store.HrirPath)})"
             : s[info.TitleKey];
-        if (IsMinimumPhaseEffective(store)) {
+        bool magLs = IsMagLsEffective(store);
+        bool minPh = IsMinimumPhaseEffective(store);
+        if (magLs && minPh) {
+            return $"{title} • MagLS O{store.MagLsModeIndex} • MinPh";
+        }
+        if (magLs) {
+            return $"{title} • MagLS O{store.MagLsModeIndex}";
+        }
+        if (minPh) {
             return $"{title} • MinPh";
         }
         return title;
@@ -300,6 +324,9 @@ public static class BinauralProfileService {
         string id = ResolveStoredHrtfProfileId(store);
         BinauralProfileInfo info = FindById(id);
         string baseBadge = info != null ? info.ShortBadge : s["BentoHrtf"];
+        if (IsMagLsEffective(store)) {
+            return $"{baseBadge} M{store.MagLsModeIndex}";
+        }
         return IsMinimumPhaseEffective(store) ? $"{baseBadge} MP" : baseBadge;
     }
 
@@ -396,7 +423,23 @@ public static class BinauralProfileService {
     }
 
     /// <summary>
-    /// Mirrors the currently active binaural profile ID, display label, and compensation mode into Slot 3 (<see cref="SpatialSceneHub"/>).
+    /// True when the active binaural profile is a measured BRIR (flagged BRIR asset or custom .sofa/.wav &gt; 1024 taps),
+    /// signaling Slot 5A to automatically bypass synthetic ISM reflections so room acoustics are never doubled.
+    /// </summary>
+    public static bool IsActiveProfileBrir(AppSettingsStore store) {
+        if (store == null || !store.HeadphoneVirtualizer) {
+            return false;
+        }
+        BinauralProfileInfo info = FindById(ResolveStoredHrtfProfileId(store));
+        if (info == null || info.IsDirectStereo) {
+            return false;
+        }
+        return info.IsBrir || VirtualizerFilter.IsMeasuredBrirActive;
+    }
+
+    /// <summary>
+    /// Mirrors the currently active binaural profile ID, display label, compensation mode, BRIR state,
+    /// and Slot 5B personalization telemetry into Slot 3 (<see cref="SpatialSceneHub"/>).
     /// </summary>
     public static void SyncToSceneHub(SpatialSceneHub hub, AppSettingsStore store, AndroidStrings s = null) {
         if (hub == null || store == null) {
@@ -405,12 +448,43 @@ public static class BinauralProfileService {
         string effectiveId = GetEffectiveProfileId(store);
         hub.ActiveBinauralProfileId = effectiveId;
         hub.ActiveBinauralCompensationMode = GetActiveCompensationMode(store);
+        hub.IsMeasuredBrirActive = IsActiveProfileBrir(store);
         if (s != null) {
             hub.ActiveBinauralProfileName = GetActiveDisplayTitle(store, s);
         } else {
             BinauralProfileInfo info = FindById(effectiveId);
             hub.ActiveBinauralProfileName = info != null ? info.ShortBadge : effectiveId;
         }
+        hub.PersonalizationDiagnostics = BuildMergedDiagnostics(store);
+    }
+
+    /// <summary>
+    /// Builds an up-to-date Slot 5B diagnostics snapshot combining the most recent HRIR load
+    /// (MagLS order/cutoff/HF error, Biometric ITD state, BRIR bypass, active format) with live HpTF notch settings.
+    /// </summary>
+    public static HrtfPersonalizationDiagnostics BuildMergedDiagnostics(AppSettingsStore store) {
+        HrtfPersonalizationConfig cfg = store != null ? store.BuildPersonalizationConfig() : HrtfPersonalizationConfig.Default;
+        HrtfPersonalizationDiagnostics last = LastPersonalizationDiagnostics;
+        double maxItdUs = BiometricItdScaler.ComputeWoodworthItdUs(90.0, 0.0, cfg.HeadWidthCm) + cfg.ManualItdOffsetUs;
+        double delta90Us = BiometricItdScaler.ComputeItdDeltaUs(90.0, 0.0, cfg.HeadWidthCm, cfg.ManualItdOffsetUs);
+        bool hrtfActive = store != null && store.HeadphoneVirtualizer;
+        return new HrtfPersonalizationDiagnostics {
+            IsMagLsActive = hrtfActive && last.IsMagLsActive,
+            MagLsOrder = hrtfActive ? last.MagLsOrder : 0,
+            MagLsCutoffHz = hrtfActive ? last.MagLsCutoffHz : 0f,
+            MagLsHfErrorDb = hrtfActive ? last.MagLsHfErrorDb : 0f,
+            IsBiometricItdActive = hrtfActive && last.IsBiometricItdActive,
+            IsBrirBypassed = hrtfActive && last.IsBrirBypassed,
+            HeadWidthCm = cfg.HeadWidthCm,
+            MaxLateralItdUs = (float)maxItdUs,
+            ItdDeltaAt90DegUs = (float)delta90Us,
+            IsHptfNotchActive = cfg.HptfNotchEnabled && cfg.HptfNotchGainDb < -0.05f,
+            HptfNotchFreqHz = cfg.HptfNotchFreqHz,
+            HptfNotchGainDb = cfg.HptfNotchGainDb,
+            HptfNotchQ = cfg.HptfNotchQ,
+            ActiveHrirFormat = hrtfActive ? (last.ActiveHrirFormat ?? "CHRIR1") : "Direct 2.0",
+            ActiveClusterId = cfg.PerceptualClusterId ?? ""
+        };
     }
 
     /// <summary>
@@ -426,6 +500,7 @@ public static class BinauralProfileService {
 
         if (info.IsDirectStereo) {
             store.HeadphoneVirtualizer = false;
+            LastPersonalizationDiagnostics = BuildMergedDiagnostics(store);
             AppLogger.Info("Switched binaural profile to Direct 2.0 (HRTF bypassed).");
             return true;
         }
@@ -457,7 +532,22 @@ public static class BinauralProfileService {
     }
 
     /// <summary>
-    /// Imports a user-selected custom .wav or .sofa file into private storage and activates it immediately.
+    /// Rebuilds the active anechoic HRIR filter bank whenever Slot 5B HRIR parameters (MagLS order or Biometric ITD)
+    /// are modified by the user. Automatically bypassed for Direct 2.0 or measured BRIR profiles.
+    /// </summary>
+    public static bool ApplyPersonalization(Context ctx, AppSettingsStore store, out string errorMessage) {
+        errorMessage = null;
+        if (store == null || !store.HeadphoneVirtualizer) {
+            LastPersonalizationDiagnostics = BuildMergedDiagnostics(store);
+            return true;
+        }
+        string activeId = ResolveStoredHrtfProfileId(store);
+        return ApplyHrtfFilterOnly(ctx, store, activeId, out errorMessage);
+    }
+
+    /// <summary>
+    /// Imports a user-selected custom .wav (Impulcifer/HeSuVi/Cavern) or .sofa (AES69) file into private storage
+    /// and activates it immediately with the current Slot 5B personalization settings.
     /// </summary>
     public static bool ImportCustomFile(Context ctx, AppSettingsStore store, string sourcePath, out string errorMessage) {
         errorMessage = null;
@@ -485,11 +575,12 @@ public static class BinauralProfileService {
                 File.Copy(sourcePath, destPath, overwrite: true);
             }
 
-            LoadAndOverrideCustom(destPath, store.MinimumPhaseHrir);
+            HrtfPersonalizationConfig personalization = store.BuildPersonalizationConfig();
+            LoadAndOverrideCustom(destPath, store.MinimumPhaseHrir, personalization);
             store.HrirPath = destPath;
             store.BinauralProfileId = CustomId;
             store.HeadphoneVirtualizer = true;
-            AppLogger.Info($"Imported and activated custom binaural profile: '{destPath}' (minPhase={store.MinimumPhaseHrir})");
+            AppLogger.Info($"Imported and activated custom binaural profile: '{destPath}' (fmt={LastPersonalizationDiagnostics.ActiveHrirFormat}, minPhase={store.MinimumPhaseHrir}, magLs={personalization.MagLsMode}, bioItd={personalization.BiometricItdEnabled})");
             return true;
         } catch (Exception ex) {
             AppLogger.Error("BinauralProfileService.ImportCustomFile", ex);
@@ -516,9 +607,27 @@ public static class BinauralProfileService {
         errorMessage = null;
         try {
             BinauralProfileInfo info = FindById(profileId);
+            HrtfPersonalizationConfig personalization = store.BuildPersonalizationConfig();
             bool useMinPhase = store.MinimumPhaseHrir && !(info?.IsBrir ?? false);
             if (info == null || info.IsClassic) {
                 VirtualizerFilter.Reset(useMinPhase);
+                LastPersonalizationDiagnostics = new HrtfPersonalizationDiagnostics {
+                    IsMagLsActive = false,
+                    MagLsOrder = 0,
+                    MagLsCutoffHz = 0f,
+                    MagLsHfErrorDb = 0f,
+                    IsBiometricItdActive = false,
+                    IsBrirBypassed = false,
+                    HeadWidthCm = personalization.HeadWidthCm,
+                    MaxLateralItdUs = (float)(BiometricItdScaler.ComputeWoodworthItdUs(90.0, 0.0, personalization.HeadWidthCm) + personalization.ManualItdOffsetUs),
+                    ItdDeltaAt90DegUs = (float)BiometricItdScaler.ComputeItdDeltaUs(90.0, 0.0, personalization.HeadWidthCm, personalization.ManualItdOffsetUs),
+                    IsHptfNotchActive = personalization.HptfNotchEnabled && personalization.HptfNotchGainDb < -0.05f,
+                    HptfNotchFreqHz = personalization.HptfNotchFreqHz,
+                    HptfNotchGainDb = personalization.HptfNotchGainDb,
+                    HptfNotchQ = personalization.HptfNotchQ,
+                    ActiveHrirFormat = "Cavern Classic",
+                    ActiveClusterId = personalization.PerceptualClusterId ?? ""
+                };
                 AppLogger.Info($"Activated binaural profile: Cavern Classic (minPhase={useMinPhase})");
                 return true;
             }
@@ -528,15 +637,17 @@ public static class BinauralProfileService {
                     errorMessage = "Custom HRIR/SOFA file not found.";
                     return false;
                 }
-                LoadAndOverrideCustom(store.HrirPath, useMinPhase);
-                AppLogger.Info($"Activated custom binaural profile: '{store.HrirPath}' (minPhase={useMinPhase})");
+                LoadAndOverrideCustom(store.HrirPath, useMinPhase, personalization);
+                AppLogger.Info($"Activated custom binaural profile: '{store.HrirPath}' (fmt={LastPersonalizationDiagnostics.ActiveHrirFormat}, minPhase={useMinPhase}, magLs={LastPersonalizationDiagnostics.MagLsOrder}, bioItd={LastPersonalizationDiagnostics.IsBiometricItdActive})");
                 return true;
             }
 
             using Stream assetStream = ctx.Assets.Open("hrir/" + info.AssetFile);
-            (VirtualChannel[] channels, int sampleRate, float refDist, int taps) = ReadChrirStream(assetStream, info.IsGzipped, useMinPhase);
+            (VirtualChannel[] channels, int sampleRate, float refDist, int taps, HrtfPersonalizationDiagnostics diag) =
+                ReadChrirStream(assetStream, info.IsGzipped, useMinPhase, personalization, info.IsBrir);
             VirtualizerFilter.Override(channels, sampleRate, refDist);
-            AppLogger.Info($"Activated official binaural profile '{info.Id}' ({channels.Length} ch, {taps} taps @ {sampleRate} Hz, d={refDist:0.00} m, minPhase={useMinPhase})");
+            LastPersonalizationDiagnostics = diag;
+            AppLogger.Info($"Activated official binaural profile '{info.Id}' ({channels.Length} ch, {taps} taps @ {sampleRate} Hz, d={refDist:0.00} m, minPhase={useMinPhase}, magLsO={diag.MagLsOrder}, bioItd={diag.IsBiometricItdActive}, brirBypass={diag.IsBrirBypassed})");
             return true;
         } catch (Exception ex) {
             AppLogger.Error($"BinauralProfileService.Apply({profileId})", ex);
@@ -545,27 +656,195 @@ public static class BinauralProfileService {
         }
     }
 
-    static void LoadAndOverrideCustom(string path, bool minimumPhase) {
+    static void LoadAndOverrideCustom(string path, bool minimumPhase, HrtfPersonalizationConfig personalization) {
         string ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext == ".sofa") {
-            SofaHrirReader.SofaLoadResult result = SofaHrirReader.Load(path, minimumPhase);
+            SofaHrirReader.SofaLoadResult result = SofaHrirReader.Load(path, minimumPhase, personalization);
             VirtualizerFilter.Override(result.Channels, result.SampleRate, result.ReferenceDistance);
+            LastPersonalizationDiagnostics = new HrtfPersonalizationDiagnostics {
+                IsMagLsActive = result.MagLsMetrics.HasValue,
+                MagLsOrder = result.MagLsMetrics?.Order ?? 0,
+                MagLsCutoffHz = result.MagLsMetrics?.CutoffHz ?? 0f,
+                MagLsHfErrorDb = result.MagLsMetrics?.HighFreqMagnitudeErrorDb ?? 0f,
+                IsBiometricItdActive = result.BiometricItdApplied,
+                IsBrirBypassed = result.BrirBypassed,
+                HeadWidthCm = personalization.HeadWidthCm,
+                MaxLateralItdUs = (float)(BiometricItdScaler.ComputeWoodworthItdUs(90.0, 0.0, personalization.HeadWidthCm) + personalization.ManualItdOffsetUs),
+                ItdDeltaAt90DegUs = (float)BiometricItdScaler.ComputeItdDeltaUs(90.0, 0.0, personalization.HeadWidthCm, personalization.ManualItdOffsetUs),
+                IsHptfNotchActive = personalization.HptfNotchEnabled && personalization.HptfNotchGainDb < -0.05f,
+                HptfNotchFreqHz = personalization.HptfNotchFreqHz,
+                HptfNotchGainDb = personalization.HptfNotchGainDb,
+                HptfNotchQ = personalization.HptfNotchQ,
+                ActiveHrirFormat = $"AES69 SOFA ({result.MeasuredDirectionCount} dirs)",
+                ActiveClusterId = personalization.PerceptualClusterId ?? ""
+            };
         } else {
             using RIFFWaveReader reader = new(path);
             reader.ReadHeader();
-            VirtualChannel[] channels = VirtualChannel.Parse(
+            ParsedWavHrirSet parsed = ImpulciferHrirParser.Parse(
                 new MultichannelWaveform(reader.ReadMultichannelAfterHeader()),
                 reader.SampleRate,
-                0f,
-                minimumPhase);
-            VirtualizerFilter.Override(channels, reader.SampleRate);
+                VirtualizerFilter.FilterSampleRate);
+            (VirtualChannel[] channels, HrtfPersonalizationDiagnostics diag) = BuildPersonalizedChannels(
+                parsed.Speakers,
+                parsed.SampleRate,
+                crossoverHz: 0f,
+                minimumPhase,
+                personalization,
+                forceBrir: parsed.IsBrir,
+                formatLabel: parsed.FormatName);
+            VirtualizerFilter.Override(channels, parsed.SampleRate);
+            LastPersonalizationDiagnostics = diag;
         }
     }
 
     /// <summary>
-    /// Parses a binary CHRIR1 stream (plain .chrir or GZip-compressed .chrirz) into <see cref="VirtualChannel"/> instances.
+    /// Shared Slot 5B HRIR builder: optionally applies MagLS spherical-harmonic decoding, single-scalar global
+    /// unity-energy normalization, Woodworth-Schlosberg biometric ITD scaling, and Minimum-Phase + ITD conversion.
+    /// Automatically bypasses all three transforms on measured room BRIRs (&gt; 1024 taps) to protect room tails.
     /// </summary>
-    static (VirtualChannel[] channels, int sampleRate, float refDist, int tapCount) ReadChrirStream(Stream source, bool gzipped, bool minimumPhase) {
+    static (VirtualChannel[] channels, HrtfPersonalizationDiagnostics diag) BuildPersonalizedChannels(
+        MeasuredHrirSpeaker[] speakers,
+        int sampleRate,
+        float crossoverHz,
+        bool minimumPhase,
+        HrtfPersonalizationConfig personalization,
+        bool forceBrir,
+        string formatLabel) {
+        int count = speakers.Length;
+        int maxTap = 0;
+        for (int i = 0; i < count; i++) {
+            if (speakers[i].LeftIr.Length > maxTap) maxTap = speakers[i].LeftIr.Length;
+            if (speakers[i].RightIr.Length > maxTap) maxTap = speakers[i].RightIr.Length;
+        }
+
+        bool isBrir = forceBrir || maxTap > MinimumPhaseHrir.MaxAnechoicTaps;
+        bool wantsMagLs = personalization.MagLsMode != MagLsDecodeMode.Off;
+        bool wantsBioItd = personalization.BiometricItdEnabled &&
+            !BiometricItdScaler.IsBypass(personalization.HeadWidthCm, personalization.ManualItdOffsetUs);
+        bool brirBypassed = isBrir && (wantsMagLs || wantsBioItd || minimumPhase);
+
+        float[][] leftEars = new float[count][];
+        float[][] rightEars = new float[count][];
+        MagLsDesignMetrics? magLsMetrics = null;
+
+        if (!isBrir && wantsMagLs && count >= 4) {
+            double[] measAz = new double[count];
+            double[] measEl = new double[count];
+            float[] tgtEl = new float[count];
+            float[] tgtAz = new float[count];
+            float[][] rawL = new float[count][];
+            float[][] rawR = new float[count][];
+            for (int i = 0; i < count; i++) {
+                tgtEl[i] = speakers[i].ElevationDeg;
+                tgtAz[i] = speakers[i].AzimuthDeg;
+                MagLsAmbisonicDecoder.CavernAnglesToAmbisonicRad(tgtEl[i], tgtAz[i], out measAz[i], out measEl[i]);
+                rawL[i] = speakers[i].LeftIr;
+                rawR[i] = speakers[i].RightIr;
+            }
+            MagLsAmbisonicDecoder.SynthesizeVirtualSpeakerHrirs(
+                measAz,
+                measEl,
+                rawL,
+                rawR,
+                tgtEl,
+                tgtAz,
+                sampleRate,
+                (int)personalization.MagLsMode,
+                out leftEars,
+                out rightEars,
+                out MagLsDesignMetrics metrics,
+                personalization.MagLsCutoffHz);
+            magLsMetrics = metrics;
+
+            // Preserve single-scalar global unity-energy L2 normalization across front speakers after MagLS synthesis
+            double frontEnergy = 0.0;
+            int frontCount = 0;
+            for (int i = 0; i < count; i++) {
+                if (MathF.Abs(speakers[i].ElevationDeg) < 15f && MathF.Abs(speakers[i].AzimuthDeg) <= 50f) {
+                    double e = 0.0;
+                    float[] l = leftEars[i];
+                    float[] r = rightEars[i];
+                    int nLen = Math.Min(l.Length, r.Length);
+                    for (int n = 0; n < nLen; n++) {
+                        e += (double)l[n] * l[n] + (double)r[n] * r[n];
+                    }
+                    frontEnergy += e;
+                    frontCount++;
+                }
+            }
+            if (frontCount > 0 && frontEnergy > 1e-12) {
+                float scale = (float)(1.0 / Math.Sqrt(frontEnergy / frontCount));
+                for (int i = 0; i < count; i++) {
+                    for (int n = 0; n < leftEars[i].Length; n++) leftEars[i][n] *= scale;
+                    for (int n = 0; n < rightEars[i].Length; n++) rightEars[i][n] *= scale;
+                }
+            }
+        } else {
+            for (int i = 0; i < count; i++) {
+                leftEars[i] = speakers[i].LeftIr;
+                rightEars[i] = speakers[i].RightIr;
+            }
+        }
+
+        bool applyBioItd = !isBrir && wantsBioItd;
+        bool applyMinPhase = minimumPhase && !isBrir;
+        VirtualChannel[] channels = new VirtualChannel[count];
+        for (int i = 0; i < count; i++) {
+            float[] irL = leftEars[i];
+            float[] irR = rightEars[i];
+            if (applyBioItd) {
+                BiometricItdScaler.ApplyToPair(
+                    irL,
+                    irR,
+                    speakers[i].ElevationDeg,
+                    speakers[i].AzimuthDeg,
+                    sampleRate,
+                    personalization.HeadWidthCm,
+                    personalization.ManualItdOffsetUs,
+                    out irL,
+                    out irR);
+            }
+            channels[i] = VirtualChannel.FromMeasured(
+                speakers[i].ElevationDeg,
+                speakers[i].AzimuthDeg,
+                irL,
+                irR,
+                sampleRate,
+                crossoverHz,
+                applyMinPhase);
+        }
+
+        HrtfPersonalizationDiagnostics diag = new() {
+            IsMagLsActive = magLsMetrics.HasValue,
+            MagLsOrder = magLsMetrics?.Order ?? 0,
+            MagLsCutoffHz = magLsMetrics?.CutoffHz ?? 0f,
+            MagLsHfErrorDb = magLsMetrics?.HighFreqMagnitudeErrorDb ?? 0f,
+            IsBiometricItdActive = applyBioItd,
+            IsBrirBypassed = brirBypassed,
+            HeadWidthCm = personalization.HeadWidthCm,
+            MaxLateralItdUs = (float)(BiometricItdScaler.ComputeWoodworthItdUs(90.0, 0.0, personalization.HeadWidthCm) + personalization.ManualItdOffsetUs),
+            ItdDeltaAt90DegUs = (float)BiometricItdScaler.ComputeItdDeltaUs(90.0, 0.0, personalization.HeadWidthCm, personalization.ManualItdOffsetUs),
+            IsHptfNotchActive = personalization.HptfNotchEnabled && personalization.HptfNotchGainDb < -0.05f,
+            HptfNotchFreqHz = personalization.HptfNotchFreqHz,
+            HptfNotchGainDb = personalization.HptfNotchGainDb,
+            HptfNotchQ = personalization.HptfNotchQ,
+            ActiveHrirFormat = formatLabel,
+            ActiveClusterId = personalization.PerceptualClusterId ?? ""
+        };
+        return (channels, diag);
+    }
+
+    /// <summary>
+    /// Parses a binary CHRIR1 stream (plain .chrir or GZip-compressed .chrirz) into <see cref="VirtualChannel"/> instances
+    /// with optional Slot 5B MagLS &amp; Biometric ITD personalization.
+    /// </summary>
+    static (VirtualChannel[] channels, int sampleRate, float refDist, int tapCount, HrtfPersonalizationDiagnostics diag) ReadChrirStream(
+        Stream source,
+        bool gzipped,
+        bool minimumPhase,
+        HrtfPersonalizationConfig personalization,
+        bool isBrirAsset) {
         Stream dataStream = gzipped ? new GZipStream(source, CompressionMode.Decompress, leaveOpen: true) : source;
         try {
             using BinaryReader br = new(dataStream, Encoding.ASCII, leaveOpen: true);
@@ -595,8 +874,7 @@ public static class BinauralProfileService {
                 throw new InvalidDataException($"Invalid CHRIR1 parameters (fmt={sampleFormat}, ch={channelCount}, taps={tapCount}, sr={sampleRate}).");
             }
 
-            bool applyMinPhase = minimumPhase && tapCount <= MinimumPhaseHrir.MaxAnechoicTaps;
-            VirtualChannel[] channels = new VirtualChannel[channelCount];
+            MeasuredHrirSpeaker[] speakers = new MeasuredHrirSpeaker[channelCount];
             for (int c = 0; c < channelCount; c++) {
                 float x = br.ReadSingle();
                 float y = br.ReadSingle();
@@ -608,10 +886,18 @@ public static class BinauralProfileService {
                 for (int n = 0; n < tapCount; n++) {
                     right[n] = br.ReadSingle();
                 }
-                channels[c] = VirtualChannel.FromMeasured(x, y, left, right, sampleRate, crossoverHz, applyMinPhase);
+                speakers[c] = new MeasuredHrirSpeaker(x, y, left, right);
             }
 
-            return (channels, sampleRate, refDist, tapCount);
+            (VirtualChannel[] channels, HrtfPersonalizationDiagnostics diag) = BuildPersonalizedChannels(
+                speakers,
+                sampleRate,
+                crossoverHz,
+                minimumPhase,
+                personalization,
+                forceBrir: isBrirAsset,
+                formatLabel: gzipped ? "CHRIR1 BRIR" : "CHRIR1 HRIR");
+            return (channels, sampleRate, refDist, tapCount, diag);
         } finally {
             if (gzipped) {
                 dataStream.Dispose();

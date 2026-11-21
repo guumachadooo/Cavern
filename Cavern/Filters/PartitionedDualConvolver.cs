@@ -81,6 +81,12 @@ namespace Cavern.Filters {
         int curFill;
 
         /// <summary>
+        /// Total length in samples of the longest impulse response (including any baked delay).
+        /// Used to distinguish short anechoic HRIRs (&lt;= 1024 taps) from long measured BRIRs (&gt; 1024 taps).
+        /// </summary>
+        public int ImpulseLength { get; }
+
+        /// <summary>
         /// Constructs a partitioned dual convolver with no extra delay.
         /// </summary>
         public PartitionedDualConvolver(float[] impulse1, float[] impulse2) : this(impulse1, impulse2, 0, 0) { }
@@ -98,6 +104,7 @@ namespace Cavern.Filters {
             int len1 = impulse1.Length + delay1;
             int len2 = impulse2.Length + delay2;
             int totalLength = Math.Max(1, Math.Max(len1, len2));
+            ImpulseLength = totalLength;
 
             if (totalLength <= maxPartitionSize) {
                 int pow2 = 1 << QMath.Log2Ceil(totalLength);

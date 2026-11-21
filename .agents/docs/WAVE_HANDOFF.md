@@ -1,12 +1,10 @@
-# WAVE_HANDOFF (Compact <=20L — Auto-Updated Every Wave)
-ROADMAP: `.agents/docs/SPATIAL_ROADMAP.md`
-NEXT_WAVE: `W04` — Zero-GC Low-Latency Audio + USB DAC + 3DoF/6DoF Head Tracking (Slot 4)
-PREV_WAVE: `W03` (`[x]` AutoEq Neutral Engine + Auto-Profile per Device (Slot 6A) verified)
-TRIGGER: User says `continue` / `continuar` -> execute `W04` immediately.
-W04_PROTOCOL:
-1. `MOD-AUDIT-EXISTING`: Inspect `RealtimePlayerEngine.cs`, `AndroidAudioOutput.cs`, `ManualHeadTrackerProvider.cs`, `ListenerPose6DoF.cs`, `AudioDeviceProfileManager.cs`, `AppSettingsStore.cs`, and `AndroidManifest.xml` (preserve `targetSdkVersion="28"`).
-2. `MOD-CURATE`: Cherry-pick Galaxy Buds RFCOMM spatial quaternion protocol (`timschneeb/GalaxyBudsClient`, `timschneeb/BudsPro-Headtracking`), Madgwick/AHRS fusion & short-horizon angular predictor (`xioTechnologies/Fusion`), Android `GameRotationVector` IMU & `Mr. Headtracker` BLE-OSC, plus `AudioTrackPerformanceMode.LowLatency` + USB DAC `Float32`/native sample-rate routing (`44.1..192 kHz`).
-3. `MOD-CONTRACT` + `MOD-IMPL`: Upgrade audio output & `RealtimePlayerEngine` render loop to pre-allocated zero-GC buffers, `LowLatency` `AudioTrack`, USB DAC native SR + `PcmFloat`; add strict C# 8.0 Madgwick/Kalman short-horizon head-pose predictor in `Cavern/Spatial/`; implement Slot 4 `IHeadTrackerProvider` providers (Galaxy Buds RFCOMM, Android IMU `GameRotationVector`, BLE-OSC) + auto-recenter + `SpatialSceneHub` / One UI 9 Settings controls & 100% EN/PT-BR parity.
-4. `MOD-VERIFY`: Run Python strict C#8 + Android API/permissions/wiring/L10n/OneUI9/manifest (`targetSdkVersion="28"`) + pure-math quaternion/Madgwick/predictor/zero-GC verification suite.
-5. `MOD-HANDOFF`: Update `SPATIAL_ROADMAP.md` (`W04` `[x]` + curation log), overwrite this file for `W05`, prepend concise entry to `PROJECT_HISTORY.md`.
-HARD_RULES: Pure C#/.NET Android (strict C#8 in `Cavern`/`Cavern.Format`) | `targetSdkVersion="28"` | Zero fake DSP | Native One UI 9 only | 100% EN/PT-BR `AndroidStrings.cs` | Split dynamically (`W04.a`/`W04.b`) if scope grows.
+# Spatial Roadmap Wave Handoff (Compact)
+- **Last Completed:** `W06` (`[x]`) — MagLS Ambisonics (`O1..O5`), Woodworth-Schlosberg Biometric Head-Width ITD (`13–18 cm`), HpTF `6–10 kHz` Ear-Canal Notch (`Priority=110`), Impulcifer/HeSuVi/SOFA pipeline & 60s SONICOM/HUTUBS Perceptual HRTF Wizard.
+- **Next Wave:** `W07` — **Psychoacoustics & Studio Loudness Standards (Slot 6B)**:
+  - Real-time ISO 226:2023 Dynamic Equal-Loudness physiological compensation (`0.00 dB` unity at ref SPL, zero-GC IIR shelving/peaking cascade).
+  - ITU-R BS.1770-5 / EBU R128 loudness meter (K-weighting + Momentary/Short-Term/Integrated LUFS + LRA) & Dolby Dialnorm respect.
+  - Spatial Dialog Enhancement (isolating Center / speech-band objects without EQ smearing, ready for `W09` lossless-twin assistance).
+  - Transparent 4x-oversampled `0 dBTP` True-Peak Limiter; expose reusable LUFS, crest-factor & True-Peak primitives for `W09` LGSR & `W11` Vocal Mix-Match.
+- **Audit First (before coding):** `Cavern/Filters/{Normalizer,Limiter,ParametricEqualizer}.cs`, `Cavernize.Logic/Spatial/Adapters/{NormalizerPostProcessingAdapter,AutoEqPostProcessingStage,HptfNotchPostProcessingStage}.cs`, `Cavernize.Logic/Rendering/RealtimePlayerEngine.cs`, `CavernizeAndroid/Services/AppSettingsStore.cs`, `MainActivity.SettingsTab.cs`, `AndroidStrings.cs`.
+- **Invariants:** `Cavern/` & `Cavern.Format/` strict C# 8.0; `targetSdkVersion="28"` immutable; zero fake DSP (exact ISO 226:2023 + ITU-R BS.1770-5 / `ebur128` tables); native One UI 9 only; 100% EN/PT-BR parity; `EXTRA_REQUESTS.md` pending queue empty.
+- **User Command:** When user says `continue`/`continuar`, execute `W07` immediately per `.agents/docs/SPATIAL_ROADMAP.md`.

@@ -38,6 +38,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
     readonly ParametricUpmixerStageProcessor parametricUpmixerStage = new(new UpmixingSettings(true));
     readonly CavernVirtualizerRendererAdapter virtualizerRenderer = new();
     readonly AutoEqPostProcessingStage autoEqPostStage = new();
+    readonly HptfNotchPostProcessingStage hptfNotchPostStage = new();
     readonly NormalizerPostProcessingAdapter limiterPostStage = new(true);
     readonly SpatialSceneFrame activeSceneFrame = new();
 
@@ -59,6 +60,10 @@ public sealed class RealtimePlayerEngine : IDisposable {
     bool lastDynamicCeilingState;
     Source[] cachedActiveSources = Array.Empty<Source>();
     int activeNativeSampleRateRequest;
+    PhysicalExternalizationConfig externalizationConfig = PhysicalExternalizationConfig.Default;
+    HrtfPersonalizationConfig personalizationConfig = HrtfPersonalizationConfig.Default;
+    bool lastExternalizationBrirState;
+    Vector3 lastExternalizationEnvSize;
 
     /// <summary>
     /// Creates a real-time spatial audio engine wired with Slot 1–6 processors.
@@ -68,6 +73,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
         sceneHub.BindRenderer(virtualizerRenderer);
         sceneHub.RegisterStageProcessor(parametricUpmixerStage);
         sceneHub.RegisterPostProcessingStage(autoEqPostStage);
+        sceneHub.RegisterPostProcessingStage(hptfNotchPostStage);
         sceneHub.RegisterPostProcessingStage(limiterPostStage);
     }
 
@@ -81,6 +87,82 @@ public sealed class RealtimePlayerEngine : IDisposable {
     /// Slot 6A neutral AutoEq parametric headphone compensation stage (Priority 100, before safety limiter).
     /// </summary>
     public AutoEqPostProcessingStage AutoEqStage => autoEqPostStage;
+
+    /// <summary>
+    /// Slot 6B/5B individual HpTF ear-canal resonance notch stage (Priority 110, 6–10 kHz Orfanidis notch).
+    /// </summary>
+    public HptfNotchPostProcessingStage HptfNotchStage => hptfNotchPostStage;
+
+    /// <summary>
+    /// Active Slot 5A physical externalization configuration (ISM Room + Near-Field DVF + ISO 9613-1).
+    /// </summary>
+    public PhysicalExternalizationConfig ExternalizationConfig => externalizationConfig;
+
+    /// <summary>
+    /// Live Slot 5A physical externalization telemetry snapshot (RT60, BRIR guard, near-field active state).
+    /// </summary>
+    public PhysicalExternalizationDiagnostics ExternalizationDiagnostics => sceneHub.ExternalizationDiagnostics;
+
+    /// <summary>
+    /// Active Slot 5B HRTF personalization configuration (MagLS Ambisonics, Biometric ITD, HpTF notch).
+    /// </summary>
+    public HrtfPersonalizationConfig PersonalizationConfig => personalizationConfig;
+
+    /// <summary>
+    /// Live Slot 5B HRTF personalization telemetry snapshot.
+    /// </summary>
+    public HrtfPersonalizationDiagnostics PersonalizationDiagnostics => sceneHub.PersonalizationDiagnostics;
+
+    /// <summary>
+    /// Applies updated Slot 5A physical externalization parameters with clickless crossfade on structural toggles.
+    /// </summary>
+    public void ApplyExternalizationConfig(PhysicalExternalizationConfig config) {
+        lock (renderLock) {
+            bool structuralChange =
+                externalizationConfig.IsmRoomEnabled != config.IsmRoomEnabled ||
+                externalizationConfig.RoomPreset != config.RoomPreset ||
+                externalizationConfig.WallMaterial != config.WallMaterial ||
+                externalizationConfig.ReflectionOrder != config.ReflectionOrder;
+            externalizationConfig = config;
+            if (structuralChange && IsPlaying && hasRenderedAudio) {
+                ArmCrossfadeLocked();
+            }
+            SyncExternalizationLocked();
+        }
+    }
+
+    /// <summary>
+    /// Applies Slot 5B HpTF ear-canal notch parameters and synchronizes personalization state into <see cref="SceneHub"/>.
+    /// </summary>
+    public void ApplyPersonalizationConfig(HrtfPersonalizationConfig config) {
+        lock (renderLock) {
+            personalizationConfig = config;
+            hptfNotchPostStage.ApplyParameters(
+                config.HptfNotchEnabled,
+                config.HptfNotchFreqHz,
+                config.HptfNotchGainDb,
+                config.HptfNotchQ);
+
+            HrtfPersonalizationDiagnostics prev = sceneHub.PersonalizationDiagnostics;
+            sceneHub.PersonalizationDiagnostics = new HrtfPersonalizationDiagnostics {
+                IsMagLsActive = prev.IsMagLsActive,
+                MagLsOrder = prev.MagLsOrder,
+                MagLsCutoffHz = prev.MagLsCutoffHz,
+                MagLsHfErrorDb = prev.MagLsHfErrorDb,
+                IsBiometricItdActive = prev.IsBiometricItdActive,
+                IsBrirBypassed = prev.IsBrirBypassed,
+                HeadWidthCm = config.HeadWidthCm,
+                MaxLateralItdUs = (float)BiometricItdScaler.ComputeWoodworthItdUs(90.0, 0.0, config.HeadWidthCm),
+                ItdDeltaAt90DegUs = (float)BiometricItdScaler.ComputeItdDeltaUs(90.0, 0.0, config.HeadWidthCm, config.ManualItdOffsetUs),
+                IsHptfNotchActive = hptfNotchPostStage.IsEnabled,
+                HptfNotchFreqHz = hptfNotchPostStage.FrequencyHz,
+                HptfNotchGainDb = hptfNotchPostStage.GainDb,
+                HptfNotchQ = hptfNotchPostStage.Q,
+                ActiveHrirFormat = prev.ActiveHrirFormat,
+                ActiveClusterId = config.PerceptualClusterId ?? string.Empty
+            };
+        }
+    }
 
     /// <summary>
     /// Active Slot 4 head-tracking provider. Defaults to <see cref="ManualHeadTrackerProvider"/> synced with
@@ -477,6 +559,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 UpdateSourceTelemetry();
                 parametricUpmixerStage.SyncTelemetry(activeSceneFrame);
                 sceneHub.Telemetry = activeSceneFrame.Telemetry;
+                sceneHub.ExternalizationDiagnostics = virtualizerRenderer.Diagnostics;
             }
         }
 
@@ -587,7 +670,18 @@ public sealed class RealtimePlayerEngine : IDisposable {
         }
         OutputSampleRate = listener.SampleRate;
         virtualizerRenderer.Bind(listener, HeadphoneVirtualizer, sceneHub.ActiveBinauralProfileName);
+        SyncExternalizationLocked();
         sceneHub.ConfigurePostProcessingStages(listener.SampleRate, 2);
+    }
+
+    void SyncExternalizationLocked() {
+        bool brirActive = sceneHub.IsMeasuredBrirActive || VirtualizerFilter.IsMeasuredBrirActive;
+        lastExternalizationBrirState = brirActive;
+        lastExternalizationEnvSize = EnvironmentSize;
+        sceneHub.ExternalizationDiagnostics = virtualizerRenderer.ApplyExternalization(
+            externalizationConfig,
+            brirActive,
+            EnvironmentSize);
     }
 
     int ResolveDirectOutputSampleRate() {
@@ -627,6 +721,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 ArmCrossfadeLocked();
             }
             SetupOutputLayout();
+        } else if (lastExternalizationBrirState != (sceneHub.IsMeasuredBrirActive || VirtualizerFilter.IsMeasuredBrirActive) ||
+            Vector3.DistanceSquared(lastExternalizationEnvSize, EnvironmentSize) > 1e-4f) {
+            SyncExternalizationLocked();
         }
 
         if (DynamicCeilingOnly != lastDynamicCeilingState) {
@@ -825,6 +922,8 @@ public sealed class RealtimePlayerEngine : IDisposable {
             currentTrack = null;
             sceneHub.BindDecoder(null);
             virtualizerRenderer.Dispose();
+            autoEqPostStage.Dispose();
+            hptfNotchPostStage.Dispose();
             limiterPostStage.Dispose();
             parametricUpmixerStage.Dispose();
             manualHeadTracker.Dispose();

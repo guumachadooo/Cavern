@@ -33,3 +33,19 @@ and MAT archives listed above, with only single-scalar global unity-energy
 normalization across the 16 virtual speaker directions to preserve exact measured
 inter-aural time differences (ITD), inter-aural level differences (ILD), and
 spectral cues without artificial equalization.
+
+3. Slot 5B Algorithms, Perceptual Protocols & Multichannel HRIR Format Support
+   - Magnitude Least-Squares (MagLS) Ambisonics-to-Binaural Decoding:
+     Algorithm curated from Schörkhuber, C., Zaunschirm, M., & Höldrich, R. (2018),
+     "Binaural Rendering of Ambisonic Signals via Magnitude Least Squares",
+     Fortschritte der Akustik — DAGA 2018; reference implementations in
+     leomccormack/Spatial_Audio_Framework (saf_hoa, ISC License) and
+     IEM Plug-in Suite (GPLv3 reference math).
+   - Biometric Head-Width ITD Scaling & 60s Perceptual HRTF Selection Protocol:
+     Woodworth (1938) / Aaronson & Hartmann (2014) spherical-head diffraction model;
+     perceptual cluster methodology referencing SONICOM (Imperial College London),
+     HUTUBS (TU Berlin, CC BY 4.0), and Katz & Parseihian (2012) A/B tournament.
+   - Impulcifer & HeSuVi Multichannel WAV HRIR/BRIR Import:
+     Channel mapping specification compatible with jaakkopasanen/Impulcifer (MIT)
+     and HeSuVi 14-channel 7.1 binaural WAV exports.
+

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 
 using Cavern.Filters;
 using Cavern.Utilities;
@@ -21,6 +22,18 @@ namespace Cavern.Virtualizer {
         public static float ReferenceDistance { get; private set; } = defaultDistance;
 
         /// <summary>
+        /// Maximum impulse response tap length among active virtual channels.
+        /// </summary>
+        public static int ActiveMaxImpulseLength { get; private set; }
+
+        /// <summary>
+        /// True when the active virtualizer profile contains long measured room reflections
+        /// (&gt; <see cref="MinimumPhaseHrir.MaxAnechoicTaps"/>, i.e. &gt; 1024 taps), automatically
+        /// engaging the BRIR double-room bypass guard for synthetic ISM reflections.
+        /// </summary>
+        public static bool IsMeasuredBrirActive => ActiveMaxImpulseLength > MinimumPhaseHrir.MaxAnechoicTaps;
+
+        /// <summary>
         /// Monotonically increasing version counter incremented whenever the active virtualizer profile changes.
         /// </summary>
         public static int ProfileVersion { get; private set; }
@@ -31,6 +44,122 @@ namespace Cavern.Virtualizer {
         public static bool CenterWallEcho { get; set; }
 
         /// <summary>
+        /// Enables real-time Allen &amp; Berkley shoebox ISM early reflections (Slot 5A).
+        /// Disabled by default for zero-regression anechoic neutrality; automatically bypassed on measured BRIRs.
+        /// </summary>
+        public static bool IsmRoomEnabled { get; set; }
+
+        /// <summary>
+        /// Active room preset for Slot 5A ISM early reflections and physical room coordinate scaling.
+        /// </summary>
+        public static IsmRoomPreset IsmPreset { get; set; } = IsmRoomPreset.MasteringStudio;
+
+        /// <summary>
+        /// Active ISO 354 wall absorption material for Slot 5A ISM early reflections.
+        /// </summary>
+        public static IsmWallMaterial IsmWallMaterial { get; set; } = IsmWallMaterial.StudioBroadband;
+
+        /// <summary>
+        /// Reflection order for Slot 5A ISM early reflections (1 = 6 first-order, 2 = 24 first + second-order).
+        /// </summary>
+        public static int IsmReflectionOrder { get; set; } = 2;
+
+        /// <summary>
+        /// Linear physical reflection level multiplier (1.0 = exact physical level, clamped to 0..1.5).
+        /// </summary>
+        public static float IsmReflectionLevel { get; set; } = 1.0f;
+
+        /// <summary>
+        /// Enables pure-physics Duda &amp; Martens (1998) spherical-head near-field DVF for sources closer than 1.0 m.
+        /// Strictly 0.00 dB unity bypass at &gt;= 1.0 m or when distance &gt;= <see cref="ReferenceDistance"/>.
+        /// </summary>
+        public static bool NearFieldCompensationEnabled { get; set; } = true;
+
+        /// <summary>
+        /// Additional BRIR guard flag mirrored from profile metadata (complements <see cref="IsMeasuredBrirActive"/>).
+        /// </summary>
+        public static bool ExternalBrirGuardActive { get; set; }
+
+        /// <summary>
+        /// Active physical shoebox geometry and Sabine/Eyring RT60 telemetry for UI/hub diagnostics.
+        /// </summary>
+        public static IsmRoomGeometry ActiveRoomGeometry { get; private set; } =
+            new IsmRoomGeometry(IsmRoomPreset.MasteringStudio, IsmWallMaterial.StudioBroadband, new Vector3(10f, 7f, 10f));
+
+        /// <summary>
+        /// Live normalized listener position inside the room (<c>[-1, +1]</c>) fed by Slot 5 adapter.
+        /// </summary>
+        public static Vector3 LiveListenerNormalizedPosition { get; set; } = Vector3.Zero;
+
+        /// <summary>
+        /// Live listener Euler rotation in degrees (Pitch X, Yaw Y, Roll Z) fed by Slot 4/5 for head-tracked ISM reflections.
+        /// </summary>
+        public static Vector3 LiveListenerRotationDegrees { get; set; } = Vector3.Zero;
+
+        /// <summary>
+        /// True when any virtual channel actively engaged Duda &amp; Martens near-field DVF on the last processed block.
+        /// </summary>
+        public static bool LastBlockNearFieldActive { get; private set; }
+
+        /// <summary>
+        /// Updates all Slot 5A physical externalization parameters atomically and refreshes <see cref="ActiveRoomGeometry"/>
+        /// and <see cref="AirAbsorptionFilter.PhysicalRoomHalfSize"/>.
+        /// </summary>
+        public static void ConfigureExternalization(
+            bool ismEnabled,
+            IsmRoomPreset preset,
+            IsmWallMaterial wallMaterial,
+            int reflectionOrder,
+            float reflectionLevel,
+            bool nearFieldEnabled,
+            bool airAbsorptionEnabled,
+            float airTempCelsius,
+            float airRelativeHumidityPct,
+            Vector3 customEnvironmentHalfSize,
+            bool externalBrirGuard) {
+            IsmRoomEnabled = ismEnabled;
+            IsmPreset = preset;
+            IsmWallMaterial = wallMaterial;
+            IsmReflectionOrder = reflectionOrder <= 1 ? 1 : 2;
+            IsmReflectionLevel = Math.Clamp(reflectionLevel, 0f, 1.5f);
+            NearFieldCompensationEnabled = nearFieldEnabled;
+            AirAbsorptionFilter.GlobalEnabled = airAbsorptionEnabled;
+            AirAbsorptionFilter.GlobalTemperatureCelsius = airTempCelsius;
+            AirAbsorptionFilter.GlobalRelativeHumidityPct = airRelativeHumidityPct;
+            ExternalBrirGuardActive = externalBrirGuard;
+
+            IsmRoomGeometry geom = new IsmRoomGeometry(preset, wallMaterial, customEnvironmentHalfSize);
+            ActiveRoomGeometry = geom;
+            AirAbsorptionFilter.PhysicalRoomHalfSize = geom.HalfDimensionsMeters;
+        }
+
+        /// <summary>
+        /// Updates per-virtual-channel minimum physical source distances (meters) without heap allocations.
+        /// Called on the audio thread immediately prior to <see cref="Listener.Render(int)"/>.
+        /// </summary>
+        public static void SetLiveChannelMinDistances(float[] distancesMeters, int count) {
+            int limit = Math.Min(liveChannelMinDistances.Length, Math.Max(0, count));
+            for (int i = 0; i < limit; i++) {
+                liveChannelMinDistances[i] = distancesMeters != null && i < distancesMeters.Length
+                    ? distancesMeters[i]
+                    : float.PositiveInfinity;
+            }
+            for (int i = limit; i < liveChannelMinDistances.Length; i++) {
+                liveChannelMinDistances[i] = float.PositiveInfinity;
+            }
+        }
+
+        static readonly float[] liveChannelMinDistances = InitInfinityDistances(64);
+
+        static float[] InitInfinityDistances(int count) {
+            float[] arr = new float[count];
+            for (int i = 0; i < count; i++) {
+                arr[i] = float.PositiveInfinity;
+            }
+            return arr;
+        }
+
+        /// <summary>
         /// Number of virtual channels.
         /// </summary>
         public static int VirtualChannels => SpatialChannels.Length;
@@ -39,8 +168,17 @@ namespace Cavern.Virtualizer {
         /// Active virtualized channels and their corresponding filters.
         /// </summary>
         static VirtualChannel[] SpatialChannels {
-            get => spatialChannels ??= GetDefaultHRIRSet();
-            set => spatialChannels = value;
+            get {
+                if (spatialChannels == null) {
+                    spatialChannels = GetDefaultHRIRSet();
+                    ActiveMaxImpulseLength = ComputeMaxImpulseLength(spatialChannels);
+                }
+                return spatialChannels;
+            }
+            set {
+                spatialChannels = value;
+                ActiveMaxImpulseLength = ComputeMaxImpulseLength(value);
+            }
         }
         static VirtualChannel[] spatialChannels;
 
@@ -68,6 +206,31 @@ namespace Cavern.Virtualizer {
         /// Cache of each output channel for one ear.
         /// </summary>
         float[][] leftSplit, rightSplit;
+
+        /// <summary>
+        /// Per-channel pure-physics Duda &amp; Martens (1998) near-field DVF filters (zero GC).
+        /// </summary>
+        NearFieldHeadFilter[] nearFieldFilters;
+
+        /// <summary>
+        /// Cached cosine of angle between each virtual channel and the right ear axis (+X).
+        /// </summary>
+        float[] channelCosRight;
+
+        /// <summary>
+        /// Real-time Allen &amp; Berkley shoebox ISM early-reflection engine owned by this filter instance.
+        /// </summary>
+        readonly IsmRoomEngine ismRoomEngine = new IsmRoomEngine();
+
+        /// <summary>
+        /// Tracks whether ISM was active on the previous block so disabling cleanly flushes delay lines.
+        /// </summary>
+        bool wasIsmActive;
+
+        /// <summary>
+        /// Cached speed of sound for the current audio block.
+        /// </summary>
+        double blockSpeedOfSound = 343.21;
 
         /// <summary>
         /// Length of split arrays.
@@ -171,6 +334,25 @@ namespace Cavern.Virtualizer {
         }
 
         /// <summary>
+        /// Computes the maximum impulse response length across all active virtual channels.
+        /// </summary>
+        static int ComputeMaxImpulseLength(VirtualChannel[] channels) {
+            if (channels == null) {
+                return 0;
+            }
+            int maxLen = 0;
+            for (int i = 0; i < channels.Length; i++) {
+                if (channels[i].active && channels[i].Filter != null) {
+                    int len = channels[i].Filter.ImpulseLength;
+                    if (len > maxLen) {
+                        maxLen = len;
+                    }
+                }
+            }
+            return maxLen;
+        }
+
+        /// <summary>
         /// Set up virtual channel set for the virtualization filters.
         /// </summary>
         public void SetLayout() {
@@ -218,12 +400,20 @@ namespace Cavern.Virtualizer {
             lowSplit = new float[activeSet.Length][];
             leftSplit = new float[activeSet.Length][];
             rightSplit = new float[activeSet.Length][];
+            nearFieldFilters = new NearFieldHeadFilter[activeSet.Length];
+            channelCosRight = new float[activeSet.Length];
             for (int channel = 0; channel < activeSet.Length; channel++) {
                 originalSplit[channel] = Array.Empty<float>();
                 lowSplit[channel] = Array.Empty<float>();
                 leftSplit[channel] = Array.Empty<float>();
                 rightSplit[channel] = Array.Empty<float>();
+                nearFieldFilters[channel] = new NearFieldHeadFilter();
+                float xRad = activeSet[channel].x * VectorExtensions.Deg2Rad;
+                float yRad = activeSet[channel].y * VectorExtensions.Deg2Rad;
+                channelCosRight[channel] = MathF.Sin(yRad) * MathF.Cos(xRad);
             }
+            ismRoomEngine.Reset();
+            wasIsmActive = false;
         }
 
         /// <summary>
@@ -260,6 +450,32 @@ namespace Cavern.Virtualizer {
                 }
             }
 
+            // Slot 5A: Pure-physics Allen & Berkley shoebox ISM early reflections (pre-HRIR, zero extra FFTs).
+            // Automatically bypassed whenever a measured BRIR (> 1024 taps or flagged BRIR) is active.
+            bool ismActive = IsmRoomEnabled && !IsMeasuredBrirActive && !ExternalBrirGuardActive;
+            if (ismActive) {
+                ismRoomEngine.Configure(
+                    IsmPreset,
+                    IsmWallMaterial,
+                    IsmReflectionOrder,
+                    IsmReflectionLevel,
+                    Listener.EnvironmentSize,
+                    AirAbsorptionFilter.GlobalEnabled,
+                    AirAbsorptionFilter.GlobalTemperatureCelsius,
+                    AirAbsorptionFilter.GlobalRelativeHumidityPct);
+                ismRoomEngine.ProcessPreHrir(
+                    originalSplit,
+                    activeSet,
+                    blockSize,
+                    sampleRate,
+                    LiveListenerNormalizedPosition,
+                    LiveListenerRotationDegrees);
+                wasIsmActive = true;
+            } else if (wasIsmActive) {
+                ismRoomEngine.Reset();
+                wasIsmActive = false;
+            }
+
             if (CenterWallEcho && center != unassigned && left != unassigned && right != unassigned) {
                 Array.Copy(originalSplit[center], delayedCenter, blockSize);
                 centerDelay.Process(delayedCenter); // Add 7.5 ms delay
@@ -267,7 +483,20 @@ namespace Cavern.Virtualizer {
                 WaveformUtils.Mix(delayedCenter, originalSplit[left]);
                 WaveformUtils.Mix(delayedCenter, originalSplit[right]);
             }
+
+            blockSpeedOfSound = AirAbsorptionFilter.ComputeSpeedOfSound(AirAbsorptionFilter.GlobalTemperatureCelsius);
             processor.ForUnchecked(0, channels);
+
+            bool anyNearFieldActive = false;
+            if (nearFieldFilters != null) {
+                for (int ch = 0; ch < channels; ch++) {
+                    if (nearFieldFilters[ch].IsActive) {
+                        anyNearFieldActive = true;
+                        break;
+                    }
+                }
+            }
+            LastBlockNearFieldActive = anyNearFieldActive;
 
             // Stereo downmix (or speaker passthrough for non-virtualized ground/sub channels)
             output.Clear();
@@ -307,7 +536,8 @@ namespace Cavern.Virtualizer {
         }
 
         /// <summary>
-        /// Split (when crossover is enabled) and convolve a single virtual channel by ID.
+        /// Split (when crossover is enabled) and convolve a single virtual channel by ID,
+        /// followed by pure-physics Duda &amp; Martens (1998) near-field DVF when a source approaches &lt; 1.0 m.
         /// </summary>
         void ProcessChannel(int channel) {
             VirtualChannel ch = boundChannels[channel];
@@ -327,6 +557,21 @@ namespace Cavern.Virtualizer {
             }
 
             ch.Filter.Process(leftSplit[channel], rightSplit[channel]);
+
+            if (nearFieldFilters != null && channel < nearFieldFilters.Length) {
+                float minDist = NearFieldCompensationEnabled && channel < liveChannelMinDistances.Length
+                    ? liveChannelMinDistances[channel]
+                    : float.PositiveInfinity;
+                nearFieldFilters[channel].ProcessStereo(
+                    leftSplit[channel],
+                    rightSplit[channel],
+                    blockSize,
+                    minDist,
+                    ReferenceDistance,
+                    channelCosRight[channel],
+                    FilterSampleRate,
+                    blockSpeedOfSound);
+            }
         }
 
         /// <summary>

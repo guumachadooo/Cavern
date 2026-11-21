@@ -268,10 +268,181 @@ public sealed class AppSettingsStore {
         set => Edit().PutBoolean("autoEqAutoSwitchByDevice", value).Apply();
     }
 
+    // Slot 4: Low-Latency Audio, USB DAC & 3DoF/6DoF Head Tracking
+    public bool LowLatencyAudio {
+        get => prefs.GetBoolean("lowLatencyAudio", true);
+        set => Edit().PutBoolean("lowLatencyAudio", value).Apply();
+    }
+
+    public bool UsbDacNativeSampleRate {
+        get => prefs.GetBoolean("usbDacNativeSampleRate", true);
+        set => Edit().PutBoolean("usbDacNativeSampleRate", value).Apply();
+    }
+
     public bool HeadTrackingEnabled {
         get => prefs.GetBoolean("headTrackingEnabled", false);
         set => Edit().PutBoolean("headTrackingEnabled", value).Apply();
     }
+
+    public int HeadTrackerSourceIndex {
+        get => prefs.GetInt("headTrackerSourceIndex", (int)Cavernize.Logic.Spatial.HeadTrackerSourceKind.GalaxyBudsRfcomm);
+        set => Edit().PutInt("headTrackerSourceIndex", value).Apply();
+    }
+
+    public bool HeadTrackingAutoRecenter {
+        get => prefs.GetBoolean("headTrackingAutoRecenter", true);
+        set => Edit().PutBoolean("headTrackingAutoRecenter", value).Apply();
+    }
+
+    public bool HeadTrackingLockRoll {
+        get => prefs.GetBoolean("headTrackingLockRoll", false);
+        set => Edit().PutBoolean("headTrackingLockRoll", value).Apply();
+    }
+
+    public float HeadTrackingPredictionMs {
+        get => prefs.GetFloat("headTrackingPredictionMs", 25f);
+        set => Edit().PutFloat("headTrackingPredictionMs", Math.Clamp(value, 0f, 120f)).Apply();
+    }
+
+    public int HeadTrackingOscPort {
+        get => prefs.GetInt("headTrackingOscPort", 9000);
+        set => Edit().PutInt("headTrackingOscPort", Math.Clamp(value, 1024, 65535)).Apply();
+    }
+
+    // Slot 5A: Physical Externalization (Allen & Berkley ISM Room, Duda & Martens Near-Field DVF, ISO 9613-1 Air Absorption)
+    public bool IsmRoomEnabled {
+        get => prefs.GetBoolean("ismRoomEnabled", false);
+        set => Edit().PutBoolean("ismRoomEnabled", value).Apply();
+    }
+
+    public int IsmRoomPresetIndex {
+        get => prefs.GetInt("ismRoomPreset", (int)Cavern.Virtualizer.IsmRoomPreset.MasteringStudio);
+        set => Edit().PutInt("ismRoomPreset", Math.Clamp(value, 0, 4)).Apply();
+    }
+
+    public int IsmWallMaterialIndex {
+        get => prefs.GetInt("ismWallMaterial", (int)Cavern.Virtualizer.IsmWallMaterial.StudioBroadband);
+        set => Edit().PutInt("ismWallMaterial", Math.Clamp(value, 0, 4)).Apply();
+    }
+
+    public int IsmReflectionOrder {
+        get => prefs.GetInt("ismReflectionOrder", 2);
+        set => Edit().PutInt("ismReflectionOrder", value <= 1 ? 1 : 2).Apply();
+    }
+
+    public float IsmReflectionLevel {
+        get => prefs.GetFloat("ismReflectionLevel", 1.0f);
+        set => Edit().PutFloat("ismReflectionLevel", Math.Clamp(value, 0f, 1.5f)).Apply();
+    }
+
+    public bool NearFieldCompensationEnabled {
+        get => prefs.GetBoolean("nearFieldCompEnabled", true);
+        set => Edit().PutBoolean("nearFieldCompEnabled", value).Apply();
+    }
+
+    public bool AirAbsorptionEnabled {
+        get => prefs.GetBoolean("airAbsorptionEnabled", true);
+        set => Edit().PutBoolean("airAbsorptionEnabled", value).Apply();
+    }
+
+    public float AirTemperatureCelsius {
+        get => prefs.GetFloat("airTempC", Cavern.Virtualizer.AirAbsorptionFilter.DefaultTemperatureCelsius);
+        set => Edit().PutFloat("airTempC", Math.Clamp(value, 0f, 40f)).Apply();
+    }
+
+    public float AirRelativeHumidityPct {
+        get => prefs.GetFloat("airRhPct", Cavern.Virtualizer.AirAbsorptionFilter.DefaultRelativeHumidityPct);
+        set => Edit().PutFloat("airRhPct", Math.Clamp(value, 15f, 90f)).Apply();
+    }
+
+    public Cavernize.Logic.Spatial.PhysicalExternalizationConfig BuildExternalizationConfig() => new() {
+        IsmRoomEnabled = IsmRoomEnabled,
+        RoomPreset = (Cavern.Virtualizer.IsmRoomPreset)Math.Clamp(IsmRoomPresetIndex, 0, 4),
+        WallMaterial = (Cavern.Virtualizer.IsmWallMaterial)Math.Clamp(IsmWallMaterialIndex, 0, 4),
+        ReflectionOrder = IsmReflectionOrder <= 1 ? 1 : 2,
+        ReflectionLevel = Math.Clamp(IsmReflectionLevel, 0f, 1.5f),
+        NearFieldEnabled = NearFieldCompensationEnabled,
+        AirAbsorptionEnabled = AirAbsorptionEnabled,
+        AirTemperatureCelsius = Math.Clamp(AirTemperatureCelsius, 0f, 40f),
+        AirRelativeHumidityPct = Math.Clamp(AirRelativeHumidityPct, 15f, 90f)
+    };
+
+    // Slot 5B: MagLS Ambisonics, Woodworth-Schlosberg Biometric ITD, HpTF Ear-Canal Notch & SONICOM/HUTUBS Wizard
+    public int MagLsModeIndex {
+        get => prefs.GetInt("magLsModeIndex", (int)Cavernize.Logic.Spatial.MagLsDecodeMode.Off);
+        set => Edit().PutInt("magLsModeIndex", Math.Clamp(value, 0, 3)).Apply();
+    }
+
+    public bool BiometricItdEnabled {
+        get => prefs.GetBoolean("biometricItdEnabled", false);
+        set => Edit().PutBoolean("biometricItdEnabled", value).Apply();
+    }
+
+    public float HeadWidthCm {
+        get => prefs.GetFloat("headWidthCm", Cavern.Virtualizer.BiometricItdScaler.ReferenceHeadWidthCm);
+        set => Edit().PutFloat("headWidthCm", Math.Clamp(value,
+            Cavern.Virtualizer.BiometricItdScaler.MinHeadWidthCm,
+            Cavern.Virtualizer.BiometricItdScaler.MaxHeadWidthCm)).Apply();
+    }
+
+    public float ManualItdOffsetUs {
+        get => prefs.GetFloat("manualItdOffsetUs", 0f);
+        set => Edit().PutFloat("manualItdOffsetUs", Math.Clamp(value,
+            -Cavern.Virtualizer.BiometricItdScaler.MaxManualOffsetUs,
+            Cavern.Virtualizer.BiometricItdScaler.MaxManualOffsetUs)).Apply();
+    }
+
+    public bool HptfNotchEnabled {
+        get => prefs.GetBoolean("hptfNotchEnabled", false);
+        set => Edit().PutBoolean("hptfNotchEnabled", value).Apply();
+    }
+
+    public float HptfNotchFreqHz {
+        get => prefs.GetFloat("hptfNotchFreqHz", Cavern.Filters.HptfNotchFilter.DefaultFrequencyHz);
+        set => Edit().PutFloat("hptfNotchFreqHz", Math.Clamp(value,
+            Cavern.Filters.HptfNotchFilter.MinFrequencyHz,
+            Cavern.Filters.HptfNotchFilter.MaxFrequencyHz)).Apply();
+    }
+
+    public float HptfNotchGainDb {
+        get => prefs.GetFloat("hptfNotchGainDb", Cavern.Filters.HptfNotchFilter.DefaultGainDb);
+        set => Edit().PutFloat("hptfNotchGainDb", Math.Clamp(value,
+            Cavern.Filters.HptfNotchFilter.MaxCutDb,
+            0f)).Apply();
+    }
+
+    public float HptfNotchQ {
+        get => prefs.GetFloat("hptfNotchQ", Cavern.Filters.HptfNotchFilter.DefaultQ);
+        set => Edit().PutFloat("hptfNotchQ", Math.Clamp(value,
+            Cavern.Filters.HptfNotchFilter.MinQ,
+            Cavern.Filters.HptfNotchFilter.MaxQ)).Apply();
+    }
+
+    public string PerceptualClusterId {
+        get => prefs.GetString("perceptualClusterId", "");
+        set => Edit().PutString("perceptualClusterId", value ?? "").Apply();
+    }
+
+    public Cavernize.Logic.Spatial.HrtfPersonalizationConfig BuildPersonalizationConfig() => new() {
+        MagLsMode = (Cavernize.Logic.Spatial.MagLsDecodeMode)Math.Clamp(MagLsModeIndex, 0, 3),
+        MagLsCutoffHz = 0f,
+        BiometricItdEnabled = BiometricItdEnabled,
+        HeadWidthCm = Math.Clamp(HeadWidthCm,
+            Cavern.Virtualizer.BiometricItdScaler.MinHeadWidthCm,
+            Cavern.Virtualizer.BiometricItdScaler.MaxHeadWidthCm),
+        ManualItdOffsetUs = Math.Clamp(ManualItdOffsetUs,
+            -Cavern.Virtualizer.BiometricItdScaler.MaxManualOffsetUs,
+            Cavern.Virtualizer.BiometricItdScaler.MaxManualOffsetUs),
+        HptfNotchEnabled = HptfNotchEnabled,
+        HptfNotchFreqHz = Math.Clamp(HptfNotchFreqHz,
+            Cavern.Filters.HptfNotchFilter.MinFrequencyHz,
+            Cavern.Filters.HptfNotchFilter.MaxFrequencyHz),
+        HptfNotchGainDb = Math.Clamp(HptfNotchGainDb, Cavern.Filters.HptfNotchFilter.MaxCutDb, 0f),
+        HptfNotchQ = Math.Clamp(HptfNotchQ,
+            Cavern.Filters.HptfNotchFilter.MinQ,
+            Cavern.Filters.HptfNotchFilter.MaxQ),
+        PerceptualClusterId = PerceptualClusterId ?? ""
+    };
 
     public string DeviceProfilesJson {
         get => prefs.GetString("deviceProfilesV1", "[]");
