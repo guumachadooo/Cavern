@@ -3761,21 +3761,239 @@ public partial class MainActivity {
         if (store == null || playerEngine == null) {
             return;
         }
+        const float VoiceprintDurationSec = 4.0f;
         LinearLayout content = new(this) { Orientation = Orientation.Vertical };
 
-        Cavern.VocalChain.VocalChainTelemetry tel = playerEngine.SceneHub.VocalChainDiagnostics;
-        TextView telLabel = Label(
-            string.Format(
+        TextView telLabel = Label("", 11.2f, OneUiTheme.IconSystemInfo);
+        telLabel.SetPadding(0, 0, 0, Dp(8));
+        content.AddView(telLabel);
+
+        // Song Vocal DNA & Mic Voiceprint readout card (W19.b)
+        LinearLayout dnaCard = new(this) { Orientation = Orientation.Vertical };
+        dnaCard.Background = OneUiTheme.CreateRoundedDrawable(
+            this, OneUiTheme.SurfaceSubTile, 16f, OneUiTheme.BorderSubtle, 0.9f);
+        dnaCard.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+
+        TextView dnaTitleTv = Label(S["VocalDnaSectionTitle"], 12.2f, OneUiTheme.TextPrimary);
+        dnaTitleTv.SetTypeface(Typeface.DefaultBold, TypefaceStyle.Bold);
+        dnaCard.AddView(dnaTitleTv);
+
+        TextView dnaSummaryTv = Label("", 11.2f, OneUiTheme.TextSub);
+        dnaSummaryTv.SetPadding(0, Dp(4), 0, 0);
+        dnaCard.AddView(dnaSummaryTv);
+
+        TextView vpStatusTv = Label("", 11.2f, OneUiTheme.TextMuted);
+        vpStatusTv.SetPadding(0, Dp(4), 0, Dp(8));
+        dnaCard.AddView(vpStatusTv);
+
+        // Action row 1: [Analyze Song DNA] [Calibrate Mic (4s)]
+        LinearLayout dnaActionRow = HRow();
+        dnaActionRow.BaselineAligned = false;
+        dnaActionRow.SetGravity(GravityFlags.CenterVertical);
+
+        Button analyzeDnaBtn = null;
+        Button calibrateMicBtn = null;
+        Button resetVpBtn = null;
+        Button abCompareBtn = null;
+        Switch bypassSwitchRef = null;
+        bool dialogClosed = false;
+
+        void RefreshModalLiveState() {
+            if (uiDestroyed || dialogClosed || playerEngine == null || store == null) {
+                return;
+            }
+            Cavern.VocalChain.VocalChainTelemetry tel = playerEngine.SceneHub.VocalChainDiagnostics;
+            telLabel.Text = string.Format(
                 S["VocalLiveTelemetryFormat"],
                 tel.InputDbfs,
                 tel.OutputDbfs,
                 tel.CompressorReductionDb,
                 tel.DeEsserReductionDb,
-                tel.SidechainPocketDuckDb),
-            11.2f,
-            OneUiTheme.IconSystemInfo);
-        telLabel.SetPadding(0, 0, 0, Dp(8));
-        content.AddView(telLabel);
+                tel.SidechainPocketDuckDb);
+
+            Cavern.VocalChain.VocalMixDnaProfile dna = playerEngine.VocalMixMatchStage.ActiveDna;
+            if (dna.IsExtractedFromSong) {
+                string delayTag = dna.DelayTimeMs > 1f && dna.DelayWetMix > 0.005f
+                    ? string.Format(S["VocalDnaDelayTagFmt"], dna.DelayTimeMs)
+                    : string.Empty;
+                string drrTag = dna.HasMeasuredDereverb && float.IsFinite(dna.MeasuredDrrDb)
+                    ? string.Format(S["VocalDnaDrrTagFmt"], dna.MeasuredDrrDb)
+                    : string.Empty;
+                string trackLabel = string.IsNullOrWhiteSpace(dna.SourceTrackSummary)
+                    ? S["TabMusicPlayer"]
+                    : dna.SourceTrackSummary;
+                dnaSummaryTv.Text = string.Format(
+                    S["VocalDnaSummaryFmt"],
+                    trackLabel,
+                    dna.TargetVocalLufs,
+                    dna.CrestFactorDb,
+                    dna.ReverbRt60Sec,
+                    dna.ReverbWetMix * 100f,
+                    delayTag,
+                    drrTag);
+                dnaSummaryTv.SetTextColor(OneUiTheme.FunctionalGreen);
+            } else {
+                dnaSummaryTv.Text = S["VocalDnaNeutralStatus"];
+                dnaSummaryTv.SetTextColor(OneUiTheme.TextSub);
+            }
+
+            bool capturing = playerEngine.LiveMicBridge.IsCapturingVoiceprint;
+            if (capturing) {
+                float progress = playerEngine.LiveMicBridge.VoiceprintCaptureProgress;
+                float remSec = Math.Max(0f, VoiceprintDurationSec * (1f - progress));
+                float livePeak = audioOutput?.ProAudioDiagnostics.MicPeakDbfs ?? tel.InputDbfs;
+                vpStatusTv.Text = string.Format(S["VocalVoiceprintCapturingFmt"], progress * 100f, remSec, livePeak);
+                vpStatusTv.SetTextColor(OneUiTheme.FunctionalOrange);
+                if (calibrateMicBtn != null) {
+                    calibrateMicBtn.Text = string.Format(S["VocalVoiceprintCancelBtn"], remSec);
+                    calibrateMicBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, OneUiTheme.FunctionalOrange, OneUiTheme.PillCornerDp);
+                }
+            } else {
+                bool hasVp = playerEngine.VocalMixMatchStage.HasMicVoiceprint;
+                float[] deltas = playerEngine.VocalMixMatchStage.GetActiveMatchEqDeltasDb();
+                if (hasVp && deltas != null && deltas.Length >= 8) {
+                    float low = (deltas[0] + deltas[1]) * 0.5f;
+                    float mid = (deltas[2] + deltas[3] + deltas[4] + deltas[5]) * 0.25f;
+                    float air = (deltas[6] + deltas[7]) * 0.5f;
+                    vpStatusTv.Text = string.Format(S["VocalVoiceprintActiveFmt"], low, mid, air);
+                    vpStatusTv.SetTextColor(OneUiTheme.IconSystemInfo);
+                } else if (hasVp) {
+                    vpStatusTv.Text = S["VocalVoiceprintWaitingSongDna"];
+                    vpStatusTv.SetTextColor(OneUiTheme.IconSystemInfo);
+                } else {
+                    vpStatusTv.Text = S["VocalVoiceprintUncalibrated"];
+                    vpStatusTv.SetTextColor(OneUiTheme.TextMuted);
+                }
+                if (calibrateMicBtn != null) {
+                    calibrateMicBtn.Text = S["VocalVoiceprintCalibrateBtn"];
+                    calibrateMicBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
+                        this,
+                        hasVp ? OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 76) : OneUiTheme.SurfaceCard,
+                        OneUiTheme.PillCornerDp);
+                }
+            }
+
+            if (analyzeDnaBtn != null) {
+                analyzeDnaBtn.Text = isNeuralPrepRunning
+                    ? string.Format(S["VocalDnaBusyBtn"], neuralPrepProgress)
+                    : S["VocalDnaAnalyzeBtn"];
+                analyzeDnaBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
+                    this,
+                    isNeuralPrepRunning
+                        ? OneUiTheme.FunctionalOrange
+                        : (dna.IsExtractedFromSong ? OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 76) : OneUiTheme.SurfaceCard),
+                    OneUiTheme.PillCornerDp);
+            }
+
+            if (resetVpBtn != null) {
+                resetVpBtn.Visibility = playerEngine.VocalMixMatchStage.HasMicVoiceprint && !capturing
+                    ? ViewStates.Visible
+                    : ViewStates.Gone;
+            }
+
+            if (abCompareBtn != null) {
+                bool dryBypass = playerEngine.VocalChainBypassed;
+                abCompareBtn.Text = dryBypass ? S["VocalAbStateDry"] : S["VocalAbStateWet"];
+                abCompareBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
+                    this,
+                    dryBypass ? OneUiTheme.FunctionalOrange : OneUiTheme.Primary,
+                    OneUiTheme.PillCornerDp);
+                abCompareBtn.SetTextColor(Color.White);
+            }
+            if (bypassSwitchRef != null && bypassSwitchRef.Checked != playerEngine.VocalChainBypassed) {
+                bypassSwitchRef.Checked = playerEngine.VocalChainBypassed;
+            }
+        }
+
+        analyzeDnaBtn = PillButton(S["VocalDnaAnalyzeBtn"], () => {
+            PrepareSongVocalDnaAsync();
+            RefreshModalLiveState();
+        });
+        analyzeDnaBtn.TextSize = 11.4f;
+        analyzeDnaBtn.SetSingleLine(true);
+        analyzeDnaBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        dnaActionRow.AddView(analyzeDnaBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+
+        calibrateMicBtn = PillButton(S["VocalVoiceprintCalibrateBtn"], () => {
+            if (playerEngine.LiveMicBridge.IsCapturingVoiceprint) {
+                playerEngine.CancelMicVoiceprintCalibration();
+                RefreshModalLiveState();
+                return;
+            }
+            RequestRecordAudioPermissionIfNeeded();
+            if (!store.ProAudioEnabled) {
+                store.ProAudioEnabled = true;
+            }
+            if (!store.LiveMicEnabled) {
+                store.LiveMicEnabled = true;
+            }
+            if (store.LiveMicRoutingIndex == 0) {
+                store.LiveMicRoutingIndex = 1; // MonoChannel1
+            }
+            ApplyAndRefreshProAudio();
+            playerEngine.StartMicVoiceprintCalibration(VoiceprintDurationSec, result => RunOnUiThread(() => {
+                if (uiDestroyed) {
+                    return;
+                }
+                if (result.IsValid && result.Profile != null) {
+                    store.SaveMicVoiceprintBands(result.Profile.BandEnergyDb);
+                    Cavern.VocalChain.VocalMacroSettings macros = store.BuildVocalMacroSettings();
+                    macros.Bypass = playerEngine.VocalChainBypassed;
+                    playerEngine.VocalMixMatchStage.ApplyMicVoiceprint(result.Profile.BandEnergyDb, macros);
+                    RefreshLyricsSingDockUi();
+                    RefreshSpatialXRayHud();
+                    ShowToast(string.Format(
+                        S["VocalVoiceprintSuccessToast"],
+                        result.ActiveRmsDbfs,
+                        result.ActiveWindowCount));
+                } else {
+                    ShowToast(string.Format(S["VocalVoiceprintTooQuietFmt"], result.ActiveRmsDbfs));
+                }
+                RefreshModalLiveState();
+            }));
+            RefreshModalLiveState();
+        });
+        calibrateMicBtn.TextSize = 11.4f;
+        calibrateMicBtn.SetSingleLine(true);
+        calibrateMicBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        dnaActionRow.AddView(calibrateMicBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        dnaCard.AddView(dnaActionRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+        // Action row 2: [Instant A/B Compare] [Reset Mic]
+        LinearLayout abActionRow = HRow();
+        abActionRow.BaselineAligned = false;
+        abActionRow.SetGravity(GravityFlags.CenterVertical);
+        abActionRow.SetPadding(0, Dp(6), 0, 0);
+
+        abCompareBtn = PillButton(S["VocalAbStateWet"], () => {
+            playerEngine.VocalChainBypassed = !playerEngine.VocalChainBypassed;
+            ApplyAndRefreshVocalChain();
+            RefreshModalLiveState();
+        });
+        abCompareBtn.TextSize = 11.6f;
+        abCompareBtn.SetSingleLine(true);
+        abCompareBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        abActionRow.AddView(abCompareBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        resetVpBtn = PillButton(S["VocalVoiceprintResetBtn"], () => {
+            store.ClearMicVoiceprint();
+            Cavern.VocalChain.VocalMacroSettings macros = store.BuildVocalMacroSettings();
+            macros.Bypass = playerEngine.VocalChainBypassed;
+            playerEngine.VocalMixMatchStage.ClearMicVoiceprint(macros);
+            RefreshLyricsSingDockUi();
+            RefreshSpatialXRayHud();
+            ShowToast(S["VocalVoiceprintResetToast"]);
+            RefreshModalLiveState();
+        });
+        resetVpBtn.TextSize = 11.4f;
+        resetVpBtn.SetSingleLine(true);
+        resetVpBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        abActionRow.AddView(resetVpBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { LeftMargin = Dp(6) });
+        dnaCard.AddView(abActionRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+        content.AddView(dnaCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
 
         AddSwitchRow(content, S["ProAudioLiveMicTitle"], store.LiveMicEnabled, v => {
             store.LiveMicEnabled = v;
@@ -3784,20 +4002,26 @@ public partial class MainActivity {
                 if (!store.ProAudioEnabled) {
                     store.ProAudioEnabled = true;
                 }
+                if (store.LiveMicRoutingIndex == 0) {
+                    store.LiveMicRoutingIndex = 1;
+                }
             }
             ApplyAndRefreshProAudio();
+            RefreshModalLiveState();
         });
         AddDivider(content);
 
         AddSwitchRow(content, S["VocalEnableTitle"], store.VocalMixMatchEnabled, v => {
             store.VocalMixMatchEnabled = v;
             ApplyAndRefreshVocalChain();
+            RefreshModalLiveState();
         });
         AddDivider(content);
 
-        AddSwitchRow(content, S["VocalBypassAbTitle"], playerEngine.VocalChainBypassed, v => {
+        bypassSwitchRef = AddSwitchRow(content, S["VocalBypassAbTitle"], playerEngine.VocalChainBypassed, v => {
             playerEngine.VocalChainBypassed = v;
             ApplyAndRefreshVocalChain();
+            RefreshModalLiveState();
         });
         AddDivider(content);
 
@@ -3883,18 +4107,46 @@ public partial class MainActivity {
         });
 
         LinearLayout scarlettRow = HRow();
+        scarlettRow.BaselineAligned = false;
+        scarlettRow.SetGravity(GravityFlags.CenterVertical);
         scarlettRow.SetPadding(0, Dp(8), 0, 0);
         Button scarlettQuickBtn = PillButton(S["ScarlettControlsBtn"], ShowScarlett2i2ControlsModal);
+        scarlettQuickBtn.SetSingleLine(true);
+        scarlettQuickBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         scarlettRow.AddView(scarlettQuickBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         content.AddView(scarlettRow);
 
-        OneUiModalDialog.Show(
+        RefreshModalLiveState();
+
+        Android.App.Dialog dlg = OneUiModalDialog.Show(
             this,
             S["VocalModalTitle"],
             customContent: content,
             icon: OneUiIconType.Microphone,
             iconBadgeColor: OneUiTheme.Primary,
             positiveText: S["CloseBtn"]);
+
+        Java.Lang.Runnable pollRunnable = null;
+        pollRunnable = new Java.Lang.Runnable(() => {
+            if (dialogClosed || uiDestroyed) {
+                return;
+            }
+            RefreshModalLiveState();
+            uiHandler?.PostDelayed(pollRunnable, 250);
+        });
+        uiHandler?.PostDelayed(pollRunnable, 250);
+
+        if (dlg != null) {
+            dlg.DismissEvent += (_, _) => {
+                dialogClosed = true;
+                if (pollRunnable != null) {
+                    uiHandler?.RemoveCallbacks(pollRunnable);
+                }
+                if (playerEngine?.LiveMicBridge?.IsCapturingVoiceprint == true) {
+                    playerEngine.CancelMicVoiceprintCalibration();
+                }
+            };
+        }
     }
 
     void ShowCalibrateRttModal() {

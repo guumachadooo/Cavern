@@ -2,14 +2,35 @@ using System.Numerics;
 
 using Cavern.ProAudio;
 using Cavern.Spatial;
+using Cavern.VocalChain;
 
 namespace Cavernize.Logic.Spatial;
+
+/// <summary>
+/// Result of a guided 3-5 second live microphone voiceprint capture executed off the real-time audio thread.
+/// </summary>
+public readonly struct VoiceprintCaptureResult {
+    /// <summary>True when sufficient active vocal speech energy was captured to compute reliable Match EQ deltas.</summary>
+    public bool IsValid { get; init; }
+
+    /// <summary>Extracted 8-band microphone vocal spectrum profile (null when invalid).</summary>
+    public VocalMixDnaProfile Profile { get; init; }
+
+    /// <summary>Measured active speech RMS level across the capture window (dBFS).</summary>
+    public float ActiveRmsDbfs { get; init; }
+
+    /// <summary>Actual captured duration in seconds.</summary>
+    public float DurationSeconds { get; init; }
+
+    /// <summary>Number of active speech windows analyzed.</summary>
+    public int ActiveWindowCount { get; init; }
+}
 
 /// <summary>
 /// Zero-GC Slot 1 live microphone bridge coupling full-duplex USB UAC2 / AAudio capture threads
 /// to <see cref="Rendering.RealtimePlayerEngine"/> and <see cref="SpatialSceneHub"/> (<see cref="SourceLayer.LiveMicrophone"/>).
 /// Includes a lock-free SPSC ring buffer, channel routing (Mono Ch1, Mono Ch2, Stereo Pair), trim gain,
-/// live peak/RMS dBFS metering, and a pure-physics MLS loopback round-trip latency calibration state machine.
+/// live peak/RMS dBFS metering, pure-physics MLS loopback round-trip latency calibration, and guided mic voiceprint capture.
 /// </summary>
 public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
     const int RingCapacityFrames = 8192; // ~170 ms @ 48 kHz; power-of-2 lock-free headroom
@@ -19,8 +40,9 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
     readonly float[] producerStereoScratch = new float[MaxScratchFrames * 2];
     readonly float[] consumerStereoScratch = new float[MaxScratchFrames * 2];
 
-    // Lock-free pure-physics MLS loopback RTT calibration session (allocated only when user triggers calibration)
+    // Lock-free pure-physics MLS loopback RTT calibration & mic voiceprint sessions (allocated only when user triggers them)
     volatile CalibrationSession activeCalibSession;
+    volatile VoiceprintSession activeVoiceprintSession;
 
     volatile bool isActive;
     volatile int sampleRate = 48000;
@@ -53,6 +75,20 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
 
     /// <summary>True while an MLS loopback round-trip latency measurement is in progress.</summary>
     public bool IsCalibratingLatency => activeCalibSession != null;
+
+    /// <summary>True while a guided 3-5 second microphone voiceprint capture is in progress.</summary>
+    public bool IsCapturingVoiceprint => activeVoiceprintSession != null;
+
+    /// <summary>Current guided voiceprint capture progress in [0; 1].</summary>
+    public float VoiceprintCaptureProgress {
+        get {
+            VoiceprintSession vp = activeVoiceprintSession;
+            if (vp == null || vp.CaptureBuffer.Length == 0) {
+                return 0f;
+            }
+            return Math.Clamp((float)Volatile.Read(ref vp.CaptureCursor) / vp.CaptureBuffer.Length, 0f, 1f);
+        }
+    }
 
     /// <summary>Latest measured or estimated full-duplex round-trip latency in milliseconds.</summary>
     public float RoundTripLatencyMs {
@@ -150,6 +186,27 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         }
     }
 
+    /// <summary>
+    /// Begins a guided 3-5 second live microphone voiceprint capture (lock-free on the real-time capture thread,
+    /// analyzed off-thread via <see cref="VocalMixProfileExtractor.Analyze"/> upon completion).
+    /// </summary>
+    public void StartVoiceprintCapture(int activeSampleRate, float durationSeconds, Action<VoiceprintCaptureResult> onCompleted) {
+        int sr = Math.Clamp(activeSampleRate, 44100, 192000);
+        float clampedSec = Math.Clamp(durationSeconds, 2.5f, 6.0f);
+        int captureFrames = Math.Clamp((int)Math.Round(sr * clampedSec), 44100 * 2, 192000 * 6);
+        activeVoiceprintSession = new VoiceprintSession(new float[captureFrames], sr, clampedSec, onCompleted);
+    }
+
+    /// <summary>
+    /// Cancels any active guided microphone voiceprint capture without invoking its completion callback.
+    /// </summary>
+    public void CancelVoiceprintCapture() {
+        VoiceprintSession prev = Interlocked.Exchange(ref activeVoiceprintSession, null);
+        if (prev != null) {
+            Interlocked.Exchange(ref prev.CompletedFlag, 1);
+        }
+    }
+
     /// <inheritdoc/>
     public int PushCapturedInterleaved(float[] interleavedInput, int offset, int frameCount, int inputChannels) {
         if (interleavedInput == null || frameCount <= 0 || inputChannels <= 0) {
@@ -167,6 +224,7 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         int meteredSamples = 0;
 
         CalibrationSession calib = activeCalibSession;
+        VoiceprintSession vp = activeVoiceprintSession;
 
         while (remaining > 0) {
             int chunk = Math.Min(remaining, MaxScratchFrames);
@@ -219,6 +277,22 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
                         calib = null;
                     }
                 }
+
+                if (vp != null && vp.CompletedFlag == 0) {
+                    int vpIdx = vp.CaptureCursor;
+                    if (vpIdx < vp.CaptureBuffer.Length) {
+                        // Record raw routed mic signal (or ch0 fallback when routing is Off during calibration)
+                        float sample = mode != LiveMicRoutingMode.Off
+                            ? 0.5f * (outL + outR)
+                            : ch0 * gain;
+                        vp.CaptureBuffer[vpIdx] = sample;
+                        vp.CaptureCursor = vpIdx + 1;
+                    }
+                    if (vp.CaptureCursor >= vp.CaptureBuffer.Length) {
+                        FinishVoiceprintCaptureAsync(vp);
+                        vp = null;
+                    }
+                }
             }
 
             if (isActive && mode != LiveMicRoutingMode.Off) {
@@ -246,8 +320,9 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
     }
 
     /// <summary>
-    /// Mixes the live microphone stream sample-locked into <paramref name="stereoOutput"/> with 3D azimuth panning
-    /// relative to <paramref name="listenerPose"/> (or straight stereo when <see cref="LiveMicRoutingMode.StereoPair"/> is active).
+    /// Runs Slot 2D <see cref="VocalMixMatchStageProcessor.ProcessLiveVocalZeroGc"/> (when supplied) on the live mic stream,
+    /// optionally carving a 1-4 kHz vocal pocket into <paramref name="stereoOutput"/>, then mixes the processed vocal
+    /// sample-locked into <paramref name="stereoOutput"/> with 3D azimuth panning relative to <paramref name="listenerPose"/>.
     /// Also injects the MLS loopback calibration probe cleanly when calibration is armed.
     /// Zero-GC on the real-time audio thread.
     /// </summary>
@@ -256,7 +331,9 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         int outOffset,
         int frameCount,
         ListenerPose6DoF listenerPose,
-        Vector3 environmentSize = default) {
+        Vector3 environmentSize = default,
+        VocalMixMatchStageProcessor vocalProcessor = null,
+        bool applyBackingSidechain = true) {
         if (stereoOutput == null || frameCount <= 0) {
             return false;
         }
@@ -269,6 +346,7 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         }
 
         if (!isActive || routingMode == LiveMicRoutingMode.Off || monitorLevel <= 1e-4f) {
+            vocalProcessor?.ClearTelemetryIfIdle();
             return false;
         }
 
@@ -296,6 +374,8 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
             gainR = monitorLevel * MathF.Sin(angle);
         }
 
+        bool preserveStereoVocalImage = routingMode == LiveMicRoutingMode.StereoPair || (vocalProcessor != null && vocalProcessor.IsEnabled);
+
         int done = 0;
         while (done < frameCount) {
             int chunk = Math.Min(frameCount - done, MaxScratchFrames);
@@ -303,11 +383,21 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
             if (read <= 0 && captureRing.AvailableFramesToRead == 0) {
                 break;
             }
+
+            if (vocalProcessor != null) {
+                vocalProcessor.ProcessLiveVocalZeroGc(
+                    consumerStereoScratch,
+                    0,
+                    chunk,
+                    applyBackingSidechain ? stereoOutput : null,
+                    outOffset + done * 2);
+            }
+
             for (int f = 0; f < chunk; f++) {
                 int dst = outOffset + (done + f) * 2;
                 float micL = consumerStereoScratch[f * 2];
                 float micR = consumerStereoScratch[f * 2 + 1];
-                if (routingMode == LiveMicRoutingMode.StereoPair) {
+                if (preserveStereoVocalImage) {
                     stereoOutput[dst] += micL * gainL;
                     stereoOutput[dst + 1] += micR * gainR;
                 } else {
@@ -383,6 +473,30 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         });
     }
 
+    void FinishVoiceprintCaptureAsync(VoiceprintSession session) {
+        if (session == null || Interlocked.Exchange(ref session.CompletedFlag, 1) != 0) {
+            return;
+        }
+        Interlocked.CompareExchange(ref activeVoiceprintSession, null, session);
+        _ = Task.Run(() => {
+            VocalMixDnaProfile profile = VocalMixProfileExtractor.Analyze(
+                session.CaptureBuffer,
+                channels: 1,
+                sampleRate: session.SampleRate,
+                dereverbedDry: null,
+                atmosPosition: null,
+                sourceSummary: "Live Mic Voiceprint");
+            bool valid = VocalMixProfileExtractor.IsSufficientVoiceprintSignal(profile);
+            session.Callback?.Invoke(new VoiceprintCaptureResult {
+                IsValid = valid,
+                Profile = valid ? profile : null,
+                ActiveRmsDbfs = profile.ActiveSpeechRmsDbfs,
+                DurationSeconds = session.DurationSeconds,
+                ActiveWindowCount = profile.ActiveWindowCount
+            });
+        });
+    }
+
     sealed class CalibrationSession(
         float[] probe,
         float[] captureBuffer,
@@ -393,6 +507,19 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         public readonly int SampleRate = sampleRate;
         public readonly Action<RoundTripLatencyResult> Callback = callback;
         public int EmitCursor;
+        public int CaptureCursor;
+        public int CompletedFlag;
+    }
+
+    sealed class VoiceprintSession(
+        float[] captureBuffer,
+        int sampleRate,
+        float durationSeconds,
+        Action<VoiceprintCaptureResult> callback) {
+        public readonly float[] CaptureBuffer = captureBuffer;
+        public readonly int SampleRate = sampleRate;
+        public readonly float DurationSeconds = durationSeconds;
+        public readonly Action<VoiceprintCaptureResult> Callback = callback;
         public int CaptureCursor;
         public int CompletedFlag;
     }

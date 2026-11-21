@@ -11,7 +11,8 @@ namespace Cavern.VocalChain {
     /// </summary>
     public sealed class LiveVocalChainDsp {
         const int FdnChannels = 8;
-        const int MaxDelaySamples = 24000; // 500 ms @ 48 kHz
+        const int MaxFdnLineLength = 12288; // Supports up to 2857 * 4 = 11428 @ 192 kHz without comb collapse
+        const int MaxDelaySamples = 96000;  // 500 ms @ 192 kHz (2000 ms @ 48 kHz)
         static readonly int[] FdnPrimeLengthsAt48k = new int[] {
             1103, 1307, 1523, 1747, 1993, 2267, 2551, 2857
         };
@@ -26,7 +27,6 @@ namespace Cavern.VocalChain {
         BiquadState midBellMatch;
         BiquadState airShelfMatch;
         BiquadState deEssBandpass;
-        BiquadState deEssDynamicBell;
         BiquadState pocketCarveL;
         BiquadState pocketCarveR;
 
@@ -51,6 +51,7 @@ namespace Cavern.VocalChain {
         readonly float[][] fdnLines = new float[FdnChannels][];
         readonly int[] fdnWritePos = new int[FdnChannels];
         readonly int[] fdnLengths = new int[FdnChannels];
+        readonly float[] fdnFeedbackPerLine = new float[FdnChannels];
         readonly float[] fdnLpState = new float[FdnChannels];
         readonly float[] fdnTempA = new float[FdnChannels];
         readonly float[] fdnTempB = new float[FdnChannels];
@@ -65,7 +66,7 @@ namespace Cavern.VocalChain {
         /// <summary>Creates and pre-allocates the zero-GC live vocal DSP rack.</summary>
         public LiveVocalChainDsp(int sampleRateHz = 48000) {
             for (int i = 0; i < FdnChannels; i++) {
-                fdnLines[i] = new float[4096];
+                fdnLines[i] = new float[MaxFdnLineLength];
             }
             Configure(sampleRateHz, dna, macros);
         }
@@ -88,21 +89,34 @@ namespace Cavern.VocalChain {
                 fdnLengths[i] = len;
             }
 
+            // Pure-physics Zero-Fake-DSP rule: strictly 0.0 dB flat neutral EQ unless calibrated Match EQ deltas are supplied.
             float matchScale = Clamp(macros.MixMatchPct / 100f, 0f, 1.5f);
-            float lowDelta = matchEqDeltasDb != null && matchEqDeltasDb.Length >= 8 ? matchEqDeltasDb[1] : -1.5f;
-            float midDelta = matchEqDeltasDb != null && matchEqDeltasDb.Length >= 8 ? matchEqDeltasDb[4] : 1.2f;
-            float airDelta = matchEqDeltasDb != null && matchEqDeltasDb.Length >= 8
+            bool hasCalibratedMatchEq = matchEqDeltasDb != null && matchEqDeltasDb.Length >= 8;
+            float lowDelta = hasCalibratedMatchEq && IsFinite(matchEqDeltasDb[1]) ? matchEqDeltasDb[1] : 0f;
+            float midDelta = hasCalibratedMatchEq && IsFinite(matchEqDeltasDb[4]) ? matchEqDeltasDb[4] : 0f;
+            float airDelta = hasCalibratedMatchEq && IsFinite(matchEqDeltasDb[5]) && IsFinite(matchEqDeltasDb[6])
                 ? 0.5f * (matchEqDeltasDb[5] + matchEqDeltasDb[6])
-                : Clamp(dna.SpectralTiltDbPerOct * 1.1f + 1.5f, -3f, 5f);
+                : 0f;
 
             hpfState.SetHighPass(sampleRate, 92f, 0.707f);
             lowShelfMatch.SetLowShelf(sampleRate, 220f, Clamp(lowDelta * matchScale, -6f, 6f), 0.75f);
             midBellMatch.SetPeaking(sampleRate, 2200f, Clamp(midDelta * matchScale, -6f, 6f), 1.1f);
             airShelfMatch.SetHighShelf(sampleRate, 8500f, Clamp(airDelta * matchScale, -6f, 6f), 0.71f);
             deEssBandpass.SetBandPass(sampleRate, 7200f, 1.6f);
-            deEssDynamicBell.SetPeaking(sampleRate, 7200f, 0f, 1.8f);
             pocketCarveL.SetPeaking(sampleRate, 2400f, 0f, 1.0f);
             pocketCarveR.SetPeaking(sampleRate, 2400f, 0f, 1.0f);
+        }
+
+        /// <summary>Zeroes real-time metering telemetry cleanly when bypassed or when live mic is inactive.</summary>
+        public void ClearTelemetry(bool preserveLevels = false) {
+            if (!preserveLevels) {
+                telemetry.InputDbfs = -120f;
+                telemetry.OutputDbfs = -120f;
+            }
+            telemetry.GateReductionDb = 0f;
+            telemetry.DeEsserReductionDb = 0f;
+            telemetry.CompressorReductionDb = 0f;
+            telemetry.SidechainPocketDuckDb = 0f;
         }
 
         /// <summary>Clears all filter memories, envelopes, and FDN reverb tails cleanly.</summary>
@@ -112,7 +126,6 @@ namespace Cavern.VocalChain {
             midBellMatch.Reset();
             airShelfMatch.Reset();
             deEssBandpass.Reset();
-            deEssDynamicBell.Reset();
             pocketCarveL.Reset();
             pocketCarveR.Reset();
             gateEnv = 0f;
@@ -132,7 +145,7 @@ namespace Cavern.VocalChain {
                 fdnWritePos[i] = 0;
                 fdnLpState[i] = 0f;
             }
-            telemetry = default(VocalChainTelemetry);
+            ClearTelemetry(preserveLevels: false);
         }
 
         /// <summary>
@@ -145,21 +158,50 @@ namespace Cavern.VocalChain {
             int frameCount,
             float[] backingStereoInterleaved = null,
             int backingOffset = 0) {
-            if (vocalStereoInterleaved == null || frameCount <= 0 || !macros.Enabled) {
+            if (vocalStereoInterleaved == null || frameCount <= 0) {
+                return;
+            }
+
+            if (!macros.Enabled) {
+                float disabledPeak = 1e-6f;
+                for (int f = 0; f < frameCount; f++) {
+                    int idx = vocalOffset + f * 2;
+                    float p = Math.Max(Math.Abs(vocalStereoInterleaved[idx]), Math.Abs(vocalStereoInterleaved[idx + 1]));
+                    if (p > disabledPeak) {
+                        disabledPeak = p;
+                    }
+                }
+                float db = LinearToDb(disabledPeak);
+                telemetry.InputDbfs = db;
+                telemetry.OutputDbfs = db;
+                ClearTelemetry(preserveLevels: true);
                 return;
             }
 
             float outputTrim = (float)Math.Pow(10.0, Clamp(macros.VocalLevelDb, -18f, 12f) / 20.0);
             if (macros.Bypass) {
+                float bypassInPeak = 1e-6f;
+                float bypassOutPeak = 1e-6f;
                 for (int f = 0; f < frameCount; f++) {
                     int idx = vocalOffset + f * 2;
-                    vocalStereoInterleaved[idx] *= outputTrim;
-                    vocalStereoInterleaved[idx + 1] *= outputTrim;
+                    float inL = vocalStereoInterleaved[idx];
+                    float inR = vocalStereoInterleaved[idx + 1];
+                    float pIn = Math.Max(Math.Abs(inL), Math.Abs(inR));
+                    if (pIn > bypassInPeak) {
+                        bypassInPeak = pIn;
+                    }
+                    float outL = Clamp(inL * outputTrim, -0.99f, 0.99f);
+                    float outR = Clamp(inR * outputTrim, -0.99f, 0.99f);
+                    vocalStereoInterleaved[idx] = outL;
+                    vocalStereoInterleaved[idx + 1] = outR;
+                    float pOut = Math.Max(Math.Abs(outL), Math.Abs(outR));
+                    if (pOut > bypassOutPeak) {
+                        bypassOutPeak = pOut;
+                    }
                 }
-                telemetry.GateReductionDb = 0f;
-                telemetry.DeEsserReductionDb = 0f;
-                telemetry.CompressorReductionDb = 0f;
-                telemetry.SidechainPocketDuckDb = 0f;
+                telemetry.InputDbfs = LinearToDb(bypassInPeak);
+                telemetry.OutputDbfs = LinearToDb(bypassOutPeak);
+                ClearTelemetry(preserveLevels: true);
                 return;
             }
 
@@ -179,14 +221,19 @@ namespace Cavern.VocalChain {
             float optoFastRel = ExpCoeff(0.065f);
             float optoSlowRel = ExpCoeff(1.100f); // T4 dual-stage slow memory tail
 
-            // FDN feedback gain derived from RT60: g = 10^(-3 * L / (RT60 * fs))
+            // Exact per-line FDN feedback gain derived from physical RT60: g_i = 10^(-3 * L_i / (RT60 * fs))
             float rt60 = Clamp(dna.ReverbRt60Sec, 0.25f, 4.5f);
-            float fdnFeedback = Clamp((float)Math.Pow(10.0, -3.0 * (1900.0 / sampleRate) / rt60), 0.15f, 0.94f);
-            float dampAlpha = Clamp((float)(2.0 * Math.PI * dna.ReverbDampingHz / sampleRate), 0.05f, 0.85f);
+            for (int i = 0; i < FdnChannels; i++) {
+                fdnFeedbackPerLine[i] = Clamp((float)Math.Pow(10.0, -3.0 * (fdnLengths[i] / (double)sampleRate) / rt60), 0.15f, 0.96f);
+            }
+            // Exact exponential one-pole damping coefficient: 1 - exp(-2*pi*fc/fs)
+            float dampCutoff = Clamp(dna.ReverbDampingHz, 500f, sampleRate * 0.45f);
+            float dampAlpha = Clamp((float)(1.0 - Math.Exp(-2.0 * Math.PI * dampCutoff / sampleRate)), 0.02f, 0.95f);
             float revWet = Clamp(dna.ReverbWetMix * revScale, 0f, 0.55f);
-            float delayWet = Clamp(dna.DelayWetMix * revScale, 0f, 0.30f);
-            int delaySamplesL = ClampInt((int)Math.Round(dna.DelayTimeMs * 0.001f * sampleRate), 32, MaxDelaySamples - 2);
-            int delaySamplesR = ClampInt((int)Math.Round(delaySamplesL * 1.12f), 32, MaxDelaySamples - 2);
+            bool hasDelay = dna.DelayTimeMs > 1f && dna.DelayWetMix > 1e-4f && revScale > 1e-4f;
+            float delayWet = hasDelay ? Clamp(dna.DelayWetMix * revScale, 0f, 0.30f) : 0f;
+            int delaySamplesL = hasDelay ? ClampInt((int)Math.Round(dna.DelayTimeMs * 0.001f * sampleRate), 32, MaxDelaySamples - 2) : 32;
+            int delaySamplesR = hasDelay ? ClampInt((int)Math.Round(delaySamplesL * 1.12f), 32, MaxDelaySamples - 2) : 32;
 
             float inPeak = 1e-6f;
             float outPeak = 1e-6f;
@@ -218,7 +265,7 @@ namespace Cavern.VocalChain {
                     worstGateDb = gateDb;
                 }
 
-                // 2. HPF + Formant-Safe Match EQ & Air Shelf
+                // 2. HPF + Formant-Safe Match EQ & Air Shelf (0 dB flat unless calibrated)
                 x = hpfState.Process(x);
                 x = lowShelfMatch.Process(x);
                 x = midBellMatch.Process(x);
@@ -288,27 +335,33 @@ namespace Cavern.VocalChain {
                     ? 0.96f * voiceActivityEnv + 0.04f * voiceAbs
                     : 0.9992f * voiceActivityEnv + 0.0008f * voiceAbs;
 
-                // 6. Matched Stereo Delay + 8-Channel Hadamard FDN Reverb
-                int readL = delayWritePos - delaySamplesL;
-                if (readL < 0) {
-                    readL += MaxDelaySamples;
-                }
-                int readR = delayWritePos - delaySamplesR;
-                if (readR < 0) {
-                    readR += MaxDelaySamples;
-                }
-                float tapL = delayBufL[readL];
-                float tapR = delayBufR[readR];
-                delayBufL[delayWritePos] = x + tapR * 0.22f;
-                delayBufR[delayWritePos] = x + tapL * 0.22f;
-                delayWritePos++;
-                if (delayWritePos >= MaxDelaySamples) {
-                    delayWritePos = 0;
+                // 6. Matched Stereo Delay (only when physically detected in Song DNA) + 8-Channel Hadamard FDN Reverb
+                float tapL = 0f;
+                float tapR = 0f;
+                if (hasDelay) {
+                    int readL = delayWritePos - delaySamplesL;
+                    if (readL < 0) {
+                        readL += MaxDelaySamples;
+                    }
+                    int readR = delayWritePos - delaySamplesR;
+                    if (readR < 0) {
+                        readR += MaxDelaySamples;
+                    }
+                    tapL = delayBufL[readL];
+                    tapR = delayBufR[readR];
+                    delayBufL[delayWritePos] = x + tapR * 0.22f;
+                    delayBufR[delayWritePos] = x + tapL * 0.22f;
+                    delayWritePos++;
+                    if (delayWritePos >= MaxDelaySamples) {
+                        delayWritePos = 0;
+                    }
                 }
 
-                float revL;
-                float revR;
-                ProcessHadamardFdn8(x, fdnFeedback, dampAlpha, out revL, out revR);
+                float revL = 0f;
+                float revR = 0f;
+                if (revWet > 1e-4f) {
+                    ProcessHadamardFdn8(x, dampAlpha, out revL, out revR);
+                }
 
                 float dryL = x + tapL * delayWet + revL * revWet;
                 float dryR = x + tapR * delayWet + revR * revWet;
@@ -371,7 +424,7 @@ namespace Cavern.VocalChain {
             return (float)(ax + Math.Log(1.0 + Math.Exp(-2.0 * ax)) - 0.6931471805599453);
         }
 
-        void ProcessHadamardFdn8(float input, float feedback, float dampAlpha, out float outL, out float outR) {
+        void ProcessHadamardFdn8(float input, float dampAlpha, out float outL, out float outR) {
             for (int i = 0; i < FdnChannels; i++) {
                 float[] line = fdnLines[i];
                 int wp = fdnWritePos[i];
@@ -409,7 +462,7 @@ namespace Cavern.VocalChain {
             for (int i = 0; i < FdnChannels; i++) {
                 float[] line = fdnLines[i];
                 float inject = ((i & 1) == 0 ? input : -input) * 0.35f;
-                line[fdnWritePos[i]] = inject + fdnTempB[i] * feedback;
+                line[fdnWritePos[i]] = inject + fdnTempB[i] * fdnFeedbackPerLine[i];
                 fdnWritePos[i]++;
                 if (fdnWritePos[i] >= line.Length) {
                     fdnWritePos[i] = 0;
@@ -422,6 +475,10 @@ namespace Cavern.VocalChain {
             }
             outL = sumL * 0.35f;
             outR = sumR * 0.35f;
+        }
+
+        static bool IsFinite(float v) {
+            return !float.IsNaN(v) && !float.IsInfinity(v);
         }
 
         float ExpCoeff(float timeSec) {

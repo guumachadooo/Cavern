@@ -147,6 +147,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     volatile bool isNeuralPrepRunning;
     double neuralPrepProgress;
     string neuralPrepStatusText = "";
+    int vocalDnaLoadGeneration;
 
     ExternalDecodedTrack decodedTrueHDTrack;
     string activeTrueHDSessionDir;
@@ -321,9 +322,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
         neuralOrchestrator = new Cavernize.Logic.Spatial.NeuralPipelineOrchestrator(neuralRuntime, neuralRuntime, neuralTrackCache);
         playerEngine.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
         playerEngine.ApplyLgsrConfig(store.BuildLgsrConfig());
-        playerEngine.VocalMixMatchStage.ApplyVocalProfile(
-            playerEngine.VocalMixMatchStage.ActiveDna,
-            store.BuildVocalMacroSettings());
+        float[] savedVoiceprint = store.GetMicVoiceprintBands();
+        if (savedVoiceprint != null) {
+            playerEngine.VocalMixMatchStage.ApplyMicVoiceprint(savedVoiceprint, store.BuildVocalMacroSettings());
+        } else {
+            playerEngine.VocalMixMatchStage.ApplyVocalProfile(
+                playerEngine.VocalMixMatchStage.ActiveDna,
+                store.BuildVocalMacroSettings());
+        }
         SyncNeuralRuntimeDiagnostics();
 
         AutoEqService.EnsureLoaded(this);
@@ -404,6 +410,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         audioOutput?.Dispose();
         usbProAudioManager?.Dispose();
         neuralRuntime?.Dispose();
+        playerEngine?.CancelMicVoiceprintCalibration();
         playerEngine?.Dispose();
         decodedTrueHDTrack?.Dispose();
         LoadedFile?.Dispose();
@@ -2168,6 +2175,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             SetWorkspaceSummaryText("");
             trackSourceItems = [];
             playerEngine?.BindSeparatedNeuralTrack(null);
+            playerEngine?.VocalMixMatchStage?.ApplySongDna(Cavern.VocalChain.VocalMixDnaProfile.CreateStudioDefault());
             mediaNotification?.CancelNotification();
             RefreshPlayerSourcesList();
             RefreshMusicPlayerUi();
@@ -2255,7 +2263,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshContainerOptions();
         SyncPlaybackUi(false, initialSeekSec, playerEngine.TotalSeconds);
         UpdateRoomCanvas();
+        playerEngine?.VocalMixMatchStage?.ApplySongDna(Cavern.VocalChain.VocalMixDnaProfile.CreateStudioDefault());
         StartLosslessTwinDiscoveryAsync(activeTrack);
+        TryLoadCachedSongVocalDnaAsync(activeTrack);
         TryAutoBindCachedNeuralStemsAsync(activeTrack);
         RefreshNeuralPrepUi();
     }
@@ -2342,6 +2352,170 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
     }
 
+    sealed class CachedVocalDnaRecord {
+        public float[] BandEnergyDb { get; set; }
+        public float SpectralTiltDbPerOct { get; set; }
+        public float SibilanceIndexDb { get; set; }
+        public float TargetVocalLufs { get; set; }
+        public float CrestFactorDb { get; set; }
+        public float HarmonicWarmth { get; set; }
+        public float ReverbRt60Sec { get; set; }
+        public float ReverbPreDelayMs { get; set; }
+        public float ReverbWetMix { get; set; }
+        public float ReverbDampingHz { get; set; }
+        public float DelayTimeMs { get; set; }
+        public float DelayWetMix { get; set; }
+        public float StereoWidth { get; set; }
+        public float PosX { get; set; }
+        public float PosY { get; set; }
+        public float PosZ { get; set; }
+        public bool HasMeasuredDereverb { get; set; }
+        public float? MeasuredDrrDb { get; set; }
+        public float ActiveSpeechRmsDbfs { get; set; }
+        public int ActiveWindowCount { get; set; }
+        public string SourceTrackSummary { get; set; }
+    }
+
+    string ResolveVocalDnaCacheFilePath(CavernizeTrack track) {
+        string sourceKey = track?.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? track?.Path ?? "";
+        if (string.IsNullOrEmpty(sourceKey) || !File.Exists(sourceKey)) {
+            return null;
+        }
+        try {
+            FileInfo fi = new(sourceKey);
+            string raw = $"{sourceKey}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}|dna_v2";
+            byte[] hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(raw));
+            string hex = Convert.ToHexString(hash, 0, 12).ToLowerInvariant();
+            string dir = Path.Combine(CacheDir?.AbsolutePath ?? FilesDir.AbsolutePath, "vocal_dna");
+            Directory.CreateDirectory(dir);
+            return Path.Combine(dir, $"{hex}.json");
+        } catch {
+            return null;
+        }
+    }
+
+    void SaveCachedSongVocalDna(CavernizeTrack track, Cavern.VocalChain.VocalMixDnaProfile dna) {
+        if (track == null || dna == null || !dna.IsExtractedFromSong) {
+            return;
+        }
+        string cachePath = ResolveVocalDnaCacheFilePath(track);
+        if (string.IsNullOrEmpty(cachePath)) {
+            return;
+        }
+        try {
+            CachedVocalDnaRecord rec = new() {
+                BandEnergyDb = dna.BandEnergyDb,
+                SpectralTiltDbPerOct = dna.SpectralTiltDbPerOct,
+                SibilanceIndexDb = dna.SibilanceIndexDb,
+                TargetVocalLufs = dna.TargetVocalLufs,
+                CrestFactorDb = dna.CrestFactorDb,
+                HarmonicWarmth = dna.HarmonicWarmth,
+                ReverbRt60Sec = dna.ReverbRt60Sec,
+                ReverbPreDelayMs = dna.ReverbPreDelayMs,
+                ReverbWetMix = dna.ReverbWetMix,
+                ReverbDampingHz = dna.ReverbDampingHz,
+                DelayTimeMs = dna.DelayTimeMs,
+                DelayWetMix = dna.DelayWetMix,
+                StereoWidth = dna.StereoWidth,
+                PosX = dna.VocalAtmosPosition.X,
+                PosY = dna.VocalAtmosPosition.Y,
+                PosZ = dna.VocalAtmosPosition.Z,
+                HasMeasuredDereverb = dna.HasMeasuredDereverb,
+                MeasuredDrrDb = float.IsFinite(dna.MeasuredDrrDb) ? dna.MeasuredDrrDb : null,
+                ActiveSpeechRmsDbfs = dna.ActiveSpeechRmsDbfs,
+                ActiveWindowCount = dna.ActiveWindowCount,
+                SourceTrackSummary = dna.SourceTrackSummary ?? ""
+            };
+            string json = System.Text.Json.JsonSerializer.Serialize(rec);
+            File.WriteAllText(cachePath, json);
+        } catch (Exception ex) {
+            AppLogger.Warn($"W19.b SaveCachedSongVocalDna: {ex.Message}");
+        }
+    }
+
+    void TryLoadCachedSongVocalDnaAsync(CavernizeTrack activeTrack) {
+        if (uiDestroyed || activeTrack == null || playerEngine == null) {
+            return;
+        }
+        int gen = ++vocalDnaLoadGeneration;
+        string cachePath = ResolveVocalDnaCacheFilePath(activeTrack);
+        if (string.IsNullOrEmpty(cachePath) || !File.Exists(cachePath)) {
+            return;
+        }
+        _ = Task.Run(() => {
+            try {
+                string json = File.ReadAllText(cachePath);
+                CachedVocalDnaRecord rec = System.Text.Json.JsonSerializer.Deserialize<CachedVocalDnaRecord>(json);
+                if (rec == null || rec.BandEnergyDb == null || rec.BandEnergyDb.Length != Cavern.VocalChain.VocalMixDnaProfile.AnalysisBandHz.Length) {
+                    return;
+                }
+                Cavern.VocalChain.VocalMixDnaProfile dna = new() {
+                    BandEnergyDb = rec.BandEnergyDb,
+                    SpectralTiltDbPerOct = rec.SpectralTiltDbPerOct,
+                    SibilanceIndexDb = rec.SibilanceIndexDb,
+                    TargetVocalLufs = rec.TargetVocalLufs,
+                    CrestFactorDb = rec.CrestFactorDb,
+                    HarmonicWarmth = rec.HarmonicWarmth,
+                    ReverbRt60Sec = rec.ReverbRt60Sec,
+                    ReverbPreDelayMs = rec.ReverbPreDelayMs,
+                    ReverbWetMix = rec.ReverbWetMix,
+                    ReverbDampingHz = rec.ReverbDampingHz,
+                    DelayTimeMs = rec.DelayTimeMs,
+                    DelayWetMix = rec.DelayWetMix,
+                    StereoWidth = rec.StereoWidth,
+                    VocalAtmosPosition = new System.Numerics.Vector3(rec.PosX, rec.PosY, rec.PosZ),
+                    IsExtractedFromSong = true,
+                    HasMeasuredDereverb = rec.HasMeasuredDereverb,
+                    MeasuredDrrDb = rec.MeasuredDrrDb ?? float.NaN,
+                    ActiveSpeechRmsDbfs = rec.ActiveSpeechRmsDbfs,
+                    ActiveWindowCount = rec.ActiveWindowCount,
+                    SourceTrackSummary = rec.SourceTrackSummary ?? ""
+                };
+                RunOnUiThread(() => {
+                    if (uiDestroyed || gen != vocalDnaLoadGeneration || GetActiveTrack() != activeTrack) {
+                        return;
+                    }
+                    ApplyExtractedSongDnaOnUiThread(dna);
+                });
+            } catch (Exception ex) {
+                AppLogger.Warn($"W19.b TryLoadCachedSongVocalDnaAsync: {ex.Message}");
+            }
+        });
+    }
+
+    void ApplyExtractedSongDnaOnUiThread(Cavern.VocalChain.VocalMixDnaProfile dna) {
+        if (dna == null || !dna.IsExtractedFromSong || playerEngine?.VocalMixMatchStage == null) {
+            return;
+        }
+        Cavern.VocalChain.VocalMixDnaProfile current = playerEngine.VocalMixMatchStage.ActiveDna;
+        if (current.IsExtractedFromSong && current.HasMeasuredDereverb && !dna.HasMeasuredDereverb) {
+            return;
+        }
+        playerEngine.VocalMixMatchStage.ApplySongDna(dna);
+        RefreshLyricsSingDockUi();
+        RefreshSpatialXRayHud();
+    }
+
+    void PrepareSongVocalDnaAsync() {
+        if (uiDestroyed) {
+            return;
+        }
+        CavernizeTrack activeTrack = GetActiveTrack();
+        if (activeTrack == null || !activeTrack.Supported || activeTrack.Codec == Codec.TrueHD) {
+            ShowToast(S["NeuralPrepNoTrackToast"]);
+            return;
+        }
+        Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
+        Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator?.BuildPlan(
+            Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna, cfg);
+        bool runtimeReady = neuralRuntime != null && neuralRuntime.IsAvailable;
+        if (!runtimeReady || plan == null || !plan.IsRunnable) {
+            ShowToast(S["VocalDnaNeedModelsToast"]);
+            return;
+        }
+        PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna);
+    }
+
     void TryAutoBindCachedNeuralStemsAsync(CavernizeTrack activeTrack) {
         if (uiDestroyed || activeTrack == null || neuralOrchestrator == null || neuralTrackCache == null || playerEngine == null) {
             return;
@@ -2357,31 +2531,66 @@ public partial class MainActivity : Activity, ICavernizeApp {
         _ = Task.Run(() => {
             try {
                 FileInfo fi = new(sourceKey);
-                Cavernize.Logic.Spatial.NeuralPipelineGoal[] goals = [
+                Cavern.Neural.NeuralSeparatedTrack playbackTrack = null;
+                Cavern.Neural.NeuralSeparatedTrack dnaTrack = null;
+
+                Cavernize.Logic.Spatial.NeuralPipelineGoal[] playbackGoals = [
                     Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
                     Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke
                 ];
-                for (int g = 0; g < goals.Length; g++) {
-                    Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator.BuildPlan(goals[g], cfg);
+                for (int g = 0; g < playbackGoals.Length; g++) {
+                    Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator.BuildPlan(playbackGoals[g], cfg);
                     if (!plan.IsRunnable) {
                         continue;
                     }
                     string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
                         sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, plan.PlanSignature);
                     if (neuralTrackCache.TryLoad(cacheKey, out Cavern.Neural.NeuralSeparatedTrack cached)) {
-                        RunOnUiThread(() => {
-                            if (uiDestroyed || gen != neuralPrepGeneration || GetActiveTrack() != activeTrack) {
-                                return;
-                            }
-                            playerEngine.BindSeparatedNeuralTrack(cached);
-                            RefreshNeuralAudioUi();
-                            RefreshNeuralPrepUi();
-                        });
-                        return;
+                        playbackTrack = cached;
+                        break;
                     }
                 }
+
+                // Also check dedicated Slot 7A VocalMixDna cache (includes Dereverb dry/wet analysis when available)
+                Cavernize.Logic.Spatial.NeuralExecutionPlan dnaPlan = neuralOrchestrator.BuildPlan(
+                    Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna, cfg);
+                if (dnaPlan.IsRunnable) {
+                    string dnaCacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
+                        sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, dnaPlan.PlanSignature);
+                    if (neuralTrackCache.TryLoad(dnaCacheKey, out Cavern.Neural.NeuralSeparatedTrack cachedDnaTrack)) {
+                        dnaTrack = cachedDnaTrack;
+                        if (playbackTrack == null) {
+                            playbackTrack = cachedDnaTrack;
+                        }
+                    }
+                }
+
+                Cavern.Neural.NeuralSeparatedTrack dnaSource = dnaTrack ?? playbackTrack;
+                string summaryTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+                    ? currentMediaMeta.Title
+                    : Path.GetFileNameWithoutExtension(sourceKey);
+                Cavern.VocalChain.VocalMixDnaProfile extractedDna = dnaSource != null
+                    ? Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(dnaSource, summaryTitle)
+                    : null;
+                if (extractedDna != null && extractedDna.IsExtractedFromSong) {
+                    SaveCachedSongVocalDna(activeTrack, extractedDna);
+                }
+
+                if (playbackTrack != null || extractedDna != null) {
+                    RunOnUiThread(() => {
+                        if (uiDestroyed || gen != neuralPrepGeneration || GetActiveTrack() != activeTrack) {
+                            return;
+                        }
+                        if (playbackTrack != null) {
+                            playerEngine.BindSeparatedNeuralTrack(playbackTrack);
+                        }
+                        ApplyExtractedSongDnaOnUiThread(extractedDna);
+                        RefreshNeuralAudioUi();
+                        RefreshNeuralPrepUi();
+                    });
+                }
             } catch (Exception ex) {
-                AppLogger.Warn($"W18 TryAutoBindCachedNeuralStemsAsync: {ex.Message}");
+                AppLogger.Warn($"W18/W19.b TryAutoBindCachedNeuralStemsAsync: {ex.Message}");
             }
         });
     }
@@ -2406,7 +2615,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         bool runtimeReady = neuralRuntime != null && neuralRuntime.IsAvailable;
         if (!runtimeReady || plan == null || !plan.IsRunnable) {
             if (!silentIfNotReady) {
-                Toast.MakeText(this, S["NeuralPrepNeedModelsToast"], ToastLength.Long).Show();
+                string msgKey = goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna
+                    ? "VocalDnaNeedModelsToast"
+                    : "NeuralPrepNeedModelsToast";
+                Toast.MakeText(this, S[msgKey], ToastLength.Long).Show();
             }
             return;
         }
@@ -2441,6 +2653,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         string ffLoc = ffmpeg?.Found == true ? ffmpeg.Location : null;
         int prefSr = activeTrack.SampleRate >= 8000 ? activeTrack.SampleRate : 48000;
+        string summaryTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+            ? currentMediaMeta.Title
+            : Path.GetFileNameWithoutExtension(activePath);
 
         _ = Task.Run(() => {
             try {
@@ -2450,6 +2665,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
                 // Instant Slot 7B cache hit before decoding PCM
                 if (neuralTrackCache != null && neuralTrackCache.TryLoad(cacheKey, out Cavern.Neural.NeuralSeparatedTrack cachedTrack, ct)) {
+                    Cavern.VocalChain.VocalMixDnaProfile cachedDna = Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(
+                        cachedTrack, summaryTitle);
+                    if (cachedDna != null && cachedDna.IsExtractedFromSong) {
+                        SaveCachedSongVocalDna(activeTrack, cachedDna);
+                    }
                     RunOnUiThread(() => {
                         if (uiDestroyed || myGen != neuralPrepGeneration) {
                             return;
@@ -2457,10 +2677,17 @@ public partial class MainActivity : Activity, ICavernizeApp {
                         isNeuralPrepRunning = false;
                         neuralPrepProgress = 1.0;
                         neuralPrepStatusText = "";
-                        playerEngine.BindSeparatedNeuralTrack(cachedTrack);
+                        if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna ||
+                            !(playerEngine.NeuralStemStage?.HasPlayableSeparatedStems ?? false)) {
+                            playerEngine.BindSeparatedNeuralTrack(cachedTrack);
+                        }
+                        ApplyExtractedSongDnaOnUiThread(cachedDna);
                         RefreshNeuralAudioUi();
                         RefreshNeuralPrepUi();
-                        Toast.MakeText(this, string.Format(S["NeuralPrepCacheHitToast"], cachedTrack.Stems.Count), ToastLength.Short).Show();
+                        string msg = (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna && cachedDna != null && cachedDna.IsExtractedFromSong)
+                            ? string.Format(S["VocalDnaReadyToast"], cachedDna.TargetVocalLufs, cachedDna.ReverbRt60Sec, cachedDna.ActiveWindowCount)
+                            : string.Format(S["NeuralPrepCacheHitToast"], cachedTrack.Stems.Count);
+                        Toast.MakeText(this, msg, ToastLength.Short).Show();
                     });
                     return;
                 }
@@ -2492,6 +2719,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     }),
                     token: ct);
 
+                Cavern.VocalChain.VocalMixDnaProfile extractedDna = Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(
+                    separated, summaryTitle);
+                if (extractedDna != null && extractedDna.IsExtractedFromSong) {
+                    SaveCachedSongVocalDna(activeTrack, extractedDna);
+                }
+
                 RunOnUiThread(() => {
                     if (uiDestroyed || myGen != neuralPrepGeneration) {
                         return;
@@ -2499,12 +2732,21 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     isNeuralPrepRunning = false;
                     neuralPrepProgress = 1.0;
                     neuralPrepStatusText = "";
-                    playerEngine.BindSeparatedNeuralTrack(separated);
+                    if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna ||
+                        !(playerEngine.NeuralStemStage?.HasPlayableSeparatedStems ?? false)) {
+                        playerEngine.BindSeparatedNeuralTrack(separated);
+                    }
+                    ApplyExtractedSongDnaOnUiThread(extractedDna);
                     RefreshNeuralAudioUi();
                     RefreshNeuralPrepUi();
-                    string toastMsg = fromCache
-                        ? string.Format(S["NeuralPrepCacheHitToast"], separated.Stems.Count)
-                        : string.Format(S["NeuralPrepDoneToast"], separated.Stems.Count, rtf);
+                    string toastMsg;
+                    if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna && extractedDna != null && extractedDna.IsExtractedFromSong) {
+                        toastMsg = string.Format(S["VocalDnaReadyToast"], extractedDna.TargetVocalLufs, extractedDna.ReverbRt60Sec, extractedDna.ActiveWindowCount);
+                    } else {
+                        toastMsg = fromCache
+                            ? string.Format(S["NeuralPrepCacheHitToast"], separated.Stems.Count)
+                            : string.Format(S["NeuralPrepDoneToast"], separated.Stems.Count, rtf);
+                    }
                     Toast.MakeText(this, toastMsg, ToastLength.Short).Show();
                 });
             } catch (System.OperationCanceledException) {
@@ -2518,7 +2760,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     RefreshNeuralPrepUi();
                 });
             } catch (Exception ex) {
-                AppLogger.Warn($"W18 PrepareActiveTrackNeuralStemsAsync: {ex.Message}");
+                AppLogger.Warn($"W18/W19.b PrepareActiveTrackNeuralStemsAsync: {ex.Message}");
                 RunOnUiThread(() => {
                     if (uiDestroyed || myGen != neuralPrepGeneration) {
                         return;

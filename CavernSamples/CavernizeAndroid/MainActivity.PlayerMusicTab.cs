@@ -185,7 +185,7 @@ public partial class MainActivity {
     OneUiIconView musicLyricsSingMicIcon;
     TextView musicLyricsSingPctText;
     OneUiSeekBar musicLyricsVocalSeekBar;
-    Button musicLyricsAiPrepBtn, musicLyricsMixMatchBtn, musicLyricsScarlettBtn;
+    Button musicLyricsAiPrepBtn, musicLyricsMixMatchBtn, musicLyricsVocalAbBtn, musicLyricsScarlettBtn;
     TextView musicLyricsAiStatusText;
 
     // Apple Music Title Row
@@ -403,6 +403,20 @@ public partial class MainActivity {
         musicLyricsMixMatchBtn.Ellipsize = TextUtils.TruncateAt.End;
         musicLyricsMixMatchBtn.SetPadding(Dp(10), Dp(5), Dp(10), Dp(5));
         singTopRow.AddView(musicLyricsMixMatchBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(5) });
+
+        musicLyricsVocalAbBtn = PillButton(S["SingVocalAbWet"], () => {
+            if (playerEngine == null) {
+                return;
+            }
+            playerEngine.VocalChainBypassed = !playerEngine.VocalChainBypassed;
+            ApplyAndRefreshVocalChain();
+        });
+        musicLyricsVocalAbBtn.TextSize = 10.2f;
+        musicLyricsVocalAbBtn.SetSingleLine(true);
+        musicLyricsVocalAbBtn.Ellipsize = TextUtils.TruncateAt.End;
+        musicLyricsVocalAbBtn.SetPadding(Dp(8), Dp(5), Dp(8), Dp(5));
+        musicLyricsVocalAbBtn.Visibility = store.LiveMicEnabled ? ViewStates.Visible : ViewStates.Gone;
+        singTopRow.AddView(musicLyricsVocalAbBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(5) });
 
         musicLyricsScarlettBtn = PillButton(S["SingScarlettQuickBtn"], ShowScarlett2i2ControlsModal);
         musicLyricsScarlettBtn.TextSize = 10.6f;
@@ -1158,6 +1172,17 @@ public partial class MainActivity {
             musicLyricsMixMatchBtn.Background = micLive
                 ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 76), 99f, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 170), 1f)
                 : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(38, 255, 255, 255), 99f, Color.Argb(54, 255, 255, 255), 0.9f);
+        }
+        if (musicLyricsVocalAbBtn != null) {
+            bool micEnabled = store.LiveMicEnabled;
+            musicLyricsVocalAbBtn.Visibility = micEnabled ? ViewStates.Visible : ViewStates.Gone;
+            if (micEnabled) {
+                bool dryBypass = playerEngine?.VocalChainBypassed == true;
+                musicLyricsVocalAbBtn.Text = dryBypass ? S["SingVocalAbDry"] : S["SingVocalAbWet"];
+                musicLyricsVocalAbBtn.Background = dryBypass
+                    ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 82), 99f, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 185), 1f)
+                    : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 76), 99f, OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 175), 1f);
+            }
         }
         if (musicLyricsScarlettBtn != null) {
             bool hasUsb = usbProAudioManager?.CurrentSnapshot?.IsAttached == true;

@@ -771,6 +771,27 @@ public partial class MainActivity {
         if (musicLyricsAiStatusText != null) {
             if (isNeuralPrepRunning && !string.IsNullOrEmpty(neuralPrepStatusText)) {
                 musicLyricsAiStatusText.Text = $"{string.Format(S["NeuralPrepBusyFmt"], neuralPrepProgress)} · {neuralPrepStatusText}";
+                musicLyricsAiStatusText.SetTextColor(OneUiTheme.FunctionalOrange);
+                musicLyricsAiStatusText.Visibility = ViewStates.Visible;
+            } else if (store != null && store.LiveMicEnabled && playerEngine?.VocalMixMatchStage != null) {
+                VocalMixDnaProfile dna = playerEngine.VocalMixMatchStage.ActiveDna;
+                string vpTag = playerEngine.VocalMixMatchStage.HasMicVoiceprint
+                    ? S["VocalSingDockVpOn"]
+                    : S["VocalSingDockVpOff"];
+                if (dna.IsExtractedFromSong) {
+                    string drrTag = dna.HasMeasuredDereverb && float.IsFinite(dna.MeasuredDrrDb)
+                        ? string.Format(S["VocalDnaDrrTagFmt"], dna.MeasuredDrrDb)
+                        : string.Empty;
+                    musicLyricsAiStatusText.Text = string.Format(
+                        S["VocalSingDockDnaReadyFmt"],
+                        dna.ReverbRt60Sec,
+                        drrTag,
+                        vpTag);
+                    musicLyricsAiStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
+                } else {
+                    musicLyricsAiStatusText.Text = string.Format(S["VocalSingDockNeutralFmt"], vpTag);
+                    musicLyricsAiStatusText.SetTextColor(OneUiTheme.TextSub);
+                }
                 musicLyricsAiStatusText.Visibility = ViewStates.Visible;
             } else {
                 musicLyricsAiStatusText.Visibility = ViewStates.Gone;

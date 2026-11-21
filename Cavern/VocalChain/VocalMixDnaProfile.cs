@@ -43,10 +43,10 @@ namespace Cavern.VocalChain {
         public float ReverbDampingHz { get; set; } = 5800f;
 
         /// <summary>Detected slapback or rhythmic stereo delay tap time in milliseconds (0 = none).</summary>
-        public float DelayTimeMs { get; set; } = 115f;
+        public float DelayTimeMs { get; set; }
 
-        /// <summary>Detected stereo delay wet mix in [0; 0.35].</summary>
-        public float DelayWetMix { get; set; } = 0.08f;
+        /// <summary>Detected stereo delay wet mix in [0; 0.35] (0 = none).</summary>
+        public float DelayWetMix { get; set; }
 
         /// <summary>Estimated stereo width / doubling spread in [0; 1].</summary>
         public float StereoWidth { get; set; } = 0.25f;
@@ -54,10 +54,64 @@ namespace Cavern.VocalChain {
         /// <summary>Extracted 3D Atmos normalized vocal position (X, Y, Z).</summary>
         public Vector3 VocalAtmosPosition { get; set; } = new Vector3(0f, 0.08f, 0.78f);
 
-        /// <summary>Creates a transparent studio-default vocal DNA baseline.</summary>
+        /// <summary>True when this profile was extracted from an actual isolated song vocal stem (false = neutral studio baseline).</summary>
+        public bool IsExtractedFromSong { get; set; }
+
+        /// <summary>True when a Dereverb dry/wet neural decomposition contributed measured DRR/RT60 parameters.</summary>
+        public bool HasMeasuredDereverb { get; set; }
+
+        /// <summary>Measured physical Direct-to-Reverberant Ratio in dB (<c>NaN</c> when unmeasured).</summary>
+        public float MeasuredDrrDb { get; set; } = float.NaN;
+
+        /// <summary>Measured active-speech RMS level across analyzed windows (dBFS).</summary>
+        public float ActiveSpeechRmsDbfs { get; set; } = -96f;
+
+        /// <summary>Number of active vocal frames/windows that contributed to this profile.</summary>
+        public int ActiveWindowCount { get; set; }
+
+        /// <summary>Optional human-readable track/source summary associated with this extracted DNA.</summary>
+        public string SourceTrackSummary { get; set; } = string.Empty;
+
+        /// <summary>Creates a deep copy safe for lock-free audio-thread config snapshots.</summary>
+        public VocalMixDnaProfile Clone() {
+            VocalMixDnaProfile copy = new VocalMixDnaProfile {
+                SpectralTiltDbPerOct = SpectralTiltDbPerOct,
+                SibilanceIndexDb = SibilanceIndexDb,
+                TargetVocalLufs = TargetVocalLufs,
+                CrestFactorDb = CrestFactorDb,
+                HarmonicWarmth = HarmonicWarmth,
+                ReverbRt60Sec = ReverbRt60Sec,
+                ReverbPreDelayMs = ReverbPreDelayMs,
+                ReverbWetMix = ReverbWetMix,
+                ReverbDampingHz = ReverbDampingHz,
+                DelayTimeMs = DelayTimeMs,
+                DelayWetMix = DelayWetMix,
+                StereoWidth = StereoWidth,
+                VocalAtmosPosition = VocalAtmosPosition,
+                IsExtractedFromSong = IsExtractedFromSong,
+                HasMeasuredDereverb = HasMeasuredDereverb,
+                MeasuredDrrDb = MeasuredDrrDb,
+                ActiveSpeechRmsDbfs = ActiveSpeechRmsDbfs,
+                ActiveWindowCount = ActiveWindowCount,
+                SourceTrackSummary = SourceTrackSummary ?? string.Empty
+            };
+            copy.BandEnergyDb = new float[AnalysisBandHz.Length];
+            if (BandEnergyDb != null) {
+                int len = Math.Min(BandEnergyDb.Length, copy.BandEnergyDb.Length);
+                Array.Copy(BandEnergyDb, copy.BandEnergyDb, len);
+            }
+            return copy;
+        }
+
+        /// <summary>Creates a transparent neutral studio baseline (zero artificial delay or EQ coloration).</summary>
         public static VocalMixDnaProfile CreateStudioDefault() {
             VocalMixDnaProfile profile = new VocalMixDnaProfile();
             profile.BandEnergyDb = new float[] { -26f, -18f, -15f, -14f, -13.5f, -12.5f, -16f, -20f };
+            profile.DelayTimeMs = 0f;
+            profile.DelayWetMix = 0f;
+            profile.IsExtractedFromSong = false;
+            profile.HasMeasuredDereverb = false;
+            profile.MeasuredDrrDb = float.NaN;
             return profile;
         }
     }
@@ -95,6 +149,22 @@ namespace Cavern.VocalChain {
 
         /// <summary>Enable split-band 5-10 kHz adaptive de-esser.</summary>
         public bool EnableDeEsser { get; set; } = true;
+
+        /// <summary>Creates a deep copy safe for lock-free audio-thread config snapshots.</summary>
+        public VocalMacroSettings Clone() {
+            return new VocalMacroSettings {
+                Enabled = Enabled,
+                Bypass = Bypass,
+                MixMatchPct = MixMatchPct,
+                ReverbPct = ReverbPct,
+                DynamicsPct = DynamicsPct,
+                WarmthPct = WarmthPct,
+                VocalLevelDb = VocalLevelDb,
+                EnableSidechainPocketGlue = EnableSidechainPocketGlue,
+                EnableNoiseGate = EnableNoiseGate,
+                EnableDeEsser = EnableDeEsser
+            };
+        }
     }
 
     /// <summary>
@@ -122,96 +192,105 @@ namespace Cavern.VocalChain {
 
     /// <summary>
     /// Extracts <see cref="VocalMixDnaProfile"/> parameters from an isolated lead vocal stem and optional dry/wet pair
-    /// using zero-dependency pure-physics signal analysis (Goertzel ERB band power, crest factor, DRR/RT60, delay autocorrelation).
+    /// using zero-dependency pure-physics signal analysis (multi-window active-RMS Goertzel ERB band power,
+    /// crest factor, DRR/RT60/damping, and envelope autocorrelation delay detection).
     /// </summary>
     public static class VocalMixProfileExtractor {
+        const int MaxCandidateWindows = 240;
+        const int MaxGoertzelActiveWindows = 32;
+        const float MinVoiceprintRmsDbfs = -48f;
+
         /// <summary>
-        /// Analyzes a mono/interleaved vocal stem buffer and optional dereverbed dry reference to build a <see cref="VocalMixDnaProfile"/>.
+        /// Analyzes a mono/interleaved vocal stem buffer and optional dereverbed dry reference across the full track
+        /// using active-RMS vocal windowing to build a <see cref="VocalMixDnaProfile"/>.
         /// </summary>
         public static VocalMixDnaProfile Analyze(
             float[] leadVocal,
             int channels,
             int sampleRate,
             float[] dereverbedDry = null,
-            Vector3? atmosPosition = null) {
+            Vector3? atmosPosition = null,
+            string sourceSummary = null) {
             VocalMixDnaProfile profile = VocalMixDnaProfile.CreateStudioDefault();
             if (atmosPosition.HasValue) {
                 profile.VocalAtmosPosition = atmosPosition.Value;
+            }
+            if (!string.IsNullOrEmpty(sourceSummary)) {
+                profile.SourceTrackSummary = sourceSummary;
             }
             if (leadVocal == null || leadVocal.Length < 256 || sampleRate < 8000) {
                 return profile;
             }
 
             int ch = Math.Max(1, channels);
-            int totalFrames = Math.Min(leadVocal.Length / ch, sampleRate * 12);
+            int totalFrames = Math.Min(leadVocal.Length / ch, sampleRate * 300);
             if (totalFrames < 256) {
                 return profile;
             }
 
-            double sumSq = 0.0;
-            float peak = 1e-6f;
-            double midSumSq = 0.0;
-            double sideSumSq = 0.0;
-            for (int i = 0; i < totalFrames; i++) {
-                float l = leadVocal[i * ch];
-                float r = ch >= 2 ? leadVocal[i * ch + 1] : l;
-                float m = 0.5f * (l + r);
-                float s = 0.5f * (l - r);
-                float absM = Math.Abs(m);
-                if (absM > peak) {
-                    peak = absM;
-                }
-                sumSq += m * m;
-                midSumSq += m * m;
-                sideSumSq += s * s;
+            bool hasDry = dereverbedDry != null && dereverbedDry.Length >= totalFrames * ch;
+            return AnalyzeCore(
+                totalFrames,
+                sampleRate,
+                hasStereo: ch >= 2,
+                hasDry: hasDry,
+                readLeadL: i => leadVocal[i * ch],
+                readLeadR: ch >= 2 ? (Func<int, float>)(i => leadVocal[i * ch + 1]) : (i => leadVocal[i * ch]),
+                readDryL: hasDry ? (Func<int, float>)(i => dereverbedDry[i * ch]) : null,
+                readDryR: hasDry ? (ch >= 2 ? (Func<int, float>)(i => dereverbedDry[i * ch + 1]) : (i => dereverbedDry[i * ch])) : null,
+                profile: profile);
+        }
+
+        /// <summary>
+        /// Analyzes planar stereo (or mono) vocal stem buffers directly without allocating an interleaved copy.
+        /// </summary>
+        public static VocalMixDnaProfile AnalyzePlanar(
+            float[] leadLeft,
+            float[] leadRight,
+            int sampleRate,
+            float[] dryLeft = null,
+            float[] dryRight = null,
+            Vector3? atmosPosition = null,
+            string sourceSummary = null) {
+            VocalMixDnaProfile profile = VocalMixDnaProfile.CreateStudioDefault();
+            if (atmosPosition.HasValue) {
+                profile.VocalAtmosPosition = atmosPosition.Value;
+            }
+            if (!string.IsNullOrEmpty(sourceSummary)) {
+                profile.SourceTrackSummary = sourceSummary;
+            }
+            if (leadLeft == null || leadLeft.Length < 256 || sampleRate < 8000) {
+                return profile;
             }
 
-            double rms = Math.Sqrt(sumSq / totalFrames);
-            float rmsDbfs = rms > 1e-6 ? (float)(20.0 * Math.Log10(rms)) : -96f;
-            float peakDbfs = (float)(20.0 * Math.Log10(peak));
-            profile.TargetVocalLufs = Clamp(rmsDbfs - 0.7f, -28f, -8f);
-            profile.CrestFactorDb = Clamp(peakDbfs - rmsDbfs, 4.5f, 20f);
-            profile.StereoWidth = ch >= 2 && midSumSq > 1e-9
-                ? Clamp((float)Math.Sqrt(sideSumSq / (midSumSq + sideSumSq)) * 1.4f, 0f, 1f)
-                : 0.15f;
-
-            // Measure 8 ERB-spaced vocal bands via Goertzel power over a 4096-frame active segment
-            int windowLen = Math.Min(4096, totalFrames);
-            for (int b = 0; b < VocalMixDnaProfile.AnalysisBandHz.Length; b++) {
-                float freq = VocalMixDnaProfile.AnalysisBandHz[b];
-                double bandPower = MeasureGoertzelPower(leadVocal, ch, windowLen, sampleRate, freq);
-                profile.BandEnergyDb[b] = bandPower > 1e-12
-                    ? Clamp((float)(10.0 * Math.Log10(bandPower)), -72f, 0f)
-                    : -72f;
+            bool hasRight = leadRight != null && leadRight.Length >= leadLeft.Length;
+            int totalFrames = Math.Min(leadLeft.Length, sampleRate * 300);
+            if (totalFrames < 256) {
+                return profile;
             }
 
-            // Compute spectral tilt (high bands 3.8-11.5 kHz minus low-mid 250-500 Hz)
-            float lowMid = 0.5f * (profile.BandEnergyDb[1] + profile.BandEnergyDb[2]);
-            float presenceAir = 0.5f * (profile.BandEnergyDb[5] + profile.BandEnergyDb[6]);
-            profile.SpectralTiltDbPerOct = Clamp((presenceAir - lowMid) / 4f, -4f, 4f);
-            profile.SibilanceIndexDb = Clamp(profile.BandEnergyDb[6] - profile.BandEnergyDb[3], -18f, 6f);
+            bool hasDry = dryLeft != null && dryLeft.Length >= totalFrames;
+            bool hasDryRight = hasDry && dryRight != null && dryRight.Length >= totalFrames;
+            return AnalyzeCore(
+                totalFrames,
+                sampleRate,
+                hasStereo: hasRight,
+                hasDry: hasDry,
+                readLeadL: i => leadLeft[i],
+                readLeadR: hasRight ? (Func<int, float>)(i => leadRight[i]) : (i => leadLeft[i]),
+                readDryL: hasDry ? (Func<int, float>)(i => dryLeft[i]) : null,
+                readDryR: hasDry ? (hasDryRight ? (Func<int, float>)(i => dryRight[i]) : (i => dryLeft[i])) : null,
+                profile: profile);
+        }
 
-            // Estimate wet reverb mix & RT60 from dry/wet difference when Dereverb reference is provided
-            if (dereverbedDry != null && dereverbedDry.Length >= totalFrames * ch) {
-                double drySq = 0.0;
-                double wetSq = 0.0;
-                for (int i = 0; i < totalFrames; i++) {
-                    float w = leadVocal[i * ch];
-                    float d = dereverbedDry[i * ch];
-                    float tail = w - d;
-                    drySq += d * d;
-                    wetSq += tail * tail;
-                }
-                double ratio = drySq > 1e-9 ? wetSq / (drySq + wetSq) : 0.15;
-                profile.ReverbWetMix = Clamp((float)ratio * 0.85f, 0.05f, 0.55f);
-                profile.ReverbRt60Sec = Clamp(0.55f + (float)ratio * 3.2f, 0.35f, 3.8f);
-            }
-
-            // Map lower crest factor + stronger high-mid harmonics to subtle analog warmth target
-            float compTightness = Clamp((14f - profile.CrestFactorDb) / 10f, 0f, 1f);
-            profile.HarmonicWarmth = Clamp(0.18f + compTightness * 0.42f, 0.1f, 0.7f);
-
-            return profile;
+        /// <summary>
+        /// Returns true when a captured microphone voiceprint contains sufficient active speech energy
+        /// to compute reliable formant-safe Match EQ deltas without fitting room noise.
+        /// </summary>
+        public static bool IsSufficientVoiceprintSignal(VocalMixDnaProfile micProfile) {
+            return micProfile != null &&
+                micProfile.ActiveWindowCount >= 3 &&
+                micProfile.ActiveSpeechRmsDbfs >= MinVoiceprintRmsDbfs;
         }
 
         /// <summary>
@@ -242,15 +321,318 @@ namespace Cavern.VocalChain {
             return deltas;
         }
 
-        static double MeasureGoertzelPower(float[] interleaved, int ch, int frames, int sampleRate, float targetHz) {
+        static VocalMixDnaProfile AnalyzeCore(
+            int totalFrames,
+            int sampleRate,
+            bool hasStereo,
+            bool hasDry,
+            Func<int, float> readLeadL,
+            Func<int, float> readLeadR,
+            Func<int, float> readDryL,
+            Func<int, float> readDryR,
+            VocalMixDnaProfile profile) {
+            int windowLen = Math.Min(4096, totalFrames);
+            int maxPossibleStarts = Math.Max(1, totalFrames - windowLen + 1);
+            int candidateCount = Math.Min(MaxCandidateWindows, Math.Max(1, totalFrames / Math.Max(512, windowLen / 2)));
+            int[] candidateStarts = new int[candidateCount];
+            double[] candidateRms = new double[candidateCount];
+
+            double maxWinRms = 0.0;
+            int loudestWindowIdx = 0;
+            for (int w = 0; w < candidateCount; w++) {
+                int start = candidateCount == 1
+                    ? 0
+                    : (int)(((long)w * (maxPossibleStarts - 1)) / (candidateCount - 1));
+                candidateStarts[w] = start;
+
+                double winSq = 0.0;
+                int stride = windowLen >= 2048 ? 2 : 1;
+                int count = 0;
+                for (int i = 0; i < windowLen; i += stride) {
+                    int idx = start + i;
+                    float m = 0.5f * (readLeadL(idx) + readLeadR(idx));
+                    winSq += m * m;
+                    count++;
+                }
+                double rmsW = count > 0 ? Math.Sqrt(winSq / count) : 0.0;
+                candidateRms[w] = rmsW;
+                if (rmsW > maxWinRms) {
+                    maxWinRms = rmsW;
+                    loudestWindowIdx = w;
+                }
+            }
+
+            // Select active vocal windows: >= -52 dBFS and within -18 dB of the track's peak vocal window
+            double activeFloor = Math.Max(0.0025, maxWinRms * 0.125);
+            int[] activeIndices = new int[candidateCount];
+            int activeCount = 0;
+            for (int w = 0; w < candidateCount; w++) {
+                if (candidateRms[w] >= activeFloor) {
+                    activeIndices[activeCount++] = w;
+                }
+            }
+            if (activeCount == 0 && maxWinRms > 1e-6) {
+                activeIndices[activeCount++] = loudestWindowIdx;
+            }
+
+            profile.ActiveWindowCount = activeCount;
+            if (activeCount == 0) {
+                profile.ActiveSpeechRmsDbfs = -96f;
+                return profile;
+            }
+
+            // Pick up to MaxGoertzelActiveWindows evenly distributed active windows across the full track
+            int evalCount = Math.Min(MaxGoertzelActiveWindows, activeCount);
+            double activeMidSqSum = 0.0;
+            double activeSideSqSum = 0.0;
+            long activeSamples = 0;
+            float activePeak = 1e-6f;
+            int bandCount = VocalMixDnaProfile.AnalysisBandHz.Length;
+            double[] weightedBandPower = new double[bandCount];
+            double totalWeight = 0.0;
+
+            double drySqTotal = 0.0;
+            double wetSqTotal = 0.0;
+            double wetMidBandPower = 0.0;
+            double wetHighBandPower = 0.0;
+
+            for (int e = 0; e < evalCount; e++) {
+                int wIdx = evalCount == 1
+                    ? activeIndices[0]
+                    : activeIndices[(e * (activeCount - 1)) / (evalCount - 1)];
+                int start = candidateStarts[wIdx];
+                double weight = Math.Max(1e-6, candidateRms[wIdx] * candidateRms[wIdx]);
+                totalWeight += weight;
+
+                for (int i = 0; i < windowLen; i++) {
+                    int idx = start + i;
+                    float l = readLeadL(idx);
+                    float r = readLeadR(idx);
+                    float m = 0.5f * (l + r);
+                    float s = 0.5f * (l - r);
+                    float absM = Math.Abs(m);
+                    if (absM > activePeak) {
+                        activePeak = absM;
+                    }
+                    activeMidSqSum += m * m;
+                    activeSideSqSum += s * s;
+                    activeSamples++;
+
+                    if (hasDry) {
+                        float dm = 0.5f * (readDryL(idx) + readDryR(idx));
+                        float tail = m - dm;
+                        drySqTotal += dm * dm;
+                        wetSqTotal += tail * tail;
+                    }
+                }
+
+                for (int b = 0; b < bandCount; b++) {
+                    double p = MeasureGoertzelPowerRange(readLeadL, readLeadR, start, windowLen, sampleRate, VocalMixDnaProfile.AnalysisBandHz[b]);
+                    weightedBandPower[b] += p * weight;
+                }
+
+                if (hasDry) {
+                    wetMidBandPower += MeasureGoertzelDiffPowerRange(readLeadL, readLeadR, readDryL, readDryR, start, windowLen, sampleRate, 1000f) * weight;
+                    wetHighBandPower += MeasureGoertzelDiffPowerRange(readLeadL, readLeadR, readDryL, readDryR, start, windowLen, sampleRate, 6800f) * weight;
+                }
+            }
+
+            double activeRms = activeSamples > 0 ? Math.Sqrt(activeMidSqSum / activeSamples) : 0.0;
+            float rmsDbfs = activeRms > 1e-6 ? (float)(20.0 * Math.Log10(activeRms)) : -96f;
+            float peakDbfs = (float)(20.0 * Math.Log10(activePeak));
+            profile.ActiveSpeechRmsDbfs = Clamp(rmsDbfs, -96f, 0f);
+            profile.TargetVocalLufs = Clamp(rmsDbfs - 0.7f, -28f, -8f);
+            profile.CrestFactorDb = Clamp(peakDbfs - rmsDbfs, 4.5f, 20f);
+            profile.StereoWidth = hasStereo && activeMidSqSum > 1e-9
+                ? Clamp((float)Math.Sqrt(activeSideSqSum / (activeMidSqSum + activeSideSqSum)) * 1.4f, 0f, 1f)
+                : 0.15f;
+
+            for (int b = 0; b < bandCount; b++) {
+                double avgPower = totalWeight > 0.0 ? weightedBandPower[b] / totalWeight : 0.0;
+                profile.BandEnergyDb[b] = avgPower > 1e-12
+                    ? Clamp((float)(10.0 * Math.Log10(avgPower)), -72f, 0f)
+                    : -72f;
+            }
+
+            // Compute spectral tilt (presence/air 3.8-6.8 kHz minus low-mid 250-500 Hz)
+            float lowMid = 0.5f * (profile.BandEnergyDb[1] + profile.BandEnergyDb[2]);
+            float presenceAir = 0.5f * (profile.BandEnergyDb[5] + profile.BandEnergyDb[6]);
+            profile.SpectralTiltDbPerOct = Clamp((presenceAir - lowMid) / 4f, -4f, 4f);
+            profile.SibilanceIndexDb = Clamp(profile.BandEnergyDb[6] - profile.BandEnergyDb[3], -18f, 6f);
+
+            // Real physical Dereverb dry/wet analysis across active vocal windows
+            if (hasDry && drySqTotal > 1e-9 && wetSqTotal > 1e-12) {
+                double ratio = wetSqTotal / (drySqTotal + wetSqTotal);
+                double drrDb = 10.0 * Math.Log10(drySqTotal / wetSqTotal);
+                profile.HasMeasuredDereverb = true;
+                profile.MeasuredDrrDb = Clamp((float)drrDb, -12f, 30f);
+                profile.ReverbWetMix = Clamp((float)ratio * 0.85f, 0.04f, 0.55f);
+                profile.ReverbRt60Sec = Clamp(0.45f + (float)ratio * 3.2f, 0.30f, 3.8f);
+                if (wetMidBandPower > 1e-14 && wetHighBandPower > 1e-14) {
+                    float wetSlopeDb = (float)(10.0 * Math.Log10(wetHighBandPower / wetMidBandPower));
+                    profile.ReverbDampingHz = Clamp(5600f * (float)Math.Pow(2.0, wetSlopeDb / 14.0), 2000f, 11500f);
+                }
+            }
+
+            // Real envelope autocorrelation slapback / rhythmic delay estimation around the loudest active phrase
+            int phraseCenter = candidateStarts[loudestWindowIdx] + windowLen / 2;
+            EstimateSlapbackDelayAutocorr(
+                readLeadL, readLeadR, totalFrames, sampleRate, phraseCenter,
+                out float estDelayMs, out float estDelayWet);
+            profile.DelayTimeMs = estDelayMs;
+            profile.DelayWetMix = estDelayWet;
+
+            // Map lower crest factor to analog saturation warmth target
+            float compTightness = Clamp((14f - profile.CrestFactorDb) / 10f, 0f, 1f);
+            profile.HarmonicWarmth = Clamp(0.18f + compTightness * 0.42f, 0.1f, 0.7f);
+            profile.IsExtractedFromSong = true;
+
+            return profile;
+        }
+
+        static void EstimateSlapbackDelayAutocorr(
+            Func<int, float> readLeadL,
+            Func<int, float> readLeadR,
+            int totalFrames,
+            int sampleRate,
+            int centerFrame,
+            out float delayMs,
+            out float delayWetMix) {
+            delayMs = 0f;
+            delayWetMix = 0f;
+
+            // Analyze up to 6 seconds around the strongest active vocal phrase using a 500 Hz (2 ms) RMS envelope
+            int segFrames = Math.Min(totalFrames, sampleRate * 6);
+            if (segFrames < (int)(sampleRate * 0.8)) {
+                return;
+            }
+            int start = Math.Max(0, Math.Min(totalFrames - segFrames, centerFrame - segFrames / 2));
+            int hop = Math.Max(1, sampleRate / 500); // 2 ms per envelope sample
+            int envLen = segFrames / hop;
+            int minLag = Math.Max(10, (int)Math.Round(0.045 * sampleRate / hop)); // 45 ms
+            int maxLag = Math.Min(envLen / 3, (int)Math.Round(0.320 * sampleRate / hop)); // 320 ms
+            if (maxLag <= minLag + 6) {
+                return;
+            }
+
+            double[] env = new double[envLen];
+            double mean = 0.0;
+            for (int k = 0; k < envLen; k++) {
+                int baseIdx = start + k * hop;
+                double sq = 0.0;
+                for (int j = 0; j < hop; j++) {
+                    float m = 0.5f * (readLeadL(baseIdx + j) + readLeadR(baseIdx + j));
+                    sq += m * m;
+                }
+                double v = Math.Sqrt(sq / hop);
+                env[k] = v;
+                mean += v;
+            }
+            mean /= envLen;
+
+            double r0 = 0.0;
+            for (int k = 0; k < envLen; k++) {
+                env[k] -= mean;
+                r0 += env[k] * env[k];
+            }
+            if (r0 <= 1e-9) {
+                return;
+            }
+
+            double[] corr = new double[maxLag + 1];
+            for (int lag = minLag - 2; lag <= maxLag; lag++) {
+                if (lag < 1) {
+                    continue;
+                }
+                double sum = 0.0;
+                int n = envLen - lag;
+                for (int k = 0; k < n; k++) {
+                    sum += env[k] * env[k + lag];
+                }
+                corr[lag] = sum / r0;
+            }
+
+            int bestLag = -1;
+            double bestPeak = 0.0;
+            double bestProminence = 0.0;
+            for (int lag = minLag; lag < maxLag; lag++) {
+                double c = corr[lag];
+                if (c < 0.32 || c <= corr[lag - 1] || c < corr[lag + 1]) {
+                    continue;
+                }
+                // Measure local prominence against neighboring baseline excluding +/- 3 bins around peak
+                double bgSum = 0.0;
+                int bgCount = 0;
+                int lo = Math.Max(minLag, lag - 12);
+                int hi = Math.Min(maxLag, lag + 12);
+                for (int k = lo; k <= hi; k++) {
+                    if (Math.Abs(k - lag) > 3) {
+                        bgSum += corr[k];
+                        bgCount++;
+                    }
+                }
+                double bg = bgCount > 0 ? bgSum / bgCount : 0.0;
+                double prom = c - bg;
+                if (prom >= 0.14 && c > bestPeak) {
+                    bestPeak = c;
+                    bestProminence = prom;
+                    bestLag = lag;
+                }
+            }
+
+            if (bestLag > 0 && bestProminence >= 0.14) {
+                float stepMs = (hop * 1000f) / sampleRate;
+                delayMs = Clamp(bestLag * stepMs, 45f, 320f);
+                delayWetMix = Clamp((float)((bestPeak - 0.25) * 0.45), 0.04f, 0.28f);
+            }
+        }
+
+        static double MeasureGoertzelPowerRange(
+            Func<int, float> readL,
+            Func<int, float> readR,
+            int start,
+            int frames,
+            int sampleRate,
+            float targetHz) {
             double omega = 2.0 * Math.PI * targetHz / sampleRate;
             double coeff = 2.0 * Math.Cos(omega);
             double s0 = 0.0;
             double s1 = 0.0;
             double s2 = 0.0;
+            double invDen = 1.0 / Math.Max(1, frames - 1);
             for (int i = 0; i < frames; i++) {
-                double w = 0.5 - 0.5 * Math.Cos(2.0 * Math.PI * i / Math.Max(1, frames - 1));
-                double x = interleaved[i * ch] * w;
+                double w = 0.5 - 0.5 * Math.Cos(2.0 * Math.PI * i * invDen);
+                int idx = start + i;
+                double x = 0.5 * (readL(idx) + readR(idx)) * w;
+                s0 = x + coeff * s1 - s2;
+                s2 = s1;
+                s1 = s0;
+            }
+            double power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+            return Math.Max(0.0, power / (frames * (double)frames));
+        }
+
+        static double MeasureGoertzelDiffPowerRange(
+            Func<int, float> readLeadL,
+            Func<int, float> readLeadR,
+            Func<int, float> readDryL,
+            Func<int, float> readDryR,
+            int start,
+            int frames,
+            int sampleRate,
+            float targetHz) {
+            double omega = 2.0 * Math.PI * targetHz / sampleRate;
+            double coeff = 2.0 * Math.Cos(omega);
+            double s0 = 0.0;
+            double s1 = 0.0;
+            double s2 = 0.0;
+            double invDen = 1.0 / Math.Max(1, frames - 1);
+            for (int i = 0; i < frames; i++) {
+                double w = 0.5 - 0.5 * Math.Cos(2.0 * Math.PI * i * invDen);
+                int idx = start + i;
+                double leadM = 0.5 * (readLeadL(idx) + readLeadR(idx));
+                double dryM = 0.5 * (readDryL(idx) + readDryR(idx));
+                double x = (leadM - dryM) * w;
                 s0 = x + coeff * s1 - s2;
                 s2 = s1;
                 s1 = s0;

@@ -401,7 +401,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
     bool lgsrBypassed;
 
     /// <summary>
-    /// Instant A/B bypass for Slot 2D Live Vocal Mastering Chain inside the W13 Spatial X-Ray HUD.
+    /// Instant A/B bypass for Slot 2D Live Vocal Mastering Chain inside the W13 Spatial X-Ray HUD &amp; Sing dock.
     /// </summary>
     public bool VocalChainBypassed {
         get => vocalMixMatchStage.IsBypassed;
@@ -410,9 +410,24 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 if (vocalMixMatchStage.IsBypassed != value) {
                     vocalMixMatchStage.IsBypassed = value;
                     sceneHub.VocalChainBypassed = value;
+                    sceneHub.VocalChainDiagnostics = vocalMixMatchStage.Telemetry;
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Starts a guided 3-5 second live microphone voiceprint capture (lock-free on capture thread,
+    /// analyzed off-thread via <see cref="VocalMixProfileExtractor.Analyze"/>).
+    /// </summary>
+    public void StartMicVoiceprintCalibration(float durationSeconds, Action<VoiceprintCaptureResult> onCompleted) {
+        int sr = liveMicBridge.SampleRate >= 44100 ? liveMicBridge.SampleRate : OutputSampleRate;
+        liveMicBridge.StartVoiceprintCapture(sr, durationSeconds, onCompleted);
+    }
+
+    /// <summary>Cancels any active guided microphone voiceprint capture.</summary>
+    public void CancelMicVoiceprintCalibration() {
+        liveMicBridge.CancelVoiceprintCapture();
     }
 
     /// <summary>
@@ -940,20 +955,39 @@ public sealed class RealtimePlayerEngine : IDisposable {
         int totalFramesWritten = 0;
 
         lock (renderLock) {
-            // Standalone live-microphone monitoring or MLS RTT calibration when track playback is paused
+            // Standalone live-microphone monitoring (with Slot 2D live vocal chain) or MLS RTT calibration when paused
             if (!IsPlaying || currentTrack == null || listener == null) {
                 int safeFrames = Math.Min(maxStereoFrames, stereoOutput.Length / 2);
                 Array.Clear(stereoOutput, 0, safeFrames * 2);
                 if (liveMicBridge.IsCalibratingLatency || liveMicBridge.IsActive) {
-                    liveMicBridge.MixIntoStereoOutputZeroGc(stereoOutput, 0, safeFrames, sceneHub.ListenerPose, EnvironmentSize);
+                    vocalMixMatchStage.EnsureSampleRate(liveMicBridge.SampleRate);
+                    liveMicBridge.MixIntoStereoOutputZeroGc(
+                        stereoOutput,
+                        0,
+                        safeFrames,
+                        sceneHub.ListenerPose,
+                        EnvironmentSize,
+                        vocalProcessor: liveMicBridge.IsCalibratingLatency ? null : vocalMixMatchStage,
+                        applyBackingSidechain: false);
+                    VocalChainTelemetry pausedVocalTel = vocalMixMatchStage.Telemetry;
                     SoundfieldTelemetry micTel = sceneHub.Telemetry;
                     micTel.LiveMicRmsDbfs = liveMicBridge.RmsDbfs;
                     micTel.LiveMicPeakDbfs = liveMicBridge.PeakDbfs;
                     micTel.FullDuplexRoundTripMs = liveMicBridge.RoundTripLatencyMs;
                     micTel.IsLiveMicActive = liveMicBridge.IsActive;
+                    micTel.VocalChainInputDbfs = pausedVocalTel.InputDbfs;
+                    micTel.VocalChainOutputDbfs = pausedVocalTel.OutputDbfs;
+                    micTel.VocalChainGateReductionDb = pausedVocalTel.GateReductionDb;
+                    micTel.VocalChainDeEsserReductionDb = pausedVocalTel.DeEsserReductionDb;
+                    micTel.VocalChainCompressorReductionDb = pausedVocalTel.CompressorReductionDb;
+                    micTel.VocalChainSidechainDuckDb = pausedVocalTel.SidechainPocketDuckDb;
+                    micTel.VocalChainBypassed = vocalMixMatchStage.IsBypassed;
                     sceneHub.Telemetry = micTel;
+                    sceneHub.VocalChainDiagnostics = pausedVocalTel;
                     return safeFrames;
                 }
+                vocalMixMatchStage.ClearTelemetryIfIdle();
+                sceneHub.VocalChainDiagnostics = vocalMixMatchStage.Telemetry;
                 return 0;
             }
 
@@ -1087,10 +1121,19 @@ public sealed class RealtimePlayerEngine : IDisposable {
                     spatialDialogPostStage.ExternalSpeechActivity = float.NaN;
                 }
 
-                // Slot 1 / W10 Sample-Locked Live Microphone injection (SourceLayer.LiveMicrophone)
-                // Mixed right before Slot 6 4x True-Peak Limiter so live vocal + Karaoke never clips.
+                // Slot 1 / W10 Sample-Locked Live Microphone + Slot 2D Live Auto-Vocal Mix-Match Chain
+                // Mixed right before Slot 6 4x True-Peak Limiter so live vocal + Karaoke + 1-4 kHz sidechain pocket never clip.
                 if (liveMicBridge.IsActive || liveMicBridge.IsCalibratingLatency) {
-                    liveMicBridge.MixIntoStereoOutputZeroGc(stereoOutput, outOffset, blockFrames, sceneHub.ListenerPose, Listener.EnvironmentSize);
+                    liveMicBridge.MixIntoStereoOutputZeroGc(
+                        stereoOutput,
+                        outOffset,
+                        blockFrames,
+                        sceneHub.ListenerPose,
+                        Listener.EnvironmentSize,
+                        vocalProcessor: liveMicBridge.IsCalibratingLatency ? null : vocalMixMatchStage,
+                        applyBackingSidechain: true);
+                } else {
+                    vocalMixMatchStage.ClearTelemetryIfIdle();
                 }
 
                 // Slot 6: Ordered transparent post-processing stages

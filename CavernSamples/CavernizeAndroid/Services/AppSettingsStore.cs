@@ -903,6 +903,66 @@ public sealed class AppSettingsStore {
         EnableDeEsser = VocalDeEsser
     };
 
+    // W19.b: Calibrated 8-band live microphone voiceprint persistence (formant-safe Match EQ)
+    public string MicVoiceprintBandsCsv {
+        get => prefs.GetString("micVoiceprintBandsV1", "");
+        set => Edit().PutString("micVoiceprintBandsV1", value ?? "").Apply();
+    }
+
+    public long MicVoiceprintCalibratedUtc {
+        get => prefs.GetLong("micVoiceprintUtcV1", 0L);
+        set => Edit().PutLong("micVoiceprintUtcV1", value).Apply();
+    }
+
+    public bool HasMicVoiceprint => GetMicVoiceprintBands() != null;
+
+    public float[] GetMicVoiceprintBands() {
+        string csv = MicVoiceprintBandsCsv;
+        if (string.IsNullOrWhiteSpace(csv)) {
+            return null;
+        }
+        string[] parts = csv.Split(',');
+        int expected = Cavern.VocalChain.VocalMixDnaProfile.AnalysisBandHz.Length;
+        if (parts.Length != expected) {
+            return null;
+        }
+        float[] bands = new float[expected];
+        for (int i = 0; i < expected; i++) {
+            if (!float.TryParse(parts[i], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float val) ||
+                !float.IsFinite(val)) {
+                return null;
+            }
+            bands[i] = Math.Clamp(val, -96f, 6f);
+        }
+        return bands;
+    }
+
+    public bool SaveMicVoiceprintBands(float[] bands) {
+        int expected = Cavern.VocalChain.VocalMixDnaProfile.AnalysisBandHz.Length;
+        if (bands == null || bands.Length < expected) {
+            return false;
+        }
+        string[] tokens = new string[expected];
+        for (int i = 0; i < expected; i++) {
+            if (!float.IsFinite(bands[i])) {
+                return false;
+            }
+            tokens[i] = Math.Clamp(bands[i], -96f, 6f).ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        }
+        Edit()
+            .PutString("micVoiceprintBandsV1", string.Join(",", tokens))
+            .PutLong("micVoiceprintUtcV1", DateTimeOffset.UtcNow.ToUnixTimeSeconds())
+            .Apply();
+        return true;
+    }
+
+    public void ClearMicVoiceprint() {
+        Edit()
+            .Remove("micVoiceprintBandsV1")
+            .Remove("micVoiceprintUtcV1")
+            .Apply();
+    }
+
     public string DeviceProfilesJson {
         get => prefs.GetString("deviceProfilesV1", "[]");
         set => Edit().PutString("deviceProfilesV1", value ?? "[]").Apply();

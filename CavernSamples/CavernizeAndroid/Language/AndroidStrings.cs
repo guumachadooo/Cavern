@@ -949,6 +949,35 @@ public sealed class AndroidStrings {
         ["NeuralPrepNoTrackToast"] = "Load a track first to prepare AI neural stems.",
         ["NeuralPrepFailedFmt"] = "AI stem preparation failed: {0}",
         ["NeuralLiveStemsActiveFmt"] = "Live AI 3D active: {0} stems ({1})",
+
+        // W19.b End-to-End Auto-Vocal Mix-Match, Song Vocal DNA & Guided Mic Voiceprint
+        ["VocalAbStateWet"] = "A/B: Processed",
+        ["VocalAbStateDry"] = "A/B: Dry Bypass",
+        ["SingVocalAbWet"] = "A/B FX",
+        ["SingVocalAbDry"] = "A/B DRY",
+        ["VocalDnaSectionTitle"] = "Song Vocal DNA & Mic Voiceprint",
+        ["VocalDnaNeutralStatus"] = "Song DNA: Neutral studio baseline (0.0 dB flat EQ · tap Analyze Song DNA)",
+        ["VocalDnaSummaryFmt"] = "Song DNA ({0}): {1:0.1} LUFS · Crest {2:0.1} dB · RT60 {3:0.2} s · Wet {4:0}%{5}{6}",
+        ["VocalDnaDelayTagFmt"] = " · Delay {0:0} ms",
+        ["VocalDnaDrrTagFmt"] = " · DRR {0:+0.0;-0.0;0.0} dB",
+        ["VocalDnaAnalyzeBtn"] = "Analyze Song DNA",
+        ["VocalDnaBusyBtn"] = "Analyzing {0:0%}",
+        ["VocalDnaReadyToast"] = "Song Vocal DNA matched ({0:0.1} LUFS · RT60 {1:0.2} s · {2} active windows)",
+        ["VocalDnaNeedModelsToast"] = "Install ONNX Runtime and a vocal separation model in Settings to extract Song Vocal DNA.",
+        ["VocalVoiceprintUncalibrated"] = "Mic Voiceprint: Not calibrated (0.0 dB flat neutral Match EQ)",
+        ["VocalVoiceprintWaitingSongDna"] = "Mic Voiceprint: Calibrated · Match EQ 0.0 dB until Song DNA is analyzed",
+        ["VocalVoiceprintActiveFmt"] = "Mic Voiceprint: Calibrated · Match EQ Low {0:+0.0;-0.0;0.0} / Mid {1:+0.0;-0.0;0.0} / Air {2:+0.0;-0.0;0.0} dB",
+        ["VocalVoiceprintCalibrateBtn"] = "Calibrate Mic (4s)",
+        ["VocalVoiceprintCancelBtn"] = "Stop ({0:0.0}s)",
+        ["VocalVoiceprintResetBtn"] = "Reset Mic",
+        ["VocalVoiceprintCapturingFmt"] = "Speak or sing normally into the mic... {0:0}% ({1:0.1}s left · {2:0.0} dBFS)",
+        ["VocalVoiceprintSuccessToast"] = "Mic voiceprint calibrated ({0:0.1} dBFS · {1} vocal windows).",
+        ["VocalVoiceprintTooQuietFmt"] = "Mic signal too quiet ({0:0.1} dBFS) — speak closer to the mic and try again.",
+        ["VocalVoiceprintResetToast"] = "Mic voiceprint cleared (Match EQ reset to 0.0 dB flat).",
+        ["VocalSingDockDnaReadyFmt"] = "Vocal DNA RT60 {0:0.2}s{1} · {2}",
+        ["VocalSingDockNeutralFmt"] = "Live Vocal Chain: Neutral baseline · {0}",
+        ["VocalSingDockVpOn"] = "Voiceprint ON",
+        ["VocalSingDockVpOff"] = "Flat 0 dB EQ",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -1848,6 +1877,35 @@ public sealed class AndroidStrings {
         d["NeuralPrepNoTrackToast"] = "Carregue uma faixa primeiro para preparar os stems neurais IA.";
         d["NeuralPrepFailedFmt"] = "Falha na preparação de stems IA: {0}";
         d["NeuralLiveStemsActiveFmt"] = "IA 3D ao vivo: {0} stems ({1})";
+
+        // W19.b Auto-Vocal Mix-Match Ponta-a-Ponta, DNA Vocal da Música e Voiceprint Guiado do Microfone
+        d["VocalAbStateWet"] = "A/B: Processado";
+        d["VocalAbStateDry"] = "A/B: Bypass Limpo";
+        d["SingVocalAbWet"] = "A/B FX";
+        d["SingVocalAbDry"] = "A/B SECO";
+        d["VocalDnaSectionTitle"] = "DNA Vocal da Música e Voiceprint do Mic";
+        d["VocalDnaNeutralStatus"] = "DNA Vocal: Base neutra de estúdio (EQ 0,0 dB plano · toque em Analisar DNA)";
+        d["VocalDnaSummaryFmt"] = "DNA ({0}): {1:0.1} LUFS · Crista {2:0.1} dB · RT60 {3:0.2} s · Wet {4:0}%{5}{6}";
+        d["VocalDnaDelayTagFmt"] = " · Delay {0:0} ms";
+        d["VocalDnaDrrTagFmt"] = " · DRR {0:+0.0;-0.0;0.0} dB";
+        d["VocalDnaAnalyzeBtn"] = "Analisar DNA Vocal";
+        d["VocalDnaBusyBtn"] = "Analisando {0:0%}";
+        d["VocalDnaReadyToast"] = "DNA Vocal da música aplicado ({0:0.1} LUFS · RT60 {1:0.2} s · {2} janelas ativas)";
+        d["VocalDnaNeedModelsToast"] = "Instale o ONNX Runtime e um modelo de separação vocal em Ajustes para extrair o DNA Vocal.";
+        d["VocalVoiceprintUncalibrated"] = "Voiceprint do Mic: Não calibrado (Match EQ neutro 0,0 dB)";
+        d["VocalVoiceprintWaitingSongDna"] = "Voiceprint do Mic: Calibrado · Match EQ 0,0 dB até analisar o DNA da música";
+        d["VocalVoiceprintActiveFmt"] = "Voiceprint do Mic: Calibrado · Match EQ Grave {0:+0.0;-0.0;0.0} / Médio {1:+0.0;-0.0;0.0} / Ar {2:+0.0;-0.0;0.0} dB";
+        d["VocalVoiceprintCalibrateBtn"] = "Calibrar Mic (4s)";
+        d["VocalVoiceprintCancelBtn"] = "Parar ({0:0.0}s)";
+        d["VocalVoiceprintResetBtn"] = "Limpar Mic";
+        d["VocalVoiceprintCapturingFmt"] = "Fale ou cante normalmente no microfone... {0:0}% ({1:0.1}s · {2:0.0} dBFS)";
+        d["VocalVoiceprintSuccessToast"] = "Voiceprint do microfone calibrado ({0:0.1} dBFS · {1} janelas vocais).";
+        d["VocalVoiceprintTooQuietFmt"] = "Sinal do microfone muito baixo ({0:0.1} dBFS) — fale mais perto e tente novamente.";
+        d["VocalVoiceprintResetToast"] = "Voiceprint do microfone limpo (Match EQ restaurado para 0,0 dB plano).";
+        d["VocalSingDockDnaReadyFmt"] = "DNA Vocal RT60 {0:0.2}s{1} · {2}";
+        d["VocalSingDockNeutralFmt"] = "Cadeia Vocal ao Vivo: Base neutra · {0}";
+        d["VocalSingDockVpOn"] = "Voiceprint ON";
+        d["VocalSingDockVpOff"] = "EQ Plano 0 dB";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {
