@@ -79,6 +79,26 @@ namespace Cavern.Spatial {
         }
 
         /// <summary>
+        /// Returns the unnormalized directional energy for <paramref name="cellIndex"/> in the selected frequency
+        /// <paramref name="mode"/> (compatible with dividing by <see cref="PeakCellEnergy"/>).
+        /// </summary>
+        public float GetCellEnergy(int cellIndex, SpatialXRayBandMode mode) {
+            if (cellIndex < 0 || cellIndex >= TotalCells) {
+                return 0f;
+            }
+            switch (mode) {
+                case SpatialXRayBandMode.LowOnly:
+                    return lowGrid[cellIndex];
+                case SpatialXRayBandMode.MidOnly:
+                    return midGrid[cellIndex];
+                case SpatialXRayBandMode.HighOnly:
+                    return highGrid[cellIndex];
+                default:
+                    return lowGrid[cellIndex] + midGrid[cellIndex] + highGrid[cellIndex];
+            }
+        }
+
+        /// <summary>
         /// Precomputes the 72 spherical unit direction vectors once at construction (zero runtime allocations).
         /// </summary>
         public SpatialXRayPowermap() {

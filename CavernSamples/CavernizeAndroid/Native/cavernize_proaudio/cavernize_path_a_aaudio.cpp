@@ -9,6 +9,7 @@
 #if defined(__ANDROID__)
 #include <aaudio/AAudio.h>
 #include <android/log.h>
+#include <dlfcn.h>
 #define CAV_LOGI(...) __android_log_print(ANDROID_LOG_INFO, "CavernizeAAudio", __VA_ARGS__)
 #define CAV_LOGW(...) __android_log_print(ANDROID_LOG_WARN, "CavernizeAAudio", __VA_ARGS__)
 #else
@@ -145,11 +146,22 @@ struct PathAAudioEngine {
         if (device_id > 0) {
             AAudioStreamBuilder_setDeviceId(builder, device_id);
         }
+        using SetInt32Fn = void (*)(AAudioStreamBuilder*, int32_t);
         if (dir == AAUDIO_DIRECTION_OUTPUT) {
-            AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_GAME);
-            AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_MUSIC);
+            /* API 28+ optional hints resolved at runtime so NDK android-26 builds cleanly */
+            static auto fn_set_usage = reinterpret_cast<SetInt32Fn>(dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setUsage"));
+            static auto fn_set_content = reinterpret_cast<SetInt32Fn>(dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setContentType"));
+            if (fn_set_usage) {
+                fn_set_usage(builder, 14 /* AAUDIO_USAGE_GAME */);
+            }
+            if (fn_set_content) {
+                fn_set_content(builder, 2 /* AAUDIO_CONTENT_TYPE_MUSIC */);
+            }
         } else {
-            AAudioStreamBuilder_setInputPreset(builder, AAUDIO_INPUT_PRESET_UNPROCESSED);
+            static auto fn_set_preset = reinterpret_cast<SetInt32Fn>(dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setInputPreset"));
+            if (fn_set_preset) {
+                fn_set_preset(builder, 9 /* AAUDIO_INPUT_PRESET_UNPROCESSED */);
+            }
         }
         if (with_callback) {
             AAudioStreamBuilder_setDataCallback(builder, on_output_ready, this);

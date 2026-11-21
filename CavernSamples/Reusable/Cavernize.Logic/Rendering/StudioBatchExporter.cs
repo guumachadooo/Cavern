@@ -1,6 +1,7 @@
 using System.Numerics;
 
 using Cavern;
+using Cavern.CavernSettings;
 using Cavern.Channels;
 using Cavern.Filters;
 using Cavern.Format;
@@ -368,9 +369,9 @@ public static class StudioBatchExporter {
         };
         UpmixingSettings upmix = new(true) {
             Cavernize = true,
-            MatrixUpmix = true,
-            ParametricStftUpmix = true,
-            AtmosAwareUpmix = true
+            MatrixUpmixing = true,
+            ParametricStft = true,
+            AtmosAware = true
         };
         track.Attach(listener, upmix);
 
@@ -442,8 +443,11 @@ public static class StudioBatchExporter {
         LiveVocalChainDsp vocalDsp = includeLiveVocalMixdown
             ? new LiveVocalChainDsp(track.SampleRate)
             : null;
-        if (vocalDsp != null && job.VocalDnaProfile != null) {
-            vocalDsp.ApplyTargetProfile(job.VocalDnaProfile);
+        if (vocalDsp != null) {
+            vocalDsp.Configure(
+                track.SampleRate,
+                job.VocalDnaProfile,
+                new VocalMacroSettings { Enabled = true });
         }
 
         LoudnessMeter meter = new(track.SampleRate, 2);
@@ -452,7 +456,7 @@ public static class StudioBatchExporter {
         float[][] chBuf = { new float[updateRate], new float[updateRate] };
         bool[] lfeFlags = { false, false };
         bool[] centerFlags = { true, true };
-        float[] micSlice = new float[updateRate];
+        float[] micInterleaved = new float[updateRate * 2];
         float[] outInterleaved = new float[updateRate * 2];
 
         using RIFFWaveWriter writer = new(outPath, stereo, totalSamples, track.SampleRate, job.BitDepth);
@@ -468,19 +472,27 @@ public static class StudioBatchExporter {
                 chBuf[0][s] = rendered[s * 2];
                 chBuf[1][s] = rendered[s * 2 + 1];
             }
-            karaoke.ProcessMultichannelInPlace(chBuf, frames, lfeFlags, centerFlags, null, null);
-
-            if (vocalDsp != null && job.LiveMicMonoCapture != null && written < job.LiveMicMonoCapture.Length) {
-                int micAvail = (int)Math.Min(frames, job.LiveMicMonoCapture.Length - written);
-                Array.Clear(micSlice, 0, frames);
-                Array.Copy(job.LiveMicMonoCapture, (int)written, micSlice, 0, micAvail);
-                vocalDsp.ProcessStereoBlockZeroGc(micSlice, chBuf[0], chBuf[1], chBuf[0], chBuf[1], frames);
-            }
+            karaoke.ProcessMultichannelInPlace(chBuf, lfeFlags, centerFlags, 2, frames, null, null);
 
             for (int s = 0; s < frames; s++) {
                 outInterleaved[s * 2] = chBuf[0][s];
                 outInterleaved[s * 2 + 1] = chBuf[1][s];
             }
+
+            if (vocalDsp != null && job.LiveMicMonoCapture != null && written < job.LiveMicMonoCapture.Length) {
+                int micAvail = (int)Math.Min(frames, job.LiveMicMonoCapture.Length - written);
+                Array.Clear(micInterleaved, 0, frames * 2);
+                for (int s = 0; s < micAvail; s++) {
+                    float m = job.LiveMicMonoCapture[(int)written + s];
+                    micInterleaved[s * 2] = m;
+                    micInterleaved[s * 2 + 1] = m;
+                }
+                vocalDsp.ProcessStereoBlockZeroGc(micInterleaved, 0, frames, outInterleaved, 0);
+                for (int i = 0; i < frames * 2; i++) {
+                    outInterleaved[i] += micInterleaved[i];
+                }
+            }
+
             limiter.ProcessInterleaved(outInterleaved, 0, frames, 2);
             meter.AnalyzeInterleaved(outInterleaved, 0, frames, 2);
             writer.WriteBlock(outInterleaved, 0, frames * 2);
@@ -515,7 +527,7 @@ public static class StudioBatchExporter {
         CancellationToken token) {
         // Reuses W09 EM-MWF Lossless-Guided Spatial Restoration when a verified FLAC twin is present,
         // and gracefully falls back to calibrated 7.1.4 ADM BWF mastering when unpaired.
-        if (job.LosslessTwinProvider != null && job.LosslessTwinProvider.IsAvailable) {
+        if (job.LosslessTwinProvider != null && job.LosslessTwinProvider.HasSyncedLosslessTwin) {
             return ExportHybrid714(track, job, outPath, onProgress, token);
         }
         return ExportHybrid714(track, job, outPath, onProgress, token);

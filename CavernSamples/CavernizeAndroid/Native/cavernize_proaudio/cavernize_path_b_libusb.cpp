@@ -10,7 +10,12 @@
 #include <vector>
 
 #if defined(CAVERNIZE_HAVE_LIBUSB)
+#include <sys/time.h>
+#if __has_include(<libusb.h>)
+#include <libusb.h>
+#else
 #include <libusb-1.0/libusb.h>
+#endif
 #endif
 
 #if defined(__ANDROID__)
@@ -202,8 +207,9 @@ struct PathBLibUsbEngine {
             }
 
             xfer->iso_packet_desc[i].length = static_cast<unsigned int>(bytes);
-            buf_ptr += pb_stream.max_packet_size;
+            buf_ptr += bytes;
         }
+        xfer->length = static_cast<int>(buf_ptr - xfer->buffer);
     }
 
     int set_uac2_sample_rate(uint32_t hz) {
@@ -227,7 +233,7 @@ struct PathBLibUsbEngine {
         if (usb_fd < 0) return -20;
 
         /* Mandatory unrooted Android sequence: disable bus scanning before libusb_init */
-        libusb_set_option(nullptr, LIBUSB_OPTION_NO_DEVICE_DISCOVERY, nullptr);
+        libusb_set_option(nullptr, LIBUSB_OPTION_NO_DEVICE_DISCOVERY);
         if (libusb_init(&ctx) != 0 || !ctx) {
             return -21;
         }
@@ -325,6 +331,9 @@ struct PathBLibUsbEngine {
         est_rtt_ms.store((kIsoTransferCount * packet_ms) + (has_cap ? packet_ms * 2.0f : 0.5f), std::memory_order_release);
 
         running.store(true, std::memory_order_release);
+
+        /* Reserve buffer storage up front so vector reallocation cannot invalidate submitted URB pointers */
+        xfer_buffers.reserve(static_cast<size_t>(kIsoTransferCount * 2 + 2));
 
         /* Allocate & submit async ISO OUT ring */
         for (int i = 0; i < kIsoTransferCount; ++i) {

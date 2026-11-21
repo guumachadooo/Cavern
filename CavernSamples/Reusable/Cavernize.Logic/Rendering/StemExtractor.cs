@@ -528,23 +528,29 @@ public static class StemExtractor {
             float[] neuralLeadRef = null;
             float[] neuralBackingRef = null;
 
-            if (runtime != null && runtime.IsAvailable && !string.IsNullOrEmpty(modelFilePath) && File.Exists(modelFilePath)) {
+            if (runtime != null && runtime.GetRuntimeInfo().IsAvailable && !string.IsNullOrEmpty(modelFilePath) && File.Exists(modelFilePath)) {
                 onProgress?.Invoke(0.22, "Separando guia vocal neural (MVSEP)...");
-                using INeuralSession session = runtime.LoadSession(modelFilePath, safeConfig.PreferredProvider);
                 NeuralModelCatalogEntry entry = modelEntry ?? NeuralModelCatalog.FindById(safeConfig.ActiveKaraokeModelId);
-                StereoStemBuffer[] vocalStems = NeuralAudioOfflinePipeline.RunSeparation(
-                    session,
-                    entry,
+                string[] karaokeStemNames = entry?.OutputStemNames is { Length: > 0 } ? entry.OutputStemNames : ["lead_vocal", "backing_vocals"];
+                int karaokeChunk = entry?.RecommendedChunkSamples > 0 ? entry.RecommendedChunkSamples : 352800;
+                (StereoStemBuffer[] vocalStems, _) = NeuralAudioOfflinePipeline.RunSeparation(
+                    runtime,
+                    [modelFilePath],
+                    [karaokeStemNames],
+                    null,
                     neuralInputLeft,
                     neuralInputRight,
-                    safeConfig.ToMvsepOptions(),
-                    p => onProgress?.Invoke(0.22 + p * 0.48, $"Inferência vocal MVSEP ({p:0.0%})..."),
+                    sampleRate,
+                    safeConfig,
+                    karaokeChunk,
+                    (p, msg) => onProgress?.Invoke(0.22 + p * 0.48, msg),
                     token);
                 NeuralSeparatedTrack separated = NeuralAudioOfflinePipeline.BuildSeparatedTrack(
                     track.Path ?? baseName,
                     sampleRate,
                     vocalStems,
-                    entry?.Id ?? "custom_onnx");
+                    dereverb: null,
+                    derivedFromLosslessTwin: losslessTwin != null && losslessTwin.HasSyncedLosslessTwin);
                 neuralLeadRef = separated.MonoLeadVocalRef;
                 neuralBackingRef = safeConfig.KaraokePreserveBackingVocals ? separated.MonoBackingVocalRef : null;
             }
@@ -577,7 +583,7 @@ public static class StemExtractor {
         }
 
         // 3. Standard Neural AI Stem Separation via ONNX Runtime + MVSEP anti-artifact pipeline
-        if (runtime == null || !runtime.IsAvailable) {
+        if (runtime == null || !runtime.GetRuntimeInfo().IsAvailable) {
             throw new InvalidOperationException("ONNX Runtime is not installed. Install it in Settings -> Neural Audio first.");
         }
         if (string.IsNullOrEmpty(modelFilePath) || !File.Exists(modelFilePath)) {
@@ -585,17 +591,21 @@ public static class StemExtractor {
         }
 
         onProgress?.Invoke(0.22, "Carregando sessão ONNX Runtime...");
-        using INeuralSession stemSession = runtime.LoadSession(modelFilePath, safeConfig.PreferredProvider);
         NeuralModelCatalogEntry catalogEntry = modelEntry ?? NeuralModelCatalog.FindById(safeConfig.ActiveStemModelId);
-        MvsepPipelineOptions mvsepOptions = safeConfig.ToMvsepOptions();
+        string[] stemNames = catalogEntry?.OutputStemNames is { Length: > 0 } ? catalogEntry.OutputStemNames : ["drums", "bass", "other", "vocals"];
+        int stemChunk = catalogEntry?.RecommendedChunkSamples > 0 ? catalogEntry.RecommendedChunkSamples : 131072;
 
-        StereoStemBuffer[] stems = NeuralAudioOfflinePipeline.RunSeparation(
-            stemSession,
-            catalogEntry,
+        (StereoStemBuffer[] stems, _) = NeuralAudioOfflinePipeline.RunSeparation(
+            runtime,
+            [modelFilePath],
+            [stemNames],
+            null,
             neuralInputLeft,
             neuralInputRight,
-            mvsepOptions,
-            p => onProgress?.Invoke(0.25 + p * 0.55, $"Separando stems MVSEP ({p:0.0%})..."),
+            sampleRate,
+            safeConfig,
+            stemChunk,
+            (p, msg) => onProgress?.Invoke(0.25 + p * 0.55, msg),
             token);
 
         for (int i = 0; i < stems.Length; i++) {
@@ -679,7 +689,7 @@ public static class StemExtractor {
         if (!losslessTwin.HasSyncedLosslessTwin) {
             throw new InvalidOperationException("A synced lossless twin (FLAC/WAV/ALAC) is required for Tier 2 EM-MWF Studio Master.");
         }
-        if (runtime == null || !runtime.IsAvailable) {
+        if (runtime == null || !runtime.GetRuntimeInfo().IsAvailable) {
             throw new InvalidOperationException("ONNX Runtime is not installed. Install it in Settings -> Neural Audio first.");
         }
         if (string.IsNullOrEmpty(stemModelPath) || !File.Exists(stemModelPath)) {
@@ -713,55 +723,58 @@ public static class StemExtractor {
 
         // 2. Separate clean neural stems directly from the synced lossless FLAC/WAV/ALAC twin
         onProgress?.Invoke(0.22, "Separando stems lossless (MVSEP)...");
-        using INeuralSession stemSession = runtime.LoadSession(stemModelPath, safeNeural.PreferredProvider);
         NeuralModelCatalogEntry entry = stemModelEntry ?? NeuralModelCatalog.FindById(safeNeural.ActiveStemModelId);
-        StereoStemBuffer[] losslessStems = NeuralAudioOfflinePipeline.RunSeparation(
-            stemSession,
-            entry,
+        string[] twinStemNames = entry?.OutputStemNames is { Length: > 0 } ? entry.OutputStemNames : ["drums", "bass", "other", "vocals"];
+        int twinChunk = entry?.RecommendedChunkSamples > 0 ? entry.RecommendedChunkSamples : 131072;
+        (StereoStemBuffer[] losslessStems, _) = NeuralAudioOfflinePipeline.RunSeparation(
+            runtime,
+            [stemModelPath],
+            [twinStemNames],
+            null,
             twinL,
             twinR,
-            safeNeural.ToMvsepOptions(),
-            p => onProgress?.Invoke(0.22 + p * 0.40, $"Separando stems do twin lossless ({p:0.0%})..."),
+            sampleRate,
+            safeNeural,
+            twinChunk,
+            (p, msg) => onProgress?.Invoke(0.22 + p * 0.40, msg),
             token);
 
         // 3. Optional Tier 3 Apollo / AP-BWE residual cleanup delegate
-        INeuralSession tier3Session = null;
         Func<float[], float[], StereoStemBuffer> tier3Delegate = null;
-        if (safeLgsr.Tier3ResidualCleanupEnabled &&
+        if (safeLgsr.EnableTier3ResidualCleanup &&
             !string.IsNullOrEmpty(tier3RestorerModelPath) &&
             File.Exists(tier3RestorerModelPath)) {
-            tier3Session = runtime.LoadSession(tier3RestorerModelPath, safeNeural.PreferredProvider);
             NeuralModelCatalogEntry restorerEntry = tier3RestorerEntry ?? NeuralModelCatalog.FindById(safeNeural.ActiveRestorerModelId);
-            MvsepPipelineOptions restorerOpts = safeNeural.ToMvsepOptions();
+            string[] restorerNames = restorerEntry?.OutputStemNames is { Length: > 0 } ? restorerEntry.OutputStemNames : ["restored"];
+            int restorerChunk = restorerEntry?.RecommendedChunkSamples > 0 ? restorerEntry.RecommendedChunkSamples : 262144;
             tier3Delegate = (resL, resR) => {
-                StereoStemBuffer[] cleaned = NeuralAudioOfflinePipeline.RunSeparation(
-                    tier3Session,
-                    restorerEntry,
+                (StereoStemBuffer[] cleaned, _) = NeuralAudioOfflinePipeline.RunSeparation(
+                    runtime,
+                    [tier3RestorerModelPath],
+                    [restorerNames],
+                    null,
                     resL,
                     resR,
-                    restorerOpts,
+                    sampleRate,
+                    safeNeural,
+                    restorerChunk,
                     null,
                     token);
                 return cleaned != null && cleaned.Length > 0
                     ? cleaned[0]
-                    : new StereoStemBuffer { Name = "residual", Left = resL, Right = resR };
+                    : new StereoStemBuffer("residual", resL, resR);
             };
         }
 
-        EmMwfSpatialMasterResult master;
-        try {
-            onProgress?.Invoke(0.64, "Projetando stems lossless via EM-MWF (norbert)...");
-            master = EmMwfSpatialMasterEngine.SynthesizeStudioMaster(
-                atmosChannels,
-                isLfe,
-                losslessStems,
-                sampleRate,
-                emIterations: 2,
-                tier3ResidualRestorer: tier3Delegate,
-                onProgress: p => onProgress?.Invoke(0.64 + p * 0.24, $"EM-MWF Studio Master ({p:0.0%})..."));
-        } finally {
-            tier3Session?.Dispose();
-        }
+        onProgress?.Invoke(0.64, "Projetando stems lossless via EM-MWF (norbert)...");
+        EmMwfSpatialMasterResult master = EmMwfSpatialMasterEngine.SynthesizeStudioMaster(
+            atmosChannels,
+            isLfe,
+            losslessStems,
+            sampleRate,
+            emIterations: 2,
+            tier3ResidualRestorer: tier3Delegate,
+            onProgress: p => onProgress?.Invoke(0.64 + p * 0.24, $"EM-MWF Studio Master ({p:0.0%})..."));
 
         // 4. Write restored discrete multichannel WAV stems (and optional Atmos-exclusive residual)
         List<string> createdFiles = [];

@@ -66,7 +66,7 @@ jobs:
             tar -xjf "$WORK_DIR/libusb.tar.bz2" -C "$WORK_DIR"
             LIBUSB_SRC=$(find "$WORK_DIR" -maxdepth 1 -type d -name "libusb-*" | head -n 1)
             if [ -n "$LIBUSB_SRC" ]; then
-              LIBUSB_CMAKE_ARG="-DCAVERNIZE_LIBUSB_DIR=$LIBUSB_SRC"
+              LIBUSB_CMAKE_ARG="-DLIBUSB_ROOT=$LIBUSB_SRC"
               echo "Bundling unrooted Android libusb from: $LIBUSB_SRC"
             fi
           else

@@ -883,18 +883,18 @@ public partial class MainActivity {
         string iLufs = loud.IntegratedLufs > -110f ? $"{loud.IntegratedLufs:0.1}" : "--";
         string tpStr = loud.TruePeakDbtp > -110f ? $"{loud.TruePeakDbtp:0.1}" : "--";
         xraySoundfieldMetricsTv.Text =
-            $"Coh {cohPct:0}% · Diff {diffPct:0}% · M {mLufs} / I {iLufs} LUFS · {tpStr} dBTP · LRA {loud.LoudnessRangeLu:0.1} LU · GR -{loud.LimiterGainReductionDb:0.1} dB";
+            $"Coh {cohPct:0}% · Diff {diffPct:0}% · M {mLufs} / I {iLufs} LUFS · {tpStr} dBTP · LRA {loud.LoudnessRangeLu:0.1} LU · GR -{MathF.Abs(loud.LimiterGainReductionDb):0.1} dB";
 
         float cplHz = lgsr.CouplingStartHz > 0f ? lgsr.CouplingStartHz : meta.CouplingStartHz;
         float spxHz = lgsr.SpxStartHz > 0f ? lgsr.SpxStartHz : meta.SpxStartHz;
-        string lgsrState = playerEngine.LgsrBypassed ? S["XRayBypassActive"] : (lgsr.IsRestoring ? S["XRayActiveLive"] : lgsr.Status.ToString());
+        string lgsrState = playerEngine.LgsrBypassed ? S["XRayBypassActive"] : (lgsr.IsActivePreHrtf ? S["XRayActiveLive"] : lgsr.State.ToString());
         xrayLgsrMetricsTv.Text =
-            $"[{lgsrState}] Cpl {cplHz:0} Hz · SPX {spxHz:0} Hz · GCC-PHAT {lgsr.SubSampleOffsetSamples:+0.00;-0.00;0.00} smp ({lgsr.ClockDriftPpm:+0.0;-0.0;0.0} ppm) · FLAC Fusion {lgsr.AverageFusionRatio * 100f:0}%";
+            $"[{lgsrState}] Cpl {cplHz:0} Hz · SPX {spxHz:0} Hz · GCC-PHAT {lgsr.SyncOffsetSamples:+0.00;-0.00;0.00} smp ({lgsr.DriftPpm:+0.0;-0.0;0.0} ppm) · FLAC Fusion {lgsr.ActiveFusionRatio * 100f:0}%";
 
         string vocState = playerEngine.VocalChainBypassed ? S["XRayBypassActive"] : (tel.IsLiveMicActive ? S["XRayActiveLive"] : "STANDBY");
-        float compGr = vocal.OptoReductionDb + vocal.FetReductionDb;
+        float compGr = MathF.Abs(vocal.CompressorReductionDb);
         xrayVocalMetricsTv.Text =
-            $"[{vocState}] In {vocal.InputDbfs:0.1} / Out {vocal.OutputDbfs:0.1} dBFS · Gate -{vocal.GateReductionDb:0.1} · DeEss -{vocal.DeEsserReductionDb:0.1} · Comp -{compGr:0.1} · Duck -{vocal.SidechainDuckDb:0.1} dB · RTT {tel.FullDuplexRoundTripMs:0.1} ms";
+            $"[{vocState}] In {vocal.InputDbfs:0.1} / Out {vocal.OutputDbfs:0.1} dBFS · Gate -{MathF.Abs(vocal.GateReductionDb):0.1} · DeEss -{MathF.Abs(vocal.DeEsserReductionDb):0.1} · Comp -{compGr:0.1} · Duck -{MathF.Abs(vocal.SidechainPocketDuckDb):0.1} dB · RTT {tel.FullDuplexRoundTripMs:0.1} ms";
 
         if (xrayLgsrBypassBtn != null) {
             bool byp = playerEngine.LgsrBypassed;

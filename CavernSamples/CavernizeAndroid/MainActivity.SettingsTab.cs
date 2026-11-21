@@ -3198,7 +3198,7 @@ public partial class MainActivity {
     }
 
     void ShowNeuralModelsModal() {
-        OneUiModalDialog dialog = new(this, S["NeuralModelsModalTitle"], OneUiIconType.Sparkles, OneUiTheme.IconAtmosUpmix);
+        Android.App.Dialog dialog = null;
         LinearLayout content = new(this) { Orientation = Orientation.Vertical };
 
         int installedCount = OnnxRuntimeInstallerService.GetInstalledModelIds(this).Count;
@@ -3231,11 +3231,14 @@ public partial class MainActivity {
             tile.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f);
             tile.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
 
-            TextView titleTv = Label($"{localEntry.DisplayName} ({localEntry.EstimatedSizeMb} MB · {localEntry.License})", 12.5f, ColText);
+            TextView titleTv = Label($"{localEntry.DisplayName} ({localEntry.ApproxSizeMb:0} MB · {localEntry.License})", 12.5f, ColText);
             titleTv.SetTypeface(null, TypefaceStyle.Bold);
             tile.AddView(titleTv);
 
-            TextView subTv = Label($"{localEntry.Summary} [{(isInst ? S["NeuralModelInstalledTag"] : localEntry.SourceRepo)}]", 11.5f, isInst ? OneUiTheme.IconSystemInfo : OneUiTheme.TextSub);
+            string stemsTag = localEntry.OutputStemNames != null && localEntry.OutputStemNames.Length > 0
+                ? string.Join(", ", localEntry.OutputStemNames)
+                : localEntry.Task.ToString();
+            TextView subTv = Label($"{stemsTag} [{(isInst ? S["NeuralModelInstalledTag"] : localEntry.SourceRepository)}]", 11.5f, isInst ? OneUiTheme.IconSystemInfo : OneUiTheme.TextSub);
             subTv.SetPadding(0, Dp(2), 0, Dp(8));
             tile.AddView(subTv);
 
@@ -3253,7 +3256,7 @@ public partial class MainActivity {
                             RunOnUiThread(() => {
                                 SyncNeuralRuntimeDiagnostics();
                                 RefreshNeuralAudioUi();
-                                dialog.Dismiss();
+                                dialog?.Dismiss();
                                 ShowNeuralModelsModal();
                             });
                         } catch (Exception ex) {
@@ -3270,7 +3273,7 @@ public partial class MainActivity {
                 Button useBtn = PillButton(isActive ? S["NeuralModelActiveTag"] : S["NeuralModelSelectBtn"], () => {
                     AssignActiveModelSlot(localEntry);
                     ApplyAndRefreshNeuralAudio();
-                    dialog.Dismiss();
+                    dialog?.Dismiss();
                     ShowNeuralModelsModal();
                 }, active: isActive);
                 btnRow.AddView(useBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
@@ -3279,7 +3282,7 @@ public partial class MainActivity {
                     OnnxRuntimeInstallerService.DeleteModel(this, localEntry.Id);
                     SyncNeuralRuntimeDiagnostics();
                     RefreshNeuralAudioUi();
-                    dialog.Dismiss();
+                    dialog?.Dismiss();
                     ShowNeuralModelsModal();
                 });
                 btnRow.AddView(delBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
@@ -3287,7 +3290,7 @@ public partial class MainActivity {
 
             Button impBtn = PillButton(S["NeuralModelImportBtn"], () => {
                 pendingOnnxImportModelId = localEntry.Id;
-                dialog.Dismiss();
+                dialog?.Dismiss();
                 OpenFileWithExplorerForExtensions(S["NeuralModelImportBtn"], [".onnx"], ImportCustomOnnxModelFromPath, ReqLoadOnnxModel);
             });
             btnRow.AddView(impBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -3305,31 +3308,37 @@ public partial class MainActivity {
             SyncNeuralRuntimeDiagnostics();
             RefreshNeuralAudioUi();
             ShowToast(S["NeuralCacheClearedToast"]);
-            dialog.Dismiss();
+            dialog?.Dismiss();
         });
         footerRow.AddView(licBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
         footerRow.AddView(clearBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         content.AddView(footerRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
 
-        dialog.SetContentView(content);
-        dialog.AddSecondaryButton(S["CloseBtn"], () => dialog.Dismiss());
-        dialog.Show();
+        dialog = OneUiModalDialog.Show(
+            this,
+            S["NeuralModelsModalTitle"],
+            customContent: content,
+            icon: OneUiIconType.Sparkles,
+            iconBadgeColor: OneUiTheme.IconAtmosUpmix,
+            positiveText: S["CloseBtn"]);
     }
 
     void AssignActiveModelSlot(Cavernize.Logic.Spatial.NeuralModelCatalogEntry entry) {
         if (entry == null) return;
         switch (entry.Task) {
             case Cavernize.Logic.Spatial.NeuralModelTask.StemSeparation4:
+            case Cavernize.Logic.Spatial.NeuralModelTask.StemSeparation6:
+            case Cavernize.Logic.Spatial.NeuralModelTask.VocalSeparation:
                 store.ActiveStemModelId = entry.Id;
                 break;
-            case Cavernize.Logic.Spatial.NeuralModelTask.VocalKaraokeSplit:
+            case Cavernize.Logic.Spatial.NeuralModelTask.KaraokeLeadBacking:
                 store.ActiveKaraokeModelId = entry.Id;
                 break;
-            case Cavernize.Logic.Spatial.NeuralModelTask.DereverbDryWet:
+            case Cavernize.Logic.Spatial.NeuralModelTask.Dereverb:
             case Cavernize.Logic.Spatial.NeuralModelTask.DebleedDenoise:
                 store.ActiveDereverbModelId = entry.Id;
                 break;
-            case Cavernize.Logic.Spatial.NeuralModelTask.CodecRestoration:
+            case Cavernize.Logic.Spatial.NeuralModelTask.CodecRestoreApollo:
             case Cavernize.Logic.Spatial.NeuralModelTask.BandwidthExtension:
                 store.ActiveRestorerModelId = entry.Id;
                 break;

@@ -1018,8 +1018,8 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 blockTelemetry.VocalChainOutputDbfs = vocalTel.OutputDbfs;
                 blockTelemetry.VocalChainGateReductionDb = vocalTel.GateReductionDb;
                 blockTelemetry.VocalChainDeEsserReductionDb = vocalTel.DeEsserReductionDb;
-                blockTelemetry.VocalChainCompressorReductionDb = vocalTel.OptoReductionDb + vocalTel.FetReductionDb;
-                blockTelemetry.VocalChainSidechainDuckDb = vocalTel.SidechainDuckDb;
+                blockTelemetry.VocalChainCompressorReductionDb = vocalTel.CompressorReductionDb;
+                blockTelemetry.VocalChainSidechainDuckDb = vocalTel.SidechainPocketDuckDb;
                 blockTelemetry.VocalChainBypassed = vocalMixMatchStage.IsBypassed;
                 activeSceneFrame.Telemetry = blockTelemetry;
 

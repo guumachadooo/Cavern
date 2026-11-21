@@ -393,15 +393,15 @@ public sealed class RoomSimulatorView : View {
             canvas.DrawRoundRect(camXRayBandBtnRect, topBarH * 0.5f, topBarH * 0.5f, pillInactivePaint);
             textPaint.TextSize = 8.8f * dp;
             textPaint.Color = XRayBandMode switch {
-                SpatialXRayBandMode.Low => Color.Rgb(255, 166, 76),
-                SpatialXRayBandMode.Mid => Color.Rgb(64, 224, 168),
-                SpatialXRayBandMode.High => Color.Rgb(158, 178, 255),
+                SpatialXRayBandMode.LowOnly => Color.Rgb(255, 166, 76),
+                SpatialXRayBandMode.MidOnly => Color.Rgb(64, 224, 168),
+                SpatialXRayBandMode.HighOnly => Color.Rgb(158, 178, 255),
                 _ => OneUiTheme.PrimaryHigh
             };
             string bTag = XRayBandMode switch {
-                SpatialXRayBandMode.Low => "L",
-                SpatialXRayBandMode.Mid => "M",
-                SpatialXRayBandMode.High => "H",
+                SpatialXRayBandMode.LowOnly => "L",
+                SpatialXRayBandMode.MidOnly => "M",
+                SpatialXRayBandMode.HighOnly => "H",
                 _ => "All"
             };
             canvas.DrawText(bTag, camXRayBandBtnRect.CenterX(),
@@ -1279,16 +1279,16 @@ public sealed class RoomSimulatorView : View {
             var proj = ProjectOrbit3D(r, sx, sy, sz, camYawRad, camPitchRad);
 
             Color cellCol;
-            if (XRayBandMode == SpatialXRayBandMode.Low) {
+            if (XRayBandMode == SpatialXRayBandMode.LowOnly) {
                 cellCol = Color.Rgb(255, 138, 64);
-            } else if (XRayBandMode == SpatialXRayBandMode.Mid) {
+            } else if (XRayBandMode == SpatialXRayBandMode.MidOnly) {
                 cellCol = Color.Rgb(48, 224, 158);
-            } else if (XRayBandMode == SpatialXRayBandMode.High) {
+            } else if (XRayBandMode == SpatialXRayBandMode.HighOnly) {
                 cellCol = Color.Rgb(128, 168, 255);
             } else {
-                float lo = xrayPowermap.LowBand[i];
-                float mi = xrayPowermap.MidBand[i];
-                float hi = xrayPowermap.HighBand[i];
+                float lo = xrayPowermap.LowEnergyGrid[i];
+                float mi = xrayPowermap.MidEnergyGrid[i];
+                float hi = xrayPowermap.HighEnergyGrid[i];
                 float sum = lo + mi + hi + 1e-6f;
                 int cr = Math.Clamp((int)Math.Round((lo * 255f + mi * 56f + hi * 136f) / sum), 40, 255);
                 int cg = Math.Clamp((int)Math.Round((lo * 136f + mi * 228f + hi * 170f) / sum), 40, 255);

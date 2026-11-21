@@ -268,18 +268,25 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime {
         if (installed && !initialized) {
             TryInitializeLocked();
         }
+        bool ready = installed && initialized;
         return new NeuralRuntimeInfo {
-            IsAvailable = installed && initialized,
-            Version = !string.IsNullOrEmpty(loadedVersion) ? loadedVersion : (installed ? "installed" : ""),
-            LibraryPath = installed ? OnnxRuntimeInstallerService.GetManagedLibraryPath(appContext) : "",
-            HasXnnpackSupport = installed,
-            HasQnnHtpSupport = qnn,
-            RecommendedThreads = Math.Clamp(Environment.ProcessorCount / 2, 2, 6)
+            IsAvailable = ready,
+            LibraryPath = installed ? OnnxRuntimeInstallerService.GetManagedLibraryPath(appContext) : string.Empty,
+            VersionString = !string.IsNullOrEmpty(loadedVersion) ? loadedVersion : (installed ? "installed" : string.Empty),
+            ActiveProvider = !ready ? "Not Installed" : (qnn ? "QNN HTP NPU" : "XNNPACK ARM64"),
+            IsQnnAvailable = qnn,
+            DiagnosticMessage = ready ? string.Empty : (installed ? "Native ONNX Runtime failed to initialize." : "ONNX Runtime is not installed.")
         };
     }
 
     /// <inheritdoc/>
-    public INeuralSession LoadSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 0) {
+    public string ResolveInstalledModelPath(string modelId) {
+        string path = OnnxRuntimeInstallerService.ResolveModelPath(appContext, modelId);
+        return string.IsNullOrEmpty(path) ? null : path;
+    }
+
+    /// <inheritdoc/>
+    public INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 4) {
         if (string.IsNullOrWhiteSpace(modelPath) || !File.Exists(modelPath)) {
             throw new FileNotFoundException("ONNX model file not found.", modelPath);
         }
@@ -301,7 +308,7 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime {
 
             string activeEp = ConfigureExecutionProvider(sessOpts, preferredProvider, threads);
             CheckStatus(fnCreateSession(ortEnv, modelPath, sessOpts, out IntPtr sessionHandle));
-            return new NativeOnnxSession(this, sessionHandle, activeEp);
+            return new NativeOnnxSession(this, modelPath, sessionHandle, activeEp);
         } finally {
             fnReleaseSessionOptions?.Invoke(sessOpts);
         }
@@ -536,17 +543,35 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime {
         readonly string[] outputNames;
         bool disposed;
 
-        public NativeOnnxSession(NativeOnnxRuntimeBridge bridge, IntPtr handle, string activeEp) {
+        public NativeOnnxSession(NativeOnnxRuntimeBridge bridge, string modelPath, IntPtr handle, string activeEp) {
             this.bridge = bridge;
+            ModelPath = modelPath ?? string.Empty;
             sessionHandle = handle;
-            ActiveExecutionProvider = activeEp;
+            ExecutionProvider = activeEp;
             inputNames = ReadNames(isInput: true);
             outputNames = ReadNames(isInput: false);
         }
 
-        public string ActiveExecutionProvider { get; }
+        public string ModelPath { get; }
+        public string ExecutionProvider { get; }
         public IReadOnlyList<string> InputNames => inputNames;
         public IReadOnlyList<string> OutputNames => outputNames;
+
+        public NeuralTensorFloat[] RunSingleInput(NeuralTensorFloat inputTensor) {
+            ArgumentNullException.ThrowIfNull(inputTensor);
+            if (inputNames.Length == 0) {
+                throw new InvalidOperationException("ONNX model exposes no input tensors.");
+            }
+            Dictionary<string, NeuralTensorFloat> inputs = new(1, StringComparer.Ordinal) {
+                [inputNames[0]] = inputTensor
+            };
+            IReadOnlyDictionary<string, NeuralTensorFloat> outputs = Run(inputs);
+            NeuralTensorFloat[] ordered = new NeuralTensorFloat[outputNames.Length];
+            for (int o = 0; o < outputNames.Length; o++) {
+                outputs.TryGetValue(outputNames[o], out ordered[o]);
+            }
+            return ordered;
+        }
 
         public IReadOnlyDictionary<string, NeuralTensorFloat> Run(IReadOnlyDictionary<string, NeuralTensorFloat> inputs) {
             if (disposed) {
@@ -575,8 +600,8 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime {
                         bridge.cpuMemoryInfo,
                         dataPtr,
                         byteLen,
-                        tensor.Dimensions,
-                        (UIntPtr)tensor.Dimensions.Length,
+                        tensor.Shape,
+                        (UIntPtr)tensor.Shape.Length,
                         OnnxTensorElementDataTypeFloat,
                         out inValPtrs[idx]));
                     idx++;
@@ -623,7 +648,7 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime {
                         bridge.CheckStatus(bridge.fnGetTensorData(outVal, out IntPtr rawPtr));
                         Marshal.Copy(rawPtr, managed, 0, (int)elemCount);
                     }
-                    results[outputNames[o]] = new NeuralTensorFloat(managed, dims);
+                    results[outputNames[o]] = new NeuralTensorFloat(dims, managed);
                 }
 
                 return results;

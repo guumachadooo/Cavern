@@ -318,7 +318,7 @@ public static class OnnxRuntimeInstallerService {
             using HttpResponseMessage resp = await dlClient.GetAsync(entry.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
 
-            long totalBytes = resp.Content.Headers.ContentLength ?? (long)entry.EstimatedSizeMb * 1024L * 1024L;
+            long totalBytes = resp.Content.Headers.ContentLength ?? (long)Math.Round(entry.ApproxSizeMb * 1024.0 * 1024.0);
             await using (Stream netStream = await resp.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
             await using (FileStream outStream = File.Create(partPath)) {
                 byte[] buf = new byte[131072];

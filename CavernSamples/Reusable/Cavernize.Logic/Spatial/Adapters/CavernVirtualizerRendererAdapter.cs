@@ -1,6 +1,7 @@
 using System.Numerics;
 
 using Cavern;
+using Cavern.Spatial;
 using Cavern.Utilities;
 using Cavern.Virtualizer;
 

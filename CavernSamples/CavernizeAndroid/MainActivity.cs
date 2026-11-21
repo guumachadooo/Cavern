@@ -2253,7 +2253,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     playerEngine.BindLosslessReference(twin);
                     RefreshLgsrUi();
                 });
-            } catch (OperationCanceledException) {
+            } catch (System.OperationCanceledException) {
                 // Superseded by newer track selection
             } catch (Exception ex) {
                 AppLogger.Warn($"W09 StartLosslessTwinDiscoveryAsync: {ex.Message}");
