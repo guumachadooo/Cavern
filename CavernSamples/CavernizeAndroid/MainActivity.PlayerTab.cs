@@ -749,9 +749,9 @@ public partial class MainActivity {
         if (uiDestroyed) {
             return;
         }
-        bool hasStems = playerEngine?.NeuralStemStage?.HasPlayableSeparatedStems == true;
+        bool hasStems = playerEngine?.NeuralStage?.HasPlayableSeparatedStems == true;
         bool live3D = playerEngine?.IsLiveNeuralStemPlaybackActive == true;
-        int stemCount = playerEngine?.NeuralStemStage?.ActiveSeparatedTrack?.Stems?.Count ?? 0;
+        int stemCount = playerEngine?.NeuralStage?.ActiveSeparatedTrack?.Stems?.Count ?? 0;
 
         if (musicLyricsAiPrepBtn != null) {
             if (isNeuralPrepRunning) {

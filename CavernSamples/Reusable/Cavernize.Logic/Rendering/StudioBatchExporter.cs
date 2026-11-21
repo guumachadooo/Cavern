@@ -9,6 +9,7 @@ using Cavern.Format.Common;
 using Cavern.Format.Environment;
 using Cavern.Neural;
 using Cavern.Remapping;
+using Cavern.Spatial;
 using Cavern.Virtualizer;
 using Cavern.VocalChain;
 
@@ -286,7 +287,7 @@ public static class StudioBatchExporter {
 
         long totalSamples = Math.Max(updateRate, track.Length);
         int hoaOrder = Math.Clamp(job.HoaOrder, 1, 3);
-        IReadOnlyList<Source> activeSources = listener.ActiveSources;
+        List<Source> activeSources = new(listener.ActiveSources);
         int srcCount = activeSources.Count;
         int outCh = codec == Codec.AmbisonicsHOA || codec == Codec.IAMF
             ? (hoaOrder + 1) * (hoaOrder + 1)

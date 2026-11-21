@@ -1168,7 +1168,7 @@ public partial class MainActivity {
             ApplyAndRefreshNeuralAudio();
             RefreshNeuralPrepUi();
             if (pos is 1 or 2 &&
-                playerEngine?.NeuralStemStage?.HasPlayableSeparatedStems != true &&
+                playerEngine?.NeuralStage?.HasPlayableSeparatedStems != true &&
                 !isNeuralPrepRunning &&
                 GetActiveTrack() != null) {
                 PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, silentIfNotReady: true);

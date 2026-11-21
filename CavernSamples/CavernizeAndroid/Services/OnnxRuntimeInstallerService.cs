@@ -422,9 +422,9 @@ public static class OnnxRuntimeInstallerService {
             candidateUrls.Add(entry.DownloadUrl.Trim());
         }
         if (entry.FallbackDownloadUrls != null) {
-            for (int i = 0; i < entry.FallbackDownloadUrls.Count; i++) {
+            for (int i = 0; i < entry.FallbackDownloadUrls.Length; i++) {
                 string fb = entry.FallbackDownloadUrls[i]?.Trim();
-                if (!string.IsNullOrWhiteSpace(fb) && !candidateUrls.Contains(fb, StringComparison.OrdinalIgnoreCase)) {
+                if (!string.IsNullOrWhiteSpace(fb) && !candidateUrls.Exists(u => string.Equals(u, fb, StringComparison.OrdinalIgnoreCase))) {
                     candidateUrls.Add(fb);
                 }
             }
@@ -563,7 +563,15 @@ public static class OnnxRuntimeInstallerService {
 
         long fileBytes = new FileInfo(customDestPath).Length;
         AppLogger.Info($"Registered custom ONNX model '{safeId}' (Task={task}, SR={sr} Hz, {fileBytes / (1024.0 * 1024.0):0.1} MB)");
-        return NeuralModelCatalog.CreateCustomEntry(safeId, displayName, destFileName, task, fileBytes, sr, defaultStems);
+        return NeuralModelCatalog.CreateCustomEntry(
+            safeId,
+            displayName,
+            task,
+            destFileName,
+            sr,
+            meta.DefaultChunkSamples,
+            meta.OutputStemNames,
+            fileBytes / (1024f * 1024f));
     }
 
     public static bool DeleteModel(Context context, string modelId) {
@@ -635,11 +643,12 @@ public static class OnnxRuntimeInstallerService {
             return NeuralModelCatalog.CreateCustomEntry(
                 meta.Id,
                 string.IsNullOrWhiteSpace(meta.DisplayName) ? Path.GetFileNameWithoutExtension(fileName) : meta.DisplayName,
-                fileName,
                 task,
-                fileBytes,
+                fileName,
                 sr,
-                stems);
+                meta.DefaultChunkSamples > 0 ? meta.DefaultChunkSamples : 131072,
+                stems.ToArray(),
+                fileBytes / (1024f * 1024f));
         }
 
         string baseName = Path.GetFileNameWithoutExtension(fileName);
@@ -647,11 +656,11 @@ public static class OnnxRuntimeInstallerService {
         return NeuralModelCatalog.CreateCustomEntry(
             SanitizeId(baseName),
             baseName.Replace('_', ' '),
-            fileName,
             inferred,
-            fileBytes,
+            fileName,
             expectedSampleRate: 44100,
-            outputStemNames: NeuralModelCatalog.GetDefaultOutputStemNames(inferred));
+            outputStemNames: NeuralModelCatalog.GetDefaultOutputStemNames(inferred),
+            approxSizeMb: fileBytes / (1024f * 1024f));
     }
 
     static CustomOnnxModelMetadata ReadCustomMeta(string metaPath) {

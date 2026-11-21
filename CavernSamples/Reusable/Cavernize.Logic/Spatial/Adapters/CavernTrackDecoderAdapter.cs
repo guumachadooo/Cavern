@@ -119,7 +119,8 @@ public sealed class CavernTrackDecoderAdapter : ISpatialDecoder {
         }
         if (isHoaStream) {
             if (hoaOrder <= 0) {
-                int rawOrder = (int)Math.Floor(Math.Sqrt(Math.Max(1, track.Channels))) - 1;
+                int channelCount = Math.Max(1, renderer != null && renderer.Objects.Count > 0 ? renderer.Objects.Count : descriptors.Count);
+                int rawOrder = (int)Math.Floor(Math.Sqrt(channelCount)) - 1;
                 hoaOrder = Math.Max(1, rawOrder);
             }
             for (int i = 0; i < descriptors.Count; i++) {

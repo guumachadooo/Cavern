@@ -1041,7 +1041,7 @@ public static class StemExtractor {
         StereoStemBuffer bassStem = null;
         if (stems != null) {
             for (int i = 0; i < stems.Length; i++) {
-                if (stems[i] != null && NeuralModelCatalog.ClassifyStemRole(stems[i].Name) == NeuralStemRole.Bass) {
+                if (stems[i] != null && NeuralStemSpatializer.ClassifyStemName(stems[i].Name) == NeuralStemRole.Bass) {
                     bassStem = stems[i];
                     break;
                 }

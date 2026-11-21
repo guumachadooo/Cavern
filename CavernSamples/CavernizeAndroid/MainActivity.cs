@@ -2532,8 +2532,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
         _ = Task.Run(() => {
             try {
                 FileInfo fi = new(sourceKey);
-                Cavern.Neural.NeuralSeparatedTrack playbackTrack = null;
-                Cavern.Neural.NeuralSeparatedTrack dnaTrack = null;
+                Cavernize.Logic.Spatial.NeuralSeparatedTrack playbackTrack = null;
+                Cavernize.Logic.Spatial.NeuralSeparatedTrack dnaTrack = null;
 
                 Cavernize.Logic.Spatial.NeuralPipelineGoal[] playbackGoals = [
                     Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
@@ -2546,7 +2546,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     }
                     string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
                         sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, plan.PlanSignature);
-                    if (neuralTrackCache.TryLoad(cacheKey, out Cavern.Neural.NeuralSeparatedTrack cached)) {
+                    if (neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cached)) {
                         playbackTrack = cached;
                         break;
                     }
@@ -2558,7 +2558,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 if (dnaPlan.IsRunnable) {
                     string dnaCacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
                         sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, dnaPlan.PlanSignature);
-                    if (neuralTrackCache.TryLoad(dnaCacheKey, out Cavern.Neural.NeuralSeparatedTrack cachedDnaTrack)) {
+                    if (neuralTrackCache.TryLoad(dnaCacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedDnaTrack)) {
                         dnaTrack = cachedDnaTrack;
                         if (playbackTrack == null) {
                             playbackTrack = cachedDnaTrack;
@@ -2566,7 +2566,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     }
                 }
 
-                Cavern.Neural.NeuralSeparatedTrack dnaSource = dnaTrack ?? playbackTrack;
+                Cavernize.Logic.Spatial.NeuralSeparatedTrack dnaSource = dnaTrack ?? playbackTrack;
                 string summaryTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
                     ? currentMediaMeta.Title
                     : Path.GetFileNameWithoutExtension(sourceKey);
@@ -2629,7 +2629,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         bool derivedFromTwin = false;
         if (cfg.UseLosslessTwinForKaraoke &&
             activeLosslessTwin != null &&
-            activeLosslessTwin.IsReady &&
+            activeLosslessTwin.HasSyncedLosslessTwin &&
             !string.IsNullOrEmpty(activeLosslessTwin.Metadata?.FilePath) &&
             File.Exists(activeLosslessTwin.Metadata.FilePath)) {
             decodePath = activeLosslessTwin.Metadata.FilePath;
@@ -2665,7 +2665,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     activePath, keyInfo.Length, keyInfo.LastWriteTimeUtc.Ticks, prefSr, plan.PlanSignature);
 
                 // Instant Slot 7B cache hit before decoding PCM
-                if (neuralTrackCache != null && neuralTrackCache.TryLoad(cacheKey, out Cavern.Neural.NeuralSeparatedTrack cachedTrack, ct)) {
+                if (neuralTrackCache != null && neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedTrack, ct)) {
                     Cavern.VocalChain.VocalMixDnaProfile cachedDna = Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(
                         cachedTrack, summaryTitle);
                     if (cachedDna != null && cachedDna.IsExtractedFromSong) {
@@ -2679,7 +2679,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                         neuralPrepProgress = 1.0;
                         neuralPrepStatusText = "";
                         if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna ||
-                            !(playerEngine.NeuralStemStage?.HasPlayableSeparatedStems ?? false)) {
+                            !(playerEngine.NeuralStage?.HasPlayableSeparatedStems ?? false)) {
                             playerEngine.BindSeparatedNeuralTrack(cachedTrack);
                         }
                         ApplyExtractedSongDnaOnUiThread(cachedDna);
@@ -2700,7 +2700,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 }
 
                 ct.ThrowIfCancellationRequested();
-                (Cavern.Neural.NeuralSeparatedTrack separated, float rtf, bool fromCache) = neuralOrchestrator.ExecuteTrackPipeline(
+                (Cavernize.Logic.Spatial.NeuralSeparatedTrack separated, float rtf, bool fromCache) = neuralOrchestrator.ExecuteTrackPipeline(
                     sourceTrackKey: activePath,
                     fileSizeBytes: keyInfo.Length,
                     lastModifiedTicks: keyInfo.LastWriteTimeUtc.Ticks,
@@ -2734,7 +2734,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     neuralPrepProgress = 1.0;
                     neuralPrepStatusText = "";
                     if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna ||
-                        !(playerEngine.NeuralStemStage?.HasPlayableSeparatedStems ?? false)) {
+                        !(playerEngine.NeuralStage?.HasPlayableSeparatedStems ?? false)) {
                         playerEngine.BindSeparatedNeuralTrack(separated);
                     }
                     ApplyExtractedSongDnaOnUiThread(extractedDna);
