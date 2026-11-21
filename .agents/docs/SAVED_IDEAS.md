@@ -1,15 +1,12 @@
-# Saved Ideas & Archived Effects (`SAVED_IDEAS.md`)
+# Saved Ideas & Prototypes (`SAVED_IDEAS.md`)
 
-> This file stores promising visual ideas, formulas, animations, and prototypes created during CavernizeAndroid development that were shelved temporarily to prioritize other goals or stay faithful to a native OS specification (such as stock One UI 9). Check here whenever the user asks to revisit archived effects.
+> Deferred ideas/designs/algos/snippets for later revisit.
+> STYLE|lossless symbolic telegraphic EN ONLY (`!articles/copulas/filler`, ops `-> | && || !`, verbatim `path:sym`/snippets).
+<!-- FORMAT: - IDEA|<name> -> <why deferred> | <key mechanism/snippet> -->
 
 ---
 
-## 1. Elastic / Concave Slider Wall Deformation (`EvalWallRightX`)
-- **Origin:** `v2.5.16` in `CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs` (`OneUiSeekBar`).
-- **Behavior:** When a capsule slider's filled track approaches the left wall (`0 < fillRight < h`), its right edge transitions smoothly through a progressive superellipse (`p = 2.0 -> 3.4`), bends into a subtle inward concave dent in the middle while preserving rounded top/bottom shoulders, and finally flattens vertically at zero.
-- **Reason archived:** Stock One UI 9 (`SecRoundedCornerSeekBarDrawable` / `SecBrightnessSliderView`) simply clips a rounded rectangle inside the outer capsule `clipPath` without concave wall bending. The user requested removing it from the main slider for exact One UI 9 parity, while preserving the snippet for potential future reuse (noting that a softer dent such as `dent = -0.08f` instead of `-0.18f` may look even cleaner).
-
-### Reference C# Implementation
+- IDEA|`EvalWallRightX` (`v2.5.16` `OneUiTheme.cs:OneUiSeekBar`) -> elastic concave wall deformation when capsule progress `0 < fillRight < h` (`p=2.0->3.4` superellipse + inward dent `-0.18f` / subtler `-0.08f`) -> deferred for exact stock One UI 9 parity (`SecRoundedCornerSeekBarDrawable` uses outer semicircular `clipPath` over `drawRoundRect(..., fillRight * 0.5f)` w/o concave bend).
 ```csharp
 /// <summary>
 /// Original concave deformation (dent = -0.18f) and subtler suggested tuning (dent = -0.07f..-0.09f)

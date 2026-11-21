@@ -25,13 +25,36 @@
     ".resx",
     ".axml",
     ".yml",
-    ".yaml"
+    ".yaml",
+    ".c",
+    ".cpp",
+    ".h"
   ],
   "build_extensions": [
     ".cs",
-    ".csproj"
+    ".csproj",
+    ".c",
+    ".cpp",
+    ".h"
   ],
   "extra_requests_file": ".agents/docs/EXTRA_REQUESTS.md",
+  "archive_docs": [
+    ".agents/docs/archive/SPATIAL_ROADMAP.md",
+    ".agents/docs/archive/PROJECT_HISTORY_ARCHIVE.md"
+  ],
+  "wiring_gate": {
+    "enabled": true,
+    "severity": "warn",
+    "library_prefixes": [
+      "Cavern/",
+      "Cavern.Format/",
+      "CavernSamples/Reusable/Cavernize.Logic/"
+    ],
+    "settings_files": [
+      "CavernSamples/CavernizeAndroid/Services/AppSettingsStore.cs"
+    ],
+    "check_identical_branches": true
+  },
   "session": {
     "version_files": [
       {
@@ -88,7 +111,7 @@
       "must_contain_regex": "android:targetSdkVersion\\s*=\\s*\"28\"",
       "decision": "force_ask",
       "verify_severity": "fail",
-      "reason": "PROJECT SAFETY GUARD: AndroidManifest.xml must keep android:targetSdkVersion=\"28\" (SELinux untrusted_app_27 domain) so static binaries (ffmpeg/truehdd) can execute inside FilesDir. Confirm manually only if intentional."
+      "reason": "PROJECT SAFETY GUARD: AndroidManifest.xml must keep android:targetSdkVersion=\"28\" until W23 migrates native binaries to NativeLibraryDir (SELinux untrusted_app_27 domain for FilesDir/bin)."
     }
   ],
   "command_guards": [
@@ -99,7 +122,7 @@
       },
       "match_regex": "^(?:/root/\\.dotnet/)?dotnet\\s+(?:build|publish|test|pack|restore|run)\\b",
       "forbid_args_regex": "(?:CavernizeAndroid\\.csproj|net11\\.0-android|InstallAndroidDependencies)",
-      "reason": "Local Termux ARM64 PRoot lacks the Android SDK / `net11.0-android` workload. Validate shared logic locally by building `CavernSamples/Reusable/Cavernize.Logic/Cavernize.Logic.csproj` (or `Cavern`/`Cavern.Format`), and build the signed APK via GitHub Actions (`.github/workflows/BuildAndroid.yml`)."
+      "reason": "Local Termux ARM64 PRoot lacks the Android SDK / `net11.0-android` workload. Validate shared logic locally by building `CavernSamples/Reusable/Cavernize.Logic/Cavernize.Logic.csproj` (or `Cavern`/`Cavern.Format`), type-check `CavernizeAndroid` via `python3 .agents/scripts/check_android_cs.py`, and build the signed APK via `.github/workflows/BuildAndroid.yml`."
     },
     {
       "conditions": {
@@ -115,18 +138,24 @@
   ],
   "diff_rules": [
     {
-      "path_prefix": "Cavern.Format/",
+      "path_prefixes": [
+        "Cavern/",
+        "Cavern.Format/"
+      ],
       "path_regex": "\\.cs$",
       "forbid_regex": "\\bis\\s+not\\b",
       "severity": "fail",
-      "message": "C# 9+ `is not` is forbidden in `Cavern.Format` (targets netstandard2.1 / C# 8.0)."
+      "message": "C# 9+ `is not` is forbidden in `Cavern/` and `Cavern.Format/` (target netstandard2.1 / C# 8.0)."
     },
     {
-      "path_prefix": "Cavern.Format/",
+      "path_prefixes": [
+        "Cavern/",
+        "Cavern.Format/"
+      ],
       "path_regex": "\\.cs$",
       "forbid_regex": "^\\s*namespace\\s+[A-Za-z0-9_.]+\\s*;\\s*$",
       "severity": "fail",
-      "message": "File-scoped namespace is C# 10+ and forbidden in `Cavern.Format` (C# 8.0)."
+      "message": "File-scoped namespace is C# 10+ and forbidden in `Cavern/` and `Cavern.Format/` (C# 8.0)."
     },
     {
       "path_prefix": "CavernSamples/CavernizeAndroid/",
@@ -161,7 +190,14 @@
       "target_section_regex": "static\\s+void\\s+ApplyPortuguese\\b(.*?)(?=^\\s*static\\s+void\\s+Apply|\\Z)",
       "target_key_template": "d[\"{key}\"]",
       "severity": "fail",
-      "message": "Added English key `[\"{key}\"]` is missing in `ApplyPortuguese`."
+      "message": "Added English key `[\"{key}\"]` is missing in `ApplyPortuguese`.",
+      "source_section_regex": "static\\s+Dictionary<string,\\s*string>\\s+CreateEnglish\\(\\)\\s*=>\\s*new\\(\\)\\s*\\{(.*?)(?=^\\s*\\};)",
+      "ref_regex": "(?:\\bAndroidStrings\\.Active|\\bS)\\[\"([^\"]+)\"\\]",
+      "ref_path_prefixes": [
+        "CavernSamples/CavernizeAndroid/"
+      ],
+      "ref_severity": "fail",
+      "ref_message": "Referenced UI string key `{key}` missing from `{table}`."
     }
   ],
   "build_rules": [
@@ -178,6 +214,7 @@
         ".csproj"
       ],
       "run_on_force": false,
+      "continue_on_error": true,
       "command": "/root/.dotnet/dotnet build Cavern.Format/Cavern.Format.csproj -c Release -m:1 /p:UseSharedCompilation=false",
       "env": {
         "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT": "1",
@@ -198,6 +235,7 @@
         ".csproj"
       ],
       "run_on_force": false,
+      "continue_on_error": true,
       "command": "/root/.dotnet/dotnet build Cavern/Cavern.csproj -c Release -m:1 /p:UseSharedCompilation=false",
       "env": {
         "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT": "1",
@@ -220,6 +258,7 @@
         ".csproj"
       ],
       "run_on_force": true,
+      "continue_on_error": true,
       "command": "/root/.dotnet/dotnet build CavernSamples/Reusable/Cavernize.Logic/Cavernize.Logic.csproj -c Release -m:1 /p:UseSharedCompilation=false",
       "env": {
         "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT": "1",
@@ -239,22 +278,91 @@
         ".cs"
       ],
       "run_on_force": true,
+      "on_upstream_fail_command": "python3 .agents/scripts/check_android_cs.py",
+      "trigger_on_upstream_fail": true,
       "command": "python3 .agents/scripts/check_android_cs.py"
+    },
+    {
+      "label": "Native cavernize_proaudio C11 unit tests",
+      "trigger_path_prefixes": [
+        "CavernSamples/CavernizeAndroid/Native/"
+      ],
+      "trigger_extensions": [
+        ".c",
+        ".cpp",
+        ".h"
+      ],
+      "run_on_force": false,
+      "command": "if command -v gcc >/dev/null 2>&1; then gcc -std=c11 -O2 -Wall -Wextra -Werror -ICavernSamples/CavernizeAndroid/Native/cavernize_proaudio CavernSamples/CavernizeAndroid/Native/cavernize_proaudio/cavernize_uac2_core.c CavernSamples/CavernizeAndroid/Native/cavernize_proaudio/test_proaudio_native.c -lm -o /tmp/test_proaudio_native && /tmp/test_proaudio_native && rm -f /tmp/test_proaudio_native; fi"
     }
   ],
   "domains": {
     "ui-oneui9": {
       "module_id": "MOD-UI-ONEUI9",
       "module_title": "One UI 9 Interface, Canvas & Localization",
+      "lens": "Principal Mobile Product Designer + IA + Samsung One UI 9 Interaction Designer (Progressive Disclosure, single primary CTA, zero jargon)",
       "keywords": [
-        "one ui", "oneui", "ui", "layout", "botão", "botoes", "botões", "button*",
-        "aba", "abas", "tab", "tabs", "tela", "screen*", "now playing", "seekbar",
-        "slider*", "switch*", "modal", "dialog*", "ícone*", "icone*", "icon*",
-        "fonte*", "font*", "lyrics", "letra*", "animaç*", "animac*", "animat*",
-        "canvas", "3d room", "roomsimulator*", "tema", "temas", "theme*",
-        "cor", "cores", "color*", "traduç*", "traduc*", "pt-br", "androidstrings*",
-        "clipping", "hud", "mini-player", "miniplayer", "waveform", "mainactivity*",
-        "card", "pill*", "bento"
+        "one ui",
+        "oneui",
+        "ui",
+        "layout",
+        "botão",
+        "botoes",
+        "botões",
+        "button*",
+        "aba",
+        "abas",
+        "tab",
+        "tabs",
+        "tela",
+        "screen*",
+        "now playing",
+        "seekbar",
+        "slider*",
+        "switch*",
+        "modal",
+        "dialog*",
+        "ícone*",
+        "icone*",
+        "icon*",
+        "fonte*",
+        "font*",
+        "lyrics",
+        "letra*",
+        "animaç*",
+        "animac*",
+        "animat*",
+        "canvas",
+        "3d room",
+        "roomsimulator*",
+        "tema",
+        "temas",
+        "theme*",
+        "cor",
+        "cores",
+        "color*",
+        "traduç*",
+        "traduc*",
+        "pt-br",
+        "androidstrings*",
+        "clipping",
+        "hud",
+        "mini-player",
+        "miniplayer",
+        "waveform",
+        "mainactivity*",
+        "card",
+        "pill*",
+        "bento",
+        "settings",
+        "configura*",
+        "studio",
+        "stems",
+        "l10n",
+        "rebrand*",
+        "insets",
+        "edge-to-edge",
+        "predictive back"
       ],
       "checklist": [
         "Consult `.agents/docs/ONEUI9_REFERENCE.md` for native One UI 9 / Apple Music / Samsung Video measurements.",
@@ -266,56 +374,227 @@
     "dsp-format": {
       "module_id": "MOD-DSP-FORMAT",
       "module_title": "Cavern Core / Format & Spatial DSP",
+      "lens": "Acoustic Physicist + Real-Time Spatial DSP Architect (Zero Fake DSP, pure ISO/ITU/EBU physics, strict C# 8.0, zero-GC audio thread)",
       "keywords": [
-        "cavern.format", "dsp", "spatial", "espacial", "atmos", "truehd", "damf",
-        "mlp", "flac", "mkv", "matroska", "mp4", "wav", "riff", "codec*",
-        "decoder*", "encoder*", "render*", "upmix*", "matrix", "hrtf", "hrir",
-        "quickeq", "stem", "stems", "channel*", "canal", "canais", "objeto*",
-        "object*", "stream", "streams", "streaming", "seek*", "merge", "juntar",
-        "demux*", "remux*", "realtimeplayerengine*", "cavernize.logic"
+        "cavern.format",
+        "dsp",
+        "spatial",
+        "espacial",
+        "atmos",
+        "truehd",
+        "damf",
+        "mlp",
+        "flac",
+        "mkv",
+        "matroska",
+        "mp4",
+        "wav",
+        "riff",
+        "codec*",
+        "decoder*",
+        "encoder*",
+        "render*",
+        "upmix*",
+        "matrix",
+        "hrtf",
+        "hrir",
+        "quickeq",
+        "stem",
+        "stems",
+        "channel*",
+        "canal",
+        "canais",
+        "objeto*",
+        "object*",
+        "stream",
+        "streams",
+        "streaming",
+        "seek*",
+        "merge",
+        "juntar",
+        "demux*",
+        "remux*",
+        "realtimeplayerengine*",
+        "cavernize.logic",
+        "onnx",
+        "mvsep",
+        "karaoke",
+        "lgsr",
+        "autoeq",
+        "hptf",
+        "magls",
+        "sofa",
+        "iamf",
+        "hoa",
+        "adm",
+        "bwf",
+        "iso 226",
+        "bs.1770",
+        "bs1770",
+        "dialog",
+        "limiter",
+        "vocal*",
+        "voiceprint",
+        "dna",
+        "ism",
+        "itd",
+        "em-mwf",
+        "stft",
+        "virtualizer",
+        "6dof",
+        "x-ray"
       ],
       "checklist": [
-        "`Cavern.Format` targets `netstandard2.1` (C# 8.0 ONLY: avoid `is not`, file-scoped namespaces, target-typed `new()`).",
+        "`Cavern/` & `Cavern.Format/` target `netstandard2.1` (strict C# 8.0 ONLY: avoid `is not`, file-scoped namespaces, target-typed `new()`).",
+        "Zero Fake DSP: NO invented EQ curves/reverb/boosts; pure physics & ISO/ITU/EBU standards only.",
         "Preserve `Seek(0)` stream invariants, `MatroskaTree` endPosition guards, `FlacAudioConverter` fallback, and original features."
       ]
     },
     "media-native": {
       "module_id": "MOD-MEDIA-NATIVE",
-      "module_title": "Native Decoders, Services & SELinux",
+      "module_title": "Native Decoders, Pro-Audio, Services & Android Platform",
+      "lens": "Android NDK/Audio Systems Engineer (W^X NativeLibraryDir pre/post W23, 16KB ELF, API 35/36 compliance, lock-free AAudio/libusb)",
       "keywords": [
-        "ffmpeg", "truehdd", "selinux", "targetsdk*", "filesdir", "ndk",
-        "binário*", "binario*", "binary", "permiss*", "notificaç*", "notificac*",
-        "notification*", "mediasession", "foreground", "applogger", "crash*",
-        "bitmap*", "recycle*", "dispose*", "safepipe*", "thread*", "deadlock*",
-        "race condition*", "audiooutput*", "audiotrack*", "androidmanifest*"
+        "ffmpeg",
+        "truehdd",
+        "selinux",
+        "targetsdk*",
+        "filesdir",
+        "ndk",
+        "binário*",
+        "binario*",
+        "binary",
+        "permiss*",
+        "notificaç*",
+        "notificac*",
+        "notification*",
+        "mediasession",
+        "foreground",
+        "applogger",
+        "crash*",
+        "bitmap*",
+        "recycle*",
+        "dispose*",
+        "safepipe*",
+        "thread*",
+        "deadlock*",
+        "race condition*",
+        "audiooutput*",
+        "audiotrack*",
+        "androidmanifest*",
+        "scarlett*",
+        "libusb",
+        "aaudio",
+        "proaudio",
+        "pro-audio",
+        "uac2",
+        "api 35",
+        "api 36",
+        "w^x",
+        "wx",
+        "nativelibrarydir",
+        "16 kb",
+        "16kb",
+        "elf",
+        "onnxruntime",
+        "head-track*",
+        "headtrack*",
+        "galaxy buds",
+        "ble",
+        "osc",
+        "imu",
+        "ahrs",
+        "scoped storage",
+        "saf",
+        "windowinsets",
+        "onbackinvoked",
+        "receiver*",
+        "pendingintent"
       ],
       "checklist": [
-        "Keep `android:targetSdkVersion=\"28\"` untouched in `AndroidManifest.xml` (`untrusted_app_27` SELinux for `ffmpeg`/`truehdd`).",
-        "Check `SafePipeHandle` / stream disposal, concurrent bitmap `.Recycle()` safety, and `AppLogger` error diagnostics."
+        "Keep `android:targetSdkVersion=\"28\"` untouched in `AndroidManifest.xml` UNTIL W23 migrates native binaries to `NativeLibraryDir`.",
+        "Check `SafePipeHandle` / stream disposal, lock-free audio/USB lifecycles, bitmap `.Recycle()` safety, and `AppLogger` error diagnostics."
       ]
     },
     "player-library": {
       "module_id": "MOD-PLAYER-LIB",
       "module_title": "Media Library, Tags & Online Scrapers",
+      "lens": "Media Library & Metadata Architect (Smart Clean v2 evidence-based tags, twin matching, async caching, zero UI stalls)",
       "keywords": [
-        "biblioteca", "library", "álbum", "album", "álbuns", "artista*", "artist*",
-        "faixa*", "track*", "tag", "tags", "audiotag*", "metadata", "capa*", "cover*",
-        "itunes", "lrclib", "opensubtitles", "podnapisi", "legenda*", "subtitle*",
-        "explorer", "pasta*", "folder*", "saf", "mediastore", "fila", "queue",
-        "variante*", "variant*", "lyricsservice*", "onlinemetadata*", "cache*"
+        "biblioteca",
+        "library",
+        "álbum",
+        "album",
+        "álbuns",
+        "artista*",
+        "artist*",
+        "faixa*",
+        "track*",
+        "tag",
+        "tags",
+        "audiotag*",
+        "metadata",
+        "capa*",
+        "cover*",
+        "itunes",
+        "lrclib",
+        "opensubtitles",
+        "podnapisi",
+        "legenda*",
+        "subtitle*",
+        "explorer",
+        "pasta*",
+        "folder*",
+        "saf",
+        "mediastore",
+        "fila",
+        "queue",
+        "variante*",
+        "variant*",
+        "lyricsservice*",
+        "onlinemetadata*",
+        "cache*",
+        "smart clean",
+        "twin",
+        "lossless twin",
+        "neural track",
+        "vocal dna",
+        "mediametadata"
       ],
       "checklist": [
-        "Keep `MediaStore` + local folder scanning, filter-accurate track counts, and non-blocking background caching safe."
+        "Keep `MediaStore` + local folder scanning, evidence-based tags, filter-accurate counts, and non-blocking background caching safe."
       ]
     },
     "build-deliver": {
       "module_id": "MOD-SHIP",
       "module_title": "Version Sync, Commit, CI & APK Delivery",
+      "lens": "Release & CI Reliability Engineer (synced versions, zero-regression 4-layer gate, clean EXTRA_REQUESTS.md, reproducible signed APK)",
       "is_ship": true,
       "keywords": [
-        "build", "builds", "compil*", "apk", "release*", "github actions",
-        "buildandroid*", "ota", "appupdate*", "versão", "versao", "version*",
-        "commit", "push", "deliver*", "entreg*", "sdcard/download"
+        "build",
+        "builds",
+        "compil*",
+        "apk",
+        "release*",
+        "github actions",
+        "buildandroid*",
+        "ota",
+        "appupdate*",
+        "versão",
+        "versao",
+        "version*",
+        "commit",
+        "push",
+        "deliver*",
+        "entreg*",
+        "sdcard/download",
+        "rebrand*",
+        "w28",
+        "w29",
+        "signing",
+        "keystore",
+        "ci",
+        "workflow"
       ],
       "checklist": [
         "Read `.agents/docs/EXTRA_REQUESTS.md` FIRST; stop & implement if any pending items exist.",
@@ -324,5 +603,6 @@
         "Monitor GitHub Actions to success and deliver signed APK to workspace & `/sdcard/Download/Cavernize-Android.apk`."
       ]
     }
-  }
+  },
+  "docs_format_version": 1
 }
