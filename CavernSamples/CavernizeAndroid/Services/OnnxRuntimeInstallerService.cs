@@ -1,12 +1,9 @@
-using System.IO.Compression;
 using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text.Json;
-using System.Xml.Linq;
 
 using Android.Content;
 using Android.OS;
-using Android.Systems;
 
 using Cavernize.Logic.Spatial;
 
@@ -33,15 +30,17 @@ public sealed class OnnxRuntimeStatusResult {
 }
 
 /// <summary>
-/// Manages on-demand download, extraction, update checking, custom <c>.onnx</c> registration, and storage hygiene
-/// for the native ARM64/x64 ONNX Runtime shared libraries (<c>FilesDir/bin/onnxruntime/libonnxruntime.so</c> +
-/// optional Snapdragon QNN HTP), C API header (<c>onnxruntime_c_api.h</c>), lazy ONNX audio models
-/// (<c>FilesDir/neural_models/</c>), and temporary inference cache (<c>CacheDir/neural_work/</c>).
+/// Resolves the W^X-compliant native ARM64 ONNX Runtime shared libraries bundled inside
+/// <see cref="Android.Content.PM.ApplicationInfo.NativeLibraryDir"/> (<c>libonnxruntime.so</c> + optional companion
+/// <c>.so</c>s), reads the matching bundled C API header (<c>Assets/onnxruntime/onnxruntime_c_api.h</c>), and manages
+/// on-demand download, registration, and storage hygiene for ONNX audio models (<c>FilesDir/neural_models/</c>)
+/// and temporary inference cache (<c>CacheDir/neural_work/</c>).
 /// </summary>
 public static class OnnxRuntimeInstallerService {
-    const string MavenBaseUrl = "https://repo1.maven.org/maven2/com/microsoft/onnxruntime";
     const string StandardArtifactId = "onnxruntime-android";
     const string QnnArtifactId = "onnxruntime-android-qnn";
+    const string BundledHeaderAssetPath = "onnxruntime/onnxruntime_c_api.h";
+    const string BundledVersionAssetPath = "onnxruntime/version.txt";
     const string CustomMetaSuffix = ".meta.json";
 
     sealed class CustomOnnxModelMetadata {
@@ -82,11 +81,13 @@ public static class OnnxRuntimeInstallerService {
         return client;
     }
 
-    public static string GetRuntimeDir(Context context) {
-        string dir = Path.Combine(context.FilesDir.AbsolutePath, "bin", "onnxruntime");
-        Directory.CreateDirectory(dir);
-        return dir;
-    }
+    public static string GetNativeLibraryDir(Context context) =>
+        context?.ApplicationInfo?.NativeLibraryDir
+        ?? Android.App.Application.Context?.ApplicationInfo?.NativeLibraryDir
+        ?? "";
+
+    public static string GetRuntimeDir(Context context) =>
+        GetNativeLibraryDir(context);
 
     public static string GetModelsDir(Context context) {
         string dir = Path.Combine(context.FilesDir.AbsolutePath, "neural_models");
@@ -100,23 +101,33 @@ public static class OnnxRuntimeInstallerService {
         return dir;
     }
 
-    public static string GetManagedLibraryPath(Context context) =>
-        Path.Combine(GetRuntimeDir(context), "libonnxruntime.so");
+    public static string GetManagedLibraryPath(Context context) {
+        string dir = GetRuntimeDir(context);
+        return string.IsNullOrEmpty(dir) ? "" : Path.Combine(dir, "libonnxruntime.so");
+    }
 
     public static string GetManagedHeaderPath(Context context) =>
-        Path.Combine(GetRuntimeDir(context), "onnxruntime_c_api.h");
+        BundledHeaderAssetPath;
 
-    public static string GetManagedQnnHtpPath(Context context) =>
-        Path.Combine(GetRuntimeDir(context), "libQnnHtp.so");
+    public static string GetManagedQnnHtpPath(Context context) {
+        string dir = GetRuntimeDir(context);
+        return string.IsNullOrEmpty(dir) ? "" : Path.Combine(dir, "libQnnHtp.so");
+    }
+
+    public static string ReadHeaderText(Context context) =>
+        ReadAssetText(context, BundledHeaderAssetPath);
+
+    public static string ReadBundledVersionText(Context context) =>
+        ReadAssetText(context, BundledVersionAssetPath).Trim();
 
     public static bool IsRuntimeInstalled(Context context) {
         string lib = GetManagedLibraryPath(context);
-        return File.Exists(lib) && new FileInfo(lib).Length > 100_000;
+        return !string.IsNullOrEmpty(lib) && File.Exists(lib) && new FileInfo(lib).Length > 100_000;
     }
 
     public static bool IsQnnAvailableOnDisk(Context context) {
         string qnn = GetManagedQnnHtpPath(context);
-        return File.Exists(qnn) && new FileInfo(qnn).Length > 100_000;
+        return !string.IsNullOrEmpty(qnn) && File.Exists(qnn) && new FileInfo(qnn).Length > 100_000;
     }
 
     /// <summary>
@@ -154,149 +165,67 @@ public static class OnnxRuntimeInstallerService {
         return "arm64-v8a";
     }
 
-    public static async Task<OnnxRuntimeStatusResult> CheckStatusAsync(
+    public static Task<OnnxRuntimeStatusResult> CheckStatusAsync(
         Context context,
         AppSettingsStore store,
         bool preferQnn = false,
         CancellationToken token = default) {
+        token.ThrowIfCancellationRequested();
+        CleanupLegacyRuntimeDir(context);
+
         bool installed = IsRuntimeInstalled(context);
         bool qnnOnDisk = IsQnnAvailableOnDisk(context);
         bool isQcom = IsQualcommSnapdragonDevice();
-        string installedVer = store?.InstalledOnnxRuntimeVersion ?? "";
-        string artifact = (preferQnn && isQcom) ? QnnArtifactId : StandardArtifactId;
-        string remoteVer = "";
-        string dlUrl = "";
-
-        try {
-            remoteVer = await FetchLatestMavenReleaseAsync(artifact, token).ConfigureAwait(false);
-            if (string.IsNullOrEmpty(remoteVer) && artifact == QnnArtifactId) {
-                artifact = StandardArtifactId;
-                remoteVer = await FetchLatestMavenReleaseAsync(artifact, token).ConfigureAwait(false);
+        string bundledVer = ReadBundledVersionText(context);
+        string installedVer = !string.IsNullOrWhiteSpace(bundledVer)
+            ? bundledVer
+            : (store?.InstalledOnnxRuntimeVersion ?? "");
+        if (installed && store != null) {
+            if (!string.IsNullOrWhiteSpace(installedVer)) {
+                store.InstalledOnnxRuntimeVersion = installedVer;
             }
-            if (!string.IsNullOrEmpty(remoteVer)) {
-                dlUrl = $"{MavenBaseUrl}/{artifact}/{remoteVer}/{artifact}-{remoteVer}.aar";
-            }
-        } catch {
-            if (!installed) {
-                throw;
-            }
+            store.OnnxRuntimeQnnInstalled = qnnOnDisk;
         }
 
-        bool updateAvail = installed &&
-            !string.IsNullOrEmpty(remoteVer) &&
-            !string.IsNullOrEmpty(dlUrl) &&
-            !string.Equals(installedVer.Trim(), remoteVer.Trim(), StringComparison.OrdinalIgnoreCase);
-
-        return new OnnxRuntimeStatusResult {
+        string headerText = ReadHeaderText(context);
+        return Task.FromResult(new OnnxRuntimeStatusResult {
             IsInstalled = installed,
             LocalLibPath = installed ? GetManagedLibraryPath(context) : "",
-            HeaderPath = File.Exists(GetManagedHeaderPath(context)) ? GetManagedHeaderPath(context) : "",
+            HeaderPath = !string.IsNullOrWhiteSpace(headerText) ? BundledHeaderAssetPath : "",
             InstalledVersion = installedVer,
-            RemoteVersion = remoteVer,
-            IsUpdateAvailable = updateAvail,
+            RemoteVersion = installedVer,
+            IsUpdateAvailable = false,
             IsQnnPackageInstalled = qnnOnDisk,
             IsQualcommDevice = isQcom,
-            DownloadUrl = dlUrl,
-            ArtifactId = artifact
-        };
+            DownloadUrl = "",
+            ArtifactId = (preferQnn && qnnOnDisk) ? QnnArtifactId : StandardArtifactId
+        });
     }
 
-    public static async Task<string> DownloadAndInstallRuntimeAsync(
+    public static Task<string> DownloadAndInstallRuntimeAsync(
         Context context,
         AppSettingsStore store,
         OnnxRuntimeStatusResult status,
         bool preferQnn,
         Action<double, string> onProgress,
         CancellationToken token = default) {
-        if (status == null || string.IsNullOrWhiteSpace(status.DownloadUrl)) {
-            status = await CheckStatusAsync(context, store, preferQnn, token).ConfigureAwait(false);
-        }
-        if (string.IsNullOrWhiteSpace(status.DownloadUrl)) {
-            throw new InvalidOperationException("No compatible ONNX Runtime Android AAR release found on Maven Central.");
-        }
+        token.ThrowIfCancellationRequested();
+        CleanupLegacyRuntimeDir(context);
 
-        string runtimeDir = GetRuntimeDir(context);
-        string aarTemp = Path.Combine(GetTempWorkDir(context), $"ort_{Guid.NewGuid():N}.aar.part");
-        string abi = GetPrimaryAndroidAbi();
-        string jniPrefix = $"jni/{abi}/";
-
-        try {
-            using HttpClient dlClient = CreateHttpClient(TimeSpan.FromMinutes(6));
-
-            using HttpResponseMessage resp = await dlClient.GetAsync(status.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
-            resp.EnsureSuccessStatusCode();
-
-            long totalBytes = resp.Content.Headers.ContentLength ?? 0;
-            await using (Stream netStream = await resp.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
-            await using (FileStream outStream = File.Create(aarTemp)) {
-                byte[] buf = new byte[65536];
-                long received = 0;
-                long nextUi = 0;
-                int read;
-                while ((read = await netStream.ReadAsync(buf, token).ConfigureAwait(false)) > 0) {
-                    await outStream.WriteAsync(buf.AsMemory(0, read), token).ConfigureAwait(false);
-                    received += read;
-                    if (received >= nextUi || (totalBytes > 0 && received >= totalBytes)) {
-                        double frac = totalBytes > 0 ? Math.Clamp(received / (double)totalBytes * 0.85, 0, 0.85) : 0.35;
-                        double rxMb = received / (1024.0 * 1024.0);
-                        double totMb = totalBytes / (1024.0 * 1024.0);
-                        string msg = totalBytes > 0
-                            ? $"ONNX Runtime: {rxMb:0.0} / {totMb:0.0} MB ({frac / 0.85:0%})"
-                            : $"ONNX Runtime: {rxMb:0.0} MB";
-                        onProgress?.Invoke(frac, msg);
-                        nextUi = received + 128_000;
-                    }
-                }
-            }
-
-            onProgress?.Invoke(0.90, AndroidStrings.Active["NeuralExtractingLibs"]);
-            bool extractedMainLib = false;
-            bool extractedQnn = false;
-
-            using (ZipArchive zip = ZipFile.OpenRead(aarTemp)) {
-                foreach (ZipArchiveEntry entry in zip.Entries) {
-                    token.ThrowIfCancellationRequested();
-                    string fullName = entry.FullName.Replace('\\', '/');
-                    if (fullName.StartsWith(jniPrefix, StringComparison.OrdinalIgnoreCase) &&
-                        fullName.EndsWith(".so", StringComparison.OrdinalIgnoreCase)) {
-                        string fileName = Path.GetFileName(fullName);
-                        if (string.IsNullOrEmpty(fileName)) {
-                            continue;
-                        }
-                        string dest = Path.Combine(runtimeDir, fileName);
-                        entry.ExtractToFile(dest, overwrite: true);
-                        EnsureExecutable(dest);
-                        if (fileName.Equals("libonnxruntime.so", StringComparison.OrdinalIgnoreCase)) {
-                            extractedMainLib = true;
-                        } else if (fileName.Contains("QnnHtp", StringComparison.OrdinalIgnoreCase)) {
-                            extractedQnn = true;
-                        }
-                    } else if (fullName.EndsWith("/onnxruntime_c_api.h", StringComparison.OrdinalIgnoreCase) ||
-                               fullName.Equals("headers/onnxruntime_c_api.h", StringComparison.OrdinalIgnoreCase)) {
-                        string destHeader = GetManagedHeaderPath(context);
-                        entry.ExtractToFile(destHeader, overwrite: true);
-                    } else if (fullName.Equals("LICENSE", StringComparison.OrdinalIgnoreCase) ||
-                               fullName.EndsWith("/LICENSE", StringComparison.OrdinalIgnoreCase) ||
-                               fullName.EndsWith("LICENSE.txt", StringComparison.OrdinalIgnoreCase)) {
-                        entry.ExtractToFile(Path.Combine(runtimeDir, "LICENSE.txt"), overwrite: true);
-                    }
-                }
-            }
-
-            if (!extractedMainLib) {
-                throw new FileNotFoundException($"AAR did not contain {jniPrefix}libonnxruntime.so.");
-            }
-
+        if (IsRuntimeInstalled(context)) {
+            string ver = ReadBundledVersionText(context);
             if (store != null) {
-                store.InstalledOnnxRuntimeVersion = status.RemoteVersion;
-                store.OnnxRuntimeQnnInstalled = extractedQnn;
+                if (!string.IsNullOrWhiteSpace(ver)) {
+                    store.InstalledOnnxRuntimeVersion = ver;
+                }
+                store.OnnxRuntimeQnnInstalled = IsQnnAvailableOnDisk(context);
             }
-            AppLogger.Info($"Installed ONNX Runtime v{status.RemoteVersion} ({abi}, QNN={extractedQnn}) to {runtimeDir}");
-            onProgress?.Invoke(1.0, $"ONNX Runtime v{status.RemoteVersion} Ready");
-            return GetManagedLibraryPath(context);
-        } finally {
-            try { if (File.Exists(aarTemp)) File.Delete(aarTemp); } catch { }
+            onProgress?.Invoke(1.0, string.IsNullOrEmpty(ver) ? "ONNX Runtime Ready" : $"ONNX Runtime v{ver} Ready");
+            return Task.FromResult(GetManagedLibraryPath(context));
         }
+
+        throw new PlatformNotSupportedException(
+            "ONNX Runtime is bundled inside APK NativeLibraryDir (W^X enforced on Android 10+). Runtime native library downloads to FilesDir/bin are disabled.");
     }
 
     /// <summary>
@@ -589,7 +518,14 @@ public static class OnnxRuntimeInstallerService {
         if (context == null) {
             return 0;
         }
-        return SumDirBytes(GetRuntimeDir(context)) + SumDirBytes(GetModelsDir(context)) + SumDirBytes(GetTempWorkDir(context));
+        long runtimeBytes = 0;
+        try {
+            string libPath = GetManagedLibraryPath(context);
+            if (!string.IsNullOrEmpty(libPath) && File.Exists(libPath)) {
+                runtimeBytes = new FileInfo(libPath).Length;
+            }
+        } catch { }
+        return runtimeBytes + SumDirBytes(GetModelsDir(context)) + SumDirBytes(GetTempWorkDir(context));
     }
 
     public static void CleanupTempCache(Context context) {
@@ -700,15 +636,33 @@ public static class OnnxRuntimeInstallerService {
         return NeuralModelTask.StemSeparation4;
     }
 
-    static async Task<string> FetchLatestMavenReleaseAsync(string artifactId, CancellationToken token) {
-        string metaUrl = $"{MavenBaseUrl}/{artifactId}/maven-metadata.xml";
-        string xml = await http.GetStringAsync(metaUrl, token).ConfigureAwait(false);
-        XDocument doc = XDocument.Parse(xml);
-        string release = doc.Descendants("release").FirstOrDefault()?.Value?.Trim();
-        if (!string.IsNullOrEmpty(release)) {
-            return release;
+    static void CleanupLegacyRuntimeDir(Context context) {
+        try {
+            string filesDir = context?.FilesDir?.AbsolutePath;
+            if (string.IsNullOrEmpty(filesDir)) {
+                return;
+            }
+            string legacyOrtDir = Path.Combine(filesDir, "bin", "onnxruntime");
+            if (Directory.Exists(legacyOrtDir)) {
+                Directory.Delete(legacyOrtDir, recursive: true);
+            }
+        } catch {
+            // Best-effort legacy cleanup
         }
-        return doc.Descendants("latest").FirstOrDefault()?.Value?.Trim() ?? "";
+    }
+
+    static string ReadAssetText(Context context, string assetPath) {
+        try {
+            var assets = context?.Assets ?? Android.App.Application.Context?.Assets;
+            if (assets == null) {
+                return "";
+            }
+            using Stream s = assets.Open(assetPath);
+            using StreamReader sr = new(s);
+            return sr.ReadToEnd();
+        } catch {
+            return "";
+        }
     }
 
     static long SumDirBytes(string dir) {
@@ -724,11 +678,6 @@ public static class OnnxRuntimeInstallerService {
         } catch {
             return 0;
         }
-    }
-
-    static void EnsureExecutable(string path) {
-        try { new Java.IO.File(path).SetExecutable(true, false); } catch { }
-        try { Os.Chmod(path, Convert.ToInt32("755", 8)); } catch { }
     }
 
     static string SanitizeId(string id) {

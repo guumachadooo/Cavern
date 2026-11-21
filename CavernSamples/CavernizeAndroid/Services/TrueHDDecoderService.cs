@@ -282,7 +282,13 @@ public static class TrueHDDecoderService {
             throw new ArgumentNullException(nameof(sourceTrack));
         }
         if (string.IsNullOrEmpty(truehddPath) || !File.Exists(truehddPath)) {
+            truehddPath = TruehddInstallerService.ResolveExistingTruehddPath(context, null);
+        }
+        if (string.IsNullOrEmpty(truehddPath) || !File.Exists(truehddPath)) {
             throw new FileNotFoundException(AndroidStrings.Active["TruehdBinaryNotInstalled"], truehddPath);
+        }
+        if (string.IsNullOrEmpty(ffmpegPath) || !File.Exists(ffmpegPath)) {
+            ffmpegPath = FFmpegInstallerService.ResolveExistingFFmpegPath(context, null);
         }
         TruehddInstallerService.EnsureExecutable(truehddPath);
 

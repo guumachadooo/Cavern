@@ -220,6 +220,7 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
 
     void TryStartBleScanLocked() {
         if (!HasBlePermissions()) {
+            AppLogger.Info("BleOscHeadTracker BLE scan skipped: required Bluetooth/Location permission not granted.");
             return;
         }
         try {
@@ -252,10 +253,16 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
     }
 
     void OnBleDeviceDiscovered(BluetoothDevice device) {
-        if (!running || device == null) {
+        if (!running || device == null || !HasBlePermissions()) {
             return;
         }
-        string name = device.Name ?? string.Empty;
+        string name;
+        try {
+            name = device.Name ?? string.Empty;
+        } catch (Java.Lang.SecurityException sx) {
+            AppLogger.Warn($"BleOscHeadTracker BLE permission check failed reading device name: {sx.Message}");
+            return;
+        }
         bool looksLikeHeadTracker =
             name.Contains("Headtracker", StringComparison.OrdinalIgnoreCase) ||
             name.Contains("Head Tracker", StringComparison.OrdinalIgnoreCase) ||
@@ -278,9 +285,15 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
             } catch {
                 // Ignore
             }
-            bleGattCallback = new BleGattCallbackImpl(this, name);
-            activeGatt = device.ConnectGatt(context, autoConnect: false, bleGattCallback, BluetoothTransports.Le);
-            SetStatus(string.Format(AndroidStrings.Active["HtBleConnecting"], name));
+            try {
+                bleGattCallback = new BleGattCallbackImpl(this, name);
+                activeGatt = device.ConnectGatt(context, autoConnect: false, bleGattCallback, BluetoothTransports.Le);
+                SetStatus(string.Format(AndroidStrings.Active["HtBleConnecting"], name));
+            } catch (Java.Lang.SecurityException sx) {
+                AppLogger.Warn($"BleOscHeadTracker ConnectGatt denied: {sx.Message}");
+                activeGatt = null;
+                bleGattCallback = null;
+            }
         }
     }
 
@@ -339,11 +352,12 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
     }
 
     bool HasBlePermissions() {
-        if (!OperatingSystem.IsAndroidVersionAtLeast(31)) {
-            return true;
+        if (OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            return context.CheckSelfPermission(Manifest.Permission.BluetoothConnect) == Permission.Granted &&
+                   context.CheckSelfPermission(Manifest.Permission.BluetoothScan) == Permission.Granted;
         }
-        return context.CheckSelfPermission(Manifest.Permission.BluetoothConnect) == Permission.Granted &&
-               context.CheckSelfPermission(Manifest.Permission.BluetoothScan) == Permission.Granted;
+        // API 26-30 require runtime location permission for BLE scanning.
+        return context.CheckSelfPermission(Manifest.Permission.AccessFineLocation) == Permission.Granted;
     }
 
     void SetStatus(string text) {

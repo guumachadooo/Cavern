@@ -9,10 +9,10 @@
 ## 2. Feature & Reference Invariants
 - Preserve 100% original Cavernize capabilities (multi-target speaker layouts, Matrix & Cavernize 3D upmixing, HRIR/QuickEQ, stem/object extraction + `.json`, batch queue, codec metadata, post-render reports, CLI/quality/delay) + mobile spatial/neural/pro-audio/player features.
 - Desktop PC reference exists in pre-Android `git log` (`backup/cavern-pre-H-ab942fd6` / `archive/cavern-pre-H-ab942fd6` preserves pre-H Cavern history).
-- External binaries (`FFmpeg`, `truehdd`, `ONNX Runtime`): pre-W23 execute inside `FilesDir/bin/` under `targetSdkVersion="28"`; W23 migrates execution to APK `NativeLibs/arm64-v8a/` (`ApplicationInfo.NativeLibraryDir`, W^X compliant).
+- External binaries (`FFmpeg`, `truehdd`, `ONNX Runtime`): bundled in APK `NativeLibs/arm64-v8a/` (`libffmpeg.so`, `libtruehdd.so`, `libonnxruntime.so`) & executed from `ApplicationInfo.NativeLibraryDir` (16 KB ELF aligned, W^X compliant; zero `FilesDir/bin/` execution; `.onnx` weights in `FilesDir/neural_models/`).
 
 ## 3. Critical Rules ("Never Break")
-1. **SELinux / `targetSdkVersion`:** Keep `android:targetSdkVersion="28"` in `CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml` (`untrusted_app_27` for `FilesDir/bin/`) **UNTIL W23** migrates `libffmpeg.so`/`libtruehdd.so`/`libonnxruntime.so` to `NativeLibraryDir` (in W23, atomically update this rule + `.agents/planner_profile.json` `file_guards` to enforce `targetSdkVersion >= 35` + W^X).
+1. **SELinux / `targetSdkVersion` / W^X:** Keep `android:targetSdkVersion` `>= 35` (`35`) + `android:extractNativeLibs="true"` + `android:enableOnBackInvokedCallback="true"` in `CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml` (no `requestLegacyExternalStorage`); bundle 16 KB ELF aligned `libffmpeg.so`/`libtruehdd.so`/`libonnxruntime.so`/`libcavernize_proaudio.so` in `NativeLibs/arm64-v8a/` (`NativeLibraryDir`); NEVER execute or `dlopen` binaries from `FilesDir/bin/` or writable app storage.
 2. **Termux ARM64 PRoot `.NET` & Sequential Builds:** No Android APK workload locally (`BuildAndroid.yml` packages signed APK). Always run sequentially (NEVER parallel across subagents):
    `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_EnableDiagnostics=0 /root/.dotnet/dotnet build <proj> -m:1 /p:UseSharedCompilation=false`
    + `python3 .agents/scripts/check_android_cs.py` for `CavernizeAndroid/**/*.cs` + `gcc` `test_proaudio_native.c` for `Native/`.

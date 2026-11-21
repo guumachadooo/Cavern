@@ -15,10 +15,10 @@ description: >-
 - Also note the running app version/build logged on startup (`=== Cavernize v... started ===`).
 - Always check `FFmpeg` exit codes, arguments, and `stderr` logged by `AppLogger.LogFFmpeg`.
 
-## 2. Verifying FFmpeg, truehdd & Permission Constraints
-- Static ARM64 FFmpeg installs inside `FilesDir/bin/ffmpeg` (`FFmpegInstallerService`) and static ARM64 musl `truehdd` installs inside `FilesDir/bin/truehdd` (`TruehddInstallerService`).
-- Confirm [AndroidManifest.xml](../../../CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml) retains `android:targetSdkVersion="28"` so SELinux keeps the app in `untrusted_app_27` and permits executing downloaded binaries from `FilesDir`.
-- For Android 13+ (API 33+) media/notifications, verify runtime permission requests cover `READ_MEDIA_AUDIO`, `READ_MEDIA_VIDEO`, and `POST_NOTIFICATIONS`.
+## 2. Verifying W^X Native Binaries, 16 KB ELF & Permission Constraints
+- Bundled ARM64 binaries (`libffmpeg.so`, `libtruehdd.so`, `libonnxruntime.so`, `libcavernize_proaudio.so`) ship inside APK `NativeLibs/arm64-v8a/` and execute directly from `ApplicationInfo.NativeLibraryDir` (W^X compliant, 16 KB ELF aligned; zero `FilesDir/bin/` execution). Only `.onnx` model weights reside in `FilesDir/neural_models/`.
+- Confirm [AndroidManifest.xml](../../../CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml) sets `android:targetSdkVersion="35"` (`>= 35`), `android:extractNativeLibs="true"`, `android:enableOnBackInvokedCallback="true"`, and omits `requestLegacyExternalStorage`.
+- Verify runtime permission requests cover `READ_MEDIA_AUDIO`, `READ_MEDIA_VIDEO` / `READ_MEDIA_VISUAL_USER_SELECTED` (API 34+), `POST_NOTIFICATIONS` (API 33+), `BLUETOOTH_CONNECT`/`BLUETOOTH_SCAN` (API 31+), and `ACCESS_FINE_LOCATION` (API 26–30 BLE OSC), plus matching FGS permissions (`FOREGROUND_SERVICE_MEDIA_PLAYBACK`, `FOREGROUND_SERVICE_MICROPHONE`, `FOREGROUND_SERVICE_MEDIA_PROCESSING`).
 
 ## 3. Native One UI 9 Reference Inspection (Read-Only)
 If the user asks to match a native Samsung One UI 9 animation or component accurately:

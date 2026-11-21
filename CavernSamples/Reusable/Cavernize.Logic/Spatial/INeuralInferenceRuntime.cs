@@ -13,7 +13,7 @@ public sealed class NeuralRuntimeInfo {
     /// <summary>True when the native ONNX Runtime library loaded and initialized successfully.</summary>
     public bool IsAvailable { get; init; }
 
-    /// <summary>Loaded native library path (<c>FilesDir/bin/onnxruntime/libonnxruntime.so</c>).</summary>
+    /// <summary>Loaded native library path (<c>NativeLibraryDir/libonnxruntime.so</c>).</summary>
     public string LibraryPath { get; init; } = string.Empty;
 
     /// <summary>Reported ONNX Runtime version string from <c>OrtApiBase.GetVersionString()</c>.</summary>
@@ -68,7 +68,7 @@ public interface INeuralSession : IDisposable {
 
 /// <summary>
 /// Platform-implemented managed ONNX Runtime host (implemented on Android via native <c>libonnxruntime.so</c>
-/// in <c>FilesDir/bin/onnxruntime/</c> with QNN HTP / XNNPACK / CPU execution provider cascade).
+/// in <c>NativeLibraryDir</c> with QNN HTP / XNNPACK / CPU execution provider cascade).
 /// </summary>
 public interface INeuralInferenceRuntime : IDisposable {
     /// <summary>Probes and returns current native runtime availability, version, and active EP capabilities.</summary>

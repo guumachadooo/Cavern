@@ -29,6 +29,7 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
     const string ActionStop = "hu.sbence.cavern.cavernize.ACTION_STOP";
 
     internal static Notification activeServiceNotification;
+    internal static volatile bool isPlaybackActive;
     internal static Action onTaskRemovedCallback;
 
     readonly Context appContext;
@@ -98,7 +99,7 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         filter.AddAction(ActionStop);
 
         try {
-            if (Build.VERSION.SdkInt >= BuildVersionCodes.Tiramisu) {
+            if (OperatingSystem.IsAndroidVersionAtLeast(33)) {
                 appContext.RegisterReceiver(actionReceiver, filter, ReceiverFlags.NotExported);
             } else {
                 appContext.RegisterReceiver(actionReceiver, filter);
@@ -109,8 +110,10 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         }
     }
 
-    void EnsureNotificationChannel() {
-        if (Build.VERSION.SdkInt < BuildVersionCodes.O || notificationManager == null) {
+    void EnsureNotificationChannel() => EnsureNotificationChannel(notificationManager);
+
+    internal static void EnsureNotificationChannel(NotificationManager manager) {
+        if (!OperatingSystem.IsAndroidVersionAtLeast(26) || manager == null) {
             return;
         }
         NotificationChannel ch = new(ChannelId, "Reprodução de Áudio 3D", NotificationImportance.Low) {
@@ -120,7 +123,7 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         ch.SetShowBadge(false);
         ch.EnableVibration(false);
         ch.SetSound(null, null);
-        notificationManager.CreateNotificationChannel(ch);
+        manager.CreateNotificationChannel(ch);
     }
 
     public void UpdateMetadata(string title, string artist, string album, double durationSeconds, Bitmap artwork = null) {
@@ -217,6 +220,7 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
 
         mediaSession.SetPlaybackState(state);
         mediaSession.Active = showNotification;
+        isPlaybackActive = showNotification && isPlaying;
 
         if (showNotification) {
             PostOrUpdateNotification(isPlaying);
@@ -230,11 +234,12 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
             Notification notif = BuildNotification(isPlaying);
             activeServiceNotification = notif;
             isNotificationPosted = true;
+            isPlaybackActive = isPlaying;
 
             try {
                 Intent svc = new(appContext, typeof(CavernizePlaybackService));
                 if (isPlaying) {
-                    if (Build.VERSION.SdkInt >= BuildVersionCodes.O) {
+                    if (OperatingSystem.IsAndroidVersionAtLeast(26)) {
                         appContext.StartForegroundService(svc);
                     } else {
                         appContext.StartService(svc);
@@ -252,6 +257,7 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
 
     public void CancelNotification() {
         isNotificationPosted = false;
+        isPlaybackActive = false;
         activeServiceNotification = null;
         try {
             appContext.StopService(new Intent(appContext, typeof(CavernizePlaybackService)));
@@ -310,6 +316,26 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
             .SetStyle(style);
 
         return builder.Build();
+    }
+
+    internal static Notification BuildFallbackNotification(Context context) {
+        NotificationManager nm = context.GetSystemService(Context.NotificationService) as NotificationManager;
+        EnsureNotificationChannel(nm);
+
+        Notification.Builder builder = OperatingSystem.IsAndroidVersionAtLeast(26)
+            ? new Notification.Builder(context, ChannelId)
+#pragma warning disable CS0618
+            : new Notification.Builder(context);
+#pragma warning restore CS0618
+
+        return builder
+            .SetSmallIcon(Resource.Drawable.cavern_logo)
+            .SetContentTitle("Cavernize 3D")
+            .SetContentText("Audio Spatializer")
+            .SetVisibility(NotificationVisibility.Public)
+            .SetOnlyAlertOnce(true)
+            .SetShowWhen(false)
+            .Build();
     }
 
     static Bitmap CreateActionBitmap(string kind) {
@@ -469,21 +495,94 @@ public sealed class CavernizePlaybackService : Service {
     public override IBinder OnBind(Intent intent) => null;
 
     public override StartCommandResult OnStartCommand(Intent intent, StartCommandFlags flags, int startId) {
-        Notification n = MediaPlaybackNotificationManager.activeServiceNotification;
-        if (n != null) {
-            try {
-                StartForeground(MediaPlaybackNotificationManager.NotificationId, n);
+        Notification active = MediaPlaybackNotificationManager.activeServiceNotification;
+        bool hasActivePlayback = intent != null && active != null && MediaPlaybackNotificationManager.isPlaybackActive;
+        try {
+            Notification notif = active ?? MediaPlaybackNotificationManager.BuildFallbackNotification(this);
+            StartForegroundCompat(MediaPlaybackNotificationManager.NotificationId, notif, ResolveForegroundServiceType());
+            if (hasActivePlayback) {
                 return StartCommandResult.Sticky;
+            }
+            // Sticky restart (intent == null) or stopped playback: satisfy FGS contract first, then tear down cleanly.
+            StopForegroundCompat(removeNotification: true);
+        } catch (Exception ex) {
+            AppLogger.Warn($"CavernizePlaybackService.OnStartCommand: {ex.Message}");
+        }
+        StopSelf(startId);
+        return StartCommandResult.NotSticky;
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("android34.0")]
+    public override void OnTimeout(int startId) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(34)) {
+            base.OnTimeout(startId);
+        }
+        HandleServiceTimeout(startId, Android.Content.PM.ForegroundService.TypeShortService);
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("android35.0")]
+    public override void OnTimeout(int startId, Android.Content.PM.ForegroundService fgsType) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(35)) {
+            base.OnTimeout(startId, fgsType);
+        }
+        HandleServiceTimeout(startId, fgsType);
+    }
+
+    void HandleServiceTimeout(int startId, Android.Content.PM.ForegroundService fgsType) {
+        AppLogger.Warn($"CavernizePlaybackService.OnTimeout(startId={startId}, fgsType={fgsType})");
+        StopForegroundCompat(removeNotification: true);
+        try {
+            StopSelf(startId);
+        } catch {
+            StopSelf();
+        }
+    }
+
+    Android.Content.PM.ForegroundService ResolveForegroundServiceType() {
+        Android.Content.PM.ForegroundService fgsType = Android.Content.PM.ForegroundService.TypeMediaPlayback;
+        if (OperatingSystem.IsAndroidVersionAtLeast(35) &&
+            CheckSelfPermission("android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING") == Android.Content.PM.Permission.Granted) {
+            try {
+#pragma warning disable CS0618, CA1422
+                var info = PackageManager?.GetServiceInfo(
+                    new ComponentName(this, Java.Lang.Class.FromType(typeof(CavernizePlaybackService))),
+                    Android.Content.PM.PackageInfoFlags.MatchDefaultOnly);
+#pragma warning restore CS0618, CA1422
+                if (info != null && (info.ForegroundServiceType & Android.Content.PM.ForegroundService.TypeMediaProcessing) != 0) {
+                    fgsType |= Android.Content.PM.ForegroundService.TypeMediaProcessing;
+                }
             } catch {
-                // Fall through
+                // Keep declared mediaPlayback type
             }
         }
-        StopSelf();
-        return StartCommandResult.NotSticky;
+        return fgsType;
+    }
+
+    void StartForegroundCompat(int id, Notification notification, Android.Content.PM.ForegroundService fgsType) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(29)) {
+            StartForeground(id, notification, fgsType);
+        } else {
+            StartForeground(id, notification);
+        }
+    }
+
+    void StopForegroundCompat(bool removeNotification) {
+        try {
+            if (OperatingSystem.IsAndroidVersionAtLeast(24)) {
+                StopForeground(removeNotification ? StopForegroundFlags.Remove : StopForegroundFlags.Detach);
+            } else {
+#pragma warning disable CS0618, CA1422
+                StopForeground(removeNotification);
+#pragma warning restore CS0618, CA1422
+            }
+        } catch {
+            // Ignore
+        }
     }
 
     public override void OnTaskRemoved(Intent rootIntent) {
         MediaPlaybackNotificationManager.onTaskRemovedCallback?.Invoke();
+        StopForegroundCompat(removeNotification: true);
         StopSelf();
         base.OnTaskRemoved(rootIntent);
     }

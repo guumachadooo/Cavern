@@ -49,8 +49,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
     const int ReqBatchMedia = 1002;
     const int ReqLoadHrir = 1003;
     const int ReqLoadFilters = 1004;
-    const int ReqLocateFFmpeg = 1005;
-    const int ReqLocateTruehdd = 1006;
     const int ReqPermissions = 1007;
     const int ReqLoadSubtitles = 1008;
     const int ReqLoadAutoEq = 1009;
@@ -133,9 +131,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
     string downloadedUpdateApkPath;
     string pendingInstallApkPath;
     bool isUpdateDownloading;
-    bool isFFmpegDownloading;
-    bool isTruehddDownloading;
-    bool isOnnxDownloading;
     string pendingOnnxImportModelId = Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId;
     Cavernize.Logic.Spatial.NeuralModelTask pendingCustomOnnxTask = Cavernize.Logic.Spatial.NeuralModelTask.StemSeparation4;
     bool pendingStandaloneCustomOnnxImport;
@@ -160,6 +155,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     volatile bool pendingAutoPlayAfterLoad;
 
     FrameLayout rootFrameHost;
+    LinearLayout rootLayoutHost;
     View bottomScrimView;
     OneUiBackdropView backdropView;
     OneUiFrostedCapsuleView navFrostedHost;
@@ -168,6 +164,13 @@ public partial class MainActivity : Activity, ICavernizeApp {
     bool isBottomNavVisible = true;
     int navVisAnimGen;
     int tabSwitchAnimGen;
+    int insetLeftPx;
+    int insetTopPx;
+    int insetRightPx;
+    int insetBarsBottomPx;
+    int insetImeBottomPx;
+    Android.Window.IOnBackInvokedCallback predictiveBackCallback;
+    bool isPredictiveBackRegistered;
     View tabIndicatorPill;
     ValueAnimator tabPillAnimator;
     LinearLayout[] tabPages;
@@ -198,13 +201,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         AppLogger.Initialize(this);
         AudioQualityAnalyzer.EnsureCacheLoaded(this);
 
-        if (Window != null) {
-            Window.DecorView?.SetBackgroundColor(ColBg);
-#pragma warning disable CS0618, CA1422
-            Window.SetStatusBarColor(ColBg);
-            Window.SetNavigationBarColor(ColBg);
-#pragma warning restore CS0618, CA1422
-        }
+        ConfigureEdgeToEdgeWindow(Window);
 
         store = new AppSettingsStore(this);
         store.ApplyGlobals();
@@ -213,14 +210,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
         ffmpeg = new AndroidFFmpegRunner(_ => { });
         string resolvedFfmpeg = FFmpegInstallerService.ResolveExistingFFmpegPath(this, store);
         if (!string.IsNullOrEmpty(resolvedFfmpeg)) {
-            FFmpegInstallerService.EnsureExecutable(resolvedFfmpeg);
             ffmpeg.Location = resolvedFfmpeg;
             AppLogger.Info($"FFmpeg resolved at '{resolvedFfmpeg}' (Found={ffmpeg.Found})");
         }
 
         string resolvedTruehdd = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
         if (!string.IsNullOrEmpty(resolvedTruehdd)) {
-            TruehddInstallerService.EnsureExecutable(resolvedTruehdd);
             Truehdd.CustomExecutablePath = resolvedTruehdd;
             AppLogger.Info($"truehdd resolved at '{resolvedTruehdd}'");
         }
@@ -386,6 +381,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     protected override void OnDestroy() {
         uiDestroyed = true;
+        if (OperatingSystem.IsAndroidVersionAtLeast(33) && isPredictiveBackRegistered && predictiveBackCallback != null) {
+            try {
+                OnBackInvokedDispatcher?.UnregisterOnBackInvokedCallback(predictiveBackCallback);
+            } catch {
+                // Ignore
+            }
+            isPredictiveBackRegistered = false;
+        }
         StopCalibrationTonePlayback();
         activeCts?.Cancel();
         activeCts?.Dispose();
@@ -454,12 +457,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
         backdropView = new OneUiBackdropView(this);
         rootFrame.AddView(backdropView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
 
-        // Layer 1: Main content column
+        // Layer 1: Main content column (Edge-to-Edge WindowInsets applied dynamically)
         LinearLayout root = new(this) {
             Orientation = Orientation.Vertical
         };
         root.SetBackgroundColor(Color.Transparent);
-        root.SetFitsSystemWindows(true);
+        rootLayoutHost = root;
 
         workspaceSourceBars.Clear();
         currentHeaderStatusText = S["SelectFilePill"];
@@ -604,11 +607,202 @@ public partial class MainActivity : Activity, ICavernizeApp {
         rootFrame.AddView(navFrostedHost, floatingNavLp);
 
         SetContentView(rootFrame);
+        ConfigureEdgeToEdgeWindow(Window);
+        rootFrame.SetOnApplyWindowInsetsListener(new RootInsetsListener(ApplyWindowInsets));
+        ApplyCurrentWindowInsetsPadding();
+        rootFrame.RequestApplyInsets();
         UpdateTabButtonStyles(animate: false);
         SetBottomNavBarVisible(activeTab != 0 || isLibrarySectionOpen, animate: false);
+        SyncPredictiveBackRegistration();
         navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
         RefreshAllUiState();
     }
+
+    sealed class RootInsetsListener(Action<WindowInsets> onApply) : Java.Lang.Object, View.IOnApplyWindowInsetsListener {
+        public WindowInsets OnApplyWindowInsets(View v, WindowInsets insets) {
+            onApply?.Invoke(insets);
+            return OperatingSystem.IsAndroidVersionAtLeast(30) ? WindowInsets.Consumed : insets;
+        }
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("android33.0")]
+    sealed class InternalBackInvokedCallback(Action onBack) : Java.Lang.Object, Android.Window.IOnBackInvokedCallback {
+        public void OnBackInvoked() => onBack?.Invoke();
+    }
+
+    void ConfigureEdgeToEdgeWindow(Window win) {
+        if (win == null) {
+            return;
+        }
+        win.DecorView?.SetBackgroundColor(ColBg);
+        if (OperatingSystem.IsAndroidVersionAtLeast(30)) {
+            win.SetDecorFitsSystemWindows(false);
+            if (win.Attributes != null) {
+                win.Attributes.LayoutInDisplayCutoutMode = LayoutInDisplayCutoutMode.Always;
+                win.Attributes = win.Attributes;
+            }
+            IWindowInsetsController ctrl = win.InsetsController;
+            if (ctrl != null) {
+                ctrl.SetSystemBarsAppearance(
+                    0,
+                    (int)(WindowInsetsControllerAppearance.LightStatusBars | WindowInsetsControllerAppearance.LightNavigationBars));
+            }
+        }
+    }
+
+    void ApplyWindowInsets(WindowInsets insets) {
+        if (insets == null || uiDestroyed) {
+            return;
+        }
+        if (OperatingSystem.IsAndroidVersionAtLeast(30)) {
+            Android.Graphics.Insets bars = insets.GetInsets(
+                WindowInsets.Type.SystemBars() | WindowInsets.Type.DisplayCutout());
+            Android.Graphics.Insets ime = insets.GetInsets(WindowInsets.Type.Ime());
+            insetLeftPx = bars.Left;
+            insetTopPx = bars.Top;
+            insetRightPx = bars.Right;
+            insetBarsBottomPx = bars.Bottom;
+            insetImeBottomPx = ime.Bottom;
+        } else {
+#pragma warning disable CS0618, CA1422
+            insetLeftPx = insets.SystemWindowInsetLeft;
+            insetTopPx = insets.SystemWindowInsetTop;
+            insetRightPx = insets.SystemWindowInsetRight;
+            insetBarsBottomPx = insets.SystemWindowInsetBottom;
+            insetImeBottomPx = 0;
+#pragma warning restore CS0618, CA1422
+        }
+        ApplyCurrentWindowInsetsPadding();
+    }
+
+    void ApplyCurrentWindowInsetsPadding() {
+        if (uiDestroyed) {
+            return;
+        }
+        rootLayoutHost?.SetPadding(insetLeftPx, insetTopPx, insetRightPx, 0);
+
+        int scrollBottom = Math.Max(insetBarsBottomPx, insetImeBottomPx);
+        if (musicTabRootPage != null) {
+            musicTabRootPage.SetPadding(
+                Dp(20),
+                Dp(6),
+                Dp(20),
+                isLibrarySectionOpen ? 0 : Dp(10) + insetBarsBottomPx);
+        }
+        if (musicLibraryScrollView != null) {
+            musicLibraryScrollView.SetPadding(0, 0, 0, Dp(106) + scrollBottom);
+        }
+        if (tabPages != null) {
+            for (int i = 1; i < tabPages.Length; i++) {
+                LinearLayout page = tabPages[i];
+                if (page == null) {
+                    continue;
+                }
+                int topDp = i == 4 ? 2 : 6;
+                page.SetPadding(Dp(14), Dp(topDp), Dp(14), Dp(116) + scrollBottom);
+            }
+        }
+        if (bottomScrimView?.LayoutParameters is FrameLayout.LayoutParams scrimLp) {
+            int targetH = Dp(98) + insetBarsBottomPx;
+            if (scrimLp.Height != targetH) {
+                scrimLp.Height = targetH;
+                bottomScrimView.LayoutParameters = scrimLp;
+            }
+        }
+        if (navFrostedHost?.LayoutParameters is FrameLayout.LayoutParams navLp) {
+            int targetLeft = Dp(14) + insetLeftPx;
+            int targetRight = Dp(14) + insetRightPx;
+            int targetBottom = Dp(12) + insetBarsBottomPx;
+            if (navLp.LeftMargin != targetLeft || navLp.RightMargin != targetRight || navLp.BottomMargin != targetBottom) {
+                navLp.LeftMargin = targetLeft;
+                navLp.RightMargin = targetRight;
+                navLp.BottomMargin = targetBottom;
+                navFrostedHost.LayoutParameters = navLp;
+                navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
+            }
+        }
+    }
+
+    bool HasInternalBackStep() =>
+        fullscreenVideoDlg != null ||
+        (activeTab == 0 && !isLibrarySectionOpen && musicStageMode == PlayerStageMode.Lyrics) ||
+        (activeTab == 0 && isLibrarySectionOpen) ||
+        activeTab != 0;
+
+    bool HandleInternalBackStep() {
+        if (uiDestroyed) {
+            return false;
+        }
+        if (fullscreenVideoDlg != null) {
+            ExitVideoFullscreenIfNeeded();
+            return true;
+        }
+        if (activeTab == 0 && !isLibrarySectionOpen && musicStageMode == PlayerStageMode.Lyrics) {
+            SetPlayerStageMode(PlayerStageMode.Cover);
+            return true;
+        }
+        if (activeTab == 0 && isLibrarySectionOpen) {
+            if (!string.IsNullOrEmpty(librarySearchQuery)) {
+                librarySearchQuery = "";
+                libraryRenderLimit = 72;
+                if (librarySearchInput != null) {
+                    librarySearchInput.Text = "";
+                } else {
+                    RenderLibraryView();
+                }
+                return true;
+            }
+            if (selectedLibraryAlbum != null || selectedLibraryFolder != null || !string.IsNullOrEmpty(selectedLibraryArtist)) {
+                selectedLibraryAlbum = null;
+                selectedLibraryFolder = null;
+                selectedLibraryArtist = null;
+                RenderLibraryView();
+                return true;
+            }
+            SetMusicPlayerSection(openLibrary: false);
+            return true;
+        }
+        if (activeTab != 0) {
+            SwitchTab(0);
+            return true;
+        }
+        return false;
+    }
+
+    void SyncPredictiveBackRegistration() {
+        if (!OperatingSystem.IsAndroidVersionAtLeast(33) || uiDestroyed) {
+            return;
+        }
+        bool shouldRegister = HasInternalBackStep();
+        if (shouldRegister == isPredictiveBackRegistered) {
+            return;
+        }
+        try {
+            Android.Window.IOnBackInvokedDispatcher dispatcher = OnBackInvokedDispatcher;
+            if (dispatcher == null) {
+                return;
+            }
+            if (shouldRegister) {
+                predictiveBackCallback ??= new InternalBackInvokedCallback(() => HandleInternalBackStep());
+                dispatcher.RegisterOnBackInvokedCallback(0, predictiveBackCallback);
+                isPredictiveBackRegistered = true;
+            } else if (predictiveBackCallback != null) {
+                dispatcher.UnregisterOnBackInvokedCallback(predictiveBackCallback);
+                isPredictiveBackRegistered = false;
+            }
+        } catch (Exception ex) {
+            AppLogger.Warn($"SyncPredictiveBackRegistration: {ex.Message}");
+        }
+    }
+
+#pragma warning disable CS0618, CA1422
+    public override void OnBackPressed() {
+        if (!OperatingSystem.IsAndroidVersionAtLeast(33) && HandleInternalBackStep()) {
+            return;
+        }
+        base.OnBackPressed();
+    }
+#pragma warning restore CS0618, CA1422
 
     LinearLayout CreateWorkspaceSourceBar() {
         LinearLayout barWrap = new(this) { Orientation = Orientation.Vertical };
@@ -947,9 +1141,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     }
 
     bool ShouldShowSettingsDot() =>
-        latestUpdateInfo?.IsUpdateAvailable == true ||
-        latestFFmpegStatus?.IsUpdateAvailable == true ||
-        latestTruehddStatus?.IsUpdateAvailable == true;
+        latestUpdateInfo?.IsUpdateAvailable == true;
 
     void SwitchTab(int idx) {
         if (tabContainers == null || idx < 0 || idx >= tabContainers.Length) {
@@ -1034,6 +1226,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             RefreshMusicPlayerUi();
         }
         navFrostedHost?.RefreshBlur(force: true);
+        SyncPredictiveBackRegistration();
     }
 
     void SetBottomNavBarVisible(bool visible, bool animate) {
@@ -1187,11 +1380,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     void RequestMediaPermissionsIfNeeded() {
         List<string> needed = [];
-        if (Build.VERSION.SdkInt >= BuildVersionCodes.Tiramisu) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(33)) {
             if (CheckSelfPermission(Manifest.Permission.ReadMediaAudio) != Permission.Granted) {
                 needed.Add(Manifest.Permission.ReadMediaAudio);
             }
-            if (CheckSelfPermission(Manifest.Permission.ReadMediaVideo) != Permission.Granted) {
+            bool hasVisualAccess = CheckSelfPermission(Manifest.Permission.ReadMediaVideo) == Permission.Granted ||
+                (OperatingSystem.IsAndroidVersionAtLeast(34) &&
+                 CheckSelfPermission(Manifest.Permission.ReadMediaVisualUserSelected) == Permission.Granted);
+            if (!hasVisualAccess) {
                 needed.Add(Manifest.Permission.ReadMediaVideo);
             }
             if (CheckSelfPermission(Manifest.Permission.PostNotifications) != Permission.Granted) {
@@ -1201,7 +1397,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             if (CheckSelfPermission(Manifest.Permission.ReadExternalStorage) != Permission.Granted) {
                 needed.Add(Manifest.Permission.ReadExternalStorage);
             }
-            if (Build.VERSION.SdkInt <= BuildVersionCodes.Q &&
+            if (!OperatingSystem.IsAndroidVersionAtLeast(30) &&
                 CheckSelfPermission(Manifest.Permission.WriteExternalStorage) != Permission.Granted) {
                 needed.Add(Manifest.Permission.WriteExternalStorage);
             }
@@ -1212,16 +1408,18 @@ public partial class MainActivity : Activity, ICavernizeApp {
     }
 
     void RequestBluetoothPermissionsIfNeeded(Cavernize.Logic.Spatial.HeadTrackerSourceKind source) {
-        if (!OperatingSystem.IsAndroidVersionAtLeast(31)) {
-            return;
-        }
         List<string> needed = [];
-        if (CheckSelfPermission(Manifest.Permission.BluetoothConnect) != Permission.Granted) {
-            needed.Add(Manifest.Permission.BluetoothConnect);
-        }
-        if (source == Cavernize.Logic.Spatial.HeadTrackerSourceKind.BleOsc &&
-            CheckSelfPermission(Manifest.Permission.BluetoothScan) != Permission.Granted) {
-            needed.Add(Manifest.Permission.BluetoothScan);
+        if (OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            if (CheckSelfPermission(Manifest.Permission.BluetoothConnect) != Permission.Granted) {
+                needed.Add(Manifest.Permission.BluetoothConnect);
+            }
+            if (source == Cavernize.Logic.Spatial.HeadTrackerSourceKind.BleOsc &&
+                CheckSelfPermission(Manifest.Permission.BluetoothScan) != Permission.Granted) {
+                needed.Add(Manifest.Permission.BluetoothScan);
+            }
+        } else if (source == Cavernize.Logic.Spatial.HeadTrackerSourceKind.BleOsc &&
+                   CheckSelfPermission(Manifest.Permission.AccessFineLocation) != Permission.Granted) {
+            needed.Add(Manifest.Permission.AccessFineLocation);
         }
         if (needed.Count > 0) {
             RequestPermissions(needed.ToArray(), ReqBluetoothPermissions);
@@ -1305,10 +1503,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
                 RunOnUiThread(() => TryLoadRoomFilters(path));
             });
-        } else if (requestCode == ReqLocateFFmpeg && data.Data != null) {
-            Task.Run(() => ApplyManualFFmpegPath(AndroidFileHelper.ResolveReadablePath(this, data.Data)));
-        } else if (requestCode == ReqLocateTruehdd && data.Data != null) {
-            Task.Run(() => ApplyManualTruehddPath(AndroidFileHelper.ResolveReadablePath(this, data.Data)));
         } else if (requestCode == ReqLoadSubtitles && data.Data != null) {
             Task.Run(() => {
                 string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
@@ -1325,44 +1519,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 RunOnUiThread(() => ImportCustomOnnxModelFromPath(path));
             });
         }
-    }
-
-    void ApplyManualFFmpegPath(string path) {
-        if (string.IsNullOrEmpty(path)) return;
-        Task.Run(() => {
-            FFmpegInstallerService.EnsureExecutable(path);
-            string ver = FFmpegInstallerService.ProbeFFmpegVersion(path);
-            AppLogger.Info($"Manual FFmpeg selected: '{path}' (ver={ver})");
-            RunOnUiThread(() => {
-                if (uiDestroyed) return;
-                store.FFmpegLocation = path;
-                if (!string.IsNullOrEmpty(ver)) {
-                    store.InstalledFFmpegVersion = ver;
-                }
-                ffmpeg.Location = path;
-                RefreshSettingsTabButtons();
-                RefreshFFmpegCardUi();
-            });
-        });
-    }
-
-    void ApplyManualTruehddPath(string path) {
-        if (string.IsNullOrEmpty(path)) return;
-        Task.Run(() => {
-            TruehddInstallerService.EnsureExecutable(path);
-            string ver = TruehddInstallerService.ProbeTruehddVersion(path);
-            AppLogger.Info($"Manual truehdd selected: '{path}' (ver={ver})");
-            RunOnUiThread(() => {
-                if (uiDestroyed) return;
-                store.TruehddLocation = path;
-                if (!string.IsNullOrEmpty(ver)) {
-                    store.InstalledTruehddVersion = ver;
-                }
-                Truehdd.CustomExecutablePath = path;
-                RefreshSettingsTabButtons();
-                RefreshTruehddCardUi();
-            });
-        });
     }
 
     void LoadExternalSubtitleFromPath(string path) {
@@ -2785,9 +2941,13 @@ public partial class MainActivity : Activity, ICavernizeApp {
             return;
         }
         string existingBin = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
-        bool needsDownload = string.IsNullOrEmpty(existingBin) || !File.Exists(existingBin);
+        if (string.IsNullOrEmpty(existingBin) || !File.Exists(existingBin)) {
+            ShowError(S["TruehddNotInstalled"]);
+            BindActiveTrackToUiAndPlayer(sourceTrack);
+            return;
+        }
 
-        if (needsDownload || !store.TruehddLicenceAccepted) {
+        if (!store.TruehddLicenceAccepted) {
             _ = Task.Run(async () => {
                 string licText = await TruehddInstallerService.FetchLicenceTextAsync(this).ConfigureAwait(false);
                 RunOnUiThread(() => {
@@ -2878,18 +3038,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
             try {
                 string truehddPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
                 if (string.IsNullOrEmpty(truehddPath) || !File.Exists(truehddPath)) {
-                    UpdatePrepUi(-1, S["TruehddDownloading"]);
-                    TruehddStatusResult status = await TruehddInstallerService.CheckStatusAsync(this, store, token).ConfigureAwait(false);
-                    truehddPath = await TruehddInstallerService.DownloadAndInstallAsync(
-                        this, store, status,
-                        (frac, msg) => UpdatePrepUi(frac * 0.25, msg),
-                        token).ConfigureAwait(false);
-                    latestTruehddStatus = await TruehddInstallerService.CheckStatusAsync(this, store, token).ConfigureAwait(false);
-                    RunOnUiThread(() => {
-                        RefreshSettingsDot();
-                        RefreshTruehddCardUi();
-                    });
+                    throw new FileNotFoundException(S["TruehddNotInstalled"]);
                 }
+                Truehdd.CustomExecutablePath = truehddPath;
 
                 token.ThrowIfCancellationRequested();
                 int? forcedPres = store.MlpPresentation >= 0 ? store.MlpPresentation : null;
@@ -3120,17 +3271,23 @@ public partial class MainActivity : Activity, ICavernizeApp {
             RunOnUiThread(() => SetFFmpegStatus(S["CheckingUpdate"], -1));
             FFmpegStatusResult status = await FFmpegInstallerService.CheckStatusAsync(this, store);
             latestFFmpegStatus = status;
-            AppLogger.Info($"FFmpeg status: installed={status.IsInstalled}, working={status.IsWorking}, local='{status.LocalPath}', ver='{status.InstalledVersion}', remote='{status.RemoteVersion}'");
+            AppLogger.Info($"FFmpeg status: installed={status.IsInstalled}, working={status.IsWorking}, local='{status.LocalPath}', ver='{status.InstalledVersion}'");
 
             RunOnUiThread(() => {
+                if (!string.IsNullOrEmpty(status.LocalPath)) {
+                    ffmpeg.Location = status.LocalPath;
+                }
                 RefreshSettingsDot();
+                RefreshSettingsTabButtons();
                 RefreshFFmpegCardUi();
-                if (status.IsInstalled && !status.IsWorking && !isFFmpegDownloading && !string.IsNullOrEmpty(status.DownloadUrl)) {
-                    AppLogger.Warn("Broken FFmpeg binary detected on launch (SIGSYS/incompatible ABI) — auto-repairing to native Android NDK build...");
-                    StartFFmpegDownloadOrUpdate();
-                } else if (!silent && !status.IsUpdateAvailable && status.IsInstalled && status.IsWorking) {
-                    string ver = string.IsNullOrEmpty(status.InstalledVersion) ? status.RemoteVersion : status.InstalledVersion;
+                RefreshContainerOptions();
+                if (status.IsInstalled && !status.IsWorking) {
+                    AppLogger.Warn($"Bundled FFmpeg probe failed at '{status.LocalPath}' (ver={status.InstalledVersion}).");
+                } else if (!silent && status.IsInstalled && status.IsWorking) {
+                    string ver = string.IsNullOrEmpty(status.InstalledVersion) ? "OK" : status.InstalledVersion;
                     Toast.MakeText(this, string.Format(S["FFmpegUpToDate"], ver), ToastLength.Short).Show();
+                } else if (!silent && !status.IsInstalled) {
+                    ShowError(S["FFmpegNotInstalled"]);
                 }
             });
         } catch (Exception ex) {
@@ -3144,57 +3301,25 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
     }
 
-    void StartFFmpegDownloadOrUpdate() {
-        if (isFFmpegDownloading) {
-            return;
-        }
-        isFFmpegDownloading = true;
-        RunOnUiThread(() => SetFFmpegStatus(S["FFmpegDownloading"], 0));
-
-        _ = Task.Run(async () => {
-            try {
-                string path = await FFmpegInstallerService.DownloadAndInstallAsync(
-                    this, store, latestFFmpegStatus,
-                    (frac, msg) => RunOnUiThread(() => SetFFmpegStatus(msg, frac)));
-
-                FFmpegStatusResult refreshed = await FFmpegInstallerService.CheckStatusAsync(this, store);
-                latestFFmpegStatus = refreshed;
-                AppLogger.Info($"FFmpeg installed at '{path}'");
-
-                RunOnUiThread(() => {
-                    isFFmpegDownloading = false;
-                    ffmpeg.Location = path;
-                    RefreshSettingsDot();
-                    RefreshSettingsTabButtons();
-                    RefreshFFmpegCardUi();
-                    RefreshContainerOptions();
-                    Toast.MakeText(this, S["Ready"], ToastLength.Short).Show();
-                });
-            } catch (Exception ex) {
-                AppLogger.Error("StartFFmpegDownloadOrUpdate", ex);
-                RunOnUiThread(() => {
-                    isFFmpegDownloading = false;
-                    SetFFmpegStatus(ex.Message, 0);
-                    RefreshFFmpegCardUi();
-                    ShowError(ex.Message);
-                });
-            }
-        });
-    }
-
     async Task CheckTruehddUpdateAsync(bool silent) {
         try {
             RunOnUiThread(() => SetTruehddStatus(S["CheckingUpdate"], -1));
             TruehddStatusResult status = await TruehddInstallerService.CheckStatusAsync(this, store);
             latestTruehddStatus = status;
-            AppLogger.Info($"truehdd status: installed={status.IsInstalled}, local='{status.LocalPath}', ver='{status.InstalledVersion}', remote='{status.RemoteVersion}'");
+            AppLogger.Info($"truehdd status: installed={status.IsInstalled}, local='{status.LocalPath}', ver='{status.InstalledVersion}'");
 
             RunOnUiThread(() => {
+                if (!string.IsNullOrEmpty(status.LocalPath)) {
+                    Truehdd.CustomExecutablePath = status.LocalPath;
+                }
                 RefreshSettingsDot();
+                RefreshSettingsTabButtons();
                 RefreshTruehddCardUi();
-                if (!silent && !status.IsUpdateAvailable && status.IsInstalled) {
-                    string ver = string.IsNullOrEmpty(status.InstalledVersion) ? status.RemoteVersion : status.InstalledVersion;
+                if (!silent && status.IsInstalled) {
+                    string ver = string.IsNullOrEmpty(status.InstalledVersion) ? "OK" : status.InstalledVersion;
                     Toast.MakeText(this, string.Format(S["TruehddUpToDate"], ver), ToastLength.Short).Show();
+                } else if (!silent && !status.IsInstalled) {
+                    ShowError(S["TruehddNotInstalled"]);
                 }
             });
         } catch (Exception ex) {
@@ -3206,70 +3331,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 }
             });
         }
-    }
-
-    void StartTruehddDownloadOrUpdate() {
-        if (isTruehddDownloading) {
-            return;
-        }
-        if (!store.TruehddLicenceAccepted) {
-            _ = Task.Run(async () => {
-                string licText = await TruehddInstallerService.FetchLicenceTextAsync(this).ConfigureAwait(false);
-                RunOnUiThread(() => {
-                    OneUiModalDialog.Show(
-                        this,
-                        S["TrueHDLicenceTitle"],
-                        $"{S["TrueHDLicenceDesc"]}\n\n{licText}",
-                        icon: OneUiIconType.Sparkles,
-                        iconBadgeColor: OneUiTheme.Primary,
-                        positiveText: S["TrueHDDownloadDecode"],
-                        onPositive: () => {
-                            store.TruehddLicenceAccepted = true;
-                            LaunchTruehddDownloadWorker();
-                        },
-                        negativeText: S["CancelBtn"]);
-                });
-            });
-            return;
-        }
-        LaunchTruehddDownloadWorker();
-    }
-
-    void LaunchTruehddDownloadWorker() {
-        if (isTruehddDownloading) {
-            return;
-        }
-        isTruehddDownloading = true;
-        RunOnUiThread(() => SetTruehddStatus(S["TruehddDownloading"], 0));
-
-        _ = Task.Run(async () => {
-            try {
-                string path = await TruehddInstallerService.DownloadAndInstallAsync(
-                    this, store, latestTruehddStatus,
-                    (frac, msg) => RunOnUiThread(() => SetTruehddStatus(msg, frac)));
-
-                TruehddStatusResult refreshed = await TruehddInstallerService.CheckStatusAsync(this, store);
-                latestTruehddStatus = refreshed;
-                AppLogger.Info($"truehdd installed at '{path}'");
-
-                RunOnUiThread(() => {
-                    isTruehddDownloading = false;
-                    Truehdd.CustomExecutablePath = path;
-                    RefreshSettingsDot();
-                    RefreshSettingsTabButtons();
-                    RefreshTruehddCardUi();
-                    Toast.MakeText(this, S["Ready"], ToastLength.Short).Show();
-                });
-            } catch (Exception ex) {
-                AppLogger.Error("StartTruehddDownloadOrUpdate", ex);
-                RunOnUiThread(() => {
-                    isTruehddDownloading = false;
-                    SetTruehddStatus(ex.Message, 0);
-                    RefreshTruehddCardUi();
-                    ShowError(ex.Message);
-                });
-            }
-        });
     }
 
     async Task CheckForUpdatesAsync(bool silent) {

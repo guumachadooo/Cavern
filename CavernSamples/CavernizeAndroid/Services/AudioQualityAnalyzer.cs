@@ -106,7 +106,8 @@ public static class AudioQualityAnalyzer {
     /// </summary>
     public static string BuildCacheKey(LibraryTrackItem item) {
         if (item == null) return "";
-        return $"{item.FilePath}|{item.FileSizeBytes}|{item.LastModifiedTicks}";
+        string id = !string.IsNullOrEmpty(item.FilePath) ? item.FilePath : item.ContentUriString;
+        return $"{id}|{item.FileSizeBytes}|{item.LastModifiedTicks}";
     }
 
     /// <summary>
@@ -119,7 +120,11 @@ public static class AudioQualityAnalyzer {
         lock (diskLock) {
             if (diskLoaded) return;
             try {
-                cachedDiskPath = IOPath.Combine(ctx.FilesDir.AbsolutePath, CacheFileName);
+                string root = ctx.FilesDir?.AbsolutePath ?? ctx.CacheDir?.AbsolutePath;
+                if (string.IsNullOrEmpty(root)) {
+                    return;
+                }
+                cachedDiskPath = IOPath.Combine(root, CacheFileName);
                 if (IOFile.Exists(cachedDiskPath)) {
                     string json = IOFile.ReadAllText(cachedDiskPath);
                     List<AudioQualityReport> list = JsonSerializer.Deserialize<List<AudioQualityReport>>(json);
@@ -221,7 +226,7 @@ public static class AudioQualityAnalyzer {
             return cached;
         }
 
-        AudioQualityReport report = BuildFastHeuristicReport(item, key);
+        AudioQualityReport report = BuildFastHeuristicReport(ctx, item, key);
         StoreCacheEntry(key, report);
         return report;
     }
@@ -302,11 +307,12 @@ public static class AudioQualityAnalyzer {
             return;
         }
         EnsureCacheLoaded(ctx);
+        string safeFfmpeg = ResolveSafeFfmpegPath(ctx, ffmpegPath);
         List<(LibraryTrackItem Item, string Key)> pending = [];
         for (int i = 0; i < variants.Count; i++) {
             if (ct.IsCancellationRequested) break;
             LibraryTrackItem v = variants[i];
-            if (v == null || string.IsNullOrEmpty(v.FilePath) || !IOFile.Exists(v.FilePath)) continue;
+            if (v == null || !HasReadableSource(v)) continue;
             string k = BuildCacheKey(v);
             if (memCache.TryGetValue(k, out AudioQualityReport rep) && rep.DeepAnalyzed) continue;
             if (inFlight.TryAdd(k, 1)) {
@@ -326,7 +332,7 @@ public static class AudioQualityAnalyzer {
                     }
                     var (item, key) = pending[i];
                     try {
-                        AudioQualityReport deep = RunDeepAnalysis(item, ffmpegPath, ct);
+                        AudioQualityReport deep = RunDeepAnalysis(ctx, item, safeFfmpeg, ct);
                         if (deep != null) {
                             StoreCacheEntry(key, deep);
                             updated = true;
@@ -334,7 +340,7 @@ public static class AudioQualityAnalyzer {
                     } catch (OperationCanceledException) {
                         break;
                     } catch (Exception ex) {
-                        AppLogger.Warn($"Deep quality analysis skipped for '{IOPath.GetFileName(item.FilePath)}': {ex.Message}");
+                        AppLogger.Warn($"Deep quality analysis skipped for '{GetTrackDisplayLabel(ctx, item)}': {ex.Message}");
                     } finally {
                         inFlight.TryRemove(key, out _);
                     }
@@ -358,9 +364,10 @@ public static class AudioQualityAnalyzer {
     // ============================================================
     // FAST HEADER + PSYCHOACOUSTIC CODEC SCORING
     // ============================================================
-    static AudioQualityReport BuildFastHeuristicReport(LibraryTrackItem item, string cacheKey) {
+    static AudioQualityReport BuildFastHeuristicReport(Context ctx, LibraryTrackItem item, string cacheKey) {
+        Context effectiveCtx = ctx ?? Android.App.Application.Context;
         AudioTierCategory cat = ClassifyCategory(item);
-        string ext = IOPath.GetExtension(item.FilePath ?? "").ToLowerInvariant();
+        string ext = GetTrackExtension(effectiveCtx, item);
         string badge = (item.AudioBadge ?? "").ToUpperInvariant();
         string fmt = (item.FormatBadge ?? "").ToUpperInvariant();
 
@@ -372,17 +379,17 @@ public static class AudioQualityAnalyzer {
 
         // Quick lightweight binary header read for exact FLAC/WAV/Opus parameters (reads <= 256 bytes)
         try {
-            if (!string.IsNullOrEmpty(item.FilePath) && IOFile.Exists(item.FilePath)) {
+            if (HasReadableSource(item)) {
                 if (ext == ".flac") {
-                    TryReadFlacHeader(item.FilePath, ref sr, ref bitDepth, ref channels);
+                    TryReadFlacHeader(effectiveCtx, item, ref sr, ref bitDepth, ref channels);
                     isLossless = true;
                     codecFamily = "FLAC";
                 } else if (ext == ".wav") {
-                    TryReadWavHeader(item.FilePath, ref sr, ref bitDepth, ref channels);
+                    TryReadWavHeader(effectiveCtx, item, ref sr, ref bitDepth, ref channels);
                     isLossless = true;
                     codecFamily = "WAV/PCM";
                 } else if (ext is ".m4a" or ".mp4" or ".mka" or ".mkv" or ".ogg" or ".opus" or ".mp3" or ".aac") {
-                    TryReadMediaExtractorMeta(item.FilePath, ref sr, ref bitDepth, ref channels, ref bitrateKbps, ref codecFamily, ref isLossless);
+                    TryReadMediaExtractorMeta(effectiveCtx, item, ref sr, ref bitDepth, ref channels, ref bitrateKbps, ref codecFamily, ref isLossless);
                 }
             }
         } catch {
@@ -542,10 +549,11 @@ public static class AudioQualityAnalyzer {
         return Math.Round(score, 1);
     }
 
-    static void TryReadFlacHeader(string path, ref int sr, ref int bitDepth, ref int channels) {
-        using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+    static void TryReadFlacHeader(Context ctx, LibraryTrackItem item, ref int sr, ref int bitDepth, ref int channels) {
+        using System.IO.Stream fs = OpenTrackStream(ctx, item);
+        if (fs == null) return;
         byte[] buf = new byte[42];
-        if (fs.Read(buf, 0, buf.Length) < 42) return;
+        if (!ReadExactBytes(fs, buf)) return;
         if (buf[0] != 'f' || buf[1] != 'L' || buf[2] != 'a' || buf[3] != 'C') return;
         // STREAMINFO starts at offset 8 (4 bytes header + 4 bytes block header)
         if ((buf[4] & 0x7F) != 0) return;
@@ -560,7 +568,7 @@ public static class AudioQualityAnalyzer {
     }
 
     static bool TryFindWavHeaderAndData(
-        FileStream fs,
+        System.IO.Stream fs,
         out int audioFmt,
         out int channels,
         out int sr,
@@ -574,10 +582,11 @@ public static class AudioQualityAnalyzer {
         bits = 0;
         dataOffset = -1;
         dataLen = 0;
-        if (fs.Length < 44) return false;
+        if (fs == null) return false;
+        if (fs.CanSeek && fs.Length < 44) return false;
 
         Span<byte> riffHdr = stackalloc byte[12];
-        if (fs.Read(riffHdr) < 12) return false;
+        if (!ReadExactBytes(fs, riffHdr)) return false;
         bool isRiff = riffHdr[0] == 'R' && riffHdr[1] == 'I' && riffHdr[2] == 'F' && riffHdr[3] == 'F';
         bool isRf64 = riffHdr[0] == 'R' && riffHdr[1] == 'F' && riffHdr[2] == '6' && riffHdr[3] == '4';
         if ((!isRiff && !isRf64) || riffHdr[8] != 'W' || riffHdr[9] != 'A' || riffHdr[10] != 'V' || riffHdr[11] != 'E') {
@@ -591,8 +600,48 @@ public static class AudioQualityAnalyzer {
         Span<byte> ds64Buf = stackalloc byte[24];
         int maxChunks = 512;
 
+        if (!fs.CanSeek) {
+            long bytesScanned = 12;
+            while (maxChunks-- > 0 && bytesScanned < 262144) {
+                if (!ReadExactBytes(fs, chunkHdr)) break;
+                bytesScanned += 8;
+                uint szU32 = BinaryPrimitives.ReadUInt32LittleEndian(chunkHdr[4..8]);
+                bool isDs64 = chunkHdr[0] == 'd' && chunkHdr[1] == 's' && chunkHdr[2] == '6' && chunkHdr[3] == '4';
+                bool isFmt = chunkHdr[0] == 'f' && chunkHdr[1] == 'm' && chunkHdr[2] == 't' && chunkHdr[3] == ' ';
+                bool isData = chunkHdr[0] == 'd' && chunkHdr[1] == 'a' && chunkHdr[2] == 't' && chunkHdr[3] == 'a';
+                long consumed = 0;
+
+                if (isDs64 && szU32 >= 24) {
+                    if (ReadExactBytes(fs, ds64Buf)) {
+                        rf64DataSize = BinaryPrimitives.ReadInt64LittleEndian(ds64Buf.Slice(8, 8));
+                    }
+                    consumed = 24;
+                } else if (isFmt && szU32 >= 16) {
+                    int toRead = (int)Math.Min(40, szU32);
+                    if (ReadExactBytes(fs, fmtBuf[..toRead])) {
+                        audioFmt = BinaryPrimitives.ReadUInt16LittleEndian(fmtBuf[..2]);
+                        channels = BinaryPrimitives.ReadUInt16LittleEndian(fmtBuf.Slice(2, 2));
+                        sr = BinaryPrimitives.ReadInt32LittleEndian(fmtBuf.Slice(4, 4));
+                        bits = BinaryPrimitives.ReadUInt16LittleEndian(fmtBuf.Slice(14, 2));
+                        foundFmt = true;
+                        if (stopAtFmtOnly) return true;
+                    }
+                    consumed = toRead;
+                } else if (isData) {
+                    if (foundFmt) return true;
+                }
+
+                long chunkLen = (szU32 == 0xFFFFFFFF && isData && rf64DataSize > 0) ? rf64DataSize : szU32;
+                long paddedLen = chunkLen + (chunkLen & 1L);
+                long skip = paddedLen - consumed;
+                if (skip > 262144 || !SkipBytes(fs, skip)) break;
+                bytesScanned += paddedLen;
+            }
+            return foundFmt;
+        }
+
         while (maxChunks-- > 0 && fs.Position + 8 <= fs.Length) {
-            if (fs.Read(chunkHdr) < 8) break;
+            if (!ReadExactBytes(fs, chunkHdr)) break;
             uint szU32 = BinaryPrimitives.ReadUInt32LittleEndian(chunkHdr[4..8]);
             long chunkDataStart = fs.Position;
 
@@ -601,12 +650,12 @@ public static class AudioQualityAnalyzer {
             bool isData = chunkHdr[0] == 'd' && chunkHdr[1] == 'a' && chunkHdr[2] == 't' && chunkHdr[3] == 'a';
 
             if (isDs64 && szU32 >= 24 && chunkDataStart + 24 <= fs.Length) {
-                if (fs.Read(ds64Buf) == 24) {
+                if (ReadExactBytes(fs, ds64Buf)) {
                     rf64DataSize = BinaryPrimitives.ReadInt64LittleEndian(ds64Buf.Slice(8, 8));
                 }
             } else if (isFmt && szU32 >= 16 && chunkDataStart + 16 <= fs.Length) {
                 int toRead = (int)Math.Min(40, Math.Min(szU32, (ulong)(fs.Length - chunkDataStart)));
-                if (fs.Read(fmtBuf[..toRead]) >= 16) {
+                if (ReadExactBytes(fs, fmtBuf[..toRead])) {
                     audioFmt = BinaryPrimitives.ReadUInt16LittleEndian(fmtBuf[..2]);
                     channels = BinaryPrimitives.ReadUInt16LittleEndian(fmtBuf.Slice(2, 2));
                     sr = BinaryPrimitives.ReadInt32LittleEndian(fmtBuf.Slice(4, 4));
@@ -640,9 +689,9 @@ public static class AudioQualityAnalyzer {
         return foundFmt;
     }
 
-    static void TryReadWavHeader(string path, ref int sr, ref int bitDepth, ref int channels) {
-        using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        if (!TryFindWavHeaderAndData(fs, out _, out int ch, out int s, out int b, out _, out _, stopAtFmtOnly: true)) {
+    static void TryReadWavHeader(Context ctx, LibraryTrackItem item, ref int sr, ref int bitDepth, ref int channels) {
+        using System.IO.Stream fs = OpenTrackStream(ctx, item);
+        if (fs == null || !TryFindWavHeaderAndData(fs, out _, out int ch, out int s, out int b, out _, out _, stopAtFmtOnly: true)) {
             return;
         }
         if (ch is >= 1 and <= 32) channels = ch;
@@ -651,7 +700,8 @@ public static class AudioQualityAnalyzer {
     }
 
     static void TryReadMediaExtractorMeta(
-        string path,
+        Context ctx,
+        LibraryTrackItem item,
         ref int sr,
         ref int bitDepth,
         ref int channels,
@@ -659,7 +709,9 @@ public static class AudioQualityAnalyzer {
         ref string codecFamily,
         ref bool isLossless) {
         using MediaExtractor extractor = new();
-        extractor.SetDataSource(path);
+        if (!TrySetExtractorSource(extractor, ctx, item)) {
+            return;
+        }
         for (int i = 0; i < extractor.TrackCount; i++) {
             MediaFormat fmt = extractor.GetTrackFormat(i);
             string mime = fmt.GetString(MediaFormat.KeyMime) ?? "";
@@ -700,9 +752,11 @@ public static class AudioQualityAnalyzer {
     // ============================================================
     // DEEP PCM + FFT + EFFECTIVE BIT-DEPTH + DR + CLIPPING ENGINE
     // ============================================================
-    static AudioQualityReport RunDeepAnalysis(LibraryTrackItem item, string ffmpegPath, CancellationToken ct = default) {
+    static AudioQualityReport RunDeepAnalysis(Context ctx, LibraryTrackItem item, string ffmpegPath, CancellationToken ct = default) {
+        Context effectiveCtx = ctx ?? Android.App.Application.Context;
+        string safeFfmpeg = ResolveSafeFfmpegPath(effectiveCtx, ffmpegPath);
         string key = BuildCacheKey(item);
-        AudioQualityReport report = BuildFastHeuristicReport(item, key);
+        AudioQualityReport report = BuildFastHeuristicReport(effectiveCtx, item, key);
 
         // Extract ~2.2s representative mono-summed float window + raw int32 LSB check (for 24-bit files)
         float[] monoSamples = null;
@@ -710,24 +764,37 @@ public static class AudioQualityAnalyzer {
         bool inspectedRaw24Bit = false;
         bool lsbZeroPadded = false;
 
-        string ext = IOPath.GetExtension(item.FilePath ?? "").ToLowerInvariant();
+        string ext = GetTrackExtension(effectiveCtx, item);
+        string localPath = CanOpenFileForRead(item.FilePath) ? item.FilePath : null;
+        Android.Net.Uri uri = item.ContentUri ?? TryParseUri(item.FilePath);
+
         if (ext == ".wav") {
-            monoSamples = DecodeWavWindow(item.FilePath, out int wavSr, out int wavBits, out inspectedRaw24Bit, out lsbZeroPadded);
-            if (monoSamples != null && wavSr > 0) decodedSr = wavSr;
-            if (wavBits > 0) report.DeclaredBitDepth = wavBits;
+            if (localPath == null && uri != null) {
+                localPath = TryResolveReadablePath(effectiveCtx, uri);
+            }
+            if (!string.IsNullOrEmpty(localPath)) {
+                monoSamples = DecodeWavWindow(localPath, out int wavSr, out int wavBits, out inspectedRaw24Bit, out lsbZeroPadded);
+                if (monoSamples != null && wavSr > 0) decodedSr = wavSr;
+                if (wavBits > 0) report.DeclaredBitDepth = wavBits;
+            }
         }
 
         // If 24-bit FLAC/ALAC/TrueHD and FFmpeg is available, read exact 32-bit PCM so we can genuinely detect fake 24-bit
-        if (monoSamples == null && !string.IsNullOrEmpty(ffmpegPath) && IOFile.Exists(ffmpegPath) &&
+        if (monoSamples == null && !string.IsNullOrEmpty(safeFfmpeg) && IOFile.Exists(safeFfmpeg) &&
             (report.DeclaredBitDepth >= 24 || ext is ".thd" or ".mlp" or ".atmos" or ".dts")) {
-            monoSamples = DecodeWithFfmpegS32Window(item.FilePath, ffmpegPath, item.DurationMs, decodedSr, ct, out int ffSr, out inspectedRaw24Bit, out lsbZeroPadded);
-            if (monoSamples != null && ffSr > 0) decodedSr = ffSr;
+            if (localPath == null && uri != null) {
+                localPath = TryResolveReadablePath(effectiveCtx, uri);
+            }
+            if (!string.IsNullOrEmpty(localPath)) {
+                monoSamples = DecodeWithFfmpegS32Window(localPath, safeFfmpeg, item.DurationMs, decodedSr, ct, out int ffSr, out inspectedRaw24Bit, out lsbZeroPadded);
+                if (monoSamples != null && ffSr > 0) decodedSr = ffSr;
+            }
         }
 
         // Standard Android hardware/software MediaExtractor + MediaCodec decode for all other formats
         if (monoSamples == null) {
             ct.ThrowIfCancellationRequested();
-            monoSamples = DecodeWithMediaCodecWindow(item.FilePath, item.DurationMs, out int mcSr, out inspectedRaw24Bit, out lsbZeroPadded);
+            monoSamples = DecodeWithMediaCodecWindow(effectiveCtx, item, item.DurationMs, out int mcSr, out inspectedRaw24Bit, out lsbZeroPadded);
             if (monoSamples != null && mcSr > 0) decodedSr = mcSr;
         }
 
@@ -997,14 +1064,16 @@ public static class AudioQualityAnalyzer {
         }
     }
 
-    static float[] DecodeWithMediaCodecWindow(string path, long durationMs, out int sampleRate, out bool inspected24, out bool lsbZero) {
+    static float[] DecodeWithMediaCodecWindow(Context ctx, LibraryTrackItem item, long durationMs, out int sampleRate, out bool inspected24, out bool lsbZero) {
         sampleRate = 48000;
         inspected24 = false;
         lsbZero = false;
         MediaCodec codec = null;
         try {
             using MediaExtractor extractor = new();
-            extractor.SetDataSource(path);
+            if (!TrySetExtractorSource(extractor, ctx, item)) {
+                return null;
+            }
             int audioIdx = -1;
             MediaFormat format = null;
             for (int i = 0; i < extractor.TrackCount; i++) {
@@ -1304,5 +1373,159 @@ public static class AudioQualityAnalyzer {
                 }
             }
         }
+    }
+
+    static string ResolveSafeFfmpegPath(Context ctx, string ffmpegPath) {
+        string resolved = FFmpegInstallerService.ResolveExistingFFmpegPath(ctx, null);
+        if (!string.IsNullOrEmpty(resolved) && IOFile.Exists(resolved)) {
+            return resolved;
+        }
+        if (!string.IsNullOrEmpty(ffmpegPath) && !IsWritableAppDataPath(ctx, ffmpegPath) && IOFile.Exists(ffmpegPath)) {
+            return ffmpegPath;
+        }
+        return "";
+    }
+
+    static bool IsWritableAppDataPath(Context ctx, string path) {
+        if (string.IsNullOrEmpty(path)) return false;
+        try {
+            string full = IOPath.GetFullPath(path);
+            string files = ctx?.FilesDir?.AbsolutePath;
+            string cache = ctx?.CacheDir?.AbsolutePath;
+            if (!string.IsNullOrEmpty(files) && full.StartsWith(IOPath.GetFullPath(files), StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+            if (!string.IsNullOrEmpty(cache) && full.StartsWith(IOPath.GetFullPath(cache), StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+            return full.Replace('\\', '/').Contains("/files/bin/", StringComparison.OrdinalIgnoreCase);
+        } catch {
+            return false;
+        }
+    }
+
+    static bool IsUriString(string value) =>
+        !string.IsNullOrEmpty(value) &&
+        (value.StartsWith("content://", StringComparison.OrdinalIgnoreCase) ||
+         value.StartsWith("file://", StringComparison.OrdinalIgnoreCase));
+
+    static Android.Net.Uri TryParseUri(string pathOrUri) {
+        if (IsUriString(pathOrUri)) {
+            try {
+                return Android.Net.Uri.Parse(pathOrUri);
+            } catch {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    static bool CanOpenFileForRead(string path) {
+        if (string.IsNullOrEmpty(path) || IsUriString(path)) return false;
+        try {
+            if (!IOFile.Exists(path)) return false;
+            using FileStream fs = IOFile.OpenRead(path);
+            return fs.CanRead;
+        } catch {
+            return false;
+        }
+    }
+
+    static bool HasReadableSource(LibraryTrackItem item) {
+        if (item == null) return false;
+        if (item.ContentUri != null || IsUriString(item.FilePath)) return true;
+        return CanOpenFileForRead(item.FilePath);
+    }
+
+    static string TryResolveReadablePath(Context ctx, Android.Net.Uri uri) {
+        if (uri == null || ctx == null) return null;
+        try {
+            string resolved = AndroidFileHelper.ResolveReadablePath(ctx, uri);
+            return CanOpenFileForRead(resolved) ? resolved : null;
+        } catch {
+            return null;
+        }
+    }
+
+    static string GetTrackExtension(Context ctx, LibraryTrackItem item) {
+        if (item == null) return "";
+        if (!string.IsNullOrEmpty(item.FilePath) && !IsUriString(item.FilePath)) {
+            string ext = IOPath.GetExtension(item.FilePath).ToLowerInvariant();
+            if (!string.IsNullOrEmpty(ext)) return ext;
+        }
+        Android.Net.Uri uri = item.ContentUri ?? TryParseUri(item.FilePath);
+        if (uri != null && ctx != null) {
+            string disp = AndroidFileHelper.GetDisplayName(ctx, uri);
+            if (!string.IsNullOrEmpty(disp)) {
+                string ext = IOPath.GetExtension(disp).ToLowerInvariant();
+                if (!string.IsNullOrEmpty(ext)) return ext;
+            }
+        }
+        return !string.IsNullOrEmpty(item.FormatBadge)
+            ? "." + item.FormatBadge.TrimStart('.').ToLowerInvariant()
+            : "";
+    }
+
+    static string GetTrackDisplayLabel(Context ctx, LibraryTrackItem item) {
+        if (item == null) return "";
+        if (!string.IsNullOrEmpty(item.FilePath) && !IsUriString(item.FilePath)) {
+            return IOPath.GetFileName(item.FilePath);
+        }
+        Android.Net.Uri uri = item.ContentUri ?? TryParseUri(item.FilePath);
+        if (uri != null && ctx != null) {
+            string disp = AndroidFileHelper.GetDisplayName(ctx, uri);
+            if (!string.IsNullOrEmpty(disp)) return disp;
+        }
+        return !string.IsNullOrEmpty(item.Title) ? item.Title : (item.FilePath ?? "");
+    }
+
+    static System.IO.Stream OpenTrackStream(Context ctx, LibraryTrackItem item) {
+        if (item == null) return null;
+        if (CanOpenFileForRead(item.FilePath)) {
+            try {
+                return new FileStream(item.FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            } catch {
+                // Fall through to ContentUri stream
+            }
+        }
+        Android.Net.Uri uri = item.ContentUri ?? TryParseUri(item.FilePath);
+        return uri != null && ctx != null ? AndroidFileHelper.OpenReadableStream(ctx, uri) : null;
+    }
+
+    static bool TrySetExtractorSource(MediaExtractor extractor, Context ctx, LibraryTrackItem item) {
+        if (extractor == null || item == null) return false;
+        if (CanOpenFileForRead(item.FilePath)) {
+            extractor.SetDataSource(item.FilePath);
+            return true;
+        }
+        Android.Net.Uri uri = item.ContentUri ?? TryParseUri(item.FilePath);
+        if (uri != null && ctx != null) {
+            extractor.SetDataSource(ctx, uri, null);
+            return true;
+        }
+        return false;
+    }
+
+    static bool ReadExactBytes(System.IO.Stream stream, Span<byte> dest) {
+        int total = 0;
+        while (total < dest.Length) {
+            int n = stream.Read(dest[total..]);
+            if (n <= 0) return false;
+            total += n;
+        }
+        return true;
+    }
+
+    static bool SkipBytes(System.IO.Stream stream, long count) {
+        if (count <= 0) return true;
+        byte[] scratch = new byte[4096];
+        long remaining = count;
+        while (remaining > 0) {
+            int want = (int)Math.Min(scratch.Length, remaining);
+            int got = stream.Read(scratch, 0, want);
+            if (got <= 0) return false;
+            remaining -= got;
+        }
+        return true;
     }
 }

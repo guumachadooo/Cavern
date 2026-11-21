@@ -23,7 +23,7 @@ DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_E
   /root/.dotnet/dotnet build CavernSamples/Reusable/Cavernize.Logic/Cavernize.Logic.csproj -c Release -m:1 /p:UseSharedCompilation=false
 ```
 
-- Also audit C# syntax, `using` directives, Android API names (`Android.*`), and `AndroidManifest.xml` (`android:targetSdkVersion` **must remain `28`**) carefully before pushing so CI succeeds on the first try.
+- Also audit C# syntax, `using` directives, Android API names (`Android.*`), 16 KB ELF alignment (`NativeLibs/arm64-v8a/*.so`), and `AndroidManifest.xml` (`android:targetSdkVersion` **must remain `>= 35`**, `android:extractNativeLibs="true"`, `android:enableOnBackInvokedCallback="true"`, no `requestLegacyExternalStorage`) carefully before pushing so CI succeeds on the first try.
 
 ## 2. Sync Version for OTA Auto-Updater
 [AppUpdateService.cs](../../../CavernSamples/CavernizeAndroid/Services/AppUpdateService.cs) checks GitHub release tag `android-latest` and compares versions numerically (`IsRemoteNewer`).

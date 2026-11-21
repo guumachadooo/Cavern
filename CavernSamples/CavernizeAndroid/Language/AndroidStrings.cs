@@ -277,7 +277,7 @@ public sealed class AndroidStrings {
         ["NoTrack"] = "Please load a file with a supported track first.",
         ["OpRunning"] = "An operation is already running.",
         ["FFmpegNeeded"] = "The selected output codec ({0}) requires FFmpeg. Configure FFmpeg in Setup or choose PCM / ADM BWF / DAMF / LAF.",
-        ["TrueHDUnsupported"] = "Dolby TrueHD requires the truehdd decoder. Tap Download to set it up automatically.",
+        ["TrueHDUnsupported"] = "Dolby TrueHD requires the bundled truehdd decoder (libtruehdd.so). Check Settings if unavailable.",
         ["CopyingMedia"] = "Preparing media file...",
         ["DecodingFallback"] = "Decoding audio via Android MediaCodec...",
         ["ProbingContainer"] = "Inspecting container streams with FFmpeg...",
@@ -285,10 +285,10 @@ public sealed class AndroidStrings {
         ["TrueHDTitle"] = "Dolby TrueHD / Atmos",
         ["TrueHDDecoding"] = "Decoding TrueHD / Atmos with truehdd...",
         ["TrueHDLicenceTitle"] = "truehdd Decoder License (Apache 2.0)",
-        ["TrueHDLicenceDesc"] = "Cavernize uses the official static truehdd binary (aarch64-unknown-linux-musl) to decode Dolby TrueHD and Atmos 3D object metadata locally on your device (~1.4 MB download).",
-        ["TrueHDDownloadDecode"] = "Accept & Download",
+        ["TrueHDLicenceDesc"] = "Cavernize bundles the official ARM64 truehdd decoder (libtruehdd.so inside APK NativeLibraryDir, W^X compliant) to decode Dolby TrueHD and Atmos 3D object metadata locally on your device.",
+        ["TrueHDDownloadDecode"] = "Accept & Decode",
         ["TrueHDCancelled"] = "TrueHD decoding cancelled.",
-        ["TrueHDContainerNeedTools"] = "This video/MKV uses an audio format (such as Dolby TrueHD or DTS) that Android cannot decode natively. Install FFmpeg and truehdd in Settings for full support.",
+        ["TrueHDContainerNeedTools"] = "This video/MKV uses an audio format (such as Dolby TrueHD or DTS) that Android cannot decode natively. Check bundled FFmpeg & truehdd status in Settings.",
         ["OpenSettingsBtn"] = "Open Settings",
 
         // Room Stability & Fine-Tuning
@@ -320,30 +320,30 @@ public sealed class AndroidStrings {
         ["AllowUnknownSourcesMsg"] = "Allow 'Install unknown apps' for Cavernize, then return to complete the installation.",
         ["DismissBtn"] = "Later",
 
-        // FFmpeg Auto-Downloader & Updater
+        // FFmpeg Bundled NDK Engine
         ["FFmpegCardTitle"] = "FFmpeg Audio Engine",
-        ["FFmpegNotInstalled"] = "Not installed (needed for E-AC-3, AC-3, FLAC, Opus, MKV muxing)",
-        ["FFmpegInstalledVer"] = "Installed: {0}",
+        ["FFmpegNotInstalled"] = "Bundled libffmpeg.so unavailable in NativeLibraryDir (needed for E-AC-3, AC-3, FLAC, Opus, MKV muxing)",
+        ["FFmpegInstalledVer"] = "Bundled NDK: {0} (W^X Ready)",
         ["FFmpegUpdateAvail"] = "FFmpeg update available: {0}",
         ["FFmpegDownloadBtn"] = "Download FFmpeg",
         ["FFmpegUpdateBtn"] = "Update FFmpeg",
-        ["FFmpegCheckBtn"] = "Check FFmpeg",
+        ["FFmpegCheckBtn"] = "Verify FFmpeg",
         ["FFmpegManualBtn"] = "Locate Manual Binary",
-        ["FFmpegDownloading"] = "Downloading static FFmpeg...",
-        ["FFmpegUpToDate"] = "FFmpeg is up to date ({0}).",
+        ["FFmpegDownloading"] = "Verifying bundled FFmpeg...",
+        ["FFmpegUpToDate"] = "Bundled FFmpeg ready ({0}).",
 
-        // TrueHD Auto-Downloader & Updater
+        // TrueHD Bundled Engine
         ["TruehddCardTitle"] = "Dolby TrueHD Engine (truehdd)",
-        ["TruehddNotInstalled"] = "Not installed (needed for Dolby TrueHD & TrueHD Atmos playback/stems/export)",
-        ["TruehddInstalledVer"] = "Installed: v{0}",
+        ["TruehddNotInstalled"] = "Bundled libtruehdd.so unavailable in NativeLibraryDir (needed for Dolby TrueHD & Atmos)",
+        ["TruehddInstalledVer"] = "Bundled: v{0} (W^X Ready)",
         ["TruehddUpdateAvail"] = "truehdd update available: v{0}",
         ["TruehddDownloadBtn"] = "Download truehdd",
         ["TruehddUpdateBtn"] = "Update truehdd",
-        ["TruehddCheckBtn"] = "Check truehdd",
+        ["TruehddCheckBtn"] = "Verify truehdd",
         ["TruehddManualBtn"] = "Locate Manual Binary",
-        ["TruehddDownloading"] = "Downloading static truehdd...",
-        ["TruehddUpToDate"] = "truehdd is up to date (v{0}).",
-        ["TipTruehdd"] = "Official static ARM64 musl build of truehdd/truehdd. Decodes lossless Dolby TrueHD and Atmos 3D objects into DAMF/CAF in private app storage, cleaning temp cache automatically.",
+        ["TruehddDownloading"] = "Verifying bundled truehdd...",
+        ["TruehddUpToDate"] = "Bundled truehdd ready (v{0}).",
+        ["TipTruehdd"] = "Official ARM64 musl build of truehdd/truehdd bundled inside APK NativeLibraryDir (libtruehdd.so, W^X compliant). Decodes lossless Dolby TrueHD and Atmos 3D objects into DAMF/CAF in private temp storage, cleaning cache automatically.",
 
         // One UI 9 Section Titles & Bento Tiles
         ["QuickPanelTitle"] = "Quick Spatial Panel",
@@ -668,12 +668,12 @@ public sealed class AndroidStrings {
 
         // Slot 2B: On-Device Neural Audio Runtime (ONNX), MVSEP Anti-Artifact Pipeline & Spatial Karaoke
         ["Slot2BCardTitle"] = "Neural Audio, Stems & Karaoke (Slot 2B)",
-        ["NeuralRuntimeNotInstalled"] = "ONNX Runtime not installed (downloads on demand into private storage)",
+        ["NeuralRuntimeNotInstalled"] = "Bundled ONNX Runtime (libonnxruntime.so) unavailable in NativeLibraryDir",
         ["NeuralRuntimeInstalled"] = "ONNX Runtime {0} · {1} · {2} model(s) · {3:0.0} MB",
         ["NeuralRuntimeUpdateAvail"] = "ONNX Runtime update available: v{0}",
         ["NeuralRuntimeDownloadBtn"] = "Install ONNX Runtime",
         ["NeuralRuntimeUpdateBtn"] = "Update ONNX Runtime",
-        ["NeuralRuntimeCheckBtn"] = "Check Runtime",
+        ["NeuralRuntimeCheckBtn"] = "Verify Runtime",
         ["NeuralModelsBtn"] = "Models & Cache ({0})",
         ["NeuralProviderTitle"] = "Hardware Acceleration (EP)",
         ["NeuralProviderAuto"] = "Auto (QNN HTP -> XNNPACK -> CPU)",
@@ -697,7 +697,7 @@ public sealed class AndroidStrings {
         ["NeuralUpmixStems3D"] = "3D Neural Stems Placement",
         ["NeuralUpmixHybrid714"] = "Hybrid Neural + DirAC 7.1.4",
         ["NeuralModelsModalTitle"] = "Neural Models & Cache",
-        ["NeuralModelsCacheSummary"] = "Managed storage: {0:0.0} MB ({1} installed) · Zero APK bloat",
+        ["NeuralModelsCacheSummary"] = "Managed model storage: {0:0.0} MB ({1} installed)",
         ["NeuralModelDownloadBtn"] = "Download",
         ["NeuralModelImportBtn"] = "Import .onnx",
         ["NeuralModelDeleteBtn"] = "Delete",
@@ -708,11 +708,11 @@ public sealed class AndroidStrings {
         ["NeuralLicensesBtn"] = "Model Licenses",
         ["NeuralCacheClearedToast"] = "Neural models and temporary cache cleared.",
         ["NeuralModelImportedToast"] = "Imported ONNX model for {0}.",
-        ["NeuralRuntimeNeedInstall"] = "Install ONNX Runtime in Settings -> Neural Audio first.",
+        ["NeuralRuntimeNeedInstall"] = "Bundled ONNX Runtime (libonnxruntime.so) was not detected in APK NativeLibraryDir.",
         ["NeuralModelNeedInstall"] = "Download or import the selected ONNX model in Settings -> Neural Audio -> Models & Cache.",
-        ["NeuralDownloadingRuntime"] = "Downloading ONNX Runtime Android AAR...",
-        ["NeuralExtractingLibs"] = "ONNX Runtime: Extracting native libraries...",
-        ["NeuralRuntimeUpToDate"] = "ONNX Runtime is up to date ({0}).",
+        ["NeuralDownloadingRuntime"] = "Verifying bundled ONNX Runtime...",
+        ["NeuralExtractingLibs"] = "ONNX Runtime: Loading bundled native libraries...",
+        ["NeuralRuntimeUpToDate"] = "Bundled ONNX Runtime ready ({0}).",
         ["NeuralOrchestrationTitle"] = "Neural Pipeline Orchestration (Slot 7A)",
         ["NeuralOrchestrationAuto"] = "Auto (Best Installed Chain)",
         ["NeuralOrchestrationManual"] = "Manual (Custom Task Slots & Ensembles)",
@@ -736,7 +736,7 @@ public sealed class AndroidStrings {
         ["NeuralTaskDebleed"] = "Debleed / Denoise Refinement",
         ["NeuralTaskRestore"] = "Codec Restoration (Apollo)",
         ["NeuralTaskBwe"] = "Bandwidth Extension (BWE / SR)",
-        ["TipNeuralRuntime"] = "Downloads the official Microsoft ONNX Runtime Android native library (libonnxruntime.so + optional Snapdragon QNN HTP) on demand from Maven Central directly into FilesDir/bin/onnxruntime/ so the APK stays lean.",
+        ["TipNeuralRuntime"] = "Bundles the official Microsoft ONNX Runtime Android native library (libonnxruntime.so) directly inside APK NativeLibraryDir (W^X compliant, 16 KB ELF aligned). Separate .onnx model weights download on demand into FilesDir/neural_models/.",
         ["TipMvsepOverlap"] = "Raised-cosine overlap-add factor (2x to 8x) with reflection padding eliminates chunk boundary clicks and musical noise.",
         ["TipMvsepTta"] = "Runs polarity-inverted and channel-swapped passes and averages inverted outputs to cancel asymmetric neural hallucinations.",
         ["TipMvsepPhaseFix"] = "Reprojects neural stem magnitudes onto the original mixture complex phase via Wiener partition of unity, preventing phasey metallic ringing.",
@@ -1016,9 +1016,9 @@ public sealed class AndroidStrings {
         ["StemProgEmMwfPct"] = "EM-MWF Studio Master ({0})...",
         ["StemProgWritingMaster"] = "Writing master {0}/{1}...",
         ["StemProgMasterDone"] = "LGSR Studio Master (EM-MWF) complete!",
-        ["StemErrOnnxNotInstalled"] = "ONNX Runtime is not installed. Install it in Settings -> Neural Audio first.",
+        ["StemErrOnnxNotInstalled"] = "Bundled ONNX Runtime (libonnxruntime.so) is unavailable in NativeLibraryDir.",
         ["StemErrModelNotInstalled"] = "Selected ONNX neural model is not installed.",
-        ["TruehdBinaryNotInstalled"] = "truehdd is not installed. Open Settings -> External Decoders and install truehdd.",
+        ["TruehdBinaryNotInstalled"] = "Bundled libtruehdd.so is unavailable in NativeLibraryDir.",
         ["TruehdExtractingTrack"] = "Extracting TrueHD track...",
         ["TruehdExtractingPct"] = "Extracting TrueHD ({0})...",
         ["TruehdExtractFailed"] = "Failed to extract TrueHD track from container.",
@@ -1319,7 +1319,7 @@ public sealed class AndroidStrings {
         d["NoTrack"] = "Abra primeiro um arquivo com uma faixa suportada.";
         d["OpRunning"] = "Já existe uma operação em andamento.";
         d["FFmpegNeeded"] = "O codec escolhido ({0}) precisa do FFmpeg. Configure o FFmpeg em Configurações ou escolha PCM / ADM BWF / DAMF / LAF.";
-        d["TrueHDUnsupported"] = "Dolby TrueHD requer o decodificador truehdd. Toque para baixar automaticamente.";
+        d["TrueHDUnsupported"] = "Dolby TrueHD requer o decodificador truehdd integrado (libtruehdd.so). Verifique Ajustes se estiver indisponível.";
         d["CopyingMedia"] = "Preparando arquivo de mídia...";
         d["DecodingFallback"] = "Decodificando áudio via MediaCodec do Android...";
         d["ProbingContainer"] = "Analisando faixas do contêiner com FFmpeg...";
@@ -1327,10 +1327,10 @@ public sealed class AndroidStrings {
         d["TrueHDTitle"] = "Dolby TrueHD / Atmos";
         d["TrueHDDecoding"] = "Decodificando TrueHD / Atmos com truehdd...";
         d["TrueHDLicenceTitle"] = "Licença do Decodificador truehdd (Apache 2.0)";
-        d["TrueHDLicenceDesc"] = "O Cavernize usa o binário estático oficial truehdd (aarch64-unknown-linux-musl) para decodificar Dolby TrueHD e metadados 3D Atmos localmente no aparelho (~1,4 MB).";
-        d["TrueHDDownloadDecode"] = "Aceitar e Baixar";
+        d["TrueHDLicenceDesc"] = "O Cavernize já inclui o decodificador oficial truehdd ARM64 (libtruehdd.so em NativeLibraryDir do APK, compatível com W^X) para decodificar Dolby TrueHD e metadados 3D Atmos localmente no aparelho.";
+        d["TrueHDDownloadDecode"] = "Aceitar e Decodificar";
         d["TrueHDCancelled"] = "Decodificação TrueHD cancelada.";
-        d["TrueHDContainerNeedTools"] = "Este vídeo/MKV usa uma faixa de áudio (como Dolby TrueHD ou DTS) não suportada nativamente pelo Android. Instale o FFmpeg e o truehdd em Ajustes para abrir com suporte completo.";
+        d["TrueHDContainerNeedTools"] = "Este vídeo/MKV usa uma faixa de áudio (como Dolby TrueHD ou DTS) não suportada nativamente pelo Android. Verifique o status dos motores FFmpeg e truehdd em Ajustes.";
         d["OpenSettingsBtn"] = "Ir para Ajustes";
 
         d["LockRoom"] = "Mover Ouvinte";
@@ -1361,27 +1361,27 @@ public sealed class AndroidStrings {
         d["DismissBtn"] = "Depois";
 
         d["FFmpegCardTitle"] = "Motor de Áudio FFmpeg";
-        d["FFmpegNotInstalled"] = "Não instalado (necessário para E-AC-3, AC-3, FLAC, Opus e MKV)";
-        d["FFmpegInstalledVer"] = "Instalado: {0}";
+        d["FFmpegNotInstalled"] = "libffmpeg.so integrado indisponível em NativeLibraryDir (necessário para E-AC-3, AC-3, FLAC, Opus e MKV)";
+        d["FFmpegInstalledVer"] = "NDK Integrado: {0} (Pronto W^X)";
         d["FFmpegUpdateAvail"] = "Atualização do FFmpeg disponível: {0}";
         d["FFmpegDownloadBtn"] = "Baixar FFmpeg Auto";
         d["FFmpegUpdateBtn"] = "Atualizar FFmpeg";
-        d["FFmpegCheckBtn"] = "Checar FFmpeg";
+        d["FFmpegCheckBtn"] = "Verificar FFmpeg";
         d["FFmpegManualBtn"] = "Selecionar Manualmente";
-        d["FFmpegDownloading"] = "Baixando FFmpeg estático ARM64...";
-        d["FFmpegUpToDate"] = "FFmpeg atualizado ({0}).";
+        d["FFmpegDownloading"] = "Verificando FFmpeg integrado...";
+        d["FFmpegUpToDate"] = "FFmpeg integrado pronto ({0}).";
 
         d["TruehddCardTitle"] = "Motor Dolby TrueHD (truehdd)";
-        d["TruehddNotInstalled"] = "Não instalado (necessário para reproduzir, converter e extrair Stems de Dolby TrueHD / Atmos)";
-        d["TruehddInstalledVer"] = "Instalado: v{0}";
+        d["TruehddNotInstalled"] = "libtruehdd.so integrado indisponível em NativeLibraryDir (necessário para Dolby TrueHD / Atmos)";
+        d["TruehddInstalledVer"] = "Integrado: v{0} (Pronto W^X)";
         d["TruehddUpdateAvail"] = "Atualização do truehdd disponível: v{0}";
         d["TruehddDownloadBtn"] = "Baixar truehdd Auto";
         d["TruehddUpdateBtn"] = "Atualizar truehdd";
-        d["TruehddCheckBtn"] = "Checar truehdd";
+        d["TruehddCheckBtn"] = "Verificar truehdd";
         d["TruehddManualBtn"] = "Selecionar Binário Manual";
-        d["TruehddDownloading"] = "Baixando truehdd estático ARM64...";
-        d["TruehddUpToDate"] = "truehdd atualizado (v{0}).";
-        d["TipTruehdd"] = "Binário estático musl oficial do projeto truehdd/truehdd. Decodifica Dolby TrueHD e objetos 3D Atmos em DAMF/CAF direto no armazenamento privado do app, limpando o cache automaticamente.";
+        d["TruehddDownloading"] = "Verificando truehdd integrado...";
+        d["TruehddUpToDate"] = "truehdd integrado pronto (v{0}).";
+        d["TipTruehdd"] = "Compilação oficial ARM64 musl de truehdd/truehdd integrada em NativeLibraryDir do APK (libtruehdd.so, compatível com W^X). Decodifica Dolby TrueHD e objetos 3D Atmos em DAMF/CAF e limpa o cache automaticamente.";
 
         d["QuickPanelTitle"] = "Painel Rápido Espacial";
         d["BentoHrtf"] = "HRTF 3D";
@@ -1704,12 +1704,12 @@ public sealed class AndroidStrings {
 
         // Slot 2B: Áudio Neural no Dispositivo (ONNX), Pipeline MVSEP e Spatial Karaoke
         d["Slot2BCardTitle"] = "Áudio Neural, Stems e Karaoke (Slot 2B)";
-        d["NeuralRuntimeNotInstalled"] = "ONNX Runtime não instalado (baixa sob demanda no armazenamento privado)";
+        d["NeuralRuntimeNotInstalled"] = "ONNX Runtime integrado (libonnxruntime.so) indisponível em NativeLibraryDir";
         d["NeuralRuntimeInstalled"] = "ONNX Runtime {0} · {1} · {2} modelo(s) · {3:0.0} MB";
         d["NeuralRuntimeUpdateAvail"] = "Atualização do ONNX Runtime disponível: v{0}";
         d["NeuralRuntimeDownloadBtn"] = "Instalar ONNX Runtime";
         d["NeuralRuntimeUpdateBtn"] = "Atualizar ONNX Runtime";
-        d["NeuralRuntimeCheckBtn"] = "Checar Runtime";
+        d["NeuralRuntimeCheckBtn"] = "Verificar Runtime";
         d["NeuralModelsBtn"] = "Modelos e Cache ({0})";
         d["NeuralProviderTitle"] = "Aceleração de Hardware (EP)";
         d["NeuralProviderAuto"] = "Automático (QNN HTP -> XNNPACK -> CPU)";
@@ -1733,7 +1733,7 @@ public sealed class AndroidStrings {
         d["NeuralUpmixStems3D"] = "Posicionamento 3D de Stems Neurais";
         d["NeuralUpmixHybrid714"] = "Híbrido Neural + DirAC 7.1.4";
         d["NeuralModelsModalTitle"] = "Modelos Neurais e Cache";
-        d["NeuralModelsCacheSummary"] = "Armazenamento gerenciado: {0:0.0} MB ({1} instalado(s)) · APK leve";
+        d["NeuralModelsCacheSummary"] = "Armazenamento de modelos: {0:0.0} MB ({1} instalado(s))";
         d["NeuralModelDownloadBtn"] = "Baixar";
         d["NeuralModelImportBtn"] = "Importar .onnx";
         d["NeuralModelDeleteBtn"] = "Remover";
@@ -1744,11 +1744,11 @@ public sealed class AndroidStrings {
         d["NeuralLicensesBtn"] = "Licenças dos Modelos";
         d["NeuralCacheClearedToast"] = "Modelos neurais e cache temporário limpos.";
         d["NeuralModelImportedToast"] = "Modelo ONNX importado para {0}.";
-        d["NeuralRuntimeNeedInstall"] = "Instale primeiro o ONNX Runtime em Ajustes -> Áudio Neural.";
+        d["NeuralRuntimeNeedInstall"] = "ONNX Runtime integrado (libonnxruntime.so) não detectado em NativeLibraryDir do APK.";
         d["NeuralModelNeedInstall"] = "Baixe ou importe o modelo ONNX escolhido em Ajustes -> Áudio Neural -> Modelos e Cache.";
-        d["NeuralDownloadingRuntime"] = "Baixando ONNX Runtime Android AAR...";
-        d["NeuralExtractingLibs"] = "ONNX Runtime: Extraindo bibliotecas nativas...";
-        d["NeuralRuntimeUpToDate"] = "ONNX Runtime atualizado ({0}).";
+        d["NeuralDownloadingRuntime"] = "Verificando ONNX Runtime integrado...";
+        d["NeuralExtractingLibs"] = "ONNX Runtime: Carregando bibliotecas nativas integradas...";
+        d["NeuralRuntimeUpToDate"] = "ONNX Runtime integrado pronto ({0}).";
         d["NeuralOrchestrationTitle"] = "Orquestração da Cadeia Neural (Slot 7A)";
         d["NeuralOrchestrationAuto"] = "Automático (Melhor Cadeia Instalada)";
         d["NeuralOrchestrationManual"] = "Manual (Slots e Ensembles Personalizados)";
@@ -1772,7 +1772,7 @@ public sealed class AndroidStrings {
         d["NeuralTaskDebleed"] = "Debleed / Redução de Vazamento";
         d["NeuralTaskRestore"] = "Restauração de Codec (Apollo)";
         d["NeuralTaskBwe"] = "Extensão de Largura de Banda (BWE / SR)";
-        d["TipNeuralRuntime"] = "Baixa sob demanda a biblioteca nativa oficial Microsoft ONNX Runtime Android (libonnxruntime.so + QNN HTP opcional para Snapdragon) do Maven Central direto para FilesDir/bin/onnxruntime/, mantendo o APK super leve.";
+        d["TipNeuralRuntime"] = "Integra a biblioteca nativa oficial Microsoft ONNX Runtime Android (libonnxruntime.so) diretamente em NativeLibraryDir do APK (compatível com W^X e alinhamento ELF 16 KB). Os pesos .onnx dos modelos são baixados sob demanda em FilesDir/neural_models/.";
         d["TipMvsepOverlap"] = "Fator de sobreposição raised-cosine (2x a 8x) com preenchimento refletido que elimina cliques de borda e ruído musical.";
         d["TipMvsepTta"] = "Executa passagens com polaridade invertida e canais trocados, promediando o resultado para cancelar alucinações assimétricas da rede neural.";
         d["TipMvsepPhaseFix"] = "Reprojeta as magnitudes neurais sobre a fase complexa exata da mixagem original usando Wiener (partição da unidade), eliminando som metálico.";
@@ -2052,9 +2052,9 @@ public sealed class AndroidStrings {
         d["StemProgEmMwfPct"] = "Studio Master EM-MWF ({0})...";
         d["StemProgWritingMaster"] = "Gravando master {0}/{1}...";
         d["StemProgMasterDone"] = "LGSR Studio Master (EM-MWF) concluído!";
-        d["StemErrOnnxNotInstalled"] = "ONNX Runtime não instalado. Instale em Ajustes -> Áudio Neural primeiro.";
+        d["StemErrOnnxNotInstalled"] = "ONNX Runtime integrado (libonnxruntime.so) indisponível em NativeLibraryDir.";
         d["StemErrModelNotInstalled"] = "Modelo neural ONNX selecionado não está instalado.";
-        d["TruehdBinaryNotInstalled"] = "truehdd não instalado. Abra Ajustes -> Decodificadores Externos e instale o truehdd.";
+        d["TruehdBinaryNotInstalled"] = "libtruehdd.so integrado indisponível em NativeLibraryDir.";
         d["TruehdExtractingTrack"] = "Extraindo faixa TrueHD...";
         d["TruehdExtractingPct"] = "Extraindo TrueHD ({0})...";
         d["TruehdExtractFailed"] = "Falha ao extrair a faixa TrueHD do container.";

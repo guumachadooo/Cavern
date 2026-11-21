@@ -108,10 +108,10 @@
     {
       "path_suffix": "CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml",
       "check_when_touching_regex": "targetSdkVersion",
-      "must_contain_regex": "android:targetSdkVersion\\s*=\\s*\"28\"",
+      "must_contain_regex": "android:targetSdkVersion\\s*=\\s*\"(?:35|36)\"",
       "decision": "force_ask",
       "verify_severity": "fail",
-      "reason": "PROJECT SAFETY GUARD: AndroidManifest.xml must keep android:targetSdkVersion=\"28\" until W23 migrates native binaries to NativeLibraryDir (SELinux untrusted_app_27 domain for FilesDir/bin)."
+      "reason": "PROJECT SAFETY GUARD: AndroidManifest.xml must keep android:targetSdkVersion=\"35\" (35 or 36) for Modern Android W^X NativeLibraryDir, Scoped Storage, Edge-to-Edge, and Predictive Back compliance."
     }
   ],
   "command_guards": [
@@ -181,6 +181,27 @@
       "window_after": 13,
       "severity": "warn",
       "message": "Horizontal LinearLayout near buttons/pills without visible `BaselineAligned = false` in local window."
+    },
+    {
+      "path_prefix": "CavernSamples/CavernizeAndroid/",
+      "path_regex": "\\.cs$",
+      "forbid_regex": "(?:FilesDir|filesDir|binDir)[^\\n;]*(?:Process\\.Start|FileName\\s*=|NativeLibrary\\.Load)|(?:Process\\.Start|NativeLibrary\\.Load)\\s*\\([^\\n;]*(?:FilesDir|filesDir|binDir|/files/bin)",
+      "severity": "fail",
+      "message": "W^X violation: executing or dlopen-ing binaries from FilesDir/bin is forbidden; resolve bundled .so from ApplicationInfo.NativeLibraryDir."
+    },
+    {
+      "path_prefix": "CavernSamples/CavernizeAndroid/",
+      "path_regex": "\\.cs$",
+      "forbid_regex": "\\b(?:SetStatusBarColor|SetNavigationBarColor|SystemUiVisibility)\\b",
+      "severity": "fail",
+      "message": "Deprecated SystemUI/Window bar color API detected; use WindowInsets / WindowInsetsController Edge-to-Edge APIs."
+    },
+    {
+      "path_prefix": "CavernSamples/CavernizeAndroid/Properties/",
+      "path_regex": "AndroidManifest\\.xml$",
+      "forbid_regex": "requestLegacyExternalStorage",
+      "severity": "fail",
+      "message": "requestLegacyExternalStorage is forbidden on targetSdkVersion >= 35; use MediaStore/SAF Scoped Storage."
     }
   ],
   "key_parity_rules": [
@@ -512,7 +533,7 @@
         "pendingintent"
       ],
       "checklist": [
-        "Keep `android:targetSdkVersion=\"28\"` untouched in `AndroidManifest.xml` UNTIL W23 migrates native binaries to `NativeLibraryDir`.",
+        "Enforce `android:targetSdkVersion` >= 35 (35/36), `extractNativeLibs=\"true\"`, `enableOnBackInvokedCallback=\"true\"`, W^X `NativeLibraryDir` execution (zero `FilesDir/bin/` exec), 16 KB ELF alignment, and API 33+ runtime/FGS compliance.",
         "Check `SafePipeHandle` / stream disposal, lock-free audio/USB lifecycles, bitmap `.Recycle()` safety, and `AppLogger` error diagnostics."
       ]
     },

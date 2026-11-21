@@ -21,6 +21,7 @@ Use this checklist when changing any visual element or screen in `CavernSamples/
 - **Horizontal button rows:** Set `BaselineAligned = false` and `SetGravity(GravityFlags.CenterVertical)` on every `LinearLayout` (`Orientation.Horizontal`) that holds buttons or multi-element pills.
 - **Pill buttons:** Configure `SetSingleLine(true)` and `Ellipsize = TextUtils.TruncateAt.End` on compact action buttons (`PrimaryButton`, `SecondaryButton`, `PillButton`) or place overflow button sets inside a `HorizontalScrollView`.
 - **Custom touch views inside `ScrollView`:** Maintain `touchSlop` vertical-vs-horizontal disambiguation and `Parent?.RequestDisallowInterceptTouchEvent(...)` in `RoomSimulatorView`, `OneUiSeekBar`, and `OneUiWaveMediaSeekBar`.
+- **Edge-to-Edge & Predictive Back (API 35+):** Handle `WindowInsets.Type.SystemBars() | DisplayCutout() | Ime()` via `SetOnApplyWindowInsetsListener` (`navFrostedHost`, `bottomScrimView`, tabs, and fullscreen video cutouts; never use deprecated `SetStatusBarColor`/`SetNavigationBarColor`/`SystemUiVisibility`/`SetFitsSystemWindows(true)`), and dynamically register API 33+ `IOnBackInvokedCallback` only while an internal back-step exists.
 
 ## 4. Visual Consistency & Localization
 - Replace stock Android dialogs/spinners with `OneUiModalDialog` and `OneUiInlineSelector`.

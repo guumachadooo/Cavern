@@ -24,6 +24,11 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+      - name: Setup .NET 11 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '11.0.x'
+
       - name: Verify .NET SDK
         run: dotnet --info
 
@@ -91,6 +96,172 @@ jobs:
           mkdir -p "CavernSamples/CavernizeAndroid/NativeLibs/arm64-v8a"
           cp "$WORK_DIR/cmake_arm64/libcavernize_proaudio.so" "CavernSamples/CavernizeAndroid/NativeLibs/arm64-v8a/libcavernize_proaudio.so"
           ls -lh "CavernSamples/CavernizeAndroid/NativeLibs/arm64-v8a/libcavernize_proaudio.so"
+
+      - name: Bundle W^X NativeLibs (libffmpeg.so, libtruehdd.so, libonnxruntime.so) & verify 16 KB ELF alignment
+        run: |
+          set -euo pipefail
+          python3 - << 'PY'
+          import hashlib, io, json, os, pathlib, re, shutil, struct, subprocess, tarfile, urllib.error, urllib.request, xml.etree.ElementTree as ET, zipfile
+
+          native_dir = pathlib.Path("CavernSamples/CavernizeAndroid/NativeLibs/arm64-v8a")
+          assets_dir = pathlib.Path("CavernSamples/CavernizeAndroid/Assets")
+          native_dir.mkdir(parents=True, exist_ok=True)
+          (assets_dir / "ffmpeg").mkdir(parents=True, exist_ok=True)
+          (assets_dir / "truehdd").mkdir(parents=True, exist_ok=True)
+          (assets_dir / "onnxruntime").mkdir(parents=True, exist_ok=True)
+
+          def http_get(url, timeout=90):
+              headers = {"User-Agent": "CavernizeCI/2.9"}
+              tok = os.environ.get("GITHUB_TOKEN")
+              if tok and "api.github.com" in url:
+                  headers["Authorization"] = f"Bearer {tok}"
+              req = urllib.request.Request(url, headers=headers)
+              with urllib.request.urlopen(req, timeout=timeout) as resp:
+                  return resp.read()
+
+          # 1. FFmpeg (16 KB ELF aligned standalone PIE executable libffmpeg.so, Android API 24+)
+          ff_tag = "native-ffmpeg-8.1.3-r1"
+          try:
+              rels = json.loads(http_get("https://api.github.com/repos/mzgs/FFmpegX-Android/releases?per_page=10", 30))
+              for r in rels:
+                  t = r.get("tag_name", "")
+                  if t.startswith("native-ffmpeg-") and any(a.get("name") == "ffmpeg-android.tar.gz" for a in r.get("assets", [])):
+                      ff_tag = t
+                      break
+          except Exception as ex:
+              print(f"FFmpeg release lookup fallback ({ex}); using {ff_tag}")
+
+          rel_meta = json.loads(http_get(f"https://github.com/mzgs/FFmpegX-Android/releases/download/{ff_tag}/native-release.json", 30))
+          ff_url = rel_meta["url"]
+          ff_sha = rel_meta["sha256"].strip().lower()
+          print(f"Downloading FFmpeg ({ff_tag}) from {ff_url}...")
+          ff_tar_bytes = http_get(ff_url, 180)
+          actual_sha = hashlib.sha256(ff_tar_bytes).hexdigest().lower()
+          assert actual_sha == ff_sha, f"FFmpeg SHA256 mismatch: {actual_sha} != {ff_sha}"
+          with tarfile.open(fileobj=io.BytesIO(ff_tar_bytes), mode="r:gz") as tf:
+              ff_member = tf.getmember("jniLibs/arm64-v8a/libffmpeg_exec.so")
+              (native_dir / "libffmpeg.so").write_bytes(tf.extractfile(ff_member).read())
+              for m in tf.getmembers():
+                  if m.isfile() and m.name == "assets/ffmpeg-licenses/ffmpeg/LICENSE.md":
+                      (assets_dir / "ffmpeg" / "LICENSE.md").write_bytes(tf.extractfile(m).read())
+          ver_m = re.search(r"native-ffmpeg-([0-9.]+)", ff_tag)
+          ff_ver = ver_m.group(1) if ver_m else ff_tag
+          (assets_dir / "ffmpeg" / "version.txt").write_text(ff_ver + "\n", encoding="utf-8")
+          print(f"Bundled libffmpeg.so ({(native_dir / 'libffmpeg.so').stat().st_size} bytes, v{ff_ver})")
+
+          # 2. truehdd (static musl ARM64 executable -> libtruehdd.so, 64 KB LOAD aligned)
+          th_ver = "0.6.3"
+          th_url = f"https://github.com/truehdd/truehdd/releases/download/{th_ver}/truehdd-{th_ver}-aarch64-unknown-linux-musl.tar.gz"
+          th_sha_url = th_url + ".sha256"
+          try:
+              th_rel = json.loads(http_get("https://api.github.com/repos/truehdd/truehdd/releases/latest", 30))
+              th_ver = (th_rel.get("tag_name") or th_ver).lstrip("vV")
+              for a in th_rel.get("assets", []):
+                  nm = a.get("name", "")
+                  if nm.endswith("aarch64-unknown-linux-musl.tar.gz"):
+                      th_url = a["browser_download_url"]
+                  elif nm.endswith("aarch64-unknown-linux-musl.tar.gz.sha256"):
+                      th_sha_url = a["browser_download_url"]
+          except Exception as ex:
+              print(f"truehdd release lookup fallback ({ex}); using {th_ver}")
+
+          print(f"Downloading truehdd ({th_ver}) from {th_url}...")
+          th_tar_bytes = http_get(th_url, 120)
+          try:
+              expected_th_sha = http_get(th_sha_url, 30).decode("utf-8").strip().split()[0].lower()
+              actual_th_sha = hashlib.sha256(th_tar_bytes).hexdigest().lower()
+              assert actual_th_sha == expected_th_sha, f"truehdd SHA256 mismatch: {actual_th_sha} != {expected_th_sha}"
+          except urllib.error.HTTPError:
+              pass
+          with tarfile.open(fileobj=io.BytesIO(th_tar_bytes), mode="r:gz") as tf:
+              found_bin = False
+              for m in tf.getmembers():
+                  if not m.isfile():
+                      continue
+                  base = os.path.basename(m.name)
+                  if base == "truehdd":
+                      (native_dir / "libtruehdd.so").write_bytes(tf.extractfile(m).read())
+                      found_bin = True
+                  elif base in ("LICENSE", "NOTICE"):
+                      (assets_dir / "truehdd" / base).write_bytes(tf.extractfile(m).read())
+              assert found_bin, "truehdd binary missing from archive"
+          (assets_dir / "truehdd" / "version.txt").write_text(th_ver + "\n", encoding="utf-8")
+          print(f"Bundled libtruehdd.so ({(native_dir / 'libtruehdd.so').stat().st_size} bytes, v{th_ver})")
+
+          # 3. ONNX Runtime (Maven Central onnxruntime-android -> libonnxruntime.so + C API header)
+          ort_base = "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android"
+          ort_ver = "1.32.0"
+          try:
+              xml_bytes = http_get(f"{ort_base}/maven-metadata.xml", 30)
+              root = ET.fromstring(xml_bytes)
+              ort_ver = (root.findtext(".//release") or root.findtext(".//latest") or ort_ver).strip()
+          except Exception as ex:
+              print(f"ORT metadata fallback ({ex}); using {ort_ver}")
+
+          ort_url = f"{ort_base}/{ort_ver}/onnxruntime-android-{ort_ver}.aar"
+          print(f"Downloading ONNX Runtime ({ort_ver}) from {ort_url}...")
+          ort_aar = http_get(ort_url, 180)
+          with zipfile.ZipFile(io.BytesIO(ort_aar)) as zf:
+              found_ort = False
+              for name in zf.namelist():
+                  norm = name.replace("\\", "/")
+                  if norm.startswith("jni/arm64-v8a/") and norm.endswith(".so"):
+                      base = os.path.basename(norm)
+                      if not base or base == "libonnxruntime4j_jni.so":
+                          continue
+                      (native_dir / base).write_bytes(zf.read(name))
+                      if base == "libonnxruntime.so":
+                          found_ort = True
+                  elif norm == "headers/onnxruntime_c_api.h" or norm.endswith("/onnxruntime_c_api.h"):
+                      (assets_dir / "onnxruntime" / "onnxruntime_c_api.h").write_bytes(zf.read(name))
+                  elif norm in ("LICENSE", "LICENSE.txt") or norm.endswith("/LICENSE"):
+                      (assets_dir / "onnxruntime" / "LICENSE.txt").write_bytes(zf.read(name))
+              assert found_ort, "libonnxruntime.so missing from ONNX Runtime AAR"
+              assert (assets_dir / "onnxruntime" / "onnxruntime_c_api.h").is_file(), "onnxruntime_c_api.h missing from AAR"
+          (assets_dir / "onnxruntime" / "version.txt").write_text(ort_ver + "\n", encoding="utf-8")
+          print(f"Bundled libonnxruntime.so ({(native_dir / 'libonnxruntime.so').stat().st_size} bytes, v{ort_ver})")
+
+          # 4. Verify required binaries, ELF64 AArch64 headers, 16 KB PT_LOAD alignment, and non-stripped exports
+          required = ["libcavernize_proaudio.so", "libffmpeg.so", "libtruehdd.so", "libonnxruntime.so"]
+          for req_name in required:
+              assert (native_dir / req_name).is_file(), f"Missing required native binary: {native_dir / req_name}"
+
+          ndk_dir = os.environ.get("ANDROID_NDK_LATEST_HOME") or os.environ.get("ANDROID_NDK_HOME") or os.environ.get("ANDROID_NDK_ROOT") or ""
+          if not ndk_dir or not os.path.isdir(ndk_dir):
+              cands = sorted(pathlib.Path("/usr/local/lib/android/sdk/ndk").glob("*")) if os.path.isdir("/usr/local/lib/android/sdk/ndk") else []
+              ndk_dir = str(cands[-1]) if cands else ""
+          llvm_bin = pathlib.Path(ndk_dir) / "toolchains/llvm/prebuilt/linux-x86_64/bin" if ndk_dir else None
+          objdump = str(llvm_bin / "llvm-objdump") if llvm_bin and (llvm_bin / "llvm-objdump").is_file() else "objdump"
+          readelf = str(llvm_bin / "llvm-readelf") if llvm_bin and (llvm_bin / "llvm-readelf").is_file() else "readelf"
+          nm_bin = str(llvm_bin / "llvm-nm") if llvm_bin and (llvm_bin / "llvm-nm").is_file() else "nm"
+
+          for so_path in sorted(native_dir.glob("*.so")):
+              raw = so_path.read_bytes()
+              assert raw[:4] == b"\x7fELF" and raw[4] == 2 and raw[5] == 1, f"{so_path.name}: not 64-bit LE ELF"
+              e_type, e_machine, _, _, e_phoff, _, _, _, e_phentsize, e_phnum = struct.unpack_from("<HHIQQQIHHH", raw, 16)
+              assert e_machine == 183, f"{so_path.name}: expected EM_AARCH64 (183), got {e_machine}"
+              assert e_type in (2, 3), f"{so_path.name}: unexpected ELF e_type={e_type}"
+              loads = []
+              for i in range(e_phnum):
+                  p_type, _, p_offset, p_vaddr, _, _, p_memsz, p_align = struct.unpack_from("<IIQQQQQQ", raw, e_phoff + i * e_phentsize)
+                  if p_type == 1:
+                      assert p_align >= 16384, f"{so_path.name}: PT_LOAD align {hex(p_align)} < 0x4000 (16 KB)"
+                      assert (p_offset - p_vaddr) % 16384 == 0, f"{so_path.name}: PT_LOAD offset/vaddr delta not 16 KB aligned"
+                      loads.append(hex(p_align))
+              assert loads, f"{so_path.name}: no PT_LOAD segments"
+              od_out = subprocess.check_output([objdump, "-p", str(so_path)], text=True, stderr=subprocess.STDOUT)
+              load_lines = [ln.strip() for ln in od_out.splitlines() if "LOAD" in ln]
+              print(f"OK {so_path.name} ({len(raw)} bytes, type={e_type}, aligns={loads}):")
+              for ln in load_lines:
+                  print(f"   {ln}")
+
+          # Verify shared library dynamic exports are unstripped for P/Invoke & NativeLibrary.GetExport
+          pa_syms = subprocess.check_output([nm_bin, "-D", str(native_dir / "libcavernize_proaudio.so")], text=True)
+          assert "cavernize_pa_get_version" in pa_syms, "libcavernize_proaudio.so stripped of cavernize_pa_get_version!"
+          ort_syms = subprocess.check_output([nm_bin, "-D", str(native_dir / "libonnxruntime.so")], text=True)
+          assert "OrtGetApiBase" in ort_syms, "libonnxruntime.so stripped of OrtGetApiBase!"
+          print("All NativeLibs/arm64-v8a binaries verified 16 KB ELF aligned and unstripped.")
+          PY
 
       - name: Full multi-layer compile check & consolidated error report
         env:
@@ -305,6 +476,47 @@ jobs:
           echo "Found APK: $APK_PATH"
           cp "$APK_PATH" "$GITHUB_WORKSPACE/build/Cavernize-Android.apk"
           ls -lh "$GITHUB_WORKSPACE/build/Cavernize-Android.apk"
+
+      - name: Verify APK 16 KB alignment & bundled NativeLibs
+        run: |
+          set -euo pipefail
+          APK="$GITHUB_WORKSPACE/build/Cavernize-Android.apk"
+          python3 - "$APK" << 'PY'
+          import struct, sys, zipfile
+
+          apk_path = sys.argv[1]
+          required = {
+              "lib/arm64-v8a/libcavernize_proaudio.so",
+              "lib/arm64-v8a/libffmpeg.so",
+              "lib/arm64-v8a/libtruehdd.so",
+              "lib/arm64-v8a/libonnxruntime.so",
+              "assets/onnxruntime/onnxruntime_c_api.h",
+          }
+          with zipfile.ZipFile(apk_path) as zf:
+              names = set(zf.namelist())
+              missing = sorted(required - names)
+              assert not missing, f"APK missing required W^X native/asset entries: {missing}"
+              arm_sos = sorted(n for n in names if n.startswith("lib/arm64-v8a/") and n.endswith(".so"))
+              print(f"Checking {len(arm_sos)} ARM64 .so entries inside APK for 16 KB ELF alignment...")
+              for name in arm_sos:
+                  raw = zf.read(name)
+                  assert raw[:4] == b"\x7fELF" and raw[4] == 2, f"{name}: invalid ELF64"
+                  _, e_machine, _, _, e_phoff, _, _, _, e_phentsize, e_phnum = struct.unpack_from("<HHIQQQIHHH", raw, 16)
+                  assert e_machine == 183, f"{name}: non-ARM64 machine={e_machine}"
+                  for i in range(e_phnum):
+                      p_type, _, p_offset, p_vaddr, _, _, _, p_align = struct.unpack_from("<IIQQQQQQ", raw, e_phoff + i * e_phentsize)
+                      if p_type == 1:
+                          assert p_align >= 16384 and (p_offset - p_vaddr) % 16384 == 0, f"{name}: 4 KB / unaligned PT_LOAD ({hex(p_align)})"
+              print("All APK lib/arm64-v8a/*.so entries passed 16 KB ELF alignment check.")
+          PY
+
+          ZIPALIGN=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name zipalign 2>/dev/null | sort -V | tail -n 1 || true)
+          if [ -n "$ZIPALIGN" ]; then
+              echo "Running $ZIPALIGN -c -P 16 -v 4 $APK"
+              "$ZIPALIGN" -c -P 16 -v 4 "$APK" | tail -n 15
+          else
+              echo "::warning::zipalign not found in ANDROID_HOME/build-tools"
+          fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

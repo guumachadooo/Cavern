@@ -29,9 +29,9 @@ public static class AppUpdateService {
     const string ReleaseApiUrl = "https://api.github.com/repos/guumachadooo/Cavern/releases/tags/android-latest";
     const string TargetAssetName = "Cavernize-Android.apk";
 
-    static readonly HttpClient http = CreateHttpClient();
+    static readonly HttpClient http = BuildGitHubHttpClient();
 
-    static HttpClient CreateHttpClient() {
+    static HttpClient BuildGitHubHttpClient() {
         HttpClient client = new() { Timeout = TimeSpan.FromSeconds(45) };
         client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", "2.1"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
@@ -43,7 +43,7 @@ public static class AppUpdateService {
             PackageInfo info = context.PackageManager.GetPackageInfo(context.PackageName, 0);
             string name = info?.VersionName ?? "2.1.0";
 #pragma warning disable CS0618, CA1422
-            long code = Build.VERSION.SdkInt >= BuildVersionCodes.P ? info.LongVersionCode : info.VersionCode;
+            long code = OperatingSystem.IsAndroidVersionAtLeast(28) ? info.LongVersionCode : info.VersionCode;
 #pragma warning restore CS0618, CA1422
             return (name, code);
         } catch {
@@ -158,14 +158,14 @@ public static class AppUpdateService {
     }
 
     public static bool CanInstallPackages(Context context) {
-        if (Build.VERSION.SdkInt >= BuildVersionCodes.O) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(26)) {
             return context.PackageManager.CanRequestPackageInstalls();
         }
         return true;
     }
 
     public static void OpenUnknownSourcesSettings(Activity activity) {
-        if (Build.VERSION.SdkInt >= BuildVersionCodes.O) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(26)) {
             Intent intent = new(
                 Android.Provider.Settings.ActionManageUnknownAppSources,
                 Android.Net.Uri.Parse("package:" + activity.PackageName));
@@ -174,8 +174,11 @@ public static class AppUpdateService {
     }
 
     public static void LaunchInstaller(Activity activity, string apkPath) {
-        string fileName = Path.GetFileName(apkPath);
-        Android.Net.Uri apkUri = ApkFileProvider.GetApkUri(fileName);
+        if (activity == null || string.IsNullOrWhiteSpace(apkPath) || !File.Exists(apkPath)) {
+            return;
+        }
+        Android.Net.Uri apkUri = ApkFileProvider.GetUriForFile(activity, apkPath)
+            ?? ApkFileProvider.GetApkUri(activity, Path.GetFileName(apkPath));
         Intent install = new(Intent.ActionView);
         install.SetDataAndType(apkUri, "application/vnd.android.package-archive");
         install.AddFlags(ActivityFlags.GrantReadUriPermission | ActivityFlags.NewTask);

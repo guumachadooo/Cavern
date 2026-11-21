@@ -939,8 +939,9 @@ public partial class MainActivity {
         if (openLibrary && isFormatPillExpanded) {
             SetFormatPillExpanded(false, animate: false);
         }
-        musicTabRootPage?.SetPadding(Dp(20), Dp(6), Dp(20), Dp(openLibrary ? 0 : 10));
+        ApplyCurrentWindowInsetsPadding();
         UpdateSectionSwitcherStyle();
+        SyncPredictiveBackRegistration();
 
         // Show full bottom nav bar when browsing Library; hide it on Now Playing (integrated '+' pill handles navigation)
         if (activeTab == 0) {
@@ -1006,6 +1007,7 @@ public partial class MainActivity {
         }
         PlayerStageMode prevMode = musicStageMode;
         musicStageMode = mode;
+        SyncPredictiveBackRegistration();
 
         if (mode == PlayerStageMode.Lyrics && isFormatPillExpanded) {
             SetFormatPillExpanded(false, animate: false);
@@ -3383,22 +3385,38 @@ public partial class MainActivity {
         if (dlg.Window != null) {
             dlg.Window.SetBackgroundDrawable(new Android.Graphics.Drawables.ColorDrawable(Color.Black));
             dlg.Window.SetLayout(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent);
+            if (OperatingSystem.IsAndroidVersionAtLeast(30)) {
+                dlg.Window.SetDecorFitsSystemWindows(false);
+                if (dlg.Window.Attributes != null) {
+                    dlg.Window.Attributes.LayoutInDisplayCutoutMode = LayoutInDisplayCutoutMode.Always;
+                    dlg.Window.Attributes = dlg.Window.Attributes;
+                }
+                fsRoot.SetOnApplyWindowInsetsListener(new RootInsetsListener(insets => {
+                    if (insets == null) return;
+                    Android.Graphics.Insets cutout = insets.GetInsets(WindowInsets.Type.DisplayCutout());
+                    fsRoot.SetPadding(cutout.Left, cutout.Top, cutout.Right, cutout.Bottom);
+                }));
+            } else {
 #pragma warning disable CS0618, CA1422
-            dlg.Window.SetFlags(WindowManagerFlags.Fullscreen, WindowManagerFlags.Fullscreen);
-            dlg.Window.DecorView.SystemUiVisibility = (StatusBarVisibility)(
-                SystemUiFlags.ImmersiveSticky |
-                SystemUiFlags.Fullscreen |
-                SystemUiFlags.HideNavigation |
-                SystemUiFlags.LayoutFullscreen |
-                SystemUiFlags.LayoutHideNavigation);
+                dlg.Window.AddFlags(WindowManagerFlags.Fullscreen);
 #pragma warning restore CS0618, CA1422
+            }
         }
         dlg.DismissEvent += (_, _) => ExitVideoFullscreenIfNeeded();
 
         fullscreenVideoDlg = dlg;
+        SyncPredictiveBackRegistration();
         RequestedOrientation = ScreenOrientation.SensorLandscape;
         dlg.Show();
         dlg.Window?.SetLayout(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent);
+        if (OperatingSystem.IsAndroidVersionAtLeast(30)) {
+            IWindowInsetsController ctrl = dlg.Window?.InsetsController;
+            if (ctrl != null) {
+                ctrl.SystemBarsBehavior = (int)WindowInsetsControllerBehavior.ShowTransientBarsBySwipe;
+                ctrl.Hide(WindowInsets.Type.SystemBars());
+            }
+            fsRoot.RequestApplyInsets();
+        }
         musicVideoStage.SetFullscreenMode(true);
     }
 
@@ -3408,6 +3426,7 @@ public partial class MainActivity {
             return;
         }
         fullscreenVideoDlg = null;
+        SyncPredictiveBackRegistration();
 
         try {
             double curSec = playerEngine?.CurrentSeconds ?? 0;

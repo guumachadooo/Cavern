@@ -34,15 +34,13 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
-    // FFmpeg auto-downloader & updater views
+    // FFmpeg bundled NDK engine status
     TextView ffmpegStatusText;
-    ProgressBar ffmpegProgressBar;
-    Button ffmpegAutoBtn, ffmpegCheckBtn, ffmpegBtn;
+    Button ffmpegCheckBtn;
 
-    // truehdd auto-downloader & updater views
+    // truehdd bundled Dolby TrueHD engine status
     TextView truehddStatusText;
-    ProgressBar truehddProgressBar;
-    Button truehddAutoBtn, truehddCheckBtn, truehddManualBtn;
+    Button truehddCheckBtn;
 
     // App version & updater views (inside About section at bottom of Settings)
     TextView updateCurrentVerLabel, updateSettingsStatusText;
@@ -86,8 +84,7 @@ public partial class MainActivity {
     OneUiInlineSelector loudnessNormSelector, truePeakCeilingSelector;
     TextView loudnessMeterText, loudnessStatusText;
     TextView neuralRuntimeStatusText, neuralPlanSummaryText;
-    ProgressBar neuralRuntimeProgressBar;
-    Button neuralRuntimeAutoBtn, neuralRuntimeCheckBtn, neuralModelsBtn;
+    Button neuralRuntimeCheckBtn, neuralModelsBtn;
     OneUiInlineSelector neuralProviderSelector, neuralOrchestrationSelector, neuralEnsembleSelector, neuralUpmixModeSelector;
     OneUiSeekBar neuralOverlapBar, karaokeVocalLevelBar;
     Switch neuralTtaSwitch, neuralPhaseFixSwitch, neuralConservationSwitch;
@@ -401,7 +398,7 @@ public partial class MainActivity {
         headTrackingEnabledSwitch = AddSwitchRow(slot4Card, S["HeadTrackingEnableTitle"], store.HeadTrackingEnabled, v => {
             store.HeadTrackingEnabled = v;
             var src = (Cavernize.Logic.Spatial.HeadTrackerSourceKind)Math.Clamp(store.HeadTrackerSourceIndex, 0, 3);
-            if (v && headTrackingManager != null && headTrackingManager.NeedsBluetoothPermissions(src)) {
+            if (v) {
                 RequestBluetoothPermissionsIfNeeded(src);
             }
             headTrackingManager?.ApplySettings();
@@ -420,7 +417,7 @@ public partial class MainActivity {
         headTrackerSourceSelector.SelectionChanged += pos => {
             store.HeadTrackerSourceIndex = pos;
             var src = (Cavernize.Logic.Spatial.HeadTrackerSourceKind)Math.Clamp(pos, 0, 3);
-            if (store.HeadTrackingEnabled && headTrackingManager != null && headTrackingManager.NeedsBluetoothPermissions(src)) {
+            if (store.HeadTrackingEnabled) {
                 RequestBluetoothPermissionsIfNeeded(src);
             }
             headTrackingManager?.ApplySettings();
@@ -1025,20 +1022,8 @@ public partial class MainActivity {
         neuralRuntimeStatusText.SetPadding(0, 0, 0, Dp(8));
         slot2bCard.AddView(neuralRuntimeStatusText);
 
-        neuralRuntimeProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
-            Max = 1000,
-            Progress = 0,
-            Visibility = ViewStates.Gone
-        };
-        OneUiTheme.StyleProgressBar(this, neuralRuntimeProgressBar);
-        slot2bCard.AddView(neuralRuntimeProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { BottomMargin = Dp(8) });
-
-        LinearLayout ortBtns = HRow();
-        neuralRuntimeAutoBtn = PrimaryButton(S["NeuralRuntimeDownloadBtn"], StartOnnxRuntimeDownloadOrUpdate);
         neuralRuntimeCheckBtn = PillButton(S["NeuralRuntimeCheckBtn"], () => _ = CheckOnnxRuntimeUpdateAsync(silent: false));
-        ortBtns.AddView(neuralRuntimeAutoBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.35f) { RightMargin = Dp(8) });
-        ortBtns.AddView(neuralRuntimeCheckBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        slot2bCard.AddView(ortBtns);
+        slot2bCard.AddView(neuralRuntimeCheckBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         neuralModelsBtn = PillButton(string.Format(S["NeuralModelsBtn"], 0), ShowNeuralModelsModal);
         slot2bCard.AddView(neuralModelsBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
@@ -1365,32 +1350,16 @@ public partial class MainActivity {
         advCard.AddView(advContentContainer);
         page.AddView(advCard);
 
-        // 5. FFmpeg Audio Engine (Auto-Download & Updater)
+        // 5. FFmpeg Audio Engine (Bundled W^X NDK in NativeLibraryDir)
         LinearLayout ffCard = Card(S["FFmpegCardTitle"], OneUiIconType.Gear, OneUiTheme.IconSliderMedia);
         ffmpegStatusText = Label(S["FFmpegNotInstalled"], 12.5f, OneUiTheme.TextSub);
         ffmpegStatusText.SetPadding(0, 0, 0, Dp(8));
         ffCard.AddView(ffmpegStatusText);
 
-        ffmpegProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
-            Max = 1000,
-            Progress = 0,
-            Visibility = ViewStates.Gone
-        };
-        OneUiTheme.StyleProgressBar(this, ffmpegProgressBar);
-        ffCard.AddView(ffmpegProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { BottomMargin = Dp(8) });
-
-        LinearLayout ffBtns = HRow();
-        ffmpegAutoBtn = PrimaryButton(S["FFmpegDownloadBtn"], StartFFmpegDownloadOrUpdate);
         ffmpegCheckBtn = PillButton(S["FFmpegCheckBtn"], () => _ = CheckFFmpegUpdateAsync(silent: false));
-        ffBtns.AddView(ffmpegAutoBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.35f) { RightMargin = Dp(8) });
-        ffBtns.AddView(ffmpegCheckBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        ffCard.AddView(ffBtns);
+        ffCard.AddView(ffmpegCheckBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
 
         AddDivider(ffCard);
-        ffmpegBtn = PillButton(S["FFmpegManualBtn"], () =>
-            OpenFileWithExplorerForExtensions(S["FFmpegManualBtn"], null, ApplyManualFFmpegPath, ReqLocateFFmpeg, allowAllFiles: true));
-        ffCard.AddView(ffmpegBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
-
         ffCard.AddView(WrapControlWithHelp(Label(S["FFmpegArgsLabel"], 12f, ColMuted), S["FFmpegCardTitle"], S["TipFFmpegArgs"], bottomMarginDp: 2));
         EditText ffArgsBox = new(this) { Text = store.FFmpegExtraArgs, TextSize = 12.5f };
         ffArgsBox.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
@@ -1403,7 +1372,7 @@ public partial class MainActivity {
         ffCard.AddView(ffArgsBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
         page.AddView(ffCard);
 
-        // 5b. truehdd Dolby TrueHD Engine (Auto-Download & Updater)
+        // 5b. truehdd Dolby TrueHD Engine (Bundled W^X NativeLibraryDir)
         LinearLayout thdCard = Card();
         LinearLayout thdHeader = HRow();
         thdHeader.SetPadding(0, 0, 0, Dp(10));
@@ -1418,25 +1387,8 @@ public partial class MainActivity {
         truehddStatusText.SetPadding(0, 0, 0, Dp(8));
         thdCard.AddView(truehddStatusText);
 
-        truehddProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
-            Max = 1000,
-            Progress = 0,
-            Visibility = ViewStates.Gone
-        };
-        OneUiTheme.StyleProgressBar(this, truehddProgressBar);
-        thdCard.AddView(truehddProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { BottomMargin = Dp(8) });
-
-        LinearLayout thdBtns = HRow();
-        truehddAutoBtn = PrimaryButton(S["TruehddDownloadBtn"], StartTruehddDownloadOrUpdate);
         truehddCheckBtn = PillButton(S["TruehddCheckBtn"], () => _ = CheckTruehddUpdateAsync(silent: false));
-        thdBtns.AddView(truehddAutoBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.35f) { RightMargin = Dp(8) });
-        thdBtns.AddView(truehddCheckBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        thdCard.AddView(thdBtns);
-
-        AddDivider(thdCard);
-        truehddManualBtn = PillButton(S["TruehddManualBtn"], () =>
-            OpenFileWithExplorerForExtensions(S["TruehddManualBtn"], null, ApplyManualTruehddPath, ReqLocateTruehdd, allowAllFiles: true));
-        thdCard.AddView(truehddManualBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        thdCard.AddView(truehddCheckBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         page.AddView(thdCard);
 
         // 6. Diagnostics & Shared Logs
@@ -1545,132 +1497,52 @@ public partial class MainActivity {
         }
     }
 
-    void SetFFmpegStatus(string msg, double progress) {
+    void SetFFmpegStatus(string msg, double _) {
         if (ffmpegStatusText != null) {
             ffmpegStatusText.Text = msg ?? "";
-        }
-        if (ffmpegProgressBar != null) {
-            if (progress < 0) {
-                ffmpegProgressBar.Visibility = ViewStates.Visible;
-                ffmpegProgressBar.Indeterminate = true;
-            } else if (isFFmpegDownloading) {
-                ffmpegProgressBar.Visibility = ViewStates.Visible;
-                ffmpegProgressBar.Indeterminate = false;
-                ffmpegProgressBar.Progress = Math.Clamp((int)Math.Round(progress * 1000.0), 0, 1000);
-            } else {
-                ffmpegProgressBar.Indeterminate = false;
-                ffmpegProgressBar.Visibility = ViewStates.Gone;
-            }
         }
     }
 
     void RefreshFFmpegCardUi() {
-        if (ffmpegStatusText == null || ffmpegAutoBtn == null) {
+        if (ffmpegStatusText == null) {
             return;
         }
-        bool hasLocal = ffmpeg.Found || !string.IsNullOrEmpty(FFmpegInstallerService.ResolveExistingFFmpegPath(this, store));
-        if (latestFFmpegStatus != null) {
-            if (latestFFmpegStatus.IsUpdateAvailable) {
-                ffmpegStatusText.Text = string.Format(S["FFmpegUpdateAvail"], latestFFmpegStatus.RemoteVersion);
-                ffmpegStatusText.SetTextColor(OneUiTheme.FunctionalOrange);
-                ffmpegAutoBtn.Text = $"{S["FFmpegUpdateBtn"]} ({latestFFmpegStatus.RemoteVersion})";
-                ffmpegAutoBtn.Visibility = ViewStates.Visible;
-            } else if (hasLocal) {
-                string ver = !string.IsNullOrEmpty(store.InstalledFFmpegVersion)
-                    ? store.InstalledFFmpegVersion
-                    : latestFFmpegStatus.RemoteVersion;
-                ffmpegStatusText.Text = string.Format(S["FFmpegInstalledVer"], string.IsNullOrEmpty(ver) ? "OK" : ver);
-                ffmpegStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
-                ffmpegAutoBtn.Text = S["FFmpegDownloadBtn"];
-                ffmpegAutoBtn.Visibility = ViewStates.Gone;
-            } else {
-                ffmpegStatusText.Text = S["FFmpegNotInstalled"];
-                ffmpegStatusText.SetTextColor(OneUiTheme.TextSub);
-                ffmpegAutoBtn.Text = S["FFmpegDownloadBtn"];
-                ffmpegAutoBtn.Visibility = ViewStates.Visible;
-            }
-        } else if (hasLocal) {
-            string ver = !string.IsNullOrEmpty(store.InstalledFFmpegVersion)
-                ? store.InstalledFFmpegVersion
-                : Path.GetFileName(ffmpeg.Location ?? "ffmpeg");
+        string localPath = FFmpegInstallerService.ResolveExistingFFmpegPath(this, store);
+        bool hasLocal = ffmpeg.Found || (!string.IsNullOrEmpty(localPath) && File.Exists(localPath));
+        bool working = latestFFmpegStatus != null ? latestFFmpegStatus.IsWorking : hasLocal;
+        if (hasLocal && working) {
+            string ver = !string.IsNullOrEmpty(latestFFmpegStatus?.InstalledVersion)
+                ? latestFFmpegStatus.InstalledVersion
+                : (!string.IsNullOrEmpty(store.InstalledFFmpegVersion) ? store.InstalledFFmpegVersion : "OK");
             ffmpegStatusText.Text = string.Format(S["FFmpegInstalledVer"], ver);
             ffmpegStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
-            ffmpegAutoBtn.Visibility = ViewStates.Gone;
         } else {
             ffmpegStatusText.Text = S["FFmpegNotInstalled"];
-            ffmpegStatusText.SetTextColor(OneUiTheme.TextSub);
-            ffmpegAutoBtn.Text = S["FFmpegDownloadBtn"];
-            ffmpegAutoBtn.Visibility = ViewStates.Visible;
-        }
-
-        if (ffmpegProgressBar != null && !isFFmpegDownloading) {
-            ffmpegProgressBar.Indeterminate = false;
-            ffmpegProgressBar.Visibility = ViewStates.Gone;
+            ffmpegStatusText.SetTextColor(hasLocal ? ColDanger : OneUiTheme.TextSub);
         }
     }
 
-    void SetTruehddStatus(string msg, double progress) {
+    void SetTruehddStatus(string msg, double _) {
         if (truehddStatusText != null) {
             truehddStatusText.Text = msg ?? "";
-        }
-        if (truehddProgressBar != null) {
-            if (progress < 0) {
-                truehddProgressBar.Visibility = ViewStates.Visible;
-                truehddProgressBar.Indeterminate = true;
-            } else if (isTruehddDownloading) {
-                truehddProgressBar.Visibility = ViewStates.Visible;
-                truehddProgressBar.Indeterminate = false;
-                truehddProgressBar.Progress = Math.Clamp((int)Math.Round(progress * 1000.0), 0, 1000);
-            } else {
-                truehddProgressBar.Indeterminate = false;
-                truehddProgressBar.Visibility = ViewStates.Gone;
-            }
         }
     }
 
     void RefreshTruehddCardUi() {
-        if (truehddStatusText == null || truehddAutoBtn == null) {
+        if (truehddStatusText == null) {
             return;
         }
         string localPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
         bool hasLocal = !string.IsNullOrEmpty(localPath) && File.Exists(localPath);
-        if (latestTruehddStatus != null) {
-            if (latestTruehddStatus.IsUpdateAvailable) {
-                truehddStatusText.Text = string.Format(S["TruehddUpdateAvail"], latestTruehddStatus.RemoteVersion);
-                truehddStatusText.SetTextColor(OneUiTheme.FunctionalOrange);
-                truehddAutoBtn.Text = $"{S["TruehddUpdateBtn"]} (v{latestTruehddStatus.RemoteVersion})";
-                truehddAutoBtn.Visibility = ViewStates.Visible;
-            } else if (hasLocal) {
-                string ver = !string.IsNullOrEmpty(store.InstalledTruehddVersion)
-                    ? store.InstalledTruehddVersion
-                    : latestTruehddStatus.RemoteVersion;
-                truehddStatusText.Text = string.Format(S["TruehddInstalledVer"], string.IsNullOrEmpty(ver) ? "OK" : ver);
-                truehddStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
-                truehddAutoBtn.Text = S["TruehddDownloadBtn"];
-                truehddAutoBtn.Visibility = ViewStates.Gone;
-            } else {
-                truehddStatusText.Text = S["TruehddNotInstalled"];
-                truehddStatusText.SetTextColor(OneUiTheme.TextSub);
-                truehddAutoBtn.Text = S["TruehddDownloadBtn"];
-                truehddAutoBtn.Visibility = ViewStates.Visible;
-            }
-        } else if (hasLocal) {
-            string ver = !string.IsNullOrEmpty(store.InstalledTruehddVersion)
-                ? store.InstalledTruehddVersion
-                : Path.GetFileName(localPath);
+        if (hasLocal) {
+            string ver = !string.IsNullOrEmpty(latestTruehddStatus?.InstalledVersion)
+                ? latestTruehddStatus.InstalledVersion
+                : (!string.IsNullOrEmpty(store.InstalledTruehddVersion) ? store.InstalledTruehddVersion : "OK");
             truehddStatusText.Text = string.Format(S["TruehddInstalledVer"], ver);
             truehddStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
-            truehddAutoBtn.Visibility = ViewStates.Gone;
         } else {
             truehddStatusText.Text = S["TruehddNotInstalled"];
             truehddStatusText.SetTextColor(OneUiTheme.TextSub);
-            truehddAutoBtn.Text = S["TruehddDownloadBtn"];
-            truehddAutoBtn.Visibility = ViewStates.Visible;
-        }
-
-        if (truehddProgressBar != null && !isTruehddDownloading) {
-            truehddProgressBar.Indeterminate = false;
-            truehddProgressBar.Visibility = ViewStates.Gone;
         }
     }
 
@@ -1780,17 +1652,6 @@ public partial class MainActivity {
             filtersBtn.Text = renderingSettings.RoomCorrection != null
                 ? $"{S["ClearFilters"]} ({Path.GetFileName(store.RoomCorrectionPath)})"
                 : S["LoadFilters"];
-        }
-        if (ffmpegBtn != null) {
-            ffmpegBtn.Text = ffmpeg.Found
-                ? $"{S["FFmpegManualBtn"]}: {Path.GetFileName(ffmpeg.Location)}"
-                : S["FFmpegManualBtn"];
-        }
-        if (truehddManualBtn != null) {
-            string thdPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
-            truehddManualBtn.Text = !string.IsNullOrEmpty(thdPath)
-                ? $"{S["TruehddManualBtn"]}: {Path.GetFileName(thdPath)}"
-                : S["TruehddManualBtn"];
         }
         if (muteBedSwitch != null && muteBedSwitch.Checked != store.MuteBed) {
             muteBedSwitch.Checked = store.MuteBed;
@@ -3217,9 +3078,6 @@ public partial class MainActivity {
             if (!installed) {
                 neuralRuntimeStatusText.Text = S["NeuralRuntimeNotInstalled"];
                 neuralRuntimeStatusText.SetTextColor(OneUiTheme.TextSub);
-            } else if (latestOnnxStatus != null && latestOnnxStatus.IsUpdateAvailable) {
-                neuralRuntimeStatusText.Text = string.Format(S["NeuralRuntimeUpdateAvail"], latestOnnxStatus.RemoteVersion);
-                neuralRuntimeStatusText.SetTextColor(OneUiTheme.Primary);
             } else {
                 string ver = string.IsNullOrEmpty(store.InstalledOnnxRuntimeVersion) ? "local" : "v" + store.InstalledOnnxRuntimeVersion;
                 neuralRuntimeStatusText.Text = string.Format(S["NeuralRuntimeInstalled"], ver, epName, modelCount, cacheMb);
@@ -3237,12 +3095,6 @@ public partial class MainActivity {
             neuralPlanSummaryText.Text = planLine + cacheSuffix;
             neuralPlanSummaryText.Visibility = string.IsNullOrEmpty(neuralPlanSummaryText.Text) ? ViewStates.Gone : ViewStates.Visible;
         }
-        if (neuralRuntimeAutoBtn != null && !isOnnxDownloading) {
-            neuralRuntimeAutoBtn.Text = (latestOnnxStatus != null && latestOnnxStatus.IsUpdateAvailable)
-                ? S["NeuralRuntimeUpdateBtn"]
-                : S["NeuralRuntimeDownloadBtn"];
-            neuralRuntimeAutoBtn.Enabled = true;
-        }
     }
 
     async Task CheckOnnxRuntimeUpdateAsync(bool silent) {
@@ -3256,9 +3108,7 @@ public partial class MainActivity {
                 SyncNeuralRuntimeDiagnostics();
                 RefreshNeuralAudioUi();
                 if (!silent) {
-                    if (status.IsUpdateAvailable) {
-                        ShowToast(string.Format(S["NeuralRuntimeUpdateAvail"], status.RemoteVersion));
-                    } else if (status.IsInstalled) {
+                    if (status.IsInstalled) {
                         ShowToast(string.Format(S["NeuralRuntimeUpToDate"], string.IsNullOrEmpty(status.InstalledVersion) ? "local" : "v" + status.InstalledVersion));
                     } else {
                         ShowToast(S["NeuralRuntimeNotInstalled"]);
@@ -3271,59 +3121,6 @@ public partial class MainActivity {
                 RunOnUiThread(() => ShowError(ex.Message));
             }
         }
-    }
-
-    void StartOnnxRuntimeDownloadOrUpdate() {
-        if (isOnnxDownloading) {
-            return;
-        }
-        isOnnxDownloading = true;
-        if (neuralRuntimeAutoBtn != null) neuralRuntimeAutoBtn.Enabled = false;
-        if (neuralRuntimeProgressBar != null) {
-            neuralRuntimeProgressBar.Visibility = ViewStates.Visible;
-            neuralRuntimeProgressBar.Progress = 0;
-        }
-        if (neuralRuntimeStatusText != null) {
-            neuralRuntimeStatusText.Text = S["NeuralDownloadingRuntime"];
-        }
-
-        bool preferQnn = store.NeuralProviderIndex == (int)Cavernize.Logic.Spatial.NeuralExecutionProvider.QnnHtp ||
-                         store.NeuralProviderIndex == (int)Cavernize.Logic.Spatial.NeuralExecutionProvider.Auto;
-
-        Task.Run(async () => {
-            try {
-                await OnnxRuntimeInstallerService.DownloadAndInstallRuntimeAsync(
-                    this,
-                    store,
-                    latestOnnxStatus,
-                    preferQnn,
-                    (frac, msg) => RunOnUiThread(() => {
-                        if (uiDestroyed) return;
-                        if (neuralRuntimeProgressBar != null) {
-                            neuralRuntimeProgressBar.Progress = Math.Clamp((int)Math.Round(frac * 1000.0), 0, 1000);
-                        }
-                        if (neuralRuntimeStatusText != null) {
-                            neuralRuntimeStatusText.Text = msg;
-                        }
-                    }));
-                RunOnUiThread(() => {
-                    if (uiDestroyed) return;
-                    isOnnxDownloading = false;
-                    if (neuralRuntimeProgressBar != null) neuralRuntimeProgressBar.Visibility = ViewStates.Gone;
-                    SyncNeuralRuntimeDiagnostics();
-                    RefreshNeuralAudioUi();
-                });
-            } catch (Exception ex) {
-                AppLogger.Error("StartOnnxRuntimeDownloadOrUpdate", ex);
-                RunOnUiThread(() => {
-                    if (uiDestroyed) return;
-                    isOnnxDownloading = false;
-                    if (neuralRuntimeProgressBar != null) neuralRuntimeProgressBar.Visibility = ViewStates.Gone;
-                    RefreshNeuralAudioUi();
-                    ShowError(ex.Message);
-                });
-            }
-        });
     }
 
     void ShowNeuralModelsModal() {

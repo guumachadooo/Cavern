@@ -45,6 +45,17 @@ public static class MediaMetadataHelper {
     };
 
     public static MediaArtworkMetadata Extract(Context context, Android.Net.Uri sourceUri, string resolvedPath, string fallbackTitle) {
+        Context effectiveCtx = context ?? Android.App.Application.Context;
+        Android.Net.Uri effectiveUri = sourceUri ?? TryParseUri(resolvedPath);
+        string effectiveFallbackTitle = fallbackTitle;
+        if (effectiveUri != null && effectiveCtx != null &&
+            (string.IsNullOrWhiteSpace(effectiveFallbackTitle) || IsUriString(effectiveFallbackTitle) || effectiveFallbackTitle.All(char.IsDigit))) {
+            string disp = AndroidFileHelper.GetDisplayName(effectiveCtx, effectiveUri);
+            if (!string.IsNullOrWhiteSpace(disp)) {
+                effectiveFallbackTitle = disp;
+            }
+        }
+
         string title = "";
         string artist = "";
         string album = "";
@@ -58,7 +69,11 @@ public static class MediaMetadataHelper {
         Bitmap artwork = null;
         bool hasEmbedded = false;
 
-        string manualOverride = OnlineMetadataService.GetManualCoverOverridePath(context, resolvedPath);
+        string mediaKey = !string.IsNullOrEmpty(resolvedPath) ? resolvedPath : (effectiveUri?.ToString() ?? "");
+        string manualOverride = OnlineMetadataService.GetManualCoverOverridePath(effectiveCtx, mediaKey);
+        if (string.IsNullOrEmpty(manualOverride) && effectiveUri != null) {
+            manualOverride = OnlineMetadataService.GetManualCoverOverridePath(effectiveCtx, effectiveUri.ToString());
+        }
         if (!string.IsNullOrEmpty(manualOverride) && IOFile.Exists(manualOverride)) {
             try {
                 artwork = MediaServiceUtils.DecodeScaledBitmapSafe(manualOverride, 640);
@@ -71,16 +86,16 @@ public static class MediaMetadataHelper {
         using MediaMetadataRetriever retriever = new();
         bool sourceOpened = false;
 
-        if (sourceUri != null && context != null) {
+        if (effectiveUri != null && effectiveCtx != null) {
             try {
-                retriever.SetDataSource(context, sourceUri);
+                retriever.SetDataSource(effectiveCtx, effectiveUri);
                 sourceOpened = true;
             } catch {
                 sourceOpened = false;
             }
         }
 
-        if (!sourceOpened && !string.IsNullOrEmpty(resolvedPath) && IOFile.Exists(resolvedPath)) {
+        if (!sourceOpened && CanOpenFileForRead(resolvedPath)) {
             try {
                 retriever.SetDataSource(resolvedPath);
                 sourceOpened = true;
@@ -149,17 +164,21 @@ public static class MediaMetadataHelper {
             }
         }
 
-        if (!hasVideo && !string.IsNullOrEmpty(resolvedPath)) {
-            string ext = IOPath.GetExtension(resolvedPath);
+        if (!hasVideo) {
+            string ext = GetMediaExtension(resolvedPath, effectiveFallbackTitle);
             if (!string.IsNullOrEmpty(ext) && VideoExtensions.Contains(ext) && !"audio/mp4".Equals(mime, StringComparison.OrdinalIgnoreCase)) {
                 hasVideo = !mime.StartsWith("audio/", StringComparison.OrdinalIgnoreCase);
             }
         }
 
+        string readableLocalPath = CanOpenFileForRead(resolvedPath)
+            ? resolvedPath
+            : ResolveDirectOrAudioPath(effectiveCtx, effectiveUri, hasVideo, IsMissingTag(title) || IsMissingTag(artist) || IsMissingTag(album));
+
         // Fallback binary tag reader (especially critical for MP4 Atmos / M4A / FLAC where MediaMetadataRetriever omits tags or emits "<unknown>")
-        if (!string.IsNullOrEmpty(resolvedPath) && IOFile.Exists(resolvedPath) &&
+        if (!string.IsNullOrEmpty(readableLocalPath) && CanOpenFileForRead(readableLocalPath) &&
             (IsMissingTag(title) || IsMissingTag(artist) || IsMissingTag(album))) {
-            ParsedAudioTags binTags = AudioTagReader.TryReadTags(resolvedPath);
+            ParsedAudioTags binTags = AudioTagReader.TryReadTags(readableLocalPath);
             if (binTags != null) {
                 if (IsMissingTag(title) && !IsMissingTag(binTags.Title)) {
                     title = binTags.Title;
@@ -176,17 +195,17 @@ public static class MediaMetadataHelper {
             }
         }
 
-        if (artwork == null && !string.IsNullOrEmpty(resolvedPath)) {
-            artwork = TryLoadAdjacentFolderCover(context, sourceUri, resolvedPath, 640);
+        if (artwork == null && (!string.IsNullOrEmpty(readableLocalPath) || !string.IsNullOrEmpty(resolvedPath) || effectiveUri != null)) {
+            artwork = TryLoadAdjacentFolderCover(effectiveCtx, effectiveUri, readableLocalPath ?? resolvedPath, 640);
             hasEmbedded = artwork != null;
         }
 
         string effectiveTitle = !IsMissingTag(title)
             ? title
-            : CleanTitleFromFilename(fallbackTitle);
+            : CleanTitleFromFilename(effectiveFallbackTitle);
 
-        if (artwork == null && context != null) {
-            string cachedCover = OnlineMetadataService.GetCachedCoverPath(context, effectiveTitle, artist, album, resolvedPath);
+        if (artwork == null && effectiveCtx != null) {
+            string cachedCover = OnlineMetadataService.GetCachedCoverPath(effectiveCtx, effectiveTitle, artist, album, mediaKey);
             if (!string.IsNullOrEmpty(cachedCover) && IOFile.Exists(cachedCover)) {
                 try {
                     artwork = MediaServiceUtils.DecodeScaledBitmapSafe(cachedCover, 640);
@@ -206,14 +225,14 @@ public static class MediaMetadataHelper {
             artwork = CreateSpatialFallbackArtwork(effectiveTitle, primary, secondary, 512);
         }
 
-        LyricsDocument lyrics = LyricsService.LoadForMedia(context, sourceUri, resolvedPath, effectiveTitle, artist);
+        LyricsDocument lyrics = LyricsService.LoadForMedia(effectiveCtx, effectiveUri, readableLocalPath ?? resolvedPath, effectiveTitle, artist);
 
         return new MediaArtworkMetadata {
             Title = effectiveTitle,
             Artist = artist,
             Album = album,
             MimeType = mime,
-            SourceMediaPath = resolvedPath ?? "",
+            SourceMediaPath = !string.IsNullOrEmpty(readableLocalPath) ? readableLocalPath : mediaKey,
             EmbeddedSampleRate = sampleRate,
             EmbeddedBitrateKbps = bitrateKbps,
             HasVideo = hasVideo,
@@ -322,18 +341,86 @@ public static class MediaMetadataHelper {
             }
 
             foreach (string candidate in ExternalCoverNames) {
-                string full = IOPath.Combine(dir, candidate);
-                if (IOFile.Exists(full)) {
-                    Bitmap bmp = MediaServiceUtils.DecodeScaledBitmapSafe(full, maxDim);
-                    if (bmp != null) {
-                        return bmp;
+                try {
+                    string full = IOPath.Combine(dir, candidate);
+                    if (IOFile.Exists(full)) {
+                        Bitmap bmp = MediaServiceUtils.DecodeScaledBitmapSafe(full, maxDim);
+                        if (bmp != null) {
+                            return bmp;
+                        }
                     }
+                } catch {
+                    // Scoped storage may block individual non-media files
                 }
             }
         } catch {
             // Optional fallback cover only
         }
         return null;
+    }
+
+    static bool IsUriString(string value) =>
+        !string.IsNullOrEmpty(value) &&
+        (value.StartsWith("content://", StringComparison.OrdinalIgnoreCase) ||
+         value.StartsWith("file://", StringComparison.OrdinalIgnoreCase));
+
+    static Android.Net.Uri TryParseUri(string pathOrUri) {
+        if (IsUriString(pathOrUri)) {
+            try {
+                return Android.Net.Uri.Parse(pathOrUri);
+            } catch {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    static bool CanOpenFileForRead(string path) {
+        if (string.IsNullOrEmpty(path) || IsUriString(path)) {
+            return false;
+        }
+        try {
+            if (!IOFile.Exists(path)) {
+                return false;
+            }
+            using FileStream fs = IOFile.OpenRead(path);
+            return fs.CanRead;
+        } catch {
+            return false;
+        }
+    }
+
+    static string ResolveDirectOrAudioPath(Context ctx, Android.Net.Uri uri, bool isVideo, bool needTags) {
+        if (uri == null || ctx == null) {
+            return null;
+        }
+        string direct = AndroidFileHelper.TryGetDirectPath(ctx, uri);
+        if (CanOpenFileForRead(direct)) {
+            return direct;
+        }
+        if (!isVideo && needTags) {
+            try {
+                string copied = AndroidFileHelper.ResolveReadablePath(ctx, uri);
+                if (CanOpenFileForRead(copied)) {
+                    return copied;
+                }
+            } catch {
+                // Ignore scoped storage copy failure
+            }
+        }
+        return null;
+    }
+
+    static string GetMediaExtension(string resolvedPath, string fallbackName) {
+        if (!string.IsNullOrEmpty(resolvedPath) && !IsUriString(resolvedPath)) {
+            string ext = IOPath.GetExtension(resolvedPath);
+            if (!string.IsNullOrEmpty(ext)) {
+                return ext;
+            }
+        }
+        return !string.IsNullOrEmpty(fallbackName) && !IsUriString(fallbackName)
+            ? IOPath.GetExtension(fallbackName)
+            : "";
     }
 
     static bool IsMissingTag(string value) =>

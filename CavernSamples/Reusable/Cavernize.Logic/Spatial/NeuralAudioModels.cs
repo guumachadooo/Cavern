@@ -3,7 +3,7 @@ using Cavern.Neural;
 namespace Cavernize.Logic.Spatial;
 
 /// <summary>
-/// Hardware execution provider preference for the managed ARM64 ONNX Runtime in <c>FilesDir/bin/onnxruntime/</c>.
+/// Hardware execution provider preference for the managed ARM64 ONNX Runtime in <c>NativeLibraryDir</c>.
 /// </summary>
 public enum NeuralExecutionProvider {
     /// <summary>Automatic priority cascade: Snapdragon QNN HTP NPU -> XNNPACK ARM64 SIMD -> CPU fallback.</summary>
@@ -729,7 +729,7 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
 /// Published into <see cref="SpatialSceneHub.NeuralDiagnostics"/>.
 /// </summary>
 public struct NeuralAudioDiagnostics {
-    /// <summary>True when managed ARM64 <c>libonnxruntime.so</c> is installed and verified in <c>FilesDir/bin/onnxruntime/</c>.</summary>
+    /// <summary>True when bundled ARM64 <c>libonnxruntime.so</c> is available and verified in <c>NativeLibraryDir</c>.</summary>
     public bool IsRuntimeInstalled { get; set; }
 
     /// <summary>Installed ONNX Runtime version string (e.g., "1.22.0").</summary>

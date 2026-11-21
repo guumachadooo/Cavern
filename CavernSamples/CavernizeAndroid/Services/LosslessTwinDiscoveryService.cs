@@ -41,7 +41,7 @@ public static partial class LosslessTwinDiscoveryService {
             return false;
         }
         string probePath = !string.IsNullOrEmpty(mediaPath) ? mediaPath : (track?.OriginalSourcePath ?? track?.Path ?? "");
-        string ext = IOPath.GetExtension(probePath).ToLowerInvariant();
+        string ext = GetPathOrUriExtension(Android.App.Application.Context, probePath);
         if (ext is ".mp3" or ".aac" or ".ogg" or ".opus" or ".wma" or ".ac3" or ".ec3" or ".eac3") {
             return false;
         }
@@ -82,14 +82,17 @@ public static partial class LosslessTwinDiscoveryService {
         left = null;
         right = null;
         sampleRate = preferredSampleRate >= 8000 ? preferredSampleRate : 48000;
-        if (string.IsNullOrEmpty(filePath) || !IOFile.Exists(filePath)) {
+        Context effectiveCtx = Android.App.Application.Context;
+        string readablePath = ResolveReadableMediaPath(effectiveCtx, TryParseUri(filePath), filePath);
+        if (string.IsNullOrEmpty(readablePath)) {
             return false;
         }
+        string safeFfmpeg = ResolveSafeFfmpegPath(effectiveCtx, ffmpegPath);
         AudioQualityReport syntheticReport = new() {
             SampleRateHz = sampleRate,
             DeclaredBitDepth = 24
         };
-        return TryDecodeLosslessStereo(filePath, syntheticReport, ffmpegPath, ct, out left, out right, out sampleRate);
+        return TryDecodeLosslessStereo(readablePath, syntheticReport, safeFfmpeg, ct, out left, out right, out sampleRate);
     }
 
     /// <summary>
@@ -122,11 +125,13 @@ public static partial class LosslessTwinDiscoveryService {
         }
 
         provider.SetState(LosslessTwinVerificationState.Searching);
+        Context effectiveCtx = ctx ?? Android.App.Application.Context;
+        string safeFfmpeg = ResolveSafeFfmpegPath(effectiveCtx, ffmpegPath);
         return await Task.Run(() => {
             ct.ThrowIfCancellationRequested();
 
             List<LibraryTrackItem> candidates = FindLosslessCandidates(
-                ctx, snapshot, activeMediaPath, title, artist, album, safeCfg, out bool rejectedFake);
+                effectiveCtx, snapshot, activeMediaPath, title, artist, album, safeCfg, out bool rejectedFake);
             if (candidates.Count == 0) {
                 provider.SetState(rejectedFake
                     ? LosslessTwinVerificationState.BypassedFakeLossless
@@ -137,7 +142,7 @@ public static partial class LosslessTwinDiscoveryService {
             int targetSr = activeTrack != null && activeTrack.SampleRate >= 8000 ? activeTrack.SampleRate : 48000;
 
             // Decode a lightweight 24 s mono probe from the active lossy Atmos file without touching live playback
-            float[] atmosProbe = DecodeMonoProbe(activeMediaPath, targetSr, AtmosProbeSeconds, ffmpegPath, ct);
+            float[] atmosProbe = DecodeMonoProbe(effectiveCtx, activeMediaPath, targetSr, AtmosProbeSeconds, safeFfmpeg, ct);
             if (atmosProbe == null || atmosProbe.Length < SubSampleSyncEngine.GccFftSize) {
                 AppLogger.Warn($"W09 LGSR: unable to extract mono sync probe for '{IOPath.GetFileName(activeMediaPath ?? "")}'.");
                 provider.SetState(LosslessTwinVerificationState.BypassedLowConfidence);
@@ -147,22 +152,25 @@ public static partial class LosslessTwinDiscoveryService {
             for (int i = 0; i < candidates.Count; i++) {
                 ct.ThrowIfCancellationRequested();
                 LibraryTrackItem item = candidates[i];
-                AudioQualityReport report = AudioQualityAnalyzer.EvaluateFast(item, ctx);
+                AudioQualityReport report = AudioQualityAnalyzer.EvaluateFast(item, effectiveCtx);
+                string candDisplayName = GetTrackFileName(effectiveCtx, item, item.FilePath);
 
                 if (safeCfg.RejectFakeLosslessTwins && report.IsFakeLossless) {
-                    AppLogger.Info($"W09 LGSR: rejected fake lossless candidate '{IOPath.GetFileName(item.FilePath)}' (cutoff {report.SpectralCutoffHz} Hz).");
+                    AppLogger.Info($"W09 LGSR: rejected fake lossless candidate '{candDisplayName}' (cutoff {report.SpectralCutoffHz} Hz).");
                     rejectedFake = true;
                     continue;
                 }
 
-                if (!TryDecodeLosslessStereo(item.FilePath, report, ffmpegPath, ct, out float[] twinL, out float[] twinR, out int twinSr)) {
-                    AppLogger.Warn($"W09 LGSR: failed to decode lossless twin '{IOPath.GetFileName(item.FilePath)}'.");
+                string candPath = ResolveReadableTrackPath(effectiveCtx, item);
+                if (string.IsNullOrEmpty(candPath) ||
+                    !TryDecodeLosslessStereo(candPath, report, safeFfmpeg, ct, out float[] twinL, out float[] twinR, out int twinSr)) {
+                    AppLogger.Warn($"W09 LGSR: failed to decode lossless twin '{candDisplayName}'.");
                     continue;
                 }
 
                 LosslessTwinMetadata meta = new() {
-                    FilePath = item.FilePath,
-                    FileName = IOPath.GetFileName(item.FilePath),
+                    FilePath = candPath,
+                    FileName = candDisplayName,
                     CodecFamily = string.IsNullOrEmpty(report.CodecFamily) ? "FLAC" : report.CodecFamily,
                     NativeSampleRate = twinSr,
                     EffectiveBitDepth = report.EffectiveBitDepth > 0 ? report.EffectiveBitDepth : Math.Max(16, report.DeclaredBitDepth),
@@ -219,10 +227,10 @@ public static partial class LosslessTwinDiscoveryService {
                 snapshot, activeMediaPath, title, artist, album);
             for (int i = 0; i < variants.Count; i++) {
                 LibraryTrackItem v = variants[i];
-                if (v == null || string.IsNullOrEmpty(v.FilePath) || !IOFile.Exists(v.FilePath)) {
+                if (v == null || (v.ContentUri == null && !IsUriString(v.FilePath) && !CanOpenFileForRead(v.FilePath))) {
                     continue;
                 }
-                if (seen.Add(v.FilePath)) {
+                if (seen.Add(v.CacheKey)) {
                     pool.Add(v);
                 }
             }
@@ -231,15 +239,19 @@ public static partial class LosslessTwinDiscoveryService {
         // Also inspect sibling files in the same directory for standalone opened files outside MediaStore
         if (!string.IsNullOrEmpty(activeMediaPath)) {
             try {
-                string dir = IOPath.GetDirectoryName(activeMediaPath);
-                string baseStem = NormalizeBaseName(IOPath.GetFileNameWithoutExtension(activeMediaPath));
+                Android.Net.Uri activeUri = TryParseUri(activeMediaPath);
+                string dir = AndroidFileHelper.TryGetOriginalDirectory(ctx, activeUri, activeMediaPath);
+                string stemSource = !IsUriString(activeMediaPath)
+                    ? IOPath.GetFileNameWithoutExtension(activeMediaPath)
+                    : (activeUri != null && ctx != null ? IOPath.GetFileNameWithoutExtension(AndroidFileHelper.GetDisplayName(ctx, activeUri) ?? "") : "");
+                string baseStem = NormalizeBaseName(stemSource);
                 if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir) && !string.IsNullOrEmpty(baseStem)) {
                     foreach (string file in Directory.EnumerateFiles(dir)) {
                         string ext = IOPath.GetExtension(file).ToLowerInvariant();
                         if (ext is not (".flac" or ".wav" or ".m4a")) {
                             continue;
                         }
-                        if (!seen.Add(file)) {
+                        if (!CanOpenFileForRead(file) || !seen.Add(file)) {
                             continue;
                         }
                         string candBase = NormalizeBaseName(IOPath.GetFileNameWithoutExtension(file));
@@ -720,17 +732,23 @@ public static partial class LosslessTwinDiscoveryService {
     }
 
     static float[] DecodeMonoProbe(
+        Context ctx,
         string mediaPath,
         int targetSampleRate,
         double seconds,
         string ffmpegPath,
         CancellationToken ct) {
-        if (string.IsNullOrEmpty(mediaPath) || !IOFile.Exists(mediaPath)) {
+        Android.Net.Uri mediaUri = TryParseUri(mediaPath);
+        string localMediaPath = CanOpenFileForRead(mediaPath) ? mediaPath : null;
+        if (localMediaPath == null && mediaUri == null) {
             return null;
         }
 
         // Fast, non-disruptive FFmpeg mono probe (supports E-AC-3 JOC, AC-3, DTS, Opus, MKV, MP4 without touching live track)
-        if (!string.IsNullOrEmpty(ffmpegPath) && IOFile.Exists(ffmpegPath)) {
+        string ffInputPath = !string.IsNullOrEmpty(ffmpegPath) && IOFile.Exists(ffmpegPath)
+            ? (localMediaPath ?? ResolveReadableMediaPath(ctx, mediaUri, mediaPath))
+            : null;
+        if (!string.IsNullOrEmpty(ffInputPath)) {
             try {
                 ct.ThrowIfCancellationRequested();
                 string durStr = seconds.ToString("0.0", CultureInfo.InvariantCulture);
@@ -747,7 +765,7 @@ public static partial class LosslessTwinDiscoveryService {
                 psi.ArgumentList.Add("-t");
                 psi.ArgumentList.Add(durStr);
                 psi.ArgumentList.Add("-i");
-                psi.ArgumentList.Add(mediaPath);
+                psi.ArgumentList.Add(ffInputPath);
                 psi.ArgumentList.Add("-vn");
                 psi.ArgumentList.Add("-ac");
                 psi.ArgumentList.Add("1");
@@ -808,7 +826,13 @@ public static partial class LosslessTwinDiscoveryService {
         MediaCodec codec = null;
         try {
             using MediaExtractor extractor = new();
-            extractor.SetDataSource(mediaPath);
+            if (localMediaPath != null) {
+                extractor.SetDataSource(localMediaPath);
+            } else if (mediaUri != null && ctx != null) {
+                extractor.SetDataSource(ctx, mediaUri, null);
+            } else {
+                return null;
+            }
             int audioIdx = -1;
             MediaFormat format = null;
             for (int i = 0; i < extractor.TrackCount; i++) {
@@ -940,5 +964,114 @@ public static partial class LosslessTwinDiscoveryService {
             }
         }
         return sb.ToString();
+    }
+
+    static string ResolveSafeFfmpegPath(Context ctx, string ffmpegPath) {
+        string resolved = FFmpegInstallerService.ResolveExistingFFmpegPath(ctx, null);
+        if (!string.IsNullOrEmpty(resolved) && IOFile.Exists(resolved)) {
+            return resolved;
+        }
+        if (!string.IsNullOrEmpty(ffmpegPath) && !IsWritableAppDataPath(ctx, ffmpegPath) && IOFile.Exists(ffmpegPath)) {
+            return ffmpegPath;
+        }
+        return "";
+    }
+
+    static bool IsWritableAppDataPath(Context ctx, string path) {
+        if (string.IsNullOrEmpty(path)) return false;
+        try {
+            string full = IOPath.GetFullPath(path);
+            string files = ctx?.FilesDir?.AbsolutePath;
+            string cache = ctx?.CacheDir?.AbsolutePath;
+            if (!string.IsNullOrEmpty(files) && full.StartsWith(IOPath.GetFullPath(files), StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+            if (!string.IsNullOrEmpty(cache) && full.StartsWith(IOPath.GetFullPath(cache), StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+            return full.Replace('\\', '/').Contains("/files/bin/", StringComparison.OrdinalIgnoreCase);
+        } catch {
+            return false;
+        }
+    }
+
+    static bool IsUriString(string value) =>
+        !string.IsNullOrEmpty(value) &&
+        (value.StartsWith("content://", StringComparison.OrdinalIgnoreCase) ||
+         value.StartsWith("file://", StringComparison.OrdinalIgnoreCase));
+
+    static Android.Net.Uri TryParseUri(string pathOrUri) {
+        if (IsUriString(pathOrUri)) {
+            try {
+                return Android.Net.Uri.Parse(pathOrUri);
+            } catch {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    static bool CanOpenFileForRead(string path) {
+        if (string.IsNullOrEmpty(path) || IsUriString(path)) return false;
+        try {
+            if (!IOFile.Exists(path)) return false;
+            using FileStream fs = IOFile.OpenRead(path);
+            return fs.CanRead;
+        } catch {
+            return false;
+        }
+    }
+
+    static string ResolveReadableMediaPath(Context ctx, Android.Net.Uri uri, string path) {
+        if (CanOpenFileForRead(path)) {
+            return path;
+        }
+        if (uri != null && ctx != null) {
+            try {
+                string resolved = AndroidFileHelper.ResolveReadablePath(ctx, uri);
+                if (CanOpenFileForRead(resolved)) {
+                    return resolved;
+                }
+            } catch {
+                // Unreadable scoped storage URI
+            }
+        }
+        return "";
+    }
+
+    static string ResolveReadableTrackPath(Context ctx, LibraryTrackItem item) {
+        if (item == null) return "";
+        if (CanOpenFileForRead(item.FilePath)) {
+            return item.FilePath;
+        }
+        Android.Net.Uri uri = item.ContentUri ?? TryParseUri(item.FilePath);
+        return ResolveReadableMediaPath(ctx, uri, item.FilePath);
+    }
+
+    static string GetPathOrUriExtension(Context ctx, string pathOrUri) {
+        if (string.IsNullOrEmpty(pathOrUri)) return "";
+        if (!IsUriString(pathOrUri)) {
+            return IOPath.GetExtension(pathOrUri).ToLowerInvariant();
+        }
+        Android.Net.Uri uri = TryParseUri(pathOrUri);
+        if (uri != null && ctx != null) {
+            string disp = AndroidFileHelper.GetDisplayName(ctx, uri);
+            if (!string.IsNullOrEmpty(disp)) {
+                return IOPath.GetExtension(disp).ToLowerInvariant();
+            }
+        }
+        return "";
+    }
+
+    static string GetTrackFileName(Context ctx, LibraryTrackItem item, string fallbackPath) {
+        if (item != null && !string.IsNullOrEmpty(item.FilePath) && !IsUriString(item.FilePath)) {
+            return IOPath.GetFileName(item.FilePath);
+        }
+        Android.Net.Uri uri = item?.ContentUri ?? TryParseUri(fallbackPath);
+        if (uri != null && ctx != null) {
+            string disp = AndroidFileHelper.GetDisplayName(ctx, uri);
+            if (!string.IsNullOrEmpty(disp)) return disp;
+        }
+        return !string.IsNullOrEmpty(item?.Title) ? item.Title : IOPath.GetFileName(fallbackPath ?? "");
     }
 }

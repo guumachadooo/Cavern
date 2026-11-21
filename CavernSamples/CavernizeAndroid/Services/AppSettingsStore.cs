@@ -1029,8 +1029,8 @@ public sealed class AppSettingsStore {
     }
 
     public string FFmpegLocation {
-        get => prefs.GetString("ffmpegPath", "");
-        set => Edit().PutString("ffmpegPath", value ?? "").Apply();
+        get => SanitizeBundledBinaryPath(prefs.GetString("ffmpegPath", ""));
+        set => Edit().PutString("ffmpegPath", SanitizeBundledBinaryPath(value)).Apply();
     }
 
     public string InstalledFFmpegVersion {
@@ -1044,8 +1044,20 @@ public sealed class AppSettingsStore {
     }
 
     public string TruehddLocation {
-        get => prefs.GetString("truehddPath", "");
-        set => Edit().PutString("truehddPath", value ?? "").Apply();
+        get => SanitizeBundledBinaryPath(prefs.GetString("truehddPath", ""));
+        set => Edit().PutString("truehddPath", SanitizeBundledBinaryPath(value)).Apply();
+    }
+
+    static string SanitizeBundledBinaryPath(string path) {
+        if (string.IsNullOrWhiteSpace(path)) {
+            return "";
+        }
+        string norm = path.Replace('\\', '/');
+        if (norm.Contains("/files/bin/", StringComparison.OrdinalIgnoreCase) ||
+            norm.Contains("/cache/", StringComparison.OrdinalIgnoreCase)) {
+            return "";
+        }
+        return path;
     }
 
     public string InstalledTruehddVersion {
@@ -1140,6 +1152,19 @@ public sealed class AppSettingsStore {
 
     public AppSettingsStore(Context context) {
         prefs = context.GetSharedPreferences(PrefsName, FileCreationMode.Private);
+        string rawFfmpeg = prefs.GetString("ffmpegPath", "");
+        string rawTruehdd = prefs.GetString("truehddPath", "");
+        if ((!string.IsNullOrEmpty(rawFfmpeg) && string.IsNullOrEmpty(SanitizeBundledBinaryPath(rawFfmpeg))) ||
+            (!string.IsNullOrEmpty(rawTruehdd) && string.IsNullOrEmpty(SanitizeBundledBinaryPath(rawTruehdd)))) {
+            ISharedPreferencesEditor ed = Edit();
+            if (string.IsNullOrEmpty(SanitizeBundledBinaryPath(rawFfmpeg))) {
+                ed.Remove("ffmpegPath");
+            }
+            if (string.IsNullOrEmpty(SanitizeBundledBinaryPath(rawTruehdd))) {
+                ed.Remove("truehddPath");
+            }
+            ed.Apply();
+        }
         if (!string.IsNullOrEmpty(LanguageCode)) {
             LanguageSettings.CultureOverride = LanguageCode;
         }

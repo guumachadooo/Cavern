@@ -26,7 +26,7 @@ namespace Cavernize.Logic.External;
 /// </summary>
 public class Truehdd : ExternalConverter {
     /// <summary>
-    /// Optional platform override pointing directly to an already-installed truehdd binary (e.g. Android FilesDir/bin/truehdd).
+    /// Optional platform override pointing directly to an already-installed truehdd binary (e.g. Android ApplicationInfo.NativeLibraryDir/libtruehdd.so).
     /// </summary>
     public static string CustomExecutablePath { get; set; }
 
@@ -90,6 +90,11 @@ public class Truehdd : ExternalConverter {
     public override void PrepareOnUI() {
         if (!string.IsNullOrEmpty(CustomExecutablePath) && File.Exists(CustomExecutablePath)) {
             return;
+        }
+        if (OperatingSystem.IsAndroid()) {
+            throw new FileNotFoundException(
+                "Bundled libtruehdd.so not found in Android NativeLibraryDir.",
+                CustomExecutablePath ?? "libtruehdd.so");
         }
 
         versionFile = Path.Combine(cavernizeData, "truehdd.version");
@@ -318,6 +323,11 @@ public class Truehdd : ExternalConverter {
             EnsureExecutablePermissions(CustomExecutablePath);
             return;
         }
+        if (OperatingSystem.IsAndroid()) {
+            throw new FileNotFoundException(
+                "Bundled libtruehdd.so not found in Android NativeLibraryDir. Runtime executable downloads are disabled under Android W^X.",
+                CustomExecutablePath ?? "libtruehdd.so");
+        }
 
         versionFile ??= Path.Combine(cavernizeData, "truehdd.version");
         unpackDir ??= Path.Combine(cavernizeData, "truehdd");
@@ -366,6 +376,9 @@ public class Truehdd : ExternalConverter {
     string ResolveExecutablePath() {
         if (!string.IsNullOrEmpty(CustomExecutablePath)) {
             return CustomExecutablePath;
+        }
+        if (OperatingSystem.IsAndroid()) {
+            return string.Empty;
         }
         string binaryName = OperatingSystem.IsWindows() ? "truehdd.exe" : "truehdd";
         string direct = Path.Combine(unpackDir, binaryName);
@@ -483,7 +496,7 @@ public class Truehdd : ExternalConverter {
     }
 
     static void EnsureExecutablePermissions(string path) {
-        if (OperatingSystem.IsWindows() || string.IsNullOrEmpty(path) || !File.Exists(path)) {
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsAndroid() || string.IsNullOrEmpty(path) || !File.Exists(path)) {
             return;
         }
         try {

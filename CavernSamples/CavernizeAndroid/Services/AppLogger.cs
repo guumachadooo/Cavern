@@ -17,7 +17,17 @@ public static class AppLogger {
     static string sharedLogPath;
     static bool initialized;
 
-    public static string SharedLogPath => sharedLogPath ?? internalLogPath ?? "";
+    public static string SharedLogPath {
+        get {
+            if (!string.IsNullOrEmpty(sharedLogPath) && File.Exists(sharedLogPath)) {
+                return sharedLogPath;
+            }
+            if (!string.IsNullOrEmpty(internalLogPath) && File.Exists(internalLogPath)) {
+                return internalLogPath;
+            }
+            return sharedLogPath ?? internalLogPath ?? "";
+        }
+    }
 
     public static void Initialize(Context context) {
         lock (sync) {
@@ -25,12 +35,16 @@ public static class AppLogger {
                 string intDir = Path.Combine(context.FilesDir.AbsolutePath, "logs");
                 Directory.CreateDirectory(intDir);
                 internalLogPath = Path.Combine(intDir, "cavernize_log.txt");
+            } catch {
+                // Keep best-effort internal log path
+            }
 
+            try {
                 string extDir = AndroidFileHelper.GetWorkingOutputDir(context, "Logs");
                 Directory.CreateDirectory(extDir);
                 sharedLogPath = Path.Combine(extDir, "cavernize_log.txt");
             } catch {
-                // Keep best-effort paths
+                sharedLogPath = internalLogPath;
             }
 
             if (!initialized) {
@@ -124,11 +138,19 @@ public static class AppLogger {
         }
     }
 
+    public static Android.Net.Uri GetShareableLogUri(Context context) {
+        string path = SharedLogPath;
+        return !string.IsNullOrEmpty(path) ? AndroidFileHelper.GetShareableUri(context, path) : null;
+    }
+
+    public static Android.Net.Uri PublishLogToDownloads(Context context) {
+        string path = SharedLogPath;
+        return !string.IsNullOrEmpty(path) ? AndroidFileHelper.PublishToDownloads(context, path, "Logs") : null;
+    }
+
     public static long GetLogSizeBytes() {
         lock (sync) {
-            string p = !string.IsNullOrEmpty(sharedLogPath) && File.Exists(sharedLogPath)
-                ? sharedLogPath
-                : internalLogPath;
+            string p = SharedLogPath;
             try {
                 return !string.IsNullOrEmpty(p) && File.Exists(p) ? new FileInfo(p).Length : 0;
             } catch {

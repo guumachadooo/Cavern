@@ -66,7 +66,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     readonly UsbManager usbManager;
     readonly Handler mainHandler;
     readonly object syncLock = new();
-    readonly UsbBroadcastReceiver receiver;
+    readonly UsbBroadcastReceiver permissionReceiver;
+    readonly UsbBroadcastReceiver usbSystemReceiver;
     readonly byte[] scarlettRxScratch = new byte[256];
     readonly float[] scarlettMeterScratch = new float[8];
 
@@ -77,7 +78,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     ushort scarlettSeq = 1;
     bool scarlettInitialized;
     volatile bool pathBOwnsFileDescriptor;
-    bool registered;
+    bool permissionReceiverRegistered;
+    bool usbSystemReceiverRegistered;
     bool disposed;
 
     /// <summary>Raised on the main thread when a USB audio interface attaches, detaches, or gets permission.</summary>
@@ -105,29 +107,40 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
         this.context = context.ApplicationContext ?? context;
         usbManager = this.context.GetSystemService(Context.UsbService) as UsbManager;
         mainHandler = new Handler(Looper.MainLooper);
-        receiver = new UsbBroadcastReceiver(this);
+        permissionReceiver = new UsbBroadcastReceiver(this);
+        usbSystemReceiver = new UsbBroadcastReceiver(this);
     }
 
     /// <summary>Registers Android USB attach/detach/permission receivers and performs an initial bus scan.</summary>
     public void Start() {
-        if (disposed || registered || usbManager == null) {
+        if (disposed || usbManager == null || (permissionReceiverRegistered && usbSystemReceiverRegistered)) {
             return;
         }
         try {
-            IntentFilter filter = new();
-            filter.AddAction(ActionUsbPermission);
-            filter.AddAction(UsbManager.ActionUsbDeviceAttached);
-            filter.AddAction(UsbManager.ActionUsbDeviceDetached);
-
-            if (OperatingSystem.IsAndroidVersionAtLeast(33)) {
-                context.RegisterReceiver(receiver, filter, ReceiverFlags.NotExported);
-            } else {
-                context.RegisterReceiver(receiver, filter);
+            if (!permissionReceiverRegistered) {
+                IntentFilter permFilter = new(ActionUsbPermission);
+                RegisterReceiverCompat(permissionReceiver, permFilter, exported: false);
+                permissionReceiverRegistered = true;
             }
-            registered = true;
+            if (!usbSystemReceiverRegistered) {
+                IntentFilter usbFilter = new();
+                usbFilter.AddAction(UsbManager.ActionUsbDeviceAttached);
+                usbFilter.AddAction(UsbManager.ActionUsbDeviceDetached);
+                RegisterReceiverCompat(usbSystemReceiver, usbFilter, exported: true);
+                usbSystemReceiverRegistered = true;
+            }
             ScanAttachedDevices(autoOpenIfPermitted: true);
         } catch (Exception ex) {
             AppLogger.Error("UsbProAudioDeviceManager.Start", ex);
+        }
+    }
+
+    void RegisterReceiverCompat(BroadcastReceiver target, IntentFilter filter, bool exported) {
+        // API 33 (Tiramisu) introduced ReceiverFlags; API 34+ (UpsideDownCake) throws without Exported/NotExported.
+        if (OperatingSystem.IsAndroidVersionAtLeast(33)) {
+            context.RegisterReceiver(target, filter, exported ? ReceiverFlags.Exported : ReceiverFlags.NotExported);
+        } else {
+            context.RegisterReceiver(target, filter);
         }
     }
 
@@ -1005,13 +1018,21 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             return;
         }
         disposed = true;
-        if (registered) {
+        if (permissionReceiverRegistered) {
             try {
-                context.UnregisterReceiver(receiver);
+                context.UnregisterReceiver(permissionReceiver);
             } catch {
                 // Ignore
             }
-            registered = false;
+            permissionReceiverRegistered = false;
+        }
+        if (usbSystemReceiverRegistered) {
+            try {
+                context.UnregisterReceiver(usbSystemReceiver);
+            } catch {
+                // Ignore
+            }
+            usbSystemReceiverRegistered = false;
         }
         lock (syncLock) {
             CloseConnectionLocked();

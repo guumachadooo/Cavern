@@ -55,22 +55,28 @@ public static partial class SubtitleService {
         AndroidFFmpegRunner ffmpeg) {
         List<SubtitleTrackInfo> result = [];
         HashSet<string> seenFiles = new(StringComparer.OrdinalIgnoreCase);
+        Context effectiveCtx = ctx ?? Android.App.Application.Context;
+        Android.Net.Uri effectiveUri = sourceUri ?? TryParseUri(mediaPath);
 
         try {
             List<string> dirs = [];
-            string origDir = AndroidFileHelper.TryGetOriginalDirectory(ctx, sourceUri, mediaPath);
+            string origDir = AndroidFileHelper.TryGetOriginalDirectory(effectiveCtx, effectiveUri, mediaPath);
             if (!string.IsNullOrEmpty(origDir)) {
                 dirs.Add(origDir);
             }
-            string directPath = sourceUri != null ? AndroidFileHelper.TryGetDirectPath(ctx, sourceUri) : null;
-            if (!string.IsNullOrEmpty(mediaPath)) {
-                string resolvedDir = IOPath.GetDirectoryName(mediaPath);
-                string cacheRoot = ctx?.CacheDir?.AbsolutePath;
-                if (!string.IsNullOrEmpty(resolvedDir) &&
-                    Directory.Exists(resolvedDir) &&
-                    (string.IsNullOrEmpty(cacheRoot) || !resolvedDir.StartsWith(cacheRoot, StringComparison.OrdinalIgnoreCase)) &&
-                    !dirs.Contains(resolvedDir, StringComparer.OrdinalIgnoreCase)) {
-                    dirs.Add(resolvedDir);
+            string directPath = effectiveUri != null ? AndroidFileHelper.TryGetDirectPath(effectiveCtx, effectiveUri) : null;
+            if (!string.IsNullOrEmpty(mediaPath) && !IsUriString(mediaPath)) {
+                try {
+                    string resolvedDir = IOPath.GetDirectoryName(mediaPath);
+                    string cacheRoot = effectiveCtx?.CacheDir?.AbsolutePath;
+                    if (!string.IsNullOrEmpty(resolvedDir) &&
+                        Directory.Exists(resolvedDir) &&
+                        (string.IsNullOrEmpty(cacheRoot) || !resolvedDir.StartsWith(cacheRoot, StringComparison.OrdinalIgnoreCase)) &&
+                        !dirs.Contains(resolvedDir, StringComparer.OrdinalIgnoreCase)) {
+                        dirs.Add(resolvedDir);
+                    }
+                } catch {
+                    // Ignore inaccessible directory under scoped storage
                 }
             }
 
@@ -81,7 +87,13 @@ public static partial class SubtitleService {
                 }
             }
             if (!string.IsNullOrEmpty(directPath)) AddStem(IOPath.GetFileNameWithoutExtension(directPath));
-            if (!string.IsNullOrEmpty(mediaPath)) AddStem(IOPath.GetFileNameWithoutExtension(mediaPath));
+            if (effectiveUri != null && effectiveCtx != null) {
+                string disp = AndroidFileHelper.GetDisplayName(effectiveCtx, effectiveUri);
+                if (!string.IsNullOrWhiteSpace(disp)) {
+                    AddStem(IOPath.GetFileNameWithoutExtension(disp));
+                }
+            }
+            if (!string.IsNullOrEmpty(mediaPath) && !IsUriString(mediaPath)) AddStem(IOPath.GetFileNameWithoutExtension(mediaPath));
             AddStem(fallbackTitle);
 
             foreach (string dir in dirs) {
@@ -108,9 +120,11 @@ public static partial class SubtitleService {
             AppLogger.Error("SubtitleService.DiscoverExternal", ex);
         }
 
-        if (ffmpeg != null && ffmpeg.Found && !string.IsNullOrEmpty(mediaPath) && IOFile.Exists(mediaPath)) {
+        string ffmpegPath = ResolveFFmpegPath(effectiveCtx, ffmpeg);
+        string localMediaPath = ResolveReadableMediaPath(effectiveCtx, effectiveUri, mediaPath);
+        if (!string.IsNullOrEmpty(ffmpegPath) && !string.IsNullOrEmpty(localMediaPath)) {
             try {
-                result.AddRange(ProbeEmbeddedSubtitles(ffmpeg.Location, mediaPath));
+                result.AddRange(ProbeEmbeddedSubtitles(ffmpegPath, localMediaPath));
             } catch (Exception ex) {
                 AppLogger.Error("SubtitleService.ProbeEmbedded", ex);
             }
@@ -185,18 +199,25 @@ public static partial class SubtitleService {
         if (track == null) {
             return [];
         }
+        Context effectiveCtx = ctx ?? Android.App.Application.Context;
 
-        if (!string.IsNullOrEmpty(track.ExternalFilePath) && IOFile.Exists(track.ExternalFilePath)) {
-            string ext = IOPath.GetExtension(track.ExternalFilePath).ToLowerInvariant();
-            string raw = MediaServiceUtils.ReadFileTextAutoEncoding(track.ExternalFilePath);
-            return ext is ".ass" or ".ssa" ? ParseAss(raw) : ParseSrtOrVtt(raw);
+        if (!string.IsNullOrEmpty(track.ExternalFilePath)) {
+            List<SubtitleCue> extCues = LoadFromFilePath(effectiveCtx, track.ExternalFilePath);
+            if (extCues.Count > 0 || track.EmbeddedStreamIndex < 0) {
+                return extCues;
+            }
         }
 
-        if (track.EmbeddedStreamIndex >= 0 && ffmpeg != null && ffmpeg.Found && !string.IsNullOrEmpty(mediaPath)) {
-            string cacheRoot = ctx?.CacheDir?.AbsolutePath ?? IOPath.GetTempPath();
+        string ffmpegPath = ResolveFFmpegPath(effectiveCtx, ffmpeg);
+        string localMediaPath = track.EmbeddedStreamIndex >= 0
+            ? ResolveReadableMediaPath(effectiveCtx, TryParseUri(mediaPath), mediaPath)
+            : "";
+
+        if (track.EmbeddedStreamIndex >= 0 && !string.IsNullOrEmpty(ffmpegPath) && !string.IsNullOrEmpty(localMediaPath)) {
+            string cacheRoot = effectiveCtx?.CacheDir?.AbsolutePath ?? effectiveCtx?.FilesDir?.AbsolutePath ?? IOPath.GetTempPath();
             string subDir = IOPath.Combine(cacheRoot, "subtitles");
             Directory.CreateDirectory(subDir);
-            string mediaHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(mediaPath)))[..12];
+            string mediaHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(localMediaPath)))[..12];
             string outSrt = IOPath.Combine(subDir, $"track_{mediaHash}_{track.EmbeddedStreamIndex}.srt");
             try {
                 if (IOFile.Exists(outSrt)) {
@@ -207,7 +228,7 @@ public static partial class SubtitleService {
             }
 
             ProcessStartInfo psi = new() {
-                FileName = ffmpeg.Location,
+                FileName = ffmpegPath,
                 UseShellExecute = false,
                 RedirectStandardError = true,
                 RedirectStandardOutput = true,
@@ -218,7 +239,7 @@ public static partial class SubtitleService {
             psi.ArgumentList.Add("-loglevel");
             psi.ArgumentList.Add("error");
             psi.ArgumentList.Add("-i");
-            psi.ArgumentList.Add(mediaPath);
+            psi.ArgumentList.Add(localMediaPath);
             psi.ArgumentList.Add("-map");
             psi.ArgumentList.Add($"0:{track.EmbeddedStreamIndex}");
             psi.ArgumentList.Add("-c:s");
@@ -236,13 +257,126 @@ public static partial class SubtitleService {
         return [];
     }
 
-    public static List<SubtitleCue> LoadFromFilePath(string filePath) {
-        if (string.IsNullOrEmpty(filePath) || !IOFile.Exists(filePath)) {
+    public static List<SubtitleCue> LoadFromFilePath(string filePath) =>
+        LoadFromFilePath(Android.App.Application.Context, filePath);
+
+    public static List<SubtitleCue> LoadFromFilePath(Context ctx, string filePath) {
+        if (string.IsNullOrEmpty(filePath)) {
             return [];
         }
-        string ext = IOPath.GetExtension(filePath).ToLowerInvariant();
-        string raw = MediaServiceUtils.ReadFileTextAutoEncoding(filePath);
-        return ext is ".ass" or ".ssa" ? ParseAss(raw) : ParseSrtOrVtt(raw);
+        Context effectiveCtx = ctx ?? Android.App.Application.Context;
+        Android.Net.Uri uri = TryParseUri(filePath);
+        if (uri != null && effectiveCtx != null) {
+            try {
+                using Stream stream = AndroidFileHelper.OpenReadableStream(effectiveCtx, uri);
+                if (stream != null) {
+                    using MemoryStream ms = new();
+                    stream.CopyTo(ms);
+                    string rawUriText = MediaServiceUtils.ReadTextAutoEncoding(ms.ToArray());
+                    string disp = AndroidFileHelper.GetDisplayName(effectiveCtx, uri) ?? "";
+                    string uriExt = IOPath.GetExtension(disp).ToLowerInvariant();
+                    bool isAss = uriExt is ".ass" or ".ssa" ||
+                        (string.IsNullOrEmpty(uriExt) && rawUriText.Contains("[Script Info]", StringComparison.OrdinalIgnoreCase));
+                    return isAss ? ParseAss(rawUriText) : ParseSrtOrVtt(rawUriText);
+                }
+            } catch {
+                // Fall back to direct file check below if possible
+            }
+        }
+
+        try {
+            if (!CanOpenFileForRead(filePath)) {
+                return [];
+            }
+            string ext = IOPath.GetExtension(filePath).ToLowerInvariant();
+            string raw = MediaServiceUtils.ReadFileTextAutoEncoding(filePath);
+            return ext is ".ass" or ".ssa" ? ParseAss(raw) : ParseSrtOrVtt(raw);
+        } catch {
+            return [];
+        }
+    }
+
+    static string ResolveFFmpegPath(Context ctx, AndroidFFmpegRunner ffmpeg) {
+        string resolved = FFmpegInstallerService.ResolveExistingFFmpegPath(ctx, null);
+        if (!string.IsNullOrEmpty(resolved) && IOFile.Exists(resolved)) {
+            return resolved;
+        }
+        if (ffmpeg != null && ffmpeg.Found && !string.IsNullOrEmpty(ffmpeg.Location) &&
+            !IsWritableAppDataPath(ctx, ffmpeg.Location) && IOFile.Exists(ffmpeg.Location)) {
+            return ffmpeg.Location;
+        }
+        return "";
+    }
+
+    static bool IsWritableAppDataPath(Context ctx, string path) {
+        if (string.IsNullOrEmpty(path)) {
+            return false;
+        }
+        try {
+            string full = IOPath.GetFullPath(path);
+            string files = ctx?.FilesDir?.AbsolutePath;
+            string cache = ctx?.CacheDir?.AbsolutePath;
+            if (!string.IsNullOrEmpty(files) && full.StartsWith(IOPath.GetFullPath(files), StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+            if (!string.IsNullOrEmpty(cache) && full.StartsWith(IOPath.GetFullPath(cache), StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+            return full.Replace('\\', '/').Contains("/files/bin/", StringComparison.OrdinalIgnoreCase);
+        } catch {
+            return false;
+        }
+    }
+
+    static Android.Net.Uri TryParseUri(string pathOrUri) {
+        if (string.IsNullOrWhiteSpace(pathOrUri)) {
+            return null;
+        }
+        if (IsUriString(pathOrUri)) {
+            try {
+                return Android.Net.Uri.Parse(pathOrUri);
+            } catch {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    static bool IsUriString(string value) =>
+        !string.IsNullOrEmpty(value) &&
+        (value.StartsWith("content://", StringComparison.OrdinalIgnoreCase) ||
+         value.StartsWith("file://", StringComparison.OrdinalIgnoreCase));
+
+    static bool CanOpenFileForRead(string path) {
+        if (string.IsNullOrEmpty(path) || IsUriString(path)) {
+            return false;
+        }
+        try {
+            if (!IOFile.Exists(path)) {
+                return false;
+            }
+            using FileStream fs = IOFile.OpenRead(path);
+            return fs.CanRead;
+        } catch {
+            return false;
+        }
+    }
+
+    static string ResolveReadableMediaPath(Context ctx, Android.Net.Uri uri, string path) {
+        if (CanOpenFileForRead(path)) {
+            return path;
+        }
+        if (uri != null && ctx != null) {
+            try {
+                string resolved = AndroidFileHelper.ResolveReadablePath(ctx, uri);
+                if (CanOpenFileForRead(resolved)) {
+                    return resolved;
+                }
+            } catch {
+                // Unreadable SAF/content URI under scoped storage
+            }
+        }
+        return "";
     }
 
     public static string FindActiveText(IReadOnlyList<SubtitleCue> cues, double currentSeconds) {

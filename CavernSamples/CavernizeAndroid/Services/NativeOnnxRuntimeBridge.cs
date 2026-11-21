@@ -416,10 +416,10 @@ public static class OnnxRuntimeHeaderParser {
 }
 
 /// <summary>
-/// Dynamic Android native bridge for <c>libonnxruntime.so</c> stored in <c>FilesDir/bin/onnxruntime/</c>.
+/// Dynamic Android native bridge for <c>libonnxruntime.so</c> bundled in <see cref="Android.Content.PM.ApplicationInfo.NativeLibraryDir"/>.
 /// Implements <see cref="INeuralInferenceRuntime"/> and <see cref="INeuralModelRegistry"/> using
 /// companion <c>.so</c> pre-loading + <see cref="NativeLibrary.Load"/> + <c>OrtGetApiBase()</c> +
-/// header-verified <c>OrtApi</c> vtable slots, with automatic QNN HTP -> XNNPACK -> CPU provider cascade.
+/// asset-bundled <c>onnxruntime_c_api.h</c> vtable slots, with automatic QNN HTP -> XNNPACK -> CPU provider cascade.
 /// </summary>
 public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralModelRegistry {
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -717,6 +717,9 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     }
 
     void PreloadCompanionLibrariesLocked(string runtimeDir) {
+        if (string.IsNullOrEmpty(runtimeDir) || !Directory.Exists(runtimeDir)) {
+            return;
+        }
         HashSet<string> loaded = new(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < PreferredCompanionLoadOrder.Length; i++) {
             string p = Path.Combine(runtimeDir, PreferredCompanionLoadOrder[i]);
@@ -742,22 +745,23 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         try {
             string runtimeDir = OnnxRuntimeInstallerService.GetRuntimeDir(appContext);
             string libPath = OnnxRuntimeInstallerService.GetManagedLibraryPath(appContext);
-            string headerPath = OnnxRuntimeInstallerService.GetManagedHeaderPath(appContext);
-            if (!File.Exists(libPath)) {
-                return false;
-            }
 
             uint headerApiVersion = 17u;
-            if (File.Exists(headerPath)) {
-                (headerApiVersion, apiSlots) = OnnxRuntimeHeaderParser.ParseOrtApiHeader(File.ReadAllText(headerPath));
+            string headerText = OnnxRuntimeInstallerService.ReadHeaderText(appContext);
+            if (!string.IsNullOrWhiteSpace(headerText)) {
+                (headerApiVersion, apiSlots) = OnnxRuntimeHeaderParser.ParseOrtApiHeader(headerText);
             }
             if (apiSlots.Count < 20) {
-                AppLogger.Warn("ONNX Runtime C API header missing or failed anchor validation; cannot safely bind vtable.");
+                AppLogger.Warn("ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.");
                 return false;
             }
 
             PreloadCompanionLibrariesLocked(runtimeDir);
-            libHandle = NativeLibrary.Load(libPath);
+            if (!string.IsNullOrEmpty(libPath) && File.Exists(libPath)) {
+                libHandle = NativeLibrary.Load(libPath);
+            } else if (!NativeLibrary.TryLoad("onnxruntime", typeof(NativeOnnxRuntimeBridge).Assembly, null, out libHandle)) {
+                return false;
+            }
             IntPtr getBaseSym = NativeLibrary.GetExport(libHandle, "OrtGetApiBase");
             OrtGetApiBaseDelegate getBase = Marshal.GetDelegateForFunctionPointer<OrtGetApiBaseDelegate>(getBaseSym);
             IntPtr apiBasePtr = getBase();

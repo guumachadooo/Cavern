@@ -97,10 +97,25 @@ public static partial class OnlineMetadataService {
     }
 
     static string GetCacheSubdir(Context ctx, string sub) {
-        string root = ctx?.FilesDir?.AbsolutePath ?? System.IO.Path.GetTempPath();
-        string dir = IOPath.Combine(root, "online_cache", sub);
-        Directory.CreateDirectory(dir);
-        return dir;
+        Context effectiveCtx = ctx ?? Android.App.Application.Context;
+        string[] roots = [
+            effectiveCtx?.FilesDir?.AbsolutePath,
+            effectiveCtx?.CacheDir?.AbsolutePath,
+            IOPath.GetTempPath()
+        ];
+        foreach (string root in roots) {
+            if (string.IsNullOrEmpty(root)) {
+                continue;
+            }
+            try {
+                string dir = IOPath.Combine(root, "online_cache", sub);
+                Directory.CreateDirectory(dir);
+                return dir;
+            } catch {
+                // Fall back to next app-private storage root
+            }
+        }
+        return null;
     }
 
     static string HashKey(string raw) {
@@ -173,6 +188,7 @@ public static partial class OnlineMetadataService {
     }
 
     static string FindExistingCachedImage(string dir, string baseHash) {
+        if (string.IsNullOrEmpty(dir)) return null;
         for (int i = 0; i < ImageCacheExtensions.Length; i++) {
             string candidate = IOPath.Combine(dir, baseHash + ImageCacheExtensions[i]);
             if (IOFile.Exists(candidate)) return candidate;
@@ -183,7 +199,30 @@ public static partial class OnlineMetadataService {
     public static string GetManualCoverOverridePath(Context ctx, string filePath) {
         if (ctx == null || string.IsNullOrWhiteSpace(filePath)) return null;
         string dir = GetCacheSubdir(ctx, "cover_overrides");
-        return FindExistingCachedImage(dir, HashKey($"file|{filePath}"));
+        if (string.IsNullOrEmpty(dir)) return null;
+        string match = FindExistingCachedImage(dir, HashKey($"file|{filePath}"));
+        if (!string.IsNullOrEmpty(match)) return match;
+
+        if (filePath.StartsWith("content://", StringComparison.OrdinalIgnoreCase)) {
+            try {
+                string direct = AndroidFileHelper.TryGetDirectPath(ctx, Android.Net.Uri.Parse(filePath));
+                if (!string.IsNullOrEmpty(direct)) {
+                    return FindExistingCachedImage(dir, HashKey($"file|{direct}"));
+                }
+            } catch {
+                // Ignore invalid URI
+            }
+        } else if (filePath.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) {
+            try {
+                string local = Android.Net.Uri.Parse(filePath)?.Path;
+                if (!string.IsNullOrEmpty(local)) {
+                    return FindExistingCachedImage(dir, HashKey($"file|{local}"));
+                }
+            } catch {
+                // Ignore invalid URI
+            }
+        }
+        return null;
     }
 
     public static string GetCachedCoverPath(Context ctx, string title, string artist, string album, string filePath = null) {
@@ -192,6 +231,7 @@ public static partial class OnlineMetadataService {
         if (!string.IsNullOrEmpty(ovr)) return ovr;
 
         string dir = GetCacheSubdir(ctx, "covers");
+        if (string.IsNullOrEmpty(dir)) return null;
         string cleanAlb = IsGenericAlbumName(album) ? "" : album.Trim();
         if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrEmpty(cleanAlb)) {
             string pEd = FindExistingCachedImage(dir, HashKey($"trk|{artist}|{cleanAlb}|{title}"));
@@ -211,6 +251,7 @@ public static partial class OnlineMetadataService {
     public static string GetCachedLyricsPath(Context ctx, string title, string artist) {
         if (ctx == null || string.IsNullOrWhiteSpace(title)) return null;
         string dir = GetCacheSubdir(ctx, "lyrics");
+        if (string.IsNullOrEmpty(dir)) return null;
         string p = IOPath.Combine(dir, HashKey($"lyr|{artist}|{title}") + ".lrc");
         return IOFile.Exists(p) ? p : null;
     }
@@ -218,9 +259,14 @@ public static partial class OnlineMetadataService {
     public static string SaveLyricsToCache(Context ctx, string title, string artist, string content) {
         if (ctx == null || string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(content)) return null;
         string dir = GetCacheSubdir(ctx, "lyrics");
+        if (string.IsNullOrEmpty(dir)) return null;
         string p = IOPath.Combine(dir, HashKey($"lyr|{artist}|{title}") + ".lrc");
-        MediaServiceUtils.WriteTextAtomic(p, content);
-        return p;
+        try {
+            MediaServiceUtils.WriteTextAtomic(p, content);
+            return p;
+        } catch {
+            return null;
+        }
     }
 
     public static async Task<List<OnlineCoverCandidate>> SearchCoverCandidatesAsync(
@@ -510,19 +556,28 @@ public static partial class OnlineMetadataService {
         if (bmp == null) return (null, null);
 
         string imgExt = DetectImageExtension(bytes);
-        string dir = GetCacheSubdir(ctx, "covers");
-        string cleanAlb = IsGenericAlbumName(album) ? "" : album.Trim();
-        string trkHash = !string.IsNullOrEmpty(cleanAlb)
-            ? HashKey($"trk|{artist}|{cleanAlb}|{title}")
-            : HashKey($"trk|{artist}|{title}");
-        string savedPath = WriteCachedImageAtomic(dir, trkHash, imgExt, bytes);
-        if (!string.IsNullOrWhiteSpace(artist) && !string.IsNullOrEmpty(cleanAlb)) {
-            WriteCachedImageAtomic(dir, HashKey($"alb|{artist}|{cleanAlb}"), imgExt, bytes);
-        }
-        if (!string.IsNullOrWhiteSpace(filePathOverride)) {
-            string ovrDir = GetCacheSubdir(ctx, "cover_overrides");
-            savedPath = WriteCachedImageAtomic(ovrDir, HashKey($"file|{filePathOverride}"), imgExt, bytes);
-            MediaLibraryService.InvalidateThumbCache(filePathOverride);
+        string savedPath = null;
+        try {
+            string dir = GetCacheSubdir(ctx, "covers");
+            string cleanAlb = IsGenericAlbumName(album) ? "" : album.Trim();
+            if (!string.IsNullOrEmpty(dir)) {
+                string trkHash = !string.IsNullOrEmpty(cleanAlb)
+                    ? HashKey($"trk|{artist}|{cleanAlb}|{title}")
+                    : HashKey($"trk|{artist}|{title}");
+                savedPath = WriteCachedImageAtomic(dir, trkHash, imgExt, bytes);
+                if (!string.IsNullOrWhiteSpace(artist) && !string.IsNullOrEmpty(cleanAlb)) {
+                    WriteCachedImageAtomic(dir, HashKey($"alb|{artist}|{cleanAlb}"), imgExt, bytes);
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(filePathOverride)) {
+                string ovrDir = GetCacheSubdir(ctx, "cover_overrides");
+                if (!string.IsNullOrEmpty(ovrDir)) {
+                    savedPath = WriteCachedImageAtomic(ovrDir, HashKey($"file|{filePathOverride}"), imgExt, bytes);
+                }
+                MediaLibraryService.InvalidateThumbCache(filePathOverride);
+            }
+        } catch {
+            // Keep decoded bitmap even if app-private cache write fails
         }
         return (bmp, savedPath);
     }
@@ -930,6 +985,7 @@ public static partial class OnlineMetadataService {
             if (bytes.Length < 16) return null;
 
             string dir = GetCacheSubdir(ctx, "subtitles");
+            if (string.IsNullOrEmpty(dir)) return null;
             string safeBase = HashKey($"{candidate.Id}|{candidate.Title}");
 
             // GZip archive starts with 0x1F, 0x8B (OpenSubtitles SubDownloadLink)

@@ -21,6 +21,10 @@ add_library(cavernize_proaudio SHARED
 target_compile_options(cavernize_proaudio PRIVATE -O3 -Wall -Wextra -fvisibility=default)
 
 if(ANDROID)
+    target_link_options(cavernize_proaudio PRIVATE
+        -Wl,-z,max-page-size=16384
+        -Wl,-z,common-page-size=16384
+    )
     find_library(AAUDIO_LIB aaudio REQUIRED)
     find_library(LOG_LIB log REQUIRED)
     target_link_libraries(cavernize_proaudio PRIVATE ${AAUDIO_LIB} ${LOG_LIB})

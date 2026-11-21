@@ -51,6 +51,7 @@ public static class OneUiFileExplorerDialog {
 
     sealed class FileScanEntry {
         public string Path { get; init; } = "";
+        public Android.Net.Uri ContentUri { get; init; }
         public string Name { get; init; } = "";
         public string Badge { get; init; } = "";
         public bool IsSpatial { get; init; }
@@ -61,10 +62,22 @@ public static class OneUiFileExplorerDialog {
         if (ctx == null || opts == null) return;
         AndroidStrings S = AndroidStrings.Active;
 
+        bool IsUiDead() => ctx is Activity act && (act.IsFinishing || act.IsDestroyed);
+
         string extRoot = Android.OS.Environment.ExternalStorageDirectory?.AbsolutePath?.TrimEnd('/') ?? "/storage/emulated/0";
-        string startDir = !string.IsNullOrWhiteSpace(opts.InitialDirectory) && Directory.Exists(opts.InitialDirectory)
-            ? opts.InitialDirectory.TrimEnd('/')
-            : extRoot;
+        string requestedDir = opts.InitialDirectory;
+        if (!string.IsNullOrWhiteSpace(requestedDir) &&
+            requestedDir.StartsWith("content://", StringComparison.OrdinalIgnoreCase)) {
+            try {
+                requestedDir = AndroidFileHelper.TryGetOriginalDirectory(ctx, Android.Net.Uri.Parse(requestedDir), null);
+            } catch {
+                requestedDir = null;
+            }
+        }
+        string appWorkingDir = AndroidFileHelper.GetWorkingOutputDir(ctx);
+        string startDir = !string.IsNullOrWhiteSpace(requestedDir) && Directory.Exists(requestedDir)
+            ? requestedDir.TrimEnd('/')
+            : (Directory.Exists(extRoot) ? extRoot : appWorkingDir.TrimEnd('/'));
 
         int dp(float v) => OneUiTheme.Dp(ctx, v);
         Typeface sfBold = OneUiTheme.GetAppleFontBold(ctx);
@@ -151,8 +164,14 @@ public static class OneUiFileExplorerDialog {
         // Dialog Layout
         LinearLayout root = new(ctx) { Orientation = Orientation.Vertical };
 
+        string currentDir = startDir;
+        List<DirScanEntry> loadedDirs = [];
+        List<FileScanEntry> loadedFiles = [];
+        int navGen = 0;
+        Dialog dlg = null;
+
         // Optional All Files Access prompt if not yet granted
-        if (!AndroidFileHelper.HasAllFilesAccess() && Build.VERSION.SdkInt >= BuildVersionCodes.R) {
+        if (!AndroidFileHelper.HasAllFilesAccess() && OperatingSystem.IsAndroidVersionAtLeast(30)) {
             LinearLayout permBar = new(ctx) { Orientation = Orientation.Horizontal, BaselineAligned = false };
             permBar.SetGravity(GravityFlags.CenterVertical);
             permBar.SetPadding(dp(12), dp(8), dp(12), dp(8));
@@ -169,7 +188,14 @@ public static class OneUiFileExplorerDialog {
                         Android.Net.Uri.Parse($"package:{ctx.PackageName}"));
                     ctx.StartActivity(permIntent);
                 } catch {
-                    opts.OnFallbackSystemPicker?.Invoke();
+                    try {
+                        Intent appSettings = new(Android.Provider.Settings.ActionApplicationDetailsSettings,
+                            Android.Net.Uri.Parse($"package:{ctx.PackageName}"));
+                        ctx.StartActivity(appSettings);
+                    } catch {
+                        dlg?.Dismiss();
+                        opts.OnFallbackSystemPicker?.Invoke();
+                    }
                 }
             };
             root.AddView(permBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = dp(8) });
@@ -248,12 +274,39 @@ public static class OneUiFileExplorerDialog {
             safBtn.Tag = "saf_btn";
         }
 
-        string currentDir = startDir;
-        List<DirScanEntry> loadedDirs = [];
-        List<FileScanEntry> loadedFiles = [];
-        int navGen = 0;
-        Dialog dlg = null;
         Button confirmActionBtn = null;
+
+        void ConfirmResolvedPaths(IReadOnlyList<string> rawPaths) {
+            if (rawPaths == null || rawPaths.Count == 0) {
+                opts.OnConfirm?.Invoke(rawPaths ?? []);
+                return;
+            }
+            bool hasContentUri = rawPaths.Any(p => !string.IsNullOrEmpty(p) && p.StartsWith("content://", StringComparison.OrdinalIgnoreCase));
+            if (!hasContentUri) {
+                opts.OnConfirm?.Invoke(rawPaths);
+                return;
+            }
+            Task.Run(() => {
+                List<string> resolved = [];
+                foreach (string raw in rawPaths) {
+                    if (string.IsNullOrEmpty(raw)) continue;
+                    if (raw.StartsWith("content://", StringComparison.OrdinalIgnoreCase)) {
+                        try {
+                            string local = AndroidFileHelper.ResolveReadablePath(ctx, Android.Net.Uri.Parse(raw));
+                            if (!string.IsNullOrEmpty(local)) resolved.Add(local);
+                        } catch {
+                            // Skip unreadable content URI
+                        }
+                    } else {
+                        resolved.Add(raw);
+                    }
+                }
+                new Handler(Looper.MainLooper!).Post(() => {
+                    if (IsUiDead()) return;
+                    opts.OnConfirm?.Invoke(resolved);
+                });
+            });
+        }
 
         void RefreshSelectionFooter() {
             if (opts.Mode == ExplorerPickMode.SingleFile || confirmActionBtn == null) return;
@@ -278,8 +331,25 @@ public static class OneUiFileExplorerDialog {
             if (dirs.Count == 0 && files.Count == 0) {
                 TextView emptyTv = new(ctx) { Text = S["ExplorerEmpty"], TextSize = 12.5f };
                 emptyTv.SetTextColor(OneUiTheme.TextMuted);
-                emptyTv.SetPadding(dp(6), dp(14), dp(6), dp(14));
+                emptyTv.SetPadding(dp(6), dp(14), dp(6), dp(10));
                 listHost.AddView(emptyTv);
+
+                if (!AndroidFileHelper.HasAllFilesAccess() && opts.OnFallbackSystemPicker != null) {
+                    TextView safInlineBtn = new(ctx) { Text = S["ExplorerSystemFallback"], TextSize = 12f };
+                    safInlineBtn.Typeface = sfBold;
+                    safInlineBtn.SetTextColor(OneUiTheme.PrimaryHigh);
+                    safInlineBtn.SetPadding(dp(14), dp(8), dp(14), dp(8));
+                    safInlineBtn.Background = OneUiTheme.CreateRoundedDrawable(ctx, OneUiTheme.WithAlpha(OneUiTheme.Primary, 45), 999f, OneUiTheme.Primary, 1f);
+                    OneUiTheme.AttachRecoil(safInlineBtn, 0.94f);
+                    safInlineBtn.Click += (_, _) => {
+                        dlg?.Dismiss();
+                        opts.OnFallbackSystemPicker?.Invoke();
+                    };
+                    listHost.AddView(safInlineBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
+                        LeftMargin = dp(6),
+                        BottomMargin = dp(8)
+                    });
+                }
                 return;
             }
 
@@ -402,7 +472,7 @@ public static class OneUiFileExplorerDialog {
                 if (opts.Mode == ExplorerPickMode.SingleFile) {
                     row.Click += (_, _) => {
                         dlg?.Dismiss();
-                        opts.OnConfirm?.Invoke([f.Path]);
+                        ConfirmResolvedPaths([f.Path]);
                     };
                 } else if (opts.Mode == ExplorerPickMode.MultiFile) {
                     void ToggleFile(bool next) {
@@ -506,8 +576,64 @@ public static class OneUiFileExplorerDialog {
                     // Protected folder fallback
                 }
 
+                // Scoped Storage MediaStore fallback when direct POSIX enumeration finds nothing under API 30-36
+                if (dirs.Count == 0 && files.Count == 0 && !AndroidFileHelper.HasAllFilesAccess()) {
+                    List<MediaStoreEntry> mediaEntries = AndroidFileHelper.QueryMediaStoreEntries(
+                        ctx, opts.AllowedExtensions, opts.AllowAllFiles);
+                    string curPrefix = currentDir.TrimEnd('/') + "/";
+                    Dictionary<string, (int direct, int total, bool spatial)> childBuckets = new(StringComparer.OrdinalIgnoreCase);
+
+                    foreach (MediaStoreEntry entry in mediaEntries) {
+                        string entryFolder = (entry.FolderPath ?? "").TrimEnd('/');
+                        if (string.Equals(entryFolder, currentDir, StringComparison.OrdinalIgnoreCase)) {
+                            if (opts.Mode == ExplorerPickMode.MultiFolder) {
+                                continue;
+                            }
+                            string lower = entry.DisplayName.ToLowerInvariant();
+                            string ext = IOPath.GetExtension(entry.DisplayName).TrimStart('.').ToUpperInvariant();
+                            bool sp = ext is "ATMOS" or "THD" or "MLP" or "EAC3" or "EC3" ||
+                                lower.Contains("atmos") || lower.Contains("truehd") || lower.Contains("joc");
+                            string pickTarget = !string.IsNullOrEmpty(entry.DirectPath)
+                                ? entry.DirectPath
+                                : (entry.ContentUri?.ToString() ?? "");
+                            if (string.IsNullOrEmpty(pickTarget)) continue;
+                            files.Add(new FileScanEntry {
+                                Path = pickTarget,
+                                ContentUri = entry.ContentUri,
+                                Name = entry.DisplayName,
+                                Badge = string.IsNullOrEmpty(ext) ? "ARQUIVO" : ext,
+                                IsSpatial = sp,
+                                SizeBytes = entry.SizeBytes
+                            });
+                        } else if (entryFolder.StartsWith(curPrefix, StringComparison.OrdinalIgnoreCase)) {
+                            string rel = entryFolder[curPrefix.Length..];
+                            int slashIdx = rel.IndexOf('/');
+                            string childName = slashIdx >= 0 ? rel[..slashIdx] : rel;
+                            if (string.IsNullOrEmpty(childName)) continue;
+                            string childPath = IOPath.Combine(currentDir, childName).TrimEnd('/');
+                            bool isDirect = slashIdx < 0;
+                            string lower = entry.DisplayName.ToLowerInvariant();
+                            string ext = IOPath.GetExtension(entry.DisplayName).TrimStart('.').ToUpperInvariant();
+                            bool sp = ext is "ATMOS" or "THD" or "MLP" or "EAC3" or "EC3" ||
+                                lower.Contains("atmos") || lower.Contains("truehd") || lower.Contains("joc");
+                            childBuckets.TryGetValue(childPath, out var prev);
+                            childBuckets[childPath] = (prev.direct + (isDirect ? 1 : 0), prev.total + 1, prev.spatial || sp);
+                        }
+                    }
+
+                    foreach (var kv in childBuckets.OrderBy(k => k.Key, StringComparer.OrdinalIgnoreCase)) {
+                        dirs.Add(new DirScanEntry {
+                            Path = kv.Key,
+                            Name = IOPath.GetFileName(kv.Key) ?? kv.Key,
+                            DirectMatchCount = kv.Value.direct,
+                            TotalSampledCount = kv.Value.total,
+                            HasSpatial = kv.Value.spatial
+                        });
+                    }
+                }
+
                 new Handler(Looper.MainLooper!).Post(() => {
-                    if (myGen != navGen) return;
+                    if (myGen != navGen || IsUiDead()) return;
                     loadedDirs = dirs;
                     loadedFiles = files;
                     statusTv.Text = $"{dirs.Count} pasta(s) • {files.Count} arquivo(s)";
@@ -518,7 +644,7 @@ public static class OneUiFileExplorerDialog {
 
         // Populate quick non-empty media shortcuts asynchronously
         Task.Run(() => {
-            (string label, string path)[] candidates = [
+            List<(string label, string path)> candidates = [
                 (S["ExplorerRoot"], extRoot),
                 ("Music", IOPath.Combine(extRoot, "Music")),
                 ("Download", IOPath.Combine(extRoot, "Download")),
@@ -526,14 +652,29 @@ public static class OneUiFileExplorerDialog {
                 ("Audiobooks", IOPath.Combine(extRoot, "Audiobooks")),
                 ("Cavernize", IOPath.Combine(extRoot, "Download", "Cavernize"))
             ];
+            if (!string.IsNullOrEmpty(appWorkingDir) &&
+                !string.Equals(appWorkingDir.TrimEnd('/'), IOPath.Combine(extRoot, "Download", "Cavernize"), StringComparison.OrdinalIgnoreCase)) {
+                candidates.Add(("Cavernize (App)", appWorkingDir.TrimEnd('/')));
+            }
+
             List<(string label, string path)> valid = [];
+            List<MediaStoreEntry> mediaFallback = null;
             foreach (var c in candidates) {
                 if (!Directory.Exists(c.path)) continue;
-                if (c.path == extRoot || InspectDirTree(c.path, 0).hasAny) {
+                if (c.path == extRoot || c.path == appWorkingDir.TrimEnd('/') || InspectDirTree(c.path, 0).hasAny) {
                     valid.Add(c);
+                } else if (!AndroidFileHelper.HasAllFilesAccess()) {
+                    mediaFallback ??= AndroidFileHelper.QueryMediaStoreEntries(ctx, opts.AllowedExtensions, opts.AllowAllFiles, maxResults: 120);
+                    string prefix = c.path.TrimEnd('/') + "/";
+                    if (mediaFallback.Any(e =>
+                        string.Equals(e.FolderPath, c.path.TrimEnd('/'), StringComparison.OrdinalIgnoreCase) ||
+                        e.FolderPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))) {
+                        valid.Add(c);
+                    }
                 }
             }
             new Handler(Looper.MainLooper!).Post(() => {
+                if (IsUiDead()) return;
                 shortcutsRow.RemoveAllViews();
                 foreach (var (lbl, path) in valid) {
                     TextView chip = new(ctx) { Text = lbl, TextSize = 11.5f };
@@ -577,7 +718,7 @@ public static class OneUiFileExplorerDialog {
             positiveText: opts.Mode == ExplorerPickMode.SingleFile ? null : posLabel,
             onPositive: opts.Mode == ExplorerPickMode.SingleFile
                 ? null
-                : () => opts.OnConfirm?.Invoke(selectedPaths.ToList()),
+                : () => ConfirmResolvedPaths(selectedPaths.ToList()),
             negativeText: S["CancelBtn"]);
 
         View safTarget = root.FindViewWithTag("saf_btn");

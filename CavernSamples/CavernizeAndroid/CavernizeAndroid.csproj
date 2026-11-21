@@ -26,8 +26,12 @@
 
   <ItemGroup>
     <AndroidAsset Update="Assets\fonts\sf_pro_android_ui.ttf" />
-    <AndroidNativeLibrary Include="NativeLibs\arm64-v8a\libcavernize_proaudio.so"
-                          Condition="Exists('NativeLibs\arm64-v8a\libcavernize_proaudio.so')" />
+    <AndroidAsset Update="Assets\ffmpeg\**" Condition="Exists('Assets\ffmpeg')" />
+    <AndroidAsset Update="Assets\truehdd\**" Condition="Exists('Assets\truehdd')" />
+    <AndroidAsset Update="Assets\onnxruntime\**" Condition="Exists('Assets\onnxruntime')" />
+    <AndroidNativeLibrary Include="NativeLibs\arm64-v8a\*.so"
+                          Abi="arm64-v8a"
+                          Condition="Exists('NativeLibs\arm64-v8a')" />
   </ItemGroup>
 
   <ItemGroup>

@@ -2,10 +2,10 @@
 """Local Roslyn C# type-check for CavernizeAndroid on Termux ARM64 PRoot.
 
 Caches architecture-independent managed Android reference assemblies
-(`Microsoft.Android.Ref.34`) and Roslyn 4.12 (`Microsoft.Net.Compilers.Toolset 4.12.0`,
-targeting .NET 8 with C# 13 support) under `~/.cache/cavern-android-ref/`, and compiles
-all `CavernSamples/CavernizeAndroid/**/*.cs` via an ephemeral shadow `.csproj`
-in `/tmp/cavern-android-typecheck/` (zero workspace pollution).
+(`Microsoft.Android.Ref.36` / API 36) + `.NET 10.0` ref assemblies (`Microsoft.NETCore.App.Ref`)
+and Roslyn 4.12 (`Microsoft.Net.Compilers.Toolset 4.12.0`, targeting .NET 8 with C# 13 support)
+under `~/.cache/cavern-android-ref/`, and compiles all `CavernSamples/CavernizeAndroid/**/*.cs`
+via an ephemeral shadow `.csproj` in `/tmp/cavern-android-typecheck/` (zero workspace pollution).
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -21,8 +22,8 @@ import xml.sax.saxutils as saxutils
 import zipfile
 from pathlib import Path
 
-ANDROID_REF_PKG = "microsoft.android.ref.34"
-ANDROID_REF_VER = "34.0.154"
+ANDROID_REF_PKG = "microsoft.android.ref.36"
+ANDROID_REF_VER = "36.1.118"
 ANDROID_REF_URL = (
     f"https://api.nuget.org/v3-flatcontainer/{ANDROID_REF_PKG}/{ANDROID_REF_VER}/"
     f"{ANDROID_REF_PKG}.{ANDROID_REF_VER}.nupkg"
@@ -32,6 +33,18 @@ REQUIRED_REFS = (
     "Java.Interop.dll",
     "Mono.Android.Export.dll",
     "Mono.Android.Runtime.dll",
+)
+
+NETCORE_REF_PKG = "microsoft.netcore.app.ref"
+NETCORE_REF_VER = "10.0.15"
+NETCORE_REF_URL = (
+    f"https://api.nuget.org/v3-flatcontainer/{NETCORE_REF_PKG}/{NETCORE_REF_VER}/"
+    f"{NETCORE_REF_PKG}.{NETCORE_REF_VER}.nupkg"
+)
+NETCORE_ANALYZER_VER = "8.0.31"
+NETCORE_ANALYZER_URL = (
+    f"https://api.nuget.org/v3-flatcontainer/{NETCORE_REF_PKG}/{NETCORE_ANALYZER_VER}/"
+    f"{NETCORE_REF_PKG}.{NETCORE_ANALYZER_VER}.nupkg"
 )
 
 ROSLYN_PKG = "microsoft.net.compilers.toolset"
@@ -59,17 +72,94 @@ def _ensure_android_refs(cache_dir: Path) -> list[Path]:
     target_dir.mkdir(parents=True, exist_ok=True)
     print(f"Downloading {ANDROID_REF_PKG} {ANDROID_REF_VER} reference assemblies -> {target_dir}...", flush=True)
     req = urllib.request.Request(ANDROID_REF_URL, headers={"User-Agent": "cavern-typecheck/1.0"})
-    with urllib.request.urlopen(req, timeout=45) as resp:
+    with urllib.request.urlopen(req, timeout=60) as resp:
         nupkg_bytes = resp.read()
 
     with zipfile.ZipFile(io.BytesIO(nupkg_bytes)) as zf:
+        names = zf.namelist()
         for name in REQUIRED_REFS:
-            member = f"ref/net8.0/{name}"
-            if member not in zf.namelist():
-                raise RuntimeError(f"Expected `{member}` inside `{ANDROID_REF_PKG}.{ANDROID_REF_VER}.nupkg`.")
+            member = f"ref/net10.0/{name}"
+            if member not in names:
+                pat = re.compile(rf"^ref/net[^/]+/{re.escape(name)}$")
+                matched = next((n for n in names if pat.match(n)), None)
+                if not matched:
+                    raise RuntimeError(f"Expected `{member}` inside `{ANDROID_REF_PKG}.{ANDROID_REF_VER}.nupkg`.")
+                member = matched
             (target_dir / name).write_bytes(zf.read(member))
 
     return paths
+
+
+def _ensure_netcore_refs(cache_dir: Path) -> list[Path]:
+    """Cache managed .NET 10 reference assemblies matching Microsoft.Android.Ref.36."""
+    target_dir = cache_dir / f"netcore-{NETCORE_REF_VER}"
+    marker = target_dir / ".ready"
+    if marker.is_file() and (target_dir / "System.Runtime.dll").is_file():
+        dlls = sorted(target_dir.glob("*.dll"))
+        if dlls:
+            return dlls
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading {NETCORE_REF_PKG} {NETCORE_REF_VER} reference assemblies -> {target_dir}...", flush=True)
+    req = urllib.request.Request(NETCORE_REF_URL, headers={"User-Agent": "cavern-typecheck/1.0"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        nupkg_bytes = resp.read()
+
+    pat = re.compile(r"^ref/net[^/]+/([^/]+\.dll)$")
+    with zipfile.ZipFile(io.BytesIO(nupkg_bytes)) as zf:
+        for member in zf.namelist():
+            m = pat.match(member)
+            if not m:
+                continue
+            (target_dir / m.group(1)).write_bytes(zf.read(member))
+
+    dlls = sorted(target_dir.glob("*.dll"))
+    if not (target_dir / "System.Runtime.dll").is_file() or not dlls:
+        raise RuntimeError(f"Failed to extract ref DLLs from `{NETCORE_REF_PKG}.{NETCORE_REF_VER}.nupkg`.")
+    marker.write_text("ok\n", encoding="utf-8")
+    return dlls
+
+
+def _ensure_netcore_analyzers(cache_dir: Path, dotnet_bin: str) -> list[Path]:
+    """Return Roslyn 4.5-compatible .NET source generators (e.g. GeneratedRegex) for Roslyn 4.12."""
+    dotnet_root = Path(dotnet_bin).resolve().parent if "/" in dotnet_bin else Path("/root/.dotnet")
+    packs_dir = dotnet_root / "packs" / "Microsoft.NETCore.App.Ref"
+    if packs_dir.is_dir():
+        candidates = sorted(
+            (p for p in packs_dir.glob("8.0.*") if (p / "analyzers" / "dotnet" / "cs").is_dir()),
+            key=lambda p: [int(x) if x.isdigit() else 0 for x in p.name.split(".")],
+        )
+        if candidates:
+            local_dlls = sorted((candidates[-1] / "analyzers" / "dotnet" / "cs").glob("*.dll"))
+            if local_dlls:
+                return local_dlls
+
+    target_dir = cache_dir / f"analyzers-{NETCORE_ANALYZER_VER}"
+    marker = target_dir / ".ready"
+    if marker.is_file():
+        dlls = sorted(target_dir.glob("*.dll"))
+        if dlls:
+            return dlls
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Downloading {NETCORE_REF_PKG} {NETCORE_ANALYZER_VER} analyzers -> {target_dir}...", flush=True)
+    req = urllib.request.Request(NETCORE_ANALYZER_URL, headers={"User-Agent": "cavern-typecheck/1.0"})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        nupkg_bytes = resp.read()
+
+    pat = re.compile(r"^analyzers/dotnet/cs/([^/]+\.dll)$")
+    with zipfile.ZipFile(io.BytesIO(nupkg_bytes)) as zf:
+        for member in zf.namelist():
+            m = pat.match(member)
+            if not m:
+                continue
+            (target_dir / m.group(1)).write_bytes(zf.read(member))
+
+    dlls = sorted(target_dir.glob("*.dll"))
+    if not dlls:
+        raise RuntimeError(f"Failed to extract analyzers from `{NETCORE_REF_PKG}.{NETCORE_ANALYZER_VER}.nupkg`.")
+    marker.write_text("ok\n", encoding="utf-8")
+    return dlls
 
 
 def _ensure_roslyn_toolset(cache_dir: Path) -> Path | None:
@@ -151,6 +241,7 @@ def _write_shadow_project(
     repo: Path,
     shadow_dir: Path,
     ref_dlls: list[Path],
+    analyzer_dlls: list[Path],
     roslyn_props: Path | None,
 ) -> tuple[Path, int]:
     android_dir = repo / "CavernSamples" / "CavernizeAndroid"
@@ -193,6 +284,11 @@ def _write_shadow_project(
         for dll in ref_dlls
     ]
 
+    analyzer_items = [
+        f'    <Analyzer Include="{saxutils.escape(str(dll))}" />'
+        for dll in analyzer_dlls
+    ]
+
     proj_refs = [
         repo / "Cavern" / "Cavern.csproj",
         repo / "Cavern.Format" / "Cavern.Format.csproj",
@@ -213,6 +309,10 @@ def _write_shadow_project(
         '    <ImplicitUsings>enable</ImplicitUsings>',
         '    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>',
         '    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>',
+        '    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>',
+        '    <DisableTransitiveFrameworkReferences>true</DisableTransitiveFrameworkReferences>',
+        '    <GenerateDependencyFile>false</GenerateDependencyFile>',
+        '    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>',
         '    <RootNamespace>CavernizeAndroid</RootNamespace>',
         '    <AssemblyName>CavernizeAndroid.TypeCheck</AssemblyName>',
         '    <DefineConstants>$(DefineConstants);ANDROID;__ANDROID__</DefineConstants>',
@@ -228,11 +328,17 @@ def _write_shadow_project(
         '  <ItemGroup>',
         *ref_items,
         '  </ItemGroup>',
+        '  <ItemGroup>',
+        *analyzer_items,
+        '  </ItemGroup>',
         '</Project>',
         '',
     ])
     shadow_csproj = shadow_dir / "CavernizeAndroid.TypeCheck.csproj"
-    shadow_csproj.write_text(csproj_xml, encoding="utf-8")
+    prev_xml = shadow_csproj.read_text(encoding="utf-8") if shadow_csproj.is_file() else None
+    if prev_xml != csproj_xml:
+        shutil.rmtree(shadow_dir / "obj", ignore_errors=True)
+        shadow_csproj.write_text(csproj_xml, encoding="utf-8")
     return shadow_csproj, len(cs_files)
 
 
@@ -266,13 +372,14 @@ def main() -> int:
     shadow_dir = Path("/tmp/cavern-android-typecheck")
 
     try:
-        ref_dlls = _ensure_android_refs(cache_dir)
+        ref_dlls = _ensure_netcore_refs(cache_dir) + _ensure_android_refs(cache_dir)
+        analyzer_dlls = _ensure_netcore_analyzers(cache_dir, dotnet_bin)
     except Exception as exc:
         print(f"ANDROID REF FETCH ERROR: {exc}", file=sys.stderr)
         return 1
 
     roslyn_props = _ensure_roslyn_toolset(cache_dir)
-    shadow_csproj, cs_count = _write_shadow_project(repo, shadow_dir, ref_dlls, roslyn_props)
+    shadow_csproj, cs_count = _write_shadow_project(repo, shadow_dir, ref_dlls, analyzer_dlls, roslyn_props)
 
     env = os.environ.copy()
     env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
@@ -286,7 +393,7 @@ def main() -> int:
     # If custom Roslyn toolset crashed CoreCLR/MSBuild without CS errors, fall back cleanly to SDK Roslyn
     if rc != 0 and roslyn_props is not None and ": error CS" not in combined:
         print(f"Warning: {roslyn_label} failed unexpectedly (exit {rc}); retrying with SDK Roslyn...", flush=True)
-        shadow_csproj, cs_count = _write_shadow_project(repo, shadow_dir, ref_dlls, None)
+        shadow_csproj, cs_count = _write_shadow_project(repo, shadow_dir, ref_dlls, analyzer_dlls, None)
         rc, combined = _run_dotnet_check(dotnet_bin, shadow_dir, shadow_csproj, env)
 
     if combined:

@@ -71,40 +71,101 @@ public static partial class LyricsService {
         bool ffmpegAsync,
         CancellationToken ct) {
         ct.ThrowIfCancellationRequested();
+        Context effectiveCtx = ctx ?? Android.App.Application.Context;
+        Android.Net.Uri effectiveUri = sourceUri ?? TryParseUri(sourceMediaPath);
 
         // 1. Adjacent external .lrc / .txt files in original folder or media folder
-        LyricsDocument external = TryLoadAdjacentFile(ctx, sourceUri, sourceMediaPath, fallbackTitle);
+        LyricsDocument external = TryLoadAdjacentFile(effectiveCtx, effectiveUri, sourceMediaPath, fallbackTitle);
         if (external != null && external.HasLyrics) {
             return external;
         }
 
         // 2. Embedded container tags inside file bytes (ID3v2 USLT/SYLT, Vorbis LYRICS, MP4 ©lyr)
-        if (!string.IsNullOrEmpty(sourceMediaPath) && IOFile.Exists(sourceMediaPath)) {
-            LyricsDocument embedded = TryExtractEmbeddedBinaryTags(sourceMediaPath);
+        string readablePath = ResolveReadableMediaPath(effectiveCtx, effectiveUri, sourceMediaPath);
+        if (!string.IsNullOrEmpty(readablePath) && CanOpenFileForRead(readablePath)) {
+            LyricsDocument embedded = TryExtractEmbeddedBinaryTags(readablePath);
             if (embedded != null && embedded.HasLyrics) {
                 return embedded;
             }
 
-            // 3. FFmpeg ffmetadata probe fallback (if FFmpeg binary is installed in FilesDir)
+            // 3. FFmpeg ffmetadata probe fallback (if bundled libffmpeg.so is available in NativeLibraryDir)
             LyricsDocument ffLyrics = ffmpegAsync
-                ? await TryExtractWithFFmpegAsync(ctx, sourceMediaPath, ct).ConfigureAwait(false)
-                : await Task.Run(() => TryExtractWithFFmpegAsync(ctx, sourceMediaPath, ct), ct).ConfigureAwait(false);
+                ? await TryExtractWithFFmpegAsync(effectiveCtx, readablePath, ct).ConfigureAwait(false)
+                : await Task.Run(() => TryExtractWithFFmpegAsync(effectiveCtx, readablePath, ct), ct).ConfigureAwait(false);
             if (ffLyrics != null && ffLyrics.HasLyrics) {
                 return ffLyrics;
             }
         }
 
         // 4. Online-fetched cached .lrc in app storage
-        string cachedLrcPath = OnlineMetadataService.GetCachedLyricsPath(ctx, fallbackTitle, artist);
-        if (!string.IsNullOrEmpty(cachedLrcPath) && IOFile.Exists(cachedLrcPath)) {
-            string raw = MediaServiceUtils.ReadFileTextAutoEncoding(cachedLrcPath);
-            LyricsDocument doc = ParseLyricsText(raw, "Online Cache");
-            if (doc.HasLyrics) {
-                return doc;
+        string cachedLrcPath = OnlineMetadataService.GetCachedLyricsPath(effectiveCtx, fallbackTitle, artist);
+        if (!string.IsNullOrEmpty(cachedLrcPath)) {
+            try {
+                if (IOFile.Exists(cachedLrcPath)) {
+                    string raw = MediaServiceUtils.ReadFileTextAutoEncoding(cachedLrcPath);
+                    LyricsDocument doc = ParseLyricsText(raw, "Online Cache");
+                    if (doc.HasLyrics) {
+                        return doc;
+                    }
+                }
+            } catch {
+                // Ignore unreadable cache file
             }
         }
 
         return new LyricsDocument();
+    }
+
+    static Android.Net.Uri TryParseUri(string pathOrUri) {
+        if (string.IsNullOrWhiteSpace(pathOrUri)) {
+            return null;
+        }
+        if (pathOrUri.StartsWith("content://", StringComparison.OrdinalIgnoreCase) ||
+            pathOrUri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) {
+            try {
+                return Android.Net.Uri.Parse(pathOrUri);
+            } catch {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    static bool IsUriString(string value) =>
+        !string.IsNullOrEmpty(value) &&
+        (value.StartsWith("content://", StringComparison.OrdinalIgnoreCase) ||
+         value.StartsWith("file://", StringComparison.OrdinalIgnoreCase));
+
+    static bool CanOpenFileForRead(string path) {
+        if (string.IsNullOrEmpty(path) || IsUriString(path)) {
+            return false;
+        }
+        try {
+            if (!IOFile.Exists(path)) {
+                return false;
+            }
+            using FileStream fs = IOFile.OpenRead(path);
+            return fs.CanRead;
+        } catch {
+            return false;
+        }
+    }
+
+    static string ResolveReadableMediaPath(Context ctx, Android.Net.Uri uri, string path) {
+        if (CanOpenFileForRead(path)) {
+            return path;
+        }
+        if (uri != null && ctx != null) {
+            try {
+                string resolved = AndroidFileHelper.ResolveReadablePath(ctx, uri);
+                if (CanOpenFileForRead(resolved)) {
+                    return resolved;
+                }
+            } catch {
+                // Unreadable SAF/content URI under scoped storage
+            }
+        }
+        return "";
     }
 
     static LyricsDocument TryLoadAdjacentFile(Context ctx, Android.Net.Uri sourceUri, string sourceMediaPath, string fallbackTitle) {
@@ -115,14 +176,18 @@ public static partial class LyricsService {
                 dirs.Add(origDir);
             }
             string directPath = sourceUri != null ? AndroidFileHelper.TryGetDirectPath(ctx, sourceUri) : null;
-            if (!string.IsNullOrEmpty(sourceMediaPath)) {
-                string resolvedDir = IOPath.GetDirectoryName(sourceMediaPath);
-                string cacheRoot = ctx?.CacheDir?.AbsolutePath;
-                if (!string.IsNullOrEmpty(resolvedDir) &&
-                    Directory.Exists(resolvedDir) &&
-                    (string.IsNullOrEmpty(cacheRoot) || !resolvedDir.StartsWith(cacheRoot, StringComparison.OrdinalIgnoreCase)) &&
-                    !dirs.Contains(resolvedDir, StringComparer.OrdinalIgnoreCase)) {
-                    dirs.Add(resolvedDir);
+            if (!string.IsNullOrEmpty(sourceMediaPath) && !IsUriString(sourceMediaPath)) {
+                try {
+                    string resolvedDir = IOPath.GetDirectoryName(sourceMediaPath);
+                    string cacheRoot = ctx?.CacheDir?.AbsolutePath;
+                    if (!string.IsNullOrEmpty(resolvedDir) &&
+                        Directory.Exists(resolvedDir) &&
+                        (string.IsNullOrEmpty(cacheRoot) || !resolvedDir.StartsWith(cacheRoot, StringComparison.OrdinalIgnoreCase)) &&
+                        !dirs.Contains(resolvedDir, StringComparer.OrdinalIgnoreCase)) {
+                        dirs.Add(resolvedDir);
+                    }
+                } catch {
+                    // Ignore inaccessible directory under scoped storage
                 }
             }
 
@@ -135,7 +200,13 @@ public static partial class LyricsService {
             if (!string.IsNullOrEmpty(directPath)) {
                 AddStem(IOPath.GetFileNameWithoutExtension(directPath));
             }
-            if (!string.IsNullOrEmpty(sourceMediaPath)) {
+            if (sourceUri != null && ctx != null) {
+                string disp = AndroidFileHelper.GetDisplayName(ctx, sourceUri);
+                if (!string.IsNullOrWhiteSpace(disp)) {
+                    AddStem(IOPath.GetFileNameWithoutExtension(disp));
+                }
+            }
+            if (!string.IsNullOrEmpty(sourceMediaPath) && !IsUriString(sourceMediaPath)) {
                 AddStem(IOPath.GetFileNameWithoutExtension(sourceMediaPath));
             }
             AddStem(fallbackTitle);
@@ -144,12 +215,16 @@ public static partial class LyricsService {
                 foreach (string stem in stems) {
                     foreach (string ext in LyricExtensions) {
                         string exact = IOPath.Combine(dir, stem + ext);
-                        if (IOFile.Exists(exact)) {
-                            string raw = MediaServiceUtils.ReadFileTextAutoEncoding(exact);
-                            LyricsDocument doc = ParseLyricsText(raw, IOPath.GetFileName(exact));
-                            if (doc.HasLyrics) {
-                                return doc;
+                        try {
+                            if (CanOpenFileForRead(exact)) {
+                                string raw = MediaServiceUtils.ReadFileTextAutoEncoding(exact);
+                                LyricsDocument doc = ParseLyricsText(raw, IOPath.GetFileName(exact));
+                                if (doc.HasLyrics) {
+                                    return doc;
+                                }
                             }
+                        } catch {
+                            // Scoped storage may block non-media sibling files
                         }
                     }
                 }
@@ -202,7 +277,7 @@ public static partial class LyricsService {
     static async Task<LyricsDocument> TryExtractWithFFmpegAsync(Context ctx, string mediaPath, CancellationToken ct = default) {
         try {
             ct.ThrowIfCancellationRequested();
-            string ffmpeg = FFmpegInstallerService.GetManagedFFmpegPath(ctx);
+            string ffmpeg = FFmpegInstallerService.ResolveExistingFFmpegPath(ctx, null);
             if (string.IsNullOrEmpty(ffmpeg) || !IOFile.Exists(ffmpeg)) {
                 return null;
             }

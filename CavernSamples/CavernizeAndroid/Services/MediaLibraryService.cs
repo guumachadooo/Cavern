@@ -51,9 +51,9 @@ public sealed class LibraryTrackItem {
     [System.Text.Json.Serialization.JsonIgnore]
     public string EffectiveAlbumArtist => !string.IsNullOrWhiteSpace(AlbumArtist) ? AlbumArtist : Artist;
 
-    // Key per exact FilePath so tracks in Download/Music or mixed folders NEVER share wrong covers
+    // Key per exact FilePath (or ContentUri under Scoped Storage) so tracks never share wrong covers
     [System.Text.Json.Serialization.JsonIgnore]
-    public string CacheKey => FilePath;
+    public string CacheKey => !string.IsNullOrEmpty(FilePath) ? FilePath : ContentUriString;
 }
 
 public sealed class LibraryMergedTrack {
@@ -268,7 +268,8 @@ public static partial class MediaLibraryService {
                 Dictionary<string, LibraryTrackItem> scannedByPath = new(StringComparer.OrdinalIgnoreCase);
                 QueryMediaStore(ctx, isVideo: false, scannedByPath);
                 QueryMediaStore(ctx, isVideo: true, scannedByPath);
-                ScanCommonMediaFolders(scannedByPath);
+                QueryDownloadsMediaStore(ctx, scannedByPath);
+                ScanCommonMediaFolders(ctx, scannedByPath);
 
                 int added = 0;
                 int updated = 0;
@@ -276,16 +277,18 @@ public static partial class MediaLibraryService {
                 List<LibraryTrackItem> finalTracks = new(scannedByPath.Count);
 
                 foreach (LibraryTrackItem current in scannedByPath.Values) {
-                    long len = 0;
-                    long modTicks = 0;
-                    try {
-                        FileInfo fi = new(current.FilePath);
-                        if (fi.Exists) {
-                            len = fi.Length;
-                            modTicks = fi.LastWriteTimeUtc.Ticks;
+                    long len = current.FileSizeBytes;
+                    long modTicks = current.LastModifiedTicks;
+                    if (!string.IsNullOrEmpty(current.FilePath) && !IsUriString(current.FilePath)) {
+                        try {
+                            FileInfo fi = new(current.FilePath);
+                            if (fi.Exists) {
+                                len = fi.Length;
+                                modTicks = fi.LastWriteTimeUtc.Ticks;
+                            }
+                        } catch {
+                            // Ignore stat error under scoped storage
                         }
-                    } catch {
-                        // Ignore stat error
                     }
                     current.FileSizeBytes = len;
                     current.LastModifiedTicks = modTicks;
@@ -311,7 +314,7 @@ public static partial class MediaLibraryService {
                         if (!string.IsNullOrWhiteSpace(prev.Album)) current.Album = prev.Album;
                         ClassifyTrackRelevance(current);
                     } else {
-                        ProbeTrackAudioProperties(current);
+                        ProbeTrackAudioProperties(ctx, current);
                         if (previousByPath.ContainsKey(current.FilePath)) {
                             updated++;
                         } else {
@@ -344,7 +347,8 @@ public static partial class MediaLibraryService {
     }
 
     static string GetDiskCachePath(Context ctx) {
-        string dir = ctx?.FilesDir?.AbsolutePath;
+        Context effectiveCtx = ctx ?? Android.App.Application.Context;
+        string dir = effectiveCtx?.FilesDir?.AbsolutePath ?? effectiveCtx?.CacheDir?.AbsolutePath;
         return string.IsNullOrEmpty(dir) ? "" : IOPath.Combine(dir, DiskCacheFileName);
     }
 
@@ -553,7 +557,7 @@ public static partial class MediaLibraryService {
 
         foreach (LibraryTrackItem item in sorted) {
             string baseTitle = CanonicalTrackBaseTitle(item.Title);
-            bool isStem = StemFragmentRegex().IsMatch(IOPath.GetFileNameWithoutExtension(item.FilePath));
+            bool isStem = StemFragmentRegex().IsMatch(GetTrackStemName(item));
             LibraryMergedTrack targetGroup = null;
 
             if (!isStem && !string.IsNullOrEmpty(baseTitle)) {
@@ -611,18 +615,24 @@ public static partial class MediaLibraryService {
         string album,
         Context ctx = null) {
         if (snap == null || string.IsNullOrEmpty(filePath)) return [];
-        LibraryTrackItem current = snap.Tracks.FirstOrDefault(t => string.Equals(t.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
+        LibraryTrackItem current = snap.Tracks.FirstOrDefault(t =>
+            string.Equals(t.FilePath, filePath, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(t.ContentUriString, filePath, StringComparison.OrdinalIgnoreCase));
 
         string targetTitle = CanonicalTrackBaseTitle(!string.IsNullOrWhiteSpace(current?.Title) ? current.Title : title);
         string targetAlbum = CanonicalAlbumBase(!string.IsNullOrWhiteSpace(current?.Album) ? current.Album : album);
         string targetArtist = NormalizeAlnum(!string.IsNullOrWhiteSpace(current?.EffectiveAlbumArtist) ? current.EffectiveAlbumArtist : artist);
         if (string.IsNullOrEmpty(targetTitle)) return current != null ? [current] : [];
 
-        bool isCurrentStem = StemFragmentRegex().IsMatch(IOPath.GetFileNameWithoutExtension(filePath));
+        string currentStem = current != null
+            ? GetTrackStemName(current)
+            : (!IsUriString(filePath) ? IOPath.GetFileNameWithoutExtension(filePath) : title ?? "");
+        bool isCurrentStem = StemFragmentRegex().IsMatch(currentStem);
         if (isCurrentStem) return current != null ? [current] : [];
 
+        string targetFolder = current?.FolderPath ?? (!IsUriString(filePath) ? IOPath.GetDirectoryName(filePath) : "");
         List<LibraryTrackItem> matches = snap.Tracks.Where(t => {
-            if (StemFragmentRegex().IsMatch(IOPath.GetFileNameWithoutExtension(t.FilePath))) return false;
+            if (StemFragmentRegex().IsMatch(GetTrackStemName(t))) return false;
             if (CanonicalTrackBaseTitle(t.Title) != targetTitle) return false;
 
             string tAlbum = CanonicalAlbumBase(t.Album);
@@ -633,7 +643,7 @@ public static partial class MediaLibraryService {
             if (!string.IsNullOrEmpty(targetArtist) && !string.IsNullOrEmpty(tArtist)) {
                 return tArtist == targetArtist;
             }
-            return string.Equals(t.FolderPath, IOPath.GetDirectoryName(filePath), StringComparison.OrdinalIgnoreCase);
+            return !string.IsNullOrEmpty(targetFolder) && string.Equals(t.FolderPath, targetFolder, StringComparison.OrdinalIgnoreCase);
         }).ToList();
 
         if (current != null && !matches.Contains(current)) {
@@ -649,10 +659,13 @@ public static partial class MediaLibraryService {
     static void ClassifyTrackRelevance(LibraryTrackItem item) {
         if (item == null || string.IsNullOrEmpty(item.FilePath)) return;
 
-        string path = item.FilePath.Replace('\\', '/');
+        string path = (item.FilePath ?? "").Replace('\\', '/');
         string folder = (item.FolderPath ?? "").Replace('\\', '/');
-        string fileBase = IOPath.GetFileNameWithoutExtension(path) ?? "";
-        string ext = IOPath.GetExtension(path).ToLowerInvariant();
+        bool isUri = IsUriString(path);
+        string fileBase = isUri ? (item.Title ?? "") : (IOPath.GetFileNameWithoutExtension(path) ?? "");
+        string ext = isUri
+            ? ("." + (item.FormatBadge ?? "").TrimStart('.').ToLowerInvariant())
+            : IOPath.GetExtension(path).ToLowerInvariant();
 
         // System / App SFX sounds are always noise regardless of channel count
         if (path.Contains("/res/raw/", StringComparison.OrdinalIgnoreCase) ||
@@ -744,10 +757,25 @@ public static partial class MediaLibraryService {
         item.NonMusicReason = "";
     }
 
-    static void ProbeTrackAudioProperties(LibraryTrackItem item) {
-        if (item == null || string.IsNullOrEmpty(item.FilePath)) return;
-        string ext = IOPath.GetExtension(item.FilePath).ToLowerInvariant();
-        string lowerName = IOPath.GetFileName(item.FilePath).ToLowerInvariant();
+    static void ProbeTrackAudioProperties(Context ctx, LibraryTrackItem item) {
+        if (item == null || (string.IsNullOrEmpty(item.FilePath) && item.ContentUri == null)) return;
+        Context effectiveCtx = ctx ?? Android.App.Application.Context;
+        Android.Net.Uri effectiveUri = item.ContentUri ?? TryParseUri(item.FilePath);
+        bool isUriPath = IsUriString(item.FilePath);
+
+        string fileName = !isUriPath ? IOPath.GetFileName(item.FilePath ?? "") : "";
+        string ext = !isUriPath ? IOPath.GetExtension(item.FilePath ?? "").ToLowerInvariant() : "";
+        if ((string.IsNullOrEmpty(ext) || string.IsNullOrEmpty(fileName)) && effectiveUri != null && effectiveCtx != null) {
+            string disp = AndroidFileHelper.GetDisplayName(effectiveCtx, effectiveUri);
+            if (!string.IsNullOrEmpty(disp)) {
+                if (string.IsNullOrEmpty(fileName)) fileName = disp;
+                if (string.IsNullOrEmpty(ext)) ext = IOPath.GetExtension(disp).ToLowerInvariant();
+            }
+        }
+        if (string.IsNullOrEmpty(ext) && !string.IsNullOrEmpty(item.FormatBadge)) {
+            ext = "." + item.FormatBadge.TrimStart('.').ToLowerInvariant();
+        }
+        string lowerName = (!string.IsNullOrEmpty(fileName) ? fileName : (item.Title ?? "")).ToLowerInvariant();
 
         bool extSpatial = ext is ".atmos" or ".thd" or ".mlp" or ".ec3" or ".eac3" or ".caf" or ".laf";
         bool extSurround = extSpatial || ext is ".ac3" or ".dts";
@@ -765,13 +793,18 @@ public static partial class MediaLibraryService {
         bool wavAdm = false;
 
         if (ext == ".wav") {
-            InspectWavHeader(item.FilePath, out ch, out wavAdm);
+            InspectWavHeader(effectiveCtx, item, out ch, out wavAdm);
         }
 
-        if (IOFile.Exists(item.FilePath)) {
+        bool directReadable = CanOpenFileForRead(item.FilePath);
+        if (directReadable || (effectiveUri != null && effectiveCtx != null)) {
             try {
                 using MediaExtractor extractor = new();
-                extractor.SetDataSource(item.FilePath);
+                if (directReadable) {
+                    extractor.SetDataSource(item.FilePath);
+                } else {
+                    extractor.SetDataSource(effectiveCtx, effectiveUri, null);
+                }
                 int count = extractor.TrackCount;
                 for (int i = 0; i < count; i++) {
                     MediaFormat fmt = extractor.GetTrackFormat(i);
@@ -803,17 +836,22 @@ public static partial class MediaLibraryService {
             }
 
             // Read native MP4/M4A/FLAC/ID3 tags (fixes missing track numbers & albums on MP4 Atmos!)
-            ParsedAudioTags binTags = AudioTagReader.TryReadTags(item.FilePath);
-            if (binTags != null) {
-                if (binTags.TrackNumber > 0) item.TrackNumber = binTags.TrackNumber;
-                if (binTags.DiscNumber > 0) item.DiscNumber = binTags.DiscNumber;
-                if (!string.IsNullOrWhiteSpace(binTags.AlbumArtist)) item.AlbumArtist = binTags.AlbumArtist;
-                if (!string.IsNullOrWhiteSpace(binTags.Artist)) item.Artist = binTags.Artist;
-                if (!string.IsNullOrWhiteSpace(binTags.Album) && !IsGenericFolderName(binTags.Album)) {
-                    item.Album = binTags.Album;
-                }
-                if (!string.IsNullOrWhiteSpace(binTags.Title)) {
-                    item.Title = binTags.Title;
+            string tagPath = directReadable
+                ? item.FilePath
+                : (effectiveUri != null && effectiveCtx != null ? AndroidFileHelper.TryGetDirectPath(effectiveCtx, effectiveUri) : null);
+            if (CanOpenFileForRead(tagPath)) {
+                ParsedAudioTags binTags = AudioTagReader.TryReadTags(tagPath);
+                if (binTags != null) {
+                    if (binTags.TrackNumber > 0) item.TrackNumber = binTags.TrackNumber;
+                    if (binTags.DiscNumber > 0) item.DiscNumber = binTags.DiscNumber;
+                    if (!string.IsNullOrWhiteSpace(binTags.AlbumArtist)) item.AlbumArtist = binTags.AlbumArtist;
+                    if (!string.IsNullOrWhiteSpace(binTags.Artist)) item.Artist = binTags.Artist;
+                    if (!string.IsNullOrWhiteSpace(binTags.Album) && !IsGenericFolderName(binTags.Album)) {
+                        item.Album = binTags.Album;
+                    }
+                    if (!string.IsNullOrWhiteSpace(binTags.Title)) {
+                        item.Title = binTags.Title;
+                    }
                 }
             }
         }
@@ -866,13 +904,14 @@ public static partial class MediaLibraryService {
         ClassifyTrackRelevance(item);
     }
 
-    static void InspectWavHeader(string filePath, out int channels, out bool isAdmBwf) {
+    static void InspectWavHeader(Context ctx, LibraryTrackItem item, out int channels, out bool isAdmBwf) {
         channels = 0;
         isAdmBwf = false;
         try {
-            using FileStream fs = IOFile.OpenRead(filePath);
-            byte[] buf = new byte[Math.Min(65536, (int)Math.Min(fs.Length, 65536))];
-            int read = fs.Read(buf, 0, buf.Length);
+            using System.IO.Stream fs = OpenTrackStream(ctx, item);
+            if (fs == null) return;
+            byte[] buf = new byte[65536];
+            int read = ReadUpTo(fs, buf, buf.Length);
             if (read < 44) return;
             if (buf[0] != 'R' || buf[1] != 'I' || buf[2] != 'F' || buf[3] != 'F') return;
             int offset = 12;
@@ -898,11 +937,14 @@ public static partial class MediaLibraryService {
             Android.Net.Uri baseUri = isVideo
                 ? MediaStore.Video.Media.ExternalContentUri
                 : MediaStore.Audio.Media.ExternalContentUri;
-            string[] projection = isVideo
-                ? ["_id", "title", "_display_name", "duration", "_data"]
-                : ["_id", "title", "artist", "album", "album_id", "duration", "track", "_data", "_display_name"];
+            List<string> cols = isVideo
+                ? ["_id", "title", "_display_name", "duration", "_data", IOpenableColumns.Size, "date_modified"]
+                : ["_id", "title", "artist", "album", "album_id", "duration", "track", "_data", "_display_name", IOpenableColumns.Size, "date_modified"];
+            if (OperatingSystem.IsAndroidVersionAtLeast(29)) {
+                cols.Add(MediaStore.IMediaColumns.RelativePath);
+            }
 
-            using ICursor cursor = ctx.ContentResolver.Query(baseUri, projection, null, null, null);
+            using ICursor cursor = ctx.ContentResolver.Query(baseUri, [.. cols], null, null, null);
             if (cursor == null) return;
 
             int idCol = cursor.GetColumnIndex("_id");
@@ -914,19 +956,44 @@ public static partial class MediaLibraryService {
             int trkCol = cursor.GetColumnIndex("track");
             int dataCol = cursor.GetColumnIndex("_data");
             int dispCol = cursor.GetColumnIndex("_display_name");
+            int sizeCol = cursor.GetColumnIndex(IOpenableColumns.Size);
+            int dateModCol = cursor.GetColumnIndex("date_modified");
+            int relCol = OperatingSystem.IsAndroidVersionAtLeast(29)
+                ? cursor.GetColumnIndex(MediaStore.IMediaColumns.RelativePath)
+                : -1;
+
+            bool hasAllAccess = AndroidFileHelper.HasAllFilesAccess();
+            string extRoot = Android.OS.Environment.ExternalStorageDirectory?.AbsolutePath?.TrimEnd('/') ?? "/storage/emulated/0";
 
             while (cursor.MoveToNext()) {
-                string path = dataCol >= 0 ? (cursor.GetString(dataCol) ?? "") : "";
-                if (string.IsNullOrEmpty(path) || IsIgnoredSystemPath(path)) continue;
+                string rawPath = dataCol >= 0 ? (cursor.GetString(dataCol) ?? "") : "";
+                if (!string.IsNullOrEmpty(rawPath) && IsIgnoredSystemPath(rawPath)) continue;
 
                 long dur = durCol >= 0 ? cursor.GetLong(durCol) : 0;
                 if (!isVideo && dur > 0 && dur < 4500) continue;
 
                 long id = idCol >= 0 ? cursor.GetLong(idCol) : -1;
                 Android.Net.Uri itemUri = id >= 0 ? ContentUris.WithAppendedId(baseUri, id) : null;
-                string disp = dispCol >= 0 ? cursor.GetString(dispCol) : IOPath.GetFileName(path);
-                string title = titleCol >= 0 ? cursor.GetString(titleCol) : "";
-                if (string.IsNullOrWhiteSpace(title)) title = IOPath.GetFileNameWithoutExtension(disp ?? path);
+                string disp = dispCol >= 0 ? (cursor.GetString(dispCol) ?? "") : IOPath.GetFileName(rawPath);
+                string relPath = relCol >= 0 ? (cursor.GetString(relCol) ?? "").Trim('/') : "";
+
+                bool directReadable = !string.IsNullOrEmpty(rawPath) &&
+                    (hasAllAccess ? IOFile.Exists(rawPath) : CanOpenFileForRead(rawPath));
+                string trackKey = directReadable ? rawPath : (itemUri?.ToString() ?? "");
+                if (string.IsNullOrEmpty(trackKey)) continue;
+
+                string dir = directReadable
+                    ? (IOPath.GetDirectoryName(rawPath) ?? extRoot)
+                    : (!string.IsNullOrEmpty(rawPath)
+                        ? (IOPath.GetDirectoryName(rawPath) ?? extRoot)
+                        : (!string.IsNullOrEmpty(relPath) ? IOPath.Combine(extRoot, relPath) : extRoot));
+                if (IsIgnoredSystemPath(dir + "/")) continue;
+
+                string title = titleCol >= 0 ? (cursor.GetString(titleCol) ?? "") : "";
+                if (string.IsNullOrWhiteSpace(title)) {
+                    string nameSeed = !string.IsNullOrEmpty(disp) ? disp : rawPath;
+                    title = IOPath.GetFileNameWithoutExtension(nameSeed);
+                }
 
                 string artist = artistCol >= 0 ? (cursor.GetString(artistCol) ?? "") : "";
                 if ("<unknown>".Equals(artist, StringComparison.OrdinalIgnoreCase)) artist = "";
@@ -940,16 +1007,21 @@ public static partial class MediaLibraryService {
                 int trkRaw = trkCol >= 0 ? cursor.GetInt(trkCol) : 0;
                 int trkDisc = trkRaw > 1000 ? trkRaw / 1000 : 0;
                 int trkNum = trkRaw > 1000 ? trkRaw % 1000 : trkRaw;
-                string dir = IOPath.GetDirectoryName(path) ?? "";
-                string ext = IOPath.GetExtension(path).TrimStart('.').ToUpperInvariant();
+                string nameForExt = !string.IsNullOrEmpty(disp) ? disp : rawPath;
+                string ext = IOPath.GetExtension(nameForExt).TrimStart('.').ToUpperInvariant();
+                long sizeBytes = sizeCol >= 0 ? cursor.GetLong(sizeCol) : 0;
+                long modSec = dateModCol >= 0 ? cursor.GetLong(dateModCol) : 0;
+                long modTicks = modSec > 0 ? DateTimeOffset.FromUnixTimeSeconds(modSec).UtcTicks : 0;
 
-                if (isVideo && byPath.TryGetValue(path, out LibraryTrackItem existing)) {
+                if (isVideo && byPath.TryGetValue(trackKey, out LibraryTrackItem existing)) {
                     if (existing.DurationMs <= 0 && dur > 0) existing.DurationMs = dur;
+                    if (existing.FileSizeBytes <= 0 && sizeBytes > 0) existing.FileSizeBytes = sizeBytes;
+                    if (existing.LastModifiedTicks <= 0 && modTicks > 0) existing.LastModifiedTicks = modTicks;
                     continue;
                 }
 
-                byPath[path] = new LibraryTrackItem {
-                    FilePath = path,
+                byPath[trackKey] = new LibraryTrackItem {
+                    FilePath = trackKey,
                     ContentUri = itemUri,
                     Title = title.Trim(),
                     Artist = artist.Trim(),
@@ -961,7 +1033,9 @@ public static partial class MediaLibraryService {
                     AlbumId = albId,
                     TrackNumber = trkNum,
                     DiscNumber = trkDisc,
-                    IsVideo = isVideo
+                    IsVideo = isVideo,
+                    FileSizeBytes = sizeBytes,
+                    LastModifiedTicks = modTicks
                 };
             }
         } catch (Exception ex) {
@@ -969,7 +1043,93 @@ public static partial class MediaLibraryService {
         }
     }
 
-    static void ScanCommonMediaFolders(Dictionary<string, LibraryTrackItem> byPath) {
+    static void QueryDownloadsMediaStore(Context ctx, Dictionary<string, LibraryTrackItem> byPath) {
+        if (!OperatingSystem.IsAndroidVersionAtLeast(29) || ctx?.ContentResolver == null) return;
+        try {
+            Android.Net.Uri baseUri = MediaStore.Downloads.ExternalContentUri;
+            if (baseUri == null) return;
+            string[] cols = [
+                "_id",
+                MediaStore.IMediaColumns.DisplayName,
+                IOpenableColumns.Size,
+                "date_modified",
+                "_data",
+                MediaStore.IMediaColumns.RelativePath
+            ];
+            using ICursor cursor = ctx.ContentResolver.Query(baseUri, cols, null, null, null);
+            if (cursor == null) return;
+
+            int idCol = cursor.GetColumnIndex("_id");
+            int dispCol = cursor.GetColumnIndex(MediaStore.IMediaColumns.DisplayName);
+            int sizeCol = cursor.GetColumnIndex(IOpenableColumns.Size);
+            int dateModCol = cursor.GetColumnIndex("date_modified");
+            int dataCol = cursor.GetColumnIndex("_data");
+            int relCol = cursor.GetColumnIndex(MediaStore.IMediaColumns.RelativePath);
+
+            bool hasAllAccess = AndroidFileHelper.HasAllFilesAccess();
+            string extRoot = Android.OS.Environment.ExternalStorageDirectory?.AbsolutePath?.TrimEnd('/') ?? "/storage/emulated/0";
+
+            while (cursor.MoveToNext()) {
+                string disp = dispCol >= 0 ? (cursor.GetString(dispCol) ?? "") : "";
+                if (string.IsNullOrWhiteSpace(disp) || disp.StartsWith('.')) continue;
+
+                string ext = IOPath.GetExtension(disp);
+                bool isAudio = SupportedAudioExts.Contains(ext);
+                bool isVideo = SupportedVideoExts.Contains(ext);
+                if (!isAudio && !isVideo) continue;
+
+                string rawPath = dataCol >= 0 ? (cursor.GetString(dataCol) ?? "") : "";
+                if (!string.IsNullOrEmpty(rawPath) && (IsIgnoredSystemPath(rawPath) || byPath.ContainsKey(rawPath))) continue;
+
+                long id = idCol >= 0 ? cursor.GetLong(idCol) : -1;
+                Android.Net.Uri itemUri = id >= 0 ? ContentUris.WithAppendedId(baseUri, id) : null;
+                bool directReadable = !string.IsNullOrEmpty(rawPath) &&
+                    (hasAllAccess ? IOFile.Exists(rawPath) : CanOpenFileForRead(rawPath));
+                string trackKey = directReadable ? rawPath : (itemUri?.ToString() ?? "");
+                if (string.IsNullOrEmpty(trackKey) || byPath.ContainsKey(trackKey)) continue;
+
+                string relPath = relCol >= 0 ? (cursor.GetString(relCol) ?? "").Trim('/') : "";
+                string dir = directReadable
+                    ? (IOPath.GetDirectoryName(rawPath) ?? extRoot)
+                    : (!string.IsNullOrEmpty(rawPath)
+                        ? (IOPath.GetDirectoryName(rawPath) ?? extRoot)
+                        : (!string.IsNullOrEmpty(relPath) ? IOPath.Combine(extRoot, relPath) : IOPath.Combine(extRoot, "Download")));
+                if (IsIgnoredSystemPath(dir + "/")) continue;
+
+                string baseName = IOPath.GetFileNameWithoutExtension(disp);
+                string folderName = IOPath.GetFileName(dir) ?? "";
+                ParseHeuristicNames(baseName, folderName, out string artist, out string title, out string album, out int discNum, out int trkNum);
+
+                long sizeBytes = sizeCol >= 0 ? cursor.GetLong(sizeCol) : 0;
+                long modSec = dateModCol >= 0 ? cursor.GetLong(dateModCol) : 0;
+                long modTicks = modSec > 0 ? DateTimeOffset.FromUnixTimeSeconds(modSec).UtcTicks : 0;
+
+                byPath[trackKey] = new LibraryTrackItem {
+                    FilePath = trackKey,
+                    ContentUri = itemUri,
+                    Title = title,
+                    Artist = artist,
+                    Album = album,
+                    FolderPath = dir,
+                    FolderName = folderName,
+                    FormatBadge = ext.TrimStart('.').ToUpperInvariant(),
+                    DiscNumber = discNum,
+                    TrackNumber = trkNum,
+                    IsVideo = isVideo,
+                    FileSizeBytes = sizeBytes,
+                    LastModifiedTicks = modTicks
+                };
+            }
+        } catch (Exception ex) {
+            AppLogger.Error("MediaLibraryService.QueryDownloadsMediaStore", ex);
+        }
+    }
+
+    static void ScanCommonMediaFolders(Context ctx, Dictionary<string, LibraryTrackItem> byPath) {
+        if (ctx != null && !AndroidFileHelper.HasMediaReadPermission(ctx)) {
+            return;
+        }
+        bool hasAllAccess = AndroidFileHelper.HasAllFilesAccess();
         string extRoot = Android.OS.Environment.ExternalStorageDirectory?.AbsolutePath ?? "/storage/emulated/0";
         string[] roots = [
             IOPath.Combine(extRoot, "Music"),
@@ -979,12 +1139,16 @@ public static partial class MediaLibraryService {
         ];
 
         foreach (string root in roots) {
-            if (!Directory.Exists(root)) continue;
-            WalkFolder(root, depth: 0, maxDepth: 5, byPath);
+            try {
+                if (!Directory.Exists(root)) continue;
+                WalkFolder(root, depth: 0, maxDepth: 5, byPath, hasAllAccess);
+            } catch {
+                // Scoped storage may block direct POSIX root enumeration
+            }
         }
     }
 
-    static void WalkFolder(string dir, int depth, int maxDepth, Dictionary<string, LibraryTrackItem> byPath) {
+    static void WalkFolder(string dir, int depth, int maxDepth, Dictionary<string, LibraryTrackItem> byPath, bool hasAllAccess) {
         if (depth > maxDepth || IsIgnoredSystemPath(dir)) return;
         try {
             foreach (string file in Directory.EnumerateFiles(dir)) {
@@ -994,6 +1158,7 @@ public static partial class MediaLibraryService {
                 bool isVideo = SupportedVideoExts.Contains(ext);
                 if (!isAudio && !isVideo) continue;
                 if (byPath.ContainsKey(file) || IsIgnoredSystemPath(file)) continue;
+                if (!hasAllAccess && !CanOpenFileForRead(file)) continue;
 
                 string baseName = IOPath.GetFileNameWithoutExtension(file);
                 string folderName = IOPath.GetFileName(dir) ?? "";
@@ -1016,7 +1181,7 @@ public static partial class MediaLibraryService {
             foreach (string sub in Directory.EnumerateDirectories(dir)) {
                 string name = IOPath.GetFileName(sub);
                 if (string.IsNullOrEmpty(name) || name.StartsWith('.')) continue;
-                WalkFolder(sub, depth + 1, maxDepth, byPath);
+                WalkFolder(sub, depth + 1, maxDepth, byPath, hasAllAccess);
             }
         } catch {
             // Skip restricted subfolders cleanly
@@ -1082,12 +1247,19 @@ public static partial class MediaLibraryService {
 
         return Task.Run(() => {
             Bitmap loaded = null;
+            Context effectiveCtx = ctx ?? Android.App.Application.Context;
+            Android.Net.Uri effectiveUri = item.ContentUri ?? TryParseUri(item.FilePath);
             try {
                 // 1. Embedded artwork inside the exact media file FIRST (prevents cross-song / folder cover mix-ups)
-                if (!string.IsNullOrEmpty(item.FilePath) && IOFile.Exists(item.FilePath)) {
+                bool directReadable = CanOpenFileForRead(item.FilePath);
+                if (directReadable || (effectiveUri != null && effectiveCtx != null)) {
                     using MediaMetadataRetriever mmr = new();
                     try {
-                        mmr.SetDataSource(item.FilePath);
+                        if (directReadable) {
+                            mmr.SetDataSource(item.FilePath);
+                        } else {
+                            mmr.SetDataSource(effectiveCtx, effectiveUri);
+                        }
                         byte[] bytes = mmr.GetEmbeddedPicture();
                         if (bytes != null && bytes.Length > 0) {
                             loaded = DecodeSampledBytes(bytes, sizePx);
@@ -1103,29 +1275,36 @@ public static partial class MediaLibraryService {
                 }
 
                 // 2. Online-enriched persistent cover cache (keyed safely)
-                if (loaded == null) {
-                    string cachedCoverPath = OnlineMetadataService.GetCachedCoverPath(ctx, item.Title, item.Artist, item.Album, item.FilePath);
+                if (loaded == null && effectiveCtx != null) {
+                    string pathKey = !string.IsNullOrEmpty(item.FilePath) ? item.FilePath : (effectiveUri?.ToString() ?? "");
+                    string cachedCoverPath = OnlineMetadataService.GetCachedCoverPath(effectiveCtx, item.Title, item.Artist, item.Album, pathKey);
                     if (!string.IsNullOrEmpty(cachedCoverPath) && IOFile.Exists(cachedCoverPath)) {
                         loaded = DecodeSampledFile(cachedCoverPath, sizePx);
                     }
                 }
 
                 // 3. Dedicated folder artwork ONLY in real album subfolders (never root Download/Music/Movies!)
-                if (loaded == null && !IsGenericRootFolderPath(item.FolderPath) && Directory.Exists(item.FolderPath)) {
-                    foreach (string name in ExternalCoverNames) {
-                        string fp = IOPath.Combine(item.FolderPath, name);
-                        if (IOFile.Exists(fp)) {
-                            loaded = DecodeSampledFile(fp, sizePx);
-                            if (loaded != null) break;
+                if (loaded == null && !IsGenericRootFolderPath(item.FolderPath)) {
+                    try {
+                        if (Directory.Exists(item.FolderPath)) {
+                            foreach (string name in ExternalCoverNames) {
+                                string fp = IOPath.Combine(item.FolderPath, name);
+                                if (CanOpenFileForRead(fp)) {
+                                    loaded = DecodeSampledFile(fp, sizePx);
+                                    if (loaded != null) break;
+                                }
+                            }
                         }
+                    } catch {
+                        // Scoped storage may block folder artwork enumeration
                     }
                 }
 
                 // 4. Android Q+ MediaStore LoadThumbnail ONLY when the item has a real album or is video
-                if (loaded == null && item.ContentUri != null && OperatingSystem.IsAndroidVersionAtLeast(29) && ctx?.ContentResolver != null
+                if (loaded == null && effectiveUri != null && OperatingSystem.IsAndroidVersionAtLeast(29) && effectiveCtx?.ContentResolver != null
                     && (item.IsVideo || !IsGenericFolderName(item.Album))) {
                     try {
-                        loaded = ctx.ContentResolver.LoadThumbnail(item.ContentUri, new Android.Util.Size(sizePx, sizePx), null);
+                        loaded = effectiveCtx.ContentResolver.LoadThumbnail(effectiveUri, new Android.Util.Size(sizePx, sizePx), null);
                     } catch {
                         // Thumbnail may not exist in MediaStore
                     }
@@ -1139,6 +1318,68 @@ public static partial class MediaLibraryService {
             }
             return loaded;
         });
+    }
+
+    static bool IsUriString(string value) =>
+        !string.IsNullOrEmpty(value) &&
+        (value.StartsWith("content://", StringComparison.OrdinalIgnoreCase) ||
+         value.StartsWith("file://", StringComparison.OrdinalIgnoreCase));
+
+    static Android.Net.Uri TryParseUri(string pathOrUri) {
+        if (IsUriString(pathOrUri)) {
+            try {
+                return Android.Net.Uri.Parse(pathOrUri);
+            } catch {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    static bool CanOpenFileForRead(string path) {
+        if (string.IsNullOrEmpty(path) || IsUriString(path)) {
+            return false;
+        }
+        try {
+            if (!IOFile.Exists(path)) {
+                return false;
+            }
+            using FileStream fs = IOFile.OpenRead(path);
+            return fs.CanRead;
+        } catch {
+            return false;
+        }
+    }
+
+    static string GetTrackStemName(LibraryTrackItem item) {
+        if (item == null) return "";
+        if (!string.IsNullOrEmpty(item.FilePath) && !IsUriString(item.FilePath)) {
+            return IOPath.GetFileNameWithoutExtension(item.FilePath);
+        }
+        return item.Title ?? "";
+    }
+
+    static System.IO.Stream OpenTrackStream(Context ctx, LibraryTrackItem item) {
+        if (item == null) return null;
+        if (CanOpenFileForRead(item.FilePath)) {
+            try {
+                return IOFile.OpenRead(item.FilePath);
+            } catch {
+                // Fall back to ContentUri below
+            }
+        }
+        Android.Net.Uri uri = item.ContentUri ?? TryParseUri(item.FilePath);
+        return uri != null && ctx != null ? AndroidFileHelper.OpenReadableStream(ctx, uri) : null;
+    }
+
+    static int ReadUpTo(System.IO.Stream stream, byte[] buffer, int maxBytes) {
+        int total = 0;
+        while (total < maxBytes) {
+            int n = stream.Read(buffer, total, maxBytes - total);
+            if (n <= 0) break;
+            total += n;
+        }
+        return total;
     }
 
     static Bitmap ScaleBitmapCopy(Bitmap source, int maxDim) {
