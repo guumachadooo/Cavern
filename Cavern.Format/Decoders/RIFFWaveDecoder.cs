@@ -162,10 +162,10 @@ namespace Cavern.Format.Decoders {
             if (IsAmbisonicsHoa) {
                 return new ReadableMetadata(new List<ReadableMetadataHeader> {
                     new ReadableMetadataHeader("Ambisonics HOA B-Format (WAVE-EX)", new List<ReadableMetadataField> {
-                        new ReadableMetadataField("Order", $"Order {AmbisonicsOrder} (ACN/SN3D)"),
-                        new ReadableMetadataField("Harmonic Channels", ChannelCount.ToString()),
-                        new ReadableMetadataField("Sample Rate", $"{SampleRate} Hz"),
-                        new ReadableMetadataField("Bit Depth", Bits.ToString())
+                        new ReadableMetadataField("hoa_order", "Ambisonic order", $"Order {AmbisonicsOrder} (ACN/SN3D)"),
+                        new ReadableMetadataField("channels", "Harmonic channels", ChannelCount),
+                        new ReadableMetadataField("sample_rate", "Sample rate", $"{SampleRate} Hz"),
+                        new ReadableMetadataField("bits", "Bit depth", Bits)
                     })
                 });
             }

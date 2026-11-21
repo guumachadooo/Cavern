@@ -242,19 +242,19 @@ namespace Cavern.Format.Decoders {
         public ReadableMetadata GetMetadata() {
             List<ReadableMetadataHeader> headers = new List<ReadableMetadataHeader> {
                 new ReadableMetadataHeader("IAMF (Eclipsa Audio) Stream", new List<ReadableMetadataField> {
-                    new ReadableMetadataField("Primary Profile", Info.PrimaryProfile.ToString()),
-                    new ReadableMetadataField("Codec FourCC", Info.CodecFourCc),
-                    new ReadableMetadataField("Element Type", Info.ElementType == IamfAudioElementType.SceneBased
+                    new ReadableMetadataField("primary_profile", "Primary profile", Info.PrimaryProfile),
+                    new ReadableMetadataField("codec_id", "Codec FourCC", Info.CodecFourCc),
+                    new ReadableMetadataField("audio_element_type", "Element type", Info.ElementType == IamfAudioElementType.SceneBased
                         ? $"Scene-Based HOA (Order {Info.AmbisonicsOrder}, ACN/SN3D)"
                         : $"Channel-Based (Layout {Info.LoudspeakerLayoutCode})"),
-                    new ReadableMetadataField("Channels", ChannelCount.ToString()),
-                    new ReadableMetadataField("Sample Rate", $"{SampleRate} Hz"),
-                    new ReadableMetadataField("Bit Depth", $"{Info.BitDepthBits}-bit"),
-                    new ReadableMetadataField("Frame Size", $"{Info.SamplesPerFrame} samples"),
-                    new ReadableMetadataField("Mix Label", Info.MixLabel),
-                    new ReadableMetadataField("Integrated Loudness", $"{Info.IntegratedLoudnessLkfs:0.00} LKFS"),
-                    new ReadableMetadataField("True Peak", $"{Info.TruePeakDbtp:0.00} dBTP"),
-                    new ReadableMetadataField("Audio Frames", Info.FrameCount.ToString())
+                    new ReadableMetadataField("channels", "Channel count", ChannelCount),
+                    new ReadableMetadataField("sample_rate", "Sample rate", $"{SampleRate} Hz"),
+                    new ReadableMetadataField("sample_size", "Bit depth", $"{Info.BitDepthBits}-bit"),
+                    new ReadableMetadataField("num_samples_per_frame", "Frame size", $"{Info.SamplesPerFrame} samples"),
+                    new ReadableMetadataField("mix_label", "Mix label", Info.MixLabel),
+                    new ReadableMetadataField("integrated_loudness", "Integrated loudness", $"{Info.IntegratedLoudnessLkfs:0.00} LKFS"),
+                    new ReadableMetadataField("true_peak", "True peak", $"{Info.TruePeakDbtp:0.00} dBTP"),
+                    new ReadableMetadataField("audio_frames", "Audio frames", Info.FrameCount)
                 })
             };
             return new ReadableMetadata(headers);
