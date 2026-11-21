@@ -29,6 +29,7 @@ interface ActiveVoice {
  */
 export class CavernSpatialAudioEngine {
   private ctx: AudioContext | null = null;
+  private mixBus: GainNode | null = null;
   private masterGain: GainNode | null = null;
   private profileToneFilter: BiquadFilterNode | null = null;
   private limiter: DynamicsCompressorNode | null = null;
@@ -47,6 +48,9 @@ export class CavernSpatialAudioEngine {
 
     if (!this.ctx) {
       this.ctx = new AudioCtx();
+      this.mixBus = this.ctx.createGain();
+      this.mixBus.gain.value = 1;
+
       this.profileToneFilter = this.ctx.createBiquadFilter();
       this.profileToneFilter.type = 'lowpass';
       this.profileToneFilter.frequency.value = 11500;
@@ -61,6 +65,7 @@ export class CavernSpatialAudioEngine {
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.value = 0.45;
 
+      this.mixBus.connect(this.profileToneFilter);
       this.profileToneFilter.connect(this.limiter);
       this.limiter.connect(this.masterGain);
       this.masterGain.connect(this.ctx.destination);
@@ -87,7 +92,7 @@ export class CavernSpatialAudioEngine {
     offsetSec = 0,
   ): void {
     const ctx = this.ensureContext();
-    if (!ctx || !this.profileToneFilter) return;
+    if (!ctx || !this.profileToneFilter || !this.mixBus) return;
     if (ctx.state === 'suspended') {
       void ctx.resume();
     }
@@ -96,7 +101,7 @@ export class CavernSpatialAudioEngine {
     this.isPlaying = true;
     this.rebuildEqChain(settings);
 
-    const destinationNode = this.eqNodes.length > 0 ? this.eqNodes[0] : this.profileToneFilter;
+    const destinationNode = this.mixBus;
 
     if (localBuffer) {
       const srcNode = ctx.createBufferSource();
@@ -168,16 +173,24 @@ export class CavernSpatialAudioEngine {
     );
   }
 
+  public updateEq(settings: CavernSettings): void {
+    this.rebuildEqChain(settings);
+  }
+
   private rebuildEqChain(settings: CavernSettings): void {
-    if (!this.ctx || !this.profileToneFilter) return;
+    if (!this.ctx || !this.profileToneFilter || !this.mixBus) return;
+    this.mixBus.disconnect();
     for (const node of this.eqNodes) {
       node.disconnect();
     }
     this.eqNodes = [];
 
-    if (settings.quickEqFilters.length === 0) return;
+    if (settings.quickEqFilters.length === 0) {
+      this.mixBus.connect(this.profileToneFilter);
+      return;
+    }
 
-    let prev: AudioNode | null = null;
+    let prev: AudioNode = this.mixBus;
     for (const f of settings.quickEqFilters.slice(0, 8)) {
       const biquad = this.ctx.createBiquadFilter();
       biquad.type =
@@ -193,16 +206,12 @@ export class CavernSpatialAudioEngine {
       biquad.frequency.value = clamp(f.freqHz, 20, 20000);
       biquad.gain.value = clamp(f.gainDb, -18, 18);
       biquad.Q.value = clamp(f.q, 0.2, 12);
-      if (prev) {
-        prev.connect(biquad);
-      }
+      prev.connect(biquad);
       prev = biquad;
       this.eqNodes.push(biquad);
     }
 
-    if (prev) {
-      prev.connect(this.profileToneFilter);
-    }
+    prev.connect(this.profileToneFilter);
   }
 
   public updateFrame(
@@ -411,14 +420,41 @@ export function renderSpatialMixWav(
 }
 
 /**
- * Synthesizes an isolated mono WAV stem for a specific bed channel or 3D object.
+ * Synthesizes an isolated mono or 3D-spatialized stereo WAV stem for a specific bed channel or 3D object.
  */
-export function renderStemWav(source: SpatialSourceNode): { url: string; fileName: string; sizeKb: number } {
+export function renderStemWav(
+  source: SpatialSourceNode,
+  mode: 'mono-stems' | 'spatial-each' = 'mono-stems',
+): { url: string; fileName: string; sizeKb: number; channelsLabel: string } {
   const sampleRateHz = 48000;
   const durationSec = 3;
   const numFrames = sampleRateHz * durationSec;
-  const mono = new Float32Array(numFrames);
 
+  if (mode === 'spatial-each') {
+    const left = new Float32Array(numFrames);
+    const right = new Float32Array(numFrames);
+    for (let i = 0; i < numFrames; i += 1) {
+      const t = i / sampleRateHz;
+      const env = Math.min(1, t * 5) * Math.min(1, (durationSec - t) * 4);
+      const pos = evaluateSourcePosition(source, t);
+      const pan = clamp(pos.x / 5, -1, 1);
+      const leftGain = Math.cos(((pan + 1) * Math.PI) / 4);
+      const rightGain = Math.sin(((pan + 1) * Math.PI) / 4);
+      const sig = Math.sin(2 * Math.PI * source.synthFreqHz * t) * 0.35 * env;
+      left[i] = sig * leftGain;
+      right[i] = sig * rightGain;
+    }
+    const wavBytes = encodeWavPcm16([left, right], sampleRateHz);
+    const blob = new Blob([wavBytes], { type: 'audio/wav' });
+    return {
+      url: URL.createObjectURL(blob),
+      fileName: `stem-${source.id.toLowerCase()}-3d.wav`,
+      sizeKb: Math.round(wavBytes.byteLength / 1024),
+      channelsLabel: '2ch HRTF',
+    };
+  }
+
+  const mono = new Float32Array(numFrames);
   for (let i = 0; i < numFrames; i += 1) {
     const t = i / sampleRateHz;
     const env = Math.min(1, t * 5) * Math.min(1, (durationSec - t) * 4);
@@ -431,5 +467,48 @@ export function renderStemWav(source: SpatialSourceNode): { url: string; fileNam
     url: URL.createObjectURL(blob),
     fileName: `stem-${source.id.toLowerCase()}.wav`,
     sizeKb: Math.round(wavBytes.byteLength / 1024),
+    channelsLabel: '1ch Mono',
+  };
+}
+
+/**
+ * Synthesizes all selected 3D objects/channels combined into a single spatialized stereo WAV file.
+ */
+export function renderCombinedStemsWav(
+  trackTitle: string,
+  sources: SpatialSourceNode[],
+): { url: string; fileName: string; sizeKb: number; channelsLabel: string } {
+  const sampleRateHz = 48000;
+  const durationSec = 4;
+  const numFrames = sampleRateHz * durationSec;
+  const left = new Float32Array(numFrames);
+  const right = new Float32Array(numFrames);
+  const scale = 0.45 / Math.max(1, Math.sqrt(sources.length));
+
+  for (let i = 0; i < numFrames; i += 1) {
+    const t = i / sampleRateHz;
+    const env = Math.min(1, t * 5) * Math.min(1, (durationSec - t) * 4);
+    let lSum = 0;
+    let rSum = 0;
+    for (let s = 0; s < sources.length; s += 1) {
+      const src = sources[s];
+      const pos = evaluateSourcePosition(src, t);
+      const pan = clamp(pos.x / 5, -1, 1);
+      const sig = Math.sin(2 * Math.PI * src.synthFreqHz * t) * scale * env;
+      lSum += sig * Math.cos(((pan + 1) * Math.PI) / 4);
+      rSum += sig * Math.sin(((pan + 1) * Math.PI) / 4);
+    }
+    left[i] = clamp(lSum, -0.98, 0.98);
+    right[i] = clamp(rSum, -0.98, 0.98);
+  }
+
+  const wavBytes = encodeWavPcm16([left, right], sampleRateHz);
+  const blob = new Blob([wavBytes], { type: 'audio/wav' });
+  const safeName = trackTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  return {
+    url: URL.createObjectURL(blob),
+    fileName: `stem-${safeName || 'cavern'}-3d-combined-${sources.length}obj.wav`,
+    sizeKb: Math.round(wavBytes.byteLength / 1024),
+    channelsLabel: `2ch Combined (${sources.length})`,
   };
 }

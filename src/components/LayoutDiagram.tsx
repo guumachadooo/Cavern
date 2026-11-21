@@ -6,14 +6,14 @@ interface LayoutDiagramProps {
 }
 
 export const LayoutDiagram: React.FC<LayoutDiagramProps> = ({ layout }) => {
-  const [selectedSpeaker, setSelectedSpeaker] = useState<SpeakerChannelSpec | null>(
-    layout.speakers[0] ?? null,
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState<string | null>(
+    layout.speakers[0]?.id ?? null,
   );
 
-  const activeSpeaker =
-    selectedSpeaker && layout.speakers.some((s) => s.id === selectedSpeaker.id)
-      ? selectedSpeaker
-      : layout.speakers[0] ?? null;
+  const activeSpeaker: SpeakerChannelSpec | null =
+    layout.speakers.find((s) => s.id === selectedSpeakerId) ??
+    layout.speakers[0] ??
+    null;
 
   return (
     <div className="bg-[#0C0E14] border border-white/10 rounded-xl p-4 space-y-3">
@@ -60,7 +60,7 @@ export const LayoutDiagram: React.FC<LayoutDiagramProps> = ({ layout }) => {
             <g
               key={sp.id}
               className="cursor-pointer"
-              onClick={() => setSelectedSpeaker(sp)}
+              onClick={() => setSelectedSpeakerId(sp.id)}
             >
               {isSelected && (
                 <circle cx={cx} cy={cy} r="15" fill="none" stroke="#FACC15" strokeWidth="1.8" />

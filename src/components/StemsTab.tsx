@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Download, FileJson, Layers } from 'lucide-react';
-import { renderStemWav } from '../audio/spatialEngine';
+import { renderCombinedStemsWav, renderStemWav } from '../audio/spatialEngine';
 import type { StringKey } from '../i18n/strings';
 import type { SpatialSourceNode, SpatialTrack } from '../types/cavern';
 import { buildTrajectoryJson } from '../utils/spatialMath';
@@ -17,6 +17,7 @@ interface ExtractedStemResult {
   fileName: string;
   sizeKb: number;
   url: string;
+  meta: string;
 }
 
 export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) => {
@@ -39,20 +40,44 @@ export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) =
     );
   };
 
+  useEffect(() => {
+    return () => {
+      for (const s of extractedStems) URL.revokeObjectURL(s.url);
+      if (trajectoryUrl) URL.revokeObjectURL(trajectoryUrl);
+    };
+  }, [extractedStems, trajectoryUrl]);
+
   const handleExtract = () => {
     if (selectedSources.length === 0) return;
 
-    const results = selectedSources.map((src) => {
-      const rendered = renderStemWav(src);
-      return {
-        id: src.id,
-        name: src.name,
-        fileName: rendered.fileName,
-        sizeKb: rendered.sizeKb,
-        url: rendered.url,
-      };
-    });
-    setExtractedStems(results);
+    const depthLabel = bitDepth === '32f' ? '32-bit float' : `${bitDepth}-bit PCM`;
+
+    if (extractMode === '3d-combined') {
+      const combined = renderCombinedStemsWav(activeTrack.title, selectedSources);
+      setExtractedStems([
+        {
+          id: 'combined-3d',
+          name: `${activeTrack.title} (Combined ${selectedSources.length} Sources)`,
+          fileName: combined.fileName,
+          sizeKb: combined.sizeKb,
+          url: combined.url,
+          meta: `${combined.channelsLabel} · ${depthLabel}`,
+        },
+      ]);
+    } else {
+      const results = selectedSources.map((src) => {
+        const rendered = renderStemWav(src, extractMode);
+        return {
+          id: src.id,
+          name: src.name,
+          fileName: rendered.fileName,
+          sizeKb: rendered.sizeKb,
+          url: rendered.url,
+          meta: `${rendered.channelsLabel} · ${depthLabel}`,
+        };
+      });
+      setExtractedStems(results);
+    }
 
     if (exportJson) {
       const jsonStr = buildTrajectoryJson(activeTrack.title, selectedSources, 4, 10);
@@ -225,7 +250,7 @@ export const StemsTab: React.FC<StemsTabProps> = ({ t, activeTrack, sources }) =
                     <div className="min-w-0">
                       <p className="font-medium text-white truncate">{stem.name}</p>
                       <p className="font-mono text-[#99999E] tabular-nums">
-                        {stem.fileName} · {stem.sizeKb} KB
+                        {stem.fileName} · {stem.sizeKb} KB · {stem.meta}
                       </p>
                     </div>
                     <a

@@ -151,11 +151,11 @@ export const RoomSimulatorCanvas: React.FC<RoomSimulatorCanvasProps> = ({
       'rgba(89, 143, 255, 0.45)',
     );
 
-    const screenLabel = proj({ x: 0, y: hy * 0.74, z: hz });
-    ctx.fillStyle = 'rgba(137, 176, 255, 0.78)';
-    ctx.font = '600 10px "JetBrains Mono", monospace';
+    const screenLabel = proj({ x: 0, y: hy * 0.56, z: hz });
+    ctx.fillStyle = 'rgba(137, 176, 255, 0.72)';
+    ctx.font = '600 9.5px "JetBrains Mono", monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('FRONT STAGE / SCREEN', screenLabel.x, screenLabel.y);
+    ctx.fillText('FRONT SCREEN', screenLabel.x, screenLabel.y);
 
     // Floor grid lines
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';

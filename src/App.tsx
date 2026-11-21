@@ -51,6 +51,7 @@ export function App() {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isLooping, setIsLooping] = useState<boolean>(true);
   const [currentTimeSec, setCurrentTimeSec] = useState<number>(18);
+  const playbackClockRef = useRef<number>(18);
   const [masterVolume, setMasterVolume] = useState<number>(0.78);
   const [lfeBoostDb, setLfeBoostDb] = useState<number>(2);
   const [listenerPosition, setListenerPosition] = useState<Vec3>({ x: 0, y: 0, z: 0 });
@@ -116,32 +117,39 @@ export function App() {
     };
   }, []);
 
+  // Sync live QuickEQ filter edits while playing
+  useEffect(() => {
+    engineRef.current?.updateEq(settings);
+  }, [settings.quickEqFilters]);
+
   // Playback clock + live 3D object trajectory animation + Web Audio update
   useEffect(() => {
     if (!isPlaying) return;
 
     let rafId = 0;
     let lastTs = performance.now();
+    let lastUiCommitTs = 0;
 
     const tick = (now: number) => {
       const dt = Math.min(0.1, (now - lastTs) / 1000);
       lastTs = now;
 
       const s = stateRef.current;
-      let nextTime = s.currentTimeSec + dt;
+      let nextTime = playbackClockRef.current + dt;
       if (nextTime >= s.activeTrack.durationSec) {
         if (s.isLooping) {
           nextTime = 0;
         } else {
+          playbackClockRef.current = s.activeTrack.durationSec;
+          setCurrentTimeSec(s.activeTrack.durationSec);
           setIsPlaying(false);
           engineRef.current?.stop();
           return;
         }
       }
+      playbackClockRef.current = nextTime;
 
-      setCurrentTimeSec(nextTime);
-
-      // Update animated 3D object positions & RMS meters
+      // Compute updated 3D object positions & RMS meters
       const updatedSources = s.sources.map((src) => {
         const pos = evaluateSourcePosition(src, nextTime);
         const rmsBase = src.kind === 'object' ? 0.48 : src.kind === 'lfe' ? 0.52 : 0.3;
@@ -152,8 +160,8 @@ export function App() {
         );
         return { ...src, position: pos, rms };
       });
-      setSources(updatedSources);
 
+      // Keep Web Audio DSP smooth every frame
       engineRef.current?.updateFrame(
         updatedSources,
         s.listenerPosition,
@@ -164,6 +172,13 @@ export function App() {
         s.settings,
         nextTime,
       );
+
+      // Throttle React state commits to ~18Hz (55ms) so UI remains snappy and never blocks input
+      if (now - lastUiCommitTs >= 55) {
+        lastUiCommitTs = now;
+        setCurrentTimeSec(nextTime);
+        setSources(updatedSources);
+      }
 
       rafId = window.requestAnimationFrame(tick);
     };
@@ -197,6 +212,7 @@ export function App() {
     if (!next) return;
     setActiveTrackId(next.id);
     setActiveVariantId(next.variants[0].id);
+    playbackClockRef.current = 0;
     setCurrentTimeSec(0);
     if (isPlaying) {
       engineRef.current?.start(
@@ -217,11 +233,12 @@ export function App() {
     const variant = activeTrack.variants.find((v) => v.id === variantId);
     if (!variant) return;
     setActiveVariantId(variant.id);
-    showToast(`Switched to ${variant.label} (position preserved)`);
+    showToast(t.switchedToFormat.replace('{format}', variant.label));
   };
 
   const handleSeek = (timeSec: number) => {
     const clamped = clamp(timeSec, 0, activeTrack.durationSec);
+    playbackClockRef.current = clamped;
     setCurrentTimeSec(clamped);
     setSources((prev) =>
       prev.map((src) => ({ ...src, position: evaluateSourcePosition(src, clamped) })),
@@ -293,6 +310,7 @@ export function App() {
       setTracks((prev) => [newTrack, ...prev]);
       setActiveTrackId(newTrack.id);
       setActiveVariantId(newTrack.variants[0].id);
+      playbackClockRef.current = 0;
       setCurrentTimeSec(0);
       showToast(`Loaded ${file.name}`);
     } catch {
@@ -380,7 +398,7 @@ export function App() {
               className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-lg bg-[#387AFF] hover:bg-[#598FFF] text-white transition-colors whitespace-nowrap shrink-0"
             >
               {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-              <span>{isPlaying ? 'Pause' : 'Play'}</span>
+              <span>{isPlaying ? t.pauseBtn : t.playBtn}</span>
             </button>
           </div>
         </div>
