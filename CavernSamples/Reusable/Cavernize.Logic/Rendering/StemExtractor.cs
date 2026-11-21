@@ -3,14 +3,17 @@ using System.Text.Json;
 
 using Cavern;
 using Cavern.CavernSettings;
+using Cavern.Channels;
 using Cavern.Filters;
 using Cavern.Format;
 using Cavern.Format.Common;
+using Cavern.Neural;
 using Cavern.Utilities;
 using Cavern.Virtualizer;
 
 using Cavernize.Logic.Models;
 using Cavernize.Logic.Models.RenderTargets;
+using Cavernize.Logic.Spatial;
 
 namespace Cavernize.Logic.Rendering;
 
@@ -435,6 +438,368 @@ public static class StemExtractor {
         }
         onProgress?.Invoke(1, "Bitstream bruto extraído!");
         return totalBytes;
+    }
+
+    /// <summary>
+    /// Performs on-device neural stem separation using the Slot 2B MVSEP anti-artifact pipeline
+    /// (raised-cosine 2x–8x overlap-add, TTA, <c>avg_wave</c>/<c>min_fft</c>/<c>avg_fft</c> ensembling,
+    /// Wiener <c>phase_fix</c>, exact energy conservation <c>residual = mix - sum(stems)</c>), with optional
+    /// zero-phase multichannel Spatial Karaoke Atmos export and Hybrid Neural+DirAC 7.1.4 export.
+    /// </summary>
+    public static StemExtractionResult ExtractNeuralStems(
+        CavernizeTrack track,
+        INeuralInferenceRuntime runtime,
+        string modelFilePath,
+        NeuralModelCatalogEntry modelEntry,
+        string outputDir,
+        BitDepth bits,
+        NeuralAudioConfig config,
+        bool exportSpatialKaraokeAtmos,
+        bool exportHybrid714,
+        Action<double, string> onProgress,
+        CancellationToken token = default) {
+        ArgumentNullException.ThrowIfNull(track);
+        if (!track.Supported) {
+            throw new NotSupportedException("The selected track format is not supported by Cavern.");
+        }
+        if (track.Codec == Codec.TrueHD) {
+            throw new NotSupportedException("TrueHD MLP neural stem extraction requires decoding via truehdd first.");
+        }
+
+        NeuralAudioConfig safeConfig = (config ?? NeuralAudioConfig.Default).Sanitize();
+        Directory.CreateDirectory(outputDir);
+        string baseName = SanitizeFilePart(Path.GetFileNameWithoutExtension(track.Path) ?? "track");
+        List<TrackSourceItem> allItems = TrackSourceItem.BuildFromTrack(track);
+        int sampleRate = track.SampleRate > 0 ? track.SampleRate : Listener.DefaultSampleRate;
+
+        // 1. Decode track audio (all discrete channels/objects if Spatial Karaoke Atmos is requested, else clean stereo downmix)
+        onProgress?.Invoke(0.05, "Decodificando áudio de origem...");
+        float[] mixLeft;
+        float[] mixRight;
+        float[][] multiChannels = null;
+        bool[] isLfe = null;
+        bool[] isFrontCenter = null;
+
+        if (exportSpatialKaraokeAtmos && allItems.Count > 2) {
+            DecodeMultichannelAndStereoDownmix(
+                track,
+                allItems,
+                out multiChannels,
+                out isLfe,
+                out isFrontCenter,
+                out mixLeft,
+                out mixRight,
+                p => onProgress?.Invoke(0.05 + p * 0.15, $"Decodificando {allItems.Count} canais/objetos ({p:0.0%})..."),
+                token);
+        } else {
+            DecodeStereoDownmix(
+                track,
+                out mixLeft,
+                out mixRight,
+                p => onProgress?.Invoke(0.05 + p * 0.15, $"Decodificando estéreo ({p:0.0%})..."),
+                token);
+        }
+
+        int totalSamples = mixLeft.Length;
+        List<string> createdFiles = [];
+
+        // 2. Optional zero-phase multichannel Spatial Karaoke export across all 1..32 Atmos beds & dynamic objects
+        if (exportSpatialKaraokeAtmos && multiChannels != null && multiChannels.Length > 0) {
+            float[] neuralLeadRef = null;
+            float[] neuralBackingRef = null;
+
+            if (runtime != null && runtime.IsAvailable && !string.IsNullOrEmpty(modelFilePath) && File.Exists(modelFilePath)) {
+                onProgress?.Invoke(0.22, "Separando guia vocal neural (MVSEP)...");
+                using INeuralSession session = runtime.LoadSession(modelFilePath, safeConfig.PreferredProvider);
+                NeuralModelCatalogEntry entry = modelEntry ?? NeuralModelCatalog.FindById(safeConfig.ActiveKaraokeModelId);
+                StereoStemBuffer[] vocalStems = NeuralAudioOfflinePipeline.RunSeparation(
+                    session,
+                    entry,
+                    mixLeft,
+                    mixRight,
+                    safeConfig.ToMvsepOptions(),
+                    p => onProgress?.Invoke(0.22 + p * 0.48, $"Inferência vocal MVSEP ({p:0.0%})..."),
+                    token);
+                NeuralSeparatedTrack separated = NeuralAudioOfflinePipeline.BuildSeparatedTrack(
+                    track.Path ?? baseName,
+                    sampleRate,
+                    vocalStems,
+                    entry?.Id ?? "custom_onnx");
+                neuralLeadRef = separated.MonoLeadVocalRef;
+                neuralBackingRef = safeConfig.KaraokePreserveBackingVocals ? separated.MonoBackingVocalRef : null;
+            }
+
+            onProgress?.Invoke(0.72, "Aplicando Spatial Karaoke zero-phase multicanal...");
+            SpatialKaraokeEngine.ProcessOfflineMultichannel(
+                multiChannels,
+                isLfe,
+                isFrontCenter,
+                sampleRate,
+                safeConfig.KaraokeVocalLevel,
+                safeConfig.KaraokePreserveBackingVocals,
+                neuralLeadRef,
+                neuralBackingRef);
+
+            for (int c = 0; c < multiChannels.Length; c++) {
+                token.ThrowIfCancellationRequested();
+                string chName = c < allItems.Count ? allItems[c].GetSafeFileBaseName() : $"ch_{c:00}";
+                string wavPath = Path.Combine(outputDir, $"{baseName}_karaoke_{chName}.wav");
+                WriteMonoWav(wavPath, multiChannels[c], sampleRate, bits);
+                createdFiles.Add(wavPath);
+                onProgress?.Invoke(0.75 + 0.25 * ((c + 1) / (double)multiChannels.Length), $"Gravando karaoke {c + 1}/{multiChannels.Length}...");
+            }
+
+            onProgress?.Invoke(1.0, "Spatial Karaoke Atmos exportado!");
+            return new StemExtractionResult {
+                CreatedFiles = createdFiles,
+                SamplesWritten = totalSamples,
+                SampleRate = sampleRate
+            };
+        }
+
+        // 3. Standard Neural AI Stem Separation via ONNX Runtime + MVSEP anti-artifact pipeline
+        if (runtime == null || !runtime.IsAvailable) {
+            throw new InvalidOperationException("ONNX Runtime is not installed. Install it in Settings -> Neural Audio first.");
+        }
+        if (string.IsNullOrEmpty(modelFilePath) || !File.Exists(modelFilePath)) {
+            throw new FileNotFoundException("Selected ONNX neural model is not installed.", modelFilePath);
+        }
+
+        onProgress?.Invoke(0.22, "Carregando sessão ONNX Runtime...");
+        using INeuralSession stemSession = runtime.LoadSession(modelFilePath, safeConfig.PreferredProvider);
+        NeuralModelCatalogEntry catalogEntry = modelEntry ?? NeuralModelCatalog.FindById(safeConfig.ActiveStemModelId);
+        MvsepPipelineOptions mvsepOptions = safeConfig.ToMvsepOptions();
+
+        StereoStemBuffer[] stems = NeuralAudioOfflinePipeline.RunSeparation(
+            stemSession,
+            catalogEntry,
+            mixLeft,
+            mixRight,
+            mvsepOptions,
+            p => onProgress?.Invoke(0.25 + p * 0.55, $"Separando stems MVSEP ({p:0.0%})..."),
+            token);
+
+        for (int i = 0; i < stems.Length; i++) {
+            token.ThrowIfCancellationRequested();
+            string stemSafe = SanitizeFilePart(stems[i].Name);
+            string wavPath = Path.Combine(outputDir, $"{baseName}_neural_{stemSafe}.wav");
+            WriteStereoWav(wavPath, stems[i].Left, stems[i].Right, sampleRate, bits);
+            createdFiles.Add(wavPath);
+            onProgress?.Invoke(0.80 + 0.12 * ((i + 1) / (double)Math.Max(1, stems.Length)), $"Gravando stem {stems[i].Name}...");
+        }
+
+        // 4. Optional Hybrid Neural + DirAC 7.1.4 spatial render
+        if (exportHybrid714 || safeConfig.SpatialUpmixMode == NeuralSpatialUpmixMode.HybridNeuralDirAc) {
+            token.ThrowIfCancellationRequested();
+            onProgress?.Invoke(0.93, "Renderizando Hybrid Neural + DirAC 7.1.4...");
+            float[][] bus714 = NeuralStemSpatializer.ProcessHybridNeuralDirAc714(stems, sampleRate, 0.35f);
+            ReferenceChannel[] layout714 = [
+                ReferenceChannel.FrontLeft,
+                ReferenceChannel.FrontRight,
+                ReferenceChannel.FrontCenter,
+                ReferenceChannel.ScreenLFE,
+                ReferenceChannel.RearLeft,
+                ReferenceChannel.RearRight,
+                ReferenceChannel.SideLeft,
+                ReferenceChannel.SideRight,
+                ReferenceChannel.TopFrontLeft,
+                ReferenceChannel.TopFrontRight,
+                ReferenceChannel.TopRearLeft,
+                ReferenceChannel.TopRearRight
+            ];
+            float[][] full12 = new float[12][];
+            full12[0] = bus714[0]; // FL
+            full12[1] = bus714[1]; // FR
+            full12[2] = bus714[2]; // FC
+            full12[3] = new float[totalSamples]; // LFE (clean zeroed bass-managed slot)
+            full12[4] = bus714[3]; // RL
+            full12[5] = bus714[4]; // RR
+            full12[6] = bus714[5]; // SL
+            full12[7] = bus714[6]; // SR
+            full12[8] = bus714[7]; // TFL
+            full12[9] = bus714[8]; // TFR
+            full12[10] = bus714[9]; // TRL
+            full12[11] = bus714[10]; // TRR
+
+            string path714 = Path.Combine(outputDir, $"{baseName}_hybrid_neural_7.1.4.wav");
+            WriteMultichannelWav(path714, layout714, full12, sampleRate, bits);
+            createdFiles.Add(path714);
+        }
+
+        onProgress?.Invoke(1.0, "Stems neurais extraídos!");
+        return new StemExtractionResult {
+            CreatedFiles = createdFiles,
+            SamplesWritten = totalSamples,
+            SampleRate = sampleRate
+        };
+    }
+
+    static void DecodeStereoDownmix(
+        CavernizeTrack track,
+        out float[] left,
+        out float[] right,
+        Action<double> onProgress,
+        CancellationToken token) {
+        if (Listener.EnvironmentSize.X == 0 || Listener.EnvironmentSize.Y == 0 || Listener.EnvironmentSize.Z == 0) {
+            Listener.EnvironmentSize = new Vector3(10, 7, 10);
+        }
+        Listener.HeadphoneVirtualizer = false;
+        Listener.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.ref200));
+        Listener listener = new(false) {
+            SampleRate = track.SampleRate,
+            UpdateRate = updateRate,
+            AudioQuality = QualityModes.Perfect,
+            MaximumSources = 256,
+            Normalizer = 0f
+        };
+        track.Attach(listener, new UpmixingSettings(false));
+
+        long totalLength = track.Length > 0 ? track.Length : track.SampleRate * 600L;
+        int len = (int)Math.Min(totalLength, int.MaxValue / 4);
+        left = new float[len];
+        right = new float[len];
+
+        int stride = Math.Max(2, Listener.Channels.Length);
+        int written = 0;
+        int iter = 0;
+        while (written < len) {
+            token.ThrowIfCancellationRequested();
+            int frames = Math.Min(writeBatchFrames, (len - written + updateRate - 1) / updateRate);
+            float[] rendered = listener.Render(frames);
+            int avail = Math.Min(frames * updateRate, len - written);
+            for (int s = 0; s < avail; s++) {
+                left[written + s] = Math.Clamp(rendered[s * stride], -1f, 1f);
+                right[written + s] = Math.Clamp(rendered[s * stride + 1], -1f, 1f);
+            }
+            written += avail;
+            if ((++iter & 15) == 0 || written >= len) {
+                onProgress?.Invoke(Math.Clamp(written / (double)Math.Max(1, len), 0.0, 1.0));
+            }
+        }
+    }
+
+    static void DecodeMultichannelAndStereoDownmix(
+        CavernizeTrack track,
+        List<TrackSourceItem> items,
+        out float[][] channels,
+        out bool[] isLfe,
+        out bool[] isFrontCenter,
+        out float[] mixLeft,
+        out float[] mixRight,
+        Action<double> onProgress,
+        CancellationToken token) {
+        if (Listener.EnvironmentSize.X == 0 || Listener.EnvironmentSize.Y == 0 || Listener.EnvironmentSize.Z == 0) {
+            Listener.EnvironmentSize = new Vector3(10, 7, 10);
+        }
+        Listener.HeadphoneVirtualizer = false;
+        Listener listener = new(false) {
+            SampleRate = track.SampleRate,
+            UpdateRate = updateRate,
+            AudioQuality = QualityModes.Perfect,
+            MaximumSources = Math.Max(256, items.Count),
+            Normalizer = 0f
+        };
+        track.Attach(listener, new UpmixingSettings(true));
+
+        IReadOnlyList<Source> sources = track.Renderer.Objects;
+        int chCount = Math.Min(sources.Count, SpatialKaraokeEngine.MaxSpatialChannels);
+        long totalLength = track.Length > 0 ? track.Length : track.SampleRate * 600L;
+        int len = (int)Math.Min(totalLength, int.MaxValue / Math.Max(4, chCount));
+
+        channels = new float[chCount][];
+        isLfe = new bool[chCount];
+        isFrontCenter = new bool[chCount];
+        for (int c = 0; c < chCount; c++) {
+            channels[c] = new float[len];
+            isLfe[c] = c < items.Count && items[c].IsLFE;
+            isFrontCenter[c] = c < items.Count &&
+                (items[c].Channel == ReferenceChannel.FrontCenter ||
+                 items[c].Channel == ReferenceChannel.FrontLeft ||
+                 items[c].Channel == ReferenceChannel.FrontRight ||
+                 items[c].NormalizedPosition.Z >= 0.35f);
+        }
+        mixLeft = new float[len];
+        mixRight = new float[len];
+
+        Vector3 invEnv = Vector3.One / Listener.EnvironmentSize;
+        int written = 0;
+        int iter = 0;
+        float normScale = 1f / MathF.Sqrt(Math.Max(1, chCount));
+        while (written < len) {
+            token.ThrowIfCancellationRequested();
+            listener.Ping();
+            int avail = Math.Min(updateRate, len - written);
+            for (int c = 0; c < chCount; c++) {
+                float[] rendered = sources[c].Rendered?[0];
+                if (rendered == null) {
+                    continue;
+                }
+                float panX = Math.Clamp((sources[c].Position * invEnv).X, -1f, 1f);
+                float gL = MathF.Sqrt(0.5f * (1f - panX)) * normScale;
+                float gR = MathF.Sqrt(0.5f * (1f + panX)) * normScale;
+                float[] dst = channels[c];
+                for (int s = 0; s < avail; s++) {
+                    float v = Math.Clamp(rendered[s], -1f, 1f);
+                    dst[written + s] = v;
+                    if (!isLfe[c]) {
+                        mixLeft[written + s] += v * gL;
+                        mixRight[written + s] += v * gR;
+                    }
+                }
+            }
+            written += avail;
+            if ((++iter & 31) == 0 || written >= len) {
+                onProgress?.Invoke(Math.Clamp(written / (double)Math.Max(1, len), 0.0, 1.0));
+            }
+        }
+    }
+
+    static void WriteMonoWav(string path, float[] samples, int sampleRate, BitDepth bits) {
+        using RIFFWaveWriter writer = new(path, 1, samples.Length, sampleRate, bits);
+        writer.WriteHeader();
+        const int block = 8192;
+        float[] tmp = new float[block];
+        for (int pos = 0; pos < samples.Length; pos += block) {
+            int count = Math.Min(block, samples.Length - pos);
+            for (int i = 0; i < count; i++) {
+                tmp[i] = Math.Clamp(samples[pos + i], -1f, 1f);
+            }
+            writer.WriteBlock(tmp, 0, count);
+        }
+    }
+
+    static void WriteStereoWav(string path, float[] left, float[] right, int sampleRate, BitDepth bits) {
+        int len = Math.Min(left.Length, right.Length);
+        using RIFFWaveWriter writer = new(path, 2, len, sampleRate, bits);
+        writer.WriteHeader();
+        const int block = 4096;
+        float[] interleaved = new float[block * 2];
+        for (int pos = 0; pos < len; pos += block) {
+            int count = Math.Min(block, len - pos);
+            for (int i = 0; i < count; i++) {
+                interleaved[i * 2] = Math.Clamp(left[pos + i], -1f, 1f);
+                interleaved[i * 2 + 1] = Math.Clamp(right[pos + i], -1f, 1f);
+            }
+            writer.WriteBlock(interleaved, 0, count * 2);
+        }
+    }
+
+    static void WriteMultichannelWav(string path, ReferenceChannel[] layout, float[][] channels, int sampleRate, BitDepth bits) {
+        int chCount = Math.Min(layout.Length, channels.Length);
+        int len = chCount > 0 ? channels[0].Length : 0;
+        using RIFFWaveWriter writer = new(path, layout[..chCount], len, sampleRate, bits);
+        writer.WriteHeader();
+        const int block = 2048;
+        float[] interleaved = new float[block * chCount];
+        for (int pos = 0; pos < len; pos += block) {
+            int count = Math.Min(block, len - pos);
+            for (int i = 0; i < count; i++) {
+                for (int c = 0; c < chCount; c++) {
+                    interleaved[i * chCount + c] = Math.Clamp(channels[c][pos + i], -1f, 1f);
+                }
+            }
+            writer.WriteBlock(interleaved, 0, count * chCount);
+        }
     }
 
     static int[] ResolveTargetIndices(int totalCount, IReadOnlyList<int> selectedIndices) {

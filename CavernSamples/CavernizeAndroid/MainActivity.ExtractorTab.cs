@@ -52,7 +52,7 @@ public partial class MainActivity {
         modeGroup.SetPadding(Dp(10), Dp(4), Dp(10), Dp(4));
         extractModeRows.Clear();
 
-        string[] modes = [S["ModeRawStems"], S["ModeSpatialEach"], S["Mode3DCombined"], S["ModeRawBitstream"]];
+        string[] modes = [S["ModeRawStems"], S["ModeSpatialEach"], S["Mode3DCombined"], S["ModeRawBitstream"], S["ModeNeuralStems"]];
         for (int i = 0; i < modes.Length; i++) {
             int modeIdx = i;
             if (i > 0) {
@@ -255,9 +255,27 @@ public partial class MainActivity {
         bool exportJson = extractJsonCheck.Checked;
         List<int> selectedIndices = extractCheckboxes.Where(x => x.box.Checked).Select(x => x.index).ToList();
 
-        if (mode != 3 && selectedIndices.Count == 0) {
+        if (mode != 3 && mode != 4 && selectedIndices.Count == 0) {
             ShowError("Select at least one channel or 3D object.");
             return;
+        }
+
+        Cavernize.Logic.Spatial.NeuralAudioConfig neuralCfg = store.BuildNeuralAudioConfig();
+        bool neuralKaraokeAtmos = mode == 4 && neuralCfg.SpatialKaraokeEnabled && trackSourceItems.Count > 2;
+        string neuralModelId = neuralKaraokeAtmos ? neuralCfg.ActiveKaraokeModelId : neuralCfg.ActiveStemModelId;
+        string neuralModelPath = OnnxRuntimeInstallerService.ResolveModelPath(this, neuralModelId);
+        Cavernize.Logic.Spatial.NeuralModelCatalogEntry neuralModelEntry =
+            Cavernize.Logic.Spatial.NeuralModelCatalog.FindById(neuralModelId);
+
+        if (mode == 4 && !neuralKaraokeAtmos) {
+            if (!OnnxRuntimeInstallerService.IsRuntimeInstalled(this)) {
+                ShowError(S["NeuralRuntimeNeedInstall"]);
+                return;
+            }
+            if (string.IsNullOrEmpty(neuralModelPath)) {
+                ShowError(S["NeuralModelNeedInstall"]);
+                return;
+            }
         }
 
         string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "track");
@@ -298,7 +316,7 @@ public partial class MainActivity {
                         playerEngine.DistanceSimulation, playerEngine.VolumeRolloff,
                         ReportProg, token);
                     created.AddRange(res.CreatedFiles);
-                } else {
+                } else if (mode == 3) {
                     Cavern.Format.Common.Codec rawCodec = active.SourceCodec != Cavern.Format.Common.Codec.Unknown
                         ? active.SourceCodec
                         : active.Codec;
@@ -311,6 +329,21 @@ public partial class MainActivity {
                     string rawPath = Path.Combine(outDir, baseName + rawExt);
                     StemExtractor.ExtractRawBitstream(active, rawPath, ReportProg, token);
                     created.Add(rawPath);
+                } else {
+                    bool exportHybrid = neuralCfg.SpatialUpmixMode == Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.HybridNeuralDirAc;
+                    StemExtractionResult res = StemExtractor.ExtractNeuralStems(
+                        active,
+                        neuralRuntime,
+                        neuralModelPath,
+                        neuralModelEntry,
+                        outDir,
+                        bits,
+                        neuralCfg,
+                        exportSpatialKaraokeAtmos: neuralKaraokeAtmos,
+                        exportHybrid714: exportHybrid,
+                        onProgress: ReportProg,
+                        token: token);
+                    created.AddRange(res.CreatedFiles);
                 }
 
                 string publishRel = $"Stems/{folderTag}";

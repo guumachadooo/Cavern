@@ -36,6 +36,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
     readonly SpatialSceneHub sceneHub = new();
     readonly ManualHeadTrackerProvider manualHeadTracker = new();
     readonly ParametricUpmixerStageProcessor parametricUpmixerStage = new(new UpmixingSettings(true));
+    readonly NeuralStemStageProcessor neuralStemStage = new();
     readonly CavernVirtualizerRendererAdapter virtualizerRenderer = new();
     readonly AutoEqPostProcessingStage autoEqPostStage = new();
     readonly HptfNotchPostProcessingStage hptfNotchPostStage = new();
@@ -78,6 +79,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
         sceneHub.BindHeadTracker(manualHeadTracker);
         sceneHub.BindRenderer(virtualizerRenderer);
         sceneHub.RegisterStageProcessor(parametricUpmixerStage);
+        sceneHub.RegisterStageProcessor(neuralStemStage);
         sceneHub.RegisterPostProcessingStage(autoEqPostStage);
         sceneHub.RegisterPostProcessingStage(hptfNotchPostStage);
         sceneHub.RegisterPostProcessingStage(iso226PostStage);
@@ -92,6 +94,71 @@ public sealed class RealtimePlayerEngine : IDisposable {
     /// and extensible Slot 2 / Slot 4 / Slot 5 / Slot 6 pipeline registrations.
     /// </summary>
     public SpatialSceneHub SceneHub => sceneHub;
+
+    /// <summary>
+    /// Slot 2B Neural Audio, MVSEP anti-artifact &amp; Spatial Karaoke stage processor (Priority 300).
+    /// </summary>
+    public NeuralStemStageProcessor NeuralStage => neuralStemStage;
+
+    /// <summary>
+    /// Active Slot 2B neural audio &amp; Spatial Karaoke configuration.
+    /// </summary>
+    public NeuralAudioConfig NeuralConfig => neuralStemStage.Config;
+
+    /// <summary>
+    /// Live Slot 2B neural audio, runtime EP, model cache, and Spatial Karaoke telemetry snapshot.
+    /// </summary>
+    public NeuralAudioDiagnostics NeuralDiagnostics => sceneHub.NeuralDiagnostics;
+
+    /// <summary>
+    /// Applies updated Slot 2B neural audio &amp; Spatial Karaoke parameters cleanly in real time.
+    /// </summary>
+    public void ApplyNeuralConfig(NeuralAudioConfig config) {
+        lock (renderLock) {
+            bool wasActive = neuralStemStage.IsKaraokeActivelyAttenuating;
+            neuralStemStage.ApplyConfig(config);
+            bool nowActive = neuralStemStage.IsKaraokeActivelyAttenuating;
+            if (wasActive != nowActive && IsPlaying && hasRenderedAudio) {
+                ArmCrossfadeLocked();
+            }
+            sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+        }
+    }
+
+    /// <summary>
+    /// Smoothly updates live Spatial Karaoke vocal level in [0; 1] (0% = instrumental, 100% = bit-exact unity bypass).
+    /// </summary>
+    public void SetKaraokeVocalLevel(float level01) {
+        lock (renderLock) {
+            neuralStemStage.SetKaraokeVocalLevel(level01);
+            sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+        }
+    }
+
+    /// <summary>
+    /// Binds a pre-separated neural stem bundle (including Lead/Backing vocal references) to the active playback scene.
+    /// </summary>
+    public void BindSeparatedNeuralTrack(NeuralSeparatedTrack separatedTrack) {
+        lock (renderLock) {
+            neuralStemStage.BindSeparatedTrack(separatedTrack);
+            SpatialSourceDescriptor[] descriptors = separatedTrack != null
+                ? neuralStemStage.BuildActiveStemDescriptors(EnvironmentSize, sceneHub.Sources.Count)
+                : Array.Empty<SpatialSourceDescriptor>();
+            sceneHub.RegisterNeuralStemDescriptors(descriptors);
+            sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+        }
+    }
+
+    /// <summary>
+    /// Binds an optional W09 lossless reference twin provider for sample-aligned Spatial Karaoke acceleration.
+    /// </summary>
+    public void BindLosslessReference(ILosslessReferenceProvider provider) {
+        lock (renderLock) {
+            neuralStemStage.BindLosslessReference(provider);
+            sceneHub.BindLosslessReference(provider);
+            sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+        }
+    }
 
     /// <summary>
     /// Slot 6A neutral AutoEq parametric headphone compensation stage (Priority 100, before safety limiter).
@@ -424,9 +491,15 @@ public sealed class RealtimePlayerEngine : IDisposable {
             crossfadeRemaining = 0;
             lastSourceMaskHash = 0;
 
+            if (neuralStemStage.ActiveSeparatedTrack != null &&
+                !string.Equals(neuralStemStage.ActiveSeparatedTrack.SourceTrackPath, track.Path, StringComparison.OrdinalIgnoreCase)) {
+                neuralStemStage.BindSeparatedTrack(null);
+            }
+
             ConfigureListener(resetToStart: true);
             sourceItems = TrackSourceItem.BuildFromTrack(track);
             BindTrackToSceneHubLocked(track);
+            sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
         }
     }
 
@@ -582,6 +655,18 @@ public sealed class RealtimePlayerEngine : IDisposable {
                     break;
                 }
 
+                // Slot 2B real-time zero-phase Spatial Karaoke (before Slot 6 metering & True-Peak limiter)
+                if (neuralStemStage.IsKaraokeActivelyAttenuating) {
+                    neuralStemStage.ProcessStereoInterleavedKaraoke(stereoOutput, outOffset, blockFrames, currentTrackSample);
+                    SoundfieldTelemetry kTel = activeSceneFrame.Telemetry;
+                    kTel.VocalActivity = neuralStemStage.VocalActivity;
+                    kTel.KaraokeVocalLevel = neuralStemStage.Config.KaraokeVocalLevel;
+                    activeSceneFrame.Telemetry = kTel;
+                    spatialDialogPostStage.ExternalSpeechActivity = neuralStemStage.VocalActivity;
+                } else {
+                    spatialDialogPostStage.ExternalSpeechActivity = float.NaN;
+                }
+
                 // Slot 6: Ordered transparent post-processing stages
                 // (100 AutoEq, 110 HpTF, 300 ISO 226:2023, 400 BS.1770/Dialnorm, 500 Dialog Path B, 890 Legacy AGC, 900 4x True-Peak Limiter)
                 iso226PostStage.UpdatePlaybackVolume(Volume);
@@ -640,6 +725,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 sceneHub.Telemetry = activeSceneFrame.Telemetry;
                 sceneHub.ExternalizationDiagnostics = virtualizerRenderer.Diagnostics;
                 PublishLoudnessDiagnosticsLocked();
+                sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
             }
         }
 
@@ -1090,6 +1176,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             limiterPostStage.Dispose();
             truePeakLimiterPostStage.Dispose();
             parametricUpmixerStage.Dispose();
+            neuralStemStage.Dispose();
             manualHeadTracker.Dispose();
         }
         GC.SuppressFinalize(this);

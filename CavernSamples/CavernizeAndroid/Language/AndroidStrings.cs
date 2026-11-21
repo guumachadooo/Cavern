@@ -212,6 +212,7 @@ public sealed class AndroidStrings {
         ["ModeSpatialEach"] = "Render Each Selected Item in 3D Separately (HRTF / Target Layout)",
         ["Mode3DCombined"] = "Render Only Selected 3D Objects Combined (1 Spatial File)",
         ["ModeRawBitstream"] = "Extract Raw Container Bitstream (--extract)",
+        ["ModeNeuralStems"] = "Neural AI Stems & Spatial Karaoke (ONNX MVSEP Pipeline)",
         ["BitDepthLabel"] = "Bit depth:",
         ["ExportJsonCheck"] = "Export 3D object trajectory metadata (.json)",
         ["SelectAll"] = "All",
@@ -650,9 +651,63 @@ public sealed class AndroidStrings {
         ["TruePeakCeil20"] = "-2.0 dBTP (Conservative DAC Margin)",
         ["LoudnessResetMeterBtn"] = "Reset BS.1770 Meter",
         ["LoudnessMeterResetToast"] = "ITU-R BS.1770-5 Integrated LUFS & LRA meter reset.",
+
+        // Slot 2B: On-Device Neural Audio Runtime (ONNX), MVSEP Anti-Artifact Pipeline & Spatial Karaoke
+        ["Slot2BCardTitle"] = "Neural Audio, Stems & Karaoke (Slot 2B)",
+        ["NeuralRuntimeNotInstalled"] = "ONNX Runtime not installed (downloads on demand into private storage)",
+        ["NeuralRuntimeInstalled"] = "ONNX Runtime {0} · {1} · {2} model(s) · {3:0.0} MB",
+        ["NeuralRuntimeUpdateAvail"] = "ONNX Runtime update available: v{0}",
+        ["NeuralRuntimeDownloadBtn"] = "Install ONNX Runtime",
+        ["NeuralRuntimeUpdateBtn"] = "Update ONNX Runtime",
+        ["NeuralRuntimeCheckBtn"] = "Check Runtime",
+        ["NeuralModelsBtn"] = "Models & Cache ({0})",
+        ["NeuralProviderTitle"] = "Hardware Acceleration (EP)",
+        ["NeuralProviderAuto"] = "Auto (QNN HTP -> XNNPACK -> CPU)",
+        ["NeuralProviderXnnpack"] = "XNNPACK (ARM64 NEON SIMD)",
+        ["NeuralProviderQnn"] = "Qualcomm QNN HTP (Snapdragon NPU)",
+        ["NeuralProviderCpu"] = "CPU Portable (Safe Fallback)",
+        ["NeuralOverlapTitle"] = "MVSEP Overlap-Add (2x–8x)",
+        ["NeuralTtaTitle"] = "MVSEP Test-Time Augmentation (TTA)",
+        ["NeuralEnsembleTitle"] = "MVSEP Ensemble Strategy",
+        ["NeuralEnsembleAvgWave"] = "avg_wave (Phase-Preserving Linear)",
+        ["NeuralEnsembleMinFft"] = "min_fft (Low-Bleed Artifact Suppressor)",
+        ["NeuralEnsembleAvgFft"] = "avg_fft (Balanced Spectral Average)",
+        ["NeuralPhaseFixTitle"] = "Wiener Phase-Fix (Zero Metallic Ringing)",
+        ["NeuralConservationTitle"] = "Exact Energy Conservation (Residual = Mix - Stems)",
+        ["SpatialKaraokeTitle"] = "Spatial Karaoke (Zero-Phase Atmos/Stereo)",
+        ["KaraokeVocalLevelTitle"] = "Karaoke Vocal Level",
+        ["KaraokePreserveBackingTitle"] = "Preserve Backing Harmonies",
+        ["KaraokeLosslessTwinTitle"] = "Accelerate via Lossless Twin (W09 Ready)",
+        ["NeuralUpmixModeTitle"] = "Neural Spatial Upmix Mode",
+        ["NeuralUpmixParametric"] = "Parametric DirAC Only (Zero-Latency)",
+        ["NeuralUpmixStems3D"] = "3D Neural Stems Placement",
+        ["NeuralUpmixHybrid714"] = "Hybrid Neural + DirAC 7.1.4",
+        ["NeuralModelsModalTitle"] = "Neural Models & Cache",
+        ["NeuralModelsCacheSummary"] = "Managed storage: {0:0.0} MB ({1} installed) · Zero APK bloat",
+        ["NeuralModelDownloadBtn"] = "Download",
+        ["NeuralModelImportBtn"] = "Import .onnx",
+        ["NeuralModelDeleteBtn"] = "Delete",
+        ["NeuralModelInstalledTag"] = "Installed",
+        ["NeuralModelSelectBtn"] = "Use",
+        ["NeuralModelActiveTag"] = "Active",
+        ["NeuralClearCacheBtn"] = "Clear Models & Cache",
+        ["NeuralLicensesBtn"] = "Model Licenses",
+        ["NeuralCacheClearedToast"] = "Neural models and temporary cache cleared.",
+        ["NeuralModelImportedToast"] = "Imported ONNX model for {0}.",
+        ["NeuralRuntimeNeedInstall"] = "Install ONNX Runtime in Settings -> Neural Audio first.",
+        ["NeuralModelNeedInstall"] = "Download or import the selected ONNX model in Settings -> Neural Audio -> Models & Cache.",
+        ["NeuralDownloadingRuntime"] = "Downloading ONNX Runtime Android AAR...",
+        ["NeuralRuntimeUpToDate"] = "ONNX Runtime is up to date ({0}).",
+        ["TipNeuralRuntime"] = "Downloads the official Microsoft ONNX Runtime Android native library (libonnxruntime.so + optional Snapdragon QNN HTP) on demand from Maven Central directly into FilesDir/bin/onnxruntime/ so the APK stays lean.",
+        ["TipMvsepOverlap"] = "Raised-cosine overlap-add factor (2x to 8x) with reflection padding eliminates chunk boundary clicks and musical noise.",
+        ["TipMvsepTta"] = "Runs polarity-inverted and channel-swapped passes and averages inverted outputs to cancel asymmetric neural hallucinations.",
+        ["TipMvsepPhaseFix"] = "Reprojects neural stem magnitudes onto the original mixture complex phase via Wiener partition of unity, preventing phasey metallic ringing.",
+        ["TipSpatialKaraoke"] = "Applies a shared real-valued zero-phase Wiener mask across all 1..32 Atmos beds and dynamic objects simultaneously, preserving 0.000 deg inter-channel phase coherence, LFE bass, and 3D trajectories. 100% is a bit-exact bypass.",
+        ["TipNeuralUpmix"] = "Places separated neural stems (Vocals, Drums, Bass, Other, Residual) in 3D space or renders an energy-conserving 12-channel 7.1.4 Hybrid Neural + DirAC master.",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
+        d["AppTitle"] = "Cavernize";
         d["OpenFile"] = "Abrir Arquivo";
         d["NoFile"] = "Nenhum arquivo aberto (TrueHD Atmos, EAC3, AC3, MKV, MP4, WAV/ADM, CAF, LAF, ATMOS, MP3/FLAC)";
         d["TrackLabel"] = "Faixa:";
@@ -819,6 +874,7 @@ public sealed class AndroidStrings {
         d["ModeSpatialEach"] = "Renderizar Cada Item Selecionado em 3D Separado (HRTF / Layout)";
         d["Mode3DCombined"] = "Renderizar Apenas Objetos 3D Combinados (1 Arquivo Espacial)";
         d["ModeRawBitstream"] = "Extrair Bitstream Bruto do Contêiner (--extract)";
+        d["ModeNeuralStems"] = "Stems Neurais IA e Spatial Karaoke (Pipeline ONNX MVSEP)";
         d["BitDepthLabel"] = "Resolução (bits):";
         d["ExportJsonCheck"] = "Exportar trajetórias 3D dos objetos (.json)";
         d["SelectAll"] = "Todos";
@@ -1249,6 +1305,59 @@ public sealed class AndroidStrings {
         d["TruePeakCeil20"] = "-2,0 dBTP (Margem Conservadora DAC)";
         d["LoudnessResetMeterBtn"] = "Zerar Medidor BS.1770";
         d["LoudnessMeterResetToast"] = "Medidor ITU-R BS.1770-5 (LUFS Integrado e LRA) zerado.";
+
+        // Slot 2B: Áudio Neural no Dispositivo (ONNX), Pipeline MVSEP e Spatial Karaoke
+        d["Slot2BCardTitle"] = "Áudio Neural, Stems e Karaoke (Slot 2B)";
+        d["NeuralRuntimeNotInstalled"] = "ONNX Runtime não instalado (baixa sob demanda no armazenamento privado)";
+        d["NeuralRuntimeInstalled"] = "ONNX Runtime {0} · {1} · {2} modelo(s) · {3:0.0} MB";
+        d["NeuralRuntimeUpdateAvail"] = "Atualização do ONNX Runtime disponível: v{0}";
+        d["NeuralRuntimeDownloadBtn"] = "Instalar ONNX Runtime";
+        d["NeuralRuntimeUpdateBtn"] = "Atualizar ONNX Runtime";
+        d["NeuralRuntimeCheckBtn"] = "Checar Runtime";
+        d["NeuralModelsBtn"] = "Modelos e Cache ({0})";
+        d["NeuralProviderTitle"] = "Aceleração de Hardware (EP)";
+        d["NeuralProviderAuto"] = "Automático (QNN HTP -> XNNPACK -> CPU)";
+        d["NeuralProviderXnnpack"] = "XNNPACK (ARM64 NEON SIMD)";
+        d["NeuralProviderQnn"] = "Qualcomm QNN HTP (NPU Snapdragon)";
+        d["NeuralProviderCpu"] = "CPU Portátil (Fallback Seguro)";
+        d["NeuralOverlapTitle"] = "Overlap-Add MVSEP (2x–8x)";
+        d["NeuralTtaTitle"] = "MVSEP Test-Time Augmentation (TTA)";
+        d["NeuralEnsembleTitle"] = "Estratégia de Ensemble MVSEP";
+        d["NeuralEnsembleAvgWave"] = "avg_wave (Linear Preservando Fase)";
+        d["NeuralEnsembleMinFft"] = "min_fft (Supressor de Vazamento/Artefatos)";
+        d["NeuralEnsembleAvgFft"] = "avg_fft (Média Espectral Equilibrada)";
+        d["NeuralPhaseFixTitle"] = "Wiener Phase-Fix (Sem Timbre Metálico)";
+        d["NeuralConservationTitle"] = "Conservação Exata de Energia (Residual = Mix - Stems)";
+        d["SpatialKaraokeTitle"] = "Spatial Karaoke (Zero-Phase Atmos/Estéreo)";
+        d["KaraokeVocalLevelTitle"] = "Nível da Voz (Karaoke)";
+        d["KaraokePreserveBackingTitle"] = "Preservar Backing Vocals / Coros";
+        d["KaraokeLosslessTwinTitle"] = "Acelerar via Gêmeo Lossless (Pronto W09)";
+        d["NeuralUpmixModeTitle"] = "Modo de Upmix Espacial Neural";
+        d["NeuralUpmixParametric"] = "Apenas DirAC Paramétrico (Latência Zero)";
+        d["NeuralUpmixStems3D"] = "Posicionamento 3D de Stems Neurais";
+        d["NeuralUpmixHybrid714"] = "Híbrido Neural + DirAC 7.1.4";
+        d["NeuralModelsModalTitle"] = "Modelos Neurais e Cache";
+        d["NeuralModelsCacheSummary"] = "Armazenamento gerenciado: {0:0.0} MB ({1} instalado(s)) · APK leve";
+        d["NeuralModelDownloadBtn"] = "Baixar";
+        d["NeuralModelImportBtn"] = "Importar .onnx";
+        d["NeuralModelDeleteBtn"] = "Remover";
+        d["NeuralModelInstalledTag"] = "Instalado";
+        d["NeuralModelSelectBtn"] = "Usar";
+        d["NeuralModelActiveTag"] = "Ativo";
+        d["NeuralClearCacheBtn"] = "Limpar Modelos e Cache";
+        d["NeuralLicensesBtn"] = "Licenças dos Modelos";
+        d["NeuralCacheClearedToast"] = "Modelos neurais e cache temporário limpos.";
+        d["NeuralModelImportedToast"] = "Modelo ONNX importado para {0}.";
+        d["NeuralRuntimeNeedInstall"] = "Instale primeiro o ONNX Runtime em Ajustes -> Áudio Neural.";
+        d["NeuralModelNeedInstall"] = "Baixe ou importe o modelo ONNX escolhido em Ajustes -> Áudio Neural -> Modelos e Cache.";
+        d["NeuralDownloadingRuntime"] = "Baixando ONNX Runtime Android AAR...";
+        d["NeuralRuntimeUpToDate"] = "ONNX Runtime atualizado ({0}).";
+        d["TipNeuralRuntime"] = "Baixa sob demanda a biblioteca nativa oficial Microsoft ONNX Runtime Android (libonnxruntime.so + QNN HTP opcional para Snapdragon) do Maven Central direto para FilesDir/bin/onnxruntime/, mantendo o APK super leve.";
+        d["TipMvsepOverlap"] = "Fator de sobreposição raised-cosine (2x a 8x) com preenchimento refletido que elimina cliques de borda e ruído musical.";
+        d["TipMvsepTta"] = "Executa passagens com polaridade invertida e canais trocados, promediando o resultado para cancelar alucinações assimétricas da rede neural.";
+        d["TipMvsepPhaseFix"] = "Reprojeta as magnitudes neurais sobre a fase complexa exata da mixagem original usando Wiener (partição da unidade), eliminando som metálico.";
+        d["TipSpatialKaraoke"] = "Aplica uma máscara Wiener real compartilhada de fase zero em todos os 1..32 canais/objetos Atmos simultaneamente, mantendo 0,000° de distorção de fase, grave LFE intacto e trajetórias 3D preservadas. Em 100% faz bypass bit-exato.";
+        d["TipNeuralUpmix"] = "Posiciona stems separados (Voz, Bateria, Baixo, Outros, Residual) no espaço 3D ou renderiza um master 7.1.4 Híbrido Neural + DirAC com conservação de energia.";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

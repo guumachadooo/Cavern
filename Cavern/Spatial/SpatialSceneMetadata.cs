@@ -244,6 +244,16 @@ namespace Cavern.Spatial {
         public float ActiveDialnormLufs { get; set; }
 
         /// <summary>
+        /// Live neural or coherence-derived vocal activity probability in [0; 1] (Slot 2B Spatial Karaoke / W07 Dialog hook).
+        /// </summary>
+        public float VocalActivity { get; set; }
+
+        /// <summary>
+        /// Active Spatial Karaoke vocal gain level in [0; 1] (1.0 = full vocals / bit-transparent bypass, 0.0 = instrumental).
+        /// </summary>
+        public float KaraokeVocalLevel { get; set; }
+
+        /// <summary>
         /// Returns an empty telemetry snapshot.
         /// </summary>
         public static SoundfieldTelemetry Empty() {
@@ -259,7 +269,9 @@ namespace Cavern.Spatial {
                 CrestFactorDb = 0f,
                 LimiterGainReductionDb = 0f,
                 AppliedLoudnessGainDb = 0f,
-                ActiveDialnormLufs = float.NaN
+                ActiveDialnormLufs = float.NaN,
+                VocalActivity = 0f,
+                KaraokeVocalLevel = 1f
             };
         }
     }

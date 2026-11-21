@@ -90,6 +90,7 @@ public static class TrueHDDecoderService {
 
         CleanFolderFiles(Path.Combine(context.CacheDir.AbsolutePath, "decoded_fallback"), keep);
         CleanFolderFiles(Path.Combine(context.CacheDir.AbsolutePath, "opened"), keep);
+        OnnxRuntimeInstallerService.CleanupTempCache(context);
     }
 
     public static void CleanupWorkDirectory(string sessionDir) {

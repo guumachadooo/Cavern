@@ -55,6 +55,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     const int ReqLoadSubtitles = 1008;
     const int ReqLoadAutoEq = 1009;
     const int ReqBluetoothPermissions = 1010;
+    const int ReqLoadOnnxModel = 1011;
 
     AppSettingsStore store;
     AndroidUpmixingSettings upmixingSettings;
@@ -67,6 +68,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     AndroidAudioOutput audioOutput;
     AudioDeviceProfileManager audioDeviceProfileManager;
     HeadTrackingManager headTrackingManager;
+    NativeOnnxRuntimeBridge neuralRuntime;
 
     AndroidStrings S => AndroidStrings.Active;
 
@@ -123,11 +125,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
     UpdateCheckResult latestUpdateInfo;
     FFmpegStatusResult latestFFmpegStatus;
     TruehddStatusResult latestTruehddStatus;
+    OnnxRuntimeStatusResult latestOnnxStatus;
     string downloadedUpdateApkPath;
     string pendingInstallApkPath;
     bool isUpdateDownloading;
     bool isFFmpegDownloading;
     bool isTruehddDownloading;
+    bool isOnnxDownloading;
+    string pendingOnnxImportModelId = "scnet_4stem_fast";
 
     ExternalDecodedTrack decodedTrueHDTrack;
     string activeTrueHDSessionDir;
@@ -278,6 +283,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
         playerEngine.ApplyExternalizationConfig(store.BuildExternalizationConfig());
         playerEngine.ApplyPersonalizationConfig(store.BuildPersonalizationConfig());
         playerEngine.ApplyLoudnessConfig(store.BuildLoudnessConfig());
+        neuralRuntime = new NativeOnnxRuntimeBridge(this);
+        playerEngine.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
+        SyncNeuralRuntimeDiagnostics();
 
         AutoEqService.EnsureLoaded(this);
         AutoEqService.ApplySavedToEngine(this, store, playerEngine);
@@ -296,6 +304,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshExternalizationUi();
         RefreshPersonalizationUi();
         RefreshLoudnessUi();
+        RefreshNeuralAudioUi();
         RequestMediaPermissionsIfNeeded();
         StartTelemetryTimer();
 
@@ -304,6 +313,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         _ = CheckFFmpegUpdateAsync(silent: true);
         _ = CheckTruehddUpdateAsync(silent: true);
+        _ = CheckOnnxRuntimeUpdateAsync(silent: true);
         if (store.AutoCheckUpdates) {
             _ = CheckForUpdatesAsync(silent: true);
         }
@@ -344,11 +354,13 @@ public partial class MainActivity : Activity, ICavernizeApp {
         headTrackingManager?.Dispose();
         audioDeviceProfileManager?.Dispose();
         audioOutput?.Dispose();
+        neuralRuntime?.Dispose();
         playerEngine?.Dispose();
         decodedTrueHDTrack?.Dispose();
         LoadedFile?.Dispose();
         TrueHDDecoderService.CleanupWorkDirectory(activeTrueHDSessionDir);
         TrueHDDecoderService.CleanupWorkDirectory(activeFallbackSessionDir);
+        OnnxRuntimeInstallerService.CleanupTempCache(this);
         base.OnDestroy();
     }
 
@@ -1234,6 +1246,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
             Task.Run(() => {
                 string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
                 RunOnUiThread(() => ImportCustomAutoEqFile(path));
+            });
+        } else if (requestCode == ReqLoadOnnxModel && data.Data != null) {
+            Task.Run(() => {
+                string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
+                RunOnUiThread(() => ImportCustomOnnxModelFromPath(path));
             });
         }
     }

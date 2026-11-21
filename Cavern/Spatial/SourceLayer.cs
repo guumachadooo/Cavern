@@ -32,7 +32,17 @@ namespace Cavern.Spatial {
         /// <summary>
         /// Scene-based Higher-Order Ambisonics (HOA) spherical harmonic component (ITU-R BS.2127 HOA).
         /// </summary>
-        AmbisonicsHoa = 5
+        AmbisonicsHoa = 5,
+
+        /// <summary>
+        /// Energy-conserved spatial residual (mix minus separated stems, or cleaned Atmos-exclusive residual in W09).
+        /// </summary>
+        RestoredResidual = 6,
+
+        /// <summary>
+        /// Live USB/pro-audio microphone 3D object injected into the scene (W10/W11).
+        /// </summary>
+        LiveMicrophone = 7
     }
 
     /// <summary>

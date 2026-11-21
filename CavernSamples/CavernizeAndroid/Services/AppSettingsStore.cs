@@ -515,6 +515,110 @@ public sealed class AppSettingsStore {
         TruePeakCeilingDbtp = ResolveTruePeakCeilingDbtp()
     };
 
+    // Slot 2B: On-Device Neural Audio Runtime (ONNX), MVSEP Anti-Artifact Pipeline & Spatial Karaoke
+    public string InstalledOnnxRuntimeVersion {
+        get => prefs.GetString("onnxRuntimeVer", "");
+        set => Edit().PutString("onnxRuntimeVer", value ?? "").Apply();
+    }
+
+    public bool OnnxRuntimeQnnInstalled {
+        get => prefs.GetBoolean("onnxRuntimeQnn", false);
+        set => Edit().PutBoolean("onnxRuntimeQnn", value).Apply();
+    }
+
+    public int NeuralProviderIndex {
+        get => prefs.GetInt("neuralProviderIdx", (int)Cavernize.Logic.Spatial.NeuralExecutionProvider.Auto);
+        set => Edit().PutInt("neuralProviderIdx", Math.Clamp(value, 0, 3)).Apply();
+    }
+
+    public int NeuralOverlapFactor {
+        get => prefs.GetInt("neuralOverlapFactor", 4);
+        set => Edit().PutInt("neuralOverlapFactor", Math.Clamp(value, 2, 8)).Apply();
+    }
+
+    public bool NeuralTtaEnabled {
+        get => prefs.GetBoolean("neuralTtaEnabled", false);
+        set => Edit().PutBoolean("neuralTtaEnabled", value).Apply();
+    }
+
+    public int NeuralEnsembleModeIndex {
+        get => prefs.GetInt("neuralEnsembleMode", (int)Cavern.Neural.MvsepEnsembleMethod.MinFft);
+        set => Edit().PutInt("neuralEnsembleMode", Math.Clamp(value, 0, 2)).Apply();
+    }
+
+    public bool NeuralPhaseFixEnabled {
+        get => prefs.GetBoolean("neuralPhaseFix", true);
+        set => Edit().PutBoolean("neuralPhaseFix", value).Apply();
+    }
+
+    public bool NeuralEnergyConservation {
+        get => prefs.GetBoolean("neuralEnergyCons", true);
+        set => Edit().PutBoolean("neuralEnergyCons", value).Apply();
+    }
+
+    public bool SpatialKaraokeEnabled {
+        get => prefs.GetBoolean("spatialKaraokeEnabled", false);
+        set => Edit().PutBoolean("spatialKaraokeEnabled", value).Apply();
+    }
+
+    public float KaraokeVocalLevel {
+        get => prefs.GetFloat("karaokeVocalLevel", 1.0f);
+        set => Edit().PutFloat("karaokeVocalLevel", Math.Clamp(value, 0f, 1f)).Apply();
+    }
+
+    public bool KaraokePreserveBackingVocals {
+        get => prefs.GetBoolean("karaokePreserveBacking", true);
+        set => Edit().PutBoolean("karaokePreserveBacking", value).Apply();
+    }
+
+    public bool UseLosslessTwinForKaraoke {
+        get => prefs.GetBoolean("useLosslessTwinKaraoke", true);
+        set => Edit().PutBoolean("useLosslessTwinKaraoke", value).Apply();
+    }
+
+    public int NeuralSpatialUpmixModeIndex {
+        get => prefs.GetInt("neuralSpatialUpmixMode", (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.ParametricOnly);
+        set => Edit().PutInt("neuralSpatialUpmixMode", Math.Clamp(value, 0, 2)).Apply();
+    }
+
+    public string ActiveStemModelId {
+        get => prefs.GetString("activeStemModelId", "scnet_4stem_fast");
+        set => Edit().PutString("activeStemModelId", value ?? "scnet_4stem_fast").Apply();
+    }
+
+    public string ActiveKaraokeModelId {
+        get => prefs.GetString("activeKaraokeModelId", "melband_roformer_karaoke");
+        set => Edit().PutString("activeKaraokeModelId", value ?? "melband_roformer_karaoke").Apply();
+    }
+
+    public string ActiveDereverbModelId {
+        get => prefs.GetString("activeDereverbModelId", "melband_roformer_dereverb");
+        set => Edit().PutString("activeDereverbModelId", value ?? "melband_roformer_dereverb").Apply();
+    }
+
+    public string ActiveRestorerModelId {
+        get => prefs.GetString("activeRestorerModelId", "apollo_codec_restorer");
+        set => Edit().PutString("activeRestorerModelId", value ?? "apollo_codec_restorer").Apply();
+    }
+
+    public Cavernize.Logic.Spatial.NeuralAudioConfig BuildNeuralAudioConfig() => new() {
+        PreferredProvider = (Cavernize.Logic.Spatial.NeuralExecutionProvider)Math.Clamp(NeuralProviderIndex, 0, 3),
+        OverlapFactor = Math.Clamp(NeuralOverlapFactor, 2, 8),
+        EnableTta = NeuralTtaEnabled,
+        EnsembleMode = (Cavern.Neural.MvsepEnsembleMethod)Math.Clamp(NeuralEnsembleModeIndex, 0, 2),
+        EnablePhaseFix = NeuralPhaseFixEnabled,
+        EnforceEnergyConservation = NeuralEnergyConservation,
+        SpatialKaraokeEnabled = SpatialKaraokeEnabled,
+        KaraokeVocalLevel = Math.Clamp(KaraokeVocalLevel, 0f, 1f),
+        KaraokePreserveBackingVocals = KaraokePreserveBackingVocals,
+        UseLosslessTwinForKaraoke = UseLosslessTwinForKaraoke,
+        SpatialUpmixMode = (Cavernize.Logic.Spatial.NeuralSpatialUpmixMode)Math.Clamp(NeuralSpatialUpmixModeIndex, 0, 2),
+        ActiveStemModelId = ActiveStemModelId,
+        ActiveKaraokeModelId = ActiveKaraokeModelId,
+        ActiveDereverbModelId = ActiveDereverbModelId,
+        ActiveRestorerModelId = ActiveRestorerModelId
+    };
+
     public string DeviceProfilesJson {
         get => prefs.GetString("deviceProfilesV1", "[]");
         set => Edit().PutString("deviceProfilesV1", value ?? "[]").Apply();

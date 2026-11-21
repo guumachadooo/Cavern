@@ -165,6 +165,35 @@ public sealed class SpatialSceneHub {
     AudioOutputDiagnostics audioDiagnostics = AudioOutputDiagnostics.Default;
 
     /// <summary>
+    /// Live Slot 2B neural audio, MVSEP anti-artifact, and Spatial Karaoke telemetry.
+    /// </summary>
+    public NeuralAudioDiagnostics NeuralDiagnostics {
+        get {
+            lock (syncLock) {
+                return neuralDiagnostics;
+            }
+        }
+        set {
+            lock (syncLock) {
+                neuralDiagnostics = value;
+            }
+        }
+    }
+    NeuralAudioDiagnostics neuralDiagnostics = NeuralAudioDiagnostics.Default;
+
+    /// <summary>
+    /// Optional W09 lossless reference twin provider for sample-aligned Spatial Karaoke acceleration.
+    /// </summary>
+    public ILosslessReferenceProvider ActiveLosslessReference {
+        get {
+            lock (syncLock) {
+                return activeLosslessReference;
+            }
+        }
+    }
+    ILosslessReferenceProvider activeLosslessReference;
+
+    /// <summary>
     /// Current 6DoF listener pose (thread-safe snapshot).
     /// </summary>
     public ListenerPose6DoF ListenerPose {
@@ -261,6 +290,37 @@ public sealed class SpatialSceneHub {
     public void BindRenderer(IBinauralRenderer renderer) {
         lock (syncLock) {
             ActiveRenderer = renderer;
+        }
+        SceneChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Binds an optional W09 lossless reference twin provider for lossless-accelerated neural vocal masking.
+    /// </summary>
+    public void BindLosslessReference(ILosslessReferenceProvider provider) {
+        lock (syncLock) {
+            activeLosslessReference = provider;
+        }
+        SceneChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Replaces any existing <see cref="SourceLayer.NeuralStem"/> or <see cref="SourceLayer.RestoredResidual"/> descriptors
+    /// with the provided Slot 2B separated stems while preserving beds and native Atmos objects intact.
+    /// </summary>
+    public void RegisterNeuralStemDescriptors(IReadOnlyList<SpatialSourceDescriptor> stemDescriptors) {
+        lock (syncLock) {
+            for (int i = sources.Count - 1; i >= 0; i--) {
+                SourceLayer layer = sources[i].Layer;
+                if (layer == SourceLayer.NeuralStem || layer == SourceLayer.RestoredResidual) {
+                    sources.RemoveAt(i);
+                }
+            }
+            if (stemDescriptors != null) {
+                for (int i = 0; i < stemDescriptors.Count; i++) {
+                    sources.Add(stemDescriptors[i]);
+                }
+            }
         }
         SceneChanged?.Invoke();
     }
