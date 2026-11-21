@@ -48,6 +48,9 @@ struct PathBLibUsbEngine {
     bool has_pb = false;
     bool has_cap = false;
     bool is_high_speed = true;
+    int claimed_vendor_if = -1;
+    double pb_pkts_per_sec = 8000.0;
+    double cap_pkts_per_sec = 8000.0;
 
     float out_storage[kUsbRingSamples];
     float in_storage[kUsbRingSamples];
@@ -61,6 +64,9 @@ struct PathBLibUsbEngine {
 
     std::thread event_thread;
     std::atomic<bool> running{false};
+    std::atomic<bool> stopping{false};
+    std::atomic<int32_t> active_xfers{0};
+    std::atomic<int32_t> full_duplex_flag{0};
     std::atomic<uint32_t> rate_1616{0};
     uint32_t phase_accum_1616 = 0;
 
@@ -76,26 +82,59 @@ struct PathBLibUsbEngine {
     float pack_scratch[1024];
     float unpack_scratch[1024];
 
-    static void LIBUSB_CALL on_out_complete(libusb_transfer* xfer) {
-        auto* self = static_cast<PathBLibUsbEngine*>(xfer->user_data);
-        if (!self || !self->running.load(std::memory_order_acquire)) return;
-        if (xfer->status == LIBUSB_TRANSFER_CANCELLED) return;
+    static double compute_iso_packets_per_sec(uint8_t bInterval, bool hs) {
+        uint8_t clamped = bInterval < 1u ? 1u : (bInterval > 16u ? 16u : bInterval);
+        double base = hs ? 8000.0 : 1000.0;
+        return base / static_cast<double>(1u << (clamped - 1u));
+    }
 
-        self->fill_out_transfer(xfer);
+    static void LIBUSB_CALL on_out_complete(libusb_transfer* xfer) {
+        if (!xfer) return;
+        auto* self = static_cast<PathBLibUsbEngine*>(xfer->user_data);
+        if (!self) return;
+
+        if (!self->running.load(std::memory_order_acquire) ||
+            self->stopping.load(std::memory_order_acquire) ||
+            xfer->status == LIBUSB_TRANSFER_CANCELLED ||
+            xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+            if (xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+                self->running.store(false, std::memory_order_release);
+            }
+            self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
+            return;
+        }
+
+        self->fill_out_transfer(xfer, false);
         int rc = libusb_submit_transfer(xfer);
         if (rc != 0) {
             self->out_xruns.fetch_add(1, std::memory_order_relaxed);
+            self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
+            if (rc == LIBUSB_ERROR_NO_DEVICE) {
+                self->running.store(false, std::memory_order_release);
+            }
         }
     }
 
     static void LIBUSB_CALL on_in_complete(libusb_transfer* xfer) {
+        if (!xfer) return;
         auto* self = static_cast<PathBLibUsbEngine*>(xfer->user_data);
-        if (!self || !self->running.load(std::memory_order_acquire)) return;
-        if (xfer->status == LIBUSB_TRANSFER_CANCELLED) return;
+        if (!self) return;
+
+        if (!self->running.load(std::memory_order_acquire) ||
+            self->stopping.load(std::memory_order_acquire) ||
+            xfer->status == LIBUSB_TRANSFER_CANCELLED ||
+            xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+            if (xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+                self->running.store(false, std::memory_order_release);
+            }
+            self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
+            return;
+        }
 
         const uint32_t ch = self->cap_stream.channels > 0 ? self->cap_stream.channels : 2u;
         const uint32_t bpf = ch * (self->cap_stream.subslot_bytes > 0 ? self->cap_stream.subslot_bytes : 3u);
         uint32_t total_in_frames = 0;
+        uint32_t completed_pkts = 0;
 
         for (int i = 0; i < xfer->num_iso_packets; ++i) {
             const auto& pkt = xfer->iso_packet_desc[i];
@@ -103,6 +142,7 @@ struct PathBLibUsbEngine {
                 const uint8_t* ptr = libusb_get_iso_packet_buffer_simple(xfer, static_cast<unsigned int>(i));
                 uint32_t frames = pkt.actual_length / bpf;
                 total_in_frames += frames;
+                completed_pkts++;
                 if (frames > 0 && frames * ch <= 1024u) {
                     cav_uac2_unpack_to_float(ptr, static_cast<size_t>(frames) * ch, self->unpack_scratch,
                                              static_cast<CavUac2Format>(self->cap_stream.format));
@@ -122,44 +162,74 @@ struct PathBLibUsbEngine {
             }
         }
 
-        /* Implicit feedback clock tracking: match async OUT packet cadence to actual IN frames delivered */
-        if (self->pb_stream.implicit_feedback && total_in_frames > 0 && xfer->num_iso_packets > 0) {
-            uint32_t measured_1616 = static_cast<uint32_t>((static_cast<uint64_t>(total_in_frames) << 16) /
-                                                           static_cast<uint32_t>(xfer->num_iso_packets));
-            uint32_t prev = self->rate_1616.load(std::memory_order_relaxed);
-            uint32_t smoothed = prev > 0 ? ((prev * 15u + measured_1616) >> 4) : measured_1616;
-            self->rate_1616.store(smoothed, std::memory_order_relaxed);
-            self->update_ppm(smoothed);
+        /* Implicit feedback clock tracking: divide by actual completed_pkts and scale if IN/OUT bIntervals differ */
+        if (self->pb_stream.implicit_feedback && total_in_frames > 0 && completed_pkts > 0) {
+            double frames_per_cap_pkt = static_cast<double>(total_in_frames) / static_cast<double>(completed_pkts);
+            double frames_per_pb_pkt = self->pb_pkts_per_sec > 0.0
+                ? frames_per_cap_pkt * (self->cap_pkts_per_sec / self->pb_pkts_per_sec)
+                : frames_per_cap_pkt;
+            uint32_t measured_1616 = static_cast<uint32_t>(llround(frames_per_pb_pkt * 65536.0));
+            if (measured_1616 > 0x00010000u && measured_1616 < 0x04000000u) {
+                uint32_t prev = self->rate_1616.load(std::memory_order_relaxed);
+                uint32_t smoothed = prev > 0 ? ((prev * 15u + measured_1616) >> 4) : measured_1616;
+                self->rate_1616.store(smoothed, std::memory_order_relaxed);
+                self->update_ppm(smoothed);
+            }
         }
 
         int rc = libusb_submit_transfer(xfer);
         if (rc != 0) {
             self->in_xruns.fetch_add(1, std::memory_order_relaxed);
+            self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
+            if (rc == LIBUSB_ERROR_NO_DEVICE) {
+                self->running.store(false, std::memory_order_release);
+            }
         }
     }
 
     static void LIBUSB_CALL on_fb_complete(libusb_transfer* xfer) {
+        if (!xfer) return;
         auto* self = static_cast<PathBLibUsbEngine*>(xfer->user_data);
-        if (!self || !self->running.load(std::memory_order_acquire)) return;
-        if (xfer->status == LIBUSB_TRANSFER_CANCELLED) return;
+        if (!self) return;
+
+        if (!self->running.load(std::memory_order_acquire) ||
+            self->stopping.load(std::memory_order_acquire) ||
+            xfer->status == LIBUSB_TRANSFER_CANCELLED ||
+            xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+            if (xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+                self->running.store(false, std::memory_order_release);
+            }
+            self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
+            return;
+        }
 
         for (int i = 0; i < xfer->num_iso_packets; ++i) {
             const auto& pkt = xfer->iso_packet_desc[i];
             if (pkt.status == LIBUSB_TRANSFER_COMPLETED && pkt.actual_length >= 3) {
                 const uint8_t* ptr = libusb_get_iso_packet_buffer_simple(xfer, static_cast<unsigned int>(i));
                 uint32_t fb_1616 = cav_uac2_decode_feedback_1616(ptr, pkt.actual_length, self->is_high_speed ? 1 : 0);
-                if (fb_1616 > 0x00010000u && fb_1616 < 0x04000000u) {
-                    self->rate_1616.store(fb_1616, std::memory_order_relaxed);
-                    self->update_ppm(fb_1616);
+                /* UAC2 explicit feedback is in frames per (micro)frame; scale to frames per OUT bInterval packet */
+                double base_rate = self->is_high_speed ? 8000.0 : 1000.0;
+                double interval_scale = self->pb_pkts_per_sec > 0.0 ? (base_rate / self->pb_pkts_per_sec) : 1.0;
+                uint32_t scaled_1616 = static_cast<uint32_t>(llround(static_cast<double>(fb_1616) * interval_scale));
+                if (scaled_1616 > 0x00010000u && scaled_1616 < 0x04000000u) {
+                    self->rate_1616.store(scaled_1616, std::memory_order_relaxed);
+                    self->update_ppm(scaled_1616);
                 }
             }
         }
-        libusb_submit_transfer(xfer);
+        int rc = libusb_submit_transfer(xfer);
+        if (rc != 0) {
+            self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
+            if (rc == LIBUSB_ERROR_NO_DEVICE) {
+                self->running.store(false, std::memory_order_release);
+            }
+        }
     }
 
     void update_ppm(uint32_t actual_1616) {
         int32_t sr = active_sr.load(std::memory_order_relaxed);
-        double pkts_per_sec = is_high_speed ? 8000.0 : 1000.0;
+        double pkts_per_sec = pb_pkts_per_sec > 0.0 ? pb_pkts_per_sec : (is_high_speed ? 8000.0 : 1000.0);
         double nominal = static_cast<double>(sr) / pkts_per_sec;
         double actual = static_cast<double>(actual_1616) / 65536.0;
         if (nominal > 0.01) {
@@ -170,7 +240,7 @@ struct PathBLibUsbEngine {
         }
     }
 
-    void fill_out_transfer(libusb_transfer* xfer) {
+    void fill_out_transfer(libusb_transfer* xfer, bool initial_silence) {
         const uint32_t ch = pb_stream.channels > 0 ? pb_stream.channels : 2u;
         const uint32_t subslot = pb_stream.subslot_bytes > 0 ? pb_stream.subslot_bytes : 3u;
         const uint32_t bpf = ch * subslot;
@@ -186,9 +256,14 @@ struct PathBLibUsbEngine {
                 frames = 512u;
             }
 
-            uint32_t got = cav_rb_read(&out_rb, pack_scratch, frames, 1);
-            if (got < frames) {
-                out_xruns.fetch_add(1, std::memory_order_relaxed);
+            if (initial_silence) {
+                /* Pre-zero initial startup URBs cleanly without pulling from empty ring or tripping bogus XRuns */
+                memset(pack_scratch, 0, static_cast<size_t>(frames) * 2u * sizeof(float));
+            } else {
+                uint32_t got = cav_rb_read(&out_rb, pack_scratch, frames, 1);
+                if (got < frames) {
+                    out_xruns.fetch_add(1, std::memory_order_relaxed);
+                }
             }
 
             size_t bytes = 0;
@@ -312,10 +387,15 @@ struct PathBLibUsbEngine {
         cav_rb_init(&in_rb, in_storage, kUsbRingSamples, 2u);
         out_xruns.store(0, std::memory_order_relaxed);
         in_xruns.store(0, std::memory_order_relaxed);
+        active_xfers.store(0, std::memory_order_release);
+        stopping.store(false, std::memory_order_release);
         phase_accum_1616 = 0;
 
-        double pkts_per_sec = is_high_speed ? 8000.0 : 1000.0;
-        uint32_t nom_1616 = static_cast<uint32_t>(llround((static_cast<double>(target_sr) / pkts_per_sec) * 65536.0));
+        pb_pkts_per_sec = compute_iso_packets_per_sec(pb_stream.interval, is_high_speed);
+        cap_pkts_per_sec = has_cap
+            ? compute_iso_packets_per_sec(cap_stream.interval, is_high_speed)
+            : pb_pkts_per_sec;
+        uint32_t nom_1616 = static_cast<uint32_t>(llround((static_cast<double>(target_sr) / pb_pkts_per_sec) * 65536.0));
         rate_1616.store(nom_1616, std::memory_order_release);
 
         int pkts_per_xfer = kIsoPacketsPerTransfer;
@@ -326,8 +406,9 @@ struct PathBLibUsbEngine {
         active_bits.store(pb_stream.bit_resolution > 0 ? pb_stream.bit_resolution : 24, std::memory_order_release);
         active_buf_frames.store(buffer_frames > 0 ? buffer_frames : 128, std::memory_order_release);
         active_sync_mode.store(pb_stream.feedback_ep_addr != 0 ? 1 : (pb_stream.implicit_feedback ? 2 : 3), std::memory_order_release);
+        full_duplex_flag.store(has_cap ? 1 : 0, std::memory_order_release);
 
-        float packet_ms = is_high_speed ? (pkts_per_xfer * 0.125f) : static_cast<float>(pkts_per_xfer);
+        float packet_ms = static_cast<float>(static_cast<double>(pkts_per_xfer) * 1000.0 / pb_pkts_per_sec);
         est_rtt_ms.store((kIsoTransferCount * packet_ms) + (has_cap ? packet_ms * 2.0f : 0.5f), std::memory_order_release);
 
         running.store(true, std::memory_order_release);
@@ -335,28 +416,56 @@ struct PathBLibUsbEngine {
         /* Reserve buffer storage up front so vector reallocation cannot invalidate submitted URB pointers */
         xfer_buffers.reserve(static_cast<size_t>(kIsoTransferCount * 2 + 2));
 
-        /* Allocate & submit async ISO OUT ring */
+        /* Allocate & submit async ISO OUT ring (pre-zeroed without triggering bogus startup XRuns) */
+        int submitted_out = 0;
         for (int i = 0; i < kIsoTransferCount; ++i) {
             xfer_buffers.emplace_back(static_cast<size_t>(pb_stream.max_packet_size) * pkts_per_xfer, 0);
             libusb_transfer* xfer = libusb_alloc_transfer(pkts_per_xfer);
+            if (!xfer) {
+                continue;
+            }
             libusb_fill_iso_transfer(xfer, devh, pb_stream.data_ep_addr, xfer_buffers.back().data(),
                                      static_cast<int>(xfer_buffers.back().size()), pkts_per_xfer, on_out_complete, this, 1000);
             libusb_set_iso_packet_lengths(xfer, pb_stream.max_packet_size);
-            fill_out_transfer(xfer);
+            fill_out_transfer(xfer, true);
             out_xfers.push_back(xfer);
-            libusb_submit_transfer(xfer);
+            int sub_rc = libusb_submit_transfer(xfer);
+            if (sub_rc == 0) {
+                active_xfers.fetch_add(1, std::memory_order_acq_rel);
+                submitted_out++;
+            } else {
+                CAV_USBLOGW("Path B ISO OUT submit[%d] failed: %d", i, sub_rc);
+            }
+        }
+        if (submitted_out == 0) {
+            stop_locked();
+            return -28;
         }
 
         /* Allocate & submit async ISO IN ring when full-duplex or implicit feedback is active */
         if (has_cap) {
+            int submitted_in = 0;
             for (int i = 0; i < kIsoTransferCount; ++i) {
                 xfer_buffers.emplace_back(static_cast<size_t>(cap_stream.max_packet_size) * pkts_per_xfer, 0);
                 libusb_transfer* xfer = libusb_alloc_transfer(pkts_per_xfer);
+                if (!xfer) {
+                    continue;
+                }
                 libusb_fill_iso_transfer(xfer, devh, cap_stream.data_ep_addr, xfer_buffers.back().data(),
                                          static_cast<int>(xfer_buffers.back().size()), pkts_per_xfer, on_in_complete, this, 1000);
                 libusb_set_iso_packet_lengths(xfer, cap_stream.max_packet_size);
                 in_xfers.push_back(xfer);
-                libusb_submit_transfer(xfer);
+                int sub_rc = libusb_submit_transfer(xfer);
+                if (sub_rc == 0) {
+                    active_xfers.fetch_add(1, std::memory_order_acq_rel);
+                    submitted_in++;
+                } else {
+                    CAV_USBLOGW("Path B ISO IN submit[%d] failed: %d", i, sub_rc);
+                }
+            }
+            if (submitted_in == 0) {
+                has_cap = false;
+                full_duplex_flag.store(0, std::memory_order_release);
             }
         }
 
@@ -365,11 +474,19 @@ struct PathBLibUsbEngine {
             for (int i = 0; i < 2; ++i) {
                 xfer_buffers.emplace_back(4u * 4u, 0);
                 libusb_transfer* xfer = libusb_alloc_transfer(4);
+                if (!xfer) {
+                    continue;
+                }
                 libusb_fill_iso_transfer(xfer, devh, pb_stream.feedback_ep_addr, xfer_buffers.back().data(),
                                          16, 4, on_fb_complete, this, 1000);
                 libusb_set_iso_packet_lengths(xfer, 4);
                 fb_xfers.push_back(xfer);
-                libusb_submit_transfer(xfer);
+                int sub_rc = libusb_submit_transfer(xfer);
+                if (sub_rc == 0) {
+                    active_xfers.fetch_add(1, std::memory_order_acq_rel);
+                } else {
+                    CAV_USBLOGW("Path B FB submit[%d] failed: %d", i, sub_rc);
+                }
             }
         }
 
@@ -378,22 +495,40 @@ struct PathBLibUsbEngine {
             setpriority(PRIO_PROCESS, 0, -19); /* THREAD_PRIORITY_URGENT_AUDIO */
 #endif
             struct timeval tv;
-            while (running.load(std::memory_order_acquire)) {
+            int drain_iters = 0;
+            while (running.load(std::memory_order_acquire) || active_xfers.load(std::memory_order_acquire) > 0) {
                 tv.tv_sec = 0;
                 tv.tv_usec = 10000; /* 10 ms poll ceiling */
                 libusb_handle_events_timeout_completed(ctx, &tv, nullptr);
+                if (!running.load(std::memory_order_acquire)) {
+                    /* Bounded safety ceiling (~500 ms) while draining cancelled URBs on stop */
+                    drain_iters++;
+                    if (drain_iters >= 50) {
+                        break;
+                    }
+                }
             }
         });
 
-        CAV_USBLOGI("Path B libusb UAC2 started: SR=%u bits=%d duplex=%d sync=%d",
-                    target_sr, active_bits.load(), has_cap ? 1 : 0, active_sync_mode.load());
+        CAV_USBLOGI("Path B libusb UAC2 started: SR=%u bits=%d duplex=%d sync=%d pkts/s=%.1f",
+                    target_sr, active_bits.load(), has_cap ? 1 : 0, active_sync_mode.load(), pb_pkts_per_sec);
         return 0;
     }
 
     int32_t scarlett2_xfer(int32_t vendor_if, const uint8_t* tx, int32_t tx_len, uint8_t* rx, int32_t rx_cap) {
         std::lock_guard<std::mutex> lock(ctrl_mtx);
         if (!devh || !tx || tx_len < CAV_SCARLETT_PKT_HDR_SIZE) return -1;
-        uint16_t wIndex = static_cast<uint16_t>(vendor_if >= 0 ? vendor_if : (topo.vendor_interface_num >= 0 ? topo.vendor_interface_num : 0));
+        int target_if = vendor_if >= 0 ? vendor_if : (topo.vendor_interface_num >= 0 ? topo.vendor_interface_num : 0);
+        if (claimed_vendor_if != target_if) {
+            if (claimed_vendor_if >= 0) {
+                libusb_release_interface(devh, claimed_vendor_if);
+                claimed_vendor_if = -1;
+            }
+            if (libusb_claim_interface(devh, target_if) == 0) {
+                claimed_vendor_if = target_if;
+            }
+        }
+        uint16_t wIndex = static_cast<uint16_t>(target_if);
 
         int sent = libusb_control_transfer(devh, 0x21, CAV_SCARLETT_USB_REQ_SEND, 0, wIndex,
                                            const_cast<uint8_t*>(tx), static_cast<uint16_t>(tx_len), 500);
@@ -411,35 +546,64 @@ struct PathBLibUsbEngine {
     }
 
     void stop_locked() {
+        stopping.store(true, std::memory_order_release);
         running.store(false, std::memory_order_release);
-        for (auto* x : out_xfers) libusb_cancel_transfer(x);
-        for (auto* x : in_xfers) libusb_cancel_transfer(x);
-        for (auto* x : fb_xfers) libusb_cancel_transfer(x);
-
-        if (event_thread.joinable()) {
-            event_thread.join();
+        for (auto* x : out_xfers) {
+            if (x) libusb_cancel_transfer(x);
+        }
+        for (auto* x : in_xfers) {
+            if (x) libusb_cancel_transfer(x);
+        }
+        for (auto* x : fb_xfers) {
+            if (x) libusb_cancel_transfer(x);
         }
 
-        for (auto* x : out_xfers) libusb_free_transfer(x);
-        for (auto* x : in_xfers) libusb_free_transfer(x);
-        for (auto* x : fb_xfers) libusb_free_transfer(x);
+        /* Drain all cancelled URBs until active_xfers == 0 BEFORE freeing transfers/buffers (prevents UAF SIGSEGV) */
+        if (event_thread.joinable()) {
+            event_thread.join();
+        } else if (ctx) {
+            struct timeval tv;
+            for (int iter = 0; iter < 50 && active_xfers.load(std::memory_order_acquire) > 0; ++iter) {
+                tv.tv_sec = 0;
+                tv.tv_usec = 10000;
+                libusb_handle_events_timeout_completed(ctx, &tv, nullptr);
+            }
+        }
+
+        for (auto* x : out_xfers) {
+            if (x) libusb_free_transfer(x);
+        }
+        for (auto* x : in_xfers) {
+            if (x) libusb_free_transfer(x);
+        }
+        for (auto* x : fb_xfers) {
+            if (x) libusb_free_transfer(x);
+        }
         out_xfers.clear();
         in_xfers.clear();
         fb_xfers.clear();
         xfer_buffers.clear();
+        active_xfers.store(0, std::memory_order_release);
 
-        if (devh) {
-            if (has_pb) {
-                libusb_set_interface_alt_setting(devh, pb_stream.interface_num, 0);
-                libusb_release_interface(devh, pb_stream.interface_num);
+        {
+            std::lock_guard<std::mutex> ctrl_lock(ctrl_mtx);
+            if (devh) {
+                if (claimed_vendor_if >= 0) {
+                    libusb_release_interface(devh, claimed_vendor_if);
+                    claimed_vendor_if = -1;
+                }
+                if (has_pb) {
+                    libusb_set_interface_alt_setting(devh, pb_stream.interface_num, 0);
+                    libusb_release_interface(devh, pb_stream.interface_num);
+                }
+                if (has_cap && cap_stream.interface_num != pb_stream.interface_num) {
+                    libusb_set_interface_alt_setting(devh, cap_stream.interface_num, 0);
+                    libusb_release_interface(devh, cap_stream.interface_num);
+                }
+                libusb_release_interface(devh, topo.ac_interface_num);
+                libusb_close(devh);
+                devh = nullptr;
             }
-            if (has_cap && cap_stream.interface_num != pb_stream.interface_num) {
-                libusb_set_interface_alt_setting(devh, cap_stream.interface_num, 0);
-                libusb_release_interface(devh, cap_stream.interface_num);
-            }
-            libusb_release_interface(devh, topo.ac_interface_num);
-            libusb_close(devh);
-            devh = nullptr;
         }
         if (ctx) {
             libusb_exit(ctx);
@@ -447,6 +611,8 @@ struct PathBLibUsbEngine {
         }
         has_pb = false;
         has_cap = false;
+        full_duplex_flag.store(0, std::memory_order_release);
+        stopping.store(false, std::memory_order_release);
     }
 
     void fill_status(CavProAudioStatus* st) {
@@ -456,7 +622,7 @@ struct PathBLibUsbEngine {
         st->bit_depth = active_bits.load(std::memory_order_relaxed);
         st->buffer_frames = active_buf_frames.load(std::memory_order_relaxed);
         st->is_exclusive = 1;
-        st->is_full_duplex = has_cap ? 1 : 0;
+        st->is_full_duplex = full_duplex_flag.load(std::memory_order_relaxed);
         st->sync_mode = active_sync_mode.load(std::memory_order_relaxed);
         st->output_xruns = out_xruns.load(std::memory_order_relaxed);
         st->input_xruns = in_xruns.load(std::memory_order_relaxed);

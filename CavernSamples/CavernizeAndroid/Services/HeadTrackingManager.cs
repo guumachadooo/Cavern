@@ -161,11 +161,19 @@ public sealed class HeadTrackingManager : IDisposable {
         }
         audioOutput?.UpdateOutputRoute(device);
 
-        // If user enabled head tracking and Galaxy Buds just connected, ensure RFCOMM provider is running
+        // Always sync persisted per-device HeadTrackingEnabled (restored by AudioDeviceProfileManager) immediately
+        ApplySettings();
+
+        // If Galaxy Buds just reconnected while RFCOMM provider was already active but disconnected/backing off,
+        // cycle it immediately so tracking resumes without waiting for the reconnect sleep interval.
         if (store.HeadTrackingEnabled &&
+            activeSource == HeadTrackerSourceKind.GalaxyBudsRfcomm &&
+            ReferenceEquals(activeExternal, galaxyBudsProvider) &&
             GalaxyBudsProtocol.IsSupportedGalaxyBudsName(device.DisplayName) &&
-            store.HeadTrackerSourceIndex == (int)HeadTrackerSourceKind.GalaxyBudsRfcomm) {
-            ApplySettings();
+            !galaxyBudsProvider.IsConnected) {
+            galaxyBudsProvider.Stop();
+            galaxyBudsProvider.Start();
+            RaiseStatusChanged();
         }
     }
 

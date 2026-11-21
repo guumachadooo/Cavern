@@ -44,8 +44,11 @@ public sealed class AndroidAudioOutput : IDisposable {
     volatile bool lowLatencyMode = true;
     volatile bool usbDacNativeSampleRate = true;
     volatile bool trackRebuildRequested;
+    volatile bool nativeFallbackLatched;
+    volatile bool nativeRetryRequested;
 
     AudioTrack audioTrack;
+    AudioDeviceRouteInfo lastRouteInfo;
     AudioDeviceInfo preferredDevice;
     AudioDeviceTransport activeTransport = AudioDeviceTransport.Unknown;
     string preferredDeviceName = string.Empty;
@@ -55,10 +58,12 @@ public sealed class AndroidAudioOutput : IDisposable {
     ActiveProAudioBackendKind activeBackend = ActiveProAudioBackendKind.LegacyAudioTrack;
     string lastProAudioStatusNote = string.Empty;
     int activeSampleRate;
+    int activeRequestedSampleRate;
     bool activeIsFloat32 = true;
     bool activeIsLowLatency;
     int activeFramesPerWrite = LowLatencyFramesPerWrite;
     int timestampCounter;
+    int nativeStallTicks;
 
     /// <summary>
     /// Enables <see cref="AudioTrackPerformanceMode.LowLatency"/> and 256-frame bursts (~5.3 ms @ 48 kHz).
@@ -68,7 +73,7 @@ public sealed class AndroidAudioOutput : IDisposable {
         set {
             if (lowLatencyMode != value) {
                 lowLatencyMode = value;
-                trackRebuildRequested = true;
+                RequestRebuild(retryNative: true);
             }
         }
     }
@@ -82,7 +87,7 @@ public sealed class AndroidAudioOutput : IDisposable {
             if (usbDacNativeSampleRate != value) {
                 usbDacNativeSampleRate = value;
                 engine.UsbDacNativeSampleRateEnabled = value;
-                trackRebuildRequested = true;
+                RequestRebuild(retryNative: true);
             }
         }
     }
@@ -133,7 +138,7 @@ public sealed class AndroidAudioOutput : IDisposable {
             if (usbManager != null) {
                 usbManager.DeviceStateChanged += OnUsbDeviceStateChanged;
             }
-            trackRebuildRequested = true;
+            RequestRebuild(retryNative: true);
         }
     }
 
@@ -155,12 +160,14 @@ public sealed class AndroidAudioOutput : IDisposable {
             proAudioConfig = clean;
             engine.ApplyProAudioConfig(clean);
 
-            if (clean.LockedSampleRateHz > 0) {
-                engine.SetPreferredHardwareSampleRate(clean.LockedSampleRateHz);
-            }
+            // Sync hardware sample rate cleanly, clearing any stale lock when returning to Auto (0)
+            int nextPreferredRate = clean.LockedSampleRateHz > 0
+                ? clean.LockedSampleRateHz
+                : (lastRouteInfo != null ? NegotiatePreferredUsbSampleRate(lastRouteInfo) : 0);
+            engine.SetPreferredHardwareSampleRate(nextPreferredRate);
 
             if (needRestart) {
-                trackRebuildRequested = true;
+                RequestRebuild(retryNative: true);
             }
         }
         PublishProAudioDiagnostics();
@@ -180,6 +187,7 @@ public sealed class AndroidAudioOutput : IDisposable {
                                  preferredOutputDeviceId != routeInfo.OutputDeviceId ||
                                  preferredInputDeviceId != routeInfo.InputDeviceId ||
                                  !ReferenceEquals(preferredDevice, routeInfo.NativeDevice);
+            lastRouteInfo = routeInfo;
             preferredDevice = routeInfo.Transport == AudioDeviceTransport.UsbDac ? routeInfo.NativeDevice : null;
             activeTransport = routeInfo.Transport;
             preferredDeviceName = routeInfo.DisplayName ?? string.Empty;
@@ -192,7 +200,7 @@ public sealed class AndroidAudioOutput : IDisposable {
             engine.SetPreferredHardwareSampleRate(negotiatedRate);
 
             if (deviceChanged) {
-                trackRebuildRequested = true;
+                RequestRebuild(retryNative: true);
             }
         }
     }
@@ -200,10 +208,18 @@ public sealed class AndroidAudioOutput : IDisposable {
     void OnUsbDeviceStateChanged(UsbProAudioDeviceSnapshot snap) {
         lock (lifecycleLock) {
             if (proAudioConfig.Enabled) {
-                trackRebuildRequested = true;
+                RequestRebuild(retryNative: true);
             }
         }
         PublishProAudioDiagnostics();
+    }
+
+    void RequestRebuild(bool retryNative) {
+        if (retryNative) {
+            nativeFallbackLatched = false;
+            nativeRetryRequested = true;
+        }
+        trackRebuildRequested = true;
     }
 
     /// <summary>
@@ -250,6 +266,9 @@ public sealed class AndroidAudioOutput : IDisposable {
             if (running) {
                 return;
             }
+            nativeFallbackLatched = false;
+            nativeRetryRequested = true;
+            nativeStallTicks = 0;
             running = true;
             renderThread = new Thread(AudioLoop) {
                 Name = "CavernizeAudioOut",
@@ -331,11 +350,15 @@ public sealed class AndroidAudioOutput : IDisposable {
             bool shouldUseNative = ShouldAttemptNativeProAudio();
 
             if (trackRebuildRequested ||
-                activeSampleRate != targetRate ||
+                activeRequestedSampleRate != targetRate ||
                 (shouldUseNative && activeBackend == ActiveProAudioBackendKind.LegacyAudioTrack) ||
                 (!shouldUseNative && activeBackend != ActiveProAudioBackendKind.LegacyAudioTrack) ||
                 (activeBackend == ActiveProAudioBackendKind.LegacyAudioTrack && audioTrack == null)) {
                 trackRebuildRequested = false;
+                if (nativeRetryRequested) {
+                    nativeRetryRequested = false;
+                    nativeFallbackLatched = false;
+                }
                 ReconfigureBackend(targetRate);
             }
 
@@ -381,6 +404,11 @@ public sealed class AndroidAudioOutput : IDisposable {
     }
 
     int ResolveTargetSampleRate() {
+        // When headphone HRTF virtualization is active, VirtualizerFilter renders strictly at FilterSampleRate (48 kHz).
+        // Never clock the hardware stream at a mismatched LockedSampleRateHz (prevents 2x pitch / chipmunk distortion).
+        if (engine.HeadphoneVirtualizer) {
+            return Math.Clamp(engine.OutputSampleRate, 44100, 192000);
+        }
         int locked = proAudioConfig.LockedSampleRateHz;
         if (locked >= 44100 && locked <= 192000) {
             return locked;
@@ -392,7 +420,8 @@ public sealed class AndroidAudioOutput : IDisposable {
         ProAudioDuplexConfig cfg = proAudioConfig;
         return cfg.Enabled &&
                cfg.PreferredPath != ProAudioEnginePath.LegacyAudioTrack &&
-               NativeProAudioBridge.IsAvailable;
+               NativeProAudioBridge.IsAvailable &&
+               !nativeFallbackLatched;
     }
 
     void PumpNativeFullDuplexIteration() {
@@ -410,11 +439,13 @@ public sealed class AndroidAudioOutput : IDisposable {
             if (rendered > 0) {
                 int written = NativeProAudioBridge.WritePlayback(floatRenderBuffer, rendered);
                 if (written <= 0) {
-                    // Native backend disconnected (e.g., USB unplugged) -> trigger clean fallback
-                    trackRebuildRequested = true;
+                    // Native backend stopped or disconnected (e.g., USB unplugged / AAudio error) -> recover cleanly
+                    nativeStallTicks = 0;
+                    RequestRebuild(retryNative: true);
                     Thread.Sleep(4);
                     return;
                 }
+                nativeStallTicks = 0;
                 timestampCounter++;
                 if (timestampCounter >= 24) {
                     timestampCounter = 0;
@@ -424,6 +455,18 @@ public sealed class AndroidAudioOutput : IDisposable {
                 Thread.Sleep(2);
             }
         } else {
+            // Detect AAudio AAUDIO_ERROR_DISCONNECTED / libusb halt (ActiveBackend == 0) while OUT ring stops draining
+            nativeStallTicks++;
+            if (nativeStallTicks >= 12) {
+                nativeStallTicks = 0;
+                if (NativeProAudioBridge.TryGetStatus(out NativeProAudioStatus st) &&
+                    st.ActiveBackend == NativeProAudioBridge.BackendNone) {
+                    AppLogger.Warn("Pro-Audio native backend reported disconnect (ActiveBackend=0); triggering auto-recovery.");
+                    RequestRebuild(retryNative: true);
+                    Thread.Sleep(6);
+                    return;
+                }
+            }
             // Sub-millisecond yield while native callback drains OUT ring
             Thread.Sleep(1);
         }
@@ -436,14 +479,24 @@ public sealed class AndroidAudioOutput : IDisposable {
 
             ProAudioDuplexConfig cfg = proAudioConfig;
             int resolvedRate = ResolveClosestSupportedRate(sampleRate);
+            activeRequestedSampleRate = sampleRate;
+            nativeStallTicks = 0;
             int burst = Math.Clamp((int)cfg.BufferFrames, 64, 256);
             bool needInput = cfg.LiveMicEnabled || engine.LiveMicBridge.IsCalibratingLatency;
             lastProAudioStatusNote = string.Empty;
 
-            if (cfg.Enabled && cfg.PreferredPath != ProAudioEnginePath.LegacyAudioTrack) {
+            if (engine.HeadphoneVirtualizer && cfg.LockedSampleRateHz > 0 && cfg.LockedSampleRateHz != resolvedRate) {
+                lastProAudioStatusNote = $"HRIR virtualization locks output to {resolvedRate} Hz (ignoring {cfg.LockedSampleRateHz} Hz lock).";
+            }
+
+            bool attemptedNative = false;
+            if (cfg.Enabled && cfg.PreferredPath != ProAudioEnginePath.LegacyAudioTrack && !nativeFallbackLatched) {
                 if (!NativeProAudioBridge.IsAvailable) {
                     lastProAudioStatusNote = "Native libcavernize_proaudio.so not bundled; using AudioTrack fallback.";
+                    nativeFallbackLatched = true;
                 } else {
+                    attemptedNative = true;
+
                     // Cascade Step 1: Path B (Unrooted libusb-1.0 UAC2 Direct Full-Duplex)
                     bool wantPathB = cfg.PreferredPath == ProAudioEnginePath.Auto ||
                                      cfg.PreferredPath == ProAudioEnginePath.PathBDirectUsbUac2;
@@ -454,13 +507,20 @@ public sealed class AndroidAudioOutput : IDisposable {
                             if (fd >= 0) {
                                 int rc = NativeProAudioBridge.StartLibUsb(fd, resolvedRate, burst, needInput);
                                 if (rc == 0) {
+                                    usbManager.NotifyPathBFileDescriptorState(ownedByPathB: true);
                                     activeBackend = ActiveProAudioBackendKind.LibUsbUac2Direct;
                                     activeSampleRate = resolvedRate;
                                     activeIsFloat32 = true;
                                     activeIsLowLatency = true;
                                     activeFramesPerWrite = burst;
+                                    if (NativeProAudioBridge.TryGetStatus(out NativeProAudioStatus pbSt) && pbSt.SampleRate >= 44100) {
+                                        activeSampleRate = pbSt.SampleRate;
+                                    }
+                                    if (!engine.HeadphoneVirtualizer && activeSampleRate != resolvedRate) {
+                                        engine.SetPreferredHardwareSampleRate(activeSampleRate);
+                                    }
                                     engine.LiveMicBridge.SetStreamingActive(needInput, activeSampleRate);
-                                    AppLogger.Info($"Pro-Audio Path B (libusb UAC2) active: {resolvedRate} Hz, {burst}f, Duplex={needInput}, Device='{usbSnap.DisplayName}'");
+                                    AppLogger.Info($"Pro-Audio Path B (libusb UAC2) active: {activeSampleRate} Hz, {burst}f, Duplex={needInput}, Device='{usbSnap.DisplayName}'");
                                     PublishDiagnostics();
                                     return;
                                 }
@@ -494,8 +554,12 @@ public sealed class AndroidAudioOutput : IDisposable {
                             if (NativeProAudioBridge.TryGetStatus(out NativeProAudioStatus st) && st.SampleRate >= 44100) {
                                 activeSampleRate = st.SampleRate;
                             }
+                            if (!engine.HeadphoneVirtualizer && activeSampleRate != resolvedRate) {
+                                // Keep Direct 2.0 DSP rate matched to AAudio's negotiated hardware rate without thrashing
+                                engine.SetPreferredHardwareSampleRate(activeSampleRate);
+                            }
                             engine.LiveMicBridge.SetStreamingActive(needInput, activeSampleRate);
-                            AppLogger.Info($"Pro-Audio Path A (AAudio Exclusive) active: {activeSampleRate} Hz, {burst}f, Duplex={needInput}, OutId={preferredOutputDeviceId}, InId={preferredInputDeviceId}");
+                            AppLogger.Info($"Pro-Audio Path A (AAudio Exclusive) active: {activeSampleRate} Hz (req={resolvedRate} Hz), {burst}f, Duplex={needInput}, OutId={preferredOutputDeviceId}, InId={preferredInputDeviceId}");
                             PublishDiagnostics();
                             return;
                         }
@@ -506,6 +570,10 @@ public sealed class AndroidAudioOutput : IDisposable {
             }
 
             // Cascade Step 3: Legacy Zero-GC AudioTrack Fallback
+            if (attemptedNative) {
+                // Latch fallback until config/device/USB state changes to prevent infinite ReconfigureBackend thrash loop
+                nativeFallbackLatched = true;
+            }
             activeBackend = ActiveProAudioBackendKind.LegacyAudioTrack;
             engine.LiveMicBridge.SetStreamingActive(false, resolvedRate);
             BuildLegacyAudioTrackLocked(resolvedRate);
@@ -514,8 +582,12 @@ public sealed class AndroidAudioOutput : IDisposable {
 
     void StopNativeBackendLocked() {
         if (activeBackend != ActiveProAudioBackendKind.LegacyAudioTrack) {
+            bool wasPathB = activeBackend == ActiveProAudioBackendKind.LibUsbUac2Direct;
             NativeProAudioBridge.Stop();
             activeBackend = ActiveProAudioBackendKind.LegacyAudioTrack;
+            if (wasPathB) {
+                usbManager?.NotifyPathBFileDescriptorState(ownedByPathB: false);
+            }
             engine.LiveMicBridge.SetStreamingActive(false, Math.Max(44100, activeSampleRate));
         }
     }

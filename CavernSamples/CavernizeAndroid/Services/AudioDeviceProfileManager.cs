@@ -211,6 +211,10 @@ public sealed class AudioDeviceProfileManager : IDisposable {
                         ActiveDeviceChanged?.Invoke(device, autoBinding, true);
                     }
                 } else {
+                    // Notify listeners immediately so audio route / USB DAC / head-tracking state updates even offline
+                    if (notifyListeners) {
+                        ActiveDeviceChanged?.Invoke(device, autoBinding, true);
+                    }
                     // Catalog match not bundled offline: fetch asynchronously in background & apply seamlessly
                     _ = FetchAndApplyAutoMatchAsync(device, autoBinding);
                 }
@@ -274,7 +278,7 @@ public sealed class AudioDeviceProfileManager : IDisposable {
                     return;
                 }
                 AutoEqService.ApplyProfileToEngine(store, engine, fetched);
-                ActiveDeviceChanged?.Invoke(device, binding, binding.AutoMatched);
+                ActiveDeviceChanged?.Invoke(device, binding, false);
             });
         } catch (Exception ex) {
             AppLogger.Warn($"Background AutoEq fetch failed for '{binding.AutoEqProfileName}': {ex.Message}");

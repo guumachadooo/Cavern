@@ -239,24 +239,3 @@ public interface ILiveMicrophoneProvider {
     /// <summary>Pulls sample-locked stereo interleaved live microphone frames on the playback render thread (zero-GC, lock-free).</summary>
     int PullRoutedStereoBlock(float[] stereoOut, int offset, int frameCount);
 }
-
-/// <summary>
-/// Unified Slot 1 / Slot 4 full-duplex audio backend contract implemented by Path B (<c>libusb</c> UAC2),
-/// Path A (<c>AAudio/Oboe</c> Exclusive), and Legacy <c>AudioTrack</c>.
-/// </summary>
-public interface IFullDuplexAudioBackend : IDisposable {
-    /// <summary>Backend implementation category.</summary>
-    ActiveProAudioBackendKind BackendKind { get; }
-
-    /// <summary>True when the backend stream is open and actively pumping audio.</summary>
-    bool IsRunning { get; }
-
-    /// <summary>Opens and starts the audio stream with the specified configuration and optional live mic sink.</summary>
-    bool TryStart(ProAudioDuplexConfig config, int sampleRate, int preferredOutputDeviceId, int preferredInputDeviceId, int usbFileDescriptor);
-
-    /// <summary>Stops and releases hardware resources cleanly.</summary>
-    void Stop();
-
-    /// <summary>Queries the latest live backend diagnostics snapshot.</summary>
-    ProAudioDuplexDiagnostics GetDiagnostics();
-}

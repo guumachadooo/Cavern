@@ -76,6 +76,7 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     ScarlettHardwareState scarlettState = new();
     ushort scarlettSeq = 1;
     bool scarlettInitialized;
+    volatile bool pathBOwnsFileDescriptor;
     bool registered;
     bool disposed;
 
@@ -210,6 +211,16 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     }
 
     /// <summary>
+    /// Coordinates exclusive ownership of the open Linux USB file descriptor with native Path B (<c>libusb</c>)
+    /// so <see cref="UsbDeviceConnection.ControlTransfer"/> never contends on the same <c>usbfs</c> FD while Path B is active.
+    /// </summary>
+    public void NotifyPathBFileDescriptorState(bool ownedByPathB) {
+        lock (syncLock) {
+            pathBOwnsFileDescriptor = ownedByPathB;
+        }
+    }
+
+    /// <summary>
     /// Ensures the active permitted USB audio device is opened and returns its raw Linux file descriptor
     /// for Path B (<c>libusb_wrap_sys_device</c>), or -1 if unavailable.
     /// </summary>
@@ -229,12 +240,13 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     }
 
     /// <summary>
-    /// Initializes Focusrite Scarlett2 Gen 3/4 host control mode (<c>CMD_INIT_1</c> + <c>CMD_INIT_2</c>)
-    /// and disables MSD ("Easy Start") mode if requested so the interface operates in full UAC2 pro-audio mode.
+    /// Initializes Focusrite Scarlett2 host control mode (<c>CMD_INIT_1</c> + <c>CMD_INIT_2</c>) on verified
+    /// control-table devices (Gen 3, or Gen 4 once FCP table discovery is verified) and optionally disables
+    /// MSD ("Easy Start") mode so the interface operates in full UAC2 pro-audio mode.
     /// </summary>
     public bool TryInitializeScarlettControl(bool exitMsdMode = false) {
         lock (syncLock) {
-            if (scarlettState.Generation != ScarlettGeneration.Gen3 && scarlettState.Generation != ScarlettGeneration.Gen4) {
+            if (!scarlettState.SupportsSoftwareControls) {
                 return false;
             }
             int vendorIf = snapshot.Topology?.VendorControlInterface ?? -1;
@@ -636,6 +648,23 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
         }
     }
 
+    /// <summary>
+    /// Computes the recommended preamp gain (0..69 dB) to target <paramref name="targetPeakDbfs"/> using
+    /// <see cref="Scarlett2Protocol.ComputeRecommendedAutoGainDb"/>. Uses live Scarlett hardware meter readings when
+    /// available and falls back cleanly to <paramref name="fallbackLiveMicPeakDbfs"/> from <see cref="Cavernize.Logic.Spatial.LiveMicrophoneBridge"/>.
+    /// </summary>
+    public float ComputeRecommendedSoftwareAutoGainDb(
+        int channelIndex,
+        float fallbackLiveMicPeakDbfs,
+        float targetPeakDbfs = -12f) {
+        lock (syncLock) {
+            float hwPeak = channelIndex == 1 ? scarlettState.InputMeterCh2Dbfs : scarlettState.InputMeterCh1Dbfs;
+            float measuredPeak = hwPeak > -115f ? hwPeak : fallbackLiveMicPeakDbfs;
+            float currentGain = channelIndex == 1 ? scarlettState.InputGainCh2Db : scarlettState.InputGainCh1Db;
+            return Scarlett2Protocol.ComputeRecommendedAutoGainDb(measuredPeak, currentGain, targetPeakDbfs);
+        }
+    }
+
     bool EnsureScarlettReadyLocked(out int vendorIf) {
         vendorIf = snapshot.Topology?.VendorControlInterface ?? -1;
         if (vendorIf < 0 || !scarlettState.SupportsSoftwareControls) {
@@ -681,14 +710,16 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     }
 
     /// <summary>
-    /// Dual-transport Scarlett2 vendor control exchange: routes through Path B <c>libusb</c> when Path B owns the FD,
-    /// otherwise uses Android <see cref="UsbDeviceConnection.ControlTransfer"/> directly so Scarlett 2i2 controls work
-    /// even when audio is streaming via Path A (AAudio) or idle.
+    /// Dual-transport Scarlett2 vendor control exchange: routes exclusively through Path B <c>libusb</c> while Path B
+    /// owns the USB file descriptor (preventing dual-FD <c>usbfs</c> contention), otherwise claims the vendor
+    /// <see cref="UsbInterface"/> before invoking Android <see cref="UsbDeviceConnection.ControlTransfer"/> and releases
+    /// it immediately afterward so Scarlett controls work cleanly under Path A (AAudio) or when idle.
     /// </summary>
     int TransferScarlettPacketLocked(int vendorIf, byte[] tx, byte[] rx) {
-        // 1. If Path B libusb is actively running, route through its open libusb_device_handle to avoid contention
-        if (NativeProAudioBridge.TryGetStatus(out NativeProAudioStatus st) &&
-            st.ActiveBackend == NativeProAudioBridge.BackendPathBLibUsb) {
+        // 1. While Path B libusb owns the FD, NEVER issue direct Android UsbDeviceConnection transfers on the same FD
+        if (pathBOwnsFileDescriptor ||
+            (NativeProAudioBridge.TryGetStatus(out NativeProAudioStatus st) &&
+             st.ActiveBackend == NativeProAudioBridge.BackendPathBLibUsb)) {
             return NativeProAudioBridge.Scarlett2Xfer(vendorIf, tx, tx.Length, rx, rx.Length);
         }
 
@@ -699,11 +730,16 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             }
             TryOpenActiveDeviceLocked();
         }
-        if (activeConnection == null) {
+        if (activeConnection == null || activeDevice == null) {
             return -1;
         }
 
+        UsbInterface vendorUsbIf = FindInterfaceById(activeDevice, vendorIf);
+        bool claimed = false;
         try {
+            if (vendorUsbIf != null) {
+                claimed = activeConnection.ClaimInterface(vendorUsbIf, true);
+            }
             int sent = activeConnection.ControlTransfer(
                 (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceOut,
                 Scarlett2Protocol.UsbReqCmdSend,
@@ -726,7 +762,28 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
         } catch (Exception ex) {
             AppLogger.Warn($"Scarlett2 ControlTransfer error: {ex.Message}");
             return -2;
+        } finally {
+            if (claimed && vendorUsbIf != null) {
+                try {
+                    activeConnection.ReleaseInterface(vendorUsbIf);
+                } catch {
+                    // Ignore release failures on abrupt USB disconnect
+                }
+            }
         }
+    }
+
+    static UsbInterface FindInterfaceById(UsbDevice dev, int interfaceId) {
+        if (dev == null || interfaceId < 0) {
+            return null;
+        }
+        for (int i = 0; i < dev.InterfaceCount; i++) {
+            UsbInterface iface = dev.GetInterface(i);
+            if (iface != null && iface.Id == interfaceId) {
+                return iface;
+            }
+        }
+        return null;
     }
 
     ushort NextScarlettSeqLocked() {
@@ -930,6 +987,7 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     }
 
     void CloseConnectionLocked() {
+        pathBOwnsFileDescriptor = false;
         if (activeConnection != null) {
             try {
                 activeConnection.Close();

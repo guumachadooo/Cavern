@@ -532,6 +532,20 @@ public sealed class AndroidStrings {
         ["HeadTrackingStatusIdle"] = "Head tracking inactive (using Manual 3D Room controls).",
         ["HeadTrackingStatusLive"] = "Active • {0}",
         ["HeadTrackingPermNeededToast"] = "Bluetooth permission is needed to connect to Galaxy Buds / BLE head trackers.",
+        ["HtImuActiveGrv"] = "Active • GameRotationVector",
+        ["HtImuActiveFusion"] = "Active • Fusion 6-Axis AHRS",
+        ["HtImuUnavailable"] = "No IMU sensors available on device",
+        ["HtBudsPermRequired"] = "BLUETOOTH_CONNECT permission required",
+        ["HtBudsNonePaired"] = "No paired Galaxy Buds found",
+        ["HtBudsConnecting"] = "Connecting to {0}...",
+        ["HtBudsWaiting"] = "Waiting for {0}...",
+        ["HtBudsConnected"] = "Connected • {0}",
+        ["HtBudsReconnecting"] = "Reconnecting to {0}...",
+        ["HtBleOscListening"] = "Listening UDP :{0} + BLE",
+        ["HtBleOscUdpBusy"] = "UDP :{0} busy ({1})",
+        ["HtBleOscLive"] = "Live • {0}{1}",
+        ["HtBleConnecting"] = "Connecting BLE • {0}...",
+        ["HtBleConnected"] = "Connected • BLE {0}",
         ["TipLowLatencyAudio"] = "Requests Android AudioTrackPerformanceMode.LowLatency with pre-allocated zero-GC 256-frame bursts (~5.3 ms at 48 kHz) to minimize audio-to-motion lag during head tracking.",
         ["TipUsbDacNativeSr"] = "Routes Direct 2.0 playback explicitly to connected USB-C DACs via SetPreferredDevice using 32-bit IEEE Float (PcmFloat) and native sample rates (44.1–192 kHz). Headphone HRTF remains locked to 48 kHz to preserve laboratory HRIR accuracy.",
         ["TipHeadTracking"] = "Rotates the 3D acoustic room in real time with your head using Samsung Galaxy Buds RFCOMM quaternions, Android 6-axis IMU (GameRotationVector / Fusion AHRS), or external BLE / UDP OSC trackers (Mr. Headtracker, IEM, SPARTA, OpenTrack).",
@@ -843,6 +857,10 @@ public sealed class AndroidStrings {
         ["ScarlettExitMsdDoneToast"] = "Scarlett MSD disabled & saved. Reconnect USB if needed.",
         ["ScarlettReadMetersBtn"] = "Read HW Meters",
         ["ScarlettMetersFormat"] = "HW Peak Meters: In 1 {0:0.1} dBFS · In 2 {1:0.1} dBFS",
+        ["ScarlettGen4FcpNotice"] = "Focusrite Scarlett 4th Gen uses the Focusrite Control Protocol (FCP), whose parameter map varies by firmware table. Streaming runs natively at 24-bit UAC2 while unsafe static NVRAM writes remain locked until dynamic FCP discovery is verified. Use front-panel preamp controls and Gain Assist below.",
+        ["ScarlettGainAssistBtn"] = "Gain Assist (-12 dBFS)",
+        ["ScarlettGainAssistFormat"] = "Gain Assist (-12 dBFS target): Ch 1 → {0:0.0} dB · Ch 2 → {1:0.0} dB",
+        ["ScarlettGainAssistNoSignalToast"] = "Play or sing into the microphone first so Gain Assist can measure input peak.",
 
         // W12 Next-Gen Formats & Studio Batch Exporter
         ["StudioW12CardTitle"] = "Studio Master Presets (W12)",
@@ -1413,6 +1431,20 @@ public sealed class AndroidStrings {
         d["HeadTrackingStatusIdle"] = "Rastreamento inativo (usando controles manuais da Sala 3D).";
         d["HeadTrackingStatusLive"] = "Ativo • {0}";
         d["HeadTrackingPermNeededToast"] = "Permissão de Bluetooth necessária para conectar a Galaxy Buds / sensores BLE.";
+        d["HtImuActiveGrv"] = "Ativo • GameRotationVector";
+        d["HtImuActiveFusion"] = "Ativo • Fusion AHRS 6 Eixos";
+        d["HtImuUnavailable"] = "Nenhum sensor IMU disponível no dispositivo";
+        d["HtBudsPermRequired"] = "Permissão BLUETOOTH_CONNECT necessária";
+        d["HtBudsNonePaired"] = "Nenhum Galaxy Buds pareado encontrado";
+        d["HtBudsConnecting"] = "Conectando a {0}...";
+        d["HtBudsWaiting"] = "Aguardando {0}...";
+        d["HtBudsConnected"] = "Conectado • {0}";
+        d["HtBudsReconnecting"] = "Reconectando a {0}...";
+        d["HtBleOscListening"] = "Escutando UDP :{0} + BLE";
+        d["HtBleOscUdpBusy"] = "UDP :{0} ocupado ({1})";
+        d["HtBleOscLive"] = "Ao vivo • {0}{1}";
+        d["HtBleConnecting"] = "Conectando BLE • {0}...";
+        d["HtBleConnected"] = "Conectado • BLE {0}";
         d["TipLowLatencyAudio"] = "Solicita AudioTrackPerformanceMode.LowLatency com blocos pré-alocados zero-GC de 256 frames (~5,3 ms em 48 kHz) para reduzir o atraso entre movimento da cabeça e som.";
         d["TipUsbDacNativeSr"] = "Roteia a saída Direto 2.0 diretamente para DACs USB-C via SetPreferredDevice em 32-bit IEEE Float (PcmFloat) e taxa nativa (44,1–192 kHz). Com HRTF binaural ativo, mantém 48 kHz exatos para preservar a precisão dos HRIRs de laboratório.";
         d["TipHeadTracking"] = "Gira a sala acústica 3D em tempo real conforme sua cabeça se move usando quatérnions RFCOMM dos Samsung Galaxy Buds, IMU de 6 eixos do Android (GameRotationVector / Fusion AHRS) ou sensores externos BLE / OSC UDP (Mr. Headtracker, IEM, SPARTA, OpenTrack).";
@@ -1724,6 +1756,10 @@ public sealed class AndroidStrings {
         d["ScarlettExitMsdDoneToast"] = "Modo MSD da Scarlett desativado e salvo. Reconecte o USB se necessário.";
         d["ScarlettReadMetersBtn"] = "Ler Medidores HW";
         d["ScarlettMetersFormat"] = "Picos de Hardware: Ent 1 {0:0.1} dBFS · Ent 2 {1:0.1} dBFS";
+        d["ScarlettGen4FcpNotice"] = "A Focusrite Scarlett 4ª Geração usa o protocolo FCP (Focusrite Control Protocol), cujo mapa de parâmetros varia por firmware. O áudio opera nativamente em UAC2 24-bit, enquanto gravações estáticas inseguras na NVRAM ficam bloqueadas até a descoberta FCP dinâmica ser verificada. Use o painel frontal e o Assistente de Ganho abaixo.";
+        d["ScarlettGainAssistBtn"] = "Assistente Ganho (-12 dBFS)";
+        d["ScarlettGainAssistFormat"] = "Assistente de Ganho (alvo -12 dBFS): C1 → {0:0.0} dB · C2 → {1:0.0} dB";
+        d["ScarlettGainAssistNoSignalToast"] = "Toque ou cante no microfone primeiro para o Assistente de Ganho medir o pico de entrada.";
 
         // W12 Next-Gen Formats & Studio Batch Exporter
         d["StudioW12CardTitle"] = "Presets Master de Estúdio (W12)";

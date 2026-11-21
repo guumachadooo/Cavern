@@ -19,15 +19,8 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
     readonly float[] producerStereoScratch = new float[MaxScratchFrames * 2];
     readonly float[] consumerStereoScratch = new float[MaxScratchFrames * 2];
 
-    // Pure-physics MLS loopback RTT calibration buffers (allocated only when user triggers calibration)
-    readonly object calibLock = new();
-    float[] calibProbe;
-    float[] calibCaptureBuffer;
-    int calibEmitCursor;
-    int calibCaptureCursor;
-    int calibSampleRate = 48000;
-    volatile bool calibActive;
-    Action<RoundTripLatencyResult> calibCompletedCallback;
+    // Lock-free pure-physics MLS loopback RTT calibration session (allocated only when user triggers calibration)
+    volatile CalibrationSession activeCalibSession;
 
     volatile bool isActive;
     volatile int sampleRate = 48000;
@@ -38,6 +31,7 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
     volatile float peakDbfs = -120f;
     volatile float latestRttMs;
     Vector3 normalizedPosition = new(0f, 0.05f, 0.72f);
+    Vector3 roomEnvironmentSize = new(10f, 7f, 10f);
 
     /// <inheritdoc/>
     public bool IsActive => isActive;
@@ -58,7 +52,7 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
     public float MonitorLevel => monitorLevel;
 
     /// <summary>True while an MLS loopback round-trip latency measurement is in progress.</summary>
-    public bool IsCalibratingLatency => calibActive;
+    public bool IsCalibratingLatency => activeCalibSession != null;
 
     /// <summary>Latest measured or estimated full-duplex round-trip latency in milliseconds.</summary>
     public float RoundTripLatencyMs {
@@ -78,13 +72,16 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
     /// <summary>
     /// Applies updated W10 Pro-Audio live microphone configuration without heap allocation on the audio thread.
     /// </summary>
-    public void ApplyConfig(ProAudioDuplexConfig config, int activeSampleRate) {
+    public void ApplyConfig(ProAudioDuplexConfig config, int activeSampleRate, Vector3 environmentSize = default) {
         ProAudioDuplexConfig safe = (config ?? ProAudioDuplexConfig.Default).Sanitize();
         sampleRate = Math.Clamp(activeSampleRate, 44100, 192000);
         routingMode = safe.MicRouting;
         inputGainLinear = MathF.Pow(10f, safe.MicInputGainDb / 20f);
         monitorLevel = safe.MicMonitorLevel;
         normalizedPosition = safe.MicNormalizedPosition;
+        if (environmentSize.X > 0.1f && environmentSize.Y > 0.1f && environmentSize.Z > 0.1f) {
+            roomEnvironmentSize = environmentSize;
+        }
         if (safe.CalibratedRoundTripMs > 0f) {
             latestRttMs = safe.CalibratedRoundTripMs;
         }
@@ -133,29 +130,23 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
     }
 
     /// <summary>
-    /// Begins a pure-physics 9-bit MLS loopback round-trip latency calibration (~300 ms capture window).
+    /// Begins a pure-physics 9-bit MLS loopback round-trip latency calibration (~350 ms capture window).
+    /// Capture runs lock-free on the real-time thread and cross-correlation runs off-thread via <see cref="Task.Run"/>.
     /// </summary>
     public void StartRoundTripCalibration(int activeSampleRate, Action<RoundTripLatencyResult> onCompleted) {
         int sr = Math.Clamp(activeSampleRate, 44100, 192000);
         int captureFrames = Math.Clamp((int)Math.Round(sr * 0.35), 8192, 96000);
-        lock (calibLock) {
-            calibSampleRate = sr;
-            calibProbe = RoundTripLatencyCalibrator.GenerateMlsProbe(RoundTripLatencyCalibrator.DefaultProbeAmplitude);
-            calibCaptureBuffer = new float[captureFrames];
-            calibEmitCursor = 0;
-            calibCaptureCursor = 0;
-            calibCompletedCallback = onCompleted;
-            calibActive = true;
-        }
+        float[] probe = RoundTripLatencyCalibrator.GenerateMlsProbe(RoundTripLatencyCalibrator.DefaultProbeAmplitude);
+        activeCalibSession = new CalibrationSession(probe, new float[captureFrames], sr, onCompleted);
     }
 
     /// <summary>
     /// Cancels any active MLS loopback round-trip latency calibration.
     /// </summary>
     public void CancelRoundTripCalibration() {
-        lock (calibLock) {
-            calibActive = false;
-            calibCompletedCallback = null;
+        CalibrationSession prev = Interlocked.Exchange(ref activeCalibSession, null);
+        if (prev != null) {
+            Interlocked.Exchange(ref prev.CompletedFlag, 1);
         }
     }
 
@@ -174,6 +165,8 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         float blockPeak = 0f;
         double blockSqSum = 0.0;
         int meteredSamples = 0;
+
+        CalibrationSession calib = activeCalibSession;
 
         while (remaining > 0) {
             int chunk = Math.Min(remaining, MaxScratchFrames);
@@ -215,8 +208,16 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
                 blockSqSum += 0.5 * (outL * outL + outR * outR);
                 meteredSamples++;
 
-                if (calibActive) {
-                    RecordCalibrationSample(0.5f * (ch0 + ch1));
+                if (calib != null && calib.CompletedFlag == 0) {
+                    int capIdx = calib.CaptureCursor;
+                    if (capIdx < calib.CaptureBuffer.Length) {
+                        calib.CaptureBuffer[capIdx] = 0.5f * (ch0 + ch1);
+                        calib.CaptureCursor = capIdx + 1;
+                    }
+                    if (calib.CaptureCursor >= calib.CaptureBuffer.Length) {
+                        FinishCalibrationAsync(calib);
+                        calib = null;
+                    }
                 }
             }
 
@@ -254,14 +255,16 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         float[] stereoOutput,
         int outOffset,
         int frameCount,
-        ListenerPose6DoF listenerPose) {
+        ListenerPose6DoF listenerPose,
+        Vector3 environmentSize = default) {
         if (stereoOutput == null || frameCount <= 0) {
             return false;
         }
 
         // Priority 1: MLS Loopback Calibration probe replaces output cleanly while measuring hardware RTT
-        if (calibActive) {
-            EmitCalibrationBlock(stereoOutput, outOffset, frameCount);
+        CalibrationSession calib = activeCalibSession;
+        if (calib != null && calib.CompletedFlag == 0) {
+            EmitCalibrationBlock(calib, stereoOutput, outOffset, frameCount);
             return true;
         }
 
@@ -272,14 +275,18 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         // Keep capture backlog tightly bounded (< 3 blocks) to guarantee sample-locked Karaoke monitoring
         TrimLatencyBacklog(Math.Max(256, frameCount * 2));
 
-        // Compute equal-power 3D azimuth panning from live mic room position relative to head-tracked listener orientation
+        // Compute equal-power 3D azimuth panning in Cavern world meters relative to head-tracked 6DoF listener pose
         float gainL;
         float gainR;
         if (routingMode == LiveMicRoutingMode.StereoPair) {
             gainL = monitorLevel;
             gainR = monitorLevel;
         } else {
-            Vector3 rel = normalizedPosition - listenerPose.Position;
+            Vector3 envMeters = environmentSize.X > 0.1f && environmentSize.Y > 0.1f && environmentSize.Z > 0.1f
+                ? environmentSize
+                : roomEnvironmentSize;
+            Vector3 micWorldMeters = normalizedPosition * envMeters;
+            Vector3 rel = micWorldMeters - listenerPose.Position;
             Quaternion invOrient = Quaternion.Conjugate(listenerPose.Orientation);
             Vector3 headLocal = Vector3.Transform(rel, invOrient);
             float horiz = MathF.Sqrt(headLocal.X * headLocal.X + headLocal.Z * headLocal.Z);
@@ -339,51 +346,54 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         };
     }
 
-    void EmitCalibrationBlock(float[] stereoOutput, int outOffset, int frameCount) {
+    static void EmitCalibrationBlock(CalibrationSession session, float[] stereoOutput, int outOffset, int frameCount) {
         Array.Clear(stereoOutput, outOffset, frameCount * 2);
-        lock (calibLock) {
-            if (!calibActive || calibProbe == null) {
-                return;
-            }
-            for (int f = 0; f < frameCount; f++) {
-                float s = calibEmitCursor < calibProbe.Length ? calibProbe[calibEmitCursor] : 0f;
-                calibEmitCursor++;
-                stereoOutput[outOffset + f * 2] = s;
-                stereoOutput[outOffset + f * 2 + 1] = s;
-            }
+        if (session == null || session.Probe == null || session.CompletedFlag != 0) {
+            return;
         }
+        float[] probe = session.Probe;
+        int cursor = session.EmitCursor;
+        for (int f = 0; f < frameCount; f++) {
+            float s = cursor < probe.Length ? probe[cursor] : 0f;
+            cursor++;
+            stereoOutput[outOffset + f * 2] = s;
+            stereoOutput[outOffset + f * 2 + 1] = s;
+        }
+        session.EmitCursor = cursor;
     }
 
-    void RecordCalibrationSample(float sample) {
-        RoundTripLatencyResult? finished = null;
-        Action<RoundTripLatencyResult> cb = null;
-        lock (calibLock) {
-            if (!calibActive || calibCaptureBuffer == null || calibProbe == null) {
-                return;
-            }
-            if (calibCaptureCursor < calibCaptureBuffer.Length) {
-                calibCaptureBuffer[calibCaptureCursor++] = sample;
-            }
-            if (calibCaptureCursor >= calibCaptureBuffer.Length) {
-                calibActive = false;
-                int maxLag = Math.Min(calibCaptureBuffer.Length - calibProbe.Length - 1, calibSampleRate / 4);
-                RoundTripLatencyResult result = RoundTripLatencyCalibrator.MeasureRoundTripLatency(
-                    calibProbe,
-                    calibCaptureBuffer,
-                    calibSampleRate,
-                    minLagSamples: 16,
-                    maxLagSamples: Math.Max(64, maxLag));
-                if (result.IsValid) {
-                    latestRttMs = (float)result.LatencyMs;
-                }
-                finished = result;
-                cb = calibCompletedCallback;
-                calibCompletedCallback = null;
-            }
+    void FinishCalibrationAsync(CalibrationSession session) {
+        if (session == null || Interlocked.Exchange(ref session.CompletedFlag, 1) != 0) {
+            return;
         }
-        if (finished.HasValue && cb != null) {
-            RoundTripLatencyResult val = finished.Value;
-            _ = Task.Run(() => cb(val));
-        }
+        Interlocked.CompareExchange(ref activeCalibSession, null, session);
+        // Run O(N*L) MLS cross-correlation completely off the real-time audio capture thread
+        _ = Task.Run(() => {
+            int maxLag = Math.Min(session.CaptureBuffer.Length - session.Probe.Length - 1, session.SampleRate / 4);
+            RoundTripLatencyResult result = RoundTripLatencyCalibrator.MeasureRoundTripLatency(
+                session.Probe,
+                session.CaptureBuffer,
+                session.SampleRate,
+                minLagSamples: 16,
+                maxLagSamples: Math.Max(64, maxLag));
+            if (result.IsValid) {
+                latestRttMs = (float)result.LatencyMs;
+            }
+            session.Callback?.Invoke(result);
+        });
+    }
+
+    sealed class CalibrationSession(
+        float[] probe,
+        float[] captureBuffer,
+        int sampleRate,
+        Action<RoundTripLatencyResult> callback) {
+        public readonly float[] Probe = probe;
+        public readonly float[] CaptureBuffer = captureBuffer;
+        public readonly int SampleRate = sampleRate;
+        public readonly Action<RoundTripLatencyResult> Callback = callback;
+        public int EmitCursor;
+        public int CaptureCursor;
+        public int CompletedFlag;
     }
 }

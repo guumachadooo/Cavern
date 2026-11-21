@@ -13,6 +13,8 @@ using Cavern.Spatial;
 
 using Cavernize.Logic.Spatial;
 
+using CavernizeAndroid.Language;
+
 using Java.Util;
 
 namespace CavernizeAndroid.Services;
@@ -59,7 +61,7 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
         : $"BLE / OSC (UDP :{listenPort})";
 
     /// <inheritdoc/>
-    public bool IsConnected => running && (bleConnected || (hasRecentPackets && Environment.TickCount64 - lastPacketMs < 3500));
+    public bool IsConnected => running && (bleConnected || (hasRecentPackets && Environment.TickCount64 - Volatile.Read(ref lastPacketMs) < 3500));
 
     /// <inheritdoc/>
     public bool Supports6DoF => supports6DoF;
@@ -114,7 +116,7 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
 
             TryStartBleScanLocked();
         }
-        SetStatus($"Listening UDP :{listenPort} + BLE");
+        SetStatus(string.Format(AndroidStrings.Active["HtBleOscListening"], listenPort));
     }
 
     /// <inheritdoc/>
@@ -197,7 +199,7 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
         } catch (Exception ex) {
             if (!token.IsCancellationRequested) {
                 AppLogger.Warn($"BleOscHeadTracker UDP bind failed on :{listenPort}: {ex.Message}");
-                SetStatus($"UDP :{listenPort} busy ({ex.Message})");
+                SetStatus(string.Format(AndroidStrings.Active["HtBleOscUdpBusy"], listenPort, ex.Message));
             }
         }
     }
@@ -208,11 +210,11 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
             supports6DoF = true;
         }
         predictor.PushSample(msg.Orientation, null, msg.Position, Stopwatch.GetTimestamp());
-        lastPacketMs = Environment.TickCount64;
+        Volatile.Write(ref lastPacketMs, Environment.TickCount64);
         hasRecentPackets = true;
         if (!wasLive || !string.Equals(connectedPeerLabel, peerLabel, StringComparison.Ordinal)) {
             connectedPeerLabel = peerLabel;
-            SetStatus($"Live • {peerLabel}{(supports6DoF ? " (6DoF)" : "")}");
+            SetStatus(string.Format(AndroidStrings.Active["HtBleOscLive"], peerLabel, supports6DoF ? " (6DoF)" : string.Empty));
         }
     }
 
@@ -221,6 +223,14 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
             return;
         }
         try {
+            if (bleScanner != null && bleScanCallback != null) {
+                try {
+                    bleScanner.StopScan(bleScanCallback);
+                } catch {
+                    // Ignore
+                }
+                bleScanCallback = null;
+            }
             BluetoothManager mgr = context.GetSystemService(Context.BluetoothService) as BluetoothManager;
             BluetoothAdapter adapter = mgr?.Adapter;
             if (adapter == null || !adapter.IsEnabled) {
@@ -270,7 +280,7 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
             }
             bleGattCallback = new BleGattCallbackImpl(this, name);
             activeGatt = device.ConnectGatt(context, autoConnect: false, bleGattCallback, BluetoothTransports.Le);
-            SetStatus($"Connecting BLE • {name}...");
+            SetStatus(string.Format(AndroidStrings.Active["HtBleConnecting"], name));
         }
     }
 
@@ -287,7 +297,7 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
         bleConnected = isConnected;
         if (isConnected) {
             connectedPeerLabel = $"BLE • {deviceName}";
-            SetStatus($"Connected • BLE {deviceName}");
+            SetStatus(string.Format(AndroidStrings.Active["HtBleConnected"], deviceName));
         } else if (running) {
             lock (lifecycleLock) {
                 try {
@@ -297,8 +307,12 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
                     // Ignore
                 }
                 activeGatt = null;
+                bleGattCallback = null;
+                if (running) {
+                    TryStartBleScanLocked();
+                }
             }
-            SetStatus($"Listening UDP :{listenPort} + BLE");
+            SetStatus(string.Format(AndroidStrings.Active["HtBleOscListening"], listenPort));
         }
     }
 

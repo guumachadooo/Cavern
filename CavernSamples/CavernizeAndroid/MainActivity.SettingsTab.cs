@@ -3965,6 +3965,52 @@ public partial class MainActivity {
             return;
         }
 
+        if (st.Generation == ScarlettGeneration.Gen4 && !st.IsGen4FcpControlTableVerified) {
+            LinearLayout gen4Content = new(this) { Orientation = Orientation.Vertical };
+            TextView gen4Hdr = Label($"{st.ModelName} (PID 0x{st.ProductId:X4})", 13f, OneUiTheme.Primary);
+            gen4Hdr.Typeface = OneUiTheme.GetAppleFontBold(this);
+            gen4Content.AddView(gen4Hdr, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(6)
+            });
+
+            TextView fcpNotice = Label(S["ScarlettGen4FcpNotice"], 11.6f, OneUiTheme.TextSub);
+            gen4Content.AddView(fcpNotice, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(10)
+            });
+
+            float livePeak = playerEngine?.LiveMicBridge?.PeakDbfs ?? -120f;
+            TextView assistReadout = Label(
+                string.Format(S["ScarlettMetersFormat"], livePeak, livePeak),
+                11.4f,
+                OneUiTheme.TextSub);
+            gen4Content.AddView(assistReadout, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(8)
+            });
+
+            LinearLayout gen4BtnRow = HRow();
+            Button gainAssistBtn = PillButton(S["ScarlettGainAssistBtn"], () => {
+                float curPeak = playerEngine?.LiveMicBridge?.PeakDbfs ?? -120f;
+                if (curPeak <= -115f) {
+                    ShowToast(S["ScarlettGainAssistNoSignalToast"]);
+                    return;
+                }
+                float rec1 = usbProAudioManager.ComputeRecommendedSoftwareAutoGainDb(0, curPeak);
+                float rec2 = usbProAudioManager.ComputeRecommendedSoftwareAutoGainDb(1, curPeak);
+                assistReadout.Text = string.Format(S["ScarlettGainAssistFormat"], rec1, rec2);
+            }, active: true);
+            gen4BtnRow.AddView(gainAssistBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            gen4Content.AddView(gen4BtnRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+            OneUiModalDialog.Show(
+                this,
+                S["ScarlettModalTitle"],
+                customContent: gen4Content,
+                icon: OneUiIconType.Sliders,
+                iconBadgeColor: OneUiTheme.IconSpatial,
+                positiveText: S["CloseBtn"]);
+            return;
+        }
+
         usbProAudioManager.TryInitializeScarlettControl(exitMsdMode: false);
         usbProAudioManager.ReadScarlettHardwareState();
         st = usbProAudioManager.ScarlettState;
@@ -4178,6 +4224,12 @@ public partial class MainActivity {
             OneUiTheme.TextSub);
         content.AddView(meterLabel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(6),
+            BottomMargin = Dp(4)
+        });
+
+        TextView gainAssistLabel = Label(string.Empty, 11.2f, OneUiTheme.Primary);
+        gainAssistLabel.Visibility = ViewStates.Gone;
+        content.AddView(gainAssistLabel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
 
@@ -4187,6 +4239,26 @@ public partial class MainActivity {
                 meterLabel.Text = string.Format(S["ScarlettMetersFormat"], m1, m2);
             }
         }, active: true);
+        Button assistBtn = PillButton(S["ScarlettGainAssistBtn"], () => {
+            usbProAudioManager.PollScarlettHardwareMeters(out _, out _);
+            float fallbackPeak = playerEngine?.LiveMicBridge?.PeakDbfs ?? -120f;
+            ScarlettHardwareState latest = usbProAudioManager.ScarlettState;
+            if (latest.InputMeterCh1Dbfs <= -115f && latest.InputMeterCh2Dbfs <= -115f && fallbackPeak <= -115f) {
+                ShowToast(S["ScarlettGainAssistNoSignalToast"]);
+                return;
+            }
+            float rec1 = usbProAudioManager.ComputeRecommendedSoftwareAutoGainDb(0, fallbackPeak);
+            float rec2 = usbProAudioManager.ComputeRecommendedSoftwareAutoGainDb(1, fallbackPeak);
+            gainAssistLabel.Text = string.Format(S["ScarlettGainAssistFormat"], rec1, rec2);
+            gainAssistLabel.Visibility = ViewStates.Visible;
+        });
+        actionRow.AddView(metersBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        actionRow.AddView(assistBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        content.AddView(actionRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(6)
+        });
+
+        LinearLayout nvramRow = HRow();
         Button saveBtn = PillButton(S["ScarlettSaveNvramBtn"], () => {
             if (usbProAudioManager.SaveScarlettConfigToNvram()) {
                 ShowToast(S["ScarlettSaveNvramDoneToast"]);
@@ -4197,10 +4269,9 @@ public partial class MainActivity {
                 ShowToast(S["ScarlettExitMsdDoneToast"]);
             }
         });
-        actionRow.AddView(metersBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        actionRow.AddView(saveBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        actionRow.AddView(msdBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        content.AddView(actionRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        nvramRow.AddView(saveBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        nvramRow.AddView(msdBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        content.AddView(nvramRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         OneUiModalDialog.Show(
             this,

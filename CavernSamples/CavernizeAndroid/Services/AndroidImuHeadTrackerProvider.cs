@@ -8,6 +8,8 @@ using Cavern.Spatial;
 
 using Cavernize.Logic.Spatial;
 
+using CavernizeAndroid.Language;
+
 namespace CavernizeAndroid.Services;
 
 /// <summary>
@@ -23,8 +25,9 @@ public sealed class AndroidImuHeadTrackerProvider : Java.Lang.Object, ISensorEve
     readonly FusionAhrsFilter fallbackAhrs = new();
     readonly object lifecycleLock = new();
 
-    // Pre-allocated quaternion scratch array for zero-GC SensorManager.GetQuaternionFromVector
+    // Pre-allocated scratch arrays for zero-GC SensorManager.GetQuaternionFromVector at 100 Hz
     readonly float[] quatScratch = new float[4];
+    readonly float[] rvScratch = new float[4];
 
     Sensor gameRotationSensor;
     Sensor gyroSensor;
@@ -101,18 +104,18 @@ public sealed class AndroidImuHeadTrackerProvider : Java.Lang.Object, ISensorEve
                     sensorManager.RegisterListener(this, gyroSensor, (SensorDelay)samplingUs);
                 }
                 running = true;
-                SetStatus("Active • GameRotationVector");
+                SetStatus(AndroidStrings.Active["HtImuActiveGrv"]);
                 AppLogger.Info("AndroidImuHeadTracker started (GameRotationVector + Gyroscope).");
             } else if (gyroSensor != null && accelSensor != null) {
                 usingFusionFallback = true;
                 sensorManager.RegisterListener(this, gyroSensor, (SensorDelay)samplingUs);
                 sensorManager.RegisterListener(this, accelSensor, (SensorDelay)samplingUs);
                 running = true;
-                SetStatus("Active • Fusion 6-Axis AHRS");
+                SetStatus(AndroidStrings.Active["HtImuActiveFusion"]);
                 AppLogger.Info("AndroidImuHeadTracker started (FusionAhrsFilter Gyro+Accel fallback).");
             } else {
                 running = false;
-                SetStatus("No IMU sensors available on device");
+                SetStatus(AndroidStrings.Active["HtImuUnavailable"]);
                 AppLogger.Warn("AndroidImuHeadTracker: GameRotationVector and Gyroscope/Accelerometer unavailable.");
             }
         }
@@ -154,7 +157,8 @@ public sealed class AndroidImuHeadTrackerProvider : Java.Lang.Object, ISensorEve
         SensorType type = e.Sensor?.Type ?? 0;
         if (type == SensorType.Gyroscope) {
             // Remap Android device axes (+X right, +Y up, +Z out-of-screen) -> Cavern (+X right, +Y up, +Z forward)
-            Vector3 cavGyro = new(e.Values[0], e.Values[1], -e.Values[2]);
+            // using the exact same proper rotation basis (x, z, -y) applied to GameRotationVector quaternions.
+            Vector3 cavGyro = RemapAndroidVectorToCavern(e.Values[0], e.Values[1], e.Values[2]);
             latestGyroRadPerSec = cavGyro;
             hasGyroSample = true;
 
@@ -180,13 +184,11 @@ public sealed class AndroidImuHeadTrackerProvider : Java.Lang.Object, ISensorEve
         }
 
         if (type == SensorType.GameRotationVector) {
-            float[] rawRv = [
-                e.Values[0],
-                e.Values[1],
-                e.Values[2],
-                e.Values.Count >= 4 ? e.Values[3] : 0f
-            ];
-            SensorManager.GetQuaternionFromVector(quatScratch, rawRv);
+            rvScratch[0] = e.Values[0];
+            rvScratch[1] = e.Values[1];
+            rvScratch[2] = e.Values[2];
+            rvScratch[3] = e.Values.Count >= 4 ? e.Values[3] : 0f;
+            SensorManager.GetQuaternionFromVector(quatScratch, rvScratch);
             // Android GetQuaternionFromVector returns [w, x, y, z]
             Quaternion qAndroid = new(quatScratch[1], quatScratch[2], quatScratch[3], quatScratch[0]);
             Quaternion qCavern = RemapAndroidQuaternionToCavern(qAndroid);
@@ -203,9 +205,12 @@ public sealed class AndroidImuHeadTrackerProvider : Java.Lang.Object, ISensorEve
         }
     }
 
+    static Vector3 RemapAndroidVectorToCavern(float x, float y, float z) => new(x, z, -y);
+
     static Quaternion RemapAndroidQuaternionToCavern(Quaternion qAndroid) {
         // Android ENU/device sensor frame (+X right, +Y up, +Z toward user) -> Cavern (+X right, +Y up, +Z forward)
-        Quaternion remapped = new(qAndroid.X, qAndroid.Z, -qAndroid.Y, qAndroid.W);
+        Vector3 v = RemapAndroidVectorToCavern(qAndroid.X, qAndroid.Y, qAndroid.Z);
+        Quaternion remapped = new(v.X, v.Y, v.Z, qAndroid.W);
         return remapped.LengthSquared() > 1e-8f ? Quaternion.Normalize(remapped) : Quaternion.Identity;
     }
 

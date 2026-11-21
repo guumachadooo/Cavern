@@ -162,7 +162,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
         ProAudioDuplexConfig safe = (config ?? ProAudioDuplexConfig.Default).Sanitize();
         lock (renderLock) {
             proAudioConfig = safe;
-            liveMicBridge.ApplyConfig(safe, OutputSampleRate);
+            liveMicBridge.ApplyConfig(safe, OutputSampleRate, EnvironmentSize);
             if (safe.Enabled && safe.LiveMicEnabled && safe.MicRouting != LiveMicRoutingMode.Off) {
                 sceneHub.SetLiveMicrophoneDescriptor(liveMicBridge.BuildSceneDescriptor(EnvironmentSize, sceneHub.Sources.Count));
             } else {
@@ -945,7 +945,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 int safeFrames = Math.Min(maxStereoFrames, stereoOutput.Length / 2);
                 Array.Clear(stereoOutput, 0, safeFrames * 2);
                 if (liveMicBridge.IsCalibratingLatency || liveMicBridge.IsActive) {
-                    liveMicBridge.MixIntoStereoOutputZeroGc(stereoOutput, 0, safeFrames, sceneHub.ListenerPose);
+                    liveMicBridge.MixIntoStereoOutputZeroGc(stereoOutput, 0, safeFrames, sceneHub.ListenerPose, EnvironmentSize);
                     SoundfieldTelemetry micTel = sceneHub.Telemetry;
                     micTel.LiveMicRmsDbfs = liveMicBridge.RmsDbfs;
                     micTel.LiveMicPeakDbfs = liveMicBridge.PeakDbfs;
@@ -1090,7 +1090,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 // Slot 1 / W10 Sample-Locked Live Microphone injection (SourceLayer.LiveMicrophone)
                 // Mixed right before Slot 6 4x True-Peak Limiter so live vocal + Karaoke never clips.
                 if (liveMicBridge.IsActive || liveMicBridge.IsCalibratingLatency) {
-                    liveMicBridge.MixIntoStereoOutputZeroGc(stereoOutput, outOffset, blockFrames, sceneHub.ListenerPose);
+                    liveMicBridge.MixIntoStereoOutputZeroGc(stereoOutput, outOffset, blockFrames, sceneHub.ListenerPose, Listener.EnvironmentSize);
                 }
 
                 // Slot 6: Ordered transparent post-processing stages
@@ -1573,7 +1573,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
             return renderingSettings.RoomCorrection.SampleRate;
         }
         int trackRate = currentTrack != null ? Math.Clamp(currentTrack.SampleRate, 44100, 192000) : Listener.DefaultSampleRate;
-        if (UsbDacNativeSampleRateEnabled && PreferredHardwareSampleRate >= 44100 && PreferredHardwareSampleRate <= 192000) {
+        bool allowHardwareOverride = UsbDacNativeSampleRateEnabled ||
+            (proAudioConfig.Enabled && proAudioConfig.LockedSampleRateHz > 0);
+        if (allowHardwareOverride && PreferredHardwareSampleRate >= 44100 && PreferredHardwareSampleRate <= 192000) {
             return PreferredHardwareSampleRate;
         }
         return trackRate;

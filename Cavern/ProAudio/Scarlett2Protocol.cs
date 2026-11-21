@@ -9,10 +9,24 @@ namespace Cavern.ProAudio {
         None = 0,
         /// <summary>Scarlett 2i2 / Solo 2nd Gen (hardware front-panel switches; UAC2 streaming).</summary>
         Gen2 = 2,
-        /// <summary>Scarlett 2i2 / Solo 3rd Gen (USB vendor control for 48V, Air, Inst/Line, Direct Monitor, MSD exit, Meters).</summary>
+        /// <summary>Scarlett 2i2 / Solo 3rd Gen (Scarlett2 USB vendor control for 48V, Air, Inst/Line, Direct Monitor, MSD exit, Meters).</summary>
         Gen3 = 3,
-        /// <summary>Scarlett 2i2 / Solo 4th Gen (FCP software preamps, independent 48V, 2-stage Air, Auto-Gain, Clip Safe, Meters).</summary>
+        /// <summary>Scarlett 2i2 / Solo / 4i4 4th Gen (Focusrite Control Protocol FCP; dynamic firmware-discovered control map).</summary>
         Gen4 = 4
+    }
+
+    /// <summary>
+    /// Underlying USB vendor control protocol family used by a Focusrite Scarlett hardware generation.
+    /// </summary>
+    public enum ScarlettProtocolFamily {
+        /// <summary>Not a Focusrite Scarlett device.</summary>
+        None = 0,
+        /// <summary>Standard UAC2 streaming only (Gen 2 physical front-panel switches).</summary>
+        Uac2Only = 1,
+        /// <summary>Linux ALSA <c>mixer_scarlett2.c</c> verified Gen 3 static offset table (<c>SET_DATA</c>/<c>GET_DATA</c>).</summary>
+        Scarlett2Gen3 = 2,
+        /// <summary>Focusrite Control Protocol (FCP) used by Gen 4 interfaces (requires dynamic firmware control table probe).</summary>
+        FocusriteFcpGen4 = 3
     }
 
     /// <summary>
@@ -67,24 +81,58 @@ namespace Cavern.ProAudio {
         /// <summary>USB Product ID.</summary>
         public int ProductId { get; set; }
 
-        /// <summary>True when USB software vendor controls are available (Gen 3 &amp; Gen 4).</summary>
+        /// <summary>Underlying vendor control protocol family for this hardware generation.</summary>
+        public ScarlettProtocolFamily ProtocolFamily {
+            get {
+                if (Generation == ScarlettGeneration.Gen2) {
+                    return ScarlettProtocolFamily.Uac2Only;
+                }
+                if (Generation == ScarlettGeneration.Gen3) {
+                    return ScarlettProtocolFamily.Scarlett2Gen3;
+                }
+                if (Generation == ScarlettGeneration.Gen4) {
+                    return ScarlettProtocolFamily.FocusriteFcpGen4;
+                }
+                return ScarlettProtocolFamily.None;
+            }
+        }
+
+        /// <summary>
+        /// True when the connected Gen 4 Focusrite Control Protocol (FCP) control table was dynamically discovered
+        /// from device firmware. False when unprobed so static offsets are never written blindly to Gen 4 NVRAM.
+        /// </summary>
+        public bool IsGen4FcpControlTableVerified { get; set; }
+
+        /// <summary>True when USB vendor handshake/metering or software controls are supported (Gen 3 verified; Gen 4 gated by FCP probe).</summary>
         public bool SupportsSoftwareControls {
+            get {
+                return Generation == ScarlettGeneration.Gen3 ||
+                       (Generation == ScarlettGeneration.Gen4 && IsGen4FcpControlTableVerified);
+            }
+        }
+
+        /// <summary>True when hardware peak meter queries or live meter-assisted Auto Gain recommendations are supported.</summary>
+        public bool SupportsMeteringAndGainAssist {
             get { return Generation == ScarlettGeneration.Gen3 || Generation == ScarlettGeneration.Gen4; }
         }
 
-        /// <summary>True when per-channel independent 48V and digital preamp gain dB are supported (Gen 4).</summary>
+        /// <summary>True when per-channel independent 48V and digital preamp gain dB writes are verified (Gen 4 with FCP control map).</summary>
         public bool SupportsIndependentPreampGain {
-            get { return Generation == ScarlettGeneration.Gen4; }
+            get { return Generation == ScarlettGeneration.Gen4 && IsGen4FcpControlTableVerified; }
         }
 
-        /// <summary>True when hardware Auto Gain and per-channel Clip Safe are supported (Gen 4).</summary>
+        /// <summary>True when hardware Auto Gain and per-channel Clip Safe writes are verified (Gen 4 with FCP control map).</summary>
         public bool SupportsAutoGain {
-            get { return Generation == ScarlettGeneration.Gen4; }
+            get { return Generation == ScarlettGeneration.Gen4 && IsGen4FcpControlTableVerified; }
         }
 
-        /// <summary>True when Stereo Channel 1-2 Linking is supported (Gen 4 2i2 / 4i4).</summary>
+        /// <summary>True when Stereo Channel 1-2 Linking writes are verified (Gen 4 2i2 / 4i4 with FCP control map).</summary>
         public bool SupportsStereoLink {
-            get { return Generation == ScarlettGeneration.Gen4 && ProductId != Scarlett2Protocol.PidScarlettSoloGen4; }
+            get {
+                return Generation == ScarlettGeneration.Gen4 &&
+                       IsGen4FcpControlTableVerified &&
+                       ProductId != Scarlett2Protocol.PidScarlettSoloGen4;
+            }
         }
 
         /// <summary>True when Inputs 1 and 2 are stereo-linked (Gain, Air, 48V, Clip Safe, Inst, Auto Gain move together).</summary>
@@ -215,34 +263,36 @@ namespace Cavern.ProAudio {
         /// <summary>Gen 3 2i2 config offset: Direct Monitor mode (0=Off, 1=Mono, 2=Stereo).</summary>
         public const uint Gen3OffsetDirectMonitor = 0x00000014u;
 
-        // Public mixer_scarlett2.c Gen 4 Scarlett 2i2/4i4 FCP configuration offsets
-        /// <summary>Gen 4 2i2 config offset: MSD ("Easy Start") mode flag.</summary>
+        // Focusrite Gen 4 interfaces use Focusrite Control Protocol (FCP) where control offsets are firmware-defined
+        // rather than fixed constants. These nominal reference offsets are gated behind IsGen4FcpControlTableVerified
+        // so Cavern never issues blind unverified SET_DATA writes to Gen 4 NVRAM.
+        /// <summary>Gen 4 FCP reference offset (gated): MSD ("Easy Start") mode flag.</summary>
         public const uint Gen4OffsetMsdMode = 0x00000008u;
-        /// <summary>Gen 4 2i2 config offset: Per-channel 48V Phantom Power (2 bytes).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Per-channel 48V Phantom Power (2 bytes).</summary>
         public const uint Gen4OffsetPhantomPower = 0x00000010u;
-        /// <summary>Gen 4 2i2 config offset: Per-channel Air mode (0=Off, 1=Presence, 2=Presence+Drive, 2 bytes).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Per-channel Air mode (0=Off, 1=Presence, 2=Presence+Drive, 2 bytes).</summary>
         public const uint Gen4OffsetAirMode = 0x00000012u;
-        /// <summary>Gen 4 2i2 config offset: Per-channel Instrument Hi-Z / Line switch (2 bytes).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Per-channel Instrument Hi-Z / Line switch (2 bytes).</summary>
         public const uint Gen4OffsetLevelSwitch = 0x00000014u;
-        /// <summary>Gen 4 2i2 config offset: Direct Monitor mode (0=Off, 1=Mono, 2=Stereo).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Direct Monitor mode (0=Off, 1=Mono, 2=Stereo).</summary>
         public const uint Gen4OffsetDirectMonitor = 0x00000018u;
-        /// <summary>Gen 4 2i2 config offset: Per-channel digital preamp gain (int16 dB, 0..69 dB).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Per-channel digital preamp gain (int16 dB, 0..69 dB).</summary>
         public const uint Gen4OffsetPreampGainDb = 0x00000020u;
-        /// <summary>Gen 4 2i2 config offset: Per-channel Clip Safe toggle (2 bytes).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Per-channel Clip Safe toggle (2 bytes).</summary>
         public const uint Gen4OffsetClipSafe = 0x00000028u;
-        /// <summary>Gen 4 2i2 config offset: Per-channel Auto Gain trigger/cancel flag (2 bytes: 0=Stop, 1=Start).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Per-channel Auto Gain trigger/cancel flag (2 bytes: 0=Stop, 1=Start).</summary>
         public const uint Gen4OffsetAutoGainEnable = 0x0000002Cu;
-        /// <summary>Gen 4 2i2 config offset: Per-channel Auto Gain status readout (2 bytes: ScarlettAutoGainStatus).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Per-channel Auto Gain status readout (2 bytes: ScarlettAutoGainStatus).</summary>
         public const uint Gen4OffsetAutoGainStatus = 0x00000030u;
-        /// <summary>Gen 4 2i2 config offset: Stereo Link Channels 1-2 flag (1 byte).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Stereo Link Channels 1-2 flag (1 byte).</summary>
         public const uint Gen4OffsetInputLink = 0x00000034u;
-        /// <summary>Gen 4 config offset: Direct Monitor Input/Playback blend (0..100, 1 byte).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Direct Monitor Input/Playback blend (0..100, 1 byte).</summary>
         public const uint Gen4OffsetDirectMonitorMix = 0x00000038u;
-        /// <summary>Gen 4 config offset: Main Monitor Output Mute flag (1 byte).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Main Monitor Output Mute flag (1 byte).</summary>
         public const uint Gen4OffsetOutputMute = 0x0000003Cu;
-        /// <summary>Gen 4 config offset: Main Monitor Output Dim (-20 dB) flag (1 byte).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Main Monitor Output Dim (-20 dB) flag (1 byte).</summary>
         public const uint Gen4OffsetOutputDim = 0x0000003Eu;
-        /// <summary>Gen 4 config offset: Virtual Loopback routing toggle (1 byte).</summary>
+        /// <summary>Gen 4 FCP reference offset (gated): Virtual Loopback routing toggle (1 byte).</summary>
         public const uint Gen4OffsetLoopback = 0x00000040u;
 
         /// <summary>

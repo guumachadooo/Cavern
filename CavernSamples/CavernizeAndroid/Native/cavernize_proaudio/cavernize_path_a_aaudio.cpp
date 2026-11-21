@@ -274,7 +274,10 @@ struct PathAAudioEngine {
 
     void fill_status(CavProAudioStatus* st) {
         if (!st) return;
-        st->active_backend = running.load(std::memory_order_acquire) ? CAV_PA_BACKEND_PATH_A_AAUDIO : CAV_PA_BACKEND_NONE;
+        std::lock_guard<std::mutex> lock(lifecycle_mtx);
+        st->active_backend = (running.load(std::memory_order_acquire) && out_stream != nullptr)
+            ? CAV_PA_BACKEND_PATH_A_AAUDIO
+            : CAV_PA_BACKEND_NONE;
         st->sample_rate = active_sr.load(std::memory_order_relaxed);
         st->bit_depth = 32;
         st->buffer_frames = active_burst.load(std::memory_order_relaxed);

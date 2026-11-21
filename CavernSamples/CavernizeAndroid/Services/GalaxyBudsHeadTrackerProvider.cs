@@ -10,6 +10,8 @@ using Cavern.Spatial;
 
 using Cavernize.Logic.Spatial;
 
+using CavernizeAndroid.Language;
+
 using Java.Util;
 
 namespace CavernizeAndroid.Services;
@@ -136,7 +138,7 @@ public sealed class GalaxyBudsHeadTrackerProvider : IHeadTrackerProvider {
         while (!token.IsCancellationRequested) {
             if (!HasBluetoothConnectPermission()) {
                 connected = false;
-                SetStatus("BLUETOOTH_CONNECT permission required");
+                SetStatus(AndroidStrings.Active["HtBudsPermRequired"]);
                 WaitInterruptible(token, 2000);
                 continue;
             }
@@ -145,18 +147,18 @@ public sealed class GalaxyBudsHeadTrackerProvider : IHeadTrackerProvider {
             if (target == null) {
                 connected = false;
                 connectedDeviceName = string.Empty;
-                SetStatus("No paired Galaxy Buds found");
+                SetStatus(AndroidStrings.Active["HtBudsNonePaired"]);
                 WaitInterruptible(token, 2500);
                 continue;
             }
 
             connectedDeviceName = target.Name ?? "Galaxy Buds";
-            SetStatus($"Connecting to {connectedDeviceName}...");
+            SetStatus(string.Format(AndroidStrings.Active["HtBudsConnecting"], connectedDeviceName));
 
             BluetoothSocket socket = TryOpenRfcommSocket(target);
             if (socket == null) {
                 connected = false;
-                SetStatus($"Waiting for {connectedDeviceName}...");
+                SetStatus(string.Format(AndroidStrings.Active["HtBudsWaiting"], connectedDeviceName));
                 WaitInterruptible(token, 2500);
                 continue;
             }
@@ -169,6 +171,8 @@ public sealed class GalaxyBudsHeadTrackerProvider : IHeadTrackerProvider {
                 activeSocket = socket;
             }
 
+            System.Threading.Timer keepAliveTimer = null;
+            object writeLock = new();
             try {
                 predictor.Reset();
                 Stream input = socket.InputStream;
@@ -178,25 +182,43 @@ public sealed class GalaxyBudsHeadTrackerProvider : IHeadTrackerProvider {
                 }
 
                 // Handshake: enable spatial sensor pipeline + attach GRV stream
-                SendPacket(output, GalaxyBudsProtocol.MsgSetSpatialAudio, [1]);
-                SendPacket(output, GalaxyBudsProtocol.MsgSpatialAudioControl, [GalaxyBudsProtocol.CtrlAttach]);
+                lock (writeLock) {
+                    SendPacket(output, GalaxyBudsProtocol.MsgSetSpatialAudio, [1]);
+                    SendPacket(output, GalaxyBudsProtocol.MsgSpatialAudioControl, [GalaxyBudsProtocol.CtrlAttach]);
+                }
 
                 connected = true;
                 isWorn = true;
-                SetStatus($"Connected • {connectedDeviceName}");
+                SetStatus(string.Format(AndroidStrings.Active["HtBudsConnected"], connectedDeviceName));
                 AppLogger.Info($"GalaxyBudsHeadTracker connected to '{connectedDeviceName}'.");
 
                 int buffered = 0;
-                long lastKeepAliveMs = Environment.TickCount64;
-                long lastPacketMs = lastKeepAliveMs;
+                long lastPacketMs = Environment.TickCount64;
+
+                // Dedicated 2 s keep-alive timer runs independently of blocking RFCOMM input.Read(...)
+                keepAliveTimer = new System.Threading.Timer(_ => {
+                    if (token.IsCancellationRequested || !connected || !socket.IsConnected) {
+                        return;
+                    }
+                    try {
+                        lock (writeLock) {
+                            if (token.IsCancellationRequested || !connected || !socket.IsConnected) {
+                                return;
+                            }
+                            SendPacket(output, GalaxyBudsProtocol.MsgSpatialAudioControl, [GalaxyBudsProtocol.CtrlKeepAlive]);
+                            long nowMs = Environment.TickCount64;
+                            if (nowMs - Volatile.Read(ref lastPacketMs) > 8000) {
+                                // Re-attach if sensor stream went silent while RFCOMM remained open
+                                SendPacket(output, GalaxyBudsProtocol.MsgSpatialAudioControl, [GalaxyBudsProtocol.CtrlAttach]);
+                                Volatile.Write(ref lastPacketMs, nowMs);
+                            }
+                        }
+                    } catch {
+                        // Read loop observes socket drop and handles reconnect cleanly
+                    }
+                }, null, 2000, 2000);
 
                 while (!token.IsCancellationRequested && socket.IsConnected) {
-                    long nowMs = Environment.TickCount64;
-                    if (nowMs - lastKeepAliveMs >= 2000) {
-                        SendPacket(output, GalaxyBudsProtocol.MsgSpatialAudioControl, [GalaxyBudsProtocol.CtrlKeepAlive]);
-                        lastKeepAliveMs = nowMs;
-                    }
-
                     int read = input.Read(readChunk, 0, readChunk.Length);
                     if (read <= 0) {
                         break;
@@ -234,7 +256,7 @@ public sealed class GalaxyBudsHeadTrackerProvider : IHeadTrackerProvider {
                                 out byte eventId,
                                 out bool worn)) {
                                 isWorn = worn;
-                                lastPacketMs = Environment.TickCount64;
+                                Volatile.Write(ref lastPacketMs, Environment.TickCount64);
                                 if (worn) {
                                     predictor.PushSample(q, null, Vector3.Zero, Stopwatch.GetTimestamp());
                                 }
@@ -257,12 +279,6 @@ public sealed class GalaxyBudsHeadTrackerProvider : IHeadTrackerProvider {
                         }
                         buffered = remaining;
                     }
-
-                    if (Environment.TickCount64 - lastPacketMs > 8000) {
-                        // Re-attach if stream went silent while socket remained open
-                        SendPacket(output, GalaxyBudsProtocol.MsgSpatialAudioControl, [GalaxyBudsProtocol.CtrlAttach]);
-                        lastPacketMs = Environment.TickCount64;
-                    }
                 }
             } catch (Exception ex) {
                 if (!token.IsCancellationRequested) {
@@ -270,14 +286,21 @@ public sealed class GalaxyBudsHeadTrackerProvider : IHeadTrackerProvider {
                 }
             } finally {
                 connected = false;
+                try {
+                    keepAliveTimer?.Dispose();
+                } catch {
+                    // Ignore
+                }
                 lock (lifecycleLock) {
                     if (ReferenceEquals(activeSocket, socket)) {
                         activeSocket = null;
                     }
                 }
-                TrySendDetachQuietly(socket);
+                lock (writeLock) {
+                    TrySendDetachQuietly(socket);
+                }
                 SafeCloseSocket(socket);
-                SetStatus($"Reconnecting to {connectedDeviceName}...");
+                SetStatus(string.Format(AndroidStrings.Active["HtBudsReconnecting"], connectedDeviceName));
             }
 
             WaitInterruptible(token, 2000);
