@@ -669,7 +669,7 @@ public sealed class AppSettingsStore {
         DynamicEnvelopeLock = LgsrDynamicEnvelopeLock,
         ClippingGuardEnabled = LgsrClippingGuard,
         UseBitstreamCouplingSpxGuide = LgsrBitstreamGuide,
-        Tier3ResidualCleanupEnabled = LgsrTier3ResidualCleanup,
+        EnableTier3ResidualCleanup = LgsrTier3ResidualCleanup,
         MinSyncConfidence = 0.35f
     };
 

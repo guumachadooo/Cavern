@@ -1205,7 +1205,7 @@ public partial class MainActivity {
             if (playerEngine != null) {
                 playerEngine.LgsrBypassed = !playerEngine.LgsrBypassed;
                 RefreshLgsrUi();
-                RefreshSpatialXRayUi();
+                RefreshSpatialXRayHud();
             }
         });
         Button lgsrRescanBtn = PillButton(S["LgsrRescanTwinBtn"], () => {
@@ -2414,7 +2414,7 @@ public partial class MainActivity {
                 row.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
                 row.Background = OneUiTheme.CreateRoundedDrawable(
                     this,
-                    isSel ? OneUiTheme.CardHighlightBg : OneUiTheme.SurfaceMuted,
+                    isSel ? OneUiTheme.WithAlpha(ColAccent, 82) : OneUiTheme.SurfaceModalRow,
                     16,
                     isSel ? OneUiTheme.Primary : OneUiTheme.Divider,
                     isSel ? 1.5f : 1f);
@@ -2502,7 +2502,11 @@ public partial class MainActivity {
     void PlayHptfTestToneAsync(bool sweep) {
         const int sr = 48000;
         float[] stereo = sweep
-            ? Cavern.Filters.HptfNotchFilter.GenerateCalibrationSweepStereo(sr, 4.0f)
+            ? Cavern.Filters.HptfNotchFilter.GenerateCalibrationSweepStereo(
+                Cavern.Filters.HptfNotchFilter.MinFrequencyHz,
+                Cavern.Filters.HptfNotchFilter.MaxFrequencyHz,
+                sr,
+                4.0)
             : Cavern.Filters.HptfNotchFilter.GenerateCalibrationToneStereo(store.HptfNotchFreqHz, sr, 2.2f);
         if (store.HptfNotchEnabled && store.HptfNotchGainDb < -0.05f) {
             Cavern.Filters.HptfNotchFilter liveNotch = new(sr, 2);
@@ -2538,7 +2542,7 @@ public partial class MainActivity {
                 int minBytes = Android.Media.AudioTrack.GetMinBufferSize(
                     sampleRate,
                     Android.Media.ChannelOut.Stereo,
-                    Android.Media.AudioEncoding.PcmFloat);
+                    Android.Media.Encoding.PcmFloat);
                 if (minBytes <= 0) {
                     return;
                 }
@@ -2547,7 +2551,7 @@ public partial class MainActivity {
                     .SetContentType(Android.Media.AudioContentType.Music)
                     .Build();
                 Android.Media.AudioFormat fmt = new Android.Media.AudioFormat.Builder()
-                    .SetEncoding(Android.Media.AudioEncoding.PcmFloat)
+                    .SetEncoding(Android.Media.Encoding.PcmFloat)
                     .SetChannelMask(Android.Media.ChannelOut.Stereo)
                     .SetSampleRate(sampleRate)
                     .Build();
@@ -3540,7 +3544,7 @@ public partial class MainActivity {
         macros.Bypass = playerEngine.VocalChainBypassed;
         playerEngine.VocalMixMatchStage.ApplyVocalProfile(playerEngine.VocalMixMatchStage.ActiveDna, macros);
         RefreshLyricsSingDockUi();
-        RefreshSpatialXRayUi();
+        RefreshSpatialXRayHud();
     }
 
     void ShowAutoVocalMixMatchModal() {
@@ -3700,17 +3704,17 @@ public partial class MainActivity {
                 audioOutput?.Start();
                 ShowToast(S["ProAudioCalibrateRunningToast"]);
                 playerEngine?.StartRoundTripLatencyCalibration(result => RunOnUiThread(() => {
-                    if (uiDestroyed || result == null) {
+                    if (uiDestroyed) {
                         return;
                     }
                     if (result.IsValid) {
-                        store.CalibratedRoundTripSamples = (float)result.DelaySamples;
-                        store.CalibratedRoundTripMs = (float)result.RoundTripMs;
+                        store.CalibratedRoundTripSamples = (float)result.LatencySamples;
+                        store.CalibratedRoundTripMs = (float)result.LatencyMs;
                         ApplyAndRefreshProAudio();
                         ShowToast(string.Format(
                             S["ProAudioCalibrateSuccessToast"],
-                            result.RoundTripMs,
-                            result.DelaySamples,
+                            result.LatencyMs,
+                            result.LatencySamples,
                             result.ConfidenceSnr));
                     } else {
                         ShowToast(string.Format(S["ProAudioCalibrateFailedToast"], result.ConfidenceSnr));
@@ -3756,7 +3760,8 @@ public partial class MainActivity {
         st = usbProAudioManager.ScarlettState;
 
         LinearLayout content = new(this) { Orientation = Orientation.Vertical };
-        TextView modelHdr = Label($"{st.ModelName} (PID 0x{st.ProductId:X4})", 13f, OneUiTheme.Primary, bold: true);
+        TextView modelHdr = Label($"{st.ModelName} (PID 0x{st.ProductId:X4})", 13f, OneUiTheme.Primary);
+        modelHdr.Typeface = OneUiTheme.GetAppleFontBold(this);
         content.AddView(modelHdr, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(4)
         });

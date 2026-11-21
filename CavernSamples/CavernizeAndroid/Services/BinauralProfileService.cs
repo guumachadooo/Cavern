@@ -664,8 +664,8 @@ public static class BinauralProfileService {
             LastPersonalizationDiagnostics = new HrtfPersonalizationDiagnostics {
                 IsMagLsActive = result.MagLsMetrics.HasValue,
                 MagLsOrder = result.MagLsMetrics?.Order ?? 0,
-                MagLsCutoffHz = result.MagLsMetrics?.CutoffHz ?? 0f,
-                MagLsHfErrorDb = result.MagLsMetrics?.HighFreqMagnitudeErrorDb ?? 0f,
+                MagLsCutoffHz = result.MagLsMetrics?.CutoffFrequencyHz ?? 0f,
+                MagLsHfErrorDb = result.MagLsMetrics?.MeanHfMagnitudeErrorDb ?? 0f,
                 IsBiometricItdActive = result.BiometricItdApplied,
                 IsBrirBypassed = result.BrirBypassed,
                 HeadWidthCm = personalization.HeadWidthCm,
@@ -818,8 +818,8 @@ public static class BinauralProfileService {
         HrtfPersonalizationDiagnostics diag = new() {
             IsMagLsActive = magLsMetrics.HasValue,
             MagLsOrder = magLsMetrics?.Order ?? 0,
-            MagLsCutoffHz = magLsMetrics?.CutoffHz ?? 0f,
-            MagLsHfErrorDb = magLsMetrics?.HighFreqMagnitudeErrorDb ?? 0f,
+            MagLsCutoffHz = magLsMetrics?.CutoffFrequencyHz ?? 0f,
+            MagLsHfErrorDb = magLsMetrics?.MeanHfMagnitudeErrorDb ?? 0f,
             IsBiometricItdActive = applyBioItd,
             IsBrirBypassed = brirBypassed,
             HeadWidthCm = personalization.HeadWidthCm,

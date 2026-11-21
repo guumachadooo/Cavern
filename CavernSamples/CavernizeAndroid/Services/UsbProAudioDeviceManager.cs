@@ -473,8 +473,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
                 return false;
             }
             if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetAutoGainStatus, 2, out int payloadOff, out int payloadLen) && payloadLen >= 2) {
-                ch1Status = (ScarlettAutoGainStatus)Math.Clamp(scarlettRxScratch[payloadOff], 0, 3);
-                ch2Status = (ScarlettAutoGainStatus)Math.Clamp(scarlettRxScratch[payloadOff + 1], 0, 3);
+                ch1Status = (ScarlettAutoGainStatus)Math.Clamp((int)scarlettRxScratch[payloadOff], 0, 3);
+                ch2Status = (ScarlettAutoGainStatus)Math.Clamp((int)scarlettRxScratch[payloadOff + 1], 0, 3);
                 scarlettState.AutoGainStatusCh1 = ch1Status;
                 scarlettState.AutoGainStatusCh2 = ch2Status;
 
@@ -482,8 +482,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
                     if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetPreampGainDb, 4, out int gOff, out int gLen) && gLen >= 4) {
                         short g1 = (short)(scarlettRxScratch[gOff] | (scarlettRxScratch[gOff + 1] << 8));
                         short g2 = (short)(scarlettRxScratch[gOff + 2] | (scarlettRxScratch[gOff + 3] << 8));
-                        scarlettState.InputGainCh1Db = Math.Clamp(g1, 0, 69);
-                        scarlettState.InputGainCh2Db = Math.Clamp(g2, 0, 69);
+                        scarlettState.InputGainCh1Db = Math.Clamp((int)g1, 0, 69);
+                        scarlettState.InputGainCh2Db = Math.Clamp((int)g2, 0, 69);
                     }
                 }
                 return true;
@@ -563,8 +563,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
                     anyOk = true;
                 }
                 if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetAirMode, 2, out off, out len) && len >= 2) {
-                    scarlettState.AirCh1 = (ScarlettAirMode)Math.Clamp(scarlettRxScratch[off], 0, 2);
-                    scarlettState.AirCh2 = (ScarlettAirMode)Math.Clamp(scarlettRxScratch[off + 1], 0, 2);
+                    scarlettState.AirCh1 = (ScarlettAirMode)Math.Clamp((int)scarlettRxScratch[off], 0, 2);
+                    scarlettState.AirCh2 = (ScarlettAirMode)Math.Clamp((int)scarlettRxScratch[off + 1], 0, 2);
                     anyOk = true;
                 }
                 if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetLevelSwitch, 2, out off, out len) && len >= 2) {
@@ -575,8 +575,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
                 if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetPreampGainDb, 4, out off, out len) && len >= 4) {
                     short g1 = (short)(scarlettRxScratch[off] | (scarlettRxScratch[off + 1] << 8));
                     short g2 = (short)(scarlettRxScratch[off + 2] | (scarlettRxScratch[off + 3] << 8));
-                    scarlettState.InputGainCh1Db = Math.Clamp(g1, 0, 69);
-                    scarlettState.InputGainCh2Db = Math.Clamp(g2, 0, 69);
+                    scarlettState.InputGainCh1Db = Math.Clamp((int)g1, 0, 69);
+                    scarlettState.InputGainCh2Db = Math.Clamp((int)g2, 0, 69);
                     anyOk = true;
                 }
                 if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetClipSafe, 2, out off, out len) && len >= 2) {

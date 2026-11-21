@@ -117,11 +117,9 @@ public static class LosslessTwinDiscoveryService {
                     CodecFamily = string.IsNullOrEmpty(report.CodecFamily) ? "FLAC" : report.CodecFamily,
                     NativeSampleRate = twinSr,
                     EffectiveBitDepth = report.EffectiveBitDepth > 0 ? report.EffectiveBitDepth : Math.Max(16, report.DeclaredBitDepth),
-                    Channels = 2,
-                    IsVerifiedTrueLossless = report.IsLossless && !report.IsFakeLossless,
                     IsUpsampledHiRes = report.IsUpsampledHiRes,
-                    DynamicRangeDb = report.DynamicRangeDb,
-                    ClippedPercent = report.ClippedPercent
+                    SpectralCutoffHz = report.SpectralCutoffHz,
+                    DynamicRangeDb = report.DynamicRangeDb
                 };
 
                 bool synced = provider.InitializeAndSync(
@@ -308,7 +306,7 @@ public static class LosslessTwinDiscoveryService {
             long dataLen = 0;
 
             while (pos + 8 <= hRead) {
-                string id = Encoding.ASCII.GetString(hdr, pos, 4);
+                string id = System.Text.Encoding.ASCII.GetString(hdr, pos, 4);
                 int sz = BinaryPrimitives.ReadInt32LittleEndian(hdr.AsSpan(pos + 4, 4));
                 if (id == "fmt " && pos + 24 <= hRead) {
                     audioFmt = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(pos + 8, 2));
@@ -350,7 +348,7 @@ public static class LosslessTwinDiscoveryService {
             }
 
             bool isFloat = bits == 32 && audioFmt == 3;
-            KaiserSincResampler.UnifyPcmBytesToStereoFloat(raw, 0, frames, channels, bits, isFloat, out left, out right);
+            KaiserSincResampler.UnifyPcmBytesToStereoFloat(raw, frames * frameBytes, channels, bits, isFloat, out left, out right);
             return left.Length >= SubSampleSyncEngine.GccFftSize;
         } catch (OperationCanceledException) {
             throw;
@@ -402,7 +400,7 @@ public static class LosslessTwinDiscoveryService {
             if (frames < SubSampleSyncEngine.GccFftSize) {
                 return false;
             }
-            KaiserSincResampler.UnifyPcmBytesToStereoFloat(raw, 0, frames, 2, 32, true, out left, out right);
+            KaiserSincResampler.UnifyPcmBytesToStereoFloat(raw, frames * 8, 2, 32, true, out left, out right);
             return true;
         } catch (OperationCanceledException) {
             throw;
@@ -495,7 +493,7 @@ public static class LosslessTwinDiscoveryService {
                         int frameBytes = (bits / 8) * outChannels;
                         int frames = frameBytes > 0 ? chunk.Length / frameBytes : 0;
                         if (frames > 0) {
-                            KaiserSincResampler.UnifyPcmBytesToStereoFloat(chunk, 0, frames, outChannels, bits, isFloat, out float[] cL, out float[] cR);
+                            KaiserSincResampler.UnifyPcmBytesToStereoFloat(chunk, frames * frameBytes, outChannels, bits, isFloat, out float[] cL, out float[] cR);
                             int take = Math.Min(frames, MaxDecodedTwinFrames - listL.Count);
                             for (int s = 0; s < take; s++) {
                                 listL.Add(cL[s]);
@@ -673,7 +671,7 @@ public static class LosslessTwinDiscoveryService {
             }
             float[] rawMono = mono.ToArray();
             return srcSr != targetSampleRate
-                ? KaiserSincResampler.ResampleMono(rawMono, srcSr, targetSampleRate)
+                ? new KaiserSincResampler(srcSr, targetSampleRate).ResampleMono(rawMono)
                 : rawMono;
         } catch (OperationCanceledException) {
             throw;

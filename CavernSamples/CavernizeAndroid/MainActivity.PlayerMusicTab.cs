@@ -689,7 +689,7 @@ public partial class MainActivity {
         musicBottomMoreBtn.AddView(musicBottomMoreIcon, new FrameLayout.LayoutParams(Dp(18), Dp(18)) { Gravity = GravityFlags.Center });
 
         settingsUpdateDotCollapsed = new View(this) { Visibility = ViewStates.Gone };
-        settingsUpdateDotCollapsed.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.UpdateGreen, 99f);
+        settingsUpdateDotCollapsed.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.FunctionalGreen, 99f);
         musicBottomMoreBtn.AddView(settingsUpdateDotCollapsed, new FrameLayout.LayoutParams(Dp(6), Dp(6)) {
             Gravity = GravityFlags.Top | GravityFlags.End,
             TopMargin = Dp(4),
@@ -1889,7 +1889,7 @@ public partial class MainActivity {
                             : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 76), 14f, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 175), 1f);
                         UpdateSpatialBadgePillVisuals();
                         RefreshLgsrUi();
-                        RefreshSpatialXRayUi();
+                        RefreshSpatialXRayHud();
                     },
                     active: !playerEngine.LgsrBypassed);
                 abRow.AddView(abToggleBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
