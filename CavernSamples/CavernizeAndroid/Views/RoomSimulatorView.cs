@@ -6,6 +6,7 @@ using Android.OS;
 using Android.Views;
 
 using Cavern.Channels;
+using Cavern.Spatial;
 
 using Cavernize.Logic.Models;
 
@@ -48,10 +49,13 @@ public sealed class RoomSimulatorView : View {
         OrbitCamera,
         PinchZoom,
         ListenerMove,
+        SourceDrag,
         HeadDock,
         HeightDock,
         PresetClick,
         LabelsClick,
+        XRayClick,
+        XRayBandClick,
         ZoomOutClick,
         ZoomInClick,
         ResetZoomClick
@@ -91,6 +95,8 @@ public sealed class RoomSimulatorView : View {
     readonly Dictionary<TrackSourceItem, SmoothedSourceState> smoothedStates = [];
     readonly RectF[] camPresetRects = [new(), new(), new()];
     RectF camLabelsBtnRect = new();
+    RectF camXRayBtnRect = new();
+    RectF camXRayBandBtnRect = new();
     RectF camZoomOutRect = new();
     RectF camZoomInRect = new();
     RectF camResetLabelRect = new();
@@ -129,8 +135,11 @@ public sealed class RoomSimulatorView : View {
     DateTime lastRoomTapTime = DateTime.MinValue;
     DateTime lastHeightTapTime = DateTime.MinValue;
     DateTime lastHeadTapTime = DateTime.MinValue;
+    DateTime lastSourceTapTime = DateTime.MinValue;
+    TrackSourceItem lastTappedSource;
 
     TouchDragMode dragMode = TouchDragMode.None;
+    TrackSourceItem draggedSource;
     int pressedPresetIdx = -1;
     float downX;
     float downY;
@@ -138,11 +147,20 @@ public sealed class RoomSimulatorView : View {
     float lastY;
     float maxMoveDist;
 
+    SpatialXRayPowermap xrayPowermap;
+    SoundfieldTelemetry xrayTelemetry = SoundfieldTelemetry.Empty();
+
     public bool IsPositionLocked { get; set; }
+    public bool IsXRayEnabled { get; set; }
+    public SpatialXRayBandMode XRayBandMode { get; set; } = SpatialXRayBandMode.AllBands;
 
     public event Action<Vector3> ListenerPositionChanged;
     public event Action<Vector3> ListenerRotationChanged;
     public event Action<TrackSourceItem> SourceSoloToggled;
+    public event Action<TrackSourceItem, Vector3> SourcePositionDragged;
+    public event Action<TrackSourceItem> SourcePositionResetRequested;
+    public event Action<bool> XRayToggled;
+    public event Action<SpatialXRayBandMode> XRayBandModeChanged;
 
     public RoomSimulatorView(Context context) : base(context) {
         touchSlop = ViewConfiguration.Get(context)?.ScaledTouchSlop ?? 24;
@@ -272,6 +290,17 @@ public sealed class RoomSimulatorView : View {
         PostInvalidateOnAnimation();
     }
 
+    /// <summary>
+    /// Synchronizes live W13 3D spherical X-Ray powermap and soundfield telemetry for overlay rendering.
+    /// </summary>
+    public void UpdateXRayState(SpatialXRayPowermap powermap, SoundfieldTelemetry telemetry) {
+        xrayPowermap = powermap;
+        xrayTelemetry = telemetry;
+        if (IsXRayEnabled) {
+            PostInvalidateOnAnimation();
+        }
+    }
+
     public void AnimateToCameraPreset(float yawDeg, float pitchDeg) {
         targetCamYawDeg = NormalizeDeg(yawDeg);
         targetCamPitchDeg = Math.Clamp(pitchDeg, 6f, 86f);
@@ -328,23 +357,60 @@ public sealed class RoomSimulatorView : View {
         camZoomOutRect = new RectF(zOutX, zTop, zOutX + zoomBtnSz, zTop + zoomBtnSz);
         camZoomInRect = new RectF(zInX, zTop, zInX + zoomBtnSz, zTop + zoomBtnSz);
 
-        float lblBtnW = 48f * dp;
-        float lblBtnX = zOutX - 6f * dp - lblBtnW;
+        float lblBtnW = 42f * dp;
+        float lblBtnX = zOutX - 5f * dp - lblBtnW;
         camLabelsBtnRect = new RectF(lblBtnX, topY, lblBtnX + lblBtnW, topY + topBarH);
-        camResetLabelRect = new RectF(outerPad, topY, camLabelsBtnRect.Left - 6f * dp, topY + topBarH);
+
+        float bandBtnW = IsXRayEnabled ? 30f * dp : 0f;
+        float bandGap = IsXRayEnabled ? 4f * dp : 0f;
+        float bandBtnX = lblBtnX - bandGap - bandBtnW;
+        camXRayBandBtnRect = IsXRayEnabled
+            ? new RectF(bandBtnX, topY, bandBtnX + bandBtnW, topY + topBarH)
+            : new RectF(0, 0, 0, 0);
+
+        float xrayBtnW = 42f * dp;
+        float xrayBtnX = (IsXRayEnabled ? bandBtnX : lblBtnX) - 5f * dp - xrayBtnW;
+        camXRayBtnRect = new RectF(xrayBtnX, topY, xrayBtnX + xrayBtnW, topY + topBarH);
+        camResetLabelRect = new RectF(outerPad, topY, Math.Max(outerPad + 28f * dp, camXRayBtnRect.Left - 4f * dp), topY + topBarH);
 
         subTextPaint.TextAlign = Paint.Align.Left;
-        subTextPaint.TextSize = 10f * dp;
+        subTextPaint.TextSize = 9.6f * dp;
         subTextPaint.Color = OneUiTheme.TextMuted;
         canvas.DrawText(
-            $"Zoom {Math.Round(roomZoom * 100)}%",
+            $"{Math.Round(roomZoom * 100)}%",
             outerPad + 4f * dp,
             topY + topBarH * 0.5f - (subTextPaint.Ascent() + subTextPaint.Descent()) * 0.5f,
             subTextPaint);
 
+        canvas.DrawRoundRect(camXRayBtnRect, topBarH * 0.5f, topBarH * 0.5f, IsXRayEnabled ? pillActivePaint : pillInactivePaint);
+        textPaint.TextAlign = Paint.Align.Center;
+        textPaint.TextSize = 8.9f * dp;
+        textPaint.Color = IsXRayEnabled ? OneUiTheme.TextPrimary : OneUiTheme.TextSub;
+        canvas.DrawText("X-Ray", camXRayBtnRect.CenterX(),
+            camXRayBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
+
+        if (IsXRayEnabled) {
+            canvas.DrawRoundRect(camXRayBandBtnRect, topBarH * 0.5f, topBarH * 0.5f, pillInactivePaint);
+            textPaint.TextSize = 8.8f * dp;
+            textPaint.Color = XRayBandMode switch {
+                SpatialXRayBandMode.Low => Color.Rgb(255, 166, 76),
+                SpatialXRayBandMode.Mid => Color.Rgb(64, 224, 168),
+                SpatialXRayBandMode.High => Color.Rgb(158, 178, 255),
+                _ => OneUiTheme.PrimaryHigh
+            };
+            string bTag = XRayBandMode switch {
+                SpatialXRayBandMode.Low => "L",
+                SpatialXRayBandMode.Mid => "M",
+                SpatialXRayBandMode.High => "H",
+                _ => "All"
+            };
+            canvas.DrawText(bTag, camXRayBandBtnRect.CenterX(),
+                camXRayBandBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
+        }
+
         canvas.DrawRoundRect(camLabelsBtnRect, topBarH * 0.5f, topBarH * 0.5f, pillInactivePaint);
         textPaint.TextAlign = Paint.Align.Center;
-        textPaint.TextSize = 9.2f * dp;
+        textPaint.TextSize = 8.9f * dp;
         textPaint.Color = labelMode == LabelVisibilityMode.All ? OneUiTheme.PrimaryHigh : OneUiTheme.TextSub;
         string lblTag = labelMode switch {
             LabelVisibilityMode.All => "Todos",
@@ -691,6 +757,11 @@ public sealed class RoomSimulatorView : View {
         listenerScreenY = lCenter.sy;
         renderQueue.Add((true, null, 0, new Vector3(lnx, lny, lnz), 0f, 1f, null, lCenter.depth));
 
+        // W13 Spatial X-Ray 3D Spherical Energy Heatmap + Dominant DoA Vector (behind sources for crisp legibility)
+        if (IsXRayEnabled && xrayPowermap != null) {
+            DrawSpatialXRaySphericalOverlay(canvas, r, lnx, lny, lnz, camYawRad, camPitchRad, dp);
+        }
+
         renderQueue.Sort((a, b) => b.depth.CompareTo(a.depth));
 
         for (int i = 0; i < renderQueue.Count; i++) {
@@ -699,7 +770,7 @@ public sealed class RoomSimulatorView : View {
             bool effMuted = e.item.IsMuted || e.item.IsDynamicallyFilteredOut || (anySolo && !e.item.IsSolo);
             if (effMuted) continue;
             var sPt = ProjectOrbit3D(r, e.np.X, e.np.Y, e.np.Z, camYawRad, camPitchRad);
-            Color mc = ResolveDolbyMeterColor(e.rms, false, e.item.IsBed, e.item.IsLFE);
+            Color mc = ResolveDolbyMeterColor(e.rms, false, e.item.IsBed, e.item.IsLFE, e.item.Layer);
             int rayAlpha = Math.Clamp((int)Math.Round(e.rms * 66f * e.visAlpha), 5, 60);
             rayPaint.Color = Color.Argb(rayAlpha, mc.R, mc.G, mc.B);
             canvas.DrawLine(sPt.sx, sPt.sy, lCenter.sx, lCenter.sy, rayPaint);
@@ -719,7 +790,7 @@ public sealed class RoomSimulatorView : View {
             var posPt = ProjectOrbit3D(r, np.X, np.Y, np.Z, camYawRad, camPitchRad);
             hitTargets.Add((item, posPt.sx, posPt.sy));
 
-            Color meterCol = ResolveDolbyMeterColor(entry.rms, effectivelyMuted, item.IsBed, item.IsLFE);
+            Color meterCol = ResolveDolbyMeterColor(entry.rms, effectivelyMuted, item.IsBed, item.IsLFE, item.Layer);
             float scale = Math.Clamp(posPt.persp * 1.04f, 0.72f, 1.25f);
 
             if (item.IsBed) {
@@ -886,11 +957,27 @@ public sealed class RoomSimulatorView : View {
 
                 if (item.IsSolo) canvas.DrawCircle(posPt.sx, posPt.sy, rad + 3.4f * dp, soloRingPaint);
 
-                if (labelMode == LabelVisibilityMode.All) {
+                // W13 custom-pinned ring when the user manually dragged this object/stem/mic
+                if (item.HasCustomPosition) {
+                    strokePaint.StrokeWidth = 1.6f * dp;
+                    strokePaint.Color = Color.Rgb(64, 224, 255);
+                    canvas.DrawCircle(posPt.sx, posPt.sy, rad + (item.IsSolo ? 6.0f : 3.2f) * dp, strokePaint);
+                }
+
+                bool showTag = labelMode == LabelVisibilityMode.All || item.HasCustomPosition || (IsXRayEnabled && (entry.rms > 0.05f || item.IsSolo));
+                if (showTag) {
+                    string baseTag = item.Layer == SourceLayer.LiveMicrophone
+                        ? "MIC"
+                        : (item.Layer == SourceLayer.NeuralStem ? $"S{entry.objNumber}" : $"O{entry.objNumber}");
+                    string delaySuffix = (IsXRayEnabled || item.HasCustomPosition || ReferenceEquals(draggedSource, item)) && item.PropagationDelayMs > 0.05f
+                        ? $" {item.PropagationDelayMs:0.0}ms"
+                        : string.Empty;
                     textPaint.TextAlign = Paint.Align.Center;
-                    textPaint.TextSize = 8.2f * dp;
-                    textPaint.Color = Color.Argb((int)Math.Round(210 * va), OneUiTheme.TextSecondary.R, OneUiTheme.TextSecondary.G, OneUiTheme.TextSecondary.B);
-                    canvas.DrawText($"O{entry.objNumber}", posPt.sx, posPt.sy - rad - (np.Y > 0.15f ? 7.5f : 3.5f) * dp, textPaint);
+                    textPaint.TextSize = 8.0f * dp;
+                    textPaint.Color = item.HasCustomPosition
+                        ? Color.Rgb(118, 232, 255)
+                        : Color.Argb((int)Math.Round(215 * va), OneUiTheme.TextSecondary.R, OneUiTheme.TextSecondary.G, OneUiTheme.TextSecondary.B);
+                    canvas.DrawText($"{baseTag}{delaySuffix}", posPt.sx, posPt.sy - rad - (np.Y > 0.15f ? 7.5f : 3.5f) * dp, textPaint);
                 }
             }
         }
@@ -1173,8 +1260,75 @@ public sealed class RoomSimulatorView : View {
         canvas.DrawPath(ringPath, paint);
     }
 
-    static Color ResolveDolbyMeterColor(float rms, bool muted, bool isBed, bool isLfe) {
+    void DrawSpatialXRaySphericalOverlay(
+        Canvas canvas, RectF r, float lnx, float lny, float lnz,
+        float camYawRad, float camPitchRad, float dp) {
+        if (xrayPowermap == null) return;
+        float peak = MathF.Max(0.02f, xrayPowermap.PeakCellEnergy);
+        const float sphereRadius = 0.72f;
+
+        for (int i = 0; i < SpatialXRayPowermap.TotalCells; i++) {
+            float e = xrayPowermap.GetCellEnergy(i, XRayBandMode);
+            float norm = Math.Clamp(e / peak, 0f, 1f);
+            if (norm < 0.08f) continue;
+
+            Vector3 dir = xrayPowermap.CellDirections[i];
+            float sx = Math.Clamp(lnx + dir.X * sphereRadius, -1f, 1f);
+            float sy = Math.Clamp(lny + dir.Y * sphereRadius, -1f, 1f);
+            float sz = Math.Clamp(lnz + dir.Z * sphereRadius, -1f, 1f);
+            var proj = ProjectOrbit3D(r, sx, sy, sz, camYawRad, camPitchRad);
+
+            Color cellCol;
+            if (XRayBandMode == SpatialXRayBandMode.Low) {
+                cellCol = Color.Rgb(255, 138, 64);
+            } else if (XRayBandMode == SpatialXRayBandMode.Mid) {
+                cellCol = Color.Rgb(48, 224, 158);
+            } else if (XRayBandMode == SpatialXRayBandMode.High) {
+                cellCol = Color.Rgb(128, 168, 255);
+            } else {
+                float lo = xrayPowermap.LowBand[i];
+                float mi = xrayPowermap.MidBand[i];
+                float hi = xrayPowermap.HighBand[i];
+                float sum = lo + mi + hi + 1e-6f;
+                int cr = Math.Clamp((int)Math.Round((lo * 255f + mi * 56f + hi * 136f) / sum), 40, 255);
+                int cg = Math.Clamp((int)Math.Round((lo * 136f + mi * 228f + hi * 170f) / sum), 40, 255);
+                int cb = Math.Clamp((int)Math.Round((lo * 64f + mi * 165f + hi * 255f) / sum), 50, 255);
+                cellCol = Color.Rgb(cr, cg, cb);
+            }
+
+            float rad = (7.5f + norm * 16f) * dp * Math.Clamp(proj.persp, 0.72f, 1.2f);
+            int alpha = Math.Clamp((int)Math.Round(norm * 102f), 14, 108);
+            using RadialGradient heatGrad = new(
+                proj.sx, proj.sy, Math.Max(1f, rad),
+                [Color.Argb(alpha, cellCol.R, cellCol.G, cellCol.B).ToArgb(), Color.Transparent.ToArgb()],
+                [0f, 1f], Shader.TileMode.Clamp);
+            fillPaint.SetShader(heatGrad);
+            canvas.DrawCircle(proj.sx, proj.sy, rad, fillPaint);
+            fillPaint.SetShader(null);
+        }
+
+        // Dominant Direction-of-Arrival (DoA) acoustic vector from listener
+        Vector3 doa = xrayPowermap.DominantDirection;
+        if (doa.LengthSquared() > 0.04f) {
+            var lPt = ProjectOrbit3D(r, lnx, lny, lnz, camYawRad, camPitchRad);
+            var tip = ProjectOrbit3D(r,
+                Math.Clamp(lnx + doa.X * 0.62f, -1f, 1f),
+                Math.Clamp(lny + doa.Y * 0.62f, -1f, 1f),
+                Math.Clamp(lnz + doa.Z * 0.62f, -1f, 1f),
+                camYawRad, camPitchRad);
+            strokePaint.StrokeWidth = 2.0f * dp;
+            strokePaint.Color = Color.Argb(205, 86, 232, 255);
+            canvas.DrawLine(lPt.sx, lPt.sy, tip.sx, tip.sy, strokePaint);
+            fillPaint.SetShader(null);
+            fillPaint.Color = Color.Rgb(86, 232, 255);
+            canvas.DrawCircle(tip.sx, tip.sy, 3.2f * dp, fillPaint);
+        }
+    }
+
+    static Color ResolveDolbyMeterColor(float rms, bool muted, bool isBed, bool isLfe, SourceLayer layer = SourceLayer.Bed) {
         if (muted) return Color.Rgb(72, 76, 88);
+        if (layer == SourceLayer.LiveMicrophone) return rms >= 0.55f ? Color.Rgb(255, 84, 84) : Color.Rgb(52, 224, 162);
+        if (layer == SourceLayer.NeuralStem) return rms >= 0.55f ? Color.Rgb(255, 112, 92) : Color.Rgb(64, 212, 245);
         if (rms >= 0.55f) return Color.Rgb(255, 84, 84);
         if (rms >= 0.24f) return Color.Rgb(248, 196, 62);
         if (rms >= 0.015f) return isLfe ? OneUiTheme.LfeChannel : Color.Rgb(58, 214, 132);
@@ -1218,6 +1372,14 @@ public sealed class RoomSimulatorView : View {
                     }
                 }
 
+                if (camXRayBtnRect.Contains(tx, ty)) {
+                    dragMode = TouchDragMode.XRayClick;
+                    return true;
+                }
+                if (IsXRayEnabled && camXRayBandBtnRect.Contains(tx, ty)) {
+                    dragMode = TouchDragMode.XRayBandClick;
+                    return true;
+                }
                 if (camLabelsBtnRect.Contains(tx, ty)) {
                     dragMode = TouchDragMode.LabelsClick;
                     return true;
@@ -1263,6 +1425,15 @@ public sealed class RoomSimulatorView : View {
                         return true;
                     }
 
+                    // W13 Draggable 3D Objects / Neural Stems / Live Microphone (tap still toggles Solo)
+                    TrackSourceItem hitDraggable = FindNearestSource(tx, ty, 24f * dp);
+                    if (!IsPositionLocked && hitDraggable != null && hitDraggable.IsCustomDraggable) {
+                        draggedSource = hitDraggable;
+                        dragMode = TouchDragMode.SourceDrag;
+                        Parent?.RequestDisallowInterceptTouchEvent(true);
+                        return true;
+                    }
+
                     dragMode = TouchDragMode.OrbitCamera;
                     Parent?.RequestDisallowInterceptTouchEvent(true);
                     cameraAnimating = false;
@@ -1297,7 +1468,7 @@ public sealed class RoomSimulatorView : View {
                 float dist = MathF.Sqrt(dx * dx + dy * dy);
                 if (dist > maxMoveDist) maxMoveDist = dist;
 
-                if (dragMode is TouchDragMode.PresetClick or TouchDragMode.LabelsClick or TouchDragMode.ZoomOutClick or TouchDragMode.ZoomInClick or TouchDragMode.ResetZoomClick) {
+                if (dragMode is TouchDragMode.PresetClick or TouchDragMode.LabelsClick or TouchDragMode.XRayClick or TouchDragMode.XRayBandClick or TouchDragMode.ZoomOutClick or TouchDragMode.ZoomInClick or TouchDragMode.ResetZoomClick) {
                     return true;
                 }
 
@@ -1335,6 +1506,16 @@ public sealed class RoomSimulatorView : View {
                     return true;
                 }
 
+                if (dragMode == TouchDragMode.SourceDrag && !IsPositionLocked && draggedSource != null) {
+                    Parent?.RequestDisallowInterceptTouchEvent(true);
+                    if (maxMoveDist >= touchSlop * 0.55f) {
+                        UpdateDraggedSourceFromRoomTouch(draggedSource, tx, ty, lastX, lastY, dp);
+                    }
+                    lastX = tx;
+                    lastY = ty;
+                    return true;
+                }
+
                 if (dragMode == TouchDragMode.OrbitCamera) {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
                     float stepX = tx - lastX;
@@ -1363,11 +1544,43 @@ public sealed class RoomSimulatorView : View {
                 Parent?.RequestDisallowInterceptTouchEvent(false);
                 bool wasTap = maxMoveDist < touchSlop;
                 TouchDragMode endedMode = dragMode;
+                TrackSourceItem endedSource = draggedSource;
                 int preset = pressedPresetIdx;
                 dragMode = TouchDragMode.None;
+                draggedSource = null;
                 pressedPresetIdx = -1;
 
                 if (!wasTap) {
+                    Invalidate();
+                    return true;
+                }
+
+                if (endedMode == TouchDragMode.XRayClick) {
+                    IsXRayEnabled = !IsXRayEnabled;
+                    XRayToggled?.Invoke(IsXRayEnabled);
+                    Invalidate();
+                    return true;
+                }
+                if (endedMode == TouchDragMode.XRayBandClick) {
+                    XRayBandMode = (SpatialXRayBandMode)(((int)XRayBandMode + 1) % 4);
+                    XRayBandModeChanged?.Invoke(XRayBandMode);
+                    Invalidate();
+                    return true;
+                }
+
+                if (endedMode == TouchDragMode.SourceDrag && endedSource != null) {
+                    DateTime now = DateTime.UtcNow;
+                    if (endedSource.HasCustomPosition && ReferenceEquals(lastTappedSource, endedSource) &&
+                        (now - lastSourceTapTime).TotalMilliseconds < 320) {
+                        lastTappedSource = null;
+                        lastSourceTapTime = DateTime.MinValue;
+                        SourcePositionResetRequested?.Invoke(endedSource);
+                    } else {
+                        lastTappedSource = endedSource;
+                        lastSourceTapTime = now;
+                        endedSource.IsSolo = !endedSource.IsSolo;
+                        SourceSoloToggled?.Invoke(endedSource);
+                    }
                     Invalidate();
                     return true;
                 }
@@ -1473,12 +1686,37 @@ public sealed class RoomSimulatorView : View {
             case MotionEventActions.Cancel:
                 Parent?.RequestDisallowInterceptTouchEvent(false);
                 dragMode = TouchDragMode.None;
+                draggedSource = null;
                 pressedPresetIdx = -1;
                 Invalidate();
                 return false;
         }
 
         return base.OnTouchEvent(e);
+    }
+
+    void UpdateDraggedSourceFromRoomTouch(TrackSourceItem item, float tx, float ty, float prevX, float prevY, float dp) {
+        if (item == null || roomCanvasRect.Width() <= 0 || roomCanvasRect.Height() <= 0) return;
+        float camYawRad = camYawDeg * (MathF.PI / 180f);
+        float camPitchRad = camPitchDeg * (MathF.PI / 180f);
+        Vector3 cur = item.HasCustomPosition ? item.CustomNormalizedPosition : item.NormalizedPosition;
+        Vector3 next;
+        if (camPitchDeg < 16f) {
+            float dyNorm = -(ty - prevY) / Math.Max(40f * dp, roomCanvasRect.Height() * 0.35f);
+            float dxNorm = (tx - prevX) / Math.Max(40f * dp, roomCanvasRect.Width() * 0.35f);
+            float nx = Math.Clamp(cur.X + dxNorm * MathF.Cos(camYawRad), -1f, 1f);
+            float nz = Math.Clamp(cur.Z - dxNorm * MathF.Sin(camYawRad), -1f, 1f);
+            float ny = Math.Clamp(cur.Y + dyNorm, -1f, 1f);
+            next = new Vector3(nx, ny, nz);
+        } else {
+            var (nx, nz) = UnprojectHorizontalPlane(roomCanvasRect, tx, ty, cur.Y, camYawRad, camPitchRad);
+            next = new Vector3(nx, cur.Y, nz);
+        }
+        item.HasCustomPosition = true;
+        item.CustomNormalizedPosition = next;
+        item.NormalizedPosition = next;
+        SourcePositionDragged?.Invoke(item, next);
+        Invalidate();
     }
 
     void UpdateHeightFromCapsuleTouch(float ty) {

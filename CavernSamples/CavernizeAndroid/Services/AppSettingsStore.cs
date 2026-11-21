@@ -844,6 +844,27 @@ public sealed class AppSettingsStore {
         set => Edit().PutBoolean("roomPosLocked", value).Apply();
     }
 
+    // W13: 6DoF Walkable 3D Room & Studio Spatial X-Ray Inspector
+    public bool PropagationDelay6DoFEnabled {
+        get => prefs.GetBoolean("propDelay6DoF", true);
+        set => Edit().PutBoolean("propDelay6DoF", value).Apply();
+    }
+
+    public bool RoomXRayOverlayEnabled {
+        get => prefs.GetBoolean("roomXRayEnabled", false);
+        set => Edit().PutBoolean("roomXRayEnabled", value).Apply();
+    }
+
+    public int RoomXRayBandMode {
+        get => prefs.GetInt("roomXRayBandMode", 0);
+        set => Edit().PutInt("roomXRayBandMode", Math.Clamp(value, 0, 3)).Apply();
+    }
+
+    public bool RoomXRayInspectorExpanded {
+        get => prefs.GetBoolean("roomXRayInspectorExp", false);
+        set => Edit().PutBoolean("roomXRayInspectorExp", value).Apply();
+    }
+
     public bool OnlineAutoSelectBestMatch {
         get => prefs.GetBoolean("onlineAutoBestMatch", true);
         set => Edit().PutBoolean("onlineAutoBestMatch", value).Apply();

@@ -5,9 +5,12 @@ using Android.Views;
 using Android.Widget;
 
 using Cavern;
+using Cavern.Spatial;
 using Cavern.Utilities;
+using Cavern.VocalChain;
 
 using Cavernize.Logic.Models;
+using Cavernize.Logic.Spatial;
 using CavernizeAndroid.Theme;
 using CavernizeAndroid.Views;
 
@@ -54,8 +57,19 @@ public partial class MainActivity {
     LinearLayout bentoRow1;
     bool? lastDistTileVisible;
     TextView roomBinauralProfileText;
-    Button filterAllBtn, filter3DBtn, filterHeightBtn, filterBedsBtn;
+    Button filterAllBtn, filter3DBtn, filterStemsMicBtn, filterHeightBtn, filterBedsBtn;
     bool isUserSeeking;
+
+    // W13 Studio Spatial X-Ray Inspector HUD views
+    LinearLayout xrayInspectorBody;
+    Button xrayInspectorToggleBtn;
+    TextView xraySoundfieldMetricsTv;
+    TextView xrayLgsrMetricsTv;
+    TextView xrayVocalMetricsTv;
+    Button xrayLgsrBypassBtn;
+    Button xrayVocalBypassBtn;
+    Switch xrayOverlaySwitch;
+    Button[] xrayBandBtns;
 
     Action refreshBentoTilesUi;
 
@@ -104,7 +118,9 @@ public partial class MainActivity {
         roomCard.AddView(hintTv);
 
         roomView = new RoomSimulatorView(this) {
-            IsPositionLocked = store.RoomPositionLocked
+            IsPositionLocked = store.RoomPositionLocked,
+            IsXRayEnabled = store.RoomXRayOverlayEnabled,
+            XRayBandMode = (SpatialXRayBandMode)Math.Clamp(store.RoomXRayBandMode, 0, 3)
         };
         UpdateRoomLockButtonUi();
         roomView.ListenerPositionChanged += pos => {
@@ -121,6 +137,26 @@ public partial class MainActivity {
             SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
             RefreshFilterButtonsUi();
             refreshBentoTilesUi?.Invoke();
+        };
+        roomView.SourcePositionDragged += (item, normPos) => {
+            playerEngine.SetSourceCustomPosition(item, normPos);
+            UpdateMixerRowsLive();
+        };
+        roomView.SourcePositionResetRequested += item => {
+            playerEngine.ClearSourceCustomPosition(item);
+            UpdateRoomCanvas();
+        };
+        roomView.XRayToggled += enabled => {
+            store.RoomXRayOverlayEnabled = enabled;
+            if (xrayOverlaySwitch != null && xrayOverlaySwitch.Checked != enabled) {
+                xrayOverlaySwitch.Checked = enabled;
+            }
+            UpdateRoomCanvas();
+        };
+        roomView.XRayBandModeChanged += band => {
+            store.RoomXRayBandMode = (int)band;
+            playerEngine.SceneHub.ActiveXRayBandMode = band;
+            RefreshXRayBandButtonsUi();
         };
         roomCard.AddView(roomView);
 
@@ -209,6 +245,9 @@ public partial class MainActivity {
         }, "°", defaultValue: 0);
         roomCard.AddView(fineTuneContainer);
         page.AddView(roomCard);
+
+        // 1B. W13 Studio Spatial X-Ray Inspector Card (Native One UI 9 Collapsible HUD)
+        page.AddView(BuildSpatialXRayInspectorCard());
 
         // 2. Transport Card featuring One UI 9 WaveSeekbar
         LinearLayout transportCard = Card(S["TimelineLabel"], OneUiIconType.Play, OneUiTheme.IconSliderMedia);
@@ -388,12 +427,16 @@ public partial class MainActivity {
             store.MuteBed = flag;
             playerEngine.MuteBed = flag;
         }));
+        filterStemsMicBtn = FilterBtn(S["FilterStemsMicOnly"], () => ToggleCategorySolo(
+            item => item.Layer == SourceLayer.NeuralStem || item.Layer == SourceLayer.LiveMicrophone,
+            _ => { }));
         filterHeightBtn = FilterBtn(S["FilterHeightOnly"], ToggleDynamicCeilingFilter);
         filterBedsBtn = FilterBtn(S["FilterBedsOnly"], () => ToggleCategorySolo(item => item.IsBed, flag => {
             playerEngine.OnlyBeds = flag;
         }));
         filterRow.AddView(filterAllBtn);
         filterRow.AddView(filter3DBtn);
+        filterRow.AddView(filterStemsMicBtn);
         filterRow.AddView(filterHeightBtn);
         filterRow.AddView(filterBedsBtn);
         filterScroll.AddView(filterRow);
@@ -661,8 +704,9 @@ public partial class MainActivity {
     void RefreshFilterButtonsUi() {
         bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
         bool solo3D = !dynCeil && IsCategorySoloActive(item => item.IsDynamicObject);
+        bool soloStemsMic = !dynCeil && IsCategorySoloActive(item => item.Layer == SourceLayer.NeuralStem || item.Layer == SourceLayer.LiveMicrophone);
         bool soloBeds = !dynCeil && IsCategorySoloActive(item => item.IsBed);
-        bool noneActive = !dynCeil && !solo3D && !soloBeds && !trackSourceItems.Any(x => x.IsSolo);
+        bool noneActive = !dynCeil && !solo3D && !soloStemsMic && !soloBeds && !trackSourceItems.Any(x => x.IsSolo);
 
         void Style(Button b, bool active, Color accent) {
             if (b == null) return;
@@ -674,8 +718,196 @@ public partial class MainActivity {
 
         Style(filterAllBtn, noneActive, OneUiTheme.IconSpatial);
         Style(filter3DBtn, solo3D, OneUiTheme.IconAtmosUpmix);
+        Style(filterStemsMicBtn, soloStemsMic, OneUiTheme.IconSliderMedia);
         Style(filterHeightBtn, dynCeil, OneUiTheme.IconStemsCalib);
         Style(filterBedsBtn, soloBeds, OneUiTheme.IconStudioExport);
+    }
+
+    LinearLayout BuildSpatialXRayInspectorCard() {
+        LinearLayout card = Card();
+
+        LinearLayout hdr = HRow();
+        hdr.SetPadding(0, 0, 0, Dp(4));
+        hdr.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Sliders, OneUiTheme.IconStemsCalib, 30));
+        TextView titleTv = SectionTitle(S["XRayInspectorTitle"]);
+        titleTv.SetSingleLine(true);
+        titleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        titleTv.SetPadding(Dp(8), 0, Dp(8), 0);
+        hdr.AddView(titleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        bool expanded = store.RoomXRayInspectorExpanded;
+        xrayInspectorToggleBtn = PillButton(expanded ? S["XRayInspectorHideBtn"] : S["XRayInspectorShowBtn"], () => {
+            bool next = !store.RoomXRayInspectorExpanded;
+            store.RoomXRayInspectorExpanded = next;
+            SetExpandedWithAnimation(xrayInspectorBody, next);
+            xrayInspectorToggleBtn.Text = next ? S["XRayInspectorHideBtn"] : S["XRayInspectorShowBtn"];
+            if (next) {
+                RefreshSpatialXRayHud();
+            }
+        });
+        xrayInspectorToggleBtn.TextSize = 11.2f;
+        xrayInspectorToggleBtn.SetPadding(Dp(12), Dp(6), Dp(12), Dp(6));
+        xrayInspectorToggleBtn.SetMinimumHeight(Dp(34));
+        hdr.AddView(xrayInspectorToggleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        card.AddView(hdr);
+
+        xrayInspectorBody = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = expanded ? ViewStates.Visible : ViewStates.Gone
+        };
+        xrayInspectorBody.SetPadding(0, Dp(6), 0, 0);
+
+        // Controls: 3D Heatmap Overlay + 6DoF Acoustic Propagation Delay (343 m/s)
+        xrayOverlaySwitch = AddSwitchRow(xrayInspectorBody, S["XRayOverlayToggle"], store.RoomXRayOverlayEnabled, on => {
+            store.RoomXRayOverlayEnabled = on;
+            if (roomView != null) {
+                roomView.IsXRayEnabled = on;
+                roomView.Invalidate();
+            }
+            UpdateRoomCanvas();
+        });
+
+        // 3-Band Spectral Selector Row (All / Low / Mid / High)
+        HorizontalScrollView bandScroll = new(this) { HorizontalScrollBarEnabled = false };
+        LinearLayout bandRow = HRow();
+        bandRow.SetPadding(0, Dp(4), 0, Dp(8));
+        string[] bandLabels = [S["XRayBandAll"], S["XRayBandLow"], S["XRayBandMid"], S["XRayBandHigh"]];
+        xrayBandBtns = new Button[4];
+        for (int b = 0; b < 4; b++) {
+            int idx = b;
+            Button btn = FilterBtn(bandLabels[b], () => {
+                store.RoomXRayBandMode = idx;
+                SpatialXRayBandMode mode = (SpatialXRayBandMode)idx;
+                playerEngine.SceneHub.ActiveXRayBandMode = mode;
+                if (roomView != null) {
+                    roomView.XRayBandMode = mode;
+                    roomView.Invalidate();
+                }
+                RefreshXRayBandButtonsUi();
+            });
+            xrayBandBtns[b] = btn;
+            bandRow.AddView(btn);
+        }
+        bandScroll.AddView(bandRow);
+        xrayInspectorBody.AddView(bandScroll);
+        RefreshXRayBandButtonsUi();
+
+        AddSwitchRow(xrayInspectorBody, S["XRayPropDelay6DoF"], store.PropagationDelay6DoFEnabled, on => {
+            store.PropagationDelay6DoFEnabled = on;
+            playerEngine.PropagationDelay6DoFEnabled = on;
+            UpdateRoomCanvas();
+        });
+
+        // Instant A/B Bypass & Reset Object Pins Action Row
+        LinearLayout actionRow = HRow();
+        actionRow.SetPadding(0, Dp(4), 0, Dp(8));
+        xrayLgsrBypassBtn = PillButton(S["XRayLgsrBypassBtn"], () => {
+            playerEngine.LgsrBypassed = !playerEngine.LgsrBypassed;
+            RefreshSpatialXRayHud();
+        });
+        xrayVocalBypassBtn = PillButton(S["XRayVocalBypassBtn"], () => {
+            playerEngine.VocalChainBypassed = !playerEngine.VocalChainBypassed;
+            RefreshSpatialXRayHud();
+        });
+        Button resetPinsBtn = PillButton(S["XRayResetPinsBtn"], () => {
+            playerEngine.ResetAllCustomPositions();
+            UpdateRoomCanvas();
+            Toast.MakeText(this, S["XRayPinsResetToast"], ToastLength.Short).Show();
+        });
+        xrayLgsrBypassBtn.TextSize = 11.2f;
+        xrayVocalBypassBtn.TextSize = 11.2f;
+        resetPinsBtn.TextSize = 11.2f;
+        actionRow.AddView(xrayLgsrBypassBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        actionRow.AddView(xrayVocalBypassBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        actionRow.AddView(resetPinsBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f));
+        xrayInspectorBody.AddView(actionRow);
+
+        // Live Acoustic Telemetry Sub-Tiles
+        LinearLayout AddXRaySubTile(string headerText, out TextView metricsOut) {
+            LinearLayout tile = new(this) { Orientation = Orientation.Vertical };
+            tile.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
+            tile.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
+            TextView hTv = Label(headerText, 11.2f, OneUiTheme.PrimaryHigh);
+            hTv.SetTypeface(null, TypefaceStyle.Bold);
+            hTv.SetSingleLine(true);
+            hTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+            metricsOut = Label("—", 11.5f, OneUiTheme.TextSecondary);
+            metricsOut.SetPadding(0, Dp(3), 0, 0);
+            tile.AddView(hTv);
+            tile.AddView(metricsOut);
+            xrayInspectorBody.AddView(tile, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(7)
+            });
+            return tile;
+        }
+
+        AddXRaySubTile(S["XRaySectionSoundfield"], out xraySoundfieldMetricsTv);
+        AddXRaySubTile(S["XRaySectionLgsr"], out xrayLgsrMetricsTv);
+        AddXRaySubTile(S["XRaySectionVocal"], out xrayVocalMetricsTv);
+
+        card.AddView(xrayInspectorBody);
+        RefreshSpatialXRayHud();
+        return card;
+    }
+
+    void RefreshXRayBandButtonsUi() {
+        if (xrayBandBtns == null) return;
+        int active = Math.Clamp(store.RoomXRayBandMode, 0, 3);
+        Color[] accents = [OneUiTheme.IconSpatial, OneUiTheme.IconAtmosUpmix, OneUiTheme.IconSliderMedia, OneUiTheme.IconStemsCalib];
+        for (int i = 0; i < xrayBandBtns.Length; i++) {
+            Button b = xrayBandBtns[i];
+            if (b == null) continue;
+            bool on = i == active;
+            b.Background = on
+                ? OneUiTheme.CreateRippleRoundedDrawable(this, accents[i], OneUiTheme.PillCornerDp)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            b.SetTypeface(null, on ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+        }
+    }
+
+    void RefreshSpatialXRayHud() {
+        if (playerEngine == null || xraySoundfieldMetricsTv == null) {
+            return;
+        }
+        SoundfieldTelemetry tel = playerEngine.SceneHub.Telemetry;
+        LoudnessStandardsDiagnostics loud = playerEngine.LoudnessDiagnostics;
+        LgsrDiagnostics lgsr = playerEngine.LgsrDiagnostics;
+        VocalChainTelemetry vocal = playerEngine.SceneHub.VocalChainDiagnostics;
+        SpatialProgramMetadata meta = playerEngine.SceneHub.ProgramMetadata;
+
+        float cohPct = Math.Clamp(tel.Coherence * 100f, 0f, 100f);
+        float diffPct = Math.Clamp(tel.Diffuseness * 100f, 0f, 100f);
+        string mLufs = loud.MomentaryLufs > -110f ? $"{loud.MomentaryLufs:0.1}" : "--";
+        string iLufs = loud.IntegratedLufs > -110f ? $"{loud.IntegratedLufs:0.1}" : "--";
+        string tpStr = loud.TruePeakDbtp > -110f ? $"{loud.TruePeakDbtp:0.1}" : "--";
+        xraySoundfieldMetricsTv.Text =
+            $"Coh {cohPct:0}% · Diff {diffPct:0}% · M {mLufs} / I {iLufs} LUFS · {tpStr} dBTP · LRA {loud.LoudnessRangeLu:0.1} LU · GR -{loud.LimiterGainReductionDb:0.1} dB";
+
+        float cplHz = lgsr.CouplingStartHz > 0f ? lgsr.CouplingStartHz : meta.CouplingStartHz;
+        float spxHz = lgsr.SpxStartHz > 0f ? lgsr.SpxStartHz : meta.SpxStartHz;
+        string lgsrState = playerEngine.LgsrBypassed ? S["XRayBypassActive"] : (lgsr.IsRestoring ? S["XRayActiveLive"] : lgsr.Status.ToString());
+        xrayLgsrMetricsTv.Text =
+            $"[{lgsrState}] Cpl {cplHz:0} Hz · SPX {spxHz:0} Hz · GCC-PHAT {lgsr.SubSampleOffsetSamples:+0.00;-0.00;0.00} smp ({lgsr.ClockDriftPpm:+0.0;-0.0;0.0} ppm) · FLAC Fusion {lgsr.AverageFusionRatio * 100f:0}%";
+
+        string vocState = playerEngine.VocalChainBypassed ? S["XRayBypassActive"] : (tel.IsLiveMicActive ? S["XRayActiveLive"] : "STANDBY");
+        float compGr = vocal.OptoReductionDb + vocal.FetReductionDb;
+        xrayVocalMetricsTv.Text =
+            $"[{vocState}] In {vocal.InputDbfs:0.1} / Out {vocal.OutputDbfs:0.1} dBFS · Gate -{vocal.GateReductionDb:0.1} · DeEss -{vocal.DeEsserReductionDb:0.1} · Comp -{compGr:0.1} · Duck -{vocal.SidechainDuckDb:0.1} dB · RTT {tel.FullDuplexRoundTripMs:0.1} ms";
+
+        if (xrayLgsrBypassBtn != null) {
+            bool byp = playerEngine.LgsrBypassed;
+            xrayLgsrBypassBtn.Text = $"{S["XRayLgsrBypassBtn"]}: {(byp ? S["XRayBypassActive"] : S["XRayActiveLive"])}";
+            xrayLgsrBypassBtn.Background = byp
+                ? OneUiTheme.CreateRippleRoundedDrawable(this, ColDanger, OneUiTheme.PillCornerDp)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+        }
+        if (xrayVocalBypassBtn != null) {
+            bool byp = playerEngine.VocalChainBypassed;
+            xrayVocalBypassBtn.Text = $"{S["XRayVocalBypassBtn"]}: {(byp ? S["XRayBypassActive"] : S["XRayActiveLive"])}";
+            xrayVocalBypassBtn.Background = byp
+                ? OneUiTheme.CreateRippleRoundedDrawable(this, ColDanger, OneUiTheme.PillCornerDp)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+        }
     }
 
     void UpdateRoomLockButtonUi() {
@@ -832,6 +1064,7 @@ public partial class MainActivity {
             playerEngine.ListenerPosition,
             playerEngine.ListenerRotation,
             playerEngine.IsPlaying);
+        roomView.UpdateXRayState(playerEngine.SceneHub.XRayPowermap, playerEngine.SceneHub.Telemetry);
         UpdateRoomTelemetryText();
         UpdateMixerRowsLive();
     }
@@ -1026,11 +1259,13 @@ public partial class MainActivity {
             MixerRowRef r = mixerRowRefs[i];
             TrackSourceItem item = r.Item;
             ApplyMixerRowVisualState(r, dynCeil);
-            if (item.IsDynamicObject || dynCeil) {
-                Vector3 p = item.NormalizedPosition;
+            Vector3 p = item.NormalizedPosition;
+            string delayTag = !item.IsLFE && item.PropagationDelayMs > 0.05f ? $" • Δt {item.PropagationDelayMs:0.0}ms" : string.Empty;
+            string pinTag = item.HasCustomPosition ? $" • [{S["XRayObjectPinnedBadge"]}]" : string.Empty;
+            if (item.IsDynamicObject || dynCeil || item.HasCustomPosition || delayTag.Length > 0) {
                 r.SubTv.Text = dynCeil && !item.IsDynamicallyFilteredOut
-                    ? $"Pos: ({p.X:0.0}, {p.Y:0.0}, {p.Z:0.0}) • {S["CeilingLiveBadge"]}"
-                    : $"Pos: ({p.X:0.0}, {p.Y:0.0}, {p.Z:0.0})";
+                    ? $"({p.X:0.0}, {p.Y:0.0}, {p.Z:0.0}){delayTag}{pinTag} • {S["CeilingLiveBadge"]}"
+                    : $"({p.X:0.0}, {p.Y:0.0}, {p.Z:0.0}){delayTag}{pinTag}";
             }
         }
         if (dynCeil || pendingMixerReorder) {
@@ -1131,6 +1366,9 @@ public partial class MainActivity {
                 if ((++loudnessMeterTick & 3) == 0) {
                     RefreshLiveLoudnessMeterUi();
                     RefreshLgsrUi();
+                    if (activeTab == 1 && store.RoomXRayInspectorExpanded) {
+                        RefreshSpatialXRayHud();
+                    }
                 }
             }
             uiHandler?.PostDelayed(Tick, 65);

@@ -2,7 +2,7 @@ export type TabId = 'play' | 'room' | 'studio' | 'stems' | 'settings';
 
 export type Locale = 'en-US' | 'pt-BR';
 
-export type SourceKind = 'bed' | 'lfe' | 'height' | 'object';
+export type SourceKind = 'bed' | 'lfe' | 'height' | 'object' | 'stem' | 'mic';
 
 export type RolloffMode = 'disabled' | 'logarithmic' | 'linear' | 'real';
 
@@ -62,6 +62,8 @@ export interface SpatialSourceNode {
   kind: SourceKind;
   basePosition: Vec3;
   position: Vec3;
+  /** Optional user-dragged 3D pin position (overrides orbit / basePosition when non-null) */
+  customPosition?: Vec3 | null;
   rms: number;
   solo: boolean;
   mute: boolean;
@@ -157,6 +159,8 @@ export interface CavernSettings {
   customHrirName: string | null;
   headphoneVirtualizer: boolean;
   distanceSimulation: boolean;
+  /** Physical 6DoF time-of-flight propagation delay at 343 m/s (disabled for LFE) */
+  propagationDelay6DoF: boolean;
   rolloffMode: RolloffMode;
   matrixUpmix: boolean;
   cavernize3D: boolean;

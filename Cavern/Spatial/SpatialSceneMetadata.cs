@@ -103,6 +103,26 @@ namespace Cavern.Spatial {
         /// Latest block sample peak amplitude [0; 1+] for headroom monitoring.
         /// </summary>
         public float PeakLevel { get; set; }
+
+        /// <summary>
+        /// Latest low-frequency (&lt; 250 Hz) RMS energy for W13 Spatial X-Ray powermap.
+        /// </summary>
+        public float LowBandEnergy { get; set; }
+
+        /// <summary>
+        /// Latest mid-frequency (250 Hz – 2.5 kHz) RMS energy for W13 Spatial X-Ray powermap.
+        /// </summary>
+        public float MidBandEnergy { get; set; }
+
+        /// <summary>
+        /// Latest high-frequency (&gt; 2.5 kHz) RMS energy for W13 Spatial X-Ray powermap.
+        /// </summary>
+        public float HighBandEnergy { get; set; }
+
+        /// <summary>
+        /// Live 6DoF acoustic propagation time-of-flight from source to listener in milliseconds (at 343 m/s).
+        /// </summary>
+        public float PropagationDelayMs { get; set; }
     }
 
     /// <summary>
@@ -323,6 +343,41 @@ namespace Cavern.Spatial {
         public bool IsLiveMicActive { get; set; }
 
         /// <summary>
+        /// Live W11/W13 Vocal Chain input level in dBFS (-120..0).
+        /// </summary>
+        public float VocalChainInputDbfs { get; set; }
+
+        /// <summary>
+        /// Live W11/W13 Vocal Chain output level in dBFS (-120..0).
+        /// </summary>
+        public float VocalChainOutputDbfs { get; set; }
+
+        /// <summary>
+        /// Live W11/W13 Vocal Chain noise gate attenuation in dB (&lt;= 0).
+        /// </summary>
+        public float VocalChainGateReductionDb { get; set; }
+
+        /// <summary>
+        /// Live W11/W13 Vocal Chain split-band de-esser reduction in dB (&lt;= 0).
+        /// </summary>
+        public float VocalChainDeEsserReductionDb { get; set; }
+
+        /// <summary>
+        /// Live W11/W13 Vocal Chain dual FET 1176 + Optical LA-2A gain reduction in dB (&lt;= 0).
+        /// </summary>
+        public float VocalChainCompressorReductionDb { get; set; }
+
+        /// <summary>
+        /// Live W11/W13 Vocal Chain 1–4 kHz instrumental sidechain pocket ducking in dB (&lt;= 0).
+        /// </summary>
+        public float VocalChainSidechainDuckDb { get; set; }
+
+        /// <summary>
+        /// True when the W11 live vocal chain is currently in instant A/B dry bypass.
+        /// </summary>
+        public bool VocalChainBypassed { get; set; }
+
+        /// <summary>
         /// Returns an empty telemetry snapshot.
         /// </summary>
         public static SoundfieldTelemetry Empty() {
@@ -350,7 +405,14 @@ namespace Cavern.Spatial {
                 LiveMicRmsDbfs = -120f,
                 LiveMicPeakDbfs = -120f,
                 FullDuplexRoundTripMs = 0f,
-                IsLiveMicActive = false
+                IsLiveMicActive = false,
+                VocalChainInputDbfs = -120f,
+                VocalChainOutputDbfs = -120f,
+                VocalChainGateReductionDb = 0f,
+                VocalChainDeEsserReductionDb = 0f,
+                VocalChainCompressorReductionDb = 0f,
+                VocalChainSidechainDuckDb = 0f,
+                VocalChainBypassed = false
             };
         }
     }

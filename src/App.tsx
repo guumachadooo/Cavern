@@ -37,6 +37,7 @@ const DEFAULT_SETTINGS: CavernSettings = {
   customHrirName: null,
   headphoneVirtualizer: true,
   distanceSimulation: true,
+  propagationDelay6DoF: true,
   rolloffMode: 'logarithmic',
   matrixUpmix: true,
   cavernize3D: true,
@@ -102,6 +103,7 @@ export function App() {
     }
   });
   const [vocalRack, setVocalRack] = useState<VocalRackState>(() => createDefaultVocalRackState());
+  const [lgsrBypassed, setLgsrBypassed] = useState<boolean>(false);
 
   useEffect(() => {
     try {
@@ -411,6 +413,34 @@ export function App() {
     setListenerPitchDeg(0);
   };
 
+  const handleMoveSource = (sourceId: string, pos: Vec3) => {
+    setSources((prev) =>
+      prev.map((src) =>
+        src.id === sourceId ? { ...src, customPosition: pos, position: pos } : src,
+      ),
+    );
+  };
+
+  const handleResetSourcePin = (sourceId: string) => {
+    setSources((prev) =>
+      prev.map((src) => {
+        if (src.id !== sourceId) return src;
+        const cleared: SpatialSourceNode = { ...src, customPosition: null };
+        return { ...cleared, position: evaluateSourcePosition(cleared, playbackClockRef.current) };
+      }),
+    );
+  };
+
+  const handleResetAllPins = () => {
+    setSources((prev) =>
+      prev.map((src) => {
+        if (!src.customPosition) return src;
+        const cleared: SpatialSourceNode = { ...src, customPosition: null };
+        return { ...cleared, position: evaluateSourcePosition(cleared, playbackClockRef.current) };
+      }),
+    );
+  };
+
   const navTabs: Array<{ id: TabId; label: string }> = [
     { id: 'play', label: t.tabPlay },
     { id: 'room', label: t.tabRoom },
@@ -539,6 +569,10 @@ export function App() {
           <RoomTab
             t={t}
             sources={sources}
+            activeVariant={activeVariant}
+            vocalRack={vocalRack}
+            scarlett={scarlett}
+            lgsrBypassed={lgsrBypassed}
             listenerPosition={listenerPosition}
             listenerYawDeg={listenerYawDeg}
             listenerPitchDeg={listenerPitchDeg}
@@ -556,6 +590,13 @@ export function App() {
             onToggleSolo={handleToggleSolo}
             onToggleMute={handleToggleMute}
             onResetSoloMute={handleResetSoloMute}
+            onMoveSource={handleMoveSource}
+            onResetSourcePin={handleResetSourcePin}
+            onResetAllPins={handleResetAllPins}
+            onToggleLgsrBypass={() => setLgsrBypassed((v) => !v)}
+            onToggleVocalBypass={() =>
+              setVocalRack((prev) => ({ ...prev, bypass: !prev.bypass }))
+            }
           />
         )}
 

@@ -257,7 +257,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
             EnvironmentSize = new System.Numerics.Vector3(store.RoomSizeX, store.RoomSizeY, store.RoomSizeZ),
             AudioQuality = (QualityModes)Math.Clamp(store.AudioQualityIndex, 0, 3),
             UsbDacNativeSampleRateEnabled = store.UsbDacNativeSampleRate,
-            HeadTrackingPredictionMs = store.HeadTrackingPredictionMs
+            HeadTrackingPredictionMs = store.HeadTrackingPredictionMs,
+            PropagationDelay6DoFEnabled = store.PropagationDelay6DoFEnabled
         };
         playerEngine.PlaybackCompleted += () => RunOnUiThread(OnPlayerCompleted);
         audioOutput = new AndroidAudioOutput(playerEngine) {

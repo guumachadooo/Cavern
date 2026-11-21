@@ -1,6 +1,7 @@
 using System.Numerics;
 
 using Cavern.Spatial;
+using Cavern.VocalChain;
 
 using Cavernize.Logic.Models;
 
@@ -22,6 +23,8 @@ public sealed class SpatialSceneHub {
     ListenerPose6DoF listenerPose = ListenerPose6DoF.Identity;
     SpatialProgramMetadata programMetadata = SpatialProgramMetadata.CreateDefault();
     SoundfieldTelemetry telemetry = SoundfieldTelemetry.Empty();
+    readonly SpatialXRayPowermap xrayPowermap = new();
+    VocalChainTelemetry vocalChainDiagnostics;
 
     /// <summary>
     /// Raised when the structural scene (active track, decoder, source list, or binaural profile) changes.
@@ -240,6 +243,47 @@ public sealed class SpatialSceneHub {
     ProAudioDuplexDiagnostics proAudioDiagnostics = ProAudioDuplexDiagnostics.Default;
 
     /// <summary>
+    /// Live Slot 2D Auto-Vocal Mix-Match &amp; Mastering Chain telemetry snapshot for the W13 Spatial X-Ray HUD.
+    /// </summary>
+    public VocalChainTelemetry VocalChainDiagnostics {
+        get {
+            lock (syncLock) {
+                return vocalChainDiagnostics;
+            }
+        }
+        set {
+            lock (syncLock) {
+                vocalChainDiagnostics = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// W13 zero-GC 3D spherical 3-band directional energy heatmap updated each audio block.
+    /// </summary>
+    public SpatialXRayPowermap XRayPowermap => xrayPowermap;
+
+    /// <summary>
+    /// Active spectral filter band displayed in the 3D Room Spatial X-Ray overlay.
+    /// </summary>
+    public SpatialXRayBandMode ActiveXRayBandMode { get; set; } = SpatialXRayBandMode.AllBands;
+
+    /// <summary>
+    /// True when pure-physics 6DoF acoustic propagation delay (343 m/s) is active.
+    /// </summary>
+    public bool PropagationDelay6DoFEnabled { get; set; } = true;
+
+    /// <summary>
+    /// True when Slot 2C LGSR is momentarily bypassed for instant Lossy-vs-Lossless A/B comparison.
+    /// </summary>
+    public bool LgsrBypassed { get; set; }
+
+    /// <summary>
+    /// True when Slot 2D Live Vocal Chain is momentarily bypassed for instant A/B comparison.
+    /// </summary>
+    public bool VocalChainBypassed { get; set; }
+
+    /// <summary>
     /// Current 6DoF listener pose (thread-safe snapshot).
     /// </summary>
     public ListenerPose6DoF ListenerPose {
@@ -351,6 +395,59 @@ public sealed class SpatialSceneHub {
     }
 
     /// <summary>
+    /// Binds Slot 1 live microphone provider (<see cref="SourceLayer.LiveMicrophone"/>).
+    /// </summary>
+    public void BindLiveMicrophone(ILiveMicrophoneProvider provider) {
+        lock (syncLock) {
+            activeLiveMicrophone = provider;
+        }
+        SceneChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Inserts, updates, or removes the active <see cref="SourceLayer.LiveMicrophone"/> descriptor in-place
+    /// without disturbing beds, native Atmos objects, or neural stems.
+    /// </summary>
+    public void SetLiveMicrophoneDescriptor(SpatialSourceDescriptor micDescriptor) {
+        bool structuralChange = false;
+        lock (syncLock) {
+            int existingIdx = -1;
+            for (int i = 0; i < sources.Count; i++) {
+                if (sources[i].Layer == SourceLayer.LiveMicrophone) {
+                    existingIdx = i;
+                    break;
+                }
+            }
+            if (micDescriptor == null) {
+                if (existingIdx >= 0) {
+                    sources.RemoveAt(existingIdx);
+                    structuralChange = true;
+                }
+            } else if (existingIdx >= 0) {
+                SpatialSourceDescriptor dst = sources[existingIdx];
+                dst.Name = micDescriptor.Name;
+                if (!dst.HasCustomPosition) {
+                    dst.NormalizedPosition = micDescriptor.NormalizedPosition;
+                    dst.WorldPositionMeters = micDescriptor.WorldPositionMeters;
+                }
+                dst.Gain = micDescriptor.Gain;
+                dst.RmsLevel = micDescriptor.RmsLevel;
+                dst.PeakLevel = micDescriptor.PeakLevel;
+                dst.LowBandEnergy = micDescriptor.LowBandEnergy;
+                dst.MidBandEnergy = micDescriptor.MidBandEnergy;
+                dst.HighBandEnergy = micDescriptor.HighBandEnergy;
+                dst.PropagationDelayMs = micDescriptor.PropagationDelayMs;
+            } else {
+                sources.Add(micDescriptor);
+                structuralChange = true;
+            }
+        }
+        if (structuralChange) {
+            SceneChanged?.Invoke();
+        }
+    }
+
+    /// <summary>
     /// Replaces any existing <see cref="SourceLayer.NeuralStem"/> or <see cref="SourceLayer.RestoredResidual"/> descriptors
     /// with the provided Slot 2B separated stems while preserving beds and native Atmos objects intact.
     /// </summary>
@@ -448,13 +545,20 @@ public sealed class SpatialSceneHub {
     }
 
     /// <summary>
-    /// Synchronizes live position, mute/solo, dynamic filter, and RMS telemetry from existing <see cref="TrackSourceItem"/>s
-    /// into the hub's <see cref="SpatialSourceDescriptor"/> list without heap allocation.
+    /// Synchronizes live position, mute/solo, dynamic filter, 3-band RMS, and 6DoF propagation delay telemetry
+    /// from existing <see cref="TrackSourceItem"/>s into the hub's <see cref="SpatialSourceDescriptor"/> list
+    /// and updates the zero-GC <see cref="XRayPowermap"/> without heap allocation.
     /// </summary>
     public void SyncTelemetryFromTrackItems(IReadOnlyList<TrackSourceItem> items, Vector3 environmentSize) {
         if (items == null) {
             return;
         }
+        Vector3 safeEnv = new(
+            MathF.Max(0.25f, environmentSize.X),
+            MathF.Max(0.25f, environmentSize.Y),
+            MathF.Max(0.25f, environmentSize.Z));
+        Vector3 listenerNorm = listenerPose.Position / safeEnv;
+
         int count = Math.Min(items.Count, sources.Count);
         for (int i = 0; i < count; i++) {
             TrackSourceItem item = items[i];
@@ -462,23 +566,61 @@ public sealed class SpatialSceneHub {
             desc.IsMuted = item.IsMuted;
             desc.IsSolo = item.IsSolo;
             desc.IsDynamicallyFilteredOut = item.IsDynamicallyFilteredOut;
+            desc.HasCustomPosition = item.HasCustomPosition;
+            desc.CustomNormalizedPosition = item.CustomNormalizedPosition;
             desc.NormalizedPosition = item.NormalizedPosition;
-            desc.WorldPositionMeters = item.NormalizedPosition * environmentSize;
+            desc.WorldPositionMeters = item.NormalizedPosition * safeEnv;
             desc.RmsLevel = item.RmsLevel;
+            desc.LowBandEnergy = item.LowBandEnergy;
+            desc.MidBandEnergy = item.MidBandEnergy;
+            desc.HighBandEnergy = item.HighBandEnergy;
+            desc.PropagationDelayMs = item.PropagationDelayMs;
         }
+        xrayPowermap.Update(sources, listenerNorm);
     }
 
     /// <summary>
-    /// Applies a manual 3D room position override for a source (used by W10 draggable objects/stems).
+    /// Applies a manual 3D room position override for a source (used by W13 draggable objects/stems/live mic).
     /// </summary>
     public bool SetSourceCustomPosition(int sourceIndex, Vector3 normalizedPosition) {
         lock (syncLock) {
             if (sourceIndex < 0 || sourceIndex >= sources.Count) {
                 return false;
             }
+            Vector3 clamped = new(
+                Math.Clamp(normalizedPosition.X, -1f, 1f),
+                Math.Clamp(normalizedPosition.Y, -1f, 1f),
+                Math.Clamp(normalizedPosition.Z, -1f, 1f));
             sources[sourceIndex].HasCustomPosition = true;
-            sources[sourceIndex].CustomNormalizedPosition = normalizedPosition;
+            sources[sourceIndex].CustomNormalizedPosition = clamped;
+            sources[sourceIndex].NormalizedPosition = clamped;
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Clears a single source's manual 3D room pin so it resumes its native Atmos trajectory or stem default.
+    /// </summary>
+    public bool ClearSourceCustomPosition(int sourceIndex) {
+        lock (syncLock) {
+            if (sourceIndex < 0 || sourceIndex >= sources.Count) {
+                return false;
+            }
+            sources[sourceIndex].HasCustomPosition = false;
+            sources[sourceIndex].CustomNormalizedPosition = Vector3.Zero;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Clears all manual 3D room position pins while preserving active Solo/Mute states.
+    /// </summary>
+    public void ResetAllCustomPositions() {
+        lock (syncLock) {
+            for (int i = 0; i < sources.Count; i++) {
+                sources[i].HasCustomPosition = false;
+                sources[i].CustomNormalizedPosition = Vector3.Zero;
+            }
         }
     }
 

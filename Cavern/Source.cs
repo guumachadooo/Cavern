@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
+using Cavern.Spatial;
 using Cavern.Utilities;
 using Cavern.Virtualizer;
 using Cavern.Waveforms;
@@ -34,6 +35,11 @@ namespace Cavern {
         /// Pure-physics ISO 9613-1 atmospheric air absorption filter (lazy-allocated only when physical distance exceeds 5 m).
         /// </summary>
         AirAbsorptionFilter airAbsorptionFilter;
+
+        /// <summary>
+        /// Pure-physics 6DoF acoustic propagation delay line (343 m/s, lazy-allocated when enabled).
+        /// </summary>
+        AcousticPropagationDelayLine propagationDelayLine;
 
         /// <summary>
         /// <see cref="PitchedUpdateRate"/> without resampling.
@@ -245,6 +251,18 @@ namespace Cavern {
                                 AirAbsorptionFilter.GlobalTemperatureCelsius,
                                 AirAbsorptionFilter.GlobalRelativeHumidityPct);
                         }
+                    }
+
+                    // Pure-physics 6DoF acoustic time-of-flight propagation delay at 343 m/s (skip on dedicated LFE)
+                    if (AcousticPropagationDelayLine.GlobalEnabled && !LFE) {
+                        if (propagationDelayLine == null) {
+                            propagationDelayLine = new AcousticPropagationDelayLine();
+                        }
+                        Vector3 propDelta = (position - listener.Position) * Listener.EnvironmentSizeInverse * AirAbsorptionFilter.PhysicalRoomHalfSize;
+                        float propDistMeters = propDelta.Length();
+                        propagationDelayLine.ProcessInPlace(samples, 0, samples.Length, propDistMeters, listener.SampleRate);
+                    } else if (propagationDelayLine != null && propagationDelayLine.ActiveDelayMs > 0f) {
+                        propagationDelayLine.Reset();
                     }
 
                     // Distance simulation for HRTF (skip on dedicated LFE subwoofer sources)

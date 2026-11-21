@@ -23,9 +23,12 @@ public sealed class VocalMixMatchStageProcessor : ISpatialStageProcessor {
     /// <inheritdoc/>
     public int Priority => 450;
 
+    /// <summary>Instant A/B bypass flag for W13 Spatial X-Ray HUD without destroying the loaded vocal DNA profile.</summary>
+    public bool IsBypassed { get; set; }
+
     /// <inheritdoc/>
     public bool IsEnabled {
-        get => activeMacros.Enabled;
+        get => activeMacros.Enabled && !IsBypassed;
         set {
             activeMacros.Enabled = value;
             dsp.Configure(configuredSampleRate, activeDna, activeMacros, matchEqDeltasDb);
@@ -62,6 +65,9 @@ public sealed class VocalMixMatchStageProcessor : ISpatialStageProcessor {
         int frameCount,
         float[] backingStereoInterleaved = null,
         int backingOffset = 0) {
+        if (IsBypassed) {
+            return;
+        }
         dsp.ProcessStereoBlockZeroGc(
             vocalStereoInterleaved,
             vocalOffset,
@@ -73,12 +79,13 @@ public sealed class VocalMixMatchStageProcessor : ISpatialStageProcessor {
     /// <inheritdoc/>
     public void Process(SpatialSceneFrame frame) {
         // Scene-frame hook ensures Atmos vocal placement metadata stays synchronized with active DNA
+        // unless the user manually pinned the Live Microphone inside the 6DoF 3D Room.
         if (frame == null || !activeMacros.Enabled) {
             return;
         }
         IReadOnlyList<SpatialSourceDescriptor> sources = frame.Sources;
         for (int i = 0; i < sources.Count; i++) {
-            if (sources[i].Layer == SourceLayer.LiveMicrophone) {
+            if (sources[i].Layer == SourceLayer.LiveMicrophone && !sources[i].HasCustomPosition) {
                 sources[i].NormalizedPosition = activeDna.VocalAtmosPosition;
                 break;
             }

@@ -97,6 +97,9 @@ export function computeListenerOrientation(yawDeg: number, pitchDeg: number): {
  * Evaluates a dynamic 3D object's position at playback time `timeSec`.
  */
 export function evaluateSourcePosition(source: SpatialSourceNode, timeSec: number): Vec3 {
+  if (source.customPosition) {
+    return source.customPosition;
+  }
   if (!source.orbit) {
     return source.basePosition;
   }
@@ -141,6 +144,7 @@ export function isSourceActiveForVariant(
   variant: { isSpatial: boolean; objectCount: number },
   upmix: { matrixUpmix: boolean; cavernize3D: boolean },
 ): boolean {
+  if (source.kind === 'stem' || source.kind === 'mic') return true;
   if (variant.isSpatial) {
     if (source.kind === 'object') return variant.objectCount > 0;
     return true;

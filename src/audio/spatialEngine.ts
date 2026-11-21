@@ -22,6 +22,7 @@ interface ActiveVoice {
   osc: OscillatorNode;
   subOsc: OscillatorNode;
   gain: GainNode;
+  delay: DelayNode;
   panner: PannerNode;
 }
 
@@ -140,9 +141,10 @@ export class CavernSpatialAudioEngine {
         const osc = ctx.createOscillator();
         const subOsc = ctx.createOscillator();
         const gain = ctx.createGain();
+        const delay = ctx.createDelay(0.12);
         const panner = ctx.createPanner();
 
-        osc.type = src.kind === 'lfe' ? 'sine' : src.kind === 'object' ? 'triangle' : 'sine';
+        osc.type = src.kind === 'lfe' ? 'sine' : src.kind === 'object' || src.kind === 'mic' ? 'triangle' : 'sine';
         osc.frequency.value = src.synthFreqHz;
         subOsc.type = 'sine';
         subOsc.frequency.value = src.synthFreqHz * (src.kind === 'lfe' ? 0.5 : 1.5);
@@ -153,16 +155,18 @@ export class CavernSpatialAudioEngine {
         panner.maxDistance = 16;
 
         gain.gain.value = 0.0001;
+        delay.delayTime.value = 0;
 
         osc.connect(gain);
         subOsc.connect(gain);
-        gain.connect(panner);
+        gain.connect(delay);
+        delay.connect(panner);
         panner.connect(destinationNode);
 
         osc.start();
         subOsc.start();
 
-        this.voices.set(src.id, { osc, subOsc, gain, panner });
+        this.voices.set(src.id, { osc, subOsc, gain, delay, panner });
       }
     }
 
@@ -287,9 +291,23 @@ export class CavernSpatialAudioEngine {
       const dist = distance3D(listenerPos, src.position);
       const rolloff = settings.distanceSimulation ? computeRolloffGain(dist, settings.rolloffMode) : 1;
 
+      // Physical 6DoF acoustic time-of-flight propagation delay at 343 m/s (skipped for omnidirectional LFE)
+      const propagationDelaySec =
+        settings.propagationDelay6DoF && src.kind !== 'lfe'
+          ? clamp(dist / 343.0, 0, 0.1)
+          : 0;
+      voice.delay.delayTime.setTargetAtTime(propagationDelaySec, now, 0.025);
+
       // Gentle rhythmic harmonic pulse so the room feels alive and musical
       const pulse = 0.55 + 0.45 * Math.sin(playbackTimeSec * (src.kind === 'object' ? 1.8 : 0.7) + src.synthFreqHz * 0.01);
-      let baseGain = src.kind === 'object' ? 0.042 : src.kind === 'lfe' ? 0.055 * lfeLinear : 0.024;
+      let baseGain =
+        src.kind === 'object'
+          ? 0.042
+          : src.kind === 'lfe'
+            ? 0.055 * lfeLinear
+            : src.kind === 'stem' || src.kind === 'mic'
+              ? 0.018
+              : 0.024;
       if (src.kind === 'height' && !settings.cavernize3D) {
         baseGain *= 0.65;
       }
@@ -308,6 +326,7 @@ export class CavernSpatialAudioEngine {
         voice.osc.disconnect();
         voice.subOsc.disconnect();
         voice.gain.disconnect();
+        voice.delay.disconnect();
         voice.panner.disconnect();
       } catch {
         // Ignore already-stopped nodes

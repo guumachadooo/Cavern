@@ -97,6 +97,16 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
     }
 
     /// <summary>
+    /// Updates the live microphone normalized 3D room position [-1; 1] immediately when dragged inside the 6DoF Room.
+    /// </summary>
+    public void SetNormalizedPosition(Vector3 normPos) {
+        normalizedPosition = new Vector3(
+            Math.Clamp(normPos.X, -1f, 1f),
+            Math.Clamp(normPos.Y, -1f, 1f),
+            Math.Clamp(normPos.Z, -1f, 1f));
+    }
+
+    /// <summary>
     /// Marks the live microphone transport active/inactive and flushes stale frames on startup.
     /// </summary>
     public void SetStreamingActive(bool active, int activeSampleRate) {

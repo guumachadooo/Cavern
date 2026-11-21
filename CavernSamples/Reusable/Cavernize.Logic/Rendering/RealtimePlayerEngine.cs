@@ -12,6 +12,7 @@ using Cavern.Listeners;
 using Cavern.Spatial;
 using Cavern.Utilities;
 using Cavern.Virtualizer;
+using Cavern.VocalChain;
 
 using Cavernize.Logic.CavernSettings;
 using Cavernize.Logic.Models;
@@ -38,6 +39,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
     readonly ParametricUpmixerStageProcessor parametricUpmixerStage = new(new UpmixingSettings(true));
     readonly NeuralStemStageProcessor neuralStemStage = new();
     readonly LgsrStageProcessor lgsrStage = new();
+    readonly VocalMixMatchStageProcessor vocalMixMatchStage = new();
     readonly CavernVirtualizerRendererAdapter virtualizerRenderer = new();
     readonly AutoEqPostProcessingStage autoEqPostStage = new();
     readonly HptfNotchPostProcessingStage hptfNotchPostStage = new();
@@ -91,6 +93,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
         sceneHub.RegisterStageProcessor(parametricUpmixerStage);
         sceneHub.RegisterStageProcessor(neuralStemStage);
         sceneHub.RegisterStageProcessor(lgsrStage);
+        sceneHub.RegisterStageProcessor(vocalMixMatchStage);
         sceneHub.RegisterPostProcessingStage(autoEqPostStage);
         sceneHub.RegisterPostProcessingStage(hptfNotchPostStage);
         sceneHub.RegisterPostProcessingStage(iso226PostStage);
@@ -98,6 +101,8 @@ public sealed class RealtimePlayerEngine : IDisposable {
         sceneHub.RegisterPostProcessingStage(spatialDialogPostStage);
         sceneHub.RegisterPostProcessingStage(limiterPostStage);
         sceneHub.RegisterPostProcessingStage(truePeakLimiterPostStage);
+        AcousticPropagationDelayLine.GlobalEnabled = true;
+        sceneHub.PropagationDelay6DoFEnabled = true;
     }
 
     /// <summary>
@@ -247,13 +252,120 @@ public sealed class RealtimePlayerEngine : IDisposable {
     public LgsrDiagnostics LgsrDiagnostics => sceneHub.LgsrDiagnostics;
 
     /// <summary>
+    /// Slot 2D Auto-Vocal Mix-Match &amp; Live Mastering Chain stage processor (Priority 450).
+    /// </summary>
+    public VocalMixMatchStageProcessor VocalMixMatchStage => vocalMixMatchStage;
+
+    /// <summary>
+    /// Enables or disables pure-physics 6DoF acoustic time-of-flight propagation delay (343 m/s) across all non-LFE sources.
+    /// </summary>
+    public bool PropagationDelay6DoFEnabled {
+        get => AcousticPropagationDelayLine.GlobalEnabled;
+        set {
+            lock (renderLock) {
+                if (AcousticPropagationDelayLine.GlobalEnabled != value) {
+                    AcousticPropagationDelayLine.GlobalEnabled = value;
+                    sceneHub.PropagationDelay6DoFEnabled = value;
+                    if (IsPlaying && hasRenderedAudio) {
+                        ArmCrossfadeLocked();
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Instant A/B bypass for Slot 2C LGSR Lossless-Guided Atmos Restoration inside the W13 Spatial X-Ray HUD.
+    /// </summary>
+    public bool LgsrBypassed {
+        get => lgsrBypassed;
+        set {
+            lock (renderLock) {
+                if (lgsrBypassed != value) {
+                    lgsrBypassed = value;
+                    sceneHub.LgsrBypassed = value;
+                    if (IsPlaying && hasRenderedAudio) {
+                        ArmCrossfadeLocked();
+                    }
+                }
+            }
+        }
+    }
+    bool lgsrBypassed;
+
+    /// <summary>
+    /// Instant A/B bypass for Slot 2D Live Vocal Mastering Chain inside the W13 Spatial X-Ray HUD.
+    /// </summary>
+    public bool VocalChainBypassed {
+        get => vocalMixMatchStage.IsBypassed;
+        set {
+            lock (renderLock) {
+                if (vocalMixMatchStage.IsBypassed != value) {
+                    vocalMixMatchStage.IsBypassed = value;
+                    sceneHub.VocalChainBypassed = value;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Pins a draggable 3D object, neural stem, or live microphone to a custom normalized room position [-1; 1].
+    /// </summary>
+    public void SetSourceCustomPosition(TrackSourceItem item, Vector3 normalizedPosition) {
+        if (item == null) {
+            return;
+        }
+        Vector3 clamped = new(
+            Math.Clamp(normalizedPosition.X, -1f, 1f),
+            Math.Clamp(normalizedPosition.Y, -1f, 1f),
+            Math.Clamp(normalizedPosition.Z, -1f, 1f));
+        lock (renderLock) {
+            item.HasCustomPosition = true;
+            item.CustomNormalizedPosition = clamped;
+            item.NormalizedPosition = clamped;
+            if (item.Layer == SourceLayer.LiveMicrophone) {
+                liveMicBridge.SetNormalizedPosition(clamped);
+            }
+            sceneHub.SetSourceCustomPosition(item.Index, clamped);
+        }
+    }
+
+    /// <summary>
+    /// Releases a single source's custom 3D pin so it returns to its native Atmos trajectory or stem default.
+    /// </summary>
+    public void ClearSourceCustomPosition(TrackSourceItem item) {
+        if (item == null) {
+            return;
+        }
+        lock (renderLock) {
+            item.HasCustomPosition = false;
+            item.CustomNormalizedPosition = Vector3.Zero;
+            sceneHub.ClearSourceCustomPosition(item.Index);
+        }
+    }
+
+    /// <summary>
+    /// Resets all manually dragged 3D object / stem / live mic pins back to their native trajectories.
+    /// </summary>
+    public void ResetAllCustomPositions() {
+        lock (renderLock) {
+            for (int i = 0; i < sourceItems.Count; i++) {
+                sourceItems[i].HasCustomPosition = false;
+                sourceItems[i].CustomNormalizedPosition = Vector3.Zero;
+            }
+            liveMicBridge.SetNormalizedPosition(proAudioConfig.MicNormalizedPosition);
+            sceneHub.ResetAllCustomPositions();
+        }
+    }
+
+    /// <summary>
     /// Applies updated Slot 2C LGSR parameters cleanly in real time with clickless crossfade on activation toggle.
     /// </summary>
     public void ApplyLgsrConfig(LgsrConfig config) {
         lock (renderLock) {
-            bool wasActive = lgsrStage.IsActivelyRestoring;
+            bool wasActive = lgsrStage.IsActivelyRestoring && !lgsrBypassed;
             lgsrStage.ApplyConfig(config);
-            bool nowActive = lgsrStage.IsActivelyRestoring;
+            bool nowActive = lgsrStage.IsActivelyRestoring && !lgsrBypassed;
             if (wasActive != nowActive && IsPlaying && hasRenderedAudio) {
                 ArmCrossfadeLocked();
             }
@@ -818,8 +930,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 }
 
                 // Slot 5: Binaural / Stereo renderer (delegates to Cavern Listener + VirtualizerFilter)
-                // Attach Slot 2C LGSR on the Pre-HRTF Virtual Speaker Bus in Headphone Virtualizer mode
-                VirtualizerFilter.PreHrtfBusProcessor = HeadphoneVirtualizer && lgsrStage.IsActivelyRestoring
+                // Attach Slot 2C LGSR on the Pre-HRTF Virtual Speaker Bus in Headphone Virtualizer mode (respecting instant A/B bypass)
+                bool lgsrActive = lgsrStage.IsActivelyRestoring && !lgsrBypassed;
+                VirtualizerFilter.PreHrtfBusProcessor = HeadphoneVirtualizer && lgsrActive
                     ? lgsrStage
                     : null;
                 IBinauralRenderer renderer = sceneHub.ActiveRenderer ?? virtualizerRenderer;
@@ -829,7 +942,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 }
 
                 // Direct 2.0 fallback for Slot 2C LGSR when Headphone Virtualizer is bypassed (speakers / USB DAC)
-                if (!HeadphoneVirtualizer && lgsrStage.IsActivelyRestoring) {
+                if (!HeadphoneVirtualizer && lgsrActive) {
                     lgsrStage.ProcessDirectStereoFallback(stereoOutput, outOffset, blockFrames, currentTrackSample);
                 }
 
@@ -900,6 +1013,14 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 blockTelemetry.LiveMicPeakDbfs = liveMicBridge.PeakDbfs;
                 blockTelemetry.FullDuplexRoundTripMs = liveMicBridge.RoundTripLatencyMs;
                 blockTelemetry.IsLiveMicActive = liveMicBridge.IsActive;
+                VocalChainTelemetry vocalTel = vocalMixMatchStage.Telemetry;
+                blockTelemetry.VocalChainInputDbfs = vocalTel.InputDbfs;
+                blockTelemetry.VocalChainOutputDbfs = vocalTel.OutputDbfs;
+                blockTelemetry.VocalChainGateReductionDb = vocalTel.GateReductionDb;
+                blockTelemetry.VocalChainDeEsserReductionDb = vocalTel.DeEsserReductionDb;
+                blockTelemetry.VocalChainCompressorReductionDb = vocalTel.OptoReductionDb + vocalTel.FetReductionDb;
+                blockTelemetry.VocalChainSidechainDuckDb = vocalTel.SidechainDuckDb;
+                blockTelemetry.VocalChainBypassed = vocalMixMatchStage.IsBypassed;
                 activeSceneFrame.Telemetry = blockTelemetry;
 
                 RecordTailLocked(stereoOutput, outOffset, blockFrames);
@@ -914,6 +1035,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 }
                 parametricUpmixerStage.SyncTelemetry(activeSceneFrame);
                 sceneHub.Telemetry = activeSceneFrame.Telemetry;
+                sceneHub.VocalChainDiagnostics = vocalTel;
                 sceneHub.ExternalizationDiagnostics = virtualizerRenderer.Diagnostics;
                 PublishLoudnessDiagnosticsLocked();
                 sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
@@ -1197,6 +1319,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
         if (activeLayers != null && flatSources.Length == activeLayers.Length && sourceItems.Count == rendererObjects.Count) {
             for (int idx = 0; idx < flatSources.Length; idx++) {
                 Source src = flatSources[idx];
+                if (idx < sourceItems.Count && sourceItems[idx].HasCustomPosition) {
+                    src.Position = sourceItems[idx].CustomNormalizedPosition * Listener.EnvironmentSize;
+                }
                 Vector3 rawPos = src.Position * invEnv;
                 bool dynFiltered = DynamicCeilingOnly && rawPos.Y <= 0.15f;
                 bool mute;
@@ -1228,6 +1353,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
             for (int i = 0; i < rendererObjects.Count; i++) {
                 Source src = rendererObjects[i];
                 TrackSourceItem item = sourceItems[i];
+                if (item.HasCustomPosition) {
+                    src.Position = item.CustomNormalizedPosition * Listener.EnvironmentSize;
+                }
                 Vector3 rawPos = src.Position * invEnv;
 
                 bool dynFiltered = DynamicCeilingOnly && rawPos.Y <= 0.15f;
@@ -1323,27 +1451,48 @@ public sealed class RealtimePlayerEngine : IDisposable {
         if (rendererObjects == null) {
             return;
         }
-        Vector3 invEnv = Vector3.One / Listener.EnvironmentSize;
+        Vector3 envSize = Listener.EnvironmentSize;
+        Vector3 invEnv = new(
+            1f / MathF.Max(0.25f, envSize.X),
+            1f / MathF.Max(0.25f, envSize.Y),
+            1f / MathF.Max(0.25f, envSize.Z));
+        Vector3 listenerNorm = sceneHub.ListenerPose.Position * invEnv;
+        Vector3 physHalf = AirAbsorptionFilter.PhysicalRoomHalfSize;
+        int sr = listener != null && listener.SampleRate > 0 ? listener.SampleRate : Listener.DefaultSampleRate;
+
         int count = Math.Min(sourceItems.Count, rendererObjects.Count);
         for (int i = 0; i < count; i++) {
             Source src = rendererObjects[i];
-            sourceItems[i].NormalizedPosition = src.Position * invEnv;
+            TrackSourceItem item = sourceItems[i];
+            Vector3 normPos = src.Position * invEnv;
+            item.NormalizedPosition = normPos;
+            Vector3 deltaMeters = (normPos - listenerNorm) * physHalf;
+            item.PropagationDelayMs = item.IsLFE
+                ? 0f
+                : AcousticPropagationDelayLine.ComputePropagationDelayMs(deltaMeters.Length());
+
             float[] rendered = src.Rendered?[0];
             if (rendered != null && rendered.Length > 0 && !src.Mute) {
-                double sumSq = 0;
-                int step = Math.Max(1, rendered.Length / 16);
-                int samples = 0;
-                for (int s = 0; s < rendered.Length; s += step) {
-                    float v = rendered[s];
-                    sumSq += v * v;
-                    samples++;
-                }
-                sourceItems[i].RmsLevel = MathF.Sqrt((float)(sumSq / Math.Max(1, samples)));
+                SpatialXRayPowermap.EstimateThreeBandRms(
+                    rendered,
+                    0,
+                    rendered.Length,
+                    sr,
+                    out float lowRms,
+                    out float midRms,
+                    out float highRms);
+                item.LowBandEnergy = lowRms;
+                item.MidBandEnergy = midRms;
+                item.HighBandEnergy = highRms;
+                item.RmsLevel = MathF.Sqrt(lowRms * lowRms + midRms * midRms + highRms * highRms);
             } else {
-                sourceItems[i].RmsLevel = 0f;
+                item.RmsLevel = 0f;
+                item.LowBandEnergy = 0f;
+                item.MidBandEnergy = 0f;
+                item.HighBandEnergy = 0f;
             }
         }
-        sceneHub.SyncTelemetryFromTrackItems(sourceItems, Listener.EnvironmentSize);
+        sceneHub.SyncTelemetryFromTrackItems(sourceItems, envSize);
     }
 
     /// <inheritdoc/>
@@ -1368,6 +1517,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             parametricUpmixerStage.Dispose();
             neuralStemStage.Dispose();
             lgsrStage.Dispose();
+            vocalMixMatchStage.Dispose();
             manualHeadTracker.Dispose();
         }
         GC.SuppressFinalize(this);

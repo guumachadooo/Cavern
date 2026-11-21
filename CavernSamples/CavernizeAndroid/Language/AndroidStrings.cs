@@ -833,6 +833,28 @@ public sealed class AndroidStrings {
         ["StudioW12PresetLiveMixdown"] = "Live Karaoke Performance Spatial Mixdown",
         ["StudioW12PresetFlacAtmos"] = "FLAC + Atmos Hybrid Lossless Spatial Master",
         ["StudioW12DoneFormat"] = "Master exported: {0} ({1:0.1} LUFS · {2:0.1} dBTP)",
+
+        // W13 6DoF Walkable 3D Room & Studio Spatial X-Ray Inspector
+        ["XRayInspectorTitle"] = "Spatial X-Ray Inspector",
+        ["XRayInspectorShowBtn"] = "Open X-Ray HUD",
+        ["XRayInspectorHideBtn"] = "Hide X-Ray HUD",
+        ["XRayOverlayToggle"] = "3D Spherical Energy Heatmap",
+        ["XRayBandAll"] = "All",
+        ["XRayBandLow"] = "Low <250Hz",
+        ["XRayBandMid"] = "Mid 250-2.5k",
+        ["XRayBandHigh"] = "High >2.5kHz",
+        ["XRayPropDelay6DoF"] = "6DoF Acoustic Delay (343 m/s)",
+        ["XRayResetPinsBtn"] = "Reset Object Pins",
+        ["XRayPinsResetToast"] = "All pinned 3D objects, stems & mic returned to native trajectory",
+        ["XRayObjectPinnedBadge"] = "PIN",
+        ["XRaySectionSoundfield"] = "Soundfield & ITU-R BS.1770-5",
+        ["XRaySectionLgsr"] = "Lossy vs Lossless X-Ray (LGSR)",
+        ["XRaySectionVocal"] = "Live Vocal Chain X-Ray",
+        ["XRayBypassActive"] = "BYPASS",
+        ["XRayActiveLive"] = "ACTIVE",
+        ["XRayLgsrBypassBtn"] = "LGSR A/B",
+        ["XRayVocalBypassBtn"] = "Vocal A/B",
+        ["FilterStemsMicOnly"] = "Stems & Mic",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -1616,6 +1638,28 @@ public sealed class AndroidStrings {
         d["StudioW12PresetLiveMixdown"] = "Mixdown Espacial de Performance Karaokê ao Vivo";
         d["StudioW12PresetFlacAtmos"] = "Master Espacial Híbrido FLAC + Atmos Lossless";
         d["StudioW12DoneFormat"] = "Master exportado: {0} ({1:0.1} LUFS · {2:0.1} dBTP)";
+
+        // W13 6DoF Walkable 3D Room & Studio Spatial X-Ray Inspector
+        d["XRayInspectorTitle"] = "Inspetor Espacial X-Ray";
+        d["XRayInspectorShowBtn"] = "Abrir HUD X-Ray";
+        d["XRayInspectorHideBtn"] = "Ocultar HUD X-Ray";
+        d["XRayOverlayToggle"] = "Mapa Esférico de Energia 3D";
+        d["XRayBandAll"] = "Tudo";
+        d["XRayBandLow"] = "Graves <250Hz";
+        d["XRayBandMid"] = "Médios 250-2.5k";
+        d["XRayBandHigh"] = "Agudos >2.5kHz";
+        d["XRayPropDelay6DoF"] = "Atraso Acústico 6DoF (343 m/s)";
+        d["XRayResetPinsBtn"] = "Soltar Objetos";
+        d["XRayPinsResetToast"] = "Todos os objetos 3D, stems e mic voltaram à trajetória nativa";
+        d["XRayObjectPinnedBadge"] = "FIXO";
+        d["XRaySectionSoundfield"] = "Campo Sonoro & ITU-R BS.1770-5";
+        d["XRaySectionLgsr"] = "Raio-X Lossy vs Lossless (LGSR)";
+        d["XRaySectionVocal"] = "Raio-X da Cadeia Vocal ao Vivo";
+        d["XRayBypassActive"] = "BYPASS";
+        d["XRayActiveLive"] = "ATIVO";
+        d["XRayLgsrBypassBtn"] = "LGSR A/B";
+        d["XRayVocalBypassBtn"] = "Vocal A/B";
+        d["FilterStemsMicOnly"] = "Stems e Mic";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {
