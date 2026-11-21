@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -121,7 +122,9 @@ public static partial class AudioTagReader {
             long boxSize = sz32;
             if (sz32 == 1) {
                 if (fs.Read(extSize) < 8) break;
-                boxSize = (long)BinaryPrimitives.ReadUInt64BigEndian(extSize);
+                ulong extVal = BinaryPrimitives.ReadUInt64BigEndian(extSize);
+                if (extVal < 16 || extVal > (ulong)long.MaxValue) break;
+                boxSize = (long)extVal;
             } else if (sz32 == 0) {
                 boxSize = endPos - boxStart;
             }
@@ -167,11 +170,14 @@ public static partial class AudioTagReader {
                 if (subType == "data" && subEnd - fs.Position >= 8) {
                     if (fs.Read(dataHdr[..8]) < 8) break;
                     uint typeInd = BinaryPrimitives.ReadUInt32BigEndian(dataHdr[..4]) & 0xFFFFFF;
-                    int payloadLen = (int)Math.Min(131072, Math.Max(0, subEnd - fs.Position));
-                    if (payloadLen > 0) {
-                        byte[] buf = new byte[payloadLen];
-                        int read = fs.Read(buf, 0, payloadLen);
-                        ApplyMp4Atom(atomName, typeInd, buf.AsSpan(0, read), tags);
+                    bool isKnownBinary = atomName is "trkn" or "disk";
+                    if (isKnownBinary || typeInd is 1 or 2 or 0) {
+                        int payloadLen = (int)Math.Min(2 * 1024 * 1024, Math.Max(0, subEnd - fs.Position));
+                        if (payloadLen > 0) {
+                            byte[] buf = new byte[payloadLen];
+                            int read = ReadExact(fs, buf, payloadLen);
+                            ApplyMp4Atom(atomName, typeInd, buf.AsSpan(0, read), tags);
+                        }
                     }
                 }
                 fs.Position = subEnd;
@@ -263,6 +269,7 @@ public static partial class AudioTagReader {
 
         int count = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(off, 4));
         off += 4;
+        bool hasSyncedLyrics = false;
         for (int i = 0; i < count && off + 4 <= buf.Length; i++) {
             int len = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(off, 4));
             off += 4;
@@ -305,9 +312,13 @@ public static partial class AudioTagReader {
                 case "DISC":
                     if (tags.DiscNumber <= 0 && TryParseSlashInt(val, out int d, out _)) tags.DiscNumber = d;
                     break;
+                case "SYNCEDLYRICS":
+                    tags.Lyrics = val;
+                    hasSyncedLyrics = true;
+                    break;
                 case "LYRICS":
                 case "UNSYNCEDLYRICS":
-                    if (string.IsNullOrEmpty(tags.Lyrics)) tags.Lyrics = val;
+                    if (!hasSyncedLyrics && string.IsNullOrEmpty(tags.Lyrics)) tags.Lyrics = val;
                     break;
             }
         }
@@ -321,70 +332,189 @@ public static partial class AudioTagReader {
         int ver = hdr[3];
         if (ver < 2 || ver > 4) return;
         int tagSize = ((hdr[6] & 0x7F) << 21) | ((hdr[7] & 0x7F) << 14) | ((hdr[8] & 0x7F) << 7) | (hdr[9] & 0x7F);
-        int readLen = Math.Min(tagSize, 512 * 1024);
-        if (readLen <= 0) return;
+        if (tagSize <= 0) return;
+        long tagEnd = Math.Min(fs.Length, fs.Position + tagSize);
 
-        byte[] buf = new byte[readLen];
-        int got = fs.Read(buf, 0, readLen);
-        int off = 0;
-
-        if ((hdr[5] & 0x40) != 0 && got >= 4) {
+        if ((hdr[5] & 0x40) != 0 && ver >= 3 && fs.Position + 4 <= tagEnd) {
+            Span<byte> extHdr = stackalloc byte[4];
+            if (fs.Read(extHdr) < 4) return;
             int extSize = ver == 4
-                ? (((buf[0] & 0x7F) << 21) | ((buf[1] & 0x7F) << 14) | ((buf[2] & 0x7F) << 7) | (buf[3] & 0x7F))
-                : BinaryPrimitives.ReadInt32BigEndian(buf.AsSpan(0, 4)) + 4;
-            if (extSize > 0 && extSize < got) off = extSize;
+                ? (((extHdr[0] & 0x7F) << 21) | ((extHdr[1] & 0x7F) << 14) | ((extHdr[2] & 0x7F) << 7) | (extHdr[3] & 0x7F))
+                : BinaryPrimitives.ReadInt32BigEndian(extHdr) + 4;
+            if (extSize > 4 && fs.Position + (extSize - 4) <= tagEnd) {
+                fs.Position += extSize - 4;
+            }
         }
 
         int frameHdrLen = ver == 2 ? 6 : 10;
-        while (off + frameHdrLen <= got) {
-            if (buf[off] == 0) break;
-            string id = ver == 2
-                ? Encoding.Latin1.GetString(buf, off, 3)
-                : Encoding.Latin1.GetString(buf, off, 4);
-            int fSize = ver switch {
-                2 => (buf[off + 3] << 16) | (buf[off + 4] << 8) | buf[off + 5],
-                4 => ((buf[off + 4] & 0x7F) << 21) | ((buf[off + 5] & 0x7F) << 14) | ((buf[off + 6] & 0x7F) << 7) | (buf[off + 7] & 0x7F),
-                _ => BinaryPrimitives.ReadInt32BigEndian(buf.AsSpan(off + 4, 4))
-            };
-            off += frameHdrLen;
-            if (fSize <= 0 || off + fSize > got) break;
+        Span<byte> fHdr = stackalloc byte[10];
+        bool hasSyncedLyrics = false;
 
-            if (id is "TIT2" or "TT2" or "TPE1" or "TP1" or "TPE2" or "TP2" or "TALB" or "TAL" or "TRCK" or "TRK" or "TPOS" or "TPA") {
-                string txt = DecodeId3Text(buf.AsSpan(off, fSize));
-                if (!string.IsNullOrEmpty(txt)) {
-                    switch (id) {
-                        case "TIT2":
-                        case "TT2":
-                            if (string.IsNullOrEmpty(tags.Title)) tags.Title = txt;
-                            break;
-                        case "TPE1":
-                        case "TP1":
-                            if (string.IsNullOrEmpty(tags.Artist)) tags.Artist = txt;
-                            break;
-                        case "TPE2":
-                        case "TP2":
-                            if (string.IsNullOrEmpty(tags.AlbumArtist)) tags.AlbumArtist = txt;
-                            break;
-                        case "TALB":
-                        case "TAL":
-                            if (string.IsNullOrEmpty(tags.Album)) tags.Album = txt;
-                            break;
-                        case "TRCK":
-                        case "TRK":
-                            if (tags.TrackNumber <= 0 && TryParseSlashInt(txt, out int t, out int tot)) {
-                                tags.TrackNumber = t;
-                                if (tot > 0 && tags.TrackTotal <= 0) tags.TrackTotal = tot;
+        while (fs.Position + frameHdrLen <= tagEnd) {
+            if (fs.Read(fHdr[..frameHdrLen]) < frameHdrLen) break;
+            if (fHdr[0] == 0) break;
+
+            string id = ver == 2
+                ? Encoding.Latin1.GetString(fHdr[..3])
+                : Encoding.Latin1.GetString(fHdr[..4]);
+            int fSize = ver switch {
+                2 => (fHdr[3] << 16) | (fHdr[4] << 8) | fHdr[5],
+                4 => ((fHdr[4] & 0x7F) << 21) | ((fHdr[5] & 0x7F) << 14) | ((fHdr[6] & 0x7F) << 7) | (fHdr[7] & 0x7F),
+                _ => BinaryPrimitives.ReadInt32BigEndian(fHdr.Slice(4, 4))
+            };
+            if (fSize <= 0 || fs.Position + fSize > tagEnd) break;
+            long frameEnd = fs.Position + fSize;
+
+            bool wantedText = id is "TIT2" or "TT2" or "TPE1" or "TP1" or "TPE2" or "TP2" or "TALB" or "TAL" or "TRCK" or "TRK" or "TPOS" or "TPA";
+            bool wantedLyrics = id is "USLT" or "ULT" or "SYLT";
+            if ((wantedText || wantedLyrics) && fSize <= 2 * 1024 * 1024) {
+                byte[] buf = new byte[fSize];
+                int got = ReadExact(fs, buf, fSize);
+                if (got > 0) {
+                    ReadOnlySpan<byte> payload = buf.AsSpan(0, got);
+                    if (wantedText) {
+                        string txt = DecodeId3Text(payload);
+                        if (!string.IsNullOrEmpty(txt)) {
+                            switch (id) {
+                                case "TIT2":
+                                case "TT2":
+                                    if (string.IsNullOrEmpty(tags.Title)) tags.Title = txt;
+                                    break;
+                                case "TPE1":
+                                case "TP1":
+                                    if (string.IsNullOrEmpty(tags.Artist)) tags.Artist = txt;
+                                    break;
+                                case "TPE2":
+                                case "TP2":
+                                    if (string.IsNullOrEmpty(tags.AlbumArtist)) tags.AlbumArtist = txt;
+                                    break;
+                                case "TALB":
+                                case "TAL":
+                                    if (string.IsNullOrEmpty(tags.Album)) tags.Album = txt;
+                                    break;
+                                case "TRCK":
+                                case "TRK":
+                                    if (tags.TrackNumber <= 0 && TryParseSlashInt(txt, out int t, out int tot)) {
+                                        tags.TrackNumber = t;
+                                        if (tot > 0 && tags.TrackTotal <= 0) tags.TrackTotal = tot;
+                                    }
+                                    break;
+                                case "TPOS":
+                                case "TPA":
+                                    if (tags.DiscNumber <= 0 && TryParseSlashInt(txt, out int d, out _)) tags.DiscNumber = d;
+                                    break;
                             }
-                            break;
-                        case "TPOS":
-                        case "TPA":
-                            if (tags.DiscNumber <= 0 && TryParseSlashInt(txt, out int d, out _)) tags.DiscNumber = d;
-                            break;
+                        }
+                    } else if (id == "SYLT") {
+                        string syltLrc = ParseId3SyltAsLrc(payload);
+                        if (!string.IsNullOrEmpty(syltLrc)) {
+                            tags.Lyrics = syltLrc;
+                            hasSyncedLyrics = true;
+                        }
+                    } else if (!hasSyncedLyrics && string.IsNullOrEmpty(tags.Lyrics)) {
+                        string uslt = ParseId3Uslt(payload);
+                        if (!string.IsNullOrWhiteSpace(uslt)) {
+                            tags.Lyrics = uslt;
+                        }
                     }
                 }
             }
-            off += fSize;
+
+            // Seek cleanly past APIC/artwork and any large or unhandled frames without capping the tag scan
+            fs.Position = frameEnd;
         }
+    }
+
+    static int ReadExact(FileStream fs, byte[] buf, int count) {
+        int total = 0;
+        while (total < count) {
+            int n = fs.Read(buf, total, count - total);
+            if (n <= 0) break;
+            total += n;
+        }
+        return total;
+    }
+
+    static string ParseId3Uslt(ReadOnlySpan<byte> frame) {
+        if (frame.Length < 5) return "";
+        byte enc = frame[0];
+        int i = 4; // encoding (1) + lang (3)
+        SkipNullTerminatedString(frame, enc, ref i);
+        if (i >= frame.Length) return "";
+        return DecodeId3String(frame[i..], enc).TrimEnd('\0');
+    }
+
+    static string ParseId3SyltAsLrc(ReadOnlySpan<byte> frame) {
+        if (frame.Length < 7) return "";
+        byte enc = frame[0];
+        byte tsFormat = frame[4]; // 2 = milliseconds
+        int i = 6; // enc (1) + lang (3) + tsFormat (1) + contentType (1)
+        SkipNullTerminatedString(frame, enc, ref i);
+
+        List<(double sec, string text)> cues = [];
+        int stepNull = (enc == 1 || enc == 2) ? 2 : 1;
+        while (i < frame.Length) {
+            int strStart = i;
+            int termPos = FindNullTerminator(frame, enc, i);
+            if (termPos < 0 || termPos + stepNull + 4 > frame.Length) break;
+
+            string txt = DecodeId3String(frame[strStart..termPos], enc).Trim('\0', '\r', '\n');
+            int tsPos = termPos + stepNull;
+            uint tsVal = BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(tsPos, 4));
+            double sec = tsFormat == 2 ? tsVal / 1000.0 : tsVal / 25.0;
+            if (!string.IsNullOrWhiteSpace(txt)) {
+                cues.Add((sec, txt));
+            }
+            i = tsPos + 4;
+        }
+        if (cues.Count < 2) return "";
+        cues.Sort((a, b) => a.sec.CompareTo(b.sec));
+        StringBuilder sb = new(cues.Count * 32);
+        foreach (var (sec, text) in cues) {
+            int mins = (int)(sec / 60.0);
+            double rem = Math.Max(0.0, sec - mins * 60.0);
+            sb.AppendFormat(CultureInfo.InvariantCulture, "[{0:00}:{1:00.000}] {2}\n", mins, rem, text);
+        }
+        return sb.ToString();
+    }
+
+    static void SkipNullTerminatedString(ReadOnlySpan<byte> frame, byte enc, ref int idx) {
+        int stepNull = (enc == 1 || enc == 2) ? 2 : 1;
+        int end = FindNullTerminator(frame, enc, idx);
+        idx = end >= 0 ? end + stepNull : frame.Length;
+    }
+
+    static int FindNullTerminator(ReadOnlySpan<byte> frame, byte enc, int start) {
+        if (enc == 1 || enc == 2) {
+            for (int i = start; i + 1 < frame.Length; i += 2) {
+                if (frame[i] == 0 && frame[i + 1] == 0) return i;
+            }
+            return -1;
+        }
+        for (int i = start; i < frame.Length; i++) {
+            if (frame[i] == 0) return i;
+        }
+        return -1;
+    }
+
+    static string DecodeId3String(ReadOnlySpan<byte> bytes, byte enc) {
+        if (bytes.IsEmpty) return "";
+        Encoding decoder = enc switch {
+            0 => Encoding.Latin1,
+            1 => Encoding.Unicode,
+            2 => Encoding.BigEndianUnicode,
+            _ => Encoding.UTF8
+        };
+        if (enc == 1 && bytes.Length >= 2) {
+            if (bytes[0] == 0xFE && bytes[1] == 0xFF) {
+                decoder = Encoding.BigEndianUnicode;
+                bytes = bytes[2..];
+            } else if (bytes[0] == 0xFF && bytes[1] == 0xFE) {
+                decoder = Encoding.Unicode;
+                bytes = bytes[2..];
+            }
+        }
+        return decoder.GetString(bytes);
     }
 
     static string DecodeId3Text(ReadOnlySpan<byte> payload) {

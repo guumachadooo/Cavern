@@ -85,6 +85,16 @@ public sealed class SpatialDialogPostProcessingStage : IPostProcessingStage {
     }
 
     /// <inheritdoc/>
+    public IPostProcessingStage CloneForOfflineExport() {
+        SpatialDialogPostProcessingStage clone = new() {
+            SpatialPathActive = spatialPathActive,
+            ExternalSpeechActivity = ExternalSpeechActivity
+        };
+        clone.ApplyParameters(userEnabled, BoostDb);
+        return clone;
+    }
+
+    /// <inheritdoc/>
     public void Dispose() {
         userEnabled = false;
         enhancer.SetParameters(false, 0f);

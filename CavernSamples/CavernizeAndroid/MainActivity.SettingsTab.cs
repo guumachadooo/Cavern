@@ -76,7 +76,8 @@ public partial class MainActivity {
     OneUiInlineSelector ismRoomPresetSelector, ismWallMaterialSelector, ismOrderSelector;
     OneUiSeekBar ismLevelBar, airTempBar, airHumidityBar;
     TextView externalizationStatusText;
-    OneUiInlineSelector magLsModeSelector;
+    OneUiInlineSelector magLsModeSelector, magLsCutoffSelector;
+    static readonly float[] MagLsCutoffPresets = [0f, 1500f, 2500f, 3500f, 5000f];
     Switch biometricItdSwitch, hptfNotchSwitch;
     OneUiSeekBar headWidthBar, manualItdBar, hptfFreqBar, hptfGainBar, hptfQBar;
     TextView personalizationStatusText;
@@ -268,7 +269,7 @@ public partial class MainActivity {
         // 3B. Slot 6A: AutoEq Neutral Headphone Engine & Auto-Profile per Device
         autoEqEnabledSwitch = AddSwitchRow(rendCard, S["AutoEqEnableTitle"], store.AutoEqEnabled, v => {
             store.AutoEqEnabled = v;
-            AutoEqService.ApplySavedToEngine(this, store, playerEngine);
+            ApplyAutoEqRespectingRoute();
             audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
             RefreshAutoEqUi();
         }, helpBody: S["TipAutoEq"]);
@@ -310,7 +311,7 @@ public partial class MainActivity {
         autoEqTargetSelector.SetItems(targetNames, Math.Clamp(store.AutoEqTargetIndex, 0, targetNames.Length - 1));
         autoEqTargetSelector.SelectionChanged += pos => {
             store.AutoEqTargetIndex = pos;
-            AutoEqService.ApplySavedToEngine(this, store, playerEngine);
+            ApplyAutoEqRespectingRoute();
             audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
             RefreshAutoEqUi();
         };
@@ -318,7 +319,7 @@ public partial class MainActivity {
 
         autoEqDoubleEqGuardSwitch = AddSwitchRow(rendCard, S["AutoEqDoubleEqGuardTitle"], store.AutoEqDoubleEqGuard, v => {
             store.AutoEqDoubleEqGuard = v;
-            AutoEqService.ApplySavedToEngine(this, store, playerEngine);
+            ApplyAutoEqRespectingRoute();
             RefreshAutoEqUi();
         }, helpBody: S["TipAutoEqDoubleEqGuard"]);
         AddDivider(rendCard);
@@ -759,6 +760,18 @@ public partial class MainActivity {
             ApplyAndRefreshPersonalization(rebuildHrir: true);
         };
         slot5bCard.AddView(magLsModeSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        magLsCutoffSelector = new OneUiInlineSelector(this, S["MagLsCutoffTitle"]);
+        string[] magLsCutoffLabels = [S["MagLsCutoffAuto"], "1.5 kHz", "2.5 kHz", "3.5 kHz", "5.0 kHz"];
+        magLsCutoffSelector.SetItems(magLsCutoffLabels, ResolveMagLsCutoffIndex(store.MagLsCutoffHz));
+        magLsCutoffSelector.SelectionChanged += pos => {
+            int safe = Math.Clamp(pos, 0, MagLsCutoffPresets.Length - 1);
+            store.MagLsCutoffHz = MagLsCutoffPresets[safe];
+            ApplyAndRefreshPersonalization(rebuildHrir: true);
+        };
+        slot5bCard.AddView(magLsCutoffSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
 
@@ -1840,7 +1853,7 @@ public partial class MainActivity {
                     RefreshMusicPlayerControlsUi();
                     ShowToast(string.Format(S["BinauralProfileApplied"], BinauralProfileService.GetActiveDisplayTitle(store, S)));
                 } else {
-                    ShowError(err ?? "Failed to load HRIR/SOFA file.");
+                    ShowError(err ?? S["HrirLoadFailedFallback"]);
                 }
             });
         });
@@ -1866,7 +1879,7 @@ public partial class MainActivity {
                         ShowToast(string.Format(S["BinauralProfileApplied"], BinauralProfileService.GetActiveDisplayTitle(store, S)));
                     }
                 } else {
-                    ShowError(err ?? "Failed to apply binaural profile.");
+                    ShowError(err ?? S["BinauralApplyFailedFallback"]);
                 }
             });
         });
@@ -1892,7 +1905,7 @@ public partial class MainActivity {
                     RefreshPersonalizationUi();
                     RefreshMusicPlayerControlsUi();
                 } else {
-                    ShowError(err ?? "Failed to update Minimum-Phase mode.");
+                    ShowError(err ?? S["MinPhaseUpdateFailedFallback"]);
                 }
             });
         });
@@ -2224,6 +2237,22 @@ public partial class MainActivity {
         });
     }
 
+    static int ResolveMagLsCutoffIndex(float cutoffHz) {
+        if (cutoffHz <= 0f) {
+            return 0;
+        }
+        int bestIdx = 1;
+        float bestDiff = float.MaxValue;
+        for (int i = 1; i < MagLsCutoffPresets.Length; i++) {
+            float diff = MathF.Abs(cutoffHz - MagLsCutoffPresets[i]);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestIdx = i;
+            }
+        }
+        return bestIdx;
+    }
+
     void RefreshPersonalizationUi() {
         if (uiDestroyed || store == null) {
             return;
@@ -2232,6 +2261,12 @@ public partial class MainActivity {
             int mIdx = Math.Clamp(store.MagLsModeIndex, 0, 3);
             if (magLsModeSelector.SelectedIndex != mIdx) {
                 magLsModeSelector.SetSelection(mIdx, notify: false);
+            }
+        }
+        if (magLsCutoffSelector != null) {
+            int cIdx = ResolveMagLsCutoffIndex(store.MagLsCutoffHz);
+            if (magLsCutoffSelector.SelectedIndex != cIdx) {
+                magLsCutoffSelector.SetSelection(cIdx, notify: false);
             }
         }
         if (biometricItdSwitch != null && biometricItdSwitch.Checked != store.BiometricItdEnabled) {
@@ -2283,13 +2318,13 @@ public partial class MainActivity {
             } else {
                 string magPart = diag.IsMagLsActive
                     ? $"MagLS O{diag.MagLsOrder} ({diag.MagLsCutoffHz:0} Hz, {diag.MagLsHfErrorDb:0.00} dB)"
-                    : "Direct HRIR";
+                    : S["MagLsDirectHrirTag"];
                 string itdPart = diag.IsBiometricItdActive
                     ? $"ITD {diag.MaxLateralItdUs:0} µs ({diag.ItdDeltaAt90DegUs:+0;-0;0})"
                     : $"ITD Ref ({diag.MaxLateralItdUs:0} µs)";
                 string hptfPart = diag.IsHptfNotchActive
                     ? $"HpTF {diag.HptfNotchFreqHz * 0.001f:0.0}k {diag.HptfNotchGainDb:0.#} dB"
-                    : "HpTF Off";
+                    : S["HptfOffTag"];
                 personalizationStatusText.Text = string.Format(S["PersStatusSummary"], magPart, itdPart, hptfPart);
                 bool anyActive = diag.IsMagLsActive || diag.IsBiometricItdActive || diag.IsHptfNotchActive;
                 personalizationStatusText.SetTextColor(anyActive ? OneUiTheme.PrimaryHigh : OneUiTheme.TextSub);
@@ -2387,10 +2422,12 @@ public partial class MainActivity {
         if (loudnessStatusText != null) {
             string isoPart = diag.Iso226Active
                 ? $"{diag.Iso226EffectivePhon:0} phon (+{diag.Iso226MaxBoostDb:0.0} dB)"
-                : (store.Iso226Enabled ? "Unity (0.0 dB)" : "Off");
+                : (store.Iso226Enabled ? S["Iso226UnityTag"] : S["StatusOffTag"]);
             string diagPart = diag.DialogActive
-                ? (diag.DialogIsSpatialMode ? $"Spatial (+{store.DialogEnhancementDb:0.0} dB)" : $"M/S LR4 (+{store.DialogEnhancementDb:0.0} dB)")
-                : "Off";
+                ? (diag.DialogIsSpatialMode
+                    ? string.Format(S["DialogSpatialTag"], store.DialogEnhancementDb)
+                    : string.Format(S["DialogMsLr4Tag"], store.DialogEnhancementDb))
+                : S["StatusOffTag"];
             loudnessStatusText.Text = string.Format(
                 S["LoudnessStatusSummary"],
                 isoPart,
@@ -2505,8 +2542,15 @@ public partial class MainActivity {
             }
 
             Button cueBtn = PillButton(S["HrtfWizPlayCueBtn"], () => {
-                float[] cue = Cavernize.Logic.Spatial.PerceptualHrtfWizardCatalog.SynthesizeAuditionCueStereo(48000, chosenHeadWidthCm);
-                PlayStereoFloatBufferAsync(cue, 48000);
+                string pid = chosenProfileId;
+                float hw = chosenHeadWidthCm;
+                Task.Run(() => {
+                    BinauralProfileService.ApplyProfile(this, store, pid, out _);
+                    BinauralProfileService.SyncToSceneHub(playerEngine?.SceneHub, store, S);
+                    int sr = VirtualizerFilter.FilterSampleRate >= 8000 ? VirtualizerFilter.FilterSampleRate : 48000;
+                    float[] cue = Cavernize.Logic.Spatial.PerceptualHrtfWizardCatalog.SynthesizeAuditionCueBinaural(sr, hw);
+                    PlayStereoFloatBufferAsync(cue, sr);
+                });
             });
             optionsHost.AddView(cueBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
                 TopMargin = Dp(2),
@@ -2735,6 +2779,7 @@ public partial class MainActivity {
             bool hasProf = !string.IsNullOrWhiteSpace(store.AutoEqProfileName);
             settingsAutoEqTitleText.Text = hasProf ? store.AutoEqProfileName : S["AutoEqNoneSelected"];
         }
+        AudioDeviceRouteInfo dev = audioDeviceProfileManager?.CurrentDevice;
         if (settingsAutoEqSubText != null) {
             var stage = playerEngine?.AutoEqStage;
             if (stage != null && stage.IsEnabled) {
@@ -2744,15 +2789,24 @@ public partial class MainActivity {
                     stage.ActiveSectionCount,
                     stage.EffectivePreampDb,
                     guardTag);
+            } else if (store.AutoEqEnabled && dev != null && !dev.IsHeadphoneRoute) {
+                settingsAutoEqSubText.Text = string.Format(S["AutoEqBypassedSpeakerSub"], dev.DisplayName);
             } else {
                 int total = AutoEqService.GetTotalCatalogCount(this);
                 settingsAutoEqSubText.Text = string.Format(S["AutoEqCatalogCountSub"], total);
             }
         }
         if (settingsAudioDeviceText != null) {
-            AudioDeviceRouteInfo dev = audioDeviceProfileManager?.CurrentDevice;
             string devLabel = dev != null ? dev.DisplayName : S["AutoEqUnknownDevice"];
             settingsAudioDeviceText.Text = string.Format(S["AutoEqDetectedDevice"], devLabel);
+        }
+    }
+
+    void ApplyAutoEqRespectingRoute() {
+        AutoEqService.ApplySavedToEngine(this, store, playerEngine);
+        if (audioDeviceProfileManager?.CurrentDevice is { IsHeadphoneRoute: false } speaker &&
+            store.FindDeviceProfile(speaker.DeviceKey) == null) {
+            audioDeviceProfileManager.RefreshActiveDevice(applyAutoSwitch: false);
         }
     }
 
@@ -2780,7 +2834,7 @@ public partial class MainActivity {
                     RefreshAutoEqUi();
                     ShowToast(string.Format(S["AutoEqAppliedToast"], profile.Name));
                 } else {
-                    ShowError(err ?? "Failed to import AutoEq / Equalizer APO file.");
+                    ShowError(err ?? S["AutoEqImportFailedFallback"]);
                 }
             });
         });

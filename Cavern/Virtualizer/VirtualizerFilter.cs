@@ -121,6 +121,105 @@ namespace Cavern.Virtualizer {
         public static IPreHrtfBusProcessor PreHrtfBusProcessor { get; set; }
 
         /// <summary>
+        /// Captures all static virtualizer configuration (<c>SpatialChannels</c>, <c>FilterSampleRate</c>,
+        /// <c>ReferenceDistance</c>, <c>PreHrtfBusProcessor</c>, and ISM/externalization room settings) and
+        /// restores them on <see cref="IDisposable.Dispose"/> so offline Studio exports never collide with live playback.
+        /// </summary>
+        public static IDisposable BeginStaticStateScope() {
+            lock (staticScopeLock) {
+                return new StaticStateScope();
+            }
+        }
+
+        static readonly object staticScopeLock = new object();
+
+        sealed class StaticStateScope : IDisposable {
+            readonly VirtualChannel[] savedSpatialChannels;
+            readonly int savedFilterSampleRate;
+            readonly float savedReferenceDistance;
+            readonly IPreHrtfBusProcessor savedPreHrtfBusProcessor;
+            readonly bool savedCenterWallEcho;
+            readonly bool savedIsmRoomEnabled;
+            readonly IsmRoomPreset savedIsmPreset;
+            readonly IsmWallMaterial savedIsmWallMaterial;
+            readonly int savedIsmReflectionOrder;
+            readonly float savedIsmReflectionLevel;
+            readonly bool savedNearFieldEnabled;
+            readonly bool savedExternalBrirGuard;
+            readonly IsmRoomGeometry savedActiveRoomGeometry;
+            readonly Vector3 savedLiveListenerNormalizedPosition;
+            readonly Vector3 savedLiveListenerRotationDegrees;
+            readonly bool savedAirAbsorptionEnabled;
+            readonly float savedAirAbsorptionTemp;
+            readonly float savedAirAbsorptionRh;
+            readonly Vector3 savedAirAbsorptionHalfSize;
+            readonly float[] savedLiveChannelMinDistances;
+            bool disposed;
+
+            public StaticStateScope() {
+                savedSpatialChannels = spatialChannels;
+                savedFilterSampleRate = FilterSampleRate;
+                savedReferenceDistance = ReferenceDistance;
+                savedPreHrtfBusProcessor = PreHrtfBusProcessor;
+                savedCenterWallEcho = CenterWallEcho;
+                savedIsmRoomEnabled = IsmRoomEnabled;
+                savedIsmPreset = IsmPreset;
+                savedIsmWallMaterial = IsmWallMaterial;
+                savedIsmReflectionOrder = IsmReflectionOrder;
+                savedIsmReflectionLevel = IsmReflectionLevel;
+                savedNearFieldEnabled = NearFieldCompensationEnabled;
+                savedExternalBrirGuard = ExternalBrirGuardActive;
+                savedActiveRoomGeometry = ActiveRoomGeometry;
+                savedLiveListenerNormalizedPosition = LiveListenerNormalizedPosition;
+                savedLiveListenerRotationDegrees = LiveListenerRotationDegrees;
+                savedAirAbsorptionEnabled = AirAbsorptionFilter.GlobalEnabled;
+                savedAirAbsorptionTemp = AirAbsorptionFilter.GlobalTemperatureCelsius;
+                savedAirAbsorptionRh = AirAbsorptionFilter.GlobalRelativeHumidityPct;
+                savedAirAbsorptionHalfSize = AirAbsorptionFilter.PhysicalRoomHalfSize;
+                savedLiveChannelMinDistances = (float[])liveChannelMinDistances.Clone();
+            }
+
+            public void Dispose() {
+                lock (staticScopeLock) {
+                    if (disposed) {
+                        return;
+                    }
+                    disposed = true;
+
+                    bool profileChanged = !ReferenceEquals(spatialChannels, savedSpatialChannels) ||
+                        FilterSampleRate != savedFilterSampleRate ||
+                        ReferenceDistance != savedReferenceDistance;
+
+                    spatialChannels = savedSpatialChannels;
+                    ActiveMaxImpulseLength = ComputeMaxImpulseLength(savedSpatialChannels);
+                    FilterSampleRate = savedFilterSampleRate;
+                    ReferenceDistance = savedReferenceDistance;
+                    PreHrtfBusProcessor = savedPreHrtfBusProcessor;
+                    CenterWallEcho = savedCenterWallEcho;
+                    IsmRoomEnabled = savedIsmRoomEnabled;
+                    IsmPreset = savedIsmPreset;
+                    IsmWallMaterial = savedIsmWallMaterial;
+                    IsmReflectionOrder = savedIsmReflectionOrder;
+                    IsmReflectionLevel = savedIsmReflectionLevel;
+                    NearFieldCompensationEnabled = savedNearFieldEnabled;
+                    ExternalBrirGuardActive = savedExternalBrirGuard;
+                    ActiveRoomGeometry = savedActiveRoomGeometry;
+                    LiveListenerNormalizedPosition = savedLiveListenerNormalizedPosition;
+                    LiveListenerRotationDegrees = savedLiveListenerRotationDegrees;
+                    AirAbsorptionFilter.GlobalEnabled = savedAirAbsorptionEnabled;
+                    AirAbsorptionFilter.GlobalTemperatureCelsius = savedAirAbsorptionTemp;
+                    AirAbsorptionFilter.GlobalRelativeHumidityPct = savedAirAbsorptionRh;
+                    AirAbsorptionFilter.PhysicalRoomHalfSize = savedAirAbsorptionHalfSize;
+                    Array.Copy(savedLiveChannelMinDistances, liveChannelMinDistances, liveChannelMinDistances.Length);
+
+                    if (profileChanged) {
+                        ProfileVersion++;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Updates all Slot 5A physical externalization parameters atomically and refreshes <see cref="ActiveRoomGeometry"/>
         /// and <see cref="AirAbsorptionFilter.PhysicalRoomHalfSize"/>.
         /// </summary>
@@ -276,6 +375,113 @@ namespace Cavern.Virtualizer {
         /// </summary>
         readonly Parallelizer processor;
 
+        // Pre-allocated rational Catmull-Rom rate conversion state used when Listener.SampleRate != FilterSampleRate
+        int rateSrcRate;
+        int rateFltRate;
+        int rateInBlockSize;
+        int rateChannels;
+        int rateBaseFltBlockSize;
+        int rateStepIn;
+        int rateModIn;
+        ChannelRateConverter[] inRateConverters;
+        ChannelRateConverter outRateConverterL;
+        ChannelRateConverter outRateConverterR;
+        float[] outFifoL;
+        float[] outFifoR;
+        int outFifoCapacity;
+        int fifoReadL, fifoWriteL, fifoCountL;
+        int fifoReadR, fifoWriteR, fifoCountR;
+        RateSlotBuffers[] rateSlots;
+
+        sealed class RateSlotBuffers {
+            public float[][] Original;
+            public float[][] Low;
+            public float[][] Left;
+            public float[][] Right;
+            public float[] DelayedCenter;
+            public float[] StereoL;
+            public float[] StereoR;
+        }
+
+        sealed class ChannelRateConverter {
+            float s0, s1, s2, s3;
+            long accum;
+            int stepNum, modDen;
+
+            public void Configure(int srcRate, int dstRate) {
+                int g = Gcd(srcRate, dstRate);
+                stepNum = srcRate / g;
+                modDen = dstRate / g;
+                accum = 0;
+                s0 = 0f;
+                s1 = 0f;
+                s2 = 0f;
+                s3 = 0f;
+            }
+
+            internal int PredictOutputCount(int inSamples) {
+                long num = (long)inSamples * modDen - accum;
+                if (num <= 0) {
+                    return 0;
+                }
+                return (int)((num + stepNum - 1) / stepNum);
+            }
+
+            internal int ConvertInterleavedChannel(float[] interleaved, int channelOffset, int stride, int inSamples, float[] dst) {
+                int outIdx = 0;
+                for (int i = 0; i < inSamples; i++) {
+                    float x = interleaved[i * stride + channelOffset];
+                    s0 = s1;
+                    s1 = s2;
+                    s2 = s3;
+                    s3 = x;
+                    while (accum < modDen) {
+                        dst[outIdx++] = EvalCatmullRom(s0, s1, s2, s3, (float)accum / modDen);
+                        accum += stepNum;
+                    }
+                    accum -= modDen;
+                }
+                return outIdx;
+            }
+
+            internal void ConvertToFifo(float[] src, int inSamples, float[] fifo, int capacity, ref int writeIdx, ref int count) {
+                for (int i = 0; i < inSamples; i++) {
+                    float x = src[i];
+                    s0 = s1;
+                    s1 = s2;
+                    s2 = s3;
+                    s3 = x;
+                    while (accum < modDen) {
+                        fifo[writeIdx] = EvalCatmullRom(s0, s1, s2, s3, (float)accum / modDen);
+                        writeIdx++;
+                        if (writeIdx >= capacity) {
+                            writeIdx = 0;
+                        }
+                        count++;
+                        accum += stepNum;
+                    }
+                    accum -= modDen;
+                }
+            }
+
+            static float EvalCatmullRom(float s0, float s1, float s2, float s3, float t) {
+                float c0 = s1;
+                float c1 = 0.5f * (s2 - s0);
+                float c2 = s0 - 2.5f * s1 + 2f * s2 - 0.5f * s3;
+                float c3 = 0.5f * (s3 - s0) + 1.5f * (s1 - s2);
+                return ((c3 * t + c2) * t + c1) * t + c0;
+            }
+
+            static int Gcd(int a, int b) {
+                while (b != 0) {
+                    int t = a % b;
+                    a = b;
+                    b = t;
+                }
+                return a > 0 ? a : 1;
+            }
+        }
+
         /// <summary>
         /// Convolution filters for each ear and virtual channel to simulate a spatial environment.
         /// </summary>
@@ -291,9 +497,15 @@ namespace Cavern.Virtualizer {
         /// Ensures a dedicated LFE virtual channel is present at the end of the array for symmetric stereo LFE downmix.
         /// </summary>
         public static void Override(VirtualChannel[] channels, int sampleRate, float referenceDistance) {
+            if (channels == null || channels.Length == 0) {
+                Reset();
+                return;
+            }
             SpatialChannels = EnsureStereoLfeChannel(channels);
-            FilterSampleRate = sampleRate;
-            ReferenceDistance = referenceDistance;
+            FilterSampleRate = sampleRate > 0 ? sampleRate : defaultSampleRate;
+            ReferenceDistance = referenceDistance > 0f && !float.IsNaN(referenceDistance) && !float.IsInfinity(referenceDistance)
+                ? referenceDistance
+                : defaultDistance;
             ProfileVersion++;
         }
 
@@ -433,26 +645,47 @@ namespace Cavern.Virtualizer {
             }
             ismRoomEngine.Reset();
             wasIsmActive = false;
+            rateSrcRate = 0;
         }
 
         /// <summary>
         /// Apply the virtualizer on the <see cref="Listener"/>'s output,
-        /// if the configuration matches the virtualization layout and filter sample rate.
+        /// seamlessly converting sample rates when <paramref name="sampleRate"/> differs from <see cref="FilterSampleRate"/>
+        /// so active impulses always process audio without silent drops or zeroing.
         /// </summary>
         public void Process(float[] output, int sampleRate) {
+            if (output == null || output.Length == 0 || sampleRate <= 0) {
+                return;
+            }
             if (appliedVersion != ProfileVersion || boundChannels == null) {
                 SetLayout();
             }
             VirtualChannel[] activeSet = boundChannels;
             int channels = Listener.Channels.Length;
-            if (originalSplit == null || activeSet == null || channels != activeSet.Length || sampleRate != FilterSampleRate) {
+            if (originalSplit == null || activeSet == null || channels <= 0) {
                 return;
             }
-            blockSize = output.Length / channels;
-            if (blockSize <= 0) {
+            if (channels != activeSet.Length) {
+                SetLayout();
+                activeSet = boundChannels;
+                if (activeSet == null || channels != activeSet.Length) {
+                    FallbackStereoDownmix(output, channels);
+                    return;
+                }
+            }
+            int inBlockSize = output.Length / channels;
+            if (inBlockSize <= 0) {
                 return;
             }
 
+            int fltRate = FilterSampleRate > 0 ? FilterSampleRate : sampleRate;
+            if (sampleRate != fltRate) {
+                ProcessRateMatched(output, activeSet, channels, inBlockSize, sampleRate, fltRate);
+                return;
+            }
+            rateSrcRate = 0;
+
+            blockSize = inBlockSize;
             if (originalSplit[0].Length != blockSize) {
                 for (int channel = 0; channel < channels; channel++) {
                     originalSplit[channel] = new float[blockSize];
@@ -469,59 +702,7 @@ namespace Cavern.Virtualizer {
                 }
             }
 
-            // Slot 2C (W09): Pre-HRTF Virtual Speaker Bus hook (Lossless-Guided Atmos Restoration preserving JOC cancellation)
-            IPreHrtfBusProcessor preHrtfBus = PreHrtfBusProcessor;
-            if (preHrtfBus != null) {
-                preHrtfBus.ProcessPreHrtfBus(originalSplit, activeSet, channels, blockSize, sampleRate);
-            }
-
-            // Slot 5A: Pure-physics Allen & Berkley shoebox ISM early reflections (pre-HRIR, zero extra FFTs).
-            // Automatically bypassed whenever a measured BRIR (> 1024 taps or flagged BRIR) is active.
-            bool ismActive = IsmRoomEnabled && !IsMeasuredBrirActive && !ExternalBrirGuardActive;
-            if (ismActive) {
-                ismRoomEngine.Configure(
-                    IsmPreset,
-                    IsmWallMaterial,
-                    IsmReflectionOrder,
-                    IsmReflectionLevel,
-                    Listener.EnvironmentSize,
-                    AirAbsorptionFilter.GlobalEnabled,
-                    AirAbsorptionFilter.GlobalTemperatureCelsius,
-                    AirAbsorptionFilter.GlobalRelativeHumidityPct);
-                ismRoomEngine.ProcessPreHrir(
-                    originalSplit,
-                    activeSet,
-                    blockSize,
-                    sampleRate,
-                    LiveListenerNormalizedPosition,
-                    LiveListenerRotationDegrees);
-                wasIsmActive = true;
-            } else if (wasIsmActive) {
-                ismRoomEngine.Reset();
-                wasIsmActive = false;
-            }
-
-            if (CenterWallEcho && center != unassigned && left != unassigned && right != unassigned) {
-                Array.Copy(originalSplit[center], delayedCenter, blockSize);
-                centerDelay.Process(delayedCenter); // Add 7.5 ms delay
-                WaveformUtils.Gain(delayedCenter, .1f); // -20 dB gain
-                WaveformUtils.Mix(delayedCenter, originalSplit[left]);
-                WaveformUtils.Mix(delayedCenter, originalSplit[right]);
-            }
-
-            blockSpeedOfSound = AirAbsorptionFilter.ComputeSpeedOfSound(AirAbsorptionFilter.GlobalTemperatureCelsius);
-            processor.ForUnchecked(0, channels);
-
-            bool anyNearFieldActive = false;
-            if (nearFieldFilters != null) {
-                for (int ch = 0; ch < channels; ch++) {
-                    if (nearFieldFilters[ch].IsActive) {
-                        anyNearFieldActive = true;
-                        break;
-                    }
-                }
-            }
-            LastBlockNearFieldActive = anyNearFieldActive;
+            RunVirtualizationStages(activeSet, channels, blockSize, sampleRate);
 
             // Stereo downmix (or speaker passthrough for non-virtualized ground/sub channels)
             output.Clear();
@@ -557,6 +738,256 @@ namespace Cavern.Virtualizer {
                 } else {
                     WaveformUtils.Mix(originalSplit[channel], output, channel, channels, 1);
                 }
+            }
+        }
+
+        void RunVirtualizationStages(VirtualChannel[] activeSet, int channels, int sampleCount, int sampleRate) {
+            // Slot 2C (W09): Pre-HRTF Virtual Speaker Bus hook (Lossless-Guided Atmos Restoration preserving JOC cancellation)
+            IPreHrtfBusProcessor preHrtfBus = PreHrtfBusProcessor;
+            if (preHrtfBus != null) {
+                preHrtfBus.ProcessPreHrtfBus(originalSplit, activeSet, channels, sampleCount, sampleRate);
+            }
+
+            // Slot 5A: Pure-physics Allen & Berkley shoebox ISM early reflections (pre-HRIR, zero extra FFTs).
+            // Automatically bypassed whenever a measured BRIR (> 1024 taps or flagged BRIR) is active.
+            bool ismActive = IsmRoomEnabled && !IsMeasuredBrirActive && !ExternalBrirGuardActive;
+            if (ismActive) {
+                ismRoomEngine.Configure(
+                    IsmPreset,
+                    IsmWallMaterial,
+                    IsmReflectionOrder,
+                    IsmReflectionLevel,
+                    Listener.EnvironmentSize,
+                    AirAbsorptionFilter.GlobalEnabled,
+                    AirAbsorptionFilter.GlobalTemperatureCelsius,
+                    AirAbsorptionFilter.GlobalRelativeHumidityPct);
+                ismRoomEngine.ProcessPreHrir(
+                    originalSplit,
+                    activeSet,
+                    sampleCount,
+                    sampleRate,
+                    LiveListenerNormalizedPosition,
+                    LiveListenerRotationDegrees);
+                wasIsmActive = true;
+            } else if (wasIsmActive) {
+                ismRoomEngine.Reset();
+                wasIsmActive = false;
+            }
+
+            if (CenterWallEcho && center != unassigned && left != unassigned && right != unassigned) {
+                Array.Copy(originalSplit[center], delayedCenter, sampleCount);
+                centerDelay.Process(delayedCenter); // Add 7.5 ms delay
+                WaveformUtils.Gain(delayedCenter, .1f); // -20 dB gain
+                WaveformUtils.Mix(delayedCenter, originalSplit[left]);
+                WaveformUtils.Mix(delayedCenter, originalSplit[right]);
+            }
+
+            blockSpeedOfSound = AirAbsorptionFilter.ComputeSpeedOfSound(AirAbsorptionFilter.GlobalTemperatureCelsius);
+            processor.ForUnchecked(0, channels);
+
+            bool anyNearFieldActive = false;
+            if (nearFieldFilters != null) {
+                for (int ch = 0; ch < channels; ch++) {
+                    if (nearFieldFilters[ch].IsActive) {
+                        anyNearFieldActive = true;
+                        break;
+                    }
+                }
+            }
+            LastBlockNearFieldActive = anyNearFieldActive;
+        }
+
+        void ProcessRateMatched(float[] output, VirtualChannel[] activeSet, int channels, int inBlockSize, int srcRate, int fltRate) {
+            EnsureRateConversionBuffers(channels, inBlockSize, srcRate, fltRate);
+
+            int fltBlockSize = inRateConverters[0].PredictOutputCount(inBlockSize);
+            int slotIdx = fltBlockSize == rateBaseFltBlockSize ? 0 : 1;
+            RateSlotBuffers slot = rateSlots[slotIdx];
+
+            for (int ch = 0; ch < channels; ch++) {
+                int produced = inRateConverters[ch].ConvertInterleavedChannel(output, ch, channels, inBlockSize, slot.Original[ch]);
+                if (produced < fltBlockSize) {
+                    Array.Clear(slot.Original[ch], produced, fltBlockSize - produced);
+                }
+            }
+
+            if (fltBlockSize > 0) {
+                float[][] savedOrig = originalSplit;
+                float[][] savedLow = lowSplit;
+                float[][] savedLeft = leftSplit;
+                float[][] savedRight = rightSplit;
+                float[] savedDelayed = delayedCenter;
+                int savedBlockSize = blockSize;
+
+                originalSplit = slot.Original;
+                lowSplit = slot.Low;
+                leftSplit = slot.Left;
+                rightSplit = slot.Right;
+                delayedCenter = slot.DelayedCenter;
+                blockSize = fltBlockSize;
+
+                try {
+                    RunVirtualizationStages(activeSet, channels, fltBlockSize, fltRate);
+                } finally {
+                    originalSplit = savedOrig;
+                    lowSplit = savedLow;
+                    leftSplit = savedLeft;
+                    rightSplit = savedRight;
+                    delayedCenter = savedDelayed;
+                    blockSize = savedBlockSize;
+                }
+
+                Array.Clear(slot.StereoL, 0, fltBlockSize);
+                Array.Clear(slot.StereoR, 0, fltBlockSize);
+                for (int channel = 0; channel < channels; channel++) {
+                    VirtualChannel ch = activeSet[channel];
+                    if (ch.active) {
+                        float[] leftSamples = slot.Left[channel];
+                        float[] rightSamples = slot.Right[channel];
+                        if (ch.Crossover != null) {
+                            float[] lowSamples = slot.Low[channel];
+                            for (int sample = 0; sample < fltBlockSize; sample++) {
+                                float unspatialized = lowSamples[sample] * VirtualChannel.minus3dB;
+                                slot.StereoL[sample] += leftSamples[sample] + unspatialized;
+                                slot.StereoR[sample] += rightSamples[sample] + unspatialized;
+                            }
+                        } else {
+                            for (int sample = 0; sample < fltBlockSize; sample++) {
+                                slot.StereoL[sample] += leftSamples[sample];
+                                slot.StereoR[sample] += rightSamples[sample];
+                            }
+                        }
+                    } else if (ch.isLfe && ch.mixLfeToStereo) {
+                        float[] lfeSamples = slot.Original[channel];
+                        for (int sample = 0; sample < fltBlockSize; sample++) {
+                            float lfe = lfeSamples[sample] * VirtualChannel.minus3dB;
+                            slot.StereoL[sample] += lfe;
+                            slot.StereoR[sample] += lfe;
+                        }
+                    }
+                }
+
+                outRateConverterL.ConvertToFifo(slot.StereoL, fltBlockSize, outFifoL, outFifoCapacity, ref fifoWriteL, ref fifoCountL);
+                outRateConverterR.ConvertToFifo(slot.StereoR, fltBlockSize, outFifoR, outFifoCapacity, ref fifoWriteR, ref fifoCountR);
+            }
+
+            bool clearL = channels >= 1 && (activeSet[0].active || (activeSet[0].isLfe && activeSet[0].mixLfeToStereo));
+            bool clearR = channels >= 2 && (activeSet[1].active || (activeSet[1].isLfe && activeSet[1].mixLfeToStereo));
+
+            for (int sample = 0; sample < inBlockSize; sample++) {
+                float sL = 0f;
+                if (fifoCountL > 0) {
+                    sL = outFifoL[fifoReadL++];
+                    if (fifoReadL >= outFifoCapacity) {
+                        fifoReadL = 0;
+                    }
+                    fifoCountL--;
+                }
+                float sR = 0f;
+                if (fifoCountR > 0) {
+                    sR = outFifoR[fifoReadR++];
+                    if (fifoReadR >= outFifoCapacity) {
+                        fifoReadR = 0;
+                    }
+                    fifoCountR--;
+                }
+
+                int outIdx = sample * channels;
+                if (channels == 1) {
+                    output[outIdx] = clearL ? 0.5f * (sL + sR) : output[outIdx] + 0.5f * (sL + sR);
+                } else {
+                    output[outIdx] = clearL ? sL : output[outIdx] + sL;
+                    output[outIdx + 1] = clearR ? sR : output[outIdx + 1] + sR;
+                    for (int ch = 2; ch < channels; ch++) {
+                        if (activeSet[ch].active || (activeSet[ch].isLfe && activeSet[ch].mixLfeToStereo)) {
+                            output[outIdx + ch] = 0f;
+                        }
+                    }
+                }
+            }
+        }
+
+        void EnsureRateConversionBuffers(int channels, int inBlockSize, int srcRate, int fltRate) {
+            if (rateSrcRate == srcRate && rateFltRate == fltRate && rateInBlockSize == inBlockSize && rateChannels == channels && rateSlots != null) {
+                return;
+            }
+            rateSrcRate = srcRate;
+            rateFltRate = fltRate;
+            rateInBlockSize = inBlockSize;
+            rateChannels = channels;
+
+            int g = srcRate;
+            int b = fltRate;
+            while (b != 0) {
+                int t = g % b;
+                g = b;
+                b = t;
+            }
+            if (g <= 0) {
+                g = 1;
+            }
+            rateStepIn = srcRate / g;
+            rateModIn = fltRate / g;
+            rateBaseFltBlockSize = (int)((long)inBlockSize * rateModIn / rateStepIn);
+
+            inRateConverters = new ChannelRateConverter[channels];
+            for (int ch = 0; ch < channels; ch++) {
+                inRateConverters[ch] = new ChannelRateConverter();
+                inRateConverters[ch].Configure(srcRate, fltRate);
+            }
+            outRateConverterL = new ChannelRateConverter();
+            outRateConverterL.Configure(fltRate, srcRate);
+            outRateConverterR = new ChannelRateConverter();
+            outRateConverterR.Configure(fltRate, srcRate);
+
+            outFifoCapacity = Math.Max(64, inBlockSize + Math.Max(16, (int)Math.Ceiling((double)srcRate / fltRate) * 2 + 16));
+            outFifoL = new float[outFifoCapacity];
+            outFifoR = new float[outFifoCapacity];
+            fifoReadL = 0;
+            fifoWriteL = 0;
+            fifoCountL = 0;
+            fifoReadR = 0;
+            fifoWriteR = 0;
+            fifoCountR = 0;
+
+            rateSlots = new RateSlotBuffers[2];
+            for (int s = 0; s < 2; s++) {
+                int slotLen = Math.Max(1, rateBaseFltBlockSize + s);
+                RateSlotBuffers slot = new RateSlotBuffers();
+                slot.Original = new float[channels][];
+                slot.Low = new float[channels][];
+                slot.Left = new float[channels][];
+                slot.Right = new float[channels][];
+                for (int ch = 0; ch < channels; ch++) {
+                    slot.Original[ch] = new float[slotLen];
+                    slot.Low[ch] = new float[slotLen];
+                    slot.Left[ch] = new float[slotLen];
+                    slot.Right[ch] = new float[slotLen];
+                }
+                slot.DelayedCenter = new float[slotLen];
+                slot.StereoL = new float[slotLen];
+                slot.StereoR = new float[slotLen];
+                rateSlots[s] = slot;
+            }
+        }
+
+        static void FallbackStereoDownmix(float[] output, int channels) {
+            if (channels <= 2) {
+                return;
+            }
+            int block = output.Length / channels;
+            for (int sample = 0; sample < block; sample++) {
+                int baseIdx = sample * channels;
+                float l = output[baseIdx];
+                float r = output[baseIdx + 1];
+                for (int ch = 2; ch < channels; ch++) {
+                    float v = output[baseIdx + ch] * VirtualChannel.minus3dB;
+                    l += v;
+                    r += v;
+                    output[baseIdx + ch] = 0f;
+                }
+                output[baseIdx] = l;
+                output[baseIdx + 1] = r;
             }
         }
 

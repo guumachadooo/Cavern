@@ -206,8 +206,16 @@ namespace Cavern.Virtualizer {
             if (leftEar == null || rightEar == null || count <= 0) {
                 return;
             }
+            int n = Math.Min(count, Math.Min(leftEar.Length, rightEar.Length));
+            if (n <= 0) {
+                return;
+            }
             if (distanceMeters >= NearFieldThresholdMeters || refDistanceMeters <= 0f || distanceMeters >= refDistanceMeters || sampleRate < 8000) {
                 if (active) {
+                    if (sampleRate >= 8000 && configuredSampleRate >= 8000) {
+                        int fadeLen = Math.Min(n, Math.Max(32, configuredSampleRate / 100));
+                        RunBiquad(leftEar, rightEar, n, fadeLen);
+                    }
                     active = false;
                     configuredDistance = float.NaN;
                     Reset();
@@ -215,29 +223,62 @@ namespace Cavern.Virtualizer {
                 return;
             }
 
-            UpdateCoefficientsIfNeeded(distanceMeters, refDistanceMeters, cosThetaRight, sampleRate, speedOfSound);
+            bool exitingNearUnity = UpdateCoefficientsIfNeeded(distanceMeters, refDistanceMeters, cosThetaRight, sampleRate, speedOfSound);
             if (!active) {
                 return;
             }
+            if (exitingNearUnity) {
+                int fadeLen = Math.Min(n, Math.Max(32, configuredSampleRate / 100));
+                RunBiquad(leftEar, rightEar, n, fadeLen);
+                active = false;
+                configuredDistance = float.NaN;
+                Reset();
+                return;
+            }
 
-            int n = Math.Min(count, Math.Min(leftEar.Length, rightEar.Length));
+            RunBiquad(leftEar, rightEar, n, 0);
+        }
+
+        void RunBiquad(float[] leftEar, float[] rightEar, int n, int fadeOutSamples) {
             double lz1 = lZ1, lz2 = lZ2;
             double rz1 = rZ1, rz2 = rZ2;
             double lb0 = lB0, lb1 = lB1, lb2 = lB2, la1 = lA1, la2 = lA2;
             double rb0 = rB0, rb1 = rB1, rb2 = rB2, ra1 = rA1, ra2 = rA2;
 
-            for (int i = 0; i < n; i++) {
-                double xl = leftEar[i];
-                double yl = lb0 * xl + lz1;
-                lz1 = lb1 * xl - la1 * yl + lz2;
-                lz2 = lb2 * xl - la2 * yl;
-                leftEar[i] = (float)yl;
+            if (fadeOutSamples > 0) {
+                int limit = Math.Min(n, fadeOutSamples);
+                double denom = limit > 1 ? limit - 1 : 1.0;
+                for (int i = 0; i < limit; i++) {
+                    double t = limit > 1 ? i / denom : 1.0;
+                    double dryMix = t * t * (3.0 - 2.0 * t);
+                    double wetMix = 1.0 - dryMix;
 
-                double xr = rightEar[i];
-                double yr = rb0 * xr + rz1;
-                rz1 = rb1 * xr - ra1 * yr + rz2;
-                rz2 = rb2 * xr - ra2 * yr;
-                rightEar[i] = (float)yr;
+                    double xl = leftEar[i];
+                    double yl = lb0 * xl + lz1;
+                    lz1 = lb1 * xl - la1 * yl + lz2;
+                    lz2 = lb2 * xl - la2 * yl;
+                    leftEar[i] = (float)(wetMix * yl + dryMix * xl);
+
+                    double xr = rightEar[i];
+                    double yr = rb0 * xr + rz1;
+                    rz1 = rb1 * xr - ra1 * yr + rz2;
+                    rz2 = rb2 * xr - ra2 * yr;
+                    rightEar[i] = (float)(wetMix * yr + dryMix * xr);
+                }
+            } else {
+                for (int i = 0; i < n; i++) {
+                    double xl = leftEar[i];
+                    double yl = lb0 * xl + lz1;
+                    lz1 = lb1 * xl - la1 * yl + lz2;
+                    lz2 = lb2 * xl - la2 * yl;
+                    leftEar[i] = (float)yl;
+
+                    double xr = rightEar[i];
+                    double yr = rb0 * xr + rz1;
+                    rz1 = rb1 * xr - ra1 * yr + rz2;
+                    rz2 = rb2 * xr - ra2 * yr;
+                    rightEar[i] = (float)yr;
+                }
             }
 
             lZ1 = Math.Abs(lz1) > 1e-24 ? lz1 : 0.0;
@@ -256,7 +297,7 @@ namespace Cavern.Virtualizer {
             rZ2 = 0.0;
         }
 
-        void UpdateCoefficientsIfNeeded(
+        bool UpdateCoefficientsIfNeeded(
             float distanceMeters,
             float refDistanceMeters,
             float cosThetaRight,
@@ -267,7 +308,7 @@ namespace Cavern.Virtualizer {
                 MathF.Abs(distanceMeters - configuredDistance) < 0.015f &&
                 MathF.Abs(refDistanceMeters - configuredRefDistance) < 0.01f &&
                 MathF.Abs(cosThetaRight - configuredCosRight) < 0.02f) {
-                return;
+                return false;
             }
 
             configuredDistance = distanceMeters;
@@ -290,15 +331,14 @@ namespace Cavern.Virtualizer {
             double hfDbR = 20.0 * Math.Log10(Math.Max(1e-6, hfR));
 
             if (Math.Abs(lfDbL) < 0.02 && Math.Abs(hfDbL) < 0.02 && Math.Abs(lfDbR) < 0.02 && Math.Abs(hfDbR) < 0.02) {
-                active = false;
-                Reset();
-                return;
+                return active;
             }
 
             // Realize exact ear transfer as broadband HF gain + low-shelf delta (lfDb - hfDb) at 900 Hz
             BuildLowShelfWithBroadband(shelfCornerHz, lfDbL - hfDbL, hfL, sampleRate, out lB0, out lB1, out lB2, out lA1, out lA2);
             BuildLowShelfWithBroadband(shelfCornerHz, lfDbR - hfDbR, hfR, sampleRate, out rB0, out rB1, out rB2, out rA1, out rA2);
             active = true;
+            return false;
         }
 
         static void BuildLowShelfWithBroadband(

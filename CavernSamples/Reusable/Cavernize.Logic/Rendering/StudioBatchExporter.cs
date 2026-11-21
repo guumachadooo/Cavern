@@ -386,6 +386,7 @@ public static class StudioBatchExporter {
         string outPath,
         Action<double> onProgress,
         CancellationToken token) {
+        using IDisposable virtScope = VirtualizerFilter.BeginStaticStateScope();
         EnsureEnvironmentSize();
         new VirtualizerFilter().SetLayout();
         Listener.HeadphoneVirtualizer = true;
@@ -403,8 +404,9 @@ public static class StudioBatchExporter {
         double rateRatio = outSampleRate / (double)Math.Max(1, track.SampleRate);
         long totalSamples = Math.Max(updateRate, (long)Math.Round(Math.Max(updateRate, track.Length) * rateRatio));
 
-        // Collect and configure active Slot 6 post-processing stages (AutoEq, HpTF, ISO 226, BS.1770, Dialog),
-        // skipping the stage-level True-Peak Limiter because this export runs its own ceiling-configured TruePeakLimiter.
+        // Collect cloned Slot 6 post-processing stages (AutoEq, HpTF, ISO 226, BS.1770, Dialog)
+        // so live playback stages never mutate or reset mid-export; skip limiters because this export
+        // runs its own ceiling-configured TruePeakLimiter.
         List<IPostProcessingStage> activePostStages = [];
         if (job.PostProcessingStages != null) {
             for (int i = 0; i < job.PostProcessingStages.Count; i++) {
@@ -412,11 +414,13 @@ public static class StudioBatchExporter {
                 if (stage == null || !stage.IsEnabled) {
                     continue;
                 }
-                if (string.Equals(stage.StageId, "true-peak-limiter", StringComparison.OrdinalIgnoreCase) ||
+                if (string.Equals(stage.StageId, "true-peak-limiter-4x", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(stage.StageId, "true-peak-limiter", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(stage.StageId, "cavern-soft-knee-limiter", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(stage.StageId, "limiter", StringComparison.OrdinalIgnoreCase)) {
                     continue;
                 }
-                activePostStages.Add(stage);
+                activePostStages.Add(stage.CloneForOfflineExport());
             }
             activePostStages.Sort((a, b) => a.Priority.CompareTo(b.Priority));
         }
@@ -466,9 +470,9 @@ public static class StudioBatchExporter {
         } finally {
             for (int i = 0; i < activePostStages.Count; i++) {
                 try {
-                    activePostStages[i].Reset();
+                    activePostStages[i].Dispose();
                 } catch {
-                    // Best-effort cleanup so live playback starts cleanly
+                    // Best-effort cleanup of cloned offline post-processing stages
                 }
             }
         }

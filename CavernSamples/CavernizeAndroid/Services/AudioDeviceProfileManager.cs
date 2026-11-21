@@ -7,6 +7,8 @@ using Android.OS;
 using Cavernize.Logic.Rendering;
 using Cavernize.Logic.Spatial;
 
+using CavernizeAndroid.Language;
+
 namespace CavernizeAndroid.Services;
 
 /// <summary>
@@ -396,14 +398,15 @@ public sealed class AudioDeviceProfileManager : IDisposable {
     static string BuildDisplayName(string rawName, AudioDeviceTransport transport) {
         bool genericPhone = string.IsNullOrWhiteSpace(rawName) ||
                             rawName.Equals("Android", StringComparison.OrdinalIgnoreCase);
+        AndroidStrings str = AndroidStrings.Active;
         return transport switch {
-            AudioDeviceTransport.BuiltinSpeaker => "Built-in Speaker",
-            AudioDeviceTransport.WiredJack => genericPhone ? "Wired 3.5mm Headphones" : $"{rawName} (3.5mm)",
-            AudioDeviceTransport.UsbDac => genericPhone ? "USB-C DAC / Headset" : rawName,
-            AudioDeviceTransport.BluetoothA2dp => genericPhone ? "Bluetooth Headphones" : rawName,
-            AudioDeviceTransport.BleAudio => genericPhone ? "Bluetooth LE Audio" : rawName,
-            AudioDeviceTransport.HdmiOrLineOut => genericPhone ? "HDMI / Line Out" : rawName,
-            _ => genericPhone ? "Default Audio Output" : rawName
+            AudioDeviceTransport.BuiltinSpeaker => str["DeviceBuiltinSpeaker"],
+            AudioDeviceTransport.WiredJack => genericPhone ? str["DeviceWiredHeadphones"] : $"{rawName} (3.5mm)",
+            AudioDeviceTransport.UsbDac => genericPhone ? str["DeviceUsbDac"] : rawName,
+            AudioDeviceTransport.BluetoothA2dp => genericPhone ? str["DeviceBluetoothHeadphones"] : rawName,
+            AudioDeviceTransport.BleAudio => genericPhone ? str["DeviceBleAudio"] : rawName,
+            AudioDeviceTransport.HdmiOrLineOut => genericPhone ? str["DeviceHdmiLineOut"] : rawName,
+            _ => genericPhone ? str["DeviceDefaultOutput"] : rawName
         };
     }
 

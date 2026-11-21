@@ -10,6 +10,8 @@ using System.Xml.Linq;
 using Android.Content;
 using Android.Graphics;
 
+using CavernizeAndroid.Language;
+
 using IOFile = System.IO.File;
 using IOPath = System.IO.Path;
 
@@ -67,7 +69,11 @@ public sealed class OnlineEnrichResult {
 public static partial class OnlineMetadataService {
     const string AudioDbKey = "95424d43204d6564696538"; // Kodi metadata.generic.albums
     const string TmdbApiKey = "f090bb54758cabf231fb605d3e3e0468"; // Kodi metadata.themoviedb.org.python
+    const string AppUserAgent = "CavernizeAndroid/2.9 (https://github.com/guumachadooo/Cavern)";
 
+    static readonly string[] ImageCacheExtensions = [".jpg", ".png", ".webp"];
+    static readonly SemaphoreSlim musicBrainzRateLock = new(1, 1);
+    static long lastMusicBrainzRequestMs;
     static readonly HttpClient http = CreateHttpClient();
 
     [GeneratedRegex(@"[\[\(].*?[\]\)]", RegexOptions.Compiled)]
@@ -85,8 +91,7 @@ public static partial class OnlineMetadataService {
     static HttpClient CreateHttpClient() {
         HttpClient client = new() { Timeout = TimeSpan.FromSeconds(14) };
         client.DefaultRequestHeaders.UserAgent.Clear();
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", "2.9"));
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("(https://github.com/guumachadooo/Cavern)"));
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(AppUserAgent);
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return client;
     }
@@ -131,7 +136,8 @@ public static partial class OnlineMetadataService {
             || album.Equals("Music", StringComparison.OrdinalIgnoreCase)
             || album.Equals("Movies", StringComparison.OrdinalIgnoreCase)
             || album.Equals("Audiobooks", StringComparison.OrdinalIgnoreCase)
-            || album.Equals("Desconhecido", StringComparison.OrdinalIgnoreCase);
+            || album.Equals("Desconhecido", StringComparison.OrdinalIgnoreCase)
+            || album.Equals("Unknown", StringComparison.OrdinalIgnoreCase);
     }
 
     static string NormalizeCompare(string raw) {
@@ -166,11 +172,18 @@ public static partial class OnlineMetadataService {
         return NormalizeCompare(candArtist) == normTarget;
     }
 
+    static string FindExistingCachedImage(string dir, string baseHash) {
+        for (int i = 0; i < ImageCacheExtensions.Length; i++) {
+            string candidate = IOPath.Combine(dir, baseHash + ImageCacheExtensions[i]);
+            if (IOFile.Exists(candidate)) return candidate;
+        }
+        return null;
+    }
+
     public static string GetManualCoverOverridePath(Context ctx, string filePath) {
         if (ctx == null || string.IsNullOrWhiteSpace(filePath)) return null;
         string dir = GetCacheSubdir(ctx, "cover_overrides");
-        string p = IOPath.Combine(dir, HashKey($"file|{filePath}") + ".jpg");
-        return IOFile.Exists(p) ? p : null;
+        return FindExistingCachedImage(dir, HashKey($"file|{filePath}"));
     }
 
     public static string GetCachedCoverPath(Context ctx, string title, string artist, string album, string filePath = null) {
@@ -181,16 +194,16 @@ public static partial class OnlineMetadataService {
         string dir = GetCacheSubdir(ctx, "covers");
         string cleanAlb = IsGenericAlbumName(album) ? "" : album.Trim();
         if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrEmpty(cleanAlb)) {
-            string pEd = IOPath.Combine(dir, HashKey($"trk|{artist}|{cleanAlb}|{title}") + ".jpg");
-            if (IOFile.Exists(pEd)) return pEd;
+            string pEd = FindExistingCachedImage(dir, HashKey($"trk|{artist}|{cleanAlb}|{title}"));
+            if (!string.IsNullOrEmpty(pEd)) return pEd;
         }
         if (!string.IsNullOrWhiteSpace(artist) && !string.IsNullOrEmpty(cleanAlb)) {
-            string pAlb = IOPath.Combine(dir, HashKey($"alb|{artist}|{cleanAlb}") + ".jpg");
-            if (IOFile.Exists(pAlb)) return pAlb;
+            string pAlb = FindExistingCachedImage(dir, HashKey($"alb|{artist}|{cleanAlb}"));
+            if (!string.IsNullOrEmpty(pAlb)) return pAlb;
         }
         if (!string.IsNullOrWhiteSpace(title) && string.IsNullOrEmpty(cleanAlb)) {
-            string pTrk = IOPath.Combine(dir, HashKey($"trk|{artist}|{title}") + ".jpg");
-            if (IOFile.Exists(pTrk)) return pTrk;
+            string pTrk = FindExistingCachedImage(dir, HashKey($"trk|{artist}|{title}"));
+            if (!string.IsNullOrEmpty(pTrk)) return pTrk;
         }
         return null;
     }
@@ -206,7 +219,7 @@ public static partial class OnlineMetadataService {
         if (ctx == null || string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(content)) return null;
         string dir = GetCacheSubdir(ctx, "lyrics");
         string p = IOPath.Combine(dir, HashKey($"lyr|{artist}|{title}") + ".lrc");
-        IOFile.WriteAllText(p, content, Encoding.UTF8);
+        MediaServiceUtils.WriteTextAtomic(p, content);
         return p;
     }
 
@@ -368,9 +381,26 @@ public static partial class OnlineMetadataService {
         try {
             string q = $"release:\"{album}\" AND artist:\"{artist}\"";
             string url = $"https://musicbrainz.org/ws/2/release/?query={Uri.EscapeDataString(q)}&fmt=json&limit=3";
-            using HttpResponseMessage resp = await http.GetAsync(url, ct).ConfigureAwait(false);
-            if (!resp.IsSuccessStatusCode) return;
-            string json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+
+            string json = null;
+            await musicBrainzRateLock.WaitAsync(ct).ConfigureAwait(false);
+            try {
+                long elapsed = Environment.TickCount64 - lastMusicBrainzRequestMs;
+                if (lastMusicBrainzRequestMs > 0 && elapsed < 1050) {
+                    await Task.Delay((int)(1050 - elapsed), ct).ConfigureAwait(false);
+                }
+                lastMusicBrainzRequestMs = Environment.TickCount64;
+
+                using HttpRequestMessage req = new(HttpMethod.Get, url);
+                req.Headers.UserAgent.Clear();
+                req.Headers.UserAgent.ParseAdd(AppUserAgent);
+                using HttpResponseMessage resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+                if (!resp.IsSuccessStatusCode) return;
+                json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            } finally {
+                musicBrainzRateLock.Release();
+            }
+
             using JsonDocument doc = JsonDocument.Parse(json);
             if (!doc.RootElement.TryGetProperty("releases", out JsonElement arr) || arr.ValueKind != JsonValueKind.Array) return;
             foreach (JsonElement rel in arr.EnumerateArray()) {
@@ -392,7 +422,8 @@ public static partial class OnlineMetadataService {
 
     static async Task TrySearchTmdbAsync(string titleQuery, List<OnlineCoverCandidate> results, CancellationToken ct) {
         try {
-            string url = $"https://api.themoviedb.org/3/search/movie?api_key={TmdbApiKey}&query={Uri.EscapeDataString(titleQuery)}&language=pt-BR";
+            string tmdbLang = Uri.EscapeDataString(AndroidStrings.Active["TmdbLanguageCode"]);
+            string url = $"https://api.themoviedb.org/3/search/movie?api_key={TmdbApiKey}&query={Uri.EscapeDataString(titleQuery)}&language={tmdbLang}";
             using HttpResponseMessage resp = await http.GetAsync(url, ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode) return;
             string json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -408,7 +439,7 @@ public static partial class OnlineMetadataService {
                 results.Add(new OnlineCoverCandidate {
                     Title = mvTitle,
                     Artist = relDate.Length >= 4 ? relDate[..4] : "TMDb",
-                    Album = "Filme / Vídeo",
+                    Album = AndroidStrings.Active["MovieVideoLabel"],
                     Source = "TMDb Poster",
                     ImageUrl = $"https://image.tmdb.org/t/p/w780{poster}"
                 });
@@ -446,27 +477,51 @@ public static partial class OnlineMetadataService {
         }
     }
 
+    static string DetectImageExtension(byte[] bytes) {
+        if (bytes.Length >= 8 && bytes[0] == 0x89 && bytes[1] == 0x50 && bytes[2] == 0x4E && bytes[3] == 0x47) {
+            return ".png";
+        }
+        if (bytes.Length >= 12 &&
+            bytes[0] == 'R' && bytes[1] == 'I' && bytes[2] == 'F' && bytes[3] == 'F' &&
+            bytes[8] == 'W' && bytes[9] == 'E' && bytes[10] == 'B' && bytes[11] == 'P') {
+            return ".webp";
+        }
+        return ".jpg";
+    }
+
+    static string WriteCachedImageAtomic(string dir, string baseHash, string ext, byte[] bytes) {
+        for (int i = 0; i < ImageCacheExtensions.Length; i++) {
+            string staleExt = ImageCacheExtensions[i];
+            if (staleExt == ext) continue;
+            string stale = IOPath.Combine(dir, baseHash + staleExt);
+            try {
+                if (IOFile.Exists(stale)) IOFile.Delete(stale);
+            } catch { }
+        }
+        string target = IOPath.Combine(dir, baseHash + ext);
+        MediaServiceUtils.WriteBytesAtomic(target, bytes);
+        return target;
+    }
+
     static (Bitmap bitmap, string savedPath) SaveAndDecodeCoverBytes(
         Context ctx, byte[] bytes, string title, string artist, string album, string filePathOverride = null) {
         if (bytes == null || bytes.Length < 256) return (null, null);
-        Bitmap bmp = MediaMetadataHelper.DecodeScaledBitmap(bytes, 640);
+        Bitmap bmp = MediaServiceUtils.DecodeScaledBitmapSafe(bytes, 640);
         if (bmp == null) return (null, null);
 
+        string imgExt = DetectImageExtension(bytes);
         string dir = GetCacheSubdir(ctx, "covers");
         string cleanAlb = IsGenericAlbumName(album) ? "" : album.Trim();
-        string savedPath = !string.IsNullOrEmpty(cleanAlb)
-            ? IOPath.Combine(dir, HashKey($"trk|{artist}|{cleanAlb}|{title}") + ".jpg")
-            : IOPath.Combine(dir, HashKey($"trk|{artist}|{title}") + ".jpg");
-        IOFile.WriteAllBytes(savedPath, bytes);
+        string trkHash = !string.IsNullOrEmpty(cleanAlb)
+            ? HashKey($"trk|{artist}|{cleanAlb}|{title}")
+            : HashKey($"trk|{artist}|{title}");
+        string savedPath = WriteCachedImageAtomic(dir, trkHash, imgExt, bytes);
         if (!string.IsNullOrWhiteSpace(artist) && !string.IsNullOrEmpty(cleanAlb)) {
-            string albPath = IOPath.Combine(dir, HashKey($"alb|{artist}|{cleanAlb}") + ".jpg");
-            IOFile.WriteAllBytes(albPath, bytes);
+            WriteCachedImageAtomic(dir, HashKey($"alb|{artist}|{cleanAlb}"), imgExt, bytes);
         }
         if (!string.IsNullOrWhiteSpace(filePathOverride)) {
             string ovrDir = GetCacheSubdir(ctx, "cover_overrides");
-            string ovrPath = IOPath.Combine(ovrDir, HashKey($"file|{filePathOverride}") + ".jpg");
-            IOFile.WriteAllBytes(ovrPath, bytes);
-            savedPath = ovrPath;
+            savedPath = WriteCachedImageAtomic(ovrDir, HashKey($"file|{filePathOverride}"), imgExt, bytes);
             MediaLibraryService.InvalidateThumbCache(filePathOverride);
         }
         return (bmp, savedPath);
@@ -532,8 +587,10 @@ public static partial class OnlineMetadataService {
             AppLogger.Warn($"OnlineMetadataService.LRCLIB: {ex.Message}");
         }
 
-        // Source 2: Netease Cloud Music (synced LRC [mm:ss.xxx] fallback/cross-source)
-        await TrySearchNeteaseLyricsAsync(cleanTitle, cleanArtist, list, ct).ConfigureAwait(false);
+        // Source 2: Netease Cloud Music (only when LRCLIB had no synced hit)
+        if (!list.Any(l => l.IsSynced)) {
+            await TrySearchNeteaseLyricsAsync(cleanTitle, cleanArtist, list, ct).ConfigureAwait(false);
+        }
 
         // Source 4: Lyrics.ovh (plain lyrics fallback)
         if (!string.IsNullOrWhiteSpace(cleanArtist) && !list.Any(l => l.IsSynced)) {
@@ -561,7 +618,7 @@ public static partial class OnlineMetadataService {
                     _ => 6
                 };
 
-                int score = (titleMatch ? 500 : (NormalizeCompare(c.TrackName).Contains(normTitle) ? 180 : 0))
+                int score = (titleMatch ? 500 : (!string.IsNullOrEmpty(normTitle) && NormalizeCompare(c.TrackName).Contains(normTitle) ? 180 : 0))
                     + (artistMatch ? 400 : 0)
                     + (albumMatch ? 120 : 0)
                     + (c.IsSynced ? 220 : 0)
@@ -728,7 +785,7 @@ public static partial class OnlineMetadataService {
                 string url = $"https://rest.opensubtitles.org/search/query-{Uri.EscapeDataString(clean)}/sublanguageid-{osLang}";
                 using HttpRequestMessage req = new(HttpMethod.Get, url);
                 req.Headers.UserAgent.Clear();
-                req.Headers.UserAgent.ParseAdd("TemporaryUserAgent");
+                req.Headers.UserAgent.ParseAdd(AppUserAgent);
                 using HttpResponseMessage resp = await http.SendAsync(req, ct).ConfigureAwait(false);
                 if (!resp.IsSuccessStatusCode) continue;
 
@@ -838,6 +895,22 @@ public static partial class OnlineMetadataService {
             .ToList();
     }
 
+    static string DetectSubtitleExtension(byte[] bytes, string hintName = null) {
+        if (!string.IsNullOrEmpty(hintName)) {
+            string ext = IOPath.GetExtension(hintName).ToLowerInvariant();
+            if (ext is ".ass" or ".ssa" or ".vtt" or ".srt") return ext;
+        }
+        int probeLen = Math.Min(bytes.Length, 1024);
+        string head = MediaServiceUtils.ReadTextAutoEncoding(bytes.AsSpan(0, probeLen).ToArray()).TrimStart('\uFEFF', ' ', '\t', '\r', '\n');
+        if (head.StartsWith("WEBVTT", StringComparison.OrdinalIgnoreCase)) return ".vtt";
+        if (head.Contains("[Script Info]", StringComparison.OrdinalIgnoreCase) ||
+            head.Contains("[V4+ Styles]", StringComparison.OrdinalIgnoreCase) ||
+            head.StartsWith("Dialogue:", StringComparison.OrdinalIgnoreCase)) {
+            return ".ass";
+        }
+        return ".srt";
+    }
+
     public static async Task<string> DownloadAndExtractSubtitleAsync(
         Context ctx,
         OnlineSubtitleCandidate candidate,
@@ -848,7 +921,7 @@ public static partial class OnlineMetadataService {
             req.Headers.Accept.Clear();
             if (candidate.DownloadUrl.Contains("opensubtitles.org", StringComparison.OrdinalIgnoreCase)) {
                 req.Headers.UserAgent.Clear();
-                req.Headers.UserAgent.ParseAdd("TemporaryUserAgent");
+                req.Headers.UserAgent.ParseAdd(AppUserAgent);
             }
             using HttpResponseMessage resp = await http.SendAsync(req, ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode) return null;
@@ -863,9 +936,11 @@ public static partial class OnlineMetadataService {
             if (bytes[0] == 0x1F && bytes[1] == 0x8B) {
                 using MemoryStream ms = new(bytes);
                 using GZipStream gz = new(ms, CompressionMode.Decompress);
-                string outPath = IOPath.Combine(dir, safeBase + ".srt");
-                using FileStream fs = IOFile.Create(outPath);
-                await gz.CopyToAsync(fs, ct).ConfigureAwait(false);
+                using MemoryStream decomp = new();
+                await gz.CopyToAsync(decomp, ct).ConfigureAwait(false);
+                byte[] subBytes = decomp.ToArray();
+                string outPath = IOPath.Combine(dir, safeBase + DetectSubtitleExtension(subBytes, candidate.Title));
+                MediaServiceUtils.WriteBytesAtomic(outPath, subBytes);
                 return outPath;
             }
 
@@ -876,19 +951,21 @@ public static partial class OnlineMetadataService {
                 ZipArchiveEntry entry = zip.Entries.FirstOrDefault(e =>
                     e.Name.EndsWith(".srt", StringComparison.OrdinalIgnoreCase) ||
                     e.Name.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase) ||
-                    e.Name.EndsWith(".ass", StringComparison.OrdinalIgnoreCase));
+                    e.Name.EndsWith(".ass", StringComparison.OrdinalIgnoreCase) ||
+                    e.Name.EndsWith(".ssa", StringComparison.OrdinalIgnoreCase));
                 if (entry == null) return null;
 
-                string ext = IOPath.GetExtension(entry.Name).ToLowerInvariant();
-                string outPath = IOPath.Combine(dir, safeBase + ext);
                 using Stream es = entry.Open();
-                using FileStream fs = IOFile.Create(outPath);
-                await es.CopyToAsync(fs, ct).ConfigureAwait(false);
+                using MemoryStream decomp = new();
+                await es.CopyToAsync(decomp, ct).ConfigureAwait(false);
+                byte[] subBytes = decomp.ToArray();
+                string outPath = IOPath.Combine(dir, safeBase + DetectSubtitleExtension(subBytes, entry.Name));
+                MediaServiceUtils.WriteBytesAtomic(outPath, subBytes);
                 return outPath;
             }
 
-            string rawPath = IOPath.Combine(dir, safeBase + ".srt");
-            await IOFile.WriteAllBytesAsync(rawPath, bytes, ct).ConfigureAwait(false);
+            string rawPath = IOPath.Combine(dir, safeBase + DetectSubtitleExtension(bytes, candidate.Title));
+            MediaServiceUtils.WriteBytesAtomic(rawPath, bytes);
             return rawPath;
         } catch (Exception ex) {
             AppLogger.Error("OnlineMetadataService.DownloadSubtitle", ex);
@@ -915,10 +992,8 @@ public static partial class OnlineMetadataService {
             if (!needCover) return;
             List<OnlineCoverCandidate> covers = await SearchCoverCandidatesAsync(
                 meta.Title, meta.Artist, meta.Album, meta.HasVideo, ct).ConfigureAwait(false);
-            // When auto-enriching silently, prefer exact matches first if available
-            IEnumerable<OnlineCoverCandidate> picks = covers.Any(c => c.IsExactMatch)
-                ? covers.Where(c => c.IsExactMatch).Take(2)
-                : covers.Take(2);
+            // Auto-enrich silently ONLY from verified exact matches
+            IEnumerable<OnlineCoverCandidate> picks = covers.Where(c => c.IsExactMatch).Take(2);
             foreach (OnlineCoverCandidate c in picks) {
                 var (bmp, _) = await DownloadAndCacheCoverAsync(ctx, c.ImageUrl, meta.Title, meta.Artist, meta.Album, ct).ConfigureAwait(false);
                 if (bmp != null) {
@@ -932,7 +1007,7 @@ public static partial class OnlineMetadataService {
         Task lyricsTask = Task.Run(async () => {
             if (!needLyrics) return;
             List<OnlineLyricsCandidate> cands = await SearchLyricsAsync(meta.Title, meta.Artist, meta.Album, ct, meta.DurationSeconds).ConfigureAwait(false);
-            OnlineLyricsCandidate best = cands.FirstOrDefault(c => c.IsExactMatch) ?? cands.FirstOrDefault();
+            OnlineLyricsCandidate best = cands.FirstOrDefault(c => c.IsExactMatch);
             if (best != null && !string.IsNullOrWhiteSpace(best.BestContent)) {
                 SaveLyricsToCache(ctx, meta.Title, meta.Artist, best.BestContent);
                 LyricsDocument doc = LyricsService.ParseLyricsText(best.BestContent, best.Source);

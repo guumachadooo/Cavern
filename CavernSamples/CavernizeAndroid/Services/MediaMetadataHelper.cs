@@ -61,7 +61,7 @@ public static class MediaMetadataHelper {
         string manualOverride = OnlineMetadataService.GetManualCoverOverridePath(context, resolvedPath);
         if (!string.IsNullOrEmpty(manualOverride) && IOFile.Exists(manualOverride)) {
             try {
-                artwork = DecodeScaledBitmap(IOFile.ReadAllBytes(manualOverride), 640);
+                artwork = MediaServiceUtils.DecodeScaledBitmapSafe(manualOverride, 640);
                 hasEmbedded = artwork != null;
             } catch {
                 // Fall back to embedded/folder art below
@@ -91,11 +91,15 @@ public static class MediaMetadataHelper {
 
         if (sourceOpened) {
             try {
-                title = (retriever.ExtractMetadata(MetadataKey.Title) ?? "").Trim();
-                artist = (retriever.ExtractMetadata(MetadataKey.Artist)
-                    ?? retriever.ExtractMetadata(MetadataKey.Albumartist)
-                    ?? "").Trim();
-                album = (retriever.ExtractMetadata(MetadataKey.Album) ?? "").Trim();
+                string rawTitle = (retriever.ExtractMetadata(MetadataKey.Title) ?? "").Trim();
+                title = IsMissingTag(rawTitle) ? "" : rawTitle;
+                string rawArtist = (retriever.ExtractMetadata(MetadataKey.Artist) ?? "").Trim();
+                if (IsMissingTag(rawArtist)) {
+                    rawArtist = (retriever.ExtractMetadata(MetadataKey.Albumartist) ?? "").Trim();
+                }
+                artist = IsMissingTag(rawArtist) ? "" : rawArtist;
+                string rawAlbum = (retriever.ExtractMetadata(MetadataKey.Album) ?? "").Trim();
+                album = IsMissingTag(rawAlbum) ? "" : rawAlbum;
                 mime = (retriever.ExtractMetadata(MetadataKey.Mimetype) ?? "").Trim();
 
                 string bitrateRaw = retriever.ExtractMetadata(MetadataKey.Bitrate);
@@ -152,18 +156,21 @@ public static class MediaMetadataHelper {
             }
         }
 
-        // Fallback binary tag reader (especially critical for MP4 Atmos / M4A / FLAC where MediaMetadataRetriever omits tags)
+        // Fallback binary tag reader (especially critical for MP4 Atmos / M4A / FLAC where MediaMetadataRetriever omits tags or emits "<unknown>")
         if (!string.IsNullOrEmpty(resolvedPath) && IOFile.Exists(resolvedPath) &&
-            (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(artist) || string.IsNullOrWhiteSpace(album))) {
+            (IsMissingTag(title) || IsMissingTag(artist) || IsMissingTag(album))) {
             ParsedAudioTags binTags = AudioTagReader.TryReadTags(resolvedPath);
             if (binTags != null) {
-                if (string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(binTags.Title)) {
+                if (IsMissingTag(title) && !IsMissingTag(binTags.Title)) {
                     title = binTags.Title;
                 }
-                if (string.IsNullOrWhiteSpace(artist)) {
-                    artist = !string.IsNullOrWhiteSpace(binTags.Artist) ? binTags.Artist : binTags.AlbumArtist;
+                if (IsMissingTag(artist)) {
+                    string fallbackArt = !IsMissingTag(binTags.Artist) ? binTags.Artist : binTags.AlbumArtist;
+                    if (!IsMissingTag(fallbackArt)) {
+                        artist = fallbackArt;
+                    }
                 }
-                if (string.IsNullOrWhiteSpace(album) && !string.IsNullOrWhiteSpace(binTags.Album)) {
+                if (IsMissingTag(album) && !IsMissingTag(binTags.Album)) {
                     album = binTags.Album;
                 }
             }
@@ -174,7 +181,7 @@ public static class MediaMetadataHelper {
             hasEmbedded = artwork != null;
         }
 
-        string effectiveTitle = !string.IsNullOrWhiteSpace(title)
+        string effectiveTitle = !IsMissingTag(title)
             ? title
             : CleanTitleFromFilename(fallbackTitle);
 
@@ -182,7 +189,7 @@ public static class MediaMetadataHelper {
             string cachedCover = OnlineMetadataService.GetCachedCoverPath(context, effectiveTitle, artist, album, resolvedPath);
             if (!string.IsNullOrEmpty(cachedCover) && IOFile.Exists(cachedCover)) {
                 try {
-                    artwork = DecodeScaledBitmap(IOFile.ReadAllBytes(cachedCover), 640);
+                    artwork = MediaServiceUtils.DecodeScaledBitmapSafe(cachedCover, 640);
                     hasEmbedded = artwork != null;
                 } catch {
                     // Ignore invalid cache
@@ -317,8 +324,7 @@ public static class MediaMetadataHelper {
             foreach (string candidate in ExternalCoverNames) {
                 string full = IOPath.Combine(dir, candidate);
                 if (IOFile.Exists(full)) {
-                    byte[] bytes = IOFile.ReadAllBytes(full);
-                    Bitmap bmp = DecodeScaledBitmap(bytes, maxDim);
+                    Bitmap bmp = MediaServiceUtils.DecodeScaledBitmapSafe(full, maxDim);
                     if (bmp != null) {
                         return bmp;
                     }
@@ -329,6 +335,9 @@ public static class MediaMetadataHelper {
         }
         return null;
     }
+
+    static bool IsMissingTag(string value) =>
+        string.IsNullOrWhiteSpace(value) || "<unknown>".Equals(value.Trim(), StringComparison.OrdinalIgnoreCase);
 
     static Bitmap ScaleBitmapToMax(Bitmap source, int maxDim) {
         int longest = Math.Max(source.Width, source.Height);
@@ -341,41 +350,8 @@ public static class MediaMetadataHelper {
         return Bitmap.CreateScaledBitmap(source, w, h, true);
     }
 
-    internal static Bitmap DecodeScaledBitmap(byte[] bytes, int maxDim) {
-        BitmapFactory.Options bounds = new() { InJustDecodeBounds = true };
-        BitmapFactory.DecodeByteArray(bytes, 0, bytes.Length, bounds);
-        if (bounds.OutWidth <= 0 || bounds.OutHeight <= 0) {
-            return null;
-        }
-
-        int sample = 1;
-        while ((bounds.OutWidth / sample) > maxDim * 2 || (bounds.OutHeight / sample) > maxDim * 2) {
-            sample *= 2;
-        }
-
-        BitmapFactory.Options opts = new() {
-            InSampleSize = sample,
-            InPreferredConfig = Bitmap.Config.Argb8888
-        };
-        Bitmap decoded = BitmapFactory.DecodeByteArray(bytes, 0, bytes.Length, opts);
-        if (decoded == null) {
-            return null;
-        }
-
-        int longest = Math.Max(decoded.Width, decoded.Height);
-        if (longest <= maxDim) {
-            return decoded;
-        }
-
-        float scale = maxDim / (float)longest;
-        int w = Math.Max(1, (int)Math.Round(decoded.Width * scale));
-        int h = Math.Max(1, (int)Math.Round(decoded.Height * scale));
-        Bitmap scaled = Bitmap.CreateScaledBitmap(decoded, w, h, true);
-        if (!ReferenceEquals(scaled, decoded)) {
-            decoded.Recycle();
-        }
-        return scaled;
-    }
+    internal static Bitmap DecodeScaledBitmap(byte[] bytes, int maxDim) =>
+        MediaServiceUtils.DecodeScaledBitmapSafe(bytes, maxDim);
 
     internal static void ExtractPalette(Bitmap source, out Color primary, out Color secondary) {
         Bitmap tiny = Bitmap.CreateScaledBitmap(source, 24, 24, true);

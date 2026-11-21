@@ -38,12 +38,12 @@ namespace Cavern.Filters {
         readonly ParametricEqualizer eq;
         readonly object configLock = new object();
 
-        bool enabled;
-        float frequencyHz = DefaultFrequencyHz;
-        float gainDb = DefaultGainDb;
-        float qFactor = DefaultQ;
-        int sampleRate = Listener.DefaultSampleRate;
-        int channels = 2;
+        volatile bool enabled;
+        volatile float frequencyHz = DefaultFrequencyHz;
+        volatile float gainDb = DefaultGainDb;
+        volatile float qFactor = DefaultQ;
+        volatile int sampleRate = Listener.DefaultSampleRate;
+        volatile int channels = 2;
 
         /// <summary>
         /// Creates an HpTF ear-canal resonance notch filter (disabled by default for zero-regression neutrality).
@@ -54,6 +54,7 @@ namespace Cavern.Filters {
             eq = new ParametricEqualizer(this.sampleRate, this.channels);
             eq.AutoPreampHeadroom = false; // Strictly attenuative notch (gain <= 0 dB) needs zero preamp loss
             eq.UseNyquistDeCramping = true;
+            eq.EnsureCapacity(Math.Max(8, this.channels), 16);
         }
 
         /// <summary>True when the notch filter is enabled and attenuating (&lt; -0.05 dB).</summary>
@@ -94,7 +95,20 @@ namespace Cavern.Filters {
                 sampleRate = sr;
                 channels = ch;
                 eq.Configure(sr, ch);
+                eq.EnsureCapacity(Math.Max(8, ch), 16);
                 RebuildLocked();
+            }
+        }
+
+        /// <summary>
+        /// Creates an independent clone with identical HpTF notch configuration and isolated EQ delay state
+        /// for thread-safe offline export.
+        /// </summary>
+        public HptfNotchFilter CreateClone() {
+            lock (configLock) {
+                HptfNotchFilter clone = new HptfNotchFilter(sampleRate, channels);
+                clone.SetParameters(enabled, frequencyHz, gainDb, qFactor);
+                return clone;
             }
         }
 

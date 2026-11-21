@@ -60,7 +60,7 @@ public sealed class HptfNotchPostProcessingStage : IPostProcessingStage {
 
     /// <inheritdoc/>
     public void ProcessInterleaved(float[] buffer, int offset, int frameCount, int channels, SpatialSceneFrame context) {
-        if (!IsEnabled) {
+        if (!IsEnabled || (context != null && !context.IsBinauralActive)) {
             return;
         }
         if (context != null && context.SampleRate >= 8000 && context.SampleRate != filter.SampleRate) {
@@ -72,6 +72,13 @@ public sealed class HptfNotchPostProcessingStage : IPostProcessingStage {
     /// <inheritdoc/>
     public void Reset() {
         filter.Reset();
+    }
+
+    /// <inheritdoc/>
+    public IPostProcessingStage CloneForOfflineExport() {
+        HptfNotchPostProcessingStage clone = new();
+        clone.ApplyParameters(userEnabled, FrequencyHz, GainDb, Q);
+        return clone;
     }
 
     /// <inheritdoc/>

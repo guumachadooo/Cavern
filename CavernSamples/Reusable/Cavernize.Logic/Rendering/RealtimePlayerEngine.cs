@@ -1139,8 +1139,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 // Slot 6: Ordered transparent post-processing stages
                 // (100 AutoEq, 110 HpTF, 300 ISO 226:2023, 400 BS.1770/Dialnorm, 500 Dialog Path B, 890 Legacy AGC, 900 4x True-Peak Limiter)
                 iso226PostStage.UpdatePlaybackVolume(Volume);
-                limiterPostStage.LimiterOnly = false;
-                limiterPostStage.IsEnabled = NormalizerEnabled && !LimiterOnly;
+                bool hasBs1770Norm = bs1770PostStage.NormalizationMode != LoudnessNormalizationMode.Off;
+                limiterPostStage.LimiterOnly = LimiterOnly || hasBs1770Norm;
+                limiterPostStage.IsEnabled = NormalizerEnabled && !LimiterOnly && !hasBs1770Norm;
                 truePeakLimiterPostStage.IsEnabled = loudnessConfig.TruePeakLimiterEnabled || (NormalizerEnabled && LimiterOnly);
                 truePeakLimiterPostStage.CeilingDbtp = loudnessConfig.TruePeakCeilingDbtp;
                 IReadOnlyList<IPostProcessingStage> postStages = sceneHub.PostProcessingStages;
@@ -1552,9 +1553,11 @@ public sealed class RealtimePlayerEngine : IDisposable {
             IntegratedLufs = snap.IntegratedLufs,
             LoudnessRangeLu = snap.LoudnessRangeLu,
             TruePeakDbtp = postTp,
-            MaxTruePeakDbtp = truePeakLimiterPostStage.IsEnabled
-                ? MathF.Min(snap.MaxTruePeakDbtp + bs1770PostStage.AppliedGainDb, truePeakLimiterPostStage.CeilingDbtp)
-                : snap.MaxTruePeakDbtp,
+            MaxTruePeakDbtp = truePeakLimiterPostStage.IsEnabled && truePeakLimiterPostStage.MaxOutputTruePeakDbtp > -120f
+                ? truePeakLimiterPostStage.MaxOutputTruePeakDbtp
+                : (truePeakLimiterPostStage.IsEnabled
+                    ? MathF.Min(snap.MaxTruePeakDbtp + bs1770PostStage.AppliedGainDb, truePeakLimiterPostStage.CeilingDbtp)
+                    : snap.MaxTruePeakDbtp),
             CrestFactorDb = snap.CrestFactorDb,
             DialnormLufs = bs1770PostStage.ActiveDialnormLufs,
             AppliedNormGainDb = bs1770PostStage.AppliedGainDb,
@@ -1741,7 +1744,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
             for (int idx = 0; idx < flatSources.Length; idx++) {
                 Source src = flatSources[idx];
                 if (idx < sourceItems.Count && sourceItems[idx].HasCustomPosition) {
-                    src.Position = sourceItems[idx].CustomNormalizedPosition * Listener.EnvironmentSize;
+                    src.LockCustomPosition(sourceItems[idx].CustomNormalizedPosition * Listener.EnvironmentSize);
+                } else {
+                    src.UnlockCustomPosition();
                 }
                 Vector3 rawPos = src.Position * invEnv;
                 bool dynFiltered = DynamicCeilingOnly && rawPos.Y <= 0.15f;
@@ -1775,7 +1780,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 Source src = activeObjects[i];
                 TrackSourceItem item = sourceItems[i];
                 if (item.HasCustomPosition) {
-                    src.Position = item.CustomNormalizedPosition * Listener.EnvironmentSize;
+                    src.LockCustomPosition(item.CustomNormalizedPosition * Listener.EnvironmentSize);
+                } else {
+                    src.UnlockCustomPosition();
                 }
                 Vector3 rawPos = src.Position * invEnv;
 

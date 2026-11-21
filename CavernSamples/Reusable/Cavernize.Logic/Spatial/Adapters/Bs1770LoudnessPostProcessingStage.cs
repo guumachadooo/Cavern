@@ -147,6 +147,15 @@ public sealed class Bs1770LoudnessPostProcessingStage : IPostProcessingStage {
     }
 
     /// <inheritdoc/>
+    public IPostProcessingStage CloneForOfflineExport() {
+        Bs1770LoudnessPostProcessingStage clone = new() {
+            IsEnabled = IsEnabled
+        };
+        clone.ApplyParameters(mode, respectDolbyDialnorm);
+        return clone;
+    }
+
+    /// <inheritdoc/>
     public void Dispose() {
         meter.Reset();
     }

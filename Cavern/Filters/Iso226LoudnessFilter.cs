@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Threading;
 
 namespace Cavern.Filters {
     /// <summary>
@@ -93,20 +95,67 @@ namespace Cavern.Filters {
         const int AnchorCount = 6;
         const double IsoConstantTerm = 4.0e-10; // (4 * 10^-10)^(0.3 - alpha_f)
         const double Threshold1kPower = 1.1803206356517297; // 10^(0.3 * 2.4 / 10) = 10^0.072
+        const float QuantizeStepPhon = 0.5f;
+        const int QuantizedSlotCount = 111; // 40.0..95.0 phon inclusive at 0.5-phon spacing
+        const int MaxCachedConfigs = 4;
+
+        sealed class QuantizedEqCache {
+            public readonly int SampleRate;
+            public readonly int Channels;
+            public readonly float ReferencePhon;
+            public readonly bool AutoHeadroomPreamp;
+            public readonly ParametricEqualizer[] Eqs = new ParametricEqualizer[QuantizedSlotCount];
+            public readonly double[] MaxBoostsDb = new double[QuantizedSlotCount];
+            public readonly double[] RmsErrorsDb = new double[QuantizedSlotCount];
+            public readonly bool[] IsBypassedSlot = new bool[QuantizedSlotCount];
+            public volatile bool IsFullyPrewarmed;
+
+            public QuantizedEqCache(int sampleRate, int channels, float referencePhon, bool autoHeadroomPreamp) {
+                SampleRate = sampleRate;
+                Channels = channels;
+                ReferencePhon = referencePhon;
+                AutoHeadroomPreamp = autoHeadroomPreamp;
+            }
+
+            public QuantizedEqCache CloneForIsolatedState(int targetChannels = -1) {
+                int ch = targetChannels > 0 ? targetChannels : Channels;
+                QuantizedEqCache copy = new QuantizedEqCache(SampleRate, ch, ReferencePhon, AutoHeadroomPreamp);
+                for (int i = 0; i < QuantizedSlotCount; i++) {
+                    copy.MaxBoostsDb[i] = MaxBoostsDb[i];
+                    copy.RmsErrorsDb[i] = RmsErrorsDb[i];
+                    copy.IsBypassedSlot[i] = IsBypassedSlot[i];
+                    ParametricEqualizer srcEq = Eqs[i];
+                    if (srcEq != null) {
+                        ParametricEqualizer clonedEq = srcEq.CreateClone();
+                        if (ch != Channels) {
+                            clonedEq.Configure(SampleRate, ch);
+                            clonedEq.EnsureCapacity(Math.Max(8, ch), 16);
+                        }
+                        copy.Eqs[i] = clonedEq;
+                    }
+                }
+                Thread.MemoryBarrier();
+                copy.IsFullyPrewarmed = IsFullyPrewarmed;
+                return copy;
+            }
+        }
 
         readonly object configLock = new object();
-        readonly ParametricEqualizer eq;
+        readonly List<QuantizedEqCache> cachedConfigs = new List<QuantizedEqCache>(MaxCachedConfigs);
 
-        bool enabled;
-        float referenceSplPhon = DefaultReferenceSplPhon;
-        float listeningSplPhon = DefaultListeningSplPhon;
-        bool autoHeadroomPreamp;
-        int sampleRate = Listener.DefaultSampleRate;
-        int channels = 2;
+        volatile QuantizedEqCache activeCache;
+        volatile ParametricEqualizer activeEq;
+
+        volatile bool enabled;
+        volatile float referenceSplPhon = DefaultReferenceSplPhon;
+        volatile float listeningSplPhon = DefaultListeningSplPhon;
+        volatile bool autoHeadroomPreamp;
+        volatile int sampleRate = Listener.DefaultSampleRate;
+        volatile int channels = 2;
 
         double maxCompensationBoostDb;
         double fitRmsErrorDb;
-        bool isBypassed = true;
+        volatile bool isBypassed = true;
 
         /// <summary>
         /// Creates an ISO 226:2023 dynamic equal-loudness filter (disabled by default for zero-regression neutrality).
@@ -114,9 +163,6 @@ namespace Cavern.Filters {
         public Iso226LoudnessFilter(int sampleRate = 48000, int channels = 2) {
             this.sampleRate = sampleRate >= 8000 ? sampleRate : Listener.DefaultSampleRate;
             this.channels = channels > 0 ? channels : 2;
-            eq = new ParametricEqualizer(this.sampleRate, this.channels);
-            eq.AutoPreampHeadroom = false;
-            eq.UseNyquistDeCramping = true;
         }
 
         /// <summary>True when enabled and listening SPL differs from reference SPL outside the 0.25 phon unity deadband.</summary>
@@ -354,6 +400,116 @@ namespace Cavern.Filters {
         }
 
         /// <summary>
+        /// Pre-computes all 111 quantized (0.5 phon step, 40.0..95.0 phon) 6-band IIR cascades for
+        /// (<paramref name="sampleRate"/>, <paramref name="channels"/>) at the active <see cref="ReferenceSplPhon"/>
+        /// so audio-thread level changes swap pre-computed equalizers with zero heap allocations.
+        /// </summary>
+        public void PrewarmQuantizedCache(int sampleRate, int channels) {
+            int sr = sampleRate >= 8000 ? sampleRate : Listener.DefaultSampleRate;
+            int ch = channels > 0 ? channels : 2;
+            lock (configLock) {
+                QuantizedEqCache cache = GetOrCreateCacheLocked(sr, ch, referenceSplPhon, autoHeadroomPreamp);
+                if (!cache.IsFullyPrewarmed) {
+                    for (int i = 0; i < QuantizedSlotCount; i++) {
+                        EnsureCacheSlotPopulatedLocked(cache, i);
+                    }
+                    Thread.MemoryBarrier();
+                    cache.IsFullyPrewarmed = true;
+                }
+                if (sr == this.sampleRate && ch == this.channels) {
+                    activeCache = cache;
+                    if (enabled) {
+                        ApplyQuantizedSlotLocked(listeningSplPhon);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Updates listening SPL in phon, swapping to the nearest 0.5-phon pre-computed EQ snapshot with zero
+        /// heap allocations on the audio thread when the quantized cache is warm.
+        /// </summary>
+        public void SetListeningLevelPhon(float listeningSplPhon) {
+            float clampedListen = Math.Clamp(listeningSplPhon, MinListeningSplPhon, MaxListeningSplPhon);
+            this.listeningSplPhon = clampedListen;
+            if (!enabled || Math.Abs(clampedListen - referenceSplPhon) < UnityDeadbandPhon) {
+                isBypassed = true;
+                maxCompensationBoostDb = 0.0;
+                fitRmsErrorDb = 0.0;
+                activeEq = null;
+                return;
+            }
+
+            int slot = QuantizeSlotIndex(clampedListen);
+            QuantizedEqCache cache = activeCache;
+            if (cache != null
+                && cache.SampleRate == sampleRate
+                && cache.Channels == channels
+                && MathF.Abs(cache.ReferencePhon - referenceSplPhon) < 0.05f
+                && cache.AutoHeadroomPreamp == autoHeadroomPreamp
+                && (cache.IsFullyPrewarmed || cache.IsBypassedSlot[slot] || cache.Eqs[slot] != null)) {
+                ApplyCachedSlotLockFree(cache, slot);
+                return;
+            }
+
+            lock (configLock) {
+                this.listeningSplPhon = clampedListen;
+                ApplyQuantizedSlotLocked(clampedListen);
+            }
+        }
+
+        /// <summary>
+        /// Tracks linear playback volume (0.01..2.0) relative to <see cref="ReferenceSplPhon"/> and swaps to the
+        /// corresponding 0.5-phon quantized EQ snapshot with zero heap allocations when cached.
+        /// </summary>
+        public void UpdatePlaybackVolume(float linearVolume) {
+            SetListeningLevelPhon(EstimateListeningPhonFromVolume(referenceSplPhon, linearVolume));
+        }
+
+        /// <summary>
+        /// Creates an independent clone duplicating configuration and pre-warmed quantized EQ cache with isolated
+        /// per-instance filter delay states for thread-safe offline export.
+        /// </summary>
+        public Iso226LoudnessFilter CreateClone() {
+            lock (configLock) {
+                Iso226LoudnessFilter clone = new Iso226LoudnessFilter(sampleRate, channels);
+                clone.enabled = enabled;
+                clone.referenceSplPhon = referenceSplPhon;
+                clone.listeningSplPhon = listeningSplPhon;
+                clone.autoHeadroomPreamp = autoHeadroomPreamp;
+                clone.maxCompensationBoostDb = maxCompensationBoostDb;
+                clone.fitRmsErrorDb = fitRmsErrorDb;
+                clone.isBypassed = isBypassed;
+
+                QuantizedEqCache srcActive = activeCache;
+                for (int i = 0; i < cachedConfigs.Count; i++) {
+                    QuantizedEqCache src = cachedConfigs[i];
+                    QuantizedEqCache copied = src.CloneForIsolatedState();
+                    clone.cachedConfigs.Add(copied);
+                    if (ReferenceEquals(src, srcActive)) {
+                        clone.activeCache = copied;
+                    }
+                }
+                if (srcActive != null && clone.activeCache == null) {
+                    QuantizedEqCache copied = srcActive.CloneForIsolatedState();
+                    clone.cachedConfigs.Add(copied);
+                    clone.activeCache = copied;
+                }
+
+                if (enabled && !isBypassed) {
+                    if (clone.activeCache != null) {
+                        int slot = QuantizeSlotIndex(listeningSplPhon);
+                        clone.activeEq = clone.activeCache.Eqs[slot];
+                    }
+                    if (clone.activeEq == null) {
+                        clone.ApplyQuantizedSlotLocked(listeningSplPhon);
+                    }
+                }
+                return clone;
+            }
+        }
+
+        /// <summary>
         /// Atomically updates ISO 226:2023 parameters. When <paramref name="enabled"/> is false or
         /// |listeningSplPhon - referenceSplPhon| &lt; 0.25 phon, switches cleanly to exact 0.000 dB unity bypass.
         /// </summary>
@@ -361,16 +517,23 @@ namespace Cavern.Filters {
             float clampedRef = Math.Clamp(referenceSplPhon, MinReferenceSplPhon, MaxReferenceSplPhon);
             float clampedListen = Math.Clamp(listeningSplPhon, MinListeningSplPhon, MaxListeningSplPhon);
             lock (configLock) {
-                bool changed = this.enabled != enabled
-                    || MathF.Abs(this.referenceSplPhon - clampedRef) > 0.05f
-                    || MathF.Abs(this.listeningSplPhon - clampedListen) > 0.15f
+                bool refChanged = MathF.Abs(this.referenceSplPhon - clampedRef) > 0.05f
                     || this.autoHeadroomPreamp != autoHeadroomPreamp;
+                bool wasInDeadband = Math.Abs(this.listeningSplPhon - this.referenceSplPhon) < UnityDeadbandPhon;
+                bool nowInDeadband = Math.Abs(clampedListen - clampedRef) < UnityDeadbandPhon;
+                bool changed = this.enabled != enabled
+                    || refChanged
+                    || wasInDeadband != nowInDeadband
+                    || QuantizeSlotIndex(this.listeningSplPhon) != QuantizeSlotIndex(clampedListen);
                 this.enabled = enabled;
                 this.referenceSplPhon = clampedRef;
                 this.listeningSplPhon = clampedListen;
                 this.autoHeadroomPreamp = autoHeadroomPreamp;
-                if (changed) {
-                    RebuildLocked();
+                if (refChanged) {
+                    activeCache = FindCachedConfigLocked(sampleRate, channels, clampedRef, autoHeadroomPreamp);
+                }
+                if (changed || (enabled && !nowInDeadband && activeEq == null)) {
+                    ApplyQuantizedSlotLocked(clampedListen);
                 }
             }
         }
@@ -382,13 +545,13 @@ namespace Cavern.Filters {
             int sr = newSampleRate >= 8000 ? newSampleRate : Listener.DefaultSampleRate;
             int ch = newChannels > 0 ? newChannels : 2;
             lock (configLock) {
-                bool srChanged = sampleRate != sr;
+                if (sampleRate == sr && channels == ch) {
+                    return;
+                }
                 sampleRate = sr;
                 channels = ch;
-                eq.Configure(sr, ch);
-                if (srChanged) {
-                    RebuildLocked();
-                }
+                activeCache = FindCachedConfigLocked(sr, ch, referenceSplPhon, autoHeadroomPreamp);
+                ApplyQuantizedSlotLocked(listeningSplPhon);
             }
         }
 
@@ -397,7 +560,8 @@ namespace Cavern.Filters {
         /// Bit-identical pass-through when disabled or at reference SPL.
         /// </summary>
         public void ProcessInterleaved(float[] buffer, int offset, int frameCount, int channelCount) {
-            if (!IsActive) {
+            ParametricEqualizer eq = activeEq;
+            if (!enabled || isBypassed || eq == null) {
                 return;
             }
             eq.ProcessInterleaved(buffer, offset, frameCount, channelCount);
@@ -406,49 +570,172 @@ namespace Cavern.Filters {
         /// <summary>
         /// Evaluates the exact real-time filter magnitude response (dB) at <paramref name="freqHz"/>.
         /// </summary>
-        public double EvaluateMagnitudeDb(double freqHz) =>
-            IsActive ? eq.EvaluateMagnitudeDb(freqHz, true) : 0.0;
+        public double EvaluateMagnitudeDb(double freqHz) {
+            ParametricEqualizer eq = activeEq;
+            return enabled && !isBypassed && eq != null ? eq.EvaluateMagnitudeDb(freqHz, true) : 0.0;
+        }
 
         /// <summary>
         /// Resets internal TDF-II delay states cleanly on seek or track switch.
         /// </summary>
         public void Reset() {
-            eq.ResetState();
+            ParametricEqualizer eq = activeEq;
+            if (eq != null) {
+                eq.ResetState();
+            }
         }
 
-        void RebuildLocked() {
-            if (!enabled || Math.Abs(listeningSplPhon - referenceSplPhon) < UnityDeadbandPhon) {
+        static int QuantizeSlotIndex(float listeningPhon) {
+            float clamped = Math.Clamp(listeningPhon, MinListeningSplPhon, MaxListeningSplPhon);
+            int idx = (int)Math.Round((clamped - MinListeningSplPhon) * 2.0f);
+            if (idx < 0) {
+                return 0;
+            }
+            if (idx >= QuantizedSlotCount) {
+                return QuantizedSlotCount - 1;
+            }
+            return idx;
+        }
+
+        static float SlotIndexToPhon(int slotIndex) =>
+            MinListeningSplPhon + slotIndex * QuantizeStepPhon;
+
+        void ApplyCachedSlotLockFree(QuantizedEqCache cache, int slot) {
+            bool slotBypassed = cache.IsBypassedSlot[slot];
+            ParametricEqualizer targetEq = cache.Eqs[slot];
+            Thread.MemoryBarrier();
+            if (slotBypassed || targetEq == null) {
                 isBypassed = true;
                 maxCompensationBoostDb = 0.0;
                 fitRmsErrorDb = 0.0;
-                eq.Clear();
+                activeEq = null;
+                return;
+            }
+            if (!ReferenceEquals(activeEq, targetEq)) {
+                targetEq.ResetState();
+            }
+            maxCompensationBoostDb = cache.MaxBoostsDb[slot];
+            fitRmsErrorDb = cache.RmsErrorsDb[slot];
+            activeEq = targetEq;
+            isBypassed = false;
+        }
+
+        void ApplyQuantizedSlotLocked(float listenPhon) {
+            if (!enabled || Math.Abs(listenPhon - referenceSplPhon) < UnityDeadbandPhon) {
+                isBypassed = true;
+                maxCompensationBoostDb = 0.0;
+                fitRmsErrorDb = 0.0;
+                activeEq = null;
+                return;
+            }
+
+            QuantizedEqCache cache = GetOrCreateCacheLocked(sampleRate, channels, referenceSplPhon, autoHeadroomPreamp);
+            activeCache = cache;
+            int slot = QuantizeSlotIndex(listenPhon);
+            EnsureCacheSlotPopulatedLocked(cache, slot);
+
+            if (cache.IsBypassedSlot[slot] || cache.Eqs[slot] == null) {
+                isBypassed = true;
+                maxCompensationBoostDb = 0.0;
+                fitRmsErrorDb = 0.0;
+                activeEq = null;
+                return;
+            }
+
+            ParametricEqualizer targetEq = cache.Eqs[slot];
+            if (!ReferenceEquals(activeEq, targetEq)) {
+                targetEq.ResetState();
+            }
+            maxCompensationBoostDb = cache.MaxBoostsDb[slot];
+            fitRmsErrorDb = cache.RmsErrorsDb[slot];
+            activeEq = targetEq;
+            isBypassed = false;
+        }
+
+        QuantizedEqCache FindCachedConfigLocked(int sr, int ch, float refPhon, bool autoHeadroom) {
+            for (int i = 0; i < cachedConfigs.Count; i++) {
+                QuantizedEqCache c = cachedConfigs[i];
+                if (c.SampleRate == sr
+                    && c.Channels == ch
+                    && MathF.Abs(c.ReferencePhon - refPhon) < 0.05f
+                    && c.AutoHeadroomPreamp == autoHeadroom) {
+                    return c;
+                }
+            }
+            return null;
+        }
+
+        QuantizedEqCache GetOrCreateCacheLocked(int sr, int ch, float refPhon, bool autoHeadroom) {
+            QuantizedEqCache existing = FindCachedConfigLocked(sr, ch, refPhon, autoHeadroom);
+            if (existing != null) {
+                return existing;
+            }
+
+            // If a prewarmed cache already exists at the same sample rate/reference with different channels, clone without refitting
+            for (int i = 0; i < cachedConfigs.Count; i++) {
+                QuantizedEqCache c = cachedConfigs[i];
+                if (c.IsFullyPrewarmed
+                    && c.SampleRate == sr
+                    && MathF.Abs(c.ReferencePhon - refPhon) < 0.05f
+                    && c.AutoHeadroomPreamp == autoHeadroom) {
+                    QuantizedEqCache adapted = c.CloneForIsolatedState(ch);
+                    StoreCacheLocked(adapted);
+                    return adapted;
+                }
+            }
+
+            QuantizedEqCache created = new QuantizedEqCache(sr, ch, refPhon, autoHeadroom);
+            StoreCacheLocked(created);
+            return created;
+        }
+
+        void StoreCacheLocked(QuantizedEqCache cache) {
+            if (cachedConfigs.Count >= MaxCachedConfigs) {
+                cachedConfigs.RemoveAt(0);
+            }
+            cachedConfigs.Add(cache);
+        }
+
+        static void EnsureCacheSlotPopulatedLocked(QuantizedEqCache cache, int slot) {
+            if (cache.IsBypassedSlot[slot] || cache.Eqs[slot] != null) {
+                return;
+            }
+            double slotPhon = SlotIndexToPhon(slot);
+            if (Math.Abs(slotPhon - cache.ReferencePhon) < UnityDeadbandPhon) {
+                cache.MaxBoostsDb[slot] = 0.0;
+                cache.RmsErrorsDb[slot] = 0.0;
+                Thread.MemoryBarrier();
+                cache.IsBypassedSlot[slot] = true;
                 return;
             }
 
             ParametricBand[] bands = FitIirCascade(
-                referenceSplPhon,
-                listeningSplPhon,
-                sampleRate,
+                cache.ReferencePhon,
+                slotPhon,
+                cache.SampleRate,
                 out double offset1kDb,
                 out double rmsErr,
                 out double maxBoost);
 
             if (bands.Length == 0) {
-                isBypassed = true;
-                maxCompensationBoostDb = 0.0;
-                fitRmsErrorDb = 0.0;
-                eq.Clear();
+                cache.MaxBoostsDb[slot] = 0.0;
+                cache.RmsErrorsDb[slot] = 0.0;
+                Thread.MemoryBarrier();
+                cache.IsBypassedSlot[slot] = true;
                 return;
             }
 
-            // Keep 1 kHz locked to 0.00 dB unless explicit headroom preamp is requested
-            double preampDb = autoHeadroomPreamp && maxBoost > 0.0 ? offset1kDb - maxBoost : offset1kDb;
-            eq.AutoPreampHeadroom = false;
-            eq.UseNyquistDeCramping = true;
-            eq.SetBands(bands, preampDb, true);
-            maxCompensationBoostDb = maxBoost;
-            fitRmsErrorDb = rmsErr;
-            isBypassed = false;
+            double preampDb = cache.AutoHeadroomPreamp && maxBoost > 0.0 ? offset1kDb - maxBoost : offset1kDb;
+            ParametricEqualizer slotEq = new ParametricEqualizer(cache.SampleRate, cache.Channels);
+            slotEq.AutoPreampHeadroom = false;
+            slotEq.UseNyquistDeCramping = true;
+            slotEq.EnsureCapacity(Math.Max(8, cache.Channels), 16);
+            slotEq.SetBands(bands, preampDb, true);
+
+            cache.MaxBoostsDb[slot] = maxBoost;
+            cache.RmsErrorsDb[slot] = rmsErr;
+            Thread.MemoryBarrier();
+            cache.Eqs[slot] = slotEq;
         }
 
         static bool SolveLinearSystem(double[,] a, double[] b, double[] x, int n) {

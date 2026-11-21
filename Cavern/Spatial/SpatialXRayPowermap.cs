@@ -149,7 +149,8 @@ namespace Cavern.Spatial {
             double sumHigh = 0.0;
 
             for (int i = 0; i < samples.Length; i++) {
-                float x = samples[i];
+                float raw = samples[i];
+                float x = IsFinite(raw) ? raw : 0f;
                 lpLow += alphaLow * (x - lpLow);
                 lpMid += alphaHigh * (x - lpMid);
                 float mid = lpMid - lpLow;
@@ -161,9 +162,12 @@ namespace Cavern.Spatial {
             }
 
             double invN = 1.0 / samples.Length;
-            lowRms = (float)Math.Sqrt(sumLow * invN);
-            midRms = (float)Math.Sqrt(sumMid * invN);
-            highRms = (float)Math.Sqrt(sumHigh * invN);
+            float l = (float)Math.Sqrt(sumLow * invN);
+            float m = (float)Math.Sqrt(sumMid * invN);
+            float h = (float)Math.Sqrt(sumHigh * invN);
+            lowRms = IsFinite(l) ? l : 0f;
+            midRms = IsFinite(m) ? m : 0f;
+            highRms = IsFinite(h) ? h : 0f;
         }
 
         /// <summary>
@@ -173,14 +177,19 @@ namespace Cavern.Spatial {
             IReadOnlyList<SpatialSourceDescriptor> sources,
             Vector3 listenerWorldMeters,
             float temporalSmoothing = 0.45f) {
-            float smooth = Math.Max(0f, Math.Min(0.92f, temporalSmoothing));
+            float safeSmoothing = IsFinite(temporalSmoothing) ? temporalSmoothing : 0.45f;
+            float smooth = Math.Max(0f, Math.Min(0.92f, safeSmoothing));
             float keep = smooth;
             float inject = 1f - smooth;
 
+            if (!IsFiniteVector(listenerWorldMeters)) {
+                listenerWorldMeters = Vector3.Zero;
+            }
+
             for (int c = 0; c < TotalCells; c++) {
-                lowGrid[c] *= keep;
-                midGrid[c] *= keep;
-                highGrid[c] *= keep;
+                lowGrid[c] = IsFinite(lowGrid[c]) ? lowGrid[c] * keep : 0f;
+                midGrid[c] = IsFinite(midGrid[c]) ? midGrid[c] * keep : 0f;
+                highGrid[c] = IsFinite(highGrid[c]) ? highGrid[c] * keep : 0f;
             }
 
             if (sources == null || sources.Count == 0) {
@@ -209,48 +218,70 @@ namespace Cavern.Spatial {
                 }
 
                 float rms = src.RmsLevel;
-                if (rms <= 1e-4f) {
+                if (!IsFinite(rms) || rms <= 1e-4f || !IsFiniteVector(src.WorldPositionMeters)) {
                     continue;
                 }
 
                 Vector3 rel = src.WorldPositionMeters - listenerWorldMeters;
                 float distSq = rel.LengthSquared();
+                if (!IsFinite(distSq)) {
+                    continue;
+                }
                 Vector3 dir = distSq > 1e-6f ? rel / (float)Math.Sqrt(distSq) : new Vector3(0f, 0f, 1f);
+                if (!IsFiniteVector(dir)) {
+                    continue;
+                }
 
-                float eLow = src.LowBandEnergy > 0f ? src.LowBandEnergy : (src.IsLfe ? rms : rms * 0.35f);
-                float eMid = src.MidBandEnergy > 0f ? src.MidBandEnergy : (src.IsLfe ? rms * 0.12f : rms * 0.65f);
-                float eHigh = src.HighBandEnergy > 0f ? src.HighBandEnergy : (src.IsLfe ? 0f : rms * 0.40f);
+                float eLow = IsFinite(src.LowBandEnergy) && src.LowBandEnergy > 0f ? src.LowBandEnergy : (src.IsLfe ? rms : rms * 0.35f);
+                float eMid = IsFinite(src.MidBandEnergy) && src.MidBandEnergy > 0f ? src.MidBandEnergy : (src.IsLfe ? rms * 0.12f : rms * 0.65f);
+                float eHigh = IsFinite(src.HighBandEnergy) && src.HighBandEnergy > 0f ? src.HighBandEnergy : (src.IsLfe ? 0f : rms * 0.40f);
 
                 // Acoustic power scales as RMS^2; diffuse sources widen the directional lobe
-                float sharpness = 5.5f - Math.Max(0f, Math.Min(1f, src.Diffuse)) * 3.0f;
+                float diffuse = IsFinite(src.Diffuse) ? Math.Max(0f, Math.Min(1f, src.Diffuse)) : 0f;
+                float sharpness = 5.5f - diffuse * 3.0f;
                 float pLow = eLow * eLow * inject;
                 float pMid = eMid * eMid * inject;
                 float pHigh = eHigh * eHigh * inject;
 
                 float totalPow = pLow + pMid + pHigh;
+                if (!IsFinite(totalPow) || totalPow <= 0f) {
+                    continue;
+                }
                 weightedDir += dir * totalPow;
                 totalWeight += totalPow;
 
                 for (int c = 0; c < TotalCells; c++) {
                     float dot = Vector3.Dot(dir, cellDirections[c]);
-                    if (dot <= 0.05f) {
+                    if (!IsFinite(dot) || dot <= 0.05f) {
                         continue;
                     }
                     // Raised-cosine directional kernel (order ~5.5 for point sources, ~2.5 for diffuse)
                     float lobe = (float)Math.Pow(dot, sharpness);
+                    if (!IsFinite(lobe)) {
+                        continue;
+                    }
                     lowGrid[c] += pLow * lobe;
                     midGrid[c] += pMid * lobe;
                     highGrid[c] += pHigh * lobe;
                 }
             }
 
-            if (totalWeight > 1e-8f && weightedDir.LengthSquared() > 1e-8f) {
-                dominantDirection = Vector3.Normalize(weightedDir);
+            if (IsFinite(totalWeight) && totalWeight > 1e-8f && IsFiniteVector(weightedDir) && weightedDir.LengthSquared() > 1e-8f) {
+                Vector3 normDir = Vector3.Normalize(weightedDir);
+                if (IsFiniteVector(normDir)) {
+                    dominantDirection = normDir;
+                }
             }
 
             float maxEnergy = 1e-6f;
             for (int c = 0; c < TotalCells; c++) {
                 float sum = lowGrid[c] + midGrid[c] + highGrid[c];
+                if (!IsFinite(sum) || sum < 0f) {
+                    lowGrid[c] = 0f;
+                    midGrid[c] = 0f;
+                    highGrid[c] = 0f;
+                    sum = 0f;
+                }
                 totalGrid[c] = sum;
                 if (sum > maxEnergy) {
                     maxEnergy = sum;
@@ -261,8 +292,13 @@ namespace Cavern.Spatial {
             // Compress dynamic range smoothly for visual readability while keeping relative proportions physical
             float invNorm = 1f / Math.Max(0.02f, maxEnergy);
             for (int c = 0; c < TotalCells; c++) {
-                totalGrid[c] = (float)Math.Sqrt(Math.Min(1f, totalGrid[c] * invNorm));
+                float normVal = (float)Math.Sqrt(Math.Min(1f, totalGrid[c] * invNorm));
+                totalGrid[c] = IsFinite(normVal) ? normVal : 0f;
             }
         }
+
+        static bool IsFinite(float v) => !float.IsNaN(v) && !float.IsInfinity(v);
+
+        static bool IsFiniteVector(Vector3 v) => IsFinite(v.X) && IsFinite(v.Y) && IsFinite(v.Z);
     }
 }

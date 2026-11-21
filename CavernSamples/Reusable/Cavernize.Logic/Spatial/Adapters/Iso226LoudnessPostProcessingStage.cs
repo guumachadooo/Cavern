@@ -70,7 +70,8 @@ public sealed class Iso226LoudnessPostProcessingStage : IPostProcessingStage {
         }
         lastLinearVolume = clamped;
         if (userEnabled && trackVolume) {
-            SyncFilter();
+            filter.SetListeningLevelPhon(
+                Iso226LoudnessFilter.EstimateListeningPhonFromVolume(referenceSplPhon, lastLinearVolume));
         }
     }
 
@@ -80,6 +81,9 @@ public sealed class Iso226LoudnessPostProcessingStage : IPostProcessingStage {
     /// <inheritdoc/>
     public void Configure(int sampleRate, int channels) {
         filter.Configure(sampleRate, channels);
+        if (userEnabled) {
+            filter.PrewarmQuantizedCache(sampleRate, channels);
+        }
     }
 
     /// <inheritdoc/>
@@ -96,6 +100,14 @@ public sealed class Iso226LoudnessPostProcessingStage : IPostProcessingStage {
     /// <inheritdoc/>
     public void Reset() {
         filter.Reset();
+    }
+
+    /// <inheritdoc/>
+    public IPostProcessingStage CloneForOfflineExport() {
+        Iso226LoudnessPostProcessingStage clone = new();
+        clone.ApplyParameters(userEnabled, referenceSplPhon, manualListeningSplPhon, trackVolume);
+        clone.UpdatePlaybackVolume(lastLinearVolume);
+        return clone;
     }
 
     /// <inheritdoc/>

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 using Cavern.Filters.Utilities;
 
@@ -133,12 +134,12 @@ namespace Cavern.Filters {
         volatile FilterBankSnapshot activeSnapshot;
 
         // Pre-allocated TDF-II delay states indexed as [section * maxChannels + channel]
-        // Owned exclusively by the audio thread (re-sized only when bank section/channel capacity grows).
-        double[] stateZ1 = Array.Empty<double>();
-        double[] stateZ2 = Array.Empty<double>();
-        int stateCapacitySections;
-        int stateCapacityChannels;
-        FilterBankSnapshot lastAppliedAudioSnapshot;
+        // Pre-sized to >= 16 sections x >= 8 channels so 2-8ch audio callbacks execute with zero heap allocations.
+        volatile double[] stateZ1 = Array.Empty<double>();
+        volatile double[] stateZ2 = Array.Empty<double>();
+        volatile int stateCapacitySections;
+        volatile int stateCapacityChannels;
+        volatile FilterBankSnapshot lastAppliedAudioSnapshot;
 
         ParametricBand[] configuredBands = Array.Empty<ParametricBand>();
         double explicitPreampDb;
@@ -154,6 +155,7 @@ namespace Cavern.Filters {
         public ParametricEqualizer(int sampleRate = 48000, int channels = 2) {
             this.sampleRate = sampleRate >= 8000 ? sampleRate : Listener.DefaultSampleRate;
             this.channels = channels > 0 ? channels : 2;
+            EnsureStateCapacityLocked(this.channels, 16);
             activeSnapshot = new FilterBankSnapshot(
                 Array.Empty<SosCoeffs>(),
                 Array.Empty<ParametricBand>(),
@@ -161,6 +163,26 @@ namespace Cavern.Filters {
                 0.0,
                 this.sampleRate,
                 this.channels);
+        }
+
+        ParametricEqualizer(
+            int sampleRate,
+            int channels,
+            FilterBankSnapshot snapshot,
+            ParametricBand[] configuredBands,
+            double explicitPreampDb,
+            bool hasExplicitPreamp,
+            bool autoPreampHeadroom,
+            bool useNyquistDeCramping) {
+            this.sampleRate = sampleRate;
+            this.channels = channels;
+            activeSnapshot = snapshot;
+            this.configuredBands = configuredBands;
+            this.explicitPreampDb = explicitPreampDb;
+            this.hasExplicitPreamp = hasExplicitPreamp;
+            this.autoPreampHeadroom = autoPreampHeadroom;
+            this.useNyquistDeCramping = useNyquistDeCramping;
+            EnsureStateCapacityLocked(channels, Math.Max(16, snapshot.Sections.Length));
         }
 
         /// <summary>Active sample rate in Hz.</summary>
@@ -230,6 +252,36 @@ namespace Cavern.Filters {
         }
 
         /// <summary>
+        /// Pre-allocates TDF-II delay state arrays for at least <paramref name="channels"/> channels and
+        /// <paramref name="sections"/> biquad sections so audio callbacks incur zero heap allocations.
+        /// </summary>
+        public void EnsureCapacity(int channels, int sections = 16) {
+            lock (configLock) {
+                EnsureStateCapacityLocked(channels, sections);
+            }
+        }
+
+        /// <summary>
+        /// Creates a thread-isolated clone sharing immutable filter coefficients while owning private delay state.
+        /// </summary>
+        public ParametricEqualizer CreateClone() {
+            lock (configLock) {
+                ParametricBand[] bandsCopy = configuredBands.Length == 0
+                    ? Array.Empty<ParametricBand>()
+                    : (ParametricBand[])configuredBands.Clone();
+                return new ParametricEqualizer(
+                    sampleRate,
+                    channels,
+                    activeSnapshot,
+                    bandsCopy,
+                    explicitPreampDb,
+                    hasExplicitPreamp,
+                    autoPreampHeadroom,
+                    useNyquistDeCramping);
+            }
+        }
+
+        /// <summary>
         /// Replaces all parametric bands and optional preamp gain atomically.
         /// </summary>
         public void SetBands(ParametricBand[] bands, double preampDb = 0.0, bool hasExplicitPreamp = false) {
@@ -291,6 +343,7 @@ namespace Cavern.Filters {
 
             double preamp = snap.PreampLinear;
             int stride = stateCapacityChannels;
+            Thread.MemoryBarrier();
             double[] z1Arr = stateZ1;
             double[] z2Arr = stateZ2;
 
@@ -691,6 +744,8 @@ namespace Cavern.Filters {
                     : neededHeadroom;
             }
 
+            EnsureStateCapacityLocked(channels, sections.Length);
+
             activeSnapshot = new FilterBankSnapshot(
                 sections,
                 configuredBands,
@@ -700,22 +755,51 @@ namespace Cavern.Filters {
                 channels);
         }
 
+        void EnsureStateCapacityLocked(int requiredChannels, int requiredSections) {
+            int maxSections = Math.Max(16, requiredSections);
+            int maxChannels = Math.Max(8, requiredChannels);
+            if (maxSections > stateCapacitySections || maxChannels > stateCapacityChannels) {
+                int newSections = Math.Max(maxSections, stateCapacitySections);
+                int newChannels = Math.Max(maxChannels, stateCapacityChannels);
+                int needed = Math.Max(1, newSections * newChannels);
+                double[] newZ1 = new double[needed];
+                double[] newZ2 = new double[needed];
+                bool channelsChanged = newChannels != stateCapacityChannels;
+                if (!channelsChanged && stateZ1.Length > 0) {
+                    Array.Copy(stateZ1, newZ1, Math.Min(stateZ1.Length, newZ1.Length));
+                    Array.Copy(stateZ2, newZ2, Math.Min(stateZ2.Length, newZ2.Length));
+                } else {
+                    lastAppliedAudioSnapshot = null;
+                }
+                stateZ1 = newZ1;
+                stateZ2 = newZ2;
+                Thread.MemoryBarrier();
+                stateCapacitySections = newSections;
+                stateCapacityChannels = newChannels;
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         void EnsureAudioStateCapacity(int sectionCount, int channelCount, FilterBankSnapshot snap) {
             bool resized = false;
             if (sectionCount > stateCapacitySections || channelCount > stateCapacityChannels) {
-                stateCapacitySections = Math.Max(sectionCount, stateCapacitySections);
-                stateCapacityChannels = Math.Max(channelCount, stateCapacityChannels);
-                int needed = Math.Max(1, stateCapacitySections * stateCapacityChannels);
+                int newSections = Math.Max(16, Math.Max(sectionCount, stateCapacitySections));
+                int newChannels = Math.Max(8, Math.Max(channelCount, stateCapacityChannels));
+                int needed = Math.Max(1, newSections * newChannels);
                 stateZ1 = new double[needed];
                 stateZ2 = new double[needed];
+                Thread.MemoryBarrier();
+                stateCapacitySections = newSections;
+                stateCapacityChannels = newChannels;
                 resized = true;
             }
             if (!resized && !ReferenceEquals(lastAppliedAudioSnapshot, snap)) {
                 // Only clear states if section topology changed or explicit ResetState() was requested
                 if (lastAppliedAudioSnapshot == null || lastAppliedAudioSnapshot.Sections.Length != sectionCount) {
-                    Array.Clear(stateZ1, 0, stateZ1.Length);
-                    Array.Clear(stateZ2, 0, stateZ2.Length);
+                    double[] z1 = stateZ1;
+                    double[] z2 = stateZ2;
+                    Array.Clear(z1, 0, z1.Length);
+                    Array.Clear(z2, 0, z2.Length);
                 }
             }
             lastAppliedAudioSnapshot = snap;

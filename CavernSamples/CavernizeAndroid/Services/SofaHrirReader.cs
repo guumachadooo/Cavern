@@ -152,21 +152,38 @@ public static class SofaHrirReader {
             }
         }
 
-        // Detect spherical (az, el, r > 0) vs Cartesian (x, y, z) coordinates
+        // Detect spherical (az, el, r > 0) vs Cartesian (x, y, z) coordinates & units via SourcePosition attributes first
+        Dictionary<string, string> spAttrs = reader.ReadStringAttributes(spAddr);
         bool looksCartesian = false;
-        double minCol2 = double.MaxValue;
-        double maxAbs01 = 0;
-        for (int i = 0; i < mCount; i++) {
-            double c0 = spVals[i * spDims[1]];
-            double c1 = spVals[i * spDims[1] + 1];
-            double c2 = spVals[i * spDims[1] + 2];
-            if (c2 < minCol2) minCol2 = c2;
-            double a0 = Math.Abs(c0), a1 = Math.Abs(c1);
-            if (a0 > maxAbs01) maxAbs01 = a0;
-            if (a1 > maxAbs01) maxAbs01 = a1;
+        bool hasExplicitType = false;
+        if (spAttrs.TryGetValue("Type", out string spType)) {
+            if (spType.Contains("cartesian", StringComparison.OrdinalIgnoreCase)) {
+                looksCartesian = true;
+                hasExplicitType = true;
+            } else if (spType.Contains("spherical", StringComparison.OrdinalIgnoreCase)) {
+                looksCartesian = false;
+                hasExplicitType = true;
+            }
         }
-        if (minCol2 < -1e-4 || maxAbs01 <= 10.0) {
-            looksCartesian = true;
+        bool sphericalInRadians = spAttrs.TryGetValue("Units", out string spUnits) &&
+            spUnits.Contains("radian", StringComparison.OrdinalIgnoreCase) &&
+            !spUnits.Contains("degree", StringComparison.OrdinalIgnoreCase);
+
+        if (!hasExplicitType) {
+            double minCol2 = double.MaxValue;
+            double maxAbs01 = 0;
+            for (int i = 0; i < mCount; i++) {
+                double c0 = spVals[i * spDims[1]];
+                double c1 = spVals[i * spDims[1] + 1];
+                double c2 = spVals[i * spDims[1] + 2];
+                if (c2 < minCol2) minCol2 = c2;
+                double a0 = Math.Abs(c0), a1 = Math.Abs(c1);
+                if (a0 > maxAbs01) maxAbs01 = a0;
+                if (a1 > maxAbs01) maxAbs01 = a1;
+            }
+            if (minCol2 < -1e-4 || maxAbs01 <= 10.0) {
+                looksCartesian = true;
+            }
         }
 
         double[] azRads = new double[mCount];
@@ -192,8 +209,9 @@ public static class SofaHrirReader {
                     distSum += 1.0;
                 }
             } else {
-                double azRad = c0 * (Math.PI / 180.0);
-                double elRad = c1 * (Math.PI / 180.0);
+                double angleScale = sphericalInRadians ? 1.0 : (Math.PI / 180.0);
+                double azRad = c0 * angleScale;
+                double elRad = c1 * angleScale;
                 double cosEl = Math.Cos(elRad);
                 double dist = c2 > 0 ? c2 : 1.0;
                 unitVectors[i] = (cosEl * Math.Cos(azRad), cosEl * Math.Sin(azRad), Math.Sin(elRad), dist);
@@ -453,15 +471,36 @@ public static class SofaHrirReader {
                     throw new InvalidDataException($"Unsupported HDF5 offset/length sizes ({szOff}/{szLen}).");
                 }
                 undefAddr = szOff == 8 ? ulong.MaxValue : uint.MaxValue;
+                EnsureBounds(12 + 3 * szOff, szOff, "v2/v3 root address");
                 RootAddress = ReadUOff(12 + 3 * szOff);
+            } else if (superblockVer == 0 || superblockVer == 1) {
+                if (d.Length < 96) {
+                    throw new InvalidDataException("HDF5 v0/v1 superblock is truncated.");
+                }
+                szOff = d[13];
+                szLen = d[14];
+                if (szOff is not (4 or 8) || szLen is not (4 or 8)) {
+                    throw new InvalidDataException($"Unsupported HDF5 offset/length sizes ({szOff}/{szLen}).");
+                }
+                undefAddr = szOff == 8 ? ulong.MaxValue : uint.MaxValue;
+                int basePos = (superblockVer == 1 ? 28 : 24) + 4 * szOff;
+                EnsureBounds(basePos + szOff, szOff, "v0/v1 root symbol entry");
+                RootAddress = ReadUOff(basePos + szOff);
             } else {
-                throw new InvalidDataException($"Unsupported HDF5 superblock version {superblockVer} (expected v2 or v3 SOFA file).");
+                throw new InvalidDataException($"Unsupported HDF5 superblock version {superblockVer} (expected v0-v3 SOFA file).");
+            }
+        }
+
+        void EnsureBounds(int pos, int len, string ctx) {
+            if (pos < 0 || len < 0 || pos > d.Length - len) {
+                throw new InvalidDataException($"Truncated or out-of-bounds HDF5 {ctx} in SOFA file.");
             }
         }
 
         bool IsUndef(ulong addr) => addr == undefAddr || addr >= (ulong)d.Length;
 
         ulong ReadUInt(int pos, int bytes) {
+            EnsureBounds(pos, bytes, "integer");
             ulong v = 0;
             for (int i = 0; i < bytes; i++) {
                 v |= (ulong)d[pos + i] << (8 * i);
@@ -473,6 +512,9 @@ public static class SofaHrirReader {
         ulong ReadULen(int pos) => ReadUInt(pos, szLen);
 
         static ulong ReadUIntFrom(byte[] buf, int pos, int bytes) {
+            if (buf == null || pos < 0 || bytes < 0 || pos > buf.Length - bytes) {
+                throw new InvalidDataException("Truncated HDF5 message payload in SOFA file.");
+            }
             ulong v = 0;
             for (int i = 0; i < bytes; i++) {
                 v |= (ulong)buf[pos + i] << (8 * i);
@@ -486,46 +528,116 @@ public static class SofaHrirReader {
         }
 
         List<(byte type, byte[] data)> ParseObjectHeader(ulong addr) {
-            int pos = (int)addr;
-            if (!MatchTag(pos, "OHDR")) {
-                throw new InvalidDataException($"Expected HDF5 v2 object header (OHDR) at offset {addr}.");
+            if (addr >= (ulong)d.Length) {
+                throw new InvalidDataException($"Invalid HDF5 object header address {addr}.");
             }
-            byte flags = d[pos + 5];
-            pos += 6;
-            if ((flags & 0x20) != 0) pos += 16; // timestamps
-            if ((flags & 0x10) != 0) pos += 4;  // phase change values
-            int szBytes = 1 << (flags & 0x03);
-            int chunk0Sz = (int)ReadUInt(pos, szBytes);
-            pos += szBytes;
-            bool trackOrder = (flags & 0x04) != 0;
+            int pos = (int)addr;
+            if (MatchTag(pos, "OHDR")) {
+                EnsureBounds(pos, 6, "v2 object header");
+                byte flags = d[pos + 5];
+                pos += 6;
+                if ((flags & 0x20) != 0) pos += 16; // timestamps
+                if ((flags & 0x10) != 0) pos += 4;  // phase change values
+                int szBytes = 1 << (flags & 0x03);
+                int chunk0Sz = (int)ReadUInt(pos, szBytes);
+                pos += szBytes;
+                bool trackOrder = (flags & 0x04) != 0;
 
-            List<(byte, byte[])> msgs = [];
-            void WalkChunk(int start, int length) {
+                List<(byte, byte[])> msgs = [];
+                int contDepth = 0;
+                void WalkChunk(int start, int length) {
+                    if (contDepth++ > 32) return;
+                    int p = start;
+                    int end = Math.Min(start + Math.Max(0, length), d.Length);
+                    while (p + 4 <= end) {
+                        byte mt = d[p];
+                        ushort msz = BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(p + 1, 2));
+                        p += 4 + (trackOrder ? 2 : 0);
+                        if (p + msz > end) break;
+                        byte[] md = new byte[msz];
+                        Buffer.BlockCopy(d, p, md, 0, msz);
+                        p += msz;
+                        if (mt == 0x10 && md.Length >= szOff + szLen) {
+                            ulong cOff = ReadUIntFrom(md, 0, szOff);
+                            ulong cLen = ReadUIntFrom(md, szOff, szLen);
+                            int ci = (int)cOff;
+                            if (!IsUndef(cOff) && MatchTag(ci, "OCHK") && cLen >= 8) {
+                                WalkChunk(ci + 4, (int)cLen - 8);
+                            }
+                        } else if (mt != 0x00) {
+                            msgs.Add((mt, md));
+                        }
+                    }
+                }
+
+                WalkChunk(pos, chunk0Sz);
+                return msgs;
+            }
+
+            // HDF5 v1 Object Header (used by older SOFA / MATLAB v7.3 / libsofa writers)
+            EnsureBounds(pos, 16, "v1 object header");
+            if (d[pos] != 1) {
+                throw new InvalidDataException($"Expected HDF5 v1 or v2 object header at offset {addr}.");
+            }
+            int hdrSize = (int)BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(pos + 8, 4));
+            List<(byte, byte[])> v1Msgs = [];
+            int v1Depth = 0;
+            void WalkV1Chunk(int start, int length) {
+                if (v1Depth++ > 32) return;
                 int p = start;
-                int end = Math.Min(start + length, d.Length);
-                while (p + 4 <= end) {
-                    byte mt = d[p];
-                    ushort msz = BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(p + 1, 2));
-                    p += 4 + (trackOrder ? 2 : 0);
+                int end = Math.Min(start + Math.Max(0, length), d.Length);
+                while (p + 8 <= end) {
+                    ushort mt = BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(p, 2));
+                    ushort msz = BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(p + 2, 2));
+                    p += 8;
                     if (p + msz > end) break;
                     byte[] md = new byte[msz];
                     Buffer.BlockCopy(d, p, md, 0, msz);
-                    p += msz;
+                    int aligned = (msz + 7) & ~7;
+                    p += Math.Min(end - p, Math.Max((int)msz, aligned));
                     if (mt == 0x10 && md.Length >= szOff + szLen) {
                         ulong cOff = ReadUIntFrom(md, 0, szOff);
                         ulong cLen = ReadUIntFrom(md, szOff, szLen);
-                        int ci = (int)cOff;
-                        if (MatchTag(ci, "OCHK") && cLen >= 8) {
-                            WalkChunk(ci + 4, (int)cLen - 8);
+                        if (!IsUndef(cOff) && cLen >= 8 && cLen <= int.MaxValue) {
+                            WalkV1Chunk((int)cOff, (int)cLen);
                         }
                     } else if (mt != 0x00) {
-                        msgs.Add((mt, md));
+                        v1Msgs.Add(((byte)mt, md));
                     }
                 }
             }
 
-            WalkChunk(pos, chunk0Sz);
-            return msgs;
+            WalkV1Chunk(pos + 16, hdrSize);
+            return v1Msgs;
+        }
+
+        public Dictionary<string, string> ReadStringAttributes(ulong addr) {
+            Dictionary<string, string> attrs = new(StringComparer.OrdinalIgnoreCase);
+            List<(byte type, byte[] data)> msgs = ParseObjectHeader(addr);
+            foreach (var (mt, md) in msgs) {
+                if (mt != 0x0c || md.Length < 10) continue;
+                byte ver = md[0];
+                int nameSz = BinaryPrimitives.ReadUInt16LittleEndian(md.AsSpan(2, 2));
+                int dtSz = BinaryPrimitives.ReadUInt16LittleEndian(md.AsSpan(4, 2));
+                int dsSz = BinaryPrimitives.ReadUInt16LittleEndian(md.AsSpan(6, 2));
+                int p = ver >= 3 ? 9 : 8;
+                if (p + nameSz > md.Length || nameSz <= 0) continue;
+                string name = Encoding.UTF8.GetString(md, p, nameSz).TrimEnd('\0').Trim();
+                p += ver <= 1 ? ((nameSz + 7) & ~7) : nameSz;
+                int dtAdvance = ver <= 1 ? ((dtSz + 7) & ~7) : dtSz;
+                if (p + dtAdvance > md.Length) continue;
+                byte dtClass = (byte)(md[p] & 0x0f);
+                p += dtAdvance;
+                int dsAdvance = ver <= 1 ? ((dsSz + 7) & ~7) : dsSz;
+                p += dsAdvance;
+                if (dtClass == 3 && p < md.Length && !string.IsNullOrEmpty(name)) {
+                    string val = Encoding.UTF8.GetString(md, p, md.Length - p).TrimEnd('\0').Trim();
+                    if (!string.IsNullOrEmpty(val)) {
+                        attrs[name] = val;
+                    }
+                }
+            }
+            return attrs;
         }
 
         (string name, ulong? objAddr) ParseLinkMessage(byte[] md) {
@@ -617,8 +729,12 @@ public static class SofaHrirReader {
                     var (boff, baddr, bsz) = blocks[i];
                     if (off >= boff && off < boff + (ulong)bsz) {
                         int rel = (int)(off - boff);
+                        int copyLen = Math.Max(0, Math.Min(ln, d.Length - (baddr + rel)));
+                        if (baddr + rel < 0 || baddr + rel > d.Length || copyLen <= 0) {
+                            throw new InvalidDataException($"Fractal heap object offset {off} out of bounds.");
+                        }
                         byte[] res = new byte[ln];
-                        Buffer.BlockCopy(d, baddr + rel, res, 0, Math.Min(ln, d.Length - (baddr + rel)));
+                        Buffer.BlockCopy(d, baddr + rel, res, 0, copyLen);
                         return res;
                     }
                 }
@@ -652,9 +768,11 @@ public static class SofaHrirReader {
             void WalkNode(ulong addr, int nrecs, int curDepth) {
                 if (IsUndef(addr) || nrecs <= 0) return;
                 int np = (int)addr;
+                EnsureBounds(np, 6, "B-Tree v2 node");
                 bool isInternal = MatchTag(np, "BTIN");
                 np += 6;
                 for (int i = 0; i < nrecs; i++) {
+                    EnsureBounds(np, recSz, "B-Tree v2 record");
                     byte[] rec = new byte[recSz];
                     Buffer.BlockCopy(d, np, rec, 0, recSz);
                     recs.Add(rec);
@@ -718,9 +836,76 @@ public static class SofaHrirReader {
                             }
                         }
                     }
+                } else if (mt == 0x11 && md.Length >= 2 * szOff) {
+                    // HDF5 v1 Group Symbol Table Message (B-Tree v1 type 0 + SNOD + Local Heap)
+                    ulong btAddr = ReadUIntFrom(md, 0, szOff);
+                    ulong heapAddr = ReadUIntFrom(md, szOff, szOff);
+                    if (!IsUndef(btAddr) && !IsUndef(heapAddr)) {
+                        ReadV1SymbolTableGroup(btAddr, heapAddr, links);
+                    }
                 }
             }
             return links;
+        }
+
+        void ReadV1SymbolTableGroup(ulong btAddr, ulong heapAddr, Dictionary<string, ulong> links) {
+            int hp = (int)heapAddr;
+            EnsureBounds(hp, 8 + 2 * szLen + szOff, "HEAP header");
+            if (!MatchTag(hp, "HEAP")) {
+                throw new InvalidDataException("Invalid HDF5 local heap header (HEAP).");
+            }
+            ulong heapDataAddr = ReadUOff(hp + 8 + 2 * szLen);
+
+            string ReadHeapName(ulong offset) {
+                ulong absOff = heapDataAddr + offset;
+                if (absOff >= (ulong)d.Length) return null;
+                int s = (int)absOff;
+                int e = s;
+                while (e < d.Length && d[e] != 0) e++;
+                return Encoding.UTF8.GetString(d, s, e - s);
+            }
+
+            void WalkGroupBTree(ulong nodeAddr, int depth) {
+                if (depth > 32 || IsUndef(nodeAddr)) return;
+                int np = (int)nodeAddr;
+                EnsureBounds(np, 8 + 2 * szOff, "v1 group TREE");
+                if (!MatchTag(np, "TREE") || d[np + 4] != 0) {
+                    throw new InvalidDataException("Invalid HDF5 v1 group B-Tree node (TREE).");
+                }
+                byte nlevel = d[np + 5];
+                ushort entries = BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(np + 6, 2));
+                int p = np + 8 + 2 * szOff;
+                for (int i = 0; i < entries; i++) {
+                    EnsureBounds(p, szLen + szOff, "v1 group TREE entry");
+                    p += szLen; // Local Heap key precedes each child pointer
+                    ulong childAddr = ReadUOff(p);
+                    p += szOff;
+                    if (nlevel > 0) {
+                        WalkGroupBTree(childAddr, depth + 1);
+                    } else if (!IsUndef(childAddr)) {
+                        int sp = (int)childAddr;
+                        EnsureBounds(sp, 8, "SNOD header");
+                        if (!MatchTag(sp, "SNOD")) {
+                            throw new InvalidDataException("Invalid HDF5 Symbol Table Node (SNOD).");
+                        }
+                        ushort numSym = BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(sp + 6, 2));
+                        int entryBytes = 2 * szOff + 24;
+                        int ep = sp + 8;
+                        for (int s = 0; s < numSym; s++) {
+                            EnsureBounds(ep, entryBytes, "SNOD entry");
+                            ulong nameOff = ReadUOff(ep);
+                            ulong objAddr = ReadUOff(ep + szOff);
+                            ep += entryBytes;
+                            string nm = ReadHeapName(nameOff);
+                            if (!string.IsNullOrEmpty(nm) && !IsUndef(objAddr)) {
+                                links[nm] = objAddr;
+                            }
+                        }
+                    }
+                }
+            }
+
+            WalkGroupBTree(btAddr, 0);
         }
 
         static byte[] Unshuffle(byte[] raw, int esz) {
@@ -814,39 +999,68 @@ public static class SofaHrirReader {
             for (int i = 0; i < dims.Length; i++) totalElems *= dims[i];
 
             byte lver = layout[0];
-            byte lcls = layout[1];
+            byte lcls = lver is 1 or 2 ? (layout.Length > 2 ? layout[2] : (byte)255) : layout[1];
+            int rank = dims.Length;
+            if (lver >= 3 && lcls == 0 && layout.Length >= 4) {
+                int csz = BinaryPrimitives.ReadUInt16LittleEndian(layout.AsSpan(2, 2));
+                if (4 + csz > layout.Length) {
+                    throw new InvalidDataException("Truncated compact HDF5 dataset in SOFA file.");
+                }
+                byte[] raw = new byte[csz];
+                Buffer.BlockCopy(layout, 4, raw, 0, csz);
+                return (dims, DecodeFloats(raw, esz));
+            }
             if (lcls == 1) {
-                ulong off = ReadUIntFrom(layout, 2, szOff);
+                int offPos = lver is 1 or 2 ? 8 : 2;
+                ulong off = ReadUIntFrom(layout, offPos, szOff);
                 int byteLen = totalElems * esz;
+                if (IsUndef(off)) {
+                    return (dims, new double[totalElems]);
+                }
+                EnsureBounds((int)off, byteLen, "contiguous dataset");
                 byte[] raw = new byte[byteLen];
                 Buffer.BlockCopy(d, (int)off, raw, 0, byteLen);
                 return (dims, DecodeFloats(raw, esz));
             }
 
-            if (lcls != 2 || lver != 3) {
+            if (lcls != 2 || lver is < 1 or > 3) {
                 throw new InvalidDataException($"Unsupported HDF5 data layout v{lver}/class {lcls} in SOFA file.");
             }
 
-            int ndimsChunk = layout[2]; // rank + 1
-            ulong btreeAddr = ReadUIntFrom(layout, 3, szOff);
-            int lp = 3 + szOff;
-            int rank = dims.Length;
+            int ndimsChunk;
+            ulong btreeAddr;
+            int lp;
+            if (lver == 3) {
+                ndimsChunk = layout[2]; // rank + 1
+                btreeAddr = ReadUIntFrom(layout, 3, szOff);
+                lp = 3 + szOff;
+            } else {
+                ndimsChunk = layout[1];
+                btreeAddr = ReadUIntFrom(layout, 8, szOff);
+                lp = 8 + szOff;
+            }
+            if (lp + 4 * rank > layout.Length) {
+                throw new InvalidDataException("Truncated chunked HDF5 layout metadata in SOFA file.");
+            }
             int[] chunkDims = new int[rank];
             for (int i = 0; i < rank; i++) {
                 chunkDims[i] = (int)BinaryPrimitives.ReadUInt32LittleEndian(layout.AsSpan(lp + 4 * i, 4));
             }
 
             List<(int[] coords, int nbytes, uint fmask, ulong caddr)> chunks = [];
-            void WalkBTree1(ulong nodeAddr) {
-                if (IsUndef(nodeAddr)) return;
+            void WalkBTree1(ulong nodeAddr, int depth) {
+                if (depth > 32 || IsUndef(nodeAddr)) return;
                 int np = (int)nodeAddr;
+                EnsureBounds(np, 8 + 2 * szOff, "chunk TREE");
                 if (!MatchTag(np, "TREE")) {
                     throw new InvalidDataException("Invalid HDF5 v1 B-Tree node (TREE).");
                 }
                 byte nlevel = d[np + 5];
                 ushort entries = BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(np + 6, 2));
                 np += 8 + 2 * szOff;
+                int entrySz = 8 + 8 * ndimsChunk + szOff;
                 for (int i = 0; i < entries; i++) {
+                    EnsureBounds(np, entrySz, "chunk TREE entry");
                     int chunkBytes = (int)BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(np, 4));
                     uint filtMask = BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(np + 4, 4));
                     int[] coords = new int[rank];
@@ -859,12 +1073,12 @@ public static class SofaHrirReader {
                     if (nlevel == 0) {
                         chunks.Add((coords, chunkBytes, filtMask, childAddr));
                     } else {
-                        WalkBTree1(childAddr);
+                        WalkBTree1(childAddr, depth + 1);
                     }
                 }
             }
 
-            WalkBTree1(btreeAddr);
+            WalkBTree1(btreeAddr, 0);
 
             double[] output = new double[totalElems];
             int[] strides = new int[rank];
@@ -877,6 +1091,7 @@ public static class SofaHrirReader {
             }
 
             foreach (var (coords, nbytes, fmask, caddr) in chunks) {
+                EnsureBounds((int)caddr, nbytes, "chunk data");
                 byte[] raw = new byte[nbytes];
                 Buffer.BlockCopy(d, (int)caddr, raw, 0, nbytes);
                 for (int fi = filters.Count - 1; fi >= 0; fi--) {

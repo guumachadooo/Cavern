@@ -19,6 +19,7 @@ public sealed class SpatialSceneHub {
 
     ISpatialStageProcessor[] stageSnapshot = Array.Empty<ISpatialStageProcessor>();
     IPostProcessingStage[] postSnapshot = Array.Empty<IPostProcessingStage>();
+    SpatialSourceDescriptor[] sourcesSnapshot = Array.Empty<SpatialSourceDescriptor>();
 
     ListenerPose6DoF listenerPose = ListenerPose6DoF.Identity;
     SpatialProgramMetadata programMetadata = SpatialProgramMetadata.CreateDefault();
@@ -333,8 +334,13 @@ public sealed class SpatialSceneHub {
 
     /// <summary>
     /// Active scene source descriptors (beds, native objects, upmixed virtual sources, neural stems, HOA).
+    /// Returns an immutable thread-safe snapshot updated atomically on structural scene changes.
     /// </summary>
-    public IReadOnlyList<SpatialSourceDescriptor> Sources => sources;
+    public IReadOnlyList<SpatialSourceDescriptor> Sources => Volatile.Read(ref sourcesSnapshot);
+
+    void PublishSourcesSnapshotLocked() {
+        Volatile.Write(ref sourcesSnapshot, sources.Count == 0 ? Array.Empty<SpatialSourceDescriptor>() : sources.ToArray());
+    }
 
     /// <summary>
     /// Ordered Slot 2 stage processor snapshot safe for allocation-free traversal on the audio thread.
@@ -360,6 +366,7 @@ public sealed class SpatialSceneHub {
                     sources.Add(list[i]);
                 }
             }
+            PublishSourcesSnapshotLocked();
         }
         SceneChanged?.Invoke();
     }
@@ -441,6 +448,9 @@ public sealed class SpatialSceneHub {
                 sources.Add(micDescriptor);
                 structuralChange = true;
             }
+            if (structuralChange) {
+                PublishSourcesSnapshotLocked();
+            }
         }
         if (structuralChange) {
             SceneChanged?.Invoke();
@@ -464,6 +474,7 @@ public sealed class SpatialSceneHub {
                     sources.Add(stemDescriptors[i]);
                 }
             }
+            PublishSourcesSnapshotLocked();
         }
         SceneChanged?.Invoke();
     }
@@ -557,26 +568,28 @@ public sealed class SpatialSceneHub {
             MathF.Max(0.25f, environmentSize.X),
             MathF.Max(0.25f, environmentSize.Y),
             MathF.Max(0.25f, environmentSize.Z));
-        Vector3 listenerNorm = listenerPose.Position / safeEnv;
 
-        int count = Math.Min(items.Count, sources.Count);
-        for (int i = 0; i < count; i++) {
-            TrackSourceItem item = items[i];
-            SpatialSourceDescriptor desc = sources[i];
-            desc.IsMuted = item.IsMuted;
-            desc.IsSolo = item.IsSolo;
-            desc.IsDynamicallyFilteredOut = item.IsDynamicallyFilteredOut;
-            desc.HasCustomPosition = item.HasCustomPosition;
-            desc.CustomNormalizedPosition = item.CustomNormalizedPosition;
-            desc.NormalizedPosition = item.NormalizedPosition;
-            desc.WorldPositionMeters = item.NormalizedPosition * safeEnv;
-            desc.RmsLevel = item.RmsLevel;
-            desc.LowBandEnergy = item.LowBandEnergy;
-            desc.MidBandEnergy = item.MidBandEnergy;
-            desc.HighBandEnergy = item.HighBandEnergy;
-            desc.PropagationDelayMs = item.PropagationDelayMs;
+        lock (syncLock) {
+            Vector3 listenerWorldMeters = listenerPose.Position;
+            int count = Math.Min(items.Count, sources.Count);
+            for (int i = 0; i < count; i++) {
+                TrackSourceItem item = items[i];
+                SpatialSourceDescriptor desc = sources[i];
+                desc.IsMuted = item.IsMuted;
+                desc.IsSolo = item.IsSolo;
+                desc.IsDynamicallyFilteredOut = item.IsDynamicallyFilteredOut;
+                desc.HasCustomPosition = item.HasCustomPosition;
+                desc.CustomNormalizedPosition = item.CustomNormalizedPosition;
+                desc.NormalizedPosition = item.NormalizedPosition;
+                desc.WorldPositionMeters = item.NormalizedPosition * safeEnv;
+                desc.RmsLevel = item.RmsLevel;
+                desc.LowBandEnergy = item.LowBandEnergy;
+                desc.MidBandEnergy = item.MidBandEnergy;
+                desc.HighBandEnergy = item.HighBandEnergy;
+                desc.PropagationDelayMs = item.PropagationDelayMs;
+            }
+            xrayPowermap.Update(sources, listenerWorldMeters);
         }
-        xrayPowermap.Update(sources, listenerNorm);
     }
 
     /// <summary>

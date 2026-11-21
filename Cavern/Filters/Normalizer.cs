@@ -72,6 +72,17 @@ namespace Cavern.Filters {
             if (samples == null || samples.Length == 0) {
                 return;
             }
+            Process(samples, samples.Length);
+        }
+
+        /// <summary>
+        /// Process the first <paramref name="length"/> interleaved samples in-place without requiring exact array length.
+        /// </summary>
+        public void Process(float[] samples, int length) {
+            if (samples == null || length <= 0) {
+                return;
+            }
+            int limit = Math.Min(length, samples.Length);
             int channels = Channels > 0 ? Channels : 1;
             int sr = SampleRate >= 8000 ? SampleRate : Listener.DefaultSampleRate;
 
@@ -79,8 +90,8 @@ namespace Cavern.Filters {
             float releaseTimeSec = limiterOnly ? 0.10f : 0.45f;
             float releaseAlpha = 1f - MathF.Exp(-1f / (releaseTimeSec * sr));
 
-            for (int frame = 0; frame < samples.Length; frame += channels) {
-                int end = Math.Min(frame + channels, samples.Length);
+            for (int frame = 0; frame < limit; frame += channels) {
+                int end = Math.Min(frame + channels, limit);
                 float peak = 0f;
                 for (int c = frame; c < end; c++) {
                     float abs = MathF.Abs(samples[c]);
@@ -130,6 +141,11 @@ namespace Cavern.Filters {
                 }
             }
         }
+
+        /// <summary>
+        /// Reset envelope gain state back to unity without allocating a new filter instance.
+        /// </summary>
+        public void Reset() => lastGain = 1f;
 
         /// <inheritdoc/>
         public override object Clone() => new Normalizer(limiterOnly) {

@@ -241,4 +241,9 @@ public interface IPostProcessingStage : IDisposable {
     /// Resets biquad states, loudness sliding windows, and limiter envelope followers.
     /// </summary>
     void Reset();
+
+    /// <summary>
+    /// Creates an isolated clone with matching configuration and independent filter state for offline batch export.
+    /// </summary>
+    IPostProcessingStage CloneForOfflineExport();
 }

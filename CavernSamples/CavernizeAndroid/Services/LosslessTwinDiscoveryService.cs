@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 using Android.Content;
 using Android.Media;
@@ -24,7 +25,10 @@ namespace CavernizeAndroid.Services;
 /// and fake/upsampled lossless files via <see cref="AudioQualityAnalyzer"/>, decodes unified <c>float32 [-1, +1]</c>
 /// PCM, and runs 3-stage sub-sample alignment via <see cref="UniversalLosslessTwinProvider"/> without disturbing live playback.
 /// </summary>
-public static class LosslessTwinDiscoveryService {
+public static partial class LosslessTwinDiscoveryService {
+    [GeneratedRegex(@"(?<![a-z0-9])(?:dolby[\s._-]*atmos|atmos|lossless|hi[\s._-]*res|flac|e[\s._-]*ac[\s._-]*3|eac3|24[\s._-]*bit|16[\s._-]*bit|96[\s._-]*khz|48[\s._-]*khz|44\.?1[\s._-]*khz|192[\s._-]*khz)(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex NormalizeStripTokenRegex();
+
     const double AtmosProbeSeconds = 24.0;
     const int MaxDecodedTwinFrames = 48000 * 60 * 18; // Cap at ~18 min stereo (~414 MB float32 upper guard; typical song ~50 MB)
 
@@ -403,26 +407,82 @@ public static class LosslessTwinDiscoveryService {
 
             ct.ThrowIfCancellationRequested();
             fs.Seek(dataOffset, SeekOrigin.Begin);
-            byte[] raw = new byte[totalFrames * frameBytes];
-            int totalRead = 0;
-            while (totalRead < raw.Length) {
+            int targetFrames = (int)totalFrames;
+            left = new float[targetFrames];
+            right = new float[targetFrames];
+
+            const int chunkFrames = 16384;
+            byte[] chunk = new byte[chunkFrames * frameBytes];
+            int framesDone = 0;
+            int carry = 0;
+
+            while (framesDone < targetFrames) {
                 ct.ThrowIfCancellationRequested();
-                int got = fs.Read(raw, totalRead, raw.Length - totalRead);
+                int remainBytes = (targetFrames - framesDone) * frameBytes;
+                int toRead = Math.Min(chunk.Length - carry, remainBytes);
+                if (toRead <= 0) break;
+                int got = fs.Read(chunk, carry, toRead);
                 if (got <= 0) break;
-                totalRead += got;
-            }
-            int frames = totalRead / frameBytes;
-            if (frames < SubSampleSyncEngine.GccFftSize) {
-                return false;
+
+                int totalBytes = carry + got;
+                int readyFrames = Math.Min(totalBytes / frameBytes, targetFrames - framesDone);
+                for (int f = 0; f < readyFrames; f++) {
+                    int baseOff = f * frameBytes;
+                    float l = ReadWavSampleNormalized(chunk, baseOff, bits, isFloat);
+                    float r = channels > 1
+                        ? ReadWavSampleNormalized(chunk, baseOff + bytesPerSample, bits, isFloat)
+                        : l;
+                    left[framesDone + f] = SanitizeFloat(l);
+                    right[framesDone + f] = SanitizeFloat(r);
+                }
+                framesDone += readyFrames;
+
+                int consumed = readyFrames * frameBytes;
+                carry = totalBytes - consumed;
+                if (carry > 0) {
+                    Buffer.BlockCopy(chunk, consumed, chunk, 0, carry);
+                }
             }
 
-            KaiserSincResampler.UnifyPcmBytesToStereoFloat(raw, frames * frameBytes, channels, bits, isFloat, out left, out right);
-            return left.Length >= SubSampleSyncEngine.GccFftSize;
+            if (framesDone < SubSampleSyncEngine.GccFftSize) {
+                left = null;
+                right = null;
+                return false;
+            }
+            if (framesDone < targetFrames) {
+                Array.Resize(ref left, framesDone);
+                Array.Resize(ref right, framesDone);
+            }
+            return true;
         } catch (OperationCanceledException) {
             throw;
         } catch {
             return false;
         }
+    }
+
+    static float ReadWavSampleNormalized(byte[] buf, int off, int bits, bool isFloat) {
+        if (isFloat && bits == 32) {
+            return BinaryPrimitives.ReadSingleLittleEndian(buf.AsSpan(off, 4));
+        }
+        if (bits == 16) {
+            return BinaryPrimitives.ReadInt16LittleEndian(buf.AsSpan(off, 2)) * (1f / 32768f);
+        }
+        if (bits == 24) {
+            int v = buf[off] | (buf[off + 1] << 8) | ((sbyte)buf[off + 2] << 16);
+            return v * (1f / 8388608f);
+        }
+        if (bits == 32) {
+            return (float)(BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(off, 4)) * (1.0 / 2147483648.0));
+        }
+        return 0f;
+    }
+
+    static float SanitizeFloat(float v) {
+        if (float.IsNaN(v) || float.IsInfinity(v)) return 0f;
+        if (v > 2f) return 2f;
+        if (v < -2f) return -2f;
+        return v;
     }
 
     static bool TryDecodeFfmpegStereoFloat(
@@ -435,50 +495,107 @@ public static class LosslessTwinDiscoveryService {
         left = null;
         right = null;
         try {
+            ct.ThrowIfCancellationRequested();
             ProcessStartInfo psi = new() {
                 FileName = ffmpegPath,
-                Arguments = $"-nostdin -v error -i \"{path}\" -vn -ac 2 -ar {sampleRate} -f f32le -",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+            psi.ArgumentList.Add("-nostdin");
+            psi.ArgumentList.Add("-v");
+            psi.ArgumentList.Add("error");
+            psi.ArgumentList.Add("-i");
+            psi.ArgumentList.Add(path);
+            psi.ArgumentList.Add("-vn");
+            psi.ArgumentList.Add("-ac");
+            psi.ArgumentList.Add("2");
+            psi.ArgumentList.Add("-ar");
+            psi.ArgumentList.Add(sampleRate.ToString(CultureInfo.InvariantCulture));
+            psi.ArgumentList.Add("-f");
+            psi.ArgumentList.Add("f32le");
+            psi.ArgumentList.Add("-");
             FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpegPath);
 
             using Process proc = Process.Start(psi);
             if (proc == null) return false;
 
+            using CancellationTokenRegistration ctr = ct.Register(() => {
+                try {
+                    if (!proc.HasExited) proc.Kill(entireProcessTree: true);
+                } catch { }
+            });
+
             // Drain stderr asynchronously so FFmpeg never deadlocks on a full 64 KB pipe buffer
             Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
 
-            using MemoryStream ms = new();
+            const int blockFrames = 65536;
+            List<(float[] L, float[] R, int Count)> blocks = [];
+            float[] curL = new float[blockFrames];
+            float[] curR = new float[blockFrames];
+            int curCount = 0;
+            int totalFrames = 0;
+
             byte[] buf = new byte[65536];
-            long maxBytes = (long)MaxDecodedTwinFrames * 8L;
+            int carry = 0;
             try {
-                int read;
-                while ((read = proc.StandardOutput.BaseStream.Read(buf, 0, buf.Length)) > 0) {
+                while (totalFrames < MaxDecodedTwinFrames) {
                     ct.ThrowIfCancellationRequested();
-                    long remaining = maxBytes - ms.Length;
-                    if (remaining <= 0) {
-                        try { proc.Kill(); } catch { }
+                    int read = proc.StandardOutput.BaseStream.Read(buf, carry, buf.Length - carry);
+                    if (read <= 0) break;
+
+                    int totalBytes = carry + read;
+                    int readyFrames = Math.Min(totalBytes / 8, MaxDecodedTwinFrames - totalFrames);
+                    for (int f = 0; f < readyFrames; f++) {
+                        int off = f * 8;
+                        curL[curCount] = SanitizeFloat(BinaryPrimitives.ReadSingleLittleEndian(buf.AsSpan(off, 4)));
+                        curR[curCount] = SanitizeFloat(BinaryPrimitives.ReadSingleLittleEndian(buf.AsSpan(off + 4, 4)));
+                        curCount++;
+                        totalFrames++;
+                        if (curCount == blockFrames) {
+                            blocks.Add((curL, curR, curCount));
+                            curL = new float[blockFrames];
+                            curR = new float[blockFrames];
+                            curCount = 0;
+                        }
+                    }
+
+                    int consumed = readyFrames * 8;
+                    carry = totalBytes - consumed;
+                    if (carry > 0) {
+                        Buffer.BlockCopy(buf, consumed, buf, 0, carry);
+                    }
+                    if (totalFrames >= MaxDecodedTwinFrames) {
+                        try { proc.Kill(entireProcessTree: true); } catch { }
                         break;
                     }
-                    ms.Write(buf, 0, (int)Math.Min(read, remaining));
                 }
             } catch (OperationCanceledException) {
-                try { proc.Kill(); } catch { }
+                try { proc.Kill(entireProcessTree: true); } catch { }
                 throw;
             } finally {
                 try { proc.WaitForExit(2000); } catch { }
                 try { stderrTask.Wait(400); } catch { }
             }
 
-            byte[] raw = ms.ToArray();
-            int frames = raw.Length / 8;
-            if (frames < SubSampleSyncEngine.GccFftSize) {
+            if (curCount > 0) {
+                blocks.Add((curL, curR, curCount));
+            }
+            if (totalFrames < SubSampleSyncEngine.GccFftSize) {
                 return false;
             }
-            KaiserSincResampler.UnifyPcmBytesToStereoFloat(raw, frames * 8, 2, 32, true, out left, out right);
+
+            left = new float[totalFrames];
+            right = new float[totalFrames];
+            int dst = 0;
+            for (int b = 0; b < blocks.Count; b++) {
+                var (bL, bR, cnt) = blocks[b];
+                Array.Copy(bL, 0, left, dst, cnt);
+                Array.Copy(bR, 0, right, dst, cnt);
+                dst += cnt;
+                blocks[b] = default;
+            }
             return true;
         } catch (OperationCanceledException) {
             throw;
@@ -615,43 +732,69 @@ public static class LosslessTwinDiscoveryService {
         // Fast, non-disruptive FFmpeg mono probe (supports E-AC-3 JOC, AC-3, DTS, Opus, MKV, MP4 without touching live track)
         if (!string.IsNullOrEmpty(ffmpegPath) && IOFile.Exists(ffmpegPath)) {
             try {
+                ct.ThrowIfCancellationRequested();
                 string durStr = seconds.ToString("0.0", CultureInfo.InvariantCulture);
                 ProcessStartInfo psi = new() {
                     FileName = ffmpegPath,
-                    Arguments = $"-nostdin -v error -t {durStr} -i \"{mediaPath}\" -vn -ac 1 -ar {targetSampleRate} -f f32le -",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     CreateNoWindow = true
                 };
+                psi.ArgumentList.Add("-nostdin");
+                psi.ArgumentList.Add("-v");
+                psi.ArgumentList.Add("error");
+                psi.ArgumentList.Add("-t");
+                psi.ArgumentList.Add(durStr);
+                psi.ArgumentList.Add("-i");
+                psi.ArgumentList.Add(mediaPath);
+                psi.ArgumentList.Add("-vn");
+                psi.ArgumentList.Add("-ac");
+                psi.ArgumentList.Add("1");
+                psi.ArgumentList.Add("-ar");
+                psi.ArgumentList.Add(targetSampleRate.ToString(CultureInfo.InvariantCulture));
+                psi.ArgumentList.Add("-f");
+                psi.ArgumentList.Add("f32le");
+                psi.ArgumentList.Add("-");
                 FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpegPath);
 
                 using Process proc = Process.Start(psi);
                 if (proc != null) {
+                    using CancellationTokenRegistration ctr = ct.Register(() => {
+                        try {
+                            if (!proc.HasExited) proc.Kill(entireProcessTree: true);
+                        } catch { }
+                    });
+
                     Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
-                    using MemoryStream ms = new();
+                    int expectedSamples = Math.Max(SubSampleSyncEngine.GccFftSize, (int)Math.Ceiling(seconds * targetSampleRate) + 1024);
+                    List<float> monoList = new(expectedSamples);
                     byte[] buf = new byte[32768];
+                    int carry = 0;
                     try {
                         int read;
-                        while ((read = proc.StandardOutput.BaseStream.Read(buf, 0, buf.Length)) > 0) {
+                        while ((read = proc.StandardOutput.BaseStream.Read(buf, carry, buf.Length - carry)) > 0) {
                             ct.ThrowIfCancellationRequested();
-                            ms.Write(buf, 0, read);
+                            int totalBytes = carry + read;
+                            int ready = totalBytes / 4;
+                            for (int i = 0; i < ready; i++) {
+                                monoList.Add(SanitizeFloat(BinaryPrimitives.ReadSingleLittleEndian(buf.AsSpan(i * 4, 4))));
+                            }
+                            int consumed = ready * 4;
+                            carry = totalBytes - consumed;
+                            if (carry > 0) {
+                                Buffer.BlockCopy(buf, consumed, buf, 0, carry);
+                            }
                         }
                     } catch (OperationCanceledException) {
-                        try { proc.Kill(); } catch { }
+                        try { proc.Kill(entireProcessTree: true); } catch { }
                         throw;
                     } finally {
                         try { proc.WaitForExit(1500); } catch { }
                         try { stderrTask.Wait(400); } catch { }
                     }
-                    byte[] raw = ms.ToArray();
-                    int samples = raw.Length / 4;
-                    if (samples >= SubSampleSyncEngine.GccFftSize) {
-                        float[] mono = new float[samples];
-                        for (int i = 0; i < samples; i++) {
-                            mono[i] = BinaryPrimitives.ReadSingleLittleEndian(raw.AsSpan(i * 4, 4));
-                        }
-                        return mono;
+                    if (monoList.Count >= SubSampleSyncEngine.GccFftSize) {
+                        return monoList.ToArray();
                     }
                 }
             } catch (OperationCanceledException) {
@@ -789,13 +932,7 @@ public static class LosslessTwinDiscoveryService {
     static string NormalizeBaseName(string raw) {
         if (string.IsNullOrWhiteSpace(raw)) return "";
         StringBuilder sb = new(raw.Length);
-        string cleaned = raw
-            .Replace("Dolby Atmos", "", StringComparison.OrdinalIgnoreCase)
-            .Replace("Atmos", "", StringComparison.OrdinalIgnoreCase)
-            .Replace("Lossless", "", StringComparison.OrdinalIgnoreCase)
-            .Replace("Hi-Res", "", StringComparison.OrdinalIgnoreCase)
-            .Replace("FLAC", "", StringComparison.OrdinalIgnoreCase)
-            .Replace("EAC3", "", StringComparison.OrdinalIgnoreCase);
+        string cleaned = NormalizeStripTokenRegex().Replace(raw, " ");
         for (int i = 0; i < cleaned.Length; i++) {
             char c = cleaned[i];
             if (char.IsLetterOrDigit(c)) {

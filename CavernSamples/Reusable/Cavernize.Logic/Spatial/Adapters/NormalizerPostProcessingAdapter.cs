@@ -82,21 +82,30 @@ public sealed class NormalizerPostProcessingAdapter : IPostProcessingStage {
             return;
         }
 
-        if (scratchBuffer.Length != sliceLen) {
+        if (scratchBuffer.Length < sliceLen) {
             scratchBuffer = new float[sliceLen];
         }
         Array.Copy(buffer, offset, scratchBuffer, 0, sliceLen);
-        normalizer.Process(scratchBuffer);
+        normalizer.Process(scratchBuffer, sliceLen);
         Array.Copy(scratchBuffer, 0, buffer, offset, sliceLen);
     }
 
     /// <inheritdoc/>
     public void Reset() {
-        normalizer = new Normalizer(limiterOnly) {
-            SampleRate = sampleRate,
-            Channels = channels
-        };
+        if (normalizer == null) {
+            normalizer = new Normalizer(limiterOnly) {
+                SampleRate = sampleRate,
+                Channels = channels
+            };
+        } else {
+            normalizer.Reset();
+        }
     }
+
+    /// <inheritdoc/>
+    public IPostProcessingStage CloneForOfflineExport() => new NormalizerPostProcessingAdapter(limiterOnly) {
+        IsEnabled = IsEnabled
+    };
 
     /// <inheritdoc/>
     public void Dispose() {

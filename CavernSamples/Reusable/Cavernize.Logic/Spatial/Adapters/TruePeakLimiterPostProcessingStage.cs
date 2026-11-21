@@ -92,6 +92,13 @@ public sealed class TruePeakLimiterPostProcessingStage : IPostProcessingStage {
     }
 
     /// <inheritdoc/>
+    public IPostProcessingStage CloneForOfflineExport() => new TruePeakLimiterPostProcessingStage {
+        IsEnabled = IsEnabled,
+        CeilingDbtp = CeilingDbtp,
+        ReleaseMs = ReleaseMs
+    };
+
+    /// <inheritdoc/>
     public void Dispose() {
         limiter.Reset();
     }

@@ -264,9 +264,12 @@ namespace Cavern.Virtualizer {
         Vector3[] channelHeadUnits;
         bool[] channelIsSpatial;
 
-        // Precomputed per-source-channel reflection routing table
+        // Precomputed per-source-channel reflection routing table and previous snapshot for zipper-free crossfades
         IsmReflectionTap[][] tapTable;
+        IsmReflectionTap[][] prevTapTable;
         int activeTapCount;
+        int prevActiveTapCount;
+        bool hasValidTaps;
         bool geometryDirty = true;
 
         // Cached listener pose to detect rotation/position deltas for zero-allocation tap refresh
@@ -357,6 +360,9 @@ namespace Cavern.Virtualizer {
                 Array.Clear(lpMidState, 0, lpMidState.Length);
             }
             writeIndex = 0;
+            hasValidTaps = false;
+            prevActiveTapCount = 0;
+            geometryDirty = true;
         }
 
         /// <summary>
@@ -383,13 +389,26 @@ namespace Cavern.Virtualizer {
                 Math.Clamp(listenerNormalizedPos.Y * half.Y, -(half.Y - 0.35f), half.Y - 0.35f),
                 Math.Clamp(listenerNormalizedPos.Z * half.Z, -(half.Z - 0.35f), half.Z - 0.35f));
 
-            if (geometryDirty ||
+            bool rebuildNeeded = geometryDirty ||
                 Vector3.DistanceSquared(listenerRoomPos, lastListenerRoomPos) > 1e-4f ||
-                Vector3.DistanceSquared(listenerRotationDeg, lastListenerRotationDeg) > 0.25f) {
+                Vector3.DistanceSquared(listenerRotationDeg, lastListenerRotationDeg) > 0.25f;
+            bool crossfadeTaps = false;
+            int oldTapCount = activeTapCount;
+            if (rebuildNeeded) {
+                if (hasValidTaps && oldTapCount > 0) {
+                    for (int ch = 0; ch < channels; ch++) {
+                        if (channelIsSpatial[ch]) {
+                            Array.Copy(tapTable[ch], prevTapTable[ch], oldTapCount);
+                        }
+                    }
+                    prevActiveTapCount = oldTapCount;
+                    crossfadeTaps = true;
+                }
                 RebuildReflectionTaps(channels, sampleRate, listenerRoomPos, listenerRotationDeg);
                 lastListenerRoomPos = listenerRoomPos;
                 lastListenerRotationDeg = listenerRotationDeg;
                 geometryDirty = false;
+                hasValidTaps = true;
             }
 
             // 1. Clear feed-forward reflection accumulation buffers
@@ -431,7 +450,42 @@ namespace Cavern.Virtualizer {
             }
 
             // 3. Tap all active 1st/2nd-order image sources and route to head-tracked target virtual HRIR speakers
-            int tapCount = activeTapCount;
+            // Smoothly crossfade across tap rebuilds (0.5 deg yaw or 6DoF motion) to eliminate zipper noise
+            if (crossfadeTaps) {
+                int rampSamples = Math.Min(blockSize, Math.Max(1, (int)(sampleRate * 0.01f)));
+                AccumulateTapTable(prevTapTable, prevActiveTapCount, channels, baseWrite, mask, rampSamples, 1f, 0f, rampSamples);
+                AccumulateTapTable(tapTable, activeTapCount, channels, baseWrite, mask, blockSize, 0f, 1f, rampSamples);
+            } else {
+                AccumulateTapTable(tapTable, activeTapCount, channels, baseWrite, mask, blockSize, 1f, 1f, 0);
+            }
+
+            // 4. Advance circular write cursor and mix feed-forward reflections into pre-HRIR channel buffers
+            writeIndex = (baseWrite + blockSize) & mask;
+            for (int ch = 0; ch < channels; ch++) {
+                if (!channelIsSpatial[ch]) {
+                    continue;
+                }
+                float[] dst = channelBuffers[ch];
+                float[] acc = reflectionAccum[ch];
+                for (int s = 0; s < blockSize; s++) {
+                    dst[s] += acc[s];
+                }
+            }
+        }
+
+        void AccumulateTapTable(
+            IsmReflectionTap[][] table,
+            int tapCount,
+            int channels,
+            int baseWrite,
+            int mask,
+            int sampleCount,
+            float fadeStart,
+            float fadeEnd,
+            int rampSamples) {
+            bool hasRamp = rampSamples > 0 && MathF.Abs(fadeEnd - fadeStart) > 1e-5f;
+            float fadeStep = hasRamp ? (fadeEnd - fadeStart) / rampSamples : 0f;
+
             for (int srcCh = 0; srcCh < channels; srcCh++) {
                 if (!channelIsSpatial[srcCh]) {
                     continue;
@@ -439,7 +493,7 @@ namespace Cavern.Virtualizer {
                 float[] dL = delayLow[srcCh];
                 float[] dM = delayMid[srcCh];
                 float[] dH = delayHigh[srcCh];
-                IsmReflectionTap[] taps = tapTable[srcCh];
+                IsmReflectionTap[] taps = table[srcCh];
 
                 for (int t = 0; t < tapCount; t++) {
                     IsmReflectionTap tap = taps[t];
@@ -461,7 +515,7 @@ namespace Cavern.Virtualizer {
                     float[] accA = reflectionAccum[dstA];
                     float[] accB = dstB >= 0 && wB > 1e-4f ? reflectionAccum[dstB] : null;
 
-                    for (int s = 0; s < blockSize; s++) {
+                    for (int s = 0; s < sampleCount; s++) {
                         int r0 = (baseWrite + s - dInt) & mask;
                         int r1 = (r0 - 1) & mask;
 
@@ -470,24 +524,17 @@ namespace Cavern.Virtualizer {
                         float vH = dH[r0] * oneMinusFrac + dH[r1] * frac;
                         float refl = vL * gL + vM * gM + vH * gH;
 
+                        if (hasRamp && s < rampSamples) {
+                            refl *= fadeStart + fadeStep * s;
+                        } else if (hasRamp && fadeEnd <= 1e-5f) {
+                            break;
+                        }
+
                         accA[s] += refl * wA;
                         if (accB != null) {
                             accB[s] += refl * wB;
                         }
                     }
-                }
-            }
-
-            // 4. Advance circular write cursor and mix feed-forward reflections into pre-HRIR channel buffers
-            writeIndex = (baseWrite + blockSize) & mask;
-            for (int ch = 0; ch < channels; ch++) {
-                if (!channelIsSpatial[ch]) {
-                    continue;
-                }
-                float[] dst = channelBuffers[ch];
-                float[] acc = reflectionAccum[ch];
-                for (int s = 0; s < blockSize; s++) {
-                    dst[s] += acc[s];
                 }
             }
         }
@@ -503,18 +550,22 @@ namespace Cavern.Virtualizer {
                 delayBufferLength = pow2Delay;
                 delayBufferMask = pow2Delay - 1;
                 writeIndex = 0;
+                hasValidTaps = false;
+                prevActiveTapCount = 0;
 
                 delayLow = new float[channels][];
                 delayMid = new float[channels][];
                 delayHigh = new float[channels][];
                 reflectionAccum = new float[channels][];
                 tapTable = new IsmReflectionTap[channels][];
+                prevTapTable = new IsmReflectionTap[channels][];
                 for (int i = 0; i < channels; i++) {
                     delayLow[i] = new float[pow2Delay];
                     delayMid[i] = new float[pow2Delay];
                     delayHigh[i] = new float[pow2Delay];
                     reflectionAccum[i] = new float[blockSize];
                     tapTable[i] = new IsmReflectionTap[Order2ReflectionCount];
+                    prevTapTable[i] = new IsmReflectionTap[Order2ReflectionCount];
                 }
                 lpLowState = new float[channels];
                 lpMidState = new float[channels];
@@ -525,7 +576,7 @@ namespace Cavern.Virtualizer {
                 lpLowAlpha = (float)(1.0 - Math.Exp(-2.0 * Math.PI * lowMidCrossHz / sampleRate));
                 lpMidAlpha = (float)(1.0 - Math.Exp(-2.0 * Math.PI * midHighCrossHz / sampleRate));
                 geometryDirty = true;
-            } else if (reflectionAccum[0].Length != blockSize) {
+            } else if (reflectionAccum[0].Length < blockSize) {
                 for (int i = 0; i < channels; i++) {
                     reflectionAccum[i] = new float[blockSize];
                 }
@@ -566,9 +617,10 @@ namespace Cavern.Virtualizer {
                     continue;
                 }
 
-                // Virtual channel audio arrived from head-relative unit vector -> rotate to world room coordinates
+                // Virtual speaker ring is anchored in fixed world room coordinates (origin = room center)
+                // rather than sliding with the listener's 6DoF offset
                 Vector3 worldDir = channelHeadUnits[srcCh].Rotate(listenerRotationDeg);
-                Vector3 srcPos = listenerRoomPos + worldDir * speakerRadius;
+                Vector3 srcPos = worldDir * speakerRadius;
                 srcPos.X = Math.Clamp(srcPos.X, -(half.X - 0.15f), half.X - 0.15f);
                 srcPos.Y = Math.Clamp(srcPos.Y, -(half.Y - 0.15f), half.Y - 0.15f);
                 srcPos.Z = Math.Clamp(srcPos.Z, -(half.Z - 0.15f), half.Z - 0.15f);

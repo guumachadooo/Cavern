@@ -29,7 +29,11 @@ namespace Cavern.Filters {
         /// <summary>Default release time constant in milliseconds (80 ms transparent recovery).</summary>
         public const float DefaultReleaseMs = 80f;
 
+        /// <summary>Group delay (in input sample frames) of the 48-tap 4x polyphase FIR True-Peak detector.</summary>
+        const int FirGroupDelayFrames = 6;
+
         readonly TruePeakDetector detector = new TruePeakDetector(2);
+        readonly TruePeakDetector outputDetector = new TruePeakDetector(2);
 
         float[] audioDelay = Array.Empty<float>();
         float[] peakHistory = Array.Empty<float>();
@@ -39,11 +43,13 @@ namespace Cavern.Filters {
         int sampleRate = Listener.DefaultSampleRate;
         int channels = 2;
         int lookaheadFrames = 72;
+        int audioDelayFrames = 72 + FirGroupDelayFrames;
         float ceilingDbtp = DefaultCeilingDbtp;
         float ceilingLinear = 0.9885531f;
         float releaseMs = DefaultReleaseMs;
 
         int delayWriteFrame;
+        int audioDelayWriteFrame;
         long totalFramesProcessed;
         int dequeHead;
         int dequeTail;
@@ -88,8 +94,8 @@ namespace Cavern.Filters {
             }
         }
 
-        /// <summary>Lookahead latency in sample frames.</summary>
-        public int LatencySamples => lookaheadFrames;
+        /// <summary>Total lookahead + polyphase FIR alignment latency in sample frames.</summary>
+        public int LatencySamples => audioDelayFrames;
 
         /// <summary>Configured sample rate in Hz.</summary>
         public int SampleRate => sampleRate;
@@ -111,12 +117,14 @@ namespace Cavern.Filters {
             int sr = newSampleRate >= 8000 ? newSampleRate : Listener.DefaultSampleRate;
             int ch = newChannels > 0 ? newChannels : 2;
             int la = Math.Clamp((int)Math.Round(sr * (DefaultLookaheadMs * 0.001)), 16, 512);
+            int totalDelayFrames = la + FirGroupDelayFrames;
 
             sampleRate = sr;
             channels = ch;
             lookaheadFrames = la;
+            audioDelayFrames = totalDelayFrames;
 
-            int requiredAudio = la * ch;
+            int requiredAudio = totalDelayFrames * ch;
             if (audioDelay.Length != requiredAudio) {
                 audioDelay = new float[requiredAudio];
             }
@@ -127,6 +135,7 @@ namespace Cavern.Filters {
             }
 
             detector.Configure(ch);
+            outputDetector.Configure(ch);
             UpdateEnvelopeCoeffs();
             Reset();
         }
@@ -140,7 +149,9 @@ namespace Cavern.Filters {
                 Array.Clear(peakHistory, 0, peakHistory.Length);
             }
             detector.Reset();
+            outputDetector.Reset();
             delayWriteFrame = 0;
+            audioDelayWriteFrame = 0;
             totalFramesProcessed = 0;
             dequeHead = 0;
             dequeTail = 0;
@@ -173,13 +184,14 @@ namespace Cavern.Filters {
             // Small deterministic safety margin (-0.015 dB) covers finite FIR transition ripple
             float detectCeil = ceil * 0.99827f;
             int la = lookaheadFrames;
+            int audioDelayLen = audioDelayFrames;
             int dequeCap = dequeIndices.Length;
             float blockMinGain = 1f;
             float blockMaxOut = 0f;
 
             for (int f = 0; f < frameCount; f++) {
                 int baseIdx = offset + f * channelCount;
-                int delayBase = delayWriteFrame * channelCount;
+                int audioDelayBase = audioDelayWriteFrame * channelCount;
 
                 // 1. Measure 4x-oversampled channel-linked True Peak of the incoming frame & push into lookahead ring
                 float frameTruePeak = 0f;
@@ -189,9 +201,9 @@ namespace Cavern.Filters {
                     if (tp > frameTruePeak) {
                         frameTruePeak = tp;
                     }
-                    // Swap incoming sample into circular delay buffer and retrieve delayed sample
-                    float delayed = audioDelay[delayBase + c];
-                    audioDelay[delayBase + c] = inSample;
+                    // Swap incoming sample into circular delay buffer (lookahead + FIR group delay aligned)
+                    float delayed = audioDelay[audioDelayBase + c];
+                    audioDelay[audioDelayBase + c] = inSample;
                     buffer[baseIdx + c] = delayed;
                 }
 
@@ -269,25 +281,29 @@ namespace Cavern.Filters {
                     blockMinGain = appliedGain;
                 }
 
-                // 4. Apply channel-linked gain (exact bit-transparent skip when unity 1.0f)
+                // 4. Apply channel-linked gain (exact bit-transparent skip when unity 1.0f) and measure 4x output True Peak
                 if (appliedGain < 0.999999f) {
                     for (int c = 0; c < channelCount; c++) {
                         float y = buffer[baseIdx + c] * appliedGain;
                         buffer[baseIdx + c] = y;
-                        float absY = MathF.Abs(y);
-                        if (absY > blockMaxOut) {
-                            blockMaxOut = absY;
+                        float outTp = outputDetector.ProcessSample(c, y);
+                        if (outTp > blockMaxOut) {
+                            blockMaxOut = outTp;
                         }
                     }
                 } else {
                     for (int c = 0; c < channelCount; c++) {
-                        float absY = MathF.Abs(buffer[baseIdx + c]);
-                        if (absY > blockMaxOut) {
-                            blockMaxOut = absY;
+                        float outTp = outputDetector.ProcessSample(c, buffer[baseIdx + c]);
+                        if (outTp > blockMaxOut) {
+                            blockMaxOut = outTp;
                         }
                     }
                 }
 
+                audioDelayWriteFrame++;
+                if (audioDelayWriteFrame >= audioDelayLen) {
+                    audioDelayWriteFrame = 0;
+                }
                 delayWriteFrame++;
                 if (delayWriteFrame >= la) {
                     delayWriteFrame = 0;

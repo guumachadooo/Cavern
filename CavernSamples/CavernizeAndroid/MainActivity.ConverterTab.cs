@@ -950,17 +950,9 @@ public partial class MainActivity {
         VirtualizerFilter virtualizer = null;
         Normalizer normalizer = null;
         bool virtualizerState = Listener.HeadphoneVirtualizer;
-        bool useDistSim = applyRoomToExportCheck != null && applyRoomToExportCheck.Checked && playerEngine.DistanceSimulation;
         float prevListenerNormalizer = environment.Listener.Normalizer;
 
-        if (virtualizerState && useDistSim) {
-            new VirtualizerFilter().SetLayout();
-            environment.Listener.Normalizer = 0f;
-            normalizer = new Normalizer(true) {
-                SampleRate = environment.Listener.SampleRate,
-                Channels = renderTarget.OutputChannels
-            };
-        } else if (virtualizerState || store.SpeakerVirtualizer) {
+        if (virtualizerState || store.SpeakerVirtualizer) {
             environment.Listener.BypassInternalVirtualizer = true;
             virtualizer = new VirtualizerFilter();
             virtualizer.SetLayout();
@@ -1018,19 +1010,7 @@ public partial class MainActivity {
                     if (flush && cachePosition < writeCache.Length) {
                         Array.Clear(writeCache, cachePosition, writeCache.Length - cachePosition);
                     }
-                    if (virtualizerState && useDistSim && virtualizer == null) {
-                        int ch = Listener.Channels.Length;
-                        int outCh = renderTarget.OutputChannels;
-                        int framesInBlock = cachePosition / ch;
-                        float[] stereo = new float[framesInBlock * outCh];
-                        for (int s = 0; s < framesInBlock; s++) {
-                            for (int c = 0; c < outCh; c++) {
-                                stereo[s * outCh + c] = writeCache[s * ch + c];
-                            }
-                        }
-                        normalizer.Process(stereo);
-                        writer?.WriteBlock(stereo, 0, stereo.Length);
-                    } else if (virtualizer == null) {
+                    if (virtualizer == null) {
                         if (renderTarget is not DownmixedRenderTarget downmix) {
                             writer?.WriteBlock(writeCache, 0, cachePosition);
                         } else {

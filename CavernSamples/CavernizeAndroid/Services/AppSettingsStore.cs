@@ -373,6 +373,11 @@ public sealed class AppSettingsStore {
         set => Edit().PutInt("magLsModeIndex", Math.Clamp(value, 0, 3)).Apply();
     }
 
+    public float MagLsCutoffHz {
+        get => prefs.GetFloat("magLsCutoffHz", 0f);
+        set => Edit().PutFloat("magLsCutoffHz", value <= 0f ? 0f : Math.Clamp(value, 800f, 8000f)).Apply();
+    }
+
     public bool BiometricItdEnabled {
         get => prefs.GetBoolean("biometricItdEnabled", false);
         set => Edit().PutBoolean("biometricItdEnabled", value).Apply();
@@ -425,7 +430,7 @@ public sealed class AppSettingsStore {
 
     public Cavernize.Logic.Spatial.HrtfPersonalizationConfig BuildPersonalizationConfig() => new() {
         MagLsMode = (Cavernize.Logic.Spatial.MagLsDecodeMode)Math.Clamp(MagLsModeIndex, 0, 3),
-        MagLsCutoffHz = 0f,
+        MagLsCutoffHz = MagLsCutoffHz,
         BiometricItdEnabled = BiometricItdEnabled,
         HeadWidthCm = Math.Clamp(HeadWidthCm,
             Cavern.Virtualizer.BiometricItdScaler.MinHeadWidthCm,

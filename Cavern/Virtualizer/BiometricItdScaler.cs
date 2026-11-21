@@ -136,6 +136,10 @@ namespace Cavern.Virtualizer {
 
             int extraSamples = (int)Math.Ceiling(Math.Max(delayLeftSamples, delayRightSamples)) + 16;
             int outLen = len + extraSamples;
+            if (leftIr.Length <= MinimumPhaseHrir.MaxAnechoicTaps && rightIr.Length <= MinimumPhaseHrir.MaxAnechoicTaps &&
+                outLen > MinimumPhaseHrir.MaxAnechoicTaps) {
+                outLen = MinimumPhaseHrir.MaxAnechoicTaps;
+            }
 
             scaledLeft = delayLeftSamples > 1e-5
                 ? ApplyCausalFractionalDelay(leftIr, delayLeftSamples, outLen)

@@ -10,6 +10,8 @@ using Android.Graphics;
 using Android.Media;
 using Android.Provider;
 
+using CavernizeAndroid.Language;
+
 using IOFile = System.IO.File;
 using IOPath = System.IO.Path;
 
@@ -118,6 +120,7 @@ public static partial class MediaLibraryService {
     static readonly LinkedList<string> thumbLru = new();
     static readonly object thumbLock = new();
     static readonly object cacheFileLock = new();
+    static readonly SemaphoreSlim scanLock = new(1, 1);
     static MediaLibrarySnapshot cachedSnapshot;
 
     public static MediaLibrarySnapshot CachedSnapshot => cachedSnapshot;
@@ -144,6 +147,15 @@ public static partial class MediaLibraryService {
 
     [GeneratedRegex(@"\[[^\]]*\]", RegexOptions.Compiled)]
     private static partial Regex SquareBracketsRegex();
+
+    [GeneratedRegex(@"(?<![a-z0-9])adm(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex SpatialNameAdmRegex();
+
+    [GeneratedRegex(@"(?<![a-z0-9])joc(?![a-z0-9])", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex SpatialNameJocRegex();
+
+    [GeneratedRegex(@"(?:\s*\((?=[^)]*(?:dolby\s*atmos|atmos|spatial(?:\s+audio)?|360\s*ra|360\s*reality\s*audio|lossless|hi-?res|flac|alac|truehd|e-?ac-?3|eac3|joc|adm|binaural|24-?\s*bit|16-?\s*bit|\d{2,3}(?:\.\d)?\s*khz|deluxe(?:\s+edition)?|expanded(?:\s+edition)?|special\s+edition|anniversary(?:\s+edition)?|complete\s+edition|collector'?s?(?:\s+edition)?|super\s+deluxe|remaster(?:ed)?(?:\s+\d{4})?|\d{4}\s+remaster(?:ed)?|apple\s+digital\s+master|explicit|clean))[^)]*\)|\s+-\s+(?:dolby\s*atmos|atmos|spatial(?:\s+audio)?|360\s*ra|lossless|hi-?res|flac|alac|truehd|e-?ac-?3|eac3|deluxe(?:\s+edition)?|remaster(?:ed)?(?:\s+\d{4})?)\s*$)", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex EditionAudioSuffixRegex();
 
     sealed class DiskLibraryCache {
         public DateTime ScannedAtUtc { get; set; } = DateTime.UtcNow;
@@ -239,91 +251,96 @@ public static partial class MediaLibraryService {
         return res.Snapshot;
     }
 
-    public static Task<(MediaLibrarySnapshot Snapshot, int AddedCount, int UpdatedCount, int RemovedCount)> ScanIncrementalAsync(Context ctx, bool forceFullRescan = false) {
-        return Task.Run(() => {
-            Dictionary<string, LibraryTrackItem> previousByPath = new(StringComparer.OrdinalIgnoreCase);
-            MediaLibrarySnapshot prevSnap = cachedSnapshot ?? TryLoadCachedSnapshot(ctx);
-            if (prevSnap != null) {
-                foreach (LibraryTrackItem old in prevSnap.Tracks) {
-                    if (!string.IsNullOrEmpty(old.FilePath)) {
-                        previousByPath[old.FilePath] = old;
+    public static async Task<(MediaLibrarySnapshot Snapshot, int AddedCount, int UpdatedCount, int RemovedCount)> ScanIncrementalAsync(Context ctx, bool forceFullRescan = false) {
+        await scanLock.WaitAsync().ConfigureAwait(false);
+        try {
+            return await Task.Run(() => {
+                Dictionary<string, LibraryTrackItem> previousByPath = new(StringComparer.OrdinalIgnoreCase);
+                MediaLibrarySnapshot prevSnap = cachedSnapshot ?? TryLoadCachedSnapshot(ctx);
+                if (prevSnap != null) {
+                    foreach (LibraryTrackItem old in prevSnap.Tracks) {
+                        if (!string.IsNullOrEmpty(old.FilePath)) {
+                            previousByPath[old.FilePath] = old;
+                        }
                     }
                 }
-            }
 
-            Dictionary<string, LibraryTrackItem> scannedByPath = new(StringComparer.OrdinalIgnoreCase);
-            QueryMediaStore(ctx, isVideo: false, scannedByPath);
-            QueryMediaStore(ctx, isVideo: true, scannedByPath);
-            ScanCommonMediaFolders(scannedByPath);
+                Dictionary<string, LibraryTrackItem> scannedByPath = new(StringComparer.OrdinalIgnoreCase);
+                QueryMediaStore(ctx, isVideo: false, scannedByPath);
+                QueryMediaStore(ctx, isVideo: true, scannedByPath);
+                ScanCommonMediaFolders(scannedByPath);
 
-            int added = 0;
-            int updated = 0;
-            int removed = 0;
-            List<LibraryTrackItem> finalTracks = new(scannedByPath.Count);
+                int added = 0;
+                int updated = 0;
+                int removed = 0;
+                List<LibraryTrackItem> finalTracks = new(scannedByPath.Count);
 
-            foreach (LibraryTrackItem current in scannedByPath.Values) {
-                long len = 0;
-                long modTicks = 0;
-                try {
-                    FileInfo fi = new(current.FilePath);
-                    if (fi.Exists) {
-                        len = fi.Length;
-                        modTicks = fi.LastWriteTimeUtc.Ticks;
+                foreach (LibraryTrackItem current in scannedByPath.Values) {
+                    long len = 0;
+                    long modTicks = 0;
+                    try {
+                        FileInfo fi = new(current.FilePath);
+                        if (fi.Exists) {
+                            len = fi.Length;
+                            modTicks = fi.LastWriteTimeUtc.Ticks;
+                        }
+                    } catch {
+                        // Ignore stat error
                     }
-                } catch {
-                    // Ignore stat error
-                }
-                current.FileSizeBytes = len;
-                current.LastModifiedTicks = modTicks;
+                    current.FileSizeBytes = len;
+                    current.LastModifiedTicks = modTicks;
 
-                bool hasPrev = previousByPath.TryGetValue(current.FilePath, out LibraryTrackItem prev);
-                bool matchedCache = !forceFullRescan
-                    && hasPrev
-                    && prev.FileSizeBytes == len
-                    && prev.LastModifiedTicks == modTicks
-                    && (!string.IsNullOrEmpty(prev.AudioBadge) || prev.ChannelCount > 0 || prev.IsSpatial);
+                    bool hasPrev = previousByPath.TryGetValue(current.FilePath, out LibraryTrackItem prev);
+                    bool matchedCache = !forceFullRescan
+                        && hasPrev
+                        && prev.FileSizeBytes == len
+                        && prev.LastModifiedTicks == modTicks
+                        && (!string.IsNullOrEmpty(prev.AudioBadge) || prev.ChannelCount > 0 || prev.IsSpatial);
 
-                if (matchedCache) {
-                    current.ChannelCount = prev.ChannelCount;
-                    current.IsSpatial = prev.IsSpatial;
-                    current.AudioBadge = prev.AudioBadge;
-                    current.IsVideo = prev.IsVideo;
-                    if (prev.DurationMs > 0 && current.DurationMs <= 0) current.DurationMs = prev.DurationMs;
-                    if (prev.TrackNumber > 0) current.TrackNumber = prev.TrackNumber;
-                    if (prev.DiscNumber > 0) current.DiscNumber = prev.DiscNumber;
-                    if (!string.IsNullOrWhiteSpace(prev.AlbumArtist)) current.AlbumArtist = prev.AlbumArtist;
-                    if (!string.IsNullOrWhiteSpace(prev.Title)) current.Title = prev.Title;
-                    if (!string.IsNullOrWhiteSpace(prev.Artist)) current.Artist = prev.Artist;
-                    if (!string.IsNullOrWhiteSpace(prev.Album)) current.Album = prev.Album;
-                    ClassifyTrackRelevance(current);
-                } else {
-                    ProbeTrackAudioProperties(current);
-                    if (previousByPath.ContainsKey(current.FilePath)) {
-                        updated++;
+                    if (matchedCache) {
+                        current.ChannelCount = prev.ChannelCount;
+                        current.IsSpatial = prev.IsSpatial;
+                        current.AudioBadge = prev.AudioBadge;
+                        current.IsVideo = prev.IsVideo;
+                        if (prev.DurationMs > 0 && current.DurationMs <= 0) current.DurationMs = prev.DurationMs;
+                        if (prev.TrackNumber > 0) current.TrackNumber = prev.TrackNumber;
+                        if (prev.DiscNumber > 0) current.DiscNumber = prev.DiscNumber;
+                        if (!string.IsNullOrWhiteSpace(prev.AlbumArtist)) current.AlbumArtist = prev.AlbumArtist;
+                        if (!string.IsNullOrWhiteSpace(prev.Title)) current.Title = prev.Title;
+                        if (!string.IsNullOrWhiteSpace(prev.Artist)) current.Artist = prev.Artist;
+                        if (!string.IsNullOrWhiteSpace(prev.Album)) current.Album = prev.Album;
+                        ClassifyTrackRelevance(current);
                     } else {
-                        added++;
+                        ProbeTrackAudioProperties(current);
+                        if (previousByPath.ContainsKey(current.FilePath)) {
+                            updated++;
+                        } else {
+                            added++;
+                        }
+                    }
+
+                    finalTracks.Add(current);
+                }
+
+                foreach (string oldPath in previousByPath.Keys) {
+                    if (!scannedByPath.ContainsKey(oldPath)) {
+                        removed++;
                     }
                 }
 
-                finalTracks.Add(current);
-            }
+                bool cacheMissing = string.IsNullOrEmpty(GetDiskCachePath(ctx)) || !IOFile.Exists(GetDiskCachePath(ctx));
+                MediaLibrarySnapshot snap = BuildSnapshotFromTracks(finalTracks, DateTime.UtcNow);
+                cachedSnapshot = snap;
 
-            foreach (string oldPath in previousByPath.Keys) {
-                if (!scannedByPath.ContainsKey(oldPath)) {
-                    removed++;
+                if (forceFullRescan || cacheMissing || added > 0 || updated > 0 || removed > 0) {
+                    SaveDiskCache(ctx, snap);
                 }
-            }
 
-            bool cacheMissing = string.IsNullOrEmpty(GetDiskCachePath(ctx)) || !IOFile.Exists(GetDiskCachePath(ctx));
-            MediaLibrarySnapshot snap = BuildSnapshotFromTracks(finalTracks, DateTime.UtcNow);
-            cachedSnapshot = snap;
-
-            if (forceFullRescan || cacheMissing || added > 0 || updated > 0 || removed > 0) {
-                SaveDiskCache(ctx, snap);
-            }
-
-            return (snap, added, updated, removed);
-        });
+                return (snap, added, updated, removed);
+            }).ConfigureAwait(false);
+        } finally {
+            scanLock.Release();
+        }
     }
 
     static string GetDiskCachePath(Context ctx) {
@@ -341,7 +358,7 @@ public static partial class MediaLibraryService {
             };
             string json = JsonSerializer.Serialize(dto);
             lock (cacheFileLock) {
-                IOFile.WriteAllText(cachePath, json);
+                MediaServiceUtils.WriteTextAtomic(cachePath, json);
             }
         } catch (Exception ex) {
             AppLogger.Error("MediaLibraryService.SaveDiskCache", ex);
@@ -357,7 +374,10 @@ public static partial class MediaLibraryService {
             || name.Equals("Audiobooks", StringComparison.OrdinalIgnoreCase)
             || name.Equals("Cavernize", StringComparison.OrdinalIgnoreCase)
             || name.Equals("0", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Desconhecido", StringComparison.OrdinalIgnoreCase);
+            || name.Equals("Desconhecido", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Unknown", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Unknown Artist", StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Artista Desconhecido", StringComparison.OrdinalIgnoreCase);
     }
 
     static bool IsGenericRootFolderPath(string folderPath) {
@@ -393,14 +413,15 @@ public static partial class MediaLibraryService {
         Dictionary<string, LibraryArtistGroup> artistMap = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, LibraryFolderGroup> folderMap = new(StringComparer.OrdinalIgnoreCase);
 
+        string unknownArtist = AndroidStrings.Active["UnknownArtist"];
         foreach (LibraryTrackItem t in tracks) {
             bool genericAlbum = string.IsNullOrWhiteSpace(t.Album) || IsGenericFolderName(t.Album);
-            string artName = string.IsNullOrWhiteSpace(t.EffectiveAlbumArtist) ? "Artista Desconhecido" : t.EffectiveAlbumArtist;
+            string artName = string.IsNullOrWhiteSpace(t.EffectiveAlbumArtist) ? unknownArtist : t.EffectiveAlbumArtist;
             string albName;
             string albKey;
             if (genericAlbum) {
-                if (!string.IsNullOrWhiteSpace(artName) && artName != "Artista Desconhecido") {
-                    albName = $"Singles ({artName})";
+                if (!string.IsNullOrWhiteSpace(artName) && !string.Equals(artName, unknownArtist, StringComparison.OrdinalIgnoreCase)) {
+                    albName = string.Format(CultureInfo.InvariantCulture, AndroidStrings.Active["SinglesAlbumFormat"], artName);
                     albKey = $"singles||{artName}";
                 } else {
                     albName = string.IsNullOrWhiteSpace(t.Title) ? "Single" : t.Title;
@@ -481,6 +502,14 @@ public static partial class MediaLibraryService {
         if (string.IsNullOrWhiteSpace(title)) return "";
         string s = SquareBracketsRegex().Replace(title, " ");
         s = FeaturingClauseRegex().Replace(s, " ");
+        s = EditionAudioSuffixRegex().Replace(s, " ");
+        return NormalizeAlnum(s);
+    }
+
+    static string CanonicalAlbumBase(string album) {
+        if (string.IsNullOrWhiteSpace(album)) return "";
+        string s = SquareBracketsRegex().Replace(album, " ");
+        s = EditionAudioSuffixRegex().Replace(s, " ");
         return NormalizeAlnum(s);
     }
 
@@ -515,36 +544,47 @@ public static partial class MediaLibraryService {
         return 4;
     }
 
-    public static List<LibraryMergedTrack> MergeAlbumTrackVariants(IEnumerable<LibraryTrackItem> sourceTracks) {
+    public static List<LibraryMergedTrack> MergeAlbumTrackVariants(IEnumerable<LibraryTrackItem> sourceTracks, Context ctx = null) {
         List<LibraryTrackItem> sorted = (sourceTracks ?? []).ToList();
         sorted.Sort(CompareTracksByDiscAndNumber);
 
         List<LibraryMergedTrack> merged = [];
-        Dictionary<string, LibraryMergedTrack> byKey = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, List<LibraryMergedTrack>> byBaseTitle = new(StringComparer.OrdinalIgnoreCase);
 
         foreach (LibraryTrackItem item in sorted) {
             string baseTitle = CanonicalTrackBaseTitle(item.Title);
             bool isStem = StemFragmentRegex().IsMatch(IOPath.GetFileNameWithoutExtension(item.FilePath));
-            string mergeKey;
-            if (isStem || string.IsNullOrEmpty(baseTitle)) {
-                mergeKey = $"unique||{item.FilePath}";
-            } else {
-                int disc = item.DiscNumber > 0 ? item.DiscNumber : 1;
-                string trkPart = item.TrackNumber > 0 ? $"#{disc}.{item.TrackNumber}||" : "";
-                mergeKey = $"{trkPart}{baseTitle}";
-            }
+            LibraryMergedTrack targetGroup = null;
 
-            if (!byKey.TryGetValue(mergeKey, out LibraryMergedTrack group)) {
-                group = new LibraryMergedTrack { Primary = item };
-                byKey[mergeKey] = group;
-                merged.Add(group);
+            if (!isStem && !string.IsNullOrEmpty(baseTitle)) {
+                if (!byBaseTitle.TryGetValue(baseTitle, out List<LibraryMergedTrack> candidates)) {
+                    candidates = [];
+                    byBaseTitle[baseTitle] = candidates;
+                }
+                for (int i = 0; i < candidates.Count; i++) {
+                    LibraryTrackItem p = candidates[i].Primary;
+                    bool trackCompatible = item.TrackNumber <= 0 || p.TrackNumber <= 0 || item.TrackNumber == p.TrackNumber;
+                    bool discCompatible = item.DiscNumber <= 0 || p.DiscNumber <= 0 || item.DiscNumber == p.DiscNumber;
+                    if (trackCompatible && discCompatible) {
+                        targetGroup = candidates[i];
+                        break;
+                    }
+                }
+                if (targetGroup == null) {
+                    targetGroup = new LibraryMergedTrack { Primary = item };
+                    candidates.Add(targetGroup);
+                    merged.Add(targetGroup);
+                }
+            } else {
+                targetGroup = new LibraryMergedTrack { Primary = item };
+                merged.Add(targetGroup);
             }
-            group.Variants.Add(item);
+            targetGroup.Variants.Add(item);
         }
 
         List<LibraryMergedTrack> finalized = new(merged.Count);
         foreach (LibraryMergedTrack m in merged) {
-            AudioQualityAnalyzer.SortVariantsIntelligently(m.Variants);
+            AudioQualityAnalyzer.SortVariantsIntelligently(m.Variants, ctx);
             LibraryTrackItem bestPrimary = m.Variants[0];
             List<string> labels = m.Variants
                 .Select(GetVariantShortLabel)
@@ -568,12 +608,13 @@ public static partial class MediaLibraryService {
         string filePath,
         string title,
         string artist,
-        string album) {
+        string album,
+        Context ctx = null) {
         if (snap == null || string.IsNullOrEmpty(filePath)) return [];
         LibraryTrackItem current = snap.Tracks.FirstOrDefault(t => string.Equals(t.FilePath, filePath, StringComparison.OrdinalIgnoreCase));
 
         string targetTitle = CanonicalTrackBaseTitle(!string.IsNullOrWhiteSpace(current?.Title) ? current.Title : title);
-        string targetAlbum = NormalizeAlnum(!string.IsNullOrWhiteSpace(current?.Album) ? current.Album : album);
+        string targetAlbum = CanonicalAlbumBase(!string.IsNullOrWhiteSpace(current?.Album) ? current.Album : album);
         string targetArtist = NormalizeAlnum(!string.IsNullOrWhiteSpace(current?.EffectiveAlbumArtist) ? current.EffectiveAlbumArtist : artist);
         if (string.IsNullOrEmpty(targetTitle)) return current != null ? [current] : [];
 
@@ -584,7 +625,7 @@ public static partial class MediaLibraryService {
             if (StemFragmentRegex().IsMatch(IOPath.GetFileNameWithoutExtension(t.FilePath))) return false;
             if (CanonicalTrackBaseTitle(t.Title) != targetTitle) return false;
 
-            string tAlbum = NormalizeAlnum(t.Album);
+            string tAlbum = CanonicalAlbumBase(t.Album);
             string tArtist = NormalizeAlnum(t.EffectiveAlbumArtist);
             if (!string.IsNullOrEmpty(targetAlbum) && !string.IsNullOrEmpty(tAlbum)) {
                 return tAlbum == targetAlbum && (string.IsNullOrEmpty(targetArtist) || string.IsNullOrEmpty(tArtist) || tArtist == targetArtist);
@@ -598,7 +639,7 @@ public static partial class MediaLibraryService {
         if (current != null && !matches.Contains(current)) {
             matches.Add(current);
         }
-        AudioQualityAnalyzer.SortVariantsIntelligently(matches);
+        AudioQualityAnalyzer.SortVariantsIntelligently(matches, ctx);
         return matches;
     }
 
@@ -619,7 +660,7 @@ public static partial class MediaLibraryService {
             path.Contains("/Sounds/Gear/", StringComparison.OrdinalIgnoreCase) ||
             path.Contains("/Cubasis 3/Trash/", StringComparison.OrdinalIgnoreCase)) {
             item.IsLikelyNonMusic = true;
-            item.NonMusicReason = "Som de sistema / app";
+            item.NonMusicReason = AndroidStrings.Active["NonMusicSystemSfx"];
             return;
         }
 
@@ -636,7 +677,7 @@ public static partial class MediaLibraryService {
             folder.Contains("/AudioCutter", StringComparison.OrdinalIgnoreCase) ||
             folder.Contains("/Mp3Cutter", StringComparison.OrdinalIgnoreCase)) {
             item.IsLikelyNonMusic = true;
-            item.NonMusicReason = "Stem / recorte de áudio";
+            item.NonMusicReason = AndroidStrings.Active["NonMusicStemClip"];
             return;
         }
 
@@ -654,7 +695,7 @@ public static partial class MediaLibraryService {
             folder.Contains("/SoundRecorder", StringComparison.OrdinalIgnoreCase)) {
             if (!hasMusicTags) {
                 item.IsLikelyNonMusic = true;
-                item.NonMusicReason = "Gravação / WhatsApp";
+                item.NonMusicReason = AndroidStrings.Active["NonMusicRecording"];
                 return;
             }
         }
@@ -669,7 +710,7 @@ public static partial class MediaLibraryService {
              folder.Contains("/AzScreenRecorder", StringComparison.OrdinalIgnoreCase) ||
              folder.Contains("/Collage", StringComparison.OrdinalIgnoreCase))) {
             item.IsLikelyNonMusic = true;
-            item.NonMusicReason = "Vídeo de rede social / captura";
+            item.NonMusicReason = AndroidStrings.Active["NonMusicSocialVideo"];
             return;
         }
 
@@ -682,19 +723,19 @@ public static partial class MediaLibraryService {
                 UuidOrHexHashRegex().IsMatch(fileBase) ||
                 (folderLeaf.Length >= 32 && UuidOrHexHashRegex().IsMatch(folderLeaf))) {
                 item.IsLikelyNonMusic = true;
-                item.NonMusicReason = "Nome genérico / gravação";
+                item.NonMusicReason = AndroidStrings.Active["NonMusicGenericName"];
                 return;
             }
 
             if (ext == ".amr") {
                 item.IsLikelyNonMusic = true;
-                item.NonMusicReason = "Nota de voz (.amr)";
+                item.NonMusicReason = AndroidStrings.Active["NonMusicVoiceNote"];
                 return;
             }
 
             if (item.DurationMs > 0 && item.DurationMs < 25_000) {
                 item.IsLikelyNonMusic = true;
-                item.NonMusicReason = "Clipe curto sem metadados";
+                item.NonMusicReason = AndroidStrings.Active["NonMusicShortClip"];
                 return;
             }
         }
@@ -710,10 +751,12 @@ public static partial class MediaLibraryService {
 
         bool extSpatial = ext is ".atmos" or ".thd" or ".mlp" or ".ec3" or ".eac3" or ".caf" or ".laf";
         bool extSurround = extSpatial || ext is ".ac3" or ".dts";
-        bool tagSpatial = lowerName.Contains("atmos") || lowerName.Contains("spatial")
-            || lowerName.Contains("eac3-joc") || lowerName.Contains("joc")
+        bool hasJocToken = lowerName.Contains("eac3-joc") || SpatialNameJocRegex().IsMatch(lowerName);
+        bool hasAdmToken = SpatialNameAdmRegex().IsMatch(lowerName);
+        bool tagAtmos = lowerName.Contains("atmos") || hasJocToken;
+        bool tagSpatial = tagAtmos || lowerName.Contains("spatial")
             || lowerName.Contains("360ra") || lowerName.Contains("truehd")
-            || lowerName.Contains("adm");
+            || hasAdmToken;
 
         int ch = 0;
         string detectedMime = "";
@@ -793,16 +836,16 @@ public static partial class MediaLibraryService {
         item.IsSpatial = isSpatial;
 
         if (isSpatial) {
-            if (ext == ".atmos" || detectedMime.Contains("joc") || tagSpatial) {
+            if (ext == ".atmos" || detectedMime.Contains("joc") || tagAtmos) {
                 item.AudioBadge = "ATMOS";
-            } else if (ext is ".thd" or ".mlp" || detectedMime.Contains("truehd")) {
+            } else if (ext is ".thd" or ".mlp" || detectedMime.Contains("truehd") || lowerName.Contains("truehd")) {
                 item.AudioBadge = "TRUEHD";
             } else if (ext is ".ec3" or ".eac3" || detectedMime.Contains("eac3")) {
                 item.AudioBadge = "E-AC3";
-            } else if (wavAdm) {
+            } else if (wavAdm || hasAdmToken) {
                 item.AudioBadge = "ADM 3D";
             } else {
-                item.AudioBadge = ch > 2 ? $"{ch}CH 3D" : "ESPACIAL";
+                item.AudioBadge = ch > 2 ? $"{ch}CH 3D" : AndroidStrings.Active["SpatialBadge"];
             }
         } else if (isSurround) {
             if (ext == ".ac3" || detectedMime.Contains("ac3")) {
@@ -899,6 +942,11 @@ public static partial class MediaLibraryService {
                 int trkNum = trkRaw > 1000 ? trkRaw % 1000 : trkRaw;
                 string dir = IOPath.GetDirectoryName(path) ?? "";
                 string ext = IOPath.GetExtension(path).TrimStart('.').ToUpperInvariant();
+
+                if (isVideo && byPath.TryGetValue(path, out LibraryTrackItem existing)) {
+                    if (existing.DurationMs <= 0 && dur > 0) existing.DurationMs = dur;
+                    continue;
+                }
 
                 byPath[path] = new LibraryTrackItem {
                     FilePath = path,
@@ -1008,15 +1056,20 @@ public static partial class MediaLibraryService {
 
     public static Bitmap TryGetCachedThumbnail(string cacheKey) {
         if (string.IsNullOrEmpty(cacheKey)) return null;
-        if (thumbCache.TryGetValue(cacheKey, out Bitmap bmp) && bmp != null) {
-            try {
-                if (bmp.Handle != IntPtr.Zero && !bmp.IsRecycled) {
-                    return bmp;
+        lock (thumbLock) {
+            if (thumbCache.TryGetValue(cacheKey, out Bitmap bmp) && bmp != null) {
+                try {
+                    if (bmp.Handle != IntPtr.Zero && !bmp.IsRecycled) {
+                        thumbLru.Remove(cacheKey);
+                        thumbLru.AddLast(cacheKey);
+                        return bmp;
+                    }
+                } catch {
+                    // Evict stale reference below
                 }
-            } catch {
-                // Evict stale reference below
+                thumbCache.TryRemove(cacheKey, out _);
+                thumbLru.Remove(cacheKey);
             }
-            thumbCache.TryRemove(cacheKey, out _);
         }
         return null;
     }
@@ -1100,8 +1153,8 @@ public static partial class MediaLibraryService {
 
     static void StoreThumbInLru(string key, Bitmap bmp) {
         lock (thumbLock) {
-            if (thumbCache.ContainsKey(key)) return;
             thumbCache[key] = bmp;
+            thumbLru.Remove(key);
             thumbLru.AddLast(key);
             while (thumbLru.Count > 96) {
                 string oldest = thumbLru.First.Value;
@@ -1111,37 +1164,9 @@ public static partial class MediaLibraryService {
         }
     }
 
-    static Bitmap DecodeSampledFile(string path, int maxDim) {
-        try {
-            byte[] bytes = IOFile.ReadAllBytes(path);
-            return DecodeSampledBytes(bytes, maxDim);
-        } catch {
-            return null;
-        }
-    }
+    static Bitmap DecodeSampledFile(string path, int maxDim) =>
+        MediaServiceUtils.DecodeScaledBitmapSafe(path, maxDim);
 
-    static Bitmap DecodeSampledBytes(byte[] bytes, int maxDim) {
-        if (bytes == null || bytes.Length == 0) return null;
-        BitmapFactory.Options bounds = new() { InJustDecodeBounds = true };
-        BitmapFactory.DecodeByteArray(bytes, 0, bytes.Length, bounds);
-        if (bounds.OutWidth <= 0 || bounds.OutHeight <= 0) return null;
-
-        int sample = 1;
-        while ((bounds.OutWidth / sample) > maxDim * 2 || (bounds.OutHeight / sample) > maxDim * 2) {
-            sample *= 2;
-        }
-        BitmapFactory.Options opts = new() {
-            InSampleSize = sample,
-            InPreferredConfig = Bitmap.Config.Argb8888
-        };
-        Bitmap decoded = BitmapFactory.DecodeByteArray(bytes, 0, bytes.Length, opts);
-        if (decoded == null) return null;
-
-        int longest = Math.Max(decoded.Width, decoded.Height);
-        if (longest <= maxDim) return decoded;
-        float sc = maxDim / (float)longest;
-        Bitmap scaled = Bitmap.CreateScaledBitmap(decoded, Math.Max(1, (int)(decoded.Width * sc)), Math.Max(1, (int)(decoded.Height * sc)), true);
-        if (!ReferenceEquals(scaled, decoded)) decoded.Dispose();
-        return scaled;
-    }
+    static Bitmap DecodeSampledBytes(byte[] bytes, int maxDim) =>
+        MediaServiceUtils.DecodeScaledBitmapSafe(bytes, maxDim);
 }

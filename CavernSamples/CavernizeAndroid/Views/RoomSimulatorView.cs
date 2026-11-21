@@ -10,6 +10,7 @@ using Cavern.Spatial;
 
 using Cavernize.Logic.Models;
 
+using CavernizeAndroid.Language;
 using CavernizeAndroid.Theme;
 
 namespace CavernizeAndroid.Views;
@@ -412,10 +413,11 @@ public sealed class RoomSimulatorView : View {
         textPaint.TextAlign = Paint.Align.Center;
         textPaint.TextSize = 8.9f * dp;
         textPaint.Color = labelMode == LabelVisibilityMode.All ? OneUiTheme.PrimaryHigh : OneUiTheme.TextSub;
+        AndroidStrings str = AndroidStrings.Active;
         string lblTag = labelMode switch {
-            LabelVisibilityMode.All => "Todos",
-            LabelVisibilityMode.Minimal => "Min",
-            _ => "Ativos"
+            LabelVisibilityMode.All => str["RoomLabelAll"],
+            LabelVisibilityMode.Minimal => str["RoomLabelMin"],
+            _ => str["RoomLabelActive"]
         };
         canvas.DrawText(lblTag, camLabelsBtnRect.CenterX(),
             camLabelsBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
@@ -431,8 +433,8 @@ public sealed class RoomSimulatorView : View {
 
         (string label, float py, float pp)[] presets = [
             ("3D", -24f, 28f),
-            ("Topo", 0f, 84f),
-            ("Frente", 0f, 10f)
+            (str["RoomCamTop"], 0f, 84f),
+            (str["RoomCamFront"], 0f, 10f)
         ];
         for (int i = 0; i < 3; i++) {
             float px = presetsStartX + i * (presetW + presetGap);
@@ -1144,20 +1146,21 @@ public sealed class RoomSimulatorView : View {
 
         Draw3DHeadSphere(canvas, sphereCx, sphereCy, sphereR, headYawRad, headPitchRad, camYawRad: 0f, camPitchRad: 0.18f, dp);
 
+        AndroidStrings str = AndroidStrings.Active;
         float textLeft = sphereCx + sphereR + 13f * dp;
         textPaint.TextAlign = Paint.Align.Left;
         textPaint.TextSize = 11.5f * dp;
         textPaint.Color = OneUiTheme.TextPrimary;
-        canvas.DrawText("Cabeça 3D", textLeft, r.Top + 25f * dp, textPaint);
+        canvas.DrawText(str["RoomHead3DTitle"], textLeft, r.Top + 25f * dp, textPaint);
 
         subTextPaint.TextAlign = Paint.Align.Left;
         subTextPaint.TextSize = 9.8f * dp;
         subTextPaint.Color = OneUiTheme.PrimaryHigh;
-        canvas.DrawText($"Giro {listenerRotation.Y:+0;-0;0}°  •  Incl {listenerRotation.X:+0;-0;0}°", textLeft, r.Top + 44f * dp, subTextPaint);
+        canvas.DrawText(string.Format(str["RoomHeadAnglesFmt"], listenerRotation.Y, listenerRotation.X), textLeft, r.Top + 44f * dp, subTextPaint);
 
         subTextPaint.TextSize = 8.4f * dp;
         subTextPaint.Color = OneUiTheme.TextMuted;
-        canvas.DrawText("Arraste livremente", textLeft, r.Top + 59f * dp, subTextPaint);
+        canvas.DrawText(str["RoomHeadDragHint"], textLeft, r.Top + 59f * dp, subTextPaint);
 
         float rstW = Math.Max(46f * dp, r.Right - textLeft - 14f * dp);
         float rstH = 22f * dp;
@@ -1166,7 +1169,7 @@ public sealed class RoomSimulatorView : View {
         textPaint.TextAlign = Paint.Align.Center;
         textPaint.TextSize = 9.2f * dp;
         textPaint.Color = OneUiTheme.TextSecondary;
-        canvas.DrawText("Zerar", dockHeadResetRect.CenterX(),
+        canvas.DrawText(str["RoomResetBtn"], dockHeadResetRect.CenterX(),
             dockHeadResetRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
     }
 
@@ -1223,11 +1226,12 @@ public sealed class RoomSimulatorView : View {
         }
 
         // Left info column
+        AndroidStrings str = AndroidStrings.Active;
         float infoLeft = r.Left + 12f * dp;
         textPaint.TextAlign = Paint.Align.Left;
         textPaint.TextSize = 11f * dp;
         textPaint.Color = OneUiTheme.TextPrimary;
-        canvas.DrawText("Altura Y", infoLeft, r.Top + 25f * dp, textPaint);
+        canvas.DrawText(str["RoomHeightTitle"], infoLeft, r.Top + 25f * dp, textPaint);
 
         float meters = lny * environmentSize.Y;
         subTextPaint.TextAlign = Paint.Align.Left;
@@ -1237,7 +1241,7 @@ public sealed class RoomSimulatorView : View {
 
         subTextPaint.TextSize = 8.2f * dp;
         subTextPaint.Color = OneUiTheme.TextMuted;
-        canvas.DrawText(IsPositionLocked ? "Travada" : (meters > 0.1f ? "Teto" : (meters < -0.1f ? "Chão" : "Ouvido")),
+        canvas.DrawText(IsPositionLocked ? str["RoomHeightLocked"] : (meters > 0.1f ? str["RoomHeightCeiling"] : (meters < -0.1f ? str["RoomHeightFloor"] : str["RoomHeightEar"])),
             infoLeft, r.Top + 59f * dp, subTextPaint);
 
         float rstW = Math.Max(36f * dp, capLeft - infoLeft - 8f * dp);

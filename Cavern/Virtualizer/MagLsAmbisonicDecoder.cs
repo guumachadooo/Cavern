@@ -274,11 +274,15 @@ namespace Cavern.Virtualizer {
             double[] weights = new double[kCount];
             double weightSum = 0.0;
             double[] shRow = new double[qCount];
+            bool hasNadirCoverage = false;
 
             for (int k = 0; k < kCount; k++) {
                 EvaluateRealSphericalHarmonicsSn3d(azimuthsRad[k], elevationsRad[k], order, shRow);
                 for (int q = 0; q < qCount; q++) {
                     yMat[k, q] = shRow[q];
+                }
+                if (elevationsRad[k] < -0.20) {
+                    hasNadirCoverage = true;
                 }
                 double w = quadratureWeights != null && k < quadratureWeights.Length && quadratureWeights[k] > 0.0
                     ? quadratureWeights[k]
@@ -291,8 +295,15 @@ namespace Cavern.Virtualizer {
                 weights[k] *= invWeightSum;
             }
 
+            // Apply mild Tikhonov diagonal regularization when solving Order >= 3 on sparse grids (e.g. 16-dir 2-ring)
+            // lacking nadir coverage so ill-conditioned elevation modes never blow up decoder gains
+            double effectiveLambda = tikhonovLambda;
+            if (order >= 3 && (!hasNadirCoverage || kCount <= qCount + 4)) {
+                effectiveLambda = (!hasNadirCoverage && kCount <= qCount + 4) ? 2e-2 : 1e-2;
+            }
+
             // Compute Tikhonov-regularized weighted pseudoinverse Y_pinv [Q x K] = (Y^T W Y + lambda I)^(-1) Y^T W
-            double[,] yPinv = ComputeWeightedPseudoinverse(yMat, weights, kCount, qCount, tikhonovLambda);
+            double[,] yPinv = ComputeWeightedPseudoinverse(yMat, weights, kCount, qCount, effectiveLambda);
 
             // Transform all measured HRIR pairs to complex frequency domain (exact double-precision FFT via Cavern FFTCache)
             FFTCache fftCache = new ThreadSafeFFTCache(fftSize);

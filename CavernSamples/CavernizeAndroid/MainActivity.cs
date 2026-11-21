@@ -1964,7 +1964,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
             SelectedTrack = null;
         }
 
-        _ = prevMeta;
+        if (prevMeta != null && prevMeta != currentMediaMeta &&
+            prevMeta.ArtworkBitmap != null && prevMeta.ArtworkBitmap != currentMediaMeta?.ArtworkBitmap) {
+            prevMeta.ArtworkBitmap.Dispose();
+            prevMeta.ArtworkBitmap = null;
+        }
         discoveredSubtitles = [];
         activeSubtitleTrackId = null;
         activeSubtitleCues = [];

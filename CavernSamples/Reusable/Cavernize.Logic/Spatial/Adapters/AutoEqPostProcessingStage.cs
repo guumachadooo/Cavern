@@ -136,6 +136,27 @@ public sealed class AutoEqPostProcessingStage : IPostProcessingStage {
     }
 
     /// <inheritdoc/>
+    public IPostProcessingStage CloneForOfflineExport() {
+        AutoEqHeadphoneProfile profile;
+        AutoEqNeutralTarget target;
+        BinauralCompensationMode binauralMode;
+        bool guardEnabled;
+        bool enabled;
+        lock (stateLock) {
+            profile = activeProfile;
+            target = activeTarget;
+            binauralMode = activeBinauralMode;
+            guardEnabled = doubleEqGuardEnabled;
+            enabled = isEnabled;
+        }
+        AutoEqPostProcessingStage clone = new() {
+            UserEnabled = enabled
+        };
+        clone.ApplyConfiguration(profile, target, binauralMode, guardEnabled);
+        return clone;
+    }
+
+    /// <inheritdoc/>
     public void Dispose() {
         ClearProfile();
     }

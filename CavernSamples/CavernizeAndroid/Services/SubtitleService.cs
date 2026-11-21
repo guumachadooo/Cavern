@@ -1,11 +1,13 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
 using Android.Content;
 
 using CavernizeAndroid.Audio;
+using CavernizeAndroid.Language;
 
 using IOFile = System.IO.File;
 using IOPath = System.IO.Path;
@@ -35,9 +37,6 @@ public sealed class SubtitleTrackInfo {
 public static partial class SubtitleService {
     [GeneratedRegex(@"Stream\s+#0:(\d+)(?:\(([^)]+)\))?[^:]*:\s*Subtitle:\s*([a-zA-Z0-9_]+)(.*)", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex FFmpegSubStreamRegex();
-
-    [GeneratedRegex(@"(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})", RegexOptions.Compiled)]
-    private static partial Regex SrtTimeRangeRegex();
 
     [GeneratedRegex(@"\{[^}]*\}|<[^>]+>", RegexOptions.Compiled)]
     private static partial Regex RichTagRegex();
@@ -90,9 +89,7 @@ public static partial class SubtitleService {
                     foreach (string ext in SubExtensions) {
                         foreach (string file in Directory.EnumerateFiles(dir, "*" + ext)) {
                             string nameNoExt = IOPath.GetFileNameWithoutExtension(file);
-                            bool stemMatch = stems.Any(s =>
-                                nameNoExt.StartsWith(s, StringComparison.OrdinalIgnoreCase) ||
-                                s.StartsWith(nameNoExt, StringComparison.OrdinalIgnoreCase));
+                            bool stemMatch = stems.Any(s => IsStrictStemMatch(nameNoExt, s));
                             if (!stemMatch || !seenFiles.Add(file)) {
                                 continue;
                             }
@@ -152,7 +149,9 @@ public static partial class SubtitleService {
             }
             string extra = m.Groups[4].Value.Trim();
             string langTag = string.IsNullOrEmpty(lang) ? "" : $" [{lang.ToUpperInvariant()}]";
-            string defTag = extra.Contains("default", StringComparison.OrdinalIgnoreCase) ? " (Padrão)" : "";
+            string defTag = extra.Contains("default", StringComparison.OrdinalIgnoreCase)
+                ? $" ({AndroidStrings.Active["SubtitleDefaultTag"]})"
+                : "";
             list.Add(new SubtitleTrackInfo {
                 Id = $"emb:{streamIdx}",
                 Title = $"Stream #{streamIdx}{langTag} • {codec.ToUpperInvariant()}{defTag}",
@@ -161,6 +160,21 @@ public static partial class SubtitleService {
             });
         }
         return list;
+    }
+
+    static bool IsStrictStemMatch(string fileStem, string mediaStem) {
+        if (string.IsNullOrWhiteSpace(fileStem) || string.IsNullOrWhiteSpace(mediaStem)) {
+            return false;
+        }
+        if (fileStem.Equals(mediaStem, StringComparison.OrdinalIgnoreCase)) {
+            return true;
+        }
+        if (fileStem.Length > mediaStem.Length &&
+            fileStem.StartsWith(mediaStem, StringComparison.OrdinalIgnoreCase)) {
+            char sep = fileStem[mediaStem.Length];
+            return sep is '.' or '-' or '_' or ' ' or '(' or '[';
+        }
+        return false;
     }
 
     public static List<SubtitleCue> LoadCues(
@@ -174,14 +188,16 @@ public static partial class SubtitleService {
 
         if (!string.IsNullOrEmpty(track.ExternalFilePath) && IOFile.Exists(track.ExternalFilePath)) {
             string ext = IOPath.GetExtension(track.ExternalFilePath).ToLowerInvariant();
-            string raw = ReadTextAutoEncoding(track.ExternalFilePath);
+            string raw = MediaServiceUtils.ReadFileTextAutoEncoding(track.ExternalFilePath);
             return ext is ".ass" or ".ssa" ? ParseAss(raw) : ParseSrtOrVtt(raw);
         }
 
         if (track.EmbeddedStreamIndex >= 0 && ffmpeg != null && ffmpeg.Found && !string.IsNullOrEmpty(mediaPath)) {
-            string subDir = IOPath.Combine(ctx.CacheDir.AbsolutePath, "subtitles");
+            string cacheRoot = ctx?.CacheDir?.AbsolutePath ?? IOPath.GetTempPath();
+            string subDir = IOPath.Combine(cacheRoot, "subtitles");
             Directory.CreateDirectory(subDir);
-            string outSrt = IOPath.Combine(subDir, $"track_{track.EmbeddedStreamIndex}.srt");
+            string mediaHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(mediaPath)))[..12];
+            string outSrt = IOPath.Combine(subDir, $"track_{mediaHash}_{track.EmbeddedStreamIndex}.srt");
             try {
                 if (IOFile.Exists(outSrt)) {
                     IOFile.Delete(outSrt);
@@ -212,7 +228,7 @@ public static partial class SubtitleService {
             FFmpegInstallerService.RunProcessSafe(psi, 25000);
 
             if (IOFile.Exists(outSrt)) {
-                string raw = ReadTextAutoEncoding(outSrt);
+                string raw = MediaServiceUtils.ReadFileTextAutoEncoding(outSrt);
                 return ParseSrtOrVtt(raw);
             }
         }
@@ -225,7 +241,7 @@ public static partial class SubtitleService {
             return [];
         }
         string ext = IOPath.GetExtension(filePath).ToLowerInvariant();
-        string raw = ReadTextAutoEncoding(filePath);
+        string raw = MediaServiceUtils.ReadFileTextAutoEncoding(filePath);
         return ext is ".ass" or ".ssa" ? ParseAss(raw) : ParseSrtOrVtt(raw);
     }
 
@@ -249,39 +265,12 @@ public static partial class SubtitleService {
     }
 
     static List<SubtitleCue> ParseSrtOrVtt(string raw) {
-        List<SubtitleCue> list = [];
-        if (string.IsNullOrWhiteSpace(raw)) {
-            return list;
+        List<TimedTextCue> parsed = MediaServiceUtils.ParseSrtOrVttCues(raw, stripCurlyTags: true, requireEndAfterStart: true, lineSeparator: "\n");
+        List<SubtitleCue> list = new(parsed.Count);
+        for (int i = 0; i < parsed.Count; i++) {
+            TimedTextCue c = parsed[i];
+            list.Add(new SubtitleCue(c.StartSec, c.EndSec, c.Text));
         }
-
-        string[] lines = raw.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        int i = 0;
-        while (i < lines.Length) {
-            string line = lines[i].Trim();
-            Match m = SrtTimeRangeRegex().Match(line);
-            if (!m.Success) {
-                i++;
-                continue;
-            }
-
-            double start = ParseTimeGroups(m.Groups[1].Value, m.Groups[2].Value, m.Groups[3].Value, m.Groups[4].Value);
-            double end = ParseTimeGroups(m.Groups[5].Value, m.Groups[6].Value, m.Groups[7].Value, m.Groups[8].Value);
-            i++;
-
-            StringBuilder body = new();
-            while (i < lines.Length && !string.IsNullOrWhiteSpace(lines[i])) {
-                if (body.Length > 0) body.Append('\n');
-                body.Append(lines[i].Trim());
-                i++;
-            }
-
-            string clean = CleanSubtitleText(body.ToString());
-            if (!string.IsNullOrEmpty(clean) && end > start) {
-                list.Add(new SubtitleCue(start, end, clean));
-            }
-        }
-
-        list.Sort((a, b) => a.StartSec.CompareTo(b.StartSec));
         return list;
     }
 
@@ -328,15 +317,6 @@ public static partial class SubtitleService {
         return list;
     }
 
-    static double ParseTimeGroups(string hStr, string mStr, string sStr, string msStr) {
-        int h = string.IsNullOrEmpty(hStr) ? 0 : int.Parse(hStr, CultureInfo.InvariantCulture);
-        int m = int.Parse(mStr, CultureInfo.InvariantCulture);
-        int s = int.Parse(sStr, CultureInfo.InvariantCulture);
-        string paddedMs = msStr.PadRight(3, '0')[..3];
-        int ms = int.Parse(paddedMs, CultureInfo.InvariantCulture);
-        return h * 3600.0 + m * 60.0 + s + ms / 1000.0;
-    }
-
     static bool TryParseAssTime(string s, out double sec) {
         sec = 0;
         string[] parts = s.Split(':');
@@ -361,23 +341,5 @@ public static partial class SubtitleService {
         if (string.IsNullOrWhiteSpace(text)) return "";
         string stripped = RichTagRegex().Replace(text, "").Trim();
         return stripped;
-    }
-
-    static string ReadTextAutoEncoding(string path) {
-        byte[] bytes = IOFile.ReadAllBytes(path);
-        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
-            return Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
-        }
-        if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
-            return Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2);
-        }
-        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
-            return Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
-        }
-        try {
-            return new UTF8Encoding(false, true).GetString(bytes);
-        } catch {
-            return Encoding.Latin1.GetString(bytes);
-        }
     }
 }

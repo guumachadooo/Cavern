@@ -103,6 +103,30 @@ namespace Cavern {
         public Vector3 Position;
 
         /// <summary>
+        /// When true, user-locked coordinates override decoder frame position updates before rendering.
+        /// </summary>
+        public bool PositionLocked { get; private set; }
+
+        /// <summary>
+        /// Target coordinates enforced while <see cref="PositionLocked"/> is active.
+        /// </summary>
+        Vector3 lockedPosition;
+
+        /// <summary>
+        /// Lock this source to an explicit 3D position so codec metadata updates cannot overwrite it.
+        /// </summary>
+        public void LockCustomPosition(Vector3 position) {
+            lockedPosition = position;
+            Position = position;
+            PositionLocked = true;
+        }
+
+        /// <summary>
+        /// Release any position lock so codec metadata drives <see cref="Position"/> normally.
+        /// </summary>
+        public void UnlockCustomPosition() => PositionLocked = false;
+
+        /// <summary>
         /// Clip playback position in samples.
         /// </summary>
         public int TimeSamples;

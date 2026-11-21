@@ -52,15 +52,25 @@ namespace Cavern.Virtualizer {
         static readonly object initLock = new object();
 
         /// <summary>
+        /// Acquire-release publication flag guaranteeing all <see cref="impulses"/> delay expansions are visible across threads.
+        /// </summary>
+        static volatile bool impulsesExpanded;
+
+        readonly float[][] candidatesLeft = new float[4][];
+        readonly float[][] candidatesRight = new float[4][];
+        readonly float[] gainsLeft = new float[4];
+        readonly float[] gainsRight = new float[4];
+
+        /// <summary>
         /// Create a distance simulation for a <see cref="Source"/> using Cavern's official <see cref="impulses"/> tables.
         /// </summary>
         public Distancer(Source source) {
             this.source = source;
 
             // Add the delays to the official impulses that were removed for storage optimization (thread-safe one-time init)
-            if (impulseDelays[0][0] != 0) {
+            if (!impulsesExpanded) {
                 lock (initLock) {
-                    if (impulseDelays[0][0] != 0) {
+                    if (!impulsesExpanded) {
                         for (int i = 0; i < impulses.Length; ++i) {
                             for (int j = 0; j < impulses[i].Length; ++j) {
                                 int convLength = impulses[i][j].Length;
@@ -73,6 +83,7 @@ namespace Cavern.Virtualizer {
                             }
                         }
                         impulseDelays[0][0] = 0;
+                        impulsesExpanded = true;
                     }
                 }
             }
@@ -119,7 +130,7 @@ namespace Cavern.Virtualizer {
             if (largerAngle == angles.Length) {
                 largerAngle = angles.Length - 1;
             }
-            float angleRatio = Math.Min(QMath.LerpInverse(angles[smallerAngle], angles[largerAngle], angle), 1);
+            float angleRatio = Math.Clamp(QMath.LerpInverse(angles[smallerAngle], angles[largerAngle], angle), 0, 1);
 
             // Find bounding distances with discrete impulses
             int smallerDistance = 0;
@@ -136,19 +147,17 @@ namespace Cavern.Virtualizer {
             float distanceRatio =
                 Math.Clamp(QMath.LerpInverse(distances[smallerDistance], distances[largerDistance], distance), 0, 1);
 
-            // Find impulse candidates and their weight from Cavern's official tables
-            float[][] candidates = new float[][] {
-                impulses[smallerAngle][smallerDistance],
-                impulses[smallerAngle][largerDistance],
-                impulses[largerAngle][smallerDistance],
-                impulses[largerAngle][largerDistance]
-            };
-            float[] gains = {
-                (float)Math.Sqrt((1 - angleRatio) * (1 - distanceRatio)),
-                (float)Math.Sqrt((1 - angleRatio) * distanceRatio),
-                (float)Math.Sqrt(angleRatio * (1 - distanceRatio)),
-                (float)Math.Sqrt(angleRatio * distanceRatio)
-            };
+            // Reuse pre-allocated per-ear candidate & gain arrays from Cavern's official tables (zero per-block GC)
+            float[][] candidates = right ? candidatesRight : candidatesLeft;
+            float[] gains = right ? gainsRight : gainsLeft;
+            candidates[0] = impulses[smallerAngle][smallerDistance];
+            candidates[1] = impulses[smallerAngle][largerDistance];
+            candidates[2] = impulses[largerAngle][smallerDistance];
+            candidates[3] = impulses[largerAngle][largerDistance];
+            gains[0] = (float)Math.Sqrt((1 - angleRatio) * (1 - distanceRatio));
+            gains[1] = (float)Math.Sqrt((1 - angleRatio) * distanceRatio);
+            gains[2] = (float)Math.Sqrt(angleRatio * (1 - distanceRatio));
+            gains[3] = (float)Math.Sqrt(angleRatio * distanceRatio);
 
             // Align candidates to the dominant candidate's peak to prevent comb-filtering across different onset delays
             int dominant = 0;

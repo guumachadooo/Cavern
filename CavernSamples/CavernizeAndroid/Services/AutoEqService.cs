@@ -11,6 +11,8 @@ using Cavern.Filters;
 using Cavernize.Logic.Rendering;
 using Cavernize.Logic.Spatial;
 
+using CavernizeAndroid.Language;
+
 using Path = System.IO.Path;
 
 namespace CavernizeAndroid.Services;
@@ -364,13 +366,13 @@ public static class AutoEqService {
         errorMessage = null;
         try {
             if (string.IsNullOrEmpty(sourcePath) || !File.Exists(sourcePath)) {
-                errorMessage = "Selected EQ file does not exist.";
+                errorMessage = AndroidStrings.Active["AutoEqFileNotFound"];
                 return false;
             }
             string text = File.ReadAllText(sourcePath, Encoding.UTF8);
             ParsedParametricEq parsed = ParametricEqualizer.ParseEqualizerApo(text);
             if (parsed.Bands == null || parsed.Bands.Length == 0) {
-                errorMessage = "No valid Equalizer APO / AutoEq / Wavelet filter lines found.";
+                errorMessage = AndroidStrings.Active["AutoEqNoValidFilters"];
                 return false;
             }
 

@@ -174,6 +174,9 @@ namespace Cavern {
         /// Process the source and returns a mix to be added to the output.
         /// </summary>
         protected internal virtual float[] Collect() {
+            if (PositionLocked) {
+                Position = lockedPosition;
+            }
             // Preparations, clean environment
             Channel[] channels = Listener.Channels;
             int updateRate = listener.UpdateRate;
@@ -289,6 +292,9 @@ namespace Cavern {
         /// Calculate distance from the <see cref="Listener"/> and choose the closest sources to play.
         /// </summary>
         internal void Precalculate() {
+            if (PositionLocked) {
+                Position = lockedPosition;
+            }
             if (Renderable) {
                 lastDistance = distance;
                 distance = Vector3.Distance(Position, listener.Position);

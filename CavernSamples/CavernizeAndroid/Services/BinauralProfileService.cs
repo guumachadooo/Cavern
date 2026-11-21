@@ -478,7 +478,7 @@ public static class BinauralProfileService {
             HeadWidthCm = cfg.HeadWidthCm,
             MaxLateralItdUs = (float)maxItdUs,
             ItdDeltaAt90DegUs = (float)delta90Us,
-            IsHptfNotchActive = cfg.HptfNotchEnabled && cfg.HptfNotchGainDb < -0.05f,
+            IsHptfNotchActive = hrtfActive && cfg.HptfNotchEnabled && cfg.HptfNotchGainDb < -0.05f,
             HptfNotchFreqHz = cfg.HptfNotchFreqHz,
             HptfNotchGainDb = cfg.HptfNotchGainDb,
             HptfNotchQ = cfg.HptfNotchQ,
@@ -494,7 +494,7 @@ public static class BinauralProfileService {
         errorMessage = null;
         BinauralProfileInfo info = FindById(profileId);
         if (info == null) {
-            errorMessage = $"Unknown binaural profile '{profileId}'.";
+            errorMessage = string.Format(AndroidStrings.Active["BinauralUnknownProfile"], profileId);
             return false;
         }
 
@@ -553,13 +553,13 @@ public static class BinauralProfileService {
         errorMessage = null;
         try {
             if (string.IsNullOrEmpty(sourcePath) || !File.Exists(sourcePath)) {
-                errorMessage = "Selected HRIR/SOFA file does not exist.";
+                errorMessage = AndroidStrings.Active["HrirFileNotFound"];
                 return false;
             }
 
             string ext = Path.GetExtension(sourcePath).ToLowerInvariant();
             if (ext != ".wav" && ext != ".sofa") {
-                errorMessage = "Unsupported file format. Please select a .sofa or .wav HRIR/BRIR file.";
+                errorMessage = AndroidStrings.Active["HrirUnsupportedFormat"];
                 return false;
             }
 
@@ -634,7 +634,7 @@ public static class BinauralProfileService {
 
             if (info.IsCustom) {
                 if (string.IsNullOrEmpty(store.HrirPath) || !File.Exists(store.HrirPath)) {
-                    errorMessage = "Custom HRIR/SOFA file not found.";
+                    errorMessage = AndroidStrings.Active["CustomHrirNotFound"];
                     return false;
                 }
                 LoadAndOverrideCustom(store.HrirPath, useMinPhase, personalization);

@@ -655,7 +655,11 @@ public partial class MainActivity {
             OneUiIconType.Headphones, S["BentoHrtf"], sfSemi, () => {
                 store.HeadphoneVirtualizer = !store.HeadphoneVirtualizer;
                 playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
+                Services.BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+                Services.AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
                 RefreshBinauralProfileUi();
+                RefreshPersonalizationUi();
+                RefreshAutoEqUi();
                 refreshBentoTilesUi?.Invoke();
                 RefreshMusicPlayerControlsUi();
             });
@@ -2056,6 +2060,9 @@ public partial class MainActivity {
                     }
                     bool changed = false;
                     if (res.ArtworkBitmap != null) {
+                        if (meta.ArtworkBitmap != null && meta.ArtworkBitmap != res.ArtworkBitmap) {
+                            meta.ArtworkBitmap.Dispose();
+                        }
                         meta.ArtworkBitmap = res.ArtworkBitmap;
                         meta.HasEmbeddedArtwork = true;
                         MediaMetadataHelper.ExtractPalette(res.ArtworkBitmap, out Color p, out Color s);
@@ -2421,7 +2428,7 @@ public partial class MainActivity {
             List<LibraryTrackItem> fldTracks = FilterLibraryTracks(selectedLibraryFolder.Tracks);
             RenderGroupTracksDrilldown(
                 selectedLibraryFolder.FolderName,
-                $"{fldTracks.Count} faixa(s) • {selectedLibraryFolder.FolderPath}",
+                $"{string.Format(S["LibSongsCount"], fldTracks.Count)} • {selectedLibraryFolder.FolderPath}",
                 fldTracks,
                 () => { selectedLibraryFolder = null; RenderLibraryView(); });
             return;
@@ -2515,7 +2522,7 @@ public partial class MainActivity {
                     .Distinct(StringComparer.OrdinalIgnoreCase).Count();
                 LinearLayout row = BuildGroupRow(
                     art.Artist,
-                    $"{Math.Max(1, albumCnt)} álbum(ns) • {visTracks.Count} faixa(s)",
+                    $"{string.Format(S["LibAlbumsCount"], Math.Max(1, albumCnt))} • {string.Format(S["LibSongsCount"], visTracks.Count)}",
                     visTracks.FirstOrDefault(),
                     () => { selectedLibraryArtist = art.Artist; RenderLibraryView(); });
                 libraryListHost.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
@@ -2544,7 +2551,7 @@ public partial class MainActivity {
                 List<LibraryTrackItem> visTracks = filtered[i].VisTracks;
                 LinearLayout row = BuildGroupRow(
                     fld.FolderName,
-                    $"{visTracks.Count} faixa(s) • {fld.FolderPath}",
+                    $"{string.Format(S["LibSongsCount"], visTracks.Count)} • {fld.FolderPath}",
                     visTracks.FirstOrDefault(),
                     () => { selectedLibraryFolder = fld; RenderLibraryView(); },
                     isFolder: true);
@@ -2650,7 +2657,7 @@ public partial class MainActivity {
         List<LibraryMergedTrack> merged = MediaLibraryService.MergeAlbumTrackVariants(filteredRaw);
         List<LibraryTrackItem> albumQueue = merged.Select(PickPreferredVariant).Where(t => t != null).ToList();
 
-        libraryStatusText.Text = $"{alb.AlbumTitle} — {merged.Count} faixa(s)";
+        libraryStatusText.Text = $"{alb.AlbumTitle} — {string.Format(S["LibSongsCount"], merged.Count)}";
 
         LinearLayout hdrCard = Card();
         LinearLayout backRow = HRow();
@@ -3035,7 +3042,7 @@ public partial class MainActivity {
                         OneUiTheme.AttachRecoil(row, 0.97f);
 
                         LinearLayout col = new(this) { Orientation = Orientation.Vertical };
-                        string exactTag = c.IsExactMatch ? " • [Exata]" : "";
+                        string exactTag = c.IsExactMatch ? S["OnlineExactMatchBadge"] : "";
                         TextView t1 = Label($"{c.Title}{exactTag}", 12.5f, ColText);
                         t1.SetTypeface(OneUiTheme.GetAppleFontBold(this), TypefaceStyle.Bold);
                         TextView t2 = Label($"{c.Artist} • {c.Album} ({c.Source})", 11f, c.IsExactMatch ? OneUiTheme.PrimaryHigh : OneUiTheme.TextMuted);
@@ -3097,8 +3104,10 @@ public partial class MainActivity {
                         OneUiTheme.AttachRecoil(row, 0.97f);
 
                         LinearLayout col = new(this) { Orientation = Orientation.Vertical };
-                        string syncBadge = c.IsSynced ? $"[Sincronizada • {c.Source}]" : $"[Texto • {c.Source}]";
-                        string exactTag = c.IsExactMatch ? " • [Exata]" : "";
+                        string syncBadge = c.IsSynced
+                            ? string.Format(S["OnlineSyncedLyricsBadge"], c.Source)
+                            : string.Format(S["OnlinePlainLyricsBadge"], c.Source);
+                        string exactTag = c.IsExactMatch ? S["OnlineExactMatchBadge"] : "";
                         TextView t1 = Label($"{c.TrackName} — {c.ArtistName}{exactTag}", 12.5f, ColText);
                         t1.SetTypeface(OneUiTheme.GetAppleFontBold(this), TypefaceStyle.Bold);
                         TextView t2 = Label($"{syncBadge} • {c.AlbumName}", 11f, c.IsSynced ? OneUiTheme.PrimaryHigh : OneUiTheme.TextMuted);
@@ -3293,7 +3302,7 @@ public partial class MainActivity {
                         OneUiTheme.AttachRecoil(row, 0.97f);
 
                         LinearLayout col = new(this) { Orientation = Orientation.Vertical };
-                        string exactTag = cand.IsExactMatch ? " • [Exata]" : "";
+                        string exactTag = cand.IsExactMatch ? S["OnlineExactMatchBadge"] : "";
                         TextView t1 = Label($"{cand.Title}{exactTag}", 12.5f, ColText);
                         t1.SetTypeface(OneUiTheme.GetAppleFontBold(this), TypefaceStyle.Bold);
                         TextView t2 = Label($"{cand.Language} • {cand.Source}", 11f, OneUiTheme.PrimaryHigh);

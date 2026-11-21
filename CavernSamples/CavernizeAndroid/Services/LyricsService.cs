@@ -46,12 +46,32 @@ public static partial class LyricsService {
     [GeneratedRegex(@"<p\b[^>]*\bbegin\s*=\s*[""']([^""']+)[""'][^>]*?(?:\bend\s*=\s*[""']([^""']+)[""'])?[^>]*>(.*?)</p>", RegexOptions.IgnoreCase | RegexOptions.Singleline | RegexOptions.Compiled)]
     private static partial Regex TtmlLineRegex();
 
-    [GeneratedRegex(@"(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->\s*(?:(\d{1,2}):)?(\d{1,2}):(\d{2})[.,](\d{1,3})", RegexOptions.Compiled)]
-    private static partial Regex SrtTimingRegex();
-
     static readonly string[] LyricExtensions = [".lrc", ".elrc", ".ttml", ".srt", ".vtt", ".txt"];
 
     public static LyricsDocument LoadForMedia(Context ctx, Android.Net.Uri sourceUri, string sourceMediaPath, string fallbackTitle, string artist = "") {
+        return LoadForMediaCore(ctx, sourceUri, sourceMediaPath, fallbackTitle, artist, ffmpegAsync: false, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    public static Task<LyricsDocument> LoadForMediaAsync(
+        Context ctx,
+        Android.Net.Uri sourceUri,
+        string sourceMediaPath,
+        string fallbackTitle,
+        string artist = "",
+        CancellationToken ct = default) {
+        return LoadForMediaCore(ctx, sourceUri, sourceMediaPath, fallbackTitle, artist, ffmpegAsync: true, ct);
+    }
+
+    static async Task<LyricsDocument> LoadForMediaCore(
+        Context ctx,
+        Android.Net.Uri sourceUri,
+        string sourceMediaPath,
+        string fallbackTitle,
+        string artist,
+        bool ffmpegAsync,
+        CancellationToken ct) {
+        ct.ThrowIfCancellationRequested();
+
         // 1. Adjacent external .lrc / .txt files in original folder or media folder
         LyricsDocument external = TryLoadAdjacentFile(ctx, sourceUri, sourceMediaPath, fallbackTitle);
         if (external != null && external.HasLyrics) {
@@ -66,7 +86,9 @@ public static partial class LyricsService {
             }
 
             // 3. FFmpeg ffmetadata probe fallback (if FFmpeg binary is installed in FilesDir)
-            LyricsDocument ffLyrics = TryExtractWithFFmpeg(ctx, sourceMediaPath);
+            LyricsDocument ffLyrics = ffmpegAsync
+                ? await TryExtractWithFFmpegAsync(ctx, sourceMediaPath, ct).ConfigureAwait(false)
+                : await Task.Run(() => TryExtractWithFFmpegAsync(ctx, sourceMediaPath, ct), ct).ConfigureAwait(false);
             if (ffLyrics != null && ffLyrics.HasLyrics) {
                 return ffLyrics;
             }
@@ -75,7 +97,7 @@ public static partial class LyricsService {
         // 4. Online-fetched cached .lrc in app storage
         string cachedLrcPath = OnlineMetadataService.GetCachedLyricsPath(ctx, fallbackTitle, artist);
         if (!string.IsNullOrEmpty(cachedLrcPath) && IOFile.Exists(cachedLrcPath)) {
-            string raw = ReadTextAutoEncoding(cachedLrcPath);
+            string raw = MediaServiceUtils.ReadFileTextAutoEncoding(cachedLrcPath);
             LyricsDocument doc = ParseLyricsText(raw, "Online Cache");
             if (doc.HasLyrics) {
                 return doc;
@@ -123,7 +145,7 @@ public static partial class LyricsService {
                     foreach (string ext in LyricExtensions) {
                         string exact = IOPath.Combine(dir, stem + ext);
                         if (IOFile.Exists(exact)) {
-                            string raw = ReadTextAutoEncoding(exact);
+                            string raw = MediaServiceUtils.ReadFileTextAutoEncoding(exact);
                             LyricsDocument doc = ParseLyricsText(raw, IOPath.GetFileName(exact));
                             if (doc.HasLyrics) {
                                 return doc;
@@ -138,7 +160,7 @@ public static partial class LyricsService {
                         foreach (string file in Directory.EnumerateFiles(dir, "*" + ext)) {
                             string name = IOPath.GetFileNameWithoutExtension(file);
                             if (stems.Any(s => string.Equals(s, name, StringComparison.OrdinalIgnoreCase))) {
-                                string raw = ReadTextAutoEncoding(file);
+                                string raw = MediaServiceUtils.ReadFileTextAutoEncoding(file);
                                 LyricsDocument doc = ParseLyricsText(raw, IOPath.GetFileName(file));
                                 if (doc.HasLyrics) {
                                     return doc;
@@ -156,262 +178,30 @@ public static partial class LyricsService {
         return null;
     }
 
-    static string ReadTextAutoEncoding(string path) {
-        byte[] bytes = IOFile.ReadAllBytes(path);
-        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) {
-            return Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
-        }
-        if (bytes.Length >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
-            return Encoding.Unicode.GetString(bytes, 2, bytes.Length - 2);
-        }
-        if (bytes.Length >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF) {
-            return Encoding.BigEndianUnicode.GetString(bytes, 2, bytes.Length - 2);
-        }
-        try {
-            UTF8Encoding strictUtf8 = new(false, true);
-            return strictUtf8.GetString(bytes);
-        } catch {
-            return Encoding.Latin1.GetString(bytes);
-        }
-    }
-
     static LyricsDocument TryExtractEmbeddedBinaryTags(string path) {
         try {
-            using FileStream fs = IOFile.OpenRead(path);
-            long len = fs.Length;
-            int headLen = (int)Math.Min(len, 2 * 1024 * 1024);
-            byte[] head = new byte[headLen];
-            int read = 0;
-            while (read < headLen) {
-                int n = fs.Read(head, read, headLen - read);
-                if (n <= 0) break;
-                read += n;
+            ParsedAudioTags tags = AudioTagReader.TryReadTags(path);
+            if (string.IsNullOrWhiteSpace(tags?.Lyrics)) {
+                return null;
             }
-            if (read < headLen) {
-                Array.Resize(ref head, read);
-            }
-
-            // ID3v2 header check ("ID3")
-            if (head.Length >= 10 && head[0] == (byte)'I' && head[1] == (byte)'D' && head[2] == (byte)'3') {
-                LyricsDocument id3 = ParseId3v2Lyrics(head);
-                if (id3 != null && id3.HasLyrics) {
-                    return id3;
-                }
-            }
-
-            // FLAC / Ogg Vorbis Comment scan
-            string vorbisText = ScanVorbisLyrics(head);
-            if (!string.IsNullOrWhiteSpace(vorbisText)) {
-                LyricsDocument doc = ParseLyricsText(vorbisText, "Vorbis Tag");
-                if (doc.HasLyrics) {
-                    return doc;
-                }
-            }
-
-            // MP4 / M4A ©lyr atom (in head or tail moov box)
-            string mp4Text = ScanMp4LyricsAtom(head);
-            if (string.IsNullOrWhiteSpace(mp4Text) && len > headLen) {
-                int tailLen = (int)Math.Min(len - headLen, 2 * 1024 * 1024);
-                byte[] tail = new byte[tailLen];
-                fs.Seek(len - tailLen, SeekOrigin.Begin);
-                int tRead = 0;
-                while (tRead < tailLen) {
-                    int n = fs.Read(tail, tRead, tailLen - tRead);
-                    if (n <= 0) break;
-                    tRead += n;
-                }
-                if (tRead > 0) {
-                    mp4Text = ScanMp4LyricsAtom(tail.AsSpan(0, tRead));
-                }
-            }
-            if (!string.IsNullOrWhiteSpace(mp4Text)) {
-                LyricsDocument doc = ParseLyricsText(mp4Text, "MP4 ©lyr");
-                if (doc.HasLyrics) {
-                    return doc;
-                }
-            }
+            string ext = IOPath.GetExtension(path ?? "").ToLowerInvariant();
+            string label = ext switch {
+                ".mp3" => "ID3v2",
+                ".flac" => "Vorbis Tag",
+                ".m4a" or ".mp4" or ".m4v" or ".mov" or ".qt" => "MP4 ©lyr",
+                _ => "Embedded Tags"
+            };
+            LyricsDocument doc = ParseLyricsText(tags.Lyrics, label);
+            return doc.HasLyrics ? doc : null;
         } catch (Exception ex) {
             AppLogger.Error("LyricsService.TryExtractEmbeddedBinaryTags", ex);
+            return null;
         }
-        return null;
     }
 
-    static LyricsDocument ParseId3v2Lyrics(byte[] data) {
-        if (data.Length < 10) return null;
-        byte verMajor = data[3];
-        if (verMajor < 3 || verMajor > 4) return null;
-
-        int tagSize = ((data[6] & 0x7F) << 21) | ((data[7] & 0x7F) << 14) | ((data[8] & 0x7F) << 7) | (data[9] & 0x7F);
-        int limit = Math.Min(data.Length, 10 + tagSize);
-        int pos = 10;
-
-        // Skip extended header if flag bit 6 set
-        if ((data[5] & 0x40) != 0 && pos + 4 <= limit) {
-            int extSize = verMajor == 4
-                ? ((data[pos] & 0x7F) << 21) | ((data[pos + 1] & 0x7F) << 14) | ((data[pos + 2] & 0x7F) << 7) | (data[pos + 3] & 0x7F)
-                : BinaryPrimitives.ReadInt32BigEndian(data.AsSpan(pos, 4)) + 4;
-            pos += Math.Max(4, extSize);
-        }
-
-        string fallbackUslt = null;
-        while (pos + 10 <= limit) {
-            if (data[pos] == 0) break;
-            string frameId = Encoding.ASCII.GetString(data, pos, 4);
-            int frameSize = verMajor == 4
-                ? ((data[pos + 4] & 0x7F) << 21) | ((data[pos + 5] & 0x7F) << 14) | ((data[pos + 6] & 0x7F) << 7) | (data[pos + 7] & 0x7F)
-                : BinaryPrimitives.ReadInt32BigEndian(data.AsSpan(pos + 4, 4));
-            pos += 10;
-            if (frameSize <= 0 || pos + frameSize > limit) break;
-
-            if (frameId == "SYLT") {
-                LyricsDocument syltDoc = ParseId3SyltFrame(data.AsSpan(pos, frameSize));
-                if (syltDoc != null && syltDoc.HasLyrics) {
-                    return syltDoc;
-                }
-            } else if (frameId == "USLT" && string.IsNullOrWhiteSpace(fallbackUslt)) {
-                fallbackUslt = ParseId3UsltFrame(data.AsSpan(pos, frameSize));
-            }
-            pos += frameSize;
-        }
-
-        return !string.IsNullOrWhiteSpace(fallbackUslt)
-            ? ParseLyricsText(fallbackUslt, "ID3v2 USLT")
-            : null;
-    }
-
-    static string ParseId3UsltFrame(ReadOnlySpan<byte> frame) {
-        if (frame.Length < 5) return null;
-        byte enc = frame[0];
-        int i = 4; // skip encoding + 3-byte lang
-        SkipNullTerminatedString(frame, enc, ref i);
-        if (i >= frame.Length) return null;
-        return DecodeId3String(frame[i..], enc);
-    }
-
-    static LyricsDocument ParseId3SyltFrame(ReadOnlySpan<byte> frame) {
-        if (frame.Length < 7) return null;
-        byte enc = frame[0];
-        byte tsFormat = frame[4]; // 2 = milliseconds
-        int i = 6; // enc(1) + lang(3) + tsFormat(1) + contentType(1)
-        SkipNullTerminatedString(frame, enc, ref i);
-
-        List<LyricCue> cues = [];
-        int stepNull = (enc == 1 || enc == 2) ? 2 : 1;
-        while (i < frame.Length) {
-            int strStart = i;
-            int termPos = FindNullTerminator(frame, enc, i);
-            if (termPos < 0 || termPos + stepNull + 4 > frame.Length) break;
-
-            string txt = DecodeId3String(frame[strStart..termPos], enc).Trim('\0', '\r', '\n');
-            int tsPos = termPos + stepNull;
-            uint tsVal = BinaryPrimitives.ReadUInt32BigEndian(frame.Slice(tsPos, 4));
-            double sec = tsFormat == 2 ? tsVal / 1000.0 : tsVal / 25.0;
-            if (!string.IsNullOrWhiteSpace(txt)) {
-                cues.Add(new LyricCue(sec, txt));
-            }
-            i = tsPos + 4;
-        }
-        if (cues.Count < 2) return null;
-        cues.Sort((a, b) => a.TimeSeconds.CompareTo(b.TimeSeconds));
-        return new LyricsDocument {
-            IsSynced = true,
-            Lines = cues,
-            SourceLabel = "ID3v2 SYLT"
-        };
-    }
-
-    static void SkipNullTerminatedString(ReadOnlySpan<byte> frame, byte enc, ref int idx) {
-        int stepNull = (enc == 1 || enc == 2) ? 2 : 1;
-        int end = FindNullTerminator(frame, enc, idx);
-        idx = end >= 0 ? end + stepNull : frame.Length;
-    }
-
-    static int FindNullTerminator(ReadOnlySpan<byte> frame, byte enc, int start) {
-        if (enc == 1 || enc == 2) {
-            for (int i = start; i + 1 < frame.Length; i += 2) {
-                if (frame[i] == 0 && frame[i + 1] == 0) return i;
-            }
-            return -1;
-        }
-        for (int i = start; i < frame.Length; i++) {
-            if (frame[i] == 0) return i;
-        }
-        return -1;
-    }
-
-    static string DecodeId3String(ReadOnlySpan<byte> bytes, byte enc) {
-        if (bytes.IsEmpty) return "";
-        Encoding decoder = enc switch {
-            0 => Encoding.Latin1,
-            1 => Encoding.Unicode,
-            2 => Encoding.BigEndianUnicode,
-            3 => Encoding.UTF8,
-            _ => Encoding.UTF8
-        };
-        if (enc == 1 && bytes.Length >= 2) {
-            if (bytes[0] == 0xFE && bytes[1] == 0xFF) {
-                decoder = Encoding.BigEndianUnicode;
-                bytes = bytes[2..];
-            } else if (bytes[0] == 0xFF && bytes[1] == 0xFE) {
-                decoder = Encoding.Unicode;
-                bytes = bytes[2..];
-            }
-        }
-        return decoder.GetString(bytes).TrimEnd('\0');
-    }
-
-    static string ScanVorbisLyrics(ReadOnlySpan<byte> data) {
-        string[] keys = ["SYNCEDLYRICS=", "LYRICS=", "UNSYNCEDLYRICS="];
-        foreach (string key in keys) {
-            int idx = IndexOfAsciiCaseInsensitive(data, key);
-            if (idx >= 4) {
-                int len = BinaryPrimitives.ReadInt32LittleEndian(data.Slice(idx - 4, 4));
-                if (len > key.Length && len <= 512 * 1024 && idx + len <= data.Length) {
-                    return Encoding.UTF8.GetString(data.Slice(idx + key.Length, len - key.Length));
-                }
-            }
-        }
-        return null;
-    }
-
-    static string ScanMp4LyricsAtom(ReadOnlySpan<byte> data) {
-        ReadOnlySpan<byte> lyrMarker = [0xA9, (byte)'l', (byte)'y', (byte)'r'];
-        int pos = data.IndexOf(lyrMarker);
-        if (pos < 0 || pos + 20 >= data.Length) return null;
-
-        ReadOnlySpan<byte> tail = data[(pos + 4)..Math.Min(data.Length, pos + 4096)];
-        ReadOnlySpan<byte> dataMarker = [(byte)'d', (byte)'a', (byte)'t', (byte)'a'];
-        int dIdx = tail.IndexOf(dataMarker);
-        if (dIdx < 4 || dIdx + 12 >= tail.Length) return null;
-
-        int atomLen = BinaryPrimitives.ReadInt32BigEndian(tail.Slice(dIdx - 4, 4));
-        int payloadStart = dIdx + 12; // 'data' (4) + flags/type (4) + locale (4)
-        int payloadLen = Math.Min(atomLen - 16, tail.Length - payloadStart);
-        if (payloadLen <= 0) return null;
-        return Encoding.UTF8.GetString(tail.Slice(payloadStart, payloadLen)).Trim();
-    }
-
-    static int IndexOfAsciiCaseInsensitive(ReadOnlySpan<byte> haystack, string asciiNeedle) {
-        int n = asciiNeedle.Length;
-        for (int i = 0; i <= haystack.Length - n; i++) {
-            bool match = true;
-            for (int j = 0; j < n; j++) {
-                byte b = haystack[i + j];
-                char c = asciiNeedle[j];
-                if (b >= 'a' && b <= 'z') b = (byte)(b - 32);
-                if (c >= 'a' && c <= 'z') c = (char)(c - 32);
-                if (b != c) {
-                    match = false;
-                    break;
-                }
-            }
-            if (match) return i;
-        }
-        return -1;
-    }
-
-    static LyricsDocument TryExtractWithFFmpeg(Context ctx, string mediaPath) {
+    static async Task<LyricsDocument> TryExtractWithFFmpegAsync(Context ctx, string mediaPath, CancellationToken ct = default) {
         try {
+            ct.ThrowIfCancellationRequested();
             string ffmpeg = FFmpegInstallerService.GetManagedFFmpegPath(ctx);
             if (string.IsNullOrEmpty(ffmpeg) || !IOFile.Exists(ffmpeg)) {
                 return null;
@@ -430,10 +220,28 @@ public static partial class LyricsService {
             psi.ArgumentList.Add("-f");
             psi.ArgumentList.Add("ffmetadata");
             psi.ArgumentList.Add("-");
-            var run = FFmpegInstallerService.RunProcessSafe(psi, 4000);
-            if (run.exitCode != 0 || string.IsNullOrWhiteSpace(run.stdout)) return null;
+            FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpeg);
 
-            string rawVal = ExtractKeyFromFFMetadata(run.stdout, "lyrics");
+            using Process proc = Process.Start(psi);
+            if (proc == null) return null;
+
+            using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(4000);
+            using CancellationTokenRegistration ctr = timeoutCts.Token.Register(() => {
+                try {
+                    if (!proc.HasExited) proc.Kill(entireProcessTree: true);
+                } catch { }
+            });
+
+            Task<string> stdoutTask = proc.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+            Task<string> stderrTask = proc.StandardError.ReadToEndAsync(timeoutCts.Token);
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
+            await proc.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+
+            string stdout = stdoutTask.Result;
+            if (proc.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout)) return null;
+
+            string rawVal = ExtractKeyFromFFMetadata(stdout, "lyrics");
             if (string.IsNullOrWhiteSpace(rawVal)) {
                 return null;
             }
@@ -488,8 +296,13 @@ public static partial class LyricsService {
 
         // Check SRT / WebVTT format (explicit start --> end markers)
         if (normalized.Contains("-->", StringComparison.Ordinal)) {
-            List<LyricCue> srtCues = ParseSrtOrVttCues(normalized);
-            if (srtCues.Count >= 1) {
+            List<TimedTextCue> parsed = MediaServiceUtils.ParseSrtOrVttCues(normalized, stripCurlyTags: false, requireEndAfterStart: false, lineSeparator: " ");
+            if (parsed.Count >= 1) {
+                List<LyricCue> srtCues = new(parsed.Count);
+                for (int i = 0; i < parsed.Count; i++) {
+                    TimedTextCue c = parsed[i];
+                    srtCues.Add(new LyricCue(c.StartSec, c.Text, c.EndSec > c.StartSec ? c.EndSec : null));
+                }
                 return new LyricsDocument {
                     IsSynced = true,
                     Lines = srtCues,
@@ -612,41 +425,6 @@ public static partial class LyricsService {
             inner = Regex.Replace(inner, @"\s+", " ").Trim();
             if (!string.IsNullOrWhiteSpace(inner)) {
                 cues.Add(new LyricCue(start, inner, end));
-            }
-        }
-        cues.Sort((a, b) => a.TimeSeconds.CompareTo(b.TimeSeconds));
-        return cues;
-    }
-
-    static List<LyricCue> ParseSrtOrVttCues(string normalized) {
-        List<LyricCue> cues = [];
-        string[] blocks = normalized.Split("\n\n", StringSplitOptions.RemoveEmptyEntries);
-        foreach (string blk in blocks) {
-            string[] lines = blk.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            int timingIdx = -1;
-            double start = 0;
-            double end = 0;
-            for (int i = 0; i < Math.Min(3, lines.Length); i++) {
-                Match tm = SrtTimingRegex().Match(lines[i]);
-                if (!tm.Success) continue;
-                int h1 = tm.Groups[1].Success ? int.Parse(tm.Groups[1].Value) : 0;
-                int m1 = int.Parse(tm.Groups[2].Value);
-                int s1 = int.Parse(tm.Groups[3].Value);
-                double f1 = double.Parse(tm.Groups[4].Value) / Math.Pow(10, tm.Groups[4].Value.Length);
-                int h2 = tm.Groups[5].Success ? int.Parse(tm.Groups[5].Value) : 0;
-                int m2 = int.Parse(tm.Groups[6].Value);
-                int s2 = int.Parse(tm.Groups[7].Value);
-                double f2 = double.Parse(tm.Groups[8].Value) / Math.Pow(10, tm.Groups[8].Value.Length);
-                start = h1 * 3600 + m1 * 60 + s1 + f1;
-                end = h2 * 3600 + m2 * 60 + s2 + f2;
-                timingIdx = i;
-                break;
-            }
-            if (timingIdx < 0 || timingIdx + 1 >= lines.Length) continue;
-            string txt = string.Join(" ", lines[(timingIdx + 1)..]);
-            txt = Regex.Replace(txt, @"<[^>]+>", "").Trim();
-            if (!string.IsNullOrWhiteSpace(txt)) {
-                cues.Add(new LyricCue(start, txt, end > start ? end : null));
             }
         }
         cues.Sort((a, b) => a.TimeSeconds.CompareTo(b.TimeSeconds));

@@ -331,7 +331,11 @@ public partial class MainActivity {
                 bool next = !store.HeadphoneVirtualizer;
                 store.HeadphoneVirtualizer = next;
                 playerEngine.HeadphoneVirtualizer = next;
+                Services.BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+                Services.AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
                 RefreshBinauralProfileUi();
+                RefreshPersonalizationUi();
+                RefreshAutoEqUi();
                 RefreshMusicPlayerControlsUi();
             },
             OneUiTheme.IconSpatial,

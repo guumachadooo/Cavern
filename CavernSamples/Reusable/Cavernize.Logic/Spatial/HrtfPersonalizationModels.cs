@@ -1,3 +1,6 @@
+using System.Numerics;
+
+using Cavern;
 using Cavern.Filters;
 using Cavern.Virtualizer;
 
@@ -330,5 +333,127 @@ public static class PerceptualHrtfWizardCatalog {
             }
         }
         return stereo;
+    }
+
+    /// <summary>
+    /// Renders a deterministic 4-point broadband spatial audition cue (Front, Left, Right, Overhead Rear-Left)
+    /// directly through the active <see cref="VirtualizerFilter"/> HRIR/MagLS/Min-Phase convolution kernel,
+    /// isolating static Listener/Virtualizer globals safely. Falls back to <see cref="SynthesizeAuditionCueStereo"/>
+    /// if no virtualizer channels are active.
+    /// </summary>
+    public static float[] SynthesizeAuditionCueBinaural(int sampleRate = 48000, float headWidthCm = 15.5f) {
+        try {
+            using IDisposable virtScope = VirtualizerFilter.BeginStaticStateScope();
+            using Cavernize.Logic.Rendering.StemExtractor.ListenerStateScope listenerScope = new();
+
+            int renderRate = VirtualizerFilter.FilterSampleRate >= 8000
+                ? VirtualizerFilter.FilterSampleRate
+                : (sampleRate >= 8000 ? sampleRate : 48000);
+            Listener.HeadphoneVirtualizer = true;
+            Listener.EnvironmentSize = new Vector3(10f, 10f, 10f);
+            new VirtualizerFilter().SetLayout();
+            Listener.HeadphoneVirtualizer = true;
+
+            int burstFrames = (int)Math.Round(renderRate * 0.75);
+            const int updateRate = 256;
+            int paddedBurstFrames = ((burstFrames + updateRate - 1) / updateRate) * updateRate;
+            int totalRenderFrames = paddedBurstFrames * 4;
+            float[] outStereo = new float[totalRenderFrames * 2];
+
+            Vector3[] dirs = [
+                new Vector3(0f, 0f, 3.0f),
+                new Vector3(-3.0f, 0f, 0f),
+                new Vector3(3.0f, 0f, 0f),
+                new Vector3(-2.1f, 1.8f, -2.1f)
+            ];
+
+            uint rng = 0x5EED1234u;
+            double b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+            int activeLen = (int)(burstFrames * 0.78);
+            int fade = Math.Max(64, renderRate / 50);
+
+            for (int c = 0; c < dirs.Length; c++) {
+                float[] mono = new float[paddedBurstFrames];
+                for (int n = 0; n < activeLen; n++) {
+                    rng ^= rng << 13;
+                    rng ^= rng >> 17;
+                    rng ^= rng << 5;
+                    double white = ((rng & 0xFFFFFFu) / (double)0x800000u) - 1.0;
+                    b0 = 0.99886 * b0 + white * 0.0555179;
+                    b1 = 0.99332 * b1 + white * 0.0750759;
+                    b2 = 0.96900 * b2 + white * 0.1538520;
+                    b3 = 0.86650 * b3 + white * 0.3104856;
+                    b4 = 0.55000 * b4 + white * 0.5329522;
+                    b5 = -0.7616 * b5 - white * 0.0168980;
+                    double pink = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
+                    b6 = white * 0.115926;
+
+                    double subEnv = (n % (activeLen / 2)) < (activeLen / 3) ? 1.0 : 0.25;
+                    double edgeEnv = 1.0;
+                    if (n < fade) edgeEnv = 0.5 - 0.5 * Math.Cos(Math.PI * n / fade);
+                    else if (n >= activeLen - fade) edgeEnv = 0.5 - 0.5 * Math.Cos(Math.PI * (activeLen - 1 - n) / fade);
+                    mono[n] = (float)(pink * subEnv * edgeEnv * 0.35);
+                }
+
+                Listener listener = new(false) {
+                    SampleRate = renderRate,
+                    UpdateRate = updateRate,
+                    AudioQuality = QualityModes.Perfect,
+                    MaximumSources = 8,
+                    Normalizer = 0f,
+                    Position = Vector3.Zero,
+                    Rotation = Vector3.Zero
+                };
+                Source src = new() {
+                    Clip = new Clip(mono, 1, renderRate),
+                    Position = dirs[c],
+                    Volume = 1f,
+                    SpatialBlend = 1f,
+                    DistanceSimulation = false,
+                    VolumeRolloff = Rolloffs.Disabled
+                };
+                listener.AttachSource(src);
+
+                int stride = Math.Max(2, Listener.Channels.Length);
+                int blocks = paddedBurstFrames / updateRate;
+                int baseFrame = c * paddedBurstFrames;
+                float[] rendered = listener.Render(blocks);
+                for (int f = 0; f < paddedBurstFrames; f++) {
+                    int dst = (baseFrame + f) * 2;
+                    outStereo[dst] = rendered[f * stride];
+                    outStereo[dst + 1] = rendered[f * stride + 1];
+                }
+            }
+
+            float peak = 0f;
+            for (int i = 0; i < outStereo.Length; i++) {
+                float a = MathF.Abs(outStereo[i]);
+                if (a > peak) peak = a;
+            }
+            if (peak > 1e-4f) {
+                float normGain = MathF.Min(2.0f, 0.5f / peak);
+                for (int i = 0; i < outStereo.Length; i++) {
+                    outStereo[i] *= normGain;
+                }
+            }
+
+            if (sampleRate > 0 && sampleRate != renderRate) {
+                int targetFrames = Math.Max(1, (int)Math.Round(totalRenderFrames * (double)sampleRate / renderRate));
+                float[] resampled = new float[targetFrames * 2];
+                double step = (double)(totalRenderFrames - 1) / Math.Max(1, targetFrames - 1);
+                for (int i = 0; i < targetFrames; i++) {
+                    double pos = i * step;
+                    int i0 = Math.Clamp((int)pos, 0, totalRenderFrames - 1);
+                    int i1 = Math.Min(i0 + 1, totalRenderFrames - 1);
+                    float frac = (float)(pos - i0);
+                    resampled[i * 2] = outStereo[i0 * 2] + (outStereo[i1 * 2] - outStereo[i0 * 2]) * frac;
+                    resampled[i * 2 + 1] = outStereo[i0 * 2 + 1] + (outStereo[i1 * 2 + 1] - outStereo[i0 * 2 + 1]) * frac;
+                }
+                return resampled;
+            }
+            return outStereo;
+        } catch {
+            return SynthesizeAuditionCueStereo(sampleRate, headWidthCm);
+        }
     }
 }

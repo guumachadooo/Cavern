@@ -58,9 +58,13 @@ public sealed class AudioQualityReport {
 /// </summary>
 public static class AudioQualityAnalyzer {
     const string CacheFileName = "quality_analysis_v1.json";
+    const int MaxCacheEntries = 4000;
 
     static readonly ConcurrentDictionary<string, AudioQualityReport> memCache = new(StringComparer.OrdinalIgnoreCase);
     static readonly ConcurrentDictionary<string, byte> inFlight = new(StringComparer.OrdinalIgnoreCase);
+    static readonly LinkedList<string> cacheLru = new();
+    static readonly Dictionary<string, LinkedListNode<string>> cacheLruNodes = new(StringComparer.OrdinalIgnoreCase);
+    static readonly object cacheLruLock = new();
     static readonly object diskLock = new();
     static bool diskLoaded;
     static string cachedDiskPath;
@@ -122,7 +126,7 @@ public static class AudioQualityAnalyzer {
                     if (list != null) {
                         for (int i = 0; i < list.Count; i++) {
                             if (!string.IsNullOrEmpty(list[i]?.CacheKey)) {
-                                memCache[list[i].CacheKey] = list[i];
+                                StoreCacheEntry(list[i].CacheKey, list[i]);
                             }
                         }
                     }
@@ -135,18 +139,65 @@ public static class AudioQualityAnalyzer {
         }
     }
 
+    static void StoreCacheEntry(string key, AudioQualityReport report) {
+        if (string.IsNullOrEmpty(key) || report == null) {
+            return;
+        }
+        memCache[key] = report;
+        lock (cacheLruLock) {
+            if (cacheLruNodes.TryGetValue(key, out LinkedListNode<string> node)) {
+                cacheLru.Remove(node);
+                cacheLru.AddLast(node);
+            } else {
+                node = cacheLru.AddLast(key);
+                cacheLruNodes[key] = node;
+            }
+            while (cacheLru.Count > MaxCacheEntries) {
+                LinkedListNode<string> oldest = cacheLru.First;
+                if (oldest == null) break;
+                cacheLru.RemoveFirst();
+                cacheLruNodes.Remove(oldest.Value);
+                memCache.TryRemove(oldest.Value, out _);
+            }
+        }
+    }
+
+    static void TouchCacheEntry(string key) {
+        if (string.IsNullOrEmpty(key)) {
+            return;
+        }
+        lock (cacheLruLock) {
+            if (cacheLruNodes.TryGetValue(key, out LinkedListNode<string> node)) {
+                cacheLru.Remove(node);
+                cacheLru.AddLast(node);
+            }
+        }
+    }
+
     static void PersistCache() {
         if (string.IsNullOrEmpty(cachedDiskPath)) {
             return;
         }
         lock (diskLock) {
             try {
-                List<AudioQualityReport> snapshot = memCache.Values
-                    .Where(r => r != null && !string.IsNullOrEmpty(r.CacheKey))
-                    .Take(4000)
-                    .ToList();
+                List<string> keysSnapshot;
+                lock (cacheLruLock) {
+                    keysSnapshot = [.. cacheLru];
+                }
+                List<AudioQualityReport> snapshot = new(Math.Min(keysSnapshot.Count, MaxCacheEntries));
+                for (int i = Math.Max(0, keysSnapshot.Count - MaxCacheEntries); i < keysSnapshot.Count; i++) {
+                    if (memCache.TryGetValue(keysSnapshot[i], out AudioQualityReport rep) && rep != null && !string.IsNullOrEmpty(rep.CacheKey)) {
+                        snapshot.Add(rep);
+                    }
+                }
+                if (snapshot.Count == 0 && !memCache.IsEmpty) {
+                    snapshot = memCache.Values
+                        .Where(r => r != null && !string.IsNullOrEmpty(r.CacheKey))
+                        .Take(MaxCacheEntries)
+                        .ToList();
+                }
                 string json = JsonSerializer.Serialize(snapshot);
-                IOFile.WriteAllText(cachedDiskPath, json);
+                MediaServiceUtils.WriteTextAtomic(cachedDiskPath, json);
             } catch {
                 // Non-critical cache write failure
             }
@@ -166,11 +217,12 @@ public static class AudioQualityAnalyzer {
         }
         string key = BuildCacheKey(item);
         if (memCache.TryGetValue(key, out AudioQualityReport cached)) {
+            TouchCacheEntry(key);
             return cached;
         }
 
         AudioQualityReport report = BuildFastHeuristicReport(item, key);
-        memCache[key] = report;
+        StoreCacheEntry(key, report);
         return report;
     }
 
@@ -244,19 +296,21 @@ public static class AudioQualityAnalyzer {
         Context ctx,
         IReadOnlyList<LibraryTrackItem> variants,
         string ffmpegPath,
-        Action onAnyUpdated) {
-        if (ctx == null || variants == null || variants.Count == 0) {
+        Action onAnyUpdated,
+        CancellationToken ct = default) {
+        if (ctx == null || variants == null || variants.Count == 0 || ct.IsCancellationRequested) {
             return;
         }
         EnsureCacheLoaded(ctx);
-        List<LibraryTrackItem> pending = [];
+        List<(LibraryTrackItem Item, string Key)> pending = [];
         for (int i = 0; i < variants.Count; i++) {
+            if (ct.IsCancellationRequested) break;
             LibraryTrackItem v = variants[i];
             if (v == null || string.IsNullOrEmpty(v.FilePath) || !IOFile.Exists(v.FilePath)) continue;
             string k = BuildCacheKey(v);
             if (memCache.TryGetValue(k, out AudioQualityReport rep) && rep.DeepAnalyzed) continue;
             if (inFlight.TryAdd(k, 1)) {
-                pending.Add(v);
+                pending.Add((v, k));
             }
         }
         if (pending.Count == 0) {
@@ -267,14 +321,18 @@ public static class AudioQualityAnalyzer {
             bool updated = false;
             try {
                 for (int i = 0; i < pending.Count; i++) {
-                    LibraryTrackItem item = pending[i];
-                    string key = BuildCacheKey(item);
+                    if (ct.IsCancellationRequested) {
+                        break;
+                    }
+                    var (item, key) = pending[i];
                     try {
-                        AudioQualityReport deep = RunDeepAnalysis(item, ffmpegPath);
+                        AudioQualityReport deep = RunDeepAnalysis(item, ffmpegPath, ct);
                         if (deep != null) {
-                            memCache[key] = deep;
+                            StoreCacheEntry(key, deep);
                             updated = true;
                         }
+                    } catch (OperationCanceledException) {
+                        break;
                     } catch (Exception ex) {
                         AppLogger.Warn($"Deep quality analysis skipped for '{IOPath.GetFileName(item.FilePath)}': {ex.Message}");
                     } finally {
@@ -283,10 +341,16 @@ public static class AudioQualityAnalyzer {
                 }
                 if (updated) {
                     PersistCache();
-                    onAnyUpdated?.Invoke();
+                    if (!ct.IsCancellationRequested) {
+                        onAnyUpdated?.Invoke();
+                    }
                 }
             } catch {
                 // Keep playback undisturbed
+            } finally {
+                for (int i = 0; i < pending.Count; i++) {
+                    inFlight.TryRemove(pending[i].Key, out _);
+                }
             }
         });
     }
@@ -495,28 +559,95 @@ public static class AudioQualityAnalyzer {
         if (parsedBits is >= 8 and <= 32) bitDepth = parsedBits;
     }
 
+    static bool TryFindWavHeaderAndData(
+        FileStream fs,
+        out int audioFmt,
+        out int channels,
+        out int sr,
+        out int bits,
+        out long dataOffset,
+        out long dataLen,
+        bool stopAtFmtOnly) {
+        audioFmt = 1;
+        channels = 0;
+        sr = 0;
+        bits = 0;
+        dataOffset = -1;
+        dataLen = 0;
+        if (fs.Length < 44) return false;
+
+        Span<byte> riffHdr = stackalloc byte[12];
+        if (fs.Read(riffHdr) < 12) return false;
+        bool isRiff = riffHdr[0] == 'R' && riffHdr[1] == 'I' && riffHdr[2] == 'F' && riffHdr[3] == 'F';
+        bool isRf64 = riffHdr[0] == 'R' && riffHdr[1] == 'F' && riffHdr[2] == '6' && riffHdr[3] == '4';
+        if ((!isRiff && !isRf64) || riffHdr[8] != 'W' || riffHdr[9] != 'A' || riffHdr[10] != 'V' || riffHdr[11] != 'E') {
+            return false;
+        }
+
+        bool foundFmt = false;
+        long rf64DataSize = -1;
+        Span<byte> chunkHdr = stackalloc byte[8];
+        Span<byte> fmtBuf = stackalloc byte[40];
+        Span<byte> ds64Buf = stackalloc byte[24];
+        int maxChunks = 512;
+
+        while (maxChunks-- > 0 && fs.Position + 8 <= fs.Length) {
+            if (fs.Read(chunkHdr) < 8) break;
+            uint szU32 = BinaryPrimitives.ReadUInt32LittleEndian(chunkHdr[4..8]);
+            long chunkDataStart = fs.Position;
+
+            bool isDs64 = chunkHdr[0] == 'd' && chunkHdr[1] == 's' && chunkHdr[2] == '6' && chunkHdr[3] == '4';
+            bool isFmt = chunkHdr[0] == 'f' && chunkHdr[1] == 'm' && chunkHdr[2] == 't' && chunkHdr[3] == ' ';
+            bool isData = chunkHdr[0] == 'd' && chunkHdr[1] == 'a' && chunkHdr[2] == 't' && chunkHdr[3] == 'a';
+
+            if (isDs64 && szU32 >= 24 && chunkDataStart + 24 <= fs.Length) {
+                if (fs.Read(ds64Buf) == 24) {
+                    rf64DataSize = BinaryPrimitives.ReadInt64LittleEndian(ds64Buf.Slice(8, 8));
+                }
+            } else if (isFmt && szU32 >= 16 && chunkDataStart + 16 <= fs.Length) {
+                int toRead = (int)Math.Min(40, Math.Min(szU32, (ulong)(fs.Length - chunkDataStart)));
+                if (fs.Read(fmtBuf[..toRead]) >= 16) {
+                    audioFmt = BinaryPrimitives.ReadUInt16LittleEndian(fmtBuf[..2]);
+                    channels = BinaryPrimitives.ReadUInt16LittleEndian(fmtBuf.Slice(2, 2));
+                    sr = BinaryPrimitives.ReadInt32LittleEndian(fmtBuf.Slice(4, 4));
+                    bits = BinaryPrimitives.ReadUInt16LittleEndian(fmtBuf.Slice(14, 2));
+                    foundFmt = true;
+                    if (stopAtFmtOnly) {
+                        return true;
+                    }
+                }
+            } else if (isData) {
+                dataOffset = chunkDataStart;
+                long avail = fs.Length - dataOffset;
+                if (szU32 == 0xFFFFFFFF && rf64DataSize > 0) {
+                    dataLen = Math.Min(rf64DataSize, avail);
+                } else if (szU32 > 0) {
+                    dataLen = Math.Min(szU32, avail);
+                } else {
+                    dataLen = avail;
+                }
+                if (foundFmt) {
+                    return true;
+                }
+            }
+
+            long chunkLen = (szU32 == 0xFFFFFFFF && isData && rf64DataSize > 0) ? rf64DataSize : szU32;
+            long paddedLen = chunkLen + (chunkLen & 1L);
+            long nextPos = chunkDataStart + paddedLen;
+            if (nextPos <= chunkDataStart || nextPos > fs.Length) break;
+            fs.Position = nextPos;
+        }
+        return foundFmt;
+    }
+
     static void TryReadWavHeader(string path, ref int sr, ref int bitDepth, ref int channels) {
         using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        byte[] buf = new byte[256];
-        int read = fs.Read(buf, 0, buf.Length);
-        if (read < 44) return;
-        if (buf[0] != 'R' || buf[1] != 'I' || buf[2] != 'F' || buf[3] != 'F') return;
-        int pos = 12;
-        while (pos + 8 <= read) {
-            bool isFmt = buf[pos] == 'f' && buf[pos + 1] == 'm' && buf[pos + 2] == 't' && buf[pos + 3] == ' ';
-            int chunkSize = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(pos + 4, 4));
-            if (isFmt && pos + 24 <= read) {
-                int ch = BinaryPrimitives.ReadUInt16LittleEndian(buf.AsSpan(pos + 10, 2));
-                int s = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(pos + 12, 4));
-                int b = BinaryPrimitives.ReadUInt16LittleEndian(buf.AsSpan(pos + 22, 2));
-                if (ch is >= 1 and <= 32) channels = ch;
-                if (s is >= 8000 and <= 384000) sr = s;
-                if (b is >= 8 and <= 64) bitDepth = b;
-                return;
-            }
-            if (chunkSize < 0) break;
-            pos += 8 + chunkSize + (chunkSize & 1);
+        if (!TryFindWavHeaderAndData(fs, out _, out int ch, out int s, out int b, out _, out _, stopAtFmtOnly: true)) {
+            return;
         }
+        if (ch is >= 1 and <= 32) channels = ch;
+        if (s is >= 8000 and <= 384000) sr = s;
+        if (b is >= 8 and <= 64) bitDepth = b;
     }
 
     static void TryReadMediaExtractorMeta(
@@ -569,7 +700,7 @@ public static class AudioQualityAnalyzer {
     // ============================================================
     // DEEP PCM + FFT + EFFECTIVE BIT-DEPTH + DR + CLIPPING ENGINE
     // ============================================================
-    static AudioQualityReport RunDeepAnalysis(LibraryTrackItem item, string ffmpegPath) {
+    static AudioQualityReport RunDeepAnalysis(LibraryTrackItem item, string ffmpegPath, CancellationToken ct = default) {
         string key = BuildCacheKey(item);
         AudioQualityReport report = BuildFastHeuristicReport(item, key);
 
@@ -581,19 +712,23 @@ public static class AudioQualityAnalyzer {
 
         string ext = IOPath.GetExtension(item.FilePath ?? "").ToLowerInvariant();
         if (ext == ".wav") {
-            monoSamples = DecodeWavWindow(item.FilePath, out decodedSr, out int wavBits, out inspectedRaw24Bit, out lsbZeroPadded);
+            monoSamples = DecodeWavWindow(item.FilePath, out int wavSr, out int wavBits, out inspectedRaw24Bit, out lsbZeroPadded);
+            if (monoSamples != null && wavSr > 0) decodedSr = wavSr;
             if (wavBits > 0) report.DeclaredBitDepth = wavBits;
         }
 
         // If 24-bit FLAC/ALAC/TrueHD and FFmpeg is available, read exact 32-bit PCM so we can genuinely detect fake 24-bit
         if (monoSamples == null && !string.IsNullOrEmpty(ffmpegPath) && IOFile.Exists(ffmpegPath) &&
             (report.DeclaredBitDepth >= 24 || ext is ".thd" or ".mlp" or ".atmos" or ".dts")) {
-            monoSamples = DecodeWithFfmpegS32Window(item.FilePath, ffmpegPath, item.DurationMs, decodedSr, out inspectedRaw24Bit, out lsbZeroPadded);
+            monoSamples = DecodeWithFfmpegS32Window(item.FilePath, ffmpegPath, item.DurationMs, decodedSr, ct, out int ffSr, out inspectedRaw24Bit, out lsbZeroPadded);
+            if (monoSamples != null && ffSr > 0) decodedSr = ffSr;
         }
 
         // Standard Android hardware/software MediaExtractor + MediaCodec decode for all other formats
         if (monoSamples == null) {
-            monoSamples = DecodeWithMediaCodecWindow(item.FilePath, item.DurationMs, out decodedSr, out inspectedRaw24Bit, out lsbZeroPadded);
+            ct.ThrowIfCancellationRequested();
+            monoSamples = DecodeWithMediaCodecWindow(item.FilePath, item.DurationMs, out int mcSr, out inspectedRaw24Bit, out lsbZeroPadded);
+            if (monoSamples != null && mcSr > 0) decodedSr = mcSr;
         }
 
         if (monoSamples == null || monoSamples.Length < 4096) {
@@ -617,7 +752,7 @@ public static class AudioQualityAnalyzer {
         report.ClippedPercent = Math.Round(clippedPct, 3);
 
         // 3. 4096-pt Hann-Windowed FFT Spectral Bandwidth & Brickwall Cutoff Analysis
-        AnalyzeSpectrum(monoSamples, decodedSr, out int cutoffHz, out bool sharpBrickwall);
+        AnalyzeSpectrum(monoSamples, decodedSr, out int cutoffHz, out bool sharpBrickwall, out double midDb, out int activeFrames);
         report.SpectralCutoffHz = cutoffHz;
 
         // Detect Fake Lossless (lossless container with steep lossy lowpass shelf)
@@ -629,8 +764,10 @@ public static class AudioQualityAnalyzer {
             }
         }
 
-        // Detect Upsampled Hi-Res (88.2 / 96 / 192 kHz file carrying strictly CD-band <= 22.5 kHz audio)
-        if (report.IsLossless && decodedSr >= 88200 && cutoffHz > 0 && cutoffHz <= 22500) {
+        // Detect Upsampled Hi-Res (88.2 / 96 / 192 kHz file carrying strictly CD-band <= 22.5 kHz audio),
+        // guarding quiet acoustic/classical passages so gentle natural treble rolloff is not false-flagged
+        if (report.IsLossless && decodedSr >= 88200 && cutoffHz > 0 && cutoffHz <= 22500 &&
+            (sharpBrickwall || (activeFrames >= 6 && midDb >= -36.0))) {
             report.IsUpsampledHiRes = true;
         }
 
@@ -685,31 +822,11 @@ public static class AudioQualityAnalyzer {
         lsbZero = false;
         try {
             using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            byte[] hdr = new byte[4096];
-            int hRead = fs.Read(hdr, 0, hdr.Length);
-            if (hRead < 44 || hdr[0] != 'R' || hdr[1] != 'I' || hdr[2] != 'F' || hdr[3] != 'F') return null;
-
-            int channels = 2;
-            int audioFmt = 1;
-            int pos = 12;
-            long dataOffset = -1;
-            long dataLen = 0;
-            while (pos + 8 <= hRead) {
-                string id = System.Text.Encoding.ASCII.GetString(hdr, pos, 4);
-                int sz = BinaryPrimitives.ReadInt32LittleEndian(hdr.AsSpan(pos + 4, 4));
-                if (id == "fmt " && pos + 24 <= hRead) {
-                    audioFmt = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(pos + 8, 2));
-                    channels = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(pos + 10, 2));
-                    sr = BinaryPrimitives.ReadInt32LittleEndian(hdr.AsSpan(pos + 12, 4));
-                    bits = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(pos + 22, 2));
-                } else if (id == "data") {
-                    dataOffset = pos + 8;
-                    dataLen = sz > 0 ? sz : (fs.Length - dataOffset);
-                    break;
-                }
-                if (sz < 0) break;
-                pos += 8 + sz + (sz & 1);
+            if (!TryFindWavHeaderAndData(fs, out int audioFmt, out int channels, out int parsedSr, out int parsedBits, out long dataOffset, out long dataLen, stopAtFmtOnly: false)) {
+                return null;
             }
+            if (parsedSr is >= 8000 and <= 384000) sr = parsedSr;
+            if (parsedBits is >= 8 and <= 64) bits = parsedBits;
             if (dataOffset < 0 || channels <= 0 || bits < 16 || (audioFmt != 1 && audioFmt != 3 && audioFmt != 0xFFFE)) return null;
 
             int bytesPerSample = bits / 8;
@@ -767,40 +884,98 @@ public static class AudioQualityAnalyzer {
         }
     }
 
-    static float[] DecodeWithFfmpegS32Window(string path, string ffmpegPath, long durationMs, int sr, out bool inspected24, out bool lsbZero) {
+    static float[] DecodeWithFfmpegS32Window(
+        string path,
+        string ffmpegPath,
+        long durationMs,
+        int sr,
+        CancellationToken ct,
+        out int actualSr,
+        out bool inspected24,
+        out bool lsbZero) {
+        actualSr = sr > 0 ? sr : 48000;
         inspected24 = false;
         lsbZero = false;
         try {
+            ct.ThrowIfCancellationRequested();
             double seekSec = durationMs > 12000 ? (durationMs / 1000.0) * 0.35 : 0.0;
             ProcessStartInfo psi = new() {
                 FileName = ffmpegPath,
-                Arguments = $"-nostdin -v error -ss {seekSec.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture)} -t 2.0 -i \"{path}\" -vn -ac 2 -f s32le -",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+            psi.ArgumentList.Add("-nostdin");
+            psi.ArgumentList.Add("-v");
+            psi.ArgumentList.Add("error");
+            psi.ArgumentList.Add("-ss");
+            psi.ArgumentList.Add(seekSec.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
+            psi.ArgumentList.Add("-t");
+            psi.ArgumentList.Add("2.0");
+            psi.ArgumentList.Add("-i");
+            psi.ArgumentList.Add(path);
+            psi.ArgumentList.Add("-vn");
+            psi.ArgumentList.Add("-ac");
+            psi.ArgumentList.Add("2");
+            psi.ArgumentList.Add("-c:a");
+            psi.ArgumentList.Add("pcm_s32le");
+            psi.ArgumentList.Add("-f");
+            psi.ArgumentList.Add("wav");
+            psi.ArgumentList.Add("-");
             FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpegPath);
 
             using Process proc = Process.Start(psi);
             if (proc == null) return null;
+
+            using CancellationTokenRegistration ctr = ct.Register(() => {
+                try {
+                    if (!proc.HasExited) proc.Kill(entireProcessTree: true);
+                } catch { }
+            });
+
+            Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
             using MemoryStream ms = new();
-            Task copyTask = proc.StandardOutput.BaseStream.CopyToAsync(ms);
+            Task copyTask = proc.StandardOutput.BaseStream.CopyToAsync(ms, ct);
             if (!copyTask.Wait(4500)) {
-                try { proc.Kill(); } catch { }
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                try { stderrTask.Wait(300); } catch { }
                 return null;
             }
-            proc.WaitForExit(1000);
+            try { proc.WaitForExit(1000); } catch { }
+            try { stderrTask.Wait(300); } catch { }
+
             byte[] raw = ms.ToArray();
-            int frames = raw.Length / 8; // 2ch * 4 bytes (s32le)
+            if (raw.Length < 44 || raw[0] != 'R' || raw[1] != 'I' || raw[2] != 'F' || raw[3] != 'F') {
+                return null;
+            }
+
+            int pos = 12;
+            int dataStart = -1;
+            while (pos + 8 <= raw.Length) {
+                uint sz = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(pos + 4, 4));
+                if (raw[pos] == 'f' && raw[pos + 1] == 'm' && raw[pos + 2] == 't' && raw[pos + 3] == ' ' && pos + 24 <= raw.Length) {
+                    int parsedSr = BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(pos + 12, 4));
+                    if (parsedSr is >= 8000 and <= 384000) actualSr = parsedSr;
+                } else if (raw[pos] == 'd' && raw[pos + 1] == 'a' && raw[pos + 2] == 't' && raw[pos + 3] == 'a') {
+                    dataStart = pos + 8;
+                    break;
+                }
+                if (sz > (uint)(raw.Length - pos - 8)) break;
+                pos += 8 + (int)sz + ((int)sz & 1);
+            }
+            if (dataStart < 0) return null;
+
+            int frames = (raw.Length - dataStart) / 8; // 2ch * 4 bytes (s32le)
             if (frames < 4096) return null;
 
             float[] mono = new float[frames];
             long nonSilent = 0;
             long zero16Lsb = 0;
             for (int f = 0; f < frames; f++) {
-                int l = BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(f * 8, 4));
-                int r = BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(f * 8 + 4, 4));
+                int off = dataStart + f * 8;
+                int l = BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(off, 4));
+                int r = BinaryPrimitives.ReadInt32LittleEndian(raw.AsSpan(off + 4, 4));
                 // In s32le, true 24-bit occupies top 24 bits (bits 8..31); fake 24-bit (16-bit padded) has bottom 16 bits == 0
                 if (Math.Abs(l) > 65536) {
                     nonSilent++;
@@ -1003,9 +1178,11 @@ public static class AudioQualityAnalyzer {
         drDb = topRms > 1e-6 && refPeak > topRms ? 20.0 * Math.Log10(refPeak / topRms) : 0;
     }
 
-    static void AnalyzeSpectrum(float[] samples, int sr, out int cutoffHz, out bool sharpBrickwall) {
+    static void AnalyzeSpectrum(float[] samples, int sr, out int cutoffHz, out bool sharpBrickwall, out double midDb, out int activeFrames) {
         cutoffHz = sr / 2;
         sharpBrickwall = false;
+        midDb = -100.0;
+        activeFrames = 0;
         const int fftSize = 4096;
         int half = fftSize / 2;
         if (samples.Length < fftSize) return;
@@ -1037,6 +1214,7 @@ public static class AudioQualityAnalyzer {
             frames++;
         }
 
+        activeFrames = frames;
         if (frames < 3) return;
         for (int k = 1; k < half; k++) {
             powerAvg[k] /= frames;
@@ -1052,8 +1230,8 @@ public static class AudioQualityAnalyzer {
             return 10.0 * Math.Log10(Math.Max(avg, 1e-18));
         }
 
-        double midDb = BandDb(1000, 6000);
-        if (midDb < -80.0) return;
+        midDb = BandDb(1000, 6000);
+        if (midDb < -48.0) return;
 
         // Scan 500 Hz bands from 10 kHz up to Nyquist to detect effective upper bandwidth and sharp brickwall cliffs
         double nyquist = sr * 0.5;
