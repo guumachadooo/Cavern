@@ -9,10 +9,12 @@ using Cavern.Format;
 using Cavern.Format.Common;
 using Cavern.Format.Renderers;
 using Cavern.Listeners;
+using Cavern.Neural;
 using Cavern.Spatial;
 using Cavern.Utilities;
 using Cavern.Virtualizer;
 using Cavern.VocalChain;
+using Cavern.Waveforms;
 
 using Cavernize.Logic.CavernSettings;
 using Cavernize.Logic.Models;
@@ -75,6 +77,11 @@ public sealed class RealtimePlayerEngine : IDisposable {
     bool lastDynamicCeilingState;
     Source[] cachedActiveSources = Array.Empty<Source>();
     float[] cachedBaseSourceVolumes = Array.Empty<float>();
+    Source[] liveNeuralSources = Array.Empty<Source>();
+    bool isRenderingLiveNeuralSources;
+    NeuralSeparatedTrack cachedHybridTrack;
+    float[][] cachedHybrid714Buses;
+    readonly CompositePreHrtfBusProcessor compositePreHrtfBus = new();
     int activeNativeSampleRateRequest;
     PhysicalExternalizationConfig externalizationConfig = PhysicalExternalizationConfig.Default;
     HrtfPersonalizationConfig personalizationConfig = HrtfPersonalizationConfig.Default;
@@ -82,6 +89,21 @@ public sealed class RealtimePlayerEngine : IDisposable {
     ProAudioDuplexConfig proAudioConfig = ProAudioDuplexConfig.Default;
     bool lastExternalizationBrirState;
     Vector3 lastExternalizationEnvSize;
+
+    sealed class CompositePreHrtfBusProcessor : IPreHrtfBusProcessor {
+        public IPreHrtfBusProcessor First;
+        public IPreHrtfBusProcessor Second;
+
+        public void ProcessPreHrtfBus(
+            float[][] virtualChannels,
+            VirtualChannel[] channelLayout,
+            int channelCount,
+            int blockSize,
+            int sampleRate) {
+            First?.ProcessPreHrtfBus(virtualChannels, channelLayout, channelCount, blockSize, sampleRate);
+            Second?.ProcessPreHrtfBus(virtualChannels, channelLayout, channelCount, blockSize, sampleRate);
+        }
+    }
 
     /// <summary>
     /// Creates a real-time spatial audio engine wired with Slot 1–6 processors.
@@ -179,17 +201,76 @@ public sealed class RealtimePlayerEngine : IDisposable {
     public NeuralAudioDiagnostics NeuralDiagnostics => sceneHub.NeuralDiagnostics;
 
     /// <summary>
+    /// Fired whenever <see cref="SourceItems"/> are rebuilt (for example when binding live 3D neural stems
+    /// or switching <see cref="NeuralSpatialUpmixMode"/>).
+    /// </summary>
+    public event Action SourcesRebuilt;
+
+    /// <summary>
+    /// True when the active <see cref="Listener"/> is rendering live separated neural PCM stems as 3D objects
+    /// or Hybrid Neural+DirAC 7.1.4 virtual feeds.
+    /// </summary>
+    public bool IsLiveNeuralStemPlaybackActive {
+        get {
+            lock (renderLock) {
+                return isRenderingLiveNeuralSources;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies updated Slot 2A upmixing settings (<see cref="UpmixingSettings.ParametricStft"/>,
+    /// <see cref="UpmixingSettings.AtmosAware"/>, Matrix, Cavernize) cleanly in real time with clickless crossfade.
+    /// </summary>
+    public void ApplyUpmixingSettings(UpmixingSettings settings) {
+        UpmixingSettings safe = settings ?? new UpmixingSettings(true);
+        bool rebuilt = false;
+        lock (renderLock) {
+            upmixingSettings = safe;
+            parametricUpmixerStage.UpdateSettings(safe);
+            if (currentTrack != null && !isRenderingLiveNeuralSources) {
+                if (IsPlaying && hasRenderedAudio) {
+                    ArmCrossfadeLocked();
+                }
+                currentTrack.Seek(currentTrackSample);
+                ConfigureListener(resetToStart: false);
+                sourceItems = TrackSourceItem.BuildFromTrack(currentTrack);
+                BindTrackToSceneHubLocked(currentTrack);
+                rebuilt = true;
+            }
+        }
+        if (rebuilt) {
+            SourcesRebuilt?.Invoke();
+        }
+    }
+
+    /// <summary>
     /// Applies updated Slot 2B neural audio &amp; Spatial Karaoke parameters cleanly in real time.
+    /// Switching <see cref="NeuralSpatialUpmixMode"/> when separated stems are bound seamlessly hot-swaps
+    /// live 3D neural stem sources into <see cref="Listener"/> with a clickless crossfade.
     /// </summary>
     public void ApplyNeuralConfig(NeuralAudioConfig config) {
+        bool rebuilt = false;
         lock (renderLock) {
             bool wasActive = neuralStemStage.IsKaraokeActivelyAttenuating;
+            NeuralSpatialUpmixMode prevMode = neuralStemStage.Config.SpatialUpmixMode;
             neuralStemStage.ApplyConfig(config);
             bool nowActive = neuralStemStage.IsKaraokeActivelyAttenuating;
-            if (wasActive != nowActive && IsPlaying && hasRenderedAudio) {
+            NeuralSpatialUpmixMode nextMode = neuralStemStage.Config.SpatialUpmixMode;
+
+            if (prevMode != nextMode && currentTrack != null && neuralStemStage.HasPlayableSeparatedStems) {
+                if (IsPlaying && hasRenderedAudio) {
+                    ArmCrossfadeLocked();
+                }
+                ConfigureListener(resetToStart: false);
+                rebuilt = true;
+            } else if (wasActive != nowActive && IsPlaying && hasRenderedAudio) {
                 ArmCrossfadeLocked();
             }
             sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+        }
+        if (rebuilt) {
+            SourcesRebuilt?.Invoke();
         }
     }
 
@@ -204,16 +285,42 @@ public sealed class RealtimePlayerEngine : IDisposable {
     }
 
     /// <summary>
-    /// Binds a pre-separated neural stem bundle (including Lead/Backing vocal references) to the active playback scene.
+    /// Binds a pre-separated neural stem bundle (including Lead/Backing vocal references and PCM stem buffers)
+    /// to the active playback scene. When <see cref="NeuralAudioConfig.SpatialUpmixMode"/> is
+    /// <see cref="NeuralSpatialUpmixMode.Stems3DObjects"/> or <see cref="NeuralSpatialUpmixMode.HybridNeuralDirAc"/>,
+    /// attaches live 3D PCM <see cref="Source"/>s directly to <see cref="Listener"/> synced to the current playhead.
     /// </summary>
     public void BindSeparatedNeuralTrack(NeuralSeparatedTrack separatedTrack) {
+        bool rebuilt = false;
         lock (renderLock) {
             neuralStemStage.BindSeparatedTrack(separatedTrack);
-            SpatialSourceDescriptor[] descriptors = separatedTrack != null
-                ? neuralStemStage.BuildActiveStemDescriptors(EnvironmentSize, sceneHub.Sources.Count)
-                : Array.Empty<SpatialSourceDescriptor>();
-            sceneHub.RegisterNeuralStemDescriptors(descriptors);
+            if (!ReferenceEquals(cachedHybridTrack, separatedTrack)) {
+                cachedHybridTrack = null;
+                cachedHybrid714Buses = null;
+            }
+
+            if (currentTrack != null && ShouldRenderLiveNeuralSourcesLocked()) {
+                if (IsPlaying && hasRenderedAudio) {
+                    ArmCrossfadeLocked();
+                }
+                ConfigureListener(resetToStart: false);
+                rebuilt = true;
+            } else if (isRenderingLiveNeuralSources && currentTrack != null) {
+                if (IsPlaying && hasRenderedAudio) {
+                    ArmCrossfadeLocked();
+                }
+                ConfigureListener(resetToStart: false);
+                rebuilt = true;
+            } else {
+                SpatialSourceDescriptor[] descriptors = separatedTrack != null
+                    ? neuralStemStage.BuildActiveStemDescriptors(EnvironmentSize, sceneHub.Sources.Count)
+                    : Array.Empty<SpatialSourceDescriptor>();
+                sceneHub.RegisterNeuralStemDescriptors(descriptors);
+            }
             sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+        }
+        if (rebuilt) {
+            SourcesRebuilt?.Invoke();
         }
     }
 
@@ -707,13 +814,18 @@ public sealed class RealtimePlayerEngine : IDisposable {
             lastSourceMaskHash = 0;
 
             if (neuralStemStage.ActiveSeparatedTrack != null &&
-                !string.Equals(neuralStemStage.ActiveSeparatedTrack.SourceTrackKey, track.Path, StringComparison.OrdinalIgnoreCase)) {
+                !MatchesSeparatedTrack(neuralStemStage.ActiveSeparatedTrack, track)) {
                 neuralStemStage.BindSeparatedTrack(null);
+                cachedHybridTrack = null;
+                cachedHybrid714Buses = null;
             }
+            lgsrStage.ClearExplicitLosslessStatus();
 
             ConfigureListener(resetToStart: true);
-            sourceItems = TrackSourceItem.BuildFromTrack(track);
-            BindTrackToSceneHubLocked(track);
+            if (!isRenderingLiveNeuralSources) {
+                sourceItems = TrackSourceItem.BuildFromTrack(track);
+                BindTrackToSceneHubLocked(track);
+            }
             sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
             sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
         }
@@ -754,9 +866,19 @@ public sealed class RealtimePlayerEngine : IDisposable {
             subBlockReadOffset = 0;
             lastSourceMaskHash = 0;
 
+            if (neuralStemStage.ActiveSeparatedTrack != null &&
+                !MatchesSeparatedTrack(neuralStemStage.ActiveSeparatedTrack, track)) {
+                neuralStemStage.BindSeparatedTrack(null);
+                cachedHybridTrack = null;
+                cachedHybrid714Buses = null;
+            }
+            lgsrStage.ClearExplicitLosslessStatus();
+
             ConfigureListener(resetToStart: false);
-            sourceItems = TrackSourceItem.BuildFromTrack(track);
-            BindTrackToSceneHubLocked(track);
+            if (!isRenderingLiveNeuralSources) {
+                sourceItems = TrackSourceItem.BuildFromTrack(track);
+                BindTrackToSceneHubLocked(track);
+            }
             sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
             IsPlaying = wasPlaying;
         }
@@ -930,25 +1052,32 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 }
 
                 // Slot 5: Binaural / Stereo renderer (delegates to Cavern Listener + VirtualizerFilter)
-                // Attach Slot 2C LGSR on the Pre-HRTF Virtual Speaker Bus in Headphone Virtualizer mode (respecting instant A/B bypass)
+                // Attach Slot 2C LGSR & Slot 2B Multichannel Spatial Karaoke PRE-HRTF on the virtual speaker bus
+                // in Headphone Virtualizer mode (preserving LFE, 0.000° spatial phase, and 3D HRIR cues).
                 bool lgsrActive = lgsrStage.IsActivelyRestoring && !lgsrBypassed;
-                VirtualizerFilter.PreHrtfBusProcessor = HeadphoneVirtualizer && lgsrActive
-                    ? lgsrStage
-                    : null;
+                bool karaokeActive = neuralStemStage.IsKaraokeActiveOrRamping;
+                if (HeadphoneVirtualizer && (lgsrActive || karaokeActive)) {
+                    compositePreHrtfBus.First = lgsrActive ? lgsrStage : null;
+                    compositePreHrtfBus.Second = karaokeActive ? neuralStemStage : null;
+                    VirtualizerFilter.PreHrtfBusProcessor = compositePreHrtfBus;
+                } else {
+                    VirtualizerFilter.PreHrtfBusProcessor = null;
+                }
                 IBinauralRenderer renderer = sceneHub.ActiveRenderer ?? virtualizerRenderer;
                 int blockFrames = renderer.RenderFrame(activeSceneFrame, stereoOutput, outOffset, requestedFrames);
                 if (blockFrames <= 0) {
                     break;
                 }
 
-                // Direct 2.0 fallback for Slot 2C LGSR when Headphone Virtualizer is bypassed (speakers / USB DAC)
+                // Direct 2.0 fallback for Slot 2C LGSR and Slot 2B Spatial Karaoke when Headphone Virtualizer is bypassed
                 if (!HeadphoneVirtualizer && lgsrActive) {
                     lgsrStage.ProcessDirectStereoFallback(stereoOutput, outOffset, blockFrames, currentTrackSample);
                 }
-
-                // Slot 2B real-time zero-phase Spatial Karaoke (before Slot 6 metering & True-Peak limiter)
-                if (neuralStemStage.IsKaraokeActivelyAttenuating) {
+                if (!HeadphoneVirtualizer && karaokeActive) {
                     neuralStemStage.ProcessStereoInterleavedKaraoke(stereoOutput, outOffset, blockFrames, currentTrackSample);
+                }
+
+                if (neuralStemStage.IsKaraokeActivelyAttenuating) {
                     SoundfieldTelemetry kTel = activeSceneFrame.Telemetry;
                     kTel.VocalActivity = neuralStemStage.VocalActivity;
                     kTel.KaraokeVocalLevel = neuralStemStage.Config.KaraokeVocalLevel;
@@ -1074,6 +1203,23 @@ public sealed class RealtimePlayerEngine : IDisposable {
         crossfadeRemaining = crossfadeFrames;
     }
 
+    static bool MatchesSeparatedTrack(NeuralSeparatedTrack sep, CavernizeTrack track) {
+        if (sep == null || track == null || string.IsNullOrEmpty(sep.SourceTrackKey)) {
+            return false;
+        }
+        return string.Equals(sep.SourceTrackKey, track.Path, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(sep.SourceTrackKey, track.OriginalSourcePath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    bool ShouldRenderLiveNeuralSourcesLocked() {
+        NeuralSpatialUpmixMode mode = neuralStemStage.Config.SpatialUpmixMode;
+        if (mode != NeuralSpatialUpmixMode.Stems3DObjects && mode != NeuralSpatialUpmixMode.HybridNeuralDirAc) {
+            return false;
+        }
+        NeuralSeparatedTrack sep = neuralStemStage.ActiveSeparatedTrack;
+        return sep != null && sep.Stems != null && sep.Stems.Count > 0;
+    }
+
     void ConfigureListener(bool resetToStart) {
         Listener.EnvironmentType = EnvironmentType;
         Listener.EnvironmentSize = EnvironmentSize;
@@ -1094,15 +1240,243 @@ public sealed class RealtimePlayerEngine : IDisposable {
             };
         }
 
-        if (resetToStart) {
-            currentTrack.Attach(listener, upmixingSettings);
+        if (ShouldRenderLiveNeuralSourcesLocked()) {
+            AttachLiveNeuralSourcesLocked(resetToStart);
+            parametricUpmixerStage.BindTelemetryProvider(null);
         } else {
-            currentTrack.AttachFromCurrentPosition(listener, upmixingSettings);
+            bool wasRenderingLiveNeural = isRenderingLiveNeuralSources;
+            isRenderingLiveNeuralSources = false;
+            liveNeuralSources = Array.Empty<Source>();
+            if (resetToStart) {
+                currentTrack.Attach(listener, upmixingSettings);
+            } else {
+                if (wasRenderingLiveNeural) {
+                    currentTrack.Seek(currentTrackSample);
+                }
+                currentTrack.AttachFromCurrentPosition(listener, upmixingSettings);
+            }
+            if (wasRenderingLiveNeural) {
+                sourceItems = TrackSourceItem.BuildFromTrack(currentTrack);
+                BindTrackToSceneHubLocked(currentTrack);
+                SpatialSourceDescriptor[] stemDescs = neuralStemStage.ActiveSeparatedTrack != null
+                    ? neuralStemStage.BuildActiveStemDescriptors(EnvironmentSize, sceneHub.Sources.Count)
+                    : Array.Empty<SpatialSourceDescriptor>();
+                sceneHub.RegisterNeuralStemDescriptors(stemDescs);
+            }
+            parametricUpmixerStage.BindTelemetryProvider(currentTrack.ActiveTelemetryProvider);
         }
 
-        parametricUpmixerStage.BindTelemetryProvider(currentTrack.ActiveTelemetryProvider);
         RebuildCachedActiveSourcesLocked();
         SetupOutputLayout();
+    }
+
+    void AttachLiveNeuralSourcesLocked(bool resetToStart) {
+        NeuralSeparatedTrack sep = neuralStemStage.ActiveSeparatedTrack;
+        NeuralSpatialUpmixMode mode = neuralStemStage.Config.SpatialUpmixMode;
+        Vector3 envSize = EnvironmentSize.X > 0.1f && EnvironmentSize.Y > 0.1f && EnvironmentSize.Z > 0.1f
+            ? EnvironmentSize
+            : new Vector3(10f, 7f, 10f);
+
+        // Preserve any existing user Solo/Mute/CustomPin overrides matched by source name across re-attaches
+        Dictionary<string, TrackSourceItem> prevByName = new(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < sourceItems.Count; i++) {
+            prevByName[sourceItems[i].Name] = sourceItems[i];
+        }
+
+        int trackSr = currentTrack != null && currentTrack.SampleRate > 0 ? currentTrack.SampleRate : Listener.DefaultSampleRate;
+        int stemSr = sep.SampleRate > 0 ? sep.SampleRate : trackSr;
+        long startSample = resetToStart
+            ? 0L
+            : (long)Math.Round(currentTrackSample * (stemSr / (double)trackSr));
+
+        List<Source> builtSources = [];
+        List<TrackSourceItem> builtItems = [];
+        List<SpatialSourceDescriptor> builtDescriptors = [];
+
+        if (mode == NeuralSpatialUpmixMode.HybridNeuralDirAc) {
+            if (!ReferenceEquals(cachedHybridTrack, sep) || cachedHybrid714Buses == null || cachedHybrid714Buses.Length != 11) {
+                StereoStemBuffer[] stemArr = new StereoStemBuffer[sep.Stems.Count];
+                for (int i = 0; i < sep.Stems.Count; i++) {
+                    stemArr[i] = sep.Stems[i];
+                }
+                float heightExp = Math.Clamp(upmixingSettings.Effect * 0.5f, 0.10f, 0.65f);
+                cachedHybrid714Buses = NeuralStemSpatializer.ProcessHybridNeuralDirAc714(stemArr, stemSr, heightExp);
+                cachedHybridTrack = sep;
+            }
+
+            ReferenceChannel[] layout714 = [
+                ReferenceChannel.FrontLeft, ReferenceChannel.FrontRight, ReferenceChannel.FrontCenter,
+                ReferenceChannel.SideLeft, ReferenceChannel.SideRight, ReferenceChannel.RearLeft, ReferenceChannel.RearRight,
+                ReferenceChannel.TopFrontLeft, ReferenceChannel.TopFrontRight, ReferenceChannel.TopRearLeft, ReferenceChannel.TopRearRight
+            ];
+            for (int b = 0; b < cachedHybrid714Buses.Length && b < layout714.Length; b++) {
+                float[] pcm = cachedHybrid714Buses[b];
+                if (pcm == null || pcm.Length == 0) {
+                    continue;
+                }
+                ReferenceChannel ch = layout714[b];
+                Vector3 normPos = ChannelPrototype.AlternativePositions[(int)ch];
+                bool isHeight = b >= 7;
+                SourceLayer layer = isHeight ? SourceLayer.VirtualHeight : SourceLayer.NeuralStem;
+                string label = $"AI Hybrid {ch.GetShortName()}";
+                int idx = builtSources.Count;
+
+                Source src = new() {
+                    Clip = new Clip(new MultichannelWaveform(pcm), stemSr),
+                    Position = normPos * envSize,
+                    TimeSamples = (int)Math.Clamp(startSample, 0, Math.Max(0, pcm.Length - 1)),
+                    Loop = Loop,
+                    Volume = 1f
+                };
+                TrackSourceItem item = new(idx, label, isBed: false, isLfe: false, ch, normPos, layer);
+                if (prevByName.TryGetValue(label, out TrackSourceItem old)) {
+                    item.IsMuted = old.IsMuted;
+                    item.IsSolo = old.IsSolo;
+                    item.HasCustomPosition = old.HasCustomPosition;
+                    item.CustomNormalizedPosition = old.CustomNormalizedPosition;
+                    if (item.HasCustomPosition) {
+                        src.Position = item.CustomNormalizedPosition * envSize;
+                        item.NormalizedPosition = item.CustomNormalizedPosition;
+                    }
+                }
+                builtSources.Add(src);
+                builtItems.Add(item);
+                builtDescriptors.Add(new SpatialSourceDescriptor {
+                    Index = idx,
+                    Name = label,
+                    Layer = layer,
+                    BedChannel = ch,
+                    IsLfe = false,
+                    IsDialogue = ch == ReferenceChannel.FrontCenter,
+                    NormalizedPosition = item.NormalizedPosition,
+                    WorldPositionMeters = item.NormalizedPosition * envSize,
+                    HasCustomPosition = item.HasCustomPosition,
+                    CustomNormalizedPosition = item.CustomNormalizedPosition,
+                    Gain = 1f,
+                    Diffuse = isHeight ? 0.45f : 0.15f,
+                    Importance = ch == ReferenceChannel.FrontCenter ? 1f : 0.8f
+                });
+            }
+        } else {
+            // Stems3DObjects: place each separated neural stem directly as live 3D object Sources in Listener
+            SpatialSourceDescriptor[] stemDescs = neuralStemStage.BuildActiveStemDescriptors(envSize, 0);
+            int descCursor = 0;
+            const float invSqrt2 = 0.70710678f;
+
+            for (int s = 0; s < sep.Stems.Count; s++) {
+                StereoStemBuffer stem = sep.Stems[s];
+                if (stem == null || stem.Length <= 0) {
+                    continue;
+                }
+                NeuralStemRole role = NeuralStemSpatializer.ClassifyStemName(stem.Name);
+                SourceLayer layer = role == NeuralStemRole.Residual ? SourceLayer.RestoredResidual : SourceLayer.NeuralStem;
+
+                if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals || role == NeuralStemRole.Bass) {
+                    SpatialSourceDescriptor d = descCursor < stemDescs.Length
+                        ? stemDescs[descCursor++]
+                        : new SpatialSourceDescriptor {
+                            Name = $"AI {stem.Name}",
+                            Layer = layer,
+                            IsDialogue = role != NeuralStemRole.Bass,
+                            NormalizedPosition = new Vector3(0f, role == NeuralStemRole.Bass ? -0.15f : 0.08f, 1f)
+                        };
+
+                    float[] mono = new float[stem.Length];
+                    for (int n = 0; n < stem.Length; n++) {
+                        mono[n] = (stem.Left[n] + stem.Right[n]) * invSqrt2;
+                    }
+
+                    int idx = builtSources.Count;
+                    Source src = new() {
+                        Clip = new Clip(new MultichannelWaveform(mono), stemSr),
+                        Position = d.NormalizedPosition * envSize,
+                        TimeSamples = (int)Math.Clamp(startSample, 0, Math.Max(0, mono.Length - 1)),
+                        Loop = Loop,
+                        Volume = 1f
+                    };
+                    TrackSourceItem item = new(idx, d.Name, isBed: false, isLfe: false, null, d.NormalizedPosition, layer);
+                    if (prevByName.TryGetValue(d.Name, out TrackSourceItem old)) {
+                        item.IsMuted = old.IsMuted;
+                        item.IsSolo = old.IsSolo;
+                        item.HasCustomPosition = old.HasCustomPosition;
+                        item.CustomNormalizedPosition = old.CustomNormalizedPosition;
+                        if (item.HasCustomPosition) {
+                            src.Position = item.CustomNormalizedPosition * envSize;
+                            item.NormalizedPosition = item.CustomNormalizedPosition;
+                        }
+                    }
+                    d.Index = idx;
+                    d.HasCustomPosition = item.HasCustomPosition;
+                    d.CustomNormalizedPosition = item.CustomNormalizedPosition;
+                    d.NormalizedPosition = item.NormalizedPosition;
+                    d.WorldPositionMeters = item.NormalizedPosition * envSize;
+                    builtSources.Add(src);
+                    builtItems.Add(item);
+                    builtDescriptors.Add(d);
+                } else {
+                    for (int side = 0; side < 2; side++) {
+                        SpatialSourceDescriptor d = descCursor < stemDescs.Length
+                            ? stemDescs[descCursor++]
+                            : new SpatialSourceDescriptor {
+                                Name = $"AI {stem.Name} {(side == 0 ? "L" : "R")}",
+                                Layer = layer,
+                                NormalizedPosition = new Vector3(side == 0 ? -0.75f : 0.75f, 0.2f, 0.4f)
+                            };
+                        float[] pcm = side == 0 ? stem.Left : stem.Right;
+                        int idx = builtSources.Count;
+                        Source src = new() {
+                            Clip = new Clip(new MultichannelWaveform(pcm), stemSr),
+                            Position = d.NormalizedPosition * envSize,
+                            TimeSamples = (int)Math.Clamp(startSample, 0, Math.Max(0, pcm.Length - 1)),
+                            Loop = Loop,
+                            Volume = 1f
+                        };
+                        TrackSourceItem item = new(idx, d.Name, isBed: false, isLfe: false, null, d.NormalizedPosition, layer);
+                        if (prevByName.TryGetValue(d.Name, out TrackSourceItem old)) {
+                            item.IsMuted = old.IsMuted;
+                            item.IsSolo = old.IsSolo;
+                            item.HasCustomPosition = old.HasCustomPosition;
+                            item.CustomNormalizedPosition = old.CustomNormalizedPosition;
+                            if (item.HasCustomPosition) {
+                                src.Position = item.CustomNormalizedPosition * envSize;
+                                item.NormalizedPosition = item.CustomNormalizedPosition;
+                            }
+                        }
+                        d.Index = idx;
+                        d.HasCustomPosition = item.HasCustomPosition;
+                        d.CustomNormalizedPosition = item.CustomNormalizedPosition;
+                        d.NormalizedPosition = item.NormalizedPosition;
+                        d.WorldPositionMeters = item.NormalizedPosition * envSize;
+                        builtSources.Add(src);
+                        builtItems.Add(item);
+                        builtDescriptors.Add(d);
+                    }
+                }
+            }
+        }
+
+        if (builtSources.Count == 0) {
+            isRenderingLiveNeuralSources = false;
+            liveNeuralSources = Array.Empty<Source>();
+            if (resetToStart) {
+                currentTrack.Attach(listener, upmixingSettings);
+            } else {
+                currentTrack.AttachFromCurrentPosition(listener, upmixingSettings);
+            }
+            return;
+        }
+
+        liveNeuralSources = [.. builtSources];
+        isRenderingLiveNeuralSources = true;
+        listener.SampleRate = stemSr;
+        listener.LFESeparation = true;
+        listener.AttachSources(liveNeuralSources);
+
+        sourceItems = builtItems;
+        CavernTrackDecoderAdapter decoderAdapter = new(currentTrack, sourceItems);
+        sceneHub.BindDecoder(decoderAdapter, builtDescriptors);
+        sceneHub.ConfigureStageProcessors(OutputSampleRate, decoderAdapter.Metadata);
+        sceneHub.ConfigurePostProcessingStages(OutputSampleRate, 2);
     }
 
     void RebuildCachedActiveSourcesLocked() {
@@ -1302,7 +1676,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
             RebuildCachedActiveSourcesLocked();
         }
 
-        IReadOnlyList<Source> rendererObjects = currentTrack.Renderer.Objects;
+        IReadOnlyList<Source> activeObjects = isRenderingLiveNeuralSources
+            ? liveNeuralSources
+            : currentTrack.Renderer.Objects;
         bool anySolo = false;
         for (int i = 0; i < sourceItems.Count; i++) {
             if (sourceItems[i].IsSolo) {
@@ -1313,10 +1689,10 @@ public sealed class RealtimePlayerEngine : IDisposable {
 
         long maskHash = (MuteBed ? 1L : 0L) | (OnlyBeds ? 2L : 0L) | (MuteGround ? 4L : 0L) | (DynamicCeilingOnly ? 8L : 0L);
         Vector3 invEnv = Vector3.One / Listener.EnvironmentSize;
-        SourceLayer[] activeLayers = currentTrack.ActiveSourceLayers;
+        SourceLayer[] activeLayers = isRenderingLiveNeuralSources ? null : currentTrack.ActiveSourceLayers;
         Source[] flatSources = cachedActiveSources;
 
-        if (activeLayers != null && flatSources.Length == activeLayers.Length && sourceItems.Count == rendererObjects.Count) {
+        if (activeLayers != null && flatSources.Length == activeLayers.Length && sourceItems.Count == activeObjects.Count) {
             for (int idx = 0; idx < flatSources.Length; idx++) {
                 Source src = flatSources[idx];
                 if (idx < sourceItems.Count && sourceItems[idx].HasCustomPosition) {
@@ -1349,9 +1725,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 src.DistanceSimulation = DistanceSimulation && HeadphoneVirtualizer;
                 src.VolumeRolloff = VolumeRolloff;
             }
-        } else if (flatSources.Length == rendererObjects.Count && sourceItems.Count == rendererObjects.Count) {
-            for (int i = 0; i < rendererObjects.Count; i++) {
-                Source src = rendererObjects[i];
+        } else if (flatSources.Length == activeObjects.Count && sourceItems.Count == activeObjects.Count) {
+            for (int i = 0; i < activeObjects.Count; i++) {
+                Source src = activeObjects[i];
                 TrackSourceItem item = sourceItems[i];
                 if (item.HasCustomPosition) {
                     src.Position = item.CustomNormalizedPosition * Listener.EnvironmentSize;
@@ -1447,8 +1823,10 @@ public sealed class RealtimePlayerEngine : IDisposable {
     }
 
     void UpdateSourceTelemetry() {
-        IReadOnlyList<Source> rendererObjects = currentTrack?.Renderer?.Objects;
-        if (rendererObjects == null) {
+        IReadOnlyList<Source> activeObjects = isRenderingLiveNeuralSources
+            ? liveNeuralSources
+            : currentTrack?.Renderer?.Objects;
+        if (activeObjects == null) {
             return;
         }
         Vector3 envSize = Listener.EnvironmentSize;
@@ -1460,9 +1838,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
         Vector3 physHalf = AirAbsorptionFilter.PhysicalRoomHalfSize;
         int sr = listener != null && listener.SampleRate > 0 ? listener.SampleRate : Listener.DefaultSampleRate;
 
-        int count = Math.Min(sourceItems.Count, rendererObjects.Count);
+        int count = Math.Min(sourceItems.Count, activeObjects.Count);
         for (int i = 0; i < count; i++) {
-            Source src = rendererObjects[i];
+            Source src = activeObjects[i];
             TrackSourceItem item = sourceItems[i];
             Vector3 normPos = src.Position * invEnv;
             item.NormalizedPosition = normPos;
@@ -1497,9 +1875,15 @@ public sealed class RealtimePlayerEngine : IDisposable {
     public void Dispose() {
         lock (renderLock) {
             IsPlaying = false;
-            if (ReferenceEquals(VirtualizerFilter.PreHrtfBusProcessor, lgsrStage)) {
+            if (ReferenceEquals(VirtualizerFilter.PreHrtfBusProcessor, compositePreHrtfBus) ||
+                ReferenceEquals(VirtualizerFilter.PreHrtfBusProcessor, lgsrStage) ||
+                ReferenceEquals(VirtualizerFilter.PreHrtfBusProcessor, neuralStemStage)) {
                 VirtualizerFilter.PreHrtfBusProcessor = null;
             }
+            liveNeuralSources = Array.Empty<Source>();
+            isRenderingLiveNeuralSources = false;
+            cachedHybridTrack = null;
+            cachedHybrid714Buses = null;
             listener?.DetachAllSources();
             listener = null;
             currentTrack = null;

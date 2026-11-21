@@ -40,7 +40,7 @@ public sealed class TrackSourceItem {
     /// <summary>
     /// True when the user can drag and pin this source in the interactive 6DoF 3D Room.
     /// </summary>
-    public bool IsCustomDraggable => !IsBed || Layer == SourceLayer.NeuralStem || Layer == SourceLayer.LiveMicrophone;
+    public bool IsCustomDraggable => !IsBed || Layer == SourceLayer.NeuralStem || Layer == SourceLayer.RestoredResidual || Layer == SourceLayer.LiveMicrophone;
 
     /// <summary>
     /// True when this element is an LFE channel.

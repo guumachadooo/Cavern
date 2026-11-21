@@ -124,15 +124,37 @@ public sealed class CavernTrackDecoderAdapter : ISpatialDecoder {
         metadata.HasNativeObjects = hasObjects;
         metadata.HasNativeHeights = hasHeights;
         metadata.HasLfe = hasLfe;
-        metadata.IsLossySpatialStream = track.Codec == Codec.EnhancedAC3 ||
-            track.Codec == Codec.AC3 ||
-            track.Codec == Codec.DTS ||
-            track.Codec == Codec.Opus;
+        Codec effectiveCodec = track.SourceCodec != Codec.Unknown ? track.SourceCodec : track.Codec;
+        metadata.IsLossySpatialStream = track.IsLossySource ||
+            effectiveCodec == Codec.EnhancedAC3 ||
+            effectiveCodec == Codec.AC3 ||
+            effectiveCodec == Codec.DTS ||
+            effectiveCodec == Codec.Opus ||
+            HasLossyMediaExtension(track.OriginalSourcePath);
         if (renderer is EnhancedAC3Renderer eac3Renderer) {
             metadata.DialnormLufs = eac3Renderer.DialnormLufs;
             metadata.CouplingStartHz = eac3Renderer.CouplingStartHz;
             metadata.SpxStartHz = eac3Renderer.SpxStartHz;
         }
+    }
+
+    static bool HasLossyMediaExtension(string path) {
+        if (string.IsNullOrEmpty(path)) {
+            return false;
+        }
+        string ext = System.IO.Path.GetExtension(path);
+        if (string.IsNullOrEmpty(ext)) {
+            return false;
+        }
+        return ext.Equals(".mp3", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".aac", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".m4a", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".ogg", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".opus", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".wma", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".ac3", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".ec3", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".eac3", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <inheritdoc/>
@@ -147,6 +169,7 @@ public sealed class CavernTrackDecoderAdapter : ISpatialDecoder {
             return false;
         }
         if (track.Renderer is EnhancedAC3Renderer eac3Renderer) {
+            metadata.DialnormLufs = eac3Renderer.DialnormLufs;
             metadata.CouplingStartHz = eac3Renderer.CouplingStartHz;
             metadata.SpxStartHz = eac3Renderer.SpxStartHz;
         }

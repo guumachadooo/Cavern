@@ -28,6 +28,7 @@ public sealed class LgsrStageProcessor : ISpatialStageProcessor, IPreHrtfBusProc
     long activeBlockTrackSamplePos;
     long preHrtfSampleCursor;
     bool activeTrackAlreadyLossless;
+    bool? explicitLosslessOverride;
     bool lastBlockActivePreHrtf;
 
     // Pre-allocated zero-GC scratch arrays for Pre-HRTF Virtual Speaker Bus & Direct 2.0 stereo fallback
@@ -107,10 +108,18 @@ public sealed class LgsrStageProcessor : ISpatialStageProcessor, IPreHrtfBusProc
     /// <summary>Updates whether the active track is natively lossless (TrueHD, DAMF/ADM, FLAC, WAV/PCM, LAF).</summary>
     public void SetActiveTrackLosslessStatus(bool isAlreadyLossless) {
         lock (stateLock) {
+            explicitLosslessOverride = isAlreadyLossless;
             activeTrackAlreadyLossless = isAlreadyLossless;
             if (isAlreadyLossless) {
                 lastBlockActivePreHrtf = false;
             }
+        }
+    }
+
+    /// <summary>Clears any explicit lossless override so <see cref="Configure"/> derives status from decoder metadata.</summary>
+    public void ClearExplicitLosslessStatus() {
+        lock (stateLock) {
+            explicitLosslessOverride = null;
         }
     }
 
@@ -119,7 +128,7 @@ public sealed class LgsrStageProcessor : ISpatialStageProcessor, IPreHrtfBusProc
         int safeRate = sampleRate >= 8000 ? sampleRate : Listener.DefaultSampleRate;
         lock (stateLock) {
             activeMetadata = metadata;
-            activeTrackAlreadyLossless = !metadata.IsLossySpatialStream;
+            activeTrackAlreadyLossless = explicitLosslessOverride ?? !metadata.IsLossySpatialStream;
             if (safeRate != this.sampleRate) {
                 this.sampleRate = safeRate;
                 fusionEngine.Dispose();

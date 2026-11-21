@@ -58,6 +58,8 @@ public partial class MainActivity {
     bool? lastDistTileVisible;
     TextView roomBinauralProfileText;
     Button filterAllBtn, filter3DBtn, filterStemsMicBtn, filterHeightBtn, filterBedsBtn;
+    Button roomNeuralPrepBtn;
+    TextView roomNeuralStatusText;
     bool isUserSeeking;
 
     // W13 Studio Spatial X-Ray Inspector HUD views
@@ -428,7 +430,7 @@ public partial class MainActivity {
             playerEngine.MuteBed = flag;
         }));
         filterStemsMicBtn = FilterBtn(S["FilterStemsMicOnly"], () => ToggleCategorySolo(
-            item => item.Layer == SourceLayer.NeuralStem || item.Layer == SourceLayer.LiveMicrophone,
+            item => item.Layer == SourceLayer.NeuralStem || item.Layer == SourceLayer.RestoredResidual || item.Layer == SourceLayer.LiveMicrophone,
             _ => { }));
         filterHeightBtn = FilterBtn(S["FilterHeightOnly"], ToggleDynamicCeilingFilter);
         filterBedsBtn = FilterBtn(S["FilterBedsOnly"], () => ToggleCategorySolo(item => item.IsBed, flag => {
@@ -442,12 +444,31 @@ public partial class MainActivity {
         filterScroll.AddView(filterRow);
         mixerCard.AddView(filterScroll);
 
+        // W18 Live Neural 3D Stems / Karaoke Prep bar (non-blocking background ONNX + Slot 7B cache)
+        LinearLayout neuralPrepRow = HRow();
+        neuralPrepRow.SetGravity(GravityFlags.CenterVertical);
+        neuralPrepRow.SetPadding(0, Dp(8), 0, Dp(2));
+        roomNeuralStatusText = Label("", 11.2f, OneUiTheme.TextSub);
+        roomNeuralStatusText.SetSingleLine(true);
+        roomNeuralStatusText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        neuralPrepRow.AddView(roomNeuralStatusText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+
+        roomNeuralPrepBtn = PillButton(S["NeuralPrep3DBtn"], () =>
+            PrepareActiveTrackNeuralStemsAsync(NeuralPipelineGoal.StemSeparation));
+        roomNeuralPrepBtn.TextSize = 11.2f;
+        roomNeuralPrepBtn.SetSingleLine(true);
+        roomNeuralPrepBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        roomNeuralPrepBtn.SetPadding(Dp(12), Dp(6), Dp(12), Dp(6));
+        neuralPrepRow.AddView(roomNeuralPrepBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        mixerCard.AddView(neuralPrepRow);
+
         mixerContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
-        mixerContainer.SetPadding(0, Dp(8), 0, 0);
+        mixerContainer.SetPadding(0, Dp(6), 0, 0);
         mixerCard.AddView(mixerContainer);
         page.AddView(mixerCard);
 
         RefreshFilterButtonsUi();
+        RefreshNeuralPrepUi();
         return page;
     }
 
@@ -704,7 +725,8 @@ public partial class MainActivity {
     void RefreshFilterButtonsUi() {
         bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
         bool solo3D = !dynCeil && IsCategorySoloActive(item => item.IsDynamicObject);
-        bool soloStemsMic = !dynCeil && IsCategorySoloActive(item => item.Layer == SourceLayer.NeuralStem || item.Layer == SourceLayer.LiveMicrophone);
+        bool soloStemsMic = !dynCeil && IsCategorySoloActive(item =>
+            item.Layer == SourceLayer.NeuralStem || item.Layer == SourceLayer.RestoredResidual || item.Layer == SourceLayer.LiveMicrophone);
         bool soloBeds = !dynCeil && IsCategorySoloActive(item => item.IsBed);
         bool noneActive = !dynCeil && !solo3D && !soloStemsMic && !soloBeds && !trackSourceItems.Any(x => x.IsSolo);
 
@@ -721,6 +743,70 @@ public partial class MainActivity {
         Style(filterStemsMicBtn, soloStemsMic, OneUiTheme.IconSliderMedia);
         Style(filterHeightBtn, dynCeil, OneUiTheme.IconStemsCalib);
         Style(filterBedsBtn, soloBeds, OneUiTheme.IconStudioExport);
+    }
+
+    void RefreshNeuralPrepUi() {
+        if (uiDestroyed) {
+            return;
+        }
+        bool hasStems = playerEngine?.NeuralStemStage?.HasPlayableSeparatedStems == true;
+        bool live3D = playerEngine?.IsLiveNeuralStemPlaybackActive == true;
+        int stemCount = playerEngine?.NeuralStemStage?.ActiveSeparatedTrack?.Stems?.Count ?? 0;
+
+        if (musicLyricsAiPrepBtn != null) {
+            if (isNeuralPrepRunning) {
+                musicLyricsAiPrepBtn.Text = string.Format(S["NeuralPrepBusyFmt"], neuralPrepProgress);
+                musicLyricsAiPrepBtn.Background = OneUiTheme.CreateRoundedDrawable(
+                    this, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 82), 99f, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 185), 1f);
+            } else if (hasStems) {
+                musicLyricsAiPrepBtn.Text = S["NeuralPrepReadyBadge"];
+                musicLyricsAiPrepBtn.Background = OneUiTheme.CreateRoundedDrawable(
+                    this, OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 72), 99f, OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 175), 1f);
+            } else {
+                musicLyricsAiPrepBtn.Text = S["NeuralPrepBtn"];
+                musicLyricsAiPrepBtn.Background = OneUiTheme.CreateRoundedDrawable(
+                    this, Color.Argb(36, 255, 255, 255), 99f, Color.Argb(54, 255, 255, 255), 0.9f);
+            }
+        }
+        if (musicLyricsAiStatusText != null) {
+            if (isNeuralPrepRunning && !string.IsNullOrEmpty(neuralPrepStatusText)) {
+                musicLyricsAiStatusText.Text = $"{string.Format(S["NeuralPrepBusyFmt"], neuralPrepProgress)} · {neuralPrepStatusText}";
+                musicLyricsAiStatusText.Visibility = ViewStates.Visible;
+            } else {
+                musicLyricsAiStatusText.Visibility = ViewStates.Gone;
+            }
+        }
+
+        if (roomNeuralPrepBtn != null) {
+            if (isNeuralPrepRunning) {
+                roomNeuralPrepBtn.Text = S["NeuralPrepCancelBtn"];
+                roomNeuralPrepBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, OneUiTheme.FunctionalOrange, OneUiTheme.PillCornerDp);
+            } else if (hasStems) {
+                roomNeuralPrepBtn.Text = S["NeuralPrepReadyBadge"];
+                roomNeuralPrepBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, OneUiTheme.FunctionalGreen, OneUiTheme.PillCornerDp);
+            } else {
+                roomNeuralPrepBtn.Text = S["NeuralPrep3DBtn"];
+                roomNeuralPrepBtn.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            }
+        }
+        if (roomNeuralStatusText != null) {
+            if (isNeuralPrepRunning) {
+                roomNeuralStatusText.Text = $"{string.Format(S["NeuralPrepBusyFmt"], neuralPrepProgress)} · {neuralPrepStatusText}";
+                roomNeuralStatusText.SetTextColor(OneUiTheme.FunctionalOrange);
+            } else if (live3D) {
+                string modeLabel = store.NeuralSpatialUpmixModeIndex == 2 ? S["NeuralUpmixHybrid714"] : S["NeuralUpmixStems3D"];
+                roomNeuralStatusText.Text = string.Format(S["NeuralLiveStemsActiveFmt"], stemCount, modeLabel);
+                roomNeuralStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
+            } else if (hasStems) {
+                roomNeuralStatusText.Text = $"{S["NeuralPrepReadyBadge"]} ({stemCount})";
+                roomNeuralStatusText.SetTextColor(OneUiTheme.IconSliderMedia);
+            } else {
+                Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator?.BuildPlan(
+                    NeuralPipelineGoal.StemSeparation, store.BuildNeuralAudioConfig());
+                roomNeuralStatusText.Text = plan != null && plan.IsRunnable ? plan.Summary : S["NeuralRuntimeNotInstalled"];
+                roomNeuralStatusText.SetTextColor(OneUiTheme.TextSub);
+            }
+        }
     }
 
     LinearLayout BuildSpatialXRayInspectorCard() {

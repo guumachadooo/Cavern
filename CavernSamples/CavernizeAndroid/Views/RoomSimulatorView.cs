@@ -715,7 +715,11 @@ public sealed class RoomSimulatorView : View {
             if (hasVolumeNow) st.SoundUntilMs = nowMs + 380;
 
             float targetVis;
-            if (item.IsBed || !hasPlayedOnce) {
+            bool alwaysVisibleLayer = item.IsBed || !hasPlayedOnce || item.HasCustomPosition ||
+                item.Layer == SourceLayer.NeuralStem ||
+                item.Layer == SourceLayer.RestoredResidual ||
+                item.Layer == SourceLayer.LiveMicrophone;
+            if (alwaysVisibleLayer) {
                 targetVis = 1f;
             } else if (!isAudioPlaying) {
                 targetVis = st.VisibilityAlpha;
@@ -966,9 +970,12 @@ public sealed class RoomSimulatorView : View {
 
                 bool showTag = labelMode == LabelVisibilityMode.All || item.HasCustomPosition || (IsXRayEnabled && (entry.rms > 0.05f || item.IsSolo));
                 if (showTag) {
-                    string baseTag = item.Layer == SourceLayer.LiveMicrophone
-                        ? "MIC"
-                        : (item.Layer == SourceLayer.NeuralStem ? $"S{entry.objNumber}" : $"O{entry.objNumber}");
+                    string baseTag = item.Layer switch {
+                        SourceLayer.LiveMicrophone => "MIC",
+                        SourceLayer.NeuralStem => $"S{entry.objNumber}",
+                        SourceLayer.RestoredResidual => $"R{entry.objNumber}",
+                        _ => $"O{entry.objNumber}"
+                    };
                     string delaySuffix = (IsXRayEnabled || item.HasCustomPosition || ReferenceEquals(draggedSource, item)) && item.PropagationDelayMs > 0.05f
                         ? $" {item.PropagationDelayMs:0.0}ms"
                         : string.Empty;
@@ -1329,6 +1336,7 @@ public sealed class RoomSimulatorView : View {
         if (muted) return Color.Rgb(72, 76, 88);
         if (layer == SourceLayer.LiveMicrophone) return rms >= 0.55f ? Color.Rgb(255, 84, 84) : Color.Rgb(52, 224, 162);
         if (layer == SourceLayer.NeuralStem) return rms >= 0.55f ? Color.Rgb(255, 112, 92) : Color.Rgb(64, 212, 245);
+        if (layer == SourceLayer.RestoredResidual) return rms >= 0.55f ? Color.Rgb(255, 128, 176) : Color.Rgb(176, 132, 255);
         if (rms >= 0.55f) return Color.Rgb(255, 84, 84);
         if (rms >= 0.24f) return Color.Rgb(248, 196, 62);
         if (rms >= 0.015f) return isLfe ? OneUiTheme.LfeChannel : Color.Rgb(58, 214, 132);

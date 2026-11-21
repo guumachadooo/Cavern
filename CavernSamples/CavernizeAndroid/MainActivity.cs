@@ -142,6 +142,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
     Cavernize.Logic.Spatial.UniversalLosslessTwinProvider activeLosslessTwin;
     CancellationTokenSource losslessTwinCts;
     int losslessTwinGeneration;
+    CancellationTokenSource neuralPrepCts;
+    int neuralPrepGeneration;
+    volatile bool isNeuralPrepRunning;
+    double neuralPrepProgress;
+    string neuralPrepStatusText = "";
 
     ExternalDecodedTrack decodedTrueHDTrack;
     string activeTrueHDSessionDir;
@@ -265,6 +270,17 @@ public partial class MainActivity : Activity, ICavernizeApp {
             PropagationDelay6DoFEnabled = store.PropagationDelay6DoFEnabled
         };
         playerEngine.PlaybackCompleted += () => RunOnUiThread(OnPlayerCompleted);
+        playerEngine.SourcesRebuilt += () => RunOnUiThread(() => {
+            if (uiDestroyed) {
+                return;
+            }
+            trackSourceItems = [.. playerEngine.SourceItems];
+            RefreshPlayerSourcesList();
+            RefreshExtractorChecklist();
+            UpdateRoomCanvas();
+            RefreshNeuralPrepUi();
+            RefreshNeuralAudioUi();
+        });
         audioOutput = new AndroidAudioOutput(playerEngine) {
             LowLatencyMode = store.LowLatencyAudio,
             UsbDacNativeSampleRate = store.UsbDacNativeSampleRate
@@ -370,6 +386,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
         truehdPrepareCts?.Dispose();
         losslessTwinCts?.Cancel();
         losslessTwinCts?.Dispose();
+        neuralPrepCts?.Cancel();
+        neuralPrepCts?.Dispose();
         activeLosslessTwin?.Dispose();
         activeLosslessTwin = null;
         tabPillAnimator?.Cancel();
@@ -1552,7 +1570,15 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     SetWorkspaceHeaderText(msg);
                     SetConvertStatus(msg, p);
                 }));
-            return new AudioFile(decodedWav);
+            AudioReader fallbackReader = AudioReader.Open(decodedWav);
+            Codec pcmCodec = fallbackReader.Bits == BitDepth.Float32 ? Codec.PCM_Float : Codec.PCM_LE;
+            string probedCodecName = probe != null && probe.AudioStreams.Count > 0 ? probe.AudioStreams[0].CodecName : null;
+            string probedLang = probe != null && probe.AudioStreams.Count > 0 ? probe.AudioStreams[0].Language : null;
+            (Codec srcCodec, bool isLossy) = InferFallbackCodecAndLossy(resolved, probedCodecName);
+            ExternalDecodedTrack fallbackTrack = new(
+                fallbackReader, pcmCodec, srcCodec, null, guessedContainer, null, null, probedLang,
+                isLossySource: isLossy, originalSourcePath: resolved);
+            return AudioFile.FromCustomTracks(resolved, [fallbackTrack]);
         } catch (Exception mediaEx) {
             AppLogger.Warn($"Android MediaCodec fallback failed ({mediaEx.GetType().Name}): {mediaEx.Message}");
 
@@ -1564,8 +1590,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 fallbackSessionDir = workDir;
                 string outWav = Path.Combine(workDir, "decoded.wav");
                 RunOnUiThread(() => {
-                    SetWorkspaceHeaderText("FFmpeg: decodificando áudio...");
-                    SetConvertStatus("FFmpeg: decodificando áudio...", -1);
+                    SetWorkspaceHeaderText(S["DecodingFallback"]);
+                    SetConvertStatus(S["DecodingFallback"], -1);
                 });
                 bool wavOk = TrueHDDecoderService.ExtractAudioStreamWithFFmpeg(
                     ffmpeg.Location, resolved, firstAudio.StreamIndex, outWav, "wav",
@@ -1576,9 +1602,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     }));
                 if (wavOk) {
                     AudioReader wavReader = AudioReader.Open(outWav);
+                    Codec pcmCodec = wavReader.Bits == BitDepth.Float32 ? Codec.PCM_Float : Codec.PCM_LE;
+                    (Codec srcCodec, bool isLossy) = InferFallbackCodecAndLossy(resolved, firstAudio.CodecName);
                     ExternalDecodedTrack wavTrack = new(
-                        wavReader, wavReader.Bits == BitDepth.Float32 ? Codec.PCM_Float : Codec.PCM_LE,
-                        Codec.PCM_LE, null, guessedContainer, null, null, firstAudio.Language);
+                        wavReader, pcmCodec, srcCodec, null, guessedContainer, null, null, firstAudio.Language,
+                        isLossySource: isLossy, originalSourcePath: resolved);
                     return AudioFile.FromCustomTracks(resolved, [wavTrack]);
                 }
             }
@@ -1588,6 +1616,31 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
             throw;
         }
+    }
+
+    static (Codec SourceCodec, bool IsLossy) InferFallbackCodecAndLossy(string sourcePath, string ffCodecName) {
+        string token = (ffCodecName ?? "").Trim().ToLowerInvariant();
+        if (token.Contains("flac")) return (Codec.FLAC, false);
+        if (token.Contains("truehd") || token.Contains("mlp")) return (Codec.TrueHD, false);
+        if (token.Contains("alac") || token.StartsWith("pcm")) return (Codec.PCM_LE, false);
+        if (token.Contains("eac3")) return (Codec.EnhancedAC3, true);
+        if (token.Contains("ac3")) return (Codec.AC3, true);
+        if (token.Contains("dts")) return (token.Contains("hd") || token.Contains("ma") ? Codec.DTS_HD : Codec.DTS, !(token.Contains("hd") || token.Contains("ma")));
+        if (token.Contains("aac") || token.Contains("mp3") || token.Contains("opus") || token.Contains("vorbis") || token.Contains("wma")) {
+            return (Codec.Unknown, true);
+        }
+
+        string ext = Path.GetExtension(sourcePath ?? "").ToLowerInvariant();
+        return ext switch {
+            ".flac" => (Codec.FLAC, false),
+            ".wav" or ".aif" or ".aiff" or ".caf" => (Codec.PCM_LE, false),
+            ".laf" => (Codec.LimitlessAudio, false),
+            ".mp3" or ".aac" or ".m4a" or ".ogg" or ".opus" or ".wma" => (Codec.Unknown, true),
+            ".ac3" => (Codec.AC3, true),
+            ".ec3" or ".eac3" => (Codec.EnhancedAC3, true),
+            ".dts" => (Codec.DTS, true),
+            _ => (Codec.Unknown, true)
+        };
     }
 
     void ShowLoadFailureDialog(Exception ex) {
@@ -2108,17 +2161,20 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     void OnSelectedTrackChanged() {
         StopPlayback();
+        CancelNeuralTrackPrep(silent: true);
         ClearDecodedTrueHDState();
         if (selectedTrack == null) {
             fileDetailsExpanded = false;
             SetWorkspaceSummaryText("");
             trackSourceItems = [];
+            playerEngine?.BindSeparatedNeuralTrack(null);
             mediaNotification?.CancelNotification();
             RefreshPlayerSourcesList();
             RefreshMusicPlayerUi();
             RefreshExtractorChecklist();
             RefreshConverterTrackInfo();
             RebuildInlineTrackList();
+            RefreshNeuralPrepUi();
             return;
         }
 
@@ -2200,6 +2256,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
         SyncPlaybackUi(false, initialSeekSec, playerEngine.TotalSeconds);
         UpdateRoomCanvas();
         StartLosslessTwinDiscoveryAsync(activeTrack);
+        TryAutoBindCachedNeuralStemsAsync(activeTrack);
+        RefreshNeuralPrepUi();
     }
 
     void StartLosslessTwinDiscoveryAsync(CavernizeTrack activeTrack) {
@@ -2264,6 +2322,213 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 // Superseded by newer track selection
             } catch (Exception ex) {
                 AppLogger.Warn($"W09 StartLosslessTwinDiscoveryAsync: {ex.Message}");
+            }
+        }, ct);
+    }
+
+    void CancelNeuralTrackPrep(bool silent = false) {
+        neuralPrepGeneration++;
+        try {
+            neuralPrepCts?.Cancel();
+            neuralPrepCts?.Dispose();
+        } catch { }
+        neuralPrepCts = null;
+        isNeuralPrepRunning = false;
+        neuralPrepProgress = 0;
+        neuralPrepStatusText = "";
+        RefreshNeuralPrepUi();
+        if (!silent) {
+            Toast.MakeText(this, S["CancelledStatus"], ToastLength.Short).Show();
+        }
+    }
+
+    void TryAutoBindCachedNeuralStemsAsync(CavernizeTrack activeTrack) {
+        if (uiDestroyed || activeTrack == null || neuralOrchestrator == null || neuralTrackCache == null || playerEngine == null) {
+            return;
+        }
+        string sourceKey = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        if (string.IsNullOrEmpty(sourceKey) || !File.Exists(sourceKey)) {
+            return;
+        }
+        int gen = neuralPrepGeneration;
+        Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
+        int sr = activeTrack.SampleRate >= 8000 ? activeTrack.SampleRate : 48000;
+
+        _ = Task.Run(() => {
+            try {
+                FileInfo fi = new(sourceKey);
+                Cavernize.Logic.Spatial.NeuralPipelineGoal[] goals = [
+                    Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
+                    Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke
+                ];
+                for (int g = 0; g < goals.Length; g++) {
+                    Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator.BuildPlan(goals[g], cfg);
+                    if (!plan.IsRunnable) {
+                        continue;
+                    }
+                    string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
+                        sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, plan.PlanSignature);
+                    if (neuralTrackCache.TryLoad(cacheKey, out Cavern.Neural.NeuralSeparatedTrack cached)) {
+                        RunOnUiThread(() => {
+                            if (uiDestroyed || gen != neuralPrepGeneration || GetActiveTrack() != activeTrack) {
+                                return;
+                            }
+                            playerEngine.BindSeparatedNeuralTrack(cached);
+                            RefreshNeuralAudioUi();
+                            RefreshNeuralPrepUi();
+                        });
+                        return;
+                    }
+                }
+            } catch (Exception ex) {
+                AppLogger.Warn($"W18 TryAutoBindCachedNeuralStemsAsync: {ex.Message}");
+            }
+        });
+    }
+
+    void PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal goal, bool silentIfNotReady = false) {
+        if (uiDestroyed) {
+            return;
+        }
+        if (isNeuralPrepRunning) {
+            CancelNeuralTrackPrep(silent: false);
+            return;
+        }
+        CavernizeTrack activeTrack = GetActiveTrack();
+        if (activeTrack == null || !activeTrack.Supported || activeTrack.Codec == Codec.TrueHD) {
+            if (!silentIfNotReady) {
+                Toast.MakeText(this, S["NeuralPrepNoTrackToast"], ToastLength.Short).Show();
+            }
+            return;
+        }
+        Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
+        Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator?.BuildPlan(goal, cfg);
+        bool runtimeReady = neuralRuntime != null && neuralRuntime.IsAvailable;
+        if (!runtimeReady || plan == null || !plan.IsRunnable) {
+            if (!silentIfNotReady) {
+                Toast.MakeText(this, S["NeuralPrepNeedModelsToast"], ToastLength.Long).Show();
+            }
+            return;
+        }
+
+        string activePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        string decodePath = activePath;
+        bool derivedFromTwin = false;
+        if (cfg.UseLosslessTwinForKaraoke &&
+            activeLosslessTwin != null &&
+            activeLosslessTwin.IsReady &&
+            !string.IsNullOrEmpty(activeLosslessTwin.Metadata?.FilePath) &&
+            File.Exists(activeLosslessTwin.Metadata.FilePath)) {
+            decodePath = activeLosslessTwin.Metadata.FilePath;
+            derivedFromTwin = true;
+        }
+        if (string.IsNullOrEmpty(decodePath) || !File.Exists(decodePath)) {
+            if (!silentIfNotReady) {
+                Toast.MakeText(this, S["NeuralPrepNoTrackToast"], ToastLength.Short).Show();
+            }
+            return;
+        }
+
+        neuralPrepCts?.Cancel();
+        neuralPrepCts?.Dispose();
+        neuralPrepCts = new CancellationTokenSource();
+        CancellationToken ct = neuralPrepCts.Token;
+        int myGen = ++neuralPrepGeneration;
+        isNeuralPrepRunning = true;
+        neuralPrepProgress = 0.02;
+        neuralPrepStatusText = S["NeuralPrepDecodingStatus"];
+        RefreshNeuralPrepUi();
+
+        string ffLoc = ffmpeg?.Found == true ? ffmpeg.Location : null;
+        int prefSr = activeTrack.SampleRate >= 8000 ? activeTrack.SampleRate : 48000;
+
+        _ = Task.Run(() => {
+            try {
+                FileInfo keyInfo = new(activePath);
+                string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
+                    activePath, keyInfo.Length, keyInfo.LastWriteTimeUtc.Ticks, prefSr, plan.PlanSignature);
+
+                // Instant Slot 7B cache hit before decoding PCM
+                if (neuralTrackCache != null && neuralTrackCache.TryLoad(cacheKey, out Cavern.Neural.NeuralSeparatedTrack cachedTrack, ct)) {
+                    RunOnUiThread(() => {
+                        if (uiDestroyed || myGen != neuralPrepGeneration) {
+                            return;
+                        }
+                        isNeuralPrepRunning = false;
+                        neuralPrepProgress = 1.0;
+                        neuralPrepStatusText = "";
+                        playerEngine.BindSeparatedNeuralTrack(cachedTrack);
+                        RefreshNeuralAudioUi();
+                        RefreshNeuralPrepUi();
+                        Toast.MakeText(this, string.Format(S["NeuralPrepCacheHitToast"], cachedTrack.Stems.Count), ToastLength.Short).Show();
+                    });
+                    return;
+                }
+
+                ct.ThrowIfCancellationRequested();
+                if (!LosslessTwinDiscoveryService.TryDecodeTrackToStereoFloat(
+                    decodePath, prefSr, ffLoc, ct, out float[] mixL, out float[] mixR, out int decodedSr)) {
+                    throw new InvalidOperationException("Unable to decode track audio for neural separation.");
+                }
+
+                ct.ThrowIfCancellationRequested();
+                (Cavern.Neural.NeuralSeparatedTrack separated, float rtf, bool fromCache) = neuralOrchestrator.ExecuteTrackPipeline(
+                    sourceTrackKey: activePath,
+                    fileSizeBytes: keyInfo.Length,
+                    lastModifiedTicks: keyInfo.LastWriteTimeUtc.Ticks,
+                    mixLeft: mixL,
+                    mixRight: mixR,
+                    sampleRate: decodedSr,
+                    goal: goal,
+                    config: cfg,
+                    derivedFromLosslessTwin: derivedFromTwin,
+                    onProgress: (p, msg) => RunOnUiThread(() => {
+                        if (uiDestroyed || myGen != neuralPrepGeneration) {
+                            return;
+                        }
+                        neuralPrepProgress = Math.Clamp(p, 0.0, 1.0);
+                        neuralPrepStatusText = msg ?? "";
+                        RefreshNeuralPrepUi();
+                    }),
+                    token: ct);
+
+                RunOnUiThread(() => {
+                    if (uiDestroyed || myGen != neuralPrepGeneration) {
+                        return;
+                    }
+                    isNeuralPrepRunning = false;
+                    neuralPrepProgress = 1.0;
+                    neuralPrepStatusText = "";
+                    playerEngine.BindSeparatedNeuralTrack(separated);
+                    RefreshNeuralAudioUi();
+                    RefreshNeuralPrepUi();
+                    string toastMsg = fromCache
+                        ? string.Format(S["NeuralPrepCacheHitToast"], separated.Stems.Count)
+                        : string.Format(S["NeuralPrepDoneToast"], separated.Stems.Count, rtf);
+                    Toast.MakeText(this, toastMsg, ToastLength.Short).Show();
+                });
+            } catch (System.OperationCanceledException) {
+                RunOnUiThread(() => {
+                    if (uiDestroyed || myGen != neuralPrepGeneration) {
+                        return;
+                    }
+                    isNeuralPrepRunning = false;
+                    neuralPrepProgress = 0;
+                    neuralPrepStatusText = "";
+                    RefreshNeuralPrepUi();
+                });
+            } catch (Exception ex) {
+                AppLogger.Warn($"W18 PrepareActiveTrackNeuralStemsAsync: {ex.Message}");
+                RunOnUiThread(() => {
+                    if (uiDestroyed || myGen != neuralPrepGeneration) {
+                        return;
+                    }
+                    isNeuralPrepRunning = false;
+                    neuralPrepProgress = 0;
+                    neuralPrepStatusText = "";
+                    RefreshNeuralPrepUi();
+                    Toast.MakeText(this, string.Format(S["NeuralPrepFailedFmt"], ex.Message), ToastLength.Long).Show();
+                });
             }
         }, ct);
     }

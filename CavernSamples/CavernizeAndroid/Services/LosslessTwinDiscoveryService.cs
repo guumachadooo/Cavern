@@ -30,17 +30,62 @@ public static class LosslessTwinDiscoveryService {
 
     /// <summary>
     /// Returns true when the active <see cref="CavernizeTrack"/> or file path is natively lossless and should auto-bypass LGSR.
+    /// Guards against Android MediaCodec / FFmpeg fallback WAV caches decoded from lossy MP3/AAC/M4A/OGG/Opus sources.
     /// </summary>
     public static bool IsTrackAlreadyLossless(CavernizeTrack track, string mediaPath) {
+        if (track != null && track.IsLossySource) {
+            return false;
+        }
+        string probePath = !string.IsNullOrEmpty(mediaPath) ? mediaPath : (track?.OriginalSourcePath ?? track?.Path ?? "");
+        string ext = IOPath.GetExtension(probePath).ToLowerInvariant();
+        if (ext is ".mp3" or ".aac" or ".ogg" or ".opus" or ".wma" or ".ac3" or ".ec3" or ".eac3") {
+            return false;
+        }
         if (track != null) {
             Codec c = track.SourceCodec != Codec.Unknown ? track.SourceCodec : track.Codec;
             if (c is Codec.TrueHD or Codec.DAMF or Codec.ADM_BWF or Codec.ADM_BWF_Atmos or
-                Codec.LimitlessAudio or Codec.FLAC or Codec.PCM_LE or Codec.PCM_Float or Codec.DTS_HD) {
+                Codec.LimitlessAudio or Codec.FLAC or Codec.DTS_HD) {
                 return true;
             }
+            if (c is Codec.PCM_LE or Codec.PCM_Float) {
+                // Only treat PCM as natively lossless if the original source file is actually PCM/WAV/AIFF/CAF,
+                // not a decoded fallback WAV from a lossy M4A/MP4/MKV container.
+                if (ext is ".wav" or ".aif" or ".aiff" or ".caf" or ".flac" or ".laf" or "") {
+                    string trackPath = track.Path ?? "";
+                    bool isFallbackCacheWav = trackPath.Contains("decoded_fallback", StringComparison.OrdinalIgnoreCase) ||
+                        trackPath.EndsWith("decoded.wav", StringComparison.OrdinalIgnoreCase);
+                    if (!isFallbackCacheWav) {
+                        return true;
+                    }
+                }
+            }
         }
-        string ext = IOPath.GetExtension(mediaPath ?? "").ToLowerInvariant();
         return ext is ".flac" or ".wav" or ".laf" or ".atmos" or ".thd" or ".mlp";
+    }
+
+    /// <summary>
+    /// Decodes an audio/video file (lossless or lossy) into unified stereo <c>float32 [-1, +1]</c> PCM arrays
+    /// for background Slot 2B neural stem separation without disturbing live playback.
+    /// </summary>
+    public static bool TryDecodeTrackToStereoFloat(
+        string filePath,
+        int preferredSampleRate,
+        string ffmpegPath,
+        CancellationToken ct,
+        out float[] left,
+        out float[] right,
+        out int sampleRate) {
+        left = null;
+        right = null;
+        sampleRate = preferredSampleRate >= 8000 ? preferredSampleRate : 48000;
+        if (string.IsNullOrEmpty(filePath) || !IOFile.Exists(filePath)) {
+            return false;
+        }
+        AudioQualityReport syntheticReport = new() {
+            SampleRateHz = sampleRate,
+            DeclaredBitDepth = 24
+        };
+        return TryDecodeLosslessStereo(filePath, syntheticReport, ffmpegPath, ct, out left, out right, out sampleRate);
     }
 
     /// <summary>

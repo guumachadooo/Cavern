@@ -913,6 +913,24 @@ public sealed class AndroidStrings {
         ["NoCodecMetadata"] = "No detailed codec metadata available for this track.",
         ["FinalizingFormat"] = "Finalizing output format...",
         ["CancelledStatus"] = "Cancelled.",
+
+        // W18 Live Neural 3D Stems Prep, Pre-HRTF Karaoke & Parametric/Atmos-Aware Upmix Controls
+        ["ParametricStftUpmix"] = "Parametric STFT / DirAC Upmix",
+        ["TipParametricStftUpmix"] = "Uses true 1024-pt STFT Direct/Ambient (DirAC) decomposition with 4x overlap-add and inter-channel coherence to extract height & surround ambience without phase cancellations.",
+        ["AtmosAwareUpmix"] = "Atmos-Aware Bed Ambient Enhancement",
+        ["TipAtmosAwareUpmix"] = "Enhances Dolby Atmos / E-AC-3 JOC bed ambience via real-time parametric height extraction while keeping discrete 3D objects mathematically untouched.",
+        ["NeuralPrepBtn"] = "AI Stems",
+        ["NeuralPrep3DBtn"] = "Prepare AI 3D Stems",
+        ["NeuralPrepCancelBtn"] = "Cancel AI",
+        ["NeuralPrepReadyBadge"] = "AI Ready",
+        ["NeuralPrepBusyFmt"] = "AI {0:0%}",
+        ["NeuralPrepDecodingStatus"] = "Decoding audio for AI neural stems...",
+        ["NeuralPrepDoneToast"] = "AI neural stems ready ({0} stems · {1:0.2}x RTF)",
+        ["NeuralPrepCacheHitToast"] = "AI neural stems loaded instantly from cache ({0} stems)",
+        ["NeuralPrepNeedModelsToast"] = "Install ONNX Runtime and at least one AI separation model in Settings first.",
+        ["NeuralPrepNoTrackToast"] = "Load a track first to prepare AI neural stems.",
+        ["NeuralPrepFailedFmt"] = "AI stem preparation failed: {0}",
+        ["NeuralLiveStemsActiveFmt"] = "Live AI 3D active: {0} stems ({1})",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -1776,6 +1794,24 @@ public sealed class AndroidStrings {
         d["NoCodecMetadata"] = "Nenhum metadado detalhado de codec disponível para esta faixa.";
         d["FinalizingFormat"] = "Finalizando formato de saída...";
         d["CancelledStatus"] = "Cancelado.";
+
+        // W18 Preparação de Stems Neurais 3D ao Vivo, Karaokê Pré-HRTF e Controles Paramétricos/Atmos-Aware
+        d["ParametricStftUpmix"] = "Upmix Paramétrico STFT / DirAC";
+        d["TipParametricStftUpmix"] = "Usa decomposição real Direto/Ambiente (DirAC) via STFT de 1024 pontos com overlap-add 4x e coerência intercanal para extrair altura e surround sem cancelamentos de fase.";
+        d["AtmosAwareUpmix"] = "Aprimoramento Atmos-Aware nos Beds";
+        d["TipAtmosAwareUpmix"] = "Enriquece a ambiência dos beds Dolby Atmos / E-AC-3 JOC via extração paramétrica em tempo real mantendo os objetos 3D discretos matematicamente intactos.";
+        d["NeuralPrepBtn"] = "Stems IA";
+        d["NeuralPrep3DBtn"] = "Preparar Stems 3D IA";
+        d["NeuralPrepCancelBtn"] = "Cancelar IA";
+        d["NeuralPrepReadyBadge"] = "IA Pronta";
+        d["NeuralPrepBusyFmt"] = "IA {0:0%}";
+        d["NeuralPrepDecodingStatus"] = "Decodificando áudio para stems neurais IA...";
+        d["NeuralPrepDoneToast"] = "Stems neurais IA prontos ({0} stems · {1:0.2}x RTF)";
+        d["NeuralPrepCacheHitToast"] = "Stems neurais IA carregados do cache ({0} stems)";
+        d["NeuralPrepNeedModelsToast"] = "Instale o ONNX Runtime e pelo menos um modelo de separação IA em Configurações primeiro.";
+        d["NeuralPrepNoTrackToast"] = "Carregue uma faixa primeiro para preparar os stems neurais IA.";
+        d["NeuralPrepFailedFmt"] = "Falha na preparação de stems IA: {0}";
+        d["NeuralLiveStemsActiveFmt"] = "IA 3D ao vivo: {0} stems ({1})";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

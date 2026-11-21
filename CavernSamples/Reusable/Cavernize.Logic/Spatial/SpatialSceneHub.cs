@@ -580,20 +580,21 @@ public sealed class SpatialSceneHub {
     }
 
     /// <summary>
-    /// Applies a manual 3D room position override for a source (used by W13 draggable objects/stems/live mic).
+    /// Applies a manual 3D room position override for a source (used by W13/W18 draggable objects/stems/live mic).
     /// </summary>
     public bool SetSourceCustomPosition(int sourceIndex, Vector3 normalizedPosition) {
         lock (syncLock) {
-            if (sourceIndex < 0 || sourceIndex >= sources.Count) {
+            SpatialSourceDescriptor target = FindDescriptorByIndexLocked(sourceIndex);
+            if (target == null) {
                 return false;
             }
             Vector3 clamped = new(
                 Math.Clamp(normalizedPosition.X, -1f, 1f),
                 Math.Clamp(normalizedPosition.Y, -1f, 1f),
                 Math.Clamp(normalizedPosition.Z, -1f, 1f));
-            sources[sourceIndex].HasCustomPosition = true;
-            sources[sourceIndex].CustomNormalizedPosition = clamped;
-            sources[sourceIndex].NormalizedPosition = clamped;
+            target.HasCustomPosition = true;
+            target.CustomNormalizedPosition = clamped;
+            target.NormalizedPosition = clamped;
             return true;
         }
     }
@@ -603,13 +604,23 @@ public sealed class SpatialSceneHub {
     /// </summary>
     public bool ClearSourceCustomPosition(int sourceIndex) {
         lock (syncLock) {
-            if (sourceIndex < 0 || sourceIndex >= sources.Count) {
+            SpatialSourceDescriptor target = FindDescriptorByIndexLocked(sourceIndex);
+            if (target == null) {
                 return false;
             }
-            sources[sourceIndex].HasCustomPosition = false;
-            sources[sourceIndex].CustomNormalizedPosition = Vector3.Zero;
+            target.HasCustomPosition = false;
+            target.CustomNormalizedPosition = Vector3.Zero;
             return true;
         }
+    }
+
+    SpatialSourceDescriptor FindDescriptorByIndexLocked(int sourceIndex) {
+        for (int i = 0; i < sources.Count; i++) {
+            if (sources[i].Index == sourceIndex) {
+                return sources[i];
+            }
+        }
+        return sourceIndex >= 0 && sourceIndex < sources.Count ? sources[sourceIndex] : null;
     }
 
     /// <summary>

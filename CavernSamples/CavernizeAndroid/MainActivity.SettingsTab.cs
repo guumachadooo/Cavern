@@ -102,7 +102,7 @@ public partial class MainActivity {
     Switch muteBedSwitch, muteGroundSwitch, speakerVirtSwitch, force24Switch, surroundSwapSwitch, wavSkipSwitch, reportModeSwitch, gradingSwitch;
     Switch pedanticSwitch, unsafeSwitch, keepTempSwitch, normSwitch, limiterOnlySwitch;
     OneUiSeekBar upmixEffectBar, upmixSmoothBar;
-    Switch matrixUpmixSwitch, cavernizeUpmixSwitch;
+    Switch matrixUpmixSwitch, cavernizeUpmixSwitch, parametricStftSwitch, atmosAwareUpmixSwitch;
 
     LinearLayout BuildSettingsTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
@@ -118,27 +118,49 @@ public partial class MainActivity {
         AddDivider(upmixCard);
         cavernizeUpmixSwitch = AddSwitchRow(upmixCard, S["CavernizeUpmix"], store.CavernizeUpmix, v => {
             store.CavernizeUpmix = v;
+            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
             ReattachPlayerTrack();
             RefreshMusicPlayerControlsUi();
         }, helpBody: S["TipCavernizeUpmix"]);
         AddDivider(upmixCard);
+        parametricStftSwitch = AddSwitchRow(upmixCard, S["ParametricStftUpmix"], store.ParametricStftUpmix, v => {
+            store.ParametricStftUpmix = v;
+            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+            ReattachPlayerTrack();
+            RefreshMusicPlayerControlsUi();
+        }, helpBody: S["TipParametricStftUpmix"]);
+        AddDivider(upmixCard);
+        atmosAwareUpmixSwitch = AddSwitchRow(upmixCard, S["AtmosAwareUpmix"], store.AtmosAwareUpmix, v => {
+            store.AtmosAwareUpmix = v;
+            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+            ReattachPlayerTrack();
+            RefreshMusicPlayerControlsUi();
+        }, helpBody: S["TipAtmosAwareUpmix"]);
+        AddDivider(upmixCard);
         (upmixEffectBar, _) = AddSliderRow(upmixCard, S["UpmixEffect"], 0, 100, (int)Math.Round(store.UpmixEffect * 100), v => {
             store.UpmixEffect = v * 0.01f;
+            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
             ReattachPlayerTrack();
         }, "%", defaultValue: 75, helpBody: S["TipUpmixEffect"]);
         (upmixSmoothBar, _) = AddSliderRow(upmixCard, S["UpmixSmooth"], 0, 100, (int)Math.Round(store.UpmixSmoothness * 100), v => {
             store.UpmixSmoothness = v * 0.01f;
+            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
             ReattachPlayerTrack();
         }, "%", defaultValue: 80, helpBody: S["TipUpmixSmooth"]);
         Button resetUpmixBtn = PillButton(S["ResetUpmix"], () => {
             store.MatrixUpmixing = false;
             store.CavernizeUpmix = false;
+            store.ParametricStftUpmix = true;
+            store.AtmosAwareUpmix = true;
             store.UpmixEffect = 0.75f;
             store.UpmixSmoothness = 0.80f;
             matrixUpmixSwitch.Checked = false;
             cavernizeUpmixSwitch.Checked = false;
+            parametricStftSwitch.Checked = true;
+            atmosAwareUpmixSwitch.Checked = true;
             upmixEffectBar.Progress = 75;
             upmixSmoothBar.Progress = 80;
+            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
             ReattachPlayerTrack();
             RefreshMusicPlayerControlsUi();
         });
@@ -1144,6 +1166,13 @@ public partial class MainActivity {
         neuralUpmixModeSelector.SelectionChanged += pos => {
             store.NeuralSpatialUpmixModeIndex = pos;
             ApplyAndRefreshNeuralAudio();
+            RefreshNeuralPrepUi();
+            if (pos is 1 or 2 &&
+                playerEngine?.NeuralStemStage?.HasPlayableSeparatedStems != true &&
+                !isNeuralPrepRunning &&
+                GetActiveTrack() != null) {
+                PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, silentIfNotReady: true);
+            }
         };
         slot2bCard.AddView(WrapControlWithHelp(neuralUpmixModeSelector, S["NeuralUpmixModeTitle"], S["TipNeuralUpmix"], bottomMarginDp: 2));
 
@@ -1755,6 +1784,12 @@ public partial class MainActivity {
         }
         if (muteGroundSwitch != null && muteGroundSwitch.Checked != store.MuteGround) {
             muteGroundSwitch.Checked = store.MuteGround;
+        }
+        if (parametricStftSwitch != null && parametricStftSwitch.Checked != store.ParametricStftUpmix) {
+            parametricStftSwitch.Checked = store.ParametricStftUpmix;
+        }
+        if (atmosAwareUpmixSwitch != null && atmosAwareUpmixSwitch.Checked != store.AtmosAwareUpmix) {
+            atmosAwareUpmixSwitch.Checked = store.AtmosAwareUpmix;
         }
         RefreshLogSummaryLabel();
     }

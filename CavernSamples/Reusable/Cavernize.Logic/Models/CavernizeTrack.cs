@@ -39,6 +39,20 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     public virtual Codec SourceCodec => Codec;
 
     /// <summary>
+    /// True when the original source stream is lossy-compressed (including fallback-decoded MP3/AAC/M4A/OGG/Opus).
+    /// </summary>
+    public virtual bool IsLossySource =>
+        SourceCodec == Codec.EnhancedAC3 ||
+        SourceCodec == Codec.AC3 ||
+        SourceCodec == Codec.DTS ||
+        SourceCodec == Codec.Opus;
+
+    /// <summary>
+    /// Original media file path prior to external fallback PCM decoding (defaults to <see cref="Path"/>).
+    /// </summary>
+    public virtual string OriginalSourcePath => Path;
+
+    /// <summary>
     /// Optional raw bitstream path on disk when already extracted from a container.
     /// </summary>
     public virtual string RawBitstreamPath => null;
@@ -395,12 +409,22 @@ public sealed class ExternalDecodedTrack : CavernizeTrack {
     readonly string rawBitstreamPath;
     readonly Codec sourceCodec;
     readonly ReadableMetadata extraMetadata;
+    readonly bool? explicitLossySource;
+    readonly string originalSourcePath;
 
     /// <inheritdoc/>
     public override Container Container => originalTrack?.Container ?? originalContainer;
 
     /// <inheritdoc/>
     public override Codec SourceCodec => sourceCodec;
+
+    /// <inheritdoc/>
+    public override bool IsLossySource => explicitLossySource ?? base.IsLossySource;
+
+    /// <inheritdoc/>
+    public override string OriginalSourcePath => string.IsNullOrEmpty(originalSourcePath)
+        ? (originalTrack?.OriginalSourcePath ?? base.OriginalSourcePath)
+        : originalSourcePath;
 
     /// <inheritdoc/>
     public override string RawBitstreamPath => rawBitstreamPath;
@@ -420,7 +444,10 @@ public sealed class ExternalDecodedTrack : CavernizeTrack {
         Track[] originalVideoTracks,
         string rawBitstreamPath,
         string language = null,
-        ReadableMetadata extraMetadata = null)
+        ReadableMetadata extraMetadata = null,
+        bool? isLossySource = null,
+        string originalSourcePath = null,
+        string customFormatHeader = null)
         : base(decodedReader, decodedCodec, originalTrack?.Index ?? 0, language ?? originalTrack?.Language) {
         this.sourceCodec = sourceCodec;
         this.originalTrack = originalTrack;
@@ -428,8 +455,12 @@ public sealed class ExternalDecodedTrack : CavernizeTrack {
         this.originalVideoTracks = originalVideoTracks;
         this.rawBitstreamPath = rawBitstreamPath;
         this.extraMetadata = extraMetadata;
+        explicitLossySource = isLossySource;
+        this.originalSourcePath = originalSourcePath;
 
-        if (sourceCodec == Codec.TrueHD) {
+        if (!string.IsNullOrWhiteSpace(customFormatHeader)) {
+            FormatHeader = customFormatHeader;
+        } else if (sourceCodec == Codec.TrueHD) {
             string durText = $"{TimeSpan.FromSeconds(Length / (double)Math.Max(1, SampleRate)):h\\:mm\\:ss}";
             FormatHeader = Renderer != null && Renderer.HasObjects
                 ? $"Dolby TrueHD Atmos ({durText})"

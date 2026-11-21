@@ -67,7 +67,8 @@ namespace Cavern.Remapping {
         readonly Vector3[][] objectPositionHistory;
         readonly int[] objectPositionDelaySamples;
         int positionHistoryHead;
-        const int PositionHistorySlots = 8; // Covers up to 8 x 256-sample hops (>= 1024-sample dual-stage alignment)
+        int positionHistorySlots = MinPositionHistorySlots;
+        const int MinPositionHistorySlots = 32; // Covers down to 32-sample bursts at 1024-sample dual-stage STFT latency
 
         // Smooth Atmos native-height activity ducker [0 = native overhead active, 1 = ceiling sparse/silent]
         float sparseHeightDuckFactor = 1f;
@@ -245,8 +246,8 @@ namespace Cavern.Remapping {
             objectPositionDelaySamples = new int[inputCount];
             for (int i = 0; i < inputCount; i++) {
                 passThroughDelays[i] = new FixedSampleDelayLine(totalDelaySamples);
-                objectPositionHistory[i] = new Vector3[PositionHistorySlots];
-                for (int s = 0; s < PositionHistorySlots; s++) {
+                objectPositionHistory[i] = new Vector3[positionHistorySlots];
+                for (int s = 0; s < positionHistorySlots; s++) {
                     objectPositionHistory[i][s] = sources[i].Position;
                 }
                 objectPositionDelaySamples[i] = totalDelaySamples;
@@ -350,10 +351,16 @@ namespace Cavern.Remapping {
             float invEnvY = envSize.Y > 0.1f ? 1f / envSize.Y : 0.142857f;
 
             // 1. Sync live 3D positions of all native beds & dynamic Atmos objects (with matched latency history if STFT active)
-            int historyLagSlots = needsStftAlignment
-                ? Math.Min(PositionHistorySlots - 1, Math.Max(1, objectPositionDelaySamples[0] / Math.Max(1, samplesPerSource)))
+            int requiredLagSlots = needsStftAlignment
+                ? Math.Max(1, (int)Math.Round(objectPositionDelaySamples[0] / (double)Math.Max(1, samplesPerSource)))
                 : 0;
-            int readSlot = (positionHistoryHead - historyLagSlots + PositionHistorySlots) % PositionHistorySlots;
+            if (needsStftAlignment && requiredLagSlots + 2 > positionHistorySlots) {
+                EnsurePositionHistoryCapacity(requiredLagSlots + 2);
+            }
+            int historyLagSlots = needsStftAlignment
+                ? Math.Min(positionHistorySlots - 1, requiredLagSlots)
+                : 0;
+            int readSlot = (positionHistoryHead - historyLagSlots + positionHistorySlots) % positionHistorySlots;
 
             double nativeHeightEnergy = 0.0;
             double groundBedEnergy = 0.0;
@@ -374,7 +381,7 @@ namespace Cavern.Remapping {
                     }
                 }
             }
-            positionHistoryHead = (positionHistoryHead + 1) % PositionHistorySlots;
+            positionHistoryHead = (positionHistoryHead + 1) % positionHistorySlots;
 
             // 2. Update smooth Atmos-Aware sparse height ducking factor (fast attack ~80 ms, gentle release ~250 ms)
             double totalMeasured = nativeHeightEnergy + groundBedEnergy;
@@ -528,6 +535,31 @@ namespace Cavern.Remapping {
                 scratchSl = new float[samplesPerSource];
                 scratchSr = new float[samplesPerSource];
             }
+        }
+
+        void EnsurePositionHistoryCapacity(int requiredSlots) {
+            if (requiredSlots <= positionHistorySlots) {
+                return;
+            }
+            int nextCap = positionHistorySlots;
+            while (nextCap < requiredSlots) {
+                nextCap *= 2;
+            }
+            for (int i = 0; i < inputCount; i++) {
+                Vector3[] oldHist = objectPositionHistory[i];
+                Vector3[] grown = new Vector3[nextCap];
+                Vector3 oldestVal = oldHist[positionHistoryHead];
+                int pad = nextCap - positionHistorySlots;
+                for (int s = 0; s < pad; s++) {
+                    grown[s] = oldestVal;
+                }
+                for (int s = 0; s < positionHistorySlots; s++) {
+                    grown[pad + s] = oldHist[(positionHistoryHead + s) % positionHistorySlots];
+                }
+                objectPositionHistory[i] = grown;
+            }
+            positionHistoryHead = 0;
+            positionHistorySlots = nextCap;
         }
 
         static double ComputeMeanSquare(float[] samples, int count) {

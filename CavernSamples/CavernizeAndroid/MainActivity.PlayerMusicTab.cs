@@ -185,7 +185,8 @@ public partial class MainActivity {
     OneUiIconView musicLyricsSingMicIcon;
     TextView musicLyricsSingPctText;
     OneUiSeekBar musicLyricsVocalSeekBar;
-    Button musicLyricsMixMatchBtn, musicLyricsScarlettBtn;
+    Button musicLyricsAiPrepBtn, musicLyricsMixMatchBtn, musicLyricsScarlettBtn;
+    TextView musicLyricsAiStatusText;
 
     // Apple Music Title Row
     LinearLayout musicTitleRow;
@@ -388,13 +389,25 @@ public partial class MainActivity {
         musicLyricsSingPctText.SetSingleLine(true);
         singTopRow.AddView(musicLyricsSingPctText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
+        musicLyricsAiPrepBtn = PillButton(S["NeuralPrepBtn"], () =>
+            PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke));
+        musicLyricsAiPrepBtn.TextSize = 10.4f;
+        musicLyricsAiPrepBtn.SetSingleLine(true);
+        musicLyricsAiPrepBtn.Ellipsize = TextUtils.TruncateAt.End;
+        musicLyricsAiPrepBtn.SetPadding(Dp(9), Dp(5), Dp(9), Dp(5));
+        singTopRow.AddView(musicLyricsAiPrepBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(5) });
+
         musicLyricsMixMatchBtn = PillButton(S["SingMicMixMatchBtn"], ShowAutoVocalMixMatchModal);
         musicLyricsMixMatchBtn.TextSize = 10.6f;
+        musicLyricsMixMatchBtn.SetSingleLine(true);
+        musicLyricsMixMatchBtn.Ellipsize = TextUtils.TruncateAt.End;
         musicLyricsMixMatchBtn.SetPadding(Dp(10), Dp(5), Dp(10), Dp(5));
-        singTopRow.AddView(musicLyricsMixMatchBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+        singTopRow.AddView(musicLyricsMixMatchBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(5) });
 
         musicLyricsScarlettBtn = PillButton(S["SingScarlettQuickBtn"], ShowScarlett2i2ControlsModal);
         musicLyricsScarlettBtn.TextSize = 10.6f;
+        musicLyricsScarlettBtn.SetSingleLine(true);
+        musicLyricsScarlettBtn.Ellipsize = TextUtils.TruncateAt.End;
         musicLyricsScarlettBtn.SetPadding(Dp(10), Dp(5), Dp(10), Dp(5));
         singTopRow.AddView(musicLyricsScarlettBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
 
@@ -412,6 +425,14 @@ public partial class MainActivity {
         musicLyricsVocalSeekBar.UserProgressChanged += v => ApplyLyricsSingVocalLevel(v);
         musicLyricsVocalSeekBar.ResetRequested += v => ApplyLyricsSingVocalLevel(v);
         musicLyricsSingDock.AddView(musicLyricsVocalSeekBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+        musicLyricsAiStatusText = Label("", 10.5f, OneUiTheme.TextSub);
+        musicLyricsAiStatusText.SetSingleLine(true);
+        musicLyricsAiStatusText.Ellipsize = TextUtils.TruncateAt.End;
+        musicLyricsAiStatusText.Visibility = ViewStates.Gone;
+        musicLyricsSingDock.AddView(musicLyricsAiStatusText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(2)
+        });
 
         musicLyricsContainer.AddView(musicLyricsSingDock, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(6)
@@ -1144,6 +1165,7 @@ public partial class MainActivity {
                 ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 76), 99f, OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 175), 1f)
                 : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f);
         }
+        RefreshNeuralPrepUi();
     }
 
     void RefreshBottomActionBarVisuals() {

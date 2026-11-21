@@ -62,6 +62,9 @@ namespace Cavern.Neural {
 
         int configuredChannels;
         int inFill;
+        bool hasPrimedHop;
+        bool wasBypassed = true;
+        float bypassFadeMix;
         bool isEnabled;
         float vocalLevel = 1f;
         bool preserveBackingVocals = true;
@@ -171,6 +174,9 @@ namespace Cavern.Neural {
             Array.Clear(covVV, 0, SpectrumBins);
             Array.Clear(covBB, 0, SpectrumBins);
             inFill = 0;
+            hasPrimedHop = false;
+            wasBypassed = true;
+            bypassFadeMix = 0f;
             latestVocalActivity = 0f;
         }
 
@@ -185,6 +191,7 @@ namespace Cavern.Neural {
         /// <param name="sampleCount">Number of samples per channel to process.</param>
         /// <param name="neuralLeadVocalRef">Optional sample-aligned mono Lead Vocal stem (from ONNX Karaoke/RoFormer or W09 lossless twin).</param>
         /// <param name="neuralBackingVocalRef">Optional sample-aligned mono Backing Vocal stem (preserved when <see cref="PreserveBackingVocals"/> is true).</param>
+        /// <param name="isFullMixTwinReference">True when <paramref name="neuralLeadVocalRef"/> is a non-neural full-mix twin center sum rather than an isolated vocal stem, restricting attenuation to the physiological vocal band.</param>
         public void ProcessMultichannelInPlace(
             float[][] channels,
             bool[] isLfe,
@@ -192,12 +199,17 @@ namespace Cavern.Neural {
             int channelCount,
             int sampleCount,
             float[] neuralLeadVocalRef = null,
-            float[] neuralBackingVocalRef = null) {
+            float[] neuralBackingVocalRef = null,
+            bool isFullMixTwinReference = false) {
             if (channels == null || channelCount <= 0 || sampleCount <= 0) {
                 return;
             }
-            // Bit-exact unity bypass when disabled or VocalLevel == 100%
-            if (!isEnabled || vocalLevel >= 0.9999f) {
+
+            bool targetActive = isEnabled && vocalLevel < 0.9999f;
+            // Bit-exact unity bypass once smoothly ramped down to 0
+            if (!targetActive && bypassFadeMix <= 0.0001f) {
+                bypassFadeMix = 0f;
+                wasBypassed = true;
                 latestVocalActivity = 0f;
                 return;
             }
@@ -208,18 +220,46 @@ namespace Cavern.Neural {
             }
             configuredChannels = chCount;
 
+            if (wasBypassed && targetActive) {
+                for (int c = 0; c < chCount; c++) {
+                    Array.Clear(prevIn[c], 0, HopSize);
+                    Array.Clear(currIn[c], 0, HopSize);
+                    Array.Clear(olaTail[c], 0, HopSize);
+                    Array.Clear(readyOut[c], 0, HopSize);
+                }
+                Array.Clear(prevRefLead, 0, HopSize);
+                Array.Clear(currRefLead, 0, HopSize);
+                Array.Clear(prevRefBacking, 0, HopSize);
+                Array.Clear(currRefBacking, 0, HopSize);
+                inFill = 0;
+                hasPrimedHop = false;
+                bypassFadeMix = 0f;
+                wasBypassed = false;
+            }
+
             bool hasNeuralLead = neuralLeadVocalRef != null && neuralLeadVocalRef.Length >= sampleCount;
             bool hasNeuralBacking = neuralBackingVocalRef != null && neuralBackingVocalRef.Length >= sampleCount;
+            const float fadeStep = 1f / HopSize;
 
             for (int n = 0; n < sampleCount; n++) {
-                // Emit previously synthesized COLA hop samples (skipping LFE channels untouched)
+                float smoothMix = 0f;
+                if (hasPrimedHop) {
+                    bypassFadeMix = targetActive
+                        ? Math.Min(1f, bypassFadeMix + fadeStep)
+                        : Math.Max(0f, bypassFadeMix - fadeStep);
+                    smoothMix = bypassFadeMix * bypassFadeMix * (3f - 2f * bypassFadeMix);
+                }
+
+                // Emit smoothly crossfaded COLA hop samples (skipping LFE channels untouched)
                 for (int c = 0; c < chCount; c++) {
                     if (channels[c] == null || (isLfe != null && c < isLfe.Length && isLfe[c])) {
                         continue;
                     }
                     float inSample = channels[c][n];
                     currIn[c][inFill] = inSample;
-                    channels[c][n] = readyOut[c][inFill];
+                    if (hasPrimedHop) {
+                        channels[c][n] = inSample + (readyOut[c][inFill] - inSample) * smoothMix;
+                    }
                 }
 
                 currRefLead[inFill] = hasNeuralLead ? neuralLeadVocalRef[n] : 0f;
@@ -227,9 +267,16 @@ namespace Cavern.Neural {
                 inFill++;
 
                 if (inFill == HopSize) {
-                    ExecuteMultichannelHop(chCount, isLfe, isCenterOrFront, hasNeuralLead, hasNeuralBacking);
+                    ExecuteMultichannelHop(chCount, isLfe, isCenterOrFront, hasNeuralLead, hasNeuralBacking, isFullMixTwinReference);
                     FinishHop(chCount);
+                    hasPrimedHop = true;
                 }
+            }
+
+            if (!targetActive && bypassFadeMix <= 0.0001f) {
+                bypassFadeMix = 0f;
+                wasBypassed = true;
+                latestVocalActivity = 0f;
             }
         }
 
@@ -274,10 +321,16 @@ namespace Cavern.Neural {
                 win[i] = MathF.Sin(MathF.PI * (i + 0.5f) / nFft);
             }
 
-            float hopSec = hop / (float)(sampleRate > 0 ? sampleRate : 48000);
+            int effectiveSr = sampleRate > 0 ? sampleRate : 48000;
+            float hopSec = hop / (float)effectiveSr;
             float alpha = 1f - MathF.Exp(-hopSec / 0.045f);
             bool hasLead = neuralLeadVocalRef != null && neuralLeadVocalRef.Length >= length;
             bool hasBacking = preserveBackingVocals && neuralBackingVocalRef != null && neuralBackingVocalRef.Length >= length;
+            float[] offlineBandWeight = new float[bins];
+            float offlineDf = effectiveSr / (float)nFft;
+            for (int k = 0; k < bins; k++) {
+                offlineBandWeight[k] = ComputeVocalBandEnvelope(k * offlineDf);
+            }
 
             ThreadSafeFFTCache fft = new ThreadSafeFFTCache(nFft);
             try {
@@ -379,9 +432,10 @@ namespace Cavern.Neural {
                             float vocalDominance = hasLead
                                 ? MathF.Min(1f, cCovVV[k] / (cCovCC[c][k] + Epsilon))
                                 : 1f;
+                            float offlineBandW = hasLead ? 1f : offlineBandWeight[k];
 
                             // Strictly real positive gain in [0, 1] -> exact 0.000° phase preservation across all channels!
-                            float vocalMask = MathF.Sqrt(cohSq * vocalDominance) * leadPurity;
+                            float vocalMask = MathF.Sqrt(cohSq * vocalDominance) * leadPurity * offlineBandW;
                             if (vocalMask > 1f) {
                                 vocalMask = 1f;
                             }
@@ -435,7 +489,13 @@ namespace Cavern.Neural {
             return output;
         }
 
-        void ExecuteMultichannelHop(int chCount, bool[] isLfe, bool[] isCenterOrFront, bool hasNeuralLead, bool hasNeuralBacking) {
+        void ExecuteMultichannelHop(
+            int chCount,
+            bool[] isLfe,
+            bool[] isCenterOrFront,
+            bool hasNeuralLead,
+            bool hasNeuralBacking,
+            bool isFullMixTwinReference) {
             for (int c = 0; c < chCount; c++) {
                 if (isLfe != null && c < isLfe.Length && isLfe[c]) {
                     continue;
@@ -462,7 +522,8 @@ namespace Cavern.Neural {
                 refBackingSpec.InPlaceFFT(fftCache);
             }
 
-            float attenStrength = 1f - vocalLevel;
+            bool useIsolatedNeuralLead = hasNeuralLead && !isFullMixTwinReference;
+            float attenStrength = isEnabled ? (1f - vocalLevel) : 0f;
             double vocalEnergySum = 0.0;
             double totalEnergySum = 0.0;
 
@@ -473,7 +534,7 @@ namespace Cavern.Neural {
 
                 if (hasNeuralLead) {
                     vRef = refLeadSpec[k];
-                    bandW = 1f;
+                    bandW = useIsolatedNeuralLead ? 1f : vocalBandWeight[k];
                 } else {
                     // Real-time center-coherent vocal reference when no offline neural stem is attached yet:
                     // uses front/center channels (or L+R Mid sum on stereo) weighted by physiological vocal envelope.
@@ -516,9 +577,9 @@ namespace Cavern.Neural {
                     leadPurity = covVV[k] / (covVV[k] + covBB[k] + Epsilon);
                 }
 
-                // Stereo Side protection when PreserveBackingVocals is enabled in blind 2-channel mode
+                // Stereo Side protection when PreserveBackingVocals is enabled without an isolated neural lead stem
                 float stereoCenterPurity = 1f;
-                if (!hasNeuralLead && preserveBackingVocals && chCount == 2) {
+                if (!useIsolatedNeuralLead && preserveBackingVocals && chCount >= 2) {
                     float dRe = chSpec[0][k].Real - chSpec[1][k].Real;
                     float dIm = chSpec[0][k].Imaginary - chSpec[1][k].Imaginary;
                     float sidePow = 0.25f * (dRe * dRe + dIm * dIm);
@@ -548,7 +609,7 @@ namespace Cavern.Neural {
                         cohSq = 1f;
                     }
 
-                    float vocalDominance = hasNeuralLead
+                    float vocalDominance = useIsolatedNeuralLead
                         ? MathF.Min(1f, covVV[k] / (covCC[c][k] + Epsilon))
                         : stereoCenterPurity;
 
