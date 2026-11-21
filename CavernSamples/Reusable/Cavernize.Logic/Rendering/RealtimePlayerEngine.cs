@@ -1475,8 +1475,6 @@ public sealed class RealtimePlayerEngine : IDisposable {
             if (rendered != null && rendered.Length > 0 && !src.Mute) {
                 SpatialXRayPowermap.EstimateThreeBandRms(
                     rendered,
-                    0,
-                    rendered.Length,
                     sr,
                     out float lowRms,
                     out float midRms,

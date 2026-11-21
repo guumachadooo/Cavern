@@ -5,6 +5,7 @@ using Cavern.Format;
 using Cavern.Format.Common;
 using Cavern.Format.Common.Metadata;
 using Cavern.Format.Renderers;
+using Cavern.Format.Renderers.BaseClasses;
 using Cavern.Remapping;
 using Cavern.Remapping.Exceptions;
 using Cavern.Utilities;

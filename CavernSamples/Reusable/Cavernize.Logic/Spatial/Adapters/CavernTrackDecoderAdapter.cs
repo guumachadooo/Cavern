@@ -19,7 +19,7 @@ namespace Cavernize.Logic.Spatial.Adapters;
 public sealed class CavernTrackDecoderAdapter : ISpatialDecoder {
     readonly CavernizeTrack track;
     readonly List<SpatialSourceDescriptor> descriptors;
-    readonly SpatialProgramMetadata metadata;
+    SpatialProgramMetadata metadata;
 
     /// <inheritdoc/>
     public string Name { get; }

@@ -97,6 +97,9 @@ jobs:
           NDK_OUTCOME: ${{ steps.ndk_build.outcome }}
         run: |
           set +e
+          SHADOW_CSPROJ="CavernSamples/CavernizeAndroid/CavernizeAndroid.ShadowAudit.csproj"
+          trap 'rm -f "$SHADOW_CSPROJ"' EXIT
+
           dotnet restore CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj -p:AcceptAndroidSDKLicenses=true
 
           LAYERS=(
@@ -130,8 +133,89 @@ jobs:
             fi
           done
 
+          # If an upstream layer failed before 04_CavernizeAndroid could compile, run an All-In-One
+          # Shadow Roslyn compilation combining unbuilt upstream .cs sources directly into net11.0-android
+          # so ALL errors across the ENTIRE app (including CavernizeAndroid) are surfaced in ONE run.
+          SHADOW_LOG="$RUNNER_TEMP/ci_05_Shadow_FullApp.log"
+          : > "$SHADOW_LOG"
+          if grep -q "04_CavernizeAndroid|SKIPPED_UPSTREAM" "$STATUS_FILE"; then
+            echo "=== Upstream layer failed; running All-In-One Shadow Roslyn Audit for entire app ==="
+            python3 - "$STATUS_FILE" "$SHADOW_CSPROJ" << 'PYGEN'
+          import sys
+
+          status_file, out_csproj = sys.argv[1], sys.argv[2]
+          statuses = {}
+          for line in open(status_file, encoding="utf-8"):
+              parts = line.strip().split("|")
+              if len(parts) == 3:
+                  statuses[parts[0]] = parts[1]
+
+          refs = []
+          compiles = []
+
+          if statuses.get("01_Cavern") == "PASS":
+              refs.append('    <ProjectReference Include="../../Cavern/Cavern.csproj" />')
+          else:
+              compiles.append('    <Compile Include="../../Cavern/**/*.cs" Exclude="../../Cavern/obj/**;../../Cavern/bin/**" />')
+              compiles.append('    <Compile Include="../VoidX.WPF/Language/LanguageBase.cs" Link="Shadow/VoidX.WPF/Language/LanguageBase.cs" />')
+              compiles.append('    <Compile Include="../VoidX.WPF/Language/LanguageSettings.cs" Link="Shadow/VoidX.WPF/Language/LanguageSettings.cs" />')
+
+          if statuses.get("02_Cavern.Format") == "PASS":
+              refs.append('    <ProjectReference Include="../../Cavern.Format/Cavern.Format.csproj" />')
+          else:
+              compiles.append('    <Compile Include="../../Cavern.Format/**/*.cs" Exclude="../../Cavern.Format/obj/**;../../Cavern.Format/bin/**" />')
+
+          if statuses.get("03_Cavernize.Logic") == "PASS":
+              refs.append('    <ProjectReference Include="../Reusable/Cavernize.Logic/Cavernize.Logic.csproj" />')
+          else:
+              compiles.append('    <Compile Include="../Reusable/Cavernize.Logic/**/*.cs" Exclude="../Reusable/Cavernize.Logic/obj/**;../Reusable/Cavernize.Logic/bin/**" />')
+              compiles.append('    <Compile Include="../VoidX.WPF/FFmpeg/FFmpeg.cs" Link="Shadow/VoidX.WPF/FFmpeg/FFmpeg.cs" />')
+              compiles.append('    <Compile Include="../VoidX.WPF/FFmpeg/FFmpegArgument.cs" Link="Shadow/VoidX.WPF/FFmpeg/FFmpegArgument.cs" />')
+              compiles.append('    <Compile Include="../VoidX.WPF/FFmpeg/FFmpegConfigurator.cs" Link="Shadow/VoidX.WPF/FFmpeg/FFmpegConfigurator.cs" />')
+              compiles.append('    <Compile Include="../VoidX.WPF/FFmpeg/FFmpegStream.cs" Link="Shadow/VoidX.WPF/FFmpeg/FFmpegStream.cs" />')
+              compiles.append('    <Compile Include="../VoidX.WPF/HTTP.cs" Link="Shadow/VoidX.WPF/HTTP.cs" />')
+
+          xml = f"""<Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <TargetFramework>net11.0-android</TargetFramework>
+              <SupportedOSPlatformVersion>26.0</SupportedOSPlatformVersion>
+              <OutputType>Exe</OutputType>
+              <Nullable>disable</Nullable>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+              <ApplicationId>hu.sbence.cavern.cavernize</ApplicationId>
+              <AndroidUseAapt2>true</AndroidUseAapt2>
+              <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;bin/**</DefaultItemExcludes>
+            </PropertyGroup>
+            <ItemGroup>
+          {chr(10).join(compiles)}
+            </ItemGroup>
+            <ItemGroup>
+          {chr(10).join(refs)}
+            </ItemGroup>
+          </Project>
+          """
+          with open(out_csproj, "w", encoding="utf-8") as f:
+              f.write(xml)
+          PYGEN
+
+            dotnet build "$SHADOW_CSPROJ" \
+              -c Release -f net11.0-android -v:minimal \
+              -p:GenerateFullPaths=true \
+              -p:AcceptAndroidSDKLicenses=true \
+              -p:BaseIntermediateOutputPath="$RUNNER_TEMP/shadow_obj/" \
+              -p:BaseOutputPath="$RUNNER_TEMP/shadow_bin/" \
+              2>&1 | tee "$SHADOW_LOG"
+            shadow_rc=${PIPESTATUS[0]}
+            if [ "$shadow_rc" -eq 0 ]; then
+              echo "05_Shadow_FullApp|PASS|0" >> "$STATUS_FILE"
+            else
+              echo "05_Shadow_FullApp|FAIL|$shadow_rc" >> "$STATUS_FILE"
+            fi
+          fi
+
           python3 - "$RUNNER_TEMP" "$NDK_OUTCOME" "$GITHUB_STEP_SUMMARY" << 'PY'
-          import glob, os, re, sys
+          import os, re, sys
 
           runner_temp, ndk_outcome, summary_path = sys.argv[1], sys.argv[2], sys.argv[3]
           status_path = os.path.join(runner_temp, "ci_layer_status.txt")
@@ -143,18 +227,24 @@ jobs:
                       layers.append(tuple(parts))
 
           err_pat = re.compile(r"(?::\s*error\b|\berror\s+[A-Z]{2,}[0-9]+:|\bfatal error:)", re.I)
+          global_seen = set()
           all_errors = []
+
+          def normalize_key(line):
+              # Deduplicate identical diagnostics reported by both a layer build and the shadow all-in-one build
+              return re.sub(r"\s*\[[^\]]+\.csproj\]\s*$", "", line).strip()
 
           def collect(label, log_file):
               if not os.path.exists(log_file):
                   return []
-              seen = set()
               found = []
               for raw in open(log_file, encoding="utf-8", errors="ignore"):
                   line = raw.strip()
-                  if err_pat.search(line) and line not in seen:
-                      seen.add(line)
-                      found.append(line)
+                  if err_pat.search(line):
+                      key = normalize_key(line)
+                      if key not in global_seen:
+                          global_seen.add(key)
+                          found.append(line)
               if found:
                   all_errors.append((label, found))
               return found
@@ -172,7 +262,7 @@ jobs:
 
           if all_errors:
               total = sum(len(errs) for _, errs in all_errors)
-              lines.append(f"\n### Consolidated Errors ({total} unique)")
+              lines.append(f"\n### Consolidated Errors ({total} unique across entire app)")
               for label, errs in all_errors:
                   lines.append(f"\n#### {label} ({len(errs)})")
                   lines.append("```text")
