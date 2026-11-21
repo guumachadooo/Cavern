@@ -1,4 +1,5 @@
-@import "tailwindcss";
+@import "tailwindcss" source("../src");
+@source "../index.html";
 
 @theme {
   --font-display: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif;

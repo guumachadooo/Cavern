@@ -306,7 +306,7 @@ namespace Cavern.Filters {
         float latestCrestFactorDb;
 
         /// <summary>Creates an ITU-R BS.1770-5 / EBU R128 loudness meter.</summary>
-        public LoudnessMeter(int sampleRate = Listener.DefaultSampleRate, int channels = 2) {
+        public LoudnessMeter(int sampleRate = 48000, int channels = 2) {
             Configure(sampleRate, channels);
         }
 

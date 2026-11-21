@@ -48,7 +48,7 @@ namespace Cavern.Filters {
         /// <summary>
         /// Creates an HpTF ear-canal resonance notch filter (disabled by default for zero-regression neutrality).
         /// </summary>
-        public HptfNotchFilter(int sampleRate = Listener.DefaultSampleRate, int channels = 2) {
+        public HptfNotchFilter(int sampleRate = 48000, int channels = 2) {
             this.sampleRate = sampleRate >= 8000 ? sampleRate : Listener.DefaultSampleRate;
             this.channels = channels > 0 ? channels : 2;
             eq = new ParametricEqualizer(this.sampleRate, this.channels);

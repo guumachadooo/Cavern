@@ -3,6 +3,7 @@ using System.Numerics;
 
 using Cavern.Spatial;
 using Cavern.Utilities;
+using Complex = Cavern.Utilities.Complex;
 
 namespace Cavern.Remapping {
     /// <summary>

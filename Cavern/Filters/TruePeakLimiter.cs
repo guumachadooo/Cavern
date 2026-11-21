@@ -60,7 +60,7 @@ namespace Cavern.Filters {
 
         /// <summary>Creates a transparent 4x-oversampled True-Peak brickwall limiter.</summary>
         public TruePeakLimiter(
-            int sampleRate = Listener.DefaultSampleRate,
+            int sampleRate = 48000,
             int channels = 2,
             float ceilingDbtp = DefaultCeilingDbtp,
             float releaseMs = DefaultReleaseMs) {

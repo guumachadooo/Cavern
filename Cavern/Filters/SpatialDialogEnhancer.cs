@@ -84,7 +84,7 @@ namespace Cavern.Filters {
         public float ExternalSpeechActivity { get; set; } = float.NaN;
 
         /// <summary>Creates a Spatial Dialog Enhancer (disabled by default for zero-regression neutrality).</summary>
-        public SpatialDialogEnhancer(int sampleRate = Listener.DefaultSampleRate) {
+        public SpatialDialogEnhancer(int sampleRate = 48000) {
             Configure(sampleRate);
         }
 

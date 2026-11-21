@@ -95,7 +95,7 @@ public static class SofaHrirReader {
     /// <summary>
     /// Loads the complete measured spherical grid from a .sofa file on disk (optionally resampled to 48 kHz).
     /// </summary>
-    public static SofaRawGrid LoadRawGrid(string filePath, int targetSampleRate = VirtualizerFilter.FilterSampleRate) {
+    public static SofaRawGrid LoadRawGrid(string filePath, int targetSampleRate = 0) {
         if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath)) {
             throw new FileNotFoundException("SOFA file not found.", filePath);
         }
@@ -107,7 +107,10 @@ public static class SofaHrirReader {
     /// Applies optional AES69 <c>Data.Delay</c> interaural offsets and resamples non-48 kHz files (e.g. 96 kHz SONICOM
     /// or 44.1 kHz HUTUBS) to <paramref name="targetSampleRate"/> using energy-preserving linear resampling.
     /// </summary>
-    public static SofaRawGrid ParseRawGrid(byte[] data, int targetSampleRate = VirtualizerFilter.FilterSampleRate) {
+    public static SofaRawGrid ParseRawGrid(byte[] data, int targetSampleRate = 0) {
+        if (targetSampleRate <= 0) {
+            targetSampleRate = VirtualizerFilter.FilterSampleRate;
+        }
         Hdf5Reader reader = new(data);
         Dictionary<string, ulong> links = reader.ListGroup(reader.RootAddress);
 

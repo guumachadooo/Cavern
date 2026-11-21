@@ -151,7 +151,7 @@ namespace Cavern.Filters {
         /// <summary>
         /// Creates a flat (unity gain, 0-band) double-precision <see cref="ParametricEqualizer"/>.
         /// </summary>
-        public ParametricEqualizer(int sampleRate = Listener.DefaultSampleRate, int channels = 2) {
+        public ParametricEqualizer(int sampleRate = 48000, int channels = 2) {
             this.sampleRate = sampleRate >= 8000 ? sampleRate : Listener.DefaultSampleRate;
             this.channels = channels > 0 ? channels : 2;
             activeSnapshot = new FilterBankSnapshot(
