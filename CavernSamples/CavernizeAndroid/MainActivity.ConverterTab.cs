@@ -31,10 +31,12 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
-    Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, shareExportBtn, playExportBtn;
+    Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, shareExportBtn, playExportBtn, studioW12ExportBtn, studioW12BatchBtn;
     LayoutDiagramView layoutDiagram;
-    TextView convertStatusText;
-    OneUiInlineSelector exportFormatSelector, containerSelector;
+    TextView convertStatusText, studioW12ContextText;
+    OneUiInlineSelector exportFormatSelector, containerSelector, studioW12PresetSelector;
+    LinearLayout studioW12KaraokeContainer;
+    OneUiSeekBar studioW12KaraokeBar;
     CheckBox applyRoomToExportCheck;
     ProgressBar convertProgressBar;
 
@@ -75,7 +77,7 @@ public partial class MainActivity {
         page.AddView(sysCard);
 
         // 2. Content & Export Card (In-App One UI 9 Selectors — no native Spinner popups)
-        LinearLayout expCard = Card("Export", OneUiIconType.Bolt, OneUiTheme.IconStudioExport);
+        LinearLayout expCard = Card(S["ExportCardTitle"], OneUiIconType.Bolt, OneUiTheme.IconStudioExport);
 
         exportFormatSelector = new OneUiInlineSelector(this, S["ExportFormat"]);
         ExportFormat[] formats = ExportFormat.GetFormats();
@@ -154,6 +156,62 @@ public partial class MainActivity {
 
         page.AddView(expCard);
 
+        // 2B. W12/W14 Studio Master Presets Card (IAMF / HOA 3rd-Order / ADM BWF / Personalized Binaural / Karaoke / Hybrid Master)
+        LinearLayout w12Card = Card(S["StudioW12CardTitle"], OneUiIconType.Sparkles, OneUiTheme.IconStudioExport);
+        studioW12PresetSelector = new OneUiInlineSelector(this, S["StudioW12PresetLabel"]);
+        studioW12PresetSelector.SetItems(new[] {
+            S["StudioW12PresetBinaural"],
+            S["StudioW12PresetIamf"],
+            S["StudioW12PresetHoa"],
+            S["StudioW12PresetAdm"],
+            S["StudioW12PresetHybrid714"],
+            S["StudioW12PresetKaraoke"],
+            S["StudioW12PresetLiveMixdown"],
+            S["StudioW12PresetFlacAtmos"]
+        }, 1);
+        studioW12PresetSelector.SelectionChanged += _ => RefreshStudioW12ContextUi();
+        w12Card.AddView(studioW12PresetSelector);
+
+        studioW12ContextText = Label("", 11.4f, OneUiTheme.TextSub);
+        studioW12ContextText.SetPadding(0, Dp(6), 0, Dp(4));
+        w12Card.AddView(studioW12ContextText);
+
+        studioW12KaraokeContainer = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        (studioW12KaraokeBar, _) = AddSliderRow(
+            studioW12KaraokeContainer,
+            S["StudioW12KaraokeLevelTitle"],
+            0,
+            100,
+            Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100),
+            v => {
+                store.KaraokeVocalLevel = v * 0.01f;
+                playerEngine?.SetKaraokeVocalLevel(store.KaraokeVocalLevel);
+                if (karaokeVocalLevelBar != null) {
+                    karaokeVocalLevelBar.Progress = v;
+                    karaokeVocalLevelBar.Invalidate();
+                }
+                RefreshLyricsSingDockUi();
+                RefreshStudioW12ContextUi();
+            },
+            "%",
+            defaultValue: 5);
+        w12Card.AddView(studioW12KaraokeContainer);
+
+        LinearLayout w12BtnRow = HRow();
+        w12BtnRow.SetPadding(0, Dp(8), 0, 0);
+        studioW12ExportBtn = PrimaryButton(S["StudioW12ExportBtn"], StartStudioW12PresetExport);
+        w12BtnRow.AddView(studioW12ExportBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        w12Card.AddView(w12BtnRow);
+
+        studioW12BatchBtn = PillButton(S["StudioW12BatchBtn"], ShowStudioW12BatchDialog);
+        w12Card.AddView(studioW12BatchBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(6)
+        });
+        page.AddView(w12Card);
+
         // 3. Batch Render Queue Card
         LinearLayout queueCard = Card(S["QueueTitle"], OneUiIconType.Queue, OneUiTheme.IconAtmosUpmix);
         queueListContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
@@ -184,6 +242,44 @@ public partial class MainActivity {
             wiringBtn.Enabled = RenderTarget is not DriverRenderTarget && RenderTarget is not VirtualizerRenderTarget;
         }
         RefreshContainerOptions();
+        RefreshStudioW12ContextUi();
+    }
+
+    void RefreshStudioW12ContextUi() {
+        if (studioW12ContextText == null || studioW12PresetSelector == null || store == null) {
+            return;
+        }
+        StudioExportPreset preset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector.SelectedIndex, 0, 7);
+        bool isKaraokePreset = preset == StudioExportPreset.SpatialKaraokeInstrumental ||
+                               preset == StudioExportPreset.LiveKaraokePerformanceMixdown;
+        if (studioW12KaraokeContainer != null) {
+            studioW12KaraokeContainer.Visibility = isKaraokePreset ? ViewStates.Visible : ViewStates.Gone;
+        }
+        int vocPct = Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100);
+        if (studioW12KaraokeBar != null && studioW12KaraokeBar.Progress != vocPct) {
+            studioW12KaraokeBar.Progress = vocPct;
+            studioW12KaraokeBar.Invalidate();
+        }
+        if (preset == StudioExportPreset.FlacAtmosHybridSpatialMaster) {
+            Cavernize.Logic.Spatial.LgsrDiagnostics lgsr = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
+            if (lgsr.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.Synced) {
+                studioW12ContextText.Text = string.Format(S["StudioW12ContextHybridReady"],
+                    string.IsNullOrEmpty(lgsr.TwinFormatSummary) ? lgsr.TwinFileName : lgsr.TwinFormatSummary);
+                studioW12ContextText.SetTextColor(OneUiTheme.IconSystemInfo);
+            } else {
+                studioW12ContextText.Text = S["StudioW12ContextHybridNoTwin"];
+                studioW12ContextText.SetTextColor(OneUiTheme.PeachText);
+            }
+        } else if (isKaraokePreset) {
+            studioW12ContextText.Text = string.Format(
+                S["StudioW12ContextKaraoke"],
+                vocPct,
+                store.KaraokePreserveBackingVocals ? "ON" : "OFF");
+            studioW12ContextText.SetTextColor(OneUiTheme.PrimaryHigh);
+        } else {
+            studioW12ContextText.Text = string.Format(S["StudioW12ContextGeneral"], store.ResolveTruePeakCeilingDbtp());
+            studioW12ContextText.SetTextColor(OneUiTheme.TextSub);
+        }
     }
 
     void RefreshConverterTrackInfo() {
@@ -217,6 +313,8 @@ public partial class MainActivity {
         if (exts.Count == 0) {
             string ext = ExportFormat.Codec switch {
                 Codec.LimitlessAudio => ".laf",
+                Codec.IAMF => ".iamf",
+                Codec.AmbisonicsHOA => ".amb",
                 Codec.DAMF => ".atmos",
                 Codec.FLAC => ".flac",
                 Codec.Opus => ".opus",
@@ -328,7 +426,7 @@ public partial class MainActivity {
         }
         ReadableMetadata meta = active.GetMetadata();
         if (meta == null) {
-            ShowError("No detailed codec metadata available for this track.");
+            ShowError(S["NoCodecMetadata"]);
             return;
         }
         StringBuilder sb = new();
@@ -450,6 +548,209 @@ public partial class MainActivity {
         RunBackgroundOperation(_ => task(), outPath);
     }
 
+    StudioBatchExportJob BuildStudioW12Job(StudioExportPreset preset, string dir, string baseName) {
+        string ext = StudioBatchExporter.GetDefaultExtension(preset);
+        string outPath = Path.Combine(dir, $"{baseName}_{preset}{ext}");
+        int n = 1;
+        while (File.Exists(outPath)) {
+            outPath = Path.Combine(dir, $"{baseName}_{preset}_{n++}{ext}");
+        }
+
+        return new StudioBatchExportJob {
+            TrackName = baseName,
+            Preset = preset,
+            OutputPath = outPath,
+            BitDepth = store.Force24Bit ? BitDepth.Int24 : BitDepth.Int16,
+            TruePeakCeilingDbtp = store.ResolveTruePeakCeilingDbtp(),
+            KaraokeVocalLevel = Math.Clamp(store.KaraokeVocalLevel, 0f, 1f),
+            PreserveBackingVocals = store.KaraokePreserveBackingVocals,
+            VocalDnaProfile = playerEngine?.VocalMixMatchStage?.ActiveDna,
+            LosslessTwinProvider = activeLosslessTwin ?? playerEngine?.SceneHub?.ActiveLosslessReference,
+            NeuralRuntime = neuralRuntime,
+            NeuralOrchestrator = neuralOrchestrator,
+            NeuralConfig = store.BuildNeuralAudioConfig(),
+            LgsrConfig = store.BuildLgsrConfig(),
+            PostProcessingStages = playerEngine?.SceneHub?.PostProcessingStages,
+            OnSeparatedTrackReady = separated => {
+                if (separated != null) {
+                    playerEngine?.BindSeparatedNeuralTrack(separated);
+                    RunOnUiThread(() => {
+                        SyncNeuralRuntimeDiagnostics();
+                        RefreshNeuralAudioUi();
+                    });
+                }
+            },
+            HoaOrder = 3
+        };
+    }
+
+    string GetStudioW12PresetLabel(StudioExportPreset preset) => preset switch {
+        StudioExportPreset.PersonalizedLosslessBinaural => S["StudioW12PresetBinaural"],
+        StudioExportPreset.EclipsaAudioIamf => S["StudioW12PresetIamf"],
+        StudioExportPreset.AmbisonicsHoa3rdOrder => S["StudioW12PresetHoa"],
+        StudioExportPreset.AdmBwfItuBs2076 => S["StudioW12PresetAdm"],
+        StudioExportPreset.HybridNeuralDirAc714 => S["StudioW12PresetHybrid714"],
+        StudioExportPreset.SpatialKaraokeInstrumental => S["StudioW12PresetKaraoke"],
+        StudioExportPreset.LiveKaraokePerformanceMixdown => S["StudioW12PresetLiveMixdown"],
+        StudioExportPreset.FlacAtmosHybridSpatialMaster => S["StudioW12PresetFlacAtmos"],
+        _ => preset.ToString()
+    };
+
+    void StartStudioW12PresetExport() {
+        if (isOperationRunning || isPreparingTrueHD) {
+            ShowError(S["OpRunning"]);
+            return;
+        }
+        CavernizeTrack active = GetActiveTrack();
+        if (active == null || !active.Supported) {
+            ShowError(S["NoTrack"]);
+            return;
+        }
+        StopPlayback();
+        StudioExportPreset preset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, 7);
+        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
+        string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
+        StudioBatchExportJob job = BuildStudioW12Job(preset, dir, baseName);
+        string label = GetStudioW12PresetLabel(preset);
+
+        RunBackgroundOperation(token => {
+            RunOnUiThread(() => SetConvertStatus(S["Starting"], 0));
+            StudioBatchExportResult res = StudioBatchExporter.ExportSingle(
+                active,
+                job,
+                p => RunOnUiThread(() => SetConvertStatus(label, p)),
+                token);
+            if (!res.Succeeded) {
+                throw new InvalidOperationException(res.ErrorMessage);
+            }
+            RunOnUiThread(() => SetConvertStatus(
+                string.Format(S["StudioW12DoneFormat"], Path.GetFileName(res.OutputPath), res.IntegratedLufs, res.MaxTruePeakDbtp),
+                1.0));
+        }, job.OutputPath);
+    }
+
+    void ShowStudioW12BatchDialog() {
+        if (isOperationRunning || isPreparingTrueHD) {
+            ShowError(S["OpRunning"]);
+            return;
+        }
+        CavernizeTrack active = GetActiveTrack();
+        if (active == null || !active.Supported) {
+            ShowError(S["NoTrack"]);
+            return;
+        }
+
+        StudioExportPreset[] allPresets = [
+            StudioExportPreset.PersonalizedLosslessBinaural,
+            StudioExportPreset.EclipsaAudioIamf,
+            StudioExportPreset.AmbisonicsHoa3rdOrder,
+            StudioExportPreset.AdmBwfItuBs2076,
+            StudioExportPreset.HybridNeuralDirAc714,
+            StudioExportPreset.SpatialKaraokeInstrumental,
+            StudioExportPreset.LiveKaraokePerformanceMixdown,
+            StudioExportPreset.FlacAtmosHybridSpatialMaster
+        ];
+
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
+        CheckBox[] boxes = new CheckBox[allPresets.Length];
+        int currentSelected = Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, allPresets.Length - 1);
+        for (int i = 0; i < allPresets.Length; i++) {
+            StudioExportPreset preset = allPresets[i];
+            CheckBox cb = new(this) {
+                Text = GetStudioW12PresetLabel(preset),
+                Checked = i == currentSelected || preset == StudioExportPreset.PersonalizedLosslessBinaural || preset == StudioExportPreset.EclipsaAudioIamf,
+                TextSize = 13f
+            };
+            cb.SetTextColor(ColText);
+            cb.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
+            cb.SetPadding(Dp(6), Dp(6), Dp(4), Dp(6));
+            content.AddView(cb);
+            boxes[i] = cb;
+        }
+
+        OneUiModalDialog.Show(
+            this,
+            S["StudioW12BatchDialogTitle"],
+            S["StudioW12BatchDialogDesc"],
+            customContent: content,
+            icon: OneUiIconType.Sparkles,
+            iconBadgeColor: OneUiTheme.IconStudioExport,
+            positiveText: S["StudioW12BatchBtn"],
+            onPositive: () => {
+                List<StudioExportPreset> chosen = new();
+                for (int i = 0; i < allPresets.Length; i++) {
+                    if (boxes[i].Checked) {
+                        chosen.Add(allPresets[i]);
+                    }
+                }
+                if (chosen.Count == 0) {
+                    ShowError(S["StudioW12BatchSelectAtLeastOne"]);
+                    return;
+                }
+                StartStudioW12BatchExport(active, chosen);
+            },
+            negativeText: S["CancelBtn"]);
+    }
+
+    void StartStudioW12BatchExport(CavernizeTrack active, List<StudioExportPreset> presets) {
+        if (isOperationRunning || isPreparingTrueHD) {
+            ShowError(S["OpRunning"]);
+            return;
+        }
+        StopPlayback();
+        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
+        string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
+        List<StudioBatchExportJob> jobs = new(presets.Count);
+        for (int i = 0; i < presets.Count; i++) {
+            jobs.Add(BuildStudioW12Job(presets[i], dir, baseName));
+        }
+
+        RunBackgroundOperation(token => {
+            RunOnUiThread(() => SetConvertStatus(S["Starting"], 0));
+            List<StudioBatchExportResult> results = StudioBatchExporter.ExportBatch(
+                active,
+                jobs,
+                (idx, total, prog) => {
+                    string label = idx >= 0 && idx < jobs.Count
+                        ? GetStudioW12PresetLabel(jobs[idx].Preset)
+                        : string.Empty;
+                    double overall = total > 0 ? Math.Clamp((idx + prog) / total, 0.0, 1.0) : prog;
+                    RunOnUiThread(() => SetConvertStatus(
+                        string.Format(S["StudioW12BatchProgressFormat"], idx + 1, total, label),
+                        overall));
+                },
+                token);
+
+            int okCount = 0;
+            string lastOkPath = null;
+            string firstError = null;
+            for (int i = 0; i < results.Count; i++) {
+                StudioBatchExportResult r = results[i];
+                if (r.Succeeded && !string.IsNullOrEmpty(r.OutputPath) && File.Exists(r.OutputPath)) {
+                    okCount++;
+                    lastOkPath = r.OutputPath;
+                    AndroidFileHelper.PublishToDownloads(this, r.OutputPath, "Renderizados");
+                } else if (firstError == null && !string.IsNullOrEmpty(r.ErrorMessage)) {
+                    firstError = r.ErrorMessage;
+                }
+            }
+
+            if (okCount == 0 && !string.IsNullOrEmpty(firstError)) {
+                throw new InvalidOperationException(firstError);
+            }
+            if (!string.IsNullOrEmpty(lastOkPath)) {
+                lastRenderedFilePath = lastOkPath;
+            }
+            RunOnUiThread(() => {
+                SetConvertStatus(string.Format(S["StudioW12BatchDoneFormat"], okCount, results.Count), 1.0);
+                if (!string.IsNullOrEmpty(lastOkPath)) {
+                    shareExportBtn.Visibility = ViewStates.Visible;
+                    playExportBtn.Visibility = ViewStates.Visible;
+                }
+            });
+        }, null);
+    }
+
     string BuildDefaultExportPath(CavernizeTrack track) {
         string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
         string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "render");
@@ -543,7 +844,7 @@ public partial class MainActivity {
         report.Generate(stats);
 
         if (writer is RIFFWaveWriter && !string.IsNullOrEmpty(finalName) && !finalName.EndsWith(waveExtension, StringComparison.OrdinalIgnoreCase)) {
-            RunOnUiThread(() => SetConvertStatus("Finalizando formato de saída...", 0.96));
+            RunOnUiThread(() => SetConvertStatus(S["FinalizingFormat"], 0.96));
             string exportedAudio = Path.ChangeExtension(finalName, waveExtension);
             string ffCodec = ExportFormat.Codec == Codec.PCM_LE && store.Force24Bit ? "pcm_s24le" : ExportFormat.FFName;
             MergeToContainer merger = new(LoadedFile.Path, exportedAudio, ffCodec);
@@ -650,18 +951,23 @@ public partial class MainActivity {
         Normalizer normalizer = null;
         bool virtualizerState = Listener.HeadphoneVirtualizer;
         bool useDistSim = applyRoomToExportCheck != null && applyRoomToExportCheck.Checked && playerEngine.DistanceSimulation;
+        float prevListenerNormalizer = environment.Listener.Normalizer;
 
         if (virtualizerState && useDistSim) {
             new VirtualizerFilter().SetLayout();
+            environment.Listener.Normalizer = 0f;
             normalizer = new Normalizer(true) {
-                decayFactor = 10f * updateRate / environment.Listener.SampleRate
+                SampleRate = environment.Listener.SampleRate,
+                Channels = renderTarget.OutputChannels
             };
         } else if (virtualizerState || store.SpeakerVirtualizer) {
-            Listener.HeadphoneVirtualizer = false;
+            environment.Listener.BypassInternalVirtualizer = true;
             virtualizer = new VirtualizerFilter();
             virtualizer.SetLayout();
+            environment.Listener.Normalizer = 0f;
             normalizer = new Normalizer(true) {
-                decayFactor = 10f * updateRate / environment.Listener.SampleRate
+                SampleRate = environment.Listener.SampleRate,
+                Channels = Listener.Channels.Length
             };
         }
 
@@ -670,88 +976,103 @@ public partial class MainActivity {
         bool customPlayerMute = applyRoomToExportCheck != null && applyRoomToExportCheck.Checked;
         bool anySolo = customPlayerMute && trackSourceItems.Any(x => x.IsSolo);
 
-        while (rendered < totalLength) {
-            token.ThrowIfCancellationRequested();
+        try {
+            while (rendered < totalLength) {
+                token.ThrowIfCancellationRequested();
 
-            IReadOnlyList<Source> objects = target.Renderer.Objects;
-            for (int i = 0; i < objects.Count; i++) {
-                bool mute = false;
-                Vector3 rawPos = objects[i].Position / Listener.EnvironmentSize;
-                if (RenderingSettings.MuteBed && MathF.Abs(rawPos.X) % 1 < .01f &&
-                    MathF.Abs(rawPos.Y) % 1 < .01f && MathF.Abs(rawPos.Z) % 1 < .01f) {
-                    mute = true;
-                }
-                if (RenderingSettings.MuteGround && MathF.Abs(rawPos.Y) < .05f) {
-                    mute = true;
-                }
-                if (customPlayerMute && i < trackSourceItems.Count) {
-                    if (trackSourceItems[i].IsMuted || (anySolo && !trackSourceItems[i].IsSolo)) {
+                IReadOnlyList<Source> objects = target.Renderer.Objects;
+                for (int i = 0; i < objects.Count; i++) {
+                    bool mute = false;
+                    Vector3 rawPos = objects[i].Position / Listener.EnvironmentSize;
+                    if (RenderingSettings.MuteBed && MathF.Abs(rawPos.X) % 1 < .01f &&
+                        MathF.Abs(rawPos.Y) % 1 < .01f && MathF.Abs(rawPos.Z) % 1 < .01f) {
                         mute = true;
                     }
-                }
-                objects[i].Mute = mute;
-            }
-
-            float[] result;
-            try {
-                result = environment.Listener.Render();
-            } catch {
-                result = new float[Listener.Channels.Length * updateRate];
-            }
-
-            bool flush = false;
-            if (totalLength - rendered < updateRate) {
-                Array.Resize(ref result, (int)((totalLength - rendered) * Listener.Channels.Length));
-                flush = true;
-            }
-
-            Array.Copy(result, 0, writeCache, cachePosition, result.Length);
-            cachePosition += result.Length;
-            if (cachePosition == writeCache.Length || flush) {
-                if (virtualizerState && useDistSim && virtualizer == null) {
-                    int ch = Listener.Channels.Length;
-                    int outCh = renderTarget.OutputChannels;
-                    int framesInBlock = cachePosition / ch;
-                    float[] stereo = new float[framesInBlock * outCh];
-                    for (int s = 0; s < framesInBlock; s++) {
-                        for (int c = 0; c < outCh; c++) {
-                            stereo[s * outCh + c] = writeCache[s * ch + c];
+                    if (RenderingSettings.MuteGround && MathF.Abs(rawPos.Y) < .05f) {
+                        mute = true;
+                    }
+                    if (customPlayerMute && i < trackSourceItems.Count) {
+                        if (trackSourceItems[i].IsMuted || (anySolo && !trackSourceItems[i].IsSolo)) {
+                            mute = true;
                         }
                     }
-                    normalizer.Process(stereo);
-                    writer?.WriteBlock(stereo, 0, stereo.Length);
-                } else if (virtualizer == null) {
-                    if (renderTarget is not DownmixedRenderTarget downmix) {
-                        writer?.WriteBlock(writeCache, 0, cachePosition);
-                    } else {
-                        downmix.PerformMerge(writeCache);
-                        writer?.WriteChannelLimitedBlock(writeCache, downmix.OutputChannels, Listener.Channels.Length, 0, cachePosition);
-                    }
-                } else {
-                    virtualizer.Process(writeCache, environment.Listener.SampleRate);
-                    normalizer.Process(writeCache);
-                    writer?.WriteChannelLimitedBlock(writeCache, renderTarget.OutputChannels, Listener.Channels.Length, 0, cachePosition);
+                    objects[i].Mute = mute;
                 }
-                cachePosition = 0;
-            }
 
-            if (rendered > secondFrame) {
-                stats.Update(result);
-            }
+                float[] result;
+                try {
+                    result = environment.Listener.Render();
+                } catch {
+                    result = new float[Listener.Channels.Length * updateRate];
+                }
 
-            rendered += updateRate;
-            if (rendered >= nextUiSample || rendered >= totalLength) {
-                double progress = Math.Clamp(rendered / (double)totalLength, 0, 1);
-                TimeSpan elapsed = DateTime.Now - start;
-                double speed = elapsed.TotalSeconds > 0 ? (rendered / (double)environment.Listener.SampleRate) / elapsed.TotalSeconds : 0;
-                RunOnUiThread(() => SetConvertStatus($"Render: {progress:0.0%} ({speed:0.0}x)", progress));
-                nextUiSample = rendered + 50000;
-            }
-        }
+                bool flush = false;
+                if (totalLength - rendered < updateRate) {
+                    Array.Resize(ref result, (int)((totalLength - rendered) * Listener.Channels.Length));
+                    flush = true;
+                }
 
-        writer?.Dispose();
-        if (virtualizerState) {
-            Listener.HeadphoneVirtualizer = true;
+                Array.Copy(result, 0, writeCache, cachePosition, result.Length);
+                cachePosition += result.Length;
+                if (cachePosition == writeCache.Length || flush) {
+                    if (flush && cachePosition < writeCache.Length) {
+                        Array.Clear(writeCache, cachePosition, writeCache.Length - cachePosition);
+                    }
+                    if (virtualizerState && useDistSim && virtualizer == null) {
+                        int ch = Listener.Channels.Length;
+                        int outCh = renderTarget.OutputChannels;
+                        int framesInBlock = cachePosition / ch;
+                        float[] stereo = new float[framesInBlock * outCh];
+                        for (int s = 0; s < framesInBlock; s++) {
+                            for (int c = 0; c < outCh; c++) {
+                                stereo[s * outCh + c] = writeCache[s * ch + c];
+                            }
+                        }
+                        normalizer.Process(stereo);
+                        writer?.WriteBlock(stereo, 0, stereo.Length);
+                    } else if (virtualizer == null) {
+                        if (renderTarget is not DownmixedRenderTarget downmix) {
+                            writer?.WriteBlock(writeCache, 0, cachePosition);
+                        } else {
+                            downmix.PerformMerge(writeCache);
+                            writer?.WriteChannelLimitedBlock(writeCache, downmix.OutputChannels, Listener.Channels.Length, 0, cachePosition);
+                        }
+                    } else {
+                        if (cachePosition == writeCache.Length) {
+                            virtualizer.Process(writeCache, environment.Listener.SampleRate);
+                            normalizer.Process(writeCache);
+                            writer?.WriteChannelLimitedBlock(writeCache, renderTarget.OutputChannels, Listener.Channels.Length, 0, cachePosition);
+                        } else {
+                            float[] tailBlock = new float[cachePosition];
+                            Array.Copy(writeCache, 0, tailBlock, 0, cachePosition);
+                            virtualizer.Process(tailBlock, environment.Listener.SampleRate);
+                            normalizer.Process(tailBlock);
+                            writer?.WriteChannelLimitedBlock(tailBlock, renderTarget.OutputChannels, Listener.Channels.Length, 0, cachePosition);
+                        }
+                    }
+                    cachePosition = 0;
+                }
+
+                if (rendered > secondFrame) {
+                    stats.Update(result);
+                }
+
+                rendered += updateRate;
+                if (rendered >= nextUiSample || rendered >= totalLength) {
+                    double progress = Math.Clamp(rendered / (double)totalLength, 0, 1);
+                    TimeSpan elapsed = DateTime.Now - start;
+                    double speed = elapsed.TotalSeconds > 0 ? (rendered / (double)environment.Listener.SampleRate) / elapsed.TotalSeconds : 0;
+                    RunOnUiThread(() => SetConvertStatus($"Render: {progress:0.0%} ({speed:0.0}x)", progress));
+                    nextUiSample = rendered + 50000;
+                }
+            }
+        } finally {
+            writer?.Dispose();
+            environment.Listener.BypassInternalVirtualizer = false;
+            environment.Listener.Normalizer = prevListenerNormalizer;
+            if (virtualizerState) {
+                Listener.HeadphoneVirtualizer = true;
+            }
         }
         return stats;
     }
@@ -816,7 +1137,7 @@ public partial class MainActivity {
                 }
             } catch (OperationCanceledException) {
                 AppLogger.Info("Background render operation cancelled by user.");
-                RunOnUiThread(() => SetConvertStatus("Cancelled.", 0));
+                RunOnUiThread(() => SetConvertStatus(S["CancelledStatus"], 0));
             } catch (Exception ex) {
                 AppLogger.Error("RunBackgroundOperation", ex);
                 RunOnUiThread(() => {
@@ -832,6 +1153,8 @@ public partial class MainActivity {
 
     void SetRunningUiState(bool running) {
         if (renderBtn != null) renderBtn.Enabled = !running;
+        if (studioW12ExportBtn != null) studioW12ExportBtn.Enabled = !running;
+        if (studioW12BatchBtn != null) studioW12BatchBtn.Enabled = !running;
         if (cancelRenderBtn != null) cancelRenderBtn.Enabled = running;
         if (extractBtn != null) extractBtn.Enabled = !running;
         if (cancelExtractBtn != null) cancelExtractBtn.Enabled = running;

@@ -62,7 +62,12 @@ public enum OneUiIconType {
     ChevronLeft,
     Refresh,
     FolderFilter,
-    CleanFilter
+    CleanFilter,
+    Plus,
+    AudioLogoAtmos,
+    AudioLogoSurround,
+    AudioLogoStereo,
+    Microphone
 }
 
 public enum OneUiTabKind {
@@ -659,6 +664,60 @@ public static class OneUiVectorIcons {
                 p.LineTo(cx - r * 0.20f, cy + r * 0.14f);
                 p.Close();
                 canvas.DrawPath(p, stroke);
+                break;
+
+            case OneUiIconType.Plus:
+                stroke.StrokeWidth = Math.Max(1.8f, size * 0.115f);
+                canvas.DrawLine(cx - r * 0.66f, cy, cx + r * 0.66f, cy, stroke);
+                canvas.DrawLine(cx, cy - r * 0.66f, cx, cy + r * 0.66f, stroke);
+                break;
+
+            case OneUiIconType.AudioLogoAtmos:
+                // Visual identity for Spatial 3D / Dolby Atmos: overhead acoustic dome + orbital height wave + core
+                stroke.StrokeWidth = Math.Max(1.35f, size * 0.095f);
+                // Outer elevated dome arc (overhead height layer)
+                canvas.DrawArc(new RectF(cx - r * 0.92f, cy - r * 0.86f, cx + r * 0.92f, cy + r * 0.76f), 192f, 156f, false, stroke);
+                // Inner spatial wave arc
+                canvas.DrawArc(new RectF(cx - r * 0.58f, cy - r * 0.52f, cx + r * 0.58f, cy + r * 0.50f), 200f, 140f, false, stroke);
+                // Subtle horizontal horizon ring (3D sphere depth)
+                canvas.DrawArc(new RectF(cx - r * 0.82f, cy + r * 0.06f, cx + r * 0.82f, cy + r * 0.68f), 14f, 152f, false, stroke);
+                // Elevated 3D point source core + overhead zenith dot
+                canvas.DrawCircle(cx, cy + r * 0.14f, Math.Max(1.5f, r * 0.19f), fill);
+                canvas.DrawCircle(cx, cy - r * 0.78f, Math.Max(1.1f, r * 0.11f), fill);
+                break;
+
+            case OneUiIconType.AudioLogoSurround:
+                // Visual identity for Surround 5.1/7.1: symmetric 360-degree horizontal speaker arcs around listener
+                stroke.StrokeWidth = Math.Max(1.35f, size * 0.095f);
+                // Left & right lateral surround waves
+                canvas.DrawArc(new RectF(cx - r * 0.92f, cy - r * 0.82f, cx + r * 0.92f, cy + r * 0.82f), 132f, 96f, false, stroke);
+                canvas.DrawArc(new RectF(cx - r * 0.92f, cy - r * 0.82f, cx + r * 0.92f, cy + r * 0.82f), 312f, 96f, false, stroke);
+                // Inner front & rear surround field arcs
+                canvas.DrawArc(new RectF(cx - r * 0.54f, cy - r * 0.54f, cx + r * 0.54f, cy + r * 0.54f), 232f, 76f, false, stroke);
+                canvas.DrawArc(new RectF(cx - r * 0.54f, cy - r * 0.54f, cx + r * 0.54f, cy + r * 0.54f), 52f, 76f, false, stroke);
+                // Center listener core
+                canvas.DrawCircle(cx, cy, Math.Max(1.4f, r * 0.17f), fill);
+                break;
+
+            case OneUiIconType.AudioLogoStereo:
+                // Visual identity for Stereo 2.0: twin balanced interlocking left/right acoustic rings
+                stroke.StrokeWidth = Math.Max(1.35f, size * 0.095f);
+                canvas.DrawCircle(cx - r * 0.36f, cy, r * 0.48f, stroke);
+                canvas.DrawCircle(cx + r * 0.36f, cy, r * 0.48f, stroke);
+                canvas.DrawCircle(cx - r * 0.36f, cy, Math.Max(1.1f, r * 0.12f), fill);
+                canvas.DrawCircle(cx + r * 0.36f, cy, Math.Max(1.1f, r * 0.12f), fill);
+                break;
+
+            case OneUiIconType.Microphone:
+                // Studio vocal microphone: rounded capsule + cradle arc + vertical stem + stand base
+                canvas.DrawRoundRect(
+                    new RectF(cx - r * 0.34f, cy - r * 0.86f, cx + r * 0.34f, cy + r * 0.14f),
+                    r * 0.34f, r * 0.34f, stroke);
+                canvas.DrawArc(
+                    new RectF(cx - r * 0.62f, cy - r * 0.34f, cx + r * 0.62f, cy + r * 0.46f),
+                    10f, 160f, false, stroke);
+                canvas.DrawLine(cx, cy + r * 0.46f, cx, cy + r * 0.84f, stroke);
+                canvas.DrawLine(cx - r * 0.38f, cy + r * 0.84f, cx + r * 0.38f, cy + r * 0.84f, stroke);
                 break;
         }
     }

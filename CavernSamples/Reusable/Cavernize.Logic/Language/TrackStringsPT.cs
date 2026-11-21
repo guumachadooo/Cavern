@@ -32,6 +32,8 @@ public class TrackStringsPT : TrackStrings {
         Set("CPCMI", "PCM inteiro (sem perdas, tamanho grande)");
         Set("CADMC", "ADM Broadcast Wave Format (compacto)");
         Set("CADMA", "ADM Broadcast Wave Format (Dolby Atmos)");
+        Set("CIAMF", "Eclipsa Audio — IAMF v1.0 (OBU 3D)");
+        Set("CHOA3", "Ambisonics HOA B-Format (3ª Ordem ACN/SN3D)");
         Set("CDAMF", "Dolby Atmos Master Format");
         Set("C_LAF", "Limitless Audio Format");
     }

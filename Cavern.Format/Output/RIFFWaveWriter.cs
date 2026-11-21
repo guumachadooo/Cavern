@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
@@ -23,6 +23,12 @@ namespace Cavern.Format {
         /// When exporting a 4 GB+ file, the <see cref="ds64Sync"/> will be followed up by a <see cref="junkSync"/> instead of zeros.
         /// </summary>
         public bool Compatibility { get; set; }
+
+        /// <summary>
+        /// When true, writes a <c>WAVEFORMATEXTENSIBLE</c> header with the Ambisonics B-Format SubFormat GUID
+        /// (<c>SUBTYPE_AMBISONIC_B_FORMAT_PCM</c> / <c>SUBTYPE_AMBISONIC_B_FORMAT_IEEE_FLOAT</c>) and channel mask 0.
+        /// </summary>
+        public bool UseAmbisonicSubFormatGuid { get; set; }
 
         /// <summary>
         /// Channels present in the file, see <see cref="WaveExtensibleChannel"/>.
@@ -152,7 +158,8 @@ namespace Cavern.Format {
         public override void WriteHeader() {
             // RIFF header with file length
             writer.WriteAny(syncWord1);
-            uint fmtContentLength = channelMask == -1 ? fmtContentSize : waveformatextensibleSize;
+            bool useExtensible = channelMask != -1 || UseAmbisonicSubFormatGuid;
+            uint fmtContentLength = useExtensible ? waveformatextensibleSize : fmtContentSize;
             uint fmtSize = (byte)(fmtJunkSize + fmtContentLength);
             bool inConstraints = fmtSize + DataLength < uint.MaxValue;
             if (inConstraints && MaxLargeChunks == 0) {
@@ -172,7 +179,7 @@ namespace Cavern.Format {
             // Format header
             writer.WriteAny(formatSync);
             writer.WriteAny(fmtContentLength);
-            if (channelMask == -1) {
+            if (!useExtensible) {
                 writer.WriteAny(Bits == BitDepth.Float32 ? (short)3 : (short)1); // Sample format...
             } else {
                 writer.WriteAny(extensibleSampleFormat); // ...or that it will be in an extended header
@@ -184,12 +191,12 @@ namespace Cavern.Format {
             writer.WriteAny((short)blockAlign); // Block size in bytes
             writer.WriteAny((short)Bits); // Bit depth
 
-            if (channelMask != -1) { // Use WAVEFORMATEXTENSIBLE
+            if (useExtensible) { // Use WAVEFORMATEXTENSIBLE
                 writer.WriteAny((short)22); // Extensible header size - 1
                 writer.WriteAny((short)Bits); // Bit depth
-                writer.WriteAny(channelMask); // Channel mask
+                writer.WriteAny(UseAmbisonicSubFormatGuid ? 0 : channelMask); // Channel mask (0 for Ambisonics B-Format)
                 writer.WriteAny(Bits == BitDepth.Float32 ? (short)3 : (short)1); // Sample format
-                writer.Write(new byte[] { 0, 0, 0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113 }); // SubFormat GUID
+                writer.Write(UseAmbisonicSubFormatGuid ? ambisonicSubFormatGuidTail : standardSubFormatGuidTail); // SubFormat GUID
             }
 
             // Data header

@@ -1,10 +1,11 @@
-﻿using Cavern;
+using Cavern;
 using Cavern.CavernSettings;
 using Cavern.Channels;
 using Cavern.Format;
 using Cavern.Format.Common;
 using Cavern.Format.Common.Metadata;
 using Cavern.Format.Renderers;
+using Cavern.Format.Renderers.BaseClasses;
 using Cavern.Remapping;
 using Cavern.Remapping.Exceptions;
 using Cavern.Utilities;
@@ -36,6 +37,20 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     /// Original codec when this track was pre-decoded externally (for example <see cref="Codec.TrueHD"/> -> <see cref="Codec.DAMF"/>).
     /// </summary>
     public virtual Codec SourceCodec => Codec;
+
+    /// <summary>
+    /// True when the original source stream is lossy-compressed (including fallback-decoded MP3/AAC/M4A/OGG/Opus).
+    /// </summary>
+    public virtual bool IsLossySource =>
+        SourceCodec == Codec.EnhancedAC3 ||
+        SourceCodec == Codec.AC3 ||
+        SourceCodec == Codec.DTS ||
+        SourceCodec == Codec.Opus;
+
+    /// <summary>
+    /// Original media file path prior to external fallback PCM decoding (defaults to <see cref="Path"/>).
+    /// </summary>
+    public virtual string OriginalSourcePath => Path;
 
     /// <summary>
     /// Optional raw bitstream path on disk when already extracted from a container.
@@ -110,9 +125,24 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     public bool[] CustomMuteMask { get; set; }
 
     /// <summary>
+    /// Live DirAC/COMPASS soundfield telemetry provider exposed by the active upmixer (null when bypassed).
+    /// </summary>
+    public ISoundfieldTelemetryProvider ActiveTelemetryProvider { get; private set; }
+
+    /// <summary>
+    /// Layer classification for attached sources when <see cref="AtmosAwareUpmixer"/> is active (null otherwise).
+    /// </summary>
+    public Cavern.Spatial.SourceLayer[] ActiveSourceLayers { get; private set; }
+
+    /// <summary>
     /// Source of audio data.
     /// </summary>
     AudioReader reader;
+
+    /// <summary>
+    /// Upmixer instances owned by the last <see cref="AttachFromCurrentPosition"/> call for deterministic FFT cache cleanup.
+    /// </summary>
+    readonly List<IDisposable> ownedUpmixers = [];
 
     /// <summary>
     /// Reads information from a track's renderer.
@@ -190,20 +220,50 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     /// <param name="listener">Listener to attach the track's <see cref="Source"/>s to</param>
     /// <param name="upmixingSettings">Optionally create new <see cref="Source"/>s to expand the soundstage</param>
     public void AttachFromCurrentPosition(Listener listener, UpmixingSettings upmixingSettings) {
+        DisposeOwnedUpmixers();
+        ActiveTelemetryProvider = null;
+        ActiveSourceLayers = null;
+
         Renderer = reader.GetRenderer();
         listener.SampleRate = SampleRate;
-        Source[] attachables = SetupUpmixer(listener, upmixingSettings);
+        upmixingSettings ??= new UpmixingSettings(true);
 
-        if (upmixingSettings.Cavernize && !Renderer.HasObjects && Renderer.Objects.All(x => x.LFE || x.Position.Y == 0)) {
-            CavernizeUpmixer cavernizer = new CavernizeUpmixer(attachables, SampleRate) {
+        Source[] attachables;
+        if (Renderer.HasObjects && upmixingSettings.AtmosAware && (upmixingSettings.MatrixUpmixing || upmixingSettings.Cavernize)) {
+            ReferenceChannel[] staticBeds = Renderer is IMixedBedObjectRenderer mixed
+                ? mixed.GetStaticChannels()
+                : Renderer.GetChannels();
+            AtmosAwareUpmixer atmosUpmixer = new AtmosAwareUpmixer(
+                Renderer.Objects,
+                staticBeds,
+                SampleRate,
+                upmixingSettings.MatrixUpmixing,
+                upmixingSettings.Cavernize) {
                 Effect = upmixingSettings.Effect,
                 Smoothness = upmixingSettings.Smoothness
             };
-            attachables = cavernizer.IntermediateSources;
+            ownedUpmixers.Add(atmosUpmixer);
+            ActiveTelemetryProvider = atmosUpmixer;
+            ActiveSourceLayers = atmosUpmixer.OutputLayers;
+            listener.LFESeparation = true;
+            attachables = atmosUpmixer.IntermediateSources;
+        } else {
+            attachables = SetupUpmixer(listener, upmixingSettings);
+
+            if (upmixingSettings.Cavernize && !Renderer.HasObjects && Renderer.Objects.All(x => x.LFE || x.Position.Y == 0)) {
+                CavernizeUpmixer cavernizer = new CavernizeUpmixer(attachables, SampleRate) {
+                    Effect = upmixingSettings.Effect,
+                    Smoothness = upmixingSettings.Smoothness,
+                    UseParametricStft = upmixingSettings.ParametricStft
+                };
+                ownedUpmixers.Add(cavernizer);
+                ActiveTelemetryProvider ??= cavernizer;
+                attachables = cavernizer.IntermediateSources;
+            }
         }
 
-        if (CustomMuteMask != null && attachables.Length == Renderer.Objects.Count) {
-            for (int i = 0; i < CustomMuteMask.Length && i < attachables.Length; i++) {
+        if (CustomMuteMask != null && attachables.Length >= Renderer.Objects.Count) {
+            for (int i = 0; i < CustomMuteMask.Length && i < Renderer.Objects.Count; i++) {
                 if (CustomMuteMask[i]) {
                     attachables[i].Mute = true;
                 }
@@ -265,11 +325,21 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
     /// Free up resources.
     /// </summary>
     public virtual void Dispose() {
+        DisposeOwnedUpmixers();
+        ActiveTelemetryProvider = null;
+        ActiveSourceLayers = null;
         if (reader is AudioTrackReader track) {
             track.Source.Dispose();
         }
         reader?.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    void DisposeOwnedUpmixers() {
+        for (int i = 0; i < ownedUpmixers.Count; i++) {
+            ownedUpmixers[i].Dispose();
+        }
+        ownedUpmixers.Clear();
     }
 
     /// <summary>
@@ -292,7 +362,9 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
             ReferenceChannel[] channels = Renderer.GetChannels();
             SurroundUpmixer upmixer = null;
             try {
-                upmixer = new SurroundUpmixer(channels, SampleRate, false, true);
+                upmixer = new SurroundUpmixer(channels, SampleRate, false, true) {
+                    UseParametricStft = upmixingSettings.ParametricStft
+                };
             } catch (LegacyInputExpectedException) {
                 listener.LFESeparation = true;
                 return [.. Renderer.Objects];
@@ -302,6 +374,8 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
                 GetSamples = input => reader.ReadBlock(input, 0, input.Length)
             };
             upmixer.OnSamplesNeeded = separator.Update;
+            ownedUpmixers.Add(upmixer);
+            ActiveTelemetryProvider = upmixer;
 
             listener.LFESeparation = channels.Contains(ReferenceChannel.ScreenLFE); // Apply crossover if LFE is not present
             return upmixer.IntermediateSources;
@@ -335,12 +409,22 @@ public sealed class ExternalDecodedTrack : CavernizeTrack {
     readonly string rawBitstreamPath;
     readonly Codec sourceCodec;
     readonly ReadableMetadata extraMetadata;
+    readonly bool? explicitLossySource;
+    readonly string originalSourcePath;
 
     /// <inheritdoc/>
     public override Container Container => originalTrack?.Container ?? originalContainer;
 
     /// <inheritdoc/>
     public override Codec SourceCodec => sourceCodec;
+
+    /// <inheritdoc/>
+    public override bool IsLossySource => explicitLossySource ?? base.IsLossySource;
+
+    /// <inheritdoc/>
+    public override string OriginalSourcePath => string.IsNullOrEmpty(originalSourcePath)
+        ? (originalTrack?.OriginalSourcePath ?? base.OriginalSourcePath)
+        : originalSourcePath;
 
     /// <inheritdoc/>
     public override string RawBitstreamPath => rawBitstreamPath;
@@ -360,7 +444,10 @@ public sealed class ExternalDecodedTrack : CavernizeTrack {
         Track[] originalVideoTracks,
         string rawBitstreamPath,
         string language = null,
-        ReadableMetadata extraMetadata = null)
+        ReadableMetadata extraMetadata = null,
+        bool? isLossySource = null,
+        string originalSourcePath = null,
+        string customFormatHeader = null)
         : base(decodedReader, decodedCodec, originalTrack?.Index ?? 0, language ?? originalTrack?.Language) {
         this.sourceCodec = sourceCodec;
         this.originalTrack = originalTrack;
@@ -368,8 +455,12 @@ public sealed class ExternalDecodedTrack : CavernizeTrack {
         this.originalVideoTracks = originalVideoTracks;
         this.rawBitstreamPath = rawBitstreamPath;
         this.extraMetadata = extraMetadata;
+        explicitLossySource = isLossySource;
+        this.originalSourcePath = originalSourcePath;
 
-        if (sourceCodec == Codec.TrueHD) {
+        if (!string.IsNullOrWhiteSpace(customFormatHeader)) {
+            FormatHeader = customFormatHeader;
+        } else if (sourceCodec == Codec.TrueHD) {
             string durText = $"{TimeSpan.FromSeconds(Length / (double)Math.Max(1, SampleRate)):h\\:mm\\:ss}";
             FormatHeader = Renderer != null && Renderer.HasObjects
                 ? $"Dolby TrueHD Atmos ({durText})"

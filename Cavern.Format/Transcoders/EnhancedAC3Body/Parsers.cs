@@ -1,4 +1,4 @@
-﻿namespace Cavern.Format.Transcoders {
+namespace Cavern.Format.Transcoders {
     partial class EnhancedAC3Body {
         /// <summary>
         /// Parse spectral extension data.
@@ -57,6 +57,26 @@
                 if (strat != 0) {
                     nchgrps[channel] = (endmant[channel] + groupAdd[strat - 1]) / groupDiv[strat - 1];
                 }
+            }
+
+            float binToHz = header.SampleRate > 0 ? header.SampleRate * (1f / 512f) : (48000f / 512f);
+            bool cplOn = cplinu[block];
+            CouplingActive = cplOn;
+            if (cplOn) {
+                int startBin = ecplinu
+                    ? (ecpl_begin_subbnd >= 0 && ecpl_begin_subbnd < ecplsubbndtab.Length ? ecplsubbndtab[ecpl_begin_subbnd] : cplstrtmant)
+                    : cplstrtmant;
+                CouplingStartHz = startBin > 0 ? startBin * binToHz : 0f;
+            } else {
+                CouplingStartHz = 0f;
+            }
+
+            SpxActive = spxinu;
+            if (spxinu) {
+                int spxStartBin = spx_begin_subbnd * 12 + 25;
+                SpxStartHz = spxStartBin > 0 ? spxStartBin * binToHz : 0f;
+            } else {
+                SpxStartHz = 0f;
             }
         }
 

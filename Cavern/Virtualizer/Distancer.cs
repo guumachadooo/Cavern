@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 
 using Cavern.Filters;
@@ -47,23 +47,34 @@ namespace Cavern.Virtualizer {
         readonly int filterSize;
 
         /// <summary>
-        /// Create a distance simulation for a <see cref="Source"/>.
+        /// Thread-safety lock protecting one-time expansion of static <see cref="impulses"/> with <see cref="impulseDelays"/>.
+        /// </summary>
+        static readonly object initLock = new object();
+
+        /// <summary>
+        /// Create a distance simulation for a <see cref="Source"/> using Cavern's official <see cref="impulses"/> tables.
         /// </summary>
         public Distancer(Source source) {
             this.source = source;
 
-            // Add the delays to the impulses that were removed for storage optimization
+            // Add the delays to the official impulses that were removed for storage optimization (thread-safe one-time init)
             if (impulseDelays[0][0] != 0) {
-                for (int i = 0; i < impulses.Length; ++i) {
-                    for (int j = 0; j < impulses[i].Length; ++j) {
-                        int convLength = impulses[i][j].Length;
-                        short delay = impulseDelays[i][j];
-                        Array.Resize(ref impulses[i][j], convLength + delay);
-                        Array.Copy(impulses[i][j], 0, impulses[i][j], delay, convLength);
-                        Array.Clear(impulses[i][j], 0, convLength);
+                lock (initLock) {
+                    if (impulseDelays[0][0] != 0) {
+                        for (int i = 0; i < impulses.Length; ++i) {
+                            for (int j = 0; j < impulses[i].Length; ++j) {
+                                int convLength = impulses[i][j].Length;
+                                short delay = impulseDelays[i][j];
+                                if (delay > 0) {
+                                    Array.Resize(ref impulses[i][j], convLength + delay);
+                                    Array.Copy(impulses[i][j], 0, impulses[i][j], delay, convLength);
+                                    Array.Clear(impulses[i][j], 0, delay);
+                                }
+                            }
+                        }
+                        impulseDelays[0][0] = 0;
                     }
                 }
-                impulseDelays[0][0] = 0;
             }
 
             source.VolumeRolloff = Rolloffs.Disabled;
@@ -125,7 +136,7 @@ namespace Cavern.Virtualizer {
             float distanceRatio =
                 Math.Clamp(QMath.LerpInverse(distances[smallerDistance], distances[largerDistance], distance), 0, 1);
 
-            // Find impulse candidates and their weight
+            // Find impulse candidates and their weight from Cavern's official tables
             float[][] candidates = new float[][] {
                 impulses[smallerAngle][smallerDistance],
                 impulses[smallerAngle][largerDistance],
@@ -139,14 +150,49 @@ namespace Cavern.Virtualizer {
                 (float)Math.Sqrt(angleRatio * distanceRatio)
             };
 
-            // Apply the ear canal's response
+            // Align candidates to the dominant candidate's peak to prevent comb-filtering across different onset delays
+            int dominant = 0;
+            for (int c = 1; c < gains.Length; ++c) {
+                if (gains[c] > gains[dominant]) {
+                    dominant = c;
+                }
+            }
+            int refPeak = FindPeakIndex(candidates[dominant]);
+
             Array.Clear(filter.Impulse, 0, filterSize);
             for (int candidate = 0; candidate < candidates.Length; ++candidate) {
-                WaveformUtils.Mix(candidates[candidate], filter.Impulse, gains[candidate]);
+                float g = gains[candidate];
+                if (g <= 1e-5f) {
+                    continue;
+                }
+                float[] src = candidates[candidate];
+                int shift = refPeak - FindPeakIndex(src);
+                for (int i = 0; i < src.Length; ++i) {
+                    int dst = i + shift;
+                    if (dst >= 0 && dst < filterSize) {
+                        filter.Impulse[dst] += src[i] * g;
+                    }
+                }
             }
+
+            // Normalize interpolated impulse to unity L2 energy so distance filtering does not boost gain by +8 to +14 dB
+            double energySum = 0;
+            for (int i = 0; i < filterSize; ++i) {
+                double v = filter.Impulse[i];
+                energySum += v * v;
+            }
+            if (energySum > 1e-12) {
+                float invNorm = 1f / (float)Math.Sqrt(energySum);
+                for (int i = 0; i < filterSize; ++i) {
+                    filter.Impulse[i] *= invNorm;
+                }
+            }
+
             filter.Process(samples);
 
-            // Apply gains
+            // Apply physically derived ear gains
+            LeftGain = 1;
+            RightGain = 1;
             float angleDiff = MathF.Sin(rawAngle) * .097f;
             float safeDistance = MathF.Max(distance, MathF.Abs(angleDiff) + .01f);
             float ratioDiff = (safeDistance + angleDiff) * (VirtualizerFilter.ReferenceDistance - angleDiff) /
@@ -170,7 +216,26 @@ namespace Cavern.Virtualizer {
                 float powerOffset = 1 / MathF.Sqrt(LeftGain * LeftGain + RightGain * RightGain);
                 LeftGain *= powerOffset;
                 RightGain *= powerOffset;
+            } else {
+                float earRmsGain = MathF.Sqrt(0.5f * (LeftGain * LeftGain + RightGain * RightGain));
+                WaveformUtils.Gain(samples, earRmsGain);
             }
+        }
+
+        /// <summary>
+        /// Finds the index of the maximum absolute sample in an impulse response.
+        /// </summary>
+        static int FindPeakIndex(float[] impulse) {
+            int best = 0;
+            float max = 0f;
+            for (int i = 0; i < impulse.Length; ++i) {
+                float abs = MathF.Abs(impulse[i]);
+                if (abs > max) {
+                    max = abs;
+                    best = i;
+                }
+            }
+            return best;
         }
     }
 }

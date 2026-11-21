@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 using Cavern.Channels;
 using Cavern.Format.Decoders;
@@ -16,6 +16,31 @@ namespace Cavern.Format.Renderers {
         /// The stream is coded in the Enhanced version of AC-3.
         /// </summary>
         public bool Enhanced => ((EnhancedAC3Decoder)stream).Enhanced;
+
+        /// <summary>
+        /// Decoded Dolby Dialogue Normalization level in LKFS/LUFS (-31..-1 LUFS per ATSC A/52 &amp; ETSI TS 102 366).
+        /// </summary>
+        public float DialnormLufs => ((EnhancedAC3Decoder)stream).DialnormLufs;
+
+        /// <summary>
+        /// True when E-AC-3 channel coupling is active in the current audio frame.
+        /// </summary>
+        public bool CouplingActive => ((EnhancedAC3Decoder)stream).CouplingActive;
+
+        /// <summary>
+        /// True when E-AC-3 Spectral Extension (SPX) is active in the current audio frame.
+        /// </summary>
+        public bool SpxActive => ((EnhancedAC3Decoder)stream).SpxActive;
+
+        /// <summary>
+        /// Live channel coupling start frequency in Hz (0 when inactive).
+        /// </summary>
+        public float CouplingStartHz => ((EnhancedAC3Decoder)stream).CouplingStartHz;
+
+        /// <summary>
+        /// Live Spectral Extension (SPX) start frequency in Hz (0 when inactive).
+        /// </summary>
+        public float SpxStartHz => ((EnhancedAC3Decoder)stream).SpxStartHz;
 
         /// <summary>
         /// Count of free-floating objects.

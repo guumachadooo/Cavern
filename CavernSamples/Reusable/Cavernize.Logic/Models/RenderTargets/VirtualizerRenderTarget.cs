@@ -1,4 +1,4 @@
-﻿using Cavern;
+using Cavern;
 using Cavern.Channels;
 
 namespace Cavernize.Logic.Models.RenderTargets;
@@ -14,6 +14,9 @@ public class VirtualizerRenderTarget : RenderTarget {
 
     /// <inheritdoc/>
     public override void Apply(bool _) => Listener.HeadphoneVirtualizer = true;
+
+    /// <inheritdoc/>
+    public override float GetSafeGain() => 1f;
 
     /// <summary>
     /// Name of this render target.

@@ -24,7 +24,7 @@ public static class FlacAudioConverter {
             throw new NotSupportedException($"FLAC supports 1 to 8 channels (got {channels}).");
         }
         int sampleRate = reader.SampleRate;
-        int bps = reader.Bits == BitDepth.Int24 ? 24 : 16;
+        int bps = (reader.Bits == BitDepth.Int24 || reader.Bits == BitDepth.Float32) ? 24 : 16;
         long totalSamples = reader.Length;
 
         Directory.CreateDirectory(Path.GetDirectoryName(flacPath) ?? ".");
@@ -44,6 +44,7 @@ public static class FlacAudioConverter {
         using IncrementalHash md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
         float[] interleaved = new float[blockSize * channels];
         byte[] md5Chunk = new byte[blockSize * channels * (bps / 8)];
+        int[] residualScratch = new int[blockSize];
         long remaining = totalSamples;
         long frameNumber = 0;
         BitWriter bw = new(outFs);
@@ -78,7 +79,7 @@ public static class FlacAudioConverter {
             }
             md5.AppendData(md5Chunk, 0, md5Bytes);
 
-            WriteFrame(bw, chSamples, n, channels, sampleRate, bps, frameNumber++);
+            WriteFrame(bw, chSamples, n, channels, sampleRate, bps, frameNumber++, residualScratch);
             remaining -= n;
         }
 
@@ -112,7 +113,7 @@ public static class FlacAudioConverter {
         fs.Write(info);
     }
 
-    static void WriteFrame(BitWriter bw, int[][] channelsData, int blockSize, int channels, int sampleRate, int bps, long frameNumber) {
+    static void WriteFrame(BitWriter bw, int[][] channelsData, int blockSize, int channels, int sampleRate, int bps, long frameNumber, int[] residualScratch) {
         bw.ResetFrameCrc();
 
         // Sync code 0x3FFE (14 bits) + reserved 0 (1 bit) + blocking strategy 0 (fixed, 1 bit) = 0xFFF8
@@ -135,7 +136,7 @@ public static class FlacAudioConverter {
         bw.WriteBits(crc8, 8);
 
         for (int c = 0; c < channels; c++) {
-            WriteSubframe(bw, channelsData[c], blockSize, bps);
+            WriteSubframe(bw, channelsData[c], blockSize, bps, residualScratch);
         }
 
         bw.AlignToByte();
@@ -144,7 +145,7 @@ public static class FlacAudioConverter {
         bw.WriteRawByte((byte)(crc16 & 0xFF));
     }
 
-    static void WriteSubframe(BitWriter bw, int[] samples, int n, int bps) {
+    static void WriteSubframe(BitWriter bw, int[] samples, int n, int bps, int[] residualScratch) {
         int first = samples[0];
         bool allConst = true;
         for (int i = 1; i < n; i++) {
@@ -160,7 +161,7 @@ public static class FlacAudioConverter {
         }
 
         // Try Fixed Order 1 with Rice partition (order 0) if residuals stay comfortably bounded
-        if (n >= 4 && TryEstimateFixedOrder1(samples, n, out int riceParam, out int[] residuals)) {
+        if (n >= 4 && TryEstimateFixedOrder1(samples, n, residualScratch, out int riceParam)) {
             // Subframe type: FIXED order 1 -> 0b001001 => byte = 0b0_001001_0 = 0x12
             bw.WriteBits(0b0_001001_0, 8);
             bw.WriteSignedBits(samples[0], bps);
@@ -169,7 +170,7 @@ public static class FlacAudioConverter {
             bw.WriteBits(0, 4); // partition order = 0 (single partition of n - 1 residuals)
             bw.WriteBits((uint)riceParam, 4);
             for (int i = 1; i < n; i++) {
-                bw.WriteRiceSigned(residuals[i], riceParam);
+                bw.WriteRiceSigned(residualScratch[i], riceParam);
             }
             return;
         }
@@ -181,8 +182,7 @@ public static class FlacAudioConverter {
         }
     }
 
-    static bool TryEstimateFixedOrder1(int[] samples, int n, out int bestParam, out int[] residuals) {
-        residuals = new int[n];
+    static bool TryEstimateFixedOrder1(int[] samples, int n, int[] residuals, out int bestParam) {
         long absSum = 0;
         for (int i = 1; i < n; i++) {
             int r = samples[i] - samples[i - 1];

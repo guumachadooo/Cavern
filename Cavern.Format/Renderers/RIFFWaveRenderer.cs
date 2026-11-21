@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 
@@ -19,10 +19,36 @@ namespace Cavern.Format.Renderers {
         readonly int[] admBlocks;
 
         /// <summary>
+        /// Optional Ambisonics HOA decoder when the WAV carries an Ambisonics B-Format SubFormat GUID.
+        /// </summary>
+        readonly AmbisonicsHoaSpatialDecoder hoaDecoder;
+
+        /// <summary>
+        /// Reusable interleaved HOA decode scratch buffer (zero-GC).
+        /// </summary>
+        float[] hoaScratch = Array.Empty<float>();
+
+        /// <summary>
+        /// True when the WAV stream is rendered through the Ambisonics HOA B-Format decoder (ACN/SN3D).
+        /// </summary>
+        public bool IsAmbisonicsHoa => hoaDecoder != null;
+
+        /// <summary>
+        /// Active Ambisonics spherical harmonic order when <see cref="IsAmbisonicsHoa"/> is true, otherwise 0.
+        /// </summary>
+        public int AmbisonicsOrder => hoaDecoder != null ? ((RIFFWaveDecoder)stream).AmbisonicsOrder : 0;
+
+        /// <summary>
         /// Renders a decoded RIFF WAVE stream.
         /// </summary>
         public RIFFWaveRenderer(RIFFWaveDecoder stream) : base(stream) {
-            if (stream.ADM == null) {
+            if (stream.IsAmbisonicsHoa && stream.ADM == null) {
+                hoaDecoder = new AmbisonicsHoaSpatialDecoder(stream.AmbisonicsOrder, useMaxReWeights: true);
+                SetupObjects(hoaDecoder.VirtualSpeakerCount);
+                for (int s = 0; s < hoaDecoder.VirtualSpeakerCount; s++) {
+                    objects[s].Position = hoaDecoder.VirtualSpeakerPositions[s] * Listener.EnvironmentSize;
+                }
+            } else if (stream.ADM == null) {
                 SetupChannels();
             } else {
                 SetupObjects(stream.ChannelCount);
@@ -43,6 +69,9 @@ namespace Cavern.Format.Renderers {
         /// </summary>
         public override ReferenceChannel[] GetChannels() {
             RIFFWaveDecoder decoder = (RIFFWaveDecoder)stream;
+            if (hoaDecoder != null) {
+                return hoaDecoder.VirtualChannels;
+            }
             AudioDefinitionModel adm = decoder.ADM;
             if (adm == null) {
                 return decoder.GetChannels();
@@ -62,6 +91,24 @@ namespace Cavern.Format.Renderers {
         /// </summary>
         /// <param name="samples">Samples per channel</param>
         public override void Update(int samples) {
+            if (hoaDecoder != null) {
+                if (objectSamples[0].Length != samples) {
+                    for (int i = 0; i < objectSamples.Length; i++) {
+                        objectSamples[i] = new float[samples];
+                    }
+                }
+                int interleavedLen = samples * stream.ChannelCount;
+                if (hoaScratch.Length < interleavedLen) {
+                    hoaScratch = new float[interleavedLen];
+                }
+                stream.DecodeBlock(hoaScratch, 0, interleavedLen);
+                hoaDecoder.DecodeInterleaved(hoaScratch, samples, stream.ChannelCount, objectSamples);
+                for (int s = 0; s < hoaDecoder.VirtualSpeakerCount; s++) {
+                    objects[s].Position = hoaDecoder.VirtualSpeakerPositions[s] * Listener.EnvironmentSize;
+                }
+                return;
+            }
+
             base.Update(samples);
             AudioDefinitionModel adm = ((RIFFWaveDecoder)stream).ADM;
             if (adm != null) {

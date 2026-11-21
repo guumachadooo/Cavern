@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
@@ -233,7 +233,7 @@ namespace Cavern {
             // Render the required number of frames
             if (frames == 1) {
                 float[] result = Frame();
-                if (headphoneVirtualizer) {
+                if (headphoneVirtualizer && !BypassInternalVirtualizer) {
                     virtualizer.Process(result, SampleRate);
                 }
                 return result;
@@ -251,7 +251,7 @@ namespace Cavern {
                     float[] frameBuffer = Frame();
                     Array.Copy(frameBuffer, 0, multiframeBuffer, frame * frameBuffer.Length, frameBuffer.Length);
                 }
-                if (headphoneVirtualizer) {
+                if (headphoneVirtualizer && !BypassInternalVirtualizer) {
                     virtualizer.Process(multiframeBuffer, SampleRate);
                 }
                 return multiframeBuffer;
@@ -270,13 +270,14 @@ namespace Cavern {
             for (int i = 0; i < channelCount; i++) {
                 lowpasses[i] = new Lowpass(SampleRate, 120);
             }
+            fallbackLfeLowpass = new Lowpass(SampleRate, 120);
         }
 
         /// <summary>
         /// A single update.
         /// </summary>
         float[] Frame() {
-            if (headphoneVirtualizer) {
+            if (headphoneVirtualizer && !BypassInternalVirtualizer) {
                 virtualizer ??= new VirtualizerFilter();
                 virtualizer.SetLayout();
             }
@@ -312,6 +313,8 @@ namespace Cavern {
                 }
             }
             if (Normalizer != 0) { // Normalize
+                normalizer.SampleRate = SampleRate;
+                normalizer.Channels = channelCount;
                 normalizer.decayFactor = Normalizer * UpdateRate / SampleRate;
                 normalizer.Process(renderBuffer);
             }

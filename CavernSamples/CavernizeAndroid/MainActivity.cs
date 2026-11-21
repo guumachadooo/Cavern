@@ -53,6 +53,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
     const int ReqLocateTruehdd = 1006;
     const int ReqPermissions = 1007;
     const int ReqLoadSubtitles = 1008;
+    const int ReqLoadAutoEq = 1009;
+    const int ReqBluetoothPermissions = 1010;
+    const int ReqLoadOnnxModel = 1011;
+    const int ReqRecordAudioPermission = 1012;
 
     AppSettingsStore store;
     AndroidUpmixingSettings upmixingSettings;
@@ -63,6 +67,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
     PostRenderReport report;
     RealtimePlayerEngine playerEngine;
     AndroidAudioOutput audioOutput;
+    AudioDeviceProfileManager audioDeviceProfileManager;
+    UsbProAudioDeviceManager usbProAudioManager;
+    HeadTrackingManager headTrackingManager;
+    NativeOnnxRuntimeBridge neuralRuntime;
+    NeuralTrackCacheService neuralTrackCache;
+    Cavernize.Logic.Spatial.NeuralPipelineOrchestrator neuralOrchestrator;
 
     AndroidStrings S => AndroidStrings.Active;
 
@@ -106,6 +116,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
     string currentTrackSummaryText = "";
     double pendingSeekAfterLoadSeconds = -1;
     string preferredFormatVariantKey = "";
+    AudioTierCategory? preferredAudioCategory;
+    int variantSwitchGeneration;
     MediaPlaybackNotificationManager mediaNotification;
     MediaArtworkMetadata currentMediaMeta;
     Android.Net.Uri currentMediaUri;
@@ -117,11 +129,25 @@ public partial class MainActivity : Activity, ICavernizeApp {
     UpdateCheckResult latestUpdateInfo;
     FFmpegStatusResult latestFFmpegStatus;
     TruehddStatusResult latestTruehddStatus;
+    OnnxRuntimeStatusResult latestOnnxStatus;
     string downloadedUpdateApkPath;
     string pendingInstallApkPath;
     bool isUpdateDownloading;
     bool isFFmpegDownloading;
     bool isTruehddDownloading;
+    bool isOnnxDownloading;
+    string pendingOnnxImportModelId = Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId;
+    Cavernize.Logic.Spatial.NeuralModelTask pendingCustomOnnxTask = Cavernize.Logic.Spatial.NeuralModelTask.StemSeparation4;
+    bool pendingStandaloneCustomOnnxImport;
+    Cavernize.Logic.Spatial.UniversalLosslessTwinProvider activeLosslessTwin;
+    CancellationTokenSource losslessTwinCts;
+    int losslessTwinGeneration;
+    CancellationTokenSource neuralPrepCts;
+    int neuralPrepGeneration;
+    volatile bool isNeuralPrepRunning;
+    double neuralPrepProgress;
+    string neuralPrepStatusText = "";
+    int vocalDnaLoadGeneration;
 
     ExternalDecodedTrack decodedTrueHDTrack;
     string activeTrueHDSessionDir;
@@ -133,11 +159,19 @@ public partial class MainActivity : Activity, ICavernizeApp {
     volatile bool suppressAutoTrueHDPrepare;
     volatile bool pendingAutoPlayAfterLoad;
 
+    FrameLayout rootFrameHost;
+    View bottomScrimView;
     OneUiBackdropView backdropView;
     OneUiFrostedCapsuleView navFrostedHost;
+    FrameLayout navLayer;
+    View settingsUpdateDotCollapsed;
+    bool isBottomNavVisible = true;
+    int navVisAnimGen;
+    int tabSwitchAnimGen;
     View tabIndicatorPill;
     ValueAnimator tabPillAnimator;
     LinearLayout[] tabPages;
+    View[] tabContainers;
     LinearLayout[] tabCells;
     OneUiTabIconView[] tabIcons;
     TextView[] tabLabels;
@@ -162,6 +196,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         OneUiTheme.Initialize(this);
         AppLogger.Initialize(this);
+        AudioQualityAnalyzer.EnsureCacheLoaded(this);
 
         if (Window != null) {
             Window.DecorView?.SetBackgroundColor(ColBg);
@@ -230,10 +265,34 @@ public partial class MainActivity : Activity, ICavernizeApp {
             LimiterOnly = store.LimiterOnly,
             EnvironmentType = (Environments)Math.Clamp(store.EnvironmentTypeIndex, 0, 3),
             EnvironmentSize = new System.Numerics.Vector3(store.RoomSizeX, store.RoomSizeY, store.RoomSizeZ),
-            AudioQuality = (QualityModes)Math.Clamp(store.AudioQualityIndex, 0, 3)
+            AudioQuality = (QualityModes)Math.Clamp(store.AudioQualityIndex, 0, 3),
+            UsbDacNativeSampleRateEnabled = store.UsbDacNativeSampleRate,
+            HeadTrackingPredictionMs = store.HeadTrackingPredictionMs,
+            PropagationDelay6DoFEnabled = store.PropagationDelay6DoFEnabled
         };
         playerEngine.PlaybackCompleted += () => RunOnUiThread(OnPlayerCompleted);
-        audioOutput = new AndroidAudioOutput(playerEngine);
+        playerEngine.SourcesRebuilt += () => RunOnUiThread(() => {
+            if (uiDestroyed) {
+                return;
+            }
+            trackSourceItems = [.. playerEngine.SourceItems];
+            RefreshPlayerSourcesList();
+            RefreshExtractorChecklist();
+            UpdateRoomCanvas();
+            RefreshNeuralPrepUi();
+            RefreshNeuralAudioUi();
+        });
+        audioOutput = new AndroidAudioOutput(playerEngine) {
+            LowLatencyMode = store.LowLatencyAudio,
+            UsbDacNativeSampleRate = store.UsbDacNativeSampleRate
+        };
+        audioOutput.DiagnosticsUpdated += _ => RunOnUiThread(RefreshHeadTrackingUi);
+        audioOutput.ProAudioDiagnosticsUpdated += _ => RunOnUiThread(RefreshProAudioUi);
+
+        usbProAudioManager = new UsbProAudioDeviceManager(this);
+        usbProAudioManager.DeviceStateChanged += _ => RunOnUiThread(RefreshProAudioUi);
+        audioOutput.AttachUsbManager(usbProAudioManager);
+        audioOutput.ApplyProAudioConfig(store.BuildProAudioConfig());
 
         mediaNotification?.Dispose();
         mediaNotification = new MediaPlaybackNotificationManager(this);
@@ -251,12 +310,50 @@ public partial class MainActivity : Activity, ICavernizeApp {
         mediaNotification.Forward10Requested += () => SeekRelative(10);
         mediaNotification.SeekRequestedMs += ms => SeekAbsoluteSeconds(ms / 1000.0);
 
-        if (!string.IsNullOrEmpty(store.HrirPath) && File.Exists(store.HrirPath)) {
-            TryLoadHrir(store.HrirPath, showError: false);
+        BinauralProfileService.ApplySavedProfile(this, store);
+        BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+        playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
+        playerEngine.ApplyExternalizationConfig(store.BuildExternalizationConfig());
+        playerEngine.ApplyPersonalizationConfig(store.BuildPersonalizationConfig());
+        playerEngine.ApplyLoudnessConfig(store.BuildLoudnessConfig());
+        StemExtractor.TextResolver = key => AndroidStrings.Active[key];
+        neuralRuntime = new NativeOnnxRuntimeBridge(this);
+        neuralTrackCache = new NeuralTrackCacheService(this, (long)store.NeuralTrackCacheMaxMb * 1024L * 1024L);
+        neuralTrackCache.EvictToLimit((long)store.NeuralTrackCacheMaxMb * 1024L * 1024L);
+        neuralOrchestrator = new Cavernize.Logic.Spatial.NeuralPipelineOrchestrator(neuralRuntime, neuralRuntime, neuralTrackCache);
+        playerEngine.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
+        playerEngine.ApplyLgsrConfig(store.BuildLgsrConfig());
+        float[] savedVoiceprint = store.GetMicVoiceprintBands();
+        if (savedVoiceprint != null) {
+            playerEngine.VocalMixMatchStage.ApplyMicVoiceprint(savedVoiceprint, store.BuildVocalMacroSettings());
+        } else {
+            playerEngine.VocalMixMatchStage.ApplyVocalProfile(
+                playerEngine.VocalMixMatchStage.ActiveDna,
+                store.BuildVocalMacroSettings());
         }
+        SyncNeuralRuntimeDiagnostics();
+
+        AutoEqService.EnsureLoaded(this);
+        AutoEqService.ApplySavedToEngine(this, store, playerEngine);
+        audioDeviceProfileManager = new AudioDeviceProfileManager(this, store, playerEngine);
+        audioDeviceProfileManager.ActiveDeviceChanged += OnAudioDeviceRouteChanged;
+
+        headTrackingManager = new HeadTrackingManager(this, store, playerEngine, audioOutput);
+        headTrackingManager.StatusChanged += () => RunOnUiThread(RefreshHeadTrackingUi);
 
         uiHandler = new Handler(Looper.MainLooper);
         BuildRootUi();
+        audioDeviceProfileManager.Start();
+        usbProAudioManager.Start();
+        audioOutput.UpdateOutputRoute(audioDeviceProfileManager.CurrentDevice);
+        headTrackingManager.ApplySettings();
+        RefreshHeadTrackingUi();
+        RefreshProAudioUi();
+        RefreshExternalizationUi();
+        RefreshPersonalizationUi();
+        RefreshLoudnessUi();
+        RefreshNeuralAudioUi();
+        RefreshLgsrUi();
         RequestMediaPermissionsIfNeeded();
         StartTelemetryTimer();
 
@@ -265,6 +362,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         _ = CheckFFmpegUpdateAsync(silent: true);
         _ = CheckTruehddUpdateAsync(silent: true);
+        _ = CheckOnnxRuntimeUpdateAsync(silent: true);
         if (store.AutoCheckUpdates) {
             _ = CheckForUpdatesAsync(silent: true);
         }
@@ -288,23 +386,38 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     protected override void OnDestroy() {
         uiDestroyed = true;
+        StopCalibrationTonePlayback();
         activeCts?.Cancel();
         activeCts?.Dispose();
         truehdPrepareCts?.Cancel();
         truehdPrepareCts?.Dispose();
+        losslessTwinCts?.Cancel();
+        losslessTwinCts?.Dispose();
+        neuralPrepCts?.Cancel();
+        neuralPrepCts?.Dispose();
+        activeLosslessTwin?.Dispose();
+        activeLosslessTwin = null;
         tabPillAnimator?.Cancel();
         tabPillAnimator?.Dispose();
+        formatPillAnimator?.Cancel();
+        formatPillAnimator?.Dispose();
         mediaNotification?.Dispose();
         ExitVideoFullscreenIfNeeded();
         musicVideoStage?.ReleasePlayer();
         currentMediaMeta?.ArtworkBitmap?.Dispose();
         defaultFallbackCover?.Dispose();
+        headTrackingManager?.Dispose();
+        audioDeviceProfileManager?.Dispose();
         audioOutput?.Dispose();
+        usbProAudioManager?.Dispose();
+        neuralRuntime?.Dispose();
+        playerEngine?.CancelMicVoiceprintCalibration();
         playerEngine?.Dispose();
         decodedTrueHDTrack?.Dispose();
         LoadedFile?.Dispose();
         TrueHDDecoderService.CleanupWorkDirectory(activeTrueHDSessionDir);
         TrueHDDecoderService.CleanupWorkDirectory(activeFallbackSessionDir);
+        OnnxRuntimeInstallerService.CleanupTempCache(this);
         base.OnDestroy();
     }
 
@@ -334,6 +447,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         OneUiTheme.Initialize(this);
 
         FrameLayout rootFrame = new(this);
+        rootFrameHost = rootFrame;
         rootFrame.SetBackgroundColor(ColBg);
 
         // Layer 0: Atmospheric blurred One UI 9 depth backdrop (also breathes with loaded album art palette)
@@ -351,26 +465,40 @@ public partial class MainActivity : Activity, ICavernizeApp {
         currentHeaderStatusText = S["SelectFilePill"];
         currentTrackSummaryText = "";
 
-        // Tab content frame
-        FrameLayout contentFrame = new(this);
+        // Tab content frame with horizontal swipe between non-Play tabs (can swipe into Play, never away from Play)
+        TabSwipeHostLayout contentFrame = new(
+            this,
+            () => activeTab,
+            () => tabContainers?.Length ?? 0,
+            () => (tabContainers != null && activeTab >= 0 && activeTab < tabContainers.Length) ? tabContainers[activeTab] : null,
+            SwitchTab);
         LinearLayout musicTab = BuildMusicPlayerTab();
         LinearLayout playerTab = BuildPlayerTab();
         LinearLayout convertTab = BuildConverterTab();
         LinearLayout extractTab = BuildExtractorTab();
         LinearLayout settingsTab = BuildSettingsTab();
         tabPages = [musicTab, playerTab, convertTab, extractTab, settingsTab];
+        tabContainers = new View[tabPages.Length];
 
         for (int i = 0; i < tabPages.Length; i++) {
-            ScrollView sv = new(this) {
-                FillViewport = true,
-                VerticalScrollBarEnabled = true
-            };
-            sv.SetClipToPadding(false);
-            sv.SetBackgroundColor(Color.Transparent);
-            sv.ScrollChange += (_, _) => navFrostedHost?.RefreshBlur();
-            sv.AddView(tabPages[i]);
-            sv.Visibility = i == activeTab ? ViewStates.Visible : ViewStates.Gone;
-            contentFrame.AddView(sv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
+            if (i == 0) {
+                // Play tab manages its own zero-scroll Now Playing viewport and internal scrollable Library
+                tabPages[i].Visibility = i == activeTab ? ViewStates.Visible : ViewStates.Gone;
+                tabContainers[i] = tabPages[i];
+                contentFrame.AddView(tabPages[i], new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
+            } else {
+                ScrollView sv = new(this) {
+                    FillViewport = true,
+                    VerticalScrollBarEnabled = true
+                };
+                sv.SetClipToPadding(false);
+                sv.SetBackgroundColor(Color.Transparent);
+                sv.ScrollChange += (_, _) => navFrostedHost?.RefreshBlur();
+                sv.AddView(tabPages[i]);
+                sv.Visibility = i == activeTab ? ViewStates.Visible : ViewStates.Gone;
+                tabContainers[i] = sv;
+                contentFrame.AddView(sv, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
+            }
         }
         root.AddView(contentFrame, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
         rootFrame.AddView(root, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
@@ -381,11 +509,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 Android.Graphics.Drawables.GradientDrawable.Orientation.TopBottom,
                 [Color.Transparent.ToArgb(), Color.Argb(205, ColBg.R, ColBg.G, ColBg.B).ToArgb()])
         };
+        bottomScrimView = bottomScrim;
         rootFrame.AddView(bottomScrim, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(98)) {
             Gravity = GravityFlags.Bottom
         });
 
-        // Layer 2: Samsung Gallery Floating Capsule Bottom Navigation Bar (56dp frosted pill + translucent #1AFFFFFF selection pill)
+        // Layer 2: Samsung Gallery Floating Capsule Bottom Navigation Bar (hidden on Play Now Playing so integrated '+' pill saves 100% vertical space)
         navFrostedHost = new OneUiFrostedCapsuleView(this) {
             CornerRadiusDp = 999f,
             GlazeTopColor = OneUiTheme.SurfaceFloatingBar,
@@ -395,7 +524,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         };
         navFrostedHost.SetPadding(Dp(5), Dp(4), Dp(5), Dp(4));
 
-        FrameLayout navLayer = new(this);
+        navLayer = new FrameLayout(this);
         tabIndicatorPill = new View(this) {
             Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SelectedTabPill, OneUiTheme.PillCornerDp)
         };
@@ -464,18 +593,19 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
         }
         navLayer.AddView(navRow, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        navFrostedHost.AddView(navLayer);
+        navFrostedHost.AddView(navLayer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         FrameLayout.LayoutParams floatingNavLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             Gravity = GravityFlags.Bottom | GravityFlags.CenterHorizontal,
             LeftMargin = Dp(14),
             RightMargin = Dp(14),
-            BottomMargin = Dp(14)
+            BottomMargin = Dp(12)
         };
         rootFrame.AddView(navFrostedHost, floatingNavLp);
 
         SetContentView(rootFrame);
         UpdateTabButtonStyles(animate: false);
+        SetBottomNavBarVisible(activeTab != 0 || isLibrarySectionOpen, animate: false);
         navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
         RefreshAllUiState();
     }
@@ -790,28 +920,30 @@ public partial class MainActivity : Activity, ICavernizeApp {
             positiveText: S["CloseBtn"]);
     }
 
+    static Android.Views.Animations.PathInterpolator CreateOneUiEase() =>
+        new(0.22f, 1f, 0.36f, 1f);
+
     void SetExpandedWithAnimation(View panel, bool expanded) {
         if (panel == null) {
             return;
         }
-        panel.Animate()?.Cancel();
-        if (expanded) {
-            if (panel.Visibility != ViewStates.Visible) {
-                panel.Visibility = ViewStates.Visible;
-                panel.Alpha = 0f;
-                panel.TranslationY = -Dp(6);
-            }
-            panel.Animate()
-                .Alpha(1f)
-                .TranslationY(0f)
-                .SetDuration(190)
-                .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.5f))
-                .Start();
-        } else {
-            panel.Visibility = ViewStates.Gone;
-            panel.Alpha = 1f;
-            panel.TranslationY = 0f;
+        bool isCurrentlyVisible = panel.Visibility == ViewStates.Visible;
+        if (isCurrentlyVisible == expanded) {
+            return;
         }
+        panel.Animate()?.Cancel();
+        if (panel.Parent is ViewGroup vg) {
+            Android.Transitions.TransitionSet ts = new();
+            ts.SetOrdering(Android.Transitions.TransitionOrdering.Together);
+            ts.AddTransition(new Android.Transitions.ChangeBounds());
+            ts.AddTransition(new Android.Transitions.Fade());
+            ts.SetDuration(240);
+            ts.SetInterpolator(CreateOneUiEase());
+            Android.Transitions.TransitionManager.BeginDelayedTransition(vg, ts);
+        }
+        panel.Visibility = expanded ? ViewStates.Visible : ViewStates.Gone;
+        panel.Alpha = 1f;
+        panel.TranslationY = 0f;
     }
 
     bool ShouldShowSettingsDot() =>
@@ -820,54 +952,171 @@ public partial class MainActivity : Activity, ICavernizeApp {
         latestTruehddStatus?.IsUpdateAvailable == true;
 
     void SwitchTab(int idx) {
-        if (tabPages == null || idx < 0 || idx >= tabPages.Length) {
+        if (tabContainers == null || idx < 0 || idx >= tabContainers.Length) {
             return;
         }
         int prevTab = activeTab;
         activeTab = idx;
         if (idx != 0) {
             musicVideoStage?.PauseVideoDecoderOnly();
-        } else if (musicStageMode == PlayerStageMode.Video) {
+        } else if (musicStageMode == PlayerStageMode.Video && !isLibrarySectionOpen) {
             musicVideoStage?.SyncPlaybackState(playerEngine?.IsPlaying == true, playerEngine?.CurrentSeconds ?? 0);
-        } else if (musicStageMode == PlayerStageMode.Lyrics) {
+        } else if (musicStageMode == PlayerStageMode.Lyrics && !isLibrarySectionOpen) {
             musicLyricsView?.UpdatePlayback(playerEngine?.CurrentSeconds ?? 0, playerEngine?.IsPlaying == true);
         }
+
+        int myGen = ++tabSwitchAnimGen;
         if (prevTab != idx) {
             int dir = idx > prevTab ? 1 : -1;
-            for (int i = 0; i < tabPages.Length; i++) {
-                if (tabPages[i].Parent is not View sv) {
+            for (int i = 0; i < tabContainers.Length; i++) {
+                View container = tabContainers[i];
+                if (container == null) {
                     continue;
                 }
-                sv.Animate()?.Cancel();
+                container.Animate()?.Cancel();
                 if (i == idx) {
-                    sv.Visibility = ViewStates.Visible;
-                    sv.Alpha = 0f;
-                    sv.TranslationX = dir * Dp(20);
-                    sv.Animate()
+                    container.Visibility = ViewStates.Visible;
+                    container.Alpha = 0f;
+                    container.ScaleX = 0.985f;
+                    container.ScaleY = 0.985f;
+                    container.TranslationX = dir * Dp(26);
+                    container.Animate()
                         .Alpha(1f)
+                        .ScaleX(1f)
+                        .ScaleY(1f)
                         .TranslationX(0f)
-                        .SetDuration(220)
-                        .SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.6f))
-                        .WithEndAction(new Java.Lang.Runnable(() => navFrostedHost?.RefreshBlur(force: true)))
+                        .SetDuration(290)
+                        .SetInterpolator(CreateOneUiEase())
+                        .WithEndAction(new Java.Lang.Runnable(() => {
+                            if (uiDestroyed || myGen != tabSwitchAnimGen) return;
+                            navFrostedHost?.RefreshBlur(force: true);
+                        }))
+                        .Start();
+                } else if (i == prevTab) {
+                    View outgoing = container;
+                    outgoing.Visibility = ViewStates.Visible;
+                    outgoing.Animate()
+                        .Alpha(0f)
+                        .TranslationX(-dir * Dp(18))
+                        .SetDuration(175)
+                        .SetInterpolator(new Android.Views.Animations.AccelerateInterpolator(1.2f))
+                        .WithEndAction(new Java.Lang.Runnable(() => {
+                            if (uiDestroyed || myGen != tabSwitchAnimGen) return;
+                            outgoing.Visibility = ViewStates.Gone;
+                            outgoing.Alpha = 1f;
+                            outgoing.ScaleX = 1f;
+                            outgoing.ScaleY = 1f;
+                            outgoing.TranslationX = 0f;
+                        }))
                         .Start();
                 } else {
-                    sv.Visibility = ViewStates.Gone;
-                    sv.Alpha = 1f;
-                    sv.TranslationX = 0f;
+                    container.Visibility = ViewStates.Gone;
+                    container.Alpha = 1f;
+                    container.ScaleX = 1f;
+                    container.ScaleY = 1f;
+                    container.TranslationX = 0f;
                 }
             }
-        } else if (tabPages[idx].Parent is View svCur) {
+        } else if (tabContainers[idx] is View svCur) {
+            svCur.Animate()?.Cancel();
             svCur.Visibility = ViewStates.Visible;
             svCur.Alpha = 1f;
+            svCur.ScaleX = 1f;
+            svCur.ScaleY = 1f;
             svCur.TranslationX = 0f;
         }
         UpdateTabButtonStyles(animate: true);
+        bool wantsNav = idx != 0 || isLibrarySectionOpen;
+        SetBottomNavBarVisible(wantsNav, animate: prevTab != idx || isBottomNavVisible != wantsNav);
         if (idx == 1) {
             UpdateRoomCanvas();
         } else if (idx == 0) {
             RefreshMusicPlayerUi();
         }
         navFrostedHost?.RefreshBlur(force: true);
+    }
+
+    void SetBottomNavBarVisible(bool visible, bool animate) {
+        if (navFrostedHost == null) {
+            return;
+        }
+        isBottomNavVisible = visible;
+        int myGen = ++navVisAnimGen;
+        navFrostedHost.Animate()?.Cancel();
+        bottomScrimView?.Animate()?.Cancel();
+
+        if (!animate) {
+            navFrostedHost.Visibility = visible ? ViewStates.Visible : ViewStates.Gone;
+            navFrostedHost.Alpha = visible ? 1f : 0f;
+            navFrostedHost.TranslationY = visible ? 0f : Dp(34);
+            navFrostedHost.ScaleX = visible ? 1f : 0.94f;
+            navFrostedHost.ScaleY = visible ? 1f : 0.94f;
+            if (bottomScrimView != null) {
+                bottomScrimView.Visibility = visible ? ViewStates.Visible : ViewStates.Gone;
+                bottomScrimView.Alpha = visible ? 1f : 0f;
+            }
+            if (visible) {
+                navFrostedHost.Post(() => {
+                    PositionTabIndicator(animate: false);
+                    navFrostedHost?.RefreshBlur(force: true);
+                });
+            }
+            return;
+        }
+
+        if (visible) {
+            if (navFrostedHost.Visibility != ViewStates.Visible) {
+                navFrostedHost.Visibility = ViewStates.Visible;
+                navFrostedHost.Alpha = 0f;
+                navFrostedHost.TranslationY = Dp(32);
+                navFrostedHost.ScaleX = 0.94f;
+                navFrostedHost.ScaleY = 0.94f;
+            }
+            navFrostedHost.Animate()
+                .Alpha(1f)
+                .TranslationY(0f)
+                .ScaleX(1f)
+                .ScaleY(1f)
+                .SetDuration(290)
+                .SetInterpolator(CreateOneUiEase())
+                .WithEndAction(new Java.Lang.Runnable(() => {
+                    if (uiDestroyed || myGen != navVisAnimGen) return;
+                    PositionTabIndicator(animate: false);
+                    navFrostedHost?.RefreshBlur(force: true);
+                }))
+                .Start();
+            if (bottomScrimView != null) {
+                bottomScrimView.Visibility = ViewStates.Visible;
+                bottomScrimView.Animate()
+                    .Alpha(1f)
+                    .SetDuration(250)
+                    .SetInterpolator(CreateOneUiEase())
+                    .Start();
+            }
+        } else {
+            navFrostedHost.Animate()
+                .Alpha(0f)
+                .TranslationY(Dp(34))
+                .ScaleX(0.94f)
+                .ScaleY(0.94f)
+                .SetDuration(220)
+                .SetInterpolator(new Android.Views.Animations.AccelerateInterpolator(1.3f))
+                .WithEndAction(new Java.Lang.Runnable(() => {
+                    if (uiDestroyed || myGen != navVisAnimGen) return;
+                    navFrostedHost.Visibility = ViewStates.Gone;
+                }))
+                .Start();
+            if (bottomScrimView != null) {
+                bottomScrimView.Animate()
+                    .Alpha(0f)
+                    .SetDuration(200)
+                    .WithEndAction(new Java.Lang.Runnable(() => {
+                        if (uiDestroyed || myGen != navVisAnimGen) return;
+                        bottomScrimView.Visibility = ViewStates.Gone;
+                    }))
+                    .Start();
+            }
+        }
     }
 
     void UpdateTabButtonStyles(bool animate = true) {
@@ -922,8 +1171,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
 
         tabPillAnimator = ValueAnimator.OfFloat(0f, 1f);
-        tabPillAnimator.SetDuration(250);
-        tabPillAnimator.SetInterpolator(new Android.Views.Animations.DecelerateInterpolator(1.7f));
+        tabPillAnimator.SetDuration(270);
+        tabPillAnimator.SetInterpolator(CreateOneUiEase());
         tabPillAnimator.Update += (_, e) => {
             float f = (float)(e.Animation?.AnimatedValue ?? 1f);
             tabIndicatorPill.TranslationX = startX + (endX - startX) * f;
@@ -959,6 +1208,50 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         if (needed.Count > 0) {
             RequestPermissions(needed.ToArray(), ReqPermissions);
+        }
+    }
+
+    void RequestBluetoothPermissionsIfNeeded(Cavernize.Logic.Spatial.HeadTrackerSourceKind source) {
+        if (!OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            return;
+        }
+        List<string> needed = [];
+        if (CheckSelfPermission(Manifest.Permission.BluetoothConnect) != Permission.Granted) {
+            needed.Add(Manifest.Permission.BluetoothConnect);
+        }
+        if (source == Cavernize.Logic.Spatial.HeadTrackerSourceKind.BleOsc &&
+            CheckSelfPermission(Manifest.Permission.BluetoothScan) != Permission.Granted) {
+            needed.Add(Manifest.Permission.BluetoothScan);
+        }
+        if (needed.Count > 0) {
+            RequestPermissions(needed.ToArray(), ReqBluetoothPermissions);
+        }
+    }
+
+    bool RequestRecordAudioPermissionIfNeeded() {
+        if (CheckSelfPermission(Manifest.Permission.RecordAudio) == Permission.Granted) {
+            return true;
+        }
+        RequestPermissions([Manifest.Permission.RecordAudio], ReqRecordAudioPermission);
+        return false;
+    }
+
+    public override void OnRequestPermissionsResult(int requestCode, string[] permissions, Permission[] grantResults) {
+        base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == ReqBluetoothPermissions) {
+            bool allGranted = grantResults != null && grantResults.Length > 0 && grantResults.All(r => r == Permission.Granted);
+            if (!allGranted) {
+                ShowToast(S["HeadTrackingPermNeededToast"]);
+            }
+            headTrackingManager?.ApplySettings();
+            RefreshHeadTrackingUi();
+        } else if (requestCode == ReqRecordAudioPermission) {
+            bool granted = grantResults != null && grantResults.Length > 0 && grantResults[0] == Permission.Granted;
+            if (!granted) {
+                ShowToast(S["ProAudioMicPermNeededToast"]);
+            }
+            audioOutput?.ApplyProAudioConfig(store.BuildProAudioConfig());
+            RefreshProAudioUi();
         }
     }
 
@@ -1005,12 +1298,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         } else if (requestCode == ReqLoadHrir && data.Data != null) {
             Task.Run(() => {
                 string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
-                RunOnUiThread(() => {
-                    if (TryLoadHrir(path, showError: true)) {
-                        store.HrirPath = path;
-                        RefreshSettingsTabButtons();
-                    }
-                });
+                RunOnUiThread(() => ImportCustomBinauralFile(path));
             });
         } else if (requestCode == ReqLoadFilters && data.Data != null) {
             Task.Run(() => {
@@ -1025,6 +1313,16 @@ public partial class MainActivity : Activity, ICavernizeApp {
             Task.Run(() => {
                 string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
                 RunOnUiThread(() => LoadExternalSubtitleFromPath(path));
+            });
+        } else if (requestCode == ReqLoadAutoEq && data.Data != null) {
+            Task.Run(() => {
+                string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
+                RunOnUiThread(() => ImportCustomAutoEqFile(path));
+            });
+        } else if (requestCode == ReqLoadOnnxModel && data.Data != null) {
+            Task.Run(() => {
+                string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
+                RunOnUiThread(() => ImportCustomOnnxModelFromPath(path));
             });
         }
     }
@@ -1280,7 +1578,15 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     SetWorkspaceHeaderText(msg);
                     SetConvertStatus(msg, p);
                 }));
-            return new AudioFile(decodedWav);
+            AudioReader fallbackReader = AudioReader.Open(decodedWav);
+            Codec pcmCodec = fallbackReader.Bits == BitDepth.Float32 ? Codec.PCM_Float : Codec.PCM_LE;
+            string probedCodecName = probe != null && probe.AudioStreams.Count > 0 ? probe.AudioStreams[0].CodecName : null;
+            string probedLang = probe != null && probe.AudioStreams.Count > 0 ? probe.AudioStreams[0].Language : null;
+            (Codec srcCodec, bool isLossy) = InferFallbackCodecAndLossy(resolved, probedCodecName);
+            ExternalDecodedTrack fallbackTrack = new(
+                fallbackReader, pcmCodec, srcCodec, null, guessedContainer, null, null, probedLang,
+                isLossySource: isLossy, originalSourcePath: resolved);
+            return AudioFile.FromCustomTracks(resolved, [fallbackTrack]);
         } catch (Exception mediaEx) {
             AppLogger.Warn($"Android MediaCodec fallback failed ({mediaEx.GetType().Name}): {mediaEx.Message}");
 
@@ -1292,8 +1598,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 fallbackSessionDir = workDir;
                 string outWav = Path.Combine(workDir, "decoded.wav");
                 RunOnUiThread(() => {
-                    SetWorkspaceHeaderText("FFmpeg: decodificando áudio...");
-                    SetConvertStatus("FFmpeg: decodificando áudio...", -1);
+                    SetWorkspaceHeaderText(S["DecodingFallback"]);
+                    SetConvertStatus(S["DecodingFallback"], -1);
                 });
                 bool wavOk = TrueHDDecoderService.ExtractAudioStreamWithFFmpeg(
                     ffmpeg.Location, resolved, firstAudio.StreamIndex, outWav, "wav",
@@ -1304,9 +1610,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     }));
                 if (wavOk) {
                     AudioReader wavReader = AudioReader.Open(outWav);
+                    Codec pcmCodec = wavReader.Bits == BitDepth.Float32 ? Codec.PCM_Float : Codec.PCM_LE;
+                    (Codec srcCodec, bool isLossy) = InferFallbackCodecAndLossy(resolved, firstAudio.CodecName);
                     ExternalDecodedTrack wavTrack = new(
-                        wavReader, wavReader.Bits == BitDepth.Float32 ? Codec.PCM_Float : Codec.PCM_LE,
-                        Codec.PCM_LE, null, guessedContainer, null, null, firstAudio.Language);
+                        wavReader, pcmCodec, srcCodec, null, guessedContainer, null, null, firstAudio.Language,
+                        isLossySource: isLossy, originalSourcePath: resolved);
                     return AudioFile.FromCustomTracks(resolved, [wavTrack]);
                 }
             }
@@ -1316,6 +1624,31 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
             throw;
         }
+    }
+
+    static (Codec SourceCodec, bool IsLossy) InferFallbackCodecAndLossy(string sourcePath, string ffCodecName) {
+        string token = (ffCodecName ?? "").Trim().ToLowerInvariant();
+        if (token.Contains("flac")) return (Codec.FLAC, false);
+        if (token.Contains("truehd") || token.Contains("mlp")) return (Codec.TrueHD, false);
+        if (token.Contains("alac") || token.StartsWith("pcm")) return (Codec.PCM_LE, false);
+        if (token.Contains("eac3")) return (Codec.EnhancedAC3, true);
+        if (token.Contains("ac3")) return (Codec.AC3, true);
+        if (token.Contains("dts")) return (token.Contains("hd") || token.Contains("ma") ? Codec.DTS_HD : Codec.DTS, !(token.Contains("hd") || token.Contains("ma")));
+        if (token.Contains("aac") || token.Contains("mp3") || token.Contains("opus") || token.Contains("vorbis") || token.Contains("wma")) {
+            return (Codec.Unknown, true);
+        }
+
+        string ext = Path.GetExtension(sourcePath ?? "").ToLowerInvariant();
+        return ext switch {
+            ".flac" => (Codec.FLAC, false),
+            ".wav" or ".aif" or ".aiff" or ".caf" => (Codec.PCM_LE, false),
+            ".laf" => (Codec.LimitlessAudio, false),
+            ".mp3" or ".aac" or ".m4a" or ".ogg" or ".opus" or ".wma" => (Codec.Unknown, true),
+            ".ac3" => (Codec.AC3, true),
+            ".ec3" or ".eac3" => (Codec.EnhancedAC3, true),
+            ".dts" => (Codec.DTS, true),
+            _ => (Codec.Unknown, true)
+        };
     }
 
     void ShowLoadFailureDialog(Exception ex) {
@@ -1403,16 +1736,207 @@ public partial class MainActivity : Activity, ICavernizeApp {
         if (LoadedFile != null && string.Equals(LoadedFile.Path, targetVariant.FilePath, StringComparison.OrdinalIgnoreCase)) {
             return;
         }
+
+        int myGen = ++variantSwitchGeneration;
         bool wasPlaying = playerEngine?.IsPlaying ?? false;
-        double resumeSec = (playerEngine != null && playerEngine.TotalSeconds > 0) ? playerEngine.CurrentSeconds : 0;
-        pendingSeekAfterLoadSeconds = resumeSec > 0.25 ? resumeSec : -1;
+        double baseSec = (playerEngine != null && playerEngine.TotalSeconds > 0) ? playerEngine.CurrentSeconds : 0;
+        long startElapsedMs = SystemClock.ElapsedRealtime();
+        preferredAudioCategory = AudioQualityAnalyzer.ClassifyCategory(targetVariant);
         preferredFormatVariantKey = MediaLibraryService.GetDistinctVariantLabel(targetVariant, allVariants);
 
         if (activeLibraryQueueIndex >= 0 && activeLibraryQueueIndex < activeLibraryQueue.Count) {
             activeLibraryQueue[activeLibraryQueueIndex] = targetVariant;
         }
-        ShowToast(string.Format(S["FormatSwitchedToast"], preferredFormatVariantKey));
-        OpenLocalPathWithFallbackAsync(targetVariant.FilePath, switchToTab: null, autoPlay: wasPlaying, bypassBusyGuard: true);
+
+        string targetPath = targetVariant.FilePath;
+        string prevTitle = currentMediaMeta?.Title;
+        MediaArtworkMetadata prevMetaSnap = currentMediaMeta;
+
+        // Keep current track playing seamlessly in the background while loading & decoding the target variant
+        Task.Run(() => {
+            AudioFile newFile = null;
+            string newFallbackDir = null;
+            ExternalDecodedTrack newDecodedTrueHD = null;
+            string newTrueHDSession = null;
+            try {
+                MediaArtworkMetadata meta = MediaMetadataHelper.Extract(this, null, targetPath, Path.GetFileName(targetPath));
+                newFile = OpenAudioFileResilient(targetPath, out newFallbackDir);
+                if (newFile == null || newFile.Tracks.Count == 0) {
+                    throw new InvalidOperationException("No playable audio tracks in selected variant.");
+                }
+                CavernizeTrack bestTrack = newFile.Tracks
+                    .Where(x => x.Codec != Codec.Unknown && x.Supported)
+                    .OrderBy(x => x.Codec)
+                    .FirstOrDefault() ?? newFile.Tracks[0];
+
+                CavernizeTrack readyTrack = bestTrack;
+                if (bestTrack.Codec == Codec.TrueHD) {
+                    string truehddPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
+                    if (string.IsNullOrEmpty(truehddPath) || !File.Exists(truehddPath) || !store.TruehddLicenceAccepted) {
+                        // Needs interactive truehdd download/licence modal -> fall back cleanly with elapsed-time compensation
+                        newFile.Dispose();
+                        if (!string.IsNullOrEmpty(newFallbackDir)) {
+                            TrueHDDecoderService.CleanupWorkDirectory(newFallbackDir);
+                        }
+                        RunOnUiThread(() => {
+                            if (uiDestroyed || myGen != variantSwitchGeneration) return;
+                            double liveSec = (wasPlaying && playerEngine.IsPlaying)
+                                ? playerEngine.CurrentSeconds
+                                : (wasPlaying ? baseSec + (SystemClock.ElapsedRealtime() - startElapsedMs) / 1000.0 : baseSec);
+                            pendingSeekAfterLoadSeconds = liveSec > 0.25 ? liveSec : -1;
+                            ShowToast(string.Format(S["FormatSwitchedToast"], preferredFormatVariantKey));
+                            OpenLocalPathWithFallbackAsync(targetPath, switchToTab: null, autoPlay: wasPlaying, bypassBusyGuard: true);
+                        });
+                        return;
+                    }
+
+                    int? forcedPres = store.MlpPresentation >= 0 ? store.MlpPresentation : null;
+                    TrueHDDecodeResult decRes = TrueHDDecoderService.DecodeTrack(
+                        this,
+                        bestTrack,
+                        newFile.Path,
+                        ffmpeg.Found ? ffmpeg.Location : null,
+                        truehddPath,
+                        forcedPres,
+                        null,
+                        CancellationToken.None);
+                    newDecodedTrueHD = decRes.DecodedTrack;
+                    newTrueHDSession = decRes.SessionDirectory;
+                    readyTrack = newDecodedTrueHD;
+                }
+
+                RunOnUiThread(() => {
+                    if (uiDestroyed || myGen != variantSwitchGeneration || readyTrack == null) {
+                        newDecodedTrueHD?.Dispose();
+                        newFile?.Dispose();
+                        if (!string.IsNullOrEmpty(newTrueHDSession)) TrueHDDecoderService.CleanupWorkDirectory(newTrueHDSession);
+                        if (!string.IsNullOrEmpty(newFallbackDir)) TrueHDDecoderService.CleanupWorkDirectory(newFallbackDir);
+                        return;
+                    }
+
+                    // Preserve high-res artwork & synced lyrics from current song to prevent visual flash
+                    bool sameSong = prevMetaSnap != null &&
+                        (string.Equals(prevTitle, meta?.Title, StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(meta?.Title));
+                    if (meta != null && sameSong) {
+                        if (!meta.HasEmbeddedArtwork && IsBitmapUsable(prevMetaSnap.ArtworkBitmap)) {
+                            meta.ArtworkBitmap = prevMetaSnap.ArtworkBitmap;
+                            meta.HasEmbeddedArtwork = prevMetaSnap.HasEmbeddedArtwork;
+                            meta.PrimaryAccent = prevMetaSnap.PrimaryAccent;
+                            meta.SecondaryAccent = prevMetaSnap.SecondaryAccent;
+                        }
+                        if ((meta.Lyrics == null || !meta.Lyrics.HasLyrics) && prevMetaSnap.Lyrics?.HasLyrics == true) {
+                            meta.Lyrics = prevMetaSnap.Lyrics;
+                        }
+                        if (string.IsNullOrWhiteSpace(meta.Title)) meta.Title = prevMetaSnap.Title;
+                        if (string.IsNullOrWhiteSpace(meta.Artist)) meta.Artist = prevMetaSnap.Artist;
+                        if (string.IsNullOrWhiteSpace(meta.Album)) meta.Album = prevMetaSnap.Album;
+                    }
+
+                    // Exact real-time elapsed timestamp so playback NEVER jumps backward
+                    double liveSec = (wasPlaying && playerEngine.IsPlaying)
+                        ? playerEngine.CurrentSeconds
+                        : (wasPlaying ? baseSec + (SystemClock.ElapsedRealtime() - startElapsedMs) / 1000.0 : baseSec);
+
+                    AudioFile oldFile = LoadedFile;
+                    ExternalDecodedTrack oldDecoded = decodedTrueHDTrack;
+                    string oldTrueHDSession = activeTrueHDSessionDir;
+                    string oldFallback = activeFallbackSessionDir;
+
+                    bool swapped = false;
+                    if (readyTrack.Supported && readyTrack.Codec != Codec.TrueHD) {
+                        try {
+                            playerEngine.HotSwapTrackSeamless(readyTrack, liveSec, upmixingSettings, renderingSettings);
+                            swapped = true;
+                        } catch (Exception swapEx) {
+                            AppLogger.Warn($"HotSwapTrackSeamless fallback: {swapEx.Message}");
+                            swapped = false;
+                        }
+                    }
+
+                    if (!swapped) {
+                        // Safe fallback if seamless swap couldn't initialize
+                        pendingSeekAfterLoadSeconds = liveSec > 0.25 ? liveSec : -1;
+                        pendingAutoPlayAfterLoad = wasPlaying;
+                        activeFallbackSessionDir = newFallbackDir;
+                        OpenContent(newFile, meta);
+                        pendingAutoPlayAfterLoad = false;
+                        return;
+                    }
+
+                    // Update active references without stopping AudioTrack or tearing down playback
+                    LoadedFile = newFile;
+                    selectedTrack = bestTrack;
+                    decodedTrueHDTrack = newDecodedTrueHD;
+                    activeTrueHDSessionDir = newTrueHDSession;
+                    activeFallbackSessionDir = newFallbackDir;
+                    currentMediaMeta = meta;
+                    currentMediaUri = targetVariant.ContentUri;
+                    trackSourceItems = [.. playerEngine.SourceItems];
+
+                    // Keep current stage mode (Cover or Lyrics) intact without flashing
+                    if (sameSong && meta?.HasVideo != true && musicStageMode != PlayerStageMode.Video) {
+                        lastStageBoundPath = meta?.SourceMediaPath ?? newFile.Path ?? "";
+                    }
+
+                    if (wasPlaying && !playerEngine.IsPlaying) {
+                        playerEngine.IsPlaying = true;
+                        audioOutput.Start();
+                    }
+                    if (meta?.HasVideo == true) {
+                        musicVideoStage?.SeekTo(liveSec);
+                    }
+
+                    EnsureActiveQueueForCurrentFile(targetPath);
+                    SetWorkspaceHeaderText(!string.IsNullOrWhiteSpace(meta?.Title) ? meta.Title : Path.GetFileName(newFile.Path));
+                    string details = string.Join(" | ", readyTrack.Details.Select(d => $"{d.property}: {d.value}"));
+                    SetWorkspaceSummaryText($"{readyTrack.FormatHeader}\n{details}");
+
+                    mediaNotification?.UpdateMetadata(
+                        !string.IsNullOrWhiteSpace(meta?.Title) ? meta.Title : Path.GetFileNameWithoutExtension(newFile.Path),
+                        !string.IsNullOrWhiteSpace(meta?.Artist) ? meta.Artist : $"Cavernize 3D • {readyTrack.FormatHeader}",
+                        !string.IsNullOrWhiteSpace(meta?.Album) ? meta.Album : readyTrack.FormatHeader,
+                        playerEngine.TotalSeconds,
+                        meta?.ArtworkBitmap);
+
+                    RebuildInlineTrackList();
+                    RefreshPlayerSourcesList();
+                    RefreshMusicPlayerUi();
+                    RefreshExtractorChecklist();
+                    RefreshConverterTrackInfo();
+                    RefreshContainerOptions();
+                    SyncPlaybackUi(playerEngine.IsPlaying, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
+                    UpdateRoomCanvas();
+                    ShowToast(string.Format(S["FormatSwitchedToast"], preferredFormatVariantKey));
+
+                    // Clean up previous file/session resources AFTER engine has atomically switched
+                    if (oldDecoded != null && oldDecoded != newDecodedTrueHD && !IsSessionProtectedByQueue(oldTrueHDSession)) {
+                        try { oldDecoded.Dispose(); } catch { }
+                    }
+                    if (oldFile != null && oldFile != newFile && renderQueue.Jobs.FirstOrDefault(x => x.IsUsingFile(oldFile)) == null) {
+                        try { oldFile.Dispose(); } catch { }
+                    }
+                    if (!string.IsNullOrEmpty(oldTrueHDSession) && !string.Equals(oldTrueHDSession, newTrueHDSession, StringComparison.Ordinal) &&
+                        !IsSessionProtectedByQueue(oldTrueHDSession)) {
+                        TrueHDDecoderService.CleanupWorkDirectory(oldTrueHDSession);
+                    }
+                    if (!string.IsNullOrEmpty(oldFallback) && !string.Equals(oldFallback, newFallbackDir, StringComparison.Ordinal) &&
+                        !IsSessionProtectedByQueue(oldFallback)) {
+                        TrueHDDecoderService.CleanupWorkDirectory(oldFallback);
+                    }
+                });
+            } catch (Exception ex) {
+                newDecodedTrueHD?.Dispose();
+                newFile?.Dispose();
+                if (!string.IsNullOrEmpty(newTrueHDSession)) TrueHDDecoderService.CleanupWorkDirectory(newTrueHDSession);
+                if (!string.IsNullOrEmpty(newFallbackDir)) TrueHDDecoderService.CleanupWorkDirectory(newFallbackDir);
+                AppLogger.Error("SwitchActiveTrackVariant", ex);
+                RunOnUiThread(() => {
+                    if (!uiDestroyed && myGen == variantSwitchGeneration) {
+                        ShowLoadFailureDialog(ex);
+                    }
+                });
+            }
+        });
     }
 
     public void OpenContent(AudioFile file) => OpenContent(file, null);
@@ -1599,8 +2123,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 List<LibraryTrackItem> useList = filteredGroup.Contains(match) ? filteredGroup : group;
                 List<LibraryMergedTrack> merged = MediaLibraryService.MergeAlbumTrackVariants(useList);
                 foreach (LibraryMergedTrack m in merged) {
-                    LibraryTrackItem pick = m.Variants.Contains(match) ? match : m.Primary;
-                    activeLibraryQueue.Add(pick);
+                    LibraryTrackItem pick = m.Variants.Contains(match)
+                        ? match
+                        : (preferredAudioCategory.HasValue
+                            ? AudioQualityAnalyzer.PickBestVariantForNextTrack(m.Variants, preferredAudioCategory.Value, this)
+                            : m.Primary);
+                    activeLibraryQueue.Add(pick ?? m.Primary);
                 }
                 activeLibraryQueueIndex = activeLibraryQueue.IndexOf(match);
                 if (activeLibraryQueue.Count > 0 && activeLibraryQueueIndex >= 0) {
@@ -1641,17 +2169,21 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     void OnSelectedTrackChanged() {
         StopPlayback();
+        CancelNeuralTrackPrep(silent: true);
         ClearDecodedTrueHDState();
         if (selectedTrack == null) {
             fileDetailsExpanded = false;
             SetWorkspaceSummaryText("");
             trackSourceItems = [];
+            playerEngine?.BindSeparatedNeuralTrack(null);
+            playerEngine?.VocalMixMatchStage?.ApplySongDna(Cavern.VocalChain.VocalMixDnaProfile.CreateStudioDefault());
             mediaNotification?.CancelNotification();
             RefreshPlayerSourcesList();
             RefreshMusicPlayerUi();
             RefreshExtractorChecklist();
             RefreshConverterTrackInfo();
             RebuildInlineTrackList();
+            RefreshNeuralPrepUi();
             return;
         }
 
@@ -1732,6 +2264,516 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshContainerOptions();
         SyncPlaybackUi(false, initialSeekSec, playerEngine.TotalSeconds);
         UpdateRoomCanvas();
+        playerEngine?.VocalMixMatchStage?.ApplySongDna(Cavern.VocalChain.VocalMixDnaProfile.CreateStudioDefault());
+        StartLosslessTwinDiscoveryAsync(activeTrack);
+        TryLoadCachedSongVocalDnaAsync(activeTrack);
+        TryAutoBindCachedNeuralStemsAsync(activeTrack);
+        RefreshNeuralPrepUi();
+    }
+
+    void StartLosslessTwinDiscoveryAsync(CavernizeTrack activeTrack) {
+        if (uiDestroyed || activeTrack == null || playerEngine == null) {
+            return;
+        }
+        losslessTwinCts?.Cancel();
+        losslessTwinCts?.Dispose();
+        losslessTwinCts = new CancellationTokenSource();
+        CancellationToken ct = losslessTwinCts.Token;
+        int gen = ++losslessTwinGeneration;
+
+        string activePath = currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        bool alreadyLossless = LosslessTwinDiscoveryService.IsTrackAlreadyLossless(activeTrack, activePath);
+        playerEngine.LgsrStage.SetActiveTrackLosslessStatus(alreadyLossless);
+
+        // Detach stale lossless twin immediately while discovering the twin for the new track
+        Cavernize.Logic.Spatial.UniversalLosslessTwinProvider previous = activeLosslessTwin;
+        activeLosslessTwin = null;
+        playerEngine.BindLosslessReference(null);
+        previous?.Dispose();
+
+        Cavernize.Logic.Spatial.LgsrConfig lgsrCfg = store.BuildLgsrConfig();
+        playerEngine.ApplyLgsrConfig(lgsrCfg);
+        RefreshLgsrUi();
+
+        if (!lgsrCfg.Enabled || !lgsrCfg.AutoDiscoverTwin || (lgsrCfg.BypassOnAlreadyLossless && alreadyLossless)) {
+            return;
+        }
+
+        MediaLibrarySnapshot snap = librarySnapshot ?? MediaLibraryService.CachedSnapshot;
+        string title = currentMediaMeta?.Title ?? "";
+        string artist = currentMediaMeta?.Artist ?? "";
+        string album = currentMediaMeta?.Album ?? "";
+        string ffLoc = ffmpeg?.Found == true ? ffmpeg.Location : null;
+
+        _ = Task.Run(async () => {
+            try {
+                Cavernize.Logic.Spatial.UniversalLosslessTwinProvider twin =
+                    await LosslessTwinDiscoveryService.DiscoverAndSyncAsync(
+                        this,
+                        snap,
+                        activeTrack,
+                        activePath,
+                        title,
+                        artist,
+                        album,
+                        lgsrCfg,
+                        ffLoc,
+                        ct).ConfigureAwait(false);
+
+                RunOnUiThread(() => {
+                    if (uiDestroyed || gen != losslessTwinGeneration) {
+                        twin.Dispose();
+                        return;
+                    }
+                    activeLosslessTwin = twin;
+                    playerEngine.BindLosslessReference(twin);
+                    RefreshLgsrUi();
+                });
+            } catch (System.OperationCanceledException) {
+                // Superseded by newer track selection
+            } catch (Exception ex) {
+                AppLogger.Warn($"W09 StartLosslessTwinDiscoveryAsync: {ex.Message}");
+            }
+        }, ct);
+    }
+
+    void CancelNeuralTrackPrep(bool silent = false) {
+        neuralPrepGeneration++;
+        try {
+            neuralPrepCts?.Cancel();
+            neuralPrepCts?.Dispose();
+        } catch { }
+        neuralPrepCts = null;
+        isNeuralPrepRunning = false;
+        neuralPrepProgress = 0;
+        neuralPrepStatusText = "";
+        RefreshNeuralPrepUi();
+        if (!silent) {
+            Toast.MakeText(this, S["CancelledStatus"], ToastLength.Short).Show();
+        }
+    }
+
+    sealed class CachedVocalDnaRecord {
+        public float[] BandEnergyDb { get; set; }
+        public float SpectralTiltDbPerOct { get; set; }
+        public float SibilanceIndexDb { get; set; }
+        public float TargetVocalLufs { get; set; }
+        public float CrestFactorDb { get; set; }
+        public float HarmonicWarmth { get; set; }
+        public float ReverbRt60Sec { get; set; }
+        public float ReverbPreDelayMs { get; set; }
+        public float ReverbWetMix { get; set; }
+        public float ReverbDampingHz { get; set; }
+        public float DelayTimeMs { get; set; }
+        public float DelayWetMix { get; set; }
+        public float StereoWidth { get; set; }
+        public float PosX { get; set; }
+        public float PosY { get; set; }
+        public float PosZ { get; set; }
+        public bool HasMeasuredDereverb { get; set; }
+        public float? MeasuredDrrDb { get; set; }
+        public float ActiveSpeechRmsDbfs { get; set; }
+        public int ActiveWindowCount { get; set; }
+        public string SourceTrackSummary { get; set; }
+    }
+
+    string ResolveVocalDnaCacheFilePath(CavernizeTrack track) {
+        string sourceKey = track?.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? track?.Path ?? "";
+        if (string.IsNullOrEmpty(sourceKey) || !File.Exists(sourceKey)) {
+            return null;
+        }
+        try {
+            FileInfo fi = new(sourceKey);
+            string raw = $"{sourceKey}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}|dna_v2";
+            byte[] hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(raw));
+            string hex = Convert.ToHexString(hash, 0, 12).ToLowerInvariant();
+            string dir = Path.Combine(CacheDir?.AbsolutePath ?? FilesDir.AbsolutePath, "vocal_dna");
+            Directory.CreateDirectory(dir);
+            return Path.Combine(dir, $"{hex}.json");
+        } catch {
+            return null;
+        }
+    }
+
+    void SaveCachedSongVocalDna(CavernizeTrack track, Cavern.VocalChain.VocalMixDnaProfile dna) {
+        if (track == null || dna == null || !dna.IsExtractedFromSong) {
+            return;
+        }
+        string cachePath = ResolveVocalDnaCacheFilePath(track);
+        if (string.IsNullOrEmpty(cachePath)) {
+            return;
+        }
+        try {
+            CachedVocalDnaRecord rec = new() {
+                BandEnergyDb = dna.BandEnergyDb,
+                SpectralTiltDbPerOct = dna.SpectralTiltDbPerOct,
+                SibilanceIndexDb = dna.SibilanceIndexDb,
+                TargetVocalLufs = dna.TargetVocalLufs,
+                CrestFactorDb = dna.CrestFactorDb,
+                HarmonicWarmth = dna.HarmonicWarmth,
+                ReverbRt60Sec = dna.ReverbRt60Sec,
+                ReverbPreDelayMs = dna.ReverbPreDelayMs,
+                ReverbWetMix = dna.ReverbWetMix,
+                ReverbDampingHz = dna.ReverbDampingHz,
+                DelayTimeMs = dna.DelayTimeMs,
+                DelayWetMix = dna.DelayWetMix,
+                StereoWidth = dna.StereoWidth,
+                PosX = dna.VocalAtmosPosition.X,
+                PosY = dna.VocalAtmosPosition.Y,
+                PosZ = dna.VocalAtmosPosition.Z,
+                HasMeasuredDereverb = dna.HasMeasuredDereverb,
+                MeasuredDrrDb = float.IsFinite(dna.MeasuredDrrDb) ? dna.MeasuredDrrDb : null,
+                ActiveSpeechRmsDbfs = dna.ActiveSpeechRmsDbfs,
+                ActiveWindowCount = dna.ActiveWindowCount,
+                SourceTrackSummary = dna.SourceTrackSummary ?? ""
+            };
+            string json = System.Text.Json.JsonSerializer.Serialize(rec);
+            File.WriteAllText(cachePath, json);
+        } catch (Exception ex) {
+            AppLogger.Warn($"W19.b SaveCachedSongVocalDna: {ex.Message}");
+        }
+    }
+
+    void TryLoadCachedSongVocalDnaAsync(CavernizeTrack activeTrack) {
+        if (uiDestroyed || activeTrack == null || playerEngine == null) {
+            return;
+        }
+        int gen = ++vocalDnaLoadGeneration;
+        string cachePath = ResolveVocalDnaCacheFilePath(activeTrack);
+        if (string.IsNullOrEmpty(cachePath) || !File.Exists(cachePath)) {
+            return;
+        }
+        _ = Task.Run(() => {
+            try {
+                string json = File.ReadAllText(cachePath);
+                CachedVocalDnaRecord rec = System.Text.Json.JsonSerializer.Deserialize<CachedVocalDnaRecord>(json);
+                if (rec == null || rec.BandEnergyDb == null || rec.BandEnergyDb.Length != Cavern.VocalChain.VocalMixDnaProfile.AnalysisBandHz.Length) {
+                    return;
+                }
+                Cavern.VocalChain.VocalMixDnaProfile dna = new() {
+                    BandEnergyDb = rec.BandEnergyDb,
+                    SpectralTiltDbPerOct = rec.SpectralTiltDbPerOct,
+                    SibilanceIndexDb = rec.SibilanceIndexDb,
+                    TargetVocalLufs = rec.TargetVocalLufs,
+                    CrestFactorDb = rec.CrestFactorDb,
+                    HarmonicWarmth = rec.HarmonicWarmth,
+                    ReverbRt60Sec = rec.ReverbRt60Sec,
+                    ReverbPreDelayMs = rec.ReverbPreDelayMs,
+                    ReverbWetMix = rec.ReverbWetMix,
+                    ReverbDampingHz = rec.ReverbDampingHz,
+                    DelayTimeMs = rec.DelayTimeMs,
+                    DelayWetMix = rec.DelayWetMix,
+                    StereoWidth = rec.StereoWidth,
+                    VocalAtmosPosition = new System.Numerics.Vector3(rec.PosX, rec.PosY, rec.PosZ),
+                    IsExtractedFromSong = true,
+                    HasMeasuredDereverb = rec.HasMeasuredDereverb,
+                    MeasuredDrrDb = rec.MeasuredDrrDb ?? float.NaN,
+                    ActiveSpeechRmsDbfs = rec.ActiveSpeechRmsDbfs,
+                    ActiveWindowCount = rec.ActiveWindowCount,
+                    SourceTrackSummary = rec.SourceTrackSummary ?? ""
+                };
+                RunOnUiThread(() => {
+                    if (uiDestroyed || gen != vocalDnaLoadGeneration || GetActiveTrack() != activeTrack) {
+                        return;
+                    }
+                    ApplyExtractedSongDnaOnUiThread(dna);
+                });
+            } catch (Exception ex) {
+                AppLogger.Warn($"W19.b TryLoadCachedSongVocalDnaAsync: {ex.Message}");
+            }
+        });
+    }
+
+    void ApplyExtractedSongDnaOnUiThread(Cavern.VocalChain.VocalMixDnaProfile dna) {
+        if (dna == null || !dna.IsExtractedFromSong || playerEngine?.VocalMixMatchStage == null) {
+            return;
+        }
+        Cavern.VocalChain.VocalMixDnaProfile current = playerEngine.VocalMixMatchStage.ActiveDna;
+        if (current.IsExtractedFromSong && current.HasMeasuredDereverb && !dna.HasMeasuredDereverb) {
+            return;
+        }
+        playerEngine.VocalMixMatchStage.ApplySongDna(dna);
+        RefreshLyricsSingDockUi();
+        RefreshSpatialXRayHud();
+    }
+
+    void PrepareSongVocalDnaAsync() {
+        if (uiDestroyed) {
+            return;
+        }
+        CavernizeTrack activeTrack = GetActiveTrack();
+        if (activeTrack == null || !activeTrack.Supported || activeTrack.Codec == Codec.TrueHD) {
+            ShowToast(S["NeuralPrepNoTrackToast"]);
+            return;
+        }
+        Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
+        Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator?.BuildPlan(
+            Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna, cfg);
+        bool runtimeReady = neuralRuntime != null && neuralRuntime.IsAvailable;
+        if (!runtimeReady || plan == null || !plan.IsRunnable) {
+            ShowToast(S["VocalDnaNeedModelsToast"]);
+            return;
+        }
+        PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna);
+    }
+
+    void TryAutoBindCachedNeuralStemsAsync(CavernizeTrack activeTrack) {
+        if (uiDestroyed || activeTrack == null || neuralOrchestrator == null || neuralTrackCache == null || playerEngine == null) {
+            return;
+        }
+        string sourceKey = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        if (string.IsNullOrEmpty(sourceKey) || !File.Exists(sourceKey)) {
+            return;
+        }
+        int gen = neuralPrepGeneration;
+        Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
+        int sr = activeTrack.SampleRate >= 8000 ? activeTrack.SampleRate : 48000;
+
+        _ = Task.Run(() => {
+            try {
+                FileInfo fi = new(sourceKey);
+                Cavern.Neural.NeuralSeparatedTrack playbackTrack = null;
+                Cavern.Neural.NeuralSeparatedTrack dnaTrack = null;
+
+                Cavernize.Logic.Spatial.NeuralPipelineGoal[] playbackGoals = [
+                    Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
+                    Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke
+                ];
+                for (int g = 0; g < playbackGoals.Length; g++) {
+                    Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator.BuildPlan(playbackGoals[g], cfg);
+                    if (!plan.IsRunnable) {
+                        continue;
+                    }
+                    string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
+                        sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, plan.PlanSignature);
+                    if (neuralTrackCache.TryLoad(cacheKey, out Cavern.Neural.NeuralSeparatedTrack cached)) {
+                        playbackTrack = cached;
+                        break;
+                    }
+                }
+
+                // Also check dedicated Slot 7A VocalMixDna cache (includes Dereverb dry/wet analysis when available)
+                Cavernize.Logic.Spatial.NeuralExecutionPlan dnaPlan = neuralOrchestrator.BuildPlan(
+                    Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna, cfg);
+                if (dnaPlan.IsRunnable) {
+                    string dnaCacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
+                        sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, dnaPlan.PlanSignature);
+                    if (neuralTrackCache.TryLoad(dnaCacheKey, out Cavern.Neural.NeuralSeparatedTrack cachedDnaTrack)) {
+                        dnaTrack = cachedDnaTrack;
+                        if (playbackTrack == null) {
+                            playbackTrack = cachedDnaTrack;
+                        }
+                    }
+                }
+
+                Cavern.Neural.NeuralSeparatedTrack dnaSource = dnaTrack ?? playbackTrack;
+                string summaryTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+                    ? currentMediaMeta.Title
+                    : Path.GetFileNameWithoutExtension(sourceKey);
+                Cavern.VocalChain.VocalMixDnaProfile extractedDna = dnaSource != null
+                    ? Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(dnaSource, summaryTitle)
+                    : null;
+                if (extractedDna != null && extractedDna.IsExtractedFromSong) {
+                    SaveCachedSongVocalDna(activeTrack, extractedDna);
+                }
+
+                if (playbackTrack != null || extractedDna != null) {
+                    RunOnUiThread(() => {
+                        if (uiDestroyed || gen != neuralPrepGeneration || GetActiveTrack() != activeTrack) {
+                            return;
+                        }
+                        if (playbackTrack != null) {
+                            playerEngine.BindSeparatedNeuralTrack(playbackTrack);
+                        }
+                        ApplyExtractedSongDnaOnUiThread(extractedDna);
+                        RefreshNeuralAudioUi();
+                        RefreshNeuralPrepUi();
+                    });
+                }
+            } catch (Exception ex) {
+                AppLogger.Warn($"W18/W19.b TryAutoBindCachedNeuralStemsAsync: {ex.Message}");
+            }
+        });
+    }
+
+    void PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal goal, bool silentIfNotReady = false) {
+        if (uiDestroyed) {
+            return;
+        }
+        if (isNeuralPrepRunning) {
+            CancelNeuralTrackPrep(silent: false);
+            return;
+        }
+        CavernizeTrack activeTrack = GetActiveTrack();
+        if (activeTrack == null || !activeTrack.Supported || activeTrack.Codec == Codec.TrueHD) {
+            if (!silentIfNotReady) {
+                Toast.MakeText(this, S["NeuralPrepNoTrackToast"], ToastLength.Short).Show();
+            }
+            return;
+        }
+        Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
+        Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator?.BuildPlan(goal, cfg);
+        bool runtimeReady = neuralRuntime != null && neuralRuntime.IsAvailable;
+        if (!runtimeReady || plan == null || !plan.IsRunnable) {
+            if (!silentIfNotReady) {
+                string msgKey = goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna
+                    ? "VocalDnaNeedModelsToast"
+                    : "NeuralPrepNeedModelsToast";
+                Toast.MakeText(this, S[msgKey], ToastLength.Long).Show();
+            }
+            return;
+        }
+
+        string activePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        string decodePath = activePath;
+        bool derivedFromTwin = false;
+        if (cfg.UseLosslessTwinForKaraoke &&
+            activeLosslessTwin != null &&
+            activeLosslessTwin.IsReady &&
+            !string.IsNullOrEmpty(activeLosslessTwin.Metadata?.FilePath) &&
+            File.Exists(activeLosslessTwin.Metadata.FilePath)) {
+            decodePath = activeLosslessTwin.Metadata.FilePath;
+            derivedFromTwin = true;
+        }
+        if (string.IsNullOrEmpty(decodePath) || !File.Exists(decodePath)) {
+            if (!silentIfNotReady) {
+                Toast.MakeText(this, S["NeuralPrepNoTrackToast"], ToastLength.Short).Show();
+            }
+            return;
+        }
+
+        neuralPrepCts?.Cancel();
+        neuralPrepCts?.Dispose();
+        neuralPrepCts = new CancellationTokenSource();
+        CancellationToken ct = neuralPrepCts.Token;
+        int myGen = ++neuralPrepGeneration;
+        isNeuralPrepRunning = true;
+        neuralPrepProgress = 0.02;
+        neuralPrepStatusText = S["NeuralPrepDecodingStatus"];
+        RefreshNeuralPrepUi();
+
+        string ffLoc = ffmpeg?.Found == true ? ffmpeg.Location : null;
+        int prefSr = activeTrack.SampleRate >= 8000 ? activeTrack.SampleRate : 48000;
+        string summaryTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+            ? currentMediaMeta.Title
+            : Path.GetFileNameWithoutExtension(activePath);
+
+        _ = Task.Run(() => {
+            try {
+                FileInfo keyInfo = new(activePath);
+                string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
+                    activePath, keyInfo.Length, keyInfo.LastWriteTimeUtc.Ticks, prefSr, plan.PlanSignature);
+
+                // Instant Slot 7B cache hit before decoding PCM
+                if (neuralTrackCache != null && neuralTrackCache.TryLoad(cacheKey, out Cavern.Neural.NeuralSeparatedTrack cachedTrack, ct)) {
+                    Cavern.VocalChain.VocalMixDnaProfile cachedDna = Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(
+                        cachedTrack, summaryTitle);
+                    if (cachedDna != null && cachedDna.IsExtractedFromSong) {
+                        SaveCachedSongVocalDna(activeTrack, cachedDna);
+                    }
+                    RunOnUiThread(() => {
+                        if (uiDestroyed || myGen != neuralPrepGeneration) {
+                            return;
+                        }
+                        isNeuralPrepRunning = false;
+                        neuralPrepProgress = 1.0;
+                        neuralPrepStatusText = "";
+                        if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna ||
+                            !(playerEngine.NeuralStemStage?.HasPlayableSeparatedStems ?? false)) {
+                            playerEngine.BindSeparatedNeuralTrack(cachedTrack);
+                        }
+                        ApplyExtractedSongDnaOnUiThread(cachedDna);
+                        RefreshNeuralAudioUi();
+                        RefreshNeuralPrepUi();
+                        string msg = (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna && cachedDna != null && cachedDna.IsExtractedFromSong)
+                            ? string.Format(S["VocalDnaReadyToast"], cachedDna.TargetVocalLufs, cachedDna.ReverbRt60Sec, cachedDna.ActiveWindowCount)
+                            : string.Format(S["NeuralPrepCacheHitToast"], cachedTrack.Stems.Count);
+                        Toast.MakeText(this, msg, ToastLength.Short).Show();
+                    });
+                    return;
+                }
+
+                ct.ThrowIfCancellationRequested();
+                if (!LosslessTwinDiscoveryService.TryDecodeTrackToStereoFloat(
+                    decodePath, prefSr, ffLoc, ct, out float[] mixL, out float[] mixR, out int decodedSr)) {
+                    throw new InvalidOperationException("Unable to decode track audio for neural separation.");
+                }
+
+                ct.ThrowIfCancellationRequested();
+                (Cavern.Neural.NeuralSeparatedTrack separated, float rtf, bool fromCache) = neuralOrchestrator.ExecuteTrackPipeline(
+                    sourceTrackKey: activePath,
+                    fileSizeBytes: keyInfo.Length,
+                    lastModifiedTicks: keyInfo.LastWriteTimeUtc.Ticks,
+                    mixLeft: mixL,
+                    mixRight: mixR,
+                    sampleRate: decodedSr,
+                    goal: goal,
+                    config: cfg,
+                    derivedFromLosslessTwin: derivedFromTwin,
+                    onProgress: (p, msg) => RunOnUiThread(() => {
+                        if (uiDestroyed || myGen != neuralPrepGeneration) {
+                            return;
+                        }
+                        neuralPrepProgress = Math.Clamp(p, 0.0, 1.0);
+                        neuralPrepStatusText = msg ?? "";
+                        RefreshNeuralPrepUi();
+                    }),
+                    token: ct);
+
+                Cavern.VocalChain.VocalMixDnaProfile extractedDna = Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(
+                    separated, summaryTitle);
+                if (extractedDna != null && extractedDna.IsExtractedFromSong) {
+                    SaveCachedSongVocalDna(activeTrack, extractedDna);
+                }
+
+                RunOnUiThread(() => {
+                    if (uiDestroyed || myGen != neuralPrepGeneration) {
+                        return;
+                    }
+                    isNeuralPrepRunning = false;
+                    neuralPrepProgress = 1.0;
+                    neuralPrepStatusText = "";
+                    if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna ||
+                        !(playerEngine.NeuralStemStage?.HasPlayableSeparatedStems ?? false)) {
+                        playerEngine.BindSeparatedNeuralTrack(separated);
+                    }
+                    ApplyExtractedSongDnaOnUiThread(extractedDna);
+                    RefreshNeuralAudioUi();
+                    RefreshNeuralPrepUi();
+                    string toastMsg;
+                    if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna && extractedDna != null && extractedDna.IsExtractedFromSong) {
+                        toastMsg = string.Format(S["VocalDnaReadyToast"], extractedDna.TargetVocalLufs, extractedDna.ReverbRt60Sec, extractedDna.ActiveWindowCount);
+                    } else {
+                        toastMsg = fromCache
+                            ? string.Format(S["NeuralPrepCacheHitToast"], separated.Stems.Count)
+                            : string.Format(S["NeuralPrepDoneToast"], separated.Stems.Count, rtf);
+                    }
+                    Toast.MakeText(this, toastMsg, ToastLength.Short).Show();
+                });
+            } catch (System.OperationCanceledException) {
+                RunOnUiThread(() => {
+                    if (uiDestroyed || myGen != neuralPrepGeneration) {
+                        return;
+                    }
+                    isNeuralPrepRunning = false;
+                    neuralPrepProgress = 0;
+                    neuralPrepStatusText = "";
+                    RefreshNeuralPrepUi();
+                });
+            } catch (Exception ex) {
+                AppLogger.Warn($"W18/W19.b PrepareActiveTrackNeuralStemsAsync: {ex.Message}");
+                RunOnUiThread(() => {
+                    if (uiDestroyed || myGen != neuralPrepGeneration) {
+                        return;
+                    }
+                    isNeuralPrepRunning = false;
+                    neuralPrepProgress = 0;
+                    neuralPrepStatusText = "";
+                    RefreshNeuralPrepUi();
+                    Toast.MakeText(this, string.Format(S["NeuralPrepFailedFmt"], ex.Message), ToastLength.Long).Show();
+                });
+            }
+        }, ct);
     }
 
     void PrepareSelectedTrueHDTrackAsync(CavernizeTrack sourceTrack, bool autoPlayAfter) {
@@ -1914,8 +2956,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
     }
 
     void RefreshSettingsDot() {
+        ViewStates vis = ShouldShowSettingsDot() ? ViewStates.Visible : ViewStates.Gone;
         if (settingsUpdateDot != null) {
-            settingsUpdateDot.Visibility = ShouldShowSettingsDot() ? ViewStates.Visible : ViewStates.Gone;
+            settingsUpdateDot.Visibility = vis;
+        }
+        if (settingsUpdateDotCollapsed != null) {
+            settingsUpdateDotCollapsed.Visibility = vis;
         }
     }
 
@@ -2328,5 +3374,164 @@ public partial class MainActivity : Activity, ICavernizeApp {
             msg,
             icon: icon,
             monospaceBody: monospace);
+    }
+
+    /// <summary>
+    /// Tab container supporting horizontal swipe navigation between tabs when outside the Play tab
+    /// (allows swiping from 3D Room into Play, while disabling swipe away from Play), with strict touch
+    /// disambiguation so 3D Room orbit, sliders, and scrollable chips are never intercepted.
+    /// </summary>
+    sealed class TabSwipeHostLayout : FrameLayout {
+        readonly Func<int> getActiveTab;
+        readonly Func<int> getTabCount;
+        readonly Func<View> getActiveContainer;
+        readonly Action<int> switchTab;
+        readonly float touchSlop;
+        readonly float commitDistPx;
+        readonly float flingVelPxPerSec;
+
+        float downRawX;
+        float downRawY;
+        long downTimeMs;
+        bool ignoreGesture;
+        bool isSwiping;
+
+        public TabSwipeHostLayout(
+            Context ctx,
+            Func<int> getActiveTab,
+            Func<int> getTabCount,
+            Func<View> getActiveContainer,
+            Action<int> switchTab) : base(ctx) {
+            this.getActiveTab = getActiveTab;
+            this.getTabCount = getTabCount;
+            this.getActiveContainer = getActiveContainer;
+            this.switchTab = switchTab;
+            float density = ctx.Resources?.DisplayMetrics?.Density ?? 3f;
+            touchSlop = ViewConfiguration.Get(ctx)?.ScaledTouchSlop ?? (int)(8f * density);
+            commitDistPx = 56f * density;
+            flingVelPxPerSec = 380f * density;
+        }
+
+        public override bool OnInterceptTouchEvent(MotionEvent ev) {
+            if (ev == null) {
+                return false;
+            }
+            int curTab = getActiveTab();
+            // Never allow horizontal swipe away from Play (tab 0)
+            if (curTab <= 0) {
+                isSwiping = false;
+                ignoreGesture = true;
+                return false;
+            }
+
+            switch (ev.ActionMasked) {
+                case MotionEventActions.Down:
+                    downRawX = ev.RawX;
+                    downRawY = ev.RawY;
+                    downTimeMs = SystemClock.UptimeMillis();
+                    isSwiping = false;
+                    ignoreGesture = IsTouchInsideHorizontalControl(getActiveContainer(), downRawX, downRawY);
+                    return false;
+
+                case MotionEventActions.Move:
+                    if (ignoreGesture) {
+                        return false;
+                    }
+                    float dx = ev.RawX - downRawX;
+                    float dy = ev.RawY - downRawY;
+                    if (MathF.Abs(dy) > touchSlop * 1.25f && MathF.Abs(dy) > MathF.Abs(dx)) {
+                        ignoreGesture = true;
+                        return false;
+                    }
+                    if (MathF.Abs(dx) > touchSlop * 1.45f && MathF.Abs(dx) > MathF.Abs(dy) * 1.65f) {
+                        int count = getTabCount();
+                        bool canGoLeft = dx > 0 && curTab > 0;
+                        bool canGoRight = dx < 0 && curTab < count - 1;
+                        if (canGoLeft || canGoRight) {
+                            isSwiping = true;
+                            return true;
+                        }
+                    }
+                    return false;
+
+                case MotionEventActions.Up:
+                case MotionEventActions.Cancel:
+                    isSwiping = false;
+                    ignoreGesture = false;
+                    return false;
+            }
+            return false;
+        }
+
+        public override bool OnTouchEvent(MotionEvent ev) {
+            if (ev == null || !isSwiping) {
+                return base.OnTouchEvent(ev);
+            }
+            int curTab = getActiveTab();
+            int count = getTabCount();
+            View activeView = getActiveContainer();
+            float dx = ev.RawX - downRawX;
+
+            switch (ev.ActionMasked) {
+                case MotionEventActions.Move:
+                    if (activeView != null) {
+                        bool allowed = (dx > 0 && curTab > 0) || (dx < 0 && curTab < count - 1);
+                        activeView.TranslationX = allowed ? dx * 0.24f : dx * 0.06f;
+                    }
+                    return true;
+
+                case MotionEventActions.Up:
+                case MotionEventActions.Cancel:
+                    isSwiping = false;
+                    long dt = Math.Max(16, SystemClock.UptimeMillis() - downTimeMs);
+                    float vel = MathF.Abs(dx) * 1000f / dt;
+                    bool commit = ev.ActionMasked == MotionEventActions.Up &&
+                                  (MathF.Abs(dx) >= commitDistPx || (MathF.Abs(dx) >= touchSlop * 2f && vel >= flingVelPxPerSec));
+                    int target = curTab;
+                    if (commit) {
+                        if (dx > 0 && curTab > 0) {
+                            target = curTab - 1;
+                        } else if (dx < 0 && curTab < count - 1) {
+                            target = curTab + 1;
+                        }
+                    }
+                    if (target != curTab) {
+                        switchTab(target);
+                    } else if (activeView != null) {
+                        activeView.Animate()
+                            .TranslationX(0f)
+                            .SetDuration(200)
+                            .SetInterpolator(CreateOneUiEase())
+                            .Start();
+                    }
+                    return true;
+            }
+            return true;
+        }
+
+        static bool IsTouchInsideHorizontalControl(View root, float rawX, float rawY) {
+            if (root == null || root.Visibility != ViewStates.Visible) {
+                return false;
+            }
+            int[] loc = new int[2];
+            root.GetLocationOnScreen(loc);
+            if (rawX < loc[0] || rawX > loc[0] + root.Width || rawY < loc[1] || rawY > loc[1] + root.Height) {
+                return false;
+            }
+            if (root is RoomSimulatorView or OneUiSeekBar or OneUiWaveMediaSeekBar or EditText) {
+                return true;
+            }
+            if (root is HorizontalScrollView hsv && (hsv.CanScrollHorizontally(-1) || hsv.CanScrollHorizontally(1))) {
+                return true;
+            }
+            if (root is ViewGroup vg) {
+                for (int i = vg.ChildCount - 1; i >= 0; i--) {
+                    if (IsTouchInsideHorizontalControl(vg.GetChildAt(i), rawX, rawY)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
     }
 }

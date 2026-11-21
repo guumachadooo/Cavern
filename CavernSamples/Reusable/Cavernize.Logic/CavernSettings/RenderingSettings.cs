@@ -1,4 +1,4 @@
-﻿using Cavern;
+using Cavern;
 using VoidX.WPF.FFmpeg;
 
 namespace Cavernize.Logic.CavernSettings;
@@ -16,6 +16,11 @@ public class RenderingSettings {
     /// The voltage gain at which the content is rendered. Shall default to 1.
     /// </summary>
     public virtual float Gain { get; set; } = 1;
+
+    /// <summary>
+    /// The LFE subwoofer channel voltage gain multiplier. Shall default to 1.
+    /// </summary>
+    public virtual float LFEVolume { get; set; } = 1;
 
     /// <summary>
     /// Virtualize and downmix elevated objects to ground-only layouts by practically applying HRTFs on height channels.

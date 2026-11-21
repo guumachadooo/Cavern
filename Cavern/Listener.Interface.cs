@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -186,6 +186,13 @@ namespace Cavern {
         /// </summary>
         public bool DirectLFE { get; set; }
 
+        /// <summary>
+        /// When true and <see cref="HeadphoneVirtualizer"/> is active, keeps spherical/cube-warp rendering enabled
+        /// while skipping the listener's internal <see cref="VirtualizerFilter"/> pass (for callers batching an
+        /// external <see cref="VirtualizerFilter"/> instance).
+        /// </summary>
+        public bool BypassInternalVirtualizer { get; set; }
+
         // ------------------------------------------------------------------
         // Logic
         // ------------------------------------------------------------------
@@ -253,6 +260,16 @@ namespace Cavern {
         /// Lowpass filters for each channel.
         /// </summary>
         Lowpass[] lowpasses;
+
+        /// <summary>
+        /// 120 Hz lowpass filter used when folding dedicated LFE sources into front L/R on layouts without an LFE channel.
+        /// </summary>
+        internal Lowpass fallbackLfeLowpass;
+
+        /// <summary>
+        /// Scratch buffer for <see cref="fallbackLfeLowpass"/> so source sample buffers are never mutated in place.
+        /// </summary>
+        internal float[] fallbackLfeBuffer;
 
         /// <summary>
         /// Active virtualization filter.

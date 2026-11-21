@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -84,7 +84,7 @@ namespace Cavern.Rendering {
         /// <inheritdoc/>
         public override void Render(Listener listener, Source source, Vector3 direction, float[] samples, float[] rendered, float gain) {
             if (source.LFE || !listener.LFESeparation) {
-                MixToLFE(samples, rendered, gain);
+                MixToLFE(listener, source.LFE, samples, rendered, gain);
                 if (source.LFE) {
                     return;
                 }
@@ -232,6 +232,15 @@ namespace Cavern.Rendering {
 
             // Spatial mix output
             Vector2 rearVol = new Vector2(1) - frontVol;
+            // ITU-R BS.775 stereo downmix: when the layout has no rear speakers (e.g. Direct 2.0), attenuate surround/rear
+            // energy smoothly to -3 dB (0.5 power -> 0.7071 amplitude) while leaving front/center sources untouched.
+            if (bottomRearLeft == bottomFrontLeft && bottomRearRight == bottomFrontRight) {
+                float frontZ = channels[bottomFrontLeft].CubicalPos.Z;
+                if (frontZ > 1e-4f && direction.Z < frontZ) {
+                    float surroundFactor = Math.Clamp((frontZ - direction.Z) / frontZ, 0f, 1f);
+                    rearVol.X *= QMath.Lerp(1f, 0.5f, surroundFactor);
+                }
+            }
             layerVol *= innerVolume3D;
             frontVol *= layerVol;
             rearVol *= layerVol;

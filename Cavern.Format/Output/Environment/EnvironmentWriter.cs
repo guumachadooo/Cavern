@@ -79,6 +79,8 @@ namespace Cavern.Format.Environment {
                 Codec.LimitlessAudio => new LimitlessAudioFormatEnvironmentWriter(path, environment, length, bits),
                 Codec.ADM_BWF => new BroadcastWaveFormatWriter(path, environment, length, bits),
                 Codec.ADM_BWF_Atmos => new DolbyAtmosBWFWriter(path, environment, length, bits, renderer, false),
+                Codec.IAMF => new IamfEnvironmentWriter(path, environment, length, bits),
+                Codec.AmbisonicsHOA => new AmbisonicsHoaWriter(path, environment, length, bits),
                 Codec.DAMF => new DolbyAtmosMasterFormatWriter(path, environment, length, bits, renderer),
                 _ => throw new UnsupportedContainerForWriteException(codec.ToString()),
             };
@@ -109,6 +111,8 @@ namespace Cavern.Format.Environment {
                 Codec.LimitlessAudio => new LimitlessAudioFormatEnvironmentWriter(stream, environment, length, bits),
                 Codec.ADM_BWF => new BroadcastWaveFormatWriter(stream, environment, length, bits),
                 Codec.ADM_BWF_Atmos => new DolbyAtmosBWFWriter(stream, environment, length, bits, renderer, false),
+                Codec.IAMF => new IamfEnvironmentWriter(stream, environment, length, bits),
+                Codec.AmbisonicsHOA => new AmbisonicsHoaWriter(stream, environment, length, bits),
                 Codec.DAMF => throw new UnsupportedFeatureException("Stream-based DAMF"),
                 _ => throw new UnsupportedContainerForWriteException(codec.ToString()),
             };

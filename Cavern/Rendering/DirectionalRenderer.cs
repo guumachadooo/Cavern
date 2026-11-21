@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -62,7 +62,7 @@ namespace Cavern.Rendering {
         /// <inheritdoc/>
         public override void Render(Listener listener, Source source, Vector3 direction, float[] samples, float[] rendered, float gain) {
             if (source.LFE || !listener.LFESeparation) {
-                MixToLFE(samples, rendered, gain);
+                MixToLFE(listener, source.LFE, samples, rendered, gain);
                 if (source.LFE) {
                     return;
                 }

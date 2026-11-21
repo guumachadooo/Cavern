@@ -1,0 +1,807 @@
+using System.Buffers.Binary;
+using System.Diagnostics;
+using System.Globalization;
+using System.Text;
+
+using Android.Content;
+using Android.Media;
+
+using Cavern.Format.Common;
+using Cavern.Restoration;
+
+using Cavernize.Logic.Models;
+using Cavernize.Logic.Spatial;
+
+using IOFile = System.IO.File;
+using IOPath = System.IO.Path;
+
+namespace CavernizeAndroid.Services;
+
+/// <summary>
+/// Android Slot 1 Universal Lossless Twin discovery &amp; alignment service (W09).
+/// Auto-discovers verified lossless <c>FLAC</c>/<c>WAV</c>/<c>ALAC</c> twins in the media library (or same directory),
+/// auto-bypasses natively lossless streams (<c>TrueHD</c>/<c>DAMF</c>/<c>ADM</c>/<c>FLAC</c>/<c>WAV</c>/<c>LAF</c>)
+/// and fake/upsampled lossless files via <see cref="AudioQualityAnalyzer"/>, decodes unified <c>float32 [-1, +1]</c>
+/// PCM, and runs 3-stage sub-sample alignment via <see cref="UniversalLosslessTwinProvider"/> without disturbing live playback.
+/// </summary>
+public static class LosslessTwinDiscoveryService {
+    const double AtmosProbeSeconds = 24.0;
+    const int MaxDecodedTwinFrames = 48000 * 60 * 18; // Cap at ~18 min stereo (~414 MB float32 upper guard; typical song ~50 MB)
+
+    /// <summary>
+    /// Returns true when the active <see cref="CavernizeTrack"/> or file path is natively lossless and should auto-bypass LGSR.
+    /// Guards against Android MediaCodec / FFmpeg fallback WAV caches decoded from lossy MP3/AAC/M4A/OGG/Opus sources.
+    /// </summary>
+    public static bool IsTrackAlreadyLossless(CavernizeTrack track, string mediaPath) {
+        if (track != null && track.IsLossySource) {
+            return false;
+        }
+        string probePath = !string.IsNullOrEmpty(mediaPath) ? mediaPath : (track?.OriginalSourcePath ?? track?.Path ?? "");
+        string ext = IOPath.GetExtension(probePath).ToLowerInvariant();
+        if (ext is ".mp3" or ".aac" or ".ogg" or ".opus" or ".wma" or ".ac3" or ".ec3" or ".eac3") {
+            return false;
+        }
+        if (track != null) {
+            Codec c = track.SourceCodec != Codec.Unknown ? track.SourceCodec : track.Codec;
+            if (c is Codec.TrueHD or Codec.DAMF or Codec.ADM_BWF or Codec.ADM_BWF_Atmos or
+                Codec.LimitlessAudio or Codec.FLAC or Codec.DTS_HD) {
+                return true;
+            }
+            if (c is Codec.PCM_LE or Codec.PCM_Float) {
+                // Only treat PCM as natively lossless if the original source file is actually PCM/WAV/AIFF/CAF,
+                // not a decoded fallback WAV from a lossy M4A/MP4/MKV container.
+                if (ext is ".wav" or ".aif" or ".aiff" or ".caf" or ".flac" or ".laf" or "") {
+                    string trackPath = track.Path ?? "";
+                    bool isFallbackCacheWav = trackPath.Contains("decoded_fallback", StringComparison.OrdinalIgnoreCase) ||
+                        trackPath.EndsWith("decoded.wav", StringComparison.OrdinalIgnoreCase);
+                    if (!isFallbackCacheWav) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return ext is ".flac" or ".wav" or ".laf" or ".atmos" or ".thd" or ".mlp";
+    }
+
+    /// <summary>
+    /// Decodes an audio/video file (lossless or lossy) into unified stereo <c>float32 [-1, +1]</c> PCM arrays
+    /// for background Slot 2B neural stem separation without disturbing live playback.
+    /// </summary>
+    public static bool TryDecodeTrackToStereoFloat(
+        string filePath,
+        int preferredSampleRate,
+        string ffmpegPath,
+        CancellationToken ct,
+        out float[] left,
+        out float[] right,
+        out int sampleRate) {
+        left = null;
+        right = null;
+        sampleRate = preferredSampleRate >= 8000 ? preferredSampleRate : 48000;
+        if (string.IsNullOrEmpty(filePath) || !IOFile.Exists(filePath)) {
+            return false;
+        }
+        AudioQualityReport syntheticReport = new() {
+            SampleRateHz = sampleRate,
+            DeclaredBitDepth = 24
+        };
+        return TryDecodeLosslessStereo(filePath, syntheticReport, ffmpegPath, ct, out left, out right, out sampleRate);
+    }
+
+    /// <summary>
+    /// Asynchronously discovers, verifies, decodes, rate-matches, and sub-sample-syncs a lossless stereo twin
+    /// for <paramref name="activeTrack"/>. Always returns a valid <see cref="UniversalLosslessTwinProvider"/> reflecting
+    /// the resolved verification state (<c>Synced</c>, <c>BypassedAlreadyLossless</c>, <c>BypassedFakeLossless</c>, etc.).
+    /// </summary>
+    public static async Task<UniversalLosslessTwinProvider> DiscoverAndSyncAsync(
+        Context ctx,
+        MediaLibrarySnapshot snapshot,
+        CavernizeTrack activeTrack,
+        string activeMediaPath,
+        string title,
+        string artist,
+        string album,
+        LgsrConfig config,
+        string ffmpegPath,
+        CancellationToken ct) {
+        UniversalLosslessTwinProvider provider = new();
+        LgsrConfig safeCfg = (config ?? LgsrConfig.Default).Sanitize();
+
+        if (!safeCfg.Enabled || !safeCfg.AutoDiscoverTwin) {
+            provider.SetState(LosslessTwinVerificationState.None);
+            return provider;
+        }
+
+        if (safeCfg.BypassOnAlreadyLossless && IsTrackAlreadyLossless(activeTrack, activeMediaPath)) {
+            provider.SetState(LosslessTwinVerificationState.BypassedAlreadyLossless);
+            return provider;
+        }
+
+        provider.SetState(LosslessTwinVerificationState.Searching);
+        return await Task.Run(() => {
+            ct.ThrowIfCancellationRequested();
+
+            List<LibraryTrackItem> candidates = FindLosslessCandidates(
+                ctx, snapshot, activeMediaPath, title, artist, album, safeCfg, out bool rejectedFake);
+            if (candidates.Count == 0) {
+                provider.SetState(rejectedFake
+                    ? LosslessTwinVerificationState.BypassedFakeLossless
+                    : LosslessTwinVerificationState.None);
+                return provider;
+            }
+
+            int targetSr = activeTrack != null && activeTrack.SampleRate >= 8000 ? activeTrack.SampleRate : 48000;
+
+            // Decode a lightweight 24 s mono probe from the active lossy Atmos file without touching live playback
+            float[] atmosProbe = DecodeMonoProbe(activeMediaPath, targetSr, AtmosProbeSeconds, ffmpegPath, ct);
+            if (atmosProbe == null || atmosProbe.Length < SubSampleSyncEngine.GccFftSize) {
+                AppLogger.Warn($"W09 LGSR: unable to extract mono sync probe for '{IOPath.GetFileName(activeMediaPath ?? "")}'.");
+                provider.SetState(LosslessTwinVerificationState.BypassedLowConfidence);
+                return provider;
+            }
+
+            for (int i = 0; i < candidates.Count; i++) {
+                ct.ThrowIfCancellationRequested();
+                LibraryTrackItem item = candidates[i];
+                AudioQualityReport report = AudioQualityAnalyzer.EvaluateFast(item, ctx);
+
+                if (safeCfg.RejectFakeLosslessTwins && report.IsFakeLossless) {
+                    AppLogger.Info($"W09 LGSR: rejected fake lossless candidate '{IOPath.GetFileName(item.FilePath)}' (cutoff {report.SpectralCutoffHz} Hz).");
+                    rejectedFake = true;
+                    continue;
+                }
+
+                if (!TryDecodeLosslessStereo(item.FilePath, report, ffmpegPath, ct, out float[] twinL, out float[] twinR, out int twinSr)) {
+                    AppLogger.Warn($"W09 LGSR: failed to decode lossless twin '{IOPath.GetFileName(item.FilePath)}'.");
+                    continue;
+                }
+
+                LosslessTwinMetadata meta = new() {
+                    FilePath = item.FilePath,
+                    FileName = IOPath.GetFileName(item.FilePath),
+                    CodecFamily = string.IsNullOrEmpty(report.CodecFamily) ? "FLAC" : report.CodecFamily,
+                    NativeSampleRate = twinSr,
+                    EffectiveBitDepth = report.EffectiveBitDepth > 0 ? report.EffectiveBitDepth : Math.Max(16, report.DeclaredBitDepth),
+                    IsUpsampledHiRes = report.IsUpsampledHiRes,
+                    SpectralCutoffHz = report.SpectralCutoffHz,
+                    DynamicRangeDb = report.DynamicRangeDb
+                };
+
+                bool synced = provider.InitializeAndSync(
+                    meta,
+                    atmosProbe,
+                    atmosProbeStartSample: 0L,
+                    atmosSampleRate: targetSr,
+                    losslessLeft: twinL,
+                    losslessRight: twinR,
+                    losslessSampleRate: twinSr,
+                    minConfidenceGate: safeCfg.MinSyncConfidence);
+
+                if (synced) {
+                    SubSampleSyncResult sr = provider.SyncResult;
+                    AppLogger.Info(
+                        $"W09 LGSR synced '{meta.FileName}' ({meta.FormatSummary}): " +
+                        $"offset={sr.BaseOffsetSamples:0.00} samp ({sr.BaseOffsetSamples * 1000.0 / targetSr:0.00} ms), " +
+                        $"drift={sr.DriftPpm:+0.00;-0.00;0.00} ppm, conf={sr.Confidence:0.00}.");
+                    return provider;
+                }
+            }
+
+            provider.SetState(rejectedFake
+                ? LosslessTwinVerificationState.BypassedFakeLossless
+                : LosslessTwinVerificationState.BypassedLowConfidence);
+            return provider;
+        }, ct).ConfigureAwait(false);
+    }
+
+    static List<LibraryTrackItem> FindLosslessCandidates(
+        Context ctx,
+        MediaLibrarySnapshot snapshot,
+        string activeMediaPath,
+        string title,
+        string artist,
+        string album,
+        LgsrConfig cfg,
+        out bool rejectedFake) {
+        rejectedFake = false;
+        List<LibraryTrackItem> pool = [];
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrEmpty(activeMediaPath)) {
+            seen.Add(activeMediaPath);
+        }
+
+        if (snapshot != null && !string.IsNullOrEmpty(activeMediaPath)) {
+            List<LibraryTrackItem> variants = MediaLibraryService.FindVariantsForTrack(
+                snapshot, activeMediaPath, title, artist, album);
+            for (int i = 0; i < variants.Count; i++) {
+                LibraryTrackItem v = variants[i];
+                if (v == null || string.IsNullOrEmpty(v.FilePath) || !IOFile.Exists(v.FilePath)) {
+                    continue;
+                }
+                if (seen.Add(v.FilePath)) {
+                    pool.Add(v);
+                }
+            }
+        }
+
+        // Also inspect sibling files in the same directory for standalone opened files outside MediaStore
+        if (!string.IsNullOrEmpty(activeMediaPath)) {
+            try {
+                string dir = IOPath.GetDirectoryName(activeMediaPath);
+                string baseStem = NormalizeBaseName(IOPath.GetFileNameWithoutExtension(activeMediaPath));
+                if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir) && !string.IsNullOrEmpty(baseStem)) {
+                    foreach (string file in Directory.EnumerateFiles(dir)) {
+                        string ext = IOPath.GetExtension(file).ToLowerInvariant();
+                        if (ext is not (".flac" or ".wav" or ".m4a")) {
+                            continue;
+                        }
+                        if (!seen.Add(file)) {
+                            continue;
+                        }
+                        string candBase = NormalizeBaseName(IOPath.GetFileNameWithoutExtension(file));
+                        if (!string.Equals(candBase, baseStem, StringComparison.OrdinalIgnoreCase)) {
+                            continue;
+                        }
+                        FileInfo fi = new(file);
+                        pool.Add(new LibraryTrackItem {
+                            FilePath = file,
+                            Title = IOPath.GetFileNameWithoutExtension(file),
+                            FormatBadge = ext.TrimStart('.').ToUpperInvariant(),
+                            ChannelCount = 2,
+                            FileSizeBytes = fi.Length,
+                            LastModifiedTicks = fi.LastWriteTimeUtc.Ticks
+                        });
+                    }
+                }
+            } catch {
+                // Directory read may be restricted by scoped storage; MediaLibrary snapshot remains primary
+            }
+        }
+
+        List<(LibraryTrackItem item, AudioQualityReport report)> valid = [];
+        for (int i = 0; i < pool.Count; i++) {
+            LibraryTrackItem item = pool[i];
+            AudioQualityReport rep = AudioQualityAnalyzer.EvaluateFast(item, ctx);
+            if (!rep.IsLossless) {
+                continue;
+            }
+            if (rep.Channels > 2 && rep.Category != AudioTierCategory.Stereo) {
+                continue;
+            }
+            if (cfg.RejectFakeLosslessTwins && rep.IsFakeLossless) {
+                rejectedFake = true;
+                continue;
+            }
+            valid.Add((item, rep));
+        }
+
+        valid.Sort((a, b) => {
+            int fakeCmp = a.report.IsUpsampledHiRes.CompareTo(b.report.IsUpsampledHiRes);
+            if (fakeCmp != 0) return fakeCmp;
+            int scoreCmp = b.report.Score.CompareTo(a.report.Score);
+            if (scoreCmp != 0) return scoreCmp;
+            return b.report.EffectiveBitDepth.CompareTo(a.report.EffectiveBitDepth);
+        });
+
+        List<LibraryTrackItem> result = new(valid.Count);
+        for (int i = 0; i < valid.Count; i++) {
+            result.Add(valid[i].item);
+        }
+        return result;
+    }
+
+    static bool TryDecodeLosslessStereo(
+        string filePath,
+        AudioQualityReport report,
+        string ffmpegPath,
+        CancellationToken ct,
+        out float[] left,
+        out float[] right,
+        out int sampleRate) {
+        left = null;
+        right = null;
+        sampleRate = report?.SampleRateHz > 0 ? report.SampleRateHz : 48000;
+
+        string ext = IOPath.GetExtension(filePath ?? "").ToLowerInvariant();
+        if (ext == ".wav" && TryDecodeWavStereo(filePath, ct, out left, out right, out sampleRate)) {
+            return true;
+        }
+
+        // Prefer FFmpeg float32 decode for 24-bit FLAC/ALAC so full 24-bit precision is preserved even on Android API < 31
+        bool preferFfmpeg = !string.IsNullOrEmpty(ffmpegPath) && IOFile.Exists(ffmpegPath) &&
+            ((report?.DeclaredBitDepth ?? 16) >= 24 || ext == ".m4a");
+        if (preferFfmpeg && TryDecodeFfmpegStereoFloat(filePath, ffmpegPath, sampleRate, ct, out left, out right)) {
+            return true;
+        }
+
+        if (TryDecodeMediaCodecStereoFloat(filePath, ct, out left, out right, out sampleRate)) {
+            return true;
+        }
+
+        if (!preferFfmpeg && !string.IsNullOrEmpty(ffmpegPath) && IOFile.Exists(ffmpegPath) &&
+            TryDecodeFfmpegStereoFloat(filePath, ffmpegPath, sampleRate, ct, out left, out right)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    static readonly byte[] WaveExtensibleGuidTail = [
+        0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71
+    ];
+
+    static bool TryDecodeWavStereo(
+        string path,
+        CancellationToken ct,
+        out float[] left,
+        out float[] right,
+        out int sampleRate) {
+        left = null;
+        right = null;
+        sampleRate = 48000;
+        try {
+            using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            byte[] hdr = new byte[Math.Min(65536, (int)Math.Min(fs.Length, 65536))];
+            int hRead = fs.Read(hdr, 0, hdr.Length);
+            if (hRead < 44 || hdr[0] != 'R' || hdr[1] != 'I' || hdr[2] != 'F' || hdr[3] != 'F') {
+                return false;
+            }
+
+            int channels = 2;
+            int audioFmt = 1;
+            int bits = 16;
+            bool isFloat = false;
+            bool fmtValid = false;
+            int pos = 12;
+            long dataOffset = -1;
+            long dataLen = 0;
+
+            while (pos + 8 <= hRead) {
+                string id = System.Text.Encoding.ASCII.GetString(hdr, pos, 4);
+                int sz = BinaryPrimitives.ReadInt32LittleEndian(hdr.AsSpan(pos + 4, 4));
+                if (id == "fmt " && pos + 24 <= hRead) {
+                    audioFmt = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(pos + 8, 2));
+                    channels = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(pos + 10, 2));
+                    sampleRate = BinaryPrimitives.ReadInt32LittleEndian(hdr.AsSpan(pos + 12, 4));
+                    bits = BinaryPrimitives.ReadUInt16LittleEndian(hdr.AsSpan(pos + 22, 2));
+                    if (audioFmt == 1) {
+                        isFloat = false;
+                        fmtValid = true;
+                    } else if (audioFmt == 3) {
+                        isFloat = bits == 32;
+                        fmtValid = bits == 32;
+                    } else if (audioFmt == 0xFFFE && sz >= 40 && pos + 8 + 40 <= hRead) {
+                        // WAVE_FORMAT_EXTENSIBLE SubFormat GUID sits at fmt payload offset +24 (pos + 32)
+                        uint subFormatData1 = BinaryPrimitives.ReadUInt32LittleEndian(hdr.AsSpan(pos + 32, 4));
+                        bool tailMatches = hdr.AsSpan(pos + 36, 12).SequenceEqual(WaveExtensibleGuidTail);
+                        if (tailMatches && subFormatData1 == 3u && bits == 32) {
+                            isFloat = true;
+                            fmtValid = true;
+                        } else if (tailMatches && subFormatData1 == 1u) {
+                            isFloat = false;
+                            fmtValid = true;
+                        }
+                    }
+                } else if (id == "data") {
+                    dataOffset = pos + 8;
+                    dataLen = sz > 0 ? Math.Min(sz, fs.Length - dataOffset) : (fs.Length - dataOffset);
+                    break;
+                }
+                if (sz < 0) break;
+                pos += 8 + sz + (sz & 1);
+            }
+
+            if (!fmtValid || dataOffset < 0 || channels <= 0 || bits < 16) {
+                return false;
+            }
+            int bytesPerSample = bits / 8;
+            int frameBytes = bytesPerSample * channels;
+            long totalFrames = Math.Min(dataLen / frameBytes, MaxDecodedTwinFrames);
+            if (totalFrames < SubSampleSyncEngine.GccFftSize) {
+                return false;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            fs.Seek(dataOffset, SeekOrigin.Begin);
+            byte[] raw = new byte[totalFrames * frameBytes];
+            int totalRead = 0;
+            while (totalRead < raw.Length) {
+                ct.ThrowIfCancellationRequested();
+                int got = fs.Read(raw, totalRead, raw.Length - totalRead);
+                if (got <= 0) break;
+                totalRead += got;
+            }
+            int frames = totalRead / frameBytes;
+            if (frames < SubSampleSyncEngine.GccFftSize) {
+                return false;
+            }
+
+            KaiserSincResampler.UnifyPcmBytesToStereoFloat(raw, frames * frameBytes, channels, bits, isFloat, out left, out right);
+            return left.Length >= SubSampleSyncEngine.GccFftSize;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch {
+            return false;
+        }
+    }
+
+    static bool TryDecodeFfmpegStereoFloat(
+        string path,
+        string ffmpegPath,
+        int sampleRate,
+        CancellationToken ct,
+        out float[] left,
+        out float[] right) {
+        left = null;
+        right = null;
+        try {
+            ProcessStartInfo psi = new() {
+                FileName = ffmpegPath,
+                Arguments = $"-nostdin -v error -i \"{path}\" -vn -ac 2 -ar {sampleRate} -f f32le -",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpegPath);
+
+            using Process proc = Process.Start(psi);
+            if (proc == null) return false;
+
+            // Drain stderr asynchronously so FFmpeg never deadlocks on a full 64 KB pipe buffer
+            Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
+
+            using MemoryStream ms = new();
+            byte[] buf = new byte[65536];
+            long maxBytes = (long)MaxDecodedTwinFrames * 8L;
+            try {
+                int read;
+                while ((read = proc.StandardOutput.BaseStream.Read(buf, 0, buf.Length)) > 0) {
+                    ct.ThrowIfCancellationRequested();
+                    long remaining = maxBytes - ms.Length;
+                    if (remaining <= 0) {
+                        try { proc.Kill(); } catch { }
+                        break;
+                    }
+                    ms.Write(buf, 0, (int)Math.Min(read, remaining));
+                }
+            } catch (OperationCanceledException) {
+                try { proc.Kill(); } catch { }
+                throw;
+            } finally {
+                try { proc.WaitForExit(2000); } catch { }
+                try { stderrTask.Wait(400); } catch { }
+            }
+
+            byte[] raw = ms.ToArray();
+            int frames = raw.Length / 8;
+            if (frames < SubSampleSyncEngine.GccFftSize) {
+                return false;
+            }
+            KaiserSincResampler.UnifyPcmBytesToStereoFloat(raw, frames * 8, 2, 32, true, out left, out right);
+            return true;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch {
+            return false;
+        }
+    }
+
+    static bool TryDecodeMediaCodecStereoFloat(
+        string path,
+        CancellationToken ct,
+        out float[] left,
+        out float[] right,
+        out int sampleRate) {
+        left = null;
+        right = null;
+        sampleRate = 48000;
+        MediaCodec codec = null;
+        try {
+            using MediaExtractor extractor = new();
+            extractor.SetDataSource(path);
+            int audioIdx = -1;
+            MediaFormat format = null;
+            for (int i = 0; i < extractor.TrackCount; i++) {
+                MediaFormat f = extractor.GetTrackFormat(i);
+                string mime = f.GetString(MediaFormat.KeyMime) ?? "";
+                if (mime.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) {
+                    audioIdx = i;
+                    format = f;
+                    break;
+                }
+            }
+            if (audioIdx < 0 || format == null) return false;
+
+            extractor.SelectTrack(audioIdx);
+            if (format.ContainsKey(MediaFormat.KeySampleRate)) {
+                sampleRate = Math.Max(8000, format.GetInteger(MediaFormat.KeySampleRate));
+            }
+            int outChannels = format.ContainsKey(MediaFormat.KeyChannelCount) ? Math.Max(1, format.GetInteger(MediaFormat.KeyChannelCount)) : 2;
+            string trackMime = format.GetString(MediaFormat.KeyMime);
+
+            codec = MediaCodec.CreateDecoderByType(trackMime);
+            codec.Configure(format, null, null, MediaCodecConfigFlags.None);
+            codec.Start();
+
+            List<float> listL = new(sampleRate * 60);
+            List<float> listR = new(sampleRate * 60);
+            MediaCodec.BufferInfo info = new();
+            bool inputDone = false;
+            int pcmEncoding = (int)Android.Media.Encoding.Pcm16bit;
+            int drainRetries = 0;
+
+            while (listL.Count < MaxDecodedTwinFrames) {
+                ct.ThrowIfCancellationRequested();
+                if (!inputDone) {
+                    int inIdx = codec.DequeueInputBuffer(10000);
+                    if (inIdx >= 0) {
+                        Java.Nio.ByteBuffer inBuf = codec.GetInputBuffer(inIdx);
+                        int read = extractor.ReadSampleData(inBuf, 0);
+                        if (read < 0) {
+                            codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
+                            inputDone = true;
+                        } else {
+                            codec.QueueInputBuffer(inIdx, 0, read, extractor.SampleTime, MediaCodecBufferFlags.None);
+                            extractor.Advance();
+                        }
+                    }
+                }
+
+                int outIdx = codec.DequeueOutputBuffer(info, 10000);
+                if (outIdx == (int)MediaCodecInfoState.OutputFormatChanged) {
+                    drainRetries = 0;
+                    MediaFormat outFmt = codec.OutputFormat;
+                    if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) sampleRate = Math.Max(8000, outFmt.GetInteger(MediaFormat.KeySampleRate));
+                    if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) outChannels = Math.Max(1, outFmt.GetInteger(MediaFormat.KeyChannelCount));
+                    if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
+                } else if (outIdx >= 0) {
+                    drainRetries = 0;
+                    if (info.Size > 0) {
+                        Java.Nio.ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
+                        outBuf.Position(info.Offset);
+                        byte[] chunk = new byte[info.Size];
+                        outBuf.Get(chunk);
+
+                        ResolveMediaCodecPcmFormat(pcmEncoding, out int bits, out bool isFloat);
+                        int frameBytes = (bits / 8) * outChannels;
+                        int frames = frameBytes > 0 ? chunk.Length / frameBytes : 0;
+                        if (frames > 0) {
+                            KaiserSincResampler.UnifyPcmBytesToStereoFloat(chunk, frames * frameBytes, outChannels, bits, isFloat, out float[] cL, out float[] cR);
+                            int take = Math.Min(frames, MaxDecodedTwinFrames - listL.Count);
+                            for (int s = 0; s < take; s++) {
+                                listL.Add(cL[s]);
+                                listR.Add(cR[s]);
+                            }
+                        }
+                    }
+                    codec.ReleaseOutputBuffer(outIdx, false);
+                    if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) {
+                        break;
+                    }
+                } else if (inputDone && outIdx == (int)MediaCodecInfoState.TryAgainLater) {
+                    if (++drainRetries >= 40) {
+                        break;
+                    }
+                }
+            }
+
+            if (listL.Count < SubSampleSyncEngine.GccFftSize) {
+                return false;
+            }
+            left = listL.ToArray();
+            right = listR.ToArray();
+            return true;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch {
+            return false;
+        } finally {
+            try { codec?.Stop(); } catch { }
+            try { codec?.Release(); } catch { }
+        }
+    }
+
+    static float[] DecodeMonoProbe(
+        string mediaPath,
+        int targetSampleRate,
+        double seconds,
+        string ffmpegPath,
+        CancellationToken ct) {
+        if (string.IsNullOrEmpty(mediaPath) || !IOFile.Exists(mediaPath)) {
+            return null;
+        }
+
+        // Fast, non-disruptive FFmpeg mono probe (supports E-AC-3 JOC, AC-3, DTS, Opus, MKV, MP4 without touching live track)
+        if (!string.IsNullOrEmpty(ffmpegPath) && IOFile.Exists(ffmpegPath)) {
+            try {
+                string durStr = seconds.ToString("0.0", CultureInfo.InvariantCulture);
+                ProcessStartInfo psi = new() {
+                    FileName = ffmpegPath,
+                    Arguments = $"-nostdin -v error -t {durStr} -i \"{mediaPath}\" -vn -ac 1 -ar {targetSampleRate} -f f32le -",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                };
+                FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpegPath);
+
+                using Process proc = Process.Start(psi);
+                if (proc != null) {
+                    Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
+                    using MemoryStream ms = new();
+                    byte[] buf = new byte[32768];
+                    try {
+                        int read;
+                        while ((read = proc.StandardOutput.BaseStream.Read(buf, 0, buf.Length)) > 0) {
+                            ct.ThrowIfCancellationRequested();
+                            ms.Write(buf, 0, read);
+                        }
+                    } catch (OperationCanceledException) {
+                        try { proc.Kill(); } catch { }
+                        throw;
+                    } finally {
+                        try { proc.WaitForExit(1500); } catch { }
+                        try { stderrTask.Wait(400); } catch { }
+                    }
+                    byte[] raw = ms.ToArray();
+                    int samples = raw.Length / 4;
+                    if (samples >= SubSampleSyncEngine.GccFftSize) {
+                        float[] mono = new float[samples];
+                        for (int i = 0; i < samples; i++) {
+                            mono[i] = BinaryPrimitives.ReadSingleLittleEndian(raw.AsSpan(i * 4, 4));
+                        }
+                        return mono;
+                    }
+                }
+            } catch (OperationCanceledException) {
+                throw;
+            } catch {
+                // Fall through to Android MediaCodec probe
+            }
+        }
+
+        // Fallback: Android native MediaExtractor + MediaCodec probe (works for MP4/M4A/EAC3/AAC/Opus when FFmpeg isn't installed)
+        MediaCodec codec = null;
+        try {
+            using MediaExtractor extractor = new();
+            extractor.SetDataSource(mediaPath);
+            int audioIdx = -1;
+            MediaFormat format = null;
+            for (int i = 0; i < extractor.TrackCount; i++) {
+                MediaFormat f = extractor.GetTrackFormat(i);
+                string mime = f.GetString(MediaFormat.KeyMime) ?? "";
+                if (mime.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) {
+                    audioIdx = i;
+                    format = f;
+                    break;
+                }
+            }
+            if (audioIdx < 0 || format == null) return null;
+
+            extractor.SelectTrack(audioIdx);
+            int srcSr = format.ContainsKey(MediaFormat.KeySampleRate) ? Math.Max(8000, format.GetInteger(MediaFormat.KeySampleRate)) : targetSampleRate;
+            int outChannels = format.ContainsKey(MediaFormat.KeyChannelCount) ? Math.Max(1, format.GetInteger(MediaFormat.KeyChannelCount)) : 2;
+            string trackMime = format.GetString(MediaFormat.KeyMime);
+
+            codec = MediaCodec.CreateDecoderByType(trackMime);
+            codec.Configure(format, null, null, MediaCodecConfigFlags.None);
+            codec.Start();
+
+            int wantSamples = (int)Math.Ceiling(srcSr * seconds);
+            List<float> mono = new(wantSamples);
+            MediaCodec.BufferInfo info = new();
+            bool inputDone = false;
+            int pcmEncoding = (int)Android.Media.Encoding.Pcm16bit;
+            int guard = 0;
+            int drainRetries = 0;
+
+            while (mono.Count < wantSamples && guard++ < 4000) {
+                ct.ThrowIfCancellationRequested();
+                if (!inputDone) {
+                    int inIdx = codec.DequeueInputBuffer(8000);
+                    if (inIdx >= 0) {
+                        Java.Nio.ByteBuffer inBuf = codec.GetInputBuffer(inIdx);
+                        int read = extractor.ReadSampleData(inBuf, 0);
+                        if (read < 0) {
+                            codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
+                            inputDone = true;
+                        } else {
+                            codec.QueueInputBuffer(inIdx, 0, read, extractor.SampleTime, MediaCodecBufferFlags.None);
+                            extractor.Advance();
+                        }
+                    }
+                }
+
+                int outIdx = codec.DequeueOutputBuffer(info, 8000);
+                if (outIdx == (int)MediaCodecInfoState.OutputFormatChanged) {
+                    drainRetries = 0;
+                    MediaFormat outFmt = codec.OutputFormat;
+                    if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) srcSr = Math.Max(8000, outFmt.GetInteger(MediaFormat.KeySampleRate));
+                    if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) outChannels = Math.Max(1, outFmt.GetInteger(MediaFormat.KeyChannelCount));
+                    if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
+                } else if (outIdx >= 0) {
+                    drainRetries = 0;
+                    if (info.Size > 0) {
+                        Java.Nio.ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
+                        outBuf.Position(info.Offset);
+                        byte[] chunk = new byte[info.Size];
+                        outBuf.Get(chunk);
+
+                        ResolveMediaCodecPcmFormat(pcmEncoding, out int bits, out bool isFloat);
+                        int bytesPerSample = bits / 8;
+                        int frameBytes = bytesPerSample * outChannels;
+                        int frames = frameBytes > 0 ? chunk.Length / frameBytes : 0;
+                        if (frames > 0) {
+                            KaiserSincResampler.UnifyPcmBytesToStereoFloat(chunk, frames * frameBytes, outChannels, bits, isFloat, out float[] cL, out float[] cR);
+                            int take = Math.Min(frames, wantSamples - mono.Count);
+                            for (int f = 0; f < take; f++) {
+                                mono.Add(0.5f * (cL[f] + cR[f]));
+                            }
+                        }
+                    }
+                    codec.ReleaseOutputBuffer(outIdx, false);
+                    if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) break;
+                } else if (inputDone && outIdx == (int)MediaCodecInfoState.TryAgainLater) {
+                    if (++drainRetries >= 40) break;
+                }
+            }
+
+            if (mono.Count < SubSampleSyncEngine.GccFftSize) {
+                return null;
+            }
+            float[] rawMono = mono.ToArray();
+            return srcSr != targetSampleRate
+                ? new KaiserSincResampler(srcSr, targetSampleRate).ResampleMono(rawMono)
+                : rawMono;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch {
+            return null;
+        } finally {
+            try { codec?.Stop(); } catch { }
+            try { codec?.Release(); } catch { }
+        }
+    }
+
+    static void ResolveMediaCodecPcmFormat(int pcmEncoding, out int bits, out bool isFloat) {
+        if (pcmEncoding == (int)Android.Media.Encoding.PcmFloat) {
+            bits = 32;
+            isFloat = true;
+            return;
+        }
+        if (OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            if (pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked) {
+                bits = 24;
+                isFloat = false;
+                return;
+            }
+            if (pcmEncoding == (int)Android.Media.Encoding.Pcm32bit) {
+                bits = 32;
+                isFloat = false;
+                return;
+            }
+        }
+        bits = 16;
+        isFloat = false;
+    }
+
+    static string NormalizeBaseName(string raw) {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        StringBuilder sb = new(raw.Length);
+        string cleaned = raw
+            .Replace("Dolby Atmos", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("Atmos", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("Lossless", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("Hi-Res", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("FLAC", "", StringComparison.OrdinalIgnoreCase)
+            .Replace("EAC3", "", StringComparison.OrdinalIgnoreCase);
+        for (int i = 0; i < cleaned.Length; i++) {
+            char c = cleaned[i];
+            if (char.IsLetterOrDigit(c)) {
+                sb.Append(char.ToLowerInvariant(c));
+            }
+        }
+        return sb.ToString();
+    }
+}

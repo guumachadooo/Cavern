@@ -11,9 +11,9 @@ namespace CavernizeAndroid.Services;
 /// Extracted embedded media tags, album artwork bitmap, and balanced UI accent palette for a loaded file.
 /// </summary>
 public sealed class MediaArtworkMetadata {
-    public string Title { get; init; } = "";
-    public string Artist { get; init; } = "";
-    public string Album { get; init; } = "";
+    public string Title { get; set; } = "";
+    public string Artist { get; set; } = "";
+    public string Album { get; set; } = "";
     public string MimeType { get; init; } = "";
     public string SourceMediaPath { get; init; } = "";
     public int EmbeddedSampleRate { get; init; }

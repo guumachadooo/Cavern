@@ -6,6 +6,7 @@ using Android.OS;
 using Android.Views;
 
 using Cavern.Channels;
+using Cavern.Spatial;
 
 using Cavernize.Logic.Models;
 
@@ -31,7 +32,7 @@ public sealed class RoomSimulatorView : View {
         public float VisibilityAlpha = 1f;
         public long MovingUntilMs;
         public long SoundUntilMs;
-        public readonly (Vector3 Pos, long TimeMs)[] Trail = new (Vector3, long)[8];
+        public readonly (Vector3 Pos, long TimeMs)[] Trail = new (Vector3, long)[22];
         public int TrailHead;
         public int TrailCount;
         public bool Initialized;
@@ -48,10 +49,13 @@ public sealed class RoomSimulatorView : View {
         OrbitCamera,
         PinchZoom,
         ListenerMove,
+        SourceDrag,
         HeadDock,
         HeightDock,
         PresetClick,
         LabelsClick,
+        XRayClick,
+        XRayBandClick,
         ZoomOutClick,
         ZoomInClick,
         ResetZoomClick
@@ -69,6 +73,8 @@ public sealed class RoomSimulatorView : View {
     readonly Paint ceilingWirePaint = new(PaintFlags.AntiAlias);
     readonly Paint dropLinePaint = new(PaintFlags.AntiAlias);
     readonly Paint dropRingPaint = new(PaintFlags.AntiAlias);
+    readonly Paint trailCorePaint = new(PaintFlags.AntiAlias);
+    readonly Paint trailGlowPaint = new(PaintFlags.AntiAlias);
     readonly Paint rayPaint = new(PaintFlags.AntiAlias);
     readonly Paint screenPaint = new(PaintFlags.AntiAlias);
     readonly Paint fillPaint = new(PaintFlags.AntiAlias);
@@ -81,12 +87,16 @@ public sealed class RoomSimulatorView : View {
     readonly Paint capsuleFillPaint = new(PaintFlags.AntiAlias);
     readonly Paint textPaint = new(PaintFlags.AntiAlias);
     readonly Paint subTextPaint = new(PaintFlags.AntiAlias);
+    readonly Android.Graphics.Path ribbonSegPath = new();
+    readonly List<(float x, float y, float persp, float fade)> projectedTrailPts = new(24);
 
     readonly int touchSlop;
     readonly List<(TrackSourceItem item, float x, float y)> hitTargets = [];
     readonly Dictionary<TrackSourceItem, SmoothedSourceState> smoothedStates = [];
     readonly RectF[] camPresetRects = [new(), new(), new()];
     RectF camLabelsBtnRect = new();
+    RectF camXRayBtnRect = new();
+    RectF camXRayBandBtnRect = new();
     RectF camZoomOutRect = new();
     RectF camZoomInRect = new();
     RectF camResetLabelRect = new();
@@ -125,8 +135,11 @@ public sealed class RoomSimulatorView : View {
     DateTime lastRoomTapTime = DateTime.MinValue;
     DateTime lastHeightTapTime = DateTime.MinValue;
     DateTime lastHeadTapTime = DateTime.MinValue;
+    DateTime lastSourceTapTime = DateTime.MinValue;
+    TrackSourceItem lastTappedSource;
 
     TouchDragMode dragMode = TouchDragMode.None;
+    TrackSourceItem draggedSource;
     int pressedPresetIdx = -1;
     float downX;
     float downY;
@@ -134,11 +147,20 @@ public sealed class RoomSimulatorView : View {
     float lastY;
     float maxMoveDist;
 
+    SpatialXRayPowermap xrayPowermap;
+    SoundfieldTelemetry xrayTelemetry = SoundfieldTelemetry.Empty();
+
     public bool IsPositionLocked { get; set; }
+    public bool IsXRayEnabled { get; set; }
+    public SpatialXRayBandMode XRayBandMode { get; set; } = SpatialXRayBandMode.AllBands;
 
     public event Action<Vector3> ListenerPositionChanged;
     public event Action<Vector3> ListenerRotationChanged;
     public event Action<TrackSourceItem> SourceSoloToggled;
+    public event Action<TrackSourceItem, Vector3> SourcePositionDragged;
+    public event Action<TrackSourceItem> SourcePositionResetRequested;
+    public event Action<bool> XRayToggled;
+    public event Action<SpatialXRayBandMode> XRayBandModeChanged;
 
     public RoomSimulatorView(Context context) : base(context) {
         touchSlop = ViewConfiguration.Get(context)?.ScaledTouchSlop ?? 24;
@@ -179,13 +201,22 @@ public sealed class RoomSimulatorView : View {
         ceilingWirePaint.StrokeWidth = 0.95f * dp;
         ceilingWirePaint.SetStyle(Paint.Style.Stroke);
 
-        dropLinePaint.StrokeWidth = 1.15f * dp;
+        dropLinePaint.StrokeWidth = 0.85f * dp;
         dropLinePaint.SetStyle(Paint.Style.Stroke);
+        dropLinePaint.SetPathEffect(new DashPathEffect([3.0f * dp, 4.2f * dp], 0f));
 
-        dropRingPaint.StrokeWidth = 1.1f * dp;
+        dropRingPaint.StrokeWidth = 0.85f * dp;
         dropRingPaint.SetStyle(Paint.Style.Stroke);
 
-        rayPaint.StrokeWidth = 1.1f * dp;
+        trailCorePaint.SetStyle(Paint.Style.Stroke);
+        trailCorePaint.StrokeCap = Paint.Cap.Round;
+        trailCorePaint.StrokeJoin = Paint.Join.Round;
+
+        trailGlowPaint.SetStyle(Paint.Style.Stroke);
+        trailGlowPaint.StrokeCap = Paint.Cap.Round;
+        trailGlowPaint.StrokeJoin = Paint.Join.Round;
+
+        rayPaint.StrokeWidth = 1.0f * dp;
         rayPaint.SetStyle(Paint.Style.Stroke);
 
         screenPaint.Color = OneUiTheme.Primary;
@@ -259,6 +290,17 @@ public sealed class RoomSimulatorView : View {
         PostInvalidateOnAnimation();
     }
 
+    /// <summary>
+    /// Synchronizes live W13 3D spherical X-Ray powermap and soundfield telemetry for overlay rendering.
+    /// </summary>
+    public void UpdateXRayState(SpatialXRayPowermap powermap, SoundfieldTelemetry telemetry) {
+        xrayPowermap = powermap;
+        xrayTelemetry = telemetry;
+        if (IsXRayEnabled) {
+            PostInvalidateOnAnimation();
+        }
+    }
+
     public void AnimateToCameraPreset(float yawDeg, float pitchDeg) {
         targetCamYawDeg = NormalizeDeg(yawDeg);
         targetCamPitchDeg = Math.Clamp(pitchDeg, 6f, 86f);
@@ -315,23 +357,60 @@ public sealed class RoomSimulatorView : View {
         camZoomOutRect = new RectF(zOutX, zTop, zOutX + zoomBtnSz, zTop + zoomBtnSz);
         camZoomInRect = new RectF(zInX, zTop, zInX + zoomBtnSz, zTop + zoomBtnSz);
 
-        float lblBtnW = 48f * dp;
-        float lblBtnX = zOutX - 6f * dp - lblBtnW;
+        float lblBtnW = 42f * dp;
+        float lblBtnX = zOutX - 5f * dp - lblBtnW;
         camLabelsBtnRect = new RectF(lblBtnX, topY, lblBtnX + lblBtnW, topY + topBarH);
-        camResetLabelRect = new RectF(outerPad, topY, camLabelsBtnRect.Left - 6f * dp, topY + topBarH);
+
+        float bandBtnW = IsXRayEnabled ? 30f * dp : 0f;
+        float bandGap = IsXRayEnabled ? 4f * dp : 0f;
+        float bandBtnX = lblBtnX - bandGap - bandBtnW;
+        camXRayBandBtnRect = IsXRayEnabled
+            ? new RectF(bandBtnX, topY, bandBtnX + bandBtnW, topY + topBarH)
+            : new RectF(0, 0, 0, 0);
+
+        float xrayBtnW = 42f * dp;
+        float xrayBtnX = (IsXRayEnabled ? bandBtnX : lblBtnX) - 5f * dp - xrayBtnW;
+        camXRayBtnRect = new RectF(xrayBtnX, topY, xrayBtnX + xrayBtnW, topY + topBarH);
+        camResetLabelRect = new RectF(outerPad, topY, Math.Max(outerPad + 28f * dp, camXRayBtnRect.Left - 4f * dp), topY + topBarH);
 
         subTextPaint.TextAlign = Paint.Align.Left;
-        subTextPaint.TextSize = 10f * dp;
+        subTextPaint.TextSize = 9.6f * dp;
         subTextPaint.Color = OneUiTheme.TextMuted;
         canvas.DrawText(
-            $"Zoom {Math.Round(roomZoom * 100)}%",
+            $"{Math.Round(roomZoom * 100)}%",
             outerPad + 4f * dp,
             topY + topBarH * 0.5f - (subTextPaint.Ascent() + subTextPaint.Descent()) * 0.5f,
             subTextPaint);
 
+        canvas.DrawRoundRect(camXRayBtnRect, topBarH * 0.5f, topBarH * 0.5f, IsXRayEnabled ? pillActivePaint : pillInactivePaint);
+        textPaint.TextAlign = Paint.Align.Center;
+        textPaint.TextSize = 8.9f * dp;
+        textPaint.Color = IsXRayEnabled ? OneUiTheme.TextPrimary : OneUiTheme.TextSub;
+        canvas.DrawText("X-Ray", camXRayBtnRect.CenterX(),
+            camXRayBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
+
+        if (IsXRayEnabled) {
+            canvas.DrawRoundRect(camXRayBandBtnRect, topBarH * 0.5f, topBarH * 0.5f, pillInactivePaint);
+            textPaint.TextSize = 8.8f * dp;
+            textPaint.Color = XRayBandMode switch {
+                SpatialXRayBandMode.LowOnly => Color.Rgb(255, 166, 76),
+                SpatialXRayBandMode.MidOnly => Color.Rgb(64, 224, 168),
+                SpatialXRayBandMode.HighOnly => Color.Rgb(158, 178, 255),
+                _ => OneUiTheme.PrimaryHigh
+            };
+            string bTag = XRayBandMode switch {
+                SpatialXRayBandMode.LowOnly => "L",
+                SpatialXRayBandMode.MidOnly => "M",
+                SpatialXRayBandMode.HighOnly => "H",
+                _ => "All"
+            };
+            canvas.DrawText(bTag, camXRayBandBtnRect.CenterX(),
+                camXRayBandBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
+        }
+
         canvas.DrawRoundRect(camLabelsBtnRect, topBarH * 0.5f, topBarH * 0.5f, pillInactivePaint);
         textPaint.TextAlign = Paint.Align.Center;
-        textPaint.TextSize = 9.2f * dp;
+        textPaint.TextSize = 8.9f * dp;
         textPaint.Color = labelMode == LabelVisibilityMode.All ? OneUiTheme.PrimaryHigh : OneUiTheme.TextSub;
         string lblTag = labelMode switch {
             LabelVisibilityMode.All => "Todos",
@@ -581,9 +660,9 @@ public sealed class RoomSimulatorView : View {
         bool anyInterpolating = false;
         List<(bool isListener, TrackSourceItem item, int objNumber, Vector3 np, float rms, float visAlpha, SmoothedSourceState state, float depth)> renderQueue = new(sources.Count + 1);
 
-        float posBlend = Math.Min(1f, dt * 18f);
-        float rmsRise = Math.Min(1f, dt * 26f);
-        float rmsFall = Math.Min(1f, dt * 11f);
+        float posBlend = 1f - MathF.Exp(-16f * dt);
+        float rmsRise = 1f - MathF.Exp(-24f * dt);
+        float rmsFall = 1f - MathF.Exp(-10f * dt);
         int objSeq = 0;
 
         for (int i = 0; i < sources.Count; i++) {
@@ -594,7 +673,7 @@ public sealed class RoomSimulatorView : View {
                 Math.Clamp(item.NormalizedPosition.X, -1f, 1f),
                 Math.Clamp(item.NormalizedPosition.Y, -1f, 1f),
                 Math.Clamp(item.NormalizedPosition.Z, -1f, 1f));
-            bool effectivelyMuted = item.IsMuted || (anySolo && !item.IsSolo);
+            bool effectivelyMuted = item.IsMuted || item.IsDynamicallyFilteredOut || (anySolo && !item.IsSolo);
             float targetRms = effectivelyMuted ? 0f : item.RmsLevel;
 
             if (!smoothedStates.TryGetValue(item, out SmoothedSourceState st)) {
@@ -611,12 +690,12 @@ public sealed class RoomSimulatorView : View {
             } else {
                 Vector3 rawMove = targetPos - st.LastRawPos;
                 if (rawMove.LengthSquared() > 0.000004f) {
-                    st.MovingUntilMs = nowMs + 480;
+                    st.MovingUntilMs = nowMs + 520;
                 }
                 st.LastRawPos = targetPos;
 
                 Vector3 delta = targetPos - st.SmoothedPos;
-                if (delta.LengthSquared() > 0.00001f) {
+                if (delta.LengthSquared() > 0.000008f) {
                     st.SmoothedPos = Vector3.Lerp(st.SmoothedPos, targetPos, posBlend);
                     anyInterpolating = true;
                 } else {
@@ -624,7 +703,7 @@ public sealed class RoomSimulatorView : View {
                 }
 
                 float rmsDiff = targetRms - st.SmoothedRms;
-                if (MathF.Abs(rmsDiff) > 0.002f) {
+                if (MathF.Abs(rmsDiff) > 0.0015f) {
                     st.SmoothedRms += rmsDiff * (rmsDiff > 0 ? rmsRise : rmsFall);
                     anyInterpolating = true;
                 } else {
@@ -636,7 +715,11 @@ public sealed class RoomSimulatorView : View {
             if (hasVolumeNow) st.SoundUntilMs = nowMs + 380;
 
             float targetVis;
-            if (item.IsBed || !hasPlayedOnce) {
+            bool alwaysVisibleLayer = item.IsBed || !hasPlayedOnce || item.HasCustomPosition ||
+                item.Layer == SourceLayer.NeuralStem ||
+                item.Layer == SourceLayer.RestoredResidual ||
+                item.Layer == SourceLayer.LiveMicrophone;
+            if (alwaysVisibleLayer) {
                 targetVis = 1f;
             } else if (!isAudioPlaying) {
                 targetVis = st.VisibilityAlpha;
@@ -646,20 +729,20 @@ public sealed class RoomSimulatorView : View {
             }
 
             float visDiff = targetVis - st.VisibilityAlpha;
-            if (MathF.Abs(visDiff) > 0.008f) {
-                float visRate = visDiff > 0 ? 16f : 4.8f;
-                st.VisibilityAlpha = Math.Clamp(st.VisibilityAlpha + visDiff * Math.Min(1f, dt * visRate), 0f, 1f);
+            if (MathF.Abs(visDiff) > 0.006f) {
+                float visK = visDiff > 0 ? 14f : 4.2f;
+                st.VisibilityAlpha = Math.Clamp(st.VisibilityAlpha + visDiff * (1f - MathF.Exp(-visK * dt)), 0f, 1f);
                 anyInterpolating = true;
             } else {
                 st.VisibilityAlpha = targetVis;
             }
 
-            if (isAudioPlaying && !item.IsBed && st.VisibilityAlpha > 0.08f) {
+            if (isAudioPlaying && !item.IsBed && st.VisibilityAlpha > 0.08f && !effectivelyMuted) {
                 int lastIdx = (st.TrailHead + st.Trail.Length - 1) % st.Trail.Length;
                 bool emptyTrail = st.TrailCount == 0;
                 long elapsedTrail = emptyTrail ? 9999 : nowMs - st.Trail[lastIdx].TimeMs;
                 float movedSq = emptyTrail ? 1f : (st.SmoothedPos - st.Trail[lastIdx].Pos).LengthSquared();
-                if (elapsedTrail >= 55 && movedSq > 0.00055f) {
+                if (elapsedTrail >= 22 && movedSq > 0.00012f) {
                     st.Trail[st.TrailHead] = (st.SmoothedPos, nowMs);
                     st.TrailHead = (st.TrailHead + 1) % st.Trail.Length;
                     if (st.TrailCount < st.Trail.Length) st.TrailCount++;
@@ -678,16 +761,21 @@ public sealed class RoomSimulatorView : View {
         listenerScreenY = lCenter.sy;
         renderQueue.Add((true, null, 0, new Vector3(lnx, lny, lnz), 0f, 1f, null, lCenter.depth));
 
+        // W13 Spatial X-Ray 3D Spherical Energy Heatmap + Dominant DoA Vector (behind sources for crisp legibility)
+        if (IsXRayEnabled && xrayPowermap != null) {
+            DrawSpatialXRaySphericalOverlay(canvas, r, lnx, lny, lnz, camYawRad, camPitchRad, dp);
+        }
+
         renderQueue.Sort((a, b) => b.depth.CompareTo(a.depth));
 
         for (int i = 0; i < renderQueue.Count; i++) {
             var e = renderQueue[i];
             if (e.isListener || e.visAlpha <= 0.04f || e.rms < 0.04f) continue;
-            bool effMuted = e.item.IsMuted || (anySolo && !e.item.IsSolo);
+            bool effMuted = e.item.IsMuted || e.item.IsDynamicallyFilteredOut || (anySolo && !e.item.IsSolo);
             if (effMuted) continue;
             var sPt = ProjectOrbit3D(r, e.np.X, e.np.Y, e.np.Z, camYawRad, camPitchRad);
-            Color mc = ResolveDolbyMeterColor(e.rms, false, e.item.IsBed, e.item.IsLFE);
-            int rayAlpha = Math.Clamp((int)Math.Round(e.rms * 78f * e.visAlpha), 6, 72);
+            Color mc = ResolveDolbyMeterColor(e.rms, false, e.item.IsBed, e.item.IsLFE, e.item.Layer);
+            int rayAlpha = Math.Clamp((int)Math.Round(e.rms * 66f * e.visAlpha), 5, 60);
             rayPaint.Color = Color.Argb(rayAlpha, mc.R, mc.G, mc.B);
             canvas.DrawLine(sPt.sx, sPt.sy, lCenter.sx, lCenter.sy, rayPaint);
         }
@@ -702,16 +790,16 @@ public sealed class RoomSimulatorView : View {
             TrackSourceItem item = entry.item;
             Vector3 np = entry.np;
             float va = entry.visAlpha;
-            bool effectivelyMuted = item.IsMuted || (anySolo && !item.IsSolo);
+            bool effectivelyMuted = item.IsMuted || item.IsDynamicallyFilteredOut || (anySolo && !item.IsSolo);
             var posPt = ProjectOrbit3D(r, np.X, np.Y, np.Z, camYawRad, camPitchRad);
             hitTargets.Add((item, posPt.sx, posPt.sy));
 
-            Color meterCol = ResolveDolbyMeterColor(entry.rms, effectivelyMuted, item.IsBed, item.IsLFE);
+            Color meterCol = ResolveDolbyMeterColor(entry.rms, effectivelyMuted, item.IsBed, item.IsLFE, item.Layer);
             float scale = Math.Clamp(posPt.persp * 1.04f, 0.72f, 1.25f);
 
             if (item.IsBed) {
                 var floorPt = ProjectOrbit3D(r, np.X, -1f, np.Z, camYawRad, camPitchRad);
-                dropLinePaint.Color = Color.Argb(36, 200, 212, 235);
+                dropLinePaint.Color = Color.Argb(18, 200, 212, 235);
                 canvas.DrawLine(floorPt.sx, floorPt.sy, posPt.sx, posPt.sy, dropLinePaint);
 
                 float hw = 8.4f * dp * scale;
@@ -721,7 +809,7 @@ public sealed class RoomSimulatorView : View {
                 if (!effectivelyMuted && entry.rms > 0.10f) {
                     float pulseR = hw + (3f + Math.Clamp(entry.rms * 7f, 0f, 6f)) * dp;
                     fillPaint.SetShader(null);
-                    fillPaint.Color = Color.Argb(Math.Clamp((int)(entry.rms * 65f), 16, 56), meterCol.R, meterCol.G, meterCol.B);
+                    fillPaint.Color = Color.Argb(Math.Clamp((int)(entry.rms * 60f), 14, 52), meterCol.R, meterCol.G, meterCol.B);
                     canvas.DrawCircle(posPt.sx, posPt.sy, pulseR, fillPaint);
                 }
 
@@ -729,7 +817,7 @@ public sealed class RoomSimulatorView : View {
                 fillPaint.Color = Color.Argb(228, 22, 26, 36);
                 canvas.DrawRoundRect(box, 3.2f * dp, 3.2f * dp, fillPaint);
 
-                strokePaint.StrokeWidth = (entry.rms > 0.02f ? 2.1f : 1.3f) * dp;
+                strokePaint.StrokeWidth = (entry.rms > 0.02f ? 2.0f : 1.25f) * dp;
                 strokePaint.Color = meterCol;
                 canvas.DrawRoundRect(box, 3.2f * dp, 3.2f * dp, strokePaint);
 
@@ -752,82 +840,151 @@ public sealed class RoomSimulatorView : View {
                     canvas.DrawText(shortLabel, posPt.sx, posPt.sy + hh + 9.5f * dp, textPaint);
                 }
             } else {
-                if (entry.state != null && entry.state.TrailCount > 0) {
+                // Continuous smooth tapered glowing Bézier trajectory ribbon (no dotted balls)
+                if (!effectivelyMuted && entry.state != null && entry.state.TrailCount > 0) {
                     SmoothedSourceState tState = entry.state;
+                    projectedTrailPts.Clear();
                     int oldestIdx = (tState.TrailHead - tState.TrailCount + tState.Trail.Length) % tState.Trail.Length;
                     for (int k = 0; k < tState.TrailCount; k++) {
                         int idx = (oldestIdx + k) % tState.Trail.Length;
                         var sample = tState.Trail[idx];
                         long ageMs = nowMs - sample.TimeMs;
-                        if (ageMs < 0 || ageMs > 520) continue;
-                        float ageFade = 1f - ageMs / 520f;
+                        if (ageMs < 0 || ageMs > 680) continue;
+                        float ageFade = 1f - ageMs / 680f;
                         var tPt = ProjectOrbit3D(r, sample.Pos.X, sample.Pos.Y, sample.Pos.Z, camYawRad, camPitchRad);
-                        int tAlpha = Math.Clamp((int)Math.Round(105f * ageFade * va), 4, 120);
-                        fillPaint.SetShader(null);
-                        fillPaint.Color = Color.Argb(tAlpha, meterCol.R, meterCol.G, meterCol.B);
-                        canvas.DrawCircle(tPt.sx, tPt.sy, (1.4f + 2.4f * ageFade) * dp * tPt.persp, fillPaint);
+                        projectedTrailPts.Add((tPt.sx, tPt.sy, tPt.persp, ageFade));
                         anyInterpolating = true;
+                    }
+                    if (projectedTrailPts.Count > 0) {
+                        projectedTrailPts.Add((posPt.sx, posPt.sy, posPt.persp, 1f));
+                        int nPts = projectedTrailPts.Count;
+                        for (int k = 0; k < nPts - 1; k++) {
+                            var p0 = projectedTrailPts[k];
+                            var p1 = projectedTrailPts[k + 1];
+                            float prog = (k + 1f) / (nPts - 1f);
+                            float segFade = Math.Clamp(prog * prog * p1.fade * va, 0f, 1f);
+                            if (segFade <= 0.015f) continue;
+
+                            float xStart = k == 0 ? p0.x : (projectedTrailPts[k - 1].x + p0.x) * 0.5f;
+                            float yStart = k == 0 ? p0.y : (projectedTrailPts[k - 1].y + p0.y) * 0.5f;
+                            float xEnd = k == nPts - 2 ? p1.x : (p0.x + p1.x) * 0.5f;
+                            float yEnd = k == nPts - 2 ? p1.y : (p0.y + p1.y) * 0.5f;
+
+                            ribbonSegPath.Rewind();
+                            ribbonSegPath.MoveTo(xStart, yStart);
+                            ribbonSegPath.QuadTo(p0.x, p0.y, xEnd, yEnd);
+
+                            float perspW = Math.Clamp(p1.persp, 0.72f, 1.2f);
+                            trailGlowPaint.StrokeWidth = (2.4f + 4.4f * prog) * dp * perspW;
+                            trailGlowPaint.Color = Color.Argb(Math.Clamp((int)Math.Round(42f * segFade), 2, 48), meterCol.R, meterCol.G, meterCol.B);
+                            canvas.DrawPath(ribbonSegPath, trailGlowPaint);
+
+                            trailCorePaint.StrokeWidth = (0.75f + 2.35f * prog) * dp * perspW;
+                            trailCorePaint.Color = Color.Argb(Math.Clamp((int)Math.Round(152f * segFade), 4, 160),
+                                Math.Min(255, meterCol.R + 36), Math.Min(255, meterCol.G + 36), Math.Min(255, meterCol.B + 36));
+                            canvas.DrawPath(ribbonSegPath, trailCorePaint);
+                        }
                     }
                 }
 
+                // Discreet dashed projection drop line + subtle floor anchor ring
                 var floorPt = ProjectOrbit3D(r, np.X, -1f, np.Z, camYawRad, camPitchRad);
                 dropLinePaint.Color = effectivelyMuted
-                    ? Color.Argb((int)Math.Round(35 * va), 160, 165, 180)
-                    : Color.Argb((int)Math.Round(115 * va), meterCol.R, meterCol.G, meterCol.B);
+                    ? Color.Argb((int)Math.Round(16 * va), 160, 165, 180)
+                    : Color.Argb((int)Math.Round(42 * va), meterCol.R, meterCol.G, meterCol.B);
                 canvas.DrawLine(floorPt.sx, floorPt.sy, posPt.sx, posPt.sy, dropLinePaint);
 
-                var earTick = ProjectOrbit3D(r, np.X, 0f, np.Z, camYawRad, camPitchRad);
-                fillPaint.SetShader(null);
-                fillPaint.Color = dropLinePaint.Color;
-                canvas.DrawCircle(earTick.sx, earTick.sy, 1.8f * dp, fillPaint);
+                dropRingPaint.Color = effectivelyMuted
+                    ? Color.Argb((int)Math.Round(18 * va), 160, 165, 180)
+                    : Color.Argb((int)Math.Round(44 * va), meterCol.R, meterCol.G, meterCol.B);
+                canvas.DrawCircle(floorPt.sx, floorPt.sy, 2.6f * dp * floorPt.persp, dropRingPaint);
 
-                dropRingPaint.Color = dropLinePaint.Color;
-                canvas.DrawCircle(floorPt.sx, floorPt.sy, 3.8f * dp * floorPt.persp, dropRingPaint);
-
-                float appearScale = 0.72f + 0.28f * va;
-                float rad = (7.2f + Math.Clamp(entry.rms * 3.8f, 0f, 3.2f)) * dp * scale * appearScale;
-                if (!effectivelyMuted && entry.rms > 0.08f) {
-                    float wave = (float)(0.5 + 0.5 * Math.Sin(nowMs * 0.008 + entry.objNumber));
-                    float haloR = rad + (3f + wave * 4f * entry.rms) * dp;
-                    fillPaint.Color = Color.Argb(Math.Clamp((int)(entry.rms * 58f * va), 6, 52), meterCol.R, meterCol.G, meterCol.B);
+                // Refined layered 3D acoustic object orb
+                float appearScale = 0.76f + 0.24f * va;
+                float rad = (7.4f + Math.Clamp(entry.rms * 3.6f, 0f, 3.0f)) * dp * scale * appearScale;
+                if (!effectivelyMuted && entry.rms > 0.06f) {
+                    float wave = (float)(0.5 + 0.5 * Math.Sin(nowMs * 0.007 + entry.objNumber));
+                    float haloR = rad + (3.2f + wave * 3.8f * entry.rms) * dp;
+                    fillPaint.SetShader(null);
+                    fillPaint.Color = Color.Argb(Math.Clamp((int)(entry.rms * 52f * va), 6, 48), meterCol.R, meterCol.G, meterCol.B);
                     canvas.DrawCircle(posPt.sx, posPt.sy, haloR, fillPaint);
+
+                    strokePaint.StrokeWidth = 0.85f * dp;
+                    strokePaint.Color = Color.Argb(Math.Clamp((int)(entry.rms * 115f * va), 12, 95), meterCol.R, meterCol.G, meterCol.B);
+                    canvas.DrawCircle(posPt.sx, posPt.sy, rad + 2.1f * dp, strokePaint);
                 }
 
                 using (RadialGradient objGrad = new(
-                    posPt.sx - rad * 0.25f, posPt.sy - rad * 0.25f, Math.Max(1f, rad * 1.15f),
+                    posPt.sx - rad * 0.28f, posPt.sy - rad * 0.30f, Math.Max(1f, rad * 1.20f),
                     [
-                        Color.Argb((int)Math.Round((effectivelyMuted ? 95 : 235) * va), Math.Min(255, meterCol.R + 40), Math.Min(255, meterCol.G + 40), Math.Min(255, meterCol.B + 40)).ToArgb(),
-                        Color.Argb((int)Math.Round((effectivelyMuted ? 65 : 195) * va), meterCol.R, meterCol.G, meterCol.B).ToArgb()
+                        Color.Argb((int)Math.Round((effectivelyMuted ? 95 : 246) * va), Math.Min(255, meterCol.R + 68), Math.Min(255, meterCol.G + 68), Math.Min(255, meterCol.B + 68)).ToArgb(),
+                        Color.Argb((int)Math.Round((effectivelyMuted ? 70 : 215) * va), meterCol.R, meterCol.G, meterCol.B).ToArgb(),
+                        Color.Argb((int)Math.Round((effectivelyMuted ? 55 : 198) * va), (int)(meterCol.R * 0.62f), (int)(meterCol.G * 0.62f), (int)(meterCol.B * 0.68f)).ToArgb()
                     ],
-                    [0f, 1f], Shader.TileMode.Clamp)) {
+                    [0f, 0.58f, 1f], Shader.TileMode.Clamp)) {
                     fillPaint.SetShader(objGrad);
                     canvas.DrawCircle(posPt.sx, posPt.sy, rad, fillPaint);
                     fillPaint.SetShader(null);
                 }
 
-                strokePaint.StrokeWidth = 1.25f * dp;
+                // Crisp top-left glass specular highlight
+                if (!effectivelyMuted) {
+                    fillPaint.Color = Color.Argb((int)Math.Round(110 * va), 255, 255, 255);
+                    canvas.DrawCircle(posPt.sx - rad * 0.30f, posPt.sy - rad * 0.30f, rad * 0.22f, fillPaint);
+                }
+
+                strokePaint.StrokeWidth = 1.15f * dp;
                 strokePaint.Color = effectivelyMuted
-                    ? Color.Argb((int)Math.Round(130 * va), OneUiTheme.TextMuted.R, OneUiTheme.TextMuted.G, OneUiTheme.TextMuted.B)
-                    : Color.Argb((int)Math.Round(200 * va), 255, 255, 255);
+                    ? Color.Argb((int)Math.Round(105 * va), OneUiTheme.TextMuted.R, OneUiTheme.TextMuted.G, OneUiTheme.TextMuted.B)
+                    : Color.Argb((int)Math.Round(218 * va), 255, 255, 255);
                 canvas.DrawCircle(posPt.sx, posPt.sy, rad, strokePaint);
 
+                // Subtle ceiling elevation chevron badge when object is above ear plane (Y > 0.15)
+                if (!effectivelyMuted && np.Y > 0.15f) {
+                    float chevY = posPt.sy - rad - 3.2f * dp;
+                    float cw = 2.6f * dp * scale;
+                    strokePaint.StrokeWidth = 1.15f * dp;
+                    strokePaint.Color = Color.Argb((int)Math.Round(185 * va), 255, 255, 255);
+                    canvas.DrawLine(posPt.sx - cw, chevY + cw * 0.65f, posPt.sx, chevY, strokePaint);
+                    canvas.DrawLine(posPt.sx, chevY, posPt.sx + cw, chevY + cw * 0.65f, strokePaint);
+                }
+
                 if (effectivelyMuted) {
-                    DrawMuteCross(canvas, posPt.sx, posPt.sy, rad * 0.55f, dp);
+                    DrawMuteCross(canvas, posPt.sx, posPt.sy, rad * 0.50f, dp);
                 } else {
                     textPaint.TextAlign = Paint.Align.Center;
-                    textPaint.TextSize = Math.Clamp(8.2f * scale * appearScale, 6f, 10f) * dp;
-                    textPaint.Color = Color.Argb((int)Math.Round(255 * va), 12, 14, 20);
+                    textPaint.TextSize = Math.Clamp(8.0f * scale * appearScale, 6f, 9.8f) * dp;
+                    textPaint.Color = Color.Argb((int)Math.Round(255 * va), 10, 12, 18);
                     canvas.DrawText(entry.objNumber.ToString(), posPt.sx,
                         posPt.sy - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
                 }
 
-                if (item.IsSolo) canvas.DrawCircle(posPt.sx, posPt.sy, rad + 3.2f * dp, soloRingPaint);
+                if (item.IsSolo) canvas.DrawCircle(posPt.sx, posPt.sy, rad + 3.4f * dp, soloRingPaint);
 
-                if (labelMode == LabelVisibilityMode.All) {
+                // W13 custom-pinned ring when the user manually dragged this object/stem/mic
+                if (item.HasCustomPosition) {
+                    strokePaint.StrokeWidth = 1.6f * dp;
+                    strokePaint.Color = Color.Rgb(64, 224, 255);
+                    canvas.DrawCircle(posPt.sx, posPt.sy, rad + (item.IsSolo ? 6.0f : 3.2f) * dp, strokePaint);
+                }
+
+                bool showTag = labelMode == LabelVisibilityMode.All || item.HasCustomPosition || (IsXRayEnabled && (entry.rms > 0.05f || item.IsSolo));
+                if (showTag) {
+                    string baseTag = item.Layer switch {
+                        SourceLayer.LiveMicrophone => "MIC",
+                        SourceLayer.NeuralStem => $"S{entry.objNumber}",
+                        SourceLayer.RestoredResidual => $"R{entry.objNumber}",
+                        _ => $"O{entry.objNumber}"
+                    };
+                    string delaySuffix = (IsXRayEnabled || item.HasCustomPosition || ReferenceEquals(draggedSource, item)) && item.PropagationDelayMs > 0.05f
+                        ? $" {item.PropagationDelayMs:0.0}ms"
+                        : string.Empty;
                     textPaint.TextAlign = Paint.Align.Center;
-                    textPaint.TextSize = 8.2f * dp;
-                    textPaint.Color = Color.Argb((int)Math.Round(210 * va), OneUiTheme.TextSecondary.R, OneUiTheme.TextSecondary.G, OneUiTheme.TextSecondary.B);
-                    canvas.DrawText($"O{entry.objNumber}", posPt.sx, posPt.sy - rad - 3.5f * dp, textPaint);
+                    textPaint.TextSize = 8.0f * dp;
+                    textPaint.Color = item.HasCustomPosition
+                        ? Color.Rgb(118, 232, 255)
+                        : Color.Argb((int)Math.Round(215 * va), OneUiTheme.TextSecondary.R, OneUiTheme.TextSecondary.G, OneUiTheme.TextSecondary.B);
+                    canvas.DrawText($"{baseTag}{delaySuffix}", posPt.sx, posPt.sy - rad - (np.Y > 0.15f ? 7.5f : 3.5f) * dp, textPaint);
                 }
             }
         }
@@ -843,10 +1000,10 @@ public sealed class RoomSimulatorView : View {
         var lFloor = ProjectOrbit3D(r, lnx, -1f, lnz, camYawRad, camPitchRad);
         var lPos = ProjectOrbit3D(r, lnx, lny, lnz, camYawRad, camPitchRad);
 
-        dropLinePaint.Color = Color.Argb(145, OneUiTheme.PrimaryHigh.R, OneUiTheme.PrimaryHigh.G, OneUiTheme.PrimaryHigh.B);
+        dropLinePaint.Color = Color.Argb(78, OneUiTheme.PrimaryHigh.R, OneUiTheme.PrimaryHigh.G, OneUiTheme.PrimaryHigh.B);
         canvas.DrawLine(lFloor.sx, lFloor.sy, lPos.sx, lPos.sy, dropLinePaint);
         dropRingPaint.Color = dropLinePaint.Color;
-        canvas.DrawCircle(lFloor.sx, lFloor.sy, 4.5f * dp * lFloor.persp, dropRingPaint);
+        canvas.DrawCircle(lFloor.sx, lFloor.sy, 3.6f * dp * lFloor.persp, dropRingPaint);
 
         const float yawSpread = 0.40f;
         const float pitchSpread = 0.22f;
@@ -1110,8 +1267,76 @@ public sealed class RoomSimulatorView : View {
         canvas.DrawPath(ringPath, paint);
     }
 
-    static Color ResolveDolbyMeterColor(float rms, bool muted, bool isBed, bool isLfe) {
+    void DrawSpatialXRaySphericalOverlay(
+        Canvas canvas, RectF r, float lnx, float lny, float lnz,
+        float camYawRad, float camPitchRad, float dp) {
+        if (xrayPowermap == null) return;
+        float peak = MathF.Max(0.02f, xrayPowermap.PeakCellEnergy);
+        const float sphereRadius = 0.72f;
+
+        for (int i = 0; i < SpatialXRayPowermap.TotalCells; i++) {
+            float e = xrayPowermap.GetCellEnergy(i, XRayBandMode);
+            float norm = Math.Clamp(e / peak, 0f, 1f);
+            if (norm < 0.08f) continue;
+
+            Vector3 dir = xrayPowermap.CellDirections[i];
+            float sx = Math.Clamp(lnx + dir.X * sphereRadius, -1f, 1f);
+            float sy = Math.Clamp(lny + dir.Y * sphereRadius, -1f, 1f);
+            float sz = Math.Clamp(lnz + dir.Z * sphereRadius, -1f, 1f);
+            var proj = ProjectOrbit3D(r, sx, sy, sz, camYawRad, camPitchRad);
+
+            Color cellCol;
+            if (XRayBandMode == SpatialXRayBandMode.LowOnly) {
+                cellCol = Color.Rgb(255, 138, 64);
+            } else if (XRayBandMode == SpatialXRayBandMode.MidOnly) {
+                cellCol = Color.Rgb(48, 224, 158);
+            } else if (XRayBandMode == SpatialXRayBandMode.HighOnly) {
+                cellCol = Color.Rgb(128, 168, 255);
+            } else {
+                float lo = xrayPowermap.LowEnergyGrid[i];
+                float mi = xrayPowermap.MidEnergyGrid[i];
+                float hi = xrayPowermap.HighEnergyGrid[i];
+                float sum = lo + mi + hi + 1e-6f;
+                int cr = Math.Clamp((int)Math.Round((lo * 255f + mi * 56f + hi * 136f) / sum), 40, 255);
+                int cg = Math.Clamp((int)Math.Round((lo * 136f + mi * 228f + hi * 170f) / sum), 40, 255);
+                int cb = Math.Clamp((int)Math.Round((lo * 64f + mi * 165f + hi * 255f) / sum), 50, 255);
+                cellCol = Color.Rgb(cr, cg, cb);
+            }
+
+            float rad = (7.5f + norm * 16f) * dp * Math.Clamp(proj.persp, 0.72f, 1.2f);
+            int alpha = Math.Clamp((int)Math.Round(norm * 102f), 14, 108);
+            using RadialGradient heatGrad = new(
+                proj.sx, proj.sy, Math.Max(1f, rad),
+                [Color.Argb(alpha, cellCol.R, cellCol.G, cellCol.B).ToArgb(), Color.Transparent.ToArgb()],
+                [0f, 1f], Shader.TileMode.Clamp);
+            fillPaint.SetShader(heatGrad);
+            canvas.DrawCircle(proj.sx, proj.sy, rad, fillPaint);
+            fillPaint.SetShader(null);
+        }
+
+        // Dominant Direction-of-Arrival (DoA) acoustic vector from listener
+        Vector3 doa = xrayPowermap.DominantDirection;
+        if (doa.LengthSquared() > 0.04f) {
+            var lPt = ProjectOrbit3D(r, lnx, lny, lnz, camYawRad, camPitchRad);
+            var tip = ProjectOrbit3D(r,
+                Math.Clamp(lnx + doa.X * 0.62f, -1f, 1f),
+                Math.Clamp(lny + doa.Y * 0.62f, -1f, 1f),
+                Math.Clamp(lnz + doa.Z * 0.62f, -1f, 1f),
+                camYawRad, camPitchRad);
+            strokePaint.StrokeWidth = 2.0f * dp;
+            strokePaint.Color = Color.Argb(205, 86, 232, 255);
+            canvas.DrawLine(lPt.sx, lPt.sy, tip.sx, tip.sy, strokePaint);
+            fillPaint.SetShader(null);
+            fillPaint.Color = Color.Rgb(86, 232, 255);
+            canvas.DrawCircle(tip.sx, tip.sy, 3.2f * dp, fillPaint);
+        }
+    }
+
+    static Color ResolveDolbyMeterColor(float rms, bool muted, bool isBed, bool isLfe, SourceLayer layer = SourceLayer.Bed) {
         if (muted) return Color.Rgb(72, 76, 88);
+        if (layer == SourceLayer.LiveMicrophone) return rms >= 0.55f ? Color.Rgb(255, 84, 84) : Color.Rgb(52, 224, 162);
+        if (layer == SourceLayer.NeuralStem) return rms >= 0.55f ? Color.Rgb(255, 112, 92) : Color.Rgb(64, 212, 245);
+        if (layer == SourceLayer.RestoredResidual) return rms >= 0.55f ? Color.Rgb(255, 128, 176) : Color.Rgb(176, 132, 255);
         if (rms >= 0.55f) return Color.Rgb(255, 84, 84);
         if (rms >= 0.24f) return Color.Rgb(248, 196, 62);
         if (rms >= 0.015f) return isLfe ? OneUiTheme.LfeChannel : Color.Rgb(58, 214, 132);
@@ -1155,6 +1380,14 @@ public sealed class RoomSimulatorView : View {
                     }
                 }
 
+                if (camXRayBtnRect.Contains(tx, ty)) {
+                    dragMode = TouchDragMode.XRayClick;
+                    return true;
+                }
+                if (IsXRayEnabled && camXRayBandBtnRect.Contains(tx, ty)) {
+                    dragMode = TouchDragMode.XRayBandClick;
+                    return true;
+                }
                 if (camLabelsBtnRect.Contains(tx, ty)) {
                     dragMode = TouchDragMode.LabelsClick;
                     return true;
@@ -1200,6 +1433,15 @@ public sealed class RoomSimulatorView : View {
                         return true;
                     }
 
+                    // W13 Draggable 3D Objects / Neural Stems / Live Microphone (tap still toggles Solo)
+                    TrackSourceItem hitDraggable = FindNearestSource(tx, ty, 24f * dp);
+                    if (!IsPositionLocked && hitDraggable != null && hitDraggable.IsCustomDraggable) {
+                        draggedSource = hitDraggable;
+                        dragMode = TouchDragMode.SourceDrag;
+                        Parent?.RequestDisallowInterceptTouchEvent(true);
+                        return true;
+                    }
+
                     dragMode = TouchDragMode.OrbitCamera;
                     Parent?.RequestDisallowInterceptTouchEvent(true);
                     cameraAnimating = false;
@@ -1234,7 +1476,7 @@ public sealed class RoomSimulatorView : View {
                 float dist = MathF.Sqrt(dx * dx + dy * dy);
                 if (dist > maxMoveDist) maxMoveDist = dist;
 
-                if (dragMode is TouchDragMode.PresetClick or TouchDragMode.LabelsClick or TouchDragMode.ZoomOutClick or TouchDragMode.ZoomInClick or TouchDragMode.ResetZoomClick) {
+                if (dragMode is TouchDragMode.PresetClick or TouchDragMode.LabelsClick or TouchDragMode.XRayClick or TouchDragMode.XRayBandClick or TouchDragMode.ZoomOutClick or TouchDragMode.ZoomInClick or TouchDragMode.ResetZoomClick) {
                     return true;
                 }
 
@@ -1272,6 +1514,16 @@ public sealed class RoomSimulatorView : View {
                     return true;
                 }
 
+                if (dragMode == TouchDragMode.SourceDrag && !IsPositionLocked && draggedSource != null) {
+                    Parent?.RequestDisallowInterceptTouchEvent(true);
+                    if (maxMoveDist >= touchSlop * 0.55f) {
+                        UpdateDraggedSourceFromRoomTouch(draggedSource, tx, ty, lastX, lastY, dp);
+                    }
+                    lastX = tx;
+                    lastY = ty;
+                    return true;
+                }
+
                 if (dragMode == TouchDragMode.OrbitCamera) {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
                     float stepX = tx - lastX;
@@ -1300,11 +1552,43 @@ public sealed class RoomSimulatorView : View {
                 Parent?.RequestDisallowInterceptTouchEvent(false);
                 bool wasTap = maxMoveDist < touchSlop;
                 TouchDragMode endedMode = dragMode;
+                TrackSourceItem endedSource = draggedSource;
                 int preset = pressedPresetIdx;
                 dragMode = TouchDragMode.None;
+                draggedSource = null;
                 pressedPresetIdx = -1;
 
                 if (!wasTap) {
+                    Invalidate();
+                    return true;
+                }
+
+                if (endedMode == TouchDragMode.XRayClick) {
+                    IsXRayEnabled = !IsXRayEnabled;
+                    XRayToggled?.Invoke(IsXRayEnabled);
+                    Invalidate();
+                    return true;
+                }
+                if (endedMode == TouchDragMode.XRayBandClick) {
+                    XRayBandMode = (SpatialXRayBandMode)(((int)XRayBandMode + 1) % 4);
+                    XRayBandModeChanged?.Invoke(XRayBandMode);
+                    Invalidate();
+                    return true;
+                }
+
+                if (endedMode == TouchDragMode.SourceDrag && endedSource != null) {
+                    DateTime now = DateTime.UtcNow;
+                    if (endedSource.HasCustomPosition && ReferenceEquals(lastTappedSource, endedSource) &&
+                        (now - lastSourceTapTime).TotalMilliseconds < 320) {
+                        lastTappedSource = null;
+                        lastSourceTapTime = DateTime.MinValue;
+                        SourcePositionResetRequested?.Invoke(endedSource);
+                    } else {
+                        lastTappedSource = endedSource;
+                        lastSourceTapTime = now;
+                        endedSource.IsSolo = !endedSource.IsSolo;
+                        SourceSoloToggled?.Invoke(endedSource);
+                    }
                     Invalidate();
                     return true;
                 }
@@ -1410,12 +1694,37 @@ public sealed class RoomSimulatorView : View {
             case MotionEventActions.Cancel:
                 Parent?.RequestDisallowInterceptTouchEvent(false);
                 dragMode = TouchDragMode.None;
+                draggedSource = null;
                 pressedPresetIdx = -1;
                 Invalidate();
                 return false;
         }
 
         return base.OnTouchEvent(e);
+    }
+
+    void UpdateDraggedSourceFromRoomTouch(TrackSourceItem item, float tx, float ty, float prevX, float prevY, float dp) {
+        if (item == null || roomCanvasRect.Width() <= 0 || roomCanvasRect.Height() <= 0) return;
+        float camYawRad = camYawDeg * (MathF.PI / 180f);
+        float camPitchRad = camPitchDeg * (MathF.PI / 180f);
+        Vector3 cur = item.HasCustomPosition ? item.CustomNormalizedPosition : item.NormalizedPosition;
+        Vector3 next;
+        if (camPitchDeg < 16f) {
+            float dyNorm = -(ty - prevY) / Math.Max(40f * dp, roomCanvasRect.Height() * 0.35f);
+            float dxNorm = (tx - prevX) / Math.Max(40f * dp, roomCanvasRect.Width() * 0.35f);
+            float nx = Math.Clamp(cur.X + dxNorm * MathF.Cos(camYawRad), -1f, 1f);
+            float nz = Math.Clamp(cur.Z - dxNorm * MathF.Sin(camYawRad), -1f, 1f);
+            float ny = Math.Clamp(cur.Y + dyNorm, -1f, 1f);
+            next = new Vector3(nx, ny, nz);
+        } else {
+            var (nx, nz) = UnprojectHorizontalPlane(roomCanvasRect, tx, ty, cur.Y, camYawRad, camPitchRad);
+            next = new Vector3(nx, cur.Y, nz);
+        }
+        item.HasCustomPosition = true;
+        item.CustomNormalizedPosition = next;
+        item.NormalizedPosition = next;
+        SourcePositionDragged?.Invoke(item, next);
+        Invalidate();
     }
 
     void UpdateHeightFromCapsuleTouch(float ty) {

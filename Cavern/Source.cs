@@ -1,8 +1,9 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
+using Cavern.Spatial;
 using Cavern.Utilities;
 using Cavern.Virtualizer;
 using Cavern.Waveforms;
@@ -29,6 +30,16 @@ namespace Cavern {
         /// Distance simulator for virtualization.
         /// </summary>
         Distancer distancer;
+
+        /// <summary>
+        /// Pure-physics ISO 9613-1 atmospheric air absorption filter (lazy-allocated only when physical distance exceeds 5 m).
+        /// </summary>
+        AirAbsorptionFilter airAbsorptionFilter;
+
+        /// <summary>
+        /// Pure-physics 6DoF acoustic propagation delay line (343 m/s, lazy-allocated when enabled).
+        /// </summary>
+        AcousticPropagationDelayLine propagationDelayLine;
 
         /// <summary>
         /// <see cref="PitchedUpdateRate"/> without resampling.
@@ -219,8 +230,43 @@ namespace Cavern {
                     // Apply filter if set
                     SpatialFilter?.Process(samples);
 
-                    // Distance simulation for HRTF
-                    if (DistanceSimulation && Listener.HeadphoneVirtualizer) {
+                    // Pure-physics ISO 9613-1 atmospheric air absorption for physical source distances > 5.0 m (unity bypass <= 5.0 m)
+                    if (AirAbsorptionFilter.GlobalEnabled && !LFE) {
+                        Vector3 physDelta = (position - listener.Position) * Listener.EnvironmentSizeInverse * AirAbsorptionFilter.PhysicalRoomHalfSize;
+                        float physicalDist = physDelta.Length();
+                        if (physicalDist > AirAbsorptionFilter.DirectPathThresholdMeters) {
+                            if (airAbsorptionFilter == null) {
+                                airAbsorptionFilter = new AirAbsorptionFilter();
+                            }
+                            airAbsorptionFilter.ConfigureDirectPath(
+                                physicalDist,
+                                listener.SampleRate,
+                                AirAbsorptionFilter.GlobalTemperatureCelsius,
+                                AirAbsorptionFilter.GlobalRelativeHumidityPct);
+                            airAbsorptionFilter.Process(samples, 0, samples.Length);
+                        } else if (airAbsorptionFilter != null && airAbsorptionFilter.IsActive) {
+                            airAbsorptionFilter.ConfigureDirectPath(
+                                0f,
+                                listener.SampleRate,
+                                AirAbsorptionFilter.GlobalTemperatureCelsius,
+                                AirAbsorptionFilter.GlobalRelativeHumidityPct);
+                        }
+                    }
+
+                    // Pure-physics 6DoF acoustic time-of-flight propagation delay at 343 m/s (skip on dedicated LFE)
+                    if (AcousticPropagationDelayLine.GlobalEnabled && !LFE) {
+                        if (propagationDelayLine == null) {
+                            propagationDelayLine = new AcousticPropagationDelayLine();
+                        }
+                        Vector3 propDelta = (position - listener.Position) * Listener.EnvironmentSizeInverse * AirAbsorptionFilter.PhysicalRoomHalfSize;
+                        float propDistMeters = propDelta.Length();
+                        propagationDelayLine.ProcessInPlace(samples, 0, samples.Length, propDistMeters, listener.SampleRate);
+                    } else if (propagationDelayLine != null && propagationDelayLine.ActiveDelayMs > 0f) {
+                        propagationDelayLine.Reset();
+                    }
+
+                    // Distance simulation for HRTF (skip on dedicated LFE subwoofer sources)
+                    if (DistanceSimulation && Listener.HeadphoneVirtualizer && !LFE) {
                         distancer ??= new Distancer(this) {
                             trueGain = false
                         };

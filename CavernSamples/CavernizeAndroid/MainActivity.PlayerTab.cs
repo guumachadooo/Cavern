@@ -5,9 +5,12 @@ using Android.Views;
 using Android.Widget;
 
 using Cavern;
+using Cavern.Spatial;
 using Cavern.Utilities;
+using Cavern.VocalChain;
 
 using Cavernize.Logic.Models;
+using Cavernize.Logic.Spatial;
 using CavernizeAndroid.Theme;
 using CavernizeAndroid.Views;
 
@@ -29,10 +32,46 @@ public partial class MainActivity {
     OneUiIconView roomTransportPlayIcon;
     LinearLayout roomTransportLoopBtn;
     OneUiIconView roomTransportLoopIcon;
+    sealed class MixerRowRef {
+        public TrackSourceItem Item;
+        public LinearLayout Row;
+        public TextView SubTv;
+        public Button SoloBtn;
+        public Button MuteBtn;
+        public bool LastSoloVisual;
+        public bool LastMuteVisual;
+    }
+
     OneUiInlineSelector rolloffSelector;
     LinearLayout mixerContainer;
-    Button filterAllBtn, filter3DBtn, filterHeightBtn, filterBedsBtn;
+    readonly List<MixerRowRef> mixerRowRefs = [];
+    readonly Dictionary<int, long> ceilingActiveSinceMs = [];
+    readonly Dictionary<int, long> ceilingPinUntilMs = [];
+    long lastMixerReorderMs;
+    bool pendingMixerReorder;
+    bool roomScrollMixerHooked;
+    const long CeilingPromoteHoldMs = 350;
+    const long CeilingPinHoldMs = 1500;
+    const long MixerReorderCooldownMs = 450;
+
+    LinearLayout bentoRow1;
+    bool? lastDistTileVisible;
+    TextView roomBinauralProfileText;
+    Button filterAllBtn, filter3DBtn, filterStemsMicBtn, filterHeightBtn, filterBedsBtn;
+    Button roomNeuralPrepBtn;
+    TextView roomNeuralStatusText;
     bool isUserSeeking;
+
+    // W13 Studio Spatial X-Ray Inspector HUD views
+    LinearLayout xrayInspectorBody;
+    Button xrayInspectorToggleBtn;
+    TextView xraySoundfieldMetricsTv;
+    TextView xrayLgsrMetricsTv;
+    TextView xrayVocalMetricsTv;
+    Button xrayLgsrBypassBtn;
+    Button xrayVocalBypassBtn;
+    Switch xrayOverlaySwitch;
+    Button[] xrayBandBtns;
 
     Action refreshBentoTilesUi;
 
@@ -81,7 +120,9 @@ public partial class MainActivity {
         roomCard.AddView(hintTv);
 
         roomView = new RoomSimulatorView(this) {
-            IsPositionLocked = store.RoomPositionLocked
+            IsPositionLocked = store.RoomPositionLocked,
+            IsXRayEnabled = store.RoomXRayOverlayEnabled,
+            XRayBandMode = (SpatialXRayBandMode)Math.Clamp(store.RoomXRayBandMode, 0, 3)
         };
         UpdateRoomLockButtonUi();
         roomView.ListenerPositionChanged += pos => {
@@ -95,9 +136,29 @@ public partial class MainActivity {
             UpdateRoomTelemetryText();
         };
         roomView.SourceSoloToggled += _ => {
-            RefreshPlayerSourcesList();
+            SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
             RefreshFilterButtonsUi();
             refreshBentoTilesUi?.Invoke();
+        };
+        roomView.SourcePositionDragged += (item, normPos) => {
+            playerEngine.SetSourceCustomPosition(item, normPos);
+            UpdateMixerRowsLive();
+        };
+        roomView.SourcePositionResetRequested += item => {
+            playerEngine.ClearSourceCustomPosition(item);
+            UpdateRoomCanvas();
+        };
+        roomView.XRayToggled += enabled => {
+            store.RoomXRayOverlayEnabled = enabled;
+            if (xrayOverlaySwitch != null && xrayOverlaySwitch.Checked != enabled) {
+                xrayOverlaySwitch.Checked = enabled;
+            }
+            UpdateRoomCanvas();
+        };
+        roomView.XRayBandModeChanged += band => {
+            store.RoomXRayBandMode = (int)band;
+            playerEngine.SceneHub.ActiveXRayBandMode = band;
+            RefreshXRayBandButtonsUi();
         };
         roomCard.AddView(roomView);
 
@@ -143,6 +204,7 @@ public partial class MainActivity {
         Button resetRoomBtn = PillButton(S["RoomResetAll"], () => {
             playerEngine.ListenerPosition = Vector3.Zero;
             playerEngine.ListenerRotation = Vector3.Zero;
+            headTrackingManager?.Recenter();
             SyncRoomSlidersFromEngine();
             UpdateRoomCanvas();
         });
@@ -185,6 +247,9 @@ public partial class MainActivity {
         }, "°", defaultValue: 0);
         roomCard.AddView(fineTuneContainer);
         page.AddView(roomCard);
+
+        // 1B. W13 Studio Spatial X-Ray Inspector Card (Native One UI 9 Collapsible HUD)
+        page.AddView(BuildSpatialXRayInspectorCard());
 
         // 2. Transport Card featuring One UI 9 WaveSeekbar
         LinearLayout transportCard = Card(S["TimelineLabel"], OneUiIconType.Play, OneUiTheme.IconSliderMedia);
@@ -256,7 +321,7 @@ public partial class MainActivity {
         // 3. One UI 9 Quick Spatial Panel Card (1x2 Bento Toggles + Fat Dynamic Capsules + In-App Rolloff Selector)
         LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.IconAtmosUpmix);
 
-        LinearLayout bentoRow1 = HRow();
+        bentoRow1 = HRow();
         bentoRow1.SetPadding(0, 0, 0, Dp(10));
 
         var tileHrtf = CreateBentoToggle(
@@ -266,19 +331,17 @@ public partial class MainActivity {
                 bool next = !store.HeadphoneVirtualizer;
                 store.HeadphoneVirtualizer = next;
                 playerEngine.HeadphoneVirtualizer = next;
+                RefreshBinauralProfileUi();
                 RefreshMusicPlayerControlsUi();
             },
             OneUiTheme.IconSpatial,
             helpBody: S["TipHrtf"]);
 
-        var tileDist = CreateBentoToggle(
+        var tileDist = CreateBentoActionTile(
             OneUiIconType.Distance, S["BentoDist"],
-            () => store.DistanceSimulation,
-            () => {
-                bool next = !store.DistanceSimulation;
-                store.DistanceSimulation = next;
-                playerEngine.DistanceSimulation = next;
-            },
+            () => Services.BinauralProfileService.GetActiveDistanceShortText(store, S),
+            () => store.HeadphoneVirtualizer,
+            CycleThKolnDistance,
             OneUiTheme.IconSliderMedia,
             helpBody: S["TipDistSim"]);
 
@@ -287,9 +350,52 @@ public partial class MainActivity {
 
         quickCard.AddView(bentoRow1);
 
+        LinearLayout roomProfRow = HRow();
+        roomProfRow.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
+        roomProfRow.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
+        OneUiTheme.AttachRecoil(roomProfRow, 0.98f);
+        roomProfRow.AddView(new OneUiIconView(this, OneUiIconType.Headphones, OneUiTheme.IconSpatial),
+            new LinearLayout.LayoutParams(Dp(17), Dp(17)) { RightMargin = Dp(8) });
+        roomBinauralProfileText = Label(Services.BinauralProfileService.GetActiveDisplayTitle(store, S), 12.5f, ColText);
+        roomBinauralProfileText.SetIncludeFontPadding(false);
+        roomBinauralProfileText.Typeface = OneUiTheme.GetAppleFontMedium(this);
+        roomBinauralProfileText.SetSingleLine(true);
+        roomBinauralProfileText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        roomProfRow.AddView(roomBinauralProfileText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        roomProfRow.AddView(new OneUiIconView(this, OneUiIconType.ChevronDown, OneUiTheme.TextSub), new LinearLayout.LayoutParams(Dp(15), Dp(15)));
+        roomProfRow.Click += (_, _) => ShowBinauralProfileSelectorDialog();
+        quickCard.AddView(roomProfRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
+
         refreshBentoTilesUi = () => {
+            bool showDist = Services.BinauralProfileService.HasVariableDistance(store);
+            if (lastDistTileVisible.HasValue && lastDistTileVisible.Value != showDist && bentoRow1 != null && bentoRow1.IsLaidOut) {
+                try {
+                    Android.Transitions.TransitionSet ts = new();
+                    ts.SetOrdering(Android.Transitions.TransitionOrdering.Together);
+                    Android.Transitions.ChangeBounds cb = new();
+                    cb.SetDuration(280);
+                    Android.Transitions.Fade fd = new();
+                    fd.SetDuration(200);
+                    ts.AddTransition(cb);
+                    ts.AddTransition(fd);
+                    ts.SetInterpolator(CreateOneUiEase());
+                    Android.Transitions.TransitionManager.BeginDelayedTransition(bentoRow1, ts);
+                } catch { }
+            }
+            lastDistTileVisible = showDist;
+
+            tileDist.view.Visibility = showDist ? ViewStates.Visible : ViewStates.Gone;
+            if (tileHrtf.view.LayoutParameters is LinearLayout.LayoutParams hlp) {
+                int targetRight = showDist ? Dp(8) : 0;
+                if (hlp.RightMargin != targetRight) {
+                    hlp.RightMargin = targetRight;
+                    tileHrtf.view.LayoutParameters = hlp;
+                }
+            }
             tileHrtf.refresh();
-            tileDist.refresh();
+            if (showDist) {
+                tileDist.refresh();
+            }
         };
         refreshBentoTilesUi();
 
@@ -323,26 +429,46 @@ public partial class MainActivity {
             store.MuteBed = flag;
             playerEngine.MuteBed = flag;
         }));
-        filterHeightBtn = FilterBtn(S["FilterHeightOnly"], () => ToggleCategorySolo(item => item.NormalizedPosition.Y > 0.15f, flag => {
-            store.MuteGround = flag;
-            playerEngine.MuteGround = flag;
-        }));
+        filterStemsMicBtn = FilterBtn(S["FilterStemsMicOnly"], () => ToggleCategorySolo(
+            item => item.Layer == SourceLayer.NeuralStem || item.Layer == SourceLayer.RestoredResidual || item.Layer == SourceLayer.LiveMicrophone,
+            _ => { }));
+        filterHeightBtn = FilterBtn(S["FilterHeightOnly"], ToggleDynamicCeilingFilter);
         filterBedsBtn = FilterBtn(S["FilterBedsOnly"], () => ToggleCategorySolo(item => item.IsBed, flag => {
             playerEngine.OnlyBeds = flag;
         }));
         filterRow.AddView(filterAllBtn);
         filterRow.AddView(filter3DBtn);
+        filterRow.AddView(filterStemsMicBtn);
         filterRow.AddView(filterHeightBtn);
         filterRow.AddView(filterBedsBtn);
         filterScroll.AddView(filterRow);
         mixerCard.AddView(filterScroll);
 
+        // W18 Live Neural 3D Stems / Karaoke Prep bar (non-blocking background ONNX + Slot 7B cache)
+        LinearLayout neuralPrepRow = HRow();
+        neuralPrepRow.SetGravity(GravityFlags.CenterVertical);
+        neuralPrepRow.SetPadding(0, Dp(8), 0, Dp(2));
+        roomNeuralStatusText = Label("", 11.2f, OneUiTheme.TextSub);
+        roomNeuralStatusText.SetSingleLine(true);
+        roomNeuralStatusText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        neuralPrepRow.AddView(roomNeuralStatusText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+
+        roomNeuralPrepBtn = PillButton(S["NeuralPrep3DBtn"], () =>
+            PrepareActiveTrackNeuralStemsAsync(NeuralPipelineGoal.StemSeparation));
+        roomNeuralPrepBtn.TextSize = 11.2f;
+        roomNeuralPrepBtn.SetSingleLine(true);
+        roomNeuralPrepBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        roomNeuralPrepBtn.SetPadding(Dp(12), Dp(6), Dp(12), Dp(6));
+        neuralPrepRow.AddView(roomNeuralPrepBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        mixerCard.AddView(neuralPrepRow);
+
         mixerContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
-        mixerContainer.SetPadding(0, Dp(8), 0, 0);
+        mixerContainer.SetPadding(0, Dp(6), 0, 0);
         mixerCard.AddView(mixerContainer);
         page.AddView(mixerCard);
 
         RefreshFilterButtonsUi();
+        RefreshNeuralPrepUi();
         return page;
     }
 
@@ -399,6 +525,72 @@ public partial class MainActivity {
         return (tile, Refresh);
     }
 
+    (LinearLayout view, Action refresh) CreateBentoActionTile(
+        OneUiIconType iconType,
+        string title,
+        Func<string> getSubtitle,
+        Func<bool> getActive,
+        Action onClick,
+        Color activeColor,
+        string helpBody = null) {
+        LinearLayout tile = HRow();
+        tile.SetMinimumHeight(Dp(62));
+        tile.SetPadding(Dp(12), Dp(10), Dp(8), Dp(10));
+        OneUiTheme.AttachRecoil(tile, 0.95f);
+
+        OneUiIconBadge badge = OneUiTheme.CreateVectorIconBadge(this, iconType, activeColor, 34);
+        LinearLayout col = new(this) { Orientation = Orientation.Vertical };
+        TextView titleTv = Label(title, 12.5f, ColText);
+        titleTv.SetIncludeFontPadding(false);
+        titleTv.SetTypeface(null, TypefaceStyle.Bold);
+        titleTv.SetSingleLine(true);
+        titleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        TextView stateTv = Label("", 10.8f, OneUiTheme.TextSub);
+        stateTv.SetSingleLine(true);
+        stateTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        col.AddView(titleTv);
+        col.AddView(stateTv);
+
+        tile.AddView(badge, new LinearLayout.LayoutParams(Dp(34), Dp(34)) { RightMargin = Dp(9) });
+        tile.AddView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        if (!string.IsNullOrEmpty(helpBody)) {
+            tile.AddView(CreateInlineHelpBtn(title, helpBody), new LinearLayout.LayoutParams(Dp(24), Dp(24)) { LeftMargin = Dp(4) });
+        }
+
+        void Refresh() {
+            bool on = getActive();
+            Color tileTint = on
+                ? Color.Argb(78, activeColor.R, activeColor.G, activeColor.B)
+                : OneUiTheme.SurfaceSubTile;
+            tile.Background = OneUiTheme.CreateGlassCardDrawable(
+                this,
+                tileTint,
+                OneUiTheme.TileCornerDp,
+                on ? OneUiTheme.WithAlpha(activeColor, 175) : null);
+            badge.UpdateColors(on ? activeColor : OneUiTheme.ControlStroke, ColText, solidOverride: on);
+            string nextSub = getSubtitle();
+            bool textChanged = !string.IsNullOrEmpty(stateTv.Text) && !string.Equals(stateTv.Text, nextSub, StringComparison.Ordinal);
+            stateTv.Text = nextSub;
+            stateTv.SetTextColor(on ? ColText : OneUiTheme.TextMuted);
+            if (textChanged && tile.IsLaidOut) {
+                stateTv.Animate()?.Cancel();
+                stateTv.Alpha = 0.35f;
+                stateTv.TranslationY = Dp(3);
+                stateTv.Animate()
+                    .Alpha(1f)
+                    .TranslationY(0f)
+                    .SetDuration(190)
+                    .SetInterpolator(CreateOneUiEase())
+                    .Start();
+            }
+        }
+
+        tile.Click += (_, _) => onClick?.Invoke();
+        Refresh();
+        return (tile, Refresh);
+    }
+
     Button FilterBtn(string text, Action onClick) {
         Button b = PillButton(text, onClick);
         b.TextSize = 12f;
@@ -412,16 +604,50 @@ public partial class MainActivity {
 
     void ClearAllSoloFilters() {
         playerEngine?.ClearSoloMute();
+        if (playerEngine != null) {
+            playerEngine.DynamicCeilingOnly = false;
+        }
+        ceilingActiveSinceMs.Clear();
+        ceilingPinUntilMs.Clear();
+        pendingMixerReorder = false;
         foreach (TrackSourceItem item in trackSourceItems) {
             item.IsSolo = false;
             item.IsMuted = false;
+            item.IsDynamicallyFilteredOut = false;
         }
         store.MuteBed = false;
         store.MuteGround = false;
         playerEngine.MuteBed = false;
         playerEngine.MuteGround = false;
         playerEngine.OnlyBeds = false;
-        RefreshPlayerSourcesList();
+        SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
+        RefreshFilterButtonsUi();
+        refreshBentoTilesUi?.Invoke();
+        RefreshSettingsTabButtons();
+        UpdateRoomCanvas();
+    }
+
+    void ToggleDynamicCeilingFilter() {
+        if (playerEngine == null) {
+            return;
+        }
+        bool next = !playerEngine.DynamicCeilingOnly;
+        ceilingActiveSinceMs.Clear();
+        ceilingPinUntilMs.Clear();
+        pendingMixerReorder = false;
+        store.MuteBed = false;
+        store.MuteGround = false;
+        playerEngine.MuteBed = false;
+        playerEngine.MuteGround = false;
+        playerEngine.OnlyBeds = false;
+        for (int i = 0; i < trackSourceItems.Count; i++) {
+            trackSourceItems[i].IsSolo = false;
+            if (!next) {
+                trackSourceItems[i].IsDynamicallyFilteredOut = false;
+            }
+        }
+        playerEngine.DynamicCeilingOnly = next;
+        SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
         RefreshFilterButtonsUi();
         refreshBentoTilesUi?.Invoke();
         RefreshSettingsTabButtons();
@@ -446,6 +672,12 @@ public partial class MainActivity {
     }
 
     void ToggleCategorySolo(Func<TrackSourceItem, bool> predicate, Action<bool> fallbackWhenNoTrack) {
+        if (playerEngine != null) {
+            playerEngine.DynamicCeilingOnly = false;
+        }
+        ceilingActiveSinceMs.Clear();
+        ceilingPinUntilMs.Clear();
+        pendingMixerReorder = false;
         if (trackSourceItems == null || trackSourceItems.Count == 0) {
             fallbackWhenNoTrack?.Invoke(true);
             refreshBentoTilesUi?.Invoke();
@@ -466,22 +698,24 @@ public partial class MainActivity {
         if (alreadyActive) {
             for (int i = 0; i < trackSourceItems.Count; i++) {
                 trackSourceItems[i].IsSolo = false;
+                trackSourceItems[i].IsDynamicallyFilteredOut = false;
             }
         } else {
             int matchedCount = 0;
             for (int i = 0; i < trackSourceItems.Count; i++) {
                 bool m = predicate(trackSourceItems[i]);
                 trackSourceItems[i].IsSolo = m;
+                trackSourceItems[i].IsDynamicallyFilteredOut = false;
                 if (m) {
                     matchedCount++;
                 }
             }
             if (matchedCount == 0) {
-                Toast.MakeText(this, "Nenhum item nesta categoria na faixa atual.", ToastLength.Short).Show();
+                Toast.MakeText(this, S["FilterNoMatchToast"], ToastLength.Short).Show();
             }
         }
 
-        RefreshPlayerSourcesList();
+        SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
         RefreshFilterButtonsUi();
         refreshBentoTilesUi?.Invoke();
         RefreshSettingsTabButtons();
@@ -489,10 +723,12 @@ public partial class MainActivity {
     }
 
     void RefreshFilterButtonsUi() {
-        bool solo3D = IsCategorySoloActive(item => item.IsDynamicObject);
-        bool soloH = IsCategorySoloActive(item => item.NormalizedPosition.Y > 0.15f);
-        bool soloBeds = IsCategorySoloActive(item => item.IsBed);
-        bool noneActive = !solo3D && !soloH && !soloBeds && !trackSourceItems.Any(x => x.IsSolo);
+        bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
+        bool solo3D = !dynCeil && IsCategorySoloActive(item => item.IsDynamicObject);
+        bool soloStemsMic = !dynCeil && IsCategorySoloActive(item =>
+            item.Layer == SourceLayer.NeuralStem || item.Layer == SourceLayer.RestoredResidual || item.Layer == SourceLayer.LiveMicrophone);
+        bool soloBeds = !dynCeil && IsCategorySoloActive(item => item.IsBed);
+        bool noneActive = !dynCeil && !solo3D && !soloStemsMic && !soloBeds && !trackSourceItems.Any(x => x.IsSolo);
 
         void Style(Button b, bool active, Color accent) {
             if (b == null) return;
@@ -504,8 +740,283 @@ public partial class MainActivity {
 
         Style(filterAllBtn, noneActive, OneUiTheme.IconSpatial);
         Style(filter3DBtn, solo3D, OneUiTheme.IconAtmosUpmix);
-        Style(filterHeightBtn, soloH, OneUiTheme.IconStemsCalib);
+        Style(filterStemsMicBtn, soloStemsMic, OneUiTheme.IconSliderMedia);
+        Style(filterHeightBtn, dynCeil, OneUiTheme.IconStemsCalib);
         Style(filterBedsBtn, soloBeds, OneUiTheme.IconStudioExport);
+    }
+
+    void RefreshNeuralPrepUi() {
+        if (uiDestroyed) {
+            return;
+        }
+        bool hasStems = playerEngine?.NeuralStemStage?.HasPlayableSeparatedStems == true;
+        bool live3D = playerEngine?.IsLiveNeuralStemPlaybackActive == true;
+        int stemCount = playerEngine?.NeuralStemStage?.ActiveSeparatedTrack?.Stems?.Count ?? 0;
+
+        if (musicLyricsAiPrepBtn != null) {
+            if (isNeuralPrepRunning) {
+                musicLyricsAiPrepBtn.Text = string.Format(S["NeuralPrepBusyFmt"], neuralPrepProgress);
+                musicLyricsAiPrepBtn.Background = OneUiTheme.CreateRoundedDrawable(
+                    this, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 82), 99f, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 185), 1f);
+            } else if (hasStems) {
+                musicLyricsAiPrepBtn.Text = S["NeuralPrepReadyBadge"];
+                musicLyricsAiPrepBtn.Background = OneUiTheme.CreateRoundedDrawable(
+                    this, OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 72), 99f, OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 175), 1f);
+            } else {
+                musicLyricsAiPrepBtn.Text = S["NeuralPrepBtn"];
+                musicLyricsAiPrepBtn.Background = OneUiTheme.CreateRoundedDrawable(
+                    this, Color.Argb(36, 255, 255, 255), 99f, Color.Argb(54, 255, 255, 255), 0.9f);
+            }
+        }
+        if (musicLyricsAiStatusText != null) {
+            if (isNeuralPrepRunning && !string.IsNullOrEmpty(neuralPrepStatusText)) {
+                musicLyricsAiStatusText.Text = $"{string.Format(S["NeuralPrepBusyFmt"], neuralPrepProgress)} · {neuralPrepStatusText}";
+                musicLyricsAiStatusText.SetTextColor(OneUiTheme.FunctionalOrange);
+                musicLyricsAiStatusText.Visibility = ViewStates.Visible;
+            } else if (store != null && store.LiveMicEnabled && playerEngine?.VocalMixMatchStage != null) {
+                VocalMixDnaProfile dna = playerEngine.VocalMixMatchStage.ActiveDna;
+                string vpTag = playerEngine.VocalMixMatchStage.HasMicVoiceprint
+                    ? S["VocalSingDockVpOn"]
+                    : S["VocalSingDockVpOff"];
+                if (dna.IsExtractedFromSong) {
+                    string drrTag = dna.HasMeasuredDereverb && float.IsFinite(dna.MeasuredDrrDb)
+                        ? string.Format(S["VocalDnaDrrTagFmt"], dna.MeasuredDrrDb)
+                        : string.Empty;
+                    musicLyricsAiStatusText.Text = string.Format(
+                        S["VocalSingDockDnaReadyFmt"],
+                        dna.ReverbRt60Sec,
+                        drrTag,
+                        vpTag);
+                    musicLyricsAiStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
+                } else {
+                    musicLyricsAiStatusText.Text = string.Format(S["VocalSingDockNeutralFmt"], vpTag);
+                    musicLyricsAiStatusText.SetTextColor(OneUiTheme.TextSub);
+                }
+                musicLyricsAiStatusText.Visibility = ViewStates.Visible;
+            } else {
+                musicLyricsAiStatusText.Visibility = ViewStates.Gone;
+            }
+        }
+
+        if (roomNeuralPrepBtn != null) {
+            if (isNeuralPrepRunning) {
+                roomNeuralPrepBtn.Text = S["NeuralPrepCancelBtn"];
+                roomNeuralPrepBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, OneUiTheme.FunctionalOrange, OneUiTheme.PillCornerDp);
+            } else if (hasStems) {
+                roomNeuralPrepBtn.Text = S["NeuralPrepReadyBadge"];
+                roomNeuralPrepBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, OneUiTheme.FunctionalGreen, OneUiTheme.PillCornerDp);
+            } else {
+                roomNeuralPrepBtn.Text = S["NeuralPrep3DBtn"];
+                roomNeuralPrepBtn.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            }
+        }
+        if (roomNeuralStatusText != null) {
+            if (isNeuralPrepRunning) {
+                roomNeuralStatusText.Text = $"{string.Format(S["NeuralPrepBusyFmt"], neuralPrepProgress)} · {neuralPrepStatusText}";
+                roomNeuralStatusText.SetTextColor(OneUiTheme.FunctionalOrange);
+            } else if (live3D) {
+                string modeLabel = store.NeuralSpatialUpmixModeIndex == 2 ? S["NeuralUpmixHybrid714"] : S["NeuralUpmixStems3D"];
+                roomNeuralStatusText.Text = string.Format(S["NeuralLiveStemsActiveFmt"], stemCount, modeLabel);
+                roomNeuralStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
+            } else if (hasStems) {
+                roomNeuralStatusText.Text = $"{S["NeuralPrepReadyBadge"]} ({stemCount})";
+                roomNeuralStatusText.SetTextColor(OneUiTheme.IconSliderMedia);
+            } else {
+                Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator?.BuildPlan(
+                    NeuralPipelineGoal.StemSeparation, store.BuildNeuralAudioConfig());
+                roomNeuralStatusText.Text = plan != null && plan.IsRunnable ? plan.Summary : S["NeuralRuntimeNotInstalled"];
+                roomNeuralStatusText.SetTextColor(OneUiTheme.TextSub);
+            }
+        }
+    }
+
+    LinearLayout BuildSpatialXRayInspectorCard() {
+        LinearLayout card = Card();
+
+        LinearLayout hdr = HRow();
+        hdr.SetPadding(0, 0, 0, Dp(4));
+        hdr.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Sliders, OneUiTheme.IconStemsCalib, 30));
+        TextView titleTv = SectionTitle(S["XRayInspectorTitle"]);
+        titleTv.SetSingleLine(true);
+        titleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        titleTv.SetPadding(Dp(8), 0, Dp(8), 0);
+        hdr.AddView(titleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        bool expanded = store.RoomXRayInspectorExpanded;
+        xrayInspectorToggleBtn = PillButton(expanded ? S["XRayInspectorHideBtn"] : S["XRayInspectorShowBtn"], () => {
+            bool next = !store.RoomXRayInspectorExpanded;
+            store.RoomXRayInspectorExpanded = next;
+            SetExpandedWithAnimation(xrayInspectorBody, next);
+            xrayInspectorToggleBtn.Text = next ? S["XRayInspectorHideBtn"] : S["XRayInspectorShowBtn"];
+            if (next) {
+                RefreshSpatialXRayHud();
+            }
+        });
+        xrayInspectorToggleBtn.TextSize = 11.2f;
+        xrayInspectorToggleBtn.SetPadding(Dp(12), Dp(6), Dp(12), Dp(6));
+        xrayInspectorToggleBtn.SetMinimumHeight(Dp(34));
+        hdr.AddView(xrayInspectorToggleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        card.AddView(hdr);
+
+        xrayInspectorBody = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = expanded ? ViewStates.Visible : ViewStates.Gone
+        };
+        xrayInspectorBody.SetPadding(0, Dp(6), 0, 0);
+
+        // Controls: 3D Heatmap Overlay + 6DoF Acoustic Propagation Delay (343 m/s)
+        xrayOverlaySwitch = AddSwitchRow(xrayInspectorBody, S["XRayOverlayToggle"], store.RoomXRayOverlayEnabled, on => {
+            store.RoomXRayOverlayEnabled = on;
+            if (roomView != null) {
+                roomView.IsXRayEnabled = on;
+                roomView.Invalidate();
+            }
+            UpdateRoomCanvas();
+        });
+
+        // 3-Band Spectral Selector Row (All / Low / Mid / High)
+        HorizontalScrollView bandScroll = new(this) { HorizontalScrollBarEnabled = false };
+        LinearLayout bandRow = HRow();
+        bandRow.SetPadding(0, Dp(4), 0, Dp(8));
+        string[] bandLabels = [S["XRayBandAll"], S["XRayBandLow"], S["XRayBandMid"], S["XRayBandHigh"]];
+        xrayBandBtns = new Button[4];
+        for (int b = 0; b < 4; b++) {
+            int idx = b;
+            Button btn = FilterBtn(bandLabels[b], () => {
+                store.RoomXRayBandMode = idx;
+                SpatialXRayBandMode mode = (SpatialXRayBandMode)idx;
+                playerEngine.SceneHub.ActiveXRayBandMode = mode;
+                if (roomView != null) {
+                    roomView.XRayBandMode = mode;
+                    roomView.Invalidate();
+                }
+                RefreshXRayBandButtonsUi();
+            });
+            xrayBandBtns[b] = btn;
+            bandRow.AddView(btn);
+        }
+        bandScroll.AddView(bandRow);
+        xrayInspectorBody.AddView(bandScroll);
+        RefreshXRayBandButtonsUi();
+
+        AddSwitchRow(xrayInspectorBody, S["XRayPropDelay6DoF"], store.PropagationDelay6DoFEnabled, on => {
+            store.PropagationDelay6DoFEnabled = on;
+            playerEngine.PropagationDelay6DoFEnabled = on;
+            UpdateRoomCanvas();
+        });
+
+        // Instant A/B Bypass & Reset Object Pins Action Row
+        LinearLayout actionRow = HRow();
+        actionRow.SetPadding(0, Dp(4), 0, Dp(8));
+        xrayLgsrBypassBtn = PillButton(S["XRayLgsrBypassBtn"], () => {
+            playerEngine.LgsrBypassed = !playerEngine.LgsrBypassed;
+            RefreshSpatialXRayHud();
+            RefreshLgsrUi();
+        });
+        xrayVocalBypassBtn = PillButton(S["XRayVocalBypassBtn"], () => {
+            playerEngine.VocalChainBypassed = !playerEngine.VocalChainBypassed;
+            RefreshSpatialXRayHud();
+            RefreshLyricsSingDockUi();
+        });
+        Button resetPinsBtn = PillButton(S["XRayResetPinsBtn"], () => {
+            playerEngine.ResetAllCustomPositions();
+            UpdateRoomCanvas();
+            Toast.MakeText(this, S["XRayPinsResetToast"], ToastLength.Short).Show();
+        });
+        xrayLgsrBypassBtn.TextSize = 11.2f;
+        xrayVocalBypassBtn.TextSize = 11.2f;
+        resetPinsBtn.TextSize = 11.2f;
+        actionRow.AddView(xrayLgsrBypassBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        actionRow.AddView(xrayVocalBypassBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        actionRow.AddView(resetPinsBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f));
+        xrayInspectorBody.AddView(actionRow);
+
+        // Live Acoustic Telemetry Sub-Tiles
+        LinearLayout AddXRaySubTile(string headerText, out TextView metricsOut) {
+            LinearLayout tile = new(this) { Orientation = Orientation.Vertical };
+            tile.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
+            tile.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
+            TextView hTv = Label(headerText, 11.2f, OneUiTheme.PrimaryHigh);
+            hTv.SetTypeface(null, TypefaceStyle.Bold);
+            hTv.SetSingleLine(true);
+            hTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+            metricsOut = Label("—", 11.5f, OneUiTheme.TextSecondary);
+            metricsOut.SetPadding(0, Dp(3), 0, 0);
+            tile.AddView(hTv);
+            tile.AddView(metricsOut);
+            xrayInspectorBody.AddView(tile, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(7)
+            });
+            return tile;
+        }
+
+        AddXRaySubTile(S["XRaySectionSoundfield"], out xraySoundfieldMetricsTv);
+        AddXRaySubTile(S["XRaySectionLgsr"], out xrayLgsrMetricsTv);
+        AddXRaySubTile(S["XRaySectionVocal"], out xrayVocalMetricsTv);
+
+        card.AddView(xrayInspectorBody);
+        RefreshSpatialXRayHud();
+        return card;
+    }
+
+    void RefreshXRayBandButtonsUi() {
+        if (xrayBandBtns == null) return;
+        int active = Math.Clamp(store.RoomXRayBandMode, 0, 3);
+        Color[] accents = [OneUiTheme.IconSpatial, OneUiTheme.IconAtmosUpmix, OneUiTheme.IconSliderMedia, OneUiTheme.IconStemsCalib];
+        for (int i = 0; i < xrayBandBtns.Length; i++) {
+            Button b = xrayBandBtns[i];
+            if (b == null) continue;
+            bool on = i == active;
+            b.Background = on
+                ? OneUiTheme.CreateRippleRoundedDrawable(this, accents[i], OneUiTheme.PillCornerDp)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            b.SetTypeface(null, on ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+        }
+    }
+
+    void RefreshSpatialXRayHud() {
+        if (playerEngine == null || xraySoundfieldMetricsTv == null) {
+            return;
+        }
+        SoundfieldTelemetry tel = playerEngine.SceneHub.Telemetry;
+        LoudnessStandardsDiagnostics loud = playerEngine.LoudnessDiagnostics;
+        LgsrDiagnostics lgsr = playerEngine.LgsrDiagnostics;
+        VocalChainTelemetry vocal = playerEngine.SceneHub.VocalChainDiagnostics;
+        SpatialProgramMetadata meta = playerEngine.SceneHub.ProgramMetadata;
+
+        float cohPct = Math.Clamp(tel.Coherence * 100f, 0f, 100f);
+        float diffPct = Math.Clamp(tel.Diffuseness * 100f, 0f, 100f);
+        string mLufs = loud.MomentaryLufs > -110f ? $"{loud.MomentaryLufs:0.1}" : "--";
+        string iLufs = loud.IntegratedLufs > -110f ? $"{loud.IntegratedLufs:0.1}" : "--";
+        string tpStr = loud.TruePeakDbtp > -110f ? $"{loud.TruePeakDbtp:0.1}" : "--";
+        xraySoundfieldMetricsTv.Text =
+            $"Coh {cohPct:0}% · Diff {diffPct:0}% · M {mLufs} / I {iLufs} LUFS · {tpStr} dBTP · LRA {loud.LoudnessRangeLu:0.1} LU · GR -{MathF.Abs(loud.LimiterGainReductionDb):0.1} dB";
+
+        float cplHz = lgsr.CouplingStartHz > 0f ? lgsr.CouplingStartHz : meta.CouplingStartHz;
+        float spxHz = lgsr.SpxStartHz > 0f ? lgsr.SpxStartHz : meta.SpxStartHz;
+        string lgsrState = playerEngine.LgsrBypassed ? S["XRayBypassActive"] : (lgsr.IsActivePreHrtf ? S["XRayActiveLive"] : lgsr.State.ToString());
+        xrayLgsrMetricsTv.Text =
+            $"[{lgsrState}] Cpl {cplHz:0} Hz · SPX {spxHz:0} Hz · GCC-PHAT {lgsr.SyncOffsetSamples:+0.00;-0.00;0.00} smp ({lgsr.DriftPpm:+0.0;-0.0;0.0} ppm) · FLAC Fusion {lgsr.ActiveFusionRatio * 100f:0}%";
+
+        string vocState = playerEngine.VocalChainBypassed ? S["XRayBypassActive"] : (tel.IsLiveMicActive ? S["XRayActiveLive"] : "STANDBY");
+        float compGr = MathF.Abs(vocal.CompressorReductionDb);
+        xrayVocalMetricsTv.Text =
+            $"[{vocState}] In {vocal.InputDbfs:0.1} / Out {vocal.OutputDbfs:0.1} dBFS · Gate -{MathF.Abs(vocal.GateReductionDb):0.1} · DeEss -{MathF.Abs(vocal.DeEsserReductionDb):0.1} · Comp -{compGr:0.1} · Duck -{MathF.Abs(vocal.SidechainPocketDuckDb):0.1} dB · RTT {tel.FullDuplexRoundTripMs:0.1} ms";
+
+        if (xrayLgsrBypassBtn != null) {
+            bool byp = playerEngine.LgsrBypassed;
+            xrayLgsrBypassBtn.Text = $"{S["XRayLgsrBypassBtn"]}: {(byp ? S["XRayBypassActive"] : S["XRayActiveLive"])}";
+            xrayLgsrBypassBtn.Background = byp
+                ? OneUiTheme.CreateRippleRoundedDrawable(this, ColDanger, OneUiTheme.PillCornerDp)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+        }
+        if (xrayVocalBypassBtn != null) {
+            bool byp = playerEngine.VocalChainBypassed;
+            xrayVocalBypassBtn.Text = $"{S["XRayVocalBypassBtn"]}: {(byp ? S["XRayBypassActive"] : S["XRayActiveLive"])}";
+            xrayVocalBypassBtn.Background = byp
+                ? OneUiTheme.CreateRippleRoundedDrawable(this, ColDanger, OneUiTheme.PillCornerDp)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+        }
     }
 
     void UpdateRoomLockButtonUi() {
@@ -645,7 +1156,10 @@ public partial class MainActivity {
         if (roomTelemetryText != null && playerEngine != null) {
             Vector3 p = playerEngine.ListenerPosition;
             Vector3 r = playerEngine.ListenerRotation;
-            roomTelemetryText.Text = $"X: {p.X:0.0}m  •  Y: {p.Y:0.0}m  •  Z: {p.Z:0.0}m  •  Yaw: {r.Y:0}°  •  Pitch: {r.X:0}°";
+            string htSuffix = playerEngine.SceneHub.IsHeadTrackingLive
+                ? $"  •  HT: {playerEngine.SceneHub.ActiveHeadTrackerName}"
+                : string.Empty;
+            roomTelemetryText.Text = $"X: {p.X:0.0}m  •  Y: {p.Y:0.0}m  •  Z: {p.Z:0.0}m  •  Yaw: {r.Y:0}°  •  Pitch: {r.X:0}°{htSuffix}";
         }
     }
 
@@ -659,7 +1173,213 @@ public partial class MainActivity {
             playerEngine.ListenerPosition,
             playerEngine.ListenerRotation,
             playerEngine.IsPlaying);
+        roomView.UpdateXRayState(playerEngine.SceneHub.XRayPowermap, playerEngine.SceneHub.Telemetry);
         UpdateRoomTelemetryText();
+        UpdateMixerRowsLive();
+    }
+
+    void ApplyMixerRowVisualState(MixerRowRef r, bool dynCeil, bool forceRedraw = false) {
+        TrackSourceItem item = r.Item;
+        bool isVisuallySolo = item.IsSolo || (dynCeil && !item.IsDynamicallyFilteredOut);
+        bool isMuted = item.IsMuted;
+
+        if (forceRedraw || isVisuallySolo != r.LastSoloVisual || isMuted != r.LastMuteVisual) {
+            r.LastSoloVisual = isVisuallySolo;
+            r.LastMuteVisual = isMuted;
+
+            r.SoloBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
+                this, isVisuallySolo ? OneUiTheme.SoloGold : OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
+            r.SoloBtn.SetTextColor(isVisuallySolo ? Color.Black : ColText);
+            r.SoloBtn.SetTypeface(null, isVisuallySolo ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+
+            r.MuteBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
+                this, isMuted ? ColDanger : OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
+            r.MuteBtn.SetTextColor(ColText);
+
+            r.Row.Background = OneUiTheme.CreateGlassCardDrawable(
+                this, OneUiTheme.SurfaceSubTile, 18f, isVisuallySolo ? OneUiTheme.SoloGold : null);
+        }
+
+        // Only manually muted rows dim; inactive rows under Solo / Ceiling stay crisp at full contrast
+        float targetAlpha = isMuted ? 0.42f : 1f;
+        if (MathF.Abs(r.Row.Alpha - targetAlpha) > 0.04f) {
+            r.Row.Alpha = targetAlpha;
+        }
+    }
+
+    bool IsMixerTopVisibleInViewport() {
+        if (mixerContainer == null || tabContainers == null || tabContainers.Length <= 1) {
+            return true;
+        }
+        if (tabContainers[1] is not ScrollView roomScroll) {
+            return true;
+        }
+        int topInScroll = 0;
+        View cur = mixerContainer;
+        while (cur != null && cur != roomScroll) {
+            topInScroll += cur.Top;
+            cur = cur.Parent as View;
+        }
+        return roomScroll.ScrollY <= topInScroll + Dp(56);
+    }
+
+    void EnsureRoomScrollMixerHook() {
+        if (roomScrollMixerHooked || tabContainers == null || tabContainers.Length <= 1) {
+            return;
+        }
+        if (tabContainers[1] is ScrollView roomScroll) {
+            roomScrollMixerHooked = true;
+            roomScroll.ScrollChange += (_, _) => {
+                if (pendingMixerReorder && activeTab == 1 && IsMixerTopVisibleInViewport()) {
+                    pendingMixerReorder = false;
+                    ReorderMixerRows(animate: true, forceImmediate: false);
+                }
+            };
+        }
+    }
+
+    void SyncMixerRowsVisualAndOrder(bool animate, bool forceImmediate) {
+        if (mixerContainer == null) {
+            return;
+        }
+        if (mixerRowRefs.Count != trackSourceItems.Count) {
+            RefreshPlayerSourcesList();
+            return;
+        }
+        bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
+        for (int i = 0; i < mixerRowRefs.Count; i++) {
+            ApplyMixerRowVisualState(mixerRowRefs[i], dynCeil);
+        }
+        ReorderMixerRows(animate, forceImmediate);
+    }
+
+    void ReorderMixerRows(bool animate, bool forceImmediate) {
+        if (mixerContainer == null || mixerRowRefs.Count <= 1) {
+            return;
+        }
+        EnsureRoomScrollMixerHook();
+
+        long nowMs = Android.OS.SystemClock.UptimeMillis();
+        bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
+        bool anyManualSolo = false;
+        for (int i = 0; i < mixerRowRefs.Count; i++) {
+            if (mixerRowRefs[i].Item.IsSolo) {
+                anyManualSolo = true;
+                break;
+            }
+        }
+
+        // Anti-chaos protection for live dynamic ceiling updates:
+        // 1) Pause automatic reordering while user is scrolled further down inspecting lower channels.
+        // 2) Apply cooldown + promote/pin hysteresis so fast-moving ceiling objects don't bounce rows chaotically.
+        if (!forceImmediate) {
+            if (!IsMixerTopVisibleInViewport()) {
+                pendingMixerReorder = true;
+                return;
+            }
+            if (nowMs - lastMixerReorderMs < MixerReorderCooldownMs) {
+                return;
+            }
+        }
+
+        HashSet<int> promoted = [];
+        if (dynCeil) {
+            for (int i = 0; i < mixerRowRefs.Count; i++) {
+                TrackSourceItem item = mixerRowRefs[i].Item;
+                bool activeNow = !item.IsDynamicallyFilteredOut;
+                if (activeNow) {
+                    if (!ceilingActiveSinceMs.TryGetValue(item.Index, out long since)) {
+                        since = nowMs;
+                        ceilingActiveSinceMs[item.Index] = since;
+                    }
+                    if (forceImmediate || (nowMs - since) >= CeilingPromoteHoldMs) {
+                        promoted.Add(item.Index);
+                        ceilingPinUntilMs[item.Index] = nowMs + CeilingPinHoldMs;
+                    }
+                } else {
+                    ceilingActiveSinceMs.Remove(item.Index);
+                    if (!forceImmediate &&
+                        ceilingPinUntilMs.TryGetValue(item.Index, out long pinUntil) &&
+                        nowMs < pinUntil) {
+                        promoted.Add(item.Index);
+                    } else {
+                        ceilingPinUntilMs.Remove(item.Index);
+                    }
+                }
+            }
+        } else if (anyManualSolo) {
+            for (int i = 0; i < mixerRowRefs.Count; i++) {
+                if (mixerRowRefs[i].Item.IsSolo) {
+                    promoted.Add(mixerRowRefs[i].Item.Index);
+                }
+            }
+        }
+
+        List<MixerRowRef> desired = new(mixerRowRefs);
+        desired.Sort((a, b) => {
+            int pa = promoted.Contains(a.Item.Index) ? 0 : 1;
+            int pb = promoted.Contains(b.Item.Index) ? 0 : 1;
+            int cmp = pa.CompareTo(pb);
+            return cmp != 0 ? cmp : a.Item.Index.CompareTo(b.Item.Index);
+        });
+
+        bool changed = mixerContainer.ChildCount != desired.Count;
+        if (!changed) {
+            for (int i = 0; i < desired.Count; i++) {
+                if (mixerContainer.GetChildAt(i) != desired[i].Row) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        if (!changed) {
+            pendingMixerReorder = false;
+            return;
+        }
+
+        lastMixerReorderMs = nowMs;
+        pendingMixerReorder = false;
+
+        if (animate && mixerContainer.IsLaidOut) {
+            try {
+                Android.Transitions.ChangeBounds cb = new();
+                cb.SetDuration(300);
+                cb.SetInterpolator(CreateOneUiEase());
+                Android.Transitions.TransitionManager.BeginDelayedTransition(mixerContainer, cb);
+            } catch { }
+        }
+
+        for (int i = 0; i < desired.Count; i++) {
+            View row = desired[i].Row;
+            if (i < mixerContainer.ChildCount && mixerContainer.GetChildAt(i) == row) {
+                continue;
+            }
+            mixerContainer.RemoveView(row);
+            mixerContainer.AddView(row, i);
+        }
+    }
+
+    void UpdateMixerRowsLive() {
+        if (mixerRowRefs.Count == 0 || activeTab != 1) {
+            return;
+        }
+        bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
+        for (int i = 0; i < mixerRowRefs.Count; i++) {
+            MixerRowRef r = mixerRowRefs[i];
+            TrackSourceItem item = r.Item;
+            ApplyMixerRowVisualState(r, dynCeil);
+            Vector3 p = item.NormalizedPosition;
+            string delayTag = !item.IsLFE && item.PropagationDelayMs > 0.05f ? $" • Δt {item.PropagationDelayMs:0.0}ms" : string.Empty;
+            string pinTag = item.HasCustomPosition ? $" • [{S["XRayObjectPinnedBadge"]}]" : string.Empty;
+            if (item.IsDynamicObject || dynCeil || item.HasCustomPosition || delayTag.Length > 0) {
+                r.SubTv.Text = dynCeil && !item.IsDynamicallyFilteredOut
+                    ? $"({p.X:0.0}, {p.Y:0.0}, {p.Z:0.0}){delayTag}{pinTag} • {S["CeilingLiveBadge"]}"
+                    : $"({p.X:0.0}, {p.Y:0.0}, {p.Z:0.0}){delayTag}{pinTag}";
+            }
+        }
+        if (dynCeil || pendingMixerReorder) {
+            ReorderMixerRows(animate: true, forceImmediate: false);
+        }
     }
 
     void RefreshPlayerSourcesList() {
@@ -667,14 +1387,19 @@ public partial class MainActivity {
             return;
         }
         mixerContainer.RemoveAllViews();
+        mixerRowRefs.Clear();
+        ceilingActiveSinceMs.Clear();
+        ceilingPinUntilMs.Clear();
+        pendingMixerReorder = false;
         if (trackSourceItems.Count == 0) {
             mixerContainer.AddView(Label(S["NoTrack"], 12f, ColMuted));
             return;
         }
 
+        bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
+
         foreach (TrackSourceItem item in trackSourceItems) {
             LinearLayout row = HRow();
-            row.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f, item.IsSolo ? OneUiTheme.SoloGold : null);
             row.SetPadding(Dp(12), Dp(9), Dp(10), Dp(9));
             LinearLayout.LayoutParams rlp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
                 BottomMargin = Dp(6)
@@ -699,44 +1424,61 @@ public partial class MainActivity {
             muteBtn.SetPadding(Dp(10), Dp(4), Dp(10), Dp(4));
             OneUiTheme.AttachRecoil(soloBtn, 0.90f);
             OneUiTheme.AttachRecoil(muteBtn, 0.90f);
-            void UpdateBtns() {
-                soloBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
-                    this, item.IsSolo ? OneUiTheme.SoloGold : OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
-                soloBtn.SetTextColor(item.IsSolo ? Color.Black : ColText);
-                soloBtn.SetTypeface(null, item.IsSolo ? TypefaceStyle.Bold : TypefaceStyle.Normal);
-                muteBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
-                    this, item.IsMuted ? ColDanger : OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
-                muteBtn.SetTextColor(ColText);
-                row.Background = OneUiTheme.CreateGlassCardDrawable(
-                    this, OneUiTheme.SurfaceSubTile, 18f, item.IsSolo ? OneUiTheme.SoloGold : null);
-            }
+
+            MixerRowRef rowRef = new() {
+                Item = item,
+                Row = row,
+                SubTv = subTv,
+                SoloBtn = soloBtn,
+                MuteBtn = muteBtn
+            };
+
             soloBtn.Click += (_, _) => {
+                if (playerEngine != null && playerEngine.DynamicCeilingOnly) {
+                    playerEngine.DynamicCeilingOnly = false;
+                    ceilingActiveSinceMs.Clear();
+                    ceilingPinUntilMs.Clear();
+                    for (int k = 0; k < trackSourceItems.Count; k++) {
+                        trackSourceItems[k].IsDynamicallyFilteredOut = false;
+                    }
+                }
                 item.IsSolo = !item.IsSolo;
-                UpdateBtns();
+                SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
                 RefreshFilterButtonsUi();
                 refreshBentoTilesUi?.Invoke();
                 UpdateRoomCanvas();
             };
             muteBtn.Click += (_, _) => {
                 item.IsMuted = !item.IsMuted;
-                UpdateBtns();
+                ApplyMixerRowVisualState(rowRef, playerEngine?.DynamicCeilingOnly ?? false, forceRedraw: true);
                 UpdateRoomCanvas();
             };
-            UpdateBtns();
+            ApplyMixerRowVisualState(rowRef, dynCeil, forceRedraw: true);
 
             row.AddView(soloBtn, new LinearLayout.LayoutParams(Dp(38), ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
             row.AddView(muteBtn, new LinearLayout.LayoutParams(Dp(38), ViewGroup.LayoutParams.WrapContent));
             mixerContainer.AddView(row, rlp);
+            mixerRowRefs.Add(rowRef);
         }
+
+        ReorderMixerRows(animate: false, forceImmediate: true);
     }
 
     void StartTelemetryTimer() {
+        int loudnessMeterTick = 0;
         void Tick() {
             if (uiDestroyed) {
                 return;
             }
             if (playerEngine != null && playerEngine.IsPlaying) {
                 SyncPlaybackUi(true, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
+                if ((++loudnessMeterTick & 3) == 0) {
+                    RefreshLiveLoudnessMeterUi();
+                    RefreshLgsrUi();
+                    if (activeTab == 1 && store.RoomXRayInspectorExpanded) {
+                        RefreshSpatialXRayHud();
+                    }
+                }
             }
             uiHandler?.PostDelayed(Tick, 65);
         }

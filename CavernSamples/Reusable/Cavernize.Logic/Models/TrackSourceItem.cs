@@ -4,22 +4,28 @@ using Cavern;
 using Cavern.Channels;
 using Cavern.Format.Renderers;
 using Cavern.Format.Renderers.BaseClasses;
+using Cavern.Spatial;
 
 namespace Cavernize.Logic.Models;
 
 /// <summary>
-/// Describes a single channel (bed) or dynamic 3D object inside a <see cref="CavernizeTrack"/>.
+/// Describes a single channel (bed), dynamic 3D object, neural stem, or live microphone source inside a <see cref="CavernizeTrack"/>.
 /// </summary>
 public sealed class TrackSourceItem {
     /// <summary>
-    /// Zero-based index inside <see cref="Renderer.Objects"/>.
+    /// Zero-based index inside <see cref="Renderer.Objects"/> (or virtual layer index for stems / live mic).
     /// </summary>
     public int Index { get; }
 
     /// <summary>
-    /// Display name of the channel or 3D object.
+    /// Display name of the channel, 3D object, stem, or live microphone.
     /// </summary>
     public string Name { get; set; }
+
+    /// <summary>
+    /// Architectural origin layer (Bed, NativeObject, VirtualMatrix, NeuralStem, LiveMicrophone).
+    /// </summary>
+    public SourceLayer Layer { get; set; }
 
     /// <summary>
     /// True when this element is a fixed bed channel rather than a dynamic object.
@@ -30,6 +36,11 @@ public sealed class TrackSourceItem {
     /// True when this element is a dynamic 3D object.
     /// </summary>
     public bool IsDynamicObject => !IsBed;
+
+    /// <summary>
+    /// True when the user can drag and pin this source in the interactive 6DoF 3D Room.
+    /// </summary>
+    public bool IsCustomDraggable => !IsBed || Layer == SourceLayer.NeuralStem || Layer == SourceLayer.RestoredResidual || Layer == SourceLayer.LiveMicrophone;
 
     /// <summary>
     /// True when this element is an LFE channel.
@@ -57,20 +68,63 @@ public sealed class TrackSourceItem {
     public Vector3 NormalizedPosition { get; set; }
 
     /// <summary>
+    /// True when the user manually dragged and pinned this source to <see cref="CustomNormalizedPosition"/>.
+    /// </summary>
+    public bool HasCustomPosition { get; set; }
+
+    /// <summary>
+    /// User-pinned normalized room position [-1; 1] overriding native object metadata while <see cref="HasCustomPosition"/> is true.
+    /// </summary>
+    public Vector3 CustomNormalizedPosition { get; set; }
+
+    /// <summary>
+    /// True when temporarily muted by a live dynamic filter (e.g. Dynamic Ceiling-Only mode).
+    /// </summary>
+    public bool IsDynamicallyFilteredOut { get; set; }
+
+    /// <summary>
     /// Latest RMS amplitude [0; 1+] for live metering.
     /// </summary>
     public float RmsLevel { get; set; }
 
     /// <summary>
-    /// Creates metadata describing a channel or object source.
+    /// Live low-frequency (&lt;250 Hz) RMS energy for the W13 3D Spatial X-Ray heatmap.
     /// </summary>
-    public TrackSourceItem(int index, string name, bool isBed, bool isLfe, ReferenceChannel? channel, Vector3 normalizedPosition) {
+    public float LowBandEnergy { get; set; }
+
+    /// <summary>
+    /// Live mid-frequency (250–2500 Hz) RMS energy for the W13 3D Spatial X-Ray heatmap.
+    /// </summary>
+    public float MidBandEnergy { get; set; }
+
+    /// <summary>
+    /// Live high-frequency (&gt;2500 Hz) RMS energy for the W13 3D Spatial X-Ray heatmap.
+    /// </summary>
+    public float HighBandEnergy { get; set; }
+
+    /// <summary>
+    /// Live 6DoF acoustic time-of-flight delay (ms at 343 m/s) from this source to the listener.
+    /// </summary>
+    public float PropagationDelayMs { get; set; }
+
+    /// <summary>
+    /// Creates metadata describing a channel, object, neural stem, or live microphone source.
+    /// </summary>
+    public TrackSourceItem(
+        int index,
+        string name,
+        bool isBed,
+        bool isLfe,
+        ReferenceChannel? channel,
+        Vector3 normalizedPosition,
+        SourceLayer? layer = null) {
         Index = index;
         Name = name;
         IsBed = isBed;
         IsLFE = isLfe;
         Channel = channel;
         NormalizedPosition = normalizedPosition;
+        Layer = layer ?? (isBed ? SourceLayer.Bed : SourceLayer.NativeObject);
     }
 
     /// <summary>

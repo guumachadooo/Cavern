@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -28,6 +28,31 @@ namespace Cavern.Format.Decoders {
         /// Samples in each decoded frame.
         /// </summary>
         public int FrameSize => header.Blocks * samplesPerBlock;
+
+        /// <summary>
+        /// Decoded Dolby Dialogue Normalization level in LKFS/LUFS (-31..-1 LUFS per ATSC A/52 &amp; ETSI TS 102 366).
+        /// </summary>
+        public float DialnormLufs => header.DialnormLufs;
+
+        /// <summary>
+        /// True when E-AC-3 channel coupling was active in the most recently decoded audio frame.
+        /// </summary>
+        public bool CouplingActive { get; private set; }
+
+        /// <summary>
+        /// True when E-AC-3 Spectral Extension (SPX) was active in the most recently decoded audio frame.
+        /// </summary>
+        public bool SpxActive { get; private set; }
+
+        /// <summary>
+        /// Live channel coupling start frequency in Hz across active substreams (0 when inactive).
+        /// </summary>
+        public float CouplingStartHz { get; private set; }
+
+        /// <summary>
+        /// Live Spectral Extension (SPX) start frequency in Hz across active substreams (0 when inactive).
+        /// </summary>
+        public float SpxStartHz { get; private set; }
 
         /// <summary>
         /// Header data container and reader.
@@ -94,6 +119,10 @@ namespace Cavern.Format.Decoders {
             }
 
             long frameStart = reader.LastFetchStart;
+            bool frameCplActive = false;
+            bool frameSpxActive = false;
+            float frameMinCplHz = float.MaxValue;
+            float frameMinSpxHz = float.MaxValue;
             do {
                 if (Finished) {
                     outCache.Clear();
@@ -102,6 +131,18 @@ namespace Cavern.Format.Decoders {
 
                 EnhancedAC3Body body = bodies[header.SubstreamID];
                 body.Update();
+                if (body.CouplingActive && body.CouplingStartHz > 0f) {
+                    frameCplActive = true;
+                    if (body.CouplingStartHz < frameMinCplHz) {
+                        frameMinCplHz = body.CouplingStartHz;
+                    }
+                }
+                if (body.SpxActive && body.SpxStartHz > 0f) {
+                    frameSpxActive = true;
+                    if (body.SpxStartHz < frameMinSpxHz) {
+                        frameMinSpxHz = body.SpxStartHz;
+                    }
+                }
                 for (int i = 0, c = body.Channels.Count; i < c; ++i) {
                     outputs[body.Channels[i]] = body.FrameResult[i];
                 }
@@ -112,6 +153,11 @@ namespace Cavern.Format.Decoders {
                 Extensions.Decode(body.GetAuxData());
                 ReadHeader();
             } while (header.SubstreamID != 0);
+
+            CouplingActive = frameCplActive;
+            CouplingStartHz = frameCplActive ? frameMinCplHz : 0f;
+            SpxActive = frameSpxActive;
+            SpxStartHz = frameSpxActive ? frameMinSpxHz : 0f;
 
             int outLength = outputs.Count * FrameSize;
             if (outCache.Length != outLength) {
