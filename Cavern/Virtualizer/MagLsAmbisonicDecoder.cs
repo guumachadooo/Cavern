@@ -380,9 +380,9 @@ namespace Cavern.Virtualizer {
                         dRRe[q, b] = lsRRe[q];
                         dRIm[q, b] = (b == 0 || b == halfBins - 1) ? 0.0 : lsRIm[q];
                         prevLRe[q] = dLRe[q, b];
-                        prevLIm[q, b] = dLIm[q, b];
+                        prevLIm[q] = dLIm[q, b];
                         prevRRe[q] = dRRe[q, b];
-                        prevRIm[q, b] = dRIm[q, b];
+                        prevRIm[q] = dRIm[q, b];
                     }
                     continue;
                 }

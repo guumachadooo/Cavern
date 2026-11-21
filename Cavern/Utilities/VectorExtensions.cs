@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -99,6 +99,31 @@ namespace Cavern.Utilities {
                 return normal;
             }
             return normal.WarpNormalToCube();
+        }
+
+        /// <summary>
+        /// Rotate this vector by all axes (exact inverse of <see cref="RotateInverse"/>).
+        /// </summary>
+        public static Vector3 Rotate(this Vector3 vector, Vector3 angles) {
+            angles *= Deg2Rad;
+
+            float cos = (float)Math.Cos(angles.X),
+                sin = (float)Math.Sin(angles.X),
+                y = cos * vector.Y - sin * vector.Z,
+                z = sin * vector.Y + cos * vector.Z;
+
+            cos = (float)Math.Cos(angles.Y);
+            sin = (float)Math.Sin(angles.Y);
+            float x = cos * vector.X + sin * z;
+            z = cos * z - sin * vector.X;
+
+            cos = (float)Math.Cos(angles.Z);
+            sin = (float)Math.Sin(angles.Z);
+            float oldX = x;
+            x = cos * oldX - sin * y;
+            y = sin * oldX + cos * y;
+
+            return new Vector3(x, y, z);
         }
 
         /// <summary>
