@@ -7,8 +7,6 @@ using Cavern.Format;
 using Cavern.Virtualizer;
 using Cavern.Waveforms;
 
-using Cavernize.Logic.Spatial;
-
 using CavernizeAndroid.Language;
 
 using Path = System.IO.Path;
@@ -42,11 +40,6 @@ public sealed class BinauralProfileInfo {
     public bool IsClassic { get; init; }
     public bool IsCustom { get; init; }
     public bool IsBrir { get; init; }
-    /// <summary>
-    /// True when the HRIR retains the dummy head's raw ear-canal/diffuse-field transfer function (e.g., TH Köln Far-Field Raw),
-    /// signaling Slot 6A AutoEq to engage the Zero Double-EQ Guard automatically.
-    /// </summary>
-    public bool IsRawUncompensated { get; init; }
     public bool IsGzipped => !string.IsNullOrEmpty(AssetFile) &&
         (AssetFile.EndsWith(".chrirz", StringComparison.OrdinalIgnoreCase) || AssetFile.EndsWith(".gz", StringComparison.OrdinalIgnoreCase));
 }
@@ -158,8 +151,7 @@ public static class BinauralProfileService {
             SubtitleKey = "ProfThkFfRawSub",
             ShortBadge = "THK Raw",
             AssetFile = "thk_ku100_ff_raw.chrir",
-            ReferenceDistanceMeters = 3.25f,
-            IsRawUncompensated = true
+            ReferenceDistanceMeters = 3.25f
         },
 
         // SADIE II — D2 (KEMAR 45BB, Apache 2.0)
@@ -376,41 +368,6 @@ public static class BinauralProfileService {
             }
         }
         store.HeadphoneVirtualizer = wantsHrtf;
-    }
-
-    /// <summary>
-    /// Returns the acoustic compensation mode of the currently active binaural profile so Slot 6A AutoEq
-    /// can automatically engage the Zero Double-EQ Guard whenever a Raw uncompensated HRIR is active.
-    /// </summary>
-    public static Cavern.Filters.BinauralCompensationMode GetActiveCompensationMode(AppSettingsStore store) {
-        if (store == null || !store.HeadphoneVirtualizer) {
-            return Cavern.Filters.BinauralCompensationMode.DirectStereo;
-        }
-        BinauralProfileInfo info = FindById(ResolveStoredHrtfProfileId(store));
-        if (info == null || info.IsDirectStereo) {
-            return Cavern.Filters.BinauralCompensationMode.DirectStereo;
-        }
-        return info.IsRawUncompensated
-            ? Cavern.Filters.BinauralCompensationMode.RawUncompensatedHrir
-            : Cavern.Filters.BinauralCompensationMode.DiffuseFieldCompensatedHrir;
-    }
-
-    /// <summary>
-    /// Mirrors the currently active binaural profile ID, display label, and compensation mode into Slot 3 (<see cref="SpatialSceneHub"/>).
-    /// </summary>
-    public static void SyncToSceneHub(SpatialSceneHub hub, AppSettingsStore store, AndroidStrings s = null) {
-        if (hub == null || store == null) {
-            return;
-        }
-        string effectiveId = GetEffectiveProfileId(store);
-        hub.ActiveBinauralProfileId = effectiveId;
-        hub.ActiveBinauralCompensationMode = GetActiveCompensationMode(store);
-        if (s != null) {
-            hub.ActiveBinauralProfileName = GetActiveDisplayTitle(store, s);
-        } else {
-            BinauralProfileInfo info = FindById(effectiveId);
-            hub.ActiveBinauralProfileName = info != null ? info.ShortBadge : effectiveId;
-        }
     }
 
     /// <summary>

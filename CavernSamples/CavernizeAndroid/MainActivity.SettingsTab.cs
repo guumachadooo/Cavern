@@ -56,9 +56,6 @@ public partial class MainActivity {
 
     LinearLayout queueListContainer;
     TextView settingsBinauralTitleText, settingsBinauralSubText;
-    TextView settingsAutoEqTitleText, settingsAutoEqSubText, settingsAudioDeviceText;
-    Switch autoEqEnabledSwitch, autoEqDoubleEqGuardSwitch, autoEqAutoSwitchDeviceSwitch;
-    OneUiInlineSelector autoEqTargetSelector;
     Button filtersBtn;
     Switch muteBedSwitch, muteGroundSwitch, speakerVirtSwitch, force24Switch, surroundSwapSwitch, wavSkipSwitch, reportModeSwitch, gradingSwitch;
     Switch pedanticSwitch, unsafeSwitch, keepTempSwitch, normSwitch, limiterOnlySwitch;
@@ -200,89 +197,6 @@ public partial class MainActivity {
         hrirActionsRow.AddView(importHrirBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
         hrirActionsRow.AddView(creditsHrirBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         rendCard.AddView(hrirActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
-
-        AddDivider(rendCard);
-
-        // 3B. Slot 6A: AutoEq Neutral Headphone Engine & Auto-Profile per Device
-        autoEqEnabledSwitch = AddSwitchRow(rendCard, S["AutoEqEnableTitle"], store.AutoEqEnabled, v => {
-            store.AutoEqEnabled = v;
-            AutoEqService.ApplySavedToEngine(this, store, playerEngine);
-            audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
-            RefreshAutoEqUi();
-        }, helpBody: S["TipAutoEq"]);
-
-        LinearLayout autoEqRow = HRow();
-        autoEqRow.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f);
-        autoEqRow.SetPadding(Dp(12), Dp(11), Dp(12), Dp(11));
-        OneUiTheme.AttachRecoil(autoEqRow, 0.98f);
-        autoEqRow.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Sliders, OneUiTheme.IconAtmosUpmix, 32),
-            new LinearLayout.LayoutParams(Dp(32), Dp(32)) { RightMargin = Dp(10) });
-
-        LinearLayout autoEqCol = new(this) { Orientation = Orientation.Vertical };
-        settingsAutoEqTitleText = Label("", 13.2f, ColText);
-        settingsAutoEqTitleText.SetIncludeFontPadding(false);
-        settingsAutoEqTitleText.Typeface = OneUiTheme.GetAppleFontBold(this);
-        settingsAutoEqTitleText.SetSingleLine(true);
-        settingsAutoEqTitleText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        settingsAutoEqSubText = Label("", 11.2f, OneUiTheme.TextSub);
-        settingsAutoEqSubText.SetSingleLine(true);
-        settingsAutoEqSubText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        autoEqCol.AddView(settingsAutoEqTitleText);
-        autoEqCol.AddView(settingsAutoEqSubText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(2) });
-        autoEqRow.AddView(autoEqCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
-        autoEqRow.AddView(new OneUiIconView(this, OneUiIconType.ChevronDown, OneUiTheme.TextSub), new LinearLayout.LayoutParams(Dp(16), Dp(16)));
-        autoEqRow.Click += (_, _) => ShowAutoEqProfileSelectorDialog();
-        rendCard.AddView(autoEqRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(4),
-            BottomMargin = Dp(8)
-        });
-
-        autoEqTargetSelector = new OneUiInlineSelector(this, S["AutoEqTargetTitle"]);
-        string[] targetNames = [
-            S["AutoEqTargetDfNeutral"],
-            S["AutoEqTargetBk5128Df"],
-            S["AutoEqTargetBk5128Jm1"],
-            S["AutoEqTargetHarmanNoBass"],
-            S["AutoEqTargetNative"]
-        ];
-        autoEqTargetSelector.SetItems(targetNames, Math.Clamp(store.AutoEqTargetIndex, 0, targetNames.Length - 1));
-        autoEqTargetSelector.SelectionChanged += pos => {
-            store.AutoEqTargetIndex = pos;
-            AutoEqService.ApplySavedToEngine(this, store, playerEngine);
-            audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
-            RefreshAutoEqUi();
-        };
-        rendCard.AddView(WrapControlWithHelp(autoEqTargetSelector, S["AutoEqTargetTitle"], S["TipAutoEqTarget"], bottomMarginDp: 8));
-
-        autoEqDoubleEqGuardSwitch = AddSwitchRow(rendCard, S["AutoEqDoubleEqGuardTitle"], store.AutoEqDoubleEqGuard, v => {
-            store.AutoEqDoubleEqGuard = v;
-            AutoEqService.ApplySavedToEngine(this, store, playerEngine);
-            RefreshAutoEqUi();
-        }, helpBody: S["TipAutoEqDoubleEqGuard"]);
-        AddDivider(rendCard);
-
-        autoEqAutoSwitchDeviceSwitch = AddSwitchRow(rendCard, S["AutoEqAutoDeviceTitle"], store.AutoEqAutoSwitchByDevice, v => {
-            store.AutoEqAutoSwitchByDevice = v;
-            if (v) {
-                audioDeviceProfileManager?.RefreshActiveDevice(applyAutoSwitch: true);
-            }
-            RefreshAutoEqUi();
-        }, helpBody: S["TipAutoEqAutoDevice"]);
-
-        settingsAudioDeviceText = Label("", 11.2f, OneUiTheme.TextMuted);
-        settingsAudioDeviceText.SetSingleLine(true);
-        settingsAudioDeviceText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        rendCard.AddView(settingsAudioDeviceText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(2),
-            BottomMargin = Dp(8)
-        });
-
-        LinearLayout autoEqActionsRow = HRow();
-        Button importAutoEqBtn = PillButton(S["AutoEqImportBtn"], LaunchCustomAutoEqImporter);
-        Button creditsAutoEqBtn = PillButton(S["AutoEqCreditsBtn"], ShowAutoEqLicenseCreditsDialog);
-        autoEqActionsRow.AddView(importAutoEqBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
-        autoEqActionsRow.AddView(creditsAutoEqBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        rendCard.AddView(autoEqActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
 
         AddDivider(rendCard);
 
@@ -789,7 +703,6 @@ public partial class MainActivity {
 
     void RefreshSettingsTabButtons() {
         RefreshBinauralProfileUi();
-        RefreshAutoEqUi();
         if (filtersBtn != null) {
             filtersBtn.Text = renderingSettings.RoomCorrection != null
                 ? $"{S["ClearFilters"]} ({Path.GetFileName(store.RoomCorrectionPath)})"
@@ -851,11 +764,7 @@ public partial class MainActivity {
                 if (uiDestroyed) return;
                 if (ok) {
                     playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
-                    BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
-                    AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
-                    audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
                     RefreshBinauralProfileUi();
-                    RefreshAutoEqUi();
                     RefreshMusicPlayerControlsUi();
                     ShowToast(string.Format(S["BinauralProfileApplied"], BinauralProfileService.GetActiveDisplayTitle(store, S)));
                 } else {
@@ -873,11 +782,7 @@ public partial class MainActivity {
                 if (uiDestroyed) return;
                 if (ok) {
                     playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
-                    BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
-                    AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
-                    audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
                     RefreshBinauralProfileUi();
-                    RefreshAutoEqUi();
                     RefreshMusicPlayerControlsUi();
                     if (showToast) {
                         ShowToast(string.Format(S["BinauralProfileApplied"], BinauralProfileService.GetActiveDisplayTitle(store, S)));
@@ -1105,243 +1010,6 @@ public partial class MainActivity {
             icon: OneUiIconType.Headphones,
             iconBadgeColor: OneUiTheme.IconSpatial,
             positiveText: S["CloseBtn"]);
-    }
-
-    void OnAudioDeviceRouteChanged(AudioDeviceRouteInfo device, Cavernize.Logic.Spatial.AudioDeviceProfileBinding binding, bool autoMatched) {
-        RunOnUiThread(() => {
-            if (uiDestroyed) {
-                return;
-            }
-            RefreshBinauralProfileUi();
-            RefreshAutoEqUi();
-            RefreshMusicPlayerControlsUi();
-            if (autoMatched && binding != null && !string.IsNullOrEmpty(binding.AutoEqProfileName)) {
-                ShowToast(string.Format(S["AutoEqAutoMatchedToast"], device.DisplayName, binding.AutoEqProfileName));
-            }
-        });
-    }
-
-    void RefreshAutoEqUi() {
-        if (autoEqEnabledSwitch != null && autoEqEnabledSwitch.Checked != store.AutoEqEnabled) {
-            autoEqEnabledSwitch.Checked = store.AutoEqEnabled;
-        }
-        if (autoEqDoubleEqGuardSwitch != null && autoEqDoubleEqGuardSwitch.Checked != store.AutoEqDoubleEqGuard) {
-            autoEqDoubleEqGuardSwitch.Checked = store.AutoEqDoubleEqGuard;
-        }
-        if (autoEqAutoSwitchDeviceSwitch != null && autoEqAutoSwitchDeviceSwitch.Checked != store.AutoEqAutoSwitchByDevice) {
-            autoEqAutoSwitchDeviceSwitch.Checked = store.AutoEqAutoSwitchByDevice;
-        }
-        if (autoEqTargetSelector != null) {
-            int idx = Math.Clamp(store.AutoEqTargetIndex, 0, 4);
-            if (autoEqTargetSelector.SelectedIndex != idx) {
-                autoEqTargetSelector.SetSelection(idx, notify: false);
-            }
-        }
-
-        if (settingsAutoEqTitleText != null) {
-            bool hasProf = !string.IsNullOrWhiteSpace(store.AutoEqProfileName);
-            settingsAutoEqTitleText.Text = hasProf ? store.AutoEqProfileName : S["AutoEqNoneSelected"];
-        }
-        if (settingsAutoEqSubText != null) {
-            var stage = playerEngine?.AutoEqStage;
-            if (stage != null && stage.IsEnabled) {
-                string guardTag = stage.DoubleEqGuardActive ? $" • {S["AutoEqGuardEngagedTag"]}" : string.Empty;
-                settingsAutoEqSubText.Text = string.Format(
-                    S["AutoEqActiveSummary"],
-                    stage.ActiveSectionCount,
-                    stage.EffectivePreampDb,
-                    guardTag);
-            } else {
-                int total = AutoEqService.GetTotalCatalogCount(this);
-                settingsAutoEqSubText.Text = string.Format(S["AutoEqCatalogCountSub"], total);
-            }
-        }
-        if (settingsAudioDeviceText != null) {
-            AudioDeviceRouteInfo dev = audioDeviceProfileManager?.CurrentDevice;
-            string devLabel = dev != null ? dev.DisplayName : S["AutoEqUnknownDevice"];
-            settingsAudioDeviceText.Text = string.Format(S["AutoEqDetectedDevice"], devLabel);
-        }
-    }
-
-    void LaunchCustomAutoEqImporter() {
-        OpenFileWithExplorerForExtensions(
-            S["AutoEqImportBtn"],
-            [".txt", ".cfg"],
-            ImportCustomAutoEqFile,
-            ReqLoadAutoEq);
-    }
-
-    void ImportCustomAutoEqFile(string path) {
-        if (string.IsNullOrEmpty(path)) {
-            return;
-        }
-        Task.Run(() => {
-            bool ok = AutoEqService.ImportCustomEqFile(this, store, path, out var profile, out string err);
-            RunOnUiThread(() => {
-                if (uiDestroyed) {
-                    return;
-                }
-                if (ok && profile != null) {
-                    AutoEqService.ApplyProfileToEngine(store, playerEngine, profile);
-                    audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
-                    RefreshAutoEqUi();
-                    ShowToast(string.Format(S["AutoEqAppliedToast"], profile.Name));
-                } else {
-                    ShowError(err ?? "Failed to import AutoEq / Equalizer APO file.");
-                }
-            });
-        });
-    }
-
-    void ShowAutoEqLicenseCreditsDialog() {
-        string credits = AutoEqService.ReadLicenseCredits(this);
-        OneUiModalDialog.Show(
-            this,
-            S["AutoEqCreditsBtn"],
-            message: credits,
-            icon: OneUiIconType.Info,
-            iconBadgeColor: OneUiTheme.IconAtmosUpmix,
-            positiveText: S["CloseBtn"]);
-    }
-
-    void ShowAutoEqProfileSelectorDialog() {
-        Dialog activeDlg = null;
-        LinearLayout root = new(this) { Orientation = Orientation.Vertical };
-
-        EditText searchBox = new(this) {
-            Hint = S["AutoEqSearchHint"]
-        };
-        searchBox.SetSingleLine(true);
-        searchBox.SetTextColor(ColText);
-        searchBox.SetHintTextColor(OneUiTheme.TextMuted);
-        searchBox.SetTextSize(Android.Util.ComplexUnitType.Sp, 13.5f);
-        searchBox.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
-        searchBox.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
-        root.AddView(searchBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
-
-        LinearLayout resultsList = new(this) { Orientation = Orientation.Vertical };
-        root.AddView(resultsList, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-
-        void PopulateResults(string query) {
-            resultsList.RemoveAllViews();
-            List<Cavernize.Logic.Spatial.AutoEqCatalogEntry> matches = AutoEqService.SearchCatalog(this, query, maxResults: 40);
-            if (matches.Count == 0) {
-                TextView emptyTv = Label(S["AutoEqNoResults"], 12.2f, OneUiTheme.TextMuted);
-                emptyTv.SetPadding(Dp(4), Dp(10), Dp(4), Dp(10));
-                resultsList.AddView(emptyTv);
-                return;
-            }
-
-            string curId = store.AutoEqProfileId;
-            for (int i = 0; i < matches.Count; i++) {
-                Cavernize.Logic.Spatial.AutoEqCatalogEntry entry = matches[i];
-                bool isSel = store.AutoEqEnabled && string.Equals(curId, entry.Id, StringComparison.OrdinalIgnoreCase);
-
-                LinearLayout row = HRow();
-                row.Background = isSel
-                    ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 82), 16f, OneUiTheme.PrimaryHigh, 1f)
-                    : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 16f, OneUiTheme.BorderSubtle, 1f);
-                row.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
-                OneUiTheme.AttachRecoil(row, 0.985f);
-
-                LinearLayout col = new(this) { Orientation = Orientation.Vertical };
-                TextView titleTv = Label(entry.Name, 13f, isSel ? ColText : OneUiTheme.TextPrimary);
-                titleTv.SetIncludeFontPadding(false);
-                titleTv.Typeface = isSel ? OneUiTheme.GetAppleFontBold(this) : OneUiTheme.GetAppleFontMedium(this);
-                titleTv.SetSingleLine(true);
-                titleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-
-                string offlineTag = entry.IsBundledOffline ? S["AutoEqOfflineTag"] : S["AutoEqOnlineTag"];
-                TextView subTv = Label($"{entry.MeasurementRig} • {offlineTag}", 11f, isSel ? OneUiTheme.TextSecondary : OneUiTheme.TextMuted);
-                subTv.SetSingleLine(true);
-                subTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-
-                col.AddView(titleTv);
-                col.AddView(subTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(2) });
-                row.AddView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
-                if (isSel) {
-                    row.AddView(new OneUiIconView(this, OneUiIconType.Check, OneUiTheme.PrimaryHigh), new LinearLayout.LayoutParams(Dp(16), Dp(16)));
-                }
-
-                Cavernize.Logic.Spatial.AutoEqCatalogEntry chosen = entry;
-                row.Click += (_, _) => {
-                    activeDlg?.Dismiss();
-                    ApplyAutoEqCatalogEntryAsync(chosen);
-                };
-                resultsList.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-                    BottomMargin = Dp(6)
-                });
-            }
-        }
-
-        PopulateResults(string.Empty);
-        searchBox.TextChanged += (_, _) => PopulateResults(searchBox.Text);
-
-        LinearLayout footerRow = HRow();
-        footerRow.SetPadding(0, Dp(6), 0, 0);
-        Button clearBtn = PillButton(S["AutoEqClearBtn"], () => {
-            activeDlg?.Dismiss();
-            store.AutoEqEnabled = false;
-            store.AutoEqProfileId = string.Empty;
-            store.AutoEqProfileName = string.Empty;
-            AutoEqService.ApplyProfileToEngine(store, playerEngine, null);
-            audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
-            RefreshAutoEqUi();
-        });
-        Button importBtn = PillButton(S["AutoEqImportBtn"], () => {
-            activeDlg?.Dismiss();
-            LaunchCustomAutoEqImporter();
-        });
-        footerRow.AddView(clearBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
-        footerRow.AddView(importBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f));
-        root.AddView(footerRow);
-
-        activeDlg = OneUiModalDialog.Show(
-            this,
-            S["AutoEqModalTitle"],
-            customContent: root,
-            icon: OneUiIconType.Sliders,
-            iconBadgeColor: OneUiTheme.IconAtmosUpmix,
-            positiveText: S["CloseBtn"]);
-    }
-
-    void ApplyAutoEqCatalogEntryAsync(Cavernize.Logic.Spatial.AutoEqCatalogEntry entry) {
-        if (entry == null) {
-            return;
-        }
-        if (!entry.IsBundledOffline) {
-            ShowToast(string.Format(S["AutoEqDownloadingToast"], entry.Name));
-        }
-        Task.Run(async () => {
-            try {
-                var profile = await AutoEqService.ResolveProfileAsync(this, store, entry.Id).ConfigureAwait(false);
-                RunOnUiThread(() => {
-                    if (uiDestroyed) {
-                        return;
-                    }
-                    if (profile != null && profile.Bands.Length > 0) {
-                        store.AutoEqProfileId = profile.Id;
-                        store.AutoEqProfileName = profile.Name;
-                        store.AutoEqEnabled = true;
-                        AutoEqService.ApplyProfileToEngine(store, playerEngine, profile);
-                        audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
-                        RefreshAutoEqUi();
-                        ShowToast(string.Format(S["AutoEqAppliedToast"], profile.Name));
-                    } else {
-                        ShowError(S["AutoEqDownloadFail"]);
-                    }
-                });
-            } catch (Exception ex) {
-                AppLogger.Error($"ApplyAutoEqCatalogEntryAsync({entry.Id})", ex);
-                RunOnUiThread(() => {
-                    if (!uiDestroyed) {
-                        ShowError($"{S["AutoEqDownloadFail"]}\n{ex.Message}");
-                    }
-                });
-            }
-        });
     }
 
     void TryLoadRoomFilters(string path) {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 using Cavern.Filters.Utilities;
@@ -37,31 +37,16 @@ namespace Cavern.Filters {
         public HighShelf(int sampleRate, double centerFreq, double q, double gain) : base(sampleRate, centerFreq, q, gain) { }
 
         /// <summary>
-        /// Parse a Filter line of Equalizer APO or AutoEq which was split at spaces to a Cavern <see cref="HighShelf"/> filter.<br />
-        /// Sample with fixed shelf: Filter: ON HS Fc 10000 Hz Gain 0 dB<br />
-        /// Sample with AutoEq Q shelf: Filter 6: ON HSC Fc 10000 Hz Gain -2.1 dB Q 0.70<br />
-        /// Sample with custom slope: Filter: ON HSC 12 dB Fc 10000 Hz Gain 0 dB
+        /// Parse a Filter line of Equalizer APO which was split at spaces to a Cavern <see cref="HighShelf"/> filter.<br />
+        /// Sample with fixed shelf: Filter: ON HS Fc 100 Hz Gain 0 dB
+        /// Sample with custom shelf: Filter: ON HSC 12 dB Fc 100 Hz Gain 0 dB
         /// </summary>
         public static new HighShelf FromEqualizerAPO(string[] splitLine, int sampleRate) {
-            int typeIndex = splitLine.Length > 2 && splitLine[1].Equals("ON", StringComparison.OrdinalIgnoreCase) ? 2 : 3;
-            if (splitLine.Length <= typeIndex) {
-                throw new FormatException(nameof(splitLine));
-            }
-            string type = splitLine[typeIndex].ToLowerInvariant();
-            if ((type == "hs" || type == "hsc") && splitLine.Length >= typeIndex + 6 &&
-                splitLine[typeIndex + 1].Equals("Fc", StringComparison.OrdinalIgnoreCase) &&
-                QMath.TryParseDouble(splitLine[typeIndex + 2], out double freq) &&
-                QMath.TryParseDouble(splitLine[typeIndex + 5], out double gain)) {
-                if (splitLine.Length >= typeIndex + 9 &&
-                    splitLine[typeIndex + 7].Equals("Q", StringComparison.OrdinalIgnoreCase) &&
-                    QMath.TryParseDouble(splitLine[typeIndex + 8], out double qVal) && qVal > 0) {
-                    return new HighShelf(sampleRate, freq, qVal, gain);
-                }
-                return new HighShelf(sampleRate, freq, QFactor.FromSlope(0.9, gain), gain);
-            } else if (type == "hsc" && splitLine.Length >= typeIndex + 8 &&
-                QMath.TryParseDouble(splitLine[typeIndex + 1], out double slope) &&
-                QMath.TryParseDouble(splitLine[typeIndex + 4], out freq) &&
-                QMath.TryParseDouble(splitLine[typeIndex + 7], out gain)) {
+            string type = splitLine[2].ToLowerInvariant();
+            if (type == "hs" && QMath.TryParseDouble(splitLine[4], out double freq) && QMath.TryParseDouble(splitLine[5], out double gain)) {
+                return new HighShelf(sampleRate, freq, QFactor.FromSlope(0.9, gain));
+            } else if (type == "hsc" && QMath.TryParseDouble(splitLine[3], out double slope) &&
+                QMath.TryParseDouble(splitLine[6], out freq) && QMath.TryParseDouble(splitLine[9], out gain)) {
                 return new HighShelf(sampleRate, freq, QFactor.FromSlopeDecibels(slope, gain), gain);
             }
             throw new FormatException(nameof(splitLine));

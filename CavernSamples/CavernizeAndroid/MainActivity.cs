@@ -53,7 +53,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
     const int ReqLocateTruehdd = 1006;
     const int ReqPermissions = 1007;
     const int ReqLoadSubtitles = 1008;
-    const int ReqLoadAutoEq = 1009;
 
     AppSettingsStore store;
     AndroidUpmixingSettings upmixingSettings;
@@ -64,7 +63,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
     PostRenderReport report;
     RealtimePlayerEngine playerEngine;
     AndroidAudioOutput audioOutput;
-    AudioDeviceProfileManager audioDeviceProfileManager;
 
     AndroidStrings S => AndroidStrings.Active;
 
@@ -265,17 +263,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         mediaNotification.SeekRequestedMs += ms => SeekAbsoluteSeconds(ms / 1000.0);
 
         BinauralProfileService.ApplySavedProfile(this, store);
-        BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
         playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
-
-        AutoEqService.EnsureLoaded(this);
-        AutoEqService.ApplySavedToEngine(this, store, playerEngine);
-        audioDeviceProfileManager = new AudioDeviceProfileManager(this, store, playerEngine);
-        audioDeviceProfileManager.ActiveDeviceChanged += OnAudioDeviceRouteChanged;
 
         uiHandler = new Handler(Looper.MainLooper);
         BuildRootUi();
-        audioDeviceProfileManager.Start();
         RequestMediaPermissionsIfNeeded();
         StartTelemetryTimer();
 
@@ -320,7 +311,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
         musicVideoStage?.ReleasePlayer();
         currentMediaMeta?.ArtworkBitmap?.Dispose();
         defaultFallbackCover?.Dispose();
-        audioDeviceProfileManager?.Dispose();
         audioOutput?.Dispose();
         playerEngine?.Dispose();
         decodedTrueHDTrack?.Dispose();
@@ -1178,11 +1168,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
             Task.Run(() => {
                 string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
                 RunOnUiThread(() => LoadExternalSubtitleFromPath(path));
-            });
-        } else if (requestCode == ReqLoadAutoEq && data.Data != null) {
-            Task.Run(() => {
-                string path = AndroidFileHelper.ResolveReadablePath(this, data.Data);
-                RunOnUiThread(() => ImportCustomAutoEqFile(path));
             });
         }
     }
