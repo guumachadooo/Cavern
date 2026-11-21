@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 using Cavern.Channels;
 using Cavern.Format.Decoders;
@@ -16,6 +16,11 @@ namespace Cavern.Format.Renderers {
         /// The stream is coded in the Enhanced version of AC-3.
         /// </summary>
         public bool Enhanced => ((EnhancedAC3Decoder)stream).Enhanced;
+
+        /// <summary>
+        /// Decoded Dolby Dialogue Normalization level in LKFS/LUFS (-31..-1 LUFS per ATSC A/52 &amp; ETSI TS 102 366).
+        /// </summary>
+        public float DialnormLufs => ((EnhancedAC3Decoder)stream).DialnormLufs;
 
         /// <summary>
         /// Count of free-floating objects.

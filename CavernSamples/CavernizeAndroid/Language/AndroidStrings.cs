@@ -622,6 +622,34 @@ public sealed class AndroidStrings {
         ["HrtfWizAppliedToast"] = "Personalized HRTF profile saved and applied.",
         ["HptfTonePlayingToast"] = "Playing safe -18 dBFS HpTF tone at {0:0} Hz...",
         ["HptfSweepPlayingToast"] = "Playing safe -18 dBFS 6–10 kHz ear-canal sweep...",
+
+        // Slot 6B: Psychoacoustics & Studio Loudness Standards (ISO 226:2023, ITU-R BS.1770-5 / EBU R128, Spatial Dialog, 4x True-Peak Limiter)
+        ["Slot6BCardTitle"] = "Psychoacoustics & Loudness (Slot 6B)",
+        ["LoudnessMeterIdle"] = "BS.1770-5 Meter: waiting for audio · Ceiling {0:0.#} dBTP",
+        ["LoudnessMeterLive"] = "M {0} · S {1} · I {2} LUFS · LRA {3:0.0} LU · TP {4:0.0} dBTP{5}{6}",
+        ["LoudnessStatusSummary"] = "ISO 226: {0} · Dialog: {1} · Limiter: {2:0.#} dBTP",
+        ["Iso226EnableTitle"] = "ISO 226:2023 Dynamic Equal-Loudness",
+        ["TipIso226"] = "Physiological bass & treble contour compensation (ISO 226:2023 Table 1) at low listening volumes. Automatically bypasses bit-identically (0.00 dB) at reference SPL and locks 1 kHz to 0.00 dB.",
+        ["Iso226TrackVolTitle"] = "Track Player Volume Automatically",
+        ["Iso226RefSplTitle"] = "Reference Studio Level",
+        ["Iso226ListenSplTitle"] = "Manual Listening Level",
+        ["LoudnessNormTitle"] = "BS.1770-5 / EBU R128 Normalization",
+        ["LoudnessNormOff"] = "Off (Meter Only · Bit-Transparent)",
+        ["LoudnessNormEbu"] = "EBU R128 Broadcast (-23 LUFS)",
+        ["LoudnessNormAtmos"] = "Dolby Atmos Music (-18 LUFS)",
+        ["LoudnessNormStream"] = "Streaming Reference (-14 LUFS)",
+        ["LoudnessNormDialnorm"] = "Dolby Dialnorm Bitstream (-31 dBFS)",
+        ["RespectDialnormTitle"] = "Respect Bitstream Dolby Dialnorm",
+        ["TipRespectDialnorm"] = "Uses certified Dolby AC-3 / E-AC-3 dialnorm metadata as static loudness anchor to preserve 100% macro-dynamics with zero pumping.",
+        ["DialogEnhanceTitle"] = "Spatial Dialog Enhancement",
+        ["TipDialogEnhance"] = "Isolates Center bed & front-center 3D objects pre-virtualizer with zero EQ smearing (Path A), or uses phase-coherent LR4 Mid/Side speech isolation on 2.0 stereo (Path B).",
+        ["DialogBoostTitle"] = "Dialog Intelligibility Lift",
+        ["TruePeakCeilingTitle"] = "4x True-Peak Brickwall Ceiling",
+        ["TruePeakCeil01"] = "-0.1 dBTP (Lossless Max Headroom)",
+        ["TruePeakCeil10"] = "-1.0 dBTP (EBU R128 / Streaming)",
+        ["TruePeakCeil20"] = "-2.0 dBTP (Conservative DAC Margin)",
+        ["LoudnessResetMeterBtn"] = "Reset BS.1770 Meter",
+        ["LoudnessMeterResetToast"] = "ITU-R BS.1770-5 Integrated LUFS & LRA meter reset.",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -1193,6 +1221,34 @@ public sealed class AndroidStrings {
         d["HrtfWizAppliedToast"] = "Perfil HRTF personalizado salvo e aplicado.";
         d["HptfTonePlayingToast"] = "Reproduzindo tom seguro -18 dBFS em {0:0} Hz...";
         d["HptfSweepPlayingToast"] = "Reproduzindo varredura segura -18 dBFS de 6–10 kHz...";
+
+        // Slot 6B: Psicoacústica e Padrões de Loudness de Estúdio
+        d["Slot6BCardTitle"] = "Psicoacústica e Loudness (Slot 6B)";
+        d["LoudnessMeterIdle"] = "Medidor BS.1770-5: aguardando áudio · Teto {0:0.#} dBTP";
+        d["LoudnessMeterLive"] = "M {0} · S {1} · I {2} LUFS · LRA {3:0.0} LU · TP {4:0.0} dBTP{5}{6}";
+        d["LoudnessStatusSummary"] = "ISO 226: {0} · Diálogo: {1} · Limiter: {2:0.#} dBTP";
+        d["Iso226EnableTitle"] = "ISO 226:2023 Igual-Sonoridade Dinâmica";
+        d["TipIso226"] = "Compensação fisiológica de graves e agudos (ISO 226:2023 Tabela 1) em volumes baixos. Bypass bit-idêntico (0,00 dB) no SPL de referência com 1 kHz travado em 0,00 dB.";
+        d["Iso226TrackVolTitle"] = "Acompanhar Volume do Player";
+        d["Iso226RefSplTitle"] = "Nível de Referência (Estúdio)";
+        d["Iso226ListenSplTitle"] = "Nível de Audição Manual";
+        d["LoudnessNormTitle"] = "Normalização BS.1770-5 / EBU R128";
+        d["LoudnessNormOff"] = "Desligada (Só Medidor · Transparente)";
+        d["LoudnessNormEbu"] = "EBU R128 Broadcast (-23 LUFS)";
+        d["LoudnessNormAtmos"] = "Dolby Atmos Music (-18 LUFS)";
+        d["LoudnessNormStream"] = "Referência Streaming (-14 LUFS)";
+        d["LoudnessNormDialnorm"] = "Dolby Dialnorm do Bitstream (-31 dBFS)";
+        d["RespectDialnormTitle"] = "Respeitar Dolby Dialnorm do Bitstream";
+        d["TipRespectDialnorm"] = "Usa o metadado oficial Dolby dialnorm (AC-3 / E-AC-3) como âncora estática de loudness, preservando 100% da macrodinâmica sem bombeamento.";
+        d["DialogEnhanceTitle"] = "Realce Espacial de Diálogos";
+        d["TipDialogEnhance"] = "Isola o canal Central e objetos 3D frontais pré-virtualizador sem coloração de EQ (Caminho A), ou aplica isolamento Mid/Side LR4 coerente em fase no estéreo 2.0 (Caminho B).";
+        d["DialogBoostTitle"] = "Ganho de Inteligibilidade de Voz";
+        d["TruePeakCeilingTitle"] = "Teto do Limiter True-Peak 4x";
+        d["TruePeakCeil01"] = "-0,1 dBTP (Máximo Headroom Lossless)";
+        d["TruePeakCeil10"] = "-1,0 dBTP (EBU R128 / Streaming)";
+        d["TruePeakCeil20"] = "-2,0 dBTP (Margem Conservadora DAC)";
+        d["LoudnessResetMeterBtn"] = "Zerar Medidor BS.1770";
+        d["LoudnessMeterResetToast"] = "Medidor ITU-R BS.1770-5 (LUFS Integrado e LRA) zerado.";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

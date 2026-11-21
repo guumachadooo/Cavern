@@ -209,9 +209,39 @@ namespace Cavern.Spatial {
         public float ShortTermLufs { get; set; }
 
         /// <summary>
-        /// Maximum True Peak level in dBFS (4x oversampled in W07, sample peak baseline in W01).
+        /// Maximum True Peak level in dBTP (4x-oversampled BS.1770-5 Annex 2 polyphase FIR).
         /// </summary>
         public float TruePeakDbfs { get; set; }
+
+        /// <summary>
+        /// Two-stage gated Integrated loudness in LUFS (ITU-R BS.1770-5), or <see cref="float.NaN"/> when unmeasured.
+        /// </summary>
+        public float IntegratedLufs { get; set; }
+
+        /// <summary>
+        /// EBU Tech 3342 Loudness Range (LRA) in LU (95th minus 10th percentile of gated 3 s blocks).
+        /// </summary>
+        public float LoudnessRangeLu { get; set; }
+
+        /// <summary>
+        /// Instantaneous Peak-to-RMS Crest Factor in dB (True Peak - 400 ms RMS).
+        /// </summary>
+        public float CrestFactorDb { get; set; }
+
+        /// <summary>
+        /// Active 4x True-Peak Limiter gain reduction in dB (&lt;= 0.0 dB).
+        /// </summary>
+        public float LimiterGainReductionDb { get; set; }
+
+        /// <summary>
+        /// Active ITU-R BS.1770-5 / Dolby Dialnorm loudness normalization gain currently applied in dB.
+        /// </summary>
+        public float AppliedLoudnessGainDb { get; set; }
+
+        /// <summary>
+        /// Active bitstream Dolby Dialnorm level in LUFS (e.g., -27 or -31 LUFS), or <see cref="float.NaN"/> when absent.
+        /// </summary>
+        public float ActiveDialnormLufs { get; set; }
 
         /// <summary>
         /// Returns an empty telemetry snapshot.
@@ -223,7 +253,13 @@ namespace Cavern.Spatial {
                 DominantDoa = Vector3.Zero,
                 MomentaryLufs = float.NaN,
                 ShortTermLufs = float.NaN,
-                TruePeakDbfs = -120f
+                IntegratedLufs = float.NaN,
+                LoudnessRangeLu = 0f,
+                TruePeakDbfs = -120f,
+                CrestFactorDb = 0f,
+                LimiterGainReductionDb = 0f,
+                AppliedLoudnessGainDb = 0f,
+                ActiveDialnormLufs = float.NaN
             };
         }
     }

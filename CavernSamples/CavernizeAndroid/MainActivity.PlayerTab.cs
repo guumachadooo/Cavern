@@ -1121,12 +1121,16 @@ public partial class MainActivity {
     }
 
     void StartTelemetryTimer() {
+        int loudnessMeterTick = 0;
         void Tick() {
             if (uiDestroyed) {
                 return;
             }
             if (playerEngine != null && playerEngine.IsPlaying) {
                 SyncPlaybackUi(true, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
+                if ((++loudnessMeterTick & 3) == 0) {
+                    RefreshLiveLoudnessMeterUi();
+                }
             }
             uiHandler?.PostDelayed(Tick, 65);
         }

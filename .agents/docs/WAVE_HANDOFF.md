@@ -1,10 +1,10 @@
 # Spatial Roadmap Wave Handoff (Compact)
-- **Last Completed:** `W06` (`[x]`) — MagLS Ambisonics (`O1..O5`), Woodworth-Schlosberg Biometric Head-Width ITD (`13–18 cm`), HpTF `6–10 kHz` Ear-Canal Notch (`Priority=110`), Impulcifer/HeSuVi/SOFA pipeline & 60s SONICOM/HUTUBS Perceptual HRTF Wizard.
-- **Next Wave:** `W07` — **Psychoacoustics & Studio Loudness Standards (Slot 6B)**:
-  - Real-time ISO 226:2023 Dynamic Equal-Loudness physiological compensation (`0.00 dB` unity at ref SPL, zero-GC IIR shelving/peaking cascade).
-  - ITU-R BS.1770-5 / EBU R128 loudness meter (K-weighting + Momentary/Short-Term/Integrated LUFS + LRA) & Dolby Dialnorm respect.
-  - Spatial Dialog Enhancement (isolating Center / speech-band objects without EQ smearing, ready for `W09` lossless-twin assistance).
-  - Transparent 4x-oversampled `0 dBTP` True-Peak Limiter; expose reusable LUFS, crest-factor & True-Peak primitives for `W09` LGSR & `W11` Vocal Mix-Match.
-- **Audit First (before coding):** `Cavern/Filters/{Normalizer,Limiter,ParametricEqualizer}.cs`, `Cavernize.Logic/Spatial/Adapters/{NormalizerPostProcessingAdapter,AutoEqPostProcessingStage,HptfNotchPostProcessingStage}.cs`, `Cavernize.Logic/Rendering/RealtimePlayerEngine.cs`, `CavernizeAndroid/Services/AppSettingsStore.cs`, `MainActivity.SettingsTab.cs`, `AndroidStrings.cs`.
-- **Invariants:** `Cavern/` & `Cavern.Format/` strict C# 8.0; `targetSdkVersion="28"` immutable; zero fake DSP (exact ISO 226:2023 + ITU-R BS.1770-5 / `ebur128` tables); native One UI 9 only; 100% EN/PT-BR parity; `EXTRA_REQUESTS.md` pending queue empty.
-- **User Command:** When user says `continue`/`continuar`, execute `W07` immediately per `.agents/docs/SPATIAL_ROADMAP.md`.
+- **Last Completed:** `W07` (`[x]`) — Slot 6B Psychoacoustics & Studio Loudness: ISO 226:2023 Dynamic Equal-Loudness (`Priority=300`), ITU-R BS.1770-5 / EBU R128 / Dolby Dialnorm (`Priority=400`), Spatial Dialog Enhancement Path A/B (`Priority=500`), 4x True-Peak Brickwall Limiter (`Priority=900`), reusable `LoudnessMeter`/`TruePeakDetector` primitives (`W09`/`W11`), live Settings meter & 26 EN/PT-BR keys.
+- **Next Wave:** `W08` — **On-Device Neural Audio Runtime, Stem Separation, Spatial Karaoke & MVSEP Anti-Artifact Engine (Slot 2B)**:
+  - Managed ARM64 ONNX Runtime (`XNNPACK` + Snapdragon `QNN` EP, CPU fallback) in `FilesDir/bin/` (lazy model downloads + cache cleanup, `FFmpeg`/`truehdd` pattern).
+  - Stem separators (`SCNet` mobile, `Mel-Band/BS-RoFormer` studio), **Karaoke Lead-vs-Backing Vocal** (`0%–100%`), **Dereverb** (`W11` RIR/dry-wet), optional `Debleed/Denoise`, and codec restorers (`Apollo`, `AP-BWE`/`FlashSR`).
+  - **Mandatory MVSEP Anti-Artifact Pipeline:** Hann/raised-cosine `overlap` (`2x–8x`), optional `TTA`, `avg_wave`/`min_fft` ensembling, `phase_fix` Wiener anchoring, exact energy conservation (`residual = mix - sum(stems)`).
+  - **Spatial Karaoke Engine:** zero-phase multichannel coherence Wiener vocal mask across all 12–16 Atmos beds/objects (auto-ready for `W09` lossless twin), placing stems as 3D objects in `SpatialSceneHub` + Hybrid Neural+DirAC upmix.
+- **Audit First (before coding):** `Cavernize.Logic/Rendering/StemExtractor.cs`, `CavernizeAndroid/Services/{FFmpegInstallerService,TruehddInstallerService}.cs`, `Cavernize.Logic/Spatial/{ISpatialPipelineSlots,SpatialSceneHub}.cs`, `RealtimePlayerEngine.cs`, `CavernizeAndroid.csproj`, `AndroidStrings.cs`.
+- **Invariants:** `Cavern/` & `Cavern.Format/` strict C# 8.0; `targetSdkVersion="28"` immutable; zero fake DSP; native One UI 9 only; 100% EN/PT-BR parity; `EXTRA_REQUESTS.md` pending queue empty. Split into `W08.a`/`W08.b` if scope exceeds one clean wave.
+- **User Command:** When user says `continue`/`continuar`, execute `W08` immediately per `.agents/docs/SPATIAL_ROADMAP.md`.

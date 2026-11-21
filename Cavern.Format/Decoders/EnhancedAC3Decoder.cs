@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -28,6 +28,11 @@ namespace Cavern.Format.Decoders {
         /// Samples in each decoded frame.
         /// </summary>
         public int FrameSize => header.Blocks * samplesPerBlock;
+
+        /// <summary>
+        /// Decoded Dolby Dialogue Normalization level in LKFS/LUFS (-31..-1 LUFS per ATSC A/52 &amp; ETSI TS 102 366).
+        /// </summary>
+        public float DialnormLufs => header.DialnormLufs;
 
         /// <summary>
         /// Header data container and reader.

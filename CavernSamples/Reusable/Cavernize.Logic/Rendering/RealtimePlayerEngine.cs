@@ -39,7 +39,11 @@ public sealed class RealtimePlayerEngine : IDisposable {
     readonly CavernVirtualizerRendererAdapter virtualizerRenderer = new();
     readonly AutoEqPostProcessingStage autoEqPostStage = new();
     readonly HptfNotchPostProcessingStage hptfNotchPostStage = new();
+    readonly Iso226LoudnessPostProcessingStage iso226PostStage = new();
+    readonly Bs1770LoudnessPostProcessingStage bs1770PostStage = new();
+    readonly SpatialDialogPostProcessingStage spatialDialogPostStage = new();
     readonly NormalizerPostProcessingAdapter limiterPostStage = new(true);
+    readonly TruePeakLimiterPostProcessingStage truePeakLimiterPostStage = new();
     readonly SpatialSceneFrame activeSceneFrame = new();
 
     CavernizeTrack currentTrack;
@@ -59,9 +63,11 @@ public sealed class RealtimePlayerEngine : IDisposable {
     long lastSourceMaskHash;
     bool lastDynamicCeilingState;
     Source[] cachedActiveSources = Array.Empty<Source>();
+    float[] cachedBaseSourceVolumes = Array.Empty<float>();
     int activeNativeSampleRateRequest;
     PhysicalExternalizationConfig externalizationConfig = PhysicalExternalizationConfig.Default;
     HrtfPersonalizationConfig personalizationConfig = HrtfPersonalizationConfig.Default;
+    PsychoacousticLoudnessConfig loudnessConfig = PsychoacousticLoudnessConfig.Default;
     bool lastExternalizationBrirState;
     Vector3 lastExternalizationEnvSize;
 
@@ -74,7 +80,11 @@ public sealed class RealtimePlayerEngine : IDisposable {
         sceneHub.RegisterStageProcessor(parametricUpmixerStage);
         sceneHub.RegisterPostProcessingStage(autoEqPostStage);
         sceneHub.RegisterPostProcessingStage(hptfNotchPostStage);
+        sceneHub.RegisterPostProcessingStage(iso226PostStage);
+        sceneHub.RegisterPostProcessingStage(bs1770PostStage);
+        sceneHub.RegisterPostProcessingStage(spatialDialogPostStage);
         sceneHub.RegisterPostProcessingStage(limiterPostStage);
+        sceneHub.RegisterPostProcessingStage(truePeakLimiterPostStage);
     }
 
     /// <summary>
@@ -128,6 +138,68 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 ArmCrossfadeLocked();
             }
             SyncExternalizationLocked();
+        }
+    }
+
+    /// <summary>
+    /// Slot 6B ISO 226:2023 Dynamic Equal-Loudness physiological compensation stage (Priority 300).
+    /// </summary>
+    public Iso226LoudnessPostProcessingStage Iso226Stage => iso226PostStage;
+
+    /// <summary>
+    /// Slot 6B ITU-R BS.1770-5 / EBU R128 loudness meter &amp; Dolby Dialnorm normalization stage (Priority 400).
+    /// </summary>
+    public Bs1770LoudnessPostProcessingStage LoudnessMeterStage => bs1770PostStage;
+
+    /// <summary>
+    /// Slot 6B Spatial Dialog Enhancement stage (Priority 500; Path A pre-virtualizer + Path B LR4 Mid/Side fallback).
+    /// </summary>
+    public SpatialDialogPostProcessingStage SpatialDialogStage => spatialDialogPostStage;
+
+    /// <summary>
+    /// Slot 6B transparent 4x-oversampled True-Peak Lookahead Brickwall Limiter (Priority 900).
+    /// </summary>
+    public TruePeakLimiterPostProcessingStage TruePeakLimiterStage => truePeakLimiterPostStage;
+
+    /// <summary>
+    /// Active Slot 6B psychoacoustics &amp; studio loudness standards configuration.
+    /// </summary>
+    public PsychoacousticLoudnessConfig LoudnessConfig => loudnessConfig;
+
+    /// <summary>
+    /// Live Slot 6B loudness, ISO 226:2023, Spatial Dialog, and True-Peak limiter telemetry snapshot.
+    /// </summary>
+    public LoudnessStandardsDiagnostics LoudnessDiagnostics => sceneHub.LoudnessDiagnostics;
+
+    /// <summary>
+    /// Applies updated Slot 6B psychoacoustics &amp; studio loudness standards parameters cleanly in real time.
+    /// </summary>
+    public void ApplyLoudnessConfig(PsychoacousticLoudnessConfig config) {
+        PsychoacousticLoudnessConfig safe = (config ?? PsychoacousticLoudnessConfig.Default).Sanitize();
+        lock (renderLock) {
+            loudnessConfig = safe;
+            iso226PostStage.ApplyParameters(
+                safe.Iso226Enabled,
+                safe.Iso226ReferenceSplPhon,
+                safe.Iso226ListeningSplPhon,
+                safe.Iso226TrackVolume);
+            iso226PostStage.UpdatePlaybackVolume(Volume);
+            bs1770PostStage.ApplyParameters(safe.NormalizationMode, safe.RespectDolbyDialnorm);
+            spatialDialogPostStage.ApplyParameters(safe.DialogEnhancementEnabled, safe.DialogEnhancementDb);
+            truePeakLimiterPostStage.ApplyParameters(
+                safe.TruePeakLimiterEnabled || (NormalizerEnabled && LimiterOnly),
+                safe.TruePeakCeilingDbtp);
+            PublishLoudnessDiagnosticsLocked();
+        }
+    }
+
+    /// <summary>
+    /// Resets the ITU-R BS.1770-5 Integrated LUFS / LRA / Max True-Peak accumulators without interrupting playback.
+    /// </summary>
+    public void ResetLoudnessMeter() {
+        lock (renderLock) {
+            bs1770PostStage.Reset();
+            PublishLoudnessDiagnosticsLocked();
         }
     }
 
@@ -510,9 +582,13 @@ public sealed class RealtimePlayerEngine : IDisposable {
                     break;
                 }
 
-                // Slot 6: Ordered transparent post-processing stages (AutoEq Priority 100, ISO 226, BS.1770, Soft-Knee Limiter Priority 900)
-                limiterPostStage.LimiterOnly = LimiterOnly;
-                limiterPostStage.IsEnabled = (HeadphoneVirtualizer || autoEqPostStage.IsEnabled) && NormalizerEnabled;
+                // Slot 6: Ordered transparent post-processing stages
+                // (100 AutoEq, 110 HpTF, 300 ISO 226:2023, 400 BS.1770/Dialnorm, 500 Dialog Path B, 890 Legacy AGC, 900 4x True-Peak Limiter)
+                iso226PostStage.UpdatePlaybackVolume(Volume);
+                limiterPostStage.LimiterOnly = false;
+                limiterPostStage.IsEnabled = NormalizerEnabled && !LimiterOnly;
+                truePeakLimiterPostStage.IsEnabled = loudnessConfig.TruePeakLimiterEnabled || (NormalizerEnabled && LimiterOnly);
+                truePeakLimiterPostStage.CeilingDbtp = loudnessConfig.TruePeakCeilingDbtp;
                 IReadOnlyList<IPostProcessingStage> postStages = sceneHub.PostProcessingStages;
                 for (int p = 0; p < postStages.Count; p++) {
                     if (postStages[p].IsEnabled) {
@@ -546,9 +622,12 @@ public sealed class RealtimePlayerEngine : IDisposable {
                     }
                 }
 
-                SoundfieldTelemetry telemetry = activeSceneFrame.Telemetry;
-                telemetry.TruePeakDbfs = blockPeak > 1e-6f ? 20f * MathF.Log10(blockPeak) : -120f;
-                activeSceneFrame.Telemetry = telemetry;
+                // Preserve 4x-oversampled dBTP measured by BS.1770 stage; only fall back to sample peak if meter is disabled
+                if (!bs1770PostStage.IsEnabled) {
+                    SoundfieldTelemetry telemetry = activeSceneFrame.Telemetry;
+                    telemetry.TruePeakDbfs = blockPeak > 1e-6f ? 20f * MathF.Log10(blockPeak) : -120f;
+                    activeSceneFrame.Telemetry = telemetry;
+                }
 
                 RecordTailLocked(stereoOutput, outOffset, blockFrames);
 
@@ -560,6 +639,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 parametricUpmixerStage.SyncTelemetry(activeSceneFrame);
                 sceneHub.Telemetry = activeSceneFrame.Telemetry;
                 sceneHub.ExternalizationDiagnostics = virtualizerRenderer.Diagnostics;
+                PublishLoudnessDiagnosticsLocked();
             }
         }
 
@@ -633,14 +713,49 @@ public sealed class RealtimePlayerEngine : IDisposable {
     void RebuildCachedActiveSourcesLocked() {
         if (listener == null || listener.ActiveSources.Count == 0) {
             cachedActiveSources = Array.Empty<Source>();
+            cachedBaseSourceVolumes = Array.Empty<float>();
             return;
         }
         Source[] arr = new Source[listener.ActiveSources.Count];
+        float[] baseVols = new float[listener.ActiveSources.Count];
         int i = 0;
         foreach (Source s in listener.ActiveSources) {
-            arr[i++] = s;
+            arr[i] = s;
+            baseVols[i] = s.Volume;
+            i++;
         }
         cachedActiveSources = arr;
+        cachedBaseSourceVolumes = baseVols;
+    }
+
+    void PublishLoudnessDiagnosticsLocked() {
+        LoudnessAnalysisSnapshot snap = bs1770PostStage.Snapshot;
+        float postTp = snap.TruePeakDbtp + bs1770PostStage.AppliedGainDb;
+        if (truePeakLimiterPostStage.IsEnabled && postTp > truePeakLimiterPostStage.CeilingDbtp) {
+            postTp = truePeakLimiterPostStage.CeilingDbtp;
+        }
+        sceneHub.LoudnessDiagnostics = new LoudnessStandardsDiagnostics {
+            MomentaryLufs = snap.MomentaryLufs,
+            ShortTermLufs = snap.ShortTermLufs,
+            IntegratedLufs = snap.IntegratedLufs,
+            LoudnessRangeLu = snap.LoudnessRangeLu,
+            TruePeakDbtp = postTp,
+            MaxTruePeakDbtp = truePeakLimiterPostStage.IsEnabled
+                ? MathF.Min(snap.MaxTruePeakDbtp + bs1770PostStage.AppliedGainDb, truePeakLimiterPostStage.CeilingDbtp)
+                : snap.MaxTruePeakDbtp,
+            CrestFactorDb = snap.CrestFactorDb,
+            DialnormLufs = bs1770PostStage.ActiveDialnormLufs,
+            AppliedNormGainDb = bs1770PostStage.AppliedGainDb,
+            LimiterGainReductionDb = truePeakLimiterPostStage.PeakGainReductionDb,
+            Iso226Active = iso226PostStage.IsFilterActive,
+            Iso226EffectivePhon = iso226PostStage.EffectiveListeningSplPhon,
+            Iso226MaxBoostDb = iso226PostStage.MaxCompensationBoostDb,
+            Iso226FitRmsErrDb = iso226PostStage.FitRmsErrorDb,
+            DialogActive = loudnessConfig.DialogEnhancementEnabled && loudnessConfig.DialogEnhancementDb > 0.05f,
+            DialogIsSpatialMode = spatialDialogPostStage.SpatialPathActive,
+            DialogSpeechActivity = spatialDialogPostStage.SpeechActivity,
+            TruePeakCeilingDbtp = truePeakLimiterPostStage.CeilingDbtp
+        };
     }
 
     void SetupOutputLayout() {
@@ -776,8 +891,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
             : 1f;
         listener.Volume = Volume * (renderingSettings?.Gain ?? 1f) * safeGain;
         listener.LFEVolume = LFEVolume;
-        // Avoid double limiting: when HeadphoneVirtualizer is active, only the single post-virtualizer stereo-linked limiter runs.
-        listener.Normalizer = !HeadphoneVirtualizer && NormalizerEnabled ? 1f : 0f;
+        // Avoid double limiting: Slot 6 runs the single transparent 4x True-Peak Limiter (Priority 900)
+        // and optional upward AGC normalizer (Priority 890) across both Binaural and Direct 2.0 modes.
+        listener.Normalizer = 0f;
         listener.LimiterOnly = LimiterOnly;
     }
 
@@ -879,6 +995,50 @@ public sealed class RealtimePlayerEngine : IDisposable {
             }
         }
 
+        // Path A Spatial Dialog Enhancement (zero EQ smearing): isolate discrete FrontCenter bed and
+        // front-center dialogue-cone 3D objects directly in the pre-virtualizer domain without drifting base volumes.
+        bool dialogRequested = loudnessConfig.DialogEnhancementEnabled && loudnessConfig.DialogEnhancementDb > 0.05f;
+        bool hasSpatialDialogue = false;
+        if (dialogRequested && flatSources.Length == cachedBaseSourceVolumes.Length) {
+            for (int idx = 0; idx < flatSources.Length; idx++) {
+                Source src = flatSources[idx];
+                if (src.Mute) {
+                    continue;
+                }
+                bool isCenterBed = idx < sourceItems.Count && sourceItems[idx].Channel == ReferenceChannel.FrontCenter;
+                bool isLfeSrc = idx < sourceItems.Count && sourceItems[idx].IsLFE;
+                Vector3 normPos = src.Position * invEnv;
+                if (SpatialDialogEnhancer.IsDialogueCandidate(isCenterBed, isLfeSrc, normPos)) {
+                    hasSpatialDialogue = true;
+                    break;
+                }
+            }
+        }
+
+        spatialDialogPostStage.SpatialPathActive = dialogRequested && hasSpatialDialogue;
+        SpatialDialogEnhancer.ComputeSpatialGains(
+            dialogRequested,
+            loudnessConfig.DialogEnhancementDb,
+            hasSpatialDialogue,
+            out float dialogGain,
+            out float ambientGain);
+
+        if (flatSources.Length == cachedBaseSourceVolumes.Length) {
+            for (int idx = 0; idx < flatSources.Length; idx++) {
+                Source src = flatSources[idx];
+                float baseVol = cachedBaseSourceVolumes[idx];
+                if (!hasSpatialDialogue || !dialogRequested) {
+                    src.Volume = baseVol;
+                } else {
+                    bool isCenterBed = idx < sourceItems.Count && sourceItems[idx].Channel == ReferenceChannel.FrontCenter;
+                    bool isLfeSrc = idx < sourceItems.Count && sourceItems[idx].IsLFE;
+                    Vector3 normPos = src.Position * invEnv;
+                    bool isDiag = SpatialDialogEnhancer.IsDialogueCandidate(isCenterBed, isLfeSrc, normPos);
+                    src.Volume = baseVol * (isDiag ? dialogGain : (isLfeSrc ? 1f : ambientGain));
+                }
+            }
+        }
+
         if (hasRenderedAudio && lastSourceMaskHash != 0 && maskHash != lastSourceMaskHash && crossfadeRemaining == 0) {
             ArmCrossfadeLocked();
         }
@@ -924,7 +1084,11 @@ public sealed class RealtimePlayerEngine : IDisposable {
             virtualizerRenderer.Dispose();
             autoEqPostStage.Dispose();
             hptfNotchPostStage.Dispose();
+            iso226PostStage.Dispose();
+            bs1770PostStage.Dispose();
+            spatialDialogPostStage.Dispose();
             limiterPostStage.Dispose();
+            truePeakLimiterPostStage.Dispose();
             parametricUpmixerStage.Dispose();
             manualHeadTracker.Dispose();
         }

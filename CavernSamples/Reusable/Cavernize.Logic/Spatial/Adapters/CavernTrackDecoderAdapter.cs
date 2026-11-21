@@ -2,6 +2,7 @@ using System.Numerics;
 
 using Cavern;
 using Cavern.Channels;
+using Cavern.Filters;
 using Cavern.Format.Renderers;
 using Cavern.Format.Renderers.BaseClasses;
 using Cavern.Spatial;
@@ -80,7 +81,10 @@ public sealed class CavernTrackDecoderAdapter : ISpatialDecoder {
                 hasHeights = true;
             }
 
-            bool isDialogue = item.Channel == ReferenceChannel.FrontCenter;
+            bool isDialogue = SpatialDialogEnhancer.IsDialogueCandidate(
+                item.Channel == ReferenceChannel.FrontCenter,
+                item.IsLFE,
+                item.NormalizedPosition);
             descriptors.Add(new SpatialSourceDescriptor {
                 Index = item.Index,
                 Name = item.Name,
@@ -119,6 +123,9 @@ public sealed class CavernTrackDecoderAdapter : ISpatialDecoder {
         metadata.HasNativeObjects = hasObjects;
         metadata.HasNativeHeights = hasHeights;
         metadata.HasLfe = hasLfe;
+        if (renderer is EnhancedAC3Renderer eac3Renderer) {
+            metadata.DialnormLufs = eac3Renderer.DialnormLufs;
+        }
     }
 
     /// <inheritdoc/>

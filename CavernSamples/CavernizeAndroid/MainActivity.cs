@@ -277,6 +277,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
         playerEngine.ApplyExternalizationConfig(store.BuildExternalizationConfig());
         playerEngine.ApplyPersonalizationConfig(store.BuildPersonalizationConfig());
+        playerEngine.ApplyLoudnessConfig(store.BuildLoudnessConfig());
 
         AutoEqService.EnsureLoaded(this);
         AutoEqService.ApplySavedToEngine(this, store, playerEngine);
@@ -294,6 +295,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshHeadTrackingUi();
         RefreshExternalizationUi();
         RefreshPersonalizationUi();
+        RefreshLoudnessUi();
         RequestMediaPermissionsIfNeeded();
         StartTelemetryTimer();
 

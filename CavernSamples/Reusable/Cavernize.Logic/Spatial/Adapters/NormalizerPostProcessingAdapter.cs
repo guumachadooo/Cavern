@@ -5,7 +5,8 @@ namespace Cavernize.Logic.Spatial.Adapters;
 
 /// <summary>
 /// Slot 6 pass-through adapter wrapping Cavern's per-sample channel-linked soft-knee <see cref="Normalizer"/>.
-/// Runs at priority 900 (final safety ceiling) using a pre-allocated reusable buffer for zero steady-state GC.
+/// Runs at priority 890 (optional upward AGC ahead of the final 4x True-Peak brickwall limiter at 900)
+/// using a pre-allocated reusable buffer for zero steady-state GC.
 /// </summary>
 public sealed class NormalizerPostProcessingAdapter : IPostProcessingStage {
     Normalizer normalizer;
@@ -21,7 +22,7 @@ public sealed class NormalizerPostProcessingAdapter : IPostProcessingStage {
     public string DisplayName => "Transparent Soft-Knee Limiter";
 
     /// <inheritdoc/>
-    public int Priority => 900;
+    public int Priority => 890;
 
     /// <inheritdoc/>
     public bool IsEnabled { get; set; } = true;

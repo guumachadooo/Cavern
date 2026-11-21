@@ -10,6 +10,7 @@ using Android.Views;
 using Android.Widget;
 
 using Cavern;
+using Cavern.Filters;
 using Cavern.Format;
 using Cavern.Format.Common;
 using Cavern.Utilities;
@@ -73,6 +74,10 @@ public partial class MainActivity {
     Switch biometricItdSwitch, hptfNotchSwitch;
     OneUiSeekBar headWidthBar, manualItdBar, hptfFreqBar, hptfGainBar, hptfQBar;
     TextView personalizationStatusText;
+    Switch iso226EnabledSwitch, iso226TrackVolSwitch, respectDialnormSwitch, dialogEnhanceSwitch;
+    OneUiSeekBar iso226RefSplBar, iso226ListenSplBar, dialogBoostBar;
+    OneUiInlineSelector loudnessNormSelector, truePeakCeilingSelector;
+    TextView loudnessMeterText, loudnessStatusText;
     CancellationTokenSource calibrationAudioCts;
     int personalizationRebuildSeq;
     Button filtersBtn;
@@ -673,6 +678,134 @@ public partial class MainActivity {
         slot5bCard.AddView(slot5bRow2, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         page.AddView(slot5bCard);
+
+        // 3C. Slot 6B: Psychoacoustics & Studio Loudness Standards (ISO 226:2023, ITU-R BS.1770-5 / EBU R128, Spatial Dialog, 4x True-Peak Limiter)
+        LinearLayout slot6bCard = Card(S["Slot6BCardTitle"], OneUiIconType.SpeakerHigh, OneUiTheme.IconSliderMedia);
+
+        loudnessMeterText = Label(string.Format(S["LoudnessMeterIdle"], store.ResolveTruePeakCeilingDbtp()), 12f, OneUiTheme.PrimaryHigh);
+        slot6bCard.AddView(loudnessMeterText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(4)
+        });
+
+        loudnessStatusText = Label("", 11.5f, OneUiTheme.TextSub);
+        slot6bCard.AddView(loudnessStatusText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        iso226EnabledSwitch = AddSwitchRow(slot6bCard, S["Iso226EnableTitle"], store.Iso226Enabled, v => {
+            store.Iso226Enabled = v;
+            ApplyAndRefreshLoudness();
+        }, helpBody: S["TipIso226"]);
+
+        iso226TrackVolSwitch = AddSwitchRow(slot6bCard, S["Iso226TrackVolTitle"], store.Iso226TrackVolume, v => {
+            store.Iso226TrackVolume = v;
+            ApplyAndRefreshLoudness();
+        });
+
+        (iso226RefSplBar, _) = AddSliderRow(
+            slot6bCard,
+            S["Iso226RefSplTitle"],
+            70,
+            85,
+            Math.Clamp((int)Math.Round(store.Iso226ReferenceSplPhon), 70, 85),
+            v => {
+                store.Iso226ReferenceSplPhon = v;
+                ApplyAndRefreshLoudness();
+            },
+            " phon",
+            defaultValue: 80);
+
+        (iso226ListenSplBar, _) = AddSliderRow(
+            slot6bCard,
+            S["Iso226ListenSplTitle"],
+            40,
+            95,
+            Math.Clamp((int)Math.Round(store.Iso226ListeningSplPhon), 40, 95),
+            v => {
+                store.Iso226ListeningSplPhon = v;
+                ApplyAndRefreshLoudness();
+            },
+            " phon",
+            defaultValue: 68);
+
+        AddDivider(slot6bCard);
+
+        loudnessNormSelector = new OneUiInlineSelector(this, S["LoudnessNormTitle"]);
+        string[] normLabels = [
+            S["LoudnessNormOff"],
+            S["LoudnessNormEbu"],
+            S["LoudnessNormAtmos"],
+            S["LoudnessNormStream"],
+            S["LoudnessNormDialnorm"]
+        ];
+        loudnessNormSelector.SetItems(normLabels, Math.Clamp(store.LoudnessNormModeIndex, 0, normLabels.Length - 1));
+        loudnessNormSelector.SelectionChanged += pos => {
+            store.LoudnessNormModeIndex = pos;
+            ApplyAndRefreshLoudness();
+        };
+        slot6bCard.AddView(loudnessNormSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        respectDialnormSwitch = AddSwitchRow(slot6bCard, S["RespectDialnormTitle"], store.RespectDolbyDialnorm, v => {
+            store.RespectDolbyDialnorm = v;
+            ApplyAndRefreshLoudness();
+        }, helpBody: S["TipRespectDialnorm"]);
+
+        AddDivider(slot6bCard);
+
+        dialogEnhanceSwitch = AddSwitchRow(slot6bCard, S["DialogEnhanceTitle"], store.DialogEnhancementEnabled, v => {
+            store.DialogEnhancementEnabled = v;
+            ApplyAndRefreshLoudness();
+        }, helpBody: S["TipDialogEnhance"]);
+
+        (dialogBoostBar, _) = AddSliderRow(
+            slot6bCard,
+            S["DialogBoostTitle"],
+            0,
+            60,
+            Math.Clamp((int)Math.Round(store.DialogEnhancementDb * 10f), 0, 60),
+            v => {
+                store.DialogEnhancementDb = v * 0.1f;
+                if (dialogBoostBar != null) {
+                    dialogBoostBar.ValueText = $"+{store.DialogEnhancementDb:0.0} dB";
+                    dialogBoostBar.Invalidate();
+                }
+                ApplyAndRefreshLoudness();
+            },
+            " dB",
+            defaultValue: 30);
+        if (dialogBoostBar != null) {
+            dialogBoostBar.ValueText = $"+{store.DialogEnhancementDb:0.0} dB";
+        }
+
+        AddDivider(slot6bCard);
+
+        truePeakCeilingSelector = new OneUiInlineSelector(this, S["TruePeakCeilingTitle"]);
+        string[] ceilLabels = [
+            S["TruePeakCeil01"],
+            S["TruePeakCeil10"],
+            S["TruePeakCeil20"]
+        ];
+        truePeakCeilingSelector.SetItems(ceilLabels, Math.Clamp(store.TruePeakCeilingIndex, 0, ceilLabels.Length - 1));
+        truePeakCeilingSelector.SelectionChanged += pos => {
+            store.TruePeakCeilingIndex = pos;
+            ApplyAndRefreshLoudness();
+        };
+        slot6bCard.AddView(truePeakCeilingSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        Button resetLoudnessMeterBtn = PillButton(S["LoudnessResetMeterBtn"], () => {
+            playerEngine?.ResetLoudnessMeter();
+            RefreshLiveLoudnessMeterUi();
+            ShowToast(S["LoudnessMeterResetToast"]);
+        });
+        slot6bCard.AddView(resetLoudnessMeterBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(4)
+        });
+
+        page.AddView(slot6bCard);
 
         // 4. Collapsible Advanced Rendering & CLI Options
         LinearLayout advCard = Card();
@@ -1687,6 +1820,110 @@ public partial class MainActivity {
                 bool anyActive = diag.IsMagLsActive || diag.IsBiometricItdActive || diag.IsHptfNotchActive;
                 personalizationStatusText.SetTextColor(anyActive ? OneUiTheme.PrimaryHigh : OneUiTheme.TextSub);
             }
+        }
+    }
+
+    void ApplyAndRefreshLoudness() {
+        if (store == null || playerEngine == null) {
+            return;
+        }
+        playerEngine.ApplyLoudnessConfig(store.BuildLoudnessConfig());
+        RefreshLoudnessUi();
+    }
+
+    void RefreshLoudnessUi() {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        if (iso226EnabledSwitch != null && iso226EnabledSwitch.Checked != store.Iso226Enabled) {
+            iso226EnabledSwitch.Checked = store.Iso226Enabled;
+        }
+        if (iso226TrackVolSwitch != null && iso226TrackVolSwitch.Checked != store.Iso226TrackVolume) {
+            iso226TrackVolSwitch.Checked = store.Iso226TrackVolume;
+        }
+        if (iso226RefSplBar != null) {
+            int r = Math.Clamp((int)Math.Round(store.Iso226ReferenceSplPhon), 70, 85);
+            if (iso226RefSplBar.Progress != r - 70) {
+                iso226RefSplBar.Progress = r - 70;
+            }
+        }
+        if (iso226ListenSplBar != null) {
+            int l = Math.Clamp((int)Math.Round(store.Iso226ListeningSplPhon), 40, 95);
+            if (iso226ListenSplBar.Progress != l - 40) {
+                iso226ListenSplBar.Progress = l - 40;
+            }
+        }
+        if (loudnessNormSelector != null) {
+            int nIdx = Math.Clamp(store.LoudnessNormModeIndex, 0, 4);
+            if (loudnessNormSelector.SelectedIndex != nIdx) {
+                loudnessNormSelector.SetSelection(nIdx, notify: false);
+            }
+        }
+        if (respectDialnormSwitch != null && respectDialnormSwitch.Checked != store.RespectDolbyDialnorm) {
+            respectDialnormSwitch.Checked = store.RespectDolbyDialnorm;
+        }
+        if (dialogEnhanceSwitch != null && dialogEnhanceSwitch.Checked != store.DialogEnhancementEnabled) {
+            dialogEnhanceSwitch.Checked = store.DialogEnhancementEnabled;
+        }
+        if (dialogBoostBar != null) {
+            int tenths = Math.Clamp((int)Math.Round(store.DialogEnhancementDb * 10f), 0, 60);
+            if (dialogBoostBar.Progress != tenths) {
+                dialogBoostBar.Progress = tenths;
+            }
+            dialogBoostBar.ValueText = $"+{store.DialogEnhancementDb:0.0} dB";
+            dialogBoostBar.Invalidate();
+        }
+        if (truePeakCeilingSelector != null) {
+            int cIdx = Math.Clamp(store.TruePeakCeilingIndex, 0, 2);
+            if (truePeakCeilingSelector.SelectedIndex != cIdx) {
+                truePeakCeilingSelector.SetSelection(cIdx, notify: false);
+            }
+        }
+        RefreshLiveLoudnessMeterUi();
+    }
+
+    void RefreshLiveLoudnessMeterUi() {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        var diag = playerEngine?.LoudnessDiagnostics ?? Cavernize.Logic.Spatial.LoudnessStandardsDiagnostics.Default;
+        if (loudnessMeterText != null) {
+            bool hasSignal = !float.IsNaN(diag.MomentaryLufs) || !float.IsNaN(diag.IntegratedLufs);
+            if (!hasSignal) {
+                loudnessMeterText.Text = string.Format(S["LoudnessMeterIdle"], store.ResolveTruePeakCeilingDbtp());
+                loudnessMeterText.SetTextColor(OneUiTheme.TextMuted);
+            } else {
+                string mStr = float.IsNaN(diag.MomentaryLufs) ? "--" : $"{diag.MomentaryLufs:0.0}";
+                string sStr = float.IsNaN(diag.ShortTermLufs) ? "--" : $"{diag.ShortTermLufs:0.0}";
+                string iStr = float.IsNaN(diag.IntegratedLufs) ? "--" : $"{diag.IntegratedLufs:0.0}";
+                string dnPart = !float.IsNaN(diag.DialnormLufs) ? $" · DN {diag.DialnormLufs:0} LUFS" : "";
+                string grPart = diag.LimiterGainReductionDb < -0.05f ? $" · GR {diag.LimiterGainReductionDb:0.0} dB" : "";
+                loudnessMeterText.Text = string.Format(
+                    S["LoudnessMeterLive"],
+                    mStr,
+                    sStr,
+                    iStr,
+                    diag.LoudnessRangeLu,
+                    diag.TruePeakDbtp,
+                    dnPart,
+                    grPart);
+                loudnessMeterText.SetTextColor(diag.LimiterGainReductionDb < -1.0f ? OneUiTheme.PeachText : OneUiTheme.PrimaryHigh);
+            }
+        }
+        if (loudnessStatusText != null) {
+            string isoPart = diag.Iso226Active
+                ? $"{diag.Iso226EffectivePhon:0} phon (+{diag.Iso226MaxBoostDb:0.0} dB)"
+                : (store.Iso226Enabled ? "Unity (0.0 dB)" : "Off");
+            string diagPart = diag.DialogActive
+                ? (diag.DialogIsSpatialMode ? $"Spatial (+{store.DialogEnhancementDb:0.0} dB)" : $"M/S LR4 (+{store.DialogEnhancementDb:0.0} dB)")
+                : "Off";
+            loudnessStatusText.Text = string.Format(
+                S["LoudnessStatusSummary"],
+                isoPart,
+                diagPart,
+                store.ResolveTruePeakCeilingDbtp());
+            bool anyActive = diag.Iso226Active || diag.DialogActive || store.LoudnessNormModeIndex > 0;
+            loudnessStatusText.SetTextColor(anyActive ? OneUiTheme.PrimaryHigh : OneUiTheme.TextSub);
         }
     }
 

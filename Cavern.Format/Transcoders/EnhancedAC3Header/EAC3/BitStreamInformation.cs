@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 using Cavern.Format.Utilities;
 
@@ -15,6 +15,16 @@ namespace Cavern.Format.Transcoders {
         bool addbsie;
         byte[] addbsi = Array.Empty<byte>();
         int addbsilen;
+
+        /// <summary>
+        /// Raw 5-bit AC-3/E-AC-3 dialogue normalization word (1..31 = -1..-31 LKFS; 0 reserved = -31 LKFS per ATSC A/52).
+        /// </summary>
+        public int Dialnorm => dialnorm;
+
+        /// <summary>
+        /// Decoded Dolby Dialnorm level in LKFS/LUFS (-31..-1 LUFS per ATSC A/52 &amp; ETSI TS 102 366).
+        /// </summary>
+        public float DialnormLufs => dialnorm <= 0 || dialnorm > 31 ? -31f : -dialnorm;
 
         /// <summary>
         /// Decodes the E-AC-3 header after the ID of the decoder.

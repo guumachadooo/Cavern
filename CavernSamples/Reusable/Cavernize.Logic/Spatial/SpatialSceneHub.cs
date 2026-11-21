@@ -131,6 +131,23 @@ public sealed class SpatialSceneHub {
     HrtfPersonalizationDiagnostics personalizationDiagnostics = HrtfPersonalizationDiagnostics.Default;
 
     /// <summary>
+    /// Live Slot 6B psychoacoustics &amp; studio loudness telemetry (ISO 226:2023, ITU-R BS.1770-5 M/S/I/LRA/dBTP, Dialnorm, Dialog, Limiter GR).
+    /// </summary>
+    public LoudnessStandardsDiagnostics LoudnessDiagnostics {
+        get {
+            lock (syncLock) {
+                return loudnessDiagnostics;
+            }
+        }
+        set {
+            lock (syncLock) {
+                loudnessDiagnostics = value;
+            }
+        }
+    }
+    LoudnessStandardsDiagnostics loudnessDiagnostics = LoudnessStandardsDiagnostics.Default;
+
+    /// <summary>
     /// Live Slot 4 audio output telemetry (sample rate, Float32, LowLatency, USB DAC preference, estimated latency, underruns).
     /// </summary>
     public AudioOutputDiagnostics AudioDiagnostics {

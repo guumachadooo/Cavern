@@ -444,6 +444,77 @@ public sealed class AppSettingsStore {
         PerceptualClusterId = PerceptualClusterId ?? ""
     };
 
+    // Slot 6B: Psychoacoustics & Studio Loudness Standards (ISO 226:2023, ITU-R BS.1770-5 / EBU R128, Spatial Dialog, 4x True-Peak Limiter)
+    public bool Iso226Enabled {
+        get => prefs.GetBoolean("iso226Enabled", false);
+        set => Edit().PutBoolean("iso226Enabled", value).Apply();
+    }
+
+    public float Iso226ReferenceSplPhon {
+        get => prefs.GetFloat("iso226RefPhon", Cavern.Filters.Iso226LoudnessFilter.DefaultReferenceSplPhon);
+        set => Edit().PutFloat("iso226RefPhon", Math.Clamp(value,
+            Cavern.Filters.Iso226LoudnessFilter.MinReferenceSplPhon,
+            Cavern.Filters.Iso226LoudnessFilter.MaxReferenceSplPhon)).Apply();
+    }
+
+    public float Iso226ListeningSplPhon {
+        get => prefs.GetFloat("iso226ListenPhon", Cavern.Filters.Iso226LoudnessFilter.DefaultListeningSplPhon);
+        set => Edit().PutFloat("iso226ListenPhon", Math.Clamp(value,
+            Cavern.Filters.Iso226LoudnessFilter.MinListeningSplPhon,
+            Cavern.Filters.Iso226LoudnessFilter.MaxListeningSplPhon)).Apply();
+    }
+
+    public bool Iso226TrackVolume {
+        get => prefs.GetBoolean("iso226TrackVol", true);
+        set => Edit().PutBoolean("iso226TrackVol", value).Apply();
+    }
+
+    public int LoudnessNormModeIndex {
+        get => prefs.GetInt("loudnessNormMode", (int)Cavernize.Logic.Spatial.LoudnessNormalizationMode.Off);
+        set => Edit().PutInt("loudnessNormMode", Math.Clamp(value, 0, 4)).Apply();
+    }
+
+    public bool RespectDolbyDialnorm {
+        get => prefs.GetBoolean("respectDialnorm", true);
+        set => Edit().PutBoolean("respectDialnorm", value).Apply();
+    }
+
+    public bool DialogEnhancementEnabled {
+        get => prefs.GetBoolean("dialogEnhanceEnabled", false);
+        set => Edit().PutBoolean("dialogEnhanceEnabled", value).Apply();
+    }
+
+    public float DialogEnhancementDb {
+        get => prefs.GetFloat("dialogEnhanceDb", Cavern.Filters.SpatialDialogEnhancer.DefaultBoostDb);
+        set => Edit().PutFloat("dialogEnhanceDb", Math.Clamp(value,
+            Cavern.Filters.SpatialDialogEnhancer.MinBoostDb,
+            Cavern.Filters.SpatialDialogEnhancer.MaxBoostDb)).Apply();
+    }
+
+    public int TruePeakCeilingIndex {
+        get => prefs.GetInt("truePeakCeilingIdx", 0); // 0 = -0.1 dBTP, 1 = -1.0 dBTP, 2 = -2.0 dBTP
+        set => Edit().PutInt("truePeakCeilingIdx", Math.Clamp(value, 0, 2)).Apply();
+    }
+
+    public float ResolveTruePeakCeilingDbtp() => TruePeakCeilingIndex switch {
+        1 => -1.0f,
+        2 => -2.0f,
+        _ => Cavern.Filters.TruePeakLimiter.DefaultCeilingDbtp
+    };
+
+    public Cavernize.Logic.Spatial.PsychoacousticLoudnessConfig BuildLoudnessConfig() => new() {
+        Iso226Enabled = Iso226Enabled,
+        Iso226ReferenceSplPhon = Iso226ReferenceSplPhon,
+        Iso226ListeningSplPhon = Iso226ListeningSplPhon,
+        Iso226TrackVolume = Iso226TrackVolume,
+        NormalizationMode = (Cavernize.Logic.Spatial.LoudnessNormalizationMode)Math.Clamp(LoudnessNormModeIndex, 0, 4),
+        RespectDolbyDialnorm = RespectDolbyDialnorm,
+        DialogEnhancementEnabled = DialogEnhancementEnabled,
+        DialogEnhancementDb = DialogEnhancementDb,
+        TruePeakLimiterEnabled = true,
+        TruePeakCeilingDbtp = ResolveTruePeakCeilingDbtp()
+    };
+
     public string DeviceProfilesJson {
         get => prefs.GetString("deviceProfilesV1", "[]");
         set => Edit().PutString("deviceProfilesV1", value ?? "[]").Apply();
