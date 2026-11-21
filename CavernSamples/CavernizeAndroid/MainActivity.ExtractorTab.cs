@@ -342,7 +342,8 @@ public partial class MainActivity {
                         exportSpatialKaraokeAtmos: neuralKaraokeAtmos,
                         exportHybrid714: exportHybrid,
                         onProgress: ReportProg,
-                        token: token);
+                        token: token,
+                        losslessTwin: activeLosslessTwin);
                     created.AddRange(res.CreatedFiles);
                 }
 

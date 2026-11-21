@@ -1130,6 +1130,7 @@ public partial class MainActivity {
                 SyncPlaybackUi(true, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
                 if ((++loudnessMeterTick & 3) == 0) {
                     RefreshLiveLoudnessMeterUi();
+                    RefreshLgsrUi();
                 }
             }
             uiHandler?.PostDelayed(Tick, 65);

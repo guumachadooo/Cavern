@@ -8,6 +8,19 @@ using Cavern.Utilities.Threading;
 
 namespace Cavern.Virtualizer {
     /// <summary>
+    /// Zero-GC Pre-HRTF Virtual Speaker Bus processor hook (used by W09 Tier 1 Lossless-Guided Spatial Restoration).
+    /// Runs directly on the de-interleaved virtual speaker feeds BEFORE ISM room reflections and HRIR convolution,
+    /// preserving JOC phase cancellation and feeding restored HF harmonics into pinna/room cues.
+    /// </summary>
+    public interface IPreHrtfBusProcessor {
+        /// <summary>
+        /// Processes <paramref name="blockSize"/> samples across all <paramref name="channelCount"/> virtual speaker
+        /// channels in place prior to ISM early reflections and HRIR convolution.
+        /// </summary>
+        void ProcessPreHrtfBus(float[][] virtualChannels, VirtualChannel[] channelLayout, int channelCount, int blockSize, int sampleRate);
+    }
+
+    /// <summary>
     /// Convolution filters for each ear and virtual channel to simulate a spatial environment.
     /// </summary>
     public partial class VirtualizerFilter {
@@ -100,6 +113,12 @@ namespace Cavern.Virtualizer {
         /// True when any virtual channel actively engaged Duda &amp; Martens near-field DVF on the last processed block.
         /// </summary>
         public static bool LastBlockNearFieldActive { get; private set; }
+
+        /// <summary>
+        /// Optional Pre-HRTF Virtual Speaker Bus processor invoked right before ISM room reflections and HRIR convolution
+        /// (W09 Tier 1 LGSR spectral fusion preserving JOC cancellation). Set to null to bypass with zero overhead.
+        /// </summary>
+        public static IPreHrtfBusProcessor PreHrtfBusProcessor { get; set; }
 
         /// <summary>
         /// Updates all Slot 5A physical externalization parameters atomically and refreshes <see cref="ActiveRoomGeometry"/>
@@ -448,6 +467,12 @@ namespace Cavern.Virtualizer {
                 for (int channel = 0; channel < channels; channel++, outSample++) {
                     originalSplit[channel][sample] = output[outSample];
                 }
+            }
+
+            // Slot 2C (W09): Pre-HRTF Virtual Speaker Bus hook (Lossless-Guided Atmos Restoration preserving JOC cancellation)
+            IPreHrtfBusProcessor preHrtfBus = PreHrtfBusProcessor;
+            if (preHrtfBus != null) {
+                preHrtfBus.ProcessPreHrtfBus(originalSplit, activeSet, channels, blockSize, sampleRate);
             }
 
             // Slot 5A: Pure-physics Allen & Berkley shoebox ISM early reflections (pre-HRIR, zero extra FFTs).

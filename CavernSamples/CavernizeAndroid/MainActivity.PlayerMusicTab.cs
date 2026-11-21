@@ -1656,8 +1656,43 @@ public partial class MainActivity {
         }
 
         box.AddView(qualCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = LoadedFile.Tracks.Count > 1 ? Dp(10) : 0
+            BottomMargin = Dp(8)
         });
+
+        // 2B. W09 Universal Lossless Twin & LGSR Status Card (shown when synced or actively bypassed with reason)
+        Cavernize.Logic.Spatial.LgsrDiagnostics lgsrDiag = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
+        if (lgsrDiag.State != Cavernize.Logic.Spatial.LosslessTwinVerificationState.None) {
+            LinearLayout lgsrCard = new(this) { Orientation = Orientation.Vertical };
+            lgsrCard.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 16f, OneUiTheme.BorderSubtle, 1f);
+            lgsrCard.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+
+            TextView lgsrHdr = Label(S["AudioSpecLgsrHeader"], 12.5f, OneUiTheme.IconSystemInfo);
+            lgsrHdr.SetTypeface(sfBold, TypefaceStyle.Bold);
+            lgsrHdr.SetPadding(0, 0, 0, Dp(4));
+            lgsrCard.AddView(lgsrHdr);
+
+            if (lgsrDiag.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.Synced) {
+                string twinLabel = string.IsNullOrEmpty(lgsrDiag.TwinFormatSummary)
+                    ? lgsrDiag.TwinFileName
+                    : $"{lgsrDiag.TwinFormatSummary} • {lgsrDiag.TwinFileName}";
+                lgsrCard.AddView(Label($"• {string.Format(S["AudioSpecLgsrActive"], twinLabel)}", 11.5f, ColText));
+                lgsrCard.AddView(Label($"• {string.Format(S["AudioSpecLgsrSync"], lgsrDiag.SyncOffsetMs, lgsrDiag.DriftPpm, lgsrDiag.SyncConfidence * 100f)}", 11.5f, OneUiTheme.TextSecondary));
+                lgsrCard.AddView(Label($"• {string.Format(S["AudioSpecLgsrBands"], lgsrDiag.CouplingStartHz / 1000f, lgsrDiag.SpxStartHz / 1000f, lgsrDiag.AverageCoherence * 100f)}", 11.5f, OneUiTheme.TextSecondary));
+                lgsrCard.AddView(Label($"• {string.Format(S["AudioSpecLgsrGuards"], lgsrDiag.DynamicEnvelopeLockDb, lgsrDiag.ClippingGuardActive ? "ON" : "OK")}", 11.5f, OneUiTheme.TextSecondary));
+            } else {
+                string stateMsg = lgsrDiag.State switch {
+                    Cavernize.Logic.Spatial.LosslessTwinVerificationState.Searching => S["LgsrStatusSearching"],
+                    Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedAlreadyLossless => S["LgsrStatusBypassedLossless"],
+                    Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedFakeLossless => S["LgsrStatusBypassedFake"],
+                    _ => S["LgsrStatusBypassedLowConf"]
+                };
+                lgsrCard.AddView(Label($"• {stateMsg}", 11.5f, OneUiTheme.TextSecondary));
+            }
+
+            box.AddView(lgsrCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = LoadedFile.Tracks.Count > 1 ? Dp(10) : 0
+            });
+        }
 
         // 3. Audio Streams Selector (only if container holds multiple audio tracks)
         if (LoadedFile.Tracks.Count > 1) {

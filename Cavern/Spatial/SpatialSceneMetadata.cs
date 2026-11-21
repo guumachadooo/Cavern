@@ -165,6 +165,22 @@ namespace Cavern.Spatial {
         public HoaNormalization HoaNormalization { get; set; }
 
         /// <summary>
+        /// Live E-AC-3 channel coupling start frequency in Hz (0 when inactive or non-E-AC-3).
+        /// </summary>
+        public float CouplingStartHz { get; set; }
+
+        /// <summary>
+        /// Live E-AC-3 Spectral Extension (SPX) start frequency in Hz (0 when inactive or non-E-AC-3).
+        /// </summary>
+        public float SpxStartHz { get; set; }
+
+        /// <summary>
+        /// True when the decoded stream is a lossy spatial/surround codec (e.g., E-AC-3 JOC, AC-3) eligible for W09 LGSR.
+        /// False for lossless streams (TrueHD, DAMF/ADM, FLAC, PCM, LAF).
+        /// </summary>
+        public bool IsLossySpatialStream { get; set; }
+
+        /// <summary>
         /// Creates a default channel-based metadata descriptor with unspecified loudness tags.
         /// </summary>
         public static SpatialProgramMetadata CreateDefault() {
@@ -174,7 +190,10 @@ namespace Cavern.Spatial {
                 IntegratedLoudnessLufs = float.NaN,
                 HoaOrder = 0,
                 HoaOrderScheme = HoaChannelOrder.Acn,
-                HoaNormalization = HoaNormalization.None
+                HoaNormalization = HoaNormalization.None,
+                CouplingStartHz = 0f,
+                SpxStartHz = 0f,
+                IsLossySpatialStream = false
             };
         }
     }
@@ -254,6 +273,36 @@ namespace Cavern.Spatial {
         public float KaraokeVocalLevel { get; set; }
 
         /// <summary>
+        /// W09 LGSR mean Magnitude-Squared Coherence <c>C_xy(t, f)</c> in [0; 1] against synced lossless FLAC twin.
+        /// </summary>
+        public float LgsrCoherence { get; set; }
+
+        /// <summary>
+        /// W09 LGSR active Pre-HRTF spectral fusion ratio in [0; 1].
+        /// </summary>
+        public float LgsrFusionRatio { get; set; }
+
+        /// <summary>
+        /// W09 GCC-PHAT sub-sample alignment offset in samples (lossless vs. Atmos).
+        /// </summary>
+        public float LgsrSyncOffsetSamples { get; set; }
+
+        /// <summary>
+        /// W09 Theil-Sen estimated clock drift in ppm.
+        /// </summary>
+        public float LgsrDriftPpm { get; set; }
+
+        /// <summary>
+        /// Live E-AC-3 channel coupling start frequency in Hz feeding LGSR &amp; W13 X-Ray HUD.
+        /// </summary>
+        public float LgsrCouplingHz { get; set; }
+
+        /// <summary>
+        /// Live E-AC-3 Spectral Extension (SPX) start frequency in Hz feeding LGSR &amp; W13 X-Ray HUD.
+        /// </summary>
+        public float LgsrSpxHz { get; set; }
+
+        /// <summary>
         /// Returns an empty telemetry snapshot.
         /// </summary>
         public static SoundfieldTelemetry Empty() {
@@ -271,7 +320,13 @@ namespace Cavern.Spatial {
                 AppliedLoudnessGainDb = 0f,
                 ActiveDialnormLufs = float.NaN,
                 VocalActivity = 0f,
-                KaraokeVocalLevel = 1f
+                KaraokeVocalLevel = 1f,
+                LgsrCoherence = 0f,
+                LgsrFusionRatio = 0f,
+                LgsrSyncOffsetSamples = 0f,
+                LgsrDriftPpm = 0f,
+                LgsrCouplingHz = 0f,
+                LgsrSpxHz = 0f
             };
         }
     }

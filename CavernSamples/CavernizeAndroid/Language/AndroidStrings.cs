@@ -704,6 +704,36 @@ public sealed class AndroidStrings {
         ["TipMvsepPhaseFix"] = "Reprojects neural stem magnitudes onto the original mixture complex phase via Wiener partition of unity, preventing phasey metallic ringing.",
         ["TipSpatialKaraoke"] = "Applies a shared real-valued zero-phase Wiener mask across all 1..32 Atmos beds and dynamic objects simultaneously, preserving 0.000 deg inter-channel phase coherence, LFE bass, and 3D trajectories. 100% is a bit-exact bypass.",
         ["TipNeuralUpmix"] = "Places separated neural stems (Vocals, Drums, Bass, Other, Residual) in 3D space or renders an energy-conserving 12-channel 7.1.4 Hybrid Neural + DirAC master.",
+
+        // Slot 2C: Universal Lossless Twin & Lossless-Guided Atmos Restoration (LGSR, W09)
+        ["Slot2CCardTitle"] = "Lossless-Guided Atmos Restoration (Slot 2C)",
+        ["LgsrStatusSearching"] = "Searching and sub-sample aligning lossless FLAC/WAV/ALAC twin...",
+        ["LgsrStatusNone"] = "No paired lossless twin active (auto-pairs when FLAC/WAV/ALAC twin exists)",
+        ["LgsrStatusBypassedLossless"] = "Auto-bypassed: active stream is already natively lossless (TrueHD/ADM/FLAC/WAV)",
+        ["LgsrStatusBypassedFake"] = "Bypassed: twin rejected as fake lossless (spectral lowpass cutoff detected)",
+        ["LgsrStatusBypassedLowConf"] = "Bypassed: twin alignment confidence below threshold (different edit/master)",
+        ["LgsrStatusSynced"] = "ATMOS + {0} ({1}) · Δ {2:0.00} ms ({3:+0.0;-0.0;0.0} ppm) · Coh {4:0}% · Cpl {5:0.0}k / SPX {6:0.0}k",
+        ["LgsrEnabledTitle"] = "Enable Lossless-Guided Restoration (LGSR)",
+        ["LgsrAutoDiscoverTitle"] = "Auto-Discover Lossless Twin (FLAC/WAV/ALAC)",
+        ["LgsrFusionStrengthTitle"] = "HF Spectral Fusion Strength",
+        ["LgsrEnvelopeLockTitle"] = "Atmos Dynamic Envelope Lock",
+        ["LgsrClippingGuardTitle"] = "FLAC Brickwall & Clipping Guard",
+        ["LgsrBitstreamGuideTitle"] = "Live E-AC-3 Coupling & SPX Bitstream Guide",
+        ["LgsrRejectFakeTitle"] = "Reject Fake / Transcoded Lossless Twins",
+        ["LgsrTier3CleanupTitle"] = "Tier 3 Apollo / AP-BWE Residual Cleanup (Offline)",
+        ["LgsrRescanTwinBtn"] = "Rescan Twin",
+        ["LgsrLicensesBtn"] = "DSP Credits",
+        ["LgsrLicensesTitle"] = "LGSR Scientific References & Licenses",
+        ["AudioSpecLgsrHeader"] = "ATMOS + LOSSLESS TWIN (LGSR)",
+        ["AudioSpecLgsrActive"] = "Synced Twin: {0}",
+        ["AudioSpecLgsrSync"] = "Sub-Sample Lock: {0:0.00} ms · Drift {1:+0.00;-0.00;0.00} ppm · Conf {2:0}%",
+        ["AudioSpecLgsrBands"] = "E-AC-3 Guide: Coupling {0:0.1} kHz · SPX {1:0.1} kHz · Coherence {2:0}%",
+        ["AudioSpecLgsrGuards"] = "Envelope Lock: {0:+0.0;-0.0;0.0} dB · Clipping Guard: {1}",
+        ["TipSlot2CLgsr"] = "Pairs a lossy Dolby Digital Plus (E-AC-3 JOC) Atmos track with your local verified FLAC/WAV/ALAC stereo twin via >120 dB Kaiser sinc resampling and <0.05-sample GCC-PHAT + Theil-Sen drift lock, fusing clean lossless high-frequency harmonics directly on the Pre-HRTF Virtual Speaker Bus while preserving 100% of Atmos phase and 3D trajectories.",
+        ["TipLgsrEnvelopeLock"] = "Locks restored spectral gain strictly to the Atmos dynamic RMS envelope so a louder, compressed stereo FLAC master can never crush Dolby Atmos's wide dynamic range.",
+        ["TipLgsrClippingGuard"] = "Continuously scans the stereo lossless twin with a 4x True-Peak detector and flat-top clip guard, smoothly backing off fusion whenever brickwall clipping is detected.",
+        ["TipLgsrBitstreamGuide"] = "Reads live per-block E-AC-3 Coupling and Spectral Extension (SPX) start frequencies directly from the decoder bitstream to focus restoration exactly where lossy compression starts.",
+        ["TipLgsrTier3Cleanup"] = "During offline Tier 2 EM-MWF Studio Master export, applies an installed Apollo or AP-BWE ONNX model to clean compression artifacts in the conserved Atmos-exclusive residual.",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -1358,6 +1388,36 @@ public sealed class AndroidStrings {
         d["TipMvsepPhaseFix"] = "Reprojeta as magnitudes neurais sobre a fase complexa exata da mixagem original usando Wiener (partição da unidade), eliminando som metálico.";
         d["TipSpatialKaraoke"] = "Aplica uma máscara Wiener real compartilhada de fase zero em todos os 1..32 canais/objetos Atmos simultaneamente, mantendo 0,000° de distorção de fase, grave LFE intacto e trajetórias 3D preservadas. Em 100% faz bypass bit-exato.";
         d["TipNeuralUpmix"] = "Posiciona stems separados (Voz, Bateria, Baixo, Outros, Residual) no espaço 3D ou renderiza um master 7.1.4 Híbrido Neural + DirAC com conservação de energia.";
+
+        // Slot 2C: Gêmeo Lossless Universal & Restauração Atmos Guiada por Lossless (LGSR, W09)
+        d["Slot2CCardTitle"] = "Restauração Atmos Guiada por Lossless (Slot 2C)";
+        d["LgsrStatusSearching"] = "Buscando e alinhando sub-sample o gêmeo lossless FLAC/WAV/ALAC...";
+        d["LgsrStatusNone"] = "Nenhum gêmeo lossless ativo (pareia automaticamente quando há FLAC/WAV/ALAC)";
+        d["LgsrStatusBypassedLossless"] = "Bypass automático: o stream ativo já é nativamente lossless (TrueHD/ADM/FLAC/WAV)";
+        d["LgsrStatusBypassedFake"] = "Ignorado: gêmeo rejeitado como falso lossless (corte espectral lossy detectado)";
+        d["LgsrStatusBypassedLowConf"] = "Ignorado: confiança de sincronia abaixo do limiar (edição/master diferente)";
+        d["LgsrStatusSynced"] = "ATMOS + {0} ({1}) · Δ {2:0.00} ms ({3:+0.0;-0.0;0.0} ppm) · Coh {4:0}% · Cpl {5:0.0}k / SPX {6:0.0}k";
+        d["LgsrEnabledTitle"] = "Ativar Restauração Guiada por Lossless (LGSR)";
+        d["LgsrAutoDiscoverTitle"] = "Detectar Gêmeo Lossless Automaticamente (FLAC/WAV/ALAC)";
+        d["LgsrFusionStrengthTitle"] = "Intensidade da Fusão Espectral HF";
+        d["LgsrEnvelopeLockTitle"] = "Trava de Envelope Dinâmico Atmos";
+        d["LgsrClippingGuardTitle"] = "Guarda Anti-Clipping / Brickwall do FLAC";
+        d["LgsrBitstreamGuideTitle"] = "Guia Ao Vivo de Coupling e SPX do Bitstream E-AC-3";
+        d["LgsrRejectFakeTitle"] = "Rejeitar Gêmeos Falsos Lossless / Transcodificados";
+        d["LgsrTier3CleanupTitle"] = "Limpeza Neural Tier 3 Apollo / AP-BWE no Residual (Offline)";
+        d["LgsrRescanTwinBtn"] = "Reescanear Gêmeo";
+        d["LgsrLicensesBtn"] = "Créditos DSP";
+        d["LgsrLicensesTitle"] = "Referências Científicas e Licenças LGSR";
+        d["AudioSpecLgsrHeader"] = "ATMOS + GÊMEO LOSSLESS (LGSR)";
+        d["AudioSpecLgsrActive"] = "Gêmeo Sincronizado: {0}";
+        d["AudioSpecLgsrSync"] = "Trava Sub-Sample: {0:0.00} ms · Drift {1:+0.00;-0.00;0.00} ppm · Conf {2:0}%";
+        d["AudioSpecLgsrBands"] = "Guia E-AC-3: Coupling {0:0.1} kHz · SPX {1:0.1} kHz · Coerência {2:0}%";
+        d["AudioSpecLgsrGuards"] = "Envelope Lock: {0:+0.0;-0.0;0.0} dB · Guarda Clipping: {1}";
+        d["TipSlot2CLgsr"] = "Pareia uma faixa Dolby Digital Plus (E-AC-3 JOC) Atmos com o gêmeo estéreo FLAC/WAV/ALAC verificado via reamostragem Kaiser sinc >120 dB e sincronia GCC-PHAT <0,05 amostra + drift Theil-Sen, fundindo harmônicos agudos limpos direto no Pre-HRTF Virtual Speaker Bus preservando 100% da fase e das trajetórias 3D Atmos.";
+        d["TipLgsrEnvelopeLock"] = "Trava o ganho espectral restaurado rigorosamente ao envelope dinâmico RMS do Atmos para que um master estéreo FLAC mais alto/comprimido nunca esmague a dinâmica do Dolby Atmos.";
+        d["TipLgsrClippingGuard"] = "Monitora continuamente o gêmeo lossless com detector 4x True-Peak e detecção de topo achatado, reduzindo a fusão suavemente se houver clipping brickwall.";
+        d["TipLgsrBitstreamGuide"] = "Lê ao vivo por bloco as frequências de início de Coupling e Extensão Espectral (SPX) direto do bitstream E-AC-3 para focar a restauração exatamente onde a compressão lossy atua.";
+        d["TipLgsrTier3Cleanup"] = "Durante a exportação offline Tier 2 EM-MWF Studio Master, aplica um modelo ONNX Apollo ou AP-BWE instalado para limpar artefatos no residual exclusivo do Atmos.";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

@@ -3,6 +3,7 @@ using System.Numerics;
 using Cavern;
 using Cavern.Channels;
 using Cavern.Filters;
+using Cavern.Format.Common;
 using Cavern.Format.Renderers;
 using Cavern.Format.Renderers.BaseClasses;
 using Cavern.Spatial;
@@ -123,8 +124,14 @@ public sealed class CavernTrackDecoderAdapter : ISpatialDecoder {
         metadata.HasNativeObjects = hasObjects;
         metadata.HasNativeHeights = hasHeights;
         metadata.HasLfe = hasLfe;
+        metadata.IsLossySpatialStream = track.Codec == Codec.EnhancedAC3 ||
+            track.Codec == Codec.AC3 ||
+            track.Codec == Codec.DTS ||
+            track.Codec == Codec.Opus;
         if (renderer is EnhancedAC3Renderer eac3Renderer) {
             metadata.DialnormLufs = eac3Renderer.DialnormLufs;
+            metadata.CouplingStartHz = eac3Renderer.CouplingStartHz;
+            metadata.SpxStartHz = eac3Renderer.SpxStartHz;
         }
     }
 
@@ -138,6 +145,10 @@ public sealed class CavernTrackDecoderAdapter : ISpatialDecoder {
     public bool FillFrame(SpatialSceneFrame frame, int maxFrames) {
         if (frame == null || maxFrames <= 0) {
             return false;
+        }
+        if (track.Renderer is EnhancedAC3Renderer eac3Renderer) {
+            metadata.CouplingStartHz = eac3Renderer.CouplingStartHz;
+            metadata.SpxStartHz = eac3Renderer.SpxStartHz;
         }
         frame.Metadata = metadata;
         frame.Sources = descriptors;

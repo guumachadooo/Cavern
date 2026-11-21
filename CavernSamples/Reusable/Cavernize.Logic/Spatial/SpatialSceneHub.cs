@@ -182,7 +182,7 @@ public sealed class SpatialSceneHub {
     NeuralAudioDiagnostics neuralDiagnostics = NeuralAudioDiagnostics.Default;
 
     /// <summary>
-    /// Optional W09 lossless reference twin provider for sample-aligned Spatial Karaoke acceleration.
+    /// Optional W09 lossless reference twin provider for sample-aligned Spatial Karaoke, LGSR, Dialog, and X-Ray acceleration.
     /// </summary>
     public ILosslessReferenceProvider ActiveLosslessReference {
         get {
@@ -192,6 +192,23 @@ public sealed class SpatialSceneHub {
         }
     }
     ILosslessReferenceProvider activeLosslessReference;
+
+    /// <summary>
+    /// Live Slot 2C Lossless-Guided Atmos Restoration (LGSR) telemetry (twin status, sub-sample offset, ppm drift, coherence, coupling/SPX Hz).
+    /// </summary>
+    public LgsrDiagnostics LgsrDiagnostics {
+        get {
+            lock (syncLock) {
+                return lgsrDiagnostics;
+            }
+        }
+        set {
+            lock (syncLock) {
+                lgsrDiagnostics = value;
+            }
+        }
+    }
+    LgsrDiagnostics lgsrDiagnostics = LgsrDiagnostics.Default;
 
     /// <summary>
     /// Current 6DoF listener pose (thread-safe snapshot).

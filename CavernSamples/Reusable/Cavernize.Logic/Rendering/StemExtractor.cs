@@ -8,6 +8,7 @@ using Cavern.Filters;
 using Cavern.Format;
 using Cavern.Format.Common;
 using Cavern.Neural;
+using Cavern.Restoration;
 using Cavern.Utilities;
 using Cavern.Virtualizer;
 
@@ -457,7 +458,8 @@ public static class StemExtractor {
         bool exportSpatialKaraokeAtmos,
         bool exportHybrid714,
         Action<double, string> onProgress,
-        CancellationToken token = default) {
+        CancellationToken token = default,
+        ILosslessReferenceProvider losslessTwin = null) {
         ArgumentNullException.ThrowIfNull(track);
         if (!track.Supported) {
             throw new NotSupportedException("The selected track format is not supported by Cavern.");
@@ -501,6 +503,24 @@ public static class StemExtractor {
         }
 
         int totalSamples = mixLeft.Length;
+        // W09 Universal Lossless Twin acceleration: when a synced FLAC/WAV/ALAC twin is available,
+        // run neural separation directly on the sample-aligned lossless stereo buffer for cleaner stems & karaoke mask!
+        float[] neuralInputLeft = mixLeft;
+        float[] neuralInputRight = mixRight;
+        if (losslessTwin != null && losslessTwin.HasSyncedLosslessTwin && totalSamples > 0) {
+            if (losslessTwin is UniversalLosslessTwinProvider universalTwin &&
+                universalTwin.TryExtractFullAlignedStereo(totalSamples, out float[] alignedL, out float[] alignedR)) {
+                neuralInputLeft = alignedL;
+                neuralInputRight = alignedR;
+            } else {
+                float[] alignedL2 = new float[totalSamples];
+                float[] alignedR2 = new float[totalSamples];
+                if (losslessTwin.TryReadAlignedStereoBlock(0L, alignedL2, alignedR2, totalSamples)) {
+                    neuralInputLeft = alignedL2;
+                    neuralInputRight = alignedR2;
+                }
+            }
+        }
         List<string> createdFiles = [];
 
         // 2. Optional zero-phase multichannel Spatial Karaoke export across all 1..32 Atmos beds & dynamic objects
@@ -515,8 +535,8 @@ public static class StemExtractor {
                 StereoStemBuffer[] vocalStems = NeuralAudioOfflinePipeline.RunSeparation(
                     session,
                     entry,
-                    mixLeft,
-                    mixRight,
+                    neuralInputLeft,
+                    neuralInputRight,
                     safeConfig.ToMvsepOptions(),
                     p => onProgress?.Invoke(0.22 + p * 0.48, $"Inferência vocal MVSEP ({p:0.0%})..."),
                     token);
@@ -530,15 +550,14 @@ public static class StemExtractor {
             }
 
             onProgress?.Invoke(0.72, "Aplicando Spatial Karaoke zero-phase multicanal...");
-            SpatialKaraokeEngine.ProcessOfflineMultichannel(
+            multiChannels = SpatialKaraokeEngine.ProcessOfflineMultichannel(
                 multiChannels,
                 isLfe,
-                isFrontCenter,
+                neuralLeadRef,
+                neuralBackingRef,
                 sampleRate,
                 safeConfig.KaraokeVocalLevel,
-                safeConfig.KaraokePreserveBackingVocals,
-                neuralLeadRef,
-                neuralBackingRef);
+                safeConfig.KaraokePreserveBackingVocals);
 
             for (int c = 0; c < multiChannels.Length; c++) {
                 token.ThrowIfCancellationRequested();
@@ -573,8 +592,8 @@ public static class StemExtractor {
         StereoStemBuffer[] stems = NeuralAudioOfflinePipeline.RunSeparation(
             stemSession,
             catalogEntry,
-            mixLeft,
-            mixRight,
+            neuralInputLeft,
+            neuralInputRight,
             mvsepOptions,
             p => onProgress?.Invoke(0.25 + p * 0.55, $"Separando stems MVSEP ({p:0.0%})..."),
             token);
@@ -627,6 +646,141 @@ public static class StemExtractor {
         }
 
         onProgress?.Invoke(1.0, "Stems neurais extraídos!");
+        return new StemExtractionResult {
+            CreatedFiles = createdFiles,
+            SamplesWritten = totalSamples,
+            SampleRate = sampleRate
+        };
+    }
+
+    /// <summary>
+    /// W09 Tier 2 Offline Studio Master: separates a synced lossless FLAC/WAV/ALAC twin into clean neural stems
+    /// via Slot 2B MVSEP, projects them onto decoded multichannel Atmos beds &amp; JOC objects via iterative EM-MWF
+    /// (<c>sigsep/norbert</c>), preserves 100% of Atmos-exclusive objects/ambience in a conserved residual, and
+    /// optionally runs Tier 3 <c>Apollo</c>/<c>AP-BWE</c> neural restoration on the residual.
+    /// </summary>
+    public static StemExtractionResult ExtractLosslessHybridSpatialMaster(
+        CavernizeTrack track,
+        UniversalLosslessTwinProvider losslessTwin,
+        INeuralInferenceRuntime runtime,
+        string stemModelPath,
+        NeuralModelCatalogEntry stemModelEntry,
+        string outputDir,
+        BitDepth bits,
+        NeuralAudioConfig neuralConfig,
+        LgsrConfig lgsrConfig,
+        string tier3RestorerModelPath,
+        NeuralModelCatalogEntry tier3RestorerEntry,
+        bool exportResidualTrack,
+        Action<double, string> onProgress,
+        CancellationToken token = default) {
+        ArgumentNullException.ThrowIfNull(track);
+        ArgumentNullException.ThrowIfNull(losslessTwin);
+        if (!losslessTwin.HasSyncedLosslessTwin) {
+            throw new InvalidOperationException("A synced lossless twin (FLAC/WAV/ALAC) is required for Tier 2 EM-MWF Studio Master.");
+        }
+        if (runtime == null || !runtime.IsAvailable) {
+            throw new InvalidOperationException("ONNX Runtime is not installed. Install it in Settings -> Neural Audio first.");
+        }
+        if (string.IsNullOrEmpty(stemModelPath) || !File.Exists(stemModelPath)) {
+            throw new FileNotFoundException("Selected ONNX stem model is not installed.", stemModelPath);
+        }
+
+        NeuralAudioConfig safeNeural = (neuralConfig ?? NeuralAudioConfig.Default).Sanitize();
+        LgsrConfig safeLgsr = (lgsrConfig ?? LgsrConfig.Default).Sanitize();
+        Directory.CreateDirectory(outputDir);
+        string baseName = SanitizeFilePart(Path.GetFileNameWithoutExtension(track.Path) ?? "track");
+        List<TrackSourceItem> allItems = TrackSourceItem.BuildFromTrack(track);
+        int sampleRate = track.SampleRate > 0 ? track.SampleRate : Listener.DefaultSampleRate;
+
+        // 1. Decode multichannel Atmos beds & dynamic JOC objects
+        onProgress?.Invoke(0.05, "Decodificando beds e objetos Atmos...");
+        DecodeMultichannelAndStereoDownmix(
+            track,
+            allItems,
+            out float[][] atmosChannels,
+            out bool[] isLfe,
+            out _,
+            out _,
+            out _,
+            p => onProgress?.Invoke(0.05 + p * 0.15, $"Decodificando Atmos ({p:0.0%})..."),
+            token);
+
+        int totalSamples = atmosChannels.Length > 0 ? atmosChannels[0].Length : 0;
+        if (totalSamples <= 0 || !losslessTwin.TryExtractFullAlignedStereo(totalSamples, out float[] twinL, out float[] twinR)) {
+            throw new InvalidOperationException("Failed to extract sample-aligned lossless twin audio.");
+        }
+
+        // 2. Separate clean neural stems directly from the synced lossless FLAC/WAV/ALAC twin
+        onProgress?.Invoke(0.22, "Separando stems lossless (MVSEP)...");
+        using INeuralSession stemSession = runtime.LoadSession(stemModelPath, safeNeural.PreferredProvider);
+        NeuralModelCatalogEntry entry = stemModelEntry ?? NeuralModelCatalog.FindById(safeNeural.ActiveStemModelId);
+        StereoStemBuffer[] losslessStems = NeuralAudioOfflinePipeline.RunSeparation(
+            stemSession,
+            entry,
+            twinL,
+            twinR,
+            safeNeural.ToMvsepOptions(),
+            p => onProgress?.Invoke(0.22 + p * 0.40, $"Separando stems do twin lossless ({p:0.0%})..."),
+            token);
+
+        // 3. Optional Tier 3 Apollo / AP-BWE residual cleanup delegate
+        INeuralSession tier3Session = null;
+        Func<float[], float[], StereoStemBuffer> tier3Delegate = null;
+        if (safeLgsr.Tier3ResidualCleanupEnabled &&
+            !string.IsNullOrEmpty(tier3RestorerModelPath) &&
+            File.Exists(tier3RestorerModelPath)) {
+            tier3Session = runtime.LoadSession(tier3RestorerModelPath, safeNeural.PreferredProvider);
+            NeuralModelCatalogEntry restorerEntry = tier3RestorerEntry ?? NeuralModelCatalog.FindById(safeNeural.ActiveRestorerModelId);
+            MvsepPipelineOptions restorerOpts = safeNeural.ToMvsepOptions();
+            tier3Delegate = (resL, resR) => {
+                StereoStemBuffer[] cleaned = NeuralAudioOfflinePipeline.RunSeparation(
+                    tier3Session,
+                    restorerEntry,
+                    resL,
+                    resR,
+                    restorerOpts,
+                    null,
+                    token);
+                return cleaned != null && cleaned.Length > 0
+                    ? cleaned[0]
+                    : new StereoStemBuffer { Name = "residual", Left = resL, Right = resR };
+            };
+        }
+
+        EmMwfSpatialMasterResult master;
+        try {
+            onProgress?.Invoke(0.64, "Projetando stems lossless via EM-MWF (norbert)...");
+            master = EmMwfSpatialMasterEngine.SynthesizeStudioMaster(
+                atmosChannels,
+                isLfe,
+                losslessStems,
+                sampleRate,
+                emIterations: 2,
+                tier3ResidualRestorer: tier3Delegate,
+                onProgress: p => onProgress?.Invoke(0.64 + p * 0.24, $"EM-MWF Studio Master ({p:0.0%})..."));
+        } finally {
+            tier3Session?.Dispose();
+        }
+
+        // 4. Write restored discrete multichannel WAV stems (and optional Atmos-exclusive residual)
+        List<string> createdFiles = [];
+        for (int c = 0; c < master.RestoredChannels.Length; c++) {
+            token.ThrowIfCancellationRequested();
+            string chName = c < allItems.Count ? allItems[c].GetSafeFileBaseName() : $"ch_{c:00}";
+            string wavPath = Path.Combine(outputDir, $"{baseName}_lgsr_master_{chName}.wav");
+            WriteMonoWav(wavPath, master.RestoredChannels[c], sampleRate, bits);
+            createdFiles.Add(wavPath);
+            if (exportResidualTrack && !isLfe[c]) {
+                string resPath = Path.Combine(outputDir, $"{baseName}_lgsr_residual_{chName}.wav");
+                WriteMonoWav(resPath, master.AtmosExclusiveResidual[c], sampleRate, bits);
+                createdFiles.Add(resPath);
+            }
+            onProgress?.Invoke(0.88 + 0.12 * ((c + 1) / (double)Math.Max(1, master.RestoredChannels.Length)),
+                $"Gravando master {c + 1}/{master.RestoredChannels.Length}...");
+        }
+
+        onProgress?.Invoke(1.0, "LGSR Studio Master (EM-MWF) concluído!");
         return new StemExtractionResult {
             CreatedFiles = createdFiles,
             SamplesWritten = totalSamples,

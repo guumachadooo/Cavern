@@ -132,7 +132,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
     bool isFFmpegDownloading;
     bool isTruehddDownloading;
     bool isOnnxDownloading;
-    string pendingOnnxImportModelId = "scnet_4stem_fast";
+    string pendingOnnxImportModelId = Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId;
+    Cavernize.Logic.Spatial.UniversalLosslessTwinProvider activeLosslessTwin;
+    CancellationTokenSource losslessTwinCts;
+    int losslessTwinGeneration;
 
     ExternalDecodedTrack decodedTrueHDTrack;
     string activeTrueHDSessionDir;
@@ -285,6 +288,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         playerEngine.ApplyLoudnessConfig(store.BuildLoudnessConfig());
         neuralRuntime = new NativeOnnxRuntimeBridge(this);
         playerEngine.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
+        playerEngine.ApplyLgsrConfig(store.BuildLgsrConfig());
         SyncNeuralRuntimeDiagnostics();
 
         AutoEqService.EnsureLoaded(this);
@@ -305,6 +309,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshPersonalizationUi();
         RefreshLoudnessUi();
         RefreshNeuralAudioUi();
+        RefreshLgsrUi();
         RequestMediaPermissionsIfNeeded();
         StartTelemetryTimer();
 
@@ -342,6 +347,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         activeCts?.Dispose();
         truehdPrepareCts?.Cancel();
         truehdPrepareCts?.Dispose();
+        losslessTwinCts?.Cancel();
+        losslessTwinCts?.Dispose();
+        activeLosslessTwin?.Dispose();
+        activeLosslessTwin = null;
         tabPillAnimator?.Cancel();
         tabPillAnimator?.Dispose();
         formatPillAnimator?.Cancel();
@@ -2153,6 +2162,73 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshContainerOptions();
         SyncPlaybackUi(false, initialSeekSec, playerEngine.TotalSeconds);
         UpdateRoomCanvas();
+        StartLosslessTwinDiscoveryAsync(activeTrack);
+    }
+
+    void StartLosslessTwinDiscoveryAsync(CavernizeTrack activeTrack) {
+        if (uiDestroyed || activeTrack == null || playerEngine == null) {
+            return;
+        }
+        losslessTwinCts?.Cancel();
+        losslessTwinCts?.Dispose();
+        losslessTwinCts = new CancellationTokenSource();
+        CancellationToken ct = losslessTwinCts.Token;
+        int gen = ++losslessTwinGeneration;
+
+        string activePath = currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        bool alreadyLossless = LosslessTwinDiscoveryService.IsTrackAlreadyLossless(activeTrack, activePath);
+        playerEngine.LgsrStage.SetActiveTrackLosslessStatus(alreadyLossless);
+
+        // Detach stale lossless twin immediately while discovering the twin for the new track
+        Cavernize.Logic.Spatial.UniversalLosslessTwinProvider previous = activeLosslessTwin;
+        activeLosslessTwin = null;
+        playerEngine.BindLosslessReference(null);
+        previous?.Dispose();
+
+        Cavernize.Logic.Spatial.LgsrConfig lgsrCfg = store.BuildLgsrConfig();
+        playerEngine.ApplyLgsrConfig(lgsrCfg);
+        RefreshLgsrUi();
+
+        if (!lgsrCfg.Enabled || !lgsrCfg.AutoDiscoverTwin || (lgsrCfg.BypassOnAlreadyLossless && alreadyLossless)) {
+            return;
+        }
+
+        MediaLibrarySnapshot snap = librarySnapshot ?? MediaLibraryService.CachedSnapshot;
+        string title = currentMediaMeta?.Title ?? "";
+        string artist = currentMediaMeta?.Artist ?? "";
+        string album = currentMediaMeta?.Album ?? "";
+        string ffLoc = ffmpeg?.Found == true ? ffmpeg.Location : null;
+
+        _ = Task.Run(async () => {
+            try {
+                Cavernize.Logic.Spatial.UniversalLosslessTwinProvider twin =
+                    await LosslessTwinDiscoveryService.DiscoverAndSyncAsync(
+                        this,
+                        snap,
+                        activeTrack,
+                        activePath,
+                        title,
+                        artist,
+                        album,
+                        lgsrCfg,
+                        ffLoc,
+                        ct).ConfigureAwait(false);
+
+                RunOnUiThread(() => {
+                    if (uiDestroyed || gen != losslessTwinGeneration) {
+                        twin.Dispose();
+                        return;
+                    }
+                    activeLosslessTwin = twin;
+                    playerEngine.BindLosslessReference(twin);
+                    RefreshLgsrUi();
+                });
+            } catch (OperationCanceledException) {
+                // Superseded by newer track selection
+            } catch (Exception ex) {
+                AppLogger.Warn($"W09 StartLosslessTwinDiscoveryAsync: {ex.Message}");
+            }
+        }, ct);
     }
 
     void PrepareSelectedTrueHDTrackAsync(CavernizeTrack sourceTrack, bool autoPlayAfter) {

@@ -577,28 +577,28 @@ public sealed class AppSettingsStore {
     }
 
     public int NeuralSpatialUpmixModeIndex {
-        get => prefs.GetInt("neuralSpatialUpmixMode", (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.ParametricOnly);
+        get => prefs.GetInt("neuralSpatialUpmixMode", (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.Off);
         set => Edit().PutInt("neuralSpatialUpmixMode", Math.Clamp(value, 0, 2)).Apply();
     }
 
     public string ActiveStemModelId {
-        get => prefs.GetString("activeStemModelId", "scnet_4stem_fast");
-        set => Edit().PutString("activeStemModelId", value ?? "scnet_4stem_fast").Apply();
+        get => prefs.GetString("activeStemModelId", Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId);
+        set => Edit().PutString("activeStemModelId", value ?? Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId).Apply();
     }
 
     public string ActiveKaraokeModelId {
-        get => prefs.GetString("activeKaraokeModelId", "melband_roformer_karaoke");
-        set => Edit().PutString("activeKaraokeModelId", value ?? "melband_roformer_karaoke").Apply();
+        get => prefs.GetString("activeKaraokeModelId", Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultKaraokeModelId);
+        set => Edit().PutString("activeKaraokeModelId", value ?? Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultKaraokeModelId).Apply();
     }
 
     public string ActiveDereverbModelId {
-        get => prefs.GetString("activeDereverbModelId", "melband_roformer_dereverb");
-        set => Edit().PutString("activeDereverbModelId", value ?? "melband_roformer_dereverb").Apply();
+        get => prefs.GetString("activeDereverbModelId", Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultDereverbModelId);
+        set => Edit().PutString("activeDereverbModelId", value ?? Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultDereverbModelId).Apply();
     }
 
     public string ActiveRestorerModelId {
-        get => prefs.GetString("activeRestorerModelId", "apollo_codec_restorer");
-        set => Edit().PutString("activeRestorerModelId", value ?? "apollo_codec_restorer").Apply();
+        get => prefs.GetString("activeRestorerModelId", Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultRestorerModelId);
+        set => Edit().PutString("activeRestorerModelId", value ?? Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultRestorerModelId).Apply();
     }
 
     public Cavernize.Logic.Spatial.NeuralAudioConfig BuildNeuralAudioConfig() => new() {
@@ -617,6 +617,60 @@ public sealed class AppSettingsStore {
         ActiveKaraokeModelId = ActiveKaraokeModelId,
         ActiveDereverbModelId = ActiveDereverbModelId,
         ActiveRestorerModelId = ActiveRestorerModelId
+    };
+
+    // Slot 2C: Universal Lossless Twin & Lossless-Guided Atmos Restoration (LGSR, W09)
+    public bool LgsrEnabled {
+        get => prefs.GetBoolean("lgsrEnabled", true);
+        set => Edit().PutBoolean("lgsrEnabled", value).Apply();
+    }
+
+    public bool LgsrAutoDiscoverTwin {
+        get => prefs.GetBoolean("lgsrAutoDiscoverTwin", true);
+        set => Edit().PutBoolean("lgsrAutoDiscoverTwin", value).Apply();
+    }
+
+    public float LgsrFusionStrength {
+        get => prefs.GetFloat("lgsrFusionStrength", 0.85f);
+        set => Edit().PutFloat("lgsrFusionStrength", Math.Clamp(value, 0f, 1f)).Apply();
+    }
+
+    public bool LgsrDynamicEnvelopeLock {
+        get => prefs.GetBoolean("lgsrEnvelopeLock", true);
+        set => Edit().PutBoolean("lgsrEnvelopeLock", value).Apply();
+    }
+
+    public bool LgsrClippingGuard {
+        get => prefs.GetBoolean("lgsrClippingGuard", true);
+        set => Edit().PutBoolean("lgsrClippingGuard", value).Apply();
+    }
+
+    public bool LgsrBitstreamGuide {
+        get => prefs.GetBoolean("lgsrBitstreamGuide", true);
+        set => Edit().PutBoolean("lgsrBitstreamGuide", value).Apply();
+    }
+
+    public bool LgsrRejectFakeLossless {
+        get => prefs.GetBoolean("lgsrRejectFakeLossless", true);
+        set => Edit().PutBoolean("lgsrRejectFakeLossless", value).Apply();
+    }
+
+    public bool LgsrTier3ResidualCleanup {
+        get => prefs.GetBoolean("lgsrTier3Cleanup", false);
+        set => Edit().PutBoolean("lgsrTier3Cleanup", value).Apply();
+    }
+
+    public Cavernize.Logic.Spatial.LgsrConfig BuildLgsrConfig() => new() {
+        Enabled = LgsrEnabled,
+        AutoDiscoverTwin = LgsrAutoDiscoverTwin,
+        BypassOnAlreadyLossless = true,
+        RejectFakeLosslessTwins = LgsrRejectFakeLossless,
+        FusionStrength = Math.Clamp(LgsrFusionStrength, 0f, 1f),
+        DynamicEnvelopeLock = LgsrDynamicEnvelopeLock,
+        ClippingGuardEnabled = LgsrClippingGuard,
+        UseBitstreamCouplingSpxGuide = LgsrBitstreamGuide,
+        Tier3ResidualCleanupEnabled = LgsrTier3ResidualCleanup,
+        MinSyncConfidence = 0.35f
     };
 
     public string DeviceProfilesJson {

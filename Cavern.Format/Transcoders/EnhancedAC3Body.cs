@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 using Cavern.Channels;
@@ -28,6 +28,26 @@ namespace Cavern.Format.Transcoders {
         /// LFE samples from the last decoded frame.
         /// </summary>
         public float[] LFEResult { get; private set; }
+
+        /// <summary>
+        /// True when channel coupling (standard or enhanced) is active in the most recently decoded audio block.
+        /// </summary>
+        public bool CouplingActive { get; private set; }
+
+        /// <summary>
+        /// True when Spectral Extension (SPX) is active in the most recently decoded audio block.
+        /// </summary>
+        public bool SpxActive { get; private set; }
+
+        /// <summary>
+        /// Live channel coupling start frequency in Hz (ATSC A/52: <c>cplstrtmant * fs / 512</c>), or 0 when inactive.
+        /// </summary>
+        public float CouplingStartHz { get; private set; }
+
+        /// <summary>
+        /// Live Spectral Extension (SPX) start frequency in Hz (ETSI TS 102 366: <c>(spx_begin_subbnd * 12 + 25) * fs / 512</c>), or 0 when inactive.
+        /// </summary>
+        public float SpxStartHz { get; private set; }
 
         /// <summary>
         /// Source of decodable data.

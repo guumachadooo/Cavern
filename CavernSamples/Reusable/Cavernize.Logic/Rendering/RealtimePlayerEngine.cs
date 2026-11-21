@@ -37,6 +37,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
     readonly ManualHeadTrackerProvider manualHeadTracker = new();
     readonly ParametricUpmixerStageProcessor parametricUpmixerStage = new(new UpmixingSettings(true));
     readonly NeuralStemStageProcessor neuralStemStage = new();
+    readonly LgsrStageProcessor lgsrStage = new();
     readonly CavernVirtualizerRendererAdapter virtualizerRenderer = new();
     readonly AutoEqPostProcessingStage autoEqPostStage = new();
     readonly HptfNotchPostProcessingStage hptfNotchPostStage = new();
@@ -80,6 +81,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
         sceneHub.BindRenderer(virtualizerRenderer);
         sceneHub.RegisterStageProcessor(parametricUpmixerStage);
         sceneHub.RegisterStageProcessor(neuralStemStage);
+        sceneHub.RegisterStageProcessor(lgsrStage);
         sceneHub.RegisterPostProcessingStage(autoEqPostStage);
         sceneHub.RegisterPostProcessingStage(hptfNotchPostStage);
         sceneHub.RegisterPostProcessingStage(iso226PostStage);
@@ -150,13 +152,51 @@ public sealed class RealtimePlayerEngine : IDisposable {
     }
 
     /// <summary>
-    /// Binds an optional W09 lossless reference twin provider for sample-aligned Spatial Karaoke acceleration.
+    /// Binds an optional W09 lossless reference twin provider for Slot 2C LGSR Pre-HRTF restoration,
+    /// sample-aligned Spatial Karaoke acceleration, Clean Stems, and telemetry.
     /// </summary>
     public void BindLosslessReference(ILosslessReferenceProvider provider) {
         lock (renderLock) {
+            bool wasActive = lgsrStage.IsActivelyRestoring;
             neuralStemStage.BindLosslessReference(provider);
+            lgsrStage.BindLosslessReference(provider);
             sceneHub.BindLosslessReference(provider);
+            bool nowActive = lgsrStage.IsActivelyRestoring;
+            if (wasActive != nowActive && IsPlaying && hasRenderedAudio) {
+                ArmCrossfadeLocked();
+            }
             sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+            sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
+        }
+    }
+
+    /// <summary>
+    /// Slot 2C Lossless-Guided Atmos Restoration (<c>LGSR</c>) Pre-HRTF stage processor (Priority 400).
+    /// </summary>
+    public LgsrStageProcessor LgsrStage => lgsrStage;
+
+    /// <summary>
+    /// Active Slot 2C LGSR configuration.
+    /// </summary>
+    public LgsrConfig LgsrConfig => lgsrStage.Config;
+
+    /// <summary>
+    /// Live Slot 2C LGSR telemetry snapshot (twin state, sub-sample offset, ppm drift, coherence, coupling/SPX Hz).
+    /// </summary>
+    public LgsrDiagnostics LgsrDiagnostics => sceneHub.LgsrDiagnostics;
+
+    /// <summary>
+    /// Applies updated Slot 2C LGSR parameters cleanly in real time with clickless crossfade on activation toggle.
+    /// </summary>
+    public void ApplyLgsrConfig(LgsrConfig config) {
+        lock (renderLock) {
+            bool wasActive = lgsrStage.IsActivelyRestoring;
+            lgsrStage.ApplyConfig(config);
+            bool nowActive = lgsrStage.IsActivelyRestoring;
+            if (wasActive != nowActive && IsPlaying && hasRenderedAudio) {
+                ArmCrossfadeLocked();
+            }
+            sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
         }
     }
 
@@ -492,7 +532,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             lastSourceMaskHash = 0;
 
             if (neuralStemStage.ActiveSeparatedTrack != null &&
-                !string.Equals(neuralStemStage.ActiveSeparatedTrack.SourceTrackPath, track.Path, StringComparison.OrdinalIgnoreCase)) {
+                !string.Equals(neuralStemStage.ActiveSeparatedTrack.SourceTrackKey, track.Path, StringComparison.OrdinalIgnoreCase)) {
                 neuralStemStage.BindSeparatedTrack(null);
             }
 
@@ -500,6 +540,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             sourceItems = TrackSourceItem.BuildFromTrack(track);
             BindTrackToSceneHubLocked(track);
             sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+            sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
         }
     }
 
@@ -539,6 +580,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             ConfigureListener(resetToStart: false);
             sourceItems = TrackSourceItem.BuildFromTrack(track);
             BindTrackToSceneHubLocked(track);
+            sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
             IsPlaying = wasPlaying;
         }
     }
@@ -623,6 +665,14 @@ public sealed class RealtimePlayerEngine : IDisposable {
 
                 ApplySourceMutesAndProperties();
 
+                // Refresh live per-block E-AC-3 Coupling / SPX bitstream cutoffs prior to Slot 2 & Pre-HRTF LGSR
+                if (currentTrack.Renderer is EnhancedAC3Renderer liveEac3) {
+                    SpatialProgramMetadata liveMeta = sceneHub.ProgramMetadata;
+                    liveMeta.CouplingStartHz = liveEac3.CouplingStartHz;
+                    liveMeta.SpxStartHz = liveEac3.SpxStartHz;
+                    sceneHub.ProgramMetadata = liveMeta;
+                }
+
                 int requestedFrames = chunks * updateRate;
                 int outOffset = totalFramesWritten * 2;
                 activeSceneFrame.BeginBlock(
@@ -640,7 +690,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                     outOffset,
                     2);
 
-                // Slot 2: Ordered spatial stage processors (pass-through until Wave W02/W08)
+                // Slot 2: Ordered spatial stage processors (W02 Parametric, W08 Neural, W09 LGSR)
                 IReadOnlyList<ISpatialStageProcessor> stageProcessors = sceneHub.StageProcessors;
                 for (int p = 0; p < stageProcessors.Count; p++) {
                     if (stageProcessors[p].IsEnabled) {
@@ -649,10 +699,19 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 }
 
                 // Slot 5: Binaural / Stereo renderer (delegates to Cavern Listener + VirtualizerFilter)
+                // Attach Slot 2C LGSR on the Pre-HRTF Virtual Speaker Bus in Headphone Virtualizer mode
+                VirtualizerFilter.PreHrtfBusProcessor = HeadphoneVirtualizer && lgsrStage.IsActivelyRestoring
+                    ? lgsrStage
+                    : null;
                 IBinauralRenderer renderer = sceneHub.ActiveRenderer ?? virtualizerRenderer;
                 int blockFrames = renderer.RenderFrame(activeSceneFrame, stereoOutput, outOffset, requestedFrames);
                 if (blockFrames <= 0) {
                     break;
+                }
+
+                // Direct 2.0 fallback for Slot 2C LGSR when Headphone Virtualizer is bypassed (speakers / USB DAC)
+                if (!HeadphoneVirtualizer && lgsrStage.IsActivelyRestoring) {
+                    lgsrStage.ProcessDirectStereoFallback(stereoOutput, outOffset, blockFrames, currentTrackSample);
                 }
 
                 // Slot 2B real-time zero-phase Spatial Karaoke (before Slot 6 metering & True-Peak limiter)
@@ -726,6 +785,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 sceneHub.ExternalizationDiagnostics = virtualizerRenderer.Diagnostics;
                 PublishLoudnessDiagnosticsLocked();
                 sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+                sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
             }
         }
 
@@ -1163,6 +1223,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
     public void Dispose() {
         lock (renderLock) {
             IsPlaying = false;
+            if (ReferenceEquals(VirtualizerFilter.PreHrtfBusProcessor, lgsrStage)) {
+                VirtualizerFilter.PreHrtfBusProcessor = null;
+            }
             listener?.DetachAllSources();
             listener = null;
             currentTrack = null;
@@ -1177,6 +1240,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             truePeakLimiterPostStage.Dispose();
             parametricUpmixerStage.Dispose();
             neuralStemStage.Dispose();
+            lgsrStage.Dispose();
             manualHeadTracker.Dispose();
         }
         GC.SuppressFinalize(this);

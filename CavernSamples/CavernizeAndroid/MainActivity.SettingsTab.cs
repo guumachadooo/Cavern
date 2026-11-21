@@ -85,6 +85,10 @@ public partial class MainActivity {
     OneUiSeekBar neuralOverlapBar, karaokeVocalLevelBar;
     Switch neuralTtaSwitch, neuralPhaseFixSwitch, neuralConservationSwitch;
     Switch spatialKaraokeSwitch, karaokePreserveBackingSwitch, karaokeLosslessTwinSwitch;
+    TextView lgsrStatusText;
+    Switch lgsrEnabledSwitch, lgsrAutoDiscoverSwitch, lgsrEnvelopeLockSwitch, lgsrClippingGuardSwitch;
+    Switch lgsrBitstreamGuideSwitch, lgsrRejectFakeSwitch, lgsrTier3CleanupSwitch;
+    OneUiSeekBar lgsrFusionBar;
     CancellationTokenSource calibrationAudioCts;
     int personalizationRebuildSeq;
     Button filtersBtn;
@@ -967,6 +971,93 @@ public partial class MainActivity {
 
         page.AddView(slot2bCard);
 
+        // 3C. Slot 2C: Universal Lossless Twin & Lossless-Guided Atmos Restoration (LGSR, W09)
+        LinearLayout slot2cCard = Card();
+        LinearLayout slot2cHeader = HRow();
+        slot2cHeader.SetPadding(0, 0, 0, Dp(10));
+        slot2cHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Sliders, OneUiTheme.IconSystemInfo));
+        TextView slot2cTitleTv = SectionTitle(S["Slot2CCardTitle"]);
+        slot2cTitleTv.SetPadding(Dp(10), 0, Dp(8), 0);
+        slot2cHeader.AddView(slot2cTitleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        slot2cHeader.AddView(CreateInlineHelpBtn(S["Slot2CCardTitle"], S["TipSlot2CLgsr"]), new LinearLayout.LayoutParams(Dp(26), Dp(26)));
+        slot2cCard.AddView(slot2cHeader);
+
+        lgsrStatusText = Label(S["LgsrStatusNone"], 12f, OneUiTheme.TextSub);
+        lgsrStatusText.SetPadding(0, 0, 0, Dp(8));
+        slot2cCard.AddView(lgsrStatusText);
+
+        lgsrEnabledSwitch = AddSwitchRow(slot2cCard, S["LgsrEnabledTitle"], store.LgsrEnabled, v => {
+            store.LgsrEnabled = v;
+            ApplyAndRefreshLgsr(rescanTwin: v);
+        });
+        AddDivider(slot2cCard);
+
+        lgsrAutoDiscoverSwitch = AddSwitchRow(slot2cCard, S["LgsrAutoDiscoverTitle"], store.LgsrAutoDiscoverTwin, v => {
+            store.LgsrAutoDiscoverTwin = v;
+            ApplyAndRefreshLgsr(rescanTwin: v);
+        });
+        AddDivider(slot2cCard);
+
+        (lgsrFusionBar, _) = AddSliderRow(
+            slot2cCard,
+            S["LgsrFusionStrengthTitle"],
+            0,
+            100,
+            Math.Clamp((int)Math.Round(store.LgsrFusionStrength * 100f), 0, 100),
+            v => {
+                store.LgsrFusionStrength = v * 0.01f;
+                ApplyAndRefreshLgsr(rescanTwin: false);
+            },
+            "%",
+            defaultValue: 85);
+
+        lgsrEnvelopeLockSwitch = AddSwitchRow(slot2cCard, S["LgsrEnvelopeLockTitle"], store.LgsrDynamicEnvelopeLock, v => {
+            store.LgsrDynamicEnvelopeLock = v;
+            ApplyAndRefreshLgsr(rescanTwin: false);
+        }, helpBody: S["TipLgsrEnvelopeLock"]);
+        AddDivider(slot2cCard);
+
+        lgsrClippingGuardSwitch = AddSwitchRow(slot2cCard, S["LgsrClippingGuardTitle"], store.LgsrClippingGuard, v => {
+            store.LgsrClippingGuard = v;
+            ApplyAndRefreshLgsr(rescanTwin: false);
+        }, helpBody: S["TipLgsrClippingGuard"]);
+        AddDivider(slot2cCard);
+
+        lgsrBitstreamGuideSwitch = AddSwitchRow(slot2cCard, S["LgsrBitstreamGuideTitle"], store.LgsrBitstreamGuide, v => {
+            store.LgsrBitstreamGuide = v;
+            ApplyAndRefreshLgsr(rescanTwin: false);
+        }, helpBody: S["TipLgsrBitstreamGuide"]);
+        AddDivider(slot2cCard);
+
+        lgsrRejectFakeSwitch = AddSwitchRow(slot2cCard, S["LgsrRejectFakeTitle"], store.LgsrRejectFakeLossless, v => {
+            store.LgsrRejectFakeLossless = v;
+            ApplyAndRefreshLgsr(rescanTwin: true);
+        });
+        AddDivider(slot2cCard);
+
+        lgsrTier3CleanupSwitch = AddSwitchRow(slot2cCard, S["LgsrTier3CleanupTitle"], store.LgsrTier3ResidualCleanup, v => {
+            store.LgsrTier3ResidualCleanup = v;
+            ApplyAndRefreshLgsr(rescanTwin: false);
+        }, helpBody: S["TipLgsrTier3Cleanup"]);
+
+        LinearLayout lgsrBtns = HRow();
+        Button lgsrRescanBtn = PillButton(S["LgsrRescanTwinBtn"], () => {
+            CavernizeTrack active = GetActiveTrack();
+            if (active != null) {
+                StartLosslessTwinDiscoveryAsync(active);
+            } else {
+                RefreshLgsrUi();
+            }
+        });
+        Button lgsrLicBtn = PillButton(S["LgsrLicensesBtn"], ShowLgsrLicensesModal);
+        lgsrBtns.AddView(lgsrRescanBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
+        lgsrBtns.AddView(lgsrLicBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        slot2cCard.AddView(lgsrBtns, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(10)
+        });
+
+        page.AddView(slot2cCard);
+
         // 4. Collapsible Advanced Rendering & CLI Options
         LinearLayout advCard = Card();
         LinearLayout advHeader = HRow();
@@ -1456,6 +1547,7 @@ public partial class MainActivity {
         RefreshExternalizationUi();
         RefreshPersonalizationUi();
         RefreshNeuralAudioUi();
+        RefreshLgsrUi();
         if (filtersBtn != null) {
             filtersBtn.Text = renderingSettings.RoomCorrection != null
                 ? $"{S["ClearFilters"]} ({Path.GetFileName(store.RoomCorrectionPath)})"
@@ -3090,5 +3182,72 @@ public partial class MainActivity {
         } catch (Exception ex) {
             ShowError(ex.Message);
         }
+    }
+
+    // Slot 2C: Lossless-Guided Atmos Restoration (LGSR, W09) Helpers
+    void ApplyAndRefreshLgsr(bool rescanTwin) {
+        playerEngine?.ApplyLgsrConfig(store.BuildLgsrConfig());
+        if (rescanTwin) {
+            CavernizeTrack active = GetActiveTrack();
+            if (active != null) {
+                StartLosslessTwinDiscoveryAsync(active);
+                return;
+            }
+        }
+        RefreshLgsrUi();
+    }
+
+    void RefreshLgsrUi() {
+        if (uiDestroyed || lgsrStatusText == null) {
+            return;
+        }
+        Cavernize.Logic.Spatial.LgsrDiagnostics diag = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
+        switch (diag.State) {
+            case Cavernize.Logic.Spatial.LosslessTwinVerificationState.Synced: {
+                string fmt = string.IsNullOrEmpty(diag.TwinFormatSummary) ? "FLAC" : diag.TwinFormatSummary;
+                string twin = string.IsNullOrEmpty(diag.TwinFileName) ? "Lossless Twin" : diag.TwinFileName;
+                lgsrStatusText.Text = string.Format(
+                    S["LgsrStatusSynced"],
+                    fmt,
+                    twin,
+                    diag.SyncOffsetMs,
+                    diag.DriftPpm,
+                    diag.AverageCoherence * 100f,
+                    diag.CouplingStartHz / 1000f,
+                    diag.SpxStartHz / 1000f);
+                lgsrStatusText.SetTextColor(OneUiTheme.IconSystemInfo);
+                break;
+            }
+            case Cavernize.Logic.Spatial.LosslessTwinVerificationState.Searching:
+                lgsrStatusText.Text = S["LgsrStatusSearching"];
+                lgsrStatusText.SetTextColor(OneUiTheme.Primary);
+                break;
+            case Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedAlreadyLossless:
+                lgsrStatusText.Text = S["LgsrStatusBypassedLossless"];
+                lgsrStatusText.SetTextColor(OneUiTheme.TextSub);
+                break;
+            case Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedFakeLossless:
+                lgsrStatusText.Text = S["LgsrStatusBypassedFake"];
+                lgsrStatusText.SetTextColor(OneUiTheme.PeachText);
+                break;
+            case Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedLowConfidence:
+                lgsrStatusText.Text = S["LgsrStatusBypassedLowConf"];
+                lgsrStatusText.SetTextColor(OneUiTheme.TextSub);
+                break;
+            default:
+                lgsrStatusText.Text = S["LgsrStatusNone"];
+                lgsrStatusText.SetTextColor(OneUiTheme.TextSub);
+                break;
+        }
+    }
+
+    void ShowLgsrLicensesModal() {
+        OneUiModalDialog.Show(
+            this,
+            S["LgsrLicensesTitle"],
+            Cavernize.Logic.Spatial.LgsrDiagnostics.BuildAttributionNotice(),
+            icon: OneUiIconType.Sliders,
+            iconBadgeColor: OneUiTheme.IconSystemInfo,
+            positiveText: S["CloseBtn"]);
     }
 }

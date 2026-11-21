@@ -23,6 +23,26 @@ namespace Cavern.Format.Renderers {
         public float DialnormLufs => ((EnhancedAC3Decoder)stream).DialnormLufs;
 
         /// <summary>
+        /// True when E-AC-3 channel coupling is active in the current audio frame.
+        /// </summary>
+        public bool CouplingActive => ((EnhancedAC3Decoder)stream).CouplingActive;
+
+        /// <summary>
+        /// True when E-AC-3 Spectral Extension (SPX) is active in the current audio frame.
+        /// </summary>
+        public bool SpxActive => ((EnhancedAC3Decoder)stream).SpxActive;
+
+        /// <summary>
+        /// Live channel coupling start frequency in Hz (0 when inactive).
+        /// </summary>
+        public float CouplingStartHz => ((EnhancedAC3Decoder)stream).CouplingStartHz;
+
+        /// <summary>
+        /// Live Spectral Extension (SPX) start frequency in Hz (0 when inactive).
+        /// </summary>
+        public float SpxStartHz => ((EnhancedAC3Decoder)stream).SpxStartHz;
+
+        /// <summary>
         /// Count of free-floating objects.
         /// </summary>
         public int DynamicObjects { get; }
