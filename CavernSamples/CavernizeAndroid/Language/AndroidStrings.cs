@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 using VoidX.WPF.Language;
 
@@ -9,6 +10,8 @@ namespace CavernizeAndroid.Language;
 /// </summary>
 public sealed class AndroidStrings {
     static AndroidStrings active;
+    static HashSet<string> allKnownKeys;
+    static readonly Regex BadNumericFmtRegex = new(@"\{\d+:0\.[1-9]\}", RegexOptions.Compiled);
     readonly Dictionary<string, string> strings;
 
     public static AndroidStrings Active => active ??= Load();
@@ -19,6 +22,44 @@ public sealed class AndroidStrings {
     }
 
     public string this[string key] => strings.TryGetValue(key, out string val) ? val : key;
+
+    public static bool IsKnownKey(string candidate) {
+        if (string.IsNullOrWhiteSpace(candidate)) {
+            return false;
+        }
+        allKnownKeys ??= new HashSet<string>(CreateEnglish().Keys, StringComparer.Ordinal);
+        return allKnownKeys.Contains(candidate.Trim());
+    }
+
+    /// <summary>
+    /// Exhaustively audits 100% of EN and PT-BR localization keys for missing translations,
+    /// empty strings, and invalid .NET format specifiers (such as :0.1 instead of :0.0).
+    /// </summary>
+    public static (int enCount, int ptCount, List<string> missingInPt, List<string> emptyValues, List<string> badFormatSpecs) AuditAllDictionaries() {
+        Dictionary<string, string> en = CreateEnglish();
+        Dictionary<string, string> ptOnly = [];
+        ApplyPortuguese(ptOnly);
+
+        List<string> missingInPt = [];
+        List<string> emptyValues = [];
+        List<string> badFormats = [];
+
+        foreach (KeyValuePair<string, string> kv in en) {
+            if (string.IsNullOrWhiteSpace(kv.Value)) {
+                emptyValues.Add($"EN:{kv.Key}");
+            } else if (BadNumericFmtRegex.IsMatch(kv.Value)) {
+                badFormats.Add($"EN:{kv.Key}");
+            }
+            if (!ptOnly.TryGetValue(kv.Key, out string ptVal)) {
+                missingInPt.Add(kv.Key);
+            } else if (string.IsNullOrWhiteSpace(ptVal)) {
+                emptyValues.Add($"PT:{kv.Key}");
+            } else if (BadNumericFmtRegex.IsMatch(ptVal)) {
+                badFormats.Add($"PT:{kv.Key}");
+            }
+        }
+        return (en.Count, ptOnly.Count, missingInPt, emptyValues, badFormats);
+    }
 
     AndroidStrings(Dictionary<string, string> strings) => this.strings = strings;
 
@@ -357,15 +398,19 @@ public sealed class AndroidStrings {
         ["ClearLogBtn"] = "Reset Log",
         ["LogClearedMsg"] = "Diagnostic log cleared.",
         ["LogSummaryHealthFmt"] = "{0}\n{1:0.0} KB · {2} fatal · {3} errors · {4} warnings",
-        ["CloudLogSectionTitle"] = "Cloud Log Sync (GitHub)",
-        ["CloudLogStatusNotConfigured"] = "Not configured — add a GitHub token to sync logs automatically",
+        ["CloudLogSectionTitle"] = "Cloud Diagnostics Hub (Cloudflare / GitHub)",
+        ["CloudLogStatusNotConfigured"] = "Not configured — set up Cloudflare Hub (recommended) or optional GitHub fallback",
         ["CloudLogStatusReadyFmt"] = "Target: {0} ({1}) · {2}",
+        ["CloudLogCloudflareReadyFmt"] = "Cloudflare Unified Hub ({0}) · {1}",
         ["CloudLogNeverSynced"] = "Not synced yet",
-        ["CloudLogUploadBtn"] = "Upload to GitHub",
-        ["CloudLogUploading"] = "Uploading diagnostic log to GitHub...",
+        ["CloudLogUploadBtn"] = "Upload to Cloud",
+        ["CloudLogUploading"] = "Uploading diagnostic bundle to Cloud...",
         ["CloudLogConfigureBtn"] = "Cloud Setup",
-        ["CloudLogModalTitle"] = "Cloud Log Sync (GitHub)",
-        ["CloudLogEnableSwitch"] = "Enable GitHub log sync",
+        ["CloudLogModalTitle"] = "Cloud Diagnostics Hub Setup",
+        ["CloudLogProviderLabel"] = "Telemetry Backend",
+        ["CloudLogProviderCloudflare"] = "Cloudflare Unified Hub (Recommended · zero Git spam)",
+        ["CloudLogProviderGitHub"] = "GitHub Repository (Optional legacy fallback)",
+        ["CloudLogEnableSwitch"] = "Enable automatic cloud telemetry sync",
         ["CloudLogRepoLabel"] = "GitHub Repository (owner/repo)",
         ["CloudLogBranchLabel"] = "Destination Branch",
         ["CloudLogBranchDiagnostics"] = "diagnostics (Recommended · zero conflicts)",
@@ -376,35 +421,38 @@ public sealed class AndroidStrings {
         ["CloudLogAutoCrashSwitch"] = "Auto-upload after a crash (next launch)",
         ["CloudLogAutoErrorSwitch"] = "Auto-upload on runtime errors (5 min cooldown)",
         ["CloudLogTestBtn"] = "Test Connection",
-        ["CloudLogTesting"] = "Testing GitHub connection...",
+        ["CloudLogTesting"] = "Testing Cloud Hub connection...",
         ["CloudLogCreateTokenBtn"] = "Create Token",
         ["CloudLogClearTokenBtn"] = "Remove Token",
+        ["CloudLogOpenBridgeBtn"] = "Open Bridge Setup",
         ["CloudLogSaveBtn"] = "Save",
         ["CloudLogTokenClearedToast"] = "GitHub token removed.",
-        ["CloudLogSavedToast"] = "Cloud log settings saved.",
+        ["CloudLogSavedToast"] = "Cloud diagnostics settings saved.",
         ["CloudLogEncryptFailedToast"] = "Could not encrypt token in Android Keystore.",
         ["CloudLogInvalidRepoToast"] = "Invalid repository format. Use owner/repo.",
         ["CloudLogNeedTokenToast"] = "Configure your GitHub token in Cloud Setup first.",
-        ["CloudLogHelpTitle"] = "How Cloud Log Sync Works",
-        ["CloudLogHelpBody"] = "1. Tap 'Create Token' on GitHub and create a Fine-Grained Personal Access Token.\n2. Under Repository access, pick ONLY your Cavern repository (guumachadooo/Cavern).\n3. Under Repository permissions, grant ONLY 'Contents: Read and write'.\n4. Paste the token here — it is encrypted on-device via Android Keystore (AES-256-GCM) and never written into logs.\n5. Branch 'diagnostics' (recommended) uploads to device-logs/cavernize_log.txt without ever conflicting with master or triggering APK builds. Choosing 'master' writes directly to .agents/device_logs/cavernize_log.txt with [skip ci].",
-        ["SelfCheckSectionTitle"] = "Intelligent Auto-Checkup",
-        ["SelfCheckNeverRun"] = "No checkup run yet — probes binaries, DSP physics & pairwise stage matrix",
+        ["CloudLogCloudflareNeedBridgeToast"] = "Configure your Cloudflare Worker URL and Pair Key in Bridge Setup first.",
+        ["CloudLogHelpTitle"] = "How Cloud Diagnostics Hub Works",
+        ["CloudLogHelpBody"] = "Recommended Architecture — Cloudflare Unified Hub v3:\n• Uses the exact same free Cloudflare Worker + RELAY_KV + Keystore 256-bit Pair Key from Live Bridge.\n• Zero Git commit pollution, zero GitHub PAT required, automatic 14-day retention, and rolling snapshot history.\n• GitHub 'diagnostics' branch stays clean exclusively for CI build reports, with a link to this hub.\n\nOptional Legacy Mode — GitHub Repository:\n• If you prefer storing logs inside a GitHub branch, switch Telemetry Backend to GitHub and paste a Fine-Grained PAT with Contents: Read & Write.",
+        ["SelfCheckSectionTitle"] = "Ultra-Deep Auto-Checkup (10 Layers)",
+        ["SelfCheckNeverRun"] = "No checkup run yet — probes binaries, 100% strings, DSP, codecs, logs & live UI",
         ["SelfCheckLastRunFmt"] = "Last checkup ({0}): {1}",
         ["SelfCheckRunningFmt"] = "Running checkup: {0}...",
-        ["SelfCheckQuickBtn"] = "Quick Checkup",
-        ["SelfCheckFullBtn"] = "Full Checkup",
+        ["SelfCheckQuickBtn"] = "Quick",
+        ["SelfCheckFullBtn"] = "Full DSP",
+        ["SelfCheckUltraBtn"] = "Total + UI",
         ["SelfCheckAutoAfterUpdateSwitch"] = "Auto-checkup & upload after app update",
         ["SelfCheckModalTitleFmt"] = "Self-Check Report — {0}",
         ["SelfCheckModalSummaryFmt"] = "{0} · {1} PASS · {2} WARN · {3} FAIL · {4} SKIP ({5} ms)",
-        ["SelfCheckUploadReportBtn"] = "Upload to GitHub",
+        ["SelfCheckUploadReportBtn"] = "Upload to Cloud",
         ["SelfCheckCopyReportBtn"] = "Copy Report",
         ["SelfCheckCopiedToast"] = "Self-check report copied to clipboard.",
-        ["SelfCheckAutoSyncedToast"] = "Checkup finished and synced to GitHub diagnostics branch.",
+        ["SelfCheckAutoSyncedToast"] = "Checkup finished and synced to Cloud Diagnostics Hub.",
         ["SelfCheckCompletedToastFmt"] = "Self-check finished: {0}",
-        ["SelfCheckHelpTitle"] = "How Intelligent Auto-Checkup Works",
-        ["SelfCheckHelpBody"] = "Tests the app cleanly without changing your settings or media files:\n• L1 NativeLibs: verifies W^X libffmpeg.so, libtruehdd.so, libonnxruntime.so & Pro-Audio NDK bridge.\n• L2 System: RAM, storage I/O, EN/PT-BR strings & hardware audio routes.\n• L3 DSP Physics: HRIR/BRIR assets, AutoEq Double-EQ Guard, ISO 9613-1 air absorption, 4x True-Peak brickwall & Vocal Chain.\n• L4 Pairwise Matrix: uses an 8-vector Strength-2 Orthogonal Covering Array so 100% of DSP feature pairs are tested in seconds (avoiding exponential combinations) for NaN/Inf, silence, clipping & CPU budget.\n• L5 Codecs (Full): synthetic WAV & FFmpeg FLAC round-trip.\nIf Cloud Log Sync is enabled, results upload directly to GitHub (diagnostics branch) for instant AI inspection.",
-        ["LiveBridgeSectionTitle"] = "Live Bridge v2 (Biometric Wake & Control)",
-        ["LiveBridgeNotConfigured"] = "Free real-time AI <-> phone bridge (off by default) — configure your Cloudflare Worker URL",
+        ["SelfCheckHelpTitle"] = "How Ultra-Deep 10-Layer Auto-Checkup Works",
+        ["SelfCheckHelpBody"] = "Inspects every level of Cavernize without altering your media or settings:\n• L1 NativeLibs: W^X libffmpeg.so, libtruehdd.so, libonnxruntime.so, ONNX models & Pro-Audio NDK.\n• L2 System & Strings: RAM, disk I/O, 100% EN/PT-BR key & format audit, audio routes & settings integrity.\n• L3 Deep DSP & Services: HRIR/BRIR decompression, AutoEq .aeqz catalog, Double-EQ Guard, ISO 9613-1, 4x True-Peak, Vocal Chain, Kaiser Sinc Resampler, Farrow Sync, Orthogonal Decorrelator, Parametric STFT, Near-Field/ITD, AHRS Quaternion, Lock-Free RingBuffer & Library cache.\n• L4 Pairwise Matrix: 8-vector Orthogonal Covering Array testing 100% of DSP feature pairs.\n• L5 Codecs: WAV 24-bit + FFmpeg FLAC round-trip & AudioQualityAnalyzer.\n• L6 Cloud Hub: Cloudflare Unified Hub v3 / GitHub readiness.\n• L7 Runtime Logs: scans AppLogger history for fatals, crashes, exceptions & FFmpeg/AAudio/ONNX errors.\n• L8 Live UI Tabs & Settings (Total + UI): walks all 5 tabs & 6 Settings categories checking missing translations, {0}/NaN leaks, clipped buttons & horizontal layout alignment.\n• L9 Live Modal Smoke Test (Total + UI): opens, audits & dismisses 20+ real dialogs.\n• L10 Interactive Controls (Total + UI): tests Settings search, Pro Mode toggle, inline selectors & full UI refresh, then restores your exact screen.",
+        ["LiveBridgeSectionTitle"] = "Live Bridge v3 (Biometric Wake & Full Control)",
+        ["LiveBridgeNotConfigured"] = "Free real-time AI <-> phone bridge + Cloud Telemetry (off by default) — configure your Cloudflare Worker URL",
         ["LiveBridgeIdleFmt"] = "Ready ({0}) · Tier {1} — OFF until you tap Start or enable Standby Wake",
         ["LiveBridgeStandbyActiveFmt"] = "STANDBY ({0}) · Biometric Wake ON · Tier {1} — ready even when app is closed",
         ["LiveBridgeActiveFmt"] = "LIVE ({0} left · T{1} · {2} cmds) — Code: {3}\n{4}",
@@ -430,27 +478,29 @@ public sealed class AndroidStrings {
         ["LiveBridgeApproveManualBtn"] = "Approve Now",
         ["LiveBridgeTierLabel"] = "Default Session Permission Tier",
         ["LiveBridgeTier0Short"] = "Tier 0 — Read-Only Diagnostics",
-        ["LiveBridgeTier1Short"] = "Tier 1 — Interactive Control & QA",
-        ["LiveBridgeTier2Short"] = "Tier 2 — Full + Screenshot & Native Probe",
+        ["LiveBridgeTier1Short"] = "Tier 1 — Interactive Control, QA & Ultra Audit",
+        ["LiveBridgeTier2Short"] = "Tier 2 — Unrestricted Control (Reflect/UI/Shell/Print)",
         ["LiveBridgeDurationLabel"] = "Session Duration",
         ["LiveBridgePairStatusPaired"] = "Device Paired (256-bit Keystore key active)",
         ["LiveBridgePairStatusUnpaired"] = "Not paired yet — generate a 256-bit pairing key for biometric wake",
         ["LiveBridgePairGenBtn"] = "Generate / Rotate Pair Key",
         ["LiveBridgePairCopyBtn"] = "Copy Pair Key",
         ["LiveBridgePairRevokeBtn"] = "Revoke Key",
+        ["LiveBridgeOpenCloudflareBtn"] = "Open Cloudflare",
+        ["LiveBridgeOpenWorkerCodeBtn"] = "Worker Code JS",
         ["LiveBridgePairCopiedToast"] = "Pairing key copied! Give it to your AI or set CAVERN_BRIDGE_PAIR_SECRET.",
         ["LiveBridgePairRevokedToast"] = "Pairing key revoked and background wake stopped.",
         ["LiveBridgeStandbyNeedPairToast"] = "Configure your Worker URL and generate a Pair Key first.",
         ["LiveBridgeCodeCopiedToast"] = "Temporary session code copied.",
-        ["LiveBridgeModalTitle"] = "Live Bridge v2 Setup (Free)",
+        ["LiveBridgeModalTitle"] = "Live Bridge v3 & Cloud Hub Setup",
         ["LiveBridgeUrlLabel"] = "Your Cloudflare Worker URL (https://...workers.dev)",
         ["LiveBridgeTestBtn"] = "Test Relay",
-        ["LiveBridgeTesting"] = "Testing Cloudflare Worker relay...",
+        ["LiveBridgeTesting"] = "Testing Cloudflare Worker v3 hub...",
         ["LiveBridgeInvalidUrlToast"] = "Enter a valid public https:// Worker URL.",
-        ["LiveBridgeSavedToast"] = "Live Bridge v2 settings saved.",
+        ["LiveBridgeSavedToast"] = "Live Bridge v3 settings saved.",
         ["LiveBridgeNeedUrlToast"] = "Configure your free Cloudflare Worker URL first.",
-        ["LiveBridgeHelpTitle"] = "Free Live Bridge v2 & Biometric Wake Setup",
-        ["LiveBridgeHelpBody"] = "100% free on Cloudflare Workers Free Tier (100k req/day):\n1. Create KV namespace CAVERNIZE_RELAY and Worker bound as RELAY_KV.\n2. Paste .agents/docs/cloudflare_live_relay_worker.js (v2) and Deploy.\n3. Enter your https://...workers.dev URL here & tap Generate Pair Key.\n4. Turn ON Background Wake Standby to receive fingerprint approval prompts even when Cavernize is closed!\nSecurity: Pairing key stays encrypted in Android Keystore (never sent to Cloudflare). Wake requests require HMAC-SHA256 verification + your fingerprint/PIN, and session tokens return end-to-end encrypted. Supports 30+ Tier 0/1/2 diagnostic, QA, playback, UI & screenshot commands.",
+        ["LiveBridgeHelpTitle"] = "Cloudflare Unified Hub v3 & Live Bridge Setup",
+        ["LiveBridgeHelpBody"] = "100% free on Cloudflare Workers Free Tier (100k req/day) — powers BOTH Live Bridge AND Cloud Logs:\n1. Open dash.cloudflare.com -> Storage & Databases -> Workers KV -> Create -> name: CAVERNIZE_RELAY.\n2. Open Compute (Workers) -> Workers & Pages -> Create -> Workers tab -> Create Worker -> name: cavernize-diag-relay -> Deploy.\n3. Inside your Worker, open Settings -> Bindings -> Add -> KV Namespace -> Variable name: RELAY_KV -> Namespace: CAVERNIZE_RELAY -> Save.\n4. Tap Edit Code (top-right), paste .agents/docs/cloudflare_live_relay_worker.js (v3), and tap Deploy.\n5. Copy your https://...workers.dev URL here, tap Generate Pair Key, and tap Test Relay.\n\nSecurity & Control: Pairing key stays encrypted in Android Keystore. Wake requests require HMAC-SHA256 + fingerprint/PIN. Tier 2 unlocks unrestricted dynamic .NET reflection, universal UI automation (including dialogs), sandboxed shell diagnostics, and multi-step pipelines.",
 
         // App Auto-Updater
         ["UpdateCardTitle"] = "Software Update",
@@ -1752,15 +1802,19 @@ public sealed class AndroidStrings {
         d["ClearLogBtn"] = "Resetar Log";
         d["LogClearedMsg"] = "Log de diagnóstico limpo.";
         d["LogSummaryHealthFmt"] = "{0}\n{1:0.0} KB · {2} fatais · {3} erros · {4} avisos";
-        d["CloudLogSectionTitle"] = "Logs na Nuvem (GitHub)";
-        d["CloudLogStatusNotConfigured"] = "Não configurado — adicione um token do GitHub para enviar logs";
+        d["CloudLogSectionTitle"] = "Hub de Telemetria na Nuvem (Cloudflare / GitHub)";
+        d["CloudLogStatusNotConfigured"] = "Não configurado — use o Hub Cloudflare (recomendado) ou GitHub legado";
         d["CloudLogStatusReadyFmt"] = "Destino: {0} ({1}) · {2}";
+        d["CloudLogCloudflareReadyFmt"] = "Hub Unificado Cloudflare ({0}) · {1}";
         d["CloudLogNeverSynced"] = "Ainda não enviado";
-        d["CloudLogUploadBtn"] = "Enviar ao GitHub";
-        d["CloudLogUploading"] = "Enviando log de diagnóstico ao GitHub...";
+        d["CloudLogUploadBtn"] = "Enviar à Nuvem";
+        d["CloudLogUploading"] = "Enviando pacote de diagnóstico para a nuvem...";
         d["CloudLogConfigureBtn"] = "Configurar Nuvem";
-        d["CloudLogModalTitle"] = "Logs na Nuvem (GitHub)";
-        d["CloudLogEnableSwitch"] = "Ativar envio de logs ao GitHub";
+        d["CloudLogModalTitle"] = "Configurar Hub de Telemetria";
+        d["CloudLogProviderLabel"] = "Servidor de Telemetria";
+        d["CloudLogProviderCloudflare"] = "Hub Unificado Cloudflare (Recomendado · sem spam Git)";
+        d["CloudLogProviderGitHub"] = "Repositório GitHub (Legado opcional)";
+        d["CloudLogEnableSwitch"] = "Ativar envio automático de telemetria na nuvem";
         d["CloudLogRepoLabel"] = "Repositório GitHub (dono/repo)";
         d["CloudLogBranchLabel"] = "Branch de Destino";
         d["CloudLogBranchDiagnostics"] = "diagnostics (Recomendado · sem conflitos)";
@@ -1771,35 +1825,38 @@ public sealed class AndroidStrings {
         d["CloudLogAutoCrashSwitch"] = "Enviar automaticamente após crash (ao reabrir)";
         d["CloudLogAutoErrorSwitch"] = "Enviar ao detectar erros (intervalo de 5 min)";
         d["CloudLogTestBtn"] = "Testar Conexão";
-        d["CloudLogTesting"] = "Testando conexão com o GitHub...";
+        d["CloudLogTesting"] = "Testando conexão com o Hub na nuvem...";
         d["CloudLogCreateTokenBtn"] = "Criar Token";
         d["CloudLogClearTokenBtn"] = "Remover Token";
+        d["CloudLogOpenBridgeBtn"] = "Abrir Config. Ponte";
         d["CloudLogSaveBtn"] = "Salvar";
         d["CloudLogTokenClearedToast"] = "Token do GitHub removido.";
-        d["CloudLogSavedToast"] = "Configurações de nuvem salvas.";
+        d["CloudLogSavedToast"] = "Configurações do Hub de Telemetria salvas.";
         d["CloudLogEncryptFailedToast"] = "Não foi possível criptografar o token no Android Keystore.";
         d["CloudLogInvalidRepoToast"] = "Formato de repositório inválido. Use dono/repo.";
         d["CloudLogNeedTokenToast"] = "Configure seu token do GitHub em Configurar Nuvem primeiro.";
-        d["CloudLogHelpTitle"] = "Como funciona o Log na Nuvem";
-        d["CloudLogHelpBody"] = "1. Toque em 'Criar Token' no GitHub e crie um Fine-Grained Personal Access Token.\n2. Em Repository access, selecione APENAS o seu repositório Cavern (guumachadooo/Cavern).\n3. Em Repository permissions, libere APENAS 'Contents: Read and write'.\n4. Cole o token aqui — ele fica criptografado no aparelho via Android Keystore (AES-256-GCM) e nunca aparece nos logs.\n5. A branch 'diagnostics' (recomendada) envia para device-logs/cavernize_log.txt sem gerar conflitos na master nem disparar build de APK. Escolher 'master' grava direto em .agents/device_logs/cavernize_log.txt com [skip ci].";
-        d["SelfCheckSectionTitle"] = "Auto-Checkup Inteligente";
-        d["SelfCheckNeverRun"] = "Ainda não executado — testa binários, física DSP e matriz ortogonal";
-        d["SelfCheckLastRunFmt"] = "Último check-up ({0}): {1}";
-        d["SelfCheckRunningFmt"] = "Executando check-up: {0}...";
-        d["SelfCheckQuickBtn"] = "Check-up Rápido";
-        d["SelfCheckFullBtn"] = "Check-up Completo";
-        d["SelfCheckAutoAfterUpdateSwitch"] = "Auto-checkup e envio após atualizar o app";
-        d["SelfCheckModalTitleFmt"] = "Relatório do Check-up — {0}";
+        d["CloudLogCloudflareNeedBridgeToast"] = "Configure a URL do Worker Cloudflare e gere a Chave de Pareamento na Ponte primeiro.";
+        d["CloudLogHelpTitle"] = "Como funciona o Hub de Telemetria na Nuvem";
+        d["CloudLogHelpBody"] = "Arquitetura Profissional Recomendada — Hub Unificado Cloudflare v3:\n• Reutiliza o mesmo Worker Cloudflare gratuito + RELAY_KV + Chave 256-bit do Keystore da Ponte Ao Vivo.\n• Zero commits automáticos poluindo o Git, sem precisar de token do GitHub, histórico rotativo e limpeza automática em 14 dias.\n• A branch 'diagnostics' no GitHub fica limpa só para relatórios de compilação CI com link apontando para este Hub.\n\nModo Legado Opcional — GitHub:\n• Se preferir gravar arquivos direto no GitHub, mude o Servidor de Telemetria para GitHub e cole um token Fine-Grained (Contents: Read & Write).";
+        d["SelfCheckSectionTitle"] = "Auditoria Profunda do App (10 Camadas)";
+        d["SelfCheckNeverRun"] = "Ainda não executada — audita binários, 100% textos, DSP, codecs, logs e UI ao vivo";
+        d["SelfCheckLastRunFmt"] = "Última auditoria ({0}): {1}";
+        d["SelfCheckRunningFmt"] = "Auditando: {0}...";
+        d["SelfCheckQuickBtn"] = "Rápido";
+        d["SelfCheckFullBtn"] = "DSP Full";
+        d["SelfCheckUltraBtn"] = "Total + UI";
+        d["SelfCheckAutoAfterUpdateSwitch"] = "Auto-auditoria e envio após atualizar o app";
+        d["SelfCheckModalTitleFmt"] = "Relatório de Auditoria — {0}";
         d["SelfCheckModalSummaryFmt"] = "{0} · {1} OK · {2} AVISOS · {3} FALHAS · {4} PULADOS ({5} ms)";
-        d["SelfCheckUploadReportBtn"] = "Enviar p/ GitHub";
+        d["SelfCheckUploadReportBtn"] = "Enviar à Nuvem";
         d["SelfCheckCopyReportBtn"] = "Copiar Relatório";
-        d["SelfCheckCopiedToast"] = "Relatório do check-up copiado.";
-        d["SelfCheckAutoSyncedToast"] = "Check-up concluído e enviado para a branch diagnostics no GitHub.";
-        d["SelfCheckCompletedToastFmt"] = "Check-up concluído: {0}";
-        d["SelfCheckHelpTitle"] = "Como funciona o Auto-Checkup Inteligente";
-        d["SelfCheckHelpBody"] = "Testa o aplicativo sem alterar suas configurações nem seus arquivos:\n• L1 NativeLibs: valida W^X de libffmpeg.so, libtruehdd.so, libonnxruntime.so e ponte NDK Pro-Audio.\n• L2 Sistema: RAM, escrita/leitura em disco, strings EN/PT-BR e rotas de áudio.\n• L3 Física DSP: assets HRIR/BRIR, Double-EQ Guard do AutoEq, absorção ISO 9613-1, limiter 4x True-Peak e Vocal Chain.\n• L4 Matriz Ortogonal (Pairwise): usa 8 vetores matemáticos de cobertura em pares para testar 100% das combinações entre pares de recursos DSP em segundos (sem explosão exponencial), checando NaN/Inf, silêncio, clipping e orçamento de CPU.\n• L5 Codecs (Completo): ida e volta WAV sintético + FLAC via FFmpeg.\nSe o Log na Nuvem estiver ativo, sobe automaticamente para o GitHub (branch diagnostics) para consulta instantânea.";
-        d["LiveBridgeSectionTitle"] = "Ponte Ao Vivo v2 (Digital e Controle Total)";
-        d["LiveBridgeNotConfigured"] = "Ponte grátis em tempo real IA <-> celular (desligada por padrão) — configure seu Worker Cloudflare";
+        d["SelfCheckCopiedToast"] = "Relatório de auditoria copiado.";
+        d["SelfCheckAutoSyncedToast"] = "Auditoria concluída e enviada ao Hub de Telemetria na nuvem.";
+        d["SelfCheckCompletedToastFmt"] = "Auditoria concluída: {0}";
+        d["SelfCheckHelpTitle"] = "Como funciona a Auditoria Profunda (10 Camadas)";
+        d["SelfCheckHelpBody"] = "Varre absolutamente todos os níveis do aplicativo sem estragar suas configurações nem arquivos:\n• L1 NativeLibs: W^X libffmpeg.so, libtruehdd.so, libonnxruntime.so, modelos ONNX e NDK Pro-Audio.\n• L2 Sistema e Textos: RAM, disco, auditoria de 100% das chaves EN/PT-BR, rotas de áudio e integridade das configurações.\n• L3 DSP Profundo e Serviços: leitura real de HRIR/BRIR, catálogo .aeqz AutoEq, Double-EQ Guard, ISO 9613-1, 4x True-Peak, Vocal Chain, Kaiser Sinc Resampler, Farrow Sync, Decorrelator Ortogonal, STFT Paramétrico, Near-Field/ITD, AHRS Quaternion, RingBuffer Lock-Free e cache da Biblioteca.\n• L4 Matriz Ortogonal: 8 vetores matemáticos testando 100% dos pares de recursos DSP.\n• L5 Codecs: WAV 24-bit + FLAC via FFmpeg e analisador de qualidade.\n• L6 Nuvem: prontidão do Hub Cloudflare v3 / GitHub.\n• L7 Logs de Execução: caça falhas fatais, crashes, exceções e erros de FFmpeg/AAudio/ONNX gravados no log real.\n• L8 UI Ao Vivo — Abas e Ajustes (Total + UI): percorre as 5 abas e 6 categorias procurando chaves sem tradução, {0}/NaN vazados, botões cortados e alinhamento.\n• L9 Teste Ao Vivo de Modais (Total + UI): abre, audita e fecha mais de 20 janelas/diálogos reais.\n• L10 Controles Interativos (Total + UI): testa busca nos Ajustes, Modo Pro, seletores e refresh completo, restaurando sua tela ao final.";
+        d["LiveBridgeSectionTitle"] = "Ponte Ao Vivo v3 (Digital e Controle Irrestrito)";
+        d["LiveBridgeNotConfigured"] = "Ponte grátis IA <-> celular + Telemetria na Nuvem (desligada por padrão) — configure seu Worker Cloudflare";
         d["LiveBridgeIdleFmt"] = "Pronta ({0}) · Nível {1} — DESLIGADA até iniciar ou ativar Escuta em 2º Plano";
         d["LiveBridgeStandbyActiveFmt"] = "EM ESPERA ({0}) · Digital ATIVA · Nível {1} — pronto mesmo com app fechado";
         d["LiveBridgeActiveFmt"] = "AO VIVO ({0} restando · T{1} · {2} cmds) — Código: {3}\n{4}";
@@ -1825,27 +1882,29 @@ public sealed class AndroidStrings {
         d["LiveBridgeApproveManualBtn"] = "Aprovar Agora";
         d["LiveBridgeTierLabel"] = "Nível de Permissão Padrão da Sessão";
         d["LiveBridgeTier0Short"] = "Nível 0 — Somente Diagnóstico";
-        d["LiveBridgeTier1Short"] = "Nível 1 — Controle Interativo e QA";
-        d["LiveBridgeTier2Short"] = "Nível 2 — Completo + Print e Ferramentas";
+        d["LiveBridgeTier1Short"] = "Nível 1 — Controle Interativo, QA e Auditoria Total";
+        d["LiveBridgeTier2Short"] = "Nível 2 — Controle Irrestrito (Reflexão/UI/Shell/Print)";
         d["LiveBridgeDurationLabel"] = "Duração da Sessão";
         d["LiveBridgePairStatusPaired"] = "Aparelho Pareado (chave 256-bit ativa no Keystore)";
         d["LiveBridgePairStatusUnpaired"] = "Não pareado — gere uma chave 256-bit para acordar com digital";
         d["LiveBridgePairGenBtn"] = "Gerar / Rotacionar Chave";
         d["LiveBridgePairCopyBtn"] = "Copiar Chave";
         d["LiveBridgePairRevokeBtn"] = "Revogar Chave";
+        d["LiveBridgeOpenCloudflareBtn"] = "Abrir Cloudflare";
+        d["LiveBridgeOpenWorkerCodeBtn"] = "Código JS";
         d["LiveBridgePairCopiedToast"] = "Chave de pareamento copiada! Envie para a IA ou defina CAVERN_BRIDGE_PAIR_SECRET.";
         d["LiveBridgePairRevokedToast"] = "Chave revogada e escuta em 2º plano encerrada.";
         d["LiveBridgeStandbyNeedPairToast"] = "Configure a URL do Worker e gere uma Chave de Pareamento primeiro.";
         d["LiveBridgeCodeCopiedToast"] = "Código temporário copiado.";
-        d["LiveBridgeModalTitle"] = "Configurar Ponte Ao Vivo v2 (Grátis)";
+        d["LiveBridgeModalTitle"] = "Ponte Ao Vivo v3 e Hub Cloudflare";
         d["LiveBridgeUrlLabel"] = "URL do seu Worker Cloudflare (https://...workers.dev)";
         d["LiveBridgeTestBtn"] = "Testar Relay";
-        d["LiveBridgeTesting"] = "Testando relay Cloudflare Worker...";
+        d["LiveBridgeTesting"] = "Testando Hub Cloudflare Worker v3...";
         d["LiveBridgeInvalidUrlToast"] = "Informe uma URL https:// pública válida do seu Worker.";
-        d["LiveBridgeSavedToast"] = "Configurações da Ponte Ao Vivo v2 salvas.";
+        d["LiveBridgeSavedToast"] = "Configurações da Ponte Ao Vivo v3 salvas.";
         d["LiveBridgeNeedUrlToast"] = "Configure primeiro a URL gratuita do seu Worker Cloudflare.";
-        d["LiveBridgeHelpTitle"] = "Como configurar a Ponte Ao Vivo v2 com Digital";
-        d["LiveBridgeHelpBody"] = "100% grátis no Cloudflare Workers Free Tier (100 mil req/dia):\n1. Crie o KV namespace CAVERNIZE_RELAY e o Worker com binding RELAY_KV.\n2. Cole o arquivo .agents/docs/cloudflare_live_relay_worker.js (v2) e clique em Deploy.\n3. Informe sua URL https://...workers.dev aqui e toque em Gerar Chave.\n4. Ative a Escuta em 2º Plano para receber pedidos de conexão na tela e aprovar com sua digital mesmo com o app fechado!\nSegurança: A chave de pareamento fica criptografada no Android Keystore (nunca enviada à Cloudflare). Pedidos exigem assinatura HMAC-SHA256 + sua digital/PIN, e o token de sessão volta criptografado ponta a ponta. Suporta 30+ comandos flexíveis (diagnóstico, QA, controles, UI e print).";
+        d["LiveBridgeHelpTitle"] = "Passo a Passo na Cloudflare (em Português)";
+        d["LiveBridgeHelpBody"] = "100% grátis (100 mil req/dia) — ativa Ponte Ao Vivo + Logs na Nuvem juntos!\n1. Entre em dash.cloudflare.com -> menu esquerdo: Armazenamento e bancos de dados -> Workers KV -> Criar -> nome: CAVERNIZE_RELAY.\n2. Menu esquerdo: Computação (Workers) -> Workers e Pages -> Criar -> aba Workers -> Criar Worker -> nome: cavernize-diag-relay -> Implantar.\n3. Dentro do Worker criado, abra a aba Configurações -> seção Associações (Bindings) -> Adicionar -> Namespace KV -> Nome da variável: RELAY_KV -> Namespace KV: CAVERNIZE_RELAY -> Salvar.\n4. No canto superior direito, clique em Editar código, apague tudo, cole o arquivo .agents/docs/cloudflare_live_relay_worker.js (v3) e clique em Implantar.\n5. Copie a URL https://...workers.dev aqui embaixo, toque em Gerar Chave e depois em Testar Relay.\n\nSegurança e Poder Total: Chave 256-bit no Android Keystore, aprovação por digital/PIN. No Nível 2 a IA tem acesso dinâmico irrestrito (reflexão .NET, clique/edição em qualquer tela ou modal, shell sandbox e pipelines).",
 
         d["UpdateCardTitle"] = "Atualização do Aplicativo";
         d["CurrentVersionLabel"] = "Versão instalada: v{0}";

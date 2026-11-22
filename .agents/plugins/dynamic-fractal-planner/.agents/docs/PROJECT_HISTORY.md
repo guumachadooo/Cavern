@@ -15,4 +15,5 @@
 ## 3. Version History (Newest First)
 <!-- RULE: PREPEND 1-3L entries directly below (newest first). !static("Current State"). -->
 <!-- FORMAT: - YYYY-MM-DD|<tag>|<scope/file:sym> <change> -> <effect> | verified:<cmd> -->
+- 2026-11-22|v2.6.0-r2|`scripts/{live_diagnostics,live_bridge_client}.py` -> added Cloudflare Unified Telemetry Hub v3 fetcher (`--cloudflare`/`--history`/`derive_telemetry_headers`) + Live Bridge v3 `--pipeline` & Tier 2 dynamic execution CLI | verified:`tests/run_plugin_tests.py --fast`
 - 2026-11-22|v2.6.0|`scripts/{error_learner,live_diagnostics,live_bridge_client,self_evolve}.py` + `plan_tool.py` + `verify_universal.py` + `planner_session_start.py` + `.agents/docs/{EXTERNAL_AI_SYNC,HANDOFF,BUILD_LESSONS}.md` -> universalized timeless error learning, live GitHub diagnostics, biometric wake bridge client v2, autonomous dual-scope self-evolution & 1:1 standalone plugin sync ledgers | verified:`tests/run_plugin_tests.py --fast`

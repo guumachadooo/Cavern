@@ -44,6 +44,10 @@ public interface ILiveBridgeAppHost {
     Task<(bool ok, string message)> OpenFileAsync(string path, bool autoPlay, int? switchToTab);
     Task<(bool ok, string message)> ExecuteUiActionAsync(string action, string message);
     Task<(bool ok, string message)> ClickUiElementAsync(string textQuery, int index);
+    Task<(bool ok, string json)> UiInteractAsync(JsonElement argsEl);
+    Task<(bool ok, string output)> ExecuteOnUiThreadReflectAsync(Func<(bool ok, string output)> fn);
+    object GetReflectionRoot(string rootName);
+    Task<List<SelfCheckItem>> RunLiveUiSelfAuditAsync(Action<string> onProgress, CancellationToken ct);
     Task ApplySettingsChangedAsync();
 }
 
@@ -127,21 +131,31 @@ public static class LiveDiagnosticBridgeService {
         new("ui_tree", 0, "Dump live Android View hierarchy of active MainActivity window", "{maxDepth?:1..10}"),
         new("batch", 0, "Execute up to 15 sequential commands in one round-trip (enforces each command's tier)", "{commands:[{cmd:string, args?:object}]}"),
 
-        // Tier 1: Interactive App Control & QA
+        // Tier 1: Interactive App Control, QA & Total-App Live Audit
+        new("ultra_check", 1, "Run 10-layer Total + Live UI/Modal/Controls self-audit", "{}"),
+        new("ui_audit", 1, "Run L8-L10 Live UI Tabs, 27-Modal Smoke & Controls audit only", "{}"),
         new("settings_set", 1, "Update non-secret AppSettingsStore property via reflection & refresh UI", "{key:string, value:any} or {values:{k:v}}"),
         new("tab_switch", 1, "Switch MainActivity bottom navigation tab", "{index?:0..4, name?:'player'|'room'|'studio'|'stems'|'settings'}"),
         new("playback_control", 1, "Control real-time player playback", "{action:'play'|'pause'|'toggle'|'stop'|'next'|'prev'|'seek'|'seek_rel'|'loop', value?:number}"),
         new("open_file", 1, "Open a local audio/video file in Cavernize", "{path:string, autoPlay?:bool, tab?:0..4}"),
-        new("ui_action", 1, "Invoke high-level app actions (refresh_ui, rescan_library, sync_logs_cloud, check_updates, reset_head_pose, bring_to_front, toast)", "{action:string, message?:string}"),
-        new("ui_click", 1, "Find and click a visible clickable View matching text/contentDescription", "{text:string, index?:number}"),
+        new("ui_action", 1, "Invoke high-level app actions (refresh_ui, rescan_library, sync_logs_cloud, check_updates, reset_head_pose, dismiss_dialogs, bring_to_front, toast)", "{action:string, message?:string}"),
+        new("ui_click", 1, "Find and click a visible clickable View matching text/contentDescription (MainActivity + dialogs)", "{text:string, index?:number}"),
         new("cache_clear", 1, "Clear temporary app cache files cleanly", "{scope?:'cache'|'logs'}"),
         new("audio_probe", 1, "Run fast AudioQualityAnalyzer metadata check on a local file", "{path:string}"),
 
-        // Tier 2: Elevated Visual & Bundled Native Tool Probing (biometric-gated)
-        new("screenshot_ui", 2, "Capture downscaled JPEG base64 screenshot of MainActivity window", "{maxWidth?:360..1080, quality?:40..90}"),
+        // Tier 2: Unrestricted Dynamic Programmable Control, Visual & Shell (biometric-gated)
+        new("screenshot_ui", 2, "Capture downscaled JPEG base64 screenshot of active dialog or MainActivity window", "{maxWidth?:360..1080, quality?:40..90}"),
         new("native_tool_exec", 2, "Run bundled NativeLibraryDir libffmpeg.so or libtruehdd.so probe w/ ArgumentList (zero shell)", "{tool:'ffmpeg'|'truehdd', args:[string]}"),
         new("file_delete", 2, "Delete a single confined file inside CacheDir or Logs directory", "{path:string}"),
-        new("settings_reset", 2, "Reset one specific non-secret setting key or clear temporary bridge cache", "{key:string}")
+        new("settings_reset", 2, "Reset one specific non-secret setting key or clear temporary bridge cache", "{key:string}"),
+        new("reflect_types", 2, "Search & list any loaded .NET types across all loaded assemblies", "{filter?:string, assembly?:string, limit?:1..200}"),
+        new("reflect_members", 2, "Inspect properties, fields & method signatures of any .NET type or live root", "{type?:string, root?:string, path?:string, filter?:string, includeNonPublic?:bool}"),
+        new("reflect_get", 2, "Dynamically read any static or instance property/field path (secret-redacted)", "{type?:string, root?:'activity'|'store'|'player'|'audiodevice'|'headtracking'|'proaudio'|'dialogs', path:string, uiThread?:bool}"),
+        new("reflect_set", 2, "Dynamically set any non-secret static or instance property/field path", "{type?:string, root?:string, path:string, value:any, uiThread?:bool}"),
+        new("reflect_invoke", 2, "Dynamically invoke any .NET method (static/instance, sync/async Task, $context/$activity/$store/$null tokens)", "{type?:string, root?:string, path?:string, method:string, args?:[any], uiThread?:bool}"),
+        new("ui_interact", 2, "Universal live UI automation across MainActivity & open dialogs (find/click/long_click/set_text/set_checked/set_progress/select_item/scroll_by/tap_xy/swipe_xy/back/dismiss_dialogs/dump_dialogs)", "{action:string, query?:string, type?:string, index?:number, value?:any, dy?:number, x?:number, y?:number, x1?:number, y1?:number, x2?:number, y2?:number}"),
+        new("shell_exec", 2, "Execute sandboxed /system/bin/sh diagnostic command inside app sandbox (20s timeout, W^X guarded)", "{command:string, cwd?:string, timeoutSec?:1..20}"),
+        new("pipeline", 2, "Execute up to 30 chained arbitrary commands/reflections/UI steps with $prev substitution", "{steps:[{cmd:string, args?:object}], stopOnError?:bool}")
     ];
 
     public static bool IsActive {
@@ -225,6 +239,8 @@ public static class LiveDiagnosticBridgeService {
         }
     }
 
+    internal static ILiveBridgeAppHost TryGetHostInternal() => TryGetHost();
+
     static HttpClient BuildClient() {
         HttpClient client = new() { Timeout = TimeSpan.FromSeconds(15) };
         client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid-LiveBridge", "2.0"));
@@ -272,12 +288,16 @@ public static class LiveDiagnosticBridgeService {
             bool ok = doc.RootElement.TryGetProperty("ok", out JsonElement okEl) && okEl.GetBoolean();
             int ver = doc.RootElement.TryGetProperty("version", out JsonElement vEl) && vEl.TryGetInt32(out int parsedV) ? parsedV : 1;
             bool supportsWake = doc.RootElement.TryGetProperty("supportsWake", out JsonElement wEl) && wEl.GetBoolean();
+            bool supportsTelemetry = doc.RootElement.TryGetProperty("supportsTelemetry", out JsonElement tEl) && tEl.GetBoolean();
             if (!ok) {
                 return (false, "Relay responded without ok=true. Verify RELAY_KV binding.");
             }
+            if (supportsTelemetry && supportsWake) {
+                return (true, $"Unified Hub v{ver} online (Biometric Wake + Cloud Telemetry + Dynamic Control ready)");
+            }
             return supportsWake
-                ? (true, $"Relay v{ver} online (Biometric Wake + Flexible Cmds ready)")
-                : (true, $"Relay v{ver} online (update Worker JS to v2 for Biometric Wake & flexible cmds)");
+                ? (true, $"Relay v{ver} online (update Worker JS to v3 for Unified Cloud Telemetry Hub)")
+                : (true, $"Relay v{ver} online (update Worker JS to v3 for Biometric Wake & Cloud Telemetry)");
         } catch (Exception ex) {
             return (false, $"Relay connection failed: {ex.Message}");
         }
@@ -329,6 +349,10 @@ public static class LiveDiagnosticBridgeService {
         string hex = DecryptWithKeystore(stored).Trim().ToLowerInvariant();
         return hex.Length == 64 ? hex : "";
     }
+
+    internal static string GetPairSecretHexForInternalAuth(AppSettingsStore store) => LoadPairSecretHex(store);
+
+    internal static string ComputeDeviceHash(string pairSecretHex) => ComputeWakeChannelHash(pairSecretHex);
 
     internal static string ComputeWakeChannelHash(string pairSecretHex) {
         byte[] input = System.Text.Encoding.UTF8.GetBytes($"wake-channel-v2:{pairSecretHex.ToLowerInvariant()}");
@@ -768,7 +792,9 @@ public static class LiveDiagnosticBridgeService {
                     (string ver, long build) = AppUpdateService.GetInstalledVersion(context);
                     return (true, JsonSerializer.Serialize(new {
                         status = "online",
-                        bridgeVersion = 2,
+                        bridgeVersion = 3,
+                        supportsDynamicExecution = true,
+                        supportsTelemetry = true,
                         activeTier = maxTier,
                         biometricVerified = ActiveBiometricVerified,
                         uiHostAttached = host != null,
@@ -790,7 +816,8 @@ public static class LiveDiagnosticBridgeService {
                 case "capabilities":
                 case "help": {
                     return (true, JsonSerializer.Serialize(new {
-                        bridgeVersion = 2,
+                        bridgeVersion = 3,
+                        supportsDynamicExecution = true,
                         activeTier = maxTier,
                         uiHostAttached = host != null,
                         commands = CapabilitiesCatalog.Select(c => new {
@@ -803,16 +830,35 @@ public static class LiveDiagnosticBridgeService {
                     }, new JsonSerializerOptions { WriteIndented = true }));
                 }
                 case "quick_check": {
-                    SelfCheckReport rep = await SelfDiagnosticEngine.RunAsync(context, store, fullSuite: false, ct: ct).ConfigureAwait(false);
+                    SelfCheckReport rep = await SelfDiagnosticEngine.RunAsync(context, store, SelfCheckMode.Quick, ct: ct).ConfigureAwait(false);
                     store.LastSelfCheckUtc = rep.ExecutedAtUtc;
                     store.LastSelfCheckSummary = rep.CompactSummary;
                     return (true, rep.ToMarkdown());
                 }
                 case "full_check": {
-                    SelfCheckReport rep = await SelfDiagnosticEngine.RunAsync(context, store, fullSuite: true, ct: ct).ConfigureAwait(false);
+                    SelfCheckReport rep = await SelfDiagnosticEngine.RunAsync(context, store, SelfCheckMode.Full, ct: ct).ConfigureAwait(false);
                     store.LastSelfCheckUtc = rep.ExecutedAtUtc;
                     store.LastSelfCheckSummary = rep.CompactSummary;
                     return (true, rep.ToMarkdown());
+                }
+                case "ultra_check": {
+                    SelfCheckReport rep = await SelfDiagnosticEngine.RunAsync(context, store, SelfCheckMode.Ultra, ct: ct).ConfigureAwait(false);
+                    store.LastSelfCheckUtc = rep.ExecutedAtUtc;
+                    store.LastSelfCheckSummary = rep.CompactSummary;
+                    return (true, rep.ToMarkdown());
+                }
+                case "ui_audit": {
+                    if (host == null) {
+                        return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
+                    }
+                    List<SelfCheckItem> items = await host.RunLiveUiSelfAuditAsync(null, ct).ConfigureAwait(false);
+                    return (items.All(i => i.Status != SelfCheckStatus.Fail),
+                        JsonSerializer.Serialize(new {
+                            pass = items.Count(i => i.Status == SelfCheckStatus.Pass),
+                            warn = items.Count(i => i.Status == SelfCheckStatus.Warn),
+                            fail = items.Count(i => i.Status == SelfCheckStatus.Fail),
+                            checks = items
+                        }, new JsonSerializerOptions { WriteIndented = true }));
                 }
                 case "summary":
                     return (true, AppLogger.BuildDiagnosticSummaryJson(context, store));
@@ -1026,6 +1072,67 @@ public static class LiveDiagnosticBridgeService {
                 }
                 case "native_tool_exec":
                     return await ExecuteNativeToolProbeAsync(context, argsEl, ct).ConfigureAwait(false);
+                case "ui_interact": {
+                    if (host == null) {
+                        return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
+                    }
+                    return await host.UiInteractAsync(argsEl).ConfigureAwait(false);
+                }
+                case "reflect_types":
+                    return ExecuteReflectTypes(argsEl);
+                case "reflect_members":
+                    return await ExecuteReflectMembersAsync(host, store, argsEl).ConfigureAwait(false);
+                case "reflect_get":
+                    return await ExecuteReflectGetAsync(host, store, argsEl).ConfigureAwait(false);
+                case "reflect_set":
+                    return await ExecuteReflectSetAsync(host, store, argsEl).ConfigureAwait(false);
+                case "reflect_invoke":
+                    return await ExecuteReflectInvokeAsync(context, host, store, argsEl).ConfigureAwait(false);
+                case "shell_exec":
+                    return await ExecuteSandboxedShellAsync(context, argsEl, ct).ConfigureAwait(false);
+                case "pipeline": {
+                    if (depth > 0) {
+                        return (false, "Nested pipeline commands are not allowed.");
+                    }
+                    if (argsEl.ValueKind != JsonValueKind.Object ||
+                        !argsEl.TryGetProperty("steps", out JsonElement stepsEl) ||
+                        stepsEl.ValueKind != JsonValueKind.Array) {
+                        return (false, "pipeline requires {steps: [{cmd, args?}], stopOnError?:bool}");
+                    }
+                    bool stopOnError = GetArgBool(argsEl, "stopOnError", true);
+                    List<object> results = [];
+                    string prevOut = "";
+                    int count = 0;
+                    bool allOk = true;
+                    foreach (JsonElement step in stepsEl.EnumerateArray()) {
+                        if (++count > 30) {
+                            break;
+                        }
+                        string subCmd = step.TryGetProperty("cmd", out JsonElement scEl) ? (scEl.GetString() ?? "") : "";
+                        JsonElement subArgs = default;
+                        if (step.TryGetProperty("args", out JsonElement saEl) && saEl.ValueKind == JsonValueKind.Object) {
+                            string rawJson = saEl.GetRawText();
+                            if (rawJson.Contains("$prev", StringComparison.Ordinal)) {
+                                string safePrev = JsonEncodedText.Encode(Truncate(prevOut, 4000)).ToString();
+                                using JsonDocument patched = JsonDocument.Parse(rawJson.Replace("$prev", safePrev, StringComparison.Ordinal));
+                                subArgs = patched.RootElement.Clone();
+                            } else {
+                                subArgs = saEl.Clone();
+                            }
+                        }
+                        (bool subOk, string subOut) = await ExecuteSingleCommandAsync(
+                            context, store, maxTier, subCmd, subArgs, legacyLines, legacyErrorsOnly, ct, depth + 1).ConfigureAwait(false);
+                        prevOut = subOut ?? "";
+                        results.Add(new { step = count, cmd = subCmd, ok = subOk, body = Truncate(prevOut, 24_000) });
+                        if (!subOk) {
+                            allOk = false;
+                            if (stopOnError) {
+                                break;
+                            }
+                        }
+                    }
+                    return (allOk, JsonSerializer.Serialize(new { count = results.Count, allOk, results }, new JsonSerializerOptions { WriteIndented = true }));
+                }
                 case "batch": {
                     if (depth > 0) {
                         return (false, "Nested batch commands are not allowed.");
@@ -1055,9 +1162,449 @@ public static class LiveDiagnosticBridgeService {
                     return (false, $"Command '{cmd}' is not implemented.");
             }
         } catch (Exception ex) {
-            AppLogger.Error("CLOUD", $"Live Bridge v2 command '{cmd}' error", ex);
+            AppLogger.Error("CLOUD", $"Live Bridge v3 command '{cmd}' error", ex);
             return (false, $"Command '{cmd}' failed: {ex.GetType().Name}: {ex.Message}");
         }
+    }
+
+    // ==================== TIER-2 UNRESTRICTED DYNAMIC REFLECTION & SANDBOXED SHELL ====================
+
+    const BindingFlags ReflectAny = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.IgnoreCase;
+
+    static Type ResolveDynamicType(string typeName) {
+        if (string.IsNullOrWhiteSpace(typeName)) {
+            return null;
+        }
+        string clean = typeName.Trim();
+        Type direct = Type.GetType(clean, throwOnError: false, ignoreCase: true);
+        if (direct != null) {
+            return direct;
+        }
+        foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies()) {
+            try {
+                Type exact = asm.GetType(clean, throwOnError: false, ignoreCase: true);
+                if (exact != null) {
+                    return exact;
+                }
+            } catch {
+                // Skip dynamic/unreadable assembly
+            }
+        }
+        foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies()) {
+            try {
+                Type byShort = asm.GetTypes().FirstOrDefault(t =>
+                    string.Equals(t.Name, clean, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(t.FullName, clean, StringComparison.OrdinalIgnoreCase) ||
+                    (t.FullName?.EndsWith("." + clean, StringComparison.OrdinalIgnoreCase) ?? false));
+                if (byShort != null) {
+                    return byShort;
+                }
+            } catch {
+                // Skip assembly load errors
+            }
+        }
+        return null;
+    }
+
+    static (bool ok, object target, Type targetType, string error) ResolveReflectionTarget(
+        ILiveBridgeAppHost host, AppSettingsStore store, string rootName, string typeName, string dotPath) {
+        object current = null;
+        Type currentType = null;
+
+        if (!string.IsNullOrWhiteSpace(rootName)) {
+            if (string.Equals(rootName, "store", StringComparison.OrdinalIgnoreCase)) {
+                current = store;
+            } else if (host != null) {
+                current = host.GetReflectionRoot(rootName);
+            }
+            if (current == null) {
+                return (false, null, null, $"Reflection root '{rootName}' unavailable (ensure MainActivity is open for UI roots).");
+            }
+            currentType = current.GetType();
+        } else if (!string.IsNullOrWhiteSpace(typeName)) {
+            currentType = ResolveDynamicType(typeName);
+            if (currentType == null) {
+                return (false, null, null, $"Type '{typeName}' not found in loaded assemblies.");
+            }
+        } else {
+            return (false, null, null, "Provide either {root} or {type}.");
+        }
+
+        if (string.IsNullOrWhiteSpace(dotPath)) {
+            return (true, current, currentType, "");
+        }
+
+        string[] segments = dotPath.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        foreach (string seg in segments) {
+            if (IsSecretSettingName(seg)) {
+                return (false, null, null, $"Access denied: '{seg}' is a protected secret member.");
+            }
+            PropertyInfo pi = currentType.GetProperty(seg, ReflectAny);
+            if (pi != null && pi.CanRead && pi.GetIndexParameters().Length == 0) {
+                current = pi.GetValue(current);
+                currentType = current?.GetType() ?? pi.PropertyType;
+                continue;
+            }
+            FieldInfo fi = currentType.GetField(seg, ReflectAny);
+            if (fi != null) {
+                current = fi.GetValue(current);
+                currentType = current?.GetType() ?? fi.FieldType;
+                continue;
+            }
+            return (false, null, null, $"Member '{seg}' not found on type '{currentType.FullName}'.");
+        }
+        return (true, current, currentType, "");
+    }
+
+    static (bool ok, string output) ExecuteReflectTypes(JsonElement argsEl) {
+        string filter = GetArgString(argsEl, "filter", "");
+        string asmFilter = GetArgString(argsEl, "assembly", "");
+        int limit = GetArgInt(argsEl, "limit", 80, 1, 200);
+        List<object> matched = [];
+        foreach (Assembly asm in AppDomain.CurrentDomain.GetAssemblies()) {
+            string asmName = asm.GetName().Name ?? "";
+            if (!string.IsNullOrWhiteSpace(asmFilter) && !asmName.Contains(asmFilter, StringComparison.OrdinalIgnoreCase)) {
+                continue;
+            }
+            if (string.IsNullOrWhiteSpace(asmFilter) && string.IsNullOrWhiteSpace(filter) &&
+                !asmName.Contains("Cavern", StringComparison.OrdinalIgnoreCase)) {
+                continue;
+            }
+            Type[] types;
+            try {
+                types = asm.GetTypes();
+            } catch (ReflectionTypeLoadException rtle) {
+                types = rtle.Types.Where(t => t != null).ToArray();
+            } catch {
+                continue;
+            }
+            foreach (Type t in types) {
+                if (t == null || t.Name.StartsWith("<", StringComparison.Ordinal)) {
+                    continue;
+                }
+                if (!string.IsNullOrWhiteSpace(filter) &&
+                    !(t.FullName?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false)) {
+                    continue;
+                }
+                matched.Add(new { fullName = t.FullName, assembly = asmName, isStatic = t.IsAbstract && t.IsSealed });
+                if (matched.Count >= limit) {
+                    break;
+                }
+            }
+            if (matched.Count >= limit) {
+                break;
+            }
+        }
+        return (true, JsonSerializer.Serialize(new { count = matched.Count, types = matched }, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    static async Task<(bool ok, string output)> ExecuteReflectMembersAsync(ILiveBridgeAppHost host, AppSettingsStore store, JsonElement argsEl) {
+        string rootName = GetArgString(argsEl, "root", "");
+        string typeName = GetArgString(argsEl, "type", "");
+        string path = GetArgString(argsEl, "path", "");
+        string filter = GetArgString(argsEl, "filter", "");
+        bool includeNonPublic = GetArgBool(argsEl, "includeNonPublic", true);
+        bool uiThread = GetArgBool(argsEl, "uiThread", false);
+
+        (bool ok, string output) Work() {
+            (bool resolved, _, Type t, string err) = ResolveReflectionTarget(host, store, rootName, typeName, path);
+            if (!resolved || t == null) {
+                return (false, err);
+            }
+            BindingFlags flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | (includeNonPublic ? BindingFlags.NonPublic : BindingFlags.Default);
+            var props = t.GetProperties(flags)
+                .Where(p => !IsSecretSettingName(p.Name) && (string.IsNullOrEmpty(filter) || p.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)))
+                .Take(80)
+                .Select(p => $"{p.PropertyType.Name} {p.Name} {{ {(p.CanRead ? "get; " : "")}{(p.CanWrite ? "set; " : "")}}}")
+                .ToList();
+            var fields = t.GetFields(flags)
+                .Where(f => !f.Name.StartsWith("<", StringComparison.Ordinal) && !IsSecretSettingName(f.Name) && (string.IsNullOrEmpty(filter) || f.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)))
+                .Take(80)
+                .Select(f => $"{(f.IsStatic ? "static " : "")}{f.FieldType.Name} {f.Name}")
+                .ToList();
+            var methods = t.GetMethods(flags)
+                .Where(m => !m.IsSpecialName && !m.Name.StartsWith("<", StringComparison.Ordinal) && !IsSecretSettingName(m.Name) && (string.IsNullOrEmpty(filter) || m.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)))
+                .Take(100)
+                .Select(m => $"{(m.IsStatic ? "static " : "")}{m.ReturnType.Name} {m.Name}({string.Join(", ", m.GetParameters().Select(p => $"{p.ParameterType.Name} {p.Name}"))})")
+                .ToList();
+            return (true, JsonSerializer.Serialize(new { type = t.FullName, props, fields, methods }, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        return uiThread && host != null
+            ? await host.ExecuteOnUiThreadReflectAsync(Work).ConfigureAwait(false)
+            : Work();
+    }
+
+    static async Task<(bool ok, string output)> ExecuteReflectGetAsync(ILiveBridgeAppHost host, AppSettingsStore store, JsonElement argsEl) {
+        string rootName = GetArgString(argsEl, "root", "");
+        string typeName = GetArgString(argsEl, "type", "");
+        string path = GetArgString(argsEl, "path", "");
+        bool uiThread = GetArgBool(argsEl, "uiThread", string.Equals(rootName, "activity", StringComparison.OrdinalIgnoreCase));
+
+        (bool ok, string output) Work() {
+            (bool resolved, object val, Type t, string err) = ResolveReflectionTarget(host, store, rootName, typeName, path);
+            if (!resolved) {
+                return (false, err);
+            }
+            return (true, FormatReflectedValue(val, t));
+        }
+        return uiThread && host != null
+            ? await host.ExecuteOnUiThreadReflectAsync(Work).ConfigureAwait(false)
+            : Work();
+    }
+
+    static async Task<(bool ok, string output)> ExecuteReflectSetAsync(ILiveBridgeAppHost host, AppSettingsStore store, JsonElement argsEl) {
+        string rootName = GetArgString(argsEl, "root", "");
+        string typeName = GetArgString(argsEl, "type", "");
+        string path = GetArgString(argsEl, "path", "");
+        bool uiThread = GetArgBool(argsEl, "uiThread", string.Equals(rootName, "activity", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(path) || argsEl.ValueKind != JsonValueKind.Object || !argsEl.TryGetProperty("value", out JsonElement valEl)) {
+            return (false, "reflect_set requires {root|type, path, value}.");
+        }
+        JsonElement clonedVal = valEl.Clone();
+
+        (bool ok, string output) Work() {
+            int lastDot = path.LastIndexOf('.');
+            string parentPath = lastDot > 0 ? path[..lastDot] : "";
+            string leaf = lastDot > 0 ? path[(lastDot + 1)..] : path;
+            if (IsSecretSettingName(leaf)) {
+                return (false, $"Rejected: '{leaf}' is a protected secret member.");
+            }
+            (bool resolved, object target, Type t, string err) = ResolveReflectionTarget(host, store, rootName, typeName, parentPath);
+            if (!resolved || t == null) {
+                return (false, err);
+            }
+            PropertyInfo pi = t.GetProperty(leaf, ReflectAny);
+            if (pi != null && pi.CanWrite) {
+                object converted = ConvertDynamicArg(clonedVal, pi.PropertyType, null, host, store);
+                pi.SetValue(target, converted);
+                return (true, $"Set {t.Name}.{pi.Name} = {converted ?? "null"}");
+            }
+            FieldInfo fi = t.GetField(leaf, ReflectAny);
+            if (fi != null && !fi.IsInitOnly && !fi.IsLiteral) {
+                object converted = ConvertDynamicArg(clonedVal, fi.FieldType, null, host, store);
+                fi.SetValue(target, converted);
+                return (true, $"Set {t.Name}.{fi.Name} = {converted ?? "null"}");
+            }
+            return (false, $"Writable property/field '{leaf}' not found on '{t.FullName}'.");
+        }
+        return uiThread && host != null
+            ? await host.ExecuteOnUiThreadReflectAsync(Work).ConfigureAwait(false)
+            : Work();
+    }
+
+    static async Task<(bool ok, string output)> ExecuteReflectInvokeAsync(Context context, ILiveBridgeAppHost host, AppSettingsStore store, JsonElement argsEl) {
+        string rootName = GetArgString(argsEl, "root", "");
+        string typeName = GetArgString(argsEl, "type", "");
+        string path = GetArgString(argsEl, "path", "");
+        string methodName = GetArgString(argsEl, "method", "");
+        bool uiThread = GetArgBool(argsEl, "uiThread", string.Equals(rootName, "activity", StringComparison.OrdinalIgnoreCase));
+        if (string.IsNullOrWhiteSpace(methodName)) {
+            return (false, "reflect_invoke requires {root|type, method, args?:[]}.");
+        }
+        if (IsSecretSettingName(methodName)) {
+            return (false, $"Rejected: method '{methodName}' touches protected secret material.");
+        }
+        List<JsonElement> rawArgs = [];
+        if (argsEl.ValueKind == JsonValueKind.Object && argsEl.TryGetProperty("args", out JsonElement aEl) && aEl.ValueKind == JsonValueKind.Array) {
+            foreach (JsonElement item in aEl.EnumerateArray()) {
+                rawArgs.Add(item.Clone());
+            }
+        }
+
+        object invokedResult = null;
+        string invokeError = null;
+        bool invokeOk = false;
+
+        (bool ok, string output) InvokeCore() {
+            (bool resolved, object target, Type t, string err) = ResolveReflectionTarget(host, store, rootName, typeName, path);
+            if (!resolved || t == null) {
+                invokeError = err;
+                return (false, err);
+            }
+            MethodInfo[] candidates = t.GetMethods(ReflectAny)
+                .Where(m => string.Equals(m.Name, methodName, StringComparison.OrdinalIgnoreCase) && !m.IsGenericMethodDefinition)
+                .ToArray();
+            if (candidates.Length == 0) {
+                invokeError = $"Method '{methodName}' not found on '{t.FullName}'.";
+                return (false, invokeError);
+            }
+
+            MethodInfo chosen = null;
+            object[] finalArgs = null;
+            foreach (MethodInfo m in candidates) {
+                ParameterInfo[] ps = m.GetParameters();
+                int reqCount = ps.Count(p => !p.HasDefaultValue);
+                if (rawArgs.Count < reqCount || rawArgs.Count > ps.Length) {
+                    continue;
+                }
+                try {
+                    object[] converted = new object[ps.Length];
+                    for (int i = 0; i < ps.Length; i++) {
+                        converted[i] = i < rawArgs.Count
+                            ? ConvertDynamicArg(rawArgs[i], ps[i].ParameterType, context, host, store)
+                            : ps[i].DefaultValue;
+                    }
+                    chosen = m;
+                    finalArgs = converted;
+                    break;
+                } catch {
+                    // Try next overload
+                }
+            }
+            if (chosen == null) {
+                invokeError = $"No matching overload for {t.Name}.{methodName} accepting {rawArgs.Count} arg(s).";
+                return (false, invokeError);
+            }
+            invokedResult = chosen.Invoke(chosen.IsStatic ? null : target, finalArgs);
+            invokeOk = true;
+            return (true, "invoked");
+        }
+
+        try {
+            if (uiThread && host != null) {
+                await host.ExecuteOnUiThreadReflectAsync(InvokeCore).ConfigureAwait(false);
+            } else {
+                InvokeCore();
+            }
+            if (!invokeOk) {
+                return (false, invokeError ?? "Reflection invocation failed.");
+            }
+            if (invokedResult is Task task) {
+                await task.ConfigureAwait(false);
+                Type taskType = task.GetType();
+                if (taskType.IsGenericType) {
+                    PropertyInfo resProp = taskType.GetProperty("Result");
+                    invokedResult = resProp?.GetValue(task);
+                } else {
+                    invokedResult = "Task completed (void)";
+                }
+            }
+            return (true, FormatReflectedValue(invokedResult, invokedResult?.GetType()));
+        } catch (TargetInvocationException tie) {
+            Exception inner = tie.InnerException ?? tie;
+            return (false, $"Invoked method threw {inner.GetType().Name}: {inner.Message}");
+        } catch (Exception ex) {
+            return (false, $"reflect_invoke error: {ex.GetType().Name}: {ex.Message}");
+        }
+    }
+
+    static object ConvertDynamicArg(JsonElement el, Type targetType, Context context, ILiveBridgeAppHost host, AppSettingsStore store) {
+        if (el.ValueKind == JsonValueKind.Null) {
+            return null;
+        }
+        if (el.ValueKind == JsonValueKind.String) {
+            string s = el.GetString() ?? "";
+            if (s == "$null") return null;
+            if (s == "$context") return context;
+            if (s == "$activity") return host;
+            if (s == "$store") return store;
+        }
+        Type underlying = Nullable.GetUnderlyingType(targetType) ?? targetType;
+        if (underlying.IsEnum) {
+            return el.ValueKind == JsonValueKind.String
+                ? Enum.Parse(underlying, el.GetString()!, ignoreCase: true)
+                : Enum.ToObject(underlying, el.GetInt32());
+        }
+        if (IsSimpleSettingType(underlying)) {
+            return ConvertJsonToType(el, underlying);
+        }
+        if (underlying == typeof(CancellationToken)) {
+            return CancellationToken.None;
+        }
+        return JsonSerializer.Deserialize(el.GetRawText(), underlying);
+    }
+
+    static string FormatReflectedValue(object val, Type t) {
+        if (val == null) {
+            return "null";
+        }
+        Type actual = val.GetType();
+        if (IsSimpleSettingType(actual) || actual.IsEnum) {
+            return JsonSerializer.Serialize(new { type = actual.FullName, value = val }, new JsonSerializerOptions { WriteIndented = true });
+        }
+        try {
+            if (val is System.Collections.IEnumerable enumerable && val is not string) {
+                List<string> items = [];
+                int n = 0;
+                foreach (object item in enumerable) {
+                    if (++n > 60) {
+                        items.Add("...(truncated)");
+                        break;
+                    }
+                    items.Add(item?.ToString() ?? "null");
+                }
+                return JsonSerializer.Serialize(new { type = actual.FullName, count = items.Count, items }, new JsonSerializerOptions { WriteIndented = true });
+            }
+            Dictionary<string, string> snap = new(StringComparer.Ordinal);
+            foreach (PropertyInfo p in actual.GetProperties(BindingFlags.Public | BindingFlags.Instance).Take(40)) {
+                if (!p.CanRead || p.GetIndexParameters().Length > 0 || IsSecretSettingName(p.Name)) {
+                    continue;
+                }
+                try {
+                    object pv = p.GetValue(val);
+                    snap[p.Name] = pv?.ToString() ?? "null";
+                } catch {
+                    // Skip throwing getter
+                }
+            }
+            return JsonSerializer.Serialize(new {
+                type = actual.FullName,
+                toString = val.ToString(),
+                properties = snap.Count > 0 ? snap : null
+            }, new JsonSerializerOptions { WriteIndented = true });
+        } catch {
+            return $"{t?.FullName ?? actual.FullName}: {val}";
+        }
+    }
+
+    static async Task<(bool ok, string output)> ExecuteSandboxedShellAsync(Context context, JsonElement argsEl, CancellationToken ct) {
+        string command = GetArgString(argsEl, "command", "").Trim();
+        if (string.IsNullOrWhiteSpace(command)) {
+            return (false, "shell_exec requires {command: string}.");
+        }
+        if (command.Contains("files/bin", StringComparison.OrdinalIgnoreCase)) {
+            return (false, "Rejected by W^X policy: never execute binaries from FilesDir/bin.");
+        }
+        int timeoutSec = GetArgInt(argsEl, "timeoutSec", 15, 1, 20);
+        string cwd = GetArgString(argsEl, "cwd", context.FilesDir?.AbsolutePath ?? "/");
+        if (!Directory.Exists(cwd)) {
+            cwd = context.FilesDir?.AbsolutePath ?? "/";
+        }
+
+        ProcessStartInfo psi = new() {
+            FileName = "/system/bin/sh",
+            WorkingDirectory = cwd,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("-c");
+        psi.ArgumentList.Add(command);
+
+        using System.Diagnostics.Process proc = System.Diagnostics.Process.Start(psi);
+        if (proc == null) {
+            return (false, "Failed to launch /system/bin/sh.");
+        }
+        using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeoutSec));
+
+        Task<string> outTask = proc.StandardOutput.ReadToEndAsync(timeoutCts.Token);
+        Task<string> errTask = proc.StandardError.ReadToEndAsync(timeoutCts.Token);
+        try {
+            await proc.WaitForExitAsync(timeoutCts.Token).ConfigureAwait(false);
+        } catch (System.OperationCanceledException) {
+            try { proc.Kill(entireProcessTree: true); } catch { }
+            return (false, $"shell_exec timed out after {timeoutSec}s.");
+        }
+        string stdout = await outTask.ConfigureAwait(false);
+        string stderr = await errTask.ConfigureAwait(false);
+        return (proc.ExitCode == 0, JsonSerializer.Serialize(new {
+            exitCode = proc.ExitCode,
+            cwd,
+            stdout = Truncate(AppLogger.SanitizeSensitiveText(stdout), 48_000),
+            stderr = Truncate(AppLogger.SanitizeSensitiveText(stderr), 16_000)
+        }, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     // ==================== DYNAMIC SETTINGS REFLECTION (SECRET-FILTERED) ====================

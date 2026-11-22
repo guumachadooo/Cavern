@@ -57,6 +57,8 @@ public sealed class OneUiInlineSelector : LinearLayout {
     bool expanded;
 
     public int SelectedIndex => selectedIndex;
+    public int ItemCount => items.Count;
+    public IReadOnlyList<string> Items => items;
     public event Action<int> SelectionChanged;
 
     public OneUiInlineSelector(Context ctx, string title = null) : base(ctx) {
@@ -213,7 +215,58 @@ public static class OneUiModalDialog {
     }
 
     static readonly HashSet<Dialog> activeBlurredDialogs = [];
+    static readonly List<WeakReference<Dialog>> activeDialogs = [];
+    static readonly object activeDialogsLock = new();
     static readonly ConditionalWeakTable<Dialog, HelpActionState> helpStates = new();
+
+    public static IReadOnlyList<Dialog> GetActiveDialogs() {
+        List<Dialog> live = [];
+        lock (activeDialogsLock) {
+            for (int i = activeDialogs.Count - 1; i >= 0; i--) {
+                if (activeDialogs[i].TryGetTarget(out Dialog d) && d != null && d.IsShowing) {
+                    live.Add(d);
+                } else {
+                    activeDialogs.RemoveAt(i);
+                }
+            }
+        }
+        return live;
+    }
+
+    public static int DismissAllActiveDialogs() {
+        IReadOnlyList<Dialog> live = GetActiveDialogs();
+        int dismissed = 0;
+        for (int i = 0; i < live.Count; i++) {
+            try {
+                live[i].Dismiss();
+                dismissed++;
+            } catch {
+                // Ignore already-detached dialog
+            }
+        }
+        return dismissed;
+    }
+
+    static void RegisterActiveDialog(Dialog dialog) {
+        lock (activeDialogsLock) {
+            for (int i = activeDialogs.Count - 1; i >= 0; i--) {
+                if (!activeDialogs[i].TryGetTarget(out Dialog existing) || existing == null || ReferenceEquals(existing, dialog) || !existing.IsShowing) {
+                    activeDialogs.RemoveAt(i);
+                }
+            }
+            activeDialogs.Add(new WeakReference<Dialog>(dialog));
+        }
+    }
+
+    static void UnregisterActiveDialog(Dialog dialog) {
+        lock (activeDialogsLock) {
+            for (int i = activeDialogs.Count - 1; i >= 0; i--) {
+                if (!activeDialogs[i].TryGetTarget(out Dialog existing) || existing == null || ReferenceEquals(existing, dialog)) {
+                    activeDialogs.RemoveAt(i);
+                }
+            }
+        }
+    }
 
     public static void SetHelpAction(this Dialog dialog, Action onHelp, string contentDesc = null) {
         if (dialog == null || !helpStates.TryGetValue(dialog, out HelpActionState state) || state.Button == null) {
@@ -409,6 +462,11 @@ public static class OneUiModalDialog {
             dialog.CancelEvent += (_, _) => ReleaseDialogBlur();
             frame.ViewDetachedFromWindow += (_, _) => ReleaseDialogBlur();
         }
+
+        RegisterActiveDialog(dialog);
+        dialog.DismissEvent += (_, _) => UnregisterActiveDialog(dialog);
+        dialog.CancelEvent += (_, _) => UnregisterActiveDialog(dialog);
+        frame.ViewDetachedFromWindow += (_, _) => UnregisterActiveDialog(dialog);
 
         dialog.Show();
         card.Alpha = 0f;

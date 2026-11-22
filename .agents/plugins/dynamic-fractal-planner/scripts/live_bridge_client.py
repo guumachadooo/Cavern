@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Universal Live Device/App Bridge Client v2 (Dynamic Fractal Planner v2.6.0).
+"""Universal Live Device/App Bridge Client v3 (Dynamic Fractal Planner v2.6.0).
 
-Supports two secure session modes over a zero-cost HTTPS relay (e.g. Cloudflare Worker):
+Supports two secure session modes over a zero-cost HTTPS relay (e.g. Cloudflare Worker v3):
   1. Direct Ephemeral Code (`--code <session-code>`): connect to an already-open session.
   2. Biometric Background Wake (`--wake --pair-secret <hex>` or env var):
      - Derives public channel ID `X-Device-Hash = sha256("wake-channel-v2:" + pair_secret_hex)`.
@@ -10,8 +10,10 @@ Supports two secure session modes over a zero-cost HTTPS relay (e.g. Cloudflare 
        (fingerprint/face/PIN), opens an ephemeral session, and returns the session token
        encrypted end-to-end with Encrypt-then-MAC (`SHA256-CTR + HMAC-SHA256`) so the
        relay never sees the plaintext session code.
-  3. Flexible tiered commands: arbitrary `--cmd <name> --args '<json>'`, `--batch '<json>'`,
-     `--capabilities`, and `--save-screenshot <path.jpg>` for base64 UI captures.
+  3. Flexible tiered & unrestricted dynamic commands (v3):
+     - Predefined Tier 0/1/2 commands (`--cmd <name> --args '<json>'`, `--capabilities`, `--batch`, `--save-screenshot`).
+     - Unrestricted Tier 2 dynamic execution: `reflect_types`, `reflect_members`, `reflect_get`,
+       `reflect_set`, `reflect_invoke`, `ui_interact`, `shell_exec`, and multi-step `--pipeline` (`$prev` chaining).
 
 Zero third-party dependencies (Python stdlib only). Never writes secrets to disk.
 """
@@ -36,7 +38,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-USER_AGENT = "DynamicFractalPlanner-LiveBridge/2.0"
+USER_AGENT = "DynamicFractalPlanner-LiveBridge/3.0"
 
 
 def validate_https_url(raw_url: str) -> str:
@@ -282,24 +284,25 @@ def main(
     env_url_vars: tuple[str, ...] = ("LIVE_BRIDGE_URL", "CAVERN_RELAY_URL"),
     env_secret_vars: tuple[str, ...] = ("LIVE_BRIDGE_PAIR_SECRET", "CAVERN_BRIDGE_PAIR_SECRET"),
 ) -> int:
-    parser = argparse.ArgumentParser(description="Live Device/App Bridge v2 client (ephemeral code + biometric wake + tiered commands).")
+    parser = argparse.ArgumentParser(description="Live Device/App Bridge v3 client (ephemeral code + biometric wake + unrestricted dynamic Tier 2 commands).")
     parser.add_argument("--url", default="", help="HTTPS relay Worker URL (or set LIVE_BRIDGE_URL / CAVERN_RELAY_URL)")
     parser.add_argument("--code", default="", help="Active ephemeral session code")
     parser.add_argument("--wake", action="store_true", help="Send HMAC-signed wake request for biometric approval on standby device")
     parser.add_argument("--wake-only", action="store_true", help="Only wake & print ephemeral session metadata (do not run a command)")
     parser.add_argument("--pair-secret", default="", help="64-hex device pairing secret (or env LIVE_BRIDGE_PAIR_SECRET)")
-    parser.add_argument("--tier", type=int, default=1, choices=[0, 1, 2], help="Requested session tier for --wake (0=Read, 1=Control, 2=Full)")
+    parser.add_argument("--tier", type=int, default=1, choices=[0, 1, 2], help="Requested session tier for --wake (0=Read, 1=Control, 2=Unrestricted Dynamic)")
     parser.add_argument("--duration", type=int, default=1800, help="Requested session TTL seconds for --wake (300..3600)")
     parser.add_argument("--reason", default="AI diagnostic & interactive QA", help="Human-readable reason shown on phone biometric prompt")
     parser.add_argument("--wake-timeout", type=int, default=90, help="Max seconds to wait for biometric approval")
-    parser.add_argument("--cmd", default="ping", help="Command name (e.g. ping, capabilities, app_state, settings_get, settings_set, tab_switch, playback_control, screenshot_ui, batch)")
+    parser.add_argument("--cmd", default="ping", help="Command name (e.g. ping, capabilities, ultra_check, ui_audit, reflect_types, reflect_members, reflect_get, reflect_set, reflect_invoke, ui_interact, shell_exec, pipeline, screenshot_ui)")
     parser.add_argument("--args", default="{}", help="JSON object of command arguments")
     parser.add_argument("--batch", default="", help="JSON array of {cmd, args} steps (shorthand for --cmd batch)")
+    parser.add_argument("--pipeline", default="", help="JSON array of {cmd, args} steps with $prev result chaining (shorthand for --cmd pipeline, Tier 2)")
     parser.add_argument("--capabilities", action="store_true", help="Shortcut for --cmd capabilities")
     parser.add_argument("--lines", type=int, default=150, help="Lines for log_tail (20..1000)")
     parser.add_argument("--errors-only", action="store_true", help="Filter log_tail to WARN/ERROR/FATAL")
     parser.add_argument("--save-screenshot", default="", help="If command returns imageBase64, decode and save JPEG to this path")
-    parser.add_argument("--timeout", type=int, default=45, help="Max seconds to wait for command response")
+    parser.add_argument("--timeout", type=int, default=60, help="Max seconds to wait for command response")
     args = parser.parse_args(argv)
 
     raw_url = args.url or next((os.environ.get(v, "").strip() for v in env_url_vars if os.environ.get(v, "").strip()), "")
@@ -364,6 +367,16 @@ def main(
             return 2
         cmd = "batch"
         args_obj = {"commands": steps}
+    elif args.pipeline:
+        try:
+            steps = json.loads(args.pipeline)
+            if not isinstance(steps, list):
+                raise ValueError("--pipeline must be a JSON array of {cmd, args}.")
+        except Exception as exc:
+            print(f"ERROR parsing --pipeline JSON: {exc}", file=sys.stderr)
+            return 2
+        cmd = "pipeline"
+        args_obj = {"steps": steps}
 
     ok, res = dispatch_command(
         base_url,

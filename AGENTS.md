@@ -45,7 +45,7 @@
 ## 5. Code Map
 - `Cavern/` & `Cavern.Format/`: spatial DSP (`Virtualizer/`, `Filters/`, `Remapping/`, `Neural/`, `Restoration/`, `VocalChain/`, `ProAudio/`, `Spatial/`), format codecs (`IAMF`, `AmbisonicsHOA`, `ADM`, `E-AC-3`, `WAV`, `MKV`).
 - `CavernSamples/Reusable/Cavernize.Logic/`: `RealtimePlayerEngine`, `StudioBatchExporter`, `StemExtractor`, `FlacAudioConverter`, `CavernizeOutput`, `MergeToContainer`, `Spatial/` slots/adapters/orchestrator/hub, `Models/`, `Language/`.
-- `CavernSamples/CavernizeAndroid/`: `net11.0-android` UI (`MainActivity*.cs`), `Theme/`, `Views/`, `Audio/`, `Services/`, `Native/cavernize_proaudio/`, `Language/AndroidStrings.cs`, `Assets/`.
-- `.github/workflows/BuildAndroid.yml`: NDK ARM64 build + 4-layer compile/shadow audit + persistent keystore signing + GitHub Releases.
+- `CavernSamples/CavernizeAndroid/`: `net11.0-android` UI (`MainActivity*.cs` incl. `MainActivity.LiveBridge.cs`, `MainActivity.SelfAudit.cs`), `Theme/`, `Views/`, `Audio/`, `Services/`, `Native/cavernize_proaudio/`, `Language/AndroidStrings.cs`, `Assets/`.
+- `.github/workflows/BuildAndroid.yml`: NDK ARM64 build + 4-layer compile/shadow audit + persistent keystore signing + GitHub Releases + `diagnostics` branch CI reports.
 - `package.json` + `.agents/preview/{server,dashboard,dashboard.test}.mjs`: zero-dependency Node.js AI Studio dev-server preview shim (port `3000`, live read-only context viewer; never affects `.NET`/Android builds).
-- Device logs: `/sdcard/Download/Cavernize/Logs/cavernize_log.txt` (follow `.agents/skills/cavernize-device-debug/SKILL.md`).
+- Diagnostics & Live Bridge v3: local `/sdcard/Download/Cavernize/Logs/cavernize_log.txt`, Cloudflare Unified Telemetry & Live Bridge Hub v3 (`.agents/docs/cloudflare_live_relay_worker.js`, `.agents/docs/DIAGNOSTICS_HUB.md`, `fetch_live_diagnostics.py --cloudflare`, `live_phone_bridge.py` Tier 0/1/2 + unrestricted dynamic reflection/UI/shell/pipeline), && 10-layer `SelfDiagnosticEngine` (`Quick`/`Full`/`Ultra`; follow `.agents/skills/cavernize-device-debug/SKILL.md`).

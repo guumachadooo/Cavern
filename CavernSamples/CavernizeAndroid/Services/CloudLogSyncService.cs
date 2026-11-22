@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -25,9 +26,9 @@ public sealed class CloudLogSyncResult {
 }
 
 /// <summary>
-/// Uploads sanitized diagnostic logs and session summary snapshots directly to GitHub via the
-/// GitHub REST Contents API, using a user-provided Fine-Grained Personal Access Token encrypted
-/// at rest with Android Keystore (AES-256-GCM).
+/// Uploads sanitized diagnostic logs, session summaries, and ultra-deep self-checkup reports
+/// to the Cloudflare Unified Diagnostics Hub v3 (primary, zero Git spam, reusing the Keystore
+/// 256-bit Pair Key) or optionally to a GitHub repository via the REST Contents API.
 /// </summary>
 public static class CloudLogSyncService {
     public const string DefaultRepo = "guumachadooo/Cavern";
@@ -47,6 +48,7 @@ public static class CloudLogSyncService {
 
     static readonly Regex RepoFormatRegex = new(@"^[A-Za-z0-9_.-]{1,64}/[A-Za-z0-9_.-]{1,100}$", RegexOptions.Compiled);
     static readonly HttpClient http = BuildClient();
+    static readonly HttpClient cfHttp = BuildCloudflareClient();
     static readonly SemaphoreSlim uploadGate = new(1, 1);
     static readonly object autoSyncLock = new();
 
@@ -61,11 +63,44 @@ public static class CloudLogSyncService {
         return client;
     }
 
+    static HttpClient BuildCloudflareClient() {
+        HttpClient client = new() { Timeout = TimeSpan.FromSeconds(30) };
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", "3.0"));
+        client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        return client;
+    }
+
     public static bool HasStoredToken(AppSettingsStore store) =>
         store != null && !string.IsNullOrWhiteSpace(store.CloudLogEncryptedToken);
 
+    public static bool IsCloudflareConfigured(AppSettingsStore store) =>
+        store != null &&
+        LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out _) &&
+        LiveDiagnosticBridgeService.HasPairedSecret(store);
+
+    public static bool IsGitHubConfigured(AppSettingsStore store) =>
+        store != null && HasStoredToken(store) && TryParseRepo(store.CloudLogRepo, out _, out _);
+
+    public static bool ShouldUseCloudflare(AppSettingsStore store) {
+        if (store == null) {
+            return false;
+        }
+        if (store.CloudLogProviderMode == 0) {
+            return IsCloudflareConfigured(store) || !IsGitHubConfigured(store);
+        }
+        return false;
+    }
+
+    public static bool IsUploadReady(AppSettingsStore store) =>
+        store != null && (ShouldUseCloudflare(store) ? IsCloudflareConfigured(store) : IsGitHubConfigured(store));
+
     public static bool IsConfigured(AppSettingsStore store) =>
-        store != null && store.CloudLogSyncEnabled && HasStoredToken(store) && TryParseRepo(store.CloudLogRepo, out _, out _);
+        store != null && store.CloudLogSyncEnabled && IsUploadReady(store);
+
+    public static string ComputeTelemetryKey(string pairSecretHex) {
+        byte[] hash = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("telemetry-access-v3:" + (pairSecretHex ?? "").Trim().ToLowerInvariant()));
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
 
     public static (string branch, string logPath, string summaryPath) ResolveTarget(AppSettingsStore store) {
         if (store != null && store.CloudLogBranchMode == 1) {
@@ -120,11 +155,62 @@ public static class CloudLogSyncService {
         }
     }
 
+    public static async Task<CloudLogSyncResult> TestCloudflareConnectionAsync(
+        AppSettingsStore store,
+        CancellationToken ct = default) {
+        if (store == null || !LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out string relayUrl)) {
+            return new CloudLogSyncResult {
+                Success = false,
+                Message = "Configure your Cloudflare Worker URL in Bridge Setup first."
+            };
+        }
+        string pairSecret = LiveDiagnosticBridgeService.GetPairSecretHexForInternalAuth(store);
+        if (string.IsNullOrWhiteSpace(pairSecret)) {
+            return new CloudLogSyncResult {
+                Success = false,
+                Message = "Generate a 256-bit Pair Key in Bridge Setup first."
+            };
+        }
+
+        try {
+            string devHash = LiveDiagnosticBridgeService.ComputeDeviceHash(pairSecret);
+            string telKey = ComputeTelemetryKey(pairSecret);
+            using HttpRequestMessage req = new(HttpMethod.Get, $"{relayUrl}/v1/telemetry/ping");
+            req.Headers.Add("X-Device-Hash", devHash);
+            req.Headers.Add("X-Telemetry-Key", telKey);
+            using HttpResponseMessage resp = await cfHttp.SendAsync(req, ct).ConfigureAwait(false);
+            string body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) {
+                return new CloudLogSyncResult {
+                    Success = false,
+                    HttpStatusCode = (int)resp.StatusCode,
+                    Message = resp.StatusCode == HttpStatusCode.NotFound
+                        ? "Worker is online but still on v1/v2 — paste cloudflare_live_relay_worker.js v3 and Deploy."
+                        : $"Cloudflare Hub HTTP {(int)resp.StatusCode}: {body}"
+                };
+            }
+            return new CloudLogSyncResult {
+                Success = true,
+                HttpStatusCode = (int)resp.StatusCode,
+                TargetBranch = "cloudflare-v3",
+                HtmlUrl = relayUrl,
+                Message = $"Cloudflare Unified Hub v3 ready ({new Uri(relayUrl).Host})."
+            };
+        } catch (System.OperationCanceledException) {
+            return new CloudLogSyncResult { Success = false, Message = "Cloudflare connection test cancelled." };
+        } catch (Exception ex) {
+            return new CloudLogSyncResult { Success = false, Message = $"Cloudflare network error: {ex.Message}" };
+        }
+    }
+
     public static async Task<CloudLogSyncResult> TestConnectionAsync(
         AppSettingsStore store,
         string overrideRepo = null,
         string overridePlainToken = null,
         CancellationToken ct = default) {
+        if (string.IsNullOrWhiteSpace(overrideRepo) && string.IsNullOrWhiteSpace(overridePlainToken) && ShouldUseCloudflare(store)) {
+            return await TestCloudflareConnectionAsync(store, ct).ConfigureAwait(false);
+        }
         string repoText = string.IsNullOrWhiteSpace(overrideRepo) ? (store?.CloudLogRepo ?? DefaultRepo) : overrideRepo;
         if (!TryParseRepo(repoText, out string owner, out string repo)) {
             return new CloudLogSyncResult { Success = false, Message = "Invalid repository format (expected owner/repo)." };
@@ -194,6 +280,9 @@ public static class CloudLogSyncService {
         CancellationToken ct = default) {
         if (store == null) {
             return new CloudLogSyncResult { Success = false, Message = "Settings store unavailable." };
+        }
+        if (ShouldUseCloudflare(store)) {
+            return await UploadLogsToCloudflareAsync(context, store, triggerReason, ct).ConfigureAwait(false);
         }
         if (!TryParseRepo(store.CloudLogRepo, out string owner, out string repo)) {
             return new CloudLogSyncResult { Success = false, Message = "Invalid repository format (expected owner/repo)." };
@@ -267,7 +356,8 @@ public static class CloudLogSyncService {
     }
 
     /// <summary>
-    /// Uploads a Self-Check report (Markdown + JSON) directly to the diagnostics branch alongside the active device log.
+    /// Uploads a Self-Check report (Markdown + JSON) alongside the active device log to Cloudflare Unified Hub v3
+    /// (default) or the GitHub diagnostics branch (optional legacy fallback).
     /// </summary>
     public static async Task<CloudLogSyncResult> UploadSelfCheckReportAsync(
         Context context,
@@ -277,6 +367,9 @@ public static class CloudLogSyncService {
         CancellationToken ct = default) {
         if (store == null || report == null) {
             return new CloudLogSyncResult { Success = false, Message = "Self-check report unavailable." };
+        }
+        if (ShouldUseCloudflare(store)) {
+            return await UploadSelfCheckToCloudflareAsync(context, store, report, triggerReason, ct).ConfigureAwait(false);
         }
         if (!TryParseRepo(store.CloudLogRepo, out string owner, out string repo)) {
             return new CloudLogSyncResult { Success = false, Message = "Invalid repository format. Use owner/repo." };
@@ -340,6 +433,140 @@ public static class CloudLogSyncService {
             string msg = AppLogger.SanitizeSensitiveText($"Self-check upload error: {ex.Message}");
             AppLogger.Warn("CLOUD", msg);
             return RecordOutcome(store, new CloudLogSyncResult { Success = false, Message = msg });
+        } finally {
+            uploadGate.Release();
+        }
+    }
+
+    static async Task<CloudLogSyncResult> UploadLogsToCloudflareAsync(
+        Context context,
+        AppSettingsStore store,
+        string triggerReason,
+        CancellationToken ct) {
+        string logText = AppLogger.ReadTailUtf8(MaxUploadBytes);
+        if (string.IsNullOrWhiteSpace(logText)) {
+            logText = $"(Empty log at {DateTime.UtcNow:O} | sid={AppLogger.SessionId}){System.Environment.NewLine}";
+        }
+        string summaryJson = AppLogger.BuildDiagnosticSummaryJson(context, store);
+        Dictionary<string, string> artifacts = new() {
+            ["log"] = logText,
+            ["summary"] = summaryJson
+        };
+        string verdict = AppLogger.SessionFatalCount > 0 ? "FAIL" : (AppLogger.SessionErrorCount > 0 ? "WARN" : "OK");
+        CloudLogSyncResult res = await UploadBundleToCloudflareAsync(
+            context, store, artifacts, triggerReason, verdict,
+            $"log ({logText.Length / 1024.0:0.0} KB) · {AppLogger.SessionFatalCount}F/{AppLogger.SessionErrorCount}E/{AppLogger.SessionWarnCount}W", ct)
+            .ConfigureAwait(false);
+        if (res.Success && (string.Equals(triggerReason, "crash", StringComparison.OrdinalIgnoreCase) || AppLogger.HasPendingCrashReport)) {
+            AppLogger.ClearPendingCrashMarker();
+        }
+        return res;
+    }
+
+    static async Task<CloudLogSyncResult> UploadSelfCheckToCloudflareAsync(
+        Context context,
+        AppSettingsStore store,
+        SelfCheckReport report,
+        string triggerReason,
+        CancellationToken ct) {
+        Dictionary<string, string> artifacts = new() {
+            ["selfcheck_md"] = AppLogger.SanitizeSensitiveText(report.ToMarkdown()),
+            ["selfcheck_json"] = AppLogger.SanitizeSensitiveText(report.ToJson()),
+            ["summary"] = AppLogger.BuildDiagnosticSummaryJson(context, store)
+        };
+        string logTail = AppLogger.ReadTailUtf8(256 * 1024);
+        if (!string.IsNullOrWhiteSpace(logTail)) {
+            artifacts["log"] = logTail;
+        }
+        return await UploadBundleToCloudflareAsync(
+            context, store, artifacts, triggerReason, report.OverallVerdict,
+            $"{report.Mode} {report.OverallVerdict} ({report.PassCount}P/{report.WarnCount}W/{report.FailCount}F)", ct)
+            .ConfigureAwait(false);
+    }
+
+    static async Task<CloudLogSyncResult> UploadBundleToCloudflareAsync(
+        Context context,
+        AppSettingsStore store,
+        Dictionary<string, string> artifacts,
+        string triggerReason,
+        string verdict,
+        string summaryText,
+        CancellationToken ct) {
+        if (!LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out string relayUrl)) {
+            return RecordOutcome(store, new CloudLogSyncResult {
+                Success = false,
+                TargetBranch = "cloudflare-v3",
+                Message = "Configure your Cloudflare Worker URL in Bridge Setup first."
+            });
+        }
+        string pairSecret = LiveDiagnosticBridgeService.GetPairSecretHexForInternalAuth(store);
+        if (string.IsNullOrWhiteSpace(pairSecret)) {
+            return RecordOutcome(store, new CloudLogSyncResult {
+                Success = false,
+                TargetBranch = "cloudflare-v3",
+                Message = "Generate a 256-bit Pair Key in Bridge Setup first."
+            });
+        }
+
+        await uploadGate.WaitAsync(ct).ConfigureAwait(false);
+        try {
+            (string ver, long buildNo) = context != null
+                ? AppUpdateService.GetInstalledVersion(context)
+                : ("2.9", 0);
+            string devHash = LiveDiagnosticBridgeService.ComputeDeviceHash(pairSecret);
+            string telKey = ComputeTelemetryKey(pairSecret);
+            object payload = new {
+                trigger = triggerReason ?? "manual",
+                appVersion = ver,
+                buildNumber = buildNo,
+                sessionId = AppLogger.SessionId,
+                verdict = verdict ?? "INFO",
+                summary = summaryText ?? "",
+                device = $"{Android.OS.Build.Manufacturer} {Android.OS.Build.Model} (API {(int)Android.OS.Build.VERSION.SdkInt})",
+                artifacts
+            };
+            string json = JsonSerializer.Serialize(payload);
+            byte[] jsonBytes = System.Text.Encoding.UTF8.GetBytes(json);
+
+            using HttpRequestMessage req = new(HttpMethod.Post, $"{relayUrl}/v1/telemetry/upload");
+            req.Headers.Add("X-Device-Hash", devHash);
+            req.Headers.Add("X-Telemetry-Key", telKey);
+            req.Content = new ByteArrayContent(jsonBytes);
+            req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+
+            using HttpResponseMessage resp = await cfHttp.SendAsync(req, ct).ConfigureAwait(false);
+            string respBody = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) {
+                string errMsg = resp.StatusCode == HttpStatusCode.NotFound
+                    ? "Worker needs v3 script — paste cloudflare_live_relay_worker.js v3 and Deploy."
+                    : $"Cloudflare Hub HTTP {(int)resp.StatusCode}: {respBody}";
+                AppLogger.Warn("CLOUD", errMsg);
+                return RecordOutcome(store, new CloudLogSyncResult {
+                    Success = false,
+                    HttpStatusCode = (int)resp.StatusCode,
+                    TargetBranch = "cloudflare-v3",
+                    TargetPath = "/v1/telemetry/upload",
+                    Message = errMsg
+                });
+            }
+
+            AppLogger.Info("CLOUD", $"Uploaded telemetry bundle ({jsonBytes.Length / 1024.0:0.0} KB) to Cloudflare Unified Hub v3 ({triggerReason})");
+            return RecordOutcome(store, new CloudLogSyncResult {
+                Success = true,
+                HttpStatusCode = (int)resp.StatusCode,
+                TargetBranch = "cloudflare-v3",
+                TargetPath = "/v1/telemetry/latest",
+                HtmlUrl = relayUrl,
+                BytesUploaded = jsonBytes.Length,
+                Message = $"Synced {jsonBytes.Length / 1024.0:0.0} KB to Cloudflare Hub v3 ({triggerReason})",
+                SyncedAtUtc = DateTime.UtcNow
+            });
+        } catch (System.OperationCanceledException) {
+            return new CloudLogSyncResult { Success = false, Message = "Cloudflare telemetry upload cancelled." };
+        } catch (Exception ex) {
+            string msg = AppLogger.SanitizeSensitiveText($"Cloudflare upload error: {ex.Message}");
+            AppLogger.Warn("CLOUD", msg);
+            return RecordOutcome(store, new CloudLogSyncResult { Success = false, TargetBranch = "cloudflare-v3", Message = msg });
         } finally {
             uploadGate.Release();
         }

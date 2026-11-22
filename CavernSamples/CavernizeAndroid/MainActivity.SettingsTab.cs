@@ -50,7 +50,7 @@ public partial class MainActivity {
 
     // Diagnostics & Log views
     TextView logPathInfoText, cloudLogStatusText, selfCheckStatusText, liveBridgeStatusText;
-    Button cloudLogUploadBtn, selfCheckQuickBtn, selfCheckFullBtn, liveBridgeToggleBtn, liveBridgeCopyBtn;
+    Button cloudLogUploadBtn, selfCheckQuickBtn, selfCheckFullBtn, selfCheckUltraBtn, liveBridgeToggleBtn, liveBridgeCopyBtn;
     Switch liveBridgeStandbySwitch;
     bool isCloudLogUploading, isSelfCheckRunning, isLiveBridgeBusy;
     LinearLayout advContentContainer;
@@ -1631,10 +1631,12 @@ public partial class MainActivity {
         logCard.AddView(selfCheckStatusText);
 
         LinearLayout selfCheckBtns = HRow();
-        selfCheckQuickBtn = PillButton(S["SelfCheckQuickBtn"], () => _ = RunSelfCheckAsync(fullSuite: false), active: true);
-        selfCheckFullBtn = PillButton(S["SelfCheckFullBtn"], () => _ = RunSelfCheckAsync(fullSuite: true));
-        selfCheckBtns.AddView(selfCheckQuickBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        selfCheckBtns.AddView(selfCheckFullBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        selfCheckQuickBtn = PillButton(S["SelfCheckQuickBtn"], () => _ = RunSelfCheckAsync(SelfCheckMode.Quick));
+        selfCheckFullBtn = PillButton(S["SelfCheckFullBtn"], () => _ = RunSelfCheckAsync(SelfCheckMode.Full));
+        selfCheckUltraBtn = PillButton(S["SelfCheckUltraBtn"], () => _ = RunSelfCheckAsync(SelfCheckMode.Ultra), active: true);
+        selfCheckBtns.AddView(selfCheckQuickBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(5) });
+        selfCheckBtns.AddView(selfCheckFullBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(5) });
+        selfCheckBtns.AddView(selfCheckUltraBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.1f));
         logCard.AddView(selfCheckBtns);
 
         AddSwitchRow(logCard, S["SelfCheckAutoAfterUpdateSwitch"], store.AutoSelfCheckAfterUpdate, v => store.AutoSelfCheckAfterUpdate = v);
@@ -1690,7 +1692,7 @@ public partial class MainActivity {
         logCard.AddView(bridgeBtns);
 
         RefreshLogSummaryLabel();
-        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear cloud github upload sync crash checkup selfcheck test pairwise bridge live cloudflare relay biometric fingerprint wake standby");
+        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear cloud github upload sync crash checkup selfcheck ultra audit ui test pairwise bridge live cloudflare relay hub telemetry biometric fingerprint wake standby");
 
         // Language, About & App Version Updater
         LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.IconSystemInfo);
@@ -2131,11 +2133,12 @@ public partial class MainActivity {
                 AppLogger.SessionWarnCount);
         }
         if (cloudLogStatusText != null && store != null) {
-            if (!CloudLogSyncService.IsConfigured(store)) {
+            bool useCf = CloudLogSyncService.ShouldUseCloudflare(store);
+            bool ready = CloudLogSyncService.IsUploadReady(store);
+            if (!ready) {
                 cloudLogStatusText.Text = S["CloudLogStatusNotConfigured"];
                 cloudLogStatusText.SetTextColor(OneUiTheme.TextSub);
             } else {
-                (string branch, _, _) = CloudLogSyncService.ResolveTarget(store);
                 string lastSync = S["CloudLogNeverSynced"];
                 if (!string.IsNullOrWhiteSpace(store.CloudLogLastSyncUtc) &&
                     DateTime.TryParse(store.CloudLogLastSyncUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTime parsedUtc)) {
@@ -2145,7 +2148,13 @@ public partial class MainActivity {
                 } else if (!string.IsNullOrWhiteSpace(store.CloudLogLastSyncStatus)) {
                     lastSync = store.CloudLogLastSyncStatus;
                 }
-                cloudLogStatusText.Text = string.Format(S["CloudLogStatusReadyFmt"], store.CloudLogRepo, branch, lastSync);
+                if (useCf && LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out string cfUrl)) {
+                    string cfHost = new Uri(cfUrl).Host;
+                    cloudLogStatusText.Text = string.Format(S["CloudLogCloudflareReadyFmt"], cfHost, lastSync);
+                } else {
+                    (string branch, _, _) = CloudLogSyncService.ResolveTarget(store);
+                    cloudLogStatusText.Text = string.Format(S["CloudLogStatusReadyFmt"], store.CloudLogRepo, branch, lastSync);
+                }
                 cloudLogStatusText.SetTextColor(
                     (store.CloudLogLastSyncStatus ?? "").StartsWith("ERR:", StringComparison.OrdinalIgnoreCase)
                         ? OneUiTheme.FunctionalAmber
@@ -2180,6 +2189,9 @@ public partial class MainActivity {
         }
         if (selfCheckFullBtn != null) {
             selfCheckFullBtn.Enabled = !isSelfCheckRunning;
+        }
+        if (selfCheckUltraBtn != null) {
+            selfCheckUltraBtn.Enabled = !isSelfCheckRunning;
         }
         if (liveBridgeStatusText != null && store != null) {
             bool active = LiveDiagnosticBridgeService.IsActive;
@@ -2361,6 +2373,25 @@ public partial class MainActivity {
         testStatus.SetPadding(0, Dp(2), 0, Dp(6));
         body.AddView(testStatus);
 
+        LinearLayout linksRow = HRow();
+        Button openCfBtn = PillButton(S["LiveBridgeOpenCloudflareBtn"], () => {
+            try {
+                StartActivity(new Intent(Intent.ActionView, Android.Net.Uri.Parse("https://dash.cloudflare.com")));
+            } catch {
+                // Ignore if no browser available
+            }
+        });
+        Button openWorkerCodeBtn = PillButton(S["LiveBridgeOpenWorkerCodeBtn"], () => {
+            try {
+                StartActivity(new Intent(Intent.ActionView, Android.Net.Uri.Parse("https://raw.githubusercontent.com/guumachadooo/Cavern/master/.agents/docs/cloudflare_live_relay_worker.js")));
+            } catch {
+                // Ignore if no browser available
+            }
+        });
+        linksRow.AddView(openCfBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        linksRow.AddView(openWorkerCodeBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        body.AddView(linksRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
+
         LinearLayout utilRow = HRow();
         Button testBtn = PillButton(S["LiveBridgeTestBtn"], () => {
             string candidate = urlInput.Text?.Trim() ?? "";
@@ -2411,6 +2442,10 @@ public partial class MainActivity {
                     return;
                 }
                 store.LiveRelayUrl = clean;
+                if (LiveDiagnosticBridgeService.HasPairedSecret(store) && !CloudLogSyncService.IsGitHubConfigured(store)) {
+                    store.CloudLogProviderMode = 0;
+                    store.CloudLogSyncEnabled = true;
+                }
                 LiveBridgeWakeService.SyncStandbyState(this, store);
                 RefreshLogSummaryLabel();
                 Toast.MakeText(this, S["LiveBridgeSavedToast"], ToastLength.Short).Show();
@@ -2419,15 +2454,24 @@ public partial class MainActivity {
             onHelp: () => ShowModalGuidedHelp(S["LiveBridgeHelpTitle"], S["LiveBridgeHelpBody"], OneUiIconType.Logs));
     }
 
-    async Task RunSelfCheckAsync(bool fullSuite) {
+    Task RunSelfCheckAsync(bool fullSuite) =>
+        RunSelfCheckAsync(fullSuite ? SelfCheckMode.Full : SelfCheckMode.Quick);
+
+    async Task RunSelfCheckAsync(SelfCheckMode mode) {
         if (isSelfCheckRunning || store == null) {
             return;
         }
         isSelfCheckRunning = true;
         if (selfCheckQuickBtn != null) selfCheckQuickBtn.Enabled = false;
         if (selfCheckFullBtn != null) selfCheckFullBtn.Enabled = false;
+        if (selfCheckUltraBtn != null) selfCheckUltraBtn.Enabled = false;
+        string modeLabel = mode switch {
+            SelfCheckMode.Ultra => S["SelfCheckUltraBtn"],
+            SelfCheckMode.Full => S["SelfCheckFullBtn"],
+            _ => S["SelfCheckQuickBtn"]
+        };
         if (selfCheckStatusText != null) {
-            selfCheckStatusText.Text = string.Format(S["SelfCheckRunningFmt"], fullSuite ? S["SelfCheckFullBtn"] : S["SelfCheckQuickBtn"]);
+            selfCheckStatusText.Text = string.Format(S["SelfCheckRunningFmt"], modeLabel);
             selfCheckStatusText.SetTextColor(OneUiTheme.PrimaryHigh);
         }
 
@@ -2435,7 +2479,7 @@ public partial class MainActivity {
             SelfCheckReport report = await SelfDiagnosticEngine.RunAsync(
                 this,
                 store,
-                fullSuite,
+                mode,
                 stepName => {
                     if (!uiDestroyed && selfCheckStatusText != null) {
                         RunOnUiThread(() => {
@@ -2453,7 +2497,12 @@ public partial class MainActivity {
 
             bool autoSynced = false;
             if (CloudLogSyncService.IsConfigured(store)) {
-                CloudLogSyncResult syncRes = await CloudLogSyncService.UploadSelfCheckReportAsync(this, store, report, fullSuite ? "manual_full" : "manual_quick");
+                string reason = mode switch {
+                    SelfCheckMode.Ultra => "manual_ultra",
+                    SelfCheckMode.Full => "manual_full",
+                    _ => "manual_quick"
+                };
+                CloudLogSyncResult syncRes = await CloudLogSyncService.UploadSelfCheckReportAsync(this, store, report, reason);
                 autoSynced = syncRes.Success;
             }
 
@@ -2548,9 +2597,14 @@ public partial class MainActivity {
         actionsRow.AddView(copyBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
 
         Button uploadBtn = PillButton(S["SelfCheckUploadReportBtn"], () => {
-            if (!CloudLogSyncService.HasStoredToken(store)) {
-                Toast.MakeText(this, S["CloudLogNeedTokenToast"], ToastLength.Short).Show();
-                ShowCloudLogSyncModal();
+            if (!CloudLogSyncService.IsUploadReady(store)) {
+                if (CloudLogSyncService.ShouldUseCloudflare(store)) {
+                    Toast.MakeText(this, S["CloudLogCloudflareNeedBridgeToast"], ToastLength.Long).Show();
+                    ShowLiveBridgeConfigModal();
+                } else {
+                    Toast.MakeText(this, S["CloudLogNeedTokenToast"], ToastLength.Short).Show();
+                    ShowCloudLogSyncModal();
+                }
                 return;
             }
             _ = Task.Run(async () => {
@@ -2580,9 +2634,14 @@ public partial class MainActivity {
         if (isCloudLogUploading || store == null) {
             return;
         }
-        if (!CloudLogSyncService.HasStoredToken(store)) {
-            Toast.MakeText(this, S["CloudLogNeedTokenToast"], ToastLength.Short).Show();
-            ShowCloudLogSyncModal();
+        if (!CloudLogSyncService.IsUploadReady(store)) {
+            if (CloudLogSyncService.ShouldUseCloudflare(store)) {
+                Toast.MakeText(this, S["CloudLogCloudflareNeedBridgeToast"], ToastLength.Long).Show();
+                ShowLiveBridgeConfigModal();
+            } else {
+                Toast.MakeText(this, S["CloudLogNeedTokenToast"], ToastLength.Short).Show();
+                ShowCloudLogSyncModal();
+            }
             return;
         }
 
@@ -2621,15 +2680,37 @@ public partial class MainActivity {
         body.SetPadding(0, Dp(2), 0, Dp(4));
 
         bool draftEnabled = store.CloudLogSyncEnabled;
+        int draftProvider = Math.Clamp(store.CloudLogProviderMode, 0, 1);
         int draftBranchMode = store.CloudLogBranchMode;
         bool draftAutoCrash = store.CloudLogAutoOnCrash;
         bool draftAutoError = store.CloudLogAutoOnError;
 
         Switch enableSw = AddSwitchRow(body, S["CloudLogEnableSwitch"], draftEnabled, v => draftEnabled = v);
 
+        OneUiInlineSelector providerSelector = new(this, S["CloudLogProviderLabel"]);
+        providerSelector.SetItems([S["CloudLogProviderCloudflare"], S["CloudLogProviderGitHub"]], draftProvider);
+        body.AddView(providerSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(6), BottomMargin = Dp(8) });
+
+        // Cloudflare Unified Hub v3 section
+        LinearLayout cfSection = new(this) { Orientation = Orientation.Vertical };
+        bool cfReady = CloudLogSyncService.IsCloudflareConfigured(store);
+        string cfInfoMsg = cfReady && LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out string cfRelayUrl)
+            ? string.Format(S["CloudLogCloudflareReadyFmt"], new Uri(cfRelayUrl).Host, "v3")
+            : S["CloudLogCloudflareNeedBridgeToast"];
+        TextView cfInfoLbl = Label(cfInfoMsg, 12f, cfReady ? OneUiTheme.FunctionalGreen : OneUiTheme.FunctionalAmber);
+        cfInfoLbl.SetPadding(0, Dp(2), 0, Dp(8));
+        cfSection.AddView(cfInfoLbl);
+
+        Button openBridgeBtn = PillButton(S["CloudLogOpenBridgeBtn"], ShowLiveBridgeConfigModal);
+        cfSection.AddView(openBridgeBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+        body.AddView(cfSection);
+
+        // Optional Legacy GitHub Repository section
+        LinearLayout githubSection = new(this) { Orientation = Orientation.Vertical };
+
         TextView repoLbl = Label(S["CloudLogRepoLabel"], 12f, OneUiTheme.TextSub);
-        repoLbl.SetPadding(0, Dp(8), 0, Dp(4));
-        body.AddView(repoLbl);
+        repoLbl.SetPadding(0, Dp(4), 0, Dp(4));
+        githubSection.AddView(repoLbl);
 
         EditText repoInput = new(this) {
             Text = string.IsNullOrWhiteSpace(store.CloudLogRepo) ? CloudLogSyncService.DefaultRepo : store.CloudLogRepo,
@@ -2642,16 +2723,16 @@ public partial class MainActivity {
         repoInput.SetHintTextColor(ColMuted);
         repoInput.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
         repoInput.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
-        body.AddView(repoInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+        githubSection.AddView(repoInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
 
         OneUiInlineSelector branchSelector = new(this, S["CloudLogBranchLabel"]);
         branchSelector.SetItems([S["CloudLogBranchDiagnostics"], S["CloudLogBranchMaster"]], Math.Clamp(draftBranchMode, 0, 1));
         branchSelector.SelectionChanged += pos => draftBranchMode = pos;
-        body.AddView(branchSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+        githubSection.AddView(branchSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
 
         TextView tokenLbl = Label(S["CloudLogTokenLabel"], 12f, OneUiTheme.TextSub);
         tokenLbl.SetPadding(0, Dp(2), 0, Dp(4));
-        body.AddView(tokenLbl);
+        githubSection.AddView(tokenLbl);
 
         bool hasSaved = CloudLogSyncService.HasStoredToken(store);
         EditText tokenInput = new(this) {
@@ -2665,7 +2746,23 @@ public partial class MainActivity {
         tokenInput.SetHintTextColor(ColMuted);
         tokenInput.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
         tokenInput.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
-        body.AddView(tokenInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+        githubSection.AddView(tokenInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+
+        if (hasSaved) {
+            Button clearTokBtn = PillButton(S["CloudLogClearTokenBtn"], () => {
+                CloudLogSyncService.ClearToken(store);
+                tokenInput.Text = "";
+                tokenInput.Hint = S["CloudLogTokenHintNew"];
+                if (draftProvider == 1) {
+                    enableSw.Checked = false;
+                    draftEnabled = false;
+                }
+                RefreshLogSummaryLabel();
+                Toast.MakeText(this, S["CloudLogTokenClearedToast"], ToastLength.Short).Show();
+            });
+            githubSection.AddView(clearTokBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
+        }
+        body.AddView(githubSection);
 
         AddSwitchRow(body, S["CloudLogAutoCrashSwitch"], draftAutoCrash, v => draftAutoCrash = v);
         AddSwitchRow(body, S["CloudLogAutoErrorSwitch"], draftAutoError, v => draftAutoError = v);
@@ -2681,10 +2778,13 @@ public partial class MainActivity {
             modalStatus.Visibility = ViewStates.Visible;
             modalStatus.Text = S["CloudLogTesting"];
             modalStatus.SetTextColor(OneUiTheme.PrimaryHigh);
+            int providerForTest = draftProvider;
             string testRepo = repoInput.Text?.Trim() ?? "";
             string testTok = tokenInput.Text?.Trim() ?? "";
             _ = Task.Run(async () => {
-                CloudLogSyncResult r = await CloudLogSyncService.TestConnectionAsync(store, testRepo, testTok);
+                CloudLogSyncResult r = providerForTest == 0
+                    ? await CloudLogSyncService.TestCloudflareConnectionAsync(store)
+                    : await CloudLogSyncService.TestConnectionAsync(store, testRepo, testTok);
                 if (!uiDestroyed) {
                     RunOnUiThread(() => {
                         modalStatus.Visibility = ViewStates.Visible;
@@ -2705,18 +2805,17 @@ public partial class MainActivity {
         actionRow.AddView(createTokBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         body.AddView(actionRow);
 
-        if (hasSaved) {
-            Button clearTokBtn = PillButton(S["CloudLogClearTokenBtn"], () => {
-                CloudLogSyncService.ClearToken(store);
-                tokenInput.Text = "";
-                tokenInput.Hint = S["CloudLogTokenHintNew"];
-                enableSw.Checked = false;
-                draftEnabled = false;
-                RefreshLogSummaryLabel();
-                Toast.MakeText(this, S["CloudLogTokenClearedToast"], ToastLength.Short).Show();
-            });
-            body.AddView(clearTokBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(6) });
+        void RefreshProviderVisibility() {
+            bool useCf = draftProvider == 0;
+            cfSection.Visibility = useCf ? ViewStates.Visible : ViewStates.Gone;
+            githubSection.Visibility = useCf ? ViewStates.Gone : ViewStates.Visible;
+            createTokBtn.Visibility = useCf ? ViewStates.Gone : ViewStates.Visible;
         }
+        providerSelector.SelectionChanged += pos => {
+            draftProvider = Math.Clamp(pos, 0, 1);
+            RefreshProviderVisibility();
+        };
+        RefreshProviderVisibility();
 
         OneUiModalDialog.Show(
             this,
@@ -2726,6 +2825,15 @@ public partial class MainActivity {
             iconBadgeColor: OneUiTheme.IconSystemInfo,
             positiveText: S["CloudLogSaveBtn"],
             onPositive: () => {
+                store.CloudLogProviderMode = draftProvider;
+                store.CloudLogAutoOnCrash = draftAutoCrash;
+                store.CloudLogAutoOnError = draftAutoError;
+                if (draftProvider == 0) {
+                    store.CloudLogSyncEnabled = draftEnabled && CloudLogSyncService.IsCloudflareConfigured(store);
+                    RefreshLogSummaryLabel();
+                    Toast.MakeText(this, S["CloudLogSavedToast"], ToastLength.Short).Show();
+                    return;
+                }
                 string repoVal = repoInput.Text?.Trim() ?? "";
                 if (!CloudLogSyncService.TryParseRepo(repoVal, out string owner, out string repo)) {
                     Toast.MakeText(this, S["CloudLogInvalidRepoToast"], ToastLength.Short).Show();
@@ -2741,8 +2849,6 @@ public partial class MainActivity {
                 }
                 store.CloudLogRepo = $"{owner}/{repo}";
                 store.CloudLogBranchMode = draftBranchMode;
-                store.CloudLogAutoOnCrash = draftAutoCrash;
-                store.CloudLogAutoOnError = draftAutoError;
                 store.CloudLogSyncEnabled = draftEnabled && CloudLogSyncService.HasStoredToken(store);
                 RefreshLogSummaryLabel();
                 Toast.MakeText(this, S["CloudLogSavedToast"], ToastLength.Short).Show();

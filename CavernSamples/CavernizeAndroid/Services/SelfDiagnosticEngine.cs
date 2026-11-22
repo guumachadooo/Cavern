@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 using System.Text.Json;
 
@@ -13,6 +14,9 @@ using Cavern;
 using Cavern.Filters;
 using Cavern.Format;
 using Cavern.Format.Common;
+using Cavern.ProAudio;
+using Cavern.Remapping;
+using Cavern.Restoration;
 using Cavern.Spatial;
 using Cavern.Virtualizer;
 using Cavern.VocalChain;
@@ -26,6 +30,12 @@ using CavernizeAndroid.Language;
 using Path = System.IO.Path;
 
 namespace CavernizeAndroid.Services;
+
+public enum SelfCheckMode {
+    Quick,
+    Full,
+    Ultra
+}
 
 public enum SelfCheckStatus {
     Pass,
@@ -132,20 +142,33 @@ public static class SelfDiagnosticEngine {
         AppSettingsStore store,
         bool fullSuite,
         Action<string> onProgress = null,
-        CancellationToken ct = default) {
-        return Task.Run(() => RunInternal(context, store, fullSuite, onProgress, ct), ct);
-    }
+        CancellationToken ct = default) =>
+        RunAsync(context, store, fullSuite ? SelfCheckMode.Full : SelfCheckMode.Quick, onProgress, ct);
 
-    static SelfCheckReport RunInternal(
+    public static Task<SelfCheckReport> RunAsync(
         Context context,
         AppSettingsStore store,
-        bool fullSuite,
+        SelfCheckMode mode,
+        Action<string> onProgress = null,
+        CancellationToken ct = default) {
+        return Task.Run(() => RunInternalAsync(context, store, mode, onProgress, ct), ct);
+    }
+
+    static async Task<SelfCheckReport> RunInternalAsync(
+        Context context,
+        AppSettingsStore store,
+        SelfCheckMode mode,
         Action<string> onProgress,
         CancellationToken ct) {
         Stopwatch totalSw = Stopwatch.StartNew();
         List<SelfCheckItem> checks = [];
-        string mode = fullSuite ? "full" : "quick";
-        AppLogger.Info("SYS", $"SelfDiagnosticEngine started (mode={mode})");
+        string modeName = mode switch {
+            SelfCheckMode.Ultra => "ultra",
+            SelfCheckMode.Full => "full",
+            _ => "quick"
+        };
+        bool deepDsp = mode != SelfCheckMode.Quick;
+        AppLogger.Info("SYS", $"SelfDiagnosticEngine started (mode={modeName})");
 
         void AddCheck(string id, string layer, string name, Func<(SelfCheckStatus status, string details)> probe) {
             ct.ThrowIfCancellationRequested();
@@ -185,36 +208,81 @@ public static class SelfDiagnosticEngine {
         AddCheck("native.proaudio_abi", "L1-Native", "Pro-Audio NDK Bridge", CheckProAudioBridge);
         AddCheck("native.onnx_abi", "L1-Native", "ONNX Runtime & Models", () => CheckOnnxRuntime(context));
 
-        // Layer 2: Environment, Storage, Localization & Audio Hardware
+        // Layer 2: Environment, Storage, 100% Localization Audit, Settings Integrity & Audio Hardware
         AddCheck("sys.memory_storage", "L2-System", "RAM & Storage I/O", () => CheckMemoryAndStorage(context));
-        AddCheck("sys.localization", "L2-System", "EN/PT-BR Strings Integrity", CheckLocalizationIntegrity);
+        AddCheck("sys.localization_full", "L2-System", "100% EN/PT-BR Strings Audit", CheckLocalizationIntegrity);
+        AddCheck("sys.settings_integrity", "L2-System", "Settings Store Range & NaN Audit", () => CheckSettingsStoreIntegrity(store));
         AddCheck("sys.audio_routes", "L2-System", "Audio Routes & Low-Latency", () => CheckAudioRoutes(context));
 
-        // Layer 3: Isolated Core DSP Physics & Assets
-        AddCheck("dsp.binaural_assets", "L3-DSP", "Binaural HRIR/BRIR Assets", () => CheckBinauralAssets(context));
-        AddCheck("dsp.autoeq_guard", "L3-DSP", "AutoEq & Double-EQ Guard", CheckAutoEqAndGuard);
+        // Layer 3: Isolated Core & Deep DSP Physics + Bundled Assets/Services
+        AddCheck("dsp.binaural_assets", "L3-DSP", "Binaural HRIR/BRIR Assets & Credits", () => CheckBinauralAssets(context));
+        AddCheck("dsp.autoeq_catalog", "L3-DSP", "AutoEq .aeqz Catalog & Double-EQ Guard", () => CheckAutoEqAndGuard(context));
         AddCheck("dsp.air_absorption", "L3-DSP", "ISO 9613-1 Air Absorption", CheckAirAbsorptionPhysics);
         AddCheck("dsp.truepeak_brickwall", "L3-DSP", "4x True-Peak Brickwall", CheckTruePeakBrickwall);
         AddCheck("dsp.vocal_chain", "L3-DSP", "Live Vocal Chain Zero-GC", CheckVocalChainDsp);
 
-        // Layer 4: Strength-2 Pairwise Orthogonal DSP Matrix (non-exponential interaction coverage)
-        if (fullSuite) {
+        if (deepDsp) {
+            AddCheck("dsp.kaiser_resampler", "L3-DSP", "Kaiser Polyphase Sinc Resampler", CheckKaiserSincResampler);
+            AddCheck("dsp.farrow_sync", "L3-DSP", "Farrow Lagrange Fractional Sync", CheckFarrowLagrangeSync);
+            AddCheck("dsp.decorrelator", "L3-DSP", "Orthogonal All-Pass Decorrelator", CheckOrthogonalDecorrelator);
+            AddCheck("dsp.parametric_stft", "L3-DSP", "Parametric STFT Soundfield Analyzer", CheckParametricStft);
+            AddCheck("dsp.nearfield_itd", "L3-DSP", "Near-Field Sphere & Biometric ITD", CheckNearFieldAndItdPhysics);
+            AddCheck("dsp.ahrs_quaternion", "L3-DSP", "AHRS Head-Tracking Quaternion", CheckFusionAhrsStability);
+            AddCheck("dsp.ringbuffer_library", "L3-DSP", "Lock-Free RingBuffer & Library Cache", () => CheckRingBufferAndLibrary(context));
+        }
+
+        // Layer 4 & 5: Strength-2 Pairwise Orthogonal DSP Matrix + Codecs
+        if (deepDsp) {
             AddCheck("dsp.pairwise_matrix", "L4-Pairwise", "Pairwise DSP Matrix (8x OA)", CheckPairwiseDspMatrix);
-            AddCheck("codec.wav_roundtrip", "L5-Codecs", "Cavern WAV Write/Read", () => CheckWavRoundTrip(context));
+            AddCheck("codec.wav_roundtrip", "L5-Codecs", "Cavern WAV Write/Read & Analyzer", () => CheckWavRoundTrip(context));
             AddCheck("codec.ffmpeg_flac", "L5-Codecs", "FFmpeg WAV->FLAC Pipeline", () => CheckFFmpegFlacRoundTrip(context, store));
         } else {
-            // Quick mode runs the 2 highest-coverage orthogonal vectors (Direct + Full Atmos Stack)
             AddCheck("dsp.pairwise_smoke", "L4-Pairwise", "DSP Stack Smoke (2x OA)", CheckQuickPairwiseSmoke);
         }
 
-        // Layer 6: Cloud Sync Readiness
-        AddCheck("cloud.github_sync", "L6-Cloud", "GitHub Cloud Log Sync", () => CheckCloudSyncReadiness(store));
+        // Layer 6: Cloud Telemetry Hub Readiness (Cloudflare v3 / GitHub fallback)
+        AddCheck("cloud.telemetry_hub", "L6-Cloud", "Cloud Diagnostics Hub (Cloudflare/GitHub)", () => CheckCloudSyncReadiness(store));
+
+        // Layer 7: Live Runtime Log & Crash Regression Audit (ALL modes!)
+        AddCheck("logs.runtime_errors", "L7-RuntimeLogs", "Runtime AppLogger Fatal/Error/Crash Audit", CheckRuntimeLogHealth);
+
+        // Layers 8, 9, 10: Live UI Tabs, Settings Categories, 27-Modal Smoke & Interactive Controls (Ultra Mode)
+        if (mode == SelfCheckMode.Ultra) {
+            ILiveBridgeAppHost uiHost = LiveDiagnosticBridgeService.TryGetHostInternal();
+            if (uiHost != null) {
+                try {
+                    List<SelfCheckItem> uiChecks = await uiHost.RunLiveUiSelfAuditAsync(onProgress, ct).ConfigureAwait(false);
+                    checks.AddRange(uiChecks);
+                } catch (System.OperationCanceledException) {
+                    throw;
+                } catch (Exception ex) {
+                    checks.Add(new SelfCheckItem {
+                        Id = "ui.audit_runner",
+                        Layer = "L8-LiveUI",
+                        Name = "Live UI Self-Audit Runner",
+                        Status = SelfCheckStatus.Fail,
+                        ElapsedMs = 0,
+                        Details = $"{ex.GetType().Name}: {ex.Message}"
+                    });
+                }
+            } else {
+                checks.Add(new SelfCheckItem {
+                    Id = "ui.host_detached",
+                    Layer = "L8-LiveUI",
+                    Name = "Live UI, Modals & Controls Audit",
+                    Status = SelfCheckStatus.Skip,
+                    ElapsedMs = 0,
+                    Details = "MainActivity UI host is closed (run from open app or call bring_to_front)."
+                });
+            }
+        }
 
         totalSw.Stop();
         (string ver, long build) = AppUpdateService.GetInstalledVersion(context);
 
         SelfCheckReport report = new() {
-            Mode = mode,
+            SchemaVersion = 2,
+            Mode = modeName,
             SessionId = AppLogger.SessionId,
             ExecutedAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             AppVersion = ver,
@@ -398,23 +466,53 @@ public static class SelfDiagnosticEngine {
     }
 
     static (SelfCheckStatus, string) CheckLocalizationIntegrity() {
-        AndroidStrings s = AndroidStrings.Active;
-        string[] criticalKeys = [
-            "AppTitle", "DiagnosticsTitle", "CloudLogSectionTitle",
-            "SelfCheckSectionTitle", "SelfCheckQuickBtn", "SelfCheckFullBtn",
-            "ProAudioCardTitle", "Slot5BCardTitle", "Slot2CCardTitle"
-        ];
-        List<string> missing = [];
-        foreach (string k in criticalKeys) {
-            string val = s[k];
-            if (string.IsNullOrWhiteSpace(val) || string.Equals(val, k, StringComparison.Ordinal)) {
-                missing.Add(k);
+        (int enCount, int ptCount, List<string> missingInPt, List<string> emptyValues, List<string> badFormats) = AndroidStrings.AuditAllDictionaries();
+        List<string> issues = [];
+        if (missingInPt.Count > 0) {
+            issues.Add($"missing PT-BR({missingInPt.Count}): {string.Join(", ", missingInPt.Take(8))}");
+        }
+        if (emptyValues.Count > 0) {
+            issues.Add($"empty({emptyValues.Count}): {string.Join(", ", emptyValues.Take(6))}");
+        }
+        if (badFormats.Count > 0) {
+            issues.Add($"badFormat({badFormats.Count}): {string.Join(", ", badFormats.Take(6))}");
+        }
+        if (issues.Count > 0) {
+            return (SelfCheckStatus.Fail, string.Join(" | ", issues));
+        }
+        return (SelfCheckStatus.Pass, $"100% dictionary parity verified: {enCount} EN / {ptCount} PT-BR keys, 0 empty, 0 bad formats");
+    }
+
+    static (SelfCheckStatus, string) CheckSettingsStoreIntegrity(AppSettingsStore store) {
+        if (store == null) {
+            return (SelfCheckStatus.Fail, "AppSettingsStore instance is null");
+        }
+        List<string> bad = [];
+        int checkedProps = 0;
+        foreach (System.Reflection.PropertyInfo p in typeof(AppSettingsStore).GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)) {
+            if (!p.CanRead || p.GetIndexParameters().Length > 0) {
+                continue;
+            }
+            string name = p.Name;
+            if (name.Contains("Token", StringComparison.OrdinalIgnoreCase) || name.Contains("Secret", StringComparison.OrdinalIgnoreCase)) {
+                continue;
+            }
+            try {
+                object val = p.GetValue(store);
+                checkedProps++;
+                if (val is float f && !float.IsFinite(f)) {
+                    bad.Add($"{name}={f}");
+                } else if (val is double d && !double.IsFinite(d)) {
+                    bad.Add($"{name}={d}");
+                }
+            } catch (Exception ex) {
+                bad.Add($"{name} threw {ex.GetType().Name}");
             }
         }
-        if (missing.Count > 0) {
-            return (SelfCheckStatus.Fail, $"Missing localized string keys: {string.Join(", ", missing)}");
+        if (bad.Count > 0) {
+            return (SelfCheckStatus.Fail, $"Corrupt settings detected: {string.Join(", ", bad.Take(8))}");
         }
-        return (SelfCheckStatus.Pass, $"Critical UI strings verified ({criticalKeys.Length}/{criticalKeys.Length})");
+        return (SelfCheckStatus.Pass, $"All {checkedProps} AppSettingsStore properties readable & finite (0 NaN/Inf/throw)");
     }
 
     static (SelfCheckStatus, string) CheckAudioRoutes(Context context) {
@@ -461,10 +559,27 @@ public static class SelfDiagnosticEngine {
         if (broken.Count > 0) {
             return (SelfCheckStatus.Fail, $"Broken HRIR/BRIR assets: {string.Join(", ", broken)}");
         }
-        return (SelfCheckStatus.Pass, $"All {checkedAssets} bundled laboratory HRIR/BRIR assets readable");
+        string credits = BinauralProfileService.ReadLicenseCredits(context);
+        if (string.IsNullOrWhiteSpace(credits)) {
+            return (SelfCheckStatus.Warn, $"All {checkedAssets} HRIR/BRIR readable, but license credits text is empty");
+        }
+        return (SelfCheckStatus.Pass, $"All {checkedAssets} bundled HRIR/BRIR assets + credits ({credits.Length} chars) verified");
     }
 
-    static (SelfCheckStatus, string) CheckAutoEqAndGuard() {
+    static (SelfCheckStatus, string) CheckAutoEqAndGuard(Context context) {
+        int catalogTotal = 0;
+        int bundledCount = 0;
+        int searchHits = 0;
+        if (context != null) {
+            AutoEqService.EnsureLoaded(context);
+            catalogTotal = AutoEqService.GetTotalCatalogCount(context);
+            bundledCount = AutoEqService.GetBundledProfiles(context)?.Count ?? 0;
+            searchHits = AutoEqService.SearchCatalog(context, "Sennheiser", 10)?.Count ?? 0;
+            if (catalogTotal <= 0 || bundledCount <= 0) {
+                return (SelfCheckStatus.Fail, $"AutoEq .aeqz catalog failed to load (catalog={catalogTotal}, bundled={bundledCount})");
+            }
+        }
+
         AutoEqHeadphoneProfile synth = new() {
             Id = "selfcheck_ref",
             Name = "Synthetic Reference",
@@ -497,7 +612,7 @@ public static class SelfDiagnosticEngine {
                 $"AutoEq invariant violation: nonFinite={nonFinite}, rms={rms:0.0000}, guardDfc={guardOnDfc}, guardRaw={guardOnRaw}, sec={dfcSections}->{rawSections}");
         }
         return (SelfCheckStatus.Pass,
-            $"DFC={dfcSections} biquads (guard=off) -> Raw={rawSections} biquads (Double-EQ Guard=ON), peak={peak:0.000}, rms={rms:0.000}");
+            $"Catalog={catalogTotal} ({bundledCount} bundled, searchHits={searchHits}), DFC={dfcSections}->Raw={rawSections} (Guard=ON), rms={rms:0.000}");
     }
 
     static (SelfCheckStatus, string) CheckAirAbsorptionPhysics() {
@@ -578,6 +693,109 @@ public static class SelfDiagnosticEngine {
         }
         return (SelfCheckStatus.Pass,
             $"Output peak={peakV:0.000}, rms={rmsV:0.000}, CPU={rtRatio * 100:0.0}% of RT budget ({sw.Elapsed.TotalMilliseconds:0.0}ms)");
+    }
+
+    static (SelfCheckStatus, string) CheckKaiserSincResampler() {
+        KaiserSincResampler resampler = new(44100, 48000);
+        float[] src = GenerateSineMono(44100, 2205, 1000f, 0.5f);
+        float[] dst = resampler.ResampleMono(src);
+        (int nf, float peak, float rms) = MeasureMonoStats(dst);
+        int expectedLen = (int)Math.Round(src.Length * 48000.0 / 44100.0);
+        if (nf > 0 || Math.Abs(dst.Length - expectedLen) > 4 || rms < 0.25f || peak > 0.65f) {
+            return (SelfCheckStatus.Fail, $"Kaiser 44.1k->48k invalid: len={dst.Length} (exp ~{expectedLen}), nf={nf}, peak={peak:0.000}, rms={rms:0.000}");
+        }
+        return (SelfCheckStatus.Pass, $"44.1k->48k ({src.Length}->{dst.Length} samples, 0 NaN, rms={rms:0.000}, peak={peak:0.000})");
+    }
+
+    static (SelfCheckStatus, string) CheckFarrowLagrangeSync() {
+        float[] sine = GenerateSineMono(48000, 512, 1000f, 0.8f);
+        double pos = 100.37;
+        float interp = FarrowLagrangeDelay.SampleAt(sine, sine.Length, pos);
+        float exact = MathF.Sin((float)(2.0 * Math.PI * 1000.0 / 48000.0 * pos)) * 0.8f;
+        float err = MathF.Abs(interp - exact);
+        if (!float.IsFinite(interp) || err > 0.005f) {
+            return (SelfCheckStatus.Fail, $"Farrow Lagrange error={err:0.00000} (got {interp:0.0000}, exp {exact:0.0000})");
+        }
+        return (SelfCheckStatus.Pass, $"Cubic Lagrange fractional sample @100.37 err={err:0.000000}");
+    }
+
+    static (SelfCheckStatus, string) CheckOrthogonalDecorrelator() {
+        OrthogonalDecorrelator dec = new(6, 48000);
+        float[] ch0 = GenerateSineMono(48000, 2048, 1200f, 0.4f);
+        float[] ch1 = (float[])ch0.Clone();
+        (_, _, float inRms) = MeasureMonoStats(ch0);
+        dec.ProcessInPlace(0, ch0, ch0.Length);
+        dec.ProcessInPlace(1, ch1, ch1.Length);
+        (int nf0, _, float rms0) = MeasureMonoStats(ch0);
+        (int nf1, _, float rms1) = MeasureMonoStats(ch1);
+        double dot = 0, n0 = 0, n1 = 0;
+        for (int i = 256; i < ch0.Length; i++) {
+            dot += ch0[i] * ch1[i];
+            n0 += ch0[i] * ch0[i];
+            n1 += ch1[i] * ch1[i];
+        }
+        double corr = (n0 > 0 && n1 > 0) ? Math.Abs(dot / Math.Sqrt(n0 * n1)) : 1.0;
+        if (nf0 + nf1 > 0 || rms0 < inRms * 0.7f || rms1 < inRms * 0.7f) {
+            return (SelfCheckStatus.Fail, $"Decorrelator energy/NaN failure: nf={nf0 + nf1}, rms0={rms0:0.000}, rms1={rms1:0.000}");
+        }
+        return (SelfCheckStatus.Pass, $"6-ch unity all-pass OK (inRms={inRms:0.000}, outRms={rms0:0.000}, |r|={corr:0.00})");
+    }
+
+    static (SelfCheckStatus, string) CheckParametricStft() {
+        using ParametricStftAnalyzer stft = new(48000);
+        float[] l = GenerateSineMono(48000, 2048, 880f, 0.4f);
+        float[] r = GenerateSineMono(48000, 2048, 880f, 0.2f);
+        stft.AnalyzeOnly(l, r, 2048);
+        SoundfieldTelemetry tel = stft.LatestTelemetry;
+        if (!float.IsFinite(tel.Diffuseness) || !float.IsFinite(tel.FrontAzimuthDeg)) {
+            return (SelfCheckStatus.Fail, $"STFT non-finite telemetry: diff={tel.Diffuseness}, az={tel.FrontAzimuthDeg}");
+        }
+        return (SelfCheckStatus.Pass, $"STFT telemetry finite (diffuseness={tel.Diffuseness:0.00}, az={tel.FrontAzimuthDeg:0.0} deg)");
+    }
+
+    static (SelfCheckStatus, string) CheckNearFieldAndItdPhysics() {
+        double nfMag = NearFieldHeadFilter.ComputeSphereTransferMagnitude(rho: 5.0, cosTheta: 1.0, mu: 2.0, maxOrder: 24);
+        double itdUs = BiometricItdScaler.ComputeWoodworthItdUs(90.0, 0.0, BiometricItdScaler.ReferenceHeadWidthCm);
+        float[] impulse = new float[64];
+        impulse[8] = 1f;
+        float[] delayed = BiometricItdScaler.ApplyCausalFractionalDelay(impulse, 4.5, 64);
+        (int nf, float peak, _) = MeasureMonoStats(delayed);
+        if (!double.IsFinite(nfMag) || nfMag <= 0 || !double.IsFinite(itdUs) || Math.Abs(itdUs) < 400 || Math.Abs(itdUs) > 1000 || nf > 0 || peak < 0.3f) {
+            return (SelfCheckStatus.Fail, $"Acoustic physics out of bounds: nfMag={nfMag:0.000}, itd={itdUs:0.0}us, delayPeak={peak:0.000}");
+        }
+        return (SelfCheckStatus.Pass, $"Sphere |H|={nfMag:0.000}, Woodworth ITD@90deg={itdUs:0.0}us, causal delay peak={peak:0.000}");
+    }
+
+    static (SelfCheckStatus, string) CheckFusionAhrsStability() {
+        FusionAhrsFilter ahrs = new();
+        Quaternion q = Quaternion.Identity;
+        for (int i = 0; i < 120; i++) {
+            q = ahrs.UpdateNoMagnetometer(new Vector3(0.05f, -0.1f, 0.02f), new Vector3(0f, 9.81f, 0f), 1f / 100f);
+        }
+        float norm = MathF.Sqrt(q.X * q.X + q.Y * q.Y + q.Z * q.Z + q.W * q.W);
+        if (!float.IsFinite(norm) || MathF.Abs(norm - 1f) > 0.01f) {
+            return (SelfCheckStatus.Fail, $"AHRS quaternion diverged: |q|={norm:0.0000}");
+        }
+        return (SelfCheckStatus.Pass, $"120-step 100Hz IMU fusion stable (|q|={norm:0.00000})");
+    }
+
+    static (SelfCheckStatus, string) CheckRingBufferAndLibrary(Context context) {
+        LockFreeAudioRingBuffer ring = new(256, 2);
+        float[] src = GenerateSyntheticStereo(48000, 128, 0.5f);
+        float[] dst = new float[src.Length];
+        int w = ring.Write(src, 0, 128);
+        int r = ring.Read(dst, 0, 128, zeroFillMissing: false);
+        float maxDiff = 0f;
+        for (int i = 0; i < src.Length; i++) {
+            float d = MathF.Abs(src[i] - dst[i]);
+            if (d > maxDiff) maxDiff = d;
+        }
+        if (w != 128 || r != 128 || maxDiff > 1e-6f) {
+            return (SelfCheckStatus.Fail, $"LockFreeRingBuffer mismatch: w={w}, r={r}, maxDiff={maxDiff:0.000000}");
+        }
+        MediaLibrarySnapshot snap = MediaLibraryService.CachedSnapshot ?? MediaLibraryService.TryLoadCachedSnapshot(context);
+        int trackCount = snap?.Tracks?.Count ?? 0;
+        return (SelfCheckStatus.Pass, $"SPSC RingBuffer bit-exact (128f, diff={maxDiff:0.000000}), Library cache={trackCount} tracks");
     }
 
     static (SelfCheckStatus, string) CheckQuickPairwiseSmoke() =>
@@ -708,7 +926,14 @@ public static class SelfDiagnosticEngine {
             if (maxErr > 0.002f) {
                 return (SelfCheckStatus.Fail, $"WAV reconstruction error too high: maxErr={maxErr:0.00000}");
             }
-            return (SelfCheckStatus.Pass, $"24-bit 48kHz stereo WAV round-trip OK (maxErr={maxErr:0.000000})");
+            LibraryTrackItem synthItem = new() {
+                Title = "roundtrip",
+                FilePath = wavPath,
+                FileSizeBytes = new FileInfo(wavPath).Length
+            };
+            AudioQualityReport qa = AudioQualityAnalyzer.EvaluateFast(synthItem, context, allowIo: true);
+            return (SelfCheckStatus.Pass,
+                $"24-bit 48kHz WAV round-trip OK (maxErr={maxErr:0.000000}, QA={qa.Category}/{qa.SampleRateHz}Hz/{qa.DeclaredBitDepth}bit)");
         } finally {
             TryDeleteFile(wavPath);
         }
@@ -759,14 +984,60 @@ public static class SelfDiagnosticEngine {
     }
 
     static (SelfCheckStatus, string) CheckCloudSyncReadiness(AppSettingsStore store) {
-        if (store == null || !CloudLogSyncService.HasStoredToken(store)) {
-            return (SelfCheckStatus.Skip, "GitHub Cloud Log Sync token not configured yet");
+        if (store == null) {
+            return (SelfCheckStatus.Skip, "Settings store unavailable");
+        }
+        if (CloudLogSyncService.ShouldUseCloudflare(store)) {
+            if (!CloudLogSyncService.IsCloudflareConfigured(store)) {
+                return (SelfCheckStatus.Skip, "Cloudflare Unified Hub v3 not configured yet (set Worker URL + Pair Key in Bridge Setup)");
+            }
+            string host = LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out string norm)
+                ? new Uri(norm).Host
+                : store.LiveRelayUrl;
+            return store.CloudLogSyncEnabled
+                ? (SelfCheckStatus.Pass, $"Cloudflare Unified Hub v3 active -> {host}")
+                : (SelfCheckStatus.Pass, $"Cloudflare Unified Hub v3 ready for manual uploads -> {host} (auto-sync off)");
+        }
+        if (!CloudLogSyncService.HasStoredToken(store)) {
+            return (SelfCheckStatus.Skip, "GitHub legacy fallback selected, no token configured");
         }
         if (!CloudLogSyncService.IsConfigured(store)) {
-            return (SelfCheckStatus.Warn, $"Cloud Sync disabled or invalid repo ('{store.CloudLogRepo}')");
+            return (SelfCheckStatus.Warn, $"GitHub Cloud Sync disabled or invalid repo ('{store.CloudLogRepo}')");
         }
         (string branch, string logPath, _) = CloudLogSyncService.ResolveTarget(store);
-        return (SelfCheckStatus.Pass, $"Configured -> {store.CloudLogRepo}@{branch} ({logPath})");
+        return (SelfCheckStatus.Pass, $"GitHub legacy configured -> {store.CloudLogRepo}@{branch} ({logPath})");
+    }
+
+    static (SelfCheckStatus, string) CheckRuntimeLogHealth() {
+        bool hasPendingCrash = AppLogger.HasPendingCrashReport;
+        int fatals = AppLogger.SessionFatalCount;
+        int errors = AppLogger.SessionErrorCount;
+        string recent = AppLogger.ReadRecentLines(400);
+        string[] lines = string.IsNullOrEmpty(recent) ? [] : recent.Split('\n');
+        List<string> fatalSnippets = [];
+        List<string> errorSnippets = [];
+
+        foreach (string raw in lines) {
+            string ln = raw.Trim();
+            if (string.IsNullOrEmpty(ln) || ln.Contains("SelfCheck finished:", StringComparison.Ordinal) || ln.Contains("SelfCheck FAIL", StringComparison.Ordinal) || ln.Contains("SelfCheck WARN", StringComparison.Ordinal)) {
+                continue;
+            }
+            if (ln.Contains("[FATAL]", StringComparison.Ordinal) || ln.Contains("SIGSEGV", StringComparison.Ordinal)) {
+                fatalSnippets.Add(ln.Length > 95 ? ln[..95] + "..." : ln);
+            } else if (ln.Contains("[ERROR]", StringComparison.Ordinal) || ln.Contains("UnhandledException", StringComparison.OrdinalIgnoreCase)) {
+                errorSnippets.Add(ln.Length > 95 ? ln[..95] + "..." : ln);
+            }
+        }
+
+        if (hasPendingCrash || fatals > 0 || fatalSnippets.Count > 0) {
+            string sample = fatalSnippets.Count > 0 ? fatalSnippets[^1] : "Pending crash marker";
+            return (SelfCheckStatus.Fail, $"Session fatals={fatals}, pendingCrash={hasPendingCrash}, logFatals={fatalSnippets.Count} | Latest: {sample}");
+        }
+        if (errors > 0 || errorSnippets.Count > 0) {
+            string sample = errorSnippets.Count > 0 ? errorSnippets[^1] : $"{errors} runtime error(s)";
+            return (SelfCheckStatus.Warn, $"Session errors={errors}, recentLogErrors={errorSnippets.Count} | Latest: {sample}");
+        }
+        return (SelfCheckStatus.Pass, $"0 fatals, 0 crashes, 0 runtime errors across last {lines.Length} log lines");
     }
 
     static SpatialSceneFrame CreateSyntheticFrame(int sampleRate, int frameCount) => new() {

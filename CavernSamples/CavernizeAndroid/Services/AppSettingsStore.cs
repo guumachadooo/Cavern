@@ -1273,10 +1273,19 @@ public sealed class AppSettingsStore {
         }
     }
 
-    // Cloud Diagnostic Log Sync (GitHub)
+    // Cloud Diagnostic Telemetry Sync (Cloudflare Unified Hub v3 default + GitHub optional legacy)
     public bool CloudLogSyncEnabled {
         get => prefs.GetBoolean("cloudLogSyncEnabled", false);
         set => Edit().PutBoolean("cloudLogSyncEnabled", value).Apply();
+    }
+
+    /// <summary>
+    /// 0 = Cloudflare Unified Diagnostics Hub v3 (recommended, reuses Live Bridge Worker + Keystore key),
+    /// 1 = GitHub Repository Contents API (optional legacy fallback).
+    /// </summary>
+    public int CloudLogProviderMode {
+        get => prefs.GetInt("cloudLogProviderMode", 0);
+        set => Edit().PutInt("cloudLogProviderMode", Math.Clamp(value, 0, 1)).Apply();
     }
 
     public string CloudLogRepo {

@@ -16,16 +16,16 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Java 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Setup .NET 11 SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '11.0.x'
 
@@ -874,7 +874,7 @@ jobs:
 
       - name: Upload build diagnostics artifact (errors + warnings)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Cavernize-Build-Diagnostics
           path: build/diagnostics
@@ -963,13 +963,13 @@ jobs:
           PYPUB
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Cavernize-APK
           path: build/Cavernize-Android.apk
 
       - name: Publish versioned GitHub Release (permanent archive)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: "v2.9.${{ github.run_number }}"
           target_commitish: ${{ github.sha }}
@@ -1093,7 +1093,7 @@ jobs:
           git push origin refs/tags/android-latest --force
 
       - name: Publish GitHub Release (OTA android-latest)
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: android-latest
           name: "Cavernize Android v2.9.${{ github.run_number }}"
