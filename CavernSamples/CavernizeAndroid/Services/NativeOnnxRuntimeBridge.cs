@@ -488,7 +488,7 @@ public static class OnnxRuntimeHeaderParser {
 /// <summary>
 /// Dynamic Android native bridge for <c>libonnxruntime.so</c> bundled in <see cref="Android.Content.PM.ApplicationInfo.NativeLibraryDir"/>.
 /// Implements <see cref="INeuralInferenceRuntime"/> and <see cref="INeuralModelRegistry"/> using
-/// companion <c>.so</c> pre-loading + <see cref="NativeLibrary.Load"/> + <c>OrtGetApiBase()</c> +
+/// companion <c>.so</c> pre-loading + <see cref="NativeLibrary.Load(string)"/> + <c>OrtGetApiBase()</c> +
 /// asset-bundled <c>onnxruntime_c_api.h</c> vtable slots, with automatic QNN HTP -> XNNPACK -> CPU provider cascade.
 /// </summary>
 public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralModelRegistry {

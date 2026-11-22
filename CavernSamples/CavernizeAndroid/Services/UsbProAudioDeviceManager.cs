@@ -225,7 +225,7 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
 
     /// <summary>
     /// Coordinates exclusive ownership of the open Linux USB file descriptor with native Path B (<c>libusb</c>)
-    /// so <see cref="UsbDeviceConnection.ControlTransfer"/> never contends on the same <c>usbfs</c> FD while Path B is active.
+    /// so <see cref="UsbDeviceConnection.ControlTransfer(UsbAddressing, int, int, int, byte[], int, int)"/> never contends on the same <c>usbfs</c> FD while Path B is active.
     /// </summary>
     public void NotifyPathBFileDescriptorState(bool ownedByPathB) {
         lock (syncLock) {
@@ -725,7 +725,7 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     /// <summary>
     /// Dual-transport Scarlett2 vendor control exchange: routes exclusively through Path B <c>libusb</c> while Path B
     /// owns the USB file descriptor (preventing dual-FD <c>usbfs</c> contention), otherwise claims the vendor
-    /// <see cref="UsbInterface"/> before invoking Android <see cref="UsbDeviceConnection.ControlTransfer"/> and releases
+    /// <see cref="UsbInterface"/> before invoking Android <see cref="UsbDeviceConnection.ControlTransfer(UsbAddressing, int, int, int, byte[], int, int)"/> and releases
     /// it immediately afterward so Scarlett controls work cleanly under Path A (AAudio) or when idle.
     /// </summary>
     int TransferScarlettPacketLocked(int vendorIf, byte[] tx, byte[] rx) {

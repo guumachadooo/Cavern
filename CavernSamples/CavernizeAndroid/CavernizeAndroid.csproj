@@ -15,8 +15,8 @@
     <AndroidUseAapt2>true</AndroidUseAapt2>
     <Authors>VoidX</Authors>
     <Description>Cavernize spatial audio player, converter, and channel/object stem extractor for Android.</Description>
-    <!-- Intentionally pin targetSdkVersion=35 in AndroidManifest.xml while compiling against net11.0-android (API 37 ACW) -->
-    <NoWarn>$(NoWarn);XA4211</NoWarn>
+    <!-- Intentionally pin targetSdkVersion=35 in AndroidManifest.xml while compiling against newer Android TFM -->
+    <NoWarn>$(NoWarn);XA1006;XA4211</NoWarn>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
@@ -31,9 +31,13 @@
     <AndroidAsset Update="Assets\ffmpeg\**" Condition="Exists('Assets\ffmpeg')" />
     <AndroidAsset Update="Assets\truehdd\**" Condition="Exists('Assets\truehdd')" />
     <AndroidAsset Update="Assets\onnxruntime\**" Condition="Exists('Assets\onnxruntime')" />
+    <!-- Microsoft.Android.Sdk AutoImport.props already globs **\*.so as AndroidNativeLibrary; use Update to attach Abi without XA4301 duplicates -->
+    <AndroidNativeLibrary Update="NativeLibs\arm64-v8a\*.so"
+                          Abi="arm64-v8a"
+                          Condition="'$(EnableDefaultAndroidItems)' != 'false' and Exists('NativeLibs\arm64-v8a')" />
     <AndroidNativeLibrary Include="NativeLibs\arm64-v8a\*.so"
                           Abi="arm64-v8a"
-                          Condition="Exists('NativeLibs\arm64-v8a')" />
+                          Condition="'$(EnableDefaultAndroidItems)' == 'false' and Exists('NativeLibs\arm64-v8a')" />
   </ItemGroup>
 
   <ItemGroup>

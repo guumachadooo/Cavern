@@ -62,7 +62,7 @@ public static partial class MediaServiceUtils {
     }
 
     /// <summary>
-    /// Parses SRT or WebVTT subtitle/lyric cues safely using <see cref="CultureInfo.InvariantCulture"/> and <see cref="TimeSpan.TryParse"/>.
+    /// Parses SRT or WebVTT subtitle/lyric cues safely using <see cref="CultureInfo.InvariantCulture"/> and <see cref="TimeSpan.TryParse(string, IFormatProvider, out TimeSpan)"/>.
     /// </summary>
     public static List<TimedTextCue> ParseSrtOrVttCues(
         string raw,
