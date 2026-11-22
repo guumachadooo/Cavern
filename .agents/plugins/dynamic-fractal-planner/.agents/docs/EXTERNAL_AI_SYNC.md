@@ -7,6 +7,11 @@
 
 ## Plugin Sync Entries (Newest First)
 
+### 2026-11-22 | `pending-push` | `AI Studio` | Plugin v2.7.0 — Gitless Container Auto-Discovery, Deep C# Pre-Push Syntax Check & Live Bridge Acoustic/Perf CLI
+- `Scope`: `dual-project+plugin` (`plugin.json`, `scripts/verify_universal.py`, `scripts/live_bridge_client.py`, `tests/run_plugin_tests.py`)
+- `Summary`: Added `--all` + automatic gitless-container workspace file discovery (`discover_workspace_files`) in `verify_universal.py` so environments without `.git` never silently audit 0 files; added `check_csharp_syntax_deep` catching statement indexer trailing-comma syntax bugs (`CS1002`/`CS1513`) with zero false positives on collection initializers; documented `acoustic_audit`, `acoustic_probe`, and `ui_perf_audit` in `live_bridge_client.py`; added regression test in `tests/run_plugin_tests.py`.
+- `Files`: `plugin.json`, `CHANGELOG.md`, `scripts/verify_universal.py`, `scripts/live_bridge_client.py`, `tests/run_plugin_tests.py`, `.agents/docs/{EXTERNAL_AI_SYNC.md,PROJECT_HISTORY.md,HANDOFF.md}`
+
 ### 2026-11-22 | `pending-push` | `AI Studio` | Plugin v2.6.0-r2 — Cloudflare Unified Telemetry Hub v3 & Live Bridge v3 Dynamic Client
 - `Scope`: `dual-project+plugin` (`scripts/live_diagnostics.py`, `scripts/live_bridge_client.py`)
 - `Summary`: Upgraded universal `scripts/live_diagnostics.py` with zero-dep Cloudflare Unified Telemetry Hub v3 client (`--cloudflare`, `--relay-url`, `--pair-secret`, `--history`, `derive_telemetry_headers` deriving `X-Device-Hash` + `X-Telemetry-Key`, seamless GitHub fallback for CI reports); upgraded `scripts/live_bridge_client.py` to v3 (`USER_AGENT/3.0`, `--pipeline` shorthand for `$prev` multi-step execution, updated Tier 2 unrestricted dynamic command docs).

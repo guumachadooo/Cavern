@@ -642,10 +642,33 @@ namespace Cavern.Virtualizer {
                 float xRad = activeSet[channel].x * VectorExtensions.Deg2Rad;
                 float yRad = activeSet[channel].y * VectorExtensions.Deg2Rad;
                 channelCosRight[channel] = MathF.Sin(yRad) * MathF.Cos(xRad);
+                if (activeSet[channel].active) {
+                    activeSet[channel].Filter?.Reset();
+                    activeSet[channel].Crossover?.Reset();
+                    activeSet[channel].LowDelay?.Reset();
+                }
             }
             ismRoomEngine.Reset();
             wasIsmActive = false;
             rateSrcRate = 0;
+        }
+
+        /// <summary>
+        /// Clears all convolution overlap-add buffers, crossovers, and delay lines in the active <see cref="SpatialChannels"/>
+        /// so track switches, seeks, or isolated acoustic probes never bleed residual BRIR/HRIR tails.
+        /// </summary>
+        public static void ResetActiveFilters() {
+            VirtualChannel[] activeSet = SpatialChannels;
+            if (activeSet == null) {
+                return;
+            }
+            for (int i = 0; i < activeSet.Length; i++) {
+                if (activeSet[i].active) {
+                    activeSet[i].Filter?.Reset();
+                    activeSet[i].Crossover?.Reset();
+                    activeSet[i].LowDelay?.Reset();
+                }
+            }
         }
 
         /// <summary>

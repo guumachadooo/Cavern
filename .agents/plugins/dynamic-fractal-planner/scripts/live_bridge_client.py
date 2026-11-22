@@ -294,7 +294,7 @@ def main(
     parser.add_argument("--duration", type=int, default=1800, help="Requested session TTL seconds for --wake (300..3600)")
     parser.add_argument("--reason", default="AI diagnostic & interactive QA", help="Human-readable reason shown on phone biometric prompt")
     parser.add_argument("--wake-timeout", type=int, default=90, help="Max seconds to wait for biometric approval")
-    parser.add_argument("--cmd", default="ping", help="Command name (e.g. ping, capabilities, ultra_check, ui_audit, reflect_types, reflect_members, reflect_get, reflect_set, reflect_invoke, ui_interact, shell_exec, pipeline, screenshot_ui)")
+    parser.add_argument("--cmd", default="ping", help="Command name (e.g. ping, capabilities, ultra_check, acoustic_audit, acoustic_probe, ui_perf_audit, ui_audit, reflect_types, reflect_members, reflect_get, reflect_set, reflect_invoke, ui_interact, shell_exec, pipeline, screenshot_ui)")
     parser.add_argument("--args", default="{}", help="JSON object of command arguments")
     parser.add_argument("--batch", default="", help="JSON array of {cmd, args} steps (shorthand for --cmd batch)")
     parser.add_argument("--pipeline", default="", help="JSON array of {cmd, args} steps with $prev result chaining (shorthand for --cmd pipeline, Tier 2)")

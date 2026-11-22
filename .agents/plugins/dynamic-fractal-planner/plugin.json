@@ -1,8 +1,8 @@
 {
   "name": "dynamic-fractal-planner",
   "displayName": "Dynamic Fractal Planner",
-  "version": "2.6.0",
-  "description": "v3 quota-efficient lean/strict adaptive planning, 4-layer triage, forward wiring-gate, read-only recon sweep, wave handoff & archive guard, multi-layer build cascade/dedup, timeless error-learner, uncached live diagnostics, biometric live bridge v2 client & autonomous dual-scope self-evolution.",
+  "version": "2.7.0",
+  "description": "v3 quota-efficient lean/strict adaptive planning, 4-layer triage, forward wiring-gate, read-only recon sweep, wave handoff & archive guard, multi-layer build cascade/dedup, gitless & deep C# pre-push verifier, timeless error-learner, uncached live diagnostics, biometric live bridge v3 client & autonomous dual-scope self-evolution.",
   "author": {
     "name": "guumachadooo"
   },

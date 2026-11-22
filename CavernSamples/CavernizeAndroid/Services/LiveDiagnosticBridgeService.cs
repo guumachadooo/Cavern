@@ -47,7 +47,7 @@ public interface ILiveBridgeAppHost {
     Task<(bool ok, string json)> UiInteractAsync(JsonElement argsEl);
     Task<(bool ok, string output)> ExecuteOnUiThreadReflectAsync(Func<(bool ok, string output)> fn);
     object GetReflectionRoot(string rootName);
-    Task<List<SelfCheckItem>> RunLiveUiSelfAuditAsync(Action<string> onProgress, CancellationToken ct);
+    Task<(List<SelfCheckItem> Checks, List<UiPerfSample> PerfSamples)> RunLiveUiSelfAuditAsync(Action<string> onProgress, CancellationToken ct);
     Task ApplySettingsChangedAsync();
 }
 
@@ -129,11 +129,14 @@ public static class LiveDiagnosticBridgeService {
         new("file_read", 0, "Read bounded sanitized text snippet from confined app/log file", "{path:string, maxChars?:100..60000, tail?:bool}"),
         new("native_status", 0, "Verify bundled W^X ARM64 NativeLibraryDir binaries & sizes", "{}"),
         new("ui_tree", 0, "Dump live Android View hierarchy of active MainActivity window", "{maxDepth?:1..10}"),
+        new("acoustic_audit", 0, "Run L11 Intelligent Acoustic Differential Oracle (HRTF/Upmix/LGSR/ISM/UserConfig fingerprints)", "{quick?:bool, format?:'json'|'markdown'}"),
         new("batch", 0, "Execute up to 15 sequential commands in one round-trip (enforces each command's tier)", "{commands:[{cmd:string, args?:object}]}"),
 
         // Tier 1: Interactive App Control, QA & Total-App Live Audit
-        new("ultra_check", 1, "Run 10-layer Total + Live UI/Modal/Controls self-audit", "{}"),
-        new("ui_audit", 1, "Run L8-L10 Live UI Tabs, 27-Modal Smoke & Controls audit only", "{}"),
+        new("ultra_check", 1, "Run 12-layer Total + Acoustic Differential + Live UI/Modal/Controls/Perf-Jank self-audit", "{}"),
+        new("ui_audit", 1, "Run L8-L10+L12 Live UI Tabs, 27-Modal Smoke, Controls & Choreographer Perf/Jank audit", "{}"),
+        new("ui_perf_audit", 1, "Run L12 Choreographer UI open-latency, main-thread block & dropped-frame jank profile ranked slowest-first", "{}"),
+        new("acoustic_probe", 1, "Run custom on-demand differential A/B psychoacoustic probe with arbitrary HRTF/ISM/MagLS/ITD/Yaw/Upmix/LGSR flags", "{profileId?:string, minPhase?:bool, magLsOrder?:0..3, bioItd?:bool, headWidthCm?:number, manualItdUs?:number, ismRoom?:bool, ismPreset?:0..4, ismLevel?:number, nearField?:bool, nearFieldDistM?:number, yawDeg?:number, pitchDeg?:number, sourceAzDeg?:number, sourceElDeg?:number, sampleRate?:number, upmix?:bool, lgsr?:bool, compareDirect?:bool, signal?:'white'|'pink'|'sine1k'|'impulse'}"),
         new("settings_set", 1, "Update non-secret AppSettingsStore property via reflection & refresh UI", "{key:string, value:any} or {values:{k:v}}"),
         new("tab_switch", 1, "Switch MainActivity bottom navigation tab", "{index?:0..4, name?:'player'|'room'|'studio'|'stems'|'settings'}"),
         new("playback_control", 1, "Control real-time player playback", "{action:'play'|'pause'|'toggle'|'stop'|'next'|'prev'|'seek'|'seek_rel'|'loop', value?:number}"),
@@ -847,17 +850,67 @@ public static class LiveDiagnosticBridgeService {
                     store.LastSelfCheckSummary = rep.CompactSummary;
                     return (true, rep.ToMarkdown());
                 }
+                case "acoustic_audit": {
+                    bool quick = GetArgBool(argsEl, "quick", false);
+                    string fmt = GetArgString(argsEl, "format", "json").Trim().ToLowerInvariant();
+                    AcousticAuditReport rep = await Task.Run(() => AcousticAuditEngine.RunSuite(context, store, quick, ct), ct).ConfigureAwait(false);
+                    return (rep.FailCount == 0, fmt == "markdown" || fmt == "md" ? rep.ToMarkdownTable() : rep.ToJson());
+                }
+                case "acoustic_probe": {
+                    AcousticCustomProbeRequest req = new() {
+                        ProfileId = GetArgString(argsEl, "profileId", BinauralProfileService.DefaultProfileId),
+                        MinimumPhase = GetArgBool(argsEl, "minPhase", false),
+                        MagLsOrder = GetArgInt(argsEl, "magLsOrder", 0, 0, 3),
+                        BiometricItdEnabled = GetArgBool(argsEl, "bioItd", false),
+                        HeadWidthCm = (float)(GetArgNullableDouble(argsEl, "headWidthCm") ?? Cavern.Virtualizer.BiometricItdScaler.ReferenceHeadWidthCm),
+                        ManualItdOffsetUs = (float)(GetArgNullableDouble(argsEl, "manualItdUs") ?? 0.0),
+                        IsmRoomEnabled = GetArgBool(argsEl, "ismRoom", false),
+                        IsmPresetIndex = GetArgInt(argsEl, "ismPreset", 0, 0, 4),
+                        IsmReflectionLevel = (float)(GetArgNullableDouble(argsEl, "ismLevel") ?? 1.0),
+                        NearFieldEnabled = GetArgBool(argsEl, "nearField", false),
+                        NearFieldDistanceM = (float)(GetArgNullableDouble(argsEl, "nearFieldDistM") ?? 3.0),
+                        ListenerYawDeg = (float)(GetArgNullableDouble(argsEl, "yawDeg") ?? 0.0),
+                        ListenerPitchDeg = (float)(GetArgNullableDouble(argsEl, "pitchDeg") ?? 0.0),
+                        SourceAzimuthDeg = (float)(GetArgNullableDouble(argsEl, "sourceAzDeg") ?? 0.0),
+                        SourceElevationDeg = (float)(GetArgNullableDouble(argsEl, "sourceElDeg") ?? 0.0),
+                        SampleRate = GetArgInt(argsEl, "sampleRate", 48000, 8000, 192000),
+                        UseParametricUpmix = GetArgBool(argsEl, "upmix", false),
+                        UseLgsrRestore = GetArgBool(argsEl, "lgsr", false),
+                        CompareAgainstDirect = GetArgBool(argsEl, "compareDirect", true),
+                        SignalType = GetArgString(argsEl, "signal", "white")
+                    };
+                    string json = await Task.Run(() => AcousticAuditEngine.RunCustomProbeJson(context, req), ct).ConfigureAwait(false);
+                    return (true, json);
+                }
                 case "ui_audit": {
                     if (host == null) {
                         return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
                     }
-                    List<SelfCheckItem> items = await host.RunLiveUiSelfAuditAsync(null, ct).ConfigureAwait(false);
+                    (List<SelfCheckItem> items, List<UiPerfSample> perfSamples) = await host.RunLiveUiSelfAuditAsync(null, ct).ConfigureAwait(false);
                     return (items.All(i => i.Status != SelfCheckStatus.Fail),
                         JsonSerializer.Serialize(new {
                             pass = items.Count(i => i.Status == SelfCheckStatus.Pass),
                             warn = items.Count(i => i.Status == SelfCheckStatus.Warn),
                             fail = items.Count(i => i.Status == SelfCheckStatus.Fail),
-                            checks = items
+                            checks = items,
+                            uiPerfSlowest = perfSamples.OrderByDescending(p => p.FirstFrameMs).Take(12).ToList()
+                        }, new JsonSerializerOptions { WriteIndented = true }));
+                }
+                case "ui_perf_audit": {
+                    if (host == null) {
+                        return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
+                    }
+                    (List<SelfCheckItem> items, List<UiPerfSample> perfSamples) = await host.RunLiveUiSelfAuditAsync(null, ct).ConfigureAwait(false);
+                    SelfCheckItem perfSummary = items.FirstOrDefault(i => i.Id == "ui.perf_latency_jank");
+                    List<UiPerfSample> ranked = perfSamples.OrderByDescending(p => p.FirstFrameMs).ToList();
+                    return (perfSummary == null || perfSummary.Status != SelfCheckStatus.Fail,
+                        JsonSerializer.Serialize(new {
+                            verdict = perfSummary?.Status.ToString() ?? "OK",
+                            summary = perfSummary?.Details ?? "",
+                            stalls = ranked.Count(p => p.Status == "STALL"),
+                            slows = ranked.Count(p => p.Status == "SLOW"),
+                            totalDroppedFrames = ranked.Sum(p => p.DroppedFrames),
+                            targets = ranked
                         }, new JsonSerializerOptions { WriteIndented = true }));
                 }
                 case "summary":

@@ -3441,6 +3441,28 @@ class TestV260UniversalEfficiencyAndSelfEvolution(unittest.TestCase):
             _, fails, _ = verify_universal.run_static_checks(repo, {}, changed=[".agents/docs/BUILD_LESSONS.md"])
             self.assertTrue(any("timelessness audit failed" in f for f in fails), fails)
 
+    def test_verify_universal_csharp_syntax_deep_and_gitless_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)  # intentionally gitless container
+            (repo / "src").mkdir()
+            cs = repo / "src" / "Strings.cs"
+            cs.write_text(
+                'class Strings {\n'
+                '    static Dictionary<string, string> Create() => new() {\n'
+                '        ["ValidInit"] = "ok",\n'
+                '    };\n'
+                '    static void Apply(Dictionary<string, string> d) {\n'
+                '        d["OkStmt"] = "ok";\n'
+                '        d["BrokenStmt"] = "oops",\n'
+                '    }\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            discovered, fails, _ = verify_universal.run_static_checks(repo, {})
+            self.assertIn("src/Strings.cs", discovered)
+            self.assertTrue(any("src/Strings.cs:7:" in f and "ends with `,`" in f for f in fails), fails)
+            self.assertFalse(any("src/Strings.cs:3:" in f for f in fails), fails)
+
 
 def _stamp_plugin_tests_passed() -> None:
     art_dir = (os.environ.get("PLANNER_ARTIFACT_DIR") or os.environ.get("CAVERN_ARTIFACT_DIR") or "").strip()

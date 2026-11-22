@@ -150,7 +150,7 @@ public partial class MainActivity : ILiveBridgeAppHost {
             }
             string cd = v.ContentDescription ?? "";
             bool? isChecked = v is CompoundButton cb ? cb.Checked : null;
-            int? progress = v is SeekBar sb ? sb.Progress : (v is OneUiSeekBar osb ? osb.Progress : null);
+            int? progress = v is SeekBar sb ? sb.Progress : (v is OneUiWaveMediaSeekBar osb ? osb.Progress : null);
             int? selectedIdx = v is OneUiInlineSelector sel ? sel.SelectedIndex : null;
             List<object> children = null;
             if (depth < maxDepth && v is ViewGroup vg && vg.ChildCount > 0) {
@@ -368,8 +368,11 @@ public partial class MainActivity : ILiveBridgeAppHost {
                     OpenSettingsCategory(-1);
                     return (true, JsonSerializer.Serialize(new { action, result = "returned to Settings Hub" }));
                 }
-                OnBackPressedDispatcher.OnBackPressed();
-                return (true, JsonSerializer.Serialize(new { action, result = "dispatched OnBackPressed" }));
+                if (HandleInternalBackStep()) {
+                    return (true, JsonSerializer.Serialize(new { action, result = "handled internal back step" }));
+                }
+                MoveTaskToBack(true);
+                return (true, JsonSerializer.Serialize(new { action, result = "moved task to back" }));
             }
             case "find": {
                 List<View> found = FindViews(query, typeFilter, clickableOnly: false, includeDialogs);
@@ -383,7 +386,7 @@ public partial class MainActivity : ILiveBridgeAppHost {
                         desc = v.ContentDescription ?? "",
                         clickable = v.Clickable && v.Enabled,
                         @checked = v is CompoundButton cb ? (bool?)cb.Checked : null,
-                        progress = v is SeekBar sb ? (int?)sb.Progress : (v is OneUiSeekBar osb ? (int?)osb.Progress : null),
+                        progress = v is SeekBar sb ? (int?)sb.Progress : (v is OneUiWaveMediaSeekBar osb ? (int?)osb.Progress : null),
                         selectedIdx = v is OneUiInlineSelector sel ? (int?)sel.SelectedIndex : null,
                         x = loc[0],
                         y = loc[1],
@@ -430,13 +433,13 @@ public partial class MainActivity : ILiveBridgeAppHost {
             case "set_progress": {
                 int val = ReadJsonInt(argsEl, "value", 0, 0, 100000);
                 List<View> matches = FindViews(query, typeFilter, clickableOnly: false, includeDialogs)
-                    .Where(v => v is SeekBar or OneUiSeekBar)
+                    .Where(v => v is SeekBar or OneUiWaveMediaSeekBar)
                     .ToList();
                 if (matches.Count == 0) {
-                    return (false, $"No visible SeekBar/OneUiSeekBar found matching '{query}'.");
+                    return (false, $"No visible SeekBar/OneUiWaveMediaSeekBar found matching '{query}'.");
                 }
                 View target = matches[Math.Clamp(index, 0, matches.Count - 1)];
-                if (target is OneUiSeekBar osb) {
+                if (target is OneUiWaveMediaSeekBar osb) {
                     osb.Progress = val;
                 } else if (target is SeekBar sb) {
                     sb.Progress = val;
@@ -523,7 +526,7 @@ public partial class MainActivity : ILiveBridgeAppHost {
         };
     }
 
-    Task<List<SelfCheckItem>> ILiveBridgeAppHost.RunLiveUiSelfAuditAsync(Action<string> onProgress, CancellationToken ct) =>
+    Task<(List<SelfCheckItem> Checks, List<UiPerfSample> PerfSamples)> ILiveBridgeAppHost.RunLiveUiSelfAuditAsync(Action<string> onProgress, CancellationToken ct) =>
         RunLiveUiSelfAuditInternalAsync(onProgress, ct);
 
     Task ILiveBridgeAppHost.ApplySettingsChangedAsync() => RunOnUiThreadWithTimeoutAsync(() => {

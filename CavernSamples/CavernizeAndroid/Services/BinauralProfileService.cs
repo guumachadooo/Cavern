@@ -603,6 +603,27 @@ public static class BinauralProfileService {
         }
     }
 
+    /// <summary>
+    /// Loads a bundled laboratory HRIR/BRIR profile into fresh <see cref="VirtualChannel"/> instances with the
+    /// requested Slot 5B personalization parameters, without mutating <see cref="LastPersonalizationDiagnostics"/>
+    /// or user settings. Used by Layer L11 <see cref="AcousticAuditEngine"/> inside an isolated
+    /// <see cref="VirtualizerFilter.BeginStaticStateScope"/>.
+    /// </summary>
+    internal static (VirtualChannel[] channels, int sampleRate, float refDist, int tapCount, bool isBrir, HrtfPersonalizationDiagnostics diag) LoadBundledProfileForProbe(
+        Context ctx,
+        string profileId,
+        bool minimumPhase,
+        HrtfPersonalizationConfig personalization) {
+        BinauralProfileInfo info = FindById(profileId) ?? FindById(DefaultProfileId);
+        if (info == null || info.IsDirectStereo || info.IsClassic || info.IsCustom || string.IsNullOrEmpty(info.AssetFile)) {
+            return (null, VirtualizerFilter.FilterSampleRate, 1.0f, 0, false, HrtfPersonalizationDiagnostics.Default);
+        }
+        using Stream assetStream = ctx.Assets.Open("hrir/" + info.AssetFile);
+        (VirtualChannel[] channels, int sampleRate, float refDist, int taps, HrtfPersonalizationDiagnostics diag) =
+            ReadChrirStream(assetStream, info.IsGzipped, minimumPhase && !info.IsBrir, personalization, info.IsBrir);
+        return (channels, sampleRate, refDist, taps, info.IsBrir, diag);
+    }
+
     static bool ApplyHrtfFilterOnly(Context ctx, AppSettingsStore store, string profileId, out string errorMessage) {
         errorMessage = null;
         try {

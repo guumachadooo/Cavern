@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 using Android.App;
@@ -12,10 +13,11 @@ using CavernizeAndroid.Views;
 namespace CavernizeAndroid;
 
 /// <summary>
-/// Live UI, Modal &amp; Interactive Control Self-Audit Engine (Layers L8, L9, L10 of
-/// <see cref="SelfDiagnosticEngine"/>). Walks all 5 tabs, 6 Settings categories, 20+ real modals,
-/// and live interactive controls on the Android UI thread, then cleanly restores the user's exact
-/// navigation state and dismisses all test dialogs.
+/// Live UI, Modal, Interactive Control &amp; Choreographer Latency/Frame-Jank Self-Audit Engine
+/// (Layers L8, L9, L10, L12 of <see cref="SelfDiagnosticEngine"/>). Walks all 5 tabs, 6 Settings categories,
+/// 27 real modals, and live interactive controls on the Android UI thread while sampling real Android
+/// <see cref="Choreographer"/> vsync frames to catch main-thread stalls, slow screen opens, dropped frames,
+/// text/NaN leaks, and layout defects, then cleanly restores the user's exact navigation state.
 /// </summary>
 public partial class MainActivity {
     static readonly Regex UnformattedPlaceholderRegex = new(@"\{\d+(?::[^}]+)?\}", RegexOptions.Compiled);
@@ -29,8 +31,130 @@ public partial class MainActivity {
         public readonly List<string> Warnings = [];
     }
 
-    async Task<List<SelfCheckItem>> RunLiveUiSelfAuditInternalAsync(Action<string> onProgress, CancellationToken ct) {
+    /// <summary>
+    /// Real Android Choreographer vsync frame sampler measuring inter-frame gaps and dropped frames (&gt; 20 ms)
+    /// over a bounded observation window on the UI thread.
+    /// </summary>
+    sealed class UiFrameJankSampler : Java.Lang.Object, Choreographer.IFrameCallback {
+        readonly TaskCompletionSource<(long firstFrameMs, double worstFrameMs, int droppedFrames)> tcs =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly long startTimestamp;
+        readonly int targetFrames;
+        long prevFrameNanos;
+        long firstFrameElapsedMs = -1;
+        double worstGapMs;
+        int droppedFrames;
+        int framesSeen;
+        bool finished;
+
+        public UiFrameJankSampler(long startTimestamp, int targetFrames = 3) {
+            this.startTimestamp = startTimestamp;
+            this.targetFrames = Math.Max(1, targetFrames);
+        }
+
+        public Task<(long firstFrameMs, double worstFrameMs, int droppedFrames)> Task => tcs.Task;
+
+        public void StartOnUiThread() {
+            Choreographer.Instance?.PostFrameCallback(this);
+        }
+
+        public void DoFrame(long frameTimeNanos) {
+            if (finished) {
+                return;
+            }
+            framesSeen++;
+            if (firstFrameElapsedMs < 0) {
+                firstFrameElapsedMs = (long)Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds;
+            } else {
+                double gapMs = (frameTimeNanos - prevFrameNanos) / 1_000_000.0;
+                if (gapMs > worstGapMs) {
+                    worstGapMs = gapMs;
+                }
+                if (gapMs > 20.5) { // Missed 60 Hz frame budget (16.67 ms + jitter margin)
+                    droppedFrames += Math.Max(1, (int)Math.Floor(gapMs / 16.67) - 1);
+                }
+            }
+            prevFrameNanos = frameTimeNanos;
+
+            if (framesSeen >= targetFrames) {
+                finished = true;
+                tcs.TrySetResult((firstFrameElapsedMs, Math.Round(worstGapMs, 1), droppedFrames));
+            } else {
+                Choreographer.Instance?.PostFrameCallback(this);
+            }
+        }
+    }
+
+    static (string tier, int warnBudgetMs, int stallFailMs) GetUiPerfBudget(string targetName) {
+        if (targetName is "Tab1:3DRoom" or "Modal:AutoEqProfileSelector") {
+            return ("Heavy", 350, 800);
+        }
+        if (targetName is "Tab0:Player" ||
+            targetName.StartsWith("SettingsCat", StringComparison.Ordinal) ||
+            targetName is "Modal:BinauralProfileSelector" or "Modal:PerceptualHrtfWizard" or "Modal:NeuralModels"
+                or "Modal:AutoVocalMixMatch" or "Modal:Scarlett2i2Controls" or "Modal:StudioBatch"
+                or "Modal:OnlineMetadata" or "Modal:TrackSelector" or "Modal:SmartCleanInspector") {
+            return ("Medium", 180, 420);
+        }
+        return ("Simple", 90, 240);
+    }
+
+    async Task<UiPerfSample> MeasureUiTransitionAsync(
+        string targetName,
+        Action uiTransition,
+        CancellationToken ct) {
+        ct.ThrowIfCancellationRequested();
+        long startStamp = Stopwatch.GetTimestamp();
+        UiFrameJankSampler sampler = new(startStamp, targetFrames: 3);
+
+        long uiBlockMs = await RunOnUiThreadWithTimeoutAsync(() => {
+            Stopwatch sw = Stopwatch.StartNew();
+            uiTransition();
+            sw.Stop();
+            sampler.StartOnUiThread();
+            return sw.ElapsedMilliseconds;
+        }, 4000).ConfigureAwait(false);
+
+        // Wait for 3 real Choreographer vsync frames (or bounded timeout when screen is off/headless)
+        Task timeoutTask = Task.Delay(350, ct);
+        Task completed = await Task.WhenAny(sampler.Task, timeoutTask).ConfigureAwait(false);
+        long firstFrameMs;
+        double worstFrameMs;
+        int dropped;
+        if (completed == sampler.Task) {
+            (firstFrameMs, worstFrameMs, dropped) = await sampler.Task.ConfigureAwait(false);
+        } else {
+            firstFrameMs = Math.Max(uiBlockMs, (long)Stopwatch.GetElapsedTime(startStamp).TotalMilliseconds);
+            worstFrameMs = uiBlockMs;
+            dropped = uiBlockMs > 34 ? (int)(uiBlockMs / 16.67) : 0;
+        }
+
+        (string tier, int warnBudgetMs, int stallFailMs) = GetUiPerfBudget(targetName);
+        string status;
+        if (uiBlockMs >= stallFailMs || firstFrameMs >= stallFailMs || worstFrameMs >= 250.0) {
+            status = "STALL";
+        } else if (uiBlockMs > warnBudgetMs || firstFrameMs > warnBudgetMs || dropped >= 4) {
+            status = "SLOW";
+        } else {
+            status = "OK";
+        }
+
+        return new UiPerfSample {
+            Target = targetName,
+            Complexity = tier,
+            BudgetMs = warnBudgetMs,
+            UiThreadBlockMs = uiBlockMs,
+            FirstFrameMs = firstFrameMs,
+            WorstFrameMs = worstFrameMs,
+            DroppedFrames = dropped,
+            Status = status
+        };
+    }
+
+    async Task<(List<SelfCheckItem> Checks, List<UiPerfSample> PerfSamples)> RunLiveUiSelfAuditInternalAsync(
+        Action<string> onProgress, CancellationToken ct) {
         List<SelfCheckItem> results = [];
+        List<UiPerfSample> perfSamples = [];
         if (uiDestroyed || IsFinishing) {
             results.Add(new SelfCheckItem {
                 Id = "ui.host_attached",
@@ -40,7 +164,7 @@ public partial class MainActivity {
                 ElapsedMs = 0,
                 Details = "MainActivity is not attached or finishing."
             });
-            return results;
+            return (results, perfSamples);
         }
 
         // Snapshot user navigation state so everything restores identically in finally
@@ -48,9 +172,9 @@ public partial class MainActivity {
             (activeTab, activeSettingsCategory, isSettingsProMode, settingsSearchQuery ?? ""), 4000).ConfigureAwait(false);
 
         try {
-            // ==================== L8: 5 TABS + 6 SETTINGS CATEGORIES GEOMETRY & TEXT AUDIT ====================
+            // ==================== L8: 5 TABS + 6 SETTINGS CATEGORIES GEOMETRY, TEXT & LATENCY AUDIT ====================
             ct.ThrowIfCancellationRequested();
-            onProgress?.Invoke("L8: Auditing 5 Tabs & 6 Settings Categories");
+            onProgress?.Invoke("L8/L12: Auditing 5 Tabs & 6 Settings Categories + Choreographer Latency");
             Stopwatch swL8 = Stopwatch.StartNew();
             UiAuditAccumulator accL8 = new();
 
@@ -58,15 +182,15 @@ public partial class MainActivity {
             for (int t = 0; t <= 4; t++) {
                 ct.ThrowIfCancellationRequested();
                 int tabIdx = t;
-                await RunOnUiThreadWithTimeoutAsync(() => {
+                UiPerfSample perf = await MeasureUiTransitionAsync(tabLabels[tabIdx], () => {
                     SwitchTab(tabIdx);
                     if (tabIdx == 4) {
                         ClearSettingsSearch();
                         OpenSettingsCategory(-1);
                     }
-                    return true;
-                }, 4000).ConfigureAwait(false);
-                await Task.Delay(35, ct).ConfigureAwait(false);
+                }, ct).ConfigureAwait(false);
+                perfSamples.Add(perf);
+
                 await RunOnUiThreadWithTimeoutAsync(() => {
                     AuditViewTree(rootFrameHost ?? Window?.DecorView, tabLabels[tabIdx], accL8, checkZeroSize: false);
                     return true;
@@ -84,13 +208,14 @@ public partial class MainActivity {
             for (int cat = 0; cat < 6; cat++) {
                 ct.ThrowIfCancellationRequested();
                 int catIdx = cat;
-                await RunOnUiThreadWithTimeoutAsync(() => {
+                string catLabel = $"SettingsCat{catIdx}";
+                UiPerfSample perf = await MeasureUiTransitionAsync(catLabel, () => {
                     OpenSettingsCategory(catIdx);
-                    return true;
-                }, 4000).ConfigureAwait(false);
-                await Task.Delay(35, ct).ConfigureAwait(false);
+                }, ct).ConfigureAwait(false);
+                perfSamples.Add(perf);
+
                 await RunOnUiThreadWithTimeoutAsync(() => {
-                    AuditViewTree(settingsCardsContainer ?? rootFrameHost, $"SettingsCat{catIdx}", accL8, checkZeroSize: false);
+                    AuditViewTree((View)settingsCardsContainer ?? rootFrameHost, catLabel, accL8, checkZeroSize: false);
                     return true;
                 }, 4000).ConfigureAwait(false);
             }
@@ -113,9 +238,9 @@ public partial class MainActivity {
                 Details = detL8
             });
 
-            // ==================== L9: EXHAUSTIVE LIVE MODAL SMOKE TEST ====================
+            // ==================== L9: EXHAUSTIVE LIVE MODAL SMOKE + OPEN-LATENCY PROFILING ====================
             ct.ThrowIfCancellationRequested();
-            onProgress?.Invoke("L9: Live Modal Smoke Audit (20+ Modals)");
+            onProgress?.Invoke("L9/L12: Live Modal Smoke & Open-Latency Audit (27 Modals)");
             Stopwatch swL9 = Stopwatch.StartNew();
             UiAuditAccumulator accL9 = new();
 
@@ -152,15 +277,13 @@ public partial class MainActivity {
             int openedCount = 0;
             foreach ((string modalName, Action opener) in modals) {
                 ct.ThrowIfCancellationRequested();
-                onProgress?.Invoke($"L9 Modal: {modalName}");
+                onProgress?.Invoke($"L9/L12 Modal: {modalName}");
                 try {
-                    await RunOnUiThreadWithTimeoutAsync(() => {
+                    UiPerfSample perf = await MeasureUiTransitionAsync($"Modal:{modalName}", () => {
                         OneUiModalDialog.DismissAllActiveDialogs();
                         opener();
-                        return true;
-                    }, 4000).ConfigureAwait(false);
-
-                    await Task.Delay(40, ct).ConfigureAwait(false);
+                    }, ct).ConfigureAwait(false);
+                    perfSamples.Add(perf);
 
                     await RunOnUiThreadWithTimeoutAsync(() => {
                         IReadOnlyList<Dialog> liveDlgs = OneUiModalDialog.GetActiveDialogs();
@@ -287,6 +410,41 @@ public partial class MainActivity {
                 ElapsedMs = swL10.ElapsedMilliseconds,
                 Details = detL10
             });
+
+            // ==================== L12: UI LATENCY & CHOREOGRAPHER FRAME-JANK SUMMARY ====================
+            List<UiPerfSample> stalls = perfSamples.Where(p => p.Status == "STALL").OrderByDescending(p => p.FirstFrameMs).ToList();
+            List<UiPerfSample> slows = perfSamples.Where(p => p.Status == "SLOW").OrderByDescending(p => p.FirstFrameMs).ToList();
+            long[] sortedMs = perfSamples.Select(p => p.FirstFrameMs).OrderBy(x => x).ToArray();
+            long p50 = sortedMs.Length > 0 ? sortedMs[sortedMs.Length / 2] : 0;
+            long p95 = sortedMs.Length > 0 ? sortedMs[(int)Math.Min(sortedMs.Length - 1, Math.Ceiling(sortedMs.Length * 0.95) - 1)] : 0;
+            int totalDrops = perfSamples.Sum(p => p.DroppedFrames);
+            UiPerfSample worst = perfSamples.OrderByDescending(p => p.FirstFrameMs).FirstOrDefault();
+
+            SelfCheckStatus stL12 = stalls.Count > 0
+                ? SelfCheckStatus.Fail
+                : (slows.Count > 0 ? SelfCheckStatus.Warn : SelfCheckStatus.Pass);
+            string detL12;
+            if (stalls.Count > 0) {
+                string topStalls = string.Join(", ", stalls.Take(5).Select(s => $"{s.Target}({s.UiThreadBlockMs}ms/1st={s.FirstFrameMs}ms>{s.BudgetMs}ms)"));
+                detL12 = $"{stalls.Count} UI stall(s), {slows.Count} slow ({perfSamples.Count} targets, P50={p50}ms, P95={p95}ms, drops={totalDrops}): {topStalls}";
+            } else if (slows.Count > 0) {
+                string topSlows = string.Join(", ", slows.Take(5).Select(s => $"{s.Target}({s.UiThreadBlockMs}ms/1st={s.FirstFrameMs}ms>{s.BudgetMs}ms)"));
+                detL12 = $"0 stalls, {slows.Count} slower-than-budget target(s) ({perfSamples.Count} profiled, P50={p50}ms, P95={p95}ms, drops={totalDrops}): {topSlows}";
+            } else {
+                string worstDesc = worst != null ? $"{worst.Target}={worst.FirstFrameMs}ms" : "n/a";
+                detL12 = string.Format(
+                    CultureInfo.InvariantCulture,
+                    "All {0} screens/modals within latency budget (P50={1}ms, P95={2}ms, max={3}, drops={4})",
+                    perfSamples.Count, p50, p95, worstDesc, totalDrops);
+            }
+            results.Add(new SelfCheckItem {
+                Id = "ui.perf_latency_jank",
+                Layer = "L12-PerfJank",
+                Name = "UI Open Latency & Choreographer Frame-Jank Profiler",
+                Status = stL12,
+                ElapsedMs = perfSamples.Sum(p => p.FirstFrameMs),
+                Details = detL12
+            });
         } finally {
             // Guaranteed restore of the user's exact screen state
             try {
@@ -308,7 +466,7 @@ public partial class MainActivity {
             }
         }
 
-        return results;
+        return (results, perfSamples);
     }
 
     void AuditViewTree(View root, string scopeName, UiAuditAccumulator acc, bool checkZeroSize) {
@@ -335,13 +493,8 @@ public partial class MainActivity {
                         acc.Failures.Add($"{scopeName}: unformatted placeholder in '{TruncateAuditText(txt)}'");
                     }
                     // Check NaN / Infinity leaks (whole token)
-                    if (txt.Contains("NaN", StringComparison.Ordinal) ||
-                        txt.Contains("Infinity", StringComparison.Ordinal) ||
-                        txt.Contains("∞", StringComparison.Ordinal)) {
-                        // Exclude benign infinity range symbols only if explicitly intentional; flag NaN/Infinity as defect
-                        if (txt.Contains("NaN", StringComparison.Ordinal) || txt.Contains("Infinity", StringComparison.Ordinal)) {
-                            acc.Failures.Add($"{scopeName}: NaN/Infinity text leak in '{TruncateAuditText(txt)}'");
-                        }
+                    if (txt.Contains("NaN", StringComparison.Ordinal) || txt.Contains("Infinity", StringComparison.Ordinal)) {
+                        acc.Failures.Add($"{scopeName}: NaN/Infinity text leak in '{TruncateAuditText(txt)}'");
                     }
                     // Check raw leaked AndroidStrings PascalCase key (e.g. "CloudLogUploadBtn")
                     string trimmed = txt.Trim();

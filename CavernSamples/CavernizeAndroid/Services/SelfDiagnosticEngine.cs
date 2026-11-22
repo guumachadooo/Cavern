@@ -53,8 +53,19 @@ public sealed class SelfCheckItem {
     public string Details { get; init; } = "";
 }
 
+public sealed class UiPerfSample {
+    public string Target { get; init; } = "";
+    public string Complexity { get; init; } = "Simple";
+    public int BudgetMs { get; init; } = 90;
+    public long UiThreadBlockMs { get; init; }
+    public long FirstFrameMs { get; init; }
+    public double WorstFrameMs { get; init; }
+    public int DroppedFrames { get; init; }
+    public string Status { get; init; } = "OK";
+}
+
 public sealed class SelfCheckReport {
-    public int SchemaVersion { get; init; } = 1;
+    public int SchemaVersion { get; init; } = 3;
     public string Mode { get; init; } = "quick";
     public string SessionId { get; init; } = "";
     public string ExecutedAtUtc { get; init; } = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture);
@@ -69,6 +80,8 @@ public sealed class SelfCheckReport {
     public int FailCount { get; init; }
     public int SkipCount { get; init; }
     public List<SelfCheckItem> Checks { get; init; } = [];
+    public AcousticAuditReport AcousticAudit { get; init; }
+    public List<UiPerfSample> UiPerfSamples { get; init; } = [];
 
     public string OverallVerdict =>
         FailCount > 0 ? "FAIL" : (WarnCount > 0 ? "WARN" : "PASS");
@@ -101,6 +114,23 @@ public sealed class SelfCheckReport {
                 .Replace("\r", " ")
                 .Replace("\n", " ");
             sb.AppendLine($"| {item.Layer} | `{item.Id}` | **{badge}** | {item.ElapsedMs} ms | {safeDetails} |");
+        }
+        if (AcousticAudit != null && AcousticAudit.Scenarios.Count > 0) {
+            sb.AppendLine();
+            sb.AppendLine(AcousticAudit.ToMarkdownTable());
+        }
+        if (UiPerfSamples != null && UiPerfSamples.Count > 0) {
+            sb.AppendLine();
+            sb.AppendLine("### L12 UI Latency & Choreographer Frame-Jank Profile (Slowest Targets)");
+            sb.AppendLine();
+            sb.AppendLine("| Target | Tier | Status | UI Block | 1st Frame | Budget | Worst Frame | Drops |");
+            sb.AppendLine("|---|---|---|---:|---:|---:|---:|---:|");
+            foreach (UiPerfSample s in UiPerfSamples.OrderByDescending(x => x.FirstFrameMs).Take(15)) {
+                sb.AppendLine(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "| `{0}` | {1} | **{2}** | {3} ms | {4} ms | {5} ms | {6:0.0} ms | {7} |",
+                    s.Target, s.Complexity, s.Status, s.UiThreadBlockMs, s.FirstFrameMs, s.BudgetMs, s.WorstFrameMs, s.DroppedFrames));
+            }
         }
         return sb.ToString();
     }
@@ -246,13 +276,66 @@ public static class SelfDiagnosticEngine {
         // Layer 7: Live Runtime Log & Crash Regression Audit (ALL modes!)
         AddCheck("logs.runtime_errors", "L7-RuntimeLogs", "Runtime AppLogger Fatal/Error/Crash Audit", CheckRuntimeLogHealth);
 
-        // Layers 8, 9, 10: Live UI Tabs, Settings Categories, 27-Modal Smoke & Interactive Controls (Ultra Mode)
+        // Layer 11: Intelligent Acoustic Differential Oracle & Psychoacoustic Fingerprint Lab (ALL modes: 6 core in Quick, 14 full in Full/Ultra)
+        AcousticAuditReport acousticReport = null;
+        ct.ThrowIfCancellationRequested();
+        onProgress?.Invoke("L11-Acoustic · Acoustic Differential Oracle (Headphone Virtualization)...");
+        Stopwatch acousticSw = Stopwatch.StartNew();
+        try {
+            acousticReport = AcousticAuditEngine.RunSuite(context, store, quickSubset: !deepDsp, ct: ct);
+            acousticSw.Stop();
+            SelfCheckStatus acStatus = acousticReport.FailCount > 0
+                ? SelfCheckStatus.Fail
+                : (acousticReport.WarnCount > 0 ? SelfCheckStatus.Warn : SelfCheckStatus.Pass);
+            string acSummary = $"{acousticReport.PassCount} PASS · {acousticReport.WarnCount} WARN · {acousticReport.FailCount} FAIL ({acousticReport.Scenarios.Count} scenarios · cfg={acousticReport.ActiveUserConfigSummary})";
+            checks.Add(new SelfCheckItem {
+                Id = "acoustic.differential_oracle",
+                Layer = "L11-Acoustic",
+                Name = "Acoustic Differential Oracle (L11)",
+                Status = acStatus,
+                ElapsedMs = acousticSw.ElapsedMilliseconds,
+                Details = acSummary
+            });
+            foreach (AcousticScenarioResult sc in acousticReport.Scenarios) {
+                if (!string.Equals(sc.Status, "PASS", StringComparison.OrdinalIgnoreCase)) {
+                    checks.Add(new SelfCheckItem {
+                        Id = $"acoustic.{sc.Id.ToLowerInvariant()}",
+                        Layer = "L11-Acoustic",
+                        Name = $"Acoustic [{sc.Id}]",
+                        Status = string.Equals(sc.Status, "FAIL", StringComparison.OrdinalIgnoreCase)
+                            ? SelfCheckStatus.Fail
+                            : SelfCheckStatus.Warn,
+                        ElapsedMs = sc.ElapsedMs,
+                        Details = $"{sc.VerdictNote} | {sc.Fingerprint.CompactMetrics()}"
+                    });
+                }
+            }
+        } catch (System.OperationCanceledException) {
+            throw;
+        } catch (Exception ex) {
+            acousticSw.Stop();
+            checks.Add(new SelfCheckItem {
+                Id = "acoustic.differential_oracle",
+                Layer = "L11-Acoustic",
+                Name = "Acoustic Differential Oracle (L11)",
+                Status = SelfCheckStatus.Fail,
+                ElapsedMs = acousticSw.ElapsedMilliseconds,
+                Details = $"{ex.GetType().Name}: {ex.Message}"
+            });
+        }
+
+        // Layers 8, 9, 10, 12: Live UI Tabs, Settings Categories, 27-Modal Smoke, Interactive Controls & UI Latency/Frame-Jank Profiler (Ultra Mode)
+        List<UiPerfSample> uiPerfSamples = [];
         if (mode == SelfCheckMode.Ultra) {
             ILiveBridgeAppHost uiHost = LiveDiagnosticBridgeService.TryGetHostInternal();
             if (uiHost != null) {
                 try {
-                    List<SelfCheckItem> uiChecks = await uiHost.RunLiveUiSelfAuditAsync(onProgress, ct).ConfigureAwait(false);
+                    (List<SelfCheckItem> uiChecks, List<UiPerfSample> perfSamples) =
+                        await uiHost.RunLiveUiSelfAuditAsync(onProgress, ct).ConfigureAwait(false);
                     checks.AddRange(uiChecks);
+                    if (perfSamples != null && perfSamples.Count > 0) {
+                        uiPerfSamples.AddRange(perfSamples);
+                    }
                 } catch (System.OperationCanceledException) {
                     throw;
                 } catch (Exception ex) {
@@ -281,7 +364,7 @@ public static class SelfDiagnosticEngine {
         (string ver, long build) = AppUpdateService.GetInstalledVersion(context);
 
         SelfCheckReport report = new() {
-            SchemaVersion = 2,
+            SchemaVersion = 3,
             Mode = modeName,
             SessionId = AppLogger.SessionId,
             ExecutedAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
@@ -295,7 +378,9 @@ public static class SelfDiagnosticEngine {
             WarnCount = checks.Count(c => c.Status == SelfCheckStatus.Warn),
             FailCount = checks.Count(c => c.Status == SelfCheckStatus.Fail),
             SkipCount = checks.Count(c => c.Status == SelfCheckStatus.Skip),
-            Checks = checks
+            Checks = checks,
+            AcousticAudit = acousticReport,
+            UiPerfSamples = uiPerfSamples
         };
 
         if (report.FailCount > 0) {
@@ -747,10 +832,11 @@ public static class SelfDiagnosticEngine {
         float[] r = GenerateSineMono(48000, 2048, 880f, 0.2f);
         stft.AnalyzeOnly(l, r, 2048);
         SoundfieldTelemetry tel = stft.LatestTelemetry;
-        if (!float.IsFinite(tel.Diffuseness) || !float.IsFinite(tel.FrontAzimuthDeg)) {
-            return (SelfCheckStatus.Fail, $"STFT non-finite telemetry: diff={tel.Diffuseness}, az={tel.FrontAzimuthDeg}");
+        float doaAzDeg = MathF.Atan2(tel.DominantDoa.X, tel.DominantDoa.Z) * (180f / MathF.PI);
+        if (!float.IsFinite(tel.Diffuseness) || !float.IsFinite(tel.Coherence) || !float.IsFinite(doaAzDeg)) {
+            return (SelfCheckStatus.Fail, $"STFT non-finite telemetry: diff={tel.Diffuseness}, coh={tel.Coherence}, az={doaAzDeg}");
         }
-        return (SelfCheckStatus.Pass, $"STFT telemetry finite (diffuseness={tel.Diffuseness:0.00}, az={tel.FrontAzimuthDeg:0.0} deg)");
+        return (SelfCheckStatus.Pass, $"STFT telemetry finite (diff={tel.Diffuseness:0.00}, coh={tel.Coherence:0.00}, doaAz={doaAzDeg:0.0} deg)");
     }
 
     static (SelfCheckStatus, string) CheckNearFieldAndItdPhysics() {

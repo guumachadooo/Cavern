@@ -377,7 +377,9 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
             ownedUpmixers.Add(upmixer);
             ActiveTelemetryProvider = upmixer;
 
-            listener.LFESeparation = channels.Contains(ReferenceChannel.ScreenLFE); // Apply crossover if LFE is not present
+            // Headphones use full-band HRIRs without a separate physical subwoofer; only engage LFE bass-management
+            // crossover on physical multi-speaker layouts lacking a native .1 LFE track.
+            listener.LFESeparation = Listener.HeadphoneVirtualizer || channels.Contains(ReferenceChannel.ScreenLFE);
             return upmixer.IntermediateSources;
         } else {
             listener.LFESeparation = true;

@@ -6,7 +6,7 @@
 
 ---
 
-## 1. Core Timeless Build & Commit Lessons (`BL-001` .. `BL-016`)
+## 1. Core Timeless Build & Commit Lessons (`BL-001` .. `BL-017`)
 
 ### `BL-001` | SDK, TFM, MSBuild & CI Runner Version Drift
 - `Category`: `toolchain-ci`
@@ -152,9 +152,18 @@
 - `DynamicLookup`: Fetch latest live CI diagnostics (`python3 -B .agents/scripts/fetch_live_diagnostics.py --ci`) && check `ci/latest-learned-lessons.md` before starting follow-up fixes.
 - `AutoGuard`: `planner_stop.py` + `planner_guard_command.py` + CI `error_learner.py` report
 
+### `BL-017` | Statement-vs-Initializer Syntax & Local Roslyn CI-Parity Verification (`CS1002`, `CS1513`, `CS0019`, `CS1729`)
+- `Category`: `pre-push-ci-parity`
+- `Codes`: `CS1002, CS1513, CS0019, CS0246, CS1729`
+- `Keywords`: `trailing comma, ApplyPortuguese, indexer assignment, check_android_cs.py --ci-parity, Roslyn analyzers, gitless container, verify_universal --all`
+- `RootCause`: Pasting dictionary initializer entries (`,`) into statement blocks (`d["Key"] = "...";`), coalescing unrelated Android `View` subclasses w/o explicit `(View)` upcast (`CS0019`), or assuming git-based static checks cover gitless containers lets syntax & type errors escape to cloud CI.
+- `TimelessRule`: ALWAYS terminate statement assignments w/ `;` (reserve `,` strictly for collection/object initializers); explicitly upcast heterogeneous `View` coalescing (`(View)a ?? b`); BEFORE handing off or pushing C#/C++/Android edits, ALWAYS run the full local CI-parity Roslyn + analyzer verifier (`python3 -B .agents/scripts/check_android_cs.py --ci-parity --strict-warnings`) AND universal static checks (`verify_universal.py --all` in gitless containers).
+- `DynamicLookup`: Run `python3 -B .agents/scripts/check_android_cs.py --ci-parity --strict-warnings` (auto-fetches current portable SDK & target Android reference assembly matching `CavernizeAndroid.csproj`) && inspect `fetch_live_diagnostics.py --ci` on any remote mismatch.
+- `AutoGuard`: `check_csharp_syntax_deep` + gitless `--all` in `verify_universal.py` + 6-layer `check_android_cs.py --ci-parity`
+
 ---
 
 ## 2. Dynamically Learned Lessons (Auto-Managed by `error_learner.py`)
 <!-- AUTO-LEARNED-LESSONS:START -->
-(No new uncatalogued structural lessons pending beyond `BL-001`..`BL-016`.)
+(No new uncatalogued structural lessons pending beyond `BL-001`..`BL-017`.)
 <!-- AUTO-LEARNED-LESSONS:END -->

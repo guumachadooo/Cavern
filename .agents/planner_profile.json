@@ -364,9 +364,29 @@
         ".cs"
       ],
       "run_on_force": true,
-      "on_upstream_fail_command": "python3 .agents/scripts/check_android_cs.py",
+      "on_upstream_fail_command": "python3 .agents/scripts/check_android_cs.py --ci-parity --strict-warnings",
       "trigger_on_upstream_fail": true,
-      "command": "python3 .agents/scripts/check_android_cs.py"
+      "command": "python3 .agents/scripts/check_android_cs.py --ci-parity --strict-warnings"
+    },
+    {
+      "label": "Cavern 6-Layer Local CI-Parity Check (Portable SDK + Android Ref + Analyzers)",
+      "conditions": {
+        "not_exists_path": "/root/.dotnet/dotnet"
+      },
+      "trigger_path_prefixes": [
+        "Cavern/",
+        "Cavern.Format/",
+        "CavernSamples/"
+      ],
+      "trigger_extensions": [
+        ".cs",
+        ".csproj",
+        ".c",
+        ".h",
+        ".xml"
+      ],
+      "run_on_force": true,
+      "command": "python3 -B .agents/scripts/check_android_cs.py --ci-parity --strict-warnings"
     },
     {
       "label": "Native cavernize_proaudio C11 unit tests",

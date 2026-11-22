@@ -249,6 +249,7 @@ namespace Cavern.Virtualizer {
         int delayBufferMask;
         int delayBufferLength;
         int writeIndex;
+        float activeEnergyNorm = 1f;
 
         // Per-channel 3-band circular delay lines & 1-pole complementary split states (zero-GC)
         float[][] delayLow;
@@ -459,8 +460,10 @@ namespace Cavern.Virtualizer {
                 AccumulateTapTable(tapTable, activeTapCount, channels, baseWrite, mask, blockSize, 1f, 1f, 0);
             }
 
-            // 4. Advance circular write cursor and mix feed-forward reflections into pre-HRIR channel buffers
+            // 4. Advance circular write cursor and mix energy-conserving feed-forward reflections into pre-HRIR buffers
+            // (exact direct+early RMS normalization keeps 0 dB loudness parity when toggling ISM Room ON/OFF)
             writeIndex = (baseWrite + blockSize) & mask;
+            float norm = activeEnergyNorm;
             for (int ch = 0; ch < channels; ch++) {
                 if (!channelIsSpatial[ch]) {
                     continue;
@@ -468,7 +471,7 @@ namespace Cavern.Virtualizer {
                 float[] dst = channelBuffers[ch];
                 float[] acc = reflectionAccum[ch];
                 for (int s = 0; s < blockSize; s++) {
-                    dst[s] += acc[s];
+                    dst[s] = (dst[s] + acc[s]) * norm;
                 }
             }
         }
@@ -611,11 +614,14 @@ namespace Cavern.Virtualizer {
             float speakerRadius = Math.Min(baseRadius, Math.Max(0.55f, minHalf * 0.78f));
 
             activeTapCount = ActiveReflectionCount;
+            double totalMidReflPower = 0.0;
+            int spatialChCount = 0;
 
             for (int srcCh = 0; srcCh < channels; srcCh++) {
                 if (!channelIsSpatial[srcCh]) {
                     continue;
                 }
+                spatialChCount++;
 
                 // Virtual speaker ring is anchored in fixed world room coordinates (origin = room center)
                 // rather than sliding with the listener's 6DoF offset
@@ -684,6 +690,18 @@ namespace Cavern.Virtualizer {
                         airH = (float)AirAbsorptionFilter.ComputeLinearGain(6000.0, extraPathMeters, airTempC, airRhPct);
                     }
 
+                    // Balanced reactive wall-impedance polarity dispersion prevents unphysical DC/sub-bass
+                    // coherent lockup across opposing mirror walls while preserving exact arrival times and RMS energy.
+                    int polarityHash = (t >= Order1ReflectionCount)
+                        ? ((Math.Abs(nx) + Math.Abs(ny) * 2 + Math.Abs(nz) * 3 + (nx < 0 ? 1 : 0) + (nz < 0 ? 1 : 0)) & 1)
+                        : (t & 1);
+                    float phaseSign = polarityHash == 0 ? 1f : -1f;
+
+                    float gL = distGain * refL * airL * phaseSign;
+                    float gM = distGain * refM * airM * phaseSign;
+                    float gH = distGain * refH * airH * phaseSign;
+                    totalMidReflPower += (double)gM * gM;
+
                     // Transform arrival direction from world room frame back into listener head frame
                     Vector3 arrivalWorld = deltaVec / reflDist;
                     Vector3 arrivalHead = arrivalWorld.RotateInverse(listenerRotationDeg);
@@ -691,9 +709,9 @@ namespace Cavern.Virtualizer {
 
                     taps[t] = new IsmReflectionTap {
                         DelaySamples = delaySamples,
-                        GainLow = distGain * refL * airL,
-                        GainMid = distGain * refM * airM,
-                        GainHigh = distGain * refH * airH,
+                        GainLow = gL,
+                        GainMid = gM,
+                        GainHigh = gH,
                         TargetChannelA = chA,
                         TargetChannelB = chB,
                         WeightA = wA,
@@ -701,6 +719,9 @@ namespace Cavern.Virtualizer {
                     };
                 }
             }
+
+            double meanMidPower = spatialChCount > 0 ? totalMidReflPower / spatialChCount : 0.0;
+            activeEnergyNorm = (float)(1.0 / Math.Sqrt(1.0 + Math.Max(0.0, meanMidPower)));
         }
 
         void FindNearestTwoChannels(Vector3 dirHead, int channels, out int bestA, out int bestB, out float weightA, out float weightB) {

@@ -64,9 +64,43 @@ def resolve_repo_root(cli_ws: str | None = None) -> Path:
     return cwd
 
 
-def get_changed_files(repo: Path) -> list[str]:
-    if not (repo / ".git").exists():
-        return []
+SKIP_DISCOVERY_DIRS = frozenset({
+    ".git", ".hg", ".svn", "node_modules", "bin", "obj", "dist", "build",
+    "__pycache__", ".venv", "venv", ".idea", ".vs", ".gradle", ".cache",
+})
+DISCOVERY_EXTS = (
+    ".cs", ".csproj", ".c", ".cpp", ".h", ".py", ".js", ".mjs", ".cjs",
+    ".ts", ".tsx", ".jsx", ".kt", ".kts", ".java", ".go", ".rs",
+    ".json", ".xml", ".yml", ".yaml", ".sh",
+)
+
+
+def discover_workspace_files(repo: Path, profile: dict[str, Any] | None = None) -> list[str]:
+    """Enumerate source/config files for `--all` or gitless container environments."""
+    prefixes: tuple[str, ...] = ()
+    if profile:
+        raw_p = profile.get("code_path_prefixes") or []
+        prefixes = tuple(str(p).replace("\\", "/").lstrip("./") for p in raw_p if str(p).strip())
+    found: list[str] = []
+    for root, dirs, filenames in os.walk(repo):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DISCOVERY_DIRS)
+        rel_root = Path(root).relative_to(repo).as_posix()
+        for fn in sorted(filenames):
+            rel = fn if rel_root == "." else f"{rel_root}/{fn}"
+            if rel.startswith(".aistudio/"):
+                continue
+            low = fn.lower()
+            if not low.endswith(DISCOVERY_EXTS) and fn != "BUILD_LESSONS.md":
+                continue
+            if prefixes and not rel.startswith(prefixes) and not rel.startswith(".agents/"):
+                continue
+            found.append(rel)
+    return found
+
+
+def get_changed_files(repo: Path, profile: dict[str, Any] | None = None, scan_all: bool = False) -> list[str]:
+    if scan_all or not (repo / ".git").exists():
+        return discover_workspace_files(repo, profile)
     res = subprocess.run(
         ["git", "-C", str(repo), "status", "--porcelain", "-uall"],
         capture_output=True,
@@ -168,6 +202,55 @@ def check_universal_syntax(repo: Path, files: list[str], fails: list[str]) -> No
             res = subprocess.run(["bash", "-n", str(full)], capture_output=True, text=True, timeout=5, check=False)
             if res.returncode != 0:
                 fails.append(f"{rel}: Shell syntax error: {res.stderr.strip()}")
+
+
+_CS_STMT_INDEX_ASSIGN_COMMA_RE = re.compile(
+    r'^\s*[A-Za-z_][A-Za-z0-9_.]*\[[^\]]+\]\s*=\s*(?:\$?"(?:\\.|[^"\\])*"|\'[^\']*\'|[^;{}()]+),\s*$'
+)
+
+
+def check_csharp_syntax_deep(repo: Path, files: list[str], fails: list[str], warns: list[str]) -> None:
+    """Fast Roslyn-free C# syntax heuristics catching high-frequency CI breaks (e.g. statement trailing comma CS1002)."""
+    for rel in files:
+        if not rel.lower().endswith(".cs"):
+            continue
+        full = repo / rel
+        if not full.is_file():
+            continue
+        lines = full.read_text(encoding="utf-8", errors="ignore").splitlines()
+        in_block_comment = False
+        in_raw_str = False
+        for idx, raw in enumerate(lines, start=1):
+            stripped = raw.strip()
+            if '"""' in stripped:
+                if stripped.count('"""') % 2 == 1:
+                    in_raw_str = not in_raw_str
+                continue
+            if in_raw_str:
+                continue
+            if in_block_comment:
+                if "*/" in raw:
+                    in_block_comment = False
+                continue
+            if "/*" in stripped and "*/" not in stripped:
+                in_block_comment = True
+                continue
+            code = strip_line_comment(raw).rstrip()
+            if not code.strip():
+                continue
+            # Catch dictionary/indexer assignment statements terminated with `,` instead of `;`
+            # (valid ONLY inside `new() { ["k"] = "v", }` where LHS has NO target identifier before `[`).
+            if _CS_STMT_INDEX_ASSIGN_COMMA_RE.match(code):
+                prev_code = ""
+                for back in range(idx - 2, max(-1, idx - 6), -1):
+                    pc = strip_line_comment(lines[back]).strip()
+                    if pc:
+                        prev_code = pc
+                        break
+                if prev_code.endswith((";", "{", "}")) and not prev_code.endswith(("=> new() {", "new {", "new() {")):
+                    fails.append(
+                        f"{rel}:{idx}: C# statement indexer assignment ends with `,` instead of `;` (likely CS1002/CS1513)."
+                    )
 
 
 def check_file_guards_state(repo: Path, profile: dict[str, Any], fails: list[str], warns: list[str]) -> None:
@@ -1287,13 +1370,15 @@ def run_static_checks(
     repo: Path,
     profile: dict[str, Any],
     changed: list[str] | None = None,
+    scan_all: bool = False,
 ) -> tuple[list[str], list[str], list[str]]:
     """Run all fast static guardrails (<0.5s; safe for Stop hook auto-verify)."""
-    files = list(changed) if changed is not None else get_changed_files(repo)
+    files = list(changed) if changed is not None else get_changed_files(repo, profile, scan_all=scan_all)
     fails: list[str] = []
     warns: list[str] = []
 
     check_universal_syntax(repo, files, fails)
+    check_csharp_syntax_deep(repo, files, fails, warns)
     check_file_guards_state(repo, profile, fails, warns)
     check_version_sync(repo, profile, warns)
     check_diff_rules(repo, files, profile, fails, warns)
@@ -1414,6 +1499,7 @@ def main() -> None:
     parser.add_argument("--fast", action="store_true", help="Use fast in-memory mode for plugin tests (default).")
     parser.add_argument("--full", action="store_true", help="Run full subprocess plugin tests instead of --fast.")
     parser.add_argument("--git-stat", action="store_true", help="On pass, append compact git status -s and git diff --stat (1-shot verify).")
+    parser.add_argument("--all", action="store_true", help="Audit all discovered workspace files (also used automatically in gitless containers).")
     parser.add_argument("--workspace", default=None)
     parser.add_argument("--files", nargs="*", default=None)
     args = parser.parse_args()
@@ -1421,9 +1507,9 @@ def main() -> None:
     plugin_root = resolve_plugin_root()
     repo = resolve_repo_root(args.workspace)
     profile, profile_warnings = load_project_profile_with_warnings(repo)
-    changed = [f.replace("\\", "/") for f in args.files] if args.files is not None else get_changed_files(repo)
+    changed = [f.replace("\\", "/") for f in args.files] if args.files is not None else get_changed_files(repo, profile, scan_all=bool(args.all))
 
-    changed, fails, warns = run_static_checks(repo, profile, changed=changed)
+    changed, fails, warns = run_static_checks(repo, profile, changed=changed, scan_all=bool(args.all))
     warns = list(profile_warnings) + warns
 
     built = False
