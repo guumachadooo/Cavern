@@ -1,22 +1,36 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-11-22T19:59:26Z",
-  "version": "2.9.44",
-  "runId": "45063312280",
-  "runNumber": "44",
-  "commitSha": "7939a21f99438699091819379f5f8bbf18ce1ac6",
-  "runUrl": "https://github.com/guumachadooo/Cavern/actions/runs/45063312280",
+  "generatedAtUtc": "2026-11-22T20:23:54Z",
+  "version": "2.9.45",
+  "runId": "45066062736",
+  "runNumber": "45",
+  "commitSha": "079b7e21a1dfb6ec47187ac8af9ed10a1efce01e",
+  "runUrl": "https://github.com/guumachadooo/Cavern/actions/runs/45066062736",
   "outcomes": {
     "ndk": "success",
-    "compile": "success",
-    "publish": "success"
+    "compile": "failure",
+    "publish": "skipped"
   },
   "totals": {
-    "errors": 0,
+    "errors": 2,
     "warnings": 0
   },
   "warningCodes": [],
-  "errorCodes": [],
-  "errorsByLayer": {},
+  "errorCodes": [
+    {
+      "code": "CS1002",
+      "count": 1
+    },
+    {
+      "code": "CS1513",
+      "count": 1
+    }
+  ],
+  "errorsByLayer": {
+    "04_CavernizeAndroid": [
+      "CavernSamples/CavernizeAndroid/Language/AndroidStrings.cs(1907,1055): error CS1002: ; expected [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]",
+      "CavernSamples/CavernizeAndroid/Language/AndroidStrings.cs(1907,1055): error CS1513: } expected [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]"
+    ]
+  },
   "warningsByLayer": {}
 }
