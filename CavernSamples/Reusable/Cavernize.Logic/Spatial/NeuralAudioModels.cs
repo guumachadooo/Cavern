@@ -116,6 +116,29 @@ public interface ILosslessReferenceProvider {
 }
 
 /// <summary>
+/// Tensor I/O contract implemented by an ONNX audio checkpoint.
+/// </summary>
+public enum NeuralOnnxContractKind {
+    /// <summary>Automatically inferred from runtime input tensor names and shapes.</summary>
+    Auto = 0,
+
+    /// <summary>End-to-end planar stereo waveform <c>[1, 2, samples]</c> (e.g., Apollo, HTDemucs).</summary>
+    WaveformStereo = 1,
+
+    /// <summary>SCNet 4-channel complex STFT <c>[1, 4, 2049, frames]</c> -> <c>[1, 4, 4, 2049, frames]</c>.</summary>
+    ScnetStft4Ch = 2,
+
+    /// <summary>UVR MDX-Net 4-channel complex STFT <c>[1, 4, dimF, dimT]</c> -> <c>[1, 4, dimF, dimT]</c>.</summary>
+    MdxNetStft4Ch = 3,
+
+    /// <summary>Mel-Band RoFormer host-STFT mask network (<c>stft_features [1, frames, 4100]</c> -> <c>mask [1, 1, 2050, frames, 2]</c>).</summary>
+    MelBandRoFormerHostStft = 4,
+
+    /// <summary>FlashSR 16 kHz -> 48 kHz bandwidth-extension upsampler (<c>audio_values [B, n16k]</c> -> <c>reconstruction [B, 3*n16k]</c>).</summary>
+    FlashSr16kTo48k = 5
+}
+
+/// <summary>
 /// Metadata entry describing an open-source or user-imported ONNX audio checkpoint registered in Slot 7A.
 /// </summary>
 public sealed class NeuralModelCatalogEntry {
@@ -166,6 +189,27 @@ public sealed class NeuralModelCatalogEntry {
 
     /// <summary>True when this descriptor represents a user-imported standalone custom <c>.onnx</c> model.</summary>
     public bool IsCustomImported { get; init; }
+
+    /// <summary>ONNX tensor I/O contract kind used by the neural inference pipeline.</summary>
+    public NeuralOnnxContractKind ContractKind { get; init; } = NeuralOnnxContractKind.Auto;
+
+    /// <summary>Host STFT FFT window size in samples (0 when waveform end-to-end).</summary>
+    public int StftFftSize { get; init; }
+
+    /// <summary>Host STFT hop size in samples (0 when waveform end-to-end).</summary>
+    public int StftHopSize { get; init; }
+
+    /// <summary>Model frequency bin count <c>dim_f</c> (0 when waveform end-to-end).</summary>
+    public int StftDimF { get; init; }
+
+    /// <summary>Fixed temporal frame count <c>dim_t</c> for MDX-Net models (0 when dynamic).</summary>
+    public int StftDimT { get; init; }
+
+    /// <summary>UVR MDX-Net scalar stem compensation multiplier.</summary>
+    public float MdxCompensate { get; init; } = 1f;
+
+    /// <summary>When true, primary stem is the spectral complement <c>mix - output * compensate</c> (used by Karaoke/Reverb/Crowd models that predict backing/reverb/crowd).</summary>
+    public bool InvertPrimaryStem { get; init; }
 }
 
 /// <summary>
@@ -196,156 +240,203 @@ public static class NeuralModelCatalog {
         new NeuralModelCatalogEntry {
             Id = DefaultStemModelId,
             DisplayName = "SCNet 4-Stem (Fast Mobile)",
-            SourceRepository = "starrytong/SCNet + ZFTurbo/MSST (ONNX)",
+            SourceRepository = "starrytong/SCNet + bgkb/scnet_onnx",
             License = "MIT",
             Task = NeuralModelTask.StemSeparation4,
             FileName = "scnet_4stem_fp16.onnx",
-            DownloadUrl = "https://huggingface.co/onnx-community/scnet-4stem-onnx/resolve/main/model_fp16.onnx",
+            DownloadUrl = "https://huggingface.co/bgkb/scnet_onnx/resolve/main/scnet_fp16.onnx",
             FallbackDownloadUrls = [
-                "https://huggingface.co/ZFTurbo/Music-Source-Separation-Training/resolve/main/scnet_4stem_fp16.onnx"
+                "https://huggingface.co/bgkb/scnet_onnx/resolve/main/scnet.onnx"
             ],
             RequiresManualOnnxImport = false,
-            ApproxSizeMb = 42f,
+            ApproxSizeMb = 22.4f,
             ExpectedSampleRate = 44100,
-            RecommendedChunkSamples = 131072,
+            RecommendedChunkSamples = 261120,
             OutputStemNames = ["drums", "bass", "other", "vocals"],
+            ContractKind = NeuralOnnxContractKind.ScnetStft4Ch,
+            StftFftSize = 4096,
+            StftHopSize = 1024,
+            StftDimF = 2049,
+            StftDimT = 0,
             IsMobileFast = true,
             PriorityRank = 110
         },
         new NeuralModelCatalogEntry {
             Id = "mbr_vocals_studio",
-            DisplayName = "Mel-Band RoFormer Vocals (Studio)",
-            SourceRepository = "ZFTurbo/MSST + santiquiroz/port-bs-roformer-onnx (KimberleyJSN)",
+            DisplayName = "Kim Vocal 2 MDX-Net (Studio)",
+            SourceRepository = "Anjok07/UVR + Acapellas/Kim_Vocal_2.onnx",
             License = "MIT",
             Task = NeuralModelTask.VocalSeparation,
-            FileName = "mel_band_roformer_vocals_kim.onnx",
-            DownloadUrl = "https://huggingface.co/santiquiroz/port-bs-roformer-onnx/resolve/main/mel_band_roformer_vocals_kim.onnx",
+            FileName = "kim_vocal_2.onnx",
+            DownloadUrl = "https://huggingface.co/Acapellas/Kim_Vocal_2.onnx/resolve/main/Kim_Vocal_2.onnx",
             FallbackDownloadUrls = [
-                "https://huggingface.co/onnx-community/mel-band-roformer-vocals-onnx/resolve/main/model.onnx"
+                "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/Kim_Vocal_2.onnx"
             ],
             RequiresManualOnnxImport = false,
-            ApproxSizeMb = 185f,
+            ApproxSizeMb = 66.8f,
             ExpectedSampleRate = 44100,
-            RecommendedChunkSamples = 352800,
+            RecommendedChunkSamples = 261120,
             OutputStemNames = ["vocals"],
-            IsMobileFast = false,
+            ContractKind = NeuralOnnxContractKind.MdxNetStft4Ch,
+            StftFftSize = 7680,
+            StftHopSize = 1024,
+            StftDimF = 3072,
+            StftDimT = 256,
+            MdxCompensate = 1.009f,
+            InvertPrimaryStem = false,
+            IsMobileFast = true,
             PriorityRank = 140
         },
         new NeuralModelCatalogEntry {
             Id = "bs_roformer_6stem_studio",
-            DisplayName = "BS-RoFormer 6-Stem (Studio)",
-            SourceRepository = "ZFTurbo/MSST + santiquiroz/port-bs-roformer-onnx",
+            DisplayName = "HTDemucs 6-Stem (Studio)",
+            SourceRepository = "facebookresearch/demucs + StemSplitio/htdemucs-6s-onnx",
             License = "MIT",
             Task = NeuralModelTask.StemSeparation6,
-            FileName = "bs_roformer_6stem.onnx",
-            DownloadUrl = "https://huggingface.co/santiquiroz/port-bs-roformer-onnx/resolve/main/bs_roformer_6stem.onnx",
+            FileName = "htdemucs_6s_fp16.onnx",
+            DownloadUrl = "https://huggingface.co/StemSplitio/htdemucs-6s-onnx/resolve/main/htdemucs_6s_fp16weights.onnx",
             FallbackDownloadUrls = [
-                "https://huggingface.co/onnx-community/bs-roformer-6stem-onnx/resolve/main/model.onnx"
+                "https://huggingface.co/Acapellas/htdemucs-6s-onnx/resolve/main/htdemucs_6s_fp16weights.onnx"
             ],
             RequiresManualOnnxImport = false,
-            ApproxSizeMb = 215f,
+            ApproxSizeMb = 136.4f,
             ExpectedSampleRate = 44100,
-            RecommendedChunkSamples = 352800,
-            OutputStemNames = ["vocals", "drums", "bass", "guitar", "piano", "other"],
+            RecommendedChunkSamples = 343980,
+            OutputStemNames = ["drums", "bass", "other", "vocals", "guitar", "piano"],
+            ContractKind = NeuralOnnxContractKind.WaveformStereo,
             IsMobileFast = false,
             PriorityRank = 160
         },
         new NeuralModelCatalogEntry {
             Id = DefaultKaraokeModelId,
-            DisplayName = "Mel-Band RoFormer Karaoke (Lead vs Backing)",
-            SourceRepository = "becruily/mel-band-roformer-karaoke + Acapellas ONNX",
+            DisplayName = "UVR MDX-Net Karaoke 2 (Lead vs Backing)",
+            SourceRepository = "Anjok07/UVR + TRvlvr/model_repo",
             License = "MIT",
             Task = NeuralModelTask.KaraokeLeadBacking,
-            FileName = "mel_band_roformer_karaoke_lead_backing.onnx",
-            DownloadUrl = "https://huggingface.co/Acapellas/mel-band-roformer-karaoke-webgpu/resolve/main/model.onnx",
+            FileName = "uvr_mdxnet_kara_2.onnx",
+            DownloadUrl = "https://huggingface.co/Acapellas/uvr5-models/resolve/main/UVR_MDXNET_KARA_2.onnx",
             FallbackDownloadUrls = [
-                "https://huggingface.co/santiquiroz/port-bs-roformer-onnx/resolve/main/mel_band_roformer_karaoke.onnx"
+                "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR_MDXNET_KARA_2.onnx"
             ],
             RequiresManualOnnxImport = false,
-            ApproxSizeMb = 178f,
+            ApproxSizeMb = 52.8f,
             ExpectedSampleRate = 44100,
-            RecommendedChunkSamples = 352800,
+            RecommendedChunkSamples = 261120,
             OutputStemNames = ["lead_vocal", "backing_vocals"],
-            IsMobileFast = false,
+            ContractKind = NeuralOnnxContractKind.MdxNetStft4Ch,
+            StftFftSize = 5120,
+            StftHopSize = 1024,
+            StftDimF = 2048,
+            StftDimT = 256,
+            MdxCompensate = 1.065f,
+            InvertPrimaryStem = true,
+            IsMobileFast = true,
             PriorityRank = 150
         },
         new NeuralModelCatalogEntry {
             Id = DefaultDereverbModelId,
-            DisplayName = "Mel-Band RoFormer Dereverb (Dry / Wet RIR)",
-            SourceRepository = "Sucial/Dereverb-Echo_Mel_Band_Roformer + ZFTurbo/MSST",
+            DisplayName = "Reverb HQ MDX-Net (Dry / Wet RIR)",
+            SourceRepository = "FoxJoy/UVR + Acapellas/AudioSeparatorONNX",
             License = "MIT",
             Task = NeuralModelTask.Dereverb,
-            FileName = "mel_band_roformer_dereverb_echo.onnx",
-            DownloadUrl = "https://huggingface.co/santiquiroz/port-bs-roformer-onnx/resolve/main/mel_band_roformer_dereverb_echo.onnx",
+            FileName = "reverb_hq_foxjoy.onnx",
+            DownloadUrl = "https://huggingface.co/Acapellas/AudioSeparatorONNX/resolve/main/Reverb_HQ_By_FoxJoy.onnx",
             FallbackDownloadUrls = [
-                "https://huggingface.co/onnx-community/mel-band-roformer-dereverb-onnx/resolve/main/model.onnx"
+                "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/Reverb_HQ_By_FoxJoy.onnx"
             ],
-            RequiresManualOnnxImport = true,
-            ApproxSizeMb = 172f,
+            RequiresManualOnnxImport = false,
+            ApproxSizeMb = 66.8f,
             ExpectedSampleRate = 44100,
-            RecommendedChunkSamples = 352800,
+            RecommendedChunkSamples = 523264,
             OutputStemNames = ["dry_vocal"],
-            IsMobileFast = false,
+            ContractKind = NeuralOnnxContractKind.MdxNetStft4Ch,
+            StftFftSize = 6144,
+            StftHopSize = 1024,
+            StftDimF = 3072,
+            StftDimT = 512,
+            MdxCompensate = 1.035f,
+            InvertPrimaryStem = true,
+            IsMobileFast = true,
             PriorityRank = 130
         },
         new NeuralModelCatalogEntry {
             Id = DefaultDebleedModelId,
-            DisplayName = "Mel-Band RoFormer Debleed / Denoise",
-            SourceRepository = "ZFTurbo/Music-Source-Separation-Training",
+            DisplayName = "UVR Crowd & Bleed HQ (Debleed / Denoise)",
+            SourceRepository = "aufr33/UVR + Acapellas/AudioSeparatorONNX",
             License = "MIT",
             Task = NeuralModelTask.DebleedDenoise,
-            FileName = "mel_band_roformer_debleed.onnx",
-            DownloadUrl = "https://huggingface.co/santiquiroz/port-bs-roformer-onnx/resolve/main/mel_band_roformer_debleed.onnx",
+            FileName = "uvr_mdxnet_crowd_hq_1.onnx",
+            DownloadUrl = "https://huggingface.co/Acapellas/AudioSeparatorONNX/resolve/main/UVR-MDX-NET_Crowd_HQ_1.onnx",
             FallbackDownloadUrls = [
-                "https://huggingface.co/onnx-community/mel-band-roformer-debleed-onnx/resolve/main/model.onnx"
+                "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR-MDX-NET_Crowd_HQ_1.onnx"
             ],
-            RequiresManualOnnxImport = true,
-            ApproxSizeMb = 168f,
+            RequiresManualOnnxImport = false,
+            ApproxSizeMb = 59.1f,
             ExpectedSampleRate = 44100,
-            RecommendedChunkSamples = 352800,
+            RecommendedChunkSamples = 261120,
             OutputStemNames = ["clean"],
-            IsMobileFast = false,
+            ContractKind = NeuralOnnxContractKind.MdxNetStft4Ch,
+            StftFftSize = 8192,
+            StftHopSize = 1024,
+            StftDimF = 4096,
+            StftDimT = 256,
+            MdxCompensate = 1.021f,
+            InvertPrimaryStem = true,
+            IsMobileFast = true,
             PriorityRank = 120
         },
         new NeuralModelCatalogEntry {
             Id = DefaultRestorerModelId,
             DisplayName = "Apollo Band-Split Codec Restorer",
-            SourceRepository = "JusperLee/Apollo + ZFTurbo/MSST",
-            License = "MIT",
+            SourceRepository = "JusperLee/Apollo (Cavernize ONNX v1)",
+            License = "CC BY-SA 4.0",
             Task = NeuralModelTask.CodecRestoreApollo,
             FileName = "apollo_band_split_44k.onnx",
-            DownloadUrl = "https://huggingface.co/onnx-community/apollo-audio-restore-onnx/resolve/main/model.onnx",
-            FallbackDownloadUrls = [
-                "https://huggingface.co/JusperLee/Apollo/resolve/main/apollo_band_split_44k.onnx"
-            ],
-            RequiresManualOnnxImport = true,
-            ApproxSizeMb = 76f,
+            DownloadUrl = "https://github.com/guumachadooo/Cavern/releases/download/neural-models-v1/apollo_band_split_44k.onnx",
+            FallbackDownloadUrls = Array.Empty<string>(),
+            RequiresManualOnnxImport = false,
+            ApproxSizeMb = 67.0f,
             ExpectedSampleRate = 44100,
-            RecommendedChunkSamples = 262144,
+            RecommendedChunkSamples = 131072,
             OutputStemNames = ["restored"],
+            ContractKind = NeuralOnnxContractKind.WaveformStereo,
             IsMobileFast = true,
             PriorityRank = 135
         },
         new NeuralModelCatalogEntry {
             Id = DefaultBweModelId,
-            DisplayName = "AP-BWE / FlashSR 48 kHz Bandwidth Extension",
-            SourceRepository = "yxlu-0102/AP-BWE + ysharma3501/FlashSR",
+            DisplayName = "FlashSR 48 kHz Bandwidth Extension",
+            SourceRepository = "YatharthS/FlashSR (HierSpeech++ Upsampler)",
             License = "Apache-2.0",
             Task = NeuralModelTask.BandwidthExtension,
-            FileName = "ap_bwe_48k.onnx",
-            DownloadUrl = "https://huggingface.co/onnx-community/flashsr-bwe-48k-onnx/resolve/main/model.onnx",
+            FileName = "flashsr_48k.onnx",
+            DownloadUrl = "https://huggingface.co/YatharthS/FlashSR/resolve/main/onnx/model.onnx",
             FallbackDownloadUrls = [
-                "https://huggingface.co/ysharma3501/FlashSR/resolve/main/ap_bwe_48k.onnx"
+                "https://github.com/guumachadooo/Cavern/releases/download/neural-models-v1/flashsr_48k.onnx"
             ],
-            RequiresManualOnnxImport = true,
-            ApproxSizeMb = 28f,
+            RequiresManualOnnxImport = false,
+            ApproxSizeMb = 0.5f,
             ExpectedSampleRate = 48000,
             RecommendedChunkSamples = 192000,
             OutputStemNames = ["extended_48k"],
+            ContractKind = NeuralOnnxContractKind.FlashSr16kTo48k,
             IsMobileFast = true,
             PriorityRank = 115
         }
     ];
+
+    /// <summary>Finds a registered model entry by its local ONNX filename (case-insensitive).</summary>
+    public static NeuralModelCatalogEntry FindByFileName(string fileName) {
+        if (string.IsNullOrWhiteSpace(fileName)) {
+            return null;
+        }
+        for (int i = 0; i < Entries.Count; i++) {
+            if (string.Equals(Entries[i].FileName, fileName, StringComparison.OrdinalIgnoreCase)) {
+                return Entries[i];
+            }
+        }
+        return null;
+    }
 
     /// <summary>Finds a registered model entry by its stable identifier (case-insensitive).</summary>
     public static NeuralModelCatalogEntry FindById(string id) {
@@ -417,13 +508,12 @@ public static class NeuralModelCatalog {
     public static string BuildAttributionNotice() =>
         "Slot 7 On-Device Neural Audio & MVSEP Pipeline Licenses:\n\n" +
         "• Microsoft ONNX Runtime (ARM64 XNNPACK / QNN EP) — MIT License (github.com/microsoft/onnxruntime)\n" +
-        "• ZFTurbo Music-Source-Separation-Training & MVSEP-MDX23 (Mel-Band/BS-RoFormer, TTA, avg_wave/min_fft) — MIT License\n" +
-        "• santiquiroz/port-bs-roformer-onnx — MIT License\n" +
-        "• starrytong/SCNet — MIT License\n" +
-        "• becruily / aufr33 Mel-Band RoFormer Karaoke — MIT License\n" +
-        "• Sucial Dereverb-Echo Mel-Band RoFormer — MIT License\n" +
-        "• JusperLee/Apollo Band-Split Restoration — MIT License\n" +
-        "• yxlu-0102/AP-BWE & ysharma3501/FlashSR — MIT / Apache-2.0 License";
+        "• ZFTurbo / MVSEP Anti-Artifact Pipeline (TTA, avg_wave/min_fft/avg_fft, Wiener phase_fix) — MIT License\n" +
+        "• starrytong/SCNet & bgkb/scnet_onnx (4-Stem Mobile) — MIT License\n" +
+        "• Meta Platforms Demucs v4 / StemSplitio htdemucs_6s (6-Stem Studio) — MIT License\n" +
+        "• Anjok07 / TRvlvr UVR MDX-Net (Kim Vocal 2, Karaoke 2, FoxJoy Reverb HQ, aufr33 Crowd HQ) — MIT License\n" +
+        "• JusperLee/Apollo Band-Split Music Restoration — CC BY-SA 4.0 License\n" +
+        "• YatharthS/FlashSR (HierSpeech++ 48 kHz Bandwidth Extension) — Apache-2.0 License";
 }
 
 /// <summary>

@@ -1620,7 +1620,8 @@ public sealed class RealtimePlayerEngine : IDisposable {
         }
         int trackRate = currentTrack != null ? Math.Clamp(currentTrack.SampleRate, 44100, 192000) : Listener.DefaultSampleRate;
         bool allowHardwareOverride = UsbDacNativeSampleRateEnabled ||
-            (proAudioConfig.Enabled && proAudioConfig.LockedSampleRateHz > 0);
+            (proAudioConfig.Enabled && proAudioConfig.LockedSampleRateHz > 0) ||
+            PreferredHardwareSampleRate == Listener.DefaultSampleRate;
         if (allowHardwareOverride && PreferredHardwareSampleRate >= 44100 && PreferredHardwareSampleRate <= 192000) {
             return PreferredHardwareSampleRate;
         }

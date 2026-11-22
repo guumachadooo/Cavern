@@ -123,7 +123,7 @@ public sealed class AudioDeviceProfileManager : IDisposable {
             }
 
             if (applyAutoSwitch && store.AutoEqAutoSwitchByDevice) {
-                ApplyBindingForDevice(detected, notifyListeners: true);
+                ApplyBindingForDevice(detected, notifyListeners: changed);
             } else if (changed) {
                 ActiveDeviceChanged?.Invoke(detected, store.FindDeviceProfile(detected.DeviceKey), false);
             }

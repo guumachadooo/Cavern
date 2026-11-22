@@ -62,7 +62,8 @@ public sealed class AndroidAudioOutput : IDisposable {
     bool activeIsFloat32 = true;
     bool activeIsLowLatency;
     int activeFramesPerWrite = LowLatencyFramesPerWrite;
-    int timestampCounter;
+    long lastDiagPublishMs;
+    long idleSinceMs;
     int nativeStallTicks;
 
     /// <summary>
@@ -182,13 +183,14 @@ public sealed class AndroidAudioOutput : IDisposable {
             return;
         }
         lock (lifecycleLock) {
+            AudioDeviceInfo nextPreferred = routeInfo.Transport == AudioDeviceTransport.UsbDac ? routeInfo.NativeDevice : null;
             bool deviceChanged = !string.Equals(preferredDeviceName, routeInfo.DisplayName, StringComparison.Ordinal) ||
                                  activeTransport != routeInfo.Transport ||
                                  preferredOutputDeviceId != routeInfo.OutputDeviceId ||
                                  preferredInputDeviceId != routeInfo.InputDeviceId ||
-                                 !ReferenceEquals(preferredDevice, routeInfo.NativeDevice);
+                                 !ReferenceEquals(preferredDevice, nextPreferred);
             lastRouteInfo = routeInfo;
-            preferredDevice = routeInfo.Transport == AudioDeviceTransport.UsbDac ? routeInfo.NativeDevice : null;
+            preferredDevice = nextPreferred;
             activeTransport = routeInfo.Transport;
             preferredDeviceName = routeInfo.DisplayName ?? string.Empty;
             preferredOutputDeviceId = routeInfo.OutputDeviceId;
@@ -226,8 +228,12 @@ public sealed class AndroidAudioOutput : IDisposable {
     /// Negotiates the closest supported USB DAC sample rate (44.1..192 kHz) for the current track when USB DAC mode is active.
     /// </summary>
     int NegotiatePreferredUsbSampleRate(AudioDeviceRouteInfo routeInfo) {
-        if (!usbDacNativeSampleRate || routeInfo.Transport != AudioDeviceTransport.UsbDac) {
-            return 0;
+        if (routeInfo.Transport != AudioDeviceTransport.UsbDac) {
+            // Non-USB routes (Speaker, Wired 3.5mm, Bluetooth) share Android HAL 48 kHz clock to avoid 44.1<->48k AAudio teardowns
+            return 48000;
+        }
+        if (!usbDacNativeSampleRate) {
+            return 48000;
         }
         int[] supported = routeInfo.SupportedSampleRates;
         if (supported == null || supported.Length == 0) {
@@ -330,11 +336,18 @@ public sealed class AndroidAudioOutput : IDisposable {
         while (running) {
             bool needAudioActive = engine.IsPlaying || engine.IsLiveMonitoringOrCalibrating;
             if (!needAudioActive) {
+                long nowMs = Environment.TickCount64;
+                if (idleSinceMs == 0) {
+                    idleSinceMs = nowMs;
+                }
                 if (activeBackend != ActiveProAudioBackendKind.LegacyAudioTrack) {
-                    lock (lifecycleLock) {
-                        StopNativeBackendLocked();
+                    // Grace period prevents tearing down/reopening AAudio across brief seek/track-switch pauses
+                    if (nowMs - idleSinceMs >= 1500) {
+                        lock (lifecycleLock) {
+                            StopNativeBackendLocked();
+                        }
+                        PublishProAudioDiagnostics();
                     }
-                    PublishProAudioDiagnostics();
                 } else if (audioTrack != null && audioTrack.PlayState == PlayState.Playing) {
                     try {
                         audioTrack.Pause();
@@ -345,6 +358,7 @@ public sealed class AndroidAudioOutput : IDisposable {
                 Thread.Sleep(12);
                 continue;
             }
+            idleSinceMs = 0;
 
             int targetRate = ResolveTargetSampleRate();
             bool shouldUseNative = ShouldAttemptNativeProAudio();
@@ -391,9 +405,9 @@ public sealed class AndroidAudioOutput : IDisposable {
                         Thread.Sleep(20);
                     }
                 } else {
-                    timestampCounter++;
-                    if (timestampCounter >= 32) {
-                        timestampCounter = 0;
+                    long nowMs = Environment.TickCount64;
+                    if (nowMs - lastDiagPublishMs >= 350) {
+                        lastDiagPublishMs = nowMs;
                         PublishDiagnostics();
                     }
                 }
@@ -446,9 +460,9 @@ public sealed class AndroidAudioOutput : IDisposable {
                     return;
                 }
                 nativeStallTicks = 0;
-                timestampCounter++;
-                if (timestampCounter >= 24) {
-                    timestampCounter = 0;
+                long nowMs = Environment.TickCount64;
+                if (nowMs - lastDiagPublishMs >= 350) {
+                    lastDiagPublishMs = nowMs;
                     PublishDiagnostics();
                 }
             } else {
@@ -482,7 +496,7 @@ public sealed class AndroidAudioOutput : IDisposable {
             activeRequestedSampleRate = sampleRate;
             nativeStallTicks = 0;
             int burst = Math.Clamp((int)cfg.BufferFrames, 64, 256);
-            bool needInput = cfg.LiveMicEnabled || engine.LiveMicBridge.IsCalibratingLatency;
+            bool needInput = (cfg.LiveMicEnabled && cfg.MicRouting != LiveMicRoutingMode.Off) || engine.LiveMicBridge.IsCalibratingLatency;
             lastProAudioStatusNote = string.Empty;
 
             if (engine.HeadphoneVirtualizer && cfg.LockedSampleRateHz > 0 && cfg.LockedSampleRateHz != resolvedRate) {

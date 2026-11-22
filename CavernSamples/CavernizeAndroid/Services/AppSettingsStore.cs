@@ -61,9 +61,12 @@ public sealed class AppSettingsStore {
         set => Edit().PutFloat("upmixSmooth", value).Apply();
     }
 
+    /// <summary>
+    /// Phase-coherent 1024-pt STFT Direct/Ambient (DirAC) decomposition is always enabled whenever spatial upmixing is active.
+    /// </summary>
     public bool ParametricStftUpmix {
-        get => prefs.GetBoolean("parametricStftUpmix", true);
-        set => Edit().PutBoolean("parametricStftUpmix", value).Apply();
+        get => true;
+        set { }
     }
 
     public bool AtmosAwareUpmix {
@@ -1343,12 +1346,12 @@ public sealed class AndroidUpmixingSettings(AppSettingsStore store) : UpmixingSe
     }
 
     public override bool ParametricStft {
-        get => store.ParametricStftUpmix;
-        set => store.ParametricStftUpmix = value;
+        get => true;
+        set { }
     }
 
     public override bool AtmosAware {
-        get => store.AtmosAwareUpmix;
+        get => (store.MatrixUpmixing || store.CavernizeUpmix) && store.AtmosAwareUpmix;
         set => store.AtmosAwareUpmix = value;
     }
 }

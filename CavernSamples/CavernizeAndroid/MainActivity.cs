@@ -39,7 +39,7 @@ namespace CavernizeAndroid;
     MainLauncher = true,
     Exported = true,
     LaunchMode = LaunchMode.SingleTask,
-    ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.KeyboardHidden)]
+    ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.SmallestScreenSize | ConfigChanges.ScreenLayout | ConfigChanges.UiMode | ConfigChanges.Density | ConfigChanges.FontScale | ConfigChanges.LayoutDirection | ConfigChanges.Keyboard | ConfigChanges.KeyboardHidden | ConfigChanges.Navigation)]
 [IntentFilter(
     [Intent.ActionView, Intent.ActionSend],
     Categories = [Intent.CategoryDefault, Intent.CategoryBrowsable],
@@ -137,6 +137,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
     Cavernize.Logic.Spatial.UniversalLosslessTwinProvider activeLosslessTwin;
     CancellationTokenSource losslessTwinCts;
     int losslessTwinGeneration;
+    string lastLgsrSyncedPath = "";
+    int lastLgsrSyncedConfigHash;
     CancellationTokenSource neuralPrepCts;
     int neuralPrepGeneration;
     volatile bool isNeuralPrepRunning;
@@ -199,7 +201,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         OneUiTheme.Initialize(this);
         AppLogger.Initialize(this);
-        AudioQualityAnalyzer.EnsureCacheLoaded(this);
+        _ = Task.Run(() => AudioQualityAnalyzer.EnsureCacheLoaded(ApplicationContext));
 
         ConfigureEdgeToEdgeWindow(Window);
 
@@ -1700,6 +1702,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     AudioFile TryOpenWithSmartFallbacks(string resolved, out string fallbackSessionDir) {
         fallbackSessionDir = null;
+        if (string.IsNullOrEmpty(resolved) || !File.Exists(resolved) || new FileInfo(resolved).Length == 0) {
+            throw new InvalidOperationException(S["MediaDecodeFailedCorrupt"]);
+        }
         string containerExt = Path.GetExtension(resolved).ToLowerInvariant();
         Container guessedContainer = containerExt switch {
             ".mkv" or ".mka" or ".webm" or ".weba" => Container.Matroska,
@@ -1796,9 +1801,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         } catch (Exception mediaEx) {
             AppLogger.Warn($"Android MediaCodec fallback failed ({mediaEx.GetType().Name}): {mediaEx.Message}");
 
-            // Final universal fallback: decode audio stream via FFmpeg to WAV (handles DTS, DTS-HD, WMA, etc.)
-            if (ffmpeg.Found && probe != null && probe.AudioStreams.Count > 0) {
-                ProbedAudioStream firstAudio = probe.AudioStreams[0];
+            // Final universal fallback: decode audio stream via FFmpeg to WAV (even when container probe returned 0 explicit streams)
+            if (ffmpeg.Found) {
+                ProbedAudioStream firstAudio = probe != null && probe.AudioStreams.Count > 0 ? probe.AudioStreams[0] : null;
+                int streamIdx = firstAudio?.StreamIndex ?? -1;
                 string workDir = Path.Combine(TrueHDDecoderService.GetWorkRoot(this), $"ffwav_{Guid.NewGuid():N}");
                 Directory.CreateDirectory(workDir);
                 fallbackSessionDir = workDir;
@@ -1808,8 +1814,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     SetConvertStatus(S["DecodingFallback"], -1);
                 });
                 bool wavOk = TrueHDDecoderService.ExtractAudioStreamWithFFmpeg(
-                    ffmpeg.Location, resolved, firstAudio.StreamIndex, outWav, "wav",
-                    probe.DurationSeconds,
+                    ffmpeg.Location, resolved, streamIdx, outWav, "wav",
+                    probe?.DurationSeconds ?? 0,
                     (p, msg) => RunOnUiThread(() => {
                         SetWorkspaceHeaderText(msg);
                         SetConvertStatus(msg, p);
@@ -1817,9 +1823,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 if (wavOk) {
                     AudioReader wavReader = AudioReader.Open(outWav);
                     Codec pcmCodec = wavReader.Bits == BitDepth.Float32 ? Codec.PCM_Float : Codec.PCM_LE;
-                    (Codec srcCodec, bool isLossy) = InferFallbackCodecAndLossy(resolved, firstAudio.CodecName);
+                    (Codec srcCodec, bool isLossy) = InferFallbackCodecAndLossy(resolved, firstAudio?.CodecName);
                     ExternalDecodedTrack wavTrack = new(
-                        wavReader, pcmCodec, srcCodec, null, guessedContainer, null, null, firstAudio.Language,
+                        wavReader, pcmCodec, srcCodec, null, guessedContainer, null, null, firstAudio?.Language,
                         isLossySource: isLossy, originalSourcePath: resolved);
                     return AudioFile.FromCustomTracks(resolved, [wavTrack]);
                 }
@@ -1828,7 +1834,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             if (!ffmpeg.Found && containerExt is ".mkv" or ".mka" or ".m2ts" or ".ts" or ".mp4" or ".thd" or ".mlp" or ".truehd") {
                 throw new NotSupportedException(S["TrueHDContainerNeedTools"], mediaEx);
             }
-            throw;
+            throw new InvalidOperationException(S["MediaDecodeFailedCorrupt"], mediaEx);
         }
     }
 
@@ -2481,27 +2487,46 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshNeuralPrepUi();
     }
 
-    void StartLosslessTwinDiscoveryAsync(CavernizeTrack activeTrack) {
+    void StartLosslessTwinDiscoveryAsync(CavernizeTrack activeTrack, bool forceRescan = false) {
         if (uiDestroyed || activeTrack == null || playerEngine == null) {
             return;
         }
+        string activePath = currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        Cavernize.Logic.Spatial.LgsrConfig lgsrCfg = store.BuildLgsrConfig();
+        int cfgHash = HashCode.Combine(
+            lgsrCfg.Enabled,
+            lgsrCfg.AutoDiscoverTwin,
+            lgsrCfg.BypassOnAlreadyLossless,
+            lgsrCfg.RejectFakeLosslessTwins,
+            lgsrCfg.FusionStrength,
+            lgsrCfg.DynamicEnvelopeLock,
+            lgsrCfg.ClippingGuardEnabled,
+            HashCode.Combine(lgsrCfg.UseBitstreamCouplingSpxGuide, lgsrCfg.EnableTier3ResidualCleanup));
+
+        if (!forceRescan &&
+            lgsrCfg.Enabled &&
+            activeLosslessTwin != null &&
+            string.Equals(lastLgsrSyncedPath, activePath, StringComparison.OrdinalIgnoreCase) &&
+            lastLgsrSyncedConfigHash == cfgHash) {
+            return;
+        }
+
         losslessTwinCts?.Cancel();
         losslessTwinCts?.Dispose();
         losslessTwinCts = new CancellationTokenSource();
         CancellationToken ct = losslessTwinCts.Token;
         int gen = ++losslessTwinGeneration;
 
-        string activePath = currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
         bool alreadyLossless = LosslessTwinDiscoveryService.IsTrackAlreadyLossless(activeTrack, activePath);
         playerEngine.LgsrStage.SetActiveTrackLosslessStatus(alreadyLossless);
 
         // Detach stale lossless twin immediately while discovering the twin for the new track
+        lastLgsrSyncedPath = "";
         Cavernize.Logic.Spatial.UniversalLosslessTwinProvider previous = activeLosslessTwin;
         activeLosslessTwin = null;
         playerEngine.BindLosslessReference(null);
         previous?.Dispose();
 
-        Cavernize.Logic.Spatial.LgsrConfig lgsrCfg = store.BuildLgsrConfig();
         playerEngine.ApplyLgsrConfig(lgsrCfg);
         RefreshLgsrUi();
 
@@ -2536,6 +2561,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
                         return;
                     }
                     activeLosslessTwin = twin;
+                    lastLgsrSyncedPath = twin != null ? activePath : "";
+                    lastLgsrSyncedConfigHash = cfgHash;
                     playerEngine.BindLosslessReference(twin);
                     RefreshLgsrUi();
                 });

@@ -159,6 +159,12 @@ public static class TrueHDDecoderService {
         }
 
         result.DurationSeconds = durationSec;
+        if (result.AudioStreams.Count == 0) {
+            string tail = stderr.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(tail)) {
+                AppLogger.Warn($"FFmpeg probe found 0 audio streams for '{Path.GetFileName(inputPath)}': {tail.Trim()}");
+            }
+        }
         return result;
     }
 
@@ -182,7 +188,8 @@ public static class TrueHDDecoderService {
             "ac3" => "-c:a copy -f ac3",
             _ => "-c:a pcm_s24le -rf64 auto -f wav"
         };
-        string args = $"-y -hide_banner -i \"{inputPath}\" -map 0:{streamIndex} {codecArgs} \"{outputPath}\"";
+        string mapSpec = streamIndex >= 0 ? $"0:{streamIndex}" : "0:a:0";
+        string args = $"-y -hide_banner -i \"{inputPath}\" -map {mapSpec} {codecArgs} \"{outputPath}\"";
 
         ProcessStartInfo psi = new() {
             FileName = ffmpegPath,

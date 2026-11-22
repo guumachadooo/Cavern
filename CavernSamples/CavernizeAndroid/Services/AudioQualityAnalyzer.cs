@@ -126,14 +126,19 @@ public static class AudioQualityAnalyzer {
                 }
                 cachedDiskPath = IOPath.Combine(root, CacheFileName);
                 if (IOFile.Exists(cachedDiskPath)) {
-                    string json = IOFile.ReadAllText(cachedDiskPath);
-                    List<AudioQualityReport> list = JsonSerializer.Deserialize<List<AudioQualityReport>>(json);
-                    if (list != null) {
-                        for (int i = 0; i < list.Count; i++) {
-                            if (!string.IsNullOrEmpty(list[i]?.CacheKey)) {
-                                StoreCacheEntry(list[i].CacheKey, list[i]);
+                    try {
+                        string json = IOFile.ReadAllText(cachedDiskPath);
+                        List<AudioQualityReport> list = JsonSerializer.Deserialize<List<AudioQualityReport>>(json);
+                        if (list != null) {
+                            for (int i = 0; i < list.Count; i++) {
+                                if (!string.IsNullOrEmpty(list[i]?.CacheKey)) {
+                                    StoreCacheEntry(list[i].CacheKey, list[i]);
+                                }
                             }
                         }
+                    } catch (JsonException jex) {
+                        AppLogger.Warn($"AudioQualityAnalyzer corrupt cache removed: {jex.Message}");
+                        try { IOFile.Delete(cachedDiskPath); } catch { }
                     }
                 }
             } catch (Exception ex) {
@@ -211,11 +216,16 @@ public static class AudioQualityAnalyzer {
 
     /// <summary>
     /// Instant non-blocking quality evaluation (returns cached deep spectral analysis when available,
-    /// or fast header + psychoacoustic codec evaluation immediately).
+    /// or pure in-memory codec evaluation immediately unless <paramref name="allowIo"/> is true on a background thread).
     /// </summary>
-    public static AudioQualityReport EvaluateFast(LibraryTrackItem item, Context ctx = null) {
+    public static AudioQualityReport EvaluateFast(LibraryTrackItem item, Context ctx = null, bool allowIo = false) {
         if (ctx != null) {
-            EnsureCacheLoaded(ctx);
+            if (allowIo) {
+                EnsureCacheLoaded(ctx);
+            } else if (!diskLoaded) {
+                Context bgCtx = ctx.ApplicationContext ?? ctx;
+                _ = Task.Run(() => EnsureCacheLoaded(bgCtx));
+            }
         }
         if (item == null) {
             return new AudioQualityReport();
@@ -226,7 +236,7 @@ public static class AudioQualityAnalyzer {
             return cached;
         }
 
-        AudioQualityReport report = BuildFastHeuristicReport(ctx, item, key);
+        AudioQualityReport report = BuildFastHeuristicReport(ctx, item, key, allowIo);
         StoreCacheEntry(key, report);
         return report;
     }
@@ -239,8 +249,9 @@ public static class AudioQualityAnalyzer {
         if (variants == null || variants.Count <= 1) {
             return;
         }
-        if (ctx != null) {
-            EnsureCacheLoaded(ctx);
+        if (ctx != null && !diskLoaded) {
+            Context bgCtx = ctx.ApplicationContext ?? ctx;
+            _ = Task.Run(() => EnsureCacheLoaded(bgCtx));
         }
         Dictionary<LibraryTrackItem, AudioQualityReport> scores = new(variants.Count);
         for (int i = 0; i < variants.Count; i++) {
@@ -364,7 +375,7 @@ public static class AudioQualityAnalyzer {
     // ============================================================
     // FAST HEADER + PSYCHOACOUSTIC CODEC SCORING
     // ============================================================
-    static AudioQualityReport BuildFastHeuristicReport(Context ctx, LibraryTrackItem item, string cacheKey) {
+    static AudioQualityReport BuildFastHeuristicReport(Context ctx, LibraryTrackItem item, string cacheKey, bool allowIo) {
         Context effectiveCtx = ctx ?? Android.App.Application.Context;
         AudioTierCategory cat = ClassifyCategory(item);
         string ext = GetTrackExtension(effectiveCtx, item);
@@ -377,23 +388,25 @@ public static class AudioQualityAnalyzer {
         int bitrateKbps = EstimateBitrateKbps(item);
         string codecFamily = DetectCodecFamily(ext, fmt, badge, out bool isLossless);
 
-        // Quick lightweight binary header read for exact FLAC/WAV/Opus parameters (reads <= 256 bytes)
-        try {
-            if (HasReadableSource(item)) {
-                if (ext == ".flac") {
-                    TryReadFlacHeader(effectiveCtx, item, ref sr, ref bitDepth, ref channels);
-                    isLossless = true;
-                    codecFamily = "FLAC";
-                } else if (ext == ".wav") {
-                    TryReadWavHeader(effectiveCtx, item, ref sr, ref bitDepth, ref channels);
-                    isLossless = true;
-                    codecFamily = "WAV/PCM";
-                } else if (ext is ".m4a" or ".mp4" or ".mka" or ".mkv" or ".ogg" or ".opus" or ".mp3" or ".aac") {
-                    TryReadMediaExtractorMeta(effectiveCtx, item, ref sr, ref bitDepth, ref channels, ref bitrateKbps, ref codecFamily, ref isLossless);
+        // Perform binary header / MediaExtractor probing ONLY when explicitly permitted on a background thread
+        if (allowIo) {
+            try {
+                if (HasReadableSource(item)) {
+                    if (ext == ".flac") {
+                        TryReadFlacHeader(effectiveCtx, item, ref sr, ref bitDepth, ref channels);
+                        isLossless = true;
+                        codecFamily = "FLAC";
+                    } else if (ext == ".wav") {
+                        TryReadWavHeader(effectiveCtx, item, ref sr, ref bitDepth, ref channels);
+                        isLossless = true;
+                        codecFamily = "WAV/PCM";
+                    } else if (ext is ".m4a" or ".mp4" or ".mka" or ".mkv" or ".ogg" or ".opus" or ".mp3" or ".aac") {
+                        TryReadMediaExtractorMeta(effectiveCtx, item, ref sr, ref bitDepth, ref channels, ref bitrateKbps, ref codecFamily, ref isLossless);
+                    }
                 }
+            } catch {
+                // Fall back to estimated metadata
             }
-        } catch {
-            // Fall back to estimated metadata
         }
 
         double baseScore = ComputePsychoacousticBaseScore(cat, codecFamily, isLossless, bitrateKbps, sr, bitDepth, channels, badge);
@@ -708,44 +721,50 @@ public static class AudioQualityAnalyzer {
         ref int bitrateKbps,
         ref string codecFamily,
         ref bool isLossless) {
-        using MediaExtractor extractor = new();
-        if (!TrySetExtractorSource(extractor, ctx, item)) {
-            return;
-        }
-        for (int i = 0; i < extractor.TrackCount; i++) {
-            MediaFormat fmt = extractor.GetTrackFormat(i);
-            string mime = fmt.GetString(MediaFormat.KeyMime) ?? "";
-            if (!mime.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) continue;
+        MediaExtractor extractor = null;
+        try {
+            extractor = new MediaExtractor();
+            if (!TrySetExtractorSource(extractor, ctx, item)) {
+                return;
+            }
+            for (int i = 0; i < extractor.TrackCount; i++) {
+                MediaFormat fmt = extractor.GetTrackFormat(i);
+                string mime = fmt.GetString(MediaFormat.KeyMime) ?? "";
+                if (!mime.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) continue;
 
-            if (fmt.ContainsKey(MediaFormat.KeySampleRate)) {
-                int s = fmt.GetInteger(MediaFormat.KeySampleRate);
-                if (s > 0) sr = s;
-            }
-            if (fmt.ContainsKey(MediaFormat.KeyChannelCount)) {
-                int c = fmt.GetInteger(MediaFormat.KeyChannelCount);
-                if (c > 0) channels = c;
-            }
-            if (fmt.ContainsKey(MediaFormat.KeyBitRate)) {
-                int br = fmt.GetInteger(MediaFormat.KeyBitRate);
-                if (br > 8000) bitrateKbps = br / 1000;
-            }
-            if (fmt.ContainsKey("bits-per-sample")) {
-                int b = fmt.GetInteger("bits-per-sample");
-                if (b is >= 8 and <= 32) bitDepth = b;
-            }
+                if (fmt.ContainsKey(MediaFormat.KeySampleRate)) {
+                    int s = fmt.GetInteger(MediaFormat.KeySampleRate);
+                    if (s > 0) sr = s;
+                }
+                if (fmt.ContainsKey(MediaFormat.KeyChannelCount)) {
+                    int c = fmt.GetInteger(MediaFormat.KeyChannelCount);
+                    if (c > 0) channels = c;
+                }
+                if (fmt.ContainsKey(MediaFormat.KeyBitRate)) {
+                    int br = fmt.GetInteger(MediaFormat.KeyBitRate);
+                    if (br > 8000) bitrateKbps = br / 1000;
+                }
+                if (fmt.ContainsKey("bits-per-sample")) {
+                    int b = fmt.GetInteger("bits-per-sample");
+                    if (b is >= 8 and <= 32) bitDepth = b;
+                }
 
-            string m = mime.ToLowerInvariant();
-            if (m.Contains("alac")) { codecFamily = "ALAC"; isLossless = true; }
-            else if (m.Contains("flac")) { codecFamily = "FLAC"; isLossless = true; }
-            else if (m.Contains("truehd")) { codecFamily = "TrueHD"; isLossless = true; }
-            else if (m.Contains("opus")) { codecFamily = "Opus"; isLossless = false; }
-            else if (m.Contains("vorbis")) { codecFamily = "Vorbis"; isLossless = false; }
-            else if (m.Contains("ac4")) { codecFamily = "AC-4"; isLossless = false; }
-            else if (m.Contains("eac3")) { codecFamily = "E-AC-3"; isLossless = false; }
-            else if (m.Contains("ac3")) { codecFamily = "AC-3"; isLossless = false; }
-            else if (m.Contains("mp4a")) { codecFamily = "AAC"; isLossless = false; }
-            else if (m.Contains("mpeg")) { codecFamily = "MP3"; isLossless = false; }
-            break;
+                string m = mime.ToLowerInvariant();
+                if (m.Contains("alac")) { codecFamily = "ALAC"; isLossless = true; }
+                else if (m.Contains("flac")) { codecFamily = "FLAC"; isLossless = true; }
+                else if (m.Contains("truehd")) { codecFamily = "TrueHD"; isLossless = true; }
+                else if (m.Contains("opus")) { codecFamily = "Opus"; isLossless = false; }
+                else if (m.Contains("vorbis")) { codecFamily = "Vorbis"; isLossless = false; }
+                else if (m.Contains("ac4")) { codecFamily = "AC-4"; isLossless = false; }
+                else if (m.Contains("eac3")) { codecFamily = "E-AC-3"; isLossless = false; }
+                else if (m.Contains("ac3")) { codecFamily = "AC-3"; isLossless = false; }
+                else if (m.Contains("mp4a")) { codecFamily = "AAC"; isLossless = false; }
+                else if (m.Contains("mpeg")) { codecFamily = "MP3"; isLossless = false; }
+                break;
+            }
+        } finally {
+            try { extractor?.Release(); } catch { }
+            try { extractor?.Dispose(); } catch { }
         }
     }
 
@@ -756,7 +775,7 @@ public static class AudioQualityAnalyzer {
         Context effectiveCtx = ctx ?? Android.App.Application.Context;
         string safeFfmpeg = ResolveSafeFfmpegPath(effectiveCtx, ffmpegPath);
         string key = BuildCacheKey(item);
-        AudioQualityReport report = BuildFastHeuristicReport(effectiveCtx, item, key);
+        AudioQualityReport report = BuildFastHeuristicReport(effectiveCtx, item, key, allowIo: true);
 
         // Extract ~2.2s representative mono-summed float window + raw int32 LSB check (for 24-bit files)
         float[] monoSamples = null;
@@ -1068,9 +1087,10 @@ public static class AudioQualityAnalyzer {
         sampleRate = 48000;
         inspected24 = false;
         lsbZero = false;
+        MediaExtractor extractor = null;
         MediaCodec codec = null;
         try {
-            using MediaExtractor extractor = new();
+            extractor = new MediaExtractor();
             if (!TrySetExtractorSource(extractor, ctx, item)) {
                 return null;
             }
@@ -1192,6 +1212,9 @@ public static class AudioQualityAnalyzer {
         } finally {
             try { codec?.Stop(); } catch { }
             try { codec?.Release(); } catch { }
+            try { codec?.Dispose(); } catch { }
+            try { extractor?.Release(); } catch { }
+            try { extractor?.Dispose(); } catch { }
         }
     }
 

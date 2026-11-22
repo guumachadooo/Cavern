@@ -781,7 +781,13 @@ public sealed class AndroidStrings {
         ["NeuralModelEnsembleAddBtn"] = "+ Ensemble",
         ["NeuralModelEnsembleInTag"] = "In Ensemble",
         ["NeuralModelManualImportHint"] = "Manual .onnx import recommended (community weights)",
-        ["NeuralModelDownloadFallbackErr"] = "Automatic download unavailable for {0}. Export or download the .onnx file and use 'Import .onnx'.",
+        ["NeuralModelDownloadFallbackErr"] = "Automatic download failed for {0}.\n\nDirect download URL:\n{1}\n\nOpen or copy the link to download the .onnx file, then tap 'Import .onnx'.",
+        ["NeuralModelOpenLinkBtn"] = "Open Link",
+        ["NeuralModelCopyLinkBtn"] = "Copy Link",
+        ["NeuralModelLinkCopiedToast"] = "Direct .onnx link copied to clipboard.",
+        ["NeuralModelCancelDownloadBtn"] = "Cancel Download",
+        ["NeuralModelDownloadInProgressToast"] = "A model download is already running.",
+        ["NeuralModelDownloadFailedTitle"] = "Model Download Issue",
         ["NeuralTaskStem4"] = "4-Stem Separation (Vocals/Drums/Bass/Other)",
         ["NeuralTaskStem6"] = "6-Stem Separation (+Guitar/Piano)",
         ["NeuralTaskVocal"] = "Vocal / Instrumental Separation",
@@ -1331,6 +1337,17 @@ public sealed class AndroidStrings {
         ["VocalModalHelpBody"] = "Matches your live microphone to the track's Vocal DNA using zero-latency EQ matching, dual FET/Optical compression, harmonic warmth, FDN room reverb, and 1–4 kHz pocket sidechain glue. Use Calibrate Mic (4s) to measure your voiceprint and Dry Bypass for instant A/B comparison.",
         ["ScarlettHelpTitle"] = "About Focusrite Scarlett Control",
         ["ScarlettHelpBody"] = "Controls supported Focusrite Scarlett 2i2 / Solo (Gen 2, 3, and 4) hardware registers directly over USB: Air Presence & Drive, Auto Gain, Clip Safe, 48V Phantom Power, Instrument/Line impedance, Direct Monitor, and NVRAM persistence.",
+        ["UpmixModeLabel"] = "Spatial Upmix Mode:",
+        ["TipUpmixMode"] = "Controls how stereo or 5.1 tracks expand across your 7.1.4 spatial field using true 1024-pt STFT DirAC phase-coherent decomposition.\n\n• Direct: preserves original source channels.\n• Surround 7.1: fills side & rear surround beds.\n• Full 3D (7.1 + Height): fills surround beds and synthesizes overhead height layers.",
+        ["UpmixModeDirect"] = "Direct (Original Channels)",
+        ["UpmixModeSurround"] = "Surround 7.1 (Matrix DirAC)",
+        ["UpmixModeFull3D"] = "Full 3D (7.1 + Overhead Heights)",
+        ["UpmixModeSurroundShort"] = "Surround 7.1",
+        ["UpmixModeFull3DShort"] = "Full 3D",
+        ["LyricsSingTogglePill"] = "Sing",
+        ["LyricsSingToggleDesc"] = "Show or hide Karaoke & Live Mic controls",
+        ["LibraryLoadingCached"] = "Loading library...",
+        ["MediaDecodeFailedCorrupt"] = "Could not decode this audio file. It may be corrupted or use an unsupported codec.",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -2062,7 +2079,13 @@ public sealed class AndroidStrings {
         d["NeuralModelEnsembleAddBtn"] = "+ Ensemble";
         d["NeuralModelEnsembleInTag"] = "No Ensemble";
         d["NeuralModelManualImportHint"] = "Importação manual .onnx recomendada (pesos da comunidade)";
-        d["NeuralModelDownloadFallbackErr"] = "Download automático indisponível para {0}. Baixe/converta o arquivo .onnx e use 'Importar .onnx'.";
+        d["NeuralModelDownloadFallbackErr"] = "Falha no download automático para {0}.\n\nLink direto para baixar:\n{1}\n\nAbra ou copie o link para baixar o arquivo .onnx e depois toque em 'Importar .onnx'.";
+        d["NeuralModelOpenLinkBtn"] = "Abrir Link";
+        d["NeuralModelCopyLinkBtn"] = "Copiar Link";
+        d["NeuralModelLinkCopiedToast"] = "Link direto do .onnx copiado.";
+        d["NeuralModelCancelDownloadBtn"] = "Cancelar Download";
+        d["NeuralModelDownloadInProgressToast"] = "Já existe um download em andamento.";
+        d["NeuralModelDownloadFailedTitle"] = "Falha ao Baixar Modelo";
         d["NeuralTaskStem4"] = "Separação 4-Stems (Voz/Bateria/Baixo/Outros)";
         d["NeuralTaskStem6"] = "Separação 6-Stems (+Guitarra/Piano)";
         d["NeuralTaskVocal"] = "Separação Voz / Instrumental";
@@ -2612,6 +2635,17 @@ public sealed class AndroidStrings {
         d["VocalModalHelpBody"] = "Ajusta seu microfone ao vivo ao DNA Vocal da música usando Match EQ de latência zero, compressão dupla FET/Óptica, saturação harmônica, reverb FDN e sidechain pocket em 1–4 kHz. Use Calibrar Mic (4s) para medir seu voiceprint e Bypass Limpo para comparar em A/B.";
         d["ScarlettHelpTitle"] = "Sobre o Controle Focusrite Scarlett";
         d["ScarlettHelpBody"] = "Controla registradores de hardware Focusrite Scarlett 2i2 / Solo (Gen 2, 3 e 4) diretamente via USB: Air Presence e Drive, Auto Gain, Clip Safe, Phantom Power 48V, modo Instrumento/Linha, Monitoramento Direto e gravação em NVRAM.";
+        d["UpmixModeLabel"] = "Modo de Upmix Espacial:";
+        d["TipUpmixMode"] = "Controla como faixas estéreo ou 5.1 se expandem no palco 7.1.4 usando decomposição STFT DirAC de 1024 pontos com coerência de fase.\n\n• Direto: preserva os canais originais do arquivo.\n• Surround 7.1: expande o palco lateral e traseiro nos beds.\n• 3D Completo (7.1 + Altura): preenche o surround e gera camadas de altura no teto.";
+        d["UpmixModeDirect"] = "Direto (Canais Originais)";
+        d["UpmixModeSurround"] = "Surround 7.1 (Matrix DirAC)";
+        d["UpmixModeFull3D"] = "3D Completo (7.1 + Altura)";
+        d["UpmixModeSurroundShort"] = "Surround 7.1";
+        d["UpmixModeFull3DShort"] = "3D Completo";
+        d["LyricsSingTogglePill"] = "Sing";
+        d["LyricsSingToggleDesc"] = "Mostrar ou ocultar controles de Karaokê e Microfone";
+        d["LibraryLoadingCached"] = "Carregando biblioteca...";
+        d["MediaDecodeFailedCorrupt"] = "Não foi possível decodificar este arquivo de áudio. Ele pode estar corrompido ou usar um codec não suportado.";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

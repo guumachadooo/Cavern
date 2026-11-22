@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <mutex>
+#include <thread>
 
 #if defined(__ANDROID__)
 #include <aaudio/AAudio.h>
@@ -37,6 +38,7 @@ struct PathAAudioEngine {
     CavRingBuffer in_rb;
 
     std::atomic<bool> running{false};
+    std::atomic<int32_t> io_inflight{0};
     std::atomic<bool> input_drained{false};
     std::atomic<int32_t> active_sr{48000};
     std::atomic<int32_t> active_burst{128};
@@ -129,6 +131,7 @@ struct PathAAudioEngine {
         int32_t device_id,
         int32_t channels,
         bool with_callback,
+        bool low_latency_duplex,
         AAudioStream** out_handle) {
         AAudioStreamBuilder* builder = nullptr;
         if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK || !builder) {
@@ -152,7 +155,7 @@ struct PathAAudioEngine {
             static auto fn_set_usage = reinterpret_cast<SetInt32Fn>(dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setUsage"));
             static auto fn_set_content = reinterpret_cast<SetInt32Fn>(dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setContentType"));
             if (fn_set_usage) {
-                fn_set_usage(builder, 14 /* AAUDIO_USAGE_GAME */);
+                fn_set_usage(builder, 1 /* AAUDIO_USAGE_MEDIA */);
             }
             if (fn_set_content) {
                 fn_set_content(builder, 2 /* AAUDIO_CONTENT_TYPE_MUSIC */);
@@ -186,11 +189,12 @@ struct PathAAudioEngine {
             return false;
         }
 
-        /* Target 2 hardware bursts initially for minimum glitch-free latency */
+        /* 2 bursts for live mic duplex latency; 4 bursts for playback-only jitter & GC immunity */
         int32_t burst = AAudioStream_getFramesPerBurst(*out_handle);
         if (burst > 0) {
-            int32_t target = burst * 2;
-            if (buffer_frames > target) target = buffer_frames * 2;
+            int32_t burst_mult = low_latency_duplex ? 2 : 4;
+            int32_t target = burst * burst_mult;
+            if (buffer_frames > target) target = buffer_frames * burst_mult;
             int32_t cap = AAudioStream_getBufferCapacityInFrames(*out_handle);
             if (target > cap) target = cap;
             AAudioStream_setBufferSizeInFrames(*out_handle, target);
@@ -208,7 +212,8 @@ struct PathAAudioEngine {
         last_xruns.store(0, std::memory_order_relaxed);
         tuner_cooldown.store(0, std::memory_order_relaxed);
 
-        if (!open_single_stream(AAUDIO_DIRECTION_OUTPUT, sample_rate, buffer_frames, out_dev_id, 2, true, &out_stream)) {
+        bool duplex_requested = enable_input != 0;
+        if (!open_single_stream(AAUDIO_DIRECTION_OUTPUT, sample_rate, buffer_frames, out_dev_id, 2, true, duplex_requested, &out_stream)) {
             return -10;
         }
 
@@ -219,8 +224,8 @@ struct PathAAudioEngine {
         bool duplex_ok = false;
         if (enable_input) {
             /* Try stereo first (Scarlett 2i2 2-ch), fall back to mono if device/phone mic is 1-ch */
-            if (open_single_stream(AAUDIO_DIRECTION_INPUT, actual_sr, buffer_frames, in_dev_id, 2, false, &in_stream) ||
-                open_single_stream(AAUDIO_DIRECTION_INPUT, actual_sr, buffer_frames, in_dev_id, 1, false, &in_stream)) {
+            if (open_single_stream(AAUDIO_DIRECTION_INPUT, actual_sr, buffer_frames, in_dev_id, 2, false, true, &in_stream) ||
+                open_single_stream(AAUDIO_DIRECTION_INPUT, actual_sr, buffer_frames, in_dev_id, 1, false, true, &in_stream)) {
                 if (AAudioStream_requestStart(in_stream) == AAUDIO_OK) {
                     duplex_ok = true;
                 } else {
@@ -259,14 +264,21 @@ struct PathAAudioEngine {
     void stop_locked() {
         running.store(false, std::memory_order_release);
         if (out_stream) {
+            aaudio_stream_state_t next_state = AAUDIO_STREAM_STATE_UNKNOWN;
             AAudioStream_requestStop(out_stream);
+            AAudioStream_waitForStateChange(out_stream, AAUDIO_STREAM_STATE_STOPPING, &next_state, 200000000LL);
             AAudioStream_close(out_stream);
             out_stream = nullptr;
         }
         if (in_stream) {
+            aaudio_stream_state_t next_state = AAUDIO_STREAM_STATE_UNKNOWN;
             AAudioStream_requestStop(in_stream);
+            AAudioStream_waitForStateChange(in_stream, AAUDIO_STREAM_STATE_STOPPING, &next_state, 200000000LL);
             AAudioStream_close(in_stream);
             in_stream = nullptr;
+        }
+        while (io_inflight.load(std::memory_order_acquire) > 0) {
+            std::this_thread::yield();
         }
         is_full_duplex.store(0, std::memory_order_release);
         is_exclusive.store(0, std::memory_order_release);
@@ -298,12 +310,31 @@ int32_t path_a_start(int32_t sr, int32_t buf_frames, int32_t enable_in, int32_t 
 }
 void path_a_stop() { g_aaudio.stop(); }
 int32_t path_a_write_playback(const float* data, int32_t frames) {
-    return frames > 0 ? static_cast<int32_t>(cav_rb_write(&g_aaudio.out_rb, data, static_cast<uint32_t>(frames))) : 0;
+    if (frames <= 0) return 0;
+    g_aaudio.io_inflight.fetch_add(1, std::memory_order_acq_rel);
+    int32_t written = g_aaudio.running.load(std::memory_order_acquire)
+        ? static_cast<int32_t>(cav_rb_write(&g_aaudio.out_rb, data, static_cast<uint32_t>(frames)))
+        : 0;
+    g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);
+    return written;
 }
 int32_t path_a_read_capture(float* data, int32_t max_frames) {
-    return max_frames > 0 ? static_cast<int32_t>(cav_rb_read(&g_aaudio.in_rb, data, static_cast<uint32_t>(max_frames), 0)) : 0;
+    if (max_frames <= 0) return 0;
+    g_aaudio.io_inflight.fetch_add(1, std::memory_order_acq_rel);
+    int32_t got = g_aaudio.running.load(std::memory_order_acquire)
+        ? static_cast<int32_t>(cav_rb_read(&g_aaudio.in_rb, data, static_cast<uint32_t>(max_frames), 0))
+        : 0;
+    g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);
+    return got;
 }
-int32_t path_a_free_frames() { return static_cast<int32_t>(cav_rb_avail_write_frames(&g_aaudio.out_rb)); }
+int32_t path_a_free_frames() {
+    g_aaudio.io_inflight.fetch_add(1, std::memory_order_acq_rel);
+    int32_t avail = g_aaudio.running.load(std::memory_order_acquire)
+        ? static_cast<int32_t>(cav_rb_avail_write_frames(&g_aaudio.out_rb))
+        : 0;
+    g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);
+    return avail;
+}
 void path_a_get_status(CavProAudioStatus* st) { g_aaudio.fill_status(st); }
 
 #else

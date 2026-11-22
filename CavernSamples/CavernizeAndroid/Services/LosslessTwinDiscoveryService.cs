@@ -625,9 +625,10 @@ public static partial class LosslessTwinDiscoveryService {
         left = null;
         right = null;
         sampleRate = 48000;
+        MediaExtractor extractor = null;
         MediaCodec codec = null;
         try {
-            using MediaExtractor extractor = new();
+            extractor = new MediaExtractor();
             extractor.SetDataSource(path);
             int audioIdx = -1;
             MediaFormat format = null;
@@ -728,6 +729,9 @@ public static partial class LosslessTwinDiscoveryService {
         } finally {
             try { codec?.Stop(); } catch { }
             try { codec?.Release(); } catch { }
+            try { codec?.Dispose(); } catch { }
+            try { extractor?.Release(); } catch { }
+            try { extractor?.Dispose(); } catch { }
         }
     }
 
@@ -823,9 +827,10 @@ public static partial class LosslessTwinDiscoveryService {
         }
 
         // Fallback: Android native MediaExtractor + MediaCodec probe (works for MP4/M4A/EAC3/AAC/Opus when FFmpeg isn't installed)
+        MediaExtractor extractor = null;
         MediaCodec codec = null;
         try {
-            using MediaExtractor extractor = new();
+            extractor = new MediaExtractor();
             if (localMediaPath != null) {
                 extractor.SetDataSource(localMediaPath);
             } else if (mediaUri != null && ctx != null) {
@@ -928,6 +933,9 @@ public static partial class LosslessTwinDiscoveryService {
         } finally {
             try { codec?.Stop(); } catch { }
             try { codec?.Release(); } catch { }
+            try { codec?.Dispose(); } catch { }
+            try { extractor?.Release(); } catch { }
+            try { extractor?.Dispose(); } catch { }
         }
     }
 

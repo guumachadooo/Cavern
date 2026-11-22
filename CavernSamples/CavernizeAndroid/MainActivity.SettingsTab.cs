@@ -100,7 +100,9 @@ public partial class MainActivity {
     Switch muteBedSwitch, muteGroundSwitch, speakerVirtSwitch, force24Switch, surroundSwapSwitch, wavSkipSwitch, reportModeSwitch, gradingSwitch;
     Switch pedanticSwitch, unsafeSwitch, keepTempSwitch, normSwitch, limiterOnlySwitch;
     OneUiSeekBar upmixEffectBar, upmixSmoothBar;
-    Switch matrixUpmixSwitch, cavernizeUpmixSwitch, parametricStftSwitch, atmosAwareUpmixSwitch;
+    OneUiInlineSelector upmixModeSelector;
+    LinearLayout atmosAwareUpmixSection;
+    Switch atmosAwareUpmixSwitch;
 
     sealed class SettingsCardEntry {
         public LinearLayout Card;
@@ -279,70 +281,55 @@ public partial class MainActivity {
         };
         page.AddView(settingsCardsContainer);
 
-        // 1. Spatial 3D Upmixing
+        // 1. Spatial 3D Upmixing (DirAC 1024-pt STFT always active internally)
         LinearLayout upmixCard = Card(S["UpmixTitle"], OneUiIconType.Sparkles, OneUiTheme.IconAtmosUpmix);
-        matrixUpmixSwitch = AddSwitchRow(upmixCard, S["MatrixUpmix"], store.MatrixUpmixing, v => {
-            store.MatrixUpmixing = v;
+        upmixModeSelector = new OneUiInlineSelector(this, S["UpmixModeLabel"]);
+        upmixModeSelector.SetItems([S["UpmixModeDirect"], S["UpmixModeSurround"], S["UpmixModeFull3D"]], ResolveUpmixModeIndex());
+        upmixModeSelector.SelectionChanged += pos => {
+            store.MatrixUpmixing = pos >= 1;
+            store.CavernizeUpmix = pos >= 2;
+            SyncUpmixModeUi();
             playerEngine?.ApplyUpmixingSettings(upmixingSettings);
-            ReattachPlayerTrack();
             RefreshMusicPlayerControlsUi();
             RefreshSettingsCategorySubtitles();
-        }, helpBody: S["TipMatrixUpmix"]);
-        AddDivider(upmixCard);
-        cavernizeUpmixSwitch = AddSwitchRow(upmixCard, S["CavernizeUpmix"], store.CavernizeUpmix, v => {
-            store.CavernizeUpmix = v;
-            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
-            ReattachPlayerTrack();
-            RefreshMusicPlayerControlsUi();
-            RefreshSettingsCategorySubtitles();
-        }, helpBody: S["TipCavernizeUpmix"]);
-        AddDivider(upmixCard);
-        parametricStftSwitch = AddSwitchRow(upmixCard, S["ParametricStftUpmix"], store.ParametricStftUpmix, v => {
-            store.ParametricStftUpmix = v;
-            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
-            ReattachPlayerTrack();
-            RefreshMusicPlayerControlsUi();
-            RefreshSettingsCategorySubtitles();
-        }, helpBody: S["TipParametricStftUpmix"]);
-        AddDivider(upmixCard);
-        atmosAwareUpmixSwitch = AddSwitchRow(upmixCard, S["AtmosAwareUpmix"], store.AtmosAwareUpmix, v => {
+        };
+        upmixCard.AddView(WrapControlWithHelp(upmixModeSelector, S["UpmixModeLabel"].TrimEnd(':'), S["TipUpmixMode"], bottomMarginDp: 2));
+
+        atmosAwareUpmixSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        AddDivider(atmosAwareUpmixSection);
+        atmosAwareUpmixSwitch = AddSwitchRow(atmosAwareUpmixSection, S["AtmosAwareUpmix"], store.AtmosAwareUpmix, v => {
             store.AtmosAwareUpmix = v;
             playerEngine?.ApplyUpmixingSettings(upmixingSettings);
-            ReattachPlayerTrack();
             RefreshMusicPlayerControlsUi();
             RefreshSettingsCategorySubtitles();
         }, helpBody: S["TipAtmosAwareUpmix"]);
+        atmosAwareUpmixSection.Visibility = (store.MatrixUpmixing || store.CavernizeUpmix) ? ViewStates.Visible : ViewStates.Gone;
+        upmixCard.AddView(atmosAwareUpmixSection, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         AddDivider(upmixCard);
         (upmixEffectBar, _) = AddSliderRow(upmixCard, S["UpmixEffect"], 0, 100, (int)Math.Round(store.UpmixEffect * 100), v => {
             store.UpmixEffect = v * 0.01f;
             playerEngine?.ApplyUpmixingSettings(upmixingSettings);
-            ReattachPlayerTrack();
         }, "%", defaultValue: 75, helpBody: S["TipUpmixEffect"]);
         (upmixSmoothBar, _) = AddSliderRow(upmixCard, S["UpmixSmooth"], 0, 100, (int)Math.Round(store.UpmixSmoothness * 100), v => {
             store.UpmixSmoothness = v * 0.01f;
             playerEngine?.ApplyUpmixingSettings(upmixingSettings);
-            ReattachPlayerTrack();
         }, "%", defaultValue: 80, helpBody: S["TipUpmixSmooth"]);
         Button resetUpmixBtn = PillButton(S["ResetUpmix"], () => {
             store.MatrixUpmixing = false;
             store.CavernizeUpmix = false;
-            store.ParametricStftUpmix = true;
             store.AtmosAwareUpmix = true;
             store.UpmixEffect = 0.75f;
             store.UpmixSmoothness = 0.80f;
-            matrixUpmixSwitch.Checked = false;
-            cavernizeUpmixSwitch.Checked = false;
-            parametricStftSwitch.Checked = true;
+            SyncUpmixModeUi();
             atmosAwareUpmixSwitch.Checked = true;
             SyncSlider(upmixEffectBar, 75, 0, 100, "%");
             SyncSlider(upmixSmoothBar, 80, 0, 100, "%");
             playerEngine?.ApplyUpmixingSettings(upmixingSettings);
-            ReattachPlayerTrack();
             RefreshMusicPlayerControlsUi();
             RefreshSettingsCategorySubtitles();
         });
         upmixCard.AddView(resetUpmixBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
-        RegisterSettingsCard(upmixCard, categoryIndex: 0, isProOnly: false, "upmix matrix cavernize stft atmos spatial 3d");
+        RegisterSettingsCard(upmixCard, categoryIndex: 0, isProOnly: false, "upmix matrix cavernize dirac stft atmos spatial 3d surround direct");
 
         // 2. Room Acoustics, Gain & Dynamic Limiter
         LinearLayout acousticsCard = Card(S["RoomAcousticsTitle"], OneUiIconType.Sliders, OneUiTheme.IconSpatial);
@@ -1457,7 +1444,7 @@ public partial class MainActivity {
         Button lgsrRescanBtn = PillButton(S["LgsrRescanTwinBtn"], () => {
             CavernizeTrack active = GetActiveTrack();
             if (active != null) {
-                StartLosslessTwinDiscoveryAsync(active);
+                StartLosslessTwinDiscoveryAsync(active, forceRescan: true);
             } else {
                 RefreshLgsrUi();
             }
@@ -1892,13 +1879,9 @@ public partial class MainActivity {
         }
         switch (catIndex) {
             case 0: {
-                string upmixTag = store.AtmosAwareUpmix
-                    ? S["AtmosAwareUpmix"]
-                    : (store.ParametricStftUpmix
-                        ? S["ParametricStftUpmix"]
-                        : (store.CavernizeUpmix
-                            ? S["CavernizeUpmix"]
-                            : (store.MatrixUpmixing ? S["MatrixUpmix"] : S["SignalChainUpmixDirect"])));
+                string upmixTag = store.CavernizeUpmix
+                    ? S["UpmixModeFull3DShort"]
+                    : (store.MatrixUpmixing ? S["UpmixModeSurroundShort"] : S["SignalChainUpmixDirect"]);
                 string roomTag = $"{store.RoomSizeX:0.#}×{store.RoomSizeY:0.#}×{store.RoomSizeZ:0.#}m";
                 string loudTag = store.Iso226Enabled
                     ? "ISO 226"
@@ -2237,6 +2220,26 @@ public partial class MainActivity {
             positiveText: S["OkBtn"]);
     }
 
+    int ResolveUpmixModeIndex() {
+        if (store == null) {
+            return 0;
+        }
+        if (store.CavernizeUpmix) {
+            return 2;
+        }
+        return store.MatrixUpmixing ? 1 : 0;
+    }
+
+    void SyncUpmixModeUi() {
+        int idx = ResolveUpmixModeIndex();
+        if (upmixModeSelector != null && upmixModeSelector.SelectedIndex != idx) {
+            upmixModeSelector.SetSelection(idx, notify: false);
+        }
+        if (atmosAwareUpmixSection != null) {
+            atmosAwareUpmixSection.Visibility = idx > 0 ? ViewStates.Visible : ViewStates.Gone;
+        }
+    }
+
     void RefreshSettingsTabButtons() {
         RefreshBinauralProfileUi();
         RefreshAutoEqUi();
@@ -2258,15 +2261,7 @@ public partial class MainActivity {
         if (muteGroundSwitch != null && muteGroundSwitch.Checked != store.MuteGround) {
             muteGroundSwitch.Checked = store.MuteGround;
         }
-        if (matrixUpmixSwitch != null && matrixUpmixSwitch.Checked != store.MatrixUpmixing) {
-            matrixUpmixSwitch.Checked = store.MatrixUpmixing;
-        }
-        if (cavernizeUpmixSwitch != null && cavernizeUpmixSwitch.Checked != store.CavernizeUpmix) {
-            cavernizeUpmixSwitch.Checked = store.CavernizeUpmix;
-        }
-        if (parametricStftSwitch != null && parametricStftSwitch.Checked != store.ParametricStftUpmix) {
-            parametricStftSwitch.Checked = store.ParametricStftUpmix;
-        }
+        SyncUpmixModeUi();
         if (atmosAwareUpmixSwitch != null && atmosAwareUpmixSwitch.Checked != store.AtmosAwareUpmix) {
             atmosAwareUpmixSwitch.Checked = store.AtmosAwareUpmix;
         }
@@ -3323,7 +3318,10 @@ public partial class MainActivity {
             }
         }
         if (headTrackingOscPortBtn != null) {
-            headTrackingOscPortBtn.Text = string.Format(S["HeadTrackingOscPortBtn"], store.HeadTrackingOscPort);
+            string nextPortTxt = string.Format(S["HeadTrackingOscPortBtn"], store.HeadTrackingOscPort);
+            if (!string.Equals(headTrackingOscPortBtn.Text, nextPortTxt, StringComparison.Ordinal)) {
+                headTrackingOscPortBtn.Text = nextPortTxt;
+            }
         }
         SyncSlider(headTrackingPredictBar, (int)Math.Round(store.HeadTrackingPredictionMs), 0, 100, " ms");
         if (audioOutputDiagText != null) {
@@ -3331,22 +3329,24 @@ public partial class MainActivity {
             string fmt = diag.IsFloat32 ? "Float32" : "PCM16";
             string latTag = diag.IsLowLatency ? S["AudioOutputLowLatTag"] : S["AudioOutputBalancedTag"];
             string usbTag = diag.IsUsbDacPreferred ? S["AudioOutputUsbTag"] : string.Empty;
-            audioOutputDiagText.Text = string.Format(
+            string nextDiagTxt = string.Format(
                 S["AudioOutputDiagFormat"],
                 diag.SampleRate / 1000.0,
                 fmt,
                 latTag,
                 diag.EstimatedLatencyMs,
                 usbTag);
+            if (!string.Equals(audioOutputDiagText.Text, nextDiagTxt, StringComparison.Ordinal)) {
+                audioOutputDiagText.Text = nextDiagTxt;
+            }
         }
         if (headTrackingStatusText != null) {
             string summary = headTrackingManager?.StatusSummary ?? string.Empty;
-            if (!store.HeadTrackingEnabled || string.IsNullOrWhiteSpace(summary)) {
-                headTrackingStatusText.Text = S["HeadTrackingStatusIdle"];
-            } else {
-                headTrackingStatusText.Text = headTrackingManager.IsLive
-                    ? string.Format(S["HeadTrackingStatusLive"], summary)
-                    : summary;
+            string nextHtTxt = (!store.HeadTrackingEnabled || string.IsNullOrWhiteSpace(summary))
+                ? S["HeadTrackingStatusIdle"]
+                : (headTrackingManager.IsLive ? string.Format(S["HeadTrackingStatusLive"], summary) : summary);
+            if (!string.Equals(headTrackingStatusText.Text, nextHtTxt, StringComparison.Ordinal)) {
+                headTrackingStatusText.Text = nextHtTxt;
             }
         }
     }
@@ -4049,6 +4049,16 @@ public partial class MainActivity {
         modalStatusTv.Visibility = ViewStates.Gone;
         content.AddView(modalStatusTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
 
+        CancellationTokenSource activeDownloadCts = null;
+        bool downloadInFlight = false;
+        Button cancelDlBtn = null;
+        cancelDlBtn = PillButton(S["NeuralModelCancelDownloadBtn"], () => {
+            try { activeDownloadCts?.Cancel(); } catch { }
+            if (cancelDlBtn != null) cancelDlBtn.Visibility = ViewStates.Gone;
+        });
+        cancelDlBtn.Visibility = ViewStates.Gone;
+        content.AddView(cancelDlBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+
         LinearLayout modelsContainer = new(this) { Orientation = Orientation.Vertical };
         content.AddView(modelsContainer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
@@ -4117,31 +4127,62 @@ public partial class MainActivity {
                 List<Button> actionButtons = [];
                 if (!isInst && !string.IsNullOrWhiteSpace(localEntry.DownloadUrl)) {
                     actionButtons.Add(PrimaryButton(S["NeuralModelDownloadBtn"], () => {
+                        if (downloadInFlight) {
+                            ShowToast(S["NeuralModelDownloadInProgressToast"]);
+                            return;
+                        }
+                        downloadInFlight = true;
+                        activeDownloadCts?.Dispose();
+                        activeDownloadCts = new CancellationTokenSource();
+                        CancellationToken dlToken = activeDownloadCts.Token;
+                        modalProg.Progress = 0;
                         modalProg.Visibility = ViewStates.Visible;
+                        modalStatusTv.Text = $"{localEntry.DisplayName}...";
                         modalStatusTv.Visibility = ViewStates.Visible;
+                        if (cancelDlBtn != null) cancelDlBtn.Visibility = ViewStates.Visible;
                         Task.Run(async () => {
                             try {
                                 await OnnxRuntimeInstallerService.DownloadModelAsync(this, localEntry, (frac, msg) => RunOnUiThread(() => {
                                     if (uiDestroyed || modalClosed) return;
                                     modalProg.Progress = Math.Clamp((int)Math.Round(frac * 1000.0), 0, 1000);
                                     modalStatusTv.Text = msg;
-                                }));
+                                }), dlToken);
                                 RunOnUiThread(() => {
+                                    downloadInFlight = false;
                                     if (uiDestroyed) return;
                                     SyncNeuralRuntimeDiagnostics();
                                     RefreshNeuralAudioUi();
                                     if (!modalClosed) {
                                         modalProg.Visibility = ViewStates.Gone;
                                         modalStatusTv.Visibility = ViewStates.Gone;
+                                        if (cancelDlBtn != null) cancelDlBtn.Visibility = ViewStates.Gone;
                                         RefreshModalInPlace();
                                     }
                                 });
+                            } catch (System.OperationCanceledException) {
+                                RunOnUiThread(() => {
+                                    downloadInFlight = false;
+                                    if (uiDestroyed || modalClosed) return;
+                                    modalProg.Visibility = ViewStates.Gone;
+                                    modalStatusTv.Visibility = ViewStates.Gone;
+                                    if (cancelDlBtn != null) cancelDlBtn.Visibility = ViewStates.Gone;
+                                });
                             } catch (Exception ex) {
                                 RunOnUiThread(() => {
+                                    downloadInFlight = false;
                                     if (uiDestroyed) return;
                                     modalProg.Visibility = ViewStates.Gone;
+                                    if (cancelDlBtn != null) cancelDlBtn.Visibility = ViewStates.Gone;
                                     modalStatusTv.Text = ex.Message;
-                                    ShowError(ex.Message);
+                                    if (!modalClosed) {
+                                        ShowModelDownloadErrorDialog(localEntry, ex.Message, onOpenImport: () => {
+                                            pendingStandaloneCustomOnnxImport = false;
+                                            pendingOnnxImportModelId = localEntry.Id;
+                                            pendingCustomOnnxTask = localEntry.Task;
+                                            dialog?.Dismiss();
+                                            OpenFileWithExplorerForExtensions(S["NeuralModelImportBtn"], [".onnx"], ImportCustomOnnxModelFromPath, ReqLoadOnnxModel);
+                                        });
+                                    }
                                 });
                             }
                         });
@@ -4177,6 +4218,9 @@ public partial class MainActivity {
                         dialog?.Dismiss();
                         OpenFileWithExplorerForExtensions(S["NeuralModelImportBtn"], [".onnx"], ImportCustomOnnxModelFromPath, ReqLoadOnnxModel);
                     }));
+                    if (!string.IsNullOrWhiteSpace(localEntry.DownloadUrl)) {
+                        actionButtons.Add(PillButton(S["NeuralModelOpenLinkBtn"], () => OpenModelUrlInBrowser(localEntry.DownloadUrl)));
+                    }
                 }
 
                 // 2-row flex layout so 3-4 action pills never clip horizontally
@@ -4259,8 +4303,86 @@ public partial class MainActivity {
             onHelp: () => ShowModalGuidedHelp(S["NeuralModelsHelpTitle"], S["NeuralModelsHelpBody"], OneUiIconType.Sparkles),
             helpContentDesc: S["NeuralModelsHelpTitle"]);
         if (dialog != null) {
-            dialog.DismissEvent += (_, _) => modalClosed = true;
+            dialog.DismissEvent += (_, _) => {
+                modalClosed = true;
+                try { activeDownloadCts?.Cancel(); } catch { }
+                activeDownloadCts?.Dispose();
+                activeDownloadCts = null;
+            };
         }
+    }
+
+    void OpenModelUrlInBrowser(string url) {
+        if (string.IsNullOrWhiteSpace(url)) {
+            return;
+        }
+        try {
+            Intent browser = new(Intent.ActionView, Android.Net.Uri.Parse(url.Trim()));
+            StartActivity(browser);
+        } catch (Exception ex) {
+            ShowError(ex.Message);
+        }
+    }
+
+    void CopyModelUrlToClipboard(string url) {
+        if (string.IsNullOrWhiteSpace(url)) {
+            return;
+        }
+        if (GetSystemService(ClipboardService) is ClipboardManager cm) {
+            cm.PrimaryClip = ClipData.NewPlainText("ONNX Model URL", url.Trim());
+            ShowToast(S["NeuralModelLinkCopiedToast"]);
+        }
+    }
+
+    void ShowModelDownloadErrorDialog(Cavernize.Logic.Spatial.NeuralModelCatalogEntry entry, string errorDetail, Action onOpenImport) {
+        LinearLayout body = new(this) { Orientation = Orientation.Vertical };
+        TextView detailTv = Label(errorDetail ?? "", 12.5f, OneUiTheme.TextSecondary);
+        detailTv.SetPadding(0, 0, 0, Dp(10));
+        body.AddView(detailTv);
+
+        string url = entry?.DownloadUrl ?? "";
+        if (!string.IsNullOrWhiteSpace(url)) {
+            TextView urlBox = new(this) {
+                Text = url,
+                TextSize = 11.5f
+            };
+            urlBox.SetTextColor(OneUiTheme.PrimaryHigh);
+            urlBox.SetTypeface(Typeface.Monospace, TypefaceStyle.Normal);
+            urlBox.SetTextIsSelectable(true);
+            urlBox.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 14f);
+            urlBox.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+            body.AddView(urlBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(10)
+            });
+
+            LinearLayout linkRow = HRow();
+            linkRow.BaselineAligned = false;
+            linkRow.SetGravity(GravityFlags.CenterVertical);
+
+            Button openBtn = PrimaryButton(S["NeuralModelOpenLinkBtn"], () => OpenModelUrlInBrowser(url));
+            openBtn.TextSize = 12f;
+            openBtn.SetSingleLine(true);
+            openBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+
+            Button copyBtn = PillButton(S["NeuralModelCopyLinkBtn"], () => CopyModelUrlToClipboard(url));
+            copyBtn.TextSize = 12f;
+            copyBtn.SetSingleLine(true);
+            copyBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+
+            linkRow.AddView(openBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+            linkRow.AddView(copyBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            body.AddView(linkRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        }
+
+        OneUiModalDialog.Show(
+            this,
+            S["NeuralModelDownloadFailedTitle"],
+            customContent: body,
+            icon: OneUiIconType.Info,
+            iconBadgeColor: OneUiTheme.FunctionalAmber,
+            positiveText: S["NeuralModelImportBtn"],
+            onPositive: onOpenImport,
+            negativeText: S["CloseBtn"]);
     }
 
     void ShowImportCustomOnnxDialog() {
@@ -4379,7 +4501,7 @@ public partial class MainActivity {
         if (rescanTwin) {
             CavernizeTrack active = GetActiveTrack();
             if (active != null) {
-                StartLosslessTwinDiscoveryAsync(active);
+                StartLosslessTwinDiscoveryAsync(active, forceRescan: true);
                 return;
             }
         }
@@ -4538,7 +4660,7 @@ public partial class MainActivity {
                 _ => S["ProAudioBackendLegacy"]
             };
             string calTag = diag.IsLatencyCalibrated ? S["ProAudioCalibratedTag"] : string.Empty;
-            proAudioStatusText.Text = string.Format(
+            string nextStatus = string.Format(
                 S["ProAudioStatusFormat"],
                 backendLabel,
                 diag.SampleRate / 1000.0,
@@ -4546,31 +4668,40 @@ public partial class MainActivity {
                 diag.BufferFrames,
                 diag.RoundTripLatencyMs,
                 calTag);
-            proAudioStatusText.SetTextColor(
-                diag.ActiveBackend == Cavernize.Logic.Spatial.ActiveProAudioBackendKind.LibUsbUac2Direct
-                    ? OneUiTheme.IconSystemInfo
-                    : (diag.ActiveBackend == Cavernize.Logic.Spatial.ActiveProAudioBackendKind.AAudioOboeFullDuplex
-                        ? OneUiTheme.Primary
-                        : OneUiTheme.TextSub));
+            if (!string.Equals(proAudioStatusText.Text, nextStatus, StringComparison.Ordinal)) {
+                proAudioStatusText.Text = nextStatus;
+                proAudioStatusText.SetTextColor(
+                    diag.ActiveBackend == Cavernize.Logic.Spatial.ActiveProAudioBackendKind.LibUsbUac2Direct
+                        ? OneUiTheme.IconSystemInfo
+                        : (diag.ActiveBackend == Cavernize.Logic.Spatial.ActiveProAudioBackendKind.AAudioOboeFullDuplex
+                            ? OneUiTheme.Primary
+                            : OneUiTheme.TextSub));
+            }
         }
 
         if (proAudioTelemetryText != null) {
+            string nextTel;
+            Color nextCol;
             if (usbSnap != null && usbSnap.IsAttached && !usbSnap.HasPermission) {
-                proAudioTelemetryText.Text = string.Format(S["ProAudioUsbWaitingPerm"], usbSnap.DisplayName);
-                proAudioTelemetryText.SetTextColor(OneUiTheme.PeachText);
+                nextTel = string.Format(S["ProAudioUsbWaitingPerm"], usbSnap.DisplayName);
+                nextCol = OneUiTheme.PeachText;
             } else if (!store.ProAudioEnabled && (usbSnap == null || !usbSnap.IsAttached)) {
-                proAudioTelemetryText.Text = S["ProAudioNoUsbAttached"];
-                proAudioTelemetryText.SetTextColor(OneUiTheme.TextMuted);
+                nextTel = S["ProAudioNoUsbAttached"];
+                nextCol = OneUiTheme.TextMuted;
             } else {
                 string syncMode = string.IsNullOrEmpty(diag.ClockSyncMode) ? "-" : diag.ClockSyncMode;
-                proAudioTelemetryText.Text = string.Format(
+                nextTel = string.Format(
                     S["ProAudioTelemetryFormat"],
                     syncMode,
                     diag.AsyncClockDriftPpm,
                     diag.OutputXRuns,
                     diag.InputXRuns,
                     diag.MicPeakDbfs);
-                proAudioTelemetryText.SetTextColor(OneUiTheme.TextMuted);
+                nextCol = OneUiTheme.TextMuted;
+            }
+            if (!string.Equals(proAudioTelemetryText.Text, nextTel, StringComparison.Ordinal)) {
+                proAudioTelemetryText.Text = nextTel;
+                proAudioTelemetryText.SetTextColor(nextCol);
             }
         }
         RefreshLyricsSingDockUi();

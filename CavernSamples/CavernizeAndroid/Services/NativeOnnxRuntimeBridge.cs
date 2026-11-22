@@ -464,6 +464,12 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     delegate IntPtr SessionGetNameDelegate(IntPtr session, UIntPtr index, IntPtr allocator, out IntPtr namePtr);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate IntPtr SessionGetTypeInfoDelegate(IntPtr session, UIntPtr index, out IntPtr typeInfo);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate IntPtr CastTypeInfoToTensorInfoDelegate(IntPtr typeInfo, out IntPtr tensorInfo);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     delegate IntPtr GetAllocatorWithDefaultOptionsDelegate(out IntPtr allocator);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -550,6 +556,8 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     SessionGetCountDelegate fnGetOutputCount;
     SessionGetNameDelegate fnGetInputName;
     SessionGetNameDelegate fnGetOutputName;
+    SessionGetTypeInfoDelegate fnGetInputTypeInfo;
+    CastTypeInfoToTensorInfoDelegate fnCastTypeInfoToTensorInfo;
     GetAllocatorWithDefaultOptionsDelegate fnGetAllocator;
     AllocatorFreeDelegate fnAllocatorFree;
     CreateCpuMemoryInfoDelegate fnCreateCpuMemInfo;
@@ -567,6 +575,7 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     ReleaseHandleDelegate fnReleaseValue;
     ReleaseHandleDelegate fnReleaseMemoryInfo;
     ReleaseHandleDelegate fnReleaseTensorTypeAndShapeInfo;
+    ReleaseHandleDelegate fnReleaseTypeInfo;
 
     public NativeOnnxRuntimeBridge(Context context) {
         appContext = context?.ApplicationContext ?? throw new ArgumentNullException(nameof(context));
@@ -830,6 +839,8 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             ?? GetSlotDelegate<SessionGetNameDelegate>("SessionGetInputNameAllocated");
         fnGetOutputName = TryGetSlotDelegate<SessionGetNameDelegate>("SessionGetOutputName")
             ?? GetSlotDelegate<SessionGetNameDelegate>("SessionGetOutputNameAllocated");
+        fnGetInputTypeInfo = TryGetSlotDelegate<SessionGetTypeInfoDelegate>("SessionGetInputTypeInfo");
+        fnCastTypeInfoToTensorInfo = TryGetSlotDelegate<CastTypeInfoToTensorInfoDelegate>("CastTypeInfoToTensorInfo");
         fnGetAllocator = GetSlotDelegate<GetAllocatorWithDefaultOptionsDelegate>("GetAllocatorWithDefaultOptions");
         fnAllocatorFree = GetSlotDelegate<AllocatorFreeDelegate>("AllocatorFree");
         fnCreateCpuMemInfo = GetSlotDelegate<CreateCpuMemoryInfoDelegate>("CreateCpuMemoryInfo");
@@ -847,6 +858,7 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         fnReleaseValue = GetSlotDelegate<ReleaseHandleDelegate>("ReleaseValue");
         fnReleaseMemoryInfo = GetSlotDelegate<ReleaseHandleDelegate>("ReleaseMemoryInfo");
         fnReleaseTensorTypeAndShapeInfo = GetSlotDelegate<ReleaseHandleDelegate>("ReleaseTensorTypeAndShapeInfo");
+        fnReleaseTypeInfo = TryGetSlotDelegate<ReleaseHandleDelegate>("ReleaseTypeInfo");
     }
 
     T GetSlotDelegate<T>(string name) where T : Delegate {
@@ -930,6 +942,7 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         IntPtr sessionHandle;
         readonly string[] inputNames;
         readonly string[] outputNames;
+        readonly long[][] inputShapes;
         bool disposed;
 
         public NativeOnnxSession(NativeOnnxRuntimeBridge bridge, string modelPath, IntPtr handle, string activeEp) {
@@ -939,11 +952,13 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             ExecutionProvider = activeEp;
             inputNames = ReadNames(isInput: true);
             outputNames = ReadNames(isInput: false);
+            inputShapes = ReadInputShapes(inputNames.Length);
         }
 
         public string ModelPath { get; }
         public string ExecutionProvider { get; }
         public IReadOnlyList<string> InputNames => inputNames;
+        public IReadOnlyList<long[]> InputShapes => inputShapes;
         public IReadOnlyList<string> OutputNames => outputNames;
 
         public NeuralTensorFloat[] RunSingleInput(NeuralTensorFloat inputTensor) {
@@ -1071,6 +1086,58 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                 }
             }
             return names;
+        }
+
+        long[][] ReadInputShapes(int count) {
+            long[][] shapes = new long[count][];
+            for (int i = 0; i < count; i++) {
+                shapes[i] = Array.Empty<long>();
+            }
+            if (bridge.fnGetInputTypeInfo == null || bridge.fnCastTypeInfoToTensorInfo == null) {
+                return shapes;
+            }
+            for (int i = 0; i < count; i++) {
+                IntPtr typeInfo = IntPtr.Zero;
+                try {
+                    IntPtr st = bridge.fnGetInputTypeInfo(sessionHandle, (UIntPtr)i, out typeInfo);
+                    if (st != IntPtr.Zero) {
+                        bridge.ReleaseStatusQuietly(st);
+                        continue;
+                    }
+                    if (typeInfo == IntPtr.Zero) {
+                        continue;
+                    }
+                    st = bridge.fnCastTypeInfoToTensorInfo(typeInfo, out IntPtr tensorInfo);
+                    if (st != IntPtr.Zero) {
+                        bridge.ReleaseStatusQuietly(st);
+                        continue;
+                    }
+                    if (tensorInfo == IntPtr.Zero) {
+                        continue;
+                    }
+                    st = bridge.fnGetDimsCount(tensorInfo, out UIntPtr dimCount);
+                    if (st != IntPtr.Zero) {
+                        bridge.ReleaseStatusQuietly(st);
+                        continue;
+                    }
+                    long[] dims = new long[(int)dimCount];
+                    if (dims.Length > 0) {
+                        st = bridge.fnGetDims(tensorInfo, dims, dimCount);
+                        if (st != IntPtr.Zero) {
+                            bridge.ReleaseStatusQuietly(st);
+                            continue;
+                        }
+                    }
+                    shapes[i] = dims;
+                } catch {
+                    // Leave empty fallback shape if runtime fails to inspect this slot
+                } finally {
+                    if (typeInfo != IntPtr.Zero) {
+                        bridge.fnReleaseTypeInfo?.Invoke(typeInfo);
+                    }
+                }
+            }
+            return shapes;
         }
 
         public void Dispose() {

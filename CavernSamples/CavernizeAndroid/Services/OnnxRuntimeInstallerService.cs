@@ -360,7 +360,7 @@ public static class OnnxRuntimeInstallerService {
         }
         if (candidateUrls.Count == 0) {
             throw new InvalidOperationException(
-                string.Format(AndroidStrings.Active["NeuralModelDownloadFallbackErr"], entry.DisplayName));
+                string.Format(AndroidStrings.Active["NeuralModelDownloadFallbackErr"], entry.DisplayName, entry.DownloadUrl ?? ""));
         }
 
         string destPath = Path.Combine(GetModelsDir(context), entry.FileName);
@@ -378,14 +378,31 @@ public static class OnnxRuntimeInstallerService {
                 using HttpResponseMessage resp = await dlClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
                 resp.EnsureSuccessStatusCode();
 
+                string mediaType = resp.Content.Headers.ContentType?.MediaType ?? "";
+                if (mediaType.Contains("text/html", StringComparison.OrdinalIgnoreCase) ||
+                    mediaType.Contains("application/json", StringComparison.OrdinalIgnoreCase)) {
+                    throw new InvalidDataException($"Unexpected content type '{mediaType}' instead of binary ONNX model.");
+                }
+
                 long totalBytes = resp.Content.Headers.ContentLength ?? (long)Math.Round(entry.ApproxSizeMb * 1024.0 * 1024.0);
+                long received = 0;
+                bool inspectedMagic = false;
                 await using (Stream netStream = await resp.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
                 await using (FileStream outStream = File.Create(partPath)) {
                     byte[] buf = new byte[131072];
-                    long received = 0;
                     long nextUi = 0;
                     int read;
                     while ((read = await netStream.ReadAsync(buf, token).ConfigureAwait(false)) > 0) {
+                        if (!inspectedMagic) {
+                            inspectedMagic = true;
+                            int firstNonWs = 0;
+                            while (firstNonWs < read && buf[firstNonWs] <= (byte)' ') {
+                                firstNonWs++;
+                            }
+                            if (firstNonWs < read && (buf[firstNonWs] == (byte)'<' || buf[firstNonWs] == (byte)'{')) {
+                                throw new InvalidDataException("Mirror returned HTML/JSON error payload instead of binary ONNX weights.");
+                            }
+                        }
                         await outStream.WriteAsync(buf.AsMemory(0, read), token).ConfigureAwait(false);
                         received += read;
                         if (received >= nextUi || (totalBytes > 0 && received >= totalBytes)) {
@@ -399,6 +416,10 @@ public static class OnnxRuntimeInstallerService {
                             nextUi = received + 262_144;
                         }
                     }
+                }
+
+                if (received < 65536) {
+                    throw new InvalidDataException($"Downloaded ONNX file is too small ({received} bytes); mirror may have returned an error page.");
                 }
 
                 if (File.Exists(destPath)) {
@@ -418,9 +439,9 @@ public static class OnnxRuntimeInstallerService {
             }
         }
 
-        string friendly = string.Format(AndroidStrings.Active["NeuralModelDownloadFallbackErr"], entry.DisplayName);
+        string friendly = string.Format(AndroidStrings.Active["NeuralModelDownloadFallbackErr"], entry.DisplayName, entry.DownloadUrl ?? "");
         throw new InvalidOperationException(
-            lastError != null ? $"{friendly} ({lastError.Message})" : friendly,
+            lastError != null ? $"{friendly}\n\n({lastError.Message})" : friendly,
             lastError);
     }
 
@@ -612,13 +633,13 @@ public static class OnnxRuntimeInstallerService {
 
     static NeuralModelTask InferTaskFromFileName(string name) {
         string lower = (name ?? "").ToLowerInvariant();
-        if (lower.Contains("karaoke") || lower.Contains("lead_back") || lower.Contains("backing")) {
+        if (lower.Contains("karaoke") || lower.Contains("kara_") || lower.Contains("lead_back") || lower.Contains("backing")) {
             return NeuralModelTask.KaraokeLeadBacking;
         }
         if (lower.Contains("dereverb") || lower.Contains("echo") || lower.Contains("reverb")) {
             return NeuralModelTask.Dereverb;
         }
-        if (lower.Contains("debleed") || lower.Contains("denoise") || lower.Contains("bleed")) {
+        if (lower.Contains("debleed") || lower.Contains("denoise") || lower.Contains("bleed") || lower.Contains("crowd")) {
             return NeuralModelTask.DebleedDenoise;
         }
         if (lower.Contains("apollo") || lower.Contains("restore")) {

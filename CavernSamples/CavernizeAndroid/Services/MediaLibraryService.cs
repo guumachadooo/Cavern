@@ -156,6 +156,8 @@ public static partial class MediaLibraryService {
     ];
 
     static readonly ConcurrentDictionary<string, Bitmap> thumbCache = new(StringComparer.OrdinalIgnoreCase);
+    static readonly ConcurrentDictionary<string, Task<Bitmap>> inflightThumbs = new(StringComparer.OrdinalIgnoreCase);
+    static readonly SemaphoreSlim thumbSemaphore = new(3, 3);
     static readonly LinkedList<string> thumbLru = new();
     static readonly object thumbLock = new();
     static readonly object cacheFileLock = new();
@@ -418,7 +420,16 @@ public static partial class MediaLibraryService {
             lock (cacheFileLock) {
                 json = IOFile.ReadAllText(cachePath);
             }
-            DiskLibraryCache disk = JsonSerializer.Deserialize<DiskLibraryCache>(json);
+            DiskLibraryCache disk;
+            try {
+                disk = JsonSerializer.Deserialize<DiskLibraryCache>(json);
+            } catch (JsonException jex) {
+                AppLogger.Warn($"MediaLibraryService corrupt disk cache removed: {jex.Message}");
+                lock (cacheFileLock) {
+                    try { IOFile.Delete(cachePath); } catch { }
+                }
+                return null;
+            }
             if (disk?.Tracks == null || disk.Tracks.Count == 0) {
                 return null;
             }
@@ -784,8 +795,8 @@ public static partial class MediaLibraryService {
     public static List<LibraryMergedTrack> MergeTrackVariants(IReadOnlyList<LibraryTrackItem> items, Context ctx = null) {
         if (items == null || items.Count == 0) return [];
 
-        List<LibraryMergedTrack> merged = [];
-        Dictionary<string, List<LibraryMergedTrack>> byBucket = new(StringComparer.OrdinalIgnoreCase);
+        List<(LibraryMergedTrack Group, string Key, string Alb, string Art)> indexed = [];
+        Dictionary<string, List<(LibraryMergedTrack Group, string Key, string Alb, string Art)>> byBucket = new(StringComparer.OrdinalIgnoreCase);
 
         for (int idx = 0; idx < items.Count; idx++) {
             LibraryTrackItem item = items[idx];
@@ -797,7 +808,7 @@ public static partial class MediaLibraryService {
             if (!isStem && !string.IsNullOrEmpty(baseTitle)) {
                 string kind = item.IsVideo ? "vid" : "aud";
                 string bucketKey = $"{kind}||{baseTitle}";
-                if (!byBucket.TryGetValue(bucketKey, out List<LibraryMergedTrack> candidates)) {
+                if (!byBucket.TryGetValue(bucketKey, out var candidates)) {
                     candidates = [];
                     byBucket[bucketKey] = candidates;
                 }
@@ -806,37 +817,38 @@ public static partial class MediaLibraryService {
                 string itemArt = NormalizeAlnum(item.EffectiveAlbumArtist);
 
                 for (int i = 0; i < candidates.Count; i++) {
-                    LibraryTrackItem p = candidates[i].Primary;
+                    var cand = candidates[i];
+                    LibraryTrackItem p = cand.Group.Primary;
                     bool trackCompatible = item.TrackNumber <= 0 || p.TrackNumber <= 0 || item.TrackNumber == p.TrackNumber;
                     bool discCompatible = item.DiscNumber <= 0 || p.DiscNumber <= 0 || item.DiscNumber == p.DiscNumber;
                     if (!trackCompatible || !discCompatible) continue;
 
-                    if (string.Equals(itemKey, GetVariantGroupKey(p), StringComparison.OrdinalIgnoreCase)) {
-                        targetGroup = candidates[i];
+                    if (string.Equals(itemKey, cand.Key, StringComparison.OrdinalIgnoreCase)) {
+                        targetGroup = cand.Group;
                         break;
                     }
-                    string pAlb = !IsGenericFolderName(p.Album) ? CanonicalAlbumBase(p.Album) : "";
-                    string pArt = NormalizeAlnum(p.EffectiveAlbumArtist);
-                    if (!string.IsNullOrEmpty(itemAlb) && string.Equals(itemAlb, pAlb, StringComparison.OrdinalIgnoreCase) &&
-                        (string.IsNullOrEmpty(itemArt) || string.IsNullOrEmpty(pArt) || string.Equals(itemArt, pArt, StringComparison.OrdinalIgnoreCase))) {
-                        targetGroup = candidates[i];
+                    if (!string.IsNullOrEmpty(itemAlb) && string.Equals(itemAlb, cand.Alb, StringComparison.OrdinalIgnoreCase) &&
+                        (string.IsNullOrEmpty(itemArt) || string.IsNullOrEmpty(cand.Art) || string.Equals(itemArt, cand.Art, StringComparison.OrdinalIgnoreCase))) {
+                        targetGroup = cand.Group;
                         break;
                     }
                 }
                 if (targetGroup == null) {
                     targetGroup = new LibraryMergedTrack { Primary = item };
-                    candidates.Add(targetGroup);
-                    merged.Add(targetGroup);
+                    var entry = (targetGroup, itemKey, itemAlb, itemArt);
+                    candidates.Add(entry);
+                    indexed.Add(entry);
                 }
             } else {
                 targetGroup = new LibraryMergedTrack { Primary = item };
-                merged.Add(targetGroup);
+                indexed.Add((targetGroup, string.Empty, string.Empty, string.Empty));
             }
             targetGroup.Variants.Add(item);
         }
 
-        List<LibraryMergedTrack> finalized = new(merged.Count);
-        foreach (LibraryMergedTrack m in merged) {
+        List<LibraryMergedTrack> finalized = new(indexed.Count);
+        foreach (var entry in indexed) {
+            LibraryMergedTrack m = entry.Group;
             AudioQualityAnalyzer.SortVariantsIntelligently(m.Variants, ctx);
             LibraryTrackItem bestPrimary = m.Variants[0];
             List<string> labels = m.Variants
@@ -1175,8 +1187,9 @@ public static partial class MediaLibraryService {
         bool directReadable = CanOpenFileForRead(item.FilePath);
         string tagPath = null;
         if (directReadable || (effectiveUri != null && effectiveCtx != null)) {
+            MediaExtractor extractor = null;
             try {
-                using MediaExtractor extractor = new();
+                extractor = new MediaExtractor();
                 if (directReadable) {
                     extractor.SetDataSource(item.FilePath);
                 } else {
@@ -1210,6 +1223,9 @@ public static partial class MediaLibraryService {
                 }
             } catch {
                 // Unsupported container for MediaExtractor (e.g. raw .thd/.mlp/.caf) -> handled via ext flags below
+            } finally {
+                try { extractor?.Release(); } catch { }
+                try { extractor?.Dispose(); } catch { }
             }
 
             // Read native MP4/M4A/FLAC/ID3/RIFF tags (fixes missing track numbers & albums on MP4 Atmos!)
@@ -1297,8 +1313,9 @@ public static partial class MediaLibraryService {
         string fileName,
         bool probeDuration,
         bool probeTags) {
+        MediaMetadataRetriever mmr = null;
         try {
-            using MediaMetadataRetriever mmr = new();
+            mmr = new MediaMetadataRetriever();
             if (directReadable) {
                 mmr.SetDataSource(item.FilePath);
             } else if (effectiveUri != null && effectiveCtx != null) {
@@ -1350,6 +1367,9 @@ public static partial class MediaLibraryService {
             }
         } catch {
             // Best-effort metadata/duration probe
+        } finally {
+            try { mmr?.Release(); } catch { }
+            try { mmr?.Dispose(); } catch { }
         }
     }
 
@@ -1763,32 +1783,55 @@ public static partial class MediaLibraryService {
         Bitmap cached = TryGetCachedThumbnail(key);
         if (cached != null) return Task.FromResult(cached);
 
-        return Task.Run(() => {
+        Context effectiveCtx = (ctx?.ApplicationContext ?? ctx) ?? Android.App.Application.Context;
+        return inflightThumbs.GetOrAdd(key, _ => LoadThumbnailCoreAsync(effectiveCtx, item, key, sizePx));
+    }
+
+    static async Task<Bitmap> LoadThumbnailCoreAsync(Context effectiveCtx, LibraryTrackItem item, string key, int sizePx) {
+        await thumbSemaphore.WaitAsync().ConfigureAwait(false);
+        try {
+            Bitmap cached = TryGetCachedThumbnail(key);
+            if (cached != null) return cached;
+
             Bitmap loaded = null;
-            Context effectiveCtx = ctx ?? Android.App.Application.Context;
             Android.Net.Uri effectiveUri = item.ContentUri ?? TryParseUri(item.FilePath);
             try {
-                // 1. Embedded artwork inside the exact media file FIRST (prevents cross-song / folder cover mix-ups)
-                bool directReadable = CanOpenFileForRead(item.FilePath);
-                if (directReadable || (effectiveUri != null && effectiveCtx != null)) {
-                    using MediaMetadataRetriever mmr = new();
+                // 0. Android Q+ MediaStore LoadThumbnail FIRST for video files to avoid spawning heavy native codec frames
+                if (item.IsVideo && effectiveUri != null && OperatingSystem.IsAndroidVersionAtLeast(29) && effectiveCtx?.ContentResolver != null) {
                     try {
-                        if (directReadable) {
-                            mmr.SetDataSource(item.FilePath);
-                        } else {
-                            mmr.SetDataSource(effectiveCtx, effectiveUri);
-                        }
-                        byte[] bytes = mmr.GetEmbeddedPicture();
-                        if (bytes != null && bytes.Length > 0) {
-                            loaded = DecodeSampledBytes(bytes, sizePx);
-                        } else if (item.IsVideo) {
-                            using Bitmap frame = mmr.GetFrameAtTime(3_000_000, Option.ClosestSync);
-                            if (frame != null) {
-                                loaded = ScaleBitmapCopy(frame, sizePx);
-                            }
-                        }
+                        loaded = effectiveCtx.ContentResolver.LoadThumbnail(effectiveUri, new Android.Util.Size(sizePx, sizePx), null);
                     } catch {
-                        // Ignore unsupported retriever containers
+                        // Thumbnail may not exist in MediaStore yet
+                    }
+                }
+
+                // 1. Embedded artwork inside the exact media file FIRST (prevents cross-song / folder cover mix-ups)
+                if (loaded == null) {
+                    bool directReadable = CanOpenFileForRead(item.FilePath);
+                    if (directReadable || (effectiveUri != null && effectiveCtx != null)) {
+                        MediaMetadataRetriever mmr = null;
+                        try {
+                            mmr = new MediaMetadataRetriever();
+                            if (directReadable) {
+                                mmr.SetDataSource(item.FilePath);
+                            } else {
+                                mmr.SetDataSource(effectiveCtx, effectiveUri);
+                            }
+                            byte[] bytes = mmr.GetEmbeddedPicture();
+                            if (bytes != null && bytes.Length > 0) {
+                                loaded = DecodeSampledBytes(bytes, sizePx);
+                            } else if (item.IsVideo) {
+                                using Bitmap frame = mmr.GetFrameAtTime(3_000_000, Option.ClosestSync);
+                                if (frame != null) {
+                                    loaded = ScaleBitmapCopy(frame, sizePx);
+                                }
+                            }
+                        } catch {
+                            // Ignore unsupported retriever containers
+                        } finally {
+                            try { mmr?.Release(); } catch { }
+                            try { mmr?.Dispose(); } catch { }
+                        }
                     }
                 }
 
@@ -1818,9 +1861,9 @@ public static partial class MediaLibraryService {
                     }
                 }
 
-                // 4. Android Q+ MediaStore LoadThumbnail ONLY when the item has a real album or is video
-                if (loaded == null && effectiveUri != null && OperatingSystem.IsAndroidVersionAtLeast(29) && effectiveCtx?.ContentResolver != null
-                    && (item.IsVideo || !IsGenericFolderName(item.Album))) {
+                // 4. Android Q+ MediaStore LoadThumbnail ONLY when the item has a real album (or audio)
+                if (loaded == null && !item.IsVideo && effectiveUri != null && OperatingSystem.IsAndroidVersionAtLeast(29) && effectiveCtx?.ContentResolver != null
+                    && !IsGenericFolderName(item.Album)) {
                     try {
                         loaded = effectiveCtx.ContentResolver.LoadThumbnail(effectiveUri, new Android.Util.Size(sizePx, sizePx), null);
                     } catch {
@@ -1835,7 +1878,10 @@ public static partial class MediaLibraryService {
                 StoreThumbInLru(key, loaded);
             }
             return loaded;
-        });
+        } finally {
+            thumbSemaphore.Release();
+            inflightThumbs.TryRemove(key, out _);
+        }
     }
 
     static bool IsUriString(string value) =>

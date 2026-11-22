@@ -83,85 +83,91 @@ public static class MediaMetadataHelper {
             }
         }
 
-        using MediaMetadataRetriever retriever = new();
-        bool sourceOpened = false;
+        MediaMetadataRetriever retriever = null;
+        try {
+            retriever = new MediaMetadataRetriever();
+            bool sourceOpened = false;
 
-        if (effectiveUri != null && effectiveCtx != null) {
-            try {
-                retriever.SetDataSource(effectiveCtx, effectiveUri);
-                sourceOpened = true;
-            } catch {
-                sourceOpened = false;
+            if (effectiveUri != null && effectiveCtx != null) {
+                try {
+                    retriever.SetDataSource(effectiveCtx, effectiveUri);
+                    sourceOpened = true;
+                } catch {
+                    sourceOpened = false;
+                }
             }
-        }
 
-        if (!sourceOpened && CanOpenFileForRead(resolvedPath)) {
-            try {
-                retriever.SetDataSource(resolvedPath);
-                sourceOpened = true;
-            } catch {
-                sourceOpened = false;
+            if (!sourceOpened && CanOpenFileForRead(resolvedPath)) {
+                try {
+                    retriever.SetDataSource(resolvedPath);
+                    sourceOpened = true;
+                } catch {
+                    sourceOpened = false;
+                }
             }
-        }
 
-        if (sourceOpened) {
-            try {
-                string rawTitle = (retriever.ExtractMetadata(MetadataKey.Title) ?? "").Trim();
-                title = IsMissingTag(rawTitle) ? "" : rawTitle;
-                string rawArtist = (retriever.ExtractMetadata(MetadataKey.Artist) ?? "").Trim();
-                if (IsMissingTag(rawArtist)) {
-                    rawArtist = (retriever.ExtractMetadata(MetadataKey.Albumartist) ?? "").Trim();
-                }
-                artist = IsMissingTag(rawArtist) ? "" : rawArtist;
-                string rawAlbum = (retriever.ExtractMetadata(MetadataKey.Album) ?? "").Trim();
-                album = IsMissingTag(rawAlbum) ? "" : rawAlbum;
-                mime = (retriever.ExtractMetadata(MetadataKey.Mimetype) ?? "").Trim();
-
-                string bitrateRaw = retriever.ExtractMetadata(MetadataKey.Bitrate);
-                if (int.TryParse(bitrateRaw, out int bps) && bps > 0) {
-                    bitrateKbps = bps / 1000;
-                }
-
-                string durRaw = retriever.ExtractMetadata(MetadataKey.Duration);
-                if (long.TryParse(durRaw, out long durMs) && durMs > 0) {
-                    durationSec = durMs / 1000.0;
-                }
-
-                string hasVideoRaw = (retriever.ExtractMetadata(MetadataKey.HasVideo) ?? "").Trim();
-                string vwRaw = retriever.ExtractMetadata(MetadataKey.VideoWidth);
-                string vhRaw = retriever.ExtractMetadata(MetadataKey.VideoHeight);
-                int.TryParse(vwRaw, out videoWidth);
-                int.TryParse(vhRaw, out videoHeight);
-                hasVideo = "yes".Equals(hasVideoRaw, StringComparison.OrdinalIgnoreCase)
-                    || "true".Equals(hasVideoRaw, StringComparison.OrdinalIgnoreCase)
-                    || (videoWidth > 0 && videoHeight > 0);
-
-                if (OperatingSystem.IsAndroidVersionAtLeast(31)) {
-                    string srRaw = retriever.ExtractMetadata((MetadataKey)38); // METADATA_KEY_SAMPLERATE
-                    if (int.TryParse(srRaw, out int sr) && sr > 0) {
-                        sampleRate = sr;
+            if (sourceOpened) {
+                try {
+                    string rawTitle = (retriever.ExtractMetadata(MetadataKey.Title) ?? "").Trim();
+                    title = IsMissingTag(rawTitle) ? "" : rawTitle;
+                    string rawArtist = (retriever.ExtractMetadata(MetadataKey.Artist) ?? "").Trim();
+                    if (IsMissingTag(rawArtist)) {
+                        rawArtist = (retriever.ExtractMetadata(MetadataKey.Albumartist) ?? "").Trim();
                     }
-                }
+                    artist = IsMissingTag(rawArtist) ? "" : rawArtist;
+                    string rawAlbum = (retriever.ExtractMetadata(MetadataKey.Album) ?? "").Trim();
+                    album = IsMissingTag(rawAlbum) ? "" : rawAlbum;
+                    mime = (retriever.ExtractMetadata(MetadataKey.Mimetype) ?? "").Trim();
 
-                if (artwork == null) {
-                    byte[] embeddedBytes = retriever.GetEmbeddedPicture();
-                    if (embeddedBytes != null && embeddedBytes.Length > 0) {
-                        artwork = DecodeScaledBitmap(embeddedBytes, 640);
-                        hasEmbedded = artwork != null;
+                    string bitrateRaw = retriever.ExtractMetadata(MetadataKey.Bitrate);
+                    if (int.TryParse(bitrateRaw, out int bps) && bps > 0) {
+                        bitrateKbps = bps / 1000;
                     }
-                }
 
-                if (artwork == null && hasVideo) {
-                    using Bitmap rawFrame = retriever.GetFrameAtTime(2_000_000, Option.ClosestSync)
-                        ?? retriever.GetFrameAtTime(0, Option.ClosestSync);
-                    if (rawFrame != null && !rawFrame.IsRecycled && rawFrame.Width > 0 && rawFrame.Height > 0) {
-                        artwork = ScaleBitmapToMax(rawFrame, 640);
-                        hasEmbedded = artwork != null;
+                    string durRaw = retriever.ExtractMetadata(MetadataKey.Duration);
+                    if (long.TryParse(durRaw, out long durMs) && durMs > 0) {
+                        durationSec = durMs / 1000.0;
                     }
+
+                    string hasVideoRaw = (retriever.ExtractMetadata(MetadataKey.HasVideo) ?? "").Trim();
+                    string vwRaw = retriever.ExtractMetadata(MetadataKey.VideoWidth);
+                    string vhRaw = retriever.ExtractMetadata(MetadataKey.VideoHeight);
+                    int.TryParse(vwRaw, out videoWidth);
+                    int.TryParse(vhRaw, out videoHeight);
+                    hasVideo = "yes".Equals(hasVideoRaw, StringComparison.OrdinalIgnoreCase)
+                        || "true".Equals(hasVideoRaw, StringComparison.OrdinalIgnoreCase)
+                        || (videoWidth > 0 && videoHeight > 0);
+
+                    if (OperatingSystem.IsAndroidVersionAtLeast(31)) {
+                        string srRaw = retriever.ExtractMetadata((MetadataKey)38); // METADATA_KEY_SAMPLERATE
+                        if (int.TryParse(srRaw, out int sr) && sr > 0) {
+                            sampleRate = sr;
+                        }
+                    }
+
+                    if (artwork == null) {
+                        byte[] embeddedBytes = retriever.GetEmbeddedPicture();
+                        if (embeddedBytes != null && embeddedBytes.Length > 0) {
+                            artwork = DecodeScaledBitmap(embeddedBytes, 640);
+                            hasEmbedded = artwork != null;
+                        }
+                    }
+
+                    if (artwork == null && hasVideo) {
+                        using Bitmap rawFrame = retriever.GetFrameAtTime(2_000_000, Option.ClosestSync)
+                            ?? retriever.GetFrameAtTime(0, Option.ClosestSync);
+                        if (rawFrame != null && !rawFrame.IsRecycled && rawFrame.Width > 0 && rawFrame.Height > 0) {
+                            artwork = ScaleBitmapToMax(rawFrame, 640);
+                            hasEmbedded = artwork != null;
+                        }
+                    }
+                } catch (Exception ex) {
+                    AppLogger.Error("MediaMetadataHelper.Extract", ex);
                 }
-            } catch (Exception ex) {
-                AppLogger.Error("MediaMetadataHelper.Extract", ex);
             }
+        } finally {
+            try { retriever?.Release(); } catch { }
+            try { retriever?.Dispose(); } catch { }
         }
 
         if (!hasVideo) {

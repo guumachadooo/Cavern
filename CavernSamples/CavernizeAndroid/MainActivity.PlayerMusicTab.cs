@@ -192,6 +192,8 @@ public partial class MainActivity {
     TextView libraryStatusText;
     bool isIncrementalSyncRunning;
     int libraryFilterRevision = 1;
+    int libraryIndexRequestSeq;
+    volatile bool isLibraryIndexBuilding;
     MediaLibrarySnapshot cachedLibIndexSnap;
     int cachedLibIndexRevision = -1;
     int cachedLibSpatialMode = -1, cachedLibMediaMode = -1, cachedLibSortMode = -1, cachedLibFolderMode = -1;
@@ -227,6 +229,10 @@ public partial class MainActivity {
     TextView musicLyricsHeaderTitle, musicLyricsHeaderSub;
     AppleMusicLyricsView musicLyricsView;
     LinearLayout musicLyricsSingDock;
+    LinearLayout musicLyricsSingToggleBtn;
+    OneUiIconView musicLyricsSingToggleIcon;
+    TextView musicLyricsSingToggleText;
+    bool isLyricsSingDockExpanded;
     OneUiIconView musicLyricsSingMicIcon;
     TextView musicLyricsSingPctText;
     OneUiSeekBar musicLyricsVocalSeekBar;
@@ -411,14 +417,49 @@ public partial class MainActivity {
         lyricsMetaCol.AddView(musicLyricsHeaderSub);
         lyricsMetaCol.Click += (_, _) => SetPlayerStageMode(PlayerStageMode.Cover);
         lyricsHeader.AddView(lyricsMetaCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        musicLyricsSingToggleBtn = new LinearLayout(this) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false,
+            Clickable = true,
+            Focusable = true,
+            ContentDescription = S["LyricsSingToggleDesc"]
+        };
+        musicLyricsSingToggleBtn.SetGravity(GravityFlags.CenterVertical);
+        musicLyricsSingToggleBtn.SetMinimumHeight(Dp(34));
+        musicLyricsSingToggleBtn.SetPadding(Dp(11), Dp(6), Dp(12), Dp(6));
+        musicLyricsSingToggleBtn.Background = OneUiTheme.CreateRoundedDrawable(
+            this, Color.Argb(38, 255, 255, 255), 99f, Color.Argb(58, 255, 255, 255), 0.9f);
+        musicLyricsSingToggleIcon = new OneUiIconView(this, OneUiIconType.Microphone, Color.Argb(230, 252, 252, 255));
+        musicLyricsSingToggleBtn.AddView(musicLyricsSingToggleIcon, new LinearLayout.LayoutParams(Dp(15), Dp(15)) { RightMargin = Dp(5) });
+        musicLyricsSingToggleText = Label(S["LyricsSingTogglePill"], 11.5f, Color.Argb(230, 252, 252, 255));
+        musicLyricsSingToggleText.SetTypeface(sfSemi, TypefaceStyle.Bold);
+        musicLyricsSingToggleText.SetIncludeFontPadding(false);
+        musicLyricsSingToggleText.SetSingleLine(true);
+        musicLyricsSingToggleText.Ellipsize = TextUtils.TruncateAt.End;
+        musicLyricsSingToggleBtn.AddView(musicLyricsSingToggleText);
+        OneUiTheme.AttachRecoil(musicLyricsSingToggleBtn, 0.94f);
+        musicLyricsSingToggleBtn.Click += (_, _) => {
+            isLyricsSingDockExpanded = !isLyricsSingDockExpanded;
+            if (musicLyricsSingDock != null) {
+                musicLyricsSingDock.Visibility = isLyricsSingDockExpanded ? ViewStates.Visible : ViewStates.Gone;
+            }
+            RefreshLyricsSingDockUi();
+        };
+        lyricsHeader.AddView(musicLyricsSingToggleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
+            LeftMargin = Dp(8)
+        });
         musicLyricsContainer.AddView(lyricsHeader);
 
         musicLyricsView = new AppleMusicLyricsView(this);
         musicLyricsView.LineSeekRequested += sec => SeekAbsoluteSeconds(sec);
         musicLyricsContainer.AddView(musicLyricsView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
 
-        // W14/W27: 2-Tier Apple Music Sing Dock (Tier 1: Vocal slider + un-crushed % + Vocal DNA pill | Tier 2: Scrollable plain-label chips)
-        musicLyricsSingDock = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        // W14/W27: 2-Tier Apple Music Sing Dock (collapsed by default; expanded on demand via lyricsHeader Sing pill)
+        musicLyricsSingDock = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
         musicLyricsSingDock.Background = OneUiTheme.CreateRoundedDrawable(
             this, Color.Argb(44, 20, 22, 32), 18f, Color.Argb(48, 255, 255, 255), 0.9f);
         musicLyricsSingDock.SetPadding(Dp(12), Dp(8), Dp(12), Dp(8));
@@ -746,8 +787,9 @@ public partial class MainActivity {
             OneUiIconType.HeightUp, "Cavernize 3D", sfSemi, () => {
                 bool next = !store.CavernizeUpmix;
                 store.CavernizeUpmix = next;
-                if (cavernizeUpmixSwitch != null) cavernizeUpmixSwitch.Checked = next;
-                ReattachPlayerTrack();
+                SyncUpmixModeUi();
+                RefreshSettingsCategorySubtitles();
+                playerEngine?.ApplyUpmixingSettings(upmixingSettings);
                 RefreshMusicPlayerControlsUi();
             });
 
@@ -772,8 +814,9 @@ public partial class MainActivity {
             OneUiIconType.Sparkles, "Matrix 7.1", sfSemi, () => {
                 bool next = !store.MatrixUpmixing;
                 store.MatrixUpmixing = next;
-                if (matrixUpmixSwitch != null) matrixUpmixSwitch.Checked = next;
-                ReattachPlayerTrack();
+                SyncUpmixModeUi();
+                RefreshSettingsCategorySubtitles();
+                playerEngine?.ApplyUpmixingSettings(upmixingSettings);
                 RefreshMusicPlayerControlsUi();
             });
 
@@ -1134,12 +1177,8 @@ public partial class MainActivity {
 
         if (openLibrary) {
             musicVideoStage?.PauseVideoDecoderOnly();
-            if (librarySnapshot == null) {
-                MediaLibrarySnapshot cached = MediaLibraryService.TryLoadCachedSnapshot(this);
-                if (cached != null && cached.Tracks.Count > 0) {
-                    librarySnapshot = cached;
-                    RenderLibraryView();
-                }
+            if (librarySnapshot == null || IsLibraryBaseIndexStale()) {
+                ScheduleLibraryLoadAndRenderAsync(loadCacheFromDisk: librarySnapshot == null);
             } else {
                 RenderLibraryView();
             }
@@ -1319,11 +1358,31 @@ public partial class MainActivity {
         RefreshStudioW12ContextUi();
     }
 
+    string lastLyricsSingDockSig = "";
+
     void RefreshLyricsSingDockUi() {
         if (musicLyricsSingDock == null || store == null) {
             return;
         }
         int pct = Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100);
+        bool micEnabled = store.LiveMicEnabled;
+        bool dryBypass = playerEngine?.VocalChainBypassed == true;
+        bool karaokeOn = store.SpatialKaraokeEnabled || pct < 99;
+        bool hasUsb = usbProAudioManager?.CurrentSnapshot?.IsAttached == true;
+        bool hasDna = playerEngine?.VocalMixMatchStage?.ActiveDna?.IsExtractedFromSong == true;
+        bool hasVp = playerEngine?.VocalMixMatchStage?.HasMicVoiceprint == true;
+        bool prepRunning = isNeuralPrepRunning;
+
+        string sig = $"{isLyricsSingDockExpanded}|{pct}|{micEnabled}|{dryBypass}|{karaokeOn}|{hasUsb}|{hasDna}|{hasVp}|{prepRunning}";
+        if (string.Equals(lastLyricsSingDockSig, sig, StringComparison.Ordinal)) {
+            return;
+        }
+        lastLyricsSingDockSig = sig;
+
+        ViewStates expectedDockVis = isLyricsSingDockExpanded ? ViewStates.Visible : ViewStates.Gone;
+        if (musicLyricsSingDock.Visibility != expectedDockVis) {
+            musicLyricsSingDock.Visibility = expectedDockVis;
+        }
         if (musicLyricsSingPctText != null) {
             musicLyricsSingPctText.Text = $"{pct}%";
             musicLyricsSingPctText.SetTextColor(pct < 99 ? OneUiTheme.IconSystemInfo : OneUiTheme.PrimaryHigh);
@@ -1333,13 +1392,33 @@ public partial class MainActivity {
             musicLyricsVocalSeekBar.Invalidate();
         }
         if (musicLyricsSingMicIcon != null) {
-            musicLyricsSingMicIcon.IconColor = store.LiveMicEnabled
+            musicLyricsSingMicIcon.IconColor = micEnabled
                 ? OneUiTheme.IconSystemInfo
                 : (pct < 99 ? OneUiTheme.PrimaryHigh : Color.Argb(215, 252, 252, 255));
         }
-        bool micEnabled = store.LiveMicEnabled;
-        bool dryBypass = playerEngine?.VocalChainBypassed == true;
-        bool karaokeOn = store.SpatialKaraokeEnabled || pct < 99;
+        if (musicLyricsSingToggleBtn != null) {
+            bool anySingActive = micEnabled || karaokeOn;
+            Color toggleBg = isLyricsSingDockExpanded
+                ? OneUiTheme.WithAlpha(OneUiTheme.Primary, 108)
+                : (anySingActive
+                    ? OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 68)
+                    : Color.Argb(38, 255, 255, 255));
+            Color toggleStroke = isLyricsSingDockExpanded
+                ? OneUiTheme.WithAlpha(OneUiTheme.PrimaryHigh, 200)
+                : (anySingActive
+                    ? OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 175)
+                    : Color.Argb(58, 255, 255, 255));
+            Color toggleFg = isLyricsSingDockExpanded
+                ? OneUiTheme.PrimaryHigh
+                : (anySingActive ? OneUiTheme.IconSystemInfo : Color.Argb(230, 252, 252, 255));
+            musicLyricsSingToggleBtn.Background = OneUiTheme.CreateRoundedDrawable(this, toggleBg, 99f, toggleStroke, isLyricsSingDockExpanded ? 1.1f : 0.95f);
+            if (musicLyricsSingToggleIcon != null) {
+                musicLyricsSingToggleIcon.IconColor = toggleFg;
+            }
+            if (musicLyricsSingToggleText != null) {
+                musicLyricsSingToggleText.SetTextColor(toggleFg);
+            }
+        }
         if (musicLyricsKaraokeBtn != null) {
             musicLyricsKaraokeBtn.Text = S["SingDockKaraokeChip"];
             musicLyricsKaraokeBtn.Background = karaokeOn
@@ -1371,21 +1450,20 @@ public partial class MainActivity {
             }
         }
         if (musicLyricsScarlettBtn != null) {
-            bool hasUsb = usbProAudioManager?.CurrentSnapshot?.IsAttached == true;
             musicLyricsScarlettBtn.Background = hasUsb
                 ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 76), 99f, OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 175), 1f)
                 : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f);
         }
-        RefreshNeuralPrepUi();
+        if (isLyricsSingDockExpanded || prepRunning) {
+            RefreshNeuralPrepUi();
+        }
         if (musicLyricsAiStatusText != null) {
-            bool hasDna = playerEngine?.VocalMixMatchStage?.ActiveDna?.IsExtractedFromSong == true;
-            bool hasVp = playerEngine?.VocalMixMatchStage?.HasMicVoiceprint == true;
+            musicLyricsAiStatusText.Text = (hasDna || hasVp) ? S["SingDockDnaActivePill"] : S["SingDockDnaIdlePill"];
+            musicLyricsAiStatusText.SetTextColor((hasDna || hasVp) ? OneUiTheme.IconSystemInfo : OneUiTheme.TextSecondary);
             if (musicLyricsAiStatusText.Visibility != ViewStates.Visible) {
-                musicLyricsAiStatusText.Text = (hasDna || hasVp) ? S["SingDockDnaActivePill"] : S["SingDockDnaIdlePill"];
-                musicLyricsAiStatusText.SetTextColor((hasDna || hasVp) ? OneUiTheme.IconSystemInfo : OneUiTheme.TextSecondary);
                 musicLyricsAiStatusText.Visibility = ViewStates.Visible;
             }
-            Color pillBg = isNeuralPrepRunning
+            Color pillBg = prepRunning
                 ? OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 48)
                 : (hasDna || hasVp || micEnabled
                     ? OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 44)
@@ -2694,9 +2772,6 @@ public partial class MainActivity {
             libSortText.SetTextColor(fg);
         }
         if (libNoiseToggleBtn != null) {
-            if (librarySnapshot != null) {
-                EnsureLibraryBaseIndex();
-            }
             bool on = store.LibraryHideNonMusic;
             int hiddenCount = librarySnapshot != null ? cachedHiddenNoiseCount : 0;
             libNoiseToggleText.Text = hiddenCount > 0
@@ -3276,7 +3351,8 @@ public partial class MainActivity {
         });
     }
 
-    void ComputeGroupSortMetrics(
+    static void ComputeGroupSortMetrics(
+        Context ctx,
         List<LibraryMergedTrack> merged,
         int sortMode,
         out long maxMod,
@@ -3292,14 +3368,32 @@ public partial class MainActivity {
             int tier = p.IsSpatial ? 0 : (p.IsSurround ? 1 : 2);
             if (tier < bestTier) bestTier = tier;
             if (sortMode == 3) {
-                double sc = AudioQualityAnalyzer.EvaluateFast(p, this).Score;
+                double sc = AudioQualityAnalyzer.EvaluateFast(p, ctx, allowIo: false).Score;
                 if (sc > maxScore) maxScore = sc;
             }
         }
     }
 
-    void EnsureLibraryBaseIndex() {
-        if (librarySnapshot == null) return;
+    sealed class LibraryBaseIndexData {
+        public MediaLibrarySnapshot Snapshot;
+        public int Revision;
+        public int SpatialMode;
+        public int MediaMode;
+        public bool HideNoise;
+        public int SortMode;
+        public int FolderMode;
+        public string FoldersJson = "[]";
+        public List<LibraryTrackItem> VisibleTracks = [];
+        public List<SmartCleanInspectionEntry> SmartCleanEntries = [];
+        public int HiddenNoiseCount;
+        public List<LibraryMergedTrack> MergedTracks = [];
+        public List<(LibraryAlbumGroup Alb, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> AlbumEntries = [];
+        public List<(LibraryArtistGroup Art, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> ArtistEntries = [];
+        public List<(LibraryFolderGroup Fld, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> FolderEntries = [];
+    }
+
+    bool IsLibraryBaseIndexStale() {
+        if (librarySnapshot == null || store == null) return false;
         int spatialMode = Math.Clamp(store.LibraryFilterMode, 0, 2);
         int mediaMode = store.LibraryMediaTypeFilter;
         bool hideNoise = store.LibraryHideNonMusic;
@@ -3307,24 +3401,99 @@ public partial class MainActivity {
         int folderMode = store.LibraryFolderFilterMode;
         string foldersJson = store.LibraryFilterFoldersJson ?? "[]";
 
-        if (cachedLibIndexSnap == librarySnapshot &&
+        return !(cachedLibIndexSnap == librarySnapshot &&
             cachedLibIndexRevision == libraryFilterRevision &&
             cachedLibSpatialMode == spatialMode &&
             cachedLibMediaMode == mediaMode &&
             cachedLibHideNoise == hideNoise &&
             cachedLibSortMode == sortMode &&
             cachedLibFolderMode == folderMode &&
-            string.Equals(cachedLibFoldersJson, foldersJson, StringComparison.Ordinal)) {
-            return;
+            string.Equals(cachedLibFoldersJson, foldersJson, StringComparison.Ordinal));
+    }
+
+    void ScheduleLibraryLoadAndRenderAsync(bool loadCacheFromDisk) {
+        if (uiDestroyed || store == null) return;
+        int mySeq = Interlocked.Increment(ref libraryIndexRequestSeq);
+        isLibraryIndexBuilding = true;
+        if (libraryListHost != null && librarySnapshot == null) {
+            libraryListHost.RemoveAllViews();
+        }
+        if (libraryStatusText != null) {
+            libraryStatusText.Text = isLibraryScanning ? S["LibScanning"] : S["LibraryLoadingCached"];
         }
 
+        Context appCtx = ApplicationContext ?? this;
+        MediaLibrarySnapshot currentSnap = loadCacheFromDisk ? null : librarySnapshot;
+        int rev = libraryFilterRevision;
+        int spatialMode = Math.Clamp(store.LibraryFilterMode, 0, 2);
+        int mediaMode = store.LibraryMediaTypeFilter;
+        bool hideNoise = store.LibraryHideNonMusic;
+        int sortMode = store.LibrarySortMode;
+        int folderMode = store.LibraryFolderFilterMode;
+        string foldersJson = store.LibraryFilterFoldersJson ?? "[]";
         List<string> selectedFolders = store.GetLibraryFilterFolders();
-        cachedVisibleTracks = MediaLibraryService.FilterTracks(librarySnapshot.Tracks, store);
 
-        // Accurate Smart Clean count honoring ALL categories (including surround SFX & hidden folders) within media/spatial/folder filters
-        List<LibraryTrackItem> scopeTracks = new(librarySnapshot.Tracks.Count);
-        for (int i = 0; i < librarySnapshot.Tracks.Count; i++) {
-            LibraryTrackItem t = librarySnapshot.Tracks[i];
+        _ = Task.Run(() => {
+            MediaLibrarySnapshot loadedSnap = currentSnap;
+            if (loadedSnap == null) {
+                MediaLibrarySnapshot cached = MediaLibraryService.TryLoadCachedSnapshot(appCtx);
+                if (cached != null && cached.Tracks.Count > 0) {
+                    loadedSnap = cached;
+                }
+            }
+            LibraryBaseIndexData built = loadedSnap != null
+                ? BuildLibraryBaseIndexSnapshot(appCtx, loadedSnap, rev, spatialMode, mediaMode, hideNoise, sortMode, folderMode, foldersJson, selectedFolders)
+                : null;
+
+            RunOnUiThread(() => {
+                if (uiDestroyed || mySeq != Volatile.Read(ref libraryIndexRequestSeq)) {
+                    return;
+                }
+                isLibraryIndexBuilding = false;
+                if (loadedSnap != null) {
+                    librarySnapshot = loadedSnap;
+                }
+                if (built != null) {
+                    cachedVisibleTracks = built.VisibleTracks;
+                    cachedSmartCleanEntries = built.SmartCleanEntries;
+                    cachedHiddenNoiseCount = built.HiddenNoiseCount;
+                    cachedMergedTracks = built.MergedTracks;
+                    cachedAlbumEntries = built.AlbumEntries;
+                    cachedArtistEntries = built.ArtistEntries;
+                    cachedFolderEntries = built.FolderEntries;
+                    cachedLibIndexSnap = built.Snapshot;
+                    cachedLibIndexRevision = built.Revision;
+                    cachedLibSpatialMode = built.SpatialMode;
+                    cachedLibMediaMode = built.MediaMode;
+                    cachedLibHideNoise = built.HideNoise;
+                    cachedLibSortMode = built.SortMode;
+                    cachedLibFolderMode = built.FolderMode;
+                    cachedLibFoldersJson = built.FoldersJson;
+                    cachedQueryRevision = -1;
+                }
+                UpdateLibraryFilterStyles();
+                RenderLibraryView();
+            });
+        });
+    }
+
+    static LibraryBaseIndexData BuildLibraryBaseIndexSnapshot(
+        Context appCtx,
+        MediaLibrarySnapshot snap,
+        int rev,
+        int spatialMode,
+        int mediaMode,
+        bool hideNoise,
+        int sortMode,
+        int folderMode,
+        string foldersJson,
+        List<string> selectedFolders) {
+        AppSettingsStore bgStore = new(appCtx);
+        List<LibraryTrackItem> visible = MediaLibraryService.FilterTracks(snap.Tracks, bgStore);
+
+        List<LibraryTrackItem> scopeTracks = new(snap.Tracks.Count);
+        for (int i = 0; i < snap.Tracks.Count; i++) {
+            LibraryTrackItem t = snap.Tracks[i];
             if (t != null &&
                 MediaLibraryService.PassesFilter(t, spatialMode) &&
                 MediaLibraryService.PassesMediaTypeFilter(t, mediaMode) &&
@@ -3332,26 +3501,23 @@ public partial class MainActivity {
                 scopeTracks.Add(t);
             }
         }
-        cachedSmartCleanEntries = MediaLibraryService.GetSmartCleanInspectionList(scopeTracks, store);
-        cachedHiddenNoiseCount = hideNoise
-            ? cachedSmartCleanEntries.Count
-            : cachedSmartCleanEntries.Count(e => e.Category == SmartCleanCategory.UserHiddenFolder);
+        List<SmartCleanInspectionEntry> cleanEntries = MediaLibraryService.GetSmartCleanInspectionList(scopeTracks, bgStore);
+        int hiddenNoise = hideNoise
+            ? cleanEntries.Count
+            : cleanEntries.Count(e => e.Category == SmartCleanCategory.UserHiddenFolder);
 
-        HashSet<LibraryTrackItem> visSet = new(cachedVisibleTracks);
+        HashSet<LibraryTrackItem> visSet = new(visible);
+        List<LibraryMergedTrack> mergedTracksRaw = MediaLibraryService.MergeTrackVariants(visible, appCtx);
+        List<LibraryMergedTrack> sortedTracks = MediaLibraryService.SortMergedTracks(mergedTracksRaw, sortMode, appCtx);
 
-        // Tracks view: merge ATMOS+FLAC variants & sort
-        List<LibraryMergedTrack> mergedTracksRaw = MediaLibraryService.MergeTrackVariants(cachedVisibleTracks, this);
-        cachedMergedTracks = MediaLibraryService.SortMergedTracks(mergedTracksRaw, sortMode, this);
-
-        // Albums view: merge variants & sort groups
         List<(LibraryAlbumGroup Alb, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> albEntries = [];
-        for (int i = 0; i < librarySnapshot.Albums.Count; i++) {
-            LibraryAlbumGroup alb = librarySnapshot.Albums[i];
+        for (int i = 0; i < snap.Albums.Count; i++) {
+            LibraryAlbumGroup alb = snap.Albums[i];
             List<LibraryTrackItem> vt = alb.Tracks.Where(visSet.Contains).ToList();
             if (vt.Count == 0) continue;
-            List<LibraryMergedTrack> merged = MediaLibraryService.MergeAlbumTrackVariants(vt, this);
+            List<LibraryMergedTrack> merged = MediaLibraryService.MergeAlbumTrackVariants(vt, appCtx);
             if (merged.Count == 0) continue;
-            ComputeGroupSortMetrics(merged, sortMode, out long maxMod, out double maxScore, out int bestTier);
+            ComputeGroupSortMetrics(appCtx, merged, sortMode, out long maxMod, out double maxScore, out int bestTier);
             albEntries.Add((alb, merged, maxMod, maxScore, bestTier));
         }
         albEntries.Sort((a, b) => sortMode switch {
@@ -3368,18 +3534,16 @@ public partial class MainActivity {
                     : string.Compare(a.Alb.AlbumTitle, b.Alb.AlbumTitle, StringComparison.OrdinalIgnoreCase)),
             _ => string.Compare(a.Alb.AlbumTitle, b.Alb.AlbumTitle, StringComparison.OrdinalIgnoreCase)
         });
-        cachedAlbumEntries = albEntries;
 
-        // Artists view: merge variants & sort groups
         List<(LibraryArtistGroup Art, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> artEntries = [];
-        for (int i = 0; i < librarySnapshot.Artists.Count; i++) {
-            LibraryArtistGroup art = librarySnapshot.Artists[i];
+        for (int i = 0; i < snap.Artists.Count; i++) {
+            LibraryArtistGroup art = snap.Artists[i];
             List<LibraryTrackItem> vt = art.Tracks.Where(visSet.Contains).ToList();
             if (vt.Count == 0) continue;
             List<LibraryMergedTrack> merged = MediaLibraryService.SortMergedTracks(
-                MediaLibraryService.MergeTrackVariants(vt, this), sortMode, this);
+                MediaLibraryService.MergeTrackVariants(vt, appCtx), sortMode, appCtx);
             if (merged.Count == 0) continue;
-            ComputeGroupSortMetrics(merged, sortMode, out long maxMod, out double maxScore, out int bestTier);
+            ComputeGroupSortMetrics(appCtx, merged, sortMode, out long maxMod, out double maxScore, out int bestTier);
             artEntries.Add((art, merged, maxMod, maxScore, bestTier));
         }
         artEntries.Sort((a, b) => sortMode switch {
@@ -3393,18 +3557,16 @@ public partial class MainActivity {
                     : string.Compare(a.Art.Artist, b.Art.Artist, StringComparison.OrdinalIgnoreCase)),
             _ => string.Compare(a.Art.Artist, b.Art.Artist, StringComparison.OrdinalIgnoreCase)
         });
-        cachedArtistEntries = artEntries;
 
-        // Folders view: merge variants & sort groups
         List<(LibraryFolderGroup Fld, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> fldEntries = [];
-        for (int i = 0; i < librarySnapshot.Folders.Count; i++) {
-            LibraryFolderGroup fld = librarySnapshot.Folders[i];
+        for (int i = 0; i < snap.Folders.Count; i++) {
+            LibraryFolderGroup fld = snap.Folders[i];
             List<LibraryTrackItem> vt = fld.Tracks.Where(visSet.Contains).ToList();
             if (vt.Count == 0) continue;
             List<LibraryMergedTrack> merged = MediaLibraryService.SortMergedTracks(
-                MediaLibraryService.MergeTrackVariants(vt, this), sortMode, this);
+                MediaLibraryService.MergeTrackVariants(vt, appCtx), sortMode, appCtx);
             if (merged.Count == 0) continue;
-            ComputeGroupSortMetrics(merged, sortMode, out long maxMod, out double maxScore, out int bestTier);
+            ComputeGroupSortMetrics(appCtx, merged, sortMode, out long maxMod, out double maxScore, out int bestTier);
             fldEntries.Add((fld, merged, maxMod, maxScore, bestTier));
         }
         fldEntries.Sort((a, b) => sortMode switch {
@@ -3418,17 +3580,24 @@ public partial class MainActivity {
                     : string.Compare(a.Fld.FolderName, b.Fld.FolderName, StringComparison.OrdinalIgnoreCase)),
             _ => string.Compare(a.Fld.FolderName, b.Fld.FolderName, StringComparison.OrdinalIgnoreCase)
         });
-        cachedFolderEntries = fldEntries;
 
-        cachedLibIndexSnap = librarySnapshot;
-        cachedLibIndexRevision = libraryFilterRevision;
-        cachedLibSpatialMode = spatialMode;
-        cachedLibMediaMode = mediaMode;
-        cachedLibHideNoise = hideNoise;
-        cachedLibSortMode = sortMode;
-        cachedLibFolderMode = folderMode;
-        cachedLibFoldersJson = foldersJson;
-        cachedQueryRevision = -1;
+        return new LibraryBaseIndexData {
+            Snapshot = snap,
+            Revision = rev,
+            SpatialMode = spatialMode,
+            MediaMode = mediaMode,
+            HideNoise = hideNoise,
+            SortMode = sortMode,
+            FolderMode = folderMode,
+            FoldersJson = foldersJson,
+            VisibleTracks = visible,
+            SmartCleanEntries = cleanEntries,
+            HiddenNoiseCount = hiddenNoise,
+            MergedTracks = sortedTracks,
+            AlbumEntries = albEntries,
+            ArtistEntries = artEntries,
+            FolderEntries = fldEntries
+        };
     }
 
     void EnsureLibraryQueryCache(string q, LibraryCategory cat) {
@@ -3572,11 +3741,16 @@ public partial class MainActivity {
         libraryListHost.RemoveAllViews();
 
         if (librarySnapshot == null) {
-            libraryStatusText.Text = isLibraryScanning ? S["LibScanning"] : S["LibEmpty"];
+            libraryStatusText.Text = isLibraryScanning
+                ? S["LibScanning"]
+                : (isLibraryIndexBuilding ? S["LibraryLoadingCached"] : S["LibEmpty"]);
             return;
         }
 
-        EnsureLibraryBaseIndex();
+        if (IsLibraryBaseIndexStale()) {
+            ScheduleLibraryLoadAndRenderAsync(loadCacheFromDisk: false);
+            return;
+        }
         SyncSmartCleanChipBadge();
 
         string q = (librarySearchQuery ?? "").Trim();

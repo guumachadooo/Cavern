@@ -28,42 +28,50 @@ public static class AndroidMediaFallbackDecoder {
         Directory.CreateDirectory(outputFolder);
         string wavPath = BuildUniqueWavCachePath(inputPath, outputFolder);
 
-        using MediaExtractor extractor = new();
-        extractor.SetDataSource(inputPath);
-
-        int audioTrackIndex = -1;
-        MediaFormat trackFormat = null;
-        string mime = null;
-        for (int i = 0; i < extractor.TrackCount; i++) {
-            MediaFormat fmt = extractor.GetTrackFormat(i);
-            string m = fmt.GetString(MediaFormat.KeyMime);
-            if (!string.IsNullOrEmpty(m) && m.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) {
-                audioTrackIndex = i;
-                trackFormat = fmt;
-                mime = m;
-                break;
-            }
-        }
-
-        if (audioTrackIndex < 0 || trackFormat == null) {
-            throw new NotSupportedException("No decodable audio track found in file.");
-        }
-
-        extractor.SelectTrack(audioTrackIndex);
-        long durationUs = trackFormat.ContainsKey(MediaFormat.KeyDuration) ? trackFormat.GetLong(MediaFormat.KeyDuration) : 0;
-        int sampleRate = trackFormat.ContainsKey(MediaFormat.KeySampleRate) ? trackFormat.GetInteger(MediaFormat.KeySampleRate) : 48000;
-        int channels = trackFormat.ContainsKey(MediaFormat.KeyChannelCount) ? trackFormat.GetInteger(MediaFormat.KeyChannelCount) : 2;
-        int pcmEncoding = trackFormat.ContainsKey(MediaFormat.KeyPcmEncoding)
-            ? trackFormat.GetInteger(MediaFormat.KeyPcmEncoding)
-            : (int)AudioEncoding.Pcm16bit;
-        ResolveWavFormat(pcmEncoding, out short wavBitsPerSample, out bool wavIsFloat, out bool convertInt32ToFloat32);
-
-        using MediaCodec codec = MediaCodec.CreateDecoderByType(mime);
-        codec.Configure(trackFormat, null, null, 0);
-        codec.Start();
-
+        MediaExtractor extractor = null;
+        MediaCodec codec = null;
         bool succeeded = false;
         try {
+            extractor = new MediaExtractor();
+            try {
+                extractor.SetDataSource(inputPath);
+            } catch {
+                using Android.OS.ParcelFileDescriptor pfd = Android.OS.ParcelFileDescriptor.Open(
+                    new Java.IO.File(inputPath), Android.OS.ParcelFileMode.ReadOnly);
+                extractor.SetDataSource(pfd.FileDescriptor);
+            }
+
+            int audioTrackIndex = -1;
+            MediaFormat trackFormat = null;
+            string mime = null;
+            for (int i = 0; i < extractor.TrackCount; i++) {
+                MediaFormat fmt = extractor.GetTrackFormat(i);
+                string m = fmt.GetString(MediaFormat.KeyMime);
+                if (!string.IsNullOrEmpty(m) && m.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) {
+                    audioTrackIndex = i;
+                    trackFormat = fmt;
+                    mime = m;
+                    break;
+                }
+            }
+
+            if (audioTrackIndex < 0 || trackFormat == null) {
+                throw new NotSupportedException("No decodable audio track found in file.");
+            }
+
+            extractor.SelectTrack(audioTrackIndex);
+            long durationUs = trackFormat.ContainsKey(MediaFormat.KeyDuration) ? trackFormat.GetLong(MediaFormat.KeyDuration) : 0;
+            int sampleRate = trackFormat.ContainsKey(MediaFormat.KeySampleRate) ? trackFormat.GetInteger(MediaFormat.KeySampleRate) : 48000;
+            int channels = trackFormat.ContainsKey(MediaFormat.KeyChannelCount) ? trackFormat.GetInteger(MediaFormat.KeyChannelCount) : 2;
+            int pcmEncoding = trackFormat.ContainsKey(MediaFormat.KeyPcmEncoding)
+                ? trackFormat.GetInteger(MediaFormat.KeyPcmEncoding)
+                : (int)AudioEncoding.Pcm16bit;
+            ResolveWavFormat(pcmEncoding, out short wavBitsPerSample, out bool wavIsFloat, out bool convertInt32ToFloat32);
+
+            codec = MediaCodec.CreateDecoderByType(mime);
+            codec.Configure(trackFormat, null, null, 0);
+            codec.Start();
+
             using FileStream fs = File.Create(wavPath);
             WriteWavPlaceholderHeader(fs, channels, sampleRate, wavBitsPerSample, wavIsFloat);
 
@@ -141,11 +149,11 @@ public static class AndroidMediaFallbackDecoder {
             PatchWavHeader(fs, channels, sampleRate, wavBitsPerSample, wavIsFloat, totalPcmBytes);
             succeeded = true;
         } finally {
-            try {
-                codec.Stop();
-            } catch {
-                // Best-effort MediaCodec stop on cancellation or decode fault
-            }
+            try { codec?.Stop(); } catch { }
+            try { codec?.Release(); } catch { }
+            try { codec?.Dispose(); } catch { }
+            try { extractor?.Release(); } catch { }
+            try { extractor?.Dispose(); } catch { }
             if (!succeeded) {
                 try {
                     if (File.Exists(wavPath)) {
