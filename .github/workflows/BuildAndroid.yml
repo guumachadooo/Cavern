@@ -277,7 +277,7 @@ jobs:
             "01_Cavern|Cavern/Cavern.csproj|-c Release -v:minimal -p:GenerateFullPaths=true"
             "02_Cavern.Format|Cavern.Format/Cavern.Format.csproj|-c Release -v:minimal -p:GenerateFullPaths=true"
             "03_Cavernize.Logic|CavernSamples/Reusable/Cavernize.Logic/Cavernize.Logic.csproj|-c Release -v:minimal -p:GenerateFullPaths=true"
-            "04_CavernizeAndroid|CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj|-c Release -f net11.0-android -v:minimal -p:GenerateFullPaths=true -p:AcceptAndroidSDKLicenses=true -p:ApplicationVersion=${{ github.run_number }} -p:ApplicationDisplayVersion=2.8.${{ github.run_number }}"
+            "04_CavernizeAndroid|CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj|-c Release -f net11.0-android -v:minimal -p:GenerateFullPaths=true -p:AcceptAndroidSDKLicenses=true -p:ApplicationVersion=${{ github.run_number }} -p:ApplicationDisplayVersion=2.9.${{ github.run_number }}"
           )
 
           STATUS_FILE="$RUNNER_TEMP/ci_layer_status.txt"
@@ -457,7 +457,7 @@ jobs:
           dotnet publish CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
             -c Release -f net11.0-android \
             -p:ApplicationVersion=${{ github.run_number }} \
-            -p:ApplicationDisplayVersion=2.8.${{ github.run_number }} \
+            -p:ApplicationDisplayVersion=2.9.${{ github.run_number }} \
             -p:AndroidPackageFormat=apk \
             -p:AndroidKeyStore=true \
             -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/cavernize.keystore" \
@@ -527,14 +527,14 @@ jobs:
       - name: Publish versioned GitHub Release (permanent archive)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: "v2.8.${{ github.run_number }}"
+          tag_name: "v2.9.${{ github.run_number }}"
           target_commitish: ${{ github.sha }}
-          name: "Cavernize Android v2.8.${{ github.run_number }}"
+          name: "Cavernize Android v2.9.${{ github.run_number }}"
           body: |
-            Permanent archive release for Cavernize Android `v2.8.${{ github.run_number }}` (Build `${{ github.run_number }}`, commit `${{ github.sha }}`).
-            - **One-Screen Play UI, Unified Visual Identity & Swapped Transport:** Compacted `Now Playing` to fit cleanly inside a single viewport with unified frosted One UI 9 + Apple Glass icons (`|◀` `-10s` `▶` `+10s` `▶|`), removed cross-tab UI redundancies (moving active source header into `Sala 3D`, `Estúdio`, and `Stems`), and added smoked frosted modal readability (`SurfaceModal` + API 31+ backdrop blur).
-            - **In-App Smart File Explorer, Directory Filtering & Smart Non-Music Cleaner:** Added `OneUiFileExplorerDialog` replacing stock SAF pickers with dead-end folder pruning, recursive media counts, multi-folder inclusion/exclusion filters, and offline rule-based **Limpeza Smart** filtering (keeping all Spatial/Surround audio).
-            - **Multi-Format Track Merging, Live FLAC ↔ Atmos Switching & MP4 Track Sorting:** Pure C# binary MP4 (`trkn`/`disk`/`©alb`/`©ART`), FLAC & ID3v2 tag parsing for accurate disc/track sorting, filtered album track counts, merged multi-format album rows (e.g. `ATMOS + FLAC`), live format toggle preserving exact playback timestamp, Deluxe/edition-aware online cover/lyrics matching, external 3D Head Trackball & Vertical Elevation dock (`RoomSimulatorView`), and streaming DAMF `.metadata` + RIFF WAVE `.atmos.audio` decoding.
+            Permanent archive release for Cavernize Android `v2.9.${{ github.run_number }}` (Build `${{ github.run_number }}`, commit `${{ github.sha }}`) — **Phase 2 Completion (`W01–W27` + `W29`)**.
+            - **Modern Android 15/16 Platform (`targetSdkVersion 35`) & W^X Security:** Full Edge-to-Edge `WindowInsets` (`SystemBars|DisplayCutout|Ime`), Predictive Back (`OnBackInvokedCallback`), Scoped Storage / MediaStore, and 16 KB ELF-aligned native engines (`libffmpeg.so`, `libtruehdd.so`, `libonnxruntime.so`, `libcavernize_proaudio.so`) bundled cleanly in `NativeLibraryDir`.
+            - **One UI 9 Presentation Shell, Library Smart Clean v2 & 2-Tier Lyrics Sing:** Unified 6-Category Settings Hub with cross-category search, Essential/Pro mode, and `?` guided modals; Smart Clean v2 evidence-based inspector (`Music|Videos|All`, variant merging `ATMOS+FLAC`, rules/allowlist/hidden folders); single-viewport `Play` with `[A|B]` Audio Spec switcher, 2-tier `Lyrics Sing` dock, `Studio` (`Master|Classic|Queue` + readiness pills), and `Stems` Goal Cards.
+            - **Spatial DSP, Pro-Audio USB & Neural Restoration (`Slot 1–8`):** SOFA HDF5 HRIR, MagLS Ambisonics, AutoEq (8,850+ profiles), ISO 226 loudness, BS.1770-5 metering + 4x True-Peak Limiter, `Slot 7` ONNX MVSEP/LGSR stem & bandwidth restoration, Auto-Vocal Mix-Match + Voiceprint DNA, and Focusrite Scarlett 2i2 / Path A `AAudio` / Path B unrooted `libusb` UAC2 audio I/O.
           prerelease: false
           make_latest: false
           files: build/Cavernize-Android.apk
@@ -650,11 +650,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-latest
-          name: "Cavernize Android v2.8.${{ github.run_number }}"
+          name: "Cavernize Android v2.9.${{ github.run_number }}"
           body: |
             Automated signed Android APK build for Cavernize (`${{ github.sha }}`).
-            - Version: `v2.8.${{ github.run_number }}` (Build `${{ github.run_number }}`)
-            - Highlights: Single-Viewport One UI 9 + Apple Glass `Now Playing` with `[|◀] [-10s] [▶] [+10s] [▶|]` & Live FLAC ↔ Atmos Format Switcher, In-App Smart File Explorer (Dead-End Pruning) & Folder/Non-Music Filters, Filtered & Multi-Format Merged Library Albums, MP4 `trkn`/`disk` Track Sorting, Deluxe/Edition Cover Matching, External 3D Head Trackball & Height Capsule Dock (`RoomSimulatorView`), Frosted Smoked Modals, and Streaming DAMF RIFF-WAVE Atmos Decoding.
+            - Version: `v2.9.${{ github.run_number }}` (Build `${{ github.run_number }}`) — **Phase 2 (`W01–W27` + `W29`)**
+            - Highlights: Android 15/16 (`targetSdkVersion 35`) Edge-to-Edge & Predictive Back, 16 KB ELF W^X `NativeLibraryDir` engines (`FFmpeg`, `truehdd`, `ONNX Runtime`, `libcavernize_proaudio`), One UI 9 6-Category Settings Hub + `?` Guided Modals, Library Smart Clean v2 Inspector + `ATMOS+FLAC` variant merge, `Studio` (`Master|Classic|Queue`), `Stems` Goal Cards & `Slot 7` ONNX MVSEP/LGSR, 2-Tier `Lyrics Sing` + Auto-Vocal Mix-Match, Scarlett 2i2 / AAudio / `libusb` Path A/B, and SOFA HDF5 / MagLS / AutoEq / ISO 226 / BS.1770-5 spatial DSP.
           prerelease: false
           make_latest: true
           files: build/Cavernize-Android.apk
