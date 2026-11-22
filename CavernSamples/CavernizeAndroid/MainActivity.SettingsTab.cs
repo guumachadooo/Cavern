@@ -1927,7 +1927,7 @@ public partial class MainActivity {
                 (string verName, _) = AppUpdateService.GetInstalledVersion(this);
                 double kb = AppLogger.GetLogSizeBytes() / 1024.0;
                 string langTag = string.IsNullOrEmpty(store.LanguageCode) ? S["LangAutoSystem"] : store.LanguageCode;
-                return $"v{verName} · {langTag} · {kb:0.1} KB";
+                return $"v{verName} · {langTag} · {kb:0.0} KB";
             }
             default:
                 return "";
@@ -2046,7 +2046,7 @@ public partial class MainActivity {
     void RefreshLogSummaryLabel() {
         if (logPathInfoText != null) {
             long bytes = AppLogger.GetLogSizeBytes();
-            logPathInfoText.Text = $"{AppLogger.SharedLogPath}\n({bytes / 1024.0:0.1} KB)";
+            logPathInfoText.Text = $"{AppLogger.SharedLogPath}\n({bytes / 1024.0:0.0} KB)";
         }
     }
 
@@ -2124,7 +2124,7 @@ public partial class MainActivity {
         }
         if (latestUpdateInfo?.IsUpdateAvailable == true) {
             double sizeMb = latestUpdateInfo.AssetSizeBytes > 0 ? latestUpdateInfo.AssetSizeBytes / (1024.0 * 1024.0) : 70.0;
-            updateSettingsStatusText.Text = string.Format(S["UpdateAvailableBanner"], latestUpdateInfo.RemoteVersion) + $" ({sizeMb:0.1} MB)";
+            updateSettingsStatusText.Text = string.Format(S["UpdateAvailableBanner"], latestUpdateInfo.RemoteVersion) + $" ({sizeMb:0.0} MB)";
             updateSettingsStatusText.SetTextColor(OneUiTheme.FunctionalOrange);
             downloadInstallBtn.Visibility = ViewStates.Visible;
             downloadInstallBtn.Text = !string.IsNullOrEmpty(downloadedUpdateApkPath) && File.Exists(downloadedUpdateApkPath)

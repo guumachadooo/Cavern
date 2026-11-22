@@ -2263,10 +2263,10 @@ public partial class MainActivity {
                     qualCard.AddView(Label($"• {S["QualityUpsampledHiResWarn"]}", 11.5f, OneUiTheme.PeachText));
                 }
                 if (qReport.DynamicRangeDb > 0.5) {
-                    qualCard.AddView(Label($"• {string.Format(S["QualityDynamicRange"], qReport.DynamicRangeDb.ToString("0.1"))}", 11.5f, OneUiTheme.TextSecondary));
+                    qualCard.AddView(Label($"• {string.Format(S["QualityDynamicRange"], qReport.DynamicRangeDb.ToString("0.0"))}", 11.5f, OneUiTheme.TextSecondary));
                 }
                 if (qReport.ClippedPercent >= 0.05) {
-                    qualCard.AddView(Label($"• {string.Format(S["QualityClippingWarn"], qReport.ClippedPercent.ToString("0.2"))}", 11.5f, OneUiTheme.FunctionalRedFill));
+                    qualCard.AddView(Label($"• {string.Format(S["QualityClippingWarn"], qReport.ClippedPercent.ToString("0.00"))}", 11.5f, OneUiTheme.FunctionalRedFill));
                 }
             } else {
                 TextView pendingTv = Label(triggerBackground ? S["QualityAnalyzing"] : S["QualityFastOnlyNote"], 11.5f, OneUiTheme.TextMuted);

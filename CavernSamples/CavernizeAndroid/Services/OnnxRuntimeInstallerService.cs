@@ -461,6 +461,21 @@ public static class OnnxRuntimeInstallerService {
         if (string.IsNullOrEmpty(sourceFilePath) || !File.Exists(sourceFilePath)) {
             throw new FileNotFoundException("ONNX model file not found.", sourceFilePath);
         }
+        long srcLen = new FileInfo(sourceFilePath).Length;
+        if (srcLen < 64) {
+            throw new InvalidDataException($"ONNX model file is too small ({srcLen} bytes) or corrupted.");
+        }
+        using (FileStream probeFs = File.OpenRead(sourceFilePath)) {
+            byte[] head = new byte[Math.Min(64, (int)srcLen)];
+            int nRead = probeFs.Read(head, 0, head.Length);
+            int firstNonWs = 0;
+            while (firstNonWs < nRead && head[firstNonWs] <= (byte)' ') {
+                firstNonWs++;
+            }
+            if (firstNonWs < nRead && (head[firstNonWs] == (byte)'<' || head[firstNonWs] == (byte)'{')) {
+                throw new InvalidDataException("Selected file appears to be HTML/JSON text rather than a binary ONNX model.");
+            }
+        }
 
         string modelsDir = GetModelsDir(context);
         NeuralModelCatalogEntry catalogEntry = !string.IsNullOrWhiteSpace(targetModelId)
@@ -512,7 +527,7 @@ public static class OnnxRuntimeInstallerService {
         File.WriteAllText(metaPath, JsonSerializer.Serialize(meta));
 
         long fileBytes = new FileInfo(customDestPath).Length;
-        AppLogger.Info($"Registered custom ONNX model '{safeId}' (Task={task}, SR={sr} Hz, {fileBytes / (1024.0 * 1024.0):0.1} MB)");
+        AppLogger.Info($"Registered custom ONNX model '{safeId}' (Task={task}, SR={sr} Hz, {fileBytes / (1024.0 * 1024.0):0.0} MB)");
         return NeuralModelCatalog.CreateCustomEntry(
             safeId,
             displayName,
@@ -709,6 +724,10 @@ public static class OnnxRuntimeInstallerService {
         foreach (char c in Path.GetInvalidFileNameChars()) {
             clean = clean.Replace(c, '_');
         }
-        return clean.Replace(' ', '_').Trim();
+        clean = clean.Replace('/', '_').Replace('\\', '_').Replace(' ', '_').Trim();
+        while (clean.Contains("..", StringComparison.Ordinal)) {
+            clean = clean.Replace("..", "_", StringComparison.Ordinal);
+        }
+        return clean.Trim('.');
     }
 }

@@ -54,12 +54,15 @@ public sealed class AudioDeviceRouteInfo {
 /// automatically switches AutoEq + Binaural HRIR + Head-Tracking profiles per connected headphone.
 /// </summary>
 public sealed class AudioDeviceProfileManager : IDisposable {
+    const long HardwareRouteDebounceMs = 250;
+
     readonly Context context;
     readonly AppSettingsStore store;
     readonly RealtimePlayerEngine engine;
     readonly AudioManager audioManager;
     readonly Handler mainHandler;
     readonly RouteCallback deviceCallback;
+    readonly Java.Lang.Runnable debouncedRefreshRunnable;
 
     AudioDeviceRouteInfo currentDevice = new();
     bool registered;
@@ -80,6 +83,11 @@ public sealed class AudioDeviceProfileManager : IDisposable {
         this.engine = engine;
         audioManager = context.GetSystemService(Context.AudioService) as AudioManager;
         mainHandler = new Handler(Looper.MainLooper);
+        debouncedRefreshRunnable = new Java.Lang.Runnable(() => {
+            if (!disposed) {
+                RefreshActiveDevice(applyAutoSwitch: true);
+            }
+        });
         deviceCallback = new RouteCallback(OnHardwareDevicesChanged);
     }
 
@@ -160,7 +168,9 @@ public sealed class AudioDeviceProfileManager : IDisposable {
         if (disposed) {
             return;
         }
-        RefreshActiveDevice(applyAutoSwitch: true);
+        // Coalesce separate Android sink/source callbacks (e.g. USB duplex interface plug/unplug) into one clean route switch
+        mainHandler.RemoveCallbacks(debouncedRefreshRunnable);
+        mainHandler.PostDelayed(debouncedRefreshRunnable, HardwareRouteDebounceMs);
     }
 
     void ApplyBindingForDevice(AudioDeviceRouteInfo device, bool notifyListeners) {
@@ -455,6 +465,7 @@ public sealed class AudioDeviceProfileManager : IDisposable {
             return;
         }
         disposed = true;
+        mainHandler?.RemoveCallbacks(debouncedRefreshRunnable);
         if (registered && audioManager != null) {
             try {
                 audioManager.UnregisterAudioDeviceCallback(deviceCallback);

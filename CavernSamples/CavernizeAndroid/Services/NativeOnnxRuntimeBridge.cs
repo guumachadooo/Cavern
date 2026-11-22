@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -19,8 +20,8 @@ namespace CavernizeAndroid.Services;
 public static class OnnxRuntimeHeaderParser {
     static readonly Regex ApiVersionRegex = new(@"#\s*define\s+ORT_API_VERSION\s+(\d+)", RegexOptions.Compiled);
     static readonly Regex StructHeaderRegex = new(@"\bstruct\s+OrtApi\s*\{", RegexOptions.Compiled);
-    static readonly Regex MacroStartRegex = new(@"\b(ORT_CLASS_RELEASE|ORT_API2_STATUS|ORT_API_STATUS|ORT_API)\s*\(", RegexOptions.Compiled);
-    static readonly Regex RawFnPtrRegex = new(@"\(\s*(?:[A-Za-z0-9_]+\s+)*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\(", RegexOptions.Compiled);
+    static readonly Regex MacroStartRegex = new(@"\b(ORT_CLASS_RELEASE|ORT_API2_STATUS|ORT_API_STATUS|ORT_API_T|ORT_API)\s*\(", RegexOptions.Compiled);
+    static readonly Regex RawFnPtrRegex = new(@"\(\s*(?:[A-Za-z0-9_]+\s*)*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\(", RegexOptions.Compiled);
 
     static readonly HashSet<string> AndroidDefinedMacros = new(StringComparer.Ordinal) {
         "__ANDROID__",
@@ -76,26 +77,95 @@ public static class OnnxRuntimeHeaderParser {
             }
         }
 
-        // Validate canonical immutable OrtApi anchor slots (v1..v31+ ABI guarantee)
-        if (!ValidateAnchorSlots(slots)) {
+        // Validate canonical immutable OrtApi anchor slots (v1..v40+ ABI guarantee)
+        if (!ValidateAnchorSlots(slots, out _)) {
             slots.Clear();
         }
 
         return (apiVersion, slots);
     }
 
-    static bool ValidateAnchorSlots(Dictionary<string, int> slots) {
+    /// <summary>
+    /// Diagnostic variant of <see cref="ParseOrtApiHeader"/> returning the failure reason when anchor validation fails.
+    /// </summary>
+    public static (uint ApiVersion, Dictionary<string, int> SlotMap, string Diagnostic) ParseOrtApiHeaderWithDiagnostics(string headerText) {
+        Dictionary<string, int> slots = new(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(headerText)) {
+            return (17u, slots, "header asset is empty or missing");
+        }
+
+        string noComments = StripCommentsPreservingNewlines(headerText);
+        string preprocessed = PreprocessForAndroidArm64(noComments);
+
+        uint apiVersion = 17u;
+        Match verMatch = ApiVersionRegex.Match(preprocessed);
+        if (verMatch.Success && uint.TryParse(verMatch.Groups[1].Value, out uint parsed)) {
+            apiVersion = parsed;
+        }
+
+        Match structMatch = StructHeaderRegex.Match(preprocessed);
+        if (!structMatch.Success) {
+            return (apiVersion, slots, $"struct OrtApi not found (headerLen={headerText.Length})");
+        }
+
+        int openBrace = preprocessed.IndexOf('{', structMatch.Index);
+        int closeBrace = FindMatchingDelimiter(preprocessed, openBrace, '{', '}');
+        if (openBrace < 0 || closeBrace <= openBrace) {
+            return (apiVersion, slots, $"struct OrtApi braces unbalanced (headerLen={headerText.Length})");
+        }
+
+        string body = preprocessed.Substring(openBrace + 1, closeBrace - openBrace - 1);
+        List<string> statements = SplitTopLevelStatements(body);
+
+        int slotIndex = 0;
+        for (int i = 0; i < statements.Count; i++) {
+            string stmt = statements[i];
+            if (string.IsNullOrWhiteSpace(stmt) || stmt.StartsWith('#')) {
+                continue;
+            }
+            string symbol = TryExtractMemberSymbol(stmt);
+            if (!string.IsNullOrEmpty(symbol)) {
+                slots[symbol] = slotIndex++;
+            }
+        }
+
+        if (!ValidateAnchorSlots(slots, out string reason)) {
+            int rawCount = slots.Count;
+            slots.Clear();
+            return (apiVersion, slots, $"anchor validation failed ({reason}, parsedSlots={rawCount}, stmts={statements.Count}, apiVer={apiVersion})");
+        }
+
+        return (apiVersion, slots, string.Empty);
+    }
+
+    static bool ValidateAnchorSlots(Dictionary<string, int> slots, out string reason) {
         if (slots.Count < 20) {
+            reason = $"too few slots ({slots.Count})";
             return false;
         }
-        if (!slots.TryGetValue("CreateStatus", out int s0) || s0 != 0) return false;
-        if (!slots.TryGetValue("GetErrorCode", out int s1) || s1 != 1) return false;
-        if (!slots.TryGetValue("GetErrorMessage", out int s2) || s2 != 2) return false;
-        if (!slots.TryGetValue("CreateEnv", out int s3) || s3 != 3) return false;
-        return slots.ContainsKey("CreateSession") &&
-               slots.ContainsKey("Run") &&
-               slots.ContainsKey("ReleaseSession") &&
-               slots.ContainsKey("ReleaseStatus");
+        if (!slots.TryGetValue("CreateStatus", out int s0) || s0 != 0) {
+            reason = $"CreateStatus={(!slots.ContainsKey("CreateStatus") ? "missing" : s0.ToString())}";
+            return false;
+        }
+        if (!slots.TryGetValue("GetErrorCode", out int s1) || s1 != 1) {
+            reason = $"GetErrorCode={(!slots.ContainsKey("GetErrorCode") ? "missing" : s1.ToString())}";
+            return false;
+        }
+        if (!slots.TryGetValue("GetErrorMessage", out int s2) || s2 != 2) {
+            reason = $"GetErrorMessage={(!slots.ContainsKey("GetErrorMessage") ? "missing" : s2.ToString())}";
+            return false;
+        }
+        if (!slots.TryGetValue("CreateEnv", out int s3) || s3 != 3) {
+            reason = $"CreateEnv={(!slots.ContainsKey("CreateEnv") ? "missing" : s3.ToString())}";
+            return false;
+        }
+        if (!slots.ContainsKey("CreateSession") || !slots.ContainsKey("Run") ||
+            !slots.ContainsKey("ReleaseSession") || !slots.ContainsKey("ReleaseStatus")) {
+            reason = "missing core CreateSession/Run/Release slots";
+            return false;
+        }
+        reason = string.Empty;
+        return true;
     }
 
     static string TryExtractMemberSymbol(string stmt) {
@@ -115,7 +185,7 @@ public static class OnnxRuntimeHeaderParser {
                     // ORT_API2_STATUS(Name, ...) -> Name is argument 0
                     return args.Count >= 1 ? CleanIdentifier(args[0]) : null;
                 }
-                // ORT_API(ReturnType, Name, ...) -> Name is argument 1
+                // ORT_API(ReturnType, Name, ...) / ORT_API_T(ReturnType, Name, ...) -> Name is argument 1
                 return args.Count >= 2 ? CleanIdentifier(args[1]) : null;
             }
         }
@@ -441,6 +511,9 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     delegate IntPtr SetIntraOpNumThreadsDelegate(IntPtr options, int intraOpNumThreads);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate IntPtr SetInterOpNumThreadsDelegate(IntPtr options, int interOpNumThreads);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     delegate IntPtr SetGraphOptimizationLevelDelegate(IntPtr options, int graphOptimizationLevel);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -506,6 +579,9 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     delegate IntPtr GetTensorTypeAndShapeDelegate(IntPtr value, out IntPtr typeAndShapeInfo);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate IntPtr GetTensorElementTypeDelegate(IntPtr info, out int elementType);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     delegate IntPtr GetDimensionsCountDelegate(IntPtr info, out UIntPtr count);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -522,6 +598,13 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     const int OrtArenaAllocator = 0;
     const int OrtMemTypeDefault = 0;
     const int OnnxTensorElementDataTypeFloat = 1;
+    const int OnnxTensorElementDataTypeFloat16 = 10;
+    const int OnnxTensorElementDataTypeDouble = 11;
+    const long MaxTensorElements = 64L * 1024L * 1024L; // 256 MB float32 ceiling to prevent mobile OOM / 32-bit length overflow
+    const float Float16FiniteMax = 65504f;
+    const double ModelMemoryExpansionFactor = 2.5; // Protobuf parse + graph opt + EP weight packing peak multiplier
+    const long SessionBaseOverheadBytes = 32L * 1024L * 1024L; // 32 MB base ORT runtime & activation arena overhead
+    const long MinimumSafetyHeadroomBytes = 192L * 1024L * 1024L; // 192 MB OS/audio engine LMK safety headroom
 
     static readonly string[] PreferredCompanionLoadOrder = [
         "libonnxruntime_providers_shared.so",
@@ -542,12 +625,16 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     Dictionary<string, int> apiSlots = new(StringComparer.Ordinal);
     string loadedVersion = "";
     string lastActiveProvider = "";
+    string lastInitError = "";
+    int activeSessionCount;
+    bool disposeRequested;
     bool initialized;
 
     // Cached C API delegates
     CreateEnvDelegate fnCreateEnv;
     CreateSessionOptionsDelegate fnCreateSessionOptions;
     SetIntraOpNumThreadsDelegate fnSetIntraOpNumThreads;
+    SetInterOpNumThreadsDelegate fnSetInterOpNumThreads;
     SetGraphOptimizationLevelDelegate fnSetGraphOpt;
     AddSessionConfigEntryDelegate fnAddSessionConfig;
     SessionOptionsAppendEpDelegate fnAppendEp;
@@ -565,6 +652,7 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     RunDelegate fnRun;
     GetTensorMutableDataDelegate fnGetTensorData;
     GetTensorTypeAndShapeDelegate fnGetTensorTypeAndShape;
+    GetTensorElementTypeDelegate fnGetTensorElementType;
     GetDimensionsCountDelegate fnGetDimsCount;
     GetDimensionsDelegate fnGetDims;
     GetErrorMessageDelegate fnGetErrorMessage;
@@ -585,7 +673,7 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     public bool IsAvailable {
         get {
             lock (initLock) {
-                return initialized || OnnxRuntimeInstallerService.IsRuntimeInstalled(appContext);
+                return !disposeRequested && (initialized || OnnxRuntimeInstallerService.IsRuntimeInstalled(appContext));
             }
         }
     }
@@ -600,10 +688,10 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         string activeEp;
 
         lock (initLock) {
-            if (installed && !initialized) {
+            if (!disposeRequested && installed && !initialized) {
                 TryInitializeLocked();
             }
-            ready = installed && initialized;
+            ready = !disposeRequested && installed && initialized;
             version = !string.IsNullOrEmpty(loadedVersion) ? loadedVersion : (installed ? "installed" : string.Empty);
             activeEp = !ready
                 ? "Not Installed"
@@ -618,7 +706,11 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             VersionString = version,
             ActiveProvider = activeEp,
             IsQnnAvailable = qnn,
-            DiagnosticMessage = ready ? string.Empty : (installed ? "Native ONNX Runtime failed to initialize." : "ONNX Runtime is not installed.")
+            DiagnosticMessage = ready
+                ? string.Empty
+                : (installed
+                    ? (!string.IsNullOrEmpty(lastInitError) ? lastInitError : "Native ONNX Runtime failed to initialize.")
+                    : "ONNX Runtime is not installed.")
         };
     }
 
@@ -636,36 +728,376 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         return string.IsNullOrEmpty(path) ? null : path;
     }
 
+    /// <summary>
+    /// Evaluates current Android system RAM against the estimated peak memory required to load
+    /// <paramref name="modelPath"/> (including any companion ONNX external-data tensor files) into ONNX Runtime.
+    /// </summary>
+    public ModelMemoryCheckResult CheckMemoryForModel(string modelPath) {
+        if (string.IsNullOrWhiteSpace(modelPath) || !File.Exists(modelPath)) {
+            return new ModelMemoryCheckResult {
+                HasSufficientMemory = false,
+                DiagnosticMessage = "ONNX model file not found."
+            };
+        }
+        long primaryBytes = new FileInfo(modelPath).Length;
+        long totalModelBytes = ResolveTotalModelSizeBytes(modelPath, primaryBytes);
+        return CheckMemoryForModelBytes(totalModelBytes, Path.GetFileName(modelPath));
+    }
+
+    /// <summary>
+    /// Evaluates current Android system RAM against the estimated peak native memory required for a model
+    /// of <paramref name="modelBytes"/> bytes without touching disk or initializing a session.
+    /// </summary>
+    public ModelMemoryCheckResult CheckMemoryForModelBytes(long modelBytes, string modelLabel = "") {
+        long safeModelBytes = Math.Max(0L, modelBytes);
+        long estimatedModelBytes = EstimateRequiredModelBytes(safeModelBytes);
+
+        if (!TryReadSystemMemory(out long availBytes, out long totalBytes, out long thresholdBytes, out bool isLowMemory, out string source)) {
+            return new ModelMemoryCheckResult {
+                HasSufficientMemory = true,
+                IsLowMemoryState = false,
+                ModelFileBytes = safeModelBytes,
+                EstimatedRequiredBytes = estimatedModelBytes,
+                AvailableSystemBytes = 0L,
+                TotalSystemBytes = 0L,
+                LowMemoryThresholdBytes = 0L,
+                SafetyHeadroomBytes = MinimumSafetyHeadroomBytes,
+                Source = "Unavailable",
+                DiagnosticMessage = $"System RAM telemetry unavailable; proceeding with model '{modelLabel}' ({FormatMiB(safeModelBytes)} MB, est. {FormatMiB(estimatedModelBytes)} MB)."
+            };
+        }
+
+        long headroomBytes = ComputeEffectiveSafetyHeadroom(totalBytes, thresholdBytes);
+        long requiredBudgetBytes = estimatedModelBytes > long.MaxValue - headroomBytes
+            ? long.MaxValue
+            : estimatedModelBytes + headroomBytes;
+
+        bool sufficient = !isLowMemory && availBytes >= requiredBudgetBytes;
+        string namePart = string.IsNullOrWhiteSpace(modelLabel) ? "ONNX model" : $"'{modelLabel}'";
+        string status = sufficient ? "OK" : (isLowMemory ? "LOW_MEMORY" : "INSUFFICIENT_RAM");
+        string diag = $"{status} [{source}] for {namePart}: file={FormatMiB(safeModelBytes)} MB, estLoad={FormatMiB(estimatedModelBytes)} MB, headroom={FormatMiB(headroomBytes)} MB, need={FormatMiB(requiredBudgetBytes)} MB, avail={FormatMiB(availBytes)} MB / total={FormatMiB(totalBytes)} MB (lowMem={isLowMemory})";
+
+        return new ModelMemoryCheckResult {
+            HasSufficientMemory = sufficient,
+            IsLowMemoryState = isLowMemory,
+            ModelFileBytes = safeModelBytes,
+            EstimatedRequiredBytes = requiredBudgetBytes,
+            AvailableSystemBytes = availBytes,
+            TotalSystemBytes = totalBytes,
+            LowMemoryThresholdBytes = thresholdBytes,
+            SafetyHeadroomBytes = headroomBytes,
+            Source = source,
+            DiagnosticMessage = diag
+        };
+    }
+
     /// <inheritdoc/>
     public INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 4) {
         if (string.IsNullOrWhiteSpace(modelPath) || !File.Exists(modelPath)) {
             throw new FileNotFoundException("ONNX model file not found.", modelPath);
         }
+        long modelBytes = new FileInfo(modelPath).Length;
+        if (modelBytes < 64) {
+            throw new InvalidDataException($"ONNX model file '{Path.GetFileName(modelPath)}' is empty or truncated ({modelBytes} bytes).");
+        }
+
+        EnsureSufficientMemoryForModel(modelPath, modelBytes);
 
         lock (initLock) {
+            if (disposeRequested) {
+                throw new ObjectDisposedException(nameof(NativeOnnxRuntimeBridge));
+            }
             if (!initialized && !TryInitializeLocked()) {
-                throw new InvalidOperationException("ONNX Runtime native library could not be initialized. Reinstall ONNX Runtime in Settings.");
+                string detail = !string.IsNullOrWhiteSpace(lastInitError)
+                    ? lastInitError
+                    : "Native library or C API header initialization failed.";
+                throw new InvalidOperationException($"ONNX Runtime could not be initialized ({detail}).");
             }
+            // Pin native runtime lifetime (ortEnv, cpuMemoryInfo, libHandle) while session creation & inference run
+            activeSessionCount++;
         }
 
-        int threads = intraOpThreads > 0 ? intraOpThreads : Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
-        CheckStatus(fnCreateSessionOptions(out IntPtr sessOpts));
+        bool handoffComplete = false;
         try {
-            CheckStatus(fnSetIntraOpNumThreads(sessOpts, threads));
-            CheckStatus(fnSetGraphOpt(sessOpts, OrtEnableAll));
-            if (fnAddSessionConfig != null) {
-                ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.intra_op.allow_spinning", "0"));
+            int threads = intraOpThreads > 0 ? intraOpThreads : Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
+            List<NeuralExecutionProvider> candidates = BuildSessionProviderCascade(preferredProvider);
+            Exception lastErr = null;
+
+            for (int c = 0; c < candidates.Count; c++) {
+                NeuralExecutionProvider candidate = candidates[c];
+                IntPtr sessOpts = IntPtr.Zero;
+                CheckStatus(fnCreateSessionOptions(out sessOpts));
+                try {
+                    CheckStatus(fnSetIntraOpNumThreads(sessOpts, threads));
+                    if (fnSetInterOpNumThreads != null) {
+                        ReleaseStatusQuietly(fnSetInterOpNumThreads(sessOpts, 1));
+                    }
+                    CheckStatus(fnSetGraphOpt(sessOpts, OrtEnableAll));
+                    if (fnAddSessionConfig != null) {
+                        ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.intra_op.allow_spinning", "0"));
+                        ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.inter_op.allow_spinning", "0"));
+                        ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.set_denormal_as_zero", "1"));
+                        ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "memory.enable_memory_arena_shrinkage", "cpu:0"));
+                    }
+
+                    string activeEp = ConfigureSingleExecutionProvider(sessOpts, candidate, threads);
+                    if (candidate != NeuralExecutionProvider.Cpu && activeEp == "CPU") {
+                        // Requested accelerator EP could not be appended; skip duplicate CPU run if CPU is already queued next
+                        if (c + 1 < candidates.Count) {
+                            continue;
+                        }
+                    }
+
+                    IntPtr st = fnCreateSession(ortEnv, modelPath, sessOpts, out IntPtr sessionHandle);
+                    if (st == IntPtr.Zero && sessionHandle != IntPtr.Zero) {
+                        lock (initLock) {
+                            lastActiveProvider = activeEp;
+                        }
+                        NativeOnnxSession session = new(this, modelPath, sessionHandle, activeEp);
+                        handoffComplete = true;
+                        return session;
+                    }
+
+                    string errMsg = ReadAndReleaseStatus(st);
+                    lastErr = new InvalidOperationException($"ONNX Runtime error ({activeEp}): {errMsg}");
+                    if (c + 1 < candidates.Count) {
+                        AppLogger.Warn($"ONNX CreateSession failed on {activeEp} for '{Path.GetFileName(modelPath)}'; retrying next EP: {errMsg}");
+                    }
+                } finally {
+                    if (sessOpts != IntPtr.Zero) {
+                        fnReleaseSessionOptions?.Invoke(sessOpts);
+                    }
+                }
             }
 
-            string activeEp = ConfigureExecutionProvider(sessOpts, preferredProvider, threads);
-            CheckStatus(fnCreateSession(ortEnv, modelPath, sessOpts, out IntPtr sessionHandle));
-            lock (initLock) {
-                lastActiveProvider = activeEp;
-            }
-            return new NativeOnnxSession(this, modelPath, sessionHandle, activeEp);
+            throw lastErr ?? new InvalidOperationException($"Failed to create ONNX Runtime session for '{Path.GetFileName(modelPath)}'.");
         } finally {
-            fnReleaseSessionOptions?.Invoke(sessOpts);
+            if (!handoffComplete) {
+                ReleaseSessionRef();
+            }
         }
+    }
+
+    void EnsureSufficientMemoryForModel(string modelPath, long primaryModelBytes) {
+        long totalModelBytes = ResolveTotalModelSizeBytes(modelPath, primaryModelBytes);
+        string fileName = Path.GetFileName(modelPath);
+        ModelMemoryCheckResult check = CheckMemoryForModelBytes(totalModelBytes, fileName);
+        if (!check.HasSufficientMemory) {
+            // Reclaim any lingering managed audio buffers from prior runs once before rejecting load
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: true, compacting: false);
+            GC.WaitForPendingFinalizers();
+            check = CheckMemoryForModelBytes(totalModelBytes, fileName);
+        }
+
+        if (!check.HasSufficientMemory) {
+            AppLogger.Warn($"ONNX memory guard blocked loading '{fileName}': {check.DiagnosticMessage}");
+            throw new InsufficientMemoryException(
+                $"Insufficient system RAM to safely load ONNX model '{fileName}' ({FormatMiB(totalModelBytes)} MB). " +
+                $"Estimated peak requirement: {FormatMiB(check.EstimatedRequiredBytes)} MB (incl. headroom), " +
+                $"available RAM: {FormatMiB(check.AvailableSystemBytes)} MB.");
+        }
+
+        AppLogger.Info($"ONNX memory guard passed: {check.DiagnosticMessage}");
+    }
+
+    static long ResolveTotalModelSizeBytes(string modelPath, long primaryModelBytes) {
+        long total = Math.Max(0L, primaryModelBytes);
+        try {
+            string[] companionCandidates = [
+                modelPath + ".data",
+                modelPath + "_data"
+            ];
+            for (int i = 0; i < companionCandidates.Length; i++) {
+                string candidate = companionCandidates[i];
+                if (File.Exists(candidate)) {
+                    long extra = new FileInfo(candidate).Length;
+                    if (extra > 0) {
+                        total = total > long.MaxValue - extra ? long.MaxValue : total + extra;
+                    }
+                }
+            }
+        } catch {
+            // Best-effort companion external-data inspection
+        }
+        return total;
+    }
+
+    static long EstimateRequiredModelBytes(long modelBytes) {
+        if (modelBytes <= 0) {
+            return SessionBaseOverheadBytes;
+        }
+        double expanded = modelBytes * ModelMemoryExpansionFactor;
+        if (!double.IsFinite(expanded) || expanded >= long.MaxValue - SessionBaseOverheadBytes) {
+            return long.MaxValue;
+        }
+        return (long)Math.Ceiling(expanded) + SessionBaseOverheadBytes;
+    }
+
+    static long ComputeEffectiveSafetyHeadroom(long totalSystemBytes, long lowMemoryThresholdBytes) {
+        long cappedThreshold = lowMemoryThresholdBytes > 0 ? lowMemoryThresholdBytes : 0L;
+        if (totalSystemBytes > 0) {
+            long quarterRam = totalSystemBytes / 4L;
+            if (cappedThreshold > quarterRam) {
+                cappedThreshold = quarterRam;
+            }
+        }
+        return Math.Max(MinimumSafetyHeadroomBytes, cappedThreshold);
+    }
+
+    bool TryReadSystemMemory(
+        out long availableBytes,
+        out long totalBytes,
+        out long thresholdBytes,
+        out bool isLowMemory,
+        out string source) {
+        availableBytes = 0L;
+        totalBytes = 0L;
+        thresholdBytes = 0L;
+        isLowMemory = false;
+        source = "Unavailable";
+
+        try {
+            if (appContext.GetSystemService(Context.ActivityService) is Android.App.ActivityManager activityManager) {
+                using Android.App.ActivityManager.MemoryInfo memInfo = new();
+                activityManager.GetMemoryInfo(memInfo);
+                if (memInfo.AvailMem > 0) {
+                    availableBytes = memInfo.AvailMem;
+                    totalBytes = memInfo.TotalMem > 0 ? memInfo.TotalMem : 0L;
+                    thresholdBytes = memInfo.Threshold > 0 ? memInfo.Threshold : 0L;
+                    isLowMemory = memInfo.LowMemory;
+                    source = "ActivityManager";
+                    return true;
+                }
+            }
+        } catch (Exception ex) {
+            AppLogger.Warn($"ActivityManager.GetMemoryInfo failed, falling back to /proc/meminfo: {ex.Message}");
+        }
+
+        if (TryReadProcMemInfo(out long procAvail, out long procTotal)) {
+            availableBytes = procAvail;
+            totalBytes = procTotal;
+            thresholdBytes = MinimumSafetyHeadroomBytes;
+            isLowMemory = procAvail < MinimumSafetyHeadroomBytes;
+            source = "/proc/meminfo";
+            return true;
+        }
+
+        return false;
+    }
+
+    static bool TryReadProcMemInfo(out long availableBytes, out long totalBytes) {
+        availableBytes = 0L;
+        totalBytes = 0L;
+        try {
+            if (!File.Exists("/proc/meminfo")) {
+                return false;
+            }
+            long memAvailableKib = -1L;
+            long memFreeKib = 0L;
+            long buffersKib = 0L;
+            long cachedKib = 0L;
+            long memTotalKib = 0L;
+
+            foreach (string line in File.ReadLines("/proc/meminfo")) {
+                if (line.StartsWith("MemTotal:", StringComparison.Ordinal)) {
+                    memTotalKib = ParseMemInfoKib(line);
+                } else if (line.StartsWith("MemAvailable:", StringComparison.Ordinal)) {
+                    memAvailableKib = ParseMemInfoKib(line);
+                } else if (line.StartsWith("MemFree:", StringComparison.Ordinal)) {
+                    memFreeKib = ParseMemInfoKib(line);
+                } else if (line.StartsWith("Buffers:", StringComparison.Ordinal)) {
+                    buffersKib = ParseMemInfoKib(line);
+                } else if (line.StartsWith("Cached:", StringComparison.Ordinal)) {
+                    cachedKib = ParseMemInfoKib(line);
+                }
+            }
+
+            long effectiveAvailKib = memAvailableKib >= 0L
+                ? memAvailableKib
+                : (memFreeKib + buffersKib + cachedKib);
+            if (effectiveAvailKib <= 0L) {
+                return false;
+            }
+
+            availableBytes = effectiveAvailKib * 1024L;
+            totalBytes = memTotalKib > 0L ? memTotalKib * 1024L : 0L;
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    static long ParseMemInfoKib(string line) {
+        int colon = line.IndexOf(':');
+        if (colon < 0) {
+            return 0L;
+        }
+        int i = colon + 1;
+        while (i < line.Length && (line[i] == ' ' || line[i] == '\t')) {
+            i++;
+        }
+        int start = i;
+        while (i < line.Length && char.IsDigit(line[i])) {
+            i++;
+        }
+        if (i <= start) {
+            return 0L;
+        }
+        return long.TryParse(line.AsSpan(start, i - start), NumberStyles.Integer, CultureInfo.InvariantCulture, out long kib)
+            ? kib
+            : 0L;
+    }
+
+    static string FormatMiB(long bytes) =>
+        (bytes / (1024.0 * 1024.0)).ToString("0.0", CultureInfo.InvariantCulture);
+
+    void ReleaseSessionRef() {
+        lock (initLock) {
+            if (activeSessionCount > 0) {
+                activeSessionCount--;
+            }
+            if (disposeRequested && activeSessionCount == 0) {
+                CleanupPartialInitLocked();
+            }
+        }
+    }
+
+    List<NeuralExecutionProvider> BuildSessionProviderCascade(NeuralExecutionProvider preferred) {
+        List<NeuralExecutionProvider> list = [];
+        bool qnnReady = OnnxRuntimeInstallerService.IsQnnAvailableOnDisk(appContext) &&
+                        OnnxRuntimeInstallerService.IsQualcommSnapdragonDevice();
+        if ((preferred == NeuralExecutionProvider.Auto || preferred == NeuralExecutionProvider.QnnHtp) && qnnReady) {
+            list.Add(NeuralExecutionProvider.QnnHtp);
+        }
+        if (preferred != NeuralExecutionProvider.Cpu) {
+            list.Add(NeuralExecutionProvider.Xnnpack);
+        }
+        list.Add(NeuralExecutionProvider.Cpu);
+        return list;
+    }
+
+    string ConfigureSingleExecutionProvider(IntPtr sessOpts, NeuralExecutionProvider provider, int threads) {
+        if (fnAppendEp == null || provider == NeuralExecutionProvider.Cpu) {
+            return "CPU";
+        }
+        if (provider == NeuralExecutionProvider.QnnHtp &&
+            OnnxRuntimeInstallerService.IsQnnAvailableOnDisk(appContext) &&
+            OnnxRuntimeInstallerService.IsQualcommSnapdragonDevice()) {
+            string qnnPath = OnnxRuntimeInstallerService.GetManagedQnnHtpPath(appContext);
+            if (TryAppendEp(sessOpts, "QNN",
+                ["backend_path", "htp_performance_mode", "enable_htp_fp16_precision"],
+                [qnnPath, "burst", "1"])) {
+                return "QNN HTP (NPU)";
+            }
+            return "CPU";
+        }
+        if (provider == NeuralExecutionProvider.Xnnpack) {
+            if (TryAppendEp(sessOpts, "XNNPACK", ["intra_op_num_threads"], [threads.ToString()])) {
+                return "XNNPACK (ARM64 SIMD)";
+            }
+            return "CPU";
+        }
+        return "CPU";
     }
 
     string ConfigureExecutionProvider(IntPtr sessOpts, NeuralExecutionProvider preferred, int threads) {
@@ -752,16 +1184,19 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             return true;
         }
         try {
+            lastInitError = "";
             string runtimeDir = OnnxRuntimeInstallerService.GetRuntimeDir(appContext);
             string libPath = OnnxRuntimeInstallerService.GetManagedLibraryPath(appContext);
 
             uint headerApiVersion = 17u;
+            string parseDiag = "header asset is empty or missing";
             string headerText = OnnxRuntimeInstallerService.ReadHeaderText(appContext);
             if (!string.IsNullOrWhiteSpace(headerText)) {
-                (headerApiVersion, apiSlots) = OnnxRuntimeHeaderParser.ParseOrtApiHeader(headerText);
+                (headerApiVersion, apiSlots, parseDiag) = OnnxRuntimeHeaderParser.ParseOrtApiHeaderWithDiagnostics(headerText);
             }
             if (apiSlots.Count < 20) {
-                AppLogger.Warn("ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.");
+                lastInitError = $"ONNX Runtime C API header validation failed: {parseDiag}";
+                AppLogger.Warn($"ONNX Runtime C API header missing from APK assets or failed anchor validation ({parseDiag}); cannot safely bind vtable.");
                 return false;
             }
 
@@ -769,12 +1204,17 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             if (!string.IsNullOrEmpty(libPath) && File.Exists(libPath)) {
                 libHandle = NativeLibrary.Load(libPath);
             } else if (!NativeLibrary.TryLoad("onnxruntime", typeof(NativeOnnxRuntimeBridge).Assembly, null, out libHandle)) {
+                lastInitError = "libonnxruntime.so could not be loaded from NativeLibraryDir";
+                AppLogger.Warn($"ONNX Runtime native library failed to load: '{libPath}'");
+                CleanupPartialInitLocked();
                 return false;
             }
             IntPtr getBaseSym = NativeLibrary.GetExport(libHandle, "OrtGetApiBase");
             OrtGetApiBaseDelegate getBase = Marshal.GetDelegateForFunctionPointer<OrtGetApiBaseDelegate>(getBaseSym);
             IntPtr apiBasePtr = getBase();
             if (apiBasePtr == IntPtr.Zero) {
+                lastInitError = "OrtGetApiBase returned null";
+                CleanupPartialInitLocked();
                 return false;
             }
 
@@ -786,13 +1226,23 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             IntPtr verStrPtr = getVer();
             loadedVersion = verStrPtr != IntPtr.Zero ? (Marshal.PtrToStringUTF8(verStrPtr) ?? "") : "";
 
+            uint resolvedApiVersion = headerApiVersion;
             ortApiPtr = getApi(headerApiVersion);
-            for (uint v = Math.Min(headerApiVersion, 31u); ortApiPtr == IntPtr.Zero && v >= 14u; v--) {
+            uint fallbackStart = headerApiVersion > 14u ? headerApiVersion - 1u : 31u;
+            for (uint v = fallbackStart; ortApiPtr == IntPtr.Zero && v >= 14u; v--) {
                 ortApiPtr = getApi(v);
+                if (ortApiPtr != IntPtr.Zero) {
+                    resolvedApiVersion = v;
+                }
             }
             if (ortApiPtr == IntPtr.Zero) {
-                AppLogger.Warn("OrtGetApiBase()->GetApi returned null.");
+                lastInitError = $"OrtGetApiBase()->GetApi({headerApiVersion}) returned null";
+                AppLogger.Warn(lastInitError);
+                CleanupPartialInitLocked();
                 return false;
+            }
+            if (resolvedApiVersion < headerApiVersion) {
+                AppLogger.Warn($"ONNX Runtime native GetApi fell back from header apiVer={headerApiVersion} to {resolvedApiVersion} (lib v{loadedVersion}).");
             }
 
             BindApiDelegates();
@@ -816,9 +1266,11 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             }
 
             initialized = true;
-            AppLogger.Info($"Initialized ONNX Runtime native bridge v{loadedVersion} ({apiSlots.Count} OrtApi symbols, EP={lastActiveProvider})");
+            lastInitError = "";
+            AppLogger.Info($"Initialized ONNX Runtime native bridge v{loadedVersion} ({apiSlots.Count} OrtApi symbols, apiVer={resolvedApiVersion}, EP={lastActiveProvider})");
             return true;
         } catch (Exception ex) {
+            lastInitError = ex.Message;
             AppLogger.Warn($"Failed to initialize ONNX Runtime native bridge: {ex.Message}");
             CleanupPartialInitLocked();
             return false;
@@ -829,6 +1281,7 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         fnCreateEnv = GetSlotDelegate<CreateEnvDelegate>("CreateEnv");
         fnCreateSessionOptions = GetSlotDelegate<CreateSessionOptionsDelegate>("CreateSessionOptions");
         fnSetIntraOpNumThreads = GetSlotDelegate<SetIntraOpNumThreadsDelegate>("SetIntraOpNumThreads");
+        fnSetInterOpNumThreads = TryGetSlotDelegate<SetInterOpNumThreadsDelegate>("SetInterOpNumThreads");
         fnSetGraphOpt = GetSlotDelegate<SetGraphOptimizationLevelDelegate>("SetSessionGraphOptimizationLevel");
         fnAddSessionConfig = TryGetSlotDelegate<AddSessionConfigEntryDelegate>("AddSessionConfigEntry");
         fnAppendEp = TryGetSlotDelegate<SessionOptionsAppendEpDelegate>("SessionOptionsAppendExecutionProvider");
@@ -848,6 +1301,7 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         fnRun = GetSlotDelegate<RunDelegate>("Run");
         fnGetTensorData = GetSlotDelegate<GetTensorMutableDataDelegate>("GetTensorMutableData");
         fnGetTensorTypeAndShape = GetSlotDelegate<GetTensorTypeAndShapeDelegate>("GetTensorTypeAndShape");
+        fnGetTensorElementType = TryGetSlotDelegate<GetTensorElementTypeDelegate>("GetTensorElementType");
         fnGetDimsCount = GetSlotDelegate<GetDimensionsCountDelegate>("GetDimensionsCount");
         fnGetDims = GetSlotDelegate<GetDimensionsDelegate>("GetDimensions");
         fnGetErrorMessage = GetSlotDelegate<GetErrorMessageDelegate>("GetErrorMessage");
@@ -915,6 +1369,43 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             fnReleaseEnv?.Invoke(ortEnv);
             ortEnv = IntPtr.Zero;
         }
+        defaultAllocator = IntPtr.Zero;
+
+        // Clear all native function-pointer delegates before unloading libonnxruntime.so so no dangling pointers remain
+        fnCreateEnv = null;
+        fnCreateSessionOptions = null;
+        fnSetIntraOpNumThreads = null;
+        fnSetInterOpNumThreads = null;
+        fnSetGraphOpt = null;
+        fnAddSessionConfig = null;
+        fnAppendEp = null;
+        fnCreateSession = null;
+        fnGetInputCount = null;
+        fnGetOutputCount = null;
+        fnGetInputName = null;
+        fnGetOutputName = null;
+        fnGetInputTypeInfo = null;
+        fnCastTypeInfoToTensorInfo = null;
+        fnGetAllocator = null;
+        fnAllocatorFree = null;
+        fnCreateCpuMemInfo = null;
+        fnCreateTensor = null;
+        fnRun = null;
+        fnGetTensorData = null;
+        fnGetTensorTypeAndShape = null;
+        fnGetTensorElementType = null;
+        fnGetDimsCount = null;
+        fnGetDims = null;
+        fnGetErrorMessage = null;
+        fnReleaseStatus = null;
+        fnReleaseEnv = null;
+        fnReleaseSession = null;
+        fnReleaseSessionOptions = null;
+        fnReleaseValue = null;
+        fnReleaseMemoryInfo = null;
+        fnReleaseTensorTypeAndShapeInfo = null;
+        fnReleaseTypeInfo = null;
+
         if (libHandle != IntPtr.Zero) {
             try { NativeLibrary.Free(libHandle); } catch { }
             libHandle = IntPtr.Zero;
@@ -925,24 +1416,55 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             }
         }
         companionLibHandles.Clear();
+        apiSlots.Clear();
         ortApiPtr = IntPtr.Zero;
+        loadedVersion = "";
         lastActiveProvider = "";
         initialized = false;
+    }
+
+    static long ComputeCheckedElementCount(long[] dims, bool allowZero) {
+        if (dims == null || dims.Length == 0) {
+            return 1L;
+        }
+        long total = 1L;
+        for (int d = 0; d < dims.Length; d++) {
+            long dim = dims[d];
+            if (dim < 0) {
+                throw new InvalidDataException($"ONNX tensor has negative dimension {dim} at axis {d}.");
+            }
+            if (dim == 0) {
+                if (allowZero) {
+                    return 0L;
+                }
+                throw new InvalidDataException($"ONNX input tensor has zero dimension at axis {d}.");
+            }
+            if (total > MaxTensorElements / dim) {
+                throw new InvalidDataException($"ONNX tensor element count exceeds safe mobile limit ({MaxTensorElements} elements).");
+            }
+            total *= dim;
+        }
+        return total;
     }
 
     /// <inheritdoc/>
     public void Dispose() {
         lock (initLock) {
-            CleanupPartialInitLocked();
+            disposeRequested = true;
+            if (activeSessionCount == 0) {
+                CleanupPartialInitLocked();
+            }
         }
     }
 
     sealed class NativeOnnxSession : INeuralSession {
         readonly NativeOnnxRuntimeBridge bridge;
+        readonly object sessionLock = new();
         IntPtr sessionHandle;
         readonly string[] inputNames;
         readonly string[] outputNames;
         readonly long[][] inputShapes;
+        readonly Dictionary<string, int> inputElementTypes;
         bool disposed;
 
         public NativeOnnxSession(NativeOnnxRuntimeBridge bridge, string modelPath, IntPtr handle, string activeEp) {
@@ -950,9 +1472,17 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             ModelPath = modelPath ?? string.Empty;
             sessionHandle = handle;
             ExecutionProvider = activeEp;
-            inputNames = ReadNames(isInput: true);
-            outputNames = ReadNames(isInput: false);
-            inputShapes = ReadInputShapes(inputNames.Length);
+            try {
+                inputNames = ReadNames(isInput: true);
+                outputNames = ReadNames(isInput: false);
+                (inputShapes, inputElementTypes) = ReadInputMetadata(inputNames);
+            } catch {
+                if (sessionHandle != IntPtr.Zero) {
+                    bridge.fnReleaseSession?.Invoke(sessionHandle);
+                    sessionHandle = IntPtr.Zero;
+                }
+                throw;
+            }
         }
 
         public string ModelPath { get; }
@@ -978,93 +1508,174 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         }
 
         public IReadOnlyDictionary<string, NeuralTensorFloat> Run(IReadOnlyDictionary<string, NeuralTensorFloat> inputs) {
-            if (disposed) {
-                throw new ObjectDisposedException(nameof(NativeOnnxSession));
-            }
             ArgumentNullException.ThrowIfNull(inputs);
-
-            int inCount = inputs.Count;
-            IntPtr[] inNamePtrs = new IntPtr[inCount];
-            IntPtr[] inValPtrs = new IntPtr[inCount];
-            GCHandle[] pinnedInputs = new GCHandle[inCount];
-
-            int outCount = outputNames.Length;
-            IntPtr[] outNamePtrs = new IntPtr[outCount];
-            IntPtr[] outValPtrs = new IntPtr[outCount];
-
-            try {
-                int idx = 0;
-                foreach (KeyValuePair<string, NeuralTensorFloat> kv in inputs) {
-                    inNamePtrs[idx] = Marshal.StringToCoTaskMemUTF8(kv.Key);
-                    NeuralTensorFloat tensor = kv.Value;
-                    pinnedInputs[idx] = GCHandle.Alloc(tensor.Data, GCHandleType.Pinned);
-                    IntPtr dataPtr = pinnedInputs[idx].AddrOfPinnedObject();
-                    UIntPtr byteLen = (UIntPtr)(tensor.Data.Length * sizeof(float));
-                    bridge.CheckStatus(bridge.fnCreateTensor(
-                        bridge.cpuMemoryInfo,
-                        dataPtr,
-                        byteLen,
-                        tensor.Shape,
-                        (UIntPtr)tensor.Shape.Length,
-                        OnnxTensorElementDataTypeFloat,
-                        out inValPtrs[idx]));
-                    idx++;
+            lock (sessionLock) {
+                if (disposed || sessionHandle == IntPtr.Zero) {
+                    throw new ObjectDisposedException(nameof(NativeOnnxSession));
                 }
 
-                for (int o = 0; o < outCount; o++) {
-                    outNamePtrs[o] = Marshal.StringToCoTaskMemUTF8(outputNames[o]);
-                }
+                int inCount = inputs.Count;
+                IntPtr[] inNamePtrs = new IntPtr[inCount];
+                IntPtr[] inValPtrs = new IntPtr[inCount];
+                GCHandle[] pinnedInputs = new GCHandle[inCount];
 
-                bridge.CheckStatus(bridge.fnRun(
-                    sessionHandle,
-                    IntPtr.Zero,
-                    inNamePtrs,
-                    inValPtrs,
-                    (UIntPtr)inCount,
-                    outNamePtrs,
-                    (UIntPtr)outCount,
-                    outValPtrs));
+                int outCount = outputNames.Length;
+                IntPtr[] outNamePtrs = new IntPtr[outCount];
+                IntPtr[] outValPtrs = new IntPtr[outCount];
 
-                Dictionary<string, NeuralTensorFloat> results = new(outCount, StringComparer.Ordinal);
-                for (int o = 0; o < outCount; o++) {
-                    IntPtr outVal = outValPtrs[o];
-                    if (outVal == IntPtr.Zero) {
-                        continue;
-                    }
-                    bridge.CheckStatus(bridge.fnGetTensorTypeAndShape(outVal, out IntPtr shapeInfo));
-                    long[] dims;
-                    try {
-                        bridge.CheckStatus(bridge.fnGetDimsCount(shapeInfo, out UIntPtr dimCount));
-                        dims = new long[(int)dimCount];
-                        if (dims.Length > 0) {
-                            bridge.CheckStatus(bridge.fnGetDims(shapeInfo, dims, dimCount));
+                try {
+                    int idx = 0;
+                    foreach (KeyValuePair<string, NeuralTensorFloat> kv in inputs) {
+                        NeuralTensorFloat tensor = kv.Value ?? throw new ArgumentException($"Null input tensor '{kv.Key}'.", nameof(inputs));
+                        long expectedElems = ComputeCheckedElementCount(tensor.Shape, allowZero: false);
+                        if (tensor.Data.Length < expectedElems) {
+                            throw new ArgumentException(
+                                $"ONNX input tensor '{kv.Key}' buffer underflow: expected {expectedElems} elements for shape [{string.Join(",", tensor.Shape)}], got {tensor.Data.Length}.");
                         }
-                    } finally {
-                        bridge.fnReleaseTensorTypeAndShapeInfo?.Invoke(shapeInfo);
+                        int elemCount = (int)expectedElems;
+
+                        inNamePtrs[idx] = Marshal.StringToCoTaskMemUTF8(kv.Key);
+                        int elemType = inputElementTypes.TryGetValue(kv.Key, out int expectedType)
+                            ? expectedType
+                            : OnnxTensorElementDataTypeFloat;
+
+                        UIntPtr byteLen;
+                        if (elemType == OnnxTensorElementDataTypeFloat16) {
+                            ushort[] fp16 = new ushort[elemCount];
+                            for (int k = 0; k < elemCount; k++) {
+                                float v = tensor.Data[k];
+                                if (!float.IsFinite(v)) {
+                                    v = 0f;
+                                } else if (v > Float16FiniteMax) {
+                                    v = Float16FiniteMax;
+                                } else if (v < -Float16FiniteMax) {
+                                    v = -Float16FiniteMax;
+                                }
+                                fp16[k] = BitConverter.HalfToUInt16Bits((Half)v);
+                            }
+                            pinnedInputs[idx] = GCHandle.Alloc(fp16, GCHandleType.Pinned);
+                            byteLen = checked((UIntPtr)((ulong)elemCount * sizeof(ushort)));
+                        } else if (elemType == OnnxTensorElementDataTypeDouble) {
+                            double[] fp64 = new double[elemCount];
+                            for (int k = 0; k < elemCount; k++) {
+                                float v = tensor.Data[k];
+                                fp64[k] = float.IsFinite(v) ? v : 0.0;
+                            }
+                            pinnedInputs[idx] = GCHandle.Alloc(fp64, GCHandleType.Pinned);
+                            byteLen = checked((UIntPtr)((ulong)elemCount * sizeof(double)));
+                        } else if (elemType == OnnxTensorElementDataTypeFloat) {
+                            pinnedInputs[idx] = GCHandle.Alloc(tensor.Data, GCHandleType.Pinned);
+                            byteLen = checked((UIntPtr)((ulong)elemCount * sizeof(float)));
+                        } else {
+                            throw new NotSupportedException($"ONNX input tensor '{kv.Key}' uses unsupported ONNXTensorElementDataType={elemType}.");
+                        }
+
+                        IntPtr dataPtr = pinnedInputs[idx].AddrOfPinnedObject();
+                        bridge.CheckStatus(bridge.fnCreateTensor(
+                            bridge.cpuMemoryInfo,
+                            dataPtr,
+                            byteLen,
+                            tensor.Shape,
+                            (UIntPtr)tensor.Shape.Length,
+                            elemType,
+                            out inValPtrs[idx]));
+                        idx++;
                     }
 
-                    long elemCount = 1;
-                    for (int d = 0; d < dims.Length; d++) {
-                        elemCount *= Math.Max(1L, dims[d]);
+                    for (int o = 0; o < outCount; o++) {
+                        outNamePtrs[o] = Marshal.StringToCoTaskMemUTF8(outputNames[o]);
                     }
-                    float[] managed = new float[elemCount];
-                    if (elemCount > 0) {
-                        bridge.CheckStatus(bridge.fnGetTensorData(outVal, out IntPtr rawPtr));
-                        Marshal.Copy(rawPtr, managed, 0, (int)elemCount);
-                    }
-                    results[outputNames[o]] = new NeuralTensorFloat(dims, managed);
-                }
 
-                return results;
-            } finally {
-                for (int i = 0; i < inCount; i++) {
-                    if (inValPtrs[i] != IntPtr.Zero) bridge.fnReleaseValue?.Invoke(inValPtrs[i]);
-                    if (pinnedInputs[i].IsAllocated) pinnedInputs[i].Free();
-                    if (inNamePtrs[i] != IntPtr.Zero) Marshal.FreeCoTaskMem(inNamePtrs[i]);
-                }
-                for (int o = 0; o < outCount; o++) {
-                    if (outValPtrs[o] != IntPtr.Zero) bridge.fnReleaseValue?.Invoke(outValPtrs[o]);
-                    if (outNamePtrs[o] != IntPtr.Zero) Marshal.FreeCoTaskMem(outNamePtrs[o]);
+                    bridge.CheckStatus(bridge.fnRun(
+                        sessionHandle,
+                        IntPtr.Zero,
+                        inNamePtrs,
+                        inValPtrs,
+                        (UIntPtr)inCount,
+                        outNamePtrs,
+                        (UIntPtr)outCount,
+                        outValPtrs));
+
+                    Dictionary<string, NeuralTensorFloat> results = new(outCount, StringComparer.Ordinal);
+                    for (int o = 0; o < outCount; o++) {
+                        IntPtr outVal = outValPtrs[o];
+                        if (outVal == IntPtr.Zero) {
+                            continue;
+                        }
+                        bridge.CheckStatus(bridge.fnGetTensorTypeAndShape(outVal, out IntPtr shapeInfo));
+                        long[] dims;
+                        int outElemType = OnnxTensorElementDataTypeFloat;
+                        try {
+                            if (bridge.fnGetTensorElementType != null) {
+                                IntPtr typeSt = bridge.fnGetTensorElementType(shapeInfo, out int parsedType);
+                                if (typeSt == IntPtr.Zero) {
+                                    outElemType = parsedType;
+                                } else {
+                                    bridge.ReleaseStatusQuietly(typeSt);
+                                }
+                            }
+                            bridge.CheckStatus(bridge.fnGetDimsCount(shapeInfo, out UIntPtr dimCount));
+                            int dimCountInt = checked((int)dimCount);
+                            if (dimCountInt < 0 || dimCountInt > 16) {
+                                throw new InvalidDataException($"ONNX output tensor '{outputNames[o]}' has invalid rank {dimCountInt}.");
+                            }
+                            dims = new long[dimCountInt];
+                            if (dims.Length > 0) {
+                                bridge.CheckStatus(bridge.fnGetDims(shapeInfo, dims, dimCount));
+                            }
+                        } finally {
+                            if (shapeInfo != IntPtr.Zero) {
+                                bridge.fnReleaseTensorTypeAndShapeInfo?.Invoke(shapeInfo);
+                            }
+                        }
+
+                        long checkedCount = ComputeCheckedElementCount(dims, allowZero: true);
+                        int elemCount = checked((int)checkedCount);
+                        float[] managed = elemCount > 0 ? new float[elemCount] : Array.Empty<float>();
+                        if (elemCount > 0) {
+                            bridge.CheckStatus(bridge.fnGetTensorData(outVal, out IntPtr rawPtr));
+                            if (rawPtr == IntPtr.Zero) {
+                                throw new InvalidDataException($"ONNX output tensor '{outputNames[o]}' returned a null native data pointer.");
+                            }
+                            if (outElemType == OnnxTensorElementDataTypeFloat16) {
+                                short[] raw16 = new short[elemCount];
+                                Marshal.Copy(rawPtr, raw16, 0, elemCount);
+                                for (int k = 0; k < elemCount; k++) {
+                                    float v = (float)BitConverter.UInt16BitsToHalf(unchecked((ushort)raw16[k]));
+                                    managed[k] = float.IsFinite(v) ? v : 0f;
+                                }
+                            } else if (outElemType == OnnxTensorElementDataTypeDouble) {
+                                double[] raw64 = new double[elemCount];
+                                Marshal.Copy(rawPtr, raw64, 0, elemCount);
+                                for (int k = 0; k < elemCount; k++) {
+                                    float v = (float)raw64[k];
+                                    managed[k] = float.IsFinite(v) ? v : 0f;
+                                }
+                            } else if (outElemType == OnnxTensorElementDataTypeFloat) {
+                                Marshal.Copy(rawPtr, managed, 0, elemCount);
+                                for (int k = 0; k < elemCount; k++) {
+                                    if (!float.IsFinite(managed[k])) {
+                                        managed[k] = 0f;
+                                    }
+                                }
+                            } else {
+                                throw new NotSupportedException($"ONNX output tensor '{outputNames[o]}' uses unsupported ONNXTensorElementDataType={outElemType}.");
+                            }
+                        }
+                        results[outputNames[o]] = new NeuralTensorFloat(dims, managed);
+                    }
+
+                    return results;
+                } finally {
+                    for (int i = 0; i < inCount; i++) {
+                        if (inValPtrs[i] != IntPtr.Zero) bridge.fnReleaseValue?.Invoke(inValPtrs[i]);
+                        if (pinnedInputs[i].IsAllocated) pinnedInputs[i].Free();
+                        if (inNamePtrs[i] != IntPtr.Zero) Marshal.FreeCoTaskMem(inNamePtrs[i]);
+                    }
+                    for (int o = 0; o < outCount; o++) {
+                        if (outValPtrs[o] != IntPtr.Zero) bridge.fnReleaseValue?.Invoke(outValPtrs[o]);
+                        if (outNamePtrs[o] != IntPtr.Zero) Marshal.FreeCoTaskMem(outNamePtrs[o]);
+                    }
                 }
             }
         }
@@ -1073,7 +1684,10 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             SessionGetCountDelegate countFn = isInput ? bridge.fnGetInputCount : bridge.fnGetOutputCount;
             SessionGetNameDelegate nameFn = isInput ? bridge.fnGetInputName : bridge.fnGetOutputName;
             bridge.CheckStatus(countFn(sessionHandle, out UIntPtr count));
-            int n = (int)count;
+            int n = checked((int)count);
+            if (n < 0 || n > 256) {
+                throw new InvalidDataException($"ONNX model reported an invalid tensor count ({n}).");
+            }
             string[] names = new string[n];
             for (int i = 0; i < n; i++) {
                 bridge.CheckStatus(nameFn(sessionHandle, (UIntPtr)i, bridge.defaultAllocator, out IntPtr namePtr));
@@ -1088,13 +1702,16 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             return names;
         }
 
-        long[][] ReadInputShapes(int count) {
+        (long[][] Shapes, Dictionary<string, int> ElementTypes) ReadInputMetadata(string[] names) {
+            int count = names.Length;
             long[][] shapes = new long[count][];
+            Dictionary<string, int> types = new(count, StringComparer.Ordinal);
             for (int i = 0; i < count; i++) {
                 shapes[i] = Array.Empty<long>();
+                types[names[i]] = OnnxTensorElementDataTypeFloat;
             }
             if (bridge.fnGetInputTypeInfo == null || bridge.fnCastTypeInfoToTensorInfo == null) {
-                return shapes;
+                return (shapes, types);
             }
             for (int i = 0; i < count; i++) {
                 IntPtr typeInfo = IntPtr.Zero;
@@ -1115,12 +1732,24 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                     if (tensorInfo == IntPtr.Zero) {
                         continue;
                     }
+                    if (bridge.fnGetTensorElementType != null) {
+                        IntPtr typeSt = bridge.fnGetTensorElementType(tensorInfo, out int elemType);
+                        if (typeSt == IntPtr.Zero && elemType > 0) {
+                            types[names[i]] = elemType;
+                        } else {
+                            bridge.ReleaseStatusQuietly(typeSt);
+                        }
+                    }
                     st = bridge.fnGetDimsCount(tensorInfo, out UIntPtr dimCount);
                     if (st != IntPtr.Zero) {
                         bridge.ReleaseStatusQuietly(st);
                         continue;
                     }
-                    long[] dims = new long[(int)dimCount];
+                    int dimCountInt = checked((int)dimCount);
+                    if (dimCountInt < 0 || dimCountInt > 16) {
+                        continue;
+                    }
+                    long[] dims = new long[dimCountInt];
                     if (dims.Length > 0) {
                         st = bridge.fnGetDims(tensorInfo, dims, dimCount);
                         if (st != IntPtr.Zero) {
@@ -1137,17 +1766,60 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                     }
                 }
             }
-            return shapes;
+            return (shapes, types);
         }
 
         public void Dispose() {
-            if (!disposed) {
-                disposed = true;
-                if (sessionHandle != IntPtr.Zero) {
-                    bridge.fnReleaseSession?.Invoke(sessionHandle);
-                    sessionHandle = IntPtr.Zero;
+            bool shouldReleaseRef = false;
+            lock (sessionLock) {
+                if (!disposed) {
+                    disposed = true;
+                    shouldReleaseRef = true;
+                    if (sessionHandle != IntPtr.Zero) {
+                        bridge.fnReleaseSession?.Invoke(sessionHandle);
+                        sessionHandle = IntPtr.Zero;
+                    }
                 }
+            }
+            if (shouldReleaseRef) {
+                bridge.ReleaseSessionRef();
             }
         }
     }
+}
+
+/// <summary>
+/// Result of comparing available Android system RAM against the estimated peak native memory
+/// footprint required to load an ONNX model checkpoint safely.
+/// </summary>
+public readonly struct ModelMemoryCheckResult {
+    /// <summary>True when available system RAM meets the estimated model load + safety headroom budget.</summary>
+    public bool HasSufficientMemory { get; init; }
+
+    /// <summary>True when Android reports the device is currently in a low-memory state.</summary>
+    public bool IsLowMemoryState { get; init; }
+
+    /// <summary>Combined size on disk of the ONNX checkpoint and any external tensor data files, in bytes.</summary>
+    public long ModelFileBytes { get; init; }
+
+    /// <summary>Estimated peak native RAM needed to load the model plus OS/audio headroom, in bytes.</summary>
+    public long EstimatedRequiredBytes { get; init; }
+
+    /// <summary>Available system RAM reported by Android at check time, in bytes.</summary>
+    public long AvailableSystemBytes { get; init; }
+
+    /// <summary>Total physical system RAM accessible to the kernel, in bytes.</summary>
+    public long TotalSystemBytes { get; init; }
+
+    /// <summary>Android low-memory threshold reported by ActivityManager, in bytes.</summary>
+    public long LowMemoryThresholdBytes { get; init; }
+
+    /// <summary>Effective safety headroom reserved for the OS and real-time audio engine, in bytes.</summary>
+    public long SafetyHeadroomBytes { get; init; }
+
+    /// <summary>Telemetry backend used ("ActivityManager", "/proc/meminfo", or "Unavailable").</summary>
+    public string Source { get; init; }
+
+    /// <summary>Human-readable summary suitable for device logs and error reporting.</summary>
+    public string DiagnosticMessage { get; init; }
 }

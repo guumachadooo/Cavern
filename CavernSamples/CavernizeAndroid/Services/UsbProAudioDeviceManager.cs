@@ -861,9 +861,43 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
 
     int[] QueryUac2ClockSampleRatesLocked(UsbDeviceConnection conn, Uac2DeviceTopology topo) {
         try {
-            byte[] buf = new byte[128];
             int wValue = Uac2Protocol.ClockSamFreqControl << 8;
             int wIndex = (topo.ClockSourceId << 8) | topo.AudioControlInterface;
+
+            // Phase 1 (UAC2 spec §5.2.3.1.2 / Linux sound/usb/clock.c): read 2-byte wNumSubRanges first so strict
+            // XMOS / Focusrite Scarlett Gen 4 firmware returns exact range count without STALLing on oversized wLength.
+            byte[] hdr = new byte[2];
+            int hdrRead = conn.ControlTransfer(
+                (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceIn,
+                Uac2Protocol.RequestRange,
+                wValue,
+                wIndex,
+                hdr,
+                hdr.Length,
+                ControlTransferTimeoutMs);
+            if (hdrRead == 2) {
+                int numRanges = hdr[0] | (hdr[1] << 8);
+                if (numRanges > 0 && numRanges <= 32) {
+                    int exactLen = 2 + numRanges * 12;
+                    byte[] exactBuf = new byte[exactLen];
+                    int got = conn.ControlTransfer(
+                        (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceIn,
+                        Uac2Protocol.RequestRange,
+                        wValue,
+                        wIndex,
+                        exactBuf,
+                        exactBuf.Length,
+                        ControlTransferTimeoutMs);
+                    if (got >= 14) {
+                        byte[] trimmed = new byte[got];
+                        Array.Copy(exactBuf, 0, trimmed, 0, got);
+                        return Uac2Protocol.ParseClockSampleRateRange(trimmed);
+                    }
+                }
+            }
+
+            // Phase 2 fallback: single-shot 256-byte GET_RANGE for firmwares that reject 2-byte partial reads
+            byte[] buf = new byte[256];
             int n = conn.ControlTransfer(
                 (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceIn,
                 Uac2Protocol.RequestRange,

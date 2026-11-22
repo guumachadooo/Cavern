@@ -363,7 +363,7 @@ public sealed class AndroidStrings {
         ["CheckUpdateBtn"] = "Check for updates",
         ["CheckingUpdate"] = "Checking GitHub Releases...",
         ["UpdateAvailableBanner"] = "Update available: v{0}",
-        ["UpdateAvailableDesc"] = "A newer build of Cavernize is ready ({0:0.1} MB).",
+        ["UpdateAvailableDesc"] = "A newer build of Cavernize is ready ({0:0.0} MB).",
         ["UpToDateMsg"] = "You have the latest version installed.",
         ["DownloadInstallBtn"] = "Download & Install",
         ["DownloadingUpdate"] = "Downloading update...",
@@ -822,7 +822,7 @@ public sealed class AndroidStrings {
         ["AudioSpecLgsrHeader"] = "ATMOS + LOSSLESS TWIN (LGSR)",
         ["AudioSpecLgsrActive"] = "Synced Twin: {0}",
         ["AudioSpecLgsrSync"] = "Sub-Sample Lock: {0:0.00} ms · Drift {1:+0.00;-0.00;0.00} ppm · Conf {2:0}%",
-        ["AudioSpecLgsrBands"] = "E-AC-3 Guide: Coupling {0:0.1} kHz · SPX {1:0.1} kHz · Coherence {2:0}%",
+        ["AudioSpecLgsrBands"] = "E-AC-3 Guide: Coupling {0:0.0} kHz · SPX {1:0.0} kHz · Coherence {2:0}%",
         ["AudioSpecLgsrGuards"] = "Envelope Lock: {0:+0.0;-0.0;0.0} dB · Clipping Guard: {1}",
         ["TipSlot2CLgsr"] = "Pairs a lossy Dolby Digital Plus (E-AC-3 JOC) Atmos track with your local verified FLAC/WAV/ALAC stereo twin via >120 dB Kaiser sinc resampling and <0.05-sample GCC-PHAT + Theil-Sen drift lock, fusing clean lossless high-frequency harmonics directly on the Pre-HRTF Virtual Speaker Bus while preserving 100% of Atmos phase and 3D trajectories.",
         ["TipLgsrEnvelopeLock"] = "Locks restored spectral gain strictly to the Atmos dynamic RMS envelope so a louder, compressed stereo FLAC master can never crush Dolby Atmos's wide dynamic range.",
@@ -854,7 +854,7 @@ public sealed class AndroidStrings {
         ["ProAudioMicStereo"] = "Stereo Pair (Inputs 1 + 2)",
         ["ProAudioMicGainTitle"] = "Digital Mic Trim Gain",
         ["ProAudioMicMonitorTitle"] = "Live Mic Monitor Mix",
-        ["ProAudioStatusFormat"] = "{0} · {1:0.0} kHz {2}-bit · {3}f · RTT {4:0.1} ms{5}",
+        ["ProAudioStatusFormat"] = "{0} · {1:0.0} kHz {2}-bit · {3}f · RTT {4:0.0} ms{5}",
         ["ProAudioTelemetryFormat"] = "Sync: {0} · Drift {1:+0.0;-0.0;0.0} ppm · XRuns {2}/{3} · Mic {4:0.0} dBFS",
         ["ProAudioBackendPathB"] = "Path B Direct USB UAC2",
         ["ProAudioBackendPathA"] = "Path A AAudio Exclusive",
@@ -871,8 +871,8 @@ public sealed class AndroidStrings {
         ["ProAudioCalibrateModalBody"] = "Measures exact physical round-trip latency using a 9-bit MLS cross-correlation probe.\n\nConnect a loopback cable (Out -> In) or hold your headphones close to the mic, then tap Start.",
         ["ProAudioCalibrateStartBtn"] = "Start Probe",
         ["ProAudioCalibrateRunningToast"] = "Running MLS loopback latency probe...",
-        ["ProAudioCalibrateSuccessToast"] = "RTT calibrated: {0:0.2} ms ({1:0.1} samples, SNR {2:0.1}x)",
-        ["ProAudioCalibrateFailedToast"] = "Loopback signal too weak or noisy (SNR {0:0.1}x). Check mic gain / loopback.",
+        ["ProAudioCalibrateSuccessToast"] = "RTT calibrated: {0:0.00} ms ({1:0.0} samples, SNR {2:0.0}x)",
+        ["ProAudioCalibrateFailedToast"] = "Loopback signal too weak or noisy (SNR {0:0.0}x). Check mic gain / loopback.",
         ["ProAudioCreditsBtn"] = "Specs & Credits",
         ["ProAudioCreditsTitle"] = "Pro-Audio USB & Scarlett 2i2 References",
         ["ScarlettControlsBtn"] = "Scarlett 2i2",
@@ -913,7 +913,7 @@ public sealed class AndroidStrings {
         ["ScarlettExitMsdBtn"] = "Exit Easy Start (MSD)",
         ["ScarlettExitMsdDoneToast"] = "Scarlett MSD disabled & saved. Reconnect USB if needed.",
         ["ScarlettReadMetersBtn"] = "Read HW Meters",
-        ["ScarlettMetersFormat"] = "HW Peak Meters: In 1 {0:0.1} dBFS · In 2 {1:0.1} dBFS",
+        ["ScarlettMetersFormat"] = "HW Peak Meters: In 1 {0:0.0} dBFS · In 2 {1:0.0} dBFS",
         ["ScarlettGen4FcpNotice"] = "Focusrite Scarlett 4th Gen uses the Focusrite Control Protocol (FCP), whose parameter map varies by firmware table. Streaming runs natively at 24-bit UAC2 while unsafe static NVRAM writes remain locked until dynamic FCP discovery is verified. Use front-panel preamp controls and Gain Assist below.",
         ["ScarlettGainAssistBtn"] = "Gain Assist (-12 dBFS)",
         ["ScarlettGainAssistFormat"] = "Gain Assist (-12 dBFS target): Ch 1 → {0:0.0} dB · Ch 2 → {1:0.0} dB",
@@ -931,7 +931,7 @@ public sealed class AndroidStrings {
         ["StudioW12PresetKaraoke"] = "Spatial Karaoke / Instrumental Atmos",
         ["StudioW12PresetLiveMixdown"] = "Live Karaoke Performance Spatial Mixdown",
         ["StudioW12PresetFlacAtmos"] = "FLAC + Atmos Hybrid Lossless Spatial Master",
-        ["StudioW12DoneFormat"] = "Master exported: {0} ({1:0.1} LUFS · {2:0.1} dBTP)",
+        ["StudioW12DoneFormat"] = "Master exported: {0} ({1:0.0} LUFS · {2:0.0} dBTP)",
 
         // W13 6DoF Walkable 3D Room & Studio Spatial X-Ray Inspector
         ["XRayInspectorTitle"] = "Spatial X-Ray Inspector",
@@ -983,7 +983,7 @@ public sealed class AndroidStrings {
         ["StudioW12ContextHybridReady"] = "ATMOS+FLAC Twin synced ({0}) — ready for EM-MWF Hybrid Master.",
         ["StudioW12ContextHybridNoTwin"] = "No verified FLAC Twin paired yet — will export lossless 7.1.4 spatial master.",
         ["StudioW12ContextKaraoke"] = "Spatial Karaoke export: Lead Vocals {0}% · Backing Vocals {1}.",
-        ["StudioW12ContextGeneral"] = "Standards-mastered offline export (ITU-R BS.1770-5 & True-Peak ceiling {0:0.1} dBTP).",
+        ["StudioW12ContextGeneral"] = "Standards-mastered offline export (ITU-R BS.1770-5 & True-Peak ceiling {0:0.0} dBTP).",
         ["StudioW12KaraokeLevelTitle"] = "Export Lead Vocal Level",
         ["NoCodecMetadata"] = "No detailed codec metadata available for this track.",
         ["FinalizingFormat"] = "Finalizing output format...",
@@ -1000,7 +1000,7 @@ public sealed class AndroidStrings {
         ["NeuralPrepReadyBadge"] = "AI Ready",
         ["NeuralPrepBusyFmt"] = "AI {0:0%}",
         ["NeuralPrepDecodingStatus"] = "Decoding audio for AI neural stems...",
-        ["NeuralPrepDoneToast"] = "AI neural stems ready ({0} stems · {1:0.2}x RTF)",
+        ["NeuralPrepDoneToast"] = "AI neural stems ready ({0} stems · {1:0.00}x RTF)",
         ["NeuralPrepCacheHitToast"] = "AI neural stems loaded instantly from cache ({0} stems)",
         ["NeuralPrepNeedModelsToast"] = "Download or import at least one AI separation model in Settings -> AI & Restoration first.",
         ["NeuralPrepNoTrackToast"] = "Load a track first to prepare AI neural stems.",
@@ -1014,12 +1014,12 @@ public sealed class AndroidStrings {
         ["SingVocalAbDry"] = "A/B DRY",
         ["VocalDnaSectionTitle"] = "Song Vocal DNA & Mic Voiceprint",
         ["VocalDnaNeutralStatus"] = "Song DNA: Neutral studio baseline (0.0 dB flat EQ · tap Analyze Song DNA)",
-        ["VocalDnaSummaryFmt"] = "Song DNA ({0}): {1:0.1} LUFS · Crest {2:0.1} dB · RT60 {3:0.2} s · Wet {4:0}%{5}{6}",
+        ["VocalDnaSummaryFmt"] = "Song DNA ({0}): {1:0.0} LUFS · Crest {2:0.0} dB · RT60 {3:0.00} s · Wet {4:0}%{5}{6}",
         ["VocalDnaDelayTagFmt"] = " · Delay {0:0} ms",
         ["VocalDnaDrrTagFmt"] = " · DRR {0:+0.0;-0.0;0.0} dB",
         ["VocalDnaAnalyzeBtn"] = "Analyze Song DNA",
         ["VocalDnaBusyBtn"] = "Analyzing {0:0%}",
-        ["VocalDnaReadyToast"] = "Song Vocal DNA matched ({0:0.1} LUFS · RT60 {1:0.2} s · {2} active windows)",
+        ["VocalDnaReadyToast"] = "Song Vocal DNA matched ({0:0.0} LUFS · RT60 {1:0.00} s · {2} active windows)",
         ["VocalDnaNeedModelsToast"] = "Download or import a vocal separation model in Settings -> AI & Restoration to extract Song Vocal DNA.",
         ["VocalVoiceprintUncalibrated"] = "Mic Voiceprint: Not calibrated (0.0 dB flat neutral Match EQ)",
         ["VocalVoiceprintWaitingSongDna"] = "Mic Voiceprint: Calibrated · Match EQ 0.0 dB until Song DNA is analyzed",
@@ -1027,11 +1027,11 @@ public sealed class AndroidStrings {
         ["VocalVoiceprintCalibrateBtn"] = "Calibrate Mic (4s)",
         ["VocalVoiceprintCancelBtn"] = "Stop ({0:0.0}s)",
         ["VocalVoiceprintResetBtn"] = "Reset Mic",
-        ["VocalVoiceprintCapturingFmt"] = "Speak or sing normally into the mic... {0:0}% ({1:0.1}s left · {2:0.0} dBFS)",
-        ["VocalVoiceprintSuccessToast"] = "Mic voiceprint calibrated ({0:0.1} dBFS · {1} vocal windows).",
-        ["VocalVoiceprintTooQuietFmt"] = "Mic signal too quiet ({0:0.1} dBFS) — speak closer to the mic and try again.",
+        ["VocalVoiceprintCapturingFmt"] = "Speak or sing normally into the mic... {0:0}% ({1:0.0}s left · {2:0.0} dBFS)",
+        ["VocalVoiceprintSuccessToast"] = "Mic voiceprint calibrated ({0:0.0} dBFS · {1} vocal windows).",
+        ["VocalVoiceprintTooQuietFmt"] = "Mic signal too quiet ({0:0.0} dBFS) — speak closer to the mic and try again.",
         ["VocalVoiceprintResetToast"] = "Mic voiceprint cleared (Match EQ reset to 0.0 dB flat).",
-        ["VocalSingDockDnaReadyFmt"] = "Vocal DNA RT60 {0:0.2}s{1} · {2}",
+        ["VocalSingDockDnaReadyFmt"] = "Vocal DNA RT60 {0:0.00}s{1} · {2}",
         ["VocalSingDockNeutralFmt"] = "Live Vocal Chain: Neutral baseline · {0}",
         ["VocalSingDockVpOn"] = "Voiceprint ON",
         ["VocalSingDockVpOff"] = "Flat 0 dB EQ",
@@ -1662,7 +1662,7 @@ public sealed class AndroidStrings {
         d["CheckUpdateBtn"] = "Verificar atualizações";
         d["CheckingUpdate"] = "Verificando nova versão no GitHub...";
         d["UpdateAvailableBanner"] = "Nova versão disponível: v{0}";
-        d["UpdateAvailableDesc"] = "Há uma atualização pronta para baixar ({0:0.1} MB).";
+        d["UpdateAvailableDesc"] = "Há uma atualização pronta para baixar ({0:0.0} MB).";
         d["UpToDateMsg"] = "Seu aplicativo já está na versão mais recente.";
         d["DownloadInstallBtn"] = "Baixar e Instalar";
         d["DownloadingUpdate"] = "Baixando atualização...";
@@ -2117,7 +2117,7 @@ public sealed class AndroidStrings {
         d["AudioSpecLgsrHeader"] = "ATMOS + GÊMEO LOSSLESS (LGSR)";
         d["AudioSpecLgsrActive"] = "Gêmeo Sincronizado: {0}";
         d["AudioSpecLgsrSync"] = "Trava Sub-Sample: {0:0.00} ms · Drift {1:+0.00;-0.00;0.00} ppm · Conf {2:0}%";
-        d["AudioSpecLgsrBands"] = "Guia E-AC-3: Coupling {0:0.1} kHz · SPX {1:0.1} kHz · Coerência {2:0}%";
+        d["AudioSpecLgsrBands"] = "Guia E-AC-3: Coupling {0:0.0} kHz · SPX {1:0.0} kHz · Coerência {2:0}%";
         d["AudioSpecLgsrGuards"] = "Envelope Lock: {0:+0.0;-0.0;0.0} dB · Guarda Clipping: {1}";
         d["TipSlot2CLgsr"] = "Pareia uma faixa Dolby Digital Plus (E-AC-3 JOC) Atmos com o gêmeo estéreo FLAC/WAV/ALAC verificado via reamostragem Kaiser sinc >120 dB e sincronia GCC-PHAT <0,05 amostra + drift Theil-Sen, fundindo harmônicos agudos limpos direto no Pre-HRTF Virtual Speaker Bus preservando 100% da fase e das trajetórias 3D Atmos.";
         d["TipLgsrEnvelopeLock"] = "Trava o ganho espectral restaurado rigorosamente ao envelope dinâmico RMS do Atmos para que um master estéreo FLAC mais alto/comprimido nunca esmague a dinâmica do Dolby Atmos.";
@@ -2149,7 +2149,7 @@ public sealed class AndroidStrings {
         d["ProAudioMicStereo"] = "Par Estéreo (Entradas 1 + 2)";
         d["ProAudioMicGainTitle"] = "Ganho Digital de Entrada do Mic";
         d["ProAudioMicMonitorTitle"] = "Volume da Monitoria do Mic";
-        d["ProAudioStatusFormat"] = "{0} · {1:0.0} kHz {2}-bit · {3}f · RTT {4:0.1} ms{5}";
+        d["ProAudioStatusFormat"] = "{0} · {1:0.0} kHz {2}-bit · {3}f · RTT {4:0.0} ms{5}";
         d["ProAudioTelemetryFormat"] = "Sync: {0} · Drift {1:+0.0;-0.0;0.0} ppm · XRuns {2}/{3} · Mic {4:0.0} dBFS";
         d["ProAudioBackendPathB"] = "Path B USB Direto UAC2";
         d["ProAudioBackendPathA"] = "Path A AAudio Exclusivo";
@@ -2166,8 +2166,8 @@ public sealed class AndroidStrings {
         d["ProAudioCalibrateModalBody"] = "Mede a latência física exata de ida e volta usando correlação cruzada MLS de 9 bits.\n\nConecte um cabo loopback (Saída -> Entrada) ou aproxime o fone do microfone e toque em Iniciar.";
         d["ProAudioCalibrateStartBtn"] = "Iniciar Sonda";
         d["ProAudioCalibrateRunningToast"] = "Executando sonda MLS de latência loopback...";
-        d["ProAudioCalibrateSuccessToast"] = "RTT calibrado: {0:0.2} ms ({1:0.1} amostras, SNR {2:0.1}x)";
-        d["ProAudioCalibrateFailedToast"] = "Sinal de loopback fraco ou ruidoso (SNR {0:0.1}x). Verifique ganho/loopback.";
+        d["ProAudioCalibrateSuccessToast"] = "RTT calibrado: {0:0.00} ms ({1:0.0} amostras, SNR {2:0.0}x)";
+        d["ProAudioCalibrateFailedToast"] = "Sinal de loopback fraco ou ruidoso (SNR {0:0.0}x). Verifique ganho/loopback.";
         d["ProAudioCreditsBtn"] = "Specs e Créditos";
         d["ProAudioCreditsTitle"] = "Referências Pro-Audio USB e Scarlett 2i2";
         d["ScarlettControlsBtn"] = "Scarlett 2i2";
@@ -2208,7 +2208,7 @@ public sealed class AndroidStrings {
         d["ScarlettExitMsdBtn"] = "Sair do Easy Start (MSD)";
         d["ScarlettExitMsdDoneToast"] = "Modo MSD da Scarlett desativado e salvo. Reconecte o USB se necessário.";
         d["ScarlettReadMetersBtn"] = "Ler Medidores HW";
-        d["ScarlettMetersFormat"] = "Picos de Hardware: Ent 1 {0:0.1} dBFS · Ent 2 {1:0.1} dBFS";
+        d["ScarlettMetersFormat"] = "Picos de Hardware: Ent 1 {0:0.0} dBFS · Ent 2 {1:0.0} dBFS";
         d["ScarlettGen4FcpNotice"] = "A Focusrite Scarlett 4ª Geração usa o protocolo FCP (Focusrite Control Protocol), cujo mapa de parâmetros varia por firmware. O áudio opera nativamente em UAC2 24-bit, enquanto gravações estáticas inseguras na NVRAM ficam bloqueadas até a descoberta FCP dinâmica ser verificada. Use o painel frontal e o Assistente de Ganho abaixo.";
         d["ScarlettGainAssistBtn"] = "Assistente Ganho (-12 dBFS)";
         d["ScarlettGainAssistFormat"] = "Assistente de Ganho (alvo -12 dBFS): C1 → {0:0.0} dB · C2 → {1:0.0} dB";
@@ -2226,7 +2226,7 @@ public sealed class AndroidStrings {
         d["StudioW12PresetKaraoke"] = "Karaokê Espacial / Instrumental Atmos";
         d["StudioW12PresetLiveMixdown"] = "Mixdown Espacial de Performance Karaokê ao Vivo";
         d["StudioW12PresetFlacAtmos"] = "Master Espacial Híbrido FLAC + Atmos Lossless";
-        d["StudioW12DoneFormat"] = "Master exportado: {0} ({1:0.1} LUFS · {2:0.1} dBTP)";
+        d["StudioW12DoneFormat"] = "Master exportado: {0} ({1:0.0} LUFS · {2:0.0} dBTP)";
 
         // W13 6DoF Walkable 3D Room & Studio Spatial X-Ray Inspector
         d["XRayInspectorTitle"] = "Inspetor Espacial X-Ray";
@@ -2278,7 +2278,7 @@ public sealed class AndroidStrings {
         d["StudioW12ContextHybridReady"] = "Gêmeo ATMOS+FLAC sincronizado ({0}) — pronto para Master Híbrido EM-MWF.";
         d["StudioW12ContextHybridNoTwin"] = "Sem Gêmeo FLAC verificado — exportará master espacial 7.1.4 lossless.";
         d["StudioW12ContextKaraoke"] = "Exportação Karaokê Espacial: Vocal Principal {0}% · Backings {1}.";
-        d["StudioW12ContextGeneral"] = "Exportação masterizada por normas (ITU-R BS.1770-5 e teto True-Peak {0:0.1} dBTP).";
+        d["StudioW12ContextGeneral"] = "Exportação masterizada por normas (ITU-R BS.1770-5 e teto True-Peak {0:0.0} dBTP).";
         d["StudioW12KaraokeLevelTitle"] = "Nível do Vocal Principal na Exportação";
         d["NoCodecMetadata"] = "Nenhum metadado detalhado de codec disponível para esta faixa.";
         d["FinalizingFormat"] = "Finalizando formato de saída...";
@@ -2295,7 +2295,7 @@ public sealed class AndroidStrings {
         d["NeuralPrepReadyBadge"] = "IA Pronta";
         d["NeuralPrepBusyFmt"] = "IA {0:0%}";
         d["NeuralPrepDecodingStatus"] = "Decodificando áudio para stems neurais IA...";
-        d["NeuralPrepDoneToast"] = "Stems neurais IA prontos ({0} stems · {1:0.2}x RTF)";
+        d["NeuralPrepDoneToast"] = "Stems neurais IA prontos ({0} stems · {1:0.00}x RTF)";
         d["NeuralPrepCacheHitToast"] = "Stems neurais IA carregados do cache ({0} stems)";
         d["NeuralPrepNeedModelsToast"] = "Baixe ou importe pelo menos um modelo de separação de IA em Ajustes -> IA e Restauração primeiro.";
         d["NeuralPrepNoTrackToast"] = "Carregue uma faixa primeiro para preparar os stems neurais IA.";
@@ -2309,12 +2309,12 @@ public sealed class AndroidStrings {
         d["SingVocalAbDry"] = "A/B SECO";
         d["VocalDnaSectionTitle"] = "DNA Vocal da Música e Voiceprint do Mic";
         d["VocalDnaNeutralStatus"] = "DNA Vocal: Base neutra de estúdio (EQ 0,0 dB plano · toque em Analisar DNA)";
-        d["VocalDnaSummaryFmt"] = "DNA ({0}): {1:0.1} LUFS · Crista {2:0.1} dB · RT60 {3:0.2} s · Wet {4:0}%{5}{6}";
+        d["VocalDnaSummaryFmt"] = "DNA ({0}): {1:0.0} LUFS · Crista {2:0.0} dB · RT60 {3:0.00} s · Wet {4:0}%{5}{6}";
         d["VocalDnaDelayTagFmt"] = " · Delay {0:0} ms";
         d["VocalDnaDrrTagFmt"] = " · DRR {0:+0.0;-0.0;0.0} dB";
         d["VocalDnaAnalyzeBtn"] = "Analisar DNA Vocal";
         d["VocalDnaBusyBtn"] = "Analisando {0:0%}";
-        d["VocalDnaReadyToast"] = "DNA Vocal da música aplicado ({0:0.1} LUFS · RT60 {1:0.2} s · {2} janelas ativas)";
+        d["VocalDnaReadyToast"] = "DNA Vocal da música aplicado ({0:0.0} LUFS · RT60 {1:0.00} s · {2} janelas ativas)";
         d["VocalDnaNeedModelsToast"] = "Baixe ou importe um modelo de separação vocal em Ajustes -> IA e Restauração para extrair o DNA Vocal.";
         d["VocalVoiceprintUncalibrated"] = "Voiceprint do Mic: Não calibrado (Match EQ neutro 0,0 dB)";
         d["VocalVoiceprintWaitingSongDna"] = "Voiceprint do Mic: Calibrado · Match EQ 0,0 dB até analisar o DNA da música";
@@ -2322,11 +2322,11 @@ public sealed class AndroidStrings {
         d["VocalVoiceprintCalibrateBtn"] = "Calibrar Mic (4s)";
         d["VocalVoiceprintCancelBtn"] = "Parar ({0:0.0}s)";
         d["VocalVoiceprintResetBtn"] = "Limpar Mic";
-        d["VocalVoiceprintCapturingFmt"] = "Fale ou cante normalmente no microfone... {0:0}% ({1:0.1}s · {2:0.0} dBFS)";
-        d["VocalVoiceprintSuccessToast"] = "Voiceprint do microfone calibrado ({0:0.1} dBFS · {1} janelas vocais).";
-        d["VocalVoiceprintTooQuietFmt"] = "Sinal do microfone muito baixo ({0:0.1} dBFS) — fale mais perto e tente novamente.";
+        d["VocalVoiceprintCapturingFmt"] = "Fale ou cante normalmente no microfone... {0:0}% ({1:0.0}s · {2:0.0} dBFS)";
+        d["VocalVoiceprintSuccessToast"] = "Voiceprint do microfone calibrado ({0:0.0} dBFS · {1} janelas vocais).";
+        d["VocalVoiceprintTooQuietFmt"] = "Sinal do microfone muito baixo ({0:0.0} dBFS) — fale mais perto e tente novamente.";
         d["VocalVoiceprintResetToast"] = "Voiceprint do microfone limpo (Match EQ restaurado para 0,0 dB plano).";
-        d["VocalSingDockDnaReadyFmt"] = "DNA Vocal RT60 {0:0.2}s{1} · {2}";
+        d["VocalSingDockDnaReadyFmt"] = "DNA Vocal RT60 {0:0.00}s{1} · {2}";
         d["VocalSingDockNeutralFmt"] = "Cadeia Vocal ao Vivo: Base neutra · {0}";
         d["VocalSingDockVpOn"] = "Voiceprint ON";
         d["VocalSingDockVpOff"] = "EQ Plano 0 dB";

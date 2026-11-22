@@ -47,7 +47,9 @@ public static class AndroidMediaFallbackDecoder {
             for (int i = 0; i < extractor.TrackCount; i++) {
                 MediaFormat fmt = extractor.GetTrackFormat(i);
                 string m = fmt.GetString(MediaFormat.KeyMime);
-                if (!string.IsNullOrEmpty(m) && m.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) {
+                if (!string.IsNullOrEmpty(m) &&
+                    m.StartsWith("audio/", StringComparison.OrdinalIgnoreCase) &&
+                    !m.Equals("audio/unknown", StringComparison.OrdinalIgnoreCase)) {
                     audioTrackIndex = i;
                     trackFormat = fmt;
                     mime = m;

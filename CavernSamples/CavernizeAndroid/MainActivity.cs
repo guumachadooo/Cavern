@@ -1774,10 +1774,22 @@ public partial class MainActivity : Activity, ICavernizeApp {
             throw new InvalidOperationException(S["VideoNoAudioTrack"]);
         }
 
-        // Fast native NEON FFmpeg path for FLAC (avoids slow ~12s MediaCodec decode and preserves 24-bit PCM depth)
-        if (containerExt == ".flac" && ffmpeg.Found) {
-            ProbedAudioStream flacStream = probe != null && probe.AudioStreams.Count > 0 ? probe.AudioStreams[0] : null;
-            int streamIdx = flacStream?.StreamIndex ?? -1;
+        // Fast native NEON FFmpeg path for FLAC, ALAC (.m4a), and other lossless/MediaCodec-unsupported codecs
+        // (avoids slow MediaCodec decode / audio/unknown IllegalArgumentException and preserves 24-bit PCM depth)
+        ProbedAudioStream fastStream = probe != null && probe.AudioStreams.Count > 0 ? probe.AudioStreams[0] : null;
+        string fastCodec = (fastStream?.CodecName ?? string.Empty).ToLowerInvariant();
+        bool preferFastFfmpeg = containerExt == ".flac" ||
+                                fastCodec == "flac" ||
+                                fastCodec == "alac" ||
+                                fastCodec == "ape" ||
+                                fastCodec == "wavpack" ||
+                                fastCodec == "wv" ||
+                                fastCodec == "tta" ||
+                                fastCodec == "dts" ||
+                                fastCodec == "mlp" ||
+                                fastCodec.StartsWith("pcm_", StringComparison.Ordinal);
+        if (preferFastFfmpeg && ffmpeg.Found) {
+            int streamIdx = fastStream?.StreamIndex ?? -1;
             string workDir = Path.Combine(TrueHDDecoderService.GetWorkRoot(this), $"ffwav_{Guid.NewGuid():N}");
             Directory.CreateDirectory(workDir);
             fallbackSessionDir = workDir;
@@ -1786,19 +1798,19 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 SetWorkspaceHeaderText(S["DecodingFallback"]);
                 SetConvertStatus(S["DecodingFallback"], -1);
             });
-            bool flacOk = TrueHDDecoderService.ExtractAudioStreamWithFFmpeg(
+            bool ffOk = TrueHDDecoderService.ExtractAudioStreamWithFFmpeg(
                 ffmpeg.Location, resolved, streamIdx, outWav, "wav",
                 probe?.DurationSeconds ?? 0,
                 (p, msg) => RunOnUiThread(() => {
                     SetWorkspaceHeaderText(msg);
                     SetConvertStatus(msg, p);
                 }));
-            if (flacOk) {
+            if (ffOk) {
                 AudioReader wavReader = AudioReader.Open(outWav);
                 Codec pcmCodec = wavReader.Bits == BitDepth.Float32 ? Codec.PCM_Float : Codec.PCM_LE;
-                (Codec srcCodec, bool isLossy) = InferFallbackCodecAndLossy(resolved, flacStream?.CodecName);
+                (Codec srcCodec, bool isLossy) = InferFallbackCodecAndLossy(resolved, fastStream?.CodecName);
                 ExternalDecodedTrack wavTrack = new(
-                    wavReader, pcmCodec, srcCodec, null, guessedContainer, null, null, flacStream?.Language,
+                    wavReader, pcmCodec, srcCodec, null, guessedContainer, null, null, fastStream?.Language,
                     isLossySource: isLossy, originalSourcePath: resolved);
                 return AudioFile.FromCustomTracks(resolved, [wavTrack]);
             }

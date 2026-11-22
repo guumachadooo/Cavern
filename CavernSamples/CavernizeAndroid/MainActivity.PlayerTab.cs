@@ -1337,9 +1337,9 @@ public partial class MainActivity {
 
         float cohPct = Math.Clamp(tel.Coherence * 100f, 0f, 100f);
         float diffPct = Math.Clamp(tel.Diffuseness * 100f, 0f, 100f);
-        string mLufs = loud.MomentaryLufs > -110f ? $"{loud.MomentaryLufs:0.1}" : "--";
-        string iLufs = loud.IntegratedLufs > -110f ? $"{loud.IntegratedLufs:0.1}" : "--";
-        string tpStr = loud.TruePeakDbtp > -110f ? $"{loud.TruePeakDbtp:0.1}" : "--";
+        string mLufs = loud.MomentaryLufs > -110f ? $"{loud.MomentaryLufs:0.0}" : "--";
+        string iLufs = loud.IntegratedLufs > -110f ? $"{loud.IntegratedLufs:0.0}" : "--";
+        string tpStr = loud.TruePeakDbtp > -110f ? $"{loud.TruePeakDbtp:0.0}" : "--";
         if (xrayEssentialSummaryTv != null) {
             xrayEssentialSummaryTv.Text = string.Format(S["XRayEssentialSummaryFmt"], cohPct, diffPct, iLufs, tpStr);
         }

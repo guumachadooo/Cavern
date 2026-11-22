@@ -64,7 +64,10 @@ public sealed class AndroidAudioOutput : IDisposable {
     int activeFramesPerWrite = LowLatencyFramesPerWrite;
     long lastDiagPublishMs;
     long idleSinceMs;
+    long lastNativeStartTickMs;
     int nativeStallTicks;
+    int consecutiveRapidNativeDisconnects;
+    volatile bool suppressAAudioDuplexOnce;
 
     /// <summary>
     /// Enables <see cref="AudioTrackPerformanceMode.LowLatency"/> and 256-frame bursts (~5.3 ms @ 48 kHz).
@@ -220,6 +223,8 @@ public sealed class AndroidAudioOutput : IDisposable {
         if (retryNative) {
             nativeFallbackLatched = false;
             nativeRetryRequested = true;
+            consecutiveRapidNativeDisconnects = 0;
+            suppressAAudioDuplexOnce = false;
         }
         trackRebuildRequested = true;
     }
@@ -453,14 +458,16 @@ public sealed class AndroidAudioOutput : IDisposable {
             if (rendered > 0) {
                 int written = NativeProAudioBridge.WritePlayback(floatRenderBuffer, rendered);
                 if (written <= 0) {
-                    // Native backend stopped or disconnected (e.g., USB unplugged / AAudio error) -> recover cleanly
+                    // Native backend stopped or disconnected (e.g., USB unplugged / AAudio error) -> recover with bounded backoff
                     nativeStallTicks = 0;
-                    RequestRebuild(retryNative: true);
-                    Thread.Sleep(4);
+                    HandleNativeStreamDisconnect("WritePlayback returned 0");
                     return;
                 }
                 nativeStallTicks = 0;
                 long nowMs = Environment.TickCount64;
+                if (consecutiveRapidNativeDisconnects > 0 && nowMs - lastNativeStartTickMs >= 2000) {
+                    consecutiveRapidNativeDisconnects = 0;
+                }
                 if (nowMs - lastDiagPublishMs >= 350) {
                     lastDiagPublishMs = nowMs;
                     PublishDiagnostics();
@@ -475,15 +482,43 @@ public sealed class AndroidAudioOutput : IDisposable {
                 nativeStallTicks = 0;
                 if (NativeProAudioBridge.TryGetStatus(out NativeProAudioStatus st) &&
                     st.ActiveBackend == NativeProAudioBridge.BackendNone) {
-                    AppLogger.Warn("Pro-Audio native backend reported disconnect (ActiveBackend=0); triggering auto-recovery.");
-                    RequestRebuild(retryNative: true);
-                    Thread.Sleep(6);
+                    HandleNativeStreamDisconnect("ActiveBackend=0");
                     return;
                 }
             }
             // Sub-millisecond yield while native callback drains OUT ring
             Thread.Sleep(1);
         }
+    }
+
+    void HandleNativeStreamDisconnect(string reason) {
+        long uptimeMs = Environment.TickCount64 - lastNativeStartTickMs;
+        bool wasPathA = activeBackend == ActiveProAudioBackendKind.AAudioOboeFullDuplex;
+        if (uptimeMs < 1500) {
+            consecutiveRapidNativeDisconnects++;
+        } else {
+            consecutiveRapidNativeDisconnects = 1;
+        }
+
+        if (consecutiveRapidNativeDisconnects >= 3) {
+            if (wasPathA && !suppressAAudioDuplexOnce && proAudioConfig.LiveMicEnabled && proAudioConfig.MicRouting != LiveMicRoutingMode.Off) {
+                // Built-in/HAL full-duplex AAudio rejected stream repeatedly; retry AAudio output-only once before AudioTrack
+                suppressAAudioDuplexOnce = true;
+                AppLogger.Warn($"Pro-Audio Path A disconnected rapidly ({reason}, streak={consecutiveRapidNativeDisconnects}); retrying AAudio output-only.");
+                trackRebuildRequested = true;
+                Thread.Sleep(180);
+                return;
+            }
+            AppLogger.Warn($"Pro-Audio native backend disconnected repeatedly ({reason}, streak={consecutiveRapidNativeDisconnects}); falling back to AudioTrack until route/config changes.");
+            nativeFallbackLatched = true;
+            trackRebuildRequested = true;
+            Thread.Sleep(120);
+            return;
+        }
+
+        AppLogger.Warn($"Pro-Audio native backend reported disconnect ({reason}, streak={consecutiveRapidNativeDisconnects}); triggering auto-recovery.");
+        trackRebuildRequested = true;
+        Thread.Sleep(consecutiveRapidNativeDisconnects == 1 ? 150 : 320);
     }
 
     void ReconfigureBackend(int sampleRate) {
@@ -534,6 +569,7 @@ public sealed class AndroidAudioOutput : IDisposable {
                                         engine.SetPreferredHardwareSampleRate(activeSampleRate);
                                     }
                                     engine.LiveMicBridge.SetStreamingActive(needInput, activeSampleRate);
+                                    lastNativeStartTickMs = Environment.TickCount64;
                                     AppLogger.Info($"Pro-Audio Path B (libusb UAC2) active: {activeSampleRate} Hz, {burst}f, Duplex={needInput}, Device='{usbSnap.DisplayName}'");
                                     PublishDiagnostics();
                                     return;
@@ -553,10 +589,11 @@ public sealed class AndroidAudioOutput : IDisposable {
                                      cfg.PreferredPath == ProAudioEnginePath.PathAAudioExclusive ||
                                      cfg.PreferredPath == ProAudioEnginePath.PathBDirectUsbUac2;
                     if (wantPathA && NativeProAudioBridge.SupportsPathAAudio) {
+                        bool aaudioDuplex = needInput && !suppressAAudioDuplexOnce;
                         int rc = NativeProAudioBridge.StartAAudio(
                             resolvedRate,
                             burst,
-                            needInput,
+                            aaudioDuplex,
                             preferredOutputDeviceId,
                             preferredInputDeviceId);
                         if (rc == 0) {
@@ -572,8 +609,9 @@ public sealed class AndroidAudioOutput : IDisposable {
                                 // Keep Direct 2.0 DSP rate matched to AAudio's negotiated hardware rate without thrashing
                                 engine.SetPreferredHardwareSampleRate(activeSampleRate);
                             }
-                            engine.LiveMicBridge.SetStreamingActive(needInput, activeSampleRate);
-                            AppLogger.Info($"Pro-Audio Path A (AAudio Exclusive) active: {activeSampleRate} Hz (req={resolvedRate} Hz), {burst}f, Duplex={needInput}, OutId={preferredOutputDeviceId}, InId={preferredInputDeviceId}");
+                            engine.LiveMicBridge.SetStreamingActive(aaudioDuplex, activeSampleRate);
+                            lastNativeStartTickMs = Environment.TickCount64;
+                            AppLogger.Info($"Pro-Audio Path A (AAudio Exclusive) active: {activeSampleRate} Hz (req={resolvedRate} Hz), {burst}f, Duplex={aaudioDuplex}, OutId={preferredOutputDeviceId}, InId={preferredInputDeviceId}");
                             PublishDiagnostics();
                             return;
                         }

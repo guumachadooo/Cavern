@@ -160,7 +160,7 @@ public static class TrueHDDecoderService {
 
         result.DurationSeconds = durationSec;
         if (result.AudioStreams.Count > 0) {
-            AppLogger.Info($"FFmpeg probe ok ({result.AudioStreams.Count} audio stream(s), {durationSec:0.1}s) for '{Path.GetFileName(inputPath)}'");
+            AppLogger.Info($"FFmpeg probe ok ({result.AudioStreams.Count} audio stream(s), {durationSec:0.0}s) for '{Path.GetFileName(inputPath)}'");
         } else {
             string tail = stderr.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? string.Empty;
             AppLogger.Warn($"FFmpeg probe exit={exitCode} (0 audio streams) for '{Path.GetFileName(inputPath)}': {tail.Trim()}");

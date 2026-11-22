@@ -221,6 +221,119 @@ jobs:
           (assets_dir / "onnxruntime" / "version.txt").write_text(ort_ver + "\n", encoding="utf-8")
           print(f"Bundled libonnxruntime.so ({(native_dir / 'libonnxruntime.so').stat().st_size} bytes, v{ort_ver})")
 
+          # 3b. Validate onnxruntime_c_api.h parses cleanly with OnnxRuntimeHeaderParser anchor rules
+          ort_hdr_text = (assets_dir / "onnxruntime" / "onnxruntime_c_api.h").read_text(encoding="utf-8", errors="ignore")
+          ort_no_cmt = re.sub(r"/\*.*?\*/", " ", ort_hdr_text, flags=re.S)
+          ort_no_cmt = re.sub(r"//[^\n]*", "", ort_no_cmt)
+          ort_no_cmt = ort_no_cmt.replace("\\\r\n", " ").replace("\\\n", " ")
+          android_defs = {"__ANDROID__", "ANDROID", "__linux__", "__unix__", "__aarch64__", "__LP64__"}
+          pp_lines, pp_stack, pp_active = [], [], True
+          for ln in ort_no_cmt.splitlines():
+              tr = ln.lstrip()
+              if tr.startswith("#"):
+                  d = tr[1:].lstrip()
+                  if re.match(r"ifdef\s+", d):
+                      sym = re.match(r"ifdef\s+([A-Za-z_][A-Za-z0-9_]*)", d).group(1)
+                      c = sym in android_defs
+                      pp_stack.append([pp_active, pp_active and c, c]); pp_active = pp_active and c
+                  elif re.match(r"ifndef\s+", d):
+                      sym = re.match(r"ifndef\s+([A-Za-z_][A-Za-z0-9_]*)", d).group(1)
+                      c = sym not in android_defs
+                      pp_stack.append([pp_active, pp_active and c, c]); pp_active = pp_active and c
+                  elif re.match(r"if(\s+|\()", d):
+                      expr = d[2:].strip()
+                      expr = re.sub(r"\bdefined\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", lambda m: "1" if m.group(1) in android_defs else "0", expr)
+                      expr = re.sub(r"\bdefined\s+([A-Za-z_][A-Za-z0-9_]*)\b", lambda m: "1" if m.group(1) in android_defs else "0", expr)
+                      expr = re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", lambda m: "1" if m.group(1) in android_defs else "0", expr)
+                      expr = expr.replace("&&", " and ").replace("||", " or ").replace("!", " not ")
+                      try: c = bool(eval(expr, {"__builtins__": {}}, {}))
+                      except Exception: c = False
+                      pp_stack.append([pp_active, pp_active and c, c]); pp_active = pp_active and c
+                  elif re.match(r"elif(\s+|\()", d) and pp_stack:
+                      parent_act, _, taken = pp_stack[-1]
+                      c = False
+                      if not taken:
+                          expr = d[4:].strip()
+                          expr = re.sub(r"\bdefined\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", lambda m: "1" if m.group(1) in android_defs else "0", expr)
+                          expr = re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", lambda m: "1" if m.group(1) in android_defs else "0", expr)
+                          expr = expr.replace("&&", " and ").replace("||", " or ").replace("!", " not ")
+                          try: c = bool(eval(expr, {"__builtins__": {}}, {}))
+                          except Exception: c = False
+                      pp_active = parent_act and c; pp_stack[-1] = [parent_act, pp_active, taken or c]
+                  elif re.match(r"else(\b|$)", d) and pp_stack:
+                      parent_act, _, taken = pp_stack[-1]
+                      pp_active = parent_act and (not taken); pp_stack[-1] = [parent_act, pp_active, True]
+                  elif re.match(r"endif(\b|$)", d) and pp_stack:
+                      pp_active = pp_stack.pop()[0]
+                  elif pp_active and d.startswith("define") and "ORT_API_VERSION" in d:
+                      pp_lines.append(tr)
+              elif pp_active:
+                  pp_lines.append(ln)
+          pp_text = "\n".join(pp_lines)
+          sm = re.search(r"\bstruct\s+OrtApi\s*\{", pp_text)
+          assert sm, "struct OrtApi not found in onnxruntime_c_api.h"
+          ob = pp_text.index("{", sm.start()); depth = 0; cb = -1
+          for idx_c in range(ob, len(pp_text)):
+              if pp_text[idx_c] == "{": depth += 1
+              elif pp_text[idx_c] == "}":
+                  depth -= 1
+                  if depth == 0: cb = idx_c; break
+          assert cb > ob, "Unbalanced braces in struct OrtApi"
+          body = pp_text[ob + 1:cb]
+          stmts, cur, pd, bd = [], [], 0, 0
+          for ch in body:
+              if ch == "(": pd += 1
+              elif ch == ")" and pd > 0: pd -= 1
+              elif ch == "{": bd += 1
+              elif ch == "}" and bd > 0: bd -= 1
+              if ch == ";" and pd == 0 and bd == 0:
+                  s = "".join(cur).strip()
+                  if s: stmts.append(s)
+                  cur = []
+              else:
+                  cur.append(ch)
+          macro_re = re.compile(r"\b(ORT_CLASS_RELEASE|ORT_API2_STATUS|ORT_API_STATUS|ORT_API_T|ORT_API)\s*\(")
+          raw_re = re.compile(r"\(\s*(?:[A-Za-z0-9_]+\s*)*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\(")
+          ort_slots = {}
+          slot_i = 0
+          for st in stmts:
+              if not st or st.startswith("#"): continue
+              sym = None
+              mm = macro_re.search(st)
+              if mm:
+                  op = st.index("(", mm.start()); d2 = 0; cp = -1
+                  for j in range(op, len(st)):
+                      if st[j] == "(": d2 += 1
+                      elif st[j] == ")":
+                          d2 -= 1
+                          if d2 == 0: cp = j; break
+                  if cp > op:
+                      inner = st[op + 1:cp]
+                      args, a0, pd2 = [], 0, 0
+                      for j, ch in enumerate(inner):
+                          if ch == "(": pd2 += 1
+                          elif ch == ")" and pd2 > 0: pd2 -= 1
+                          elif ch == "," and pd2 == 0:
+                              args.append(inner[a0:j].strip()); a0 = j + 1
+                      args.append(inner[a0:].strip())
+                      mac = mm.group(1)
+                      tok = args[0] if mac in ("ORT_CLASS_RELEASE", "ORT_API2_STATUS", "ORT_API_STATUS") else (args[1] if len(args) >= 2 else "")
+                      idm = re.search(r"([A-Za-z_][A-Za-z0-9_]*)[^A-Za-z0-9_]*$", tok)
+                      if idm:
+                          sym = ("Release" + idm.group(1)) if mac == "ORT_CLASS_RELEASE" else idm.group(1)
+              if not sym:
+                  rm = raw_re.search(st)
+                  if rm: sym = rm.group(1)
+              if sym:
+                  ort_slots[sym] = slot_i; slot_i += 1
+          assert ort_slots.get("CreateStatus") == 0, f"Bad CreateStatus slot: {ort_slots.get('CreateStatus')}"
+          assert ort_slots.get("GetErrorCode") == 1, f"Bad GetErrorCode slot: {ort_slots.get('GetErrorCode')}"
+          assert ort_slots.get("GetErrorMessage") == 2, f"Bad GetErrorMessage slot: {ort_slots.get('GetErrorMessage')}"
+          assert ort_slots.get("CreateEnv") == 3, f"Bad CreateEnv slot: {ort_slots.get('CreateEnv')}"
+          for req_sym in ("CreateSession", "Run", "GetTensorElementType", "SessionGetInputTypeInfo", "CastTypeInfoToTensorInfo", "ReleaseSession", "ReleaseStatus"):
+              assert req_sym in ort_slots, f"Missing required OrtApi slot '{req_sym}' in onnxruntime_c_api.h"
+          print(f"Verified onnxruntime_c_api.h OrtApi vtable: {len(ort_slots)} symbols (CreateStatus=0, CreateEnv=3, CreateSession={ort_slots['CreateSession']}, Run={ort_slots['Run']}, GetTensorElementType={ort_slots['GetTensorElementType']})")
+
           # 4. Verify required binaries, ELF64 AArch64 headers, 16 KB PT_LOAD alignment, and non-stripped exports
           required = ["libcavernize_proaudio.so", "libffmpeg.so", "libtruehdd.so", "libonnxruntime.so"]
           for req_name in required:

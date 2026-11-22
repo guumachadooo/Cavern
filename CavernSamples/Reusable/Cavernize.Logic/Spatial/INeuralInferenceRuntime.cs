@@ -527,16 +527,23 @@ public static class NeuralAudioOfflinePipeline {
         int chunkSamples,
         string[] expectedStemNames,
         ResolvedModelContract contract = default) {
+        if (session == null || chunkLeft == null || chunkRight == null || chunkSamples <= 0) {
+            return Array.Empty<StereoStemBuffer>();
+        }
+        int safeChunk = Math.Min(chunkSamples, Math.Min(chunkLeft.Length, chunkRight.Length));
+        if (safeChunk <= 0) {
+            return Array.Empty<StereoStemBuffer>();
+        }
         if (contract.Kind == NeuralOnnxContractKind.Auto) {
-            contract = ResolveContract(session, null, chunkSamples);
+            contract = ResolveContract(session, null, safeChunk);
         }
 
         return contract.Kind switch {
-            NeuralOnnxContractKind.ScnetStft4Ch => EvaluateScnetStftChunk(session, chunkLeft, chunkRight, chunkSamples, expectedStemNames, contract),
-            NeuralOnnxContractKind.MdxNetStft4Ch => EvaluateMdxNetStftChunk(session, chunkLeft, chunkRight, chunkSamples, expectedStemNames, contract),
-            NeuralOnnxContractKind.MelBandRoFormerHostStft => EvaluateMelBandRoFormerHostStftChunk(session, chunkLeft, chunkRight, chunkSamples, expectedStemNames, contract),
-            NeuralOnnxContractKind.FlashSr16kTo48k => EvaluateFlashSrChunk(session, chunkLeft, chunkRight, chunkSamples, expectedStemNames),
-            _ => EvaluateWaveformStereoChunk(session, chunkLeft, chunkRight, chunkSamples, expectedStemNames, contract.FixedChunkSamples)
+            NeuralOnnxContractKind.ScnetStft4Ch => EvaluateScnetStftChunk(session, chunkLeft, chunkRight, safeChunk, expectedStemNames, contract),
+            NeuralOnnxContractKind.MdxNetStft4Ch => EvaluateMdxNetStftChunk(session, chunkLeft, chunkRight, safeChunk, expectedStemNames, contract),
+            NeuralOnnxContractKind.MelBandRoFormerHostStft => EvaluateMelBandRoFormerHostStftChunk(session, chunkLeft, chunkRight, safeChunk, expectedStemNames, contract),
+            NeuralOnnxContractKind.FlashSr16kTo48k => EvaluateFlashSrChunk(session, chunkLeft, chunkRight, safeChunk, expectedStemNames),
+            _ => EvaluateWaveformStereoChunk(session, chunkLeft, chunkRight, safeChunk, expectedStemNames, contract.FixedChunkSamples)
         };
     }
 
@@ -570,10 +577,13 @@ public static class NeuralAudioOfflinePipeline {
             long[] shape = t.Shape;
             float[] data = t.Data;
 
-            if (shape.Length == 4 && shape[0] == 1 && shape[2] == 2) {
+            if (shape.Length == 4 && shape[0] == 1 && shape[1] > 0 && shape[2] == 2 && shape[3] > 0) {
                 // [1, S, 2, T] (SCNet / HTDemucs / BS-RoFormer multi-stem)
                 int stemCount = (int)shape[1];
                 int tLen = (int)shape[3];
+                if ((long)stemCount * 2L * tLen > data.Length) {
+                    throw new InvalidDataException($"ONNX waveform output [1,{stemCount},2,{tLen}] truncated ({data.Length} floats).");
+                }
                 int copyLen = Math.Min(chunkSamples, tLen);
                 for (int s = 0; s < stemCount; s++) {
                     string name = ResolveStemName(expectedStemNames, stemCounter++);
@@ -584,10 +594,13 @@ public static class NeuralAudioOfflinePipeline {
                     Array.Copy(data, baseIdx + tLen, r, 0, copyLen);
                     parsed.Add(new StereoStemBuffer(name, l, r));
                 }
-            } else if (shape.Length == 3 && shape[1] == 2 && shape[0] >= 1) {
+            } else if (shape.Length == 3 && shape[1] == 2 && shape[0] >= 1 && shape[2] > 0) {
                 // [1, 2, T] (single stereo stem: Apollo, Mel-Band RoFormer) or [S, 2, T]
                 int stemCount = (int)shape[0];
                 int tLen = (int)shape[2];
+                if ((long)stemCount * 2L * tLen > data.Length) {
+                    throw new InvalidDataException($"ONNX waveform output [{stemCount},2,{tLen}] truncated ({data.Length} floats).");
+                }
                 int copyLen = Math.Min(chunkSamples, tLen);
                 for (int s = 0; s < stemCount; s++) {
                     string name = ResolveStemName(expectedStemNames, stemCounter++);
@@ -598,9 +611,12 @@ public static class NeuralAudioOfflinePipeline {
                     Array.Copy(data, baseIdx + tLen, r, 0, copyLen);
                     parsed.Add(new StereoStemBuffer(name, l, r));
                 }
-            } else if (shape.Length == 2 && shape[0] == 2) {
+            } else if (shape.Length == 2 && shape[0] == 2 && shape[1] > 0) {
                 // [2, T]
                 int tLen = (int)shape[1];
+                if (2L * tLen > data.Length) {
+                    throw new InvalidDataException($"ONNX waveform output [2,{tLen}] truncated ({data.Length} floats).");
+                }
                 int copyLen = Math.Min(chunkSamples, tLen);
                 string name = ResolveStemName(expectedStemNames, stemCounter++);
                 float[] l = new float[chunkSamples];
@@ -670,7 +686,15 @@ public static class NeuralAudioOfflinePipeline {
         int outCh = sShape.Length == 5 ? (int)sShape[2] : 4;
         int outBins = sShape.Length == 5 ? (int)sShape[3] : dimF;
         int outFrames = sShape.Length == 5 ? (int)sShape[4] : frames;
-        int outPlane = outBins * outFrames;
+        if (stemCount <= 0 || outCh < 4 || outBins <= 0 || outFrames <= 0) {
+            throw new InvalidDataException($"Unexpected SCNet STFT output shape [{string.Join(",", sShape)}].");
+        }
+        long outPlaneLong = (long)outBins * outFrames;
+        long totalNeeded = (long)stemCount * outCh * outPlaneLong;
+        if (totalNeeded > data.Length) {
+            throw new InvalidDataException($"SCNet STFT output buffer underflow: expected {totalNeeded} floats for [{string.Join(",", sShape)}], got {data.Length}.");
+        }
+        int outPlane = (int)outPlaneLong;
         float istftUnnorm = MathF.Sqrt(nFft);
 
         float[] stemRe = new float[outPlane];
@@ -743,6 +767,9 @@ public static class NeuralAudioOfflinePipeline {
         }
 
         float[] outData = outputs[0].Data;
+        if (outData.Length < 4L * plane) {
+            throw new InvalidDataException($"MDX-Net STFT output buffer underflow: expected {4L * plane} floats ([1,4,{dimF},{dimT}]), got {outData.Length}.");
+        }
         float[] outLRe = new float[plane];
         float[] outLIm = new float[plane];
         float[] outRRe = new float[plane];
@@ -819,6 +846,10 @@ public static class NeuralAudioOfflinePipeline {
 
         // Output mask [1, 1, 2050, frames, 2] -> packed bin = 2*freq + ch
         float[] mask = outputs[0].Data;
+        long requiredMaskElems = (long)bins * 2L * frames * 2L;
+        if (mask.Length < requiredMaskElems) {
+            throw new InvalidDataException($"Mel-Band RoFormer output mask underflow: expected {requiredMaskElems} floats, got {mask.Length}.");
+        }
         float[] leadLRe = new float[bins * frames];
         float[] leadLIm = new float[bins * frames];
         float[] leadRRe = new float[bins * frames];

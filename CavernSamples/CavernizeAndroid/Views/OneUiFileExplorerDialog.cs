@@ -460,7 +460,7 @@ public static class OneUiFileExplorerDialog {
                 nameTv.Ellipsize = TextUtils.TruncateAt.Middle;
 
                 string sizeStr = f.SizeBytes >= 1024 * 1024
-                    ? $"{f.SizeBytes / (1024.0 * 1024.0):0.1} MB"
+                    ? $"{f.SizeBytes / (1024.0 * 1024.0):0.0} MB"
                     : $"{Math.Max(1, f.SizeBytes / 1024)} KB";
                 TextView subTv = new(ctx) { Text = $"{f.Badge} • {sizeStr}", TextSize = 10.5f };
                 subTv.SetTextColor(f.IsSpatial ? OneUiTheme.PrimaryHigh : OneUiTheme.TextMuted);
