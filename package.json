@@ -1,0 +1,16 @@
+{
+  "name": "cavernize-android-workspace-preview",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Zero-dependency local preview server for AI Studio Build (real project stack is C# / .NET / Android).",
+  "type": "module",
+  "scripts": {
+    "dev": "node .agents/preview/server.mjs",
+    "start": "node .agents/preview/server.mjs",
+    "build": "node --check .agents/preview/server.mjs && node --check .agents/preview/dashboard.mjs",
+    "lint": "node --check .agents/preview/server.mjs && node --check .agents/preview/dashboard.mjs && node --test .agents/preview/dashboard.test.mjs",
+    "test": "node --test .agents/preview/dashboard.test.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

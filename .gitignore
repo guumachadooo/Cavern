@@ -17,3 +17,5 @@ packages/
 .agents/plugins/**/.hook_state.json
 .agents/plugins/**/.diagnostics*
 .agents/plugins/**/model_mode_cache.json
+node_modules/
+.playwright-cli/
