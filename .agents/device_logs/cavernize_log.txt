@@ -1,0 +1,2423 @@
+﻿[2026-11-21 09:36:25.387] [INFO] === Log reset | Cavernize v2.8.13 (build 13) | samsung SM-S938B ===
+[2026-11-21 09:36:27.874] [INFO] truehdd status: installed=True, local='/data/user/0/hu.sbence.cavern.cavernize/files/bin/truehdd', ver='0.6.3', remote='0.6.3'
+[2026-11-21 09:36:29.406] [INFO] FFmpeg status: installed=True, working=True, local='/data/user/0/hu.sbence.cavern.cavernize/files/bin/ffmpeg', ver='ndk-v2.0.0', remote='ndk-v2.0.0'
+[2026-11-21 09:37:37.696] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=False, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 09:37:40.152] [INFO] Activated official binaural profile 'thk_ku100_nf150' (16 ch, 384 taps @ 48000 Hz, d=1.50 m, minPhase=False, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 09:37:40.735] [INFO] Activated official binaural profile 'thk_ku100_ff_dfc' (16 ch, 384 taps @ 48000 Hz, d=3.25 m, minPhase=False, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 09:37:41.041] [INFO] Activated official binaural profile 'thk_ku100_nf050' (16 ch, 384 taps @ 48000 Hz, d=0.50 m, minPhase=False, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 09:37:41.439] [INFO] Activated official binaural profile 'thk_ku100_nf075' (16 ch, 384 taps @ 48000 Hz, d=0.75 m, minPhase=False, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 09:37:41.942] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=False, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 09:39:08.608] [INFO] Installed ONNX Runtime v1.29.0 (arm64-v8a, QNN=False) to /data/user/0/hu.sbence.cavern.cavernize/files/bin/onnxruntime
+[2026-11-21 09:44:20.971] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:44:24.931] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:45:39.344] [INFO] Downloaded neural model 'mbr_karaoke_lead_backing' to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/mel_band_roformer_karaoke_lead_backing.onnx
+[2026-11-21 09:45:55.146] [ERROR] UI Error shown: Could not find file '/data/user/0/hu.sbence.cavern.cavernize/files/neural_models/mel_band_roformer_karaoke_lead_backing.onnx.part'.
+[2026-11-21 09:47:51.611] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:47:54.413] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:47:57.935] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:53:47.920] [INFO] Installed ONNX Runtime v1.29.0 (arm64-v8a, QNN=False) to /data/user/0/hu.sbence.cavern.cavernize/files/bin/onnxruntime
+[2026-11-21 09:53:50.458] [INFO] Installed ONNX Runtime v1.29.0 (arm64-v8a, QNN=False) to /data/user/0/hu.sbence.cavern.cavernize/files/bin/onnxruntime
+[2026-11-21 09:53:51.554] [INFO] Installed ONNX Runtime v1.29.0 (arm64-v8a, QNN=False) to /data/user/0/hu.sbence.cavern.cavernize/files/bin/onnxruntime
+[2026-11-21 09:53:52.378] [INFO] Installed ONNX Runtime v1.29.0 (arm64-v8a, QNN=False) to /data/user/0/hu.sbence.cavern.cavernize/files/bin/onnxruntime
+[2026-11-21 09:54:52.159] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:54:53.707] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:55:12.824] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:55:15.529] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:55:31.143] [INFO] Downloaded neural model 'mbr_karaoke_lead_backing' to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/mel_band_roformer_karaoke_lead_backing.onnx
+[2026-11-21 09:55:35.190] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:55:36.246] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:55:38.004] [ERROR] UI Error shown: Response status code does not indicate success: 404 (Not Found).
+[2026-11-21 09:55:39.750] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:55:41.855] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:55:43.025] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 09:55:43.928] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 10:02:30.595] [INFO] Opened file: '/storage/emulated/0/Download/01. Fortnight (feat. Post Malone).m4a', tracks=1, embeddedArt=True
+[2026-11-21 10:02:30.602] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:03:49)
+[2026-11-21 10:02:30.796] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:02:31.930] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-21 10:02:45.077] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:02:45.821] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:02:50.549] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:02:50.999] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:03:11.282] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:03:58.302] [INFO] Activated official binaural profile 'sadie_d2_dfc' (16 ch, 256 taps @ 48000 Hz, d=1.20 m, minPhase=False, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 10:04:14.471] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:06:14.171] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:06:14.763] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:06:20.047] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:06:20.437] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:06:27.373] [INFO] Opened file: '/storage/emulated/0/Music/AM-DL-Atmos downloads/Taylor Swift/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/THE TORTURED POETS DEPARTMENT_ THE ANTHOLOGY/02. The Tortured Poets Department.m4a', tracks=1, embeddedArt=True
+[2026-11-21 10:06:27.382] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:04:53)
+[2026-11-21 10:06:27.524] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:06:28.939] [INFO] W09 LGSR synced '02. The Tortured Poets Department.flac' (FLAC 24-bit / 48 kHz): offset=-4147.32 samp (-86.40 ms), drift=0.00 ppm, conf=0.90.
+[2026-11-21 10:08:21.396] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:08:42.703] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:08:43.976] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:09:12.634] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:09:46.909] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:09:47.466] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:10:06.802] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-21 10:10:07.023] [INFO] FFmpeg probe exit=1 for '02. The Tortured Poets Department.flac'
+[2026-11-21 10:10:18.390] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:30:35.617] [INFO] === Cavernize v2.8.13 (build 13) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-21 10:30:35.814] [INFO] FFmpeg resolved at '/data/user/0/hu.sbence.cavern.cavernize/files/bin/ffmpeg' (Found=True)
+[2026-11-21 10:30:35.816] [INFO] truehdd resolved at '/data/user/0/hu.sbence.cavern.cavernize/files/bin/truehdd'
+[2026-11-21 10:30:35.854] [INFO] NativeProAudioBridge loaded: ABI=100, Caps=0x3 (PathA=True, PathB=True)
+[2026-11-21 10:30:35.951] [INFO] Activated official binaural profile 'sadie_d2_dfc' (16 ch, 256 taps @ 48000 Hz, d=1.20 m, minPhase=False, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 10:30:35.998] [INFO] AutoEq database ready: 127 offline bundled profiles, 8850 total catalog models.
+[2026-11-21 10:30:36.002] [INFO] Slot 6A AutoEq active: 'Audio-Technica ATH-M40x' (target=DiffuseFieldNeutral, hrirMode=DiffuseFieldCompensatedHrir, guard=False, sections=16, preamp=-5.58 dB)
+[2026-11-21 10:30:36.236] [INFO] Audio route changed -> 'Built-in Speaker' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-21 10:30:36.242] [INFO] Slot 6A AutoEq active: 'Audio-Technica ATH-M40x' (target=DiffuseFieldNeutral, hrirMode=DiffuseFieldCompensatedHrir, guard=False, sections=16, preamp=-5.58 dB)
+[2026-11-21 10:30:37.200] [INFO] Slot 6A AutoEq active: 'Audio-Technica ATH-M40x' (target=DiffuseFieldNeutral, hrirMode=DiffuseFieldCompensatedHrir, guard=False, sections=16, preamp=-5.58 dB)
+[2026-11-21 10:30:37.443] [INFO] truehdd status: installed=True, local='/data/user/0/hu.sbence.cavern.cavernize/files/bin/truehdd', ver='0.6.3', remote='0.6.3'
+[2026-11-21 10:30:37.447] [INFO] FFmpeg status: installed=True, working=True, local='/data/user/0/hu.sbence.cavern.cavernize/files/bin/ffmpeg', ver='ndk-v2.0.0', remote='ndk-v2.0.0'
+[2026-11-21 10:30:48.894] [INFO] Opened file: '/storage/emulated/0/Music/AM-DL-Atmos downloads/Billie Eilish/HIT ME HARD AND SOFT/01. SKINNY.m4a', tracks=1, embeddedArt=True
+[2026-11-21 10:30:48.899] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:03:39)
+[2026-11-21 10:30:49.211] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:31:01.502] [INFO] W09 LGSR synced '01 - SKINNY.flac' (FLAC 16-bit / 44.1 kHz): offset=-3330.35 samp (-69.38 ms), drift=-5.90 ppm, conf=0.79.
+[2026-11-21 10:32:09.589] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-21 10:32:10.090] [INFO] FFmpeg probe exit=1 for '01 - SKINNY.flac'
+[2026-11-21 10:32:24.045] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:32:27.877] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:32:28.087] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 44100 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:32:28.917] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:32:29.805] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:32:31.348] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:32:41.405] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 44100 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:32:48.972] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=False, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 10:32:49.334] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:04.018] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:06.266] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:11.091] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:14.255] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:15.478] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:16.202] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:16.794] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:17.202] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 44100 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:17.888] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 44100 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:18.508] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 44100 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:19.865] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 44100 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:20.287] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:25.106] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:48.391] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 10:33:51.514] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:52.024] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:53.415] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 44100 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:55.330] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:33:59.146] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 44100 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:34:00.242] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:34:00.842] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:34:02.543] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:34:07.579] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 44100 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:34:08.427] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:34:14.423] [INFO] Slot 6A AutoEq active: 'Audio-Technica ATH-M40x' (target=DiffuseFieldNeutral, hrirMode=DiffuseFieldCompensatedHrir, guard=False, sections=16, preamp=-5.58 dB)
+[2026-11-21 10:35:16.459] [INFO] Activated official binaural profile 'sadie_d2_dfc' (16 ch, 256 taps @ 48000 Hz, d=1.20 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 10:35:18.866] [INFO] Activated official binaural profile 'sadie_d1_dfc' (16 ch, 256 taps @ 48000 Hz, d=1.20 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 10:35:23.449] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 10:35:37.271] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:35:39.962] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:35:41.224] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:35:41.815] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:35:43.226] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:35:53.833] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:35:55.048] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:35:56.323] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:35:56.622] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:36:17.996] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:36:19.903] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:36:31.094] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=True, OutId=3, InId=22
+[2026-11-21 10:36:39.396] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:36:42.355] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=True, OutId=3, InId=22
+[2026-11-21 10:37:20.307] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=True, OutId=3, InId=22
+[2026-11-21 10:37:50.129] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:41:26.443] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:41:27.720] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:41:28.893] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:41:29.915] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:41:39.528] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:41:40.214] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:42:47.216] [INFO] Opened file: '/storage/emulated/0/Music/AM-DL-Atmos downloads/Billie Eilish/HIT ME HARD AND SOFT/02. LUNCH.m4a', tracks=1, embeddedArt=True
+[2026-11-21 10:42:47.225] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:02:59)
+[2026-11-21 10:42:47.381] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:42:56.049] [INFO] W09 LGSR synced '02 - LUNCH.flac' (FLAC 16-bit / 44.1 kHz): offset=-2800.43 samp (-58.34 ms), drift=-5.45 ppm, conf=0.93.
+[2026-11-21 10:44:27.752] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:44:30.963] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:44:36.315] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:44:42.425] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:44:44.160] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:44:46.319] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:44:58.531] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 10:44:59.541] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:12:25.758] [INFO] === Cavernize v2.8.13 (build 13) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-21 17:12:26.006] [INFO] FFmpeg resolved at '/data/user/0/hu.sbence.cavern.cavernize/files/bin/ffmpeg' (Found=True)
+[2026-11-21 17:12:26.008] [INFO] truehdd resolved at '/data/user/0/hu.sbence.cavern.cavernize/files/bin/truehdd'
+[2026-11-21 17:12:26.169] [INFO] NativeProAudioBridge loaded: ABI=100, Caps=0x3 (PathA=True, PathB=True)
+[2026-11-21 17:12:26.389] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 17:12:26.449] [INFO] AutoEq database ready: 127 offline bundled profiles, 8850 total catalog models.
+[2026-11-21 17:12:27.035] [INFO] Audio route changed -> 'Built-in Speaker' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-21 17:12:28.608] [INFO] FFmpeg status: installed=True, working=True, local='/data/user/0/hu.sbence.cavern.cavernize/files/bin/ffmpeg', ver='ndk-v2.0.0', remote='ndk-v2.0.0'
+[2026-11-21 17:12:28.613] [INFO] truehdd status: installed=True, local='/data/user/0/hu.sbence.cavern.cavernize/files/bin/truehdd', ver='0.6.3', remote='0.6.3'
+[2026-11-21 17:12:59.224] [INFO] Opened file: '/storage/emulated/0/Download/01. Fortnight (feat. Post Malone).m4a', tracks=1, embeddedArt=True
+[2026-11-21 17:12:59.235] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:03:49)
+[2026-11-21 17:12:59.466] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:13:02.307] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-21 17:13:35.102] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:13:42.579] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:13:42.839] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:14:14.314] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:15:11.280] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:15:26.501] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:15:27.549] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:15:28.366] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:15:28.711] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:15:29.393] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:15:30.163] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:15:30.596] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:15:37.030] [INFO] Slot 6A AutoEq active: 'Audio-Technica ATH-M40x' (target=DiffuseFieldNeutral, hrirMode=DiffuseFieldCompensatedHrir, guard=False, sections=16, preamp=-5.58 dB)
+[2026-11-21 17:16:05.329] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:11.628] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:11.879] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:12.121] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:15.110] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:15.361] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:16.301] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:16.543] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:18.541] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:18.779] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:19.006] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:32.348] [INFO] AudioTrack ready: 48000 Hz, Float32, LowLatency (256f), Route='Built-in Speaker', EstLatency=90.0 ms
+[2026-11-21 17:16:32.509] [INFO] AudioTrack ready: 48000 Hz, Float32, LowLatency (256f), Route='Built-in Speaker', EstLatency=90.0 ms
+[2026-11-21 17:16:33.770] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:35.578] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=True, OutId=3, InId=22
+[2026-11-21 17:16:38.924] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=False, OutId=3, InId=22
+[2026-11-21 17:16:39.902] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=True, OutId=3, InId=22
+[2026-11-21 17:18:43.156] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=True, OutId=3, InId=22
+[2026-11-21 17:19:27.806] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz, 128f, Duplex=True, OutId=3, InId=22
+[2026-11-21 17:20:49.979] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=0, bioItd=False, brirBypass=False)
+[2026-11-21 17:20:50.964] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-21 17:21:34.448] [INFO] Installed ONNX Runtime v1.29.0 (arm64-v8a, QNN=False) to /data/user/0/hu.sbence.cavern.cavernize/files/bin/onnxruntime
+[2026-11-21 17:21:38.449] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 17:21:46.646] [ERROR] UI Error shown: Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-21 17:21:56.182] [INFO] Installed ONNX Runtime v1.29.0 (arm64-v8a, QNN=False) to /data/user/0/hu.sbence.cavern.cavernize/files/bin/onnxruntime
+[2026-11-22 01:08:34.115] [INFO] === Cavernize v2.8.13 (build 13) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-22 01:08:34.350] [INFO] FFmpeg resolved at '/data/user/0/hu.sbence.cavern.cavernize/files/bin/ffmpeg' (Found=True)
+[2026-11-22 01:08:34.351] [INFO] truehdd resolved at '/data/user/0/hu.sbence.cavern.cavernize/files/bin/truehdd'
+[2026-11-22 01:08:34.442] [INFO] NativeProAudioBridge loaded: ABI=100, Caps=0x3 (PathA=True, PathB=True)
+[2026-11-22 01:08:34.613] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 01:08:34.655] [INFO] AutoEq database ready: 127 offline bundled profiles, 8850 total catalog models.
+[2026-11-22 01:08:34.890] [INFO] Audio route changed -> 'JBL PartyBox Stage 320' [BluetoothA2dp] (key='bt:jbl_partybox_stage_320')
+[2026-11-22 01:08:35.886] [INFO] FFmpeg status: installed=True, working=True, local='/data/user/0/hu.sbence.cavern.cavernize/files/bin/ffmpeg', ver='ndk-v2.0.0', remote='ndk-v2.0.0'
+[2026-11-22 01:08:35.887] [INFO] truehdd status: installed=True, local='/data/user/0/hu.sbence.cavern.cavernize/files/bin/truehdd', ver='0.6.3', remote='0.6.3'
+[2026-11-22 01:09:09.443] [INFO] === Cavernize v2.9.31 (build 31) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-22 01:09:09.586] [INFO] FFmpeg resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so' (Found=True)
+[2026-11-22 01:09:09.588] [INFO] truehdd resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so'
+[2026-11-22 01:09:09.659] [INFO] NativeProAudioBridge loaded: ABI=100, Caps=0x3 (PathA=True, PathB=True)
+[2026-11-22 01:09:09.806] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 01:09:09.859] [INFO] AutoEq database ready: 127 offline bundled profiles, 8850 total catalog models.
+[2026-11-22 01:09:10.111] [INFO] Audio route changed -> 'JBL PartyBox Stage 320' [BluetoothA2dp] (key='bt:jbl_partybox_stage_320')
+[2026-11-22 01:09:10.269] [INFO] === Cavernize v2.9.31 (build 31) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-22 01:09:10.272] [INFO] FFmpeg resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so' (Found=True)
+[2026-11-22 01:09:10.274] [INFO] truehdd resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so'
+[2026-11-22 01:09:10.379] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 01:09:10.485] [INFO] Audio route changed -> 'JBL PartyBox Stage 320' [BluetoothA2dp] (key='bt:jbl_partybox_stage_320')
+[2026-11-22 01:09:10.600] [INFO] truehdd status: installed=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so', ver='0.6.3'
+[2026-11-22 01:09:10.684] [INFO] truehdd status: installed=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so', ver='0.6.3'
+[2026-11-22 01:09:10.983] [INFO] FFmpeg status: installed=True, working=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so', ver='8.1.3'
+[2026-11-22 01:09:10.990] [INFO] FFmpeg status: installed=True, working=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so', ver='8.1.3'
+[2026-11-22 01:11:12.572] [INFO] Opened file: '/storage/emulated/0/Download/01. Fortnight (feat. Post Malone).m4a', tracks=1, embeddedArt=True
+[2026-11-22 01:11:12.580] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:03:49)
+[2026-11-22 01:11:13.002] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=498, InId=22
+[2026-11-22 01:11:14.284] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-22 01:11:17.989] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 01:11:20.784] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:12:33.408] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 01:12:35.447] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:13:11.221] [WARN] Neural model 'scnet_4stem_mobile' mirror #1 failed (https://huggingface.co/onnx-community/scnet-4stem-onnx/resolve/main/model_fp16.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:13:11.397] [WARN] Neural model 'scnet_4stem_mobile' mirror #2 failed (https://huggingface.co/ZFTurbo/Music-Source-Separation-Training/resolve/main/scnet_4stem_fp16.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:13:11.405] [ERROR] UI Error shown: Download automático indisponível para SCNet 4-Stem (Fast Mobile). Baixe/converta o arquivo .onnx e use 'Importar .onnx'. (Response status code does not indicate success: 401 (Unauthorized).)
+[2026-11-22 01:13:26.408] [WARN] Neural model 'ap_bwe_flashsr_48k' mirror #1 failed (https://huggingface.co/onnx-community/flashsr-bwe-48k-onnx/resolve/main/model.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:13:26.587] [WARN] Neural model 'ap_bwe_flashsr_48k' mirror #2 failed (https://huggingface.co/ysharma3501/FlashSR/resolve/main/ap_bwe_48k.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:13:26.592] [ERROR] UI Error shown: Download automático indisponível para AP-BWE / FlashSR 48 kHz Bandwidth Extension. Baixe/converta o arquivo .onnx e use 'Importar .onnx'. (Response status code does not indicate success: 401 (Unauthorized).)
+[2026-11-22 01:14:14.743] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:14:26.265] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:15:42.865] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:18:37.268] [WARN] Neural model 'scnet_4stem_mobile' mirror #1 failed (https://huggingface.co/onnx-community/scnet-4stem-onnx/resolve/main/model_fp16.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:18:37.478] [WARN] Neural model 'scnet_4stem_mobile' mirror #2 failed (https://huggingface.co/ZFTurbo/Music-Source-Separation-Training/resolve/main/scnet_4stem_fp16.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:18:37.480] [ERROR] UI Error shown: Download automático indisponível para SCNet 4-Stem (Fast Mobile). Baixe/converta o arquivo .onnx e use 'Importar .onnx'. (Response status code does not indicate success: 401 (Unauthorized).)
+[2026-11-22 01:21:45.473] [WARN] Neural model 'scnet_4stem_mobile' mirror #1 failed (https://huggingface.co/onnx-community/scnet-4stem-onnx/resolve/main/model_fp16.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:21:45.670] [WARN] Neural model 'scnet_4stem_mobile' mirror #2 failed (https://huggingface.co/ZFTurbo/Music-Source-Separation-Training/resolve/main/scnet_4stem_fp16.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:21:45.675] [ERROR] UI Error shown: Download automático indisponível para SCNet 4-Stem (Fast Mobile). Baixe/converta o arquivo .onnx e use 'Importar .onnx'. (Response status code does not indicate success: 401 (Unauthorized).)
+[2026-11-22 01:21:46.927] [WARN] Neural model 'mbr_vocals_studio' mirror #1 failed (https://huggingface.co/santiquiroz/port-bs-roformer-onnx/resolve/main/mel_band_roformer_vocals_kim.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:21:47.123] [WARN] Neural model 'mbr_vocals_studio' mirror #2 failed (https://huggingface.co/onnx-community/mel-band-roformer-vocals-onnx/resolve/main/model.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:21:47.131] [ERROR] UI Error shown: Download automático indisponível para Mel-Band RoFormer Vocals (Studio). Baixe/converta o arquivo .onnx e use 'Importar .onnx'. (Response status code does not indicate success: 401 (Unauthorized).)
+[2026-11-22 01:21:58.461] [WARN] Neural model 'ap_bwe_flashsr_48k' mirror #1 failed (https://huggingface.co/onnx-community/flashsr-bwe-48k-onnx/resolve/main/model.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:21:58.646] [WARN] Neural model 'ap_bwe_flashsr_48k' mirror #2 failed (https://huggingface.co/ysharma3501/FlashSR/resolve/main/ap_bwe_48k.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:21:58.648] [ERROR] UI Error shown: Download automático indisponível para AP-BWE / FlashSR 48 kHz Bandwidth Extension. Baixe/converta o arquivo .onnx e use 'Importar .onnx'. (Response status code does not indicate success: 401 (Unauthorized).)
+[2026-11-22 01:21:59.965] [WARN] Neural model 'apollo_codec_restore' mirror #1 failed (https://huggingface.co/onnx-community/apollo-audio-restore-onnx/resolve/main/model.onnx): Response status code does not indicate success: 401 (Unauthorized).
+[2026-11-22 01:22:00.151] [WARN] Neural model 'apollo_codec_restore' mirror #2 failed (https://huggingface.co/JusperLee/Apollo/resolve/main/apollo_band_split_44k.onnx): Response status code does not indicate success: 404 (Not Found).
+[2026-11-22 01:22:00.156] [ERROR] UI Error shown: Download automático indisponível para Apollo Band-Split Codec Restorer. Baixe/converta o arquivo .onnx e use 'Importar .onnx'. (Response status code does not indicate success: 404 (Not Found).)
+[2026-11-22 01:23:34.721] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-22 01:23:36.874] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-22 01:23:38.388] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-22 01:24:26.513] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-22 01:24:28.137] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-22 01:24:29.409] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-22 01:24:30.518] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-22 01:34:49.677] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:35:04.364] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 01:35:06.540] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:35:08.575] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 01:35:20.269] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:35:31.569] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:35:40.574] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:35:42.024] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:35:43.026] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:35:57.746] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:36:00.357] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:36:01.874] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:36:27.369] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:36:33.352] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 01:36:33.508] [INFO] FFmpeg probe exit=1 for '01. Fortnight.flac'
+[2026-11-22 01:36:57.203] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:05.340] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:05.946] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:08.755] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:14.084] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:15.914] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:16.931] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:18.503] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:19.051] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:23.949] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:29.172] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:30.164] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:31.406] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:37.898] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:38.986] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:41.289] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:37:41.838] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:38:08.437] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:38:11.971] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 01:38:12.135] [INFO] FFmpeg probe exit=1 for '02. The Tortured Poets Department.flac'
+[2026-11-22 01:38:18.936] [INFO] Opened file: '/storage/emulated/0/Download/TTPD (Explicit) [Qobuz 24-Bit 48 kHz]/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/02. The Tortured Poets Department.flac', tracks=1, embeddedArt=True
+[2026-11-22 01:38:18.944] [INFO] Active track ready: Faixa de áudio baseada em canais (0:04:51)
+[2026-11-22 01:38:19.157] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:38:47.925] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:46:33.010] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:47:09.254] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:48:47.894] [INFO] Native Cavern reader fallback (IndexOutOfRangeException): inspecting container/codec...
+[2026-11-22 01:48:48.084] [INFO] FFmpeg probe exit=1 for '00327_P1265029657_Anull_video_gr660_sdr_830x1108-.mp4.mp4'
+[2026-11-22 01:48:48.128] [ERROR] OpenLocalPathWithFallbackAsync: InvalidOperationException: Este arquivo de vídeo não possui nenhuma faixa de áudio.
+   at CavernizeAndroid.MainActivity.TryOpenWithSmartFallbacks(String resolved, String& fallbackSessionDir)
+   at CavernizeAndroid.MainActivity.OpenAudioFileResilient(String resolved, String& fallbackSessionDir)
+   at CavernizeAndroid.MainActivity.<>c__DisplayClass284_0.<OpenLocalPathWithFallbackAsync>b__0()
+[2026-11-22 01:48:48.132] [ERROR] UI Error shown: Este arquivo de vídeo não possui nenhuma faixa de áudio.
+[2026-11-22 01:49:13.435] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 01:49:13.626] [INFO] FFmpeg probe exit=183 for 'Devil - August James (1).mp3'
+[2026-11-22 01:49:13.632] [WARN] Android MediaCodec fallback failed (IOException): Failed to instantiate extractor.
+[2026-11-22 01:49:13.637] [ERROR] OpenLocalPathWithFallbackAsync: IOException: Failed to instantiate extractor.
+   at Android.Media.MediaExtractor.SetDataSource(String path)
+   at CavernizeAndroid.Audio.AndroidMediaFallbackDecoder.DecodeToWav(String inputPath, String outputFolder, Action`1 onProgress, CancellationToken token)
+   at CavernizeAndroid.MainActivity.TryOpenWithSmartFallbacks(String resolved, String& fallbackSessionDir)
+   at CavernizeAndroid.MainActivity.OpenAudioFileResilient(String resolved, String& fallbackSessionDir)
+   at CavernizeAndroid.MainActivity.<>c__DisplayClass284_0.<OpenLocalPathWithFallbackAsync>b__0()
+  --- End of managed Java.IO.IOException stack trace ---
+java.io.IOException: Failed to instantiate extractor.
+	at android.media.MediaExtractor.nativeSetDataSource(Native Method)
+	at android.media.MediaExtractor.setDataSource(MediaExtractor.java:202)
+
+[2026-11-22 01:49:13.638] [ERROR] UI Error shown: Failed to instantiate extractor.
+[2026-11-22 01:49:17.021] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 01:49:17.222] [INFO] FFmpeg probe exit=183 for 'Devil - August James (1).mp3'
+[2026-11-22 01:49:17.229] [WARN] Android MediaCodec fallback failed (IOException): Failed to instantiate extractor.
+[2026-11-22 01:49:17.230] [ERROR] OpenLocalPathWithFallbackAsync: IOException: Failed to instantiate extractor.
+   at Android.Media.MediaExtractor.SetDataSource(String path)
+   at CavernizeAndroid.Audio.AndroidMediaFallbackDecoder.DecodeToWav(String inputPath, String outputFolder, Action`1 onProgress, CancellationToken token)
+   at CavernizeAndroid.MainActivity.TryOpenWithSmartFallbacks(String resolved, String& fallbackSessionDir)
+   at CavernizeAndroid.MainActivity.OpenAudioFileResilient(String resolved, String& fallbackSessionDir)
+   at CavernizeAndroid.MainActivity.<>c__DisplayClass284_0.<OpenLocalPathWithFallbackAsync>b__0()
+  --- End of managed Java.IO.IOException stack trace ---
+java.io.IOException: Failed to instantiate extractor.
+	at android.media.MediaExtractor.nativeSetDataSource(Native Method)
+	at android.media.MediaExtractor.setDataSource(MediaExtractor.java:202)
+
+[2026-11-22 01:49:17.231] [ERROR] UI Error shown: Failed to instantiate extractor.
+[2026-11-22 01:49:21.342] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 01:49:21.539] [INFO] FFmpeg probe exit=1 for '06 - Altitude Sickness.flac'
+[2026-11-22 01:49:28.404] [INFO] Opened file: '/storage/emulated/0/Music/Musics/August James/August James - Venison Forever/06 - Altitude Sickness.flac', tracks=1, embeddedArt=True
+[2026-11-22 01:49:28.412] [INFO] Active track ready: Faixa de áudio baseada em canais (0:03:20)
+[2026-11-22 01:49:28.697] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 01:59:52.336] [INFO] === Cavernize v2.9.31 (build 31) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-22 01:59:52.469] [INFO] FFmpeg resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so' (Found=True)
+[2026-11-22 01:59:52.471] [INFO] truehdd resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so'
+[2026-11-22 01:59:52.593] [INFO] NativeProAudioBridge loaded: ABI=100, Caps=0x3 (PathA=True, PathB=True)
+[2026-11-22 01:59:52.717] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 01:59:52.767] [INFO] AutoEq database ready: 127 offline bundled profiles, 8850 total catalog models.
+[2026-11-22 01:59:52.975] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 01:59:53.130] [INFO] truehdd status: installed=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so', ver='0.6.3'
+[2026-11-22 01:59:53.367] [INFO] FFmpeg status: installed=True, working=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so', ver='8.1.3'
+[2026-11-22 02:00:04.215] [INFO] === Cavernize v2.9.31 (build 31) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-22 02:00:04.371] [INFO] FFmpeg resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so' (Found=True)
+[2026-11-22 02:00:04.371] [INFO] truehdd resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so'
+[2026-11-22 02:00:04.399] [INFO] NativeProAudioBridge loaded: ABI=100, Caps=0x3 (PathA=True, PathB=True)
+[2026-11-22 02:00:04.534] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 02:00:04.586] [INFO] AutoEq database ready: 127 offline bundled profiles, 8850 total catalog models.
+[2026-11-22 02:00:04.793] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 02:00:04.919] [INFO] truehdd status: installed=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so', ver='0.6.3'
+[2026-11-22 02:00:04.935] [INFO] FFmpeg status: installed=True, working=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so', ver='8.1.3'
+[2026-11-22 02:01:01.537] [INFO] === Cavernize v2.9.31 (build 31) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-22 02:01:01.685] [INFO] FFmpeg resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so' (Found=True)
+[2026-11-22 02:01:01.686] [INFO] truehdd resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so'
+[2026-11-22 02:01:01.770] [INFO] NativeProAudioBridge loaded: ABI=100, Caps=0x3 (PathA=True, PathB=True)
+[2026-11-22 02:01:01.939] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 02:01:02.000] [INFO] AutoEq database ready: 127 offline bundled profiles, 8850 total catalog models.
+[2026-11-22 02:01:02.277] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 02:01:02.430] [INFO] truehdd status: installed=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so', ver='0.6.3'
+[2026-11-22 02:01:02.809] [INFO] FFmpeg status: installed=True, working=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so', ver='8.1.3'
+[2026-11-22 11:28:16.551] [INFO] === Cavernize v2.9.31 (build 31) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-22 11:28:16.709] [INFO] FFmpeg resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so' (Found=True)
+[2026-11-22 11:28:16.711] [INFO] truehdd resolved at '/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so'
+[2026-11-22 11:28:16.780] [INFO] NativeProAudioBridge loaded: ABI=100, Caps=0x3 (PathA=True, PathB=True)
+[2026-11-22 11:28:16.910] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 11:28:16.957] [INFO] AutoEq database ready: 127 offline bundled profiles, 8850 total catalog models.
+[2026-11-22 11:28:17.192] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 11:28:17.336] [INFO] truehdd status: installed=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libtruehdd.so', ver='0.6.3'
+[2026-11-22 11:28:17.730] [INFO] FFmpeg status: installed=True, working=True, local='/data/app/~~55EyVUVNiXrSFeHpNWrP9Q==/hu.sbence.cavern.cavernize-FPvW89Xan22IM3K3ya2a9g==/lib/arm64/libffmpeg.so', ver='8.1.3'
+[2026-11-22 11:28:37.480] [INFO] === Cavernize v2.9.32 (build 32) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-22 11:28:37.666] [INFO] FFmpeg resolved at '/data/app/~~rsv4g-xDioMGg8dXgeOIbg==/hu.sbence.cavern.cavernize-yMjWKuLCMFqploezTtm8gQ==/lib/arm64/libffmpeg.so' (Found=True)
+[2026-11-22 11:28:37.667] [INFO] truehdd resolved at '/data/app/~~rsv4g-xDioMGg8dXgeOIbg==/hu.sbence.cavern.cavernize-yMjWKuLCMFqploezTtm8gQ==/lib/arm64/libtruehdd.so'
+[2026-11-22 11:28:37.758] [INFO] NativeProAudioBridge loaded: ABI=100, Caps=0x3 (PathA=True, PathB=True)
+[2026-11-22 11:28:37.988] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 11:28:38.051] [INFO] AutoEq database ready: 127 offline bundled profiles, 8850 total catalog models.
+[2026-11-22 11:28:38.377] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 11:28:38.624] [INFO] truehdd status: installed=True, local='/data/app/~~rsv4g-xDioMGg8dXgeOIbg==/hu.sbence.cavern.cavernize-yMjWKuLCMFqploezTtm8gQ==/lib/arm64/libtruehdd.so', ver='0.6.3'
+[2026-11-22 11:28:38.645] [INFO] === Cavernize v2.9.32 (build 32) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-22 11:28:38.647] [INFO] FFmpeg resolved at '/data/app/~~rsv4g-xDioMGg8dXgeOIbg==/hu.sbence.cavern.cavernize-yMjWKuLCMFqploezTtm8gQ==/lib/arm64/libffmpeg.so' (Found=True)
+[2026-11-22 11:28:38.648] [INFO] truehdd resolved at '/data/app/~~rsv4g-xDioMGg8dXgeOIbg==/hu.sbence.cavern.cavernize-yMjWKuLCMFqploezTtm8gQ==/lib/arm64/libtruehdd.so'
+[2026-11-22 11:28:38.764] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 11:28:38.887] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 11:28:38.999] [INFO] truehdd status: installed=True, local='/data/app/~~rsv4g-xDioMGg8dXgeOIbg==/hu.sbence.cavern.cavernize-yMjWKuLCMFqploezTtm8gQ==/lib/arm64/libtruehdd.so', ver='0.6.3'
+[2026-11-22 11:28:39.246] [INFO] FFmpeg status: installed=True, working=True, local='/data/app/~~rsv4g-xDioMGg8dXgeOIbg==/hu.sbence.cavern.cavernize-yMjWKuLCMFqploezTtm8gQ==/lib/arm64/libffmpeg.so', ver='8.1.3'
+[2026-11-22 11:28:39.252] [INFO] FFmpeg status: installed=True, working=True, local='/data/app/~~rsv4g-xDioMGg8dXgeOIbg==/hu.sbence.cavern.cavernize-yMjWKuLCMFqploezTtm8gQ==/lib/arm64/libffmpeg.so', ver='8.1.3'
+[2026-11-22 11:29:36.957] [INFO] Opened file: '/storage/emulated/0/Download/01. Fortnight (feat. Post Malone).m4a', tracks=1, embeddedArt=True
+[2026-11-22 11:29:36.970] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:03:49)
+[2026-11-22 11:29:37.556] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 11:29:38.947] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-22 11:29:56.150] [INFO] Downloaded neural model 'scnet_4stem_mobile' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/scnet_4stem_fp16.onnx
+[2026-11-22 11:29:59.786] [INFO] Downloaded neural model 'mbr_vocals_studio' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/kim_vocal_2.onnx
+[2026-11-22 11:30:04.618] [INFO] Downloaded neural model 'mbr_dereverb_echo' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/reverb_hq_foxjoy.onnx
+[2026-11-22 11:30:11.126] [INFO] Downloaded neural model 'bs_roformer_6stem_studio' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/htdemucs_6s_fp16.onnx
+[2026-11-22 11:30:13.269] [INFO] Downloaded neural model 'ap_bwe_flashsr_48k' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/flashsr_48k.onnx
+[2026-11-22 11:30:18.422] [INFO] Downloaded neural model 'apollo_codec_restore' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/apollo_band_split_44k.onnx
+[2026-11-22 11:30:23.216] [INFO] Downloaded neural model 'mbr_debleed_denoise' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/uvr_mdxnet_crowd_hq_1.onnx
+[2026-11-22 11:30:31.240] [INFO] Downloaded neural model 'mbr_karaoke_lead_backing' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/uvr_mdxnet_kara_2.onnx
+[2026-11-22 11:31:10.234] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 11:33:04.881] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 11:33:36.728] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 11:33:46.218] [INFO] Opened file: '/storage/emulated/0/Music/AM-DL-Atmos downloads/Taylor Swift/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/THE TORTURED POETS DEPARTMENT_ THE ANTHOLOGY/02. The Tortured Poets Department.m4a', tracks=1, embeddedArt=True
+[2026-11-22 11:33:46.283] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:04:53)
+[2026-11-22 11:33:46.412] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 11:33:54.216] [INFO] W09 LGSR synced '02. The Tortured Poets Department.flac' (FLAC 16-bit / 48 kHz): offset=-4147.32 samp (-86.40 ms), drift=0.00 ppm, conf=0.90.
+[2026-11-22 11:34:27.758] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 11:34:27.938] [INFO] FFmpeg probe exit=1 for '02. The Tortured Poets Department.flac'
+[2026-11-22 11:34:39.901] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:05:18.368] [INFO] === Cavernize v2.9.33 (build 33) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-22 12:05:18.475] [INFO] FFmpeg resolved at '/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so' (Found=True)
+[2026-11-22 12:05:18.476] [INFO] truehdd resolved at '/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libtruehdd.so'
+[2026-11-22 12:05:18.548] [INFO] NativeProAudioBridge loaded: ABI=100, Caps=0x3 (PathA=True, PathB=True)
+[2026-11-22 12:05:18.675] [INFO] Activated official binaural profile 'thk_ku100_nf100' (16 ch, 384 taps @ 48000 Hz, d=1.00 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 12:05:18.723] [INFO] AutoEq database ready: 127 offline bundled profiles, 8850 total catalog models.
+[2026-11-22 12:05:18.946] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 12:05:19.075] [INFO] truehdd status: installed=True, local='/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libtruehdd.so', ver='0.6.3'
+[2026-11-22 12:05:19.742] [INFO] FFmpeg status: installed=True, working=True, local='/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so', ver='8.1.3'
+[2026-11-22 12:05:45.638] [INFO] Opened file: '/storage/emulated/0/Download/01. Fortnight (feat. Post Malone).m4a', tracks=1, embeddedArt=True
+[2026-11-22 12:05:45.668] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:03:49)
+[2026-11-22 12:05:46.479] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:05:49.554] [INFO] W09 LGSR synced '01. Fortnight.flac' (FLAC 24-bit / 48 kHz): offset=-4831.27 samp (-100.65 ms), drift=-0.29 ppm, conf=0.70.
+[2026-11-22 12:05:53.121] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:05:53.342] [INFO] FFmpeg probe ok (1 audio stream(s), 2291s) for '01. Fortnight.flac'
+[2026-11-22 12:05:54.128] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Download/TTPD (Explicit) [Qobuz 24-Bit 48 kHz]/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/01. Fortnight.flac" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_62997236acd64c69bf0314a40bfba4f1/decoded.wav"
+  stderr: Input #0, flac, from '/storage/emulated/0/Download/TTPD (Explicit) [Qobuz 24-Bit 48 kHz]/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/01. Fortnight.flac':
+  Metadata:
+    ALBUM           : THE TORTURED POETS DEPARTMENT: THE ANTHOLOGY
+    album_artist    : Taylor Swift
+    ARTIST          : Taylor Swift;Post Malone
+    COMPOSER        : Jack Antonoff;Taylor Swift;Austin Post
+    COPYRIGHT       : ℗ 2024 Taylor Swift
+    DATE            : 2024-04-19
+    disc            : 1
+    DISCTOTAL       : 1
+    ENCODER         : Lavf59.27.100
+    GENRE           : Pop
+    ISRC            : USUG12401028
+    TITLE           : Fortnight
+    track           : 01
+    TRACKTOTAL      : 31
+    UPC             : 0602465709216
+  Duration: 00:03:48.97, start: 0.000000, bitrate: 1695 kb/s
+  Stream #0:0: Audio: flac, 48000 Hz, stereo, s32 (24 bit)
+  Stream #0:1: Video: mjpeg (Baseline), yuvj444p(pc, bt470bg/unknown/unknown), 600x600 [SAR 300:300 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+    Metadata:
+      comment         : Cover (front)
+Stream mapping:
+  Stream #0:0 -> #0:0 (flac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_62997236acd64c69bf0314a40bfba4f1/decoded.wav':
+  Metadata:
+    IPRD            : THE TORTURED POETS DEPARTMENT: THE ANTHOLOGY
+    album_artist    : Taylor Swift
+    IART            : Taylor Swift;Post Malone
+    COMPOSER        : Jack Antonoff;Taylor Swift;Austin Post
+    ICOP            : ℗ 2024 Taylor Swift
+    ICRD            : 2024-04-19
+    disc            : 1
+    DISCTOTAL       : 1
+    UPC             : 0602465709216
+    IGNR            : Pop
+    ISRC            : USUG12401028
+    INAM            : Fortnight
+    IPRT            : 01
+    TRACKTOTAL      : 31
+    ISFT            : Lavf62.12.103
+  Stream #0:0: Audio: pcm_s24le ([1][0][0][0] / 0x0001), 48000 Hz, stereo, s32 (24 bit), 2304 kb/s
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+size=   56832KiB time=00:03:22.56 bitrate=2298.4kbits/s speed= 405x elapsed=0:00:00.50    
+[out#0/wav @ 0xb400007addd1e5f0] video:0KiB audio:64397KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000516%
+size=   64397KiB time=00:03:48.96 bitrate=2304.0kbits/s speed= 408x elapsed=0:00:00.56
+[2026-11-22 12:07:31.170] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:07:31.309] [INFO] FFmpeg probe ok (1 audio stream(s), 2291s) for '01. Fortnight.flac'
+[2026-11-22 12:07:31.673] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Download/TTPD (Explicit) [Qobuz 24-Bit 48 kHz]/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/01. Fortnight.flac" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_f82fe98063084ba9a52d3be10e0e51d9/decoded.wav"
+  stderr: Input #0, flac, from '/storage/emulated/0/Download/TTPD (Explicit) [Qobuz 24-Bit 48 kHz]/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/01. Fortnight.flac':
+  Metadata:
+    ALBUM           : THE TORTURED POETS DEPARTMENT: THE ANTHOLOGY
+    album_artist    : Taylor Swift
+    ARTIST          : Taylor Swift;Post Malone
+    COMPOSER        : Jack Antonoff;Taylor Swift;Austin Post
+    COPYRIGHT       : ℗ 2024 Taylor Swift
+    DATE            : 2024-04-19
+    disc            : 1
+    DISCTOTAL       : 1
+    ENCODER         : Lavf59.27.100
+    GENRE           : Pop
+    ISRC            : USUG12401028
+    TITLE           : Fortnight
+    track           : 01
+    TRACKTOTAL      : 31
+    UPC             : 0602465709216
+  Duration: 00:03:48.97, start: 0.000000, bitrate: 1695 kb/s
+  Stream #0:0: Audio: flac, 48000 Hz, stereo, s32 (24 bit)
+  Stream #0:1: Video: mjpeg (Baseline), yuvj444p(pc, bt470bg/unknown/unknown), 600x600 [SAR 300:300 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+    Metadata:
+      comment         : Cover (front)
+Stream mapping:
+  Stream #0:0 -> #0:0 (flac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_f82fe98063084ba9a52d3be10e0e51d9/decoded.wav':
+  Metadata:
+    IPRD            : THE TORTURED POETS DEPARTMENT: THE ANTHOLOGY
+    album_artist    : Taylor Swift
+    IART            : Taylor Swift;Post Malone
+    COMPOSER        : Jack Antonoff;Taylor Swift;Austin Post
+    ICOP            : ℗ 2024 Taylor Swift
+    ICRD            : 2024-04-19
+    disc            : 1
+    DISCTOTAL       : 1
+    UPC             : 0602465709216
+    IGNR            : Pop
+    ISRC            : USUG12401028
+    INAM            : Fortnight
+    IPRT            : 01
+    TRACKTOTAL      : 31
+    ISFT            : Lavf62.12.103
+  Stream #0:0: Audio: pcm_s24le ([1][0][0][0] / 0x0001), 48000 Hz, stereo, s32 (24 bit), 2304 kb/s
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+[out#0/wav @ 0xb400007d58434b70] video:0KiB audio:64397KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000516%
+size=   64397KiB time=00:03:48.96 bitrate=2304.0kbits/s speed=1.1e+03x elapsed=0:00:00.20
+[2026-11-22 12:07:52.037] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:09:38.772] [INFO] Opened file: '/storage/emulated/0/Music/AM-DL-Atmos downloads/Taylor Swift/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/THE TORTURED POETS DEPARTMENT_ THE ANTHOLOGY/02. The Tortured Poets Department.m4a', tracks=1, embeddedArt=True
+[2026-11-22 12:09:38.788] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:04:53)
+[2026-11-22 12:09:38.951] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:09:39.632] [INFO] W09 LGSR synced '02. The Tortured Poets Department.flac' (FLAC 24-bit / 48 kHz): offset=-4147.32 samp (-86.40 ms), drift=0.00 ppm, conf=0.90.
+[2026-11-22 12:10:11.696] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:10:18.461] [INFO] Audio route changed -> 'USB-Audio - Scarlett 2i2 4th Gen' [UsbDac] (key='usb:usb_audio_scarlett_2i2_4th_gen')
+[2026-11-22 12:10:19.354] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:10:19.359] [INFO] Audio route changed -> 'USB-Audio - Scarlett 2i2 4th Gen' [UsbDac] (key='usb:usb_audio_scarlett_2i2_4th_gen')
+[2026-11-22 12:10:19.619] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=1145, InId=22
+[2026-11-22 12:10:19.811] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=1145, InId=1152
+[2026-11-22 12:11:56.066] [INFO] Activated official binaural profile 'thk_ku100_ff_raw' (16 ch, 128 taps @ 48000 Hz, d=3.25 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 12:12:08.592] [INFO] Activated official binaural profile 'sadie_d1_dfc' (16 ch, 256 taps @ 48000 Hz, d=1.20 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 12:12:14.124] [INFO] Activated official binaural profile 'sadie_d1_brir' (16 ch, 14400 taps @ 48000 Hz, d=1.50 m, minPhase=False, magLsO=0, bioItd=False, brirBypass=True)
+[2026-11-22 12:12:18.028] [INFO] Activated official binaural profile 'sadie_d1_dfc' (16 ch, 256 taps @ 48000 Hz, d=1.20 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 12:12:30.332] [INFO] Activated official binaural profile 'sadie_d1_brir' (16 ch, 14400 taps @ 48000 Hz, d=1.50 m, minPhase=False, magLsO=0, bioItd=False, brirBypass=True)
+[2026-11-22 12:12:45.102] [INFO] Activated official binaural profile 'sadie_d1_brir' (16 ch, 14400 taps @ 48000 Hz, d=1.50 m, minPhase=False, magLsO=0, bioItd=False, brirBypass=True)
+[2026-11-22 12:12:48.821] [INFO] Activated official binaural profile 'sadie_d2_brir' (16 ch, 14400 taps @ 48000 Hz, d=1.50 m, minPhase=False, magLsO=0, bioItd=False, brirBypass=True)
+[2026-11-22 12:12:55.483] [INFO] Activated official binaural profile 'sadie_d1_brir' (16 ch, 14400 taps @ 48000 Hz, d=1.50 m, minPhase=False, magLsO=0, bioItd=False, brirBypass=True)
+[2026-11-22 12:13:00.949] [INFO] Minimum-Phase + ITD set to False (automatically bypassed while BRIR 'sadie_d1_brir' is active).
+[2026-11-22 12:13:02.184] [INFO] Minimum-Phase + ITD set to True (automatically bypassed while BRIR 'sadie_d1_brir' is active).
+[2026-11-22 12:13:21.641] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=1145, InId=1152
+[2026-11-22 12:13:23.332] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=1145, InId=1152
+[2026-11-22 12:13:28.849] [WARN] ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.
+[2026-11-22 12:13:28.851] [WARN] W18/W19.b PrepareActiveTrackNeuralStemsAsync: ONNX Runtime native library could not be initialized. Reinstall ONNX Runtime in Settings.
+[2026-11-22 12:13:41.976] [WARN] ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.
+[2026-11-22 12:13:41.977] [WARN] W18/W19.b PrepareActiveTrackNeuralStemsAsync: ONNX Runtime native library could not be initialized. Reinstall ONNX Runtime in Settings.
+[2026-11-22 12:13:46.884] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=1145, InId=1152
+[2026-11-22 12:13:47.508] [INFO] UsbProAudioDeviceManager: Requested Android USB permission for Focusrite Scarlett 2i2 4th Gen (VID=0x1235, PID=0x8219)
+[2026-11-22 12:13:48.633] [INFO] UsbProAudioDeviceManager: USB permission result granted=True
+[2026-11-22 12:13:48.645] [INFO] USB Pro-Audio opened: 'Focusrite Scarlett 2i2 (4th Gen)' (VID=0x1235, PID=0x8219, UAC2=True, Duplex=True, ClockID=41, VendorIf=3, Scarlett=Gen4, Rates=[], FD=164)
+[2026-11-22 12:13:48.834] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=False, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:13:52.545] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=False, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:14:35.022] [INFO] Opened file: '/storage/emulated/0/Music/AM-DL-Atmos downloads/Taylor Swift/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/THE TORTURED POETS DEPARTMENT_ THE ANTHOLOGY/03. My Boy Only Breaks His Favorite Toys.m4a', tracks=1, embeddedArt=True
+[2026-11-22 12:14:35.029] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:03:23)
+[2026-11-22 12:14:35.105] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=False, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:14:41.459] [INFO] W09 LGSR synced '03. My Boy Only Breaks His Favorite Toys.flac' (FLAC 16-bit / 48 kHz): offset=-3137.43 samp (-65.36 ms), drift=+0.03 ppm, conf=0.91.
+[2026-11-22 12:15:32.733] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:15:33.008] [INFO] FFmpeg probe ok (1 audio stream(s), 2041s) for '03. My Boy Only Breaks His Favorite Toys.flac'
+[2026-11-22 12:15:33.529] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Download/TTPD (Explicit) [Qobuz 24-Bit 48 kHz]/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/03. My Boy Only Breaks His Favorite Toys.flac" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_fb5e1046cf3646769a6e924604ae426b/decoded.wav"
+  stderr: Input #0, flac, from '/storage/emulated/0/Download/TTPD (Explicit) [Qobuz 24-Bit 48 kHz]/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/03. My Boy Only Breaks His Favorite Toys.flac':
+  Metadata:
+    ALBUM           : THE TORTURED POETS DEPARTMENT: THE ANTHOLOGY
+    album_artist    : Taylor Swift
+    ARTIST          : Taylor Swift
+    COMPOSER        : Taylor Swift
+    COPYRIGHT       : ℗ 2024 Taylor Swift
+    DATE            : 2024-04-19
+    disc            : 1
+    DISCTOTAL       : 1
+    ENCODER         : Lavf59.27.100
+    GENRE           : Pop
+    ISRC            : USUG12401030
+    TITLE           : My Boy Only Breaks His Favorite Toys
+    track           : 03
+    TRACKTOTAL      : 31
+    UPC             : 0602465709216
+  Duration: 00:03:23.80, start: 0.000000, bitrate: 1812 kb/s
+  Stream #0:0: Audio: flac, 48000 Hz, stereo, s32 (24 bit)
+  Stream #0:1: Video: mjpeg (Baseline), yuvj444p(pc, bt470bg/unknown/unknown), 600x600 [SAR 300:300 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+    Metadata:
+      comment         : Cover (front)
+Stream mapping:
+  Stream #0:0 -> #0:0 (flac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_fb5e1046cf3646769a6e924604ae426b/decoded.wav':
+  Metadata:
+    IPRD            : THE TORTURED POETS DEPARTMENT: THE ANTHOLOGY
+    album_artist    : Taylor Swift
+    IART            : Taylor Swift
+    COMPOSER        : Taylor Swift
+    ICOP            : ℗ 2024 Taylor Swift
+    ICRD            : 2024-04-19
+    disc            : 1
+    DISCTOTAL       : 1
+    UPC             : 0602465709216
+    IGNR            : Pop
+    ISRC            : USUG12401030
+    INAM            : My Boy Only Breaks His Favorite Toys
+    IPRT            : 03
+    TRACKTOTAL      : 31
+    ISFT            : Lavf62.12.103
+  Stream #0:0: Audio: pcm_s24le ([1][0][0][0] / 0x0001), 48000 Hz, stereo, s32 (24 bit), 2304 kb/s
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+[out#0/wav @ 0xb400006f808858d0] video:0KiB audio:57319KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000607%
+size=   57319KiB time=00:03:23.80 bitrate=2304.0kbits/s speed= 862x elapsed=0:00:00.23
+[2026-11-22 12:15:44.988] [WARN] ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.
+[2026-11-22 12:15:44.990] [WARN] W18/W19.b PrepareActiveTrackNeuralStemsAsync: ONNX Runtime native library could not be initialized. Reinstall ONNX Runtime in Settings.
+[2026-11-22 12:16:07.523] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:16:20.537] [WARN] ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.
+[2026-11-22 12:16:20.538] [WARN] W18/W19.b PrepareActiveTrackNeuralStemsAsync: ONNX Runtime native library could not be initialized. Reinstall ONNX Runtime in Settings.
+[2026-11-22 12:16:38.466] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:17:04.066] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:17:17.951] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:17:18.149] [INFO] FFmpeg probe ok (1 audio stream(s), 2041s) for '03. My Boy Only Breaks His Favorite Toys.flac'
+[2026-11-22 12:17:18.477] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Download/TTPD (Explicit) [Qobuz 24-Bit 48 kHz]/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/03. My Boy Only Breaks His Favorite Toys.flac" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_286e1567a4dd43f08bd9ff5fc38f1909/decoded.wav"
+  stderr: Input #0, flac, from '/storage/emulated/0/Download/TTPD (Explicit) [Qobuz 24-Bit 48 kHz]/THE TORTURED POETS DEPARTMENT THE ANTHOLOGY/03. My Boy Only Breaks His Favorite Toys.flac':
+  Metadata:
+    ALBUM           : THE TORTURED POETS DEPARTMENT: THE ANTHOLOGY
+    album_artist    : Taylor Swift
+    ARTIST          : Taylor Swift
+    COMPOSER        : Taylor Swift
+    COPYRIGHT       : ℗ 2024 Taylor Swift
+    DATE            : 2024-04-19
+    disc            : 1
+    DISCTOTAL       : 1
+    ENCODER         : Lavf59.27.100
+    GENRE           : Pop
+    ISRC            : USUG12401030
+    TITLE           : My Boy Only Breaks His Favorite Toys
+    track           : 03
+    TRACKTOTAL      : 31
+    UPC             : 0602465709216
+  Duration: 00:03:23.80, start: 0.000000, bitrate: 1812 kb/s
+  Stream #0:0: Audio: flac, 48000 Hz, stereo, s32 (24 bit)
+  Stream #0:1: Video: mjpeg (Baseline), yuvj444p(pc, bt470bg/unknown/unknown), 600x600 [SAR 300:300 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+    Metadata:
+      comment         : Cover (front)
+Stream mapping:
+  Stream #0:0 -> #0:0 (flac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_286e1567a4dd43f08bd9ff5fc38f1909/decoded.wav':
+  Metadata:
+    IPRD            : THE TORTURED POETS DEPARTMENT: THE ANTHOLOGY
+    album_artist    : Taylor Swift
+    IART            : Taylor Swift
+    COMPOSER        : Taylor Swift
+    ICOP            : ℗ 2024 Taylor Swift
+    ICRD            : 2024-04-19
+    disc            : 1
+    DISCTOTAL       : 1
+    UPC             : 0602465709216
+    IGNR            : Pop
+    ISRC            : USUG12401030
+    INAM            : My Boy Only Breaks His Favorite Toys
+    IPRT            : 03
+    TRACKTOTAL      : 31
+    ISFT            : Lavf62.12.103
+  Stream #0:0: Audio: pcm_s24le ([1][0][0][0] / 0x0001), 48000 Hz, stereo, s32 (24 bit), 2304 kb/s
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+[out#0/wav @ 0xb40000716a58a690] video:0KiB audio:57319KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000607%
+size=   57319KiB time=00:03:23.80 bitrate=2304.0kbits/s speed=1.71e+03x elapsed=0:00:00.11
+[2026-11-22 12:18:09.569] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:18:13.921] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:18:25.761] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:18:42.795] [WARN] ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.
+[2026-11-22 12:18:42.797] [WARN] W18/W19.b PrepareActiveTrackNeuralStemsAsync: ONNX Runtime native library could not be initialized. Reinstall ONNX Runtime in Settings.
+[2026-11-22 12:18:52.001] [WARN] Pro-Audio native backend reported disconnect (ActiveBackend=0); triggering auto-recovery.
+[2026-11-22 12:18:52.419] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 12:18:54.900] [INFO] === Cavernize v2.9.33 (build 33) started | samsung SM-S938B | Android 17 (SDK 37) ===
+[2026-11-22 12:18:54.970] [INFO] FFmpeg resolved at '/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so' (Found=True)
+[2026-11-22 12:18:54.971] [INFO] truehdd resolved at '/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libtruehdd.so'
+[2026-11-22 12:18:55.000] [INFO] NativeProAudioBridge loaded: ABI=100, Caps=0x3 (PathA=True, PathB=True)
+[2026-11-22 12:18:55.151] [INFO] Activated official binaural profile 'sadie_d1_brir' (16 ch, 14400 taps @ 48000 Hz, d=1.50 m, minPhase=False, magLsO=0, bioItd=False, brirBypass=True)
+[2026-11-22 12:18:55.211] [INFO] AutoEq database ready: 127 offline bundled profiles, 8850 total catalog models.
+[2026-11-22 12:18:55.427] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 12:18:55.551] [INFO] truehdd status: installed=True, local='/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libtruehdd.so', ver='0.6.3'
+[2026-11-22 12:18:55.567] [INFO] FFmpeg status: installed=True, working=True, local='/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so', ver='8.1.3'
+[2026-11-22 12:19:24.426] [INFO] truehdd status: installed=True, local='/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libtruehdd.so', ver='0.6.3'
+[2026-11-22 12:19:25.547] [INFO] FFmpeg status: installed=True, working=True, local='/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so', ver='8.1.3'
+[2026-11-22 12:19:55.394] [INFO] Audio route changed -> 'USB-Audio - Scarlett 2i2 4th Gen' [UsbDac] (key='usb:usb_audio_scarlett_2i2_4th_gen')
+[2026-11-22 12:19:55.453] [INFO] Audio route changed -> 'USB-Audio - Scarlett 2i2 4th Gen' [UsbDac] (key='usb:usb_audio_scarlett_2i2_4th_gen')
+[2026-11-22 12:19:57.370] [INFO] UsbProAudioDeviceManager: Requested Android USB permission for Focusrite Scarlett 2i2 4th Gen (VID=0x1235, PID=0x8219)
+[2026-11-22 12:19:58.674] [INFO] UsbProAudioDeviceManager: USB permission result granted=True
+[2026-11-22 12:19:58.742] [INFO] USB Pro-Audio opened: 'Focusrite Scarlett 2i2 (4th Gen)' (VID=0x1235, PID=0x8219, UAC2=True, Duplex=True, ClockID=41, VendorIf=3, Scarlett=Gen4, Rates=[], FD=170)
+[2026-11-22 12:20:27.380] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:20:34.385] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 64f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:20:41.489] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 64f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:20:44.144] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:20:50.192] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:20:55.185] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:21:00.241] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 64f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:21:09.745] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 64f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:21:17.361] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 64f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:21:22.129] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:22:01.873] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:22:31.408] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:22:41.201] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:24:50.288] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:25:12.592] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:26:21.009] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:26:30.161] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:26:49.616] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:26:53.872] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:26:58.032] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:27:02.097] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:27:55.051] [INFO] Opened file: '/storage/emulated/0/Download/01. Lavender Haze.m4a.mp4', tracks=1, embeddedArt=False
+[2026-11-22 12:27:55.061] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:03:22)
+[2026-11-22 12:27:55.312] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:28:04.173] [INFO] W09 LGSR synced '01 - Lavender Haze.flac' (FLAC 16-bit / 44.1 kHz): offset=-5361.93 samp (-111.71 ms), drift=-2.00 ppm, conf=0.47.
+[2026-11-22 12:28:34.764] [INFO] Activated official binaural profile 'sadie_d1_dfc' (16 ch, 256 taps @ 48000 Hz, d=1.20 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 12:29:14.643] [WARN] ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.
+[2026-11-22 12:29:14.646] [WARN] W18/W19.b PrepareActiveTrackNeuralStemsAsync: ONNX Runtime native library could not be initialized. Reinstall ONNX Runtime in Settings.
+[2026-11-22 12:29:18.224] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:29:33.280] [WARN] ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.
+[2026-11-22 12:29:33.282] [WARN] W18/W19.b PrepareActiveTrackNeuralStemsAsync: ONNX Runtime native library could not be initialized. Reinstall ONNX Runtime in Settings.
+[2026-11-22 12:29:39.927] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=False, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:29:44.913] [INFO] Pro-Audio Path B (libusb UAC2) active: 48000 Hz, 128f, Duplex=True, Device='Focusrite Scarlett 2i2 (4th Gen)'
+[2026-11-22 12:30:10.936] [WARN] Pro-Audio native backend reported disconnect (ActiveBackend=0); triggering auto-recovery.
+[2026-11-22 12:30:11.021] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 12:30:11.311] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=1181, InId=1188
+[2026-11-22 12:30:11.316] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 12:30:11.749] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=1188
+[2026-11-22 12:30:12.192] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 12:30:12.668] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 12:30:13.131] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 12:30:13.564] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 12:30:13.996] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 12:30:15.078] [INFO] Audio route changed -> 'USB-Audio - Scarlett 2i2 4th Gen' [UsbDac] (key='usb:usb_audio_scarlett_2i2_4th_gen')
+[2026-11-22 12:30:15.802] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 12:30:15.808] [INFO] Audio route changed -> 'USB-Audio - Scarlett 2i2 4th Gen' [UsbDac] (key='usb:usb_audio_scarlett_2i2_4th_gen')
+[2026-11-22 12:30:16.597] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=1254, InId=22
+[2026-11-22 12:30:17.331] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=1254, InId=1261
+[2026-11-22 12:30:47.237] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=1254, InId=1261
+[2026-11-22 12:30:47.245] [INFO] Audio route changed -> 'Alto-falante Interno' [BuiltinSpeaker] (key='speaker:builtin')
+[2026-11-22 12:30:47.679] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=1254, InId=1261
+[2026-11-22 12:30:48.130] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 12:32:08.303] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:32:09.361] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=True, OutId=3, InId=22
+[2026-11-22 12:32:12.250] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:32:49.023] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:32:49.492] [INFO] FFmpeg probe ok (1 audio stream(s), 2021s) for '01 - Lavender Haze.flac'
+[2026-11-22 12:32:49.773] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Midnights (The Til Dawn Edition)/01 - Lavender Haze.flac" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_b1932bcf80fa473c9f81863152d27448/decoded.wav"
+  stderr: Input #0, flac, from '/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Midnights (The Til Dawn Edition)/01 - Lavender Haze.flac':
+  Metadata:
+    TITLE           : Lavender Haze
+    ARTIST          : Taylor Swift
+    ALBUM           : Midnights (The Til Dawn Edition)
+    album_artist    : Taylor Swift
+    track           : 1
+    TRACKTOTAL      : 23
+    disc            : 1
+    DISCTOTAL       : 1
+    GENRE           : Pop
+    DATE            : 2022-10-21
+    LENGTH          : 202000
+    PUBLISHER       : Taylor Swift
+    ISRC            : USUG12205734
+    BARCODE         : 602455890092
+    ITUNESADVISORY  : 1
+    REPLAYGAIN_TRACK_GAIN: -8.4 dB
+    LYRICS          : Meet me at midnight 
+                    :  
+                    : Starin' at the ceilin' with you 
+                    : Oh, you don't ever say too much 
+                    : And you don't really read into 
+                    : My melancholia 
+                    :  
+                    : I've been under scrutiny (yeah, oh, yeah) 
+                    : You handle it beautifully (yeah, oh, yeah) 
+                    : All this shit is new to me (yeah, oh, yeah) 
+                    :  
+                    : I feel the lavender haze creepin' up on me 
+                    : Surreal, I'm damned if I do give a damn what people say 
+                    : No deal, the 1950s shit they want from me 
+                    : I just wanna stay in that lavender haze 
+                    :  
+                    : All they keep askin' me (all they keep askin' me) 
+                    : Is if I'm gonna be your bride 
+                    : The only kind of girl they see (only kind of girl they see) 
+                    : Is a one-night or a wife 
+                    :  
+                    : I find it dizzying (yeah, oh, yeah) 
+                    : They're bringin' up my history (yeah, oh, yeah) 
+                    : But you aren't even listening (yeah, oh, yeah) 
+                    : (Ooh-whoa) 
+                    :  
+                    : I feel the lavender haze creepin' up on me 
+                    : Surreal, I'm damned if I do give a damn what people say 
+                    : No deal, the 1950s shit they want from me 
+                    : I just wanna stay in that lavender haze 
+                    : That lavender haze 
+                    :  
+                    : Talk your talk and go viral 
+                    : I just need this love spiral 
+                    : Get it off your chest 
+                    : Get it off my desk (get it off my desk) 
+                    : Talk your talk and go viral 
+                    : I just need this love spiral 
+                    : Get it off your chest 
+                    : Get it off my desk 
+                    : (Ooh-whoa) 
+                    :  
+                    : I feel (I feel) the lavender haze creepin' up on me 
+                    : Surreal, I'm damned if I do give a damn what people say (oh, yeah) 
+                    : No deal (no deal), the 1950s shit they want from me 
+                    : I just wanna stay in that lavender haze  
+                    :  
+                    : Get it off your chest 
+                    : Get it off my desk 
+                    : That lavender haze, I just wanna stay 
+                    : I just wanna stay in that lavender haze
+    COMPOSER        : Jack Antonoff;Taylor Swift;Sam Dew;Zoe Kravitz;Mark Anthony Spears;Jahaan Akil Sweet
+    COPYRIGHT       : © 2023 Taylor Swift
+    SOURCE          : Deezer
+    SOURCEID        : 2300267725
+  Duration: 00:03:22.40, start: 0.000000, bitrate: 835 kb/s
+  Stream #0:0: Audio: flac, 44100 Hz, stereo, s16
+    Side data:
+      Replay Gain: track gain - -8.400000, track peak - unknown, album gain - unknown, album peak - unknown, 
+  Stream #0:1: Video: mjpeg (Progressive), yuvj420p(pc, bt470bg/unknown/unknown), 800x800 [SAR 72:72 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+    Metadata:
+      comment         : Cover (front)
+Stream mapping:
+  Stream #0:0 -> #0:0 (flac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_b1932bcf80fa473c9f81863152d27448/decoded.wav':
+  Metadata:
+    INAM            : Lavender Haze
+    IART            : Taylor Swift
+    IPRD            : Midnights (The Til Dawn Edition)
+    album_artist    : Taylor Swift
+    IPRT            : 1
+    TRACKTOTAL      : 23
+    disc            : 1
+    DISCTOTAL       : 1
+    IGNR            : Pop
+    ICRD            : 2022-10-21
+    LENGTH          : 202000
+    PUBLISHER       : Taylor Swift
+    ISRC            : USUG12205734
+    BARCODE         : 602455890092
+    ITUNESADVISORY  : 1
+    REPLAYGAIN_TRACK_GAIN: -8.4 dB
+    LYRICS          : Meet me at midnight 
+                    :  
+                    : Starin' at the ceilin' with you 
+                    : Oh, you don't ever say too much 
+                    : And you don't really read into 
+                    : My melancholia 
+                    :  
+                    : I've been under scrutiny (yeah, oh, yeah) 
+                    : You handle it beautifully (yeah, oh, yeah) 
+                    : All this shit is new to me (yeah, oh, yeah) 
+                    :  
+                    : I feel the lavender haze creepin' up on me 
+                    : Surreal, I'm damned if I do give a damn what people say 
+                    : No deal, the 1950s shit they want from me 
+                    : I just wanna stay in that lavender haze 
+                    :  
+                    : All they keep askin' me (all they keep askin' me) 
+                    : Is if I'm gonna be your bride 
+                    : The only kind of girl they see (only kind of girl they see) 
+                    : Is a one-night or a wife 
+                    :  
+                    : I find it dizzying (yeah, oh, yeah) 
+                    : They're bringin' up my history (yeah, oh, yeah) 
+                    : But you aren't even listening (yeah, oh, yeah) 
+                    : (Ooh-whoa) 
+                    :  
+                    : I feel the lavender haze creepin' up on me 
+                    : Surreal, I'm damned if I do give a damn what people say 
+                    : No deal, the 1950s shit they want from me 
+                    : I just wanna stay in that lavender haze 
+                    : That lavender haze 
+                    :  
+                    : Talk your talk and go viral 
+                    : I just need this love spiral 
+                    : Get it off your chest 
+                    : Get it off my desk (get it off my desk) 
+                    : Talk your talk and go viral 
+                    : I just need this love spiral 
+                    : Get it off your chest 
+                    : Get it off my desk 
+                    : (Ooh-whoa) 
+                    :  
+                    : I feel (I feel) the lavender haze creepin' up on me 
+                    : Surreal, I'm damned if I do give a damn what people say (oh, yeah) 
+                    : No deal (no deal), the 1950s shit they want from me 
+                    : I just wanna stay in that lavender haze  
+                    :  
+                    : Get it off your chest 
+                    : Get it off my desk 
+                    : That lavender haze, I just wanna stay 
+                    : I just wanna stay in that lavender haze
+    COMPOSER        : Jack Antonoff;Taylor Swift;Sam Dew;Zoe Kravitz;Mark Anthony Spears;Jahaan Akil Sweet
+    ICOP            : © 2023 Taylor Swift
+    SOURCE          : Deezer
+    SOURCEID        : 2300267725
+    ISFT            : Lavf62.12.103
+  Stream #0:0: Audio: pcm_s24le ([1][0][0][0] / 0x0001), 44100 Hz, stereo, s32 (24 bit), 2116 kb/s
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+    Side data:
+      Replay Gain: track gain - -8.400000, track peak - unknown, album gain - unknown, album peak - unknown, 
+[out#0/wav @ 0xb400007bbbe9e1d0] video:0KiB audio:52299KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000594%
+size=   52299KiB time=00:03:22.39 bitrate=2116.8kbits/s speed=1.7e+03x elapsed=0:00:00.11
+[2026-11-22 12:33:58.125] [INFO] Opened file: '/storage/emulated/0/Download/02. Maroon.m4a (1).mp4', tracks=1, embeddedArt=True
+[2026-11-22 12:33:58.133] [INFO] Active track ready: Enhanced AC-3 com Joint Object Coding (Dolby Atmos) (0:03:38)
+[2026-11-22 12:33:58.394] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:34:10.606] [INFO] W09 LGSR synced '02 - Maroon.flac' (FLAC 16-bit / 44.1 kHz): offset=-2645.24 samp (-55.11 ms), drift=-2.44 ppm, conf=0.63.
+[2026-11-22 12:36:50.788] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:36:51.465] [INFO] FFmpeg probe ok (1 audio stream(s), 1801s) for '17 - _Slut!_ (Taylor's Version) (From The Vault).flac'
+[2026-11-22 12:36:51.985] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - 1989 (Taylor's Version) (Deluxe)/17 - _Slut!_ (Taylor's Version) (From The Vault).flac" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_be24b4799e374107bbff560af6379ebf/decoded.wav"
+  stderr: Input #0, flac, from '/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - 1989 (Taylor's Version) (Deluxe)/17 - _Slut!_ (Taylor's Version) (From The Vault).flac':
+  Metadata:
+    TITLE           : "Slut!" (Taylor's Version) (From The Vault)
+    ARTIST          : Taylor Swift
+    ALBUM           : 1989 (Taylor's Version) (Deluxe)
+    album_artist    : Taylor Swift
+    track           : 17
+    TRACKTOTAL      : 22
+    disc            : 1
+    DISCTOTAL       : 1
+    GENRE           : Pop
+    DATE            : 2023-10-27
+    LENGTH          : 180000
+    PUBLISHER       : Taylor Swift
+    ISRC            : USUG12306687
+    BARCODE         : 602458807615
+    ITUNESADVISORY  : 0
+    REPLAYGAIN_TRACK_GAIN: -5.5 dB
+    LYRICS          : Flamingo pink 
+                    : Sunrise Boulevard 
+                    : Clink, clink 
+                    : Being this young is art 
+                    : Aquamarine 
+                    : Moonlit swimming pool 
+                    : What if all I need is you? 
+                    :  
+                    : Got lovestruck, went straight to my head 
+                    : Got lovesick, all over my bed 
+                    : Love to think you'll never forget 
+                    : Handprints in wet cement 
+                    : Adorned with smoke on my clothes 
+                    : Lovelorn and nobody knows 
+                    : Love thorns all over this rose 
+                    : I'll pay the price, you won't 
+                    :  
+                    : But if I'm all dressed up 
+                    : They might as well be looking at us 
+                    : And if they call me a slut 
+                    : You know it might be worth it for once 
+                    : And if I'm gonna be drunk 
+                    : Might as well be drunk in love 
+                    :  
+                    : Send the code, he's waiting there 
+                    : The sticks and stones they throw froze mid-air 
+                    : Everyone wants him 
+                    : That was my crime 
+                    : The wrong place at the right time 
+                    : And I break down, then he's pullin' me in 
+                    : In a world of boys, he's a gentleman 
+                    :  
+                    : Got lovestruck, went straight to my head 
+                    : Got lovesick, all over my bed 
+                    : Love to think you'll never forget 
+                    : We'll pay the price, I guess 
+                    :  
+                    : But if I'm all dressed up 
+                    : They might as well be looking at us 
+                    : If they call me a slut 
+                    : You know it might be worth it for once 
+                    : And if I'm gonna be drunk 
+                    : I might as well be drunk in love 
+                    :  
+                    : Half asleep 
+                    : Taking your time 
+                    : In the tangerine, neon light 
+                    : This is luxury 
+                    : You're not saying you're in love with me 
+                    : But you're going to 
+                    : Half awake 
+                    : Taking your chance 
+                    : It's a big mistake 
+                    : I said it might blow up in your pretty face 
+                    : I'm not saying do it anyway 
+                    : But you're going to 
+                    :  
+                    : And if they call me a slut 
+                    : You know it might be worth it for once 
+                    : And if I'm gonna be drunk 
+                    : Might as well be drunk in love
+    COMPOSER        : Jack Antonoff;Patrik Berger;Taylor Swift
+    COPYRIGHT       : © 2023 Taylor Swift
+    SOURCE          : Deezer
+    SOURCEID        : 2516448251
+  Duration: 00:03:00.38, start: 0.000000, bitrate: 864 kb/s
+  Stream #0:0: Audio: flac, 44100 Hz, stereo, s16
+    Side data:
+      Replay Gain: track gain - -5.500000, track peak - unknown, album gain - unknown, album peak - unknown, 
+  Stream #0:1: Video: mjpeg (Progressive), yuvj420p(pc, bt470bg/unknown/unknown), 800x800 [SAR 72:72 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+    Metadata:
+      comment         : Cover (front)
+Stream mapping:
+  Stream #0:0 -> #0:0 (flac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_be24b4799e374107bbff560af6379ebf/decoded.wav':
+  Metadata:
+    INAM            : "Slut!" (Taylor's Version) (From The Vault)
+    IART            : Taylor Swift
+    IPRD            : 1989 (Taylor's Version) (Deluxe)
+    album_artist    : Taylor Swift
+    IPRT            : 17
+    TRACKTOTAL      : 22
+    disc            : 1
+    DISCTOTAL       : 1
+    IGNR            : Pop
+    ICRD            : 2023-10-27
+    LENGTH          : 180000
+    PUBLISHER       : Taylor Swift
+    ISRC            : USUG12306687
+    BARCODE         : 602458807615
+    ITUNESADVISORY  : 0
+    REPLAYGAIN_TRACK_GAIN: -5.5 dB
+    LYRICS          : Flamingo pink 
+                    : Sunrise Boulevard 
+                    : Clink, clink 
+                    : Being this young is art 
+                    : Aquamarine 
+                    : Moonlit swimming pool 
+                    : What if all I need is you? 
+                    :  
+                    : Got lovestruck, went straight to my head 
+                    : Got lovesick, all over my bed 
+                    : Love to think you'll never forget 
+                    : Handprints in wet cement 
+                    : Adorned with smoke on my clothes 
+                    : Lovelorn and nobody knows 
+                    : Love thorns all over this rose 
+                    : I'll pay the price, you won't 
+                    :  
+                    : But if I'm all dressed up 
+                    : They might as well be looking at us 
+                    : And if they call me a slut 
+                    : You know it might be worth it for once 
+                    : And if I'm gonna be drunk 
+                    : Might as well be drunk in love 
+                    :  
+                    : Send the code, he's waiting there 
+                    : The sticks and stones they throw froze mid-air 
+                    : Everyone wants him 
+                    : That was my crime 
+                    : The wrong place at the right time 
+                    : And I break down, then he's pullin' me in 
+                    : In a world of boys, he's a gentleman 
+                    :  
+                    : Got lovestruck, went straight to my head 
+                    : Got lovesick, all over my bed 
+                    : Love to think you'll never forget 
+                    : We'll pay the price, I guess 
+                    :  
+                    : But if I'm all dressed up 
+                    : They might as well be looking at us 
+                    : If they call me a slut 
+                    : You know it might be worth it for once 
+                    : And if I'm gonna be drunk 
+                    : I might as well be drunk in love 
+                    :  
+                    : Half asleep 
+                    : Taking your time 
+                    : In the tangerine, neon light 
+                    : This is luxury 
+                    : You're not saying you're in love with me 
+                    : But you're going to 
+                    : Half awake 
+                    : Taking your chance 
+                    : It's a big mistake 
+                    : I said it might blow up in your pretty face 
+                    : I'm not saying do it anyway 
+                    : But you're going to 
+                    :  
+                    : And if they call me a slut 
+                    : You know it might be worth it for once 
+                    : And if I'm gonna be drunk 
+                    : Might as well be drunk in love
+    COMPOSER        : Jack Antonoff;Patrik Berger;Taylor Swift
+    ICOP            : © 2023 Taylor Swift
+    SOURCE          : Deezer
+    SOURCEID        : 2516448251
+    ISFT            : Lavf62.12.103
+  Stream #0:0: Audio: pcm_s24le ([1][0][0][0] / 0x0001), 44100 Hz, stereo, s32 (24 bit), 2116 kb/s
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+    Side data:
+      Replay Gain: track gain - -5.500000, track peak - unknown, album gain - unknown, album peak - unknown, 
+[out#0/wav @ 0xb4000076900dc150] video:0KiB audio:46610KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000733%
+size=   46611KiB time=00:03:00.38 bitrate=2116.8kbits/s speed= 779x elapsed=0:00:00.23
+[2026-11-22 12:36:52.181] [INFO] Opened file: '/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - 1989 (Taylor's Version) (Deluxe)/17 - _Slut!_ (Taylor's Version) (From The Vault).flac', tracks=1, embeddedArt=True
+[2026-11-22 12:36:52.189] [INFO] Active track ready: Faixa de áudio baseada em canais (0:03:00)
+[2026-11-22 12:36:52.450] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:39:06.526] [WARN] ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.
+[2026-11-22 12:39:06.528] [WARN] W18/W19.b PrepareActiveTrackNeuralStemsAsync: ONNX Runtime native library could not be initialized. Reinstall ONNX Runtime in Settings.
+[2026-11-22 12:39:38.976] [INFO] Downloaded neural model 'scnet_4stem_mobile' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/scnet_4stem_fp16.onnx
+[2026-11-22 12:39:53.294] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:39:53.498] [INFO] FFmpeg probe ok (1 audio stream(s), 2071s) for '01 - ...Ready For It_ (Karaoke Version).flac'
+[2026-11-22 12:39:54.044] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/01 - ...Ready For It_ (Karaoke Version).flac" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_b91749367d664d9780135f244b3db538/decoded.wav"
+  stderr: Input #0, flac, from '/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/01 - ...Ready For It_ (Karaoke Version).flac':
+  Metadata:
+    TITLE           : ...Ready For It? (Karaoke Version)
+    ARTIST          : Taylor Swift
+    ALBUM           : Taylor Swift Karaoke: reputation
+    album_artist    : Taylor Swift
+    track           : 1
+    TRACKTOTAL      : 15
+    disc            : 1
+    DISCTOTAL       : 1
+    GENRE           : Pop
+    DATE            : 2018-03-09
+    LENGTH          : 208000
+    BPM             : 160.25
+    PUBLISHER       : Big Machine Records, LLC
+    ISRC            : USCJY1831781
+    BARCODE         : 843930034970
+    ITUNESADVISORY  : 0
+    REPLAYGAIN_TRACK_GAIN: -9.6 dB
+    COMPOSER        : Taylor Swift;Max Martin;Shellback;Ali Payami
+    COPYRIGHT       : © 2018 Apollo A-1 LLC
+    SOURCE          : Deezer
+    SOURCEID        : 469435292
+  Duration: 00:03:27.17, start: 0.000000, bitrate: 967 kb/s
+  Stream #0:0: Audio: flac, 44100 Hz, stereo, s16
+    Side data:
+      Replay Gain: track gain - -9.600000, track peak - unknown, album gain - unknown, album peak - unknown, 
+  Stream #0:1: Video: mjpeg (Progressive), yuvj420p(pc, bt470bg/unknown/unknown), 800x800 [SAR 300:300 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+    Metadata:
+      comment         : Cover (front)
+Stream mapping:
+  Stream #0:0 -> #0:0 (flac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_b91749367d664d9780135f244b3db538/decoded.wav':
+  Metadata:
+    INAM            : ...Ready For It? (Karaoke Version)
+    IART            : Taylor Swift
+    IPRD            : Taylor Swift Karaoke: reputation
+    album_artist    : Taylor Swift
+    IPRT            : 1
+    TRACKTOTAL      : 15
+    disc            : 1
+    DISCTOTAL       : 1
+    IGNR            : Pop
+    ICRD            : 2018-03-09
+    LENGTH          : 208000
+    BPM             : 160.25
+    PUBLISHER       : Big Machine Records, LLC
+    ISRC            : USCJY1831781
+    BARCODE         : 843930034970
+    ITUNESADVISORY  : 0
+    REPLAYGAIN_TRACK_GAIN: -9.6 dB
+    COMPOSER        : Taylor Swift;Max Martin;Shellback;Ali Payami
+    ICOP            : © 2018 Apollo A-1 LLC
+    SOURCE          : Deezer
+    SOURCEID        : 469435292
+    ISFT            : Lavf62.12.103
+  Stream #0:0: Audio: pcm_s24le ([1][0][0][0] / 0x0001), 44100 Hz, stereo, s32 (24 bit), 2116 kb/s
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+    Side data:
+      Replay Gain: track gain - -9.600000, track peak - unknown, album gain - unknown, album peak - unknown, 
+[out#0/wav @ 0xb400006ff2b591d0] video:0KiB audio:53533KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000624%
+size=   53534KiB time=00:03:27.17 bitrate=2116.8kbits/s speed= 662x elapsed=0:00:00.31
+[2026-11-22 12:39:54.243] [INFO] Opened file: '/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/01 - ...Ready For It_ (Karaoke Version).flac', tracks=1, embeddedArt=True
+[2026-11-22 12:39:54.249] [INFO] Active track ready: Faixa de áudio baseada em canais (0:03:27)
+[2026-11-22 12:39:54.521] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:41:09.583] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:41:11.254] [WARN] ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.
+[2026-11-22 12:41:11.255] [WARN] W18/W19.b PrepareActiveTrackNeuralStemsAsync: ONNX Runtime native library could not be initialized. Reinstall ONNX Runtime in Settings.
+[2026-11-22 12:41:22.626] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:41:22.802] [INFO] FFmpeg probe ok (1 audio stream(s), 2441s) for '02 - End Game (Karaoke Version) (feat. Ed Sheeran & Future).flac'
+[2026-11-22 12:41:23.287] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/02 - End Game (Karaoke Version) (feat. Ed Sheeran & Future).flac" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_2b3f24bf0c7344c49b4012c9e43014ad/decoded.wav"
+  stderr: Input #0, flac, from '/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/02 - End Game (Karaoke Version) (feat. Ed Sheeran & Future).flac':
+  Metadata:
+    TITLE           : End Game (Karaoke Version) (feat. Ed Sheeran & Future)
+    ARTIST          : Taylor Swift;Ed Sheeran;Future
+    ALBUM           : Taylor Swift Karaoke: reputation
+    album_artist    : Taylor Swift
+    track           : 2
+    TRACKTOTAL      : 15
+    disc            : 1
+    DISCTOTAL       : 1
+    GENRE           : Pop
+    DATE            : 2018-03-09
+    LENGTH          : 244000
+    BPM             : 159.01
+    PUBLISHER       : Big Machine Records, LLC
+    ISRC            : USCJY1831782
+    BARCODE         : 843930034970
+    ITUNESADVISORY  : 0
+    REPLAYGAIN_TRACK_GAIN: -9.2 dB
+    LYRICS          : I wanna be your endgame 
+                    : I wanna be your first string 
+                    : I wanna be your A-Team (whoa-whoa, whoa) 
+                    : I wanna be your endgame, endgame 
+                    :  
+                    : Big reputation, big reputation 
+                    : Ooh, you and me, we got big reputations, ah 
+                    : And you heard about me, ooh 
+                    : I got some big enemies (yeah) 
+                    : Big reputation, big reputation 
+                    : Ooh, you and me, we'd be a big conversation, ah 
+                    : And I heard about you, ooh (yeah) 
+                    : You like the bad ones too 
+                    :  
+                    : You so dope, don't overdose 
+                    : I'm so stoked, I need a toast 
+                    : We do the most 
+                    : I'm in the Ghost like I'm whippin' a boat 
+                    : I got a reputation, girl, that don't precede me (yeah) 
+                    : I'm one call away, whenever you need me (yeah) 
+                    : I'm on a G5 (yeah), come to the A-Side (yeah) 
+                    : I got a bad boy persona, that's what they like 
+                    : You love it, I love it too 'cause you my type 
+                    : You hold me down and I protect you with my life 
+                    :  
+                    : I don't wanna touch you (I don't wanna be) 
+                    : Just another ex-love (you don't wanna see) 
+                    : I don't wanna miss you (I don't wanna miss you) 
+                    : Like the other girls do 
+                    : I don't wanna hurt you (I just wanna be) 
+                    : Drinkin' on a beach with (you all over me) 
+                    : I know what they all say (I know what they all say) 
+                    : But I ain't tryna play 
+                    :  
+                    : I wanna be your endgame (endgame) 
+                    : I wanna be your first string (first string) 
+                    : I wanna be your A-Team (A-Team) 
+                    : I wanna be your endgame, endgame 
+                    :  
+                    : Knew her when I was young 
+                    : Reconnected when we were little bit older 
+                    : Both sprung, I got issues and chips on both of my shoulders 
+                    : Reputation precedes me, in rumors I'm knee-deep 
+                    : The truth is, it's easier to ignore it, believe me 
+                    : Even when we'd argue, we'd not do it for long 
+                    : And you understand the good and bad end up in the song 
+                    : For all your beautiful traits, and the way you do it with ease 
+                    : For all my flaws, paranoia, and insecurities 
+                    : I've made mistakes, and made some choices that's hard to deny 
+                    : After the storm, something was born on the Fourth of July 
+                    : I've passed days without fun, this endgame is the one 
+                    : With four words on the tip of my tongue I'll never say 
+                    :  
+                    : I don't wanna touch you (I don't wanna be) 
+                    : Just another ex-love (you don't wanna see) 
+                    : I don't wanna miss you (I don't wanna miss you) 
+                    : Like the other girls do 
+                    : I don't wanna hurt you (I just wanna be) 
+                    : Drinkin' on a beach with (you all over me) 
+                    : I know what they all say, yeah 
+                    : But I ain't tryna play 
+                    :  
+                    : I wanna be your endgame (endgame) 
+                    : I wanna be your first string (wanna be your first string) 
+                    : I wanna be your A-Team (A-Team) 
+                    : I wanna be your endgame, endgame 
+                    :  
+                    : Big reputation, big reputation 
+                    : Ooh, you and me, we got big reputations, ah 
+                    : And you heard about me, oh 
+                    : I got some big enemies (hey) 
+                    : Big reputation, big reputation (yeah) 
+                    : Ooh, you and me, we'd be a big conversation, ah 
+                    : And I heard about you, ooh 
+                    : You like the bad ones too 
+                    :  
+                    : I hit you like, "Bang" 
+                    : We tried to forget it, but we just couldn't 
+                    : And I bury hatchets but I keep maps of where I put 'em 
+                    : Reputation precedes me, they told you I'm crazy 
+                    : I swear I don't love the drama, it loves me 
+                    : And I can't let you go, your handprint's on my soul 
+                    : It's like your eyes are liquor, it's like your body is gold 
+                    : You've been calling my bluff on all my usual tricks 
+                    : So here's the truth from my red lips 
+                    :  
+                    : I wanna be your endgame (endgame) 
+                    : I wanna be your first string (me and you) (first string) 
+                    : I wanna be your A-Team (be your A-Team now) 
+                    : I wanna be your endgame, endgame 
+                    : I wanna be your endgame (oh, I do) 
+                    : I wanna be your first string (first string) 
+                    : I wanna be your A-Team (A-Team) 
+                    : I wanna be your endgame, endgame
+    COMPOSER        : Taylor Swift;Max Martin;Shellback;Ed Sheeran;Nayvadius Wilburn
+    COPYRIGHT       : © 2018 Apollo A-1 LLC
+    SOURCE          : Deezer
+    SOURCEID        : 469435302
+  Duration: 00:04:03.83, start: 0.000000, bitrate: 974 kb/s
+  Stream #0:0: Audio: flac, 44100 Hz, stereo, s16
+    Side data:
+      Replay Gain: track gain - -9.200000, track peak - unknown, album gain - unknown, album peak - unknown, 
+  Stream #0:1: Video: mjpeg (Progressive), yuvj420p(pc, bt470bg/unknown/unknown), 800x800 [SAR 300:300 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+    Metadata:
+      comment         : Cover (front)
+Stream mapping:
+  Stream #0:0 -> #0:0 (flac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_2b3f24bf0c7344c49b4012c9e43014ad/decoded.wav':
+  Metadata:
+    INAM            : End Game (Karaoke Version) (feat. Ed Sheeran & Future)
+    IART            : Taylor Swift;Ed Sheeran;Future
+    IPRD            : Taylor Swift Karaoke: reputation
+    album_artist    : Taylor Swift
+    IPRT            : 2
+    TRACKTOTAL      : 15
+    disc            : 1
+    DISCTOTAL       : 1
+    IGNR            : Pop
+    ICRD            : 2018-03-09
+    LENGTH          : 244000
+    BPM             : 159.01
+    PUBLISHER       : Big Machine Records, LLC
+    ISRC            : USCJY1831782
+    BARCODE         : 843930034970
+    ITUNESADVISORY  : 0
+    REPLAYGAIN_TRACK_GAIN: -9.2 dB
+    LYRICS          : I wanna be your endgame 
+                    : I wanna be your first string 
+                    : I wanna be your A-Team (whoa-whoa, whoa) 
+                    : I wanna be your endgame, endgame 
+                    :  
+                    : Big reputation, big reputation 
+                    : Ooh, you and me, we got big reputations, ah 
+                    : And you heard about me, ooh 
+                    : I got some big enemies (yeah) 
+                    : Big reputation, big reputation 
+                    : Ooh, you and me, we'd be a big conversation, ah 
+                    : And I heard about you, ooh (yeah) 
+                    : You like the bad ones too 
+                    :  
+                    : You so dope, don't overdose 
+                    : I'm so stoked, I need a toast 
+                    : We do the most 
+                    : I'm in the Ghost like I'm whippin' a boat 
+                    : I got a reputation, girl, that don't precede me (yeah) 
+                    : I'm one call away, whenever you need me (yeah) 
+                    : I'm on a G5 (yeah), come to the A-Side (yeah) 
+                    : I got a bad boy persona, that's what they like 
+                    : You love it, I love it too 'cause you my type 
+                    : You hold me down and I protect you with my life 
+                    :  
+                    : I don't wanna touch you (I don't wanna be) 
+                    : Just another ex-love (you don't wanna see) 
+                    : I don't wanna miss you (I don't wanna miss you) 
+                    : Like the other girls do 
+                    : I don't wanna hurt you (I just wanna be) 
+                    : Drinkin' on a beach with (you all over me) 
+                    : I know what they all say (I know what they all say) 
+                    : But I ain't tryna play 
+                    :  
+                    : I wanna be your endgame (endgame) 
+                    : I wanna be your first string (first string) 
+                    : I wanna be your A-Team (A-Team) 
+                    : I wanna be your endgame, endgame 
+                    :  
+                    : Knew her when I was young 
+                    : Reconnected when we were little bit older 
+                    : Both sprung, I got issues and chips on both of my shoulders 
+                    : Reputation precedes me, in rumors I'm knee-deep 
+                    : The truth is, it's easier to ignore it, believe me 
+                    : Even when we'd argue, we'd not do it for long 
+                    : And you understand the good and bad end up in the song 
+                    : For all your beautiful traits, and the way you do it with ease 
+                    : For all my flaws, paranoia, and insecurities 
+                    : I've made mistakes, and made some choices that's hard to deny 
+                    : After the storm, something was born on the Fourth of July 
+                    : I've passed days without fun, this endgame is the one 
+                    : With four words on the tip of my tongue I'll never say 
+                    :  
+                    : I don't wanna touch you (I don't wanna be) 
+                    : Just another ex-love (you don't wanna see) 
+                    : I don't wanna miss you (I don't wanna miss you) 
+                    : Like the other girls do 
+                    : I don't wanna hurt you (I just wanna be) 
+                    : Drinkin' on a beach with (you all over me) 
+                    : I know what they all say, yeah 
+                    : But I ain't tryna play 
+                    :  
+                    : I wanna be your endgame (endgame) 
+                    : I wanna be your first string (wanna be your first string) 
+                    : I wanna be your A-Team (A-Team) 
+                    : I wanna be your endgame, endgame 
+                    :  
+                    : Big reputation, big reputation 
+                    : Ooh, you and me, we got big reputations, ah 
+                    : And you heard about me, oh 
+                    : I got some big enemies (hey) 
+                    : Big reputation, big reputation (yeah) 
+                    : Ooh, you and me, we'd be a big conversation, ah 
+                    : And I heard about you, ooh 
+                    : You like the bad ones too 
+                    :  
+                    : I hit you like, "Bang" 
+                    : We tried to forget it, but we just couldn't 
+                    : And I bury hatchets but I keep maps of where I put 'em 
+                    : Reputation precedes me, they told you I'm crazy 
+                    : I swear I don't love the drama, it loves me 
+                    : And I can't let you go, your handprint's on my soul 
+                    : It's like your eyes are liquor, it's like your body is gold 
+                    : You've been calling my bluff on all my usual tricks 
+                    : So here's the truth from my red lips 
+                    :  
+                    : I wanna be your endgame (endgame) 
+                    : I wanna be your first string (me and you) (first string) 
+                    : I wanna be your A-Team (be your A-Team now) 
+                    : I wanna be your endgame, endgame 
+                    : I wanna be your endgame (oh, I do) 
+                    : I wanna be your first string (first string) 
+                    : I wanna be your A-Team (A-Team) 
+                    : I wanna be your endgame, endgame
+    COMPOSER        : Taylor Swift;Max Martin;Shellback;Ed Sheeran;Nayvadius Wilburn
+    ICOP            : © 2018 Apollo A-1 LLC
+    SOURCE          : Deezer
+    SOURCEID        : 469435302
+    ISFT            : Lavf62.12.103
+  Stream #0:0: Audio: pcm_s24le ([1][0][0][0] / 0x0001), 44100 Hz, stereo, s32 (24 bit), 2116 kb/s
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+    Side data:
+      Replay Gain: track gain - -9.200000, track peak - unknown, album gain - unknown, album peak - unknown, 
+[out#0/wav @ 0xb400006e3d698af0] video:0KiB audio:63004KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000589%
+size=   63005KiB time=00:04:03.82 bitrate=2116.8kbits/s speed= 711x elapsed=0:00:00.34
+[2026-11-22 12:41:23.472] [INFO] Opened file: '/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/02 - End Game (Karaoke Version) (feat. Ed Sheeran & Future).flac', tracks=1, embeddedArt=True
+[2026-11-22 12:41:23.475] [INFO] Active track ready: Faixa de áudio baseada em canais (0:04:03)
+[2026-11-22 12:41:23.663] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:41:25.011] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:41:25.149] [INFO] FFmpeg probe ok (1 audio stream(s), 2381s) for '03 - I Did Something Bad (Karaoke Version).flac'
+[2026-11-22 12:41:25.688] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/03 - I Did Something Bad (Karaoke Version).flac" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_1e7fc9f3157f401892741006684bbe90/decoded.wav"
+  stderr: Input #0, flac, from '/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/03 - I Did Something Bad (Karaoke Version).flac':
+  Metadata:
+    TITLE           : I Did Something Bad (Karaoke Version)
+    ARTIST          : Taylor Swift
+    ALBUM           : Taylor Swift Karaoke: reputation
+    album_artist    : Taylor Swift
+    track           : 3
+    TRACKTOTAL      : 15
+    disc            : 1
+    DISCTOTAL       : 1
+    GENRE           : Pop
+    DATE            : 2018-03-09
+    LENGTH          : 238000
+    BPM             : 83.02
+    PUBLISHER       : Big Machine Records, LLC
+    ISRC            : USCJY1831783
+    BARCODE         : 843930034970
+    ITUNESADVISORY  : 0
+    REPLAYGAIN_TRACK_GAIN: -9.9 dB
+    LYRICS          : I never trust a narcissist 
+                    : But they love me 
+                    : So I play 'em like a violin 
+                    : And I make it look oh so easy 
+                    : 'Cause for every lie I tell them 
+                    : They tell me three 
+                    : This is how the world works 
+                    : Now all he thinks about is me 
+                    :  
+                    : I can feel the flames on my skin 
+                    : Crimson red paint on my lips 
+                    : If a man talks shit, then I owe him nothing 
+                    : I don't regret it one bit, 'cause he had it coming 
+                    :  
+                    : They say I did something bad 
+                    : Then why's it feel so good? 
+                    : They say I did something bad 
+                    : But why's it feel so good? 
+                    : Most fun I ever had 
+                    : And I'd do it over and over and over again if I could 
+                    : It just felt so good, good 
+                    :  
+                    : I never trust a playboy 
+                    : But they love me 
+                    : So I fly him all around the world 
+                    : And I let them think they saved me 
+                    : They never see it comin' 
+                    : What I do next 
+                    : This is how the world works 
+                    : You gotta leave before you get left 
+                    :  
+                    : I can feel the flames on my skin 
+                    : He says, "Don't throw away a good thing" 
+                    : But if he drops my name, then I owe him nothin' 
+                    : And if he spends my change, then he had it comin' 
+                    :  
+                    : They say I did something bad 
+                    : Then why's it feel so good? 
+                    : They say I did something bad 
+                    : But why's it feel so good? 
+                    : Most fun I ever had 
+                    : And I'd do it over and over and over again if I could 
+                    : It just felt so good, good 
+                    :  
+                    : It just felt so good 
+                    :  
+                    : They're burning all the witches, even if you aren't one 
+                    : They got their pitchforks and proof 
+                    : Their receipts and reasons 
+                    : They're burning all the witches, even if you aren't one 
+                    : So light me up (light me up), light me up (light me up) 
+                    : Light me up, go ahead and light me up (light me up) 
+                    : Light me up (light me up), light me up (light me up) 
+                    : Light me up (light me up), light me up (light me up) 
+                    :  
+                    : They say I did something bad 
+                    : Then why's it feel so good? 
+                    : They say I did something bad 
+                    : But why's it feel so good? 
+                    : Most fun I ever had 
+                    : And I'd do it over and over and over again if I could 
+                    : It just felt so good, good 
+                    :  
+                    : Oh, you say I did something bad 
+                    : Then why's it feel so good, good? 
+                    : So bad, why's it feel so good? 
+                    : Why's it feel, why's it feel so good? (Bad) 
+                    : It just felt so good, good
+    COMPOSER        : Taylor Swift;Max Martin;Shellback
+    COPYRIGHT       : © 2018 Apollo A-1 LLC
+    SOURCE          : Deezer
+    SOURCEID        : 469435312
+  Duration: 00:03:58.25, start: 0.000000, bitrate: 884 kb/s
+  Stream #0:0: Audio: flac, 44100 Hz, stereo, s16
+    Side data:
+      Replay Gain: track gain - -9.900000, track peak - unknown, album gain - unknown, album peak - unknown, 
+  Stream #0:1: Video: mjpeg (Progressive), yuvj420p(pc, bt470bg/unknown/unknown), 800x800 [SAR 300:300 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+    Metadata:
+      comment         : Cover (front)
+Stream mapping:
+  Stream #0:0 -> #0:0 (flac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_1e7fc9f3157f401892741006684bbe90/decoded.wav':
+  Metadata:
+    INAM            : I Did Something Bad (Karaoke Version)
+    IART            : Taylor Swift
+    IPRD            : Taylor Swift Karaoke: reputation
+    album_artist    : Taylor Swift
+    IPRT            : 3
+    TRACKTOTAL      : 15
+    disc            : 1
+    DISCTOTAL       : 1
+    IGNR            : Pop
+    ICRD            : 2018-03-09
+    LENGTH          : 238000
+    BPM             : 83.02
+    PUBLISHER       : Big Machine Records, LLC
+    ISRC            : USCJY1831783
+    BARCODE         : 843930034970
+    ITUNESADVISORY  : 0
+    REPLAYGAIN_TRACK_GAIN: -9.9 dB
+    LYRICS          : I never trust a narcissist 
+                    : But they love me 
+                    : So I play 'em like a violin 
+                    : And I make it look oh so easy 
+                    : 'Cause for every lie I tell them 
+                    : They tell me three 
+                    : This is how the world works 
+                    : Now all he thinks about is me 
+                    :  
+                    : I can feel the flames on my skin 
+                    : Crimson red paint on my lips 
+                    : If a man talks shit, then I owe him nothing 
+                    : I don't regret it one bit, 'cause he had it coming 
+                    :  
+                    : They say I did something bad 
+                    : Then why's it feel so good? 
+                    : They say I did something bad 
+                    : But why's it feel so good? 
+                    : Most fun I ever had 
+                    : And I'd do it over and over and over again if I could 
+                    : It just felt so good, good 
+                    :  
+                    : I never trust a playboy 
+                    : But they love me 
+                    : So I fly him all around the world 
+                    : And I let them think they saved me 
+                    : They never see it comin' 
+                    : What I do next 
+                    : This is how the world works 
+                    : You gotta leave before you get left 
+                    :  
+                    : I can feel the flames on my skin 
+                    : He says, "Don't throw away a good thing" 
+                    : But if he drops my name, then I owe him nothin' 
+                    : And if he spends my change, then he had it comin' 
+                    :  
+                    : They say I did something bad 
+                    : Then why's it feel so good? 
+                    : They say I did something bad 
+                    : But why's it feel so good? 
+                    : Most fun I ever had 
+                    : And I'd do it over and over and over again if I could 
+                    : It just felt so good, good 
+                    :  
+                    : It just felt so good 
+                    :  
+                    : They're burning all the witches, even if you aren't one 
+                    : They got their pitchforks and proof 
+                    : Their receipts and reasons 
+                    : They're burning all the witches, even if you aren't one 
+                    : So light me up (light me up), light me up (light me up) 
+                    : Light me up, go ahead and light me up (light me up) 
+                    : Light me up (light me up), light me up (light me up) 
+                    : Light me up (light me up), light me up (light me up) 
+                    :  
+                    : They say I did something bad 
+                    : Then why's it feel so good? 
+                    : They say I did something bad 
+                    : But why's it feel so good? 
+                    : Most fun I ever had 
+                    : And I'd do it over and over and over again if I could 
+                    : It just felt so good, good 
+                    :  
+                    : Oh, you say I did something bad 
+                    : Then why's it feel so good, good? 
+                    : So bad, why's it feel so good? 
+                    : Why's it feel, why's it feel so good? (Bad) 
+                    : It just felt so good, good
+    COMPOSER        : Taylor Swift;Max Martin;Shellback
+    ICOP            : © 2018 Apollo A-1 LLC
+    SOURCE          : Deezer
+    SOURCEID        : 469435312
+    ISFT            : Lavf62.12.103
+  Stream #0:0: Audio: pcm_s24le ([1][0][0][0] / 0x0001), 44100 Hz, stereo, s32 (24 bit), 2116 kb/s
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+    Side data:
+      Replay Gain: track gain - -9.900000, track peak - unknown, album gain - unknown, album peak - unknown, 
+[out#0/wav @ 0xb40000724ee557f0] video:0KiB audio:61564KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000546%
+size=   61565KiB time=00:03:58.25 bitrate=2116.8kbits/s speed= 637x elapsed=0:00:00.37
+[2026-11-22 12:41:25.863] [INFO] Opened file: '/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/03 - I Did Something Bad (Karaoke Version).flac', tracks=1, embeddedArt=True
+[2026-11-22 12:41:25.867] [INFO] Active track ready: Faixa de áudio baseada em canais (0:03:58)
+[2026-11-22 12:41:25.981] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:41:27.148] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:41:27.295] [INFO] FFmpeg probe ok (1 audio stream(s), 2361s) for '04 - Don't Blame Me (Karaoke Version).flac'
+[2026-11-22 12:41:27.822] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/04 - Don't Blame Me (Karaoke Version).flac" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_33fb6f6766f147f8af2b233f53a9c2b5/decoded.wav"
+  stderr: Input #0, flac, from '/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/04 - Don't Blame Me (Karaoke Version).flac':
+  Metadata:
+    TITLE           : Don't Blame Me (Karaoke Version)
+    ARTIST          : Taylor Swift
+    ALBUM           : Taylor Swift Karaoke: reputation
+    album_artist    : Taylor Swift
+    track           : 4
+    TRACKTOTAL      : 15
+    disc            : 1
+    DISCTOTAL       : 1
+    GENRE           : Pop
+    DATE            : 2018-03-09
+    LENGTH          : 236000
+    BPM             : 136
+    PUBLISHER       : Big Machine Records, LLC
+    ISRC            : USCJY1831784
+    BARCODE         : 843930034970
+    ITUNESADVISORY  : 0
+    REPLAYGAIN_TRACK_GAIN: -10.9 dB
+    LYRICS          : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right 
+                    : Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life 
+                    :  
+                    : I've been breakin' hearts a long time, and 
+                    : Toyin' with them older guys 
+                    : Just playthings for me to use 
+                    : Something happened for the first time, in 
+                    : The darkest little paradise 
+                    : Shakin, pacin', I just need you 
+                    :  
+                    : For you, I would cross the line 
+                    : I would waste my time 
+                    : I would lose my mind 
+                    : They say, "She's gone too far this time" 
+                    :  
+                    : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right 
+                    : Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life 
+                    : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right 
+                    : Oh, Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life 
+                    :  
+                    : My name is whatever you decide 
+                    : And I'm just gonna call you mine 
+                    : I'm insane, but I'm your baby (your baby) 
+                    : Echoes (echoes) of your name inside my mind 
+                    : Halo, hiding my obsession 
+                    : I once was poison ivy, but now I'm your daisy 
+                    :  
+                    : And baby, for you, I (I) would (would) fall from grace 
+                    : Just (just) to (to) touch your face 
+                    : If (if) you (you) walk away 
+                    : I'd beg you on my knees to stay 
+                    :  
+                    : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right 
+                    : Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life (yeah, ooh) 
+                    : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right 
+                    : Oh, Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life 
+                    :  
+                    : I get so high, oh 
+                    : Every time you're, every time you're lovin' me 
+                    : You're lovin' me 
+                    : Trip of my life, oh 
+                    : Every time you're, every time you're touchin' me 
+                    : You're touchin' me 
+                    :  
+                    : Every time you're, every time you're lovin' me 
+                    : Oh Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life 
+                    : Usin' for the rest of my life, ohh-oh 
+                    :  
+                    : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right (doin' it right, no) 
+                    : Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life (oh) 
+                    : Don't blame me, love made me crazy (ooh) 
+                    : If it doesn't, you ain't doin' it right (you ain't doin' it right) 
+                    : Oh, Lord, save me, my drug is my baby 
+                    : I'll be usin' for (I'll be usin') the rest of my life (I'll be usin') 
+                    :  
+                    : I get so high, oh 
+                    : Every time you're, every time you're lovin' me 
+                    : You're lovin' me 
+                    : Oh, Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life
+    COMPOSER        : Taylor Swift;Max Martin;Shellback
+    COPYRIGHT       : © 2018 Apollo A-1 LLC
+    SOURCE          : Deezer
+    SOURCEID        : 469435322
+  Duration: 00:03:56.41, start: 0.000000, bitrate: 955 kb/s
+  Stream #0:0: Audio: flac, 44100 Hz, stereo, s16
+    Side data:
+      Replay Gain: track gain - -10.900000, track peak - unknown, album gain - unknown, album peak - unknown, 
+  Stream #0:1: Video: mjpeg (Progressive), yuvj420p(pc, bt470bg/unknown/unknown), 800x800 [SAR 300:300 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+    Metadata:
+      comment         : Cover (front)
+Stream mapping:
+  Stream #0:0 -> #0:0 (flac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_33fb6f6766f147f8af2b233f53a9c2b5/decoded.wav':
+  Metadata:
+    INAM            : Don't Blame Me (Karaoke Version)
+    IART            : Taylor Swift
+    IPRD            : Taylor Swift Karaoke: reputation
+    album_artist    : Taylor Swift
+    IPRT            : 4
+    TRACKTOTAL      : 15
+    disc            : 1
+    DISCTOTAL       : 1
+    IGNR            : Pop
+    ICRD            : 2018-03-09
+    LENGTH          : 236000
+    BPM             : 136
+    PUBLISHER       : Big Machine Records, LLC
+    ISRC            : USCJY1831784
+    BARCODE         : 843930034970
+    ITUNESADVISORY  : 0
+    REPLAYGAIN_TRACK_GAIN: -10.9 dB
+    LYRICS          : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right 
+                    : Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life 
+                    :  
+                    : I've been breakin' hearts a long time, and 
+                    : Toyin' with them older guys 
+                    : Just playthings for me to use 
+                    : Something happened for the first time, in 
+                    : The darkest little paradise 
+                    : Shakin, pacin', I just need you 
+                    :  
+                    : For you, I would cross the line 
+                    : I would waste my time 
+                    : I would lose my mind 
+                    : They say, "She's gone too far this time" 
+                    :  
+                    : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right 
+                    : Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life 
+                    : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right 
+                    : Oh, Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life 
+                    :  
+                    : My name is whatever you decide 
+                    : And I'm just gonna call you mine 
+                    : I'm insane, but I'm your baby (your baby) 
+                    : Echoes (echoes) of your name inside my mind 
+                    : Halo, hiding my obsession 
+                    : I once was poison ivy, but now I'm your daisy 
+                    :  
+                    : And baby, for you, I (I) would (would) fall from grace 
+                    : Just (just) to (to) touch your face 
+                    : If (if) you (you) walk away 
+                    : I'd beg you on my knees to stay 
+                    :  
+                    : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right 
+                    : Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life (yeah, ooh) 
+                    : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right 
+                    : Oh, Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life 
+                    :  
+                    : I get so high, oh 
+                    : Every time you're, every time you're lovin' me 
+                    : You're lovin' me 
+                    : Trip of my life, oh 
+                    : Every time you're, every time you're touchin' me 
+                    : You're touchin' me 
+                    :  
+                    : Every time you're, every time you're lovin' me 
+                    : Oh Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life 
+                    : Usin' for the rest of my life, ohh-oh 
+                    :  
+                    : Don't blame me, love made me crazy 
+                    : If it doesn't, you ain't doin' it right (doin' it right, no) 
+                    : Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life (oh) 
+                    : Don't blame me, love made me crazy (ooh) 
+                    : If it doesn't, you ain't doin' it right (you ain't doin' it right) 
+                    : Oh, Lord, save me, my drug is my baby 
+                    : I'll be usin' for (I'll be usin') the rest of my life (I'll be usin') 
+                    :  
+                    : I get so high, oh 
+                    : Every time you're, every time you're lovin' me 
+                    : You're lovin' me 
+                    : Oh, Lord, save me, my drug is my baby 
+                    : I'll be usin' for the rest of my life
+    COMPOSER        : Taylor Swift;Max Martin;Shellback
+    ICOP            : © 2018 Apollo A-1 LLC
+    SOURCE          : Deezer
+    SOURCEID        : 469435322
+    ISFT            : Lavf62.12.103
+  Stream #0:0: Audio: pcm_s24le ([1][0][0][0] / 0x0001), 44100 Hz, stereo, s32 (24 bit), 2116 kb/s
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+    Side data:
+      Replay Gain: track gain - -10.900000, track peak - unknown, album gain - unknown, album peak - unknown, 
+[out#0/wav @ 0xb4000078d6c65f90] video:0KiB audio:61089KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000544%
+size=   61089KiB time=00:03:56.41 bitrate=2116.8kbits/s speed= 655x elapsed=0:00:00.36
+[2026-11-22 12:41:28.007] [INFO] Opened file: '/storage/emulated/0/Music/Musics/Taylor Swift/Taylor Swift - Taylor Swift Karaoke_ reputation/04 - Don't Blame Me (Karaoke Version).flac', tracks=1, embeddedArt=True
+[2026-11-22 12:41:28.010] [INFO] Active track ready: Faixa de áudio baseada em canais (0:03:56)
+[2026-11-22 12:41:28.125] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:42:04.322] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:42:04.664] [INFO] FFmpeg probe ok (1 audio stream(s), 1781s) for '01 I Knew It, I Knew You.m4a'
+[2026-11-22 12:42:04.688] [WARN] Android MediaCodec fallback failed (IllegalArgumentException): Failed to initialize audio/unknown, error 0xfffffffe (NAME_NOT_FOUND)
+[2026-11-22 12:42:05.009] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Download/I Knew It, I Knew You - Single/I Knew It, I Knew You - Single/01 I Knew It, I Knew You.m4a" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_3a9e40a4a74e49728eec5ffe85be2cd0/decoded.wav"
+  stderr: [in#0 @ 0xb400006f5501cc90] stream 0, timescale not set
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/storage/emulated/0/Download/I Knew It, I Knew You - Single/I Knew It, I Knew You - Single/01 I Knew It, I Knew You.m4a':
+  Metadata:
+    major_brand     : M4A 
+    minor_version   : 0
+    compatible_brands: M4A mp42isom
+    creation_time   : 2026-06-01T18:25:40.000000Z
+    title           : I Knew It, I Knew You
+    artist          : Taylor Swift
+    composer        : Taylor Swift & Jack Antonoff
+    album           : I Knew It, I Knew You - Single
+    genre           : Country
+    track           : 1/1
+    disc            : 1/1
+    compilation     : 0
+    gapless_playback: 0
+    lyrics          : I knew you
+                    : Through the daze of the blades of the grass in summer
+                    : Parachutes for the free fall of being younger
+                    : 
+                    : I memorized the sound of your bare footsteps running wild
+                    : It's been a long time
+                    : Life has ways of leaving those days behind
+                    : But seeing you tonight
+                    : 
+                    : I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : I knew you, all your blues like a mood ring changing colors
+                    : You did too, there were times we could fight like brothers
+                    : 
+                    : I watched you drive around the bend
+                    : For what I thought would be the last time I saw my friend
+                    : But love has ways of bringing things back to life
+                    : All you said was, "Hi"
+                    : 
+                    : And I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : Oh, the rivers I cried when we said goodbye
+                    : Wondering if I'd made it up in my mind
+                    : But now you look me in the eye
+                    : 
+                    : And you told me I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Yeah, it's been a while
+                    : Oh
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : 
+                    : I knew it, I knew you
+                    : Wearing that same smile
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it
+    rating          : 0
+    media_type      : 1
+    album_artist    : Taylor Swift
+    sort_artist     : Taylor Swift
+    sort_name       : I Knew It, I Knew You
+    sort_composer   : Taylor Swift & Jack Antonoff
+    sort_album      : I Knew It, I Knew You - Single
+    copyright       : ℗ 2026 Walt Disney Records / Pixar
+  Duration: 00:02:58.19, start: 0.000000, bitrate: 1791 kb/s
+  Stream #0:0[0x1](und): Audio: alac (alac / 0x63616C61), 48000 Hz, stereo, s32p (24 bit), 1772 kb/s (default)
+    Metadata:
+      creation_time   : 2026-06-01T18:25:40.000000Z
+      handler_name    : Core Media Audio
+  Stream #0:1[0x0]: Video: mjpeg (Baseline), yuvj420p(pc, bt470bg/unknown/unknown), 1200x1200 [SAR 72:72 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+Stream mapping:
+  Stream #0:0 -> #0:0 (alac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_3a9e40a4a74e49728eec5ffe85be2cd0/decoded.wav':
+  Metadata:
+    major_brand     : M4A 
+    minor_version   : 0
+    compatible_brands: M4A mp42isom
+    ICOP            : ℗ 2026 Walt Disney Records / Pixar
+    INAM            : I Knew It, I Knew You
+    IART            : Taylor Swift
+    composer        : Taylor Swift & Jack Antonoff
+    IPRD            : I Knew It, I Knew You - Single
+    IGNR            : Country
+    IPRT            : 1/1
+    disc            : 1/1
+    compilation     : 0
+    gapless_playback: 0
+    lyrics          : I knew you
+                    : Through the daze of the blades of the grass in summer
+                    : Parachutes for the free fall of being younger
+                    : 
+                    : I memorized the sound of your bare footsteps running wild
+                    : It's been a long time
+                    : Life has ways of leaving those days behind
+                    : But seeing you tonight
+                    : 
+                    : I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : I knew you, all your blues like a mood ring changing colors
+                    : You did too, there were times we could fight like brothers
+                    : 
+                    : I watched you drive around the bend
+                    : For what I thought would be the last time I saw my friend
+                    : But love has ways of bringing things back to life
+                    : All you said was, "Hi"
+                    : 
+                    : And I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : Oh, the rivers I cried when we said goodbye
+                    : Wondering if I'd made it up in my mind
+                    : But now you look me in the eye
+                    : 
+                    : And you told me I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Yeah, it's been a while
+                    : Oh
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : 
+                    : I knew it, I knew you
+                    : Wearing that same smile
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it
+    rating          : 0
+    media_type      : 1
+    album_artist    : Taylor Swift
+    sort_artist     : Taylor Swift
+    sort_name       : I Knew It, I Knew You
+    sort_composer   : Taylor Swift & Jack Antonoff
+    sort_album      : I Knew It, I Knew You - Single
+    ISFT            : Lavf62.12.103
+  Stream #0:0(und): Audio: pcm_s24le ([1][0][0][0] / 0x0001), 48000 Hz, stereo, s32 (24 bit), 2304 kb/s (default)
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+      creation_time   : 2026-06-01T18:25:40.000000Z
+      handler_name    : Core Media Audio
+[out#0/wav @ 0xb400006f15020a10] video:0KiB audio:50115KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000592%
+size=   50115KiB time=00:02:58.18 bitrate=2304.0kbits/s speed=1.03e+03x elapsed=0:00:00.17
+[2026-11-22 12:42:05.198] [INFO] Opened file: '/storage/emulated/0/Download/I Knew It, I Knew You - Single/I Knew It, I Knew You - Single/01 I Knew It, I Knew You.m4a', tracks=1, embeddedArt=True
+[2026-11-22 12:42:05.223] [INFO] Active track ready: Faixa de áudio baseada em canais (0:02:58)
+[2026-11-22 12:42:05.342] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:43:02.685] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:43:05.025] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:43:13.510] [WARN] ONNX Runtime C API header missing from APK assets or failed anchor validation; cannot safely bind vtable.
+[2026-11-22 12:43:13.511] [WARN] W18/W19.b PrepareActiveTrackNeuralStemsAsync: ONNX Runtime native library could not be initialized. Reinstall ONNX Runtime in Settings.
+[2026-11-22 12:43:46.269] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:43:46.595] [INFO] FFmpeg probe ok (1 audio stream(s), 1781s) for '01 I Knew It, I Knew You.m4a'
+[2026-11-22 12:43:46.608] [WARN] Android MediaCodec fallback failed (IllegalArgumentException): Failed to initialize audio/unknown, error 0xfffffffe (NAME_NOT_FOUND)
+[2026-11-22 12:43:46.929] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Download/I Knew It, I Knew You - Single/I Knew It, I Knew You - Single/01 I Knew It, I Knew You.m4a" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_8356de4f54b346d3a32c241625441725/decoded.wav"
+  stderr: [in#0 @ 0xb400007a1e871ab0] stream 0, timescale not set
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/storage/emulated/0/Download/I Knew It, I Knew You - Single/I Knew It, I Knew You - Single/01 I Knew It, I Knew You.m4a':
+  Metadata:
+    major_brand     : M4A 
+    minor_version   : 0
+    compatible_brands: M4A mp42isom
+    creation_time   : 2026-06-01T18:25:40.000000Z
+    title           : I Knew It, I Knew You
+    artist          : Taylor Swift
+    composer        : Taylor Swift & Jack Antonoff
+    album           : I Knew It, I Knew You - Single
+    genre           : Country
+    track           : 1/1
+    disc            : 1/1
+    compilation     : 0
+    gapless_playback: 0
+    lyrics          : I knew you
+                    : Through the daze of the blades of the grass in summer
+                    : Parachutes for the free fall of being younger
+                    : 
+                    : I memorized the sound of your bare footsteps running wild
+                    : It's been a long time
+                    : Life has ways of leaving those days behind
+                    : But seeing you tonight
+                    : 
+                    : I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : I knew you, all your blues like a mood ring changing colors
+                    : You did too, there were times we could fight like brothers
+                    : 
+                    : I watched you drive around the bend
+                    : For what I thought would be the last time I saw my friend
+                    : But love has ways of bringing things back to life
+                    : All you said was, "Hi"
+                    : 
+                    : And I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : Oh, the rivers I cried when we said goodbye
+                    : Wondering if I'd made it up in my mind
+                    : But now you look me in the eye
+                    : 
+                    : And you told me I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Yeah, it's been a while
+                    : Oh
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : 
+                    : I knew it, I knew you
+                    : Wearing that same smile
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it
+    rating          : 0
+    media_type      : 1
+    album_artist    : Taylor Swift
+    sort_artist     : Taylor Swift
+    sort_name       : I Knew It, I Knew You
+    sort_composer   : Taylor Swift & Jack Antonoff
+    sort_album      : I Knew It, I Knew You - Single
+    copyright       : ℗ 2026 Walt Disney Records / Pixar
+  Duration: 00:02:58.19, start: 0.000000, bitrate: 1791 kb/s
+  Stream #0:0[0x1](und): Audio: alac (alac / 0x63616C61), 48000 Hz, stereo, s32p (24 bit), 1772 kb/s (default)
+    Metadata:
+      creation_time   : 2026-06-01T18:25:40.000000Z
+      handler_name    : Core Media Audio
+  Stream #0:1[0x0]: Video: mjpeg (Baseline), yuvj420p(pc, bt470bg/unknown/unknown), 1200x1200 [SAR 72:72 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+Stream mapping:
+  Stream #0:0 -> #0:0 (alac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_8356de4f54b346d3a32c241625441725/decoded.wav':
+  Metadata:
+    major_brand     : M4A 
+    minor_version   : 0
+    compatible_brands: M4A mp42isom
+    ICOP            : ℗ 2026 Walt Disney Records / Pixar
+    INAM            : I Knew It, I Knew You
+    IART            : Taylor Swift
+    composer        : Taylor Swift & Jack Antonoff
+    IPRD            : I Knew It, I Knew You - Single
+    IGNR            : Country
+    IPRT            : 1/1
+    disc            : 1/1
+    compilation     : 0
+    gapless_playback: 0
+    lyrics          : I knew you
+                    : Through the daze of the blades of the grass in summer
+                    : Parachutes for the free fall of being younger
+                    : 
+                    : I memorized the sound of your bare footsteps running wild
+                    : It's been a long time
+                    : Life has ways of leaving those days behind
+                    : But seeing you tonight
+                    : 
+                    : I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : I knew you, all your blues like a mood ring changing colors
+                    : You did too, there were times we could fight like brothers
+                    : 
+                    : I watched you drive around the bend
+                    : For what I thought would be the last time I saw my friend
+                    : But love has ways of bringing things back to life
+                    : All you said was, "Hi"
+                    : 
+                    : And I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : Oh, the rivers I cried when we said goodbye
+                    : Wondering if I'd made it up in my mind
+                    : But now you look me in the eye
+                    : 
+                    : And you told me I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Yeah, it's been a while
+                    : Oh
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : 
+                    : I knew it, I knew you
+                    : Wearing that same smile
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it
+    rating          : 0
+    media_type      : 1
+    album_artist    : Taylor Swift
+    sort_artist     : Taylor Swift
+    sort_name       : I Knew It, I Knew You
+    sort_composer   : Taylor Swift & Jack Antonoff
+    sort_album      : I Knew It, I Knew You - Single
+    ISFT            : Lavf62.12.103
+  Stream #0:0(und): Audio: pcm_s24le ([1][0][0][0] / 0x0001), 48000 Hz, stereo, s32 (24 bit), 2304 kb/s (default)
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+      creation_time   : 2026-06-01T18:25:40.000000Z
+      handler_name    : Core Media Audio
+[out#0/wav @ 0xb4000079ce870190] video:0KiB audio:50115KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000592%
+size=   50115KiB time=00:02:58.18 bitrate=2304.0kbits/s speed= 993x elapsed=0:00:00.17
+[2026-11-22 12:44:24.592] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:44:24.722] [INFO] FFmpeg probe ok (1 audio stream(s), 1781s) for '01 I Knew It, I Knew You.m4a'
+[2026-11-22 12:44:24.737] [WARN] Android MediaCodec fallback failed (IllegalArgumentException): Failed to initialize audio/unknown, error 0xfffffffe (NAME_NOT_FOUND)
+[2026-11-22 12:44:25.072] [FFMPEG] FFmpeg exit=0 bin="/data/app/~~93bNT_6ukbP4GAYVF4Zurg==/hu.sbence.cavern.cavernize-tgyjtAxdPdbFx9Csv54LIw==/lib/arm64/libffmpeg.so" args=-y -hide_banner -i "/storage/emulated/0/Download/I Knew It, I Knew You - Single/I Knew It, I Knew You - Single/01 I Knew It, I Knew You.m4a" -map 0:0 -c:a pcm_s24le -rf64 auto -f wav "/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_64f92f89060445389009492c699c7edf/decoded.wav"
+  stderr: [in#0 @ 0xb4000073a3c572d0] stream 0, timescale not set
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '/storage/emulated/0/Download/I Knew It, I Knew You - Single/I Knew It, I Knew You - Single/01 I Knew It, I Knew You.m4a':
+  Metadata:
+    major_brand     : M4A 
+    minor_version   : 0
+    compatible_brands: M4A mp42isom
+    creation_time   : 2026-06-01T18:25:40.000000Z
+    title           : I Knew It, I Knew You
+    artist          : Taylor Swift
+    composer        : Taylor Swift & Jack Antonoff
+    album           : I Knew It, I Knew You - Single
+    genre           : Country
+    track           : 1/1
+    disc            : 1/1
+    compilation     : 0
+    gapless_playback: 0
+    lyrics          : I knew you
+                    : Through the daze of the blades of the grass in summer
+                    : Parachutes for the free fall of being younger
+                    : 
+                    : I memorized the sound of your bare footsteps running wild
+                    : It's been a long time
+                    : Life has ways of leaving those days behind
+                    : But seeing you tonight
+                    : 
+                    : I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : I knew you, all your blues like a mood ring changing colors
+                    : You did too, there were times we could fight like brothers
+                    : 
+                    : I watched you drive around the bend
+                    : For what I thought would be the last time I saw my friend
+                    : But love has ways of bringing things back to life
+                    : All you said was, "Hi"
+                    : 
+                    : And I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : Oh, the rivers I cried when we said goodbye
+                    : Wondering if I'd made it up in my mind
+                    : But now you look me in the eye
+                    : 
+                    : And you told me I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Yeah, it's been a while
+                    : Oh
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : 
+                    : I knew it, I knew you
+                    : Wearing that same smile
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it
+    rating          : 0
+    media_type      : 1
+    album_artist    : Taylor Swift
+    sort_artist     : Taylor Swift
+    sort_name       : I Knew It, I Knew You
+    sort_composer   : Taylor Swift & Jack Antonoff
+    sort_album      : I Knew It, I Knew You - Single
+    copyright       : ℗ 2026 Walt Disney Records / Pixar
+  Duration: 00:02:58.19, start: 0.000000, bitrate: 1791 kb/s
+  Stream #0:0[0x1](und): Audio: alac (alac / 0x63616C61), 48000 Hz, stereo, s32p (24 bit), 1772 kb/s (default)
+    Metadata:
+      creation_time   : 2026-06-01T18:25:40.000000Z
+      handler_name    : Core Media Audio
+  Stream #0:1[0x0]: Video: mjpeg (Baseline), yuvj420p(pc, bt470bg/unknown/unknown), 1200x1200 [SAR 72:72 DAR 1:1], 90k tbr, 90k tbn (attached pic)
+Stream mapping:
+  Stream #0:0 -> #0:0 (alac (native) -> pcm_s24le (native))
+Press [q] to stop, [?] for help
+Output #0, wav, to '/data/user/0/hu.sbence.cavern.cavernize/cache/truehdd_work/ffwav_64f92f89060445389009492c699c7edf/decoded.wav':
+  Metadata:
+    major_brand     : M4A 
+    minor_version   : 0
+    compatible_brands: M4A mp42isom
+    ICOP            : ℗ 2026 Walt Disney Records / Pixar
+    INAM            : I Knew It, I Knew You
+    IART            : Taylor Swift
+    composer        : Taylor Swift & Jack Antonoff
+    IPRD            : I Knew It, I Knew You - Single
+    IGNR            : Country
+    IPRT            : 1/1
+    disc            : 1/1
+    compilation     : 0
+    gapless_playback: 0
+    lyrics          : I knew you
+                    : Through the daze of the blades of the grass in summer
+                    : Parachutes for the free fall of being younger
+                    : 
+                    : I memorized the sound of your bare footsteps running wild
+                    : It's been a long time
+                    : Life has ways of leaving those days behind
+                    : But seeing you tonight
+                    : 
+                    : I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : I knew you, all your blues like a mood ring changing colors
+                    : You did too, there were times we could fight like brothers
+                    : 
+                    : I watched you drive around the bend
+                    : For what I thought would be the last time I saw my friend
+                    : But love has ways of bringing things back to life
+                    : All you said was, "Hi"
+                    : 
+                    : And I remembered I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : 
+                    : Oh, the rivers I cried when we said goodbye
+                    : Wondering if I'd made it up in my mind
+                    : But now you look me in the eye
+                    : 
+                    : And you told me I loved you
+                    : Came back when it mattered
+                    : I saw you, standing there in the light of the window
+                    : Wearing that same smile
+                    : Yeah, it's been a while
+                    : Oh
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : Wearing that same smile
+                    : Man, it's been a while
+                    : But I knew it, I knew you
+                    : 
+                    : I knew it, I knew you
+                    : Wearing that same smile
+                    : I knew it, I knew you
+                    : I knew it, I knew you
+                    : I knew it
+    rating          : 0
+    media_type      : 1
+    album_artist    : Taylor Swift
+    sort_artist     : Taylor Swift
+    sort_name       : I Knew It, I Knew You
+    sort_composer   : Taylor Swift & Jack Antonoff
+    sort_album      : I Knew It, I Knew You - Single
+    ISFT            : Lavf62.12.103
+  Stream #0:0(und): Audio: pcm_s24le ([1][0][0][0] / 0x0001), 48000 Hz, stereo, s32 (24 bit), 2304 kb/s (default)
+    Metadata:
+      encoder         : Lavc62.28.103 pcm_s24le
+      creation_time   : 2026-06-01T18:25:40.000000Z
+      handler_name    : Core Media Audio
+[out#0/wav @ 0xb4000074e3c587f0] video:0KiB audio:50115KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000592%
+size=   50115KiB time=00:02:58.18 bitrate=2304.0kbits/s speed= 973x elapsed=0:00:00.18
+[2026-11-22 12:44:33.038] [INFO] Native Cavern reader fallback (NotSupportedException): inspecting container/codec...
+[2026-11-22 12:44:33.180] [INFO] FFmpeg probe ok (1 audio stream(s), 1781s) for '01 I Knew It, I Knew You [AAC LC _ 16bit _ 48kHz _ 256 kb_s _ Spatial Audio (Binaural)].m4a'
+[2026-11-22 12:45:16.100] [INFO] Activated official binaural profile 'sadie_d1_brir' (16 ch, 14400 taps @ 48000 Hz, d=1.50 m, minPhase=False, magLsO=0, bioItd=False, brirBypass=True)
+[2026-11-22 12:45:19.824] [INFO] Activated official binaural profile 'sadie_d1_dfc' (16 ch, 256 taps @ 48000 Hz, d=1.20 m, minPhase=True, magLsO=3, bioItd=False, brirBypass=False)
+[2026-11-22 12:45:46.314] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:46:28.045] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:50:35.073] [INFO] Pro-Audio Path A (AAudio Exclusive) active: 48000 Hz (req=48000 Hz), 128f, Duplex=False, OutId=3, InId=22
+[2026-11-22 12:56:36.378] [INFO] Downloaded neural model 'mbr_debleed_denoise' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/uvr_mdxnet_crowd_hq_1.onnx
+[2026-11-22 12:56:44.043] [INFO] Downloaded neural model 'mbr_vocals_studio' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/kim_vocal_2.onnx
+[2026-11-22 12:56:47.141] [INFO] Downloaded neural model 'scnet_4stem_mobile' from mirror #1 to /data/user/0/hu.sbence.cavern.cavernize/files/neural_models/scnet_4stem_fp16.onnx
