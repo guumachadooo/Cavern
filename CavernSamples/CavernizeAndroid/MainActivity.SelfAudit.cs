@@ -99,7 +99,7 @@ public partial class MainActivity {
         return ("Simple", 90, 240);
     }
 
-    async Task<UiPerfSample> MeasureUiTransitionAsync(
+    async Task<(UiPerfSample Sample, bool VsyncSampled)> MeasureUiTransitionAsync(
         string targetName,
         Action uiTransition,
         CancellationToken ct) {
@@ -107,24 +107,37 @@ public partial class MainActivity {
         long startStamp = Stopwatch.GetTimestamp();
         UiFrameJankSampler sampler = new(startStamp, targetFrames: 3);
 
-        long uiBlockMs = await RunOnUiThreadWithTimeoutAsync(() => {
+        (long uiBlockMs, bool canSampleVsync) = await RunOnUiThreadWithTimeoutAsync(() => {
             Stopwatch sw = Stopwatch.StartNew();
             uiTransition();
             sw.Stop();
-            sampler.StartOnUiThread();
-            return sw.ElapsedMilliseconds;
+            bool visible = isActivityResumed && !uiDestroyed && Window?.DecorView?.WindowVisibility == ViewStates.Visible;
+            if (visible) {
+                sampler.StartOnUiThread();
+            }
+            return (sw.ElapsedMilliseconds, visible);
         }, 4000).ConfigureAwait(false);
 
-        // Wait for 3 real Choreographer vsync frames (or bounded timeout when screen is off/headless)
-        Task timeoutTask = Task.Delay(350, ct);
-        Task completed = await Task.WhenAny(sampler.Task, timeoutTask).ConfigureAwait(false);
         long firstFrameMs;
         double worstFrameMs;
         int dropped;
-        if (completed == sampler.Task) {
-            (firstFrameMs, worstFrameMs, dropped) = await sampler.Task.ConfigureAwait(false);
+        bool vsyncSampled = false;
+        if (canSampleVsync) {
+            // Wait for 3 real Choreographer vsync frames (bounded timeout if screen turns off mid-audit)
+            Task timeoutTask = Task.Delay(350, ct);
+            Task completed = await Task.WhenAny(sampler.Task, timeoutTask).ConfigureAwait(false);
+            if (completed == sampler.Task) {
+                (firstFrameMs, worstFrameMs, dropped) = await sampler.Task.ConfigureAwait(false);
+                vsyncSampled = true;
+            } else {
+                // Screen/vsync paused mid-transition: evaluate using true main-thread block time without adding timeout penalty
+                firstFrameMs = uiBlockMs;
+                worstFrameMs = uiBlockMs;
+                dropped = uiBlockMs > 34 ? (int)(uiBlockMs / 16.67) : 0;
+            }
         } else {
-            firstFrameMs = Math.Max(uiBlockMs, (long)Stopwatch.GetElapsedTime(startStamp).TotalMilliseconds);
+            // Headless/background Live Bridge run: Android pauses Choreographer vsync; measure real UI-thread block directly
+            firstFrameMs = uiBlockMs;
             worstFrameMs = uiBlockMs;
             dropped = uiBlockMs > 34 ? (int)(uiBlockMs / 16.67) : 0;
         }
@@ -139,7 +152,7 @@ public partial class MainActivity {
             status = "OK";
         }
 
-        return new UiPerfSample {
+        UiPerfSample sample = new() {
             Target = targetName,
             Complexity = tier,
             BudgetMs = warnBudgetMs,
@@ -149,6 +162,7 @@ public partial class MainActivity {
             DroppedFrames = dropped,
             Status = status
         };
+        return (sample, vsyncSampled);
     }
 
     async Task<(List<SelfCheckItem> Checks, List<UiPerfSample> PerfSamples)> RunLiveUiSelfAuditInternalAsync(
@@ -171,6 +185,8 @@ public partial class MainActivity {
         (int savedTab, int savedCat, bool savedPro, string savedSearch) = await RunOnUiThreadWithTimeoutAsync(() =>
             (activeTab, activeSettingsCategory, isSettingsProMode, settingsSearchQuery ?? ""), 4000).ConfigureAwait(false);
 
+        isRunningUiSelfAudit = true;
+        int vsyncSampledCount = 0;
         try {
             // ==================== L8: 5 TABS + 6 SETTINGS CATEGORIES GEOMETRY, TEXT & LATENCY AUDIT ====================
             ct.ThrowIfCancellationRequested();
@@ -182,13 +198,14 @@ public partial class MainActivity {
             for (int t = 0; t <= 4; t++) {
                 ct.ThrowIfCancellationRequested();
                 int tabIdx = t;
-                UiPerfSample perf = await MeasureUiTransitionAsync(tabLabels[tabIdx], () => {
+                (UiPerfSample perf, bool vsyncOk) = await MeasureUiTransitionAsync(tabLabels[tabIdx], () => {
                     SwitchTab(tabIdx);
                     if (tabIdx == 4) {
                         ClearSettingsSearch();
                         OpenSettingsCategory(-1);
                     }
                 }, ct).ConfigureAwait(false);
+                if (vsyncOk) vsyncSampledCount++;
                 perfSamples.Add(perf);
 
                 await RunOnUiThreadWithTimeoutAsync(() => {
@@ -209,9 +226,10 @@ public partial class MainActivity {
                 ct.ThrowIfCancellationRequested();
                 int catIdx = cat;
                 string catLabel = $"SettingsCat{catIdx}";
-                UiPerfSample perf = await MeasureUiTransitionAsync(catLabel, () => {
+                (UiPerfSample perf, bool vsyncOk) = await MeasureUiTransitionAsync(catLabel, () => {
                     OpenSettingsCategory(catIdx);
                 }, ct).ConfigureAwait(false);
+                if (vsyncOk) vsyncSampledCount++;
                 perfSamples.Add(perf);
 
                 await RunOnUiThreadWithTimeoutAsync(() => {
@@ -279,10 +297,11 @@ public partial class MainActivity {
                 ct.ThrowIfCancellationRequested();
                 onProgress?.Invoke($"L9/L12 Modal: {modalName}");
                 try {
-                    UiPerfSample perf = await MeasureUiTransitionAsync($"Modal:{modalName}", () => {
+                    (UiPerfSample perf, bool vsyncOk) = await MeasureUiTransitionAsync($"Modal:{modalName}", () => {
                         OneUiModalDialog.DismissAllActiveDialogs();
                         opener();
                     }, ct).ConfigureAwait(false);
+                    if (vsyncOk) vsyncSampledCount++;
                     perfSamples.Add(perf);
 
                     await RunOnUiThreadWithTimeoutAsync(() => {
@@ -424,18 +443,21 @@ public partial class MainActivity {
                 ? SelfCheckStatus.Fail
                 : (slows.Count > 0 ? SelfCheckStatus.Warn : SelfCheckStatus.Pass);
             string detL12;
+            string modeTag = vsyncSampledCount == 0
+                ? " [background UI-block mode]"
+                : (vsyncSampledCount < perfSamples.Count ? $" [{vsyncSampledCount}/{perfSamples.Count} vsync]" : "");
             if (stalls.Count > 0) {
                 string topStalls = string.Join(", ", stalls.Take(5).Select(s => $"{s.Target}({s.UiThreadBlockMs}ms/1st={s.FirstFrameMs}ms>{s.BudgetMs}ms)"));
-                detL12 = $"{stalls.Count} UI stall(s), {slows.Count} slow ({perfSamples.Count} targets, P50={p50}ms, P95={p95}ms, drops={totalDrops}): {topStalls}";
+                detL12 = $"{stalls.Count} UI stall(s), {slows.Count} slow ({perfSamples.Count} targets, P50={p50}ms, P95={p95}ms, drops={totalDrops}){modeTag}: {topStalls}";
             } else if (slows.Count > 0) {
                 string topSlows = string.Join(", ", slows.Take(5).Select(s => $"{s.Target}({s.UiThreadBlockMs}ms/1st={s.FirstFrameMs}ms>{s.BudgetMs}ms)"));
-                detL12 = $"0 stalls, {slows.Count} slower-than-budget target(s) ({perfSamples.Count} profiled, P50={p50}ms, P95={p95}ms, drops={totalDrops}): {topSlows}";
+                detL12 = $"0 stalls, {slows.Count} slower-than-budget target(s) ({perfSamples.Count} profiled, P50={p50}ms, P95={p95}ms, drops={totalDrops}){modeTag}: {topSlows}";
             } else {
                 string worstDesc = worst != null ? $"{worst.Target}={worst.FirstFrameMs}ms" : "n/a";
                 detL12 = string.Format(
                     CultureInfo.InvariantCulture,
-                    "All {0} screens/modals within latency budget (P50={1}ms, P95={2}ms, max={3}, drops={4})",
-                    perfSamples.Count, p50, p95, worstDesc, totalDrops);
+                    "All {0} screens/modals within latency budget (P50={1}ms, P95={2}ms, max={3}, drops={4}){5}",
+                    perfSamples.Count, p50, p95, worstDesc, totalDrops, modeTag);
             }
             results.Add(new SelfCheckItem {
                 Id = "ui.perf_latency_jank",
@@ -446,6 +468,7 @@ public partial class MainActivity {
                 Details = detL12
             });
         } finally {
+            isRunningUiSelfAudit = false;
             // Guaranteed restore of the user's exact screen state
             try {
                 await RunOnUiThreadWithTimeoutAsync(() => {

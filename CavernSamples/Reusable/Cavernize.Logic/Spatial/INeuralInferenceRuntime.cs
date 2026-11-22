@@ -442,6 +442,8 @@ public static class NeuralAudioOfflinePipeline {
             int fixedChunk = catalogEntry.ContractKind switch {
                 NeuralOnnxContractKind.MdxNetStft4Ch when catalogEntry.StftDimT > 0 && catalogEntry.StftHopSize > 0 =>
                     (catalogEntry.StftDimT - 1) * catalogEntry.StftHopSize,
+                NeuralOnnxContractKind.ScnetStft4Ch when catalogEntry.StftDimT > 0 && catalogEntry.StftHopSize > 0 =>
+                    (catalogEntry.StftDimT - 1) * catalogEntry.StftHopSize,
                 NeuralOnnxContractKind.WaveformStereo when session?.InputShapes != null && session.InputShapes.Count > 0 =>
                     ResolveFixedWaveformLength(session.InputShapes[0]),
                 _ => 0
@@ -650,16 +652,23 @@ public static class NeuralAudioOfflinePipeline {
         int hop = contract.HopSize > 0 ? contract.HopSize : 1024;
         int dimF = contract.DimF > 0 ? contract.DimF : (nFft / 2 + 1);
 
-        // Pad chunk so SCNet's STFT frame count T = 1 + paddedLen/hop is odd? SCNet.py ensures (len + pad)//hop is odd -> frames is even.
-        int pad = hop - (chunkSamples % hop);
-        if (((chunkSamples + pad) / hop) % 2 == 0) {
-            pad += hop;
+        // When the exported SCNet ONNX graph bakes fixed DFT MatMul weights (e.g. bgkb/scnet_onnx [474, 238]),
+        // enforce exact target frame count DimT via paddedSamples = (DimT - 1) * hop so STFT yields 1 + (DimT - 1) = DimT frames.
+        int paddedSamples;
+        if (contract.DimT > 0) {
+            paddedSamples = (contract.DimT - 1) * hop;
+        } else {
+            int pad = hop - (chunkSamples % hop);
+            if (((chunkSamples + pad) / hop) % 2 == 0) {
+                pad += hop;
+            }
+            paddedSamples = chunkSamples + pad;
         }
-        int paddedSamples = chunkSamples + pad;
         float[] padL = new float[paddedSamples];
         float[] padR = new float[paddedSamples];
-        Array.Copy(chunkLeft, padL, chunkSamples);
-        Array.Copy(chunkRight, padR, chunkSamples);
+        int copyIn = Math.Min(chunkSamples, paddedSamples);
+        Array.Copy(chunkLeft, padL, copyIn);
+        Array.Copy(chunkRight, padR, copyIn);
 
         int frames = MixedRadixFft.ComputeComplexStft(padL, nFft, hop, dimF, out float[] lRe, out float[] lIm);
         MixedRadixFft.ComputeComplexStft(padR, nFft, hop, dimF, out float[] rRe, out float[] rIm);

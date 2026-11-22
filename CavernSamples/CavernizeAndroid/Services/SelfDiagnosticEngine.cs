@@ -167,6 +167,8 @@ public static class SelfDiagnosticEngine {
         new("V8_Ebu_EqDlg",      true,  false, false, LoudnessNormalizationMode.EbuR128Minus23,    true,  -1.0f)
     ];
 
+    static readonly SemaphoreSlim runGate = new(1, 1);
+
     public static Task<SelfCheckReport> RunAsync(
         Context context,
         AppSettingsStore store,
@@ -190,6 +192,8 @@ public static class SelfDiagnosticEngine {
         SelfCheckMode mode,
         Action<string> onProgress,
         CancellationToken ct) {
+        await runGate.WaitAsync(ct).ConfigureAwait(false);
+        try {
         Stopwatch totalSw = Stopwatch.StartNew();
         List<SelfCheckItem> checks = [];
         string modeName = mode switch {
@@ -383,22 +387,23 @@ public static class SelfDiagnosticEngine {
             UiPerfSamples = uiPerfSamples
         };
 
-        if (report.FailCount > 0) {
-            AppLogger.Error("SYS", $"SelfCheck finished: {report.CompactSummary}");
-        } else if (report.WarnCount > 0) {
+        if (report.FailCount > 0 || report.WarnCount > 0) {
             AppLogger.Warn("SYS", $"SelfCheck finished: {report.CompactSummary}");
         } else {
             AppLogger.Info("SYS", $"SelfCheck finished: {report.CompactSummary}");
         }
         foreach (SelfCheckItem item in checks) {
             if (item.Status == SelfCheckStatus.Fail) {
-                AppLogger.Error("SYS", $"SelfCheck FAIL [{item.Id}]: {item.Details}");
+                AppLogger.Warn("SYS", $"SelfCheck FAIL [{item.Id}]: {item.Details}");
             } else if (item.Status == SelfCheckStatus.Warn) {
                 AppLogger.Warn("SYS", $"SelfCheck WARN [{item.Id}]: {item.Details}");
             }
         }
 
         return report;
+        } finally {
+            runGate.Release();
+        }
     }
 
     static (SelfCheckStatus, string) CheckNativeLibs(Context context) {

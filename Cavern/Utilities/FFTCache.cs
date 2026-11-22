@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 using System.Threading;
 
@@ -61,6 +61,16 @@ namespace Cavern.Utilities {
         static readonly int[] refcounts = new int[30];
 
         /// <summary>
+        /// Indicates whether <see cref="evenMask"/> and <see cref="oddMask"/> have been initialized.
+        /// </summary>
+        static bool masksInitialized;
+
+        /// <summary>
+        /// Guard flag ensuring <see cref="ReleaseCache"/> only decrements <see cref="refcounts"/> once per instance.
+        /// </summary>
+        int disposed;
+
+        /// <summary>
         /// FFT cache constructor.
         /// </summary>
         public FFTCache(int size) {
@@ -105,26 +115,28 @@ namespace Cavern.Utilities {
         /// Recreate the even and odd vector masks if they don't yet exist.
         /// </summary>
         internal static void EnsureMasks() {
-            if (evenMask[1] != 0) {
+            if (Volatile.Read(ref masksInitialized)) {
                 return;
             }
 
-            float[] maskSource = new float[Vector<float>.Count + 1];
-            for (int i = 0; i < maskSource.Length; i++) {
-                int odd = i & 1;
-                maskSource[i] = odd;
+            lock (refcounts) {
+                if (masksInitialized) {
+                    return;
+                }
+                float[] maskSource = new float[Vector<float>.Count + 1];
+                for (int i = 0; i < maskSource.Length; i++) {
+                    maskSource[i] = i & 1;
+                }
+                evenMask = new Vector<float>(maskSource, 1);
+                oddMask = new Vector<float>(maskSource);
+                Volatile.Write(ref masksInitialized, true);
             }
-            evenMask = new Vector<float>(maskSource, 1);
-            oddMask = new Vector<float>(maskSource);
         }
 
         /// <summary>
         /// Free all used resources if there is any.
         /// </summary>
         public void Dispose() {
-            if (Native != IntPtr.Zero) {
-                CavernAmp.FFTCache_Dispose(Native);
-            }
             GC.SuppressFinalize(this);
             ReleaseCache();
         }
@@ -150,13 +162,18 @@ namespace Cavern.Utilities {
         /// Release the static cos/sin cache arrays and decrement refcounts.
         /// </summary>
         void ReleaseCache() {
+            if (Interlocked.Exchange(ref disposed, 1) != 0) {
+                return;
+            }
             if (Native != IntPtr.Zero) {
+                CavernAmp.FFTCache_Dispose(Native);
+                Native = IntPtr.Zero;
                 return;
             }
 
             for (int i = 0, c = QMath.Log2(Size); i < c; i++) {
                 lock (refcounts) {
-                    if (--refcounts[i] == 0) {
+                    if (refcounts[i] > 0 && --refcounts[i] == 0) {
                         cos[i] = null;
                         sin[i] = null;
                     }

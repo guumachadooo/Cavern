@@ -184,6 +184,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
     int activeTab;
     Handler uiHandler;
     bool uiDestroyed;
+    volatile bool isActivityResumed;
+    volatile bool isRunningUiSelfAudit;
 
     // Dynamic One UI 9 Color Tokens (automatically adapt to system Wallpaper Palette on API 31+)
     static Color ColBg => OneUiTheme.BgScreen;
@@ -430,6 +432,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     protected override void OnResume() {
         base.OnResume();
+        isActivityResumed = true;
         if (!string.IsNullOrEmpty(pendingInstallApkPath) &&
             File.Exists(pendingInstallApkPath) &&
             AppUpdateService.CanInstallPackages(this)) {
@@ -437,6 +440,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
             pendingInstallApkPath = null;
             AppUpdateService.LaunchInstaller(this, path);
         }
+    }
+
+    protected override void OnPause() {
+        isActivityResumed = false;
+        base.OnPause();
     }
 
     protected override void OnNewIntent(Intent intent) {
@@ -3615,7 +3623,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
     }
 
     void ShowError(string msg) {
-        AppLogger.Error($"UI Error shown: {msg}");
+        if (isRunningUiSelfAudit) {
+            AppLogger.Info("UI", $"[SelfAudit] Expected modal guard shown: {msg}");
+        } else {
+            AppLogger.Error($"UI Error shown: {msg}");
+        }
         if (uiDestroyed) {
             return;
         }

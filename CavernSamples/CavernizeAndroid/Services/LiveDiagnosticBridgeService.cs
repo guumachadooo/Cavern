@@ -1176,7 +1176,7 @@ public static class LiveDiagnosticBridgeService {
                         (bool subOk, string subOut) = await ExecuteSingleCommandAsync(
                             context, store, maxTier, subCmd, subArgs, legacyLines, legacyErrorsOnly, ct, depth + 1).ConfigureAwait(false);
                         prevOut = subOut ?? "";
-                        results.Add(new { step = count, cmd = subCmd, ok = subOk, body = Truncate(prevOut, 24_000) });
+                        results.Add(new { step = count, cmd = subCmd, ok = subOk, body = TruncateForCommand(subCmd, subArgs, prevOut, 24_000) });
                         if (!subOk) {
                             allOk = false;
                             if (stopOnError) {
@@ -1207,7 +1207,7 @@ public static class LiveDiagnosticBridgeService {
                             : default;
                         (bool subOk, string subOut) = await ExecuteSingleCommandAsync(
                             context, store, maxTier, subCmd, subArgs, legacyLines, legacyErrorsOnly, ct, depth + 1).ConfigureAwait(false);
-                        results.Add(new { cmd = subCmd, ok = subOk, body = Truncate(subOut, 24_000) });
+                        results.Add(new { cmd = subCmd, ok = subOk, body = TruncateForCommand(subCmd, subArgs, subOut, 24_000) });
                     }
                     return (true, JsonSerializer.Serialize(new { count = results.Count, results }, new JsonSerializerOptions { WriteIndented = true }));
                 }
@@ -1781,6 +1781,9 @@ public static class LiveDiagnosticBridgeService {
         AddIfSet(context.CacheDir?.AbsolutePath);
         AddIfSet(context.ApplicationInfo?.NativeLibraryDir);
         AddIfSet("/sdcard/Download/Cavernize");
+        if (!string.IsNullOrEmpty(AppLogger.SharedLogPath)) {
+            AddIfSet(Path.GetDirectoryName(AppLogger.SharedLogPath));
+        }
         return roots;
     }
 
@@ -1807,12 +1810,15 @@ public static class LiveDiagnosticBridgeService {
     static (bool ok, string output) ExecuteFilesList(Context context, JsonElement argsEl) {
         string scope = GetArgString(argsEl, "scope", "logs").ToLowerInvariant();
         string subdir = GetArgString(argsEl, "subdir", "");
+        string resolvedLogsDir = !string.IsNullOrEmpty(AppLogger.SharedLogPath)
+            ? Path.GetDirectoryName(AppLogger.SharedLogPath)
+            : Path.Combine(context.FilesDir?.AbsolutePath ?? "", "logs");
         string baseDir = scope switch {
             "files" => context.FilesDir?.AbsolutePath,
             "cache" => context.CacheDir?.AbsolutePath,
             "native" => context.ApplicationInfo?.NativeLibraryDir,
             "downloads" => "/sdcard/Download/Cavernize",
-            _ => Path.Combine(context.FilesDir?.AbsolutePath ?? "", "Logs")
+            _ => resolvedLogsDir
         };
         if (string.IsNullOrWhiteSpace(baseDir)) {
             return (false, "Scope root unavailable.");
@@ -2118,6 +2124,17 @@ public static class LiveDiagnosticBridgeService {
 
     static string Truncate(string text, int maxLen) =>
         string.IsNullOrEmpty(text) || text.Length <= maxLen ? (text ?? "") : text[..maxLen] + "\n... [truncated]";
+
+    static string TruncateForCommand(string cmd, JsonElement argsEl, string text, int maxLen) {
+        if (string.IsNullOrEmpty(text) || text.Length <= maxLen) {
+            return text ?? "";
+        }
+        bool keepTail = string.Equals(cmd, "log_tail", StringComparison.OrdinalIgnoreCase)
+            || (string.Equals(cmd, "file_read", StringComparison.OrdinalIgnoreCase) && GetArgBool(argsEl, "tail", true));
+        return keepTail
+            ? "... [earlier lines truncated]\n" + text[^maxLen..]
+            : text[..maxLen] + "\n... [truncated]";
+    }
 
     internal static void NotifyStateChanged() {
         try {

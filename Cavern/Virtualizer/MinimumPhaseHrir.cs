@@ -48,14 +48,17 @@ namespace Cavern.Virtualizer {
                 return;
             }
 
-            // Measure true interaural time difference (positive => right ear arrives later than left ear)
-            int itdSamples = EstimateInterauralDelaySamples(leftIR, rightIR, sampleRate);
-
             // Minimum-phase decomposition on padded FFT size (4x zero-padding prevents time-aliasing in cepstrum)
             int fftSize = 1 << QMath.Log2Ceil(Math.Max(256, len * 4));
-            FFTCache cache = new ThreadSafeFFTCache(fftSize);
-            float[] rawMinL = ComputeMinimumPhase(leftIR, len, fftSize, cache);
-            float[] rawMinR = ComputeMinimumPhase(rightIR, len, fftSize, cache);
+            float[] rawMinL, rawMinR;
+            int itdSamples;
+            using (FFTCache cache = new ThreadSafeFFTCache(fftSize)) {
+                // Measure true physical ITD via Duplex-Theory low-pass (<=1500 Hz) waveform cross-correlation
+                // (positive => right ear arrives later than left ear; immune to MagLS HF phase relaxation & pinna peaks)
+                itdSamples = EstimateInterauralDelaySamples(leftIR, rightIR, sampleRate, fftSize, cache);
+                rawMinL = ComputeMinimumPhase(leftIR, len, fftSize, cache);
+                rawMinR = ComputeMinimumPhase(rightIR, len, fftSize, cache);
+            }
 
             int delayL = itdSamples < 0 ? -itdSamples : 0;
             int delayR = itdSamples > 0 ? itdSamples : 0;
@@ -124,10 +127,13 @@ namespace Cavern.Virtualizer {
         }
 
         /// <summary>
-        /// Estimates integer interaural time difference (ITD = onsetRight - onsetLeft) by normalized cross-correlation
-        /// of the impulse envelopes around the primary onset, bounded to physically plausible head lags (+/- 1.2 ms).
+        /// Estimates integer interaural time difference (ITD = onsetRight - onsetLeft) via Duplex-Theory
+        /// low-pass filtered (&lt;= 1500 Hz, smooth Hann rolloff 1200–1800 Hz) zero-phase waveform cross-correlation,
+        /// bounded to physically plausible head lags (+/- 1.2 ms).
+        /// Low-pass fine-structure correlation preserves exact physical ITD even when high-frequency phase has been
+        /// relaxed by spherical-harmonic MagLS decoding or modulated by pinna reflections (Katz &amp; Noisternig 2014).
         /// </summary>
-        static int EstimateInterauralDelaySamples(float[] leftIR, float[] rightIR, int sampleRate) {
+        static int EstimateInterauralDelaySamples(float[] leftIR, float[] rightIR, int sampleRate, int fftSize, FFTCache cache) {
             int len = Math.Min(leftIR.Length, rightIR.Length);
             if (len < 8) {
                 return 0;
@@ -136,27 +142,72 @@ namespace Cavern.Virtualizer {
                 sampleRate = 48000;
             }
 
-            // Compute low-pass smoothed energy envelope for robust onset ITD matching
-            float[] envL = new float[len];
-            float[] envR = new float[len];
-            float maxL = 0f, maxR = 0f;
-            for (int i = 0; i < len; i++) {
-                float lv = leftIR[i];
-                float rv = rightIR[i];
-                float al = !float.IsNaN(lv) && !float.IsInfinity(lv) ? MathF.Abs(lv) : 0f;
-                float ar = !float.IsNaN(rv) && !float.IsInfinity(rv) ? MathF.Abs(rv) : 0f;
-                envL[i] = al;
-                envR[i] = ar;
-                if (al > maxL) {
-                    maxL = al;
-                }
-                if (ar > maxR) {
-                    maxR = ar;
+            Complex[] specL = new Complex[fftSize];
+            Complex[] specR = new Complex[fftSize];
+            double energyL = 0.0, energyR = 0.0;
+            for (int i = 0; i < leftIR.Length; i++) {
+                float v = leftIR[i];
+                if (!float.IsNaN(v) && !float.IsInfinity(v)) {
+                    specL[i] = new Complex(v, 0f);
+                    energyL += (double)v * v;
                 }
             }
-            if (maxL < 1e-6f || maxR < 1e-6f) {
+            for (int i = 0; i < rightIR.Length; i++) {
+                float v = rightIR[i];
+                if (!float.IsNaN(v) && !float.IsInfinity(v)) {
+                    specR[i] = new Complex(v, 0f);
+                    energyR += (double)v * v;
+                }
+            }
+            if (energyL < 1e-12 || energyR < 1e-12) {
                 return 0;
             }
+
+            specL.InPlaceFFT(cache);
+            specR.InPlaceFFT(cache);
+
+            // Compute low-pass weighted cross-power spectrum: X[k] = W(f_k) * conj(L[k]) * R[k]
+            // Smooth Hann rolloff 1200..1800 Hz isolates Duplex-Theory ITD without Gibbs ringing.
+            const double passHz = 1200.0;
+            const double stopHz = 1800.0;
+            double binHz = (double)sampleRate / fftSize;
+            int half = fftSize >> 1;
+
+            Complex[] xcorr = new Complex[fftSize];
+            double lowEnergy = 0.0;
+            double totalEnergy = 0.0;
+            for (int k = 1; k < half; k++) {
+                double f = k * binHz;
+                float lr = specL[k].Real, li = specL[k].Imaginary;
+                float rr = specR[k].Real, ri = specR[k].Imaginary;
+                double binE = (double)lr * lr + (double)li * li + (double)rr * rr + (double)ri * ri;
+                totalEnergy += binE;
+
+                if (f >= stopHz) {
+                    continue;
+                }
+                float w = f <= passHz
+                    ? 1f
+                    : (float)(0.5 * (1.0 + Math.Cos(Math.PI * (f - passHz) / (stopHz - passHz))));
+                lowEnergy += binE * w;
+
+                // conj(L) * R = (lr - i*li)(rr + i*ri) = (lr*rr + li*ri) + i*(lr*ri - li*rr)
+                float re = (lr * rr + li * ri) * w;
+                float im = (lr * ri - li * rr) * w;
+                xcorr[k] = new Complex(re, im);
+                xcorr[fftSize - k] = new Complex(re, -im);
+            }
+
+            // Fallback to broadband cross-correlation only for synthetic high-pass/ultrasonic impulses with no LF energy
+            if (lowEnergy < totalEnergy * 1e-6) {
+                for (int k = 0; k < fftSize; k++) {
+                    float lr = specL[k].Real, li = specL[k].Imaginary;
+                    float rr = specR[k].Real, ri = specR[k].Imaginary;
+                    xcorr[k] = new Complex(lr * rr + li * ri, lr * ri - li * rr);
+                }
+            }
+
+            xcorr.InPlaceIFFT(cache);
 
             // Bounded lag search (+/- 1.2 ms at sampleRate, well above max human head ITD ~0.75 ms)
             int maxLag = Math.Max(8, (int)Math.Ceiling(0.0012 * sampleRate));
@@ -164,12 +215,8 @@ namespace Cavern.Virtualizer {
             int bestLag = 0;
             double bestCorr = double.NegativeInfinity;
             for (int lag = -maxLag; lag <= maxLag; lag++) {
-                double corr = 0;
-                int start = lag < 0 ? -lag : 0;
-                int end = lag > 0 ? len - lag : len;
-                for (int i = start; i < end; i++) {
-                    corr += envL[i] * envR[i + lag];
-                }
+                int idx = lag >= 0 ? lag : fftSize + lag;
+                double corr = xcorr[idx].Real;
                 if (!double.IsNaN(corr) && !double.IsInfinity(corr) && corr > bestCorr) {
                     bestCorr = corr;
                     bestLag = lag;

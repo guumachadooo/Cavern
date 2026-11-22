@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -77,8 +77,27 @@ namespace Cavern.Utilities {
                 float* cosCache = pCosCache,
                     sinCache = pSinCache;
 
-                // SIMD pass
-                while (result <= endSimd) {
+                // Process index 0 scalar so SIMD oddRight ((float*)oddRef - 1) never reads before odd[0]
+                // (prevents out-of-bounds heap reads where NaN/Inf header bits survive * 0f masking in IEEE-754)
+                if (result < end) {
+                    float oddReal0 = oddRef->X,
+                        oddImag0 = oddRef->Y,
+                        cos0 = *cosCache,
+                        sin0 = *sinCache;
+                    Vector2 newOdd0 = new Vector2(oddReal0 * cos0 - oddImag0 * sin0,
+                        oddReal0 * sin0 + oddImag0 * cos0);
+                    *result = *evenRef + newOdd0;
+                    *mirror = *evenRef - newOdd0;
+                    result++;
+                    mirror++;
+                    evenRef++;
+                    oddRef++;
+                    cosCache += 2;
+                    sinCache += 2;
+                }
+
+                // SIMD pass (strictly in-bounds: result < endSimd guarantees oddLeft stays inside odd[])
+                while (result < endSimd) {
                     Vector<float> oddRight = new Vector<float>(new Span<float>((float*)oddRef - 1, Vector<float>.Count)),
                         oddVec = new Vector<float>(new Span<float>((float*)oddRef, Vector<float>.Count)),
                         oddLeft = new Vector<float>(new Span<float>((float*)oddRef + 1, Vector<float>.Count));

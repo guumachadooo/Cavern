@@ -225,7 +225,7 @@ public static class AcousticAuditEngine {
                                 return ("FAIL", $"Invalid upmix output (nf={fp.NonFiniteCount}, rmsL={fp.RmsLeftDbfs:0.0}dBFS)", fp);
                             }
                             if (fp.Sub20To120Db > 5.5f) {
-                                return ("FAIL", $"Excessive sub-bass boom ({fp.Sub20To120Db:+0.0} dB) — check LFESeparation bleed!", fp);
+                                return ("FAIL", $"Excessive sub-bass boom ({fp.Sub20To120Db:+0.0;-0.0;0.0} dB) — check LFESeparation bleed!", fp);
                             }
                             bool warn = fp.Sub20To120Db > 4.2f || MathF.Abs(fp.Mid500To2k5Db) > 3.0f || MathF.Abs(fp.Air8kTo20kDb) > 3.5f;
                             return (warn ? "WARN" : "PASS",
@@ -245,11 +245,11 @@ public static class AcousticAuditEngine {
                             float bandSpan = Max5(fp.Sub20To120Db, fp.Bass120To500Db, fp.Mid500To2k5Db, fp.Pres2k5To8kDb, fp.Air8kTo20kDb)
                                            - Min5(fp.Sub20To120Db, fp.Bass120To500Db, fp.Mid500To2k5Db, fp.Pres2k5To8kDb, fp.Air8kTo20kDb);
                             if (fp.NonFiniteCount > 0 || fp.IldDb < 8.0f || fp.ItdUs < 450f) {
-                                return ("FAIL", $"Broken lateral spatialization: ILD={fp.IldDb:+0.0}dB, ITD={fp.ItdUs:+0}us", fp);
+                                return ("FAIL", $"Broken lateral spatialization: ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us", fp);
                             }
                             bool warn = bandSpan > 4.0f;
                             return (warn ? "WARN" : "PASS",
-                                $"Strong lateral cues (ILD={fp.IldDb:+0.0}dB, ITD={fp.ItdUs:+0}us, bandSpan={bandSpan:0.0}dB)", fp);
+                                $"Strong lateral cues (ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us, bandSpan={bandSpan:0.0}dB)", fp);
                         }));
 
                     ct.ThrowIfCancellationRequested();
@@ -263,9 +263,9 @@ public static class AcousticAuditEngine {
                             AcousticFingerprint fp = AnalyzeStereo(restL, restR, lossyL, lossyR, ProbeSampleRate, ProbeUpdateRate);
                             bool lowIntact = MathF.Abs(fp.Sub20To120Db) <= 1.2f && MathF.Abs(fp.Bass120To500Db) <= 1.2f && MathF.Abs(fp.Mid500To2k5Db) <= 1.2f;
                             if (fp.NonFiniteCount > 0 || fp.Air8kTo20kDb < 2.0f || !lowIntact) {
-                                return ("FAIL", $"LGSR defect: Air={fp.Air8kTo20kDb:+0.0}dB, Mid={fp.Mid500To2k5Db:+0.0}dB, coh={tel.AverageCoherence:0.00}", fp);
+                                return ("FAIL", $"LGSR defect: Air={fp.Air8kTo20kDb:+0.0;-0.0;0.0}dB, Mid={fp.Mid500To2k5Db:+0.0;-0.0;0.0}dB, coh={tel.AverageCoherence:0.00}", fp);
                             }
-                            return ("PASS", $"HF restored Air={fp.Air8kTo20kDb:+0.0}dB, Prs={fp.Pres2k5To8kDb:+0.0}dB, coh={tel.AverageCoherence:0.00}, fusion={tel.ActiveFusionRatio:0.00}", fp);
+                            return ("PASS", $"HF restored Air={fp.Air8kTo20kDb:+0.0;-0.0;0.0}dB, Prs={fp.Pres2k5To8kDb:+0.0;-0.0;0.0}dB, coh={tel.AverageCoherence:0.00}, fusion={tel.ActiveFusionRatio:0.00}", fp);
                         }));
 
                     if (!quickSubset) {
@@ -283,9 +283,9 @@ public static class AcousticAuditEngine {
                                 (float[] rL, float[] rR) = RenderSingleSource(white44, wallLeft90, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, 44100);
                                 AcousticFingerprint fp = AnalyzeStereo(rL, rR, white44, white44, 44100, ProbeUpdateRate);
                                 if (fp.NonFiniteCount > 0 || fp.IldDb < 8.0f || fp.ItdUs < 400f) {
-                                    return ("FAIL", $"44.1k->48k rate-match anomaly: ILD={fp.IldDb:+0.0}dB, ITD={fp.ItdUs:+0}us, nf={fp.NonFiniteCount}", fp);
+                                    return ("FAIL", $"44.1k->48k rate-match anomaly: ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us, nf={fp.NonFiniteCount}", fp);
                                 }
-                                return ("PASS", $"44.1kHz->48kHz HRIR clean (ILD={fp.IldDb:+0.0}dB, ITD={fp.ItdUs:+0}us)", fp);
+                                return ("PASS", $"44.1kHz->48kHz HRIR clean (ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us)", fp);
                             }));
                     }
 
@@ -306,9 +306,9 @@ public static class AcousticAuditEngine {
                             AcousticFingerprint fp = AnalyzeStereo(mpL, mpR, baseCenterL, baseCenterR, ProbeSampleRate, ProbeUpdateRate);
                             float maxBandErr = MaxAbs5(fp.Sub20To120Db, fp.Bass120To500Db, fp.Mid500To2k5Db, fp.Pres2k5To8kDb, fp.Air8kTo20kDb);
                             if (fp.NonFiniteCount > 0 || MathF.Abs(fp.GainDeltaDb) > 0.6f || maxBandErr > 1.2f) {
-                                return ("FAIL", $"Min-Phase altered magnitude spectrum (GainΔ={fp.GainDeltaDb:+0.00}dB, maxBandErr={maxBandErr:0.00}dB)", fp);
+                                return ("FAIL", $"Min-Phase altered magnitude spectrum (GainΔ={fp.GainDeltaDb:+0.00;-0.00;0.00}dB, maxBandErr={maxBandErr:0.00}dB)", fp);
                             }
-                            return ("PASS", $"Exact cepstral magnitude invariance (GainΔ={fp.GainDeltaDb:+0.00}dB, maxBandErr={maxBandErr:0.00}dB, IACC0={fp.IaccZero:0.00})", fp);
+                            return ("PASS", $"Exact cepstral magnitude invariance (GainΔ={fp.GainDeltaDb:+0.00;-0.00;0.00}dB, maxBandErr={maxBandErr:0.00}dB, IACC0={fp.IaccZero:0.00})", fp);
                         }));
 
                     if (!quickSubset) {
@@ -337,7 +337,7 @@ public static class AcousticAuditEngine {
                                 if (itdSpan < 100f || maxErr > 0.5f) {
                                     return ("FAIL", $"Biometric ITD delta invalid: 18cm={fpBig.ItdUs:0}us vs 11.5cm={fpSmall.ItdUs:0}us (span={itdSpan:0}us, eqErr={maxErr:0.00}dB)", fpBig);
                                 }
-                                return ("PASS", $"ITD scaled cleanly: 11.5cm={fpSmall.ItdUs:0}us -> 18.0cm={fpBig.ItdUs:0}us (Δ={itdSpan:+0}us, eqErr={maxErr:0.00}dB)", fpBig);
+                                return ("PASS", $"ITD scaled cleanly: 11.5cm={fpSmall.ItdUs:0}us -> 18.0cm={fpBig.ItdUs:0}us (Δ={itdSpan:+0;-0;0}us, eqErr={maxErr:0.00}dB)", fpBig);
                             }));
 
                         ct.ThrowIfCancellationRequested();
@@ -353,11 +353,29 @@ public static class AcousticAuditEngine {
                                 (float[] mL, float[] mR) = RenderSingleSource(whiteL, wallLeft90, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
                                 AcousticFingerprint fp = AnalyzeStereo(mL, mR, baseLeft90L, baseLeft90R, ProbeSampleRate, ProbeUpdateRate);
                                 if (fp.NonFiniteCount > 0 || !mDiag.IsMagLsActive || fp.IldDb < 4.0f || fp.ItdUs < 350f) {
-                                    return ("FAIL", $"MagLS O3 defect: active={mDiag.IsMagLsActive}, ILD={fp.IldDb:+0.0}dB, ITD={fp.ItdUs:+0}us", fp);
+                                    return ("FAIL", $"MagLS O3 defect: active={mDiag.IsMagLsActive}, ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us", fp);
                                 }
                                 bool warn = MathF.Abs(fp.GainDeltaDb) > 3.5f;
                                 return (warn ? "WARN" : "PASS",
-                                    $"MagLS O{mDiag.MagLsOrder} (fc={mDiag.MagLsCutoffHz:0}Hz, hfErr={mDiag.MagLsHfErrorDb:0.0}dB, ILD={fp.IldDb:+0.0}dB, ITD={fp.ItdUs:+0}us)", fp);
+                                    $"MagLS O{mDiag.MagLsOrder} (fc={mDiag.MagLsCutoffHz:0}Hz, hfErr={mDiag.MagLsHfErrorDb:0.0}dB, ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us)", fp);
+                            }));
+
+                        ct.ThrowIfCancellationRequested();
+                        results.Add(RunScenario(
+                            "B8_MinPhase_Plus_MagLs_O3", "TierB-OFAT",
+                            "Combined Minimum-Phase + MagLS Order 3 on SADIE D1 DFC (Left -90)",
+                            "Duplex-Theory low-pass ITD preserved (>=+550us) & lateral ILD>=+6dB (no ITD collapse)",
+                            () => {
+                                HrtfPersonalizationConfig magCfg = new() { MagLsMode = MagLsDecodeMode.Order3 };
+                                (VirtualChannel[] mCh, int mSr, float mRd, _, _, HrtfPersonalizationDiagnostics mDiag) =
+                                    BinauralProfileService.LoadBundledProfileForProbe(context, BinauralProfileService.DefaultProfileId, true, magCfg);
+                                VirtualizerFilter.Override(mCh, mSr, mRd);
+                                (float[] mL, float[] mR) = RenderSingleSource(whiteL, wallLeft90, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
+                                AcousticFingerprint fp = AnalyzeStereo(mL, mR, baseLeft90L, baseLeft90R, ProbeSampleRate, ProbeUpdateRate);
+                                if (fp.NonFiniteCount > 0 || !mDiag.IsMagLsActive || fp.IldDb < 6.0f || fp.ItdUs < 550f) {
+                                    return ("FAIL", $"MinPhase+MagLS ITD/ILD collapse: ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us", fp);
+                                }
+                                return ("PASS", $"MinPhase+MagLS O3 ITD intact (ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us)", fp);
                             }));
                     }
 
@@ -375,11 +393,11 @@ public static class AcousticAuditEngine {
                             AcousticFingerprint fpBase = AnalyzeStereo(baseCenterL, baseCenterR, whiteL, whiteL, ProbeSampleRate, ProbeUpdateRate);
                             AcousticFingerprint fp = AnalyzeStereo(ismL, ismR, baseCenterL, baseCenterR, ProbeSampleRate, ProbeUpdateRate);
                             if (fp.NonFiniteCount > 0 || fp.Sub20To120Db > 3.0f || MathF.Abs(fp.GainDeltaDb) > 2.5f) {
-                                return ("FAIL", $"ISM Room coloration/loudness bug: GainΔ={fp.GainDeltaDb:+0.00}dB, Sub={fp.Sub20To120Db:+0.0}dB, Bas={fp.Bass120To500Db:+0.0}dB", fp);
+                                return ("FAIL", $"ISM Room coloration/loudness bug: GainΔ={fp.GainDeltaDb:+0.00;-0.00;0.00}dB, Sub={fp.Sub20To120Db:+0.0;-0.0;0.0}dB, Bas={fp.Bass120To500Db:+0.0;-0.0;0.0}dB", fp);
                             }
                             bool iaccDrop = fp.IaccZero < fpBase.IaccZero;
                             return (iaccDrop ? "PASS" : "WARN",
-                                $"ISM Studio neutral (GainΔ={fp.GainDeltaDb:+0.00}dB, Sub={fp.Sub20To120Db:+0.0}dB, IACC0 {fpBase.IaccZero:0.00}->{fp.IaccZero:0.00})", fp);
+                                $"ISM Studio neutral (GainΔ={fp.GainDeltaDb:+0.00;-0.00;0.00}dB, Sub={fp.Sub20To120Db:+0.0;-0.0;0.0}dB, IACC0 {fpBase.IaccZero:0.00}->{fp.IaccZero:0.00})", fp);
                         }));
 
                     if (!quickSubset) {
@@ -422,9 +440,9 @@ public static class AcousticAuditEngine {
                                 AcousticFingerprint fpNf = AnalyzeStereo(nfL, nfR, baseLeft90L, baseLeft90R, ProbeSampleRate, ProbeUpdateRate);
                                 float ildDelta = fpNf.IldDb - fpFar.IldDb;
                                 if (fpNf.NonFiniteCount > 0 || ildDelta < 1.0f) {
-                                    return ("FAIL", $"Near-field ILD boost too weak: {fpFar.IldDb:+0.0}dB -> {fpNf.IldDb:+0.0}dB (Δ={ildDelta:+0.0}dB)", fpNf);
+                                    return ("FAIL", $"Near-field ILD boost too weak: {fpFar.IldDb:+0.0;-0.0;0.0}dB -> {fpNf.IldDb:+0.0;-0.0;0.0}dB (Δ={ildDelta:+0.0;-0.0;0.0}dB)", fpNf);
                                 }
-                                return ("PASS", $"Proximity ILD boosted {fpFar.IldDb:+0.0}dB -> {fpNf.IldDb:+0.0}dB (Δ={ildDelta:+0.0}dB)", fpNf);
+                                return ("PASS", $"Proximity ILD boosted {fpFar.IldDb:+0.0;-0.0;0.0}dB -> {fpNf.IldDb:+0.0;-0.0;0.0}dB (Δ={ildDelta:+0.0;-0.0;0.0}dB)", fpNf);
                             }));
                     }
 
@@ -446,9 +464,9 @@ public static class AcousticAuditEngine {
                                 && fpPos.IldDb >= 6.0f && fpPos.ItdUs >= 200f
                                 && fpNeg.IldDb <= -6.0f && fpNeg.ItdUs <= -200f;
                             if (!ok) {
-                                return ("FAIL", $"Head-tracking sign/magnitude error: Yaw+45(ILD={fpPos.IldDb:+0.0}dB,ITD={fpPos.ItdUs:+0}us) Yaw-45(ILD={fpNeg.IldDb:+0.0}dB,ITD={fpNeg.ItdUs:+0}us)", fpPos);
+                                return ("FAIL", $"Head-tracking sign/magnitude error: Yaw+45(ILD={fpPos.IldDb:+0.0;-0.0;0.0}dB,ITD={fpPos.ItdUs:+0;-0;0}us) Yaw-45(ILD={fpNeg.IldDb:+0.0;-0.0;0.0}dB,ITD={fpNeg.ItdUs:+0;-0;0}us)", fpPos);
                             }
-                            return ("PASS", $"Correct yaw orientation: Yaw+45(ILD={fpPos.IldDb:+0.0}dB,ITD={fpPos.ItdUs:+0}us) | Yaw-45(ILD={fpNeg.IldDb:+0.0}dB,ITD={fpNeg.ItdUs:+0}us)", fpPos);
+                            return ("PASS", $"Correct yaw orientation: Yaw+45(ILD={fpPos.IldDb:+0.0;-0.0;0.0}dB,ITD={fpPos.ItdUs:+0;-0;0}us) | Yaw-45(ILD={fpNeg.IldDb:+0.0;-0.0;0.0}dB,ITD={fpNeg.ItdUs:+0;-0;0}us)", fpPos);
                         }));
 
                     // ==================== TIER C: USER'S LIVE ACTIVE SETTINGS SNAPSHOT ====================
@@ -680,10 +698,10 @@ public static class AcousticAuditEngine {
             return ("FAIL", $"User config produced invalid/silent output (nf={fp.NonFiniteCount}, rmsL={fp.RmsLeftDbfs:0.0}dBFS)", fp);
         }
         if (isCenter && MathF.Abs(fp.IldDb) > 3.0f) {
-            return ("WARN", $"Center L/R imbalance ({fp.IldDb:+0.0} dB) on user config — inspect HRIR/EQ", fp);
+            return ("WARN", $"Center L/R imbalance ({fp.IldDb:+0.0;-0.0;0.0} dB) on user config — inspect HRIR/EQ", fp);
         }
-        if (!isCenter && fp.IldDb < 3.0f) {
-            return ("WARN", $"Weak lateral separation at -90 deg (ILD={fp.IldDb:+0.0} dB, ITD={fp.ItdUs:+0} us)", fp);
+        if (!isCenter && (fp.IldDb < 3.0f || fp.ItdUs < 450f)) {
+            return ("WARN", $"Weak/collapsed lateral cues at -90 deg (ILD={fp.IldDb:+0.0;-0.0;0.0} dB, ITD={fp.ItdUs:+0;-0;0} us)", fp);
         }
         return ("PASS", fp.CompactMetrics(), fp);
     }
