@@ -1,42 +1,22 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-11-22T19:30:57Z",
-  "version": "2.9.42",
-  "runId": "45060946806",
-  "runNumber": "42",
-  "commitSha": "ec76e8136c07d6aebad47a0bd7a36ae60ba0c72c",
-  "runUrl": "https://github.com/guumachadooo/Cavern/actions/runs/45060946806",
+  "generatedAtUtc": "2026-11-22T19:46:24Z",
+  "version": "2.9.43",
+  "runId": "45062209952",
+  "runNumber": "43",
+  "commitSha": "749d6fd14d18a340e0e09594f8b44f66128f6884",
+  "runUrl": "https://github.com/guumachadooo/Cavern/actions/runs/45062209952",
   "outcomes": {
     "ndk": "success",
-    "compile": "failure",
-    "publish": "skipped"
+    "compile": "success",
+    "publish": "success"
   },
   "totals": {
-    "errors": 2,
-    "warnings": 1
+    "errors": 0,
+    "warnings": 0
   },
-  "warningCodes": [
-    {
-      "code": "CS1570",
-      "count": 1,
-      "priority": "Low"
-    }
-  ],
-  "errorCodes": [
-    {
-      "code": "CS0117",
-      "count": 2
-    }
-  ],
-  "errorsByLayer": {
-    "04_CavernizeAndroid": [
-      "CavernSamples/CavernizeAndroid/Services/LiveBridgeAuthActivity.cs(137,13): error CS0117: 'Button' does not contain a definition for 'AllCaps' [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]",
-      "CavernSamples/CavernizeAndroid/Services/LiveBridgeAuthActivity.cs(295,97): error CS0117: 'BiometricErrorCode' does not contain a definition for 'NegativeButton' [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]"
-    ]
-  },
-  "warningsByLayer": {
-    "04_CavernizeAndroid": [
-      "CavernSamples/CavernizeAndroid/Services/AppSettingsStore.cs(1359,65): warning CS1570: XML comment has badly formed XML -- 'Whitespace is not allowed at this location.' [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]"
-    ]
-  }
+  "warningCodes": [],
+  "errorCodes": [],
+  "errorsByLayer": {},
+  "warningsByLayer": {}
 }
