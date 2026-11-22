@@ -54,10 +54,14 @@ namespace Cavern.Virtualizer {
             int itdSamples;
             using (FFTCache cache = new ThreadSafeFFTCache(fftSize)) {
                 // Measure true physical ITD via Duplex-Theory low-pass (<=1500 Hz) waveform cross-correlation
-                // (positive => right ear arrives later than left ear; immune to MagLS HF phase relaxation & pinna peaks)
-                itdSamples = EstimateInterauralDelaySamples(leftIR, rightIR, sampleRate, fftSize, cache);
+                // (positive => right ear arrives later than left ear; immune to MagLS HF phase relaxation & pinna peaks).
+                // Subtract the intrinsic minimum-phase group-delay difference already embedded in the contralateral
+                // head-shadow magnitude rolloff of (rawMinL, rawMinR) so total ITD is preserved without double-counting.
+                int totalItd = EstimateInterauralDelaySamples(leftIR, rightIR, sampleRate, fftSize, cache);
                 rawMinL = ComputeMinimumPhase(leftIR, len, fftSize, cache);
                 rawMinR = ComputeMinimumPhase(rightIR, len, fftSize, cache);
+                int minPhaseIntrinsicItd = EstimateInterauralDelaySamples(rawMinL, rawMinR, sampleRate, fftSize, cache);
+                itdSamples = totalItd - minPhaseIntrinsicItd;
             }
 
             int delayL = itdSamples < 0 ? -itdSamples : 0;

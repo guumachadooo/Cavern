@@ -121,7 +121,7 @@ namespace Cavern.Virtualizer {
         public static VirtualChannel FromMeasured(float x, float y, float[] leftEarIR, float[] rightEarIR,
             int sampleRate, float crossoverFrequency, bool minimumPhase) {
             if (minimumPhase && leftEarIR.Length <= MinimumPhaseHrir.MaxAnechoicTaps && rightEarIR.Length <= MinimumPhaseHrir.MaxAnechoicTaps) {
-                MinimumPhaseHrir.ConvertPair(leftEarIR, rightEarIR, out leftEarIR, out rightEarIR);
+                MinimumPhaseHrir.ConvertPair(leftEarIR, rightEarIR, out leftEarIR, out rightEarIR, sampleRate);
             }
             return new VirtualChannel(x, y, leftEarIR, rightEarIR, sampleRate, crossoverFrequency, 0, 0);
         }
@@ -163,7 +163,7 @@ namespace Cavern.Virtualizer {
                 }
             }
             if (applyMinimumPhaseOnSubpar && leftCopy.Length <= MinimumPhaseHrir.MaxAnechoicTaps && rightCopy.Length <= MinimumPhaseHrir.MaxAnechoicTaps) {
-                MinimumPhaseHrir.ConvertPair(leftCopy, rightCopy, out leftCopy, out rightCopy);
+                MinimumPhaseHrir.ConvertPair(leftCopy, rightCopy, out leftCopy, out rightCopy, sampleRate);
             }
             return new VirtualChannel(x, y, leftCopy, rightCopy, sampleRate, crossoverFrequency);
         }

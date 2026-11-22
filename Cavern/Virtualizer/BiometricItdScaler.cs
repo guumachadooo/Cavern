@@ -156,7 +156,7 @@ namespace Cavern.Virtualizer {
         /// </summary>
         public static float[] ApplyCausalFractionalDelay(float[] ir, double delaySamples, int outLength) {
             int fftSize = 1 << QMath.Log2Ceil(Math.Max(256, Math.Max(ir.Length, outLength) * 4));
-            FFTCache cache = new ThreadSafeFFTCache(fftSize);
+            using FFTCache cache = new ThreadSafeFFTCache(fftSize);
             Complex[] spec = new Complex[fftSize];
             for (int i = 0; i < ir.Length; i++) {
                 spec[i] = new Complex(ir[i], 0f);
