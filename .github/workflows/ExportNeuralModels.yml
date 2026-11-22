@@ -1,0 +1,88 @@
+name: Export Neural Audio ONNX Models
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export-models:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyTorch (CPU) & ONNX toolchain
+        run: |
+          python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install onnx onnxruntime huggingface_hub numpy
+
+      - name: Export Apollo ONNX & Mirror FlashSR
+        run: |
+          python3 .github/scripts/export_apollo_onnx.py dist_models
+          ls -lh dist_models/
+          cat dist_models/SHA256SUMS.txt
+
+      - name: Verify external catalog ONNX mirrors
+        run: |
+          python3 - <<'EOF'
+          import urllib.request
+
+          urls = [
+              "https://huggingface.co/bgkb/scnet_onnx/resolve/main/scnet_fp16.onnx",
+              "https://huggingface.co/bgkb/scnet_onnx/resolve/main/scnet.onnx",
+              "https://huggingface.co/Acapellas/Kim_Vocal_2.onnx/resolve/main/Kim_Vocal_2.onnx",
+              "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/Kim_Vocal_2.onnx",
+              "https://huggingface.co/StemSplitio/htdemucs-6s-onnx/resolve/main/htdemucs_6s_fp16weights.onnx",
+              "https://huggingface.co/Acapellas/htdemucs-6s-onnx/resolve/main/htdemucs_6s_fp16weights.onnx",
+              "https://huggingface.co/Acapellas/uvr5-models/resolve/main/UVR_MDXNET_KARA_2.onnx",
+              "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR_MDXNET_KARA_2.onnx",
+              "https://huggingface.co/Acapellas/AudioSeparatorONNX/resolve/main/Reverb_HQ_By_FoxJoy.onnx",
+              "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/Reverb_HQ_By_FoxJoy.onnx",
+              "https://huggingface.co/Acapellas/AudioSeparatorONNX/resolve/main/UVR-MDX-NET_Crowd_HQ_1.onnx",
+              "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/UVR-MDX-NET_Crowd_HQ_1.onnx",
+              "https://huggingface.co/YatharthS/FlashSR/resolve/main/onnx/model.onnx",
+          ]
+          for u in urls:
+              req = urllib.request.Request(u, headers={"User-Agent": "CavernizeCI/1.0", "Range": "bytes=0-0"})
+              with urllib.request.urlopen(req, timeout=20) as resp:
+                  print(f"OK {resp.status} | {u}")
+          EOF
+
+      - name: Publish neural-models-v1 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view neural-models-v1 >/dev/null 2>&1; then
+            gh release upload neural-models-v1 \
+              dist_models/apollo_band_split_44k.onnx \
+              dist_models/flashsr_48k.onnx \
+              dist_models/SHA256SUMS.txt \
+              --clobber
+          else
+            gh release create neural-models-v1 \
+              dist_models/apollo_band_split_44k.onnx \
+              dist_models/flashsr_48k.onnx \
+              dist_models/SHA256SUMS.txt \
+              --title "Neural Audio ONNX Models (v1)" \
+              --notes "Verified ONNX opset 17 exports & fallback mirrors for Cavernize Android: JusperLee/Apollo (CC BY-SA 4.0) and FlashSR (Apache-2.0)." \
+              --latest=false
+          fi
+
+      - name: Verify published release download links
+        run: |
+          for u in \
+            "https://github.com/${{ github.repository }}/releases/download/neural-models-v1/apollo_band_split_44k.onnx" \
+            "https://github.com/${{ github.repository }}/releases/download/neural-models-v1/flashsr_48k.onnx"; do
+            code=$(curl -s -L -r 0-0 -o /dev/null -w "%{http_code}" "$u")
+            echo "$code | $u"
+            test "$code" = "200" -o "$code" = "206"
+          done
