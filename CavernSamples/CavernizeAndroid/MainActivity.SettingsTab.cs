@@ -110,6 +110,7 @@ public partial class MainActivity {
     }
 
     static readonly int[] NeuralTrackCachePresetsMb = [256, 512, 1024, 2048, 4096];
+    static readonly int[] ProAudioSampleRateValues = [0, 44100, 48000, 96000, 192000];
     readonly List<SettingsCardEntry> settingsCardsRegistry = [];
     readonly TextView[] settingsCatSubtitleViews = new TextView[6];
     LinearLayout settingsHubTilesContainer;
@@ -333,8 +334,8 @@ public partial class MainActivity {
             cavernizeUpmixSwitch.Checked = false;
             parametricStftSwitch.Checked = true;
             atmosAwareUpmixSwitch.Checked = true;
-            upmixEffectBar.Progress = 75;
-            upmixSmoothBar.Progress = 80;
+            SyncSlider(upmixEffectBar, 75, 0, 100, "%");
+            SyncSlider(upmixSmoothBar, 80, 0, 100, "%");
             playerEngine?.ApplyUpmixingSettings(upmixingSettings);
             ReattachPlayerTrack();
             RefreshMusicPlayerControlsUi();
@@ -713,11 +714,10 @@ public partial class MainActivity {
 
         proAudioSrSelector = new OneUiInlineSelector(this, S["ProAudioSampleRateTitle"]);
         string[] proAudioSrLabels = [S["ProAudioSrAuto"], "44.1 kHz", "48 kHz", "96 kHz", "192 kHz"];
-        int[] proAudioSrValues = [0, 44100, 48000, 96000, 192000];
-        int initialSrIdx = Array.IndexOf(proAudioSrValues, store.ProAudioLockedSampleRate);
+        int initialSrIdx = Array.IndexOf(ProAudioSampleRateValues, store.ProAudioLockedSampleRate);
         proAudioSrSelector.SetItems(proAudioSrLabels, initialSrIdx >= 0 ? initialSrIdx : 0);
         proAudioSrSelector.SelectionChanged += pos => {
-            store.ProAudioLockedSampleRate = proAudioSrValues[Math.Clamp(pos, 0, proAudioSrValues.Length - 1)];
+            store.ProAudioLockedSampleRate = ProAudioSampleRateValues[Math.Clamp(pos, 0, ProAudioSampleRateValues.Length - 1)];
             ApplyAndRefreshProAudio();
         };
         proAudioCard.AddView(proAudioSrSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
@@ -2214,11 +2214,37 @@ public partial class MainActivity {
         }
     }
 
+    static void SyncSlider(OneUiSeekBar bar, int value, int min, int max, string suffix, string overrideValueText = null) {
+        if (bar == null) {
+            return;
+        }
+        int clamped = Math.Clamp(value, min, max);
+        int targetProg = clamped - min;
+        if (bar.Progress != targetProg) {
+            bar.Progress = targetProg;
+        }
+        bar.ValueText = overrideValueText ?? $"{clamped}{suffix}";
+        bar.Invalidate();
+    }
+
+    void ShowModalGuidedHelp(string title, string body, OneUiIconType icon = OneUiIconType.Info) {
+        OneUiModalDialog.Show(
+            this,
+            title,
+            body,
+            icon: icon,
+            iconBadgeColor: OneUiTheme.IconSystemInfo,
+            positiveText: S["OkBtn"]);
+    }
+
     void RefreshSettingsTabButtons() {
         RefreshBinauralProfileUi();
         RefreshAutoEqUi();
         RefreshExternalizationUi();
         RefreshPersonalizationUi();
+        RefreshLoudnessUi();
+        RefreshHeadTrackingUi();
+        RefreshProAudioUi();
         RefreshNeuralAudioUi();
         RefreshLgsrUi();
         if (filtersBtn != null) {
@@ -2243,6 +2269,44 @@ public partial class MainActivity {
         }
         if (atmosAwareUpmixSwitch != null && atmosAwareUpmixSwitch.Checked != store.AtmosAwareUpmix) {
             atmosAwareUpmixSwitch.Checked = store.AtmosAwareUpmix;
+        }
+        SyncSlider(upmixEffectBar, (int)Math.Round(store.UpmixEffect * 100f), 0, 100, "%");
+        SyncSlider(upmixSmoothBar, (int)Math.Round(store.UpmixSmoothness * 100f), 0, 100, "%");
+        if (normSwitch != null && normSwitch.Checked != store.NormalizerEnabled) {
+            normSwitch.Checked = store.NormalizerEnabled;
+        }
+        if (limiterOnlySwitch != null && limiterOnlySwitch.Checked != store.LimiterOnly) {
+            limiterOnlySwitch.Checked = store.LimiterOnly;
+        }
+        if (speakerVirtSwitch != null && speakerVirtSwitch.Checked != store.SpeakerVirtualizer) {
+            speakerVirtSwitch.Checked = store.SpeakerVirtualizer;
+        }
+        if (force24Switch != null && force24Switch.Checked != store.Force24Bit) {
+            force24Switch.Checked = store.Force24Bit;
+        }
+        if (surroundSwapSwitch != null && surroundSwapSwitch.Checked != store.SurroundSwap) {
+            surroundSwapSwitch.Checked = store.SurroundSwap;
+        }
+        if (wavSkipSwitch != null && wavSkipSwitch.Checked != store.WavChannelSkip) {
+            wavSkipSwitch.Checked = store.WavChannelSkip;
+        }
+        if (reportModeSwitch != null && reportModeSwitch.Checked != store.ReportOnlyMode) {
+            reportModeSwitch.Checked = store.ReportOnlyMode;
+        }
+        if (gradingSwitch != null && gradingSwitch.Checked != store.QualityGrading) {
+            gradingSwitch.Checked = store.QualityGrading;
+        }
+        if (pedanticSwitch != null && pedanticSwitch.Checked != store.Pedantic) {
+            pedanticSwitch.Checked = store.Pedantic;
+        }
+        if (unsafeSwitch != null && unsafeSwitch.Checked != store.Unsafe) {
+            unsafeSwitch.Checked = store.Unsafe;
+        }
+        if (keepTempSwitch != null && keepTempSwitch.Checked != store.KeepTempFiles) {
+            keepTempSwitch.Checked = store.KeepTempFiles;
+        }
+        if (autoCheckUpdatesSwitch != null && autoCheckUpdatesSwitch.Checked != store.AutoCheckUpdates) {
+            autoCheckUpdatesSwitch.Checked = store.AutoCheckUpdates;
         }
         RefreshLogSummaryLabel();
         RefreshSettingsCategorySubtitles();
@@ -2612,6 +2676,9 @@ public partial class MainActivity {
                 ismOrderSelector.SetSelection(oIdx, notify: false);
             }
         }
+        SyncSlider(ismLevelBar, (int)Math.Round(store.IsmReflectionLevel * 100f), 0, 150, "%");
+        SyncSlider(airTempBar, (int)Math.Round(store.AirTemperatureCelsius), 0, 40, " °C");
+        SyncSlider(airHumidityBar, (int)Math.Round(store.AirRelativeHumidityPct), 15, 90, "%");
         if (externalizationStatusText != null) {
             var diag = playerEngine?.ExternalizationDiagnostics ?? Cavernize.Logic.Spatial.PhysicalExternalizationDiagnostics.Default;
             bool isBrir = BinauralProfileService.IsActiveProfileBrir(store);
@@ -2892,6 +2959,25 @@ public partial class MainActivity {
     }
 
     void ShowPerceptualHrtfWizardDialog() {
+        if (store == null) {
+            return;
+        }
+        // Snapshot original HRTF settings so Cancel / Back / outside tap reverts cleanly.
+        string origProfileId = store.BinauralProfileId;
+        bool origHeadphoneVirtualizer = store.HeadphoneVirtualizer;
+        string origHrirPath = store.HrirPath;
+        float origHeadWidthCm = store.HeadWidthCm;
+        bool origBiometricItd = store.BiometricItdEnabled;
+        float origManualItdOffsetUs = store.ManualItdOffsetUs;
+        bool origMinPhase = store.MinimumPhaseHrir;
+        int origMagLsOrder = store.MagLsModeIndex;
+        float origMagLsCutoffHz = store.MagLsCutoffHz;
+        string origClusterId = store.PerceptualClusterId;
+        bool origHptfEnabled = store.HptfNotchEnabled;
+        float origHptfFreqHz = store.HptfNotchFreqHz;
+        float origHptfGainDb = store.HptfNotchGainDb;
+        float origHptfQ = store.HptfNotchQ;
+
         int currentStage = 0;
         string chosenProfileId = BinauralProfileService.ResolveStoredHrtfProfileId(store);
         if (chosenProfileId != "sadie_d1_dfc" && chosenProfileId != "sadie_d2_dfc" && chosenProfileId != "thk_ku100_ff_dfc") {
@@ -2901,6 +2987,11 @@ public partial class MainActivity {
         bool chosenMinPhase = store.MinimumPhaseHrir;
         int chosenMagLsOrder = store.MagLsModeIndex;
         string chosenClusterId = string.IsNullOrEmpty(store.PerceptualClusterId) ? "cluster_ku100_sadie" : store.PerceptualClusterId;
+
+        bool committed = false;
+        bool reverted = false;
+        bool hasPreviewed = false;
+        object draftSync = new();
 
         LinearLayout body = new(this) { Orientation = Orientation.Vertical };
         TextView stageHeader = Label("", 13.5f, OneUiTheme.PrimaryHigh);
@@ -2918,13 +3009,54 @@ public partial class MainActivity {
         Dialog activeDlg = null;
 
         void ApplyLivePreview() {
-            store.HeadWidthCm = chosenHeadWidthCm;
-            store.BiometricItdEnabled = Math.Abs(chosenHeadWidthCm - BiometricItdScaler.ReferenceHeadWidthCm) >= 0.05f ||
-                Math.Abs(store.ManualItdOffsetUs) >= 1f;
-            store.MinimumPhaseHrir = chosenMinPhase;
-            store.MagLsModeIndex = chosenMagLsOrder;
-            store.PerceptualClusterId = chosenClusterId;
+            lock (draftSync) {
+                if (reverted) {
+                    return;
+                }
+                hasPreviewed = true;
+                store.HeadWidthCm = chosenHeadWidthCm;
+                store.BiometricItdEnabled = Math.Abs(chosenHeadWidthCm - BiometricItdScaler.ReferenceHeadWidthCm) >= 0.05f ||
+                    Math.Abs(store.ManualItdOffsetUs) >= 1f;
+                store.MinimumPhaseHrir = chosenMinPhase;
+                store.MagLsModeIndex = chosenMagLsOrder;
+                store.PerceptualClusterId = chosenClusterId;
+            }
             ApplyBinauralProfileAsync(chosenProfileId, showToast: false);
+        }
+
+        void RevertDraftIfNeeded() {
+            bool shouldRestore;
+            string restoreId;
+            lock (draftSync) {
+                if (committed || reverted) {
+                    return;
+                }
+                reverted = true;
+                shouldRestore = hasPreviewed;
+                if (shouldRestore) {
+                    store.BinauralProfileId = origProfileId;
+                    store.HeadphoneVirtualizer = origHeadphoneVirtualizer;
+                    store.HrirPath = origHrirPath;
+                    store.HeadWidthCm = origHeadWidthCm;
+                    store.BiometricItdEnabled = origBiometricItd;
+                    store.ManualItdOffsetUs = origManualItdOffsetUs;
+                    store.MinimumPhaseHrir = origMinPhase;
+                    store.MagLsModeIndex = origMagLsOrder;
+                    store.MagLsCutoffHz = origMagLsCutoffHz;
+                    store.PerceptualClusterId = origClusterId;
+                    store.HptfNotchEnabled = origHptfEnabled;
+                    store.HptfNotchFreqHz = origHptfFreqHz;
+                    store.HptfNotchGainDb = origHptfGainDb;
+                    store.HptfNotchQ = origHptfQ;
+                }
+                restoreId = origHeadphoneVirtualizer
+                    ? BinauralProfileService.ResolveStoredHrtfProfileId(store)
+                    : BinauralProfileService.Direct20Id;
+            }
+            if (shouldRestore) {
+                ApplyBinauralProfileAsync(restoreId, showToast: false);
+                RefreshPersonalizationUi();
+            }
         }
 
         void RenderStage() {
@@ -2995,14 +3127,35 @@ public partial class MainActivity {
             }
 
             Button cueBtn = PillButton(S["HrtfWizPlayCueBtn"], () => {
+                lock (draftSync) {
+                    if (reverted) {
+                        return;
+                    }
+                    hasPreviewed = true;
+                }
                 string pid = chosenProfileId;
                 float hw = chosenHeadWidthCm;
                 Task.Run(() => {
-                    BinauralProfileService.ApplyProfile(this, store, pid, out _);
-                    BinauralProfileService.SyncToSceneHub(playerEngine?.SceneHub, store, S);
+                    lock (draftSync) {
+                        if (reverted || uiDestroyed) {
+                            return;
+                        }
+                        BinauralProfileService.ApplyProfile(this, store, pid, out _);
+                        BinauralProfileService.SyncToSceneHub(playerEngine?.SceneHub, store, S);
+                    }
                     int sr = VirtualizerFilter.FilterSampleRate >= 8000 ? VirtualizerFilter.FilterSampleRate : 48000;
                     float[] cue = Cavernize.Logic.Spatial.PerceptualHrtfWizardCatalog.SynthesizeAuditionCueBinaural(sr, hw);
+                    lock (draftSync) {
+                        if (reverted || uiDestroyed) {
+                            return;
+                        }
+                    }
                     PlayStereoFloatBufferAsync(cue, sr);
+                    lock (draftSync) {
+                        if (reverted || uiDestroyed) {
+                            StopCalibrationTonePlayback();
+                        }
+                    }
                 });
             });
             optionsHost.AddView(cueBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
@@ -3026,6 +3179,7 @@ public partial class MainActivity {
                         currentStage++;
                         RenderStage();
                     } else {
+                        committed = true;
                         StopCalibrationTonePlayback();
                         ApplyLivePreview();
                         RefreshPersonalizationUi();
@@ -3045,8 +3199,19 @@ public partial class MainActivity {
             customContent: body,
             icon: OneUiIconType.Sparkles,
             iconBadgeColor: OneUiTheme.IconSpatial,
-            positiveText: S["CloseBtn"],
-            onPositive: StopCalibrationTonePlayback);
+            positiveText: S["CancelBtn"],
+            onPositive: () => {
+                StopCalibrationTonePlayback();
+                RevertDraftIfNeeded();
+            },
+            onHelp: () => ShowModalGuidedHelp(S["HrtfWizHelpTitle"], S["HrtfWizHelpBody"], OneUiIconType.Sparkles),
+            helpContentDesc: S["HrtfWizHelpTitle"]);
+        if (activeDlg != null) {
+            activeDlg.DismissEvent += (_, _) => {
+                StopCalibrationTonePlayback();
+                RevertDraftIfNeeded();
+            };
+        }
     }
 
     void PlayHptfTestToneAsync(bool sweep) {
@@ -3160,6 +3325,7 @@ public partial class MainActivity {
         if (headTrackingOscPortBtn != null) {
             headTrackingOscPortBtn.Text = string.Format(S["HeadTrackingOscPortBtn"], store.HeadTrackingOscPort);
         }
+        SyncSlider(headTrackingPredictBar, (int)Math.Round(store.HeadTrackingPredictionMs), 0, 100, " ms");
         if (audioOutputDiagText != null) {
             var diag = audioOutput?.Diagnostics ?? Cavernize.Logic.Spatial.AudioOutputDiagnostics.Default;
             string fmt = diag.IsFloat32 ? "Float32" : "PCM16";
@@ -3306,7 +3472,19 @@ public partial class MainActivity {
 
     void ShowAutoEqProfileSelectorDialog() {
         Dialog activeDlg = null;
+        bool autoEqDlgClosed = false;
+        Handler searchHandler = uiHandler ?? new Handler(Looper.MainLooper);
+        Java.Lang.Runnable searchDebounceRunnable = null;
         LinearLayout root = new(this) { Orientation = Orientation.Vertical };
+
+        LinearLayout searchPill = HRow();
+        searchPill.BaselineAligned = false;
+        searchPill.SetGravity(GravityFlags.CenterVertical);
+        searchPill.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
+        searchPill.SetPadding(Dp(12), Dp(4), Dp(8), Dp(4));
+
+        OneUiIconView searchIco = new(this, OneUiIconType.Search, OneUiTheme.TextMuted);
+        searchPill.AddView(searchIco, new LinearLayout.LayoutParams(Dp(16), Dp(16)) { RightMargin = Dp(8) });
 
         EditText searchBox = new(this) {
             Hint = S["AutoEqSearchHint"]
@@ -3315,9 +3493,21 @@ public partial class MainActivity {
         searchBox.SetTextColor(ColText);
         searchBox.SetHintTextColor(OneUiTheme.TextMuted);
         searchBox.SetTextSize(Android.Util.ComplexUnitType.Sp, 13.5f);
-        searchBox.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
-        searchBox.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
-        root.AddView(searchBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        searchBox.SetBackgroundColor(Color.Transparent);
+        searchBox.SetPadding(0, Dp(6), 0, Dp(6));
+        searchPill.AddView(searchBox, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
+
+        FrameLayout clearSearchBtn = new(this) {
+            Visibility = ViewStates.Gone,
+            ContentDescription = S["LibClearSearchDesc"]
+        };
+        clearSearchBtn.Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(36, 255, 255, 255), 99f);
+        OneUiTheme.AttachRecoil(clearSearchBtn, 0.88f);
+        clearSearchBtn.AddView(new SearchClearIconView(this, OneUiTheme.TextMuted),
+            new FrameLayout.LayoutParams(Dp(12), Dp(12)) { Gravity = GravityFlags.Center });
+        searchPill.AddView(clearSearchBtn, new LinearLayout.LayoutParams(Dp(24), Dp(24)));
+
+        root.AddView(searchPill, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
 
@@ -3377,7 +3567,28 @@ public partial class MainActivity {
         }
 
         PopulateResults(string.Empty);
-        searchBox.TextChanged += (_, _) => PopulateResults(searchBox.Text);
+        clearSearchBtn.Click += (_, _) => {
+            if (searchDebounceRunnable != null) {
+                searchHandler.RemoveCallbacks(searchDebounceRunnable);
+                searchDebounceRunnable = null;
+            }
+            searchBox.Text = string.Empty;
+            clearSearchBtn.Visibility = ViewStates.Gone;
+            PopulateResults(string.Empty);
+        };
+        searchBox.TextChanged += (_, _) => {
+            string query = searchBox.Text ?? string.Empty;
+            clearSearchBtn.Visibility = string.IsNullOrEmpty(query) ? ViewStates.Gone : ViewStates.Visible;
+            if (searchDebounceRunnable != null) {
+                searchHandler.RemoveCallbacks(searchDebounceRunnable);
+            }
+            searchDebounceRunnable = new Java.Lang.Runnable(() => {
+                if (!uiDestroyed && !autoEqDlgClosed) {
+                    PopulateResults(query);
+                }
+            });
+            searchHandler.PostDelayed(searchDebounceRunnable, 180);
+        };
 
         LinearLayout footerRow = HRow();
         footerRow.SetPadding(0, Dp(6), 0, 0);
@@ -3404,7 +3615,18 @@ public partial class MainActivity {
             customContent: root,
             icon: OneUiIconType.Sliders,
             iconBadgeColor: OneUiTheme.IconAtmosUpmix,
-            positiveText: S["CloseBtn"]);
+            positiveText: S["CloseBtn"],
+            onHelp: () => ShowModalGuidedHelp(S["AutoEqHelpTitle"], S["AutoEqHelpBody"], OneUiIconType.Sliders),
+            helpContentDesc: S["AutoEqHelpTitle"]);
+        if (activeDlg != null) {
+            activeDlg.DismissEvent += (_, _) => {
+                autoEqDlgClosed = true;
+                if (searchDebounceRunnable != null) {
+                    searchHandler.RemoveCallbacks(searchDebounceRunnable);
+                    searchDebounceRunnable = null;
+                }
+            };
+        }
     }
 
     void ApplyAutoEqCatalogEntryAsync(Cavernize.Logic.Spatial.AutoEqCatalogEntry entry) {
@@ -3693,6 +3915,52 @@ public partial class MainActivity {
                 neuralTrackCacheCapSelector.SetSelection(capIdx, notify: false);
             }
         }
+        if (store != null) {
+            if (neuralProviderSelector != null) {
+                int pIdx = Math.Clamp(store.NeuralProviderIndex, 0, 3);
+                if (neuralProviderSelector.SelectedIndex != pIdx) {
+                    neuralProviderSelector.SetSelection(pIdx, notify: false);
+                }
+            }
+            if (neuralOrchestrationSelector != null) {
+                int oIdx = Math.Clamp(store.NeuralOrchestrationModeIndex, 0, 1);
+                if (neuralOrchestrationSelector.SelectedIndex != oIdx) {
+                    neuralOrchestrationSelector.SetSelection(oIdx, notify: false);
+                }
+            }
+            SyncSlider(neuralOverlapBar, store.NeuralOverlapFactor, 2, 8, "x");
+            if (neuralTtaSwitch != null && neuralTtaSwitch.Checked != store.NeuralTtaEnabled) {
+                neuralTtaSwitch.Checked = store.NeuralTtaEnabled;
+            }
+            if (neuralEnsembleSelector != null) {
+                int eIdx = Math.Clamp(store.NeuralEnsembleModeIndex, 0, 2);
+                if (neuralEnsembleSelector.SelectedIndex != eIdx) {
+                    neuralEnsembleSelector.SetSelection(eIdx, notify: false);
+                }
+            }
+            if (neuralPhaseFixSwitch != null && neuralPhaseFixSwitch.Checked != store.NeuralPhaseFixEnabled) {
+                neuralPhaseFixSwitch.Checked = store.NeuralPhaseFixEnabled;
+            }
+            if (neuralConservationSwitch != null && neuralConservationSwitch.Checked != store.NeuralEnergyConservation) {
+                neuralConservationSwitch.Checked = store.NeuralEnergyConservation;
+            }
+            if (spatialKaraokeSwitch != null && spatialKaraokeSwitch.Checked != store.SpatialKaraokeEnabled) {
+                spatialKaraokeSwitch.Checked = store.SpatialKaraokeEnabled;
+            }
+            SyncSlider(karaokeVocalLevelBar, (int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100, "%");
+            if (karaokePreserveBackingSwitch != null && karaokePreserveBackingSwitch.Checked != store.KaraokePreserveBackingVocals) {
+                karaokePreserveBackingSwitch.Checked = store.KaraokePreserveBackingVocals;
+            }
+            if (karaokeLosslessTwinSwitch != null && karaokeLosslessTwinSwitch.Checked != store.UseLosslessTwinForKaraoke) {
+                karaokeLosslessTwinSwitch.Checked = store.UseLosslessTwinForKaraoke;
+            }
+            if (neuralUpmixModeSelector != null) {
+                int uIdx = Math.Clamp(store.NeuralSpatialUpmixModeIndex, 0, 2);
+                if (neuralUpmixModeSelector.SelectedIndex != uIdx) {
+                    neuralUpmixModeSelector.SetSelection(uIdx, notify: false);
+                }
+            }
+        }
         RefreshSettingsCategorySubtitles();
         if (activeSettingsCategory == 2) {
             RefreshSettingsHubVisibility();
@@ -3727,21 +3995,14 @@ public partial class MainActivity {
 
     void ShowNeuralModelsModal() {
         Android.App.Dialog dialog = null;
+        bool modalClosed = false;
         LinearLayout content = new(this) { Orientation = Orientation.Vertical };
 
-        Cavernize.Logic.Spatial.NeuralAudioConfig currentCfg = store.BuildNeuralAudioConfig();
-        int installedCount = OnnxRuntimeInstallerService.GetInstalledModelIds(this).Count;
-        double cacheMb = OnnxRuntimeInstallerService.GetModelsAndRuntimeSizeBytes(this) / (1024.0 * 1024.0);
-        TextView summaryTv = Label(string.Format(S["NeuralModelsCacheSummary"], cacheMb, installedCount), 12f, OneUiTheme.IconSystemInfo);
+        TextView summaryTv = Label("", 12f, OneUiTheme.IconSystemInfo);
         summaryTv.SetPadding(0, 0, 0, Dp(4));
         content.AddView(summaryTv);
 
-        Cavernize.Logic.Spatial.NeuralTrackCacheStats trackCacheStats = neuralTrackCache?.GetStats() ?? default;
-        double trackCacheMb = trackCacheStats.TotalBytes / (1024.0 * 1024.0);
-        TextView trackCacheTv = Label(
-            string.Format(S["NeuralTrackCacheSummary"], trackCacheStats.EntryCount, trackCacheMb, store.NeuralTrackCacheMaxMb),
-            11.5f,
-            OneUiTheme.TextSub);
+        TextView trackCacheTv = Label("", 11.5f, OneUiTheme.TextSub);
         trackCacheTv.SetPadding(0, 0, 0, Dp(4));
         content.AddView(trackCacheTv);
 
@@ -3759,10 +4020,9 @@ public partial class MainActivity {
             BottomMargin = Dp(8)
         });
 
+        TextView planTv = null;
         if (neuralOrchestrator != null) {
-            Cavernize.Logic.Spatial.NeuralExecutionPlan plan =
-                neuralOrchestrator.BuildPlan(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, currentCfg);
-            TextView planTv = Label(string.Format(S["NeuralPlanPreviewFmt"], plan.Summary), 11.5f, OneUiTheme.Primary);
+            planTv = Label("", 11.5f, OneUiTheme.Primary);
             planTv.SetSingleLine(true);
             planTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
             planTv.SetPadding(0, 0, 0, Dp(8));
@@ -3789,118 +4049,184 @@ public partial class MainActivity {
         modalStatusTv.Visibility = ViewStates.Gone;
         content.AddView(modalStatusTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
 
-        List<Cavernize.Logic.Spatial.NeuralModelCatalogEntry> allModels = OnnxRuntimeInstallerService.GetAllRegisteredModels(this);
-        foreach (Cavernize.Logic.Spatial.NeuralModelCatalogEntry entry in allModels) {
-            Cavernize.Logic.Spatial.NeuralModelCatalogEntry localEntry = entry;
-            bool isInst = OnnxRuntimeInstallerService.IsModelInstalled(this, localEntry.Id);
-            IReadOnlyList<string> taskSlots = currentCfg.GetModelsForTask(localEntry.Task);
-            bool inTaskSlot = taskSlots.Any(id => string.Equals(id, localEntry.Id, StringComparison.OrdinalIgnoreCase));
-            bool isPrimary = string.Equals(localEntry.Id, store.ActiveStemModelId, StringComparison.OrdinalIgnoreCase) ||
-                             string.Equals(localEntry.Id, store.ActiveKaraokeModelId, StringComparison.OrdinalIgnoreCase) ||
-                             string.Equals(localEntry.Id, store.ActiveDereverbModelId, StringComparison.OrdinalIgnoreCase) ||
-                             string.Equals(localEntry.Id, store.ActiveDebleedModelId, StringComparison.OrdinalIgnoreCase) ||
-                             string.Equals(localEntry.Id, store.ActiveRestorerModelId, StringComparison.OrdinalIgnoreCase);
-            bool isActive = isPrimary || inTaskSlot;
+        LinearLayout modelsContainer = new(this) { Orientation = Orientation.Vertical };
+        content.AddView(modelsContainer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
-            LinearLayout tile = new(this) { Orientation = Orientation.Vertical };
-            tile.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f);
-            tile.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+        void RefreshModalInPlace(bool preserveScroll = true) {
+            if (uiDestroyed || modalClosed || store == null) {
+                return;
+            }
+            ScrollView hostScroll = content.Parent?.Parent as ScrollView;
+            int savedScrollY = preserveScroll && hostScroll != null ? hostScroll.ScrollY : 0;
 
-            string originTag = localEntry.IsCustomImported ? S["NeuralModelCustomTag"] : localEntry.License;
-            TextView titleTv = Label($"{localEntry.DisplayName} ({localEntry.ApproxSizeMb:0.0} MB · {originTag})", 12.5f, ColText);
-            titleTv.SetTypeface(null, TypefaceStyle.Bold);
-            titleTv.SetSingleLine(true);
-            titleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-            tile.AddView(titleTv);
+            Cavernize.Logic.Spatial.NeuralAudioConfig currentCfg = store.BuildNeuralAudioConfig();
+            int installedCount = OnnxRuntimeInstallerService.GetInstalledModelIds(this).Count;
+            double cacheMb = OnnxRuntimeInstallerService.GetModelsAndRuntimeSizeBytes(this) / (1024.0 * 1024.0);
+            summaryTv.Text = string.Format(S["NeuralModelsCacheSummary"], cacheMb, installedCount);
 
-            string stemsTag = localEntry.OutputStemNames != null && localEntry.OutputStemNames.Length > 0
-                ? string.Join(", ", localEntry.OutputStemNames)
-                : localEntry.Task.ToString();
-            string statusHint = isInst
-                ? S["NeuralModelInstalledTag"]
-                : (localEntry.RequiresManualOnnxImport ? S["NeuralModelManualImportHint"] : localEntry.SourceRepository);
-            TextView subTv = Label($"{localEntry.Task} · {stemsTag} [{statusHint}]", 11.5f, isInst ? OneUiTheme.IconSystemInfo : OneUiTheme.TextSub);
-            subTv.SetPadding(0, Dp(2), 0, Dp(8));
-            tile.AddView(subTv);
+            Cavernize.Logic.Spatial.NeuralTrackCacheStats trackCacheStats = neuralTrackCache?.GetStats() ?? default;
+            double trackCacheMb = trackCacheStats.TotalBytes / (1024.0 * 1024.0);
+            trackCacheTv.Text = string.Format(S["NeuralTrackCacheSummary"], trackCacheStats.EntryCount, trackCacheMb, store.NeuralTrackCacheMaxMb);
 
-            LinearLayout btnRow = HRow();
-            if (!isInst && !string.IsNullOrWhiteSpace(localEntry.DownloadUrl)) {
-                Button dlBtn = PrimaryButton(S["NeuralModelDownloadBtn"], () => {
-                    modalProg.Visibility = ViewStates.Visible;
-                    modalStatusTv.Visibility = ViewStates.Visible;
-                    Task.Run(async () => {
-                        try {
-                            await OnnxRuntimeInstallerService.DownloadModelAsync(this, localEntry, (frac, msg) => RunOnUiThread(() => {
-                                modalProg.Progress = Math.Clamp((int)Math.Round(frac * 1000.0), 0, 1000);
-                                modalStatusTv.Text = msg;
-                            }));
-                            RunOnUiThread(() => {
-                                SyncNeuralRuntimeDiagnostics();
-                                RefreshNeuralAudioUi();
-                                dialog?.Dismiss();
-                                ShowNeuralModelsModal();
-                            });
-                        } catch (Exception ex) {
-                            RunOnUiThread(() => {
-                                modalProg.Visibility = ViewStates.Gone;
-                                modalStatusTv.Text = ex.Message;
-                                ShowError(ex.Message);
-                            });
-                        }
-                    });
-                });
-                btnRow.AddView(dlBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-            } else if (isInst) {
-                Button useBtn = PillButton(isActive ? S["NeuralModelActiveTag"] : S["NeuralModelSelectBtn"], () => {
-                    AssignActiveModelSlot(localEntry, toggleEnsemble: false);
-                    ApplyAndRefreshNeuralAudio();
-                    dialog?.Dismiss();
-                    ShowNeuralModelsModal();
-                }, active: isActive);
-                btnRow.AddView(useBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+            int capIdx = ResolveNeuralTrackCachePresetIndex(store.NeuralTrackCacheMaxMb);
+            if (modalCacheCapSelector.SelectedIndex != capIdx) {
+                modalCacheCapSelector.SetSelection(capIdx, notify: false);
+            }
 
-                if (store.NeuralOrchestrationModeIndex == (int)Cavernize.Logic.Spatial.NeuralOrchestrationMode.Manual) {
-                    Button ensBtn = PillButton(inTaskSlot ? S["NeuralModelEnsembleInTag"] : S["NeuralModelEnsembleAddBtn"], () => {
-                        AssignActiveModelSlot(localEntry, toggleEnsemble: true);
+            if (neuralOrchestrator != null && planTv != null) {
+                Cavernize.Logic.Spatial.NeuralExecutionPlan plan =
+                    neuralOrchestrator.BuildPlan(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, currentCfg);
+                planTv.Text = string.Format(S["NeuralPlanPreviewFmt"], plan.Summary);
+            }
+
+            modelsContainer.RemoveAllViews();
+            List<Cavernize.Logic.Spatial.NeuralModelCatalogEntry> allModels = OnnxRuntimeInstallerService.GetAllRegisteredModels(this);
+            foreach (Cavernize.Logic.Spatial.NeuralModelCatalogEntry entry in allModels) {
+                Cavernize.Logic.Spatial.NeuralModelCatalogEntry localEntry = entry;
+                bool isInst = OnnxRuntimeInstallerService.IsModelInstalled(this, localEntry.Id);
+                IReadOnlyList<string> taskSlots = currentCfg.GetModelsForTask(localEntry.Task);
+                bool inTaskSlot = taskSlots.Any(id => string.Equals(id, localEntry.Id, StringComparison.OrdinalIgnoreCase));
+                bool isPrimary = string.Equals(localEntry.Id, store.ActiveStemModelId, StringComparison.OrdinalIgnoreCase) ||
+                                 string.Equals(localEntry.Id, store.ActiveKaraokeModelId, StringComparison.OrdinalIgnoreCase) ||
+                                 string.Equals(localEntry.Id, store.ActiveDereverbModelId, StringComparison.OrdinalIgnoreCase) ||
+                                 string.Equals(localEntry.Id, store.ActiveDebleedModelId, StringComparison.OrdinalIgnoreCase) ||
+                                 string.Equals(localEntry.Id, store.ActiveRestorerModelId, StringComparison.OrdinalIgnoreCase);
+                bool isActive = isPrimary || inTaskSlot;
+
+                LinearLayout tile = new(this) { Orientation = Orientation.Vertical };
+                tile.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f);
+                tile.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+
+                string originTag = localEntry.IsCustomImported ? S["NeuralModelCustomTag"] : localEntry.License;
+                TextView titleTv = Label($"{localEntry.DisplayName} ({localEntry.ApproxSizeMb:0.0} MB · {originTag})", 12.5f, ColText);
+                titleTv.SetTypeface(null, TypefaceStyle.Bold);
+                titleTv.SetSingleLine(true);
+                titleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+                tile.AddView(titleTv);
+
+                string stemsTag = localEntry.OutputStemNames != null && localEntry.OutputStemNames.Length > 0
+                    ? string.Join(", ", localEntry.OutputStemNames)
+                    : localEntry.Task.ToString();
+                string statusHint = isInst
+                    ? S["NeuralModelInstalledTag"]
+                    : (localEntry.RequiresManualOnnxImport ? S["NeuralModelManualImportHint"] : localEntry.SourceRepository);
+                TextView subTv = Label($"{localEntry.Task} · {stemsTag} [{statusHint}]", 11.5f, isInst ? OneUiTheme.IconSystemInfo : OneUiTheme.TextSub);
+                subTv.SetPadding(0, Dp(2), 0, Dp(8));
+                tile.AddView(subTv);
+
+                List<Button> actionButtons = [];
+                if (!isInst && !string.IsNullOrWhiteSpace(localEntry.DownloadUrl)) {
+                    actionButtons.Add(PrimaryButton(S["NeuralModelDownloadBtn"], () => {
+                        modalProg.Visibility = ViewStates.Visible;
+                        modalStatusTv.Visibility = ViewStates.Visible;
+                        Task.Run(async () => {
+                            try {
+                                await OnnxRuntimeInstallerService.DownloadModelAsync(this, localEntry, (frac, msg) => RunOnUiThread(() => {
+                                    if (uiDestroyed || modalClosed) return;
+                                    modalProg.Progress = Math.Clamp((int)Math.Round(frac * 1000.0), 0, 1000);
+                                    modalStatusTv.Text = msg;
+                                }));
+                                RunOnUiThread(() => {
+                                    if (uiDestroyed) return;
+                                    SyncNeuralRuntimeDiagnostics();
+                                    RefreshNeuralAudioUi();
+                                    if (!modalClosed) {
+                                        modalProg.Visibility = ViewStates.Gone;
+                                        modalStatusTv.Visibility = ViewStates.Gone;
+                                        RefreshModalInPlace();
+                                    }
+                                });
+                            } catch (Exception ex) {
+                                RunOnUiThread(() => {
+                                    if (uiDestroyed) return;
+                                    modalProg.Visibility = ViewStates.Gone;
+                                    modalStatusTv.Text = ex.Message;
+                                    ShowError(ex.Message);
+                                });
+                            }
+                        });
+                    }));
+                } else if (isInst) {
+                    actionButtons.Add(PillButton(isActive ? S["NeuralModelActiveTag"] : S["NeuralModelSelectBtn"], () => {
+                        AssignActiveModelSlot(localEntry, toggleEnsemble: false);
                         ApplyAndRefreshNeuralAudio();
-                        dialog?.Dismiss();
-                        ShowNeuralModelsModal();
-                    }, active: inTaskSlot);
-                    btnRow.AddView(ensBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+                        RefreshModalInPlace();
+                    }, active: isActive));
+
+                    if (store.NeuralOrchestrationModeIndex == (int)Cavernize.Logic.Spatial.NeuralOrchestrationMode.Manual) {
+                        actionButtons.Add(PillButton(inTaskSlot ? S["NeuralModelEnsembleInTag"] : S["NeuralModelEnsembleAddBtn"], () => {
+                            AssignActiveModelSlot(localEntry, toggleEnsemble: true);
+                            ApplyAndRefreshNeuralAudio();
+                            RefreshModalInPlace();
+                        }, active: inTaskSlot));
+                    }
+
+                    actionButtons.Add(PillButton(S["NeuralModelDeleteBtn"], () => {
+                        OnnxRuntimeInstallerService.DeleteModel(this, localEntry.Id);
+                        SyncNeuralRuntimeDiagnostics();
+                        RefreshNeuralAudioUi();
+                        RefreshModalInPlace();
+                    }));
                 }
 
-                Button delBtn = PillButton(S["NeuralModelDeleteBtn"], () => {
-                    OnnxRuntimeInstallerService.DeleteModel(this, localEntry.Id);
-                    SyncNeuralRuntimeDiagnostics();
-                    RefreshNeuralAudioUi();
-                    dialog?.Dismiss();
-                    ShowNeuralModelsModal();
-                });
-                btnRow.AddView(delBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+                if (!localEntry.IsCustomImported) {
+                    actionButtons.Add(PillButton(S["NeuralModelImportBtn"], () => {
+                        pendingStandaloneCustomOnnxImport = false;
+                        pendingOnnxImportModelId = localEntry.Id;
+                        pendingCustomOnnxTask = localEntry.Task;
+                        dialog?.Dismiss();
+                        OpenFileWithExplorerForExtensions(S["NeuralModelImportBtn"], [".onnx"], ImportCustomOnnxModelFromPath, ReqLoadOnnxModel);
+                    }));
+                }
+
+                // 2-row flex layout so 3-4 action pills never clip horizontally
+                for (int idx = 0; idx < actionButtons.Count; idx += 2) {
+                    LinearLayout row = HRow();
+                    row.BaselineAligned = false;
+                    row.SetGravity(GravityFlags.CenterVertical);
+                    Button first = actionButtons[idx];
+                    first.TextSize = 11.6f;
+                    first.SetSingleLine(true);
+                    first.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+                    first.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
+
+                    bool hasSecond = idx + 1 < actionButtons.Count;
+                    row.AddView(first, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
+                        RightMargin = hasSecond ? Dp(6) : 0
+                    });
+                    if (hasSecond) {
+                        Button second = actionButtons[idx + 1];
+                        second.TextSize = 11.6f;
+                        second.SetSingleLine(true);
+                        second.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+                        second.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
+                        row.AddView(second, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+                    }
+                    tile.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                        TopMargin = idx > 0 ? Dp(6) : 0
+                    });
+                }
+
+                modelsContainer.AddView(tile, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
             }
 
-            if (!localEntry.IsCustomImported) {
-                Button impBtn = PillButton(S["NeuralModelImportBtn"], () => {
-                    pendingStandaloneCustomOnnxImport = false;
-                    pendingOnnxImportModelId = localEntry.Id;
-                    pendingCustomOnnxTask = localEntry.Task;
-                    dialog?.Dismiss();
-                    OpenFileWithExplorerForExtensions(S["NeuralModelImportBtn"], [".onnx"], ImportCustomOnnxModelFromPath, ReqLoadOnnxModel);
+            if (preserveScroll && hostScroll != null) {
+                hostScroll.Post(() => {
+                    if (!uiDestroyed && !modalClosed) {
+                        hostScroll.ScrollTo(0, savedScrollY);
+                    }
                 });
-                btnRow.AddView(impBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             }
-            tile.AddView(btnRow);
-
-            content.AddView(tile, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
         }
+
+        RefreshModalInPlace(preserveScroll: false);
 
         Button clearTracksBtn = PillButton(S["NeuralClearTrackCacheBtn"], () => {
             neuralTrackCache?.Clear();
             SyncNeuralRuntimeDiagnostics();
             RefreshNeuralAudioUi();
             ShowToast(S["NeuralTrackCacheClearedToast"]);
-            dialog?.Dismiss();
-            ShowNeuralModelsModal();
+            RefreshModalInPlace();
         });
         content.AddView(clearTracksBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(2),
@@ -3929,7 +4255,12 @@ public partial class MainActivity {
             customContent: content,
             icon: OneUiIconType.Sparkles,
             iconBadgeColor: OneUiTheme.IconAtmosUpmix,
-            positiveText: S["CloseBtn"]);
+            positiveText: S["CloseBtn"],
+            onHelp: () => ShowModalGuidedHelp(S["NeuralModelsHelpTitle"], S["NeuralModelsHelpBody"], OneUiIconType.Sparkles),
+            helpContentDesc: S["NeuralModelsHelpTitle"]);
+        if (dialog != null) {
+            dialog.DismissEvent += (_, _) => modalClosed = true;
+        }
     }
 
     void ShowImportCustomOnnxDialog() {
@@ -4059,6 +4390,30 @@ public partial class MainActivity {
         if (uiDestroyed || lgsrStatusText == null) {
             return;
         }
+        if (store != null) {
+            if (lgsrEnabledSwitch != null && lgsrEnabledSwitch.Checked != store.LgsrEnabled) {
+                lgsrEnabledSwitch.Checked = store.LgsrEnabled;
+            }
+            if (lgsrAutoDiscoverSwitch != null && lgsrAutoDiscoverSwitch.Checked != store.LgsrAutoDiscoverTwin) {
+                lgsrAutoDiscoverSwitch.Checked = store.LgsrAutoDiscoverTwin;
+            }
+            SyncSlider(lgsrFusionBar, (int)Math.Round(store.LgsrFusionStrength * 100f), 0, 100, "%");
+            if (lgsrEnvelopeLockSwitch != null && lgsrEnvelopeLockSwitch.Checked != store.LgsrDynamicEnvelopeLock) {
+                lgsrEnvelopeLockSwitch.Checked = store.LgsrDynamicEnvelopeLock;
+            }
+            if (lgsrClippingGuardSwitch != null && lgsrClippingGuardSwitch.Checked != store.LgsrClippingGuard) {
+                lgsrClippingGuardSwitch.Checked = store.LgsrClippingGuard;
+            }
+            if (lgsrBitstreamGuideSwitch != null && lgsrBitstreamGuideSwitch.Checked != store.LgsrBitstreamGuide) {
+                lgsrBitstreamGuideSwitch.Checked = store.LgsrBitstreamGuide;
+            }
+            if (lgsrRejectFakeSwitch != null && lgsrRejectFakeSwitch.Checked != store.LgsrRejectFakeLossless) {
+                lgsrRejectFakeSwitch.Checked = store.LgsrRejectFakeLossless;
+            }
+            if (lgsrTier3CleanupSwitch != null && lgsrTier3CleanupSwitch.Checked != store.LgsrTier3ResidualCleanup) {
+                lgsrTier3CleanupSwitch.Checked = store.LgsrTier3ResidualCleanup;
+            }
+        }
         Cavernize.Logic.Spatial.LgsrDiagnostics diag = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
         switch (diag.State) {
             case Cavernize.Logic.Spatial.LosslessTwinVerificationState.Synced: {
@@ -4156,12 +4511,21 @@ public partial class MainActivity {
                 proAudioBufferSelector.SetSelection(bIdx, notify: false);
             }
         }
+        if (proAudioSrSelector != null) {
+            int srIdx = Array.IndexOf(ProAudioSampleRateValues, store.ProAudioLockedSampleRate);
+            int safeSrIdx = srIdx >= 0 ? srIdx : 0;
+            if (proAudioSrSelector.SelectedIndex != safeSrIdx) {
+                proAudioSrSelector.SetSelection(safeSrIdx, notify: false);
+            }
+        }
         if (proAudioMicRouteSelector != null) {
             int mIdx = Math.Clamp(store.LiveMicRoutingIndex, 0, 3);
             if (proAudioMicRouteSelector.SelectedIndex != mIdx) {
                 proAudioMicRouteSelector.SetSelection(mIdx, notify: false);
             }
         }
+        SyncSlider(proAudioMicGainBar, (int)MathF.Round(store.LiveMicInputGainDb), -18, 24, " dB");
+        SyncSlider(proAudioMicMonitorBar, (int)MathF.Round(store.LiveMicMonitorLevel * 100f), 0, 125, "%");
 
         Cavernize.Logic.Spatial.ProAudioDuplexDiagnostics diag =
             audioOutput?.ProAudioDiagnostics ?? Cavernize.Logic.Spatial.ProAudioDuplexDiagnostics.Default;
@@ -4602,7 +4966,9 @@ public partial class MainActivity {
             customContent: content,
             icon: OneUiIconType.Microphone,
             iconBadgeColor: OneUiTheme.Primary,
-            positiveText: S["CloseBtn"]);
+            positiveText: S["CloseBtn"],
+            onHelp: () => ShowModalGuidedHelp(S["VocalModalHelpTitle"], S["VocalModalHelpBody"], OneUiIconType.Microphone),
+            helpContentDesc: S["VocalModalHelpTitle"]);
 
         Java.Lang.Runnable pollRunnable = null;
         pollRunnable = new Java.Lang.Runnable(() => {
@@ -4668,6 +5034,8 @@ public partial class MainActivity {
         UsbProAudioDeviceSnapshot snap = usbProAudioManager?.ScanAttachedDevices(autoOpenIfPermitted: true);
         ScarlettHardwareState st = usbProAudioManager?.ScarlettState;
 
+        Action showScarlettHelp = () => ShowModalGuidedHelp(S["ScarlettHelpTitle"], S["ScarlettHelpBody"], OneUiIconType.Sliders);
+
         if (snap == null || !snap.IsAttached || !snap.HasPermission || st == null || st.Generation == ScarlettGeneration.None) {
             OneUiModalDialog.Show(
                 this,
@@ -4680,7 +5048,9 @@ public partial class MainActivity {
                     usbProAudioManager?.RequestUsbPermission();
                     RefreshProAudioUi();
                 },
-                negativeText: S["CloseBtn"]);
+                negativeText: S["CloseBtn"],
+                onHelp: showScarlettHelp,
+                helpContentDesc: S["ScarlettHelpTitle"]);
             return;
         }
 
@@ -4691,7 +5061,9 @@ public partial class MainActivity {
                 S["ScarlettGen2Notice"],
                 icon: OneUiIconType.Sliders,
                 iconBadgeColor: OneUiTheme.IconSpatial,
-                positiveText: S["CloseBtn"]);
+                positiveText: S["CloseBtn"],
+                onHelp: showScarlettHelp,
+                helpContentDesc: S["ScarlettHelpTitle"]);
             return;
         }
 
@@ -4737,7 +5109,9 @@ public partial class MainActivity {
                 customContent: gen4Content,
                 icon: OneUiIconType.Sliders,
                 iconBadgeColor: OneUiTheme.IconSpatial,
-                positiveText: S["CloseBtn"]);
+                positiveText: S["CloseBtn"],
+                onHelp: showScarlettHelp,
+                helpContentDesc: S["ScarlettHelpTitle"]);
             return;
         }
 
@@ -5009,7 +5383,9 @@ public partial class MainActivity {
             customContent: content,
             icon: OneUiIconType.Sliders,
             iconBadgeColor: OneUiTheme.IconSpatial,
-            positiveText: S["CloseBtn"]);
+            positiveText: S["CloseBtn"],
+            onHelp: showScarlettHelp,
+            helpContentDesc: S["ScarlettHelpTitle"]);
     }
 
     void ShowProAudioCreditsModal() {

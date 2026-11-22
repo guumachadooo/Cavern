@@ -173,6 +173,7 @@ public partial class MainActivity {
 
     // Section switcher inside Play tab (Now Playing vs In-App Library)
     LinearLayout musicTabRootPage;
+    ScrollView musicNowPlayingScrollView;
     LinearLayout musicNowPlayingSection;
     ScrollView musicLibraryScrollView;
     LinearLayout musicLibrarySection;
@@ -229,7 +230,7 @@ public partial class MainActivity {
     OneUiIconView musicLyricsSingMicIcon;
     TextView musicLyricsSingPctText;
     OneUiSeekBar musicLyricsVocalSeekBar;
-    Button musicLyricsAiPrepBtn, musicLyricsMixMatchBtn, musicLyricsVocalAbBtn, musicLyricsScarlettBtn;
+    Button musicLyricsKaraokeBtn, musicLyricsLiveMicBtn, musicLyricsAiPrepBtn, musicLyricsMixMatchBtn, musicLyricsVocalAbBtn, musicLyricsScarlettBtn;
     TextView musicLyricsAiStatusText;
 
     // Apple Music Title Row
@@ -255,6 +256,9 @@ public partial class MainActivity {
     List<LibraryTrackItem> currentTrackVariants = [];
     int stageAnimGen;
     int lastMusicViewportHeightPx;
+    int lastMusicViewportPadPx = -1;
+    bool lastMusicViewportLandscape;
+    PlayerStageMode? lastMusicViewportStageMode;
     LinearLayout musicTransportRow, musicVolRow, musicSpatialToggleRow, musicBottomActionRow;
 
     FrameLayout musicSeekBackBtn, musicRewBtn, musicPlayCircleBtn, musicFwdBtn, musicSeekFwdBtn;
@@ -294,6 +298,7 @@ public partial class MainActivity {
         };
         segNowPlayingBtn.SetTypeface(sfSemi, TypefaceStyle.Bold);
         segNowPlayingBtn.SetSingleLine(true);
+        segNowPlayingBtn.Ellipsize = TextUtils.TruncateAt.End;
         segNowPlayingBtn.SetPadding(Dp(12), Dp(5), Dp(12), Dp(5));
         OneUiTheme.AttachRecoil(segNowPlayingBtn, 0.94f);
         segNowPlayingBtn.Click += (_, _) => SetMusicPlayerSection(openLibrary: false);
@@ -305,6 +310,7 @@ public partial class MainActivity {
         };
         segLibraryBtn.SetTypeface(sfSemi, TypefaceStyle.Bold);
         segLibraryBtn.SetSingleLine(true);
+        segLibraryBtn.Ellipsize = TextUtils.TruncateAt.End;
         segLibraryBtn.SetPadding(Dp(12), Dp(5), Dp(12), Dp(5));
         OneUiTheme.AttachRecoil(segLibraryBtn, 0.94f);
         segLibraryBtn.Click += (_, _) => SetMusicPlayerSection(openLibrary: true);
@@ -411,12 +417,13 @@ public partial class MainActivity {
         musicLyricsView.LineSeekRequested += sec => SeekAbsoluteSeconds(sec);
         musicLyricsContainer.AddView(musicLyricsView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
 
-        // W14: Apple Music Sing-style Vocal Level Slider (0%-100%) + Live Mic / Auto-Vocal Mix-Match & Scarlett 2i2 Controls
+        // W14/W27: 2-Tier Apple Music Sing Dock (Tier 1: Vocal slider + un-crushed % + Vocal DNA pill | Tier 2: Scrollable plain-label chips)
         musicLyricsSingDock = new LinearLayout(this) { Orientation = Orientation.Vertical };
         musicLyricsSingDock.Background = OneUiTheme.CreateRoundedDrawable(
             this, Color.Argb(44, 20, 22, 32), 18f, Color.Argb(48, 255, 255, 255), 0.9f);
         musicLyricsSingDock.SetPadding(Dp(12), Dp(8), Dp(12), Dp(8));
 
+        // Tier 1 Header: Mic icon + Vocals label + un-crushed % readout + right-aligned Vocal DNA / Voiceprint status pill
         LinearLayout singTopRow = HRow();
         singTopRow.SetGravity(GravityFlags.CenterVertical);
         musicLyricsSingMicIcon = new OneUiIconView(this, OneUiIconType.Microphone, OneUiTheme.PrimaryHigh);
@@ -430,44 +437,31 @@ public partial class MainActivity {
 
         musicLyricsSingPctText = Label($"{Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100)}%", 11.5f, OneUiTheme.PrimaryHigh);
         musicLyricsSingPctText.SetTypeface(sfBold, TypefaceStyle.Bold);
+        musicLyricsSingPctText.SetIncludeFontPadding(false);
         musicLyricsSingPctText.SetSingleLine(true);
-        singTopRow.AddView(musicLyricsSingPctText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        musicLyricsSingPctText.SetMinimumWidth(Dp(40));
+        singTopRow.AddView(musicLyricsSingPctText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(8) });
 
-        musicLyricsAiPrepBtn = PillButton(S["NeuralPrepBtn"], () =>
-            PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke));
-        musicLyricsAiPrepBtn.TextSize = 10.4f;
-        musicLyricsAiPrepBtn.SetSingleLine(true);
-        musicLyricsAiPrepBtn.Ellipsize = TextUtils.TruncateAt.End;
-        musicLyricsAiPrepBtn.SetPadding(Dp(9), Dp(5), Dp(9), Dp(5));
-        singTopRow.AddView(musicLyricsAiPrepBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(5) });
+        LinearLayout singDnaPillHost = new(this) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false
+        };
+        singDnaPillHost.SetGravity(GravityFlags.End | GravityFlags.CenterVertical);
 
-        musicLyricsMixMatchBtn = PillButton(S["SingMicMixMatchBtn"], ShowAutoVocalMixMatchModal);
-        musicLyricsMixMatchBtn.TextSize = 10.6f;
-        musicLyricsMixMatchBtn.SetSingleLine(true);
-        musicLyricsMixMatchBtn.Ellipsize = TextUtils.TruncateAt.End;
-        musicLyricsMixMatchBtn.SetPadding(Dp(10), Dp(5), Dp(10), Dp(5));
-        singTopRow.AddView(musicLyricsMixMatchBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(5) });
+        musicLyricsAiStatusText = Label(S["SingDockDnaIdlePill"], 10.2f, OneUiTheme.TextSecondary);
+        musicLyricsAiStatusText.SetTypeface(sfSemi, TypefaceStyle.Bold);
+        musicLyricsAiStatusText.SetIncludeFontPadding(false);
+        musicLyricsAiStatusText.SetSingleLine(true);
+        musicLyricsAiStatusText.Ellipsize = TextUtils.TruncateAt.End;
+        musicLyricsAiStatusText.Gravity = GravityFlags.Center;
+        musicLyricsAiStatusText.SetPadding(Dp(9), Dp(3), Dp(9), Dp(3));
+        musicLyricsAiStatusText.Background = OneUiTheme.CreateRoundedDrawable(
+            this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.8f);
+        OneUiTheme.AttachRecoil(musicLyricsAiStatusText, 0.94f);
+        musicLyricsAiStatusText.Click += (_, _) => ShowAutoVocalMixMatchModal();
 
-        musicLyricsVocalAbBtn = PillButton(S["SingVocalAbWet"], () => {
-            if (playerEngine == null) {
-                return;
-            }
-            playerEngine.VocalChainBypassed = !playerEngine.VocalChainBypassed;
-            ApplyAndRefreshVocalChain();
-        });
-        musicLyricsVocalAbBtn.TextSize = 10.2f;
-        musicLyricsVocalAbBtn.SetSingleLine(true);
-        musicLyricsVocalAbBtn.Ellipsize = TextUtils.TruncateAt.End;
-        musicLyricsVocalAbBtn.SetPadding(Dp(8), Dp(5), Dp(8), Dp(5));
-        musicLyricsVocalAbBtn.Visibility = store.LiveMicEnabled ? ViewStates.Visible : ViewStates.Gone;
-        singTopRow.AddView(musicLyricsVocalAbBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(5) });
-
-        musicLyricsScarlettBtn = PillButton(S["SingScarlettQuickBtn"], ShowScarlett2i2ControlsModal);
-        musicLyricsScarlettBtn.TextSize = 10.6f;
-        musicLyricsScarlettBtn.SetSingleLine(true);
-        musicLyricsScarlettBtn.Ellipsize = TextUtils.TruncateAt.End;
-        musicLyricsScarlettBtn.SetPadding(Dp(10), Dp(5), Dp(10), Dp(5));
-        singTopRow.AddView(musicLyricsScarlettBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        singDnaPillHost.AddView(musicLyricsAiStatusText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        singTopRow.AddView(singDnaPillHost, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
         musicLyricsSingDock.AddView(singTopRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(4)
@@ -482,15 +476,77 @@ public partial class MainActivity {
         };
         musicLyricsVocalSeekBar.UserProgressChanged += v => ApplyLyricsSingVocalLevel(v);
         musicLyricsVocalSeekBar.ResetRequested += v => ApplyLyricsSingVocalLevel(v);
-        musicLyricsSingDock.AddView(musicLyricsVocalSeekBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-
-        musicLyricsAiStatusText = Label("", 10.5f, OneUiTheme.TextSub);
-        musicLyricsAiStatusText.SetSingleLine(true);
-        musicLyricsAiStatusText.Ellipsize = TextUtils.TruncateAt.End;
-        musicLyricsAiStatusText.Visibility = ViewStates.Gone;
-        musicLyricsSingDock.AddView(musicLyricsAiStatusText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(2)
+        musicLyricsSingDock.AddView(musicLyricsVocalSeekBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(6)
         });
+
+        // Tier 2: Horizontal scrollable row of compact plain-label chips (minH 30dp overriding PillButton 40dp)
+        Button MakeSingDockChip(string text, Action onClick, bool active = false) {
+            Button b = PillButton(text, onClick, active);
+            b.TextSize = 10.8f;
+            b.SetSingleLine(true);
+            b.Ellipsize = TextUtils.TruncateAt.End;
+            b.SetMinimumWidth(0);
+            b.SetMinimumHeight(Dp(30));
+            b.SetMinHeight(Dp(30));
+            b.SetPadding(Dp(11), Dp(4), Dp(11), Dp(4));
+            return b;
+        }
+
+        LinearLayout singChipsRow = new(this) {
+            Orientation = Orientation.Horizontal,
+            BaselineAligned = false
+        };
+        singChipsRow.SetGravity(GravityFlags.CenterVertical);
+
+        musicLyricsKaraokeBtn = MakeSingDockChip(S["SingDockKaraokeChip"], () =>
+            ApplyLyricsSingVocalLevel(store.SpatialKaraokeEnabled ? 100 : 20));
+        singChipsRow.AddView(musicLyricsKaraokeBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+
+        musicLyricsLiveMicBtn = MakeSingDockChip(S["SingDockLiveMicChip"], () => {
+            bool next = !store.LiveMicEnabled;
+            if (next) {
+                RequestRecordAudioPermissionIfNeeded();
+            }
+            store.LiveMicEnabled = next;
+            if (proAudioLiveMicSwitch != null && proAudioLiveMicSwitch.Checked != next) {
+                proAudioLiveMicSwitch.Checked = next;
+            }
+            ApplyAndRefreshVocalChain();
+            RefreshLyricsSingDockUi();
+        });
+        singChipsRow.AddView(musicLyricsLiveMicBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+
+        musicLyricsMixMatchBtn = MakeSingDockChip(S["SingDockMixMatchChip"], ShowAutoVocalMixMatchModal);
+        singChipsRow.AddView(musicLyricsMixMatchBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+
+        musicLyricsVocalAbBtn = MakeSingDockChip(S["SingDockVocalAbWetChip"], () => {
+            if (playerEngine == null) {
+                return;
+            }
+            playerEngine.VocalChainBypassed = !playerEngine.VocalChainBypassed;
+            ApplyAndRefreshVocalChain();
+        });
+        musicLyricsVocalAbBtn.Visibility = store.LiveMicEnabled ? ViewStates.Visible : ViewStates.Gone;
+        singChipsRow.AddView(musicLyricsVocalAbBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+
+        musicLyricsScarlettBtn = MakeSingDockChip(S["SingScarlettQuickBtn"], ShowScarlett2i2ControlsModal);
+        singChipsRow.AddView(musicLyricsScarlettBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+
+        musicLyricsAiPrepBtn = MakeSingDockChip(S["NeuralPrepBtn"], () =>
+            PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke));
+        singChipsRow.AddView(musicLyricsAiPrepBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+
+        HorizontalScrollView singChipsScroll = new(this) {
+            HorizontalScrollBarEnabled = false,
+            OverScrollMode = OverScrollMode.Never
+        };
+        singChipsScroll.AddView(singChipsRow, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent,
+            ViewGroup.LayoutParams.WrapContent));
+        musicLyricsSingDock.AddView(singChipsScroll, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.WrapContent));
 
         musicLyricsContainer.AddView(musicLyricsSingDock, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(6)
@@ -791,7 +847,16 @@ public partial class MainActivity {
         bottomActionRow.AddView(slot4, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         musicNowPlayingSection.AddView(bottomActionRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
-        page.AddView(musicNowPlayingSection, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
+        musicNowPlayingScrollView = new ScrollView(this) {
+            FillViewport = true,
+            VerticalScrollBarEnabled = false,
+            OverScrollMode = OverScrollMode.IfContentScrolls
+        };
+        musicNowPlayingScrollView.SetClipToPadding(false);
+        musicNowPlayingScrollView.AddView(musicNowPlayingSection, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.WrapContent));
+        page.AddView(musicNowPlayingScrollView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
 
         // ============================================================
         // SECTION B: IN-APP LIBRARY (Internally Scrollable, Full Nav Bar Visible)
@@ -818,22 +883,45 @@ public partial class MainActivity {
         return page;
     }
 
-    void UpdatePlayTabSpacingForViewport() {
-        if (musicTabRootPage == null || musicNowPlayingSection == null) {
+    void UpdatePlayTabSpacingForViewport(bool force = false) {
+        if (musicTabRootPage == null || musicNowPlayingSection == null || mediaStageFrame == null) {
             return;
         }
         int vpH = musicTabRootPage.Height;
-        if (vpH <= 0 || Math.Abs(vpH - lastMusicViewportHeightPx) < Dp(8)) {
+        if (vpH <= 0) {
+            return;
+        }
+        int padV = musicTabRootPage.PaddingTop + musicTabRootPage.PaddingBottom;
+        bool isLandscape = Resources?.Configuration?.Orientation == Android.Content.Res.Orientation.Landscape;
+        if (!force &&
+            Math.Abs(vpH - lastMusicViewportHeightPx) < Dp(8) &&
+            padV == lastMusicViewportPadPx &&
+            isLandscape == lastMusicViewportLandscape &&
+            lastMusicViewportStageMode == musicStageMode) {
             return;
         }
         lastMusicViewportHeightPx = vpH;
+        lastMusicViewportPadPx = padV;
+        lastMusicViewportLandscape = isLandscape;
+        lastMusicViewportStageMode = musicStageMode;
 
         float density = Math.Max(1f, Resources?.DisplayMetrics?.Density ?? 3f);
-        int availHDp = (int)(vpH / density);
+        int usableHPx = Math.Max(0, vpH - padV);
+        int availHDp = (int)(usableHPx / density);
+        bool isLyricsOrVideo = musicStageMode == PlayerStageMode.Lyrics || musicStageMode == PlayerStageMode.Video;
+        bool isCompact = availHDp < 600 || isLandscape;
 
-        // Adaptive breathing room scaled cleanly to viewport height while mediaStageFrame (weight=1f) guarantees 0px scroll
-        int gapDp = availHDp < 610 ? 4 : (availHDp < 690 ? 6 : (availHDp < 780 ? 8 : 11));
-        int stageGapDp = availHDp < 610 ? 5 : (availHDp < 690 ? 7 : 10);
+        // Adaptive breathing room scaled cleanly to usable viewport height while allowing inner scroll when crushed
+        int gapDp = isCompact ? 3 : (availHDp < 690 ? 6 : (availHDp < 780 ? 8 : 11));
+        int stageGapDp = isCompact ? 4 : (availHDp < 690 ? 7 : 10);
+
+        if (musicArtworkView != null) {
+            int targetArtDp = isCompact ? Math.Clamp(availHDp - 310, 150, 220) : 340;
+            if (musicArtworkView.PreferredSizeDp != targetArtDp) {
+                musicArtworkView.PreferredSizeDp = targetArtDp;
+                musicArtworkView.RequestLayout();
+            }
+        }
 
         void SetBottomMarginDp(View v, int dpVal) {
             if (v?.LayoutParameters is LinearLayout.LayoutParams lp && lp.BottomMargin != Dp(dpVal)) {
@@ -843,11 +931,43 @@ public partial class MainActivity {
         }
 
         SetBottomMarginDp(mediaStageFrame, stageGapDp);
-        SetBottomMarginDp(musicTitleRow, Math.Max(4, gapDp - 1));
+        SetBottomMarginDp(musicTitleRow, Math.Max(3, gapDp - 1));
         SetBottomMarginDp(badgeFormatRow, gapDp);
         SetBottomMarginDp(musicTransportRow, gapDp);
-        SetBottomMarginDp(musicVolRow, Math.Max(4, gapDp - 1));
-        SetBottomMarginDp(musicSpatialToggleRow, Math.Max(4, gapDp - 1));
+        SetBottomMarginDp(musicVolRow, Math.Max(3, gapDp - 1));
+        SetBottomMarginDp(musicSpatialToggleRow, Math.Max(3, gapDp - 1));
+
+        // Guard stage height against compact/landscape vertical crush so Lyrics/Video/Cover never collapse <= 40dp
+        int minStageDp = isLyricsOrVideo ? (isLandscape ? 230 : 250) : 170;
+        int minStagePx = Dp(minStageDp);
+        int scrollH = musicNowPlayingScrollView?.Height ?? 0;
+        int otherControlsPx = 0;
+        if (scrollH > 0) {
+            for (int i = 0; i < musicNowPlayingSection.ChildCount; i++) {
+                View child = musicNowPlayingSection.GetChildAt(i);
+                if (child == null || child == mediaStageFrame || child.Visibility == ViewStates.Gone) {
+                    continue;
+                }
+                int childH = child.MeasuredHeight > 0 ? child.MeasuredHeight : child.Height;
+                if (child.LayoutParameters is ViewGroup.MarginLayoutParams mlp) {
+                    childH += mlp.TopMargin + mlp.BottomMargin;
+                }
+                otherControlsPx += childH;
+            }
+        }
+        bool needsScrollFloor = scrollH > 0 && otherControlsPx > 0
+            ? (scrollH - otherControlsPx - Dp(stageGapDp)) < minStagePx
+            : (availHDp < 600 || (isLandscape && isLyricsOrVideo));
+
+        if (mediaStageFrame.LayoutParameters is LinearLayout.LayoutParams stageLp) {
+            int targetH = needsScrollFloor ? minStagePx : 0;
+            float targetW = needsScrollFloor ? 0f : 1f;
+            if (stageLp.Height != targetH || Math.Abs(stageLp.Weight - targetW) > 0.01f) {
+                stageLp.Height = targetH;
+                stageLp.Weight = targetW;
+                mediaStageFrame.LayoutParameters = stageLp;
+            }
+        }
     }
 
     (LinearLayout pill, OneUiIconView ico, TextView txt) MakeCompactSpatialPill(
@@ -992,9 +1112,9 @@ public partial class MainActivity {
             SetBottomNavBarVisible(openLibrary, animate: true);
         }
 
-        if (musicNowPlayingSection != null && musicLibraryScrollView != null) {
-            View entering = openLibrary ? (View)musicLibraryScrollView : musicNowPlayingSection;
-            View leaving = openLibrary ? (View)musicNowPlayingSection : musicLibraryScrollView;
+        if (musicNowPlayingScrollView != null && musicLibraryScrollView != null) {
+            View entering = openLibrary ? (View)musicLibraryScrollView : musicNowPlayingScrollView;
+            View leaving = openLibrary ? (View)musicNowPlayingScrollView : musicLibraryScrollView;
 
             leaving.Animate()?.Cancel();
             leaving.Visibility = ViewStates.Gone;
@@ -1174,6 +1294,7 @@ public partial class MainActivity {
 
         RefreshLyricsSingDockUi();
         RefreshBottomActionBarVisuals();
+        musicTabRootPage?.Post(() => UpdatePlayTabSpacingForViewport(force: true));
     }
 
     void ApplyLyricsSingVocalLevel(int pct) {
@@ -1216,19 +1337,34 @@ public partial class MainActivity {
                 ? OneUiTheme.IconSystemInfo
                 : (pct < 99 ? OneUiTheme.PrimaryHigh : Color.Argb(215, 252, 252, 255));
         }
+        bool micEnabled = store.LiveMicEnabled;
+        bool dryBypass = playerEngine?.VocalChainBypassed == true;
+        bool karaokeOn = store.SpatialKaraokeEnabled || pct < 99;
+        if (musicLyricsKaraokeBtn != null) {
+            musicLyricsKaraokeBtn.Text = S["SingDockKaraokeChip"];
+            musicLyricsKaraokeBtn.Background = karaokeOn
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.Primary, 86), 99f, OneUiTheme.WithAlpha(OneUiTheme.PrimaryHigh, 185), 1f)
+                : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f);
+        }
+        if (musicLyricsLiveMicBtn != null) {
+            musicLyricsLiveMicBtn.Text = micEnabled ? S["SingDockLiveMicOnChip"] : S["SingDockLiveMicChip"];
+            musicLyricsLiveMicBtn.Background = micEnabled
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 76), 99f, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 175), 1f)
+                : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f);
+        }
         if (musicLyricsMixMatchBtn != null) {
-            bool micLive = store.LiveMicEnabled && !(playerEngine?.VocalChainBypassed ?? false);
-            musicLyricsMixMatchBtn.Text = micLive ? $"{S["SingMicMixMatchBtn"]} · {S["SingMicLiveBadge"]}" : S["SingMicMixMatchBtn"];
+            bool micLive = micEnabled && !dryBypass;
+            musicLyricsMixMatchBtn.Text = micEnabled
+                ? (dryBypass ? S["SingDockMixMatchDryChip"] : S["SingDockMixMatchWetChip"])
+                : S["SingDockMixMatchChip"];
             musicLyricsMixMatchBtn.Background = micLive
                 ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 76), 99f, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 170), 1f)
                 : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(38, 255, 255, 255), 99f, Color.Argb(54, 255, 255, 255), 0.9f);
         }
         if (musicLyricsVocalAbBtn != null) {
-            bool micEnabled = store.LiveMicEnabled;
             musicLyricsVocalAbBtn.Visibility = micEnabled ? ViewStates.Visible : ViewStates.Gone;
             if (micEnabled) {
-                bool dryBypass = playerEngine?.VocalChainBypassed == true;
-                musicLyricsVocalAbBtn.Text = dryBypass ? S["SingVocalAbDry"] : S["SingVocalAbWet"];
+                musicLyricsVocalAbBtn.Text = dryBypass ? S["SingDockVocalAbDryChip"] : S["SingDockVocalAbWetChip"];
                 musicLyricsVocalAbBtn.Background = dryBypass
                     ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 82), 99f, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 185), 1f)
                     : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 76), 99f, OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 175), 1f);
@@ -1241,6 +1377,22 @@ public partial class MainActivity {
                 : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f);
         }
         RefreshNeuralPrepUi();
+        if (musicLyricsAiStatusText != null) {
+            bool hasDna = playerEngine?.VocalMixMatchStage?.ActiveDna?.IsExtractedFromSong == true;
+            bool hasVp = playerEngine?.VocalMixMatchStage?.HasMicVoiceprint == true;
+            if (musicLyricsAiStatusText.Visibility != ViewStates.Visible) {
+                musicLyricsAiStatusText.Text = (hasDna || hasVp) ? S["SingDockDnaActivePill"] : S["SingDockDnaIdlePill"];
+                musicLyricsAiStatusText.SetTextColor((hasDna || hasVp) ? OneUiTheme.IconSystemInfo : OneUiTheme.TextSecondary);
+                musicLyricsAiStatusText.Visibility = ViewStates.Visible;
+            }
+            Color pillBg = isNeuralPrepRunning
+                ? OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 48)
+                : (hasDna || hasVp || micEnabled
+                    ? OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 44)
+                    : Color.Argb(34, 255, 255, 255));
+            musicLyricsAiStatusText.Background = OneUiTheme.CreateRoundedDrawable(
+                this, pillBg, 99f, Color.Argb(54, 255, 255, 255), 0.8f);
+        }
     }
 
     void RefreshBottomActionBarVisuals() {
@@ -1528,6 +1680,7 @@ public partial class MainActivity {
             activeChip.SetTypeface(sfBold, TypefaceStyle.Bold);
             activeChip.SetIncludeFontPadding(false);
             activeChip.SetSingleLine(true);
+            activeChip.Ellipsize = TextUtils.TruncateAt.End;
             activeChip.SetPadding(Dp(8), 0, Dp(8), 0);
             activeChip.SetTextColor(Color.Rgb(18, 20, 26));
             activeChip.Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(240, 252, 252, 255), 99f);
@@ -1618,6 +1771,7 @@ public partial class MainActivity {
             chip.SetTypeface(sfBold, TypefaceStyle.Bold);
             chip.SetIncludeFontPadding(false);
             chip.SetSingleLine(true);
+            chip.Ellipsize = TextUtils.TruncateAt.End;
             chip.SetPadding(Dp(8), 0, Dp(8), 0);
             Color inactiveFg = cat switch {
                 AudioTierCategory.Atmos => OneUiTheme.PrimaryHigh,
@@ -1820,9 +1974,134 @@ public partial class MainActivity {
 
         LinearLayout box = new(this) { Orientation = Orientation.Vertical };
         Android.App.Dialog dlg = null;
+        bool dialogOpen = true;
 
         Typeface sfBold = OneUiTheme.GetAppleFontBold(this);
         Typeface sfSemi = OneUiTheme.GetAppleFontSemibold(this);
+
+        Cavernize.Logic.Spatial.LgsrDiagnostics lgsrDiag = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
+        bool twinSynced = lgsrDiag.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.Synced;
+        bool spatialActive = !twinSynced && (
+            store.HeadphoneVirtualizer ||
+            store.CavernizeUpmix ||
+            store.MatrixUpmixing ||
+            playerEngine?.IsLiveNeuralStemPlaybackActive == true);
+
+        TextView abStateTv = null;
+        TextView twinPill = null;
+
+        // 0. Prominent Segmented A/B Comparison Header: [A: Original | B: ATMOS+FLAC / Spatial 3D]
+        if (twinSynced || spatialActive) {
+            LinearLayout abHeaderCard = new(this) { Orientation = Orientation.Vertical };
+            abHeaderCard.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 16f, OneUiTheme.BorderSubtle, 1f);
+            abHeaderCard.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+
+            LinearLayout abSegWrap = new(this) {
+                Orientation = Orientation.Horizontal,
+                BaselineAligned = false
+            };
+            abSegWrap.SetPadding(Dp(3), Dp(3), Dp(3), Dp(3));
+            abSegWrap.Background = OneUiTheme.CreateRoundedDrawable(
+                this, Color.Argb(34, 255, 255, 255), 999f, Color.Argb(44, 255, 255, 255), 0.9f);
+
+            TextView segOriginal = new(this) {
+                Text = S["AudioSpecAbOriginalSeg"],
+                TextSize = 11.5f,
+                Gravity = GravityFlags.Center
+            };
+            segOriginal.SetTypeface(sfBold, TypefaceStyle.Bold);
+            segOriginal.SetIncludeFontPadding(false);
+            segOriginal.SetSingleLine(true);
+            segOriginal.Ellipsize = TextUtils.TruncateAt.End;
+            segOriginal.SetPadding(Dp(10), Dp(7), Dp(10), Dp(7));
+            OneUiTheme.AttachRecoil(segOriginal, 0.95f);
+
+            TextView segMaster = new(this) {
+                Text = twinSynced ? S["AudioSpecAbTwinSeg"] : S["AudioSpecAbSpatialSeg"],
+                TextSize = 11.5f,
+                Gravity = GravityFlags.Center
+            };
+            segMaster.SetTypeface(sfBold, TypefaceStyle.Bold);
+            segMaster.SetIncludeFontPadding(false);
+            segMaster.SetSingleLine(true);
+            segMaster.Ellipsize = TextUtils.TruncateAt.End;
+            segMaster.SetPadding(Dp(10), Dp(7), Dp(10), Dp(7));
+            OneUiTheme.AttachRecoil(segMaster, 0.95f);
+
+            abSegWrap.AddView(segOriginal, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            abSegWrap.AddView(segMaster, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            abHeaderCard.AddView(abSegWrap, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+            abStateTv = Label("", 11.2f, OneUiTheme.TextSecondary);
+            abStateTv.SetPadding(Dp(2), Dp(6), Dp(2), 0);
+            abHeaderCard.AddView(abStateTv);
+
+            void RefreshAbHeaderVisuals() {
+                bool listeningOriginal = twinSynced
+                    ? (playerEngine?.LgsrBypassed ?? false)
+                    : !store.HeadphoneVirtualizer;
+
+                segOriginal.Background = listeningOriginal
+                    ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.PeachText, 999f)
+                    : null;
+                segOriginal.SetTextColor(listeningOriginal ? Color.Rgb(16, 18, 26) : OneUiTheme.TextSecondary);
+
+                Color masterBg = twinSynced ? OneUiTheme.IconSystemInfo : OneUiTheme.PrimaryHigh;
+                segMaster.Background = !listeningOriginal
+                    ? OneUiTheme.CreateRoundedDrawable(this, masterBg, 999f)
+                    : null;
+                segMaster.SetTextColor(!listeningOriginal ? Color.Rgb(16, 18, 26) : OneUiTheme.TextSecondary);
+
+                if (twinSynced) {
+                    abStateTv.Text = listeningOriginal ? S["AudioSpecLgsrAbOriginalHint"] : S["AudioSpecLgsrAbRestoredHint"];
+                    abStateTv.SetTextColor(listeningOriginal ? OneUiTheme.PeachText : OneUiTheme.IconSystemInfo);
+                    if (twinPill != null) {
+                        twinPill.Text = listeningOriginal ? S["AudioSpecAtmosAbBadge"] : S["AudioSpecAtmosFlacBadge"];
+                        twinPill.Background = OneUiTheme.CreateRoundedDrawable(
+                            this, listeningOriginal ? OneUiTheme.PeachText : OneUiTheme.IconSystemInfo, 99f);
+                    }
+                } else {
+                    abStateTv.Text = listeningOriginal ? S["AudioSpecAbSpatialOffHint"] : S["AudioSpecAbSpatialOnHint"];
+                    abStateTv.SetTextColor(listeningOriginal ? OneUiTheme.PeachText : OneUiTheme.PrimaryHigh);
+                }
+            }
+
+            void SelectAbMode(bool wantOriginal) {
+                if (twinSynced) {
+                    if (playerEngine == null) {
+                        return;
+                    }
+                    playerEngine.LgsrBypassed = wantOriginal;
+                    RefreshAbHeaderVisuals();
+                    UpdateSpatialBadgePillVisuals();
+                    RefreshLgsrUi();
+                    RefreshSpatialXRayHud();
+                } else {
+                    bool wantSpatial = !wantOriginal;
+                    store.HeadphoneVirtualizer = wantSpatial;
+                    if (playerEngine != null) {
+                        playerEngine.HeadphoneVirtualizer = wantSpatial;
+                        BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+                    }
+                    AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
+                    RefreshBinauralProfileUi();
+                    RefreshPersonalizationUi();
+                    RefreshAutoEqUi();
+                    refreshBentoTilesUi?.Invoke();
+                    RefreshMusicPlayerControlsUi();
+                    UpdateSpatialBadgePillVisuals();
+                    RefreshAbHeaderVisuals();
+                }
+            }
+
+            segOriginal.Click += (_, _) => SelectAbMode(wantOriginal: true);
+            segMaster.Click += (_, _) => SelectAbMode(wantOriginal: false);
+            RefreshAbHeaderVisuals();
+
+            box.AddView(abHeaderCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(8)
+            });
+        }
 
         // 1. Primary Format & Spatial Engine Summary Card (read-only binaural engine line, no redundant profile button)
         LinearLayout specCard = new(this) { Orientation = Orientation.Vertical };
@@ -1869,59 +2148,71 @@ public partial class MainActivity {
                 LastModifiedTicks = File.Exists(activePath) ? File.GetLastWriteTimeUtc(activePath).Ticks : 0
             };
 
-        AudioQualityReport qReport = AudioQualityAnalyzer.EvaluateFast(libItem, this);
         LinearLayout qualCard = new(this) { Orientation = Orientation.Vertical };
         qualCard.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 16f, OneUiTheme.BorderSubtle, 1f);
         qualCard.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
 
-        string tierName = qReport.Category switch {
-            AudioTierCategory.Atmos => S["TierAtmos"],
-            AudioTierCategory.Surround => S["TierSurround"],
-            _ => S["TierStereo"]
-        };
-        TextView qualHdr = Label($"{tierName} • {string.Format(S["QualityScoreLabel"], (int)Math.Round(qReport.Score))}", 12.5f, OneUiTheme.PeachText);
-        qualHdr.SetTypeface(sfBold, TypefaceStyle.Bold);
-        qualHdr.SetPadding(0, 0, 0, Dp(4));
-        qualCard.AddView(qualHdr);
+        void PopulateQualCard(bool triggerBackground) {
+            qualCard.RemoveAllViews();
+            AudioQualityReport qReport = AudioQualityAnalyzer.EvaluateFast(libItem, this);
+            string tierName = qReport.Category switch {
+                AudioTierCategory.Atmos => S["TierAtmos"],
+                AudioTierCategory.Surround => S["TierSurround"],
+                _ => S["TierStereo"]
+            };
+            TextView qualHdr = Label($"{tierName} • {string.Format(S["QualityScoreLabel"], (int)Math.Round(qReport.Score))}", 12.5f, OneUiTheme.PeachText);
+            qualHdr.SetTypeface(sfBold, TypefaceStyle.Bold);
+            qualHdr.SetPadding(0, 0, 0, Dp(4));
+            qualCard.AddView(qualHdr);
 
-        if (qReport.DeepAnalyzed) {
-            if (qReport.EffectiveBitDepth > 0) {
-                string bitStr = qReport.IsFake24Bit
-                    ? S["QualityFake24BitWarn"]
-                    : (qReport.EffectiveBitDepth >= 20
-                        ? string.Format(S["QualityTrue24BitOk"], qReport.EffectiveBitDepth)
-                        : string.Format(S["QualityEffectiveBits"], qReport.EffectiveBitDepth));
-                Color bitCol = qReport.IsFake24Bit ? OneUiTheme.FunctionalRedFill : OneUiTheme.TextSecondary;
-                qualCard.AddView(Label($"• {bitStr}", 11.5f, bitCol));
+            if (qReport.DeepAnalyzed) {
+                if (qReport.EffectiveBitDepth > 0) {
+                    string bitStr = qReport.IsFake24Bit
+                        ? S["QualityFake24BitWarn"]
+                        : (qReport.EffectiveBitDepth >= 20
+                            ? string.Format(S["QualityTrue24BitOk"], qReport.EffectiveBitDepth)
+                            : string.Format(S["QualityEffectiveBits"], qReport.EffectiveBitDepth));
+                    Color bitCol = qReport.IsFake24Bit ? OneUiTheme.FunctionalRedFill : OneUiTheme.TextSecondary;
+                    qualCard.AddView(Label($"• {bitStr}", 11.5f, bitCol));
+                }
+                if (qReport.SpectralCutoffHz > 0) {
+                    string cutStr = string.Format(S["QualitySpectralCutoff"], (qReport.SpectralCutoffHz / 1000.0).ToString("0.0"));
+                    qualCard.AddView(Label($"• {cutStr}", 11.5f, OneUiTheme.TextSecondary));
+                }
+                if (qReport.IsFakeLossless) {
+                    qualCard.AddView(Label($"• {S["QualityFakeLosslessWarn"]}", 11.5f, OneUiTheme.FunctionalRedFill));
+                } else if (qReport.IsUpsampledHiRes) {
+                    qualCard.AddView(Label($"• {S["QualityUpsampledHiResWarn"]}", 11.5f, OneUiTheme.PeachText));
+                }
+                if (qReport.DynamicRangeDb > 0.5) {
+                    qualCard.AddView(Label($"• {string.Format(S["QualityDynamicRange"], qReport.DynamicRangeDb.ToString("0.1"))}", 11.5f, OneUiTheme.TextSecondary));
+                }
+                if (qReport.ClippedPercent >= 0.05) {
+                    qualCard.AddView(Label($"• {string.Format(S["QualityClippingWarn"], qReport.ClippedPercent.ToString("0.2"))}", 11.5f, OneUiTheme.FunctionalRedFill));
+                }
+            } else {
+                TextView pendingTv = Label(triggerBackground ? S["QualityAnalyzing"] : S["QualityFastOnlyNote"], 11.5f, OneUiTheme.TextMuted);
+                qualCard.AddView(pendingTv);
+                if (triggerBackground) {
+                    string ffLoc = ffmpeg?.Found == true ? ffmpeg.Location : null;
+                    AudioQualityAnalyzer.AnalyzeVariantsInBackground(this, [libItem], ffLoc, () => {
+                        RunOnUiThread(() => {
+                            if (uiDestroyed || !dialogOpen || dlg == null || !dlg.IsShowing) {
+                                return;
+                            }
+                            PopulateQualCard(triggerBackground: false);
+                        });
+                    });
+                }
             }
-            if (qReport.SpectralCutoffHz > 0) {
-                string cutStr = string.Format(S["QualitySpectralCutoff"], (qReport.SpectralCutoffHz / 1000.0).ToString("0.0"));
-                qualCard.AddView(Label($"• {cutStr}", 11.5f, OneUiTheme.TextSecondary));
-            }
-            if (qReport.IsFakeLossless) {
-                qualCard.AddView(Label($"• {S["QualityFakeLosslessWarn"]}", 11.5f, OneUiTheme.FunctionalRedFill));
-            } else if (qReport.IsUpsampledHiRes) {
-                qualCard.AddView(Label($"• {S["QualityUpsampledHiResWarn"]}", 11.5f, OneUiTheme.PeachText));
-            }
-            if (qReport.DynamicRangeDb > 0.5) {
-                qualCard.AddView(Label($"• {string.Format(S["QualityDynamicRange"], qReport.DynamicRangeDb.ToString("0.1"))}", 11.5f, OneUiTheme.TextSecondary));
-            }
-            if (qReport.ClippedPercent >= 0.05) {
-                qualCard.AddView(Label($"• {string.Format(S["QualityClippingWarn"], qReport.ClippedPercent.ToString("0.2"))}", 11.5f, OneUiTheme.FunctionalRedFill));
-            }
-        } else {
-            TextView pendingTv = Label(S["QualityAnalyzing"], 11.5f, OneUiTheme.TextMuted);
-            qualCard.AddView(pendingTv);
-            string ffLoc = ffmpeg?.Found == true ? ffmpeg.Location : null;
-            AudioQualityAnalyzer.AnalyzeVariantsInBackground(this, [libItem], ffLoc, null);
         }
+        PopulateQualCard(triggerBackground: true);
 
         box.AddView(qualCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
 
-        // 2B. W09/W14 Universal Lossless Twin & LGSR Status Card + ATMOS+FLAC Instant A/B Compare
-        Cavernize.Logic.Spatial.LgsrDiagnostics lgsrDiag = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
+        // 2B. W09/W14 Universal Lossless Twin & LGSR Status Card + Collapsible Pro Signal Telemetry
         if (lgsrDiag.State != Cavernize.Logic.Spatial.LosslessTwinVerificationState.None) {
             LinearLayout lgsrCard = new(this) { Orientation = Orientation.Vertical };
             lgsrCard.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 16f, OneUiTheme.BorderSubtle, 1f);
@@ -1935,8 +2226,8 @@ public partial class MainActivity {
             lgsrHdr.Ellipsize = TextUtils.TruncateAt.End;
             lgsrHdrRow.AddView(lgsrHdr, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
-            if (lgsrDiag.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.Synced) {
-                TextView twinPill = new(this) {
+            if (twinSynced) {
+                twinPill = new TextView(this) {
                     Text = playerEngine.LgsrBypassed ? S["AudioSpecAtmosAbBadge"] : S["AudioSpecAtmosFlacBadge"],
                     TextSize = 10f,
                     Gravity = GravityFlags.Center
@@ -1958,40 +2249,42 @@ public partial class MainActivity {
                     ? lgsrDiag.TwinFileName
                     : $"{lgsrDiag.TwinFormatSummary} • {lgsrDiag.TwinFileName}";
                 lgsrCard.AddView(Label($"• {string.Format(S["AudioSpecLgsrActive"], twinLabel)}", 11.5f, ColText));
-                lgsrCard.AddView(Label($"• {string.Format(S["AudioSpecLgsrSync"], lgsrDiag.SyncOffsetMs, lgsrDiag.DriftPpm, lgsrDiag.SyncConfidence * 100f)}", 11.5f, OneUiTheme.TextSecondary));
-                lgsrCard.AddView(Label($"• {string.Format(S["AudioSpecLgsrBands"], lgsrDiag.CouplingStartHz / 1000f, lgsrDiag.SpxStartHz / 1000f, lgsrDiag.AverageCoherence * 100f)}", 11.5f, OneUiTheme.TextSecondary));
-                lgsrCard.AddView(Label($"• {string.Format(S["AudioSpecLgsrGuards"], lgsrDiag.DynamicEnvelopeLockDb, lgsrDiag.ClippingGuardActive ? S["StatusOnTag"] : "OK")}", 11.5f, OneUiTheme.TextSecondary));
 
-                TextView abStateTv = Label(
-                    playerEngine.LgsrBypassed ? S["AudioSpecLgsrAbOriginalHint"] : S["AudioSpecLgsrAbRestoredHint"],
-                    11.2f,
-                    playerEngine.LgsrBypassed ? OneUiTheme.PeachText : OneUiTheme.IconSystemInfo);
-                abStateTv.SetPadding(0, Dp(6), 0, Dp(6));
-                lgsrCard.AddView(abStateTv);
+                // Collapsible Pro Signal Telemetry disclosure (DriftPpm, Coherence, EnvelopeLock)
+                bool telemetryExpanded = false;
+                LinearLayout telemetryToggleRow = HRow();
+                telemetryToggleRow.SetPadding(Dp(8), Dp(6), Dp(8), Dp(6));
+                telemetryToggleRow.Background = OneUiTheme.CreateRoundedDrawable(
+                    this, Color.Argb(24, 255, 255, 255), 12f, Color.Argb(36, 255, 255, 255), 0.8f);
+                OneUiTheme.AttachRecoil(telemetryToggleRow, 0.97f);
 
-                LinearLayout abRow = HRow();
-                Button abToggleBtn = null;
-                abToggleBtn = PillButton(
-                    playerEngine.LgsrBypassed ? S["AudioSpecLgsrAbToRestored"] : S["AudioSpecLgsrAbToOriginal"],
-                    () => {
-                        playerEngine.LgsrBypassed = !playerEngine.LgsrBypassed;
-                        bool byp = playerEngine.LgsrBypassed;
-                        twinPill.Text = byp ? S["AudioSpecAtmosAbBadge"] : S["AudioSpecAtmosFlacBadge"];
-                        twinPill.Background = OneUiTheme.CreateRoundedDrawable(
-                            this, byp ? OneUiTheme.PeachText : OneUiTheme.IconSystemInfo, 99f);
-                        abStateTv.Text = byp ? S["AudioSpecLgsrAbOriginalHint"] : S["AudioSpecLgsrAbRestoredHint"];
-                        abStateTv.SetTextColor(byp ? OneUiTheme.PeachText : OneUiTheme.IconSystemInfo);
-                        abToggleBtn.Text = byp ? S["AudioSpecLgsrAbToRestored"] : S["AudioSpecLgsrAbToOriginal"];
-                        abToggleBtn.Background = byp
-                            ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.PeachText, 76), 14f, OneUiTheme.WithAlpha(OneUiTheme.PeachText, 175), 1f)
-                            : OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 76), 14f, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 175), 1f);
-                        UpdateSpatialBadgePillVisuals();
-                        RefreshLgsrUi();
-                        RefreshSpatialXRayHud();
-                    },
-                    active: !playerEngine.LgsrBypassed);
-                abRow.AddView(abToggleBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-                lgsrCard.AddView(abRow);
+                TextView telemetryTitle = Label(S["AudioSpecProTelemetryToggle"], 11.2f, OneUiTheme.TextSecondary);
+                telemetryTitle.SetTypeface(sfSemi, TypefaceStyle.Bold);
+                telemetryTitle.SetSingleLine(true);
+                telemetryTitle.Ellipsize = TextUtils.TruncateAt.End;
+                OneUiIconView telemetryChevron = new(this, OneUiIconType.ChevronDown, OneUiTheme.TextMuted);
+                telemetryToggleRow.AddView(telemetryTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+                telemetryToggleRow.AddView(telemetryChevron, new LinearLayout.LayoutParams(Dp(14), Dp(14)));
+
+                LinearLayout telemetryBody = new(this) {
+                    Orientation = Orientation.Vertical,
+                    Visibility = ViewStates.Gone
+                };
+                telemetryBody.SetPadding(Dp(2), Dp(6), Dp(2), 0);
+                telemetryBody.AddView(Label($"• {string.Format(S["AudioSpecLgsrSync"], lgsrDiag.SyncOffsetMs, lgsrDiag.DriftPpm, lgsrDiag.SyncConfidence * 100f)}", 11.2f, OneUiTheme.TextSecondary));
+                telemetryBody.AddView(Label($"• {string.Format(S["AudioSpecLgsrBands"], lgsrDiag.CouplingStartHz / 1000f, lgsrDiag.SpxStartHz / 1000f, lgsrDiag.AverageCoherence * 100f)}", 11.2f, OneUiTheme.TextSecondary));
+                telemetryBody.AddView(Label($"• {string.Format(S["AudioSpecLgsrGuards"], lgsrDiag.DynamicEnvelopeLockDb, lgsrDiag.ClippingGuardActive ? S["StatusOnTag"] : "OK")}", 11.2f, OneUiTheme.TextSecondary));
+
+                telemetryToggleRow.Click += (_, _) => {
+                    telemetryExpanded = !telemetryExpanded;
+                    telemetryBody.Visibility = telemetryExpanded ? ViewStates.Visible : ViewStates.Gone;
+                    telemetryChevron.IconType = telemetryExpanded ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown;
+                };
+
+                lgsrCard.AddView(telemetryToggleRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    TopMargin = Dp(6)
+                });
+                lgsrCard.AddView(telemetryBody);
             } else {
                 lgsrCard.AddView(lgsrHdrRow);
                 string stateMsg = lgsrDiag.State switch {
@@ -2058,6 +2351,7 @@ public partial class MainActivity {
             iconBadgeColor: OneUiTheme.Primary,
             positiveText: S["CloseBtn"],
             customContent: box);
+        dlg.DismissEvent += (_, _) => dialogOpen = false;
     }
 
     void RefreshMusicPlayerControlsUi() {
@@ -4399,6 +4693,18 @@ public partial class MainActivity {
         });
     }
 
+    static View FindFullscreenVideoHudOverlay(SyncedVideoStageView stage) {
+        if (stage == null) {
+            return null;
+        }
+        for (int i = 0; i < stage.ChildCount; i++) {
+            if (stage.GetChildAt(i) is FrameLayout fl) {
+                return fl;
+            }
+        }
+        return null;
+    }
+
     void ToggleVideoFullscreen() {
         if (fullscreenVideoDlg != null) {
             ExitVideoFullscreenIfNeeded();
@@ -4431,10 +4737,14 @@ public partial class MainActivity {
                     dlg.Window.Attributes.LayoutInDisplayCutoutMode = LayoutInDisplayCutoutMode.Always;
                     dlg.Window.Attributes = dlg.Window.Attributes;
                 }
+                View hudOverlay = FindFullscreenVideoHudOverlay(musicVideoStage);
                 fsRoot.SetOnApplyWindowInsetsListener(new RootInsetsListener(insets => {
-                    if (insets == null) return;
-                    Android.Graphics.Insets cutout = insets.GetInsets(WindowInsets.Type.DisplayCutout());
-                    fsRoot.SetPadding(cutout.Left, cutout.Top, cutout.Right, cutout.Bottom);
+                    if (insets == null || hudOverlay == null) {
+                        return;
+                    }
+                    Android.Graphics.Insets safe = insets.GetInsets(
+                        WindowInsets.Type.DisplayCutout() | WindowInsets.Type.SystemBars());
+                    hudOverlay.SetPadding(safe.Left, safe.Top, safe.Right, safe.Bottom);
                 }));
             } else {
 #pragma warning disable CS0618, CA1422
@@ -4471,6 +4781,7 @@ public partial class MainActivity {
         try {
             double curSec = playerEngine?.CurrentSeconds ?? 0;
             musicVideoStage?.PrepareSurfaceTransferSeek(curSec);
+            FindFullscreenVideoHudOverlay(musicVideoStage)?.SetPadding(0, 0, 0, 0);
             if (musicVideoStage?.Parent is ViewGroup parent) {
                 parent.RemoveView(musicVideoStage);
             }

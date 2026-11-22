@@ -42,3 +42,21 @@
 ## 7. Media Library & Online Metadata (`Samsung Music 16.2.46`, `Poweramp 1035`, `Kodi 22`)
 - Library: `Albums` (2-col grid -> numbered tracks + duration), `Tracks` (codec badge), `Artists`, `Folders`; `MediaStore` (`MediaStore.Audio`/`Video`) + dir scan (`Music`, `Download`, `Movies`, `Audiobooks`).
 - Scrapers: art/tags (`MusicBrainz`+`CoverArtArchive`, `TheAudioDB`, `iTunes Search API` `600x600`, `TMDb`), `.lrc` (`LRCLIB`, `Netease`, `Lyrics.ovh`), `.srt` (`Podnapisi` XML+ZIP, `OpenSubtitles` REST).
+
+## 8. Cavernize One UI 9 Design System, Settings Hub, Sing Dock & Edge-to-Edge Insets (`W26–W27`)
+- **Design System Primitives (`OneUiTheme.cs` + `OneUiComponents.cs`):**
+  - `CreateCategoryHubTile(ctx, icon, iconColor, title, liveSubtitle, onClick, out subtitleView)` -> `minH=68dp`, `38dp` squircle `OneUiIconBadge`, single-line ellipsized bold title + live status subtitle + `16dp` `ChevronRight`.
+  - `CreateStatusChip` / `UpdateStatusChip` -> `11f` bold ellipsized pill (`PillCornerDp`, `48` fill / `145` border alpha).
+  - `CreateEmptyPrereqCard` -> `18f` `SurfaceSubTile` + `FunctionalAmber` (`110` alpha) border + optional `38dp` `Primary` pill CTA.
+  - `OneUiModalDialog.SetHelpAction(dialog, onHelp, contentDesc)` -> header `?` action slot; `activeBlurredDialogs` (`HashSet<Dialog>`) ref-counts API 31+ `SetRenderEffect` blur (`0` leaks on stacked modals); single-button footer centered.
+  - `OneUiInlineSelector` -> single-line ellipsized pill (`44dp` minH, `Ellipsize=End`); `RoomSimulatorView` -> 2-row top chip bar (`<=320dp` safe), reused `clipRoomPath.Reset()`, `IsSolo` race guard.
+- **6-Category Settings Hub (`MainActivity.SettingsTab.cs`):**
+  - 6 tiles (*Playback & Spatial*, *Headphones & Calibration*, *AI & Restoration*, *Pro-Audio & Microphone*, *Engines & Storage*, *Diagnostics & About*) + `RefreshSettingsCategorySubtitles` + cross-category search (`MatchesSettingsSearch`) + Essential/Pro mode chip (`isSettingsProMode`) + `← All Settings` back-nav (`TryHandleInternalBack` / `JumpToSettingsCategory`).
+  - Guided `?` help modals (`ShowModalGuidedHelp`) across `HRTF Wizard` (draft cancel-revert via `RevertDraftIfNeeded` + tone cleanup), `AutoEq` (`180 ms` search debounce), `Neural Models & Cache` (`NeuralTrackCacheMaxMb` `256..4096 MB` + 2-row `HRow` buttons), `Auto-Vocal Mix-Match`, and `Focusrite Scarlett`.
+- **5-Tab IA, 2-Tier `Lyrics Sing` & `AudioSpec [A|B]` (`MainActivity.{PlayerMusic,Player,Converter,Extractor}Tab.cs`):**
+  - Play viewport compaction (`availHDp < 600` or landscape Lyrics -> `targetArtDp` clamped `150..220dp` + compact gaps); 2-tier `Lyrics Sing` dock (`Tier 1`: `16dp` mic icon + `Vocals` + `40dp` min-width `%` + DNA pill + `OneUiSeekBar`; `Tier 2`: horizontal scroll chips `minH=30dp`).
+  - `ShowAudioSpecDialog`: `[A: Original | B: ATMOS+FLAC / Spatial 3D]` live A/B toggle (`RefreshAbHeaderVisuals` + callback refresh) + collapsible Pro signal telemetry (`DriftPpm`, `Coherence`, `EnvelopeLock`).
+  - `3D Room` 5-pill `BuildActiveSignalChainBar` + mini transport; `Studio` `Master|Classic|Queue` + Readiness Pills + 1 CTA; `Stems` 4 Goal Cards + live AI pipeline preview.
+- **Edge-to-Edge `WindowInsets` & DisplayCutout (`MainActivity.cs` + Tabs):**
+  - `ConfigureEdgeToEdgeWindow` (`SetDecorFitsSystemWindows(false)`, `LayoutInDisplayCutoutMode.Always`) + `RootInsetsListener` (`SystemBars() | DisplayCutout()`, `Ime()`).
+  - `rootLayoutHost` applies `insetLeft/Top/Right`; `navFrostedHost` hides when `imeOpen` (`insetImeBottomPx > insetBarsBottomPx + 48dp`) & shifts `BottomMargin = 12dp + scrollBottom` w/o double L/R cutout padding; `tabCells[4]` `WrapContent`; `ApplyTabPageCutoutPadding` adds landscape cutout margins on `Converter`/`Extractor`; `fsRoot` applies `DisplayCutout|SystemBars` to fullscreen video HUD overlay only.

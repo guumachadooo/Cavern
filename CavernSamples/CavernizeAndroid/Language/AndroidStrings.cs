@@ -330,8 +330,8 @@ public sealed class AndroidStrings {
         ["ErrorTitle"] = "Error",
         ["NoTrack"] = "Please load a file with a supported track first.",
         ["OpRunning"] = "An operation is already running.",
-        ["FFmpegNeeded"] = "The selected output codec ({0}) requires FFmpeg. Configure FFmpeg in Setup or choose PCM / ADM BWF / DAMF / LAF.",
-        ["TrueHDUnsupported"] = "Dolby TrueHD requires the bundled truehdd decoder (libtruehdd.so). Check Settings if unavailable.",
+        ["FFmpegNeeded"] = "The selected output codec ({0}) requires the built-in FFmpeg engine. Check Engines & Storage in Settings or choose PCM / ADM BWF / DAMF / LAF.",
+        ["TrueHDUnsupported"] = "Dolby TrueHD requires the built-in truehdd decoder engine. Check Engines & Storage in Settings if unavailable.",
         ["CopyingMedia"] = "Preparing media file...",
         ["DecodingFallback"] = "Decoding audio via Android MediaCodec...",
         ["ProbingContainer"] = "Inspecting container streams with FFmpeg...",
@@ -339,7 +339,7 @@ public sealed class AndroidStrings {
         ["TrueHDTitle"] = "Dolby TrueHD / Atmos",
         ["TrueHDDecoding"] = "Decoding TrueHD / Atmos with truehdd...",
         ["TrueHDLicenceTitle"] = "truehdd Decoder License (Apache 2.0)",
-        ["TrueHDLicenceDesc"] = "Cavernize bundles the official ARM64 truehdd decoder (libtruehdd.so inside APK NativeLibraryDir, W^X compliant) to decode Dolby TrueHD and Atmos 3D object metadata locally on your device.",
+        ["TrueHDLicenceDesc"] = "Cavernize includes the official built-in ARM64 truehdd decoder to decode Dolby TrueHD and Atmos 3D object metadata locally on your device.",
         ["TrueHDDownloadDecode"] = "Accept & Decode",
         ["TrueHDCancelled"] = "TrueHD decoding cancelled.",
         ["TrueHDContainerNeedTools"] = "This video/MKV uses an audio format (such as Dolby TrueHD or DTS) that Android cannot decode natively. Check bundled FFmpeg & truehdd status in Settings.",
@@ -374,30 +374,30 @@ public sealed class AndroidStrings {
         ["AllowUnknownSourcesMsg"] = "Allow 'Install unknown apps' for Cavernize, then return to complete the installation.",
         ["DismissBtn"] = "Later",
 
-        // FFmpeg Bundled NDK Engine
+        // FFmpeg Built-in Engine
         ["FFmpegCardTitle"] = "FFmpeg Audio Engine",
-        ["FFmpegNotInstalled"] = "Bundled libffmpeg.so unavailable in NativeLibraryDir (needed for E-AC-3, AC-3, FLAC, Opus, MKV muxing)",
-        ["FFmpegInstalledVer"] = "Bundled NDK: {0} (W^X Ready)",
-        ["FFmpegUpdateAvail"] = "FFmpeg update available: {0}",
-        ["FFmpegDownloadBtn"] = "Download FFmpeg",
-        ["FFmpegUpdateBtn"] = "Update FFmpeg",
+        ["FFmpegNotInstalled"] = "Built-in FFmpeg engine is unavailable on this installation (needed for E-AC-3, AC-3, FLAC, Opus, MKV muxing)",
+        ["FFmpegInstalledVer"] = "Built-in Engine: {0} (Ready)",
+        ["FFmpegUpdateAvail"] = "Built-in FFmpeg engine version: {0}",
+        ["FFmpegDownloadBtn"] = "Verify FFmpeg",
+        ["FFmpegUpdateBtn"] = "Verify FFmpeg",
         ["FFmpegCheckBtn"] = "Verify FFmpeg",
-        ["FFmpegManualBtn"] = "Locate Manual Binary",
-        ["FFmpegDownloading"] = "Verifying bundled FFmpeg...",
-        ["FFmpegUpToDate"] = "Bundled FFmpeg ready ({0}).",
+        ["FFmpegManualBtn"] = "Built-in Engine",
+        ["FFmpegDownloading"] = "Checking built-in FFmpeg engine...",
+        ["FFmpegUpToDate"] = "Built-in FFmpeg ready ({0}).",
 
-        // TrueHD Bundled Engine
+        // TrueHD Built-in Engine
         ["TruehddCardTitle"] = "Dolby TrueHD Engine (truehdd)",
-        ["TruehddNotInstalled"] = "Bundled libtruehdd.so unavailable in NativeLibraryDir (needed for Dolby TrueHD & Atmos)",
-        ["TruehddInstalledVer"] = "Bundled: v{0} (W^X Ready)",
-        ["TruehddUpdateAvail"] = "truehdd update available: v{0}",
-        ["TruehddDownloadBtn"] = "Download truehdd",
-        ["TruehddUpdateBtn"] = "Update truehdd",
+        ["TruehddNotInstalled"] = "Built-in truehdd engine is unavailable on this installation (needed for Dolby TrueHD & Atmos)",
+        ["TruehddInstalledVer"] = "Built-in Engine: v{0} (Ready)",
+        ["TruehddUpdateAvail"] = "Built-in truehdd engine version: v{0}",
+        ["TruehddDownloadBtn"] = "Verify truehdd",
+        ["TruehddUpdateBtn"] = "Verify truehdd",
         ["TruehddCheckBtn"] = "Verify truehdd",
-        ["TruehddManualBtn"] = "Locate Manual Binary",
-        ["TruehddDownloading"] = "Verifying bundled truehdd...",
-        ["TruehddUpToDate"] = "Bundled truehdd ready (v{0}).",
-        ["TipTruehdd"] = "Official ARM64 musl build of truehdd/truehdd bundled inside APK NativeLibraryDir (libtruehdd.so, W^X compliant). Decodes lossless Dolby TrueHD and Atmos 3D objects into DAMF/CAF in private temp storage, cleaning cache automatically.",
+        ["TruehddManualBtn"] = "Built-in Engine",
+        ["TruehddDownloading"] = "Checking built-in truehdd engine...",
+        ["TruehddUpToDate"] = "Built-in truehdd ready (v{0}).",
+        ["TipTruehdd"] = "Official ARM64 truehdd decoder built directly into the app. Decodes lossless Dolby TrueHD and Atmos 3D objects into DAMF/CAF in private temporary storage and cleans cache automatically.",
 
         // One UI 9 Section Titles & Bento Tiles
         ["QuickPanelTitle"] = "Quick Spatial Panel",
@@ -720,13 +720,13 @@ public sealed class AndroidStrings {
         ["LoudnessResetMeterBtn"] = "Reset BS.1770 Meter",
         ["LoudnessMeterResetToast"] = "ITU-R BS.1770-5 Integrated LUFS & LRA meter reset.",
 
-        // Slot 2B: On-Device Neural Audio Runtime (ONNX), MVSEP Anti-Artifact Pipeline & Spatial Karaoke
+        // On-Device Neural Audio Runtime (ONNX), MVSEP Anti-Artifact Pipeline & Spatial Karaoke
         ["Slot2BCardTitle"] = "Neural Audio, Stems & Karaoke",
-        ["NeuralRuntimeNotInstalled"] = "Bundled ONNX Runtime (libonnxruntime.so) unavailable in NativeLibraryDir",
+        ["NeuralRuntimeNotInstalled"] = "Built-in ONNX Runtime neural engine is unavailable on this installation",
         ["NeuralRuntimeInstalled"] = "ONNX Runtime {0} · {1} · {2} model(s) · {3:0.0} MB",
-        ["NeuralRuntimeUpdateAvail"] = "ONNX Runtime update available: v{0}",
-        ["NeuralRuntimeDownloadBtn"] = "Install ONNX Runtime",
-        ["NeuralRuntimeUpdateBtn"] = "Update ONNX Runtime",
+        ["NeuralRuntimeUpdateAvail"] = "Built-in ONNX Runtime version: v{0}",
+        ["NeuralRuntimeDownloadBtn"] = "Verify ONNX Runtime",
+        ["NeuralRuntimeUpdateBtn"] = "Verify ONNX Runtime",
         ["NeuralRuntimeCheckBtn"] = "Verify Runtime",
         ["NeuralModelsBtn"] = "Models & Cache ({0})",
         ["NeuralProviderTitle"] = "Hardware Acceleration (EP)",
@@ -762,11 +762,11 @@ public sealed class AndroidStrings {
         ["NeuralLicensesBtn"] = "Model Licenses",
         ["NeuralCacheClearedToast"] = "Neural models and temporary cache cleared.",
         ["NeuralModelImportedToast"] = "Imported ONNX model for {0}.",
-        ["NeuralRuntimeNeedInstall"] = "Bundled ONNX Runtime (libonnxruntime.so) was not detected in APK NativeLibraryDir.",
-        ["NeuralModelNeedInstall"] = "Download or import the selected ONNX model in Settings -> Neural Audio -> Models & Cache.",
-        ["NeuralDownloadingRuntime"] = "Verifying bundled ONNX Runtime...",
-        ["NeuralExtractingLibs"] = "ONNX Runtime: Loading bundled native libraries...",
-        ["NeuralRuntimeUpToDate"] = "Bundled ONNX Runtime ready ({0}).",
+        ["NeuralRuntimeNeedInstall"] = "Built-in ONNX Runtime neural engine was not detected in this installation.",
+        ["NeuralModelNeedInstall"] = "Download or import the selected ONNX model in Settings -> AI & Restoration -> Models & Cache.",
+        ["NeuralDownloadingRuntime"] = "Checking built-in ONNX Runtime engine...",
+        ["NeuralExtractingLibs"] = "ONNX Runtime: Loading built-in neural engine...",
+        ["NeuralRuntimeUpToDate"] = "Built-in ONNX Runtime ready ({0}).",
         ["NeuralOrchestrationTitle"] = "Neural Pipeline Orchestration",
         ["NeuralOrchestrationAuto"] = "Auto (Best Installed Chain)",
         ["NeuralOrchestrationManual"] = "Manual (Custom Task Slots & Ensembles)",
@@ -790,7 +790,7 @@ public sealed class AndroidStrings {
         ["NeuralTaskDebleed"] = "Debleed / Denoise Refinement",
         ["NeuralTaskRestore"] = "Codec Restoration (Apollo)",
         ["NeuralTaskBwe"] = "Bandwidth Extension (BWE / SR)",
-        ["TipNeuralRuntime"] = "Bundles the official Microsoft ONNX Runtime Android native library (libonnxruntime.so) directly inside APK NativeLibraryDir (W^X compliant, 16 KB ELF aligned). Separate .onnx model weights download on demand into FilesDir/neural_models/.",
+        ["TipNeuralRuntime"] = "Includes the official Microsoft ONNX Runtime Android neural engine built directly into the app. Separate .onnx AI model weights download on demand into private app model storage.",
         ["TipMvsepOverlap"] = "Raised-cosine overlap-add factor (2x to 8x) with reflection padding eliminates chunk boundary clicks and musical noise.",
         ["TipMvsepTta"] = "Runs polarity-inverted and channel-swapped passes and averages inverted outputs to cancel asymmetric neural hallucinations.",
         ["TipMvsepPhaseFix"] = "Reprojects neural stem magnitudes onto the original mixture complex phase via Wiener partition of unity, preventing phasey metallic ringing.",
@@ -812,7 +812,7 @@ public sealed class AndroidStrings {
         ["LgsrClippingGuardTitle"] = "FLAC Brickwall & Clipping Guard",
         ["LgsrBitstreamGuideTitle"] = "Live E-AC-3 Coupling & SPX Bitstream Guide",
         ["LgsrRejectFakeTitle"] = "Reject Fake / Transcoded Lossless Twins",
-        ["LgsrTier3CleanupTitle"] = "Tier 3 Apollo / AP-BWE Residual Cleanup (Offline)",
+        ["LgsrTier3CleanupTitle"] = "Apollo / AP-BWE Residual Cleanup (Offline)",
         ["LgsrRescanTwinBtn"] = "Rescan Twin",
         ["LgsrLicensesBtn"] = "DSP Credits",
         ["LgsrLicensesTitle"] = "LGSR Scientific References & Licenses",
@@ -825,7 +825,7 @@ public sealed class AndroidStrings {
         ["TipLgsrEnvelopeLock"] = "Locks restored spectral gain strictly to the Atmos dynamic RMS envelope so a louder, compressed stereo FLAC master can never crush Dolby Atmos's wide dynamic range.",
         ["TipLgsrClippingGuard"] = "Continuously scans the stereo lossless twin with a 4x True-Peak detector and flat-top clip guard, smoothly backing off fusion whenever brickwall clipping is detected.",
         ["TipLgsrBitstreamGuide"] = "Reads live per-block E-AC-3 Coupling and Spectral Extension (SPX) start frequencies directly from the decoder bitstream to focus restoration exactly where lossy compression starts.",
-        ["TipLgsrTier3Cleanup"] = "During offline Tier 2 EM-MWF Studio Master export, applies an installed Apollo or AP-BWE ONNX model to clean compression artifacts in the conserved Atmos-exclusive residual.",
+        ["TipLgsrTier3Cleanup"] = "During offline EM-MWF Studio Master export, applies an installed Apollo or AP-BWE ONNX model to clean compression artifacts in the conserved Atmos-exclusive residual.",
 
         // Slot 1 / Slot 4: W10 Pro-Audio Full-Duplex USB Engine (Path B libusb UAC2 + Path A AAudio Exclusive + Scarlett 2i2)
         ["ProAudioCardTitle"] = "Pro-Audio USB Full-Duplex & Scarlett 2i2",
@@ -977,7 +977,7 @@ public sealed class AndroidStrings {
         ["VocalLiveTelemetryFormat"] = "In {0:0.0} -> Out {1:0.0} dBFS · Comp {2:0.0} dB · DeEss {3:0.0} dB · Pocket {4:0.0} dB",
         ["ProAudioVocalChainBtn"] = "Auto-Vocal Mix-Match",
         ["LgsrAbToggleBtn"] = "A/B Compare",
-        ["StudioW12ContextHybridReady"] = "ATMOS+FLAC Twin synced ({0}) — ready for Tier 2 EM-MWF Hybrid Master.",
+        ["StudioW12ContextHybridReady"] = "ATMOS+FLAC Twin synced ({0}) — ready for EM-MWF Hybrid Master.",
         ["StudioW12ContextHybridNoTwin"] = "No verified FLAC Twin paired yet — will export lossless 7.1.4 spatial master.",
         ["StudioW12ContextKaraoke"] = "Spatial Karaoke export: Lead Vocals {0}% · Backing Vocals {1}.",
         ["StudioW12ContextGeneral"] = "Standards-mastered offline export (ITU-R BS.1770-5 & True-Peak ceiling {0:0.1} dBTP).",
@@ -999,7 +999,7 @@ public sealed class AndroidStrings {
         ["NeuralPrepDecodingStatus"] = "Decoding audio for AI neural stems...",
         ["NeuralPrepDoneToast"] = "AI neural stems ready ({0} stems · {1:0.2}x RTF)",
         ["NeuralPrepCacheHitToast"] = "AI neural stems loaded instantly from cache ({0} stems)",
-        ["NeuralPrepNeedModelsToast"] = "Install ONNX Runtime and at least one AI separation model in Settings first.",
+        ["NeuralPrepNeedModelsToast"] = "Download or import at least one AI separation model in Settings -> AI & Restoration first.",
         ["NeuralPrepNoTrackToast"] = "Load a track first to prepare AI neural stems.",
         ["NeuralPrepFailedFmt"] = "AI stem preparation failed: {0}",
         ["NeuralLiveStemsActiveFmt"] = "Live AI 3D active: {0} stems ({1})",
@@ -1017,7 +1017,7 @@ public sealed class AndroidStrings {
         ["VocalDnaAnalyzeBtn"] = "Analyze Song DNA",
         ["VocalDnaBusyBtn"] = "Analyzing {0:0%}",
         ["VocalDnaReadyToast"] = "Song Vocal DNA matched ({0:0.1} LUFS · RT60 {1:0.2} s · {2} active windows)",
-        ["VocalDnaNeedModelsToast"] = "Install ONNX Runtime and a vocal separation model in Settings to extract Song Vocal DNA.",
+        ["VocalDnaNeedModelsToast"] = "Download or import a vocal separation model in Settings -> AI & Restoration to extract Song Vocal DNA.",
         ["VocalVoiceprintUncalibrated"] = "Mic Voiceprint: Not calibrated (0.0 dB flat neutral Match EQ)",
         ["VocalVoiceprintWaitingSongDna"] = "Mic Voiceprint: Calibrated · Match EQ 0.0 dB until Song DNA is analyzed",
         ["VocalVoiceprintActiveFmt"] = "Mic Voiceprint: Calibrated · Match EQ Low {0:+0.0;-0.0;0.0} / Mid {1:+0.0;-0.0;0.0} / Air {2:+0.0;-0.0;0.0} dB",
@@ -1070,9 +1070,9 @@ public sealed class AndroidStrings {
         ["StemProgEmMwfPct"] = "EM-MWF Studio Master ({0})...",
         ["StemProgWritingMaster"] = "Writing master {0}/{1}...",
         ["StemProgMasterDone"] = "LGSR Studio Master (EM-MWF) complete!",
-        ["StemErrOnnxNotInstalled"] = "Bundled ONNX Runtime (libonnxruntime.so) is unavailable in NativeLibraryDir.",
+        ["StemErrOnnxNotInstalled"] = "Built-in ONNX Runtime neural engine is unavailable.",
         ["StemErrModelNotInstalled"] = "Selected ONNX neural model is not installed.",
-        ["TruehdBinaryNotInstalled"] = "Bundled libtruehdd.so is unavailable in NativeLibraryDir.",
+        ["TruehdBinaryNotInstalled"] = "Built-in truehdd decoder engine is unavailable.",
         ["TruehdExtractingTrack"] = "Extracting TrueHD track...",
         ["TruehdExtractingPct"] = "Extracting TrueHD ({0})...",
         ["TruehdExtractFailed"] = "Failed to extract TrueHD track from container.",
@@ -1302,6 +1302,35 @@ public sealed class AndroidStrings {
         ["AboutDialogBodyFmt"] = "{0}\nCavernize Android v{1} (build {2})\n{3}\n{4}",
         ["QueueUnsupportedFilesFmt"] = "Unsupported files:\n{0}",
         ["QueueEmptyZeroJobs"] = "0 jobs in queue",
+
+        // W27 2-Tier Sing Dock, Audio Spec A/B, Quality Note & Guided Modal Help
+        ["SingDockDnaActivePill"] = "Vocal DNA Active",
+        ["SingDockDnaIdlePill"] = "Vocal DNA: Neutral",
+        ["SingDockKaraokeChip"] = "Karaoke",
+        ["SingDockLiveMicChip"] = "Live Mic",
+        ["SingDockLiveMicOnChip"] = "Mic On",
+        ["SingDockMixMatchChip"] = "Mix-Match",
+        ["SingDockMixMatchDryChip"] = "Mix-Match (Dry)",
+        ["SingDockMixMatchWetChip"] = "Mix-Match (FX)",
+        ["SingDockVocalAbDryChip"] = "Vocal: Dry",
+        ["SingDockVocalAbWetChip"] = "Vocal: FX",
+        ["AudioSpecAbOriginalSeg"] = "A: Original",
+        ["AudioSpecAbTwinSeg"] = "B: ATMOS+FLAC",
+        ["AudioSpecAbSpatialSeg"] = "B: Spatial 3D",
+        ["AudioSpecAbSpatialOffHint"] = "Active mode: Direct stereo mix (spatial HRTF bypassed)",
+        ["AudioSpecAbSpatialOnHint"] = "Active mode: Cavern Spatial 3D active",
+        ["AudioSpecProTelemetryToggle"] = "Pro Signal Telemetry (Sync · Bands · Guards)",
+        ["QualityFastOnlyNote"] = "Quick header quality estimate (awaiting deep PCM scan).",
+        ["HrtfWizHelpTitle"] = "About Perceptual HRTF Wizard",
+        ["HrtfWizHelpBody"] = "Auditions real spatial cues through candidate ear/head profiles so you can pick the most natural front, side, and overhead localization. Changes stay in a temporary draft until you tap Apply — Cancel or dismiss restores your previous profile.",
+        ["AutoEqHelpTitle"] = "About AutoEq Headphone Calibration",
+        ["AutoEqHelpBody"] = "Searches over 8,850 measured headphone correction profiles (Harman, Diffuse-Field, and B&K 5128 targets) or imports custom Equalizer APO .txt filters. With Auto-Match enabled, Cavernize switches EQ profiles automatically when Bluetooth or USB headphones connect.",
+        ["NeuralModelsHelpTitle"] = "About AI Models & Track Cache",
+        ["NeuralModelsHelpBody"] = "Manages on-device ONNX checkpoints for 4/6-stem separation, lead-vs-backing Karaoke, dereverb, debleed, and bandwidth restoration. Auto mode chains your best installed models; Manual mode lets you build custom ensembles. Separated tracks are cached locally up to your configured disk limit.",
+        ["VocalModalHelpTitle"] = "About Auto-Vocal Mix-Match",
+        ["VocalModalHelpBody"] = "Matches your live microphone to the track's Vocal DNA using zero-latency EQ matching, dual FET/Optical compression, harmonic warmth, FDN room reverb, and 1–4 kHz pocket sidechain glue. Use Calibrate Mic (4s) to measure your voiceprint and Dry Bypass for instant A/B comparison.",
+        ["ScarlettHelpTitle"] = "About Focusrite Scarlett Control",
+        ["ScarlettHelpBody"] = "Controls supported Focusrite Scarlett 2i2 / Solo (Gen 2, 3, and 4) hardware registers directly over USB: Air Presence & Drive, Auto Gain, Clip Safe, 48V Phantom Power, Instrument/Line impedance, Direct Monitor, and NVRAM persistence.",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -1588,8 +1617,8 @@ public sealed class AndroidStrings {
         d["ErrorTitle"] = "Erro";
         d["NoTrack"] = "Abra primeiro um arquivo com uma faixa suportada.";
         d["OpRunning"] = "Já existe uma operação em andamento.";
-        d["FFmpegNeeded"] = "O codec escolhido ({0}) precisa do FFmpeg. Configure o FFmpeg em Configurações ou escolha PCM / ADM BWF / DAMF / LAF.";
-        d["TrueHDUnsupported"] = "Dolby TrueHD requer o decodificador truehdd integrado (libtruehdd.so). Verifique Ajustes se estiver indisponível.";
+        d["FFmpegNeeded"] = "O codec escolhido ({0}) precisa do motor integrado FFmpeg. Verifique Motores e Armazenamento em Ajustes ou escolha PCM / ADM BWF / DAMF / LAF.";
+        d["TrueHDUnsupported"] = "Dolby TrueHD requer o motor decodificador integrado truehdd. Verifique Motores e Armazenamento em Ajustes se estiver indisponível.";
         d["CopyingMedia"] = "Preparando arquivo de mídia...";
         d["DecodingFallback"] = "Decodificando áudio via MediaCodec do Android...";
         d["ProbingContainer"] = "Analisando faixas do contêiner com FFmpeg...";
@@ -1597,7 +1626,7 @@ public sealed class AndroidStrings {
         d["TrueHDTitle"] = "Dolby TrueHD / Atmos";
         d["TrueHDDecoding"] = "Decodificando TrueHD / Atmos com truehdd...";
         d["TrueHDLicenceTitle"] = "Licença do Decodificador truehdd (Apache 2.0)";
-        d["TrueHDLicenceDesc"] = "O Cavernize já inclui o decodificador oficial truehdd ARM64 (libtruehdd.so em NativeLibraryDir do APK, compatível com W^X) para decodificar Dolby TrueHD e metadados 3D Atmos localmente no aparelho.";
+        d["TrueHDLicenceDesc"] = "O Cavernize já inclui o decodificador oficial ARM64 truehdd integrado para decodificar Dolby TrueHD e metadados 3D Atmos localmente no aparelho.";
         d["TrueHDDownloadDecode"] = "Aceitar e Decodificar";
         d["TrueHDCancelled"] = "Decodificação TrueHD cancelada.";
         d["TrueHDContainerNeedTools"] = "Este vídeo/MKV usa uma faixa de áudio (como Dolby TrueHD ou DTS) não suportada nativamente pelo Android. Verifique o status dos motores FFmpeg e truehdd em Ajustes.";
@@ -1631,27 +1660,27 @@ public sealed class AndroidStrings {
         d["DismissBtn"] = "Depois";
 
         d["FFmpegCardTitle"] = "Motor de Áudio FFmpeg";
-        d["FFmpegNotInstalled"] = "libffmpeg.so integrado indisponível em NativeLibraryDir (necessário para E-AC-3, AC-3, FLAC, Opus e MKV)";
-        d["FFmpegInstalledVer"] = "NDK Integrado: {0} (Pronto W^X)";
-        d["FFmpegUpdateAvail"] = "Atualização do FFmpeg disponível: {0}";
-        d["FFmpegDownloadBtn"] = "Baixar FFmpeg Auto";
-        d["FFmpegUpdateBtn"] = "Atualizar FFmpeg";
+        d["FFmpegNotInstalled"] = "Motor integrado FFmpeg indisponível nesta instalação (necessário para E-AC-3, AC-3, FLAC, Opus e MKV)";
+        d["FFmpegInstalledVer"] = "Motor Integrado: {0} (Pronto)";
+        d["FFmpegUpdateAvail"] = "Versão do motor integrado FFmpeg: {0}";
+        d["FFmpegDownloadBtn"] = "Verificar FFmpeg";
+        d["FFmpegUpdateBtn"] = "Verificar FFmpeg";
         d["FFmpegCheckBtn"] = "Verificar FFmpeg";
-        d["FFmpegManualBtn"] = "Selecionar Manualmente";
-        d["FFmpegDownloading"] = "Verificando FFmpeg integrado...";
+        d["FFmpegManualBtn"] = "Motor Integrado";
+        d["FFmpegDownloading"] = "Verificando motor integrado FFmpeg...";
         d["FFmpegUpToDate"] = "FFmpeg integrado pronto ({0}).";
 
         d["TruehddCardTitle"] = "Motor Dolby TrueHD (truehdd)";
-        d["TruehddNotInstalled"] = "libtruehdd.so integrado indisponível em NativeLibraryDir (necessário para Dolby TrueHD / Atmos)";
-        d["TruehddInstalledVer"] = "Integrado: v{0} (Pronto W^X)";
-        d["TruehddUpdateAvail"] = "Atualização do truehdd disponível: v{0}";
-        d["TruehddDownloadBtn"] = "Baixar truehdd Auto";
-        d["TruehddUpdateBtn"] = "Atualizar truehdd";
+        d["TruehddNotInstalled"] = "Motor integrado truehdd indisponível nesta instalação (necessário para Dolby TrueHD / Atmos)";
+        d["TruehddInstalledVer"] = "Motor Integrado: v{0} (Pronto)";
+        d["TruehddUpdateAvail"] = "Versão do motor integrado truehdd: v{0}";
+        d["TruehddDownloadBtn"] = "Verificar truehdd";
+        d["TruehddUpdateBtn"] = "Verificar truehdd";
         d["TruehddCheckBtn"] = "Verificar truehdd";
-        d["TruehddManualBtn"] = "Selecionar Binário Manual";
-        d["TruehddDownloading"] = "Verificando truehdd integrado...";
+        d["TruehddManualBtn"] = "Motor Integrado";
+        d["TruehddDownloading"] = "Verificando motor integrado truehdd...";
         d["TruehddUpToDate"] = "truehdd integrado pronto (v{0}).";
-        d["TipTruehdd"] = "Compilação oficial ARM64 musl de truehdd/truehdd integrada em NativeLibraryDir do APK (libtruehdd.so, compatível com W^X). Decodifica Dolby TrueHD e objetos 3D Atmos em DAMF/CAF e limpa o cache automaticamente.";
+        d["TipTruehdd"] = "Decodificador oficial ARM64 truehdd já integrado ao aplicativo. Decodifica Dolby TrueHD lossless e objetos 3D Atmos em DAMF/CAF no armazenamento temporário privado e limpa o cache automaticamente.";
 
         d["QuickPanelTitle"] = "Painel Rápido Espacial";
         d["BentoHrtf"] = "HRTF 3D";
@@ -1972,13 +2001,13 @@ public sealed class AndroidStrings {
         d["LoudnessResetMeterBtn"] = "Zerar Medidor BS.1770";
         d["LoudnessMeterResetToast"] = "Medidor ITU-R BS.1770-5 (LUFS Integrado e LRA) zerado.";
 
-        // Slot 2B: Áudio Neural no Dispositivo (ONNX), Pipeline MVSEP e Spatial Karaoke
+        // Áudio Neural no Dispositivo (ONNX), Pipeline MVSEP e Spatial Karaoke
         d["Slot2BCardTitle"] = "Áudio Neural, Stems e Karaoke";
-        d["NeuralRuntimeNotInstalled"] = "ONNX Runtime integrado (libonnxruntime.so) indisponível em NativeLibraryDir";
+        d["NeuralRuntimeNotInstalled"] = "Motor neural integrado ONNX Runtime indisponível nesta instalação";
         d["NeuralRuntimeInstalled"] = "ONNX Runtime {0} · {1} · {2} modelo(s) · {3:0.0} MB";
-        d["NeuralRuntimeUpdateAvail"] = "Atualização do ONNX Runtime disponível: v{0}";
-        d["NeuralRuntimeDownloadBtn"] = "Instalar ONNX Runtime";
-        d["NeuralRuntimeUpdateBtn"] = "Atualizar ONNX Runtime";
+        d["NeuralRuntimeUpdateAvail"] = "Versão do ONNX Runtime integrado: v{0}";
+        d["NeuralRuntimeDownloadBtn"] = "Verificar ONNX Runtime";
+        d["NeuralRuntimeUpdateBtn"] = "Verificar ONNX Runtime";
         d["NeuralRuntimeCheckBtn"] = "Verificar Runtime";
         d["NeuralModelsBtn"] = "Modelos e Cache ({0})";
         d["NeuralProviderTitle"] = "Aceleração de Hardware (EP)";
@@ -2014,10 +2043,10 @@ public sealed class AndroidStrings {
         d["NeuralLicensesBtn"] = "Licenças dos Modelos";
         d["NeuralCacheClearedToast"] = "Modelos neurais e cache temporário limpos.";
         d["NeuralModelImportedToast"] = "Modelo ONNX importado para {0}.";
-        d["NeuralRuntimeNeedInstall"] = "ONNX Runtime integrado (libonnxruntime.so) não detectado em NativeLibraryDir do APK.";
-        d["NeuralModelNeedInstall"] = "Baixe ou importe o modelo ONNX escolhido em Ajustes -> Áudio Neural -> Modelos e Cache.";
-        d["NeuralDownloadingRuntime"] = "Verificando ONNX Runtime integrado...";
-        d["NeuralExtractingLibs"] = "ONNX Runtime: Carregando bibliotecas nativas integradas...";
+        d["NeuralRuntimeNeedInstall"] = "O motor neural integrado ONNX Runtime não foi detectado nesta instalação.";
+        d["NeuralModelNeedInstall"] = "Baixe ou importe o modelo ONNX escolhido em Ajustes -> IA e Restauração -> Modelos e Cache.";
+        d["NeuralDownloadingRuntime"] = "Verificando motor integrado ONNX Runtime...";
+        d["NeuralExtractingLibs"] = "ONNX Runtime: Carregando motor neural integrado...";
         d["NeuralRuntimeUpToDate"] = "ONNX Runtime integrado pronto ({0}).";
         d["NeuralOrchestrationTitle"] = "Orquestração da Cadeia Neural";
         d["NeuralOrchestrationAuto"] = "Automático (Melhor Cadeia Instalada)";
@@ -2042,7 +2071,7 @@ public sealed class AndroidStrings {
         d["NeuralTaskDebleed"] = "Debleed / Redução de Vazamento";
         d["NeuralTaskRestore"] = "Restauração de Codec (Apollo)";
         d["NeuralTaskBwe"] = "Extensão de Largura de Banda (BWE / SR)";
-        d["TipNeuralRuntime"] = "Integra a biblioteca nativa oficial Microsoft ONNX Runtime Android (libonnxruntime.so) diretamente em NativeLibraryDir do APK (compatível com W^X e alinhamento ELF 16 KB). Os pesos .onnx dos modelos são baixados sob demanda em FilesDir/neural_models/.";
+        d["TipNeuralRuntime"] = "Inclui o motor neural oficial Microsoft ONNX Runtime Android diretamente integrado ao aplicativo. Os pesos de modelos de IA (.onnx) são baixados sob demanda para a pasta privada de modelos.";
         d["TipMvsepOverlap"] = "Fator de sobreposição raised-cosine (2x a 8x) com preenchimento refletido que elimina cliques de borda e ruído musical.";
         d["TipMvsepTta"] = "Executa passagens com polaridade invertida e canais trocados, promediando o resultado para cancelar alucinações assimétricas da rede neural.";
         d["TipMvsepPhaseFix"] = "Reprojeta as magnitudes neurais sobre a fase complexa exata da mixagem original usando Wiener (partição da unidade), eliminando som metálico.";
@@ -2064,7 +2093,7 @@ public sealed class AndroidStrings {
         d["LgsrClippingGuardTitle"] = "Guarda Anti-Clipping / Brickwall do FLAC";
         d["LgsrBitstreamGuideTitle"] = "Guia Ao Vivo de Coupling e SPX do Bitstream E-AC-3";
         d["LgsrRejectFakeTitle"] = "Rejeitar Gêmeos Falsos Lossless / Transcodificados";
-        d["LgsrTier3CleanupTitle"] = "Limpeza Neural Tier 3 Apollo / AP-BWE no Residual (Offline)";
+        d["LgsrTier3CleanupTitle"] = "Limpeza Neural Apollo / AP-BWE no Residual (Offline)";
         d["LgsrRescanTwinBtn"] = "Reescanear Gêmeo";
         d["LgsrLicensesBtn"] = "Créditos DSP";
         d["LgsrLicensesTitle"] = "Referências Científicas e Licenças LGSR";
@@ -2077,7 +2106,7 @@ public sealed class AndroidStrings {
         d["TipLgsrEnvelopeLock"] = "Trava o ganho espectral restaurado rigorosamente ao envelope dinâmico RMS do Atmos para que um master estéreo FLAC mais alto/comprimido nunca esmague a dinâmica do Dolby Atmos.";
         d["TipLgsrClippingGuard"] = "Monitora continuamente o gêmeo lossless com detector 4x True-Peak e detecção de topo achatado, reduzindo a fusão suavemente se houver clipping brickwall.";
         d["TipLgsrBitstreamGuide"] = "Lê ao vivo por bloco as frequências de início de Coupling e Extensão Espectral (SPX) direto do bitstream E-AC-3 para focar a restauração exatamente onde a compressão lossy atua.";
-        d["TipLgsrTier3Cleanup"] = "Durante a exportação offline Tier 2 EM-MWF Studio Master, aplica um modelo ONNX Apollo ou AP-BWE instalado para limpar artefatos no residual exclusivo do Atmos.";
+        d["TipLgsrTier3Cleanup"] = "Durante a exportação offline EM-MWF Studio Master, aplica um modelo ONNX Apollo ou AP-BWE instalado para limpar artefatos no residual exclusivo do Atmos.";
 
         // Slot 1 / Slot 4: W10 Motor Pro-Audio USB Full-Duplex (Path B libusb UAC2 + Path A AAudio Exclusivo + Scarlett 2i2)
         d["ProAudioCardTitle"] = "Pro-Audio USB Full-Duplex e Scarlett 2i2";
@@ -2251,7 +2280,7 @@ public sealed class AndroidStrings {
         d["NeuralPrepDecodingStatus"] = "Decodificando áudio para stems neurais IA...";
         d["NeuralPrepDoneToast"] = "Stems neurais IA prontos ({0} stems · {1:0.2}x RTF)";
         d["NeuralPrepCacheHitToast"] = "Stems neurais IA carregados do cache ({0} stems)";
-        d["NeuralPrepNeedModelsToast"] = "Instale o ONNX Runtime e pelo menos um modelo de separação IA em Configurações primeiro.";
+        d["NeuralPrepNeedModelsToast"] = "Baixe ou importe pelo menos um modelo de separação de IA em Ajustes -> IA e Restauração primeiro.";
         d["NeuralPrepNoTrackToast"] = "Carregue uma faixa primeiro para preparar os stems neurais IA.";
         d["NeuralPrepFailedFmt"] = "Falha na preparação de stems IA: {0}";
         d["NeuralLiveStemsActiveFmt"] = "IA 3D ao vivo: {0} stems ({1})";
@@ -2269,7 +2298,7 @@ public sealed class AndroidStrings {
         d["VocalDnaAnalyzeBtn"] = "Analisar DNA Vocal";
         d["VocalDnaBusyBtn"] = "Analisando {0:0%}";
         d["VocalDnaReadyToast"] = "DNA Vocal da música aplicado ({0:0.1} LUFS · RT60 {1:0.2} s · {2} janelas ativas)";
-        d["VocalDnaNeedModelsToast"] = "Instale o ONNX Runtime e um modelo de separação vocal em Ajustes para extrair o DNA Vocal.";
+        d["VocalDnaNeedModelsToast"] = "Baixe ou importe um modelo de separação vocal em Ajustes -> IA e Restauração para extrair o DNA Vocal.";
         d["VocalVoiceprintUncalibrated"] = "Voiceprint do Mic: Não calibrado (Match EQ neutro 0,0 dB)";
         d["VocalVoiceprintWaitingSongDna"] = "Voiceprint do Mic: Calibrado · Match EQ 0,0 dB até analisar o DNA da música";
         d["VocalVoiceprintActiveFmt"] = "Voiceprint do Mic: Calibrado · Match EQ Grave {0:+0.0;-0.0;0.0} / Médio {1:+0.0;-0.0;0.0} / Ar {2:+0.0;-0.0;0.0} dB";
@@ -2322,9 +2351,9 @@ public sealed class AndroidStrings {
         d["StemProgEmMwfPct"] = "Studio Master EM-MWF ({0})...";
         d["StemProgWritingMaster"] = "Gravando master {0}/{1}...";
         d["StemProgMasterDone"] = "LGSR Studio Master (EM-MWF) concluído!";
-        d["StemErrOnnxNotInstalled"] = "ONNX Runtime integrado (libonnxruntime.so) indisponível em NativeLibraryDir.";
+        d["StemErrOnnxNotInstalled"] = "Motor neural integrado ONNX Runtime indisponível.";
         d["StemErrModelNotInstalled"] = "Modelo neural ONNX selecionado não está instalado.";
-        d["TruehdBinaryNotInstalled"] = "libtruehdd.so integrado indisponível em NativeLibraryDir.";
+        d["TruehdBinaryNotInstalled"] = "Motor decodificador integrado truehdd indisponível.";
         d["TruehdExtractingTrack"] = "Extraindo faixa TrueHD...";
         d["TruehdExtractingPct"] = "Extraindo TrueHD ({0})...";
         d["TruehdExtractFailed"] = "Falha ao extrair a faixa TrueHD do container.";
@@ -2554,6 +2583,35 @@ public sealed class AndroidStrings {
         d["AboutDialogBodyFmt"] = "{0}\nCavernize Android v{1} (build {2})\n{3}\n{4}";
         d["QueueUnsupportedFilesFmt"] = "Arquivos não suportados:\n{0}";
         d["QueueEmptyZeroJobs"] = "0 tarefas na fila";
+
+        // W27 Dock Sing em 2 Níveis, Audio Spec A/B, Nota de Qualidade e Ajuda Guiada dos Modais
+        d["SingDockDnaActivePill"] = "DNA Vocal Ativo";
+        d["SingDockDnaIdlePill"] = "DNA Vocal: Neutro";
+        d["SingDockKaraokeChip"] = "Karaokê";
+        d["SingDockLiveMicChip"] = "Mic ao Vivo";
+        d["SingDockLiveMicOnChip"] = "Mic Ativo";
+        d["SingDockMixMatchChip"] = "Mix-Match";
+        d["SingDockMixMatchDryChip"] = "Mix-Match (Seco)";
+        d["SingDockMixMatchWetChip"] = "Mix-Match (FX)";
+        d["SingDockVocalAbDryChip"] = "Voz: Seca";
+        d["SingDockVocalAbWetChip"] = "Voz: FX";
+        d["AudioSpecAbOriginalSeg"] = "A: Original";
+        d["AudioSpecAbTwinSeg"] = "B: ATMOS+FLAC";
+        d["AudioSpecAbSpatialSeg"] = "B: Espacial 3D";
+        d["AudioSpecAbSpatialOffHint"] = "Modo ativo: Mixagem estéreo direta (HRTF espacial em bypass)";
+        d["AudioSpecAbSpatialOnHint"] = "Modo ativo: Cavern Espacial 3D ativo";
+        d["AudioSpecProTelemetryToggle"] = "Telemetria Pro do Sinal (Sincronia · Bandas · Proteções)";
+        d["QualityFastOnlyNote"] = "Estimativa rápida pelo cabeçalho (aguardando varredura PCM profunda).";
+        d["HrtfWizHelpTitle"] = "Sobre o Assistente HRTF Perceptual";
+        d["HrtfWizHelpBody"] = "Reproduz pistas espaciais reais em perfis candidatos de ouvido e cabeça para você escolher a localização frontal, lateral e de altura mais natural. As alterações ficam em rascunho temporário até tocar em Aplicar — cancelar ou fechar restaura o perfil anterior.";
+        d["AutoEqHelpTitle"] = "Sobre a Calibração AutoEq";
+        d["AutoEqHelpBody"] = "Pesquisa mais de 8.850 medições oficiais de fones (alvos Harman, Diffuse-Field e B&K 5128) ou importa filtros .txt do Equalizer APO. Com a detecção automática ativa, o Cavernize troca o perfil de EQ ao conectar fones Bluetooth ou USB.";
+        d["NeuralModelsHelpTitle"] = "Sobre Modelos de IA e Cache de Faixas";
+        d["NeuralModelsHelpBody"] = "Gerencia modelos ONNX locais para separação em 4/6 stems, Karaokê (voz principal vs. backing), remoção de eco, debleed e restauração de banda. O modo Automático encadeia os melhores modelos instalados; o Manual permite montar ensembles próprios. Faixas separadas ficam em cache até o limite definido.";
+        d["VocalModalHelpTitle"] = "Sobre o Auto-Vocal Mix-Match";
+        d["VocalModalHelpBody"] = "Ajusta seu microfone ao vivo ao DNA Vocal da música usando Match EQ de latência zero, compressão dupla FET/Óptica, saturação harmônica, reverb FDN e sidechain pocket em 1–4 kHz. Use Calibrar Mic (4s) para medir seu voiceprint e Bypass Limpo para comparar em A/B.";
+        d["ScarlettHelpTitle"] = "Sobre o Controle Focusrite Scarlett";
+        d["ScarlettHelpBody"] = "Controla registradores de hardware Focusrite Scarlett 2i2 / Solo (Gen 2, 3 e 4) diretamente via USB: Air Presence e Drive, Auto Gain, Clip Safe, Phantom Power 48V, modo Instrumento/Linha, Monitoramento Direto e gravação em NVRAM.";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {
@@ -2563,7 +2621,7 @@ public sealed class AndroidStrings {
         d["TabPlayer"] = "3D Szoba";
         d["TabConvert"] = "Konvertálás";
         d["TabExtract"] = "Kivonó";
-        d["TabSettings"] = "Sor & Beáll.";
+        d["TabSettings"] = "Beállítások";
         d["ModeCover"] = "Borító";
         d["ModeVideo"] = "Videó";
         d["ModeLyrics"] = "Dalszöveg";
@@ -2581,8 +2639,8 @@ public sealed class AndroidStrings {
         d["DownloadInstallBtn"] = "Letöltés és telepítés";
         d["LockRoom"] = "Hallgató mozgatása";
         d["UnlockRoom"] = "Pozíció zárolva";
-        d["FineTuneBtn"] = "Finomhangolás (csúszkák) ▾";
-        d["FineTuneHideBtn"] = "Csúszkák elrejtése ▴";
+        d["FineTuneBtn"] = "Finomhangolás (csúszkák)";
+        d["FineTuneHideBtn"] = "Csúszkák elrejtése";
     }
 
     static void ApplyChinese(Dictionary<string, string> d) {
@@ -2592,7 +2650,7 @@ public sealed class AndroidStrings {
         d["TabPlayer"] = "3D 房间";
         d["TabConvert"] = "转换导出";
         d["TabExtract"] = "分轨提取";
-        d["TabSettings"] = "队列与设置";
+        d["TabSettings"] = "设置";
         d["ModeCover"] = "封面";
         d["ModeVideo"] = "视频";
         d["ModeLyrics"] = "歌词";
@@ -2610,7 +2668,7 @@ public sealed class AndroidStrings {
         d["DownloadInstallBtn"] = "下载并安装";
         d["LockRoom"] = "自由移动位置";
         d["UnlockRoom"] = "位置已锁定";
-        d["FineTuneBtn"] = "微调位置与头部朝向 ▾";
-        d["FineTuneHideBtn"] = "隐藏微调滑块 ▴";
+        d["FineTuneBtn"] = "微调位置与头部朝向";
+        d["FineTuneHideBtn"] = "隐藏微调滑块";
     }
 }

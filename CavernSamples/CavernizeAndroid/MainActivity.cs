@@ -579,7 +579,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
             if (i == 4) {
                 FrameLayout tabCell = new(this);
-                tabCell.AddView(cell, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(48)));
+                tabCell.AddView(cell, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
                 settingsUpdateDot = new View(this);
                 settingsUpdateDot.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.IconAtmosUpmix, 99f);
@@ -592,7 +592,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 tabCell.AddView(settingsUpdateDot, dotLp);
                 navRow.AddView(tabCell, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             } else {
-                navRow.AddView(cell, new LinearLayout.LayoutParams(0, Dp(48), 1f));
+                navRow.AddView(cell, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             }
         }
         navLayer.AddView(navRow, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
@@ -682,12 +682,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
         rootLayoutHost?.SetPadding(insetLeftPx, insetTopPx, insetRightPx, 0);
 
         int scrollBottom = Math.Max(insetBarsBottomPx, insetImeBottomPx);
+        bool imeOpen = insetImeBottomPx > insetBarsBottomPx + Dp(48);
         if (musicTabRootPage != null) {
             musicTabRootPage.SetPadding(
                 Dp(20),
                 Dp(6),
                 Dp(20),
                 isLibrarySectionOpen ? 0 : Dp(10) + insetBarsBottomPx);
+            UpdatePlayTabSpacingForViewport(force: true);
         }
         if (musicLibraryScrollView != null) {
             musicLibraryScrollView.SetPadding(0, 0, 0, Dp(106) + scrollBottom);
@@ -703,7 +705,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
         }
         if (bottomScrimView?.LayoutParameters is FrameLayout.LayoutParams scrimLp) {
-            int targetH = Dp(98) + insetBarsBottomPx;
+            int targetH = Dp(98) + scrollBottom;
             if (scrimLp.Height != targetH) {
                 scrimLp.Height = targetH;
                 bottomScrimView.LayoutParameters = scrimLp;
@@ -712,13 +714,38 @@ public partial class MainActivity : Activity, ICavernizeApp {
         if (navFrostedHost?.LayoutParameters is FrameLayout.LayoutParams navLp) {
             int targetLeft = Dp(14) + insetLeftPx;
             int targetRight = Dp(14) + insetRightPx;
-            int targetBottom = Dp(12) + insetBarsBottomPx;
+            int targetBottom = Dp(12) + scrollBottom;
             if (navLp.LeftMargin != targetLeft || navLp.RightMargin != targetRight || navLp.BottomMargin != targetBottom) {
                 navLp.LeftMargin = targetLeft;
                 navLp.RightMargin = targetRight;
                 navLp.BottomMargin = targetBottom;
                 navFrostedHost.LayoutParameters = navLp;
-                navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
+                if (!imeOpen) {
+                    navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
+                }
+            }
+        }
+        if (navFrostedHost != null) {
+            bool shouldShowNav = isBottomNavVisible && !imeOpen;
+            ViewStates targetVis = shouldShowNav ? ViewStates.Visible : ViewStates.Gone;
+            if (navFrostedHost.Visibility != targetVis) {
+                navFrostedHost.Animate()?.Cancel();
+                navFrostedHost.Visibility = targetVis;
+                navFrostedHost.Alpha = shouldShowNav ? 1f : 0f;
+                navFrostedHost.TranslationY = shouldShowNav ? 0f : Dp(34);
+                navFrostedHost.ScaleX = shouldShowNav ? 1f : 0.94f;
+                navFrostedHost.ScaleY = shouldShowNav ? 1f : 0.94f;
+                if (bottomScrimView != null) {
+                    bottomScrimView.Animate()?.Cancel();
+                    bottomScrimView.Visibility = targetVis;
+                    bottomScrimView.Alpha = shouldShowNav ? 1f : 0f;
+                }
+                if (shouldShowNav) {
+                    navFrostedHost.Post(() => {
+                        PositionTabIndicator(animate: false);
+                        navFrostedHost?.RefreshBlur(force: true);
+                    });
+                }
             }
         }
     }
@@ -1247,6 +1274,16 @@ public partial class MainActivity : Activity, ICavernizeApp {
             return;
         }
         isBottomNavVisible = visible;
+        bool imeOpen = insetImeBottomPx > insetBarsBottomPx + Dp(48);
+        if (visible && imeOpen) {
+            navFrostedHost.Animate()?.Cancel();
+            navFrostedHost.Visibility = ViewStates.Gone;
+            if (bottomScrimView != null) {
+                bottomScrimView.Animate()?.Cancel();
+                bottomScrimView.Visibility = ViewStates.Gone;
+            }
+            return;
+        }
         int myGen = ++navVisAnimGen;
         navFrostedHost.Animate()?.Cancel();
         bottomScrimView?.Animate()?.Cancel();

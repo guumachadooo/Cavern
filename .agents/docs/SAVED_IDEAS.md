@@ -35,3 +35,5 @@ static float EvalWallRightX(float t, float u, float r) {
     return r * 0.32f * (t / 0.12f);
 }
 ```
+
+- IDEA|`W28 Turnkey Level 2 Rebranding` (`brand_config.json`, `.agents/scripts/apply_rebrand.py`, `BrandIdentity.cs`) -> deferred by user (`W28` skipped pre-`W29`/Phase 3) -> centralized identity manifest (`BrandDisplayName`, `BrandNamespacePrefix`, `AndroidApplicationId`, `NativeLibName`, `ExportFolderName`, `ApkArtifactName`, `UpdateTagPrefix`, `FileProviderAuthority`, `NotificationChannelPrefix`) + idempotent Python dry-run/apply/verify script + brand-agnostic `AndroidStrings.cs` tokens + `NOTICE.md` OSS attribution (preserving historical `PROJECT_HISTORY.md`/`SPATIAL_ROADMAP.md` *Cavern* records).
