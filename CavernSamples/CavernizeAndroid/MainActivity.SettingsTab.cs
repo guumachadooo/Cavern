@@ -102,16 +102,190 @@ public partial class MainActivity {
     OneUiSeekBar upmixEffectBar, upmixSmoothBar;
     Switch matrixUpmixSwitch, cavernizeUpmixSwitch, parametricStftSwitch, atmosAwareUpmixSwitch;
 
+    sealed class SettingsCardEntry {
+        public LinearLayout Card;
+        public int CategoryIndex;
+        public bool IsProOnly;
+        public string ExtraKeywords;
+    }
+
+    static readonly int[] NeuralTrackCachePresetsMb = [256, 512, 1024, 2048, 4096];
+    readonly List<SettingsCardEntry> settingsCardsRegistry = [];
+    readonly TextView[] settingsCatSubtitleViews = new TextView[6];
+    LinearLayout settingsHubTilesContainer;
+    LinearLayout settingsCategoryHeaderBar;
+    TextView settingsCategoryHeaderTitle, settingsCategoryHeaderSub, settingsCategoryStatusChip;
+    LinearLayout settingsCardsContainer;
+    LinearLayout settingsNeuralPrereqCard, settingsUsbPrereqCard, settingsProHiddenCard, settingsSearchEmptyCard;
+    EditText settingsSearchInput;
+    FrameLayout settingsSearchClearBtn;
+    Button settingsModeToggleBtn;
+    OneUiInlineSelector neuralTrackCacheCapSelector;
+    int activeSettingsCategory = -1;
+    string settingsSearchQuery = "";
+    bool isSettingsProMode = true;
+
+    void RegisterSettingsCard(LinearLayout card, int categoryIndex, bool isProOnly, string extraKeywords) {
+        if (card == null) {
+            return;
+        }
+        settingsCardsRegistry.Add(new SettingsCardEntry {
+            Card = card,
+            CategoryIndex = categoryIndex,
+            IsProOnly = isProOnly,
+            ExtraKeywords = extraKeywords ?? ""
+        });
+    }
+
     LinearLayout BuildSettingsTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
         page.SetPadding(Dp(14), Dp(2), Dp(14), Dp(116));
+
+        isSettingsProMode = GetSharedPreferences("cavernize_settings", FileCreationMode.Private)?.GetBoolean("settings_pro_mode", true) ?? true;
+        settingsCardsRegistry.Clear();
+        settingsSearchQuery = "";
+        activeSettingsCategory = -1;
+
+        // Top Bar: Search Pill (with Clear 'X') + Essential/Pro Mode Toggle Chip
+        LinearLayout topRow = HRow();
+        topRow.SetPadding(0, Dp(2), 0, Dp(10));
+
+        LinearLayout searchPill = HRow();
+        searchPill.SetPadding(Dp(12), Dp(6), Dp(8), Dp(6));
+        searchPill.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceElevated, 999f);
+        OneUiIconView srchIco = new(this, OneUiIconType.Search, OneUiTheme.TextMuted);
+
+        settingsSearchInput = new EditText(this) {
+            Hint = S["SettingsSearchHint"],
+            TextSize = 12.5f,
+            ImeOptions = Android.Views.InputMethods.ImeAction.Search
+        };
+        settingsSearchInput.SetTextColor(ColText);
+        settingsSearchInput.SetHintTextColor(ColMuted);
+        settingsSearchInput.SetBackgroundColor(Color.Transparent);
+        settingsSearchInput.SetSingleLine(true);
+        settingsSearchInput.SetPadding(0, Dp(2), 0, Dp(2));
+
+        settingsSearchClearBtn = new FrameLayout(this) {
+            Visibility = ViewStates.Gone,
+            ContentDescription = S["LibClearSearchDesc"]
+        };
+        settingsSearchClearBtn.Background = OneUiTheme.CreateRoundedDrawable(this, Color.Argb(36, 255, 255, 255), 99f);
+        OneUiTheme.AttachRecoil(settingsSearchClearBtn, 0.88f);
+        settingsSearchClearBtn.AddView(new SearchClearIconView(this, OneUiTheme.TextMuted),
+            new FrameLayout.LayoutParams(Dp(12), Dp(12)) { Gravity = GravityFlags.Center });
+        settingsSearchClearBtn.Click += (_, _) => ClearSettingsSearch();
+
+        settingsSearchInput.TextChanged += (_, _) => {
+            string raw = settingsSearchInput.Text?.Trim() ?? "";
+            if (settingsSearchClearBtn != null) {
+                settingsSearchClearBtn.Visibility = string.IsNullOrEmpty(raw) ? ViewStates.Gone : ViewStates.Visible;
+            }
+            if (string.Equals(raw, settingsSearchQuery, StringComparison.Ordinal)) {
+                return;
+            }
+            settingsSearchQuery = raw;
+            RefreshSettingsHubVisibility();
+            SyncPredictiveBackRegistration();
+        };
+
+        searchPill.AddView(srchIco, new LinearLayout.LayoutParams(Dp(16), Dp(16)) { RightMargin = Dp(8) });
+        searchPill.AddView(settingsSearchInput, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
+        searchPill.AddView(settingsSearchClearBtn, new LinearLayout.LayoutParams(Dp(24), Dp(24)));
+        topRow.AddView(searchPill, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+
+        settingsModeToggleBtn = PillButton(
+            isSettingsProMode ? S["SettingsModeProChip"] : S["SettingsModeEssentialChip"],
+            () => SetSettingsProMode(!isSettingsProMode),
+            active: isSettingsProMode);
+        settingsModeToggleBtn.TextSize = 11.5f;
+        settingsModeToggleBtn.SetPadding(Dp(12), Dp(8), Dp(12), Dp(8));
+        topRow.AddView(settingsModeToggleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        page.AddView(topRow);
+
+        // Category Drill-Down & Back Header
+        settingsCategoryHeaderBar = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        LinearLayout catNavRow = HRow();
+        catNavRow.SetPadding(0, 0, 0, Dp(6));
+        Button backToHubBtn = PillButton(S["SettingsBackToHubBtn"], () => {
+            ClearSettingsSearch();
+            OpenSettingsCategory(-1);
+        });
+        backToHubBtn.TextSize = 12f;
+        catNavRow.AddView(backToHubBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        catNavRow.AddView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        settingsCategoryStatusChip = OneUiComponents.CreateStatusChip(
+            this,
+            isSettingsProMode ? S["SettingsModeProChip"] : S["SettingsModeEssentialChip"],
+            isSettingsProMode ? OneUiTheme.Primary : OneUiTheme.IconSystemInfo);
+        catNavRow.AddView(settingsCategoryStatusChip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        settingsCategoryHeaderBar.AddView(catNavRow);
+
+        LinearLayout catTitleWrap = new(this) { Orientation = Orientation.Vertical };
+        catTitleWrap.SetPadding(Dp(4), Dp(2), Dp(4), Dp(10));
+        settingsCategoryHeaderTitle = Label("", 17.5f, ColText);
+        settingsCategoryHeaderTitle.Typeface = OneUiTheme.GetAppleFontBold(this);
+        settingsCategoryHeaderTitle.SetIncludeFontPadding(false);
+        settingsCategoryHeaderTitle.SetSingleLine(true);
+        settingsCategoryHeaderTitle.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        settingsCategoryHeaderSub = Label("", 11.8f, OneUiTheme.TextSub);
+        settingsCategoryHeaderSub.SetSingleLine(true);
+        settingsCategoryHeaderSub.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        settingsCategoryHeaderSub.SetPadding(0, Dp(2), 0, 0);
+        catTitleWrap.AddView(settingsCategoryHeaderTitle);
+        catTitleWrap.AddView(settingsCategoryHeaderSub);
+        settingsCategoryHeaderBar.AddView(catTitleWrap);
+        page.AddView(settingsCategoryHeaderBar);
+
+        // One UI 9 6-Category Hub Tiles
+        settingsHubTilesContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        TextView hubIntroTv = Label(S["SettingsHubHeaderSub"], 11.8f, OneUiTheme.TextSub);
+        hubIntroTv.SetPadding(Dp(4), 0, Dp(4), Dp(8));
+        settingsHubTilesContainer.AddView(hubIntroTv);
+
+        (OneUiIconType icon, Color color, string titleKey)[] hubDefs = [
+            (OneUiIconType.Sparkles, OneUiTheme.IconAtmosUpmix, "SettingsCatPlaybackTitle"),
+            (OneUiIconType.Headphones, OneUiTheme.IconStemsCalib, "SettingsCatHeadphonesTitle"),
+            (OneUiIconType.Sparkles, OneUiTheme.Primary, "SettingsCatAiTitle"),
+            (OneUiIconType.Bolt, OneUiTheme.IconSpatial, "SettingsCatProAudioTitle"),
+            (OneUiIconType.Wrench, OneUiTheme.IconStudioExport, "SettingsCatEnginesTitle"),
+            (OneUiIconType.Info, OneUiTheme.IconSystemInfo, "SettingsCatAboutTitle")
+        ];
+        for (int i = 0; i < hubDefs.Length; i++) {
+            int catIdx = i;
+            var def = hubDefs[i];
+            LinearLayout tile = OneUiTheme.CreateCategoryHubTile(
+                this,
+                def.icon,
+                def.color,
+                S[def.titleKey],
+                "",
+                () => OpenSettingsCategory(catIdx),
+                out TextView subView);
+            settingsCatSubtitleViews[catIdx] = subView;
+            settingsHubTilesContainer.AddView(tile, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(10)
+            });
+        }
+        page.AddView(settingsHubTilesContainer);
+
+        settingsCardsContainer = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        page.AddView(settingsCardsContainer);
 
         // 1. Spatial 3D Upmixing
         LinearLayout upmixCard = Card(S["UpmixTitle"], OneUiIconType.Sparkles, OneUiTheme.IconAtmosUpmix);
         matrixUpmixSwitch = AddSwitchRow(upmixCard, S["MatrixUpmix"], store.MatrixUpmixing, v => {
             store.MatrixUpmixing = v;
+            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
             ReattachPlayerTrack();
             RefreshMusicPlayerControlsUi();
+            RefreshSettingsCategorySubtitles();
         }, helpBody: S["TipMatrixUpmix"]);
         AddDivider(upmixCard);
         cavernizeUpmixSwitch = AddSwitchRow(upmixCard, S["CavernizeUpmix"], store.CavernizeUpmix, v => {
@@ -119,6 +293,7 @@ public partial class MainActivity {
             playerEngine?.ApplyUpmixingSettings(upmixingSettings);
             ReattachPlayerTrack();
             RefreshMusicPlayerControlsUi();
+            RefreshSettingsCategorySubtitles();
         }, helpBody: S["TipCavernizeUpmix"]);
         AddDivider(upmixCard);
         parametricStftSwitch = AddSwitchRow(upmixCard, S["ParametricStftUpmix"], store.ParametricStftUpmix, v => {
@@ -126,6 +301,7 @@ public partial class MainActivity {
             playerEngine?.ApplyUpmixingSettings(upmixingSettings);
             ReattachPlayerTrack();
             RefreshMusicPlayerControlsUi();
+            RefreshSettingsCategorySubtitles();
         }, helpBody: S["TipParametricStftUpmix"]);
         AddDivider(upmixCard);
         atmosAwareUpmixSwitch = AddSwitchRow(upmixCard, S["AtmosAwareUpmix"], store.AtmosAwareUpmix, v => {
@@ -133,6 +309,7 @@ public partial class MainActivity {
             playerEngine?.ApplyUpmixingSettings(upmixingSettings);
             ReattachPlayerTrack();
             RefreshMusicPlayerControlsUi();
+            RefreshSettingsCategorySubtitles();
         }, helpBody: S["TipAtmosAwareUpmix"]);
         AddDivider(upmixCard);
         (upmixEffectBar, _) = AddSliderRow(upmixCard, S["UpmixEffect"], 0, 100, (int)Math.Round(store.UpmixEffect * 100), v => {
@@ -161,20 +338,27 @@ public partial class MainActivity {
             playerEngine?.ApplyUpmixingSettings(upmixingSettings);
             ReattachPlayerTrack();
             RefreshMusicPlayerControlsUi();
+            RefreshSettingsCategorySubtitles();
         });
         upmixCard.AddView(resetUpmixBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
-        page.AddView(upmixCard);
+        RegisterSettingsCard(upmixCard, categoryIndex: 0, isProOnly: false, "upmix matrix cavernize stft atmos spatial 3d");
 
         // 2. Room Acoustics, Gain & Dynamic Limiter
         LinearLayout acousticsCard = Card(S["RoomAcousticsTitle"], OneUiIconType.Sliders, OneUiTheme.IconSpatial);
         normSwitch = AddSwitchRow(acousticsCard, S["NormalizerCheck"], store.NormalizerEnabled, v => {
             store.NormalizerEnabled = v;
-            playerEngine.NormalizerEnabled = v;
+            if (playerEngine != null) {
+                playerEngine.NormalizerEnabled = v;
+            }
+            RefreshSettingsCategorySubtitles();
         }, helpBody: S["TipNormalizer"]);
         AddDivider(acousticsCard);
         limiterOnlySwitch = AddSwitchRow(acousticsCard, S["LimiterOnlyCheck"], store.LimiterOnly, v => {
             store.LimiterOnly = v;
-            playerEngine.LimiterOnly = v;
+            if (playerEngine != null) {
+                playerEngine.LimiterOnly = v;
+            }
+            RefreshSettingsCategorySubtitles();
         });
         AddDivider(acousticsCard);
         AddSliderRow(acousticsCard, S["RenderGain"], -24, 24, (int)Math.Round(store.RenderGainDb), v => {
@@ -192,8 +376,11 @@ public partial class MainActivity {
         envSelector.SelectionChanged += pos => {
             store.EnvironmentTypeIndex = pos;
             store.ApplyGlobals();
-            playerEngine.EnvironmentType = (Environments)pos;
+            if (playerEngine != null) {
+                playerEngine.EnvironmentType = (Environments)pos;
+            }
             UpdateRoomCanvas();
+            RefreshSettingsCategorySubtitles();
         };
         acousticsCard.AddView(WrapControlWithHelp(envSelector, S["EnvType"].TrimEnd(':'), S["TipEnvType"]));
 
@@ -207,7 +394,7 @@ public partial class MainActivity {
         EditText rx = NumBox(store.RoomSizeX.ToString("0.0", CultureInfo.InvariantCulture));
         EditText ry = NumBox(store.RoomSizeY.ToString("0.0", CultureInfo.InvariantCulture));
         EditText rz = NumBox(store.RoomSizeZ.ToString("0.0", CultureInfo.InvariantCulture));
-        Button applyRoomBtn = PillButton("OK", () => {
+        Button applyRoomBtn = PillButton(S["OkBtn"], () => {
             if (float.TryParse(rx.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vx) &&
                 float.TryParse(ry.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vy) &&
                 float.TryParse(rz.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vz)) {
@@ -215,10 +402,13 @@ public partial class MainActivity {
                 store.RoomSizeY = Math.Clamp(vy, 1f, 50f);
                 store.RoomSizeZ = Math.Clamp(vz, 1f, 50f);
                 store.ApplyGlobals();
-                playerEngine.EnvironmentSize = Listener.EnvironmentSize;
+                if (playerEngine != null) {
+                    playerEngine.EnvironmentSize = Listener.EnvironmentSize;
+                }
                 ApplyAndRefreshExternalization();
                 SyncRoomSlidersFromEngine();
                 UpdateRoomCanvas();
+                RefreshSettingsCategorySubtitles();
             }
         }, active: true);
         roomDimRow.AddView(rx, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
@@ -226,7 +416,7 @@ public partial class MainActivity {
         roomDimRow.AddView(rz, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
         roomDimRow.AddView(applyRoomBtn, new LinearLayout.LayoutParams(Dp(60), ViewGroup.LayoutParams.WrapContent));
         acousticsCard.AddView(roomDimRow);
-        page.AddView(acousticsCard);
+        RegisterSettingsCard(acousticsCard, categoryIndex: 0, isProOnly: false, "room acoustics normalizer limiter gain height dimensions environment");
 
         // 3. Official Binaural Profile (HRIR / BRIR) & QuickEQ Calibration
         LinearLayout rendCard = Card(S["CalibTitle"], OneUiIconType.Headphones, OneUiTheme.IconStemsCalib);
@@ -362,9 +552,9 @@ public partial class MainActivity {
         rendCard.AddView(WrapControlWithHelp(filtersBtn, S["LoadFilters"], S["TipQuickEQ"], bottomMarginDp: 8));
 
         speakerVirtSwitch = AddSwitchRow(rendCard, S["SpeakerVirt"], store.SpeakerVirtualizer, v => store.SpeakerVirtualizer = v, helpBody: S["TipSpeakerVirt"]);
-        page.AddView(rendCard);
+        RegisterSettingsCard(rendCard, categoryIndex: 1, isProOnly: false, "headphones binaural hrir brir sofa autoeq quickeq speaker virtualizer calibration");
 
-        // 3C. Slot 4: Zero-GC Low-Latency Audio, USB DAC & 3DoF/6DoF Head Tracking
+        // Low-Latency Audio, USB DAC & 3DoF/6DoF Head Tracking
         LinearLayout slot4Card = Card(S["Slot4CardTitle"], OneUiIconType.Bolt, OneUiTheme.IconSpatial);
         lowLatencyAudioSwitch = AddSwitchRow(slot4Card, S["LowLatencyAudioTitle"], store.LowLatencyAudio, v => {
             store.LowLatencyAudio = v;
@@ -469,9 +659,9 @@ public partial class MainActivity {
         htActionsRow.AddView(recenterNowBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
         htActionsRow.AddView(headTrackingOscPortBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         slot4Card.AddView(htActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        page.AddView(slot4Card);
+        RegisterSettingsCard(slot4Card, categoryIndex: 3, isProOnly: false, "low latency usb dac head tracking imu galaxy buds ble osc gyro");
 
-        // 3C2. Slot 1 / Slot 4: W10 Pro-Audio Full-Duplex USB Engine (Path B libusb UAC2 + Path A AAudio Exclusive + Scarlett 2i2)
+        // Pro-Audio Full-Duplex USB Engine (Path B libusb UAC2 + Path A AAudio Exclusive + Scarlett 2i2)
         LinearLayout proAudioCard = Card(S["ProAudioCardTitle"], OneUiIconType.Sliders, OneUiTheme.IconSpatial);
         proAudioEnabledSwitch = AddSwitchRow(proAudioCard, S["ProAudioEnableTitle"], store.ProAudioEnabled, v => {
             store.ProAudioEnabled = v;
@@ -619,9 +809,9 @@ public partial class MainActivity {
         Button proAudioCreditsBtn = PillButton(S["ProAudioCreditsBtn"], ShowProAudioCreditsModal);
         proAudioRow3.AddView(proAudioCreditsBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         proAudioCard.AddView(proAudioRow3, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        page.AddView(proAudioCard);
+        RegisterSettingsCard(proAudioCard, categoryIndex: 3, isProOnly: true, "pro audio usb aaudio libusb uac2 microphone live mic vocal mix match focusrite scarlett 2i2 4i4 rtt");
 
-        // 3D. Slot 5A: Physical Externalization (Allen & Berkley ISM Room, Duda & Martens Near-Field DVF & ISO 9613-1)
+        // Physical Externalization (Allen & Berkley ISM Room, Duda & Martens Near-Field DVF & ISO 9613-1)
         LinearLayout slot5aCard = Card(S["Slot5ACardTitle"], OneUiIconType.Speaker, OneUiTheme.IconSpatial);
         ismRoomEnabledSwitch = AddSwitchRow(slot5aCard, S["IsmRoomEnableTitle"], store.IsmRoomEnabled, v => {
             store.IsmRoomEnabled = v;
@@ -732,9 +922,9 @@ public partial class MainActivity {
             "%",
             defaultValue: 50);
 
-        page.AddView(slot5aCard);
+        RegisterSettingsCard(slot5aCard, categoryIndex: 1, isProOnly: true, "physical externalization ism room reflections near field dvf air absorption temperature humidity");
 
-        // 3E. Slot 5B: MagLS Ambisonics, Woodworth-Schlosberg Biometric ITD & HpTF Ear-Canal Notch
+        // MagLS Ambisonics, Woodworth-Schlosberg Biometric ITD & HpTF Ear-Canal Notch
         LinearLayout slot5bCard = Card(S["Slot5BCardTitle"], OneUiIconType.Headphones, OneUiTheme.IconSpatial);
 
         personalizationStatusText = Label("", 11.4f, OneUiTheme.TextSub);
@@ -877,9 +1067,9 @@ public partial class MainActivity {
         slot5bRow2.AddView(import5bBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f));
         slot5bCard.AddView(slot5bRow2, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
-        page.AddView(slot5bCard);
+        RegisterSettingsCard(slot5bCard, categoryIndex: 1, isProOnly: true, "hrtf personalization magls ambisonics biometric itd head width hptf notch wizard");
 
-        // 3C. Slot 6B: Psychoacoustics & Studio Loudness Standards (ISO 226:2023, ITU-R BS.1770-5 / EBU R128, Spatial Dialog, 4x True-Peak Limiter)
+        // Psychoacoustics & Studio Loudness Standards (ISO 226:2023, ITU-R BS.1770-5 / EBU R128, Spatial Dialog, 4x True-Peak Limiter)
         LinearLayout slot6bCard = Card(S["Slot6BCardTitle"], OneUiIconType.SpeakerHigh, OneUiTheme.IconSliderMedia);
 
         loudnessMeterText = Label(string.Format(S["LoudnessMeterIdle"], store.ResolveTruePeakCeilingDbtp()), 12f, OneUiTheme.PrimaryHigh);
@@ -1005,9 +1195,9 @@ public partial class MainActivity {
             TopMargin = Dp(4)
         });
 
-        page.AddView(slot6bCard);
+        RegisterSettingsCard(slot6bCard, categoryIndex: 0, isProOnly: true, "psychoacoustics loudness iso 226 phon ebu r128 lufs dialnorm dialog boost true peak ceiling");
 
-        // 3f. Slot 2B: On-Device Neural Audio Runtime (ONNX), MVSEP Anti-Artifact & Spatial Karaoke
+        // On-Device Neural Audio Runtime (ONNX), MVSEP Anti-Artifact & Spatial Karaoke
         LinearLayout slot2bCard = Card();
         LinearLayout slot2bHeader = HRow();
         slot2bHeader.SetPadding(0, 0, 0, Dp(10));
@@ -1066,6 +1256,17 @@ public partial class MainActivity {
         neuralPlanSummaryText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         neuralPlanSummaryText.SetPadding(Dp(2), 0, Dp(2), Dp(6));
         slot2bCard.AddView(neuralPlanSummaryText);
+
+        neuralTrackCacheCapSelector = new OneUiInlineSelector(this, S["NeuralTrackCacheCapTitle"]);
+        string[] cacheCapLabels = ["256 MB", "512 MB", "1024 MB", "2048 MB", "4096 MB"];
+        neuralTrackCacheCapSelector.SetItems(cacheCapLabels, ResolveNeuralTrackCachePresetIndex(store.NeuralTrackCacheMaxMb));
+        neuralTrackCacheCapSelector.SelectionChanged += pos => {
+            int mb = NeuralTrackCachePresetsMb[Math.Clamp(pos, 0, NeuralTrackCachePresetsMb.Length - 1)];
+            ApplyNeuralTrackCacheMaxMb(mb);
+        };
+        slot2bCard.AddView(neuralTrackCacheCapSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(6)
+        });
 
         (neuralOverlapBar, _) = AddSliderRow(
             slot2bCard,
@@ -1174,9 +1375,9 @@ public partial class MainActivity {
         };
         slot2bCard.AddView(WrapControlWithHelp(neuralUpmixModeSelector, S["NeuralUpmixModeTitle"], S["TipNeuralUpmix"], bottomMarginDp: 2));
 
-        page.AddView(slot2bCard);
+        RegisterSettingsCard(slot2bCard, categoryIndex: 2, isProOnly: false, "ai neural onnx runtime models orchestrator cache mb mvsep stems karaoke qnn xnnpack");
 
-        // 3C. Slot 2C: Universal Lossless Twin & Lossless-Guided Atmos Restoration (LGSR, W09)
+        // Universal Lossless Twin & Lossless-Guided Atmos Restoration (LGSR)
         LinearLayout slot2cCard = Card();
         LinearLayout slot2cHeader = HRow();
         slot2cHeader.SetPadding(0, 0, 0, Dp(10));
@@ -1269,9 +1470,9 @@ public partial class MainActivity {
             TopMargin = Dp(10)
         });
 
-        page.AddView(slot2cCard);
+        RegisterSettingsCard(slot2cCard, categoryIndex: 2, isProOnly: true, "lgsr lossless twin restoration atmos eac3 flac fusion envelope lock tier3");
 
-        // 4. Collapsible Advanced Rendering & CLI Options
+        // Collapsible Advanced Rendering & CLI Options
         LinearLayout advCard = Card();
         LinearLayout advHeader = HRow();
         OneUiTheme.AttachRecoil(advHeader, 0.98f);
@@ -1296,13 +1497,17 @@ public partial class MainActivity {
 
         muteBedSwitch = AddSwitchRow(advContentContainer, S["MuteBed"], store.MuteBed, v => {
             store.MuteBed = v;
-            playerEngine.MuteBed = v;
+            if (playerEngine != null) {
+                playerEngine.MuteBed = v;
+            }
             refreshBentoTilesUi?.Invoke();
         }, helpBody: S["TipMuteBed"]);
         AddDivider(advContentContainer);
         muteGroundSwitch = AddSwitchRow(advContentContainer, S["MuteGround"], store.MuteGround, v => {
             store.MuteGround = v;
-            playerEngine.MuteGround = v;
+            if (playerEngine != null) {
+                playerEngine.MuteGround = v;
+            }
             refreshBentoTilesUi?.Invoke();
         }, helpBody: S["TipMuteGround"]);
         AddDivider(advContentContainer);
@@ -1331,7 +1536,10 @@ public partial class MainActivity {
         qualSelector.SetItems(qualNames, Math.Clamp(store.AudioQualityIndex, 0, qualNames.Length - 1));
         qualSelector.SelectionChanged += pos => {
             store.AudioQualityIndex = pos;
-            playerEngine.AudioQuality = (QualityModes)pos;
+            if (playerEngine != null) {
+                playerEngine.AudioQuality = (QualityModes)pos;
+            }
+            RefreshSettingsCategorySubtitles();
         };
         advContentContainer.AddView(qualSelector);
 
@@ -1348,9 +1556,9 @@ public partial class MainActivity {
         }
 
         advCard.AddView(advContentContainer);
-        page.AddView(advCard);
+        RegisterSettingsCard(advCard, categoryIndex: 4, isProOnly: true, "advanced cli render mute bed ground 24-bit surround swap wav report grading mlp quality pedantic unsafe temp storage permission");
 
-        // 5. FFmpeg Audio Engine (Bundled W^X NDK in NativeLibraryDir)
+        // FFmpeg Audio Engine (Bundled W^X NDK in NativeLibraryDir)
         LinearLayout ffCard = Card(S["FFmpegCardTitle"], OneUiIconType.Gear, OneUiTheme.IconSliderMedia);
         ffmpegStatusText = Label(S["FFmpegNotInstalled"], 12.5f, OneUiTheme.TextSub);
         ffmpegStatusText.SetPadding(0, 0, 0, Dp(8));
@@ -1370,9 +1578,9 @@ public partial class MainActivity {
             ParseFFmpegExtraArgs(ffArgsBox.Text);
         };
         ffCard.AddView(ffArgsBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
-        page.AddView(ffCard);
+        RegisterSettingsCard(ffCard, categoryIndex: 4, isProOnly: false, "ffmpeg engine audio transcode container args");
 
-        // 5b. truehdd Dolby TrueHD Engine (Bundled W^X NativeLibraryDir)
+        // truehdd Dolby TrueHD Engine (Bundled W^X NativeLibraryDir)
         LinearLayout thdCard = Card();
         LinearLayout thdHeader = HRow();
         thdHeader.SetPadding(0, 0, 0, Dp(10));
@@ -1389,9 +1597,9 @@ public partial class MainActivity {
 
         truehddCheckBtn = PillButton(S["TruehddCheckBtn"], () => _ = CheckTruehddUpdateAsync(silent: false));
         thdCard.AddView(truehddCheckBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        page.AddView(thdCard);
+        RegisterSettingsCard(thdCard, categoryIndex: 4, isProOnly: false, "truehdd dolby truehd atmos mlp decoder engine");
 
-        // 6. Diagnostics & Shared Logs
+        // Diagnostics & Shared Logs
         LinearLayout logCard = Card(S["DiagnosticsTitle"], OneUiIconType.Logs, OneUiTheme.IconSystemInfo);
         logPathInfoText = Label("", 11.5f, ColMuted);
         logPathInfoText.SetPadding(0, 0, 0, Dp(8));
@@ -1407,7 +1615,7 @@ public partial class MainActivity {
             if (!string.IsNullOrEmpty(logPath) && File.Exists(logPath)) {
                 ShareLocalFile(logPath);
             } else {
-                Toast.MakeText(this, "Arquivo de log ainda não disponível.", ToastLength.Short).Show();
+                Toast.MakeText(this, S["LogFileNotAvailableToast"], ToastLength.Short).Show();
             }
         });
         Button clearLogBtn = PillButton(S["ClearLogBtn"], () => {
@@ -1419,12 +1627,12 @@ public partial class MainActivity {
         logBtns.AddView(exportLogBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
         logBtns.AddView(clearLogBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         logCard.AddView(logBtns);
-        page.AddView(logCard);
+        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear");
 
-        // 7. Language, About & App Version Updater
+        // Language, About & App Version Updater
         LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.IconSystemInfo);
         OneUiInlineSelector langSelector = new(this, S["LanguageLabel"]);
-        string[] langLabels = ["Auto (System)", "Português (Brasil)", "English", "Magyar", "简体中文"];
+        string[] langLabels = [S["LangAutoSystem"], S["LangPtBr"], S["LangEnUs"], S["LangHuHu"], S["LangZhCn"]];
         string[] langCodes = ["", "pt-BR", "en-US", "hu-HU", "zh-CN"];
         int curLangIdx = Array.IndexOf(langCodes, store.LanguageCode ?? "");
         langSelector.SetItems(langLabels, Math.Max(0, curLangIdx));
@@ -1444,9 +1652,9 @@ public partial class MainActivity {
         });
         Button aboutBtn = PillButton(S["AboutBtn"], () => {
             (string verName, long verCode) = AppUpdateService.GetInstalledVersion(this);
-            string msg = $"{Listener.Info}\nCavernize Android v{verName} (build {verCode})\n" +
-                (OneUiTheme.IsDynamicWallpaperActive ? "Theme: Dynamic One UI Wallpaper Palette\n" : "Theme: Samsung One UI 9 Blue\n") +
-                (CavernAmp.Available ? "CavernAmp: Active" : "Managed Pure-C# DSP (ARM64 Ready)");
+            string themeLine = OneUiTheme.IsDynamicWallpaperActive ? S["AboutThemeDynamicWallpaper"] : S["AboutThemeOneUiBlue"];
+            string engineLine = CavernAmp.Available ? S["AboutEngineCavernAmpActive"] : S["AboutEngineManagedArm64"];
+            string msg = string.Format(S["AboutDialogBodyFmt"], Listener.Info, verName, verCode, themeLine, engineLine);
             ShowMessageDialog(S["AboutBtn"], msg, OneUiIconType.Info);
         });
         helpBtns.AddView(guideBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
@@ -1481,13 +1689,375 @@ public partial class MainActivity {
 
         AddDivider(helpCard);
         autoCheckUpdatesSwitch = AddSwitchRow(helpCard, S["AutoCheckSwitch"], store.AutoCheckUpdates, v => store.AutoCheckUpdates = v);
-        page.AddView(helpCard);
+        RegisterSettingsCard(helpCard, categoryIndex: 5, isProOnly: false, "language about version ota update guide credits");
+
+        // Assemble Category Cards & Prerequisite States in Category Order (0..5)
+        settingsNeuralPrereqCard = OneUiComponents.CreateEmptyPrereqCard(
+            this,
+            S["SettingsPrereqNeuralTitle"],
+            S["SettingsPrereqNeuralSub"],
+            S["SettingsPrereqNeuralCta"],
+            ShowNeuralModelsModal);
+        settingsUsbPrereqCard = OneUiComponents.CreateEmptyPrereqCard(
+            this,
+            S["SettingsPrereqUsbTitle"],
+            S["SettingsPrereqUsbSub"],
+            S["ProAudioGrantUsbBtn"],
+            () => proAudioGrantUsbBtn?.PerformClick());
+
+        for (int cat = 0; cat < 6; cat++) {
+            if (cat == 2) {
+                settingsCardsContainer.AddView(settingsNeuralPrereqCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    BottomMargin = Dp(10)
+                });
+            } else if (cat == 3) {
+                settingsCardsContainer.AddView(settingsUsbPrereqCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    BottomMargin = Dp(10)
+                });
+            }
+            foreach (SettingsCardEntry entry in settingsCardsRegistry) {
+                if (entry.CategoryIndex == cat && entry.Card != null) {
+                    settingsCardsContainer.AddView(entry.Card);
+                }
+            }
+        }
+
+        settingsProHiddenCard = OneUiComponents.CreateEmptyPrereqCard(
+            this,
+            S["SettingsProHiddenTitle"],
+            S["SettingsProHiddenSub"],
+            S["SettingsSwitchToProCta"],
+            () => SetSettingsProMode(true));
+        settingsCardsContainer.AddView(settingsProHiddenCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(4),
+            BottomMargin = Dp(10)
+        });
+
+        settingsSearchEmptyCard = OneUiComponents.CreateEmptyPrereqCard(
+            this,
+            S["SettingsSearchEmptyTitle"],
+            S["SettingsSearchEmptySub"],
+            S["SettingsClearSearchCta"],
+            ClearSettingsSearch);
+        settingsCardsContainer.AddView(settingsSearchEmptyCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(4),
+            BottomMargin = Dp(10)
+        });
 
         RefreshSettingsTabButtons();
         RefreshFFmpegCardUi();
         RefreshTruehddCardUi();
         RefreshSettingsUpdateUi();
+        RefreshSettingsCategorySubtitles();
+        RefreshSettingsHubVisibility();
         return page;
+    }
+
+    static int ResolveNeuralTrackCachePresetIndex(int maxMb) {
+        int bestIdx = 1;
+        int bestDiff = int.MaxValue;
+        for (int i = 0; i < NeuralTrackCachePresetsMb.Length; i++) {
+            int diff = Math.Abs(maxMb - NeuralTrackCachePresetsMb[i]);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestIdx = i;
+            }
+        }
+        return bestIdx;
+    }
+
+    void ApplyNeuralTrackCacheMaxMb(int mb) {
+        int clamped = Math.Clamp(mb, 256, 4096);
+        store.NeuralTrackCacheMaxMb = clamped;
+        neuralTrackCache?.EvictToLimit((long)clamped * 1024L * 1024L);
+        SyncNeuralRuntimeDiagnostics();
+        RefreshNeuralAudioUi();
+        RefreshSettingsCategorySubtitles();
+    }
+
+    public bool HasSettingsInternalBackStep() =>
+        !string.IsNullOrWhiteSpace(settingsSearchQuery) || activeSettingsCategory >= 0;
+
+    public bool TryHandleSettingsBackStep() {
+        if (!string.IsNullOrWhiteSpace(settingsSearchQuery)) {
+            ClearSettingsSearch();
+            return true;
+        }
+        if (activeSettingsCategory >= 0) {
+            OpenSettingsCategory(-1);
+            return true;
+        }
+        return false;
+    }
+
+    public void JumpToSettingsCategory(int catIndex) {
+        SwitchTab(4);
+        ClearSettingsSearch();
+        OpenSettingsCategory(Math.Clamp(catIndex, -1, 5));
+    }
+
+    void OpenSettingsCategory(int catIndex) {
+        activeSettingsCategory = Math.Clamp(catIndex, -1, 5);
+        RefreshSettingsCategorySubtitles();
+        RefreshSettingsHubVisibility();
+        SyncPredictiveBackRegistration();
+    }
+
+    void ClearSettingsSearch() {
+        settingsSearchQuery = "";
+        if (settingsSearchInput != null && !string.IsNullOrEmpty(settingsSearchInput.Text)) {
+            settingsSearchInput.Text = "";
+        } else {
+            if (settingsSearchClearBtn != null) {
+                settingsSearchClearBtn.Visibility = ViewStates.Gone;
+            }
+            RefreshSettingsHubVisibility();
+            SyncPredictiveBackRegistration();
+        }
+    }
+
+    void SetSettingsProMode(bool proMode) {
+        isSettingsProMode = proMode;
+        try {
+            GetSharedPreferences("cavernize_settings", FileCreationMode.Private)?
+                .Edit()?
+                .PutBoolean("settings_pro_mode", proMode)?
+                .Apply();
+        } catch { }
+        if (settingsModeToggleBtn != null) {
+            settingsModeToggleBtn.Text = isSettingsProMode ? S["SettingsModeProChip"] : S["SettingsModeEssentialChip"];
+            settingsModeToggleBtn.Background = isSettingsProMode
+                ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
+        }
+        if (settingsCategoryStatusChip != null) {
+            OneUiComponents.UpdateStatusChip(
+                this,
+                settingsCategoryStatusChip,
+                isSettingsProMode ? S["SettingsModeProChip"] : S["SettingsModeEssentialChip"],
+                isSettingsProMode ? OneUiTheme.Primary : OneUiTheme.IconSystemInfo);
+        }
+        RefreshSettingsHubVisibility();
+    }
+
+    static void CollectViewText(View v, System.Text.StringBuilder sb) {
+        if (v == null) {
+            return;
+        }
+        if (v is TextView tv && !string.IsNullOrWhiteSpace(tv.Text)) {
+            sb.Append(tv.Text).Append(' ');
+        } else if (v is ViewGroup vg) {
+            int count = vg.ChildCount;
+            for (int i = 0; i < count; i++) {
+                CollectViewText(vg.GetChildAt(i), sb);
+            }
+        }
+    }
+
+    static bool MatchesSettingsSearch(SettingsCardEntry entry, string query) {
+        if (entry?.Card == null || string.IsNullOrWhiteSpace(query)) {
+            return true;
+        }
+        string[] tokens = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0) {
+            return true;
+        }
+        System.Text.StringBuilder sb = new(256);
+        if (!string.IsNullOrEmpty(entry.ExtraKeywords)) {
+            sb.Append(entry.ExtraKeywords).Append(' ');
+        }
+        CollectViewText(entry.Card, sb);
+        string haystack = sb.ToString();
+        for (int i = 0; i < tokens.Length; i++) {
+            if (haystack.IndexOf(tokens[i], StringComparison.OrdinalIgnoreCase) < 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    string GetSettingsCategoryTitle(int catIndex) => catIndex switch {
+        0 => S["SettingsCatPlaybackTitle"],
+        1 => S["SettingsCatHeadphonesTitle"],
+        2 => S["SettingsCatAiTitle"],
+        3 => S["SettingsCatProAudioTitle"],
+        4 => S["SettingsCatEnginesTitle"],
+        5 => S["SettingsCatAboutTitle"],
+        _ => S["TabSettings"]
+    };
+
+    string BuildSettingsCategoryLiveSubtitle(int catIndex) {
+        if (store == null) {
+            return "";
+        }
+        switch (catIndex) {
+            case 0: {
+                string upmixTag = store.AtmosAwareUpmix
+                    ? S["AtmosAwareUpmix"]
+                    : (store.ParametricStftUpmix
+                        ? S["ParametricStftUpmix"]
+                        : (store.CavernizeUpmix
+                            ? S["CavernizeUpmix"]
+                            : (store.MatrixUpmixing ? S["MatrixUpmix"] : S["SignalChainUpmixDirect"])));
+                string roomTag = $"{store.RoomSizeX:0.#}×{store.RoomSizeY:0.#}×{store.RoomSizeZ:0.#}m";
+                string loudTag = store.Iso226Enabled
+                    ? "ISO 226"
+                    : (store.LoudnessNormModeIndex > 0 ? "BS.1770" : (store.NormalizerEnabled ? S["NormalizerCheck"] : S["LimiterOnlyCheck"]));
+                return $"{upmixTag} · {roomTag} · {loudTag}";
+            }
+            case 1: {
+                string hrirTitle = BinauralProfileService.GetActiveDisplayTitle(store, S);
+                string eqTag = store.AutoEqEnabled && !string.IsNullOrWhiteSpace(store.AutoEqProfileName)
+                    ? store.AutoEqProfileName
+                    : S["StatusOffTag"];
+                string extTag = store.IsmRoomEnabled ? "ISM" : (store.BiometricItdEnabled ? "Bio-ITD" : "HRIR");
+                return $"{hrirTitle} · AutoEq: {eqTag} · {extTag}";
+            }
+            case 2: {
+                int modelCount = OnnxRuntimeInstallerService.GetInstalledModelIds(this).Count;
+                bool installed = OnnxRuntimeInstallerService.IsRuntimeInstalled(this);
+                string ep = playerEngine?.NeuralDiagnostics.ActiveProviderName ?? (installed ? "XNNPACK" : "CPU");
+                string restTag = store.LgsrEnabled
+                    ? "LGSR"
+                    : (store.SpatialKaraokeEnabled ? "Karaoke" : $"{store.NeuralTrackCacheMaxMb} MB");
+                return string.Format(S["SettingsCatAiLiveSubFmt"], ep, modelCount, restTag);
+            }
+            case 3: {
+                string latPart = store.ProAudioEnabled
+                    ? S["ProAudioEnableTitle"]
+                    : (store.LowLatencyAudio ? S["AudioOutputLowLatTag"] : S["AudioOutputBalancedTag"]);
+                string htPart = store.HeadTrackingEnabled ? S["HeadTrackingEnableTitle"] : S["HeadTrackingStatusIdle"];
+                string micPart = store.LiveMicEnabled ? S["ProAudioLiveMicTitle"] : S["ProAudioMicOff"];
+                return $"{latPart} · {htPart} · {micPart}";
+            }
+            case 4: {
+                bool ffOk = ffmpeg?.Found == true || !string.IsNullOrEmpty(FFmpegInstallerService.ResolveExistingFFmpegPath(this, store));
+                bool thdOk = !string.IsNullOrEmpty(TruehddInstallerService.ResolveExistingTruehddPath(this, store));
+                bool onnxOk = OnnxRuntimeInstallerService.IsRuntimeInstalled(this);
+                return string.Format(
+                    S["SettingsCatEnginesLiveSubFmt"],
+                    ffOk ? "FFmpeg ✓" : "FFmpeg —",
+                    thdOk ? "TrueHD ✓" : "TrueHD —",
+                    onnxOk ? "ONNX ✓" : "ONNX —");
+            }
+            case 5: {
+                (string verName, _) = AppUpdateService.GetInstalledVersion(this);
+                double kb = AppLogger.GetLogSizeBytes() / 1024.0;
+                string langTag = string.IsNullOrEmpty(store.LanguageCode) ? S["LangAutoSystem"] : store.LanguageCode;
+                return $"v{verName} · {langTag} · {kb:0.1} KB";
+            }
+            default:
+                return "";
+        }
+    }
+
+    void RefreshSettingsCategorySubtitles() {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        for (int i = 0; i < settingsCatSubtitleViews.Length; i++) {
+            TextView tv = settingsCatSubtitleViews[i];
+            if (tv != null) {
+                tv.Text = BuildSettingsCategoryLiveSubtitle(i);
+            }
+        }
+        if (activeSettingsCategory >= 0 && activeSettingsCategory < 6 && string.IsNullOrWhiteSpace(settingsSearchQuery)) {
+            if (settingsCategoryHeaderTitle != null) {
+                settingsCategoryHeaderTitle.Text = GetSettingsCategoryTitle(activeSettingsCategory);
+            }
+            if (settingsCategoryHeaderSub != null) {
+                settingsCategoryHeaderSub.Text = BuildSettingsCategoryLiveSubtitle(activeSettingsCategory);
+            }
+        }
+    }
+
+    void RefreshSettingsHubVisibility() {
+        if (uiDestroyed) {
+            return;
+        }
+        bool isSearching = !string.IsNullOrWhiteSpace(settingsSearchQuery);
+        bool inHubHome = !isSearching && activeSettingsCategory < 0;
+
+        if (settingsHubTilesContainer != null) {
+            settingsHubTilesContainer.Visibility = inHubHome ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (settingsCategoryHeaderBar != null) {
+            settingsCategoryHeaderBar.Visibility = inHubHome ? ViewStates.Gone : ViewStates.Visible;
+        }
+        if (settingsCardsContainer != null) {
+            settingsCardsContainer.Visibility = inHubHome ? ViewStates.Gone : ViewStates.Visible;
+        }
+        if (inHubHome) {
+            return;
+        }
+
+        int visibleCount = 0;
+        int hiddenProCount = 0;
+        for (int i = 0; i < settingsCardsRegistry.Count; i++) {
+            SettingsCardEntry entry = settingsCardsRegistry[i];
+            if (entry?.Card == null) {
+                continue;
+            }
+            bool show;
+            if (isSearching) {
+                show = MatchesSettingsSearch(entry, settingsSearchQuery);
+                if (show && entry.CategoryIndex == 4 && entry.IsProOnly && advContentContainer != null && !isAdvancedExpanded) {
+                    isAdvancedExpanded = true;
+                    advContentContainer.Visibility = ViewStates.Visible;
+                    if (advChevron != null) {
+                        advChevron.IconType = OneUiIconType.ChevronUp;
+                    }
+                }
+            } else {
+                bool inCat = entry.CategoryIndex == activeSettingsCategory;
+                if (inCat && entry.IsProOnly && !isSettingsProMode) {
+                    show = false;
+                    hiddenProCount++;
+                } else {
+                    show = inCat;
+                }
+            }
+            entry.Card.Visibility = show ? ViewStates.Visible : ViewStates.Gone;
+            if (show) {
+                visibleCount++;
+            }
+        }
+
+        if (settingsNeuralPrereqCard != null) {
+            bool showNeuralPrereq = !isSearching &&
+                                    activeSettingsCategory == 2 &&
+                                    OnnxRuntimeInstallerService.GetInstalledModelIds(this).Count == 0;
+            settingsNeuralPrereqCard.Visibility = showNeuralPrereq ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (settingsUsbPrereqCard != null) {
+            UsbProAudioDeviceSnapshot usbSnap = usbProAudioManager?.CurrentSnapshot;
+            bool showUsbPrereq = !isSearching &&
+                                 activeSettingsCategory == 3 &&
+                                 (usbSnap == null || !usbSnap.IsAttached);
+            settingsUsbPrereqCard.Visibility = showUsbPrereq ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (settingsProHiddenCard != null) {
+            settingsProHiddenCard.Visibility = (!isSearching && hiddenProCount > 0) ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (settingsSearchEmptyCard != null) {
+            settingsSearchEmptyCard.Visibility = (isSearching && visibleCount == 0) ? ViewStates.Visible : ViewStates.Gone;
+        }
+
+        if (isSearching) {
+            if (settingsCategoryHeaderTitle != null) {
+                settingsCategoryHeaderTitle.Text = string.Format(S["SettingsSearchResultsTitleFmt"], visibleCount);
+            }
+            if (settingsCategoryHeaderSub != null) {
+                settingsCategoryHeaderSub.Text = string.Format(S["SettingsSearchResultsSubFmt"], settingsSearchQuery);
+            }
+        } else if (activeSettingsCategory >= 0 && activeSettingsCategory < 6) {
+            if (settingsCategoryHeaderTitle != null) {
+                settingsCategoryHeaderTitle.Text = GetSettingsCategoryTitle(activeSettingsCategory);
+            }
+            if (settingsCategoryHeaderSub != null) {
+                settingsCategoryHeaderSub.Text = BuildSettingsCategoryLiveSubtitle(activeSettingsCategory);
+            }
+        }
     }
 
     void RefreshLogSummaryLabel() {
@@ -1623,6 +2193,9 @@ public partial class MainActivity {
     }
 
     void ReattachPlayerTrack() {
+        if (playerEngine == null) {
+            return;
+        }
         CavernizeTrack active = GetActiveTrack();
         if (active != null && active.Supported && active.Codec != Codec.TrueHD) {
             bool wasPlaying = playerEngine.IsPlaying;
@@ -1659,6 +2232,12 @@ public partial class MainActivity {
         if (muteGroundSwitch != null && muteGroundSwitch.Checked != store.MuteGround) {
             muteGroundSwitch.Checked = store.MuteGround;
         }
+        if (matrixUpmixSwitch != null && matrixUpmixSwitch.Checked != store.MatrixUpmixing) {
+            matrixUpmixSwitch.Checked = store.MatrixUpmixing;
+        }
+        if (cavernizeUpmixSwitch != null && cavernizeUpmixSwitch.Checked != store.CavernizeUpmix) {
+            cavernizeUpmixSwitch.Checked = store.CavernizeUpmix;
+        }
         if (parametricStftSwitch != null && parametricStftSwitch.Checked != store.ParametricStftUpmix) {
             parametricStftSwitch.Checked = store.ParametricStftUpmix;
         }
@@ -1666,6 +2245,7 @@ public partial class MainActivity {
             atmosAwareUpmixSwitch.Checked = store.AtmosAwareUpmix;
         }
         RefreshLogSummaryLabel();
+        RefreshSettingsCategorySubtitles();
     }
 
     void RefreshBinauralProfileUi() {
@@ -1703,8 +2283,10 @@ public partial class MainActivity {
             RunOnUiThread(() => {
                 if (uiDestroyed) return;
                 if (ok) {
-                    playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
-                    BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+                    if (playerEngine != null) {
+                        playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
+                        BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+                    }
                     AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
                     ApplyAndRefreshExternalization();
                     audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
@@ -1712,6 +2294,7 @@ public partial class MainActivity {
                     RefreshPersonalizationUi();
                     RefreshAutoEqUi();
                     RefreshMusicPlayerControlsUi();
+                    RefreshSettingsCategorySubtitles();
                     ShowToast(string.Format(S["BinauralProfileApplied"], BinauralProfileService.GetActiveDisplayTitle(store, S)));
                 } else {
                     ShowError(err ?? S["HrirLoadFailedFallback"]);
@@ -1727,8 +2310,10 @@ public partial class MainActivity {
             RunOnUiThread(() => {
                 if (uiDestroyed) return;
                 if (ok) {
-                    playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
-                    BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+                    if (playerEngine != null) {
+                        playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
+                        BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+                    }
                     AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
                     ApplyAndRefreshExternalization();
                     audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
@@ -1736,6 +2321,7 @@ public partial class MainActivity {
                     RefreshPersonalizationUi();
                     RefreshAutoEqUi();
                     RefreshMusicPlayerControlsUi();
+                    RefreshSettingsCategorySubtitles();
                     if (showToast) {
                         ShowToast(string.Format(S["BinauralProfileApplied"], BinauralProfileService.GetActiveDisplayTitle(store, S)));
                     }
@@ -1761,10 +2347,13 @@ public partial class MainActivity {
             RunOnUiThread(() => {
                 if (uiDestroyed) return;
                 if (ok) {
-                    BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+                    if (playerEngine != null) {
+                        BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+                    }
                     RefreshBinauralProfileUi();
                     RefreshPersonalizationUi();
                     RefreshMusicPlayerControlsUi();
+                    RefreshSettingsCategorySubtitles();
                 } else {
                     ShowError(err ?? S["MinPhaseUpdateFailedFallback"]);
                 }
@@ -2087,10 +2676,13 @@ public partial class MainActivity {
                     return;
                 }
                 if (ok) {
-                    BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+                    if (playerEngine != null) {
+                        BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
+                    }
                     RefreshBinauralProfileUi();
                     RefreshPersonalizationUi();
                     RefreshMusicPlayerControlsUi();
+                    RefreshSettingsCategorySubtitles();
                 } else if (!string.IsNullOrEmpty(err)) {
                     ShowError(err);
                 }
@@ -2608,7 +3200,7 @@ public partial class MainActivity {
             customContent: content,
             icon: OneUiIconType.Bolt,
             iconBadgeColor: OneUiTheme.IconSpatial,
-            positiveText: "OK",
+            positiveText: S["OkBtn"],
             onPositive: () => {
                 if (int.TryParse(portBox.Text?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int port)) {
                     store.HeadTrackingOscPort = Math.Clamp(port, 1024, 65535);
@@ -2968,7 +3560,7 @@ public partial class MainActivity {
         }
         RefreshQueueList();
         if (invalids.Count > 0) {
-            ShowError("Unsupported files:\n" + string.Join('\n', invalids));
+            ShowError(string.Format(S["QueueUnsupportedFilesFmt"], string.Join('\n', invalids)));
         }
     }
 
@@ -3014,7 +3606,7 @@ public partial class MainActivity {
         }
         queueListContainer.RemoveAllViews();
         if (renderQueue.Jobs.Count == 0) {
-            queueListContainer.AddView(Label("0 jobs", 12f, ColMuted));
+            queueListContainer.AddView(Label(S["QueueEmptyZeroJobs"], 12f, ColMuted));
             return;
         }
         foreach (QueuedJob job in renderQueue.Jobs) {
@@ -3095,6 +3687,16 @@ public partial class MainActivity {
             neuralPlanSummaryText.Text = planLine + cacheSuffix;
             neuralPlanSummaryText.Visibility = string.IsNullOrEmpty(neuralPlanSummaryText.Text) ? ViewStates.Gone : ViewStates.Visible;
         }
+        if (neuralTrackCacheCapSelector != null && store != null) {
+            int capIdx = ResolveNeuralTrackCachePresetIndex(store.NeuralTrackCacheMaxMb);
+            if (neuralTrackCacheCapSelector.SelectedIndex != capIdx) {
+                neuralTrackCacheCapSelector.SetSelection(capIdx, notify: false);
+            }
+        }
+        RefreshSettingsCategorySubtitles();
+        if (activeSettingsCategory == 2) {
+            RefreshSettingsHubVisibility();
+        }
     }
 
     async Task CheckOnnxRuntimeUpdateAsync(bool silent) {
@@ -3142,6 +3744,20 @@ public partial class MainActivity {
             OneUiTheme.TextSub);
         trackCacheTv.SetPadding(0, 0, 0, Dp(4));
         content.AddView(trackCacheTv);
+
+        OneUiInlineSelector modalCacheCapSelector = new(this, S["NeuralTrackCacheCapTitle"]);
+        string[] modalCacheCapLabels = ["256 MB", "512 MB", "1024 MB", "2048 MB", "4096 MB"];
+        modalCacheCapSelector.SetItems(modalCacheCapLabels, ResolveNeuralTrackCachePresetIndex(store.NeuralTrackCacheMaxMb));
+        modalCacheCapSelector.SelectionChanged += pos => {
+            int mb = NeuralTrackCachePresetsMb[Math.Clamp(pos, 0, NeuralTrackCachePresetsMb.Length - 1)];
+            ApplyNeuralTrackCacheMaxMb(mb);
+            Cavernize.Logic.Spatial.NeuralTrackCacheStats updatedStats = neuralTrackCache?.GetStats() ?? default;
+            double updatedMb = updatedStats.TotalBytes / (1024.0 * 1024.0);
+            trackCacheTv.Text = string.Format(S["NeuralTrackCacheSummary"], updatedStats.EntryCount, updatedMb, store.NeuralTrackCacheMaxMb);
+        };
+        content.AddView(modalCacheCapSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
 
         if (neuralOrchestrator != null) {
             Cavernize.Logic.Spatial.NeuralExecutionPlan plan =
@@ -3766,6 +4382,9 @@ public partial class MainActivity {
         dnaActionRow.AddView(analyzeDnaBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
 
         calibrateMicBtn = PillButton(S["VocalVoiceprintCalibrateBtn"], () => {
+            if (playerEngine == null) {
+                return;
+            }
             if (playerEngine.LiveMicBridge.IsCapturingVoiceprint) {
                 playerEngine.CancelMicVoiceprintCalibration();
                 RefreshModalLiveState();
@@ -3782,8 +4401,8 @@ public partial class MainActivity {
                 store.LiveMicRoutingIndex = 1; // MonoChannel1
             }
             ApplyAndRefreshProAudio();
-            playerEngine.StartMicVoiceprintCalibration(VoiceprintDurationSec, result => RunOnUiThread(() => {
-                if (uiDestroyed) {
+            playerEngine?.StartMicVoiceprintCalibration(VoiceprintDurationSec, result => RunOnUiThread(() => {
+                if (uiDestroyed || playerEngine == null) {
                     return;
                 }
                 if (result.IsValid && result.Profile != null) {
@@ -3817,6 +4436,9 @@ public partial class MainActivity {
         abActionRow.SetPadding(0, Dp(6), 0, 0);
 
         abCompareBtn = PillButton(S["VocalAbStateWet"], () => {
+            if (playerEngine == null) {
+                return;
+            }
             playerEngine.VocalChainBypassed = !playerEngine.VocalChainBypassed;
             ApplyAndRefreshVocalChain();
             RefreshModalLiveState();
@@ -3827,6 +4449,9 @@ public partial class MainActivity {
         abActionRow.AddView(abCompareBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
         resetVpBtn = PillButton(S["VocalVoiceprintResetBtn"], () => {
+            if (playerEngine == null) {
+                return;
+            }
             store.ClearMicVoiceprint();
             Cavern.VocalChain.VocalMacroSettings macros = store.BuildVocalMacroSettings();
             macros.Bypass = playerEngine.VocalChainBypassed;
@@ -3869,8 +4494,10 @@ public partial class MainActivity {
         });
         AddDivider(content);
 
-        bypassSwitchRef = AddSwitchRow(content, S["VocalBypassAbTitle"], playerEngine.VocalChainBypassed, v => {
-            playerEngine.VocalChainBypassed = v;
+        bypassSwitchRef = AddSwitchRow(content, S["VocalBypassAbTitle"], playerEngine?.VocalChainBypassed ?? false, v => {
+            if (playerEngine != null) {
+                playerEngine.VocalChainBypassed = v;
+            }
             ApplyAndRefreshVocalChain();
             RefreshModalLiveState();
         });

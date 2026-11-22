@@ -5,6 +5,7 @@ using Android.Text;
 using Android.Views;
 using Android.Widget;
 
+using CavernizeAndroid.Language;
 using CavernizeAndroid.Services;
 using CavernizeAndroid.Theme;
 
@@ -56,7 +57,7 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
             arrowPaint.StrokeCap = Paint.Cap.Round;
             arrowPaint.StrokeJoin = Paint.Join.Round;
             textPaint.TextAlign = Paint.Align.Center;
-            textPaint.SetTypeface(Typeface.Create(Typeface.Default, TypefaceStyle.Bold));
+            textPaint.SetTypeface(OneUiTheme.GetAppleFontBold(ctx));
             textPaint.TextSize = 13f * dp;
         }
 
@@ -236,7 +237,7 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
             Visibility = ViewStates.Gone
         };
         subtitleOverlayView.SetTextColor(Color.White);
-        subtitleOverlayView.SetTypeface(null, TypefaceStyle.Bold);
+        OneUiTheme.ApplyHeadlineFont(ctx, subtitleOverlayView);
         subtitleOverlayView.SetPadding(Dp(12), Dp(5), Dp(12), Dp(5));
         subtitleOverlayView.SetShadowLayer(Dp(4), 0, Dp(1), Color.Black);
         subtitleOverlayView.Background = OneUiTheme.CreateRoundedDrawable(ctx, Color.Argb(182, 8, 9, 13), 10f);
@@ -266,11 +267,11 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
         topBar.Background = topGrad;
 
         hudTitleText = new TextView(ctx) {
-            Text = titlePlaceholder ?? "Video",
+            Text = titlePlaceholder ?? AndroidStrings.Active["ModeVideo"],
             TextSize = 13.5f
         };
         hudTitleText.SetTextColor(OneUiTheme.TextPrimary);
-        hudTitleText.SetTypeface(OneUiTheme.GetAppleFontBold(ctx), TypefaceStyle.Bold);
+        OneUiTheme.ApplyHeadlineFont(ctx, hudTitleText);
         hudTitleText.SetSingleLine(true);
         hudTitleText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         topBar.AddView(hudTitleText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
@@ -284,9 +285,9 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
         trackPillBtn.Background = OneUiTheme.CreateRoundedDrawable(ctx, Color.Argb(150, 26, 28, 38), 99f, Color.Argb(70, 255, 255, 255), 1f);
         OneUiTheme.AttachRecoil(trackPillBtn, 0.92f);
         OneUiIconView trkIco = new(ctx, OneUiIconType.Speaker, OneUiTheme.TextPrimary);
-        trackPillLabel = new TextView(ctx) { Text = "Faixa", TextSize = 11f };
+        trackPillLabel = new TextView(ctx) { Text = AndroidStrings.Active["VideoTrackPill"], TextSize = 11f };
         trackPillLabel.SetTextColor(OneUiTheme.TextPrimary);
-        trackPillLabel.SetTypeface(null, TypefaceStyle.Bold);
+        OneUiTheme.ApplyHeadlineFont(ctx, trackPillLabel);
         trackPillLabel.SetIncludeFontPadding(false);
         trackPillLabel.SetSingleLine(true);
         trackPillBtn.AddView(trkIco, new LinearLayout.LayoutParams(Dp(13), Dp(13)) { RightMargin = Dp(4) });
@@ -361,9 +362,10 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
 
         fsCurTimeText = new TextView(ctx) { Text = "00:00", TextSize = 11.5f };
         fsCurTimeText.SetTextColor(OneUiTheme.TextPrimary);
-        fsCurTimeText.SetTypeface(null, TypefaceStyle.Bold);
+        OneUiTheme.ApplyHeadlineFont(ctx, fsCurTimeText);
         fsTotTimeText = new TextView(ctx) { Text = "00:00", TextSize = 11.5f };
         fsTotTimeText.SetTextColor(OneUiTheme.TextSub);
+        OneUiTheme.ApplyHeadlineFont(ctx, fsTotTimeText, bold: false);
 
         fullscreenSeekBar = new OneUiSeekBar(ctx) {
             Max = 1000,
@@ -413,7 +415,7 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
         spatialPillBtn.Background = OneUiTheme.CreateRoundedDrawable(ctx, Color.Argb(150, 26, 28, 38), 99f, Color.Argb(75, 255, 255, 255), 1f);
         OneUiTheme.AttachRecoil(spatialPillBtn, 0.93f);
         OneUiIconView spIco = new(ctx, OneUiIconType.Sparkles, OneUiTheme.PrimaryHigh);
-        spatialPillText = new TextView(ctx) { Text = "Spatial 3D", TextSize = 10.5f };
+        spatialPillText = new TextView(ctx) { Text = AndroidStrings.Active["PlayerBadgeSpatial"], TextSize = 10.5f };
         spatialPillText.SetTextColor(OneUiTheme.TextPrimary);
         spatialPillText.SetTypeface(OneUiTheme.GetAppleFontSemibold(ctx), TypefaceStyle.Bold);
         spatialPillText.SetIncludeFontPadding(false);
@@ -477,9 +479,9 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
         unlockFloatingPill.Background = OneUiTheme.CreateRoundedDrawable(ctx, Color.Argb(215, 22, 24, 34), 99f, Color.Argb(110, 255, 255, 255), 1.2f);
         OneUiTheme.AttachRecoil(unlockFloatingPill, 0.92f);
         OneUiIconView unlockIco = new(ctx, OneUiIconType.Lock, OneUiTheme.PrimaryHigh);
-        unlockPillLabel = new TextView(ctx) { Text = "Destravar", TextSize = 12f };
+        unlockPillLabel = new TextView(ctx) { Text = AndroidStrings.Active["VideoUnlockHint"], TextSize = 12f };
         unlockPillLabel.SetTextColor(OneUiTheme.TextPrimary);
-        unlockPillLabel.SetTypeface(null, TypefaceStyle.Bold);
+        OneUiTheme.ApplyHeadlineFont(ctx, unlockPillLabel);
         unlockPillLabel.SetIncludeFontPadding(false);
         unlockFloatingPill.AddView(unlockIco, new LinearLayout.LayoutParams(Dp(15), Dp(15)) { RightMargin = Dp(6) });
         unlockFloatingPill.AddView(unlockPillLabel);
@@ -495,7 +497,7 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
             Visibility = ViewStates.Gone
         };
         hudAspectToast.SetTextColor(OneUiTheme.TextPrimary);
-        hudAspectToast.SetTypeface(null, TypefaceStyle.Bold);
+        OneUiTheme.ApplyHeadlineFont(ctx, hudAspectToast);
         hudAspectToast.SetPadding(Dp(14), Dp(6), Dp(14), Dp(6));
         hudAspectToast.Background = OneUiTheme.CreateRoundedDrawable(ctx, Color.Argb(210, 20, 22, 30), 99f);
         AddView(hudAspectToast, new LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
@@ -548,10 +550,11 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
         bool hasSubtitles,
         bool isLooping,
         string unlockText) {
-        hudTitleText.Text = string.IsNullOrWhiteSpace(title) ? "Video" : title;
-        spatialPillText.Text = string.IsNullOrWhiteSpace(spatialBadge) ? "Spatial 3D" : spatialBadge;
+        AndroidStrings str = AndroidStrings.Active;
+        hudTitleText.Text = string.IsNullOrWhiteSpace(title) ? str["ModeVideo"] : title;
+        spatialPillText.Text = string.IsNullOrWhiteSpace(spatialBadge) ? str["PlayerBadgeSpatial"] : spatialBadge;
         if (hasMultipleAudioTracks) {
-            trackPillLabel.Text = trackSummary ?? "Faixa";
+            trackPillLabel.Text = trackSummary ?? str["VideoTrackPill"];
             trackPillBtn.Visibility = ViewStates.Visible;
         } else {
             trackPillBtn.Visibility = ViewStates.Gone;
@@ -562,7 +565,7 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
             ? OneUiTheme.CreateRippleRoundedDrawable(Context, OneUiTheme.WithAlpha(OneUiTheme.Primary, 140), 99f)
             : OneUiTheme.CreateRippleRoundedDrawable(Context, Color.Argb(115, 20, 22, 30), 99f);
         loopIcon.IconColor = isLooping ? OneUiTheme.PrimaryHigh : OneUiTheme.TextPrimary;
-        unlockPillLabel.Text = unlockText ?? "Destravar";
+        unlockPillLabel.Text = unlockText ?? str["VideoUnlockHint"];
     }
 
     public void SetFullscreenMode(bool fullscreen) {
@@ -729,10 +732,11 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
             _ => VideoAspectMode.Fit
         };
         UpdateVideoTransform();
+        AndroidStrings str = AndroidStrings.Active;
         string msg = aspectMode switch {
-            VideoAspectMode.Crop => "Proporção: Preencher",
-            VideoAspectMode.Stretch => "Proporção: Esticar",
-            _ => "Proporção: Ajustar"
+            VideoAspectMode.Crop => str["VideoAspectCropToast"],
+            VideoAspectMode.Stretch => str["VideoAspectStretchToast"],
+            _ => str["VideoAspectFitToast"]
         };
         ShowAspectToast(msg);
     }
@@ -819,14 +823,14 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
 
             mediaPlayer.Error += (_, _) => {
                 isPrepared = false;
-                hudErrorText.Text = "Prévia de vídeo indisponível para este codec (Áudio espacial segue ativo)";
+                hudErrorText.Text = AndroidStrings.Active["VideoPreviewCodecUnavailable"];
                 hudErrorText.Visibility = ViewStates.Visible;
                 ShowHudOverlay(autoHide: false);
             };
 
             mediaPlayer.PrepareAsync();
         } catch {
-            hudErrorText.Text = "Prévia de vídeo indisponível para este arquivo";
+            hudErrorText.Text = AndroidStrings.Active["VideoPreviewFileUnavailable"];
             hudErrorText.Visibility = ViewStates.Visible;
             ReleasePlayer();
         }

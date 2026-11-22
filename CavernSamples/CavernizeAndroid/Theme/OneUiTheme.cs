@@ -3,6 +3,7 @@ using Android.Content.Res;
 using Android.Graphics;
 using Android.Graphics.Drawables;
 using Android.OS;
+using Android.Text;
 using Android.Views;
 using Android.Widget;
 
@@ -34,6 +35,16 @@ public static class OneUiTheme {
 
     public static Typeface GetAppleFontRegular(Context ctx) =>
         appleFontRegular ??= LoadVariableAppleFont(ctx, 400, TypefaceStyle.Normal);
+
+    /// <summary>
+    /// Applies the unified SF Pro headline/UI typeface instead of raw Roboto Bold.
+    /// </summary>
+    public static void ApplyHeadlineFont(Context ctx, TextView tv, bool bold = true) {
+        if (tv == null) {
+            return;
+        }
+        tv.Typeface = bold ? GetAppleFontBold(ctx) : GetAppleFontMedium(ctx);
+    }
 
     static Typeface LoadVariableAppleFont(Context ctx, int weight, TypefaceStyle fallbackStyle) {
         try {
@@ -475,6 +486,171 @@ public static class OneUiTheme {
         line.LayoutParameters = lp;
         return line;
     }
+
+    /// <summary>
+    /// Creates an ellipsized single-line One UI 9 status badge chip.
+    /// </summary>
+    public static TextView CreateStatusChip(Context ctx, string text, Color accentColor) {
+        TextView chip = new(ctx) {
+            Text = text ?? "",
+            TextSize = 11f,
+            Gravity = GravityFlags.Center
+        };
+        chip.SetSingleLine(true);
+        chip.Ellipsize = TextUtils.TruncateAt.End;
+        chip.SetIncludeFontPadding(false);
+        chip.Typeface = GetAppleFontBold(ctx);
+        UpdateStatusChip(ctx, chip, text, accentColor);
+        return chip;
+    }
+
+    /// <summary>
+    /// Updates an existing One UI 9 status chip's text and accent tint.
+    /// </summary>
+    public static void UpdateStatusChip(Context ctx, TextView chip, string text, Color accentColor) {
+        if (chip == null) {
+            return;
+        }
+        chip.Text = text ?? "";
+        chip.SetTextColor(BlendColor(accentColor, Color.White, 0.35f));
+        chip.SetPadding(Dp(ctx, 10f), Dp(ctx, 4f), Dp(ctx, 10f), Dp(ctx, 4f));
+        chip.Background = CreateRoundedDrawable(
+            ctx,
+            WithAlpha(accentColor, 48),
+            PillCornerDp,
+            WithAlpha(accentColor, 145),
+            1f);
+    }
+
+    /// <summary>
+    /// Creates a clean One UI 9 prerequisite / empty state banner card with an optional CTA pill button.
+    /// </summary>
+    public static LinearLayout CreateEmptyPrereqCard(
+        Context ctx,
+        string title,
+        string subtitle,
+        string ctaText = null,
+        Action onCta = null) {
+        LinearLayout card = new(ctx) {
+            Orientation = Android.Widget.Orientation.Vertical
+        };
+        card.Background = CreateGlassCardDrawable(
+            ctx,
+            SurfaceSubTile,
+            18f,
+            WithAlpha(FunctionalAmber, 110));
+        card.SetPadding(Dp(ctx, 14f), Dp(ctx, 12f), Dp(ctx, 14f), Dp(ctx, 12f));
+
+        if (!string.IsNullOrEmpty(title)) {
+            TextView titleTv = new(ctx) {
+                Text = title,
+                TextSize = 13f
+            };
+            titleTv.SetTextColor(TextPrimary);
+            titleTv.Typeface = GetAppleFontBold(ctx);
+            titleTv.SetIncludeFontPadding(false);
+            card.AddView(titleTv);
+        }
+
+        if (!string.IsNullOrEmpty(subtitle)) {
+            TextView subTv = new(ctx) {
+                Text = subtitle,
+                TextSize = 11.8f
+            };
+            subTv.SetTextColor(TextSub);
+            subTv.Typeface = GetAppleFontRegular(ctx);
+            subTv.SetLineSpacing(Dp(ctx, 1.5f), 1.06f);
+            subTv.SetPadding(0, Dp(ctx, string.IsNullOrEmpty(title) ? 0f : 4f), 0, 0);
+            card.AddView(subTv);
+        }
+
+        if (!string.IsNullOrEmpty(ctaText)) {
+            Button ctaBtn = new(ctx) {
+                Text = ctaText,
+                TextSize = 12.2f
+            };
+            ctaBtn.SetAllCaps(false);
+            ctaBtn.SetSingleLine(true);
+            ctaBtn.Ellipsize = TextUtils.TruncateAt.End;
+            ctaBtn.SetIncludeFontPadding(false);
+            ctaBtn.SetTextColor(TextPrimary);
+            ctaBtn.Typeface = GetAppleFontBold(ctx);
+            ctaBtn.SetMinimumHeight(Dp(ctx, 38f));
+            ctaBtn.SetPadding(Dp(ctx, 16f), Dp(ctx, 7f), Dp(ctx, 16f), Dp(ctx, 7f));
+            ctaBtn.Background = CreateRippleRoundedDrawable(ctx, Primary, PillCornerDp);
+            AttachRecoil(ctaBtn, 0.96f);
+            ctaBtn.Click += (_, _) => onCta?.Invoke();
+            card.AddView(ctaBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
+                TopMargin = Dp(ctx, 10f)
+            });
+        }
+
+        return card;
+    }
+
+    /// <summary>
+    /// Creates a One UI 9 6-Category Settings Hub tile with squircle vector icon badge, bold title,
+    /// live ellipsized status subtitle, and drill-down chevron.
+    /// </summary>
+    public static LinearLayout CreateCategoryHubTile(
+        Context ctx,
+        Views.OneUiIconType icon,
+        Color iconColor,
+        string title,
+        string liveSubtitle,
+        Action onClick,
+        out TextView subtitleView) {
+        LinearLayout tile = new(ctx) {
+            Orientation = Android.Widget.Orientation.Horizontal,
+            BaselineAligned = false
+        };
+        tile.SetGravity(GravityFlags.CenterVertical);
+        tile.SetMinimumHeight(Dp(ctx, 68f));
+        tile.SetPadding(Dp(ctx, 14f), Dp(ctx, 12f), Dp(ctx, 14f), Dp(ctx, 12f));
+        tile.Background = CreateGlassCardDrawable(ctx, SurfaceCard, TileCornerDp);
+        AttachRecoil(tile, 0.97f);
+
+        Views.OneUiIconBadge badge = CreateVectorIconBadge(ctx, icon, iconColor, 38);
+        tile.AddView(badge, new LinearLayout.LayoutParams(Dp(ctx, 38f), Dp(ctx, 38f)) {
+            RightMargin = Dp(ctx, 12f)
+        });
+
+        LinearLayout textCol = new(ctx) {
+            Orientation = Android.Widget.Orientation.Vertical
+        };
+        TextView titleTv = new(ctx) {
+            Text = title ?? "",
+            TextSize = 14.5f
+        };
+        titleTv.SetTextColor(TextPrimary);
+        titleTv.Typeface = GetAppleFontBold(ctx);
+        titleTv.SetIncludeFontPadding(false);
+        titleTv.SetSingleLine(true);
+        titleTv.Ellipsize = TextUtils.TruncateAt.End;
+
+        subtitleView = new TextView(ctx) {
+            Text = liveSubtitle ?? "",
+            TextSize = 11.8f
+        };
+        subtitleView.SetTextColor(TextSub);
+        subtitleView.Typeface = GetAppleFontMedium(ctx);
+        subtitleView.SetIncludeFontPadding(false);
+        subtitleView.SetSingleLine(true);
+        subtitleView.Ellipsize = TextUtils.TruncateAt.End;
+        subtitleView.SetPadding(0, Dp(ctx, 2.5f), 0, 0);
+
+        textCol.AddView(titleTv);
+        textCol.AddView(subtitleView);
+        tile.AddView(textCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
+            RightMargin = Dp(ctx, 8f)
+        });
+
+        Views.OneUiIconView chevron = new(ctx, Views.OneUiIconType.ChevronRight, TextMuted);
+        tile.AddView(chevron, new LinearLayout.LayoutParams(Dp(ctx, 16f), Dp(ctx, 16f)));
+
+        tile.Click += (_, _) => onClick?.Invoke();
+        return tile;
+    }
 }
 
 /// <summary>
@@ -856,7 +1032,7 @@ public sealed class OneUiSeekBar : SeekBar {
     readonly Paint thumbHaloPaint = new(PaintFlags.AntiAlias);
     readonly Paint thumbBallPaint = new(PaintFlags.AntiAlias);
     readonly Paint thumbBallRimPaint = new(PaintFlags.AntiAlias);
-    readonly Paint labelPaint = new(PaintFlags.AntiAlias);
+    readonly TextPaint labelPaint = new(PaintFlags.AntiAlias);
     readonly Paint valuePaint = new(PaintFlags.AntiAlias);
     readonly Android.Graphics.Path clipPath = new();
 
@@ -927,7 +1103,7 @@ public sealed class OneUiSeekBar : SeekBar {
     }
 
     protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        int desiredH = OneUiTheme.Dp(Context, SlimVolumeMode ? 26f : 40f);
+        int desiredH = OneUiTheme.Dp(Context, SlimVolumeMode ? 26f : 44f);
         int w = MeasureSpec.GetSize(widthMeasureSpec);
         SetMeasuredDimension(ResolveSize(w, widthMeasureSpec), ResolveSize(desiredH, heightMeasureSpec));
     }
@@ -1048,10 +1224,11 @@ public sealed class OneUiSeekBar : SeekBar {
         float valW = valuePaint.MeasureText(valText);
 
         if (!string.IsNullOrEmpty(LabelText)) {
-            float maxLabelW = Math.Max(40f * dp, w - 34f * dp - valW);
+            float maxLabelW = Math.Max(28f * dp, w - 36f * dp - valW);
+            string ellipsized = TextUtils.Ellipsize(LabelText, labelPaint, maxLabelW, TextUtils.TruncateAt.End) ?? LabelText;
             canvas.Save();
-            canvas.ClipRect(12f * dp, 0f, 12f * dp + maxLabelW, h);
-            canvas.DrawText(LabelText, 14f * dp, textY, labelPaint);
+            canvas.ClipRect(12f * dp, 0f, 14f * dp + maxLabelW, h);
+            canvas.DrawText(ellipsized, 14f * dp, textY, labelPaint);
             canvas.Restore();
         }
         canvas.DrawText(valText, w - 14f * dp, textY, valuePaint);

@@ -3,6 +3,7 @@ using System.Numerics;
 using Android.Content;
 using Android.Graphics;
 using Android.OS;
+using Android.Text;
 using Android.Views;
 
 using Cavern.Channels;
@@ -86,8 +87,10 @@ public sealed class RoomSimulatorView : View {
     readonly Paint headWireBackPaint = new(PaintFlags.AntiAlias);
     readonly Paint capsuleTrackPaint = new(PaintFlags.AntiAlias);
     readonly Paint capsuleFillPaint = new(PaintFlags.AntiAlias);
-    readonly Paint textPaint = new(PaintFlags.AntiAlias);
-    readonly Paint subTextPaint = new(PaintFlags.AntiAlias);
+    readonly TextPaint textPaint = new(PaintFlags.AntiAlias);
+    readonly TextPaint subTextPaint = new(PaintFlags.AntiAlias);
+    readonly Android.Graphics.Path clipRoomPath = new();
+    readonly Android.Graphics.Path scratchPath = new();
     readonly Android.Graphics.Path ribbonSegPath = new();
     readonly List<(float x, float y, float persp, float fade)> projectedTrailPts = new(24);
 
@@ -138,6 +141,7 @@ public sealed class RoomSimulatorView : View {
     DateTime lastHeadTapTime = DateTime.MinValue;
     DateTime lastSourceTapTime = DateTime.MinValue;
     TrackSourceItem lastTappedSource;
+    bool lastTappedSourcePrevSolo;
 
     TouchDragMode dragMode = TouchDragMode.None;
     TrackSourceItem draggedSource;
@@ -313,8 +317,27 @@ public sealed class RoomSimulatorView : View {
     protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         float dp = Resources.DisplayMetrics.Density;
         int w = MeasureSpec.GetSize(widthMeasureSpec);
-        int desiredH = Math.Max((int)(w * 1.02f), (int)(386f * dp));
+        int desiredH = Math.Max((int)(w * 1.08f), (int)(414f * dp));
         SetMeasuredDimension(w, ResolveSize(desiredH, heightMeasureSpec));
+    }
+
+    static void DrawEllipsizedText(Canvas canvas, string text, float x, float y, float maxWidth, TextPaint paint) {
+        if (string.IsNullOrEmpty(text) || maxWidth <= 4f) {
+            return;
+        }
+        string clipped = TextUtils.Ellipsize(text, paint, maxWidth, TextUtils.TruncateAt.End) ?? text;
+        canvas.DrawText(clipped, x, y, paint);
+    }
+
+    static bool HitTestExpanded44Dp(RectF rect, float tx, float ty, float dp, float maxPadX = 6f, float maxPadY = 9f) {
+        if (rect.Width() <= 0f || rect.Height() <= 0f) {
+            return false;
+        }
+        float minPx = 44f * dp;
+        float padX = Math.Min(maxPadX * dp, Math.Max(0f, (minPx - rect.Width()) * 0.5f));
+        float padY = Math.Min(maxPadY * dp, Math.Max(0f, (minPx - rect.Height()) * 0.5f));
+        return tx >= rect.Left - padX && tx <= rect.Right + padX &&
+               ty >= rect.Top - padY && ty <= rect.Bottom + padY;
     }
 
     protected override void OnDraw(Canvas canvas) {
@@ -324,6 +347,11 @@ public sealed class RoomSimulatorView : View {
         float w = Width - outerPad * 2f;
         float h = Height - outerPad * 2f;
         if (w <= 0 || h <= 0) return;
+
+        dockBgPaint.Color = Color.Argb(212, OneUiTheme.SurfaceElevated.R, OneUiTheme.SurfaceElevated.G, OneUiTheme.SurfaceElevated.B);
+        roomBorderPaint.Color = OneUiTheme.Divider;
+        pillActivePaint.Color = OneUiTheme.Primary;
+        screenPaint.Color = OneUiTheme.Primary;
 
         long nowMs = SystemClock.UptimeMillis();
         if (lastFrameMs == 0) lastFrameMs = nowMs;
@@ -343,84 +371,51 @@ public sealed class RoomSimulatorView : View {
             }
         }
 
-        // Zone 1: Clean Top Camera Bar ([Zoom %] ... [Labels] [- / +] [3D] [Topo] [Frente])
+        AndroidStrings str = AndroidStrings.Active;
+
+        // Zone 1: Two-Row Top Control Bar (prevents 320dp overflow on 360dp phones; all pills fit inside ~292dp card width)
+        // Row 1: [Zoom %] [- / +] ... [3D] [Top] [Front]
         float topBarH = 26f * dp;
-        float topY = outerPad;
-        float presetW = 42f * dp;
+        float row1Y = outerPad;
+        float presetW = 44f * dp;
         float presetGap = 4f * dp;
-        float zoomBtnSz = 24f * dp;
+        float zoomBtnSz = 26f * dp;
         float presetsTotalW = presetW * 3f + presetGap * 2f;
         float presetsStartX = outerPad + w - presetsTotalW;
 
-        float zInX = presetsStartX - 6f * dp - zoomBtnSz;
-        float zOutX = zInX - 4f * dp - zoomBtnSz;
-        float zTop = topY + (topBarH - zoomBtnSz) * 0.5f;
+        float zoomLabelW = 38f * dp;
+        camResetLabelRect = new RectF(outerPad, row1Y, outerPad + zoomLabelW, row1Y + topBarH);
+        float zOutX = camResetLabelRect.Right + 4f * dp;
+        float zInX = zOutX + zoomBtnSz + 4f * dp;
+        float zTop = row1Y + (topBarH - zoomBtnSz) * 0.5f;
         camZoomOutRect = new RectF(zOutX, zTop, zOutX + zoomBtnSz, zTop + zoomBtnSz);
         camZoomInRect = new RectF(zInX, zTop, zInX + zoomBtnSz, zTop + zoomBtnSz);
 
-        float lblBtnW = 42f * dp;
-        float lblBtnX = zOutX - 5f * dp - lblBtnW;
-        camLabelsBtnRect = new RectF(lblBtnX, topY, lblBtnX + lblBtnW, topY + topBarH);
+        // Row 2: [X-Ray] [Band (when active)] [Labels] ... [Legend summary]
+        float row2Y = row1Y + topBarH + 5f * dp;
+        float xrayBtnW = 52f * dp;
+        camXRayBtnRect = new RectF(outerPad, row2Y, outerPad + xrayBtnW, row2Y + topBarH);
 
-        float bandBtnW = IsXRayEnabled ? 30f * dp : 0f;
-        float bandGap = IsXRayEnabled ? 4f * dp : 0f;
-        float bandBtnX = lblBtnX - bandGap - bandBtnW;
-        camXRayBandBtnRect = IsXRayEnabled
-            ? new RectF(bandBtnX, topY, bandBtnX + bandBtnW, topY + topBarH)
-            : new RectF(0, 0, 0, 0);
+        float nextChipX = camXRayBtnRect.Right + 5f * dp;
+        if (IsXRayEnabled) {
+            float bandBtnW = 42f * dp;
+            camXRayBandBtnRect = new RectF(nextChipX, row2Y, nextChipX + bandBtnW, row2Y + topBarH);
+            nextChipX = camXRayBandBtnRect.Right + 5f * dp;
+        } else {
+            camXRayBandBtnRect = new RectF(0, 0, 0, 0);
+        }
 
-        float xrayBtnW = 42f * dp;
-        float xrayBtnX = (IsXRayEnabled ? bandBtnX : lblBtnX) - 5f * dp - xrayBtnW;
-        camXRayBtnRect = new RectF(xrayBtnX, topY, xrayBtnX + xrayBtnW, topY + topBarH);
-        camResetLabelRect = new RectF(outerPad, topY, Math.Max(outerPad + 28f * dp, camXRayBtnRect.Left - 4f * dp), topY + topBarH);
+        float lblBtnW = 54f * dp;
+        camLabelsBtnRect = new RectF(nextChipX, row2Y, nextChipX + lblBtnW, row2Y + topBarH);
 
         subTextPaint.TextAlign = Paint.Align.Left;
-        subTextPaint.TextSize = 9.6f * dp;
+        subTextPaint.TextSize = 9.8f * dp;
         subTextPaint.Color = OneUiTheme.TextMuted;
         canvas.DrawText(
             $"{Math.Round(roomZoom * 100)}%",
             outerPad + 4f * dp,
-            topY + topBarH * 0.5f - (subTextPaint.Ascent() + subTextPaint.Descent()) * 0.5f,
+            row1Y + topBarH * 0.5f - (subTextPaint.Ascent() + subTextPaint.Descent()) * 0.5f,
             subTextPaint);
-
-        canvas.DrawRoundRect(camXRayBtnRect, topBarH * 0.5f, topBarH * 0.5f, IsXRayEnabled ? pillActivePaint : pillInactivePaint);
-        textPaint.TextAlign = Paint.Align.Center;
-        textPaint.TextSize = 8.9f * dp;
-        textPaint.Color = IsXRayEnabled ? OneUiTheme.TextPrimary : OneUiTheme.TextSub;
-        canvas.DrawText("X-Ray", camXRayBtnRect.CenterX(),
-            camXRayBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
-
-        if (IsXRayEnabled) {
-            canvas.DrawRoundRect(camXRayBandBtnRect, topBarH * 0.5f, topBarH * 0.5f, pillInactivePaint);
-            textPaint.TextSize = 8.8f * dp;
-            textPaint.Color = XRayBandMode switch {
-                SpatialXRayBandMode.LowOnly => Color.Rgb(255, 166, 76),
-                SpatialXRayBandMode.MidOnly => Color.Rgb(64, 224, 168),
-                SpatialXRayBandMode.HighOnly => Color.Rgb(158, 178, 255),
-                _ => OneUiTheme.PrimaryHigh
-            };
-            string bTag = XRayBandMode switch {
-                SpatialXRayBandMode.LowOnly => "L",
-                SpatialXRayBandMode.MidOnly => "M",
-                SpatialXRayBandMode.HighOnly => "H",
-                _ => "All"
-            };
-            canvas.DrawText(bTag, camXRayBandBtnRect.CenterX(),
-                camXRayBandBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
-        }
-
-        canvas.DrawRoundRect(camLabelsBtnRect, topBarH * 0.5f, topBarH * 0.5f, pillInactivePaint);
-        textPaint.TextAlign = Paint.Align.Center;
-        textPaint.TextSize = 8.9f * dp;
-        textPaint.Color = labelMode == LabelVisibilityMode.All ? OneUiTheme.PrimaryHigh : OneUiTheme.TextSub;
-        AndroidStrings str = AndroidStrings.Active;
-        string lblTag = labelMode switch {
-            LabelVisibilityMode.All => str["RoomLabelAll"],
-            LabelVisibilityMode.Minimal => str["RoomLabelMin"],
-            _ => str["RoomLabelActive"]
-        };
-        canvas.DrawText(lblTag, camLabelsBtnRect.CenterX(),
-            camLabelsBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
 
         canvas.DrawOval(camZoomOutRect, dragMode == TouchDragMode.ZoomOutClick ? pillActivePaint : pillInactivePaint);
         canvas.DrawOval(camZoomInRect, dragMode == TouchDragMode.ZoomInClick ? pillActivePaint : pillInactivePaint);
@@ -432,13 +427,13 @@ public sealed class RoomSimulatorView : View {
         canvas.DrawLine(camZoomInRect.CenterX(), camZoomInRect.CenterY() - arm, camZoomInRect.CenterX(), camZoomInRect.CenterY() + arm, strokePaint);
 
         (string label, float py, float pp)[] presets = [
-            ("3D", -24f, 28f),
+            (str["RoomCam3D"], -24f, 28f),
             (str["RoomCamTop"], 0f, 84f),
             (str["RoomCamFront"], 0f, 10f)
         ];
         for (int i = 0; i < 3; i++) {
             float px = presetsStartX + i * (presetW + presetGap);
-            camPresetRects[i] = new RectF(px, topY, px + presetW, topY + topBarH);
+            camPresetRects[i] = new RectF(px, row1Y, px + presetW, row1Y + topBarH);
             bool isClose = MathF.Abs(NormalizeDeg(camYawDeg - presets[i].py)) < 8f
                 && MathF.Abs(camPitchDeg - presets[i].pp) < 8f;
             canvas.DrawRoundRect(camPresetRects[i], topBarH * 0.5f, topBarH * 0.5f, isClose ? pillActivePaint : pillInactivePaint);
@@ -446,8 +441,61 @@ public sealed class RoomSimulatorView : View {
             textPaint.TextAlign = Paint.Align.Center;
             textPaint.TextSize = 9.4f * dp;
             textPaint.Color = isClose ? OneUiTheme.TextPrimary : OneUiTheme.TextSub;
-            canvas.DrawText(presets[i].label, camPresetRects[i].CenterX(),
-                camPresetRects[i].CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
+            DrawEllipsizedText(canvas, presets[i].label, camPresetRects[i].CenterX(),
+                camPresetRects[i].CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f,
+                presetW - 6f * dp, textPaint);
+        }
+
+        // Draw Row 2 chips: X-Ray + Band + Labels + right-aligned legend summary
+        canvas.DrawRoundRect(camXRayBtnRect, topBarH * 0.5f, topBarH * 0.5f, IsXRayEnabled ? pillActivePaint : pillInactivePaint);
+        textPaint.TextAlign = Paint.Align.Center;
+        textPaint.TextSize = 8.9f * dp;
+        textPaint.Color = IsXRayEnabled ? OneUiTheme.TextPrimary : OneUiTheme.TextSub;
+        DrawEllipsizedText(canvas, str["RoomXRayBtn"], camXRayBtnRect.CenterX(),
+            camXRayBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f,
+            xrayBtnW - 6f * dp, textPaint);
+
+        if (IsXRayEnabled) {
+            canvas.DrawRoundRect(camXRayBandBtnRect, topBarH * 0.5f, topBarH * 0.5f, pillInactivePaint);
+            textPaint.TextSize = 8.8f * dp;
+            textPaint.Color = XRayBandMode switch {
+                SpatialXRayBandMode.LowOnly => Color.Rgb(255, 166, 76),
+                SpatialXRayBandMode.MidOnly => Color.Rgb(64, 224, 168),
+                SpatialXRayBandMode.HighOnly => Color.Rgb(158, 178, 255),
+                _ => OneUiTheme.PrimaryHigh
+            };
+            string bTag = XRayBandMode switch {
+                SpatialXRayBandMode.LowOnly => str["RoomXRayBandLowShort"],
+                SpatialXRayBandMode.MidOnly => str["RoomXRayBandMidShort"],
+                SpatialXRayBandMode.HighOnly => str["RoomXRayBandHighShort"],
+                _ => str["XRayBandAll"]
+            };
+            DrawEllipsizedText(canvas, bTag, camXRayBandBtnRect.CenterX(),
+                camXRayBandBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f,
+                camXRayBandBtnRect.Width() - 6f * dp, textPaint);
+        }
+
+        canvas.DrawRoundRect(camLabelsBtnRect, topBarH * 0.5f, topBarH * 0.5f, pillInactivePaint);
+        textPaint.TextAlign = Paint.Align.Center;
+        textPaint.TextSize = 8.9f * dp;
+        textPaint.Color = labelMode == LabelVisibilityMode.All ? OneUiTheme.PrimaryHigh : OneUiTheme.TextSub;
+        string lblTag = labelMode switch {
+            LabelVisibilityMode.All => str["RoomLabelAll"],
+            LabelVisibilityMode.Minimal => str["RoomLabelMin"],
+            _ => str["RoomLabelActive"]
+        };
+        DrawEllipsizedText(canvas, lblTag, camLabelsBtnRect.CenterX(),
+            camLabelsBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f,
+            lblBtnW - 6f * dp, textPaint);
+
+        float legendAvailW = outerPad + w - camLabelsBtnRect.Right - 8f * dp;
+        if (legendAvailW >= 44f * dp) {
+            subTextPaint.TextAlign = Paint.Align.Right;
+            subTextPaint.TextSize = 8.2f * dp;
+            subTextPaint.Color = OneUiTheme.TextMuted;
+            DrawEllipsizedText(canvas, str["RoomLegendSummary"], outerPad + w - 2f * dp,
+                row2Y + topBarH * 0.5f - (subTextPaint.Ascent() + subTextPaint.Descent()) * 0.5f,
+                legendAvailW, subTextPaint);
         }
 
         // Zone 3: Dedicated Frosted Control Dock OUTSIDE the 3D room (Left: 3D Head Trackball | Right: Vertical Height Y Capsule)
@@ -459,7 +507,7 @@ public sealed class RoomSimulatorView : View {
         dockHeightRect = new RectF(outerPad + headDockW + dockGap, dockTop, outerPad + w, dockTop + dockH);
 
         // Zone 2: Unobstructed 3D Viewport above the dock
-        float roomTop = topY + topBarH + 8f * dp;
+        float roomTop = row2Y + topBarH + 7f * dp;
         float roomBottom = dockTop - dockGap;
         roomCanvasRect = new RectF(outerPad, roomTop, outerPad + w, Math.Max(roomTop + 170f * dp, roomBottom));
 
@@ -553,9 +601,9 @@ public sealed class RoomSimulatorView : View {
         canvas.DrawRoundRect(r, corner, corner, roomBorderPaint);
 
         canvas.Save();
-        Android.Graphics.Path clipRoom = new();
-        clipRoom.AddRoundRect(r, corner, corner, Android.Graphics.Path.Direction.Cw);
-        canvas.ClipPath(clipRoom);
+        clipRoomPath.Reset();
+        clipRoomPath.AddRoundRect(r, corner, corner, Android.Graphics.Path.Direction.Cw);
+        canvas.ClipPath(clipRoomPath);
 
         var fl_bl = ProjectOrbit3D(r, -1f, -1f, -1f, camYawRad, camPitchRad);
         var fl_br = ProjectOrbit3D(r, 1f, -1f, -1f, camYawRad, camPitchRad);
@@ -575,29 +623,28 @@ public sealed class RoomSimulatorView : View {
             int alpha) {
             float avgDepth = (a.depth + b.depth + c.depth + d.depth) * 0.25f;
             if (avgDepth < -0.15f) return;
-            using Android.Graphics.Path wp = new();
-            wp.MoveTo(a.sx, a.sy);
-            wp.LineTo(b.sx, b.sy);
-            wp.LineTo(c.sx, c.sy);
-            wp.LineTo(d.sx, d.sy);
-            wp.Close();
+            scratchPath.Reset();
+            scratchPath.MoveTo(a.sx, a.sy);
+            scratchPath.LineTo(b.sx, b.sy);
+            scratchPath.LineTo(c.sx, c.sy);
+            scratchPath.LineTo(d.sx, d.sy);
+            scratchPath.Close();
             wallShadePaint.Color = Color.Argb(alpha, 150, 178, 235);
-            canvas.DrawPath(wp, wallShadePaint);
+            canvas.DrawPath(scratchPath, wallShadePaint);
         }
         DrawWallQuad(fl_bl, fl_br, ce_br, ce_bl, 12);
         DrawWallQuad(fl_fl, fl_bl, ce_bl, ce_fl, 9);
         DrawWallQuad(fl_br, fl_fr, ce_fr, ce_br, 9);
         DrawWallQuad(fl_fl, fl_fr, ce_fr, ce_fl, 14);
 
-        using (Android.Graphics.Path floorPath = new()) {
-            floorPath.MoveTo(fl_bl.sx, fl_bl.sy);
-            floorPath.LineTo(fl_br.sx, fl_br.sy);
-            floorPath.LineTo(fl_fr.sx, fl_fr.sy);
-            floorPath.LineTo(fl_fl.sx, fl_fl.sy);
-            floorPath.Close();
-            canvas.DrawPath(floorPath, floorQuadPaint);
-            canvas.DrawPath(floorPath, gridPaint);
-        }
+        scratchPath.Reset();
+        scratchPath.MoveTo(fl_bl.sx, fl_bl.sy);
+        scratchPath.LineTo(fl_br.sx, fl_br.sy);
+        scratchPath.LineTo(fl_fr.sx, fl_fr.sy);
+        scratchPath.LineTo(fl_fl.sx, fl_fl.sy);
+        scratchPath.Close();
+        canvas.DrawPath(scratchPath, floorQuadPaint);
+        canvas.DrawPath(scratchPath, gridPaint);
 
         for (int g = -1; g <= 1; g++) {
             float t = g * 0.5f;
@@ -616,23 +663,21 @@ public sealed class RoomSimulatorView : View {
         var ear_br = ProjectOrbit3D(r, 1f, 0f, -1f, camYawRad, camPitchRad);
         var ear_fr = ProjectOrbit3D(r, 1f, 0f, 1f, camYawRad, camPitchRad);
         var ear_fl = ProjectOrbit3D(r, -1f, 0f, 1f, camYawRad, camPitchRad);
-        using (Android.Graphics.Path earPath = new()) {
-            earPath.MoveTo(ear_bl.sx, ear_bl.sy);
-            earPath.LineTo(ear_br.sx, ear_br.sy);
-            earPath.LineTo(ear_fr.sx, ear_fr.sy);
-            earPath.LineTo(ear_fl.sx, ear_fl.sy);
-            earPath.Close();
-            canvas.DrawPath(earPath, horizonRingPaint);
-        }
+        scratchPath.Reset();
+        scratchPath.MoveTo(ear_bl.sx, ear_bl.sy);
+        scratchPath.LineTo(ear_br.sx, ear_br.sy);
+        scratchPath.LineTo(ear_fr.sx, ear_fr.sy);
+        scratchPath.LineTo(ear_fl.sx, ear_fl.sy);
+        scratchPath.Close();
+        canvas.DrawPath(scratchPath, horizonRingPaint);
 
-        using (Android.Graphics.Path ceilPath = new()) {
-            ceilPath.MoveTo(ce_bl.sx, ce_bl.sy);
-            ceilPath.LineTo(ce_br.sx, ce_br.sy);
-            ceilPath.LineTo(ce_fr.sx, ce_fr.sy);
-            ceilPath.LineTo(ce_fl.sx, ce_fl.sy);
-            ceilPath.Close();
-            canvas.DrawPath(ceilPath, ceilingWirePaint);
-        }
+        scratchPath.Reset();
+        scratchPath.MoveTo(ce_bl.sx, ce_bl.sy);
+        scratchPath.LineTo(ce_br.sx, ce_br.sy);
+        scratchPath.LineTo(ce_fr.sx, ce_fr.sy);
+        scratchPath.LineTo(ce_fl.sx, ce_fl.sy);
+        scratchPath.Close();
+        canvas.DrawPath(scratchPath, ceilingWirePaint);
         canvas.DrawLine(fl_bl.sx, fl_bl.sy, ce_bl.sx, ce_bl.sy, gridPaint);
         canvas.DrawLine(fl_br.sx, fl_br.sy, ce_br.sx, ce_br.sy, gridPaint);
         canvas.DrawLine(fl_fr.sx, fl_fr.sy, ce_fr.sx, ce_fr.sy, gridPaint);
@@ -642,22 +687,21 @@ public sealed class RoomSimulatorView : View {
         var scrR = ProjectOrbit3D(r, 0.58f, 0.16f, 1f, camYawRad, camPitchRad);
         var scrBotL = ProjectOrbit3D(r, -0.46f, -1f, 0.98f, camYawRad, camPitchRad);
         var scrBotR = ProjectOrbit3D(r, 0.46f, -1f, 0.98f, camYawRad, camPitchRad);
-        using (Android.Graphics.Path washPath = new()) {
-            washPath.MoveTo(scrL.sx, scrL.sy);
-            washPath.LineTo(scrR.sx, scrR.sy);
-            washPath.LineTo(scrBotR.sx, scrBotR.sy);
-            washPath.LineTo(scrBotL.sx, scrBotL.sy);
-            washPath.Close();
-            wallShadePaint.Color = Color.Argb(20, OneUiTheme.Primary.R, OneUiTheme.Primary.G, OneUiTheme.Primary.B);
-            canvas.DrawPath(washPath, wallShadePaint);
-        }
+        scratchPath.Reset();
+        scratchPath.MoveTo(scrL.sx, scrL.sy);
+        scratchPath.LineTo(scrR.sx, scrR.sy);
+        scratchPath.LineTo(scrBotR.sx, scrBotR.sy);
+        scratchPath.LineTo(scrBotL.sx, scrBotL.sy);
+        scratchPath.Close();
+        wallShadePaint.Color = Color.Argb(20, OneUiTheme.Primary.R, OneUiTheme.Primary.G, OneUiTheme.Primary.B);
+        canvas.DrawPath(scratchPath, wallShadePaint);
         screenPaint.Color = OneUiTheme.Primary;
         canvas.DrawLine(scrL.sx, scrL.sy, scrR.sx, scrR.sy, screenPaint);
         var scrMid = ProjectOrbit3D(r, 0f, 0.30f, 1.02f, camYawRad, camPitchRad);
         subTextPaint.TextAlign = Paint.Align.Center;
         subTextPaint.TextSize = 8.2f * dp;
         subTextPaint.Color = OneUiTheme.PrimaryHigh;
-        canvas.DrawText("TELA / FRONT", scrMid.sx, scrMid.sy - 2f * dp, subTextPaint);
+        canvas.DrawText(AndroidStrings.Active["RoomScreenFront"], scrMid.sx, scrMid.sy - 2f * dp, subTextPaint);
 
         bool anyInterpolating = false;
         List<(bool isListener, TrackSourceItem item, int objNumber, Vector3 np, float rms, float visAlpha, SmoothedSourceState state, float depth)> renderQueue = new(sources.Count + 1);
@@ -972,14 +1016,15 @@ public sealed class RoomSimulatorView : View {
 
                 bool showTag = labelMode == LabelVisibilityMode.All || item.HasCustomPosition || (IsXRayEnabled && (entry.rms > 0.05f || item.IsSolo));
                 if (showTag) {
+                    AndroidStrings str = AndroidStrings.Active;
                     string baseTag = item.Layer switch {
-                        SourceLayer.LiveMicrophone => "MIC",
-                        SourceLayer.NeuralStem => $"S{entry.objNumber}",
-                        SourceLayer.RestoredResidual => $"R{entry.objNumber}",
-                        _ => $"O{entry.objNumber}"
+                        SourceLayer.LiveMicrophone => str["RoomTagMic"],
+                        SourceLayer.NeuralStem => string.Format(str["RoomTagStemFmt"], entry.objNumber),
+                        SourceLayer.RestoredResidual => string.Format(str["RoomTagResidualFmt"], entry.objNumber),
+                        _ => string.Format(str["RoomTagObjectFmt"], entry.objNumber)
                     };
                     string delaySuffix = (IsXRayEnabled || item.HasCustomPosition || ReferenceEquals(draggedSource, item)) && item.PropagationDelayMs > 0.05f
-                        ? $" {item.PropagationDelayMs:0.0}ms"
+                        ? " " + string.Format(str["RoomDelayMsFmt"], item.PropagationDelayMs)
                         : string.Empty;
                     textPaint.TextAlign = Paint.Align.Center;
                     textPaint.TextSize = 8.0f * dp;
@@ -1029,19 +1074,19 @@ public sealed class RoomSimulatorView : View {
         var fovU = ProjVec(lookU, coneReach * 0.92f);
         var fovD = ProjVec(lookD, coneReach * 0.92f);
 
-        using (Android.Graphics.Path cone = new()) {
-            cone.MoveTo(lPos.sx, lPos.sy);
-            cone.LineTo(fovL.sx, fovL.sy);
-            cone.LineTo(fovU.sx, fovU.sy);
-            cone.LineTo(fovR.sx, fovR.sy);
-            cone.LineTo(fovD.sx, fovD.sy);
-            cone.Close();
-            using LinearGradient coneGrad = new(
-                lPos.sx, lPos.sy, fovC.sx, fovC.sy,
-                [Color.Argb(105, OneUiTheme.PrimaryHigh.R, OneUiTheme.PrimaryHigh.G, OneUiTheme.PrimaryHigh.B).ToArgb(), Color.Transparent.ToArgb()],
-                [0f, 1f], Shader.TileMode.Clamp);
+        scratchPath.Reset();
+        scratchPath.MoveTo(lPos.sx, lPos.sy);
+        scratchPath.LineTo(fovL.sx, fovL.sy);
+        scratchPath.LineTo(fovU.sx, fovU.sy);
+        scratchPath.LineTo(fovR.sx, fovR.sy);
+        scratchPath.LineTo(fovD.sx, fovD.sy);
+        scratchPath.Close();
+        using (LinearGradient coneGrad = new(
+            lPos.sx, lPos.sy, fovC.sx, fovC.sy,
+            [Color.Argb(105, OneUiTheme.PrimaryHigh.R, OneUiTheme.PrimaryHigh.G, OneUiTheme.PrimaryHigh.B).ToArgb(), Color.Transparent.ToArgb()],
+            [0f, 1f], Shader.TileMode.Clamp)) {
             listenerConePaint.SetShader(coneGrad);
-            canvas.DrawPath(cone, listenerConePaint);
+            canvas.DrawPath(scratchPath, listenerConePaint);
             listenerConePaint.SetShader(null);
         }
 
@@ -1148,29 +1193,37 @@ public sealed class RoomSimulatorView : View {
 
         AndroidStrings str = AndroidStrings.Active;
         float textLeft = sphereCx + sphereR + 13f * dp;
+        float maxTextW = Math.Max(24f * dp, r.Right - textLeft - 8f * dp);
+
+        canvas.Save();
+        canvas.ClipRect(r.Left + 4f * dp, r.Top + 4f * dp, r.Right - 4f * dp, r.Bottom - 4f * dp);
+
         textPaint.TextAlign = Paint.Align.Left;
         textPaint.TextSize = 11.5f * dp;
         textPaint.Color = OneUiTheme.TextPrimary;
-        canvas.DrawText(str["RoomHead3DTitle"], textLeft, r.Top + 25f * dp, textPaint);
+        DrawEllipsizedText(canvas, str["RoomHead3DTitle"], textLeft, r.Top + 25f * dp, maxTextW, textPaint);
 
         subTextPaint.TextAlign = Paint.Align.Left;
-        subTextPaint.TextSize = 9.8f * dp;
+        subTextPaint.TextSize = 9.6f * dp;
         subTextPaint.Color = OneUiTheme.PrimaryHigh;
-        canvas.DrawText(string.Format(str["RoomHeadAnglesFmt"], listenerRotation.Y, listenerRotation.X), textLeft, r.Top + 44f * dp, subTextPaint);
+        DrawEllipsizedText(canvas, string.Format(str["RoomHeadAnglesFmt"], listenerRotation.Y, listenerRotation.X), textLeft, r.Top + 44f * dp, maxTextW, subTextPaint);
 
         subTextPaint.TextSize = 8.4f * dp;
         subTextPaint.Color = OneUiTheme.TextMuted;
-        canvas.DrawText(str["RoomHeadDragHint"], textLeft, r.Top + 59f * dp, subTextPaint);
+        DrawEllipsizedText(canvas, str["RoomHeadDragHint"], textLeft, r.Top + 59f * dp, maxTextW, subTextPaint);
 
-        float rstW = Math.Max(46f * dp, r.Right - textLeft - 14f * dp);
+        float rstW = Math.Max(46f * dp, r.Right - textLeft - 12f * dp);
         float rstH = 22f * dp;
-        dockHeadResetRect = new RectF(textLeft, r.Bottom - rstH - 10f * dp, textLeft + Math.Min(64f * dp, rstW), r.Bottom - 10f * dp);
+        dockHeadResetRect = new RectF(textLeft, r.Bottom - rstH - 10f * dp, textLeft + Math.Min(68f * dp, rstW), r.Bottom - 10f * dp);
         canvas.DrawRoundRect(dockHeadResetRect, rstH * 0.5f, rstH * 0.5f, pillInactivePaint);
         textPaint.TextAlign = Paint.Align.Center;
         textPaint.TextSize = 9.2f * dp;
         textPaint.Color = OneUiTheme.TextSecondary;
-        canvas.DrawText(str["RoomResetBtn"], dockHeadResetRect.CenterX(),
-            dockHeadResetRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
+        DrawEllipsizedText(canvas, str["RoomResetBtn"], dockHeadResetRect.CenterX(),
+            dockHeadResetRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f,
+            dockHeadResetRect.Width() - 8f * dp, textPaint);
+
+        canvas.Restore();
     }
 
     /// <summary>
@@ -1206,9 +1259,9 @@ public sealed class RoomSimulatorView : View {
         float fillBot = Math.Max(midY, fillEdgeY);
         if (fillBot - fillTop >= 2f * dp) {
             canvas.Save();
-            using Android.Graphics.Path capClip = new();
-            capClip.AddRoundRect(dockHeightCapsuleRect, capRad, capRad, Android.Graphics.Path.Direction.Cw);
-            canvas.ClipPath(capClip);
+            scratchPath.Reset();
+            scratchPath.AddRoundRect(dockHeightCapsuleRect, capRad, capRad, Android.Graphics.Path.Direction.Cw);
+            canvas.ClipPath(scratchPath);
             canvas.DrawRoundRect(new RectF(capLeft, fillTop, capRight, fillBot), capRad * 0.6f, capRad * 0.6f, capsuleFillPaint);
             canvas.Restore();
         }
@@ -1225,34 +1278,47 @@ public sealed class RoomSimulatorView : View {
             canvas.DrawCircle(dockHeightCapsuleRect.CenterX(), fillEdgeY, capW * 0.44f, fillPaint);
         }
 
-        // Left info column
+        // Left info column with bounds clipping & ellipsize
         AndroidStrings str = AndroidStrings.Active;
         float infoLeft = r.Left + 12f * dp;
+        float maxInfoW = Math.Max(20f * dp, capLeft - infoLeft - 6f * dp);
+
+        canvas.Save();
+        canvas.ClipRect(r.Left + 4f * dp, r.Top + 4f * dp, capLeft - 2f * dp, r.Bottom - 4f * dp);
+
         textPaint.TextAlign = Paint.Align.Left;
         textPaint.TextSize = 11f * dp;
         textPaint.Color = OneUiTheme.TextPrimary;
-        canvas.DrawText(str["RoomHeightTitle"], infoLeft, r.Top + 25f * dp, textPaint);
+        DrawEllipsizedText(canvas, str["RoomHeightTitle"], infoLeft, r.Top + 25f * dp, maxInfoW, textPaint);
 
         float meters = lny * environmentSize.Y;
         subTextPaint.TextAlign = Paint.Align.Left;
         subTextPaint.TextSize = 10.5f * dp;
         subTextPaint.Color = IsPositionLocked ? OneUiTheme.TextMuted : accent;
-        canvas.DrawText(MathF.Abs(meters) < 0.05f ? "0.0m" : $"{meters:+0.0;-0.0}m", infoLeft, r.Top + 44f * dp, subTextPaint);
+        string metersStr = MathF.Abs(meters) < 0.05f
+            ? str["RoomHeightZeroMeters"]
+            : string.Format(str["RoomHeightMetersFmt"], meters);
+        DrawEllipsizedText(canvas, metersStr, infoLeft, r.Top + 44f * dp, maxInfoW, subTextPaint);
 
         subTextPaint.TextSize = 8.2f * dp;
         subTextPaint.Color = OneUiTheme.TextMuted;
-        canvas.DrawText(IsPositionLocked ? str["RoomHeightLocked"] : (meters > 0.1f ? str["RoomHeightCeiling"] : (meters < -0.1f ? str["RoomHeightFloor"] : str["RoomHeightEar"])),
-            infoLeft, r.Top + 59f * dp, subTextPaint);
+        string heightStateStr = IsPositionLocked
+            ? str["RoomHeightLocked"]
+            : (meters > 0.1f ? str["RoomHeightCeiling"] : (meters < -0.1f ? str["RoomHeightFloor"] : str["RoomHeightEar"]));
+        DrawEllipsizedText(canvas, heightStateStr, infoLeft, r.Top + 59f * dp, maxInfoW, subTextPaint);
 
-        float rstW = Math.Max(36f * dp, capLeft - infoLeft - 8f * dp);
+        float rstW = Math.Max(38f * dp, capLeft - infoLeft - 8f * dp);
         float rstH = 22f * dp;
-        dockHeightResetRect = new RectF(infoLeft, r.Bottom - rstH - 10f * dp, infoLeft + Math.Min(48f * dp, rstW), r.Bottom - 10f * dp);
+        dockHeightResetRect = new RectF(infoLeft, r.Bottom - rstH - 10f * dp, infoLeft + Math.Min(50f * dp, rstW), r.Bottom - 10f * dp);
         canvas.DrawRoundRect(dockHeightResetRect, rstH * 0.5f, rstH * 0.5f, pillInactivePaint);
         textPaint.TextAlign = Paint.Align.Center;
         textPaint.TextSize = 9.0f * dp;
         textPaint.Color = OneUiTheme.TextSecondary;
-        canvas.DrawText("0m", dockHeightResetRect.CenterX(),
-            dockHeightResetRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f, textPaint);
+        DrawEllipsizedText(canvas, str["RoomHeightZeroBtn"], dockHeightResetRect.CenterX(),
+            dockHeightResetRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f,
+            dockHeightResetRect.Width() - 6f * dp, textPaint);
+
+        canvas.Restore();
     }
 
     void DrawProjectedRing(
@@ -1260,15 +1326,15 @@ public sealed class RoomSimulatorView : View {
         float camYawRad, float camPitchRad, Paint paint) {
         const int segs = 28;
         var p0 = ProjectOrbit3D(r, cx + radNorm, cy, cz, camYawRad, camPitchRad);
-        using Android.Graphics.Path ringPath = new();
-        ringPath.MoveTo(p0.sx, p0.sy);
+        scratchPath.Reset();
+        scratchPath.MoveTo(p0.sx, p0.sy);
         for (int i = 1; i <= segs; i++) {
             float a = i / (float)segs * MathF.PI * 2f;
             var pi = ProjectOrbit3D(r, cx + MathF.Cos(a) * radNorm, cy, cz + MathF.Sin(a) * radNorm, camYawRad, camPitchRad);
-            ringPath.LineTo(pi.sx, pi.sy);
+            scratchPath.LineTo(pi.sx, pi.sy);
         }
-        ringPath.Close();
-        canvas.DrawPath(ringPath, paint);
+        scratchPath.Close();
+        canvas.DrawPath(scratchPath, paint);
     }
 
     void DrawSpatialXRaySphericalOverlay(
@@ -1376,6 +1442,7 @@ public sealed class RoomSimulatorView : View {
                 maxMoveDist = 0f;
                 pressedPresetIdx = -1;
 
+                // Exact hit test first, then 44dp hit-slop expansion for compact top-bar pills
                 for (int i = 0; i < 3; i++) {
                     if (camPresetRects[i].Contains(tx, ty)) {
                         pressedPresetIdx = i;
@@ -1383,7 +1450,6 @@ public sealed class RoomSimulatorView : View {
                         return true;
                     }
                 }
-
                 if (camXRayBtnRect.Contains(tx, ty)) {
                     dragMode = TouchDragMode.XRayClick;
                     return true;
@@ -1411,6 +1477,43 @@ public sealed class RoomSimulatorView : View {
                     return true;
                 }
 
+                // Expanded >=44dp touch hit-slop fallback for top-bar pills when outside roomCanvasRect
+                if (!roomCanvasRect.Contains(tx, ty) && !dockHeadRect.Contains(tx, ty) && !dockHeightRect.Contains(tx, ty)) {
+                    for (int i = 0; i < 3; i++) {
+                        if (HitTestExpanded44Dp(camPresetRects[i], tx, ty, dp, maxPadX: 2f, maxPadY: 8f)) {
+                            pressedPresetIdx = i;
+                            dragMode = TouchDragMode.PresetClick;
+                            return true;
+                        }
+                    }
+                    if (HitTestExpanded44Dp(camZoomOutRect, tx, ty, dp, maxPadX: 2f, maxPadY: 8f)) {
+                        dragMode = TouchDragMode.ZoomOutClick;
+                        Invalidate();
+                        return true;
+                    }
+                    if (HitTestExpanded44Dp(camZoomInRect, tx, ty, dp, maxPadX: 2f, maxPadY: 8f)) {
+                        dragMode = TouchDragMode.ZoomInClick;
+                        Invalidate();
+                        return true;
+                    }
+                    if (HitTestExpanded44Dp(camResetLabelRect, tx, ty, dp, maxPadX: 2f, maxPadY: 8f)) {
+                        dragMode = TouchDragMode.ResetZoomClick;
+                        return true;
+                    }
+                    if (HitTestExpanded44Dp(camXRayBtnRect, tx, ty, dp, maxPadX: 2f, maxPadY: 8f)) {
+                        dragMode = TouchDragMode.XRayClick;
+                        return true;
+                    }
+                    if (IsXRayEnabled && HitTestExpanded44Dp(camXRayBandBtnRect, tx, ty, dp, maxPadX: 2f, maxPadY: 8f)) {
+                        dragMode = TouchDragMode.XRayBandClick;
+                        return true;
+                    }
+                    if (HitTestExpanded44Dp(camLabelsBtnRect, tx, ty, dp, maxPadX: 2f, maxPadY: 8f)) {
+                        dragMode = TouchDragMode.LabelsClick;
+                        return true;
+                    }
+                }
+
                 if (dockHeadRect.Contains(tx, ty)) {
                     dragMode = TouchDragMode.HeadDock;
                     Parent?.RequestDisallowInterceptTouchEvent(true);
@@ -1421,7 +1524,7 @@ public sealed class RoomSimulatorView : View {
                 if (dockHeightRect.Contains(tx, ty)) {
                     dragMode = TouchDragMode.HeightDock;
                     Parent?.RequestDisallowInterceptTouchEvent(true);
-                    if (!IsPositionLocked && !dockHeightResetRect.Contains(tx, ty)) {
+                    if (!IsPositionLocked && !HitTestExpanded44Dp(dockHeightResetRect, tx, ty, dp)) {
                         UpdateHeightFromCapsuleTouch(ty);
                     }
                     Invalidate();
@@ -1486,7 +1589,7 @@ public sealed class RoomSimulatorView : View {
 
                 if (dragMode == TouchDragMode.HeadDock) {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
-                    if (!dockHeadResetRect.Contains(downX, downY)) {
+                    if (!HitTestExpanded44Dp(dockHeadResetRect, downX, downY, dp)) {
                         float stepX = tx - lastX;
                         float stepY = ty - lastY;
                         float newYaw = NormalizeDeg(listenerRotation.Y + stepX * 1.30f / dp);
@@ -1502,7 +1605,7 @@ public sealed class RoomSimulatorView : View {
 
                 if (dragMode == TouchDragMode.HeightDock && !IsPositionLocked) {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
-                    if (!dockHeightResetRect.Contains(downX, downY)) {
+                    if (!HitTestExpanded44Dp(dockHeightResetRect, downX, downY, dp)) {
                         UpdateHeightFromCapsuleTouch(ty);
                     }
                     lastX = tx;
@@ -1586,9 +1689,14 @@ public sealed class RoomSimulatorView : View {
                         (now - lastSourceTapTime).TotalMilliseconds < 320) {
                         lastTappedSource = null;
                         lastSourceTapTime = DateTime.MinValue;
+                        if (endedSource.IsSolo != lastTappedSourcePrevSolo) {
+                            endedSource.IsSolo = lastTappedSourcePrevSolo;
+                            SourceSoloToggled?.Invoke(endedSource);
+                        }
                         SourcePositionResetRequested?.Invoke(endedSource);
                     } else {
                         lastTappedSource = endedSource;
+                        lastTappedSourcePrevSolo = endedSource.IsSolo;
                         lastSourceTapTime = now;
                         endedSource.IsSolo = !endedSource.IsSolo;
                         SourceSoloToggled?.Invoke(endedSource);
@@ -1633,7 +1741,7 @@ public sealed class RoomSimulatorView : View {
                 }
 
                 if (endedMode == TouchDragMode.HeadDock) {
-                    if (dockHeadResetRect.Contains(tx, ty)) {
+                    if (HitTestExpanded44Dp(dockHeadResetRect, tx, ty, dp)) {
                         listenerRotation = Vector3.Zero;
                         ListenerRotationChanged?.Invoke(listenerRotation);
                         Invalidate();
@@ -1653,7 +1761,7 @@ public sealed class RoomSimulatorView : View {
 
                 if (endedMode == TouchDragMode.HeightDock) {
                     if (IsPositionLocked) return true;
-                    if (dockHeightResetRect.Contains(tx, ty)) {
+                    if (HitTestExpanded44Dp(dockHeightResetRect, tx, ty, dp)) {
                         listenerPosition = new Vector3(listenerPosition.X, 0f, listenerPosition.Z);
                         ListenerPositionChanged?.Invoke(listenerPosition);
                         Invalidate();

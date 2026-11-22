@@ -727,7 +727,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         fullscreenVideoDlg != null ||
         (activeTab == 0 && !isLibrarySectionOpen && musicStageMode == PlayerStageMode.Lyrics) ||
         (activeTab == 0 && isLibrarySectionOpen) ||
+        (activeTab == 4 && HasSettingsInternalBackStep()) ||
         activeTab != 0;
+
+    bool TryHandleInternalBack() => HandleInternalBackStep();
 
     bool HandleInternalBackStep() {
         if (uiDestroyed) {
@@ -735,6 +738,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         if (fullscreenVideoDlg != null) {
             ExitVideoFullscreenIfNeeded();
+            return true;
+        }
+        if (activeTab == 4 && TryHandleSettingsBackStep()) {
+            SyncPredictiveBackRegistration();
             return true;
         }
         if (activeTab == 0 && !isLibrarySectionOpen && musicStageMode == PlayerStageMode.Lyrics) {
@@ -1224,6 +1231,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
             UpdateRoomCanvas();
         } else if (idx == 0) {
             RefreshMusicPlayerUi();
+        } else if (idx == 4) {
+            if (prevTab == 4) {
+                OpenSettingsCategory(-1);
+            } else {
+                RefreshSettingsCategorySubtitles();
+            }
         }
         navFrostedHost?.RefreshBlur(force: true);
         SyncPredictiveBackRegistration();
@@ -1820,7 +1833,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 icon: OneUiIconType.Info,
                 iconBadgeColor: ColDanger,
                 positiveText: S["OpenSettingsBtn"],
-                onPositive: () => SwitchTab(4),
+                onPositive: () => JumpToSettingsCategory(4),
                 negativeText: S["DismissBtn"]);
         } else {
             ShowError(ex.Message);

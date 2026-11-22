@@ -32,13 +32,23 @@ namespace CavernizeAndroid;
 
 public partial class MainActivity {
     Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, shareExportBtn, playExportBtn, studioW12ExportBtn, studioW12BatchBtn;
+    Button studioQueueAddBtn, studioQueueAddInQueueTabBtn, studioBatchAddBtn, studioQueueRemoveBtn, studioMetaBtn, studioReportBtn;
+    Button studioBadgeFfmpegBtn, studioBadgeTruehdBtn, studioBadgeOnnxBtn, studioBadgeTwinBtn, studioPrereqJumpBtn;
     LayoutDiagramView layoutDiagram;
     TextView convertStatusText, studioW12ContextText;
-    OneUiInlineSelector exportFormatSelector, containerSelector, studioW12PresetSelector;
+    OneUiInlineSelector studioWorkflowSelector, exportFormatSelector, containerSelector, studioW12PresetSelector;
+    readonly List<Button> studioWorkflowPillBtns = [];
+    LinearLayout studioMasterSection, studioClassicSection, studioQueueSection;
+    LinearLayout studioProContentContainer;
+    OneUiIconView studioProChevron;
+    bool isStudioProExpanded;
+    int selectedStudioWorkflow; // 0 = Master, 1 = Classic, 2 = Queue
     LinearLayout studioW12KaraokeContainer;
     OneUiSeekBar studioW12KaraokeBar;
     CheckBox applyRoomToExportCheck;
     ProgressBar convertProgressBar;
+    Action pendingPostTrueHDStudioAction;
+    CavernizeTrack pendingTrueHDStudioTrack;
 
     List<string> availableContainerExts = [".wav"];
     int blockSize;
@@ -46,124 +56,109 @@ public partial class MainActivity {
     const int secondFrame = 2 * 1536;
     const double progressSplit = .95;
 
+    void ApplyTabPageCutoutPadding(LinearLayout page) {
+        if (page == null) {
+            return;
+        }
+        void UpdatePad() {
+            if (uiDestroyed) {
+                return;
+            }
+            int cutoutL = 0;
+            int cutoutR = 0;
+            if (OperatingSystem.IsAndroidVersionAtLeast(28)) {
+                var cutout = Window?.DecorView?.RootWindowInsets?.DisplayCutout;
+                if (cutout != null) {
+                    cutoutL = Math.Max(0, cutout.SafeInsetLeft - insetLeftPx);
+                    cutoutR = Math.Max(0, cutout.SafeInsetRight - insetRightPx);
+                }
+            }
+            int targetL = Dp(14) + cutoutL;
+            int targetR = Dp(14) + cutoutR;
+            int targetB = Dp(116) + Math.Max(insetBarsBottomPx, insetImeBottomPx);
+            if (page.PaddingLeft != targetL || page.PaddingRight != targetR || page.PaddingBottom < Dp(116)) {
+                page.SetPadding(targetL, Dp(6), targetR, Math.Max(page.PaddingBottom, targetB));
+            }
+        }
+        UpdatePad();
+        page.LayoutChange += (_, _) => UpdatePad();
+    }
+
     LinearLayout BuildConverterTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(6), Dp(14), Dp(116));
+        ApplyTabPageCutoutPadding(page);
 
         // 0. Active File Source Bar (Clean workspace context & track selector)
         page.AddView(CreateWorkspaceSourceBar(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
 
-        // 1. System & RenderTarget Hero Card
-        LinearLayout sysCard = Card(S["SystemTitle"], OneUiIconType.Speaker, OneUiTheme.IconSpatial);
-        LinearLayout sysRow = HRow();
+        // 1. Segmented Workflow Selector (Master | Classic | Queue) + Readiness Pills Card
+        LinearLayout modeCard = Card();
+        studioWorkflowSelector = new OneUiInlineSelector(this, S["StudioWorkflowLabel"]);
+        string[] workflowNames = [
+            S["StudioModeMaster"],
+            S["StudioModeClassic"],
+            S["StudioModeQueue"]
+        ];
+        studioWorkflowSelector.SetItems(workflowNames, selectedStudioWorkflow);
+        studioWorkflowSelector.SelectionChanged += idx => SetStudioWorkflowMode(idx);
+        modeCard.AddView(studioWorkflowSelector);
 
-        LinearLayout sysLeft = new(this) { Orientation = Orientation.Vertical };
-        LinearLayout rtLabelRow = HRow();
-        rtLabelRow.AddView(Label(S["RenderTarget"], 12f, ColMuted), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        rtLabelRow.AddView(CreateInlineHelpBtn(S["RenderTarget"].TrimEnd(':'), S["TipRenderTarget"]), new LinearLayout.LayoutParams(Dp(24), Dp(24)));
-        sysLeft.AddView(rtLabelRow);
+        LinearLayout segRow = HRow();
+        segRow.SetPadding(0, Dp(8), 0, Dp(10));
+        studioWorkflowPillBtns.Clear();
+        for (int i = 0; i < workflowNames.Length; i++) {
+            int modeIdx = i;
+            Button pill = PillButton(workflowNames[i], () => SetStudioWorkflowMode(modeIdx), active: i == selectedStudioWorkflow);
+            pill.TextSize = 11.5f;
+            pill.SetPadding(Dp(8), Dp(7), Dp(8), Dp(7));
+            studioWorkflowPillBtns.Add(pill);
+            segRow.AddView(pill, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
+                RightMargin = i < workflowNames.Length - 1 ? Dp(6) : 0
+            });
+        }
+        modeCard.AddView(segRow);
 
-        selectTargetBtn = SecondaryButton(RenderTarget?.Name ?? S["SelectTarget"], ShowRenderTargetDialog);
-        sysLeft.AddView(selectTargetBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4), BottomMargin = Dp(6) });
-        wiringBtn = PillButton(S["DisplayWiring"], DisplayWiringDialog);
-        sysLeft.AddView(wiringBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        sysRow.AddView(sysLeft, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(10) });
+        AddDivider(modeCard);
+        TextView readyHdr = Label(S["StudioReadinessHeader"], 11.5f, ColMuted);
+        readyHdr.SetPadding(0, Dp(2), 0, Dp(6));
+        modeCard.AddView(readyHdr);
 
-        layoutDiagram = new LayoutDiagramView(this);
-        sysRow.AddView(layoutDiagram);
-        sysCard.AddView(sysRow);
-        page.AddView(sysCard);
+        LinearLayout badgeRow1 = HRow();
+        studioBadgeTruehdBtn = PillButton(S["StudioBadgeTrueHdReady"], OnTrueHdReadinessBadgeClicked);
+        studioBadgeFfmpegBtn = PillButton(S["StudioBadgeFFmpegReady"], () => SwitchTab(4));
+        studioBadgeTruehdBtn.TextSize = 11f;
+        studioBadgeFfmpegBtn.TextSize = 11f;
+        badgeRow1.AddView(studioBadgeTruehdBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        badgeRow1.AddView(studioBadgeFfmpegBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        modeCard.AddView(badgeRow1, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
 
-        // 2. Content & Export Card (In-App One UI 9 Selectors — no native Spinner popups)
-        LinearLayout expCard = Card(S["ExportCardTitle"], OneUiIconType.Bolt, OneUiTheme.IconStudioExport);
+        LinearLayout badgeRow2 = HRow();
+        studioBadgeOnnxBtn = PillButton(S["StudioBadgeOnnxReady"], OnOnnxReadinessBadgeClicked);
+        studioBadgeTwinBtn = PillButton(S["StudioBadgeTwinNone"], OnTwinReadinessBadgeClicked);
+        studioBadgeOnnxBtn.TextSize = 11f;
+        studioBadgeTwinBtn.TextSize = 11f;
+        badgeRow2.AddView(studioBadgeOnnxBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        badgeRow2.AddView(studioBadgeTwinBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        modeCard.AddView(badgeRow2);
 
-        exportFormatSelector = new OneUiInlineSelector(this, S["ExportFormat"]);
-        ExportFormat[] formats = ExportFormat.GetFormats();
-        exportFormatSelector.SetItems(
-            formats.Select(f => f.Description).ToArray(),
-            Math.Clamp(Array.IndexOf(formats, ExportFormat), 0, formats.Length - 1));
-        exportFormatSelector.SelectionChanged += pos => {
-            ExportFormat[] curFormats = ExportFormat.GetFormats();
-            if (pos >= 0 && pos < curFormats.Length) {
-                ExportFormat = curFormats[pos];
-                store.ExportFormatIndex = pos;
-                RefreshContainerOptions();
-            }
-        };
-        expCard.AddView(exportFormatSelector);
+        studioPrereqJumpBtn = SecondaryButton(S["OpenSettingsBtn"], OnStudioPrerequisiteJumpClicked);
+        studioPrereqJumpBtn.Visibility = ViewStates.Gone;
+        modeCard.AddView(studioPrereqJumpBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(8)
+        });
+        page.AddView(modeCard);
 
-        AddDivider(expCard);
-        containerSelector = new OneUiInlineSelector(this, S["Container"]);
-        expCard.AddView(containerSelector);
-
-        AddDivider(expCard);
-        applyRoomToExportCheck = new CheckBox(this) {
-            Text = S["ApplyRoomToExport"],
-            Checked = false,
-            TextSize = 12.5f
-        };
-        applyRoomToExportCheck.SetTextColor(ColText);
-        applyRoomToExportCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
-        expCard.AddView(WrapControlWithHelp(applyRoomToExportCheck, S["ApplyRoomToExport"], S["TipApplyRoomExport"], bottomMarginDp: 2));
-
-        // Action Buttons (non-clipping single-line horizontal rows with BaselineAligned = false)
-        LinearLayout actRow1 = HRow();
-        actRow1.SetPadding(0, Dp(10), 0, Dp(6));
-        renderBtn = PrimaryButton(S["RenderBtn"], () => StartSingleRender());
-        cancelRenderBtn = PillButton(S["CancelBtn"], () => activeCts?.Cancel());
-        cancelRenderBtn.Enabled = false;
-        actRow1.AddView(renderBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 2f) { RightMargin = Dp(6) });
-        actRow1.AddView(cancelRenderBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        expCard.AddView(actRow1);
-
-        Button queueAddBtn = PillButton(S["AddQueueBtn"], AddCurrentToQueue);
-        expCard.AddView(queueAddBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
-
-        LinearLayout infoBtns = HRow();
-        Button metaBtn = PillButton(S["ShowMetaBtn"], ShowMetadataDialog);
-        Button repBtn = PillButton(S["ShowReportBtn"], ShowPostRenderReportDialog);
-        infoBtns.AddView(metaBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        infoBtns.AddView(repBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        expCard.AddView(infoBtns);
-
-        // Progress & Result
-        convertProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
-            Max = 1000,
-            Progress = 0
-        };
-        OneUiTheme.StyleProgressBar(this, convertProgressBar);
-        LinearLayout.LayoutParams pbLp = new(ViewGroup.LayoutParams.MatchParent, Dp(14)) { TopMargin = Dp(10) };
-        expCard.AddView(convertProgressBar, pbLp);
-
-        convertStatusText = Label(S["Ready"], 12f, OneUiTheme.IconSystemInfo);
-        convertStatusText.SetPadding(0, Dp(6), 0, Dp(6));
-        expCard.AddView(convertStatusText);
-
-        LinearLayout postBtns = HRow();
-        shareExportBtn = PillButton(S["ShareFile"], () => ShareLocalFile(lastRenderedFilePath));
-        playExportBtn = PillButton(S["OpenPlayer"], () => {
-            if (!string.IsNullOrEmpty(lastRenderedFilePath) && File.Exists(lastRenderedFilePath)) {
-                OpenLocalPathWithFallbackAsync(lastRenderedFilePath, switchToTab: 0);
-            }
-        }, active: true);
-        shareExportBtn.Visibility = ViewStates.Gone;
-        playExportBtn.Visibility = ViewStates.Gone;
-        postBtns.AddView(shareExportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        postBtns.AddView(playExportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        expCard.AddView(postBtns);
-
-        page.AddView(expCard);
-
-        // 2B. W12/W14 Studio Master Presets Card (IAMF / HOA 3rd-Order / ADM BWF / Personalized Binaural / Karaoke / Hybrid Master)
-        LinearLayout w12Card = Card(S["StudioW12CardTitle"], OneUiIconType.Sparkles, OneUiTheme.IconStudioExport);
+        // 2A. Master Workflow Section (Studio Master Presets)
+        studioMasterSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        LinearLayout w12Card = Card(S["StudioMasterCardTitle"], OneUiIconType.Sparkles, OneUiTheme.IconStudioExport);
         studioW12PresetSelector = new OneUiInlineSelector(this, S["StudioW12PresetLabel"]);
         studioW12PresetSelector.SetItems(new[] {
             S["StudioW12PresetBinaural"],
-            S["StudioW12PresetIamf"],
-            S["StudioW12PresetHoa"],
-            S["StudioW12PresetAdm"],
+            S["StudioPresetIamfClean"],
+            S["StudioPresetHoaClean"],
+            S["StudioPresetAdmClean"],
             S["StudioW12PresetHybrid714"],
             S["StudioW12PresetKaraoke"],
             S["StudioW12PresetLiveMixdown"],
@@ -200,37 +195,380 @@ public partial class MainActivity {
             defaultValue: 5);
         w12Card.AddView(studioW12KaraokeContainer);
 
-        LinearLayout w12BtnRow = HRow();
-        w12BtnRow.SetPadding(0, Dp(8), 0, 0);
-        studioW12ExportBtn = PrimaryButton(S["StudioW12ExportBtn"], StartStudioW12PresetExport);
-        w12BtnRow.AddView(studioW12ExportBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        w12Card.AddView(w12BtnRow);
-
         studioW12BatchBtn = PillButton(S["StudioW12BatchBtn"], ShowStudioW12BatchDialog);
         w12Card.AddView(studioW12BatchBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(6)
+            TopMargin = Dp(8)
         });
-        page.AddView(w12Card);
+        studioMasterSection.AddView(w12Card);
+        page.AddView(studioMasterSection);
 
-        // 3. Batch Render Queue Card
+        // 2B. Classic Workflow Section (System Target + Codec/Container + Collapsible Pro Options)
+        studioClassicSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        LinearLayout sysCard = Card(S["SystemTitle"], OneUiIconType.Speaker, OneUiTheme.IconSpatial);
+        LinearLayout sysRow = HRow();
+
+        LinearLayout sysLeft = new(this) { Orientation = Orientation.Vertical };
+        LinearLayout rtLabelRow = HRow();
+        rtLabelRow.AddView(Label(S["RenderTarget"], 12f, ColMuted), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        rtLabelRow.AddView(CreateInlineHelpBtn(S["RenderTarget"].TrimEnd(':'), S["TipRenderTarget"]), new LinearLayout.LayoutParams(Dp(24), Dp(24)));
+        sysLeft.AddView(rtLabelRow);
+
+        selectTargetBtn = SecondaryButton(RenderTarget?.Name ?? S["SelectTarget"], ShowRenderTargetDialog);
+        sysLeft.AddView(selectTargetBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
+        sysRow.AddView(sysLeft, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(10) });
+
+        layoutDiagram = new LayoutDiagramView(this);
+        sysRow.AddView(layoutDiagram);
+        sysCard.AddView(sysRow);
+        studioClassicSection.AddView(sysCard);
+
+        LinearLayout expCard = Card(S["ExportCardTitle"], OneUiIconType.Bolt, OneUiTheme.IconStudioExport);
+        exportFormatSelector = new OneUiInlineSelector(this, S["ExportFormat"]);
+        ExportFormat[] formats = ExportFormat.GetFormats();
+        exportFormatSelector.SetItems(
+            formats.Select(f => f.Description).ToArray(),
+            Math.Clamp(Array.IndexOf(formats, ExportFormat), 0, formats.Length - 1));
+        exportFormatSelector.SelectionChanged += pos => {
+            ExportFormat[] curFormats = ExportFormat.GetFormats();
+            if (pos >= 0 && pos < curFormats.Length) {
+                ExportFormat = curFormats[pos];
+                store.ExportFormatIndex = pos;
+                RefreshContainerOptions();
+                RefreshStudioReadinessUi();
+            }
+        };
+        expCard.AddView(exportFormatSelector);
+
+        AddDivider(expCard);
+        containerSelector = new OneUiInlineSelector(this, S["Container"]);
+        containerSelector.SelectionChanged += _ => RefreshStudioReadinessUi();
+        expCard.AddView(containerSelector);
+
+        studioQueueAddBtn = PillButton(S["AddQueueBtn"], AddCurrentToQueue);
+        expCard.AddView(studioQueueAddBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(10),
+            BottomMargin = Dp(4)
+        });
+
+        AddDivider(expCard);
+        LinearLayout proHeader = HRow();
+        proHeader.SetPadding(0, Dp(4), 0, Dp(4));
+        OneUiTheme.AttachRecoil(proHeader, 0.98f);
+        proHeader.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Wrench, OneUiTheme.IconSystemInfo, 26));
+        TextView proTitleTv = Label(S["StudioProSectionTitle"], 12.8f, ColText);
+        proTitleTv.Typeface = OneUiTheme.GetAppleFontBold(this);
+        proTitleTv.SetPadding(Dp(8), 0, Dp(8), 0);
+        proHeader.AddView(proTitleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        studioProChevron = new OneUiIconView(this, isStudioProExpanded ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown, OneUiTheme.PeachText);
+        proHeader.AddView(studioProChevron, new LinearLayout.LayoutParams(Dp(16), Dp(16)));
+        expCard.AddView(proHeader);
+
+        studioProContentContainer = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = isStudioProExpanded ? ViewStates.Visible : ViewStates.Gone
+        };
+        studioProContentContainer.SetPadding(0, Dp(8), 0, 0);
+        proHeader.Click += (_, _) => {
+            isStudioProExpanded = !isStudioProExpanded;
+            SetExpandedWithAnimation(studioProContentContainer, isStudioProExpanded);
+            studioProChevron.IconType = isStudioProExpanded ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown;
+        };
+
+        applyRoomToExportCheck = new CheckBox(this) {
+            Text = S["ApplyRoomToExport"],
+            Checked = false,
+            TextSize = 12.5f
+        };
+        applyRoomToExportCheck.SetTextColor(ColText);
+        applyRoomToExportCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
+        studioProContentContainer.AddView(WrapControlWithHelp(applyRoomToExportCheck, S["ApplyRoomToExport"], S["TipApplyRoomExport"], bottomMarginDp: 6));
+
+        wiringBtn = PillButton(S["DisplayWiring"], DisplayWiringDialog);
+        studioProContentContainer.AddView(wiringBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(6)
+        });
+
+        LinearLayout infoBtns = HRow();
+        studioMetaBtn = PillButton(S["ShowMetaBtn"], ShowMetadataDialog);
+        studioReportBtn = PillButton(S["ShowReportBtn"], ShowPostRenderReportDialog);
+        infoBtns.AddView(studioMetaBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        infoBtns.AddView(studioReportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        studioProContentContainer.AddView(infoBtns);
+
+        expCard.AddView(studioProContentContainer);
+        studioClassicSection.AddView(expCard);
+        page.AddView(studioClassicSection);
+
+        // 2C. Queue Workflow Section (Batch Render Queue — 2-row non-clipping secondary buttons)
+        studioQueueSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
         LinearLayout queueCard = Card(S["QueueTitle"], OneUiIconType.Queue, OneUiTheme.IconAtmosUpmix);
         queueListContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
         queueCard.AddView(queueListContainer);
 
-        LinearLayout qBtns = HRow();
-        qBtns.SetPadding(0, Dp(10), 0, 0);
-        Button batchBtn = PillButton(S["BatchAddBtn"], () => OpenMultiFilesWithExplorer(AddLocalPathsToQueue));
-        Button remBtn = PillButton(S["RemoveQueueBtn"], RemoveLastFromQueue);
-        Button runQBtn = PrimaryButton(S["ProcessQueueBtn"], StartQueueProcessing);
-        qBtns.AddView(batchBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(6) });
-        qBtns.AddView(remBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.85f) { RightMargin = Dp(6) });
-        qBtns.AddView(runQBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.25f));
-        queueCard.AddView(qBtns);
-        page.AddView(queueCard);
+        LinearLayout qRow1 = HRow();
+        qRow1.SetPadding(0, Dp(10), 0, Dp(6));
+        studioQueueAddInQueueTabBtn = PillButton(S["AddQueueBtn"], AddCurrentToQueue);
+        studioBatchAddBtn = PillButton(S["BatchAddBtn"], () => OpenMultiFilesWithExplorer(AddLocalPathsToQueue));
+        qRow1.AddView(studioQueueAddInQueueTabBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        qRow1.AddView(studioBatchAddBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        queueCard.AddView(qRow1);
+
+        studioQueueRemoveBtn = PillButton(S["RemoveQueueBtn"], RemoveLastFromQueue);
+        queueCard.AddView(studioQueueRemoveBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        studioQueueSection.AddView(queueCard);
+        page.AddView(studioQueueSection);
+
+        // 3. Shared Unified Primary Action, Progress, Status, Cancel, Share & Play Footer Card
+        LinearLayout footerCard = Card();
+        LinearLayout actRow = HRow();
+        actRow.SetPadding(0, Dp(2), 0, Dp(6));
+        renderBtn = PrimaryButton(S["StudioW12ExportBtn"], ExecuteActiveStudioPrimaryAction);
+        studioW12ExportBtn = renderBtn;
+        cancelRenderBtn = PillButton(S["CancelBtn"], () => activeCts?.Cancel());
+        cancelRenderBtn.Enabled = false;
+        actRow.AddView(renderBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 2.1f) { RightMargin = Dp(8) });
+        actRow.AddView(cancelRenderBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        footerCard.AddView(actRow);
+
+        convertProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
+            Max = 1000,
+            Progress = 0
+        };
+        OneUiTheme.StyleProgressBar(this, convertProgressBar);
+        footerCard.AddView(convertProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { TopMargin = Dp(6) });
+
+        convertStatusText = Label(S["Ready"], 12f, OneUiTheme.IconSystemInfo);
+        convertStatusText.SetPadding(0, Dp(6), 0, Dp(6));
+        footerCard.AddView(convertStatusText);
+
+        LinearLayout postBtns = HRow();
+        shareExportBtn = PillButton(S["ShareFile"], () => ShareLocalFile(lastRenderedFilePath));
+        playExportBtn = PillButton(S["OpenPlayer"], () => {
+            if (!string.IsNullOrEmpty(lastRenderedFilePath) && File.Exists(lastRenderedFilePath)) {
+                OpenLocalPathWithFallbackAsync(lastRenderedFilePath, switchToTab: 0);
+            }
+        }, active: true);
+        shareExportBtn.Visibility = ViewStates.Gone;
+        playExportBtn.Visibility = ViewStates.Gone;
+        postBtns.AddView(shareExportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        postBtns.AddView(playExportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        footerCard.AddView(postBtns);
+        page.AddView(footerCard);
 
         RefreshQueueList();
         RefreshConverterTabState();
+        SetStudioWorkflowMode(selectedStudioWorkflow);
         return page;
+    }
+
+    void SetStudioWorkflowMode(int modeIdx) {
+        selectedStudioWorkflow = Math.Clamp(modeIdx, 0, 2);
+        if (studioWorkflowSelector != null && studioWorkflowSelector.SelectedIndex != selectedStudioWorkflow) {
+            studioWorkflowSelector.SetSelection(selectedStudioWorkflow, notify: false);
+        }
+        for (int i = 0; i < studioWorkflowPillBtns.Count; i++) {
+            bool sel = i == selectedStudioWorkflow;
+            Button b = studioWorkflowPillBtns[i];
+            b.Background = sel
+                ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            b.SetTypeface(null, sel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+        }
+        if (studioMasterSection != null) {
+            studioMasterSection.Visibility = selectedStudioWorkflow == 0 ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (studioClassicSection != null) {
+            studioClassicSection.Visibility = selectedStudioWorkflow == 1 ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (studioQueueSection != null) {
+            studioQueueSection.Visibility = selectedStudioWorkflow == 2 ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (selectedStudioWorkflow == 2) {
+            RefreshQueueList();
+        }
+        RefreshStudioPrimaryCtaUi();
+        RefreshStudioReadinessUi();
+    }
+
+    void ExecuteActiveStudioPrimaryAction() {
+        switch (selectedStudioWorkflow) {
+            case 0:
+                StartStudioW12PresetExport();
+                break;
+            case 1:
+                StartSingleRender();
+                break;
+            case 2:
+                StartQueueProcessing();
+                break;
+        }
+    }
+
+    void RefreshStudioPrimaryCtaUi() {
+        if (renderBtn == null) {
+            return;
+        }
+        if (selectedStudioWorkflow == 0) {
+            renderBtn.Text = S["StudioW12ExportBtn"];
+            renderBtn.Enabled = !isOperationRunning && !isPreparingTrueHD;
+        } else if (selectedStudioWorkflow == 1) {
+            renderBtn.Text = S["RenderBtn"];
+            renderBtn.Enabled = !isOperationRunning && !isPreparingTrueHD;
+        } else {
+            int qCount = renderQueue?.Jobs.Count ?? 0;
+            renderBtn.Text = qCount > 0 ? $"{S["ProcessQueueBtn"]} ({qCount})" : S["ProcessQueueBtn"];
+            renderBtn.Enabled = !isOperationRunning && !isPreparingTrueHD && qCount > 0;
+        }
+    }
+
+    bool IsLosslessTwinSynced(out string twinSummary) {
+        Cavernize.Logic.Spatial.LgsrDiagnostics lgsr = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
+        var twinRef = activeLosslessTwin ?? playerEngine?.SceneHub?.ActiveLosslessReference as Cavernize.Logic.Spatial.UniversalLosslessTwinProvider;
+        bool synced = (twinRef != null && twinRef.HasSyncedLosslessTwin) ||
+                      lgsr.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.Synced;
+        twinSummary = !string.IsNullOrEmpty(lgsr.TwinFormatSummary)
+            ? lgsr.TwinFormatSummary
+            : (!string.IsNullOrEmpty(lgsr.TwinFileName)
+                ? lgsr.TwinFileName
+                : (!string.IsNullOrEmpty(twinRef?.Metadata?.FilePath)
+                    ? Path.GetFileName(twinRef.Metadata.FilePath)
+                    : "FLAC"));
+        return synced;
+    }
+
+    bool IsNeuralPresetReady(StudioExportPreset preset, out bool runtimeInstalled) {
+        runtimeInstalled = OnnxRuntimeInstallerService.IsRuntimeInstalled(this);
+        if (!runtimeInstalled || store == null) {
+            return false;
+        }
+        Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
+        bool isKaraoke = preset == StudioExportPreset.SpatialKaraokeInstrumental ||
+                         preset == StudioExportPreset.LiveKaraokePerformanceMixdown;
+        Cavernize.Logic.Spatial.NeuralPipelineGoal goal = isKaraoke
+            ? Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke
+            : Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation;
+        var plan = neuralOrchestrator?.BuildPlan(goal, cfg);
+        string modelId = isKaraoke ? cfg.ActiveKaraokeModelId : cfg.ActiveStemModelId;
+        string modelPath = OnnxRuntimeInstallerService.ResolveModelPath(this, modelId);
+        return (plan != null && plan.IsRunnable) || !string.IsNullOrEmpty(modelPath);
+    }
+
+    void StyleReadinessBadge(Button btn, string text, Color tint, bool highlight) {
+        if (btn == null) {
+            return;
+        }
+        btn.Text = text;
+        btn.SetTextColor(highlight ? ColText : OneUiTheme.TextSecondary);
+        btn.Background = OneUiTheme.CreateRoundedDrawable(
+            this,
+            OneUiTheme.WithAlpha(tint, (byte)(highlight ? 64 : 32)),
+            OneUiTheme.PillCornerDp,
+            OneUiTheme.WithAlpha(tint, (byte)(highlight ? 175 : 95)),
+            1f);
+    }
+
+    void RefreshStudioReadinessUi() {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        string thdPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
+        bool thdInstalled = !string.IsNullOrEmpty(thdPath) && File.Exists(thdPath);
+        bool thdPendingDecode = selectedTrack != null && selectedTrack.Codec == Codec.TrueHD && decodedTrueHDTrack == null;
+        if (!thdInstalled) {
+            StyleReadinessBadge(studioBadgeTruehdBtn, S["StudioBadgeTrueHdMissing"], ColDanger, true);
+        } else if (thdPendingDecode) {
+            StyleReadinessBadge(studioBadgeTruehdBtn, S["StudioBadgeTrueHdPending"], OneUiTheme.FunctionalOrange, true);
+        } else {
+            StyleReadinessBadge(studioBadgeTruehdBtn, S["StudioBadgeTrueHdReady"], OneUiTheme.FunctionalGreen, false);
+        }
+
+        bool ffReady = ffmpeg != null && ffmpeg.Found;
+        StyleReadinessBadge(
+            studioBadgeFfmpegBtn,
+            ffReady ? S["StudioBadgeFFmpegReady"] : S["StudioBadgeFFmpegMissing"],
+            ffReady ? OneUiTheme.FunctionalGreen : OneUiTheme.FunctionalOrange,
+            !ffReady);
+
+        StudioExportPreset activePreset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, 7);
+        bool onnxReady = IsNeuralPresetReady(activePreset, out _);
+        StyleReadinessBadge(
+            studioBadgeOnnxBtn,
+            onnxReady ? S["StudioBadgeOnnxReady"] : S["StudioBadgeOnnxMissing"],
+            onnxReady ? OneUiTheme.FunctionalGreen : OneUiTheme.FunctionalOrange,
+            !onnxReady);
+
+        Cavernize.Logic.Spatial.LgsrDiagnostics lgsr = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
+        bool twinSynced = IsLosslessTwinSynced(out _);
+        if (twinSynced) {
+            StyleReadinessBadge(studioBadgeTwinBtn, S["StudioBadgeTwinSynced"], OneUiTheme.FunctionalGreen, true);
+        } else if (lgsr.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedAlreadyLossless) {
+            StyleReadinessBadge(studioBadgeTwinBtn, S["StudioBadgeTwinNative"], OneUiTheme.IconSystemInfo, false);
+        } else {
+            StyleReadinessBadge(studioBadgeTwinBtn, S["StudioBadgeTwinNone"], OneUiTheme.PeachText, activePreset == StudioExportPreset.FlacAtmosHybridSpatialMaster);
+        }
+
+        if (studioPrereqJumpBtn != null) {
+            bool needsOnnxNow = selectedStudioWorkflow == 0 &&
+                (activePreset == StudioExportPreset.HybridNeuralDirAc714 ||
+                 activePreset == StudioExportPreset.FlacAtmosHybridSpatialMaster ||
+                 activePreset == StudioExportPreset.SpatialKaraokeInstrumental ||
+                 activePreset == StudioExportPreset.LiveKaraokePerformanceMixdown);
+            bool needsTwinNow = selectedStudioWorkflow == 0 && activePreset == StudioExportPreset.FlacAtmosHybridSpatialMaster;
+            bool missingAny = (!thdInstalled && selectedTrack?.Codec == Codec.TrueHD) ||
+                              (!ffReady && selectedStudioWorkflow == 1) ||
+                              (needsOnnxNow && !onnxReady) ||
+                              (needsTwinNow && !twinSynced);
+            studioPrereqJumpBtn.Visibility = missingAny ? ViewStates.Visible : ViewStates.Gone;
+            if (needsTwinNow && !twinSynced && GetActiveTrack() != null) {
+                studioPrereqJumpBtn.Text = S["LgsrRescanTwinBtn"];
+            } else {
+                studioPrereqJumpBtn.Text = S["OpenSettingsBtn"];
+            }
+        }
+    }
+
+    void OnTrueHdReadinessBadgeClicked() {
+        if (selectedTrack != null && selectedTrack.Codec == Codec.TrueHD && decodedTrueHDTrack == null) {
+            PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
+        } else {
+            SwitchTab(4);
+        }
+    }
+
+    void OnOnnxReadinessBadgeClicked() {
+        if (OnnxRuntimeInstallerService.IsRuntimeInstalled(this)) {
+            ShowNeuralModelsModal();
+        } else {
+            SwitchTab(4);
+        }
+    }
+
+    void OnTwinReadinessBadgeClicked() {
+        CavernizeTrack active = GetActiveTrack();
+        if (active != null && !IsLosslessTwinSynced(out _)) {
+            StartLosslessTwinDiscoveryAsync(active);
+        } else {
+            SwitchTab(4);
+        }
+    }
+
+    void OnStudioPrerequisiteJumpClicked() {
+        StudioExportPreset activePreset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, 7);
+        if (selectedStudioWorkflow == 0 && activePreset == StudioExportPreset.FlacAtmosHybridSpatialMaster && !IsLosslessTwinSynced(out _) && GetActiveTrack() != null) {
+            StartLosslessTwinDiscoveryAsync(GetActiveTrack());
+            return;
+        }
+        if (selectedStudioWorkflow == 0 && !IsNeuralPresetReady(activePreset, out bool rtOk) && rtOk) {
+            ShowNeuralModelsModal();
+            return;
+        }
+        SwitchTab(4);
     }
 
     void RefreshConverterTabState() {
@@ -239,10 +577,12 @@ public partial class MainActivity {
         }
         layoutDiagram?.SetRenderTarget(RenderTarget);
         if (wiringBtn != null) {
-            wiringBtn.Enabled = RenderTarget is not DriverRenderTarget && RenderTarget is not VirtualizerRenderTarget;
+            wiringBtn.Enabled = !isOperationRunning && RenderTarget is not DriverRenderTarget && RenderTarget is not VirtualizerRenderTarget;
         }
         RefreshContainerOptions();
         RefreshStudioW12ContextUi();
+        RefreshStudioPrimaryCtaUi();
+        RefreshStudioReadinessUi();
     }
 
     void RefreshStudioW12ContextUi() {
@@ -261,10 +601,8 @@ public partial class MainActivity {
             studioW12KaraokeBar.Invalidate();
         }
         if (preset == StudioExportPreset.FlacAtmosHybridSpatialMaster) {
-            Cavernize.Logic.Spatial.LgsrDiagnostics lgsr = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
-            if (lgsr.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.Synced) {
-                studioW12ContextText.Text = string.Format(S["StudioW12ContextHybridReady"],
-                    string.IsNullOrEmpty(lgsr.TwinFormatSummary) ? lgsr.TwinFileName : lgsr.TwinFormatSummary);
+            if (IsLosslessTwinSynced(out string twinLabel)) {
+                studioW12ContextText.Text = string.Format(S["StudioContextHybridReadyClean"], twinLabel);
                 studioW12ContextText.SetTextColor(OneUiTheme.IconSystemInfo);
             } else {
                 studioW12ContextText.Text = S["StudioW12ContextHybridNoTwin"];
@@ -274,16 +612,27 @@ public partial class MainActivity {
             studioW12ContextText.Text = string.Format(
                 S["StudioW12ContextKaraoke"],
                 vocPct,
-                store.KaraokePreserveBackingVocals ? "ON" : "OFF");
+                store.KaraokePreserveBackingVocals ? S["StatusOnTag"] : S["StatusOffTag"]);
             studioW12ContextText.SetTextColor(OneUiTheme.PrimaryHigh);
         } else {
             studioW12ContextText.Text = string.Format(S["StudioW12ContextGeneral"], store.ResolveTruePeakCeilingDbtp());
             studioW12ContextText.SetTextColor(OneUiTheme.TextSub);
         }
+        RefreshStudioReadinessUi();
+        RefreshExtractAiChainPreviewUi();
     }
 
     void RefreshConverterTrackInfo() {
-        // Track details & stream switcher are now presented cleanly via WorkspaceSourceBar and ShowTechnicalStreamDialog
+        RefreshConverterTabState();
+        if (!isPreparingTrueHD && pendingPostTrueHDStudioAction != null) {
+            Action resume = pendingPostTrueHDStudioAction;
+            CavernizeTrack expected = pendingTrueHDStudioTrack;
+            pendingPostTrueHDStudioAction = null;
+            pendingTrueHDStudioTrack = null;
+            if (decodedTrueHDTrack != null && selectedTrack == expected && !isOperationRunning) {
+                uiHandler?.Post(resume);
+            }
+        }
     }
 
     void RefreshContainerOptions() {
@@ -431,7 +780,7 @@ public partial class MainActivity {
         }
         StringBuilder sb = new();
         foreach (var hdr in meta.Headers) {
-            sb.AppendLine($"=== {hdr.Name} ({hdr.Fields.Count}) ===");
+            sb.AppendLine(string.Format(S["CodecMetaSectionHeaderFmt"], hdr.Name, hdr.Fields.Count));
             foreach (var row in hdr.Fields) {
                 sb.AppendLine($"  {row}");
             }
@@ -527,6 +876,8 @@ public partial class MainActivity {
         }
         CavernizeTrack active = GetActiveTrack();
         if (active != null && active.Codec == Codec.TrueHD) {
+            pendingTrueHDStudioTrack = selectedTrack;
+            pendingPostTrueHDStudioAction = StartSingleRender;
             PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
             return;
         }
@@ -586,15 +937,36 @@ public partial class MainActivity {
 
     string GetStudioW12PresetLabel(StudioExportPreset preset) => preset switch {
         StudioExportPreset.PersonalizedLosslessBinaural => S["StudioW12PresetBinaural"],
-        StudioExportPreset.EclipsaAudioIamf => S["StudioW12PresetIamf"],
-        StudioExportPreset.AmbisonicsHoa3rdOrder => S["StudioW12PresetHoa"],
-        StudioExportPreset.AdmBwfItuBs2076 => S["StudioW12PresetAdm"],
+        StudioExportPreset.EclipsaAudioIamf => S["StudioPresetIamfClean"],
+        StudioExportPreset.AmbisonicsHoa3rdOrder => S["StudioPresetHoaClean"],
+        StudioExportPreset.AdmBwfItuBs2076 => S["StudioPresetAdmClean"],
         StudioExportPreset.HybridNeuralDirAc714 => S["StudioW12PresetHybrid714"],
         StudioExportPreset.SpatialKaraokeInstrumental => S["StudioW12PresetKaraoke"],
         StudioExportPreset.LiveKaraokePerformanceMixdown => S["StudioW12PresetLiveMixdown"],
         StudioExportPreset.FlacAtmosHybridSpatialMaster => S["StudioW12PresetFlacAtmos"],
         _ => preset.ToString()
     };
+
+    bool TryPreflightStudioPresets(IReadOnlyList<StudioExportPreset> presets) {
+        if (presets == null || presets.Count == 0) {
+            return false;
+        }
+        for (int i = 0; i < presets.Count; i++) {
+            StudioExportPreset preset = presets[i];
+            if (preset == StudioExportPreset.HybridNeuralDirAc714 ||
+                preset == StudioExportPreset.FlacAtmosHybridSpatialMaster) {
+                if (!IsNeuralPresetReady(preset, out bool runtimeInstalled)) {
+                    ShowError(runtimeInstalled ? S["NeuralModelNeedInstall"] : S["NeuralRuntimeNeedInstall"]);
+                    return false;
+                }
+            }
+            if (preset == StudioExportPreset.FlacAtmosHybridSpatialMaster && !IsLosslessTwinSynced(out _)) {
+                ShowError(S["LgsrMasterNeedsTwin"]);
+                return false;
+            }
+        }
+        return true;
+    }
 
     void StartStudioW12PresetExport() {
         if (isOperationRunning || isPreparingTrueHD) {
@@ -606,8 +978,17 @@ public partial class MainActivity {
             ShowError(S["NoTrack"]);
             return;
         }
-        StopPlayback();
+        if (active.Codec == Codec.TrueHD) {
+            pendingTrueHDStudioTrack = selectedTrack;
+            pendingPostTrueHDStudioAction = StartStudioW12PresetExport;
+            PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
+            return;
+        }
         StudioExportPreset preset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, 7);
+        if (!TryPreflightStudioPresets([preset])) {
+            return;
+        }
+        StopPlayback();
         string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
         string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
         StudioBatchExportJob job = BuildStudioW12Job(preset, dir, baseName);
@@ -637,6 +1018,12 @@ public partial class MainActivity {
         CavernizeTrack active = GetActiveTrack();
         if (active == null || !active.Supported) {
             ShowError(S["NoTrack"]);
+            return;
+        }
+        if (active.Codec == Codec.TrueHD) {
+            pendingTrueHDStudioTrack = selectedTrack;
+            pendingPostTrueHDStudioAction = ShowStudioW12BatchDialog;
+            PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
             return;
         }
 
@@ -671,7 +1058,7 @@ public partial class MainActivity {
         OneUiModalDialog.Show(
             this,
             S["StudioW12BatchDialogTitle"],
-            S["StudioW12BatchDialogDesc"],
+            S["StudioBatchDialogDescClean"],
             customContent: content,
             icon: OneUiIconType.Sparkles,
             iconBadgeColor: OneUiTheme.IconStudioExport,
@@ -687,7 +1074,7 @@ public partial class MainActivity {
                     ShowError(S["StudioW12BatchSelectAtLeastOne"]);
                     return;
                 }
-                StartStudioW12BatchExport(active, chosen);
+                StartStudioW12BatchExport(GetActiveTrack(), chosen);
             },
             negativeText: S["CancelBtn"]);
     }
@@ -695,6 +1082,20 @@ public partial class MainActivity {
     void StartStudioW12BatchExport(CavernizeTrack active, List<StudioExportPreset> presets) {
         if (isOperationRunning || isPreparingTrueHD) {
             ShowError(S["OpRunning"]);
+            return;
+        }
+        if (active == null || !active.Supported) {
+            ShowError(S["NoTrack"]);
+            return;
+        }
+        if (active.Codec == Codec.TrueHD) {
+            List<StudioExportPreset> captured = [.. presets];
+            pendingTrueHDStudioTrack = selectedTrack;
+            pendingPostTrueHDStudioAction = () => StartStudioW12BatchExport(GetActiveTrack(), captured);
+            PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
+            return;
+        }
+        if (!TryPreflightStudioPresets(presets)) {
             return;
         }
         StopPlayback();
@@ -780,7 +1181,7 @@ public partial class MainActivity {
         if (codec.IsEnvironmental()) {
             return () => {
                 EnvironmentWriter transcoder = EnvironmentWriter.Create(path, codec, environment.Listener, target.Length, bits, target.Renderer);
-                TranscodeTask(target, transcoder, activeCts?.Token ?? CancellationToken.None);
+                TranscodeTask(target, transcoder, path, activeCts?.Token ?? CancellationToken.None);
             };
         }
 
@@ -820,7 +1221,7 @@ public partial class MainActivity {
         CavernizeTrack effective = external.IntermediateTrack ?? rawTrueHDTarget;
         AttachToListener(effective);
         EnvironmentWriter transcoder = EnvironmentWriter.Create(path, codec, environment.Listener, effective.Length, bits, effective.Renderer);
-        ExecuteTranscodeBody(effective, transcoder, token);
+        ExecuteTranscodeBody(effective, transcoder, path, token);
     }
 
     void RenderTask(CavernizeTrack target, AudioWriter writer, string finalName, CancellationToken token) {
@@ -849,15 +1250,15 @@ public partial class MainActivity {
             string ffCodec = ExportFormat.Codec == Codec.PCM_LE && store.Force24Bit ? "pcm_s24le" : ExportFormat.FFName;
             MergeToContainer merger = new(LoadedFile.Path, exportedAudio, ffCodec);
             merger.AddArguments(RenderingSettings.MergeArguments);
-            merger.SetTrackName($"Cavern {RenderTarget.Name} render");
+            merger.SetTrackName(string.Format(S["RenderedTrackNameFmt"], RenderTarget.Name));
             if (writer.ChannelCount > 8) {
                 merger.Allow8PlusChannels();
             }
             merger.MakeSafe(finalName);
             if (!merger.Merge(ffmpeg, finalName)) {
-                string reason = string.IsNullOrWhiteSpace(merger.LastError) ? "Unknown error" : merger.LastError;
+                string reason = string.IsNullOrWhiteSpace(merger.LastError) ? S["RenderMergeUnknownError"] : merger.LastError;
                 AppLogger.Error($"RenderTask merge failed for '{finalName}': {reason}");
-                throw new IOException($"FFmpeg merge failed.\n{reason}");
+                throw new IOException(string.Format(S["FFmpegMergeFailedFmt"], reason));
             }
         }
 
@@ -875,7 +1276,7 @@ public partial class MainActivity {
         }
     }
 
-    void TranscodeTask(CavernizeTrack target, EnvironmentWriter writer, CancellationToken token) {
+    void TranscodeTask(CavernizeTrack target, EnvironmentWriter writer, string finalName, CancellationToken token) {
         if (writer is DolbyAtmosBWFWriter bwfWriter) {
             bwfWriter.ExtendWithMuteTarget();
         }
@@ -887,15 +1288,19 @@ public partial class MainActivity {
             }
             return;
         }
-        ExecuteTranscodeBody(target, writer, token);
+        ExecuteTranscodeBody(target, writer, finalName, token);
     }
 
-    void ExecuteTranscodeBody(CavernizeTrack target, EnvironmentWriter writer, CancellationToken token) {
+    void ExecuteTranscodeBody(CavernizeTrack target, EnvironmentWriter writer, string finalName, CancellationToken token) {
         RunOnUiThread(() => SetConvertStatus(S["Starting"], 0));
         RenderStats stats = writer is BroadcastWaveFormatWriter bwf
             ? WriteTranscodeBwf(target, bwf, token)
             : WriteTranscodeGeneric(target, writer, token);
         report.Generate(stats);
+        string doneLabel = !string.IsNullOrEmpty(finalName)
+            ? string.Format(S["ExportDone"], finalName)
+            : S["ReportDone"];
+        RunOnUiThread(() => SetConvertStatus(doneLabel, 1f));
     }
 
     ExternalConverterHandler CreateExternalHandler(CavernizeTrack target, int keepFirstSources, CancellationToken token = default) {
@@ -1042,7 +1447,7 @@ public partial class MainActivity {
                     double progress = Math.Clamp(rendered / (double)totalLength, 0, 1);
                     TimeSpan elapsed = DateTime.Now - start;
                     double speed = elapsed.TotalSeconds > 0 ? (rendered / (double)environment.Listener.SampleRate) / elapsed.TotalSeconds : 0;
-                    RunOnUiThread(() => SetConvertStatus($"Render: {progress:0.0%} ({speed:0.0}x)", progress));
+                    RunOnUiThread(() => SetConvertStatus(string.Format(S["RenderProgressSpeedFmt"], progress, speed), progress));
                     nextUiSample = rendered + 50000;
                 }
             }
@@ -1068,7 +1473,7 @@ public partial class MainActivity {
             rendered += environment.Listener.UpdateRate;
             if (rendered >= nextUi || rendered >= total) {
                 double p = Math.Clamp(rendered / (double)total, 0, 1);
-                RunOnUiThread(() => SetConvertStatus($"Transcode: {p:0.0%}", p));
+                RunOnUiThread(() => SetConvertStatus(string.Format(S["TranscodeProgressFmt"], p), p));
                 nextUi = rendered + 50000;
             }
         }
@@ -1087,11 +1492,13 @@ public partial class MainActivity {
             rendered += environment.Listener.UpdateRate;
             if (rendered >= nextUi || rendered >= total) {
                 double p = Math.Clamp(rendered / (double)total * progressSplit, 0, progressSplit);
-                RunOnUiThread(() => SetConvertStatus($"Transcode ADM: {p:0.0%}", p));
+                RunOnUiThread(() => SetConvertStatus(string.Format(S["TranscodeAdmProgressFmt"], p), p));
                 nextUi = rendered + 50000;
             }
         }
-        writer.FinalFeedback = p => RunOnUiThread(() => SetConvertStatus($"Finalizing ADM: {p:0.0%}", progressSplit + p * (1 - progressSplit)));
+        writer.FinalFeedback = p => RunOnUiThread(() => SetConvertStatus(
+            string.Format(S["FinalizingAdmProgressFmt"], p),
+            progressSplit + p * (1 - progressSplit)));
         writer.FinalFeedbackStart = progressSplit;
         writer.Dispose();
         return stats;
@@ -1103,7 +1510,11 @@ public partial class MainActivity {
         CancellationToken token = activeCts.Token;
 
         isOperationRunning = true;
-        SetRunningUiState(true);
+        RunOnUiThread(() => {
+            if (shareExportBtn != null) shareExportBtn.Visibility = ViewStates.Gone;
+            if (playExportBtn != null) playExportBtn.Visibility = ViewStates.Gone;
+            SetRunningUiState(true);
+        });
         Task.Run(() => {
             try {
                 work(token);
@@ -1135,9 +1546,45 @@ public partial class MainActivity {
         if (renderBtn != null) renderBtn.Enabled = !running;
         if (studioW12ExportBtn != null) studioW12ExportBtn.Enabled = !running;
         if (studioW12BatchBtn != null) studioW12BatchBtn.Enabled = !running;
+        if (selectTargetBtn != null) selectTargetBtn.Enabled = !running;
+        if (applyRoomToExportCheck != null) applyRoomToExportCheck.Enabled = !running;
+        if (studioQueueAddBtn != null) studioQueueAddBtn.Enabled = !running;
+        if (studioQueueAddInQueueTabBtn != null) studioQueueAddInQueueTabBtn.Enabled = !running;
+        if (studioBatchAddBtn != null) studioBatchAddBtn.Enabled = !running;
+        if (studioQueueRemoveBtn != null) studioQueueRemoveBtn.Enabled = !running;
+        if (studioMetaBtn != null) studioMetaBtn.Enabled = !running;
+        if (studioReportBtn != null) studioReportBtn.Enabled = !running;
+        if (wiringBtn != null) {
+            wiringBtn.Enabled = !running && RenderTarget is not DriverRenderTarget && RenderTarget is not VirtualizerRenderTarget;
+        }
+        for (int i = 0; i < studioWorkflowPillBtns.Count; i++) {
+            studioWorkflowPillBtns[i].Enabled = !running;
+        }
+        if (studioWorkflowSelector != null) {
+            studioWorkflowSelector.Enabled = !running;
+            studioWorkflowSelector.Alpha = running ? 0.55f : 1f;
+        }
+        if (studioW12PresetSelector != null) {
+            studioW12PresetSelector.Enabled = !running;
+            studioW12PresetSelector.Alpha = running ? 0.55f : 1f;
+        }
+        if (exportFormatSelector != null) {
+            exportFormatSelector.Enabled = !running;
+            exportFormatSelector.Alpha = running ? 0.55f : 1f;
+        }
+        if (containerSelector != null) {
+            containerSelector.Enabled = !running;
+            containerSelector.Alpha = running ? 0.55f : 1f;
+        }
         if (cancelRenderBtn != null) cancelRenderBtn.Enabled = running;
         if (extractBtn != null) extractBtn.Enabled = !running;
         if (cancelExtractBtn != null) cancelExtractBtn.Enabled = running;
+        if (extractJsonCheck != null) extractJsonCheck.Enabled = !running;
+        if (extractResidualCheck != null) extractResidualCheck.Enabled = !running;
+        for (int i = 0; i < extractBitButtons.Count; i++) {
+            extractBitButtons[i].Enabled = !running && selectedExtractMode != 3;
+        }
+        RefreshStudioPrimaryCtaUi();
     }
 
     void SetConvertStatus(string text, double progress) {

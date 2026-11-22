@@ -5,6 +5,7 @@ using Android.Views;
 using Cavern.Channels;
 
 using Cavernize.Logic.Models.RenderTargets;
+using CavernizeAndroid.Language;
 using CavernizeAndroid.Theme;
 
 namespace CavernizeAndroid.Views;
@@ -19,6 +20,7 @@ public sealed class LayoutDiagramView : View {
     readonly Paint labelPaint = new(PaintFlags.AntiAlias);
 
     readonly Dictionary<ReferenceChannel, Color> channelColors = new();
+    RenderTarget activeTarget;
     bool isDynamicMode;
 
     static readonly (ReferenceChannel ch, float x, float y, bool isTop)[] speakerLayout = [
@@ -57,11 +59,22 @@ public sealed class LayoutDiagramView : View {
         labelPaint.Color = OneUiTheme.TextSecondary;
         labelPaint.TextSize = 9.5f * dp;
         labelPaint.TextAlign = Paint.Align.Center;
+        labelPaint.SetTypeface(OneUiTheme.GetAppleFontMedium(context));
     }
 
     public void SetRenderTarget(RenderTarget target) {
+        activeTarget = target;
+        RefreshThemeColors();
+        Invalidate();
+    }
+
+    public void RefreshThemeColors() {
+        boxPaint.Color = OneUiTheme.TextMuted;
+        linePaint.Color = OneUiTheme.ControlStroke;
+        labelPaint.Color = OneUiTheme.TextSecondary;
+
         channelColors.Clear();
-        if (target is DriverRenderTarget || target is VirtualizerRenderTarget) {
+        if (activeTarget is DriverRenderTarget || activeTarget is VirtualizerRenderTarget) {
             isDynamicMode = true;
             Color dyn = OneUiTheme.PrimaryHigh;
             foreach (var s in speakerLayout) {
@@ -74,16 +87,15 @@ public sealed class LayoutDiagramView : View {
             foreach (var s in speakerLayout) {
                 channelColors[s.ch] = inactive;
             }
-            if (target != null) {
-                ReferenceChannel[] channels = target.Channels;
+            if (activeTarget != null) {
+                ReferenceChannel[] channels = activeTarget.Channels;
                 for (int i = 0; i < channels.Length; i++) {
-                    if (target.IsExported(i) && channels[i] != ReferenceChannel.ScreenLFE) {
+                    if (activeTarget.IsExported(i) && channels[i] != ReferenceChannel.ScreenLFE) {
                         channelColors[channels[i]] = active;
                     }
                 }
             }
         }
-        Invalidate();
     }
 
     protected override void OnMeasure(int widthMeasureSpec, int heightMeasureSpec) {
@@ -95,6 +107,7 @@ public sealed class LayoutDiagramView : View {
 
     protected override void OnDraw(Canvas canvas) {
         base.OnDraw(canvas);
+        RefreshThemeColors();
         float scaleX = Width / 170f;
         float scaleY = Height / 164f;
         float scale = Math.Min(scaleX, scaleY);
@@ -115,13 +128,13 @@ public sealed class LayoutDiagramView : View {
         canvas.DrawLine(X(122), Y(50), X(154), Y(158), linePaint);
 
         foreach (var sp in speakerLayout) {
-            speakerPaint.Color = channelColors.TryGetValue(sp.ch, out Color col) ? col : Color.Gray;
+            speakerPaint.Color = channelColors.TryGetValue(sp.ch, out Color col) ? col : OneUiTheme.ControlStroke;
             float r = (sp.isTop ? 4.5f : 5.5f) * scale;
             canvas.DrawCircle(X(sp.x + 5), Y(sp.y + 5), r, speakerPaint);
         }
 
         if (isDynamicMode) {
-            canvas.DrawText("3D / Dynamic", Width * 0.5f, Height - 4f, labelPaint);
+            canvas.DrawText(AndroidStrings.Active["Layout3DDynamic"], Width * 0.5f, Height - 4f, labelPaint);
         }
     }
 }

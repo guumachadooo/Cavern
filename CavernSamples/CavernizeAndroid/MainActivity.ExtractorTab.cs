@@ -18,19 +18,25 @@ namespace CavernizeAndroid;
 public partial class MainActivity {
     int selectedExtractMode;
     int selectedExtractBitDepth = 1; // 0 = 16-bit, 1 = 24-bit, 2 = 32-bit float
-    readonly List<(LinearLayout row, View radioDot, TextView title)> extractModeRows = [];
+    readonly List<(int modeIdx, LinearLayout row, View radioDot, TextView title, TextView subtitle)> extractModeRows = [];
     readonly List<Button> extractBitButtons = [];
 
-    CheckBox extractJsonCheck;
+    CheckBox extractJsonCheck, extractResidualCheck;
+    LinearLayout extractBitSection, extractJsonCheckWrap, extractResidualCheckWrap, extractSelectionSection;
+    LinearLayout extractAiChainCard;
+    TextView extractAiChainSummaryText;
+    Button extractBadgeOnnxBtn, extractBadgeTwinBtn;
     LinearLayout extractorChecklistContainer, extractedFilesContainer;
     Button extractBtn, cancelExtractBtn;
     ProgressBar extractProgressBar;
     TextView extractStatusText;
     readonly List<(int index, CheckBox box)> extractCheckboxes = [];
+    bool pendingAutoResumeExtractAfterTrueHD;
+    CavernizeTrack pendingTrueHDExtractTrack;
 
     LinearLayout BuildExtractorTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(6), Dp(14), Dp(116));
+        ApplyTabPageCutoutPadding(page);
 
         // 0. Active File Source Bar (Clean workspace context & track selector)
         page.AddView(CreateWorkspaceSourceBar(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
@@ -42,75 +48,145 @@ public partial class MainActivity {
         desc.SetPadding(0, 0, 0, Dp(10));
         card.AddView(desc);
 
-        // One UI 9 Visual Radio Rows for Extraction Modes
+        // One UI 9 Grouped Goal Cards for Extraction Modes
         LinearLayout modeHeaderRow = HRow();
         modeHeaderRow.AddView(Label(S["ExtractMode"], 12f, ColMuted), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        modeHeaderRow.AddView(CreateInlineHelpBtn(S["ExtractMode"].TrimEnd(':'), S["TipExtractModes"]), new LinearLayout.LayoutParams(Dp(24), Dp(24)));
+        modeHeaderRow.AddView(CreateInlineHelpBtn(S["ExtractMode"].TrimEnd(':'), S["TipExtractModesAll"]), new LinearLayout.LayoutParams(Dp(24), Dp(24)));
         card.AddView(modeHeaderRow);
-        LinearLayout modeGroup = new(this) { Orientation = Orientation.Vertical };
-        modeGroup.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 20f);
-        modeGroup.SetPadding(Dp(10), Dp(4), Dp(10), Dp(4));
+
         extractModeRows.Clear();
-
-        string[] modes = [
-            S["ModeRawStems"],
-            S["ModeSpatialEach"],
-            S["Mode3DCombined"],
-            S["ModeRawBitstream"],
-            S["ModeNeuralStems"],
-            S["ModeNeuralRestorer"],
-            S["ModeLgsrHybridStems"]
+        (string goalHeader, (int modeIdx, string title, string sub)[] items)[] goalGroups = [
+            (S["ExtractGoalRawTitle"], [
+                (0, S["ModeRawStems"], S["ModeRawStemsSub"]),
+                (3, S["ModeRawBitstreamClean"], S["ModeRawBitstreamSub"])
+            ]),
+            (S["ExtractGoalSpatialTitle"], [
+                (1, S["ModeSpatialEach"], S["ModeSpatialEachSub"]),
+                (2, S["Mode3DCombined"], S["Mode3DCombinedSub"])
+            ]),
+            (S["ExtractGoalNeuralTitle"], [
+                (4, S["ModeNeuralStemsClean"], S["ModeNeuralStemsSub"])
+            ]),
+            (S["ExtractGoalRestoreTitle"], [
+                (5, S["ModeNeuralRestorerClean"], S["ModeNeuralRestorerSub"]),
+                (6, S["ModeLgsrHybridStemsClean"], S["ModeLgsrHybridStemsSub"])
+            ])
         ];
-        for (int i = 0; i < modes.Length; i++) {
-            int modeIdx = i;
-            if (i > 0) {
-                AddDivider(modeGroup);
+
+        for (int g = 0; g < goalGroups.Length; g++) {
+            var (goalHeader, items) = goalGroups[g];
+            LinearLayout goalCard = new(this) { Orientation = Orientation.Vertical };
+            goalCard.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 20f);
+            goalCard.SetPadding(Dp(12), Dp(8), Dp(12), Dp(6));
+
+            TextView goalHdrTv = Label(goalHeader, 11.3f, OneUiTheme.PeachText);
+            goalHdrTv.Typeface = OneUiTheme.GetAppleFontBold(this);
+            goalHdrTv.SetPadding(Dp(2), 0, Dp(2), Dp(4));
+            goalCard.AddView(goalHdrTv);
+
+            for (int i = 0; i < items.Length; i++) {
+                var (modeIdx, modeTitle, modeSub) = items[i];
+                if (i > 0) {
+                    AddDivider(goalCard);
+                }
+                LinearLayout row = HRow();
+                row.SetPadding(Dp(4), Dp(8), Dp(4), Dp(8));
+                OneUiTheme.AttachRecoil(row, 0.98f);
+
+                View radioDot = new(this);
+                LinearLayout textCol = new(this) { Orientation = Orientation.Vertical };
+                TextView modeTv = Label(modeTitle, 12.8f, ColText);
+                modeTv.SetIncludeFontPadding(false);
+                TextView subTv = Label(modeSub, 11.1f, OneUiTheme.TextSub);
+                textCol.AddView(modeTv);
+                textCol.AddView(subTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    TopMargin = Dp(2)
+                });
+
+                row.AddView(radioDot, new LinearLayout.LayoutParams(Dp(18), Dp(18)) { RightMargin = Dp(10) });
+                row.AddView(textCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+                int capturedIdx = modeIdx;
+                row.Click += (_, _) => {
+                    if (isOperationRunning || isPreparingTrueHD) {
+                        return;
+                    }
+                    selectedExtractMode = capturedIdx;
+                    RefreshExtractModeUi();
+                };
+                extractModeRows.Add((modeIdx, row, radioDot, modeTv, subTv));
+                goalCard.AddView(row);
             }
-            LinearLayout row = HRow();
-            row.SetPadding(Dp(6), Dp(10), Dp(6), Dp(10));
-            OneUiTheme.AttachRecoil(row, 0.98f);
 
-            View radioDot = new(this);
-            TextView modeTv = Label(modes[i], 13f, ColText);
-            row.AddView(radioDot, new LinearLayout.LayoutParams(Dp(18), Dp(18)) { RightMargin = Dp(10) });
-            row.AddView(modeTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-
-            row.Click += (_, _) => {
-                selectedExtractMode = modeIdx;
-                RefreshExtractModeUi();
-            };
-            extractModeRows.Add((row, radioDot, modeTv));
-            modeGroup.AddView(row);
+            card.AddView(goalCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                TopMargin = Dp(6),
+                BottomMargin = g == goalGroups.Length - 1 ? Dp(10) : Dp(2)
+            });
         }
-        card.AddView(modeGroup, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(6),
+
+        // Live Slot 7 AI Processing Chain Preview Card (with ONNX & Lossless Twin Readiness Badges)
+        extractAiChainCard = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        extractAiChainCard.Background = OneUiTheme.CreateRoundedDrawable(
+            this,
+            OneUiTheme.WithAlpha(OneUiTheme.IconAtmosUpmix, 28),
+            18f,
+            OneUiTheme.WithAlpha(OneUiTheme.IconAtmosUpmix, 110),
+            1f);
+        extractAiChainCard.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+
+        TextView aiCardTitle = Label(S["ExtractAiChainCardTitle"], 11.8f, OneUiTheme.PeachText);
+        aiCardTitle.Typeface = OneUiTheme.GetAppleFontBold(this);
+        extractAiChainCard.AddView(aiCardTitle);
+
+        extractAiChainSummaryText = Label("", 11.4f, ColText);
+        extractAiChainSummaryText.SetPadding(0, Dp(4), 0, Dp(8));
+        extractAiChainCard.AddView(extractAiChainSummaryText);
+
+        LinearLayout aiBadgeRow = HRow();
+        extractBadgeOnnxBtn = PillButton(S["StudioBadgeOnnxReady"], OnOnnxReadinessBadgeClicked);
+        extractBadgeTwinBtn = PillButton(S["StudioBadgeTwinNone"], OnTwinReadinessBadgeClicked);
+        extractBadgeOnnxBtn.TextSize = 11f;
+        extractBadgeTwinBtn.TextSize = 11f;
+        aiBadgeRow.AddView(extractBadgeOnnxBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        aiBadgeRow.AddView(extractBadgeTwinBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        extractAiChainCard.AddView(aiBadgeRow);
+
+        card.AddView(extractAiChainCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(10)
         });
-        RefreshExtractModeUi();
 
-        // One UI 9 Segmented Capsule Pills for Bit Depth
-        card.AddView(Label(S["BitDepthLabel"], 12f, ColMuted));
+        // One UI 9 Segmented Capsule Pills for Bit Depth (hidden/disabled in Mode 3 Raw Bitstream)
+        extractBitSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        extractBitSection.AddView(Label(S["BitDepthLabel"], 12f, ColMuted));
         LinearLayout bitRow = HRow();
         bitRow.SetPadding(0, Dp(6), 0, Dp(8));
         extractBitButtons.Clear();
-        string[] bitLabels = ["16-bit PCM", "24-bit PCM", "32-bit Float"];
+        string[] bitLabels = [S["BitDepth16Pcm"], S["BitDepth24Pcm"], S["BitDepth32Float"]];
         for (int i = 0; i < bitLabels.Length; i++) {
             int bitIdx = i;
             Button bb = PillButton(bitLabels[i], () => {
+                if (isOperationRunning || isPreparingTrueHD || selectedExtractMode == 3) {
+                    return;
+                }
                 selectedExtractBitDepth = bitIdx;
                 RefreshExtractBitButtonsUi();
             });
-            bb.TextSize = 11.5f;
-            bb.SetPadding(Dp(6), Dp(8), Dp(6), Dp(8));
+            bb.TextSize = 11.4f;
+            bb.SetMinimumWidth(0);
+            bb.SetPadding(Dp(8), Dp(9), Dp(8), Dp(9));
             extractBitButtons.Add(bb);
             bitRow.AddView(bb, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
-                RightMargin = i < bitLabels.Length - 1 ? Dp(6) : 0
+                RightMargin = i < bitLabels.Length - 1 ? Dp(8) : 0
             });
         }
-        card.AddView(bitRow);
+        extractBitSection.AddView(bitRow);
+        card.AddView(extractBitSection);
         RefreshExtractBitButtonsUi();
 
-        AddDivider(card);
+        // Mode 0 only: 3D object trajectory metadata (.json)
         extractJsonCheck = new CheckBox(this) {
             Text = S["ExportJsonCheck"],
             Checked = true,
@@ -118,9 +194,23 @@ public partial class MainActivity {
         };
         extractJsonCheck.SetTextColor(ColText);
         extractJsonCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
-        card.AddView(WrapControlWithHelp(extractJsonCheck, S["ExportJsonCheck"], S["TipExtractJson"], bottomMarginDp: 4));
+        extractJsonCheckWrap = WrapControlWithHelp(extractJsonCheck, S["ExportJsonCheck"], S["TipExtractJson"], bottomMarginDp: 4);
+        card.AddView(extractJsonCheckWrap);
 
-        // Quick selection pills (horizontally scrollable so full labels never clip or wrap)
+        // Mode 6 only: Dedicated Atmos-exclusive residual stem toggle (never hijacking extractJsonCheck!)
+        extractResidualCheck = new CheckBox(this) {
+            Text = S["ExportResidualTrackCheck"],
+            Checked = true,
+            TextSize = 12.5f
+        };
+        extractResidualCheck.SetTextColor(ColText);
+        extractResidualCheck.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(ColAccent);
+        extractResidualCheckWrap = WrapControlWithHelp(extractResidualCheck, S["ExportResidualTrackCheck"], S["TipExtractResidual"], bottomMarginDp: 4);
+        card.AddView(extractResidualCheckWrap);
+
+        // Modes 0..2 only: Quick selection pills & per-channel/object checklist
+        extractSelectionSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        AddDivider(extractSelectionSection);
         HorizontalScrollView selScroll = new(this) { HorizontalScrollBarEnabled = false };
         LinearLayout selRow = HRow();
         selRow.SetPadding(0, Dp(8), 0, Dp(8));
@@ -133,10 +223,11 @@ public partial class MainActivity {
             }
         }));
         selScroll.AddView(selRow);
-        card.AddView(selScroll);
+        extractSelectionSection.AddView(selScroll);
 
         extractorChecklistContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };
-        card.AddView(extractorChecklistContainer);
+        extractSelectionSection.AddView(extractorChecklistContainer);
+        card.AddView(extractSelectionSection);
 
         LinearLayout actionRow = HRow();
         actionRow.SetPadding(0, Dp(12), 0, Dp(8));
@@ -165,19 +256,104 @@ public partial class MainActivity {
         outCard.AddView(extractedFilesContainer);
         page.AddView(outCard);
 
+        RefreshExtractModeUi();
         RefreshExtractorChecklist();
+        PopulateExtractedFiles(null);
         return page;
     }
 
     void RefreshExtractModeUi() {
         for (int i = 0; i < extractModeRows.Count; i++) {
-            bool sel = i == selectedExtractMode;
-            var (_, dot, title) = extractModeRows[i];
+            var (modeIdx, row, dot, title, subtitle) = extractModeRows[i];
+            bool sel = modeIdx == selectedExtractMode;
+            row.Background = sel
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 56), 14f)
+                : null;
             dot.Background = sel
                 ? OneUiTheme.CreateRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp, ColText, 3f)
                 : OneUiTheme.CreateRoundedDrawable(this, Color.Transparent, OneUiTheme.PillCornerDp, OneUiTheme.TextMuted, 1.5f);
             title.SetTypeface(null, sel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
-            title.SetTextColor(sel ? ColText : OneUiTheme.TextSub);
+            title.SetTextColor(sel ? ColText : OneUiTheme.TextSecondary);
+            subtitle.SetTextColor(sel ? OneUiTheme.TextSecondary : OneUiTheme.TextMuted);
+        }
+
+        bool isRawBitstream = selectedExtractMode == 3;
+        if (extractBitSection != null) {
+            extractBitSection.Visibility = isRawBitstream ? ViewStates.Gone : ViewStates.Visible;
+        }
+        for (int i = 0; i < extractBitButtons.Count; i++) {
+            extractBitButtons[i].Enabled = !isOperationRunning && !isRawBitstream;
+        }
+
+        if (extractJsonCheckWrap != null) {
+            extractJsonCheckWrap.Visibility = selectedExtractMode == 0 ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (extractResidualCheckWrap != null) {
+            extractResidualCheckWrap.Visibility = selectedExtractMode == 6 ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (extractSelectionSection != null) {
+            extractSelectionSection.Visibility = selectedExtractMode <= 2 ? ViewStates.Visible : ViewStates.Gone;
+        }
+
+        RefreshExtractAiChainPreviewUi();
+    }
+
+    void RefreshExtractAiChainPreviewUi() {
+        if (uiDestroyed || extractAiChainCard == null || store == null) {
+            return;
+        }
+        int mode = selectedExtractMode;
+        bool isAiMode = mode >= 4;
+        extractAiChainCard.Visibility = isAiMode ? ViewStates.Visible : ViewStates.Gone;
+        if (!isAiMode) {
+            return;
+        }
+
+        Cavernize.Logic.Spatial.NeuralAudioConfig neuralCfg = store.BuildNeuralAudioConfig();
+        bool neuralKaraokeAtmos = mode == 4 && neuralCfg.SpatialKaraokeEnabled && trackSourceItems.Count > 2;
+        Cavernize.Logic.Spatial.NeuralPipelineGoal goal = mode == 5
+            ? Cavernize.Logic.Spatial.NeuralPipelineGoal.LosslessResidualRestore
+            : (neuralKaraokeAtmos
+                ? Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke
+                : Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation);
+        Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator?.BuildPlan(goal, neuralCfg);
+        string modelId = mode == 5
+            ? neuralCfg.ActiveRestorerModelId
+            : (neuralKaraokeAtmos ? neuralCfg.ActiveKaraokeModelId : neuralCfg.ActiveStemModelId);
+        string modelPath = OnnxRuntimeInstallerService.ResolveModelPath(this, modelId);
+        bool runtimeReady = OnnxRuntimeInstallerService.IsRuntimeInstalled(this);
+        bool modelReady = runtimeReady && ((plan != null && plan.IsRunnable) || !string.IsNullOrEmpty(modelPath));
+
+        if (extractAiChainSummaryText != null) {
+            if (plan != null && !string.IsNullOrEmpty(plan.Summary) && plan.IsRunnable) {
+                extractAiChainSummaryText.Text = string.Format(S["NeuralPlanPreviewFmt"], plan.Summary);
+                extractAiChainSummaryText.SetTextColor(OneUiTheme.IconSystemInfo);
+            } else if (!string.IsNullOrEmpty(modelPath)) {
+                extractAiChainSummaryText.Text = string.Format(S["NeuralPlanPreviewFmt"], Path.GetFileNameWithoutExtension(modelPath));
+                extractAiChainSummaryText.SetTextColor(OneUiTheme.IconSystemInfo);
+            } else {
+                extractAiChainSummaryText.Text = S["ExtractAiChainNoModel"];
+                extractAiChainSummaryText.SetTextColor(OneUiTheme.PeachText);
+            }
+        }
+
+        StyleReadinessBadge(
+            extractBadgeOnnxBtn,
+            modelReady ? S["StudioBadgeOnnxReady"] : S["StudioBadgeOnnxMissing"],
+            modelReady ? OneUiTheme.FunctionalGreen : OneUiTheme.FunctionalOrange,
+            !modelReady);
+
+        if (extractBadgeTwinBtn != null) {
+            extractBadgeTwinBtn.Visibility = (mode == 4 || mode == 6) ? ViewStates.Visible : ViewStates.Gone;
+            bool twinSynced = IsLosslessTwinSynced(out _);
+            Cavernize.Logic.Spatial.LgsrDiagnostics lgsr = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
+            if (twinSynced) {
+                StyleReadinessBadge(extractBadgeTwinBtn, S["StudioBadgeTwinSynced"], OneUiTheme.FunctionalGreen, true);
+            } else if (lgsr.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedAlreadyLossless && mode != 6) {
+                StyleReadinessBadge(extractBadgeTwinBtn, S["StudioBadgeTwinNative"], OneUiTheme.IconSystemInfo, false);
+            } else {
+                StyleReadinessBadge(extractBadgeTwinBtn, S["StudioBadgeTwinNone"], OneUiTheme.PeachText, mode == 6);
+            }
         }
     }
 
@@ -222,19 +398,32 @@ public partial class MainActivity {
 
         if (trackSourceItems.Count == 0) {
             extractorChecklistContainer.AddView(Label(S["NoTrack"], 12f, ColMuted));
-            return;
+        } else {
+            foreach (TrackSourceItem item in trackSourceItems) {
+                CheckBox cb = new(this) {
+                    Text = item.Name,
+                    Checked = true,
+                    TextSize = 12.5f
+                };
+                cb.SetTextColor(item.IsDynamicObject ? OneUiTheme.DynamicObject : ColText);
+                cb.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(item.IsDynamicObject ? OneUiTheme.DynamicObject : ColAccent);
+                extractorChecklistContainer.AddView(cb);
+                extractCheckboxes.Add((item.Index, cb));
+            }
         }
 
-        foreach (TrackSourceItem item in trackSourceItems) {
-            CheckBox cb = new(this) {
-                Text = item.Name,
-                Checked = true,
-                TextSize = 12.5f
-            };
-            cb.SetTextColor(item.IsDynamicObject ? OneUiTheme.DynamicObject : ColText);
-            cb.ButtonTintList = Android.Content.Res.ColorStateList.ValueOf(item.IsDynamicObject ? OneUiTheme.DynamicObject : ColAccent);
-            extractorChecklistContainer.AddView(cb);
-            extractCheckboxes.Add((item.Index, cb));
+        RefreshExtractAiChainPreviewUi();
+        if (extractedFilesContainer != null && !isOperationRunning && extractedFilesContainer.ChildCount <= 1) {
+            PopulateExtractedFiles(null);
+        }
+
+        if (!isPreparingTrueHD && pendingAutoResumeExtractAfterTrueHD) {
+            CavernizeTrack expected = pendingTrueHDExtractTrack;
+            pendingAutoResumeExtractAfterTrueHD = false;
+            pendingTrueHDExtractTrack = null;
+            if (decodedTrueHDTrack != null && selectedTrack == expected && !isOperationRunning) {
+                uiHandler?.Post(StartExtraction);
+            }
         }
     }
 
@@ -250,6 +439,8 @@ public partial class MainActivity {
         }
         int mode = selectedExtractMode;
         if (active.Codec == Cavern.Format.Common.Codec.TrueHD && mode != 3) {
+            pendingTrueHDExtractTrack = selectedTrack;
+            pendingAutoResumeExtractAfterTrueHD = true;
             PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
             return;
         }
@@ -260,10 +451,11 @@ public partial class MainActivity {
             2 => BitDepth.Float32,
             _ => BitDepth.Int24
         };
-        bool exportJson = extractJsonCheck.Checked;
+        bool exportJson = extractJsonCheck != null && extractJsonCheck.Checked;
+        bool exportResidual = extractResidualCheck != null && extractResidualCheck.Checked;
         List<int> selectedIndices = extractCheckboxes.Where(x => x.box.Checked).Select(x => x.index).ToList();
 
-        if (mode != 3 && mode != 4 && mode != 5 && mode != 6 && selectedIndices.Count == 0) {
+        if (mode <= 2 && selectedIndices.Count == 0) {
             ShowError(S["ExtractSelectAtLeastOne"]);
             return;
         }
@@ -301,7 +493,8 @@ public partial class MainActivity {
                 return;
             }
         }
-        if (mode == 6 && (activeLosslessTwin == null || !activeLosslessTwin.HasSyncedLosslessTwin)) {
+        var twinProvider = activeLosslessTwin ?? playerEngine?.SceneHub?.ActiveLosslessReference as Cavernize.Logic.Spatial.UniversalLosslessTwinProvider;
+        if (mode == 6 && (twinProvider == null || !twinProvider.HasSyncedLosslessTwin)) {
             ShowError(S["LgsrMasterNeedsTwin"]);
             return;
         }
@@ -318,6 +511,9 @@ public partial class MainActivity {
 
         isOperationRunning = true;
         SetRunningUiState(true);
+        extractProgressBar.Indeterminate = false;
+        extractProgressBar.Progress = 0;
+        extractStatusText.Text = S["Starting"];
         extractedFilesContainer.RemoveAllViews();
 
         Task.Run(() => {
@@ -325,6 +521,7 @@ public partial class MainActivity {
                 store.ApplyGlobals();
                 List<string> created = [];
                 void ReportProg(double p, string msg) => RunOnUiThread(() => {
+                    extractProgressBar.Indeterminate = false;
                     extractProgressBar.Progress = Math.Clamp((int)Math.Round(p * 1000.0), 0, 1000);
                     extractStatusText.Text = msg;
                 });
@@ -370,7 +567,7 @@ public partial class MainActivity {
                         exportHybrid714: false,
                         onProgress: ReportProg,
                         token: token,
-                        losslessTwin: activeLosslessTwin,
+                        losslessTwin: twinProvider,
                         orchestrator: neuralOrchestrator,
                         onSeparatedTrackReady: null,
                         runStandaloneRestorer: true);
@@ -378,7 +575,7 @@ public partial class MainActivity {
                 } else if (mode == 6) {
                     StemExtractionResult res = StemExtractor.ExtractLosslessHybridSpatialMaster(
                         active,
-                        activeLosslessTwin,
+                        twinProvider,
                         neuralRuntime,
                         neuralModelPath,
                         neuralModelEntry,
@@ -388,7 +585,7 @@ public partial class MainActivity {
                         lgsrCfg,
                         tier3ModelPath,
                         tier3ModelEntry,
-                        exportResidualTrack: exportJson,
+                        exportResidualTrack: exportResidual,
                         onProgress: ReportProg,
                         token: token,
                         orchestrator: neuralOrchestrator,
@@ -416,7 +613,7 @@ public partial class MainActivity {
                         exportHybrid714: exportHybrid,
                         onProgress: ReportProg,
                         token: token,
-                        losslessTwin: activeLosslessTwin,
+                        losslessTwin: twinProvider,
                         orchestrator: neuralOrchestrator,
                         onSeparatedTrackReady: separated => {
                             if (separated != null) {
@@ -437,19 +634,25 @@ public partial class MainActivity {
 
                 AppLogger.Info($"Stem extraction complete: {created.Count} files in '{outDir}'");
                 RunOnUiThread(() => {
+                    extractProgressBar.Indeterminate = false;
                     extractProgressBar.Progress = 1000;
                     extractStatusText.Text = string.Format(S["ExtractDone"], created.Count, outDir);
                     PopulateExtractedFiles(created);
                 });
             } catch (OperationCanceledException) {
                 RunOnUiThread(() => {
+                    extractProgressBar.Indeterminate = false;
                     extractProgressBar.Progress = 0;
-                    extractStatusText.Text = S["CancelBtn"];
+                    extractStatusText.Text = S["CancelledStatus"];
+                    PopulateExtractedFiles(null);
                 });
             } catch (Exception ex) {
                 AppLogger.Error("StartExtraction", ex);
                 RunOnUiThread(() => {
+                    extractProgressBar.Indeterminate = false;
+                    extractProgressBar.Progress = 0;
                     extractStatusText.Text = ex.Message;
+                    PopulateExtractedFiles(null);
                     ShowError(ex.Message);
                 });
             } finally {
@@ -460,7 +663,19 @@ public partial class MainActivity {
     }
 
     void PopulateExtractedFiles(List<string> paths) {
+        if (extractedFilesContainer == null) {
+            return;
+        }
         extractedFilesContainer.RemoveAllViews();
+        if (paths == null || paths.Count == 0) {
+            string emptyMsg = GetActiveTrack() == null
+                ? S["ExtractOutputEmptyNoTrack"]
+                : S["ExtractOutputEmptyReady"];
+            TextView emptyTv = Label(emptyMsg, 12f, OneUiTheme.TextMuted);
+            emptyTv.SetPadding(Dp(4), Dp(6), Dp(4), Dp(6));
+            extractedFilesContainer.AddView(emptyTv);
+            return;
+        }
         foreach (string path in paths) {
             string localPath = path;
             LinearLayout row = HRow();

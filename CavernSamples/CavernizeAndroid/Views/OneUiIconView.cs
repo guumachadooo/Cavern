@@ -67,7 +67,8 @@ public enum OneUiIconType {
     AudioLogoAtmos,
     AudioLogoSurround,
     AudioLogoStereo,
-    Microphone
+    Microphone,
+    ChevronRight
 }
 
 public enum OneUiTabKind {
@@ -634,6 +635,13 @@ public static class OneUiVectorIcons {
                 canvas.DrawPath(p, stroke);
                 break;
 
+            case OneUiIconType.ChevronRight:
+                p.MoveTo(cx - r * 0.26f, cy - r * 0.64f);
+                p.LineTo(cx + r * 0.36f, cy);
+                p.LineTo(cx - r * 0.26f, cy + r * 0.64f);
+                canvas.DrawPath(p, stroke);
+                break;
+
             case OneUiIconType.Refresh:
                 canvas.DrawArc(new RectF(cx - r * 0.72f, cy - r * 0.72f, cx + r * 0.72f, cy + r * 0.72f), -35f, 290f, false, stroke);
                 p.MoveTo(cx + r * 0.22f, cy - r * 0.72f);
@@ -1037,7 +1045,7 @@ public static class OneUiPillFactory {
             };
             tv.SetIncludeFontPadding(false);
             tv.SetTextColor(OneUiTheme.TextPrimary);
-            tv.SetTypeface(null, primary ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+            OneUiTheme.ApplyHeadlineFont(ctx, tv, bold: primary);
             pill.AddView(tv);
         }
 

@@ -635,7 +635,7 @@ public sealed class AndroidStrings {
         ["TipIsmRoom"] = "Computes exact 1st- and 2nd-order Allen & Berkley (1979) shoebox mirror-image reflections using physical speed of sound, inverse-distance scaling, ISO 354 3-band Sabine wall absorption, and live head-tracked arrival angles routed through your active measured HRIR. Automatically bypassed whenever a measured BRIR is active to prevent double room acoustics.",
         ["TipNearField"] = "Applies Duda & Martens (1998) spherical-head Legendre-Hankel diffraction (DVF) relative to your HRIR measurement distance when sources approach closer than 1.0 m. Strictly 0.00 dB unity bypass at >= 1.0 m and auto-guarded against double compensation on TH Köln near-field HRIRs.",
         ["TipAirAbsorption"] = "Applies exact ISO 9613-1:1993 atmospheric absorption (O2/N2 molecular relaxation + thermal viscosity) for physical source distances beyond 5.0 m and along ISM reflection paths. Strictly 0.00 dB unity pass-through at <= 5.0 m.",
-        ["Slot5BCardTitle"] = "HRTF Personalization & MagLS (Slot 5B)",
+        ["Slot5BCardTitle"] = "HRTF Personalization & MagLS",
         ["MagLsModeTitle"] = "MagLS Ambisonics Decoder",
         ["MagLsModeOff"] = "Off (Direct Measured HRIR)",
         ["MagLsModeO1"] = "Order 1 (FOA • fc ~624 Hz)",
@@ -693,7 +693,7 @@ public sealed class AndroidStrings {
         ["HptfSweepPlayingToast"] = "Playing safe -18 dBFS 6–10 kHz ear-canal sweep...",
 
         // Slot 6B: Psychoacoustics & Studio Loudness Standards (ISO 226:2023, ITU-R BS.1770-5 / EBU R128, Spatial Dialog, 4x True-Peak Limiter)
-        ["Slot6BCardTitle"] = "Psychoacoustics & Loudness (Slot 6B)",
+        ["Slot6BCardTitle"] = "Psychoacoustics & Loudness",
         ["LoudnessMeterIdle"] = "BS.1770-5 Meter: waiting for audio · Ceiling {0:0.#} dBTP",
         ["LoudnessMeterLive"] = "M {0} · S {1} · I {2} LUFS · LRA {3:0.0} LU · TP {4:0.0} dBTP{5}{6}",
         ["LoudnessStatusSummary"] = "ISO 226: {0} · Dialog: {1} · Limiter: {2:0.#} dBTP",
@@ -721,7 +721,7 @@ public sealed class AndroidStrings {
         ["LoudnessMeterResetToast"] = "ITU-R BS.1770-5 Integrated LUFS & LRA meter reset.",
 
         // Slot 2B: On-Device Neural Audio Runtime (ONNX), MVSEP Anti-Artifact Pipeline & Spatial Karaoke
-        ["Slot2BCardTitle"] = "Neural Audio, Stems & Karaoke (Slot 2B)",
+        ["Slot2BCardTitle"] = "Neural Audio, Stems & Karaoke",
         ["NeuralRuntimeNotInstalled"] = "Bundled ONNX Runtime (libonnxruntime.so) unavailable in NativeLibraryDir",
         ["NeuralRuntimeInstalled"] = "ONNX Runtime {0} · {1} · {2} model(s) · {3:0.0} MB",
         ["NeuralRuntimeUpdateAvail"] = "ONNX Runtime update available: v{0}",
@@ -745,7 +745,7 @@ public sealed class AndroidStrings {
         ["SpatialKaraokeTitle"] = "Spatial Karaoke (Zero-Phase Atmos/Stereo)",
         ["KaraokeVocalLevelTitle"] = "Karaoke Vocal Level",
         ["KaraokePreserveBackingTitle"] = "Preserve Backing Harmonies",
-        ["KaraokeLosslessTwinTitle"] = "Accelerate via Lossless Twin (W09 Ready)",
+        ["KaraokeLosslessTwinTitle"] = "Accelerate via Lossless Twin",
         ["NeuralUpmixModeTitle"] = "Neural Spatial Upmix Mode",
         ["NeuralUpmixParametric"] = "Parametric DirAC Only (Zero-Latency)",
         ["NeuralUpmixStems3D"] = "3D Neural Stems Placement",
@@ -767,7 +767,7 @@ public sealed class AndroidStrings {
         ["NeuralDownloadingRuntime"] = "Verifying bundled ONNX Runtime...",
         ["NeuralExtractingLibs"] = "ONNX Runtime: Loading bundled native libraries...",
         ["NeuralRuntimeUpToDate"] = "Bundled ONNX Runtime ready ({0}).",
-        ["NeuralOrchestrationTitle"] = "Neural Pipeline Orchestration (Slot 7A)",
+        ["NeuralOrchestrationTitle"] = "Neural Pipeline Orchestration",
         ["NeuralOrchestrationAuto"] = "Auto (Best Installed Chain)",
         ["NeuralOrchestrationManual"] = "Manual (Custom Task Slots & Ensembles)",
         ["TipNeuralOrchestration"] = "Auto mode automatically chains your highest-ranked installed ONNX checkpoints (Separation -> Debleed -> Karaoke/Dereverb). Manual mode runs the exact single or multi-model ensemble you toggle in Models & Cache, including custom imported .onnx files.",
@@ -798,7 +798,7 @@ public sealed class AndroidStrings {
         ["TipNeuralUpmix"] = "Places separated neural stems (Vocals, Drums, Bass, Other, Residual) in 3D space or renders an energy-conserving 12-channel 7.1.4 Hybrid Neural + DirAC master.",
 
         // Slot 2C: Universal Lossless Twin & Lossless-Guided Atmos Restoration (LGSR, W09)
-        ["Slot2CCardTitle"] = "Lossless-Guided Atmos Restoration (Slot 2C)",
+        ["Slot2CCardTitle"] = "Lossless-Guided Atmos Restoration",
         ["LgsrStatusSearching"] = "Searching and sub-sample aligning lossless FLAC/WAV/ALAC twin...",
         ["LgsrStatusNone"] = "No paired lossless twin active (auto-pairs when FLAC/WAV/ALAC twin exists)",
         ["LgsrStatusBypassedLossless"] = "Auto-bypassed: active stream is already natively lossless (TrueHD/ADM/FLAC/WAV)",
@@ -842,7 +842,7 @@ public sealed class AndroidStrings {
         ["ProAudioBuf256"] = "256 frames (~5.3 ms @ 48k)",
         ["ProAudioSampleRateTitle"] = "Hardware Sample Rate Lock",
         ["ProAudioSrAuto"] = "Auto (Match Track / DAC)",
-        ["ProAudioLiveMicTitle"] = "Live Microphone Full-Duplex (Slot 1)",
+        ["ProAudioLiveMicTitle"] = "Live Microphone Full-Duplex",
         ["TipProAudioLiveMic"] = "Captures your USB XLR/combo microphone (e.g. Focusrite Scarlett 2i2) in real time and injects it as a 3D vocal object (SourceLayer.LiveMicrophone) sample-locked with Spatial Karaoke before the 4x True-Peak Limiter.",
         ["ProAudioMicRouteTitle"] = "Microphone Input Routing",
         ["ProAudioMicOff"] = "Muted / Off",
@@ -871,7 +871,7 @@ public sealed class AndroidStrings {
         ["ProAudioCalibrateSuccessToast"] = "RTT calibrated: {0:0.2} ms ({1:0.1} samples, SNR {2:0.1}x)",
         ["ProAudioCalibrateFailedToast"] = "Loopback signal too weak or noisy (SNR {0:0.1}x). Check mic gain / loopback.",
         ["ProAudioCreditsBtn"] = "Specs & Credits",
-        ["ProAudioCreditsTitle"] = "W10 Pro-Audio USB & Scarlett 2i2 References",
+        ["ProAudioCreditsTitle"] = "Pro-Audio USB & Scarlett 2i2 References",
         ["ScarlettControlsBtn"] = "Scarlett 2i2",
         ["ScarlettModalTitle"] = "Focusrite Scarlett 2i2 Hardware Controls",
         ["ScarlettNotConnectedMsg"] = "No Focusrite Scarlett 2i2 (Gen 2 / 3 / 4, VID 0x1235) with USB permission detected.\n\nConnect your Scarlett 2i2 via USB-C and tap 'Grant USB Access' first.",
@@ -917,7 +917,7 @@ public sealed class AndroidStrings {
         ["ScarlettGainAssistNoSignalToast"] = "Play or sing into the microphone first so Gain Assist can measure input peak.",
 
         // W12 Next-Gen Formats & Studio Batch Exporter
-        ["StudioW12CardTitle"] = "Studio Master Presets (W12)",
+        ["StudioW12CardTitle"] = "Studio Master Presets",
         ["StudioW12PresetLabel"] = "Master Workflow",
         ["StudioW12ExportBtn"] = "Export Master",
         ["StudioW12PresetBinaural"] = "Personalized Lossless Binaural (HRTF + ISM + AutoEq)",
@@ -964,7 +964,7 @@ public sealed class AndroidStrings {
         ["AudioSpecLgsrAbRestoredHint"] = "Active mode: Lossless-Guided Atmos (FLAC Twin restored pre-HRTF)",
         ["AudioSpecLgsrAbOriginalHint"] = "Active mode: Original Lossy Atmos (instant A/B bypass)",
         ["VocalModalTitle"] = "Auto-Vocal Mix-Match & Live Chain",
-        ["VocalEnableTitle"] = "Enable Live Vocal Chain (Slot 2D)",
+        ["VocalEnableTitle"] = "Enable Live Vocal Chain",
         ["VocalBypassAbTitle"] = "Instant A/B Dry Mic Bypass",
         ["VocalMixMatchPctTitle"] = "Mix Match Intensity",
         ["VocalReverbPctTitle"] = "Matched FDN Reverb & Delay",
@@ -1037,7 +1037,7 @@ public sealed class AndroidStrings {
         ["ExportCardTitle"] = "Export",
         ["StudioW12BatchBtn"] = "Batch Export Presets...",
         ["StudioW12BatchDialogTitle"] = "Studio Batch Export",
-        ["StudioW12BatchDialogDesc"] = "Select one or more W12 Studio Master presets to render sequentially and save to Downloads/Cavernize/Renderizados.",
+        ["StudioW12BatchDialogDesc"] = "Select one or more Studio Master presets to render sequentially and save to Downloads/Cavernize/Renderizados.",
         ["StudioW12BatchSelectAtLeastOne"] = "Select at least one Studio Master preset.",
         ["StudioW12BatchProgressFormat"] = "Batch {0}/{1}: {2}",
         ["StudioW12BatchDoneFormat"] = "Batch complete: {0}/{1} Studio masters saved to Downloads!",
@@ -1057,7 +1057,7 @@ public sealed class AndroidStrings {
         ["StemProgApplyingKaraoke"] = "Applying zero-phase multichannel Spatial Karaoke...",
         ["StemProgWritingKaraoke"] = "Writing karaoke {0}/{1}...",
         ["StemProgKaraokeDone"] = "Atmos Spatial Karaoke exported!",
-        ["StemProgRestoringStandalone"] = "Restoring audio via Slot 7A ({0})...",
+        ["StemProgRestoringStandalone"] = "Restoring audio ({0})...",
         ["StemProgRestorerDone"] = "Neural restoration exported!",
         ["StemProgLoadingOnnx"] = "Loading ONNX Runtime session...",
         ["StemProgWritingStem"] = "Writing stem {0}...",
@@ -1147,6 +1147,161 @@ public sealed class AndroidStrings {
         ["Iso226UnityTag"] = "Unity (0.0 dB)",
         ["DialogSpatialTag"] = "Spatial (+{0:0.0} dB)",
         ["DialogMsLr4Tag"] = "M/S LR4 (+{0:0.0} dB)",
+        ["Layout3DDynamic"] = "3D / Dynamic",
+        ["VideoTrackPill"] = "Track",
+        ["VideoAspectFitToast"] = "Aspect: Original (Fit)",
+        ["VideoAspectCropToast"] = "Aspect: Fill (Crop)",
+        ["VideoAspectStretchToast"] = "Aspect: Stretch (16:9)",
+        ["VideoPreviewCodecUnavailable"] = "Video preview unavailable for this codec (3D audio remains active)",
+        ["VideoPreviewFileUnavailable"] = "Video preview unavailable for this file (3D audio remains active)",
+        ["RoomCam3D"] = "3D",
+        ["RoomXRayBtn"] = "X-Ray",
+        ["RoomXRayBandLowShort"] = "L",
+        ["RoomXRayBandMidShort"] = "M",
+        ["RoomXRayBandHighShort"] = "H",
+        ["RoomLegendSummary"] = "Floor · Height · Obj · Stem/Mic",
+        ["RoomScreenFront"] = "SCREEN / FRONT",
+        ["RoomTagMic"] = "MIC",
+        ["RoomTagStemFmt"] = "Stem {0}",
+        ["RoomTagResidualFmt"] = "Res {0}",
+        ["RoomTagObjectFmt"] = "Obj {0}",
+        ["RoomDelayMsFmt"] = "{0:0.0}ms",
+        ["RoomHeightZeroMeters"] = "0.0m",
+        ["RoomHeightMetersFmt"] = "{0:+0.0;-0.0}m",
+        ["RoomHeightZeroBtn"] = "0m",
+        ["StatusStandbyTag"] = "STANDBY",
+        ["RoomTelemetryFmt"] = "Pos ({0:0.0}, {1:0.0}, {2:0.0})m · Yaw {3:0}° Pitch {4:0}°{5}",
+        ["RoomTelemetryHtSuffixFmt"] = " · HT: {0}",
+        ["StudioWorkflowLabel"] = "Studio Workflow",
+        ["StudioModeMaster"] = "Master Presets",
+        ["StudioModeClassic"] = "Classic Layout",
+        ["StudioModeQueue"] = "Batch Queue",
+        ["StudioMasterCardTitle"] = "Studio Master Presets",
+        ["StudioProSectionTitle"] = "Pro Diagnostics & Inspection",
+        ["StudioReadinessHeader"] = "Pipeline Readiness",
+        ["StudioPresetIamfClean"] = "IAMF v1.1 Spatial Container (.iamf)",
+        ["StudioPresetHoaClean"] = "3rd-Order Ambisonics (16ch HOA ACN/SN3D .wav)",
+        ["StudioPresetAdmClean"] = "ADM BWF Studio Master ( ITU-R BS.2076 .wav )",
+        ["StudioContextHybridReadyClean"] = "Lossless Twin ready ({0}) · EM-MWF + Neural Restorer active",
+        ["StudioBatchDialogDescClean"] = "Select one or more Studio Master presets to render sequentially and save to Downloads/Cavernize/Renderizados.",
+        ["StudioBadgeFFmpegReady"] = "FFmpeg Ready",
+        ["StudioBadgeFFmpegMissing"] = "FFmpeg Missing",
+        ["StudioBadgeOnnxReady"] = "ONNX Ready",
+        ["StudioBadgeOnnxMissing"] = "ONNX Models Needed",
+        ["StudioBadgeTrueHdReady"] = "TrueHD Ready",
+        ["StudioBadgeTrueHdPending"] = "Decode TrueHD",
+        ["StudioBadgeTrueHdMissing"] = "truehdd Missing",
+        ["StudioBadgeTwinSynced"] = "Lossless Twin Synced",
+        ["StudioBadgeTwinNative"] = "Native Lossless",
+        ["StudioBadgeTwinNone"] = "Find Lossless Twin",
+        ["CodecMetaSectionHeaderFmt"] = "=== {0} ({1}) ===",
+        ["RenderedTrackNameFmt"] = "Cavern {0} render",
+        ["RenderMergeUnknownError"] = "Unknown container merge error",
+        ["FFmpegMergeFailedFmt"] = "FFmpeg container merge failed: {0}",
+        ["RenderProgressSpeedFmt"] = "Rendering: {0:0.0%} ({1:0.0}x)",
+        ["TranscodeProgressFmt"] = "Rendering audio: {0:0.0%}",
+        ["TranscodeAdmProgressFmt"] = "Rendering ADM BWF: {0:0.0%}",
+        ["FinalizingAdmProgressFmt"] = "Finalizing ADM BWF metadata: {0:0.0%}",
+        ["ExtractGoalRawTitle"] = "Raw Channels & Bitstream",
+        ["ExtractGoalSpatialTitle"] = "3D Spatial Object Renders",
+        ["ExtractGoalNeuralTitle"] = "AI Source Separation (MVSEP)",
+        ["ExtractGoalRestoreTitle"] = "Harmonic & Hybrid Atmos Restoration",
+        ["ModeRawStemsSub"] = "Separate discrete bed/object channels into mono/stereo WAVs",
+        ["ModeSpatialEachSub"] = "Render each active object in 3D space across your target layout",
+        ["Mode3DCombinedSub"] = "Combine selected channels & objects into a single 3D master WAV",
+        ["ModeRawBitstreamClean"] = "Lossless Bitstream Passthrough",
+        ["ModeRawBitstreamSub"] = "Demux untouched E-AC-3 / TrueHD / DTS stream without re-encoding",
+        ["ModeNeuralStemsClean"] = "AI Neural Stems (Vocals, Drums, Bass, Other)",
+        ["ModeNeuralStemsSub"] = "On-device ONNX stem separation with phase fix & energy conservation",
+        ["ModeNeuralRestorerClean"] = "AI Harmonic & Bandwidth Restorer (Apollo / AP-BWE)",
+        ["ModeNeuralRestorerSub"] = "Reconstruct high-frequency harmonics lost in compressed codecs",
+        ["ModeLgsrHybridStemsClean"] = "Lossless-Guided 7.1.4 Hybrid Spatial Master (EM-MWF)",
+        ["ModeLgsrHybridStemsSub"] = "Fuse Atmos 3D spatial trajectories with a synced lossless stereo twin",
+        ["TipExtractModesAll"] = "Choose an extraction goal: Raw Channels/Bitstream for untouched streams, 3D Spatial Renders for layout-rendered objects, AI Source Separation for neural vocal/instrument stems, or Harmonic/Hybrid Restoration for lossless-guided 7.1.4 mastering.",
+        ["ExtractAiChainCardTitle"] = "Active AI Pipeline & Readiness",
+        ["ExtractAiChainNoModel"] = "No neural model installed yet — open AI Models to download or import an .onnx checkpoint.",
+        ["BitDepth16Pcm"] = "16-bit PCM",
+        ["BitDepth24Pcm"] = "24-bit PCM",
+        ["BitDepth32Float"] = "32-bit Float",
+        ["ExportResidualTrackCheck"] = "Export conserved residual / instrumental companion track",
+        ["TipExtractResidual"] = "Saves the phase-coherent residual difference track alongside separated stems so all exported stems sum back to 100% of the original mix energy.",
+        ["ExtractOutputEmptyNoTrack"] = "Open an audio or video file above to inspect and extract channels or stems.",
+        ["ExtractOutputEmptyReady"] = "Ready — tap Start Extraction to export files to Downloads/Cavernize/Extraidos.",
+        ["SignalChainNoTrackToast"] = "Load a track first to toggle live signal chain stages.",
+        ["SignalChainDecoderIdle"] = "In: Idle",
+        ["SignalChainDecoderFmt"] = "In: {0}",
+        ["SignalChainUpmixDirect"] = "Direct 3D",
+        ["SignalChainUpmixMatrix"] = "Matrix Surround",
+        ["SignalChainUpmixCavernize"] = "Cavernize 3D",
+        ["SignalChainUpmixAiActive"] = "AI 3D Stems ({0})",
+        ["SignalChainLgsrActive"] = "LGSR Twin: Live",
+        ["SignalChainLgsrIdle"] = "LGSR Twin: Standby",
+        ["SignalChainLgsrBypass"] = "LGSR Twin: Bypass",
+        ["SignalChainLgsrOff"] = "LGSR: Off",
+        ["SignalChainHrtfOnFmt"] = "Room / HRTF ({0})",
+        ["SignalChainHrtfDirect"] = "Speakers / Direct",
+        ["SignalChainEqLoudActive"] = "AutoEq + Loudness",
+        ["SignalChainEqActive"] = "AutoEq Active",
+        ["SignalChainLoudActive"] = "Loudness Active",
+        ["SignalChainEqLoudIdle"] = "EQ / Loudness: Flat",
+        ["RoomMiniVolFmt"] = "Vol {0}%",
+        ["XRayModeEssentialBtn"] = "Summary",
+        ["XRayModeProBtn"] = "Pro Telemetry",
+        ["XRayStandbyState"] = "Standby",
+        ["XRayEssentialSummaryFmt"] = "Coh {0:0}% · Diff {1:0}% · {2} LUFS · {3} dBTP",
+        ["XRaySoundfieldTelemetryFmt"] = "Coherence: {0:0}% · Diffuseness: {1:0}% · M: {2} / I: {3} LUFS · Peak: {4} dBTP · LRA: {5:0.0} LU · Lim GR: -{6:0.0} dB",
+        ["XRayLgsrTelemetryFmt"] = "LGSR: {0} · Cpl: {1:0} Hz · SPX: {2:0} Hz · Offset: {3:+0.00;-0.00;0.00} samp · Drift: {4:+0.00;-0.00;0.00} ppm · Fusion: {5:0}%",
+        ["XRayVocalTelemetryFmt"] = "Vocal Rack: {0} · In: {1:0.0} / Out: {2:0.0} dBFS · Gate: -{3:0.0} dB · De-Ess: -{4:0.0} dB · Comp: -{5:0.0} dB · Pocket: -{6:0.0} dB · RTT: {7:0.0} ms",
+        ["RoomNeuralIdleHint"] = "Tap Prepare AI 3D Stems to separate vocals, drums, bass & instruments into draggable 3D sources.",
+        ["RoomPositionLockedToast"] = "Listener position is locked — tap the lock icon to move or reset.",
+        ["RolloffDisabled"] = "Disabled",
+        ["RolloffLogarithmic"] = "Logarithmic",
+        ["RolloffLinear"] = "Linear",
+        ["RolloffReal"] = "Real (1/r)",
+        ["RoomTelemetryHeadTrackerFmt"] = " · HT: {0}",
+        ["RoomTelemetryCoordsFmt"] = "Listener ({0:0.0}, {1:0.0}, {2:0.0}) m · Yaw {3:0}° · Pitch {4:0}°{5}",
+        ["MixerSourcePosFmt"] = "X {0:+0.00;-0.00;0.00} · Y {1:+0.00;-0.00;0.00} · Z {2:+0.00;-0.00;0.00}",
+        ["SettingsSearchHint"] = "Search settings, DSP, headphones, AI...",
+        ["SettingsModeEssentialChip"] = "Mode: Essential",
+        ["SettingsModeProChip"] = "Mode: Pro",
+        ["SettingsBackToHubBtn"] = "← All Settings",
+        ["SettingsHubHeaderSub"] = "Select a category or search any DSP, headphone, AI, or hardware setting",
+        ["SettingsCatPlaybackTitle"] = "Playback & Spatial",
+        ["SettingsCatHeadphonesTitle"] = "Headphones & Calibration",
+        ["SettingsCatAiTitle"] = "AI & Restoration",
+        ["SettingsCatProAudioTitle"] = "Pro-Audio & Microphone",
+        ["SettingsCatEnginesTitle"] = "Engines & Storage",
+        ["SettingsCatAboutTitle"] = "Diagnostics & About",
+        ["SettingsCatAiLiveSubFmt"] = "{0} · {1} model(s) · {2}",
+        ["SettingsCatEnginesLiveSubFmt"] = "{0} · {1} · {2}",
+        ["SettingsPrereqNeuralTitle"] = "No AI Models Installed Yet",
+        ["SettingsPrereqNeuralSub"] = "Download a verified ONNX stem/karaoke/restoration model or import a custom .onnx checkpoint to enable on-device AI processing.",
+        ["SettingsPrereqNeuralCta"] = "Open AI Model Manager",
+        ["SettingsPrereqUsbTitle"] = "USB Pro-Audio Interface Not Connected",
+        ["SettingsPrereqUsbSub"] = "Connect a class-compliant USB DAC or Focusrite Scarlett 2i2/4i4 interface for Path B UAC2 direct hardware I/O, or use Path A AAudio with the built-in mic.",
+        ["SettingsProHiddenTitle"] = "Advanced Pro Controls Hidden",
+        ["SettingsProHiddenSub"] = "Switch to Pro mode to access advanced psychoacoustic standards, physical room externalization, biometric HRTF, LGSR restoration, and full-duplex USB audio controls.",
+        ["SettingsSwitchToProCta"] = "Switch to Pro Mode",
+        ["SettingsSearchEmptyTitle"] = "No Matching Settings Found",
+        ["SettingsSearchEmptySub"] = "Try a different keyword such as AutoEq, HRTF, ONNX, Karaoke, TrueHD, Scarlett, or Loudness.",
+        ["SettingsClearSearchCta"] = "Clear Search",
+        ["SettingsSearchResultsTitleFmt"] = "Search Results ({0})",
+        ["SettingsSearchResultsSubFmt"] = "Matching cards across all categories for \"{0}\"",
+        ["NeuralTrackCacheCapTitle"] = "Separated Track Disk Cache Limit",
+        ["OkBtn"] = "OK",
+        ["LogFileNotAvailableToast"] = "Log file is not available yet.",
+        ["LangAutoSystem"] = "Auto (System)",
+        ["LangPtBr"] = "Português (Brasil)",
+        ["LangEnUs"] = "English",
+        ["LangHuHu"] = "Magyar",
+        ["LangZhCn"] = "简体中文",
+        ["AboutThemeDynamicWallpaper"] = "Theme: Dynamic One UI Wallpaper Palette",
+        ["AboutThemeOneUiBlue"] = "Theme: Samsung One UI 9 Blue",
+        ["AboutEngineCavernAmpActive"] = "CavernAmp: Active",
+        ["AboutEngineManagedArm64"] = "Managed Pure-C# DSP (ARM64 Ready)",
+        ["AboutDialogBodyFmt"] = "{0}\nCavernize Android v{1} (build {2})\n{3}\n{4}",
+        ["QueueUnsupportedFilesFmt"] = "Unsupported files:\n{0}",
+        ["QueueEmptyZeroJobs"] = "0 jobs in queue",
     };
 
     static void ApplyPortuguese(Dictionary<string, string> d) {
@@ -1732,7 +1887,7 @@ public sealed class AndroidStrings {
         d["TipIsmRoom"] = "Calcula reflexões espelhadas exatas de 1ª e 2ª ordem pelo Método de Fontes Virtuais de Allen & Berkley (1979) com velocidade real do som, lei do inverso da distância, absorção de paredes ISO 354/Sabine em 3 bandas e ângulos acompanhando sua cabeça pelo HRIR medido ativo. Desativado automaticamente quando um BRIR medido está ativo para nunca duplicar a acústica da sala.";
         d["TipNearField"] = "Aplica a difração esférica de cabeça Duda & Martens (1998) (Legendre-Hankel DVF) relativa à distância de medição do HRIR quando fontes ficam a menos de 1,0 m. Bypass unitário exato (0,00 dB) em >= 1,0 m e proteção automática contra dupla compensação nos HRIRs de campo próximo TH Köln.";
         d["TipAirAbsorption"] = "Aplica a absorção atmosférica exata ISO 9613-1:1993 (relaxação molecular de O2/N2 + viscosidade térmica) para distâncias físicas acima de 5,0 m e nos caminhos extras das reflexões ISM. Passagem unitária exata (0,00 dB) em <= 5,0 m.";
-        d["Slot5BCardTitle"] = "Personalização HRTF & MagLS (Slot 5B)";
+        d["Slot5BCardTitle"] = "Personalização HRTF & MagLS";
         d["MagLsModeTitle"] = "Decodificador Ambisonics MagLS";
         d["MagLsModeOff"] = "Desligado (HRIR Medido Direto)";
         d["MagLsModeO1"] = "Ordem 1 (FOA • fc ~624 Hz)";
@@ -1790,7 +1945,7 @@ public sealed class AndroidStrings {
         d["HptfSweepPlayingToast"] = "Reproduzindo varredura segura -18 dBFS de 6–10 kHz...";
 
         // Slot 6B: Psicoacústica e Padrões de Loudness de Estúdio
-        d["Slot6BCardTitle"] = "Psicoacústica e Loudness (Slot 6B)";
+        d["Slot6BCardTitle"] = "Psicoacústica e Loudness";
         d["LoudnessMeterIdle"] = "Medidor BS.1770-5: aguardando áudio · Teto {0:0.#} dBTP";
         d["LoudnessMeterLive"] = "M {0} · S {1} · I {2} LUFS · LRA {3:0.0} LU · TP {4:0.0} dBTP{5}{6}";
         d["LoudnessStatusSummary"] = "ISO 226: {0} · Diálogo: {1} · Limiter: {2:0.#} dBTP";
@@ -1818,7 +1973,7 @@ public sealed class AndroidStrings {
         d["LoudnessMeterResetToast"] = "Medidor ITU-R BS.1770-5 (LUFS Integrado e LRA) zerado.";
 
         // Slot 2B: Áudio Neural no Dispositivo (ONNX), Pipeline MVSEP e Spatial Karaoke
-        d["Slot2BCardTitle"] = "Áudio Neural, Stems e Karaoke (Slot 2B)";
+        d["Slot2BCardTitle"] = "Áudio Neural, Stems e Karaoke";
         d["NeuralRuntimeNotInstalled"] = "ONNX Runtime integrado (libonnxruntime.so) indisponível em NativeLibraryDir";
         d["NeuralRuntimeInstalled"] = "ONNX Runtime {0} · {1} · {2} modelo(s) · {3:0.0} MB";
         d["NeuralRuntimeUpdateAvail"] = "Atualização do ONNX Runtime disponível: v{0}";
@@ -1842,7 +1997,7 @@ public sealed class AndroidStrings {
         d["SpatialKaraokeTitle"] = "Spatial Karaoke (Zero-Phase Atmos/Estéreo)";
         d["KaraokeVocalLevelTitle"] = "Nível da Voz (Karaoke)";
         d["KaraokePreserveBackingTitle"] = "Preservar Backing Vocals / Coros";
-        d["KaraokeLosslessTwinTitle"] = "Acelerar via Gêmeo Lossless (Pronto W09)";
+        d["KaraokeLosslessTwinTitle"] = "Acelerar via Gêmeo Lossless";
         d["NeuralUpmixModeTitle"] = "Modo de Upmix Espacial Neural";
         d["NeuralUpmixParametric"] = "Apenas DirAC Paramétrico (Latência Zero)";
         d["NeuralUpmixStems3D"] = "Posicionamento 3D de Stems Neurais";
@@ -1864,7 +2019,7 @@ public sealed class AndroidStrings {
         d["NeuralDownloadingRuntime"] = "Verificando ONNX Runtime integrado...";
         d["NeuralExtractingLibs"] = "ONNX Runtime: Carregando bibliotecas nativas integradas...";
         d["NeuralRuntimeUpToDate"] = "ONNX Runtime integrado pronto ({0}).";
-        d["NeuralOrchestrationTitle"] = "Orquestração da Cadeia Neural (Slot 7A)";
+        d["NeuralOrchestrationTitle"] = "Orquestração da Cadeia Neural";
         d["NeuralOrchestrationAuto"] = "Automático (Melhor Cadeia Instalada)";
         d["NeuralOrchestrationManual"] = "Manual (Slots e Ensembles Personalizados)";
         d["TipNeuralOrchestration"] = "O modo Automático encadeia os melhores modelos ONNX instalados (Separação -> Debleed -> Karaokê/Dereverb). O modo Manual executa exatamente os modelos individuais ou ensembles marcados em Modelos e Cache, incluindo arquivos .onnx importados.";
@@ -1895,7 +2050,7 @@ public sealed class AndroidStrings {
         d["TipNeuralUpmix"] = "Posiciona stems separados (Voz, Bateria, Baixo, Outros, Residual) no espaço 3D ou renderiza um master 7.1.4 Híbrido Neural + DirAC com conservação de energia.";
 
         // Slot 2C: Gêmeo Lossless Universal & Restauração Atmos Guiada por Lossless (LGSR, W09)
-        d["Slot2CCardTitle"] = "Restauração Atmos Guiada por Lossless (Slot 2C)";
+        d["Slot2CCardTitle"] = "Restauração Atmos Guiada por Lossless";
         d["LgsrStatusSearching"] = "Buscando e alinhando sub-sample o gêmeo lossless FLAC/WAV/ALAC...";
         d["LgsrStatusNone"] = "Nenhum gêmeo lossless ativo (pareia automaticamente quando há FLAC/WAV/ALAC)";
         d["LgsrStatusBypassedLossless"] = "Bypass automático: o stream ativo já é nativamente lossless (TrueHD/ADM/FLAC/WAV)";
@@ -1939,7 +2094,7 @@ public sealed class AndroidStrings {
         d["ProAudioBuf256"] = "256 frames (~5,3 ms @ 48k)";
         d["ProAudioSampleRateTitle"] = "Trava de Taxa de Amostragem do Hardware";
         d["ProAudioSrAuto"] = "Automático (Seguir Faixa / DAC)";
-        d["ProAudioLiveMicTitle"] = "Microfone Ao Vivo Full-Duplex (Slot 1)";
+        d["ProAudioLiveMicTitle"] = "Microfone Ao Vivo Full-Duplex";
         d["TipProAudioLiveMic"] = "Captura seu microfone XLR/Combo USB (ex.: Focusrite Scarlett 2i2) em tempo real e o injeta como objeto vocal 3D (SourceLayer.LiveMicrophone) sincronizado por amostra com o Karaokê Espacial antes do Limiter 4x True-Peak.";
         d["ProAudioMicRouteTitle"] = "Roteamento de Entrada do Microfone";
         d["ProAudioMicOff"] = "Mudo / Desligado";
@@ -1968,7 +2123,7 @@ public sealed class AndroidStrings {
         d["ProAudioCalibrateSuccessToast"] = "RTT calibrado: {0:0.2} ms ({1:0.1} amostras, SNR {2:0.1}x)";
         d["ProAudioCalibrateFailedToast"] = "Sinal de loopback fraco ou ruidoso (SNR {0:0.1}x). Verifique ganho/loopback.";
         d["ProAudioCreditsBtn"] = "Specs e Créditos";
-        d["ProAudioCreditsTitle"] = "Referências W10 Pro-Audio USB e Scarlett 2i2";
+        d["ProAudioCreditsTitle"] = "Referências Pro-Audio USB e Scarlett 2i2";
         d["ScarlettControlsBtn"] = "Scarlett 2i2";
         d["ScarlettModalTitle"] = "Controles de Hardware Focusrite Scarlett 2i2";
         d["ScarlettNotConnectedMsg"] = "Nenhuma Focusrite Scarlett 2i2 (Gen 2 / 3 / 4, VID 0x1235) com permissão USB detectada.\n\nConecte sua Scarlett 2i2 via USB-C e toque em 'Permitir USB' primeiro.";
@@ -2014,7 +2169,7 @@ public sealed class AndroidStrings {
         d["ScarlettGainAssistNoSignalToast"] = "Toque ou cante no microfone primeiro para o Assistente de Ganho medir o pico de entrada.";
 
         // W12 Next-Gen Formats & Studio Batch Exporter
-        d["StudioW12CardTitle"] = "Presets Master de Estúdio (W12)";
+        d["StudioW12CardTitle"] = "Presets Master de Estúdio";
         d["StudioW12PresetLabel"] = "Fluxo de Masterização";
         d["StudioW12ExportBtn"] = "Exportar Master";
         d["StudioW12PresetBinaural"] = "Binaural Personalizado Lossless (HRTF + ISM + AutoEq)";
@@ -2061,7 +2216,7 @@ public sealed class AndroidStrings {
         d["AudioSpecLgsrAbRestoredHint"] = "Modo ativo: Atmos Guiado por Lossless (Gêmeo FLAC restaurado pré-HRTF)";
         d["AudioSpecLgsrAbOriginalHint"] = "Modo ativo: Atmos Lossy Original (bypass A/B instantâneo)";
         d["VocalModalTitle"] = "Auto-Vocal Mix-Match e Cadeia ao Vivo";
-        d["VocalEnableTitle"] = "Ativar Cadeia Vocal ao Vivo (Slot 2D)";
+        d["VocalEnableTitle"] = "Ativar Cadeia Vocal ao Vivo";
         d["VocalBypassAbTitle"] = "Bypass A/B Instantâneo (Mic Limpo)";
         d["VocalMixMatchPctTitle"] = "Intensidade do Mix Match";
         d["VocalReverbPctTitle"] = "Reverb FDN e Delay Casados";
@@ -2134,7 +2289,7 @@ public sealed class AndroidStrings {
         d["ExportCardTitle"] = "Exportação";
         d["StudioW12BatchBtn"] = "Exportar em Lote (Presets)...";
         d["StudioW12BatchDialogTitle"] = "Exportação Studio em Lote";
-        d["StudioW12BatchDialogDesc"] = "Selecione um ou mais presets Studio Master W12 para renderizar em sequência e salvar em Downloads/Cavernize/Renderizados.";
+        d["StudioW12BatchDialogDesc"] = "Selecione um ou mais presets Studio Master para renderizar em sequência e salvar em Downloads/Cavernize/Renderizados.";
         d["StudioW12BatchSelectAtLeastOne"] = "Selecione pelo menos um preset Studio Master.";
         d["StudioW12BatchProgressFormat"] = "Lote {0}/{1}: {2}";
         d["StudioW12BatchDoneFormat"] = "Lote concluído: {0}/{1} masters Studio salvos em Downloads!";
@@ -2154,7 +2309,7 @@ public sealed class AndroidStrings {
         d["StemProgApplyingKaraoke"] = "Aplicando Karaokê Espacial multicanal fase-zero...";
         d["StemProgWritingKaraoke"] = "Gravando karaokê {0}/{1}...";
         d["StemProgKaraokeDone"] = "Karaokê Espacial Atmos exportado!";
-        d["StemProgRestoringStandalone"] = "Restaurando áudio via Slot 7A ({0})...";
+        d["StemProgRestoringStandalone"] = "Restaurando áudio ({0})...";
         d["StemProgRestorerDone"] = "Restauração neural exportada!";
         d["StemProgLoadingOnnx"] = "Carregando sessão ONNX Runtime...";
         d["StemProgWritingStem"] = "Gravando stem {0}...";
@@ -2244,6 +2399,161 @@ public sealed class AndroidStrings {
         d["Iso226UnityTag"] = "Unitário (0,0 dB)";
         d["DialogSpatialTag"] = "Espacial (+{0:0.0} dB)";
         d["DialogMsLr4Tag"] = "M/S LR4 (+{0:0.0} dB)";
+        d["Layout3DDynamic"] = "3D / Dinâmico";
+        d["VideoTrackPill"] = "Faixa";
+        d["VideoAspectFitToast"] = "Proporção: Original (Ajustar)";
+        d["VideoAspectCropToast"] = "Proporção: Preencher (Cortar)";
+        d["VideoAspectStretchToast"] = "Proporção: Esticar (16:9)";
+        d["VideoPreviewCodecUnavailable"] = "Pré-visualização de vídeo indisponível neste codec (o áudio 3D continua ativo)";
+        d["VideoPreviewFileUnavailable"] = "Pré-visualização de vídeo indisponível neste arquivo (o áudio 3D continua ativo)";
+        d["RoomCam3D"] = "3D";
+        d["RoomXRayBtn"] = "Raio-X";
+        d["RoomXRayBandLowShort"] = "G";
+        d["RoomXRayBandMidShort"] = "M";
+        d["RoomXRayBandHighShort"] = "A";
+        d["RoomLegendSummary"] = "Piso · Altura · Obj · Stem/Mic";
+        d["RoomScreenFront"] = "TELA / FRENTE";
+        d["RoomTagMic"] = "MIC";
+        d["RoomTagStemFmt"] = "Stem {0}";
+        d["RoomTagResidualFmt"] = "Res {0}";
+        d["RoomTagObjectFmt"] = "Obj {0}";
+        d["RoomDelayMsFmt"] = "{0:0.0}ms";
+        d["RoomHeightZeroMeters"] = "0.0m";
+        d["RoomHeightMetersFmt"] = "{0:+0.0;-0.0}m";
+        d["RoomHeightZeroBtn"] = "0m";
+        d["StatusStandbyTag"] = "EM ESPERA";
+        d["RoomTelemetryFmt"] = "Pos ({0:0.0}, {1:0.0}, {2:0.0})m · Yaw {3:0}° Pitch {4:0}°{5}";
+        d["RoomTelemetryHtSuffixFmt"] = " · HT: {0}";
+        d["StudioWorkflowLabel"] = "Fluxo do Estúdio";
+        d["StudioModeMaster"] = "Presets Master";
+        d["StudioModeClassic"] = "Layout Clássico";
+        d["StudioModeQueue"] = "Fila em Lote";
+        d["StudioMasterCardTitle"] = "Presets Master de Estúdio";
+        d["StudioProSectionTitle"] = "Diagnóstico e Inspeção Pro";
+        d["StudioReadinessHeader"] = "Prontidão da Cadeia";
+        d["StudioPresetIamfClean"] = "Contêiner Espacial IAMF v1.1 (.iamf)";
+        d["StudioPresetHoaClean"] = "Ambisonics 3ª Ordem (16ch HOA ACN/SN3D .wav)";
+        d["StudioPresetAdmClean"] = "ADM BWF Master de Estúdio ( ITU-R BS.2076 .wav )";
+        d["StudioContextHybridReadyClean"] = "Gêmeo Lossless pronto ({0}) · EM-MWF + Restaurador Neural ativo";
+        d["StudioBatchDialogDescClean"] = "Selecione um ou mais presets Studio Master para renderizar em sequência e salvar em Downloads/Cavernize/Renderizados.";
+        d["StudioBadgeFFmpegReady"] = "FFmpeg Pronto";
+        d["StudioBadgeFFmpegMissing"] = "FFmpeg Ausente";
+        d["StudioBadgeOnnxReady"] = "ONNX Pronto";
+        d["StudioBadgeOnnxMissing"] = "Modelos ONNX Necessários";
+        d["StudioBadgeTrueHdReady"] = "TrueHD Pronto";
+        d["StudioBadgeTrueHdPending"] = "Decodificar TrueHD";
+        d["StudioBadgeTrueHdMissing"] = "truehdd Ausente";
+        d["StudioBadgeTwinSynced"] = "Gêmeo Lossless Sincronizado";
+        d["StudioBadgeTwinNative"] = "Lossless Nativo";
+        d["StudioBadgeTwinNone"] = "Buscar Gêmeo Lossless";
+        d["CodecMetaSectionHeaderFmt"] = "=== {0} ({1}) ===";
+        d["RenderedTrackNameFmt"] = "Render Cavern {0}";
+        d["RenderMergeUnknownError"] = "Erro desconhecido ao mesclar contêiner";
+        d["FFmpegMergeFailedFmt"] = "Falha ao mesclar contêiner via FFmpeg: {0}";
+        d["RenderProgressSpeedFmt"] = "Renderizando: {0:0.0%} ({1:0.0}x)";
+        d["TranscodeProgressFmt"] = "Renderizando áudio: {0:0.0%}";
+        d["TranscodeAdmProgressFmt"] = "Renderizando ADM BWF: {0:0.0%}";
+        d["FinalizingAdmProgressFmt"] = "Finalizando metadados ADM BWF: {0:0.0%}";
+        d["ExtractGoalRawTitle"] = "Canais Brutos e Bitstream";
+        d["ExtractGoalSpatialTitle"] = "Renders Espaciais 3D";
+        d["ExtractGoalNeuralTitle"] = "Separação de Fontes por IA (MVSEP)";
+        d["ExtractGoalRestoreTitle"] = "Restauração Harmônica e Atmos Híbrida";
+        d["ModeRawStemsSub"] = "Separa canais discretos bed/objeto em WAVs mono/estéreo";
+        d["ModeSpatialEachSub"] = "Renderiza cada objeto ativo no espaço 3D no layout escolhido";
+        d["Mode3DCombinedSub"] = "Combina canais e objetos selecionados em um único WAV master 3D";
+        d["ModeRawBitstreamClean"] = "Extração Direta do Bitstream Original";
+        d["ModeRawBitstreamSub"] = "Extrai o stream E-AC-3 / TrueHD / DTS intacto sem recodificar";
+        d["ModeNeuralStemsClean"] = "Stems Neurais por IA (Voz, Bateria, Baixo, Outros)";
+        d["ModeNeuralStemsSub"] = "Separação ONNX local com correção de fase e conservação de energia";
+        d["ModeNeuralRestorerClean"] = "Restaurador Harmônico e de Banda por IA (Apollo / AP-BWE)";
+        d["ModeNeuralRestorerSub"] = "Reconstrói harmônicos agudos perdidos em codecs comprimidos";
+        d["ModeLgsrHybridStemsClean"] = "Master Espacial Híbrido 7.1.4 Guiado por Lossless (EM-MWF)";
+        d["ModeLgsrHybridStemsSub"] = "Funde trajetórias 3D Atmos com um gêmeo estéreo lossless sincronizado";
+        d["TipExtractModesAll"] = "Escolha o objetivo de extração: Canais Brutos/Bitstream para streams intactos, Renders Espaciais 3D para objetos renderizados no layout, Separação por IA para stems neurais de voz/instrumentos ou Restauração Harmônica/Híbrida para masterização 7.1.4 guiada por lossless.";
+        d["ExtractAiChainCardTitle"] = "Cadeia de IA Ativa e Prontidão";
+        d["ExtractAiChainNoModel"] = "Nenhum modelo neural instalado — abra Modelos de IA para baixar ou importar um checkpoint .onnx.";
+        d["BitDepth16Pcm"] = "16-bit PCM";
+        d["BitDepth24Pcm"] = "24-bit PCM";
+        d["BitDepth32Float"] = "32-bit Float";
+        d["ExportResidualTrackCheck"] = "Exportar faixa residual / instrumental conservada complementar";
+        d["TipExtractResidual"] = "Salva a faixa diferencial residual coerente em fase junto aos stems separados para que a soma reconstrua 100% da energia da mixagem original.";
+        d["ExtractOutputEmptyNoTrack"] = "Abra um arquivo de áudio ou vídeo acima para inspecionar e extrair canais ou stems.";
+        d["ExtractOutputEmptyReady"] = "Pronto — toque em Iniciar Extração para exportar arquivos em Downloads/Cavernize/Extraidos.";
+        d["SignalChainNoTrackToast"] = "Carregue uma faixa primeiro para alternar estágios da cadeia de sinal.";
+        d["SignalChainDecoderIdle"] = "Ent.: Ocioso";
+        d["SignalChainDecoderFmt"] = "Ent.: {0}";
+        d["SignalChainUpmixDirect"] = "3D Direto";
+        d["SignalChainUpmixMatrix"] = "Surround Matricial";
+        d["SignalChainUpmixCavernize"] = "Cavernize 3D";
+        d["SignalChainUpmixAiActive"] = "Stems IA 3D ({0})";
+        d["SignalChainLgsrActive"] = "Gêmeo LGSR: Ativo";
+        d["SignalChainLgsrIdle"] = "Gêmeo LGSR: Espera";
+        d["SignalChainLgsrBypass"] = "Gêmeo LGSR: Bypass";
+        d["SignalChainLgsrOff"] = "LGSR: Desl.";
+        d["SignalChainHrtfOnFmt"] = "Sala / HRTF ({0})";
+        d["SignalChainHrtfDirect"] = "Caixas / Direto";
+        d["SignalChainEqLoudActive"] = "AutoEq + Loudness";
+        d["SignalChainEqActive"] = "AutoEq Ativo";
+        d["SignalChainLoudActive"] = "Loudness Ativo";
+        d["SignalChainEqLoudIdle"] = "EQ / Loudness: Neutro";
+        d["RoomMiniVolFmt"] = "Vol {0}%";
+        d["XRayModeEssentialBtn"] = "Resumo";
+        d["XRayModeProBtn"] = "Telemetria Pro";
+        d["XRayStandbyState"] = "Em Espera";
+        d["XRayEssentialSummaryFmt"] = "Coe {0:0}% · Dif {1:0}% · {2} LUFS · {3} dBTP";
+        d["XRaySoundfieldTelemetryFmt"] = "Coerência: {0:0}% · Difusão: {1:0}% · M: {2} / I: {3} LUFS · Pico: {4} dBTP · LRA: {5:0.0} LU · Lim GR: -{6:0.0} dB";
+        d["XRayLgsrTelemetryFmt"] = "LGSR: {0} · Cpl: {1:0} Hz · SPX: {2:0} Hz · Offset: {3:+0.00;-0.00;0.00} am · Drift: {4:+0.00;-0.00;0.00} ppm · Fusão: {5:0}%";
+        d["XRayVocalTelemetryFmt"] = "Rack Vocal: {0} · Ent: {1:0.0} / Saí: {2:0.0} dBFS · Gate: -{3:0.0} dB · De-Ess: -{4:0.0} dB · Comp: -{5:0.0} dB · Pocket: -{6:0.0} dB · RTT: {7:0.0} ms";
+        d["RoomNeuralIdleHint"] = "Toque em Preparar Stems IA 3D para separar voz, bateria, baixo e instrumentos em fontes 3D arrastáveis.";
+        d["RoomPositionLockedToast"] = "A posição do ouvinte está travada — toque no cadeado para mover ou resetar.";
+        d["RolloffDisabled"] = "Desativado";
+        d["RolloffLogarithmic"] = "Logarítmico";
+        d["RolloffLinear"] = "Linear";
+        d["RolloffReal"] = "Real (1/r)";
+        d["RoomTelemetryHeadTrackerFmt"] = " · HT: {0}";
+        d["RoomTelemetryCoordsFmt"] = "Ouvinte ({0:0.0}, {1:0.0}, {2:0.0}) m · Yaw {3:0}° · Pitch {4:0}°{5}";
+        d["MixerSourcePosFmt"] = "X {0:+0.00;-0.00;0.00} · Y {1:+0.00;-0.00;0.00} · Z {2:+0.00;-0.00;0.00}";
+        d["SettingsSearchHint"] = "Buscar configurações, DSP, fones, IA...";
+        d["SettingsModeEssentialChip"] = "Modo: Essencial";
+        d["SettingsModeProChip"] = "Modo: Pro";
+        d["SettingsBackToHubBtn"] = "← Todas as Config.";
+        d["SettingsHubHeaderSub"] = "Selecione uma categoria ou busque qualquer ajuste de DSP, fone, IA ou hardware";
+        d["SettingsCatPlaybackTitle"] = "Reprodução e Espacial";
+        d["SettingsCatHeadphonesTitle"] = "Fones e Calibração";
+        d["SettingsCatAiTitle"] = "IA e Restauração";
+        d["SettingsCatProAudioTitle"] = "Pro-Audio e Microfone";
+        d["SettingsCatEnginesTitle"] = "Motores e Armazenamento";
+        d["SettingsCatAboutTitle"] = "Diagnóstico e Sobre";
+        d["SettingsCatAiLiveSubFmt"] = "{0} · {1} modelo(s) · {2}";
+        d["SettingsCatEnginesLiveSubFmt"] = "{0} · {1} · {2}";
+        d["SettingsPrereqNeuralTitle"] = "Nenhum Modelo de IA Instalado";
+        d["SettingsPrereqNeuralSub"] = "Baixe um modelo ONNX verificado de stems/karaoke/restauração ou importe um arquivo .onnx personalizado para ativar a IA local.";
+        d["SettingsPrereqNeuralCta"] = "Abrir Gerenciador de Modelos IA";
+        d["SettingsPrereqUsbTitle"] = "Interface USB Pro-Audio Não Conectada";
+        d["SettingsPrereqUsbSub"] = "Conecte um DAC USB ou interface Focusrite Scarlett 2i2/4i4 para I/O direto Path B UAC2, ou use Path A AAudio com o microfone integrado.";
+        d["SettingsProHiddenTitle"] = "Controles Avançados Pro Ocultos";
+        d["SettingsProHiddenSub"] = "Mude para o modo Pro para acessar padrões psicoacústicos avançados, externalização física de sala, HRTF biométrico, restauração LGSR e controles USB full-duplex.";
+        d["SettingsSwitchToProCta"] = "Mudar para Modo Pro";
+        d["SettingsSearchEmptyTitle"] = "Nenhuma Configuração Encontrada";
+        d["SettingsSearchEmptySub"] = "Tente outra palavra-chave como AutoEq, HRTF, ONNX, Karaoke, TrueHD, Scarlett ou Loudness.";
+        d["SettingsClearSearchCta"] = "Limpar Busca";
+        d["SettingsSearchResultsTitleFmt"] = "Resultados da Busca ({0})";
+        d["SettingsSearchResultsSubFmt"] = "Cartões correspondentes em todas as categorias para \"{0}\"";
+        d["NeuralTrackCacheCapTitle"] = "Limite do Cache em Disco de Faixas Separadas";
+        d["OkBtn"] = "OK";
+        d["LogFileNotAvailableToast"] = "Arquivo de log ainda não disponível.";
+        d["LangAutoSystem"] = "Auto (Sistema)";
+        d["LangPtBr"] = "Português (Brasil)";
+        d["LangEnUs"] = "English";
+        d["LangHuHu"] = "Magyar";
+        d["LangZhCn"] = "简体中文";
+        d["AboutThemeDynamicWallpaper"] = "Tema: Paleta Dinâmica do Papel de Parede One UI";
+        d["AboutThemeOneUiBlue"] = "Tema: Azul Samsung One UI 9";
+        d["AboutEngineCavernAmpActive"] = "CavernAmp: Ativo";
+        d["AboutEngineManagedArm64"] = "DSP Puro C# Gerenciado (Pronto para ARM64)";
+        d["AboutDialogBodyFmt"] = "{0}\nCavernize Android v{1} (build {2})\n{3}\n{4}";
+        d["QueueUnsupportedFilesFmt"] = "Arquivos não suportados:\n{0}";
+        d["QueueEmptyZeroJobs"] = "0 tarefas na fila";
     }
 
     static void ApplyHungarian(Dictionary<string, string> d) {

@@ -1,13 +1,45 @@
+using System.Runtime.CompilerServices;
+
 using Android.App;
 using Android.Content;
 using Android.Graphics;
 using Android.Graphics.Drawables;
+using Android.Text;
 using Android.Views;
 using Android.Widget;
 
 using CavernizeAndroid.Theme;
 
 namespace CavernizeAndroid.Views;
+
+/// <summary>
+/// Reusable One UI 9 factory primitives for Settings Hub tiles, status chips, and prerequisite cards.
+/// </summary>
+public static class OneUiComponents {
+    public static TextView CreateStatusChip(Context ctx, string text, Color accentColor) =>
+        OneUiTheme.CreateStatusChip(ctx, text, accentColor);
+
+    public static void UpdateStatusChip(Context ctx, TextView chip, string text, Color accentColor) =>
+        OneUiTheme.UpdateStatusChip(ctx, chip, text, accentColor);
+
+    public static LinearLayout CreateEmptyPrereqCard(
+        Context ctx,
+        string title,
+        string subtitle,
+        string ctaText = null,
+        Action onCta = null) =>
+        OneUiTheme.CreateEmptyPrereqCard(ctx, title, subtitle, ctaText, onCta);
+
+    public static LinearLayout CreateCategoryHubTile(
+        Context ctx,
+        OneUiIconType icon,
+        Color iconColor,
+        string title,
+        string liveSubtitle,
+        Action onClick,
+        out TextView subtitleView) =>
+        OneUiTheme.CreateCategoryHubTile(ctx, icon, iconColor, title, liveSubtitle, onClick, out subtitleView);
+}
 
 /// <summary>
 /// In-app One UI 9 frosted glass collapsible selector replacing stock Android Spinner dropdowns.
@@ -37,6 +69,8 @@ public sealed class OneUiInlineSelector : LinearLayout {
                 TextSize = 12f
             };
             titleView.SetTextColor(OneUiTheme.TextMuted);
+            titleView.SetSingleLine(true);
+            titleView.Ellipsize = TextUtils.TruncateAt.End;
             titleView.SetPadding(dp(2), 0, dp(2), dp(5));
             AddView(titleView);
         }
@@ -45,7 +79,7 @@ public sealed class OneUiInlineSelector : LinearLayout {
         headerPill.SetGravity(GravityFlags.CenterVertical);
         headerPill.Background = OneUiTheme.CreateGlassCardDrawable(ctx, OneUiTheme.SurfaceSubTile, OneUiTheme.ButtonCornerDp);
         headerPill.SetPadding(dp(14), dp(10), dp(12), dp(10));
-        headerPill.SetMinimumHeight(dp(42));
+        headerPill.SetMinimumHeight(dp(44));
         OneUiTheme.AttachRecoil(headerPill, 0.98f);
 
         currentValueView = new TextView(ctx) {
@@ -55,6 +89,8 @@ public sealed class OneUiInlineSelector : LinearLayout {
         currentValueView.SetTextColor(OneUiTheme.TextPrimary);
         currentValueView.Typeface = OneUiTheme.GetAppleFontBold(ctx);
         currentValueView.SetIncludeFontPadding(false);
+        currentValueView.SetSingleLine(true);
+        currentValueView.Ellipsize = TextUtils.TruncateAt.End;
 
         chevronView = new OneUiIconView(ctx, OneUiIconType.ChevronDown, OneUiTheme.PeachText);
 
@@ -139,6 +175,8 @@ public sealed class OneUiInlineSelector : LinearLayout {
                 TextSize = 13f
             };
             tv.SetIncludeFontPadding(false);
+            tv.SetSingleLine(true);
+            tv.Ellipsize = TextUtils.TruncateAt.End;
             tv.SetTextColor(isSel ? OneUiTheme.TextPrimary : OneUiTheme.TextSecondary);
             tv.Typeface = isSel ? OneUiTheme.GetAppleFontBold(Context) : OneUiTheme.GetAppleFontRegular(Context);
 
@@ -169,7 +207,24 @@ public sealed class OneUiInlineSelector : LinearLayout {
 /// so foreground controls stay crisp and never visually clash with content behind the dialog.
 /// </summary>
 public static class OneUiModalDialog {
-    static int activeBlurDialogDepth;
+    sealed class HelpActionState {
+        public FrameLayout Button;
+        public Action Handler;
+    }
+
+    static readonly HashSet<Dialog> activeBlurredDialogs = [];
+    static readonly ConditionalWeakTable<Dialog, HelpActionState> helpStates = new();
+
+    public static void SetHelpAction(this Dialog dialog, Action onHelp, string contentDesc = null) {
+        if (dialog == null || !helpStates.TryGetValue(dialog, out HelpActionState state) || state.Button == null) {
+            return;
+        }
+        state.Handler = onHelp;
+        state.Button.Visibility = onHelp != null ? ViewStates.Visible : ViewStates.Gone;
+        if (!string.IsNullOrEmpty(contentDesc)) {
+            state.Button.ContentDescription = contentDesc;
+        }
+    }
 
     public static Dialog Show(
         Context ctx,
@@ -183,7 +238,9 @@ public static class OneUiModalDialog {
         string negativeText = null,
         Action onNegative = null,
         bool cancelable = true,
-        bool monospaceBody = false) {
+        bool monospaceBody = false,
+        Action onHelp = null,
+        string helpContentDesc = null) {
         Dialog dialog = new(ctx);
         dialog.RequestWindowFeature((int)WindowFeatures.NoTitle);
         dialog.SetCancelable(cancelable);
@@ -195,7 +252,7 @@ public static class OneUiModalDialog {
         card.Elevation = dp(20);
         card.SetPadding(dp(20), dp(18), dp(20), dp(16));
 
-        // Header with crisp One UI 9 vector badge
+        // Header with crisp One UI 9 vector badge + optional '?' help trigger
         LinearLayout header = new(ctx) { Orientation = Orientation.Horizontal };
         header.SetGravity(GravityFlags.CenterVertical);
         header.SetPadding(0, 0, 0, dp(12));
@@ -207,8 +264,22 @@ public static class OneUiModalDialog {
         };
         titleTv.SetTextColor(OneUiTheme.TextPrimary);
         titleTv.Typeface = OneUiTheme.GetAppleFontBold(ctx);
-        titleTv.SetPadding(dp(12), 0, 0, 0);
+        titleTv.SetPadding(dp(12), 0, dp(8), 0);
         header.AddView(titleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        FrameLayout helpBtn = new(ctx) {
+            Visibility = onHelp != null ? ViewStates.Visible : ViewStates.Gone,
+            ContentDescription = helpContentDesc ?? title ?? "Help"
+        };
+        helpBtn.Background = OneUiTheme.CreateGlassCardDrawable(ctx, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+        OneUiTheme.AttachRecoil(helpBtn, 0.92f);
+        OneUiIconView helpIco = new(ctx, OneUiIconType.HelpQuestion, OneUiTheme.TextSecondary);
+        helpBtn.AddView(helpIco, new FrameLayout.LayoutParams(dp(16), dp(16)) { Gravity = GravityFlags.Center });
+        HelpActionState helpState = new() { Button = helpBtn, Handler = onHelp };
+        helpStates.AddOrUpdate(dialog, helpState);
+        helpBtn.Click += (_, _) => helpState.Handler?.Invoke();
+        header.AddView(helpBtn, new LinearLayout.LayoutParams(dp(34), dp(34)));
+
         card.AddView(header);
 
         ScrollView scroll = new(ctx) { VerticalScrollBarEnabled = true };
@@ -246,28 +317,48 @@ public static class OneUiModalDialog {
             }
         });
 
+        bool hasNeg = !string.IsNullOrEmpty(negativeText);
+        bool hasPos = !string.IsNullOrEmpty(positiveText);
+        bool singleFooterBtn = hasNeg ^ hasPos;
+
         LinearLayout btnRow = new(ctx) {
             Orientation = Orientation.Horizontal,
             BaselineAligned = false
         };
-        btnRow.SetGravity(GravityFlags.CenterVertical | GravityFlags.End);
+        btnRow.SetGravity(singleFooterBtn
+            ? GravityFlags.Center
+            : (GravityFlags.CenterVertical | GravityFlags.End));
 
-        if (!string.IsNullOrEmpty(negativeText)) {
+        if (hasNeg) {
             Button negBtn = MakeDialogButton(ctx, negativeText, primary: false, () => {
                 dialog.Dismiss();
                 onNegative?.Invoke();
             });
-            btnRow.AddView(negBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
-                RightMargin = dp(8)
-            });
+            if (singleFooterBtn) {
+                negBtn.SetMinimumWidth(dp(148));
+                negBtn.SetMaxWidth(dp(240));
+                negBtn.SetPadding(dp(24), dp(10), dp(24), dp(10));
+                btnRow.AddView(negBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+            } else {
+                btnRow.AddView(negBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
+                    RightMargin = dp(8)
+                });
+            }
         }
 
-        if (!string.IsNullOrEmpty(positiveText)) {
+        if (hasPos) {
             Button posBtn = MakeDialogButton(ctx, positiveText, primary: true, () => {
                 dialog.Dismiss();
                 onPositive?.Invoke();
             });
-            btnRow.AddView(posBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            if (singleFooterBtn) {
+                posBtn.SetMinimumWidth(dp(148));
+                posBtn.SetMaxWidth(dp(240));
+                posBtn.SetPadding(dp(24), dp(10), dp(24), dp(10));
+                btnRow.AddView(posBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+            } else {
+                btnRow.AddView(posBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            }
         }
 
         card.AddView(btnRow);
@@ -286,18 +377,37 @@ public static class OneUiModalDialog {
 
         View bgRoot = (ctx as Activity)?.Window?.DecorView;
         if (bgRoot != null && OperatingSystem.IsAndroidVersionAtLeast(31)) {
-            activeBlurDialogDepth++;
-            bgRoot.SetRenderEffect(RenderEffect.CreateBlurEffect(28f, 28f, Shader.TileMode.Clamp));
-            dialog.DismissEvent += (_, _) => {
-                activeBlurDialogDepth = Math.Max(0, activeBlurDialogDepth - 1);
-                if (activeBlurDialogDepth == 0 && OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            activeBlurredDialogs.RemoveWhere(d => d == null || !d.IsShowing);
+            bool wasEmpty = activeBlurredDialogs.Count == 0;
+            activeBlurredDialogs.Add(dialog);
+            if (wasEmpty) {
+                try {
+                    bgRoot.SetRenderEffect(RenderEffect.CreateBlurEffect(28f, 28f, Shader.TileMode.Clamp));
+                } catch {
+                    // Ignore on unsupported window surfaces
+                }
+            }
+
+            bool released = false;
+            void ReleaseDialogBlur() {
+                if (released) {
+                    return;
+                }
+                released = true;
+                activeBlurredDialogs.Remove(dialog);
+                activeBlurredDialogs.RemoveWhere(d => d == null || !d.IsShowing);
+                if (activeBlurredDialogs.Count == 0 && OperatingSystem.IsAndroidVersionAtLeast(31)) {
                     try {
                         bgRoot.SetRenderEffect(null);
                     } catch {
                         // Ignore teardown race
                     }
                 }
-            };
+            }
+
+            dialog.DismissEvent += (_, _) => ReleaseDialogBlur();
+            dialog.CancelEvent += (_, _) => ReleaseDialogBlur();
+            frame.ViewDetachedFromWindow += (_, _) => ReleaseDialogBlur();
         }
 
         dialog.Show();
