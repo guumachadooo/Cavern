@@ -194,12 +194,21 @@ def main() -> None:
         for rel in (
             ".agents/docs/PROJECT_HISTORY.md",
             ".agents/docs/SAVED_IDEAS.md",
+            ".agents/docs/BUILD_LESSONS.md",
+            ".agents/docs/EXTERNAL_AI_SYNC.md",
             *(session_cfg.get("extra_docs") or []),
         ):
             if rel not in mem_candidates and (repo / rel).is_file():
                 mem_candidates.append(rel)
         if mem_candidates:
             lines.append("DOCS|" + ",".join(f"`{m}`" for m in mem_candidates))
+
+        evo_cfg = profile.get("plugin_evolution") or {}
+        if isinstance(evo_cfg, dict) and evo_cfg.get("enabled"):
+            plug_sync_rel = str(evo_cfg.get("plugin_sync_doc") or ".agents/plugins/dynamic-fractal-planner/.agents/docs/EXTERNAL_AI_SYNC.md")
+            lines.append(
+                f"EVOLVE|AUTO_DUAL_SCOPE: reusable workflow/tooling/diag ideas -> universalize in plugin (`scripts/`+`{plug_sync_rel}`) && app-only -> host project"
+            )
 
         hist_p = repo / ".agents" / "docs" / "PROJECT_HISTORY.md"
         if hist_p.is_file():

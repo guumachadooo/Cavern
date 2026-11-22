@@ -3250,7 +3250,7 @@ class TestV25EvolutionMechanics(unittest.TestCase):
                         "lastUserInput": t2_prompt,
                         "invocationNum": 1,
                     },
-                    env_extra={"PLANNER_INJECTION_BLOAT_CHARS": "340"},
+                    env_extra={"PLANNER_INJECTION_BLOAT_CHARS": "260"},
                 )
                 msg_tight = pre_tight["injectSteps"][0]["systemMessage"]["systemMessage"]
                 self.assertIn("[Triage|", msg_tight)
@@ -3340,6 +3340,106 @@ class TestV25EvolutionMechanics(unittest.TestCase):
                 )
                 msg_norm = json.dumps(pre_norm)
                 self.assertNotIn("[BTW_QUEUE]", msg_norm)
+
+
+class TestV260UniversalEfficiencyAndSelfEvolution(unittest.TestCase):
+    def test_universal_error_learner_timeless_and_multistack(self) -> None:
+        import error_learner as el
+
+        self.assertEqual(el.extract_code_from_line("src/app.ts(10,3): error TS2322: Type 'number' is not assignable"), "TS2322")
+        self.assertEqual(el.extract_code_from_line("error[E0382]: borrow of moved value"), "E0382")
+        self.assertTrue(el.lint_timelessness("Always target Android 16 and actions/checkout@v4"))
+        self.assertEqual(el.lint_timelessness("Guard API-gated calls with runtime OS version checks"), [])
+
+        with tempfile.TemporaryDirectory() as td:
+            lp = Path(td) / "BUILD_LESSONS.md"
+            lp.write_text(
+                "# Lessons\n\n### `BL-001` | Starter\n"
+                "- `Category`: `build-process`\n- `Codes`: `CS0104`\n- `Keywords`: `ambiguous`\n"
+                "- `RootCause`: Ambiguous type reference.\n- `TimelessRule`: Qualify ambiguous types explicitly.\n"
+                "- `DynamicLookup`: Inspect symbol declarations in repo.\n- `AutoGuard`: `verify_universal.py`\n\n"
+                f"{el.AUTO_START_MARKER}\n{el.EMPTY_AUTO_PLACEHOLDER}\n{el.AUTO_END_MARKER}\n",
+                encoding="utf-8",
+            )
+            ok, errs = el.audit_lessons_file(lp)
+            self.assertTrue(ok, errs)
+            items = el.load_diagnostics_from_log_text("src/x.ts(1,1): error TS2322: Type 'string' is not assignable to 'number'")
+            res = el.analyze_diagnostics(items, el.parse_lessons(lp.read_text(encoding="utf-8")))
+            self.assertEqual(len(res.new_candidates), 1)
+            changed, _ = el.apply_new_lessons(lp, res.new_candidates)
+            self.assertTrue(changed)
+            ok2, errs2 = el.audit_lessons_file(lp)
+            self.assertTrue(ok2, errs2)
+
+    def test_live_bridge_client_hmac_and_encrypt_then_mac(self) -> None:
+        import live_bridge_client as lbc
+
+        raw_secret = "CAVPAIR-" + "a1b2c3d4" * 8
+        norm = lbc.normalize_pair_secret_hex(raw_secret)
+        self.assertEqual(len(norm), 64)
+        h1 = lbc.compute_wake_channel_hash(norm)
+        self.assertEqual(len(h1), 64)
+
+        sig = lbc.sign_wake_request(norm, "wake123", 1700000000, 2, 1800, "Inspect DSP")
+        self.assertEqual(len(sig), 64)
+
+        payload = {"sessionCode": "CAV-ABCD-EFGH-IJKL-MNOP-QRST-UVWX", "tier": 2, "ttlSeconds": 1800}
+        env = lbc.encrypt_approval_payload(norm, "wake123", payload)
+        self.assertNotIn("CAV-ABCD", json.dumps(env))
+        dec = lbc.decrypt_approval_payload(norm, "wake123", env)
+        self.assertEqual(dec, payload)
+
+        tampered = dict(env)
+        tampered["ct"] = "AA" + env["ct"][2:]
+        with self.assertRaises(ValueError):
+            lbc.decrypt_approval_payload(norm, "wake123", tampered)
+
+    def test_self_evolve_classifier_and_dual_sync_ledger(self) -> None:
+        import self_evolve as se
+
+        r_uni = se.classify_improvement("Universalize timeless error_learner and live diagnostics fetcher in planner hooks")
+        self.assertEqual(r_uni["scope"], "plugin-universal")
+
+        r_proj = se.classify_improvement("Tune HRIR room reflections and OneUI player volume slider in MainActivity.cs")
+        self.assertEqual(r_proj["scope"], "project-only")
+
+        r_dual = se.classify_improvement("Upgrade live bridge protocol client in plugin and add Android BiometricPrompt wake service in MainActivity.cs")
+        self.assertEqual(r_dual["scope"], "dual-project+plugin")
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            touched = se.record_sync_entry(
+                repo,
+                scope="dual",
+                title="Test Dual Sync",
+                summary="Added universal client + host integration",
+                files=["scripts/live_bridge_client.py", "Services/LiveBridge.cs"],
+            )
+            self.assertEqual(len(touched), 2)
+            host_txt = (repo / ".agents/docs/EXTERNAL_AI_SYNC.md").read_text(encoding="utf-8")
+            plug_txt = (repo / ".agents/plugins/dynamic-fractal-planner/.agents/docs/EXTERNAL_AI_SYNC.md").read_text(encoding="utf-8")
+            self.assertIn("Test Dual Sync", host_txt)
+            self.assertIn("## Plugin (`dynamic-fractal-planner`) Sync Entries", host_txt)
+            self.assertIn("Test Dual Sync", plug_txt)
+
+    def test_verify_universal_audits_build_lessons_timelessness(self) -> None:
+        import error_learner as el
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            init_git_repo(repo)
+            (repo / ".agents" / "docs").mkdir(parents=True)
+            bad = repo / ".agents" / "docs" / "BUILD_LESSONS.md"
+            bad.write_text(
+                "# Lessons\n\n### `BL-001` | Bad\n"
+                "- `Category`: `build`\n- `Codes`: `CS0001`\n- `Keywords`: `bad`\n"
+                "- `RootCause`: Fails on Android 16.\n- `TimelessRule`: Use actions/checkout@v4.\n"
+                "- `DynamicLookup`: Check docs.\n- `AutoGuard`: `manual`\n\n"
+                f"{el.AUTO_START_MARKER}\n{el.EMPTY_AUTO_PLACEHOLDER}\n{el.AUTO_END_MARKER}\n",
+                encoding="utf-8",
+            )
+            _, fails, _ = verify_universal.run_static_checks(repo, {}, changed=[".agents/docs/BUILD_LESSONS.md"])
+            self.assertTrue(any("timelessness audit failed" in f for f in fails), fails)
 
 
 def _stamp_plugin_tests_passed() -> None:

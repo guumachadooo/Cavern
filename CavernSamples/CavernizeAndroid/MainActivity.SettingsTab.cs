@@ -51,6 +51,7 @@ public partial class MainActivity {
     // Diagnostics & Log views
     TextView logPathInfoText, cloudLogStatusText, selfCheckStatusText, liveBridgeStatusText;
     Button cloudLogUploadBtn, selfCheckQuickBtn, selfCheckFullBtn, liveBridgeToggleBtn, liveBridgeCopyBtn;
+    Switch liveBridgeStandbySwitch;
     bool isCloudLogUploading, isSelfCheckRunning, isLiveBridgeBusy;
     LinearLayout advContentContainer;
     OneUiIconView advChevron;
@@ -1667,6 +1668,18 @@ public partial class MainActivity {
         liveBridgeStatusText.SetPadding(0, Dp(2), 0, Dp(8));
         logCard.AddView(liveBridgeStatusText);
 
+        liveBridgeStandbySwitch = AddSwitchRow(logCard, S["LiveBridgeStandbySwitch"], store.LiveBridgeStandbyEnabled, v => {
+            if (v && (!LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out _) || !LiveDiagnosticBridgeService.HasPairedSecret(store))) {
+                Toast.MakeText(this, S["LiveBridgeStandbyNeedPairToast"], ToastLength.Long).Show();
+                if (liveBridgeStandbySwitch != null) liveBridgeStandbySwitch.Checked = false;
+                ShowLiveBridgeConfigModal();
+                return;
+            }
+            store.LiveBridgeStandbyEnabled = v;
+            LiveBridgeWakeService.SyncStandbyState(this, store);
+            RefreshLogSummaryLabel();
+        });
+
         LinearLayout bridgeBtns = HRow();
         liveBridgeToggleBtn = PillButton(S["LiveBridgeStartBtn"], () => _ = ToggleLiveBridgeSessionAsync(), active: true);
         liveBridgeCopyBtn = PillButton(S["LiveBridgeCopyCodeBtn"], CopyActiveLiveBridgeCode);
@@ -1677,7 +1690,7 @@ public partial class MainActivity {
         logCard.AddView(bridgeBtns);
 
         RefreshLogSummaryLabel();
-        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear cloud github upload sync crash checkup selfcheck test pairwise bridge live cloudflare relay");
+        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear cloud github upload sync crash checkup selfcheck test pairwise bridge live cloudflare relay biometric fingerprint wake standby");
 
         // Language, About & App Version Updater
         LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.IconSystemInfo);
@@ -2170,23 +2183,32 @@ public partial class MainActivity {
         }
         if (liveBridgeStatusText != null && store != null) {
             bool active = LiveDiagnosticBridgeService.IsActive;
+            bool hasUrl = LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out string normUrl);
             if (active) {
                 int rem = LiveDiagnosticBridgeService.RemainingSeconds;
                 string mmss = $"{rem / 60:00}:{rem % 60:00}";
                 liveBridgeStatusText.Text = string.Format(
                     S["LiveBridgeActiveFmt"],
                     mmss,
+                    LiveDiagnosticBridgeService.ActiveMaxTier,
                     LiveDiagnosticBridgeService.CommandsHandled,
                     LiveDiagnosticBridgeService.ActiveSessionCode,
                     LiveDiagnosticBridgeService.LastEventText);
                 liveBridgeStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
-            } else if (LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out string normUrl)) {
+            } else if (hasUrl && store.LiveBridgeStandbyEnabled && LiveDiagnosticBridgeService.HasPairedSecret(store)) {
                 string host = new Uri(normUrl).Host;
-                liveBridgeStatusText.Text = string.Format(S["LiveBridgeIdleFmt"], host);
+                liveBridgeStatusText.Text = string.Format(S["LiveBridgeStandbyActiveFmt"], host, store.LiveBridgeDefaultTier);
+                liveBridgeStatusText.SetTextColor(OneUiTheme.PrimaryHigh);
+            } else if (hasUrl) {
+                string host = new Uri(normUrl).Host;
+                liveBridgeStatusText.Text = string.Format(S["LiveBridgeIdleFmt"], host, store.LiveBridgeDefaultTier);
                 liveBridgeStatusText.SetTextColor(OneUiTheme.TextSub);
             } else {
                 liveBridgeStatusText.Text = S["LiveBridgeNotConfigured"];
                 liveBridgeStatusText.SetTextColor(OneUiTheme.TextSub);
+            }
+            if (liveBridgeStandbySwitch != null && liveBridgeStandbySwitch.Checked != store.LiveBridgeStandbyEnabled) {
+                liveBridgeStandbySwitch.Checked = store.LiveBridgeStandbyEnabled;
             }
             if (liveBridgeToggleBtn != null) {
                 liveBridgeToggleBtn.Text = active ? S["LiveBridgeStopBtn"] : S["LiveBridgeStartBtn"];
@@ -2285,10 +2307,61 @@ public partial class MainActivity {
         urlInput.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
         body.AddView(urlInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
 
+        OneUiInlineSelector tierSel = new(this, S["LiveBridgeTierLabel"]);
+        tierSel.SetItems([S["LiveBridgeTier0Short"], S["LiveBridgeTier1Short"], S["LiveBridgeTier2Short"]], store.LiveBridgeDefaultTier);
+        int selectedTier = store.LiveBridgeDefaultTier;
+        tierSel.SelectionChanged += pos => selectedTier = pos;
+        body.AddView(tierSel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
+
+        int[] durations = [15, 30, 60];
+        OneUiInlineSelector durSel = new(this, S["LiveBridgeDurationLabel"]);
+        int curDurIdx = Math.Max(0, Array.IndexOf(durations, store.LiveBridgeSessionMinutes));
+        durSel.SetItems(["15 min", "30 min", "60 min"], curDurIdx);
+        int selectedMinutes = durations[curDurIdx];
+        durSel.SelectionChanged += pos => selectedMinutes = durations[Math.Clamp(pos, 0, durations.Length - 1)];
+        body.AddView(durSel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+
+        TextView pairStatus = Label("", 11.5f, OneUiTheme.TextSub);
+        pairStatus.SetPadding(0, Dp(2), 0, Dp(6));
+        body.AddView(pairStatus);
+
+        void RefreshPairStatus() {
+            bool paired = LiveDiagnosticBridgeService.HasPairedSecret(store);
+            pairStatus.Text = paired ? S["LiveBridgePairStatusPaired"] : S["LiveBridgePairStatusUnpaired"];
+            pairStatus.SetTextColor(paired ? OneUiTheme.FunctionalGreen : OneUiTheme.TextSub);
+        }
+        RefreshPairStatus();
+
+        LinearLayout pairRow = HRow();
+        Button genPairBtn = PillButton(S["LiveBridgePairGenBtn"], () => {
+            string copyable = LiveDiagnosticBridgeService.GenerateAndStorePairSecret(store);
+            RefreshPairStatus();
+            if (!string.IsNullOrEmpty(copyable) && GetSystemService(ClipboardService) is ClipboardManager cm) {
+                cm.PrimaryClip = ClipData.NewPlainText("Cavernize Bridge Pair Key", copyable);
+                Toast.MakeText(this, S["LiveBridgePairCopiedToast"], ToastLength.Long).Show();
+            }
+            RefreshLogSummaryLabel();
+        }, active: true);
+        Button copyPairBtn = PillButton(S["LiveBridgePairCopyBtn"], () => {
+            string copyable = LiveDiagnosticBridgeService.GetCopyablePairSecret(store);
+            if (string.IsNullOrEmpty(copyable)) {
+                copyable = LiveDiagnosticBridgeService.GenerateAndStorePairSecret(store);
+                RefreshPairStatus();
+            }
+            if (!string.IsNullOrEmpty(copyable) && GetSystemService(ClipboardService) is ClipboardManager cm) {
+                cm.PrimaryClip = ClipData.NewPlainText("Cavernize Bridge Pair Key", copyable);
+                Toast.MakeText(this, S["LiveBridgePairCopiedToast"], ToastLength.Long).Show();
+            }
+        });
+        pairRow.AddView(genPairBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.25f) { RightMargin = Dp(6) });
+        pairRow.AddView(copyPairBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        body.AddView(pairRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
+
         TextView testStatus = Label("", 11.5f, OneUiTheme.TextSub);
-        testStatus.SetPadding(0, Dp(2), 0, Dp(8));
+        testStatus.SetPadding(0, Dp(2), 0, Dp(6));
         body.AddView(testStatus);
 
+        LinearLayout utilRow = HRow();
         Button testBtn = PillButton(S["LiveBridgeTestBtn"], () => {
             string candidate = urlInput.Text?.Trim() ?? "";
             testStatus.Text = S["LiveBridgeTesting"];
@@ -2303,7 +2376,16 @@ public partial class MainActivity {
                 }
             });
         });
-        body.AddView(testBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        Button revokeBtn = PillButton(S["LiveBridgePairRevokeBtn"], () => {
+            LiveDiagnosticBridgeService.RevokePairSecret(store);
+            LiveBridgeWakeService.SyncStandbyState(this, store);
+            RefreshPairStatus();
+            RefreshLogSummaryLabel();
+            Toast.MakeText(this, S["LiveBridgePairRevokedToast"], ToastLength.Short).Show();
+        });
+        utilRow.AddView(testBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(6) });
+        utilRow.AddView(revokeBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.9f));
+        body.AddView(utilRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         OneUiModalDialog.Show(
             this,
@@ -2313,9 +2395,13 @@ public partial class MainActivity {
             iconBadgeColor: OneUiTheme.IconSystemInfo,
             positiveText: S["CloudLogSaveBtn"],
             onPositive: () => {
+                store.LiveBridgeDefaultTier = selectedTier;
+                store.LiveBridgeSessionMinutes = selectedMinutes;
                 string raw = urlInput.Text?.Trim() ?? "";
                 if (string.IsNullOrEmpty(raw)) {
                     store.LiveRelayUrl = "";
+                    store.LiveBridgeStandbyEnabled = false;
+                    LiveBridgeWakeService.SyncStandbyState(this, store);
                     RefreshLogSummaryLabel();
                     Toast.MakeText(this, S["LiveBridgeSavedToast"], ToastLength.Short).Show();
                     return;
@@ -2325,6 +2411,7 @@ public partial class MainActivity {
                     return;
                 }
                 store.LiveRelayUrl = clean;
+                LiveBridgeWakeService.SyncStandbyState(this, store);
                 RefreshLogSummaryLabel();
                 Toast.MakeText(this, S["LiveBridgeSavedToast"], ToastLength.Short).Show();
             },

@@ -688,5 +688,24 @@
       ]
     }
   },
+  "error_learning": {
+    "repo": "guumachadooo/Cavern",
+    "branch": "diagnostics",
+    "ci_json_path": "ci/latest-build-diagnostics.json",
+    "lessons_file": ".agents/docs/BUILD_LESSONS.md"
+  },
+  "diagnostics": {
+    "repo": "guumachadooo/Cavern",
+    "branch": "diagnostics",
+    "log_txt": "device-logs/cavernize_log.txt",
+    "fallback_log_branch": "master",
+    "fallback_log_path": ".agents/device_logs/cavernize_log.txt"
+  },
+  "plugin_evolution": {
+    "enabled": true,
+    "plugin_path": ".agents/plugins/dynamic-fractal-planner",
+    "plugin_sync_doc": ".agents/plugins/dynamic-fractal-planner/.agents/docs/EXTERNAL_AI_SYNC.md",
+    "host_sync_doc": ".agents/docs/EXTERNAL_AI_SYNC.md"
+  },
   "docs_format_version": 1
 }

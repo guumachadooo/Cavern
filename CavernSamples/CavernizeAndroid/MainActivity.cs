@@ -369,7 +369,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
             }
         });
         SchedulePostUpdateSelfCheckIfNeeded();
+        LiveDiagnosticBridgeService.RegisterAppHost(this);
         LiveDiagnosticBridgeService.StateChanged += OnLiveBridgeStateChanged;
+        LiveBridgeWakeService.SyncStandbyState(this, store);
     }
 
     void OnLiveBridgeStateChanged() {
@@ -446,7 +448,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         uiDestroyed = true;
         AppLogger.CriticalEventLogged -= OnCriticalLogEvent;
         LiveDiagnosticBridgeService.StateChanged -= OnLiveBridgeStateChanged;
-        _ = LiveDiagnosticBridgeService.StopSessionAsync();
+        LiveDiagnosticBridgeService.UnregisterAppHost(this);
+        if (store == null || !store.LiveBridgeStandbyEnabled) {
+            _ = LiveDiagnosticBridgeService.StopSessionAsync();
+        }
         if (OperatingSystem.IsAndroidVersionAtLeast(33) && isPredictiveBackRegistered && predictiveBackCallback != null) {
             try {
                 OnBackInvokedDispatcher?.UnregisterOnBackInvokedCallback(predictiveBackCallback);

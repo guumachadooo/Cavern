@@ -450,8 +450,14 @@ def run_build_rules(
     if ran_any and layer_statuses:
         l_parts = [f"{lbl}:{st}({cnt})" if cnt else f"{lbl}:{st}" for lbl, st, cnt in layer_statuses]
         print(f"BUILD_SUMMARY|layers={','.join(l_parts)}|unique_errors={len(global_seen)}|deduped={total_dups}")
-        if upstream_failed and (repo / ".agents" / "scripts" / "error_learner.py").is_file():
-            print("LEARN_HINT|new recurring build error? pipe output -> `python3 -B .agents/scripts/error_learner.py --from-log - --apply`")
+        if upstream_failed:
+            local_el = repo / ".agents" / "scripts" / "error_learner.py"
+            el_cmd = (
+                "python3 -B .agents/scripts/error_learner.py --from-log - --apply"
+                if local_el.is_file()
+                else f"python3 -B {SCRIPTS_DIR / 'error_learner.py'} --workspace {repo} --from-log - --apply"
+            )
+            print(f"LEARN_HINT|new recurring build error? pipe output -> `{el_cmd}`")
     return ran_any
 
 
@@ -1246,6 +1252,37 @@ def check_memory_weight(repo: Path, profile: dict[str, Any], warns: list[str]) -
                 warns.append(f"`{extra_rel}` has {len(items)} completed items (>15); archive old entries to `.agents/docs/archive/`.")
 
 
+def check_build_lessons_timelessness(repo: Path, files: list[str], fails: list[str]) -> None:
+    """Enforce timeless anti-obsolescence rules whenever any BUILD_LESSONS.md is modified."""
+    lesson_files = [f for f in files if Path(f).name == "BUILD_LESSONS.md" and (repo / f).is_file()]
+    if not lesson_files:
+        return
+    try:
+        import error_learner  # noqa: E402
+    except Exception:
+        return
+    for rel in lesson_files:
+        ok, errs = error_learner.audit_lessons_file(repo / rel)
+        if not ok:
+            for e in errs[:8]:
+                fails.append(f"{rel}: timelessness audit failed -> {e}")
+
+
+def check_plugin_sync_parity(repo: Path, files: list[str], warns: list[str]) -> None:
+    """Warn if embedded plugin code changed without recording an entry in plugin EXTERNAL_AI_SYNC.md."""
+    plug_prefix = ".agents/plugins/dynamic-fractal-planner/"
+    code_touched = [
+        f for f in files
+        if f.startswith(plug_prefix)
+        and (f.endswith(".py") or f.endswith("plugin.json") or f.endswith("hooks.json"))
+    ]
+    if not code_touched:
+        return
+    plug_sync = f"{plug_prefix}.agents/docs/EXTERNAL_AI_SYNC.md"
+    if (repo / plug_sync).is_file() and plug_sync not in files:
+        warns.append(f"Plugin code edited ({len(code_touched)} file(s)) without updating `{plug_sync}`.")
+
+
 def run_static_checks(
     repo: Path,
     profile: dict[str, Any],
@@ -1266,6 +1303,8 @@ def run_static_checks(
     check_orphan_calls(repo, files, warns)
     check_forward_wiring(repo, files, profile, fails, warns)
     check_memory_weight(repo, profile, warns)
+    check_build_lessons_timelessness(repo, files, fails)
+    check_plugin_sync_parity(repo, files, warns)
 
     extra_rel, pending_extra = get_pending_extra_requests(repo, profile)
     if pending_extra:

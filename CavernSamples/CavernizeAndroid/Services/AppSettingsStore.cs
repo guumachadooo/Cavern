@@ -1339,10 +1339,33 @@ public sealed class AppSettingsStore {
         set => Edit().PutString("lastSelfCheckSummary", value ?? "").Apply();
     }
 
-    // Free Ephemeral Live Diagnostic Bridge (user's own Cloudflare Worker HTTPS URL)
+    // Free Live Bridge v2 (Cloudflare Worker HTTPS URL + Keystore-encrypted Pair Secret + Standby Wake)
     public string LiveRelayUrl {
         get => prefs.GetString("liveRelayUrl", "");
         set => Edit().PutString("liveRelayUrl", (value ?? "").Trim()).Apply();
+    }
+
+    public string LiveBridgeEncryptedPairSecret {
+        get => prefs.GetString("liveBridgeEncPairSecret", "");
+        set => Edit().PutString("liveBridgeEncPairSecret", value ?? "").Apply();
+    }
+
+    public bool LiveBridgeStandbyEnabled {
+        get => prefs.GetBoolean("liveBridgeStandbyEnabled", false);
+        set => Edit().PutBoolean("liveBridgeStandbyEnabled", value).Apply();
+    }
+
+    /// <summary>
+    /// 0 = Read-Only Diagnostics (T0), 1 = Interactive Control & QA (T1), 2 = Full + Visual/Tools (T2).
+    /// </summary>
+    public int LiveBridgeDefaultTier {
+        get => prefs.GetInt("liveBridgeDefaultTier", 1);
+        set => Edit().PutInt("liveBridgeDefaultTier", Math.Clamp(value, 0, 2)).Apply();
+    }
+
+    public int LiveBridgeSessionMinutes {
+        get => prefs.GetInt("liveBridgeSessionMinutes", 30);
+        set => Edit().PutInt("liveBridgeSessionMinutes", Math.Clamp(value, 15, 60)).Apply();
     }
 
     public string LastExplorerDirectory {

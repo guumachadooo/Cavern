@@ -766,6 +766,7 @@ def is_real_project_root(repo: Path) -> bool:
 
     home = Path.home().resolve()
     gemini_dir = (home / ".gemini").resolve()
+    plugin_root = resolve_plugin_root().resolve()
     disallowed = {
         Path("/"),
         Path("/tmp"),
@@ -774,8 +775,9 @@ def is_real_project_root(repo: Path) -> bool:
         Path("/var/tmp").resolve(),
         home,
         gemini_dir,
+        plugin_root,
     }
-    if r in disallowed or gemini_dir in r.parents:
+    if r in disallowed or gemini_dir in r.parents or plugin_root in r.parents:
         return False
 
     if (r / ".git").exists():
