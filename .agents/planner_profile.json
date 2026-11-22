@@ -203,6 +203,13 @@
       "forbid_regex": "requestLegacyExternalStorage",
       "severity": "fail",
       "message": "requestLegacyExternalStorage is forbidden on targetSdkVersion >= 35; use MediaStore/SAF Scoped Storage."
+    },
+    {
+      "path_prefix": "CavernSamples/CavernizeAndroid/",
+      "path_regex": "\\.cs$",
+      "forbid_regex": "\\bBuild\\.VERSION\\.SdkInt\\s*(?:>=|<=|>|<|==|!=)",
+      "severity": "warn",
+      "message": "Prefer `OperatingSystem.IsAndroidVersionAtLeast(N)` over `Build.VERSION.SdkInt` comparisons so Roslyn CA1416/CA1422 platform analyzers recognize the OS guard (and repeat the guard inside lambdas/callbacks)."
     }
   ],
   "key_parity_rules": [
@@ -550,7 +557,8 @@
       ],
       "checklist": [
         "Enforce `android:targetSdkVersion` >= 35 (35/36), `extractNativeLibs=\"true\"`, `enableOnBackInvokedCallback=\"true\"`, W^X `NativeLibraryDir` execution (zero `FilesDir/bin/` exec), 16 KB ELF alignment, and API 33+ runtime/FGS compliance.",
-        "Check `SafePipeHandle` / stream disposal, lock-free audio/USB lifecycles, bitmap `.Recycle()` safety, and `AppLogger` error diagnostics."
+        "Check `SafePipeHandle` / stream disposal, lock-free audio/USB lifecycles, bitmap `.Recycle()` safety, and `AppLogger` error diagnostics.",
+        "Zero-Warning Live Check: inspect `fetch_live_diagnostics.py --ci` & current official Android/.NET docs before touching OS-versioned APIs; use `OperatingSystem.IsAndroidVersionAtLeast(N)` in the exact scope (incl. inside lambdas) or `[SupportedOSPlatform]` (see `PROJECT_HISTORY.md` Sec 2)."
       ]
     },
     "player-library": {

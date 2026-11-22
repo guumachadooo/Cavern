@@ -4314,7 +4314,7 @@ public partial class MainActivity {
     }
 
     void RequestAllFilesAccess() {
-        if (Build.VERSION.SdkInt >= BuildVersionCodes.R) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(30)) {
             try {
                 Intent intent = new(Android.Provider.Settings.ActionManageAppAllFilesAccessPermission,
                     Android.Net.Uri.Parse("package:" + PackageName));

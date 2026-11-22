@@ -4906,14 +4906,18 @@ public partial class MainActivity {
             dlg.Window.SetBackgroundDrawable(new Android.Graphics.Drawables.ColorDrawable(Color.Black));
             dlg.Window.SetLayout(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent);
             if (OperatingSystem.IsAndroidVersionAtLeast(30)) {
-                dlg.Window.SetDecorFitsSystemWindows(false);
+                if (!OperatingSystem.IsAndroidVersionAtLeast(35)) {
+#pragma warning disable CS0618, CA1422
+                    dlg.Window.SetDecorFitsSystemWindows(false);
+#pragma warning restore CS0618, CA1422
+                }
                 if (dlg.Window.Attributes != null) {
                     dlg.Window.Attributes.LayoutInDisplayCutoutMode = LayoutInDisplayCutoutMode.Always;
                     dlg.Window.Attributes = dlg.Window.Attributes;
                 }
                 View hudOverlay = FindFullscreenVideoHudOverlay(musicVideoStage);
                 fsRoot.SetOnApplyWindowInsetsListener(new RootInsetsListener(insets => {
-                    if (insets == null || hudOverlay == null) {
+                    if (insets == null || hudOverlay == null || !OperatingSystem.IsAndroidVersionAtLeast(30)) {
                         return;
                     }
                     Android.Graphics.Insets safe = insets.GetInsets(

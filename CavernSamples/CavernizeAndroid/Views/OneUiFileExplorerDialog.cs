@@ -183,6 +183,9 @@ public static class OneUiFileExplorerDialog {
             pTv.Typeface = sfSemi;
             permBar.AddView(pTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
             permBar.Click += (_, _) => {
+                if (!OperatingSystem.IsAndroidVersionAtLeast(30)) {
+                    return;
+                }
                 try {
                     Intent permIntent = new(Android.Provider.Settings.ActionManageAppAllFilesAccessPermission,
                         Android.Net.Uri.Parse($"package:{ctx.PackageName}"));

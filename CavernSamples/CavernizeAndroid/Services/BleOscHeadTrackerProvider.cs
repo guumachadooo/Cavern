@@ -287,7 +287,10 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
             }
             try {
                 bleGattCallback = new BleGattCallbackImpl(this, name);
+                // Keep ConnectGatt(Context, bool, Callback, Transport) for API 26-37 compatibility (API 37 replaced it with BluetoothGattConnectionSettings).
+#pragma warning disable CA1422
                 activeGatt = device.ConnectGatt(context, autoConnect: false, bleGattCallback, BluetoothTransports.Le);
+#pragma warning restore CA1422
                 SetStatus(string.Format(AndroidStrings.Active["HtBleConnecting"], name));
             } catch (Java.Lang.SecurityException sx) {
                 AppLogger.Warn($"BleOscHeadTracker ConnectGatt denied: {sx.Message}");
@@ -437,8 +440,11 @@ public sealed class BleOscHeadTrackerProvider : IHeadTrackerProvider {
             }
         }
 
+        [System.Runtime.Versioning.SupportedOSPlatform("android33.0")]
         public override void OnCharacteristicChanged(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, byte[] value) {
-            base.OnCharacteristicChanged(gatt, characteristic, value);
+            if (OperatingSystem.IsAndroidVersionAtLeast(33)) {
+                base.OnCharacteristicChanged(gatt, characteristic, value);
+            }
             owner.OnBleNotification(value, deviceName);
         }
 

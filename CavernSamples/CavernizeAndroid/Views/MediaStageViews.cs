@@ -1048,14 +1048,14 @@ public sealed class AppleMusicLyricsView : View {
         cachedLines.Clear();
         totalContentHeight = 0f;
         float dp = Resources.DisplayMetrics.Density;
-        float sp = Resources.DisplayMetrics.ScaledDensity > 0 ? Resources.DisplayMetrics.ScaledDensity : dp;
         int availW = Math.Max(40, Width - (int)(12f * dp));
         if (availW <= 40 || !document.HasLyrics) {
             return;
         }
         lastBuiltWidth = Width;
 
-        float fontSize = Math.Clamp(23.5f * sp, 18f * dp, 28f * dp);
+        float spSize = Android.Util.TypedValue.ApplyDimension(Android.Util.ComplexUnitType.Sp, 23.5f, Resources.DisplayMetrics);
+        float fontSize = Math.Clamp(spSize > 0f ? spSize : 23.5f * dp, 18f * dp, 28f * dp);
         linePaint.TextSize = fontSize;
 
         float y = 20f * dp;

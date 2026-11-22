@@ -288,11 +288,7 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
             .SetMediaSession(mediaSession.SessionToken)
             .SetShowActionsInCompactView(0, 2, 4);
 
-        Notification.Builder builder = Build.VERSION.SdkInt >= BuildVersionCodes.O
-            ? new Notification.Builder(appContext, ChannelId)
-#pragma warning disable CS0618
-            : new Notification.Builder(appContext);
-#pragma warning restore CS0618
+        Notification.Builder builder = new(appContext, ChannelId);
 
         Bitmap artToUse = IsBitmapUsable(customArtworkBitmap) ? customArtworkBitmap : defaultArtworkBitmap;
 
@@ -322,11 +318,7 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         NotificationManager nm = context.GetSystemService(Context.NotificationService) as NotificationManager;
         EnsureNotificationChannel(nm);
 
-        Notification.Builder builder = OperatingSystem.IsAndroidVersionAtLeast(26)
-            ? new Notification.Builder(context, ChannelId)
-#pragma warning disable CS0618
-            : new Notification.Builder(context);
-#pragma warning restore CS0618
+        Notification.Builder builder = new(context, ChannelId);
 
         return builder
             .SetSmallIcon(Resource.Drawable.cavern_logo)
@@ -499,7 +491,7 @@ public sealed class CavernizePlaybackService : Service {
         bool hasActivePlayback = intent != null && active != null && MediaPlaybackNotificationManager.isPlaybackActive;
         try {
             Notification notif = active ?? MediaPlaybackNotificationManager.BuildFallbackNotification(this);
-            StartForegroundCompat(MediaPlaybackNotificationManager.NotificationId, notif, ResolveForegroundServiceType());
+            StartForegroundCompat(MediaPlaybackNotificationManager.NotificationId, notif);
             if (hasActivePlayback) {
                 return StartCommandResult.Sticky;
             }
@@ -538,6 +530,7 @@ public sealed class CavernizePlaybackService : Service {
         }
     }
 
+    [System.Runtime.Versioning.SupportedOSPlatform("android29.0")]
     Android.Content.PM.ForegroundService ResolveForegroundServiceType() {
         Android.Content.PM.ForegroundService fgsType = Android.Content.PM.ForegroundService.TypeMediaPlayback;
         if (OperatingSystem.IsAndroidVersionAtLeast(35) &&
@@ -558,9 +551,9 @@ public sealed class CavernizePlaybackService : Service {
         return fgsType;
     }
 
-    void StartForegroundCompat(int id, Notification notification, Android.Content.PM.ForegroundService fgsType) {
+    void StartForegroundCompat(int id, Notification notification) {
         if (OperatingSystem.IsAndroidVersionAtLeast(29)) {
-            StartForeground(id, notification, fgsType);
+            StartForeground(id, notification, ResolveForegroundServiceType());
         } else {
             StartForeground(id, notification);
         }

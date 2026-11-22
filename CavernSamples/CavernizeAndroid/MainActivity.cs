@@ -702,7 +702,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         win.DecorView?.SetBackgroundColor(ColBg);
         if (OperatingSystem.IsAndroidVersionAtLeast(30)) {
-            win.SetDecorFitsSystemWindows(false);
+            if (!OperatingSystem.IsAndroidVersionAtLeast(35)) {
+#pragma warning disable CS0618, CA1422
+                win.SetDecorFitsSystemWindows(false);
+#pragma warning restore CS0618, CA1422
+            }
             if (win.Attributes != null) {
                 win.Attributes.LayoutInDisplayCutoutMode = LayoutInDisplayCutoutMode.Always;
                 win.Attributes = win.Attributes;
@@ -1571,10 +1575,14 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     void HandleIncomingIntent(Intent intent) {
         Android.Net.Uri uri = intent.Data;
-        if (uri == null && intent.Extras != null && Build.VERSION.SdkInt < BuildVersionCodes.Tiramisu) {
-            uri = intent.GetParcelableExtra(Intent.ExtraStream) as Android.Net.Uri;
-        } else if (uri == null && Build.VERSION.SdkInt >= BuildVersionCodes.Tiramisu) {
-            uri = intent.GetParcelableExtra(Intent.ExtraStream, Java.Lang.Class.FromType(typeof(Android.Net.Uri))) as Android.Net.Uri;
+        if (uri == null) {
+            if (OperatingSystem.IsAndroidVersionAtLeast(33)) {
+                uri = intent.GetParcelableExtra(Intent.ExtraStream, Java.Lang.Class.FromType(typeof(Android.Net.Uri))) as Android.Net.Uri;
+            } else if (intent.Extras != null) {
+#pragma warning disable CS0618, CA1422
+                uri = intent.GetParcelableExtra(Intent.ExtraStream) as Android.Net.Uri;
+#pragma warning restore CS0618, CA1422
+            }
         }
         if (uri != null) {
             LoadUriAsync(uri);

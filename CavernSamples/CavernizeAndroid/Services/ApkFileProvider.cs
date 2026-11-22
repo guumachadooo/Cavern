@@ -112,7 +112,7 @@ public sealed class ApkFileProvider : ContentProvider {
             if (cols[i] == IOpenableColumns.DisplayName) {
                 row[i] = new Java.Lang.String(safeName);
             } else if (cols[i] == IOpenableColumns.Size) {
-                row[i] = new Java.Lang.Long(size);
+                row[i] = Java.Lang.Long.ValueOf(size);
             } else {
                 row[i] = null;
             }

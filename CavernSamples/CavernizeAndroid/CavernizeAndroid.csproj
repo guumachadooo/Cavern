@@ -15,6 +15,8 @@
     <AndroidUseAapt2>true</AndroidUseAapt2>
     <Authors>VoidX</Authors>
     <Description>Cavernize spatial audio player, converter, and channel/object stem extractor for Android.</Description>
+    <!-- Intentionally pin targetSdkVersion=35 in AndroidManifest.xml while compiling against net11.0-android (API 37 ACW) -->
+    <NoWarn>$(NoWarn);XA4211</NoWarn>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">

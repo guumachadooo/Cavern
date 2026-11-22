@@ -13,6 +13,7 @@ using Cavern;
 using Cavern.Filters;
 using Cavern.Format;
 using Cavern.Format.Common;
+using Cavern.Spatial;
 using Cavern.Virtualizer;
 using Cavern.VocalChain;
 
@@ -397,7 +398,7 @@ public static class SelfDiagnosticEngine {
     }
 
     static (SelfCheckStatus, string) CheckLocalizationIntegrity() {
-        AndroidStrings s = AndroidStrings.Current;
+        AndroidStrings s = AndroidStrings.Active;
         string[] criticalKeys = [
             "AppTitle", "DiagnosticsTitle", "CloudLogSectionTitle",
             "SelfCheckSectionTitle", "SelfCheckQuickBtn", "SelfCheckFullBtn",
@@ -447,7 +448,7 @@ public static class SelfDiagnosticEngine {
             }
             checkedAssets++;
             try {
-                using Stream stream = context.Assets.Open("hrir/" + prof.AssetFile);
+                using System.IO.Stream stream = context.Assets.Open("hrir/" + prof.AssetFile);
                 byte[] head = new byte[16];
                 int n = stream.Read(head, 0, head.Length);
                 if (n < 6) {
@@ -576,7 +577,7 @@ public static class SelfDiagnosticEngine {
             return (SelfCheckStatus.Warn, $"VocalChain slow: {sw.Elapsed.TotalMilliseconds:0.0}ms for {budgetMs:0.0}ms block ({rtRatio * 100:0}% RT budget)");
         }
         return (SelfCheckStatus.Pass,
-            $"Output peak={peakV:0.000}, rms={rmsV:0.000}, CPU={rtRatio * 100:0.0}% of RT budget ({sw.Elapsed.TotalMilliseconds:0.1}ms)");
+            $"Output peak={peakV:0.000}, rms={rmsV:0.000}, CPU={rtRatio * 100:0.0}% of RT budget ({sw.Elapsed.TotalMilliseconds:0.0}ms)");
     }
 
     static (SelfCheckStatus, string) CheckQuickPairwiseSmoke() =>

@@ -12,14 +12,23 @@ namespace Cavern.Format.Decoders {
     /// AOMedia IAMF v1.0.0 Open Bitstream Unit (OBU) type codes (curated from <c>AOMediaCodec/iamf-tools</c> &amp; <c>libiamf</c>).
     /// </summary>
     public enum IamfObuType : byte {
+        /// <summary>Codec Config OBU defining decoder parameters for an elementary audio stream.</summary>
         CodecConfig = 0,
+        /// <summary>Audio Element OBU describing channel-based or scene-based spatial audio elements.</summary>
         AudioElement = 1,
+        /// <summary>Mix Presentation OBU defining loudness, rendering, and sub-mix layout rules.</summary>
         MixPresentation = 2,
+        /// <summary>Parameter Block OBU carrying time-varying gain, recon gain, or demixing metadata.</summary>
         ParameterBlock = 3,
+        /// <summary>Temporal Delimiter OBU marking boundaries between temporal units.</summary>
         TemporalDelimiter = 4,
+        /// <summary>Audio Frame OBU carrying an explicit substream ID and encoded frame payload.</summary>
         AudioFrame = 5,
+        /// <summary>Audio Frame OBU with implicit substream ID 0.</summary>
         AudioFrameId0 = 6,
+        /// <summary>Audio Frame OBU with implicit substream ID 17 (upper bound of implicit IDs 0..17).</summary>
         AudioFrameId17 = 23,
+        /// <summary>IA Sequence Header OBU identifying an IAMF bitstream and primary/additional profiles.</summary>
         SequenceHeader = 31
     }
 
@@ -27,7 +36,9 @@ namespace Cavern.Format.Decoders {
     /// IAMF Audio Element type (Section 3.6 of AOMedia IAMF v1.0.0).
     /// </summary>
     public enum IamfAudioElementType : byte {
+        /// <summary>Channel-based audio element (scalable loudspeaker layouts).</summary>
         ChannelBased = 0,
+        /// <summary>Scene-based audio element (Ambisonics / HOA).</summary>
         SceneBased = 1
     }
 

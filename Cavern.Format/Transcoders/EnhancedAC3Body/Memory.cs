@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 using Cavern.Utilities;
 
@@ -92,7 +92,7 @@ namespace Cavern.Format.Transcoders {
         int blkfsnroffst;
         int blkstrtinfo;
         int convsnroffst;
-        int cplahtinu;
+        int cplahtinu = 0;
         int cplbegf;
         int cplendf;
         int cplendmant;
@@ -114,7 +114,7 @@ namespace Cavern.Format.Transcoders {
         int frmcplexpstr;
         int frmcsnroffst;
         int frmfsnroffst;
-        int lfeahtinu;
+        int lfeahtinu = 0;
         int lfefgaincod;
         int lfefsnroffst;
         int ncplbnd;
