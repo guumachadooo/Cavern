@@ -133,9 +133,9 @@ public sealed class LiveBridgeAuthActivity : Activity {
     Button CreateActionButton(string label, Color bg, Color fg) {
         Button b = new(this) {
             Text = label,
-            TextSize = 13f,
-            AllCaps = false
+            TextSize = 13f
         };
+        b.SetAllCaps(false);
         b.SetSingleLine(true);
         b.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         b.SetTextColor(fg);
@@ -292,7 +292,9 @@ public sealed class LiveBridgeAuthActivity : Activity {
                     activity.statusLabel.SetTextColor(OneUiTheme.TextSub);
                 }
             });
-            if (errorCode == BiometricErrorCode.UserCanceled || errorCode == BiometricErrorCode.NegativeButton) {
+            // Native Android.Hardware.Biometrics.BiometricErrorCode omits NegativeButton (API 28 SetNegativeButton fires NegativeClickListener);
+            // code 13 guards OEM/AndroidX ERROR_NEGATIVE_BUTTON if surfaced here.
+            if (errorCode == BiometricErrorCode.UserCanceled || (int)errorCode == 13) {
                 _ = activity.DenyAndFinishAsync(msg);
             }
         }

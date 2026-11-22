@@ -47,11 +47,11 @@
 ### `BL-005` | `.NET Android` Binding & Override Divergences from Java (`CS0115`, `CS0122`, `CS1503`, `CS0117`)
 - `Category`: `android-bindings`
 - `Codes`: `CS0115, CS0122, CS0507, CS0117, CS1503`
-- `Keywords`: `OnMeasure, ScaleX, ScaleY, Paint.Style, SetStroke, ColorStateList, SeekTo, GetFrameAtTime, MetadataKey, TextView.Paint`
-- `RootCause`: `.NET Android` bindings differ systematically from Java Android: Java getters/setters map to C# properties (`View.ScaleX`), inherited properties shadow type names (`TextView.Paint` shadows `Android.Graphics.Paint` inside `Switch`/`TextView` subclasses), override visibility may be `public` (`public override void OnMeasure`), && overloads/enums have C#-specific signatures (`SetStroke` `ColorStateList`, `SeekTo(int)`, explicit timestamp on `GetFrameAtTime`, numeric casts when binding enum omits newer keys).
-- `TimelessRule`: NEVER transcribe Java Android method names/modifiers/overloads blindly into C#; qualify `Android.Graphics.Paint.Style.*` inside `TextView`/`CompoundButton`/`Switch` subclasses && match exact `.NET Android` binding signatures and visibility modifiers.
-- `DynamicLookup`: Verify exact C# binding member signature against current `.NET Android` API docs or local Roslyn reference assemblies (`python3 .agents/scripts/check_android_cs.py`) before committing.
-- `AutoGuard`: `check_android_cs.py` + CI 4-layer compile & shadow audit
+- `Keywords`: `OnMeasure, ScaleX, ScaleY, SetAllCaps, AllCaps, BiometricErrorCode, Paint.Style, SetStroke, ColorStateList, SeekTo, GetFrameAtTime, MetadataKey, TextView.Paint`
+- `RootCause`: `.NET Android` bindings differ systematically from Java Android & AndroidX: Java getters/setters map inconsistently (`View.ScaleX` prop vs `TextView.SetAllCaps(bool)` method), inherited properties shadow type names (`TextView.Paint` shadows `Android.Graphics.Paint` inside `Switch`/`TextView` subclasses), override visibility may be `public` (`public override void OnMeasure`), platform enums omit AndroidX-only constants (`BiometricErrorCode` omits `NegativeButton`), && overloads/enums have C#-specific signatures (`SetStroke` `ColorStateList`, `SeekTo(int)`, explicit timestamp on `GetFrameAtTime`, numeric casts when binding enum omits newer keys).
+- `TimelessRule`: NEVER transcribe Java Android or AndroidX member names/modifiers/overloads blindly into native `.NET Android` C#; use `SetAllCaps(bool)` (never `AllCaps =`), qualify `Android.Graphics.Paint.Style.*` inside `TextView`/`CompoundButton`/`Switch` subclasses, && verify exact enum members against platform bindings rather than AndroidX docs.
+- `DynamicLookup`: Verify exact C# binding member signature against current `.NET Android` API docs (`dotnet/android-api-docs`) or local Roslyn reference assemblies (`python3 .agents/scripts/check_android_cs.py`) before committing.
+- `AutoGuard`: `diff_rules` (`AllCaps =` fail rule) + `check_android_cs.py` + CI 4-layer compile & shadow audit
 
 ### `BL-006` | Cross-Layer Contract & Symbol Drift (`CS0103`, `CS0117`, `CS1061`, `CS1501`, `CS0111`, `CS0121`)
 - `Category`: `cross-layer-contract`
@@ -74,11 +74,11 @@
 ### `BL-008` | XML Documentation Comments & Overload Ambiguity (`CS1591`, `CS0419`)
 - `Category`: `xml-docs`
 - `Codes`: `CS1591, CS0419, CS1570, CS1573, CS1574`
-- `Keywords`: `missing XML comment, ambiguous reference in cref, GenerateDocumentationFile, summary, see cref`
-- `RootCause`: Projects w/ XML doc generation warn (`CS1591`) on undocumented `public` types/members/enums; referencing overloaded methods via unqualified `<see cref="Type.Method"/>` triggers `CS0419` ambiguity warnings.
-- `TimelessRule`: ALWAYS add `/// <summary>` on every new `public` type, member, & enum value in XML-doc-enabled libraries; in XML comments, reference overloaded methods w/ `<c>Type.Method</c>` OR full parameter-type signature in `cref` (never bare overloaded `<see cref="Type.Method"/>`).
-- `DynamicLookup`: Check `<GenerateDocumentationFile>` in target `.csproj` && inspect `fetch_live_diagnostics.py --ci` for `CS1591`/`CS0419` regressions.
-- `AutoGuard`: CI diagnostics code breakdown (`CS1591`, `CS0419`)
+- `Keywords`: `missing XML comment, ambiguous reference in cref, badly formed XML, GenerateDocumentationFile, summary, see cref, &amp;`
+- `RootCause`: Projects w/ XML doc generation warn (`CS1591`) on undocumented `public` types/members/enums, emit `CS0419` on unqualified overloaded `<see cref="Type.Method"/>`, && emit `CS1570` on raw unescaped XML characters (`&`, `<`, `>`) inside `///` comments.
+- `TimelessRule`: ALWAYS add `/// <summary>` on every new `public` type, member, & enum value in XML-doc-enabled libraries; reference overloaded methods w/ `<c>Type.Method</c>` OR full parameter-type signature in `cref`; ALWAYS escape raw `&`/`<`/`>` as `&amp;`/`&lt;`/`&gt;` inside `///` comments.
+- `DynamicLookup`: Check `<GenerateDocumentationFile>` in target `.csproj` && inspect `fetch_live_diagnostics.py --ci` for `CS1591`/`CS0419`/`CS1570` regressions.
+- `AutoGuard`: `diff_rules` (unescaped `&` in `///` warn rule) + CI diagnostics code breakdown (`CS1591`, `CS0419`, `CS1570`)
 
 ### `BL-009` | Unassigned Fields & Numeric Format Specifier Traps (`CS0649`, `:0.1`/`:0.2`)
 - `Category`: `csharp-correctness`

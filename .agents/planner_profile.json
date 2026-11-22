@@ -248,6 +248,25 @@
       "forbid_regex": "\\{[^}\\n]*:0\\.[1-9]\\b",
       "severity": "warn",
       "message": "Custom numeric format `:0.1`/`:0.2` emits literal digits in C#; use `:0.0`/`:0.00` or `:F1`/`:F2` (BL-009)."
+    },
+    {
+      "path_prefix": "CavernSamples/CavernizeAndroid/",
+      "path_regex": "\\.cs$",
+      "forbid_regex": "\\bAllCaps\\s*=",
+      "severity": "fail",
+      "message": "`.NET Android` `TextView`/`Button` exposes `SetAllCaps(bool)` method, not an `AllCaps` property (BL-005)."
+    },
+    {
+      "path_prefixes": [
+        "Cavern/",
+        "Cavern.Format/",
+        "CavernSamples/"
+      ],
+      "path_regex": "\\.cs$",
+      "strip_strings": false,
+      "forbid_regex": "^\\s*///.*&(?!(?:amp|lt|gt|quot|apos|#\\d+|#x[0-9a-fA-F]+);)",
+      "severity": "warn",
+      "message": "Unescaped `&` in XML documentation comment triggers CS1570; escape as `&amp;` (BL-008)."
     }
   ],
   "key_parity_rules": [

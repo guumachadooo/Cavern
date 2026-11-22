@@ -1356,7 +1356,7 @@ public sealed class AppSettingsStore {
     }
 
     /// <summary>
-    /// 0 = Read-Only Diagnostics (T0), 1 = Interactive Control & QA (T1), 2 = Full + Visual/Tools (T2).
+    /// 0 = Read-Only Diagnostics (T0), 1 = Interactive Control &amp; QA (T1), 2 = Full + Visual/Tools (T2).
     /// </summary>
     public int LiveBridgeDefaultTier {
         get => prefs.GetInt("liveBridgeDefaultTier", 1);
