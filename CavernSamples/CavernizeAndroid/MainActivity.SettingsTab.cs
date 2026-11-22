@@ -49,9 +49,9 @@ public partial class MainActivity {
     Switch autoCheckUpdatesSwitch;
 
     // Diagnostics & Log views
-    TextView logPathInfoText, cloudLogStatusText, selfCheckStatusText;
-    Button cloudLogUploadBtn, selfCheckQuickBtn, selfCheckFullBtn;
-    bool isCloudLogUploading, isSelfCheckRunning;
+    TextView logPathInfoText, cloudLogStatusText, selfCheckStatusText, liveBridgeStatusText;
+    Button cloudLogUploadBtn, selfCheckQuickBtn, selfCheckFullBtn, liveBridgeToggleBtn, liveBridgeCopyBtn;
+    bool isCloudLogUploading, isSelfCheckRunning, isLiveBridgeBusy;
     LinearLayout advContentContainer;
     OneUiIconView advChevron;
     bool isAdvancedExpanded;
@@ -1654,8 +1654,30 @@ public partial class MainActivity {
         cloudBtns.AddView(cloudLogConfigBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         logCard.AddView(cloudBtns);
 
+        AddDivider(logCard);
+        LinearLayout bridgeHeader = HRow();
+        TextView bridgeTitle = Label(S["LiveBridgeSectionTitle"], 13f, ColText);
+        bridgeTitle.SetTypeface(null, TypefaceStyle.Bold);
+        bridgeHeader.AddView(bridgeTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        Button bridgeHelpBtn = PillButton("?", () => ShowModalGuidedHelp(S["LiveBridgeHelpTitle"], S["LiveBridgeHelpBody"], OneUiIconType.Logs));
+        bridgeHeader.AddView(bridgeHelpBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        logCard.AddView(bridgeHeader);
+
+        liveBridgeStatusText = Label("", 11.5f, OneUiTheme.TextSub);
+        liveBridgeStatusText.SetPadding(0, Dp(2), 0, Dp(8));
+        logCard.AddView(liveBridgeStatusText);
+
+        LinearLayout bridgeBtns = HRow();
+        liveBridgeToggleBtn = PillButton(S["LiveBridgeStartBtn"], () => _ = ToggleLiveBridgeSessionAsync(), active: true);
+        liveBridgeCopyBtn = PillButton(S["LiveBridgeCopyCodeBtn"], CopyActiveLiveBridgeCode);
+        Button bridgeCfgBtn = PillButton(S["LiveBridgeConfigBtn"], ShowLiveBridgeConfigModal);
+        bridgeBtns.AddView(liveBridgeToggleBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.2f) { RightMargin = Dp(6) });
+        bridgeBtns.AddView(liveBridgeCopyBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.9f) { RightMargin = Dp(6) });
+        bridgeBtns.AddView(bridgeCfgBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.95f));
+        logCard.AddView(bridgeBtns);
+
         RefreshLogSummaryLabel();
-        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear cloud github upload sync crash checkup selfcheck test pairwise");
+        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear cloud github upload sync crash checkup selfcheck test pairwise bridge live cloudflare relay");
 
         // Language, About & App Version Updater
         LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.IconSystemInfo);
@@ -2146,6 +2168,168 @@ public partial class MainActivity {
         if (selfCheckFullBtn != null) {
             selfCheckFullBtn.Enabled = !isSelfCheckRunning;
         }
+        if (liveBridgeStatusText != null && store != null) {
+            bool active = LiveDiagnosticBridgeService.IsActive;
+            if (active) {
+                int rem = LiveDiagnosticBridgeService.RemainingSeconds;
+                string mmss = $"{rem / 60:00}:{rem % 60:00}";
+                liveBridgeStatusText.Text = string.Format(
+                    S["LiveBridgeActiveFmt"],
+                    mmss,
+                    LiveDiagnosticBridgeService.CommandsHandled,
+                    LiveDiagnosticBridgeService.ActiveSessionCode,
+                    LiveDiagnosticBridgeService.LastEventText);
+                liveBridgeStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
+            } else if (LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out string normUrl)) {
+                string host = new Uri(normUrl).Host;
+                liveBridgeStatusText.Text = string.Format(S["LiveBridgeIdleFmt"], host);
+                liveBridgeStatusText.SetTextColor(OneUiTheme.TextSub);
+            } else {
+                liveBridgeStatusText.Text = S["LiveBridgeNotConfigured"];
+                liveBridgeStatusText.SetTextColor(OneUiTheme.TextSub);
+            }
+            if (liveBridgeToggleBtn != null) {
+                liveBridgeToggleBtn.Text = active ? S["LiveBridgeStopBtn"] : S["LiveBridgeStartBtn"];
+                liveBridgeToggleBtn.Enabled = !isLiveBridgeBusy;
+            }
+            if (liveBridgeCopyBtn != null) {
+                liveBridgeCopyBtn.Visibility = active ? ViewStates.Visible : ViewStates.Gone;
+            }
+        }
+    }
+
+    void CopyActiveLiveBridgeCode() {
+        string code = LiveDiagnosticBridgeService.ActiveSessionCode;
+        if (string.IsNullOrEmpty(code)) {
+            return;
+        }
+        try {
+            if (GetSystemService(ClipboardService) is ClipboardManager cm) {
+                cm.PrimaryClip = ClipData.NewPlainText("Cavernize Live Code", code);
+                Toast.MakeText(this, S["LiveBridgeCodeCopiedToast"], ToastLength.Short).Show();
+            }
+        } catch {
+            // Best effort
+        }
+    }
+
+    async Task ToggleLiveBridgeSessionAsync() {
+        if (isLiveBridgeBusy || store == null) {
+            return;
+        }
+        if (LiveDiagnosticBridgeService.IsActive) {
+            isLiveBridgeBusy = true;
+            try {
+                await LiveDiagnosticBridgeService.StopSessionAsync();
+            } finally {
+                isLiveBridgeBusy = false;
+                if (!uiDestroyed) {
+                    RunOnUiThread(RefreshLogSummaryLabel);
+                }
+            }
+            return;
+        }
+
+        if (!LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out _)) {
+            Toast.MakeText(this, S["LiveBridgeNeedUrlToast"], ToastLength.Short).Show();
+            ShowLiveBridgeConfigModal();
+            return;
+        }
+
+        isLiveBridgeBusy = true;
+        if (liveBridgeToggleBtn != null) {
+            liveBridgeToggleBtn.Enabled = false;
+        }
+        try {
+            (bool ok, string code, string msg) = await LiveDiagnosticBridgeService.StartSessionAsync(this, store);
+            if (uiDestroyed) {
+                return;
+            }
+            RunOnUiThread(() => {
+                RefreshLogSummaryLabel();
+                if (ok && !string.IsNullOrEmpty(code)) {
+                    CopyActiveLiveBridgeCode();
+                } else {
+                    Toast.MakeText(this, msg, ToastLength.Long).Show();
+                }
+            });
+        } finally {
+            isLiveBridgeBusy = false;
+            if (!uiDestroyed) {
+                RunOnUiThread(RefreshLogSummaryLabel);
+            }
+        }
+    }
+
+    void ShowLiveBridgeConfigModal() {
+        if (store == null) {
+            return;
+        }
+        LinearLayout body = new(this) { Orientation = Orientation.Vertical };
+        body.SetPadding(0, Dp(2), 0, Dp(4));
+
+        TextView urlLbl = Label(S["LiveBridgeUrlLabel"], 12f, OneUiTheme.TextSub);
+        urlLbl.SetPadding(0, Dp(4), 0, Dp(4));
+        body.AddView(urlLbl);
+
+        EditText urlInput = new(this) {
+            Text = store.LiveRelayUrl ?? "",
+            Hint = "https://cavernize-diag-relay.your-name.workers.dev",
+            TextSize = 13f,
+            InputType = Android.Text.InputTypes.ClassText | Android.Text.InputTypes.TextVariationUri
+        };
+        urlInput.SetSingleLine(true);
+        urlInput.SetTextColor(ColText);
+        urlInput.SetHintTextColor(ColMuted);
+        urlInput.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+        urlInput.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
+        body.AddView(urlInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+
+        TextView testStatus = Label("", 11.5f, OneUiTheme.TextSub);
+        testStatus.SetPadding(0, Dp(2), 0, Dp(8));
+        body.AddView(testStatus);
+
+        Button testBtn = PillButton(S["LiveBridgeTestBtn"], () => {
+            string candidate = urlInput.Text?.Trim() ?? "";
+            testStatus.Text = S["LiveBridgeTesting"];
+            testStatus.SetTextColor(OneUiTheme.PrimaryHigh);
+            _ = Task.Run(async () => {
+                (bool ok, string msg) = await LiveDiagnosticBridgeService.TestRelayHealthAsync(candidate);
+                if (!uiDestroyed) {
+                    RunOnUiThread(() => {
+                        testStatus.Text = msg;
+                        testStatus.SetTextColor(ok ? OneUiTheme.FunctionalGreen : ColDanger);
+                    });
+                }
+            });
+        });
+        body.AddView(testBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+        OneUiModalDialog.Show(
+            this,
+            S["LiveBridgeModalTitle"],
+            customContent: body,
+            icon: OneUiIconType.Logs,
+            iconBadgeColor: OneUiTheme.IconSystemInfo,
+            positiveText: S["CloudLogSaveBtn"],
+            onPositive: () => {
+                string raw = urlInput.Text?.Trim() ?? "";
+                if (string.IsNullOrEmpty(raw)) {
+                    store.LiveRelayUrl = "";
+                    RefreshLogSummaryLabel();
+                    Toast.MakeText(this, S["LiveBridgeSavedToast"], ToastLength.Short).Show();
+                    return;
+                }
+                if (!LiveDiagnosticBridgeService.TryNormalizeRelayUrl(raw, out string clean)) {
+                    Toast.MakeText(this, S["LiveBridgeInvalidUrlToast"], ToastLength.Long).Show();
+                    return;
+                }
+                store.LiveRelayUrl = clean;
+                RefreshLogSummaryLabel();
+                Toast.MakeText(this, S["LiveBridgeSavedToast"], ToastLength.Short).Show();
+            },
+            negativeText: S["CancelBtn"],
+            onHelp: () => ShowModalGuidedHelp(S["LiveBridgeHelpTitle"], S["LiveBridgeHelpBody"], OneUiIconType.Logs));
     }
 
     async Task RunSelfCheckAsync(bool fullSuite) {

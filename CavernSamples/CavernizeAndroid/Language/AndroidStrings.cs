@@ -403,6 +403,24 @@ public sealed class AndroidStrings {
         ["SelfCheckCompletedToastFmt"] = "Self-check finished: {0}",
         ["SelfCheckHelpTitle"] = "How Intelligent Auto-Checkup Works",
         ["SelfCheckHelpBody"] = "Tests the app cleanly without changing your settings or media files:\n• L1 NativeLibs: verifies W^X libffmpeg.so, libtruehdd.so, libonnxruntime.so & Pro-Audio NDK bridge.\n• L2 System: RAM, storage I/O, EN/PT-BR strings & hardware audio routes.\n• L3 DSP Physics: HRIR/BRIR assets, AutoEq Double-EQ Guard, ISO 9613-1 air absorption, 4x True-Peak brickwall & Vocal Chain.\n• L4 Pairwise Matrix: uses an 8-vector Strength-2 Orthogonal Covering Array so 100% of DSP feature pairs are tested in seconds (avoiding exponential combinations) for NaN/Inf, silence, clipping & CPU budget.\n• L5 Codecs (Full): synthetic WAV & FFmpeg FLAC round-trip.\nIf Cloud Log Sync is enabled, results upload directly to GitHub (diagnostics branch) for instant AI inspection.",
+        ["LiveBridgeSectionTitle"] = "Live Diagnostic Bridge (15 min)",
+        ["LiveBridgeNotConfigured"] = "Free real-time AI <-> phone bridge (off by default) — configure your Cloudflare Worker URL",
+        ["LiveBridgeIdleFmt"] = "Ready ({0}) — OFF until you tap Start (15-min temporary code)",
+        ["LiveBridgeActiveFmt"] = "LIVE ({0} left · {1} cmds) — Code: {2}\n{3}",
+        ["LiveBridgeStartBtn"] = "Start 15-min Session",
+        ["LiveBridgeStopBtn"] = "Stop Session",
+        ["LiveBridgeCopyCodeBtn"] = "Copy Code",
+        ["LiveBridgeConfigBtn"] = "Bridge Setup",
+        ["LiveBridgeCodeCopiedToast"] = "Temporary session code copied (valid 15 min, read-only diagnostics).",
+        ["LiveBridgeModalTitle"] = "Live Diagnostic Bridge Setup (Free)",
+        ["LiveBridgeUrlLabel"] = "Your Cloudflare Worker URL (https://...workers.dev)",
+        ["LiveBridgeTestBtn"] = "Test Relay",
+        ["LiveBridgeTesting"] = "Testing Cloudflare Worker relay...",
+        ["LiveBridgeInvalidUrlToast"] = "Enter a valid public https:// Worker URL.",
+        ["LiveBridgeSavedToast"] = "Live Bridge relay URL saved.",
+        ["LiveBridgeNeedUrlToast"] = "Configure your free Cloudflare Worker URL first.",
+        ["LiveBridgeHelpTitle"] = "Free 15-Min Live Bridge Setup",
+        ["LiveBridgeHelpBody"] = "100% free on Cloudflare Workers Free Tier (100k req/day, no server to maintain):\n1. In Cloudflare Dashboard -> Storage & Databases -> KV, create a namespace named CAVERNIZE_RELAY.\n2. Go to Workers & Pages -> Create Worker (e.g. cavernize-diag-relay) -> Deploy.\n3. Open Worker Settings -> Bindings -> Add KV Namespace binding: Variable name = RELAY_KV -> CAVERNIZE_RELAY.\n4. Click Edit Code, paste .agents/docs/cloudflare_live_relay_worker.js from your Cavern repo, and Deploy.\n5. Paste your https://...workers.dev URL here.\nSecurity: Always OFF by default. Each session generates a fresh 120-bit code that expires in 15 min and accepts ONLY 7 read-only diagnostic commands (ping, quick_check, full_check, log_tail, summary, audio_routes, memory).",
 
         // App Auto-Updater
         ["UpdateCardTitle"] = "Software Update",
@@ -1750,6 +1768,24 @@ public sealed class AndroidStrings {
         d["SelfCheckCompletedToastFmt"] = "Check-up concluído: {0}";
         d["SelfCheckHelpTitle"] = "Como funciona o Auto-Checkup Inteligente";
         d["SelfCheckHelpBody"] = "Testa o aplicativo sem alterar suas configurações nem seus arquivos:\n• L1 NativeLibs: valida W^X de libffmpeg.so, libtruehdd.so, libonnxruntime.so e ponte NDK Pro-Audio.\n• L2 Sistema: RAM, escrita/leitura em disco, strings EN/PT-BR e rotas de áudio.\n• L3 Física DSP: assets HRIR/BRIR, Double-EQ Guard do AutoEq, absorção ISO 9613-1, limiter 4x True-Peak e Vocal Chain.\n• L4 Matriz Ortogonal (Pairwise): usa 8 vetores matemáticos de cobertura em pares para testar 100% das combinações entre pares de recursos DSP em segundos (sem explosão exponencial), checando NaN/Inf, silêncio, clipping e orçamento de CPU.\n• L5 Codecs (Completo): ida e volta WAV sintético + FLAC via FFmpeg.\nSe o Log na Nuvem estiver ativo, sobe automaticamente para o GitHub (branch diagnostics) para consulta instantânea.";
+        d["LiveBridgeSectionTitle"] = "Ponte Ao Vivo de Diagnóstico (15 min)";
+        d["LiveBridgeNotConfigured"] = "Ponte grátis em tempo real IA <-> celular (desligada por padrão) — configure seu Worker Cloudflare";
+        d["LiveBridgeIdleFmt"] = "Pronta ({0}) — DESLIGADA até você tocar em Iniciar (código temporário de 15 min)";
+        d["LiveBridgeActiveFmt"] = "AO VIVO ({0} restando · {1} cmds) — Código: {2}\n{3}";
+        d["LiveBridgeStartBtn"] = "Iniciar Sessão (15 min)";
+        d["LiveBridgeStopBtn"] = "Encerrar Sessão";
+        d["LiveBridgeCopyCodeBtn"] = "Copiar Código";
+        d["LiveBridgeConfigBtn"] = "Configurar Ponte";
+        d["LiveBridgeCodeCopiedToast"] = "Código temporário copiado (válido por 15 min, somente diagnóstico).";
+        d["LiveBridgeModalTitle"] = "Configurar Ponte Ao Vivo (Grátis)";
+        d["LiveBridgeUrlLabel"] = "URL do seu Worker Cloudflare (https://...workers.dev)";
+        d["LiveBridgeTestBtn"] = "Testar Relay";
+        d["LiveBridgeTesting"] = "Testando relay Cloudflare Worker...";
+        d["LiveBridgeInvalidUrlToast"] = "Informe uma URL https:// pública válida do seu Worker.";
+        d["LiveBridgeSavedToast"] = "URL da Ponte Ao Vivo salva.";
+        d["LiveBridgeNeedUrlToast"] = "Configure primeiro a URL gratuita do seu Worker Cloudflare.";
+        d["LiveBridgeHelpTitle"] = "Como criar sua Ponte Ao Vivo Grátis";
+        d["LiveBridgeHelpBody"] = "100% grátis no Cloudflare Workers Free Tier (100 mil req/dia, sem servidor):\n1. No painel da Cloudflare -> Storage & Databases -> KV, crie um namespace chamado CAVERNIZE_RELAY.\n2. Vá em Workers & Pages -> Create Worker (ex.: cavernize-diag-relay) -> Deploy.\n3. Em Settings -> Bindings -> adicione um KV Namespace: Variable name = RELAY_KV -> CAVERNIZE_RELAY.\n4. Clique em Edit Code, cole o arquivo .agents/docs/cloudflare_live_relay_worker.js do seu repositório Cavern e clique em Deploy.\n5. Cole sua URL https://...workers.dev aqui.\nSegurança: Sempre DESLIGADA por padrão. Cada sessão gera um código aleatório de 120 bits que expira em 15 min e aceita APENAS 7 comandos de leitura/diagnóstico (ping, quick_check, full_check, log_tail, summary, audio_routes, memory).";
 
         d["UpdateCardTitle"] = "Atualização do Aplicativo";
         d["CurrentVersionLabel"] = "Versão instalada: v{0}";

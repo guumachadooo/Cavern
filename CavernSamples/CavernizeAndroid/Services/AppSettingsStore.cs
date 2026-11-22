@@ -1339,6 +1339,12 @@ public sealed class AppSettingsStore {
         set => Edit().PutString("lastSelfCheckSummary", value ?? "").Apply();
     }
 
+    // Free Ephemeral Live Diagnostic Bridge (user's own Cloudflare Worker HTTPS URL)
+    public string LiveRelayUrl {
+        get => prefs.GetString("liveRelayUrl", "");
+        set => Edit().PutString("liveRelayUrl", (value ?? "").Trim()).Apply();
+    }
+
     public string LastExplorerDirectory {
         get => prefs.GetString("lastExplorerDir", "");
         set => Edit().PutString("lastExplorerDir", value ?? "").Apply();
