@@ -88,9 +88,9 @@ class OnnxSafeRoformerAttention(nn.Module):
 
     def forward(self, x: torch.Tensor):
         # x: [B, N, T]
-        B, _, T = x.shape
+        T = x.shape[-1]
         qkv = self.weight(self.input_norm(x))
-        qkv = qkv.reshape(B, self.num_head, self.hidden_size * 3, T).transpose(-1, -2)
+        qkv = qkv.reshape(-1, self.num_head, self.hidden_size * 3, T).transpose(-1, -2)
         q, k, v = torch.split(qkv, self.hidden_size, dim=-1)
 
         q = self._apply_rope(q)
@@ -98,7 +98,7 @@ class OnnxSafeRoformerAttention(nn.Module):
 
         scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
         attn = F.softmax(scores, dim=-1)
-        context = torch.matmul(attn, v).transpose(-1, -2).reshape(B, -1, T)
+        context = torch.matmul(attn, v).transpose(-1, -2).reshape(-1, self.num_head * self.hidden_size, T)
 
         out = self.output(context) + x
         gate, z = self.MLP(out).chunk(2, dim=1)
@@ -122,7 +122,7 @@ class ApolloOnnxWrapper(nn.Module):
         fwd_k, inv_k, win_sq_k = _build_stft_kernels(self.win)
         self.register_buffer("stft_fwd_kernel", fwd_k)
         self.register_buffer("stft_inv_kernel", inv_k)
-        self.register_buffer("win_sq_kernel", win_sq_kernel)
+        self.register_buffer("win_sq_kernel", win_sq_k)
 
         self.BN = apollo.BN
         self.net = apollo.net
@@ -133,7 +133,7 @@ class ApolloOnnxWrapper(nn.Module):
     def forward(self, mix: torch.Tensor) -> torch.Tensor:
         # mix: [B, C, N]
         B, C, N = mix.shape
-        flat = mix.reshape(B * C, N)
+        flat = mix.reshape(-1, N)
 
         # Match torch.stft(center=True, pad_mode='reflect')
         padded = F.pad(flat.unsqueeze(1), (self.pad, self.pad), mode="reflect")
@@ -229,6 +229,8 @@ def main():
 
     model_proto = onnx.load(str(apollo_onnx_path))
     onnx.checker.check_model(model_proto)
+    assert apollo_onnx_path.stat().st_size > 1_000_000, "Exported ONNX unexpectedly small or externalized"
+    assert not (out_dir / (apollo_onnx_path.name + ".data")).exists(), "ONNX must be single self-contained file"
 
     sess = ort.InferenceSession(str(apollo_onnx_path), providers=["CPUExecutionProvider"])
     for shape in sample_shapes:
