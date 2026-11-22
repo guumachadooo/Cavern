@@ -395,7 +395,7 @@ public static class NeuralModelCatalog {
             DownloadUrl = "https://github.com/guumachadooo/Cavern/releases/download/neural-models-v1/apollo_band_split_44k.onnx",
             FallbackDownloadUrls = Array.Empty<string>(),
             RequiresManualOnnxImport = false,
-            ApproxSizeMb = 67.0f,
+            ApproxSizeMb = 70.5f,
             ExpectedSampleRate = 44100,
             RecommendedChunkSamples = 131072,
             OutputStemNames = ["restored"],
