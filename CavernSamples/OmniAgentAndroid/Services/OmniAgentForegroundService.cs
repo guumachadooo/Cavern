@@ -1,0 +1,520 @@
+using System.Net.Http.Headers;
+using System.Text.Json;
+
+using Android.App;
+using Android.Content;
+using Android.OS;
+
+using Path = System.IO.Path;
+
+namespace OmniAgentAndroid.Services;
+
+/// <summary>
+/// Standalone background Foreground Service (<c>dataSync</c>) running independently of Cavernize.
+/// Connects to Cloudflare Hub v4 on channel <c>android</c> using zero-trust E2E encryption,
+/// supporting direct GitHub atomic multi-file push, one-tap APK install, and Termux daemon wake.
+/// </summary>
+[Service(Exported = false, ForegroundServiceType = Android.Content.PM.ForegroundService.TypeDataSync)]
+public sealed class OmniAgentForegroundService : Service {
+    const int NotifId = 9188;
+    const string ChannelId = "omni_agent_foreground";
+    const string ActionStop = "hu.sbence.cavern.omniagent.ACTION_STOP";
+
+    static readonly HashSet<string> CriticalCommands = new(StringComparer.OrdinalIgnoreCase) {
+        "github_push_bundle",
+        "install_apk_url",
+        "termux_run"
+    };
+
+    static readonly string[] Capabilities = [
+        "ping",
+        "status",
+        "device_info",
+        "github_push_bundle",
+        "install_apk_url",
+        "launch_termux_daemon",
+        "termux_run",
+        "open_cavernize"
+    ];
+
+    static readonly HttpClient http = BuildClient();
+    static volatile bool isRunning;
+    static volatile int commandsHandled;
+
+    public static bool IsRunning => isRunning;
+    public static int CommandsHandled => commandsHandled;
+    public static event Action StateChanged;
+
+    CancellationTokenSource cts;
+
+    static HttpClient BuildClient() {
+        HttpClient c = new() { Timeout = TimeSpan.FromSeconds(30) };
+        c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("OmniAgentAndroid", "1.0"));
+        c.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        return c;
+    }
+
+    public static void Start(Context context) {
+        if (context == null) {
+            return;
+        }
+        Context appCtx = context.ApplicationContext ?? context;
+        Intent intent = new(appCtx, typeof(OmniAgentForegroundService));
+        if (OperatingSystem.IsAndroidVersionAtLeast(26)) {
+            appCtx.StartForegroundService(intent);
+        } else {
+            appCtx.StartService(intent);
+        }
+    }
+
+    public static void Stop(Context context) {
+        if (context == null) {
+            return;
+        }
+        Context appCtx = context.ApplicationContext ?? context;
+        try {
+            appCtx.StopService(new Intent(appCtx, typeof(OmniAgentForegroundService)));
+        } catch {
+            // Ignore
+        }
+    }
+
+    public override IBinder OnBind(Intent intent) => null;
+
+    public override StartCommandResult OnStartCommand(Intent intent, StartCommandFlags flags, int startId) {
+        if (string.Equals(intent?.Action, ActionStop, StringComparison.Ordinal)) {
+            OmniSettingsStore store = new(this);
+            store.ServiceEnabled = false;
+            StopForegroundCompat(true);
+            StopSelf();
+            return StartCommandResult.NotSticky;
+        }
+
+        EnsureChannel();
+        StartForegroundCompat(NotifId, BuildNotification());
+
+        if (cts == null || cts.IsCancellationRequested) {
+            cts?.Dispose();
+            cts = new CancellationTokenSource();
+            isRunning = true;
+            NotifyState();
+            OmniSettingsStore.AppendActivity("AGENT", "Foreground service started (channel=android).");
+            CancellationToken token = cts.Token;
+            _ = Task.Run(() => PollLoopAsync(token));
+        }
+        return StartCommandResult.Sticky;
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("android34.0")]
+    public override void OnTimeout(int startId) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(34)) {
+            base.OnTimeout(startId);
+        }
+        HandleTimeout(startId);
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("android35.0")]
+    public override void OnTimeout(int startId, Android.Content.PM.ForegroundService fgsType) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(35)) {
+            base.OnTimeout(startId, fgsType);
+        }
+        HandleTimeout(startId);
+    }
+
+    void HandleTimeout(int startId) {
+        OmniSettingsStore.AppendActivity("AGENT", $"Foreground timeout reached (startId={startId}); stopping cleanly.");
+        StopForegroundCompat(true);
+        try {
+            StopSelf(startId);
+        } catch {
+            StopSelf();
+        }
+    }
+
+    public override void OnDestroy() {
+        isRunning = false;
+        try {
+            cts?.Cancel();
+            cts?.Dispose();
+        } catch {
+            // Ignore
+        }
+        cts = null;
+        NotifyState();
+        OmniSettingsStore.AppendActivity("AGENT", "Foreground service stopped.");
+        base.OnDestroy();
+    }
+
+    async Task PollLoopAsync(CancellationToken ct) {
+        DateTime lastHb = DateTime.MinValue;
+        int idleTicks = 0;
+        try {
+            while (!ct.IsCancellationRequested) {
+                OmniSettingsStore store = new(this);
+                if (!store.ServiceEnabled) {
+                    break;
+                }
+                string pairHex = store.LoadPairSecretHex();
+                if (string.IsNullOrEmpty(pairHex) || !OmniSettingsStore.TryNormalizeRelayUrl(store.RelayUrl, out string baseUrl)) {
+                    await Task.Delay(12_000, ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                string devHash = OmniCrypto.ComputeDeviceHash(pairHex);
+                string agentKey = OmniCrypto.ComputeAgentKey(pairHex);
+
+                if ((DateTime.UtcNow - lastHb).TotalSeconds >= 45) {
+                    try {
+                        await SendHeartbeatAsync(baseUrl, devHash, agentKey, store, ct).ConfigureAwait(false);
+                        lastHb = DateTime.UtcNow;
+                    } catch {
+                        // Retry on next loop
+                    }
+                }
+
+                try {
+                    using HttpRequestMessage pollReq = CreateAgentReq(HttpMethod.Get, $"{baseUrl}/v1/agent/poll", devHash, agentKey);
+                    using HttpResponseMessage pollResp = await http.SendAsync(pollReq, ct).ConfigureAwait(false);
+                    if (pollResp.IsSuccessStatusCode) {
+                        string raw = await pollResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                        using JsonDocument doc = JsonDocument.Parse(raw);
+                        if (doc.RootElement.TryGetProperty("hasCommand", out JsonElement hasEl) &&
+                            hasEl.GetBoolean() &&
+                            doc.RootElement.TryGetProperty("command", out JsonElement cmdWrap)) {
+                            idleTicks = 0;
+                            string reqId = cmdWrap.TryGetProperty("requestId", out JsonElement idEl) ? (idEl.GetString() ?? "") : "";
+                            JsonElement envEl = cmdWrap.GetProperty("envelope");
+                            object resultObj = await HandleEncryptedCommandAsync(baseUrl, devHash, agentKey, pairHex, store, reqId, envEl, ct).ConfigureAwait(false);
+                            object resEnv = OmniCrypto.EncryptEnvelope(pairHex, $"res:{reqId}", resultObj);
+                            using HttpRequestMessage postRes = CreateAgentReq(HttpMethod.Post, $"{baseUrl}/v1/agent/result", devHash, agentKey);
+                            postRes.Content = new StringContent(
+                                JsonSerializer.Serialize(new { requestId = reqId, envelope = resEnv }),
+                                System.Text.Encoding.UTF8,
+                                "application/json");
+                            using HttpResponseMessage _ = await http.SendAsync(postRes, ct).ConfigureAwait(false);
+                            Interlocked.Increment(ref commandsHandled);
+                            NotifyState();
+                            continue;
+                        }
+                        idleTicks = Math.Min(idleTicks + 1, 15);
+                    }
+                } catch (System.OperationCanceledException) {
+                    break;
+                } catch {
+                    idleTicks = Math.Min(idleTicks + 1, 15);
+                }
+
+                await Task.Delay(idleTicks >= 4 ? 7_000 : 2_500, ct).ConfigureAwait(false);
+            }
+        } catch (System.OperationCanceledException) {
+            // Normal cancel
+        } finally {
+            isRunning = false;
+            NotifyState();
+            StopForegroundCompat(true);
+            StopSelf();
+        }
+    }
+
+    async Task SendHeartbeatAsync(string baseUrl, string devHash, string agentKey, OmniSettingsStore store, CancellationToken ct) {
+        using HttpRequestMessage req = CreateAgentReq(HttpMethod.Post, $"{baseUrl}/v1/agent/heartbeat", devHash, agentKey);
+        object payload = new {
+            agentVersion = "1.0.0",
+            hostEnv = "android-companion",
+            device = $"{Build.Manufacturer} {Build.Model}".Trim(),
+            securityMode = store.SecurityMode,
+            repoPath = store.GitHubRepo,
+            tools = new {
+                githubDirectPush = store.HasGitHubPat,
+                apkInstaller = true,
+                termuxInstalled = IsPackageInstalled("com.termux"),
+                cavernizeInstalled = IsPackageInstalled("hu.sbence.cavern.cavernize")
+            },
+            capabilities = Capabilities
+        };
+        req.Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json");
+        using HttpResponseMessage _ = await http.SendAsync(req, ct).ConfigureAwait(false);
+    }
+
+    async Task<object> HandleEncryptedCommandAsync(
+        string baseUrl,
+        string devHash,
+        string agentKey,
+        string pairHex,
+        OmniSettingsStore store,
+        string reqId,
+        JsonElement envelope,
+        CancellationToken ct) {
+        string cmd = "";
+        try {
+            using JsonDocument cmdDoc = OmniCrypto.DecryptEnvelope(pairHex, $"cmd:{reqId}", envelope);
+            JsonElement root = cmdDoc.RootElement;
+            cmd = root.TryGetProperty("cmd", out JsonElement cEl) ? (cEl.GetString() ?? "").Trim().ToLowerInvariant() : "";
+            JsonElement argsEl = root.TryGetProperty("args", out JsonElement aEl) && aEl.ValueKind == JsonValueKind.Object ? aEl : default;
+
+            OmniSettingsStore.AppendActivity("CMD", $"{cmd} (#{reqId[..Math.Min(8, reqId.Length)]})");
+
+            if (string.Equals(store.SecurityMode, "biometric", StringComparison.OrdinalIgnoreCase) && CriticalCommands.Contains(cmd)) {
+                bool approved = await OmniBiometricGateActivity.RequestApprovalAsync(
+                    this, reqId, "OmniAgent Approval", $"Allow remote '{cmd}'?", ct).ConfigureAwait(false);
+                if (!approved) {
+                    OmniSettingsStore.AppendActivity("DENY", $"User denied {cmd} via biometric prompt.");
+                    return new { ok = false, cmd, error = "Denied by user via BiometricPrompt." };
+                }
+            }
+
+            switch (cmd) {
+                case "ping":
+                case "status":
+                case "device_info":
+                    return new {
+                        ok = true,
+                        cmd,
+                        agentVersion = "1.0.0",
+                        channel = "android",
+                        securityMode = store.SecurityMode,
+                        device = $"{Build.Manufacturer} {Build.Model}".Trim(),
+                        android = $"{Build.VERSION.Release} (SDK {(int)Build.VERSION.SdkInt})",
+                        githubDirectPushReady = store.HasGitHubPat,
+                        githubRepo = store.GitHubRepo,
+                        termuxInstalled = IsPackageInstalled("com.termux"),
+                        cavernizeInstalled = IsPackageInstalled("hu.sbence.cavern.cavernize"),
+                        commandsHandled,
+                        utc = DateTime.UtcNow.ToString("O")
+                    };
+
+                case "github_push_bundle": {
+                    string blobId = GetStr(argsEl, "blobId");
+                    string msg = GetStr(argsEl, "message");
+                    string branch = GetStr(argsEl, "branch");
+                    if (string.IsNullOrEmpty(branch)) {
+                        branch = store.GitHubBranch;
+                    }
+                    string repo = GetStr(argsEl, "repo");
+                    if (string.IsNullOrEmpty(repo) || !repo.Contains('/')) {
+                        repo = store.GitHubRepo;
+                    }
+                    if (string.IsNullOrEmpty(blobId)) {
+                        return new { ok = false, cmd, error = "blobId is required." };
+                    }
+                    using JsonDocument bundleDoc = await DownloadEncryptedBlobAsync(baseUrl, devHash, agentKey, pairHex, blobId, ct).ConfigureAwait(false);
+                    (bool ok, string sha, string detail) = await GitHubGitPushService.PushDeltaBundleAsync(
+                        store.LoadGitHubPat(), repo, branch, msg, bundleDoc.RootElement, ct).ConfigureAwait(false);
+                    OmniSettingsStore.AppendActivity(ok ? "PUSH" : "ERR", detail);
+                    return new { ok, cmd, head = sha, message = detail };
+                }
+
+                case "install_apk_url": {
+                    string url = GetStr(argsEl, "url");
+                    if (string.IsNullOrWhiteSpace(url) || !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) {
+                        return new { ok = false, cmd, error = "Valid https:// APK URL is required." };
+                    }
+                    byte[] apkBytes = await http.GetByteArrayAsync(url, ct).ConfigureAwait(false);
+                    if (apkBytes.Length < 1024 || apkBytes[0] != 0x50 || apkBytes[1] != 0x4B) {
+                        return new { ok = false, cmd, error = "Downloaded file is not a valid APK archive." };
+                    }
+                    string fileName = $"omni_install_{DateTime.UtcNow:yyyyMMdd_HHmmss}.apk";
+                    string path = Path.Combine(OmniApkFileProvider.GetApkDirectory(this), fileName);
+                    await File.WriteAllBytesAsync(path, apkBytes, ct).ConfigureAwait(false);
+                    Android.Net.Uri contentUri = OmniApkFileProvider.GetApkUri(this, fileName);
+                    Intent installIntent = new(Intent.ActionView);
+                    installIntent.SetDataAndType(contentUri, "application/vnd.android.package-archive");
+                    installIntent.AddFlags(ActivityFlags.GrantReadUriPermission | ActivityFlags.NewTask);
+                    StartActivity(installIntent);
+                    OmniSettingsStore.AppendActivity("APK", $"Launched installer ({apkBytes.Length / 1024} KB).");
+                    return new { ok = true, cmd, bytes = apkBytes.Length, file = fileName };
+                }
+
+                case "launch_termux_daemon": {
+                    string scriptPath = GetStr(argsEl, "script");
+                    if (string.IsNullOrEmpty(scriptPath)) {
+                        scriptPath = store.TermuxStartScript;
+                    }
+                    (bool ok, string detail) = LaunchTermuxCommand(this, scriptPath, ["--bg"]);
+                    OmniSettingsStore.AppendActivity("TERMUX", detail);
+                    return new { ok, cmd, message = detail };
+                }
+
+                case "termux_run": {
+                    string execPath = GetStr(argsEl, "path");
+                    if (string.IsNullOrEmpty(execPath)) {
+                        execPath = "/data/data/com.termux/files/usr/bin/bash";
+                    }
+                    string command = GetStr(argsEl, "command");
+                    (bool ok, string detail) = LaunchTermuxCommand(this, execPath, string.IsNullOrEmpty(command) ? [] : ["-lc", command]);
+                    OmniSettingsStore.AppendActivity("TERMUX", detail);
+                    return new { ok, cmd, message = detail };
+                }
+
+                case "open_cavernize": {
+                    Intent launch = PackageManager?.GetLaunchIntentForPackage("hu.sbence.cavern.cavernize");
+                    if (launch == null) {
+                        return new { ok = false, cmd, error = "Cavernize Android is not installed." };
+                    }
+                    launch.AddFlags(ActivityFlags.NewTask);
+                    StartActivity(launch);
+                    OmniSettingsStore.AppendActivity("APP", "Brought Cavernize Android to foreground.");
+                    return new { ok = true, cmd, message = "Opened Cavernize Android." };
+                }
+
+                default:
+                    return new { ok = false, cmd, error = $"Unknown Android companion command '{cmd}'." };
+            }
+        } catch (Exception ex) {
+            OmniSettingsStore.AppendActivity("ERR", $"{cmd}: {ex.Message}");
+            return new { ok = false, cmd, error = $"{ex.GetType().Name}: {ex.Message}" };
+        }
+    }
+
+    async Task<JsonDocument> DownloadEncryptedBlobAsync(
+        string baseUrl,
+        string devHash,
+        string agentKey,
+        string pairHex,
+        string blobId,
+        CancellationToken ct) {
+        using HttpRequestMessage metaReq = CreateAgentReq(HttpMethod.Get, $"{baseUrl}/v1/blob/meta?blobId={Uri.EscapeDataString(blobId)}", devHash, agentKey);
+        using HttpResponseMessage metaResp = await http.SendAsync(metaReq, ct).ConfigureAwait(false);
+        string metaRaw = await metaResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        using JsonDocument metaDoc = JsonDocument.Parse(metaRaw);
+        int totalChunks = metaDoc.RootElement.GetProperty("meta").GetProperty("totalChunks").GetInt32();
+
+        System.Text.StringBuilder sb = new();
+        for (int i = 0; i < totalChunks; i++) {
+            using HttpRequestMessage chReq = CreateAgentReq(HttpMethod.Get, $"{baseUrl}/v1/blob/chunk?blobId={Uri.EscapeDataString(blobId)}&index={i}", devHash, agentKey);
+            using HttpResponseMessage chResp = await http.SendAsync(chReq, ct).ConfigureAwait(false);
+            string chRaw = await chResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            using JsonDocument chDoc = JsonDocument.Parse(chRaw);
+            sb.Append(chDoc.RootElement.GetProperty("data").GetString() ?? "");
+        }
+
+        try {
+            using HttpRequestMessage delReq = CreateAgentReq(HttpMethod.Delete, $"{baseUrl}/v1/blob/delete?blobId={Uri.EscapeDataString(blobId)}", devHash, agentKey);
+            using HttpResponseMessage _ = await http.SendAsync(delReq, ct).ConfigureAwait(false);
+        } catch {
+            // Best effort cleanup
+        }
+
+        using JsonDocument envDoc = JsonDocument.Parse(sb.ToString());
+        return OmniCrypto.DecryptEnvelope(pairHex, $"blob:{blobId}", envDoc.RootElement);
+    }
+
+    public static (bool ok, string message) LaunchTermuxCommand(Context context, string executablePath, string[] arguments) {
+        try {
+            Intent intent = new("com.termux.RUN_COMMAND");
+            intent.SetClassName("com.termux", "com.termux.app.RunCommandService");
+            intent.PutExtra("com.termux.RUN_COMMAND_PATH", executablePath);
+            if (arguments is { Length: > 0 }) {
+                intent.PutExtra("com.termux.RUN_COMMAND_ARGUMENTS", arguments);
+            }
+            intent.PutExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
+            if (OperatingSystem.IsAndroidVersionAtLeast(26)) {
+                context.StartForegroundService(intent);
+            } else {
+                context.StartService(intent);
+            }
+            return (true, $"Dispatched Termux RUN_COMMAND -> {executablePath}");
+        } catch (Exception ex) {
+            return (false, $"Termux RUN_COMMAND failed (enable allow-external-apps=true in ~/.termux/termux.properties): {ex.Message}");
+        }
+    }
+
+    bool IsPackageInstalled(string pkg) {
+        try {
+            if (OperatingSystem.IsAndroidVersionAtLeast(33)) {
+                return PackageManager?.GetPackageInfo(pkg, Android.Content.PM.PackageManager.PackageInfoFlags.Of(0L)) != null;
+            }
+#pragma warning disable CS0618, CA1422
+            return PackageManager?.GetPackageInfo(pkg, 0) != null;
+#pragma warning restore CS0618, CA1422
+        } catch {
+            return false;
+        }
+    }
+
+    static HttpRequestMessage CreateAgentReq(HttpMethod method, string url, string devHash, string agentKey) {
+        HttpRequestMessage req = new(method, url);
+        req.Headers.Add("X-Device-Hash", devHash);
+        req.Headers.Add("X-Agent-Key", agentKey);
+        req.Headers.Add("X-Agent-Channel", "android");
+        return req;
+    }
+
+    static string GetStr(JsonElement el, string name) =>
+        el.ValueKind == JsonValueKind.Object && el.TryGetProperty(name, out JsonElement p) && p.ValueKind == JsonValueKind.String
+            ? (p.GetString() ?? "")
+            : "";
+
+    void EnsureChannel() {
+        if (!OperatingSystem.IsAndroidVersionAtLeast(26)) {
+            return;
+        }
+        NotificationManager nm = (NotificationManager)GetSystemService(NotificationService);
+        if (nm == null) {
+            return;
+        }
+        NotificationChannel ch = new(ChannelId, "OmniAgent Bridge", NotificationImportance.Low) {
+            Description = "Zero-trust background bridge for AI Studio Full-Agent commands"
+        };
+        ch.SetShowBadge(false);
+        nm.CreateNotificationChannel(ch);
+    }
+
+    Notification BuildNotification() {
+        PendingIntentFlags piFlags = OperatingSystem.IsAndroidVersionAtLeast(23)
+            ? PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable
+            : PendingIntentFlags.UpdateCurrent;
+        Intent openIntent = new(this, typeof(MainActivity));
+        openIntent.AddFlags(ActivityFlags.NewTask | ActivityFlags.SingleTop);
+        PendingIntent openPi = PendingIntent.GetActivity(this, NotifId, openIntent, piFlags);
+
+        Intent stopIntent = new(this, typeof(OmniAgentForegroundService));
+        stopIntent.SetAction(ActionStop);
+        PendingIntent stopPi = PendingIntent.GetService(this, NotifId + 1, stopIntent, piFlags);
+
+        Notification.Builder b = new(this, ChannelId);
+        b.SetSmallIcon(Resource.Drawable.omni_icon)
+            .SetContentTitle("OmniAgent Online")
+            .SetContentText($"Channel: android • {commandsHandled} cmd(s) handled")
+            .SetOngoing(true)
+            .SetContentIntent(openPi);
+        if (OperatingSystem.IsAndroidVersionAtLeast(23)) {
+            Notification.Action act = new Notification.Action.Builder(
+                Android.Graphics.Drawables.Icon.CreateWithResource(this, Resource.Drawable.omni_icon),
+                "Stop",
+                stopPi).Build();
+            b.AddAction(act);
+        }
+        return b.Build();
+    }
+
+    void StartForegroundCompat(int id, Notification n) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(29)) {
+            StartForeground(id, n, Android.Content.PM.ForegroundService.TypeDataSync);
+        } else {
+            StartForeground(id, n);
+        }
+    }
+
+    void StopForegroundCompat(bool remove) {
+        try {
+            if (OperatingSystem.IsAndroidVersionAtLeast(24)) {
+                StopForeground(remove ? StopForegroundFlags.Remove : StopForegroundFlags.Detach);
+            } else {
+#pragma warning disable CS0618, CA1422
+                StopForeground(remove);
+#pragma warning restore CS0618, CA1422
+            }
+        } catch {
+            // Ignore
+        }
+    }
+
+    static void NotifyState() {
+        try {
+            StateChanged?.Invoke();
+        } catch {
+            // Ignore
+        }
+    }
+}

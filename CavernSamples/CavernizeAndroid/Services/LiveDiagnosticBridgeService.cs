@@ -158,6 +158,8 @@ public static class LiveDiagnosticBridgeService {
         new("reflect_invoke", 2, "Dynamically invoke any .NET method (static/instance, sync/async Task, $context/$activity/$store/$null tokens)", "{type?:string, root?:string, path?:string, method:string, args?:[any], uiThread?:bool}"),
         new("ui_interact", 2, "Universal live UI automation across MainActivity & open dialogs (find/click/long_click/set_text/set_checked/set_progress/select_item/scroll_by/tap_xy/swipe_xy/back/dismiss_dialogs/dump_dialogs)", "{action:string, query?:string, type?:string, index?:number, value?:any, dy?:number, x?:number, y?:number, x1?:number, y1?:number, x2?:number, y2?:number}"),
         new("shell_exec", 2, "Execute sandboxed /system/bin/sh diagnostic command inside app sandbox (20s timeout, W^X guarded)", "{command:string, cwd?:string, timeoutSec?:1..20}"),
+        new("hot_probe_status", 0, "Inspect W^X-compliant in-memory AssemblyLoadContext hot_exec readiness & HMAC key status", "{}"),
+        new("hot_exec", 2, "Execute HMAC-SHA256 signed C# IL probe purely in RAM via collectible AssemblyLoadContext (zero APK rebuild)", "{requestId:string, timestampUnix:number, signature:string, dllBase64:string, entryType?:string, argsJson?:string, timeoutSec?:2..45}"),
         new("pipeline", 2, "Execute up to 30 chained arbitrary commands/reflections/UI steps with $prev substitution", "{steps:[{cmd:string, args?:object}], stopOnError?:bool}")
     ];
 
@@ -1143,6 +1145,10 @@ public static class LiveDiagnosticBridgeService {
                     return await ExecuteReflectInvokeAsync(context, host, store, argsEl).ConfigureAwait(false);
                 case "shell_exec":
                     return await ExecuteSandboxedShellAsync(context, argsEl, ct).ConfigureAwait(false);
+                case "hot_probe_status":
+                    return (true, LiveHotPatchHost.GetStatusJson(store));
+                case "hot_exec":
+                    return await LiveHotPatchHost.ExecuteSignedProbeAsync(context, store, host, argsEl, ct).ConfigureAwait(false);
                 case "pipeline": {
                     if (depth > 0) {
                         return (false, "Nested pipeline commands are not allowed.");

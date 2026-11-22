@@ -364,7 +364,14 @@ def _ensure_roslyn_toolset(cache_dir: Path) -> Path | None:
         return None
 
 
-def _generate_resource_stub(android_dir: Path, stub_path: Path, android_api: int, min_sdk: str, emit_platform_attrs: bool) -> None:
+def _generate_resource_stub(
+    android_dir: Path,
+    stub_path: Path,
+    android_api: int,
+    min_sdk: str,
+    emit_platform_attrs: bool,
+    root_namespace: str = "CavernizeAndroid",
+) -> None:
     res_dir = android_dir / "Resources"
     groups: dict[str, set[str]] = {
         "Drawable": set(), "Layout": set(), "Mipmap": set(),
@@ -393,7 +400,7 @@ def _generate_resource_stub(android_dir: Path, stub_path: Path, android_api: int
         lines.append(f'[assembly: System.Runtime.Versioning.TargetPlatform("android{android_api}.0")]')
         lines.append(f'[assembly: System.Runtime.Versioning.SupportedOSPlatform("android{min_sdk}")]')
     lines.extend([
-        "namespace CavernizeAndroid {",
+        f"namespace {root_namespace} {{",
         "    public static partial class Resource {",
     ])
     for cls_name in sorted(groups):
@@ -417,12 +424,15 @@ def _write_shadow_project(
     extra_netcore_ref_dlls: list[Path],
     analyzer_dlls: list[Path],
     roslyn_props: Path | None,
+    android_subdir: str = "CavernSamples/CavernizeAndroid",
+    root_namespace: str = "CavernizeAndroid",
+    include_cavern_refs: bool = True,
 ) -> tuple[Path, int]:
-    android_dir = repo / "CavernSamples" / "CavernizeAndroid"
+    android_dir = repo / android_subdir
     shadow_dir.mkdir(parents=True, exist_ok=True)
     native_modern_sdk = sdk_major >= target_major
     stub_path = shadow_dir / "Resource.Stub.cs"
-    _generate_resource_stub(android_dir, stub_path, android_api, min_sdk, emit_platform_attrs=native_modern_sdk)
+    _generate_resource_stub(android_dir, stub_path, android_api, min_sdk, emit_platform_attrs=native_modern_sdk, root_namespace=root_namespace)
 
     cs_files: list[Path] = []
     for p in sorted(android_dir.rglob("*.cs")):
@@ -467,7 +477,7 @@ def _write_shadow_project(
         repo / "Cavern" / "Cavern.csproj",
         repo / "Cavern.Format" / "Cavern.Format.csproj",
         repo / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Cavernize.Logic.csproj",
-    ]
+    ] if include_cavern_refs else []
     proj_ref_items = [f'    <ProjectReference Include="{saxutils.escape(str(pr))}" />' for pr in proj_refs]
 
     # Match CavernizeAndroid.csproj warnings: enable CA1416/CA1422 platform analysis on modern SDK!
@@ -506,8 +516,8 @@ def _write_shadow_project(
         "    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>",
         "    <GenerateDependencyFile>false</GenerateDependencyFile>",
         "    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>",
-        "    <RootNamespace>CavernizeAndroid</RootNamespace>",
-        "    <AssemblyName>CavernizeAndroid.TypeCheck</AssemblyName>",
+        f"    <RootNamespace>{root_namespace}</RootNamespace>",
+        f"    <AssemblyName>{root_namespace}.TypeCheck</AssemblyName>",
         f"    <DefineConstants>$(DefineConstants);ANDROID;__ANDROID__;ANDROID_{android_api}_0_OR_GREATER</DefineConstants>",
         f"    <NoWarn>$(NoWarn);{nowarn_str}</NoWarn>",
         *extra_props,
@@ -515,9 +525,7 @@ def _write_shadow_project(
         "  <ItemGroup>",
         *compile_items,
         "  </ItemGroup>",
-        "  <ItemGroup>",
-        *proj_ref_items,
-        "  </ItemGroup>",
+        *(["  <ItemGroup>", *proj_ref_items, "  </ItemGroup>"] if proj_ref_items else []),
         "  <ItemGroup>",
         *ref_items,
         "  </ItemGroup>",
@@ -525,7 +533,7 @@ def _write_shadow_project(
         "</Project>",
         "",
     ])
-    shadow_csproj = shadow_dir / "CavernizeAndroid.TypeCheck.csproj"
+    shadow_csproj = shadow_dir / f"{root_namespace}.TypeCheck.csproj"
     prev_xml = shadow_csproj.read_text(encoding="utf-8") if shadow_csproj.is_file() else None
     if prev_xml != csproj_xml:
         shutil.rmtree(shadow_dir / "obj", ignore_errors=True)
@@ -748,6 +756,24 @@ def main() -> int:
     if full_mode:
         st5, e5, w5 = _run_static_packaging_and_l10n_audit(repo)
         layer_results.append(("05_Packaging_L10n", st5, e5, w5))
+
+        # Layer 06: Optional standalone OmniAgentAndroid companion Roslyn + Analyzer verification
+        omni_csproj_path = repo / "CavernSamples" / "OmniAgentAndroid" / "OmniAgentAndroid.csproj"
+        if omni_csproj_path.is_file():
+            omni_shadow_dir = Path("/tmp/omniagent-android-typecheck")
+            omni_shadow_csproj, omni_cs_count = _write_shadow_project(
+                repo, omni_shadow_dir, sdk_major, target_major, android_api, min_sdk, csproj_nowarns,
+                android_refs, extra_netcore_refs, analyzers, roslyn_props,
+                android_subdir="CavernSamples/OmniAgentAndroid",
+                root_namespace="OmniAgentAndroid",
+                include_cavern_refs=False,
+            )
+            print(f"Checking {omni_cs_count} OmniAgentAndroid C# files ({mode_tag})...", flush=True)
+            rc_o, out_o = _run_layer_build(dotnet_bin, omni_shadow_csproj, omni_shadow_dir, env)
+            eo, wo = _extract_diags(out_o, repo)
+            if rc_o != 0 and not eo:
+                eo.append(f"06_OmniAgentAndroid exited with code {rc_o}: {out_o[-400:]}")
+            layer_results.append(("06_OmniAgentAndroid", "PASS" if rc_o == 0 else "FAIL", eo, wo))
 
     # Clean transient bin/obj created by core project builds so repo stays clean
     if not args.keep_bin and not _is_proot_dotnet(dotnet_bin):

@@ -1,48 +1,48 @@
 /**
- * Cavernize Android — Unified Diagnostics & Live Bridge Hub v3 (Cloudflare Worker + KV)
+ * Cavernize & OmniAgent — Unified Diagnostics, Live Bridge & Full-Agent Hub v4 (Cloudflare Worker + KV)
  *
  * 100% FREE on Cloudflare Workers Free Tier (100,000 req/day + KV Free Tier).
- * Replaces GitHub commit spam for runtime device logs & self-checkups AND powers Live Bridge v3
- * (biometric background wake + 30+ shortcuts + unrestricted Tier-2 dynamic reflection/UI/shell).
+ * 100% backwards-compatible with Cavernize Android Live Bridge v3 (/v1/telemetry/*, /v1/wake/*, /v1/session/*)
+ * AND powers Full-Agent v4 ("Antigravity 2"):
+ *   - /v1/agent/* : Multi-channel E2E-encrypted full-agent command queue (termux, android, debian, etc.)
+ *                   with live presence heartbeats and FIFO command queuing.
+ *   - /v1/blob/*  : E2E-encrypted chunked transfer store (up to 64 chunks for git delta bundles,
+ *                   hot-compiled C# .dll probes, or large logs) with automatic 30-min KV expiration.
+ *   - /v1/swarm/* : Zero-API-cost Multi-Agent Swarm Task Bus connecting AI Studio <-> Antigravity (Debian)
+ *                   <-> secondary chats/local CLI workers with compact token-diet task/result exchange.
  *
  * === PASSO A PASSO NO PAINEL CLOUDFLARE EM PORTUGUES (PT-BR) ===
- *   1. Acesse https://dash.cloudflare.com e faca login.
- *   2. Menu esquerdo -> "Armazenamento e bancos de dados" -> "Workers KV" (ou "KV"):
- *        - Clique em "Criar" / "Criar um namespace"
- *        - Nome: CAVERNIZE_RELAY  -> clique em "Criar" / "Adicionar".
- *   3. Menu esquerdo -> "Computacao (Workers)" -> "Workers e Pages" (ou direto "Workers e Pages"):
- *        - Clique em "Criar" -> aba "Workers" -> "Criar Worker" (ou "Comecar com Hello World")
- *        - Nome: cavernize-diag-relay -> clique em "Implantar" (Deploy).
- *   4. Abra o Worker criado -> aba "Configuracoes" (Settings) -> secao "Associacoes" (Bindings)
- *      (em contas antigas: "Variaveis" -> "Associacoes de namespace KV"):
- *        - Clique em "Adicionar" / "Adicionar associacao" -> escolha "Namespace KV" (KV namespace)
- *        - Nome da variavel (Variable name): RELAY_KV  (exatamente assim, em maiusculas!)
- *        - Namespace KV: selecione CAVERNIZE_RELAY
- *        - Clique em "Salvar" / "Implantar".
- *   5. No canto superior direito do Worker, clique em "Editar codigo" (Edit code):
- *        - Apague tudo no arquivo worker.js, cole TODO este codigo e clique em "Implantar" (Deploy).
- *   6. Copie a URL do Worker (ex.: https://cavernize-diag-relay.<seu-subdominio>.workers.dev)
- *      e cole no app: Configuracoes -> Sistema -> Diagnostico -> Configurar Ponte / Nuvem.
+ *   1. Acesse https://dash.cloudflare.com -> "Workers e Pages" -> abra seu Worker `cavernize-diag-relay`.
+ *      (Se for a 1a vez: crie KV `CAVERNIZE_RELAY`, crie Worker, associe variavel `RELAY_KV` -> `CAVERNIZE_RELAY`.)
+ *   2. Clique em "Editar codigo" (Edit code), apague tudo, cole TODO este codigo v4 e clique em "Implantar" (Deploy).
+ *   3. Pronto! O Cavernize Android v3, o Termux/Debian Agent Daemon e o OmniAgent Android compartilham o mesmo Worker!
  *
- * === SECURITY MODEL (v3) ===
+ * === SECURITY MODEL (v4 Zero-Trust E2E) ===
  * - Zero plaintext pairing secret on Cloudflare:
- *     * Wake channel uses X-Device-Hash = sha256("wake-channel-v2:" + pairSecretHex).
- *     * Wake requests carry HMAC-SHA256 signatures verified strictly on-device against Android Keystore.
- *     * Biometric approval returns the ephemeral session token E2E encrypted (SHA256-CTR + HMAC-SHA256).
- *     * Telemetry storage (/v1/telemetry/*) requires BOTH X-Device-Hash AND X-Telemetry-Key
- *       (= sha256("telemetry-access-v3:" + pairSecretHex)), hashed again on the edge into an isolated
- *       KV bucket key `t:${sha256(devHash + ":" + telemetryKey)}:*` with 14-day auto-expiring TTL.
- *     * Optional extra hardening: set Worker Secret `CAVERNIZE_ADMIN_KEY` in Settings -> Variables & Secrets
- *       if you want an additional server-side X-Admin-Key gate.
- * - Zero wildcard CORS on authenticated endpoints.
+ *     * X-Device-Hash   = sha256("wake-channel-v2:" + pairSecretHex)
+ *     * X-Telemetry-Key = sha256("telemetry-access-v3:" + pairSecretHex)
+ *     * X-Agent-Key     = sha256("agent-access-v4:" + pairSecretHex)
+ * - Every /v1/agent/* command, result, and /v1/blob/* payload is E2E encrypted client-side
+ *   (Encrypt-then-MAC: SHA256-CTR + HMAC-SHA256) so Cloudflare NEVER sees plaintext code, commands, or outputs.
+ * - Optional Worker Secret `CAVERNIZE_ADMIN_KEY` adds an extra X-Admin-Key gate on all non-health routes.
  */
 
 const MAX_TTL_SECONDS = 3600; // 60 min hard ceiling for live sessions
 const MAX_WAKE_TTL_SECONDS = 180; // 3 min for biometric approval
 const TELEMETRY_TTL_SECONDS = 14 * 24 * 3600; // 14 days automatic KV hygiene
-const MAX_BODY_BYTES = 1024 * 1024; // 1 MB payload ceiling (supports full logs + screenshots)
+const AGENT_PRESENCE_TTL_SECONDS = 120; // 2 min presence heartbeat
+const AGENT_CMD_TTL_SECONDS = 300; // 5 min command queue TTL
+const AGENT_RESULT_TTL_SECONDS = 600; // 10 min result TTL
+const BLOB_TTL_SECONDS = 1800; // 30 min chunked transfer TTL
+const SWARM_TTL_SECONDS = 24 * 3600; // 24h swarm task TTL
+const MAX_BODY_BYTES = 1024 * 1024; // 1 MB single-request payload ceiling
 const MAX_HISTORY_ENTRIES = 10;
+const MAX_AGENT_QUEUE = 16;
+const MAX_BLOB_CHUNKS = 64;
+const MAX_SWARM_TASKS = 32;
+const KNOWN_AGENT_CHANNELS = ["termux", "android", "debian", "cavernize"];
 const CMD_NAME_RE = /^[a-z0-9_.:-]{1,64}$/;
+const CHANNEL_RE = /^[a-z0-9_-]{1,32}$/;
 const HEX64_RE = /^[0-9a-f]{64}$/;
 const ALLOWED_TELEMETRY_KINDS = new Set([
   "log",
@@ -104,8 +104,13 @@ function getValidHex64Header(request, headerName) {
   return HEX64_RE.test(h) ? h : null;
 }
 
+function getValidChannel(request, fallback = "termux") {
+  const raw = (request.headers.get("X-Agent-Channel") || fallback).trim().toLowerCase();
+  return CHANNEL_RE.test(raw) ? raw : null;
+}
+
 function sanitizeId(raw) {
-  return String(raw || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 48);
+  return String(raw || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
 }
 
 async function readBoundedJson(request, maxBytes = MAX_BODY_BYTES) {
@@ -118,6 +123,15 @@ async function readBoundedJson(request, maxBytes = MAX_BODY_BYTES) {
   } catch {
     return { error: "Invalid JSON body", status: 400 };
   }
+}
+
+async function resolveAgentBucket(request) {
+  const devHash = getValidHex64Header(request, "X-Device-Hash");
+  const agentKey = getValidHex64Header(request, "X-Agent-Key");
+  if (!devHash || !agentKey) {
+    return null;
+  }
+  return await sha256Hex(`${devHash}:${agentKey}`);
 }
 
 export default {
@@ -134,18 +148,443 @@ export default {
       return jsonResp({
         ok: true,
         service: "cavernize-unified-hub",
-        version: 3,
+        version: 4,
         maxTtlSeconds: MAX_TTL_SECONDS,
         telemetryTtlDays: Math.round(TELEMETRY_TTL_SECONDS / 86400),
         supportsWake: true,
         supportsFlexibleCommands: true,
         supportsDynamicExecution: true,
         supportsTelemetry: true,
+        supportsOmniAgent: true,
+        supportsChunkedBlobs: true,
+        supportsSwarmBus: true,
+        supportsHotExec: true,
       });
     }
 
     if (!verifyOptionalAdminGate(request, env)) {
       return jsonResp({ ok: false, error: "Invalid or missing X-Admin-Key." }, 403);
+    }
+
+    // ==================== V4 FULL-AGENT MULTI-CHANNEL RELAY (/v1/agent/*) ====================
+    if (path.startsWith("/v1/agent/")) {
+      const bucket = await resolveAgentBucket(request);
+      if (!bucket) {
+        return jsonResp({
+          ok: false,
+          error: "Missing or invalid X-Device-Hash / X-Agent-Key headers (64 hex chars each).",
+        }, 401);
+      }
+
+      const channel = getValidChannel(request, url.searchParams.get("channel") || "termux");
+      if (!channel) {
+        return jsonResp({ ok: false, error: "Invalid X-Agent-Channel (expected [a-z0-9_-]{1,32})." }, 400);
+      }
+
+      const basePrefix = `ag:${bucket}:`;
+      const chanPrefix = `${basePrefix}${channel}:`;
+      const presenceKey = `${chanPrefix}presence`;
+      const queueKey = `${chanPrefix}queue`;
+      const resPrefix = `${chanPrefix}res:`;
+
+      // A1. Agent presence heartbeat
+      if (request.method === "POST" && path === "/v1/agent/heartbeat") {
+        const parsed = await readBoundedJson(request, 64 * 1024);
+        if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
+        const d = parsed.data || {};
+        const presence = {
+          channel,
+          online: true,
+          lastSeenUtc: new Date().toISOString(),
+          agentVersion: String(d.agentVersion || "1.0").slice(0, 32),
+          hostEnv: String(d.hostEnv || channel).slice(0, 64),
+          device: String(d.device || "").slice(0, 80),
+          securityMode: String(d.securityMode || "smart").slice(0, 24),
+          repoPath: String(d.repoPath || "").slice(0, 180),
+          tools: d.tools && typeof d.tools === "object" ? d.tools : {},
+          capabilities: Array.isArray(d.capabilities) ? d.capabilities.slice(0, 64) : [],
+        };
+        await env.RELAY_KV.put(presenceKey, JSON.stringify(presence), { expirationTtl: AGENT_PRESENCE_TTL_SECONDS });
+        return jsonResp({ ok: true, channel, ttlSeconds: AGENT_PRESENCE_TTL_SECONDS });
+      }
+
+      // A2. Query status for one channel or all known channels
+      if (request.method === "GET" && path === "/v1/agent/status") {
+        if (url.searchParams.get("all") === "1") {
+          const extra = (url.searchParams.get("channels") || "")
+            .split(",")
+            .map((c) => c.trim().toLowerCase())
+            .filter((c) => CHANNEL_RE.test(c));
+          const list = [...new Set([...KNOWN_AGENT_CHANNELS, channel, ...extra])];
+          const entries = await Promise.all(list.map((c) => env.RELAY_KV.get(`${basePrefix}${c}:presence`)));
+          const channels = {};
+          for (let i = 0; i < list.length; i++) {
+            channels[list[i]] = entries[i] ? JSON.parse(entries[i]) : { channel: list[i], online: false };
+          }
+          return jsonResp({ ok: true, channels });
+        }
+        const raw = await env.RELAY_KV.get(presenceKey);
+        return jsonResp({
+          ok: true,
+          channel,
+          online: Boolean(raw),
+          presence: raw ? JSON.parse(raw) : null,
+        });
+      }
+
+      // A3. AI enqueues an E2E-encrypted command into channel FIFO queue
+      if (request.method === "POST" && path === "/v1/agent/cmd") {
+        const parsed = await readBoundedJson(request, MAX_BODY_BYTES);
+        if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
+        const d = parsed.data || {};
+        const requestId = sanitizeId(d.requestId || crypto.randomUUID());
+        if (!requestId || !d.envelope || typeof d.envelope !== "object") {
+          return jsonResp({ ok: false, error: "Missing requestId or encrypted envelope." }, 400);
+        }
+        let queue = [];
+        try {
+          const rawQ = await env.RELAY_KV.get(queueKey);
+          if (rawQ) {
+            const parsedQ = JSON.parse(rawQ);
+            if (Array.isArray(parsedQ)) queue = parsedQ;
+          }
+        } catch {
+          queue = [];
+        }
+        if (queue.length >= MAX_AGENT_QUEUE) {
+          queue = queue.slice(-(MAX_AGENT_QUEUE - 1));
+        }
+        queue.push({
+          requestId,
+          channel,
+          queuedAtUtc: new Date().toISOString(),
+          envelope: d.envelope,
+        });
+        await env.RELAY_KV.put(queueKey, JSON.stringify(queue), { expirationTtl: AGENT_CMD_TTL_SECONDS });
+        return jsonResp({ ok: true, requestId, channel, queueDepth: queue.length });
+      }
+
+      // A4. Agent dequeues next pending command from channel FIFO queue
+      if (request.method === "GET" && path === "/v1/agent/poll") {
+        const rawQ = await env.RELAY_KV.get(queueKey);
+        if (!rawQ) {
+          return jsonResp({ ok: true, hasCommand: false, channel });
+        }
+        let queue = [];
+        try {
+          const parsedQ = JSON.parse(rawQ);
+          if (Array.isArray(parsedQ)) queue = parsedQ;
+        } catch {
+          queue = [];
+        }
+        if (queue.length === 0) {
+          await env.RELAY_KV.delete(queueKey);
+          return jsonResp({ ok: true, hasCommand: false, channel });
+        }
+        const nextCmd = queue.shift();
+        if (queue.length > 0) {
+          await env.RELAY_KV.put(queueKey, JSON.stringify(queue), { expirationTtl: AGENT_CMD_TTL_SECONDS });
+        } else {
+          await env.RELAY_KV.delete(queueKey);
+        }
+        return jsonResp({ ok: true, hasCommand: true, channel, remaining: queue.length, command: nextCmd });
+      }
+
+      // A5. Agent posts E2E-encrypted result for requestId
+      if (request.method === "POST" && path === "/v1/agent/result") {
+        const parsed = await readBoundedJson(request, MAX_BODY_BYTES);
+        if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
+        const d = parsed.data || {};
+        const requestId = sanitizeId(d.requestId);
+        if (!requestId || !d.envelope || typeof d.envelope !== "object") {
+          return jsonResp({ ok: false, error: "Missing requestId or encrypted result envelope." }, 400);
+        }
+        await env.RELAY_KV.put(
+          resPrefix + requestId,
+          JSON.stringify({
+            requestId,
+            channel,
+            completedAtUtc: new Date().toISOString(),
+            envelope: d.envelope,
+          }),
+          { expirationTtl: AGENT_RESULT_TTL_SECONDS }
+        );
+        return jsonResp({ ok: true, requestId, channel });
+      }
+
+      // A6. AI fetches & deletes E2E-encrypted result for requestId
+      if (request.method === "GET" && path === "/v1/agent/result") {
+        const requestId = sanitizeId(url.searchParams.get("requestId"));
+        if (!requestId) {
+          return jsonResp({ ok: false, error: "Missing requestId query parameter." }, 400);
+        }
+        const raw = await env.RELAY_KV.get(resPrefix + requestId);
+        if (!raw) {
+          return jsonResp({ ok: true, ready: false, requestId, channel });
+        }
+        await env.RELAY_KV.delete(resPrefix + requestId);
+        return jsonResp({ ok: true, ready: true, result: JSON.parse(raw) });
+      }
+
+      return jsonResp({ ok: false, error: "Unknown agent endpoint." }, 404);
+    }
+
+    // ==================== V4 CHUNKED LARGE-PAYLOAD STORE (/v1/blob/*) ====================
+    if (path.startsWith("/v1/blob/")) {
+      const bucket = await resolveAgentBucket(request);
+      if (!bucket) {
+        return jsonResp({
+          ok: false,
+          error: "Missing or invalid X-Device-Hash / X-Agent-Key headers (64 hex chars each).",
+        }, 401);
+      }
+      const blobPrefix = `bl:${bucket}:`;
+
+      if (request.method === "POST" && path === "/v1/blob/chunk") {
+        const parsed = await readBoundedJson(request, MAX_BODY_BYTES);
+        if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
+        const d = parsed.data || {};
+        const blobId = sanitizeId(d.blobId);
+        const idx = Number(d.index);
+        if (!blobId || !Number.isInteger(idx) || idx < 0 || idx >= MAX_BLOB_CHUNKS || typeof d.data !== "string") {
+          return jsonResp({ ok: false, error: "Invalid blobId, chunk index (0..63), or data string." }, 400);
+        }
+        await env.RELAY_KV.put(`${blobPrefix}${blobId}:c:${idx}`, d.data, { expirationTtl: BLOB_TTL_SECONDS });
+        return jsonResp({ ok: true, blobId, index: idx, bytes: d.data.length });
+      }
+
+      if (request.method === "GET" && path === "/v1/blob/chunk") {
+        const blobId = sanitizeId(url.searchParams.get("blobId"));
+        const idx = Number(url.searchParams.get("index"));
+        if (!blobId || !Number.isInteger(idx) || idx < 0 || idx >= MAX_BLOB_CHUNKS) {
+          return jsonResp({ ok: false, error: "Invalid blobId or index." }, 400);
+        }
+        const data = await env.RELAY_KV.get(`${blobPrefix}${blobId}:c:${idx}`);
+        if (data === null) {
+          return jsonResp({ ok: false, error: "Blob chunk not found or expired." }, 404);
+        }
+        return jsonResp({ ok: true, blobId, index: idx, data });
+      }
+
+      if (request.method === "POST" && path === "/v1/blob/commit") {
+        const parsed = await readBoundedJson(request, 64 * 1024);
+        if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
+        const d = parsed.data || {};
+        const blobId = sanitizeId(d.blobId);
+        const totalChunks = Number(d.totalChunks);
+        if (!blobId || !Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > MAX_BLOB_CHUNKS) {
+          return jsonResp({ ok: false, error: "Invalid blobId or totalChunks (1..64)." }, 400);
+        }
+        const meta = {
+          blobId,
+          totalChunks,
+          sha256: String(d.sha256 || "").slice(0, 64),
+          bytes: Number(d.bytes) || 0,
+          meta: d.meta && typeof d.meta === "object" ? d.meta : {},
+          committedAtUtc: new Date().toISOString(),
+        };
+        await env.RELAY_KV.put(`${blobPrefix}${blobId}:meta`, JSON.stringify(meta), { expirationTtl: BLOB_TTL_SECONDS });
+        return jsonResp({ ok: true, ...meta });
+      }
+
+      if (request.method === "GET" && path === "/v1/blob/meta") {
+        const blobId = sanitizeId(url.searchParams.get("blobId"));
+        if (!blobId) return jsonResp({ ok: false, error: "Missing blobId." }, 400);
+        const raw = await env.RELAY_KV.get(`${blobPrefix}${blobId}:meta`);
+        if (!raw) return jsonResp({ ok: false, error: "Blob metadata not found or expired." }, 404);
+        return jsonResp({ ok: true, meta: JSON.parse(raw) });
+      }
+
+      if (request.method === "DELETE" && path === "/v1/blob/delete") {
+        const blobId = sanitizeId(url.searchParams.get("blobId"));
+        if (!blobId) return jsonResp({ ok: false, error: "Missing blobId." }, 400);
+        const rawMeta = await env.RELAY_KV.get(`${blobPrefix}${blobId}:meta`);
+        let count = 0;
+        if (rawMeta) {
+          try {
+            count = Math.min(MAX_BLOB_CHUNKS, Math.max(0, Number(JSON.parse(rawMeta).totalChunks) || 0));
+          } catch {
+            count = 0;
+          }
+        }
+        const deletes = [env.RELAY_KV.delete(`${blobPrefix}${blobId}:meta`)];
+        for (let i = 0; i < count; i++) {
+          deletes.push(env.RELAY_KV.delete(`${blobPrefix}${blobId}:c:${i}`));
+        }
+        await Promise.all(deletes);
+        return jsonResp({ ok: true, blobId, deletedChunks: count });
+      }
+
+      return jsonResp({ ok: false, error: "Unknown blob endpoint." }, 404);
+    }
+
+    // ==================== V4 MULTI-AGENT SWARM TASK BUS (/v1/swarm/*) ====================
+    if (path.startsWith("/v1/swarm/")) {
+      const bucket = await resolveAgentBucket(request);
+      if (!bucket) {
+        return jsonResp({
+          ok: false,
+          error: "Missing or invalid X-Device-Hash / X-Agent-Key headers (64 hex chars each).",
+        }, 401);
+      }
+      const swarmPrefix = `sw:${bucket}:`;
+      const idxKey = `${swarmPrefix}index`;
+
+      async function loadSwarmIndex() {
+        try {
+          const raw = await env.RELAY_KV.get(idxKey);
+          const arr = raw ? JSON.parse(raw) : [];
+          return Array.isArray(arr) ? arr : [];
+        } catch {
+          return [];
+        }
+      }
+
+      if (request.method === "POST" && path === "/v1/swarm/enqueue") {
+        const parsed = await readBoundedJson(request, 256 * 1024);
+        if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
+        const d = parsed.data || {};
+        const taskId = sanitizeId(d.taskId || `t_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 6)}`);
+        const nowUtc = new Date().toISOString();
+        const header = {
+          taskId,
+          role: String(d.role || "worker").slice(0, 32),
+          title: String(d.title || "Swarm task").slice(0, 140),
+          createdBy: String(d.createdBy || "architect").slice(0, 48),
+          status: "pending",
+          claimedBy: "",
+          createdAtUtc: nowUtc,
+          updatedAtUtc: nowUtc,
+        };
+        const record = {
+          ...header,
+          envelope: d.envelope && typeof d.envelope === "object" ? d.envelope : null,
+          instructions: typeof d.instructions === "string" ? d.instructions.slice(0, 32000) : "",
+          result: null,
+        };
+        let index = await loadSwarmIndex();
+        index = index.filter((item) => item.taskId !== taskId);
+        index.unshift(header);
+        if (index.length > MAX_SWARM_TASKS) {
+          index = index.slice(0, MAX_SWARM_TASKS);
+        }
+        await Promise.all([
+          env.RELAY_KV.put(`${swarmPrefix}task:${taskId}`, JSON.stringify(record), { expirationTtl: SWARM_TTL_SECONDS }),
+          env.RELAY_KV.put(idxKey, JSON.stringify(index), { expirationTtl: SWARM_TTL_SECONDS }),
+        ]);
+        return jsonResp({ ok: true, task: header });
+      }
+
+      if (request.method === "GET" && path === "/v1/swarm/list") {
+        const statusFilter = (url.searchParams.get("status") || "").trim().toLowerCase();
+        let index = await loadSwarmIndex();
+        if (statusFilter) {
+          index = index.filter((t) => String(t.status || "").toLowerCase() === statusFilter);
+        }
+        return jsonResp({ ok: true, tasks: index });
+      }
+
+      if (request.method === "POST" && path === "/v1/swarm/claim") {
+        const parsed = await readBoundedJson(request, 32 * 1024);
+        if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
+        const d = parsed.data || {};
+        const workerId = String(d.workerId || "worker").slice(0, 48);
+        const roleFilter = String(d.role || "").trim().toLowerCase();
+        const specificId = sanitizeId(d.taskId || "");
+        const index = await loadSwarmIndex();
+        let targetIdx = -1;
+        for (let i = index.length - 1; i >= 0; i--) {
+          const item = index[i];
+          if (specificId && item.taskId !== specificId) continue;
+          if (!specificId && item.status !== "pending") continue;
+          if (roleFilter && String(item.role || "").toLowerCase() !== roleFilter) continue;
+          targetIdx = i;
+          break;
+        }
+        if (targetIdx === -1) {
+          return jsonResp({ ok: true, claimed: false, task: null });
+        }
+        const taskId = index[targetIdx].taskId;
+        const rawRec = await env.RELAY_KV.get(`${swarmPrefix}task:${taskId}`);
+        if (!rawRec) {
+          return jsonResp({ ok: true, claimed: false, task: null });
+        }
+        const rec = JSON.parse(rawRec);
+        const nowUtc = new Date().toISOString();
+        rec.status = "claimed";
+        rec.claimedBy = workerId;
+        rec.updatedAtUtc = nowUtc;
+        index[targetIdx].status = "claimed";
+        index[targetIdx].claimedBy = workerId;
+        index[targetIdx].updatedAtUtc = nowUtc;
+        await Promise.all([
+          env.RELAY_KV.put(`${swarmPrefix}task:${taskId}`, JSON.stringify(rec), { expirationTtl: SWARM_TTL_SECONDS }),
+          env.RELAY_KV.put(idxKey, JSON.stringify(index), { expirationTtl: SWARM_TTL_SECONDS }),
+        ]);
+        return jsonResp({ ok: true, claimed: true, task: rec });
+      }
+
+      if (request.method === "POST" && path === "/v1/swarm/complete") {
+        const parsed = await readBoundedJson(request, 512 * 1024);
+        if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
+        const d = parsed.data || {};
+        const taskId = sanitizeId(d.taskId);
+        if (!taskId) return jsonResp({ ok: false, error: "Missing taskId." }, 400);
+        const rawRec = await env.RELAY_KV.get(`${swarmPrefix}task:${taskId}`);
+        if (!rawRec) return jsonResp({ ok: false, error: "Task not found or expired." }, 404);
+        const rec = JSON.parse(rawRec);
+        const finalStatus = d.ok === false ? "failed" : "done";
+        const nowUtc = new Date().toISOString();
+        rec.status = finalStatus;
+        rec.updatedAtUtc = nowUtc;
+        rec.result = {
+          ok: d.ok !== false,
+          workerId: String(d.workerId || rec.claimedBy || "worker").slice(0, 48),
+          summary: String(d.summary || "").slice(0, 4000),
+          envelope: d.envelope && typeof d.envelope === "object" ? d.envelope : null,
+          completedAtUtc: nowUtc,
+        };
+        const index = await loadSwarmIndex();
+        for (const item of index) {
+          if (item.taskId === taskId) {
+            item.status = finalStatus;
+            item.updatedAtUtc = nowUtc;
+            break;
+          }
+        }
+        await Promise.all([
+          env.RELAY_KV.put(`${swarmPrefix}task:${taskId}`, JSON.stringify(rec), { expirationTtl: SWARM_TTL_SECONDS }),
+          env.RELAY_KV.put(idxKey, JSON.stringify(index), { expirationTtl: SWARM_TTL_SECONDS }),
+        ]);
+        return jsonResp({ ok: true, taskId, status: finalStatus });
+      }
+
+      if (request.method === "GET" && path === "/v1/swarm/task") {
+        const taskId = sanitizeId(url.searchParams.get("taskId"));
+        if (!taskId) return jsonResp({ ok: false, error: "Missing taskId." }, 400);
+        const rawRec = await env.RELAY_KV.get(`${swarmPrefix}task:${taskId}`);
+        if (!rawRec) return jsonResp({ ok: false, error: "Task not found." }, 404);
+        return jsonResp({ ok: true, task: JSON.parse(rawRec) });
+      }
+
+      if (request.method === "DELETE" && path === "/v1/swarm/clear") {
+        const onlyDone = url.searchParams.get("doneOnly") === "1";
+        const index = await loadSwarmIndex();
+        const kept = [];
+        const deletes = [];
+        for (const item of index) {
+          if (onlyDone && item.status !== "done" && item.status !== "failed") {
+            kept.push(item);
+          } else {
+            deletes.push(env.RELAY_KV.delete(`${swarmPrefix}task:${item.taskId}`));
+          }
+        }
+        deletes.push(env.RELAY_KV.put(idxKey, JSON.stringify(kept), { expirationTtl: SWARM_TTL_SECONDS }));
+        await Promise.all(deletes);
+        return jsonResp({ ok: true, cleared: index.length - kept.length, remaining: kept.length });
+      }
+
+      return jsonResp({ ok: false, error: "Unknown swarm endpoint." }, 404);
     }
 
     // ==================== UNIFIED TELEMETRY & LOG STORAGE (/v1/telemetry/*) ====================
@@ -162,7 +601,6 @@ export default {
       const bucket = await sha256Hex(`${devHash}:${telKey}`);
       const prefix = `t:${bucket}:`;
 
-      // T1. Upload one or more diagnostic artifacts atomically
       if (request.method === "POST" && path === "/v1/telemetry/upload") {
         const parsed = await readBoundedJson(request, MAX_BODY_BYTES);
         if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
@@ -210,7 +648,6 @@ export default {
         };
         writes.push(env.RELAY_KV.put(`${prefix}latest:meta`, JSON.stringify(snapshotMeta), { expirationTtl: TELEMETRY_TTL_SECONDS }));
 
-        // Maintain rolling history index
         let history = [];
         try {
           const rawHist = await env.RELAY_KV.get(`${prefix}history`);
@@ -237,7 +674,6 @@ export default {
         });
       }
 
-      // T2. Fetch latest telemetry artifact(s)
       if (request.method === "GET" && path === "/v1/telemetry/latest") {
         const kind = (url.searchParams.get("kind") || "all").trim().toLowerCase();
         if (kind === "meta") {
@@ -283,19 +719,17 @@ export default {
         });
       }
 
-      // T3. Fetch rolling upload history
       if (request.method === "GET" && path === "/v1/telemetry/history") {
         const rawHist = await env.RELAY_KV.get(`${prefix}history`);
         return jsonResp({ ok: true, history: rawHist ? JSON.parse(rawHist) : [] });
       }
 
-      // T4. Verify telemetry auth/connectivity cleanly
       if (request.method === "GET" && path === "/v1/telemetry/ping") {
         const rawMeta = await env.RELAY_KV.get(`${prefix}latest:meta`);
         return jsonResp({
           ok: true,
           service: "cavernize-unified-hub",
-          version: 3,
+          version: 4,
           hasTelemetry: Boolean(rawMeta),
           lastUpload: rawMeta ? JSON.parse(rawMeta).uploadedAtUtc : null,
         });
@@ -329,6 +763,7 @@ export default {
           durationSeconds: Math.max(300, Math.min(MAX_TTL_SECONDS, Number(d.durationSeconds) || 1800)),
           reason: String(d.reason || "AI session request").slice(0, 160),
           requester: String(d.requester || "AI Assistant").slice(0, 64),
+          channel: String(d.channel || "cavernize").slice(0, 32),
           signature: sig,
           queuedAtUtc: new Date().toISOString(),
         };

@@ -1,0 +1,490 @@
+#!/usr/bin/env python3
+"""OmniAgent v4 — AI Studio Full-Agent Controller CLI.
+
+Connects AI Studio to:
+  1. Termux / Debian PRoot Full-Agent Daemon (`--channel termux`)
+  2. OmniAgent Android Companion App (`--channel android`)
+  3. Cavernize Android Live Bridge v3 + Live C# Hot-Execution (`hot-exec`)
+  4. Cloudflare Unified Hub v4 Multi-Agent Swarm Bus (`swarm-*`)
+  5. Direct GitHub 2-Way Pull Sync (`pull-github`) even when phone daemon is offline!
+
+Zero external pip dependencies (Python 3 stdlib only). Never writes secrets to disk.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import secrets
+import sys
+import time
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+AGENT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = AGENT_DIR.parents[1]
+PLUGIN_SCRIPTS = REPO_ROOT / ".agents" / "plugins" / "dynamic-fractal-planner" / "scripts"
+for p in (str(AGENT_DIR), str(PLUGIN_SCRIPTS)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+import hot_probe_compiler as hpc
+import omni_protocol as proto
+
+
+def _resolve_auth(args: argparse.Namespace) -> tuple[str, str, str]:
+    relay = (getattr(args, "url", "") or os.environ.get("CAVERN_RELAY_URL") or "").strip()
+    secret = (getattr(args, "pair_secret", "") or os.environ.get("CAVERN_BRIDGE_PAIR_SECRET") or "").strip()
+    admin = (getattr(args, "admin_key", "") or os.environ.get("CAVERN_ADMIN_KEY") or "").strip()
+    if not relay or not secret:
+        raise SystemExit("ERROR: Provide --url & --pair-secret (or set CAVERN_RELAY_URL & CAVERN_BRIDGE_PAIR_SECRET).")
+    return proto.validate_https_url(relay), proto.normalize_pair_secret_hex(secret), admin
+
+
+def send_agent_command(
+    relay_url: str,
+    pair_secret_hex: str,
+    cmd: str,
+    args_obj: dict[str, Any] | None = None,
+    channel: str = "termux",
+    admin_key: str = "",
+    timeout_sec: int = 120,
+) -> dict[str, Any]:
+    headers = proto.derive_agent_headers(pair_secret_hex, channel=channel, admin_key=admin_key)
+    req_id = f"r_{int(time.time())}_{secrets.token_hex(6)}"
+    payload = {"cmd": cmd, "args": args_obj or {}, "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    envelope = proto.encrypt_envelope(pair_secret_hex, f"cmd:{req_id}", payload)
+    st, resp = proto.http_json(
+        "POST",
+        f"{relay_url}/v1/agent/cmd",
+        headers,
+        {"requestId": req_id, "envelope": envelope},
+        timeout=30,
+    )
+    if st >= 400 or not resp.get("ok"):
+        raise RuntimeError(f"Failed queueing agent command '{cmd}' on channel '{channel}' (HTTP {st}): {resp}")
+
+    deadline = time.time() + max(5, timeout_sec)
+    while time.time() < deadline:
+        st_r, res_r = proto.http_json(
+            "GET",
+            f"{relay_url}/v1/agent/result?requestId={urllib.parse.quote(req_id)}",
+            headers,
+            timeout=20,
+        )
+        if st_r == 200 and res_r.get("ok") and res_r.get("ready"):
+            raw_res = res_r["result"]
+            return proto.decrypt_envelope(pair_secret_hex, f"res:{req_id}", raw_res["envelope"])
+        time.sleep(1.5)
+    raise TimeoutError(f"Timed out waiting {timeout_sec}s for channel '{channel}' to answer '{cmd}'.")
+
+
+def pick_channel(relay_url: str, pair_secret_hex: str, preferred: str, admin_key: str = "") -> str:
+    if preferred and preferred != "auto":
+        return preferred
+    headers = proto.derive_agent_headers(pair_secret_hex, channel="termux", admin_key=admin_key)
+    st, resp = proto.http_json("GET", f"{relay_url}/v1/agent/status?all=1", headers, timeout=15)
+    if st == 200 and resp.get("ok"):
+        chans = resp.get("channels") or {}
+        for c in ("termux", "debian", "android"):
+            if (chans.get(c) or {}).get("online"):
+                return c
+    return "termux"
+
+
+def cmd_push_workspace(args: argparse.Namespace) -> int:
+    relay, secret, admin = _resolve_auth(args)
+    channel = pick_channel(relay, secret, args.channel, admin)
+    repo_root = Path(args.workspace or REPO_ROOT).resolve()
+
+    explicit_files: list[str] = list(args.files or [])
+    deleted_files: list[str] = list(args.delete or [])
+
+    if not explicit_files:
+        # Ask phone repo for its exact manifest so we only transmit changed/added/deleted files!
+        print(f"Fetching remote manifest from channel '{channel}'...", file=sys.stderr)
+        m_res = send_agent_command(relay, secret, "git_manifest", {"repo": args.repo or ""}, channel=channel, admin_key=admin, timeout_sec=90)
+        if not m_res.get("ok"):
+            print(json.dumps(m_res, indent=2))
+            return 1
+        if m_res.get("manifestBlobId"):
+            remote_manifest = proto.download_encrypted_blob(relay, secret, m_res["manifestBlobId"], admin_key=admin).get("manifest", {})
+        else:
+            remote_manifest = m_res.get("manifest") or {}
+        local_manifest = proto.build_workspace_manifest(repo_root)
+        for rel, meta in local_manifest.items():
+            rem = remote_manifest.get(rel)
+            if not rem or rem.get("sha256") != meta["sha256"]:
+                explicit_files.append(rel)
+        if args.sync_deletes:
+            for rel in remote_manifest:
+                if rel not in local_manifest:
+                    deleted_files.append(rel)
+
+    if not explicit_files and not deleted_files:
+        print(json.dumps({"ok": True, "message": "Workspace already 100% identical to remote repo (0 changed files)."}, indent=2))
+        return 0
+
+    bundle = proto.pack_delta_bundle(repo_root, explicit_files, deleted_files)
+    print(f"Packing delta bundle: {len(bundle['files'])} modified/added, {len(bundle['deleted'])} deleted...", file=sys.stderr)
+    blob = proto.upload_encrypted_blob(relay, secret, bundle, admin_key=admin)
+    print(f"Uploaded encrypted blob {blob['blobId']} ({blob['bytes']} bytes, {blob['totalChunks']} chunk(s)).", file=sys.stderr)
+
+    target_cmd = "github_push_bundle" if channel == "android" else ("git_commit_push" if args.commit else "git_apply_bundle")
+    res = send_agent_command(
+        relay,
+        secret,
+        target_cmd,
+        {
+            "repo": args.repo or "",
+            "blobId": blob["blobId"],
+            "message": args.commit or "",
+            "branch": args.branch,
+            "remote": args.remote,
+            "push": not args.no_push,
+            "pullFirst": bool(args.pull_first),
+            "allowDelete": bool(deleted_files),
+        },
+        channel=channel,
+        admin_key=admin,
+        timeout_sec=180,
+    )
+    print(json.dumps(res, indent=2, ensure_ascii=False))
+    return 0 if res.get("ok") else 1
+
+
+def cmd_pull_workspace(args: argparse.Namespace) -> int:
+    repo_root = Path(args.workspace or REPO_ROOT).resolve()
+    if args.from_github:
+        # Direct GitHub API pull (works even if phone is offline!)
+        owner_repo = args.from_github.strip()
+        branch = args.branch
+        headers = {"User-Agent": proto.USER_AGENT, "Accept": "application/vnd.github+json"}
+        st, tree_resp = proto.http_json(
+            "GET",
+            f"https://api.github.com/repos/{owner_repo}/git/trees/{urllib.parse.quote(branch)}?recursive=1",
+            headers,
+            timeout=45,
+        )
+        if st != 200 or "tree" not in tree_resp:
+            print(json.dumps({"ok": False, "http": st, "error": tree_resp}, indent=2))
+            return 1
+        local_manifest = proto.build_workspace_manifest(repo_root)
+        updated: list[str] = []
+        target_paths = set(args.files or [])
+        for node in tree_resp["tree"]:
+            if node.get("type") != "blob":
+                continue
+            rel = str(node.get("path") or "")
+            if target_paths and rel not in target_paths:
+                continue
+            if not proto.should_include_workspace_path(rel):
+                continue
+            if int(node.get("size") or 0) > 2 * 1024 * 1024:
+                continue
+            # Compare git blob sha1 against local file quickly before downloading
+            full = repo_root / rel
+            if full.is_file():
+                raw_local = full.read_bytes()
+                git_sha1 = hashlib.sha1(f"blob {len(raw_local)}\0".encode("ascii") + raw_local).hexdigest()
+                if git_sha1 == node.get("sha"):
+                    continue
+            raw_url = f"https://raw.githubusercontent.com/{owner_repo}/{urllib.parse.quote(branch)}/{urllib.parse.quote(rel)}"
+            req = urllib.request.Request(raw_url, headers={"User-Agent": proto.USER_AGENT})
+            with urllib.request.urlopen(req, timeout=45) as resp:
+                data = resp.read()
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_bytes(data)
+            updated.append(rel)
+        print(json.dumps({"ok": True, "source": f"github:{owner_repo}@{branch}", "updatedCount": len(updated), "updated": updated}, indent=2))
+        return 0
+
+    relay, secret, admin = _resolve_auth(args)
+    channel = pick_channel(relay, secret, args.channel, admin)
+    m_res = send_agent_command(relay, secret, "git_manifest", {"repo": args.repo or ""}, channel=channel, admin_key=admin, timeout_sec=90)
+    if not m_res.get("ok"):
+        print(json.dumps(m_res, indent=2))
+        return 1
+    remote_manifest = (
+        proto.download_encrypted_blob(relay, secret, m_res["manifestBlobId"], admin_key=admin).get("manifest", {})
+        if m_res.get("manifestBlobId")
+        else (m_res.get("manifest") or {})
+    )
+    local_manifest = proto.build_workspace_manifest(repo_root)
+    to_fetch: list[str] = list(args.files or [])
+    if not to_fetch:
+        for rel, rmeta in remote_manifest.items():
+            lmeta = local_manifest.get(rel)
+            if not lmeta or lmeta.get("sha256") != rmeta.get("sha256"):
+                to_fetch.append(rel)
+    if not to_fetch:
+        print(json.dumps({"ok": True, "message": "AI Studio workspace already in sync with phone repo (0 files)."}, indent=2))
+        return 0
+    exp_res = send_agent_command(relay, secret, "file_export_bundle", {"repo": args.repo or "", "paths": to_fetch}, channel=channel, admin_key=admin, timeout_sec=120)
+    if not exp_res.get("ok"):
+        print(json.dumps(exp_res, indent=2))
+        return 1
+    bundle = proto.download_encrypted_blob(relay, secret, exp_res["blobId"], admin_key=admin)
+    applied = proto.apply_delta_bundle(repo_root, bundle, allow_delete=False)
+    print(json.dumps({"ok": True, "source": f"channel:{channel}", "head": m_res.get("head"), "applied": applied}, indent=2))
+    return 0
+
+
+def cmd_hot_exec(args: argparse.Namespace) -> int:
+    relay, secret, admin = _resolve_auth(args)
+    if args.file:
+        src = Path(args.file).read_text(encoding="utf-8")
+    elif args.code:
+        src = args.code
+    else:
+        raise SystemExit("ERROR: Provide --file or --code for hot-exec.")
+
+    print("Compiling C# hot-probe with local .NET 11 Roslyn...", file=sys.stderr)
+    comp = hpc.compile_hot_probe(src, probe_name=args.name, include_android=not args.no_android_refs)
+    if not comp.get("ok"):
+        print(json.dumps(comp, indent=2))
+        return 1
+    print(f"Compiled {comp['assemblyName']} ({comp['sizeBytes']} bytes) in {comp['elapsedMs']}ms.", file=sys.stderr)
+
+    req_id = f"hot_{int(time.time())}_{secrets.token_hex(5)}"
+    hot_args = hpc.build_signed_hot_exec_args(
+        comp["dllBytes"],
+        secret,
+        req_id,
+        entry_type=args.entry_type or "",
+        args_json=args.args_json or "{}",
+        timeout_sec=args.timeout,
+    )
+
+    if args.compile_only:
+        out = {k: v for k, v in hot_args.items() if k != "dllBase64"}
+        out["sizeBytes"] = comp["sizeBytes"]
+        out["compileElapsedMs"] = comp["elapsedMs"]
+        print(json.dumps(out, indent=2))
+        return 0
+
+    import live_bridge_client as lbc
+
+    code = (args.code_session or os.environ.get("CAVERN_SESSION_CODE") or "").strip()
+    if not code:
+        # Wake Cavernize Live Bridge v3 automatically if no active session code passed
+        wake_res = lbc.wake_and_get_session(
+            relay,
+            secret,
+            tier=2,
+            duration_seconds=1800,
+            reason=f"Live C# hot_exec ({args.name})",
+            admin_key=admin,
+            wait_seconds=120,
+        )
+        code = wake_res["sessionCode"]
+
+    res = lbc.send_command_and_wait(
+        relay,
+        code,
+        "hot_exec",
+        args_obj=hot_args,
+        admin_key=admin,
+        timeout_seconds=args.timeout + 30,
+    )
+    print(json.dumps(res, indent=2, ensure_ascii=False))
+    return 0 if res.get("ok") else 1
+
+
+def cmd_swarm(args: argparse.Namespace) -> int:
+    relay, secret, admin = _resolve_auth(args)
+    headers = proto.derive_agent_headers(secret, channel="termux", admin_key=admin)
+    act = args.swarm_action
+    if act == "enqueue":
+        st, resp = proto.http_json(
+            "POST",
+            f"{relay}/v1/swarm/enqueue",
+            headers,
+            {
+                "role": args.role,
+                "title": args.title,
+                "createdBy": args.worker_id,
+                "instructions": args.instructions,
+            },
+        )
+    elif act == "list":
+        q = f"?status={urllib.parse.quote(args.status)}" if args.status else ""
+        st, resp = proto.http_json("GET", f"{relay}/v1/swarm/list{q}", headers)
+    elif act == "claim":
+        st, resp = proto.http_json(
+            "POST",
+            f"{relay}/v1/swarm/claim",
+            headers,
+            {"workerId": args.worker_id, "role": args.role, "taskId": args.task_id},
+        )
+    elif act == "complete":
+        st, resp = proto.http_json(
+            "POST",
+            f"{relay}/v1/swarm/complete",
+            headers,
+            {"taskId": args.task_id, "workerId": args.worker_id, "ok": not args.failed, "summary": args.summary},
+        )
+    elif act == "task":
+        st, resp = proto.http_json("GET", f"{relay}/v1/swarm/task?taskId={urllib.parse.quote(args.task_id)}", headers)
+    elif act == "clear":
+        q = "?doneOnly=1" if args.done_only else ""
+        st, resp = proto.http_json("DELETE", f"{relay}/v1/swarm/clear{q}", headers)
+    else:
+        raise SystemExit(f"Unknown swarm action: {act}")
+    print(json.dumps(resp, indent=2, ensure_ascii=False))
+    return 0 if st < 400 and resp.get("ok") else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="OmniAgent v4 Full-Agent CLI (Antigravity 2 Controller).")
+    parser.add_argument("--url", default="", help="Cloudflare Unified Hub v4 URL (or env CAVERN_RELAY_URL)")
+    parser.add_argument("--pair-secret", default="", help="64-hex pairing key (or env CAVERN_BRIDGE_PAIR_SECRET)")
+    parser.add_argument("--admin-key", default="", help="Optional Worker X-Admin-Key")
+    parser.add_argument("--channel", default="auto", help="Target channel: auto|termux|android|debian")
+    parser.add_argument("--repo", default="", help="Override remote git repo path")
+    parser.add_argument("--timeout", type=int, default=120)
+
+    sub = parser.add_subparsers(dest="action", required=True)
+
+    sub.add_parser("status", help="Check online status of all agent channels (termux, android, debian)")
+    sub.add_parser("ping", help="Ping target agent channel and print detected tools/environment")
+
+    p_cmd = sub.add_parser("cmd", help="Send any arbitrary OmniAgent command + JSON args")
+    p_cmd.add_argument("name")
+    p_cmd.add_argument("--args", default="{}")
+
+    p_sh = sub.add_parser("shell", help="Run shell command on phone Termux or Debian PRoot")
+    p_sh.add_argument("command")
+    p_sh.add_argument("--debian", action="store_true", help="Execute inside Debian PRoot")
+    p_sh.add_argument("--cwd", default="")
+
+    p_push = sub.add_parser("push-workspace", help="Diff AI Studio workspace -> E2E bundle -> phone git commit & push")
+    p_push.add_argument("--workspace", default=str(REPO_ROOT))
+    p_push.add_argument("--commit", default="", help="Commit message (if omitted, only applies files without commit/push)")
+    p_push.add_argument("--branch", default="master")
+    p_push.add_argument("--remote", default="origin")
+    p_push.add_argument("--no-push", action="store_true")
+    p_push.add_argument("--pull-first", action="store_true")
+    p_push.add_argument("--sync-deletes", action="store_true")
+    p_push.add_argument("--files", nargs="*")
+    p_push.add_argument("--delete", nargs="*")
+
+    p_pull = sub.add_parser("pull-workspace", help="2-way pull from GitHub or phone repo into AI Studio workspace")
+    p_pull.add_argument("--workspace", default=str(REPO_ROOT))
+    p_pull.add_argument("--from-github", default="", help="Pull directly from GitHub owner/repo (e.g. guumachadooo/Cavern)")
+    p_pull.add_argument("--branch", default="master")
+    p_pull.add_argument("--files", nargs="*")
+
+    p_apk = sub.add_parser("install-apk", help="Download & install APK on phone via ADB/Shizuku/Android installer")
+    p_apk.add_argument("--apk-url", required=True)
+    p_apk.add_argument("--dest", default="/sdcard/Download/Cavernize-Android.apk")
+    p_apk.add_argument("--method", default="auto", choices=("auto", "adb", "shizuku", "open"))
+
+    p_lc = sub.add_parser("logcat", help="Tail live Android logcat via ADB/Shizuku")
+    p_lc.add_argument("--lines", type=int, default=120)
+    p_lc.add_argument("--filter", default="Cavernize")
+
+    sub.add_parser("ag-discover", help="Discover local Antigravity Debian brain/conversations/scratch structure")
+
+    p_ags = sub.add_parser("ag-sync", help="Write compact token-diet session mirror into Antigravity Debian")
+    p_ags.add_argument("--title", required=True)
+    p_ags.add_argument("--summary", required=True)
+    p_ags.add_argument("--commit", default="")
+    p_ags.add_argument("--next", default="")
+    p_ags.add_argument("--session-id", default="")
+    p_ags.add_argument("--files", nargs="*", default=[])
+
+    p_hot = sub.add_parser("hot-exec", help="Compile C# probe locally & run LIVE in Cavernize RAM (zero APK rebuild!)")
+    p_hot.add_argument("--file", default="")
+    p_hot.add_argument("--code", default="")
+    p_hot.add_argument("--name", default="HotProbe")
+    p_hot.add_argument("--entry-type", default="")
+    p_hot.add_argument("--args-json", default="{}")
+    p_hot.add_argument("--code-session", default="", help="Optional existing Live Bridge CAV-... code")
+    p_hot.add_argument("--no-android-refs", action="store_true")
+    p_hot.add_argument("--compile-only", action="store_true")
+
+    p_sw = sub.add_parser("swarm", help="Zero-API-cost Multi-Agent Swarm Task Bus (/v1/swarm/*)")
+    p_sw.add_argument("swarm_action", choices=("enqueue", "list", "claim", "complete", "task", "clear"))
+    p_sw.add_argument("--role", default="worker")
+    p_sw.add_argument("--title", default="Task")
+    p_sw.add_argument("--instructions", default="")
+    p_sw.add_argument("--worker-id", default="aistudio-architect")
+    p_sw.add_argument("--task-id", default="")
+    p_sw.add_argument("--summary", default="")
+    p_sw.add_argument("--status", default="")
+    p_sw.add_argument("--failed", action="store_true")
+    p_sw.add_argument("--done-only", action="store_true")
+
+    args = parser.parse_args()
+
+    if args.action == "pull-workspace":
+        return cmd_pull_workspace(args)
+    if args.action == "push-workspace":
+        return cmd_push_workspace(args)
+    if args.action == "hot-exec":
+        return cmd_hot_exec(args)
+    if args.action == "swarm":
+        return cmd_swarm(args)
+
+    relay, secret, admin = _resolve_auth(args)
+    if args.action == "status":
+        headers = proto.derive_agent_headers(secret, channel="termux", admin_key=admin)
+        st, resp = proto.http_json("GET", f"{relay}/v1/agent/status?all=1", headers, timeout=15)
+        print(json.dumps(resp, indent=2, ensure_ascii=False))
+        return 0 if st == 200 and resp.get("ok") else 1
+
+    channel = pick_channel(relay, secret, args.channel, admin)
+    if args.action == "ping":
+        res = send_agent_command(relay, secret, "ping", {"repo": args.repo}, channel=channel, admin_key=admin, timeout_sec=args.timeout)
+    elif args.action == "cmd":
+        res = send_agent_command(relay, secret, args.name, json.loads(args.args), channel=channel, admin_key=admin, timeout_sec=args.timeout)
+    elif args.action == "shell":
+        res = send_agent_command(
+            relay, secret, "shell_exec",
+            {"command": args.command, "debian": args.debian, "cwd": args.cwd or args.repo, "timeoutSec": args.timeout},
+            channel=channel, admin_key=admin, timeout_sec=args.timeout + 15,
+        )
+    elif args.action == "install-apk":
+        cmd_name = "install_apk_url" if channel == "android" else "install_apk"
+        res = send_agent_command(
+            relay, secret, cmd_name,
+            {"url": args.apk_url, "dest": args.dest, "method": args.method},
+            channel=channel, admin_key=admin, timeout_sec=max(args.timeout, 180),
+        )
+    elif args.action == "logcat":
+        res = send_agent_command(
+            relay, secret, "logcat_tail",
+            {"lines": args.lines, "filter": args.filter},
+            channel=channel, admin_key=admin, timeout_sec=45,
+        )
+    elif args.action == "ag-discover":
+        res = send_agent_command(relay, secret, "ag_discover", {}, channel=channel, admin_key=admin, timeout_sec=45)
+    elif args.action == "ag-sync":
+        res = send_agent_command(
+            relay, secret, "ag_sync_session",
+            {
+                "sessionId": args.session_id,
+                "title": args.title,
+                "summary": args.summary,
+                "commit": args.commit,
+                "next": args.next,
+                "files": args.files,
+                "repo": args.repo,
+            },
+            channel=channel, admin_key=admin, timeout_sec=45,
+        )
+    else:
+        raise SystemExit(f"Unsupported action: {args.action}")
+
+    print(json.dumps(res, indent=2, ensure_ascii=False))
+    return 0 if res.get("ok") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
