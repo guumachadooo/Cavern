@@ -4,7 +4,7 @@
 
 ## 1. Scope & Memory Layers
 - Fork `guumachadooo/Cavern` -> Android **Cavernize** (`CavernSamples/CavernizeAndroid`, `hu.sbence.cavern.cavernize`) running full **Cavern** DSP + neural/pro-audio stack on mobile.
-- Boot layers: (1) root `AGENTS.md` (permanent invariants) -> (2) global `dynamic-fractal-planner` `SessionStart` + `.agents/planner_profile.json` (`auto` mode; live git/versions/APK/logs/queue) -> (3) `CavernSamples/CavernizeAndroid/AGENTS.md` -> (4) declarative hooks (`PreInvocation`/`PreToolUse`/`PostToolUse`/`Stop`) -> (5) `.agents/skills/*/SKILL.md` (`cavernize-build-and-deliver`, `cavernize-device-debug`, `cavernize-ui-oneui9`, `cavernize-vocal-cortex`) + global skills -> (6) `.agents/docs/` (`PHASE2_ROADMAP.md`, `PHASE3_VOCAL_CORTEX_ROADMAP.md`, `HANDOFF.md`, `PROJECT_HISTORY.md`, `ONEUI9_REFERENCE.md`, `SAVED_IDEAS.md`, `EXTRA_REQUESTS.md`, `archive/*`).
+- Boot layers: (1) root `AGENTS.md` (permanent invariants) -> (2) global `dynamic-fractal-planner` `SessionStart` + `.agents/planner_profile.json` (`auto` mode; live git/versions/APK/logs/queue) -> (3) `CavernSamples/CavernizeAndroid/AGENTS.md` -> (4) declarative hooks (`PreInvocation`/`PreToolUse`/`PostToolUse`/`Stop`) -> (5) `.agents/skills/*/SKILL.md` (`cavernize-build-and-deliver`, `cavernize-device-debug`, `cavernize-ui-oneui9`, `cavernize-vocal-cortex`) + global skills -> (6) `.agents/docs/` (`EXTERNAL_AI_ONBOARDING.md`, `EXTERNAL_AI_SYNC.md`, `PHASE2_ROADMAP.md`, `PHASE3_VOCAL_CORTEX_ROADMAP.md`, `HANDOFF.md`, `PROJECT_HISTORY.md`, `ONEUI9_REFERENCE.md`, `SAVED_IDEAS.md`, `EXTRA_REQUESTS.md`, `archive/*`).
 
 ## 2. Feature & Reference Invariants
 - Preserve 100% original Cavernize capabilities (multi-target speaker layouts, Matrix & Cavernize 3D upmixing, HRIR/QuickEQ, stem/object extraction + `.json`, batch queue, codec metadata, post-render reports, CLI/quality/delay) + mobile spatial/neural/pro-audio/player features.
@@ -24,6 +24,7 @@
 8. **APK Disclosure Gate:** If requested APK/system inspection fails or is blocked, NEVER silently guess — disclose block & ask user first.
 9. **User Docs (`README.md`) & Archived Ideas (`SAVED_IDEAS.md`):** Update `README.md` for user-facing features; archive deferred visual/shader/algo snippets in `.agents/docs/SAVED_IDEAS.md`.
 10. **Extra Request Gate (`.agents/docs/EXTRA_REQUESTS.md`):** Always check before finishing, `git commit`, `git push`, or CI APK build; implement pending items -> move to `## Completed Requests` -> ship.
+11. **External AI Remote Sync Gate:** External AI pushes directly to `origin/master`; on session resume pre-edit/pre-diagnosis ALWAYS run `git fetch origin && git status -sb && git log HEAD..origin/master --oneline`, sync via `git pull --rebase` (when tree clean), && read `.agents/docs/EXTERNAL_AI_SYNC.md` + `.agents/docs/HANDOFF.md`.
 
 ## 4. Anti-Rot & Memory Rules
 - `!static("Current State"|"Current Version")` in Markdown docs (`SessionStart` injects live git/versions).

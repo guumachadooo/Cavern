@@ -12,3 +12,8 @@ packages/
 *.apk
 *.keystore
 **/__pycache__/
+.agents/plugins/**/.metrics.jsonl
+.agents/plugins/**/.model_modes.json
+.agents/plugins/**/.hook_state.json
+.agents/plugins/**/.diagnostics*
+.agents/plugins/**/model_mode_cache.json
