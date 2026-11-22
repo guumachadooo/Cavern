@@ -49,7 +49,9 @@ public partial class MainActivity {
     Switch autoCheckUpdatesSwitch;
 
     // Diagnostics & Log views
-    TextView logPathInfoText;
+    TextView logPathInfoText, cloudLogStatusText, selfCheckStatusText;
+    Button cloudLogUploadBtn, selfCheckQuickBtn, selfCheckFullBtn;
+    bool isCloudLogUploading, isSelfCheckRunning;
     LinearLayout advContentContainer;
     OneUiIconView advChevron;
     bool isAdvancedExpanded;
@@ -1590,12 +1592,11 @@ public partial class MainActivity {
         LinearLayout logCard = Card(S["DiagnosticsTitle"], OneUiIconType.Logs, OneUiTheme.IconSystemInfo);
         logPathInfoText = Label("", 11.5f, ColMuted);
         logPathInfoText.SetPadding(0, 0, 0, Dp(8));
-        RefreshLogSummaryLabel();
         logCard.AddView(logPathInfoText);
 
         LinearLayout logBtns = HRow();
         Button viewLogBtn = PillButton(S["ViewLogBtn"], () => {
-            ShowMessageDialog(S["DiagnosticsTitle"], AppLogger.ReadAll(), OneUiIconType.Logs, monospace: true);
+            ShowMessageDialog(S["DiagnosticsTitle"], AppLogger.ReadRecentLines(450), OneUiIconType.Logs, monospace: true);
         }, active: true);
         Button exportLogBtn = PillButton(S["ExportLogBtn"], () => {
             string logPath = AppLogger.SharedLogPath;
@@ -1614,7 +1615,47 @@ public partial class MainActivity {
         logBtns.AddView(exportLogBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
         logBtns.AddView(clearLogBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         logCard.AddView(logBtns);
-        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear");
+
+        AddDivider(logCard);
+        LinearLayout selfCheckHeader = HRow();
+        TextView selfCheckTitle = Label(S["SelfCheckSectionTitle"], 13f, ColText);
+        selfCheckTitle.SetTypeface(null, TypefaceStyle.Bold);
+        selfCheckHeader.AddView(selfCheckTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        Button selfCheckHelpBtn = PillButton("?", () => ShowModalGuidedHelp(S["SelfCheckHelpTitle"], S["SelfCheckHelpBody"], OneUiIconType.Logs));
+        selfCheckHeader.AddView(selfCheckHelpBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        logCard.AddView(selfCheckHeader);
+
+        selfCheckStatusText = Label("", 11.5f, OneUiTheme.TextSub);
+        selfCheckStatusText.SetPadding(0, Dp(2), 0, Dp(8));
+        logCard.AddView(selfCheckStatusText);
+
+        LinearLayout selfCheckBtns = HRow();
+        selfCheckQuickBtn = PillButton(S["SelfCheckQuickBtn"], () => _ = RunSelfCheckAsync(fullSuite: false), active: true);
+        selfCheckFullBtn = PillButton(S["SelfCheckFullBtn"], () => _ = RunSelfCheckAsync(fullSuite: true));
+        selfCheckBtns.AddView(selfCheckQuickBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        selfCheckBtns.AddView(selfCheckFullBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        logCard.AddView(selfCheckBtns);
+
+        AddSwitchRow(logCard, S["SelfCheckAutoAfterUpdateSwitch"], store.AutoSelfCheckAfterUpdate, v => store.AutoSelfCheckAfterUpdate = v);
+
+        AddDivider(logCard);
+        TextView cloudTitle = Label(S["CloudLogSectionTitle"], 13f, ColText);
+        cloudTitle.SetTypeface(null, TypefaceStyle.Bold);
+        logCard.AddView(cloudTitle);
+
+        cloudLogStatusText = Label("", 11.5f, OneUiTheme.TextSub);
+        cloudLogStatusText.SetPadding(0, Dp(2), 0, Dp(8));
+        logCard.AddView(cloudLogStatusText);
+
+        LinearLayout cloudBtns = HRow();
+        cloudLogUploadBtn = PillButton(S["CloudLogUploadBtn"], () => _ = UploadDiagnosticLogsToCloudAsync(), active: true);
+        Button cloudLogConfigBtn = PillButton(S["CloudLogConfigureBtn"], ShowCloudLogSyncModal);
+        cloudBtns.AddView(cloudLogUploadBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(6) });
+        cloudBtns.AddView(cloudLogConfigBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        logCard.AddView(cloudBtns);
+
+        RefreshLogSummaryLabel();
+        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear cloud github upload sync crash checkup selfcheck test pairwise");
 
         // Language, About & App Version Updater
         LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.IconSystemInfo);
@@ -2046,8 +2087,397 @@ public partial class MainActivity {
     void RefreshLogSummaryLabel() {
         if (logPathInfoText != null) {
             long bytes = AppLogger.GetLogSizeBytes();
-            logPathInfoText.Text = $"{AppLogger.SharedLogPath}\n({bytes / 1024.0:0.0} KB)";
+            logPathInfoText.Text = string.Format(
+                S["LogSummaryHealthFmt"],
+                AppLogger.SharedLogPath,
+                bytes / 1024.0,
+                AppLogger.SessionFatalCount,
+                AppLogger.SessionErrorCount,
+                AppLogger.SessionWarnCount);
         }
+        if (cloudLogStatusText != null && store != null) {
+            if (!CloudLogSyncService.IsConfigured(store)) {
+                cloudLogStatusText.Text = S["CloudLogStatusNotConfigured"];
+                cloudLogStatusText.SetTextColor(OneUiTheme.TextSub);
+            } else {
+                (string branch, _, _) = CloudLogSyncService.ResolveTarget(store);
+                string lastSync = S["CloudLogNeverSynced"];
+                if (!string.IsNullOrWhiteSpace(store.CloudLogLastSyncUtc) &&
+                    DateTime.TryParse(store.CloudLogLastSyncUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTime parsedUtc)) {
+                    string localTime = parsedUtc.ToLocalTime().ToString("dd/MM HH:mm", CultureInfo.InvariantCulture);
+                    string st = string.IsNullOrWhiteSpace(store.CloudLogLastSyncStatus) ? "OK" : store.CloudLogLastSyncStatus;
+                    lastSync = $"{localTime} ({st})";
+                } else if (!string.IsNullOrWhiteSpace(store.CloudLogLastSyncStatus)) {
+                    lastSync = store.CloudLogLastSyncStatus;
+                }
+                cloudLogStatusText.Text = string.Format(S["CloudLogStatusReadyFmt"], store.CloudLogRepo, branch, lastSync);
+                cloudLogStatusText.SetTextColor(
+                    (store.CloudLogLastSyncStatus ?? "").StartsWith("ERR:", StringComparison.OrdinalIgnoreCase)
+                        ? OneUiTheme.FunctionalAmber
+                        : OneUiTheme.FunctionalGreen);
+            }
+        }
+        if (cloudLogUploadBtn != null) {
+            cloudLogUploadBtn.Enabled = !isCloudLogUploading;
+        }
+        if (selfCheckStatusText != null && store != null && !isSelfCheckRunning) {
+            if (string.IsNullOrWhiteSpace(store.LastSelfCheckSummary)) {
+                selfCheckStatusText.Text = S["SelfCheckNeverRun"];
+                selfCheckStatusText.SetTextColor(OneUiTheme.TextSub);
+            } else {
+                string when = "";
+                if (!string.IsNullOrWhiteSpace(store.LastSelfCheckUtc) &&
+                    DateTime.TryParse(store.LastSelfCheckUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTime scUtc)) {
+                    when = scUtc.ToLocalTime().ToString("dd/MM HH:mm", CultureInfo.InvariantCulture);
+                }
+                selfCheckStatusText.Text = string.Format(S["SelfCheckLastRunFmt"], string.IsNullOrEmpty(when) ? "-" : when, store.LastSelfCheckSummary);
+                if (store.LastSelfCheckSummary.StartsWith("FAIL", StringComparison.OrdinalIgnoreCase)) {
+                    selfCheckStatusText.SetTextColor(ColDanger);
+                } else if (store.LastSelfCheckSummary.StartsWith("WARN", StringComparison.OrdinalIgnoreCase)) {
+                    selfCheckStatusText.SetTextColor(OneUiTheme.FunctionalAmber);
+                } else {
+                    selfCheckStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
+                }
+            }
+        }
+        if (selfCheckQuickBtn != null) {
+            selfCheckQuickBtn.Enabled = !isSelfCheckRunning;
+        }
+        if (selfCheckFullBtn != null) {
+            selfCheckFullBtn.Enabled = !isSelfCheckRunning;
+        }
+    }
+
+    async Task RunSelfCheckAsync(bool fullSuite) {
+        if (isSelfCheckRunning || store == null) {
+            return;
+        }
+        isSelfCheckRunning = true;
+        if (selfCheckQuickBtn != null) selfCheckQuickBtn.Enabled = false;
+        if (selfCheckFullBtn != null) selfCheckFullBtn.Enabled = false;
+        if (selfCheckStatusText != null) {
+            selfCheckStatusText.Text = string.Format(S["SelfCheckRunningFmt"], fullSuite ? S["SelfCheckFullBtn"] : S["SelfCheckQuickBtn"]);
+            selfCheckStatusText.SetTextColor(OneUiTheme.PrimaryHigh);
+        }
+
+        try {
+            SelfCheckReport report = await SelfDiagnosticEngine.RunAsync(
+                this,
+                store,
+                fullSuite,
+                stepName => {
+                    if (!uiDestroyed && selfCheckStatusText != null) {
+                        RunOnUiThread(() => {
+                            selfCheckStatusText.Text = string.Format(S["SelfCheckRunningFmt"], stepName);
+                        });
+                    }
+                });
+
+            (_, long installedBuild) = AppUpdateService.GetInstalledVersion(this);
+            if (installedBuild > 0) {
+                store.LastSelfCheckBuildCode = installedBuild;
+            }
+            store.LastSelfCheckUtc = report.ExecutedAtUtc;
+            store.LastSelfCheckSummary = report.CompactSummary;
+
+            bool autoSynced = false;
+            if (CloudLogSyncService.IsConfigured(store)) {
+                CloudLogSyncResult syncRes = await CloudLogSyncService.UploadSelfCheckReportAsync(this, store, report, fullSuite ? "manual_full" : "manual_quick");
+                autoSynced = syncRes.Success;
+            }
+
+            if (uiDestroyed) {
+                return;
+            }
+            RunOnUiThread(() => {
+                RefreshLogSummaryLabel();
+                Toast.MakeText(
+                    this,
+                    autoSynced ? S["SelfCheckAutoSyncedToast"] : string.Format(S["SelfCheckCompletedToastFmt"], report.CompactSummary),
+                    ToastLength.Long).Show();
+                ShowSelfCheckReportModal(report, autoSynced);
+            });
+        } catch (Exception ex) {
+            AppLogger.Error("SYS", "RunSelfCheckAsync failed", ex);
+            if (!uiDestroyed) {
+                RunOnUiThread(() => Toast.MakeText(this, $"Self-Check error: {ex.Message}", ToastLength.Long).Show());
+            }
+        } finally {
+            isSelfCheckRunning = false;
+            if (!uiDestroyed) {
+                RunOnUiThread(RefreshLogSummaryLabel);
+            }
+        }
+    }
+
+    void ShowSelfCheckReportModal(SelfCheckReport report, bool alreadySynced) {
+        if (report == null) {
+            return;
+        }
+        LinearLayout body = new(this) { Orientation = Orientation.Vertical };
+        body.SetPadding(0, Dp(2), 0, Dp(4));
+
+        TextView summaryLbl = Label(
+            string.Format(
+                S["SelfCheckModalSummaryFmt"],
+                report.Mode.ToUpperInvariant(),
+                report.PassCount,
+                report.WarnCount,
+                report.FailCount,
+                report.SkipCount,
+                report.TotalElapsedMs),
+            12.5f,
+            report.FailCount > 0 ? ColDanger : (report.WarnCount > 0 ? OneUiTheme.FunctionalAmber : OneUiTheme.FunctionalGreen));
+        summaryLbl.SetTypeface(null, TypefaceStyle.Bold);
+        summaryLbl.SetPadding(0, 0, 0, Dp(8));
+        body.AddView(summaryLbl);
+
+        foreach (SelfCheckItem item in report.Checks) {
+            LinearLayout row = new(this) { Orientation = Orientation.Vertical };
+            row.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
+            row.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 12f, OneUiTheme.BorderSubtle, 1f);
+
+            string badge = item.Status switch {
+                SelfCheckStatus.Pass => "PASS",
+                SelfCheckStatus.Warn => "WARN",
+                SelfCheckStatus.Fail => "FAIL",
+                _ => "SKIP"
+            };
+            Android.Graphics.Color badgeCol = item.Status switch {
+                SelfCheckStatus.Pass => OneUiTheme.FunctionalGreen,
+                SelfCheckStatus.Warn => OneUiTheme.FunctionalAmber,
+                SelfCheckStatus.Fail => ColDanger,
+                _ => ColMuted
+            };
+
+            TextView titleLine = Label($"[{badge}] {item.Layer} · {item.Name} ({item.ElapsedMs}ms)", 12f, badgeCol);
+            titleLine.SetTypeface(null, TypefaceStyle.Bold);
+            row.AddView(titleLine);
+
+            if (!string.IsNullOrWhiteSpace(item.Details)) {
+                TextView detLine = Label(item.Details, 11f, ColMuted);
+                detLine.SetPadding(0, Dp(2), 0, 0);
+                row.AddView(detLine);
+            }
+
+            body.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
+        }
+
+        LinearLayout actionsRow = HRow();
+        Button copyBtn = PillButton(S["SelfCheckCopyReportBtn"], () => {
+            try {
+                if (GetSystemService(ClipboardService) is ClipboardManager cm) {
+                    cm.PrimaryClip = ClipData.NewPlainText("Cavernize Self-Check", report.ToMarkdown());
+                    Toast.MakeText(this, S["SelfCheckCopiedToast"], ToastLength.Short).Show();
+                }
+            } catch {
+                // Best effort
+            }
+        });
+        actionsRow.AddView(copyBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+
+        Button uploadBtn = PillButton(S["SelfCheckUploadReportBtn"], () => {
+            if (!CloudLogSyncService.HasStoredToken(store)) {
+                Toast.MakeText(this, S["CloudLogNeedTokenToast"], ToastLength.Short).Show();
+                ShowCloudLogSyncModal();
+                return;
+            }
+            _ = Task.Run(async () => {
+                CloudLogSyncResult r = await CloudLogSyncService.UploadSelfCheckReportAsync(this, store, report, "manual_modal");
+                if (!uiDestroyed) {
+                    RunOnUiThread(() => {
+                        RefreshLogSummaryLabel();
+                        Toast.MakeText(this, r.Message, ToastLength.Long).Show();
+                    });
+                }
+            });
+        }, active: !alreadySynced);
+        actionsRow.AddView(uploadBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        body.AddView(actionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
+
+        OneUiModalDialog.Show(
+            this,
+            string.Format(S["SelfCheckModalTitleFmt"], report.OverallVerdict),
+            customContent: body,
+            icon: OneUiIconType.Logs,
+            iconBadgeColor: report.FailCount > 0 ? ColDanger : OneUiTheme.IconSystemInfo,
+            positiveText: S["CloseBtn"],
+            onHelp: () => ShowModalGuidedHelp(S["SelfCheckHelpTitle"], S["SelfCheckHelpBody"], OneUiIconType.Logs));
+    }
+
+    async Task UploadDiagnosticLogsToCloudAsync() {
+        if (isCloudLogUploading || store == null) {
+            return;
+        }
+        if (!CloudLogSyncService.HasStoredToken(store)) {
+            Toast.MakeText(this, S["CloudLogNeedTokenToast"], ToastLength.Short).Show();
+            ShowCloudLogSyncModal();
+            return;
+        }
+
+        isCloudLogUploading = true;
+        if (cloudLogUploadBtn != null) {
+            cloudLogUploadBtn.Enabled = false;
+        }
+        if (cloudLogStatusText != null) {
+            cloudLogStatusText.Text = S["CloudLogUploading"];
+            cloudLogStatusText.SetTextColor(OneUiTheme.PrimaryHigh);
+        }
+
+        try {
+            CloudLogSyncResult res = await CloudLogSyncService.UploadLogsAsync(this, store, "manual");
+            if (uiDestroyed) {
+                return;
+            }
+            RunOnUiThread(() => {
+                RefreshLogSummaryLabel();
+                Toast.MakeText(this, res.Message, ToastLength.Long).Show();
+            });
+        } finally {
+            isCloudLogUploading = false;
+            if (!uiDestroyed) {
+                RunOnUiThread(RefreshLogSummaryLabel);
+            }
+        }
+    }
+
+    void ShowCloudLogSyncModal() {
+        if (store == null) {
+            return;
+        }
+
+        LinearLayout body = new(this) { Orientation = Orientation.Vertical };
+        body.SetPadding(0, Dp(2), 0, Dp(4));
+
+        bool draftEnabled = store.CloudLogSyncEnabled;
+        int draftBranchMode = store.CloudLogBranchMode;
+        bool draftAutoCrash = store.CloudLogAutoOnCrash;
+        bool draftAutoError = store.CloudLogAutoOnError;
+
+        Switch enableSw = AddSwitchRow(body, S["CloudLogEnableSwitch"], draftEnabled, v => draftEnabled = v);
+
+        TextView repoLbl = Label(S["CloudLogRepoLabel"], 12f, OneUiTheme.TextSub);
+        repoLbl.SetPadding(0, Dp(8), 0, Dp(4));
+        body.AddView(repoLbl);
+
+        EditText repoInput = new(this) {
+            Text = string.IsNullOrWhiteSpace(store.CloudLogRepo) ? CloudLogSyncService.DefaultRepo : store.CloudLogRepo,
+            Hint = CloudLogSyncService.DefaultRepo,
+            TextSize = 13f,
+            InputType = Android.Text.InputTypes.ClassText | Android.Text.InputTypes.TextVariationUri
+        };
+        repoInput.SetSingleLine(true);
+        repoInput.SetTextColor(ColText);
+        repoInput.SetHintTextColor(ColMuted);
+        repoInput.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+        repoInput.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
+        body.AddView(repoInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+
+        OneUiInlineSelector branchSelector = new(this, S["CloudLogBranchLabel"]);
+        branchSelector.SetItems([S["CloudLogBranchDiagnostics"], S["CloudLogBranchMaster"]], Math.Clamp(draftBranchMode, 0, 1));
+        branchSelector.SelectionChanged += pos => draftBranchMode = pos;
+        body.AddView(branchSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+
+        TextView tokenLbl = Label(S["CloudLogTokenLabel"], 12f, OneUiTheme.TextSub);
+        tokenLbl.SetPadding(0, Dp(2), 0, Dp(4));
+        body.AddView(tokenLbl);
+
+        bool hasSaved = CloudLogSyncService.HasStoredToken(store);
+        EditText tokenInput = new(this) {
+            Text = "",
+            Hint = hasSaved ? S["CloudLogTokenHintSaved"] : S["CloudLogTokenHintNew"],
+            TextSize = 13f,
+            InputType = Android.Text.InputTypes.ClassText | Android.Text.InputTypes.TextVariationPassword
+        };
+        tokenInput.SetSingleLine(true);
+        tokenInput.SetTextColor(ColText);
+        tokenInput.SetHintTextColor(ColMuted);
+        tokenInput.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+        tokenInput.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 14f, OneUiTheme.BorderSubtle, 1f);
+        body.AddView(tokenInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(8) });
+
+        AddSwitchRow(body, S["CloudLogAutoCrashSwitch"], draftAutoCrash, v => draftAutoCrash = v);
+        AddSwitchRow(body, S["CloudLogAutoErrorSwitch"], draftAutoError, v => draftAutoError = v);
+
+        TextView modalStatus = Label("", 11.5f, OneUiTheme.TextSub);
+        modalStatus.SetPadding(0, Dp(6), 0, Dp(6));
+        modalStatus.Visibility = ViewStates.Gone;
+        body.AddView(modalStatus);
+
+        LinearLayout actionRow = HRow();
+        actionRow.SetPadding(0, Dp(4), 0, 0);
+        Button testBtn = PillButton(S["CloudLogTestBtn"], () => {
+            modalStatus.Visibility = ViewStates.Visible;
+            modalStatus.Text = S["CloudLogTesting"];
+            modalStatus.SetTextColor(OneUiTheme.PrimaryHigh);
+            string testRepo = repoInput.Text?.Trim() ?? "";
+            string testTok = tokenInput.Text?.Trim() ?? "";
+            _ = Task.Run(async () => {
+                CloudLogSyncResult r = await CloudLogSyncService.TestConnectionAsync(store, testRepo, testTok);
+                if (!uiDestroyed) {
+                    RunOnUiThread(() => {
+                        modalStatus.Visibility = ViewStates.Visible;
+                        modalStatus.Text = r.Message;
+                        modalStatus.SetTextColor(r.Success ? OneUiTheme.FunctionalGreen : ColDanger);
+                    });
+                }
+            });
+        });
+        Button createTokBtn = PillButton(S["CloudLogCreateTokenBtn"], () => {
+            try {
+                StartActivity(new Intent(Intent.ActionView, Android.Net.Uri.Parse(CloudLogSyncService.GitHubTokenCreateUrl)));
+            } catch {
+                // Ignore if no browser available
+            }
+        });
+        actionRow.AddView(testBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(6) });
+        actionRow.AddView(createTokBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        body.AddView(actionRow);
+
+        if (hasSaved) {
+            Button clearTokBtn = PillButton(S["CloudLogClearTokenBtn"], () => {
+                CloudLogSyncService.ClearToken(store);
+                tokenInput.Text = "";
+                tokenInput.Hint = S["CloudLogTokenHintNew"];
+                enableSw.Checked = false;
+                draftEnabled = false;
+                RefreshLogSummaryLabel();
+                Toast.MakeText(this, S["CloudLogTokenClearedToast"], ToastLength.Short).Show();
+            });
+            body.AddView(clearTokBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(6) });
+        }
+
+        OneUiModalDialog.Show(
+            this,
+            S["CloudLogModalTitle"],
+            customContent: body,
+            icon: OneUiIconType.Logs,
+            iconBadgeColor: OneUiTheme.IconSystemInfo,
+            positiveText: S["CloudLogSaveBtn"],
+            onPositive: () => {
+                string repoVal = repoInput.Text?.Trim() ?? "";
+                if (!CloudLogSyncService.TryParseRepo(repoVal, out string owner, out string repo)) {
+                    Toast.MakeText(this, S["CloudLogInvalidRepoToast"], ToastLength.Short).Show();
+                    return;
+                }
+                string enteredToken = tokenInput.Text?.Trim() ?? "";
+                if (!string.IsNullOrEmpty(enteredToken)) {
+                    if (!CloudLogSyncService.SaveToken(store, enteredToken)) {
+                        Toast.MakeText(this, S["CloudLogEncryptFailedToast"], ToastLength.Long).Show();
+                        return;
+                    }
+                    draftEnabled = true;
+                }
+                store.CloudLogRepo = $"{owner}/{repo}";
+                store.CloudLogBranchMode = draftBranchMode;
+                store.CloudLogAutoOnCrash = draftAutoCrash;
+                store.CloudLogAutoOnError = draftAutoError;
+                store.CloudLogSyncEnabled = draftEnabled && CloudLogSyncService.HasStoredToken(store);
+                RefreshLogSummaryLabel();
+                Toast.MakeText(this, S["CloudLogSavedToast"], ToastLength.Short).Show();
+            },
+            negativeText: S["CancelBtn"],
+            onHelp: () => ShowModalGuidedHelp(S["CloudLogHelpTitle"], S["CloudLogHelpBody"], OneUiIconType.Logs));
     }
 
     void SetFFmpegStatus(string msg, double _) {

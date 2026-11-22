@@ -15,8 +15,9 @@
    - `cavernize-device-debug` | `cavernize-build-and-deliver` | `cavernize-ui-oneui9` | `cavernize-vocal-cortex`
 5. `.agents/docs/` -> `EXTERNAL_AI_SYNC.md`, `HANDOFF.md`, `PROJECT_HISTORY.md` (`L1-60` slice only), `PHASE2_ROADMAP.md`, `PHASE3_VOCAL_CORTEX_ROADMAP.md`, `ONEUI9_REFERENCE.md`, `SAVED_IDEAS.md`, `EXTRA_REQUESTS.md`.
 
-## 2. Device Logs (S25 Ultra Snapshot)
-- Path -> `.agents/device_logs/cavernize_log.txt` (snapshot of `/sdcard/Download/Cavernize/Logs/cavernize_log.txt`).
+## 2. Device Logs (S25 Ultra Snapshot) & CI Diagnostics
+- Path -> `.agents/device_logs/cavernize_log.txt` (snapshot of `/sdcard/Download/Cavernize/Logs/cavernize_log.txt`, optionally synced directly by in-app `CloudLogSyncService` when target=`master` w/ `[skip ci]`).
+- Cloud `diagnostics` branch -> `origin/diagnostics:device-logs/cavernize_log.txt` + `device-logs/latest_summary.json` (in-app `CloudLogSyncService` default) && `origin/diagnostics:ci/latest-build-diagnostics.{md,json}` (always-on CI warnings+errors report + `Cavernize-Build-Diagnostics` Actions artifact).
 - Token diet -> if shell/Python available, run `python3 .agents/plugins/dynamic-fractal-planner/scripts/log_digest.py .agents/device_logs/cavernize_log.txt` (`--errors-only` if large) BEFORE reading raw slices; otherwise search/read targeted slices (`ERROR`, `Exception`, `FATAL`, `FFmpeg`, `AAudio`, `AudioTrack`, `Matrix`, `FLAC`) & tail per `.agents/skills/cavernize-device-debug/SKILL.md`.
 
 ## 3. Code & Manual Static Audit Gates

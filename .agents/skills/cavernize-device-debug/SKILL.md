@@ -12,8 +12,11 @@ description: >-
 [AppLogger.cs](../../../CavernSamples/CavernizeAndroid/Services/AppLogger.cs) writes persistent logs to public Downloads so you can inspect crashes and FFmpeg stderr directly from this environment:
 
 - Shared path: `/sdcard/Download/Cavernize/Logs/cavernize_log.txt`
-- Also note the running app version/build logged on startup (`=== Cavernize v... started ===`).
-- Always check `FFmpeg` exit codes, arguments, and `stderr` logged by `AppLogger.LogFFmpeg`.
+- Live mid-message GitHub fetch (no CDN cache lag): `python3 -B .agents/scripts/fetch_live_diagnostics.py --all` (reads `origin/diagnostics:ci/latest-build-diagnostics.md`, `device-logs/latest_selfcheck.md`, `device-logs/latest_summary.json`, and `device-logs/cavernize_log.txt` directly via GitHub Contents API).
+- GitHub Cloud Sync (`CloudLogSyncService.cs`): `origin/diagnostics:device-logs/cavernize_log.txt`, `latest_summary.json`, and `latest_selfcheck.{md,json}` (default) or `master:.agents/device_logs/cavernize_log.txt` (`[skip ci]`); CI warnings+errors at `origin/diagnostics:ci/latest-build-diagnostics.md` (`Cavernize-Build-Diagnostics` artifact).
+- On-device Self-Check (`SelfDiagnosticEngine.cs`): Quick/Full 6-layer probe + 8-vector Strength-2 Pairwise DSP Matrix, auto-runs post-update and uploads to `diagnostics` when Cloud Log Sync is configured.
+- Also note the running app version/build, `sid=...`, RAM/`NativeLibs`, and `CONFIG` DSP snapshot logged on startup (`=== Session started [sid=...] | Cavernize v... ===`).
+- Always check `FFmpeg` exit codes, arguments, and `stderr` logged by `AppLogger.LogFFmpeg`, plus `[MEM]` `OnTrimMemory` and `[CRASH]` markers.
 
 ## 2. Verifying W^X Native Binaries, 16 KB ELF & Permission Constraints
 - Bundled ARM64 binaries (`libffmpeg.so`, `libtruehdd.so`, `libonnxruntime.so`, `libcavernize_proaudio.so`) ship inside APK `NativeLibs/arm64-v8a/` and execute directly from `ApplicationInfo.NativeLibraryDir` (W^X compliant, 16 KB ELF aligned; zero `FilesDir/bin/` execution). Only `.onnx` model weights reside in `FilesDir/neural_models/`.

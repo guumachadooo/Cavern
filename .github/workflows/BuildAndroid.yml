@@ -100,6 +100,9 @@ jobs:
       - name: Bundle W^X NativeLibs (libffmpeg.so, libtruehdd.so, libonnxruntime.so) & verify 16 KB ELF alignment
         run: |
           set -euo pipefail
+          NAT_LOG="$RUNNER_TEMP/ci_00b_nativelibs.log"
+          : > "$NAT_LOG"
+          exec > >(tee -a "$NAT_LOG") 2>&1
           python3 - << 'PY'
           import hashlib, io, json, os, pathlib, re, shutil, struct, subprocess, tarfile, urllib.error, urllib.request, xml.etree.ElementTree as ET, zipfile
 
@@ -377,6 +380,7 @@ jobs:
           PY
 
       - name: Full multi-layer compile check & consolidated error report
+        id: compile_check
         env:
           NDK_OUTCOME: ${{ steps.ndk_build.outcome }}
         run: |
@@ -566,9 +570,14 @@ jobs:
           PY
 
       - name: Build and sign CavernizeAndroid APK
+        id: apk_publish
         run: |
+          set -euo pipefail
+          PUB_LOG="$RUNNER_TEMP/ci_06_publish.log"
+          : > "$PUB_LOG"
           dotnet publish CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj \
             -c Release -f net11.0-android \
+            -p:GenerateFullPaths=true \
             -p:ApplicationVersion=${{ github.run_number }} \
             -p:ApplicationDisplayVersion=2.9.${{ github.run_number }} \
             -p:AndroidPackageFormat=apk \
@@ -577,7 +586,7 @@ jobs:
             -p:AndroidSigningKeyAlias=cavernize \
             -p:AndroidSigningKeyPass=cavernize \
             -p:AndroidSigningStorePass=cavernize \
-            -p:AcceptAndroidSDKLicenses=true
+            -p:AcceptAndroidSDKLicenses=true 2>&1 | tee "$PUB_LOG"
 
       - name: Collect signed APK
         run: |
@@ -631,6 +640,321 @@ jobs:
               echo "::warning::zipalign not found in ANDROID_HOME/build-tools"
           fi
 
+      - name: Generate consolidated build diagnostics report (errors + warnings)
+        if: always()
+        env:
+          NDK_OUTCOME: ${{ steps.ndk_build.outcome }}
+          COMPILE_OUTCOME: ${{ steps.compile_check.outcome }}
+          PUBLISH_OUTCOME: ${{ steps.apk_publish.outcome }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NUMBER: ${{ github.run_number }}
+          COMMIT_SHA: ${{ github.sha }}
+          REPO_SLUG: ${{ github.repository }}
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/build/diagnostics"
+          python3 - "$RUNNER_TEMP" "$GITHUB_WORKSPACE/build/diagnostics" "$GITHUB_STEP_SUMMARY" << 'PYDIAG'
+          import collections, datetime, json, os, re, sys
+
+          runner_temp, out_dir, summary_path = sys.argv[1], sys.argv[2], sys.argv[3]
+          run_id = os.environ.get("RUN_ID", "")
+          run_number = os.environ.get("RUN_NUMBER", "")
+          commit_sha = os.environ.get("COMMIT_SHA", "")
+          repo_slug = os.environ.get("REPO_SLUG", "guumachadooo/Cavern")
+          ndk_outcome = os.environ.get("NDK_OUTCOME", "unknown")
+          compile_outcome = os.environ.get("COMPILE_OUTCOME", "unknown")
+          publish_outcome = os.environ.get("PUBLISH_OUTCOME", "skipped")
+
+          status_path = os.path.join(runner_temp, "ci_layer_status.txt")
+          layer_statuses = {}
+          if os.path.exists(status_path):
+              for raw in open(status_path, encoding="utf-8", errors="ignore"):
+                  parts = raw.strip().split("|")
+                  if len(parts) == 3:
+                      layer_statuses[parts[0]] = parts[1]
+
+          log_sources = [
+              ("00_Native_NDK", os.path.join(runner_temp, "ci_00_ndk.log"), ndk_outcome.upper()),
+              ("00b_NativeLibs", os.path.join(runner_temp, "ci_00b_nativelibs.log"), "LOGGED" if os.path.exists(os.path.join(runner_temp, "ci_00b_nativelibs.log")) else "SKIPPED"),
+              ("01_Cavern", os.path.join(runner_temp, "ci_01_Cavern.log"), layer_statuses.get("01_Cavern", "SKIPPED")),
+              ("02_Cavern.Format", os.path.join(runner_temp, "ci_02_Cavern.Format.log"), layer_statuses.get("02_Cavern.Format", "SKIPPED")),
+              ("03_Cavernize.Logic", os.path.join(runner_temp, "ci_03_Cavernize.Logic.log"), layer_statuses.get("03_Cavernize.Logic", "SKIPPED")),
+              ("04_CavernizeAndroid", os.path.join(runner_temp, "ci_04_CavernizeAndroid.log"), layer_statuses.get("04_CavernizeAndroid", "SKIPPED")),
+              ("05_Shadow_FullApp", os.path.join(runner_temp, "ci_05_Shadow_FullApp.log"), layer_statuses.get("05_Shadow_FullApp", "SKIPPED")),
+              ("06_Publish_APK", os.path.join(runner_temp, "ci_06_publish.log"), publish_outcome.upper()),
+          ]
+
+          err_pat = re.compile(r"(?::\s*error\b|\berror\s+[A-Z]{2,}[0-9]+:|\bfatal error:)", re.I)
+          warn_pat = re.compile(r"(?::\s*warning\b|\bwarning\s+[A-Z]{2,}[0-9]+:|::warning::|\bWarning:\s|\bwarn:\s)", re.I)
+          code_pat = re.compile(r"\b(?:warning|error)\s+([A-Z]{2,6}[0-9]{3,5})\b", re.I)
+          clang_warn_pat = re.compile(r"\[-W([A-Za-z0-9_-]+)\]")
+          proj_suffix_pat = re.compile(r"\s*\[[^\]]+\.csproj\]\s*$", re.I)
+
+          high_codes = {"CA1416", "CA1422", "CS4014", "CS0108", "CS0114", "CS0618", "CS0649"}
+          high_prefixes = ("IL", "XA", "APT", "CS86")
+          med_codes = {"CS0162", "CS0168", "CS0219", "CS0414", "CS0612", "CS1998"}
+          med_prefixes = ("MSB", "NU", "SYSLIB", "CA")
+
+          def classify_warning(code):
+              c = code.upper()
+              if c.startswith("-W") or c in high_codes or c.startswith(high_prefixes):
+                  return "High"
+              if c in med_codes or c.startswith(med_prefixes):
+                  return "Medium"
+              return "Low"
+
+          def extract_code(line):
+              m = code_pat.search(line)
+              if m:
+                  return m.group(1).upper()
+              cm = clang_warn_pat.search(line)
+              if cm:
+                  return "-W" + cm.group(1)
+              return "GENERAL"
+
+          def norm_key(line):
+              cleaned = proj_suffix_pat.sub("", line).replace("\\", "/")
+              return re.sub(r"\s+", " ", cleaned).strip()
+
+          def shorten_paths(line):
+              ws = os.environ.get("GITHUB_WORKSPACE", "")
+              if ws and ws in line:
+                  return line.replace(ws.rstrip("/") + "/", "")
+              return line
+
+          seen_err, seen_warn = set(), set()
+          errors_by_layer = {}
+          warnings_by_layer = {}
+          warn_code_counts = collections.Counter()
+          err_code_counts = collections.Counter()
+
+          for label, path, _ in log_sources:
+              if not os.path.exists(path):
+                  continue
+              l_errs, l_warns = [], []
+              for raw in open(path, encoding="utf-8", errors="ignore"):
+                  line = raw.strip()
+                  if not line:
+                      continue
+                  if re.match(r"^\d+\s+(?:Warning|Error)\(s\)$", line, re.I):
+                      continue
+                  if err_pat.search(line):
+                      k = norm_key(line)
+                      if k not in seen_err:
+                          seen_err.add(k)
+                          short_ln = shorten_paths(line)
+                          l_errs.append(short_ln)
+                          err_code_counts[extract_code(short_ln)] += 1
+                  elif warn_pat.search(line):
+                      k = norm_key(line)
+                      if k not in seen_warn:
+                          seen_warn.add(k)
+                          short_ln = shorten_paths(line)
+                          l_warns.append(short_ln)
+                          warn_code_counts[extract_code(short_ln)] += 1
+              if l_errs:
+                  errors_by_layer[label] = l_errs
+              if l_warns:
+                  warnings_by_layer[label] = l_warns
+
+          total_errors = sum(len(v) for v in errors_by_layer.values())
+          total_warnings = sum(len(v) for v in warnings_by_layer.values())
+          now_utc = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+          run_url = f"https://github.com/{repo_slug}/actions/runs/{run_id}" if run_id else ""
+
+          md = [
+              f"# Cavernize Android CI Build Diagnostics (`v2.9.{run_number}`)",
+              "",
+              f"- **Generated (UTC):** `{now_utc}`",
+              f"- **Commit:** `{commit_sha}`",
+              f"- **Build / Run:** `#{run_number}` ({run_url})",
+              f"- **Outcome:** `compile={compile_outcome.upper()}` · `publish={publish_outcome.upper()}`",
+              f"- **Totals:** **{total_errors} unique error(s)** · **{total_warnings} unique warning(s)**",
+              "",
+              "## Layer Status",
+          ]
+          for label, _, st in log_sources:
+              ec = len(errors_by_layer.get(label, []))
+              wc = len(warnings_by_layer.get(label, []))
+              md.append(f"- **{label}**: `{st}` (errors: `{ec}`, warnings: `{wc}`)")
+
+          if warn_code_counts:
+              md.extend([
+                  "",
+                  "## Warning Breakdown by Code",
+                  "| Code | Count | Priority |",
+                  "| --- | ---: | --- |",
+              ])
+              for code, cnt in warn_code_counts.most_common():
+                  md.append(f"| `{code}` | {cnt} | {classify_warning(code)} |")
+
+          if errors_by_layer:
+              md.append("")
+              md.append(f"## Consolidated Errors ({total_errors} unique)")
+              for label, items in errors_by_layer.items():
+                  md.append(f"\n### {label} ({len(items)})")
+                  md.append("```text")
+                  md.extend(items)
+                  md.append("```")
+          else:
+              md.append("\n## Consolidated Errors\nZero compilation/packaging errors.")
+
+          if warnings_by_layer:
+              md.append("")
+              md.append(f"## Consolidated Warnings ({total_warnings} unique)")
+              for label, items in warnings_by_layer.items():
+                  md.append(f"\n### {label} ({len(items)})")
+                  md.append("```text")
+                  md.extend(items)
+                  md.append("```")
+          else:
+              md.append("\n## Consolidated Warnings\nZero build warnings.")
+
+          md_text = "\n".join(md) + "\n"
+          md_path = os.path.join(out_dir, "build-diagnostics-report.md")
+          with open(md_path, "w", encoding="utf-8") as f:
+              f.write(md_text)
+
+          json_payload = {
+              "schemaVersion": 1,
+              "generatedAtUtc": now_utc,
+              "version": f"2.9.{run_number}",
+              "runId": run_id,
+              "runNumber": run_number,
+              "commitSha": commit_sha,
+              "runUrl": run_url,
+              "outcomes": {
+                  "ndk": ndk_outcome,
+                  "compile": compile_outcome,
+                  "publish": publish_outcome,
+              },
+              "totals": {
+                  "errors": total_errors,
+                  "warnings": total_warnings,
+              },
+              "warningCodes": [
+                  {"code": code, "count": cnt, "priority": classify_warning(code)}
+                  for code, cnt in warn_code_counts.most_common()
+              ],
+              "errorCodes": [
+                  {"code": code, "count": cnt}
+                  for code, cnt in err_code_counts.most_common()
+              ],
+              "errorsByLayer": errors_by_layer,
+              "warningsByLayer": warnings_by_layer,
+          }
+          json_path = os.path.join(out_dir, "build-diagnostics.json")
+          with open(json_path, "w", encoding="utf-8") as f:
+              json.dump(json_payload, f, indent=2)
+
+          print(f"Generated build diagnostics report: {total_errors} errors, {total_warnings} warnings -> {md_path}")
+
+          if summary_path:
+              sum_lines = [
+                  "",
+                  f"## Build Warnings & Errors Summary (`v2.9.{run_number}`)",
+                  f"- **Unique Errors:** `{total_errors}` · **Unique Warnings:** `{total_warnings}`",
+                  f"- **Full Report Artifact:** `Cavernize-Build-Diagnostics` (`build-diagnostics-report.md` & `build-diagnostics.json`)",
+                  f"- **GitHub Diagnostics Branch:** `https://github.com/{repo_slug}/blob/diagnostics/ci/latest-build-diagnostics.md`",
+              ]
+              if warn_code_counts:
+                  sum_lines.append("")
+                  sum_lines.append("| Warning Code | Count | Priority |")
+                  sum_lines.append("| --- | ---: | --- |")
+                  for code, cnt in warn_code_counts.most_common(20):
+                      sum_lines.append(f"| `{code}` | {cnt} | {classify_warning(code)} |")
+              with open(summary_path, "a", encoding="utf-8") as sf:
+                  sf.write("\n".join(sum_lines) + "\n")
+          PYDIAG
+
+      - name: Upload build diagnostics artifact (errors + warnings)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cavernize-Build-Diagnostics
+          path: build/diagnostics
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Publish build diagnostics to GitHub diagnostics branch
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_SLUG: ${{ github.repository }}
+          RUN_NUMBER: ${{ github.run_number }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          python3 - "$GITHUB_WORKSPACE/build/diagnostics" << 'PYPUB'
+          import base64, json, os, sys, urllib.error, urllib.parse, urllib.request
+
+          diag_dir = sys.argv[1]
+          token = os.environ.get("GITHUB_TOKEN", "")
+          repo_slug = os.environ.get("REPO_SLUG", "guumachadooo/Cavern")
+          run_number = os.environ.get("RUN_NUMBER", "0")
+          commit_sha = os.environ.get("COMMIT_SHA", "")
+          branch = "diagnostics"
+
+          if not token or not os.path.isdir(diag_dir):
+              print("Skipping diagnostics branch publish (missing token or report dir).")
+              sys.exit(0)
+
+          def gh_api(method, path, payload=None):
+              url = f"https://api.github.com/repos/{repo_slug}/{path.lstrip('/')}"
+              body = json.dumps(payload).encode("utf-8") if payload is not None else None
+              headers = {
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "User-Agent": "CavernizeCI/2.9",
+              }
+              if body is not None:
+                  headers["Content-Type"] = "application/json"
+              req = urllib.request.Request(url, data=body, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=45) as resp:
+                      return resp.status, json.loads(resp.read().decode("utf-8"))
+              except urllib.error.HTTPError as e:
+                  raw = e.read().decode("utf-8", errors="ignore")
+                  return e.code, raw
+
+          # Ensure 'diagnostics' branch exists (never touches master, never triggers CI)
+          st, _ = gh_api("GET", f"git/ref/heads/{branch}")
+          if st == 404:
+              st_m, master_ref = gh_api("GET", "git/ref/heads/master")
+              base_sha = master_ref.get("object", {}).get("sha") if isinstance(master_ref, dict) else commit_sha
+              st_c, res_c = gh_api("POST", "git/refs", {"ref": f"refs/heads/{branch}", "sha": base_sha or commit_sha})
+              print(f"Bootstrapped branch '{branch}': HTTP {st_c}")
+
+          files_to_push = [
+              ("build-diagnostics-report.md", "ci/latest-build-diagnostics.md"),
+              ("build-diagnostics.json", "ci/latest-build-diagnostics.json"),
+          ]
+          for local_name, remote_path in files_to_push:
+              fp = os.path.join(diag_dir, local_name)
+              if not os.path.isfile(fp):
+                  continue
+              raw_bytes = open(fp, "rb").read()
+              b64 = base64.b64encode(raw_bytes).decode("ascii")
+              for attempt in range(2):
+                  st_g, data_g = gh_api("GET", f"contents/{remote_path}?ref={urllib.parse.quote(branch)}")
+                  existing_sha = data_g.get("sha") if st_g == 200 and isinstance(data_g, dict) else None
+                  payload = {
+                      "message": f"chore(ci): update build diagnostics v2.9.{run_number} ({commit_sha[:8]}) [skip ci]",
+                      "content": b64,
+                      "branch": branch,
+                  }
+                  if existing_sha:
+                      payload["sha"] = existing_sha
+                  st_p, _ = gh_api("PUT", f"contents/{remote_path}", payload)
+                  if st_p in (200, 201):
+                      print(f"Published {remote_path} -> branch '{branch}' ({len(raw_bytes)} bytes)")
+                      break
+                  if st_p == 409 and attempt == 0:
+                      continue
+                  print(f"Warning: failed publishing {remote_path} to '{branch}' (HTTP {st_p})")
+                  break
+          PYPUB
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -650,7 +974,9 @@ jobs:
             - **Spatial DSP, Pro-Audio USB & Neural Restoration (`Slot 1–8`):** SOFA HDF5 HRIR, MagLS Ambisonics, AutoEq (8,850+ profiles), ISO 226 loudness, BS.1770-5 metering + 4x True-Peak Limiter, `Slot 7` ONNX MVSEP/LGSR stem & bandwidth restoration, Auto-Vocal Mix-Match + Voiceprint DNA, and Focusrite Scarlett 2i2 / Path A `AAudio` / Path B unrooted `libusb` UAC2 audio I/O.
           prerelease: false
           make_latest: false
-          files: build/Cavernize-Android.apk
+          files: |
+            build/Cavernize-Android.apk
+            build/diagnostics/build-diagnostics-report.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -770,6 +1096,8 @@ jobs:
             - Highlights: Android 15/16 (`targetSdkVersion 35`) Edge-to-Edge & Predictive Back, 16 KB ELF W^X `NativeLibraryDir` engines (`FFmpeg`, `truehdd`, `ONNX Runtime`, `libcavernize_proaudio`), One UI 9 6-Category Settings Hub + `?` Guided Modals, Library Smart Clean v2 Inspector + `ATMOS+FLAC` variant merge, `Studio` (`Master|Classic|Queue`), `Stems` Goal Cards & `Slot 7` ONNX MVSEP/LGSR, 2-Tier `Lyrics Sing` + Auto-Vocal Mix-Match, Scarlett 2i2 / AAudio / `libusb` Path A/B, and SOFA HDF5 / MagLS / AutoEq / ISO 226 / BS.1770-5 spatial DSP.
           prerelease: false
           make_latest: true
-          files: build/Cavernize-Android.apk
+          files: |
+            build/Cavernize-Android.apk
+            build/diagnostics/build-diagnostics-report.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

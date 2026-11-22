@@ -207,6 +207,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         store = new AppSettingsStore(this);
         store.ApplyGlobals();
+        AppLogger.LogAudioConfigSnapshot(store);
         upmixingSettings = new AndroidUpmixingSettings(store);
         renderingSettings = new AndroidRenderingSettings(store);
         ffmpeg = new AndroidFFmpegRunner(_ => { });
@@ -361,6 +362,61 @@ public partial class MainActivity : Activity, ICavernizeApp {
         if (store.AutoCheckUpdates) {
             _ = CheckForUpdatesAsync(silent: true);
         }
+        AppLogger.CriticalEventLogged += OnCriticalLogEvent;
+        CloudLogSyncService.TriggerStartupCrashSyncIfNeeded(this, store, _ => {
+            if (!uiDestroyed) {
+                RunOnUiThread(RefreshLogSummaryLabel);
+            }
+        });
+        SchedulePostUpdateSelfCheckIfNeeded();
+    }
+
+    void SchedulePostUpdateSelfCheckIfNeeded() {
+        if (store == null || !store.AutoSelfCheckAfterUpdate) {
+            return;
+        }
+        (_, long installedBuild) = AppUpdateService.GetInstalledVersion(this);
+        if (installedBuild <= 0 || store.LastSelfCheckBuildCode == installedBuild) {
+            return;
+        }
+        _ = Task.Run(async () => {
+            try {
+                await Task.Delay(4500).ConfigureAwait(false);
+                if (uiDestroyed) {
+                    return;
+                }
+                SelfCheckReport report = await SelfDiagnosticEngine.RunAsync(this, store, fullSuite: false).ConfigureAwait(false);
+                store.LastSelfCheckBuildCode = installedBuild;
+                store.LastSelfCheckUtc = report.ExecutedAtUtc;
+                store.LastSelfCheckSummary = report.CompactSummary;
+                if (CloudLogSyncService.IsConfigured(store)) {
+                    _ = await CloudLogSyncService.UploadSelfCheckReportAsync(this, store, report, "post_update").ConfigureAwait(false);
+                }
+                if (!uiDestroyed) {
+                    RunOnUiThread(RefreshLogSummaryLabel);
+                }
+            } catch {
+                // Never disrupt startup
+            }
+        });
+    }
+
+    void OnCriticalLogEvent(string _) {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        CloudLogSyncService.ScheduleAutoErrorSyncIfEnabled(this, store, _ => {
+            if (!uiDestroyed) {
+                RunOnUiThread(RefreshLogSummaryLabel);
+            }
+        });
+    }
+
+    public override void OnTrimMemory(TrimMemory level) {
+        base.OnTrimMemory(level);
+        if ((int)level >= 10) {
+            AppLogger.LogMemorySnapshot(this, $"OnTrimMemory({level})");
+        }
     }
 
     protected override void OnResume() {
@@ -381,6 +437,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     protected override void OnDestroy() {
         uiDestroyed = true;
+        AppLogger.CriticalEventLogged -= OnCriticalLogEvent;
         if (OperatingSystem.IsAndroidVersionAtLeast(33) && isPredictiveBackRegistered && predictiveBackCallback != null) {
             try {
                 OnBackInvokedDispatcher?.UnregisterOnBackInvokedCallback(predictiveBackCallback);

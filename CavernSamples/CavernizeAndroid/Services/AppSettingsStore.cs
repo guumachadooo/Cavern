@@ -1273,6 +1273,72 @@ public sealed class AppSettingsStore {
         }
     }
 
+    // Cloud Diagnostic Log Sync (GitHub)
+    public bool CloudLogSyncEnabled {
+        get => prefs.GetBoolean("cloudLogSyncEnabled", false);
+        set => Edit().PutBoolean("cloudLogSyncEnabled", value).Apply();
+    }
+
+    public string CloudLogRepo {
+        get => prefs.GetString("cloudLogRepo", "guumachadooo/Cavern");
+        set => Edit().PutString("cloudLogRepo", string.IsNullOrWhiteSpace(value) ? "guumachadooo/Cavern" : value.Trim()).Apply();
+    }
+
+    /// <summary>
+    /// 0 = dedicated 'diagnostics' branch (recommended, zero conflicts on master),
+    /// 1 = 'master' branch (.agents/device_logs/cavernize_log.txt with [skip ci]).
+    /// </summary>
+    public int CloudLogBranchMode {
+        get => prefs.GetInt("cloudLogBranchMode", 0);
+        set => Edit().PutInt("cloudLogBranchMode", Math.Clamp(value, 0, 1)).Apply();
+    }
+
+    public string CloudLogEncryptedToken {
+        get => prefs.GetString("cloudLogEncToken", "");
+        set => Edit().PutString("cloudLogEncToken", value ?? "").Apply();
+    }
+
+    public bool CloudLogAutoOnCrash {
+        get => prefs.GetBoolean("cloudLogAutoCrash", true);
+        set => Edit().PutBoolean("cloudLogAutoCrash", value).Apply();
+    }
+
+    public bool CloudLogAutoOnError {
+        get => prefs.GetBoolean("cloudLogAutoError", false);
+        set => Edit().PutBoolean("cloudLogAutoError", value).Apply();
+    }
+
+    public string CloudLogLastSyncUtc {
+        get => prefs.GetString("cloudLogLastSyncUtc", "");
+        set => Edit().PutString("cloudLogLastSyncUtc", value ?? "").Apply();
+    }
+
+    public string CloudLogLastSyncStatus {
+        get => prefs.GetString("cloudLogLastSyncStatus", "");
+        set => Edit().PutString("cloudLogLastSyncStatus", value ?? "").Apply();
+    }
+
+    // Intelligent On-Device Self-Checkup
+    public bool AutoSelfCheckAfterUpdate {
+        get => prefs.GetBoolean("autoSelfCheckAfterUpdate", true);
+        set => Edit().PutBoolean("autoSelfCheckAfterUpdate", value).Apply();
+    }
+
+    public long LastSelfCheckBuildCode {
+        get => prefs.GetLong("lastSelfCheckBuildCode", 0L);
+        set => Edit().PutLong("lastSelfCheckBuildCode", value).Apply();
+    }
+
+    public string LastSelfCheckUtc {
+        get => prefs.GetString("lastSelfCheckUtc", "");
+        set => Edit().PutString("lastSelfCheckUtc", value ?? "").Apply();
+    }
+
+    public string LastSelfCheckSummary {
+        get => prefs.GetString("lastSelfCheckSummary", "");
+        set => Edit().PutString("lastSelfCheckSummary", value ?? "").Apply();
+    }
+
     public string LastExplorerDirectory {
         get => prefs.GetString("lastExplorerDir", "");
         set => Edit().PutString("lastExplorerDir", value ?? "").Apply();
