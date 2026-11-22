@@ -110,8 +110,8 @@ public static class TrueHDDecoderService {
 
         string args = $"-hide_banner -i \"{inputPath}\"";
         (int exitCode, _, string stderr) = RunProcessSimple(ffmpegPath, args, timeoutMs: 15000);
-        AppLogger.Info($"FFmpeg probe exit={exitCode} for '{Path.GetFileName(inputPath)}'");
         if (string.IsNullOrWhiteSpace(stderr)) {
+            AppLogger.Warn($"FFmpeg probe exit={exitCode} (empty stderr) for '{Path.GetFileName(inputPath)}'");
             return result;
         }
 
@@ -159,11 +159,11 @@ public static class TrueHDDecoderService {
         }
 
         result.DurationSeconds = durationSec;
-        if (result.AudioStreams.Count == 0) {
+        if (result.AudioStreams.Count > 0) {
+            AppLogger.Info($"FFmpeg probe ok ({result.AudioStreams.Count} audio stream(s), {durationSec:0.1}s) for '{Path.GetFileName(inputPath)}'");
+        } else {
             string tail = stderr.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? string.Empty;
-            if (!string.IsNullOrWhiteSpace(tail)) {
-                AppLogger.Warn($"FFmpeg probe found 0 audio streams for '{Path.GetFileName(inputPath)}': {tail.Trim()}");
-            }
+            AppLogger.Warn($"FFmpeg probe exit={exitCode} (0 audio streams) for '{Path.GetFileName(inputPath)}': {tail.Trim()}");
         }
         return result;
     }

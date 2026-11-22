@@ -589,7 +589,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             bs1770PostStage.ApplyParameters(safe.NormalizationMode, safe.RespectDolbyDialnorm);
             spatialDialogPostStage.ApplyParameters(safe.DialogEnhancementEnabled, safe.DialogEnhancementDb);
             truePeakLimiterPostStage.ApplyParameters(
-                safe.TruePeakLimiterEnabled || (NormalizerEnabled && LimiterOnly),
+                safe.TruePeakLimiterEnabled,
                 safe.TruePeakCeilingDbtp);
             PublishLoudnessDiagnosticsLocked();
         }
@@ -760,9 +760,9 @@ public sealed class RealtimePlayerEngine : IDisposable {
     public float LFEVolume { get; set; } = 1f;
 
     /// <summary>
-    /// Enable Cavern's dynamic normalizer/limiter.
+    /// Enable Cavern's legacy dynamic normalizer/limiter (superseded by Slot 6B BS.1770-5 + 4x True-Peak Limiter).
     /// </summary>
-    public bool NormalizerEnabled { get; set; } = true;
+    public bool NormalizerEnabled { get; set; }
 
     /// <summary>
     /// When normalizing, never boost volume above 100%.
@@ -1137,12 +1137,11 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 }
 
                 // Slot 6: Ordered transparent post-processing stages
-                // (100 AutoEq, 110 HpTF, 300 ISO 226:2023, 400 BS.1770/Dialnorm, 500 Dialog Path B, 890 Legacy AGC, 900 4x True-Peak Limiter)
+                // (100 AutoEq, 110 HpTF, 300 ISO 226:2023, 400 BS.1770/Dialnorm, 500 Dialog Path B, 900 4x True-Peak Limiter)
                 iso226PostStage.UpdatePlaybackVolume(Volume);
-                bool hasBs1770Norm = bs1770PostStage.NormalizationMode != LoudnessNormalizationMode.Off;
-                limiterPostStage.LimiterOnly = LimiterOnly || hasBs1770Norm;
-                limiterPostStage.IsEnabled = NormalizerEnabled && !LimiterOnly && !hasBs1770Norm;
-                truePeakLimiterPostStage.IsEnabled = loudnessConfig.TruePeakLimiterEnabled || (NormalizerEnabled && LimiterOnly);
+                limiterPostStage.LimiterOnly = true;
+                limiterPostStage.IsEnabled = false;
+                truePeakLimiterPostStage.IsEnabled = loudnessConfig.TruePeakLimiterEnabled;
                 truePeakLimiterPostStage.CeilingDbtp = loudnessConfig.TruePeakCeilingDbtp;
                 IReadOnlyList<IPostProcessingStage> postStages = sceneHub.PostProcessingStages;
                 for (int p = 0; p < postStages.Count; p++) {

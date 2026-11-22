@@ -39,7 +39,7 @@ namespace CavernizeAndroid;
     MainLauncher = true,
     Exported = true,
     LaunchMode = LaunchMode.SingleTask,
-    ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.SmallestScreenSize | ConfigChanges.ScreenLayout | ConfigChanges.UiMode | ConfigChanges.Density | ConfigChanges.FontScale | ConfigChanges.LayoutDirection | ConfigChanges.Keyboard | ConfigChanges.KeyboardHidden | ConfigChanges.Navigation)]
+    ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.SmallestScreenSize | ConfigChanges.ScreenLayout | ConfigChanges.UiMode | ConfigChanges.Density | ConfigChanges.FontScale | ConfigChanges.LayoutDirection | ConfigChanges.Keyboard | ConfigChanges.KeyboardHidden | ConfigChanges.Navigation | ConfigChanges.Locale | ConfigChanges.ColorMode)]
 [IntentFilter(
     [Intent.ActionView, Intent.ActionSend],
     Categories = [Intent.CategoryDefault, Intent.CategoryBrowsable],
@@ -258,8 +258,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
             VolumeRolloff = (Rolloffs)Math.Clamp(store.VolumeRolloffIndex, 0, 3),
             Volume = store.PlayerVolume,
             LFEVolume = store.LfeVolume,
-            NormalizerEnabled = store.NormalizerEnabled,
-            LimiterOnly = store.LimiterOnly,
             EnvironmentType = (Environments)Math.Clamp(store.EnvironmentTypeIndex, 0, 3),
             EnvironmentSize = new System.Numerics.Vector3(store.RoomSizeX, store.RoomSizeY, store.RoomSizeZ),
             AudioQuality = (QualityModes)Math.Clamp(store.AudioQualityIndex, 0, 3),
@@ -1776,7 +1774,39 @@ public partial class MainActivity : Activity, ICavernizeApp {
             throw new InvalidOperationException(S["VideoNoAudioTrack"]);
         }
 
-        // Standard Android MediaCodec fallback (AAC, MP3, FLAC, OGG, Opus, etc.)
+        // Fast native NEON FFmpeg path for FLAC (avoids slow ~12s MediaCodec decode and preserves 24-bit PCM depth)
+        if (containerExt == ".flac" && ffmpeg.Found) {
+            ProbedAudioStream flacStream = probe != null && probe.AudioStreams.Count > 0 ? probe.AudioStreams[0] : null;
+            int streamIdx = flacStream?.StreamIndex ?? -1;
+            string workDir = Path.Combine(TrueHDDecoderService.GetWorkRoot(this), $"ffwav_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(workDir);
+            fallbackSessionDir = workDir;
+            string outWav = Path.Combine(workDir, "decoded.wav");
+            RunOnUiThread(() => {
+                SetWorkspaceHeaderText(S["DecodingFallback"]);
+                SetConvertStatus(S["DecodingFallback"], -1);
+            });
+            bool flacOk = TrueHDDecoderService.ExtractAudioStreamWithFFmpeg(
+                ffmpeg.Location, resolved, streamIdx, outWav, "wav",
+                probe?.DurationSeconds ?? 0,
+                (p, msg) => RunOnUiThread(() => {
+                    SetWorkspaceHeaderText(msg);
+                    SetConvertStatus(msg, p);
+                }));
+            if (flacOk) {
+                AudioReader wavReader = AudioReader.Open(outWav);
+                Codec pcmCodec = wavReader.Bits == BitDepth.Float32 ? Codec.PCM_Float : Codec.PCM_LE;
+                (Codec srcCodec, bool isLossy) = InferFallbackCodecAndLossy(resolved, flacStream?.CodecName);
+                ExternalDecodedTrack wavTrack = new(
+                    wavReader, pcmCodec, srcCodec, null, guessedContainer, null, null, flacStream?.Language,
+                    isLossySource: isLossy, originalSourcePath: resolved);
+                return AudioFile.FromCustomTracks(resolved, [wavTrack]);
+            }
+            TrueHDDecoderService.CleanupWorkDirectory(workDir);
+            fallbackSessionDir = null;
+        }
+
+        // Standard Android MediaCodec fallback (AAC, MP3, OGG, Opus, etc., or FLAC if FFmpeg failed)
         RunOnUiThread(() => {
             SetWorkspaceHeaderText(S["DecodingFallback"]);
             SetConvertStatus(S["DecodingFallback"], -1);

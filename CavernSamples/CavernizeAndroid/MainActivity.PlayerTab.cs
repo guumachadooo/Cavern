@@ -622,7 +622,7 @@ public partial class MainActivity {
         StyleStagePill(signalChainRoomHrtfPill, hrtfLabel, hrtfOn, OneUiTheme.IconSpatial);
 
         bool autoEqOn = store?.AutoEqEnabled == true && !string.IsNullOrEmpty(store.AutoEqProfileId);
-        bool loudOn = store?.Iso226Enabled == true || (store?.LoudnessNormModeIndex ?? 0) > 0 || store?.DialogEnhancementEnabled == true || store?.NormalizerEnabled == true;
+        bool loudOn = store?.Iso226Enabled == true || (store?.LoudnessNormModeIndex ?? 0) > 0 || store?.DialogEnhancementEnabled == true;
         string eqLoudLabel = (autoEqOn && loudOn)
             ? S["SignalChainEqLoudActive"]
             : (autoEqOn ? S["SignalChainEqActive"] : (loudOn ? S["SignalChainLoudActive"] : S["SignalChainEqLoudIdle"]));

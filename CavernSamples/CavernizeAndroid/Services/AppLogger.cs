@@ -62,10 +62,10 @@ public static class AppLogger {
                 Android.Runtime.AndroidEnvironment.UnhandledExceptionRaiser += (_, e) => {
                     Error("AndroidEnvironment.UnhandledException", e.Exception);
                 };
-            }
 
-            (string ver, long code) = AppUpdateService.GetInstalledVersion(context);
-            WriteRaw("INFO", $"=== Cavernize v{ver} (build {code}) started | {Build.Manufacturer} {Build.Model} | Android {Build.VERSION.Release} (SDK {(int)Build.VERSION.SdkInt}) ===");
+                (string ver, long code) = AppUpdateService.GetInstalledVersion(context);
+                WriteRaw("INFO", $"=== Cavernize v{ver} (build {code}) started | {Build.Manufacturer} {Build.Model} | Android {Build.VERSION.Release} (SDK {(int)Build.VERSION.SdkInt}) ===");
+            }
         }
     }
 

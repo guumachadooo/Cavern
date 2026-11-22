@@ -198,6 +198,8 @@ namespace Cavern.Remapping {
                 return;
             }
             for (int i = 0; i < count; i++) {
+                float sampleL = inL[i];
+                float sampleR = inR[i];
                 outFL[i] = readyOut[0][inFill];
                 outFR[i] = readyOut[1][inFill];
                 if (extractCenter && outC != null) {
@@ -218,8 +220,8 @@ namespace Cavern.Remapping {
                     }
                 }
 
-                currInL[inFill] = inL[i];
-                currInR[inFill] = inR[i];
+                currInL[inFill] = sampleL;
+                currInR[inFill] = sampleR;
                 inFill++;
                 if (inFill == HopSize) {
                     ExecuteStereoToSurroundHop(extractCenter, mode51);
@@ -245,13 +247,15 @@ namespace Cavern.Remapping {
                 return;
             }
             for (int i = 0; i < count; i++) {
+                float sampleSL = inSL[i];
+                float sampleSR = inSR[i];
                 outSL[i] = readyOut[0][inFill] + readyOut[5][inFill];
                 outSR[i] = readyOut[1][inFill] + readyOut[6][inFill];
                 outRL[i] = readyOut[7][inFill];
                 outRR[i] = readyOut[8][inFill];
 
-                currInL[inFill] = inSL[i];
-                currInR[inFill] = inSR[i];
+                currInL[inFill] = sampleSL;
+                currInR[inFill] = sampleSR;
                 inFill++;
                 if (inFill == HopSize) {
                     ExecuteSurroundSplitHop();
@@ -287,13 +291,15 @@ namespace Cavern.Remapping {
             float xover = crossoverHz < 120f ? 120f : crossoverHz;
 
             for (int i = 0; i < count; i++) {
+                float sampleL = inL[i];
+                float sampleR = inR[i];
                 outGroundL[i] = readyOut[0][inFill];
                 outGroundR[i] = readyOut[1][inFill];
                 outHeightL[i] = readyOut[5][inFill];
                 outHeightR[i] = readyOut[6][inFill];
 
-                currInL[inFill] = inL[i];
-                currInR[inFill] = inR[i];
+                currInL[inFill] = sampleL;
+                currInR[inFill] = sampleR;
                 inFill++;
                 if (inFill == HopSize) {
                     ExecuteHeightExtractionHop(clampedEffect, clampedSmooth, xover);

@@ -80,6 +80,7 @@ public partial class MainActivity {
     OneUiSeekBar headWidthBar, manualItdBar, hptfFreqBar, hptfGainBar, hptfQBar;
     TextView personalizationStatusText;
     Switch iso226EnabledSwitch, iso226TrackVolSwitch, respectDialnormSwitch, dialogEnhanceSwitch;
+    LinearLayout iso226DetailsSection, loudnessNormDetailsSection, dialogDetailsSection;
     OneUiSeekBar iso226RefSplBar, iso226ListenSplBar, dialogBoostBar;
     OneUiInlineSelector loudnessNormSelector, truePeakCeilingSelector;
     TextView loudnessMeterText, loudnessStatusText;
@@ -98,7 +99,7 @@ public partial class MainActivity {
     int personalizationRebuildSeq;
     Button filtersBtn;
     Switch muteBedSwitch, muteGroundSwitch, speakerVirtSwitch, force24Switch, surroundSwapSwitch, wavSkipSwitch, reportModeSwitch, gradingSwitch;
-    Switch pedanticSwitch, unsafeSwitch, keepTempSwitch, normSwitch, limiterOnlySwitch;
+    Switch pedanticSwitch, unsafeSwitch, keepTempSwitch;
     OneUiSeekBar upmixEffectBar, upmixSmoothBar;
     OneUiInlineSelector upmixModeSelector;
     LinearLayout atmosAwareUpmixSection;
@@ -331,24 +332,8 @@ public partial class MainActivity {
         upmixCard.AddView(resetUpmixBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
         RegisterSettingsCard(upmixCard, categoryIndex: 0, isProOnly: false, "upmix matrix cavernize dirac stft atmos spatial 3d surround direct");
 
-        // 2. Room Acoustics, Gain & Dynamic Limiter
+        // 2. Room Acoustics & Pre-Render Gain
         LinearLayout acousticsCard = Card(S["RoomAcousticsTitle"], OneUiIconType.Sliders, OneUiTheme.IconSpatial);
-        normSwitch = AddSwitchRow(acousticsCard, S["NormalizerCheck"], store.NormalizerEnabled, v => {
-            store.NormalizerEnabled = v;
-            if (playerEngine != null) {
-                playerEngine.NormalizerEnabled = v;
-            }
-            RefreshSettingsCategorySubtitles();
-        }, helpBody: S["TipNormalizer"]);
-        AddDivider(acousticsCard);
-        limiterOnlySwitch = AddSwitchRow(acousticsCard, S["LimiterOnlyCheck"], store.LimiterOnly, v => {
-            store.LimiterOnly = v;
-            if (playerEngine != null) {
-                playerEngine.LimiterOnly = v;
-            }
-            RefreshSettingsCategorySubtitles();
-        });
-        AddDivider(acousticsCard);
         AddSliderRow(acousticsCard, S["RenderGain"], -24, 24, (int)Math.Round(store.RenderGainDb), v => {
             store.RenderGainDb = v;
             store.ApplyGlobals();
@@ -404,7 +389,7 @@ public partial class MainActivity {
         roomDimRow.AddView(rz, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
         roomDimRow.AddView(applyRoomBtn, new LinearLayout.LayoutParams(Dp(60), ViewGroup.LayoutParams.WrapContent));
         acousticsCard.AddView(roomDimRow);
-        RegisterSettingsCard(acousticsCard, categoryIndex: 0, isProOnly: false, "room acoustics normalizer limiter gain height dimensions environment");
+        RegisterSettingsCard(acousticsCard, categoryIndex: 0, isProOnly: false, "room acoustics gain height squeeze dimensions environment");
 
         // 3. Official Binaural Profile (HRIR / BRIR) & QuickEQ Calibration
         LinearLayout rendCard = Card(S["CalibTitle"], OneUiIconType.Headphones, OneUiTheme.IconStemsCalib);
@@ -1074,13 +1059,17 @@ public partial class MainActivity {
             ApplyAndRefreshLoudness();
         }, helpBody: S["TipIso226"]);
 
-        iso226TrackVolSwitch = AddSwitchRow(slot6bCard, S["Iso226TrackVolTitle"], store.Iso226TrackVolume, v => {
+        iso226DetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.Iso226Enabled ? ViewStates.Visible : ViewStates.Gone
+        };
+        iso226TrackVolSwitch = AddSwitchRow(iso226DetailsSection, S["Iso226TrackVolTitle"], store.Iso226TrackVolume, v => {
             store.Iso226TrackVolume = v;
             ApplyAndRefreshLoudness();
         });
 
         (iso226RefSplBar, _) = AddSliderRow(
-            slot6bCard,
+            iso226DetailsSection,
             S["Iso226RefSplTitle"],
             70,
             85,
@@ -1093,7 +1082,7 @@ public partial class MainActivity {
             defaultValue: 80);
 
         (iso226ListenSplBar, _) = AddSliderRow(
-            slot6bCard,
+            iso226DetailsSection,
             S["Iso226ListenSplTitle"],
             40,
             95,
@@ -1104,6 +1093,7 @@ public partial class MainActivity {
             },
             " phon",
             defaultValue: 68);
+        slot6bCard.AddView(iso226DetailsSection, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         AddDivider(slot6bCard);
 
@@ -1124,10 +1114,15 @@ public partial class MainActivity {
             BottomMargin = Dp(8)
         });
 
-        respectDialnormSwitch = AddSwitchRow(slot6bCard, S["RespectDialnormTitle"], store.RespectDolbyDialnorm, v => {
+        loudnessNormDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.LoudnessNormModeIndex > 0 ? ViewStates.Visible : ViewStates.Gone
+        };
+        respectDialnormSwitch = AddSwitchRow(loudnessNormDetailsSection, S["RespectDialnormTitle"], store.RespectDolbyDialnorm, v => {
             store.RespectDolbyDialnorm = v;
             ApplyAndRefreshLoudness();
         }, helpBody: S["TipRespectDialnorm"]);
+        slot6bCard.AddView(loudnessNormDetailsSection, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         AddDivider(slot6bCard);
 
@@ -1136,8 +1131,12 @@ public partial class MainActivity {
             ApplyAndRefreshLoudness();
         }, helpBody: S["TipDialogEnhance"]);
 
+        dialogDetailsSection = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = store.DialogEnhancementEnabled ? ViewStates.Visible : ViewStates.Gone
+        };
         (dialogBoostBar, _) = AddSliderRow(
-            slot6bCard,
+            dialogDetailsSection,
             S["DialogBoostTitle"],
             0,
             60,
@@ -1155,6 +1154,7 @@ public partial class MainActivity {
         if (dialogBoostBar != null) {
             dialogBoostBar.ValueText = $"+{store.DialogEnhancementDb:0.0} dB";
         }
+        slot6bCard.AddView(dialogDetailsSection, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         AddDivider(slot6bCard);
 
@@ -1182,7 +1182,7 @@ public partial class MainActivity {
             TopMargin = Dp(4)
         });
 
-        RegisterSettingsCard(slot6bCard, categoryIndex: 0, isProOnly: true, "psychoacoustics loudness iso 226 phon ebu r128 lufs dialnorm dialog boost true peak ceiling");
+        RegisterSettingsCard(slot6bCard, categoryIndex: 0, isProOnly: false, "normalizer limiter normalization psychoacoustics loudness iso 226 phon ebu r128 lufs dialnorm dialog boost true peak ceiling");
 
         // On-Device Neural Audio Runtime (ONNX), MVSEP Anti-Artifact & Spatial Karaoke
         LinearLayout slot2bCard = Card();
@@ -1885,7 +1885,7 @@ public partial class MainActivity {
                 string roomTag = $"{store.RoomSizeX:0.#}×{store.RoomSizeY:0.#}×{store.RoomSizeZ:0.#}m";
                 string loudTag = store.Iso226Enabled
                     ? "ISO 226"
-                    : (store.LoudnessNormModeIndex > 0 ? "BS.1770" : (store.NormalizerEnabled ? S["NormalizerCheck"] : S["LimiterOnlyCheck"]));
+                    : (store.LoudnessNormModeIndex > 0 ? "BS.1770" : $"TP {store.ResolveTruePeakCeilingDbtp():0.#} dB");
                 return $"{upmixTag} · {roomTag} · {loudTag}";
             }
             case 1: {
@@ -2267,12 +2267,6 @@ public partial class MainActivity {
         }
         SyncSlider(upmixEffectBar, (int)Math.Round(store.UpmixEffect * 100f), 0, 100, "%");
         SyncSlider(upmixSmoothBar, (int)Math.Round(store.UpmixSmoothness * 100f), 0, 100, "%");
-        if (normSwitch != null && normSwitch.Checked != store.NormalizerEnabled) {
-            normSwitch.Checked = store.NormalizerEnabled;
-        }
-        if (limiterOnlySwitch != null && limiterOnlySwitch.Checked != store.LimiterOnly) {
-            limiterOnlySwitch.Checked = store.LimiterOnly;
-        }
         if (speakerVirtSwitch != null && speakerVirtSwitch.Checked != store.SpeakerVirtualizer) {
             speakerVirtSwitch.Checked = store.SpeakerVirtualizer;
         }
@@ -2853,6 +2847,7 @@ public partial class MainActivity {
         }
         playerEngine.ApplyLoudnessConfig(store.BuildLoudnessConfig());
         RefreshLoudnessUi();
+        RefreshSettingsCategorySubtitles();
     }
 
     void RefreshLoudnessUi() {
@@ -2861,6 +2856,9 @@ public partial class MainActivity {
         }
         if (iso226EnabledSwitch != null && iso226EnabledSwitch.Checked != store.Iso226Enabled) {
             iso226EnabledSwitch.Checked = store.Iso226Enabled;
+        }
+        if (iso226DetailsSection != null) {
+            iso226DetailsSection.Visibility = store.Iso226Enabled ? ViewStates.Visible : ViewStates.Gone;
         }
         if (iso226TrackVolSwitch != null && iso226TrackVolSwitch.Checked != store.Iso226TrackVolume) {
             iso226TrackVolSwitch.Checked = store.Iso226TrackVolume;
@@ -2883,11 +2881,17 @@ public partial class MainActivity {
                 loudnessNormSelector.SetSelection(nIdx, notify: false);
             }
         }
+        if (loudnessNormDetailsSection != null) {
+            loudnessNormDetailsSection.Visibility = store.LoudnessNormModeIndex > 0 ? ViewStates.Visible : ViewStates.Gone;
+        }
         if (respectDialnormSwitch != null && respectDialnormSwitch.Checked != store.RespectDolbyDialnorm) {
             respectDialnormSwitch.Checked = store.RespectDolbyDialnorm;
         }
         if (dialogEnhanceSwitch != null && dialogEnhanceSwitch.Checked != store.DialogEnhancementEnabled) {
             dialogEnhanceSwitch.Checked = store.DialogEnhancementEnabled;
+        }
+        if (dialogDetailsSection != null) {
+            dialogDetailsSection.Visibility = store.DialogEnhancementEnabled ? ViewStates.Visible : ViewStates.Gone;
         }
         if (dialogBoostBar != null) {
             int tenths = Math.Clamp((int)Math.Round(store.DialogEnhancementDb * 10f), 0, 60);

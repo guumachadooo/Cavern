@@ -312,8 +312,6 @@ public sealed class AndroidStrings {
         ["Pedantic"] = "Pedantic standard checks (--pedantic)",
         ["Unsafe"] = "Bypass standard checks (--unsafe)",
         ["KeepTemp"] = "Keep temporary files",
-        ["NormalizerCheck"] = "Dynamic Normalizer / Limiter",
-        ["LimiterOnlyCheck"] = "Limiter only (never boost > 0 dB)",
         ["FFmpegBtn"] = "Locate FFmpeg Executable",
         ["FFmpegArgsLabel"] = "Extra FFmpeg args (e.g. -b:a 768k):",
         ["LanguageTitle"] = "Language & Help",
@@ -408,7 +406,7 @@ public sealed class AndroidStrings {
         ["TimelineLabel"] = "Playback Position",
         ["CalibTitle"] = "HRIR & QuickEQ Calibration",
         ["AboutVerSection"] = "About & App Version",
-        ["RoomAcousticsTitle"] = "Room Acoustics, Gain & Limiter",
+        ["RoomAcousticsTitle"] = "Room Acoustics & Gain",
         ["SelectFilePill"] = "Open audio or video...",
         ["FileDetailsHint"] = "Technical stream details",
         ["OpenShort"] = "Open",
@@ -424,7 +422,6 @@ public sealed class AndroidStrings {
         ["TipUpmixSmooth"] = "Smooths motion speed of synthesized 3D objects.\n\n• Higher (%): calmer, steadier movement without abrupt shifts.\n• Lower (%): fast tracking for sharp transient effects.",
         ["TipRenderGain"] = "Master digital gain offset applied when mixing and exporting.\n\n• Positive (+dB): louder signal (watch for clipping above 0 dB).\n• Negative (-dB): adds headroom to prevent peak distortion.",
         ["TipHeightSqueeze"] = "Compresses elevated objects down toward ear height.\n\n• 0%: full vertical 3D ceiling spread.\n• Near 100%: folds ceiling sounds down onto ground channels.",
-        ["TipNormalizer"] = "Dynamic volume control during playback.\n\n• Normalizer On: raises quiet detail and caps harsh peaks.\n• Limiter Only: keeps native loudness untouched, capping peaks at 0 dB.",
         ["TipEnvType"] = "Selects the Cavern speaker-geometry layout mode (Home, Theatre, Studio).\n\n• Primarily designed for physical Home Theater speaker placement and export.\n• On headphones, acoustic room character comes from your chosen laboratory HRIR/BRIR profile.",
         ["TipRoomSize"] = "Defines the 3D spatial coordinate box (Width × Height × Depth in meters) used to place Dolby Atmos 3D objects and compute distance rolloff.\n\n• Primarily calibrates physical Home Theater speaker geometry.\n• On headphones, larger dimensions gently alter how far objects travel before volume rolloff applies, while acoustic timbre remains controlled by your laboratory HRIR/BRIR.",
         ["TipHrir"] = "Imports a custom laboratory-measured Head-Related Impulse Response (.sofa or .wav) to personalize headphone spatialization.",
@@ -693,7 +690,7 @@ public sealed class AndroidStrings {
         ["HptfSweepPlayingToast"] = "Playing safe -18 dBFS 6–10 kHz ear-canal sweep...",
 
         // Slot 6B: Psychoacoustics & Studio Loudness Standards (ISO 226:2023, ITU-R BS.1770-5 / EBU R128, Spatial Dialog, 4x True-Peak Limiter)
-        ["Slot6BCardTitle"] = "Psychoacoustics & Loudness",
+        ["Slot6BCardTitle"] = "Loudness, Psychoacoustics & Limiter",
         ["LoudnessMeterIdle"] = "BS.1770-5 Meter: waiting for audio · Ceiling {0:0.#} dBTP",
         ["LoudnessMeterLive"] = "M {0} · S {1} · I {2} LUFS · LRA {3:0.0} LU · TP {4:0.0} dBTP{5}{6}",
         ["LoudnessStatusSummary"] = "ISO 226: {0} · Dialog: {1} · Limiter: {2:0.#} dBTP",
@@ -1617,8 +1614,6 @@ public sealed class AndroidStrings {
         d["Pedantic"] = "Verificações estritas (--pedantic)";
         d["Unsafe"] = "Ignorar travas de padrão (--unsafe)";
         d["KeepTemp"] = "Manter arquivos temporários";
-        d["NormalizerCheck"] = "Normalizador / Limitador Dinâmico";
-        d["LimiterOnlyCheck"] = "Apenas limitador (não sobe acima de 0 dB)";
         d["FFmpegBtn"] = "Localizar Executável FFmpeg";
         d["FFmpegArgsLabel"] = "Argumentos extras do FFmpeg (ex: -b:a 768k):";
         d["LanguageTitle"] = "Idioma e Ajuda";
@@ -1707,7 +1702,7 @@ public sealed class AndroidStrings {
         d["TimelineLabel"] = "Linha do Tempo";
         d["CalibTitle"] = "Calibração HRIR e Filtros QuickEQ";
         d["AboutVerSection"] = "Sobre e Versão do App";
-        d["RoomAcousticsTitle"] = "Acústica da Sala, Ganho e Limitador";
+        d["RoomAcousticsTitle"] = "Acústica da Sala e Ganho";
         d["SelectFilePill"] = "Abrir arquivo de áudio ou vídeo...";
         d["FileDetailsHint"] = "Detalhes técnicos da faixa";
         d["OpenShort"] = "Abrir";
@@ -1722,7 +1717,6 @@ public sealed class AndroidStrings {
         d["TipUpmixSmooth"] = "Estabiliza a velocidade de deslocamento dos objetos gerados.\n\n• Subir (%): transições suaves e calmas sem saltos rápidos.\n• Descer (%): resposta imediata para efeitos rápidos.";
         d["TipRenderGain"] = "Ajuste mestre de ganho digital aplicado na renderização.\n\n• Subir (+dB): saída mais alta (cuidado com saturação acima de 0 dB).\n• Descer (-dB): cria margem contra distorção em trilhas comprimidas.";
         d["TipHeightSqueeze"] = "Comprime a altura dos sons do teto em direção ao plano horizontal.\n\n• 0%: aproveita toda a elevação vertical até o teto.\n• Perto de 100%: abaixa efeitos de teto para o nível das caixas comuns.";
-        d["TipNormalizer"] = "Controle automático de intensidade durante a reprodução.\n\n• Normalizador ativo: equilibra trechos baixos e contém picos.\n• Apenas limitador: não amplifica trechos suaves, só evita clipping acima de 0 dB.";
         d["TipEnvType"] = "Define o modo geométrico de caixas do Cavern (Casa, Cinema, Estúdio).\n\n• Pensado principalmente para layouts físicos de Home Theater e exportação.\n• Nos fones de ouvido, a acústica real vem do perfil de laboratório HRIR/BRIR escolhido.";
         d["TipRoomSize"] = "Define a caixa de coordenadas 3D (Largura × Altura × Profundidade em metros) usada para posicionar objetos Dolby Atmos e calcular a atenuação de volume (rolloff).\n\n• Calibra principalmente a geometria de um Home Theater físico.\n• Nos fones, dimensões maiores suavizam a queda de volume dos objetos distantes, mantendo o timbre real do perfil HRIR/BRIR.";
         d["TipHrir"] = "Importa um arquivo HRIR/BRIR medido (.sofa ou .wav) para personalizar a espacialização nos fones de ouvido.";
@@ -1991,7 +1985,7 @@ public sealed class AndroidStrings {
         d["HptfSweepPlayingToast"] = "Reproduzindo varredura segura -18 dBFS de 6–10 kHz...";
 
         // Slot 6B: Psicoacústica e Padrões de Loudness de Estúdio
-        d["Slot6BCardTitle"] = "Psicoacústica e Loudness";
+        d["Slot6BCardTitle"] = "Loudness, Psicoacústica e Limiter";
         d["LoudnessMeterIdle"] = "Medidor BS.1770-5: aguardando áudio · Teto {0:0.#} dBTP";
         d["LoudnessMeterLive"] = "M {0} · S {1} · I {2} LUFS · LRA {3:0.0} LU · TP {4:0.0} dBTP{5}{6}";
         d["LoudnessStatusSummary"] = "ISO 226: {0} · Diálogo: {1} · Limiter: {2:0.#} dBTP";

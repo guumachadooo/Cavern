@@ -113,16 +113,6 @@ public sealed class AppSettingsStore {
         set => Edit().PutFloat("lfeVol", value).Apply();
     }
 
-    public bool NormalizerEnabled {
-        get => prefs.GetBoolean("normalizer", true);
-        set => Edit().PutBoolean("normalizer", value).Apply();
-    }
-
-    public bool LimiterOnly {
-        get => prefs.GetBoolean("limiterOnly", true);
-        set => Edit().PutBoolean("limiterOnly", value).Apply();
-    }
-
     // Rendering Settings
     public bool SpeakerVirtualizer {
         get => prefs.GetBoolean("speakerVirt", false);
