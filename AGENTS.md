@@ -4,7 +4,7 @@
 
 ## 1. Scope & Memory Layers
 - Fork `guumachadooo/Cavern` -> Android **Cavernize** (`CavernSamples/CavernizeAndroid`, `hu.sbence.cavern.cavernize`) running full **Cavern** DSP + neural/pro-audio stack on mobile.
-- Boot layers: (1) root `AGENTS.md` (permanent invariants) -> (2) global `dynamic-fractal-planner` `SessionStart` + `.agents/planner_profile.json` (`auto` mode; live git/versions/APK/logs/queue) -> (3) `CavernSamples/CavernizeAndroid/AGENTS.md` -> (4) declarative hooks (`PreInvocation`/`PreToolUse`/`PostToolUse`/`Stop`) -> (5) `.agents/skills/*/SKILL.md` + global skills -> (6) `.agents/docs/` (`PHASE2_ROADMAP.md`, `HANDOFF.md`, `PROJECT_HISTORY.md`, `ONEUI9_REFERENCE.md`, `SAVED_IDEAS.md`, `EXTRA_REQUESTS.md`, `archive/*`).
+- Boot layers: (1) root `AGENTS.md` (permanent invariants) -> (2) global `dynamic-fractal-planner` `SessionStart` + `.agents/planner_profile.json` (`auto` mode; live git/versions/APK/logs/queue) -> (3) `CavernSamples/CavernizeAndroid/AGENTS.md` -> (4) declarative hooks (`PreInvocation`/`PreToolUse`/`PostToolUse`/`Stop`) -> (5) `.agents/skills/*/SKILL.md` (`cavernize-build-and-deliver`, `cavernize-device-debug`, `cavernize-ui-oneui9`, `cavernize-vocal-cortex`) + global skills -> (6) `.agents/docs/` (`PHASE2_ROADMAP.md`, `PHASE3_VOCAL_CORTEX_ROADMAP.md`, `HANDOFF.md`, `PROJECT_HISTORY.md`, `ONEUI9_REFERENCE.md`, `SAVED_IDEAS.md`, `EXTRA_REQUESTS.md`, `archive/*`).
 
 ## 2. Feature & Reference Invariants
 - Preserve 100% original Cavernize capabilities (multi-target speaker layouts, Matrix & Cavernize 3D upmixing, HRIR/QuickEQ, stem/object extraction + `.json`, batch queue, codec metadata, post-render reports, CLI/quality/delay) + mobile spatial/neural/pro-audio/player features.

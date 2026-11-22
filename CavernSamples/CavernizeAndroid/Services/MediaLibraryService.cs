@@ -17,6 +17,36 @@ using IOPath = System.IO.Path;
 
 namespace CavernizeAndroid.Services;
 
+/// <summary>
+/// Evidence-based classification category assigned by Smart Clean v2.
+/// </summary>
+public enum SmartCleanCategory {
+    None = 0,
+    SystemSfx = 1,
+    MessengersVoice = 2,
+    CameraSocialVideo = 3,
+    StemsExportsShort = 4,
+    UserHiddenFolder = 5
+}
+
+/// <summary>
+/// Result of evaluating a track against Smart Clean v2 rules and user overrides.
+/// </summary>
+public readonly record struct SmartCleanResult(
+    SmartCleanCategory Category,
+    string ReasonKey,
+    string ReasonLabel,
+    bool IsHidden);
+
+/// <summary>
+/// Inspection entry returned by <see cref="MediaLibraryService.GetSmartCleanInspectionList"/> for user review/allowlisting.
+/// </summary>
+public sealed record SmartCleanInspectionEntry(
+    LibraryTrackItem Track,
+    SmartCleanCategory Category,
+    string ReasonKey,
+    string ReasonLabel);
+
 public sealed class LibraryTrackItem {
     public string FilePath { get; set; } = "";
     public string ContentUriString { get; set; } = "";
@@ -40,6 +70,9 @@ public sealed class LibraryTrackItem {
     public int ChannelCount { get; set; }
     public bool IsSpatial { get; set; }
     public string AudioBadge { get; set; } = "";
+    public bool HasEmbeddedMusicTags { get; set; }
+    public SmartCleanCategory SmartCleanCategory { get; set; } = SmartCleanCategory.None;
+    public string SmartCleanReasonKey { get; set; } = "";
     public bool IsLikelyNonMusic { get; set; }
     public string NonMusicReason { get; set; } = "";
     public long FileSizeBytes { get; set; }
@@ -54,6 +87,12 @@ public sealed class LibraryTrackItem {
     // Key per exact FilePath (or ContentUri under Scoped Storage) so tracks never share wrong covers
     [System.Text.Json.Serialization.JsonIgnore]
     public string CacheKey => !string.IsNullOrEmpty(FilePath) ? FilePath : ContentUriString;
+
+    /// <summary>
+    /// Normalized album + artist + title grouping key used for merging format variants (e.g. Atmos + FLAC).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string VariantGroupKey => MediaLibraryService.GetVariantGroupKey(this);
 }
 
 public sealed class LibraryMergedTrack {
@@ -125,7 +164,7 @@ public static partial class MediaLibraryService {
 
     public static MediaLibrarySnapshot CachedSnapshot => cachedSnapshot;
 
-    const string DiskCacheFileName = "library_cache_v3.json";
+    const string DiskCacheFileName = "library_cache_v4.json";
 
     [GeneratedRegex(@"^(?:WA-)?(?:PTT|AUD|VID)[-_]\d{8}[-_]WA\d+", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex WhatsAppNameRegex();
@@ -176,8 +215,20 @@ public static partial class MediaLibraryService {
     public static bool PassesFilter(LibraryTrackItem item, int filterMode) {
         if (item == null) return false;
         return filterMode switch {
-            1 => item.IsSurround, // Espacial + Surround (exclui estéreo/mono)
-            2 => item.IsSpatial,  // Somente Espacial / Atmos / TrueHD / Objects
+            1 => item.IsSurround, // Spatial + Surround (excludes stereo/mono)
+            2 => item.IsSpatial,  // Spatial / Atmos / TrueHD / Objects only
+            _ => true
+        };
+    }
+
+    /// <summary>
+    /// Filters by media kind: 0 = All, 1 = Music (non-video), 2 = Videos.
+    /// </summary>
+    public static bool PassesMediaTypeFilter(LibraryTrackItem item, int mediaTypeFilter) {
+        if (item == null) return false;
+        return mediaTypeFilter switch {
+            1 => !item.IsVideo,
+            2 => item.IsVideo,
             _ => true
         };
     }
@@ -198,8 +249,8 @@ public static partial class MediaLibraryService {
             }
         }
         return folderFilterMode switch {
-            1 => !matchesAny, // Todos exceto os escolhidos
-            2 => matchesAny,  // Somente os escolhidos
+            1 => !matchesAny, // All except selected
+            2 => matchesAny,  // Only selected
             _ => true
         };
     }
@@ -215,6 +266,143 @@ public static partial class MediaLibraryService {
         if (hideNonMusic && item.IsLikelyNonMusic) return false;
         if (!PassesFolderFilter(item.FolderPath, folderFilterMode, selectedFolders)) return false;
         return true;
+    }
+
+    /// <summary>
+    /// Applies spatial, media type, Smart Clean v2, hidden-folder, and directory filters from <paramref name="store"/>.
+    /// </summary>
+    public static bool PassesAllFilters(
+        LibraryTrackItem item,
+        AppSettingsStore store,
+        IReadOnlyList<string> selectedFoldersOverride = null) {
+        if (item == null) return false;
+        if (store == null) {
+            return !IsHiddenBySmartClean(item, null);
+        }
+        SmartCleanRuleSnapshot rules = SmartCleanRuleSnapshot.FromStore(store);
+        IReadOnlyList<string> selectedFolders = selectedFoldersOverride ?? store.GetLibraryFilterFolders();
+        return PassesAllFiltersInternal(item, store.LibraryFilterMode, store.LibraryMediaTypeFilter, store.LibraryHideNonMusic,
+            store.LibraryFolderFilterMode, selectedFolders, rules);
+    }
+
+    /// <summary>
+    /// Filters a sequence of tracks in one pass against all <paramref name="store"/> criteria without repeated prefs deserialization.
+    /// </summary>
+    public static List<LibraryTrackItem> FilterTracks(IEnumerable<LibraryTrackItem> tracks, AppSettingsStore store) {
+        if (tracks == null) return [];
+        if (store == null) {
+            SmartCleanRuleSnapshot defaultRules = SmartCleanRuleSnapshot.FromStore(null);
+            return tracks.Where(t => t != null && !ClassifySmartCleanInternal(t, defaultRules).IsHidden).ToList();
+        }
+        int spatialMode = Math.Clamp(store.LibraryFilterMode, 0, 2);
+        int mediaType = store.LibraryMediaTypeFilter;
+        bool hideNoise = store.LibraryHideNonMusic;
+        int folderMode = store.LibraryFolderFilterMode;
+        List<string> selectedFolders = store.GetLibraryFilterFolders();
+        SmartCleanRuleSnapshot rules = SmartCleanRuleSnapshot.FromStore(store);
+        List<LibraryTrackItem> result = [];
+        foreach (LibraryTrackItem t in tracks) {
+            if (PassesAllFiltersInternal(t, spatialMode, mediaType, hideNoise, folderMode, selectedFolders, rules)) {
+                result.Add(t);
+            }
+        }
+        return result;
+    }
+
+    static bool PassesAllFiltersInternal(
+        LibraryTrackItem item,
+        int spatialFilterMode,
+        int mediaTypeFilter,
+        bool hideNonMusic,
+        int folderFilterMode,
+        IReadOnlyList<string> selectedFolders,
+        SmartCleanRuleSnapshot rules) {
+        if (item == null) return false;
+        if (!PassesFilter(item, spatialFilterMode)) return false;
+        if (!PassesMediaTypeFilter(item, mediaTypeFilter)) return false;
+        SmartCleanResult sc = ClassifySmartCleanInternal(item, rules);
+        if (sc.Category == SmartCleanCategory.UserHiddenFolder) return false;
+        if (hideNonMusic && sc.IsHidden) return false;
+        if (!PassesFolderFilter(item.FolderPath, folderFilterMode, selectedFolders)) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Sorts tracks according to <see cref="AppSettingsStore.LibrarySortMode"/> (0=TitleAsc, 1=ArtistAsc, 2=RecentDesc, 3=QualityDesc).
+    /// </summary>
+    public static List<LibraryTrackItem> SortTracks(IEnumerable<LibraryTrackItem> items, int sortMode, Context ctx = null) {
+        List<LibraryTrackItem> list = (items ?? []).Where(t => t != null).ToList();
+        if (list.Count <= 1) return list;
+
+        if (sortMode == 3) {
+            Dictionary<LibraryTrackItem, AudioQualityReport> scores = EvaluateFastMap(list, ctx);
+            list.Sort((a, b) => CompareByQuality(scores[a], scores[b], a, b));
+            return list;
+        }
+
+        list.Sort((a, b) => CompareTracksBySortMode(a, b, sortMode));
+        return list;
+    }
+
+    /// <summary>
+    /// Sorts merged track groups according to <see cref="AppSettingsStore.LibrarySortMode"/> (0=TitleAsc, 1=ArtistAsc, 2=RecentDesc, 3=QualityDesc).
+    /// </summary>
+    public static List<LibraryMergedTrack> SortMergedTracks(IEnumerable<LibraryMergedTrack> items, int sortMode, Context ctx = null) {
+        List<LibraryMergedTrack> list = (items ?? []).Where(m => m?.Primary != null).ToList();
+        if (list.Count <= 1) return list;
+
+        if (sortMode == 3) {
+            Dictionary<LibraryTrackItem, AudioQualityReport> scores = EvaluateFastMap(list.Select(m => m.Primary), ctx);
+            list.Sort((a, b) => CompareByQuality(scores[a.Primary], scores[b.Primary], a.Primary, b.Primary));
+            return list;
+        }
+
+        list.Sort((a, b) => CompareTracksBySortMode(a.Primary, b.Primary, sortMode));
+        return list;
+    }
+
+    static int CompareTracksBySortMode(LibraryTrackItem a, LibraryTrackItem b, int sortMode) {
+        return sortMode switch {
+            1 => CompareArtistThenAlbum(a, b),
+            2 => CompareRecentDesc(a, b),
+            _ => CompareTitleAsc(a, b)
+        };
+    }
+
+    static int CompareTitleAsc(LibraryTrackItem a, LibraryTrackItem b) {
+        int cmp = string.Compare(a.Title, b.Title, StringComparison.OrdinalIgnoreCase);
+        return cmp != 0 ? cmp : CompareTracksByDiscAndNumber(a, b);
+    }
+
+    static int CompareArtistThenAlbum(LibraryTrackItem a, LibraryTrackItem b) {
+        int artCmp = string.Compare(a.EffectiveAlbumArtist, b.EffectiveAlbumArtist, StringComparison.OrdinalIgnoreCase);
+        if (artCmp != 0) return artCmp;
+        int albCmp = string.Compare(a.Album, b.Album, StringComparison.OrdinalIgnoreCase);
+        return albCmp != 0 ? albCmp : CompareTracksByDiscAndNumber(a, b);
+    }
+
+    static int CompareRecentDesc(LibraryTrackItem a, LibraryTrackItem b) {
+        int timeCmp = b.LastModifiedTicks.CompareTo(a.LastModifiedTicks);
+        return timeCmp != 0 ? timeCmp : CompareTitleAsc(a, b);
+    }
+
+    static Dictionary<LibraryTrackItem, AudioQualityReport> EvaluateFastMap(IEnumerable<LibraryTrackItem> items, Context ctx) {
+        Dictionary<LibraryTrackItem, AudioQualityReport> map = [];
+        foreach (LibraryTrackItem item in items) {
+            if (item != null && !map.ContainsKey(item)) {
+                map[item] = AudioQualityAnalyzer.EvaluateFast(item, ctx);
+            }
+        }
+        return map;
+    }
+
+    static int CompareByQuality(AudioQualityReport ra, AudioQualityReport rb, LibraryTrackItem a, LibraryTrackItem b) {
+        int catCmp = ((int)ra.Category).CompareTo((int)rb.Category);
+        if (catCmp != 0) return catCmp;
+        int scoreCmp = rb.Score.CompareTo(ra.Score);
+        if (scoreCmp != 0) return scoreCmp;
+        int sizeCmp = b.FileSizeBytes.CompareTo(a.FileSizeBytes);
+        return sizeCmp != 0 ? sizeCmp : CompareTitleAsc(a, b);
     }
 
     public static MediaLibrarySnapshot TryLoadCachedSnapshot(Context ctx) {
@@ -234,8 +422,10 @@ public static partial class MediaLibraryService {
             if (disk?.Tracks == null || disk.Tracks.Count == 0) {
                 return null;
             }
+            Context effectiveCtx = ctx ?? Android.App.Application.Context;
+            SmartCleanRuleSnapshot rules = SmartCleanRuleSnapshot.FromStore(effectiveCtx != null ? new AppSettingsStore(effectiveCtx) : null);
             foreach (LibraryTrackItem tr in disk.Tracks) {
-                ClassifyTrackRelevance(tr);
+                ClassifyTrackRelevanceInternal(tr, rules);
             }
             MediaLibrarySnapshot snap = BuildSnapshotFromTracks(disk.Tracks, disk.ScannedAtUtc);
             cachedSnapshot = snap;
@@ -255,6 +445,10 @@ public static partial class MediaLibraryService {
         await scanLock.WaitAsync().ConfigureAwait(false);
         try {
             return await Task.Run(() => {
+                Context effectiveCtx = ctx ?? Android.App.Application.Context;
+                AppSettingsStore settingsStore = effectiveCtx != null ? new AppSettingsStore(effectiveCtx) : null;
+                SmartCleanRuleSnapshot rules = SmartCleanRuleSnapshot.FromStore(settingsStore);
+
                 Dictionary<string, LibraryTrackItem> previousByPath = new(StringComparer.OrdinalIgnoreCase);
                 MediaLibrarySnapshot prevSnap = cachedSnapshot ?? TryLoadCachedSnapshot(ctx);
                 if (prevSnap != null) {
@@ -305,6 +499,7 @@ public static partial class MediaLibraryService {
                         current.IsSpatial = prev.IsSpatial;
                         current.AudioBadge = prev.AudioBadge;
                         current.IsVideo = prev.IsVideo;
+                        current.HasEmbeddedMusicTags = prev.HasEmbeddedMusicTags;
                         if (prev.DurationMs > 0 && current.DurationMs <= 0) current.DurationMs = prev.DurationMs;
                         if (prev.TrackNumber > 0) current.TrackNumber = prev.TrackNumber;
                         if (prev.DiscNumber > 0) current.DiscNumber = prev.DiscNumber;
@@ -312,9 +507,9 @@ public static partial class MediaLibraryService {
                         if (!string.IsNullOrWhiteSpace(prev.Title)) current.Title = prev.Title;
                         if (!string.IsNullOrWhiteSpace(prev.Artist)) current.Artist = prev.Artist;
                         if (!string.IsNullOrWhiteSpace(prev.Album)) current.Album = prev.Album;
-                        ClassifyTrackRelevance(current);
+                        ClassifyTrackRelevanceInternal(current, rules);
                     } else {
-                        ProbeTrackAudioProperties(ctx, current);
+                        ProbeTrackAudioPropertiesInternal(ctx, current, rules);
                         if (previousByPath.ContainsKey(current.FilePath)) {
                             updated++;
                         } else {
@@ -369,19 +564,29 @@ public static partial class MediaLibraryService {
         }
     }
 
+    static string GetStringOrDefault(string key, string fallback) {
+        string val = AndroidStrings.Active[key];
+        return string.Equals(val, key, StringComparison.Ordinal) ? fallback : val;
+    }
+
     static bool IsGenericFolderName(string name) {
         if (string.IsNullOrWhiteSpace(name)) return true;
-        return name.Equals("Download", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Downloads", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Music", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Movies", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Audiobooks", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Cavernize", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("0", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Desconhecido", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Unknown", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Unknown Artist", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Artista Desconhecido", StringComparison.OrdinalIgnoreCase);
+        string trimmed = name.Trim();
+        string localizedUnknownArtist = AndroidStrings.Active["UnknownArtist"];
+        string localizedUnknown = GetStringOrDefault("UnknownGenericLabel", "Unknown");
+        return trimmed.Equals("Download", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("Downloads", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("Music", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("Movies", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("Audiobooks", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("Cavernize", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("<unknown>", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("Unknown", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("Unknown Artist", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("Unknown Album", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals(localizedUnknown, StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals(localizedUnknownArtist, StringComparison.OrdinalIgnoreCase);
     }
 
     static bool IsGenericRootFolderPath(string folderPath) {
@@ -428,7 +633,7 @@ public static partial class MediaLibraryService {
                     albName = string.Format(CultureInfo.InvariantCulture, AndroidStrings.Active["SinglesAlbumFormat"], artName);
                     albKey = $"singles||{artName}";
                 } else {
-                    albName = string.IsNullOrWhiteSpace(t.Title) ? "Single" : t.Title;
+                    albName = string.IsNullOrWhiteSpace(t.Title) ? GetStringOrDefault("SingleTrackLabel", "Single") : t.Title;
                     albKey = $"track||{t.FilePath}";
                 }
             } else {
@@ -520,12 +725,12 @@ public static partial class MediaLibraryService {
     public static string GetVariantShortLabel(LibraryTrackItem item) {
         if (item == null) return "";
         if (item.IsSpatial) {
-            return string.IsNullOrWhiteSpace(item.AudioBadge) ? "ATMOS" : item.AudioBadge;
+            return string.IsNullOrWhiteSpace(item.AudioBadge) ? GetStringOrDefault("AtmosBadge", "ATMOS") : item.AudioBadge;
         }
         if (item.IsSurround) {
-            return string.IsNullOrWhiteSpace(item.AudioBadge) ? "SURROUND" : item.AudioBadge;
+            return string.IsNullOrWhiteSpace(item.AudioBadge) ? GetStringOrDefault("SurroundBadge", "SURROUND") : item.AudioBadge;
         }
-        return string.IsNullOrWhiteSpace(item.FormatBadge) ? "AUDIO" : item.FormatBadge;
+        return string.IsNullOrWhiteSpace(item.FormatBadge) ? GetStringOrDefault("AudioBadgeDefault", "AUDIO") : item.FormatBadge;
     }
 
     public static string GetDistinctVariantLabel(LibraryTrackItem item, IReadOnlyList<LibraryTrackItem> allVariants) {
@@ -548,28 +753,72 @@ public static partial class MediaLibraryService {
         return 4;
     }
 
-    public static List<LibraryMergedTrack> MergeAlbumTrackVariants(IEnumerable<LibraryTrackItem> sourceTracks, Context ctx = null) {
-        List<LibraryTrackItem> sorted = (sourceTracks ?? []).ToList();
-        sorted.Sort(CompareTracksByDiscAndNumber);
+    /// <summary>
+    /// Computes an album + artist scoped grouping key for matching format variants across all library tabs.
+    /// </summary>
+    public static string GetVariantGroupKey(LibraryTrackItem item) {
+        if (item == null) return "";
+        if (StemFragmentRegex().IsMatch(GetTrackStemName(item))) {
+            return $"stem||{item.CacheKey}";
+        }
+        string baseTitle = CanonicalTrackBaseTitle(item.Title);
+        if (string.IsNullOrEmpty(baseTitle)) {
+            return $"raw||{item.CacheKey}";
+        }
+        string kind = item.IsVideo ? "vid" : "aud";
+        string baseAlbum = !IsGenericFolderName(item.Album) ? CanonicalAlbumBase(item.Album) : "";
+        string baseArtist = NormalizeAlnum(item.EffectiveAlbumArtist);
+        if (!string.IsNullOrEmpty(baseAlbum)) {
+            return $"{kind}||alb||{baseAlbum}||{baseArtist}||{baseTitle}";
+        }
+        if (!string.IsNullOrEmpty(baseArtist)) {
+            return $"{kind}||art||{baseArtist}||{baseTitle}";
+        }
+        return $"{kind}||dir||{NormalizeAlnum(item.FolderPath)}||{baseTitle}";
+    }
+
+    /// <summary>
+    /// Merges multi-format variants (e.g. Atmos + FLAC, Hi-Res vs lossy) scoped by album + artist
+    /// while preserving caller track order; usable by Tracks, Albums, Artists, and Folders views.
+    /// </summary>
+    public static List<LibraryMergedTrack> MergeTrackVariants(IReadOnlyList<LibraryTrackItem> items, Context ctx = null) {
+        if (items == null || items.Count == 0) return [];
 
         List<LibraryMergedTrack> merged = [];
-        Dictionary<string, List<LibraryMergedTrack>> byBaseTitle = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, List<LibraryMergedTrack>> byBucket = new(StringComparer.OrdinalIgnoreCase);
 
-        foreach (LibraryTrackItem item in sorted) {
+        for (int idx = 0; idx < items.Count; idx++) {
+            LibraryTrackItem item = items[idx];
+            if (item == null) continue;
             string baseTitle = CanonicalTrackBaseTitle(item.Title);
             bool isStem = StemFragmentRegex().IsMatch(GetTrackStemName(item));
             LibraryMergedTrack targetGroup = null;
 
             if (!isStem && !string.IsNullOrEmpty(baseTitle)) {
-                if (!byBaseTitle.TryGetValue(baseTitle, out List<LibraryMergedTrack> candidates)) {
+                string kind = item.IsVideo ? "vid" : "aud";
+                string bucketKey = $"{kind}||{baseTitle}";
+                if (!byBucket.TryGetValue(bucketKey, out List<LibraryMergedTrack> candidates)) {
                     candidates = [];
-                    byBaseTitle[baseTitle] = candidates;
+                    byBucket[bucketKey] = candidates;
                 }
+                string itemKey = GetVariantGroupKey(item);
+                string itemAlb = !IsGenericFolderName(item.Album) ? CanonicalAlbumBase(item.Album) : "";
+                string itemArt = NormalizeAlnum(item.EffectiveAlbumArtist);
+
                 for (int i = 0; i < candidates.Count; i++) {
                     LibraryTrackItem p = candidates[i].Primary;
                     bool trackCompatible = item.TrackNumber <= 0 || p.TrackNumber <= 0 || item.TrackNumber == p.TrackNumber;
                     bool discCompatible = item.DiscNumber <= 0 || p.DiscNumber <= 0 || item.DiscNumber == p.DiscNumber;
-                    if (trackCompatible && discCompatible) {
+                    if (!trackCompatible || !discCompatible) continue;
+
+                    if (string.Equals(itemKey, GetVariantGroupKey(p), StringComparison.OrdinalIgnoreCase)) {
+                        targetGroup = candidates[i];
+                        break;
+                    }
+                    string pAlb = !IsGenericFolderName(p.Album) ? CanonicalAlbumBase(p.Album) : "";
+                    string pArt = NormalizeAlnum(p.EffectiveAlbumArtist);
+                    if (!string.IsNullOrEmpty(itemAlb) && string.Equals(itemAlb, pAlb, StringComparison.OrdinalIgnoreCase) &&
+                        (string.IsNullOrEmpty(itemArt) || string.IsNullOrEmpty(pArt) || string.Equals(itemArt, pArt, StringComparison.OrdinalIgnoreCase))) {
                         targetGroup = candidates[i];
                         break;
                     }
@@ -602,7 +851,13 @@ public static partial class MediaLibraryService {
             finalItem.Variants.AddRange(m.Variants);
             finalized.Add(finalItem);
         }
+        return finalized;
+    }
 
+    public static List<LibraryMergedTrack> MergeAlbumTrackVariants(IEnumerable<LibraryTrackItem> sourceTracks, Context ctx = null) {
+        List<LibraryTrackItem> sorted = (sourceTracks ?? []).Where(t => t != null).ToList();
+        sorted.Sort(CompareTracksByDiscAndNumber);
+        List<LibraryMergedTrack> finalized = MergeTrackVariants(sorted, ctx);
         finalized.Sort((a, b) => CompareTracksByDiscAndNumber(a.Primary, b.Primary));
         return finalized;
     }
@@ -654,110 +909,227 @@ public static partial class MediaLibraryService {
     }
 
     // ============================================================
-    // SMART NON-MUSIC CLUTTER CLASSIFIER (NO AI REQUIRED)
+    // SMART CLEAN V2 EVIDENCE-BASED CLUTTER CLASSIFIER
     // ============================================================
-    static void ClassifyTrackRelevance(LibraryTrackItem item) {
-        if (item == null || string.IsNullOrEmpty(item.FilePath)) return;
+    sealed class SmartCleanRuleSnapshot {
+        public bool HideSystemSfx { get; init; } = true;
+        public bool HideMessengers { get; init; } = true;
+        public bool HideCameraSocialVideo { get; init; } = true;
+        public bool HideStemsAndShort { get; init; } = true;
+        public int MinDurationSec { get; init; } = 25;
+        public HashSet<string> Allowlist { get; init; } = new(StringComparer.OrdinalIgnoreCase);
+        public List<string> HiddenFolders { get; init; } = [];
+
+        public static SmartCleanRuleSnapshot FromStore(AppSettingsStore store) {
+            if (store == null) return new SmartCleanRuleSnapshot();
+            return new SmartCleanRuleSnapshot {
+                HideSystemSfx = store.SmartCleanHideSystemSfx,
+                HideMessengers = store.SmartCleanHideMessengers,
+                HideCameraSocialVideo = store.SmartCleanHideCameraSocialVideo,
+                HideStemsAndShort = store.SmartCleanHideStemsAndShort,
+                MinDurationSec = store.SmartCleanMinDurationSec,
+                Allowlist = store.SmartCleanAllowlistPaths,
+                HiddenFolders = store.SmartCleanHiddenFolders.ToList()
+            };
+        }
+    }
+
+    static readonly string[] SystemSfxPathTokens = [
+        "/res/raw/", "/câmera.ver", "/camera.ver", "/sounds/gear/", "/cubasis 3/trash/",
+        "/ringtones/", "/notifications/", "/alarms/", "/system/media/", "/product/media/",
+        "/vendor/media/", "/touchsounds/", "/ui_sounds/"
+    ];
+
+    static readonly string[] MessengerPathTokens = [
+        "/whatsapp audio/", "/whatsapp voice notes/", "/whatsapp video/", "/whatsapp voice/",
+        "/whatsmediaconv/", "/whatsapp/", "/telegram/", "/messenger/", "/discord/",
+        "/recordings/call/", "/record/call/", "/call recordings/", "/call/", "/calls/",
+        "/voice recorder/", "/voice notes/", "/voice/", "/gravações de voz/", "/gravacoes de voz/",
+        "/soundrecorder/"
+    ];
+
+    static readonly string[] CameraScreenPathTokens = [
+        "/dcim/", "/camera/", "/câmera/", "/screenshots/", "/screenrecords/",
+        "/screen recordings/", "/screenrecorder/", "/azscreenrecorder/"
+    ];
+
+    static readonly string[] SocialVideoPathTokens = [
+        "/instaflow/", "/instaprime/", "/instagram/", "/tiktok/", "/snapchat/",
+        "/kwai/", "/facebook/", "/reels/", "/shorts/", "/collage/", "/capcut/", "/inshot/"
+    ];
+
+    static readonly string[] StemFolderTokens = [
+        "/stems/", "/projeto_stems_separados/", "/audiocutter/", "/mp3cutter/"
+    ];
+
+    /// <summary>
+    /// Classifies <paramref name="item"/> using Smart Clean v2 evidence-based rules and <paramref name="store"/> overrides.
+    /// </summary>
+    public static SmartCleanResult ClassifySmartClean(LibraryTrackItem item, AppSettingsStore store = null) =>
+        ClassifySmartCleanInternal(item, SmartCleanRuleSnapshot.FromStore(store));
+
+    /// <summary>
+    /// Returns true if <paramref name="item"/> is flagged for hiding under the active Smart Clean v2 rules.
+    /// </summary>
+    public static bool IsHiddenBySmartClean(LibraryTrackItem item, AppSettingsStore store = null) =>
+        ClassifySmartCleanInternal(item, SmartCleanRuleSnapshot.FromStore(store)).IsHidden;
+
+    /// <summary>
+    /// Returns all tracks currently hidden by Smart Clean v2 along with category and localized reason for UI inspection.
+    /// </summary>
+    public static List<SmartCleanInspectionEntry> GetSmartCleanInspectionList(IEnumerable<LibraryTrackItem> tracks, AppSettingsStore store = null) {
+        if (tracks == null) return [];
+        SmartCleanRuleSnapshot rules = SmartCleanRuleSnapshot.FromStore(store);
+        List<SmartCleanInspectionEntry> results = [];
+        foreach (LibraryTrackItem t in tracks) {
+            if (t == null) continue;
+            SmartCleanResult res = ClassifySmartCleanInternal(t, rules);
+            if (res.IsHidden) {
+                results.Add(new SmartCleanInspectionEntry(t, res.Category, res.ReasonKey, res.ReasonLabel));
+            }
+        }
+        results.Sort((a, b) => {
+            int catCmp = ((int)a.Category).CompareTo((int)b.Category);
+            if (catCmp != 0) return catCmp;
+            int fldCmp = string.Compare(a.Track.FolderName, b.Track.FolderName, StringComparison.OrdinalIgnoreCase);
+            return fldCmp != 0 ? fldCmp : string.Compare(a.Track.Title, b.Track.Title, StringComparison.OrdinalIgnoreCase);
+        });
+        return results;
+    }
+
+    static SmartCleanResult MakeHiddenSmartClean(SmartCleanCategory category, string reasonKey, string fallbackLabel) =>
+        new(category, reasonKey, GetStringOrDefault(reasonKey, fallbackLabel), true);
+
+    static bool ContainsAnyPathToken(string folderSlash, string fullPath, string[] tokens) {
+        for (int i = 0; i < tokens.Length; i++) {
+            string tok = tokens[i];
+            if ((!string.IsNullOrEmpty(folderSlash) && folderSlash.Contains(tok, StringComparison.OrdinalIgnoreCase)) ||
+                (!string.IsNullOrEmpty(fullPath) && fullPath.Contains(tok, StringComparison.OrdinalIgnoreCase))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static bool IsLikelyFourDigitYearTitle(string fileBase) =>
+        fileBase.Length == 4 && int.TryParse(fileBase, out int year) && year is >= 1900 and <= 2099;
+
+    static SmartCleanResult ClassifySmartCleanInternal(LibraryTrackItem item, SmartCleanRuleSnapshot rules) {
+        if (item == null || string.IsNullOrEmpty(item.FilePath)) {
+            return new SmartCleanResult(SmartCleanCategory.None, "", "", false);
+        }
 
         string path = (item.FilePath ?? "").Replace('\\', '/');
-        string folder = (item.FolderPath ?? "").Replace('\\', '/');
+        string folderNorm = (item.FolderPath ?? "").Replace('\\', '/').TrimEnd('/');
+        string folderSlash = string.IsNullOrEmpty(folderNorm) ? "" : (folderNorm + "/");
+
+        // 1. Per-file allowlist always restores individual tracks cleanly
+        if (rules.Allowlist.Count > 0 &&
+            (rules.Allowlist.Contains(path) ||
+             (!string.IsNullOrEmpty(item.FilePath) && rules.Allowlist.Contains(item.FilePath)) ||
+             (!string.IsNullOrEmpty(item.ContentUriString) && rules.Allowlist.Contains(item.ContentUriString)))) {
+            return new SmartCleanResult(SmartCleanCategory.None, "", "", false);
+        }
+
+        // 2. Explicit user-hidden folders
+        if (rules.HiddenFolders.Count > 0 && !string.IsNullOrEmpty(folderNorm)) {
+            for (int i = 0; i < rules.HiddenFolders.Count; i++) {
+                string hidden = (rules.HiddenFolders[i] ?? "").Replace('\\', '/').TrimEnd('/');
+                if (string.IsNullOrEmpty(hidden)) continue;
+                if (folderNorm.Equals(hidden, StringComparison.OrdinalIgnoreCase) ||
+                    folderSlash.StartsWith(hidden + "/", StringComparison.OrdinalIgnoreCase)) {
+                    return MakeHiddenSmartClean(SmartCleanCategory.UserHiddenFolder, "NonMusicHiddenFolder", "Hidden folder");
+                }
+            }
+        }
+
         bool isUri = IsUriString(path);
         string fileBase = isUri ? (item.Title ?? "") : (IOPath.GetFileNameWithoutExtension(path) ?? "");
         string ext = isUri
             ? ("." + (item.FormatBadge ?? "").TrimStart('.').ToLowerInvariant())
             : IOPath.GetExtension(path).ToLowerInvariant();
 
-        // System / App SFX sounds are always noise regardless of channel count
-        if (path.Contains("/res/raw/", StringComparison.OrdinalIgnoreCase) ||
-            path.Contains("/Câmera.ver", StringComparison.OrdinalIgnoreCase) ||
-            path.Contains("/Sounds/Gear/", StringComparison.OrdinalIgnoreCase) ||
-            path.Contains("/Cubasis 3/Trash/", StringComparison.OrdinalIgnoreCase)) {
-            item.IsLikelyNonMusic = true;
-            item.NonMusicReason = AndroidStrings.Active["NonMusicSystemSfx"];
-            return;
+        // 3. System / App SFX / Ringtones / Notifications / Alarms (before spatial exemption)
+        if (rules.HideSystemSfx && ContainsAnyPathToken(folderSlash, path, SystemSfxPathTokens)) {
+            return MakeHiddenSmartClean(SmartCleanCategory.SystemSfx, "NonMusicSystemSfx", "System / app sound");
         }
 
-        // HARD KEEP: Spatial / Surround audio (including Atmos talks/lectures, spatial demos, Atmos movies)
-        if (item.IsSpatial || item.IsSurround || item.ChannelCount > 2) {
-            item.IsLikelyNonMusic = false;
-            item.NonMusicReason = "";
-            return;
+        // 4. Messengers / Voice / Call recordings (before spatial exemption)
+        if (rules.HideMessengers &&
+            (ContainsAnyPathToken(folderSlash, path, MessengerPathTokens) ||
+             ext == ".amr" ||
+             WhatsAppNameRegex().IsMatch(fileBase))) {
+            return ext == ".amr"
+                ? MakeHiddenSmartClean(SmartCleanCategory.MessengersVoice, "NonMusicVoiceNote", "Voice note (.amr)")
+                : MakeHiddenSmartClean(SmartCleanCategory.MessengersVoice, "NonMusicRecording", "Recording / WhatsApp");
         }
 
-        // Separated AI stems / karaoke / dereverb fragments (MVSEP, etc.)
-        if (StemFragmentRegex().IsMatch(fileBase) ||
-            folder.Contains("/Projeto_Stems_Separados", StringComparison.OrdinalIgnoreCase) ||
-            folder.Contains("/AudioCutter", StringComparison.OrdinalIgnoreCase) ||
-            folder.Contains("/Mp3Cutter", StringComparison.OrdinalIgnoreCase)) {
-            item.IsLikelyNonMusic = true;
-            item.NonMusicReason = AndroidStrings.Active["NonMusicStemClip"];
-            return;
-        }
-
-        bool hasMusicTags = (!string.IsNullOrWhiteSpace(item.Artist) && !IsGenericFolderName(item.Artist)) ||
-            (!string.IsNullOrWhiteSpace(item.Album) && !IsGenericFolderName(item.Album)) ||
-            item.TrackNumber > 0;
-
-        // WhatsApp / Voice / Call recording folders
-        if (folder.Contains("/WhatsApp", StringComparison.OrdinalIgnoreCase) ||
-            folder.Contains("/WhatsMediaConv", StringComparison.OrdinalIgnoreCase) ||
-            folder.Contains("/Recordings/Call", StringComparison.OrdinalIgnoreCase) ||
-            folder.Contains("/Voice Recorder", StringComparison.OrdinalIgnoreCase) ||
-            folder.Contains("/gravações de voz", StringComparison.OrdinalIgnoreCase) ||
-            folder.Contains("/gravacoes de voz", StringComparison.OrdinalIgnoreCase) ||
-            folder.Contains("/SoundRecorder", StringComparison.OrdinalIgnoreCase)) {
-            if (!hasMusicTags) {
-                item.IsLikelyNonMusic = true;
-                item.NonMusicReason = AndroidStrings.Active["NonMusicRecording"];
-                return;
+        // 5. Camera / Screen / Social captures (before spatial exemption)
+        if (rules.HideCameraSocialVideo) {
+            if (ContainsAnyPathToken(folderSlash, path, CameraScreenPathTokens)) {
+                return MakeHiddenSmartClean(SmartCleanCategory.CameraSocialVideo, "NonMusicCameraVideo", "Camera / screen recording");
+            }
+            if (ContainsAnyPathToken(folderSlash, path, SocialVideoPathTokens)) {
+                return MakeHiddenSmartClean(SmartCleanCategory.CameraSocialVideo, "NonMusicSocialVideo", "Social media / screen capture");
+            }
+            if (item.IsVideo && !item.HasEmbeddedMusicTags && RecordingPrefixRegex().IsMatch(fileBase)) {
+                return MakeHiddenSmartClean(SmartCleanCategory.CameraSocialVideo, "NonMusicCameraVideo", "Camera / screen recording");
             }
         }
 
-        // Social media & screen-recording video dumps without album/artist tags
-        if (item.IsVideo && !hasMusicTags &&
-            (folder.Contains("/InstaFlow", StringComparison.OrdinalIgnoreCase) ||
-             folder.Contains("/InstaPrime", StringComparison.OrdinalIgnoreCase) ||
-             folder.Contains("/Instagram", StringComparison.OrdinalIgnoreCase) ||
-             folder.Contains("/TikTok", StringComparison.OrdinalIgnoreCase) ||
-             folder.Contains("/Snapchat", StringComparison.OrdinalIgnoreCase) ||
-             folder.Contains("/AzScreenRecorder", StringComparison.OrdinalIgnoreCase) ||
-             folder.Contains("/Collage", StringComparison.OrdinalIgnoreCase))) {
-            item.IsLikelyNonMusic = true;
-            item.NonMusicReason = AndroidStrings.Active["NonMusicSocialVideo"];
-            return;
+        // 6. Stems / Exports / Short untagged clips (before spatial exemption)
+        if (rules.HideStemsAndShort) {
+            if (StemFragmentRegex().IsMatch(fileBase) || ContainsAnyPathToken(folderSlash, path, StemFolderTokens)) {
+                return MakeHiddenSmartClean(SmartCleanCategory.StemsExportsShort, "NonMusicStemClip", "Stem / audio clip");
+            }
+            if (rules.MinDurationSec > 0 && item.DurationMs > 0 && item.DurationMs < rules.MinDurationSec * 1000L && !item.HasEmbeddedMusicTags) {
+                return MakeHiddenSmartClean(SmartCleanCategory.StemsExportsShort, "NonMusicShortClip", "Short untagged clip");
+            }
         }
 
-        // Generic / random hash / UUID / timestamp / voice filename patterns (unless properly tagged as music!)
-        if (!hasMusicTags) {
-            string folderLeaf = IOPath.GetFileName(folder.TrimEnd('/')) ?? "";
-            if (WhatsAppNameRegex().IsMatch(fileBase) ||
-                RecordingPrefixRegex().IsMatch(fileBase) ||
-                TimestampOrCodeNameRegex().IsMatch(fileBase) ||
+        // 7. Real Spatial / Atmos / Surround music & films stay intact unless caught by explicit junk/stem/hidden rules above
+        if (item.IsSpatial || item.IsSurround || item.ChannelCount > 2) {
+            return new SmartCleanResult(SmartCleanCategory.None, "", "", false);
+        }
+
+        // 8. Remaining untagged non-spatial clutter (hashes, timestamps, voice prefixes)
+        if (!item.HasEmbeddedMusicTags) {
+            if (rules.HideMessengers && RecordingPrefixRegex().IsMatch(fileBase)) {
+                return MakeHiddenSmartClean(SmartCleanCategory.MessengersVoice, "NonMusicRecording", "Recording / WhatsApp");
+            }
+            string folderLeaf = IOPath.GetFileName(folderNorm) ?? "";
+            bool looksTimestamp = TimestampOrCodeNameRegex().IsMatch(fileBase) && !(item.IsVideo && IsLikelyFourDigitYearTitle(fileBase));
+            if (looksTimestamp ||
                 UuidOrHexHashRegex().IsMatch(fileBase) ||
                 (folderLeaf.Length >= 32 && UuidOrHexHashRegex().IsMatch(folderLeaf))) {
-                item.IsLikelyNonMusic = true;
-                item.NonMusicReason = AndroidStrings.Active["NonMusicGenericName"];
-                return;
-            }
-
-            if (ext == ".amr") {
-                item.IsLikelyNonMusic = true;
-                item.NonMusicReason = AndroidStrings.Active["NonMusicVoiceNote"];
-                return;
-            }
-
-            if (item.DurationMs > 0 && item.DurationMs < 25_000) {
-                item.IsLikelyNonMusic = true;
-                item.NonMusicReason = AndroidStrings.Active["NonMusicShortClip"];
-                return;
+                if (item.IsVideo && rules.HideCameraSocialVideo) {
+                    return MakeHiddenSmartClean(SmartCleanCategory.CameraSocialVideo, "NonMusicGenericName", "Generic name / recording");
+                }
+                if (!item.IsVideo && rules.HideMessengers) {
+                    return MakeHiddenSmartClean(SmartCleanCategory.MessengersVoice, "NonMusicGenericName", "Generic name / recording");
+                }
             }
         }
 
-        item.IsLikelyNonMusic = false;
-        item.NonMusicReason = "";
+        return new SmartCleanResult(SmartCleanCategory.None, "", "", false);
     }
 
-    static void ProbeTrackAudioProperties(Context ctx, LibraryTrackItem item) {
+    static void ClassifyTrackRelevance(LibraryTrackItem item, AppSettingsStore store = null) =>
+        ClassifyTrackRelevanceInternal(item, SmartCleanRuleSnapshot.FromStore(store));
+
+    static void ClassifyTrackRelevanceInternal(LibraryTrackItem item, SmartCleanRuleSnapshot rules) {
+        if (item == null || string.IsNullOrEmpty(item.FilePath)) return;
+        SmartCleanResult res = ClassifySmartCleanInternal(item, rules);
+        item.SmartCleanCategory = res.Category;
+        item.SmartCleanReasonKey = res.ReasonKey;
+        item.IsLikelyNonMusic = res.IsHidden;
+        item.NonMusicReason = res.ReasonLabel;
+    }
+
+    static void ProbeTrackAudioProperties(Context ctx, LibraryTrackItem item) =>
+        ProbeTrackAudioPropertiesInternal(ctx, item, SmartCleanRuleSnapshot.FromStore(null));
+
+    static void ProbeTrackAudioPropertiesInternal(Context ctx, LibraryTrackItem item, SmartCleanRuleSnapshot rules) {
         if (item == null || (string.IsNullOrEmpty(item.FilePath) && item.ContentUri == null)) return;
         Context effectiveCtx = ctx ?? Android.App.Application.Context;
         Android.Net.Uri effectiveUri = item.ContentUri ?? TryParseUri(item.FilePath);
@@ -791,12 +1163,17 @@ public static partial class MediaLibraryService {
         bool sawAudio = false;
         bool sawVideo = false;
         bool wavAdm = false;
+        item.HasEmbeddedMusicTags = false;
 
         if (ext == ".wav") {
-            InspectWavHeader(effectiveCtx, item, out ch, out wavAdm);
+            InspectWavHeader(effectiveCtx, item, out ch, out wavAdm, out long wavDurMs);
+            if (item.DurationMs <= 0 && wavDurMs > 0) {
+                item.DurationMs = wavDurMs;
+            }
         }
 
         bool directReadable = CanOpenFileForRead(item.FilePath);
+        string tagPath = null;
         if (directReadable || (effectiveUri != null && effectiveCtx != null)) {
             try {
                 using MediaExtractor extractor = new();
@@ -835,13 +1212,14 @@ public static partial class MediaLibraryService {
                 // Unsupported container for MediaExtractor (e.g. raw .thd/.mlp/.caf) -> handled via ext flags below
             }
 
-            // Read native MP4/M4A/FLAC/ID3 tags (fixes missing track numbers & albums on MP4 Atmos!)
-            string tagPath = directReadable
+            // Read native MP4/M4A/FLAC/ID3/RIFF tags (fixes missing track numbers & albums on MP4 Atmos!)
+            tagPath = directReadable
                 ? item.FilePath
                 : (effectiveUri != null && effectiveCtx != null ? AndroidFileHelper.TryGetDirectPath(effectiveCtx, effectiveUri) : null);
             if (CanOpenFileForRead(tagPath)) {
                 ParsedAudioTags binTags = AudioTagReader.TryReadTags(tagPath);
                 if (binTags != null) {
+                    item.HasEmbeddedMusicTags = binTags.HasEmbeddedMusicTags;
                     if (binTags.TrackNumber > 0) item.TrackNumber = binTags.TrackNumber;
                     if (binTags.DiscNumber > 0) item.DiscNumber = binTags.DiscNumber;
                     if (!string.IsNullOrWhiteSpace(binTags.AlbumArtist)) item.AlbumArtist = binTags.AlbumArtist;
@@ -853,6 +1231,13 @@ public static partial class MediaLibraryService {
                         item.Title = binTags.Title;
                     }
                 }
+            }
+
+            bool canReadTagContainer = CanOpenFileForRead(tagPath) && AudioTagReader.IsContainerSupported(ext);
+            bool needDurationFallback = item.DurationMs <= 0 && !extSpatial && !extSurround;
+            bool needTagFallback = !item.HasEmbeddedMusicTags && !extSpatial && !extSurround && !canReadTagContainer;
+            if (needDurationFallback || needTagFallback) {
+                ProbeWithMediaMetadataRetriever(effectiveCtx, item, effectiveUri, directReadable, fileName, needDurationFallback, needTagFallback);
             }
         }
 
@@ -901,12 +1286,77 @@ public static partial class MediaLibraryService {
             item.AudioBadge = ch == 1 ? "MONO" : "2.0";
         }
 
-        ClassifyTrackRelevance(item);
+        ClassifyTrackRelevanceInternal(item, rules);
     }
 
-    static void InspectWavHeader(Context ctx, LibraryTrackItem item, out int channels, out bool isAdmBwf) {
+    static void ProbeWithMediaMetadataRetriever(
+        Context effectiveCtx,
+        LibraryTrackItem item,
+        Android.Net.Uri effectiveUri,
+        bool directReadable,
+        string fileName,
+        bool probeDuration,
+        bool probeTags) {
+        try {
+            using MediaMetadataRetriever mmr = new();
+            if (directReadable) {
+                mmr.SetDataSource(item.FilePath);
+            } else if (effectiveUri != null && effectiveCtx != null) {
+                mmr.SetDataSource(effectiveCtx, effectiveUri);
+            } else {
+                return;
+            }
+
+            if (probeDuration) {
+                string durRaw = mmr.ExtractMetadata(MetadataKey.Duration);
+                if (long.TryParse(durRaw, out long durMs) && durMs > 0) {
+                    item.DurationMs = durMs;
+                }
+            }
+
+            if (probeTags) {
+                string rawTitle = CleanMediaStoreTag(mmr.ExtractMetadata(MetadataKey.Title));
+                string rawArtist = CleanMediaStoreTag(mmr.ExtractMetadata(MetadataKey.Artist));
+                string rawAlbumArtist = CleanMediaStoreTag(mmr.ExtractMetadata(MetadataKey.Albumartist));
+                string rawAlbum = CleanMediaStoreTag(mmr.ExtractMetadata(MetadataKey.Album));
+                TryParseSlashNumber(mmr.ExtractMetadata(MetadataKey.CdTrackNumber), out int trkNum);
+                TryParseSlashNumber(mmr.ExtractMetadata(MetadataKey.DiscNumber), out int discNum);
+                byte[] embeddedArt = mmr.GetEmbeddedPicture();
+
+                bool hasRealAlbum = !string.IsNullOrWhiteSpace(rawAlbum)
+                    && !IsGenericFolderName(rawAlbum)
+                    && !string.Equals(rawAlbum, item.FolderName, StringComparison.OrdinalIgnoreCase);
+                string fileStem = !string.IsNullOrEmpty(fileName) ? IOPath.GetFileNameWithoutExtension(fileName) : "";
+                bool hasRealTitle = !string.IsNullOrWhiteSpace(rawTitle)
+                    && !string.Equals(rawTitle, fileStem, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(rawTitle, fileName, StringComparison.OrdinalIgnoreCase);
+
+                if (!string.IsNullOrWhiteSpace(rawArtist) ||
+                    !string.IsNullOrWhiteSpace(rawAlbumArtist) ||
+                    hasRealAlbum ||
+                    trkNum > 0 ||
+                    discNum > 0 ||
+                    hasRealTitle ||
+                    (embeddedArt != null && embeddedArt.Length > 0)) {
+                    item.HasEmbeddedMusicTags = true;
+                }
+
+                if (trkNum > 0 && item.TrackNumber <= 0) item.TrackNumber = trkNum;
+                if (discNum > 0 && item.DiscNumber <= 0) item.DiscNumber = discNum;
+                if (!string.IsNullOrWhiteSpace(rawAlbumArtist) && string.IsNullOrWhiteSpace(item.AlbumArtist)) item.AlbumArtist = rawAlbumArtist;
+                if (!string.IsNullOrWhiteSpace(rawArtist) && string.IsNullOrWhiteSpace(item.Artist)) item.Artist = rawArtist;
+                if (hasRealAlbum && string.IsNullOrWhiteSpace(item.Album)) item.Album = rawAlbum;
+                if (hasRealTitle) item.Title = rawTitle;
+            }
+        } catch {
+            // Best-effort metadata/duration probe
+        }
+    }
+
+    static void InspectWavHeader(Context ctx, LibraryTrackItem item, out int channels, out bool isAdmBwf, out long wavDurationMs) {
         channels = 0;
         isAdmBwf = false;
+        wavDurationMs = 0;
         try {
             using System.IO.Stream fs = OpenTrackStream(ctx, item);
             if (fs == null) return;
@@ -915,20 +1365,54 @@ public static partial class MediaLibraryService {
             if (read < 44) return;
             if (buf[0] != 'R' || buf[1] != 'I' || buf[2] != 'F' || buf[3] != 'F') return;
             int offset = 12;
+            uint byteRate = 0;
+            uint dataBytes = 0;
             while (offset + 8 <= read) {
                 string chunkId = System.Text.Encoding.ASCII.GetString(buf, offset, 4);
                 int chunkSize = BitConverter.ToInt32(buf, offset + 4);
                 if (chunkId == "fmt " && offset + 12 <= read) {
                     channels = BitConverter.ToUInt16(buf, offset + 10);
+                    if (offset + 20 <= read) {
+                        byteRate = BitConverter.ToUInt32(buf, offset + 16);
+                    }
+                } else if (chunkId == "data") {
+                    dataBytes = BitConverter.ToUInt32(buf, offset + 4);
                 } else if (chunkId is "axml" or "chna" or "bext") {
                     if (chunkId is "axml" or "chna") isAdmBwf = true;
                 }
                 if (chunkSize < 0) break;
                 offset += 8 + chunkSize + (chunkSize & 1);
             }
+            if (byteRate > 0) {
+                long effectiveBytes = dataBytes > 0 ? dataBytes : Math.Max(0, item.FileSizeBytes - 44);
+                if (effectiveBytes > 0) {
+                    wavDurationMs = effectiveBytes * 1000L / byteRate;
+                }
+            }
         } catch {
             // Ignore malformed header
         }
+    }
+
+    static ICursor TryQueryMediaCursor(ContentResolver cr, Android.Net.Uri baseUri, string[] preferredCols, string[] fallbackCols) {
+        try {
+            return cr.Query(baseUri, preferredCols, null, null, null);
+        } catch {
+            return cr.Query(baseUri, fallbackCols, null, null, null);
+        }
+    }
+
+    static string CleanMediaStoreTag(string raw) {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        string trimmed = raw.Trim();
+        return "<unknown>".Equals(trimmed, StringComparison.OrdinalIgnoreCase) ? "" : trimmed;
+    }
+
+    static bool TryParseSlashNumber(string raw, out int value) {
+        value = 0;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        string part = raw.Split('/')[0].Trim();
+        return int.TryParse(part, out value) && value > 0;
     }
 
     static void QueryMediaStore(Context ctx, bool isVideo, Dictionary<string, LibraryTrackItem> byPath) {
@@ -937,23 +1421,37 @@ public static partial class MediaLibraryService {
             Android.Net.Uri baseUri = isVideo
                 ? MediaStore.Video.Media.ExternalContentUri
                 : MediaStore.Audio.Media.ExternalContentUri;
-            List<string> cols = isVideo
+            List<string> fallbackCols = isVideo
                 ? ["_id", "title", "_display_name", "duration", "_data", IOpenableColumns.Size, "date_modified"]
                 : ["_id", "title", "artist", "album", "album_id", "duration", "track", "_data", "_display_name", IOpenableColumns.Size, "date_modified"];
+            List<string> preferredCols = isVideo
+                ? ["_id", "title", "artist", "album", "duration", "_data", "_display_name", IOpenableColumns.Size, "date_modified"]
+                : [.. fallbackCols];
             if (OperatingSystem.IsAndroidVersionAtLeast(29)) {
-                cols.Add(MediaStore.IMediaColumns.RelativePath);
+                fallbackCols.Add(MediaStore.IMediaColumns.RelativePath);
+                preferredCols.Add(MediaStore.IMediaColumns.RelativePath);
+            }
+            if (OperatingSystem.IsAndroidVersionAtLeast(30)) {
+                preferredCols.Add("album_artist");
+                if (isVideo) {
+                    preferredCols.Add("cd_track_number");
+                    preferredCols.Add("disc_number");
+                }
             }
 
-            using ICursor cursor = ctx.ContentResolver.Query(baseUri, [.. cols], null, null, null);
+            using ICursor cursor = TryQueryMediaCursor(ctx.ContentResolver, baseUri, [.. preferredCols], [.. fallbackCols]);
             if (cursor == null) return;
 
             int idCol = cursor.GetColumnIndex("_id");
             int titleCol = cursor.GetColumnIndex("title");
             int artistCol = cursor.GetColumnIndex("artist");
+            int albumArtistCol = cursor.GetColumnIndex("album_artist");
             int albumCol = cursor.GetColumnIndex("album");
             int albumIdCol = cursor.GetColumnIndex("album_id");
             int durCol = cursor.GetColumnIndex("duration");
             int trkCol = cursor.GetColumnIndex("track");
+            int cdTrkCol = cursor.GetColumnIndex("cd_track_number");
+            int discCol = cursor.GetColumnIndex("disc_number");
             int dataCol = cursor.GetColumnIndex("_data");
             int dispCol = cursor.GetColumnIndex("_display_name");
             int sizeCol = cursor.GetColumnIndex(IOpenableColumns.Size);
@@ -988,6 +1486,7 @@ public static partial class MediaLibraryService {
                         ? (IOPath.GetDirectoryName(rawPath) ?? extRoot)
                         : (!string.IsNullOrEmpty(relPath) ? IOPath.Combine(extRoot, relPath) : extRoot));
                 if (IsIgnoredSystemPath(dir + "/")) continue;
+                string folderName = IOPath.GetFileName(dir) ?? "";
 
                 string title = titleCol >= 0 ? (cursor.GetString(titleCol) ?? "") : "";
                 if (string.IsNullOrWhiteSpace(title)) {
@@ -995,18 +1494,27 @@ public static partial class MediaLibraryService {
                     title = IOPath.GetFileNameWithoutExtension(nameSeed);
                 }
 
-                string artist = artistCol >= 0 ? (cursor.GetString(artistCol) ?? "") : "";
-                if ("<unknown>".Equals(artist, StringComparison.OrdinalIgnoreCase)) artist = "";
-
-                string album = albumCol >= 0 ? (cursor.GetString(albumCol) ?? "") : "";
-                if ("<unknown>".Equals(album, StringComparison.OrdinalIgnoreCase) || IsGenericFolderName(album)) {
-                    album = "";
-                }
+                string artist = artistCol >= 0 ? CleanMediaStoreTag(cursor.GetString(artistCol)) : "";
+                string albumArtist = albumArtistCol >= 0 ? CleanMediaStoreTag(cursor.GetString(albumArtistCol)) : "";
 
                 long albId = albumIdCol >= 0 ? cursor.GetLong(albumIdCol) : -1;
                 int trkRaw = trkCol >= 0 ? cursor.GetInt(trkCol) : 0;
                 int trkDisc = trkRaw > 1000 ? trkRaw / 1000 : 0;
                 int trkNum = trkRaw > 1000 ? trkRaw % 1000 : trkRaw;
+                if (trkNum <= 0 && cdTrkCol >= 0 && TryParseSlashNumber(cursor.GetString(cdTrkCol), out int cdTrk)) {
+                    trkNum = cdTrk;
+                }
+                if (trkDisc <= 0 && discCol >= 0 && TryParseSlashNumber(cursor.GetString(discCol), out int parsedDisc)) {
+                    trkDisc = parsedDisc;
+                }
+
+                string album = albumCol >= 0 ? CleanMediaStoreTag(cursor.GetString(albumCol)) : "";
+                if (IsGenericFolderName(album) ||
+                    (isVideo && string.Equals(album, folderName, StringComparison.OrdinalIgnoreCase) &&
+                     string.IsNullOrEmpty(artist) && string.IsNullOrEmpty(albumArtist) && trkNum <= 0)) {
+                    album = "";
+                }
+
                 string nameForExt = !string.IsNullOrEmpty(disp) ? disp : rawPath;
                 string ext = IOPath.GetExtension(nameForExt).TrimStart('.').ToUpperInvariant();
                 long sizeBytes = sizeCol >= 0 ? cursor.GetLong(sizeCol) : 0;
@@ -1017,6 +1525,11 @@ public static partial class MediaLibraryService {
                     if (existing.DurationMs <= 0 && dur > 0) existing.DurationMs = dur;
                     if (existing.FileSizeBytes <= 0 && sizeBytes > 0) existing.FileSizeBytes = sizeBytes;
                     if (existing.LastModifiedTicks <= 0 && modTicks > 0) existing.LastModifiedTicks = modTicks;
+                    if (string.IsNullOrWhiteSpace(existing.Artist) && !string.IsNullOrWhiteSpace(artist)) existing.Artist = artist;
+                    if (string.IsNullOrWhiteSpace(existing.AlbumArtist) && !string.IsNullOrWhiteSpace(albumArtist)) existing.AlbumArtist = albumArtist;
+                    if (string.IsNullOrWhiteSpace(existing.Album) && !string.IsNullOrWhiteSpace(album)) existing.Album = album;
+                    if (existing.TrackNumber <= 0 && trkNum > 0) existing.TrackNumber = trkNum;
+                    if (existing.DiscNumber <= 0 && trkDisc > 0) existing.DiscNumber = trkDisc;
                     continue;
                 }
 
@@ -1024,10 +1537,11 @@ public static partial class MediaLibraryService {
                     FilePath = trackKey,
                     ContentUri = itemUri,
                     Title = title.Trim(),
-                    Artist = artist.Trim(),
-                    Album = album.Trim(),
+                    Artist = artist,
+                    AlbumArtist = albumArtist,
+                    Album = album,
                     FolderPath = dir,
-                    FolderName = IOPath.GetFileName(dir),
+                    FolderName = folderName,
                     FormatBadge = string.IsNullOrEmpty(ext) ? (isVideo ? "VIDEO" : "AUDIO") : ext,
                     DurationMs = dur,
                     AlbumId = albId,
@@ -1051,6 +1565,7 @@ public static partial class MediaLibraryService {
             string[] cols = [
                 "_id",
                 MediaStore.IMediaColumns.DisplayName,
+                MediaStore.IMediaColumns.Duration,
                 IOpenableColumns.Size,
                 "date_modified",
                 "_data",
@@ -1061,6 +1576,7 @@ public static partial class MediaLibraryService {
 
             int idCol = cursor.GetColumnIndex("_id");
             int dispCol = cursor.GetColumnIndex(MediaStore.IMediaColumns.DisplayName);
+            int durCol = cursor.GetColumnIndex(MediaStore.IMediaColumns.Duration);
             int sizeCol = cursor.GetColumnIndex(IOpenableColumns.Size);
             int dateModCol = cursor.GetColumnIndex("date_modified");
             int dataCol = cursor.GetColumnIndex("_data");
@@ -1100,6 +1616,7 @@ public static partial class MediaLibraryService {
                 string folderName = IOPath.GetFileName(dir) ?? "";
                 ParseHeuristicNames(baseName, folderName, out string artist, out string title, out string album, out int discNum, out int trkNum);
 
+                long durMs = durCol >= 0 ? Math.Max(0, cursor.GetLong(durCol)) : 0;
                 long sizeBytes = sizeCol >= 0 ? cursor.GetLong(sizeCol) : 0;
                 long modSec = dateModCol >= 0 ? cursor.GetLong(dateModCol) : 0;
                 long modTicks = modSec > 0 ? DateTimeOffset.FromUnixTimeSeconds(modSec).UtcTicks : 0;
@@ -1113,6 +1630,7 @@ public static partial class MediaLibraryService {
                     FolderPath = dir,
                     FolderName = folderName,
                     FormatBadge = ext.TrimStart('.').ToUpperInvariant(),
+                    DurationMs = durMs,
                     DiscNumber = discNum,
                     TrackNumber = trkNum,
                     IsVideo = isVideo,

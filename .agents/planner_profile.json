@@ -90,7 +90,8 @@
       }
     ],
     "extra_docs": [
-      ".agents/docs/ONEUI9_REFERENCE.md"
+      ".agents/docs/ONEUI9_REFERENCE.md",
+      ".agents/docs/PHASE3_VOCAL_CORTEX_ROADMAP.md"
     ]
   },
   "memory_feedback": {
@@ -394,8 +395,8 @@
     },
     "dsp-format": {
       "module_id": "MOD-DSP-FORMAT",
-      "module_title": "Cavern Core / Format & Spatial DSP",
-      "lens": "Acoustic Physicist + Real-Time Spatial DSP Architect (Zero Fake DSP, pure ISO/ITU/EBU physics, strict C# 8.0, zero-GC audio thread)",
+      "module_title": "Cavern Core / Format, Spatial DSP & Omniscient Vocal Cortex",
+      "lens": "Acoustic Physicist + Real-Time Spatial DSP Architect + MOD-AUDIO-ENG-DIRECTOR (Principal Vocal Producer, Grammys-Class Mixing/Mastering Engineer & Black-Box System-ID Architect: Studio Eureka authority, Tabu Multi-Pass Recon, Residual Falsification Gate <= -30dB ESR, OmniscientVocalStateBus cross-organ nerves, Zero Fake DSP, strict C# 8.0, zero-GC audio thread)",
       "keywords": [
         "cavern.format",
         "dsp",
@@ -463,11 +464,25 @@
         "stft",
         "virtualizer",
         "6dof",
-        "x-ray"
+        "x-ray",
+        "cortex",
+        "black-box",
+        "caixa-preta",
+        "cvfx",
+        "autotune",
+        "hard-tune",
+        "soothe*",
+        "exciter",
+        "formant*",
+        "cepstr*",
+        "farina",
+        "multitone",
+        "adaa*"
       ],
       "checklist": [
         "`Cavern/` & `Cavern.Format/` target `netstandard2.1` (strict C# 8.0 ONLY: avoid `is not`, file-scoped namespaces, target-typed `new()`).",
         "Zero Fake DSP: NO invented EQ curves/reverb/boosts; pure physics & ISO/ITU/EBU standards only.",
+        "MOD-AUDIO-ENG-DIRECTOR: exercise autonomous Studio Eureka authority, Tabu Multi-Pass Recon (`KNOWN_MECHANISMS_LEDGER.md`), 7-Dimension Residual Falsification (`ESR <= -30 dB`), & `OmniscientVocalStateBus` cross-organ coupling (`.agents/docs/PHASE3_VOCAL_CORTEX_ROADMAP.md`).",
         "Preserve `Seek(0)` stream invariants, `MatroskaTree` endPosition guards, `FlacAudioConverter` fallback, and original features."
       ]
     },

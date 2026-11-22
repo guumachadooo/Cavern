@@ -1126,23 +1126,158 @@ public sealed class AppSettingsStore {
         set => Edit().PutString("libraryFilterFolders", value ?? "[]").Apply();
     }
 
-    public List<string> GetLibraryFilterFolders() {
-        try {
-            List<string> list = System.Text.Json.JsonSerializer.Deserialize<List<string>>(LibraryFilterFoldersJson);
-            return list?.Where(s => !string.IsNullOrWhiteSpace(s)).Distinct(StringComparer.OrdinalIgnoreCase).ToList() ?? [];
-        } catch {
-            return [];
-        }
+    public List<string> GetLibraryFilterFolders() =>
+        ReadStringSetPref("libraryFilterFolders", trimTrailingSlash: true)
+            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    public void SetLibraryFilterFolders(IEnumerable<string> folders) =>
+        WriteStringSetPref("libraryFilterFolders", folders, trimTrailingSlash: true);
+
+    // W25-A: Smart Clean v2 Rules & Library Information Architecture Preferences
+    public bool SmartCleanHideSystemSfx {
+        get => prefs.GetBoolean("smartCleanHideSystemSfx", true);
+        set => Edit().PutBoolean("smartCleanHideSystemSfx", value).Apply();
     }
 
-    public void SetLibraryFilterFolders(IEnumerable<string> folders) {
-        List<string> clean = folders?
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Select(s => s.TrimEnd('/'))
+    public bool SmartCleanHideMessengers {
+        get => prefs.GetBoolean("smartCleanHideMessengers", true);
+        set => Edit().PutBoolean("smartCleanHideMessengers", value).Apply();
+    }
+
+    public bool SmartCleanHideCameraSocialVideo {
+        get => prefs.GetBoolean("smartCleanHideCameraSocialVideo", true);
+        set => Edit().PutBoolean("smartCleanHideCameraSocialVideo", value).Apply();
+    }
+
+    public bool SmartCleanHideStemsAndShort {
+        get => prefs.GetBoolean("smartCleanHideStemsAndShort", true);
+        set => Edit().PutBoolean("smartCleanHideStemsAndShort", value).Apply();
+    }
+
+    public int SmartCleanMinDurationSec {
+        get => Math.Clamp(prefs.GetInt("smartCleanMinDurationSec", 25), 0, 180);
+        set => Edit().PutInt("smartCleanMinDurationSec", Math.Clamp(value, 0, 180)).Apply();
+    }
+
+    public HashSet<string> SmartCleanAllowlistPaths {
+        get => ReadStringSetPref("smartCleanAllowlistPaths", trimTrailingSlash: false);
+        set => WriteStringSetPref("smartCleanAllowlistPaths", value, trimTrailingSlash: false);
+    }
+
+    public void AllowSmartCleanPath(string path) =>
+        ModifyStringSetPref("smartCleanAllowlistPaths", path, add: true, trimTrailingSlash: false);
+
+    public void RemoveSmartCleanAllowPath(string path) =>
+        ModifyStringSetPref("smartCleanAllowlistPaths", path, add: false, trimTrailingSlash: false);
+
+    public void ClearSmartCleanAllowlist() =>
+        WriteStringSetPref("smartCleanAllowlistPaths", [], trimTrailingSlash: false);
+
+    public HashSet<string> SmartCleanHiddenFolders {
+        get => ReadStringSetPref("smartCleanHiddenFolders", trimTrailingSlash: true);
+        set => WriteStringSetPref("smartCleanHiddenFolders", value, trimTrailingSlash: true);
+    }
+
+    public void HideLibraryFolder(string folderPath) =>
+        ModifyStringSetPref("smartCleanHiddenFolders", folderPath, add: true, trimTrailingSlash: true);
+
+    public void UnhideLibraryFolder(string folderPath) =>
+        ModifyStringSetPref("smartCleanHiddenFolders", folderPath, add: false, trimTrailingSlash: true);
+
+    public void ClearHiddenLibraryFolders() =>
+        WriteStringSetPref("smartCleanHiddenFolders", [], trimTrailingSlash: true);
+
+    /// <summary>0 = All, 1 = Music, 2 = Videos.</summary>
+    public int LibraryMediaTypeFilter {
+        get => Math.Clamp(prefs.GetInt("libraryMediaTypeFilter", 0), 0, 2);
+        set => Edit().PutInt("libraryMediaTypeFilter", Math.Clamp(value, 0, 2)).Apply();
+    }
+
+    /// <summary>0 = TitleAsc, 1 = ArtistAsc, 2 = RecentDesc, 3 = QualityDesc.</summary>
+    public int LibrarySortMode {
+        get => Math.Clamp(prefs.GetInt("librarySortMode", 0), 0, 3);
+        set => Edit().PutInt("librarySortMode", Math.Clamp(value, 0, 3)).Apply();
+    }
+
+    /// <summary>
+    /// Resets Smart Clean v2 rules back to defaults (and optionally clears user allowlist/hidden-folder overrides).
+    /// </summary>
+    public void ResetSmartCleanToDefaults(bool clearAllowlistAndHiddenFolders = false) {
+        ISharedPreferencesEditor ed = Edit()
+            .PutBoolean("libraryHideNonMusic", true)
+            .PutBoolean("smartCleanHideSystemSfx", true)
+            .PutBoolean("smartCleanHideMessengers", true)
+            .PutBoolean("smartCleanHideCameraSocialVideo", true)
+            .PutBoolean("smartCleanHideStemsAndShort", true)
+            .PutInt("smartCleanMinDurationSec", 25);
+        if (clearAllowlistAndHiddenFolders) {
+            ed.PutString("smartCleanAllowlistPaths", "[]")
+              .PutString("smartCleanHiddenFolders", "[]");
+        }
+        ed.Apply();
+    }
+
+    /// <summary>
+    /// Resets all Library IA filters, sort order, and Smart Clean v2 settings back to defaults.
+    /// </summary>
+    public void ResetLibraryPreferencesToDefaults(bool clearAllowlistAndHiddenFolders = false) {
+        ResetSmartCleanToDefaults(clearAllowlistAndHiddenFolders);
+        Edit()
+            .PutInt("libraryFilterMode", 0)
+            .PutInt("libraryMediaTypeFilter", 0)
+            .PutInt("librarySortMode", 0)
+            .PutInt("libraryFolderFilterMode", 0)
+            .PutString("libraryFilterFolders", "[]")
+            .Apply();
+    }
+
+    static string NormalizePrefPath(string path, bool trimTrailingSlash) {
+        if (string.IsNullOrWhiteSpace(path)) return "";
+        string trimmed = path.Trim();
+        if (trimmed.StartsWith("content://", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("file://", StringComparison.OrdinalIgnoreCase)) {
+            return trimmed;
+        }
+        string norm = trimmed.Replace('\\', '/');
+        return trimTrailingSlash && norm.Length > 1 ? norm.TrimEnd('/') : norm;
+    }
+
+    HashSet<string> ReadStringSetPref(string prefKey, bool trimTrailingSlash) {
+        HashSet<string> set = new(StringComparer.OrdinalIgnoreCase);
+        try {
+            string json = prefs.GetString(prefKey, "[]");
+            List<string> list = System.Text.Json.JsonSerializer.Deserialize<List<string>>(json);
+            if (list != null) {
+                for (int i = 0; i < list.Count; i++) {
+                    string norm = NormalizePrefPath(list[i], trimTrailingSlash);
+                    if (!string.IsNullOrEmpty(norm)) set.Add(norm);
+                }
+            }
+        } catch {
+            // Fall back to empty set on malformed persisted JSON
+        }
+        return set;
+    }
+
+    void WriteStringSetPref(string prefKey, IEnumerable<string> values, bool trimTrailingSlash) {
+        List<string> clean = values?
+            .Select(v => NormalizePrefPath(v, trimTrailingSlash))
+            .Where(v => !string.IsNullOrEmpty(v))
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(s => s, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(v => v, StringComparer.OrdinalIgnoreCase)
             .ToList() ?? [];
-        LibraryFilterFoldersJson = System.Text.Json.JsonSerializer.Serialize(clean);
+        Edit().PutString(prefKey, System.Text.Json.JsonSerializer.Serialize(clean)).Apply();
+    }
+
+    void ModifyStringSetPref(string prefKey, string path, bool add, bool trimTrailingSlash) {
+        string norm = NormalizePrefPath(path, trimTrailingSlash);
+        if (string.IsNullOrEmpty(norm)) return;
+        HashSet<string> set = ReadStringSetPref(prefKey, trimTrailingSlash);
+        bool changed = add ? set.Add(norm) : set.Remove(norm);
+        if (changed) {
+            WriteStringSetPref(prefKey, set, trimTrailingSlash);
+        }
     }
 
     public string LastExplorerDirectory {
