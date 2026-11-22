@@ -23,7 +23,7 @@ DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_E
   /root/.dotnet/dotnet build CavernSamples/Reusable/Cavernize.Logic/Cavernize.Logic.csproj -c Release -m:1 /p:UseSharedCompilation=false
 ```
 
-- Also audit C# syntax, `using` directives, Android API names (`Android.*`), 16 KB ELF alignment (`NativeLibs/arm64-v8a/*.so`), and `AndroidManifest.xml` (`android:targetSdkVersion` **must remain `>= 35`**, `android:extractNativeLibs="true"`, `android:enableOnBackInvokedCallback="true"`, no `requestLegacyExternalStorage`) carefully before pushing so CI succeeds on the first try.
+- Consult [BUILD_LESSONS.md](../../docs/BUILD_LESSONS.md) and audit C# syntax, `using` directives, Android API names (`Android.*`), 16 KB ELF alignment (`NativeLibs/arm64-v8a/*.so`), and `AndroidManifest.xml` (`android:targetSdkVersion` **must remain `>= 35`**, `android:extractNativeLibs="true"`, `android:enableOnBackInvokedCallback="true"`, no `requestLegacyExternalStorage`) carefully before pushing so CI succeeds on the first try.
 
 ## 2. Sync Version for OTA Auto-Updater
 [AppUpdateService.cs](../../../CavernSamples/CavernizeAndroid/Services/AppUpdateService.cs) checks GitHub release tag `android-latest` and compares versions numerically (`IsRemoteNewer`).
@@ -33,13 +33,14 @@ DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_E
 
 ## 3. Update Project Memory (Feedback Loop) & Clean Commit
 - If this release introduces new features, UX decisions, CI changes, or non-obvious bug fixes, **prepend** a concise 1–4 line summary under `## 3. Version History (Newest First)` in [PROJECT_HISTORY.md](../../docs/PROJECT_HISTORY.md) (and update [ONEUI9_REFERENCE.md](../../docs/ONEUI9_REFERENCE.md) in place or `AGENTS.md` if applicable) before committing.
+- If this commit fixes a **novel recurring build/CI error class** (not transient network/runner noise), run `python3 -B .agents/scripts/error_learner.py --fetch-live-ci --apply` (or `--from-log`/`--record`) and verify `python3 -B .agents/scripts/error_learner.py --audit-lessons` so [BUILD_LESSONS.md](../../docs/BUILD_LESSONS.md) captures a **version-agnostic** guardrail with dynamic lookup instructions.
 - Check `git status` and review diffs (`git diff --stat`) before staging.
 - Never force-push over collaborator/concurrent work or commit temporary logs/APKs unless already tracked (note `*.apk` is in `.gitignore`).
 - Keep commits organized on `master` with clear messages and push to `origin/master`.
 
 ## 4. Monitor GitHub Actions (`Build Android APK`)
-- Wait for the workflow triggered by the push to finish cleanly (`completed` + `success`), inspecting build logs via `gh run list` / `gh run view --log-failed` (or GitHub REST API if `gh` is unavailable).
-- Only report the APK build as passing after observing the workflow complete with zero errors.
+- Wait for the workflow triggered by the push to finish cleanly (`completed` + `success`), inspecting build logs via `gh run list` / `gh run view --log-failed` or `python3 -B .agents/scripts/fetch_live_diagnostics.py --ci --lessons` (`origin/diagnostics:ci/latest-build-diagnostics.md` & `ci/latest-learned-lessons.md`).
+- Only report the APK build as passing after observing the workflow complete with zero errors. If any new recurring error/warning class appears, ingest it with `error_learner.py --fetch-live-ci --apply` before shipping the fix.
 
 ## 5. Deliver the Signed APK
 Once the run succeeds, download the `Cavernize-APK` artifact (or `android-latest` release asset) and place it in both locations if accessible:

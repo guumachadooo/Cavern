@@ -89,8 +89,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch live diagnostics from GitHub.")
     parser.add_argument("--repo", default=DEFAULT_REPO, help="owner/repo (default: guumachadooo/Cavern)")
     parser.add_argument("--branch", default=DEFAULT_BRANCH, help="branch (default: diagnostics)")
-    parser.add_argument("--all", action="store_true", help="Fetch CI diagnostics, self-check, summary, and log tail")
+    parser.add_argument("--all", action="store_true", help="Fetch CI diagnostics, learned lessons, self-check, summary, and log tail")
     parser.add_argument("--ci", action="store_true", help="Fetch CI build diagnostics report")
+    parser.add_argument("--lessons", action="store_true", help="Fetch CI dynamic error-learner candidates (ci/latest-learned-lessons.md)")
     parser.add_argument("--selfcheck", action="store_true", help="Fetch device self-check report")
     parser.add_argument("--summary", action="store_true", help="Fetch device diagnostic JSON summary")
     parser.add_argument("--log", action="store_true", help="Fetch device log tail")
@@ -98,7 +99,7 @@ def main() -> int:
     parser.add_argument("--errors-only", action="store_true", help="Filter device log lines to WARN/ERROR/FATAL")
     args = parser.parse_args()
 
-    if not (args.all or args.ci or args.selfcheck or args.summary or args.log):
+    if not (args.all or args.ci or args.lessons or args.selfcheck or args.summary or args.log):
         args.all = True
 
     head = fetch_branch_head(args.repo, args.branch)
@@ -124,6 +125,14 @@ def main() -> int:
                 print(f"... (+{len(lines) - 160} more lines)")
         else:
             print(f"[HTTP {code}] ci/latest-build-diagnostics.md unavailable yet.")
+
+    if args.all or args.lessons:
+        print_section("DYNAMIC BUILD LESSONS CANDIDATES (ci/latest-learned-lessons.md)")
+        code, body = fetch_raw_file(args.repo, args.branch, "ci/latest-learned-lessons.md")
+        if code == 200:
+            print(body.strip())
+        else:
+            print(f"[HTTP {code}] ci/latest-learned-lessons.md unavailable yet (generated on next CI build).")
 
     if args.all or args.selfcheck:
         print_section("DEVICE SELF-CHECK REPORT (device-logs/latest_selfcheck.md)")

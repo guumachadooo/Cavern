@@ -450,6 +450,8 @@ def run_build_rules(
     if ran_any and layer_statuses:
         l_parts = [f"{lbl}:{st}({cnt})" if cnt else f"{lbl}:{st}" for lbl, st, cnt in layer_statuses]
         print(f"BUILD_SUMMARY|layers={','.join(l_parts)}|unique_errors={len(global_seen)}|deduped={total_dups}")
+        if upstream_failed and (repo / ".agents" / "scripts" / "error_learner.py").is_file():
+            print("LEARN_HINT|new recurring build error? pipe output -> `python3 -B .agents/scripts/error_learner.py --from-log - --apply`")
     return ran_any
 
 

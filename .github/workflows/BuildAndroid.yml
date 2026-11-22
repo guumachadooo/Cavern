@@ -865,6 +865,12 @@ jobs:
               with open(summary_path, "a", encoding="utf-8") as sf:
                   sf.write("\n".join(sum_lines) + "\n")
           PYDIAG
+          if [ -f ".agents/scripts/error_learner.py" ] && [ -f "$GITHUB_WORKSPACE/build/diagnostics/build-diagnostics.json" ]; then
+            python3 -B .agents/scripts/error_learner.py \
+              --from-ci-json "$GITHUB_WORKSPACE/build/diagnostics/build-diagnostics.json" \
+              --dry-run \
+              --report "$GITHUB_WORKSPACE/build/diagnostics/learned-lessons.md" || true
+          fi
 
       - name: Upload build diagnostics artifact (errors + warnings)
         if: always()
@@ -928,6 +934,7 @@ jobs:
           files_to_push = [
               ("build-diagnostics-report.md", "ci/latest-build-diagnostics.md"),
               ("build-diagnostics.json", "ci/latest-build-diagnostics.json"),
+              ("learned-lessons.md", "ci/latest-learned-lessons.md"),
           ]
           for local_name, remote_path in files_to_push:
               fp = os.path.join(diag_dir, local_name)
