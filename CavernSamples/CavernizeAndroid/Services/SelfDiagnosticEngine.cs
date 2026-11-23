@@ -507,7 +507,8 @@ public static class SelfDiagnosticEngine {
             }
         }
         bool qnn = OnnxRuntimeInstallerService.IsQnnAvailableOnDisk(context);
-        string info = $"ORT v{ver} (API v{apiVer}, {slots.Count} vtable slots, QNN={qnn}), models={validModels} valid";
+        bool hasWebGpuHeader = header.Contains("WebGpu", StringComparison.OrdinalIgnoreCase);
+        string info = $"ORT v{ver} (API v{apiVer}, {slots.Count} vtable slots, WebGPU={hasWebGpuHeader}, QNN={qnn}), models={validModels} valid";
         if (corruptModels > 0) {
             return (SelfCheckStatus.Warn, $"{info}, {corruptModels} corrupt/empty .onnx file(s) detected");
         }

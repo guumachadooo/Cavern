@@ -6,17 +6,20 @@ namespace Cavernize.Logic.Spatial;
 /// Hardware execution provider preference for the managed ARM64 ONNX Runtime in <c>NativeLibraryDir</c>.
 /// </summary>
 public enum NeuralExecutionProvider {
-    /// <summary>Automatic priority cascade: Snapdragon QNN HTP NPU -> XNNPACK ARM64 SIMD -> CPU fallback.</summary>
+    /// <summary>Automatic smart cascade: WebGPU Vulkan GPU (for GPU-optimal CNN/MDX models) -> QNN HTP NPU (if bundled) -> CPU ARM64 KleidiAI SIMD.</summary>
     Auto = 0,
 
-    /// <summary>Qualcomm Snapdragon QNN Hexagon Tensor Processor (HTP NPU) with XNNPACK/CPU fallback.</summary>
+    /// <summary>Qualcomm Snapdragon QNN Hexagon Tensor Processor (HTP NPU) with WebGPU/CPU fallback.</summary>
     QnnHtp = 1,
 
     /// <summary>ARM64 NEON/FP16 XNNPACK Execution Provider with CPU fallback.</summary>
     Xnnpack = 2,
 
-    /// <summary>Standard ONNX Runtime CPU Execution Provider.</summary>
-    Cpu = 3
+    /// <summary>Standard ONNX Runtime CPU Execution Provider (ARM64 KleidiAI SIMD).</summary>
+    Cpu = 3,
+
+    /// <summary>WebGPU (Vulkan Dawn GPU — Adreno / Mali / Xclipse) Execution Provider with automatic CPU fallback.</summary>
+    WebGpu = 4
 }
 
 /// <summary>

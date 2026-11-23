@@ -191,8 +191,8 @@ jobs:
           (assets_dir / "truehdd" / "version.txt").write_text(th_ver + "\n", encoding="utf-8")
           print(f"Bundled libtruehdd.so ({(native_dir / 'libtruehdd.so').stat().st_size} bytes, v{th_ver})")
 
-          # 3. ONNX Runtime (Prefer Maven Central onnxruntime-android-qnn for Snapdragon Hexagon NPU QNN HTP,
-          #    auto-falling back to standard onnxruntime-android if QNN AAR is unavailable or fails 16 KB ELF alignment)
+          # 3. ONNX Runtime (Standard Maven Central onnxruntime-android AAR with WebGPU Vulkan GPU, XNNPACK,
+          #    ARM64 KleidiAI CPU, full FP16 ops, and verified 16 KB ELF PT_LOAD alignment)
           def check_elf_16k_bytes(raw_bytes):
               if len(raw_bytes) < 64 or raw_bytes[:4] != b"\x7fELF" or raw_bytes[4] != 2:
                   return False
@@ -211,10 +211,12 @@ jobs:
                           return False
               return found_load
 
+          # Use standard onnxruntime-android (includes WebGPU Vulkan GPU EP, XNNPACK, ARM64 KleidiAI CPU, and full FP16 ops like Gelu for SCNet).
+          # Stripped onnxruntime-android-qnn omits XNNPACK/WebGPU/FP16-Gelu and requires ~130 MB of external qnn-runtime .so blobs.
           ort_ver = "1.32.0"
           ort_variant = "onnxruntime-android"
           ort_bundled = False
-          for artifact in ("onnxruntime-android-qnn", "onnxruntime-android"):
+          for artifact in ("onnxruntime-android",):
               ort_base = f"https://repo1.maven.org/maven2/com/microsoft/onnxruntime/{artifact}"
               cand_ver = ort_ver
               try:
@@ -243,9 +245,8 @@ jobs:
                       print(f"Skipping {artifact} {cand_ver}: missing libonnxruntime.so or onnxruntime_c_api.h")
                       continue
                   bad_align = [b for b, data in extracted_sos.items() if not check_elf_16k_bytes(data)]
-                  if bad_align and artifact == "onnxruntime-android-qnn":
-                      print(f"Skipping {artifact} {cand_ver}: non-16KB-aligned libraries {bad_align}; falling back to standard onnxruntime-android")
-                      continue
+                  if bad_align:
+                      raise RuntimeError(f"{artifact} {cand_ver} has non-16KB-aligned libraries: {bad_align}")
                   for b, data in extracted_sos.items():
                       (native_dir / b).write_bytes(data)
                   (assets_dir / "onnxruntime" / "onnxruntime_c_api.h").write_bytes(extracted_hdr)

@@ -3162,6 +3162,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                         playerEngine.BindSeparatedNeuralTrack(separated);
                     }
                     ApplyExtractedSongDnaOnUiThread(extractedDna);
+                    SyncNeuralRuntimeDiagnostics();
                     RefreshNeuralAudioUi();
                     RefreshNeuralPrepUi();
                     string toastMsg;

@@ -1221,7 +1221,8 @@ public partial class MainActivity {
             S["NeuralProviderAuto"],
             S["NeuralProviderQnn"],
             S["NeuralProviderXnnpack"],
-            S["NeuralProviderCpu"]
+            S["NeuralProviderCpu"],
+            S["NeuralProviderWebGpu"]
         ];
         neuralProviderSelector.SetItems(providerLabels, Math.Clamp(store.NeuralProviderIndex, 0, providerLabels.Length - 1));
         neuralProviderSelector.SelectionChanged += pos => {
@@ -1955,7 +1956,7 @@ public partial class MainActivity {
             case 2: {
                 int modelCount = OnnxRuntimeInstallerService.GetInstalledModelIds(this).Count;
                 bool installed = OnnxRuntimeInstallerService.IsRuntimeInstalled(this);
-                string ep = playerEngine?.NeuralDiagnostics.ActiveProviderName ?? (installed ? "XNNPACK" : "CPU");
+                string ep = playerEngine?.NeuralDiagnostics.ActiveProviderName ?? (installed ? "CPU (ARM64 KleidiAI)" : "Not Installed");
                 string restTag = store.LgsrEnabled
                     ? "LGSR"
                     : (store.SpatialKaraokeEnabled ? "Karaoke" : $"{store.NeuralTrackCacheMaxMb} MB");
@@ -4688,19 +4689,19 @@ public partial class MainActivity {
         string planSummary = neuralOrchestrator != null
             ? neuralOrchestrator.BuildPlan(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, store.BuildNeuralAudioConfig()).Summary
             : string.Empty;
+        Cavernize.Logic.Spatial.NeuralExecutionProvider prefEp =
+            (Cavernize.Logic.Spatial.NeuralExecutionProvider)Math.Clamp(store.NeuralProviderIndex, 0, 4);
         string epName = !installed
             ? "Not Installed"
-            : store.NeuralProviderIndex switch {
-                1 => qnn ? "QNN HTP" : "XNNPACK",
-                2 => "XNNPACK",
-                3 => "CPU",
-                _ => qnn ? "QNN HTP" : "XNNPACK"
-            };
+            : (neuralRuntime != null
+                ? neuralRuntime.DescribeEffectiveProvider(prefEp)
+                : "CPU (ARM64 KleidiAI)");
+        bool qnnActive = qnn && (neuralRuntime == null || neuralRuntime.SupportsQnnHtp);
         playerEngine?.NeuralStage.UpdateRuntimeDiagnostics(
             installed,
             store.InstalledOnnxRuntimeVersion,
             epName,
-            qnn,
+            qnnActive,
             modelCount,
             totalBytes,
             trackCacheEntryCount: cacheStats.EntryCount,
@@ -4724,7 +4725,7 @@ public partial class MainActivity {
         bool installed = OnnxRuntimeInstallerService.IsRuntimeInstalled(this);
         int modelCount = OnnxRuntimeInstallerService.GetInstalledModelIds(this).Count;
         double cacheMb = OnnxRuntimeInstallerService.GetModelsAndRuntimeSizeBytes(this) / (1024.0 * 1024.0);
-        string epName = playerEngine?.NeuralDiagnostics.ActiveProviderName ?? (installed ? "XNNPACK" : "CPU");
+        string epName = playerEngine?.NeuralDiagnostics.ActiveProviderName ?? (installed ? "CPU (ARM64 KleidiAI)" : "Not Installed");
 
         if (neuralModelsBtn != null) {
             neuralModelsBtn.Text = string.Format(S["NeuralModelsBtn"], modelCount);
@@ -4758,7 +4759,7 @@ public partial class MainActivity {
         }
         if (store != null) {
             if (neuralProviderSelector != null) {
-                int pIdx = Math.Clamp(store.NeuralProviderIndex, 0, 3);
+                int pIdx = Math.Clamp(store.NeuralProviderIndex, 0, 4);
                 if (neuralProviderSelector.SelectedIndex != pIdx) {
                     neuralProviderSelector.SetSelection(pIdx, notify: false);
                 }
@@ -4813,6 +4814,9 @@ public partial class MainActivity {
             bool preferQnn = store.NeuralProviderIndex == (int)Cavernize.Logic.Spatial.NeuralExecutionProvider.QnnHtp ||
                              store.NeuralProviderIndex == (int)Cavernize.Logic.Spatial.NeuralExecutionProvider.Auto;
             OnnxRuntimeStatusResult status = await OnnxRuntimeInstallerService.CheckStatusAsync(this, store, preferQnn);
+            if (status.IsInstalled && neuralRuntime != null) {
+                await neuralRuntime.ProbeCapabilitiesAsync();
+            }
             latestOnnxStatus = status;
             RunOnUiThread(() => {
                 if (uiDestroyed) return;

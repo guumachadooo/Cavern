@@ -526,7 +526,7 @@ public sealed class AppSettingsStore {
 
     public int NeuralProviderIndex {
         get => prefs.GetInt("neuralProviderIdx", (int)Cavernize.Logic.Spatial.NeuralExecutionProvider.Auto);
-        set => Edit().PutInt("neuralProviderIdx", Math.Clamp(value, 0, 3)).Apply();
+        set => Edit().PutInt("neuralProviderIdx", Math.Clamp(value, 0, 4)).Apply();
     }
 
     public int NeuralOverlapFactor {
@@ -696,7 +696,7 @@ public sealed class AppSettingsStore {
     }
 
     public Cavernize.Logic.Spatial.NeuralAudioConfig BuildNeuralAudioConfig() => new Cavernize.Logic.Spatial.NeuralAudioConfig {
-        PreferredProvider = (Cavernize.Logic.Spatial.NeuralExecutionProvider)Math.Clamp(NeuralProviderIndex, 0, 3),
+        PreferredProvider = (Cavernize.Logic.Spatial.NeuralExecutionProvider)Math.Clamp(NeuralProviderIndex, 0, 4),
         OrchestrationMode = (Cavernize.Logic.Spatial.NeuralOrchestrationMode)Math.Clamp(NeuralOrchestrationModeIndex, 0, 1),
         OverlapFactor = Math.Clamp(NeuralOverlapFactor, 2, 8),
         EnableTta = NeuralTtaEnabled,
