@@ -39,6 +39,7 @@ SKIP_SYNC_DIRS = {
     ".vs",
     ".idea",
     "NativeLibs",
+    ".aistudio",
 }
 SKIP_SYNC_FILES = {
     ".metrics.jsonl",

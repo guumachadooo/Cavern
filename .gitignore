@@ -22,4 +22,4 @@ node_modules/
 .agents/.bridge_vault.json
 .env
 .env.local
-
+.aistudio/
