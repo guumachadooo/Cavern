@@ -79,6 +79,18 @@ namespace Cavern.Neural {
         public int StftSize { get; set; } = 2048;
 
         /// <summary>
+        /// Enables 3-stage CPU↔GPU producer-consumer double-buffered pipelining (STFT/pack for chunk <c>c+1</c> and
+        /// iSTFT/WOLA for chunk <c>c-1</c> overlap concurrently with GPU/ONNX inference for chunk <c>c</c>, 0.0 dB bit-exact).
+        /// </summary>
+        public bool EnableAsyncPipelining { get; set; } = true;
+
+        /// <summary>
+        /// Optional inter-chunk GPU breathing yield in milliseconds (0..100 ms) so mobile WebGPU/Vulkan dispatches leave
+        /// compositor frame headroom for Android SurfaceFlinger/UI responsiveness without starving the display.
+        /// </summary>
+        public int GpuUiBreathingYieldMs { get; set; }
+
+        /// <summary>
         /// Creates a sanitized copy with bounded numeric fields.
         /// </summary>
         public MvsepPipelineOptions CloneSanitized() {
@@ -102,6 +114,12 @@ namespace Cavern.Neural {
             } else if (wiener > 4.0f) {
                 wiener = 4.0f;
             }
+            int yieldMs = GpuUiBreathingYieldMs;
+            if (yieldMs < 0) {
+                yieldMs = 0;
+            } else if (yieldMs > 100) {
+                yieldMs = 100;
+            }
             return new MvsepPipelineOptions {
                 ChunkSamples = chunk,
                 OverlapFactor = overlap,
@@ -111,7 +129,9 @@ namespace Cavern.Neural {
                 EnablePhaseFix = EnablePhaseFix,
                 WienerExponent = wiener,
                 EnforceEnergyConservation = EnforceEnergyConservation,
-                StftSize = fft
+                StftSize = fft,
+                EnableAsyncPipelining = EnableAsyncPipelining,
+                GpuUiBreathingYieldMs = yieldMs
             };
         }
 
@@ -203,6 +223,30 @@ namespace Cavern.Neural {
     /// returning <c>stemCount</c> separated stereo stems of identical length.
     /// </summary>
     public delegate StereoStemBuffer[] NeuralChunkEvaluator(float[] chunkLeft, float[] chunkRight, int chunkSamples);
+
+    /// <summary>
+    /// Stage 1 (CPU Producer) delegate: converts a planar stereo chunk into a model-ready tensor/STFT payload
+    /// concurrently while Stage 2 executes ONNX inference on the previous chunk.
+    /// </summary>
+    public delegate TPrepared NeuralChunkPreparer<TPrepared>(float[] chunkLeft, float[] chunkRight, int chunkSamples);
+
+    /// <summary>
+    /// Stage 2 (GPU/Accelerator Inference) delegate: executes the ONNX session on <paramref name="prepared"/>
+    /// concurrently with Stage 1 (next chunk) and Stage 3 (previous chunk).
+    /// </summary>
+    public delegate TInferOut NeuralChunkInferer<TPrepared, TInferOut>(TPrepared prepared);
+
+    /// <summary>
+    /// Stage 3 (CPU Consumer) delegate: runs iSTFT / mask synthesis on <paramref name="inferred"/> to produce
+    /// planar stereo stem chunks ready for bit-exact sequential overlap-add accumulation.
+    /// </summary>
+    public delegate StereoStemBuffer[] NeuralChunkFinalizer<TPrepared, TInferOut>(TPrepared prepared, TInferOut inferred, int chunkSamples);
+
+    /// <summary>
+    /// Callback invoked monotonically as consecutive overlap-add sample spans become permanently finalized during
+    /// single-pass chunked inference, enabling Auto-RTF progressive real-time playback before 100% completion.
+    /// </summary>
+    public delegate void ProgressiveStemsReadyCallback(StereoStemBuffer[] liveStems, int finalizedSamples, int totalSamples, double elapsedSeconds);
 
     /// <summary>
     /// Mandatory MVSEP-grade anti-artifact signal processing pipeline for ALL Slot 2B neural audio models
@@ -314,6 +358,110 @@ namespace Cavern.Neural {
 
             onProgress?.Invoke(1.0);
             return stems;
+        }
+
+        /// <summary>
+        /// Processes a full stereo track using an explicit 3-stage CPU↔GPU producer-consumer double-buffered pipeline:
+        /// Stage 1 (<paramref name="preparer"/> on chunk <c>c+1</c>), Stage 2 (<paramref name="inferer"/> on chunk <c>c</c>),
+        /// and Stage 3 (<paramref name="finalizer"/> + overlap-add on chunk <c>c-1</c>) run concurrently while preserving
+        /// strictly sequential chunk accumulation order (0.0 dB / IEEE-754 bit-exact with <see cref="ProcessTrack"/>).
+        /// </summary>
+        public static StereoStemBuffer[] ProcessTrackPipelined<TPrepared, TInferOut>(
+            float[] mixLeft,
+            float[] mixRight,
+            NeuralChunkPreparer<TPrepared> preparer,
+            NeuralChunkInferer<TPrepared, TInferOut> inferer,
+            NeuralChunkFinalizer<TPrepared, TInferOut> finalizer,
+            MvsepPipelineOptions options,
+            Action<double> onProgress = null,
+            ProgressiveStemsReadyCallback onProgressiveReady = null,
+            CancellationToken token = default) {
+            if (mixLeft == null) {
+                throw new ArgumentNullException(nameof(mixLeft));
+            }
+            if (mixRight == null) {
+                throw new ArgumentNullException(nameof(mixRight));
+            }
+            if (mixLeft.Length != mixRight.Length) {
+                throw new ArgumentException("Mix channels must have identical lengths.");
+            }
+            if (preparer == null) {
+                throw new ArgumentNullException(nameof(preparer));
+            }
+            if (inferer == null) {
+                throw new ArgumentNullException(nameof(inferer));
+            }
+            if (finalizer == null) {
+                throw new ArgumentNullException(nameof(finalizer));
+            }
+
+            MvsepPipelineOptions opt = (options ?? new MvsepPipelineOptions()).CloneSanitized();
+            int totalSamples = mixLeft.Length;
+            if (totalSamples == 0) {
+                return Array.Empty<StereoStemBuffer>();
+            }
+
+            StereoStemBuffer[] stems;
+            if (!opt.EnableTta) {
+                stems = RunSingleChunkedPassPipelined(
+                    mixLeft, mixRight, preparer, inferer, finalizer, opt,
+                    0.0, 0.90, onProgress, onProgressiveReady, token);
+            } else {
+                stems = RunTtaPassesPipelined(
+                    mixLeft, mixRight, preparer, inferer, finalizer, opt, onProgress, token);
+            }
+
+            if (stems == null || stems.Length == 0) {
+                return Array.Empty<StereoStemBuffer>();
+            }
+
+            // Isolate live progressive playback buffers from in-place post-processing (e.g., Wiener phase_fix)
+            // so the real-time audio thread never reads partially mutated buffers before final atomic swap.
+            bool willPostProcess = opt.EnforceEnergyConservation || (opt.EnablePhaseFix && stems.Length > 1);
+            if (onProgressiveReady != null && !opt.EnableTta && willPostProcess) {
+                StereoStemBuffer[] isolated = new StereoStemBuffer[stems.Length];
+                for (int s = 0; s < stems.Length; s++) {
+                    float[] copyL = new float[stems[s].Length];
+                    float[] copyR = new float[stems[s].Length];
+                    Array.Copy(stems[s].Left, copyL, stems[s].Length);
+                    Array.Copy(stems[s].Right, copyR, stems[s].Length);
+                    isolated[s] = new StereoStemBuffer(stems[s].Name, copyL, copyR);
+                }
+                stems = isolated;
+            }
+
+            if (opt.EnforceEnergyConservation) {
+                stems = AppendOrUpdateConservedResidual(mixLeft, mixRight, stems);
+            }
+
+            if (opt.EnablePhaseFix && stems.Length > 1) {
+                ApplyPhaseFixWiener(mixLeft, mixRight, stems, opt.StftSize, opt.WienerExponent, token);
+                if (opt.EnforceEnergyConservation) {
+                    stems = AppendOrUpdateConservedResidual(mixLeft, mixRight, stems);
+                }
+            }
+
+            onProgress?.Invoke(1.0);
+            return stems;
+        }
+
+        /// <summary>
+        /// Computes an adaptive inter-chunk GPU UI breathing yield (in ms) from the configured base yield and
+        /// the measured Stage 2 inference dispatch duration, preventing Vulkan/WebGPU compositor stalls on heavy
+        /// dispatches while adding zero overhead on fast (<c>&lt; 50 ms</c>) chunks.
+        /// </summary>
+        public static int ComputeAdaptiveGpuBreathingYieldMs(int baseYieldMs, double stage2InferElapsedMs) {
+            if (baseYieldMs <= 0) {
+                return 0;
+            }
+            if (stage2InferElapsedMs < 50.0) {
+                return 0;
+            }
+            int cappedBase = Math.Min(100, baseYieldMs);
+            if (stage2InferElapsedMs >= 500.0) {
+                return Math.Min(100, Math.Max(cappedBase, 32));
+            }
+            return cappedBase;
         }
 
         /// <summary>
@@ -844,6 +992,386 @@ namespace Cavern.Neural {
                     outR[n] = accumR[s][src] * invW;
                 }
                 result[s] = new StereoStemBuffer(stemNames[s], outL, outR);
+            }
+            return result;
+        }
+
+        static StereoStemBuffer[] RunTtaPassesPipelined<TPrepared, TInferOut>(
+            float[] mixLeft,
+            float[] mixRight,
+            NeuralChunkPreparer<TPrepared> preparer,
+            NeuralChunkInferer<TPrepared, TInferOut> inferer,
+            NeuralChunkFinalizer<TPrepared, TInferOut> finalizer,
+            MvsepPipelineOptions opt,
+            Action<double> onProgress,
+            CancellationToken token) {
+            int totalPasses = opt.EnableShiftTta ? 4 : 3;
+            int length = mixLeft.Length;
+            double passWeight = 0.90 / totalPasses;
+
+            StereoStemBuffer[] accum = RunSingleChunkedPassPipelined(
+                mixLeft, mixRight, preparer, inferer, finalizer, opt, 0.0, passWeight, onProgress, null, token);
+            if (accum == null || accum.Length == 0) {
+                return Array.Empty<StereoStemBuffer>();
+            }
+            int stemCount = accum.Length;
+
+            StereoStemBuffer[] pass1 = RunSingleChunkedPassPipelined(
+                mixRight, mixLeft, preparer, inferer, finalizer, opt, passWeight, passWeight * 2.0, onProgress, null, token);
+            if (pass1 != null && pass1.Length >= stemCount) {
+                for (int s = 0; s < stemCount; s++) {
+                    float[] accL = accum[s].Left;
+                    float[] accR = accum[s].Right;
+                    float[] p1L = pass1[s].Left;
+                    float[] p1R = pass1[s].Right;
+                    for (int n = 0; n < length; n++) {
+                        accL[n] += p1R[n];
+                        accR[n] += p1L[n];
+                    }
+                }
+            }
+            pass1 = null;
+
+            float[] invL = new float[length];
+            float[] invR = new float[length];
+            for (int i = 0; i < length; i++) {
+                invL[i] = -mixLeft[i];
+                invR[i] = -mixRight[i];
+            }
+            StereoStemBuffer[] pass2 = RunSingleChunkedPassPipelined(
+                invL, invR, preparer, inferer, finalizer, opt, passWeight * 2.0, passWeight * 3.0, onProgress, null, token);
+            invL = null;
+            invR = null;
+            if (pass2 != null && pass2.Length >= stemCount) {
+                for (int s = 0; s < stemCount; s++) {
+                    float[] accL = accum[s].Left;
+                    float[] accR = accum[s].Right;
+                    float[] p2L = pass2[s].Left;
+                    float[] p2R = pass2[s].Right;
+                    for (int n = 0; n < length; n++) {
+                        accL[n] -= p2L[n];
+                        accR[n] -= p2R[n];
+                    }
+                }
+            }
+            pass2 = null;
+
+            if (opt.EnableShiftTta) {
+                int shift = Math.Max(1, (opt.ChunkSamples / opt.OverlapFactor) / 2);
+                float[] shiftL = new float[length + shift];
+                float[] shiftR = new float[length + shift];
+                for (int i = 0; i < shift; i++) {
+                    int src = ReflectIndex(shift - 1 - i, length);
+                    shiftL[i] = mixLeft[src];
+                    shiftR[i] = mixRight[src];
+                }
+                Array.Copy(mixLeft, 0, shiftL, shift, length);
+                Array.Copy(mixRight, 0, shiftR, shift, length);
+                StereoStemBuffer[] pass3 = RunSingleChunkedPassPipelined(
+                    shiftL, shiftR, preparer, inferer, finalizer, opt, passWeight * 3.0, 0.90, onProgress, null, token);
+                shiftL = null;
+                shiftR = null;
+                if (pass3 != null && pass3.Length >= stemCount) {
+                    for (int s = 0; s < stemCount; s++) {
+                        float[] accL = accum[s].Left;
+                        float[] accR = accum[s].Right;
+                        float[] p3L = pass3[s].Left;
+                        float[] p3R = pass3[s].Right;
+                        for (int n = 0; n < length; n++) {
+                            accL[n] += p3L[n + shift];
+                            accR[n] += p3R[n + shift];
+                        }
+                    }
+                }
+                pass3 = null;
+            }
+
+            float invCount = 1f / totalPasses;
+            for (int s = 0; s < stemCount; s++) {
+                float[] accL = accum[s].Left;
+                float[] accR = accum[s].Right;
+                for (int n = 0; n < length; n++) {
+                    accL[n] *= invCount;
+                    accR[n] *= invCount;
+                }
+            }
+            return accum;
+        }
+
+        static StereoStemBuffer[] RunSingleChunkedPassPipelined<TPrepared, TInferOut>(
+            float[] mixLeft,
+            float[] mixRight,
+            NeuralChunkPreparer<TPrepared> preparer,
+            NeuralChunkInferer<TPrepared, TInferOut> inferer,
+            NeuralChunkFinalizer<TPrepared, TInferOut> finalizer,
+            MvsepPipelineOptions opt,
+            double progressStart,
+            double progressEnd,
+            Action<double> onProgress,
+            ProgressiveStemsReadyCallback onProgressiveReady,
+            CancellationToken token) {
+            int length = mixLeft.Length;
+            int chunkSize = opt.ChunkSamples;
+            int step = Math.Max(1, chunkSize / opt.OverlapFactor);
+            int pad = step;
+            int paddedLen = length + pad * 2;
+            if (paddedLen < chunkSize) {
+                paddedLen = chunkSize;
+            }
+
+            float[] padL = new float[paddedLen];
+            float[] padR = new float[paddedLen];
+            for (int i = 0; i < paddedLen; i++) {
+                int srcIdx = ReflectIndex(i - pad, length);
+                padL[i] = mixLeft[srcIdx];
+                padR[i] = mixRight[srcIdx];
+            }
+
+            float[] chunkWindow = CreateRaisedCosineChunkWindow(chunkSize, opt.FadeFraction);
+            float[] weightSum = new float[paddedLen];
+
+            int maxChunks = ((paddedLen - chunkSize) + step - 1) / step + 1;
+            if (maxChunks < 1) {
+                maxChunks = 1;
+            }
+            int[] starts = new int[maxChunks];
+            int totalChunks = 0;
+            for (int c = 0; c < maxChunks; c++) {
+                int st = c * step;
+                if (st + chunkSize > paddedLen) {
+                    st = paddedLen - chunkSize;
+                }
+                starts[totalChunks++] = st;
+                if (st + chunkSize >= paddedLen) {
+                    break;
+                }
+            }
+
+            float[][] accumL = null;
+            float[][] accumR = null;
+            string[] stemNames = null;
+            StereoStemBuffer[] progressiveStems = null;
+            int publishedSamples = 0;
+            bool abortedEmpty = false;
+            System.Diagnostics.Stopwatch passSw = System.Diagnostics.Stopwatch.StartNew();
+
+            Action<int, TPrepared, TInferOut> runStage3Sequential = (chunkIdx, prepPayload, inferPayload) => {
+                StereoStemBuffer[] chunkOut = finalizer(prepPayload, inferPayload, chunkSize);
+                if (chunkOut == null || chunkOut.Length == 0) {
+                    abortedEmpty = true;
+                    return;
+                }
+
+                if (accumL == null) {
+                    int stems = chunkOut.Length;
+                    accumL = new float[stems][];
+                    accumR = new float[stems][];
+                    stemNames = new string[stems];
+                    for (int s = 0; s < stems; s++) {
+                        accumL[s] = new float[paddedLen];
+                        accumR[s] = new float[paddedLen];
+                        stemNames[s] = string.IsNullOrEmpty(chunkOut[s].Name) ? ("stem_" + s) : chunkOut[s].Name;
+                    }
+                    if (onProgressiveReady != null) {
+                        progressiveStems = new StereoStemBuffer[stems];
+                        for (int s = 0; s < stems; s++) {
+                            progressiveStems[s] = new StereoStemBuffer(stemNames[s], length);
+                        }
+                    }
+                }
+
+                int start = starts[chunkIdx];
+                for (int i = 0; i < chunkSize; i++) {
+                    float w = chunkWindow[i];
+                    int dst = start + i;
+                    weightSum[dst] += w;
+                    for (int s = 0; s < accumL.Length; s++) {
+                        accumL[s][dst] += chunkOut[s].Left[i] * w;
+                        accumR[s][dst] += chunkOut[s].Right[i] * w;
+                    }
+                }
+
+                if (onProgressiveReady != null && progressiveStems != null) {
+                    int safeFinalized = (chunkIdx + 1 < totalChunks)
+                        ? Math.Min(length, Math.Max(0, starts[chunkIdx + 1] - pad))
+                        : length;
+                    if (safeFinalized > publishedSamples) {
+                        for (int s = 0; s < accumL.Length; s++) {
+                            float[] dstL = progressiveStems[s].Left;
+                            float[] dstR = progressiveStems[s].Right;
+                            float[] srcL = accumL[s];
+                            float[] srcR = accumR[s];
+                            for (int n = publishedSamples; n < safeFinalized; n++) {
+                                int pIdx = n + pad;
+                                float wVal = weightSum[pIdx];
+                                float invW = wVal > Epsilon ? (1f / wVal) : 1f;
+                                dstL[n] = srcL[pIdx] * invW;
+                                dstR[n] = srcR[pIdx] * invW;
+                            }
+                        }
+                        publishedSamples = safeFinalized;
+                        onProgressiveReady(progressiveStems, publishedSamples, length, passSw.Elapsed.TotalSeconds);
+                    }
+                }
+
+                if (onProgress != null) {
+                    double frac = (chunkIdx + 1.0) / totalChunks;
+                    onProgress(progressStart + (progressEnd - progressStart) * frac);
+                }
+            };
+
+            bool usePipeline = opt.EnableAsyncPipelining && totalChunks > 1;
+            ThreadPriority originalPriority = ThreadPriority.Normal;
+            bool priorityChanged = false;
+            try {
+                originalPriority = Thread.CurrentThread.Priority;
+                if (originalPriority > ThreadPriority.BelowNormal) {
+                    Thread.CurrentThread.Priority = ThreadPriority.BelowNormal;
+                    priorityChanged = true;
+                }
+            } catch {
+                // Best-effort thread priority hint for UI/audio responsiveness
+            }
+
+            try {
+                if (!usePipeline) {
+                    float[] chunkInL = new float[chunkSize];
+                    float[] chunkInR = new float[chunkSize];
+                    for (int c = 0; c < totalChunks; c++) {
+                        token.ThrowIfCancellationRequested();
+                        int st = starts[c];
+                        Array.Copy(padL, st, chunkInL, 0, chunkSize);
+                        Array.Copy(padR, st, chunkInR, 0, chunkSize);
+                        TPrepared prepared = preparer(chunkInL, chunkInR, chunkSize);
+                        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                        TInferOut inferred = inferer(prepared);
+                        double inferMs = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                        runStage3Sequential(c, prepared, inferred);
+                        if (abortedEmpty) {
+                            return Array.Empty<StereoStemBuffer>();
+                        }
+                        if (opt.GpuUiBreathingYieldMs > 0 && c + 1 < totalChunks) {
+                            int yieldMs = ComputeAdaptiveGpuBreathingYieldMs(opt.GpuUiBreathingYieldMs, inferMs);
+                            if (yieldMs > 0) {
+                                token.WaitHandle.WaitOne(yieldMs);
+                            }
+                        }
+                    }
+                } else {
+                    // Triple-buffered 3-stage producer-consumer pipeline:
+                    // Stage 1 (CPU STFT/pack for c+1) || Stage 2 (GPU/ONNX inference for c) || Stage 3 (CPU iSTFT+WOLA for c-1).
+                    // Using 3 slots (chunkIdx % 3) guarantees Stage 1 (c+1), Stage 2 (c), and Stage 3 (c-1) never alias buffers.
+                    // Stage 3 joins strictly in chunk order c = 0..N-1 before dispatching c+1, guaranteeing 0.0 dB IEEE-754 identity.
+                    float[][] inLSlots = new float[3][] { new float[chunkSize], new float[chunkSize], new float[chunkSize] };
+                    float[][] inRSlots = new float[3][] { new float[chunkSize], new float[chunkSize], new float[chunkSize] };
+
+                    Func<int, Task<TPrepared>> launchStage1 = chunkIdx => {
+                        int slot = chunkIdx % 3;
+                        int st = starts[chunkIdx];
+                        float[] bufL = inLSlots[slot];
+                        float[] bufR = inRSlots[slot];
+                        return Task.Run(() => {
+                            token.ThrowIfCancellationRequested();
+                            Array.Copy(padL, st, bufL, 0, chunkSize);
+                            Array.Copy(padR, st, bufR, 0, chunkSize);
+                            return preparer(bufL, bufR, chunkSize);
+                        }, token);
+                    };
+
+                    Task<TPrepared> curPrepTask = launchStage1(0);
+                    Task<TPrepared> nextPrepTask = null;
+                    Task prevPostTask = null;
+
+                    try {
+                        for (int c = 0; c < totalChunks; c++) {
+                            token.ThrowIfCancellationRequested();
+
+                            TPrepared curPrep = curPrepTask.GetAwaiter().GetResult();
+
+                            // Overlap Stage 1 for chunk c+1 concurrently with Stage 2 GPU inference for chunk c
+                            nextPrepTask = (c + 1 < totalChunks) ? launchStage1(c + 1) : null;
+
+                            // Stage 2: run ONNX inference on current chunk while Stage 1 (c+1) and Stage 3 (c-1) run in parallel
+                            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                            TInferOut curInfer = inferer(curPrep);
+                            double inferMs = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
+                            // Join Stage 3 (c-1) before dispatching Stage 3 (c) so overlap-add order is bit-exact
+                            if (prevPostTask != null) {
+                                prevPostTask.GetAwaiter().GetResult();
+                                prevPostTask = null;
+                                if (abortedEmpty) {
+                                    break;
+                                }
+                            }
+
+                            int capturedChunk = c;
+                            TPrepared capturedPrep = curPrep;
+                            TInferOut capturedInfer = curInfer;
+                            prevPostTask = Task.Run(() => runStage3Sequential(capturedChunk, capturedPrep, capturedInfer), token);
+
+                            // Adaptive Adreno/Vulkan UI-compositor headroom gap between consecutive GPU dispatches
+                            if (opt.GpuUiBreathingYieldMs > 0 && c + 1 < totalChunks) {
+                                int yieldMs = ComputeAdaptiveGpuBreathingYieldMs(opt.GpuUiBreathingYieldMs, inferMs);
+                                if (yieldMs > 0) {
+                                    token.WaitHandle.WaitOne(yieldMs);
+                                }
+                            }
+
+                            curPrepTask = nextPrepTask;
+                            nextPrepTask = null;
+                        }
+
+                        if (prevPostTask != null) {
+                            prevPostTask.GetAwaiter().GetResult();
+                            prevPostTask = null;
+                        }
+                    } finally {
+                        // Always drain any in-flight worker tasks before returning so no background task touches arrays
+                        if (nextPrepTask != null) {
+                            try { nextPrepTask.GetAwaiter().GetResult(); } catch { }
+                        }
+                        if (curPrepTask != null && !curPrepTask.IsCompleted) {
+                            try { curPrepTask.GetAwaiter().GetResult(); } catch { }
+                        }
+                        if (prevPostTask != null) {
+                            try { prevPostTask.GetAwaiter().GetResult(); } catch { }
+                        }
+                    }
+
+                    if (abortedEmpty) {
+                        return Array.Empty<StereoStemBuffer>();
+                    }
+                }
+            } finally {
+                if (priorityChanged) {
+                    try { Thread.CurrentThread.Priority = originalPriority; } catch { }
+                }
+            }
+
+            if (accumL == null) {
+                return Array.Empty<StereoStemBuffer>();
+            }
+
+            if (progressiveStems != null && publishedSamples == length) {
+                return progressiveStems;
+            }
+
+            StereoStemBuffer[] result = progressiveStems ?? new StereoStemBuffer[accumL.Length];
+            for (int s = 0; s < accumL.Length; s++) {
+                float[] outL = progressiveStems != null ? progressiveStems[s].Left : new float[length];
+                float[] outR = progressiveStems != null ? progressiveStems[s].Right : new float[length];
+                int startN = progressiveStems != null ? publishedSamples : 0;
+                for (int n = startN; n < length; n++) {
+                    int src = n + pad;
+                    float w = weightSum[src];
+                    float invW = w > Epsilon ? (1f / w) : 1f;
+                    outL[n] = accumL[s][src] * invW;
+                    outR[n] = accumR[s][src] * invW;
+                }
+                if (progressiveStems == null) {
+                    result[s] = new StereoStemBuffer(stemNames[s], outL, outR);
+                }
             }
             return result;
         }

@@ -96,8 +96,13 @@ public static class LiveHotPatchHost {
         protected override Assembly Load(AssemblyName assemblyName) {
             // Resolve Cavern, Cavern.Format, Cavernize.Logic, CavernizeAndroid & Android BCL from host ALC
             if (assemblyName?.Name != null) {
+                string targetName = assemblyName.Name;
+                if (string.Equals(targetName, "CavernizeAndroid.TypeCheck", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(targetName, "CavernizeAndroidShadow", StringComparison.OrdinalIgnoreCase)) {
+                    targetName = "CavernizeAndroid";
+                }
                 foreach (Assembly loaded in Default.Assemblies) {
-                    if (string.Equals(loaded.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase)) {
+                    if (string.Equals(loaded.GetName().Name, targetName, StringComparison.OrdinalIgnoreCase)) {
                         return loaded;
                     }
                 }

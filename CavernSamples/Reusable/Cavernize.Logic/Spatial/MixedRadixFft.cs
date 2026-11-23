@@ -660,6 +660,22 @@ public static class MixedRadixFft {
         int nFft,
         int hop,
         int dimF,
+        int targetLen) =>
+        ComputeComplexIstft(specRe, 0, specIm, 0, frames, nFft, hop, dimF, targetLen);
+
+    /// <summary>
+    /// Zero-copy offset-aware variant of <see cref="ComputeComplexIstft(float[], float[], int, int, int, int, int)"/>
+    /// reading planar <c>[dimF, frames]</c> real and imaginary slices directly from shared tensor buffers.
+    /// </summary>
+    public static float[] ComputeComplexIstft(
+        float[] specRe,
+        int reOffset,
+        float[] specIm,
+        int imOffset,
+        int frames,
+        int nFft,
+        int hop,
+        int dimF,
         int targetLen) {
         ArgumentNullException.ThrowIfNull(specRe);
         ArgumentNullException.ThrowIfNull(specIm);
@@ -700,7 +716,7 @@ public static class MixedRadixFft {
                         float[] fftRe = scratch.Re;
                         float[] fftIm = scratch.Im;
                         for (int f = from; f < to; f++) {
-                            FillInverseSpectrum(specRe, specIm, frames, f, nFft, halfN, maxValidBins, interiorLimit, hasNyquist, fftRe, fftIm);
+                            FillInverseSpectrum(specRe, reOffset, specIm, imOffset, frames, f, nFft, halfN, maxValidBins, interiorLimit, hasNyquist, fftRe, fftIm);
                             ExecutePlanFloat(fftRe, fftIm, scratch.BufRe, scratch.BufIm, scratch.TmpRe, scratch.TmpIm, plan);
                             int dstBase = f * nFft;
                             for (int n = 0; n < nFft; n++) {
@@ -726,7 +742,7 @@ public static class MixedRadixFft {
                 float[] fftRe = scratch.Re;
                 float[] fftIm = scratch.Im;
                 for (int f = 0; f < frames; f++) {
-                    FillInverseSpectrum(specRe, specIm, frames, f, nFft, halfN, maxValidBins, interiorLimit, hasNyquist, fftRe, fftIm);
+                    FillInverseSpectrum(specRe, reOffset, specIm, imOffset, frames, f, nFft, halfN, maxValidBins, interiorLimit, hasNyquist, fftRe, fftIm);
                     ExecutePlanFloat(fftRe, fftIm, scratch.BufRe, scratch.BufIm, scratch.TmpRe, scratch.TmpIm, plan);
                     int start = f * hop;
                     for (int n = 0; n < nFft; n++) {
@@ -753,7 +769,9 @@ public static class MixedRadixFft {
 
     static void FillInverseSpectrum(
         float[] specRe,
+        int reOffset,
         float[] specIm,
+        int imOffset,
         int frames,
         int f,
         int nFft,
@@ -767,14 +785,14 @@ public static class MixedRadixFft {
         Array.Clear(fftIm, 0, nFft);
 
         if (maxValidBins > 0) {
-            fftRe[0] = specRe[f];
+            fftRe[0] = specRe[reOffset + f];
             fftIm[0] = 0f;
         }
 
         for (int k = 1; k < interiorLimit; k++) {
             int idx = k * frames + f;
-            float r = specRe[idx];
-            float im = specIm[idx];
+            float r = specRe[reOffset + idx];
+            float im = specIm[imOffset + idx];
             fftRe[k] = r;
             fftIm[k] = im;
             fftRe[nFft - k] = r;
@@ -783,7 +801,7 @@ public static class MixedRadixFft {
 
         if (hasNyquist) {
             int nyqIdx = halfN * frames + f;
-            fftRe[halfN] = specRe[nyqIdx];
+            fftRe[halfN] = specRe[reOffset + nyqIdx];
             fftIm[halfN] = 0f;
         }
     }

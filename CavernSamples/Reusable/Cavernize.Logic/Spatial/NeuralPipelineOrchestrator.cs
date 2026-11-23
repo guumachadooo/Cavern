@@ -302,7 +302,8 @@ public sealed class NeuralPipelineOrchestrator {
         NeuralAudioConfig config,
         bool derivedFromLosslessTwin = false,
         Action<double, string> onProgress = null,
-        CancellationToken token = default) {
+        CancellationToken token = default,
+        Action<NeuralSeparatedTrack> onProgressiveTrackReady = null) {
         ArgumentNullException.ThrowIfNull(mixLeft);
         ArgumentNullException.ThrowIfNull(mixRight);
 
@@ -364,8 +365,15 @@ public sealed class NeuralPipelineOrchestrator {
                 step.Task == NeuralModelTask.StemSeparation6 ||
                 step.Task == NeuralModelTask.VocalSeparation ||
                 step.Task == NeuralModelTask.KaraokeLeadBacking) {
+                Action<NeuralSeparatedTrack> stepProgressive = (!isExcerptDna && totalSteps == 1)
+                    ? onProgressiveTrackReady
+                    : null;
                 (stems, float stepRtf) = RunStepSeparation(step, workLeft, workRight, sampleRate, execCfg,
-                    (p, msg) => onProgress?.Invoke(stepStart + p * stepSpan, msg), token);
+                    (p, msg) => onProgress?.Invoke(stepStart + p * stepSpan, msg), token,
+                    sourceTrackKey: sourceTrackKey,
+                    derivedFromLosslessTwin: derivedFromLosslessTwin,
+                    modelSignature: plan.PlanSignature,
+                    onProgressiveTrackReady: stepProgressive);
                 totalRtf += stepRtf;
             } else if (step.Task == NeuralModelTask.DebleedDenoise && stems.Length > 0) {
                 // Refine primary vocal/lead stem via installed Debleed/Denoise checkpoint without altering instrumental mix
@@ -498,7 +506,11 @@ public sealed class NeuralPipelineOrchestrator {
         int sampleRate,
         NeuralAudioConfig cfg,
         Action<double, string> onProgress,
-        CancellationToken token) {
+        CancellationToken token,
+        string sourceTrackKey = null,
+        bool derivedFromLosslessTwin = false,
+        string modelSignature = null,
+        Action<NeuralSeparatedTrack> onProgressiveTrackReady = null) {
         List<string[]> stemNames = new(step.Models.Count);
         List<int> expectedRates = new(step.Models.Count);
         List<int> chunks = new(step.Models.Count);
@@ -524,7 +536,11 @@ public sealed class NeuralPipelineOrchestrator {
             onProgress,
             token,
             expectedSampleRatesPerModel: expectedRates,
-            chunkSamplesPerModel: chunks);
+            chunkSamplesPerModel: chunks,
+            onProgressiveTrackReady: onProgressiveTrackReady,
+            progressiveTrackKey: sourceTrackKey,
+            progressiveDerivedFromTwin: derivedFromLosslessTwin,
+            progressivePlanSignature: modelSignature);
     }
 
     NeuralExecutionStep ResolveSeparationStep(

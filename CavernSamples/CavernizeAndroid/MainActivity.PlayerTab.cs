@@ -243,6 +243,7 @@ public partial class MainActivity {
             }
             playerEngine.ListenerPosition = Vector3.Zero;
             playerEngine.ListenerRotation = Vector3.Zero;
+            playerEngine.ResetAllCustomPositions();
             headTrackingManager?.Recenter();
             SyncRoomSlidersFromEngine();
             UpdateRoomCanvas();

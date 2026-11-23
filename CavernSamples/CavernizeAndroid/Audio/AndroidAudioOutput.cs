@@ -137,10 +137,12 @@ public sealed class AndroidAudioOutput : IDisposable {
         lock (lifecycleLock) {
             if (usbManager != null) {
                 usbManager.DeviceStateChanged -= OnUsbDeviceStateChanged;
+                usbManager.BeforeUsbConnectionClosing -= OnBeforeUsbConnectionClosing;
             }
             usbManager = manager;
             if (usbManager != null) {
                 usbManager.DeviceStateChanged += OnUsbDeviceStateChanged;
+                usbManager.BeforeUsbConnectionClosing += OnBeforeUsbConnectionClosing;
             }
             RequestRebuild(retryNative: true);
         }
@@ -205,6 +207,18 @@ public sealed class AndroidAudioOutput : IDisposable {
             engine.SetPreferredHardwareSampleRate(negotiatedRate);
 
             if (deviceChanged) {
+                RequestRebuild(retryNative: true);
+            }
+        }
+    }
+
+    void OnBeforeUsbConnectionClosing() {
+        // Must stop Path B libusb synchronously BEFORE Android closes the UsbDeviceConnection FD
+        // to prevent fdsan SIGABRT / libusb UAF when unplugging USB DACs (e.g., Focusrite Scarlett).
+        lock (lifecycleLock) {
+            if (activeBackend == ActiveProAudioBackendKind.LibUsbUac2Direct) {
+                AppLogger.Info("AndroidAudioOutput: USB interface detaching — stopping Path B (libusb) before FD close.");
+                StopNativeBackendLocked();
                 RequestRebuild(retryNative: true);
             }
         }
@@ -918,6 +932,7 @@ public sealed class AndroidAudioOutput : IDisposable {
         lock (lifecycleLock) {
             if (usbManager != null) {
                 usbManager.DeviceStateChanged -= OnUsbDeviceStateChanged;
+                usbManager.BeforeUsbConnectionClosing -= OnBeforeUsbConnectionClosing;
                 usbManager = null;
             }
         }

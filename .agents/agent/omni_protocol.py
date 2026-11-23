@@ -355,6 +355,7 @@ def upload_encrypted_blob(
     payload_obj: Any,
     admin_key: str = "",
     blob_id: str | None = None,
+    meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Encrypt payload_obj and upload in <=512KB chunks to Cloudflare /v1/blob/*."""
     base = validate_https_url(relay_url)
@@ -375,11 +376,14 @@ def upload_encrypted_blob(
         )
         if st >= 400 or not resp.get("ok"):
             raise RuntimeError(f"Blob chunk {idx} upload failed (HTTP {st}): {resp}")
+    commit_body: dict[str, Any] = {"blobId": bid, "totalChunks": len(chunks), "sha256": sha, "bytes": total_bytes}
+    if meta:
+        commit_body["meta"] = meta
     st, meta_resp = http_json(
         "POST",
         f"{base}/v1/blob/commit",
         headers,
-        {"blobId": bid, "totalChunks": len(chunks), "sha256": sha, "bytes": total_bytes},
+        commit_body,
         timeout=30,
     )
     if st >= 400 or not meta_resp.get("ok"):

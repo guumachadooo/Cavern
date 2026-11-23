@@ -565,6 +565,18 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
     /// <summary>Maximum disk budget in megabytes for Slot 7B <c>CacheDir/neural_tracks/</c> LRU cache.</summary>
     public int TrackCacheMaxSizeMb { get; init; } = 512;
 
+    /// <summary>
+    /// Inter-chunk GPU breathing yield in milliseconds (0..100 ms; default 16 ms) so WebGPU/Vulkan inference
+    /// leaves Android SurfaceFlinger/HWUI compositor headroom and never freezes phone UI.
+    /// </summary>
+    public int GpuUiBreathingYieldMs { get; init; } = 16;
+
+    /// <summary>
+    /// Enables Auto-RTF progressive live stem streaming: when initial chunks prove faster than real time
+    /// (<c>RTF &lt; 0.85</c>) during sequential playback, separated stems engage progressively without waiting for 100%.
+    /// </summary>
+    public bool EnableProgressiveStreaming { get; init; } = true;
+
     /// <summary>Extensible task-keyed model registry supporting 1 or more (ensemble) model IDs per <see cref="NeuralModelTask"/>.</summary>
     public IReadOnlyDictionary<NeuralModelTask, IReadOnlyList<string>> TaskModelSlots { get; init; }
 
@@ -617,6 +629,8 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
         UseLosslessTwinForKaraoke = UseLosslessTwinForKaraoke,
         SpatialUpmixMode = SpatialUpmixMode,
         TrackCacheMaxSizeMb = TrackCacheMaxSizeMb,
+        GpuUiBreathingYieldMs = GpuUiBreathingYieldMs,
+        EnableProgressiveStreaming = EnableProgressiveStreaming,
         TaskModelSlots = TaskModelSlots,
         ActiveStemModelId = ActiveStemModelId,
         ActiveKaraokeModelId = ActiveKaraokeModelId,
@@ -674,6 +688,8 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
             UseLosslessTwinForKaraoke = UseLosslessTwinForKaraoke,
             SpatialUpmixMode = Enum.IsDefined(SpatialUpmixMode) ? SpatialUpmixMode : NeuralSpatialUpmixMode.Off,
             TrackCacheMaxSizeMb = Math.Clamp(TrackCacheMaxSizeMb, 128, 4096),
+            GpuUiBreathingYieldMs = Math.Clamp(GpuUiBreathingYieldMs, 0, 100),
+            EnableProgressiveStreaming = EnableProgressiveStreaming,
             TaskModelSlots = normalizedSlots,
             ActiveStemModelId = stemId,
             ActiveKaraokeModelId = karaokeId,
@@ -715,7 +731,9 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
         EnableTta = EnableTta,
         EnableShiftTta = false,
         EnablePhaseFix = EnablePhaseFix,
-        EnforceEnergyConservation = EnforceEnergyConservation
+        EnforceEnergyConservation = EnforceEnergyConservation,
+        EnableAsyncPipelining = true,
+        GpuUiBreathingYieldMs = Math.Clamp(GpuUiBreathingYieldMs, 0, 100)
     };
 
     /// <inheritdoc/>
@@ -739,6 +757,8 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
             || UseLosslessTwinForKaraoke != other.UseLosslessTwinForKaraoke
             || SpatialUpmixMode != other.SpatialUpmixMode
             || TrackCacheMaxSizeMb != other.TrackCacheMaxSizeMb
+            || GpuUiBreathingYieldMs != other.GpuUiBreathingYieldMs
+            || EnableProgressiveStreaming != other.EnableProgressiveStreaming
             || !string.Equals(ActiveStemModelId, other.ActiveStemModelId, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(ActiveKaraokeModelId, other.ActiveKaraokeModelId, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(ActiveDereverbModelId, other.ActiveDereverbModelId, StringComparison.OrdinalIgnoreCase)
@@ -798,6 +818,8 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
         hc.Add(UseLosslessTwinForKaraoke);
         hc.Add(SpatialUpmixMode);
         hc.Add(TrackCacheMaxSizeMb);
+        hc.Add(GpuUiBreathingYieldMs);
+        hc.Add(EnableProgressiveStreaming);
         hc.Add(ActiveStemModelId, StringComparer.OrdinalIgnoreCase);
         hc.Add(ActiveKaraokeModelId, StringComparer.OrdinalIgnoreCase);
         hc.Add(ActiveDereverbModelId, StringComparer.OrdinalIgnoreCase);
@@ -900,6 +922,8 @@ public struct NeuralAudioDiagnostics {
 /// real-time Spatial Karaoke projection, 3D object placement inside <see cref="SpatialSceneHub"/>, and Slot 7B disk caching.
 /// </summary>
 public sealed class NeuralSeparatedTrack {
+    int readySampleCount = -1;
+
     /// <summary>Track path or identifier this stem set belongs to.</summary>
     public string SourceTrackKey { get; init; } = string.Empty;
 
@@ -923,4 +947,27 @@ public sealed class NeuralSeparatedTrack {
 
     /// <summary>Slot 7A orchestrator plan signature used to generate this stem bundle (for cache validation).</summary>
     public string PlanSignature { get; init; } = string.Empty;
+
+    /// <summary>Total stem length in samples per channel.</summary>
+    public int TotalSampleCount => Stems != null && Stems.Count > 0 && Stems[0] != null ? Stems[0].Length : (MonoLeadVocalRef?.Length ?? 0);
+
+    /// <summary>
+    /// True while chunks are still progressively streaming into this track's buffers via Auto-RTF live mode.
+    /// </summary>
+    public bool IsProgressiveStreaming { get; set; }
+
+    /// <summary>Latest measured real-time factor (<c>wallSec / audioSec</c>) during progressive or offline inference.</summary>
+    public float MeasuredRealTimeFactor { get; set; }
+
+    /// <summary>
+    /// Lock-free monotonically advancing sample count that is permanently finalized and safe for real-time audio reads.
+    /// Defaults to <see cref="TotalSampleCount"/> for fully materialized tracks.
+    /// </summary>
+    public int ReadySampleCount {
+        get {
+            int val = Volatile.Read(ref readySampleCount);
+            return val < 0 ? TotalSampleCount : val;
+        }
+        set => Volatile.Write(ref readySampleCount, Math.Max(0, value));
+    }
 }

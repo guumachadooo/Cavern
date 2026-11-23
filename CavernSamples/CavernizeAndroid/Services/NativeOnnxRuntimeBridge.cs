@@ -975,6 +975,31 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         }
     }
 
+    string TryResolveWebGpuFp16CachePath(string modelPath, long modelBytes, DateTime srcWriteUtc) {
+        if (!IsWebGpuOptimalModel(modelPath)) {
+            return null;
+        }
+        string fileName = Path.GetFileName(modelPath ?? string.Empty);
+        if (fileName.Contains("fp16", StringComparison.OrdinalIgnoreCase)) {
+            return null;
+        }
+        if (File.Exists(modelPath + ".data") || File.Exists(modelPath + "_data")) {
+            return null;
+        }
+        try {
+            string cacheRoot = appContext.CacheDir?.AbsolutePath;
+            if (string.IsNullOrEmpty(cacheRoot)) {
+                return null;
+            }
+            string fp16Dir = Path.Combine(cacheRoot, "ort_fp16");
+            Directory.CreateDirectory(fp16Dir);
+            string baseName = Path.GetFileNameWithoutExtension(modelPath);
+            return Path.Combine(fp16Dir, $"{baseName}_{modelBytes}_{srcWriteUtc.Ticks}_fp16.onnx");
+        } catch {
+            return null;
+        }
+    }
+
     string TryResolveQnnContextModelPath(string modelPath, long modelBytes) {
         try {
             string cacheRoot = appContext.CacheDir?.AbsolutePath;
@@ -1041,12 +1066,37 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                     new FileInfo(qnnCtxPath).Length >= 1024 &&
                     File.GetLastWriteTimeUtc(qnnCtxPath) >= srcWriteUtc;
 
-                // Attempt cached graph/context load first; if unavailable or rejected, load original & build cache
-                bool canTryCachedFirst = hasValidCachedOpt || hasValidQnnCtx;
+                // W46 IEEE-754 FP32 -> FP16 WebGPU cache (strictly no INT8 quantization):
+                // Achieves ~1.40x real-time on Snapdragon Adreno Vulkan GPU (SNR > 37 dB, 0 NaN/Inf)
+                // with automatic fallback to original FP32 if conversion or WebGPU session creation fails.
+                string fp16CachePath = candidate == NeuralExecutionProvider.WebGpu
+                    ? TryResolveWebGpuFp16CachePath(modelPath, modelBytes, srcWriteUtc)
+                    : null;
+                bool hasValidFp16Cache = !string.IsNullOrEmpty(fp16CachePath) &&
+                    File.Exists(fp16CachePath) &&
+                    new FileInfo(fp16CachePath).Length >= 1024 &&
+                    File.GetLastWriteTimeUtc(fp16CachePath) >= srcWriteUtc;
+                bool convertedFp16Now = false;
+                if (!hasValidFp16Cache && !string.IsNullOrEmpty(fp16CachePath)) {
+                    OnnxFp16ConversionResult fp16Res = OnnxFp16ModelConverter.TryConvertFileToFp16(modelPath, fp16CachePath);
+                    if (fp16Res.Success) {
+                        hasValidFp16Cache = true;
+                        convertedFp16Now = true;
+                        AppLogger.Info($"W46 WebGPU FP16 cache generated for '{Path.GetFileName(modelPath)}': {fp16Res.Message}");
+                    } else if (!fp16Res.SkippedAlreadyFp16 && !fp16Res.SkippedExternalData) {
+                        AppLogger.Warn($"W46 WebGPU FP16 conversion skipped for '{Path.GetFileName(modelPath)}': {fp16Res.Message}");
+                    }
+                }
+
+                // Attempt cached FP16 / graph / QNN context load first; if unavailable or rejected, load original FP32
+                bool canTryCachedFirst = hasValidFp16Cache || hasValidCachedOpt || hasValidQnnCtx;
                 for (int attempt = canTryCachedFirst ? 0 : 1; attempt < 2; attempt++) {
-                    bool usingCachedOpt = attempt == 0 && hasValidCachedOpt;
-                    bool usingQnnCtx = attempt == 0 && hasValidQnnCtx;
-                    string loadPath = usingQnnCtx ? qnnCtxPath : (usingCachedOpt ? cachedOptPath : modelPath);
+                    bool usingFp16Cache = attempt == 0 && hasValidFp16Cache;
+                    bool usingCachedOpt = attempt == 0 && !usingFp16Cache && hasValidCachedOpt;
+                    bool usingQnnCtx = attempt == 0 && !usingFp16Cache && hasValidQnnCtx;
+                    string loadPath = usingFp16Cache
+                        ? fp16CachePath
+                        : (usingQnnCtx ? qnnCtxPath : (usingCachedOpt ? cachedOptPath : modelPath));
                     IntPtr sessOpts = IntPtr.Zero;
                     CheckStatus(fnCreateSessionOptions(out sessOpts));
                     try {
@@ -1063,7 +1113,7 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                             ReleaseStatusQuietly(fnEnableMemPattern(sessOpts));
                         }
                         CheckStatus(fnSetGraphOpt(sessOpts, (usingCachedOpt || usingQnnCtx) ? 1 : OrtEnableAll));
-                        if (!usingCachedOpt && !string.IsNullOrEmpty(cachedOptPath) && fnSetOptimizedModelPath != null) {
+                        if (!usingCachedOpt && !usingFp16Cache && !string.IsNullOrEmpty(cachedOptPath) && fnSetOptimizedModelPath != null) {
                             ReleaseStatusQuietly(fnSetOptimizedModelPath(sessOpts, cachedOptPath));
                         }
                         if (fnAddSessionConfig != null) {
@@ -1090,6 +1140,9 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                                 break;
                             }
                         }
+                        if (usingFp16Cache && activeEp.Contains("WebGPU", StringComparison.OrdinalIgnoreCase)) {
+                            activeEp = "WebGPU FP16 (Vulkan GPU)";
+                        }
 
                         Stopwatch swCreate = Stopwatch.StartNew();
                         IntPtr st = fnCreateSession(ortEnv, loadPath, sessOpts, out IntPtr sessionHandle);
@@ -1098,7 +1151,9 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                             lock (initLock) {
                                 lastActiveProvider = activeEp;
                             }
-                            string cacheTag = usingQnnCtx ? " [qnn-ctx-hit]" : (usingCachedOpt ? " [opt-cache-hit]" : "");
+                            string cacheTag = usingFp16Cache
+                                ? (convertedFp16Now ? " [webgpu-fp16-conv]" : " [webgpu-fp16-hit]")
+                                : (usingQnnCtx ? " [qnn-ctx-hit]" : (usingCachedOpt ? " [opt-cache-hit]" : ""));
                             AppLogger.Info($"ONNX session ready [{activeEp}]{cacheTag} threads={threads} init={swCreate.ElapsedMilliseconds}ms model='{Path.GetFileName(modelPath)}'");
                             NativeOnnxSession session = new(this, modelPath, sessionHandle, activeEp);
                             handoffComplete = true;
@@ -1106,6 +1161,11 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                         }
 
                         string errMsg = ReadAndReleaseStatus(st);
+                        if (usingFp16Cache) {
+                            try { File.Delete(fp16CachePath); } catch { }
+                            AppLogger.Warn($"W46 WebGPU FP16 session rejected for '{Path.GetFileName(modelPath)}'; falling back cleanly to FP32: {errMsg}");
+                            continue;
+                        }
                         if (usingCachedOpt) {
                             try { File.Delete(cachedOptPath); } catch { }
                             AppLogger.Warn($"ONNX opt-cache invalidated for '{Path.GetFileName(modelPath)}'; rebuilding cleanly.");

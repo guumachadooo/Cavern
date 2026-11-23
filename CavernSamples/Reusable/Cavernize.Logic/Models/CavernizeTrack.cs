@@ -1,3 +1,5 @@
+using System.Numerics;
+
 using Cavern;
 using Cavern.CavernSettings;
 using Cavern.Channels;
@@ -8,6 +10,7 @@ using Cavern.Format.Renderers;
 using Cavern.Format.Renderers.BaseClasses;
 using Cavern.Remapping;
 using Cavern.Remapping.Exceptions;
+using Cavern.Spatial;
 using Cavern.Utilities;
 
 using Cavernize.Logic.Language;
@@ -259,6 +262,18 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
                 ownedUpmixers.Add(cavernizer);
                 ActiveTelemetryProvider ??= cavernizer;
                 attachables = cavernizer.IntermediateSources;
+            }
+
+            if (attachables.Length != Renderer.Objects.Count ||
+                (attachables.Length > 0 && Renderer.Objects.Count > 0 && !ReferenceEquals(attachables[0], Renderer.Objects[0]))) {
+                Vector3 envSize = Listener.EnvironmentSize;
+                float invY = envSize.Y > 0.1f ? 1f / envSize.Y : 1f / 7f;
+                SourceLayer[] layers = new SourceLayer[attachables.Length];
+                for (int i = 0; i < attachables.Length; i++) {
+                    float ny = attachables[i].Position.Y * invY;
+                    layers[i] = ny > 0.15f ? SourceLayer.VirtualHeight : SourceLayer.VirtualMatrix;
+                }
+                ActiveSourceLayers = layers;
             }
         }
 

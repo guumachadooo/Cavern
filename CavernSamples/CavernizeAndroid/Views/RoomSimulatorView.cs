@@ -585,10 +585,12 @@ public sealed class RoomSimulatorView : View {
     }
 
     static Vector3 HeadLookVector(float yawRad, float pitchRad) {
+        // Matches Cavern.Utilities.VectorExtensions.Rotate((0,0,1), (pitch, yaw, 0)):
+        // negative pitch looks UP (+Y), positive pitch looks DOWN (-Y).
         float cosP = MathF.Cos(pitchRad);
         return new Vector3(
             MathF.Sin(yawRad) * cosP,
-            MathF.Sin(pitchRad),
+            -MathF.Sin(pitchRad),
             MathF.Cos(yawRad) * cosP);
     }
 
@@ -1593,7 +1595,7 @@ public sealed class RoomSimulatorView : View {
                         float stepX = tx - lastX;
                         float stepY = ty - lastY;
                         float newYaw = NormalizeDeg(listenerRotation.Y + stepX * 1.30f / dp);
-                        float newPitch = Math.Clamp(listenerRotation.X - stepY * 1.05f / dp, -90f, 90f);
+                        float newPitch = Math.Clamp(listenerRotation.X + stepY * 1.05f / dp, -90f, 90f);
                         listenerRotation = new Vector3(newPitch, newYaw, listenerRotation.Z);
                         ListenerRotationChanged?.Invoke(listenerRotation);
                         Invalidate();
@@ -1635,7 +1637,7 @@ public sealed class RoomSimulatorView : View {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
                     float stepX = tx - lastX;
                     float stepY = ty - lastY;
-                    camYawDeg = NormalizeDeg(camYawDeg + stepX * 0.55f / dp);
+                    camYawDeg = NormalizeDeg(camYawDeg - stepX * 0.55f / dp);
                     camPitchDeg = Math.Clamp(camPitchDeg + stepY * 0.45f / dp, 6f, 86f);
                     Invalidate();
                     lastX = tx;

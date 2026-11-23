@@ -164,6 +164,7 @@ public partial class MainActivity {
     LibraryFolderGroup selectedLibraryFolder;
     string librarySearchQuery = "";
     int libraryRenderLimit = 72;
+    int libraryRenderGeneration;
     MediaLibrarySnapshot librarySnapshot;
     bool isLibraryScanning;
     int onlineEnrichGeneration;
@@ -3749,6 +3750,7 @@ public partial class MainActivity {
 
     void RenderLibraryView() {
         if (libraryListHost == null) return;
+        int myRenderGen = ++libraryRenderGeneration;
         libraryListHost.RemoveAllViews();
 
         if (librarySnapshot == null) {
@@ -3835,6 +3837,33 @@ public partial class MainActivity {
 
         EnsureLibraryQueryCache(q, libraryCategory);
 
+        const int InitialBatchItems = 12;
+        const int IncrementalBatchItems = 12;
+
+        void ScheduleIncrementalRender(int startIndex, int endIndex, int step, Action<int> appendItem, Action onDone) {
+            int cursor = startIndex;
+            void Pump() {
+                if (uiDestroyed || myRenderGen != libraryRenderGeneration || libraryListHost == null) {
+                    return;
+                }
+                int batchEnd = Math.Min(endIndex, cursor + IncrementalBatchItems);
+                for (int idx = cursor; idx < batchEnd; idx += step) {
+                    appendItem(idx);
+                }
+                cursor = batchEnd;
+                if (cursor < endIndex) {
+                    libraryListHost.Post(Pump);
+                } else {
+                    onDone?.Invoke();
+                }
+            }
+            if (cursor < endIndex) {
+                libraryListHost.Post(Pump);
+            } else {
+                onDone?.Invoke();
+            }
+        }
+
         if (libraryCategory == LibraryCategory.Albums) {
             List<(LibraryAlbumGroup Alb, List<LibraryMergedTrack> Merged)> filtered = cachedQueryAlbums;
             libraryStatusText.Text = $"{filtered.Count} {S["LibAlbums"].ToLowerInvariant()} • {cacheTag}";
@@ -3844,7 +3873,7 @@ public partial class MainActivity {
             }
 
             int showCount = Math.Min(filtered.Count, libraryRenderLimit);
-            for (int i = 0; i < showCount; i += 2) {
+            void AppendAlbumPair(int i) {
                 LinearLayout gridRow = new(this) {
                     Orientation = Orientation.Horizontal,
                     BaselineAligned = false
@@ -3859,7 +3888,12 @@ public partial class MainActivity {
                     BottomMargin = Dp(10)
                 });
             }
-            AddLoadMoreIfNeeded(filtered.Count, showCount);
+
+            int firstEnd = Math.Min(showCount, InitialBatchItems);
+            for (int i = 0; i < firstEnd; i += 2) {
+                AppendAlbumPair(i);
+            }
+            ScheduleIncrementalRender(firstEnd, showCount, 2, AppendAlbumPair, () => AddLoadMoreIfNeeded(filtered.Count, showCount));
         } else if (libraryCategory == LibraryCategory.Tracks) {
             List<LibraryMergedTrack> filtered = cachedQueryMergedTracks;
             libraryStatusText.Text = $"{string.Format(S["LibSongsCount"], filtered.Count)} • {cacheTag}";
@@ -3868,9 +3902,17 @@ public partial class MainActivity {
                 return;
             }
 
-            List<LibraryTrackItem> queue = filtered.Select(PickPreferredVariant).Where(t => t != null).ToList();
+            // Build queue incrementally in the same loop (avoids blocking UI thread with full-library LINQ scan on tab switch)
             int showCount = Math.Min(filtered.Count, libraryRenderLimit);
+            List<LibraryTrackItem> queue = new(showCount);
             for (int i = 0; i < showCount; i++) {
+                LibraryTrackItem chosen = PickPreferredVariant(filtered[i]);
+                if (chosen != null) {
+                    queue.Add(chosen);
+                }
+            }
+            int renderCount = Math.Min(showCount, queue.Count);
+            void AppendTrackRow(int i) {
                 LibraryMergedTrack m = filtered[i];
                 LibraryTrackItem chosen = queue[i];
                 libraryListHost.AddView(
@@ -3885,7 +3927,12 @@ public partial class MainActivity {
                         BottomMargin = Dp(6)
                     });
             }
-            AddLoadMoreIfNeeded(filtered.Count, showCount);
+
+            int firstEnd = Math.Min(renderCount, InitialBatchItems);
+            for (int i = 0; i < firstEnd; i++) {
+                AppendTrackRow(i);
+            }
+            ScheduleIncrementalRender(firstEnd, renderCount, 1, AppendTrackRow, () => AddLoadMoreIfNeeded(filtered.Count, renderCount));
         } else if (libraryCategory == LibraryCategory.Artists) {
             List<(LibraryArtistGroup Art, List<LibraryMergedTrack> Merged)> filtered = cachedQueryArtists;
             libraryStatusText.Text = $"{filtered.Count} {S["LibArtists"].ToLowerInvariant()} • {cacheTag}";
@@ -3895,16 +3942,24 @@ public partial class MainActivity {
             }
 
             int showCount = Math.Min(filtered.Count, libraryRenderLimit);
-            for (int i = 0; i < showCount; i++) {
+            void AppendArtistRow(int i) {
                 LibraryArtistGroup art = filtered[i].Art;
                 List<LibraryMergedTrack> merged = filtered[i].Merged;
-                List<LibraryTrackItem> artQueue = merged.Select(PickPreferredVariant).Where(t => t != null).ToList();
-                int albumCnt = merged.Select(m => string.IsNullOrWhiteSpace(m.Primary.Album) ? m.Primary.FolderPath : m.Primary.Album)
-                    .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                List<LibraryTrackItem> artQueue = new(merged.Count);
+                HashSet<string> albums = new(StringComparer.OrdinalIgnoreCase);
+                for (int j = 0; j < merged.Count; j++) {
+                    LibraryTrackItem pref = PickPreferredVariant(merged[j]);
+                    if (pref != null) artQueue.Add(pref);
+                    string albKey = string.IsNullOrWhiteSpace(merged[j].Primary.Album)
+                        ? merged[j].Primary.FolderPath
+                        : merged[j].Primary.Album;
+                    if (!string.IsNullOrEmpty(albKey)) albums.Add(albKey);
+                }
+                int albumCnt = Math.Max(1, albums.Count);
                 LinearLayout row = BuildGroupRow(
                     art.Artist,
-                    $"{string.Format(S["LibAlbumsCount"], Math.Max(1, albumCnt))} • {string.Format(S["LibSongsCount"], merged.Count)}",
-                    artQueue.FirstOrDefault(),
+                    $"{string.Format(S["LibAlbumsCount"], albumCnt)} • {string.Format(S["LibSongsCount"], merged.Count)}",
+                    artQueue.Count > 0 ? artQueue[0] : null,
                     artQueue,
                     () => {
                         selectedLibraryArtist = art.Artist;
@@ -3915,7 +3970,12 @@ public partial class MainActivity {
                     BottomMargin = Dp(6)
                 });
             }
-            AddLoadMoreIfNeeded(filtered.Count, showCount);
+
+            int firstEnd = Math.Min(showCount, InitialBatchItems);
+            for (int i = 0; i < firstEnd; i++) {
+                AppendArtistRow(i);
+            }
+            ScheduleIncrementalRender(firstEnd, showCount, 1, AppendArtistRow, () => AddLoadMoreIfNeeded(filtered.Count, showCount));
         } else {
             libraryListHost.AddView(BuildFoldersToolbar());
             List<(LibraryFolderGroup Fld, List<LibraryMergedTrack> Merged)> filtered = cachedQueryFolders;
@@ -3926,15 +3986,19 @@ public partial class MainActivity {
             }
 
             int showCount = Math.Min(filtered.Count, libraryRenderLimit);
-            for (int i = 0; i < showCount; i++) {
+            void AppendFolderRow(int i) {
                 LibraryFolderGroup fld = filtered[i].Fld;
                 List<LibraryMergedTrack> merged = filtered[i].Merged;
-                List<LibraryTrackItem> fldQueue = merged.Select(PickPreferredVariant).Where(t => t != null).ToList();
+                List<LibraryTrackItem> fldQueue = new(merged.Count);
+                for (int j = 0; j < merged.Count; j++) {
+                    LibraryTrackItem pref = PickPreferredVariant(merged[j]);
+                    if (pref != null) fldQueue.Add(pref);
+                }
                 LibraryFolderGroup capturedFld = fld;
                 LinearLayout row = BuildGroupRow(
                     fld.FolderName,
                     $"{string.Format(S["LibSongsCount"], merged.Count)} • {fld.FolderPath}",
-                    fldQueue.FirstOrDefault(),
+                    fldQueue.Count > 0 ? fldQueue[0] : null,
                     fldQueue,
                     () => {
                         selectedLibraryFolder = capturedFld;
@@ -3947,7 +4011,12 @@ public partial class MainActivity {
                     BottomMargin = Dp(6)
                 });
             }
-            AddLoadMoreIfNeeded(filtered.Count, showCount);
+
+            int firstEnd = Math.Min(showCount, InitialBatchItems);
+            for (int i = 0; i < firstEnd; i++) {
+                AppendFolderRow(i);
+            }
+            ScheduleIncrementalRender(firstEnd, showCount, 1, AppendFolderRow, () => AddLoadMoreIfNeeded(filtered.Count, showCount));
         }
     }
 

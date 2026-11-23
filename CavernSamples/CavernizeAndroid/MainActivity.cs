@@ -3118,12 +3118,42 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 }
 
                 ct.ThrowIfCancellationRequested();
-                if (!LosslessTwinDiscoveryService.TryDecodeTrackToStereoFloat(
-                    decodePath, prefSr, ffLoc, ct, out float[] mixL, out float[] mixR, out int decodedSr)) {
-                    throw new InvalidOperationException("Unable to decode track audio for neural separation.");
+                float[] mixL = null;
+                float[] mixR = null;
+                int decodedSr = prefSr;
+                bool usedAlignedTwin = false;
+                if (derivedFromTwin && activeLosslessTwin != null && activeLosslessTwin.HasSyncedLosslessTwin) {
+                    int atmosLen = activeTrack.Length > 0 && activeTrack.Length <= int.MaxValue
+                        ? (int)activeTrack.Length
+                        : 0;
+                    if (atmosLen > 0 && activeLosslessTwin.TryExtractFullAlignedStereo(atmosLen, out float[] alignedL, out float[] alignedR)) {
+                        mixL = alignedL;
+                        mixR = alignedR;
+                        decodedSr = activeLosslessTwin.SampleRate >= 8000 ? activeLosslessTwin.SampleRate : prefSr;
+                        usedAlignedTwin = true;
+                        AppLogger.Info($"W47 Neural Karaoke using sub-sample aligned Lossless Twin ({atmosLen} samples @ {decodedSr} Hz, offset={activeLosslessTwin.SyncResult.BaseOffsetSamples:0.00} smp, drift={activeLosslessTwin.SyncResult.DriftPpm:0.0} ppm).");
+                    }
+                }
+                if (!usedAlignedTwin) {
+                    if (!LosslessTwinDiscoveryService.TryDecodeTrackToStereoFloat(
+                        decodePath, prefSr, ffLoc, ct, out mixL, out mixR, out decodedSr)) {
+                        throw new InvalidOperationException("Unable to decode track audio for neural separation.");
+                    }
                 }
 
                 ct.ThrowIfCancellationRequested();
+                Action<Cavernize.Logic.Spatial.NeuralSeparatedTrack> progressiveCallback =
+                    goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna
+                        ? progressiveTrack => RunOnUiThread(() => {
+                            if (uiDestroyed || myGen != neuralPrepGeneration || progressiveTrack == null) {
+                                return;
+                            }
+                            playerEngine.BindSeparatedNeuralTrack(progressiveTrack);
+                            RefreshNeuralAudioUi();
+                            RefreshNeuralPrepUi();
+                        })
+                        : null;
+
                 (Cavernize.Logic.Spatial.NeuralSeparatedTrack separated, float rtf, bool fromCache) = neuralOrchestrator.ExecuteTrackPipeline(
                     sourceTrackKey: activePath,
                     fileSizeBytes: keyInfo.Length,
@@ -3133,7 +3163,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     sampleRate: decodedSr,
                     goal: goal,
                     config: cfg,
-                    derivedFromLosslessTwin: derivedFromTwin,
+                    derivedFromLosslessTwin: usedAlignedTwin || derivedFromTwin,
                     onProgress: (p, msg) => RunOnUiThread(() => {
                         if (uiDestroyed || myGen != neuralPrepGeneration) {
                             return;
@@ -3142,7 +3172,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
                         neuralPrepStatusText = msg ?? "";
                         RefreshNeuralPrepUi();
                     }),
-                    token: ct);
+                    token: ct,
+                    onProgressiveTrackReady: progressiveCallback);
 
                 Cavern.VocalChain.VocalMixDnaProfile extractedDna = Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(
                     separated, summaryTitle);

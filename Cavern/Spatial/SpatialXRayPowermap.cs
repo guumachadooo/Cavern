@@ -266,10 +266,18 @@ namespace Cavern.Spatial {
                 }
             }
 
-            if (IsFinite(totalWeight) && totalWeight > 1e-8f && IsFiniteVector(weightedDir) && weightedDir.LengthSquared() > 1e-8f) {
+            // Energy-gated exponential smoothing on dominant Direction-of-Arrival vector (prevents 187 Hz block jitter)
+            float dirAlpha = Math.Max(0.04f, Math.Min(0.28f, inject * 0.22f));
+            if (IsFinite(totalWeight) && totalWeight > 1e-6f && IsFiniteVector(weightedDir) && weightedDir.LengthSquared() > 1e-8f) {
                 Vector3 normDir = Vector3.Normalize(weightedDir);
                 if (IsFiniteVector(normDir)) {
-                    dominantDirection = normDir;
+                    Vector3 blended = dominantDirection * (1f - dirAlpha) + normDir * dirAlpha;
+                    float lenSq = blended.LengthSquared();
+                    if (IsFinite(lenSq) && lenSq > 1e-8f) {
+                        dominantDirection = Vector3.Normalize(blended);
+                    } else {
+                        dominantDirection = normDir;
+                    }
                 }
             }
 
@@ -287,10 +295,18 @@ namespace Cavern.Spatial {
                     maxEnergy = sum;
                 }
             }
-            peakCellEnergy = maxEnergy;
+            // Fast attack / smooth release envelope on normalization peak so heatmap brightness never strobes
+            if (!IsFinite(peakCellEnergy) || peakCellEnergy <= 1e-6f) {
+                peakCellEnergy = maxEnergy;
+            } else if (maxEnergy > peakCellEnergy) {
+                peakCellEnergy += (maxEnergy - peakCellEnergy) * 0.30f;
+            } else {
+                peakCellEnergy += (maxEnergy - peakCellEnergy) * 0.06f;
+            }
+            float normPeak = Math.Max(0.02f, Math.Max(maxEnergy, peakCellEnergy));
 
             // Compress dynamic range smoothly for visual readability while keeping relative proportions physical
-            float invNorm = 1f / Math.Max(0.02f, maxEnergy);
+            float invNorm = 1f / normPeak;
             for (int c = 0; c < TotalCells; c++) {
                 float normVal = (float)Math.Sqrt(Math.Min(1f, totalGrid[c] * invNorm));
                 totalGrid[c] = IsFinite(normVal) ? normVal : 0f;

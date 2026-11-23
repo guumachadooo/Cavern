@@ -1033,9 +1033,20 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
         });
     }
 
+    /// <summary>
+    /// Raised synchronously immediately BEFORE <c>UsbDeviceConnection.Close()</c> closes the native USB file descriptor.
+    /// Allows Path B (<c>libusb-1.0</c>) to stop its event thread and release the FD cleanly, preventing Android <c>fdsan</c> <c>SIGABRT</c>.
+    /// </summary>
+    public event Action BeforeUsbConnectionClosing;
+
     void CloseConnectionLocked() {
-        pathBOwnsFileDescriptor = false;
         if (activeConnection != null) {
+            try {
+                BeforeUsbConnectionClosing?.Invoke();
+            } catch (Exception ex) {
+                AppLogger.Warn($"UsbProAudioDeviceManager: BeforeUsbConnectionClosing listener error: {ex.Message}");
+            }
+            pathBOwnsFileDescriptor = false;
             try {
                 activeConnection.Close();
                 activeConnection.Dispose();
@@ -1043,6 +1054,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
                 // Ignore
             }
             activeConnection = null;
+        } else {
+            pathBOwnsFileDescriptor = false;
         }
         scarlettInitialized = false;
     }

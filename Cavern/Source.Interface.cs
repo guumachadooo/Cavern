@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 
@@ -125,6 +125,15 @@ namespace Cavern {
         /// Release any position lock so codec metadata drives <see cref="Position"/> normally.
         /// </summary>
         public void UnlockCustomPosition() => PositionLocked = false;
+
+        /// <summary>
+        /// Release any position lock and immediately restore <see cref="Position"/> to <paramref name="restorePosition"/>
+        /// (needed for static beds, virtual upmix sources, and neural stems whose codec does not rewrite coordinates per block).
+        /// </summary>
+        public void UnlockCustomPosition(Vector3 restorePosition) {
+            PositionLocked = false;
+            Position = restorePosition;
+        }
 
         /// <summary>
         /// Clip playback position in samples.

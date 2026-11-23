@@ -65,6 +65,7 @@ struct PathBLibUsbEngine {
     std::thread event_thread;
     std::atomic<bool> running{false};
     std::atomic<bool> stopping{false};
+    std::atomic<bool> device_gone{false};
     std::atomic<int32_t> active_xfers{0};
     std::atomic<int32_t> full_duplex_flag{0};
     std::atomic<uint32_t> rate_1616{0};
@@ -98,6 +99,7 @@ struct PathBLibUsbEngine {
             xfer->status == LIBUSB_TRANSFER_CANCELLED ||
             xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
             if (xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+                self->device_gone.store(true, std::memory_order_release);
                 self->running.store(false, std::memory_order_release);
             }
             self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
@@ -110,6 +112,7 @@ struct PathBLibUsbEngine {
             self->out_xruns.fetch_add(1, std::memory_order_relaxed);
             self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
             if (rc == LIBUSB_ERROR_NO_DEVICE) {
+                self->device_gone.store(true, std::memory_order_release);
                 self->running.store(false, std::memory_order_release);
             }
         }
@@ -125,6 +128,7 @@ struct PathBLibUsbEngine {
             xfer->status == LIBUSB_TRANSFER_CANCELLED ||
             xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
             if (xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+                self->device_gone.store(true, std::memory_order_release);
                 self->running.store(false, std::memory_order_release);
             }
             self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
@@ -182,6 +186,7 @@ struct PathBLibUsbEngine {
             self->in_xruns.fetch_add(1, std::memory_order_relaxed);
             self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
             if (rc == LIBUSB_ERROR_NO_DEVICE) {
+                self->device_gone.store(true, std::memory_order_release);
                 self->running.store(false, std::memory_order_release);
             }
         }
@@ -197,6 +202,7 @@ struct PathBLibUsbEngine {
             xfer->status == LIBUSB_TRANSFER_CANCELLED ||
             xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
             if (xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
+                self->device_gone.store(true, std::memory_order_release);
                 self->running.store(false, std::memory_order_release);
             }
             self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
@@ -222,6 +228,7 @@ struct PathBLibUsbEngine {
         if (rc != 0) {
             self->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
             if (rc == LIBUSB_ERROR_NO_DEVICE) {
+                self->device_gone.store(true, std::memory_order_release);
                 self->running.store(false, std::memory_order_release);
             }
         }
@@ -517,7 +524,11 @@ struct PathBLibUsbEngine {
 
     int32_t scarlett2_xfer(int32_t vendor_if, const uint8_t* tx, int32_t tx_len, uint8_t* rx, int32_t rx_cap) {
         std::lock_guard<std::mutex> lock(ctrl_mtx);
-        if (!devh || !tx || tx_len < CAV_SCARLETT_PKT_HDR_SIZE) return -1;
+        if (!devh || !tx || tx_len < CAV_SCARLETT_PKT_HDR_SIZE ||
+            stopping.load(std::memory_order_acquire) ||
+            device_gone.load(std::memory_order_acquire)) {
+            return -1;
+        }
         int target_if = vendor_if >= 0 ? vendor_if : (topo.vendor_interface_num >= 0 ? topo.vendor_interface_num : 0);
         if (claimed_vendor_if != target_if) {
             if (claimed_vendor_if >= 0) {
@@ -532,11 +543,20 @@ struct PathBLibUsbEngine {
 
         int sent = libusb_control_transfer(devh, 0x21, CAV_SCARLETT_USB_REQ_SEND, 0, wIndex,
                                            const_cast<uint8_t*>(tx), static_cast<uint16_t>(tx_len), 500);
+        if (sent == LIBUSB_ERROR_NO_DEVICE) {
+            device_gone.store(true, std::memory_order_release);
+            running.store(false, std::memory_order_release);
+            return sent;
+        }
         if (sent < 0) return sent;
         if (!rx || rx_cap < CAV_SCARLETT_PKT_HDR_SIZE) return sent;
 
         int recvd = libusb_control_transfer(devh, 0xA1, CAV_SCARLETT_USB_REQ_RECV, 0, wIndex,
                                             rx, static_cast<uint16_t>(rx_cap), 500);
+        if (recvd == LIBUSB_ERROR_NO_DEVICE) {
+            device_gone.store(true, std::memory_order_release);
+            running.store(false, std::memory_order_release);
+        }
         return recvd;
     }
 
@@ -548,14 +568,17 @@ struct PathBLibUsbEngine {
     void stop_locked() {
         stopping.store(true, std::memory_order_release);
         running.store(false, std::memory_order_release);
-        for (auto* x : out_xfers) {
-            if (x) libusb_cancel_transfer(x);
-        }
-        for (auto* x : in_xfers) {
-            if (x) libusb_cancel_transfer(x);
-        }
-        for (auto* x : fb_xfers) {
-            if (x) libusb_cancel_transfer(x);
+        bool gone = device_gone.load(std::memory_order_acquire);
+        if (!gone) {
+            for (auto* x : out_xfers) {
+                if (x) libusb_cancel_transfer(x);
+            }
+            for (auto* x : in_xfers) {
+                if (x) libusb_cancel_transfer(x);
+            }
+            for (auto* x : fb_xfers) {
+                if (x) libusb_cancel_transfer(x);
+            }
         }
 
         /* Drain all cancelled URBs until active_xfers == 0 BEFORE freeing transfers/buffers (prevents UAF SIGSEGV) */
@@ -563,44 +586,54 @@ struct PathBLibUsbEngine {
             event_thread.join();
         } else if (ctx) {
             struct timeval tv;
-            for (int iter = 0; iter < 50 && active_xfers.load(std::memory_order_acquire) > 0; ++iter) {
+            for (int iter = 0; iter < 80 && active_xfers.load(std::memory_order_acquire) > 0; ++iter) {
                 tv.tv_sec = 0;
                 tv.tv_usec = 10000;
-                libusb_handle_events_timeout_completed(ctx, &tv, nullptr);
+                int rc = libusb_handle_events_timeout_completed(ctx, &tv, nullptr);
+                if (rc < 0) break;
             }
         }
 
-        for (auto* x : out_xfers) {
-            if (x) libusb_free_transfer(x);
-        }
-        for (auto* x : in_xfers) {
-            if (x) libusb_free_transfer(x);
-        }
-        for (auto* x : fb_xfers) {
-            if (x) libusb_free_transfer(x);
+        bool safe_to_free = active_xfers.load(std::memory_order_acquire) <= 0;
+        if (safe_to_free) {
+            for (auto* x : out_xfers) {
+                if (x) libusb_free_transfer(x);
+            }
+            for (auto* x : in_xfers) {
+                if (x) libusb_free_transfer(x);
+            }
+            for (auto* x : fb_xfers) {
+                if (x) libusb_free_transfer(x);
+            }
+            xfer_buffers.clear();
+        } else {
+            CAV_USBLOGW("Path B stop: %d URBs still in-flight after drain; deferring free to avoid UAF",
+                        active_xfers.load(std::memory_order_acquire));
         }
         out_xfers.clear();
         in_xfers.clear();
         fb_xfers.clear();
-        xfer_buffers.clear();
         active_xfers.store(0, std::memory_order_release);
 
+        gone = device_gone.load(std::memory_order_acquire);
         {
             std::lock_guard<std::mutex> ctrl_lock(ctrl_mtx);
             if (devh) {
-                if (claimed_vendor_if >= 0) {
-                    libusb_release_interface(devh, claimed_vendor_if);
-                    claimed_vendor_if = -1;
+                if (!gone) {
+                    if (claimed_vendor_if >= 0) {
+                        libusb_release_interface(devh, claimed_vendor_if);
+                    }
+                    if (has_pb) {
+                        libusb_set_interface_alt_setting(devh, pb_stream.interface_num, 0);
+                        libusb_release_interface(devh, pb_stream.interface_num);
+                    }
+                    if (has_cap && cap_stream.interface_num != pb_stream.interface_num) {
+                        libusb_set_interface_alt_setting(devh, cap_stream.interface_num, 0);
+                        libusb_release_interface(devh, cap_stream.interface_num);
+                    }
+                    libusb_release_interface(devh, topo.ac_interface_num);
                 }
-                if (has_pb) {
-                    libusb_set_interface_alt_setting(devh, pb_stream.interface_num, 0);
-                    libusb_release_interface(devh, pb_stream.interface_num);
-                }
-                if (has_cap && cap_stream.interface_num != pb_stream.interface_num) {
-                    libusb_set_interface_alt_setting(devh, cap_stream.interface_num, 0);
-                    libusb_release_interface(devh, cap_stream.interface_num);
-                }
-                libusb_release_interface(devh, topo.ac_interface_num);
+                claimed_vendor_if = -1;
                 libusb_close(devh);
                 devh = nullptr;
             }
@@ -611,6 +644,7 @@ struct PathBLibUsbEngine {
         }
         has_pb = false;
         has_cap = false;
+        device_gone.store(false, std::memory_order_release);
         full_duplex_flag.store(0, std::memory_order_release);
         stopping.store(false, std::memory_order_release);
     }

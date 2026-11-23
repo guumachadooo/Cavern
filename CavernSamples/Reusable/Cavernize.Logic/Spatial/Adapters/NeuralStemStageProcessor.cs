@@ -514,7 +514,8 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             VocalLevel = config.KaraokeVocalLevel,
             PreserveBackingVocals = config.KaraokePreserveBackingVocals
         };
-        if (activeSeparatedTrack != null && alignedRefSampleRate != safeRate) {
+        if (activeSeparatedTrack != null &&
+            (activeSeparatedTrack.IsProgressiveStreaming || alignedRefSampleRate != safeRate)) {
             RebuildAlignedReferencesLocked();
         }
     }
@@ -535,11 +536,15 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         float[] srcMonoLead = activeSeparatedTrack.MonoLeadVocalRef;
         float[] srcBacking = activeSeparatedTrack.MonoBackingVocalRef;
 
-        if (srcSr == sampleRate) {
+        // While progressive streaming is active, bind directly to the live incrementally-populated stem arrays
+        // and perform zero-GC sub-sample Catmull-Rom rate mapping on read when srcSr != sampleRate
+        // (avoids freezing a one-shot Kaiser-sinc resample over mostly-zero unfinalized chunks).
+        if (srcSr == sampleRate || activeSeparatedTrack.IsProgressiveStreaming) {
             alignedLeadMono = srcMonoLead;
             alignedLeadLeft = stereoLead?.Left;
             alignedLeadRight = stereoLead?.Right;
             alignedBackingMono = srcBacking;
+            alignedRefSampleRate = srcSr;
             return;
         }
 
@@ -627,43 +632,80 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         backingRef = null;
         isFullMixTwinReference = false;
 
-        if (outputSamplePos >= 0) {
-            if (wantStereoLead && alignedLeadLeft != null && alignedLeadRight != null &&
-                outputSamplePos < alignedLeadLeft.Length && outputSamplePos < alignedLeadRight.Length) {
-                int availL = (int)Math.Min(frameCount, alignedLeadLeft.Length - outputSamplePos);
-                int availR = (int)Math.Min(frameCount, alignedLeadRight.Length - outputSamplePos);
-                Array.Copy(alignedLeadLeft, (int)outputSamplePos, leadRefScratch, 0, availL);
-                if (availL < frameCount) {
-                    Array.Clear(leadRefScratch, availL, frameCount - availL);
-                }
-                Array.Copy(alignedLeadRight, (int)outputSamplePos, leadRefRightScratch, 0, availR);
-                if (availR < frameCount) {
-                    Array.Clear(leadRefRightScratch, availR, frameCount - availR);
-                }
-                leadRefL = leadRefScratch;
-                leadRefR = leadRefRightScratch;
-            } else if (alignedLeadMono != null && outputSamplePos < alignedLeadMono.Length) {
-                int avail = (int)Math.Min(frameCount, alignedLeadMono.Length - outputSamplePos);
-                Array.Copy(alignedLeadMono, (int)outputSamplePos, leadRefScratch, 0, avail);
-                if (avail < frameCount) {
-                    Array.Clear(leadRefScratch, avail, frameCount - avail);
-                }
-                leadRefL = leadRefScratch;
-            }
+        // Guard progressive streaming reads: only read neural stem references inside the permanently finalized sample window.
+        // If playback seeks ahead of ReadySampleCount, seamlessly fall back until progressive inference catches up.
+        int readyLimit = activeSeparatedTrack != null && activeSeparatedTrack.IsProgressiveStreaming
+            ? activeSeparatedTrack.ReadySampleCount
+            : int.MaxValue;
+        bool needsLiveRateMap = alignedRefSampleRate > 0 && alignedRefSampleRate != sampleRate;
 
-            if (config.KaraokePreserveBackingVocals && alignedBackingMono != null && outputSamplePos < alignedBackingMono.Length) {
-                int avail = (int)Math.Min(frameCount, alignedBackingMono.Length - outputSamplePos);
-                Array.Copy(alignedBackingMono, (int)outputSamplePos, backingRefScratch, 0, avail);
-                if (avail < frameCount) {
-                    Array.Clear(backingRefScratch, avail, frameCount - avail);
+        if (!needsLiveRateMap) {
+            bool sampleWindowReady = outputSamplePos >= 0 && (outputSamplePos + frameCount) <= readyLimit;
+            if (sampleWindowReady) {
+                if (wantStereoLead && alignedLeadLeft != null && alignedLeadRight != null &&
+                    outputSamplePos < alignedLeadLeft.Length && outputSamplePos < alignedLeadRight.Length) {
+                    int availL = (int)Math.Min(frameCount, alignedLeadLeft.Length - outputSamplePos);
+                    int availR = (int)Math.Min(frameCount, alignedLeadRight.Length - outputSamplePos);
+                    Array.Copy(alignedLeadLeft, (int)outputSamplePos, leadRefScratch, 0, availL);
+                    if (availL < frameCount) {
+                        Array.Clear(leadRefScratch, availL, frameCount - availL);
+                    }
+                    Array.Copy(alignedLeadRight, (int)outputSamplePos, leadRefRightScratch, 0, availR);
+                    if (availR < frameCount) {
+                        Array.Clear(leadRefRightScratch, availR, frameCount - availR);
+                    }
+                    leadRefL = leadRefScratch;
+                    leadRefR = leadRefRightScratch;
+                } else if (alignedLeadMono != null && outputSamplePos < alignedLeadMono.Length) {
+                    int avail = (int)Math.Min(frameCount, alignedLeadMono.Length - outputSamplePos);
+                    Array.Copy(alignedLeadMono, (int)outputSamplePos, leadRefScratch, 0, avail);
+                    if (avail < frameCount) {
+                        Array.Clear(leadRefScratch, avail, frameCount - avail);
+                    }
+                    leadRefL = leadRefScratch;
                 }
-                backingRef = backingRefScratch;
+
+                if (config.KaraokePreserveBackingVocals && alignedBackingMono != null && outputSamplePos < alignedBackingMono.Length) {
+                    int avail = (int)Math.Min(frameCount, alignedBackingMono.Length - outputSamplePos);
+                    Array.Copy(alignedBackingMono, (int)outputSamplePos, backingRefScratch, 0, avail);
+                    if (avail < frameCount) {
+                        Array.Clear(backingRefScratch, avail, frameCount - avail);
+                    }
+                    backingRef = backingRefScratch;
+                }
+            }
+        } else if (outputSamplePos >= 0) {
+            double ratio = alignedRefSampleRate / (double)sampleRate;
+            double srcStart = outputSamplePos * ratio;
+            int maxNeededIdx = (int)Math.Floor(srcStart + Math.Max(0, frameCount - 1) * ratio) + 2;
+            bool sampleWindowReady = maxNeededIdx < readyLimit;
+            if (sampleWindowReady) {
+                if (wantStereoLead && alignedLeadLeft != null && alignedLeadRight != null &&
+                    srcStart < alignedLeadLeft.Length && srcStart < alignedLeadRight.Length) {
+                    int capL = Math.Min(alignedLeadLeft.Length, readyLimit);
+                    int capR = Math.Min(alignedLeadRight.Length, readyLimit);
+                    ResampleCatmullRomBlock(alignedLeadLeft, capL, srcStart, ratio, leadRefScratch, frameCount);
+                    ResampleCatmullRomBlock(alignedLeadRight, capR, srcStart, ratio, leadRefRightScratch, frameCount);
+                    leadRefL = leadRefScratch;
+                    leadRefR = leadRefRightScratch;
+                } else if (alignedLeadMono != null && srcStart < alignedLeadMono.Length) {
+                    int cap = Math.Min(alignedLeadMono.Length, readyLimit);
+                    ResampleCatmullRomBlock(alignedLeadMono, cap, srcStart, ratio, leadRefScratch, frameCount);
+                    leadRefL = leadRefScratch;
+                }
+
+                if (config.KaraokePreserveBackingVocals && alignedBackingMono != null && srcStart < alignedBackingMono.Length) {
+                    int cap = Math.Min(alignedBackingMono.Length, readyLimit);
+                    ResampleCatmullRomBlock(alignedBackingMono, cap, srcStart, ratio, backingRefScratch, frameCount);
+                    backingRef = backingRefScratch;
+                }
             }
         }
 
-        // W09 Lossless Twin auto-acceleration: if no offline neural lead stem is attached yet AND sample rates match,
-        // use the synced lossless FLAC twin's clean center-sum as a vocal-band-guarded coherence reference.
-        if (leadRefL == null && config.UseLosslessTwinForKaraoke &&
+        // W09 Lossless Twin blind guard: on stereo tracks without a neural stem, a synced lossless twin center-sum can
+        // serve as a vocal-band reference. On multichannel/Atmos tracks (wantStereoLead == false), DO NOT overwrite
+        // Atmos's discrete FrontCenter bed reference with a full-mix stereo sum (full-mix sum contains centered drums/bass/instruments!).
+        if (leadRefL == null && wantStereoLead && config.UseLosslessTwinForKaraoke &&
             losslessReference != null && losslessReference.HasSyncedLosslessTwin &&
             losslessReference.SampleRate == sampleRate &&
             losslessReference.TryReadAlignedStereoBlock(trackSamplePos, twinLeftScratch, twinRightScratch, frameCount)) {
@@ -672,6 +714,40 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             }
             leadRefL = leadRefScratch;
             isFullMixTwinReference = true;
+        }
+    }
+
+    static void ResampleCatmullRomBlock(
+        float[] src,
+        int validLen,
+        double srcStart,
+        double ratio,
+        float[] dst,
+        int frameCount) {
+        if (validLen <= 0) {
+            Array.Clear(dst, 0, frameCount);
+            return;
+        }
+        int lastIdx = validLen - 1;
+        for (int i = 0; i < frameCount; i++) {
+            double pos = srcStart + i * ratio;
+            int idx = (int)Math.Floor(pos);
+            if (idx < 0 || idx > lastIdx) {
+                dst[i] = 0f;
+                continue;
+            }
+            float t = (float)(pos - idx);
+            float p0 = src[idx > 0 ? idx - 1 : 0];
+            float p1 = src[idx];
+            float p2 = src[idx + 1 <= lastIdx ? idx + 1 : lastIdx];
+            float p3 = src[idx + 2 <= lastIdx ? idx + 2 : lastIdx];
+            float t2 = t * t;
+            float t3 = t2 * t;
+            dst[i] = 0.5f * (
+                (2f * p1) +
+                (-p0 + p2) * t +
+                (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2 +
+                (-p0 + 3f * p1 - 3f * p2 + p3) * t3);
         }
     }
 }

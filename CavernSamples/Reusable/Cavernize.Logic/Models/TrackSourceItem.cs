@@ -68,6 +68,11 @@ public sealed class TrackSourceItem {
     public Vector3 NormalizedPosition { get; set; }
 
     /// <summary>
+    /// Original default normalized position in room space [-1; 1], used when resetting custom dragged pins.
+    /// </summary>
+    public Vector3 DefaultNormalizedPosition { get; }
+
+    /// <summary>
     /// True when the user manually dragged and pinned this source to <see cref="CustomNormalizedPosition"/>.
     /// </summary>
     public bool HasCustomPosition { get; set; }
@@ -124,6 +129,7 @@ public sealed class TrackSourceItem {
         IsLFE = isLfe;
         Channel = channel;
         NormalizedPosition = normalizedPosition;
+        DefaultNormalizedPosition = normalizedPosition;
         Layer = layer ?? (isBed ? SourceLayer.Bed : SourceLayer.NativeObject);
     }
 
@@ -196,6 +202,59 @@ public sealed class TrackSourceItem {
             }
 
             items.Add(new TrackSourceItem(i, name, isBed, isLfe, channel, normPos));
+        }
+        return items;
+    }
+
+    /// <summary>
+    /// Builds <see cref="TrackSourceItem"/> entries matching the exact attached <see cref="Listener.ActiveSources"/>
+    /// (including virtual Matrix / Cavernize 3D upmix channels) so the 3D Room graph displays every active upmixed
+    /// speaker/height object and Solo/Mute/CustomPosition map 1:1 with the rendered sources.
+    /// </summary>
+    public static List<TrackSourceItem> BuildFromAttachedSources(CavernizeTrack track, IReadOnlyList<Source> attachedSources) {
+        List<TrackSourceItem> baseItems = BuildFromTrack(track);
+        if (attachedSources == null || attachedSources.Count <= baseItems.Count) {
+            return baseItems;
+        }
+
+        Vector3 envSize = Listener.EnvironmentSize;
+        if (envSize.X <= 0.1f || envSize.Y <= 0.1f || envSize.Z <= 0.1f) {
+            envSize = new Vector3(10, 7, 10);
+        }
+
+        SourceLayer[] layers = track?.ActiveSourceLayers;
+        bool hasDirectBaseMatch = track?.Renderer?.Objects != null &&
+            attachedSources.Count >= track.Renderer.Objects.Count;
+        // When CavernizeUpmixer or MatrixUpmixing replaces the source list completely (e.g. 2.0 -> 8/12 virtual sources),
+        // enumerate every attached source directly so 3D Room graph and Solo/Mute stay 1:1 with Listener.ActiveSources.
+        bool baseIndicesMatch = hasDirectBaseMatch && baseItems.Count > 0 &&
+            ReferenceEquals(attachedSources[0], track.Renderer.Objects[0]);
+
+        List<TrackSourceItem> items = new(attachedSources.Count);
+        for (int i = 0; i < attachedSources.Count; i++) {
+            if (baseIndicesMatch && i < baseItems.Count) {
+                items.Add(baseItems[i]);
+                continue;
+            }
+            Source src = attachedSources[i];
+            Vector3 normPos = src.Position / envSize;
+            ReferenceChannel ch = Renderer.ChannelFromPosition(normPos);
+            bool isLfe = src.LFE || ch == ReferenceChannel.ScreenLFE;
+            SourceLayer layer = layers != null && i < layers.Length
+                ? layers[i]
+                : (normPos.Y > 0.15f ? SourceLayer.VirtualHeight : SourceLayer.VirtualMatrix);
+            bool isBed = layer == SourceLayer.Bed || layer == SourceLayer.VirtualMatrix;
+            string label;
+            if (ch != ReferenceChannel.Unknown) {
+                string shortName = ch.GetShortName();
+                string prefix = layer == SourceLayer.VirtualHeight ? "Upmix Height" : (layer == SourceLayer.VirtualMatrix ? "Upmix" : ChannelPrototype.Mapping[(int)ch].Name);
+                label = $"#{i + 1} {prefix} ({shortName})";
+            } else {
+                label = layer == SourceLayer.VirtualHeight
+                    ? $"#{i + 1} Virtual Height {i + 1}"
+                    : $"#{i + 1} Virtual Upmix {i + 1}";
+            }
+            items.Add(new TrackSourceItem(i, label, isBed, isLfe, ch != ReferenceChannel.Unknown ? ch : null, normPos, layer));
         }
         return items;
     }

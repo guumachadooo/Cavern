@@ -249,7 +249,7 @@ def pick_channel(relay_url: str, pair_secret_hex: str, preferred: str, admin_key
 
 
 def cmd_push_workspace(args: argparse.Namespace) -> int:
-    relay, secret, admin = _resolve_auth(args)
+    relay, secret, admin = _resolve_auth(args, allow_knock=True)
     channel = pick_channel(relay, secret, args.channel, admin)
     repo_root = Path(args.workspace or REPO_ROOT).resolve()
 
@@ -355,7 +355,7 @@ def cmd_pull_workspace(args: argparse.Namespace) -> int:
         print(json.dumps({"ok": True, "source": f"github:{owner_repo}@{branch}", "updatedCount": len(updated), "updated": updated}, indent=2))
         return 0
 
-    relay, secret, admin = _resolve_auth(args)
+    relay, secret, admin = _resolve_auth(args, allow_knock=True)
     channel = pick_channel(relay, secret, args.channel, admin)
     m_res = send_agent_command(relay, secret, "git_manifest", {"repo": args.repo or ""}, channel=channel, admin_key=admin, timeout_sec=90)
     if not m_res.get("ok"):
@@ -502,7 +502,7 @@ def cmd_hot_exec(args: argparse.Namespace) -> int:
 
 
 def cmd_swarm(args: argparse.Namespace) -> int:
-    relay, secret, admin = _resolve_auth(args)
+    relay, secret, admin = _resolve_auth(args, allow_knock=True)
     headers = proto.derive_agent_headers(secret, channel="termux", admin_key=admin)
     act = args.swarm_action
     if act == "enqueue":
