@@ -299,6 +299,7 @@
   "key_parity_rules": [
     {
       "path": "CavernSamples/CavernizeAndroid/Language/AndroidStrings.cs",
+      "target_path": "CavernSamples/CavernizeAndroid/Language/AndroidStrings.PtBr.cs",
       "added_key_regex": "^\\s*\\[\"([^\"]+)\"\\]\\s*=",
       "target_section_regex": "static\\s+void\\s+ApplyPortuguese\\b(.*?)(?=^\\s*static\\s+void\\s+Apply|\\Z)",
       "target_key_template": "d[\"{key}\"]",

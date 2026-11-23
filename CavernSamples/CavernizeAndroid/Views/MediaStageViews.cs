@@ -278,6 +278,7 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
 
         trackPillBtn = new LinearLayout(ctx) {
             Orientation = Orientation.Horizontal,
+            BaselineAligned = false,
             Visibility = ViewStates.Gone
         };
         trackPillBtn.SetGravity(GravityFlags.Center);
@@ -472,6 +473,7 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
         // Touch Unlock floating pill (when Lock Controls is enabled)
         unlockFloatingPill = new LinearLayout(ctx) {
             Orientation = Orientation.Horizontal,
+            BaselineAligned = false,
             Visibility = ViewStates.Gone
         };
         unlockFloatingPill.SetGravity(GravityFlags.Center);

@@ -365,7 +365,7 @@ def check_key_parity_rules(repo: Path, files: list[str], profile: dict[str, Any]
         text = full.read_text(encoding="utf-8", errors="ignore")
         target_rel = (r.get("target_path") or "").replace("\\", "/").lstrip("./") or rel
         target_full = repo / target_rel
-        target_text = target_full.read_text(encoding="utf-8", errors="ignore") if target_full.is_file() else ""
+        target_text = target_full.read_text(encoding="utf-8", errors="ignore") if target_full.is_file() else text
 
         if rel in files or target_rel in files:
             sec_pat = r.get("target_section_regex") or ""

@@ -77,7 +77,7 @@ public sealed class OneUiInlineSelector : LinearLayout {
             AddView(titleView);
         }
 
-        headerPill = new LinearLayout(ctx) { Orientation = Orientation.Horizontal };
+        headerPill = new LinearLayout(ctx) { Orientation = Orientation.Horizontal, BaselineAligned = false };
         headerPill.SetGravity(GravityFlags.CenterVertical);
         headerPill.Background = OneUiTheme.CreateGlassCardDrawable(ctx, OneUiTheme.SurfaceSubTile, OneUiTheme.ButtonCornerDp);
         headerPill.SetPadding(dp(14), dp(10), dp(12), dp(10));
@@ -306,7 +306,7 @@ public static class OneUiModalDialog {
         card.SetPadding(dp(20), dp(18), dp(20), dp(16));
 
         // Header with crisp One UI 9 vector badge + optional '?' help trigger
-        LinearLayout header = new(ctx) { Orientation = Orientation.Horizontal };
+        LinearLayout header = new(ctx) { Orientation = Orientation.Horizontal, BaselineAligned = false };
         header.SetGravity(GravityFlags.CenterVertical);
         header.SetPadding(0, 0, 0, dp(12));
         header.AddView(OneUiTheme.CreateVectorIconBadge(ctx, icon, iconBadgeColor ?? OneUiTheme.IconSpatial, 32));

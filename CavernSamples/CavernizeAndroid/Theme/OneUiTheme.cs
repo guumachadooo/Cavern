@@ -445,7 +445,7 @@ public static class OneUiTheme {
         LayerDrawable layers = new([bgTrack, progressClip]);
         layers.SetId(0, Android.Resource.Id.Background);
         layers.SetId(1, Android.Resource.Id.Progress);
-        if (Build.VERSION.SdkInt >= BuildVersionCodes.M) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(23)) {
             layers.SetLayerHeight(0, trackH);
             layers.SetLayerHeight(1, trackH);
         }

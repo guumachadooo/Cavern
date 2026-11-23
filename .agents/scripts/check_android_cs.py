@@ -656,27 +656,30 @@ def _run_static_packaging_and_l10n_audit(repo: Path) -> tuple[str, list[str], li
             if p1 != p2:
                 errs.append(f"OTA version prefix mismatch: csproj={m1.group(1).strip()} vs BuildAndroid.yml={m2.group(1).strip()}")
 
-    # 4. AndroidStrings.cs 100% EN/PT-BR parity + format placeholders + statement terminator check
+    # 4. AndroidStrings*.cs 100% EN/PT-BR parity + format placeholders + statement terminator check
     strings_cs = repo / "CavernSamples" / "CavernizeAndroid" / "Language" / "AndroidStrings.cs"
+    strings_pt_cs = repo / "CavernSamples" / "CavernizeAndroid" / "Language" / "AndroidStrings.PtBr.cs"
     if strings_cs.is_file():
         stxt = strings_cs.read_text(encoding="utf-8", errors="ignore")
+        pt_src_path = strings_pt_cs if strings_pt_cs.is_file() else strings_cs
+        pt_txt = pt_src_path.read_text(encoding="utf-8", errors="ignore")
         m_en = re.search(r"static\s+Dictionary<string,\s*string>\s+CreateEnglish\(\)\s*=>\s*new\(\)\s*\{(.*?)(?=^\s*\};)", stxt, re.M | re.S)
-        m_pt = re.search(r"static\s+void\s+ApplyPortuguese\b(.*?)(?=^\s*static\s+void\s+Apply|\Z)", stxt, re.M | re.S)
+        m_pt = re.search(r"static\s+void\s+ApplyPortuguese\b(.*?)(?=^\s*static\s+void\s+Apply|\Z)", pt_txt, re.M | re.S)
         if m_en and m_pt:
             en_keys = re.findall(r'^\s*\["([^"]+)"\]\s*=', m_en.group(1), re.M)
             pt_keys = re.findall(r'^\s*d\["([^"]+)"\]\s*=', m_pt.group(1), re.M)
             en_set, pt_set = set(en_keys), set(pt_keys)
             missing_pt = sorted(en_set - pt_set)
             if missing_pt:
-                errs.append(f"AndroidStrings.cs: {len(missing_pt)} EN key(s) missing in ApplyPortuguese: {', '.join(missing_pt[:8])}")
+                errs.append(f"{pt_src_path.name}: {len(missing_pt)} EN key(s) missing in ApplyPortuguese: {', '.join(missing_pt[:8])}")
             en_dups = [k for k, c in collections.Counter(en_keys).items() if c > 1]
             if en_dups:
                 errs.append(f"AndroidStrings.cs: duplicate EN dictionary key(s): {', '.join(en_dups[:8])}")
             # Catch dangling trailing comma in ApplyPortuguese statement body (CI Run #45 regression!)
-            pt_start_line = stxt[: m_pt.start()].count("\n") + 1
+            pt_start_line = pt_txt[: m_pt.start()].count("\n") + 1
             for idx, ln in enumerate(m_pt.group(0).splitlines(), start=pt_start_line):
                 if re.match(r'^\s*d\["[^"]+"\]\s*=\s*".*",\s*(?://.*)?$', ln):
-                    errs.append(f"AndroidStrings.cs:{idx}: trailing comma `,` instead of `;` in ApplyPortuguese statement (CS1002/CS1513)")
+                    errs.append(f"{pt_src_path.name}:{idx}: trailing comma `,` instead of `;` in ApplyPortuguese statement (CS1002/CS1513)")
 
     status = "FAIL" if errs else ("WARN" if warns else "PASS")
     return status, errs, warns

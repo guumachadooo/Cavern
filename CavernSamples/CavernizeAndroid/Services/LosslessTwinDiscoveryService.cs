@@ -558,7 +558,7 @@ public static partial class LosslessTwinDiscoveryService {
             psi.ArgumentList.Add("-");
             FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpegPath);
 
-            using Process proc = Process.Start(psi);
+            using System.Diagnostics.Process proc = System.Diagnostics.Process.Start(psi);
             if (proc == null) return false;
 
             using CancellationTokenRegistration ctr = ct.Register(() => {
@@ -825,7 +825,7 @@ public static partial class LosslessTwinDiscoveryService {
                     psi.ArgumentList.Add("-");
                     FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpegPath);
 
-                    using Process proc = Process.Start(psi);
+                    using System.Diagnostics.Process proc = System.Diagnostics.Process.Start(psi);
                     if (proc != null) {
                         using CancellationTokenRegistration ctr = ct.Register(() => {
                             try {

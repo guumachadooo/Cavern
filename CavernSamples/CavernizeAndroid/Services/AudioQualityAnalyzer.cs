@@ -1011,7 +1011,7 @@ public static class AudioQualityAnalyzer {
             psi.ArgumentList.Add("-");
             FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpegPath);
 
-            using Process proc = Process.Start(psi);
+            using System.Diagnostics.Process proc = System.Diagnostics.Process.Start(psi);
             if (proc == null) return null;
 
             using CancellationTokenRegistration ctr = ct.Register(() => {

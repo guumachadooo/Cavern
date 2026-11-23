@@ -297,7 +297,7 @@ public static partial class LyricsService {
             psi.ArgumentList.Add("-");
             FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpeg);
 
-            using Process proc = Process.Start(psi);
+            using System.Diagnostics.Process proc = System.Diagnostics.Process.Start(psi);
             if (proc == null) return null;
 
             using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
