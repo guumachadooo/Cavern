@@ -435,14 +435,19 @@ public sealed class OmniAgentForegroundService : Service {
             : customScriptPath.Trim().Replace("'", "");
 
         // Hybrid auto-detect launcher:
-        // 1) Runs native Termux start.sh if present;
-        // 2) Otherwise boots Debian PRoot daemon (/root/.omni_agent/start.sh) where Antigravity lives;
-        // 3) Runs cleanly in background via nohup so Termux RUN_COMMAND returns promptly.
+        // 1) Ensures Termux usr/bin is in PATH (Termux RUN_COMMAND often has minimal PATH);
+        // 2) Runs native Termux start.sh via setsid -f if present;
+        // 3) Otherwise detaches proot-distro on the OUTSIDE via setsid -f while running the daemon
+        //    in foreground inside Debian PRoot (preventing PRoot from exiting and killing child processes!).
         string smartCmd =
+            $"export PATH=/data/data/com.termux/files/usr/bin:$PATH; " +
             $"if [ -x '{safeCustom}' ]; then " +
-            $"nohup bash '{safeCustom}' --bg >/dev/null 2>&1 & " +
+            $"setsid -f bash '{safeCustom}' >\"$HOME/.omni_agent_termux.log\" 2>&1 < /dev/null; " +
             $"elif command -v proot-distro >/dev/null 2>&1; then " +
-            $"nohup proot-distro login debian -- bash -lc 'if [ -x /root/.omni_agent/start.sh ]; then bash /root/.omni_agent/start.sh --bg; elif [ -f /root/.gemini/antigravity/scratch/Cavern/.agents/agent/install_termux_agent.sh ]; then cd /root/.gemini/antigravity/scratch/Cavern && bash .agents/agent/install_termux_agent.sh --bg; fi' >\"$HOME/.omni_agent_wake.log\" 2>&1 & " +
+            $"setsid -f /data/data/com.termux/files/usr/bin/proot-distro login debian --shared-tmp -- bash -lc " +
+            $"'if [ -x /root/.omni_agent/start.sh ]; then exec bash /root/.omni_agent/start.sh; " +
+            $"elif [ -f /root/.omni_agent/config.json ]; then exec python3 -B /root/.gemini/antigravity/scratch/Cavern/.agents/agent/omni_agent_daemon.py --config /root/.omni_agent/config.json; fi' " +
+            $">\"$HOME/.omni_agent_debian.log\" 2>&1 < /dev/null; " +
             $"fi";
 
         (bool ok, string msg) = LaunchTermuxCommand(context, "/data/data/com.termux/files/usr/bin/bash", ["-lc", smartCmd]);

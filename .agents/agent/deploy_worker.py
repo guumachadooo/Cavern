@@ -112,7 +112,7 @@ def deploy_worker(
 
 def verify_worker_health(worker_url: str) -> dict[str, Any]:
     url = worker_url.strip().rstrip("/") + "/health"
-    req = urllib.request.Request(url, method="GET")
+    req = urllib.request.Request(url, headers={"User-Agent": "OmniAgentDeploy/4.0"}, method="GET")
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read().decode("utf-8", errors="replace"))
 

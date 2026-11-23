@@ -70,6 +70,9 @@ def send_agent_command(
         raise RuntimeError(f"Failed queueing agent command '{cmd}' on channel '{channel}' (HTTP {st}): {resp}")
 
     deadline = time.time() + max(5, timeout_sec)
+    # Brief initial pause avoids poisoning Cloudflare KV's 60s negative-lookup cache
+    # at the caller's edge PoP before the phone has even polled and posted its result.
+    time.sleep(2.5)
     while time.time() < deadline:
         st_r, res_r = proto.http_json(
             "GET",
@@ -80,7 +83,7 @@ def send_agent_command(
         if st_r == 200 and res_r.get("ok") and res_r.get("ready"):
             raw_res = res_r["result"]
             return proto.decrypt_envelope(pair_secret_hex, f"res:{req_id}", raw_res["envelope"])
-        time.sleep(1.5)
+        time.sleep(2.5)
     raise TimeoutError(f"Timed out waiting {timeout_sec}s for channel '{channel}' to answer '{cmd}'.")
 
 
@@ -461,10 +464,10 @@ def main() -> int:
         res = send_agent_command(
             relay, secret, "logcat_tail",
             {"lines": args.lines, "filter": args.filter},
-            channel=channel, admin_key=admin, timeout_sec=45,
+            channel=channel, admin_key=admin, timeout_sec=max(120, args.timeout),
         )
     elif args.action == "ag-discover":
-        res = send_agent_command(relay, secret, "ag_discover", {}, channel=channel, admin_key=admin, timeout_sec=45)
+        res = send_agent_command(relay, secret, "ag_discover", {}, channel=channel, admin_key=admin, timeout_sec=max(120, args.timeout))
     elif args.action == "ag-sync":
         res = send_agent_command(
             relay, secret, "ag_sync_session",
@@ -477,7 +480,7 @@ def main() -> int:
                 "files": args.files,
                 "repo": args.repo,
             },
-            channel=channel, admin_key=admin, timeout_sec=45,
+            channel=channel, admin_key=admin, timeout_sec=max(120, args.timeout),
         )
     else:
         raise SystemExit(f"Unsupported action: {args.action}")
