@@ -1,6 +1,0 @@
-{
-  "summary": "Implementation plan for OmniAgent Android Companion improvements: runtime Termux RUN_COMMAND permission flow, smart hybrid Debian PRoot / Termux daemon launcher with 1-tap setup helper, system-following language detection with live Auto/PT-BR/EN switcher, and Android 15+ WindowInsets safe-area polish.",
-  "updatedAt": "2026-11-23T00:58:10.909995875Z",
-  "requestFeedback": true,
-  "userFacing": true
-}
