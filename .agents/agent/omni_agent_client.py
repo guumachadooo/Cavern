@@ -683,6 +683,76 @@ def cmd_swarm(args: argparse.Namespace) -> int:
     return 0 if st < 400 and resp.get("ok") else 1
 
 
+def _needs_apk_ci(paths: list[str]) -> bool:
+    code_prefixes = ("Cavern/", "Cavern.Format/", "CavernSamples/", ".github/workflows/BuildAndroid.yml")
+    code_exts = (".cs", ".csproj", ".c", ".cpp", ".h", ".xml", ".axml", ".ttf", ".so")
+    for p in paths:
+        norm = p.replace("\\", "/")
+        if norm == ".github/workflows/BuildAndroid.yml":
+            return True
+        if norm.startswith(code_prefixes) and norm.lower().endswith(code_exts):
+            return True
+    return False
+
+
+def cmd_ship(args: argparse.Namespace) -> int:
+    """One-shot quota-saving ship pipeline: verify + file-budget + push + Termux sync + Flight Recorder close."""
+    ws = Path(args.workspace or REPO_ROOT).resolve()
+    import subprocess as sp
+
+    if not args.no_verify:
+        checks = [
+            ("file_budget", [sys.executable, "-B", str(ws / ".agents/scripts/file_budget_guard.py"), "--check", "--warn", "850", "--fail", "920"]),
+            ("verify_universal", [sys.executable, "-B", str(ws / ".agents/plugins/dynamic-fractal-planner/scripts/verify_universal.py"), "--all"]),
+        ]
+        for label, cmd in checks:
+            r = sp.run(cmd, cwd=str(ws), capture_output=True, text=True, timeout=120, check=False)
+            if r.returncode != 0:
+                print(json.dumps({"ok": False, "stage": label, "stdout": r.stdout[-1500:], "stderr": r.stderr[-1500:]}, indent=2))
+                return r.returncode
+
+    owner_repo = args.owner_repo or "guumachadooo/Cavern"
+    branch = args.branch or "master"
+    diff = ghdirect.diff_workspace_against_github(ws, owner_repo=owner_repo, branch=branch, sync_deletes=bool(args.sync_deletes))
+    touched = list(diff["changed"]) + list(diff["deleted"])
+    commit_msg = args.commit.strip()
+    if args.auto_skip_ci and "[skip ci]" not in commit_msg.lower() and not _needs_apk_ci(touched):
+        commit_msg = f"{commit_msg} [skip ci]"
+
+    push_ns = argparse.Namespace(
+        workspace=str(ws),
+        commit=commit_msg,
+        via=args.via,
+        owner_repo=owner_repo,
+        branch=branch,
+        remote="origin",
+        no_push=False,
+        no_sync_termux=bool(args.no_sync_termux),
+        pull_first=False,
+        sync_deletes=bool(args.sync_deletes),
+        files=None,
+        delete=None,
+        url=args.url,
+        pair_secret=args.pair_secret,
+        admin_key=args.admin_key,
+        channel=args.channel,
+        repo=args.repo,
+        timeout=args.timeout,
+    )
+    rc = cmd_push_workspace(push_ns)
+    if rc != 0:
+        return rc
+
+    if not args.no_close_fr:
+        fr_script = ws / ".agents/scripts/flight_recorder.py"
+        if fr_script.is_file():
+            fr_cmd = [sys.executable, "-B", str(fr_script), "close", "--note", commit_msg]
+            if args.next_step:
+                fr_cmd += ["--next", args.next_step]
+            sp.run(fr_cmd, cwd=str(ws), check=False)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="OmniAgent v4 Full-Agent CLI (Antigravity 2 Controller).")
     parser.add_argument("--url", default="", help="Cloudflare Unified Hub v4 URL (or env CAVERN_RELAY_URL)")
@@ -811,6 +881,19 @@ def main() -> int:
     p_cp = sub.add_parser("checkpoint", help="Anti-Cancellation 3-tier Session Flight Recorder (forwards to flight_recorder.py)")
     p_cp.add_argument("fr_args", nargs=argparse.REMAINDER, help="Arguments passed directly to flight_recorder.py (init|save|recover|restore|status|close)")
 
+    p_ship = sub.add_parser("ship", help="1-shot quota-saving pipeline: verify + file-budget + auto [skip ci] push + Termux sync + Flight Recorder close")
+    p_ship.add_argument("--commit", required=True, help="Commit message")
+    p_ship.add_argument("--next", dest="next_step", default="", help="Next step saved to Flight Recorder & Antigravity handoff")
+    p_ship.add_argument("--workspace", default=str(REPO_ROOT))
+    p_ship.add_argument("--owner-repo", default="guumachadooo/Cavern")
+    p_ship.add_argument("--branch", default="master")
+    p_ship.add_argument("--via", choices=("auto", "github", "phone"), default="auto")
+    p_ship.add_argument("--sync-deletes", action="store_true")
+    p_ship.add_argument("--auto-skip-ci", action="store_true", help="Automatically append [skip ci] if no Android C#/C++/BuildAndroid.yml files changed")
+    p_ship.add_argument("--no-verify", action="store_true")
+    p_ship.add_argument("--no-sync-termux", action="store_true")
+    p_ship.add_argument("--no-close-fr", action="store_true")
+
     args = parser.parse_args()
 
     if args.action == "checkpoint":
@@ -848,6 +931,8 @@ def main() -> int:
         return cmd_pull_workspace(args)
     if args.action == "push-workspace":
         return cmd_push_workspace(args)
+    if args.action == "ship":
+        return cmd_ship(args)
     if args.action == "hot-exec":
         return cmd_hot_exec(args)
     if args.action == "swarm":

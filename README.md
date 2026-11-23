@@ -1,9 +1,12 @@
 # Cavernize Android
 
-Spatial audio player, multi-format converter, and 3D object stem extractor for Android built on top of the [Cavern](https://github.com/VoidXH/Cavern) acoustic engine and ported via `.NET 11` (`net11.0-android`).
+> **Flagship Spatial Audio Player, Dolby Atmos / TrueHD / IAMF / HOA3 Engine, Neural Stem Studio & USB Pro-Audio Suite for Android** — built on the [Cavern](https://github.com/VoidXH/Cavern) acoustic DSP core and `.NET 11` (`net11.0-android`) with a native **One UI 9** presentation shell.
 
 [![Build Android APK](https://github.com/guumachadooo/Cavern/actions/workflows/BuildAndroid.yml/badge.svg)](https://github.com/guumachadooo/Cavern/actions/workflows/BuildAndroid.yml)
-[![Latest Release](https://img.shields.io/github/v/release/guumachadooo/Cavern)](https://github.com/guumachadooo/Cavern/releases/tag/android-latest)
+[![Fast Quality & File-Budget Guard](https://github.com/guumachadooo/Cavern/actions/workflows/FastQualityGuard.yml/badge.svg)](https://github.com/guumachadooo/Cavern/actions/workflows/FastQualityGuard.yml)
+[![Latest Release](https://img.shields.io/github/v/release/guumachadooo/Cavern?label=Latest%20APK&color=0A84FF)](https://github.com/guumachadooo/Cavern/releases/latest)
+[![Platform](https://img.shields.io/badge/.NET%2011-Android%2015%2B%20%28API%2035%29-34C759)](#building)
+[![Native Engines](https://img.shields.io/badge/W%5EX%2016KB%20ELF-FFmpeg%20%7C%20truehdd%20%7C%20ONNX%20%7C%20AAudio-111827)](#key-capabilities)
 
 ---
 
@@ -72,14 +75,21 @@ dotnet build CavernSamples/Reusable/Cavernize.Logic/Cavernize.Logic.csproj -c Re
 ```
 
 ### CI / Signed Release Workflow
-Pushing to `master` (or manually triggering `.github/workflows/BuildAndroid.yml`) compiles a signed APK in GitHub Actions, publishes it as a build artifact, and updates the `android-latest` release tag.
+Pushing to `master` (or manually triggering `.github/workflows/BuildAndroid.yml`) compiles a signed 16 KB ELF-aligned ARM64 APK in GitHub Actions, publishes a permanent versioned release (`v2.9.<run>`) automatically promoted as **`Latest`**, and mirrors the binary to the rolling `android-latest` OTA alias used by the in-app updater. In parallel, `.github/workflows/FastQualityGuard.yml` verifies static guardrails, L10n parity, unit tests, native C11 pro-audio tests, and workspace file budget (`<920/999`).
 
 ---
 
 ## Architecture Overview
-- [`Cavern/`](./Cavern) & [`Cavern.Format/`](./Cavern.Format) — Core Cavern spatial DSP engine, object renderers, and immersive bitstream parsers (upstream [`VoidXH/Cavern`](https://github.com/VoidXH/Cavern)).
-- [`CavernSamples/Reusable/Cavernize.Logic/`](./CavernSamples/Reusable/Cavernize.Logic) — Shared player engine (`RealtimePlayerEngine`), conversion environment, post-render reports, and queue logic.
-- [`CavernSamples/CavernizeAndroid/`](./CavernSamples/CavernizeAndroid) — Android UI (`OneUiTheme`, `RoomSimulatorView`, `OneUiWaveMediaSeekBar`), `AudioTrack` output, `MediaMetadataRetriever` metadata/artwork extractor, `MediaSession` lock-screen service, FFmpeg installer, and GitHub Releases updater.
+- [`Cavern/`](./Cavern) & [`Cavern.Format/`](./Cavern.Format) — Strict C# 8.0 (`netstandard2.1`) core spatial DSP engine, object renderers, neural pipelines, restoration/vocal chains, and immersive bitstream parsers (IAMF, HOA3, ADM BWF, E-AC-3 JOC, TrueHD, WAV, MKV).
+- [`CavernSamples/Reusable/Cavernize.Logic/`](./CavernSamples/Reusable/Cavernize.Logic) — Shared player engine (`RealtimePlayerEngine`), ONNX WebGPU/FP16 conversion & streaming adapters, conversion environment, post-render reports, and queue logic.
+- [`CavernSamples/CavernizeAndroid/`](./CavernSamples/CavernizeAndroid) — Native `.NET 11` Android One UI 9 shell, `RoomSimulatorView` 3D acoustic room, `Native/cavernize_proaudio/` (AAudio Exclusive + userspace `libusb` UAC2), Focusrite Scarlett console, ONNX Runtime bridge, and OTA updater.
+- [`archive/desktop-legacy-wpf.tar.gz`](./archive/desktop-legacy-wpf.tar.gz) — Lossless SHA-256 verified archive of legacy upstream Windows WPF desktop projects (also preserved in full git history on branch `backup/cavern-pre-H-ab942fd6`), keeping the repository lean and well below AI Studio's 999-file import ceiling.
+
+---
+
+## Companion Ecosystem
+- [**OmniAgent**](https://github.com/guumachadooo/OmniAgent) — Dedicated Zero-Trust E2E Android companion app, Termux daemon, and Cloudflare Durable Objects Hub v6 for same-signature local IPC with Cavernize, biometric approval, remote builds, and automatic APK delivery.
+- [**Dynamic Fractal Planner**](https://github.com/guumachadooo/dynamic-fractal-planner) — Zero-dependency AI planning, SOTA pre-flight, wiring-gate, timeless error-learning, and file-budget verification plugin (`v2.10.0`).
 
 ---
 

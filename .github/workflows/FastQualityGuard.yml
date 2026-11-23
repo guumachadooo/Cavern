@@ -1,0 +1,71 @@
+name: Fast Quality & File-Budget Guard
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fast-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run zero-token static guardrails, file-budget & unit test suite
+        run: |
+          set -euo pipefail
+          {
+            echo "## Fast Quality & AI Studio File-Budget Guard"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "=== 1. AI Studio File Budget (<920 / 999) ==="
+          python3 -B .agents/scripts/file_budget_guard.py --check --warn 850 --fail 920 | tee /tmp/file_budget.json
+
+          echo "=== 2. Universal Fractal Guardrails (L10n, Wiring, Syntax, Monolith, Budget) ==="
+          python3 -B .agents/plugins/dynamic-fractal-planner/scripts/verify_universal.py --all
+
+          echo "=== 3. Dynamic Fractal Planner Regression Suite ==="
+          python3 -B .agents/plugins/dynamic-fractal-planner/tests/run_plugin_tests.py --fast
+
+          echo "=== 4. OmniAgent & Flight Recorder Python Unit Tests ==="
+          python3 -B -m unittest discover -s .agents/agent -p 'test_*.py' -v
+
+          echo "=== 5. Timeless Build Lessons Audit ==="
+          python3 -B .agents/scripts/error_learner.py --audit-lessons
+
+          echo "=== 6. Preview Dashboard Node Tests ==="
+          node --test .agents/preview/dashboard.test.mjs
+
+          echo "=== 7. Native Pro-Audio C11 Unit Tests ==="
+          gcc -std=c11 -O2 -Wall -Wextra -Werror \
+            -ICavernSamples/CavernizeAndroid/Native/cavernize_proaudio \
+            CavernSamples/CavernizeAndroid/Native/cavernize_proaudio/cavernize_uac2_core.c \
+            CavernSamples/CavernizeAndroid/Native/cavernize_proaudio/test_proaudio_native.c \
+            -lm -o /tmp/test_proaudio_native
+          /tmp/test_proaudio_native
+          rm -f /tmp/test_proaudio_native
+
+          python3 - << 'PY'
+          import json, os
+          fb = json.load(open("/tmp/file_budget.json", encoding="utf-8"))
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as sf:
+              sf.write(f"- **File Budget:** `{fb['totalFiles']}/{fb['platformCap']}` (`{fb['status']}`, headroom: `{fb['headroomToCap']}` files)\n")
+              sf.write("- **Static Guardrails (`verify_universal --all`):** `PASS`\n")
+              sf.write("- **Fractal Plugin Tests / OmniAgent Tests / Node Tests / Native C11 / Timeless Lessons:** `ALL PASS`\n")
+          PY

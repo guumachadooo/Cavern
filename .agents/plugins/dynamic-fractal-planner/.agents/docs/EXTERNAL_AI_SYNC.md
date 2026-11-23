@@ -7,6 +7,11 @@
 
 ## Plugin Sync Entries (Newest First)
 
+### 2026-11-23 | `pending-push` | `AI Studio` | Plugin v2.10.0 — Universal File-Budget Guard (`file_budget_limits`) & Professional README Sync
+- `Scope`: `dual-project+plugin` (`plugin.json`, `README.md`, `CHANGELOG.md`, `scripts/verify_universal.py`, `tests/run_plugin_tests.py`)
+- `Summary`: Added universal `check_file_budget()` (`file_budget_limits`: `warn_files`, `fail_files`, `hard_platform_cap`, top-5 heaviest directory diagnostic) in `scripts/verify_universal.py` so any GitHub-imported AI Studio workspace catches file-count bloat before hitting platform import caps (`999`); rewrote `README.md` for `v2.10.0`; added `test_v210_file_budget_guard` unit test.
+- `Files`: `plugin.json`, `README.md`, `CHANGELOG.md`, `scripts/verify_universal.py`, `tests/run_plugin_tests.py`, `.agents/docs/{EXTERNAL_AI_SYNC.md,PROJECT_HISTORY.md,HANDOFF.md}`
+
 ### 2026-11-23 | `pending-push` | `AI Studio` | Plugin v2.9.0 — Retroactive Workspace Upgrade (`v3->v4` + `plugin_version`), Bidirectional Higher-Version Sync (`sync-plugin`), Code Bloat Guard & Cross-File Key Parity
 - `Scope`: `dual-project+plugin` (`plugin.json`, `CHANGELOG.md`, `rules/AGENTS.md`, `install.sh`, `scripts/{schema_migrations,self_evolve,plan_tool,verify_universal}.py`, `hooks/{planner_state,planner_session_start}.py`, `tests/{run_plugin_tests.py,fixtures/profile_v3_cavern.json}`)
 - `Summary`: Implemented retroactive workspace auto-upgrade (`schema_migrations.py` `v3->v4` + `parse_semver`/`compare_semver`, `planner_state.py:auto_upgrade_workspace()` monotonic `plugin_version` stamp & downgrade guard), bidirectional higher-version plugin propagation (`self_evolve.py:sync_plugin_versions()` + `plan_tool.py evolve sync-plugin [--apply]` + `planner_session_start.py` `embedded->global` auto-sync w/ `.last_good_backup` + `install.sh` downgrade guard), universal `code_weight_limits` monolith guard (`verify_universal.py:check_code_weight`), cross-file `key_parity_rules.target_path`, configurable `memory_weight_limits`, & zero-FP gitless `--all` `check_plugin_sync_parity()`.

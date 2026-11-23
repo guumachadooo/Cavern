@@ -569,8 +569,43 @@ class OmniAgentProtocolTests(unittest.TestCase):
             self.assertFalse(r3["synced"])
             self.assertEqual(r3["reason"], "clean")
 
+    def test_file_budget_guard_roundtrip_and_ship_skip_ci_detector(self) -> None:
+        scripts_dir = str(Path(__file__).resolve().parents[1] / "scripts")
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        import file_budget_guard as fbg
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / "Legacy" / "Sub").mkdir(parents=True)
+            (repo / "Legacy" / "a.txt").write_text("alpha\n", encoding="utf-8")
+            (repo / "Legacy" / "Sub" / "b.bin").write_bytes(b"\x00\x01\x02\xff")
+            (repo / "Keep.cs").write_text("// keep\n", encoding="utf-8")
+
+            out_arch = repo / "archive" / "legacy.tar.gz"
+            packed = fbg.pack_paths(repo, ["Legacy"], out_arch, remove_sources=True)
+            self.assertTrue(packed["ok"])
+            self.assertEqual(packed["packedFiles"], 2)
+            self.assertEqual(packed["removedSources"], 2)
+            self.assertFalse((repo / "Legacy" / "a.txt").exists())
+
+            verified = fbg.verify_archive(out_arch)
+            self.assertTrue(verified["ok"])
+            self.assertEqual(verified["fileCount"], 2)
+
+            restored = fbg.unpack_archive(out_arch, repo)
+            self.assertTrue(restored["ok"])
+            self.assertEqual((repo / "Legacy" / "a.txt").read_text(encoding="utf-8"), "alpha\n")
+            self.assertEqual((repo / "Legacy" / "Sub" / "b.bin").read_bytes(), b"\x00\x01\x02\xff")
+
+        # Smart [skip ci] detector
+        self.assertFalse(oac._needs_apk_ci(["README.md", ".agents/docs/HANDOFF.md", ".github/workflows/FastQualityGuard.yml"]))
+        self.assertTrue(oac._needs_apk_ci(["Cavern/Spatial/Foo.cs"]))
+        self.assertTrue(oac._needs_apk_ci([".github/workflows/BuildAndroid.yml"]))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
 
 

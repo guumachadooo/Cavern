@@ -3699,6 +3699,47 @@ class TestV260UniversalEfficiencyAndSelfEvolution(unittest.TestCase):
             )
             self.assertEqual(ps_warns, [])
 
+    def test_v210_file_budget_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / "src" / "sub").mkdir(parents=True)
+            for i in range(6):
+                (repo / "src" / "sub" / f"f{i}.cs").write_text("// ok\n", encoding="utf-8")
+
+            # Below warn -> 0 warnings, 0 failures
+            f1: list[str] = []
+            w1: list[str] = []
+            verify_universal.check_file_budget(
+                repo,
+                {"file_budget_limits": {"enabled": True, "warn_files": 8, "fail_files": 10, "hard_platform_cap": 999}},
+                f1,
+                w1,
+            )
+            self.assertEqual((f1, w1), ([], []))
+
+            # Above warn, below fail -> 1 warning with heaviest dir diagnostic
+            f2: list[str] = []
+            w2: list[str] = []
+            verify_universal.check_file_budget(
+                repo,
+                {"file_budget_limits": {"enabled": True, "warn_files": 4, "fail_files": 10, "hard_platform_cap": 999}},
+                f2,
+                w2,
+            )
+            self.assertEqual(f2, [])
+            self.assertTrue(any("6/999" in w and "src/sub=6" in w for w in w2), w2)
+
+            # Above fail -> 1 failure
+            f3: list[str] = []
+            w3: list[str] = []
+            verify_universal.check_file_budget(
+                repo,
+                {"file_budget_limits": {"enabled": True, "warn_files": 3, "fail_files": 5, "hard_platform_cap": 999}},
+                f3,
+                w3,
+            )
+            self.assertTrue(any("6/999" in f for f in f3), f3)
+            self.assertEqual(w3, [])
 
 
 def _stamp_plugin_tests_passed() -> None:

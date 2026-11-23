@@ -1447,6 +1447,52 @@ def check_plugin_sync_parity(
     warns.append(f"Plugin code edited ({len(code_touched)} file(s)) without updating `{plug_sync}`.")
 
 
+def check_file_budget(
+    repo: Path,
+    profile: dict[str, Any],
+    fails: list[str],
+    warns: list[str],
+) -> None:
+    """Guard total tracked/workspace file count against platform import limits (e.g. AI Studio 999-file cap)."""
+    fb = profile.get("file_budget_limits")
+    if not isinstance(fb, dict) or not fb.get("enabled", True):
+        return
+    warn_files = int(fb.get("warn_files") or 850)
+    fail_files = int(fb.get("fail_files") or 950)
+    cap_label = int(fb.get("hard_platform_cap") or 999)
+    extra_ignore = {str(d).strip() for d in (fb.get("ignore_dirs") or []) if str(d).strip()}
+    skip_dirs = set(SKIP_DISCOVERY_DIRS) | {".playwright-cli", ".aistudio"} | extra_ignore
+
+    total = 0
+    dir_counts: dict[str, int] = {}
+    for root, dirs, filenames in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        rel_root = Path(root).relative_to(repo).as_posix()
+        for fn in filenames:
+            if fn.endswith((".pyc", ".pyo")):
+                continue
+            rel = fn if rel_root == "." else f"{rel_root}/{fn}"
+            parts = rel.split("/")
+            bucket = "/".join(parts[:2]) if len(parts) > 2 else (parts[0] if len(parts) > 1 else "(root)")
+            dir_counts[bucket] = dir_counts.get(bucket, 0) + 1
+            total += 1
+
+    if total <= warn_files and total <= fail_files:
+        return
+
+    top_dirs = sorted(dir_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+    top_str = ", ".join(f"{k}={v}" for k, v in top_dirs)
+    msg = (
+        f"Workspace file budget: {total}/{cap_label} files "
+        f"(warn={warn_files}, fail={fail_files}; heaviest: {top_str}) — "
+        f"pack cold/legacy dirs into archive/*.tar.gz or split sub-repos."
+    )
+    if fail_files > 0 and total > fail_files:
+        fails.append(msg)
+    elif warn_files > 0 and total > warn_files:
+        warns.append(msg)
+
+
 def run_static_checks(
     repo: Path,
     profile: dict[str, Any],
@@ -1470,6 +1516,7 @@ def run_static_checks(
     check_forward_wiring(repo, files, profile, fails, warns)
     check_memory_weight(repo, profile, warns)
     check_code_weight(repo, files, profile, warns, scan_all=scan_all)
+    check_file_budget(repo, profile, fails, warns)
     check_build_lessons_timelessness(repo, files, fails)
     check_plugin_sync_parity(repo, files, warns, scan_all=scan_all)
 
