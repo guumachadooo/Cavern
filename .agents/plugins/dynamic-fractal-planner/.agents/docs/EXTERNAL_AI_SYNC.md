@@ -7,6 +7,11 @@
 
 ## Plugin Sync Entries (Newest First)
 
+### 2026-11-23 | `pending-push` | `AI Studio` | Plugin v2.8.0 — Universal SOTA First-Principles Pre-Flight (`MOD-SOTA-PREFLIGHT`), Lens Truncation Fix & Byte-Bloat Guard
+- `Scope`: `dual-project+plugin` (`plugin.json`, `CHANGELOG.md`, `rules/AGENTS.md`, `skills/dynamic-planner/SKILL.md`, `scripts/complexity_triage.py`, `hooks/planner_pre_invocation.py`, `scripts/verify_universal.py`, `tests/run_plugin_tests.py`)
+- `Summary`: Baked SOTA first-principles architectural brainstorming directly into Tier 3 triage (`MOD-SOTA-PREFLIGHT` in `complexity_triage.py` + `SOTA_PREFLIGHT|` injection in `planner_pre_invocation.py`, suppressed under ECO/tight budget) so complex features automatically falsify seeded assumptions, run Physics-vs-AI tournaments, split execution planes, and validate via offline golden benches before coding; raised `_compact_domain_lenses` cap `220 -> 420` chars fixing silent mid-sentence lens truncation; added byte-bloat warnings (`PROJECT_HISTORY.md > 28 KB`, `EXTERNAL_AI_SYNC.md > 48 KB`) to `verify_universal.py:check_memory_weight()`; added regression unit test in `tests/run_plugin_tests.py`.
+- `Files`: `plugin.json`, `CHANGELOG.md`, `rules/AGENTS.md`, `skills/dynamic-planner/SKILL.md`, `scripts/complexity_triage.py`, `hooks/planner_pre_invocation.py`, `scripts/verify_universal.py`, `tests/run_plugin_tests.py`, `.agents/docs/{EXTERNAL_AI_SYNC.md,PROJECT_HISTORY.md,HANDOFF.md}`
+
 ### 2026-11-22 | `pending-push` | `AI Studio` | Plugin v2.7.0-r1 — Live Bridge Client Session Persistence Callback & Distinct HTTP 404 Expired Exit Code
 - `Scope`: `dual-project+plugin` (`scripts/live_bridge_client.py`)
 - `Summary`: Added `EXIT_SESSION_EXPIRED = 4` (HTTP 404 `sessionExpired` propagation vs transient timeout) and `on_session_acquired(token, ttl_sec)` callback invoked immediately after `--wake` approves BEFORE executing `--cmd`, preventing wrapper vaults from losing a freshly biometric-approved session or wiping valid sessions on network timeouts.

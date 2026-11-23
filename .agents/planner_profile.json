@@ -267,6 +267,20 @@
       "forbid_regex": "^\\s*///.*&(?!(?:amp|lt|gt|quot|apos|#\\d+|#x[0-9a-fA-F]+);)",
       "severity": "warn",
       "message": "Unescaped `&` in XML documentation comment triggers CS1570; escape as `&amp;` (BL-008)."
+    },
+    {
+      "path_prefix": "CavernSamples/CavernizeAndroid/Native/cavernize_proaudio/",
+      "path_regex": "\\.(?:c|cpp)$",
+      "forbid_regex": "\\b(?:malloc|calloc|realloc)\\s*\\(",
+      "severity": "warn",
+      "message": "RT-audio guard: heap allocation (`malloc`/`calloc`/`realloc`) detected in `Native/cavernize_proaudio/`; pre-allocate buffers at init and keep RT AAudio/USB callbacks 0-alloc & lock-free."
+    },
+    {
+      "path_prefix": "Cavern/VocalChain/",
+      "path_regex": "\\.cs$",
+      "forbid_regex": "\\b(?:AppLogger\\.|Console\\.Write)",
+      "severity": "warn",
+      "message": "RT-audio guard: logging/console I/O detected in `Cavern/VocalChain/`; keep real-time vocal DSP strictly zero-GC, lock-free, and telemetry-via-snapshot only."
     }
   ],
   "key_parity_rules": [
@@ -369,7 +383,7 @@
       "command": "python3 .agents/scripts/check_android_cs.py --ci-parity --strict-warnings"
     },
     {
-      "label": "Cavern 6-Layer Local CI-Parity Check (Portable SDK + Android Ref + Analyzers)",
+      "label": "Cavern 7-Layer Local CI-Parity Check (Portable SDK + Android Ref + OmniAgent + Analyzers)",
       "conditions": {
         "not_exists_path": "/root/.dotnet/dotnet"
       },
@@ -480,7 +494,7 @@
     "dsp-format": {
       "module_id": "MOD-DSP-FORMAT",
       "module_title": "Cavern Core / Format, Spatial DSP & Omniscient Vocal Cortex",
-      "lens": "Acoustic Physicist + Real-Time Spatial DSP Architect + MOD-AUDIO-ENG-DIRECTOR + MOD-SEED-FALSIFY (Principal Vocal Producer, Grammys-Class Mixing/Mastering Engineer & Black-Box System-ID Architect: treat prior roadmaps as [SEED-v0] floor hypotheses only, challenge pre-wave via Tabu Multi-Pass Recon + AI-vs-Physics Tournament, dynamically replan, Studio Eureka authority, Residual Falsification <= -30dB ESR, OmniscientVocalStateBus, Zero Fake DSP, strict C# 8.0, zero-GC audio thread)",
+      "lens": "Acoustic Physicist + RT Spatial DSP Architect + MOD-SOTA-PREFLIGHT + MOD-AUDIO-ENG-DIRECTOR: challenge [SEED-v3] via Tabu Recon + Physics-vs-AI Tournament, split 3 S25U planes, offline Golden Bench before C#/C++, AcousticConstraintGovernor + Zero Fake DSP, strict C# 8.0, 0-GC RT audio",
       "keywords": [
         "cavern.format",
         "dsp",
@@ -565,9 +579,9 @@
       ],
       "checklist": [
         "`Cavern/` & `Cavern.Format/` target `netstandard2.1` (strict C# 8.0 ONLY: avoid `is not`, file-scoped namespaces, target-typed `new()`).",
-        "Zero Fake DSP: NO invented EQ curves/reverb/boosts; pure physics & ISO/ITU/EBU standards only.",
-        "MOD-SEED-FALSIFY & MOD-DYNAMIC-REPLAN: treat pre-drafted Phase 3 specs/AI placements as `[SEED-v0]` floor hypotheses ONLY; pre-wave challenge via `MOD-TABU-RECON` + AI-vs-Physics Justification Tournament & rewrite roadmap dynamically when superior designs emerge.",
-        "MOD-AUDIO-ENG-DIRECTOR: exercise autonomous Studio Eureka authority, Tabu Multi-Pass Recon (`KNOWN_MECHANISMS_LEDGER.md`), 7-Dimension Residual Falsification (`ESR <= -30 dB`), & `OmniscientVocalStateBus` cross-organ coupling (`.agents/docs/PHASE3_VOCAL_CORTEX_ROADMAP.md`).",
+        "Zero Fake DSP: NO invented EQ curves/reverb/boosts; pure physics & ISO/ITU/EBU standards only; validate audio/DSP changes against `.agents/docs/AUDIO_GROUND_TRUTH_PROTOCOL.md`.",
+        "MOD-SOTA-PREFLIGHT & MOD-SEED-FALSIFY: treat Phase 3 specs as `[SEED-v3]` mutable floor hypotheses ONLY; pre-wave challenge via `MOD-TABU-RECON` + Physics-vs-AI Tournament + 3-plane S25U split + offline Golden Bench BEFORE coding.",
+        "MOD-AUDIO-ENG-DIRECTOR: enforce `Slot 2D-SHIELD`, `AcousticConstraintGovernor`, Scarlett pre-ADC snapshot, `OmniscientVocalStateBus` & 0-GC RT audio (`.agents/docs/PHASE3_VOCAL_CORTEX_ROADMAP.md`).",
         "Preserve `Seek(0)` stream invariants, `MatroskaTree` endPosition guards, `FlacAudioConverter` fallback, and original features."
       ]
     },

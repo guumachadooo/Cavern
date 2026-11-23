@@ -3463,6 +3463,88 @@ class TestV260UniversalEfficiencyAndSelfEvolution(unittest.TestCase):
             self.assertTrue(any("src/Strings.cs:7:" in f and "ends with `,`" in f for f in fails), fails)
             self.assertFalse(any("src/Strings.cs:3:" in f for f in fails), fails)
 
+    def test_v280_sota_preflight_lens_budget_and_memory_byte_guard(self) -> None:
+        # 1) Tier 3 recommended_modules includes MOD-SOTA-PREFLIGHT right after MOD-DISCOVERY
+        mods_t3 = complexity_triage.build_recommended_modules(3, ["backend"], "deep")
+        mod_ids_t3 = [m["id"] for m in mods_t3]
+        self.assertIn("MOD-SOTA-PREFLIGHT", mod_ids_t3)
+        self.assertEqual(mod_ids_t3.index("MOD-SOTA-PREFLIGHT"), mod_ids_t3.index("MOD-DISCOVERY") + 1)
+        mods_t2 = complexity_triage.build_recommended_modules(2, ["backend"], "medium")
+        self.assertNotIn("MOD-SOTA-PREFLIGHT", [m["id"] for m in mods_t2])
+
+        # 2) PreInvocation injects SOTA_PREFLIGHT| on T3, suppresses on ECO/tight bloat, and preserves >220-char lens
+        long_lens = (
+            "Principal DSP Architect: challenge prior seed via Tabu recon, run Physics-vs-AI tournament, "
+            "split RT CPU vs NPU planes, validate offline golden bench before production code, enforce zero-GC audio thread."
+        )
+        self.assertGreater(len(long_lens), 200)
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            init_git_repo(repo)
+            (repo / ".agents" / "docs").mkdir(parents=True)
+            (repo / ".agents" / "planner_profile.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 3,
+                        "planner_mode": "lean",
+                        "domains": {
+                            "audio-dsp": {
+                                "module_id": "MOD-DSP",
+                                "module_title": "Audio DSP",
+                                "keywords": ["dsp", "kalman", "audio"],
+                                "lens": long_lens,
+                                "checklist": ["Enforce zero-GC RT path."],
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            t3_prompt = (
+                "Architect and refactor audio dsp kalman filter, api endpoints, database schema, "
+                "authentication pipeline, ui controls and benchmark suite across 6 modules"
+            )
+            with tempfile.TemporaryDirectory() as art3:
+                _, _, pre3 = run_hook(
+                    "planner_pre_invocation.py",
+                    {
+                        "workspacePaths": [str(repo)],
+                        "artifactDirectoryPath": art3,
+                        "lastUserInput": t3_prompt,
+                        "invocationNum": 1,
+                    },
+                )
+                msg3 = pre3["injectSteps"][0]["systemMessage"]["systemMessage"]
+                self.assertIn("SOTA_PREFLIGHT|", msg3)
+                self.assertIn("zero-GC audio thread.", msg3)
+
+            with tempfile.TemporaryDirectory() as art_eco:
+                _, _, pre_eco = run_hook(
+                    "planner_pre_invocation.py",
+                    {
+                        "workspacePaths": [str(repo)],
+                        "artifactDirectoryPath": art_eco,
+                        "lastUserInput": "low quota: " + t3_prompt,
+                        "invocationNum": 1,
+                    },
+                )
+                msg_eco = pre_eco["injectSteps"][0]["systemMessage"]["systemMessage"]
+                self.assertNotIn("SOTA_PREFLIGHT|", msg_eco)
+
+            # 3) check_memory_weight warns on byte bloat even when line count <= 150
+            (repo / ".agents" / "docs" / "PROJECT_HISTORY.md").write_text(
+                "# History\n" + ("- " + ("x" * 1000) + "\n") * 32,
+                encoding="utf-8",
+            )
+            (repo / ".agents" / "docs" / "EXTERNAL_AI_SYNC.md").write_text(
+                "# Sync\n" + ("- " + ("y" * 2000) + "\n") * 26,
+                encoding="utf-8",
+            )
+            warns: list[str] = []
+            verify_universal.check_memory_weight(repo, {}, warns)
+            self.assertTrue(any("PROJECT_HISTORY.md" in w and "KB" in w for w in warns), warns)
+            self.assertTrue(any("EXTERNAL_AI_SYNC.md" in w and "KB" in w for w in warns), warns)
+
 
 def _stamp_plugin_tests_passed() -> None:
     art_dir = (os.environ.get("PLANNER_ARTIFACT_DIR") or os.environ.get("CAVERN_ARTIFACT_DIR") or "").strip()

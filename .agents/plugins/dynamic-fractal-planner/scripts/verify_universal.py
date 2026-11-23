@@ -1312,9 +1312,19 @@ def check_forward_wiring(repo: Path, files: list[str], profile: dict[str, Any], 
 def check_memory_weight(repo: Path, profile: dict[str, Any], warns: list[str]) -> None:
     hist = repo / ".agents" / "docs" / "PROJECT_HISTORY.md"
     if hist.is_file():
-        n_lines = len(hist.read_text(encoding="utf-8", errors="ignore").splitlines())
+        hist_txt = hist.read_text(encoding="utf-8", errors="ignore")
+        n_lines = len(hist_txt.splitlines())
+        hist_kb = len(hist_txt.encode("utf-8")) / 1024.0
         if n_lines > 150:
             warns.append(f"`.agents/docs/PROJECT_HISTORY.md` has {n_lines}L (>150L); archive older milestones to `.agents/docs/archive/`.")
+        elif hist_kb > 28.0:
+            warns.append(f"`.agents/docs/PROJECT_HISTORY.md` is {hist_kb:.1f} KB (>28 KB despite {n_lines}L); archive older milestones to `.agents/docs/archive/`.")
+
+    sync_doc = repo / ".agents" / "docs" / "EXTERNAL_AI_SYNC.md"
+    if sync_doc.is_file():
+        sync_kb = sync_doc.stat().st_size / 1024.0
+        if sync_kb > 48.0:
+            warns.append(f"`.agents/docs/EXTERNAL_AI_SYNC.md` is {sync_kb:.1f} KB (>48 KB); archive older sync entries to `.agents/docs/archive/`.")
 
     extra_rel = (profile.get("extra_requests_file") or DEFAULT_EXTRA_REQUESTS_FILE).strip()
     extra_p = repo / extra_rel
