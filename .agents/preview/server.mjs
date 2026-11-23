@@ -20,6 +20,8 @@ const HOST = '0.0.0.0';
 const RUNTIME_ENV_BRIDGE_PATH = '/tmp/.cavern_runtime_env.json';
 const LIVE_SYNC_STATUS_PATH = '/tmp/cavern-flight-recorder/watcher_status.json';
 const LIVE_SYNC_SCRIPT_PATH = path.join(ROOT_DIR, '.agents', 'agent', 'live_sync_watcher.py');
+const FEDERATION_STATUS_PATH = '/tmp/cavern-federation/federation_status.json';
+const FEDERATION_SCRIPT_PATH = path.join(ROOT_DIR, '.agents', 'agent', 'repo_federation.py');
 const WHITELISTED_RUNTIME_KEYS = [
   'GITHUB_TOKEN',
   'GH_TOKEN',
@@ -104,7 +106,38 @@ function readLiveSyncStatus() {
   };
 }
 
+function warmFederatedRepos() {
+  if (shuttingDown || process.env.CAVERN_DISABLE_FEDERATION_WARM === '1') return;
+  if (!fs.existsSync(FEDERATION_SCRIPT_PATH)) return;
+  try {
+    const child = spawn(
+      'python3',
+      ['-B', FEDERATION_SCRIPT_PATH, '--warm', '--workspace', ROOT_DIR],
+      {
+        cwd: ROOT_DIR,
+        stdio: 'ignore',
+        env: { ...process.env },
+      }
+    );
+    child.unref();
+  } catch {
+    // Best-effort zero-quota warm hydrate; never block preview boot
+  }
+}
+
+function readFederationStatus() {
+  try {
+    if (fs.existsSync(FEDERATION_STATUS_PATH)) {
+      return JSON.parse(fs.readFileSync(FEDERATION_STATUS_PATH, 'utf8'));
+    }
+  } catch {
+    // Ignore transient reads
+  }
+  return { ok: true, status: 'warming', mountRoot: '/tmp/cavern-federation' };
+}
+
 startLiveSyncWatcher();
+warmFederatedRepos();
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -129,6 +162,10 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/live-sync') {
     return sendJson(res, 200, readLiveSyncStatus());
+  }
+
+  if (url.pathname === '/api/federation') {
+    return sendJson(res, 200, readFederationStatus());
   }
 
   if (url.pathname === '/favicon.ico') {
