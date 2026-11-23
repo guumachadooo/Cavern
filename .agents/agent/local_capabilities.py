@@ -31,7 +31,8 @@ AGENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = AGENT_DIR.parents[1]
 ENV_MANIFEST_PATH = REPO_ROOT / ".agents" / "env_manifest.json"
 RUNTIME_ENV_FILE = Path("/tmp/.cavern_runtime_env.json")
-LOCAL_VAULT_PATH = REPO_ROOT / ".agents" / ".bridge_vault.json"
+LEGACY_WORKSPACE_VAULT_PATH = REPO_ROOT / ".agents" / ".bridge_vault.json"
+LOCAL_VAULT_PATH = Path("/tmp/.cavern_bridge_vault.json")
 
 WHITELISTED_KEYS: tuple[str, ...] = (
     "GITHUB_TOKEN",
@@ -123,8 +124,10 @@ def resolve_secret_with_source(
             if val:
                 return val, f"dev_server_proc:{k}"
 
-    # 4. Local gitignored vault (.agents/.bridge_vault.json)
+    # 4. Private /tmp vault (fallback to legacy .agents/.bridge_vault.json if present)
     vault = _read_json_safe(vault_path)
+    if not vault and Path(vault_path).resolve() == LOCAL_VAULT_PATH.resolve():
+        vault = _read_json_safe(LEGACY_WORKSPACE_VAULT_PATH)
     for k in keys:
         vf = _VAULT_FIELD_MAP.get(k)
         if vf:

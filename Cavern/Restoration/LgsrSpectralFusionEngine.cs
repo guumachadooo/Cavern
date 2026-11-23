@@ -51,6 +51,9 @@ namespace Cavern.Restoration {
         /// <summary>Streaming WOLA hop size (256 samples = 50% overlap).</summary>
         public const int HopSize = 256;
 
+        /// <summary>Exact causal WOLA analysis/synthesis group delay in samples (2 hops = <see cref="FftSize"/> = 512 samples).</summary>
+        public const int LatencySamples = FftSize;
+
         /// <summary>Maximum virtual speaker bus channels supported without heap allocation.</summary>
         public const int MaxBusChannels = 32;
 

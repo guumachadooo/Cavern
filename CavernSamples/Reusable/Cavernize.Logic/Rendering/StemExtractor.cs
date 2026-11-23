@@ -590,6 +590,7 @@ public static class StemExtractor {
         // 2. Optional zero-phase multichannel Spatial Karaoke export across all 1..32 Atmos beds & dynamic objects
         if (exportSpatialKaraokeAtmos && multiChannels != null && multiChannels.Length > 0) {
             float[] neuralLeadRef = null;
+            float[] neuralLeadRefRight = null;
             float[] neuralBackingRef = null;
 
             NeuralExecutionPlan karaokePlan = orchestrator?.BuildPlan(NeuralPipelineGoal.SpatialKaraoke, safeConfig);
@@ -608,7 +609,7 @@ public static class StemExtractor {
                     (p, msg) => onProgress?.Invoke(0.22 + p * 0.48, msg),
                     token);
                 onSeparatedTrackReady?.Invoke(separated);
-                neuralLeadRef = separated?.MonoLeadVocalRef;
+                ResolveStereoLeadVocalRefs(separated, out neuralLeadRef, out neuralLeadRefRight);
                 neuralBackingRef = safeConfig.KaraokePreserveBackingVocals ? separated?.MonoBackingVocalRef : null;
             } else if (runtime != null && runtime.GetRuntimeInfo().IsAvailable && !string.IsNullOrEmpty(modelFilePath) && File.Exists(modelFilePath)) {
                 onProgress?.Invoke(0.22, T("StemProgSeparatingKaraoke", "Separating neural vocal guide (MVSEP)..."));
@@ -637,8 +638,13 @@ public static class StemExtractor {
                     dereverb: null,
                     derivedFromLosslessTwin: derivedFromTwin);
                 onSeparatedTrackReady?.Invoke(separated);
-                neuralLeadRef = separated.MonoLeadVocalRef;
+                ResolveStereoLeadVocalRefs(separated, out neuralLeadRef, out neuralLeadRefRight);
                 neuralBackingRef = safeConfig.KaraokePreserveBackingVocals ? separated.MonoBackingVocalRef : null;
+            }
+
+            bool[] isStrictCenter = new bool[multiChannels.Length];
+            for (int c = 0; c < multiChannels.Length && c < allItems.Count; c++) {
+                isStrictCenter[c] = !isLfe[c] && allItems[c].Channel == ReferenceChannel.FrontCenter;
             }
 
             onProgress?.Invoke(0.72, T("StemProgApplyingKaraoke", "Applying zero-phase multichannel Spatial Karaoke..."));
@@ -649,7 +655,9 @@ public static class StemExtractor {
                 neuralBackingRef,
                 sampleRate,
                 safeConfig.KaraokeVocalLevel,
-                safeConfig.KaraokePreserveBackingVocals);
+                safeConfig.KaraokePreserveBackingVocals,
+                neuralLeadVocalRefRight: neuralLeadRefRight,
+                isStrictCenter: isStrictCenter);
 
             for (int c = 0; c < multiChannels.Length; c++) {
                 token.ThrowIfCancellationRequested();
@@ -1275,6 +1283,34 @@ public static class StemExtractor {
             }
         }
         return false;
+    }
+
+    static void ResolveStereoLeadVocalRefs(NeuralSeparatedTrack separated, out float[] leadL, out float[] leadR) {
+        leadL = separated?.MonoLeadVocalRef;
+        leadR = null;
+        if (separated?.Stems == null || separated.Stems.Count == 0) {
+            return;
+        }
+        StereoStemBuffer fallback = null;
+        for (int i = 0; i < separated.Stems.Count; i++) {
+            StereoStemBuffer st = separated.Stems[i];
+            if (st == null || st.Length <= 0 || st.Left == null || st.Right == null) {
+                continue;
+            }
+            NeuralStemRole role = NeuralStemSpatializer.ClassifyStemName(st.Name);
+            if (role == NeuralStemRole.LeadVocal) {
+                leadL = st.Left;
+                leadR = st.Right;
+                return;
+            }
+            if (role == NeuralStemRole.Vocals && fallback == null) {
+                fallback = st;
+            }
+        }
+        if (fallback != null) {
+            leadL = fallback.Left;
+            leadR = fallback.Right;
+        }
     }
 
     static string SanitizeFilePart(string input) {

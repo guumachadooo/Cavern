@@ -280,3 +280,138 @@ def fetch_ci_runs(
             }
         )
     return {"ok": True, "via": "local_github_api" if tok else "public_github_api", "workflow": workflow, "runs": runs}
+
+
+_EPHEMERAL_WORKSPACE_FILES: tuple[str, ...] = (
+    ".agents/.bridge_vault.json",
+    ".agents/plugins/dynamic-fractal-planner/.metrics.jsonl",
+    ".agents/plugins/dynamic-fractal-planner/.model_modes.json",
+)
+_BUILD_ROOT_PREFIXES: tuple[str, ...] = ("Cavern/", "Cavern.Format/", "CavernSamples/")
+
+
+def clean_workspace_artifacts(repo_root: Path) -> dict[str, Any]:
+    """Remove generated caches/build outputs/runtime dotfiles so workspace matches GitHub 1:1."""
+    import os
+    import shutil
+
+    root = Path(repo_root).resolve()
+    removed_files: list[str] = []
+    removed_dirs: list[str] = []
+
+    # Migrate legacy workspace vault to /tmp before removing it so credentials are never lost
+    legacy_vault = root / ".agents" / ".bridge_vault.json"
+    tmp_vault = Path("/tmp/.cavern_bridge_vault.json")
+    if legacy_vault.is_file() and not tmp_vault.is_file():
+        try:
+            tmp_vault.write_bytes(legacy_vault.read_bytes())
+            os.chmod(tmp_vault, 0o600)
+        except OSError:
+            pass
+
+    for rel in _EPHEMERAL_WORKSPACE_FILES:
+        p = root / rel
+        if p.is_file():
+            try:
+                p.unlink()
+                removed_files.append(rel)
+            except OSError:
+                pass
+
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        cur_dir = Path(dirpath)
+        rel_dir = cur_dir.relative_to(root).as_posix()
+        keep_dirs: list[str] = []
+        for dn in dirnames:
+            if dn in (".git", "node_modules"):
+                continue
+            child = cur_dir / dn
+            child_rel = f"{rel_dir}/{dn}" if rel_dir != "." else dn
+            is_build_dir = dn in ("bin", "obj") and any(child_rel.startswith(pref) for pref in _BUILD_ROOT_PREFIXES)
+            if dn == "__pycache__" or is_build_dir:
+                try:
+                    shutil.rmtree(child)
+                    removed_dirs.append(child_rel)
+                except OSError:
+                    pass
+                continue
+            keep_dirs.append(dn)
+        dirnames[:] = keep_dirs
+
+        for fn in filenames:
+            if fn.endswith((".pyc", ".pyo")):
+                fp = cur_dir / fn
+                try:
+                    fp.unlink()
+                    removed_files.append(fp.relative_to(root).as_posix())
+                except OSError:
+                    pass
+
+    return {
+        "removedFiles": sorted(removed_files),
+        "removedDirs": sorted(removed_dirs),
+        "removedCount": len(removed_files) + len(removed_dirs),
+    }
+
+
+def verify_github_parity(
+    repo_root: Path,
+    *,
+    owner_repo: str = "guumachadooo/Cavern",
+    branch: str = "master",
+    token: str = "",
+    clean: bool = False,
+) -> dict[str, Any]:
+    """Verify exact 1:1 full-workspace parity (every file on disk except .git/node_modules) vs GitHub HEAD."""
+    import os
+
+    root = Path(repo_root).resolve()
+    cleaned = clean_workspace_artifacts(root) if clean else None
+
+    diff = diff_workspace_against_github(
+        root,
+        owner_repo=owner_repo,
+        branch=branch,
+        token=token,
+        sync_deletes=True,
+    )
+    gh_blobs: dict[str, tuple[str, str]] = diff["ghBlobs"]
+
+    local_all: dict[str, str] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [dn for dn in dirnames if dn not in (".git", "node_modules")]
+        for fn in filenames:
+            fp = Path(dirpath) / fn
+            rel = fp.relative_to(root).as_posix()
+            local_all[rel] = git_blob_sha1(fp.read_bytes())
+
+    local_keys = set(local_all.keys())
+    gh_keys = set(gh_blobs.keys())
+
+    modified = sorted(k for k in (local_keys & gh_keys) if local_all[k] != gh_blobs[k][0])
+    local_only = sorted(local_keys - gh_keys)
+    remote_only = sorted(gh_keys - local_keys)
+    is_exact = (not modified) and (not local_only) and (not remote_only)
+
+    return {
+        "ok": is_exact,
+        "ownerRepo": owner_repo,
+        "branch": branch,
+        "head": diff["headSha"][:8],
+        "headFull": diff["headSha"],
+        "trackedCount": len(gh_keys),
+        "localCount": len(local_keys),
+        "modifiedCount": len(modified),
+        "localOnlyCount": len(local_only),
+        "remoteOnlyCount": len(remote_only),
+        "modified": modified,
+        "localOnly": local_only,
+        "remoteOnly": remote_only,
+        "cleaned": cleaned,
+        "message": (
+            f"100% EXACT 1:1 PARITY with GitHub {owner_repo}@{branch} ({diff['headSha'][:8]}): 0 modified, 0 local-only, 0 remote-only."
+            if is_exact
+            else f"PARITY DRIFT vs {owner_repo}@{branch} ({diff['headSha'][:8]}): {len(modified)} modified, {len(local_only)} local-only, {len(remote_only)} remote-only."
+        ),
+    }
+

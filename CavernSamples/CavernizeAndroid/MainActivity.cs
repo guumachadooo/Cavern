@@ -3086,8 +3086,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     }
                 }
 
+                string twinCacheTag = (derivedFromTwin && activeLosslessTwin != null && activeLosslessTwin.HasSyncedLosslessTwin)
+                    ? $"|twin:{Math.Round(activeLosslessTwin.SyncResult.BaseOffsetSamples, 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}:{Math.Round(activeLosslessTwin.SyncResult.DriftPpm, 1).ToString(System.Globalization.CultureInfo.InvariantCulture)}"
+                    : "|native";
                 string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
-                    activePath, keyInfo.Length, keyInfo.LastWriteTimeUtc.Ticks, prefSr, plan.PlanSignature);
+                    activePath, keyInfo.Length, keyInfo.LastWriteTimeUtc.Ticks, prefSr, plan.PlanSignature + twinCacheTag);
 
                 // Instant Slot 7B cache hit before decoding PCM
                 if (neuralTrackCache != null && neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedTrack, ct)) {
@@ -3138,6 +3141,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     if (!LosslessTwinDiscoveryService.TryDecodeTrackToStereoFloat(
                         decodePath, prefSr, ffLoc, ct, out mixL, out mixR, out decodedSr)) {
                         throw new InvalidOperationException("Unable to decode track audio for neural separation.");
+                    }
+                    // W47: Compensate any FFmpeg vs Cavern AudioReader MDCT/elst priming offset on Pure Atmos tracks
+                    double primingShift = LosslessTwinDiscoveryService.AlignDecodedStereoToCavernTimeline(
+                        activePath, mixL, mixR, decodedSr, ct);
+                    if (Math.Abs(primingShift) >= 0.5) {
+                        AppLogger.Info($"W47 Pure Atmos neural priming aligned to Cavern AudioReader timeline (shift={primingShift:0.00} samples @ {decodedSr} Hz).");
                     }
                 }
 

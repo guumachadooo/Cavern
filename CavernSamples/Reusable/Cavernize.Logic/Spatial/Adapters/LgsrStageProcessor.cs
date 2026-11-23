@@ -76,6 +76,21 @@ public sealed class LgsrStageProcessor : ISpatialStageProcessor, IPreHrtfBusProc
         }
     }
 
+    /// <summary>Exact WOLA latency in samples (<c>512</c>) when LGSR is armed and actively restoring, else <c>0</c>.</summary>
+    public int ActiveLatencySamples => IsActivelyRestoring ? LgsrSpectralFusionEngine.LatencySamples : 0;
+
+    /// <summary>
+    /// Exact WOLA latency in samples (<c>512</c>) actually applied on the most recently processed Pre-HRTF or
+    /// Direct 2.0 block (immediately readable by downstream <see cref="NeuralStemStageProcessor"/> on the same block).
+    /// </summary>
+    public int LastAppliedLatencySamples {
+        get {
+            lock (stateLock) {
+                return lastBlockActivePreHrtf ? LgsrSpectralFusionEngine.LatencySamples : 0;
+            }
+        }
+    }
+
     /// <summary>Creates the Slot 2C LGSR stage processor.</summary>
     public LgsrStageProcessor() {
         stereoBusScratch[0] = new float[2048];

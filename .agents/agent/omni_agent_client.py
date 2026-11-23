@@ -645,6 +645,12 @@ def main() -> int:
     p_ci.add_argument("--workflow", default="BuildAndroid.yml")
     p_ci.add_argument("--limit", type=int, default=5)
 
+    p_sp = sub.add_parser("sync-parity", help="Verify exact 1:1 AI Studio <-> GitHub workspace parity (and optionally clean build/cache artifacts)")
+    p_sp.add_argument("--workspace", default=str(REPO_ROOT))
+    p_sp.add_argument("--owner-repo", default="guumachadooo/Cavern")
+    p_sp.add_argument("--branch", default="master")
+    p_sp.add_argument("--clean", action="store_true", help="Remove ephemeral caches (__pycache__, bin/, obj/, .metrics.jsonl, .model_modes.json, legacy vault) before checking parity")
+
     p_push = sub.add_parser("push-workspace", help="Diff AI Studio workspace -> direct GitHub API push (local-first) or phone git commit & push")
     p_push.add_argument("--workspace", default=str(REPO_ROOT))
     p_push.add_argument("--commit", default="", help="Commit message (if omitted, only applies files on phone without commit/push)")
@@ -757,6 +763,15 @@ def main() -> int:
         return 0
     if args.action == "ci-status":
         res = ghdirect.fetch_ci_runs(owner_repo=args.owner_repo, workflow=args.workflow, limit=args.limit)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0 if res.get("ok") else 1
+    if args.action == "sync-parity":
+        res = ghdirect.verify_github_parity(
+            Path(args.workspace or REPO_ROOT),
+            owner_repo=args.owner_repo,
+            branch=args.branch,
+            clean=bool(args.clean),
+        )
         print(json.dumps(res, indent=2, ensure_ascii=False))
         return 0 if res.get("ok") else 1
     if args.action == "connect":

@@ -39,12 +39,36 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     readonly float[][] channelScratch = new float[SpatialKaraokeEngine.MaxSpatialChannels][];
     readonly bool[] lfeScratch = new bool[SpatialKaraokeEngine.MaxSpatialChannels];
     readonly bool[] frontCenterScratch = new bool[SpatialKaraokeEngine.MaxSpatialChannels];
+    readonly bool[] strictCenterScratch = new bool[SpatialKaraokeEngine.MaxSpatialChannels];
     readonly SpatialSourceDescriptor[] preHrtfDescriptors = CreatePreHrtfDescriptorPool();
     float[] leadRefScratch = new float[2048];
     float[] leadRefRightScratch = new float[2048];
     float[] backingRefScratch = new float[2048];
     float[] twinLeftScratch = new float[2048];
     float[] twinRightScratch = new float[2048];
+    int upstreamBusLatencySamples;
+
+    /// <summary>
+    /// Optional dynamic upstream bus latency provider in output samples (e.g., Slot 2C LGSR WOLA 512-sample delay)
+    /// queried on every block so neural vocal stems stay 0.0-sample phase-locked whenever LGSR is active.
+    /// </summary>
+    public Func<int> UpstreamLatencySamplesProvider { get; set; }
+
+    /// <summary>
+    /// Static upstream bus latency in output samples (used when <see cref="UpstreamLatencySamplesProvider"/> is null).
+    /// </summary>
+    public int UpstreamBusLatencySamples {
+        get {
+            lock (stateLock) {
+                return upstreamBusLatencySamples;
+            }
+        }
+        set {
+            lock (stateLock) {
+                upstreamBusLatencySamples = value > 0 ? value : 0;
+            }
+        }
+    }
 
     // Runtime & cache telemetry mirrored from platform installer service
     NeuralAudioDiagnostics runtimeSnapshot = NeuralAudioDiagnostics.Default;
@@ -304,7 +328,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
                 SpatialSourceDescriptor d = preHrtfDescriptors[c];
                 d.IsLfe = vc.isLfe;
                 bool isFront = !vc.isLfe && MathF.Abs(vc.y) <= 45f && MathF.Abs(vc.x) <= 35f;
-                d.IsDialogue = isFront && MathF.Abs(vc.y) <= 15f;
+                d.IsDialogue = isFront && MathF.Abs(vc.y) <= 12f && MathF.Abs(vc.x) <= 25f;
                 d.NormalizedPosition = isFront ? new Vector3(0f, 0f, 1f) : new Vector3(0f, 0f, -1f);
             }
         }
@@ -338,13 +362,19 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             lfeScratch[1] = false;
             frontCenterScratch[0] = true;
             frontCenterScratch[1] = true;
+            strictCenterScratch[0] = false;
+            strictCenterScratch[1] = false;
 
-            long outputSamplePos = MapTrackSampleToOutputSampleLocked(trackSamplePos);
+            int upstreamLatency = ResolveUpstreamBusLatencyLocked();
+            long rawOutputSamplePos = MapTrackSampleToOutputSampleLocked(trackSamplePos);
+            long outputSamplePos = rawOutputSamplePos - upstreamLatency;
+            long compensatedTrackPos = trackSamplePos - MapOutputSampleToTrackSampleLocked(upstreamLatency);
             ResolveVocalReferencesLocked(
                 outputSamplePos,
-                trackSamplePos,
+                compensatedTrackPos,
                 frameCount,
                 wantStereoLead: true,
+                allowLosslessTwinBlindFallback: true,
                 out float[] leadRefL,
                 out float[] leadRefR,
                 out float[] backingRef,
@@ -359,7 +389,8 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
                 neuralLeadVocalRef: leadRefL,
                 neuralBackingVocalRef: backingRef,
                 isFullMixTwinReference: isFullMixTwin,
-                neuralLeadVocalRefRight: leadRefR);
+                neuralLeadVocalRefRight: leadRefR,
+                isStrictCenter: strictCenterScratch);
 
             for (int i = 0; i < frameCount; i++) {
                 int idx = offset + i * 2;
@@ -412,19 +443,26 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
 
             for (int c = 0; c < count; c++) {
                 bool isLfe = descriptors != null && c < descriptors.Count && descriptors[c].IsLfe;
+                bool isStrict = descriptors != null && c < descriptors.Count && !isLfe && descriptors[c].IsDialogue;
                 bool isFront = descriptors == null || c >= descriptors.Count ||
                     descriptors[c].IsDialogue ||
                     descriptors[c].NormalizedPosition.Z >= 0.35f;
                 lfeScratch[c] = isLfe;
                 frontCenterScratch[c] = isFront;
+                strictCenterScratch[c] = isStrict;
             }
 
-            long twinSamplePos = explicitTrackSamplePos ?? MapOutputSampleToTrackSampleLocked(outputSamplePos);
+            int upstreamLatency = ResolveUpstreamBusLatencyLocked();
+            long compensatedOutputPos = outputSamplePos - upstreamLatency;
+            long twinSamplePos = explicitTrackSamplePos.HasValue
+                ? (explicitTrackSamplePos.Value - MapOutputSampleToTrackSampleLocked(upstreamLatency))
+                : MapOutputSampleToTrackSampleLocked(compensatedOutputPos);
             ResolveVocalReferencesLocked(
-                outputSamplePos,
+                compensatedOutputPos,
                 twinSamplePos,
                 frameCount,
-                wantStereoLead: count == 2,
+                wantStereoLead: true,
+                allowLosslessTwinBlindFallback: count == 2,
                 out float[] leadRefL,
                 out float[] leadRefR,
                 out float[] backingRef,
@@ -439,7 +477,8 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
                 leadRefL,
                 backingRef,
                 isFullMixTwinReference: isFullMixTwin,
-                neuralLeadVocalRefRight: leadRefR);
+                neuralLeadVocalRefRight: leadRefR,
+                isStrictCenter: strictCenterScratch);
 
             if (!active && karaokeTailBlocksRemaining > 0) {
                 karaokeTailBlocksRemaining--;
@@ -618,11 +657,51 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         }
     }
 
+    int ResolveUpstreamBusLatencyLocked() {
+        Func<int> provider = UpstreamLatencySamplesProvider;
+        if (provider != null) {
+            int dynamicLatency = provider();
+            return dynamicLatency > 0 ? dynamicLatency : 0;
+        }
+        return upstreamBusLatencySamples;
+    }
+
+    static bool CopyWithLeadingZeroOffset(float[] src, int validLimit, long startPos, float[] dst, int frameCount) {
+        if (src == null || src.Length == 0 || frameCount <= 0) {
+            return false;
+        }
+        int maxLen = Math.Min(src.Length, validLimit);
+        if (startPos >= maxLen) {
+            return false;
+        }
+        if (startPos + frameCount <= 0) {
+            Array.Clear(dst, 0, frameCount);
+            return true;
+        }
+        int dstOffset = 0;
+        long srcOffset = startPos;
+        if (srcOffset < 0) {
+            dstOffset = (int)(-srcOffset);
+            Array.Clear(dst, 0, dstOffset);
+            srcOffset = 0;
+        }
+        int remain = frameCount - dstOffset;
+        int avail = (int)Math.Min(remain, maxLen - srcOffset);
+        if (avail > 0) {
+            Array.Copy(src, (int)srcOffset, dst, dstOffset, avail);
+        }
+        if (dstOffset + avail < frameCount) {
+            Array.Clear(dst, dstOffset + avail, frameCount - (dstOffset + avail));
+        }
+        return true;
+    }
+
     void ResolveVocalReferencesLocked(
         long outputSamplePos,
         long trackSamplePos,
         int frameCount,
         bool wantStereoLead,
+        bool allowLosslessTwinBlindFallback,
         out float[] leadRefL,
         out float[] leadRefR,
         out float[] backingRef,
@@ -640,41 +719,25 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         bool needsLiveRateMap = alignedRefSampleRate > 0 && alignedRefSampleRate != sampleRate;
 
         if (!needsLiveRateMap) {
-            bool sampleWindowReady = outputSamplePos >= 0 && (outputSamplePos + frameCount) <= readyLimit;
+            long endPos = outputSamplePos + frameCount;
+            bool sampleWindowReady = endPos <= readyLimit;
             if (sampleWindowReady) {
                 if (wantStereoLead && alignedLeadLeft != null && alignedLeadRight != null &&
-                    outputSamplePos < alignedLeadLeft.Length && outputSamplePos < alignedLeadRight.Length) {
-                    int availL = (int)Math.Min(frameCount, alignedLeadLeft.Length - outputSamplePos);
-                    int availR = (int)Math.Min(frameCount, alignedLeadRight.Length - outputSamplePos);
-                    Array.Copy(alignedLeadLeft, (int)outputSamplePos, leadRefScratch, 0, availL);
-                    if (availL < frameCount) {
-                        Array.Clear(leadRefScratch, availL, frameCount - availL);
-                    }
-                    Array.Copy(alignedLeadRight, (int)outputSamplePos, leadRefRightScratch, 0, availR);
-                    if (availR < frameCount) {
-                        Array.Clear(leadRefRightScratch, availR, frameCount - availR);
-                    }
+                    CopyWithLeadingZeroOffset(alignedLeadLeft, readyLimit, outputSamplePos, leadRefScratch, frameCount) &&
+                    CopyWithLeadingZeroOffset(alignedLeadRight, readyLimit, outputSamplePos, leadRefRightScratch, frameCount)) {
                     leadRefL = leadRefScratch;
                     leadRefR = leadRefRightScratch;
-                } else if (alignedLeadMono != null && outputSamplePos < alignedLeadMono.Length) {
-                    int avail = (int)Math.Min(frameCount, alignedLeadMono.Length - outputSamplePos);
-                    Array.Copy(alignedLeadMono, (int)outputSamplePos, leadRefScratch, 0, avail);
-                    if (avail < frameCount) {
-                        Array.Clear(leadRefScratch, avail, frameCount - avail);
-                    }
+                } else if (alignedLeadMono != null &&
+                    CopyWithLeadingZeroOffset(alignedLeadMono, readyLimit, outputSamplePos, leadRefScratch, frameCount)) {
                     leadRefL = leadRefScratch;
                 }
 
-                if (config.KaraokePreserveBackingVocals && alignedBackingMono != null && outputSamplePos < alignedBackingMono.Length) {
-                    int avail = (int)Math.Min(frameCount, alignedBackingMono.Length - outputSamplePos);
-                    Array.Copy(alignedBackingMono, (int)outputSamplePos, backingRefScratch, 0, avail);
-                    if (avail < frameCount) {
-                        Array.Clear(backingRefScratch, avail, frameCount - avail);
-                    }
+                if (config.KaraokePreserveBackingVocals && alignedBackingMono != null &&
+                    CopyWithLeadingZeroOffset(alignedBackingMono, readyLimit, outputSamplePos, backingRefScratch, frameCount)) {
                     backingRef = backingRefScratch;
                 }
             }
-        } else if (outputSamplePos >= 0) {
+        } else {
             double ratio = alignedRefSampleRate / (double)sampleRate;
             double srcStart = outputSamplePos * ratio;
             int maxNeededIdx = (int)Math.Floor(srcStart + Math.Max(0, frameCount - 1) * ratio) + 2;
@@ -703,11 +766,12 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         }
 
         // W09 Lossless Twin blind guard: on stereo tracks without a neural stem, a synced lossless twin center-sum can
-        // serve as a vocal-band reference. On multichannel/Atmos tracks (wantStereoLead == false), DO NOT overwrite
-        // Atmos's discrete FrontCenter bed reference with a full-mix stereo sum (full-mix sum contains centered drums/bass/instruments!).
-        if (leadRefL == null && wantStereoLead && config.UseLosslessTwinForKaraoke &&
+        // serve as a vocal-band reference. On multichannel/Atmos tracks (allowLosslessTwinBlindFallback == false), DO NOT
+        // overwrite Atmos's discrete FrontCenter bed reference with a full-mix stereo sum!
+        if (leadRefL == null && allowLosslessTwinBlindFallback && config.UseLosslessTwinForKaraoke &&
             losslessReference != null && losslessReference.HasSyncedLosslessTwin &&
             losslessReference.SampleRate == sampleRate &&
+            trackSamplePos >= 0 &&
             losslessReference.TryReadAlignedStereoBlock(trackSamplePos, twinLeftScratch, twinRightScratch, frameCount)) {
             for (int i = 0; i < frameCount; i++) {
                 leadRefScratch[i] = 0.5f * (twinLeftScratch[i] + twinRightScratch[i]);

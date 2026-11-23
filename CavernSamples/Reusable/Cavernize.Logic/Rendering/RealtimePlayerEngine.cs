@@ -240,6 +240,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
         sceneHub.RegisterPostProcessingStage(spatialDialogPostStage);
         sceneHub.RegisterPostProcessingStage(limiterPostStage);
         sceneHub.RegisterPostProcessingStage(truePeakLimiterPostStage);
+        neuralStemStage.UpstreamLatencySamplesProvider = () => lgsrBypassed ? 0 : lgsrStage.LastAppliedLatencySamples;
         AcousticPropagationDelayLine.GlobalEnabled = true;
         sceneHub.PropagationDelay6DoFEnabled = true;
     }
@@ -806,6 +807,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
         : 0;
 
     long currentTrackSample;
+    double currentTrackSampleExact;
 
     /// <summary>
     /// True when playback is currently active.
@@ -950,6 +952,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             upmixingSettings = upmixing ?? new UpmixingSettings(true);
             renderingSettings = rendering ?? new RenderingSettings();
             currentTrackSample = 0;
+            currentTrackSampleExact = 0.0;
             subBlockAvailableFrames = 0;
             subBlockReadOffset = 0;
             hasRenderedAudio = false;
@@ -1006,6 +1009,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             double clampedSec = Math.Clamp(startSeconds, 0, maxSec);
             long targetSample = (long)Math.Round(clampedSec * track.SampleRate);
             currentTrackSample = track.Seek(targetSample);
+            currentTrackSampleExact = currentTrackSample;
             subBlockAvailableFrames = 0;
             subBlockReadOffset = 0;
             lastSourceMaskHash = 0;
@@ -1063,6 +1067,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             }
             long targetSample = (long)Math.Round(seconds * currentTrack.SampleRate);
             currentTrackSample = currentTrack.Seek(targetSample);
+            currentTrackSampleExact = currentTrackSample;
             subBlockAvailableFrames = 0;
             subBlockReadOffset = 0;
             ConfigureListener(resetToStart: false);
@@ -1165,6 +1170,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 if (currentTrack.Length > 0 && currentTrackSample >= currentTrack.Length) {
                     if (Loop) {
                         currentTrackSample = currentTrack.Seek(0);
+                        currentTrackSampleExact = currentTrackSample;
                         ConfigureListener(resetToStart: false);
                         ApplyLiveParameters();
                     } else {
@@ -1349,7 +1355,8 @@ public sealed class RealtimePlayerEngine : IDisposable {
                 RecordTailLocked(stereoOutput, outOffset, blockFrames);
 
                 double sampleAdvance = blockFrames * (currentTrack.SampleRate / (double)listener.SampleRate);
-                currentTrackSample += (long)Math.Round(sampleAdvance);
+                currentTrackSampleExact += sampleAdvance;
+                currentTrackSample = (long)Math.Round(currentTrackSampleExact);
                 totalFramesWritten += blockFrames;
 
                 UpdateSourceTelemetry();

@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using Android.Content;
 using Android.Media;
 
+using Cavern.Format;
 using Cavern.Format.Common;
 using Cavern.Restoration;
 
@@ -497,10 +498,33 @@ public static partial class LosslessTwinDiscoveryService {
         return v;
     }
 
+    static bool IsPotentiallyDolbyDrcContainer(string path) {
+        if (string.IsNullOrEmpty(path)) return false;
+        string ext = IOPath.GetExtension(path).ToLowerInvariant();
+        return ext is ".ec3" or ".eac3" or ".ac3" or ".m4a" or ".mp4" or ".mkv" or ".mka" or ".ts" or ".m2ts";
+    }
+
     static bool TryDecodeFfmpegStereoFloat(
         string path,
         string ffmpegPath,
         int sampleRate,
+        CancellationToken ct,
+        out float[] left,
+        out float[] right) {
+        // W47: Disable Dolby E-AC-3/AC-3 dynamic range compression (-drc_scale 0) when decoding Atmos/Dolby streams
+        // so vocal peaks match Cavern's uncompressed EnhancedAC3Decoder; auto-fallback cleanly if container holds non-AC3.
+        if (IsPotentiallyDolbyDrcContainer(path) &&
+            TryRunFfmpegStereoFloat(path, ffmpegPath, sampleRate, disableDolbyDrc: true, ct, out left, out right)) {
+            return true;
+        }
+        return TryRunFfmpegStereoFloat(path, ffmpegPath, sampleRate, disableDolbyDrc: false, ct, out left, out right);
+    }
+
+    static bool TryRunFfmpegStereoFloat(
+        string path,
+        string ffmpegPath,
+        int sampleRate,
+        bool disableDolbyDrc,
         CancellationToken ct,
         out float[] left,
         out float[] right) {
@@ -518,6 +542,10 @@ public static partial class LosslessTwinDiscoveryService {
             psi.ArgumentList.Add("-nostdin");
             psi.ArgumentList.Add("-v");
             psi.ArgumentList.Add("error");
+            if (disableDolbyDrc) {
+                psi.ArgumentList.Add("-drc_scale");
+                psi.ArgumentList.Add("0");
+            }
             psi.ArgumentList.Add("-i");
             psi.ArgumentList.Add(path);
             psi.ArgumentList.Add("-vn");
@@ -748,81 +776,99 @@ public static partial class LosslessTwinDiscoveryService {
             return null;
         }
 
+        // W47: Prefer Cavern's own non-disruptive read-only AudioReader FIRST for local files supported by Cavern
+        // (E-AC-3 JOC, AC-3, MP4, MKV, WAV, DAMF, LAF). Guarantees 0.000-sample MDCT/elst priming parity and zero
+        // Dolby DRC mismatch against live CavernizeTrack playback!
+        if (!string.IsNullOrEmpty(localMediaPath)) {
+            float[] cavernMono = TryDecodeCavernNativeMonoProbe(localMediaPath, targetSampleRate, seconds, ct);
+            if (cavernMono != null && cavernMono.Length >= SubSampleSyncEngine.GccFftSize) {
+                return cavernMono;
+            }
+        }
+
         // Fast, non-disruptive FFmpeg mono probe (supports E-AC-3 JOC, AC-3, DTS, Opus, MKV, MP4 without touching live track)
         string ffInputPath = !string.IsNullOrEmpty(ffmpegPath) && IOFile.Exists(ffmpegPath)
             ? (localMediaPath ?? ResolveReadableMediaPath(ctx, mediaUri, mediaPath))
             : null;
         if (!string.IsNullOrEmpty(ffInputPath)) {
-            try {
-                ct.ThrowIfCancellationRequested();
-                string durStr = seconds.ToString("0.0", CultureInfo.InvariantCulture);
-                ProcessStartInfo psi = new() {
-                    FileName = ffmpegPath,
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    CreateNoWindow = true
-                };
-                psi.ArgumentList.Add("-nostdin");
-                psi.ArgumentList.Add("-v");
-                psi.ArgumentList.Add("error");
-                psi.ArgumentList.Add("-t");
-                psi.ArgumentList.Add(durStr);
-                psi.ArgumentList.Add("-i");
-                psi.ArgumentList.Add(ffInputPath);
-                psi.ArgumentList.Add("-vn");
-                psi.ArgumentList.Add("-ac");
-                psi.ArgumentList.Add("1");
-                psi.ArgumentList.Add("-ar");
-                psi.ArgumentList.Add(targetSampleRate.ToString(CultureInfo.InvariantCulture));
-                psi.ArgumentList.Add("-f");
-                psi.ArgumentList.Add("f32le");
-                psi.ArgumentList.Add("-");
-                FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpegPath);
+            bool tryDrcZero = IsPotentiallyDolbyDrcContainer(ffInputPath);
+            for (int attempt = 0; attempt < (tryDrcZero ? 2 : 1); attempt++) {
+                bool useDrcZero = tryDrcZero && attempt == 0;
+                try {
+                    ct.ThrowIfCancellationRequested();
+                    string durStr = seconds.ToString("0.0", CultureInfo.InvariantCulture);
+                    ProcessStartInfo psi = new() {
+                        FileName = ffmpegPath,
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    };
+                    psi.ArgumentList.Add("-nostdin");
+                    psi.ArgumentList.Add("-v");
+                    psi.ArgumentList.Add("error");
+                    if (useDrcZero) {
+                        psi.ArgumentList.Add("-drc_scale");
+                        psi.ArgumentList.Add("0");
+                    }
+                    psi.ArgumentList.Add("-t");
+                    psi.ArgumentList.Add(durStr);
+                    psi.ArgumentList.Add("-i");
+                    psi.ArgumentList.Add(ffInputPath);
+                    psi.ArgumentList.Add("-vn");
+                    psi.ArgumentList.Add("-ac");
+                    psi.ArgumentList.Add("1");
+                    psi.ArgumentList.Add("-ar");
+                    psi.ArgumentList.Add(targetSampleRate.ToString(CultureInfo.InvariantCulture));
+                    psi.ArgumentList.Add("-f");
+                    psi.ArgumentList.Add("f32le");
+                    psi.ArgumentList.Add("-");
+                    FFmpegInstallerService.ConfigureProcessStartInfo(psi, ffmpegPath);
 
-                using Process proc = Process.Start(psi);
-                if (proc != null) {
-                    using CancellationTokenRegistration ctr = ct.Register(() => {
+                    using Process proc = Process.Start(psi);
+                    if (proc != null) {
+                        using CancellationTokenRegistration ctr = ct.Register(() => {
+                            try {
+                                if (!proc.HasExited) proc.Kill(entireProcessTree: true);
+                            } catch { }
+                        });
+
+                        Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
+                        int expectedSamples = Math.Max(SubSampleSyncEngine.GccFftSize, (int)Math.Ceiling(seconds * targetSampleRate) + 1024);
+                        List<float> monoList = new(expectedSamples);
+                        byte[] buf = new byte[32768];
+                        int carry = 0;
                         try {
-                            if (!proc.HasExited) proc.Kill(entireProcessTree: true);
-                        } catch { }
-                    });
-
-                    Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
-                    int expectedSamples = Math.Max(SubSampleSyncEngine.GccFftSize, (int)Math.Ceiling(seconds * targetSampleRate) + 1024);
-                    List<float> monoList = new(expectedSamples);
-                    byte[] buf = new byte[32768];
-                    int carry = 0;
-                    try {
-                        int read;
-                        while ((read = proc.StandardOutput.BaseStream.Read(buf, carry, buf.Length - carry)) > 0) {
-                            ct.ThrowIfCancellationRequested();
-                            int totalBytes = carry + read;
-                            int ready = totalBytes / 4;
-                            for (int i = 0; i < ready; i++) {
-                                monoList.Add(SanitizeFloat(BinaryPrimitives.ReadSingleLittleEndian(buf.AsSpan(i * 4, 4))));
+                            int read;
+                            while ((read = proc.StandardOutput.BaseStream.Read(buf, carry, buf.Length - carry)) > 0) {
+                                ct.ThrowIfCancellationRequested();
+                                int totalBytes = carry + read;
+                                int ready = totalBytes / 4;
+                                for (int i = 0; i < ready; i++) {
+                                    monoList.Add(SanitizeFloat(BinaryPrimitives.ReadSingleLittleEndian(buf.AsSpan(i * 4, 4))));
+                                }
+                                int consumed = ready * 4;
+                                carry = totalBytes - consumed;
+                                if (carry > 0) {
+                                    Buffer.BlockCopy(buf, consumed, buf, 0, carry);
+                                }
                             }
-                            int consumed = ready * 4;
-                            carry = totalBytes - consumed;
-                            if (carry > 0) {
-                                Buffer.BlockCopy(buf, consumed, buf, 0, carry);
-                            }
+                        } catch (OperationCanceledException) {
+                            try { proc.Kill(entireProcessTree: true); } catch { }
+                            throw;
+                        } finally {
+                            try { proc.WaitForExit(1500); } catch { }
+                            try { stderrTask.Wait(400); } catch { }
                         }
-                    } catch (OperationCanceledException) {
-                        try { proc.Kill(entireProcessTree: true); } catch { }
-                        throw;
-                    } finally {
-                        try { proc.WaitForExit(1500); } catch { }
-                        try { stderrTask.Wait(400); } catch { }
+                        if (monoList.Count >= SubSampleSyncEngine.GccFftSize) {
+                            return monoList.ToArray();
+                        }
                     }
-                    if (monoList.Count >= SubSampleSyncEngine.GccFftSize) {
-                        return monoList.ToArray();
-                    }
+                } catch (OperationCanceledException) {
+                    throw;
+                } catch {
+                    // Retry without -drc_scale 0 or fall through to Android MediaCodec probe
                 }
-            } catch (OperationCanceledException) {
-                throw;
-            } catch {
-                // Fall through to Android MediaCodec probe
             }
         }
 
@@ -1081,5 +1127,168 @@ public static partial class LosslessTwinDiscoveryService {
             if (!string.IsNullOrEmpty(disp)) return disp;
         }
         return !string.IsNullOrEmpty(item?.Title) ? item.Title : IOPath.GetFileName(fallbackPath ?? "");
+    }
+
+    /// <summary>
+    /// Decodes a read-only non-disruptive mono timeline probe directly through Cavern's own <see cref="AudioReader"/>
+    /// so E-AC-3 JOC, AC-3, MP4, MKV, WAV, DAMF, and LAF alignment matches live <see cref="CavernizeTrack"/> playback
+    /// with 0.000-sample priming offset and zero Dolby DRC.
+    /// </summary>
+    static float[] TryDecodeCavernNativeMonoProbe(string localMediaPath, int targetSampleRate, double seconds, CancellationToken ct) {
+        if (string.IsNullOrEmpty(localMediaPath) || !IOFile.Exists(localMediaPath)) {
+            return null;
+        }
+        try {
+            ct.ThrowIfCancellationRequested();
+            using AudioReader reader = AudioReader.Open(localMediaPath);
+            if (reader == null) {
+                return null;
+            }
+            reader.ReadHeader();
+            int channels = reader.ChannelCount;
+            int srcSr = reader.SampleRate;
+            if (channels <= 0 || srcSr < 8000) {
+                return null;
+            }
+
+            long trackLen = reader.Length > 0 ? reader.Length : (long)Math.Ceiling(seconds * srcSr);
+            int wantSrcFrames = (int)Math.Min(trackLen, (long)Math.Ceiling(seconds * srcSr) + 512L);
+            if (wantSrcFrames < SubSampleSyncEngine.GccFftSize) {
+                return null;
+            }
+
+            const int blockFrames = 4096;
+            float[] interleaved = new float[blockFrames * channels];
+            float[] mono = new float[wantSrcFrames];
+            int lfeIdx = channels >= 6 ? 3 : -1;
+            int nonLfeCount = lfeIdx >= 0 ? (channels - 1) : channels;
+            float invCount = nonLfeCount > 0 ? (1f / nonLfeCount) : 1f;
+
+            int written = 0;
+            while (written < wantSrcFrames) {
+                ct.ThrowIfCancellationRequested();
+                int take = Math.Min(blockFrames, wantSrcFrames - written);
+                long sampleSpan = (long)take * channels;
+                Array.Clear(interleaved, 0, (int)sampleSpan);
+                reader.ReadBlock(interleaved, 0, sampleSpan);
+
+                for (int f = 0; f < take; f++) {
+                    int baseOff = f * channels;
+                    float sum = 0f;
+                    for (int c = 0; c < channels; c++) {
+                        if (c == lfeIdx) continue;
+                        sum += SanitizeFloat(interleaved[baseOff + c]);
+                    }
+                    mono[written + f] = sum * invCount;
+                }
+                written += take;
+            }
+
+            // Guard against silent/unsupported readers returning all zeros
+            double energy = 0.0;
+            for (int i = 0; i < written; i++) {
+                energy += mono[i] * mono[i];
+            }
+            if (energy < 1e-8) {
+                return null;
+            }
+
+            if (srcSr != targetSampleRate) {
+                KaiserSincResampler resampler = new(srcSr, targetSampleRate);
+                return resampler.ResampleMono(mono);
+            }
+            return mono;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Measures and removes any FFmpeg-vs-Cavern <see cref="AudioReader"/> MDCT/edit-list priming offset on
+    /// FFmpeg-decoded stereo PCM (Pure Dolby Atmos / E-AC-3 / MP4 / MKV) in place before neural vocal separation,
+    /// ensuring 0.0-sample phase lock with live Cavern playback. Returns the applied shift in samples (0 if skipped).
+    /// </summary>
+    public static double AlignDecodedStereoToCavernTimeline(
+        string mediaPath,
+        float[] left,
+        float[] right,
+        int sampleRate,
+        CancellationToken ct) {
+        if (string.IsNullOrEmpty(mediaPath) || left == null || right == null || sampleRate < 8000) {
+            return 0.0;
+        }
+        int totalLen = Math.Min(left.Length, right.Length);
+        if (totalLen < SubSampleSyncEngine.GccFftSize * 2) {
+            return 0.0;
+        }
+        string localPath = CanOpenFileForRead(mediaPath) ? mediaPath : null;
+        if (string.IsNullOrEmpty(localPath)) {
+            return 0.0;
+        }
+
+        try {
+            double probeSec = Math.Min(8.0, totalLen / (double)sampleRate);
+            float[] cavernProbe = TryDecodeCavernNativeMonoProbe(localPath, sampleRate, probeSec, ct);
+            if (cavernProbe == null || cavernProbe.Length < SubSampleSyncEngine.GccFftSize) {
+                return 0.0;
+            }
+
+            int cmpLen = Math.Min(cavernProbe.Length, totalLen);
+            float[] decodedMono = new float[cmpLen];
+            for (int i = 0; i < cmpLen; i++) {
+                decodedMono[i] = 0.5f * (left[i] + right[i]);
+            }
+
+            SubSampleSyncResult sync = SubSampleSyncEngine.Align(
+                cavernProbe,
+                decodedMono,
+                sampleRate,
+                maxMacroSearchSeconds: 1.5f);
+
+            double offset = sync.BaseOffsetSamples;
+            if (!sync.IsSynced || sync.Confidence < 0.45f ||
+                Math.Abs(offset) < 0.75 || Math.Abs(offset) > 8192.0) {
+                return 0.0;
+            }
+
+            // Shift decoded stereo buffers in place so index t matches Cavern AudioReader sample t:
+            // decoded[t + offset] ~= cavern[t]
+            float[] shiftedL = new float[totalLen];
+            float[] shiftedR = new float[totalLen];
+            for (int t = 0; t < totalLen; t++) {
+                double srcPos = t + offset;
+                shiftedL[t] = SampleCatmullRom(left, totalLen, srcPos);
+                shiftedR[t] = SampleCatmullRom(right, totalLen, srcPos);
+            }
+            Array.Copy(shiftedL, left, totalLen);
+            Array.Copy(shiftedR, right, totalLen);
+            return offset;
+        } catch (OperationCanceledException) {
+            throw;
+        } catch {
+            return 0.0;
+        }
+    }
+
+    static float SampleCatmullRom(float[] src, int len, double pos) {
+        if (pos < 0.0 || pos >= len - 1) {
+            int nearest = (int)Math.Round(pos);
+            return (nearest >= 0 && nearest < len) ? src[nearest] : 0f;
+        }
+        int idx = (int)Math.Floor(pos);
+        float t = (float)(pos - idx);
+        float p0 = src[idx > 0 ? idx - 1 : 0];
+        float p1 = src[idx];
+        float p2 = src[idx + 1 < len ? idx + 1 : len - 1];
+        float p3 = src[idx + 2 < len ? idx + 2 : len - 1];
+        float t2 = t * t;
+        float t3 = t2 * t;
+        return 0.5f * (
+            (2f * p1) +
+            (-p0 + p2) * t +
+            (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2 +
+            (-p0 + 3f * p1 - 3f * p2 + p3) * t3);
     }
 }

@@ -655,6 +655,7 @@ public static class StudioBatchExporter {
             int totalSamples = multiChannels.Length > 0 ? multiChannels[0].Length : 0;
 
             float[] leadRef = null;
+            float[] leadRefRight = null;
             float[] backingRef = null;
             if (hasNeuralKaraoke && totalSamples > 0) {
                 (float[] nL, float[] nR, bool fromTwin) = ResolveNeuralStereoInput(job, mixL, mixR, totalSamples);
@@ -672,8 +673,13 @@ public static class StudioBatchExporter {
                     (p, _) => onProgress?.Invoke(0.25 + p * 0.45),
                     token);
                 job.OnSeparatedTrackReady?.Invoke(separated);
-                leadRef = separated?.MonoLeadVocalRef;
+                ResolveStereoLeadVocalRefs(separated, out leadRef, out leadRefRight);
                 backingRef = job.PreserveBackingVocals ? separated?.MonoBackingVocalRef : null;
+            }
+
+            bool[] isStrictCenter = new bool[targetLayout.Length];
+            for (int c = 0; c < targetLayout.Length; c++) {
+                isStrictCenter[c] = targetLayout[c] == ReferenceChannel.FrontCenter;
             }
 
             onProgress?.Invoke(0.72);
@@ -684,7 +690,9 @@ public static class StudioBatchExporter {
                 backingRef,
                 sampleRate,
                 Math.Clamp(job.KaraokeVocalLevel, 0f, 1f),
-                job.PreserveBackingVocals);
+                job.PreserveBackingVocals,
+                neuralLeadVocalRefRight: leadRefRight,
+                isStrictCenter: isStrictCenter);
 
             LoudnessAnalysisSnapshot multiSnap = WriteMeteredLimitedMultichannelWav(
                 outPath,
@@ -716,6 +724,7 @@ public static class StudioBatchExporter {
         DecodeStereoInput(track, job, out float[] stereoL, out float[] stereoR, out bool twinUsed, p => onProgress?.Invoke(p * 0.20), token);
         int len = Math.Min(stereoL.Length, stereoR.Length);
         float[] neuralLeadRef = null;
+        float[] neuralLeadRefRight = null;
         float[] neuralBackingRef = null;
 
         if (hasNeuralKaraoke && len > 0) {
@@ -733,7 +742,7 @@ public static class StudioBatchExporter {
                 (p, _) => onProgress?.Invoke(0.20 + p * 0.45),
                 token);
             job.OnSeparatedTrackReady?.Invoke(separated);
-            neuralLeadRef = separated?.MonoLeadVocalRef;
+            ResolveStereoLeadVocalRefs(separated, out neuralLeadRef, out neuralLeadRefRight);
             neuralBackingRef = job.PreserveBackingVocals ? separated?.MonoBackingVocalRef : null;
         }
 
@@ -746,7 +755,8 @@ public static class StudioBatchExporter {
             neuralBackingRef,
             sampleRate,
             Math.Clamp(job.KaraokeVocalLevel, 0f, 1f),
-            job.PreserveBackingVocals);
+            job.PreserveBackingVocals,
+            neuralLeadVocalRefRight: neuralLeadRefRight);
 
         LiveVocalChainDsp vocalDsp = includeLiveVocalMixdown ? new LiveVocalChainDsp(sampleRate) : null;
         if (vocalDsp != null) {
@@ -1155,6 +1165,34 @@ public static class StudioBatchExporter {
             }
         } catch { }
         return (0L, 0L);
+    }
+
+    static void ResolveStereoLeadVocalRefs(NeuralSeparatedTrack separated, out float[] leadL, out float[] leadR) {
+        leadL = separated?.MonoLeadVocalRef;
+        leadR = null;
+        if (separated?.Stems == null || separated.Stems.Count == 0) {
+            return;
+        }
+        StereoStemBuffer fallback = null;
+        for (int i = 0; i < separated.Stems.Count; i++) {
+            StereoStemBuffer st = separated.Stems[i];
+            if (st == null || st.Length <= 0 || st.Left == null || st.Right == null) {
+                continue;
+            }
+            NeuralStemRole role = NeuralStemSpatializer.ClassifyStemName(st.Name);
+            if (role == NeuralStemRole.LeadVocal) {
+                leadL = st.Left;
+                leadR = st.Right;
+                return;
+            }
+            if (role == NeuralStemRole.Vocals && fallback == null) {
+                fallback = st;
+            }
+        }
+        if (fallback != null) {
+            leadL = fallback.Left;
+            leadR = fallback.Right;
+        }
     }
 
     static void EnsureEnvironmentSize() {

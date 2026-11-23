@@ -62,12 +62,18 @@ namespace Cavern.Neural {
         readonly Complex[] refLeadSpecR = new Complex[FftSize];
         readonly Complex[] refBackingSpec = new Complex[FftSize];
 
-        // Per-channel cross-spectral covariance accumulators against the reference vocal spectrum
+        // Per-channel cross-spectral covariance accumulators against the reference vocal spectrum (primary V_M and orthogonalized side V_So)
         readonly float[][] covCC;
         readonly float[][] covCVRe;
         readonly float[][] covCVIm;
+        readonly float[][] covResCC;
+        readonly float[][] covCSoRe;
+        readonly float[][] covCSoIm;
         readonly float[] covVV = new float[SpectrumBins];
         readonly float[] covVVR = new float[SpectrumBins];
+        readonly float[] covSMRe = new float[SpectrumBins];
+        readonly float[] covSMIm = new float[SpectrumBins];
+        readonly float[] covVSo = new float[SpectrumBins];
         readonly float[] covBB = new float[SpectrumBins];
         readonly float[] covMid = new float[SpectrumBins];
         readonly float[] covSide = new float[SpectrumBins];
@@ -84,6 +90,8 @@ namespace Cavern.Neural {
         bool preserveBackingVocals = true;
         float latestVocalActivity;
         float smoothedTransientProtect;
+        float smoothedStrictCenterEnergy;
+        float smoothedFrontPairEnergy;
 
         /// <summary>Enables or bypasses Spatial Karaoke processing.</summary>
         public bool IsEnabled {
@@ -141,6 +149,9 @@ namespace Cavern.Neural {
             covCC = new float[MaxSpatialChannels][];
             covCVRe = new float[MaxSpatialChannels][];
             covCVIm = new float[MaxSpatialChannels][];
+            covResCC = new float[MaxSpatialChannels][];
+            covCSoRe = new float[MaxSpatialChannels][];
+            covCSoIm = new float[MaxSpatialChannels][];
 
             for (int c = 0; c < MaxSpatialChannels; c++) {
                 prevIn[c] = new float[HopSize];
@@ -151,6 +162,9 @@ namespace Cavern.Neural {
                 covCC[c] = new float[SpectrumBins];
                 covCVRe[c] = new float[SpectrumBins];
                 covCVIm[c] = new float[SpectrumBins];
+                covResCC[c] = new float[SpectrumBins];
+                covCSoRe[c] = new float[SpectrumBins];
+                covCSoIm[c] = new float[SpectrumBins];
             }
 
             // Exact COLA sqrt(Hann) sine window: w[n]^2 + w[n + N/2]^2 == 1.0 identically
@@ -192,6 +206,9 @@ namespace Cavern.Neural {
                 Array.Clear(covCC[c], 0, SpectrumBins);
                 Array.Clear(covCVRe[c], 0, SpectrumBins);
                 Array.Clear(covCVIm[c], 0, SpectrumBins);
+                Array.Clear(covResCC[c], 0, SpectrumBins);
+                Array.Clear(covCSoRe[c], 0, SpectrumBins);
+                Array.Clear(covCSoIm[c], 0, SpectrumBins);
             }
             Array.Clear(prevRefLead, 0, HopSize);
             Array.Clear(currRefLead, 0, HopSize);
@@ -201,6 +218,9 @@ namespace Cavern.Neural {
             Array.Clear(currRefBacking, 0, HopSize);
             Array.Clear(covVV, 0, SpectrumBins);
             Array.Clear(covVVR, 0, SpectrumBins);
+            Array.Clear(covSMRe, 0, SpectrumBins);
+            Array.Clear(covSMIm, 0, SpectrumBins);
+            Array.Clear(covVSo, 0, SpectrumBins);
             Array.Clear(covBB, 0, SpectrumBins);
             Array.Clear(covMid, 0, SpectrumBins);
             Array.Clear(covSide, 0, SpectrumBins);
@@ -212,6 +232,8 @@ namespace Cavern.Neural {
             bypassFadeMix = 0f;
             latestVocalActivity = 0f;
             smoothedTransientProtect = 0f;
+            smoothedStrictCenterEnergy = 0f;
+            smoothedFrontPairEnergy = 0f;
         }
 
         /// <summary>
@@ -227,7 +249,8 @@ namespace Cavern.Neural {
         /// <param name="neuralLeadVocalRef">Optional sample-aligned mono or Left-channel Lead Vocal stem (from ONNX Karaoke/RoFormer or W09 lossless twin).</param>
         /// <param name="neuralBackingVocalRef">Optional sample-aligned mono Backing Vocal stem (preserved when <see cref="PreserveBackingVocals"/> is true).</param>
         /// <param name="isFullMixTwinReference">True when <paramref name="neuralLeadVocalRef"/> is a non-neural full-mix twin center sum rather than an isolated vocal stem.</param>
-        /// <param name="neuralLeadVocalRefRight">Optional sample-aligned Right-channel Lead Vocal stem for true stereo L/R MMSE vocal subtraction.</param>
+        /// <param name="neuralLeadVocalRefRight">Optional sample-aligned Right-channel Lead Vocal stem for true 2-reference stereo subspace MMSE vocal subtraction across all 1..32 channels.</param>
+        /// <param name="isStrictCenter">Optional discrete FrontCenter flags (<c>|azimuth| &lt;= 12°</c>) used in blind multichannel mode to isolate discrete Atmos center dialogue without FL/FR instrument dilution.</param>
         public void ProcessMultichannelInPlace(
             float[][] channels,
             bool[] isLfe,
@@ -237,7 +260,8 @@ namespace Cavern.Neural {
             float[] neuralLeadVocalRef = null,
             float[] neuralBackingVocalRef = null,
             bool isFullMixTwinReference = false,
-            float[] neuralLeadVocalRefRight = null) {
+            float[] neuralLeadVocalRefRight = null,
+            bool[] isStrictCenter = null) {
             if (channels == null || channelCount <= 0 || sampleCount <= 0) {
                 return;
             }
@@ -266,6 +290,9 @@ namespace Cavern.Neural {
                     Array.Clear(covCC[c], 0, SpectrumBins);
                     Array.Clear(covCVRe[c], 0, SpectrumBins);
                     Array.Clear(covCVIm[c], 0, SpectrumBins);
+                    Array.Clear(covResCC[c], 0, SpectrumBins);
+                    Array.Clear(covCSoRe[c], 0, SpectrumBins);
+                    Array.Clear(covCSoIm[c], 0, SpectrumBins);
                 }
                 Array.Clear(prevRefLead, 0, HopSize);
                 Array.Clear(currRefLead, 0, HopSize);
@@ -275,6 +302,9 @@ namespace Cavern.Neural {
                 Array.Clear(currRefBacking, 0, HopSize);
                 Array.Clear(covVV, 0, SpectrumBins);
                 Array.Clear(covVVR, 0, SpectrumBins);
+                Array.Clear(covSMRe, 0, SpectrumBins);
+                Array.Clear(covSMIm, 0, SpectrumBins);
+                Array.Clear(covVSo, 0, SpectrumBins);
                 Array.Clear(covBB, 0, SpectrumBins);
                 Array.Clear(covMid, 0, SpectrumBins);
                 Array.Clear(covSide, 0, SpectrumBins);
@@ -283,6 +313,8 @@ namespace Cavern.Neural {
                 hasPrimedHop = false;
                 bypassFadeMix = 0f;
                 smoothedTransientProtect = 0f;
+                smoothedStrictCenterEnergy = 0f;
+                smoothedFrontPairEnergy = 0f;
                 wasBypassed = false;
             }
 
@@ -319,7 +351,7 @@ namespace Cavern.Neural {
                 inFill++;
 
                 if (inFill == HopSize) {
-                    ExecuteMultichannelHop(chCount, isLfe, isCenterOrFront, hasNeuralLead, hasNeuralLeadRight, hasNeuralBacking, isFullMixTwinReference);
+                    ExecuteMultichannelHop(chCount, isLfe, isCenterOrFront, isStrictCenter, hasNeuralLead, hasNeuralLeadRight, hasNeuralBacking, isFullMixTwinReference);
                     FinishHop(chCount);
                     hasPrimedHop = true;
                 }
@@ -334,8 +366,9 @@ namespace Cavern.Neural {
 
         /// <summary>
         /// Offline zero-latency multichannel Spatial Karaoke pass (zero delay offset) for Atmos/multichannel export.
-        /// Applies MMSE Complex Coherent Projection across all beds/objects using a pre-separated neural Lead Vocal stem
-        /// (and optional Backing Vocal stem), or exact Complex Mid/Side + Coherent Projection in blind mode.
+        /// Applies 2-reference orthogonalized stereo subspace MMSE Complex Coherent Projection across all beds/objects
+        /// using a pre-separated neural Lead Vocal stem (mono or stereo L/R, plus optional Backing Vocal stem),
+        /// or discrete FrontCenter / Complex Mid-Side Coherent Projection in blind mode.
         /// </summary>
         public static float[][] ProcessOfflineMultichannel(
             float[][] channels,
@@ -346,7 +379,8 @@ namespace Cavern.Neural {
             float vocalLevel,
             bool preserveBackingVocals = true,
             int fftSize = 2048,
-            float[] neuralLeadVocalRefRight = null) {
+            float[] neuralLeadVocalRefRight = null,
+            bool[] isStrictCenter = null) {
             if (channels == null || channels.Length == 0) {
                 return Array.Empty<float[]>();
             }
@@ -396,17 +430,26 @@ namespace Cavern.Neural {
                 float[][] cCovCC = new float[chCount][];
                 float[][] cCovCVRe = new float[chCount][];
                 float[][] cCovCVIm = new float[chCount][];
+                float[][] cCovResCC = new float[chCount][];
+                float[][] cCovCSoRe = new float[chCount][];
+                float[][] cCovCSoIm = new float[chCount][];
                 for (int c = 0; c < chCount; c++) {
                     cSpecs[c] = new Complex[nFft];
                     cCovCC[c] = new float[bins];
                     cCovCVRe[c] = new float[bins];
                     cCovCVIm[c] = new float[bins];
+                    cCovResCC[c] = new float[bins];
+                    cCovCSoRe[c] = new float[bins];
+                    cCovCSoIm[c] = new float[bins];
                 }
                 Complex[] leadSpec = new Complex[nFft];
                 Complex[] leadSpecR = hasLeadRight ? new Complex[nFft] : null;
                 Complex[] backSpec = new Complex[nFft];
                 float[] cCovVV = new float[bins];
                 float[] cCovVVR = new float[bins];
+                float[] cCovSMRe = new float[bins];
+                float[] cCovSMIm = new float[bins];
+                float[] cCovVSo = new float[bins];
                 float[] cCovBB = new float[bins];
                 float[] cCovMid = new float[bins];
                 float[] cCovSide = new float[bins];
@@ -457,7 +500,8 @@ namespace Cavern.Neural {
                             cCovSide[k] += fAlpha * (sidePow - cCovSide[k]);
 
                             float centerRatio = cCovMid[k] / (cCovMid[k] + cCovSide[k] + Epsilon);
-                            float panSelect = preserveBackingVocals ? SmoothStep(0.10f, 0.38f, centerRatio) : 1f;
+                            // Hard-panned L/R instruments have centerRatio == 0.50; gate above 0.52 to avoid -6 dB bleed
+                            float panSelect = preserveBackingVocals ? SmoothStep(0.52f, 0.80f, centerRatio) : 1f;
                             float midCut = attenStrength * offlineBandWeight[k] * panSelect * (1f - BlindResidualFloor);
                             float midGain = 1f - midCut;
                             if (midGain < 0f) {
@@ -474,12 +518,74 @@ namespace Cavern.Neural {
                             }
                         }
                     } else {
+                        // In offline blind multichannel mode, prefer discrete FrontCenter when present and active
+                        bool offlineUseStrictCenter = false;
+                        if (!hasLead && isStrictCenter != null) {
+                            double strictE = 0.0;
+                            double otherE = 0.0;
+                            for (int k = 0; k < bins; k++) {
+                                float bw = offlineBandWeight[k];
+                                if (bw < 0.25f) {
+                                    continue;
+                                }
+                                for (int c = 0; c < chCount; c++) {
+                                    if (isLfe != null && c < isLfe.Length && isLfe[c]) {
+                                        continue;
+                                    }
+                                    float p = cSpecs[c][k].Real * cSpecs[c][k].Real + cSpecs[c][k].Imaginary * cSpecs[c][k].Imaginary;
+                                    if (c < isStrictCenter.Length && isStrictCenter[c]) {
+                                        strictE += p;
+                                    } else {
+                                        otherE += p;
+                                    }
+                                }
+                            }
+                            offlineUseStrictCenter = strictE > 1e-10 && strictE >= 0.06 * otherE;
+                        }
+
                         for (int k = 0; k < bins; k++) {
-                            Complex vRefL;
-                            Complex vRefR;
+                            Complex vM;
+                            Complex vSo = default(Complex);
+                            bool hasOrthSide = false;
+
                             if (hasLead) {
-                                vRefL = leadSpec[k];
-                                vRefR = hasLeadRight ? leadSpecR[k] : vRefL;
+                                if (hasLeadRight) {
+                                    Complex lSpec = leadSpec[k];
+                                    Complex rSpec = leadSpecR[k];
+                                    vM = new Complex(0.5f * (lSpec.Real + rSpec.Real), 0.5f * (lSpec.Imaginary + rSpec.Imaginary));
+                                    Complex vS = new Complex(0.5f * (lSpec.Real - rSpec.Real), 0.5f * (lSpec.Imaginary - rSpec.Imaginary));
+                                    float vvM = vM.Real * vM.Real + vM.Imaginary * vM.Imaginary;
+                                    float vvS = vS.Real * vS.Real + vS.Imaginary * vS.Imaginary;
+                                    cCovVV[k] += alpha * (vvM - cCovVV[k]);
+                                    cCovVVR[k] += alpha * (vvS - cCovVVR[k]);
+
+                                    float smRe = vS.Real * vM.Real + vS.Imaginary * vM.Imaginary;
+                                    float smIm = vS.Imaginary * vM.Real - vS.Real * vM.Imaginary;
+                                    cCovSMRe[k] += alpha * (smRe - cCovSMRe[k]);
+                                    cCovSMIm[k] += alpha * (smIm - cCovSMIm[k]);
+
+                                    float invMM = 1f / (cCovVV[k] + Epsilon);
+                                    float gRe = cCovSMRe[k] * invMM;
+                                    float gIm = cCovSMIm[k] * invMM;
+                                    float gSq = gRe * gRe + gIm * gIm;
+                                    if (gSq > 16f) {
+                                        float gs = 4f / MathF.Sqrt(gSq);
+                                        gRe *= gs;
+                                        gIm *= gs;
+                                    }
+                                    vSo = new Complex(
+                                        vS.Real - (gRe * vM.Real - gIm * vM.Imaginary),
+                                        vS.Imaginary - (gRe * vM.Imaginary + gIm * vM.Real));
+                                    float vSoPow = vSo.Real * vSo.Real + vSo.Imaginary * vSo.Imaginary;
+                                    cCovVSo[k] += alpha * (vSoPow - cCovVSo[k]);
+                                    hasOrthSide = cCovVSo[k] > 1e-10f;
+                                } else {
+                                    vM = leadSpec[k];
+                                    float vvM = vM.Real * vM.Real + vM.Imaginary * vM.Imaginary;
+                                    cCovVV[k] += alpha * (vvM - cCovVV[k]);
+                                    cCovVVR[k] = 0f;
+                                    cCovVSo[k] = 0f;
+                                }
                             } else {
                                 float sumRe = 0f;
                                 float sumIm = 0f;
@@ -488,56 +594,61 @@ namespace Cavern.Neural {
                                     if (isLfe != null && c < isLfe.Length && isLfe[c]) {
                                         continue;
                                     }
+                                    if (offlineUseStrictCenter && (c >= isStrictCenter.Length || !isStrictCenter[c])) {
+                                        continue;
+                                    }
                                     sumRe += cSpecs[c][k].Real;
                                     sumIm += cSpecs[c][k].Imaginary;
                                     active++;
                                 }
                                 float invA = active > 0 ? (1f / active) : 1f;
-                                vRefL = new Complex(sumRe * invA, sumIm * invA);
-                                vRefR = vRefL;
+                                vM = new Complex(sumRe * invA, sumIm * invA);
+                                float vvM = vM.Real * vM.Real + vM.Imaginary * vM.Imaginary;
+                                cCovVV[k] += alpha * (vvM - cCovVV[k]);
+                                cCovVVR[k] = 0f;
+                                cCovVSo[k] = 0f;
                             }
-
-                            float vvL = vRefL.Real * vRefL.Real + vRefL.Imaginary * vRefL.Imaginary;
-                            cCovVV[k] += alpha * (vvL - cCovVV[k]);
-                            float vvR = vRefR.Real * vRefR.Real + vRefR.Imaginary * vRefR.Imaginary;
-                            cCovVVR[k] += alpha * (vvR - cCovVVR[k]);
 
                             float leadPurity = 1f;
                             if (hasBacking) {
                                 float bb = backSpec[k].Real * backSpec[k].Real + backSpec[k].Imaginary * backSpec[k].Imaginary;
                                 cCovBB[k] += alpha * (bb - cCovBB[k]);
-                                float vMean = 0.5f * (cCovVV[k] + cCovVVR[k]);
-                                leadPurity = vMean / (vMean + cCovBB[k] + Epsilon);
+                                float vTotal = cCovVV[k] + cCovVVR[k];
+                                leadPurity = vTotal / (vTotal + cCovBB[k] + Epsilon);
                             }
 
                             float offlineBandW = hasLead ? 1f : offlineBandWeight[k];
+                            float binStrength = attenStrength * leadPurity * offlineBandW;
 
                             for (int c = 0; c < chCount; c++) {
                                 if (isLfe != null && c < isLfe.Length && isLfe[c]) {
                                     continue;
                                 }
-                                bool useRightRef = hasLeadRight && chCount == 2 && c == 1;
-                                Complex vRef = useRightRef ? vRefR : vRefL;
-                                float vvSmoothed = useRightRef ? cCovVVR[k] : cCovVV[k];
-
                                 Complex x = cSpecs[c][k];
                                 float cc = x.Real * x.Real + x.Imaginary * x.Imaginary;
-                                float cvRe = x.Real * vRef.Real + x.Imaginary * vRef.Imaginary;
-                                float cvIm = x.Imaginary * vRef.Real - x.Real * vRef.Imaginary;
+                                float cvRe = x.Real * vM.Real + x.Imaginary * vM.Imaginary;
+                                float cvIm = x.Imaginary * vM.Real - x.Real * vM.Imaginary;
 
                                 cCovCC[c][k] += alpha * (cc - cCovCC[c][k]);
                                 cCovCVRe[c][k] += alpha * (cvRe - cCovCVRe[c][k]);
                                 cCovCVIm[c][k] += alpha * (cvIm - cCovCVIm[c][k]);
 
-                                Complex y = ApplyMmseCoherentSubtraction(
+                                Complex y = ApplyTwoRefSubspaceSubtraction(
                                     x,
-                                    vRef,
+                                    vM,
+                                    vSo,
+                                    hasOrthSide,
                                     cc,
                                     cCovCC[c][k],
-                                    vvSmoothed,
+                                    cCovVV[k],
                                     cCovCVRe[c][k],
                                     cCovCVIm[c][k],
-                                    attenStrength * leadPurity * offlineBandW,
+                                    cCovVSo[k],
+                                    ref cCovResCC[c][k],
+                                    ref cCovCSoRe[c][k],
+                                    ref cCovCSoIm[c][k],
+                                    alpha,
+                                    binStrength,
                                     isIsolatedNeuralLead: hasLead);
 
                                 cSpecs[c][k] = y;
@@ -589,6 +700,7 @@ namespace Cavern.Neural {
             int chCount,
             bool[] isLfe,
             bool[] isCenterOrFront,
+            bool[] isStrictCenter,
             bool hasNeuralLead,
             bool hasNeuralLeadRight,
             bool hasNeuralBacking,
@@ -641,6 +753,7 @@ namespace Cavern.Neural {
                     chCount,
                     isLfe,
                     isCenterOrFront,
+                    isStrictCenter,
                     hasNeuralLead,
                     hasNeuralLeadRight,
                     hasNeuralBacking,
@@ -709,9 +822,9 @@ namespace Cavern.Neural {
 
                 float centerRatio = covMid[k] / (covMid[k] + covSide[k] + Epsilon);
                 float bandW = vocalBandWeight[k];
-                // Preserve wide-panned harmonies when PreserveBackingVocals is enabled, while allowing full removal
-                // whenever center vocal energy is substantial (even when mixed with equal-energy stereo instruments).
-                float panSelect = preserveBackingVocals ? SmoothStep(0.10f, 0.38f, centerRatio) : 1f;
+                // Hard-panned L/R instruments have centerRatio == 0.50; gating in [0.52; 0.80] keeps hard-panned
+                // guitars/synths at 0.00 dB with zero opposite-ear bleed while cutting centered vocals deeply.
+                float panSelect = preserveBackingVocals ? SmoothStep(0.52f, 0.80f, centerRatio) : 1f;
 
                 vocalEnergySum += covMid[k] * bandW * panSelect;
                 totalEnergySum += (xL.Real * xL.Real + xL.Imaginary * xL.Imaginary) +
@@ -736,14 +849,15 @@ namespace Cavern.Neural {
         }
 
         /// <summary>
-        /// MMSE Complex Coherent Projection for (a) isolated neural vocal stems (stereo or multichannel 1..32ch)
-        /// and (b) blind multichannel / Headphone Virtualizer buses (where front-center sum acts as coherent reference
-        /// and Side/Surround/Height instruments stay untouched because their cross-covariance with the center reference is ~0).
+        /// 2-Reference Orthogonalized Stereo Subspace MMSE Complex Coherent Projection for isolated neural vocal stems
+        /// (mono or stereo L/R across all 1..32 spatial channels) and discrete-Center / Virtualized-Stereo-Pair
+        /// blind multichannel buses.
         /// </summary>
         void ExecuteCoherentProjectionHop(
             int chCount,
             bool[] isLfe,
             bool[] isCenterOrFront,
+            bool[] isStrictCenter,
             bool hasNeuralLead,
             bool hasNeuralLeadRight,
             bool hasNeuralBacking,
@@ -755,9 +869,57 @@ namespace Cavern.Neural {
             totalEnergySum = 0.0;
 
             float transientProtect = 0f;
+            bool useDiscreteStrictCenter = false;
+            bool useVirtualizedFrontPairMidSide = false;
+            int frontPairLeftIdx = -1;
+            int frontPairRightIdx = -1;
+
             if (!useIsolatedNeuralLead) {
+                // Classify multichannel blind bus: discrete Atmos FrontCenter vs Virtualized Stereo FLAC (silent FC, active FL/FR)
+                if (!hasNeuralLead && isStrictCenter != null) {
+                    double hopStrictE = 0.0;
+                    double hopFrontPairE = 0.0;
+                    for (int c = 0; c < chCount; c++) {
+                        if (isLfe != null && c < isLfe.Length && isLfe[c]) {
+                            continue;
+                        }
+                        bool isStrict = c < isStrictCenter.Length && isStrictCenter[c];
+                        bool isFront = isCenterOrFront == null || c >= isCenterOrFront.Length || isCenterOrFront[c];
+                        if (!isStrict && isFront) {
+                            if (frontPairLeftIdx < 0) {
+                                frontPairLeftIdx = c;
+                            } else if (frontPairRightIdx < 0) {
+                                frontPairRightIdx = c;
+                            }
+                        }
+                        if (!isStrict && !isFront) {
+                            continue;
+                        }
+                        for (int k = transientBinStart; k <= transientBinEnd; k++) {
+                            float p = chSpec[c][k].Real * chSpec[c][k].Real + chSpec[c][k].Imaginary * chSpec[c][k].Imaginary;
+                            if (isStrict) {
+                                hopStrictE += p;
+                            } else {
+                                hopFrontPairE += p;
+                            }
+                        }
+                    }
+                    smoothedStrictCenterEnergy += 0.25f * ((float)hopStrictE - smoothedStrictCenterEnergy);
+                    smoothedFrontPairEnergy += 0.25f * ((float)hopFrontPairE - smoothedFrontPairEnergy);
+
+                    if (smoothedStrictCenterEnergy > 1e-10f && smoothedStrictCenterEnergy >= 0.08f * smoothedFrontPairEnergy) {
+                        useDiscreteStrictCenter = true;
+                    } else if (frontPairLeftIdx >= 0 && frontPairRightIdx >= 0 && smoothedFrontPairEnergy > 1e-10f) {
+                        useVirtualizedFrontPairMidSide = true;
+                    }
+                }
+
                 for (int k = 0; k < SpectrumBins; k++) {
-                    Complex vRef = ComputeBlindCenterReference(k, chCount, isLfe, isCenterOrFront, hasNeuralLead);
+                    Complex vRef = useVirtualizedFrontPairMidSide
+                        ? new Complex(
+                            0.5f * (chSpec[frontPairLeftIdx][k].Real + chSpec[frontPairRightIdx][k].Real),
+                            0.5f * (chSpec[frontPairLeftIdx][k].Imaginary + chSpec[frontPairRightIdx][k].Imaginary))
+                        : ComputeBlindCenterReference(k, chCount, isLfe, isCenterOrFront, isStrictCenter, useDiscreteStrictCenter, hasNeuralLead);
                     currRefMag[k] = MathF.Sqrt(vRef.Real * vRef.Real + vRef.Imaginary * vRef.Imaginary);
                 }
                 transientProtect = UpdatePercussiveTransientGuard();
@@ -765,64 +927,146 @@ namespace Cavern.Neural {
 
             for (int k = 0; k < SpectrumBins; k++) {
                 float a = smoothAlpha[k];
-                Complex vRefL;
-                Complex vRefR;
+                Complex vM;
+                Complex vSo = default(Complex);
+                bool hasOrthSide = false;
                 float bandW;
 
                 if (useIsolatedNeuralLead) {
-                    vRefL = refLeadSpec[k];
-                    vRefR = hasNeuralLeadRight ? refLeadSpecR[k] : vRefL;
+                    if (hasNeuralLeadRight) {
+                        Complex lSpec = refLeadSpec[k];
+                        Complex rSpec = refLeadSpecR[k];
+                        vM = new Complex(0.5f * (lSpec.Real + rSpec.Real), 0.5f * (lSpec.Imaginary + rSpec.Imaginary));
+                        Complex vS = new Complex(0.5f * (lSpec.Real - rSpec.Real), 0.5f * (lSpec.Imaginary - rSpec.Imaginary));
+
+                        float vvM = vM.Real * vM.Real + vM.Imaginary * vM.Imaginary;
+                        float vvS = vS.Real * vS.Real + vS.Imaginary * vS.Imaginary;
+                        covVV[k] += a * (vvM - covVV[k]);
+                        covVVR[k] += a * (vvS - covVVR[k]);
+
+                        float smRe = vS.Real * vM.Real + vS.Imaginary * vM.Imaginary;
+                        float smIm = vS.Imaginary * vM.Real - vS.Real * vM.Imaginary;
+                        covSMRe[k] += a * (smRe - covSMRe[k]);
+                        covSMIm[k] += a * (smIm - covSMIm[k]);
+
+                        float invMM = 1f / (covVV[k] + Epsilon);
+                        float gRe = covSMRe[k] * invMM;
+                        float gIm = covSMIm[k] * invMM;
+                        float gSq = gRe * gRe + gIm * gIm;
+                        if (gSq > 16f) {
+                            float gs = 4f / MathF.Sqrt(gSq);
+                            gRe *= gs;
+                            gIm *= gs;
+                        }
+                        vSo = new Complex(
+                            vS.Real - (gRe * vM.Real - gIm * vM.Imaginary),
+                            vS.Imaginary - (gRe * vM.Imaginary + gIm * vM.Real));
+                        float vSoPow = vSo.Real * vSo.Real + vSo.Imaginary * vSo.Imaginary;
+                        covVSo[k] += a * (vSoPow - covVSo[k]);
+                        hasOrthSide = covVSo[k] > 1e-10f;
+                    } else {
+                        vM = refLeadSpec[k];
+                        float vvM = vM.Real * vM.Real + vM.Imaginary * vM.Imaginary;
+                        covVV[k] += a * (vvM - covVV[k]);
+                        covVVR[k] = 0f;
+                        covVSo[k] = 0f;
+                    }
                     bandW = 1f;
                 } else {
-                    vRefL = ComputeBlindCenterReference(k, chCount, isLfe, isCenterOrFront, hasNeuralLead);
-                    vRefR = vRefL;
+                    vM = useVirtualizedFrontPairMidSide
+                        ? new Complex(
+                            0.5f * (chSpec[frontPairLeftIdx][k].Real + chSpec[frontPairRightIdx][k].Real),
+                            0.5f * (chSpec[frontPairLeftIdx][k].Imaginary + chSpec[frontPairRightIdx][k].Imaginary))
+                        : ComputeBlindCenterReference(k, chCount, isLfe, isCenterOrFront, isStrictCenter, useDiscreteStrictCenter, hasNeuralLead);
+                    float vvM = vM.Real * vM.Real + vM.Imaginary * vM.Imaginary;
+                    covVV[k] += a * (vvM - covVV[k]);
+                    covVVR[k] = 0f;
+                    covVSo[k] = 0f;
                     bandW = vocalBandWeight[k];
                 }
-
-                float vvL = vRefL.Real * vRefL.Real + vRefL.Imaginary * vRefL.Imaginary;
-                covVV[k] += a * (vvL - covVV[k]);
-                float vvR = vRefR.Real * vRefR.Real + vRefR.Imaginary * vRefR.Imaginary;
-                covVVR[k] += a * (vvR - covVVR[k]);
 
                 float leadPurity = 1f;
                 if (preserveBackingVocals && hasNeuralBacking) {
                     float bb = refBackingSpec[k].Real * refBackingSpec[k].Real + refBackingSpec[k].Imaginary * refBackingSpec[k].Imaginary;
                     covBB[k] += a * (bb - covBB[k]);
-                    float vMean = 0.5f * (covVV[k] + covVVR[k]);
-                    leadPurity = vMean / (vMean + covBB[k] + Epsilon);
+                    float vTotal = covVV[k] + covVVR[k];
+                    leadPurity = vTotal / (vTotal + covBB[k] + Epsilon);
                 }
 
                 float blindScale = useIsolatedNeuralLead ? 1f : (1f - transientProtect) * (1f - BlindResidualFloor);
                 float binStrength = attenStrength * bandW * leadPurity * blindScale;
-                vocalEnergySum += 0.5f * (covVV[k] + covVVR[k]) * bandW * leadPurity;
+                vocalEnergySum += (covVV[k] + covVVR[k]) * bandW * leadPurity;
+
+                // Virtualized Stereo FLAC blind parity: apply exact Complex Mid/Side + panSelect to the active front L/R pair
+                // so Virtualizer 7.1.4 blind karaoke matches Direct 2.0 stereo blind karaoke (0.00 dB Side instrument loss!).
+                if (useVirtualizedFrontPairMidSide) {
+                    Complex xL = chSpec[frontPairLeftIdx][k];
+                    Complex xR = chSpec[frontPairRightIdx][k];
+                    float midRe = 0.5f * (xL.Real + xR.Real);
+                    float midIm = 0.5f * (xL.Imaginary + xR.Imaginary);
+                    float sideRe = 0.5f * (xL.Real - xR.Real);
+                    float sideIm = 0.5f * (xL.Imaginary - xR.Imaginary);
+
+                    float midPow = midRe * midRe + midIm * midIm;
+                    float sidePow = sideRe * sideRe + sideIm * sideIm;
+                    float fAlpha = fastAlpha[k];
+                    covMid[k] += fAlpha * (midPow - covMid[k]);
+                    covSide[k] += fAlpha * (sidePow - covSide[k]);
+
+                    float centerRatio = covMid[k] / (covMid[k] + covSide[k] + Epsilon);
+                    float panSelect = preserveBackingVocals ? SmoothStep(0.52f, 0.80f, centerRatio) : 1f;
+                    float effectiveCut = attenStrength * bandW * panSelect * (1f - transientProtect) * (1f - BlindResidualFloor);
+                    float midGain = 1f - effectiveCut;
+                    if (midGain < 0f) {
+                        midGain = 0f;
+                    }
+
+                    Complex yL = new Complex(midRe * midGain + sideRe, midIm * midGain + sideIm);
+                    Complex yR = new Complex(midRe * midGain - sideRe, midIm * midGain - sideIm);
+                    totalEnergySum += (xL.Real * xL.Real + xL.Imaginary * xL.Imaginary) +
+                                      (xR.Real * xR.Real + xR.Imaginary * xR.Imaginary);
+                    chSpec[frontPairLeftIdx][k] = yL;
+                    chSpec[frontPairRightIdx][k] = yR;
+                    if (k > 0 && k < SpectrumBins - 1) {
+                        chSpec[frontPairLeftIdx][FftSize - k] = new Complex(yL.Real, -yL.Imaginary);
+                        chSpec[frontPairRightIdx][FftSize - k] = new Complex(yR.Real, -yR.Imaginary);
+                    }
+                }
 
                 for (int c = 0; c < chCount; c++) {
                     if (isLfe != null && c < isLfe.Length && isLfe[c]) {
                         continue;
                     }
-                    bool useRightRef = useIsolatedNeuralLead && hasNeuralLeadRight && chCount == 2 && c == 1;
-                    Complex vRef = useRightRef ? vRefR : vRefL;
-                    float vvSmoothed = useRightRef ? covVVR[k] : covVV[k];
+                    if (useVirtualizedFrontPairMidSide && (c == frontPairLeftIdx || c == frontPairRightIdx)) {
+                        continue;
+                    }
 
                     Complex x = chSpec[c][k];
                     float cc = x.Real * x.Real + x.Imaginary * x.Imaginary;
                     totalEnergySum += cc;
 
-                    float cvRe = x.Real * vRef.Real + x.Imaginary * vRef.Imaginary;
-                    float cvIm = x.Imaginary * vRef.Real - x.Real * vRef.Imaginary;
+                    float cvRe = x.Real * vM.Real + x.Imaginary * vM.Imaginary;
+                    float cvIm = x.Imaginary * vM.Real - x.Real * vM.Imaginary;
 
                     covCC[c][k] += a * (cc - covCC[c][k]);
                     covCVRe[c][k] += a * (cvRe - covCVRe[c][k]);
                     covCVIm[c][k] += a * (cvIm - covCVIm[c][k]);
 
-                    Complex y = ApplyMmseCoherentSubtraction(
+                    Complex y = ApplyTwoRefSubspaceSubtraction(
                         x,
-                        vRef,
+                        vM,
+                        vSo,
+                        hasOrthSide,
                         cc,
                         covCC[c][k],
-                        vvSmoothed,
+                        covVV[k],
                         covCVRe[c][k],
                         covCVIm[c][k],
+                        covVSo[k],
+                        ref covResCC[c][k],
+                        ref covCSoRe[c][k],
+                        ref covCSoIm[c][k],
+                        a,
                         binStrength,
                         useIsolatedNeuralLead);
 
@@ -839,6 +1083,8 @@ namespace Cavern.Neural {
             int chCount,
             bool[] isLfe,
             bool[] isCenterOrFront,
+            bool[] isStrictCenter,
+            bool useDiscreteStrictCenter,
             bool hasTwinRef) {
             if (hasTwinRef) {
                 return refLeadSpec[k];
@@ -846,6 +1092,22 @@ namespace Cavern.Neural {
             float sumRe = 0f;
             float sumIm = 0f;
             int refCount = 0;
+            if (useDiscreteStrictCenter && isStrictCenter != null) {
+                for (int c = 0; c < chCount; c++) {
+                    if (isLfe != null && c < isLfe.Length && isLfe[c]) {
+                        continue;
+                    }
+                    if (c < isStrictCenter.Length && isStrictCenter[c]) {
+                        sumRe += chSpec[c][k].Real;
+                        sumIm += chSpec[c][k].Imaginary;
+                        refCount++;
+                    }
+                }
+                if (refCount > 0) {
+                    float invS = 1f / refCount;
+                    return new Complex(sumRe * invS, sumIm * invS);
+                }
+            }
             for (int c = 0; c < chCount; c++) {
                 if (isLfe != null && c < isLfe.Length && isLfe[c]) {
                     continue;
@@ -919,6 +1181,79 @@ namespace Cavern.Neural {
                 smoothedTransientProtect *= 0.62f;
             }
             return smoothedTransientProtect;
+        }
+
+        /// <summary>
+        /// 2-Reference Orthogonalized Subspace MMSE Complex Coherent Subtraction:
+        /// projects <paramref name="x"/> onto primary basis <paramref name="vM"/> (Mid/Mono vocal) and, when stereo width
+        /// exists, projects the residual onto the Gram-Schmidt orthogonalized basis <paramref name="vSo"/>, guaranteeing
+        /// identical cancellation of both mono and stereo/double-tracked vocals across 2ch, 7.1.4 virtualizer, and Atmos
+        /// while preserving overlapping instruments (<c>|Y| &lt;= |X|</c>).
+        /// </summary>
+        static Complex ApplyTwoRefSubspaceSubtraction(
+            Complex x,
+            Complex vM,
+            Complex vSo,
+            bool hasOrthSide,
+            float cc,
+            float covCC,
+            float covVM,
+            float covCVRe,
+            float covCVIm,
+            float covVSo,
+            ref float covResCC,
+            ref float covCSoRe,
+            ref float covCSoIm,
+            float alpha,
+            float strength,
+            bool isIsolatedNeuralLead) {
+            if (strength <= 1e-5f || cc <= Epsilon) {
+                return x;
+            }
+
+            // Stage 1: coherent projection along primary Mid/Mono vocal basis V_M
+            Complex y1 = ApplyMmseCoherentSubtraction(
+                x,
+                vM,
+                cc,
+                covCC,
+                covVM,
+                covCVRe,
+                covCVIm,
+                strength,
+                isIsolatedNeuralLead);
+
+            if (!hasOrthSide || !isIsolatedNeuralLead || covVSo <= 1e-10f) {
+                return y1;
+            }
+
+            // Stage 2: coherent projection of residual y1 along Gram-Schmidt orthogonalized stereo Side basis V_So
+            float resPow = y1.Real * y1.Real + y1.Imaginary * y1.Imaginary;
+            float csoRe = y1.Real * vSo.Real + y1.Imaginary * vSo.Imaginary;
+            float csoIm = y1.Imaginary * vSo.Real - y1.Real * vSo.Imaginary;
+
+            covResCC += alpha * (resPow - covResCC);
+            covCSoRe += alpha * (csoRe - covCSoRe);
+            covCSoIm += alpha * (csoIm - covCSoIm);
+
+            Complex y2 = ApplyMmseCoherentSubtraction(
+                y1,
+                vSo,
+                resPow,
+                covResCC,
+                covVSo,
+                covCSoRe,
+                covCSoIm,
+                strength,
+                isIsolatedNeuralLead: true);
+
+            // Final strict energy non-amplification guard relative to original |X|
+            float y2Pow = y2.Real * y2.Real + y2.Imaginary * y2.Imaginary;
+            if (y2Pow > cc) {
+                float normScale = MathF.Sqrt(cc / (y2Pow + Epsilon));
+                y2 = new Complex(y2.Real * normScale, y2.Imaginary * normScale);
+            }
+            return y2;
         }
 
         /// <summary>

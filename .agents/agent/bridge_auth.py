@@ -35,7 +35,8 @@ import local_capabilities as lcap
 import omni_protocol as proto
 
 PUBLIC_PROFILE_PATH = REPO_ROOT / ".agents" / "bridge_profile.json"
-LOCAL_VAULT_PATH = REPO_ROOT / ".agents" / ".bridge_vault.json"
+LEGACY_WORKSPACE_VAULT_PATH = REPO_ROOT / ".agents" / ".bridge_vault.json"
+LOCAL_VAULT_PATH = Path("/tmp/.cavern_bridge_vault.json")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -96,6 +97,8 @@ def save_public_profile(
 
 def load_vault(vault_path: Path = LOCAL_VAULT_PATH) -> dict[str, Any]:
     data = _read_json_safe(vault_path)
+    if not data and Path(vault_path).resolve() == LOCAL_VAULT_PATH.resolve():
+        data = _read_json_safe(LEGACY_WORKSPACE_VAULT_PATH)
     if not data:
         return {}
     now = time.time()
@@ -148,14 +151,27 @@ def save_vault(
         os.chmod(vault_path, 0o600)
     except OSError:
         pass
+    # Clean legacy workspace vault once migrated to /tmp so Git/AI Studio stays 100% clean
+    if Path(vault_path).resolve() == LOCAL_VAULT_PATH.resolve() and LEGACY_WORKSPACE_VAULT_PATH.is_file():
+        try:
+            LEGACY_WORKSPACE_VAULT_PATH.unlink()
+        except OSError:
+            pass
     return data
 
 
 def clear_vault(vault_path: Path = LOCAL_VAULT_PATH) -> bool:
+    removed = False
     if vault_path.is_file():
         vault_path.unlink()
-        return True
-    return False
+        removed = True
+    if Path(vault_path).resolve() == LOCAL_VAULT_PATH.resolve() and LEGACY_WORKSPACE_VAULT_PATH.is_file():
+        try:
+            LEGACY_WORKSPACE_VAULT_PATH.unlink()
+            removed = True
+        except OSError:
+            pass
+    return removed
 
 
 def resolve_connection(
