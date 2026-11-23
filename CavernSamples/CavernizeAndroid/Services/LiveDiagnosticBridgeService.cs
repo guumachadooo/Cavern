@@ -1033,6 +1033,65 @@ public static class LiveDiagnosticBridgeService {
         NotifyStateChanged();
     }
 
+    /// <summary>
+    /// Executes a single Live Bridge command dispatched locally over signature-protected Android IPC
+    /// from the same-signed OmniAgent Companion app (zero duplicate cloud polling or extra biometric prompts).
+    /// </summary>
+    public static async Task<(bool ok, string body, long elapsedMs)> ExecuteLocalIpcCommandAsync(
+        Context context,
+        AppSettingsStore store,
+        int maxTier,
+        string rawCmd,
+        string argsJson,
+        CancellationToken ct) {
+        const int MaxIpcBinderChars = 220_000;
+        string cmd = (rawCmd ?? "").Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(cmd)) {
+            return (false, "Empty IPC command.", 0);
+        }
+        Stopwatch sw = Stopwatch.StartNew();
+        JsonDocument argsDoc = null;
+        try {
+            JsonElement argsEl = default;
+            if (!string.IsNullOrWhiteSpace(argsJson)) {
+                try {
+                    argsDoc = JsonDocument.Parse(argsJson);
+                    if (argsDoc.RootElement.ValueKind == JsonValueKind.Object) {
+                        argsEl = argsDoc.RootElement;
+                    }
+                } catch {
+                    argsEl = default;
+                }
+            }
+            int clampedTier = Math.Clamp(maxTier, 0, 2);
+            (bool ok, string output) = await ExecuteSingleCommandAsync(
+                context,
+                store,
+                clampedTier,
+                cmd,
+                argsEl,
+                legacyLines: 200,
+                legacyErrorsOnly: false,
+                ct,
+                depth: 0).ConfigureAwait(false);
+            sw.Stop();
+            string safeBody = Truncate(AppLogger.SanitizeSensitiveText(output ?? ""), MaxIpcBinderChars);
+            lock (stateLock) {
+                commandsHandled++;
+                lastEventText = $"IPC '{cmd}' ({sw.ElapsedMilliseconds}ms)";
+            }
+            AppLogger.Info("IPC", $"OmniAgent local IPC handled '{cmd}' (T{clampedTier}, ok={ok}, {sw.ElapsedMilliseconds}ms)");
+            NotifyStateChanged();
+            return (ok, safeBody, sw.ElapsedMilliseconds);
+        } catch (Exception ex) {
+            sw.Stop();
+            AppLogger.Warn("IPC", $"OmniAgent local IPC '{cmd}' failed: {ex.Message}");
+            return (false, $"{ex.GetType().Name}: {ex.Message}", sw.ElapsedMilliseconds);
+        } finally {
+            argsDoc?.Dispose();
+        }
+    }
+
     static async Task<(bool ok, string output)> ExecuteSingleCommandAsync(
         Context context,
         AppSettingsStore store,

@@ -49,9 +49,12 @@ public partial class MainActivity {
     Switch autoCheckUpdatesSwitch;
 
     // Diagnostics & Log views
-    TextView logPathInfoText, cloudLogStatusText, selfCheckStatusText, liveBridgeStatusText;
-    Button cloudLogUploadBtn, selfCheckQuickBtn, selfCheckFullBtn, selfCheckUltraBtn, liveBridgeToggleBtn, liveBridgeCopyBtn;
-    Switch liveBridgeStandbySwitch;
+    TextView logPathInfoText, selfCheckStatusText, omniBridgeStatusText;
+    TextView cloudLogStatusText = null, liveBridgeStatusText = null;
+    Button selfCheckQuickBtn, selfCheckFullBtn, selfCheckUltraBtn, omniBridgeOpenBtn;
+    Button cloudLogUploadBtn = null, liveBridgeToggleBtn = null, liveBridgeCopyBtn = null;
+    Switch omniBridgeIpcSwitch;
+    Switch liveBridgeStandbySwitch = null;
     bool isCloudLogUploading, isSelfCheckRunning, isLiveBridgeBusy;
     LinearLayout advContentContainer;
     OneUiIconView advChevron;
@@ -1642,57 +1645,32 @@ public partial class MainActivity {
         AddSwitchRow(logCard, S["SelfCheckAutoAfterUpdateSwitch"], store.AutoSelfCheckAfterUpdate, v => store.AutoSelfCheckAfterUpdate = v);
 
         AddDivider(logCard);
-        TextView cloudTitle = Label(S["CloudLogSectionTitle"], 13f, ColText);
-        cloudTitle.SetTypeface(null, TypefaceStyle.Bold);
-        logCard.AddView(cloudTitle);
+        LinearLayout omniHeader = HRow();
+        TextView omniTitle = Label(S["OmniBridgeSectionTitle"], 13f, ColText);
+        omniTitle.SetTypeface(null, TypefaceStyle.Bold);
+        omniHeader.AddView(omniTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        Button omniHelpBtn = PillButton("?", () => ShowModalGuidedHelp(S["OmniBridgeHelpTitle"], S["OmniBridgeHelpBody"], OneUiIconType.Logs));
+        omniHeader.AddView(omniHelpBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        logCard.AddView(omniHeader);
 
-        cloudLogStatusText = Label("", 11.5f, OneUiTheme.TextSub);
-        cloudLogStatusText.SetPadding(0, Dp(2), 0, Dp(8));
-        logCard.AddView(cloudLogStatusText);
+        omniBridgeStatusText = Label("", 11.5f, OneUiTheme.TextSub);
+        omniBridgeStatusText.SetPadding(0, Dp(2), 0, Dp(8));
+        logCard.AddView(omniBridgeStatusText);
 
-        LinearLayout cloudBtns = HRow();
-        cloudLogUploadBtn = PillButton(S["CloudLogUploadBtn"], () => _ = UploadDiagnosticLogsToCloudAsync(), active: true);
-        Button cloudLogConfigBtn = PillButton(S["CloudLogConfigureBtn"], ShowCloudLogSyncModal);
-        cloudBtns.AddView(cloudLogUploadBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(6) });
-        cloudBtns.AddView(cloudLogConfigBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        logCard.AddView(cloudBtns);
-
-        AddDivider(logCard);
-        LinearLayout bridgeHeader = HRow();
-        TextView bridgeTitle = Label(S["LiveBridgeSectionTitle"], 13f, ColText);
-        bridgeTitle.SetTypeface(null, TypefaceStyle.Bold);
-        bridgeHeader.AddView(bridgeTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        Button bridgeHelpBtn = PillButton("?", () => ShowModalGuidedHelp(S["LiveBridgeHelpTitle"], S["LiveBridgeHelpBody"], OneUiIconType.Logs));
-        bridgeHeader.AddView(bridgeHelpBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
-        logCard.AddView(bridgeHeader);
-
-        liveBridgeStatusText = Label("", 11.5f, OneUiTheme.TextSub);
-        liveBridgeStatusText.SetPadding(0, Dp(2), 0, Dp(8));
-        logCard.AddView(liveBridgeStatusText);
-
-        liveBridgeStandbySwitch = AddSwitchRow(logCard, S["LiveBridgeStandbySwitch"], store.LiveBridgeStandbyEnabled, v => {
-            if (v && (!LiveDiagnosticBridgeService.TryNormalizeRelayUrl(store.LiveRelayUrl, out _) || !LiveDiagnosticBridgeService.HasPairedSecret(store))) {
-                Toast.MakeText(this, S["LiveBridgeStandbyNeedPairToast"], ToastLength.Long).Show();
-                if (liveBridgeStandbySwitch != null) liveBridgeStandbySwitch.Checked = false;
-                ShowLiveBridgeConfigModal();
-                return;
-            }
-            store.LiveBridgeStandbyEnabled = v;
-            LiveBridgeWakeService.SyncStandbyState(this, store);
+        omniBridgeIpcSwitch = AddSwitchRow(logCard, S["OmniBridgeIpcSwitch"], store.OmniAgentIpcEnabled, v => {
+            store.OmniAgentIpcEnabled = v;
             RefreshLogSummaryLabel();
         });
 
-        LinearLayout bridgeBtns = HRow();
-        liveBridgeToggleBtn = PillButton(S["LiveBridgeStartBtn"], () => _ = ToggleLiveBridgeSessionAsync(), active: true);
-        liveBridgeCopyBtn = PillButton(S["LiveBridgeCopyCodeBtn"], CopyActiveLiveBridgeCode);
-        Button bridgeCfgBtn = PillButton(S["LiveBridgeConfigBtn"], ShowLiveBridgeConfigModal);
-        bridgeBtns.AddView(liveBridgeToggleBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.2f) { RightMargin = Dp(6) });
-        bridgeBtns.AddView(liveBridgeCopyBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.9f) { RightMargin = Dp(6) });
-        bridgeBtns.AddView(bridgeCfgBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.95f));
-        logCard.AddView(bridgeBtns);
+        LinearLayout omniBtns = HRow();
+        omniBridgeOpenBtn = PillButton(S["OmniBridgeOpenBtn"], OpenOmniAgentOrDownload, active: true);
+        Button omniAdvancedBtn = PillButton(S["OmniBridgeAdvancedBtn"], ShowCloudLogSyncModal);
+        omniBtns.AddView(omniBridgeOpenBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.25f) { RightMargin = Dp(6) });
+        omniBtns.AddView(omniAdvancedBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        logCard.AddView(omniBtns);
 
         RefreshLogSummaryLabel();
-        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear cloud github upload sync crash checkup selfcheck ultra audit ui test pairwise bridge live cloudflare relay hub telemetry biometric fingerprint wake standby");
+        RegisterSettingsCard(logCard, categoryIndex: 5, isProOnly: false, "diagnostics logs error debug export clear cloud github upload sync crash checkup selfcheck ultra audit ui test pairwise bridge live cloudflare relay hub telemetry biometric fingerprint wake standby omniagent ipc");
 
         // Language, About & App Version Updater
         LinearLayout helpCard = Card(S["AboutVerSection"], OneUiIconType.Info, OneUiTheme.IconSystemInfo);
@@ -2229,6 +2207,40 @@ public partial class MainActivity {
             if (liveBridgeCopyBtn != null) {
                 liveBridgeCopyBtn.Visibility = active ? ViewStates.Visible : ViewStates.Gone;
             }
+        }
+        if (omniBridgeStatusText != null && store != null) {
+            bool installed = OmniBridgeIpcReceiver.IsOmniAgentInstalledWithMatchingSignature(this);
+            if (installed && store.OmniAgentIpcEnabled) {
+                omniBridgeStatusText.Text = string.Format(S["OmniBridgeStatusConnectedFmt"], LiveDiagnosticBridgeService.CommandsHandled);
+                omniBridgeStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
+            } else if (installed) {
+                omniBridgeStatusText.Text = S["OmniBridgeStatusPaused"];
+                omniBridgeStatusText.SetTextColor(OneUiTheme.FunctionalAmber);
+            } else {
+                omniBridgeStatusText.Text = S["OmniBridgeStatusNotInstalled"];
+                omniBridgeStatusText.SetTextColor(OneUiTheme.TextSub);
+            }
+            if (omniBridgeIpcSwitch != null && omniBridgeIpcSwitch.Checked != store.OmniAgentIpcEnabled) {
+                omniBridgeIpcSwitch.Checked = store.OmniAgentIpcEnabled;
+            }
+            if (omniBridgeOpenBtn != null) {
+                omniBridgeOpenBtn.Text = installed ? S["OmniBridgeOpenBtn"] : S["OmniBridgeInstallBtn"];
+            }
+        }
+    }
+
+    void OpenOmniAgentOrDownload() {
+        try {
+            Intent launch = PackageManager?.GetLaunchIntentForPackage(OmniBridgeIpcReceiver.OmniAgentPackage);
+            if (launch != null) {
+                launch.AddFlags(ActivityFlags.NewTask);
+                StartActivity(launch);
+                return;
+            }
+            Intent browser = new(Intent.ActionView, Android.Net.Uri.Parse("https://github.com/guumachadooo/Cavern/releases/tag/omniagent-latest"));
+            StartActivity(browser);
+        } catch (Exception ex) {
+            Toast.MakeText(this, ex.Message, ToastLength.Short).Show();
         }
     }
 

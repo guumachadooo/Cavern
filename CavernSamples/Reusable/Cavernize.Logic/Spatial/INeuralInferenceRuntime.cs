@@ -77,8 +77,8 @@ public interface INeuralInferenceRuntime : IDisposable {
     /// <summary>Probes and returns current native runtime availability, version, and active EP capabilities.</summary>
     NeuralRuntimeInfo GetRuntimeInfo();
 
-    /// <summary>Creates a new ONNX inference session for <paramref name="modelPath"/> using <paramref name="preferredProvider"/>.</summary>
-    INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 4);
+    /// <summary>Creates a new ONNX inference session for <paramref name="modelPath"/> using <paramref name="preferredProvider"/> (<paramref name="intraOpThreads"/> = 0 auto-detects performance cores).</summary>
+    INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 0);
 
     /// <summary>Resolves the local file path of an installed catalog or custom model, or null if not yet installed.</summary>
     string ResolveInstalledModelPath(string modelId);
@@ -128,7 +128,8 @@ public static class NeuralAudioOfflinePipeline {
 
         // Always apply residual conservation & Wiener phase_fix ONCE at native sample rate against original mixLeft/mixRight
         // whenever ensembling (>1 model) OR when sample-rate conversion occurred (prevents phase smear across resamplers).
-        int threads = Environment.ProcessorCount >= 8 ? 4 : Math.Clamp(Environment.ProcessorCount / 2, 2, 4);
+        // Pass 0 so NativeOnnxRuntimeBridge auto-detects Prime/Performance ARM64 cluster threads (6 on Snapdragon 8 Elite, 4 on big.LITTLE).
+        const int threads = 0;
         bool anyResampled = false;
 
         for (int m = 0; m < modelCount; m++) {
@@ -846,7 +847,7 @@ public static class NeuralAudioOfflinePipeline {
         MixedRadixFft.ComputeComplexStft(chunkRight, nFft, hop, bins, out float[] rRe, out float[] rIm);
 
         float[] inputData = new float[frames * width];
-        for (int t = 0; t < frames; t++) {
+        Parallel.For(0, frames, t => {
             int rowBase = t * width;
             for (int f = 0; f < bins; f++) {
                 int stftIdx = f * frames + t;
@@ -857,7 +858,7 @@ public static class NeuralAudioOfflinePipeline {
                 inputData[baseR] = rRe[stftIdx];
                 inputData[baseR + 1] = rIm[stftIdx];
             }
-        }
+        });
 
         NeuralTensorFloat[] outputs = session.RunSingleInput(new NeuralTensorFloat([1L, frames, width], inputData));
         if (outputs == null || outputs.Length == 0 || outputs[0]?.Data == null) {
@@ -875,7 +876,7 @@ public static class NeuralAudioOfflinePipeline {
         float[] leadRRe = new float[bins * frames];
         float[] leadRIm = new float[bins * frames];
 
-        for (int f = 0; f < bins; f++) {
+        Parallel.For(0, bins, f => {
             int ch0Row = (2 * f) * frames;
             int ch1Row = (2 * f + 1) * frames;
             for (int t = 0; t < frames; t++) {
@@ -892,7 +893,7 @@ public static class NeuralAudioOfflinePipeline {
                 leadRRe[stftIdx] = rRe[stftIdx] * m1Re - rIm[stftIdx] * m1Im;
                 leadRIm[stftIdx] = rRe[stftIdx] * m1Im + rIm[stftIdx] * m1Re;
             }
-        }
+        });
 
         float[] leadL = MixedRadixFft.ComputeComplexIstft(leadLRe, leadLIm, frames, nFft, hop, bins, chunkSamples);
         float[] leadR = MixedRadixFft.ComputeComplexIstft(leadRRe, leadRIm, frames, nFft, hop, bins, chunkSamples);

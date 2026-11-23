@@ -236,6 +236,9 @@ def request_biometric_wake(
     return False, {"error": f"Timed out after {wake_timeout}s waiting for biometric approval on device."}
 
 
+EXIT_SESSION_EXPIRED = 4
+
+
 def dispatch_command(
     base_url: str,
     session_token: str,
@@ -258,8 +261,10 @@ def dispatch_command(
         payload["errorsOnly"] = True
 
     code, data = _request_json("POST", f"{base_url}/v1/session/cmd", token=session_token, payload=payload)
+    if code == 404:
+        return False, {"error": "Session expired or closed on device.", "sessionExpired": True, "httpStatus": 404}
     if code != 200 or not data.get("ok"):
-        return False, {"error": f"Failed queueing command (HTTP {code}): {data.get('error', data)}"}
+        return False, {"error": f"Failed queueing command (HTTP {code}): {data.get('error', data)}", "httpStatus": code}
 
     deadline = time.monotonic() + max(5, timeout)
     while time.monotonic() < deadline:
@@ -270,12 +275,12 @@ def dispatch_command(
             token=session_token,
         )
         if r_code == 404:
-            return False, {"error": "Session expired or closed on device."}
+            return False, {"error": "Session expired or closed on device.", "sessionExpired": True, "httpStatus": 404}
         if r_code == 200 and r_data.get("ready"):
             res = r_data.get("result", {})
             return bool(res.get("ok", True)), res
 
-    return False, {"error": f"Device did not respond within {timeout}s."}
+    return False, {"error": f"Device did not respond within {timeout}s.", "timedOut": True}
 
 
 def main(
@@ -283,6 +288,7 @@ def main(
     *,
     env_url_vars: tuple[str, ...] = ("LIVE_BRIDGE_URL", "CAVERN_RELAY_URL"),
     env_secret_vars: tuple[str, ...] = ("LIVE_BRIDGE_PAIR_SECRET", "CAVERN_BRIDGE_PAIR_SECRET"),
+    on_session_acquired: Any = None,
 ) -> int:
     parser = argparse.ArgumentParser(description="Live Device/App Bridge v3 client (ephemeral code + biometric wake + unrestricted dynamic Tier 2 commands).")
     parser.add_argument("--url", default="", help="HTTPS relay Worker URL (or set LIVE_BRIDGE_URL / CAVERN_RELAY_URL)")
@@ -336,8 +342,14 @@ def main(
         if not token:
             print("ERROR: Approved wake response missing sessionCode.", file=sys.stderr)
             return 1
+        ttl_sec = int(unlocked.get("ttlSeconds") or args.duration or 1800)
+        if callable(on_session_acquired):
+            try:
+                on_session_acquired(base_url, token, ttl_sec, unlocked)
+            except Exception:
+                pass
         print(
-            f"[WAKE_APPROVED|tier=T{unlocked.get('tier')}|ttl={unlocked.get('ttlSeconds')}s|device={unlocked.get('device', '?')}]",
+            f"[WAKE_APPROVED|tier=T{unlocked.get('tier')}|ttl={ttl_sec}s|device={unlocked.get('device', '?')}]",
             file=sys.stderr,
         )
         if args.wake_only:
@@ -389,7 +401,7 @@ def main(
     )
     if "error" in res and "body" not in res:
         print(f"ERROR: {res['error']}", file=sys.stderr)
-        return 1
+        return EXIT_SESSION_EXPIRED if res.get("sessionExpired") else 1
 
     print(f"=== LIVE DEVICE RESPONSE [{res.get('cmd', cmd)}] (ok={res.get('ok')}, tier=T{res.get('tier', '?')}, {res.get('elapsedMs', 0)} ms) ===")
     body = res.get("body", "")

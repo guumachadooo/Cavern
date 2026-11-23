@@ -216,7 +216,38 @@ class OmniAgentProtocolTests(unittest.TestCase):
             r2 = bauth.resolve_connection(profile_path=prof_p, vault_path=vault_p)
             self.assertEqual(r2["sessionToken"], "")
 
+    def test_deploy_worker_v6_sqlite_do_multipart_and_worker_name_extract(self) -> None:
+        body, ctype = deploy_worker.build_worker_multipart(
+            b"export class HubCoordinator {} export default { async fetch() { return new Response('ok'); } };",
+            main_module="worker.js",
+            boundary="TESTV6DO",
+            enable_durable_object=True,
+            include_sqlite_migration=True,
+        )
+        self.assertEqual(ctype, "multipart/form-data; boundary=TESTV6DO")
+        text = body.decode("utf-8")
+        self.assertIn('"durable_object_namespace"', text)
+        self.assertIn('"name":"HUB_DO"', text)
+        self.assertIn('"class_name":"HubCoordinator"', text)
+        self.assertIn('"new_sqlite_classes":["HubCoordinator"]', text)
+        self.assertIn('"kv_namespace"', text)
+        self.assertIn('"secret_text"', text)
+        self.assertEqual(
+            deploy_worker.infer_worker_name_from_url("https://cavernize-relay.example.workers.dev"),
+            "cavernize-relay",
+        )
+
+    def test_live_bridge_session_expired_constant_and_vault_callback(self) -> None:
+        plugin_scripts = AGENT_DIR.parent / "plugins" / "dynamic-fractal-planner" / "scripts"
+        if str(plugin_scripts) not in sys.path:
+            sys.path.insert(0, str(plugin_scripts))
+        import live_bridge_client as lbc
+
+        self.assertEqual(lbc.EXIT_SESSION_EXPIRED, 4)
+        self.assertTrue(callable(lbc.main))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
 

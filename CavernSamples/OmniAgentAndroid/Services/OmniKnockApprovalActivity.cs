@@ -37,6 +37,16 @@ public sealed class OmniKnockApprovalActivity : Activity {
     Button denyBtn;
     CancellationSignal cancelSignal;
 
+    const int KnockNotifId = 9192;
+    const string KnockChannelId = "omni_agent_knock_urgent";
+
+    public static bool CanDrawInstantOverlay(Context context) {
+        if (context == null) {
+            return false;
+        }
+        return !OperatingSystem.IsAndroidVersionAtLeast(23) || Android.Provider.Settings.CanDrawOverlays(context);
+    }
+
     public static async Task<(bool approved, bool biometricVerified)> RequestApprovalAsync(
         Context context,
         string knockReqId,
@@ -57,8 +67,24 @@ public sealed class OmniKnockApprovalActivity : Activity {
             intent.PutExtra(ExtraSasCode, sasCode ?? "");
             intent.PutExtra(ExtraRequester, requester ?? "AI Studio");
             intent.PutExtra(ExtraReason, reason ?? "Zero-paste connection");
-            intent.AddFlags(ActivityFlags.NewTask | ActivityFlags.ClearTop | ActivityFlags.SingleTop);
-            context.StartActivity(intent);
+            intent.AddFlags(ActivityFlags.NewTask | ActivityFlags.ClearTop | ActivityFlags.SingleTop | ActivityFlags.ReorderToFront);
+
+            bool hasOverlay = CanDrawInstantOverlay(context);
+            if (hasOverlay) {
+                try {
+                    context.StartActivity(intent);
+                } catch {
+                    PostFullScreenFallbackNotification(context, intent, sasCode ?? "---", requester ?? "AI Studio", reason ?? "");
+                }
+            } else {
+                // Always post urgent FullScreenIntent notification AND try direct launch (works if app is visible or screen unlocked via BAL)
+                PostFullScreenFallbackNotification(context, intent, sasCode ?? "---", requester ?? "AI Studio", reason ?? "");
+                try {
+                    context.StartActivity(intent);
+                } catch {
+                    // User can tap the urgent heads-up notification
+                }
+            }
 
             Task completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(105), ct)).ConfigureAwait(false);
             return completed == tcs.Task ? await tcs.Task.ConfigureAwait(false) : (false, false);
@@ -66,6 +92,50 @@ public sealed class OmniKnockApprovalActivity : Activity {
             return (false, false);
         } finally {
             pendingKnocks.TryRemove(knockReqId, out _);
+            CancelFallbackNotification(context);
+        }
+    }
+
+    static void PostFullScreenFallbackNotification(Context context, Intent fullScreenIntent, string sas, string requester, string reason) {
+        try {
+            NotificationManager nm = (NotificationManager)context.GetSystemService(NotificationService);
+            if (nm == null) {
+                return;
+            }
+            if (OperatingSystem.IsAndroidVersionAtLeast(26)) {
+                NotificationChannel ch = new(KnockChannelId, "Smart Knock Approval", NotificationImportance.High) {
+                    Description = "Urgent biometric approval requests from AI Studio"
+                };
+                ch.LockscreenVisibility = NotificationVisibility.Public;
+                nm.CreateNotificationChannel(ch);
+            }
+            PendingIntentFlags piFlags = OperatingSystem.IsAndroidVersionAtLeast(23)
+                ? PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable
+                : PendingIntentFlags.UpdateCurrent;
+            PendingIntent pi = PendingIntent.GetActivity(context, KnockNotifId, fullScreenIntent, piFlags);
+
+            Notification.Builder b = OperatingSystem.IsAndroidVersionAtLeast(26)
+                ? new Notification.Builder(context, KnockChannelId)
+                : new Notification.Builder(context);
+            b.SetSmallIcon(Resource.Drawable.omni_icon)
+                .SetContentTitle($"Smart Knock ({sas}) — {requester}")
+                .SetContentText(string.IsNullOrWhiteSpace(reason) ? "Toque para aprovar com sua digital" : reason)
+                .SetAutoCancel(true)
+                .SetCategory(Notification.CategoryCall)
+                .SetContentIntent(pi)
+                .SetFullScreenIntent(pi, true);
+            nm.Notify(KnockNotifId, b.Build());
+        } catch {
+            // Best effort
+        }
+    }
+
+    static void CancelFallbackNotification(Context context) {
+        try {
+            NotificationManager nm = (NotificationManager)context?.GetSystemService(NotificationService);
+            nm?.Cancel(KnockNotifId);
+        } catch {
+            // Best effort
         }
     }
 

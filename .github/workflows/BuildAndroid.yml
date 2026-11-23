@@ -191,38 +191,75 @@ jobs:
           (assets_dir / "truehdd" / "version.txt").write_text(th_ver + "\n", encoding="utf-8")
           print(f"Bundled libtruehdd.so ({(native_dir / 'libtruehdd.so').stat().st_size} bytes, v{th_ver})")
 
-          # 3. ONNX Runtime (Maven Central onnxruntime-android -> libonnxruntime.so + C API header)
-          ort_base = "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android"
-          ort_ver = "1.32.0"
-          try:
-              xml_bytes = http_get(f"{ort_base}/maven-metadata.xml", 30)
-              root = ET.fromstring(xml_bytes)
-              ort_ver = (root.findtext(".//release") or root.findtext(".//latest") or ort_ver).strip()
-          except Exception as ex:
-              print(f"ORT metadata fallback ({ex}); using {ort_ver}")
+          # 3. ONNX Runtime (Prefer Maven Central onnxruntime-android-qnn for Snapdragon Hexagon NPU QNN HTP,
+          #    auto-falling back to standard onnxruntime-android if QNN AAR is unavailable or fails 16 KB ELF alignment)
+          def check_elf_16k_bytes(raw_bytes):
+              if len(raw_bytes) < 64 or raw_bytes[:4] != b"\x7fELF" or raw_bytes[4] != 2:
+                  return False
+              e_phoff = struct.unpack_from("<Q", raw_bytes, 32)[0]
+              e_phentsize, e_phnum = struct.unpack_from("<HH", raw_bytes, 54)
+              found_load = False
+              for pi in range(e_phnum):
+                  off = e_phoff + pi * e_phentsize
+                  if off + 56 > len(raw_bytes):
+                      return False
+                  p_type = struct.unpack_from("<I", raw_bytes, off)[0]
+                  if p_type == 1:  # PT_LOAD
+                      found_load = True
+                      p_align = struct.unpack_from("<Q", raw_bytes, off + 48)[0]
+                      if p_align < 16384:
+                          return False
+              return found_load
 
-          ort_url = f"{ort_base}/{ort_ver}/onnxruntime-android-{ort_ver}.aar"
-          print(f"Downloading ONNX Runtime ({ort_ver}) from {ort_url}...")
-          ort_aar = http_get(ort_url, 180)
-          with zipfile.ZipFile(io.BytesIO(ort_aar)) as zf:
-              found_ort = False
-              for name in zf.namelist():
-                  norm = name.replace("\\", "/")
-                  if norm.startswith("jni/arm64-v8a/") and norm.endswith(".so"):
-                      base = os.path.basename(norm)
-                      if not base or base == "libonnxruntime4j_jni.so":
-                          continue
-                      (native_dir / base).write_bytes(zf.read(name))
-                      if base == "libonnxruntime.so":
-                          found_ort = True
-                  elif norm == "headers/onnxruntime_c_api.h" or norm.endswith("/onnxruntime_c_api.h"):
-                      (assets_dir / "onnxruntime" / "onnxruntime_c_api.h").write_bytes(zf.read(name))
-                  elif norm in ("LICENSE", "LICENSE.txt") or norm.endswith("/LICENSE"):
-                      (assets_dir / "onnxruntime" / "LICENSE.txt").write_bytes(zf.read(name))
-              assert found_ort, "libonnxruntime.so missing from ONNX Runtime AAR"
-              assert (assets_dir / "onnxruntime" / "onnxruntime_c_api.h").is_file(), "onnxruntime_c_api.h missing from AAR"
-          (assets_dir / "onnxruntime" / "version.txt").write_text(ort_ver + "\n", encoding="utf-8")
-          print(f"Bundled libonnxruntime.so ({(native_dir / 'libonnxruntime.so').stat().st_size} bytes, v{ort_ver})")
+          ort_ver = "1.32.0"
+          ort_variant = "onnxruntime-android"
+          ort_bundled = False
+          for artifact in ("onnxruntime-android-qnn", "onnxruntime-android"):
+              ort_base = f"https://repo1.maven.org/maven2/com/microsoft/onnxruntime/{artifact}"
+              cand_ver = ort_ver
+              try:
+                  xml_bytes = http_get(f"{ort_base}/maven-metadata.xml", 30)
+                  root = ET.fromstring(xml_bytes)
+                  cand_ver = (root.findtext(".//release") or root.findtext(".//latest") or cand_ver).strip()
+                  ort_url = f"{ort_base}/{cand_ver}/{artifact}-{cand_ver}.aar"
+                  print(f"Downloading ONNX Runtime ({artifact} {cand_ver}) from {ort_url}...")
+                  ort_aar = http_get(ort_url, 180)
+                  extracted_sos = {}
+                  extracted_hdr = None
+                  extracted_lic = None
+                  with zipfile.ZipFile(io.BytesIO(ort_aar)) as zf:
+                      for name in zf.namelist():
+                          norm = name.replace("\\", "/")
+                          if norm.startswith("jni/arm64-v8a/") and norm.endswith(".so"):
+                              base = os.path.basename(norm)
+                              if not base or base == "libonnxruntime4j_jni.so":
+                                  continue
+                              extracted_sos[base] = zf.read(name)
+                          elif norm == "headers/onnxruntime_c_api.h" or norm.endswith("/onnxruntime_c_api.h"):
+                              extracted_hdr = zf.read(name)
+                          elif norm in ("LICENSE", "LICENSE.txt") or norm.endswith("/LICENSE"):
+                              extracted_lic = zf.read(name)
+                  if "libonnxruntime.so" not in extracted_sos or not extracted_hdr:
+                      print(f"Skipping {artifact} {cand_ver}: missing libonnxruntime.so or onnxruntime_c_api.h")
+                      continue
+                  bad_align = [b for b, data in extracted_sos.items() if not check_elf_16k_bytes(data)]
+                  if bad_align and artifact == "onnxruntime-android-qnn":
+                      print(f"Skipping {artifact} {cand_ver}: non-16KB-aligned libraries {bad_align}; falling back to standard onnxruntime-android")
+                      continue
+                  for b, data in extracted_sos.items():
+                      (native_dir / b).write_bytes(data)
+                  (assets_dir / "onnxruntime" / "onnxruntime_c_api.h").write_bytes(extracted_hdr)
+                  if extracted_lic:
+                      (assets_dir / "onnxruntime" / "LICENSE.txt").write_bytes(extracted_lic)
+                  ort_ver = cand_ver
+                  ort_variant = artifact
+                  ort_bundled = True
+                  break
+              except Exception as ex:
+                  print(f"ONNX Runtime artifact {artifact} failed ({ex}); trying fallback...")
+          assert ort_bundled, "Failed to download valid ONNX Runtime AAR"
+          (assets_dir / "onnxruntime" / "version.txt").write_text(f"{ort_ver}\n", encoding="utf-8")
+          print(f"Bundled {ort_variant} libonnxruntime.so ({(native_dir / 'libonnxruntime.so').stat().st_size} bytes, v{ort_ver})")
 
           # 3b. Validate onnxruntime_c_api.h parses cleanly with OnnxRuntimeHeaderParser anchor rules
           ort_hdr_text = (assets_dir / "onnxruntime" / "onnxruntime_c_api.h").read_text(encoding="utf-8", errors="ignore")

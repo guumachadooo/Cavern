@@ -1411,6 +1411,15 @@ public sealed class AppSettingsStore {
         }
     }
 
+    /// <summary>
+    /// Allows the same-signature OmniAgent Companion app to dispatch local encrypted diagnostics and
+    /// live bridge commands to Cavernize over Android signature-protected IPC without duplicate cloud polling.
+    /// </summary>
+    public bool OmniAgentIpcEnabled {
+        get => prefs.GetBoolean("omniAgentIpcEnabled", true);
+        set => Edit().PutBoolean("omniAgentIpcEnabled", value).Apply();
+    }
+
     ISharedPreferencesEditor Edit() => prefs.Edit();
 
     public void ApplyGlobals() {

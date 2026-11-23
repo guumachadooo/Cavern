@@ -58,7 +58,11 @@ public sealed class MainActivity : Activity {
     Button modeTrustedBtn;
     TextView relaySummaryTv;
     TextView githubSummaryTv;
+    TextView cloudflareSummaryTv;
     TextView logViewTv;
+    Button overlayPermBtn;
+    Button batteryPermBtn;
+    Button cavernizeLinkBtn;
     FrameLayout modalOverlay;
 
     protected override void OnCreate(Bundle savedInstanceState) {
@@ -75,6 +79,11 @@ public sealed class MainActivity : Activity {
         BuildUi();
         OmniAgentForegroundService.StateChanged += OnServiceOrLogChanged;
         OmniSettingsStore.ActivityChanged += OnServiceOrLogChanged;
+        RefreshUi();
+    }
+
+    protected override void OnResume() {
+        base.OnResume();
         RefreshUi();
     }
 
@@ -205,7 +214,7 @@ public sealed class MainActivity : Activity {
         contentLayout.AddView(headerRow);
 
         TextView subtitle = new(this) {
-            Text = T("Antigravity 2 Full-Agent Companion (Zero-Trust E2E)", "Companheiro Agente Full Antigravity 2 (E2E Zero-Trust)"),
+            Text = T("Unified Hub v6 • Zero-Trust E2E • Cavernize Bridge", "Hub Unificado v6 • E2E Zero-Trust • Ponte Cavernize"),
             TextSize = 13
         };
         subtitle.SetTextColor(TextSecondary);
@@ -238,13 +247,43 @@ public sealed class MainActivity : Activity {
         statusCard.AddView(actionRow);
         contentLayout.AddView(statusCard);
 
-        // 2. Security Mode Card (never nags with fingerprint in Smart mode!)
+        // 2. Instant Popup & Background Resilience Card
+        LinearLayout sysCard = MakeCard();
+        sysCard.AddView(MakeCardTitle(T("Instant Fingerprint Popup & Background", "Popup Instantâneo & 2º Plano")));
+        TextView sysDesc = new(this) {
+            Text = T(
+                "Grant 'Appear on top' so biometric approval pops instantly over any app without tapping a notification, and set Battery to Unrestricted.",
+                "Ative 'Sobrepor a outros apps' para a digital aparecer direto na tela sem tocar em notificação, e deixe Bateria sem restrições."),
+            TextSize = 12
+        };
+        sysDesc.SetTextColor(TextSecondary);
+        sysDesc.SetPadding(0, Dp(4), 0, Dp(12));
+        sysCard.AddView(sysDesc);
+
+        LinearLayout permRow = MakeRow();
+        overlayPermBtn = MakeButton(T("Instant Popup", "Popup Tela"), CardElevated, TextPrimary, false);
+        overlayPermBtn.Click += (_, _) => OpenOverlayPermissionSettings();
+        permRow.AddView(overlayPermBtn, MakeWeightedLp(1f, rightMarginDp: 8));
+
+        batteryPermBtn = MakeButton(T("Battery", "Bateria"), CardElevated, TextPrimary, false);
+        batteryPermBtn.Click += (_, _) => RequestUnrestrictedBattery();
+        permRow.AddView(batteryPermBtn, MakeWeightedLp(1f));
+        sysCard.AddView(permRow);
+
+        cavernizeLinkBtn = MakeButton(T("Cavernize Local IPC", "Ponte Local Cavernize"), CardElevated, TextPrimary, false);
+        LinearLayout.LayoutParams cavLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        cavLp.SetMargins(0, Dp(8), 0, 0);
+        cavernizeLinkBtn.Click += (_, _) => OpenCavernizeApp();
+        sysCard.AddView(cavernizeLinkBtn, cavLp);
+        contentLayout.AddView(sysCard);
+
+        // 3. Security Mode Card (never nags with fingerprint in Smart mode!)
         LinearLayout secCard = MakeCard();
         secCard.AddView(MakeCardTitle(T("Approval Policy", "Política de Aprovação")));
         TextView secDesc = new(this) {
             Text = T(
-                "Smart mode uses 256-bit E2E HMAC silently with zero fingerprint popups. Switch to Biometric only if you want fingerprint prompts on push/install.",
-                "Modo Smart usa HMAC E2E de 256 bits sem popups chatos de digital. Troque para Digital apenas se quiser confirmar push/instalação."),
+                "Smart mode uses 256-bit E2E HMAC silently with zero fingerprint popups. Switch to Biometric only if you want fingerprint prompts on push/deploy/install.",
+                "Modo Smart usa HMAC E2E de 256 bits sem popups chatos de digital. Troque para Digital apenas se quiser confirmar push/deploy/instalação."),
             TextSize = 12
         };
         secDesc.SetTextColor(TextSecondary);
@@ -261,14 +300,19 @@ public sealed class MainActivity : Activity {
         secCard.AddView(modeRow);
         contentLayout.AddView(secCard);
 
-        // 3. Connections Card (Cloudflare Relay + Direct GitHub Push + Termux Setup)
+        // 4. Unified Connections Card (Cloudflare Relay + Cloudflare Auto-Deploy + Direct GitHub Push + Termux Setup)
         LinearLayout connCard = MakeCard();
-        connCard.AddView(MakeCardTitle(T("Bridge & GitHub Config", "Ponte Cloudflare & GitHub")));
+        connCard.AddView(MakeCardTitle(T("Hub, Cloudflare & GitHub", "Hub, Cloudflare & GitHub")));
 
         relaySummaryTv = new TextView(this) { TextSize = 12 };
         relaySummaryTv.SetTextColor(TextSecondary);
         relaySummaryTv.SetPadding(0, Dp(6), 0, Dp(4));
         connCard.AddView(relaySummaryTv);
+
+        cloudflareSummaryTv = new TextView(this) { TextSize = 12 };
+        cloudflareSummaryTv.SetTextColor(TextSecondary);
+        cloudflareSummaryTv.SetPadding(0, 0, 0, Dp(4));
+        connCard.AddView(cloudflareSummaryTv);
 
         githubSummaryTv = new TextView(this) { TextSize = 12 };
         githubSummaryTv.SetTextColor(TextSecondary);
@@ -280,19 +324,24 @@ public sealed class MainActivity : Activity {
         cfgRelayBtn.Click += (_, _) => ShowRelayConfigSheet();
         cfgRow.AddView(cfgRelayBtn, MakeWeightedLp(1f, rightMarginDp: 8));
 
-        Button cfgGhBtn = MakeButton(T("GitHub Push", "GitHub Push"), CardElevated, TextPrimary, false);
-        cfgGhBtn.Click += (_, _) => ShowGitHubConfigSheet();
-        cfgRow.AddView(cfgGhBtn, MakeWeightedLp(1f));
+        Button cfgCfBtn = MakeButton(T("CF Auto-Deploy", "Deploy CF"), CardElevated, TextPrimary, false);
+        cfgCfBtn.Click += (_, _) => ShowCloudflareDeploySheet();
+        cfgRow.AddView(cfgCfBtn, MakeWeightedLp(1f));
         connCard.AddView(cfgRow);
 
-        Button termuxSetupBtn = MakeButton(T("Termux / Debian Setup Guide", "Configurar Termux / Debian"), CardElevated, TextSecondary, false);
-        LinearLayout.LayoutParams setupLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
-        setupLp.SetMargins(0, Dp(8), 0, 0);
+        LinearLayout cfgRow2 = MakeRow();
+        cfgRow2.SetPadding(0, Dp(8), 0, 0);
+        Button cfgGhBtn = MakeButton(T("GitHub Push", "GitHub Push"), CardElevated, TextPrimary, false);
+        cfgGhBtn.Click += (_, _) => ShowGitHubConfigSheet();
+        cfgRow2.AddView(cfgGhBtn, MakeWeightedLp(1f, rightMarginDp: 8));
+
+        Button termuxSetupBtn = MakeButton(T("Termux / Debian", "Termux / Debian"), CardElevated, TextSecondary, false);
         termuxSetupBtn.Click += (_, _) => ShowTermuxSetupSheet(permissionDenied: false);
-        connCard.AddView(termuxSetupBtn, setupLp);
+        cfgRow2.AddView(termuxSetupBtn, MakeWeightedLp(1f));
+        connCard.AddView(cfgRow2);
         contentLayout.AddView(connCard);
 
-        // 4. Live Activity Journal
+        // 5. Live Activity Journal
         LinearLayout logCard = MakeCard();
         LinearLayout logHeader = MakeRow();
         TextView logTitle = MakeCardTitle(T("Live Agent Activity", "Atividade do Agente"));
@@ -333,6 +382,55 @@ public sealed class MainActivity : Activity {
 
         SetContentView(rootFrame);
         rootFrame.RequestApplyInsets();
+    }
+
+    void OpenOverlayPermissionSettings() {
+        try {
+            if (OperatingSystem.IsAndroidVersionAtLeast(23)) {
+                Intent intent = new(Settings.ActionManageOverlayPermission, Android.Net.Uri.Parse($"package:{PackageName}"));
+                StartActivity(intent);
+            }
+        } catch {
+            Toast.MakeText(this, T("Open Settings -> Apps -> OmniAgent -> Appear on top", "Abra Configurações -> Apps -> OmniAgent -> Aparecer sobre outros"), ToastLength.Long)?.Show();
+        }
+    }
+
+    void RequestUnrestrictedBattery() {
+        try {
+            if (OperatingSystem.IsAndroidVersionAtLeast(23)) {
+                Intent intent = new(Settings.ActionRequestIgnoreBatteryOptimizations, Android.Net.Uri.Parse($"package:{PackageName}"));
+                StartActivity(intent);
+                return;
+            }
+        } catch {
+            // Fallback to battery optimization list
+        }
+        try {
+            if (OperatingSystem.IsAndroidVersionAtLeast(23)) {
+                StartActivity(new Intent(Settings.ActionIgnoreBatteryOptimizationSettings));
+            }
+        } catch {
+            Intent details = new(Settings.ActionApplicationDetailsSettings, Android.Net.Uri.FromParts("package", PackageName, null));
+            StartActivity(details);
+        }
+    }
+
+    void OpenCavernizeApp() {
+        Intent launch = PackageManager?.GetLaunchIntentForPackage(CavernizeIpcBridgeClient.CavernizePackage);
+        if (launch != null) {
+            launch.AddFlags(ActivityFlags.NewTask);
+            StartActivity(launch);
+        } else {
+            OpenUrl("https://github.com/guumachadooo/Cavern/releases/tag/android-latest");
+        }
+    }
+
+    void OpenUrl(string url) {
+        try {
+            StartActivity(new Intent(Intent.ActionView, Android.Net.Uri.Parse(url)));
+        } catch {
+            Toast.MakeText(this, url, ToastLength.Long)?.Show();
+        }
     }
 
     void TriggerWakeTermux() {
@@ -457,6 +555,9 @@ public sealed class MainActivity : Activity {
     }
 
     void RefreshUi() {
+        if (statusBadge == null) {
+            return;
+        }
         bool running = OmniAgentForegroundService.IsRunning;
         statusBadge.Text = running
             ? T("● ONLINE (channel: android)", "● ONLINE (canal: android)")
@@ -466,16 +567,39 @@ public sealed class MainActivity : Activity {
 
         statusSubtitle.Text = running
             ? T(
-                $"Listening for encrypted AI Studio commands • {OmniAgentForegroundService.CommandsHandled} handled",
-                $"Ouvindo comandos E2E do AI Studio • {OmniAgentForegroundService.CommandsHandled} executado(s)")
+                $"Unified Hub v6 bridge active • {OmniAgentForegroundService.CommandsHandled} cmd(s) handled",
+                $"Ponte Hub Unificado v6 ativa • {OmniAgentForegroundService.CommandsHandled} comando(s)")
             : T(
-                "Tap Start Agent to enable remote GitHub push, APK install & Termux wake.",
-                "Toque em Ligar Agente para push GitHub, instalar APK e acordar Termux.");
+                "Tap Start Agent for remote Cavernize bridge, Cloudflare auto-deploy, GitHub push & Termux wake.",
+                "Toque em Ligar Agente para ponte Cavernize, auto-deploy Cloudflare, GitHub push e Termux.");
 
         toggleServiceBtn.Text = running ? T("Stop Agent", "Parar Agente") : T("Start Agent", "Ligar Agente");
         toggleServiceBtn.Background = Pill(running ? AccentRed : AccentBlue, 18);
         if (langBtn != null) {
             langBtn.Text = FormatLangBadge();
+        }
+
+        if (overlayPermBtn != null) {
+            bool okOv = OmniKnockApprovalActivity.CanDrawInstantOverlay(this);
+            overlayPermBtn.Text = okOv ? T("✓ Instant Popup", "✓ Popup Tela") : T("! Instant Popup", "! Ativar Popup");
+            overlayPermBtn.SetTextColor(okOv ? AccentGreen : AccentRed);
+            overlayPermBtn.Background = Pill(okOv ? Color.Argb(32, 34, 197, 94) : CardElevated, 14, okOv ? null : AccentRed);
+        }
+        if (batteryPermBtn != null) {
+            bool okBat = OmniAgentForegroundService.IsBatteryUnrestricted(this);
+            batteryPermBtn.Text = okBat ? T("✓ Battery Free", "✓ Bateria Livre") : T("! Battery Free", "! Bateria Livre");
+            batteryPermBtn.SetTextColor(okBat ? AccentGreen : AccentRed);
+            batteryPermBtn.Background = Pill(okBat ? Color.Argb(32, 34, 197, 94) : CardElevated, 14, okBat ? null : AccentRed);
+        }
+        if (cavernizeLinkBtn != null) {
+            bool cavInst = OmniAgentForegroundService.IsPackageInstalled(this, CavernizeIpcBridgeClient.CavernizePackage);
+            bool cavSig = cavInst && CavernizeIpcBridgeClient.IsSignatureVerified(this);
+            cavernizeLinkBtn.Text = cavSig
+                ? T("✓ Cavernize Local IPC Connected — Open App", "✓ Ponte Local Cavernize Ativa — Abrir App")
+                : (cavInst
+                    ? T("! Cavernize Installed (Update APK for IPC)", "! Cavernize Instalado (Atualize para IPC)")
+                    : T("Install Cavernize Android", "Baixar Cavernize Android"));
+            cavernizeLinkBtn.SetTextColor(cavSig ? AccentGreen : TextPrimary);
         }
 
         string mode = store.SecurityMode;
@@ -485,6 +609,9 @@ public sealed class MainActivity : Activity {
 
         string pairDisp = store.HasPairSecret ? OmniCrypto.FormatPairKeyDisplay(store.LoadPairSecretHex()) : T("Not paired", "Sem chave");
         relaySummaryTv.Text = $"Worker: {(string.IsNullOrEmpty(store.RelayUrl) ? T("Not set", "Não configurado") : store.RelayUrl)}  •  {T("Key", "Chave")}: {pairDisp}";
+        if (cloudflareSummaryTv != null) {
+            cloudflareSummaryTv.Text = $"Cloudflare Auto-Deploy: {store.ResolveEffectiveWorkerName()}  •  Token: {(store.HasCloudflareToken ? T("Encrypted in Keystore", "Salvo no Keystore") : T("Not set", "Não configurado"))}";
+        }
         githubSummaryTv.Text = $"GitHub: {store.GitHubRepo} ({store.GitHubBranch})  •  PAT: {(store.HasGitHubPat ? T("Encrypted in Keystore", "Salvo no Keystore") : T("Optional", "Opcional"))}";
 
         List<string> lines = OmniSettingsStore.GetActivitySnapshot();
@@ -501,7 +628,7 @@ public sealed class MainActivity : Activity {
     void ShowRelayConfigSheet() {
         LinearLayout sheet = CreateSheet(T("Cloudflare Relay & Pairing Key", "Cloudflare Worker & Chave de Pareamento"));
         EditText urlInput = MakeInput(T("https://cavernize-diag-relay.xxx.workers.dev", "https://cavernize-diag-relay.xxx.workers.dev"), store.RelayUrl, false);
-        EditText keyInput = MakeInput(T("Paste same 64-hex CAVPAIR key from Cavernize", "Cole a mesma chave CAVPAIR (64 hex) do Cavernize"), store.LoadPairSecretHex(), false);
+        EditText keyInput = MakeInput(T("Paste 64-hex CAVPAIR key", "Cole a chave CAVPAIR (64 hex)"), store.LoadPairSecretHex(), false);
 
         sheet.AddView(MakeFieldLabel("Cloudflare Worker URL"));
         sheet.AddView(urlInput);
@@ -592,6 +719,79 @@ public sealed class MainActivity : Activity {
         PresentSheet(sheet);
     }
 
+    void ShowCloudflareDeploySheet() {
+        LinearLayout sheet = CreateSheet(T("Cloudflare Auto-Deploy (Keystore)", "Auto-Deploy Cloudflare (Keystore)"));
+        TextView desc = new(this) {
+            Text = T(
+                "Save a Cloudflare API Token (Edit Cloudflare Workers template) once in Android Keystore so AI Studio can update your Worker & Durable Objects automatically without manual uploads.",
+                "Salve um Token de API Cloudflare (modelo 'Edit Cloudflare Workers') uma única vez no Keystore para a IA atualizar seu Worker e Durable Objects automaticamente sem upload manual."),
+            TextSize = 12
+        };
+        desc.SetTextColor(TextSecondary);
+        desc.SetPadding(0, 0, 0, Dp(6));
+        sheet.AddView(desc);
+
+        EditText tokenInput = MakeInput(T("Cloudflare API Token (leave empty to keep)", "Token API Cloudflare (vazio mantém atual)"), "", true);
+        EditText workerInput = MakeInput(store.ResolveEffectiveWorkerName(), store.CloudflareWorkerName, false);
+        EditText accInput = MakeInput(T("Optional (auto-detected)", "Opcional (detectado automático)"), store.CloudflareAccountId, false);
+
+        sheet.AddView(MakeFieldLabel(T("Cloudflare API Token (AES-256-GCM Keystore)", "Token API Cloudflare (Keystore AES-256-GCM)")));
+        sheet.AddView(tokenInput);
+        sheet.AddView(MakeFieldLabel(T("Worker Name (optional)", "Nome do Worker (opcional)")));
+        sheet.AddView(workerInput);
+        sheet.AddView(MakeFieldLabel(T("Account ID (optional)", "Account ID (opcional)")));
+        sheet.AddView(accInput);
+
+        TextView testTv = new(this) { Text = "", TextSize = 12, Visibility = ViewStates.Gone };
+        testTv.SetPadding(0, Dp(8), 0, 0);
+        sheet.AddView(testTv);
+
+        LinearLayout linkRow = MakeRow();
+        linkRow.SetPadding(0, Dp(10), 0, 0);
+        Button openCfBtn = MakeButton(T("Create CF Token", "Criar Token CF"), CardElevated, TextPrimary, false);
+        openCfBtn.Click += (_, _) => OpenUrl("https://dash.cloudflare.com/profile/api-tokens");
+        linkRow.AddView(openCfBtn, MakeWeightedLp(1f, rightMarginDp: 8));
+
+        Button testBtn = MakeButton(T("Test Token", "Testar Token"), CardElevated, TextPrimary, false);
+        testBtn.Click += async (_, _) => {
+            string tok = string.IsNullOrWhiteSpace(tokenInput.Text) ? store.LoadCloudflareToken() : tokenInput.Text.Trim();
+            testTv.Visibility = ViewStates.Visible;
+            testTv.SetTextColor(TextSecondary);
+            testTv.Text = T("Verifying Cloudflare API Token...", "Verificando Token Cloudflare...");
+            (bool ok, string accId, _, string msg) = await CloudflareDeployService.TestTokenAsync(tok);
+            RunOnUiThread(() => {
+                testTv.SetTextColor(ok ? AccentGreen : AccentRed);
+                testTv.Text = ok ? $"✓ {msg}" : $"✗ {msg}";
+                if (ok && string.IsNullOrWhiteSpace(accInput.Text) && !string.IsNullOrEmpty(accId)) {
+                    accInput.Text = accId;
+                }
+            });
+        };
+        linkRow.AddView(testBtn, MakeWeightedLp(1f));
+        sheet.AddView(linkRow);
+
+        LinearLayout btnRow = MakeRow();
+        btnRow.SetPadding(0, Dp(10), 0, 0);
+        Button cancelBtn = MakeButton(T("Cancel", "Cancelar"), CardElevated, TextSecondary, false);
+        cancelBtn.Click += (_, _) => HideModal();
+        btnRow.AddView(cancelBtn, MakeWeightedLp(1f, rightMarginDp: 8));
+
+        Button saveBtn = MakeButton(T("Save", "Salvar"), AccentBlue, TextPrimary, true);
+        saveBtn.Click += (_, _) => {
+            if (!string.IsNullOrWhiteSpace(tokenInput.Text)) {
+                store.SaveCloudflareToken(tokenInput.Text);
+            }
+            store.CloudflareWorkerName = workerInput.Text;
+            store.CloudflareAccountId = accInput.Text;
+            OmniSettingsStore.AppendActivity("CFG", $"Saved Cloudflare Auto-Deploy config (worker={store.ResolveEffectiveWorkerName()}).");
+            HideModal();
+            RefreshUi();
+        };
+        btnRow.AddView(saveBtn, MakeWeightedLp(1f));
+        sheet.AddView(btnRow);
+        PresentSheet(sheet);
+    }
+
     void ShowGitHubConfigSheet() {
         LinearLayout sheet = CreateSheet(T("Direct GitHub Push (Optional)", "GitHub Push Direto (Opcional)"));
         EditText repoInput = MakeInput("guumachadooo/Cavern", store.GitHubRepo, false);
@@ -605,8 +805,14 @@ public sealed class MainActivity : Activity {
         sheet.AddView(MakeFieldLabel(T("GitHub PAT (leave empty to keep current)", "GitHub PAT (deixe vazio para manter atual)")));
         sheet.AddView(patInput);
 
+        Button openGhBtn = MakeButton(T("Create GitHub Fine-Grained Token", "Criar Token GitHub (Fine-Grained)"), CardElevated, TextPrimary, false);
+        LinearLayout.LayoutParams ghLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        ghLp.SetMargins(0, Dp(10), 0, 0);
+        openGhBtn.Click += (_, _) => OpenUrl("https://github.com/settings/personal-access-tokens/new");
+        sheet.AddView(openGhBtn, ghLp);
+
         LinearLayout btnRow = MakeRow();
-        btnRow.SetPadding(0, Dp(14), 0, 0);
+        btnRow.SetPadding(0, Dp(10), 0, 0);
         Button cancelBtn = MakeButton(T("Cancel", "Cancelar"), CardElevated, TextSecondary, false);
         cancelBtn.Click += (_, _) => HideModal();
         btnRow.AddView(cancelBtn, MakeWeightedLp(1f, rightMarginDp: 8));

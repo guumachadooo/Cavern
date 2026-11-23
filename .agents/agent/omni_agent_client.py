@@ -587,6 +587,17 @@ def main() -> int:
     p_conn.add_argument("--sync-public-profile", action="store_true", help="Also write derived public knockId (non-secret) into .agents/bridge_profile.json")
     p_conn.add_argument("--clear-vault", action="store_true", help="Wipe local gitignored .agents/.bridge_vault.json")
 
+    p_cf = sub.add_parser("deploy-worker", help="Deploy Cloudflare Unified Hub Worker v6 (via local CF API token OR E2E via OmniAgent phone)")
+    p_cf.add_argument("--file", default=str(REPO_ROOT / ".agents" / "docs" / "cloudflare_live_relay_worker.js"))
+    p_cf.add_argument("--worker-name", default="")
+    p_cf.add_argument("--no-do", action="store_true", help="Deploy without attaching SQLite Durable Object HUB_DO")
+    p_cf.add_argument("--via", choices=("auto", "direct", "phone"), default="auto")
+
+    p_cav = sub.add_parser("cavernize-cmd", help="Forward any Cavernize Live Bridge command via OmniAgent local signature-verified IPC")
+    p_cav.add_argument("--name", required=True, help="Cavernize Live Bridge command (ping, quick_check, ultra_check, acoustic_audit, ui_tree, screenshot_ui, hot_exec, log_tail, etc.)")
+    p_cav.add_argument("--args", default="{}", help="JSON object of arguments")
+    p_cav.add_argument("--tier", type=int, default=2, choices=(0, 1, 2))
+
     args = parser.parse_args()
 
     if args.action == "connect":
@@ -600,12 +611,69 @@ def main() -> int:
     if args.action == "swarm":
         return cmd_swarm(args)
 
+    if args.action == "deploy-worker":
+        worker_file = Path(args.file).expanduser().resolve()
+        if not worker_file.is_file():
+            print(json.dumps({"ok": False, "error": f"Worker file not found: {worker_file}"}))
+            return 2
+        local_cf_token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+        if args.via == "direct" or (args.via == "auto" and local_cf_token):
+            import deploy_worker as cf_deploy
+            d_argv = ["--file", str(worker_file)]
+            if args.worker_name:
+                d_argv += ["--worker-name", args.worker_name]
+            if args.no_do:
+                d_argv.append("--no-do")
+            return cf_deploy.main(d_argv)
+        relay, secret, admin = _resolve_auth(args, allow_knock=True)
+        script_text = worker_file.read_text(encoding="utf-8")
+        blob = proto.upload_encrypted_blob(
+            relay,
+            secret,
+            {"script": script_text, "file": worker_file.name},
+            admin_key=admin,
+            meta={"kind": "cloudflare_worker_js"},
+        )
+        res = send_agent_command(
+            relay,
+            secret,
+            "cf_deploy_worker",
+            {
+                "blobId": blob["blobId"],
+                "workerName": args.worker_name,
+                "enableDurableObject": not args.no_do,
+            },
+            channel="android",
+            admin_key=admin,
+            timeout_sec=max(90, args.timeout),
+        )
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0 if res.get("ok") else 1
+
     relay, secret, admin = _resolve_auth(args, allow_knock=True)
     if args.action == "status":
         headers = proto.derive_agent_headers(secret, channel="termux", admin_key=admin)
         st, resp = proto.http_json("GET", f"{relay}/v1/agent/status?all=1", headers, timeout=15)
         print(json.dumps(resp, indent=2, ensure_ascii=False))
         return 0 if st == 200 and resp.get("ok") else 1
+
+    if args.action == "cavernize-cmd":
+        res = send_agent_command(
+            relay,
+            secret,
+            "cavernize_cmd",
+            {
+                "cmd": args.name,
+                "argsJson": args.args,
+                "maxTier": args.tier,
+                "timeoutSec": min(150, max(15, args.timeout - 10)),
+            },
+            channel="android",
+            admin_key=admin,
+            timeout_sec=max(60, args.timeout),
+        )
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0 if res.get("ok") else 1
 
     channel = pick_channel(relay, secret, args.channel, admin)
     if args.action == "ping":

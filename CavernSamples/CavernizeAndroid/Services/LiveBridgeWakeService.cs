@@ -68,7 +68,7 @@ public sealed class LiveBridgeWakeService : Service {
         }
     }
 
-    static void Stop(Context context) {
+    public static void Stop(Context context) {
         if (context == null) {
             return;
         }

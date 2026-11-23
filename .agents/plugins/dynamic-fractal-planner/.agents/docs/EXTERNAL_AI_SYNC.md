@@ -7,6 +7,11 @@
 
 ## Plugin Sync Entries (Newest First)
 
+### 2026-11-22 | `pending-push` | `AI Studio` | Plugin v2.7.0-r1 — Live Bridge Client Session Persistence Callback & Distinct HTTP 404 Expired Exit Code
+- `Scope`: `dual-project+plugin` (`scripts/live_bridge_client.py`)
+- `Summary`: Added `EXIT_SESSION_EXPIRED = 4` (HTTP 404 `sessionExpired` propagation vs transient timeout) and `on_session_acquired(token, ttl_sec)` callback invoked immediately after `--wake` approves BEFORE executing `--cmd`, preventing wrapper vaults from losing a freshly biometric-approved session or wiping valid sessions on network timeouts.
+- `Files`: `scripts/live_bridge_client.py`, `.agents/docs/{EXTERNAL_AI_SYNC.md,PROJECT_HISTORY.md,HANDOFF.md}`
+
 ### 2026-11-22 | `pending-push` | `AI Studio` | Plugin v2.7.0 — Gitless Container Auto-Discovery, Deep C# Pre-Push Syntax Check & Live Bridge Acoustic/Perf CLI
 - `Scope`: `dual-project+plugin` (`plugin.json`, `scripts/verify_universal.py`, `scripts/live_bridge_client.py`, `tests/run_plugin_tests.py`)
 - `Summary`: Added `--all` + automatic gitless-container workspace file discovery (`discover_workspace_files`) in `verify_universal.py` so environments without `.git` never silently audit 0 files; added `check_csharp_syntax_deep` catching statement indexer trailing-comma syntax bugs (`CS1002`/`CS1513`) with zero false positives on collection initializers; documented `acoustic_audit`, `acoustic_probe`, and `ui_perf_audit` in `live_bridge_client.py`; added regression test in `tests/run_plugin_tests.py`.

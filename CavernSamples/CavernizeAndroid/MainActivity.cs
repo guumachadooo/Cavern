@@ -373,7 +373,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
         SchedulePostUpdateSelfCheckIfNeeded();
         LiveDiagnosticBridgeService.RegisterAppHost(this);
         LiveDiagnosticBridgeService.StateChanged += OnLiveBridgeStateChanged;
-        LiveBridgeWakeService.SyncStandbyState(this, store);
+        if (OmniBridgeIpcReceiver.IsOmniAgentInstalledWithMatchingSignature(this)) {
+            LiveBridgeWakeService.Stop(this);
+        } else {
+            LiveBridgeWakeService.SyncStandbyState(this, store);
+        }
     }
 
     void OnLiveBridgeStateChanged() {

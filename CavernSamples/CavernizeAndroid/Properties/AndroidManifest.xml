@@ -30,6 +30,16 @@
   <uses-permission android:name="android.permission.RECORD_AUDIO" />
   <uses-feature android:name="android.hardware.usb.host" android:required="false" />
 
+  <!-- W44: Cryptographically verified same-signature local IPC with OmniAgent Companion -->
+  <permission
+      android:name="hu.sbence.cavern.permission.OMNI_BRIDGE"
+      android:protectionLevel="signature" />
+  <uses-permission android:name="hu.sbence.cavern.permission.OMNI_BRIDGE" />
+
+  <queries>
+    <package android:name="hu.sbence.cavern.omniagent" />
+  </queries>
+
   <application
       android:allowBackup="true"
       android:enableOnBackInvokedCallback="true"
@@ -38,5 +48,8 @@
       android:label="Cavernize"
       android:supportsRtl="true"
       android:theme="@android:style/Theme.Material.NoActionBar">
+    <!-- W44: Allow Android 12-17 access to Qualcomm Hexagon NPU FastRPC (QNN HTP) and OpenCL GPU libraries -->
+    <uses-native-library android:name="libcdsprpc.so" android:required="false" />
+    <uses-native-library android:name="libOpenCL.so" android:required="false" />
   </application>
 </manifest>

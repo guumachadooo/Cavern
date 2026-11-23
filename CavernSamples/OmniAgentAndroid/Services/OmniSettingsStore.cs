@@ -72,8 +72,19 @@ public sealed class OmniSettingsStore {
         set => prefs.Edit().PutString("ui_language", string.IsNullOrWhiteSpace(value) ? "auto" : value.Trim().ToLowerInvariant()).Apply();
     }
 
+    public string CloudflareAccountId {
+        get => prefs.GetString("cf_account_id", "") ?? "";
+        set => prefs.Edit().PutString("cf_account_id", (value ?? "").Trim()).Apply();
+    }
+
+    public string CloudflareWorkerName {
+        get => prefs.GetString("cf_worker_name", "") ?? "";
+        set => prefs.Edit().PutString("cf_worker_name", (value ?? "").Trim()).Apply();
+    }
+
     public bool HasPairSecret => !string.IsNullOrEmpty(LoadPairSecretHex());
     public bool HasGitHubPat => !string.IsNullOrEmpty(LoadGitHubPat());
+    public bool HasCloudflareToken => !string.IsNullOrEmpty(LoadCloudflareToken());
 
     public void SavePairSecretHex(string rawKey) {
         string norm = OmniCrypto.NormalizePairSecretHex(rawKey);
@@ -98,6 +109,35 @@ public sealed class OmniSettingsStore {
 
     public string LoadGitHubPat() =>
         DecryptSecret(prefs.GetString("github_pat_enc", "") ?? "");
+
+    public void SaveCloudflareToken(string token) {
+        string clean = (token ?? "").Trim();
+        if (string.IsNullOrEmpty(clean)) {
+            prefs.Edit().Remove("cf_token_enc").Apply();
+            return;
+        }
+        prefs.Edit().PutString("cf_token_enc", EncryptSecret(clean)).Apply();
+    }
+
+    public string LoadCloudflareToken() =>
+        DecryptSecret(prefs.GetString("cf_token_enc", "") ?? "");
+
+    public string ResolveEffectiveWorkerName() {
+        string explicitName = CloudflareWorkerName;
+        if (!string.IsNullOrWhiteSpace(explicitName)) {
+            return explicitName;
+        }
+        if (TryNormalizeRelayUrl(RelayUrl, out string norm) && Uri.TryCreate(norm, UriKind.Absolute, out Uri uri)) {
+            string host = (uri.Host ?? "").ToLowerInvariant();
+            if (host.EndsWith(".workers.dev", StringComparison.Ordinal)) {
+                int dot = host.IndexOf('.');
+                if (dot > 0) {
+                    return host[..dot];
+                }
+            }
+        }
+        return "cavernize-diag-relay";
+    }
 
     public static bool TryNormalizeRelayUrl(string raw, out string normalized) {
         normalized = "";

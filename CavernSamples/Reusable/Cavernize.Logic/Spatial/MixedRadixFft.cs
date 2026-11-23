@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 
 namespace Cavernize.Logic.Spatial;
@@ -631,8 +632,8 @@ public static class MixedRadixFft {
             }
         }
 
-        int workers = Math.Clamp(Environment.ProcessorCount / 2, 1, 6);
-        if (workers > 1 && frames >= 32) {
+        int workers = Math.Clamp(Environment.ProcessorCount >= 8 ? 6 : Environment.ProcessorCount / 2, 1, 6);
+        if (workers > 1 && frames >= 24) {
             int chunk = (frames + workers - 1) / workers;
             Parallel.For(0, workers, new ParallelOptions { MaxDegreeOfParallelism = workers }, w => {
                 int from = w * chunk;
@@ -676,66 +677,78 @@ public static class MixedRadixFft {
         MixedRadixPlan plan = GetPlan(nFft, inverse: true);
         float[] window = GetPeriodicHannWindowFloat(nFft);
 
-        float[] ola = new float[outTotalLen];
-        float[] winSum = new float[outTotalLen];
+        float[] ola = ArrayPool<float>.Shared.Rent(outTotalLen);
+        float[] winSum = ArrayPool<float>.Shared.Rent(outTotalLen);
+        Array.Clear(ola, 0, outTotalLen);
+        Array.Clear(winSum, 0, outTotalLen);
 
-        int workers = Math.Clamp(Environment.ProcessorCount / 2, 1, 6);
-        if (workers > 1 && frames >= 32) {
-            // Compute time-domain windowed frames in parallel into a flat buffer, then overlap-add linearly (zero lock contention)
-            float[] frameTimeBuf = new float[frames * nFft];
-            int chunk = (frames + workers - 1) / workers;
-            Parallel.For(0, workers, new ParallelOptions { MaxDegreeOfParallelism = workers }, w => {
-                int from = w * chunk;
-                int to = Math.Min(frames, from + chunk);
-                if (from >= to) {
-                    return;
+        try {
+            int workers = Math.Clamp(Environment.ProcessorCount >= 8 ? 6 : Environment.ProcessorCount / 2, 1, 6);
+            if (workers > 1 && frames >= 24) {
+                // Compute time-domain windowed frames in parallel into a pooled flat buffer, then overlap-add linearly (zero lock contention)
+                int flatLen = frames * nFft;
+                float[] frameTimeBuf = ArrayPool<float>.Shared.Rent(flatLen);
+                try {
+                    int chunk = (frames + workers - 1) / workers;
+                    Parallel.For(0, workers, new ParallelOptions { MaxDegreeOfParallelism = workers }, w => {
+                        int from = w * chunk;
+                        int to = Math.Min(frames, from + chunk);
+                        if (from >= to) {
+                            return;
+                        }
+                        FloatFftScratch scratch = new(plan);
+                        float[] fftRe = scratch.Re;
+                        float[] fftIm = scratch.Im;
+                        for (int f = from; f < to; f++) {
+                            FillInverseSpectrum(specRe, specIm, frames, f, nFft, halfN, maxValidBins, interiorLimit, hasNyquist, fftRe, fftIm);
+                            ExecutePlanFloat(fftRe, fftIm, scratch.BufRe, scratch.BufIm, scratch.TmpRe, scratch.TmpIm, plan);
+                            int dstBase = f * nFft;
+                            for (int n = 0; n < nFft; n++) {
+                                frameTimeBuf[dstBase + n] = fftRe[n] * window[n];
+                            }
+                        }
+                    });
+
+                    for (int f = 0; f < frames; f++) {
+                        int start = f * hop;
+                        int srcBase = f * nFft;
+                        for (int n = 0; n < nFft; n++) {
+                            float w = window[n];
+                            ola[start + n] += frameTimeBuf[srcBase + n];
+                            winSum[start + n] += w * w;
+                        }
+                    }
+                } finally {
+                    ArrayPool<float>.Shared.Return(frameTimeBuf);
                 }
+            } else {
                 FloatFftScratch scratch = new(plan);
                 float[] fftRe = scratch.Re;
                 float[] fftIm = scratch.Im;
-                for (int f = from; f < to; f++) {
+                for (int f = 0; f < frames; f++) {
                     FillInverseSpectrum(specRe, specIm, frames, f, nFft, halfN, maxValidBins, interiorLimit, hasNyquist, fftRe, fftIm);
                     ExecutePlanFloat(fftRe, fftIm, scratch.BufRe, scratch.BufIm, scratch.TmpRe, scratch.TmpIm, plan);
-                    int dstBase = f * nFft;
+                    int start = f * hop;
                     for (int n = 0; n < nFft; n++) {
-                        frameTimeBuf[dstBase + n] = fftRe[n] * window[n];
+                        float w = window[n];
+                        ola[start + n] += fftRe[n] * w;
+                        winSum[start + n] += w * w;
                     }
                 }
-            });
-
-            for (int f = 0; f < frames; f++) {
-                int start = f * hop;
-                int srcBase = f * nFft;
-                for (int n = 0; n < nFft; n++) {
-                    float w = window[n];
-                    ola[start + n] += frameTimeBuf[srcBase + n];
-                    winSum[start + n] += w * w;
-                }
             }
-        } else {
-            FloatFftScratch scratch = new(plan);
-            float[] fftRe = scratch.Re;
-            float[] fftIm = scratch.Im;
-            for (int f = 0; f < frames; f++) {
-                FillInverseSpectrum(specRe, specIm, frames, f, nFft, halfN, maxValidBins, interiorLimit, hasNyquist, fftRe, fftIm);
-                ExecutePlanFloat(fftRe, fftIm, scratch.BufRe, scratch.BufIm, scratch.TmpRe, scratch.TmpIm, plan);
-                int start = f * hop;
-                for (int n = 0; n < nFft; n++) {
-                    float w = window[n];
-                    ola[start + n] += fftRe[n] * w;
-                    winSum[start + n] += w * w;
-                }
-            }
-        }
 
-        float[] output = new float[targetLen];
-        int usable = Math.Min(targetLen, Math.Max(0, outTotalLen - pad));
-        for (int i = 0; i < usable; i++) {
-            int src = pad + i;
-            float ws = winSum[src];
-            output[i] = ws > 1e-8f ? (ola[src] / ws) : 0f;
+            float[] output = new float[targetLen];
+            int usable = Math.Min(targetLen, Math.Max(0, outTotalLen - pad));
+            for (int i = 0; i < usable; i++) {
+                int src = pad + i;
+                float ws = winSum[src];
+                output[i] = ws > 1e-8f ? (ola[src] / ws) : 0f;
+            }
+            return output;
+        } finally {
+            ArrayPool<float>.Shared.Return(ola);
+            ArrayPool<float>.Shared.Return(winSum);
         }
-        return output;
     }
 
     static void FillInverseSpectrum(

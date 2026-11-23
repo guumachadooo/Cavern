@@ -25,6 +25,9 @@ public sealed class OmniBiometricGateActivity : Activity {
     static readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> pendingGates = new(StringComparer.Ordinal);
     string currentReqId = "";
 
+    const int GateNotifId = 9193;
+    const string GateChannelId = "omni_agent_knock_urgent";
+
     public static async Task<bool> RequestApprovalAsync(Context context, string requestId, string title, string subtitle, CancellationToken ct) {
         if (context == null || string.IsNullOrEmpty(requestId)) {
             return false;
@@ -38,8 +41,17 @@ public sealed class OmniBiometricGateActivity : Activity {
             intent.PutExtra(ExtraRequestId, requestId);
             intent.PutExtra(ExtraTitle, title ?? "OmniAgent");
             intent.PutExtra(ExtraSubtitle, subtitle ?? "Confirm remote agent action");
-            intent.AddFlags(ActivityFlags.NewTask | ActivityFlags.ClearTop | ActivityFlags.SingleTop);
-            context.StartActivity(intent);
+            intent.AddFlags(ActivityFlags.NewTask | ActivityFlags.ClearTop | ActivityFlags.SingleTop | ActivityFlags.ReorderToFront);
+
+            bool hasOverlay = OmniKnockApprovalActivity.CanDrawInstantOverlay(context);
+            if (!hasOverlay) {
+                PostGateNotification(context, intent, title ?? "OmniAgent", subtitle ?? "Confirm remote agent action");
+            }
+            try {
+                context.StartActivity(intent);
+            } catch {
+                PostGateNotification(context, intent, title ?? "OmniAgent", subtitle ?? "Confirm remote agent action");
+            }
 
             Task completed = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(75), ct)).ConfigureAwait(false);
             return completed == tcs.Task && await tcs.Task.ConfigureAwait(false);
@@ -47,11 +59,48 @@ public sealed class OmniBiometricGateActivity : Activity {
             return false;
         } finally {
             pendingGates.TryRemove(requestId, out _);
+            try {
+                ((NotificationManager)context.GetSystemService(NotificationService))?.Cancel(GateNotifId);
+            } catch { }
+        }
+    }
+
+    static void PostGateNotification(Context context, Intent fullScreenIntent, string title, string subtitle) {
+        try {
+            NotificationManager nm = (NotificationManager)context.GetSystemService(NotificationService);
+            if (nm == null) {
+                return;
+            }
+            if (OperatingSystem.IsAndroidVersionAtLeast(26)) {
+                NotificationChannel ch = new(GateChannelId, "Smart Knock Approval", NotificationImportance.High);
+                nm.CreateNotificationChannel(ch);
+            }
+            PendingIntentFlags piFlags = OperatingSystem.IsAndroidVersionAtLeast(23)
+                ? PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable
+                : PendingIntentFlags.UpdateCurrent;
+            PendingIntent pi = PendingIntent.GetActivity(context, GateNotifId, fullScreenIntent, piFlags);
+            Notification.Builder b = OperatingSystem.IsAndroidVersionAtLeast(26)
+                ? new Notification.Builder(context, GateChannelId)
+                : new Notification.Builder(context);
+            b.SetSmallIcon(Resource.Drawable.omni_icon)
+                .SetContentTitle(title)
+                .SetContentText(subtitle)
+                .SetAutoCancel(true)
+                .SetCategory(Notification.CategoryCall)
+                .SetContentIntent(pi)
+                .SetFullScreenIntent(pi, true);
+            nm.Notify(GateNotifId, b.Build());
+        } catch {
+            // Best effort
         }
     }
 
     protected override void OnCreate(Bundle savedInstanceState) {
         base.OnCreate(savedInstanceState);
+        if (OperatingSystem.IsAndroidVersionAtLeast(27)) {
+            SetShowWhenLocked(true);
+            SetTurnScreenOn(true);
+        }
         currentReqId = Intent?.GetStringExtra(ExtraRequestId) ?? "";
         string title = Intent?.GetStringExtra(ExtraTitle) ?? "OmniAgent";
         string subtitle = Intent?.GetStringExtra(ExtraSubtitle) ?? "Approve critical action";

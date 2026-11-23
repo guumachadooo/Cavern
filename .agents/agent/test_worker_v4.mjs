@@ -1,19 +1,53 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import worker from "../docs/cloudflare_live_relay_worker.js";
+import worker, { HubCoordinator } from "../docs/cloudflare_live_relay_worker.js";
 
 function makeMockKv() {
   const store = new Map();
+  let puts = 0;
   return {
+    get putCount() {
+      return puts;
+    },
     async get(key) {
       return store.has(key) ? store.get(key) : null;
     },
     async put(key, val) {
+      puts++;
       store.set(key, String(val));
     },
     async delete(key) {
       store.delete(key);
+    },
+  };
+}
+
+function makeMockDoNamespace() {
+  const instances = new Map();
+  return {
+    idFromName(name) {
+      return `do-id:${name}`;
+    },
+    get(id) {
+      if (!instances.has(id)) {
+        const backing = new Map();
+        const state = {
+          storage: {
+            async get(k) {
+              return backing.has(k) ? backing.get(k) : undefined;
+            },
+            async put(k, v) {
+              backing.set(k, v);
+            },
+            async delete(k) {
+              backing.delete(k);
+            },
+          },
+        };
+        instances.set(id, new HubCoordinator(state, {}));
+      }
+      return instances.get(id);
     },
   };
 }
@@ -39,17 +73,58 @@ async function req(env, method, path, headers = {}, body = null) {
   return { status: r.status, json: await r.json() };
 }
 
-test("Worker v5 health reports all v3, v4 & v5 Smart Knock capabilities", async () => {
-  const env = { RELAY_KV: makeMockKv() };
-  const r = await req(env, "GET", "/health");
-  assert.equal(r.status, 200);
-  assert.equal(r.json.version, 5);
-  assert.equal(r.json.supportsSmartKnock, true);
-  assert.equal(r.json.supportsOmniAgent, true);
-  assert.equal(r.json.supportsChunkedBlobs, true);
-  assert.equal(r.json.supportsSwarmBus, true);
-  assert.equal(r.json.supportsHotExec, true);
-  assert.equal(r.json.supportsTelemetry, true);
+test("Worker v6 health reports Hybrid Durable Objects & KV fallback modes accurately", async () => {
+  const envKvOnly = { RELAY_KV: makeMockKv() };
+  const rKv = await req(envKvOnly, "GET", "/health");
+  assert.equal(rKv.status, 200);
+  assert.equal(rKv.json.version, 6);
+  assert.equal(rKv.json.supportsDurableObjects, false);
+  assert.equal(rKv.json.storageMode, "kv_fallback");
+  assert.equal(rKv.json.recommendedHeartbeatSec, 180);
+  assert.equal(rKv.json.supportsSmartKnock, true);
+  assert.equal(rKv.json.supportsOmniAgent, true);
+  assert.equal(rKv.json.supportsChunkedBlobs, true);
+  assert.equal(rKv.json.supportsSwarmBus, true);
+  assert.equal(rKv.json.supportsHotExec, true);
+  assert.equal(rKv.json.supportsTelemetry, true);
+
+  const envDo = { RELAY_KV: makeMockKv(), HUB_DO: makeMockDoNamespace() };
+  const rDo = await req(envDo, "GET", "/health");
+  assert.equal(rDo.status, 200);
+  assert.equal(rDo.json.version, 6);
+  assert.equal(rDo.json.supportsDurableObjects, true);
+  assert.equal(rDo.json.storageMode, "durable_object_sqlite");
+  assert.equal(rDo.json.recommendedHeartbeatSec, 60);
+});
+
+test("Worker v6 Durable Object handles real-time agent/knock/session with ZERO KV writes while keeping telemetry in KV", async () => {
+  const kv = makeMockKv();
+  const env = { RELAY_KV: kv, HUB_DO: makeMockDoNamespace() };
+  const hAndroid = { "X-Device-Hash": DEV_HASH, "X-Agent-Key": AGENT_KEY, "X-Agent-Channel": "android" };
+  const hPublic = { "X-Knock-Id": KNOCK_ID };
+  const hOwner = { "X-Device-Hash": DEV_HASH };
+
+  // Heartbeat + cmd + poll + result all hit HubCoordinator DO -> 0 KV writes!
+  assert.equal((await req(env, "POST", "/v1/agent/heartbeat", hAndroid, { hostEnv: "android-companion" })).status, 200);
+  assert.equal((await req(env, "POST", "/v1/agent/cmd", hAndroid, { requestId: "do1", envelope: { v: 4, ct: "hi" } })).status, 200);
+  const poll = await req(env, "GET", "/v1/agent/poll", hAndroid);
+  assert.equal(poll.json.hasCommand, true);
+  assert.equal(poll.json.command.requestId, "do1");
+  assert.equal((await req(env, "POST", "/v1/agent/result", hAndroid, { requestId: "do1", envelope: { v: 4, ct: "bye" } })).status, 200);
+  const res = await req(env, "GET", "/v1/agent/result?requestId=do1", hAndroid);
+  assert.equal(res.json.ready, true);
+  assert.equal(res.json.result.envelope.ct, "bye");
+
+  // Smart Knock also uses DO -> still 0 KV writes!
+  assert.equal((await req(env, "POST", "/v1/knock/request", hPublic, { knockReqId: "do_k1", clientPubKey: SAMPLE_PUB_B64 })).status, 200);
+  const kp = await req(env, "GET", "/v1/knock/poll", hOwner);
+  assert.equal(kp.json.hasKnock, true);
+  assert.equal(kv.putCount, 0);
+
+  // Telemetry still writes to RELAY_KV
+  const hTel = { "X-Device-Hash": DEV_HASH, "X-Telemetry-Key": TEL_KEY };
+  assert.equal((await req(env, "POST", "/v1/telemetry/upload", hTel, { kind: "summary", content: "{\"ok\":true}" })).status, 200);
+  assert.ok(kv.putCount > 0);
 });
 
 test("Worker v4 /v1/agent/* multi-channel heartbeat, FIFO queue, and result flow", async () => {

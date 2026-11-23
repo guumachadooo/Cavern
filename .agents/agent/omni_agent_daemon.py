@@ -744,13 +744,34 @@ class OmniAgentDaemon:
         except Exception as exc:
             return {"ok": False, "cmd": cmd, "error": f"{type(exc).__name__}: {exc}"}
 
+    def probe_heartbeat_interval(self) -> float:
+        try:
+            st, data = proto.http_json("GET", f"{self.relay_url}/health", {}, timeout=10)
+            if st == 200 and isinstance(data, dict):
+                rec = data.get("recommendedHeartbeatSec")
+                if isinstance(rec, (int, float)) and 30 <= rec <= 600:
+                    return float(rec)
+                if data.get("supportsDurableObjects"):
+                    return 60.0
+        except Exception:
+            pass
+        return 180.0
+
     def run_forever(self, poll_fast_sec: float = 2.0, poll_idle_sec: float = 6.0) -> None:
-        print(f"[OmniAgent v{AGENT_VERSION}] Starting daemon | channel={self.channel} | security={self.security_mode} | repo={self.repo_path}", flush=True)
+        hb_interval = self.probe_heartbeat_interval()
+        last_probe = time.time()
+        print(
+            f"[OmniAgent v{AGENT_VERSION}] Starting daemon | channel={self.channel} | security={self.security_mode} | hb={int(hb_interval)}s | repo={self.repo_path}",
+            flush=True,
+        )
         last_hb = 0.0
         idle_ticks = 0
         while self.running:
             now = time.time()
-            if now - last_hb >= 45.0:
+            if now - last_probe >= 1800.0:
+                hb_interval = self.probe_heartbeat_interval()
+                last_probe = now
+            if now - last_hb >= hb_interval:
                 try:
                     self.send_heartbeat()
                     last_hb = now

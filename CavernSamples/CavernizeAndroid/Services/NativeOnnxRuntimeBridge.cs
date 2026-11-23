@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -517,6 +518,12 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     delegate IntPtr SetGraphOptimizationLevelDelegate(IntPtr options, int graphOptimizationLevel);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate IntPtr SetOptimizedModelFilePathDelegate(IntPtr options, [MarshalAs(UnmanagedType.LPUTF8Str)] string optimizedModelFilePath);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate IntPtr EnableSessionOptionFlagDelegate(IntPtr options);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     delegate IntPtr AddSessionConfigEntryDelegate(IntPtr options, [MarshalAs(UnmanagedType.LPUTF8Str)] string key, [MarshalAs(UnmanagedType.LPUTF8Str)] string value);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -636,6 +643,9 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
     SetIntraOpNumThreadsDelegate fnSetIntraOpNumThreads;
     SetInterOpNumThreadsDelegate fnSetInterOpNumThreads;
     SetGraphOptimizationLevelDelegate fnSetGraphOpt;
+    SetOptimizedModelFilePathDelegate fnSetOptimizedModelPath;
+    EnableSessionOptionFlagDelegate fnEnableCpuMemArena;
+    EnableSessionOptionFlagDelegate fnEnableMemPattern;
     AddSessionConfigEntryDelegate fnAddSessionConfig;
     SessionOptionsAppendEpDelegate fnAppendEp;
     CreateSessionDelegate fnCreateSession;
@@ -791,8 +801,94 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         };
     }
 
+    /// <summary>
+    /// Detects the number of Prime/Performance ARM64 CPU cores by reading Linux cpufreq max frequencies.
+    /// On all-big SoCs like Snapdragon 8 Elite (2× Prime + 6× Performance Oryon), returns 6 threads
+    /// (leaving 2 cores free for UI/audio) instead of capping at 4; on classic big.LITTLE SoCs, avoids slow little cores.
+    /// </summary>
+    static int DetectPerformanceCoreCount() {
+        int totalCores = Math.Max(1, Environment.ProcessorCount);
+        try {
+            long[] freqs = new long[totalCores];
+            long maxFreq = 0L;
+            int valid = 0;
+            for (int i = 0; i < totalCores; i++) {
+                string path = $"/sys/devices/system/cpu/cpu{i}/cpufreq/cpuinfo_max_freq";
+                if (!File.Exists(path)) {
+                    continue;
+                }
+                string raw = File.ReadAllText(path).Trim();
+                if (long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out long khz) && khz > 0) {
+                    freqs[i] = khz;
+                    valid++;
+                    if (khz > maxFreq) {
+                        maxFreq = khz;
+                    }
+                }
+            }
+            if (valid >= 4 && maxFreq > 0) {
+                long perfThreshold = (long)(maxFreq * 0.72);
+                int perfCores = 0;
+                for (int i = 0; i < totalCores; i++) {
+                    if (freqs[i] >= perfThreshold) {
+                        perfCores++;
+                    }
+                }
+                if (perfCores >= 7) {
+                    // All-big architecture (e.g. Snapdragon 8 Elite 8× Oryon): 6 threads maximizes throughput while keeping UI & audio silky
+                    return Math.Clamp(perfCores - 2, 4, 6);
+                }
+                if (perfCores >= 2) {
+                    return Math.Clamp(perfCores, 2, 6);
+                }
+            }
+        } catch {
+            // Fall through to core-count heuristic
+        }
+        return totalCores >= 8 ? 6 : Math.Clamp(totalCores / 2, 2, 4);
+    }
+
+    string TryResolveOptimizedCachePath(string modelPath, long modelBytes, NeuralExecutionProvider ep) {
+        if (ep == NeuralExecutionProvider.QnnHtp) {
+            return null;
+        }
+        // Only cache self-contained ONNX files (avoid splitting external-data checkpoints)
+        if (File.Exists(modelPath + ".data") || File.Exists(modelPath + "_data")) {
+            return null;
+        }
+        try {
+            string cacheRoot = appContext.CacheDir?.AbsolutePath;
+            if (string.IsNullOrEmpty(cacheRoot)) {
+                return null;
+            }
+            string optDir = Path.Combine(cacheRoot, "ort_opt");
+            Directory.CreateDirectory(optDir);
+            string baseName = Path.GetFileNameWithoutExtension(modelPath);
+            string safeVer = string.IsNullOrEmpty(loadedVersion) ? "ort" : loadedVersion.Replace('.', '_');
+            string stamp = $"{baseName}_{modelBytes}_{ep}_{safeVer}.onnx";
+            return Path.Combine(optDir, stamp);
+        } catch {
+            return null;
+        }
+    }
+
+    string TryResolveQnnContextCachePath(string modelPath, long modelBytes) {
+        try {
+            string cacheRoot = appContext.CacheDir?.AbsolutePath;
+            if (string.IsNullOrEmpty(cacheRoot)) {
+                return null;
+            }
+            string qnnDir = Path.Combine(cacheRoot, "qnn_cache");
+            Directory.CreateDirectory(qnnDir);
+            string baseName = Path.GetFileNameWithoutExtension(modelPath);
+            return Path.Combine(qnnDir, $"{baseName}_{modelBytes}_htp.bin");
+        } catch {
+            return null;
+        }
+    }
+
     /// <inheritdoc/>
-    public INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 4) {
+    public INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 0) {
         if (string.IsNullOrWhiteSpace(modelPath) || !File.Exists(modelPath)) {
             throw new FileNotFoundException("ONNX model file not found.", modelPath);
         }
@@ -819,63 +915,96 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
 
         bool handoffComplete = false;
         try {
-            // On 8+ core ARM64 SoCs (e.g. Snapdragon 8 Elite), 4 performance threads prevent big.LITTLE stragglers
-            int defaultThreads = Environment.ProcessorCount >= 8 ? 4 : Math.Clamp(Environment.ProcessorCount / 2, 2, 4);
-            int threads = intraOpThreads > 0 ? Math.Clamp(intraOpThreads, 1, 6) : defaultThreads;
+            int defaultThreads = DetectPerformanceCoreCount();
+            int threads = intraOpThreads > 0 ? Math.Clamp(intraOpThreads, 1, 8) : defaultThreads;
             List<NeuralExecutionProvider> candidates = BuildSessionProviderCascade(preferredProvider);
             Exception lastErr = null;
+            DateTime srcWriteUtc = File.GetLastWriteTimeUtc(modelPath);
 
             for (int c = 0; c < candidates.Count; c++) {
                 NeuralExecutionProvider candidate = candidates[c];
-                IntPtr sessOpts = IntPtr.Zero;
-                CheckStatus(fnCreateSessionOptions(out sessOpts));
-                try {
-                    // Per ONNX Runtime XNNPACK EP docs, CPU intra-op threads should be 1 when XNNPACK owns the thread pool
-                    // to avoid competing thread pools thrashing ARM64 big/little cores.
-                    int cpuIntraThreads = candidate == NeuralExecutionProvider.Xnnpack ? 1 : threads;
-                    CheckStatus(fnSetIntraOpNumThreads(sessOpts, cpuIntraThreads));
-                    if (fnSetInterOpNumThreads != null) {
-                        ReleaseStatusQuietly(fnSetInterOpNumThreads(sessOpts, 1));
-                    }
-                    CheckStatus(fnSetGraphOpt(sessOpts, OrtEnableAll));
-                    if (fnAddSessionConfig != null) {
-                        // Allow intra-op worker spin-wait between layers (disabling spinning caused futex sleep/wake on every op -> 3-8x slowdown).
-                        // Do NOT enable cpu:0 arena shrinkage (that unmapped & re-allocated hundreds of MB after every single chunk Run()).
-                        ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.intra_op.allow_spinning", "1"));
-                        ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.inter_op.allow_spinning", "0"));
-                        ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.set_denormal_as_zero", "1"));
-                    }
+                string cachedOptPath = TryResolveOptimizedCachePath(modelPath, modelBytes, candidate);
+                bool hasValidCachedOpt = !string.IsNullOrEmpty(cachedOptPath) &&
+                    File.Exists(cachedOptPath) &&
+                    new FileInfo(cachedOptPath).Length >= 1024 &&
+                    File.GetLastWriteTimeUtc(cachedOptPath) >= srcWriteUtc;
 
-                    string activeEp = ConfigureSingleExecutionProvider(sessOpts, candidate, threads);
-                    if (candidate != NeuralExecutionProvider.Cpu && activeEp == "CPU") {
-                        // Requested accelerator EP could not be appended; skip duplicate CPU run if CPU is already queued next
-                        if (c + 1 < candidates.Count) {
+                // Attempt fast pre-optimized graph load first; if unavailable or rejected, load original & save cache
+                for (int attempt = hasValidCachedOpt ? 0 : 1; attempt < 2; attempt++) {
+                    bool usingCachedOpt = attempt == 0;
+                    string loadPath = usingCachedOpt ? cachedOptPath : modelPath;
+                    IntPtr sessOpts = IntPtr.Zero;
+                    CheckStatus(fnCreateSessionOptions(out sessOpts));
+                    try {
+                        // Per ONNX Runtime XNNPACK EP docs, CPU intra-op threads should be 1 when XNNPACK owns the thread pool
+                        // to avoid competing thread pools thrashing ARM64 performance cores.
+                        int cpuIntraThreads = candidate == NeuralExecutionProvider.Xnnpack ? 1 : threads;
+                        CheckStatus(fnSetIntraOpNumThreads(sessOpts, cpuIntraThreads));
+                        if (fnSetInterOpNumThreads != null) {
+                            ReleaseStatusQuietly(fnSetInterOpNumThreads(sessOpts, 1));
+                        }
+                        if (fnEnableCpuMemArena != null) {
+                            ReleaseStatusQuietly(fnEnableCpuMemArena(sessOpts));
+                        }
+                        if (fnEnableMemPattern != null) {
+                            ReleaseStatusQuietly(fnEnableMemPattern(sessOpts));
+                        }
+                        CheckStatus(fnSetGraphOpt(sessOpts, usingCachedOpt ? 1 : OrtEnableAll));
+                        if (!usingCachedOpt && !string.IsNullOrEmpty(cachedOptPath) && fnSetOptimizedModelPath != null) {
+                            ReleaseStatusQuietly(fnSetOptimizedModelPath(sessOpts, cachedOptPath));
+                        }
+                        if (fnAddSessionConfig != null) {
+                            // Allow intra-op worker spin-wait between layers (disabling spinning caused futex sleep/wake on every op -> 3-8x slowdown).
+                            // Do NOT enable cpu:0 arena shrinkage (that unmapped & re-allocated hundreds of MB after every single chunk Run()).
+                            ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.intra_op.allow_spinning", "1"));
+                            ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.inter_op.allow_spinning", "0"));
+                            ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.set_denormal_as_zero", "1"));
+                            if (candidate == NeuralExecutionProvider.QnnHtp) {
+                                string qnnCache = TryResolveQnnContextCachePath(modelPath, modelBytes);
+                                if (!string.IsNullOrEmpty(qnnCache)) {
+                                    ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "ep.context_enable", "1"));
+                                    ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "ep.context_file_path", qnnCache));
+                                }
+                            }
+                        }
+
+                        string activeEp = ConfigureSingleExecutionProvider(sessOpts, candidate, threads);
+                        if (candidate != NeuralExecutionProvider.Cpu && activeEp == "CPU") {
+                            // Requested accelerator EP could not be appended; skip duplicate CPU run if CPU is already queued next
+                            if (c + 1 < candidates.Count) {
+                                break;
+                            }
+                            if (cpuIntraThreads != threads) {
+                                CheckStatus(fnSetIntraOpNumThreads(sessOpts, threads));
+                            }
+                        }
+
+                        IntPtr st = fnCreateSession(ortEnv, loadPath, sessOpts, out IntPtr sessionHandle);
+                        if (st == IntPtr.Zero && sessionHandle != IntPtr.Zero) {
+                            lock (initLock) {
+                                lastActiveProvider = activeEp;
+                            }
+                            string cacheTag = usingCachedOpt ? " [opt-cache-hit]" : "";
+                            AppLogger.Info($"ONNX session ready [{activeEp}]{cacheTag} threads={threads} model='{Path.GetFileName(modelPath)}'");
+                            NativeOnnxSession session = new(this, modelPath, sessionHandle, activeEp);
+                            handoffComplete = true;
+                            return session;
+                        }
+
+                        string errMsg = ReadAndReleaseStatus(st);
+                        if (usingCachedOpt) {
+                            try { File.Delete(cachedOptPath); } catch { }
+                            AppLogger.Warn($"ONNX opt-cache invalidated for '{Path.GetFileName(modelPath)}'; rebuilding cleanly.");
                             continue;
                         }
-                        if (cpuIntraThreads != threads) {
-                            CheckStatus(fnSetIntraOpNumThreads(sessOpts, threads));
+                        lastErr = new InvalidOperationException($"ONNX Runtime error ({activeEp}): {errMsg}");
+                        if (c + 1 < candidates.Count) {
+                            AppLogger.Warn($"ONNX CreateSession failed on {activeEp} for '{Path.GetFileName(modelPath)}'; retrying next EP: {errMsg}");
                         }
-                    }
-
-                    IntPtr st = fnCreateSession(ortEnv, modelPath, sessOpts, out IntPtr sessionHandle);
-                    if (st == IntPtr.Zero && sessionHandle != IntPtr.Zero) {
-                        lock (initLock) {
-                            lastActiveProvider = activeEp;
+                    } finally {
+                        if (sessOpts != IntPtr.Zero) {
+                            fnReleaseSessionOptions?.Invoke(sessOpts);
                         }
-                        AppLogger.Info($"ONNX session ready [{activeEp}] threads={threads} model='{Path.GetFileName(modelPath)}'");
-                        NativeOnnxSession session = new(this, modelPath, sessionHandle, activeEp);
-                        handoffComplete = true;
-                        return session;
-                    }
-
-                    string errMsg = ReadAndReleaseStatus(st);
-                    lastErr = new InvalidOperationException($"ONNX Runtime error ({activeEp}): {errMsg}");
-                    if (c + 1 < candidates.Count) {
-                        AppLogger.Warn($"ONNX CreateSession failed on {activeEp} for '{Path.GetFileName(modelPath)}'; retrying next EP: {errMsg}");
-                    }
-                } finally {
-                    if (sessOpts != IntPtr.Zero) {
-                        fnReleaseSessionOptions?.Invoke(sessOpts);
                     }
                 }
             }
@@ -1095,8 +1224,8 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
             OnnxRuntimeInstallerService.IsQualcommSnapdragonDevice()) {
             string qnnPath = OnnxRuntimeInstallerService.GetManagedQnnHtpPath(appContext);
             if (TryAppendEp(sessOpts, "QNN",
-                ["backend_path", "htp_performance_mode", "enable_htp_fp16_precision"],
-                [qnnPath, "burst", "1"])) {
+                ["backend_path", "htp_performance_mode", "enable_htp_fp16_precision", "htp_graph_finalization_optimization_mode"],
+                [qnnPath, "burst", "1", "3"])) {
                 return "QNN HTP (NPU)";
             }
             return "CPU";
@@ -1121,8 +1250,8 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         if (tryQnn) {
             string qnnPath = OnnxRuntimeInstallerService.GetManagedQnnHtpPath(appContext);
             if (TryAppendEp(sessOpts, "QNN",
-                ["backend_path", "htp_performance_mode", "enable_htp_fp16_precision"],
-                [qnnPath, "burst", "1"])) {
+                ["backend_path", "htp_performance_mode", "enable_htp_fp16_precision", "htp_graph_finalization_optimization_mode"],
+                [qnnPath, "burst", "1", "3"])) {
                 return "QNN HTP (NPU)";
             }
         }
@@ -1293,6 +1422,9 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         fnSetIntraOpNumThreads = GetSlotDelegate<SetIntraOpNumThreadsDelegate>("SetIntraOpNumThreads");
         fnSetInterOpNumThreads = TryGetSlotDelegate<SetInterOpNumThreadsDelegate>("SetInterOpNumThreads");
         fnSetGraphOpt = GetSlotDelegate<SetGraphOptimizationLevelDelegate>("SetSessionGraphOptimizationLevel");
+        fnSetOptimizedModelPath = TryGetSlotDelegate<SetOptimizedModelFilePathDelegate>("SetOptimizedModelFilePath");
+        fnEnableCpuMemArena = TryGetSlotDelegate<EnableSessionOptionFlagDelegate>("EnableCpuMemArena");
+        fnEnableMemPattern = TryGetSlotDelegate<EnableSessionOptionFlagDelegate>("EnableMemPattern");
         fnAddSessionConfig = TryGetSlotDelegate<AddSessionConfigEntryDelegate>("AddSessionConfigEntry");
         fnAppendEp = TryGetSlotDelegate<SessionOptionsAppendEpDelegate>("SessionOptionsAppendExecutionProvider");
         fnCreateSession = GetSlotDelegate<CreateSessionDelegate>("CreateSession");
@@ -1387,6 +1519,9 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
         fnSetIntraOpNumThreads = null;
         fnSetInterOpNumThreads = null;
         fnSetGraphOpt = null;
+        fnSetOptimizedModelPath = null;
+        fnEnableCpuMemArena = null;
+        fnEnableMemPattern = null;
         fnAddSessionConfig = null;
         fnAppendEp = null;
         fnCreateSession = null;
@@ -1528,6 +1663,8 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                 IntPtr[] inNamePtrs = new IntPtr[inCount];
                 IntPtr[] inValPtrs = new IntPtr[inCount];
                 GCHandle[] pinnedInputs = new GCHandle[inCount];
+                ushort[][] rentedFp16Inputs = new ushort[inCount][];
+                double[][] rentedFp64Inputs = new double[inCount][];
 
                 int outCount = outputNames.Length;
                 IntPtr[] outNamePtrs = new IntPtr[outCount];
@@ -1551,22 +1688,14 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
 
                         UIntPtr byteLen;
                         if (elemType == OnnxTensorElementDataTypeFloat16) {
-                            ushort[] fp16 = new ushort[elemCount];
-                            for (int k = 0; k < elemCount; k++) {
-                                float v = tensor.Data[k];
-                                if (!float.IsFinite(v)) {
-                                    v = 0f;
-                                } else if (v > Float16FiniteMax) {
-                                    v = Float16FiniteMax;
-                                } else if (v < -Float16FiniteMax) {
-                                    v = -Float16FiniteMax;
-                                }
-                                fp16[k] = BitConverter.HalfToUInt16Bits((Half)v);
-                            }
+                            ushort[] fp16 = ArrayPool<ushort>.Shared.Rent(elemCount);
+                            rentedFp16Inputs[idx] = fp16;
+                            ConvertFloat32ToFloat16(tensor.Data, fp16, elemCount);
                             pinnedInputs[idx] = GCHandle.Alloc(fp16, GCHandleType.Pinned);
                             byteLen = checked((UIntPtr)((ulong)elemCount * sizeof(ushort)));
                         } else if (elemType == OnnxTensorElementDataTypeDouble) {
-                            double[] fp64 = new double[elemCount];
+                            double[] fp64 = ArrayPool<double>.Shared.Rent(elemCount);
+                            rentedFp64Inputs[idx] = fp64;
                             for (int k = 0; k < elemCount; k++) {
                                 float v = tensor.Data[k];
                                 fp64[k] = float.IsFinite(v) ? v : 0.0;
@@ -1648,26 +1777,27 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                                 throw new InvalidDataException($"ONNX output tensor '{outputNames[o]}' returned a null native data pointer.");
                             }
                             if (outElemType == OnnxTensorElementDataTypeFloat16) {
-                                short[] raw16 = new short[elemCount];
-                                Marshal.Copy(rawPtr, raw16, 0, elemCount);
-                                for (int k = 0; k < elemCount; k++) {
-                                    float v = (float)BitConverter.UInt16BitsToHalf(unchecked((ushort)raw16[k]));
-                                    managed[k] = float.IsFinite(v) ? v : 0f;
+                                short[] raw16 = ArrayPool<short>.Shared.Rent(elemCount);
+                                try {
+                                    Marshal.Copy(rawPtr, raw16, 0, elemCount);
+                                    ConvertFloat16ToFloat32(raw16, managed, elemCount);
+                                } finally {
+                                    ArrayPool<short>.Shared.Return(raw16);
                                 }
                             } else if (outElemType == OnnxTensorElementDataTypeDouble) {
-                                double[] raw64 = new double[elemCount];
-                                Marshal.Copy(rawPtr, raw64, 0, elemCount);
-                                for (int k = 0; k < elemCount; k++) {
-                                    float v = (float)raw64[k];
-                                    managed[k] = float.IsFinite(v) ? v : 0f;
+                                double[] raw64 = ArrayPool<double>.Shared.Rent(elemCount);
+                                try {
+                                    Marshal.Copy(rawPtr, raw64, 0, elemCount);
+                                    for (int k = 0; k < elemCount; k++) {
+                                        float v = (float)raw64[k];
+                                        managed[k] = float.IsFinite(v) ? v : 0f;
+                                    }
+                                } finally {
+                                    ArrayPool<double>.Shared.Return(raw64);
                                 }
                             } else if (outElemType == OnnxTensorElementDataTypeFloat) {
                                 Marshal.Copy(rawPtr, managed, 0, elemCount);
-                                for (int k = 0; k < elemCount; k++) {
-                                    if (!float.IsFinite(managed[k])) {
-                                        managed[k] = 0f;
-                                    }
-                                }
+                                SanitizeFiniteFloat32(managed, elemCount);
                             } else {
                                 throw new NotSupportedException($"ONNX output tensor '{outputNames[o]}' uses unsupported ONNXTensorElementDataType={outElemType}.");
                             }
@@ -1680,6 +1810,8 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                     for (int i = 0; i < inCount; i++) {
                         if (inValPtrs[i] != IntPtr.Zero) bridge.fnReleaseValue?.Invoke(inValPtrs[i]);
                         if (pinnedInputs[i].IsAllocated) pinnedInputs[i].Free();
+                        if (rentedFp16Inputs[i] != null) ArrayPool<ushort>.Shared.Return(rentedFp16Inputs[i]);
+                        if (rentedFp64Inputs[i] != null) ArrayPool<double>.Shared.Return(rentedFp64Inputs[i]);
                         if (inNamePtrs[i] != IntPtr.Zero) Marshal.FreeCoTaskMem(inNamePtrs[i]);
                     }
                     for (int o = 0; o < outCount; o++) {
@@ -1688,6 +1820,74 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                     }
                 }
             }
+        }
+
+        static void ConvertFloat32ToFloat16(float[] src, ushort[] dst, int count) {
+            const int Block = 16384;
+            if (count < 65536) {
+                for (int k = 0; k < count; k++) {
+                    float v = src[k];
+                    if (!float.IsFinite(v)) v = 0f;
+                    else if (v > Float16FiniteMax) v = Float16FiniteMax;
+                    else if (v < -Float16FiniteMax) v = -Float16FiniteMax;
+                    dst[k] = BitConverter.HalfToUInt16Bits((Half)v);
+                }
+                return;
+            }
+            int blocks = (count + Block - 1) / Block;
+            Parallel.For(0, blocks, b => {
+                int start = b * Block;
+                int end = Math.Min(count, start + Block);
+                for (int k = start; k < end; k++) {
+                    float v = src[k];
+                    if (!float.IsFinite(v)) v = 0f;
+                    else if (v > Float16FiniteMax) v = Float16FiniteMax;
+                    else if (v < -Float16FiniteMax) v = -Float16FiniteMax;
+                    dst[k] = BitConverter.HalfToUInt16Bits((Half)v);
+                }
+            });
+        }
+
+        static void ConvertFloat16ToFloat32(short[] src, float[] dst, int count) {
+            const int Block = 16384;
+            if (count < 65536) {
+                for (int k = 0; k < count; k++) {
+                    float v = (float)BitConverter.UInt16BitsToHalf(unchecked((ushort)src[k]));
+                    dst[k] = float.IsFinite(v) ? v : 0f;
+                }
+                return;
+            }
+            int blocks = (count + Block - 1) / Block;
+            Parallel.For(0, blocks, b => {
+                int start = b * Block;
+                int end = Math.Min(count, start + Block);
+                for (int k = start; k < end; k++) {
+                    float v = (float)BitConverter.UInt16BitsToHalf(unchecked((ushort)src[k]));
+                    dst[k] = float.IsFinite(v) ? v : 0f;
+                }
+            });
+        }
+
+        static void SanitizeFiniteFloat32(float[] buf, int count) {
+            const int Block = 32768;
+            if (count < 131072) {
+                for (int k = 0; k < count; k++) {
+                    if (!float.IsFinite(buf[k])) {
+                        buf[k] = 0f;
+                    }
+                }
+                return;
+            }
+            int blocks = (count + Block - 1) / Block;
+            Parallel.For(0, blocks, b => {
+                int start = b * Block;
+                int end = Math.Min(count, start + Block);
+                for (int k = start; k < end; k++) {
+                    if (!float.IsFinite(buf[k])) {
+                        buf[k] = 0f;
+                    }
+                }
+            });
         }
 
         string[] ReadNames(bool isInput) {

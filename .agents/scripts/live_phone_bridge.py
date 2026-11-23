@@ -104,13 +104,26 @@ def main(argv: list[str] | None = None) -> int:
     elif wants_wake and not _has_flag(forwarded, "--pair-secret") and conn["pairSecret"]:
         forwarded = ["--pair-secret", conn["pairSecret"]] + forwarded
 
+    def _save_acquired_session(relay_url: str, session_code: str, ttl_seconds: int, _meta: dict) -> None:
+        try:
+            _bauth.save_vault(
+                relay_url=relay_url,
+                session_token=session_code,
+                session_ttl_seconds=max(60, int(ttl_seconds or 1800)),
+            )
+        except Exception:
+            pass
+
     rc = _plugin_lb.main(
         forwarded,
         env_url_vars=("CAVERN_RELAY_URL", "LIVE_BRIDGE_URL"),
         env_secret_vars=("CAVERN_BRIDGE_PAIR_SECRET", "LIVE_BRIDGE_PAIR_SECRET"),
+        on_session_acquired=_save_acquired_session,
     )
-    # If vaulted session expired (HTTP 404), auto-clear stale session token so next run wakes/knocks cleanly
-    if rc != 0 and not cli_code and conn["sessionSource"] == "vault" and conn["sessionToken"]:
+    # Only clear vaulted session token when relay explicitly reports HTTP 404 (expired/closed),
+    # NEVER on transient network/command timeouts so a 30-min biometric approval is never wasted.
+    expired_rc = getattr(_plugin_lb, "EXIT_SESSION_EXPIRED", 4)
+    if rc == expired_rc and not cli_code and conn["sessionSource"] == "vault" and conn["sessionToken"]:
         try:
             vault = _bauth.load_vault()
             if vault.get("sessionToken") == conn["sessionToken"]:

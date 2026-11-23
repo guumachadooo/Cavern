@@ -21,8 +21,11 @@ public sealed class OmniAgentForegroundService : Service {
     const string ChannelId = "omni_agent_foreground";
     const string ActionStop = "hu.sbence.cavern.omniagent.ACTION_STOP";
 
+    const string AgentVersion = "2.0.0";
+
     static readonly HashSet<string> CriticalCommands = new(StringComparer.OrdinalIgnoreCase) {
         "github_push_bundle",
+        "cf_deploy_worker",
         "install_apk_url",
         "termux_run"
     };
@@ -32,6 +35,9 @@ public sealed class OmniAgentForegroundService : Service {
         "status",
         "device_info",
         "github_push_bundle",
+        "cf_status",
+        "cf_deploy_worker",
+        "cavernize_cmd",
         "install_apk_url",
         "launch_termux_daemon",
         "termux_run",
@@ -50,9 +56,21 @@ public sealed class OmniAgentForegroundService : Service {
 
     static HttpClient BuildClient() {
         HttpClient c = new() { Timeout = TimeSpan.FromSeconds(30) };
-        c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("OmniAgentAndroid", "1.0"));
+        c.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("OmniAgentAndroid", "2.0"));
         c.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         return c;
+    }
+
+    public static bool IsBatteryUnrestricted(Context context) {
+        if (context == null || !OperatingSystem.IsAndroidVersionAtLeast(23)) {
+            return true;
+        }
+        try {
+            PowerManager pm = (PowerManager)context.GetSystemService(PowerService);
+            return pm == null || pm.IsIgnoringBatteryOptimizations(context.PackageName);
+        } catch {
+            return false;
+        }
     }
 
     public static void Start(Context context) {
@@ -99,7 +117,7 @@ public sealed class OmniAgentForegroundService : Service {
             cts = new CancellationTokenSource();
             isRunning = true;
             NotifyState();
-            OmniSettingsStore.AppendActivity("AGENT", "Foreground service started (channel=android).");
+            OmniSettingsStore.AppendActivity("AGENT", $"Foreground service v{AgentVersion} started (channel=android).");
             CancellationToken token = cts.Token;
             _ = Task.Run(() => PollLoopAsync(token));
         }
@@ -146,8 +164,30 @@ public sealed class OmniAgentForegroundService : Service {
         base.OnDestroy();
     }
 
+    static async Task<int> ProbeRecommendedHeartbeatSecAsync(string baseUrl, CancellationToken ct) {
+        try {
+            using HttpResponseMessage resp = await http.GetAsync($"{baseUrl}/health", ct).ConfigureAwait(false);
+            if (resp.IsSuccessStatusCode) {
+                string body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                using JsonDocument doc = JsonDocument.Parse(body);
+                JsonElement root = doc.RootElement;
+                if (root.TryGetProperty("recommendedHeartbeatSec", out JsonElement hbEl) && hbEl.TryGetInt32(out int rec) && rec >= 30 && rec <= 600) {
+                    return rec;
+                }
+                if (root.TryGetProperty("supportsDurableObjects", out JsonElement doEl) && doEl.ValueKind == JsonValueKind.True) {
+                    return 60;
+                }
+            }
+        } catch {
+            // Fall back to economical KV interval
+        }
+        return 180;
+    }
+
     async Task PollLoopAsync(CancellationToken ct) {
         DateTime lastHb = DateTime.MinValue;
+        DateTime lastHealthProbe = DateTime.MinValue;
+        int heartbeatSec = 180;
         int idleTicks = 0;
         try {
             while (!ct.IsCancellationRequested) {
@@ -164,7 +204,12 @@ public sealed class OmniAgentForegroundService : Service {
                 string devHash = OmniCrypto.ComputeDeviceHash(pairHex);
                 string agentKey = OmniCrypto.ComputeAgentKey(pairHex);
 
-                if ((DateTime.UtcNow - lastHb).TotalSeconds >= 45) {
+                if ((DateTime.UtcNow - lastHealthProbe).TotalMinutes >= 30) {
+                    heartbeatSec = await ProbeRecommendedHeartbeatSecAsync(baseUrl, ct).ConfigureAwait(false);
+                    lastHealthProbe = DateTime.UtcNow;
+                }
+
+                if ((DateTime.UtcNow - lastHb).TotalSeconds >= heartbeatSec) {
                     try {
                         await SendHeartbeatAsync(baseUrl, devHash, agentKey, store, ct).ConfigureAwait(false);
                         lastHb = DateTime.UtcNow;
@@ -238,17 +283,21 @@ public sealed class OmniAgentForegroundService : Service {
     async Task SendHeartbeatAsync(string baseUrl, string devHash, string agentKey, OmniSettingsStore store, CancellationToken ct) {
         using HttpRequestMessage req = CreateAgentReq(HttpMethod.Post, $"{baseUrl}/v1/agent/heartbeat", devHash, agentKey);
         object payload = new {
-            agentVersion = "1.0.0",
+            agentVersion = AgentVersion,
             hostEnv = "android-companion",
             device = $"{Build.Manufacturer} {Build.Model}".Trim(),
             securityMode = store.SecurityMode,
             repoPath = store.GitHubRepo,
             tools = new {
                 githubDirectPush = store.HasGitHubPat,
+                cloudflareDeployReady = store.HasCloudflareToken,
+                overlayPermissionGranted = OmniKnockApprovalActivity.CanDrawInstantOverlay(this),
+                batteryUnrestricted = IsBatteryUnrestricted(this),
                 apkInstaller = true,
                 termuxInstalled = IsPackageInstalled(this, "com.termux"),
                 termuxPermissionGranted = HasTermuxPermission(this),
-                cavernizeInstalled = IsPackageInstalled(this, "hu.sbence.cavern.cavernize")
+                cavernizeInstalled = IsPackageInstalled(this, "hu.sbence.cavern.cavernize"),
+                cavernizeSignatureMatch = CavernizeIpcBridgeClient.IsSignatureVerified(this)
             },
             capabilities = Capabilities
         };
@@ -337,19 +386,119 @@ public sealed class OmniAgentForegroundService : Service {
                     return new {
                         ok = true,
                         cmd,
-                        agentVersion = "1.0.0",
+                        agentVersion = AgentVersion,
                         channel = "android",
                         securityMode = store.SecurityMode,
                         device = $"{Build.Manufacturer} {Build.Model}".Trim(),
                         android = $"{Build.VERSION.Release} (SDK {(int)Build.VERSION.SdkInt})",
                         githubDirectPushReady = store.HasGitHubPat,
                         githubRepo = store.GitHubRepo,
+                        cloudflareDeployReady = store.HasCloudflareToken,
+                        cloudflareWorkerName = store.ResolveEffectiveWorkerName(),
+                        overlayPermissionGranted = OmniKnockApprovalActivity.CanDrawInstantOverlay(this),
+                        batteryUnrestricted = IsBatteryUnrestricted(this),
                         termuxInstalled = IsPackageInstalled(this, "com.termux"),
                         termuxPermissionGranted = HasTermuxPermission(this),
                         cavernizeInstalled = IsPackageInstalled(this, "hu.sbence.cavern.cavernize"),
+                        cavernizeSignatureMatch = CavernizeIpcBridgeClient.IsSignatureVerified(this),
                         commandsHandled,
                         utc = DateTime.UtcNow.ToString("O")
                     };
+
+                case "cf_status": {
+                    (bool healthOk, int workerVer, long healthMs, string healthDetail) = await TestRelayHealthAsync(baseUrl, ct).ConfigureAwait(false);
+                    return new {
+                        ok = true,
+                        cmd,
+                        cloudflareDeployReady = store.HasCloudflareToken,
+                        accountId = store.CloudflareAccountId,
+                        workerName = store.ResolveEffectiveWorkerName(),
+                        relayUrl = baseUrl,
+                        relayHealthy = healthOk,
+                        workerVersion = workerVer,
+                        healthLatencyMs = healthMs,
+                        healthDetail
+                    };
+                }
+
+                case "cf_deploy_worker": {
+                    if (!store.HasCloudflareToken) {
+                        return new { ok = false, cmd, error = "Cloudflare API Token not configured in OmniAgent yet. Open OmniAgent -> Deploy CF to paste it once." };
+                    }
+                    string workerScript = GetStr(argsEl, "script");
+                    string blobId = GetStr(argsEl, "blobId");
+                    if (string.IsNullOrWhiteSpace(workerScript) && !string.IsNullOrWhiteSpace(blobId)) {
+                        using JsonDocument blobDoc = await DownloadEncryptedBlobAsync(baseUrl, devHash, agentKey, pairHex, blobId, ct).ConfigureAwait(false);
+                        if (blobDoc.RootElement.ValueKind == JsonValueKind.Object &&
+                            blobDoc.RootElement.TryGetProperty("script", out JsonElement sEl) &&
+                            sEl.ValueKind == JsonValueKind.String) {
+                            workerScript = sEl.GetString() ?? "";
+                        }
+                    }
+                    if (string.IsNullOrWhiteSpace(workerScript)) {
+                        return new { ok = false, cmd, error = "Worker script payload (script or blobId) is required." };
+                    }
+                    string targetWorkerName = GetStr(argsEl, "workerName");
+                    if (string.IsNullOrWhiteSpace(targetWorkerName)) {
+                        targetWorkerName = store.ResolveEffectiveWorkerName();
+                    }
+                    string targetAccountId = GetStr(argsEl, "accountId");
+                    if (string.IsNullOrWhiteSpace(targetAccountId)) {
+                        targetAccountId = store.CloudflareAccountId;
+                    }
+                    (bool depOk, string depMode, string resolvedAcc, string depDetail) = await CloudflareDeployService.DeployWorkerAsync(
+                        store.LoadCloudflareToken(),
+                        targetAccountId,
+                        targetWorkerName,
+                        workerScript,
+                        enableDurableObject: true,
+                        mainModule: "worker.js",
+                        ct: ct).ConfigureAwait(false);
+                    if (depOk && !string.IsNullOrWhiteSpace(resolvedAcc) && string.IsNullOrWhiteSpace(store.CloudflareAccountId)) {
+                        store.CloudflareAccountId = resolvedAcc;
+                    }
+                    OmniSettingsStore.AppendActivity(depOk ? "CF" : "ERR", $"cf_deploy_worker ({targetWorkerName}, {depMode}): {depDetail}");
+                    (bool healthOk, int workerVer, long healthMs, string healthDetail) = await TestRelayHealthAsync(baseUrl, ct).ConfigureAwait(false);
+                    return new {
+                        ok = depOk,
+                        cmd,
+                        workerName = targetWorkerName,
+                        accountId = resolvedAcc,
+                        deployMode = depMode,
+                        message = depDetail,
+                        healthOk,
+                        workerVersion = workerVer,
+                        healthLatencyMs = healthMs,
+                        healthDetail
+                    };
+                }
+
+                case "cavernize_cmd": {
+                    string subCmd = GetStr(argsEl, "cmd");
+                    if (string.IsNullOrWhiteSpace(subCmd)) {
+                        return new { ok = false, cmd, error = "args.cmd is required for cavernize_cmd." };
+                    }
+                    string subArgsJson = "{}";
+                    if (argsEl.ValueKind == JsonValueKind.Object && argsEl.TryGetProperty("args", out JsonElement subArgsEl)) {
+                        subArgsJson = subArgsEl.GetRawText();
+                    }
+                    int maxTier = argsEl.ValueKind == JsonValueKind.Object && argsEl.TryGetProperty("tier", out JsonElement tEl) && tEl.TryGetInt32(out int parsedTier)
+                        ? Math.Clamp(parsedTier, 0, 2)
+                        : 2;
+                    int timeoutSec = argsEl.ValueKind == JsonValueKind.Object && argsEl.TryGetProperty("timeoutSec", out JsonElement toEl) && toEl.TryGetInt32(out int parsedTo)
+                        ? Math.Clamp(parsedTo, 5, 120)
+                        : 45;
+                    (bool ipcOk, string ipcBody, long ipcElapsedMs) = await CavernizeIpcBridgeClient.SendCommandAsync(
+                        this, subCmd, subArgsJson, maxTier, timeoutSec, ct).ConfigureAwait(false);
+                    OmniSettingsStore.AppendActivity(ipcOk ? "IPC" : "ERR", $"cavernize_cmd '{subCmd}' ({ipcElapsedMs}ms, ok={ipcOk})");
+                    return new {
+                        ok = ipcOk,
+                        cmd,
+                        subCmd,
+                        elapsedMs = ipcElapsedMs,
+                        body = ipcBody
+                    };
+                }
 
                 case "github_push_bundle": {
                     string blobId = GetStr(argsEl, "blobId");
@@ -566,7 +715,11 @@ public sealed class OmniAgentForegroundService : Service {
                 ? vEl.GetInt32()
                 : 0;
             bool omni = root.TryGetProperty("supportsOmniAgent", out JsonElement oEl) && oEl.ValueKind == JsonValueKind.True;
-            return (omni && version >= 4, version, sw.ElapsedMilliseconds, omni ? $"Worker v{version} ready ({sw.ElapsedMilliseconds} ms)" : $"Worker v{version} (needs v4)");
+            bool hasDo = root.TryGetProperty("supportsDurableObjects", out JsonElement doEl) && doEl.ValueKind == JsonValueKind.True;
+            string modeTag = hasDo ? "DO-SQLite" : "KV";
+            return (omni && version >= 4, version, sw.ElapsedMilliseconds, omni
+                ? $"Worker v{version} ({modeTag}) ready ({sw.ElapsedMilliseconds} ms)"
+                : $"Worker v{version} (needs v6)");
         } catch (Exception ex) {
             sw.Stop();
             return (false, 0, sw.ElapsedMilliseconds, ex.Message);
