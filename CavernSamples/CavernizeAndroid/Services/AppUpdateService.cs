@@ -27,6 +27,7 @@ public sealed class UpdateCheckResult {
 /// </summary>
 public static class AppUpdateService {
     const string ReleaseApiUrl = "https://api.github.com/repos/guumachadooo/Cavern/releases/tags/android-latest";
+    const string LatestWebReleaseUrl = "https://github.com/guumachadooo/Cavern/releases/latest";
     const string TargetAssetName = "Cavernize-Android.apk";
 
     static readonly HttpClient http = BuildGitHubHttpClient();
@@ -56,6 +57,13 @@ public static class AppUpdateService {
 
         using HttpRequestMessage req = new(HttpMethod.Get, ReleaseApiUrl);
         using HttpResponseMessage resp = await http.SendAsync(req, token).ConfigureAwait(false);
+        if ((int)resp.StatusCode == 403 || (int)resp.StatusCode == 429) {
+            // GitHub unauthenticated REST API rate-limited (60/hr per IP): fall back to zero-rate-limit web redirect.
+            UpdateCheckResult webFallback = await CheckForUpdateViaWebRedirectAsync(currentVer, token).ConfigureAwait(false);
+            if (webFallback != null) {
+                return webFallback;
+            }
+        }
         resp.EnsureSuccessStatusCode();
 
         string json = await resp.Content.ReadAsStringAsync(token).ConfigureAwait(false);
@@ -108,6 +116,37 @@ public static class AppUpdateService {
             ReleaseNotes = releaseBody,
             PublishedAt = publishedAt
         };
+    }
+
+    static async Task<UpdateCheckResult> CheckForUpdateViaWebRedirectAsync(string currentVer, CancellationToken token) {
+        try {
+            using HttpRequestMessage headReq = new(HttpMethod.Get, LatestWebReleaseUrl);
+            headReq.Headers.Accept.Clear();
+            headReq.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/html"));
+            using HttpResponseMessage resp = await http.SendAsync(headReq, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+            string finalUrl = resp.RequestMessage?.RequestUri?.ToString() ?? "";
+            Match tagMatch = Regex.Match(finalUrl, @"/releases/tag/([^/?#]+)", RegexOptions.IgnoreCase);
+            if (!tagMatch.Success) {
+                return null;
+            }
+            string tag = Uri.UnescapeDataString(tagMatch.Groups[1].Value);
+            string remoteVer = ExtractVersionString(tag) ?? "";
+            if (string.IsNullOrEmpty(remoteVer)) {
+                return null;
+            }
+            string dlUrl = $"https://github.com/guumachadooo/Cavern/releases/download/{Uri.EscapeDataString(tag)}/{TargetAssetName}";
+            return new UpdateCheckResult {
+                IsUpdateAvailable = IsRemoteNewer(currentVer, remoteVer),
+                CurrentVersion = currentVer,
+                RemoteVersion = remoteVer,
+                DownloadUrl = dlUrl,
+                AssetSizeBytes = 0,
+                ReleaseNotes = $"Release {tag} (resolved via GitHub web fallback)",
+                PublishedAt = ""
+            };
+        } catch {
+            return null;
+        }
     }
 
     public static async Task<string> DownloadUpdateAsync(

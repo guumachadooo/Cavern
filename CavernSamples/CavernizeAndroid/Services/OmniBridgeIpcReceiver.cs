@@ -102,9 +102,27 @@ public sealed class OmniBridgeIpcReceiver : BroadcastReceiver {
         PendingResult pending = GoAsync();
         _ = Task.Run(async () => {
             try {
+                string normalizedCmd = (cmd ?? "").Trim().ToLowerInvariant();
+                if (normalizedCmd == "get_omni_bootstrap") {
+                    string relayUrl = (store.LiveRelayUrl ?? "").Trim();
+                    string pairHex = LiveDiagnosticBridgeService.GetPairSecretHexForInternalAuth(store) ?? "";
+                    string payload = System.Text.Json.JsonSerializer.Serialize(new {
+                        ok = !string.IsNullOrEmpty(pairHex) || !string.IsNullOrEmpty(relayUrl),
+                        relayUrl,
+                        pairSecretHex = pairHex,
+                        hasPairSecret = !string.IsNullOrEmpty(pairHex),
+                        hasRelayUrl = !string.IsNullOrEmpty(relayUrl)
+                    });
+                    AppLogger.Info("IPC", $"OmniAgent local IPC bootstrap served (hasRelay={!string.IsNullOrEmpty(relayUrl)}, hasPair={!string.IsNullOrEmpty(pairHex)}).");
+                    SendReply(appCtx, replyPkg, reqId, ok: true, body: payload, elapsedMs: 1);
+                    return;
+                }
+                if (normalizedCmd == "self_check") {
+                    normalizedCmd = "quick_check";
+                }
                 using CancellationTokenSource cts = new(TimeSpan.FromSeconds(timeoutSec));
                 (bool ok, string body, long elapsedMs) = await LiveDiagnosticBridgeService.ExecuteLocalIpcCommandAsync(
-                    appCtx, store, maxTier, cmd, argsJson, cts.Token).ConfigureAwait(false);
+                    appCtx, store, maxTier, normalizedCmd, argsJson, cts.Token).ConfigureAwait(false);
                 SendReply(appCtx, replyPkg, reqId, ok, body, elapsedMs);
             } catch (OperationCanceledException) {
                 SendReply(appCtx, replyPkg, reqId, ok: false, body: $"Cavernize IPC command '{cmd}' timed out after {timeoutSec}s.", elapsedMs: timeoutSec * 1000L);
