@@ -237,12 +237,15 @@ def send_agent_command(
         delay = poll_delays[min(attempt, len(poll_delays) - 1)]
         time.sleep(min(delay, max(0.05, deadline - time.time())))
         attempt += 1
-        st_r, res_r = proto.http_json(
-            "GET",
-            f"{relay_url}/v1/agent/result?requestId={urllib.parse.quote(req_id)}",
-            headers,
-            timeout=20,
-        )
+        try:
+            st_r, res_r = proto.http_json(
+                "GET",
+                f"{relay_url}/v1/agent/result?requestId={urllib.parse.quote(req_id)}",
+                headers,
+                timeout=20,
+            )
+        except (TimeoutError, OSError):
+            continue
         if st_r == 200 and res_r.get("ok") and res_r.get("ready"):
             raw_res = res_r["result"]
             return proto.decrypt_envelope(pair_secret_hex, f"res:{req_id}", raw_res["envelope"])
@@ -385,9 +388,25 @@ def cmd_push_workspace(args: argparse.Namespace) -> int:
             rem = remote_manifest.get(rel)
             if not rem or rem.get("sha256") != meta["sha256"]:
                 explicit_files.append(rel)
+        # If files were ALREADY live-mirrored to the phone repo by live_sync_watcher.py,
+        # their working-tree SHA-256 matches local_manifest, so also include tracked live-mirrored
+        # files when committing so git_commit_push stages & commits them cleanly!
+        if args.commit:
+            try:
+                import flight_recorder as fr
+                cp = fr.read_local_tier(fr.DEFAULT_LOCAL_DIR) or {}
+                for rel in (cp.get("fileHashes") or {}).keys():
+                    if rel in local_manifest and rel not in explicit_files:
+                        explicit_files.append(rel)
+                if args.sync_deletes:
+                    for rel in (cp.get("deletedFiles") or []):
+                        if rel not in local_manifest and rel not in deleted_files:
+                            deleted_files.append(rel)
+            except Exception:
+                pass
         if args.sync_deletes:
             for rel in remote_manifest:
-                if rel not in local_manifest:
+                if rel not in local_manifest and rel not in deleted_files:
                     deleted_files.append(rel)
 
     if not explicit_files and not deleted_files:
@@ -418,6 +437,12 @@ def cmd_push_workspace(args: argparse.Namespace) -> int:
         admin_key=admin,
         timeout_sec=180,
     )
+    if res.get("ok") and args.commit:
+        try:
+            import flight_recorder as fr
+            fr.save_local_baseline(fr.DEFAULT_LOCAL_DIR, repo_root)
+        except Exception:
+            pass
     print(json.dumps(res, indent=2, ensure_ascii=False))
     return 0 if res.get("ok") else 1
 
