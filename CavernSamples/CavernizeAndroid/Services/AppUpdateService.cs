@@ -69,15 +69,29 @@ public static class AppUpdateService {
         string downloadUrl = "";
         long assetSize = 0;
         if (root.TryGetProperty("assets", out JsonElement assetsEl) && assetsEl.ValueKind == JsonValueKind.Array) {
+            // Pass 1: exact match for Cavernize-Android.apk (release also bundles OmniAgent-Android.apk)
             foreach (JsonElement asset in assetsEl.EnumerateArray()) {
                 string assetName = asset.TryGetProperty("name", out JsonElement an) ? (an.GetString() ?? "") : "";
-                if (string.Equals(assetName, TargetAssetName, StringComparison.OrdinalIgnoreCase) ||
-                    assetName.EndsWith(".apk", StringComparison.OrdinalIgnoreCase)) {
+                if (string.Equals(assetName, TargetAssetName, StringComparison.OrdinalIgnoreCase)) {
                     downloadUrl = asset.TryGetProperty("browser_download_url", out JsonElement du) ? (du.GetString() ?? "") : "";
                     if (asset.TryGetProperty("size", out JsonElement sz)) {
                         assetSize = sz.GetInt64();
                     }
                     break;
+                }
+            }
+            // Pass 2: fallback to any non-OmniAgent APK if Cavernize APK name ever changes
+            if (string.IsNullOrEmpty(downloadUrl)) {
+                foreach (JsonElement asset in assetsEl.EnumerateArray()) {
+                    string assetName = asset.TryGetProperty("name", out JsonElement an) ? (an.GetString() ?? "") : "";
+                    if (assetName.EndsWith(".apk", StringComparison.OrdinalIgnoreCase) &&
+                        !assetName.StartsWith("OmniAgent", StringComparison.OrdinalIgnoreCase)) {
+                        downloadUrl = asset.TryGetProperty("browser_download_url", out JsonElement du) ? (du.GetString() ?? "") : "";
+                        if (asset.TryGetProperty("size", out JsonElement sz)) {
+                            assetSize = sz.GetInt64();
+                        }
+                        break;
+                    }
                 }
             }
         }

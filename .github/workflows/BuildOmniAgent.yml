@@ -1,12 +1,6 @@
-name: Build OmniAgent Companion APK
+name: Build OmniAgent Companion APK (Manual Fast Build)
 
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - 'CavernSamples/OmniAgentAndroid/**'
-      - '.github/workflows/BuildOmniAgent.yml'
   workflow_dispatch:
 
 permissions:
@@ -50,10 +44,11 @@ jobs:
 
       - name: Build & sign OmniAgent Android APK (Release)
         run: |
+          VER_CODE=$(($(date +%s) / 60))
           dotnet publish CavernSamples/OmniAgentAndroid/OmniAgentAndroid.csproj \
             -f net11.0-android -c Release \
-            -p:ApplicationVersion="${{ github.run_number }}" \
-            -p:ApplicationDisplayVersion="1.0.${{ github.run_number }}" \
+            -p:ApplicationVersion="$VER_CODE" \
+            -p:ApplicationDisplayVersion="2.0.${{ github.run_number }}" \
             -p:AndroidKeyStore=true \
             -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/cavernize.keystore" \
             -p:AndroidSigningKeyAlias=cavernize \
@@ -74,11 +69,18 @@ jobs:
           name: OmniAgent-Android-APK
           path: ${{ runner.temp }}/OmniAgent-Android.apk
 
+      - name: Attach OmniAgent APK to main Cavernize android-latest Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload android-latest "$RUNNER_TEMP/OmniAgent-Android.apk" --clobber || true
+
       - name: Publish versioned OmniAgent GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: omniagent-v1.0.${{ github.run_number }}
-          name: OmniAgent Companion v1.0.${{ github.run_number }}
+          tag_name: omniagent-v2.0.${{ github.run_number }}
+          name: OmniAgent Companion v2.0.${{ github.run_number }}
+          make_latest: false
           files: ${{ runner.temp }}/OmniAgent-Android.apk
 
       - name: Update rolling omniagent-latest Release
@@ -86,4 +88,5 @@ jobs:
         with:
           tag_name: omniagent-latest
           name: OmniAgent Companion (Latest)
+          make_latest: false
           files: ${{ runner.temp }}/OmniAgent-Android.apk

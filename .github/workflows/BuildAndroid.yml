@@ -636,6 +636,35 @@ jobs:
           cp "$APK_PATH" "$GITHUB_WORKSPACE/build/Cavernize-Android.apk"
           ls -lh "$GITHUB_WORKSPACE/build/Cavernize-Android.apk"
 
+      - name: Build & sign OmniAgent Companion APK (Release)
+        id: omniagent_publish
+        run: |
+          set -euo pipefail
+          OMNI_LOG="$RUNNER_TEMP/ci_07_omniagent_publish.log"
+          : > "$OMNI_LOG"
+          OMNI_VER_CODE=$(($(date +%s) / 60))
+          dotnet publish CavernSamples/OmniAgentAndroid/OmniAgentAndroid.csproj \
+            -c Release -f net11.0-android \
+            -p:GenerateFullPaths=true \
+            -p:ApplicationVersion="$OMNI_VER_CODE" \
+            -p:ApplicationDisplayVersion=2.0.${{ github.run_number }} \
+            -p:AndroidPackageFormat=apk \
+            -p:AndroidKeyStore=true \
+            -p:AndroidSigningKeyStore="$GITHUB_WORKSPACE/cavernize.keystore" \
+            -p:AndroidSigningKeyAlias=cavernize \
+            -p:AndroidSigningKeyPass=cavernize \
+            -p:AndroidSigningStorePass=cavernize \
+            -p:AcceptAndroidSDKLicenses=true \
+            -o "$RUNNER_TEMP/omniagent_out" 2>&1 | tee "$OMNI_LOG"
+
+          OMNI_APK=$(find "$RUNNER_TEMP/omniagent_out" -name "*-Signed.apk" | head -n 1)
+          if [ -z "$OMNI_APK" ]; then
+            OMNI_APK=$(find "$RUNNER_TEMP/omniagent_out" -name "*.apk" | head -n 1)
+          fi
+          echo "Found OmniAgent APK: $OMNI_APK"
+          cp "$OMNI_APK" "$GITHUB_WORKSPACE/build/OmniAgent-Android.apk"
+          ls -lh "$GITHUB_WORKSPACE/build/OmniAgent-Android.apk"
+
       - name: Verify APK 16 KB alignment & bundled NativeLibs
         run: |
           set -euo pipefail
@@ -718,6 +747,7 @@ jobs:
               ("04_CavernizeAndroid", os.path.join(runner_temp, "ci_04_CavernizeAndroid.log"), layer_statuses.get("04_CavernizeAndroid", "SKIPPED")),
               ("05_Shadow_FullApp", os.path.join(runner_temp, "ci_05_Shadow_FullApp.log"), layer_statuses.get("05_Shadow_FullApp", "SKIPPED")),
               ("06_Publish_APK", os.path.join(runner_temp, "ci_06_publish.log"), publish_outcome.upper()),
+              ("07_OmniAgent_APK", os.path.join(runner_temp, "ci_07_omniagent_publish.log"), "PASS" if os.path.isfile(os.path.join(os.environ.get("GITHUB_WORKSPACE", ""), "build", "OmniAgent-Android.apk")) else "SKIPPED"),
           ]
 
           err_pat = re.compile(r"(?::\s*error\b|\berror\s+[A-Z]{2,}[0-9]+:|\bfatal error:)", re.I)
@@ -999,11 +1029,13 @@ jobs:
                   break
           PYPUB
 
-      - name: Upload APK artifact
+      - name: Upload APK artifacts (Cavernize + OmniAgent Companion)
         uses: actions/upload-artifact@v7
         with:
           name: Cavernize-APK
-          path: build/Cavernize-Android.apk
+          path: |
+            build/Cavernize-Android.apk
+            build/OmniAgent-Android.apk
 
       - name: Publish versioned GitHub Release (permanent archive)
         uses: softprops/action-gh-release@v3
@@ -1012,14 +1044,18 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: "Cavernize Android v2.9.${{ github.run_number }}"
           body: |
-            Permanent archive release for Cavernize Android `v2.9.${{ github.run_number }}` (Build `${{ github.run_number }}`, commit `${{ github.sha }}`) — **Phase 2 Completion (`W01–W27` + `W29`)**.
-            - **Modern Android 15/16 Platform (`targetSdkVersion 35`) & W^X Security:** Full Edge-to-Edge `WindowInsets` (`SystemBars|DisplayCutout|Ime`), Predictive Back (`OnBackInvokedCallback`), Scoped Storage / MediaStore, and 16 KB ELF-aligned native engines (`libffmpeg.so`, `libtruehdd.so`, `libonnxruntime.so`, `libcavernize_proaudio.so`) bundled cleanly in `NativeLibraryDir`.
+            Permanent archive release for Cavernize Android `v2.9.${{ github.run_number }}` + OmniAgent Companion `v2.0.${{ github.run_number }}` (Build `${{ github.run_number }}`, commit `${{ github.sha }}`).
+            - **Downloads included in this release:**
+              - `Cavernize-Android.apk` — main Cavernize spatial audio, neural stems & pro-audio player/converter app (`v2.9.${{ github.run_number }}`)
+              - `OmniAgent-Android.apk` — companion bridge app (`v2.0.${{ github.run_number }}`, same release signature for local IPC, Cloudflare Worker auto-deploy, GitHub direct push & instant biometric approval)
+            - **Modern Android 15/16/17 Platform (`targetSdkVersion 35`) & W^X Security:** Full Edge-to-Edge `WindowInsets` (`SystemBars|DisplayCutout|Ime`), Predictive Back (`OnBackInvokedCallback`), Scoped Storage / MediaStore, and 16 KB ELF-aligned native engines (`libffmpeg.so`, `libtruehdd.so`, `libonnxruntime.so`, `libcavernize_proaudio.so`) bundled cleanly in `NativeLibraryDir`.
             - **One UI 9 Presentation Shell, Library Smart Clean v2 & 2-Tier Lyrics Sing:** Unified 6-Category Settings Hub with cross-category search, Essential/Pro mode, and `?` guided modals; Smart Clean v2 evidence-based inspector (`Music|Videos|All`, variant merging `ATMOS+FLAC`, rules/allowlist/hidden folders); single-viewport `Play` with `[A|B]` Audio Spec switcher, 2-tier `Lyrics Sing` dock, `Studio` (`Master|Classic|Queue` + readiness pills), and `Stems` Goal Cards.
             - **Spatial DSP, Pro-Audio USB & Neural Restoration (`Slot 1–8`):** SOFA HDF5 HRIR, MagLS Ambisonics, AutoEq (8,850+ profiles), ISO 226 loudness, BS.1770-5 metering + 4x True-Peak Limiter, `Slot 7` ONNX MVSEP/LGSR stem & bandwidth restoration, Auto-Vocal Mix-Match + Voiceprint DNA, and Focusrite Scarlett 2i2 / Path A `AAudio` / Path B unrooted `libusb` UAC2 audio I/O.
           prerelease: false
           make_latest: false
           files: |
             build/Cavernize-Android.apk
+            build/OmniAgent-Android.apk
             build/diagnostics/build-diagnostics-report.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1129,19 +1165,36 @@ jobs:
           git tag -f android-latest HEAD
           git push origin refs/tags/android-latest --force
 
-      - name: Publish GitHub Release (OTA android-latest)
+      - name: Publish GitHub Release (OTA android-latest — Cavernize + OmniAgent)
         uses: softprops/action-gh-release@v3
         with:
           tag_name: android-latest
           name: "Cavernize Android v2.9.${{ github.run_number }}"
           body: |
-            Automated signed Android APK build for Cavernize (`${{ github.sha }}`).
-            - Version: `v2.9.${{ github.run_number }}` (Build `${{ github.run_number }}`) — **Phase 2 (`W01–W27` + `W29`)**
-            - Highlights: Android 15/16 (`targetSdkVersion 35`) Edge-to-Edge & Predictive Back, 16 KB ELF W^X `NativeLibraryDir` engines (`FFmpeg`, `truehdd`, `ONNX Runtime`, `libcavernize_proaudio`), One UI 9 6-Category Settings Hub + `?` Guided Modals, Library Smart Clean v2 Inspector + `ATMOS+FLAC` variant merge, `Studio` (`Master|Classic|Queue`), `Stems` Goal Cards & `Slot 7` ONNX MVSEP/LGSR, 2-Tier `Lyrics Sing` + Auto-Vocal Mix-Match, Scarlett 2i2 / AAudio / `libusb` Path A/B, and SOFA HDF5 / MagLS / AutoEq / ISO 226 / BS.1770-5 spatial DSP.
+            Automated signed Android APK builds for Cavernize (`v2.9.${{ github.run_number }}`) & OmniAgent Companion (`v2.0.${{ github.run_number }}`, commit `${{ github.sha }}`).
+            - **Both APKs are attached directly below:**
+              - `Cavernize-Android.apk` — Cavernize Android (`v2.9.${{ github.run_number }}`, Build `${{ github.run_number }}`)
+              - `OmniAgent-Android.apk` — OmniAgent Companion (`v2.0.${{ github.run_number }}`, same release signature for local IPC, Cloudflare Worker auto-deploy & instant biometric approval)
+            - Highlights: Android 15/16/17 (`targetSdkVersion 35`) Edge-to-Edge & Predictive Back, 16 KB ELF W^X `NativeLibraryDir` engines (`FFmpeg`, `truehdd`, `ONNX Runtime` QNN-preferred, `libcavernize_proaudio`), One UI 9 6-Category Settings Hub + `?` Guided Modals, Library Smart Clean v2 Inspector + `ATMOS+FLAC` variant merge, `Studio` (`Master|Classic|Queue`), `Stems` Goal Cards & `Slot 7` ONNX MVSEP/LGSR, 2-Tier `Lyrics Sing` + Auto-Vocal Mix-Match, Scarlett 2i2 / AAudio / `libusb` Path A/B, and SOFA HDF5 / MagLS / AutoEq / ISO 226 / BS.1770-5 spatial DSP.
           prerelease: false
           make_latest: true
           files: |
             build/Cavernize-Android.apk
+            build/OmniAgent-Android.apk
             build/diagnostics/build-diagnostics-report.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror OmniAgent APK to omniagent-latest tag (compat alias)
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: omniagent-latest
+          name: "OmniAgent Companion v2.0.${{ github.run_number }} (Latest)"
+          body: |
+            Mirror of `OmniAgent-Android.apk` (`v2.0.${{ github.run_number }}`) — also bundled directly inside the main `Cavernize Android v2.9.${{ github.run_number }}` (`android-latest`) release.
+          prerelease: false
+          make_latest: false
+          files: |
+            build/OmniAgent-Android.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
