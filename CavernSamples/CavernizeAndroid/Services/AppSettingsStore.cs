@@ -530,7 +530,7 @@ public sealed class AppSettingsStore {
     }
 
     public int NeuralOverlapFactor {
-        get => prefs.GetInt("neuralOverlapFactor", 4);
+        get => prefs.GetInt("neuralOverlapFactor", 2);
         set => Edit().PutInt("neuralOverlapFactor", Math.Clamp(value, 2, 8)).Apply();
     }
 
@@ -1362,6 +1362,15 @@ public sealed class AppSettingsStore {
     public bool LiveBridgeStandbyEnabled {
         get => prefs.GetBoolean("liveBridgeStandbyEnabled", false);
         set => Edit().PutBoolean("liveBridgeStandbyEnabled", value).Apply();
+    }
+
+    /// <summary>
+    /// Enables Zero-Secret Ephemeral P-256 ECDH Smart Knock so AI Studio can ring this phone
+    /// with a 6-char visual code and BiometricPrompt without pasting URLs or tokens.
+    /// </summary>
+    public bool LiveBridgeSmartKnockEnabled {
+        get => prefs.GetBoolean("liveBridgeSmartKnockEnabled", true);
+        set => Edit().PutBoolean("liveBridgeSmartKnockEnabled", value).Apply();
     }
 
     /// <summary>

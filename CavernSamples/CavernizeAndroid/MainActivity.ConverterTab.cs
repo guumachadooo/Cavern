@@ -47,6 +47,13 @@ public partial class MainActivity {
     OneUiSeekBar studioW12KaraokeBar;
     CheckBox applyRoomToExportCheck;
     ProgressBar convertProgressBar;
+    LinearLayout pipelineStageContainer;
+    TextView pipelineStageTitleTv;
+    TextView pipelineStagePctTv;
+    readonly View[] pipelineStageBars = new View[4];
+    readonly TextView[] pipelineStageLabels = new TextView[4];
+    DateTime pipelineStartedUtc = DateTime.MinValue;
+    int lastPipelineStageIndex = -1;
     Action pendingPostTrueHDStudioAction;
     CavernizeTrack pendingTrueHDStudioTrack;
 
@@ -335,6 +342,56 @@ public partial class MainActivity {
         actRow.AddView(renderBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 2.1f) { RightMargin = Dp(8) });
         actRow.AddView(cancelRenderBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         footerCard.AddView(actRow);
+
+        // Granular 4-stage audio processing pipeline progress tracker (shown automatically while processing)
+        pipelineStageContainer = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        pipelineStageContainer.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
+        pipelineStageContainer.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceSubTile, 14f, OneUiTheme.BorderSubtle, 1f);
+
+        LinearLayout stageHdr = HRow();
+        pipelineStageTitleTv = Label(S["PipelineStageAnalyzing"], 11.5f, OneUiTheme.PrimaryHigh);
+        pipelineStageTitleTv.SetTypeface(null, TypefaceStyle.Bold);
+        pipelineStageTitleTv.SetSingleLine(true);
+        pipelineStageTitleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        pipelineStagePctTv = Label("0%", 11.5f, OneUiTheme.TextPrimary);
+        pipelineStagePctTv.SetTypeface(Typeface.Monospace, TypefaceStyle.Bold);
+        pipelineStagePctTv.SetSingleLine(true);
+        stageHdr.AddView(pipelineStageTitleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+        stageHdr.AddView(pipelineStagePctTv);
+        pipelineStageContainer.AddView(stageHdr, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
+
+        LinearLayout stageSegRow = HRow();
+        LinearLayout lblRow = HRow();
+        string[] stageShortNames = [
+            S["PipelineStep1Short"],
+            S["PipelineStep2Short"],
+            S["PipelineStep3Short"],
+            S["PipelineStep4Short"]
+        ];
+        for (int i = 0; i < 4; i++) {
+            View bar = new(this) {
+                Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 4f)
+            };
+            pipelineStageBars[i] = bar;
+            stageSegRow.AddView(bar, new LinearLayout.LayoutParams(0, Dp(5), 1f) {
+                RightMargin = i < 3 ? Dp(5) : 0
+            });
+
+            TextView sLbl = Label(stageShortNames[i], 10f, ColMuted);
+            sLbl.SetSingleLine(true);
+            sLbl.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+            sLbl.Gravity = GravityFlags.Center;
+            pipelineStageLabels[i] = sLbl;
+            lblRow.AddView(sLbl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
+                RightMargin = i < 3 ? Dp(4) : 0
+            });
+        }
+        pipelineStageContainer.AddView(stageSegRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(4) });
+        pipelineStageContainer.AddView(lblRow);
+        footerCard.AddView(pipelineStageContainer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4), BottomMargin = Dp(4) });
 
         convertProgressBar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal) {
             Max = 1000,
@@ -1584,6 +1641,13 @@ public partial class MainActivity {
         for (int i = 0; i < extractBitButtons.Count; i++) {
             extractBitButtons[i].Enabled = !running && selectedExtractMode != 3;
         }
+        if (running) {
+            pipelineStartedUtc = DateTime.UtcNow;
+            lastPipelineStageIndex = 0;
+            UpdatePipelineStageVisuals(0, 0.0, isCompleted: false, visible: true);
+        } else if (pipelineStageContainer != null && lastPipelineStageIndex < 0) {
+            pipelineStageContainer.Visibility = ViewStates.Gone;
+        }
         RefreshStudioPrimaryCtaUi();
     }
 
@@ -1597,6 +1661,104 @@ public partial class MainActivity {
             } else {
                 convertProgressBar.Indeterminate = false;
                 convertProgressBar.Progress = Math.Clamp((int)Math.Round(progress * 1000.0), 0, 1000);
+            }
+        }
+        bool isDone = !isOperationRunning && progress >= 0.999;
+        bool shouldShow = isOperationRunning || isDone;
+        if (shouldShow) {
+            int stage = ResolvePipelineStageIndex(text ?? "", progress, isDone);
+            lastPipelineStageIndex = stage;
+            UpdatePipelineStageVisuals(stage, progress, isDone, visible: true);
+        } else if (pipelineStageContainer != null) {
+            lastPipelineStageIndex = -1;
+            pipelineStageContainer.Visibility = ViewStates.Gone;
+        }
+    }
+
+    static int ResolvePipelineStageIndex(string statusText, double progress, bool isDone) {
+        if (isDone) {
+            return 4;
+        }
+        string t = (statusText ?? "").ToLowerInvariant();
+        if (t.Contains("encod") || t.Contains("mux") || t.Contains("flac") || t.Contains("export") ||
+            t.Contains("saving") || t.Contains("salvando") || t.Contains("finaliz") || t.Contains("merging") ||
+            t.Contains("gravando") || t.Contains("packing")) {
+            return 3;
+        }
+        if (t.Contains("render") || t.Contains("spatial") || t.Contains("espacial") || t.Contains("upmix") ||
+            t.Contains("binaural") || t.Contains("atmos") || t.Contains("master") || t.Contains("convolv") ||
+            t.Contains("loudness") || t.Contains("iamf")) {
+            return 2;
+        }
+        if (t.Contains("neural") || t.Contains("onnx") || t.Contains("scnet") || t.Contains("vocal") ||
+            t.Contains("stem") || t.Contains("separat") || t.Contains("isolat") || t.Contains("isoland") ||
+            t.Contains("karaoke") || t.Contains("demux") || t.Contains("dna")) {
+            return 1;
+        }
+        if (t.Contains("analy") || t.Contains("analis") || t.Contains("decod") || t.Contains("probe") ||
+            t.Contains("truehd") || t.Contains("prepar") || t.Contains("load") || t.Contains("carreg")) {
+            return 0;
+        }
+        if (progress < 0) {
+            return 0;
+        }
+        if (progress >= 0.85) return 3;
+        if (progress >= 0.45) return 2;
+        if (progress >= 0.15) return 1;
+        return 0;
+    }
+
+    void UpdatePipelineStageVisuals(int activeStage, double progress, bool isCompleted, bool visible) {
+        if (pipelineStageContainer == null) {
+            return;
+        }
+        pipelineStageContainer.Visibility = visible ? ViewStates.Visible : ViewStates.Gone;
+        if (!visible) {
+            return;
+        }
+        string[] stageTitles = [
+            S["PipelineStageAnalyzing"],
+            S["PipelineStageIsolating"],
+            S["PipelineStageRendering"],
+            S["PipelineStageExporting"],
+            S["PipelineStageDone"]
+        ];
+        int titleIdx = Math.Clamp(isCompleted ? 4 : activeStage, 0, 4);
+        if (pipelineStageTitleTv != null) {
+            pipelineStageTitleTv.Text = stageTitles[titleIdx];
+            pipelineStageTitleTv.SetTextColor(isCompleted ? OneUiTheme.FunctionalGreen : OneUiTheme.PrimaryHigh);
+        }
+        if (pipelineStagePctTv != null) {
+            string elapsed = pipelineStartedUtc != DateTime.MinValue
+                ? $" · {Math.Max(0, (int)(DateTime.UtcNow - pipelineStartedUtc).TotalSeconds)}s"
+                : "";
+            if (isCompleted) {
+                pipelineStagePctTv.Text = $"100%{elapsed}";
+                pipelineStagePctTv.SetTextColor(OneUiTheme.FunctionalGreen);
+            } else if (progress < 0) {
+                pipelineStagePctTv.Text = $"...{elapsed}";
+                pipelineStagePctTv.SetTextColor(OneUiTheme.PrimaryHigh);
+            } else {
+                int pct = Math.Clamp((int)Math.Round(progress * 100.0), 0, 100);
+                pipelineStagePctTv.Text = $"{pct}%{elapsed}";
+                pipelineStagePctTv.SetTextColor(OneUiTheme.TextPrimary);
+            }
+        }
+        for (int i = 0; i < 4; i++) {
+            bool stepDone = isCompleted || i < activeStage;
+            bool stepActive = !isCompleted && i == activeStage;
+            if (pipelineStageBars[i] != null) {
+                Color barCol = stepDone
+                    ? OneUiTheme.FunctionalGreen
+                    : (stepActive ? OneUiTheme.PrimaryHigh : OneUiTheme.SurfaceModalRow);
+                pipelineStageBars[i].Background = OneUiTheme.CreateRoundedDrawable(this, barCol, 4f);
+            }
+            if (pipelineStageLabels[i] != null) {
+                Color lblCol = stepDone
+                    ? OneUiTheme.FunctionalGreen
+                    : (stepActive ? OneUiTheme.TextPrimary : ColMuted);
+                pipelineStageLabels[i].SetTextColor(lblCol);
+                pipelineStageLabels[i].SetTypeface(null, stepActive ? TypefaceStyle.Bold : TypefaceStyle.Normal);
             }
         }
     }

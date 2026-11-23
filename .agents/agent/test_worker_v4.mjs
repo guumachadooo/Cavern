@@ -24,8 +24,10 @@ function sha256(text) {
 
 const PAIR_SECRET = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const DEV_HASH = sha256(`wake-channel-v2:${PAIR_SECRET}`);
+const KNOCK_ID = sha256(`knock-channel-v5:${DEV_HASH}`);
 const AGENT_KEY = sha256(`agent-access-v4:${PAIR_SECRET}`);
 const TEL_KEY = sha256(`telemetry-access-v3:${PAIR_SECRET}`);
+const SAMPLE_PUB_B64 = Buffer.concat([Buffer.from([0x04]), Buffer.alloc(64, 0x42)]).toString("base64");
 
 async function req(env, method, path, headers = {}, body = null) {
   const init = { method, headers: { ...headers } };
@@ -37,11 +39,12 @@ async function req(env, method, path, headers = {}, body = null) {
   return { status: r.status, json: await r.json() };
 }
 
-test("Worker v4 health reports all v3 & v4 capabilities", async () => {
+test("Worker v5 health reports all v3, v4 & v5 Smart Knock capabilities", async () => {
   const env = { RELAY_KV: makeMockKv() };
   const r = await req(env, "GET", "/health");
   assert.equal(r.status, 200);
-  assert.equal(r.json.version, 4);
+  assert.equal(r.json.version, 5);
+  assert.equal(r.json.supportsSmartKnock, true);
   assert.equal(r.json.supportsOmniAgent, true);
   assert.equal(r.json.supportsChunkedBlobs, true);
   assert.equal(r.json.supportsSwarmBus, true);
@@ -146,3 +149,89 @@ test("Worker v4 preserves 100% backwards-compatibility with v3 telemetry & sessi
   const poll = await req(env, "GET", "/v1/session/poll", hSess);
   assert.equal(poll.json.command.cmd, "hot_probe_status");
 });
+
+test("Worker v5 /v1/knock/* zero-secret ECDH lifecycle, owner X-Device-Hash auth, 409 lock & deny cooldown", async () => {
+  const env = { RELAY_KV: makeMockKv() };
+  const hPublic = { "X-Knock-Id": KNOCK_ID };
+  const hOwner = { "X-Device-Hash": DEV_HASH };
+
+  // 1. Public AI knocks with double-hashed knockId & ephemeral P-256 public key
+  const k1 = await req(env, "POST", "/v1/knock/request", hPublic, {
+    knockReqId: "k_req_1",
+    clientPubKey: SAMPLE_PUB_B64,
+    requestedScope: "workspace",
+    requestedTier: 2,
+    reason: "Connect to S25U",
+  });
+  assert.equal(k1.status, 200);
+  assert.equal(k1.json.knockReqId, "k_req_1");
+
+  // 2. Single-slot lock rejects concurrent knock with 409
+  const dup = await req(env, "POST", "/v1/knock/request", hPublic, {
+    knockReqId: "k_req_dup",
+    clientPubKey: SAMPLE_PUB_B64,
+  });
+  assert.equal(dup.status, 409);
+
+  // 3. Public caller CANNOT poll or approve (missing X-Device-Hash -> 401)
+  assert.equal((await req(env, "GET", "/v1/knock/poll", hPublic)).status, 401);
+  assert.equal((await req(env, "POST", "/v1/knock/approve", hPublic, { knockReqId: "k_req_1", serverPubKey: SAMPLE_PUB_B64, encryptedGrant: { v: 4 } })).status, 401);
+
+  // 4. Owner phone polls with X-Device-Hash (Worker derives knockId server-side)
+  const p = await req(env, "GET", "/v1/knock/poll", hOwner);
+  assert.equal(p.status, 200);
+  assert.equal(p.json.hasKnock, true);
+  assert.equal(p.json.knock.knockReqId, "k_req_1");
+
+  // 5. Owner approves with E2E encrypted grant
+  const app = await req(env, "POST", "/v1/knock/approve", hOwner, {
+    knockReqId: "k_req_1",
+    serverPubKey: SAMPLE_PUB_B64,
+    encryptedGrant: { v: 4, ct: "enc_payload" },
+    scope: "workspace",
+  });
+  assert.equal(app.status, 200);
+
+  // 6. AI receives approved grant once (then auto-deleted from KV -> 404)
+  const st1 = await req(env, "GET", "/v1/knock/status?knockReqId=k_req_1", hPublic);
+  assert.equal(st1.status, 200);
+  assert.equal(st1.json.status, "approved");
+  assert.equal(st1.json.encryptedGrant.ct, "enc_payload");
+  assert.equal((await req(env, "GET", "/v1/knock/status?knockReqId=k_req_1", hPublic)).status, 404);
+
+  // 7. Deny activates automatic lockout cooldown (429 on subsequent knock)
+  const k2 = await req(env, "POST", "/v1/knock/request", hPublic, {
+    knockReqId: "k_req_2",
+    clientPubKey: SAMPLE_PUB_B64,
+  });
+  assert.equal(k2.status, 200);
+  await req(env, "GET", "/v1/knock/poll", hOwner);
+  const den = await req(env, "POST", "/v1/knock/deny", hOwner, { knockReqId: "k_req_2", reason: "Not me", cooldownSeconds: 900 });
+  assert.equal(den.status, 200);
+  const blocked = await req(env, "POST", "/v1/knock/request", hPublic, {
+    knockReqId: "k_req_3",
+    clientPubKey: SAMPLE_PUB_B64,
+  });
+  assert.equal(blocked.status, 429);
+});
+
+test("Worker v5 /v1/knock/request enforces 3-per-15-min rate limit", async () => {
+  const env = { RELAY_KV: makeMockKv() };
+  const hPublic = { "X-Knock-Id": KNOCK_ID };
+  const hOwner = { "X-Device-Hash": DEV_HASH };
+
+  for (let i = 1; i <= 3; i++) {
+    const r = await req(env, "POST", "/v1/knock/request", hPublic, {
+      knockReqId: `rate_${i}`,
+      clientPubKey: SAMPLE_PUB_B64,
+    });
+    assert.equal(r.status, 200);
+    await req(env, "GET", "/v1/knock/poll", hOwner);
+  }
+  const r4 = await req(env, "POST", "/v1/knock/request", hPublic, {
+    knockReqId: "rate_4",
+    clientPubKey: SAMPLE_PUB_B64,
+  });
+  assert.equal(r4.status, 429);
+});
+

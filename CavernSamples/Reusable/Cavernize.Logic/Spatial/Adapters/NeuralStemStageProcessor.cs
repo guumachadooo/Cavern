@@ -2,6 +2,7 @@ using System.Numerics;
 
 using Cavern;
 using Cavern.Neural;
+using Cavern.Restoration;
 using Cavern.Spatial;
 using Cavern.Virtualizer;
 
@@ -10,8 +11,8 @@ namespace Cavernize.Logic.Spatial.Adapters;
 /// <summary>
 /// Slot 2B stage processor (<c>Priority = 300</c>, <c>SupportsAtmosAware = true</c>) &amp; Pre-HRTF Virtual Speaker Bus
 /// processor (<see cref="IPreHrtfBusProcessor"/>):
-/// Coordinates zero-phase multichannel Spatial Karaoke across all 1..32 Atmos virtual speaker feeds BEFORE HRTF/ISM
-/// (with automatic W09 Lossless Twin vocal-band-guarded acceleration &amp; pre-separated neural vocal stem projection),
+/// Coordinates MMSE Complex Coherent Projection &amp; Mid/Side Spatial Karaoke across all 1..32 Atmos virtual speaker feeds
+/// BEFORE HRTF/ISM (with sample-rate-locked neural stereo/mono vocal references and automatic W09 Lossless Twin support),
 /// 3D neural stem descriptor registration into <see cref="SpatialSceneHub"/>, and live vocal-activity handoff
 /// to Slot 6B <see cref="SpatialDialogPostProcessingStage"/>.
 /// </summary>
@@ -23,8 +24,16 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     ILosslessReferenceProvider losslessReference;
     SpatialProgramMetadata activeMetadata = SpatialProgramMetadata.CreateDefault();
     int sampleRate = Listener.DefaultSampleRate;
+    int sourceTrackSampleRate = Listener.DefaultSampleRate;
     long preHrtfSampleCursor;
     int karaokeTailBlocksRemaining;
+
+    // Sample-rate-locked neural vocal reference buffers resampled once to output sampleRate (fixes 44.1 kHz -> 48 kHz drift)
+    float[] alignedLeadMono;
+    float[] alignedLeadLeft;
+    float[] alignedLeadRight;
+    float[] alignedBackingMono;
+    int alignedRefSampleRate;
 
     // Pre-allocated zero-GC scratch arrays for real-time multichannel Karaoke masking
     readonly float[][] channelScratch = new float[SpatialKaraokeEngine.MaxSpatialChannels][];
@@ -32,6 +41,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     readonly bool[] frontCenterScratch = new bool[SpatialKaraokeEngine.MaxSpatialChannels];
     readonly SpatialSourceDescriptor[] preHrtfDescriptors = CreatePreHrtfDescriptorPool();
     float[] leadRefScratch = new float[2048];
+    float[] leadRefRightScratch = new float[2048];
     float[] backingRefScratch = new float[2048];
     float[] twinLeftScratch = new float[2048];
     float[] twinRightScratch = new float[2048];
@@ -81,7 +91,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     }
 
     /// <summary>
-    /// True while Spatial Karaoke is active OR completing its 256-sample clickless bypass fade-out ramp.
+    /// True while Spatial Karaoke is active OR completing its 512-sample clickless bypass fade-out ramp.
     /// </summary>
     public bool IsKaraokeActiveOrRamping {
         get {
@@ -112,6 +122,28 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         }
     }
 
+    /// <summary>True when an isolated neural vocal stem reference is loaded and active for Spatial Karaoke.</summary>
+    public bool HasIsolatedNeuralVocalReference {
+        get {
+            lock (stateLock) {
+                return alignedLeadMono != null && alignedLeadMono.Length > 0;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records the native sample rate of the currently playing source track so track sample positions
+    /// map accurately into output sample-rate units (e.g. 44.1 kHz FLAC playing through 48 kHz Headphone Virtualizer).
+    /// </summary>
+    public void SetSourceTrackSampleRate(int trackSampleRate) {
+        if (trackSampleRate < 8000) {
+            return;
+        }
+        lock (stateLock) {
+            sourceTrackSampleRate = trackSampleRate;
+        }
+    }
+
     /// <summary>Updates Slot 2B configuration cleanly without audio glitches.</summary>
     public void ApplyConfig(NeuralAudioConfig newConfig) {
         NeuralAudioConfig safe = (newConfig ?? NeuralAudioConfig.Default).Sanitize();
@@ -119,7 +151,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             bool wasActive = config.SpatialKaraokeEnabled && config.KaraokeVocalLevel < 0.9999f;
             bool nowActive = safe.SpatialKaraokeEnabled && safe.KaraokeVocalLevel < 0.9999f;
             if (wasActive && !nowActive) {
-                karaokeTailBlocksRemaining = 2; // Allow 256-sample clickless fade-out to settle cleanly
+                karaokeTailBlocksRemaining = 3; // Allow 512-sample clickless fade-out to settle cleanly
             }
             config = safe;
             karaokeEngine.IsEnabled = safe.SpatialKaraokeEnabled;
@@ -135,7 +167,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             bool wasActive = config.SpatialKaraokeEnabled && config.KaraokeVocalLevel < 0.9999f;
             bool nowActive = config.SpatialKaraokeEnabled && clamped < 0.9999f;
             if (wasActive && !nowActive) {
-                karaokeTailBlocksRemaining = 2;
+                karaokeTailBlocksRemaining = 3;
             }
             config = config.WithKaraokeVocalLevel(clamped);
             karaokeEngine.VocalLevel = clamped;
@@ -146,6 +178,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     public void BindSeparatedTrack(NeuralSeparatedTrack separatedTrack) {
         lock (stateLock) {
             activeSeparatedTrack = separatedTrack;
+            RebuildAlignedReferencesLocked();
             karaokeEngine.Reset();
         }
     }
@@ -193,7 +226,8 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             bool hasTwin = config.UseLosslessTwinForKaraoke &&
                 ((losslessReference != null && losslessReference.HasSyncedLosslessTwin) ||
                  (activeSeparatedTrack != null && activeSeparatedTrack.DerivedFromLosslessTwin));
-            bool hasNeuralLead = activeSeparatedTrack?.MonoLeadVocalRef != null && activeSeparatedTrack.MonoLeadVocalRef.Length > 0;
+            bool hasNeuralLead = (alignedLeadMono != null && alignedLeadMono.Length > 0) ||
+                (activeSeparatedTrack?.MonoLeadVocalRef != null && activeSeparatedTrack.MonoLeadVocalRef.Length > 0);
             bool activeKaraoke = IsEnabled && config.SpatialKaraokeEnabled && config.KaraokeVocalLevel < 0.999f;
 
             return new NeuralAudioDiagnostics {
@@ -239,7 +273,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
 
     /// <summary>
     /// Pre-HRTF Virtual Speaker Bus entry point called directly via <see cref="VirtualizerFilter.PreHrtfBusProcessor"/>
-    /// BEFORE ISM room reflections and HRIR binaural convolution, executing zero-phase multichannel Spatial Karaoke
+    /// BEFORE ISM room reflections and HRIR binaural convolution, executing multichannel Spatial Karaoke
     /// across all virtual speaker feeds simultaneously while preserving LFE and spatial phase coherence.
     /// </summary>
     public void ProcessPreHrtfBus(
@@ -252,14 +286,17 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             return;
         }
 
-        long samplePos;
+        long outputSamplePos;
         int count;
         lock (stateLock) {
             bool active = config.SpatialKaraokeEnabled && config.KaraokeVocalLevel < 0.9999f;
             if (!IsEnabled || (!active && karaokeTailBlocksRemaining <= 0)) {
                 return;
             }
-            samplePos = preHrtfSampleCursor;
+            if (sampleRate >= 8000 && sampleRate != this.sampleRate) {
+                ReconfigureEngineLocked(sampleRate);
+            }
+            outputSamplePos = preHrtfSampleCursor;
             preHrtfSampleCursor += blockSize;
             count = Math.Min(channelCount, Math.Min(channelLayout.Length, SpatialKaraokeEngine.MaxSpatialChannels));
             for (int c = 0; c < count; c++) {
@@ -272,12 +309,13 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             }
         }
 
-        ProcessMultichannelKaraoke(virtualChannels, preHrtfDescriptors, count, blockSize, samplePos);
+        ProcessMultichannelKaraokeAtOutputSample(virtualChannels, preHrtfDescriptors, count, blockSize, outputSamplePos);
     }
 
     /// <summary>
-    /// Processes the rendered stereo output buffer in place when operating in Direct 2.0 stereo fallback mode
-    /// (zero-phase coherence Wiener masking; bit-exact pass-through when disabled or VocalLevel == 1.0).
+    /// Processes the rendered stereo output buffer in place when operating in Direct 2.0 stereo mode
+    /// (true stereo L/R MMSE vocal subtraction when neural stems are loaded, or exact Complex Mid/Side + Percussive
+    /// Guard in instant blind mode; bit-exact pass-through when disabled or VocalLevel == 1.0).
     /// </summary>
     public void ProcessStereoInterleavedKaraoke(float[] interleavedStereo, int offset, int frameCount, long trackSamplePos) {
         if (interleavedStereo == null || frameCount <= 0) {
@@ -301,16 +339,27 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             frontCenterScratch[0] = true;
             frontCenterScratch[1] = true;
 
-            ResolveVocalReferencesLocked(trackSamplePos, frameCount, out float[] leadRef, out float[] backingRef, out bool isFullMixTwin);
+            long outputSamplePos = MapTrackSampleToOutputSampleLocked(trackSamplePos);
+            ResolveVocalReferencesLocked(
+                outputSamplePos,
+                trackSamplePos,
+                frameCount,
+                wantStereoLead: true,
+                out float[] leadRefL,
+                out float[] leadRefR,
+                out float[] backingRef,
+                out bool isFullMixTwin);
+
             karaokeEngine.ProcessMultichannelInPlace(
                 channelScratch,
                 lfeScratch,
                 frontCenterScratch,
                 channelCount: 2,
                 sampleCount: frameCount,
-                neuralLeadVocalRef: leadRef,
+                neuralLeadVocalRef: leadRefL,
                 neuralBackingVocalRef: backingRef,
-                isFullMixTwinReference: isFullMixTwin);
+                isFullMixTwinReference: isFullMixTwin,
+                neuralLeadVocalRefRight: leadRefR);
 
             for (int i = 0; i < frameCount; i++) {
                 int idx = offset + i * 2;
@@ -325,7 +374,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
 
     /// <summary>
     /// Processes discrete multichannel Atmos bed/object or Pre-HRTF virtual speaker buffers in place,
-    /// preserving LFE and 0.000° inter-channel phase coherence.
+    /// preserving LFE and spatial coherence.
     /// </summary>
     public void ProcessMultichannelKaraoke(
         float[][] sourceBuffers,
@@ -333,6 +382,23 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         int activeCount,
         int frameCount,
         long trackSamplePos) {
+        if (sourceBuffers == null || activeCount <= 0 || frameCount <= 0) {
+            return;
+        }
+        long outputSamplePos;
+        lock (stateLock) {
+            outputSamplePos = MapTrackSampleToOutputSampleLocked(trackSamplePos);
+        }
+        ProcessMultichannelKaraokeAtOutputSample(sourceBuffers, descriptors, activeCount, frameCount, outputSamplePos, trackSamplePos);
+    }
+
+    void ProcessMultichannelKaraokeAtOutputSample(
+        float[][] sourceBuffers,
+        IReadOnlyList<SpatialSourceDescriptor> descriptors,
+        int activeCount,
+        int frameCount,
+        long outputSamplePos,
+        long? explicitTrackSamplePos = null) {
         if (sourceBuffers == null || activeCount <= 0 || frameCount <= 0) {
             return;
         }
@@ -353,16 +419,27 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
                 frontCenterScratch[c] = isFront;
             }
 
-            ResolveVocalReferencesLocked(trackSamplePos, frameCount, out float[] leadRef, out float[] backingRef, out bool isFullMixTwin);
+            long twinSamplePos = explicitTrackSamplePos ?? MapOutputSampleToTrackSampleLocked(outputSamplePos);
+            ResolveVocalReferencesLocked(
+                outputSamplePos,
+                twinSamplePos,
+                frameCount,
+                wantStereoLead: count == 2,
+                out float[] leadRefL,
+                out float[] leadRefR,
+                out float[] backingRef,
+                out bool isFullMixTwin);
+
             karaokeEngine.ProcessMultichannelInPlace(
                 sourceBuffers,
                 lfeScratch,
                 frontCenterScratch,
                 count,
                 frameCount,
-                leadRef,
+                leadRefL,
                 backingRef,
-                isFullMixTwinReference: isFullMixTwin);
+                isFullMixTwinReference: isFullMixTwin,
+                neuralLeadVocalRefRight: leadRefR);
 
             if (!active && karaokeTailBlocksRemaining > 0) {
                 karaokeTailBlocksRemaining--;
@@ -376,13 +453,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         lock (stateLock) {
             activeMetadata = metadata;
             if (safeRate != this.sampleRate) {
-                this.sampleRate = safeRate;
-                karaokeEngine.Dispose();
-                karaokeEngine = new SpatialKaraokeEngine(safeRate, 16) {
-                    IsEnabled = config.SpatialKaraokeEnabled,
-                    VocalLevel = config.KaraokeVocalLevel,
-                    PreserveBackingVocals = config.KaraokePreserveBackingVocals
-                };
+                ReconfigureEngineLocked(safeRate);
             }
         }
     }
@@ -393,7 +464,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             return;
         }
         lock (stateLock) {
-            preHrtfSampleCursor = frame.TrackSamplePosition;
+            preHrtfSampleCursor = MapTrackSampleToOutputSampleLocked(frame.TrackSamplePosition);
         }
         if (frame.SourceBuffers != null && frame.ActiveSourceBufferCount > 0 && frame.FrameCount > 0) {
             ProcessMultichannelKaraoke(
@@ -425,9 +496,105 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         lock (stateLock) {
             karaokeEngine.Dispose();
             activeSeparatedTrack = null;
+            alignedLeadMono = null;
+            alignedLeadLeft = null;
+            alignedLeadRight = null;
+            alignedBackingMono = null;
+            alignedRefSampleRate = 0;
             losslessReference = null;
             karaokeTailBlocksRemaining = 0;
         }
+    }
+
+    void ReconfigureEngineLocked(int safeRate) {
+        sampleRate = safeRate;
+        karaokeEngine.Dispose();
+        karaokeEngine = new SpatialKaraokeEngine(safeRate, 16) {
+            IsEnabled = config.SpatialKaraokeEnabled,
+            VocalLevel = config.KaraokeVocalLevel,
+            PreserveBackingVocals = config.KaraokePreserveBackingVocals
+        };
+        if (activeSeparatedTrack != null && alignedRefSampleRate != safeRate) {
+            RebuildAlignedReferencesLocked();
+        }
+    }
+
+    void RebuildAlignedReferencesLocked() {
+        alignedLeadMono = null;
+        alignedLeadLeft = null;
+        alignedLeadRight = null;
+        alignedBackingMono = null;
+        alignedRefSampleRate = sampleRate;
+
+        if (activeSeparatedTrack == null) {
+            return;
+        }
+
+        int srcSr = activeSeparatedTrack.SampleRate >= 8000 ? activeSeparatedTrack.SampleRate : sampleRate;
+        StereoStemBuffer stereoLead = FindLeadOrVocalStem(activeSeparatedTrack);
+        float[] srcMonoLead = activeSeparatedTrack.MonoLeadVocalRef;
+        float[] srcBacking = activeSeparatedTrack.MonoBackingVocalRef;
+
+        if (srcSr == sampleRate) {
+            alignedLeadMono = srcMonoLead;
+            alignedLeadLeft = stereoLead?.Left;
+            alignedLeadRight = stereoLead?.Right;
+            alignedBackingMono = srcBacking;
+            return;
+        }
+
+        // Exact polyphase Kaiser-sinc resampling to output sample rate (prevents 44.1 kHz <-> 48 kHz drift)
+        KaiserSincResampler resampler = new(srcSr, sampleRate);
+        if (stereoLead != null && stereoLead.Length > 0) {
+            alignedLeadLeft = resampler.ResampleMono(stereoLead.Left);
+            alignedLeadRight = resampler.ResampleMono(stereoLead.Right);
+            int n = Math.Min(alignedLeadLeft.Length, alignedLeadRight.Length);
+            alignedLeadMono = new float[n];
+            for (int i = 0; i < n; i++) {
+                alignedLeadMono[i] = 0.5f * (alignedLeadLeft[i] + alignedLeadRight[i]);
+            }
+        } else if (srcMonoLead != null && srcMonoLead.Length > 0) {
+            alignedLeadMono = resampler.ResampleMono(srcMonoLead);
+        }
+
+        if (srcBacking != null && srcBacking.Length > 0) {
+            alignedBackingMono = resampler.ResampleMono(srcBacking);
+        }
+    }
+
+    static StereoStemBuffer FindLeadOrVocalStem(NeuralSeparatedTrack track) {
+        if (track?.Stems == null || track.Stems.Count == 0) {
+            return null;
+        }
+        StereoStemBuffer fallbackVocal = null;
+        for (int i = 0; i < track.Stems.Count; i++) {
+            StereoStemBuffer st = track.Stems[i];
+            if (st == null || st.Length <= 0) {
+                continue;
+            }
+            NeuralStemRole role = NeuralStemSpatializer.ClassifyStemName(st.Name);
+            if (role == NeuralStemRole.LeadVocal) {
+                return st;
+            }
+            if (role == NeuralStemRole.Vocals && fallbackVocal == null) {
+                fallbackVocal = st;
+            }
+        }
+        return fallbackVocal;
+    }
+
+    long MapTrackSampleToOutputSampleLocked(long trackSamplePos) {
+        if (trackSamplePos <= 0 || sourceTrackSampleRate <= 0 || sourceTrackSampleRate == sampleRate) {
+            return trackSamplePos;
+        }
+        return (long)Math.Round(trackSamplePos * (sampleRate / (double)sourceTrackSampleRate));
+    }
+
+    long MapOutputSampleToTrackSampleLocked(long outputSamplePos) {
+        if (outputSamplePos <= 0 || sourceTrackSampleRate <= 0 || sourceTrackSampleRate == sampleRate) {
+            return outputSamplePos;
+        }
+        return (long)Math.Round(outputSamplePos * (sourceTrackSampleRate / (double)sampleRate));
     }
 
     void EnsureScratchCapacity(int frameCount) {
@@ -439,6 +606,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         if (leadRefScratch.Length < frameCount) {
             int alloc = Math.Max(2048, frameCount);
             leadRefScratch = new float[alloc];
+            leadRefRightScratch = new float[alloc];
             backingRefScratch = new float[alloc];
             twinLeftScratch = new float[alloc];
             twinRightScratch = new float[alloc];
@@ -446,32 +614,46 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     }
 
     void ResolveVocalReferencesLocked(
+        long outputSamplePos,
         long trackSamplePos,
         int frameCount,
-        out float[] leadRef,
+        bool wantStereoLead,
+        out float[] leadRefL,
+        out float[] leadRefR,
         out float[] backingRef,
         out bool isFullMixTwinReference) {
-        leadRef = null;
+        leadRefL = null;
+        leadRefR = null;
         backingRef = null;
         isFullMixTwinReference = false;
 
-        if (activeSeparatedTrack?.MonoLeadVocalRef != null && trackSamplePos >= 0) {
-            float[] srcLead = activeSeparatedTrack.MonoLeadVocalRef;
-            if (trackSamplePos < srcLead.Length) {
-                int avail = (int)Math.Min(frameCount, srcLead.Length - trackSamplePos);
-                Array.Copy(srcLead, (int)trackSamplePos, leadRefScratch, 0, avail);
+        if (outputSamplePos >= 0) {
+            if (wantStereoLead && alignedLeadLeft != null && alignedLeadRight != null &&
+                outputSamplePos < alignedLeadLeft.Length && outputSamplePos < alignedLeadRight.Length) {
+                int availL = (int)Math.Min(frameCount, alignedLeadLeft.Length - outputSamplePos);
+                int availR = (int)Math.Min(frameCount, alignedLeadRight.Length - outputSamplePos);
+                Array.Copy(alignedLeadLeft, (int)outputSamplePos, leadRefScratch, 0, availL);
+                if (availL < frameCount) {
+                    Array.Clear(leadRefScratch, availL, frameCount - availL);
+                }
+                Array.Copy(alignedLeadRight, (int)outputSamplePos, leadRefRightScratch, 0, availR);
+                if (availR < frameCount) {
+                    Array.Clear(leadRefRightScratch, availR, frameCount - availR);
+                }
+                leadRefL = leadRefScratch;
+                leadRefR = leadRefRightScratch;
+            } else if (alignedLeadMono != null && outputSamplePos < alignedLeadMono.Length) {
+                int avail = (int)Math.Min(frameCount, alignedLeadMono.Length - outputSamplePos);
+                Array.Copy(alignedLeadMono, (int)outputSamplePos, leadRefScratch, 0, avail);
                 if (avail < frameCount) {
                     Array.Clear(leadRefScratch, avail, frameCount - avail);
                 }
-                leadRef = leadRefScratch;
+                leadRefL = leadRefScratch;
             }
-        }
 
-        if (config.KaraokePreserveBackingVocals && activeSeparatedTrack?.MonoBackingVocalRef != null && trackSamplePos >= 0) {
-            float[] srcBack = activeSeparatedTrack.MonoBackingVocalRef;
-            if (trackSamplePos < srcBack.Length) {
-                int avail = (int)Math.Min(frameCount, srcBack.Length - trackSamplePos);
-                Array.Copy(srcBack, (int)trackSamplePos, backingRefScratch, 0, avail);
+            if (config.KaraokePreserveBackingVocals && alignedBackingMono != null && outputSamplePos < alignedBackingMono.Length) {
+                int avail = (int)Math.Min(frameCount, alignedBackingMono.Length - outputSamplePos);
+                Array.Copy(alignedBackingMono, (int)outputSamplePos, backingRefScratch, 0, avail);
                 if (avail < frameCount) {
                     Array.Clear(backingRefScratch, avail, frameCount - avail);
                 }
@@ -479,15 +661,16 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             }
         }
 
-        // W09 Lossless Twin auto-acceleration: if no offline neural lead stem is attached yet, use the synced
-        // lossless FLAC twin's clean center-sum as a vocal-band-guarded coherence reference (never cancels sub-bass/kick).
-        if (leadRef == null && config.UseLosslessTwinForKaraoke &&
+        // W09 Lossless Twin auto-acceleration: if no offline neural lead stem is attached yet AND sample rates match,
+        // use the synced lossless FLAC twin's clean center-sum as a vocal-band-guarded coherence reference.
+        if (leadRefL == null && config.UseLosslessTwinForKaraoke &&
             losslessReference != null && losslessReference.HasSyncedLosslessTwin &&
+            losslessReference.SampleRate == sampleRate &&
             losslessReference.TryReadAlignedStereoBlock(trackSamplePos, twinLeftScratch, twinRightScratch, frameCount)) {
             for (int i = 0; i < frameCount; i++) {
                 leadRefScratch[i] = 0.5f * (twinLeftScratch[i] + twinRightScratch[i]);
             }
-            leadRef = leadRefScratch;
+            leadRefL = leadRefScratch;
             isFullMixTwinReference = true;
         }
     }

@@ -1,9 +1,13 @@
 /**
- * Cavernize & OmniAgent - Unified Diagnostics, Live Bridge & Full-Agent Hub v4 (Cloudflare Worker + KV)
+ * Cavernize & OmniAgent - Unified Diagnostics, Live Bridge & Full-Agent Hub v5 (Cloudflare Worker + KV)
  *
  * 100% FREE on Cloudflare Workers Free Tier (100,000 req/day + KV Free Tier).
- * 100% backwards-compatible with Cavernize Android Live Bridge v3 (/v1/telemetry/*, /v1/wake/*, /v1/session/*)
- * AND powers Full-Agent v4 ("Antigravity 2"):
+ * 100% backwards-compatible with Cavernize Android Live Bridge v3/v4 (/v1/telemetry/*, /v1/wake/*, /v1/session/*)
+ * AND powers Full-Agent v4/v5 ("OmniConnect Zero-Paste"):
+ *   - /v1/knock/* : Zero-Secret Ephemeral ECDH P-256 "Smart Knock" so a fresh AI Studio chat NEVER asks the user
+ *                   to copy/paste URLs or tokens. Only the public double-hashed X-Knock-Id is used to ring the
+ *                   phone's biometric bell; only the owner phone (proving X-Device-Hash) can poll/approve/deny,
+ *                   and grants are E2E encrypted via ephemeral P-256 ECDH (Forward Secrecy).
  *   - /v1/agent/* : Multi-channel E2E-encrypted full-agent command queue (termux, android, debian, etc.)
  *                   with live presence heartbeats and FIFO command queuing.
  *   - /v1/blob/*  : E2E-encrypted chunked transfer store (up to 64 chunks for git delta bundles,
@@ -32,6 +36,10 @@
 
 const MAX_TTL_SECONDS = 3600; // 60 min hard ceiling for live sessions
 const MAX_WAKE_TTL_SECONDS = 180; // 3 min for biometric approval
+const MAX_KNOCK_TTL_SECONDS = 120; // 2 min for zero-secret smart knock approval
+const KNOCK_RATE_WINDOW_SECONDS = 900; // 15 min anti-spam rate window
+const KNOCK_MAX_PER_WINDOW = 3; // max 3 knocks per 15 min per mailbox
+const KNOCK_DEFAULT_DENY_COOLDOWN = 900; // 15 min automatic lockout on deny
 const TELEMETRY_TTL_SECONDS = 14 * 24 * 3600; // 14 days automatic KV hygiene
 const AGENT_PRESENCE_TTL_SECONDS = 120; // 2 min presence heartbeat
 const AGENT_CMD_TTL_SECONDS = 300; // 5 min command queue TTL
@@ -47,6 +55,7 @@ const KNOWN_AGENT_CHANNELS = ["termux", "android", "debian", "cavernize"];
 const CMD_NAME_RE = /^[a-z0-9_.:-]{1,64}$/;
 const CHANNEL_RE = /^[a-z0-9_-]{1,32}$/;
 const HEX64_RE = /^[0-9a-f]{64}$/;
+const PUBKEY_B64_RE = /^[A-Za-z0-9+/_-]{80,120}={0,2}$/;
 const ALLOWED_TELEMETRY_KINDS = new Set([
   "log",
   "summary",
@@ -217,10 +226,11 @@ export default {
       return jsonResp({
         ok: true,
         service: "cavernize-unified-hub",
-        version: 4,
+        version: 5,
         maxTtlSeconds: MAX_TTL_SECONDS,
         telemetryTtlDays: Math.round(TELEMETRY_TTL_SECONDS / 86400),
         supportsWake: true,
+        supportsSmartKnock: true,
         supportsFlexibleCommands: true,
         supportsDynamicExecution: true,
         supportsTelemetry: true,
@@ -790,13 +800,179 @@ export default {
         return jsonResp({
           ok: true,
           service: "cavernize-unified-hub",
-          version: 4,
+          version: 5,
           hasTelemetry: Boolean(rawMeta),
           lastUpload: rawMeta ? JSON.parse(rawMeta).uploadedAtUtc : null,
         });
       }
 
       return jsonResp({ ok: false, error: "Unknown telemetry endpoint." }, 404);
+    }
+
+    // ==================== V5 ZERO-SECRET ECDH SMART KNOCK (/v1/knock/*) ====================
+    if (path.startsWith("/v1/knock/")) {
+      // Owner-authenticated routes (phone proves X-Device-Hash -> Worker derives knockId server-side)
+      if (path === "/v1/knock/poll" || path === "/v1/knock/approve" || path === "/v1/knock/deny") {
+        const devHash = getValidHex64Header(request, "X-Device-Hash");
+        if (!devHash) {
+          return jsonResp({ ok: false, error: "Missing or invalid X-Device-Hash header (64 hex chars)." }, 401);
+        }
+        const ownerKnockId = await sha256Hex(`knock-channel-v5:${devHash}`);
+        const pendingKey = `k:${ownerKnockId}:pending`;
+        const statusPrefix = `k:${ownerKnockId}:st:`;
+        const cooldownKey = `k:${ownerKnockId}:cooldown`;
+
+        if (request.method === "GET" && path === "/v1/knock/poll") {
+          const raw = await env.RELAY_KV.get(pendingKey);
+          if (!raw) {
+            return jsonResp({ ok: true, hasKnock: false });
+          }
+          await env.RELAY_KV.delete(pendingKey);
+          return jsonResp({ ok: true, hasKnock: true, knock: JSON.parse(raw) });
+        }
+
+        if (request.method === "POST" && path === "/v1/knock/approve") {
+          const parsed = await readBoundedJson(request, 64 * 1024);
+          if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
+          const d = parsed.data || {};
+          const knockReqId = sanitizeId(d.knockReqId);
+          const serverPubKey = String(d.serverPubKey || "").trim();
+          if (!knockReqId || !PUBKEY_B64_RE.test(serverPubKey) || !d.encryptedGrant) {
+            return jsonResp({ ok: false, error: "Missing knockReqId, valid serverPubKey, or encryptedGrant." }, 400);
+          }
+          await env.RELAY_KV.put(
+            statusPrefix + knockReqId,
+            JSON.stringify({
+              status: "approved",
+              knockReqId,
+              serverPubKey,
+              encryptedGrant: d.encryptedGrant,
+              scope: String(d.scope || "session").slice(0, 24),
+              approvedAtUtc: new Date().toISOString(),
+            }),
+            { expirationTtl: 180 }
+          );
+          return jsonResp({ ok: true, knockReqId, status: "approved" });
+        }
+
+        if (request.method === "POST" && path === "/v1/knock/deny") {
+          const parsed = await readBoundedJson(request, 32 * 1024);
+          if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
+          const d = parsed.data || {};
+          const knockReqId = sanitizeId(d.knockReqId);
+          if (!knockReqId) {
+            return jsonResp({ ok: false, error: "Missing knockReqId." }, 400);
+          }
+          const cooldownSec = Math.max(60, Math.min(3600, Number(d.cooldownSeconds) || KNOCK_DEFAULT_DENY_COOLDOWN));
+          await Promise.all([
+            env.RELAY_KV.put(
+              statusPrefix + knockReqId,
+              JSON.stringify({
+                status: "denied",
+                knockReqId,
+                reason: String(d.reason || "Denied by device user").slice(0, 120),
+                deniedAtUtc: new Date().toISOString(),
+              }),
+              { expirationTtl: 120 }
+            ),
+            env.RELAY_KV.put(
+              cooldownKey,
+              JSON.stringify({ untilUtc: new Date(Date.now() + cooldownSec * 1000).toISOString() }),
+              { expirationTtl: cooldownSec }
+            ),
+          ]);
+          return jsonResp({ ok: true, knockReqId, status: "denied", cooldownSeconds: cooldownSec });
+        }
+
+        return jsonResp({ ok: false, error: "Method not allowed on knock owner route." }, 405);
+      }
+
+      // Public caller routes (only X-Knock-Id double-hash; strictly rate-limited + single-slot)
+      const knockId = getValidHex64Header(request, "X-Knock-Id");
+      if (!knockId) {
+        return jsonResp({ ok: false, error: "Missing or invalid X-Knock-Id header (64 hex chars)." }, 401);
+      }
+      const pendingKey = `k:${knockId}:pending`;
+      const statusPrefix = `k:${knockId}:st:`;
+      const cooldownKey = `k:${knockId}:cooldown`;
+      const rateKey = `k:${knockId}:rate`;
+
+      if (request.method === "POST" && path === "/v1/knock/request") {
+        const [cooldownRaw, existingPending, rateRaw] = await Promise.all([
+          env.RELAY_KV.get(cooldownKey),
+          env.RELAY_KV.get(pendingKey),
+          env.RELAY_KV.get(rateKey),
+        ]);
+        if (cooldownRaw) {
+          return jsonResp({ ok: false, error: "Smart Knock temporarily locked after a recent denial." }, 429);
+        }
+        if (existingPending) {
+          return jsonResp({ ok: false, error: "A Smart Knock request is already awaiting approval on the device." }, 409);
+        }
+        let rateCount = 0;
+        if (rateRaw) {
+          try {
+            rateCount = Number(JSON.parse(rateRaw).count) || 0;
+          } catch (_err) {
+            rateCount = 0;
+          }
+        }
+        if (rateCount >= KNOCK_MAX_PER_WINDOW) {
+          return jsonResp({ ok: false, error: "Smart Knock rate limit exceeded (max 3 requests per 15 min)." }, 429);
+        }
+
+        const parsed = await readBoundedJson(request, 32 * 1024);
+        if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
+        const d = parsed.data || {};
+        const knockReqId = sanitizeId(d.knockReqId || crypto.randomUUID());
+        const clientPubKey = String(d.clientPubKey || "").trim();
+        if (!knockReqId || !PUBKEY_B64_RE.test(clientPubKey)) {
+          return jsonResp({ ok: false, error: "Invalid knockReqId or P-256 clientPubKey." }, 400);
+        }
+        const scope = String(d.requestedScope || "session").trim().toLowerCase() === "workspace" ? "workspace" : "session";
+        const knockPayload = {
+          knockReqId,
+          clientPubKey,
+          requestedScope: scope,
+          requestedTier: Math.max(0, Math.min(2, Number(d.requestedTier != null ? d.requestedTier : 2))),
+          durationSeconds: Math.max(300, Math.min(MAX_TTL_SECONDS, Number(d.durationSeconds) || 3600)),
+          requester: String(d.requester || "AI Studio").slice(0, 64),
+          reason: String(d.reason || "Zero-paste AI session").slice(0, 160),
+          queuedAtUtc: new Date().toISOString(),
+        };
+        await Promise.all([
+          env.RELAY_KV.put(pendingKey, JSON.stringify(knockPayload), { expirationTtl: MAX_KNOCK_TTL_SECONDS }),
+          env.RELAY_KV.put(
+            statusPrefix + knockReqId,
+            JSON.stringify({ status: "pending", knockReqId, queuedAtUtc: knockPayload.queuedAtUtc }),
+            { expirationTtl: MAX_KNOCK_TTL_SECONDS + 60 }
+          ),
+          env.RELAY_KV.put(
+            rateKey,
+            JSON.stringify({ count: rateCount + 1 }),
+            { expirationTtl: KNOCK_RATE_WINDOW_SECONDS }
+          ),
+        ]);
+        return jsonResp({ ok: true, knockReqId, expiresInSeconds: MAX_KNOCK_TTL_SECONDS });
+      }
+
+      if (request.method === "GET" && path === "/v1/knock/status") {
+        const knockReqId = sanitizeId(url.searchParams.get("knockReqId"));
+        if (!knockReqId) {
+          return jsonResp({ ok: false, error: "Missing knockReqId query parameter." }, 400);
+        }
+        const raw = await env.RELAY_KV.get(statusPrefix + knockReqId);
+        if (!raw) {
+          return jsonResp({ ok: false, error: "Smart Knock expired or unknown." }, 404);
+        }
+        const parsed = JSON.parse(raw);
+        if (parsed.status === "approved" || parsed.status === "denied") {
+          await env.RELAY_KV.delete(statusPrefix + knockReqId);
+        }
+        return jsonResp({ ok: true, ...parsed });
+      }
+
+      return jsonResp({ ok: false, error: "Unknown knock endpoint." }, 404);
     }
 
     // ==================== PAIRED BIOMETRIC WAKE ENDPOINTS ====================

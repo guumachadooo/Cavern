@@ -60,6 +60,12 @@ public sealed class OmniSettingsStore {
         set => prefs.Edit().PutBoolean("service_enabled", value).Apply();
     }
 
+    /// <summary>Enables Zero-Secret P-256 ECDH Smart Knock approval overlay when running.</summary>
+    public bool SmartKnockEnabled {
+        get => prefs.GetBoolean("smart_knock_enabled", true);
+        set => prefs.Edit().PutBoolean("smart_knock_enabled", value).Apply();
+    }
+
     /// <summary>UI language preference: "auto" (follows device locale), "pt", or "en".</summary>
     public string UiLanguage {
         get => prefs.GetString("ui_language", "auto") ?? "auto";

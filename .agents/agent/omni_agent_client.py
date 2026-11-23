@@ -33,17 +33,165 @@ for p in (str(AGENT_DIR), str(PLUGIN_SCRIPTS)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import bridge_auth as bauth
 import hot_probe_compiler as hpc
 import omni_protocol as proto
 
 
-def _resolve_auth(args: argparse.Namespace) -> tuple[str, str, str]:
-    relay = (getattr(args, "url", "") or os.environ.get("CAVERN_RELAY_URL") or "").strip()
-    secret = (getattr(args, "pair_secret", "") or os.environ.get("CAVERN_BRIDGE_PAIR_SECRET") or "").strip()
-    admin = (getattr(args, "admin_key", "") or os.environ.get("CAVERN_ADMIN_KEY") or "").strip()
+def _resolve_auth(args: argparse.Namespace, *, allow_knock: bool = False) -> tuple[str, str, str]:
+    conn = bauth.resolve_connection(
+        cli_url=getattr(args, "url", "") or "",
+        cli_pair_secret=getattr(args, "pair_secret", "") or "",
+        cli_admin_key=getattr(args, "admin_key", "") or "",
+    )
+    relay = conn["relayUrl"]
+    secret = conn["pairSecret"]
+    admin = conn["adminKey"]
+    if relay and not secret and allow_knock and conn.get("knockId"):
+        kr = bauth.request_smart_knock(
+            relay,
+            conn["knockId"],
+            requested_scope="workspace",
+            tier=2,
+            duration_seconds=3600,
+            reason="OmniAgent workspace auto-connect",
+            admin_key=admin,
+            persist_vault=True,
+        )
+        secret = str((kr.get("grant") or {}).get("pairSecret") or "").strip()
+        if secret:
+            secret = proto.normalize_pair_secret_hex(secret)
     if not relay or not secret:
-        raise SystemExit("ERROR: Provide --url & --pair-secret (or set CAVERN_RELAY_URL & CAVERN_BRIDGE_PAIR_SECRET).")
-    return proto.validate_https_url(relay), proto.normalize_pair_secret_hex(secret), admin
+        hint = (
+            "Run `python3 -B .agents/scripts/omni_agent.py connect` (Smart Knock) "
+            "or set CAVERN_BRIDGE_PAIR_SECRET in AI Studio Secrets."
+        )
+        raise SystemExit(f"ERROR: Missing relay URL or pairing secret. {hint}")
+    return relay, secret, admin
+
+
+def cmd_connect(args: argparse.Namespace) -> int:
+    if args.clear_vault:
+        removed = bauth.clear_vault()
+        print(json.dumps({"ok": True, "vaultCleared": removed}, indent=2))
+        return 0
+
+    if args.set_profile:
+        prof = bauth.save_public_profile(
+            relay_url=args.url or None,
+            knock_id=args.knock_id or None,
+        )
+        print(json.dumps({"ok": True, "profile": prof}, indent=2, ensure_ascii=False))
+        return 0
+
+    if args.save_session or args.save_pair:
+        saved = bauth.save_vault(
+            relay_url=args.url or None,
+            pair_secret=args.save_pair or None,
+            session_token=args.save_session or None,
+            session_ttl_seconds=args.duration,
+            session_tier=args.tier,
+            admin_key=args.admin_key or None,
+        )
+        if args.save_pair and saved.get("knockId"):
+            # Sync ONLY the non-secret double-hashed knockId to the public profile if requested
+            if args.sync_public_profile:
+                bauth.save_public_profile(relay_url=saved.get("relayUrl"), knock_id=saved["knockId"])
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "vaultPath": str(bauth.LOCAL_VAULT_PATH.relative_to(REPO_ROOT)),
+                    "relayUrl": saved.get("relayUrl", ""),
+                    "hasPairSecret": bool(saved.get("pairSecret")),
+                    "hasSessionToken": bool(saved.get("sessionToken")),
+                    "publicKnockId": saved.get("knockId", ""),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+
+    conn = bauth.resolve_connection(
+        cli_url=args.url or "",
+        cli_pair_secret=args.pair_secret or "",
+        cli_code=args.code or "",
+        cli_admin_key=args.admin_key or "",
+        cli_knock_id=args.knock_id or "",
+    )
+
+    if args.status_only:
+        summary = {
+            "ok": bool(conn["relayUrl"]),
+            "relayUrl": conn["relayUrl"],
+            "relaySource": conn["relaySource"],
+            "hasPairSecret": bool(conn["pairSecret"]),
+            "pairSource": conn["pairSource"],
+            "hasActiveSessionToken": bool(conn["sessionToken"]),
+            "sessionSource": conn["sessionSource"],
+            "sessionRemainingSec": conn["sessionRemainingSec"],
+            "hasPublicKnockId": bool(conn["knockId"]),
+            "knockIdPreview": (conn["knockId"][:12] + "...") if conn["knockId"] else "",
+            "device": conn["device"],
+        }
+        # Probe relay health + agent channels if paired
+        if conn["relayUrl"]:
+            st_h, h_resp = proto.http_json("GET", f"{conn['relayUrl']}/health", {"User-Agent": proto.USER_AGENT}, timeout=10)
+            summary["relayHealth"] = h_resp if st_h == 200 else {"ok": False, "http": st_h}
+        if conn["relayUrl"] and conn["pairSecret"]:
+            headers = proto.derive_agent_headers(conn["pairSecret"], channel="termux", admin_key=conn["adminKey"])
+            st_a, a_resp = proto.http_json("GET", f"{conn['relayUrl']}/v1/agent/status?all=1", headers, timeout=12)
+            if st_a == 200 and a_resp.get("ok"):
+                summary["channels"] = {
+                    k: {"online": bool(v.get("online")), "device": v.get("device", ""), "mode": v.get("securityMode", "")}
+                    for k, v in (a_resp.get("channels") or {}).items()
+                }
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return 0
+
+    if not conn["relayUrl"]:
+        raise SystemExit("ERROR: No relayUrl found in CLI, Env, Vault, or .agents/bridge_profile.json.")
+
+    if not args.force_knock and (conn["pairSecret"] or conn["sessionToken"]):
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "mode": "pair_auto" if conn["pairSecret"] else "session_vault",
+                    "relayUrl": conn["relayUrl"],
+                    "source": conn["pairSource"] if conn["pairSecret"] else conn["sessionSource"],
+                    "sessionRemainingSec": conn["sessionRemainingSec"],
+                    "message": "Already connected via zero-paste credentials (no knock needed).",
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 0
+
+    if not conn["knockId"]:
+        raise SystemExit(
+            "ERROR: No pairSecret/sessionToken in vault and no public knockId in .agents/bridge_profile.json yet.\n"
+            "Fix once: tap 'Copy Public Knock ID' in Cavernize/OmniAgent -> run `omni_agent.py connect --set-profile --knock-id <id>`, "
+            "OR set CAVERN_BRIDGE_PAIR_SECRET once in AI Studio Secrets."
+        )
+
+    res = bauth.request_smart_knock(
+        conn["relayUrl"],
+        conn["knockId"],
+        requested_scope=args.scope,
+        tier=args.tier,
+        duration_seconds=args.duration,
+        reason=args.reason,
+        requester="AI Studio",
+        timeout_sec=args.timeout,
+        admin_key=conn["adminKey"],
+        persist_vault=True,
+    )
+    safe_out = {k: v for k, v in res.items() if k != "grant"}
+    print(json.dumps(safe_out, indent=2, ensure_ascii=False))
+    return 0
 
 
 def send_agent_command(
@@ -424,8 +572,25 @@ def main() -> int:
     p_sw.add_argument("--failed", action="store_true")
     p_sw.add_argument("--done-only", action="store_true")
 
+    p_conn = sub.add_parser("connect", help="OmniConnect v5 zero-paste auto-connect, vault & Smart Knock manager")
+    p_conn.add_argument("--status-only", action="store_true", help="Inspect active auto-connect sources & relay health without knocking")
+    p_conn.add_argument("--force-knock", action="store_true", help="Force a fresh P-256 ECDH Smart Knock even if credentials exist")
+    p_conn.add_argument("--scope", default="workspace", choices=("session", "workspace"), help="Requested Smart Knock scope")
+    p_conn.add_argument("--tier", type=int, default=2, choices=(0, 1, 2))
+    p_conn.add_argument("--duration", type=int, default=3600)
+    p_conn.add_argument("--reason", default="AI Studio auto-connect")
+    p_conn.add_argument("--code", default="", help="Optional active Live Bridge session token")
+    p_conn.add_argument("--knock-id", default="", help="Public 64-hex double-hashed Knock ID")
+    p_conn.add_argument("--set-profile", action="store_true", help="Update public non-secret .agents/bridge_profile.json")
+    p_conn.add_argument("--save-session", default="", help="Cache an active ephemeral CAV-... session token in local gitignored vault")
+    p_conn.add_argument("--save-pair", default="", help="Cache pair secret in local gitignored vault (0600, never synced to Git)")
+    p_conn.add_argument("--sync-public-profile", action="store_true", help="Also write derived public knockId (non-secret) into .agents/bridge_profile.json")
+    p_conn.add_argument("--clear-vault", action="store_true", help="Wipe local gitignored .agents/.bridge_vault.json")
+
     args = parser.parse_args()
 
+    if args.action == "connect":
+        return cmd_connect(args)
     if args.action == "pull-workspace":
         return cmd_pull_workspace(args)
     if args.action == "push-workspace":
@@ -435,7 +600,7 @@ def main() -> int:
     if args.action == "swarm":
         return cmd_swarm(args)
 
-    relay, secret, admin = _resolve_auth(args)
+    relay, secret, admin = _resolve_auth(args, allow_knock=True)
     if args.action == "status":
         headers = proto.derive_agent_headers(secret, channel="termux", admin_key=admin)
         st, resp = proto.http_json("GET", f"{relay}/v1/agent/status?all=1", headers, timeout=15)

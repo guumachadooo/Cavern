@@ -3027,6 +3027,61 @@ public partial class MainActivity : Activity, ICavernizeApp {
         _ = Task.Run(() => {
             try {
                 FileInfo keyInfo = new(activePath);
+
+                // Fast path for VocalMixDna: if full separated stems for this track are already loaded in RAM or cached on disk,
+                // extract Song Vocal DNA immediately (<0.3s) without re-running ONNX separation!
+                if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna) {
+                    Cavernize.Logic.Spatial.NeuralSeparatedTrack existingForDna = playerEngine?.NeuralStage?.ActiveSeparatedTrack;
+                    if (existingForDna == null ||
+                        existingForDna.Stems == null ||
+                        existingForDna.Stems.Count == 0 ||
+                        !string.Equals(existingForDna.SourceTrackKey, activePath, StringComparison.OrdinalIgnoreCase)) {
+                        existingForDna = null;
+                        if (neuralTrackCache != null) {
+                            Cavernize.Logic.Spatial.NeuralPipelineGoal[] reuseGoals = [
+                                Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
+                                Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke
+                            ];
+                            for (int g = 0; g < reuseGoals.Length; g++) {
+                                Cavernize.Logic.Spatial.NeuralExecutionPlan rp = neuralOrchestrator.BuildPlan(reuseGoals[g], cfg);
+                                if (!rp.IsRunnable) {
+                                    continue;
+                                }
+                                string rk = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
+                                    activePath, keyInfo.Length, keyInfo.LastWriteTimeUtc.Ticks, prefSr, rp.PlanSignature);
+                                if (neuralTrackCache.TryLoad(rk, out Cavernize.Logic.Spatial.NeuralSeparatedTrack reusable, ct)) {
+                                    existingForDna = reusable;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (existingForDna != null) {
+                        Cavern.VocalChain.VocalMixDnaProfile instantDna = Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(
+                            existingForDna, summaryTitle);
+                        if (instantDna != null && instantDna.IsExtractedFromSong) {
+                            SaveCachedSongVocalDna(activeTrack, instantDna);
+                            RunOnUiThread(() => {
+                                if (uiDestroyed || myGen != neuralPrepGeneration) {
+                                    return;
+                                }
+                                isNeuralPrepRunning = false;
+                                neuralPrepProgress = 1.0;
+                                neuralPrepStatusText = "";
+                                if (!(playerEngine.NeuralStage?.HasPlayableSeparatedStems ?? false)) {
+                                    playerEngine.BindSeparatedNeuralTrack(existingForDna);
+                                }
+                                ApplyExtractedSongDnaOnUiThread(instantDna);
+                                RefreshNeuralAudioUi();
+                                RefreshNeuralPrepUi();
+                                Toast.MakeText(this, string.Format(S["VocalDnaReadyToast"], instantDna.TargetVocalLufs, instantDna.ReverbRt60Sec, instantDna.ActiveWindowCount), ToastLength.Short).Show();
+                            });
+                            return;
+                        }
+                    }
+                }
+
                 string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
                     activePath, keyInfo.Length, keyInfo.LastWriteTimeUtc.Ticks, prefSr, plan.PlanSignature);
 
@@ -3044,8 +3099,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                         isNeuralPrepRunning = false;
                         neuralPrepProgress = 1.0;
                         neuralPrepStatusText = "";
-                        if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna ||
-                            !(playerEngine.NeuralStage?.HasPlayableSeparatedStems ?? false)) {
+                        if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna) {
                             playerEngine.BindSeparatedNeuralTrack(cachedTrack);
                         }
                         ApplyExtractedSongDnaOnUiThread(cachedDna);
@@ -3099,8 +3153,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
                     isNeuralPrepRunning = false;
                     neuralPrepProgress = 1.0;
                     neuralPrepStatusText = "";
-                    if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna ||
-                        !(playerEngine.NeuralStage?.HasPlayableSeparatedStems ?? false)) {
+                    // VocalMixDna analyzes a smart <=40s excerpt, so never bind it as a full-length playback stem set
+                    if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna) {
                         playerEngine.BindSeparatedNeuralTrack(separated);
                     }
                     ApplyExtractedSongDnaOnUiThread(extractedDna);

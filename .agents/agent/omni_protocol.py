@@ -45,6 +45,9 @@ SKIP_SYNC_FILES = {
     ".model_modes.json",
     ".diagnostics",
     ".hook_state.json",
+    ".bridge_vault.json",
+    ".env",
+    ".env.local",
 }
 SKIP_SYNC_EXTS = {
     ".so",
@@ -97,6 +100,124 @@ def compute_device_hash(pair_secret_hex: str) -> str:
 def compute_agent_key(pair_secret_hex: str) -> str:
     norm = normalize_pair_secret_hex(pair_secret_hex)
     return hashlib.sha256(f"agent-access-v4:{norm}".encode("utf-8")).hexdigest()
+
+
+def compute_knock_channel_id(pair_secret_hex: str) -> str:
+    """Public double-hashed Smart Knock mailbox ID (cannot derive device_hash or pair_secret)."""
+    dev_hash = compute_device_hash(pair_secret_hex)
+    return hashlib.sha256(f"knock-channel-v5:{dev_hash}".encode("utf-8")).hexdigest()
+
+
+# ==================== PURE-PYTHON NIST P-256 ECDH & SMART KNOCK v5 ====================
+# Exact SEC 1 uncompressed point format (0x04 || X(32) || Y(32)) matching .NET ECDiffieHellman(nistP256).
+
+_P256_P = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
+_P256_A = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFC
+_P256_B = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B
+_P256_N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+_P256_GX = 0x6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296
+_P256_GY = 0x4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5
+_SAS_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def _p256_is_on_curve(x: int, y: int) -> bool:
+    if not (0 <= x < _P256_P and 0 <= y < _P256_P):
+        return False
+    return (y * y - (x * x * x + _P256_A * x + _P256_B)) % _P256_P == 0
+
+
+def _p256_point_add(p1: tuple[int, int] | None, p2: tuple[int, int] | None) -> tuple[int, int] | None:
+    if p1 is None:
+        return p2
+    if p2 is None:
+        return p1
+    x1, y1 = p1
+    x2, y2 = p2
+    if x1 == x2:
+        if (y1 + y2) % _P256_P == 0:
+            return None
+        lam = ((3 * x1 * x1 + _P256_A) * pow(2 * y1, _P256_P - 2, _P256_P)) % _P256_P
+    else:
+        lam = ((y2 - y1) * pow((x2 - x1) % _P256_P, _P256_P - 2, _P256_P)) % _P256_P
+    x3 = (lam * lam - x1 - x2) % _P256_P
+    y3 = (lam * (x1 - x3) - y1) % _P256_P
+    return (x3, y3)
+
+
+def _p256_scalar_mul(k: int, point: tuple[int, int]) -> tuple[int, int] | None:
+    if k % _P256_N == 0:
+        return None
+    k = k % _P256_N
+    result: tuple[int, int] | None = None
+    addend: tuple[int, int] | None = point
+    while k > 0:
+        if k & 1:
+            result = _p256_point_add(result, addend)
+        addend = _p256_point_add(addend, addend)
+        k >>= 1
+    return result
+
+
+def p256_generate_keypair() -> tuple[int, bytes]:
+    """Generate ephemeral NIST P-256 (priv_int, sec1_uncompressed_65bytes)."""
+    while True:
+        priv = secrets.randbelow(_P256_N - 1) + 1
+        pub = _p256_scalar_mul(priv, (_P256_GX, _P256_GY))
+        if pub is not None:
+            return priv, b"\x04" + pub[0].to_bytes(32, "big") + pub[1].to_bytes(32, "big")
+
+
+def p256_encode_public_key(pub_bytes: bytes) -> str:
+    if len(pub_bytes) != 65 or pub_bytes[0] != 0x04:
+        raise ValueError("Expected 65-byte SEC1 uncompressed P-256 public key.")
+    return base64.b64encode(pub_bytes).decode("ascii")
+
+
+def p256_decode_public_key(pub_b64: str) -> tuple[int, int]:
+    raw = base64.b64decode((pub_b64 or "").strip())
+    if len(raw) != 65 or raw[0] != 0x04:
+        raise ValueError("Invalid P-256 SEC1 public key encoding.")
+    x = int.from_bytes(raw[1:33], "big")
+    y = int.from_bytes(raw[33:65], "big")
+    if not _p256_is_on_curve(x, y):
+        raise ValueError("P-256 public key point is not on curve.")
+    return (x, y)
+
+
+def p256_ecdh_shared_secret(priv_int: int, peer_pub_b64: str) -> bytes:
+    """Compute raw 32-byte ECDH X-coordinate shared secret matching .NET DeriveRawSecretAgreement."""
+    peer_pt = p256_decode_public_key(peer_pub_b64)
+    shared = _p256_scalar_mul(priv_int, peer_pt)
+    if shared is None:
+        raise ValueError("ECDH shared point at infinity.")
+    return shared[0].to_bytes(32, "big")
+
+
+def compute_knock_sas(knock_id: str, knock_req_id: str, client_pub_b64: str) -> str:
+    """Compute 6-character visual verification code (XXX-XXX) bound to client's ephemeral public key."""
+    canonical = f"knock-sas-v5|{knock_id.strip().lower()}|{knock_req_id.strip()}|{client_pub_b64.strip()}"
+    digest = hashlib.sha256(canonical.encode("utf-8")).digest()
+    chars = [_SAS_ALPHABET[digest[i] & 0x1F] for i in range(6)]
+    return f"{''.join(chars[:3])}-{''.join(chars[3:])}"
+
+
+def derive_knock_shared_key_hex(shared_x_bytes: bytes, knock_req_id: str) -> str:
+    """Derive 32-byte (64-hex) symmetric key from raw ECDH shared X-coordinate + knockReqId."""
+    if len(shared_x_bytes) != 32:
+        raise ValueError("Expected 32-byte raw P-256 shared secret.")
+    return hashlib.sha256(b"ecdh-knock-v5|" + knock_req_id.strip().encode("utf-8") + b"|" + shared_x_bytes).hexdigest()
+
+
+def encrypt_knock_grant(priv_int: int, peer_pub_b64: str, knock_req_id: str, grant_obj: Any) -> dict[str, Any]:
+    shared_x = p256_ecdh_shared_secret(priv_int, peer_pub_b64)
+    sym_hex = derive_knock_shared_key_hex(shared_x, knock_req_id)
+    return encrypt_envelope(sym_hex, f"knock:{knock_req_id}", grant_obj)
+
+
+def decrypt_knock_grant(priv_int: int, peer_pub_b64: str, knock_req_id: str, envelope: dict[str, Any]) -> Any:
+    shared_x = p256_ecdh_shared_secret(priv_int, peer_pub_b64)
+    sym_hex = derive_knock_shared_key_hex(shared_x, knock_req_id)
+    return decrypt_envelope(sym_hex, f"knock:{knock_req_id}", envelope)
 
 
 def derive_agent_headers(

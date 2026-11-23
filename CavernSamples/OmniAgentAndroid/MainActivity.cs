@@ -550,6 +550,45 @@ public sealed class MainActivity : Activity {
         };
         btnRow.AddView(saveBtn, MakeWeightedLp(1f));
         sheet.AddView(btnRow);
+
+        LinearLayout knockRow = MakeRow();
+        knockRow.SetPadding(0, Dp(8), 0, 0);
+        Button knockToggleBtn = MakeButton(
+            store.SmartKnockEnabled
+                ? T("Smart Knock: ON", "Smart Knock: ATIVO")
+                : T("Smart Knock: OFF", "Smart Knock: DESLIGADO"),
+            store.SmartKnockEnabled ? Color.Argb(45, 34, 197, 94) : CardElevated,
+            store.SmartKnockEnabled ? AccentGreen : TextSecondary,
+            false);
+        knockToggleBtn.Click += (_, _) => {
+            store.SmartKnockEnabled = !store.SmartKnockEnabled;
+            knockToggleBtn.Text = store.SmartKnockEnabled
+                ? T("Smart Knock: ON", "Smart Knock: ATIVO")
+                : T("Smart Knock: OFF", "Smart Knock: DESLIGADO");
+            knockToggleBtn.Background = Pill(store.SmartKnockEnabled ? Color.Argb(45, 34, 197, 94) : CardElevated, 14);
+            knockToggleBtn.SetTextColor(store.SmartKnockEnabled ? AccentGreen : TextSecondary);
+        };
+        knockRow.AddView(knockToggleBtn, MakeWeightedLp(1f, rightMarginDp: 6));
+
+        Button copyKnockBtn = MakeButton(T("Copy Public Knock ID", "Copiar Knock ID Público"), CardElevated, TextPrimary, false);
+        copyKnockBtn.Click += (_, _) => {
+            string normK = OmniCrypto.NormalizePairSecretHex(keyInput.Text);
+            if (string.IsNullOrEmpty(normK)) {
+                normK = store.LoadPairSecretHex();
+            }
+            string kid = OmniCrypto.ComputeKnockChannelId(normK);
+            if (string.IsNullOrEmpty(kid)) {
+                Toast.MakeText(this, T("Generate or save a 64-hex key first", "Gere ou salve uma chave de 64 hex primeiro"), ToastLength.Short)?.Show();
+                return;
+            }
+            if (GetSystemService(ClipboardService) is Android.Content.ClipboardManager cm) {
+                cm.PrimaryClip = ClipData.NewPlainText("OmniAgent Public Knock ID", kid);
+                Toast.MakeText(this, T("Public Knock ID copied (safe, zero secrets)!", "Knock ID Público copiado (seguro, sem segredos)!"), ToastLength.Long)?.Show();
+            }
+        };
+        knockRow.AddView(copyKnockBtn, MakeWeightedLp(1.2f));
+        sheet.AddView(knockRow);
+
         PresentSheet(sheet);
     }
 

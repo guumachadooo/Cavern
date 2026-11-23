@@ -29,8 +29,8 @@ namespace Cavern.Neural {
         /// <summary>Maximum overlap factor (8x = 87.5% overlap, studio reference).</summary>
         public const int MaxOverlap = 8;
 
-        /// <summary>Default balanced overlap factor (4x = 75% overlap, MVSEP standard).</summary>
-        public const int DefaultOverlap = 4;
+        /// <summary>Default balanced mobile overlap factor (2x = 50% raised-cosine COLA unity; users can raise up to 8x).</summary>
+        public const int DefaultOverlap = 2;
 
         /// <summary>
         /// Model chunk length in samples per channel (e.g. 352800 = 8.0 s @ 44.1 kHz, or 131072 / 262144 for mobile models).

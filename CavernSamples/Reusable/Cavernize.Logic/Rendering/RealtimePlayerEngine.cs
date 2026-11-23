@@ -836,6 +836,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             }
             lgsrStage.ClearExplicitLosslessStatus();
 
+            neuralStemStage.SetSourceTrackSampleRate(track.SampleRate);
             ConfigureListener(resetToStart: true);
             if (!isRenderingLiveNeuralSources) {
                 sourceItems = TrackSourceItem.BuildFromTrack(track);
@@ -889,6 +890,7 @@ public sealed class RealtimePlayerEngine : IDisposable {
             }
             lgsrStage.ClearExplicitLosslessStatus();
 
+            neuralStemStage.SetSourceTrackSampleRate(track.SampleRate);
             ConfigureListener(resetToStart: false);
             if (!isRenderingLiveNeuralSources) {
                 sourceItems = TrackSourceItem.BuildFromTrack(track);
@@ -1598,6 +1600,10 @@ public sealed class RealtimePlayerEngine : IDisposable {
             activeNativeSampleRateRequest = desiredRate;
         }
         OutputSampleRate = listener.SampleRate;
+        if (currentTrack != null && currentTrack.SampleRate >= 8000) {
+            neuralStemStage.SetSourceTrackSampleRate(currentTrack.SampleRate);
+        }
+        neuralStemStage.Configure(listener.SampleRate, sceneHub.ProgramMetadata);
         virtualizerRenderer.Bind(listener, HeadphoneVirtualizer, sceneHub.ActiveBinauralProfileName);
         SyncExternalizationLocked();
         sceneHub.ConfigurePostProcessingStages(listener.SampleRate, 2);

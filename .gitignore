@@ -19,3 +19,7 @@ packages/
 .agents/plugins/**/model_mode_cache.json
 node_modules/
 .playwright-cli/
+.agents/.bridge_vault.json
+.env
+.env.local
+

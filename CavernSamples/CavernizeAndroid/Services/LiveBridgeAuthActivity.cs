@@ -24,17 +24,22 @@ namespace CavernizeAndroid.Services;
     Theme = "@android:style/Theme.Translucent.NoTitleBar")]
 public sealed class LiveBridgeAuthActivity : Activity {
     public const string ExtraWakeId = "cavernize.livebridge.wake_id";
+    public const string ExtraKnockReqId = "cavernize.livebridge.knock_req_id";
     const int ReqConfirmCredential = 4401;
     const int AuthenticatorBiometricStrong = 0x000F;
     const int AuthenticatorDeviceCredential = 0x8000;
 
     LiveBridgeWakeRequest activeRequest;
+    LiveBridgeKnockRequest activeKnock;
     CancellationSignal biometricCancel;
     TextView statusLabel;
+    CheckBox rememberWorkspaceCheck;
     Button approveBtn;
     Button denyBtn;
     bool resolved;
     bool fallbackManualApprove;
+
+    bool IsKnockMode => activeKnock != null;
 
     protected override void OnCreate(Bundle savedInstanceState) {
         base.OnCreate(savedInstanceState);
@@ -43,9 +48,15 @@ public sealed class LiveBridgeAuthActivity : Activity {
             SetTurnScreenOn(true);
         }
 
-        string wakeId = Intent?.GetStringExtra(ExtraWakeId) ?? "";
-        activeRequest = LiveDiagnosticBridgeService.GetPendingWakeRequest(wakeId);
-        if (activeRequest == null) {
+        string knockReqId = Intent?.GetStringExtra(ExtraKnockReqId) ?? "";
+        if (!string.IsNullOrEmpty(knockReqId)) {
+            activeKnock = LiveDiagnosticBridgeService.GetPendingKnockRequest(knockReqId);
+        }
+        if (activeKnock == null) {
+            string wakeId = Intent?.GetStringExtra(ExtraWakeId) ?? "";
+            activeRequest = LiveDiagnosticBridgeService.GetPendingWakeRequest(wakeId);
+        }
+        if (activeKnock == null && activeRequest == null) {
             Finish();
             return;
         }
@@ -67,14 +78,35 @@ public sealed class LiveBridgeAuthActivity : Activity {
         card.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceCard, 26f, OneUiTheme.BorderSubtle, 1.2f);
 
         TextView title = new(this) {
-            Text = S["LiveBridgeAuthTitle"],
+            Text = IsKnockMode ? S["LiveBridgeKnockAuthTitle"] : S["LiveBridgeAuthTitle"],
             TextSize = 18f
         };
         title.SetTypeface(null, TypefaceStyle.Bold);
         title.SetTextColor(OneUiTheme.TextPrimary);
         card.AddView(title);
 
-        string tierLabel = activeRequest.RequestedTier switch {
+        if (IsKnockMode) {
+            TextView sasBadge = new(this) {
+                Text = string.Format(S["LiveBridgeKnockSasBadgeFmt"], activeKnock.SasCode),
+                TextSize = 20f,
+                Gravity = GravityFlags.Center
+            };
+            sasBadge.SetTypeface(Typeface.Monospace, TypefaceStyle.Bold);
+            sasBadge.SetTextColor(OneUiTheme.PrimaryHigh);
+            sasBadge.SetPadding(Dp(14), Dp(10), Dp(14), Dp(10));
+            sasBadge.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceModalRow, 16f, OneUiTheme.PrimaryHigh, 1.2f);
+            card.AddView(sasBadge, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                TopMargin = Dp(10),
+                BottomMargin = Dp(4)
+            });
+        }
+
+        int reqTier = IsKnockMode ? activeKnock.RequestedTier : activeRequest.RequestedTier;
+        int reqDur = IsKnockMode ? activeKnock.DurationSeconds : activeRequest.DurationSeconds;
+        string requester = IsKnockMode ? activeKnock.Requester : activeRequest.Requester;
+        string reason = IsKnockMode ? activeKnock.Reason : activeRequest.Reason;
+
+        string tierLabel = reqTier switch {
             0 => S["LiveBridgeTier0Short"],
             1 => S["LiveBridgeTier1Short"],
             _ => S["LiveBridgeTier2Short"]
@@ -83,15 +115,26 @@ public sealed class LiveBridgeAuthActivity : Activity {
         TextView details = new(this) {
             Text = string.Format(
                 S["LiveBridgeAuthBodyFmt"],
-                activeRequest.Requester,
+                requester,
                 tierLabel,
-                activeRequest.DurationSeconds / 60,
-                string.IsNullOrWhiteSpace(activeRequest.Reason) ? "—" : activeRequest.Reason),
+                reqDur / 60,
+                string.IsNullOrWhiteSpace(reason) ? "—" : reason),
             TextSize = 13.5f
         };
         details.SetTextColor(OneUiTheme.TextSub);
-        details.SetPadding(0, Dp(10), 0, Dp(12));
+        details.SetPadding(0, Dp(10), 0, Dp(10));
         card.AddView(details);
+
+        if (IsKnockMode) {
+            rememberWorkspaceCheck = new CheckBox(this) {
+                Text = S["LiveBridgeKnockRememberCheck"],
+                Checked = string.Equals(activeKnock.RequestedScope, "workspace", StringComparison.OrdinalIgnoreCase),
+                TextSize = 12.5f
+            };
+            rememberWorkspaceCheck.SetTextColor(OneUiTheme.TextPrimary);
+            rememberWorkspaceCheck.SetPadding(Dp(6), Dp(4), Dp(4), Dp(10));
+            card.AddView(rememberWorkspaceCheck);
+        }
 
         statusLabel = new TextView(this) {
             Text = S["LiveBridgeAuthTouchFingerprint"],
@@ -145,18 +188,22 @@ public sealed class LiveBridgeAuthActivity : Activity {
     }
 
     void TriggerBiometricPrompt() {
-        if (resolved || activeRequest == null) {
+        if (resolved || (!IsKnockMode && activeRequest == null)) {
             return;
         }
         AndroidStrings S = AndroidStrings.Active;
+        int reqTier = IsKnockMode ? activeKnock.RequestedTier : activeRequest.RequestedTier;
+        int reqDur = IsKnockMode ? activeKnock.DurationSeconds : activeRequest.DurationSeconds;
+        string reqReason = IsKnockMode ? $"SAS {activeKnock.SasCode} · {activeKnock.Reason}" : activeRequest.Reason;
+
         if (OperatingSystem.IsAndroidVersionAtLeast(28)) {
             try {
                 biometricCancel?.Cancel();
                 biometricCancel = new CancellationSignal();
                 BiometricPrompt.Builder builder = new BiometricPrompt.Builder(this)
-                    .SetTitle(S["LiveBridgeAuthTitle"])
-                    .SetSubtitle(string.Format(S["LiveBridgeAuthPromptSubFmt"], activeRequest.RequestedTier, activeRequest.DurationSeconds / 60))
-                    .SetDescription(activeRequest.Reason);
+                    .SetTitle(IsKnockMode ? S["LiveBridgeKnockAuthTitle"] : S["LiveBridgeAuthTitle"])
+                    .SetSubtitle(string.Format(S["LiveBridgeAuthPromptSubFmt"], reqTier, reqDur / 60))
+                    .SetDescription(reqReason);
 
                 if (OperatingSystem.IsAndroidVersionAtLeast(30)) {
                     // BiometricStrong | DeviceCredential — MUST NOT set negative button when DeviceCredential is enabled
@@ -181,7 +228,9 @@ public sealed class LiveBridgeAuthActivity : Activity {
         if (GetSystemService(KeyguardService) is KeyguardManager km && km.IsDeviceSecure) {
             try {
 #pragma warning disable CS0618, CA1422
-                Intent confirm = km.CreateConfirmDeviceCredentialIntent(S["LiveBridgeAuthTitle"], activeRequest.Reason);
+                Intent confirm = km.CreateConfirmDeviceCredentialIntent(
+                    IsKnockMode ? S["LiveBridgeKnockAuthTitle"] : S["LiveBridgeAuthTitle"],
+                    reqReason);
                 if (confirm != null) {
                     StartActivityForResult(confirm, ReqConfirmCredential);
                     return;
@@ -209,13 +258,15 @@ public sealed class LiveBridgeAuthActivity : Activity {
     }
 
     async Task ApproveAndFinishAsync(bool biometricVerified) {
-        if (resolved || activeRequest == null) {
+        if (resolved || (!IsKnockMode && activeRequest == null)) {
             return;
         }
         resolved = true;
+        bool rememberWs = rememberWorkspaceCheck?.Checked ?? false;
         RunOnUiThread(() => {
             if (approveBtn != null) approveBtn.Enabled = false;
             if (denyBtn != null) denyBtn.Enabled = false;
+            if (rememberWorkspaceCheck != null) rememberWorkspaceCheck.Enabled = false;
             if (statusLabel != null) {
                 statusLabel.Text = AndroidStrings.Active["LiveBridgeAuthConnecting"];
                 statusLabel.SetTextColor(OneUiTheme.FunctionalGreen);
@@ -223,13 +274,20 @@ public sealed class LiveBridgeAuthActivity : Activity {
         });
 
         AppSettingsStore store = new(this);
-        (bool ok, string msg) = await LiveDiagnosticBridgeService.CompleteWakeApprovalAsync(
-            this,
-            store,
-            activeRequest.WakeId,
-            activeRequest.RequestedTier,
-            activeRequest.DurationSeconds,
-            biometricVerified).ConfigureAwait(false);
+        (bool ok, string msg) = IsKnockMode
+            ? await LiveDiagnosticBridgeService.CompleteKnockApprovalAsync(
+                this,
+                store,
+                activeKnock,
+                rememberWorkspace: rememberWs,
+                biometricVerified: biometricVerified).ConfigureAwait(false)
+            : await LiveDiagnosticBridgeService.CompleteWakeApprovalAsync(
+                this,
+                store,
+                activeRequest.WakeId,
+                activeRequest.RequestedTier,
+                activeRequest.DurationSeconds,
+                biometricVerified).ConfigureAwait(false);
 
         RunOnUiThread(() => {
             CancelWakeNotification();
@@ -239,13 +297,17 @@ public sealed class LiveBridgeAuthActivity : Activity {
     }
 
     async Task DenyAndFinishAsync(string reason) {
-        if (resolved || activeRequest == null) {
+        if (resolved || (!IsKnockMode && activeRequest == null)) {
             return;
         }
         resolved = true;
         CancelWakeNotification();
         AppSettingsStore store = new(this);
-        await LiveDiagnosticBridgeService.DenyWakeRequestAsync(store, activeRequest.WakeId, reason).ConfigureAwait(false);
+        if (IsKnockMode) {
+            await LiveDiagnosticBridgeService.DenyKnockRequestAsync(store, activeKnock.KnockReqId, reason, cooldownSeconds: 900).ConfigureAwait(false);
+        } else {
+            await LiveDiagnosticBridgeService.DenyWakeRequestAsync(store, activeRequest.WakeId, reason).ConfigureAwait(false);
+        }
         RunOnUiThread(Finish);
     }
 

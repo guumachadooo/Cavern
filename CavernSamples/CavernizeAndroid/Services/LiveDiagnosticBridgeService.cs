@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Reflection;
@@ -65,6 +66,21 @@ public sealed class LiveBridgeWakeRequest {
 }
 
 /// <summary>
+/// Zero-secret ephemeral P-256 ECDH Smart Knock request received via Cloudflare Hub v5.
+/// Requires on-device SAS visual verification + native BiometricPrompt approval.
+/// </summary>
+public sealed class LiveBridgeKnockRequest {
+    public string KnockReqId { get; init; } = "";
+    public string ClientPubKeyB64 { get; init; } = "";
+    public string SasCode { get; init; } = "";
+    public string RequestedScope { get; init; } = "session";
+    public int RequestedTier { get; init; } = 2;
+    public int DurationSeconds { get; init; } = 3600;
+    public string Reason { get; init; } = "";
+    public string Requester { get; init; } = "AI Studio";
+}
+
+/// <summary>
 /// Live Bridge v2 connecting Cavernize Android to the user's free Cloudflare Worker relay
 /// (<c>cloudflare_live_relay_worker.js</c>).
 ///
@@ -92,6 +108,7 @@ public static class LiveDiagnosticBridgeService {
     static readonly Queue<string> recentWakeNoncesQueue = new();
     static readonly HashSet<string> recentWakeNonces = new(StringComparer.Ordinal);
     static readonly ConcurrentDictionary<string, LiveBridgeWakeRequest> pendingWakeRequests = new(StringComparer.Ordinal);
+    static readonly ConcurrentDictionary<string, LiveBridgeKnockRequest> pendingKnockRequests = new(StringComparer.Ordinal);
 
     static readonly string[] SecretSettingTokens = [
         "Encrypted", "Token", "Secret", "Password", "ApiKey", "Credential"
@@ -294,15 +311,19 @@ public static class LiveDiagnosticBridgeService {
             int ver = doc.RootElement.TryGetProperty("version", out JsonElement vEl) && vEl.TryGetInt32(out int parsedV) ? parsedV : 1;
             bool supportsWake = doc.RootElement.TryGetProperty("supportsWake", out JsonElement wEl) && wEl.GetBoolean();
             bool supportsTelemetry = doc.RootElement.TryGetProperty("supportsTelemetry", out JsonElement tEl) && tEl.GetBoolean();
+            bool supportsKnock = doc.RootElement.TryGetProperty("supportsSmartKnock", out JsonElement kEl) && kEl.GetBoolean();
             if (!ok) {
                 return (false, "Relay responded without ok=true. Verify RELAY_KV binding.");
             }
+            if (supportsKnock && supportsTelemetry && supportsWake) {
+                return (true, $"Unified Hub v{ver} online (Smart Knock + Biometric Wake + Cloud Telemetry ready)");
+            }
             if (supportsTelemetry && supportsWake) {
-                return (true, $"Unified Hub v{ver} online (Biometric Wake + Cloud Telemetry + Dynamic Control ready)");
+                return (true, $"Unified Hub v{ver} online (Biometric Wake + Cloud Telemetry ready; update JS to v5 for Smart Knock)");
             }
             return supportsWake
-                ? (true, $"Relay v{ver} online (update Worker JS to v3 for Unified Cloud Telemetry Hub)")
-                : (true, $"Relay v{ver} online (update Worker JS to v3 for Biometric Wake & Cloud Telemetry)");
+                ? (true, $"Relay v{ver} online (update Worker JS to v5 for Smart Knock & Cloud Telemetry)")
+                : (true, $"Relay v{ver} online (update Worker JS to v5 for Smart Knock, Wake & Telemetry)");
         } catch (Exception ex) {
             return (false, $"Relay connection failed: {ex.Message}");
         }
@@ -363,6 +384,122 @@ public static class LiveDiagnosticBridgeService {
         byte[] input = System.Text.Encoding.UTF8.GetBytes($"wake-channel-v2:{pairSecretHex.ToLowerInvariant()}");
         byte[] digest = SHA256.HashData(input);
         return Convert.ToHexString(digest).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Computes the public double-hashed Smart Knock mailbox ID (<c>sha256("knock-channel-v5:" + deviceHash)</c>).
+    /// Safe to store in public <c>.agents/bridge_profile.json</c> (cannot derive deviceHash or pairSecret).
+    /// </summary>
+    public static string ComputeKnockChannelId(string pairSecretHex) {
+        if (string.IsNullOrWhiteSpace(pairSecretHex) || pairSecretHex.Length != 64) {
+            return "";
+        }
+        string devHash = ComputeWakeChannelHash(pairSecretHex);
+        byte[] digest = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"knock-channel-v5:{devHash}"));
+        return Convert.ToHexString(digest).ToLowerInvariant();
+    }
+
+    public static string GetPublicKnockId(AppSettingsStore store) {
+        string hex = LoadPairSecretHex(store);
+        return string.IsNullOrEmpty(hex) ? "" : ComputeKnockChannelId(hex);
+    }
+
+    /// <summary>
+    /// Computes the 6-character Visual Verification Code (SAS, <c>XXX-XXX</c>) matching Python <c>omni_protocol.py</c>.
+    /// </summary>
+    public static string ComputeKnockSasCode(string knockId, string knockReqId, string clientPubKeyB64) {
+        string canonical = $"knock-sas-v5|{(knockId ?? "").Trim().ToLowerInvariant()}|{(knockReqId ?? "").Trim()}|{(clientPubKeyB64 ?? "").Trim()}";
+        byte[] digest = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonical));
+        char[] chars = new char[6];
+        for (int i = 0; i < 6; i++) {
+            chars[i] = CodeAlphabet[digest[i] & 0x1F];
+        }
+        return $"{new string(chars, 0, 3)}-{new string(chars, 3, 3)}";
+    }
+
+    /// <summary>
+    /// Performs ephemeral NIST P-256 ECDH with <paramref name="clientPubKeyB64"/> (65-byte SEC1 uncompressed)
+    /// and encrypts <paramref name="grantObj"/> using v4 Encrypt-then-MAC (SHA256-CTR + HMAC-SHA256).
+    /// </summary>
+    internal static (string serverPubKeyB64, object encryptedGrant) CreateEcdhP256GrantEnvelope(
+        string clientPubKeyB64,
+        string knockReqId,
+        object grantObj) {
+        byte[] clientRaw = Convert.FromBase64String((clientPubKeyB64 ?? "").Trim());
+        if (clientRaw.Length != 65 || clientRaw[0] != 0x04) {
+            throw new CryptographicException("Invalid client P-256 SEC1 public key.");
+        }
+        ECParameters peerParams = new() {
+            Curve = ECCurve.NamedCurves.nistP256,
+            Q = new ECPoint {
+                X = clientRaw[1..33],
+                Y = clientRaw[33..65]
+            }
+        };
+        using ECDiffieHellman peerDh = ECDiffieHellman.Create(peerParams);
+        using ECDiffieHellman localDh = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
+        ECParameters localPub = localDh.ExportParameters(includePrivateParameters: false);
+        byte[] serverRaw = new byte[65];
+        serverRaw[0] = 0x04;
+        Buffer.BlockCopy(localPub.Q.X, 0, serverRaw, 1 + (32 - localPub.Q.X.Length), localPub.Q.X.Length);
+        Buffer.BlockCopy(localPub.Q.Y, 0, serverRaw, 33 + (32 - localPub.Q.Y.Length), localPub.Q.Y.Length);
+        string serverPubB64 = Convert.ToBase64String(serverRaw);
+
+        byte[] sharedX = localDh.DeriveRawSecretAgreement(peerDh.PublicKey);
+        byte[] symKeyBytes = SHA256.HashData(ConcatBytes(
+            System.Text.Encoding.UTF8.GetBytes($"ecdh-knock-v5|{(knockReqId ?? "").Trim()}|"),
+            sharedX));
+        string symKeyHex = Convert.ToHexString(symKeyBytes).ToLowerInvariant();
+        object env = EncryptV4Envelope(symKeyHex, $"knock:{(knockReqId ?? "").Trim()}", grantObj);
+        return (serverPubB64, env);
+    }
+
+    static object EncryptV4Envelope(string keyHex64, string contextId, object payloadObj) {
+        byte[] key = Convert.FromHexString(keyHex64);
+        byte[] iv = new byte[16];
+        RandomNumberGenerator.Fill(iv);
+
+        byte[] encKey = HMACSHA256.HashData(key, ConcatBytes(System.Text.Encoding.UTF8.GetBytes("omni-enc-v4:"), iv));
+        byte[] macKey = HMACSHA256.HashData(key, ConcatBytes(System.Text.Encoding.UTF8.GetBytes("omni-mac-v4:"), iv));
+
+        byte[] rawPlain = System.Text.Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payloadObj));
+        byte[] gzPlain;
+        using (MemoryStream ms = new()) {
+            using (GZipStream gz = new(ms, CompressionLevel.Optimal, leaveOpen: true)) {
+                gz.Write(rawPlain, 0, rawPlain.Length);
+            }
+            gzPlain = ms.ToArray();
+        }
+        bool useGz = gzPlain.Length < rawPlain.Length;
+        byte[] plain = useGz ? gzPlain : rawPlain;
+
+        byte[] ct = new byte[plain.Length];
+        uint counter = 0;
+        int offset = 0;
+        byte[] ctrBuf = new byte[4];
+        while (offset < plain.Length) {
+            ctrBuf[0] = (byte)((counter >> 24) & 0xFF);
+            ctrBuf[1] = (byte)((counter >> 16) & 0xFF);
+            ctrBuf[2] = (byte)((counter >> 8) & 0xFF);
+            ctrBuf[3] = (byte)(counter & 0xFF);
+            byte[] ksBlock = SHA256.HashData(ConcatBytes(encKey, iv, ctrBuf));
+            int take = Math.Min(ksBlock.Length, plain.Length - offset);
+            for (int i = 0; i < take; i++) {
+                ct[offset + i] = (byte)(plain[offset + i] ^ ksBlock[i]);
+            }
+            offset += take;
+            counter++;
+        }
+
+        byte[] prefix = System.Text.Encoding.UTF8.GetBytes($"omni-v4|{contextId}|{(useGz ? "1" : "0")}|");
+        byte[] tag = HMACSHA256.HashData(macKey, ConcatBytes(prefix, iv, ct));
+        return new {
+            v = 4,
+            gz = useGz,
+            nonce = Convert.ToBase64String(iv),
+            ct = Convert.ToBase64String(ct),
+            tag = Convert.ToBase64String(tag)
+        };
     }
 
     internal static bool VerifyWakeRequestSignature(string pairSecretHex, LiveBridgeWakeRequest req, out string rejectReason) {
@@ -554,6 +691,131 @@ public static class LiveDiagnosticBridgeService {
             using CancellationTokenSource cts = new(TimeSpan.FromSeconds(5));
             using HttpResponseMessage _ = await http.SendAsync(post, cts.Token).ConfigureAwait(false);
             AppLogger.Info("CLOUD", $"Live Bridge wake request denied (wakeId={wakeId}): {reason}");
+        } catch {
+            // Best effort
+        }
+    }
+
+    internal static void StorePendingKnockRequest(LiveBridgeKnockRequest req) {
+        if (req != null && !string.IsNullOrEmpty(req.KnockReqId)) {
+            pendingKnockRequests[req.KnockReqId] = req;
+        }
+    }
+
+    internal static LiveBridgeKnockRequest GetPendingKnockRequest(string knockReqId) =>
+        !string.IsNullOrEmpty(knockReqId) && pendingKnockRequests.TryGetValue(knockReqId, out LiveBridgeKnockRequest r) ? r : null;
+
+    internal static async Task<(bool ok, string message)> CompleteKnockApprovalAsync(
+        Context context,
+        AppSettingsStore store,
+        LiveBridgeKnockRequest knockReq,
+        bool rememberWorkspace,
+        bool biometricVerified,
+        CancellationToken ct = default) {
+        if (context == null || store == null || knockReq == null) {
+            return (false, "Invalid Smart Knock context.");
+        }
+        pendingKnockRequests.TryRemove(knockReq.KnockReqId ?? "", out _);
+        string pairHex = LoadPairSecretHex(store);
+        if (string.IsNullOrEmpty(pairHex)) {
+            return (false, "Pairing secret missing.");
+        }
+        if (!TryNormalizeRelayUrl(store.LiveRelayUrl, out string baseUrl)) {
+            return (false, "Relay URL invalid.");
+        }
+
+        // Strict least-privilege invariant: workspace persistent pair grant requires genuine Biometric verification
+        bool grantPair = rememberWorkspace && biometricVerified;
+        int finalTier = Math.Clamp(knockReq.RequestedTier, 0, 2);
+        int finalTtl = Math.Clamp(knockReq.DurationSeconds, 300, 3600);
+        (bool started, string sessionCode, string startMsg) = await StartSessionAsync(
+            context,
+            store,
+            maxTier: finalTier,
+            durationSeconds: finalTtl,
+            biometricVerified: biometricVerified,
+            ct: ct).ConfigureAwait(false);
+        if (!started) {
+            return (false, startMsg);
+        }
+
+        (string ver, long build) = AppUpdateService.GetInstalledVersion(context);
+        object grantPayload = grantPair
+            ? new {
+                mode = "workspace",
+                relayUrl = baseUrl,
+                sessionCode,
+                pairSecret = pairHex,
+                knockId = ComputeKnockChannelId(pairHex),
+                tier = finalTier,
+                ttlSeconds = finalTtl,
+                biometricVerified,
+                device = $"{Build.Manufacturer} {Build.Model}".Trim(),
+                appVersion = $"v{ver} ({build})",
+                approvedAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)
+            }
+            : new {
+                mode = "session",
+                relayUrl = baseUrl,
+                sessionCode,
+                pairSecret = "",
+                knockId = ComputeKnockChannelId(pairHex),
+                tier = finalTier,
+                ttlSeconds = finalTtl,
+                biometricVerified,
+                device = $"{Build.Manufacturer} {Build.Model}".Trim(),
+                appVersion = $"v{ver} ({build})",
+                approvedAtUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)
+            };
+
+        try {
+            (string serverPubB64, object encGrant) = CreateEcdhP256GrantEnvelope(knockReq.ClientPubKeyB64, knockReq.KnockReqId, grantPayload);
+            string devHash = ComputeWakeChannelHash(pairHex);
+            using HttpRequestMessage post = new(HttpMethod.Post, $"{baseUrl}/v1/knock/approve");
+            post.Headers.Add("X-Device-Hash", devHash);
+            post.Content = new StringContent(
+                JsonSerializer.Serialize(new {
+                    knockReqId = knockReq.KnockReqId,
+                    serverPubKey = serverPubB64,
+                    encryptedGrant = encGrant,
+                    scope = grantPair ? "workspace" : "session"
+                }),
+                System.Text.Encoding.UTF8,
+                "application/json");
+            using HttpResponseMessage resp = await http.SendAsync(post, ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) {
+                return (false, $"Smart Knock approval failed: HTTP {(int)resp.StatusCode}");
+            }
+            AppLogger.Info("CLOUD", $"Smart Knock approved (id={knockReq.KnockReqId}, sas={knockReq.SasCode}, scope={(grantPair ? "workspace" : "session")}, tier=T{finalTier}).");
+            return (true, grantPair
+                ? $"Connected & remembered (Tier {finalTier})"
+                : $"Connected for {finalTtl / 60} min (Tier {finalTier})");
+        } catch (Exception ex) {
+            return (false, $"Smart Knock crypto/network error: {ex.Message}");
+        }
+    }
+
+    internal static async Task DenyKnockRequestAsync(AppSettingsStore store, string knockReqId, string reason, int cooldownSeconds = 900) {
+        pendingKnockRequests.TryRemove(knockReqId ?? "", out _);
+        string pairHex = LoadPairSecretHex(store);
+        if (string.IsNullOrEmpty(pairHex) || !TryNormalizeRelayUrl(store?.LiveRelayUrl, out string baseUrl)) {
+            return;
+        }
+        try {
+            string devHash = ComputeWakeChannelHash(pairHex);
+            using HttpRequestMessage post = new(HttpMethod.Post, $"{baseUrl}/v1/knock/deny");
+            post.Headers.Add("X-Device-Hash", devHash);
+            post.Content = new StringContent(
+                JsonSerializer.Serialize(new {
+                    knockReqId,
+                    reason = reason ?? "Denied by user",
+                    cooldownSeconds = Math.Clamp(cooldownSeconds, 60, 3600)
+                }),
+                System.Text.Encoding.UTF8,
+                "application/json");
+            using CancellationTokenSource cts = new(TimeSpan.FromSeconds(5));
+            using HttpResponseMessage _ = await http.SendAsync(post, cts.Token).ConfigureAwait(false);
+            AppLogger.Info("CLOUD", $"Smart Knock denied (id={knockReqId}, cooldown={cooldownSeconds}s): {reason}");
         } catch {
             // Best effort
         }

@@ -149,21 +149,27 @@ public sealed class NeuralPipelineOrchestrator {
             installedById[installed[i].Id] = installed[i];
         }
 
+        bool isManual = safeCfg.OrchestrationMode == NeuralOrchestrationMode.Manual;
         List<NeuralExecutionStep> steps = [];
         switch (goal) {
             case NeuralPipelineGoal.StemSeparation:
                 AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: false));
-                AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false));
+                // In Auto mode, run a single fast model (reserve extra Debleed pass for Manual mode / Studio Export).
+                if (isManual) {
+                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false));
+                }
                 break;
 
             case NeuralPipelineGoal.SpatialKaraoke: {
-                NeuralExecutionStep karaokeStep = ResolveSingleTaskStep(NeuralModelTask.KaraokeLeadBacking, safeCfg, installed, installedById, allowEnsemble: true);
+                NeuralExecutionStep karaokeStep = ResolveSingleTaskStep(NeuralModelTask.KaraokeLeadBacking, safeCfg, installed, installedById, allowEnsemble: isManual);
                 if (karaokeStep != null) {
                     steps.Add(karaokeStep);
                 } else {
                     AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: true));
                 }
-                AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false));
+                if (isManual) {
+                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false));
+                }
                 break;
             }
 
@@ -187,6 +193,86 @@ public sealed class NeuralPipelineOrchestrator {
             PlanSignature = signature,
             Summary = summary
         };
+    }
+
+    /// <summary>
+    /// Selects the highest vocal-band-energy (300–3400 Hz center-weighted) contiguous excerpt up to
+    /// <paramref name="maxDurationSeconds"/> so <see cref="NeuralPipelineGoal.VocalMixDna"/> captures the main sung
+    /// verse/chorus in ~10–25 seconds instead of running multiple ONNX passes across an entire 5-minute track.
+    /// </summary>
+    public static (float[] Left, float[] Right, double StartSeconds, double DurationSeconds) SelectRepresentativeVocalExcerpt(
+        float[] mixLeft,
+        float[] mixRight,
+        int sampleRate,
+        double maxDurationSeconds = 40.0) {
+        ArgumentNullException.ThrowIfNull(mixLeft);
+        ArgumentNullException.ThrowIfNull(mixRight);
+        int sr = sampleRate >= 8000 ? sampleRate : 48000;
+        int totalLen = Math.Min(mixLeft.Length, mixRight.Length);
+        if (totalLen <= 0) {
+            return (Array.Empty<float>(), Array.Empty<float>(), 0.0, 0.0);
+        }
+
+        int targetSamples = (int)Math.Round(Math.Clamp(maxDurationSeconds, 12.0, 120.0) * sr);
+        if (totalLen <= targetSamples) {
+            return (mixLeft, mixRight, 0.0, totalLen / (double)sr);
+        }
+
+        // Compute 2-second vocal-band (300..3400 Hz) center-weighted energy blocks via fast 1-pole HP/LP IIR
+        int blockSamples = Math.Max(1024, sr * 2);
+        int numBlocks = (totalLen + blockSamples - 1) / blockSamples;
+        double[] blockScore = new double[numBlocks];
+
+        float dt = 1f / sr;
+        float hpAlpha = 1f / (1f + 2f * MathF.PI * 300f * dt);
+        float lpAlpha = (2f * MathF.PI * 3400f * dt) / (1f + 2f * MathF.PI * 3400f * dt);
+        float hpPrevIn = 0f;
+        float hpPrevOut = 0f;
+        float lpPrevOut = 0f;
+
+        for (int b = 0; b < numBlocks; b++) {
+            int start = b * blockSamples;
+            int end = Math.Min(totalLen, start + blockSamples);
+            double bandSum = 0.0;
+            for (int i = start; i < end; i++) {
+                float mid = 0.5f * (mixLeft[i] + mixRight[i]);
+                float hp = hpAlpha * (hpPrevOut + mid - hpPrevIn);
+                hpPrevIn = mid;
+                hpPrevOut = hp;
+                float bp = lpPrevOut + lpAlpha * (hp - lpPrevOut);
+                lpPrevOut = bp;
+                bandSum += (double)bp * bp;
+            }
+            blockScore[b] = bandSum / Math.Max(1, end - start);
+        }
+
+        int windowBlocks = Math.Max(1, targetSamples / blockSamples);
+        if (windowBlocks >= numBlocks) {
+            return (mixLeft, mixRight, 0.0, totalLen / (double)sr);
+        }
+
+        // Sliding window over blocks to locate peak sustained vocal region (preferring non-intro/outro interior)
+        double curSum = 0.0;
+        for (int b = 0; b < windowBlocks; b++) {
+            curSum += blockScore[b];
+        }
+        double bestSum = curSum;
+        int bestStartBlock = 0;
+        for (int b = windowBlocks; b < numBlocks; b++) {
+            curSum += blockScore[b] - blockScore[b - windowBlocks];
+            if (curSum > bestSum) {
+                bestSum = curSum;
+                bestStartBlock = b - windowBlocks + 1;
+            }
+        }
+
+        int startSample = Math.Clamp(bestStartBlock * blockSamples, 0, Math.Max(0, totalLen - targetSamples));
+        int sliceLen = Math.Min(targetSamples, totalLen - startSample);
+        float[] sliceL = new float[sliceLen];
+        float[] sliceR = new float[sliceLen];
+        Array.Copy(mixLeft, startSample, sliceL, 0, sliceLen);
+        Array.Copy(mixRight, startSample, sliceR, 0, sliceLen);
+        return (sliceL, sliceR, startSample / (double)sr, sliceLen / (double)sr);
     }
 
     /// <summary>Computes a deterministic SHA-256 track cache key uniting audio identity, sample rate, and plan signature.</summary>
@@ -232,6 +318,37 @@ public sealed class NeuralPipelineOrchestrator {
             return (cached, 0f, true);
         }
 
+        // For VocalMixDna, analyze a smart ~40s peak vocal-activity excerpt with 2x COLA overlap (fast & accurate DNA extraction
+        // instead of processing 4-6 full minutes through multiple models + 6144-pt Reverb HQ).
+        float[] workLeft = mixLeft;
+        float[] workRight = mixRight;
+        NeuralAudioConfig execCfg = safeCfg;
+        bool isExcerptDna = false;
+        if (goal == NeuralPipelineGoal.VocalMixDna) {
+            (float[] exL, float[] exR, _, _) = SelectRepresentativeVocalExcerpt(mixLeft, mixRight, sampleRate, maxDurationSeconds: 40.0);
+            if (exL.Length > 0 && exL.Length < mixLeft.Length) {
+                workLeft = exL;
+                workRight = exR;
+                isExcerptDna = true;
+            }
+            execCfg = new NeuralAudioConfig {
+                PreferredProvider = safeCfg.PreferredProvider,
+                OrchestrationMode = safeCfg.OrchestrationMode,
+                OverlapFactor = MvsepPipelineOptions.MinOverlap,
+                EnableTta = false,
+                EnsembleMode = safeCfg.EnsembleMode,
+                EnablePhaseFix = false,
+                EnforceEnergyConservation = false,
+                TrackCacheMaxSizeMb = safeCfg.TrackCacheMaxSizeMb,
+                TaskModelSlots = safeCfg.TaskModelSlots,
+                ActiveStemModelId = safeCfg.ActiveStemModelId,
+                ActiveKaraokeModelId = safeCfg.ActiveKaraokeModelId,
+                ActiveDereverbModelId = safeCfg.ActiveDereverbModelId,
+                ActiveDebleedModelId = safeCfg.ActiveDebleedModelId,
+                ActiveRestorerModelId = safeCfg.ActiveRestorerModelId
+            };
+        }
+
         float totalRtf = 0f;
         StereoStemBuffer[] stems = Array.Empty<StereoStemBuffer>();
         DereverbDecompositionResult dereverbResult = null;
@@ -247,7 +364,7 @@ public sealed class NeuralPipelineOrchestrator {
                 step.Task == NeuralModelTask.StemSeparation6 ||
                 step.Task == NeuralModelTask.VocalSeparation ||
                 step.Task == NeuralModelTask.KaraokeLeadBacking) {
-                (stems, float stepRtf) = RunStepSeparation(step, mixLeft, mixRight, sampleRate, safeCfg,
+                (stems, float stepRtf) = RunStepSeparation(step, workLeft, workRight, sampleRate, execCfg,
                     (p, msg) => onProgress?.Invoke(stepStart + p * stepSpan, msg), token);
                 totalRtf += stepRtf;
             } else if (step.Task == NeuralModelTask.DebleedDenoise && stems.Length > 0) {
@@ -255,9 +372,9 @@ public sealed class NeuralPipelineOrchestrator {
                 int targetIdx = FindPrimaryVocalStemIndex(stems);
                 if (targetIdx >= 0) {
                     NeuralAudioConfig cleanCfg = new() {
-                        PreferredProvider = safeCfg.PreferredProvider,
-                        OverlapFactor = safeCfg.OverlapFactor,
-                        EnableTta = safeCfg.EnableTta,
+                        PreferredProvider = execCfg.PreferredProvider,
+                        OverlapFactor = execCfg.OverlapFactor,
+                        EnableTta = execCfg.EnableTta,
                         EnablePhaseFix = false,
                         EnforceEnergyConservation = false
                     };
@@ -267,8 +384,8 @@ public sealed class NeuralPipelineOrchestrator {
                     totalRtf += stepRtf;
                     if (cleaned.Length > 0) {
                         stems[targetIdx] = new StereoStemBuffer(stems[targetIdx].Name, cleaned[0].Left, cleaned[0].Right);
-                        if (safeCfg.EnforceEnergyConservation) {
-                            stems = MvsepAntiArtifactPipeline.AppendOrUpdateConservedResidual(mixLeft, mixRight, stems);
+                        if (execCfg.EnforceEnergyConservation) {
+                            stems = MvsepAntiArtifactPipeline.AppendOrUpdateConservedResidual(workLeft, workRight, stems);
                         }
                     }
                 }
@@ -276,25 +393,25 @@ public sealed class NeuralPipelineOrchestrator {
                 int vocalIdx = FindPrimaryVocalStemIndex(stems);
                 StereoStemBuffer sourceVocal = vocalIdx >= 0
                     ? stems[vocalIdx]
-                    : new StereoStemBuffer("vocals", mixLeft, mixRight);
+                    : new StereoStemBuffer("vocals", workLeft, workRight);
                 NeuralModelCatalogEntry drvModel = step.Models[0];
                 (dereverbResult, float stepRtf) = NeuralAudioOfflinePipeline.RunDereverbDryWet(
                     runtime,
                     step.ModelPaths[0],
                     sourceVocal,
                     sampleRate,
-                    safeCfg,
+                    execCfg,
                     drvModel.RecommendedChunkSamples,
                     (p, msg) => onProgress?.Invoke(stepStart + p * stepSpan, msg),
                     token,
                     drvModel.ExpectedSampleRate);
                 totalRtf += stepRtf;
             } else if (step.Task == NeuralModelTask.CodecRestoreApollo || step.Task == NeuralModelTask.BandwidthExtension) {
-                float[] srcL = stems.Length > 0 ? stems[0].Left : mixLeft;
-                float[] srcR = stems.Length > 0 ? stems[0].Right : mixRight;
+                float[] srcL = stems.Length > 0 ? stems[0].Left : workLeft;
+                float[] srcR = stems.Length > 0 ? stems[0].Right : workRight;
                 NeuralAudioConfig restoreCfg = new() {
-                    PreferredProvider = safeCfg.PreferredProvider,
-                    OverlapFactor = safeCfg.OverlapFactor,
+                    PreferredProvider = execCfg.PreferredProvider,
+                    OverlapFactor = execCfg.OverlapFactor,
                     EnableTta = false,
                     EnablePhaseFix = false,
                     EnforceEnergyConservation = false
@@ -317,7 +434,8 @@ public sealed class NeuralPipelineOrchestrator {
             derivedFromLosslessTwin,
             plan.PlanSignature);
 
-        if (trackCache != null && stems.Length > 0) {
+        // Only cache full-length track bundles in Slot 7B stem cache (avoid overwriting full track cache with a 40s DNA excerpt)
+        if (trackCache != null && stems.Length > 0 && !isExcerptDna) {
             trackCache.Save(cacheKey, track, token);
             trackCache.EvictToLimit((long)safeCfg.TrackCacheMaxSizeMb * 1024L * 1024L);
         }
@@ -436,7 +554,8 @@ public sealed class NeuralPipelineOrchestrator {
             return BuildStepFromEntries(chosen.Count > 0 ? chosen[0].Task : NeuralModelTask.StemSeparation4, chosen);
         }
 
-        // Auto mode: rank all installed stem/vocal models by PriorityRank and combine complementary models for MVSEP ensemble
+        // Auto mode: select ONE single best mobile-fast checkpoint per goal (eliminating 2-3x multiplicative model chains
+        // that caused 30+ minute mobile stalls; multi-model MVSEP ensembling remains fully available in Manual mode).
         List<NeuralModelCatalogEntry> sepModels = [];
         for (int i = 0; i < installed.Count; i++) {
             NeuralModelTask t = installed[i].Task;
@@ -449,35 +568,38 @@ public sealed class NeuralPipelineOrchestrator {
         }
 
         if (preferVocalsOnly) {
-            sepModels.Sort((a, b) => {
-                int aVoc = a.Task == NeuralModelTask.VocalSeparation ? 1 : 0;
-                int bVoc = b.Task == NeuralModelTask.VocalSeparation ? 1 : 0;
-                int cmp = bVoc.CompareTo(aVoc);
-                return cmp != 0 ? cmp : b.PriorityRank.CompareTo(a.PriorityRank);
-            });
-            // Top 1–2 vocal-capable models
-            List<NeuralModelCatalogEntry> picked = sepModels.Take(2).ToList();
-            return BuildStepFromEntries(picked[0].Task, picked);
+            // Prefer dedicated mobile-fast vocal model -> any vocal model -> mobile-fast multi-stem -> highest rank
+            NeuralModelCatalogEntry best = sepModels
+                .OrderByDescending(m => m.Task == NeuralModelTask.VocalSeparation ? 1 : 0)
+                .ThenByDescending(m => m.IsMobileFast ? 1 : 0)
+                .ThenByDescending(m => m.PriorityRank)
+                .First();
+            return BuildStepFromEntries(best.Task, [best]);
         }
 
-        // Full stem separation: pick best multi-stem model + optional top dedicated vocal model for semantic vocal ensembling
-        NeuralModelCatalogEntry bestMulti = sepModels
+        // Full stem separation Auto: prioritize mobile-fast multi-stem (e.g. SCNet 4-Stem) over heavy 136 MB HTDemucs
+        // when both are installed, falling back to any multi-stem or vocal separator if that's all installed.
+        NeuralModelCatalogEntry bestMultiFast = sepModels
+            .Where(m => (m.Task == NeuralModelTask.StemSeparation4 || m.Task == NeuralModelTask.StemSeparation6) && m.IsMobileFast)
+            .OrderByDescending(m => m.PriorityRank)
+            .FirstOrDefault();
+        if (bestMultiFast != null) {
+            return BuildStepFromEntries(bestMultiFast.Task, [bestMultiFast]);
+        }
+
+        NeuralModelCatalogEntry bestMultiAny = sepModels
             .Where(m => m.Task == NeuralModelTask.StemSeparation6 || m.Task == NeuralModelTask.StemSeparation4)
             .OrderByDescending(m => m.PriorityRank)
             .FirstOrDefault();
-        NeuralModelCatalogEntry bestVocal = sepModels
-            .Where(m => m.Task == NeuralModelTask.VocalSeparation)
-            .OrderByDescending(m => m.PriorityRank)
-            .FirstOrDefault();
+        if (bestMultiAny != null) {
+            return BuildStepFromEntries(bestMultiAny.Task, [bestMultiAny]);
+        }
 
-        List<NeuralModelCatalogEntry> autoChosen = [];
-        if (bestMulti != null) {
-            autoChosen.Add(bestMulti);
-        }
-        if (bestVocal != null) {
-            autoChosen.Add(bestVocal);
-        }
-        return BuildStepFromEntries(autoChosen[0].Task, autoChosen);
+        NeuralModelCatalogEntry bestVocalFallback = sepModels
+            .OrderByDescending(m => m.IsMobileFast ? 1 : 0)
+            .ThenByDescending(m => m.PriorityRank)
+            .First();
+        return BuildStepFromEntries(bestVocalFallback.Task, [bestVocalFallback]);
     }
 
     NeuralExecutionStep ResolveSingleTaskStep(
@@ -500,14 +622,12 @@ public sealed class NeuralPipelineOrchestrator {
         } else {
             List<NeuralModelCatalogEntry> matches = installed
                 .Where(m => m.Task == task)
-                .OrderByDescending(m => m.PriorityRank)
+                .OrderByDescending(m => m.IsMobileFast ? 1 : 0)
+                .ThenByDescending(m => m.PriorityRank)
                 .ToList();
             if (matches.Count > 0) {
-                if (allowEnsemble) {
-                    chosen.AddRange(matches.Take(2));
-                } else {
-                    chosen.Add(matches[0]);
-                }
+                // Single best model in Auto mode for fast mobile responsiveness
+                chosen.Add(matches[0]);
             }
         }
         return BuildStepFromEntries(task, chosen);

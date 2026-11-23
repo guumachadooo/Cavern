@@ -13,6 +13,7 @@ AGENT_DIR = Path(__file__).resolve().parent
 if str(AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_DIR))
 
+import bridge_auth as bauth
 import deploy_worker
 import omni_agent_daemon as daemon
 import omni_protocol as proto
@@ -157,6 +158,65 @@ class OmniAgentProtocolTests(unittest.TestCase):
         self.assertIn("Content-Type: application/javascript+module", text)
         self.assertIn("export default", text)
 
+    def test_p256_ecdh_sas_and_knock_grant_roundtrip(self) -> None:
+        priv_a, pub_a_bytes = proto.p256_generate_keypair()
+        priv_b, pub_b_bytes = proto.p256_generate_keypair()
+        pub_a = proto.p256_encode_public_key(pub_a_bytes)
+        pub_b = proto.p256_encode_public_key(pub_b_bytes)
+
+        s_ab = proto.p256_ecdh_shared_secret(priv_a, pub_b)
+        s_ba = proto.p256_ecdh_shared_secret(priv_b, pub_a)
+        self.assertEqual(len(s_ab), 32)
+        self.assertEqual(s_ab, s_ba)
+
+        kid = proto.compute_knock_channel_id(self.KEY)
+        self.assertEqual(len(kid), 64)
+        self.assertNotEqual(kid, proto.compute_device_hash(self.KEY))
+
+        sas1 = proto.compute_knock_sas(kid, "k_test_1", pub_a)
+        sas2 = proto.compute_knock_sas(kid, "k_test_1", pub_a)
+        sas_diff = proto.compute_knock_sas(kid, "k_test_1", pub_b)
+        self.assertEqual(sas1, sas2)
+        self.assertRegex(sas1, r"^[A-Z2-9]{3}-[A-Z2-9]{3}$")
+        self.assertNotEqual(sas1, sas_diff)
+
+        grant = {"mode": "workspace", "sessionCode": "CAV-TEST-1234", "pairSecret": self.KEY, "tier": 2}
+        enc = proto.encrypt_knock_grant(priv_b, pub_a, "k_test_1", grant)
+        dec = proto.decrypt_knock_grant(priv_a, pub_b, "k_test_1", enc)
+        self.assertEqual(dec, grant)
+
+        with self.assertRaises(ValueError):
+            proto.decrypt_knock_grant(priv_a, pub_b, "k_wrong_id", enc)
+
+    def test_bridge_auth_vault_priority_expiry_and_sync_exclusion(self) -> None:
+        self.assertFalse(proto.should_include_workspace_path(".agents/.bridge_vault.json"))
+        self.assertFalse(proto.should_include_workspace_path(".env.local"))
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            prof_p = t / "bridge_profile.json"
+            vault_p = t / ".bridge_vault.json"
+            kid = proto.compute_knock_channel_id(self.KEY)
+            bauth.save_public_profile(relay_url="https://demo.workers.dev", knock_id=kid, profile_path=prof_p)
+            bauth.save_vault(
+                relay_url="https://vault.workers.dev",
+                session_token="CAV-LIVE-1111-2222-3333",
+                session_ttl_seconds=600,
+                vault_path=vault_p,
+            )
+            r = bauth.resolve_connection(profile_path=prof_p, vault_path=vault_p)
+            self.assertEqual(r["relayUrl"], "https://vault.workers.dev")
+            self.assertEqual(r["relaySource"], "vault")
+            self.assertEqual(r["sessionToken"], "CAV-LIVE-1111-2222-3333")
+            self.assertEqual(r["knockId"], kid)
+
+            # Force expired session token -> auto-pruned cleanly
+            vdata = json.loads(vault_p.read_text(encoding="utf-8"))
+            vdata["sessionExpiresUnix"] = 100
+            vault_p.write_text(json.dumps(vdata), encoding="utf-8")
+            r2 = bauth.resolve_connection(profile_path=prof_p, vault_path=vault_p)
+            self.assertEqual(r2["sessionToken"], "")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+

@@ -192,6 +192,40 @@ public sealed class LiveBridgeWakeService : Service {
                             consecutiveIdle = Math.Min(consecutiveIdle + 1, 10);
                         }
                     }
+
+                    // Also poll Zero-Secret Ephemeral P-256 Smart Knock inbox (authenticated by X-Device-Hash)
+                    if (store.LiveBridgeSmartKnockEnabled) {
+                        using HttpRequestMessage kReq = new(HttpMethod.Get, $"{baseUrl}/v1/knock/poll");
+                        kReq.Headers.Add("X-Device-Hash", devHash);
+                        using HttpResponseMessage kResp = await http.SendAsync(kReq, ct).ConfigureAwait(false);
+                        if (kResp.IsSuccessStatusCode) {
+                            string kBody = await kResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                            using JsonDocument kDoc = JsonDocument.Parse(kBody);
+                            if (kDoc.RootElement.TryGetProperty("hasKnock", out JsonElement hkEl) &&
+                                hkEl.GetBoolean() &&
+                                kDoc.RootElement.TryGetProperty("knock", out JsonElement knockEl)) {
+                                consecutiveIdle = 0;
+                                string knockReqId = knockEl.TryGetProperty("knockReqId", out JsonElement idEl) ? (idEl.GetString() ?? "") : "";
+                                string clientPub = knockEl.TryGetProperty("clientPubKey", out JsonElement pkEl) ? (pkEl.GetString() ?? "") : "";
+                                string knockId = LiveDiagnosticBridgeService.ComputeKnockChannelId(pairHex);
+                                string sas = LiveDiagnosticBridgeService.ComputeKnockSasCode(knockId, knockReqId, clientPub);
+                                LiveBridgeKnockRequest knockReq = new() {
+                                    KnockReqId = knockReqId,
+                                    ClientPubKeyB64 = clientPub,
+                                    SasCode = sas,
+                                    RequestedScope = knockEl.TryGetProperty("requestedScope", out JsonElement scEl) ? (scEl.GetString() ?? "session") : "session",
+                                    RequestedTier = knockEl.TryGetProperty("requestedTier", out JsonElement tEl) && tEl.TryGetInt32(out int kt) ? Math.Clamp(kt, 0, 2) : 2,
+                                    DurationSeconds = knockEl.TryGetProperty("durationSeconds", out JsonElement dEl) && dEl.TryGetInt32(out int kd) ? Math.Clamp(kd, 300, 3600) : 3600,
+                                    Reason = knockEl.TryGetProperty("reason", out JsonElement rEl) ? (rEl.GetString() ?? "") : "",
+                                    Requester = knockEl.TryGetProperty("requester", out JsonElement rqEl) ? (rqEl.GetString() ?? "AI Studio") : "AI Studio"
+                                };
+                                if (!string.IsNullOrEmpty(knockReq.KnockReqId) && !string.IsNullOrEmpty(knockReq.ClientPubKeyB64)) {
+                                    LiveDiagnosticBridgeService.StorePendingKnockRequest(knockReq);
+                                    TriggerSmartKnockOverlay(knockReq);
+                                }
+                            }
+                        }
+                    }
                 } catch (System.OperationCanceledException) {
                     break;
                 } catch {
@@ -243,6 +277,40 @@ public sealed class LiveBridgeWakeService : Service {
             StartActivity(authIntent);
         } catch (Exception ex) {
             AppLogger.Info("CLOUD", $"Direct wake overlay deferred to high-priority notification ({ex.GetType().Name}).");
+        }
+    }
+
+    void TriggerSmartKnockOverlay(LiveBridgeKnockRequest knockReq) {
+        Intent authIntent = new(this, typeof(LiveBridgeAuthActivity));
+        authIntent.PutExtra(LiveBridgeAuthActivity.ExtraKnockReqId, knockReq.KnockReqId);
+        authIntent.AddFlags(ActivityFlags.NewTask | ActivityFlags.ClearTop | ActivityFlags.SingleTop);
+
+        PendingIntentFlags piFlags = OperatingSystem.IsAndroidVersionAtLeast(23)
+            ? PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable
+            : PendingIntentFlags.UpdateCurrent;
+        PendingIntent fullScreenPi = PendingIntent.GetActivity(this, WakeAlertNotificationId + 2, authIntent, piFlags);
+
+        AndroidStrings S = AndroidStrings.Active;
+        string title = S["LiveBridgeKnockNotifTitle"];
+        string text = string.Format(S["LiveBridgeKnockNotifBodyFmt"], knockReq.SasCode, knockReq.Requester, knockReq.Reason);
+
+        NotificationManager nm = (NotificationManager)GetSystemService(NotificationService);
+        if (nm != null) {
+            Notification.Builder b = new(this, WakeAlertChannelId);
+            b.SetSmallIcon(Resource.Drawable.cavern_logo)
+                .SetContentTitle(title)
+                .SetContentText(text)
+                .SetCategory(Notification.CategoryCall)
+                .SetAutoCancel(true)
+                .SetContentIntent(fullScreenPi)
+                .SetFullScreenIntent(fullScreenPi, true);
+            nm.Notify(WakeAlertNotificationId, b.Build());
+        }
+
+        try {
+            StartActivity(authIntent);
+        } catch (Exception ex) {
+            AppLogger.Info("CLOUD", $"Direct Smart Knock overlay deferred to notification ({ex.GetType().Name}).");
         }
     }
 

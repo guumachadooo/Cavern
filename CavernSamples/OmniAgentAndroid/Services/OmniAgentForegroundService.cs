@@ -199,6 +199,24 @@ public sealed class OmniAgentForegroundService : Service {
                         }
                         idleTicks = Math.Min(idleTicks + 1, 15);
                     }
+
+                    // Poll Zero-Secret Ephemeral P-256 Smart Knock inbox when enabled
+                    if (store.SmartKnockEnabled) {
+                        using HttpRequestMessage kReq = new(HttpMethod.Get, $"{baseUrl}/v1/knock/poll");
+                        kReq.Headers.Add("X-Device-Hash", devHash);
+                        using HttpResponseMessage kResp = await http.SendAsync(kReq, ct).ConfigureAwait(false);
+                        if (kResp.IsSuccessStatusCode) {
+                            string kRaw = await kResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                            using JsonDocument kDoc = JsonDocument.Parse(kRaw);
+                            if (kDoc.RootElement.TryGetProperty("hasKnock", out JsonElement hkEl) &&
+                                hkEl.GetBoolean() &&
+                                kDoc.RootElement.TryGetProperty("knock", out JsonElement knockEl)) {
+                                idleTicks = 0;
+                                await HandleSmartKnockAsync(baseUrl, devHash, pairHex, knockEl, ct).ConfigureAwait(false);
+                                continue;
+                            }
+                        }
+                    }
                 } catch (System.OperationCanceledException) {
                     break;
                 } catch {
@@ -236,6 +254,53 @@ public sealed class OmniAgentForegroundService : Service {
         };
         req.Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json");
         using HttpResponseMessage _ = await http.SendAsync(req, ct).ConfigureAwait(false);
+    }
+
+    async Task HandleSmartKnockAsync(string baseUrl, string devHash, string pairHex, JsonElement knockEl, CancellationToken ct) {
+        string knockReqId = knockEl.TryGetProperty("knockReqId", out JsonElement idEl) ? (idEl.GetString() ?? "") : "";
+        string clientPub = knockEl.TryGetProperty("clientPubKey", out JsonElement pkEl) ? (pkEl.GetString() ?? "") : "";
+        string requester = knockEl.TryGetProperty("requester", out JsonElement rqEl) ? (rqEl.GetString() ?? "AI Studio") : "AI Studio";
+        string reason = knockEl.TryGetProperty("reason", out JsonElement rEl) ? (rEl.GetString() ?? "Zero-paste auto-connect") : "Zero-paste auto-connect";
+        if (string.IsNullOrEmpty(knockReqId) || string.IsNullOrEmpty(clientPub)) {
+            return;
+        }
+        string knockId = OmniCrypto.ComputeKnockChannelId(pairHex);
+        string sas = OmniCrypto.ComputeKnockSasCode(knockId, knockReqId, clientPub);
+        OmniSettingsStore.AppendActivity("KNOCK", $"Incoming Smart Knock (SAS={sas}) from {requester}...");
+
+        (bool approved, bool bioOk) = await OmniKnockApprovalActivity.RequestApprovalAsync(this, knockReqId, sas, requester, reason, ct).ConfigureAwait(false);
+        if (!approved || !bioOk) {
+            using HttpRequestMessage denyReq = new(HttpMethod.Post, $"{baseUrl}/v1/knock/deny");
+            denyReq.Headers.Add("X-Device-Hash", devHash);
+            denyReq.Content = new StringContent(
+                JsonSerializer.Serialize(new { knockReqId, reason = "Denied by OmniAgent user", cooldownSeconds = 900 }),
+                System.Text.Encoding.UTF8,
+                "application/json");
+            using HttpResponseMessage _ = await http.SendAsync(denyReq, ct).ConfigureAwait(false);
+            OmniSettingsStore.AppendActivity("KNOCK", $"Denied Smart Knock (SAS={sas}, 15m cooldown).");
+            return;
+        }
+
+        object grantPayload = new {
+            mode = "workspace",
+            relayUrl = baseUrl,
+            pairSecret = pairHex,
+            knockId,
+            biometricVerified = true,
+            device = $"{Build.Manufacturer} {Build.Model}".Trim(),
+            approvedAtUtc = DateTime.UtcNow.ToString("O")
+        };
+        (string serverPubB64, object encGrant) = OmniCrypto.CreateEcdhP256GrantEnvelope(clientPub, knockReqId, grantPayload);
+        using HttpRequestMessage appReq = new(HttpMethod.Post, $"{baseUrl}/v1/knock/approve");
+        appReq.Headers.Add("X-Device-Hash", devHash);
+        appReq.Content = new StringContent(
+            JsonSerializer.Serialize(new { knockReqId, serverPubKey = serverPubB64, encryptedGrant = encGrant, scope = "workspace" }),
+            System.Text.Encoding.UTF8,
+            "application/json");
+        using HttpResponseMessage resp = await http.SendAsync(appReq, ct).ConfigureAwait(false);
+        OmniSettingsStore.AppendActivity("KNOCK", resp.IsSuccessStatusCode
+            ? $"Approved Smart Knock (SAS={sas}) -> E2E P-256 workspace connected!"
+            : $"Smart Knock approve failed (HTTP {(int)resp.StatusCode}).");
     }
 
     async Task<object> HandleEncryptedCommandAsync(

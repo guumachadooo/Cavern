@@ -128,7 +128,7 @@ public static class NeuralAudioOfflinePipeline {
 
         // Always apply residual conservation & Wiener phase_fix ONCE at native sample rate against original mixLeft/mixRight
         // whenever ensembling (>1 model) OR when sample-rate conversion occurred (prevents phase smear across resamplers).
-        int threads = Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
+        int threads = Environment.ProcessorCount >= 8 ? 4 : Math.Clamp(Environment.ProcessorCount / 2, 2, 4);
         bool anyResampled = false;
 
         for (int m = 0; m < modelCount; m++) {
@@ -180,6 +180,7 @@ public static class NeuralAudioOfflinePipeline {
                 }
             }
 
+            Stopwatch modelSw = Stopwatch.StartNew();
             StereoStemBuffer[] rawModelStems = MvsepAntiArtifactPipeline.ProcessTrack(
                 inL,
                 inR,
@@ -188,7 +189,17 @@ public static class NeuralAudioOfflinePipeline {
                 p => {
                     double totalP = (modelIdx + p) / modelCount;
                     double scale = (modelCount > 1 || needsResample) ? 0.90 : 1.0;
-                    onProgress?.Invoke(totalP * scale, $"ONNX [{session.ExecutionProvider}] {modelLabel}: {p:0%}");
+                    string etaPart = string.Empty;
+                    if (p >= 0.03 && p < 0.995) {
+                        double elapsed = modelSw.Elapsed.TotalSeconds;
+                        double rem = elapsed * (1.0 - p) / p;
+                        if (double.IsFinite(rem) && rem >= 1.0 && rem < 7200.0) {
+                            etaPart = rem >= 60.0
+                                ? $" · ~{(int)(rem / 60)}m{(int)(rem % 60):00}s"
+                                : $" · ~{(int)Math.Ceiling(rem)}s";
+                        }
+                    }
+                    onProgress?.Invoke(totalP * scale, $"[{session.ExecutionProvider}] {modelLabel} {p:0%}{etaPart}");
                 },
                 token);
 

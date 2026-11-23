@@ -499,8 +499,25 @@ public sealed class AndroidStrings {
         ["LiveBridgeInvalidUrlToast"] = "Enter a valid public https:// Worker URL.",
         ["LiveBridgeSavedToast"] = "Live Bridge v3 settings saved.",
         ["LiveBridgeNeedUrlToast"] = "Configure your free Cloudflare Worker URL first.",
-        ["LiveBridgeHelpTitle"] = "Cloudflare Unified Hub v3 & Live Bridge Setup",
-        ["LiveBridgeHelpBody"] = "100% free on Cloudflare Workers Free Tier (100k req/day) — powers BOTH Live Bridge AND Cloud Logs:\n1. Open dash.cloudflare.com -> Storage & Databases -> Workers KV -> Create -> name: CAVERNIZE_RELAY.\n2. Open Compute (Workers) -> Workers & Pages -> Create -> Workers tab -> Create Worker -> name: cavernize-diag-relay -> Deploy.\n3. Inside your Worker, open Settings -> Bindings -> Add -> KV Namespace -> Variable name: RELAY_KV -> Namespace: CAVERNIZE_RELAY -> Save.\n4. Tap Edit Code (top-right), paste .agents/docs/cloudflare_live_relay_worker.js (v3), and tap Deploy.\n5. Copy your https://...workers.dev URL here, tap Generate Pair Key, and tap Test Relay.\n\nSecurity & Control: Pairing key stays encrypted in Android Keystore. Wake requests require HMAC-SHA256 + fingerprint/PIN. Tier 2 unlocks unrestricted dynamic .NET reflection, universal UI automation (including dialogs), sandboxed shell diagnostics, and multi-step pipelines.",
+        ["LiveBridgeHelpTitle"] = "Cloudflare Unified Hub v5 & Live Bridge Setup",
+        ["LiveBridgeHelpBody"] = "100% free on Cloudflare Workers Free Tier (100k req/day) — powers Live Bridge, Cloud Logs & Zero-Paste Smart Knock:\n1. Open dash.cloudflare.com -> Storage & Databases -> Workers KV -> Create -> name: CAVERNIZE_RELAY.\n2. Open Compute (Workers) -> Workers & Pages -> Create -> Workers tab -> Create Worker -> name: cavernize-diag-relay -> Deploy.\n3. Inside your Worker, open Settings -> Bindings -> Add -> KV Namespace -> Variable name: RELAY_KV -> Namespace: CAVERNIZE_RELAY -> Save.\n4. Tap Edit Code (top-right), upload .agents/docs/cloudflare_live_relay_worker.js (v5), and tap Deploy.\n5. Copy your https://...workers.dev URL here, tap Generate Pair Key, and tap Test Relay.\n\nZero-Paste Auto-Connect: Tap 'Copy Public Knock ID' (zero secrets, safe for .agents/bridge_profile.json) so any AI Studio chat can ring your phone with a 6-char code + fingerprint — no more copying URLs or tokens!",
+        ["LiveBridgeSmartKnockSwitch"] = "Smart Knock (Zero-Paste AI Auto-Connect)",
+        ["LiveBridgeCopyKnockIdBtn"] = "Copy Public Knock ID (Zero-Secret)",
+        ["LiveBridgeKnockIdCopiedToast"] = "Public Knock ID copied (safe, zero secrets)! Add it to .agents/bridge_profile.json.",
+        ["LiveBridgeKnockNotifTitle"] = "Smart Knock — AI Studio Request",
+        ["LiveBridgeKnockNotifBodyFmt"] = "Code {0} · {1} — {2}",
+        ["LiveBridgeKnockAuthTitle"] = "Smart Knock — Approve AI Studio?",
+        ["LiveBridgeKnockSasBadgeFmt"] = "Verification Code: {0}",
+        ["LiveBridgeKnockRememberCheck"] = "Remember this AI Studio workspace (zero prompts next time)",
+        ["PipelineStep1Short"] = "1. Analyze",
+        ["PipelineStep2Short"] = "2. AI / Vocals",
+        ["PipelineStep3Short"] = "3. Spatial",
+        ["PipelineStep4Short"] = "4. Export",
+        ["PipelineStageAnalyzing"] = "Stage 1/4 · Analyzing Waveforms & Decoding",
+        ["PipelineStageIsolating"] = "Stage 2/4 · Isolating Vocals & Neural Stems",
+        ["PipelineStageRendering"] = "Stage 3/4 · Spatial 3D Rendering & DSP",
+        ["PipelineStageExporting"] = "Stage 4/4 · Encoding & Finalizing Output",
+        ["PipelineStageDone"] = "Pipeline Complete · Ready to Play or Share",
 
         // App Auto-Updater
         ["UpdateCardTitle"] = "Software Update",
@@ -1454,6 +1471,8 @@ public sealed class AndroidStrings {
         // W27 2-Tier Sing Dock, Audio Spec A/B, Quality Note & Guided Modal Help
         ["SingDockDnaActivePill"] = "Vocal DNA Active",
         ["SingDockDnaIdlePill"] = "Vocal DNA: Neutral",
+        ["SingDockKaraokeCenterPill"] = "Karaoke: Center (Instant)",
+        ["SingDockKaraokeAiPill"] = "Karaoke: AI Stems",
         ["SingDockKaraokeChip"] = "Karaoke",
         ["SingDockLiveMicChip"] = "Live Mic",
         ["SingDockLiveMicOnChip"] = "Mic On",
@@ -1903,8 +1922,25 @@ public sealed class AndroidStrings {
         d["LiveBridgeInvalidUrlToast"] = "Informe uma URL https:// pública válida do seu Worker.";
         d["LiveBridgeSavedToast"] = "Configurações da Ponte Ao Vivo v3 salvas.";
         d["LiveBridgeNeedUrlToast"] = "Configure primeiro a URL gratuita do seu Worker Cloudflare.";
-        d["LiveBridgeHelpTitle"] = "Passo a Passo na Cloudflare (em Português)";
-        d["LiveBridgeHelpBody"] = "100% grátis (100 mil req/dia) — ativa Ponte Ao Vivo + Logs na Nuvem juntos!\n1. Entre em dash.cloudflare.com -> menu esquerdo: Armazenamento e bancos de dados -> Workers KV -> Criar -> nome: CAVERNIZE_RELAY.\n2. Menu esquerdo: Computação (Workers) -> Workers e Pages -> Criar -> aba Workers -> Criar Worker -> nome: cavernize-diag-relay -> Implantar.\n3. Dentro do Worker criado, abra a aba Configurações -> seção Associações (Bindings) -> Adicionar -> Namespace KV -> Nome da variável: RELAY_KV -> Namespace KV: CAVERNIZE_RELAY -> Salvar.\n4. No canto superior direito, clique em Editar código, apague tudo, cole o arquivo .agents/docs/cloudflare_live_relay_worker.js (v3) e clique em Implantar.\n5. Copie a URL https://...workers.dev aqui embaixo, toque em Gerar Chave e depois em Testar Relay.\n\nSegurança e Poder Total: Chave 256-bit no Android Keystore, aprovação por digital/PIN. No Nível 2 a IA tem acesso dinâmico irrestrito (reflexão .NET, clique/edição em qualquer tela ou modal, shell sandbox e pipelines).";
+        d["LiveBridgeHelpTitle"] = "Passo a Passo na Cloudflare (v5 — Conexão Automática)";
+        d["LiveBridgeHelpBody"] = "100% grátis (100 mil req/dia) — ativa Ponte Ao Vivo, Logs na Nuvem e Smart Knock sem precisar colar token!\n1. Entre em dash.cloudflare.com -> Armazenamento e bancos de dados -> Workers KV -> Criar -> nome: CAVERNIZE_RELAY.\n2. Computação (Workers) -> Workers e Pages -> Criar -> aba Workers -> Criar Worker -> nome: cavernize-diag-relay -> Implantar.\n3. Configurações -> Associações (Bindings) -> Adicionar -> Namespace KV -> Nome da variável: RELAY_KV -> Namespace: CAVERNIZE_RELAY -> Salvar.\n4. Clique em Editar código, envie .agents/docs/cloudflare_live_relay_worker.js (v5) e clique em Implantar.\n5. Salve a URL https://...workers.dev aqui, toque em Gerar Chave e em Testar Relay.\n\nConexão Zero-Cola (Smart Knock): Toque em 'Copiar Knock ID Público' (100% seguro, zero segredos) para salvar em .agents/bridge_profile.json — depois basta falar com o AI Studio e aprovar na digital!";
+        d["LiveBridgeSmartKnockSwitch"] = "Smart Knock (Conexão Automática sem Token)";
+        d["LiveBridgeCopyKnockIdBtn"] = "Copiar Knock ID Público (Seguro)";
+        d["LiveBridgeKnockIdCopiedToast"] = "Knock ID Público copiado (zero segredos)! Salve em .agents/bridge_profile.json.";
+        d["LiveBridgeKnockNotifTitle"] = "Smart Knock — AI Studio quer conectar";
+        d["LiveBridgeKnockNotifBodyFmt"] = "Código {0} · {1} — {2}";
+        d["LiveBridgeKnockAuthTitle"] = "Smart Knock — Aprovar AI Studio?";
+        d["LiveBridgeKnockSasBadgeFmt"] = "Código de Verificação: {0}";
+        d["LiveBridgeKnockRememberCheck"] = "Lembrar este AI Studio (conectar automático depois)";
+        d["PipelineStep1Short"] = "1. Análise";
+        d["PipelineStep2Short"] = "2. IA / Voz";
+        d["PipelineStep3Short"] = "3. Espacial";
+        d["PipelineStep4Short"] = "4. Exportar";
+        d["PipelineStageAnalyzing"] = "Etapa 1/4 · Analisando Ondas e Decodificando";
+        d["PipelineStageIsolating"] = "Etapa 2/4 · Isolando Vocais e Stems IA";
+        d["PipelineStageRendering"] = "Etapa 3/4 · Renderização Espacial 3D e DSP";
+        d["PipelineStageExporting"] = "Etapa 4/4 · Codificando e Finalizando Saída";
+        d["PipelineStageDone"] = "Pipeline Concluído · Pronto para Ouvir ou Compartilhar";
 
         d["UpdateCardTitle"] = "Atualização do Aplicativo";
         d["CurrentVersionLabel"] = "Versão instalada: v{0}";
@@ -2853,6 +2889,8 @@ public sealed class AndroidStrings {
         // W27 Dock Sing em 2 Níveis, Audio Spec A/B, Nota de Qualidade e Ajuda Guiada dos Modais
         d["SingDockDnaActivePill"] = "DNA Vocal Ativo";
         d["SingDockDnaIdlePill"] = "DNA Vocal: Neutro";
+        d["SingDockKaraokeCenterPill"] = "Karaokê: Centro (Instantâneo)";
+        d["SingDockKaraokeAiPill"] = "Karaokê: Stems IA";
         d["SingDockKaraokeChip"] = "Karaokê";
         d["SingDockLiveMicChip"] = "Mic ao Vivo";
         d["SingDockLiveMicOnChip"] = "Mic Ativo";

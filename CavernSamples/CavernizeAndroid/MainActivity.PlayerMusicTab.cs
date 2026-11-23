@@ -1371,9 +1371,10 @@ public partial class MainActivity {
         bool hasUsb = usbProAudioManager?.CurrentSnapshot?.IsAttached == true;
         bool hasDna = playerEngine?.VocalMixMatchStage?.ActiveDna?.IsExtractedFromSong == true;
         bool hasVp = playerEngine?.VocalMixMatchStage?.HasMicVoiceprint == true;
+        bool hasNeuralLead = playerEngine?.NeuralStage?.HasIsolatedNeuralVocalReference == true;
         bool prepRunning = isNeuralPrepRunning;
 
-        string sig = $"{isLyricsSingDockExpanded}|{pct}|{micEnabled}|{dryBypass}|{karaokeOn}|{hasUsb}|{hasDna}|{hasVp}|{prepRunning}";
+        string sig = $"{isLyricsSingDockExpanded}|{pct}|{micEnabled}|{dryBypass}|{karaokeOn}|{hasUsb}|{hasDna}|{hasVp}|{hasNeuralLead}|{prepRunning}";
         if (string.Equals(lastLyricsSingDockSig, sig, StringComparison.Ordinal)) {
             return;
         }
@@ -1458,16 +1459,26 @@ public partial class MainActivity {
             RefreshNeuralPrepUi();
         }
         if (musicLyricsAiStatusText != null) {
-            musicLyricsAiStatusText.Text = (hasDna || hasVp) ? S["SingDockDnaActivePill"] : S["SingDockDnaIdlePill"];
-            musicLyricsAiStatusText.SetTextColor((hasDna || hasVp) ? OneUiTheme.IconSystemInfo : OneUiTheme.TextSecondary);
+            if (!prepRunning) {
+                if (karaokeOn && pct < 99) {
+                    string modeBadge = hasNeuralLead ? S["SingDockKaraokeAiPill"] : S["SingDockKaraokeCenterPill"];
+                    musicLyricsAiStatusText.Text = (hasDna || hasVp) ? $"{modeBadge} · {S["SingDockDnaActivePill"]}" : modeBadge;
+                    musicLyricsAiStatusText.SetTextColor(hasNeuralLead ? OneUiTheme.FunctionalGreen : OneUiTheme.IconSystemInfo);
+                } else {
+                    musicLyricsAiStatusText.Text = (hasDna || hasVp) ? S["SingDockDnaActivePill"] : S["SingDockDnaIdlePill"];
+                    musicLyricsAiStatusText.SetTextColor((hasDna || hasVp) ? OneUiTheme.IconSystemInfo : OneUiTheme.TextSecondary);
+                }
+            }
             if (musicLyricsAiStatusText.Visibility != ViewStates.Visible) {
                 musicLyricsAiStatusText.Visibility = ViewStates.Visible;
             }
             Color pillBg = prepRunning
                 ? OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 48)
-                : (hasDna || hasVp || micEnabled
-                    ? OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 44)
-                    : Color.Argb(34, 255, 255, 255));
+                : (hasNeuralLead && karaokeOn && pct < 99
+                    ? OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 44)
+                    : (hasDna || hasVp || micEnabled || (karaokeOn && pct < 99)
+                        ? OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 44)
+                        : Color.Argb(34, 255, 255, 255)));
             musicLyricsAiStatusText.Background = OneUiTheme.CreateRoundedDrawable(
                 this, pillBg, 99f, Color.Argb(54, 255, 255, 255), 0.8f);
         }

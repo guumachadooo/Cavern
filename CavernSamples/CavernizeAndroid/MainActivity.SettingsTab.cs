@@ -1273,7 +1273,7 @@ public partial class MainActivity {
                 ApplyAndRefreshNeuralAudio();
             },
             "x",
-            defaultValue: 4,
+            defaultValue: 2,
             helpBody: S["TipMvsepOverlap"]);
         if (neuralOverlapBar != null) {
             neuralOverlapBar.ValueText = $"{store.NeuralOverlapFactor}x";
@@ -2368,6 +2368,24 @@ public partial class MainActivity {
         pairRow.AddView(genPairBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.25f) { RightMargin = Dp(6) });
         pairRow.AddView(copyPairBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         body.AddView(pairRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
+
+        AddSwitchRow(body, S["LiveBridgeSmartKnockSwitch"], store.LiveBridgeSmartKnockEnabled, v => {
+            store.LiveBridgeSmartKnockEnabled = v;
+        });
+
+        Button copyKnockIdBtn = PillButton(S["LiveBridgeCopyKnockIdBtn"], () => {
+            string kid = LiveDiagnosticBridgeService.GetPublicKnockId(store);
+            if (string.IsNullOrEmpty(kid)) {
+                LiveDiagnosticBridgeService.GenerateAndStorePairSecret(store);
+                RefreshPairStatus();
+                kid = LiveDiagnosticBridgeService.GetPublicKnockId(store);
+            }
+            if (!string.IsNullOrEmpty(kid) && GetSystemService(ClipboardService) is ClipboardManager cm) {
+                cm.PrimaryClip = ClipData.NewPlainText("Cavernize Public Knock ID", kid);
+                Toast.MakeText(this, S["LiveBridgeKnockIdCopiedToast"], ToastLength.Long).Show();
+            }
+        });
+        body.AddView(copyKnockIdBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(2), BottomMargin = Dp(6) });
 
         TextView testStatus = Label("", 11.5f, OneUiTheme.TextSub);
         testStatus.SetPadding(0, Dp(2), 0, Dp(6));

@@ -48,6 +48,55 @@ public static class OmniCrypto {
     public static string ComputeAgentKey(string pairHex) =>
         Sha256Hex($"agent-access-v4:{pairHex}");
 
+    public static string ComputeKnockChannelId(string pairHex) =>
+        string.IsNullOrEmpty(pairHex) || pairHex.Length != 64
+            ? ""
+            : Sha256Hex($"knock-channel-v5:{ComputeDeviceHash(pairHex)}");
+
+    public static string ComputeKnockSasCode(string knockId, string knockReqId, string clientPubKeyB64) {
+        const string alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+        string canonical = $"knock-sas-v5|{(knockId ?? "").Trim().ToLowerInvariant()}|{(knockReqId ?? "").Trim()}|{(clientPubKeyB64 ?? "").Trim()}";
+        byte[] digest = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(canonical));
+        char[] chars = new char[6];
+        for (int i = 0; i < 6; i++) {
+            chars[i] = alphabet[digest[i] & 0x1F];
+        }
+        return $"{new string(chars, 0, 3)}-{new string(chars, 3, 3)}";
+    }
+
+    public static (string serverPubKeyB64, object encryptedGrant) CreateEcdhP256GrantEnvelope(
+        string clientPubKeyB64,
+        string knockReqId,
+        object grantObj) {
+        byte[] clientRaw = Convert.FromBase64String((clientPubKeyB64 ?? "").Trim());
+        if (clientRaw.Length != 65 || clientRaw[0] != 0x04) {
+            throw new CryptographicException("Invalid client P-256 SEC1 public key.");
+        }
+        ECParameters peerParams = new() {
+            Curve = ECCurve.NamedCurves.nistP256,
+            Q = new ECPoint {
+                X = clientRaw[1..33],
+                Y = clientRaw[33..65]
+            }
+        };
+        using ECDiffieHellman peerDh = ECDiffieHellman.Create(peerParams);
+        using ECDiffieHellman localDh = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
+        ECParameters localPub = localDh.ExportParameters(includePrivateParameters: false);
+        byte[] serverRaw = new byte[65];
+        serverRaw[0] = 0x04;
+        Buffer.BlockCopy(localPub.Q.X, 0, serverRaw, 1 + (32 - localPub.Q.X.Length), localPub.Q.X.Length);
+        Buffer.BlockCopy(localPub.Q.Y, 0, serverRaw, 33 + (32 - localPub.Q.Y.Length), localPub.Q.Y.Length);
+        string serverPubB64 = Convert.ToBase64String(serverRaw);
+
+        byte[] sharedX = localDh.DeriveRawSecretAgreement(peerDh.PublicKey);
+        byte[] symKeyBytes = SHA256.HashData(Concat(
+            System.Text.Encoding.UTF8.GetBytes($"ecdh-knock-v5|{(knockReqId ?? "").Trim()}|"),
+            sharedX));
+        string symKeyHex = Convert.ToHexString(symKeyBytes).ToLowerInvariant();
+        object env = EncryptEnvelope(symKeyHex, $"knock:{(knockReqId ?? "").Trim()}", grantObj);
+        return (serverPubB64, env);
+    }
+
     public static string Sha256Hex(string utf8Text) =>
         Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(utf8Text))).ToLowerInvariant();
 

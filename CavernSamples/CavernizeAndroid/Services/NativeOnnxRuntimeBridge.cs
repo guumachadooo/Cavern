@@ -819,7 +819,9 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
 
         bool handoffComplete = false;
         try {
-            int threads = intraOpThreads > 0 ? intraOpThreads : Math.Clamp(Environment.ProcessorCount / 2, 2, 6);
+            // On 8+ core ARM64 SoCs (e.g. Snapdragon 8 Elite), 4 performance threads prevent big.LITTLE stragglers
+            int defaultThreads = Environment.ProcessorCount >= 8 ? 4 : Math.Clamp(Environment.ProcessorCount / 2, 2, 4);
+            int threads = intraOpThreads > 0 ? Math.Clamp(intraOpThreads, 1, 6) : defaultThreads;
             List<NeuralExecutionProvider> candidates = BuildSessionProviderCascade(preferredProvider);
             Exception lastErr = null;
 
@@ -828,16 +830,20 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                 IntPtr sessOpts = IntPtr.Zero;
                 CheckStatus(fnCreateSessionOptions(out sessOpts));
                 try {
-                    CheckStatus(fnSetIntraOpNumThreads(sessOpts, threads));
+                    // Per ONNX Runtime XNNPACK EP docs, CPU intra-op threads should be 1 when XNNPACK owns the thread pool
+                    // to avoid competing thread pools thrashing ARM64 big/little cores.
+                    int cpuIntraThreads = candidate == NeuralExecutionProvider.Xnnpack ? 1 : threads;
+                    CheckStatus(fnSetIntraOpNumThreads(sessOpts, cpuIntraThreads));
                     if (fnSetInterOpNumThreads != null) {
                         ReleaseStatusQuietly(fnSetInterOpNumThreads(sessOpts, 1));
                     }
                     CheckStatus(fnSetGraphOpt(sessOpts, OrtEnableAll));
                     if (fnAddSessionConfig != null) {
-                        ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.intra_op.allow_spinning", "0"));
+                        // Allow intra-op worker spin-wait between layers (disabling spinning caused futex sleep/wake on every op -> 3-8x slowdown).
+                        // Do NOT enable cpu:0 arena shrinkage (that unmapped & re-allocated hundreds of MB after every single chunk Run()).
+                        ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.intra_op.allow_spinning", "1"));
                         ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.inter_op.allow_spinning", "0"));
                         ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.set_denormal_as_zero", "1"));
-                        ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "memory.enable_memory_arena_shrinkage", "cpu:0"));
                     }
 
                     string activeEp = ConfigureSingleExecutionProvider(sessOpts, candidate, threads);
@@ -846,6 +852,9 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                         if (c + 1 < candidates.Count) {
                             continue;
                         }
+                        if (cpuIntraThreads != threads) {
+                            CheckStatus(fnSetIntraOpNumThreads(sessOpts, threads));
+                        }
                     }
 
                     IntPtr st = fnCreateSession(ortEnv, modelPath, sessOpts, out IntPtr sessionHandle);
@@ -853,6 +862,7 @@ public sealed class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, INeuralMo
                         lock (initLock) {
                             lastActiveProvider = activeEp;
                         }
+                        AppLogger.Info($"ONNX session ready [{activeEp}] threads={threads} model='{Path.GetFileName(modelPath)}'");
                         NativeOnnxSession session = new(this, modelPath, sessionHandle, activeEp);
                         handoffComplete = true;
                         return session;
