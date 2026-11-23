@@ -1,5 +1,5 @@
 /**
- * Cavernize & OmniAgent — Unified Diagnostics, Live Bridge & Full-Agent Hub v4 (Cloudflare Worker + KV)
+ * Cavernize & OmniAgent - Unified Diagnostics, Live Bridge & Full-Agent Hub v4 (Cloudflare Worker + KV)
  *
  * 100% FREE on Cloudflare Workers Free Tier (100,000 req/day + KV Free Tier).
  * 100% backwards-compatible with Cavernize Android Live Bridge v3 (/v1/telemetry/*, /v1/wake/*, /v1/session/*)
@@ -11,11 +11,14 @@
  *   - /v1/swarm/* : Zero-API-cost Multi-Agent Swarm Task Bus connecting AI Studio <-> Antigravity (Debian)
  *                   <-> secondary chats/local CLI workers with compact token-diet task/result exchange.
  *
- * === PASSO A PASSO NO PAINEL CLOUDFLARE EM PORTUGUES (PT-BR) ===
- *   1. Acesse https://dash.cloudflare.com -> "Workers e Pages" -> abra seu Worker `cavernize-diag-relay`.
- *      (Se for a 1a vez: crie KV `CAVERNIZE_RELAY`, crie Worker, associe variavel `RELAY_KV` -> `CAVERNIZE_RELAY`.)
- *   2. Clique em "Editar codigo" (Edit code), apague tudo, cole TODO este codigo v4 e clique em "Implantar" (Deploy).
- *   3. Pronto! O Cavernize Android v3, o Termux/Debian Agent Daemon e o OmniAgent Android compartilham o mesmo Worker!
+ * === COMO ATUALIZAR SEM TRAVAR O NAVEGADOR (PT-BR) ===
+ *   Opcao 1 (Upload de arquivo no Editor Cloudflare - 5 segundos, sem Ctrl+V):
+ *     1. Baixe este arquivo do GitHub e renomeie para `worker.js` (ou o nome que aparece na barra esquerda do Worker).
+ *     2. No painel Cloudflare -> Workers e Pages -> seu Worker -> "Editar codigo" (Quick Edit).
+ *     3. Na barra lateral esquerda (Explorer de arquivos), clique com o botao direito -> "Upload..." (ou arraste o arquivo)
+ *        para substituir `worker.js` instantaneamente, e clique em "Implantar" (Deploy).
+ *   Opcao 2 (Deploy em 1 segundo via API preservando RELAY_KV):
+ *     python3 -B .agents/agent/deploy_worker.py
  *
  * === SECURITY MODEL (v4 Zero-Trust E2E) ===
  * - Zero plaintext pairing secret on Cloudflare:
@@ -52,6 +55,11 @@ const ALLOWED_TELEMETRY_KINDS = new Set([
   "ui_audit",
 ]);
 
+/**
+ * @param {any} obj
+ * @param {number} [status=200]
+ * @returns {Response}
+ */
 function jsonResp(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
@@ -63,6 +71,10 @@ function jsonResp(obj, status = 200) {
   });
 }
 
+/**
+ * @param {string} text
+ * @returns {Promise<string>}
+ */
 async function sha256Hex(text) {
   const data = new TextEncoder().encode(text);
   const digest = await crypto.subtle.digest("SHA-256", data);
@@ -71,6 +83,11 @@ async function sha256Hex(text) {
     .join("");
 }
 
+/**
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
 function timingSafeEqualStr(a, b) {
   if (typeof a !== "string" || typeof b !== "string") return false;
   const enc = new TextEncoder();
@@ -84,6 +101,11 @@ function timingSafeEqualStr(a, b) {
   return diff === 0;
 }
 
+/**
+ * @param {Request} request
+ * @param {any} env
+ * @returns {boolean}
+ */
 function verifyOptionalAdminGate(request, env) {
   const expected = env && typeof env.CAVERNIZE_ADMIN_KEY === "string" ? env.CAVERNIZE_ADMIN_KEY.trim() : "";
   if (!expected) return true;
@@ -91,6 +113,10 @@ function verifyOptionalAdminGate(request, env) {
   return provided.length > 0 && timingSafeEqualStr(provided, expected);
 }
 
+/**
+ * @param {Request} request
+ * @returns {string | null}
+ */
 function getValidToken(request) {
   const token = (request.headers.get("X-Session-Token") || "").trim();
   if (token.length < 20 || token.length > 96 || !/^[A-Za-z0-9_-]+$/.test(token)) {
@@ -99,20 +125,39 @@ function getValidToken(request) {
   return token;
 }
 
+/**
+ * @param {Request} request
+ * @param {string} headerName
+ * @returns {string | null}
+ */
 function getValidHex64Header(request, headerName) {
   const h = (request.headers.get(headerName) || "").trim().toLowerCase();
   return HEX64_RE.test(h) ? h : null;
 }
 
+/**
+ * @param {Request} request
+ * @param {string} [fallback="termux"]
+ * @returns {string | null}
+ */
 function getValidChannel(request, fallback = "termux") {
   const raw = (request.headers.get("X-Agent-Channel") || fallback).trim().toLowerCase();
   return CHANNEL_RE.test(raw) ? raw : null;
 }
 
+/**
+ * @param {any} raw
+ * @returns {string}
+ */
 function sanitizeId(raw) {
   return String(raw || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
 }
 
+/**
+ * @param {Request} request
+ * @param {number} [maxBytes=MAX_BODY_BYTES]
+ * @returns {Promise<{ data?: any, error?: string, status?: number }>}
+ */
 async function readBoundedJson(request, maxBytes = MAX_BODY_BYTES) {
   const raw = await request.text();
   if (raw.length > maxBytes) {
@@ -120,11 +165,15 @@ async function readBoundedJson(request, maxBytes = MAX_BODY_BYTES) {
   }
   try {
     return { data: raw ? JSON.parse(raw) : {} };
-  } catch {
+  } catch (_err) {
     return { error: "Invalid JSON body", status: 400 };
   }
 }
 
+/**
+ * @param {Request} request
+ * @returns {Promise<string | null>}
+ */
 async function resolveAgentBucket(request) {
   const devHash = getValidHex64Header(request, "X-Device-Hash");
   const agentKey = getValidHex64Header(request, "X-Agent-Key");
@@ -134,7 +183,27 @@ async function resolveAgentBucket(request) {
   return await sha256Hex(`${devHash}:${agentKey}`);
 }
 
+/**
+ * @param {any} env
+ * @param {string} idxKey
+ * @returns {Promise<any[]>}
+ */
+async function loadSwarmIndex(env, idxKey) {
+  try {
+    const raw = await env.RELAY_KV.get(idxKey);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch (_err) {
+    return [];
+  }
+}
+
 export default {
+  /**
+   * @param {Request} request
+   * @param {any} env
+   * @returns {Promise<Response>}
+   */
   async fetch(request, env) {
     if (!env || !env.RELAY_KV) {
       return jsonResp({ ok: false, error: "RELAY_KV binding missing in Worker Settings -> Bindings (Associacoes)." }, 500);
@@ -217,6 +286,7 @@ export default {
             .filter((c) => CHANNEL_RE.test(c));
           const list = [...new Set([...KNOWN_AGENT_CHANNELS, channel, ...extra])];
           const entries = await Promise.all(list.map((c) => env.RELAY_KV.get(`${basePrefix}${c}:presence`)));
+          /** @type {Record<string, any>} */
           const channels = {};
           for (let i = 0; i < list.length; i++) {
             channels[list[i]] = entries[i] ? JSON.parse(entries[i]) : { channel: list[i], online: false };
@@ -248,7 +318,7 @@ export default {
             const parsedQ = JSON.parse(rawQ);
             if (Array.isArray(parsedQ)) queue = parsedQ;
           }
-        } catch {
+        } catch (_err) {
           queue = [];
         }
         if (queue.length >= MAX_AGENT_QUEUE) {
@@ -274,7 +344,7 @@ export default {
         try {
           const parsedQ = JSON.parse(rawQ);
           if (Array.isArray(parsedQ)) queue = parsedQ;
-        } catch {
+        } catch (_err) {
           queue = [];
         }
         if (queue.length === 0) {
@@ -403,7 +473,7 @@ export default {
         if (rawMeta) {
           try {
             count = Math.min(MAX_BLOB_CHUNKS, Math.max(0, Number(JSON.parse(rawMeta).totalChunks) || 0));
-          } catch {
+          } catch (_err) {
             count = 0;
           }
         }
@@ -430,16 +500,6 @@ export default {
       const swarmPrefix = `sw:${bucket}:`;
       const idxKey = `${swarmPrefix}index`;
 
-      async function loadSwarmIndex() {
-        try {
-          const raw = await env.RELAY_KV.get(idxKey);
-          const arr = raw ? JSON.parse(raw) : [];
-          return Array.isArray(arr) ? arr : [];
-        } catch {
-          return [];
-        }
-      }
-
       if (request.method === "POST" && path === "/v1/swarm/enqueue") {
         const parsed = await readBoundedJson(request, 256 * 1024);
         if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
@@ -462,7 +522,7 @@ export default {
           instructions: typeof d.instructions === "string" ? d.instructions.slice(0, 32000) : "",
           result: null,
         };
-        let index = await loadSwarmIndex();
+        let index = await loadSwarmIndex(env, idxKey);
         index = index.filter((item) => item.taskId !== taskId);
         index.unshift(header);
         if (index.length > MAX_SWARM_TASKS) {
@@ -477,7 +537,7 @@ export default {
 
       if (request.method === "GET" && path === "/v1/swarm/list") {
         const statusFilter = (url.searchParams.get("status") || "").trim().toLowerCase();
-        let index = await loadSwarmIndex();
+        let index = await loadSwarmIndex(env, idxKey);
         if (statusFilter) {
           index = index.filter((t) => String(t.status || "").toLowerCase() === statusFilter);
         }
@@ -491,7 +551,7 @@ export default {
         const workerId = String(d.workerId || "worker").slice(0, 48);
         const roleFilter = String(d.role || "").trim().toLowerCase();
         const specificId = sanitizeId(d.taskId || "");
-        const index = await loadSwarmIndex();
+        const index = await loadSwarmIndex(env, idxKey);
         let targetIdx = -1;
         for (let i = index.length - 1; i >= 0; i--) {
           const item = index[i];
@@ -544,7 +604,7 @@ export default {
           envelope: d.envelope && typeof d.envelope === "object" ? d.envelope : null,
           completedAtUtc: nowUtc,
         };
-        const index = await loadSwarmIndex();
+        const index = await loadSwarmIndex(env, idxKey);
         for (const item of index) {
           if (item.taskId === taskId) {
             item.status = finalStatus;
@@ -569,7 +629,7 @@ export default {
 
       if (request.method === "DELETE" && path === "/v1/swarm/clear") {
         const onlyDone = url.searchParams.get("doneOnly") === "1";
-        const index = await loadSwarmIndex();
+        const index = await loadSwarmIndex(env, idxKey);
         const kept = [];
         const deletes = [];
         for (const item of index) {
@@ -607,6 +667,7 @@ export default {
         const d = parsed.data || {};
         const nowUtc = new Date().toISOString();
         const meta = d.meta && typeof d.meta === "object" ? d.meta : {};
+        /** @type {Record<string, string>} */
         const artifacts = {};
 
         if (d.artifacts && typeof d.artifacts === "object") {
@@ -655,7 +716,7 @@ export default {
             const parsedHist = JSON.parse(rawHist);
             if (Array.isArray(parsedHist)) history = parsedHist;
           }
-        } catch {
+        } catch (_err) {
           history = [];
         }
         history.unshift(snapshotMeta);
@@ -759,7 +820,7 @@ export default {
         const wakePayload = {
           wakeId,
           timestampUnix: Number(d.timestampUnix) || Math.floor(Date.now() / 1000),
-          requestedTier: Math.max(0, Math.min(2, Number(d.requestedTier ?? 1))),
+          requestedTier: Math.max(0, Math.min(2, Number(d.requestedTier != null ? d.requestedTier : 1))),
           durationSeconds: Math.max(300, Math.min(MAX_TTL_SECONDS, Number(d.durationSeconds) || 1800)),
           reason: String(d.reason || "AI session request").slice(0, 160),
           requester: String(d.requester || "AI Assistant").slice(0, 64),
@@ -868,7 +929,7 @@ export default {
       const meta = {
         openedAtUtc: new Date().toISOString(),
         expiresAtUtc,
-        maxTier: Math.max(0, Math.min(2, Number(d.maxTier ?? 1))),
+        maxTier: Math.max(0, Math.min(2, Number(d.maxTier != null ? d.maxTier : 1))),
         device: String(d.device || "").slice(0, 80),
         appVersion: String(d.appVersion || "").slice(0, 32),
       };
@@ -920,7 +981,7 @@ export default {
     if (request.method === "POST" && path === "/v1/session/result") {
       const parsed = await readBoundedJson(request, MAX_BODY_BYTES);
       if (parsed.error) return jsonResp({ ok: false, error: parsed.error }, parsed.status);
-      const requestId = sanitizeId(parsed.data?.requestId);
+      const requestId = sanitizeId(parsed.data ? parsed.data.requestId : "");
       if (!requestId) {
         return jsonResp({ ok: false, error: "Missing requestId." }, 400);
       }

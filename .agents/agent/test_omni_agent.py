@@ -13,6 +13,7 @@ AGENT_DIR = Path(__file__).resolve().parent
 if str(AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_DIR))
 
+import deploy_worker
 import omni_agent_daemon as daemon
 import omni_protocol as proto
 
@@ -141,6 +142,20 @@ class OmniAgentProtocolTests(unittest.TestCase):
             })
             self.assertTrue(par["ok"])
             self.assertEqual(len(par["results"]), 2)
+
+    def test_deploy_worker_multipart_preserves_kv_bindings(self) -> None:
+        body, ctype = deploy_worker.build_worker_multipart(
+            b"export default { async fetch() { return new Response('ok'); } };",
+            main_module="worker.js",
+            boundary="TESTBOUNDARY123",
+        )
+        self.assertEqual(ctype, "multipart/form-data; boundary=TESTBOUNDARY123")
+        text = body.decode("utf-8")
+        self.assertIn('"main_module":"worker.js"', text)
+        self.assertIn('"kv_namespace"', text)
+        self.assertIn('"secret_text"', text)
+        self.assertIn("Content-Type: application/javascript+module", text)
+        self.assertIn("export default", text)
 
 
 if __name__ == "__main__":
