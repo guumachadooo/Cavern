@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,43 @@ const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, '../..');
 const PORT = Number(process.env.PORT || 3000);
 const HOST = '0.0.0.0';
+
+// Bridge whitelisted AI Studio Secrets from the dev-server process to local CLI tools
+// via a strictly private 0600 file in /tmp (outside the repo, NEVER exposed over HTTP).
+const RUNTIME_ENV_BRIDGE_PATH = '/tmp/.cavern_runtime_env.json';
+const WHITELISTED_RUNTIME_KEYS = [
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
+  'CLOUDFLARE_API_TOKEN',
+  'CLOUDFLARE_ACCOUNT_ID',
+  'CLOUDFLARE_WORKER_NAME',
+  'CAVERN_BRIDGE_PAIR_SECRET',
+  'CAVERN_RELAY_URL',
+  'CAVERN_ADMIN_KEY',
+  'CAVERN_KNOCK_ID',
+];
+
+function syncPrivateRuntimeEnvBridge() {
+  try {
+    const payload = {};
+    for (const key of WHITELISTED_RUNTIME_KEYS) {
+      const val = String(process.env[key] || '').trim();
+      if (val) payload[key] = val;
+    }
+    if (Object.keys(payload).length > 0) {
+      fs.writeFileSync(RUNTIME_ENV_BRIDGE_PATH, JSON.stringify(payload), { mode: 0o600 });
+      try {
+        fs.chmodSync(RUNTIME_ENV_BRIDGE_PATH, 0o600);
+      } catch {
+        // Best effort on non-POSIX filesystems
+      }
+    }
+  } catch {
+    // Never block preview server boot if /tmp is read-only
+  }
+}
+
+syncPrivateRuntimeEnvBridge();
 
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);

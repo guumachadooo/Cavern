@@ -26,7 +26,13 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+AGENT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = AGENT_DIR.parents[1]
+if str(AGENT_DIR) not in sys.path:
+    sys.path.insert(0, str(AGENT_DIR))
+
+import local_capabilities as lcap
+
 DEFAULT_WORKER_FILE = REPO_ROOT / ".agents" / "docs" / "cloudflare_live_relay_worker.js"
 BRIDGE_PROFILE_PATH = REPO_ROOT / ".agents" / "bridge_profile.json"
 PRESERVED_BINDING_TYPES = ["kv_namespace", "secret_text", "plain_text", "r2_bucket", "d1"]
@@ -222,14 +228,14 @@ def verify_worker_health(worker_url: str) -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    default_relay = os.environ.get("CAVERN_RELAY_URL", "").strip() or load_profile_relay_url()
-    default_worker = os.environ.get("CLOUDFLARE_WORKER_NAME", "").strip() or infer_worker_name_from_url(default_relay)
+    default_relay = lcap.get_secret("CAVERN_RELAY_URL") or load_profile_relay_url()
+    default_worker = lcap.get_secret("CLOUDFLARE_WORKER_NAME") or infer_worker_name_from_url(default_relay)
 
     parser = argparse.ArgumentParser(description="Upload Cavernize/OmniAgent Worker v6 via Cloudflare API (SQLite DO + RELAY_KV preserved).")
     parser.add_argument("--file", type=Path, default=DEFAULT_WORKER_FILE, help="Path to worker JS file")
-    parser.add_argument("--account-id", default=os.environ.get("CLOUDFLARE_ACCOUNT_ID", ""), help="Cloudflare Account ID (auto-detected if omitted)")
+    parser.add_argument("--account-id", default=lcap.get_secret("CLOUDFLARE_ACCOUNT_ID"), help="Cloudflare Account ID (auto-detected if omitted)")
     parser.add_argument("--worker-name", default=default_worker, help="Existing Worker name (auto-detected from relay URL)")
-    parser.add_argument("--token", default=os.environ.get("CLOUDFLARE_API_TOKEN", ""), help="Cloudflare API Token (Edit Cloudflare Workers)")
+    parser.add_argument("--token", default=lcap.get_secret("CLOUDFLARE_API_TOKEN"), help="Cloudflare API Token (Edit Cloudflare Workers)")
     parser.add_argument("--main-module", default="worker.js", help="Entry module filename inside Cloudflare Worker (default: worker.js)")
     parser.add_argument("--no-do", action="store_true", help="Deploy without attaching HubCoordinator Durable Object")
     parser.add_argument("--verify-url", default=default_relay, help="Optional Worker URL to check /health after deploy")

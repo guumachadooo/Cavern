@@ -31,6 +31,7 @@ REPO_ROOT = AGENT_DIR.parents[1]
 if str(AGENT_DIR) not in sys.path:
     sys.path.insert(0, str(AGENT_DIR))
 
+import local_capabilities as lcap
 import omni_protocol as proto
 
 PUBLIC_PROFILE_PATH = REPO_ROOT / ".agents" / "bridge_profile.json"
@@ -171,11 +172,20 @@ def resolve_connection(
     profile = load_public_profile(profile_path)
     vault = load_vault(vault_path)
 
+    use_runtime_bridge = Path(vault_path).resolve() == LOCAL_VAULT_PATH.resolve()
+    rt_path = lcap.RUNTIME_ENV_FILE if use_runtime_bridge else Path("/nonexistent_test_runtime_env.json")
+
+    env_relay, env_relay_src = lcap.resolve_secret_with_source(
+        "CAVERN_RELAY_URL",
+        runtime_file=rt_path,
+        vault_path=vault_path,
+        allow_proc_scan=use_runtime_bridge,
+    )
     relay_url = ""
     relay_source = "none"
     for src_name, val in (
         ("cli", cli_url),
-        ("env", os.environ.get("CAVERN_RELAY_URL", "")),
+        (env_relay_src if env_relay and not env_relay_src.startswith("vault:") else "env", env_relay if not env_relay_src.startswith("vault:") else ""),
         ("vault", vault.get("relayUrl", "")),
         ("profile", profile.get("relayUrl", "")),
     ):
@@ -185,11 +195,17 @@ def resolve_connection(
             relay_source = src_name
             break
 
+    env_pair, env_pair_src = lcap.resolve_secret_with_source(
+        "CAVERN_BRIDGE_PAIR_SECRET",
+        runtime_file=rt_path,
+        vault_path=vault_path,
+        allow_proc_scan=use_runtime_bridge,
+    )
     pair_secret = ""
     pair_source = "none"
     for src_name, val in (
         ("cli", cli_pair_secret),
-        ("env", os.environ.get("CAVERN_BRIDGE_PAIR_SECRET", "")),
+        (env_pair_src if env_pair and not env_pair_src.startswith("vault:") else "env", env_pair if not env_pair_src.startswith("vault:") else ""),
         ("vault", vault.get("pairSecret", "")),
     ):
         clean = str(val or "").strip()
@@ -211,17 +227,19 @@ def resolve_connection(
             session_source = src_name
             break
 
+    env_admin = lcap.get_secret("CAVERN_ADMIN_KEY", runtime_file=rt_path, vault_path=vault_path, allow_proc_scan=use_runtime_bridge)
     admin_key = ""
-    for val in (cli_admin_key, os.environ.get("CAVERN_ADMIN_KEY", ""), vault.get("adminKey", "")):
+    for val in (cli_admin_key, env_admin, vault.get("adminKey", "")):
         clean = str(val or "").strip()
         if clean:
             admin_key = clean
             break
 
+    env_knock = lcap.get_secret("CAVERN_KNOCK_ID", runtime_file=rt_path, vault_path=vault_path, allow_proc_scan=use_runtime_bridge)
     knock_id = ""
     for val in (
         cli_knock_id,
-        os.environ.get("CAVERN_KNOCK_ID", ""),
+        env_knock,
         proto.compute_knock_channel_id(pair_secret) if pair_secret else "",
         vault.get("knockId", ""),
         profile.get("knockId", ""),

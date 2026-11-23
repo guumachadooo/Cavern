@@ -34,7 +34,9 @@ for p in (str(AGENT_DIR), str(PLUGIN_SCRIPTS)):
         sys.path.insert(0, p)
 
 import bridge_auth as bauth
+import github_direct as ghdirect
 import hot_probe_compiler as hpc
+import local_capabilities as lcap
 import omni_protocol as proto
 
 
@@ -147,6 +149,15 @@ def cmd_connect(args: argparse.Namespace) -> int:
                     k: {"online": bool(v.get("online")), "device": v.get("device", ""), "mode": v.get("securityMode", "")}
                     for k, v in (a_resp.get("channels") or {}).items()
                 }
+        caps = lcap.inspect_capabilities()
+        summary["localCapabilities"] = {
+            "presentVars": [v["name"] for v in caps["presentVars"]],
+            "missingExpectedVars": [m["name"] for m in caps["missingExpectedVars"]],
+            "alert": caps["alert"],
+            "routing": {
+                k: v for k, v in caps["routing"].items() if k in ("githubPush", "githubCiInspect", "cloudflareWorkerDeploy", "omniAgentAuth")
+            },
+        }
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return 0
 
@@ -249,12 +260,71 @@ def pick_channel(relay_url: str, pair_secret_hex: str, preferred: str, admin_key
 
 
 def cmd_push_workspace(args: argparse.Namespace) -> int:
-    relay, secret, admin = _resolve_auth(args, allow_knock=True)
-    channel = pick_channel(relay, secret, args.channel, admin)
     repo_root = Path(args.workspace or REPO_ROOT).resolve()
-
     explicit_files: list[str] = list(args.files or [])
     deleted_files: list[str] = list(args.delete or [])
+
+    via = getattr(args, "via", "auto") or "auto"
+    local_gh_token = lcap.get_secret("GITHUB_TOKEN", aliases=("GH_TOKEN",))
+    use_direct_github = (
+        via == "github"
+        or (via == "auto" and bool(local_gh_token) and bool(args.commit) and not args.no_push)
+    )
+    if use_direct_github:
+        owner_repo = (getattr(args, "owner_repo", "") or "guumachadooo/Cavern").strip()
+        print(f"Pushing directly to GitHub ({owner_repo}@{args.branch}) via local GITHUB_TOKEN...", file=sys.stderr)
+        try:
+            res = ghdirect.push_workspace_direct(
+                repo_root,
+                args.commit,
+                owner_repo=owner_repo,
+                branch=args.branch,
+                token=local_gh_token,
+                explicit_files=explicit_files or None,
+                explicit_deletes=deleted_files or None,
+                sync_deletes=bool(args.sync_deletes),
+            )
+            # Keep Antigravity / Termux repo on phone 100% synced whenever online!
+            if not getattr(args, "no_sync_termux", False):
+                termux_sync: dict[str, Any] = {"attempted": False}
+                try:
+                    conn = bauth.resolve_connection(
+                        cli_url=getattr(args, "url", "") or "",
+                        cli_pair_secret=getattr(args, "pair_secret", "") or "",
+                        cli_admin_key=getattr(args, "admin_key", "") or "",
+                    )
+                    if conn["relayUrl"] and conn["pairSecret"] and _is_channel_online(conn["relayUrl"], conn["pairSecret"], "termux", conn["adminKey"]):
+                        termux_sync["attempted"] = True
+                        pull_res = send_agent_command(
+                            conn["relayUrl"],
+                            conn["pairSecret"],
+                            "git_pull",
+                            {"repo": args.repo or "", "remote": args.remote, "branch": args.branch},
+                            channel="termux",
+                            admin_key=conn["adminKey"],
+                            timeout_sec=60,
+                        )
+                        termux_sync["ok"] = bool(pull_res.get("ok"))
+                        termux_sync["head"] = pull_res.get("head", "")
+                        if not pull_res.get("ok"):
+                            termux_sync["error"] = pull_res.get("error") or pull_res.get("stderr") or "git_pull failed"
+                except Exception as exc:
+                    termux_sync["ok"] = False
+                    termux_sync["error"] = str(exc)
+                res["termuxSync"] = termux_sync
+            print(json.dumps(res, indent=2, ensure_ascii=False))
+            return 0 if res.get("ok") else 1
+        except RuntimeError as exc:
+            if via == "github" or "HTTP 403" not in str(exc):
+                raise
+            print(
+                f"WARN: Local GITHUB_TOKEN lacks repository Contents:Write permission ({exc}). "
+                "Falling back automatically to OmniAgent phone git push...",
+                file=sys.stderr,
+            )
+
+    relay, secret, admin = _resolve_auth(args, allow_knock=True)
+    channel = pick_channel(relay, secret, args.channel, admin)
 
     if not explicit_files:
         # Ask phone repo for its exact manifest so we only transmit changed/added/deleted files!
@@ -568,12 +638,22 @@ def main() -> int:
     p_sh.add_argument("--debian", action="store_true", help="Execute inside Debian PRoot")
     p_sh.add_argument("--cwd", default="")
 
-    p_push = sub.add_parser("push-workspace", help="Diff AI Studio workspace -> E2E bundle -> phone git commit & push")
+    sub.add_parser("capabilities", help="Inspect local AI Studio capabilities, secret presence & missing expected env alerts")
+
+    p_ci = sub.add_parser("ci-status", help="Inspect latest GitHub Actions CI runs directly via local GITHUB_TOKEN")
+    p_ci.add_argument("--owner-repo", default="guumachadooo/Cavern")
+    p_ci.add_argument("--workflow", default="BuildAndroid.yml")
+    p_ci.add_argument("--limit", type=int, default=5)
+
+    p_push = sub.add_parser("push-workspace", help="Diff AI Studio workspace -> direct GitHub API push (local-first) or phone git commit & push")
     p_push.add_argument("--workspace", default=str(REPO_ROOT))
-    p_push.add_argument("--commit", default="", help="Commit message (if omitted, only applies files without commit/push)")
+    p_push.add_argument("--commit", default="", help="Commit message (if omitted, only applies files on phone without commit/push)")
+    p_push.add_argument("--via", choices=("auto", "github", "phone"), default="auto", help="auto prefers local GITHUB_TOKEN direct push + Termux git_pull sync")
+    p_push.add_argument("--owner-repo", default="guumachadooo/Cavern")
     p_push.add_argument("--branch", default="master")
     p_push.add_argument("--remote", default="origin")
     p_push.add_argument("--no-push", action="store_true")
+    p_push.add_argument("--no-sync-termux", action="store_true", help="Skip automatic git_pull on phone Termux after direct GitHub push")
     p_push.add_argument("--pull-first", action="store_true")
     p_push.add_argument("--sync-deletes", action="store_true")
     p_push.add_argument("--files", nargs="*")
@@ -671,6 +751,14 @@ def main() -> int:
         forwarded += list(args.fr_args or [])
         return fr.main(forwarded)
 
+    if args.action == "capabilities":
+        report = lcap.inspect_capabilities()
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
+    if args.action == "ci-status":
+        res = ghdirect.fetch_ci_runs(owner_repo=args.owner_repo, workflow=args.workflow, limit=args.limit)
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0 if res.get("ok") else 1
     if args.action == "connect":
         return cmd_connect(args)
     if args.action == "pull-workspace":
@@ -687,7 +775,7 @@ def main() -> int:
         if not worker_file.is_file():
             print(json.dumps({"ok": False, "error": f"Worker file not found: {worker_file}"}))
             return 2
-        local_cf_token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
+        local_cf_token = lcap.get_secret("CLOUDFLARE_API_TOKEN")
         if args.via == "direct" or (args.via == "auto" and local_cf_token):
             import deploy_worker as cf_deploy
             d_argv = ["--file", str(worker_file)]

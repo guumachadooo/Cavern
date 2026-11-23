@@ -358,6 +358,57 @@ class OmniAgentProtocolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             fr.decode_bundle_gz_b64(b64, expected_sha256="0" * 64)
 
+    def test_local_capabilities_priority_and_missing_alert(self) -> None:
+        import local_capabilities as lcap
+        import github_direct as ghdirect
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = root / "env_manifest.json"
+            rt_file = root / "runtime_env.json"
+            vault = root / "vault.json"
+
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "ownerRepo": "guumachadooo/Cavern",
+                        "defaultBranch": "master",
+                        "variables": [
+                            {"name": "GITHUB_TOKEN", "aliases": ["GH_TOKEN"], "expectedInAiStudio": True, "capability": "githubDirectPushAndCi"},
+                            {"name": "CLOUDFLARE_API_TOKEN", "aliases": [], "expectedInAiStudio": True, "capability": "cloudflareDirectDeploy"},
+                            {"name": "CAVERN_BRIDGE_PAIR_SECRET", "aliases": [], "expectedInAiStudio": True, "capability": "omniAgentZeroKnockAuth"},
+                            {"name": "CAVERN_RELAY_URL", "aliases": [], "expectedInAiStudio": True, "capability": "omniAgentZeroKnockAuth"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rt_file.write_text(json.dumps({"GITHUB_TOKEN": "ghp_dummy_test", "CAVERN_RELAY_URL": "https://example.workers.dev"}), encoding="utf-8")
+            vault.write_text(json.dumps({"pairSecret": "ab" * 32}), encoding="utf-8")
+
+            report = lcap.inspect_capabilities(
+                manifest_path=manifest,
+                runtime_file=rt_file,
+                vault_path=vault,
+                allow_proc_scan=False,
+            )
+            self.assertEqual(report["presentCount"], 3)
+            self.assertEqual(report["missingExpectedCount"], 1)
+            self.assertEqual(report["missingExpectedVars"][0]["name"], "CLOUDFLARE_API_TOKEN")
+            self.assertIn("CLOUDFLARE_API_TOKEN", report["alert"])
+            self.assertEqual(report["routing"]["githubPush"], "local_github_api")
+            self.assertEqual(report["routing"]["cloudflareWorkerDeploy"], "phone_omniagent")
+            self.assertEqual(report["routing"]["omniAgentAuth"], "local_zero_knock")
+
+            # Ensure ZERO secret values appear anywhere in the serialized report!
+            dumped = json.dumps(report)
+            self.assertNotIn("ghp_dummy_test", dumped)
+            self.assertNotIn("ab" * 32, dumped)
+
+            # Verify standard git blob sha1 for "hello\n" == ce013625030ba8dba906f756967f9e9ca394464a
+            self.assertEqual(ghdirect.git_blob_sha1(b"hello\n"), "ce013625030ba8dba906f756967f9e9ca394464a")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
