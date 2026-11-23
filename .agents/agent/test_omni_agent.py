@@ -409,6 +409,166 @@ class OmniAgentProtocolTests(unittest.TestCase):
             # Verify standard git blob sha1 for "hello\n" == ce013625030ba8dba906f756967f9e9ca394464a
             self.assertEqual(ghdirect.git_blob_sha1(b"hello\n"), "ce013625030ba8dba906f756967f9e9ca394464a")
 
+    def test_termux_atomic_sync_runner_live_mirror_and_manual_edit_protection(self) -> None:
+        import base64
+        import gzip
+        import os
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            src = root / "src_aistudio"
+            repo = root / "phone_repo"
+            ag = root / "antigravity"
+            fr_dir = ag / "ai_studio_bridge" / "flight_recorder"
+            (ag / "knowledge").mkdir(parents=True)
+            src.mkdir()
+            repo.mkdir()
+
+            # Initialize a real git repo on the "phone" side
+            for fname, txt in (("a.cs", "// a v1\n"), ("b.cs", "// b v1\n")):
+                (src / fname).write_text(txt, encoding="utf-8")
+                (repo / fname).write_text(txt, encoding="utf-8")
+            subprocess.run(["git", "init"], cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@local"], cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=str(repo), check=True, capture_output=True)
+
+            # Simulate AI Studio editing a.cs + creating c.cs
+            (src / "a.cs").write_text("// a v2 from AI Studio\n", encoding="utf-8")
+            (src / "c.cs").write_text("// c new from AI Studio\n", encoding="utf-8")
+            bundle1 = proto.pack_delta_bundle(src, ["a.cs", "c.cs"])
+            _, b64_1, sha_1 = fr.encode_bundle_gz_b64(bundle1)
+            cp1 = {
+                "schema": 1,
+                "sessionId": "w48_live",
+                "seq": 2,
+                "status": "active",
+                "timestampUnix": 1795450000.0,
+                "updatedUtc": "2026-11-23T16:20:00Z",
+                "wave": "W48",
+                "phase": "live-mirror",
+                "summary": "Edited a.cs and c.cs",
+                "nextStep": "Continue W48",
+                "fileHashes": {e["path"]: e["sha256"] for e in bundle1["files"]},
+                "deletedFiles": [],
+                "bundleSha256": sha_1,
+                "hasBundle": True,
+            }
+            payload1 = {
+                "frDir": str(fr_dir),
+                "agDir": str(ag),
+                "repoDir": str(repo),
+                "checkpoint": cp1,
+                "diaryMd": fr.render_diary_markdown(cp1),
+                "bundle": bundle1,
+                "bundleGzB64": b64_1,
+                "applyLiveMirror": True,
+                "syncAntigravityHandoff": True,
+            }
+            env = dict(os.environ)
+            env["FR_PAYLOAD_B64"] = base64.b64encode(
+                gzip.compress(json.dumps(payload1, separators=(",", ":")).encode("utf-8"))
+            ).decode("ascii")
+            r1 = subprocess.run(
+                [sys.executable, "-B", "-c", fr.build_termux_atomic_sync_script()],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            out1 = json.loads(r1.stdout.strip().splitlines()[-1])
+            self.assertTrue(out1["ok"])
+            self.assertTrue(out1["agHandoff"])
+            self.assertEqual(sorted(out1["liveMirror"]["written"]), ["a.cs", "c.cs"])
+            self.assertEqual((repo / "a.cs").read_text(encoding="utf-8"), "// a v2 from AI Studio\n")
+            self.assertEqual((repo / "c.cs").read_text(encoding="utf-8"), "// c new from AI Studio\n")
+            self.assertTrue((fr_dir / "latest.json").is_file())
+            self.assertTrue((fr_dir / "LATEST_DIARY.md").is_file())
+            self.assertTrue((fr_dir / "latest_bundle.json.gz.b64").is_file())
+            self.assertTrue((ag / "ai_studio_bridge" / "LATEST_HANDOFF.md").is_file())
+            self.assertTrue((ag / "knowledge" / "ai_studio_latest_sync.md").is_file())
+
+            # Now user manually edits b.cs on phone in Antigravity!
+            (repo / "b.cs").write_text("// USER MANUAL PHONE EDIT\n", encoding="utf-8")
+            # AI Studio edits both a.cs (v3) and b.cs (AI v2)
+            (src / "a.cs").write_text("// a v3 from AI Studio\n", encoding="utf-8")
+            (src / "b.cs").write_text("// b AI version\n", encoding="utf-8")
+            bundle2 = proto.pack_delta_bundle(src, ["a.cs", "b.cs"])
+            _, b64_2, sha_2 = fr.encode_bundle_gz_b64(bundle2)
+            cp2 = dict(cp1, seq=3, bundleSha256=sha_2, fileHashes={e["path"]: e["sha256"] for e in bundle2["files"]})
+            payload2 = dict(payload1, checkpoint=cp2, diaryMd=fr.render_diary_markdown(cp2), bundle=bundle2, bundleGzB64=b64_2)
+            env["FR_PAYLOAD_B64"] = base64.b64encode(
+                gzip.compress(json.dumps(payload2, separators=(",", ":")).encode("utf-8"))
+            ).decode("ascii")
+            r2 = subprocess.run(
+                [sys.executable, "-B", "-c", fr.build_termux_atomic_sync_script()],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            out2 = json.loads(r2.stdout.strip().splitlines()[-1])
+            self.assertTrue(out2["ok"])
+            self.assertEqual(out2["liveMirror"]["written"], ["a.cs"])
+            self.assertEqual(out2["liveMirror"]["skippedConflicts"], ["b.cs"])
+            # a.cs updated to v3, while user's manual edit to b.cs stayed 100% untouched!
+            self.assertEqual((repo / "a.cs").read_text(encoding="utf-8"), "// a v3 from AI Studio\n")
+            self.assertEqual((repo / "b.cs").read_text(encoding="utf-8"), "// USER MANUAL PHONE EDIT\n")
+
+    def test_live_sync_watcher_zero_empty_push_and_close_baseline_refresh(self) -> None:
+        import live_sync_watcher as lsw
+
+        with tempfile.TemporaryDirectory() as ws_tmp, tempfile.TemporaryDirectory() as fr_tmp:
+            ws = Path(ws_tmp)
+            fr_dir = Path(fr_tmp)
+            (ws / "Core.cs").write_text("// v1\n", encoding="utf-8")
+
+            watcher = lsw.LiveSyncWatcher(
+                workspace=ws,
+                local_dir=fr_dir,
+                poll_sec=0.5,
+                debounce_sec=0.0,
+                use_remote=False,
+                apply_live_mirror=False,
+            )
+            # Clean startup must NEVER push (protects prior account's remote checkpoint)
+            r0 = watcher.sync_once(force_immediate=True)
+            self.assertTrue(r0["ok"])
+            self.assertFalse(r0["synced"])
+            self.assertEqual(r0["reason"], "clean")
+
+            # Edit file -> watcher syncs immediately
+            (ws / "Core.cs").write_text("// v2 live\n", encoding="utf-8")
+            r1 = watcher.sync_once(force_immediate=True)
+            self.assertTrue(r1["ok"])
+            self.assertTrue(r1["synced"])
+            self.assertEqual(r1["changed"], ["Core.cs"])
+            self.assertTrue((fr_dir / "watcher_status.json").is_file())
+
+            # No new edits -> deduplicated (zero redundant syncs)
+            r2 = watcher.sync_once(force_immediate=True)
+            self.assertFalse(r2["synced"])
+            self.assertEqual(r2["reason"], "already_synced")
+
+            # Close session with workspace -> refreshes baseline & clears pending
+            cls = fr.close_session(
+                workspace=ws,
+                local_dir=fr_dir,
+                commit="cafebabe",
+                note="Shipped",
+                next_step="Start W48",
+                use_remote=False,
+            )
+            self.assertEqual(cls["checkpoint"]["nextStep"], "Start W48")
+            self.assertEqual(cls["checkpoint"]["pending"], [])
+
+            # Watcher detects refreshed baseline -> returns clean
+            r3 = watcher.sync_once(force_immediate=True)
+            self.assertFalse(r3["synced"])
+            self.assertEqual(r3["reason"], "clean")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -229,10 +229,14 @@ def send_agent_command(
         raise RuntimeError(f"Failed queueing agent command '{cmd}' on channel '{channel}' (HTTP {st}): {resp}")
 
     deadline = time.time() + max(5, timeout_sec)
-    # Brief initial pause avoids poisoning Cloudflare KV's 60s negative-lookup cache
-    # at the caller's edge PoP before the phone has even polled and posted its result.
-    time.sleep(2.5)
+    # Cloudflare Hub v6 uses SQLite Durable Objects (<50ms strong consistency, zero KV negative cache);
+    # use fast adaptive polling backoff so Termux RPCs complete in ~0.6-1.5s instead of 3-5s+.
+    poll_delays = (0.35, 0.45, 0.65, 0.9, 1.25, 1.6)
+    attempt = 0
     while time.time() < deadline:
+        delay = poll_delays[min(attempt, len(poll_delays) - 1)]
+        time.sleep(min(delay, max(0.05, deadline - time.time())))
+        attempt += 1
         st_r, res_r = proto.http_json(
             "GET",
             f"{relay_url}/v1/agent/result?requestId={urllib.parse.quote(req_id)}",
@@ -242,7 +246,6 @@ def send_agent_command(
         if st_r == 200 and res_r.get("ok") and res_r.get("ready"):
             raw_res = res_r["result"]
             return proto.decrypt_envelope(pair_secret_hex, f"res:{req_id}", raw_res["envelope"])
-        time.sleep(2.5)
     raise TimeoutError(f"Timed out waiting {timeout_sec}s for channel '{channel}' to answer '{cmd}'.")
 
 
@@ -284,7 +287,14 @@ def cmd_push_workspace(args: argparse.Namespace) -> int:
                 explicit_deletes=deleted_files or None,
                 sync_deletes=bool(args.sync_deletes),
             )
+            # Refresh local Flight Recorder / live-sync watcher baseline immediately so pushed files aren't re-mirrored.
+            try:
+                import flight_recorder as fr
+                fr.save_local_baseline(fr.DEFAULT_LOCAL_DIR, repo_root)
+            except Exception:
+                pass
             # Keep Antigravity / Termux repo on phone 100% synced whenever online!
+            # Safely reconciles any unmodified live-mirrored files before git pull --rebase (never clobbers manual phone edits).
             if not getattr(args, "no_sync_termux", False):
                 termux_sync: dict[str, Any] = {"attempted": False}
                 try:
@@ -295,19 +305,52 @@ def cmd_push_workspace(args: argparse.Namespace) -> int:
                     )
                     if conn["relayUrl"] and conn["pairSecret"] and _is_channel_online(conn["relayUrl"], conn["pairSecret"], "termux", conn["adminKey"]):
                         termux_sync["attempted"] = True
+                        import flight_recorder as fr
+                        script_b64 = base64.b64encode(
+                            fr.build_termux_reconcile_pull_script(args.remote, args.branch).encode("utf-8")
+                        ).decode("ascii")
+                        reconcile_cmd = f"python3 -B -c \"import base64; exec(base64.b64decode('{script_b64}').decode('utf-8'))\""
                         pull_res = send_agent_command(
                             conn["relayUrl"],
                             conn["pairSecret"],
-                            "git_pull",
-                            {"repo": args.repo or "", "remote": args.remote, "branch": args.branch},
+                            "shell_exec",
+                            {"command": reconcile_cmd, "cwd": args.repo or "", "timeoutSec": 90},
                             channel="termux",
                             admin_key=conn["adminKey"],
-                            timeout_sec=60,
+                            timeout_sec=100,
                         )
-                        termux_sync["ok"] = bool(pull_res.get("ok"))
-                        termux_sync["head"] = pull_res.get("head", "")
-                        if not pull_res.get("ok"):
-                            termux_sync["error"] = pull_res.get("error") or pull_res.get("stderr") or "git_pull failed"
+                        parsed_sync = None
+                        if pull_res.get("ok"):
+                            lines = [ln.strip() for ln in str(pull_res.get("stdout") or "").splitlines() if ln.strip()]
+                            if lines:
+                                try:
+                                    parsed_sync = json.loads(lines[-1])
+                                except Exception:
+                                    parsed_sync = None
+                        if isinstance(parsed_sync, dict):
+                            termux_sync["ok"] = bool(parsed_sync.get("ok"))
+                            termux_sync["head"] = parsed_sync.get("head", "")
+                            if parsed_sync.get("reconciled"):
+                                termux_sync["reconciledMirrored"] = parsed_sync["reconciled"]
+                            if parsed_sync.get("preservedManual"):
+                                termux_sync["preservedManual"] = parsed_sync["preservedManual"]
+                            if not parsed_sync.get("ok"):
+                                termux_sync["error"] = parsed_sync.get("stderr") or "git_pull failed"
+                        else:
+                            # Fallback to legacy git_pull command
+                            legacy = send_agent_command(
+                                conn["relayUrl"],
+                                conn["pairSecret"],
+                                "git_pull",
+                                {"repo": args.repo or "", "remote": args.remote, "branch": args.branch},
+                                channel="termux",
+                                admin_key=conn["adminKey"],
+                                timeout_sec=60,
+                            )
+                            termux_sync["ok"] = bool(legacy.get("ok"))
+                            termux_sync["head"] = legacy.get("head", "")
+                            if not legacy.get("ok"):
+                                termux_sync["error"] = legacy.get("error") or legacy.get("stderr") or "git_pull failed"
                 except Exception as exc:
                     termux_sync["ok"] = False
                     termux_sync["error"] = str(exc)

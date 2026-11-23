@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import gzip
 import hashlib
 import json
 import os
 import secrets
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -42,10 +44,13 @@ import omni_protocol as proto
 
 SCHEMA_VERSION = 1
 DEFAULT_LOCAL_DIR = Path(os.environ.get("CAVERN_FLIGHT_RECORDER_DIR", "/tmp/cavern-flight-recorder"))
-PHONE_FR_DIR = "/root/.gemini/antigravity/ai_studio_bridge/flight_recorder"
+PHONE_AG_DIR = "/root/.gemini/antigravity"
+PHONE_FR_DIR = f"{PHONE_AG_DIR}/ai_studio_bridge/flight_recorder"
+PHONE_REPO_DIR = f"{PHONE_AG_DIR}/scratch/Cavern"
 CLOUD_TASK_ID = "fr_latest"
 CLOUD_ENVELOPE_CTX = "fr:latest"
 CLOUD_INLINE_BUNDLE_MAX_BYTES = 140 * 1024  # comfortably under Worker's 256 KB /v1/swarm/enqueue cap
+TERMUX_INLINE_PAYLOAD_MAX_BYTES = 96 * 1024  # safe under shell ARG_MAX & Worker cmd body cap
 MAX_LOCAL_HISTORY = 25
 
 
@@ -431,6 +436,364 @@ def _send_termux_cmd(
     )
 
 
+# Self-contained pure-stdlib Python runner executed in ONE Termux shell_exec RPC.
+# Writes all Flight Recorder files + Antigravity LATEST_HANDOFF.md + knowledge mirror
+# AND optionally applies a conflict-safe live mirror directly into the local Antigravity repo.
+_TERMUX_ATOMIC_SYNC_RUNNER = r"""
+import base64, gzip, hashlib, json, os, subprocess, sys
+from pathlib import Path
+
+def atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+def safe_rel(root: Path, rel: str):
+    norm = str(rel or "").replace("\\", "/").lstrip("/")
+    if not norm or ".." in Path(norm).parts:
+        return None, None
+    full = (root / norm).resolve()
+    try:
+        full.relative_to(root)
+    except ValueError:
+        return None, None
+    return norm, full
+
+def git_dirty_paths(repo: Path) -> set:
+    dirty = set()
+    if not (repo / ".git").exists():
+        return dirty
+    try:
+        r = subprocess.run(
+            ["git", "status", "--porcelain", "-z", "-uall"],
+            cwd=str(repo),
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        if r.returncode != 0:
+            return dirty
+        parts = r.stdout.split(b"\x00")
+        i = 0
+        while i < len(parts):
+            entry = parts[i]
+            if len(entry) >= 4:
+                code = entry[:2].decode("utf-8", errors="ignore")
+                p = entry[3:].decode("utf-8", errors="replace").replace("\\", "/")
+                if p:
+                    dirty.add(p)
+                if "R" in code or "C" in code:
+                    i += 1
+            i += 1
+    except Exception:
+        pass
+    return dirty
+
+def run_payload(payload: dict) -> dict:
+    fr_dir = Path(payload["frDir"]).expanduser()
+    ag_dir = Path(payload["agDir"]).expanduser()
+    repo_dir = Path(payload["repoDir"]).expanduser().resolve()
+    cp = payload["checkpoint"]
+    diary_md = str(payload.get("diaryMd") or "")
+    seq = int(cp.get("seq") or 0)
+    ts = int(cp.get("timestampUnix") or 0)
+
+    (fr_dir / "history").mkdir(parents=True, exist_ok=True)
+    cp_text = json.dumps(cp, indent=2, ensure_ascii=False) + "\n"
+    atomic_write_text(fr_dir / "latest.json", cp_text)
+    atomic_write_text(fr_dir / "LATEST_DIARY.md", diary_md)
+    atomic_write_text(fr_dir / "history" / f"cp_{seq:04d}_{ts}.json", cp_text)
+
+    # Trim old history entries (keep newest 25)
+    hist_files = sorted((fr_dir / "history").glob("cp_*.json"))
+    for stale in hist_files[:-25]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+
+    bundle_saved = False
+    bundle_mode = "none"
+    if payload.get("bundleGzB64"):
+        atomic_write_text(fr_dir / "latest_bundle.json.gz.b64", str(payload["bundleGzB64"]))
+        bundle_saved = True
+        bundle_mode = "direct_b64"
+    elif payload.get("bundleBlob"):
+        atomic_write_text(
+            fr_dir / "latest_bundle_blob.json",
+            json.dumps(payload["bundleBlob"], separators=(",", ":")),
+        )
+        bundle_saved = True
+        bundle_mode = f"blob:{payload['bundleBlob'].get('blobId', '')}"
+
+    ag_handoff_written = False
+    if payload.get("syncAntigravityHandoff", True):
+        bridge_dir = ag_dir / "ai_studio_bridge"
+        sessions_dir = bridge_dir / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        sid_raw = str(cp.get("sessionId") or "aistudio_live")
+        safe_id = "".join(c for c in sid_raw if c.isalnum() or c in ("_", "-"))[:64] or "session"
+        title = f"{cp.get('wave') or 'AI Studio'} — {cp.get('phase') or cp.get('status') or 'live'}"
+        files_list = sorted((cp.get("fileHashes") or {}).keys())[:64]
+        lines = [
+            f"# {title}",
+            f"- **UTC**: `{cp.get('updatedUtc', '')}` | **Session**: `{safe_id}` (seq `#{seq}`) | **Status**: `{cp.get('status', 'active')}` | **Commit**: `{cp.get('commit') or 'live-mirror'}`",
+            f"- **Repo**: `{repo_dir}`",
+            "",
+            "## Compact Summary (Token-Diet)",
+            str(cp.get("summary") or cp.get("goal") or "(live sync)"),
+            "",
+        ]
+        if files_list:
+            lines.append("## Live Mirrored / Tracked Files")
+            lines.extend(f"- `{f}`" for f in files_list)
+            lines.append("")
+        if cp.get("nextStep"):
+            lines.append("## Next")
+            lines.append(str(cp["nextStep"]))
+            lines.append("")
+        handoff_text = "\n".join(lines)
+        atomic_write_text(sessions_dir / f"{safe_id}.md", handoff_text)
+        atomic_write_text(bridge_dir / "LATEST_HANDOFF.md", handoff_text)
+
+        index_path = bridge_dir / "index.json"
+        index = []
+        if index_path.is_file():
+            try:
+                parsed = json.loads(index_path.read_text(encoding="utf-8"))
+                if isinstance(parsed, list):
+                    index = parsed
+            except Exception:
+                index = []
+        entry = {
+            "sessionId": safe_id,
+            "utc": cp.get("updatedUtc", ""),
+            "repo": str(repo_dir),
+            "title": title[:160],
+            "commit": str(cp.get("commit") or "")[:64],
+            "files": files_list,
+            "summary": str(cp.get("summary") or cp.get("goal") or "")[:4000],
+            "next": str(cp.get("nextStep") or "")[:1000],
+        }
+        index = [x for x in index if x.get("sessionId") != safe_id]
+        index.insert(0, entry)
+        atomic_write_text(index_path, json.dumps(index[:40], indent=2, ensure_ascii=False))
+
+        knowledge_dir = ag_dir / "knowledge"
+        if knowledge_dir.is_dir():
+            atomic_write_text(knowledge_dir / "ai_studio_latest_sync.md", handoff_text)
+        ag_handoff_written = True
+
+    mirror_state_path = fr_dir / "live_mirror_state.json"
+    mirror_res = {"applied": False, "written": [], "deleted": [], "alreadySynced": 0, "skippedConflicts": []}
+    if payload.get("clearMirrorState"):
+        atomic_write_text(mirror_state_path, json.dumps({"mirrored": {}, "updatedUtc": cp.get("updatedUtc", "")}, indent=2) + "\n")
+    elif payload.get("applyLiveMirror") and isinstance(payload.get("bundle"), dict) and repo_dir.is_dir():
+        bundle = payload["bundle"]
+        state = {"mirrored": {}}
+        if mirror_state_path.is_file():
+            try:
+                loaded = json.loads(mirror_state_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict) and isinstance(loaded.get("mirrored"), dict):
+                    state = loaded
+            except Exception:
+                pass
+        mirrored = state["mirrored"]
+        dirty = git_dirty_paths(repo_dir)
+
+        for fentry in bundle.get("files") or []:
+            norm, full = safe_rel(repo_dir, fentry.get("path", ""))
+            if not norm or full is None:
+                continue
+            target_sha = str(fentry.get("sha256") or "")
+            prev_rec = mirrored.get(norm)
+            exists_now = full.is_file()
+            cur_sha = hashlib.sha256(full.read_bytes()).hexdigest() if exists_now else ""
+            if exists_now and cur_sha == target_sha:
+                mirror_res["alreadySynced"] += 1
+                if norm not in mirrored:
+                    mirrored[norm] = {"sha256": target_sha, "existedBefore": True}
+                else:
+                    mirrored[norm]["sha256"] = target_sha
+                continue
+            # Conflict guard: never clobber a file manually modified by the user on the phone!
+            if exists_now and norm in dirty:
+                if not prev_rec or cur_sha != prev_rec.get("sha256"):
+                    mirror_res["skippedConflicts"].append(norm)
+                    continue
+            raw = gzip.decompress(base64.b64decode(fentry["gz_b64"].encode("ascii")))
+            if target_sha and hashlib.sha256(raw).hexdigest() != target_sha:
+                raise ValueError(f"SHA-256 mismatch for mirrored file {norm}")
+            existed_before = prev_rec["existedBefore"] if prev_rec else exists_now
+            atomic_write_bytes(full, raw)
+            mirrored[norm] = {"sha256": target_sha or hashlib.sha256(raw).hexdigest(), "existedBefore": existed_before}
+            mirror_res["written"].append(norm)
+
+        for drel in bundle.get("deleted") or []:
+            norm, full = safe_rel(repo_dir, drel)
+            if not norm or full is None or not full.is_file():
+                mirrored.pop(norm or "", None)
+                continue
+            prev_rec = mirrored.get(norm)
+            cur_sha = hashlib.sha256(full.read_bytes()).hexdigest()
+            if norm in dirty and (not prev_rec or cur_sha != prev_rec.get("sha256")):
+                mirror_res["skippedConflicts"].append(norm)
+                continue
+            full.unlink()
+            mirrored.pop(norm, None)
+            mirror_res["deleted"].append(norm)
+
+        state["updatedUtc"] = cp.get("updatedUtc", "")
+        atomic_write_text(mirror_state_path, json.dumps(state, indent=2, ensure_ascii=False) + "\n")
+        mirror_res["applied"] = True
+    elif payload.get("recordMirroredHashes") and isinstance(payload.get("recordMirroredHashes"), dict):
+        state = {"mirrored": {}}
+        if mirror_state_path.is_file():
+            try:
+                loaded = json.loads(mirror_state_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict) and isinstance(loaded.get("mirrored"), dict):
+                    state = loaded
+            except Exception:
+                pass
+        for rel, sha in payload["recordMirroredHashes"].items():
+            prev_rec = state["mirrored"].get(rel)
+            state["mirrored"][rel] = {
+                "sha256": sha,
+                "existedBefore": prev_rec["existedBefore"] if prev_rec else True,
+            }
+        state["updatedUtc"] = cp.get("updatedUtc", "")
+        atomic_write_text(mirror_state_path, json.dumps(state, indent=2, ensure_ascii=False) + "\n")
+
+    return {
+        "ok": True,
+        "path": str(fr_dir / "latest.json"),
+        "bundleSaved": bundle_saved,
+        "bundleMode": bundle_mode,
+        "agHandoff": ag_handoff_written,
+        "liveMirror": mirror_res,
+    }
+
+if __name__ == "__main__":
+    raw_b64 = os.environ.get("FR_PAYLOAD_B64") or (sys.argv[1] if len(sys.argv) > 1 else "")
+    data = json.loads(gzip.decompress(base64.b64decode(raw_b64.encode("ascii"))).decode("utf-8"))
+    print(json.dumps(run_payload(data), separators=(",", ":")))
+"""
+
+
+def build_termux_atomic_sync_script() -> str:
+    """Return the self-contained pure-stdlib Python atomic sync script (testable locally)."""
+    return _TERMUX_ATOMIC_SYNC_RUNNER.strip()
+
+
+def build_termux_reconcile_pull_script(remote: str = "origin", branch: str = "master") -> str:
+    """Return a single-RPC script that safely reverts ONLY unmodified live-mirrored files before git pull --rebase."""
+    safe_remote = json.dumps(remote or "origin")
+    safe_branch = json.dumps(branch or "master")
+    safe_state = json.dumps(f"{PHONE_FR_DIR}/live_mirror_state.json")
+    return f"""
+import hashlib, json, os, subprocess
+from pathlib import Path
+
+repo = Path.cwd().resolve()
+state_path = Path({safe_state}).expanduser()
+reconciled = []
+preserved_manual = []
+
+if state_path.is_file():
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except Exception:
+        state = {{}}
+    mirrored = state.get("mirrored") if isinstance(state, dict) else {{}}
+    if isinstance(mirrored, dict) and mirrored:
+        remaining = {{}}
+        to_checkout = []
+        for rel, rec in mirrored.items():
+            norm = str(rel).replace("\\\\", "/").lstrip("/")
+            if not norm or ".." in Path(norm).parts:
+                continue
+            full = (repo / norm).resolve()
+            try:
+                full.relative_to(repo)
+            except ValueError:
+                continue
+            expected_sha = str((rec or {{}}).get("sha256") or "")
+            existed_before = bool((rec or {{}}).get("existedBefore", True))
+            if not full.is_file():
+                reconciled.append(norm)
+                continue
+            actual_sha = hashlib.sha256(full.read_bytes()).hexdigest()
+            if expected_sha and actual_sha == expected_sha:
+                if existed_before:
+                    to_checkout.append(norm)
+                else:
+                    try:
+                        full.unlink()
+                    except OSError:
+                        pass
+                reconciled.append(norm)
+            else:
+                preserved_manual.append(norm)
+                remaining[norm] = rec
+        if to_checkout:
+            subprocess.run(["git", "checkout", "--", *to_checkout], cwd=str(repo), capture_output=True, timeout=30, check=False)
+        tmp = state_path.with_name(state_path.name + f".tmp.{{os.getpid()}}")
+        tmp.write_text(json.dumps({{"mirrored": remaining}}, indent=2) + "\\n", encoding="utf-8")
+        os.replace(tmp, state_path)
+
+r_fetch = subprocess.run(["git", "fetch", {safe_remote}], cwd=str(repo), capture_output=True, text=True, timeout=60, check=False)
+r_pull = subprocess.run(["git", "pull", "--rebase", {safe_remote}, {safe_branch}], cwd=str(repo), capture_output=True, text=True, timeout=90, check=False)
+r_head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(repo), capture_output=True, text=True, timeout=15, check=False)
+print(json.dumps({{
+    "ok": r_pull.returncode == 0,
+    "head": r_head.stdout.strip(),
+    "reconciled": reconciled,
+    "preservedManual": preserved_manual,
+    "stderr": (r_pull.stderr or r_fetch.stderr or "").strip()[:1000],
+}}, separators=(",", ":")))
+""".strip()
+
+
+def _run_termux_atomic_script(
+    relay_url: str,
+    pair_secret: str,
+    payload_obj: dict[str, Any],
+    *,
+    admin_key: str = "",
+    timeout_sec: int = 35,
+) -> dict[str, Any]:
+    raw_json = json.dumps(payload_obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    payload_b64 = base64.b64encode(gzip.compress(raw_json, compresslevel=6)).decode("ascii")
+    script_b64 = base64.b64encode(build_termux_atomic_sync_script().encode("utf-8")).decode("ascii")
+    # Both script_b64 and payload_b64 contain strictly [A-Za-z0-9+/=] — zero shell injection/quoting hazards.
+    cmd = (
+        f"FR_PAYLOAD_B64={payload_b64} "
+        f"python3 -B -c \"import base64; exec(base64.b64decode('{script_b64}').decode('utf-8'))\""
+    )
+    res = _send_termux_cmd(
+        relay_url,
+        pair_secret,
+        "shell_exec",
+        {"command": cmd, "timeoutSec": min(60, timeout_sec)},
+        admin_key=admin_key,
+        timeout_sec=timeout_sec,
+    )
+    if not res.get("ok"):
+        return {"ok": False, "error": str(res.get("stderr") or res.get("error") or res)}
+    out_lines = [ln.strip() for ln in str(res.get("stdout") or "").splitlines() if ln.strip()]
+    parsed = _safe_json_loads(out_lines[-1]) if out_lines else None
+    if not parsed:
+        return {"ok": False, "error": f"Unexpected atomic sync output: {str(res.get('stdout') or '')[:240]}"}
+    return parsed
+
+
 def write_termux_tier(
     relay_url: str,
     pair_secret: str,
@@ -438,85 +801,83 @@ def write_termux_tier(
     diary_md: str,
     bundle_gz_b64: str | None,
     *,
+    bundle: dict[str, Any] | None = None,
+    apply_live_mirror: bool = False,
+    clear_mirror_state: bool = False,
+    sync_antigravity_handoff: bool = True,
     admin_key: str = "",
 ) -> dict[str, Any]:
-    """Persist checkpoint + diary + bundle on phone Termux outside the git repo tree."""
+    """Persist checkpoint + diary + bundle + Antigravity handoff (+ optional live repo mirror) in ONE atomic Termux RPC."""
     try:
-        seq = int(cp.get("seq") or 0)
-        ts = int(cp.get("timestampUnix") or int(time.time()))
-        cp_text = json.dumps(cp, indent=2, ensure_ascii=False) + "\n"
-
-        r1 = _send_termux_cmd(
-            relay_url,
-            pair_secret,
-            "file_write",
-            {"path": f"{PHONE_FR_DIR}/latest.json", "content": cp_text},
-            admin_key=admin_key,
-            timeout_sec=20,
-        )
-        if not r1.get("ok"):
-            return {"ok": False, "error": str(r1.get("error") or r1)}
-
-        _send_termux_cmd(
-            relay_url,
-            pair_secret,
-            "file_write",
-            {"path": f"{PHONE_FR_DIR}/LATEST_DIARY.md", "content": diary_md},
-            admin_key=admin_key,
-            timeout_sec=20,
-        )
-        _send_termux_cmd(
-            relay_url,
-            pair_secret,
-            "file_write",
-            {"path": f"{PHONE_FR_DIR}/history/cp_{seq:04d}_{ts}.json", "content": cp_text},
-            admin_key=admin_key,
-            timeout_sec=20,
-        )
-
-        bundle_saved = False
-        bundle_mode = "none"
-        if bundle_gz_b64:
-            if len(bundle_gz_b64) <= 220 * 1024:
-                rb = _send_termux_cmd(
-                    relay_url,
-                    pair_secret,
-                    "file_write",
-                    {"path": f"{PHONE_FR_DIR}/latest_bundle.json.gz.b64", "content": bundle_gz_b64},
-                    admin_key=admin_key,
-                    timeout_sec=25,
-                )
-                bundle_saved = bool(rb.get("ok"))
-                bundle_mode = "direct_b64"
-            else:
-                # Large bundle: chunked E2E blob -> store blobId pointer on phone
-                blob = proto.upload_encrypted_blob(
-                    relay_url,
-                    pair_secret,
-                    {"bundleGzB64": bundle_gz_b64, "sha256": cp.get("bundleSha256", "")},
-                    admin_key=admin_key,
-                    meta={"kind": "flight_recorder_bundle", "sessionId": cp.get("sessionId", "")},
-                )
-                rb = _send_termux_cmd(
-                    relay_url,
-                    pair_secret,
-                    "file_write",
-                    {
-                        "path": f"{PHONE_FR_DIR}/latest_bundle_blob.json",
-                        "content": json.dumps({"blobId": blob["blobId"], "sha256": cp.get("bundleSha256", "")}),
-                    },
-                    admin_key=admin_key,
-                    timeout_sec=20,
-                )
-                bundle_saved = bool(rb.get("ok"))
-                bundle_mode = f"blob:{blob['blobId']}"
-
-        return {
-            "ok": True,
-            "path": f"{PHONE_FR_DIR}/latest.json",
-            "bundleSaved": bundle_saved,
-            "bundleMode": bundle_mode,
+        inline_payload: dict[str, Any] = {
+            "frDir": PHONE_FR_DIR,
+            "agDir": PHONE_AG_DIR,
+            "repoDir": PHONE_REPO_DIR,
+            "checkpoint": cp,
+            "diaryMd": diary_md,
+            "bundleGzB64": bundle_gz_b64 if (bundle_gz_b64 and len(bundle_gz_b64) <= TERMUX_INLINE_PAYLOAD_MAX_BYTES) else None,
+            "bundle": bundle if apply_live_mirror else None,
+            "applyLiveMirror": bool(apply_live_mirror and bundle),
+            "clearMirrorState": bool(clear_mirror_state),
+            "syncAntigravityHandoff": bool(sync_antigravity_handoff),
         }
+        est_size = len(gzip.compress(json.dumps(inline_payload, separators=(",", ":")).encode("utf-8"), compresslevel=6))
+
+        if est_size <= TERMUX_INLINE_PAYLOAD_MAX_BYTES:
+            return _run_termux_atomic_script(
+                relay_url,
+                pair_secret,
+                inline_payload,
+                admin_key=admin_key,
+                timeout_sec=35,
+            )
+
+        # Large bundle (>96 KB compressed): stream via encrypted chunked blob + apply via git_apply_bundle if mirroring,
+        # then write compact metadata + Antigravity handoff in ONE tiny atomic RPC!
+        blob = proto.upload_encrypted_blob(
+            relay_url,
+            pair_secret,
+            bundle if (apply_live_mirror and bundle) else {"bundleGzB64": bundle_gz_b64 or "", "sha256": cp.get("bundleSha256", "")},
+            admin_key=admin_key,
+            meta={"kind": "flight_recorder_bundle", "sessionId": cp.get("sessionId", "")},
+        )
+        mirror_applied_via_blob = None
+        if apply_live_mirror and bundle:
+            mirror_applied_via_blob = _send_termux_cmd(
+                relay_url,
+                pair_secret,
+                "git_apply_bundle",
+                {"blobId": blob["blobId"], "allowDelete": bool(bundle.get("deleted"))},
+                admin_key=admin_key,
+                timeout_sec=60,
+            )
+
+        meta_payload = {
+            "frDir": PHONE_FR_DIR,
+            "agDir": PHONE_AG_DIR,
+            "repoDir": PHONE_REPO_DIR,
+            "checkpoint": cp,
+            "diaryMd": diary_md,
+            "bundleGzB64": None,
+            "bundleBlob": {"blobId": blob["blobId"], "sha256": cp.get("bundleSha256", "")},
+            "applyLiveMirror": False,
+            "recordMirroredHashes": (cp.get("fileHashes") or {}) if (apply_live_mirror and mirror_applied_via_blob and mirror_applied_via_blob.get("ok")) else None,
+            "clearMirrorState": bool(clear_mirror_state),
+            "syncAntigravityHandoff": bool(sync_antigravity_handoff),
+        }
+        res = _run_termux_atomic_script(
+            relay_url,
+            pair_secret,
+            meta_payload,
+            admin_key=admin_key,
+            timeout_sec=35,
+        )
+        if mirror_applied_via_blob is not None:
+            res["blobMirror"] = {
+                "ok": bool(mirror_applied_via_blob.get("ok")),
+                "applied": mirror_applied_via_blob.get("applied"),
+            }
+        return res
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
 
@@ -637,12 +998,112 @@ def _collect_tier_checkpoints(
     }
 
 
+def _spawn_background_remote_flush(
+    local_dir: Path,
+    *,
+    apply_live_mirror: bool = False,
+    clear_mirror_state: bool = False,
+    url_arg: str = "",
+    pair_secret_arg: str = "",
+    admin_key_arg: str = "",
+) -> dict[str, Any]:
+    """Flush Tier 2 (Termux+Antigravity) & Tier 3 (Cloudflare Hub v6) in a detached background process (<40ms CLI return)."""
+    cmd = [
+        sys.executable,
+        "-B",
+        str(Path(__file__).resolve()),
+        "--local-dir",
+        str(local_dir),
+    ]
+    if url_arg:
+        cmd += ["--url", url_arg]
+    if pair_secret_arg:
+        cmd += ["--pair-secret", pair_secret_arg]
+    if admin_key_arg:
+        cmd += ["--admin-key", admin_key_arg]
+    cmd.append("flush-remote")
+    if apply_live_mirror:
+        cmd.append("--mirror")
+    if clear_mirror_state:
+        cmd.append("--clear-mirror-state")
+    try:
+        log_path = local_dir / "bg_flush.log"
+        log_f = open(log_path, "ab")
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=log_f,
+            stderr=log_f,
+            start_new_session=True,
+            close_fds=True,
+        )
+        log_f.close()
+        return {"ok": True, "mode": "background", "pid": proc.pid}
+    except Exception as exc:
+        return {"ok": False, "mode": "background", "error": str(exc)}
+
+
+def _persist_remote_tiers(
+    cp: dict[str, Any],
+    diary_md: str,
+    bundle: dict[str, Any] | None,
+    bundle_gz_b64: str | None,
+    *,
+    apply_live_mirror: bool = False,
+    clear_mirror_state: bool = False,
+    url_arg: str = "",
+    pair_secret_arg: str = "",
+    admin_key_arg: str = "",
+) -> dict[str, Any]:
+    tiers: dict[str, Any] = {}
+    auth = _try_resolve_remote_auth(url_arg, pair_secret_arg, admin_key_arg)
+    if not auth:
+        tiers["cloud"] = {"ok": False, "skipped": True, "error": "No pairSecret configured"}
+        tiers["termux"] = {"ok": False, "skipped": True, "error": "No pairSecret configured"}
+        return tiers
+
+    relay, secret, admin = auth
+
+    def _do_cloud() -> dict[str, Any]:
+        try:
+            return write_cloud_tier(relay, secret, cp, bundle_gz_b64, admin_key=admin)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    def _do_termux() -> dict[str, Any]:
+        try:
+            return write_termux_tier(
+                relay,
+                secret,
+                cp,
+                diary_md,
+                bundle_gz_b64,
+                bundle=bundle,
+                apply_live_mirror=apply_live_mirror,
+                clear_mirror_state=clear_mirror_state,
+                sync_antigravity_handoff=True,
+                admin_key=admin,
+            )
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        f_cloud = pool.submit(_do_cloud)
+        f_termux = pool.submit(_do_termux)
+        tiers["cloud"] = f_cloud.result()
+        tiers["termux"] = f_termux.result()
+    return tiers
+
+
 def _persist_to_all_tiers(
     local_dir: Path,
     cp: dict[str, Any],
     bundle: dict[str, Any] | None,
     *,
     use_remote: bool,
+    background: bool = False,
+    apply_live_mirror: bool = False,
+    clear_mirror_state: bool = False,
     url_arg: str = "",
     pair_secret_arg: str = "",
     admin_key_arg: str = "",
@@ -664,21 +1125,62 @@ def _persist_to_all_tiers(
     tiers["local"] = write_local_tier(local_dir, cp, diary_md, bundle_gz)
 
     if use_remote:
-        auth = _try_resolve_remote_auth(url_arg, pair_secret_arg, admin_key_arg)
-        if auth:
-            relay, secret, admin = auth
-            try:
-                tiers["cloud"] = write_cloud_tier(relay, secret, cp, bundle_gz_b64, admin_key=admin)
-            except Exception as exc:
-                tiers["cloud"] = {"ok": False, "error": str(exc)}
-            try:
-                tiers["termux"] = write_termux_tier(relay, secret, cp, diary_md, bundle_gz_b64, admin_key=admin)
-            except Exception as exc:
-                tiers["termux"] = {"ok": False, "error": str(exc)}
+        if background:
+            tiers["remote"] = _spawn_background_remote_flush(
+                local_dir,
+                apply_live_mirror=apply_live_mirror,
+                clear_mirror_state=clear_mirror_state,
+                url_arg=url_arg,
+                pair_secret_arg=pair_secret_arg,
+                admin_key_arg=admin_key_arg,
+            )
         else:
-            tiers["cloud"] = {"ok": False, "skipped": True, "error": "No pairSecret configured"}
-            tiers["termux"] = {"ok": False, "skipped": True, "error": "No pairSecret configured"}
+            tiers.update(
+                _persist_remote_tiers(
+                    cp,
+                    diary_md,
+                    bundle,
+                    bundle_gz_b64,
+                    apply_live_mirror=apply_live_mirror,
+                    clear_mirror_state=clear_mirror_state,
+                    url_arg=url_arg,
+                    pair_secret_arg=pair_secret_arg,
+                    admin_key_arg=admin_key_arg,
+                )
+            )
     return tiers
+
+
+def flush_local_to_remote(
+    local_dir: Path,
+    *,
+    apply_live_mirror: bool = False,
+    clear_mirror_state: bool = False,
+    url_arg: str = "",
+    pair_secret_arg: str = "",
+    admin_key_arg: str = "",
+) -> dict[str, Any]:
+    """Read freshest Tier 1 local checkpoint + bundle and push concurrently to Tier 2 (Termux) & Tier 3 (Cloudflare)."""
+    cp = read_local_tier(local_dir)
+    if not cp:
+        return {"ok": False, "error": "No local checkpoint in Tier 1 cache to flush."}
+    bundle = read_local_bundle(local_dir) if cp.get("hasBundle") else None
+    bundle_gz_b64: str | None = None
+    if bundle and (bundle.get("files") or bundle.get("deleted")):
+        _, bundle_gz_b64, _ = encode_bundle_gz_b64(bundle)
+    diary_md = render_diary_markdown(cp)
+    tiers = _persist_remote_tiers(
+        cp,
+        diary_md,
+        bundle,
+        bundle_gz_b64,
+        apply_live_mirror=apply_live_mirror,
+        clear_mirror_state=clear_mirror_state,
+        url_arg=url_arg,
+        pair_secret_arg=pair_secret_arg,
+        admin_key_arg=admin_key_arg,
+    )
+    return {"ok": bool(tiers.get("cloud", {}).get("ok") or tiers.get("termux", {}).get("ok")), "tiers": tiers}
 
 
 def init_session(
@@ -690,6 +1192,7 @@ def init_session(
     goal: str = "",
     requests: list[str] | None = None,
     use_remote: bool = True,
+    background: bool = False,
     url_arg: str = "",
     pair_secret_arg: str = "",
     admin_key_arg: str = "",
@@ -723,6 +1226,7 @@ def init_session(
         cp,
         None,
         use_remote=use_remote,
+        background=background,
         url_arg=url_arg,
         pair_secret_arg=pair_secret_arg,
         admin_key_arg=admin_key_arg,
@@ -749,7 +1253,9 @@ def save_checkpoint(
     files: list[str] | None = None,
     deleted: list[str] | None = None,
     auto_diff: bool = False,
+    apply_live_mirror: bool = True,
     use_remote: bool = True,
+    background: bool = False,
     url_arg: str = "",
     pair_secret_arg: str = "",
     admin_key_arg: str = "",
@@ -834,6 +1340,8 @@ def save_checkpoint(
         cp,
         bundle,
         use_remote=use_remote,
+        background=background,
+        apply_live_mirror=bool(apply_live_mirror and bundle),
         url_arg=url_arg,
         pair_secret_arg=pair_secret_arg,
         admin_key_arg=admin_key_arg,
@@ -988,10 +1496,14 @@ def restore_session(
 
 def close_session(
     *,
+    workspace: Path | None = None,
     local_dir: Path,
     commit: str = "",
     note: str = "",
+    next_step: str = "",
+    clear_pending: bool = True,
     use_remote: bool = True,
+    background: bool = False,
     url_arg: str = "",
     pair_secret_arg: str = "",
     admin_key_arg: str = "",
@@ -1016,14 +1528,23 @@ def close_session(
         cp["commit"] = commit
     if note:
         cp["summary"] = note
+    if next_step:
+        cp["nextStep"] = next_step
+    if clear_pending:
+        cp["pending"] = []
     cp["fileHashes"] = {}
     cp["deletedFiles"] = []
+
+    if workspace is not None and workspace.is_dir():
+        save_local_baseline(local_dir, workspace)
 
     tiers = _persist_to_all_tiers(
         local_dir,
         cp,
         None,
         use_remote=use_remote,
+        background=background,
+        clear_mirror_state=True,
         url_arg=url_arg,
         pair_secret_arg=pair_secret_arg,
         admin_key_arg=admin_key_arg,
@@ -1052,6 +1573,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--wave", default="")
     p_init.add_argument("--goal", default="")
     p_init.add_argument("--request", action="append", default=[])
+    p_init.add_argument("-b", "--background", action="store_true", help="Write Tier 1 local (<10ms) and flush Termux+Cloud in background")
 
     p_save = sub.add_parser("save", help="Save incremental diary checkpoint + optional workspace snapshot to all 3 tiers")
     p_save.add_argument("--session", default="")
@@ -1069,6 +1591,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_save.add_argument("--files", nargs="*", default=[])
     p_save.add_argument("--delete", nargs="*", default=[])
     p_save.add_argument("--auto-diff", action="store_true", help="Auto-detect all modified/added/deleted workspace files vs baseline")
+    p_save.add_argument("--no-mirror", action="store_true", help="Do not live-mirror changed files into local Antigravity repo")
+    p_save.add_argument("-b", "--background", action="store_true", help="Write Tier 1 local (<10ms) and flush Termux+Cloud in background")
 
     p_rec = sub.add_parser("recover", help="Probe all 3 tiers, detect workspace rollback, and print recovery brief")
     p_rec.add_argument("--json", action="store_true", help="Output machine-readable JSON instead of compact brief")
@@ -1083,6 +1607,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_cls = sub.add_parser("close", help="Mark active session cleanly closed after commit/push")
     p_cls.add_argument("--commit", default="")
     p_cls.add_argument("--note", default="")
+    p_cls.add_argument("--next", default="")
+    p_cls.add_argument("--keep-pending", action="store_true")
+    p_cls.add_argument("-b", "--background", action="store_true", help="Write Tier 1 local (<10ms) and flush Termux+Cloud in background")
+
+    p_fl = sub.add_parser("flush-remote", help="Internal/manual command: flush Tier 1 checkpoint to Termux + Cloudflare")
+    p_fl.add_argument("--mirror", action="store_true")
+    p_fl.add_argument("--clear-mirror-state", action="store_true")
 
     return p
 
@@ -1102,6 +1633,7 @@ def main(argv: list[str] | None = None) -> int:
             goal=args.goal,
             requests=args.request,
             use_remote=use_remote,
+            background=bool(args.background),
             url_arg=args.url,
             pair_secret_arg=args.pair_secret,
             admin_key_arg=args.admin_key,
@@ -1128,7 +1660,9 @@ def main(argv: list[str] | None = None) -> int:
             files=args.files,
             deleted=args.delete,
             auto_diff=args.auto_diff,
+            apply_live_mirror=not bool(args.no_mirror),
             use_remote=use_remote,
+            background=bool(args.background),
             url_arg=args.url,
             pair_secret_arg=args.pair_secret,
             admin_key_arg=args.admin_key,
@@ -1209,10 +1743,26 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.action == "close":
         res = close_session(
+            workspace=workspace,
             local_dir=local_dir,
             commit=args.commit,
             note=args.note,
+            next_step=args.next,
+            clear_pending=not bool(args.keep_pending),
             use_remote=use_remote,
+            background=bool(args.background),
+            url_arg=args.url,
+            pair_secret_arg=args.pair_secret,
+            admin_key_arg=args.admin_key,
+        )
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0 if res.get("ok") else 1
+
+    if args.action == "flush-remote":
+        res = flush_local_to_remote(
+            local_dir=local_dir,
+            apply_live_mirror=bool(args.mirror),
+            clear_mirror_state=bool(args.clear_mirror_state),
             url_arg=args.url,
             pair_secret_arg=args.pair_secret,
             admin_key_arg=args.admin_key,

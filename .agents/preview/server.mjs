@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -17,6 +18,8 @@ const HOST = '0.0.0.0';
 // Bridge whitelisted AI Studio Secrets from the dev-server process to local CLI tools
 // via a strictly private 0600 file in /tmp (outside the repo, NEVER exposed over HTTP).
 const RUNTIME_ENV_BRIDGE_PATH = '/tmp/.cavern_runtime_env.json';
+const LIVE_SYNC_STATUS_PATH = '/tmp/cavern-flight-recorder/watcher_status.json';
+const LIVE_SYNC_SCRIPT_PATH = path.join(ROOT_DIR, '.agents', 'agent', 'live_sync_watcher.py');
 const WHITELISTED_RUNTIME_KEYS = [
   'GITHUB_TOKEN',
   'GH_TOKEN',
@@ -51,6 +54,58 @@ function syncPrivateRuntimeEnvBridge() {
 
 syncPrivateRuntimeEnvBridge();
 
+// Zero-quota background live Antigravity mirror + Flight Recorder watcher
+let liveWatcherProc = null;
+let shuttingDown = false;
+let watcherRestartAttempts = 0;
+
+function startLiveSyncWatcher() {
+  if (shuttingDown || process.env.CAVERN_DISABLE_LIVE_SYNC === '1') return;
+  if (!fs.existsSync(LIVE_SYNC_SCRIPT_PATH)) return;
+  try {
+    const child = spawn(
+      'python3',
+      ['-B', LIVE_SYNC_SCRIPT_PATH, '--daemon', '--workspace', ROOT_DIR],
+      {
+        cwd: ROOT_DIR,
+        stdio: 'ignore',
+        env: { ...process.env },
+      }
+    );
+    liveWatcherProc = child;
+    child.on('exit', () => {
+      if (liveWatcherProc === child) liveWatcherProc = null;
+      if (!shuttingDown && watcherRestartAttempts < 5) {
+        watcherRestartAttempts += 1;
+        setTimeout(startLiveSyncWatcher, Math.min(30000, 3000 * watcherRestartAttempts));
+      }
+    });
+    child.on('error', () => {
+      if (liveWatcherProc === child) liveWatcherProc = null;
+    });
+  } catch {
+    // Never block preview server if python3 is unavailable
+  }
+}
+
+function readLiveSyncStatus() {
+  try {
+    if (fs.existsSync(LIVE_SYNC_STATUS_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(LIVE_SYNC_STATUS_PATH, 'utf8'));
+      return { ...parsed, spawnedByServer: Boolean(liveWatcherProc && !liveWatcherProc.killed) };
+    }
+  } catch {
+    // Ignore transient reads
+  }
+  return {
+    ok: true,
+    running: Boolean(liveWatcherProc && !liveWatcherProc.killed),
+    spawnedByServer: Boolean(liveWatcherProc && !liveWatcherProc.killed),
+  };
+}
+
+startLiveSyncWatcher();
+
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
@@ -64,7 +119,16 @@ const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
   if (url.pathname === '/health') {
-    return sendJson(res, 200, { ok: true, service: 'cavernize-workspace-preview', port: PORT });
+    return sendJson(res, 200, {
+      ok: true,
+      service: 'cavernize-workspace-preview',
+      port: PORT,
+      liveSyncWatcher: Boolean(liveWatcherProc && !liveWatcherProc.killed),
+    });
+  }
+
+  if (url.pathname === '/api/live-sync') {
+    return sendJson(res, 200, readLiveSyncStatus());
   }
 
   if (url.pathname === '/favicon.ico') {
@@ -114,6 +178,14 @@ server.listen(PORT, HOST, () => {
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
+    shuttingDown = true;
+    if (liveWatcherProc && !liveWatcherProc.killed) {
+      try {
+        liveWatcherProc.kill('SIGTERM');
+      } catch {
+        // Best effort
+      }
+    }
     server.close(() => process.exit(0));
   });
 }
