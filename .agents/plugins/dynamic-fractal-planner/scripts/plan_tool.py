@@ -986,6 +986,15 @@ def cmd_evolve(args: argparse.Namespace, ws_root: Path) -> int:
         sub_argv.extend(["--scope", args.scope, "--title", args.title, "--summary", args.summary, "--commit", args.commit, "--agent", args.agent])
         if args.files:
             sub_argv.extend(["--files", *args.files])
+    elif args.evolve_cmd == "sync-plugin":
+        if args.apply:
+            sub_argv.append("--apply")
+        if args.global_dir:
+            sub_argv.extend(["--global-dir", args.global_dir])
+        if args.plugin_rel:
+            sub_argv.extend(["--plugin-rel", args.plugin_rel])
+        if args.json:
+            sub_argv.append("--json")
     return self_evolve.main(sub_argv)
 
 
@@ -1127,6 +1136,11 @@ def main() -> None:
     p_evo_sync.add_argument("--files", nargs="*", default=[])
     p_evo_sync.add_argument("--commit", default="pending-push")
     p_evo_sync.add_argument("--agent", default="AI")
+    p_evo_psync = evo_sub.add_parser("sync-plugin")
+    p_evo_psync.add_argument("--apply", action="store_true")
+    p_evo_psync.add_argument("--global-dir", default="")
+    p_evo_psync.add_argument("--plugin-rel", default=".agents/plugins/dynamic-fractal-planner")
+    p_evo_psync.add_argument("--json", action="store_true")
 
     p_learn = sub.add_parser("learn", help="Run universal timeless build-error learner (forwards remaining args).")
     p_learn.add_argument("extra_args", nargs=argparse.REMAINDER)

@@ -27,8 +27,11 @@ from schema_migrations import (  # noqa: E402
     CURRENT_DOCS_FORMAT_VERSION,
     CURRENT_SCHEMA_VERSION,
     DEFAULT_BLAST_RADIUS,
+    DEFAULT_CODE_WEIGHT_LIMITS,
+    DEFAULT_MEMORY_WEIGHT_LIMITS,
     DEFAULT_READ_BUDGET,
     DEFAULT_SECRET_GUARD,
+    compare_semver,
     migrate_profile,
 )
 
@@ -1042,10 +1045,25 @@ def _template_for_managed_doc(rel: str) -> str | None:
     return None
 
 
+def read_plugin_version(plugin_dir: Path | None = None) -> str:
+    """Read semantic version from plugin.json (defaults to '0.0.0' if missing)."""
+    root = plugin_dir if plugin_dir is not None else resolve_plugin_root()
+    pjson = root / "plugin.json"
+    if not pjson.is_file():
+        return "0.0.0"
+    try:
+        data = json.loads(pjson.read_text(encoding="utf-8", errors="ignore"))
+        return str(data.get("version") or "0.0.0").strip()
+    except Exception:
+        return "0.0.0"
+
+
 def auto_upgrade_workspace(repo: Path) -> dict[str, Any]:
-    """Upgrade outdated profile schema (v1/v2->v3) & untouched legacy templates in place (0 tokens)."""
+    """Retroactively upgrade outdated profile schema (v1..v3->v4), plugin_version stamp & untouched legacy templates (0 tokens)."""
     res: dict[str, Any] = {
         "profile_migrated": None,
+        "plugin_upgraded": None,
+        "plugin_downgrade_blocked": None,
         "boilerplate_upgraded": [],
         "docs_needing_ai_conversion": [],
         "docs_format_stamped": False,
@@ -1059,6 +1077,7 @@ def auto_upgrade_workspace(repo: Path) -> dict[str, Any]:
     raw: dict[str, Any] = {}
     is_future_schema = False
     profile_dirty = False
+    current_plugin_ver = read_plugin_version()
 
     if profile_path.is_file():
         try:
@@ -1077,6 +1096,16 @@ def auto_upgrade_workspace(repo: Path) -> dict[str, Any]:
                 res["profile_migrated"] = (old_v, resolved_ver)
                 raw = migrated
                 profile_dirty = True
+
+            if current_plugin_ver and current_plugin_ver != "0.0.0":
+                stored_pv = str(raw.get("plugin_version") or "").strip()
+                cmp_pv = compare_semver(current_plugin_ver, stored_pv)
+                if cmp_pv > 0:
+                    res["plugin_upgraded"] = (stored_pv or "0.0.0", current_plugin_ver)
+                    raw["plugin_version"] = current_plugin_ver
+                    profile_dirty = True
+                elif cmp_pv < 0 and stored_pv:
+                    res["plugin_downgrade_blocked"] = (stored_pv, current_plugin_ver)
 
         doc_ver_raw = raw.get("docs_format_version")
         try:
@@ -1177,12 +1206,15 @@ def bootstrap_workspace(repo: Path, name: str = "", force: bool = False) -> tupl
         )
         profile = {
             "schema_version": CURRENT_SCHEMA_VERSION,
+            "plugin_version": read_plugin_version(),
             "docs_format_version": CURRENT_DOCS_FORMAT_VERSION if all_current else 0,
             "project_name": name or repo.name,
             "planner_mode": "lean",
             "read_budget": dict(DEFAULT_READ_BUDGET),
             "secret_guard": dict(DEFAULT_SECRET_GUARD),
             "blast_radius": dict(DEFAULT_BLAST_RADIUS),
+            "code_weight_limits": dict(DEFAULT_CODE_WEIGHT_LIMITS),
+            "memory_weight_limits": dict(DEFAULT_MEMORY_WEIGHT_LIMITS),
             "extra_requests_file": ".agents/docs/EXTRA_REQUESTS.md",
             "memory_feedback": {
                 "enabled": True,

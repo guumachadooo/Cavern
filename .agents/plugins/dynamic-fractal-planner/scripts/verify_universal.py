@@ -363,12 +363,15 @@ def check_key_parity_rules(repo: Path, files: list[str], profile: dict[str, Any]
         if not full.is_file():
             continue
         text = full.read_text(encoding="utf-8", errors="ignore")
+        target_rel = (r.get("target_path") or "").replace("\\", "/").lstrip("./") or rel
+        target_full = repo / target_rel
+        target_text = target_full.read_text(encoding="utf-8", errors="ignore") if target_full.is_file() else ""
 
-        if rel in files:
+        if rel in files or target_rel in files:
             sec_pat = r.get("target_section_regex") or ""
-            m_sec = re.search(sec_pat, text, flags=re.MULTILINE | re.DOTALL)
+            m_sec = re.search(sec_pat, target_text, flags=re.MULTILINE | re.DOTALL) if target_text else None
             if not m_sec:
-                fails.append(f"{rel}: Could not locate target section for key parity rule.")
+                fails.append(f"{target_rel}: Could not locate target section for key parity rule.")
             else:
                 target_block = m_sec.group(1) if m_sec.groups() else m_sec.group(0)
                 key_pat = r.get("added_key_regex") or ""
@@ -406,9 +409,10 @@ def check_key_parity_rules(repo: Path, files: list[str], profile: dict[str, Any]
         ref_bucket = warns if ref_sev == "warn" else fails
         ref_msg_tpl = r.get("ref_message") or "Referenced key `{key}` missing from `{table}`."
         strip_comm = r.get("strip_line_comments", True)
+        skip_rels = {rel, target_rel}
 
         for f_rel in files:
-            if f_rel == rel or not (repo / f_rel).is_file():
+            if f_rel in skip_rels or not (repo / f_rel).is_file():
                 continue
             if ref_prefs and not any(f_rel.startswith(p) for p in ref_prefs):
                 continue
@@ -1310,21 +1314,26 @@ def check_forward_wiring(repo: Path, files: list[str], profile: dict[str, Any], 
 
 
 def check_memory_weight(repo: Path, profile: dict[str, Any], warns: list[str]) -> None:
+    mw = profile.get("memory_weight_limits") if isinstance(profile.get("memory_weight_limits"), dict) else {}
+    hist_max_lines = int(mw.get("project_history_max_lines") or 150)
+    hist_max_kb = float(mw.get("project_history_max_kb") or 28.0)
+    sync_max_kb = float(mw.get("external_sync_max_kb") or 48.0)
+
     hist = repo / ".agents" / "docs" / "PROJECT_HISTORY.md"
     if hist.is_file():
         hist_txt = hist.read_text(encoding="utf-8", errors="ignore")
         n_lines = len(hist_txt.splitlines())
         hist_kb = len(hist_txt.encode("utf-8")) / 1024.0
-        if n_lines > 150:
-            warns.append(f"`.agents/docs/PROJECT_HISTORY.md` has {n_lines}L (>150L); archive older milestones to `.agents/docs/archive/`.")
-        elif hist_kb > 28.0:
-            warns.append(f"`.agents/docs/PROJECT_HISTORY.md` is {hist_kb:.1f} KB (>28 KB despite {n_lines}L); archive older milestones to `.agents/docs/archive/`.")
+        if n_lines > hist_max_lines:
+            warns.append(f"`.agents/docs/PROJECT_HISTORY.md` has {n_lines}L (>{hist_max_lines}L); archive older milestones to `.agents/docs/archive/`.")
+        elif hist_kb > hist_max_kb:
+            warns.append(f"`.agents/docs/PROJECT_HISTORY.md` is {hist_kb:.1f} KB (>{hist_max_kb:.0f} KB despite {n_lines}L); archive older milestones to `.agents/docs/archive/`.")
 
     sync_doc = repo / ".agents" / "docs" / "EXTERNAL_AI_SYNC.md"
     if sync_doc.is_file():
         sync_kb = sync_doc.stat().st_size / 1024.0
-        if sync_kb > 48.0:
-            warns.append(f"`.agents/docs/EXTERNAL_AI_SYNC.md` is {sync_kb:.1f} KB (>48 KB); archive older sync entries to `.agents/docs/archive/`.")
+        if sync_kb > sync_max_kb:
+            warns.append(f"`.agents/docs/EXTERNAL_AI_SYNC.md` is {sync_kb:.1f} KB (>{sync_max_kb:.0f} KB); archive older sync entries to `.agents/docs/archive/`.")
 
     extra_rel = (profile.get("extra_requests_file") or DEFAULT_EXTRA_REQUESTS_FILE).strip()
     extra_p = repo / extra_rel
@@ -1345,6 +1354,47 @@ def check_memory_weight(repo: Path, profile: dict[str, Any], warns: list[str]) -
                 warns.append(f"`{extra_rel}` has {len(items)} completed items (>15); archive old entries to `.agents/docs/archive/`.")
 
 
+def check_code_weight(
+    repo: Path,
+    files: list[str],
+    profile: dict[str, Any],
+    warns: list[str],
+    *,
+    scan_all: bool = False,
+) -> None:
+    """Warn on oversized source files breaching profile `code_weight_limits` (anti-monolith guard)."""
+    cw = profile.get("code_weight_limits")
+    if not isinstance(cw, dict) or not cw.get("enabled", True):
+        return
+    limit = int(cw.get("warn_lines_all") or 2000) if scan_all else int(cw.get("warn_lines") or 1500)
+    if limit <= 0:
+        return
+    ignore_prefixes = tuple(
+        str(p).replace("\\", "/").lstrip("./")
+        for p in (cw.get("ignore_path_prefixes") or [".agents/", "Libraries/", "node_modules/"])
+        if str(p).strip()
+    )
+    allowed_exts = {
+        str(e).lower()
+        for e in (cw.get("extensions") or (".cs", ".py", ".ts", ".tsx", ".js", ".jsx", ".kt", ".java", ".rs", ".go", ".c", ".cpp", ".h", ".swift"))
+    }
+    for rel in files:
+        norm = rel.replace("\\", "/").lstrip("./")
+        if any(norm.startswith(pref) for pref in ignore_prefixes):
+            continue
+        if Path(norm).suffix.lower() not in allowed_exts:
+            continue
+        full = repo / norm
+        if not full.is_file():
+            continue
+        try:
+            n_lines = len(full.read_text(encoding="utf-8", errors="ignore").splitlines())
+        except Exception:
+            continue
+        if n_lines > limit:
+            warns.append(f"{norm}: {n_lines}L (>{limit}L) — consider splitting into modular/partial files (`code_weight_limits`).")
+
+
 def check_build_lessons_timelessness(repo: Path, files: list[str], fails: list[str]) -> None:
     """Enforce timeless anti-obsolescence rules whenever any BUILD_LESSONS.md is modified."""
     lesson_files = [f for f in files if Path(f).name == "BUILD_LESSONS.md" and (repo / f).is_file()]
@@ -1361,7 +1411,13 @@ def check_build_lessons_timelessness(repo: Path, files: list[str], fails: list[s
                 fails.append(f"{rel}: timelessness audit failed -> {e}")
 
 
-def check_plugin_sync_parity(repo: Path, files: list[str], warns: list[str]) -> None:
+def check_plugin_sync_parity(
+    repo: Path,
+    files: list[str],
+    warns: list[str],
+    *,
+    scan_all: bool = False,
+) -> None:
     """Warn if embedded plugin code changed without recording an entry in plugin EXTERNAL_AI_SYNC.md."""
     plug_prefix = ".agents/plugins/dynamic-fractal-planner/"
     code_touched = [
@@ -1372,8 +1428,23 @@ def check_plugin_sync_parity(repo: Path, files: list[str], warns: list[str]) -> 
     if not code_touched:
         return
     plug_sync = f"{plug_prefix}.agents/docs/EXTERNAL_AI_SYNC.md"
-    if (repo / plug_sync).is_file() and plug_sync not in files:
-        warns.append(f"Plugin code edited ({len(code_touched)} file(s)) without updating `{plug_sync}`.")
+    sync_full = repo / plug_sync
+    if not sync_full.is_file():
+        return
+    if plug_sync in files:
+        return
+    if scan_all or not (repo / ".git").exists():
+        # In full-workspace / gitless scans, `files` includes all tracked plugin files regardless of edit state.
+        # Only warn if the current plugin.json version is missing from plugin EXTERNAL_AI_SYNC.md.
+        manifest_p = repo / f"{plug_prefix}plugin.json"
+        if manifest_p.is_file():
+            try:
+                cur_ver = str(json.loads(manifest_p.read_text(encoding="utf-8", errors="ignore")).get("version") or "").strip()
+            except Exception:
+                cur_ver = ""
+            if cur_ver and f"v{cur_ver}" in sync_full.read_text(encoding="utf-8", errors="ignore"):
+                return
+    warns.append(f"Plugin code edited ({len(code_touched)} file(s)) without updating `{plug_sync}`.")
 
 
 def run_static_checks(
@@ -1398,8 +1469,9 @@ def run_static_checks(
     check_orphan_calls(repo, files, warns)
     check_forward_wiring(repo, files, profile, fails, warns)
     check_memory_weight(repo, profile, warns)
+    check_code_weight(repo, files, profile, warns, scan_all=scan_all)
     check_build_lessons_timelessness(repo, files, fails)
-    check_plugin_sync_parity(repo, files, warns)
+    check_plugin_sync_parity(repo, files, warns, scan_all=scan_all)
 
     extra_rel, pending_extra = get_pending_extra_requests(repo, profile)
     if pending_extra:

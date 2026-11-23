@@ -221,14 +221,15 @@ class TestSchemaMigrations(unittest.TestCase):
         migrated, ver, warnings = schema_migrations.migrate_profile(raw)
 
         self.assertEqual(raw, snapshot, "migrate_profile must never mutate input dict")
-        self.assertEqual(ver, 3)
-        self.assertEqual(migrated["schema_version"], 3)
+        self.assertEqual(ver, 4)
+        self.assertEqual(migrated["schema_version"], 4)
         self.assertEqual(warnings, [])
         self.assertEqual(migrated["custom_owner_note"], "preserve-me-losslessly")
         self.assertEqual(migrated["planner_mode"], "lean")
         self.assertEqual(migrated["read_budget"], {"max_full_read_lines": 300, "max_slice_lines": 250})
         self.assertEqual(migrated["secret_guard"], {"enabled": True})
         self.assertEqual(migrated["blast_radius"], {"simple_tier_max_files": 3})
+        self.assertEqual(migrated["code_weight_limits"], {"enabled": True, "warn_lines": 1500, "warn_lines_all": 2000})
 
         cmds = {r.get("label"): r for r in (migrated.get("build_rules") or [])}
         self.assertIn("verify_command", cmds)
@@ -242,7 +243,7 @@ class TestSchemaMigrations(unittest.TestCase):
         v1 = json.loads((FIXTURES_DIR / "profile_v1_cavern.json").read_text(encoding="utf-8"))
         self.assertNotIn("schema_version", v1)
         m1, ver1, w1 = schema_migrations.migrate_profile(v1)
-        self.assertEqual(ver1, 3)
+        self.assertEqual(ver1, 4)
         self.assertEqual(w1, [])
         self.assertEqual(m1["build_rules"], v1["build_rules"])
         self.assertEqual(m1["file_guards"], v1["file_guards"])
@@ -252,13 +253,23 @@ class TestSchemaMigrations(unittest.TestCase):
         v2 = json.loads((FIXTURES_DIR / "profile_v2_cavern.json").read_text(encoding="utf-8"))
         self.assertEqual(v2.get("schema_version"), 2)
         m2, ver2, w2 = schema_migrations.migrate_profile(v2)
-        self.assertEqual(ver2, 3)
+        self.assertEqual(ver2, 4)
         self.assertEqual(w2, [])
-        self.assertEqual(m2["schema_version"], 3)
+        self.assertEqual(m2["schema_version"], 4)
         self.assertEqual(m2["planner_mode"], "lean")
         self.assertEqual(m2["build_rules"], v2["build_rules"])
         self.assertEqual(m2["command_guards"], v2["command_guards"])
         self.assertEqual(m2["key_parity_rules"], v2["key_parity_rules"])
+
+        v3 = json.loads((FIXTURES_DIR / "profile_v3_cavern.json").read_text(encoding="utf-8"))
+        self.assertEqual(v3.get("schema_version"), 3)
+        m3, ver3, w3 = schema_migrations.migrate_profile(v3)
+        self.assertEqual(ver3, 4)
+        self.assertEqual(w3, [])
+        self.assertEqual(m3["schema_version"], 4)
+        self.assertEqual(m3["planner_mode"], "auto")
+        self.assertEqual(m3["diff_rules"], v3["diff_rules"])
+        self.assertTrue(m3["code_weight_limits"]["enabled"])
 
     def test_synthetic_chain_v1_to_v10(self) -> None:
         def make_hop(src_v: int):
@@ -304,14 +315,14 @@ class TestSchemaMigrations(unittest.TestCase):
             prof_file.write_text(v1_text, encoding="utf-8")
 
             loaded = planner_state.load_project_profile(repo)
-            self.assertEqual(loaded["schema_version"], 3)
+            self.assertEqual(loaded["schema_version"], 4)
             self.assertEqual(prof_file.read_text(encoding="utf-8"), v1_text)
 
             res = run_script("plan_tool.py", ["--workspace", str(repo), "migrate"])
             self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
             self.assertTrue((agents_dir / "planner_profile.json.bak").is_file())
             disk_after = json.loads(prof_file.read_text(encoding="utf-8"))
-            self.assertEqual(disk_after["schema_version"], 3)
+            self.assertEqual(disk_after["schema_version"], 4)
             self.assertEqual(disk_after["planner_mode"], "lean")
 
             res2 = run_script("plan_tool.py", ["--workspace", str(repo), "migrate"])
@@ -345,7 +356,7 @@ class TestAutoBootstrapAndHeadings(unittest.TestCase):
             (r / "tsconfig.json").write_text("{}", encoding="utf-8")
             planner_state.bootstrap_workspace(r)
             prof = json.loads((r / ".agents" / "planner_profile.json").read_text(encoding="utf-8"))
-            self.assertEqual(prof["schema_version"], 3)
+            self.assertEqual(prof["schema_version"], 4)
             self.assertEqual(prof["planner_mode"], "lean")
             cmds = [x["command"] for x in prof["build_rules"]]
             self.assertIn("npx tsc --noEmit", cmds)
@@ -388,7 +399,7 @@ class TestAutoBootstrapAndHeadings(unittest.TestCase):
             msg = parsed["injectSteps"][0]["systemMessage"]["systemMessage"]
             self.assertIn("Auto-initialized project docs/profile", msg)
             prof = json.loads((repo / ".agents" / "planner_profile.json").read_text(encoding="utf-8"))
-            self.assertEqual(prof["schema_version"], 3)
+            self.assertEqual(prof["schema_version"], 4)
 
         with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as art:
             empty_dir = Path(td)
@@ -1367,7 +1378,7 @@ class TestCavernV1V2V3Parity(unittest.TestCase):
 
         if self.LIVE_CAVERN_PROFILE.is_file():
             live_cavern = json.loads(self.LIVE_CAVERN_PROFILE.read_text(encoding="utf-8"))
-            self.assertIn(live_cavern.get("schema_version"), (2, 3))
+            self.assertIn(live_cavern.get("schema_version"), (2, 3, 4))
             self._assert_parity_for_profile(f"live_v{live_cavern.get('schema_version')}_cavern", live_cavern)
 
 
@@ -2090,7 +2101,7 @@ class TestSymbolicTelegraphicStyle(unittest.TestCase):
             self.assertNotIn("DOCS_AUTO_MIGRATE", ss_msg)
 
             upgraded_prof = json.loads(prof_file.read_text(encoding="utf-8"))
-            self.assertEqual(upgraded_prof["schema_version"], 3)
+            self.assertEqual(upgraded_prof["schema_version"], 4)
             self.assertEqual(upgraded_prof["docs_format_version"], 1)
             self.assertEqual(upgraded_prof["custom_owner_note"], "preserve-me-losslessly")
 
@@ -2122,7 +2133,7 @@ class TestSymbolicTelegraphicStyle(unittest.TestCase):
             (docs_dir / "SAVED_IDEAS.md").write_text(pop_ideas, encoding="utf-8")
             (docs_dir / "EXTRA_REQUESTS.md").write_text(empty_extra, encoding="utf-8")
 
-            # 1. SessionStart upgrades profile v2->v3 & empty EXTRA_REQUESTS.md, preserves populated docs byte-for-byte
+            # 1. SessionStart upgrades profile v2->v4 & empty EXTRA_REQUESTS.md, preserves populated docs byte-for-byte
             rc, err, ss = run_hook("planner_session_start.py", {
                 "workspacePaths": [str(repo)],
                 "artifactDirectoryPath": art,
@@ -2135,7 +2146,7 @@ class TestSymbolicTelegraphicStyle(unittest.TestCase):
             self.assertNotIn("EXTRA_REQUESTS.md", ss_msg.split("DOCS_AUTO_MIGRATE", 1)[1].split("ACT:", 1)[0])
 
             prof_after_ss = json.loads(prof_file.read_text(encoding="utf-8"))
-            self.assertEqual(prof_after_ss["schema_version"], 3)
+            self.assertEqual(prof_after_ss["schema_version"], 4)
             self.assertEqual(prof_after_ss.get("docs_format_version", 0), 0)
             self.assertEqual((docs_dir / "PROJECT_HISTORY.md").read_text(encoding="utf-8"), pop_hist)
             self.assertEqual((docs_dir / "SAVED_IDEAS.md").read_text(encoding="utf-8"), pop_ideas)
@@ -3544,6 +3555,150 @@ class TestV260UniversalEfficiencyAndSelfEvolution(unittest.TestCase):
             verify_universal.check_memory_weight(repo, {}, warns)
             self.assertTrue(any("PROJECT_HISTORY.md" in w and "KB" in w for w in warns), warns)
             self.assertTrue(any("EXTERNAL_AI_SYNC.md" in w and "KB" in w for w in warns), warns)
+
+    def test_v290_retroactive_upgrade_higher_version_sync_and_code_weight_guard(self) -> None:
+        import self_evolve
+
+        # 1) Retroactive auto_upgrade_workspace stamps v4 + plugin_version and blocks downgrades
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / "package.json").write_text('{"name":"retro"}\n', encoding="utf-8")
+            (repo / ".agents" / "docs").mkdir(parents=True)
+            prof_p = repo / ".agents" / "planner_profile.json"
+            prof_p.write_text(
+                json.dumps({"schema_version": 3, "docs_format_version": 1, "plugin_version": "2.5.1"}),
+                encoding="utf-8",
+            )
+            up = planner_state.auto_upgrade_workspace(repo)
+            self.assertEqual(up["profile_migrated"], (3, 4))
+            self.assertEqual(up["plugin_upgraded"][0], "2.5.1")
+            self.assertEqual(up["plugin_upgraded"][1], planner_state.read_plugin_version())
+            disk = json.loads(prof_p.read_text(encoding="utf-8"))
+            self.assertEqual(disk["schema_version"], 4)
+            self.assertEqual(disk["plugin_version"], planner_state.read_plugin_version())
+
+            # Higher workspace plugin_version must NEVER downgrade
+            disk["plugin_version"] = "9.9.9"
+            prof_p.write_text(json.dumps(disk), encoding="utf-8")
+            up2 = planner_state.auto_upgrade_workspace(repo)
+            self.assertIsNone(up2["plugin_upgraded"])
+            self.assertEqual(up2["plugin_downgrade_blocked"], ("9.9.9", planner_state.read_plugin_version()))
+
+        # 2) Bidirectional higher-version plugin sync (embedded > global -> backup + runtime preserved; global > embedded -> upgrades repo)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            emb = repo / ".agents" / "plugins" / "dynamic-fractal-planner"
+            glob = root / "global_plugin"
+            emb.mkdir(parents=True)
+            glob.mkdir(parents=True)
+
+            (emb / "plugin.json").write_text(json.dumps({"name": "dynamic-fractal-planner", "version": "2.9.0"}), encoding="utf-8")
+            (emb / "marker.txt").write_text("from-2.9.0", encoding="utf-8")
+            (glob / "plugin.json").write_text(json.dumps({"name": "dynamic-fractal-planner", "version": "2.5.1"}), encoding="utf-8")
+            (glob / ".metrics.jsonl").write_text('{"ev":"keep"}\n', encoding="utf-8")
+
+            chk = self_evolve.sync_plugin_versions(repo, global_dir=glob, apply=False)
+            self.assertEqual(chk["direction"], "embedded->global")
+            self.assertFalse(chk["applied"])
+
+            applied = self_evolve.sync_plugin_versions(repo, global_dir=glob, apply=True)
+            self.assertTrue(applied["applied"])
+            self.assertEqual(json.loads((glob / "plugin.json").read_text(encoding="utf-8"))["version"], "2.9.0")
+            self.assertEqual((glob / "marker.txt").read_text(encoding="utf-8"), "from-2.9.0")
+            self.assertEqual((glob / ".metrics.jsonl").read_text(encoding="utf-8"), '{"ev":"keep"}\n')
+            self.assertTrue((glob / ".last_good_backup" / "plugin.json").is_file())
+
+            # Equal versions -> in-sync no-op
+            eq = self_evolve.sync_plugin_versions(repo, global_dir=glob, apply=True)
+            self.assertEqual(eq["direction"], "in-sync")
+            self.assertFalse(eq["applied"])
+
+            # Global newer than embedded -> propagates global->embedded
+            (glob / "plugin.json").write_text(json.dumps({"name": "dynamic-fractal-planner", "version": "3.0.0"}), encoding="utf-8")
+            (glob / "marker.txt").write_text("from-3.0.0", encoding="utf-8")
+            rev = self_evolve.sync_plugin_versions(repo, global_dir=glob, apply=True)
+            self.assertEqual(rev["direction"], "global->embedded")
+            self.assertTrue(rev["applied"])
+            self.assertEqual(json.loads((emb / "plugin.json").read_text(encoding="utf-8"))["version"], "3.0.0")
+            self.assertEqual((emb / "marker.txt").read_text(encoding="utf-8"), "from-3.0.0")
+
+        # 3) code_weight_limits monolith guard + cross-file key_parity_rules.target_path + gitless --all plugin-sync parity
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / "src").mkdir()
+            (repo / "src" / "Huge.cs").write_text("// line\n" * 60, encoding="utf-8")
+            cw_warns: list[str] = []
+            verify_universal.check_code_weight(
+                repo,
+                ["src/Huge.cs"],
+                {"code_weight_limits": {"enabled": True, "warn_lines": 50, "warn_lines_all": 100}},
+                cw_warns,
+                scan_all=False,
+            )
+            self.assertTrue(any("src/Huge.cs: 60L (>50L)" in w for w in cw_warns), cw_warns)
+
+            cw_all_warns: list[str] = []
+            verify_universal.check_code_weight(
+                repo,
+                ["src/Huge.cs"],
+                {"code_weight_limits": {"enabled": True, "warn_lines": 50, "warn_lines_all": 100}},
+                cw_all_warns,
+                scan_all=True,
+            )
+            self.assertEqual(cw_all_warns, [])
+
+            # Cross-file key_parity_rules.target_path
+            (repo / "src" / "Strings.cs").write_text(
+                'static Dictionary<string, string> CreateEnglish() => new() {\n'
+                '    ["Hello"] = "Hello",\n'
+                '    ["MissingKey"] = "Missing",\n'
+                '};\n',
+                encoding="utf-8",
+            )
+            (repo / "src" / "Strings.PtBr.cs").write_text(
+                'static void ApplyPortuguese(Dictionary<string, string> d) {\n'
+                '    d["Hello"] = "Olá";\n'
+                '}\n',
+                encoding="utf-8",
+            )
+            kp_fails: list[str] = []
+            kp_warns: list[str] = []
+            verify_universal.check_key_parity_rules(
+                repo,
+                ["src/Strings.cs"],
+                {
+                    "key_parity_rules": [
+                        {
+                            "path": "src/Strings.cs",
+                            "target_path": "src/Strings.PtBr.cs",
+                            "added_key_regex": r'^\s*\["([^"]+)"\]\s*=',
+                            "target_section_regex": r"static\s+void\s+ApplyPortuguese\b(.*)",
+                            "target_key_template": 'd["{key}"]',
+                            "severity": "fail",
+                        }
+                    ]
+                },
+                kp_fails,
+                kp_warns,
+            )
+            self.assertTrue(any("MissingKey" in f for f in kp_fails), kp_fails)
+            self.assertFalse(any("Hello" in f for f in kp_fails), kp_fails)
+
+            # Gitless --all plugin-sync parity emits 0 false warnings when EXTERNAL_AI_SYNC.md mentions plugin.json version
+            plug = repo / ".agents" / "plugins" / "dynamic-fractal-planner"
+            (plug / ".agents" / "docs").mkdir(parents=True)
+            (plug / "plugin.json").write_text(json.dumps({"version": "2.9.0"}), encoding="utf-8")
+            (plug / ".agents" / "docs" / "EXTERNAL_AI_SYNC.md").write_text("### 2026-11-23 | Plugin v2.9.0\n", encoding="utf-8")
+            ps_warns: list[str] = []
+            verify_universal.check_plugin_sync_parity(
+                repo,
+                [".agents/plugins/dynamic-fractal-planner/plugin.json"],
+                ps_warns,
+                scan_all=True,
+            )
+            self.assertEqual(ps_warns, [])
+
 
 
 def _stamp_plugin_tests_passed() -> None:
