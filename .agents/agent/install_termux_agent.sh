@@ -69,9 +69,30 @@ os.chmod(cfg_path, 0o600)
 print(f"[OmniAgent] Saved secured config -> {cfg_path} (chmod 600)")
 PY
 
-# Create convenient shortcut launcher in ~/.omni_agent/start.sh
+# If running directly inside Termux, auto-enable allow-external-apps=true for OmniAgent Wake Termux
+if [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux/files/home" ]; then
+  TERMUX_PROPS="${HOME}/.termux/termux.properties"
+  if [ -d "${HOME}" ] && [ "${HOME}" = "/data/data/com.termux/files/home" ]; then
+    mkdir -p "${HOME}/.termux"
+    if ! grep -qxF "allow-external-apps=true" "$TERMUX_PROPS" 2>/dev/null; then
+      echo "allow-external-apps=true" >> "$TERMUX_PROPS"
+      echo "[OmniAgent] Enabled allow-external-apps=true in $TERMUX_PROPS"
+      command -v termux-reload-settings >/dev/null 2>&1 && termux-reload-settings || true
+    fi
+  fi
+fi
+
+# Create convenient shortcut launcher in ~/.omni_agent/start.sh (supports --bg cleanly)
 cat > "${CFG_DIR}/start.sh" << EOF
 #!/usr/bin/env bash
+if [ "\${1:-}" = "--bg" ] || [ "\${1:-}" = "--background" ]; then
+  if [ -f "${PID_FILE}" ] && kill -0 "\$(cat "${PID_FILE}")" 2>/dev/null; then
+    exit 0
+  fi
+  nohup python3 -B "${SCRIPT_DIR}/omni_agent_daemon.py" --config "${CFG_FILE}" > "${LOG_FILE}" 2>&1 &
+  echo \$! > "${PID_FILE}"
+  exit 0
+fi
 exec python3 -B "${SCRIPT_DIR}/omni_agent_daemon.py" --config "${CFG_FILE}" "\$@"
 EOF
 chmod +x "${CFG_DIR}/start.sh"

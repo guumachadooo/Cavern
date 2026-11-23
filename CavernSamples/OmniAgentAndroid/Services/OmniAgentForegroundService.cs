@@ -16,6 +16,7 @@ namespace OmniAgentAndroid.Services;
 /// </summary>
 [Service(Exported = false, ForegroundServiceType = Android.Content.PM.ForegroundService.TypeDataSync)]
 public sealed class OmniAgentForegroundService : Service {
+    public const string TermuxRunCommandPermission = "com.termux.permission.RUN_COMMAND";
     const int NotifId = 9188;
     const string ChannelId = "omni_agent_foreground";
     const string ActionStop = "hu.sbence.cavern.omniagent.ACTION_STOP";
@@ -227,8 +228,9 @@ public sealed class OmniAgentForegroundService : Service {
             tools = new {
                 githubDirectPush = store.HasGitHubPat,
                 apkInstaller = true,
-                termuxInstalled = IsPackageInstalled("com.termux"),
-                cavernizeInstalled = IsPackageInstalled("hu.sbence.cavern.cavernize")
+                termuxInstalled = IsPackageInstalled(this, "com.termux"),
+                termuxPermissionGranted = HasTermuxPermission(this),
+                cavernizeInstalled = IsPackageInstalled(this, "hu.sbence.cavern.cavernize")
             },
             capabilities = Capabilities
         };
@@ -277,8 +279,9 @@ public sealed class OmniAgentForegroundService : Service {
                         android = $"{Build.VERSION.Release} (SDK {(int)Build.VERSION.SdkInt})",
                         githubDirectPushReady = store.HasGitHubPat,
                         githubRepo = store.GitHubRepo,
-                        termuxInstalled = IsPackageInstalled("com.termux"),
-                        cavernizeInstalled = IsPackageInstalled("hu.sbence.cavern.cavernize"),
+                        termuxInstalled = IsPackageInstalled(this, "com.termux"),
+                        termuxPermissionGranted = HasTermuxPermission(this),
+                        cavernizeInstalled = IsPackageInstalled(this, "hu.sbence.cavern.cavernize"),
                         commandsHandled,
                         utc = DateTime.UtcNow.ToString("O")
                     };
@@ -330,9 +333,17 @@ public sealed class OmniAgentForegroundService : Service {
                     if (string.IsNullOrEmpty(scriptPath)) {
                         scriptPath = store.TermuxStartScript;
                     }
-                    (bool ok, string detail) = LaunchTermuxCommand(this, scriptPath, ["--bg"]);
-                    OmniSettingsStore.AppendActivity("TERMUX", detail);
-                    return new { ok, cmd, message = detail };
+                    (bool ok, bool needsPermission, bool needsExternalApps, string detail) = LaunchTermuxSmartDaemon(this, scriptPath);
+                    OmniSettingsStore.AppendActivity(ok ? "TERMUX" : "ERR", detail);
+                    return new {
+                        ok,
+                        cmd,
+                        needsPermission,
+                        needsExternalApps,
+                        termuxInstalled = IsPackageInstalled(this, "com.termux"),
+                        permissionGranted = HasTermuxPermission(this),
+                        message = detail
+                    };
                 }
 
                 case "termux_run": {
@@ -399,6 +410,52 @@ public sealed class OmniAgentForegroundService : Service {
         return OmniCrypto.DecryptEnvelope(pairHex, $"blob:{blobId}", envDoc.RootElement);
     }
 
+    public static bool HasTermuxPermission(Context context) {
+        if (context == null) {
+            return false;
+        }
+        return context.CheckSelfPermission(TermuxRunCommandPermission) == Android.Content.PM.Permission.Granted;
+    }
+
+    public static (bool ok, bool needsPermission, bool needsExternalApps, string message) LaunchTermuxSmartDaemon(
+        Context context,
+        string customScriptPath = null) {
+        if (context == null) {
+            return (false, false, false, "Missing Android context.");
+        }
+        if (!IsPackageInstalled(context, "com.termux")) {
+            return (false, false, false, "Termux (com.termux) is not installed on this device.");
+        }
+        if (!HasTermuxPermission(context)) {
+            return (false, true, false, "Termux RUN_COMMAND permission not granted yet. Tap Wake Termux to allow.");
+        }
+
+        string safeCustom = string.IsNullOrWhiteSpace(customScriptPath)
+            ? "/data/data/com.termux/files/home/.omni_agent/start.sh"
+            : customScriptPath.Trim().Replace("'", "");
+
+        // Hybrid auto-detect launcher:
+        // 1) Runs native Termux start.sh if present;
+        // 2) Otherwise boots Debian PRoot daemon (/root/.omni_agent/start.sh) where Antigravity lives;
+        // 3) Runs cleanly in background via nohup so Termux RUN_COMMAND returns promptly.
+        string smartCmd =
+            $"if [ -x '{safeCustom}' ]; then " +
+            $"nohup bash '{safeCustom}' --bg >/dev/null 2>&1 & " +
+            $"elif command -v proot-distro >/dev/null 2>&1; then " +
+            $"nohup proot-distro login debian -- bash -lc 'if [ -x /root/.omni_agent/start.sh ]; then bash /root/.omni_agent/start.sh --bg; elif [ -f /root/.gemini/antigravity/scratch/Cavern/.agents/agent/install_termux_agent.sh ]; then cd /root/.gemini/antigravity/scratch/Cavern && bash .agents/agent/install_termux_agent.sh --bg; fi' >\"$HOME/.omni_agent_wake.log\" 2>&1 & " +
+            $"fi";
+
+        (bool ok, string msg) = LaunchTermuxCommand(context, "/data/data/com.termux/files/usr/bin/bash", ["-lc", smartCmd]);
+        if (ok) {
+            return (true, false, false, "Smart wake sent to Termux / Debian PRoot daemon.");
+        }
+        bool permErr = msg.Contains("RUN_COMMAND", StringComparison.OrdinalIgnoreCase) &&
+            msg.Contains("permission", StringComparison.OrdinalIgnoreCase);
+        bool extErr = msg.Contains("allow-external-apps", StringComparison.OrdinalIgnoreCase) ||
+            msg.Contains("not allowed", StringComparison.OrdinalIgnoreCase);
+        return (false, permErr, !permErr && extErr, msg);
+    }
+
     public static (bool ok, string message) LaunchTermuxCommand(Context context, string executablePath, string[] arguments) {
         try {
             Intent intent = new("com.termux.RUN_COMMAND");
@@ -414,18 +471,48 @@ public sealed class OmniAgentForegroundService : Service {
                 context.StartService(intent);
             }
             return (true, $"Dispatched Termux RUN_COMMAND -> {executablePath}");
+        } catch (Java.Lang.SecurityException secEx) {
+            return (false, $"Termux permission or allow-external-apps blocked: {secEx.Message}");
         } catch (Exception ex) {
-            return (false, $"Termux RUN_COMMAND failed (enable allow-external-apps=true in ~/.termux/termux.properties): {ex.Message}");
+            return (false, $"Termux RUN_COMMAND failed (check allow-external-apps=true in ~/.termux/termux.properties): {ex.Message}");
         }
     }
 
-    bool IsPackageInstalled(string pkg) {
+    public static async Task<(bool ok, int version, long elapsedMs, string detail)> TestRelayHealthAsync(string rawUrl, CancellationToken ct = default) {
+        if (!OmniSettingsStore.TryNormalizeRelayUrl(rawUrl, out string baseUrl)) {
+            return (false, 0, 0, "Invalid https:// Worker URL.");
+        }
+        System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
         try {
+            using HttpResponseMessage resp = await http.GetAsync($"{baseUrl}/health", ct).ConfigureAwait(false);
+            sw.Stop();
+            string body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) {
+                return (false, 0, sw.ElapsedMilliseconds, $"HTTP {(int)resp.StatusCode}");
+            }
+            using JsonDocument doc = JsonDocument.Parse(body);
+            JsonElement root = doc.RootElement;
+            int version = root.TryGetProperty("version", out JsonElement vEl) && vEl.ValueKind == JsonValueKind.Number
+                ? vEl.GetInt32()
+                : 0;
+            bool omni = root.TryGetProperty("supportsOmniAgent", out JsonElement oEl) && oEl.ValueKind == JsonValueKind.True;
+            return (omni && version >= 4, version, sw.ElapsedMilliseconds, omni ? $"Worker v{version} ready ({sw.ElapsedMilliseconds} ms)" : $"Worker v{version} (needs v4)");
+        } catch (Exception ex) {
+            sw.Stop();
+            return (false, 0, sw.ElapsedMilliseconds, ex.Message);
+        }
+    }
+
+    public static bool IsPackageInstalled(Context context, string pkg) {
+        try {
+            if (context?.PackageManager == null) {
+                return false;
+            }
             if (OperatingSystem.IsAndroidVersionAtLeast(33)) {
-                return PackageManager?.GetPackageInfo(pkg, Android.Content.PM.PackageManager.PackageInfoFlags.Of(0L)) != null;
+                return context.PackageManager.GetPackageInfo(pkg, Android.Content.PM.PackageManager.PackageInfoFlags.Of(0L)) != null;
             }
 #pragma warning disable CS0618, CA1422
-            return PackageManager?.GetPackageInfo(pkg, 0) != null;
+            return context.PackageManager.GetPackageInfo(pkg, 0) != null;
 #pragma warning restore CS0618, CA1422
         } catch {
             return false;

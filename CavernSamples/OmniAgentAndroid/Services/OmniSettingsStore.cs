@@ -60,6 +60,12 @@ public sealed class OmniSettingsStore {
         set => prefs.Edit().PutBoolean("service_enabled", value).Apply();
     }
 
+    /// <summary>UI language preference: "auto" (follows device locale), "pt", or "en".</summary>
+    public string UiLanguage {
+        get => prefs.GetString("ui_language", "auto") ?? "auto";
+        set => prefs.Edit().PutString("ui_language", string.IsNullOrWhiteSpace(value) ? "auto" : value.Trim().ToLowerInvariant()).Apply();
+    }
+
     public bool HasPairSecret => !string.IsNullOrEmpty(LoadPairSecretHex());
     public bool HasGitHubPat => !string.IsNullOrEmpty(LoadGitHubPat());
 

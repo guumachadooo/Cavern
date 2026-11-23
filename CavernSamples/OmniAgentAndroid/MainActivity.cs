@@ -4,6 +4,7 @@ using Android.Content.PM;
 using Android.Graphics;
 using Android.Graphics.Drawables;
 using Android.OS;
+using Android.Provider;
 using Android.Text;
 using Android.Util;
 using Android.Views;
@@ -15,14 +16,22 @@ namespace OmniAgentAndroid;
 
 /// <summary>
 /// One UI 9 inspired AMOLED dashboard for OmniAgent Companion (Phase 2).
-/// Zero stock AlertDialog/Spinner, strict BaselineAligned=false anti-clipping, EN + PT-BR auto-locale.
+/// Zero stock AlertDialog/Spinner, strict BaselineAligned=false anti-clipping,
+/// dynamic WindowInsets safe-area padding, runtime Termux RUN_COMMAND permission flow,
+/// and system-following locale with live Auto / PT-BR / EN switcher.
 /// </summary>
 [Activity(
     Label = "OmniAgent",
     MainLauncher = true,
     Exported = true,
-    ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.UiMode)]
+    ConfigurationChanges = ConfigChanges.Orientation | ConfigChanges.ScreenSize | ConfigChanges.UiMode | ConfigChanges.Locale | ConfigChanges.LayoutDirection)]
 public sealed class MainActivity : Activity {
+    const int ReqPostNotifications = 101;
+    const int ReqTermuxRunCommand = 102;
+
+    const string TermuxBootstrapCmd =
+        "mkdir -p ~/.termux && (grep -qxF 'allow-external-apps=true' ~/.termux/termux.properties 2>/dev/null || echo 'allow-external-apps=true' >> ~/.termux/termux.properties) && (termux-reload-settings 2>/dev/null || true) && proot-distro login debian -- bash -lc 'cd /root/.gemini/antigravity/scratch/Cavern && (git stash push -u -m \"backup-pre-w41\" || true) && git pull --rebase origin master && bash .agents/agent/install_termux_agent.sh --bg'";
+
     static readonly Color BgDark = Color.ParseColor("#09090B");
     static readonly Color CardBg = Color.ParseColor("#16161B");
     static readonly Color CardElevated = Color.ParseColor("#202028");
@@ -35,10 +44,15 @@ public sealed class MainActivity : Activity {
 
     OmniSettingsStore store;
     bool isPt;
+    bool pendingTermuxWake;
+    int insetTopPx;
+    int insetBottomPx;
 
+    LinearLayout contentLayout;
     TextView statusBadge;
     TextView statusSubtitle;
     Button toggleServiceBtn;
+    Button langBtn;
     Button modeSmartBtn;
     Button modeBioBtn;
     Button modeTrustedBtn;
@@ -50,11 +64,11 @@ public sealed class MainActivity : Activity {
     protected override void OnCreate(Bundle savedInstanceState) {
         base.OnCreate(savedInstanceState);
         store = new OmniSettingsStore(this);
-        isPt = string.Equals(Java.Util.Locale.Default?.Language, "pt", StringComparison.OrdinalIgnoreCase);
+        isPt = ResolveIsPt();
 
         if (OperatingSystem.IsAndroidVersionAtLeast(33)) {
             if (CheckSelfPermission(Android.Manifest.Permission.PostNotifications) != Permission.Granted) {
-                RequestPermissions([Android.Manifest.Permission.PostNotifications], 101);
+                RequestPermissions([Android.Manifest.Permission.PostNotifications], ReqPostNotifications);
             }
         }
 
@@ -70,7 +84,67 @@ public sealed class MainActivity : Activity {
         base.OnDestroy();
     }
 
+    public override void OnRequestPermissionsResult(int requestCode, string[] permissions, Permission[] grantResults) {
+        base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == ReqTermuxRunCommand) {
+            bool granted = grantResults is { Length: > 0 } && grantResults[0] == Permission.Granted;
+            bool shouldRetry = pendingTermuxWake;
+            pendingTermuxWake = false;
+            if (granted) {
+                OmniSettingsStore.AppendActivity("PERM", T("Termux RUN_COMMAND permission granted.", "Permissão Termux RUN_COMMAND concedida."));
+                if (shouldRetry) {
+                    DispatchSmartTermuxWake();
+                }
+            } else {
+                OmniSettingsStore.AppendActivity("ERR", T("Termux RUN_COMMAND permission denied.", "Permissão Termux RUN_COMMAND negada."));
+                ShowTermuxSetupSheet(permissionDenied: true);
+            }
+        }
+    }
+
     void OnServiceOrLogChanged() => RunOnUiThread(RefreshUi);
+
+    bool ResolveIsPt() {
+        string pref = store?.UiLanguage ?? "auto";
+        if (pref == "pt") {
+            return true;
+        }
+        if (pref == "en") {
+            return false;
+        }
+        try {
+            if (OperatingSystem.IsAndroidVersionAtLeast(24)) {
+                LocaleList locales = Resources?.Configuration?.Locales;
+                if (locales != null && locales.Size() > 0) {
+                    string primaryLang = locales.Get(0)?.Language;
+                    if (!string.IsNullOrEmpty(primaryLang)) {
+                        return string.Equals(primaryLang, "pt", StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+            }
+        } catch {
+            // Fall back to JVM default locale below
+        }
+        return string.Equals(Java.Util.Locale.Default?.Language, "pt", StringComparison.OrdinalIgnoreCase);
+    }
+
+    void CycleLanguage() {
+        string next = store.UiLanguage switch {
+            "auto" => "pt",
+            "pt" => "en",
+            _ => "auto"
+        };
+        store.UiLanguage = next;
+        isPt = ResolveIsPt();
+        BuildUi();
+        RefreshUi();
+    }
+
+    string FormatLangBadge() => store.UiLanguage switch {
+        "pt" => "PT-BR",
+        "en" => "EN",
+        _ => isPt ? "Auto · PT" : "Auto · EN"
+    };
 
     string T(string en, string pt) => isPt ? pt : en;
 
@@ -86,6 +160,18 @@ public sealed class MainActivity : Activity {
         return g;
     }
 
+    void ApplySafeAreaPadding() {
+        if (contentLayout != null) {
+            int hPad = Dp(18);
+            int topPad = Math.Max(Dp(20), insetTopPx + Dp(14));
+            int bottomPad = Math.Max(Dp(32), insetBottomPx + Dp(24));
+            contentLayout.SetPadding(hPad, topPad, hPad, bottomPad);
+        }
+        if (modalOverlay != null) {
+            modalOverlay.SetPadding(0, insetTopPx, 0, insetBottomPx);
+        }
+    }
+
     void BuildUi() {
         FrameLayout rootFrame = new(this) {
             LayoutParameters = new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent)
@@ -96,19 +182,27 @@ public sealed class MainActivity : Activity {
             LayoutParameters = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent),
             FillViewport = true
         };
+        scroll.SetClipToPadding(false);
 
-        LinearLayout content = new(this) {
+        contentLayout = new LinearLayout(this) {
             Orientation = Orientation.Vertical,
             LayoutParameters = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent)
         };
-        int pad = Dp(18);
-        content.SetPadding(pad, Dp(46), pad, Dp(32));
 
-        // Header
+        // Header Row (Title + Live Auto/PT-BR/EN Language Switcher)
+        LinearLayout headerRow = MakeRow();
         TextView title = new(this) { Text = "OmniAgent", TextSize = 28 };
         title.SetTextColor(TextPrimary);
         title.SetTypeface(Typeface.DefaultBold, TypefaceStyle.Bold);
-        content.AddView(title);
+        headerRow.AddView(title, MakeWeightedLp(1f, rightMarginDp: 8));
+
+        langBtn = MakeButton(FormatLangBadge(), CardElevated, TextPrimary, false);
+        langBtn.SetPadding(Dp(12), Dp(6), Dp(12), Dp(6));
+        langBtn.SetMinHeight(Dp(34));
+        langBtn.Background = Pill(CardElevated, 18, StrokeColor);
+        langBtn.Click += (_, _) => CycleLanguage();
+        headerRow.AddView(langBtn);
+        contentLayout.AddView(headerRow);
 
         TextView subtitle = new(this) {
             Text = T("Antigravity 2 Full-Agent Companion (Zero-Trust E2E)", "Companheiro Agente Full Antigravity 2 (E2E Zero-Trust)"),
@@ -116,7 +210,7 @@ public sealed class MainActivity : Activity {
         };
         subtitle.SetTextColor(TextSecondary);
         subtitle.SetPadding(0, Dp(2), 0, Dp(16));
-        content.AddView(subtitle);
+        contentLayout.AddView(subtitle);
 
         // 1. Live Status Card
         LinearLayout statusCard = MakeCard();
@@ -138,15 +232,11 @@ public sealed class MainActivity : Activity {
         toggleServiceBtn.Click += (_, _) => ToggleService();
         actionRow.AddView(toggleServiceBtn, MakeWeightedLp(1f, rightMarginDp: 8));
 
-        Button termuxBtn = MakeButton(T("Wake Termux", "Abrir Termux"), CardElevated, TextPrimary, false);
-        termuxBtn.Click += (_, _) => {
-            (bool ok, string msg) = OmniAgentForegroundService.LaunchTermuxCommand(this, store.TermuxStartScript, ["--bg"]);
-            OmniSettingsStore.AppendActivity(ok ? "TERMUX" : "ERR", msg);
-            Toast.MakeText(this, msg, ToastLength.Short)?.Show();
-        };
+        Button termuxBtn = MakeButton(T("Wake Termux", "Acordar Termux"), CardElevated, TextPrimary, false);
+        termuxBtn.Click += (_, _) => TriggerWakeTermux();
         actionRow.AddView(termuxBtn, MakeWeightedLp(1f, leftMarginDp: 0));
         statusCard.AddView(actionRow);
-        content.AddView(statusCard);
+        contentLayout.AddView(statusCard);
 
         // 2. Security Mode Card (never nags with fingerprint in Smart mode!)
         LinearLayout secCard = MakeCard();
@@ -169,9 +259,9 @@ public sealed class MainActivity : Activity {
         modeRow.AddView(modeBioBtn, MakeWeightedLp(1f, rightMarginDp: 6));
         modeRow.AddView(modeTrustedBtn, MakeWeightedLp(1f));
         secCard.AddView(modeRow);
-        content.AddView(secCard);
+        contentLayout.AddView(secCard);
 
-        // 3. Connections Card (Cloudflare Relay + Direct GitHub Push)
+        // 3. Connections Card (Cloudflare Relay + Direct GitHub Push + Termux Setup)
         LinearLayout connCard = MakeCard();
         connCard.AddView(MakeCardTitle(T("Bridge & GitHub Config", "Ponte Cloudflare & GitHub")));
 
@@ -194,9 +284,15 @@ public sealed class MainActivity : Activity {
         cfgGhBtn.Click += (_, _) => ShowGitHubConfigSheet();
         cfgRow.AddView(cfgGhBtn, MakeWeightedLp(1f));
         connCard.AddView(cfgRow);
-        content.AddView(connCard);
 
-        // 4. Live Activity Journal + Kill Switch
+        Button termuxSetupBtn = MakeButton(T("Termux / Debian Setup Guide", "Configurar Termux / Debian"), CardElevated, TextSecondary, false);
+        LinearLayout.LayoutParams setupLp = new(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        setupLp.SetMargins(0, Dp(8), 0, 0);
+        termuxSetupBtn.Click += (_, _) => ShowTermuxSetupSheet(permissionDenied: false);
+        connCard.AddView(termuxSetupBtn, setupLp);
+        contentLayout.AddView(connCard);
+
+        // 4. Live Activity Journal
         LinearLayout logCard = MakeCard();
         LinearLayout logHeader = MakeRow();
         TextView logTitle = MakeCardTitle(T("Live Agent Activity", "Atividade do Agente"));
@@ -212,9 +308,9 @@ public sealed class MainActivity : Activity {
         logViewTv.SetTextColor(TextSecondary);
         logViewTv.SetPadding(0, Dp(10), 0, 0);
         logCard.AddView(logViewTv);
-        content.AddView(logCard);
+        contentLayout.AddView(logCard);
 
-        scroll.AddView(content);
+        scroll.AddView(contentLayout);
         rootFrame.AddView(scroll);
 
         // Custom One UI 9 Modal Overlay (zero stock AlertDialog!)
@@ -228,7 +324,111 @@ public sealed class MainActivity : Activity {
         modalOverlay.Click += (_, _) => HideModal();
         rootFrame.AddView(modalOverlay);
 
+        ApplySafeAreaPadding();
+        rootFrame.SetOnApplyWindowInsetsListener(new SafeAreaInsetsListener((top, bottom) => {
+            insetTopPx = top;
+            insetBottomPx = bottom;
+            ApplySafeAreaPadding();
+        }));
+
         SetContentView(rootFrame);
+        rootFrame.RequestApplyInsets();
+    }
+
+    void TriggerWakeTermux() {
+        if (!OmniAgentForegroundService.IsPackageInstalled(this, "com.termux")) {
+            string msg = T("Termux is not installed.", "O app Termux não está instalado.");
+            OmniSettingsStore.AppendActivity("ERR", msg);
+            Toast.MakeText(this, msg, ToastLength.Short)?.Show();
+            return;
+        }
+        if (!OmniAgentForegroundService.HasTermuxPermission(this)) {
+            pendingTermuxWake = true;
+            OmniSettingsStore.AppendActivity("PERM", T("Requesting Termux RUN_COMMAND permission...", "Solicitando permissão Termux RUN_COMMAND..."));
+            RequestPermissions([OmniAgentForegroundService.TermuxRunCommandPermission], ReqTermuxRunCommand);
+            return;
+        }
+        DispatchSmartTermuxWake();
+    }
+
+    void DispatchSmartTermuxWake() {
+        (bool ok, bool needsPermission, bool needsExternalApps, string msg) =
+            OmniAgentForegroundService.LaunchTermuxSmartDaemon(this, store.TermuxStartScript);
+        OmniSettingsStore.AppendActivity(ok ? "TERMUX" : "ERR", msg);
+        Toast.MakeText(this, ok ? T("Wake sent to Termux / Debian!", "Comando enviado ao Termux / Debian!") : msg, ToastLength.Short)?.Show();
+        if (!ok && (needsPermission || needsExternalApps)) {
+            ShowTermuxSetupSheet(permissionDenied: needsPermission);
+        }
+    }
+
+    void ShowTermuxSetupSheet(bool permissionDenied) {
+        LinearLayout sheet = CreateSheet(T("Termux & Debian One-Time Setup", "Configuração Única do Termux & Debian"));
+
+        TextView desc = new(this) {
+            Text = permissionDenied
+                ? T(
+                    "Android blocked the Termux RUN_COMMAND permission. Tap App Permissions below to enable 'Run commands in Termux environment', then run the setup command once in Termux.",
+                    "O Android bloqueou a permissão RUN_COMMAND do Termux. Toque em Permissões abaixo para ativar 'Executar comandos no Termux' e depois cole o comando abaixo uma única vez no Termux.")
+                : T(
+                    "Copy the command below, open Termux, paste it once and press Enter. It enables allow-external-apps=true, updates Cavern inside Debian, and starts the background agent.",
+                    "Copie o comando abaixo, abra o Termux, cole uma única vez e aperte Enter. Ele ativa allow-external-apps=true, atualiza o Cavern no Debian e liga o agente em segundo plano."),
+            TextSize = 12
+        };
+        desc.SetTextColor(TextSecondary);
+        desc.SetPadding(0, 0, 0, Dp(10));
+        sheet.AddView(desc);
+
+        TextView cmdBox = new(this) {
+            Text = TermuxBootstrapCmd,
+            TextSize = 11,
+            Background = Pill(CardElevated, 14, StrokeColor)
+        };
+        cmdBox.SetTypeface(Typeface.Monospace, TypefaceStyle.Normal);
+        cmdBox.SetTextColor(TextPrimary);
+        cmdBox.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+        sheet.AddView(cmdBox);
+
+        LinearLayout row1 = MakeRow();
+        row1.SetPadding(0, Dp(12), 0, 0);
+        Button copyBtn = MakeButton(T("Copy Command", "Copiar Comando"), AccentBlue, TextPrimary, true);
+        copyBtn.Click += (_, _) => {
+            Android.Content.ClipboardManager cm = (Android.Content.ClipboardManager)GetSystemService(ClipboardService);
+            if (cm != null) {
+                cm.PrimaryClip = ClipData.NewPlainText("OmniAgent Termux Setup", TermuxBootstrapCmd);
+            }
+            Toast.MakeText(this, T("Command copied!", "Comando copiado!"), ToastLength.Short)?.Show();
+        };
+        row1.AddView(copyBtn, MakeWeightedLp(1f, rightMarginDp: 8));
+
+        Button openTermuxBtn = MakeButton(T("Open Termux", "Abrir Termux"), CardElevated, TextPrimary, false);
+        openTermuxBtn.Click += (_, _) => {
+            Intent launch = PackageManager?.GetLaunchIntentForPackage("com.termux");
+            if (launch != null) {
+                launch.AddFlags(ActivityFlags.NewTask);
+                StartActivity(launch);
+            } else {
+                Toast.MakeText(this, T("Termux not found.", "Termux não encontrado."), ToastLength.Short)?.Show();
+            }
+        };
+        row1.AddView(openTermuxBtn, MakeWeightedLp(1f));
+        sheet.AddView(row1);
+
+        LinearLayout row2 = MakeRow();
+        row2.SetPadding(0, Dp(8), 0, 0);
+        Button permsBtn = MakeButton(T("App Permissions", "Permissões do App"), CardElevated, TextPrimary, false);
+        permsBtn.Click += (_, _) => {
+            Intent intent = new(Settings.ActionApplicationDetailsSettings);
+            intent.SetData(Android.Net.Uri.FromParts("package", PackageName, null));
+            StartActivity(intent);
+        };
+        row2.AddView(permsBtn, MakeWeightedLp(1f, rightMarginDp: 8));
+
+        Button closeBtn = MakeButton(T("Close", "Fechar"), CardElevated, TextSecondary, false);
+        closeBtn.Click += (_, _) => HideModal();
+        row2.AddView(closeBtn, MakeWeightedLp(1f));
+        sheet.AddView(row2);
+
+        PresentSheet(sheet);
     }
 
     Button MakeModeButton(string label, string modeValue) {
@@ -274,6 +474,9 @@ public sealed class MainActivity : Activity {
 
         toggleServiceBtn.Text = running ? T("Stop Agent", "Parar Agente") : T("Start Agent", "Ligar Agente");
         toggleServiceBtn.Background = Pill(running ? AccentRed : AccentBlue, 18);
+        if (langBtn != null) {
+            langBtn.Text = FormatLangBadge();
+        }
 
         string mode = store.SecurityMode;
         StyleModeBtn(modeSmartBtn, mode == "smart");
@@ -281,12 +484,12 @@ public sealed class MainActivity : Activity {
         StyleModeBtn(modeTrustedBtn, mode == "trusted");
 
         string pairDisp = store.HasPairSecret ? OmniCrypto.FormatPairKeyDisplay(store.LoadPairSecretHex()) : T("Not paired", "Sem chave");
-        relaySummaryTv.Text = $"Worker: {(string.IsNullOrEmpty(store.RelayUrl) ? T("Not set", "Não configurado") : store.RelayUrl)}  •  Key: {pairDisp}";
+        relaySummaryTv.Text = $"Worker: {(string.IsNullOrEmpty(store.RelayUrl) ? T("Not set", "Não configurado") : store.RelayUrl)}  •  {T("Key", "Chave")}: {pairDisp}";
         githubSummaryTv.Text = $"GitHub: {store.GitHubRepo} ({store.GitHubBranch})  •  PAT: {(store.HasGitHubPat ? T("Encrypted in Keystore", "Salvo no Keystore") : T("Optional", "Opcional"))}";
 
         List<string> lines = OmniSettingsStore.GetActivitySnapshot();
         logViewTv.Text = lines.Count == 0
-            ? T("No commands yet. Start the agent or wake Termux daemon.", "Nenhum comando ainda. Ligue o agente ou inicie o daemon no Termux.")
+            ? T("No commands yet. Start the agent or wake Termux daemon.", "Nenhum comando ainda. Ligue o agente ou acorde o daemon no Termux.")
             : string.Join("\n", lines.Take(18));
     }
 
@@ -305,11 +508,28 @@ public sealed class MainActivity : Activity {
         sheet.AddView(MakeFieldLabel(T("256-bit Pairing Key (AES-256-GCM Keystore)", "Chave 256-bit (Keystore AES-256-GCM)")));
         sheet.AddView(keyInput);
 
+        TextView healthResultTv = new(this) { Text = "", TextSize = 12, Visibility = ViewStates.Gone };
+        healthResultTv.SetPadding(0, Dp(8), 0, 0);
+        sheet.AddView(healthResultTv);
+
         LinearLayout btnRow = MakeRow();
         btnRow.SetPadding(0, Dp(14), 0, 0);
+        Button testBtn = MakeButton(T("Test", "Testar"), CardElevated, TextPrimary, false);
+        testBtn.Click += async (_, _) => {
+            healthResultTv.Visibility = ViewStates.Visible;
+            healthResultTv.SetTextColor(TextSecondary);
+            healthResultTv.Text = T("Testing Worker /health...", "Testando Worker /health...");
+            (bool ok, _, _, string detail) = await OmniAgentForegroundService.TestRelayHealthAsync(urlInput.Text);
+            RunOnUiThread(() => {
+                healthResultTv.SetTextColor(ok ? AccentGreen : AccentRed);
+                healthResultTv.Text = ok ? $"✓ {detail}" : $"✗ {detail}";
+            });
+        };
+        btnRow.AddView(testBtn, MakeWeightedLp(1f, rightMarginDp: 6));
+
         Button genBtn = MakeButton(T("Generate", "Gerar"), CardElevated, TextPrimary, false);
         genBtn.Click += (_, _) => keyInput.Text = OmniCrypto.GeneratePairSecretHex();
-        btnRow.AddView(genBtn, MakeWeightedLp(1f, rightMarginDp: 8));
+        btnRow.AddView(genBtn, MakeWeightedLp(1f, rightMarginDp: 6));
 
         Button saveBtn = MakeButton(T("Save", "Salvar"), AccentBlue, TextPrimary, true);
         saveBtn.Click += (_, _) => {
@@ -470,5 +690,26 @@ public sealed class MainActivity : Activity {
         b.SetPadding(Dp(14), Dp(11), Dp(14), Dp(11));
         b.SetMinHeight(Dp(42));
         return b;
+    }
+
+    sealed class SafeAreaInsetsListener : Java.Lang.Object, View.IOnApplyWindowInsetsListener {
+        readonly Action<int, int> onInsets;
+
+        public SafeAreaInsetsListener(Action<int, int> onInsets) => this.onInsets = onInsets;
+
+        public WindowInsets OnApplyWindowInsets(View v, WindowInsets insets) {
+            if (insets == null) {
+                return insets;
+            }
+            if (OperatingSystem.IsAndroidVersionAtLeast(30)) {
+                Insets bars = insets.GetInsets(WindowInsets.Type.SystemBars() | WindowInsets.Type.DisplayCutout());
+                onInsets(bars.Top, bars.Bottom);
+            } else {
+#pragma warning disable CS0618, CA1422
+                onInsets(insets.SystemWindowInsetTop, insets.SystemWindowInsetBottom);
+#pragma warning restore CS0618, CA1422
+            }
+            return insets;
+        }
     }
 }
