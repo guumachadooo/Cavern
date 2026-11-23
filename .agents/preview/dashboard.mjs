@@ -3,6 +3,7 @@ import path from 'node:path';
 
 export const ALLOWED_DOCS = {
   handoff: { label: 'Handoff', relPath: '.agents/docs/HANDOFF.md' },
+  master: { label: 'Master Plan W46-W51', relPath: '.agents/docs/MASTER_AUDIT_PLAN_W46_W51.md' },
   agents: { label: 'AGENTS.md (Auto)', relPath: 'AGENTS.md' },
   onboarding: { label: 'Onboarding', relPath: '.agents/docs/EXTERNAL_AI_ONBOARDING.md' },
   sync: { label: 'Sync Ledger', relPath: '.agents/docs/EXTERNAL_AI_SYNC.md' },

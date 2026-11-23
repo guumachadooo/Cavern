@@ -15,6 +15,8 @@ if str(AGENT_DIR) not in sys.path:
 
 import bridge_auth as bauth
 import deploy_worker
+import flight_recorder as fr
+import omni_agent_client as oac
 import omni_agent_daemon as daemon
 import omni_protocol as proto
 
@@ -245,6 +247,116 @@ class OmniAgentProtocolTests(unittest.TestCase):
 
         self.assertEqual(lbc.EXIT_SESSION_EXPIRED, 4)
         self.assertTrue(callable(lbc.main))
+
+    def test_aistudio_attachments_excluded_from_workspace_sync(self) -> None:
+        self.assertFalse(proto.should_include_workspace_path("public/assets/aistudio/cavern_1_lossless.txt"))
+        self.assertFalse(proto.should_include_workspace_path("public/assets/aistudio/sub/img.png"))
+        self.assertTrue(proto.should_include_workspace_path("Cavern/Neural/MvsepAntiArtifactPipeline.cs"))
+
+    def test_cavernize_cmd_payload_uses_args_object_and_tier(self) -> None:
+        p = oac.build_cavernize_cmd_payload("shell_exec", '{"command":"ls -la"}', tier=2, timeout_sec=90)
+        self.assertEqual(p["cmd"], "shell_exec")
+        self.assertEqual(p["args"], {"command": "ls -la"})
+        self.assertEqual(p["tier"], 2)
+        self.assertEqual(p["timeoutSec"], 80)
+        self.assertNotIn("argsJson", p)
+        self.assertNotIn("maxTier", p)
+        with self.assertRaises(ValueError):
+            oac.build_cavernize_cmd_payload("ping", '["not-an-object"]', tier=0)
+
+    def test_flight_recorder_auto_diff_rollback_detection_and_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as ws_tmp, tempfile.TemporaryDirectory() as fr_tmp:
+            ws = Path(ws_tmp)
+            fr_dir = Path(fr_tmp)
+            (ws / "src").mkdir()
+            (ws / "src" / "core.cs").write_text("// baseline v1\n", encoding="utf-8")
+            (ws / "public" / "assets" / "aistudio").mkdir(parents=True)
+            (ws / "public" / "assets" / "aistudio" / "upload.txt").write_text("ignored", encoding="utf-8")
+
+            init_r = fr.init_session(
+                workspace=ws,
+                local_dir=fr_dir,
+                session_id="test_w46",
+                wave="W46",
+                goal="Test anti-rollback",
+                requests=["Keep progress on cancel"],
+                use_remote=False,
+            )
+            self.assertTrue(init_r["ok"])
+            self.assertEqual(init_r["checkpoint"]["seq"], 1)
+
+            # Edit existing file + create a new file
+            (ws / "src" / "core.cs").write_text("// upgraded v2 FP16 pipeline\n", encoding="utf-8")
+            (ws / "src" / "new_stage.cs").write_text("public sealed class NewStage {}\n", encoding="utf-8")
+
+            save_r = fr.save_checkpoint(
+                workspace=ws,
+                local_dir=fr_dir,
+                phase="implementation",
+                summary="Implemented 3-stage pipeline",
+                findings=["batch=2 rejected 0.466x", "FP16 approved 1.396x"],
+                completed=["Baseline captured"],
+                pending=["Run CI parity"],
+                next_step="Run check_android_cs.py",
+                auto_diff=True,
+                use_remote=False,
+            )
+            self.assertTrue(save_r["ok"])
+            self.assertEqual(save_r["checkpoint"]["seq"], 2)
+            self.assertIn("src/core.cs", save_r["checkpoint"]["fileHashes"])
+            self.assertIn("src/new_stage.cs", save_r["checkpoint"]["fileHashes"])
+            self.assertNotIn("public/assets/aistudio/upload.txt", save_r["checkpoint"]["fileHashes"])
+
+            # Simulate AI Studio turn cancellation & workspace rollback!
+            (ws / "src" / "core.cs").write_text("// baseline v1\n", encoding="utf-8")
+            (ws / "src" / "new_stage.cs").unlink()
+
+            rec = fr.recover_session(workspace=ws, local_dir=fr_dir, use_remote=False)
+            self.assertTrue(rec["found"])
+            self.assertTrue(rec["rollback"]["rollbackDetected"])
+            self.assertEqual(len(rec["rollback"]["reverted"]), 1)
+            self.assertEqual(rec["rollback"]["reverted"][0]["path"], "src/core.cs")
+            self.assertEqual(rec["rollback"]["missing"], ["src/new_stage.cs"])
+            self.assertIn("restore", rec["restoreCommand"])
+
+            # Dry-run restore
+            dry = fr.restore_session(workspace=ws, local_dir=fr_dir, dry_run=True, use_remote=False)
+            self.assertTrue(dry["ok"])
+            self.assertEqual(sorted(dry["wouldWrite"]), ["src/core.cs", "src/new_stage.cs"])
+            self.assertFalse((ws / "src" / "new_stage.cs").exists())
+
+            # Real restore
+            rest = fr.restore_session(workspace=ws, local_dir=fr_dir, use_remote=False)
+            self.assertTrue(rest["ok"])
+            self.assertEqual((ws / "src" / "core.cs").read_text(encoding="utf-8"), "// upgraded v2 FP16 pipeline\n")
+            self.assertEqual((ws / "src" / "new_stage.cs").read_text(encoding="utf-8"), "public sealed class NewStage {}\n")
+
+            # After restore, rollbackDetected must be False
+            rec2 = fr.recover_session(workspace=ws, local_dir=fr_dir, use_remote=False)
+            self.assertFalse(rec2["rollback"]["rollbackDetected"])
+
+            # Close session after commit/push
+            cls = fr.close_session(local_dir=fr_dir, commit="deadbeef", note="Committed", use_remote=False)
+            self.assertEqual(cls["checkpoint"]["status"], "closed")
+            rec3 = fr.recover_session(workspace=ws, local_dir=fr_dir, use_remote=False)
+            self.assertFalse(rec3["rollback"]["rollbackDetected"])
+
+    def test_flight_recorder_multitier_recency_and_bundle_codec(self) -> None:
+        cands = {
+            "local": {"sessionId": "s1", "seq": 2, "timestampUnix": 1000.0},
+            "cloud": {"sessionId": "s1", "seq": 4, "timestampUnix": 1020.0},
+            "termux": {"sessionId": "s1", "seq": 3, "timestampUnix": 1010.0},
+        }
+        tier, cp = fr.pick_freshest_checkpoint(cands)
+        self.assertEqual(tier, "cloud")
+        self.assertEqual(cp["seq"], 4)
+
+        bundle = {"format": "omni-delta-v1", "files": [], "deleted": []}
+        _, b64, sha = fr.encode_bundle_gz_b64(bundle)
+        decoded = fr.decode_bundle_gz_b64(b64, expected_sha256=sha)
+        self.assertEqual(decoded, bundle)
+        with self.assertRaises(ValueError):
+            fr.decode_bundle_gz_b64(b64, expected_sha256="0" * 64)
 
 
 if __name__ == "__main__":

@@ -386,8 +386,43 @@ def cmd_pull_workspace(args: argparse.Namespace) -> int:
     return 0
 
 
+def build_cavernize_cmd_payload(
+    name: str,
+    args_raw: str | dict[str, Any] = "{}",
+    tier: int = 2,
+    timeout_sec: int = 120,
+) -> dict[str, Any]:
+    """Build payload matching OmniAgentForegroundService.cs (`cmd`, JSON object `args`, int `tier`)."""
+    if isinstance(args_raw, dict):
+        parsed_args = args_raw
+    else:
+        raw_text = (args_raw or "{}").strip() or "{}"
+        parsed = json.loads(raw_text)
+        if not isinstance(parsed, dict):
+            raise ValueError("cavernize-cmd --args must be a JSON object (e.g. '{\"command\":\"...\"}').")
+        parsed_args = parsed
+    return {
+        "cmd": name,
+        "args": parsed_args,
+        "tier": int(tier),
+        "timeoutSec": min(150, max(15, int(timeout_sec) - 10)),
+    }
+
+
+def _is_channel_online(relay: str, secret: str, channel: str, admin: str = "") -> bool:
+    try:
+        headers = proto.derive_agent_headers(secret, channel="termux", admin_key=admin)
+        st, resp = proto.http_json("GET", f"{relay}/v1/agent/status?all=1", headers, timeout=10)
+        if st == 200 and resp.get("ok"):
+            ch = (resp.get("channels") or {}).get(channel) or {}
+            return bool(ch.get("online"))
+    except Exception:
+        pass
+    return False
+
+
 def cmd_hot_exec(args: argparse.Namespace) -> int:
-    relay, secret, admin = _resolve_auth(args)
+    relay, secret, admin = _resolve_auth(args, allow_knock=True)
     if args.file:
         src = Path(args.file).read_text(encoding="utf-8")
     elif args.code:
@@ -395,8 +430,11 @@ def cmd_hot_exec(args: argparse.Namespace) -> int:
     else:
         raise SystemExit("ERROR: Provide --file or --code for hot-exec.")
 
-    print("Compiling C# hot-probe with local .NET 11 Roslyn...", file=sys.stderr)
-    comp = hpc.compile_hot_probe(src, probe_name=args.name, include_android=not args.no_android_refs)
+    # Default include_android=False to avoid CavernizeAndroid.TypeCheck assembly mismatch at runtime;
+    # hot probes inspect CavernizeAndroid/Mono.Android via reflection unless --with-android-refs is explicit.
+    include_android = bool(getattr(args, "with_android_refs", False)) and not bool(getattr(args, "no_android_refs", False))
+    print(f"Compiling C# hot-probe with local .NET Roslyn (include_android={include_android})...", file=sys.stderr)
+    comp = hpc.compile_hot_probe(src, probe_name=args.name, include_android=include_android)
     if not comp.get("ok"):
         print(json.dumps(comp, indent=2))
         return 1
@@ -416,12 +454,28 @@ def cmd_hot_exec(args: argparse.Namespace) -> int:
         out = {k: v for k, v in hot_args.items() if k != "dllBase64"}
         out["sizeBytes"] = comp["sizeBytes"]
         out["compileElapsedMs"] = comp["elapsedMs"]
+        out["includeAndroid"] = include_android
         print(json.dumps(out, indent=2))
         return 0
 
+    via = getattr(args, "via", "auto")
+    code = (args.code_session or os.environ.get("CAVERN_SESSION_CODE") or "").strip()
+    use_android_ipc = via == "android" or (via == "auto" and not code and _is_channel_online(relay, secret, "android", admin))
+    if use_android_ipc:
+        res = send_agent_command(
+            relay,
+            secret,
+            "cavernize_cmd",
+            build_cavernize_cmd_payload("hot_exec", hot_args, tier=2, timeout_sec=max(90, args.timeout + 30)),
+            channel="android",
+            admin_key=admin,
+            timeout_sec=max(90, args.timeout + 30),
+        )
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0 if res.get("ok") else 1
+
     import live_bridge_client as lbc
 
-    code = (args.code_session or os.environ.get("CAVERN_SESSION_CODE") or "").strip()
     if not code:
         # Wake Cavernize Live Bridge v3 automatically if no active session code passed
         wake_res = lbc.wake_and_get_session(
@@ -557,7 +611,9 @@ def main() -> int:
     p_hot.add_argument("--entry-type", default="")
     p_hot.add_argument("--args-json", default="{}")
     p_hot.add_argument("--code-session", default="", help="Optional existing Live Bridge CAV-... code")
-    p_hot.add_argument("--no-android-refs", action="store_true")
+    p_hot.add_argument("--via", choices=("auto", "android", "bridge"), default="auto", help="Transport: auto prefers online android IPC channel")
+    p_hot.add_argument("--with-android-refs", action="store_true", help="Opt-in Android TypeCheck refs (default False; use reflection on device)")
+    p_hot.add_argument("--no-android-refs", action="store_true", help="Compat flag (already default)")
     p_hot.add_argument("--compile-only", action="store_true")
 
     p_sw = sub.add_parser("swarm", help="Zero-API-cost Multi-Agent Swarm Task Bus (/v1/swarm/*)")
@@ -598,7 +654,22 @@ def main() -> int:
     p_cav.add_argument("--args", default="{}", help="JSON object of arguments")
     p_cav.add_argument("--tier", type=int, default=2, choices=(0, 1, 2))
 
+    p_cp = sub.add_parser("checkpoint", help="Anti-Cancellation 3-tier Session Flight Recorder (forwards to flight_recorder.py)")
+    p_cp.add_argument("fr_args", nargs=argparse.REMAINDER, help="Arguments passed directly to flight_recorder.py (init|save|recover|restore|status|close)")
+
     args = parser.parse_args()
+
+    if args.action == "checkpoint":
+        import flight_recorder as fr
+        forwarded: list[str] = []
+        if args.url:
+            forwarded += ["--url", args.url]
+        if args.pair_secret:
+            forwarded += ["--pair-secret", args.pair_secret]
+        if args.admin_key:
+            forwarded += ["--admin-key", args.admin_key]
+        forwarded += list(args.fr_args or [])
+        return fr.main(forwarded)
 
     if args.action == "connect":
         return cmd_connect(args)
@@ -658,16 +729,12 @@ def main() -> int:
         return 0 if st == 200 and resp.get("ok") else 1
 
     if args.action == "cavernize-cmd":
+        payload = build_cavernize_cmd_payload(args.name, args.args, args.tier, args.timeout)
         res = send_agent_command(
             relay,
             secret,
             "cavernize_cmd",
-            {
-                "cmd": args.name,
-                "argsJson": args.args,
-                "maxTier": args.tier,
-                "timeoutSec": min(150, max(15, args.timeout - 10)),
-            },
+            payload,
             channel="android",
             admin_key=admin,
             timeout_sec=max(60, args.timeout),

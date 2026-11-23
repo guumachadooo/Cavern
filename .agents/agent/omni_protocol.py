@@ -41,6 +41,9 @@ SKIP_SYNC_DIRS = {
     "NativeLibs",
     ".aistudio",
 }
+SKIP_SYNC_PREFIXES = (
+    "public/assets/aistudio/",
+)
 SKIP_SYNC_FILES = {
     ".metrics.jsonl",
     ".model_modes.json",
@@ -428,6 +431,9 @@ def should_include_workspace_path(rel_posix: str) -> bool:
     rel = rel_posix.replace("\\", "/").lstrip("/")
     if not rel:
         return False
+    for prefix in SKIP_SYNC_PREFIXES:
+        if rel.startswith(prefix) or rel == prefix.rstrip("/"):
+            return False
     parts = rel.split("/")
     for p in parts[:-1]:
         if p in SKIP_SYNC_DIRS:
