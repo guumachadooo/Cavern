@@ -1257,8 +1257,9 @@ class TestCavernV1V2V3Parity(unittest.TestCase):
             "run: dotnet publish -p:ApplicationDisplayVersion=2.8.${{ github.run_number }}\n",
             encoding="utf-8",
         )
+        expected_sdk = "35" if any("35" in (g.get("must_contain_regex") or "") for g in (profile_data.get("file_guards") or [])) else "28"
         (repo / "CavernSamples" / "CavernizeAndroid" / "Properties" / "AndroidManifest.xml").write_text(
-            '<manifest><uses-sdk android:targetSdkVersion="28" /></manifest>\n',
+            f'<manifest><uses-sdk android:targetSdkVersion="{expected_sdk}" /></manifest>\n',
             encoding="utf-8",
         )
         (repo / "CavernSamples" / "CavernizeAndroid" / "Language" / "AndroidStrings.cs").write_text(
@@ -1322,11 +1323,12 @@ class TestCavernV1V2V3Parity(unittest.TestCase):
                 self.assertEqual(fg_gate.get("decision"), "deny", label)
                 self.assertIn("PLAN GATE", fg_gate.get("reason", ""))
 
-            # 5. File guard: targetSdkVersion="28"
+            # 5. File guard: targetSdkVersion mismatch
+            expected_sdk = "35" if any("35" in (g.get("must_contain_regex") or "") for g in (profile_data.get("file_guards") or [])) else "28"
             manifest = str(repo / "CavernSamples" / "CavernizeAndroid" / "Properties" / "AndroidManifest.xml")
             _, _, fg_bad = run_hook("planner_guard_files.py", {
                 "workspacePaths": [str(repo)], "artifactDirectoryPath": art,
-                "toolCall": {"name": "edit_file", "args": {"Path": manifest, "Target": 'android:targetSdkVersion="28"', "Replacement": 'android:targetSdkVersion="34"'}},
+                "toolCall": {"name": "edit_file", "args": {"Path": manifest, "Target": f'android:targetSdkVersion="{expected_sdk}"', "Replacement": 'android:targetSdkVersion="34"'}},
             })
             self.assertEqual(fg_bad.get("decision"), "force_ask", label)
 

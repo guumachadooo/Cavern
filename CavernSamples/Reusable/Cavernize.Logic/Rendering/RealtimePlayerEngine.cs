@@ -91,6 +91,11 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     bool lastExternalizationBrirState;
     Vector3 lastExternalizationEnvSize;
 
+    // Zero-GC Studio recorded performance take preview state
+    readonly float[] previewVocalScratch = new float[updateRate * framesPerChunk * 2];
+    PerformanceRecordingTake previewPerformanceTake;
+    bool isPreviewingRecordedPerformance;
+
     sealed class StatefulLr4Crossover {
         readonly double a1, a2, lpB0, lpB1, lpB2, hpB0, hpB1, hpB2;
         double lp1x1, lp1x2, lp1y1, lp1y2;
@@ -141,28 +146,31 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
 
         public NeuralSeparatedTrack Track { get; }
         public int WrittenSamples { get; private set; }
-        readonly List<(StereoStemBuffer Stem, float[] MonoDst, float[] TempMono, StatefulLr4Crossover BassLr4, float[] LfeDst)> monoJobs = [];
-        readonly List<(StereoStemBuffer Stem, float[] HpL, float[] HpR, float[] LpL, float[] LpR, float[] LfeDst, StatefulLr4Crossover Lr4L, StatefulLr4Crossover Lr4R)> stereoLfeJobs = [];
+        readonly float[] sharedLfeDst;
+        readonly List<(StereoStemBuffer Stem, float[] MonoDst, float[] TempMono, float[] TempLp, StatefulLr4Crossover BassLr4, float LfeWeight)> monoJobs = [];
+        readonly List<(StereoStemBuffer Stem, float[] HpL, float[] HpR, float[] LpL, float[] LpR, StatefulLr4Crossover Lr4L, StatefulLr4Crossover Lr4R, float LfeWeight)> stereoLfeJobs = [];
 
-        public ProgressiveNeuralStemUpdater(NeuralSeparatedTrack track) {
+        public ProgressiveNeuralStemUpdater(NeuralSeparatedTrack track, float[] sharedLfeBuffer = null) {
             Track = track;
+            sharedLfeDst = sharedLfeBuffer;
         }
 
-        public void AddMonoJob(StereoStemBuffer stem, float[] monoDst, StatefulLr4Crossover bassLr4 = null, float[] lfeDst = null) {
+        public void AddMonoJob(StereoStemBuffer stem, float[] monoDst, StatefulLr4Crossover bassLr4 = null, float lfeWeight = 1f) {
             float[] tempMono = bassLr4 != null ? new float[stem.Length] : null;
-            monoJobs.Add((stem, monoDst, tempMono, bassLr4, lfeDst));
+            float[] tempLp = bassLr4 != null ? new float[stem.Length] : null;
+            monoJobs.Add((stem, monoDst, tempMono, tempLp, bassLr4, lfeWeight));
         }
 
-        public void AddStereoLfeJob(StereoStemBuffer stem, float[] hpL, float[] hpR, float[] lfeDst, int sampleRate) {
+        public void AddStereoLfeJob(StereoStemBuffer stem, float[] hpL, float[] hpR, int sampleRate, float lfeWeight = 0.5f) {
             stereoLfeJobs.Add((
                 stem,
                 hpL,
                 hpR,
                 new float[stem.Length],
                 new float[stem.Length],
-                lfeDst,
                 new StatefulLr4Crossover(sampleRate, 120f),
-                new StatefulLr4Crossover(sampleRate, 120f)));
+                new StatefulLr4Crossover(sampleRate, 120f),
+                lfeWeight));
         }
 
         public void AdvanceTo(int targetSamples) {
@@ -171,6 +179,12 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
                 return;
             }
             int start = WrittenSamples;
+            if (sharedLfeDst != null) {
+                int clearEnd = Math.Min(limit, sharedLfeDst.Length);
+                if (clearEnd > start) {
+                    Array.Clear(sharedLfeDst, start, clearEnd - start);
+                }
+            }
 
             for (int j = 0; j < monoJobs.Count; j++) {
                 var job = monoJobs[j];
@@ -179,11 +193,16 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
 
                 float[] srcL = job.Stem.Left;
                 float[] srcR = job.Stem.Right;
-                if (job.BassLr4 != null && job.LfeDst != null && job.TempMono != null) {
+                if (job.BassLr4 != null && sharedLfeDst != null && job.TempMono != null && job.TempLp != null) {
                     for (int n = start; n < end; n++) {
                         job.TempMono[n] = (srcL[n] + srcR[n]) * InvSqrt2;
                     }
-                    job.BassLr4.ProcessRange(job.TempMono, start, end, job.MonoDst, job.LfeDst);
+                    job.BassLr4.ProcessRange(job.TempMono, start, end, job.MonoDst, job.TempLp);
+                    int lfeEnd = Math.Min(end, sharedLfeDst.Length);
+                    float w = job.LfeWeight;
+                    for (int n = start; n < lfeEnd; n++) {
+                        sharedLfeDst[n] += job.TempLp[n] * w;
+                    }
                 } else {
                     for (int n = start; n < end; n++) {
                         job.MonoDst[n] = (srcL[n] + srcR[n]) * InvSqrt2;
@@ -198,8 +217,12 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
 
                 job.Lr4L.ProcessRange(job.Stem.Left, start, end, job.HpL, job.LpL);
                 job.Lr4R.ProcessRange(job.Stem.Right, start, end, job.HpR, job.LpR);
-                for (int n = start; n < end; n++) {
-                    job.LfeDst[n] = (job.LpL[n] + job.LpR[n]) * 0.5f;
+                if (sharedLfeDst != null) {
+                    int lfeEnd = Math.Min(end, sharedLfeDst.Length);
+                    float w = job.LfeWeight;
+                    for (int n = start; n < lfeEnd; n++) {
+                        sharedLfeDst[n] += (job.LpL[n] + job.LpR[n]) * w;
+                    }
                 }
             }
 
@@ -376,7 +399,8 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
             bool nowActive = neuralStemStage.IsKaraokeActivelyAttenuating;
             NeuralSpatialUpmixMode nextMode = neuralStemStage.Config.SpatialUpmixMode;
 
-            if (prevMode != nextMode && currentTrack != null && neuralStemStage.HasPlayableSeparatedStems) {
+            if (prevMode != nextMode && currentTrack != null &&
+                (neuralStemStage.HasPlayableSpatialUpmixStems || isRenderingLiveNeuralSources)) {
                 if (IsPlaying && hasRenderedAudio) {
                     ArmCrossfadeLocked();
                 }
@@ -403,43 +427,85 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     }
 
     /// <summary>
-    /// Binds a pre-separated neural stem bundle (including Lead/Backing vocal references and PCM stem buffers)
-    /// to the active playback scene. When <see cref="NeuralAudioConfig.SpatialUpmixMode"/> is
-    /// <see cref="NeuralSpatialUpmixMode.Stems3DObjects"/> or <see cref="NeuralSpatialUpmixMode.HybridNeuralDirAc"/>,
-    /// attaches live 3D PCM <see cref="Source"/>s directly to <see cref="Listener"/> synced to the current playhead.
+    /// Binds a full-mix separated stem bundle exclusively for AI Spatial Upmix (never overwritten by 2-stem Karaoke).
+    /// When <see cref="NeuralAudioConfig.SpatialUpmixMode"/> is <see cref="NeuralSpatialUpmixMode.Stems3DObjects"/>
+    /// or <see cref="NeuralSpatialUpmixMode.HybridNeuralDirAc"/> on a stereo track, attaches live 3D PCM
+    /// <see cref="Source"/>s directly to <see cref="Listener"/> synced to the current playhead.
     /// </summary>
-    public void BindSeparatedNeuralTrack(NeuralSeparatedTrack separatedTrack) {
+    public void BindSpatialUpmixTrack(NeuralSeparatedTrack separatedTrack) {
         bool rebuilt = false;
         lock (renderLock) {
-            neuralStemStage.BindSeparatedTrack(separatedTrack);
+            neuralStemStage.BindSpatialUpmixTrack(separatedTrack);
             if (!ReferenceEquals(cachedHybridTrack, separatedTrack)) {
                 cachedHybridTrack = null;
                 cachedHybrid714Buses = null;
             }
-
-            if (currentTrack != null && ShouldRenderLiveNeuralSourcesLocked()) {
-                if (IsPlaying && hasRenderedAudio) {
-                    ArmCrossfadeLocked();
-                }
-                ConfigureListener(resetToStart: false);
-                rebuilt = true;
-            } else if (isRenderingLiveNeuralSources && currentTrack != null) {
-                if (IsPlaying && hasRenderedAudio) {
-                    ArmCrossfadeLocked();
-                }
-                ConfigureListener(resetToStart: false);
-                rebuilt = true;
-            } else {
-                SpatialSourceDescriptor[] descriptors = separatedTrack != null
-                    ? neuralStemStage.BuildActiveStemDescriptors(EnvironmentSize, sceneHub.Sources.Count)
-                    : Array.Empty<SpatialSourceDescriptor>();
-                sceneHub.RegisterNeuralStemDescriptors(descriptors);
-            }
+            rebuilt = RefreshLiveNeuralPlaybackLocked();
             sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
         }
         if (rebuilt) {
             SourcesRebuilt?.Invoke();
         }
+    }
+
+    /// <summary>
+    /// Binds a vocal/backing separated stem bundle exclusively for Spatial Karaoke without clobbering
+    /// active AI Spatial Upmix stems or rebuilding the live spatial upmix scene.
+    /// </summary>
+    public void BindKaraokeReferenceTrack(NeuralSeparatedTrack separatedTrack) {
+        lock (renderLock) {
+            neuralStemStage.BindKaraokeReferenceTrack(separatedTrack);
+            sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+        }
+    }
+
+    /// <summary>
+    /// Role-aware neural stem binding: full-mix stem bundles route to <see cref="BindSpatialUpmixTrack"/>,
+    /// vocal-only 2-stem bundles route exclusively to <see cref="BindKaraokeReferenceTrack"/> without overwriting
+    /// spatial upmix stems, and <c>null</c> clears both slots cleanly.
+    /// </summary>
+    public void BindSeparatedNeuralTrack(NeuralSeparatedTrack separatedTrack) {
+        if (separatedTrack == null) {
+            bool rebuilt = false;
+            lock (renderLock) {
+                neuralStemStage.ClearAllSeparatedTracks();
+                cachedHybridTrack = null;
+                cachedHybrid714Buses = null;
+                rebuilt = RefreshLiveNeuralPlaybackLocked();
+                sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+            }
+            if (rebuilt) {
+                SourcesRebuilt?.Invoke();
+            }
+            return;
+        }
+        if (NeuralStemSpatializer.IsFullMixSpatialStemSet(separatedTrack.Stems)) {
+            BindSpatialUpmixTrack(separatedTrack);
+        } else {
+            BindKaraokeReferenceTrack(separatedTrack);
+        }
+    }
+
+    bool RefreshLiveNeuralPlaybackLocked() {
+        if (currentTrack != null && ShouldRenderLiveNeuralSourcesLocked()) {
+            if (IsPlaying && hasRenderedAudio) {
+                ArmCrossfadeLocked();
+            }
+            ConfigureListener(resetToStart: false);
+            return true;
+        }
+        if (isRenderingLiveNeuralSources && currentTrack != null) {
+            if (IsPlaying && hasRenderedAudio) {
+                ArmCrossfadeLocked();
+            }
+            ConfigureListener(resetToStart: false);
+            return true;
+        }
+        SpatialSourceDescriptor[] descriptors = neuralStemStage.ActiveSpatialUpmixTrack != null
+            ? neuralStemStage.BuildActiveStemDescriptors(EnvironmentSize, sceneHub.Sources.Count)
+            : Array.Empty<SpatialSourceDescriptor>();
+        sceneHub.RegisterNeuralStemDescriptors(descriptors);
+        return false;
     }
 
     /// <summary>
@@ -805,6 +871,37 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     public double CurrentSeconds => currentTrack != null && currentTrack.SampleRate > 0
         ? currentTrackSample / (double)currentTrack.SampleRate
         : 0;
+
+    /// <summary>Current track sample position (in native track sample rate units).</summary>
+    public long CurrentTrackSample {
+        get {
+            lock (renderLock) {
+                return currentTrackSample;
+            }
+        }
+    }
+
+    /// <summary>True when Studio recorded vocal performance take preview is actively mixed into playback.</summary>
+    public bool IsPreviewingRecordedPerformance {
+        get {
+            lock (renderLock) {
+                return isPreviewingRecordedPerformance && previewPerformanceTake != null && previewPerformanceTake.HasAudio;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Arms or disarms sample-locked live preview of a Studio recorded vocal take through the W11 Vocal Chain.
+    /// </summary>
+    public void SetPerformancePreviewTake(PerformanceRecordingTake take, bool enabled) {
+        lock (renderLock) {
+            previewPerformanceTake = enabled && take != null && take.HasAudio ? take : null;
+            isPreviewingRecordedPerformance = previewPerformanceTake != null;
+            if (IsPlaying && hasRenderedAudio) {
+                ArmCrossfadeLocked();
+            }
+        }
+    }
 
     long currentTrackSample;
     double currentTrackSampleExact;

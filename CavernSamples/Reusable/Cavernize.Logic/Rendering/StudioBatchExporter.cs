@@ -12,6 +12,7 @@ using Cavern.Remapping;
 using Cavern.Spatial;
 using Cavern.Virtualizer;
 using Cavern.VocalChain;
+using Cavern.Waveforms;
 
 using Cavernize.Logic.Models;
 using Cavernize.Logic.Spatial;
@@ -38,6 +39,52 @@ public enum StudioExportPreset {
     LiveKaraokePerformanceMixdown = 6,
     /// <summary>FLAC + Atmos Hybrid Lossless Spatial Master (W09 Tier 2 EM-MWF fused 7.1.4 / ADM BWF).</summary>
     FlacAtmosHybridSpatialMaster = 7
+}
+
+/// <summary>
+/// Commercial base output container/format for the W48 dynamic composable Studio export builder.
+/// </summary>
+public enum StudioBaseOutputFormat {
+    /// <summary>3D Headphone Spatial Audio (.wav — personalized HRTF + room virtualizer).</summary>
+    Headphone3D = 0,
+    /// <summary>Cinema Surround 7.1.4 (.wav — 12 discrete channels including LFE .1 and 4 overhead heights).</summary>
+    Cinema714 = 1,
+    /// <summary>Dolby Atmos Master — ADM BWF ITU-R BS.2076 (.wav — preserves dynamic moving 3D objects).</summary>
+    DolbyAtmosAdm = 2,
+    /// <summary>Eclipsa Audio 3D — AOMedia IAMF (.iamf — modern open 3D spatial streaming container).</summary>
+    EclipsaIamf = 3,
+    /// <summary>360° Ambisonics Scene — 3rd-Order HOA (.amb — 16-ch spherical soundfield).</summary>
+    Ambisonics360 = 4
+}
+
+/// <summary>
+/// Modular composable Studio export configuration allowing independent combination of
+/// Base Output Format + AI 3D Upmix/Atmos Enhancement + Karaoke + Recorded Performance + Lossless Restoration.
+/// </summary>
+public sealed class StudioComposableExportOptions {
+    /// <summary>Selected base output format.</summary>
+    public StudioBaseOutputFormat BaseFormat { get; set; } = StudioBaseOutputFormat.Headphone3D;
+
+    /// <summary>Apply AI 3D Spatial Upmix on stereo tracks or Atmos-safe enhancement preserving moving objects on Atmos tracks.</summary>
+    public bool EnableAiSpatialUpmix { get; set; }
+
+    /// <summary>Apply Spatial Karaoke vocal attenuation while keeping backing vocals &amp; LFE intact.</summary>
+    public bool EnableKaraokeInstrumental { get; set; }
+
+    /// <summary>Mix the Studio recorded vocal performance take through the W11 Live Vocal Chain with sidechain pocket.</summary>
+    public bool IncludeRecordedPerformance { get; set; }
+
+    /// <summary>Apply W09 Lossless Twin Restoration (EM-MWF on Atmos or lossless twin stereo feed for neural stems).</summary>
+    public bool EnableLosslessTwinRestoration { get; set; }
+
+    /// <summary>Apply active personalized headphone post-processing stages (AutoEq, HpTF, ISO 226) on Headphone 3D output.</summary>
+    public bool ApplyPersonalizedHeadphonePost { get; set; } = true;
+
+    /// <summary>Track sample offset where the recorded performance take started (0 = beginning of song).</summary>
+    public long RecordedPerformanceStartTrackSample { get; set; }
+
+    /// <summary>Sample rate of the recorded performance take (0 = same as source track).</summary>
+    public int RecordedPerformanceSampleRate { get; set; }
 }
 
 /// <summary>
@@ -97,6 +144,13 @@ public sealed class StudioBatchExportJob {
 
     /// <summary>Ambisonic order for HOA / Scene-Based IAMF export (1..3, default 3 = 16 ch).</summary>
     public int HoaOrder { get; set; } = 3;
+
+    /// <summary>
+    /// Optional W48 modular composable export configuration. When non-null, <see cref="StudioBatchExporter.ExportSingle"/>
+    /// composes the selected base output format with all enabled processing modules (AI Upmix, Karaoke, Recorded Performance,
+    /// Lossless Twin Restoration) instead of forcing a single mutually-exclusive legacy preset.
+    /// </summary>
+    public StudioComposableExportOptions ComposableOptions { get; set; }
 }
 
 /// <summary>
@@ -164,6 +218,15 @@ public static class StudioBatchExporter {
     };
 
     /// <summary>
+    /// Returns the recommended native file extension for a W48 <see cref="StudioBaseOutputFormat"/>.
+    /// </summary>
+    public static string GetDefaultExtension(StudioBaseOutputFormat format) => format switch {
+        StudioBaseOutputFormat.EclipsaIamf => ".iamf",
+        StudioBaseOutputFormat.Ambisonics360 => ".amb",
+        _ => ".wav"
+    };
+
+    /// <summary>
     /// Maps a W12 <see cref="StudioExportPreset"/> to its canonical <see cref="Codec"/> identifier.
     /// </summary>
     public static Codec GetPrimaryCodec(StudioExportPreset preset, bool atmosSubset = true) => preset switch {
@@ -174,7 +237,7 @@ public static class StudioBatchExporter {
     };
 
     /// <summary>
-    /// Executes a single W12 Studio export job against an attached <see cref="CavernizeTrack"/> and <see cref="Listener"/>
+    /// Executes a single W12/W48 Studio export job against an attached <see cref="CavernizeTrack"/> and <see cref="Listener"/>
     /// while isolating and restoring global static <see cref="Listener"/> state in <c>finally</c>.
     /// </summary>
     public static StudioBatchExportResult ExportSingle(
@@ -195,8 +258,13 @@ public static class StudioBatchExporter {
 
         string outPath = job.OutputPath;
         if (string.IsNullOrWhiteSpace(outPath)) {
-            string ext = GetDefaultExtension(job.Preset);
-            outPath = $"{job.TrackName}_{job.Preset}{ext}";
+            string ext = job.ComposableOptions != null
+                ? GetDefaultExtension(job.ComposableOptions.BaseFormat)
+                : GetDefaultExtension(job.Preset);
+            string tag = job.ComposableOptions != null
+                ? job.ComposableOptions.BaseFormat.ToString()
+                : job.Preset.ToString();
+            outPath = $"{job.TrackName}_{tag}{ext}";
         }
         string dir = Path.GetDirectoryName(outPath);
         if (!string.IsNullOrEmpty(dir)) {
@@ -205,6 +273,9 @@ public static class StudioBatchExporter {
 
         using StemExtractor.ListenerStateScope listenerScope = new();
         try {
+            if (job.ComposableOptions != null) {
+                return ExportComposable(track, job, job.ComposableOptions, outPath, onProgress, token);
+            }
             switch (job.Preset) {
                 case StudioExportPreset.EclipsaAudioIamf:
                     return ExportEnvironmental(track, job, Codec.IAMF, outPath, "Eclipsa Audio IAMF v1.0 OBU (3rd-Order HOA / LPCM)", onProgress, token);
@@ -272,7 +343,9 @@ public static class StudioBatchExporter {
         string outPath,
         string formatSummary,
         Action<double> onProgress,
-        CancellationToken token) {
+        CancellationToken token,
+        UpmixingSettings upmixOverride = null,
+        Source extraVocalSource = null) {
         EnsureEnvironmentSize();
         Listener.HeadphoneVirtualizer = false;
         int sampleRate = track.SampleRate > 0 ? track.SampleRate : Listener.DefaultSampleRate;
@@ -283,7 +356,10 @@ public static class StudioBatchExporter {
             MaximumSources = 256,
             Normalizer = 0f
         };
-        track.Attach(listener, new UpmixingSettings(false));
+        track.Attach(listener, upmixOverride ?? new UpmixingSettings(false));
+        if (extraVocalSource != null) {
+            listener.AttachSource(extraVocalSource);
+        }
 
         long totalSamples = Math.Max(updateRate, track.Length);
         int hoaOrder = Math.Clamp(job.HoaOrder, 1, 3);
@@ -494,6 +570,11 @@ public static class StudioBatchExporter {
         };
     }
 
+    static bool IsNativeMultichannelOrAtmos(CavernizeTrack track) =>
+        track != null &&
+        ((track.Renderer != null && (track.Renderer.HasObjects || track.Renderer.Objects.Count > 2)) ||
+         (track.Reader != null && track.Reader.ChannelCount > 2));
+
     static StudioBatchExportResult ExportHybrid714(
         CavernizeTrack track,
         StudioBatchExportJob job,
@@ -503,10 +584,15 @@ public static class StudioBatchExporter {
         string formatSummaryOverride = null) {
         int sampleRate = track.SampleRate > 0 ? track.SampleRate : Listener.DefaultSampleRate;
 
-        // Prefer Slot 7A Neural Orchestrator -> NeuralStemSpatializer.ProcessHybridNeuralDirAc714 + 120 Hz LR4 LFE
+        // W48 Dynamic Atmos Preservation Invariant: NEVER downmix native Dolby Atmos / multichannel tracks to stereo
+        // for AI upmix. Native Atmos moving objects are preserved 100% via AtmosAwareUpmixer below.
+        bool isNativeMulti = IsNativeMultichannelOrAtmos(track);
+
+        // Prefer Slot 7A Neural Orchestrator -> NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe (canonical Layout714 + 120 Hz LR4 LFE)
         NeuralAudioConfig safeNeural = (job.NeuralConfig ?? NeuralAudioConfig.Default).Sanitize();
         NeuralExecutionPlan stemPlan = job.NeuralOrchestrator?.BuildPlan(NeuralPipelineGoal.StemSeparation, safeNeural);
-        if (job.NeuralOrchestrator != null &&
+        if (!isNativeMulti &&
+            job.NeuralOrchestrator != null &&
             job.NeuralRuntime != null &&
             job.NeuralRuntime.GetRuntimeInfo().IsAvailable &&
             stemPlan != null &&
@@ -530,21 +616,7 @@ public static class StudioBatchExporter {
 
             StereoStemBuffer[] stems = separated?.Stems != null ? separated.Stems.ToArray() : Array.Empty<StereoStemBuffer>();
             if (stems.Length > 0 && totalSamples > 0) {
-                float[][] bus714 = NeuralStemSpatializer.ProcessHybridNeuralDirAc714(stems, sampleRate, 0.35f);
-                float[][] full12 = new float[12][];
-                full12[0] = bus714[0];
-                full12[1] = bus714[1];
-                full12[2] = bus714[2];
-                full12[3] = StemExtractor.BuildBassManagedLfe(stems, bus714[0], bus714[1], totalSamples, sampleRate);
-                full12[4] = bus714[3];
-                full12[5] = bus714[4];
-                full12[6] = bus714[5];
-                full12[7] = bus714[6];
-                full12[8] = bus714[7];
-                full12[9] = bus714[8];
-                full12[10] = bus714[9];
-                full12[11] = bus714[10];
-
+                float[][] full12 = NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe(stems, sampleRate, 0.35f, 120f);
                 LoudnessAnalysisSnapshot neuralSnap = WriteMeteredLimitedMultichannelWav(
                     outPath,
                     Layout714,
@@ -558,7 +630,7 @@ public static class StudioBatchExporter {
                 return new StudioBatchExportResult {
                     Preset = job.Preset,
                     OutputPath = outPath,
-                    FormatSummary = formatSummaryOverride ?? $"Hybrid Neural + DirAC 7.1.4 Master ({stemPlan.Summary})",
+                    FormatSummary = formatSummaryOverride ?? $"Cinema 7.1.4 AI Spatial Master ({stemPlan.Summary})",
                     ChannelCount = Layout714.Length,
                     SampleRate = sampleRate,
                     DurationSeconds = totalSamples / (double)Math.Max(1, sampleRate),
@@ -1048,7 +1120,8 @@ public static class StudioBatchExporter {
         out float[] mixLeft,
         out float[] mixRight,
         Action<double> onProgress,
-        CancellationToken token) {
+        CancellationToken token,
+        UpmixingSettings upmixOverride = null) {
         EnsureEnvironmentSize();
         Listener.HeadphoneVirtualizer = false;
         Listener.ReplaceChannels(ChannelPrototype.ToLayout(layout));
@@ -1058,9 +1131,10 @@ public static class StudioBatchExporter {
             UpdateRate = updateRate,
             AudioQuality = QualityModes.Perfect,
             MaximumSources = 256,
+            LFESeparation = true,
             Normalizer = 0f
         };
-        track.Attach(listener, new UpmixingSettings(false));
+        track.Attach(listener, upmixOverride ?? new UpmixingSettings(false));
 
         int chCount = layout.Length;
         long totalLength = track.Length > 0 ? track.Length : sampleRate * 600L;
@@ -1193,6 +1267,650 @@ public static class StudioBatchExporter {
             leadL = fallback.Left;
             leadR = fallback.Right;
         }
+    }
+
+    static StudioBatchExportResult ExportComposable(
+        CavernizeTrack track,
+        StudioBatchExportJob job,
+        StudioComposableExportOptions opts,
+        string outPath,
+        Action<double> onProgress,
+        CancellationToken token) {
+        int sampleRate = track.SampleRate > 0 ? track.SampleRate : Listener.DefaultSampleRate;
+        bool isNativeMulti = IsNativeMultichannelOrAtmos(track);
+        bool hasRecordedVocal = opts.IncludeRecordedPerformance && job.LiveMicMonoCapture != null && job.LiveMicMonoCapture.Length > 0;
+        bool wantsEnvContainer = opts.BaseFormat == StudioBaseOutputFormat.DolbyAtmosAdm ||
+                                 opts.BaseFormat == StudioBaseOutputFormat.EclipsaIamf ||
+                                 opts.BaseFormat == StudioBaseOutputFormat.Ambisonics360;
+
+        // Fast path preserving 100% of dynamic moving Dolby Atmos objects directly into ADM BWF / IAMF / Ambisonics 360
+        // (supports combining with Atmos-safe AI Enhancement AND Recorded Vocal Performance!).
+        if (wantsEnvContainer && isNativeMulti && !opts.EnableKaraokeInstrumental && !opts.EnableLosslessTwinRestoration) {
+            Codec envCodec = opts.BaseFormat switch {
+                StudioBaseOutputFormat.EclipsaIamf => Codec.IAMF,
+                StudioBaseOutputFormat.Ambisonics360 => Codec.AmbisonicsHOA,
+                _ => job.UseDolbyAtmosAdmSubset ? Codec.ADM_BWF_Atmos : Codec.ADM_BWF
+            };
+            UpmixingSettings envUpmix = opts.EnableAiSpatialUpmix
+                ? new UpmixingSettings(true) { AtmosAware = true, ParametricStft = true, Cavernize = true, MatrixUpmixing = true }
+                : new UpmixingSettings(false);
+            Source vocalObj = hasRecordedVocal
+                ? BuildProcessedPerformanceSource(job, opts, sampleRate, Math.Max(updateRate, (int)Math.Min(track.Length, int.MaxValue / 4)))
+                : null;
+            string summary = BuildComposableSummary(opts, isNativeMulti, usedNeuralStems: false, usedEmMwf: false, hasRecordedVocal);
+            return ExportEnvironmental(track, job, envCodec, outPath, summary, onProgress, token, envUpmix, vocalObj);
+        }
+
+        // Pure binaural fast path when no Karaoke, Recorded Performance, AI Neural Upmix, or Lossless Twin override is active
+        if (opts.BaseFormat == StudioBaseOutputFormat.Headphone3D &&
+            !opts.EnableAiSpatialUpmix &&
+            !opts.EnableKaraokeInstrumental &&
+            !hasRecordedVocal &&
+            !opts.EnableLosslessTwinRestoration) {
+            StudioBatchExportJob cleanJob = opts.ApplyPersonalizedHeadphonePost
+                ? job
+                : new StudioBatchExportJob {
+                    TrackName = job.TrackName,
+                    Preset = StudioExportPreset.PersonalizedLosslessBinaural,
+                    OutputPath = outPath,
+                    BitDepth = job.BitDepth,
+                    TruePeakCeilingDbtp = job.TruePeakCeilingDbtp,
+                    PostProcessingStages = null
+                };
+            return ExportPersonalizedBinaural(track, cleanJob, outPath, onProgress, token);
+        }
+
+        // Unified Composable Multichannel Pipeline:
+        // Step 1: Produce canonical spatial channel buses (7.1.4 or native layout) with 100% Atmos object preservation or AI 7.1.4 + discrete LFE
+        ReferenceChannel[] activeLayout;
+        float[][] channels;
+        float[] refStereoL;
+        float[] refStereoR;
+        bool usedNeuralStems = false;
+        bool usedEmMwf = false;
+
+        NeuralAudioConfig safeNeural = (job.NeuralConfig ?? NeuralAudioConfig.Default).Sanitize();
+        NeuralExecutionPlan stemPlan = job.NeuralOrchestrator?.BuildPlan(NeuralPipelineGoal.StemSeparation, safeNeural);
+        bool canRunNeuralStems = job.NeuralOrchestrator != null &&
+                                 job.NeuralRuntime != null &&
+                                 job.NeuralRuntime.GetRuntimeInfo().IsAvailable &&
+                                 stemPlan != null &&
+                                 stemPlan.IsRunnable;
+
+        bool canRunEmMwf = opts.EnableLosslessTwinRestoration &&
+                           isNativeMulti &&
+                           canRunNeuralStems &&
+                           job.LosslessTwinProvider is UniversalLosslessTwinProvider twinForEm &&
+                           twinForEm.HasSyncedLosslessTwin;
+
+        if (canRunEmMwf) {
+            UniversalLosslessTwinProvider syncedTwin = (UniversalLosslessTwinProvider)job.LosslessTwinProvider;
+            float[][] mastered = null;
+            ReferenceChannel[] masteredLayout = null;
+            string tempDir = Path.GetDirectoryName(outPath) ?? ".";
+            string tempUnused = Path.Combine(tempDir, $".cavern_emmwf_tmp_{Guid.NewGuid():N}.wav");
+            try {
+                StemExtractor.ExtractLosslessHybridSpatialMaster(
+                    track,
+                    syncedTwin,
+                    job.NeuralRuntime,
+                    stemModelPath: null,
+                    stemModelEntry: null,
+                    outputDir: tempDir,
+                    bits: job.BitDepth,
+                    neuralConfig: safeNeural,
+                    lgsrConfig: (job.LgsrConfig ?? LgsrConfig.Default).Sanitize(),
+                    tier3RestorerModelPath: null,
+                    tier3RestorerEntry: null,
+                    exportResidualTrack: false,
+                    onProgress: (p, _) => onProgress?.Invoke(p * 0.50),
+                    token: token,
+                    orchestrator: job.NeuralOrchestrator,
+                    onSeparatedTrackReady: job.OnSeparatedTrackReady,
+                    combinedMasterOutputPath: tempUnused,
+                    onMasterChannelsReady: (chs, lay) => {
+                        mastered = chs;
+                        masteredLayout = lay;
+                    });
+            } finally {
+                try { if (File.Exists(tempUnused)) File.Delete(tempUnused); } catch { }
+            }
+            activeLayout = masteredLayout ?? Layout714;
+            channels = mastered ?? Array.Empty<float[]>();
+            BuildStereoFolddown(channels, activeLayout, out refStereoL, out refStereoR);
+            usedEmMwf = true;
+            usedNeuralStems = true;
+        } else if (opts.EnableAiSpatialUpmix && !isNativeMulti && canRunNeuralStems) {
+            // Stereo + AI Spatial Upmix -> canonical 12-channel 7.1.4 with complementary 120 Hz LR4 discrete LFE
+            DecodeStereoInput(track, job, out float[] inL, out float[] inR, out bool fromTwin, p => onProgress?.Invoke(p * 0.15), token);
+            (long fileSize, long mtimeTicks) = GetSourceFileStamp(track.Path);
+            (NeuralSeparatedTrack separated, _, _) = job.NeuralOrchestrator.ExecuteTrackPipeline(
+                track.Path ?? job.TrackName,
+                fileSize,
+                mtimeTicks,
+                inL,
+                inR,
+                sampleRate,
+                NeuralPipelineGoal.StemSeparation,
+                safeNeural,
+                fromTwin,
+                (p, _) => onProgress?.Invoke(0.15 + p * 0.35),
+                token);
+            job.OnSeparatedTrackReady?.Invoke(separated);
+            StereoStemBuffer[] stems = separated?.Stems != null ? separated.Stems.ToArray() : Array.Empty<StereoStemBuffer>();
+            if (stems.Length > 0) {
+                activeLayout = Layout714;
+                channels = NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe(stems, sampleRate, 0.35f, 120f);
+                refStereoL = inL;
+                refStereoR = inR;
+                usedNeuralStems = true;
+            } else {
+                activeLayout = Layout714;
+                DecodeMultichannelLayout(track, Layout714, out channels, out _, out refStereoL, out refStereoR, p => onProgress?.Invoke(0.15 + p * 0.35), token,
+                    new UpmixingSettings(true) { Cavernize = true, MatrixUpmixing = true, ParametricStft = true, AtmosAware = true });
+            }
+        } else if (opts.EnableAiSpatialUpmix || opts.BaseFormat == StudioBaseOutputFormat.Cinema714 || isNativeMulti) {
+            // Native Atmos / multichannel OR DSP 7.1.4 spatial upmix (preserves dynamic moving Atmos objects!)
+            activeLayout = opts.BaseFormat == StudioBaseOutputFormat.Cinema714 || opts.EnableAiSpatialUpmix
+                ? Layout714
+                : ResolveExportChannelLayout(track, TrackSourceItem.BuildFromTrack(track).Count);
+            UpmixingSettings upmix = opts.EnableAiSpatialUpmix
+                ? new UpmixingSettings(true) { Cavernize = true, MatrixUpmixing = true, ParametricStft = true, AtmosAware = true }
+                : new UpmixingSettings(false);
+            DecodeMultichannelLayout(track, activeLayout, out channels, out _, out refStereoL, out refStereoR, p => onProgress?.Invoke(p * 0.45), token, upmix);
+        } else {
+            // Stereo base (e.g. Stereo + Karaoke + Recorded Performance -> Headphone 3D)
+            DecodeStereoInput(track, job, out float[] inL, out float[] inR, out _, p => onProgress?.Invoke(p * 0.45), token);
+            activeLayout = [ReferenceChannel.FrontLeft, ReferenceChannel.FrontRight];
+            channels = [inL, inR];
+            refStereoL = inL;
+            refStereoR = inR;
+        }
+
+        int totalSamples = channels.Length > 0 && channels[0] != null ? channels[0].Length : 0;
+        if (totalSamples <= 0) {
+            return new StudioBatchExportResult {
+                Preset = job.Preset,
+                OutputPath = outPath,
+                Succeeded = false,
+                ErrorMessage = "No audio frames decoded for Studio export."
+            };
+        }
+
+        // Step 2: Optional Spatial Karaoke vocal attenuation (preserves backing vocals & discrete LFE)
+        if (opts.EnableKaraokeInstrumental) {
+            bool[] isLfe = new bool[activeLayout.Length];
+            bool[] isStrictCenter = new bool[activeLayout.Length];
+            for (int c = 0; c < activeLayout.Length; c++) {
+                isLfe[c] = activeLayout[c] == ReferenceChannel.ScreenLFE;
+                isStrictCenter[c] = activeLayout[c] == ReferenceChannel.FrontCenter;
+            }
+            float[] leadRefL = null;
+            float[] leadRefR = null;
+            float[] backingRef = null;
+            NeuralExecutionPlan karaokePlan = job.NeuralOrchestrator?.BuildPlan(NeuralPipelineGoal.SpatialKaraoke, safeNeural);
+            if (job.NeuralOrchestrator != null &&
+                job.NeuralRuntime != null &&
+                job.NeuralRuntime.GetRuntimeInfo().IsAvailable &&
+                karaokePlan != null &&
+                karaokePlan.IsRunnable) {
+                (float[] nL, float[] nR, bool fromTwin) = ResolveNeuralStereoInput(job, refStereoL, refStereoR, totalSamples);
+                (long fileSize, long mtimeTicks) = GetSourceFileStamp(track.Path);
+                (NeuralSeparatedTrack kSep, _, _) = job.NeuralOrchestrator.ExecuteTrackPipeline(
+                    track.Path ?? job.TrackName,
+                    fileSize,
+                    mtimeTicks,
+                    nL,
+                    nR,
+                    sampleRate,
+                    NeuralPipelineGoal.SpatialKaraoke,
+                    safeNeural,
+                    fromTwin,
+                    (p, _) => onProgress?.Invoke(0.50 + p * 0.15),
+                    token);
+                job.OnSeparatedTrackReady?.Invoke(kSep);
+                ResolveStereoLeadVocalRefs(kSep, out leadRefL, out leadRefR);
+                backingRef = job.PreserveBackingVocals ? kSep?.MonoBackingVocalRef : null;
+            }
+            channels = SpatialKaraokeEngine.ProcessOfflineMultichannel(
+                channels,
+                isLfe,
+                leadRefL,
+                backingRef,
+                sampleRate,
+                Math.Clamp(job.KaraokeVocalLevel, 0f, 1f),
+                job.PreserveBackingVocals,
+                neuralLeadVocalRefRight: leadRefR,
+                isStrictCenter: isStrictCenter);
+        }
+
+        // Step 3: Optional Recorded Vocal Performance mixdown through W11 Live Vocal Chain + sidechain pocket
+        if (hasRecordedVocal) {
+            MixRecordedPerformanceIntoMultichannelInPlace(channels, activeLayout, job, opts, sampleRate, token);
+        }
+
+        string formatSummary = BuildComposableSummary(opts, isNativeMulti, usedNeuralStems, usedEmMwf, hasRecordedVocal);
+
+        // Step 4: Render into the chosen commercial Base Output Format
+        if (opts.BaseFormat == StudioBaseOutputFormat.Cinema714) {
+            LoudnessAnalysisSnapshot snap714 = WriteMeteredLimitedMultichannelWav(
+                outPath,
+                activeLayout,
+                channels,
+                sampleRate,
+                job.BitDepth,
+                job.TruePeakCeilingDbtp,
+                p => onProgress?.Invoke(0.70 + p * 0.30),
+                token);
+            return new StudioBatchExportResult {
+                Preset = job.Preset,
+                OutputPath = outPath,
+                FormatSummary = formatSummary,
+                ChannelCount = activeLayout.Length,
+                SampleRate = sampleRate,
+                DurationSeconds = totalSamples / (double)Math.Max(1, sampleRate),
+                IntegratedLufs = ResolveMeasuredLufs(snap714),
+                LoudnessRangeLu = snap714.LoudnessRangeLu,
+                MaxTruePeakDbtp = snap714.MaxTruePeakDbtp,
+                Succeeded = true
+            };
+        }
+
+        if (opts.BaseFormat == StudioBaseOutputFormat.Headphone3D) {
+            return RenderMultichannelToBinauralWav(
+                channels,
+                activeLayout,
+                sampleRate,
+                job,
+                opts.ApplyPersonalizedHeadphonePost,
+                outPath,
+                formatSummary,
+                p => onProgress?.Invoke(0.70 + p * 0.30),
+                token);
+        }
+
+        // ADM BWF / IAMF / Ambisonics 360 from composed spatial buses (each channel placed at its ITU 3D speaker anchor)
+        Codec outCodec = opts.BaseFormat switch {
+            StudioBaseOutputFormat.EclipsaIamf => Codec.IAMF,
+            StudioBaseOutputFormat.Ambisonics360 => Codec.AmbisonicsHOA,
+            _ => job.UseDolbyAtmosAdmSubset ? Codec.ADM_BWF_Atmos : Codec.ADM_BWF
+        };
+        return RenderMultichannelToEnvironmentalContainer(
+            channels,
+            activeLayout,
+            sampleRate,
+            job,
+            outCodec,
+            outPath,
+            formatSummary,
+            p => onProgress?.Invoke(0.70 + p * 0.30),
+            token);
+    }
+
+    static string BuildComposableSummary(
+        StudioComposableExportOptions opts,
+        bool isNativeMulti,
+        bool usedNeuralStems,
+        bool usedEmMwf,
+        bool hasRecordedVocal) {
+        string baseName = opts.BaseFormat switch {
+            StudioBaseOutputFormat.Headphone3D => "3D Headphones",
+            StudioBaseOutputFormat.Cinema714 => "Cinema 7.1.4",
+            StudioBaseOutputFormat.DolbyAtmosAdm => "Dolby Atmos Master",
+            StudioBaseOutputFormat.EclipsaIamf => "Eclipsa Audio 3D",
+            StudioBaseOutputFormat.Ambisonics360 => "360° Ambisonics",
+            _ => "Spatial Master"
+        };
+        List<string> mods = [];
+        if (opts.EnableAiSpatialUpmix) {
+            mods.Add(isNativeMulti ? "Atmos-Safe AI" : (usedNeuralStems ? "AI 3D Upmix" : "3D Spatial Upmix"));
+        }
+        if (opts.EnableLosslessTwinRestoration) {
+            mods.Add(usedEmMwf ? "Lossless EM-MWF" : "Lossless Twin");
+        }
+        if (opts.EnableKaraokeInstrumental) {
+            mods.Add("Karaoke");
+        }
+        if (hasRecordedVocal) {
+            mods.Add("Vocal Take");
+        }
+        return mods.Count > 0 ? $"{baseName} + {string.Join(" + ", mods)}" : baseName;
+    }
+
+    static Source BuildProcessedPerformanceSource(
+        StudioBatchExportJob job,
+        StudioComposableExportOptions opts,
+        int targetSampleRate,
+        int totalSamples) {
+        float[] aligned = AlignAndResamplePerformanceMono(job.LiveMicMonoCapture, opts.RecordedPerformanceSampleRate, targetSampleRate, opts.RecordedPerformanceStartTrackSample, totalSamples);
+        LiveVocalChainDsp vocalDsp = new(targetSampleRate);
+        vocalDsp.Configure(targetSampleRate, job.VocalDnaProfile, new VocalMacroSettings { Enabled = true });
+        float[] stereoBuf = new float[updateRate * 2];
+        for (int pos = 0; pos < totalSamples; pos += updateRate) {
+            int frames = Math.Min(updateRate, totalSamples - pos);
+            for (int s = 0; s < frames; s++) {
+                float v = aligned[pos + s];
+                stereoBuf[s * 2] = v;
+                stereoBuf[s * 2 + 1] = v;
+            }
+            vocalDsp.ProcessStereoBlockZeroGc(stereoBuf, 0, frames, null, 0);
+            for (int s = 0; s < frames; s++) {
+                aligned[pos + s] = 0.5f * (stereoBuf[s * 2] + stereoBuf[s * 2 + 1]);
+            }
+        }
+        EnsureEnvironmentSize();
+        return new Source {
+            Clip = new Clip(new MultichannelWaveform(aligned), targetSampleRate),
+            Position = new Vector3(0f, 0.08f, 1.0f) * Listener.EnvironmentSize,
+            Volume = 1f
+        };
+    }
+
+    static float[] AlignAndResamplePerformanceMono(
+        float[] rawMono,
+        int takeSampleRate,
+        int targetSampleRate,
+        long startTrackSample,
+        int totalSamples) {
+        float[] aligned = new float[Math.Max(0, totalSamples)];
+        if (rawMono == null || rawMono.Length == 0 || totalSamples <= 0) {
+            return aligned;
+        }
+        int srcSr = takeSampleRate >= 8000 ? takeSampleRate : targetSampleRate;
+        double step = srcSr / (double)Math.Max(1, targetSampleRate);
+        int startDst = (int)Math.Clamp(startTrackSample, 0L, totalSamples);
+        int maxSrc = rawMono.Length;
+        for (int dst = startDst; dst < totalSamples; dst++) {
+            double srcPos = (dst - startDst) * step;
+            if (srcPos >= maxSrc) {
+                break;
+            }
+            int idx = (int)srcPos;
+            float frac = (float)(srcPos - idx);
+            float s0 = rawMono[idx];
+            float s1 = idx + 1 < maxSrc ? rawMono[idx + 1] : s0;
+            aligned[dst] = s0 + (s1 - s0) * frac;
+        }
+        return aligned;
+    }
+
+    static void MixRecordedPerformanceIntoMultichannelInPlace(
+        float[][] channels,
+        ReferenceChannel[] layout,
+        StudioBatchExportJob job,
+        StudioComposableExportOptions opts,
+        int sampleRate,
+        CancellationToken token) {
+        if (channels == null || channels.Length == 0 || channels[0] == null) {
+            return;
+        }
+        int totalSamples = channels[0].Length;
+        float[] aligned = AlignAndResamplePerformanceMono(
+            job.LiveMicMonoCapture,
+            opts.RecordedPerformanceSampleRate,
+            sampleRate,
+            opts.RecordedPerformanceStartTrackSample,
+            totalSamples);
+
+        int idxFl = Array.IndexOf(layout, ReferenceChannel.FrontLeft);
+        int idxFr = Array.IndexOf(layout, ReferenceChannel.FrontRight);
+        int idxFc = Array.IndexOf(layout, ReferenceChannel.FrontCenter);
+        if (idxFl < 0) idxFl = 0;
+        if (idxFr < 0) idxFr = Math.Min(1, channels.Length - 1);
+
+        LiveVocalChainDsp vocalDsp = new(sampleRate);
+        vocalDsp.Configure(sampleRate, job.VocalDnaProfile, new VocalMacroSettings { Enabled = true });
+        float[] vocalStereo = new float[updateRate * 2];
+        float[] backingStereo = new float[updateRate * 2];
+
+        for (int pos = 0; pos < totalSamples; pos += updateRate) {
+            token.ThrowIfCancellationRequested();
+            int frames = Math.Min(updateRate, totalSamples - pos);
+            for (int s = 0; s < frames; s++) {
+                float v = aligned[pos + s];
+                vocalStereo[s * 2] = v;
+                vocalStereo[s * 2 + 1] = v;
+                backingStereo[s * 2] = channels[idxFl][pos + s];
+                backingStereo[s * 2 + 1] = channels[idxFr][pos + s];
+            }
+            vocalDsp.ProcessStereoBlockZeroGc(vocalStereo, 0, frames, backingStereo, 0);
+            for (int s = 0; s < frames; s++) {
+                channels[idxFl][pos + s] = backingStereo[s * 2];
+                channels[idxFr][pos + s] = backingStereo[s * 2 + 1];
+                float vL = vocalStereo[s * 2];
+                float vR = vocalStereo[s * 2 + 1];
+                if (idxFc >= 0 && idxFc < channels.Length) {
+                    // Anchor vocal cleanly in Front Center (Mid) + subtle stereo air in FL/FR (Side)
+                    float mid = 0.70710678f * (vL + vR);
+                    float side = 0.5f * (vL - vR);
+                    channels[idxFc][pos + s] += mid;
+                    channels[idxFl][pos + s] += side;
+                    channels[idxFr][pos + s] -= side;
+                } else {
+                    channels[idxFl][pos + s] += vL;
+                    channels[idxFr][pos + s] += vR;
+                }
+            }
+        }
+    }
+
+    static void BuildStereoFolddown(float[][] channels, ReferenceChannel[] layout, out float[] mixL, out float[] mixR) {
+        int len = channels != null && channels.Length > 0 && channels[0] != null ? channels[0].Length : 0;
+        mixL = new float[len];
+        mixR = new float[len];
+        if (len == 0) {
+            return;
+        }
+        int chCount = Math.Min(channels.Length, layout.Length);
+        for (int s = 0; s < len; s++) {
+            float l = 0f, r = 0f;
+            for (int c = 0; c < chCount; c++) {
+                if (layout[c] == ReferenceChannel.ScreenLFE) continue;
+                float v = channels[c][s];
+                ReferenceChannel rc = layout[c];
+                if (rc == ReferenceChannel.FrontCenter || rc == ReferenceChannel.RearCenter) {
+                    l += v * 0.70710678f;
+                    r += v * 0.70710678f;
+                } else if (rc == ReferenceChannel.FrontLeft || rc == ReferenceChannel.SideLeft ||
+                           rc == ReferenceChannel.RearLeft || rc == ReferenceChannel.TopFrontLeft ||
+                           rc == ReferenceChannel.TopRearLeft || rc == ReferenceChannel.TopSideLeft) {
+                    l += v;
+                } else if (rc == ReferenceChannel.FrontRight || rc == ReferenceChannel.SideRight ||
+                           rc == ReferenceChannel.RearRight || rc == ReferenceChannel.TopFrontRight ||
+                           rc == ReferenceChannel.TopRearRight || rc == ReferenceChannel.TopSideRight) {
+                    r += v;
+                } else {
+                    l += v * 0.5f;
+                    r += v * 0.5f;
+                }
+            }
+            mixL[s] = Math.Clamp(l, -1f, 1f);
+            mixR[s] = Math.Clamp(r, -1f, 1f);
+        }
+    }
+
+    static StudioBatchExportResult RenderMultichannelToBinauralWav(
+        float[][] channels,
+        ReferenceChannel[] layout,
+        int sourceSampleRate,
+        StudioBatchExportJob job,
+        bool applyPostStages,
+        string outPath,
+        string formatSummary,
+        Action<double> onProgress,
+        CancellationToken token) {
+        using IDisposable virtScope = VirtualizerFilter.BeginStaticStateScope();
+        EnsureEnvironmentSize();
+        new VirtualizerFilter().SetLayout();
+        Listener.HeadphoneVirtualizer = true;
+        int outSampleRate = VirtualizerFilter.FilterSampleRate;
+        Listener listener = new(false) {
+            SampleRate = outSampleRate,
+            UpdateRate = updateRate,
+            AudioQuality = QualityModes.Perfect,
+            MaximumSources = 256,
+            LFESeparation = true,
+            Normalizer = 0f
+        };
+
+        int chCount = Math.Min(channels.Length, layout.Length);
+        int srcLen = chCount > 0 && channels[0] != null ? channels[0].Length : 0;
+        for (int c = 0; c < chCount; c++) {
+            ReferenceChannel ch = layout[c];
+            Vector3 normPos = ChannelPrototype.AlternativePositions[(int)ch];
+            listener.AttachSource(new Source {
+                Clip = new Clip(new MultichannelWaveform(channels[c]), sourceSampleRate),
+                Position = normPos * Listener.EnvironmentSize,
+                LFE = ch == ReferenceChannel.ScreenLFE,
+                Volume = 1f
+            });
+        }
+
+        int stride = Math.Max(2, Listener.Channels.Length);
+        double rateRatio = outSampleRate / (double)Math.Max(1, sourceSampleRate);
+        long totalSamples = Math.Max(updateRate, (long)Math.Round(Math.Max(updateRate, srcLen) * rateRatio));
+
+        List<IPostProcessingStage> activePostStages = [];
+        if (applyPostStages && job.PostProcessingStages != null) {
+            for (int i = 0; i < job.PostProcessingStages.Count; i++) {
+                IPostProcessingStage stage = job.PostProcessingStages[i];
+                if (stage == null || !stage.IsEnabled) continue;
+                if (string.Equals(stage.StageId, "true-peak-limiter-4x", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(stage.StageId, "true-peak-limiter", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(stage.StageId, "cavern-soft-knee-limiter", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(stage.StageId, "limiter", StringComparison.OrdinalIgnoreCase)) {
+                    continue;
+                }
+                activePostStages.Add(stage.CloneForOfflineExport());
+            }
+            activePostStages.Sort((a, b) => a.Priority.CompareTo(b.Priority));
+            for (int i = 0; i < activePostStages.Count; i++) {
+                activePostStages[i].Configure(outSampleRate, 2);
+                activePostStages[i].Reset();
+            }
+        }
+
+        LoudnessMeter meter = new(outSampleRate, 2);
+        TruePeakLimiter limiter = new(outSampleRate, 2, job.TruePeakCeilingDbtp);
+        float[] binauralStereo = new float[updateRate * 2];
+        SpatialSceneFrame stageContext = new() {
+            SampleRate = outSampleRate,
+            FrameCount = updateRate,
+            Metadata = SpatialProgramMetadata.CreateDefault()
+        };
+
+        long written = 0;
+        try {
+            using RIFFWaveWriter writer = new(outPath, new[] { ReferenceChannel.FrontLeft, ReferenceChannel.FrontRight }, totalSamples, outSampleRate, job.BitDepth);
+            writer.WriteHeader();
+            long totalFrames = (totalSamples + updateRate - 1) / updateRate;
+            for (long f = 0; f < totalFrames; f++) {
+                token.ThrowIfCancellationRequested();
+                float[] rendered = listener.Render(1);
+                int frames = (int)Math.Min(updateRate, totalSamples - written);
+                for (int s = 0; s < frames; s++) {
+                    binauralStereo[s * 2] = rendered[s * stride];
+                    binauralStereo[s * 2 + 1] = rendered[s * stride + 1];
+                }
+                stageContext.FrameCount = frames;
+                for (int i = 0; i < activePostStages.Count; i++) {
+                    activePostStages[i].ProcessInterleaved(binauralStereo, 0, frames, 2, stageContext);
+                }
+                limiter.ProcessInterleaved(binauralStereo, 0, frames, 2);
+                meter.AnalyzeInterleaved(binauralStereo, 0, frames, 2);
+                writer.WriteBlock(binauralStereo, 0, frames * 2);
+                written += frames;
+                if ((f & 15) == 0 || f == totalFrames - 1) {
+                    onProgress?.Invoke(Math.Clamp((f + 1.0) / totalFrames, 0.0, 1.0));
+                }
+            }
+        } finally {
+            for (int i = 0; i < activePostStages.Count; i++) {
+                try { activePostStages[i].Dispose(); } catch { }
+            }
+        }
+
+        LoudnessAnalysisSnapshot snap = meter.Snapshot;
+        return new StudioBatchExportResult {
+            Preset = job.Preset,
+            OutputPath = outPath,
+            FormatSummary = formatSummary,
+            ChannelCount = 2,
+            SampleRate = outSampleRate,
+            DurationSeconds = written / (double)Math.Max(1, outSampleRate),
+            IntegratedLufs = ResolveMeasuredLufs(snap),
+            LoudnessRangeLu = snap.LoudnessRangeLu,
+            MaxTruePeakDbtp = snap.MaxTruePeakDbtp,
+            Succeeded = true
+        };
+    }
+
+    static StudioBatchExportResult RenderMultichannelToEnvironmentalContainer(
+        float[][] channels,
+        ReferenceChannel[] layout,
+        int sampleRate,
+        StudioBatchExportJob job,
+        Codec codec,
+        string outPath,
+        string formatSummary,
+        Action<double> onProgress,
+        CancellationToken token) {
+        EnsureEnvironmentSize();
+        Listener.HeadphoneVirtualizer = false;
+        Listener listener = new(false) {
+            SampleRate = sampleRate,
+            UpdateRate = updateRate,
+            AudioQuality = QualityModes.Perfect,
+            MaximumSources = 256,
+            LFESeparation = true,
+            Normalizer = 0f
+        };
+        int chCount = Math.Min(channels.Length, layout.Length);
+        int totalSamples = chCount > 0 && channels[0] != null ? channels[0].Length : updateRate;
+        for (int c = 0; c < chCount; c++) {
+            ReferenceChannel ch = layout[c];
+            listener.AttachSource(new Source {
+                Clip = new Clip(new MultichannelWaveform(channels[c]), sampleRate),
+                Position = ChannelPrototype.AlternativePositions[(int)ch] * Listener.EnvironmentSize,
+                LFE = ch == ReferenceChannel.ScreenLFE,
+                Volume = 1f
+            });
+        }
+
+        int hoaOrder = Math.Clamp(job.HoaOrder, 1, 3);
+        int outCh = codec == Codec.AmbisonicsHOA || codec == Codec.IAMF
+            ? (hoaOrder + 1) * (hoaOrder + 1)
+            : Math.Max(1, chCount);
+
+        LoudnessAnalysisSnapshot measured = ApplyTruePeakLimiterAndMeasureInPlace(channels, layout, sampleRate, job.TruePeakCeilingDbtp, token);
+
+        using EnvironmentWriter writer = codec switch {
+            Codec.IAMF => new IamfEnvironmentWriter(outPath, listener, totalSamples, job.BitDepth, useSceneBasedHoa: true, hoaOrder: hoaOrder, mixLabel: job.TrackName),
+            Codec.AmbisonicsHOA => new AmbisonicsHoaWriter(outPath, listener, totalSamples, job.BitDepth, hoaOrder),
+            _ => EnvironmentWriter.Create(outPath, codec, listener, totalSamples, job.BitDepth, renderer: null)
+        };
+
+        long totalFrames = (totalSamples + updateRate - 1) / updateRate;
+        for (long f = 0; f < totalFrames; f++) {
+            token.ThrowIfCancellationRequested();
+            writer.WriteNextFrame();
+            if ((f & 15) == 0 || f == totalFrames - 1) {
+                onProgress?.Invoke(Math.Clamp((f + 1.0) / totalFrames, 0.0, 1.0));
+            }
+        }
+
+        return new StudioBatchExportResult {
+            Preset = job.Preset,
+            OutputPath = outPath,
+            FormatSummary = formatSummary,
+            ChannelCount = outCh,
+            SampleRate = sampleRate,
+            DurationSeconds = totalSamples / (double)Math.Max(1, sampleRate),
+            IntegratedLufs = ResolveMeasuredLufs(measured),
+            LoudnessRangeLu = measured.LoudnessRangeLu,
+            MaxTruePeakDbtp = measured.MaxTruePeakDbtp,
+            Succeeded = true
+        };
     }
 
     static void EnsureEnvironmentSize() {

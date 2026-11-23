@@ -50,12 +50,18 @@ public sealed partial class RealtimePlayerEngine {
             crossfadeRemaining = 0;
             lastSourceMaskHash = 0;
 
-            if (neuralStemStage.ActiveSeparatedTrack != null &&
-                !MatchesSeparatedTrack(neuralStemStage.ActiveSeparatedTrack, track)) {
-                neuralStemStage.BindSeparatedTrack(null);
+            if (neuralStemStage.ActiveSpatialUpmixTrack != null &&
+                !MatchesSeparatedTrack(neuralStemStage.ActiveSpatialUpmixTrack, track)) {
+                neuralStemStage.BindSpatialUpmixTrack(null);
                 cachedHybridTrack = null;
                 cachedHybrid714Buses = null;
             }
+            if (neuralStemStage.ActiveKaraokeTrack != null &&
+                !MatchesSeparatedTrack(neuralStemStage.ActiveKaraokeTrack, track)) {
+                neuralStemStage.BindKaraokeReferenceTrack(null);
+            }
+            isPreviewingRecordedPerformance = false;
+            previewPerformanceTake = null;
             lgsrStage.ClearExplicitLosslessStatus();
 
             neuralStemStage.SetSourceTrackSampleRate(track.SampleRate);
@@ -105,11 +111,15 @@ public sealed partial class RealtimePlayerEngine {
             subBlockReadOffset = 0;
             lastSourceMaskHash = 0;
 
-            if (neuralStemStage.ActiveSeparatedTrack != null &&
-                !MatchesSeparatedTrack(neuralStemStage.ActiveSeparatedTrack, track)) {
-                neuralStemStage.BindSeparatedTrack(null);
+            if (neuralStemStage.ActiveSpatialUpmixTrack != null &&
+                !MatchesSeparatedTrack(neuralStemStage.ActiveSpatialUpmixTrack, track)) {
+                neuralStemStage.BindSpatialUpmixTrack(null);
                 cachedHybridTrack = null;
                 cachedHybrid714Buses = null;
+            }
+            if (neuralStemStage.ActiveKaraokeTrack != null &&
+                !MatchesSeparatedTrack(neuralStemStage.ActiveKaraokeTrack, track)) {
+                neuralStemStage.BindKaraokeReferenceTrack(null);
             }
             lgsrStage.ClearExplicitLosslessStatus();
 
@@ -278,7 +288,7 @@ public sealed partial class RealtimePlayerEngine {
                 }
 
                 // Advance incremental progressive 3D neural buffers and guard playhead against seeking past ReadySampleCount
-                NeuralSeparatedTrack activeSep = neuralStemStage.ActiveSeparatedTrack;
+                NeuralSeparatedTrack activeSep = neuralStemStage.ActiveSpatialUpmixTrack;
                 if (isRenderingLiveNeuralSources) {
                     if (progressiveNeuralUpdater != null && ReferenceEquals(progressiveNeuralUpdater.Track, activeSep)) {
                         progressiveNeuralUpdater.AdvanceTo(activeSep.ReadySampleCount);
@@ -369,9 +379,11 @@ public sealed partial class RealtimePlayerEngine {
                     spatialDialogPostStage.ExternalSpeechActivity = float.NaN;
                 }
 
-                // Slot 1 / W10 Sample-Locked Live Microphone + Slot 2D Live Auto-Vocal Mix-Match Chain
-                // Mixed right before Slot 6 4x True-Peak Limiter so live vocal + Karaoke + 1-4 kHz sidechain pocket never clip.
-                if (liveMicBridge.IsActive || liveMicBridge.IsCalibratingLatency) {
+                // Slot 1 / W10 Sample-Locked Live Microphone OR W48 Studio Recorded Take Preview + Slot 2D Vocal Chain
+                // Mixed right before Slot 6 4x True-Peak Limiter so vocal + Karaoke + 1-4 kHz sidechain pocket never clip.
+                if (isPreviewingRecordedPerformance && previewPerformanceTake != null && previewPerformanceTake.HasAudio) {
+                    MixRecordedPerformancePreviewZeroGc(previewPerformanceTake, stereoOutput, outOffset, blockFrames);
+                } else if (liveMicBridge.IsActive || liveMicBridge.IsCalibratingLatency) {
                     liveMicBridge.MixIntoStereoOutputZeroGc(
                         stereoOutput,
                         outOffset,
@@ -527,11 +539,58 @@ public sealed partial class RealtimePlayerEngine {
             (currentTrack.Reader != null && currentTrack.Reader.ChannelCount > 2)) {
             return false;
         }
-        NeuralSeparatedTrack sep = neuralStemStage.ActiveSeparatedTrack;
-        if (sep == null || sep.Stems == null || sep.Stems.Count == 0) {
+        NeuralSeparatedTrack sep = neuralStemStage.ActiveSpatialUpmixTrack;
+        if (sep == null || sep.Stems == null || sep.Stems.Count == 0 ||
+            !NeuralStemSpatializer.IsFullMixSpatialStemSet(sep.Stems)) {
             return false;
         }
         return IsProgressiveWindowAheadOfPlayheadLocked(sep);
+    }
+
+    void MixRecordedPerformancePreviewZeroGc(
+        PerformanceRecordingTake take,
+        float[] stereoOutput,
+        int outOffset,
+        int blockFrames) {
+        if (take == null || take.MonoPcm == null || take.MonoPcm.Length == 0 || blockFrames <= 0) {
+            return;
+        }
+        int takeSr = take.SampleRate > 0 ? take.SampleRate : listener.SampleRate;
+        int trackSr = currentTrack != null && currentTrack.SampleRate > 0 ? currentTrack.SampleRate : listener.SampleRate;
+        double startTakePos = (currentTrackSample - take.StartTrackSample) * (takeSr / (double)trackSr);
+        double step = takeSr / (double)Math.Max(1, listener.SampleRate);
+        int takeLen = take.MonoPcm.Length;
+        if (startTakePos + blockFrames * step <= 0.0 || startTakePos >= takeLen) {
+            return;
+        }
+
+        int count = Math.Min(blockFrames, previewVocalScratch.Length / 2);
+        bool anySample = false;
+        for (int f = 0; f < count; f++) {
+            double pos = startTakePos + f * step;
+            float s = 0f;
+            if (pos >= 0.0 && pos < takeLen - 1) {
+                int idx = (int)pos;
+                float frac = (float)(pos - idx);
+                s = take.MonoPcm[idx] * (1f - frac) + take.MonoPcm[idx + 1] * frac;
+                anySample = true;
+            } else if (pos >= takeLen - 1 && pos < takeLen) {
+                s = take.MonoPcm[takeLen - 1];
+                anySample = true;
+            }
+            previewVocalScratch[f * 2] = s;
+            previewVocalScratch[f * 2 + 1] = s;
+        }
+        if (!anySample) {
+            return;
+        }
+        vocalMixMatchStage.EnsureSampleRate(listener.SampleRate);
+        vocalMixMatchStage.ProcessLiveVocalZeroGc(previewVocalScratch, 0, count, stereoOutput, outOffset);
+        for (int f = 0; f < count; f++) {
+            int dst = outOffset + f * 2;
+            stereoOutput[dst] += previewVocalScratch[f * 2];
+            stereoOutput[dst + 1] += previewVocalScratch[f * 2 + 1];
+        }
     }
 
 }

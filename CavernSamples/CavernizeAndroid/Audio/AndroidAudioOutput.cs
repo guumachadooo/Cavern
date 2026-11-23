@@ -69,6 +69,14 @@ public sealed class AndroidAudioOutput : IDisposable {
     int consecutiveRapidNativeDisconnects;
     volatile bool suppressAAudioDuplexOnce;
 
+    // W48: Zero-GC fallback AudioRecord capture for Studio vocal recording when Path A/B duplex is inactive
+    readonly short[] fallbackMicPcm16 = new short[1024];
+    readonly float[] fallbackMicFloat = new float[1024];
+    AudioRecord fallbackMicRecord;
+    Thread fallbackMicThread;
+    volatile bool fallbackMicRunning;
+    bool fallbackMicOwnsStreamingFlag;
+
     /// <summary>
     /// Enables <see cref="AudioTrackPerformanceMode.LowLatency"/> and 256-frame bursts (~5.3 ms @ 48 kHz).
     /// </summary>
@@ -325,9 +333,119 @@ public sealed class AndroidAudioOutput : IDisposable {
     }
 
     /// <summary>
+    /// Ensures live microphone PCM is actively captured into <see cref="RealtimePlayerEngine.LiveMicBridge"/>
+    /// during Studio vocal performance recording, using Path A/B duplex when active or a zero-GC managed
+    /// <see cref="AudioRecord"/> fallback when running on <see cref="ActiveProAudioBackendKind.LegacyAudioTrack"/>.
+    /// </summary>
+    public bool EnsureStudioRecordingCapture(bool active) {
+        if (!active) {
+            StopFallbackMicCapture();
+            return true;
+        }
+        if (engine.LiveMicBridge.IsActive) {
+            return true;
+        }
+        return StartFallbackMicCapture();
+    }
+
+    bool StartFallbackMicCapture() {
+        lock (lifecycleLock) {
+            if (fallbackMicRunning) {
+                return true;
+            }
+            int sr = activeSampleRate >= 44100 ? activeSampleRate : 48000;
+            if (sr > 48000) {
+                sr = 48000;
+            }
+            try {
+                int minBytes = AudioRecord.GetMinBufferSize(sr, ChannelIn.Mono, AudioEncoding.Pcm16bit);
+                if (minBytes <= 0) {
+                    minBytes = 4096;
+                }
+                int bufBytes = Math.Max(minBytes * 2, fallbackMicPcm16.Length * sizeof(short) * 2);
+                AudioRecord rec = new(AudioSource.Mic, sr, ChannelIn.Mono, AudioEncoding.Pcm16bit, bufBytes);
+                if (rec.State != State.Initialized) {
+                    rec.Release();
+                    rec.Dispose();
+                    return false;
+                }
+                rec.StartRecording();
+                fallbackMicRecord = rec;
+                fallbackMicRunning = true;
+                fallbackMicOwnsStreamingFlag = true;
+                engine.LiveMicBridge.SetStreamingActive(true, sr);
+                fallbackMicThread = new Thread(() => FallbackMicCaptureLoop(rec)) {
+                    Name = "CavernizeStudioMicRec",
+                    IsBackground = true,
+                    Priority = System.Threading.ThreadPriority.AboveNormal
+                };
+                fallbackMicThread.Start();
+                AppLogger.Info($"W48 Studio fallback AudioRecord started @ {sr} Hz mono.");
+                return true;
+            } catch (Exception ex) {
+                AppLogger.Warn($"W48 StartFallbackMicCapture failed: {ex.Message}");
+                StopFallbackMicCaptureLocked();
+                return false;
+            }
+        }
+    }
+
+    void FallbackMicCaptureLoop(AudioRecord rec) {
+        const float InvShort = 1f / 32768f;
+        while (fallbackMicRunning) {
+            try {
+                int read = rec.Read(fallbackMicPcm16, 0, fallbackMicPcm16.Length);
+                if (read > 0) {
+                    for (int i = 0; i < read; i++) {
+                        fallbackMicFloat[i] = fallbackMicPcm16[i] * InvShort;
+                    }
+                    engine.LiveMicBridge.PushCapturedInterleaved(fallbackMicFloat, 0, read, 1);
+                } else if (read < 0) {
+                    Thread.Sleep(8);
+                }
+            } catch {
+                break;
+            }
+        }
+    }
+
+    void StopFallbackMicCapture() {
+        Thread toJoin;
+        lock (lifecycleLock) {
+            fallbackMicRunning = false;
+            toJoin = fallbackMicThread;
+            fallbackMicThread = null;
+            if (fallbackMicRecord != null) {
+                try { fallbackMicRecord.Stop(); } catch { }
+            }
+        }
+        if (toJoin != null && toJoin.IsAlive && toJoin != Thread.CurrentThread) {
+            toJoin.Join(400);
+        }
+        lock (lifecycleLock) {
+            StopFallbackMicCaptureLocked();
+        }
+    }
+
+    void StopFallbackMicCaptureLocked() {
+        fallbackMicRunning = false;
+        if (fallbackMicRecord != null) {
+            try { fallbackMicRecord.Stop(); } catch { }
+            try { fallbackMicRecord.Release(); } catch { }
+            try { fallbackMicRecord.Dispose(); } catch { }
+            fallbackMicRecord = null;
+        }
+        if (fallbackMicOwnsStreamingFlag) {
+            fallbackMicOwnsStreamingFlag = false;
+            engine.LiveMicBridge.SetStreamingActive(false, Math.Max(44100, activeSampleRate));
+        }
+    }
+
+    /// <summary>
     /// Stops and tears down the audio output thread, native Path B/A streams, and <see cref="AudioTrack"/>.
     /// </summary>
     public void Stop() {
+        StopFallbackMicCapture();
         Thread threadToJoin;
         lock (lifecycleLock) {
             running = false;
@@ -545,7 +663,9 @@ public sealed class AndroidAudioOutput : IDisposable {
             activeRequestedSampleRate = sampleRate;
             nativeStallTicks = 0;
             int burst = Math.Clamp((int)cfg.BufferFrames, 64, 256);
-            bool needInput = (cfg.LiveMicEnabled && cfg.MicRouting != LiveMicRoutingMode.Off) || engine.LiveMicBridge.IsCalibratingLatency;
+            bool needInput = (cfg.LiveMicEnabled && cfg.MicRouting != LiveMicRoutingMode.Off) ||
+                             engine.LiveMicBridge.IsCalibratingLatency ||
+                             engine.LiveMicBridge.IsRecordingPerformance;
             lastProAudioStatusNote = string.Empty;
 
             if (engine.HeadphoneVirtualizer && cfg.LockedSampleRateHz > 0 && cfg.LockedSampleRateHz != resolvedRate) {

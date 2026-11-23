@@ -142,6 +142,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     CancellationTokenSource neuralPrepCts;
     int neuralPrepGeneration;
     volatile bool isNeuralPrepRunning;
+    Cavernize.Logic.Spatial.NeuralPipelineGoal? activeNeuralPrepGoal;
     double neuralPrepProgress;
     string neuralPrepStatusText = "";
     int vocalDnaLoadGeneration;

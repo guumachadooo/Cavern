@@ -576,7 +576,59 @@ public sealed class AppSettingsStore {
 
     public int NeuralSpatialUpmixModeIndex {
         get => prefs.GetInt("neuralSpatialUpmixMode", (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.Off);
-        set => Edit().PutInt("neuralSpatialUpmixMode", Math.Clamp(value, 0, 2)).Apply();
+        set {
+            int clamped = Math.Clamp(value, 0, 2);
+            ISharedPreferencesEditor ed = Edit().PutInt("neuralSpatialUpmixMode", clamped);
+            if (clamped != 0) {
+                ed.PutInt("lastActiveNeuralSpatialUpmixMode", clamped);
+            }
+            ed.Apply();
+        }
+    }
+
+    public int LastActiveNeuralSpatialUpmixModeIndex {
+        get {
+            int v = prefs.GetInt("lastActiveNeuralSpatialUpmixMode", (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.HybridNeuralDirAc);
+            return v == (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.Stems3DObjects
+                ? (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.Stems3DObjects
+                : (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.HybridNeuralDirAc;
+        }
+        set => Edit().PutInt("lastActiveNeuralSpatialUpmixMode", value == 1 ? 1 : 2).Apply();
+    }
+
+    public bool PlayTabAtmosAiEnhancementEnabled {
+        get => prefs.GetBoolean("playTabAtmosAiEnhance", false);
+        set => Edit().PutBoolean("playTabAtmosAiEnhance", value).Apply();
+    }
+
+    public int StudioBaseFormatIndex {
+        get => Math.Clamp(prefs.GetInt("studioBaseFormatIndex", 0), 0, 4);
+        set => Edit().PutInt("studioBaseFormatIndex", Math.Clamp(value, 0, 4)).Apply();
+    }
+
+    public bool StudioOptAiUpmix {
+        get => prefs.GetBoolean("studioOptAiUpmix", false);
+        set => Edit().PutBoolean("studioOptAiUpmix", value).Apply();
+    }
+
+    public bool StudioOptKaraoke {
+        get => prefs.GetBoolean("studioOptKaraoke", false);
+        set => Edit().PutBoolean("studioOptKaraoke", value).Apply();
+    }
+
+    public bool StudioOptPerformance {
+        get => prefs.GetBoolean("studioOptPerformance", false);
+        set => Edit().PutBoolean("studioOptPerformance", value).Apply();
+    }
+
+    public bool StudioOptLosslessTwin {
+        get => prefs.GetBoolean("studioOptLosslessTwin", false);
+        set => Edit().PutBoolean("studioOptLosslessTwin", value).Apply();
+    }
+
+    public bool StudioOptPersonalizedHeadphone {
+        get => prefs.GetBoolean("studioOptPersonalizedHeadphone", true);
+        set => Edit().PutBoolean("studioOptPersonalizedHeadphone", value).Apply();
     }
 
     public int NeuralOrchestrationModeIndex {

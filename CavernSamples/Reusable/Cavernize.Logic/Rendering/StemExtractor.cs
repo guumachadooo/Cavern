@@ -782,11 +782,10 @@ public static class StemExtractor {
                 T("StemProgWritingStem", "Writing stem {0}...", stems[i].Name));
         }
 
-        // 4. Optional Hybrid Neural + DirAC 7.1.4 spatial render (with 4th-order Linkwitz-Riley 120 Hz LFE)
+        // 4. Optional Hybrid Neural + DirAC 7.1.4 spatial render (canonical 12-ch Layout714 + complementary 120 Hz LR4 LFE)
         if (exportHybrid714 || safeConfig.SpatialUpmixMode == NeuralSpatialUpmixMode.HybridNeuralDirAc) {
             token.ThrowIfCancellationRequested();
             onProgress?.Invoke(0.93, T("StemProgRenderingHybrid714", "Rendering Hybrid Neural + DirAC 7.1.4..."));
-            float[][] bus714 = NeuralStemSpatializer.ProcessHybridNeuralDirAc714(stems, sampleRate, 0.35f);
             ReferenceChannel[] layout714 = [
                 ReferenceChannel.FrontLeft,
                 ReferenceChannel.FrontRight,
@@ -801,20 +800,7 @@ public static class StemExtractor {
                 ReferenceChannel.TopRearLeft,
                 ReferenceChannel.TopRearRight
             ];
-            float[][] full12 = new float[12][];
-            full12[0] = bus714[0]; // FL
-            full12[1] = bus714[1]; // FR
-            full12[2] = bus714[2]; // FC
-            full12[3] = BuildBassManagedLfe(stems, bus714[0], bus714[1], totalSamples, sampleRate); // Clean 120 Hz LR4 LFE
-            full12[4] = bus714[3]; // RL
-            full12[5] = bus714[4]; // RR
-            full12[6] = bus714[5]; // SL
-            full12[7] = bus714[6]; // SR
-            full12[8] = bus714[7]; // TFL
-            full12[9] = bus714[8]; // TFR
-            full12[10] = bus714[9]; // TRL
-            full12[11] = bus714[10]; // TRR
-
+            float[][] full12 = NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe(stems, sampleRate, 0.35f, 120f);
             string path714 = Path.Combine(outputDir, $"{baseName}_hybrid_neural_7.1.4.wav");
             WriteMultichannelWav(path714, layout714, full12, sampleRate, bits);
             createdFiles.Add(path714);
@@ -1033,8 +1019,8 @@ public static class StemExtractor {
 
     /// <summary>
     /// Derives a pure-physics 4th-order Linkwitz-Riley (24 dB/oct, 120 Hz) band-limited LFE channel for
-    /// Hybrid Neural + DirAC 7.1.4 export from the separated Bass stem (or FL/FR sum if no Bass stem exists),
-    /// scaled by -6 dB (0.5x) to preserve ITU-R BS.775 / Dolby LFE headroom without artificial bass boost.
+    /// Hybrid Neural + DirAC 7.1.4 export from the separated Bass + Drums stems (or FL/FR sum if neither exists),
+    /// preserving ITU-R BS.775 / Dolby discrete sub-bass headroom.
     /// </summary>
     internal static float[] BuildBassManagedLfe(
         StereoStemBuffer[] stems,
@@ -1046,35 +1032,37 @@ public static class StemExtractor {
         if (totalSamples <= 0) {
             return lfe;
         }
-        StereoStemBuffer bassStem = null;
+        bool summedAnyStem = false;
         if (stems != null) {
             for (int i = 0; i < stems.Length; i++) {
-                if (stems[i] != null && NeuralStemSpatializer.ClassifyStemName(stems[i].Name) == NeuralStemRole.Bass) {
-                    bassStem = stems[i];
-                    break;
+                StereoStemBuffer st = stems[i];
+                if (st == null || st.Left == null || st.Right == null) {
+                    continue;
+                }
+                NeuralStemRole role = NeuralStemSpatializer.ClassifyStemName(st.Name);
+                if (role == NeuralStemRole.Bass || role == NeuralStemRole.Drums) {
+                    int copyLen = Math.Min(totalSamples, Math.Min(st.Left.Length, st.Right.Length));
+                    for (int n = 0; n < copyLen; n++) {
+                        lfe[n] += 0.5f * (st.Left[n] + st.Right[n]);
+                    }
+                    summedAnyStem = true;
                 }
             }
         }
 
-        float[] srcL = bassStem?.Left ?? fallbackLeft;
-        float[] srcR = bassStem?.Right ?? fallbackRight;
-        if (srcL == null || srcR == null) {
-            return lfe;
-        }
-
-        int copyLen = Math.Min(totalSamples, Math.Min(srcL.Length, srcR.Length));
-        for (int i = 0; i < copyLen; i++) {
-            lfe[i] = 0.25f * (srcL[i] + srcR[i]); // Mono sum * -6 dB headroom
+        if (!summedAnyStem) {
+            if (fallbackLeft == null || fallbackRight == null) {
+                return lfe;
+            }
+            int copyLen = Math.Min(totalSamples, Math.Min(fallbackLeft.Length, fallbackRight.Length));
+            for (int i = 0; i < copyLen; i++) {
+                lfe[i] = 0.5f * (fallbackLeft[i] + fallbackRight[i]);
+            }
         }
 
         int safeSr = sampleRate >= 8000 ? sampleRate : Listener.DefaultSampleRate;
-        const double lfeCutoffHz = 120.0;
-        const double butterworthQ = 0.7071067811865476;
-        Lowpass stage1 = new(safeSr, lfeCutoffHz, butterworthQ);
-        Lowpass stage2 = new(safeSr, lfeCutoffHz, butterworthQ);
-        stage1.Process(lfe);
-        stage2.Process(lfe);
-        return lfe;
+        NeuralStemSpatializer.SplitLinkwitzRiley4Lfe(lfe, safeSr, 120f, out _, out float[] subBass);
+        return subBass;
     }
 
     static ReferenceChannel[] BuildChannelLayoutForItems(List<TrackSourceItem> items, int count) {

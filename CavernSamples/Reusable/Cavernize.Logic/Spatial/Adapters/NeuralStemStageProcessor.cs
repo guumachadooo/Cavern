@@ -20,7 +20,8 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     readonly object stateLock = new();
     SpatialKaraokeEngine karaokeEngine = new(Listener.DefaultSampleRate, 16);
     NeuralAudioConfig config = NeuralAudioConfig.Default;
-    NeuralSeparatedTrack activeSeparatedTrack;
+    NeuralSeparatedTrack activeSpatialUpmixTrack;
+    NeuralSeparatedTrack activeKaraokeTrack;
     ILosslessReferenceProvider losslessReference;
     SpatialProgramMetadata activeMetadata = SpatialProgramMetadata.CreateDefault();
     int sampleRate = Listener.DefaultSampleRate;
@@ -128,20 +129,50 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     /// <summary>Latest neural or coherence-derived vocal activity probability in [0; 1].</summary>
     public float VocalActivity => karaokeEngine.LatestVocalActivity;
 
-    /// <summary>Active pre-separated neural stem bundle for the current track, or null if none loaded.</summary>
-    public NeuralSeparatedTrack ActiveSeparatedTrack {
+    /// <summary>Active pre-separated full-mix neural stem bundle for AI Spatial Upmix (never overwritten by 2-stem Karaoke).</summary>
+    public NeuralSeparatedTrack ActiveSpatialUpmixTrack {
         get {
             lock (stateLock) {
-                return activeSeparatedTrack;
+                return activeSpatialUpmixTrack;
             }
         }
     }
 
-    /// <summary>True when a separated track with playable PCM stems is bound.</summary>
+    /// <summary>Active pre-separated vocal/backing neural stem bundle dedicated to Spatial Karaoke.</summary>
+    public NeuralSeparatedTrack ActiveKaraokeTrack {
+        get {
+            lock (stateLock) {
+                return activeKaraokeTrack;
+            }
+        }
+    }
+
+    /// <summary>Active pre-separated neural stem bundle (prefers full-mix spatial stems, falls back to karaoke track).</summary>
+    public NeuralSeparatedTrack ActiveSeparatedTrack {
+        get {
+            lock (stateLock) {
+                return activeSpatialUpmixTrack ?? activeKaraokeTrack;
+            }
+        }
+    }
+
+    /// <summary>True when a full-mix separated track with non-vocal accompaniment stems is bound for AI Spatial Upmix.</summary>
+    public bool HasPlayableSpatialUpmixStems {
+        get {
+            lock (stateLock) {
+                return activeSpatialUpmixTrack?.Stems != null &&
+                       activeSpatialUpmixTrack.Stems.Count > 0 &&
+                       NeuralStemSpatializer.IsFullMixSpatialStemSet(activeSpatialUpmixTrack.Stems);
+            }
+        }
+    }
+
+    /// <summary>True when any separated track with playable PCM stems is bound.</summary>
     public bool HasPlayableSeparatedStems {
         get {
             lock (stateLock) {
-                return activeSeparatedTrack?.Stems != null && activeSeparatedTrack.Stems.Count > 0;
+                return (activeSpatialUpmixTrack?.Stems != null && activeSpatialUpmixTrack.Stems.Count > 0) ||
+                       (activeKaraokeTrack?.Stems != null && activeKaraokeTrack.Stems.Count > 0);
             }
         }
     }
@@ -198,12 +229,56 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         }
     }
 
-    /// <summary>Binds a pre-separated neural stem set (including Lead/Backing karaoke references) for the active track.</summary>
-    public void BindSeparatedTrack(NeuralSeparatedTrack separatedTrack) {
+    /// <summary>
+    /// Binds a full-mix separated stem bundle exclusively for AI Spatial Upmix without clobbering any dedicated
+    /// Karaoke vocal/backing track. If no dedicated Karaoke track is bound, its vocal stem also accelerates Karaoke.
+    /// </summary>
+    public void BindSpatialUpmixTrack(NeuralSeparatedTrack separatedTrack) {
         lock (stateLock) {
-            activeSeparatedTrack = separatedTrack;
+            activeSpatialUpmixTrack = separatedTrack;
+            if (activeKaraokeTrack == null) {
+                RebuildAlignedReferencesLocked();
+                karaokeEngine.Reset();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Binds a vocal/backing separated stem bundle exclusively for Spatial Karaoke without ever overwriting
+    /// full-mix AI Spatial Upmix stems.
+    /// </summary>
+    public void BindKaraokeReferenceTrack(NeuralSeparatedTrack separatedTrack) {
+        lock (stateLock) {
+            activeKaraokeTrack = separatedTrack;
             RebuildAlignedReferencesLocked();
             karaokeEngine.Reset();
+        }
+    }
+
+    /// <summary>Clears both AI Spatial Upmix and Spatial Karaoke stem slots cleanly.</summary>
+    public void ClearAllSeparatedTracks() {
+        lock (stateLock) {
+            activeSpatialUpmixTrack = null;
+            activeKaraokeTrack = null;
+            RebuildAlignedReferencesLocked();
+            karaokeEngine.Reset();
+        }
+    }
+
+    /// <summary>
+    /// Smart role-aware binding helper: full-mix stem bundles (containing Bass/Drums/Other/Instrumental) bind to
+    /// <see cref="ActiveSpatialUpmixTrack"/>, vocal-only 2-stem bundles bind exclusively to <see cref="ActiveKaraokeTrack"/>
+    /// without clobbering AI Spatial Upmix stems, and <c>null</c> clears both slots.
+    /// </summary>
+    public void BindSeparatedTrack(NeuralSeparatedTrack separatedTrack) {
+        if (separatedTrack == null) {
+            ClearAllSeparatedTracks();
+            return;
+        }
+        if (NeuralStemSpatializer.IsFullMixSpatialStemSet(separatedTrack.Stems)) {
+            BindSpatialUpmixTrack(separatedTrack);
+        } else {
+            BindKaraokeReferenceTrack(separatedTrack);
         }
     }
 
@@ -247,11 +322,14 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     /// <summary>Builds a fresh Slot 2B diagnostics snapshot for <see cref="SpatialSceneHub.NeuralDiagnostics"/>.</summary>
     public NeuralAudioDiagnostics BuildDiagnosticsSnapshot() {
         lock (stateLock) {
+            NeuralSeparatedTrack vocalTrack = activeKaraokeTrack ?? activeSpatialUpmixTrack;
+            NeuralSeparatedTrack primaryTrack = activeSpatialUpmixTrack ?? activeKaraokeTrack;
             bool hasTwin = config.UseLosslessTwinForKaraoke &&
                 ((losslessReference != null && losslessReference.HasSyncedLosslessTwin) ||
-                 (activeSeparatedTrack != null && activeSeparatedTrack.DerivedFromLosslessTwin));
+                 (vocalTrack != null && vocalTrack.DerivedFromLosslessTwin) ||
+                 (activeSpatialUpmixTrack != null && activeSpatialUpmixTrack.DerivedFromLosslessTwin));
             bool hasNeuralLead = (alignedLeadMono != null && alignedLeadMono.Length > 0) ||
-                (activeSeparatedTrack?.MonoLeadVocalRef != null && activeSeparatedTrack.MonoLeadVocalRef.Length > 0);
+                (vocalTrack?.MonoLeadVocalRef != null && vocalTrack.MonoLeadVocalRef.Length > 0);
             bool activeKaraoke = IsEnabled && config.SpatialKaraokeEnabled && config.KaraokeVocalLevel < 0.999f;
 
             return new NeuralAudioDiagnostics {
@@ -268,11 +346,11 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
                 KaraokeVocalLevel = config.KaraokeVocalLevel,
                 HasNeuralVocalReference = hasNeuralLead,
                 IsLosslessTwinAccelerated = hasTwin,
-                ActiveNeuralStemCount = activeSeparatedTrack?.Stems?.Count ?? 0,
+                ActiveNeuralStemCount = primaryTrack?.Stems?.Count ?? 0,
                 VocalActivity = activeKaraoke ? karaokeEngine.LatestVocalActivity : 0f,
-                LastDereverbDrrDb = activeSeparatedTrack?.DereverbAnalysis != null
-                    ? activeSeparatedTrack.DereverbAnalysis.DirectToReverberantRatioDb
-                    : float.NaN,
+                LastDereverbDrrDb = vocalTrack?.DereverbAnalysis != null
+                    ? vocalTrack.DereverbAnalysis.DirectToReverberantRatioDb
+                    : (primaryTrack?.DereverbAnalysis != null ? primaryTrack.DereverbAnalysis.DirectToReverberantRatioDb : float.NaN),
                 LastInferenceRtf = runtimeSnapshot.LastInferenceRtf
             };
         }
@@ -280,16 +358,17 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
 
     /// <summary>
     /// Builds 3D <see cref="SpatialSourceDescriptor"/> objects for all loaded neural stems ready for
-    /// <see cref="SpatialSceneHub"/> placement.
+    /// <see cref="SpatialSceneHub"/> placement (preferring full-mix spatial stems).
     /// </summary>
     public SpatialSourceDescriptor[] BuildActiveStemDescriptors(Vector3 environmentSize, int startIndex) {
         lock (stateLock) {
-            if (activeSeparatedTrack == null || activeSeparatedTrack.Stems == null || activeSeparatedTrack.Stems.Count == 0) {
+            NeuralSeparatedTrack stemTrack = activeSpatialUpmixTrack ?? activeKaraokeTrack;
+            if (stemTrack == null || stemTrack.Stems == null || stemTrack.Stems.Count == 0) {
                 return Array.Empty<SpatialSourceDescriptor>();
             }
-            string[] names = new string[activeSeparatedTrack.Stems.Count];
+            string[] names = new string[stemTrack.Stems.Count];
             for (int i = 0; i < names.Length; i++) {
-                names[i] = activeSeparatedTrack.Stems[i].Name;
+                names[i] = stemTrack.Stems[i].Name;
             }
             return NeuralStemSpatializer.BuildSceneDescriptors(names, environmentSize, startIndex);
         }
@@ -534,7 +613,8 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     public void Dispose() {
         lock (stateLock) {
             karaokeEngine.Dispose();
-            activeSeparatedTrack = null;
+            activeSpatialUpmixTrack = null;
+            activeKaraokeTrack = null;
             alignedLeadMono = null;
             alignedLeadLeft = null;
             alignedLeadRight = null;
@@ -553,8 +633,9 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             VocalLevel = config.KaraokeVocalLevel,
             PreserveBackingVocals = config.KaraokePreserveBackingVocals
         };
-        if (activeSeparatedTrack != null &&
-            (activeSeparatedTrack.IsProgressiveStreaming || alignedRefSampleRate != safeRate)) {
+        NeuralSeparatedTrack vocalTrack = activeKaraokeTrack ?? activeSpatialUpmixTrack;
+        if (vocalTrack != null &&
+            (vocalTrack.IsProgressiveStreaming || alignedRefSampleRate != safeRate)) {
             RebuildAlignedReferencesLocked();
         }
     }
@@ -566,20 +647,30 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         alignedBackingMono = null;
         alignedRefSampleRate = sampleRate;
 
-        if (activeSeparatedTrack == null) {
+        NeuralSeparatedTrack vocalTrack = activeKaraokeTrack ?? activeSpatialUpmixTrack;
+        if (vocalTrack == null) {
             return;
         }
 
-        int srcSr = activeSeparatedTrack.SampleRate >= 8000 ? activeSeparatedTrack.SampleRate : sampleRate;
-        StereoStemBuffer stereoLead = FindLeadOrVocalStem(activeSeparatedTrack);
-        float[] srcMonoLead = activeSeparatedTrack.MonoLeadVocalRef;
-        float[] srcBacking = activeSeparatedTrack.MonoBackingVocalRef;
+        int srcSr = vocalTrack.SampleRate >= 8000 ? vocalTrack.SampleRate : sampleRate;
+        StereoStemBuffer stereoLead = FindLeadOrVocalStem(vocalTrack);
+        float[] srcMonoLead = vocalTrack.MonoLeadVocalRef;
+        float[] srcBacking = vocalTrack.MonoBackingVocalRef;
 
         // While progressive streaming is active, bind directly to the live incrementally-populated stem arrays
         // and perform zero-GC sub-sample Catmull-Rom rate mapping on read when srcSr != sampleRate
         // (avoids freezing a one-shot Kaiser-sinc resample over mostly-zero unfinalized chunks).
-        if (srcSr == sampleRate || activeSeparatedTrack.IsProgressiveStreaming) {
-            alignedLeadMono = srcMonoLead;
+        if (srcSr == sampleRate || vocalTrack.IsProgressiveStreaming) {
+            if (srcMonoLead != null && srcMonoLead.Length > 0) {
+                alignedLeadMono = srcMonoLead;
+            } else if (stereoLead != null && stereoLead.Length > 0) {
+                int n = stereoLead.Length;
+                float[] mono = new float[n];
+                for (int i = 0; i < n; i++) {
+                    mono[i] = 0.5f * (stereoLead.Left[i] + stereoLead.Right[i]);
+                }
+                alignedLeadMono = mono;
+            }
             alignedLeadLeft = stereoLead?.Left;
             alignedLeadRight = stereoLead?.Right;
             alignedBackingMono = srcBacking;
@@ -713,8 +804,9 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
 
         // Guard progressive streaming reads: only read neural stem references inside the permanently finalized sample window.
         // If playback seeks ahead of ReadySampleCount, seamlessly fall back until progressive inference catches up.
-        int readyLimit = activeSeparatedTrack != null && activeSeparatedTrack.IsProgressiveStreaming
-            ? activeSeparatedTrack.ReadySampleCount
+        NeuralSeparatedTrack vocalTrack = activeKaraokeTrack ?? activeSpatialUpmixTrack;
+        int readyLimit = vocalTrack != null && vocalTrack.IsProgressiveStreaming
+            ? vocalTrack.ReadySampleCount
             : int.MaxValue;
         bool needsLiveRateMap = alignedRefSampleRate > 0 && alignedRefSampleRate != sampleRate;
 

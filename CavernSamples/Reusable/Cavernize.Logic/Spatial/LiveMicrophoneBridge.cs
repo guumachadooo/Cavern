@@ -27,6 +27,33 @@ public readonly struct VoiceprintCaptureResult {
 }
 
 /// <summary>
+/// Recorded vocal performance take captured zero-GC off the real-time microphone stream,
+/// ready for live Studio preview and composable offline export.
+/// </summary>
+public sealed class PerformanceRecordingTake {
+    /// <summary>Recorded mono vocal PCM samples (gain-trimmed from the active mic routing).</summary>
+    public float[] MonoPcm { get; init; } = Array.Empty<float>();
+
+    /// <summary>Capture sample rate in Hz.</summary>
+    public int SampleRate { get; init; } = 48000;
+
+    /// <summary>Source track sample position where recording began (for sample-locked preview &amp; export alignment).</summary>
+    public long StartTrackSample { get; init; }
+
+    /// <summary>Captured duration in seconds.</summary>
+    public float DurationSeconds { get; init; }
+
+    /// <summary>Peak amplitude in dBFS across the captured take.</summary>
+    public float PeakDbfs { get; init; } = -120f;
+
+    /// <summary>UTC timestamp when the take finished recording.</summary>
+    public DateTime RecordedUtc { get; init; } = DateTime.UtcNow;
+
+    /// <summary>True when this take contains usable audio samples.</summary>
+    public bool HasAudio => MonoPcm != null && MonoPcm.Length > 0;
+}
+
+/// <summary>
 /// Zero-GC Slot 1 live microphone bridge coupling full-duplex USB UAC2 / AAudio capture threads
 /// to <see cref="Rendering.RealtimePlayerEngine"/> and <see cref="SpatialSceneHub"/> (<see cref="SourceLayer.LiveMicrophone"/>).
 /// Includes a lock-free SPSC ring buffer, channel routing (Mono Ch1, Mono Ch2, Stereo Pair), trim gain,
@@ -34,15 +61,20 @@ public readonly struct VoiceprintCaptureResult {
 /// </summary>
 public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
     const int RingCapacityFrames = 8192; // ~170 ms @ 48 kHz; power-of-2 lock-free headroom
+    const int RecordingRingCapacityFrames = 32768; // ~682 ms @ 48 kHz off-thread drain headroom
     const int MaxScratchFrames = 2048;
 
     readonly LockFreeAudioRingBuffer captureRing = new(RingCapacityFrames, 2);
+    readonly LockFreeAudioRingBuffer recordingRing = new(RecordingRingCapacityFrames, 1);
     readonly float[] producerStereoScratch = new float[MaxScratchFrames * 2];
+    readonly float[] recordingProducerScratch = new float[MaxScratchFrames];
     readonly float[] consumerStereoScratch = new float[MaxScratchFrames * 2];
 
-    // Lock-free pure-physics MLS loopback RTT calibration & mic voiceprint sessions (allocated only when user triggers them)
+    // Lock-free pure-physics MLS loopback RTT calibration, mic voiceprint & performance recording sessions
     volatile CalibrationSession activeCalibSession;
     volatile VoiceprintSession activeVoiceprintSession;
+    volatile RecordingSession activeRecordingSession;
+    volatile PerformanceRecordingTake latestRecordedTake;
 
     volatile bool isActive;
     volatile int sampleRate = 48000;
@@ -78,6 +110,32 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
 
     /// <summary>True while a guided 3-5 second microphone voiceprint capture is in progress.</summary>
     public bool IsCapturingVoiceprint => activeVoiceprintSession != null;
+
+    /// <summary>True while a Studio vocal performance recording take is actively capturing.</summary>
+    public bool IsRecordingPerformance => activeRecordingSession != null;
+
+    /// <summary>True when a recorded vocal performance take is ready for preview or Studio export.</summary>
+    public bool HasRecordedPerformance {
+        get {
+            PerformanceRecordingTake take = latestRecordedTake;
+            return take != null && take.HasAudio;
+        }
+    }
+
+    /// <summary>Latest completed vocal performance take, or null if none recorded / discarded.</summary>
+    public PerformanceRecordingTake LatestRecordedTake => latestRecordedTake;
+
+    /// <summary>Elapsed duration in seconds of the active recording take (or latest recorded take if idle).</summary>
+    public float RecordingDurationSeconds {
+        get {
+            RecordingSession rec = activeRecordingSession;
+            if (rec != null && rec.SampleRate > 0) {
+                return (float)(Volatile.Read(ref rec.CapturedSamples) / (double)rec.SampleRate);
+            }
+            PerformanceRecordingTake take = latestRecordedTake;
+            return take != null ? take.DurationSeconds : 0f;
+        }
+    }
 
     /// <summary>Current guided voiceprint capture progress in [0; 1].</summary>
     public float VoiceprintCaptureProgress {
@@ -207,6 +265,52 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         }
     }
 
+    /// <summary>
+    /// Starts a zero-GC continuous Studio vocal performance recording synchronized to <paramref name="startTrackSample"/>.
+    /// Audio frames are pushed lock-free into <c>recordingRing</c> on the RT capture thread and drained off-thread.
+    /// </summary>
+    public void StartPerformanceRecording(int activeSampleRate, long startTrackSample = 0L) {
+        StopPerformanceRecording();
+        int sr = Math.Clamp(activeSampleRate > 0 ? activeSampleRate : sampleRate, 44100, 192000);
+        recordingRing.Reset();
+        RecordingSession session = new(sr, Math.Max(0L, startTrackSample));
+        activeRecordingSession = session;
+        session.DrainTask = Task.Run(() => DrainRecordingLoop(session));
+    }
+
+    /// <summary>
+    /// Stops the active Studio vocal performance recording, drains remaining samples from the lock-free ring,
+    /// stores the resulting <see cref="PerformanceRecordingTake"/> in <see cref="LatestRecordedTake"/>, and returns it.
+    /// </summary>
+    public PerformanceRecordingTake StopPerformanceRecording() {
+        RecordingSession prev = Interlocked.Exchange(ref activeRecordingSession, null);
+        if (prev == null) {
+            return latestRecordedTake;
+        }
+        Interlocked.Exchange(ref prev.StopRequested, 1);
+        try {
+            prev.DrainTask?.Wait(TimeSpan.FromSeconds(2));
+        } catch { }
+
+        PerformanceRecordingTake take = prev.BuildTake();
+        if (take.HasAudio) {
+            latestRecordedTake = take;
+        }
+        return take;
+    }
+
+    /// <summary>Discards any recorded performance take and stops an active recording if running.</summary>
+    public void ClearRecordedPerformance() {
+        RecordingSession prev = Interlocked.Exchange(ref activeRecordingSession, null);
+        if (prev != null) {
+            Interlocked.Exchange(ref prev.StopRequested, 1);
+            try {
+                prev.DrainTask?.Wait(TimeSpan.FromSeconds(1));
+            } catch { }
+        }
+        latestRecordedTake = null;
+    }
+
     /// <inheritdoc/>
     public int PushCapturedInterleaved(float[] interleavedInput, int offset, int frameCount, int inputChannels) {
         if (interleavedInput == null || frameCount <= 0 || inputChannels <= 0) {
@@ -225,6 +329,7 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
 
         CalibrationSession calib = activeCalibSession;
         VoiceprintSession vp = activeVoiceprintSession;
+        RecordingSession rec = activeRecordingSession;
 
         while (remaining > 0) {
             int chunk = Math.Min(remaining, MaxScratchFrames);
@@ -256,6 +361,13 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
 
                 producerStereoScratch[f * 2] = outL;
                 producerStereoScratch[f * 2 + 1] = outR;
+
+                if (rec != null && rec.StopRequested == 0) {
+                    float recSample = mode != LiveMicRoutingMode.Off
+                        ? 0.5f * (outL + outR)
+                        : ch0 * gain;
+                    recordingProducerScratch[f] = recSample;
+                }
 
                 float absL = MathF.Abs(outL);
                 float absR = MathF.Abs(outR);
@@ -292,6 +404,13 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
                         FinishVoiceprintCaptureAsync(vp);
                         vp = null;
                     }
+                }
+            }
+
+            if (rec != null && rec.StopRequested == 0) {
+                int recWritten = recordingRing.Write(recordingProducerScratch, 0, chunk);
+                if (recWritten > 0) {
+                    Interlocked.Add(ref rec.CapturedSamples, recWritten);
                 }
             }
 
@@ -497,6 +616,104 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         });
     }
 
+    void DrainRecordingLoop(RecordingSession session) {
+        float[] drainBuf = new float[4096];
+        while (Volatile.Read(ref session.StopRequested) == 0 || recordingRing.AvailableFramesToRead > 0) {
+            int avail = recordingRing.AvailableFramesToRead;
+            if (avail > 0) {
+                int toRead = Math.Min(avail, drainBuf.Length);
+                int read = recordingRing.Read(drainBuf, 0, toRead, zeroFillMissing: false);
+                if (read > 0) {
+                    session.AppendSamples(drainBuf, read);
+                }
+                continue;
+            }
+            if (Volatile.Read(ref session.StopRequested) != 0) {
+                break;
+            }
+            Thread.Sleep(15);
+        }
+    }
+
+    sealed class RecordingSession(int sampleRate, long startTrackSample) {
+        const int ChunkSize = 48000;
+        const int MaxTotalSamples = 48000 * 60 * 15; // 15-minute safety bound
+        readonly object chunkLock = new();
+        readonly List<float[]> chunks = [];
+        float[] currentChunk = new float[ChunkSize];
+        int currentChunkOffset;
+        int totalSamples;
+        float peakLinear;
+
+        public readonly int SampleRate = sampleRate;
+        public readonly long StartTrackSample = startTrackSample;
+        public long CapturedSamples;
+        public int StopRequested;
+        public Task DrainTask;
+
+        internal void AppendSamples(float[] src, int count) {
+            if (src == null || count <= 0) {
+                return;
+            }
+            lock (chunkLock) {
+                int idx = 0;
+                while (idx < count && totalSamples < MaxTotalSamples) {
+                    int space = currentChunk.Length - currentChunkOffset;
+                    int copy = Math.Min(Math.Min(space, count - idx), MaxTotalSamples - totalSamples);
+                    for (int i = 0; i < copy; i++) {
+                        float v = src[idx + i];
+                        currentChunk[currentChunkOffset + i] = v;
+                        float abs = MathF.Abs(v);
+                        if (abs > peakLinear) {
+                            peakLinear = abs;
+                        }
+                    }
+                    currentChunkOffset += copy;
+                    totalSamples += copy;
+                    idx += copy;
+                    if (currentChunkOffset >= currentChunk.Length) {
+                        chunks.Add(currentChunk);
+                        currentChunk = new float[ChunkSize];
+                        currentChunkOffset = 0;
+                    }
+                }
+            }
+        }
+
+        internal PerformanceRecordingTake BuildTake() {
+            lock (chunkLock) {
+                if (totalSamples <= 0) {
+                    return new PerformanceRecordingTake {
+                        MonoPcm = Array.Empty<float>(),
+                        SampleRate = SampleRate,
+                        StartTrackSample = StartTrackSample,
+                        DurationSeconds = 0f,
+                        PeakDbfs = -120f,
+                        RecordedUtc = DateTime.UtcNow
+                    };
+                }
+                float[] full = new float[totalSamples];
+                int dst = 0;
+                for (int i = 0; i < chunks.Count; i++) {
+                    Array.Copy(chunks[i], 0, full, dst, chunks[i].Length);
+                    dst += chunks[i].Length;
+                }
+                if (currentChunkOffset > 0) {
+                    Array.Copy(currentChunk, 0, full, dst, currentChunkOffset);
+                }
+                float peakDb = peakLinear > 1e-6f ? Math.Clamp(20f * MathF.Log10(peakLinear), -120f, 0f) : -120f;
+                return new PerformanceRecordingTake {
+                    MonoPcm = full,
+                    SampleRate = SampleRate,
+                    StartTrackSample = StartTrackSample,
+                    DurationSeconds = (float)(totalSamples / (double)Math.Max(1, SampleRate)),
+                    PeakDbfs = peakDb,
+                    RecordedUtc = DateTime.UtcNow
+                };
+            }
+        }
+    }
+
     sealed class CalibrationSession(
         float[] probe,
         float[] captureBuffer,
@@ -524,3 +741,4 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
         public int CompletedFlag;
     }
 }
+

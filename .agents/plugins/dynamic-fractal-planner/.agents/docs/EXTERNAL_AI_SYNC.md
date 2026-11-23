@@ -7,6 +7,11 @@
 
 ## Plugin Sync Entries (Newest First)
 
+### 2026-11-23 | `pending-push` | `Antigravity` | Plugin v2.10.1 — Fix Dynamic `targetSdkVersion` Parity Test & Raw Docstring Warning
+- `Scope`: `dual-project+plugin` (`plugin.json`, `CHANGELOG.md`, `scripts/error_learner.py`, `tests/run_plugin_tests.py`)
+- `Summary`: Fixed `TestCavernV1V2V3Parity` in `tests/run_plugin_tests.py` to infer expected `targetSdkVersion` (`"35"` vs `"28"`) dynamically from `profile_data.file_guards` so live v4 (`targetSdkVersion>=35`) profiles pass cleanly; fixed raw-docstring `SyntaxWarning` in `scripts/error_learner.py`.
+- `Files`: `plugin.json`, `CHANGELOG.md`, `scripts/error_learner.py`, `tests/run_plugin_tests.py`, `.agents/docs/EXTERNAL_AI_SYNC.md`
+
 ### 2026-11-23 | `pending-push` | `AI Studio` | Plugin v2.10.0 — Universal File-Budget Guard (`file_budget_limits`) & Professional README Sync
 - `Scope`: `dual-project+plugin` (`plugin.json`, `README.md`, `CHANGELOG.md`, `scripts/verify_universal.py`, `tests/run_plugin_tests.py`)
 - `Summary`: Added universal `check_file_budget()` (`file_budget_limits`: `warn_files`, `fail_files`, `hard_platform_cap`, top-5 heaviest directory diagnostic) in `scripts/verify_universal.py` so any GitHub-imported AI Studio workspace catches file-count bloat before hitting platform import caps (`999`); rewrote `README.md` for `v2.10.0`; added `test_v210_file_budget_guard` unit test.

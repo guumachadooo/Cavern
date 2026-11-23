@@ -398,6 +398,30 @@ public partial class MainActivity {
             BinauralProfileService.GetActiveShortBadge(store, S));
         StyleSpatialPill(musicMatrixToggleBtn, musicMatrixIcon, musicMatrixText, store.MatrixUpmixing, OneUiTheme.IconStudioExport);
 
+        bool aiPrepBusy = isNeuralPrepRunning &&
+                          activeNeuralPrepGoal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation;
+        bool isAtmosTrack = IsActiveTrackMultichannelOrAtmos();
+        bool aiActive = IsPlayTabAiActive();
+        string aiPillText;
+        Color aiPillAccent;
+        if (aiPrepBusy) {
+            int pct = Math.Clamp((int)Math.Round(neuralPrepProgress * 100.0), 1, 99);
+            aiPillText = string.Format(S["PlayTabAiPrepShortFmt"], pct);
+            aiPillAccent = OneUiTheme.FunctionalOrange;
+        } else if (aiActive && isAtmosTrack) {
+            aiPillText = S["PlayTabAiAtmosShort"];
+            aiPillAccent = OneUiTheme.IconSliderMedia;
+        } else if (aiActive) {
+            aiPillText = store.NeuralSpatialUpmixModeIndex == (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.HybridNeuralDirAc
+                ? S["PlayTabAi714Short"]
+                : S["PlayTabAi3DShort"];
+            aiPillAccent = OneUiTheme.IconSliderMedia;
+        } else {
+            aiPillText = S["PlayTabAiOffShort"];
+            aiPillAccent = OneUiTheme.IconSliderMedia;
+        }
+        StyleSpatialPill(musicAiToggleBtn, musicAiToggleIcon, musicAiToggleText, aiPrepBusy || aiActive, aiPillAccent, aiPillText);
+
         bool loop = playerEngine?.Loop ?? false;
         musicBottomLoopBtn.Background = loop
             ? OneUiTheme.CreateRoundedDrawable(this, Color.Argb(52, 255, 255, 255), 14f)

@@ -285,6 +285,162 @@ namespace Cavern.Neural {
             return buses;
         }
 
+        /// <summary>
+        /// Returns true when <paramref name="stems"/> contains at least one non-vocal accompaniment/instrument stem
+        /// (Bass, Drums, Guitar, Piano, Other, Instrumental, or Residual), distinguishing full-mix spatial upmix
+        /// bundles from 2-stem Karaoke vocal-only models (Lead + Backing).
+        /// </summary>
+        public static bool IsFullMixSpatialStemSet(IReadOnlyList<StereoStemBuffer> stems) {
+            if (stems == null || stems.Count == 0) {
+                return false;
+            }
+            for (int i = 0; i < stems.Count; i++) {
+                StereoStemBuffer stem = stems[i];
+                if (stem == null || stem.Length <= 0) {
+                    continue;
+                }
+                NeuralStemRole role = ClassifyStemName(stem.Name);
+                if (role != NeuralStemRole.LeadVocal &&
+                    role != NeuralStemRole.BackingVocals &&
+                    role != NeuralStemRole.Vocals) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Runs <see cref="ProcessHybridNeuralDirAc714"/> and applies a complementary 4th-order Linkwitz-Riley
+        /// (24 dB/oct, default 120 Hz) crossover across all 7 ground channels so mains remain cleanly high-passed
+        /// while sub-120 Hz bass &amp; kick-drum energy routes to a discrete ScreenLFE (.1) channel with exact
+        /// canonical 7.1.4 channel ordering:
+        /// <c>[0=FL, 1=FR, 2=C, 3=LFE, 4=RL, 5=RR, 6=SL, 7=SR, 8=TFL, 9=TFR, 10=TRL, 11=TRR]</c>.
+        /// </summary>
+        public static float[][] BuildHybrid714WithDiscreteLfe(
+            StereoStemBuffer[] stems,
+            int sampleRate,
+            float heightExpansion = 0.35f,
+            float lfeCutoffHz = 120f) {
+            float[][] raw11 = ProcessHybridNeuralDirAc714(stems, sampleRate, heightExpansion);
+            if (raw11.Length < 11) {
+                return Array.Empty<float[]>();
+            }
+            int length = raw11[0] != null ? raw11[0].Length : 0;
+            float[][] full12 = new float[12][];
+            if (length == 0) {
+                for (int c = 0; c < 12; c++) {
+                    full12[c] = Array.Empty<float>();
+                }
+                return full12;
+            }
+
+            int safeSr = sampleRate >= 8000 ? sampleRate : 48000;
+            float[] lfeSum = new float[length];
+            float[][] groundHp = new float[7][];
+            for (int b = 0; b < 7; b++) {
+                float[] srcBus = raw11[b];
+                if (srcBus == null || srcBus.Length == 0) {
+                    groundHp[b] = new float[length];
+                    continue;
+                }
+                float[] hpBus;
+                float[] lpBus;
+                SplitLinkwitzRiley4Lfe(srcBus, safeSr, lfeCutoffHz, out hpBus, out lpBus);
+                groundHp[b] = hpBus;
+                // Mono fold weights conserve bass + kick sub-120 Hz energy without overloading discrete .1 headroom
+                float weight = b <= 2 ? 0.50f : 0.35f;
+                int limit = length < lpBus.Length ? length : lpBus.Length;
+                for (int n = 0; n < limit; n++) {
+                    lfeSum[n] += lpBus[n] * weight;
+                }
+            }
+
+            // Canonical ITU/SMPTE/Cavern Layout714 order: [FL, FR, C, LFE, RL, RR, SL, SR, TFL, TFR, TRL, TRR]
+            // ProcessHybridNeuralDirAc714 order:          [0=FL, 1=FR, 2=C, 3=SL, 4=SR, 5=RL, 6=RR, 7=TFL, 8=TFR, 9=TRL, 10=TRR]
+            full12[0] = groundHp[0]; // FL
+            full12[1] = groundHp[1]; // FR
+            full12[2] = groundHp[2]; // FC
+            full12[3] = lfeSum;      // ScreenLFE (.1)
+            full12[4] = groundHp[5]; // RL
+            full12[5] = groundHp[6]; // RR
+            full12[6] = groundHp[3]; // SL
+            full12[7] = groundHp[4]; // SR
+            full12[8] = raw11[7];    // TFL
+            full12[9] = raw11[8];    // TFR
+            full12[10] = raw11[9];   // TRL
+            full12[11] = raw11[10];  // TRR
+            return full12;
+        }
+
+        /// <summary>
+        /// Exact 4th-order Linkwitz-Riley (LR4 = cascaded 2nd-order Butterworth) complementary crossover
+        /// splitting <paramref name="input"/> at <paramref name="cutoffHz"/> into high-passed mains and discrete LFE (.1).
+        /// </summary>
+        public static void SplitLinkwitzRiley4Lfe(
+            float[] input,
+            int sampleRate,
+            float cutoffHz,
+            out float[] highPass,
+            out float[] lowPass) {
+            int n = input != null ? input.Length : 0;
+            highPass = new float[n];
+            lowPass = new float[n];
+            if (n == 0 || sampleRate <= 0) {
+                return;
+            }
+            double maxFc = sampleRate * 0.25;
+            if (maxFc > 250.0) {
+                maxFc = 250.0;
+            }
+            double fc = cutoffHz;
+            if (fc < 40.0) {
+                fc = 40.0;
+            } else if (fc > maxFc) {
+                fc = maxFc;
+            }
+
+            double w0 = 2.0 * Math.PI * fc / sampleRate;
+            double cosW = Math.Cos(w0);
+            double sinW = Math.Sin(w0);
+            // Butterworth 2nd-order Q = 1/sqrt(2); two cascaded sections yield exact LR4 (-6 dB @ fc, 0 deg phase sum)
+            double alpha = sinW / (2.0 * 0.7071067811865476);
+            double a0 = 1.0 + alpha;
+            double a1 = (-2.0 * cosW) / a0;
+            double a2 = (1.0 - alpha) / a0;
+
+            double lpB0 = ((1.0 - cosW) * 0.5) / a0;
+            double lpB1 = (1.0 - cosW) / a0;
+            double lpB2 = lpB0;
+
+            double hpB0 = ((1.0 + cosW) * 0.5) / a0;
+            double hpB1 = -(1.0 + cosW) / a0;
+            double hpB2 = hpB0;
+
+            double lp1x1 = 0.0, lp1x2 = 0.0, lp1y1 = 0.0, lp1y2 = 0.0;
+            double lp2x1 = 0.0, lp2x2 = 0.0, lp2y1 = 0.0, lp2y2 = 0.0;
+            double hp1x1 = 0.0, hp1x2 = 0.0, hp1y1 = 0.0, hp1y2 = 0.0;
+            double hp2x1 = 0.0, hp2x2 = 0.0, hp2y1 = 0.0, hp2y2 = 0.0;
+
+            for (int i = 0; i < n; i++) {
+                double x = input[i];
+                if (double.IsNaN(x) || double.IsInfinity(x)) {
+                    x = 0.0;
+                }
+
+                double l1 = lpB0 * x + lpB1 * lp1x1 + lpB2 * lp1x2 - a1 * lp1y1 - a2 * lp1y2;
+                lp1x2 = lp1x1; lp1x1 = x; lp1y2 = lp1y1; lp1y1 = l1;
+                double l2 = lpB0 * l1 + lpB1 * lp2x1 + lpB2 * lp2x2 - a1 * lp2y1 - a2 * lp2y2;
+                lp2x2 = lp2x1; lp2x1 = l1; lp2y2 = lp2y1; lp2y1 = l2;
+                lowPass[i] = (float)l2;
+
+                double h1 = hpB0 * x + hpB1 * hp1x1 + hpB2 * hp1x2 - a1 * hp1y1 - a2 * hp1y2;
+                hp1x2 = hp1x1; hp1x1 = x; hp1y2 = hp1y1; hp1y1 = h1;
+                double h2 = hpB0 * h1 + hpB1 * hp2x1 + hpB2 * hp2x2 - a1 * hp2y1 - a2 * hp2y2;
+                hp2x2 = hp2x1; hp2x1 = h1; hp2y2 = hp2y1; hp2y1 = h2;
+                highPass[i] = (float)h2;
+            }
+        }
+
         static Vector3 GetAnchorPosition(NeuralStemRole role, float sideSign) {
             switch (role) {
                 case NeuralStemRole.LeadVocal:

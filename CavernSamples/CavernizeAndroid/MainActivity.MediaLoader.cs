@@ -910,6 +910,20 @@ public partial class MainActivity {
         if (activeTrack == null) {
             return;
         }
+        string activeSourcePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        if (!string.Equals(activeSourcePath, lastRecordedTrackSourcePath, StringComparison.OrdinalIgnoreCase)) {
+            StopStudioPerformanceRecording(autoSelectInExport: false);
+            playerEngine?.SetPerformancePreviewTake(null, enabled: false);
+            playerEngine?.LiveMicBridge?.ClearRecordedPerformance();
+            if (store != null && store.StudioOptPerformance) {
+                store.StudioOptPerformance = false;
+                if (studioOptPerformanceSwitch != null && studioOptPerformanceSwitch.Checked) {
+                    studioOptPerformanceSwitch.Checked = false;
+                }
+            }
+            lastRecordedTrackSourcePath = activeSourcePath;
+            RefreshStudioW12ContextUi();
+        }
         AppLogger.Info($"Active track ready: {activeTrack.FormatHeader}");
         string details = string.Join(" | ", activeTrack.Details.Select(d => $"{d.property}: {d.value}"));
         SetWorkspaceSummaryText($"{activeTrack.FormatHeader}\n{details}");

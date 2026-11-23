@@ -77,9 +77,20 @@ TEST_CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
 
 TEST_PROGRAM_CS = r"""
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Text;
+using Cavern;
+using Cavern.CavernSettings;
+using Cavern.Channels;
+using Cavern.Format;
+using Cavern.Format.Common;
+using Cavern.Format.Decoders;
+using Cavern.Format.Renderers;
+using Cavern.Format.Renderers.BaseClasses;
 using Cavern.Neural;
 using Cavern.Spatial;
+using Cavernize.Logic.Models;
+using Cavernize.Logic.Rendering;
 using Cavernize.Logic.Spatial;
 using Cavernize.Logic.Spatial.Adapters;
 
@@ -467,7 +478,232 @@ RunTest("T6_AutoRtfProgressiveStreaming_48kTo44k_ColdWarmup_KaraokeCatmullRom", 
     }
 });
 
-Console.WriteLine($"\nALL {passed} W46 UNIT TESTS PASSED (0 failures).");
+// ---------- Test 7: W48 Decoupled Spatial Upmix vs Karaoke Neural Slots ----------
+RunTest("T7_W48_DecoupledSpatialUpmixVsKaraoke", () => {
+    int n = 4096;
+    float[] z = new float[n];
+    float[] s = new float[n];
+    for (int i = 0; i < n; i++) s[i] = 0.25f * MathF.Sin(2f * MathF.PI * 440f * i / 48000f);
+
+    NeuralSeparatedTrack fullMix = new() {
+        SourceTrackKey = "song.flac",
+        SampleRate = 48000,
+        Stems = [
+            new StereoStemBuffer("vocals", s, s),
+            new StereoStemBuffer("drums", s, z),
+            new StereoStemBuffer("bass", z, s),
+            new StereoStemBuffer("other", s, s)
+        ]
+    };
+    NeuralSeparatedTrack karaokeOnly = new() {
+        SourceTrackKey = "song.flac",
+        SampleRate = 48000,
+        Stems = [
+            new StereoStemBuffer("lead_vocal", s, s),
+            new StereoStemBuffer("backing_vocals", z, z)
+        ]
+    };
+
+    Assert(NeuralStemSpatializer.IsFullMixSpatialStemSet(fullMix.Stems), "4-stem bundle must be recognized as full-mix spatial stem set.");
+    Assert(!NeuralStemSpatializer.IsFullMixSpatialStemSet(karaokeOnly.Stems), "2-stem vocal-only Karaoke bundle must NOT be treated as full-mix spatial stem set.");
+
+    NeuralStemStageProcessor stage = new();
+    stage.BindSpatialUpmixTrack(fullMix);
+    Assert(stage.HasPlayableSpatialUpmixStems, "Full-mix spatial stems should be playable.");
+    Assert(stage.HasIsolatedNeuralVocalReference, "Full-mix vocals should act as karaoke vocal fallback.");
+
+    // Now bind 2-stem Karaoke via generic BindSeparatedTrack AND explicit BindKaraokeReferenceTrack
+    stage.BindSeparatedTrack(karaokeOnly);
+    Assert(ReferenceEquals(stage.ActiveSpatialUpmixTrack, fullMix), "2-stem Karaoke must NEVER clobber ActiveSpatialUpmixTrack!");
+    Assert(ReferenceEquals(stage.ActiveKaraokeTrack, karaokeOnly), "2-stem Karaoke must bind to ActiveKaraokeTrack!");
+    Assert(stage.HasPlayableSpatialUpmixStems, "Full-mix spatial stems must remain playable after binding Karaoke.");
+});
+
+// ---------- Test 8: W48 Hybrid 7.1.4 Discrete LFE (.1) & Canonical Channel Order ----------
+RunTest("T8_W48_Hybrid714DiscreteLfeAndCanonicalOrder", () => {
+    int sr = 48000;
+    int len = sr; // 1.0s
+    float[] bassL = new float[len], bassR = new float[len];
+    float[] drumsL = new float[len], drumsR = new float[len];
+    float[] voxL = new float[len], voxR = new float[len];
+    float[] otherL = new float[len], otherR = new float[len];
+    for (int i = 0; i < len; i++) {
+        double t = i / (double)sr;
+        float sub = 0.6f * (float)Math.Sin(2.0 * Math.PI * 55.0 * t);
+        float kick = 0.4f * (float)Math.Sin(2.0 * Math.PI * 65.0 * t);
+        float hat = 0.25f * (float)Math.Sin(2.0 * Math.PI * 2500.0 * t);
+        bassL[i] = sub; bassR[i] = sub;
+        drumsL[i] = kick + hat; drumsR[i] = kick - hat;
+        voxL[i] = 0.3f * (float)Math.Sin(2.0 * Math.PI * 800.0 * t);
+        voxR[i] = voxL[i];
+        otherL[i] = 0.35f * (float)Math.Sin(2.0 * Math.PI * 1200.0 * t);
+        otherR[i] = 0.35f * (float)Math.Cos(2.0 * Math.PI * 1200.0 * t);
+    }
+
+    StereoStemBuffer[] stems = [
+        new StereoStemBuffer("bass", bassL, bassR),
+        new StereoStemBuffer("drums", drumsL, drumsR),
+        new StereoStemBuffer("vocals", voxL, voxR),
+        new StereoStemBuffer("other", otherL, otherR)
+    ];
+
+    float[][] ch = NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe(stems, sr, 0.35f, 120f);
+    Assert(ch.Length == 12, $"Expected 12 channels for 7.1.4, got {ch.Length}");
+    double lfeSumSq = 0.0, fl55Re = 0.0, fl55Im = 0.0, lfe55Re = 0.0, lfe55Im = 0.0;
+    double rlSumSq = 0.0, slSumSq = 0.0, tflSumSq = 0.0;
+    int start = sr / 4; // skip filter warmup transient
+    for (int i = start; i < len; i++) {
+        for (int c = 0; c < 12; c++) {
+            Assert(float.IsFinite(ch[c][i]), $"Non-finite sample at ch[{c}][{i}]");
+        }
+        lfeSumSq += ch[3][i] * ch[3][i];
+        rlSumSq += ch[4][i] * ch[4][i];
+        slSumSq += ch[6][i] * ch[6][i];
+        tflSumSq += ch[8][i] * ch[8][i];
+        double ang = 2.0 * Math.PI * 55.0 * i / sr;
+        double cs = Math.Cos(ang), sn = Math.Sin(ang);
+        fl55Re += ch[0][i] * cs; fl55Im += ch[0][i] * sn;
+        lfe55Re += ch[3][i] * cs; lfe55Im += ch[3][i] * sn;
+    }
+    double lfeRms = Math.Sqrt(lfeSumSq / (len - start));
+    double fl55Mag = Math.Sqrt(fl55Re * fl55Re + fl55Im * fl55Im);
+    double lfe55Mag = Math.Sqrt(lfe55Re * lfe55Re + lfe55Im * lfe55Im);
+    double lfeVsFl55Db = 20.0 * Math.Log10((lfe55Mag + 1e-12) / (fl55Mag + 1e-12));
+    Assert(lfeRms > 0.20, $"Discrete LFE channel [3] RMS too low: {lfeRms:0.000}");
+    Assert(lfeVsFl55Db > 18.0, $"Expected >18 dB LR4 sub-bass separation between LFE and FL @ 55 Hz, got {lfeVsFl55Db:0.1} dB");
+    Assert(rlSumSq > 1e-4 && slSumSq > 1e-4 && tflSumSq > 1e-4, "Surround (RL/SL) and Height (TFL) channels must carry active energy.");
+});
+
+// ---------- Test 9: W48 Dynamic Dolby Atmos Object Identity Preserved Under AtmosAwareUpmixer ----------
+RunTest("T9_W48_DynamicAtmosObjectIdentityPreserved", () => {
+    int sr = 48000;
+    using SyntheticAtmosReader reader = new(sr, sr / 2);
+    using CavernizeTrack track = new(reader, Codec.EnhancedAC3, 0);
+    Listener listener = new() { SampleRate = sr, UpdateRate = 1024 };
+    UpmixingSettings upmix = new(true) {
+        Cavernize = true,
+        MatrixUpmixing = true,
+        AtmosAware = true
+    };
+    track.Attach(listener, upmix);
+
+    IReadOnlyList<Source> attached = listener.ActiveSources.ToList();
+    Assert(track.Renderer.HasObjects, "Synthetic Atmos track must have Renderer.HasObjects=true.");
+    Assert(attached.Count > 8, $"AtmosAwareUpmixer should preserve 6 beds + 2 dynamic objects and add virtual heights, got {attached.Count}.");
+    Assert(!ReferenceEquals(attached[0], track.Renderer.Objects[0]), "AtmosAwareUpmixer wraps base sources in IntermediateSources.");
+
+    List<TrackSourceItem> items = TrackSourceItem.BuildFromAttachedSources(track, attached);
+    Assert(items.Count == attached.Count, $"Expected {attached.Count} TrackSourceItems, got {items.Count}");
+    Assert(items[3].IsLFE, "Native LFE channel [3] must preserve IsLFE=true under AtmosAwareUpmixer!");
+    Assert(items[0].Layer == SourceLayer.Bed, $"Base channel [0] must stay Bed, got {items[0].Layer}");
+    Assert(items[6].IsDynamicObject && items[7].IsDynamicObject, "Dynamic Atmos 3D objects [6,7] must preserve IsDynamicObject=true!");
+    Assert(items[6].Name.Contains("Object"), $"Dynamic object [6] must keep Object identity, got '{items[6].Name}'");
+    bool hasHeight = items.Any(it => it.Layer == SourceLayer.VirtualHeight);
+    Assert(hasHeight, "AtmosAwareUpmixer must append VirtualHeight channels after native beds and objects.");
+});
+
+// ---------- Test 10: W48 Zero-GC Studio Performance Recording Bridge ----------
+RunTest("T10_W48_StudioPerformanceRecordingBridge", () => {
+    LiveMicrophoneBridge bridge = new();
+    bridge.SetStreamingActive(true, 48000);
+    bridge.StartPerformanceRecording(48000, startTrackSample: 96000);
+    Assert(bridge.IsRecordingPerformance, "Bridge must report IsRecordingPerformance=true.");
+
+    int framesPerBlock = 256;
+    int blocks = 40;
+    float[] stereo = new float[framesPerBlock * 2];
+    for (int b = 0; b < blocks; b++) {
+        for (int i = 0; i < framesPerBlock; i++) {
+            int idx = b * framesPerBlock + i;
+            float v = 0.5f * MathF.Sin(2f * MathF.PI * 440f * idx / 48000f);
+            stereo[i * 2] = v;
+            stereo[i * 2 + 1] = v;
+        }
+        bridge.PushCapturedInterleaved(stereo, 0, framesPerBlock, 2);
+        Thread.Sleep(2);
+    }
+
+    PerformanceRecordingTake take = bridge.StopPerformanceRecording();
+    Assert(take != null && take.HasAudio, "Recorded vocal take must have audio.");
+    Assert(take.SampleRate == 48000, $"Expected 48000 Hz take, got {take.SampleRate}");
+    Assert(take.StartTrackSample == 96000, $"Expected StartTrackSample=96000, got {take.StartTrackSample}");
+    Assert(take.MonoPcm.Length == blocks * framesPerBlock, $"Expected {blocks * framesPerBlock} mono samples, got {take.MonoPcm.Length}");
+    Assert(take.PeakDbfs > -8f && take.PeakDbfs < -4f, $"Expected peak near -6 dBFS, got {take.PeakDbfs:0.2} dBFS");
+
+    bridge.ClearRecordedPerformance();
+    Assert(!bridge.HasRecordedPerformance, "ClearRecordedPerformance must clear HasRecordedPerformance.");
+});
+
+// ---------- Test 11: W48 Composable Export (Vocal Take + Cinema 7.1.4 & Headphone 3D) ----------
+RunTest("T11_W48_ComposableExport_VocalTakeAndSpatial", () => {
+    string tmpDir = Path.Combine(Path.GetTempPath(), "cavern_w48_exp_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(tmpDir);
+    try {
+        int sr = 48000;
+        int len = sr / 2; // 0.5s stereo test file
+        string inWav = Path.Combine(tmpDir, "in_stereo.wav");
+        float[] interleavedIn = new float[len * 2];
+        for (int i = 0; i < len; i++) {
+            double t = i / (double)sr;
+            float bass = 0.35f * (float)Math.Sin(2.0 * Math.PI * 60.0 * t);
+            interleavedIn[i * 2] = bass + 0.25f * (float)Math.Sin(2.0 * Math.PI * 1000.0 * t);
+            interleavedIn[i * 2 + 1] = bass + 0.25f * (float)Math.Cos(2.0 * Math.PI * 1000.0 * t);
+        }
+        using (RIFFWaveWriter writer = new(inWav, 2, len, sr, BitDepth.Int16)) {
+            writer.WriteHeader();
+            writer.WriteBlock(interleavedIn, 0, interleavedIn.Length);
+        }
+
+        float[] vocalTake = new float[len];
+        for (int i = 0; i < len; i++) {
+            vocalTake[i] = 0.25f * MathF.Sin(2f * MathF.PI * 520f * i / sr);
+        }
+
+        AudioReader stereoReader = AudioReader.Open(inWav);
+        using CavernizeTrack track = new(stereoReader, Codec.PCM_LE, 0);
+
+        // Composable Case A: Cinema 7.1.4 + Recorded Vocal Take
+        string out714 = Path.Combine(tmpDir, "out_714_vocal.wav");
+        StudioBatchExportJob job714 = new() {
+            TrackName = "test",
+            OutputPath = out714,
+            BitDepth = BitDepth.Int16,
+            LiveMicMonoCapture = vocalTake,
+            ComposableOptions = new StudioComposableExportOptions {
+                BaseFormat = StudioBaseOutputFormat.Cinema714,
+                EnableAiSpatialUpmix = false,
+                IncludeRecordedPerformance = true,
+                RecordedPerformanceSampleRate = sr
+            }
+        };
+        StudioBatchExportResult res714 = StudioBatchExporter.ExportSingle(track, job714);
+        Assert(res714.Succeeded, $"Composable Cinema714 export failed: {res714.ErrorMessage}");
+        Assert(File.Exists(out714) && new FileInfo(out714).Length > 10000, "Cinema714 output WAV missing or too small.");
+        Assert(float.IsFinite(res714.IntegratedLufs) && res714.MaxTruePeakDbtp <= 0.1f, $"Invalid loudness/peak: {res714.IntegratedLufs} LUFS / {res714.MaxTruePeakDbtp} dBTP");
+
+        // Composable Case B: Headphone 3D + Recorded Vocal Take
+        string outHp = Path.Combine(tmpDir, "out_hp3d_vocal.wav");
+        StudioBatchExportJob jobHp = new() {
+            TrackName = "test",
+            OutputPath = outHp,
+            BitDepth = BitDepth.Int16,
+            LiveMicMonoCapture = vocalTake,
+            ComposableOptions = new StudioComposableExportOptions {
+                BaseFormat = StudioBaseOutputFormat.Headphone3D,
+                IncludeRecordedPerformance = true,
+                ApplyPersonalizedHeadphonePost = true,
+                RecordedPerformanceSampleRate = sr
+            }
+        };
+        StudioBatchExportResult resHp = StudioBatchExporter.ExportSingle(track, jobHp);
+        Assert(resHp.Succeeded, $"Composable Headphone3D export failed: {resHp.ErrorMessage}");
+        Assert(File.Exists(outHp) && new FileInfo(outHp).Length > 4000, "Headphone3D output WAV missing or too small.");
+    } finally {
+        try { Directory.Delete(tmpDir, true); } catch { }
+    }
+});
+
+Console.WriteLine($"\nALL {passed} W46/W48 UNIT TESTS PASSED (0 failures).");
 return 0;
 
 // ---- Helpers for Test 4 & Test 6 ----
@@ -651,6 +887,55 @@ sealed class MockColdWarmupRuntime : INeuralInferenceRuntime {
         }
 
         public void Dispose() { }
+    }
+}
+
+sealed class SyntheticAtmosReader : AudioReader {
+    readonly SyntheticAtmosRenderer renderer;
+    public override long Position { get; set; }
+
+    public SyntheticAtmosReader(int sampleRate, long length) : base(Stream.Null) {
+        SampleRate = sampleRate;
+        Length = length;
+        ChannelCount = 8; // 6 static 5.1 beds + 2 dynamic 3D objects
+        Bits = BitDepth.Float32;
+        renderer = new SyntheticAtmosRenderer(sampleRate);
+    }
+
+    public override Renderer GetRenderer() => renderer;
+    public override void ReadHeader() { }
+    public override void ReadBlock(float[] samples, long from, long to) => Array.Clear(samples, (int)from, (int)(to - from));
+}
+
+sealed class SyntheticAtmosRenderer : Renderer, IMixedBedObjectRenderer {
+    static readonly ReferenceChannel[] Bed51 = ChannelPrototype.GetStandardMatrix(6);
+
+    public SyntheticAtmosRenderer(int sampleRate) : base(null) {
+        HasObjects = true;
+        Vector3 env = Listener.EnvironmentSize;
+        if (env.X <= 0.1f) env = new Vector3(10, 7, 10);
+        for (int i = 0; i < Bed51.Length; i++) {
+            ReferenceChannel ch = Bed51[i];
+            Source bed = new() {
+                LFE = ch == ReferenceChannel.ScreenLFE,
+                Position = ChannelPrototype.AlternativePositions[(int)ch] * env
+            };
+            objects.Add(bed);
+        }
+        // 2 dynamic moving 3D Dolby Atmos objects
+        objects.Add(new Source { Position = new Vector3(-0.4f, 0.3f, 0.7f) * env });
+        objects.Add(new Source { Position = new Vector3(0.6f, 0.5f, -0.3f) * env });
+        objectSamples = new float[objects.Count][];
+        for (int i = 0; i < objectSamples.Length; i++) objectSamples[i] = new float[1024];
+    }
+
+    public override ReferenceChannel[] GetChannels() => Bed51;
+    public ReferenceChannel[] GetStaticChannels() => Bed51;
+
+    public override void Update(int samples) {
+        for (int i = 0; i < objectSamples.Length; i++) {
+            if (objectSamples[i].Length != samples) objectSamples[i] = new float[samples];
+        }
     }
 }
 """

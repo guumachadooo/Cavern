@@ -36,7 +36,7 @@ public partial class MainActivity {
     Button studioBadgeFfmpegBtn, studioBadgeTruehdBtn, studioBadgeOnnxBtn, studioBadgeTwinBtn, studioPrereqJumpBtn;
     LayoutDiagramView layoutDiagram;
     TextView convertStatusText, studioW12ContextText;
-    OneUiInlineSelector studioWorkflowSelector, exportFormatSelector, containerSelector, studioW12PresetSelector;
+    OneUiInlineSelector studioWorkflowSelector, exportFormatSelector, containerSelector;
     readonly List<Button> studioWorkflowPillBtns = [];
     LinearLayout studioMasterSection, studioClassicSection, studioQueueSection;
     LinearLayout studioProContentContainer;
@@ -157,56 +157,10 @@ public partial class MainActivity {
         });
         page.AddView(modeCard);
 
-        // 2A. Master Workflow Section (Studio Master Presets)
+        // 2A. Master Workflow Section (W48 Vocal Performance Recorder + Composable Spatial Export Builder)
         studioMasterSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
-        LinearLayout w12Card = Card(S["StudioMasterCardTitle"], OneUiIconType.Sparkles, OneUiTheme.IconStudioExport);
-        studioW12PresetSelector = new OneUiInlineSelector(this, S["StudioW12PresetLabel"]);
-        studioW12PresetSelector.SetItems(new[] {
-            S["StudioW12PresetBinaural"],
-            S["StudioPresetIamfClean"],
-            S["StudioPresetHoaClean"],
-            S["StudioPresetAdmClean"],
-            S["StudioW12PresetHybrid714"],
-            S["StudioW12PresetKaraoke"],
-            S["StudioW12PresetLiveMixdown"],
-            S["StudioW12PresetFlacAtmos"]
-        }, 1);
-        studioW12PresetSelector.SelectionChanged += _ => RefreshStudioW12ContextUi();
-        w12Card.AddView(studioW12PresetSelector);
-
-        studioW12ContextText = Label("", 11.4f, OneUiTheme.TextSub);
-        studioW12ContextText.SetPadding(0, Dp(6), 0, Dp(4));
-        w12Card.AddView(studioW12ContextText);
-
-        studioW12KaraokeContainer = new LinearLayout(this) {
-            Orientation = Orientation.Vertical,
-            Visibility = ViewStates.Gone
-        };
-        (studioW12KaraokeBar, _) = AddSliderRow(
-            studioW12KaraokeContainer,
-            S["StudioW12KaraokeLevelTitle"],
-            0,
-            100,
-            Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100),
-            v => {
-                store.KaraokeVocalLevel = v * 0.01f;
-                playerEngine?.SetKaraokeVocalLevel(store.KaraokeVocalLevel);
-                if (karaokeVocalLevelBar != null) {
-                    karaokeVocalLevelBar.Progress = v;
-                    karaokeVocalLevelBar.Invalidate();
-                }
-                RefreshLyricsSingDockUi();
-                RefreshStudioW12ContextUi();
-            },
-            "%",
-            defaultValue: 5);
-        w12Card.AddView(studioW12KaraokeContainer);
-
-        studioW12BatchBtn = PillButton(S["StudioW12BatchBtn"], ShowStudioW12BatchDialog);
-        w12Card.AddView(studioW12BatchBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(8)
-        });
-        studioMasterSection.AddView(w12Card);
+        studioMasterSection.AddView(BuildStudioPerformanceRecorderCard());
+        studioMasterSection.AddView(BuildStudioComposableExportCard());
         page.AddView(studioMasterSection);
 
         // 2B. Classic Workflow Section (System Target + Codec/Container + Collapsible Pro Options)
@@ -499,23 +453,6 @@ public partial class MainActivity {
         return synced;
     }
 
-    bool IsNeuralPresetReady(StudioExportPreset preset, out bool runtimeInstalled) {
-        runtimeInstalled = OnnxRuntimeInstallerService.IsRuntimeInstalled(this);
-        if (!runtimeInstalled || store == null) {
-            return false;
-        }
-        Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
-        bool isKaraoke = preset == StudioExportPreset.SpatialKaraokeInstrumental ||
-                         preset == StudioExportPreset.LiveKaraokePerformanceMixdown;
-        Cavernize.Logic.Spatial.NeuralPipelineGoal goal = isKaraoke
-            ? Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke
-            : Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation;
-        var plan = neuralOrchestrator?.BuildPlan(goal, cfg);
-        string modelId = isKaraoke ? cfg.ActiveKaraokeModelId : cfg.ActiveStemModelId;
-        string modelPath = OnnxRuntimeInstallerService.ResolveModelPath(this, modelId);
-        return (plan != null && plan.IsRunnable) || !string.IsNullOrEmpty(modelPath);
-    }
-
     void StyleReadinessBadge(Button btn, string text, Color tint, bool highlight) {
         if (btn == null) {
             return;
@@ -552,8 +489,8 @@ public partial class MainActivity {
             ffReady ? OneUiTheme.FunctionalGreen : OneUiTheme.FunctionalOrange,
             !ffReady);
 
-        StudioExportPreset activePreset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, 7);
-        bool onnxReady = IsNeuralPresetReady(activePreset, out _);
+        StudioComposableExportOptions activeOpts = BuildCurrentComposableOptions();
+        bool onnxReady = IsComposableExportNeuralReady(activeOpts, out _);
         StyleReadinessBadge(
             studioBadgeOnnxBtn,
             onnxReady ? S["StudioBadgeOnnxReady"] : S["StudioBadgeOnnxMissing"],
@@ -567,16 +504,15 @@ public partial class MainActivity {
         } else if (lgsr.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedAlreadyLossless) {
             StyleReadinessBadge(studioBadgeTwinBtn, S["StudioBadgeTwinNative"], OneUiTheme.IconSystemInfo, false);
         } else {
-            StyleReadinessBadge(studioBadgeTwinBtn, S["StudioBadgeTwinNone"], OneUiTheme.PeachText, activePreset == StudioExportPreset.FlacAtmosHybridSpatialMaster);
+            StyleReadinessBadge(studioBadgeTwinBtn, S["StudioBadgeTwinNone"], OneUiTheme.PeachText, activeOpts.EnableLosslessTwinRestoration);
         }
 
         if (studioPrereqJumpBtn != null) {
             bool needsOnnxNow = selectedStudioWorkflow == 0 &&
-                (activePreset == StudioExportPreset.HybridNeuralDirAc714 ||
-                 activePreset == StudioExportPreset.FlacAtmosHybridSpatialMaster ||
-                 activePreset == StudioExportPreset.SpatialKaraokeInstrumental ||
-                 activePreset == StudioExportPreset.LiveKaraokePerformanceMixdown);
-            bool needsTwinNow = selectedStudioWorkflow == 0 && activePreset == StudioExportPreset.FlacAtmosHybridSpatialMaster;
+                ((activeOpts.EnableAiSpatialUpmix && !IsActiveTrackMultichannelOrAtmos()) ||
+                 activeOpts.EnableKaraokeInstrumental ||
+                 activeOpts.EnableLosslessTwinRestoration);
+            bool needsTwinNow = selectedStudioWorkflow == 0 && activeOpts.EnableLosslessTwinRestoration;
             bool missingAny = (!thdInstalled && selectedTrack?.Codec == Codec.TrueHD) ||
                               (!ffReady && selectedStudioWorkflow == 1) ||
                               (needsOnnxNow && !onnxReady) ||
@@ -616,12 +552,12 @@ public partial class MainActivity {
     }
 
     void OnStudioPrerequisiteJumpClicked() {
-        StudioExportPreset activePreset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, 7);
-        if (selectedStudioWorkflow == 0 && activePreset == StudioExportPreset.FlacAtmosHybridSpatialMaster && !IsLosslessTwinSynced(out _) && GetActiveTrack() != null) {
+        StudioComposableExportOptions activeOpts = BuildCurrentComposableOptions();
+        if (selectedStudioWorkflow == 0 && activeOpts.EnableLosslessTwinRestoration && !IsLosslessTwinSynced(out _) && GetActiveTrack() != null) {
             StartLosslessTwinDiscoveryAsync(GetActiveTrack());
             return;
         }
-        if (selectedStudioWorkflow == 0 && !IsNeuralPresetReady(activePreset, out bool rtOk) && rtOk) {
+        if (selectedStudioWorkflow == 0 && !IsComposableExportNeuralReady(activeOpts, out bool rtOk) && rtOk) {
             ShowNeuralModelsModal();
             return;
         }
@@ -643,38 +579,10 @@ public partial class MainActivity {
     }
 
     void RefreshStudioW12ContextUi() {
-        if (studioW12ContextText == null || studioW12PresetSelector == null || store == null) {
+        if (store == null) {
             return;
         }
-        StudioExportPreset preset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector.SelectedIndex, 0, 7);
-        bool isKaraokePreset = preset == StudioExportPreset.SpatialKaraokeInstrumental ||
-                               preset == StudioExportPreset.LiveKaraokePerformanceMixdown;
-        if (studioW12KaraokeContainer != null) {
-            studioW12KaraokeContainer.Visibility = isKaraokePreset ? ViewStates.Visible : ViewStates.Gone;
-        }
-        int vocPct = Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100);
-        if (studioW12KaraokeBar != null && studioW12KaraokeBar.Progress != vocPct) {
-            studioW12KaraokeBar.Progress = vocPct;
-            studioW12KaraokeBar.Invalidate();
-        }
-        if (preset == StudioExportPreset.FlacAtmosHybridSpatialMaster) {
-            if (IsLosslessTwinSynced(out string twinLabel)) {
-                studioW12ContextText.Text = string.Format(S["StudioContextHybridReadyClean"], twinLabel);
-                studioW12ContextText.SetTextColor(OneUiTheme.IconSystemInfo);
-            } else {
-                studioW12ContextText.Text = S["StudioW12ContextHybridNoTwin"];
-                studioW12ContextText.SetTextColor(OneUiTheme.PeachText);
-            }
-        } else if (isKaraokePreset) {
-            studioW12ContextText.Text = string.Format(
-                S["StudioW12ContextKaraoke"],
-                vocPct,
-                store.KaraokePreserveBackingVocals ? S["StatusOnTag"] : S["StatusOffTag"]);
-            studioW12ContextText.SetTextColor(OneUiTheme.PrimaryHigh);
-        } else {
-            studioW12ContextText.Text = string.Format(S["StudioW12ContextGeneral"], store.ResolveTruePeakCeilingDbtp());
-            studioW12ContextText.SetTextColor(OneUiTheme.TextSub);
-        }
+        RefreshStudioComposableExportUi();
         RefreshStudioReadinessUi();
         RefreshExtractAiChainPreviewUi();
     }
@@ -956,116 +864,7 @@ public partial class MainActivity {
         RunBackgroundOperation(_ => task(), outPath);
     }
 
-    StudioBatchExportJob BuildStudioW12Job(StudioExportPreset preset, string dir, string baseName) {
-        string ext = StudioBatchExporter.GetDefaultExtension(preset);
-        string outPath = Path.Combine(dir, $"{baseName}_{preset}{ext}");
-        int n = 1;
-        while (File.Exists(outPath)) {
-            outPath = Path.Combine(dir, $"{baseName}_{preset}_{n++}{ext}");
-        }
-
-        return new StudioBatchExportJob {
-            TrackName = baseName,
-            Preset = preset,
-            OutputPath = outPath,
-            BitDepth = store.Force24Bit ? BitDepth.Int24 : BitDepth.Int16,
-            TruePeakCeilingDbtp = store.ResolveTruePeakCeilingDbtp(),
-            KaraokeVocalLevel = Math.Clamp(store.KaraokeVocalLevel, 0f, 1f),
-            PreserveBackingVocals = store.KaraokePreserveBackingVocals,
-            VocalDnaProfile = playerEngine?.VocalMixMatchStage?.ActiveDna,
-            LosslessTwinProvider = activeLosslessTwin ?? playerEngine?.SceneHub?.ActiveLosslessReference,
-            NeuralRuntime = neuralRuntime,
-            NeuralOrchestrator = neuralOrchestrator,
-            NeuralConfig = store.BuildNeuralAudioConfig(),
-            LgsrConfig = store.BuildLgsrConfig(),
-            PostProcessingStages = playerEngine?.SceneHub?.PostProcessingStages,
-            OnSeparatedTrackReady = separated => {
-                if (separated != null) {
-                    playerEngine?.BindSeparatedNeuralTrack(separated);
-                    RunOnUiThread(() => {
-                        SyncNeuralRuntimeDiagnostics();
-                        RefreshNeuralAudioUi();
-                    });
-                }
-            },
-            HoaOrder = 3
-        };
-    }
-
-    string GetStudioW12PresetLabel(StudioExportPreset preset) => preset switch {
-        StudioExportPreset.PersonalizedLosslessBinaural => S["StudioW12PresetBinaural"],
-        StudioExportPreset.EclipsaAudioIamf => S["StudioPresetIamfClean"],
-        StudioExportPreset.AmbisonicsHoa3rdOrder => S["StudioPresetHoaClean"],
-        StudioExportPreset.AdmBwfItuBs2076 => S["StudioPresetAdmClean"],
-        StudioExportPreset.HybridNeuralDirAc714 => S["StudioW12PresetHybrid714"],
-        StudioExportPreset.SpatialKaraokeInstrumental => S["StudioW12PresetKaraoke"],
-        StudioExportPreset.LiveKaraokePerformanceMixdown => S["StudioW12PresetLiveMixdown"],
-        StudioExportPreset.FlacAtmosHybridSpatialMaster => S["StudioW12PresetFlacAtmos"],
-        _ => preset.ToString()
-    };
-
-    bool TryPreflightStudioPresets(IReadOnlyList<StudioExportPreset> presets) {
-        if (presets == null || presets.Count == 0) {
-            return false;
-        }
-        for (int i = 0; i < presets.Count; i++) {
-            StudioExportPreset preset = presets[i];
-            if (preset == StudioExportPreset.HybridNeuralDirAc714 ||
-                preset == StudioExportPreset.FlacAtmosHybridSpatialMaster) {
-                if (!IsNeuralPresetReady(preset, out bool runtimeInstalled)) {
-                    ShowError(runtimeInstalled ? S["NeuralModelNeedInstall"] : S["NeuralRuntimeNeedInstall"]);
-                    return false;
-                }
-            }
-            if (preset == StudioExportPreset.FlacAtmosHybridSpatialMaster && !IsLosslessTwinSynced(out _)) {
-                ShowError(S["LgsrMasterNeedsTwin"]);
-                return false;
-            }
-        }
-        return true;
-    }
-
-    void StartStudioW12PresetExport() {
-        if (isOperationRunning || isPreparingTrueHD) {
-            ShowError(S["OpRunning"]);
-            return;
-        }
-        CavernizeTrack active = GetActiveTrack();
-        if (active == null || !active.Supported) {
-            ShowError(S["NoTrack"]);
-            return;
-        }
-        if (active.Codec == Codec.TrueHD) {
-            pendingTrueHDStudioTrack = selectedTrack;
-            pendingPostTrueHDStudioAction = StartStudioW12PresetExport;
-            PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
-            return;
-        }
-        StudioExportPreset preset = (StudioExportPreset)Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, 7);
-        if (!TryPreflightStudioPresets([preset])) {
-            return;
-        }
-        StopPlayback();
-        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
-        string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
-        StudioBatchExportJob job = BuildStudioW12Job(preset, dir, baseName);
-        string label = GetStudioW12PresetLabel(preset);
-
-        RunBackgroundOperation(token => {
-            RunOnUiThread(() => SetConvertStatus(S["Starting"], 0));
-            StudioBatchExportResult res = StudioBatchExporter.ExportSingle(
-                active,
-                job,
-                p => RunOnUiThread(() => SetConvertStatus(label, p)),
-                token);
-            if (!res.Succeeded) {
-                throw new InvalidOperationException(res.ErrorMessage);
-            }
-            RunOnUiThread(() => SetConvertStatus(
-                string.Format(S["StudioW12DoneFormat"], Path.GetFileName(res.OutputPath), res.IntegratedLufs, res.MaxTruePeakDbtp),
-                1.0));
-        }, job.OutputPath);
-    }
+    void StartStudioW12PresetExport() => StartStudioComposableExport();
 
     void ShowStudioW12BatchDialog() {
         if (isOperationRunning || isPreparingTrueHD) {
@@ -1084,25 +883,22 @@ public partial class MainActivity {
             return;
         }
 
-        StudioExportPreset[] allPresets = [
-            StudioExportPreset.PersonalizedLosslessBinaural,
-            StudioExportPreset.EclipsaAudioIamf,
-            StudioExportPreset.AmbisonicsHoa3rdOrder,
-            StudioExportPreset.AdmBwfItuBs2076,
-            StudioExportPreset.HybridNeuralDirAc714,
-            StudioExportPreset.SpatialKaraokeInstrumental,
-            StudioExportPreset.LiveKaraokePerformanceMixdown,
-            StudioExportPreset.FlacAtmosHybridSpatialMaster
+        StudioBaseOutputFormat[] allFormats = [
+            StudioBaseOutputFormat.Headphone3D,
+            StudioBaseOutputFormat.Cinema714,
+            StudioBaseOutputFormat.DolbyAtmosAdm,
+            StudioBaseOutputFormat.EclipsaIamf,
+            StudioBaseOutputFormat.Ambisonics360
         ];
 
         LinearLayout content = new(this) { Orientation = Orientation.Vertical };
-        CheckBox[] boxes = new CheckBox[allPresets.Length];
-        int currentSelected = Math.Clamp(studioW12PresetSelector?.SelectedIndex ?? 1, 0, allPresets.Length - 1);
-        for (int i = 0; i < allPresets.Length; i++) {
-            StudioExportPreset preset = allPresets[i];
+        CheckBox[] boxes = new CheckBox[allFormats.Length];
+        int currentSelected = Math.Clamp(store?.StudioBaseFormatIndex ?? 0, 0, allFormats.Length - 1);
+        for (int i = 0; i < allFormats.Length; i++) {
+            StudioBaseOutputFormat fmt = allFormats[i];
             CheckBox cb = new(this) {
-                Text = GetStudioW12PresetLabel(preset),
-                Checked = i == currentSelected || preset == StudioExportPreset.PersonalizedLosslessBinaural || preset == StudioExportPreset.EclipsaAudioIamf,
+                Text = GetStudioBaseFormatLabel(fmt),
+                Checked = i == currentSelected || fmt == StudioBaseOutputFormat.Headphone3D || fmt == StudioBaseOutputFormat.EclipsaIamf,
                 TextSize = 13f
             };
             cb.SetTextColor(ColText);
@@ -1121,10 +917,10 @@ public partial class MainActivity {
             iconBadgeColor: OneUiTheme.IconStudioExport,
             positiveText: S["StudioW12BatchBtn"],
             onPositive: () => {
-                List<StudioExportPreset> chosen = new();
-                for (int i = 0; i < allPresets.Length; i++) {
+                List<StudioBaseOutputFormat> chosen = new();
+                for (int i = 0; i < allFormats.Length; i++) {
                     if (boxes[i].Checked) {
-                        chosen.Add(allPresets[i]);
+                        chosen.Add(allFormats[i]);
                     }
                 }
                 if (chosen.Count == 0) {
@@ -1136,7 +932,7 @@ public partial class MainActivity {
             negativeText: S["CancelBtn"]);
     }
 
-    void StartStudioW12BatchExport(CavernizeTrack active, List<StudioExportPreset> presets) {
+    void StartStudioW12BatchExport(CavernizeTrack active, List<StudioBaseOutputFormat> formats) {
         if (isOperationRunning || isPreparingTrueHD) {
             ShowError(S["OpRunning"]);
             return;
@@ -1146,21 +942,53 @@ public partial class MainActivity {
             return;
         }
         if (active.Codec == Codec.TrueHD) {
-            List<StudioExportPreset> captured = [.. presets];
+            List<StudioBaseOutputFormat> captured = [.. formats];
             pendingTrueHDStudioTrack = selectedTrack;
             pendingPostTrueHDStudioAction = () => StartStudioW12BatchExport(GetActiveTrack(), captured);
             PrepareSelectedTrueHDTrackAsync(selectedTrack, autoPlayAfter: false);
             return;
         }
-        if (!TryPreflightStudioPresets(presets)) {
+        if (formats == null || formats.Count == 0) {
             return;
         }
+
+        // Stop any active recording cleanly before exporting so the recorded take is finalized
+        if (playerEngine?.LiveMicBridge?.IsRecordingPerformance == true) {
+            StopStudioPerformanceRecording(autoSelectInExport: true);
+        }
+
+        StudioComposableExportOptions baseOpts = BuildCurrentComposableOptions();
+        if (baseOpts.IncludeRecordedPerformance && !(playerEngine?.LiveMicBridge?.HasRecordedPerformance ?? false)) {
+            ShowError(S["StudioRecNeedTakeToast"]);
+            return;
+        }
+        if (baseOpts.EnableAiSpatialUpmix && !IsActiveTrackMultichannelOrAtmos() &&
+            !IsComposableExportNeuralReady(baseOpts, out bool runtimeInstalled)) {
+            ShowError(runtimeInstalled ? S["NeuralModelNeedInstall"] : S["NeuralRuntimeNeedInstall"]);
+            return;
+        }
+        if (baseOpts.EnableLosslessTwinRestoration && !IsLosslessTwinSynced(out _)) {
+            ShowError(S["LgsrMasterNeedsTwin"]);
+            return;
+        }
+
+        playerEngine?.SetPerformancePreviewTake(null, enabled: false);
         StopPlayback();
         string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
         string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
-        List<StudioBatchExportJob> jobs = new(presets.Count);
-        for (int i = 0; i < presets.Count; i++) {
-            jobs.Add(BuildStudioW12Job(presets[i], dir, baseName));
+        List<StudioBatchExportJob> jobs = new(formats.Count);
+        for (int i = 0; i < formats.Count; i++) {
+            StudioComposableExportOptions jobOpts = new() {
+                BaseFormat = formats[i],
+                EnableAiSpatialUpmix = baseOpts.EnableAiSpatialUpmix,
+                EnableKaraokeInstrumental = baseOpts.EnableKaraokeInstrumental,
+                IncludeRecordedPerformance = baseOpts.IncludeRecordedPerformance,
+                EnableLosslessTwinRestoration = baseOpts.EnableLosslessTwinRestoration,
+                ApplyPersonalizedHeadphonePost = baseOpts.ApplyPersonalizedHeadphonePost,
+                RecordedPerformanceStartTrackSample = baseOpts.RecordedPerformanceStartTrackSample,
+                RecordedPerformanceSampleRate = baseOpts.RecordedPerformanceSampleRate
+            };
+            jobs.Add(BuildComposableExportJob(jobOpts, dir, baseName));
         }
 
         RunBackgroundOperation(token => {
@@ -1170,7 +998,7 @@ public partial class MainActivity {
                 jobs,
                 (idx, total, prog) => {
                     string label = idx >= 0 && idx < jobs.Count
-                        ? GetStudioW12PresetLabel(jobs[idx].Preset)
+                        ? GetStudioBaseFormatLabel(jobs[idx].ComposableOptions?.BaseFormat ?? StudioBaseOutputFormat.Headphone3D)
                         : string.Empty;
                     double overall = total > 0 ? Math.Clamp((idx + prog) / total, 0.0, 1.0) : prog;
                     RunOnUiThread(() => SetConvertStatus(
@@ -1621,10 +1449,7 @@ public partial class MainActivity {
             studioWorkflowSelector.Enabled = !running;
             studioWorkflowSelector.Alpha = running ? 0.55f : 1f;
         }
-        if (studioW12PresetSelector != null) {
-            studioW12PresetSelector.Enabled = !running;
-            studioW12PresetSelector.Alpha = running ? 0.55f : 1f;
-        }
+        SetStudioExportControlsBusy(running);
         if (exportFormatSelector != null) {
             exportFormatSelector.Enabled = !running;
             exportFormatSelector.Alpha = running ? 0.55f : 1f;

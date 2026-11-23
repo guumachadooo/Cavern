@@ -272,10 +272,10 @@ public partial class MainActivity {
     OneUiIconView musicPlayIcon;
     OneUiSeekBar musicVolSeekBar;
 
-    // Flanking Spatial Toggles ([Cavernize 3D] | [HRTF 3D] | [Matrix 7.1]) + Integrated Bottom Utility Row
-    LinearLayout musicCavernizeToggleBtn, musicBottomSpatialBtn, musicMatrixToggleBtn;
-    OneUiIconView musicCavernizeIcon, musicBottomSpatialIcon, musicMatrixIcon;
-    TextView musicCavernizeText, musicBottomSpatialText, musicMatrixText;
+    // Flanking Spatial Toggles ([Cavernize 3D] | [HRTF 3D] | [Matrix 7.1] | [AI 3D]) + Integrated Bottom Utility Row
+    LinearLayout musicCavernizeToggleBtn, musicBottomSpatialBtn, musicMatrixToggleBtn, musicAiToggleBtn;
+    OneUiIconView musicCavernizeIcon, musicBottomSpatialIcon, musicMatrixIcon, musicAiToggleIcon;
+    TextView musicCavernizeText, musicBottomSpatialText, musicMatrixText, musicAiToggleText;
 
     FrameLayout musicBottomLeftBtn, musicBottomOnlineBtn, musicBottomLoopBtn, musicBottomMoreBtn;
     OneUiIconView musicBottomLeftIcon, musicBottomOnlineIcon, musicBottomLoopIcon, musicBottomMoreIcon;
@@ -779,7 +779,7 @@ public partial class MainActivity {
             BottomMargin = Dp(8)
         });
 
-        // 6. Flanking Spatial Toggles: [ Cavernize 3D ]  [ HRTF 3D / Direto ]  [ Matrix 7.1 ]
+        // 6. Flanking Spatial Toggles: [ Cavernize 3D ]  [ HRTF 3D ]  [ Matrix 7.1 ]  [ AI 3D ]
         LinearLayout spatialToggleRow = HRow();
         musicSpatialToggleRow = spatialToggleRow;
         spatialToggleRow.SetGravity(GravityFlags.CenterVertical);
@@ -821,9 +821,17 @@ public partial class MainActivity {
                 RefreshMusicPlayerControlsUi();
             });
 
-        spatialToggleRow.AddView(musicCavernizeToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(6) });
-        spatialToggleRow.AddView(musicBottomSpatialBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(6) });
-        spatialToggleRow.AddView(musicMatrixToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f));
+        (musicAiToggleBtn, musicAiToggleIcon, musicAiToggleText) = MakeCompactSpatialPill(
+            OneUiIconType.Sparkles, S["PlayTabAiOffShort"], sfSemi, TogglePlayTabAiProcessing);
+        musicAiToggleBtn.LongClick += (_, e) => {
+            ShowPlayTabAiModeDialog();
+            e.Handled = true;
+        };
+
+        spatialToggleRow.AddView(musicCavernizeToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(5) });
+        spatialToggleRow.AddView(musicBottomSpatialBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(5) });
+        spatialToggleRow.AddView(musicMatrixToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(5) });
+        spatialToggleRow.AddView(musicAiToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f));
         musicNowPlayingSection.AddView(spatialToggleRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });

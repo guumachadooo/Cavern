@@ -131,12 +131,193 @@ public partial class MainActivity {
         } catch { }
         neuralPrepCts = null;
         isNeuralPrepRunning = false;
+        activeNeuralPrepGoal = null;
         neuralPrepProgress = 0;
         neuralPrepStatusText = "";
         RefreshNeuralPrepUi();
         if (!silent) {
             Toast.MakeText(this, S["CancelledStatus"], ToastLength.Short).Show();
         }
+    }
+
+    bool IsActiveTrackMultichannelOrAtmos() {
+        CavernizeTrack track = GetActiveTrack();
+        if (track == null) {
+            return false;
+        }
+        return (track.Renderer != null && (track.Renderer.HasObjects || track.Renderer.Objects.Count > 2)) ||
+               (track.Reader != null && track.Reader.ChannelCount > 2) ||
+               track.Codec == Codec.EnhancedAC3 ||
+               track.Codec == Codec.TrueHD ||
+               track.SourceCodec == Codec.TrueHD;
+    }
+
+    bool IsPlayTabAiActive() {
+        if (store == null) {
+            return false;
+        }
+        if (IsActiveTrackMultichannelOrAtmos()) {
+            return store.PlayTabAtmosAiEnhancementEnabled;
+        }
+        return store.NeuralSpatialUpmixModeIndex != (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.Off;
+    }
+
+    void TogglePlayTabAiProcessing() {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        CavernizeTrack activeTrack = GetActiveTrack();
+        if (activeTrack == null || !activeTrack.Supported || activeTrack.Codec == Codec.TrueHD) {
+            Toast.MakeText(this, S["NeuralPrepNoTrackToast"], ToastLength.Short).Show();
+            return;
+        }
+
+        // Dolby Atmos / Multichannel path: Atmos-safe AI enhancement without ever collapsing dynamic objects
+        if (IsActiveTrackMultichannelOrAtmos()) {
+            bool nextOn = !store.PlayTabAtmosAiEnhancementEnabled;
+            store.PlayTabAtmosAiEnhancementEnabled = nextOn;
+            if (nextOn) {
+                store.AtmosAwareUpmix = true;
+                upmixingSettings.AtmosAware = true;
+                playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+                if (!store.LgsrEnabled) {
+                    store.LgsrEnabled = true;
+                }
+                if (playerEngine != null) {
+                    playerEngine.LgsrBypassed = false;
+                    playerEngine.ApplyLgsrConfig(store.BuildLgsrConfig());
+                }
+                StartLosslessTwinDiscoveryAsync(activeTrack);
+                Toast.MakeText(this, S["PlayTabAiAtmosOnToast"], ToastLength.Short).Show();
+            } else {
+                if (playerEngine != null) {
+                    playerEngine.LgsrBypassed = true;
+                }
+                Toast.MakeText(this, S["PlayTabAiOffToast"], ToastLength.Short).Show();
+            }
+            RefreshLgsrUi();
+            RefreshNeuralAudioUi();
+            RefreshNeuralPrepUi();
+            RefreshBottomActionBarVisuals();
+            return;
+        }
+
+        // Stereo / Mono path: Independent AI Spatial Upmix (never requires Karaoke)
+        if (isNeuralPrepRunning && activeNeuralPrepGoal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation) {
+            CancelNeuralTrackPrep(silent: false);
+            return;
+        }
+
+        bool currentlyOn = store.NeuralSpatialUpmixModeIndex != (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.Off;
+        if (currentlyOn) {
+            store.NeuralSpatialUpmixModeIndex = (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.Off;
+            playerEngine?.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
+            RefreshNeuralAudioUi();
+            RefreshNeuralPrepUi();
+            RefreshBottomActionBarVisuals();
+            Toast.MakeText(this, S["PlayTabAiOffToast"], ToastLength.Short).Show();
+            return;
+        }
+
+        Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
+        Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator?.BuildPlan(
+            Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, cfg);
+        bool runtimeReady = neuralRuntime != null && neuralRuntime.IsAvailable;
+        if (!runtimeReady || plan == null || !plan.IsRunnable) {
+            ShowPlayTabAiModeDialog();
+            Toast.MakeText(this, S["NeuralPrepNeedModelsToast"], ToastLength.Long).Show();
+            return;
+        }
+
+        int targetMode = store.LastActiveNeuralSpatialUpmixModeIndex;
+        store.NeuralSpatialUpmixModeIndex = targetMode;
+        playerEngine?.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
+        RefreshNeuralAudioUi();
+        RefreshNeuralPrepUi();
+        RefreshBottomActionBarVisuals();
+
+        if (!(playerEngine?.NeuralStage?.HasPlayableSpatialUpmixStems ?? false)) {
+            PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation);
+        } else {
+            string modeName = targetMode == (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.HybridNeuralDirAc
+                ? S["PlayTabAiModeHybrid714"]
+                : S["PlayTabAiModeStems3D"];
+            Toast.MakeText(this, string.Format(S["PlayTabAiOnToastFmt"], modeName), ToastLength.Short).Show();
+        }
+    }
+
+    void ShowPlayTabAiModeDialog() {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        bool isAtmos = IsActiveTrackMultichannelOrAtmos();
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
+
+        if (isAtmos) {
+            TextView desc = Label(S["PlayTabAiAtmosDialogDesc"], 12.6f, OneUiTheme.TextSecondary);
+            desc.SetPadding(0, 0, 0, Dp(10));
+            content.AddView(desc);
+
+            Switch atmosSwitch = AddSwitchRow(
+                content,
+                S["PlayTabAiAtmosEnhanceTitle"],
+                store.PlayTabAtmosAiEnhancementEnabled,
+                on => {
+                    store.PlayTabAtmosAiEnhancementEnabled = on;
+                    if (on) {
+                        store.AtmosAwareUpmix = true;
+                        upmixingSettings.AtmosAware = true;
+                        playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+                        store.LgsrEnabled = true;
+                        if (playerEngine != null) {
+                            playerEngine.LgsrBypassed = false;
+                            playerEngine.ApplyLgsrConfig(store.BuildLgsrConfig());
+                        }
+                        if (GetActiveTrack() != null) {
+                            StartLosslessTwinDiscoveryAsync(GetActiveTrack());
+                        }
+                    } else if (playerEngine != null) {
+                        playerEngine.LgsrBypassed = true;
+                    }
+                    RefreshLgsrUi();
+                    RefreshNeuralPrepUi();
+                    RefreshBottomActionBarVisuals();
+                });
+            atmosSwitch.Tag = "playTabAtmosSwitch";
+        } else {
+            TextView desc = Label(S["PlayTabAiStereoDialogDesc"], 12.4f, OneUiTheme.TextSecondary);
+            desc.SetPadding(0, 0, 0, Dp(8));
+            content.AddView(desc);
+
+            OneUiInlineSelector modeSel = new(this, S["PlayTabAiModeTitle"]);
+            modeSel.SetItems(new[] {
+                S["PlayTabAiModeOff"],
+                S["PlayTabAiModeStems3D"],
+                S["PlayTabAiModeHybrid714"]
+            }, Math.Clamp(store.NeuralSpatialUpmixModeIndex, 0, 2));
+            modeSel.SelectionChanged += idx => {
+                store.NeuralSpatialUpmixModeIndex = idx;
+                playerEngine?.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
+                RefreshNeuralAudioUi();
+                RefreshNeuralPrepUi();
+                RefreshBottomActionBarVisuals();
+                if (idx != 0 && !(playerEngine?.NeuralStage?.HasPlayableSpatialUpmixStems ?? false) && GetActiveTrack() != null) {
+                    PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, silentIfNotReady: false);
+                }
+            };
+            content.AddView(modeSel);
+        }
+
+        OneUiModalDialog.Show(
+            this,
+            S["PlayTabAiDialogTitle"],
+            null,
+            customContent: content,
+            icon: OneUiIconType.Sparkles,
+            iconBadgeColor: OneUiTheme.IconSliderMedia,
+            positiveText: S["NeuralModelsBtn"],
+            onPositive: ShowNeuralModelsModal,
+            negativeText: S["CloseBtn"]);
     }
 
     sealed class CachedVocalDnaRecord {
@@ -318,23 +499,28 @@ public partial class MainActivity {
         _ = Task.Run(() => {
             try {
                 FileInfo fi = new(sourceKey);
-                Cavernize.Logic.Spatial.NeuralSeparatedTrack playbackTrack = null;
+                Cavernize.Logic.Spatial.NeuralSeparatedTrack spatialUpmixTrack = null;
+                Cavernize.Logic.Spatial.NeuralSeparatedTrack karaokeTrack = null;
                 Cavernize.Logic.Spatial.NeuralSeparatedTrack dnaTrack = null;
 
-                Cavernize.Logic.Spatial.NeuralPipelineGoal[] playbackGoals = [
-                    Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
-                    Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke
-                ];
-                for (int g = 0; g < playbackGoals.Length; g++) {
-                    Cavernize.Logic.Spatial.NeuralExecutionPlan plan = neuralOrchestrator.BuildPlan(playbackGoals[g], cfg);
-                    if (!plan.IsRunnable) {
-                        continue;
-                    }
+                // W48: Independently auto-bind BOTH Spatial Upmix (full-mix) AND Karaoke caches without clobbering
+                Cavernize.Logic.Spatial.NeuralExecutionPlan spatialPlan = neuralOrchestrator.BuildPlan(
+                    Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, cfg);
+                if (spatialPlan.IsRunnable) {
                     string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
-                        sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, plan.PlanSignature);
-                    if (neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cached)) {
-                        playbackTrack = cached;
-                        break;
+                        sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, spatialPlan.PlanSignature);
+                    if (neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedSpatial)) {
+                        spatialUpmixTrack = cachedSpatial;
+                    }
+                }
+
+                Cavernize.Logic.Spatial.NeuralExecutionPlan karaokePlan = neuralOrchestrator.BuildPlan(
+                    Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke, cfg);
+                if (karaokePlan.IsRunnable) {
+                    string cacheKey = Cavernize.Logic.Spatial.NeuralPipelineOrchestrator.ComputeTrackCacheKey(
+                        sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, karaokePlan.PlanSignature);
+                    if (neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedKaraoke)) {
+                        karaokeTrack = cachedKaraoke;
                     }
                 }
 
@@ -346,13 +532,10 @@ public partial class MainActivity {
                         sourceKey, fi.Length, fi.LastWriteTimeUtc.Ticks, sr, dnaPlan.PlanSignature);
                     if (neuralTrackCache.TryLoad(dnaCacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedDnaTrack)) {
                         dnaTrack = cachedDnaTrack;
-                        if (playbackTrack == null) {
-                            playbackTrack = cachedDnaTrack;
-                        }
                     }
                 }
 
-                Cavernize.Logic.Spatial.NeuralSeparatedTrack dnaSource = dnaTrack ?? playbackTrack;
+                Cavernize.Logic.Spatial.NeuralSeparatedTrack dnaSource = dnaTrack ?? karaokeTrack ?? spatialUpmixTrack;
                 string summaryTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
                     ? currentMediaMeta.Title
                     : Path.GetFileNameWithoutExtension(sourceKey);
@@ -363,13 +546,16 @@ public partial class MainActivity {
                     SaveCachedSongVocalDna(activeTrack, extractedDna);
                 }
 
-                if (playbackTrack != null || extractedDna != null) {
+                if (spatialUpmixTrack != null || karaokeTrack != null || extractedDna != null) {
                     RunOnUiThread(() => {
                         if (uiDestroyed || gen != neuralPrepGeneration || GetActiveTrack() != activeTrack) {
                             return;
                         }
-                        if (playbackTrack != null) {
-                            playerEngine.BindSeparatedNeuralTrack(playbackTrack);
+                        if (spatialUpmixTrack != null) {
+                            playerEngine.BindSpatialUpmixTrack(spatialUpmixTrack);
+                        }
+                        if (karaokeTrack != null) {
+                            playerEngine.BindKaraokeReferenceTrack(karaokeTrack);
                         }
                         ApplyExtractedSongDnaOnUiThread(extractedDna);
                         RefreshNeuralAudioUi();
@@ -377,7 +563,7 @@ public partial class MainActivity {
                     });
                 }
             } catch (Exception ex) {
-                AppLogger.Warn($"W18/W19.b TryAutoBindCachedNeuralStemsAsync: {ex.Message}");
+                AppLogger.Warn($"W18/W19.b/W48 TryAutoBindCachedNeuralStemsAsync: {ex.Message}");
             }
         });
     }
@@ -434,6 +620,7 @@ public partial class MainActivity {
         CancellationToken ct = neuralPrepCts.Token;
         int myGen = ++neuralPrepGeneration;
         isNeuralPrepRunning = true;
+        activeNeuralPrepGoal = goal;
         neuralPrepProgress = 0.02;
         neuralPrepStatusText = S["NeuralPrepDecodingStatus"];
         RefreshNeuralPrepUi();
@@ -487,6 +674,7 @@ public partial class MainActivity {
                                     return;
                                 }
                                 isNeuralPrepRunning = false;
+                                activeNeuralPrepGoal = null;
                                 neuralPrepProgress = 1.0;
                                 neuralPrepStatusText = "";
                                 if (!(playerEngine.NeuralStage?.HasPlayableSeparatedStems ?? false)) {
@@ -520,10 +708,13 @@ public partial class MainActivity {
                             return;
                         }
                         isNeuralPrepRunning = false;
+                        activeNeuralPrepGoal = null;
                         neuralPrepProgress = 1.0;
                         neuralPrepStatusText = "";
-                        if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna) {
-                            playerEngine.BindSeparatedNeuralTrack(cachedTrack);
+                        if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation) {
+                            playerEngine.BindSpatialUpmixTrack(cachedTrack);
+                        } else if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
+                            playerEngine.BindKaraokeReferenceTrack(cachedTrack);
                         }
                         ApplyExtractedSongDnaOnUiThread(cachedDna);
                         RefreshNeuralAudioUi();
@@ -573,7 +764,11 @@ public partial class MainActivity {
                             if (uiDestroyed || myGen != neuralPrepGeneration || progressiveTrack == null) {
                                 return;
                             }
-                            playerEngine.BindSeparatedNeuralTrack(progressiveTrack);
+                            if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation) {
+                                playerEngine.BindSpatialUpmixTrack(progressiveTrack);
+                            } else if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
+                                playerEngine.BindKaraokeReferenceTrack(progressiveTrack);
+                            }
                             RefreshNeuralAudioUi();
                             RefreshNeuralPrepUi();
                         })
@@ -611,11 +806,14 @@ public partial class MainActivity {
                         return;
                     }
                     isNeuralPrepRunning = false;
+                    activeNeuralPrepGoal = null;
                     neuralPrepProgress = 1.0;
                     neuralPrepStatusText = "";
                     // VocalMixDna analyzes a smart <=40s excerpt, so never bind it as a full-length playback stem set
-                    if (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna) {
-                        playerEngine.BindSeparatedNeuralTrack(separated);
+                    if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation) {
+                        playerEngine.BindSpatialUpmixTrack(separated);
+                    } else if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
+                        playerEngine.BindKaraokeReferenceTrack(separated);
                     }
                     ApplyExtractedSongDnaOnUiThread(extractedDna);
                     SyncNeuralRuntimeDiagnostics();
@@ -637,6 +835,7 @@ public partial class MainActivity {
                         return;
                     }
                     isNeuralPrepRunning = false;
+                    activeNeuralPrepGoal = null;
                     neuralPrepProgress = 0;
                     neuralPrepStatusText = "";
                     RefreshNeuralPrepUi();
@@ -648,6 +847,7 @@ public partial class MainActivity {
                         return;
                     }
                     isNeuralPrepRunning = false;
+                    activeNeuralPrepGoal = null;
                     neuralPrepProgress = 0;
                     neuralPrepStatusText = "";
                     RefreshNeuralPrepUi();
@@ -755,7 +955,7 @@ public partial class MainActivity {
             });
         }
 
-        Task.Run(async () => {
+        Task.Run(() => {
             try {
                 string truehddPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
                 if (string.IsNullOrEmpty(truehddPath) || !File.Exists(truehddPath)) {

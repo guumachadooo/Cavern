@@ -225,10 +225,16 @@ public sealed class TrackSourceItem {
         SourceLayer[] layers = track?.ActiveSourceLayers;
         bool hasDirectBaseMatch = track?.Renderer?.Objects != null &&
             attachedSources.Count >= track.Renderer.Objects.Count;
+        // AtmosAwareUpmixer wraps native beds + dynamic Atmos 3D objects in IntermediateSources at indices [0..baseCount-1]
+        // with ActiveSourceLayers marked Bed/NativeObject, then appends virtual height/surround channels after them.
+        // Preserve 100% of native dynamic Atmos object identities instead of mislabeling them as Virtual Upmix!
+        bool atmosAwarePrefixMatch = hasDirectBaseMatch && baseItems.Count > 0 &&
+            layers != null && layers.Length >= baseItems.Count &&
+            (layers[0] == SourceLayer.Bed || layers[0] == SourceLayer.NativeObject);
         // When CavernizeUpmixer or MatrixUpmixing replaces the source list completely (e.g. 2.0 -> 8/12 virtual sources),
         // enumerate every attached source directly so 3D Room graph and Solo/Mute stay 1:1 with Listener.ActiveSources.
         bool baseIndicesMatch = hasDirectBaseMatch && baseItems.Count > 0 &&
-            ReferenceEquals(attachedSources[0], track.Renderer.Objects[0]);
+            (ReferenceEquals(attachedSources[0], track.Renderer.Objects[0]) || atmosAwarePrefixMatch);
 
         List<TrackSourceItem> items = new(attachedSources.Count);
         for (int i = 0; i < attachedSources.Count; i++) {

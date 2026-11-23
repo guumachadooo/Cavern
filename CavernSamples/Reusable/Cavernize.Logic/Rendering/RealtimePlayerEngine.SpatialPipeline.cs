@@ -66,7 +66,7 @@ public sealed partial class RealtimePlayerEngine {
             if (wasRenderingLiveNeural) {
                 sourceItems = TrackSourceItem.BuildFromAttachedSources(currentTrack, cachedActiveSources);
                 BindTrackToSceneHubLocked(currentTrack);
-                SpatialSourceDescriptor[] stemDescs = neuralStemStage.ActiveSeparatedTrack != null
+                SpatialSourceDescriptor[] stemDescs = neuralStemStage.ActiveSpatialUpmixTrack != null
                     ? neuralStemStage.BuildActiveStemDescriptors(EnvironmentSize, sceneHub.Sources.Count)
                     : Array.Empty<SpatialSourceDescriptor>();
                 sceneHub.RegisterNeuralStemDescriptors(stemDescs);
@@ -78,10 +78,9 @@ public sealed partial class RealtimePlayerEngine {
     }
 
     void AttachLiveNeuralSourcesLocked(bool resetToStart) {
-        NeuralSeparatedTrack sep = neuralStemStage.ActiveSeparatedTrack;
+        NeuralSeparatedTrack sep = neuralStemStage.ActiveSpatialUpmixTrack;
         NeuralSpatialUpmixMode mode = neuralStemStage.Config.SpatialUpmixMode;
-        bool isProgressive = sep.IsProgressiveStreaming;
-        progressiveNeuralUpdater = isProgressive ? new ProgressiveNeuralStemUpdater(sep) : null;
+        bool isProgressive = sep != null && sep.IsProgressiveStreaming;
         Vector3 envSize = EnvironmentSize.X > 0.1f && EnvironmentSize.Y > 0.1f && EnvironmentSize.Z > 0.1f
             ? EnvironmentSize
             : new Vector3(10f, 7f, 10f);
@@ -93,7 +92,7 @@ public sealed partial class RealtimePlayerEngine {
         }
 
         int trackSr = currentTrack != null && currentTrack.SampleRate > 0 ? currentTrack.SampleRate : Listener.DefaultSampleRate;
-        int stemSr = sep.SampleRate > 0 ? sep.SampleRate : trackSr;
+        int stemSr = sep != null && sep.SampleRate > 0 ? sep.SampleRate : trackSr;
         long startSample = resetToStart
             ? 0L
             : (long)Math.Round(currentTrackSample * (stemSr / (double)trackSr));
@@ -102,49 +101,39 @@ public sealed partial class RealtimePlayerEngine {
         List<TrackSourceItem> builtItems = [];
         List<SpatialSourceDescriptor> builtDescriptors = [];
 
+        if (sep == null || sep.Stems == null || sep.Stems.Count == 0) {
+            progressiveNeuralUpdater = null;
+            isRenderingLiveNeuralSources = false;
+            liveNeuralSources = Array.Empty<Source>();
+            if (resetToStart) {
+                currentTrack.Attach(listener, upmixingSettings);
+            } else {
+                currentTrack.AttachFromCurrentPosition(listener, upmixingSettings);
+            }
+            return;
+        }
+
         // While progressive streaming is active, run live incremental Stems3DObjects (never run full-track
         // HybridNeuralDirAc over unfinalized zeros); seamlessly upgrade to 7.1.4 Hybrid DirAC on final bind.
         if (mode == NeuralSpatialUpmixMode.HybridNeuralDirAc && !isProgressive) {
+            progressiveNeuralUpdater = null;
             if (!ReferenceEquals(cachedHybridTrack, sep) || cachedHybrid714Buses == null || cachedHybrid714Buses.Length != 12) {
                 StereoStemBuffer[] stemArr = new StereoStemBuffer[sep.Stems.Count];
                 for (int i = 0; i < sep.Stems.Count; i++) {
                     stemArr[i] = sep.Stems[i];
                 }
                 float heightExp = Math.Clamp(upmixingSettings.Effect * 0.5f, 0.10f, 0.65f);
-                float[][] raw11 = NeuralStemSpatializer.ProcessHybridNeuralDirAc714(stemArr, stemSr, heightExp);
-                // W47: True 12-channel 7.1.4 with complementary 120 Hz LR4 Linkwitz-Riley ScreenLFE crossover
-                float[][] full12 = new float[12][];
-                int len12 = raw11.Length > 0 && raw11[0] != null ? raw11[0].Length : 0;
-                float[] lfeSum = new float[len12];
-                for (int b = 0; b < 11 && b < raw11.Length; b++) {
-                    float[] srcBus = raw11[b];
-                    if (srcBus == null || srcBus.Length == 0) {
-                        full12[b] = Array.Empty<float>();
-                        continue;
-                    }
-                    // Extract sub-120 Hz energy from the 7 ground channels into dedicated ScreenLFE while keeping mains high-passed
-                    if (b < 7) {
-                        SplitLinkwitzRiley4Lfe(srcBus, stemSr, 120f, out float[] hpBus, out float[] lpBus);
-                        full12[b] = hpBus;
-                        float weight = b <= 1 ? 0.50f : 0.35f;
-                        int m = Math.Min(lfeSum.Length, lpBus.Length);
-                        for (int n = 0; n < m; n++) {
-                            lfeSum[n] += lpBus[n] * weight;
-                        }
-                    } else {
-                        full12[b] = srcBus;
-                    }
-                }
-                full12[11] = lfeSum;
-                cachedHybrid714Buses = full12;
+                // W48: Shared canonical 12-channel 7.1.4 builder with complementary 120 Hz LR4 ScreenLFE crossover
+                cachedHybrid714Buses = NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe(stemArr, stemSr, heightExp, 120f);
                 cachedHybridTrack = sep;
             }
 
+            // Canonical ITU/SMPTE/Cavern Layout714 order matching BuildHybrid714WithDiscreteLfe 1:1
             ReferenceChannel[] layout714 = [
                 ReferenceChannel.FrontLeft, ReferenceChannel.FrontRight, ReferenceChannel.FrontCenter,
-                ReferenceChannel.SideLeft, ReferenceChannel.SideRight, ReferenceChannel.RearLeft, ReferenceChannel.RearRight,
-                ReferenceChannel.TopFrontLeft, ReferenceChannel.TopFrontRight, ReferenceChannel.TopRearLeft, ReferenceChannel.TopRearRight,
-                ReferenceChannel.ScreenLFE
+                ReferenceChannel.ScreenLFE,
+                ReferenceChannel.RearLeft, ReferenceChannel.RearRight, ReferenceChannel.SideLeft, ReferenceChannel.SideRight,
+                ReferenceChannel.TopFrontLeft, ReferenceChannel.TopFrontRight, ReferenceChannel.TopRearLeft, ReferenceChannel.TopRearRight
             ];
             for (int b = 0; b < cachedHybrid714Buses.Length && b < layout714.Length; b++) {
                 float[] pcm = cachedHybrid714Buses[b];
@@ -154,7 +143,7 @@ public sealed partial class RealtimePlayerEngine {
                 ReferenceChannel ch = layout714[b];
                 bool isLfe = ch == ReferenceChannel.ScreenLFE;
                 Vector3 normPos = ChannelPrototype.AlternativePositions[(int)ch];
-                bool isHeight = b >= 7 && !isLfe;
+                bool isHeight = b >= 8 && !isLfe;
                 SourceLayer layer = isHeight ? SourceLayer.VirtualHeight : SourceLayer.NeuralStem;
                 string label = isLfe ? "AI Hybrid LFE (.1)" : $"AI Hybrid {ch.GetShortName()}";
                 int idx = builtSources.Count;
@@ -198,18 +187,29 @@ public sealed partial class RealtimePlayerEngine {
             }
         } else {
             // Stems3DObjects: place each separated neural stem directly as live 3D object Sources in Listener
-            // plus a dedicated 120 Hz LR4 ScreenLFE (.1) crossover channel derived from Bass (or Instrumental fallback).
+            // plus a dedicated 120 Hz LR4 ScreenLFE (.1) crossover channel summing BOTH Bass and Drums sub-bass
+            // (with automatic fallback to Instrumental/Other/Residual when neither Bass nor Drums is present).
             SpatialSourceDescriptor[] stemDescs = neuralStemStage.BuildActiveStemDescriptors(envSize, 0);
             int descCursor = 0;
             const float invSqrt2 = 0.70710678f;
-            float[] dedicatedLfePcm = null;
-            bool hasBassStem = false;
+            int maxStemLen = 0;
+            bool hasBassOrDrums = false;
             for (int s = 0; s < sep.Stems.Count; s++) {
-                if (sep.Stems[s] != null && NeuralStemSpatializer.ClassifyStemName(sep.Stems[s].Name) == NeuralStemRole.Bass) {
-                    hasBassStem = true;
-                    break;
+                StereoStemBuffer st = sep.Stems[s];
+                if (st == null || st.Length <= 0) {
+                    continue;
+                }
+                if (st.Length > maxStemLen) {
+                    maxStemLen = st.Length;
+                }
+                NeuralStemRole r = NeuralStemSpatializer.ClassifyStemName(st.Name);
+                if (r == NeuralStemRole.Bass || r == NeuralStemRole.Drums) {
+                    hasBassOrDrums = true;
                 }
             }
+            float[] dedicatedLfePcm = maxStemLen > 0 ? new float[maxStemLen] : null;
+            bool hasPopulatedLfe = false;
+            progressiveNeuralUpdater = isProgressive ? new ProgressiveNeuralStemUpdater(sep, dedicatedLfePcm) : null;
 
             for (int s = 0; s < sep.Stems.Count; s++) {
                 StereoStemBuffer stem = sep.Stems[s];
@@ -231,9 +231,9 @@ public sealed partial class RealtimePlayerEngine {
 
                     float[] mono = new float[stem.Length];
                     if (isProgressive && progressiveNeuralUpdater != null) {
-                        if (role == NeuralStemRole.Bass) {
-                            dedicatedLfePcm = new float[stem.Length];
-                            progressiveNeuralUpdater.AddMonoJob(stem, mono, new StatefulLr4Crossover(stemSr, 120f), dedicatedLfePcm);
+                        if (role == NeuralStemRole.Bass && dedicatedLfePcm != null) {
+                            progressiveNeuralUpdater.AddMonoJob(stem, mono, new StatefulLr4Crossover(stemSr, 120f), lfeWeight: 0.70710678f);
+                            hasPopulatedLfe = true;
                         } else {
                             progressiveNeuralUpdater.AddMonoJob(stem, mono);
                         }
@@ -241,10 +241,14 @@ public sealed partial class RealtimePlayerEngine {
                         for (int n = 0; n < stem.Length; n++) {
                             mono[n] = (stem.Left[n] + stem.Right[n]) * invSqrt2;
                         }
-                        if (role == NeuralStemRole.Bass) {
-                            SplitLinkwitzRiley4Lfe(mono, stemSr, 120f, out float[] upperBass, out float[] subLfe);
+                        if (role == NeuralStemRole.Bass && dedicatedLfePcm != null) {
+                            NeuralStemSpatializer.SplitLinkwitzRiley4Lfe(mono, stemSr, 120f, out float[] upperBass, out float[] subLfe);
                             mono = upperBass;
-                            dedicatedLfePcm = subLfe;
+                            int m = Math.Min(dedicatedLfePcm.Length, subLfe.Length);
+                            for (int n = 0; n < m; n++) {
+                                dedicatedLfePcm[n] += subLfe[n] * invSqrt2;
+                            }
+                            hasPopulatedLfe = true;
                         }
                     }
 
@@ -278,24 +282,27 @@ public sealed partial class RealtimePlayerEngine {
                 } else {
                     float[] leftSrc = stem.Left;
                     float[] rightSrc = stem.Right;
-                    if (!hasBassStem && dedicatedLfePcm == null &&
-                        (role == NeuralStemRole.Instrumental || role == NeuralStemRole.Other || role == NeuralStemRole.Drums)) {
+                    bool routeSubToLfe = dedicatedLfePcm != null && (
+                        role == NeuralStemRole.Drums ||
+                        (!hasBassOrDrums && (role == NeuralStemRole.Instrumental || role == NeuralStemRole.Other || role == NeuralStemRole.Residual)));
+                    if (routeSubToLfe) {
                         if (isProgressive && progressiveNeuralUpdater != null) {
                             float[] hpL = new float[stem.Length];
                             float[] hpR = new float[stem.Length];
-                            dedicatedLfePcm = new float[stem.Length];
-                            progressiveNeuralUpdater.AddStereoLfeJob(stem, hpL, hpR, dedicatedLfePcm, stemSr);
+                            progressiveNeuralUpdater.AddStereoLfeJob(stem, hpL, hpR, stemSr, lfeWeight: 0.5f);
                             leftSrc = hpL;
                             rightSrc = hpR;
+                            hasPopulatedLfe = true;
                         } else {
-                            SplitLinkwitzRiley4Lfe(stem.Left, stemSr, 120f, out float[] hpL, out float[] lpL);
-                            SplitLinkwitzRiley4Lfe(stem.Right, stemSr, 120f, out float[] hpR, out float[] lpR);
+                            NeuralStemSpatializer.SplitLinkwitzRiley4Lfe(stem.Left, stemSr, 120f, out float[] hpL, out float[] lpL);
+                            NeuralStemSpatializer.SplitLinkwitzRiley4Lfe(stem.Right, stemSr, 120f, out float[] hpR, out float[] lpR);
                             leftSrc = hpL;
                             rightSrc = hpR;
-                            dedicatedLfePcm = new float[stem.Length];
-                            for (int n = 0; n < stem.Length; n++) {
-                                dedicatedLfePcm[n] = (lpL[n] + lpR[n]) * 0.5f;
+                            int m = Math.Min(dedicatedLfePcm.Length, stem.Length);
+                            for (int n = 0; n < m; n++) {
+                                dedicatedLfePcm[n] += (lpL[n] + lpR[n]) * 0.5f;
                             }
+                            hasPopulatedLfe = true;
                         }
                     }
                     for (int side = 0; side < 2; side++) {
@@ -338,7 +345,7 @@ public sealed partial class RealtimePlayerEngine {
                 }
             }
 
-            if (dedicatedLfePcm != null && dedicatedLfePcm.Length > 0) {
+            if (hasPopulatedLfe && dedicatedLfePcm != null && dedicatedLfePcm.Length > 0) {
                 Vector3 lfeNormPos = ChannelPrototype.AlternativePositions[(int)ReferenceChannel.ScreenLFE];
                 int lfeIdx = builtSources.Count;
                 const string lfeLabel = "AI LFE (.1)";
@@ -401,57 +408,8 @@ public sealed partial class RealtimePlayerEngine {
         sceneHub.ConfigurePostProcessingStages(OutputSampleRate, 2);
     }
 
-    /// <summary>
-    /// Exact 4th-order Linkwitz-Riley (LR4 = cascaded 2nd-order Butterworth) complementary crossover
-    /// splitting <paramref name="input"/> at <paramref name="cutoffHz"/> into high-passed mains and dedicated LFE (.1).
-    /// </summary>
-    static void SplitLinkwitzRiley4Lfe(float[] input, int sampleRate, float cutoffHz, out float[] highPass, out float[] lowPass) {
-        int n = input?.Length ?? 0;
-        highPass = new float[n];
-        lowPass = new float[n];
-        if (n == 0 || sampleRate <= 0) {
-            return;
-        }
-        double fc = Math.Clamp(cutoffHz, 40.0, Math.Min(250.0, sampleRate * 0.25));
-        double w0 = 2.0 * Math.PI * fc / sampleRate;
-        double cosW = Math.Cos(w0);
-        double sinW = Math.Sin(w0);
-        // Butterworth 2nd-order Q = 1/sqrt(2); two identical cascaded sections form an exact LR4 crossover (-6 dB @ fc, 0 deg phase sum)
-        double alpha = sinW / (2.0 * 0.7071067811865476);
-        double a0 = 1.0 + alpha;
-        double a1 = (-2.0 * cosW) / a0;
-        double a2 = (1.0 - alpha) / a0;
-
-        double lpB0 = ((1.0 - cosW) * 0.5) / a0;
-        double lpB1 = (1.0 - cosW) / a0;
-        double lpB2 = lpB0;
-
-        double hpB0 = ((1.0 + cosW) * 0.5) / a0;
-        double hpB1 = -(1.0 + cosW) / a0;
-        double hpB2 = hpB0;
-
-        double lp1x1 = 0, lp1x2 = 0, lp1y1 = 0, lp1y2 = 0;
-        double lp2x1 = 0, lp2x2 = 0, lp2y1 = 0, lp2y2 = 0;
-        double hp1x1 = 0, hp1x2 = 0, hp1y1 = 0, hp1y2 = 0;
-        double hp2x1 = 0, hp2x2 = 0, hp2y1 = 0, hp2y2 = 0;
-
-        for (int i = 0; i < n; i++) {
-            double x = input[i];
-            if (!double.IsFinite(x)) x = 0.0;
-
-            double l1 = lpB0 * x + lpB1 * lp1x1 + lpB2 * lp1x2 - a1 * lp1y1 - a2 * lp1y2;
-            lp1x2 = lp1x1; lp1x1 = x; lp1y2 = lp1y1; lp1y1 = l1;
-            double l2 = lpB0 * l1 + lpB1 * lp2x1 + lpB2 * lp2x2 - a1 * lp2y1 - a2 * lp2y2;
-            lp2x2 = lp2x1; lp2x1 = l1; lp2y2 = lp2y1; lp2y1 = l2;
-            lowPass[i] = (float)l2;
-
-            double h1 = hpB0 * x + hpB1 * hp1x1 + hpB2 * hp1x2 - a1 * hp1y1 - a2 * hp1y2;
-            hp1x2 = hp1x1; hp1x1 = x; hp1y2 = hp1y1; hp1y1 = h1;
-            double h2 = hpB0 * h1 + hpB1 * hp2x1 + hpB2 * hp2x2 - a1 * hp2y1 - a2 * hp2y2;
-            hp2x2 = hp2x1; hp2x1 = h1; hp2y2 = hp2y1; hp2y1 = h2;
-            highPass[i] = (float)h2;
-        }
-    }
+    static void SplitLinkwitzRiley4Lfe(float[] input, int sampleRate, float cutoffHz, out float[] highPass, out float[] lowPass) =>
+        NeuralStemSpatializer.SplitLinkwitzRiley4Lfe(input, sampleRate, cutoffHz, out highPass, out lowPass);
 
     void RebuildCachedActiveSourcesLocked() {
         if (listener == null || listener.ActiveSources.Count == 0) {

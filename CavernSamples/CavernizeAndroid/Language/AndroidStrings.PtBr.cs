@@ -1004,14 +1004,14 @@ public sealed partial class AndroidStrings {
         d["StudioW12CardTitle"] = "Presets Master de Estúdio";
         d["StudioW12PresetLabel"] = "Fluxo de Masterização";
         d["StudioW12ExportBtn"] = "Exportar Master";
-        d["StudioW12PresetBinaural"] = "Binaural Personalizado Lossless (HRTF + ISM + AutoEq)";
-        d["StudioW12PresetIamf"] = "Eclipsa Audio — IAMF v1.0 (.iamf OBU)";
-        d["StudioW12PresetHoa"] = "Ambisonics HOA B-Format (3ª Ordem ACN/SN3D .amb)";
-        d["StudioW12PresetAdm"] = "ADM BWF Master (ITU-R BS.2076 .wav)";
-        d["StudioW12PresetHybrid714"] = "Híbrido Neural + DirAC Estéreo → 7.1.4 Atmos";
-        d["StudioW12PresetKaraoke"] = "Karaokê Espacial / Instrumental Atmos";
-        d["StudioW12PresetLiveMixdown"] = "Mixdown Espacial de Performance Karaokê ao Vivo";
-        d["StudioW12PresetFlacAtmos"] = "Master Espacial Híbrido FLAC + Atmos Lossless";
+        d["StudioW12PresetBinaural"] = "Master Fones 3D (.wav)";
+        d["StudioW12PresetIamf"] = "Eclipsa Audio 3D (.iamf)";
+        d["StudioW12PresetHoa"] = "Cena Espacial 360° (.amb)";
+        d["StudioW12PresetAdm"] = "Master Dolby Atmos (.wav)";
+        d["StudioW12PresetHybrid714"] = "Cinema Surround 7.1.4 IA (.wav)";
+        d["StudioW12PresetKaraoke"] = "Karaokê Espacial Instrumental (.wav)";
+        d["StudioW12PresetLiveMixdown"] = "Mix da Performance Vocal Gravada (.wav)";
+        d["StudioW12PresetFlacAtmos"] = "Master Atmos + Gêmeo Lossless (.wav)";
         d["StudioW12DoneFormat"] = "Master exportado: {0} ({1:0.0} LUFS · {2:0.0} dBTP)";
 
         // W13 6DoF Walkable 3D Room & Studio Spatial X-Ray Inspector
@@ -1263,9 +1263,9 @@ public sealed partial class AndroidStrings {
         d["StudioMasterCardTitle"] = "Presets Master de Estúdio";
         d["StudioProSectionTitle"] = "Diagnóstico e Inspeção Pro";
         d["StudioReadinessHeader"] = "Prontidão da Cadeia";
-        d["StudioPresetIamfClean"] = "Contêiner Espacial IAMF v1.1 (.iamf)";
-        d["StudioPresetHoaClean"] = "Ambisonics 3ª Ordem (16ch HOA ACN/SN3D .wav)";
-        d["StudioPresetAdmClean"] = "ADM BWF Master de Estúdio ( ITU-R BS.2076 .wav )";
+        d["StudioPresetIamfClean"] = "Eclipsa Audio 3D (.iamf)";
+        d["StudioPresetHoaClean"] = "Cena Espacial 360° (.amb)";
+        d["StudioPresetAdmClean"] = "Master Dolby Atmos (.wav)";
         d["StudioContextHybridReadyClean"] = "Gêmeo Lossless pronto ({0}) · EM-MWF + Restaurador Neural ativo";
         d["StudioBatchDialogDescClean"] = "Selecione um ou mais presets Studio Master para renderizar em sequência e salvar em Downloads/Cavernize/Renderizados.";
         d["StudioBadgeFFmpegReady"] = "FFmpeg Pronto";
@@ -1428,5 +1428,75 @@ public sealed partial class AndroidStrings {
         d["LyricsSingToggleDesc"] = "Mostrar ou ocultar controles de Karaokê e Microfone";
         d["LibraryLoadingCached"] = "Carregando biblioteca...";
         d["MediaDecodeFailedCorrupt"] = "Não foi possível decodificar este arquivo de áudio. Ele pode estar corrompido ou usar um codec não suportado.";
+
+        // W48 Botão Direto de IA na Aba Play, Gravador de Performance e Construtor Componível no Estúdio
+        d["PlayTabAiOffShort"] = "IA 3D";
+        d["PlayTabAi3DShort"] = "IA 3D";
+        d["PlayTabAi714Short"] = "IA 7.1.4";
+        d["PlayTabAiAtmosShort"] = "IA Atmos";
+        d["PlayTabAiPrepShortFmt"] = "IA {0}%";
+        d["PlayTabAiAtmosOnToast"] = "Aprimoramento IA Atmos ATIVO — objetos 3D dinâmicos preservados.";
+        d["PlayTabAiOffToast"] = "Processamento Espacial por IA DESLIGADO.";
+        d["PlayTabAiOnToastFmt"] = "Upmix Espacial IA ATIVO: {0}";
+        d["PlayTabAiDialogTitle"] = "Processamento Espacial por IA";
+        d["PlayTabAiAtmosDialogDesc"] = "Aprimora faixas Dolby Atmos com restauração por Gêmeo Lossless mantendo 100% dos objetos 3D em movimento e o canal LFE (.1).";
+        d["PlayTabAiAtmosEnhanceTitle"] = "Aprimoramento IA para Atmos (Preserva Objetos)";
+        d["PlayTabAiStereoDialogDesc"] = "Escolha como a IA local transforma músicas estéreo em áudio 3D com subwoofer dedicado (.1) — independente do Karaokê.";
+        d["PlayTabAiModeTitle"] = "Modo Espacial IA";
+        d["PlayTabAiModeOff"] = "Desligado (Reprodução Padrão)";
+        d["PlayTabAiModeStems3D"] = "Stems 3D por IA (Instrumentos em 3D + Sub)";
+        d["PlayTabAiModeHybrid714"] = "Cinema 7.1.4 por IA (Surround + Altura + Sub)";
+
+        d["StudioRecCardTitle"] = "Gravador de Performance Vocal";
+        d["StudioRecCardSub"] = "Grave sua voz sobre a música atual, ouça a prévia mixada e combine com qualquer formato de exportação abaixo.";
+        d["StudioRecStatusIdle"] = "Pronto — toque em Gravar para cantar sobre esta faixa";
+        d["StudioRecStatusRecordingFmt"] = "GRAVANDO {0} · Pico do mic {1:0.0} dBFS";
+        d["StudioRecStatusReadyFmt"] = "Gravação pronta · {0} (pico {1:0.0} dBFS)";
+        d["StudioRecStatusPreviewingFmt"] = "Ouvindo prévia da gravação · {0}";
+        d["StudioRecStartBtn"] = "Gravar Performance";
+        d["StudioRecStopBtn"] = "Parar Gravação";
+        d["StudioRecReRecordBtn"] = "Gravar Nova Tomada";
+        d["StudioRecPreviewBtn"] = "Ouvir Prévia";
+        d["StudioRecStopPreviewBtn"] = "Parar Prévia";
+        d["StudioRecDiscardBtn"] = "Descartar";
+        d["StudioRecGrantMicToast"] = "Permita o acesso ao microfone e toque em Gravar Performance novamente.";
+        d["StudioRecMicFailedToast"] = "Não foi possível iniciar a captura do microfone. Verifique as permissões de áudio.";
+        d["StudioRecStartedToast"] = "Gravação iniciada — pode cantar!";
+        d["StudioRecStoppedToastFmt"] = "Gravação salva ({0}) — toque em Ouvir Prévia ou Exportar.";
+        d["StudioRecNeedTakeToast"] = "Grave uma performance vocal acima primeiro, ou desative 'Incluir Voz Gravada'.";
+        d["StudioRecPreviewingToast"] = "Reproduzindo sua voz gravada com acabamento automático de estúdio.";
+        d["StudioRecDiscardedToast"] = "Gravação descartada.";
+
+        d["StudioExportBuilderTitle"] = "Construtor de Exportação Espacial";
+        d["StudioExportFormatLabel"] = "Formato de Saída";
+        d["StudioExportModulesHeader"] = "Opções de Mix e Aprimoramento (Combine Livremente)";
+        d["StudioFmtHeadphone3D"] = "Fones 3D (.wav)";
+        d["StudioFmtHeadphone3DDesc"] = "Áudio 3D binaural imersivo pronto para qualquer fone de ouvido.";
+        d["StudioFmtCinema714"] = "Cinema Surround 7.1.4 (.wav)";
+        d["StudioFmtCinema714Desc"] = "12 canais surround discretos com subwoofer dedicado (.1) e canais de altura.";
+        d["StudioFmtAtmosMaster"] = "Master Dolby Atmos (.wav)";
+        d["StudioFmtAtmosMasterDesc"] = "Master de estúdio ADM BWF que preserva objetos 3D Atmos em movimento e LFE.";
+        d["StudioFmtEclipsa3D"] = "Eclipsa Audio 3D (.iamf)";
+        d["StudioFmtEclipsa3DDesc"] = "Formato espacial 3D aberto moderno para streaming de nova geração.";
+        d["StudioFmtSpatial360"] = "Cena Espacial 360° (.amb)";
+        d["StudioFmtSpatial360Desc"] = "Campo sonoro Ambisonics de 3ª ordem em 360° para VR e vídeos imersivos.";
+        d["StudioOptAiTitle"] = "Upmix 3D IA / Aprimorar Atmos";
+        d["StudioOptAiDesc"] = "Transforma estéreo em 7.1.4 com graves discretos (.1), ou aprimora Atmos preservando objetos.";
+        d["StudioOptKaraokeTitle"] = "Modo Karaokê (Reduzir Voz Principal)";
+        d["StudioOptKaraokeDesc"] = "Abaixa o vocal principal mantendo backings, instrumentos e graves intactos.";
+        d["StudioOptPerfTitle"] = "Incluir Voz Gravada";
+        d["StudioOptPerfDesc"] = "Mixa sua voz gravada na exportação com EQ, compressão e reverb de estúdio automáticos.";
+        d["StudioOptPerfReadyDescFmt"] = "Gravação pronta ({0}) — será mixada automaticamente nesta exportação.";
+        d["StudioOptPerfMissingDesc"] = "Nenhuma gravação ainda — use Gravar Performance acima antes de exportar.";
+        d["StudioOptTwinTitle"] = "Restauração por Gêmeo Lossless";
+        d["StudioOptTwinDesc"] = "Usa seu arquivo FLAC/WAV pareado para restaurar a clareza total de estúdio.";
+        d["StudioOptHeadphoneTitle"] = "Calibração Personalizada de Fone";
+        d["StudioOptHeadphoneDesc"] = "Aplica seu perfil HRTF, acústica da sala virtual e curva AutoEq do fone.";
+        d["StudioTagAtmosAi"] = "IA Atmos";
+        d["StudioTagAiUpmix"] = "Upmix 3D IA";
+        d["StudioTagKaraokeFmt"] = "Karaokê ({0}%)";
+        d["StudioTagVocalTake"] = "Voz Gravada";
+        d["StudioTagLosslessTwin"] = "Gêmeo Lossless";
+        d["StudioExportRecipeSummaryFmt"] = "Receita de exportação: {0} · Teto {1:0.0} dBTP";
     }
 }
