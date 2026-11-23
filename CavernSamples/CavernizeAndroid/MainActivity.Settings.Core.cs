@@ -53,7 +53,6 @@ public partial class MainActivity {
     TextView cloudLogStatusText = null, liveBridgeStatusText = null;
     Button selfCheckQuickBtn, selfCheckFullBtn, selfCheckUltraBtn, omniBridgeOpenBtn;
     Button cloudLogUploadBtn = null, liveBridgeToggleBtn = null, liveBridgeCopyBtn = null;
-    Switch omniBridgeIpcSwitch;
     Switch liveBridgeStandbySwitch = null;
     bool isCloudLogUploading, isSelfCheckRunning, isLiveBridgeBusy;
     LinearLayout advContentContainer;

@@ -97,13 +97,8 @@ public partial class MainActivity {
         logCard.AddView(omniHeader);
 
         omniBridgeStatusText = Label("", 11.5f, OneUiTheme.TextSub);
-        omniBridgeStatusText.SetPadding(0, Dp(2), 0, Dp(8));
+        omniBridgeStatusText.SetPadding(0, Dp(2), 0, Dp(10));
         logCard.AddView(omniBridgeStatusText);
-
-        omniBridgeIpcSwitch = AddSwitchRow(logCard, S["OmniBridgeIpcSwitch"], store.OmniAgentIpcEnabled, v => {
-            store.OmniAgentIpcEnabled = v;
-            RefreshLogSummaryLabel();
-        });
 
         LinearLayout omniBtns = HRow();
         omniBridgeOpenBtn = PillButton(S["OmniBridgeOpenBtn"], OpenOmniAgentOrDownload, active: true);
@@ -228,18 +223,12 @@ public partial class MainActivity {
         }
         if (omniBridgeStatusText != null && store != null) {
             bool installed = OmniBridgeIpcReceiver.IsOmniAgentInstalledWithMatchingSignature(this);
-            if (installed && store.OmniAgentIpcEnabled) {
+            if (installed) {
                 omniBridgeStatusText.Text = string.Format(S["OmniBridgeStatusConnectedFmt"], LiveDiagnosticBridgeService.CommandsHandled);
                 omniBridgeStatusText.SetTextColor(OneUiTheme.FunctionalGreen);
-            } else if (installed) {
-                omniBridgeStatusText.Text = S["OmniBridgeStatusPaused"];
-                omniBridgeStatusText.SetTextColor(OneUiTheme.FunctionalAmber);
             } else {
                 omniBridgeStatusText.Text = S["OmniBridgeStatusNotInstalled"];
                 omniBridgeStatusText.SetTextColor(OneUiTheme.TextSub);
-            }
-            if (omniBridgeIpcSwitch != null && omniBridgeIpcSwitch.Checked != store.OmniAgentIpcEnabled) {
-                omniBridgeIpcSwitch.Checked = store.OmniAgentIpcEnabled;
             }
             if (omniBridgeOpenBtn != null) {
                 omniBridgeOpenBtn.Text = installed ? S["OmniBridgeOpenBtn"] : S["OmniBridgeInstallBtn"];
@@ -255,7 +244,7 @@ public partial class MainActivity {
                 StartActivity(launch);
                 return;
             }
-            Intent browser = new(Intent.ActionView, Android.Net.Uri.Parse("https://github.com/guumachadooo/Cavern/releases/tag/omniagent-latest"));
+            Intent browser = new(Intent.ActionView, Android.Net.Uri.Parse("https://github.com/guumachadooo/OmniAgent/releases/latest"));
             StartActivity(browser);
         } catch (Exception ex) {
             Toast.MakeText(this, ex.Message, ToastLength.Short).Show();

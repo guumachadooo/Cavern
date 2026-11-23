@@ -147,6 +147,7 @@ public static partial class LiveDiagnosticBridgeService {
         new("native_status", 0, "Verify bundled W^X ARM64 NativeLibraryDir binaries & sizes", "{}"),
         new("ui_tree", 0, "Dump live Android View hierarchy of active MainActivity window", "{maxDepth?:1..10}"),
         new("acoustic_audit", 0, "Run L11 Intelligent Acoustic Differential Oracle (HRTF/Upmix/LGSR/ISM/UserConfig fingerprints)", "{quick?:bool, format?:'json'|'markdown'}"),
+        new("get_design_tokens", 0, "Export active Cavernize One UI 9 runtime design tokens JSON for zero-quota companion UI sync", "{}"),
         new("batch", 0, "Execute up to 15 sequential commands in one round-trip (enforces each command's tier)", "{commands:[{cmd:string, args?:object}]}"),
 
         // Tier 1: Interactive App Control, QA & Total-App Live Audit

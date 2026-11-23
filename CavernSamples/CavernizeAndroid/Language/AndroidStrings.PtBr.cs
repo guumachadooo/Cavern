@@ -376,12 +376,12 @@ public sealed partial class AndroidStrings {
         d["LiveBridgeStandbySwitch"] = "Escuta em 2º Plano (Aprovação por Digital)";
         d["OmniBridgeSectionTitle"] = "Ponte OmniAgent (Conexão Unificada)";
         d["OmniBridgeHelpTitle"] = "Ponte Local Unificada com OmniAgent";
-        d["OmniBridgeHelpBody"] = "O relay Cloudflare, pareamento biométrico Smart Knock, push no GitHub, Termux e auto-deploy do Worker ficam centralizados no aplicativo OmniAgent Companion.\n\nCom o IPC local ativado, o Cavernize aceita comandos de diagnóstico somente do OmniAgent assinado com o mesmo certificado, sem rodar serviços duplicados em 2º plano.";
-        d["OmniBridgeIpcSwitch"] = "Permitir ponte local com OmniAgent";
+        d["OmniBridgeHelpBody"] = "O relay Cloudflare, pareamento biométrico Smart Knock, push no GitHub, Termux e auto-deploy do Worker ficam centralizados no aplicativo OmniAgent Companion.\n\nSempre que o OmniAgent assinado com o mesmo certificado estiver instalado, o IPC local criptografado e o sync de design One UI 9 ficam ativos automaticamente, sem botão para desativar por engano.";
+        d["OmniBridgeIpcSwitch"] = "Ponte local automática com OmniAgent";
         d["OmniBridgeOpenBtn"] = "Abrir OmniAgent";
         d["OmniBridgeInstallBtn"] = "Baixar OmniAgent";
         d["OmniBridgeAdvancedBtn"] = "Avançado / Nuvem";
-        d["OmniBridgeStatusConnectedFmt"] = "OmniAgent instalado · IPC local por assinatura ativo ({0} cmds)";
+        d["OmniBridgeStatusConnectedFmt"] = "OmniAgent conectado automaticamente · Mesma assinatura ({0} cmds)";
         d["OmniBridgeStatusPaused"] = "OmniAgent instalado · IPC local pausado pela chave";
         d["OmniBridgeStatusNotInstalled"] = "Instale o OmniAgent Companion para gerenciar a ponte IA, Smart Knock e deploy do Worker em um só lugar.";
         d["LiveBridgeStandbyNotifTitle"] = "Ponte Ao Vivo em Espera";

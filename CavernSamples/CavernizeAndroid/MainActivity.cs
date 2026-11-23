@@ -375,6 +375,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         LiveDiagnosticBridgeService.StateChanged += OnLiveBridgeStateChanged;
         if (OmniBridgeIpcReceiver.IsOmniAgentInstalledWithMatchingSignature(this)) {
             LiveBridgeWakeService.Stop(this);
+            OmniBridgeIpcReceiver.NotifyOmniAgentWake(this);
         } else {
             LiveBridgeWakeService.SyncStandbyState(this, store);
         }

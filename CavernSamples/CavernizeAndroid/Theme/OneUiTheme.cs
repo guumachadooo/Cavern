@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 using Android.Content;
 using Android.Content.Res;
 using Android.Graphics;
@@ -144,12 +146,18 @@ public static class OneUiTheme {
     public static readonly Color SoloGold = Color.ParseColor("#FACC15");
 
     public static bool IsDynamicWallpaperActive { get; private set; }
+    public static string ActiveDesignTokensSource { get; private set; } = "local";
+    public const int DesignKitSchemaVersion = 1;
 
     // SESL9 Dimensions (dp)
     public const float CardCornerDp = 26f;
     public const float ButtonCornerDp = 18f;
     public const float TileCornerDp = 22f;
     public const float PillCornerDp = 999f;
+
+    public static float EffectiveCardCornerDp { get; private set; } = CardCornerDp;
+    public static float EffectiveButtonCornerDp { get; private set; } = ButtonCornerDp;
+    public static float EffectiveTileCornerDp { get; private set; } = TileCornerDp;
 
     /// <summary>
     /// Reads Samsung One UI / Android Material You dynamic wallpaper colors from <paramref name="ctx"/>
@@ -650,6 +658,110 @@ public static class OneUiTheme {
 
         tile.Click += (_, _) => onClick?.Invoke();
         return tile;
+    }
+
+    /// <summary>
+    /// Serializes the active One UI 9 design tokens (palette, glass surfaces, semantic icons, corner radii)
+    /// to compact JSON so companion apps (OmniAgent) can mirror Cavernize's live visual choices with zero quota.
+    /// </summary>
+    public static string ExportDesignTokensJson(string sourceTag = "cavernize-ipc") {
+        return JsonSerializer.Serialize(new {
+            schema = DesignKitSchemaVersion,
+            source = sourceTag,
+            dynamicWallpaper = IsDynamicWallpaperActive,
+            cardCornerDp = EffectiveCardCornerDp,
+            buttonCornerDp = EffectiveButtonCornerDp,
+            tileCornerDp = EffectiveTileCornerDp,
+            bgScreen = BgScreen.ToArgb(),
+            surfaceCard = SurfaceCard.ToArgb(),
+            surfaceElevated = SurfaceElevated.ToArgb(),
+            surfaceModal = SurfaceModal.ToArgb(),
+            surfaceModalRow = SurfaceModalRow.ToArgb(),
+            surfaceFloatingBar = SurfaceFloatingBar.ToArgb(),
+            glassRimTop = GlassRimTop.ToArgb(),
+            glassRimMid = GlassRimMid.ToArgb(),
+            glassRimBottom = GlassRimBottom.ToArgb(),
+            primary = Primary.ToArgb(),
+            primaryHigh = PrimaryHigh.ToArgb(),
+            primaryPressed = PrimaryPressed.ToArgb(),
+            secondary = Secondary.ToArgb(),
+            secondaryHigh = SecondaryHigh.ToArgb(),
+            tertiary = Tertiary.ToArgb(),
+            highlightAccent = HighlightAccent.ToArgb(),
+            peachText = PeachText.ToArgb(),
+            iconSpatial = IconSpatial.ToArgb(),
+            iconSliderMedia = IconSliderMedia.ToArgb(),
+            iconAtmosUpmix = IconAtmosUpmix.ToArgb(),
+            iconStudioExport = IconStudioExport.ToArgb(),
+            iconStemsCalib = IconStemsCalib.ToArgb(),
+            iconSystemInfo = IconSystemInfo.ToArgb(),
+            utc = DateTime.UtcNow.ToString("O")
+        });
+    }
+
+    /// <summary>
+    /// Applies a JSON design-token snapshot exported by Cavernize so companion apps reflect
+    /// Cavernize design adjustments immediately at runtime without rebuilding or spending quota.
+    /// </summary>
+    public static bool ApplyRuntimeDesignTokensJson(string json, string sourceLabel = "cavernize-ipc") {
+        if (string.IsNullOrWhiteSpace(json)) {
+            return false;
+        }
+        try {
+            using JsonDocument doc = JsonDocument.Parse(json);
+            JsonElement root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) {
+                return false;
+            }
+            if (TryGetFloat(root, "cardCornerDp", out float cDp)) EffectiveCardCornerDp = Math.Clamp(cDp, 12f, 36f);
+            if (TryGetFloat(root, "buttonCornerDp", out float bDp)) EffectiveButtonCornerDp = Math.Clamp(bDp, 10f, 32f);
+            if (TryGetFloat(root, "tileCornerDp", out float tDp)) EffectiveTileCornerDp = Math.Clamp(tDp, 12f, 32f);
+            if (TryGetArgb(root, "bgScreen", out Color c)) BgScreen = c;
+            if (TryGetArgb(root, "surfaceCard", out c)) SurfaceCard = c;
+            if (TryGetArgb(root, "surfaceElevated", out c)) SurfaceElevated = c;
+            if (TryGetArgb(root, "surfaceModal", out c)) SurfaceModal = c;
+            if (TryGetArgb(root, "surfaceModalRow", out c)) SurfaceModalRow = c;
+            if (TryGetArgb(root, "surfaceFloatingBar", out c)) SurfaceFloatingBar = c;
+            if (TryGetArgb(root, "glassRimTop", out c)) GlassRimTop = c;
+            if (TryGetArgb(root, "glassRimMid", out c)) GlassRimMid = c;
+            if (TryGetArgb(root, "glassRimBottom", out c)) GlassRimBottom = c;
+            if (TryGetArgb(root, "primary", out c)) Primary = c;
+            if (TryGetArgb(root, "primaryHigh", out c)) PrimaryHigh = c;
+            if (TryGetArgb(root, "primaryPressed", out c)) PrimaryPressed = c;
+            if (TryGetArgb(root, "secondary", out c)) Secondary = c;
+            if (TryGetArgb(root, "secondaryHigh", out c)) SecondaryHigh = c;
+            if (TryGetArgb(root, "tertiary", out c)) { Tertiary = c; SliderAccent = c; }
+            if (TryGetArgb(root, "highlightAccent", out c)) HighlightAccent = c;
+            if (TryGetArgb(root, "peachText", out c)) PeachText = c;
+            if (TryGetArgb(root, "iconSpatial", out c)) IconSpatial = c;
+            if (TryGetArgb(root, "iconSliderMedia", out c)) IconSliderMedia = c;
+            if (TryGetArgb(root, "iconAtmosUpmix", out c)) IconAtmosUpmix = c;
+            if (TryGetArgb(root, "iconStudioExport", out c)) IconStudioExport = c;
+            if (TryGetArgb(root, "iconStemsCalib", out c)) IconStemsCalib = c;
+            if (TryGetArgb(root, "iconSystemInfo", out c)) IconSystemInfo = c;
+            ActiveDesignTokensSource = string.IsNullOrWhiteSpace(sourceLabel) ? "cavernize-ipc" : sourceLabel;
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    static bool TryGetArgb(JsonElement obj, string name, out Color color) {
+        color = default;
+        if (obj.TryGetProperty(name, out JsonElement el) && el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out int argb)) {
+            color = new Color(argb);
+            return true;
+        }
+        return false;
+    }
+
+    static bool TryGetFloat(JsonElement obj, string name, out float value) {
+        value = 0f;
+        if (obj.TryGetProperty(name, out JsonElement el) && el.ValueKind == JsonValueKind.Number && el.TryGetSingle(out float v)) {
+            value = v;
+            return true;
+        }
+        return false;
     }
 }
 

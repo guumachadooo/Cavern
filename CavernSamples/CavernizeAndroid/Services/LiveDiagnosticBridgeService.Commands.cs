@@ -17,6 +17,7 @@ using Android.OS;
 using Android.Security.Keystore;
 
 using CavernizeAndroid.Audio;
+using CavernizeAndroid.Theme;
 
 using Java.Security;
 
@@ -93,6 +94,10 @@ public static partial class LiveDiagnosticBridgeService {
                             args = c.ArgsSchema
                         })
                     }, new JsonSerializerOptions { WriteIndented = true }));
+                }
+                case "get_design_tokens": {
+                    OneUiTheme.Initialize(context);
+                    return (true, OneUiTheme.ExportDesignTokensJson("cavernize-ipc"));
                 }
                 case "quick_check": {
                     SelfCheckReport rep = await SelfDiagnosticEngine.RunAsync(context, store, SelfCheckMode.Quick, ct: ct).ConfigureAwait(false);

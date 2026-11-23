@@ -35,6 +35,8 @@ public sealed class OmniBridgeIpcReceiver : BroadcastReceiver {
     public const string ExtraBody = "body";
     public const string ExtraElapsedMs = "elapsed_ms";
 
+    public const string ActionEnsureOmniAlive = "hu.sbence.cavern.ipc.OMNI_ENSURE_ALIVE";
+
     /// <summary>
     /// Returns true if <c>OmniAgent Companion</c> is installed and signed with the exact same
     /// release keystore certificate as Cavernize.
@@ -50,6 +52,24 @@ public sealed class OmniBridgeIpcReceiver : BroadcastReceiver {
 #pragma warning restore CS0618, CA1422
         } catch {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Silently sends a signature-protected wake ping to OmniAgent Companion so its always-on
+    /// background service stays alive even if Android previously stopped the process.
+    /// </summary>
+    public static void NotifyOmniAgentWake(Context context) {
+        if (context == null || !IsOmniAgentInstalledWithMatchingSignature(context)) {
+            return;
+        }
+        try {
+            Intent wake = new(ActionEnsureOmniAlive);
+            wake.SetPackage(OmniAgentPackage);
+            wake.AddFlags(ActivityFlags.IncludeStoppedPackages);
+            context.SendBroadcast(wake, OmniBridgePermission);
+        } catch {
+            // Best effort
         }
     }
 
@@ -69,7 +89,7 @@ public sealed class OmniBridgeIpcReceiver : BroadcastReceiver {
             return;
         }
 
-        // Strict signature verification: only accept commands from same-signed OmniAgent package
+        // Strict signature verification: automatically accepts commands whenever same-signed OmniAgent is installed
         if (!string.Equals(replyPkg, OmniAgentPackage, StringComparison.Ordinal) ||
             !IsOmniAgentInstalledWithMatchingSignature(context)) {
             AppLogger.Warn("IPC", $"Rejected OmniBridge IPC '{cmd}' from untrusted caller '{replyPkg}'.");
@@ -78,10 +98,6 @@ public sealed class OmniBridgeIpcReceiver : BroadcastReceiver {
 
         Context appCtx = context.ApplicationContext ?? context;
         AppSettingsStore store = new(appCtx);
-        if (!store.OmniAgentIpcEnabled) {
-            SendReply(appCtx, replyPkg, reqId, ok: false, body: "Local OmniAgent IPC is disabled in Cavernize Settings -> Diagnostics.", elapsedMs: 0);
-            return;
-        }
 
         PendingResult pending = GoAsync();
         _ = Task.Run(async () => {
