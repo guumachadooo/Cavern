@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-11-23T01:13:22Z",
-  "version": "2.9.51",
-  "runId": "45092762812",
-  "runNumber": "51",
-  "commitSha": "ef77aa7c8cd478ea1a32c685c8acdeabaec4edc6",
-  "runUrl": "https://github.com/guumachadooo/Cavern/actions/runs/45092762812",
+  "generatedAtUtc": "2026-11-23T01:56:05Z",
+  "version": "2.9.52",
+  "runId": "45096800816",
+  "runNumber": "52",
+  "commitSha": "a8d3348529eb716127810b3ae16fba59cb6cfc13",
+  "runUrl": "https://github.com/guumachadooo/Cavern/actions/runs/45096800816",
   "outcomes": {
     "ndk": "success",
     "compile": "success",
