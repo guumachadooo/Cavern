@@ -85,6 +85,53 @@ public static partial class LyricsService {
         return doc.IsSynced ? 2 : 1;
     }
 
+    /// <summary>
+    /// Serializes a <see cref="LyricsDocument"/> into standard LRC (or Enhanced LRC when syllable timings exist)
+    /// for lossless container embedding during Studio/Classic audio export.
+    /// </summary>
+    public static string SerializeToLrc(LyricsDocument doc) {
+        if (doc == null || !doc.HasLyrics) {
+            return string.Empty;
+        }
+        if (doc.IsSynced && doc.Lines != null && doc.Lines.Count > 0) {
+            StringBuilder sb = new(doc.Lines.Count * 48);
+            for (int i = 0; i < doc.Lines.Count; i++) {
+                LyricCue cue = doc.Lines[i];
+                if (string.IsNullOrWhiteSpace(cue.Text)) {
+                    continue;
+                }
+                sb.Append('[').Append(FormatLrcTimestamp(cue.TimeSeconds)).Append(']');
+                if (doc.IsSyllableSynced && cue.Words != null && cue.Words.Count > 0) {
+                    for (int w = 0; w < cue.Words.Count; w++) {
+                        LyricWordCue word = cue.Words[w];
+                        if (string.IsNullOrEmpty(word.Text)) continue;
+                        sb.Append('<').Append(FormatLrcTimestamp(word.StartSeconds)).Append('>').Append(word.Text);
+                        if (w + 1 < cue.Words.Count && !word.Text.EndsWith(' ')) {
+                            sb.Append(' ');
+                        }
+                    }
+                } else {
+                    sb.Append(cue.Text.Trim());
+                }
+                sb.Append('\n');
+            }
+            string built = sb.ToString().Trim();
+            if (!string.IsNullOrWhiteSpace(built)) {
+                return built;
+            }
+        }
+        return (doc.RawUnsyncedText ?? string.Empty).Trim();
+    }
+
+    static string FormatLrcTimestamp(double seconds) {
+        double safe = double.IsFinite(seconds) && seconds > 0 ? seconds : 0.0;
+        int totalCentis = (int)Math.Round(safe * 100.0);
+        int mins = totalCentis / 6000;
+        int secs = (totalCentis / 100) % 60;
+        int centis = totalCentis % 100;
+        return string.Format(System.Globalization.CultureInfo.InvariantCulture, "{0:00}:{1:00}.{2:00}", mins, secs, centis);
+    }
+
     const int MaxMoodDigestSections = 16;
 
     static readonly HashSet<string> HighArousalTokens = new(StringComparer.OrdinalIgnoreCase) {

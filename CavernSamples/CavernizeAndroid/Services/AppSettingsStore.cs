@@ -675,6 +675,26 @@ public sealed class AppSettingsStore {
         set => Edit().PutBoolean("studioOptPersonalizedHeadphone", value).Apply();
     }
 
+    public int StudioDynamicChoreoModeIndex {
+        get => Math.Clamp(prefs.GetInt("studioDynamicChoreoModeIndex", (int)Cavern.Spatial.SpatialChoreoMode.Off), 0, 4);
+        set => Edit().PutInt("studioDynamicChoreoModeIndex", Math.Clamp(value, 0, 4)).Apply();
+    }
+
+    public bool StudioExportEmbedCoverArt {
+        get => prefs.GetBoolean("studioExportEmbedCoverArt", true);
+        set => Edit().PutBoolean("studioExportEmbedCoverArt", value).Apply();
+    }
+
+    public bool StudioExportEmbedLyrics {
+        get => prefs.GetBoolean("studioExportEmbedLyrics", true);
+        set => Edit().PutBoolean("studioExportEmbedLyrics", value).Apply();
+    }
+
+    public int StudioExportFolderIndex {
+        get => Math.Clamp(prefs.GetInt("studioExportFolderIndex", (int)ExportStorageDestination.MusicCavernize), 0, 1);
+        set => Edit().PutInt("studioExportFolderIndex", Math.Clamp(value, 0, 1)).Apply();
+    }
+
     public int NeuralOrchestrationModeIndex {
         get => prefs.GetInt("neuralOrchestrationMode", (int)Cavernize.Logic.Spatial.NeuralOrchestrationMode.Auto);
         set => Edit().PutInt("neuralOrchestrationMode", Math.Clamp(value, 0, 1)).Apply();

@@ -95,6 +95,15 @@ public sealed class StudioComposableExportOptions {
     /// <summary>Optional precomputed 3D spatial object choreography track evaluated per frame during offline rendering.</summary>
     public SpatialChoreoTrack ChoreoTrack { get; set; }
 
+    /// <summary>Explicit Studio dynamic Atmos object motion mode (Off = static anchors; Subtle/Musical/Cinematic/Orbit = moving 3D objects).</summary>
+    public SpatialChoreoMode DynamicChoreoMode { get; set; } = SpatialChoreoMode.Off;
+
+    /// <summary>Optional privacy-safe distilled lyric mood sections guiding dynamic spatial choreography.</summary>
+    public IReadOnlyList<LyricMoodDigest> LyricMoodDigests { get; set; }
+
+    /// <summary>Optional metadata, cover art, and synchronized lyrics payload preserved into exported audio files.</summary>
+    public ExportMetadataPackage Metadata { get; set; }
+
     /// <summary>Optional callback invoked before piping to FFmpeg stdin to install a <c>SIGPIPE</c> shield.</summary>
     public Action OnSigpipeShield { get; set; }
 }
@@ -173,6 +182,15 @@ public sealed class StudioBatchExportJob {
     /// <summary>Optional precomputed 3D spatial object choreography track evaluated per frame during offline rendering.</summary>
     public SpatialChoreoTrack ChoreoTrack { get; set; }
 
+    /// <summary>Explicit Studio dynamic Atmos object motion mode (Off = static anchors; Subtle/Musical/Cinematic/Orbit = moving 3D objects).</summary>
+    public SpatialChoreoMode DynamicChoreoMode { get; set; } = SpatialChoreoMode.Off;
+
+    /// <summary>Optional privacy-safe distilled lyric mood sections guiding dynamic spatial choreography.</summary>
+    public IReadOnlyList<LyricMoodDigest> LyricMoodDigests { get; set; }
+
+    /// <summary>Optional metadata, cover art, and synchronized lyrics payload preserved into exported audio files.</summary>
+    public ExportMetadataPackage Metadata { get; set; }
+
     /// <summary>Optional callback invoked before piping to FFmpeg stdin to install a <c>SIGPIPE</c> shield.</summary>
     public Action OnSigpipeShield { get; set; }
 }
@@ -222,6 +240,18 @@ public sealed class StudioBatchExportResult {
 
     /// <summary>Resolved compression tier used for this export.</summary>
     public StudioCompressionTier CompressionTier { get; init; }
+
+    /// <summary>True when text tags were embedded into the exported container.</summary>
+    public bool MetadataEmbedded { get; init; }
+
+    /// <summary>True when front cover artwork was embedded into the exported container.</summary>
+    public bool CoverArtEmbedded { get; init; }
+
+    /// <summary>True when synchronized or plain lyrics were embedded into the exported container.</summary>
+    public bool LyricsEmbedded { get; init; }
+
+    /// <summary>Effective dynamic Atmos object choreography mode applied during export.</summary>
+    public SpatialChoreoMode EffectiveChoreoMode { get; init; }
 }
 
 /// <summary>
@@ -353,6 +383,86 @@ public static class StudioBatchExporter {
     static SpatialChoreoTrack ResolveChoreoTrack(StudioBatchExportJob job) =>
         job.ComposableOptions?.ChoreoTrack ?? job.ChoreoTrack;
 
+    static SpatialChoreoMode ResolveDynamicChoreoMode(StudioBatchExportJob job) {
+        if (job.ComposableOptions != null && job.ComposableOptions.DynamicChoreoMode != SpatialChoreoMode.Off) {
+            return job.ComposableOptions.DynamicChoreoMode;
+        }
+        if (job.DynamicChoreoMode != SpatialChoreoMode.Off) {
+            return job.DynamicChoreoMode;
+        }
+        return ResolveChoreoTrack(job)?.Mode ?? SpatialChoreoMode.Off;
+    }
+
+    static IReadOnlyList<LyricMoodDigest> ResolveLyricMoodDigests(StudioBatchExportJob job) =>
+        job.ComposableOptions?.LyricMoodDigests ?? job.LyricMoodDigests;
+
+    static ExportMetadataPackage ResolveMetadata(StudioBatchExportJob job) =>
+        job.ComposableOptions?.Metadata ?? job.Metadata;
+
+    static SpatialChoreoTrack ResolveOrBuildChoreoTrack(
+        StudioBatchExportJob job,
+        IReadOnlyList<StereoStemBuffer> stems,
+        int sampleRate,
+        double durationSec) {
+        SpatialChoreoMode mode = ResolveDynamicChoreoMode(job);
+        if (mode == SpatialChoreoMode.Off) {
+            return null;
+        }
+        SpatialChoreoTrack existing = ResolveChoreoTrack(job);
+        if (existing != null &&
+            existing.Mode == mode &&
+            existing.StemCount > 0 &&
+            (stems == null || stems.Count == 0 || existing.StemCount == stems.Count)) {
+            return existing;
+        }
+        if (stems != null && stems.Count > 0) {
+            return NeuralStemSpatializer.BuildChoreoTrack(stems, sampleRate, mode, ResolveLyricMoodDigests(job));
+        }
+        return BuildDeterministicFallbackChoreoTrack(mode, durationSec);
+    }
+
+    static SpatialChoreoTrack BuildDeterministicFallbackChoreoTrack(SpatialChoreoMode mode, double durationSec) {
+        if (mode == SpatialChoreoMode.Off) {
+            return null;
+        }
+        double safeDuration = Math.Max(1.0, durationSec);
+        string[] roles = ["Vocals", "Drums", "Other", "BackingVocals"];
+        NeuralStemRole[] roleEnums = [NeuralStemRole.Vocals, NeuralStemRole.Drums, NeuralStemRole.Other, NeuralStemRole.BackingVocals];
+        int steps = Math.Clamp((int)Math.Ceiling(safeDuration / 1.5), 4, 24);
+        List<DirectorCue> cues = new(steps * roles.Length);
+        float azSpan = mode switch {
+            SpatialChoreoMode.Subtle => 28f,
+            SpatialChoreoMode.Musical => 62f,
+            SpatialChoreoMode.Cinematic => 125f,
+            SpatialChoreoMode.Orbit => 180f,
+            _ => 0f
+        };
+        float elSpan = mode switch {
+            SpatialChoreoMode.Subtle => 14f,
+            SpatialChoreoMode.Musical => 28f,
+            SpatialChoreoMode.Cinematic => 48f,
+            SpatialChoreoMode.Orbit => 40f,
+            _ => 0f
+        };
+
+        for (int k = 0; k < steps; k++) {
+            double t = (safeDuration * k) / Math.Max(1, steps - 1);
+            float phase = (float)(k * (2.0 * Math.PI / Math.Max(4, steps)));
+            for (int r = 0; r < roles.Length; r++) {
+                float roleOffset = r * 1.15f;
+                float az = mode == SpatialChoreoMode.Orbit
+                    ? (r == 0 ? 18f * MathF.Sin(phase) : ((k * 360f / Math.Max(4, steps) + r * 90f) % 360f) - 180f)
+                    : (r == 0 ? 12f * MathF.Sin(phase) : azSpan * MathF.Sin(phase + roleOffset));
+                float el = r == 0
+                    ? 6f + 6f * MathF.Sin(phase * 0.5f)
+                    : MathF.Max(0f, 10f + elSpan * (0.5f + 0.5f * MathF.Cos(phase + roleOffset)));
+                float radius = r == 0 ? 0.92f : 0.85f;
+                cues.Add(new DirectorCue(t, roleEnums[r], az, el, radius, 0.72f));
+            }
+        }
+        return SpatialChoreoTrack.Build(roles, cues.ToArray(), mode, safeDuration);
+    }
+
     static Action ResolveSigpipeShield(StudioBatchExportJob job) =>
         job.ComposableOptions?.OnSigpipeShield ?? job.OnSigpipeShield;
 
@@ -387,7 +497,8 @@ public static class StudioBatchExporter {
         StudioCompressionTier tier,
         string ffmpegPath,
         Action onSigpipeShield,
-        bool isAmbisonics = false) {
+        bool isAmbisonics = false,
+        ExportMetadataPackage metadata = null) {
         if (tier == StudioCompressionTier.LosslessCompressed) {
             bool wantsWavPack = channelCount > 8 ||
                                 outPath.EndsWith(".wv", StringComparison.OrdinalIgnoreCase);
@@ -401,7 +512,8 @@ public static class StudioBatchExporter {
                 sampleRate,
                 FfmpegPipeCodec.WavPack,
                 onSigpipeShield,
-                isAmbisonics);
+                isAmbisonics,
+                metadata: metadata);
         }
 
         if (tier == StudioCompressionTier.PortableLossy) {
@@ -415,7 +527,8 @@ public static class StudioBatchExporter {
                 sampleRate,
                 lossyCodec,
                 onSigpipeShield,
-                isAmbisonics);
+                isAmbisonics,
+                metadata: metadata);
         }
 
         return new DirectPcmStreamingSink(
@@ -434,11 +547,33 @@ public static class StudioBatchExporter {
         readonly float[] sideSigns;
         readonly bool applyStereoSpread;
 
-        public ChoreoSourceMapper(IReadOnlyCollection<Source> sources, SpatialChoreoTrack choreo) {
+        public ChoreoSourceMapper(
+            IReadOnlyCollection<Source> sources,
+            SpatialChoreoTrack choreo,
+            int[] explicitStemMap = null,
+            float[] explicitSideSigns = null) {
             track = choreo;
             if (choreo == null || choreo.StemCount <= 0 || choreo.Mode == SpatialChoreoMode.Off || sources == null || sources.Count == 0) {
                 stemMap = Array.Empty<int>();
                 sideSigns = Array.Empty<float>();
+                return;
+            }
+
+            if (explicitStemMap != null && explicitStemMap.Length == sources.Count) {
+                stemMap = new int[sources.Count];
+                sideSigns = new float[sources.Count];
+                int idxEx = 0;
+                foreach (Source s in sources) {
+                    if (s == null || s.LFE || s.PositionLocked || explicitStemMap[idxEx] < 0) {
+                        stemMap[idxEx] = -1;
+                        sideSigns[idxEx] = 0f;
+                    } else {
+                        stemMap[idxEx] = explicitStemMap[idxEx] % choreo.StemCount;
+                        sideSigns[idxEx] = explicitSideSigns != null && idxEx < explicitSideSigns.Length ? explicitSideSigns[idxEx] : 0f;
+                    }
+                    idxEx++;
+                }
+                applyStereoSpread = true;
                 return;
             }
 
@@ -487,7 +622,7 @@ public static class StudioBatchExporter {
                         if (horizSq > 1e-6f) {
                             float invH = 1f / MathF.Sqrt(horizSq);
                             Vector3 tangent = new(normPos.Z * invH, 0f, -normPos.X * invH);
-                            normPos += tangent * (0.18f * sideSigns[i]);
+                            normPos += tangent * (0.20f * sideSigns[i]);
                             float len = normPos.Length();
                             if (len > 1f) {
                                 normPos /= len;
@@ -539,30 +674,23 @@ public static class StudioBatchExporter {
         using StemExtractor.ListenerStateScope listenerScope = new();
         try {
             token.ThrowIfCancellationRequested();
+            StudioBatchExportResult result;
             if (job.ComposableOptions != null) {
-                return ExportComposable(track, job, job.ComposableOptions, outPath, onProgress, token);
+                result = ExportComposable(track, job, job.ComposableOptions, outPath, onProgress, token);
+            } else {
+                result = job.Preset switch {
+                    StudioExportPreset.EclipsaAudioIamf => ExportEnvironmental(track, job, Codec.IAMF, outPath, "Eclipsa Audio IAMF v1.0 OBU (3rd-Order HOA / LPCM)", onProgress, token),
+                    StudioExportPreset.AmbisonicsHoa3rdOrder => ExportEnvironmental(track, job, Codec.AmbisonicsHOA, outPath, $"Ambisonics HOA Order {Math.Clamp(job.HoaOrder, 1, 3)} (ACN/SN3D WAVE-EX)", onProgress, token),
+                    StudioExportPreset.AdmBwfItuBs2076 => ExportEnvironmental(track, job, job.UseDolbyAtmosAdmSubset ? Codec.ADM_BWF_Atmos : Codec.ADM_BWF, outPath, job.UseDolbyAtmosAdmSubset ? "ADM BWF Dolby Atmos (ITU-R BS.2076)" : "ADM BWF Compact (ITU-R BS.2076)", onProgress, token),
+                    StudioExportPreset.PersonalizedLosslessBinaural => ExportPersonalizedBinaural(track, job, outPath, onProgress, token),
+                    StudioExportPreset.HybridNeuralDirAc714 => ExportHybrid714(track, job, outPath, onProgress, token),
+                    StudioExportPreset.SpatialKaraokeInstrumental => ExportSpatialKaraoke(track, job, outPath, includeLiveVocalMixdown: false, onProgress, token),
+                    StudioExportPreset.LiveKaraokePerformanceMixdown => ExportSpatialKaraoke(track, job, outPath, includeLiveVocalMixdown: true, onProgress, token),
+                    StudioExportPreset.FlacAtmosHybridSpatialMaster => ExportFlacAtmosHybridMaster(track, job, outPath, onProgress, token),
+                    _ => throw new NotSupportedException($"Unsupported Studio export preset: {job.Preset}")
+                };
             }
-            switch (job.Preset) {
-                case StudioExportPreset.EclipsaAudioIamf:
-                    return ExportEnvironmental(track, job, Codec.IAMF, outPath, "Eclipsa Audio IAMF v1.0 OBU (3rd-Order HOA / LPCM)", onProgress, token);
-                case StudioExportPreset.AmbisonicsHoa3rdOrder:
-                    return ExportEnvironmental(track, job, Codec.AmbisonicsHOA, outPath, $"Ambisonics HOA Order {Math.Clamp(job.HoaOrder, 1, 3)} (ACN/SN3D WAVE-EX)", onProgress, token);
-                case StudioExportPreset.AdmBwfItuBs2076:
-                    Codec admCodec = job.UseDolbyAtmosAdmSubset ? Codec.ADM_BWF_Atmos : Codec.ADM_BWF;
-                    return ExportEnvironmental(track, job, admCodec, outPath, job.UseDolbyAtmosAdmSubset ? "ADM BWF Dolby Atmos (ITU-R BS.2076)" : "ADM BWF Compact (ITU-R BS.2076)", onProgress, token);
-                case StudioExportPreset.PersonalizedLosslessBinaural:
-                    return ExportPersonalizedBinaural(track, job, outPath, onProgress, token);
-                case StudioExportPreset.HybridNeuralDirAc714:
-                    return ExportHybrid714(track, job, outPath, onProgress, token);
-                case StudioExportPreset.SpatialKaraokeInstrumental:
-                    return ExportSpatialKaraoke(track, job, outPath, includeLiveVocalMixdown: false, onProgress, token);
-                case StudioExportPreset.LiveKaraokePerformanceMixdown:
-                    return ExportSpatialKaraoke(track, job, outPath, includeLiveVocalMixdown: true, onProgress, token);
-                case StudioExportPreset.FlacAtmosHybridSpatialMaster:
-                    return ExportFlacAtmosHybridMaster(track, job, outPath, onProgress, token);
-                default:
-                    throw new NotSupportedException($"Unsupported Studio export preset: {job.Preset}");
-            }
+            return FinalizeExportResultWithMetadata(result, job);
         } catch (OperationCanceledException) {
             TryDeletePartialOutput(outPath);
             return new StudioBatchExportResult {
@@ -585,6 +713,58 @@ public static class StudioBatchExporter {
                 ErrorMessage = ex.Message
             };
         }
+    }
+
+    static StudioBatchExportResult FinalizeExportResultWithMetadata(StudioBatchExportResult res, StudioBatchExportJob job) {
+        if (res == null || !res.Succeeded || string.IsNullOrWhiteSpace(res.OutputPath) || !File.Exists(res.OutputPath)) {
+            return res;
+        }
+        ExportMetadataPackage meta = ResolveMetadata(job);
+        SpatialChoreoMode effectiveMode = res.EffectiveChoreoMode != SpatialChoreoMode.Off
+            ? res.EffectiveChoreoMode
+            : ResolveDynamicChoreoMode(job);
+        bool embeddedTags = res.MetadataEmbedded;
+        bool embeddedCover = res.CoverArtEmbedded;
+        bool embeddedLyrics = res.LyricsEmbedded;
+
+        if (meta != null && meta.HasAnythingToEmbed) {
+            string ext = Path.GetExtension(res.OutputPath).ToLowerInvariant();
+            if (ext is ".flac" or ".wav" or ".amb") {
+                try {
+                    ExportMetadataEmbedResult embedRes = ExportMetadataEmbedder.EmbedInPlace(res.OutputPath, meta);
+                    embeddedTags |= embedRes.EmbeddedTags;
+                    embeddedCover |= embedRes.EmbeddedCoverArt;
+                    embeddedLyrics |= embedRes.EmbeddedLyrics;
+                } catch {
+                    // Metadata post-embed is strictly non-fatal so rendered audio is never lost
+                }
+            } else if (ext is ".opus" or ".wv" or ".m4a") {
+                embeddedTags |= meta.HasAnyTextTags;
+                embeddedCover |= (ext is ".opus" or ".m4a") && meta.HasCoverArt;
+                embeddedLyrics |= meta.HasLyrics;
+            }
+        }
+
+        return new StudioBatchExportResult {
+            Preset = res.Preset,
+            OutputPath = res.OutputPath,
+            FormatSummary = res.FormatSummary,
+            ChannelCount = res.ChannelCount,
+            SampleRate = res.SampleRate,
+            DurationSeconds = res.DurationSeconds,
+            IntegratedLufs = res.IntegratedLufs,
+            LoudnessRangeLu = res.LoudnessRangeLu,
+            MaxTruePeakDbtp = res.MaxTruePeakDbtp,
+            Succeeded = res.Succeeded,
+            ErrorMessage = res.ErrorMessage,
+            IsCancelled = res.IsCancelled,
+            OutputBytes = SafeFileLength(res.OutputPath),
+            CompressionTier = res.CompressionTier,
+            MetadataEmbedded = embeddedTags,
+            CoverArtEmbedded = embeddedCover,
+            LyricsEmbedded = embeddedLyrics,
+            EffectiveChoreoMode = effectiveMode
+        };
     }
 
     /// <summary>
@@ -663,9 +843,10 @@ public static class StudioBatchExporter {
         StudioCompressionTier effectiveTier = ResolveEffectiveTier(job, baseFmt);
         string ffmpegPath = ResolveFfmpegPath(job);
         Action onSigpipe = ResolveSigpipeShield(job);
-        ChoreoSourceMapper choreoMapper = new(listener.ActiveSources, ResolveChoreoTrack(job));
-
         long totalSamples = Math.Max(updateRate, track.Length);
+        SpatialChoreoTrack activeChoreo = ResolveOrBuildChoreoTrack(job, null, sampleRate, totalSamples / (double)Math.Max(1, sampleRate));
+        ChoreoSourceMapper choreoMapper = new(listener.ActiveSources, activeChoreo);
+
         int hoaOrder = Math.Clamp(job.HoaOrder, 1, 3);
         List<Source> activeSources = new(listener.ActiveSources);
         int srcCount = activeSources.Count;
@@ -710,7 +891,7 @@ public static class StudioBatchExporter {
                     listener.AttachSource(extraVocalSource);
                 }
                 activeSources = new List<Source>(listener.ActiveSources);
-                choreoMapper = new ChoreoSourceMapper(activeSources, ResolveChoreoTrack(job));
+                choreoMapper = new ChoreoSourceMapper(activeSources, activeChoreo);
             }
         }
 
@@ -845,7 +1026,8 @@ public static class StudioBatchExporter {
             sampleRate,
             pipeCodec,
             onSigpipe,
-            isAmbisonics: true)) {
+            isAmbisonics: true,
+            metadata: ResolveMetadata(job))) {
             long totalFrames = (totalSamples + updateRate - 1) / updateRate;
             for (long f = 0; f < totalFrames; f++) {
                 token.ThrowIfCancellationRequested();
@@ -925,7 +1107,6 @@ public static class StudioBatchExporter {
         };
         track.Attach(listener, new UpmixingSettings(true));
         List<Source> activeSources = new(listener.ActiveSources);
-        ChoreoSourceMapper choreoMapper = new(activeSources, ResolveChoreoTrack(job));
 
         StudioCompressionTier effectiveTier = ResolveEffectiveTier(job, StudioBaseOutputFormat.Headphone3D);
         string ffmpegPath = ResolveFfmpegPath(job);
@@ -934,6 +1115,8 @@ public static class StudioBatchExporter {
         int stride = Math.Max(2, Listener.Channels.Length);
         double rateRatio = outSampleRate / (double)Math.Max(1, track.SampleRate);
         long totalSamples = Math.Max(updateRate, (long)Math.Round(Math.Max(updateRate, track.Length) * rateRatio));
+        SpatialChoreoTrack activeChoreo = ResolveOrBuildChoreoTrack(job, null, outSampleRate, totalSamples / (double)Math.Max(1, outSampleRate));
+        ChoreoSourceMapper choreoMapper = new(activeSources, activeChoreo);
 
         // Collect cloned Slot 6 post-processing stages (AutoEq, HpTF, ISO 226, BS.1770, Dialog)
         // so live playback stages never mutate or reset mid-export; skip limiters because this export
@@ -983,7 +1166,8 @@ public static class StudioBatchExporter {
                 effectiveTier,
                 ffmpegPath,
                 onSigpipe,
-                isAmbisonics: false);
+                isAmbisonics: false,
+                metadata: ResolveMetadata(job));
 
             long totalFrames = (totalSamples + updateRate - 1) / updateRate;
             for (long f = 0; f < totalFrames; f++) {
@@ -1714,7 +1898,8 @@ public static class StudioBatchExporter {
         Action onSigpipe,
         Action<double> onProgress,
         CancellationToken token,
-        bool releaseChannelsAfterStream = false) {
+        bool releaseChannelsAfterStream = false,
+        ExportMetadataPackage metadata = null) {
         int chCount = Math.Min(layout.Length, channels.Length);
         int len = chCount > 0 && channels[0] != null ? channels[0].Length : 0;
         LoudnessMeter meter = new(sampleRate, Math.Max(1, chCount));
@@ -1735,7 +1920,8 @@ public static class StudioBatchExporter {
             tier,
             ffmpegPath,
             onSigpipe,
-            isAmbisonics: false)) {
+            isAmbisonics: false,
+            metadata: metadata)) {
             float[] interleaved = new float[updateRate * Math.Max(1, chCount)];
             int totalBlocks = Math.Max(1, (len + updateRate - 1) / updateRate);
             int blockIdx = 0;
@@ -1981,6 +2167,7 @@ public static class StudioBatchExporter {
                                  opts.BaseFormat == StudioBaseOutputFormat.EclipsaIamf ||
                                  opts.BaseFormat == StudioBaseOutputFormat.Ambisonics360;
 
+        SpatialChoreoMode effectiveChoreoMode = ResolveDynamicChoreoMode(job);
         NeuralAudioConfig safeNeural = (job.NeuralConfig ?? NeuralAudioConfig.Default).Sanitize();
         NeuralExecutionPlan stemPlan = job.NeuralOrchestrator?.BuildPlan(NeuralPipelineGoal.StemSeparation, safeNeural);
         bool canRunNeuralStems = job.NeuralOrchestrator != null &&
@@ -1988,7 +2175,9 @@ public static class StudioBatchExporter {
                                  job.NeuralRuntime.GetRuntimeInfo().IsAvailable &&
                                  stemPlan != null &&
                                  stemPlan.IsRunnable;
-        bool needsNeuralStemUpmix = opts.EnableAiSpatialUpmix && !isNativeMulti && canRunNeuralStems;
+        bool needsNeuralStemUpmix = (opts.EnableAiSpatialUpmix || effectiveChoreoMode != SpatialChoreoMode.Off) &&
+                                    !isNativeMulti &&
+                                    canRunNeuralStems;
         bool canRunEmMwf = opts.EnableLosslessTwinRestoration &&
                            isNativeMulti &&
                            canRunNeuralStems &&
@@ -2002,13 +2191,13 @@ public static class StudioBatchExporter {
                 StudioBaseOutputFormat.Ambisonics360 => Codec.AmbisonicsHOA,
                 _ => job.UseDolbyAtmosAdmSubset ? Codec.ADM_BWF_Atmos : Codec.ADM_BWF
             };
-            UpmixingSettings envUpmix = opts.EnableAiSpatialUpmix
+            UpmixingSettings envUpmix = (opts.EnableAiSpatialUpmix || effectiveChoreoMode != SpatialChoreoMode.Off)
                 ? new UpmixingSettings(true) { AtmosAware = true, ParametricStft = true, Cavernize = true, MatrixUpmixing = true }
                 : new UpmixingSettings(false);
             Source vocalObj = hasRecordedVocal
                 ? BuildProcessedPerformanceSource(job, opts, sampleRate, Math.Max(updateRate, (int)Math.Min(track.Length, int.MaxValue / 4)))
                 : null;
-            string summary = BuildComposableSummary(opts, isNativeMulti, usedNeuralStems: false, usedEmMwf: false, hasRecordedVocal);
+            string summary = BuildComposableSummary(opts, isNativeMulti, usedNeuralStems: false, usedEmMwf: false, hasRecordedVocal, effectiveChoreoMode);
             return ExportEnvironmental(track, job, envCodec, outPath, summary, onProgress, token, envUpmix, vocalObj);
         }
 
@@ -2017,7 +2206,8 @@ public static class StudioBatchExporter {
             !opts.EnableAiSpatialUpmix &&
             !opts.EnableKaraokeInstrumental &&
             !hasRecordedVocal &&
-            !canRunEmMwf) {
+            !canRunEmMwf &&
+            !needsNeuralStemUpmix) {
             StudioBatchExportJob cleanJob = opts.ApplyPersonalizedHeadphonePost
                 ? job
                 : new StudioBatchExportJob {
@@ -2029,6 +2219,9 @@ public static class StudioBatchExporter {
                     CompressionTier = ResolveEffectiveTier(job, StudioBaseOutputFormat.Headphone3D),
                     FfmpegExecutablePath = ResolveFfmpegPath(job),
                     ChoreoTrack = ResolveChoreoTrack(job),
+                    DynamicChoreoMode = effectiveChoreoMode,
+                    LyricMoodDigests = ResolveLyricMoodDigests(job),
+                    Metadata = ResolveMetadata(job),
                     OnSigpipeShield = ResolveSigpipeShield(job),
                     PostProcessingStages = null
                 };
@@ -2107,6 +2300,24 @@ public static class StudioBatchExporter {
             StereoStemBuffer[] stems = separated?.Stems != null ? separated.Stems.ToArray() : Array.Empty<StereoStemBuffer>();
             separated = null;
             if (stems.Length > 0) {
+                // T5 True Dynamic Moving Atmos Object Choreography: preserve semantic neural stems as moving 3D objects
+                // paired with a stationary discrete 120 Hz LR4 .1 LFE bed instead of flattening to static 12ch speaker beds!
+                if (effectiveChoreoMode != SpatialChoreoMode.Off) {
+                    inL = null;
+                    inR = null;
+                    return ExportSemanticMovingObjects(
+                        stems,
+                        sampleRate,
+                        job,
+                        opts,
+                        effectiveChoreoMode,
+                        isNativeMulti,
+                        hasRecordedVocal,
+                        outPath,
+                        p => onProgress?.Invoke(0.50 + p * 0.50),
+                        token);
+                }
+
                 activeLayout = Layout714;
                 channels = NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe(stems, sampleRate, 0.35f, 120f);
                 stems = null;
@@ -2212,7 +2423,7 @@ public static class StudioBatchExporter {
             MixRecordedPerformanceIntoMultichannelInPlace(channels, activeLayout, job, opts, sampleRate, token);
         }
 
-        string formatSummary = BuildComposableSummary(opts, isNativeMulti, usedNeuralStems, usedEmMwf, hasRecordedVocal);
+        string formatSummary = BuildComposableSummary(opts, isNativeMulti, usedNeuralStems, usedEmMwf, hasRecordedVocal, effectiveChoreoMode);
 
         // Step 4: Render into the chosen commercial Base Output Format
         if (opts.BaseFormat == StudioBaseOutputFormat.Cinema714) {
@@ -2229,7 +2440,8 @@ public static class StudioBatchExporter {
                 ResolveSigpipeShield(job),
                 p => onProgress?.Invoke(0.70 + p * 0.30),
                 token,
-                releaseChannelsAfterStream: true);
+                releaseChannelsAfterStream: true,
+                metadata: ResolveMetadata(job));
             channels = null;
             return new StudioBatchExportResult {
                 Preset = job.Preset,
@@ -2291,7 +2503,7 @@ public static class StudioBatchExporter {
         StudioCompressionTier effectiveTier = ResolveEffectiveTier(job, opts.BaseFormat);
         string ffmpegPath = ResolveFfmpegPath(job);
         Action onSigpipe = ResolveSigpipeShield(job);
-        SpatialChoreoTrack choreoTrack = ResolveChoreoTrack(job);
+        SpatialChoreoMode effectiveChoreoMode = ResolveDynamicChoreoMode(job);
 
         using IDisposable virtScope = isHeadphone ? VirtualizerFilter.BeginStaticStateScope() : null;
         EnsureEnvironmentSize();
@@ -2317,17 +2529,18 @@ public static class StudioBatchExporter {
             LFESeparation = true,
             Normalizer = 0f
         };
-        UpmixingSettings upmix = (isHeadphone || opts.EnableAiSpatialUpmix)
+        UpmixingSettings upmix = (isHeadphone || opts.EnableAiSpatialUpmix || effectiveChoreoMode != SpatialChoreoMode.Off)
             ? new UpmixingSettings(true) { Cavernize = true, MatrixUpmixing = true, ParametricStft = true, AtmosAware = true }
             : new UpmixingSettings(false);
         track.Attach(listener, upmix);
         List<Source> activeSources = new(listener.ActiveSources);
-        ChoreoSourceMapper choreoMapper = new(activeSources, choreoTrack);
 
         int outCh = targetLayout.Length;
         int stride = Math.Max(outCh, Listener.Channels.Length);
         double rateRatio = isHeadphone ? (outSampleRate / (double)Math.Max(1, track.SampleRate)) : 1.0;
         long totalSamples = Math.Max(updateRate, (long)Math.Round(Math.Max(updateRate, track.Length) * rateRatio));
+        SpatialChoreoTrack choreoTrack = ResolveOrBuildChoreoTrack(job, null, outSampleRate, totalSamples / (double)Math.Max(1, outSampleRate));
+        ChoreoSourceMapper choreoMapper = new(activeSources, choreoTrack);
 
         List<IPostProcessingStage> activePostStages = isHeadphone && opts.ApplyPersonalizedHeadphonePost
             ? CloneOfflinePostStages(job.PostProcessingStages, outSampleRate, outCh)
@@ -2371,7 +2584,8 @@ public static class StudioBatchExporter {
                 effectiveTier,
                 ffmpegPath,
                 onSigpipe,
-                isAmbisonics: false);
+                isAmbisonics: false,
+                metadata: ResolveMetadata(job));
 
             long totalFrames = (totalSamples + updateRate - 1) / updateRate;
             for (long f = 0; f < totalFrames; f++) {
@@ -2444,7 +2658,7 @@ public static class StudioBatchExporter {
         return new StudioBatchExportResult {
             Preset = job.Preset,
             OutputPath = outPath,
-            FormatSummary = BuildComposableSummary(opts, isNativeMulti, usedNeuralStems: false, usedEmMwf: false, hasRecordedVocal),
+            FormatSummary = BuildComposableSummary(opts, isNativeMulti, usedNeuralStems: false, usedEmMwf: false, hasRecordedVocal, effectiveChoreoMode),
             ChannelCount = outCh,
             SampleRate = outSampleRate,
             DurationSeconds = written / (double)Math.Max(1, outSampleRate),
@@ -2453,6 +2667,7 @@ public static class StudioBatchExporter {
             MaxTruePeakDbtp = snap.MaxTruePeakDbtp,
             CompressionTier = effectiveTier,
             OutputBytes = SafeFileLength(outPath),
+            EffectiveChoreoMode = effectiveChoreoMode,
             Succeeded = true
         };
     }
@@ -2532,7 +2747,8 @@ public static class StudioBatchExporter {
         bool isNativeMulti,
         bool usedNeuralStems,
         bool usedEmMwf,
-        bool hasRecordedVocal) {
+        bool hasRecordedVocal,
+        SpatialChoreoMode choreoMode = SpatialChoreoMode.Off) {
         string baseName = opts.BaseFormat switch {
             StudioBaseOutputFormat.Headphone3D => "3D Headphones",
             StudioBaseOutputFormat.Cinema714 => "Cinema 7.1.4",
@@ -2542,8 +2758,11 @@ public static class StudioBatchExporter {
             _ => "Spatial Master"
         };
         List<string> mods = [];
-        if (opts.EnableAiSpatialUpmix) {
+        if (opts.EnableAiSpatialUpmix || usedNeuralStems) {
             mods.Add(isNativeMulti ? "Atmos-Safe AI" : (usedNeuralStems ? "AI 3D Upmix" : "3D Spatial Upmix"));
+        }
+        if (choreoMode != SpatialChoreoMode.Off) {
+            mods.Add($"Motion {choreoMode}");
         }
         if (opts.EnableLosslessTwinRestoration) {
             mods.Add(usedEmMwf ? "Lossless EM-MWF" : "Lossless Twin");
@@ -2744,7 +2963,6 @@ public static class StudioBatchExporter {
         }
 
         List<Source> activeSources = new(listener.ActiveSources);
-        ChoreoSourceMapper choreoMapper = new(activeSources, ResolveChoreoTrack(job));
         StudioCompressionTier effectiveTier = ResolveEffectiveTier(job, StudioBaseOutputFormat.Headphone3D);
         string ffmpegPath = ResolveFfmpegPath(job);
         Action onSigpipe = ResolveSigpipeShield(job);
@@ -2752,6 +2970,7 @@ public static class StudioBatchExporter {
         int stride = Math.Max(2, Listener.Channels.Length);
         double rateRatio = outSampleRate / (double)Math.Max(1, sourceSampleRate);
         long totalSamples = Math.Max(updateRate, (long)Math.Round(Math.Max(updateRate, srcLen) * rateRatio));
+        ChoreoSourceMapper choreoMapper = new(activeSources, ResolveOrBuildChoreoTrack(job, null, outSampleRate, totalSamples / (double)Math.Max(1, outSampleRate)));
 
         List<IPostProcessingStage> activePostStages = applyPostStages
             ? CloneOfflinePostStages(job.PostProcessingStages, outSampleRate, 2)
@@ -2779,7 +2998,8 @@ public static class StudioBatchExporter {
                 effectiveTier,
                 ffmpegPath,
                 onSigpipe,
-                isAmbisonics: false);
+                isAmbisonics: false,
+                metadata: ResolveMetadata(job));
             long totalFrames = (totalSamples + updateRate - 1) / updateRate;
             for (long f = 0; f < totalFrames; f++) {
                 token.ThrowIfCancellationRequested();
@@ -2859,7 +3079,7 @@ public static class StudioBatchExporter {
         }
 
         List<Source> activeSources = new(listener.ActiveSources);
-        ChoreoSourceMapper choreoMapper = new(activeSources, ResolveChoreoTrack(job));
+        ChoreoSourceMapper choreoMapper = new(activeSources, ResolveOrBuildChoreoTrack(job, null, sampleRate, totalSamples / (double)Math.Max(1, sampleRate)));
         StudioBaseOutputFormat baseFmt = codec switch {
             Codec.IAMF => StudioBaseOutputFormat.EclipsaIamf,
             Codec.AmbisonicsHOA => StudioBaseOutputFormat.Ambisonics360,
@@ -2943,6 +3163,409 @@ public static class StudioBatchExporter {
             MaxTruePeakDbtp = measured.MaxTruePeakDbtp,
             CompressionTier = effectiveTier,
             OutputBytes = SafeFileLength(outPath),
+            EffectiveChoreoMode = ResolveDynamicChoreoMode(job),
+            Succeeded = true
+        };
+    }
+
+    /// <summary>
+    /// T5 True Semantic Moving Atmos Object Renderer:
+    /// Keeps neural stems as individual moving 3D objects mapped 1:1 to <see cref="SpatialChoreoTrack"/>
+    /// (producing real time-varying ITU-R BS.2076 <c>ADMBlockFormat</c> keyframes in ADM BWF, dynamic HOA in IAMF/AMB,
+    /// and moving 3D stage audio in Headphone 3D / Cinema 7.1.4) while anchoring sub-120 Hz bass/kick into a
+    /// stationary discrete 4th-order Linkwitz-Riley <c>.1</c> LFE bed (0.0 ms drift).
+    /// </summary>
+    static StudioBatchExportResult ExportSemanticMovingObjects(
+        StereoStemBuffer[] stems,
+        int sampleRate,
+        StudioBatchExportJob job,
+        StudioComposableExportOptions opts,
+        SpatialChoreoMode choreoMode,
+        bool isNativeMulti,
+        bool hasRecordedVocal,
+        string outPath,
+        Action<double> onProgress,
+        CancellationToken token) {
+        int totalSamples = 0;
+        for (int i = 0; i < stems.Length; i++) {
+            if (stems[i] != null && stems[i].Length > totalSamples) {
+                totalSamples = stems[i].Length;
+            }
+        }
+        if (totalSamples <= 0) {
+            return new StudioBatchExportResult {
+                Preset = job.Preset,
+                OutputPath = outPath,
+                CompressionTier = ResolveEffectiveTier(job, opts.BaseFormat),
+                Succeeded = false,
+                ErrorMessage = "No neural stem samples available for dynamic Atmos export."
+            };
+        }
+
+        double durationSec = totalSamples / (double)Math.Max(1, sampleRate);
+        SpatialChoreoTrack choreoTrack = ResolveOrBuildChoreoTrack(job, stems, sampleRate, durationSec);
+        string formatSummary = BuildComposableSummary(opts, isNativeMulti, usedNeuralStems: true, usedEmMwf: false, hasRecordedVocal, choreoMode);
+
+        // Extract stationary 120 Hz LR4 discrete LFE bed from Bass + Drums while high-passing their mains cleanly
+        float[] lfeBed = new float[totalSamples];
+        List<Source> objectSources = [];
+        List<int> stemIndices = [];
+        List<float> sideSigns = [];
+
+        EnsureEnvironmentSize();
+        Vector3 env = Listener.EnvironmentSize;
+        float karaokeLeadGain = opts.EnableKaraokeInstrumental ? Math.Clamp(job.KaraokeVocalLevel, 0f, 1f) : 1f;
+        float karaokeBackGain = opts.EnableKaraokeInstrumental && !job.PreserveBackingVocals ? karaokeLeadGain : 1f;
+
+        for (int i = 0; i < stems.Length; i++) {
+            StereoStemBuffer st = stems[i];
+            if (st == null || st.Length <= 0 || st.Left == null || st.Right == null) {
+                continue;
+            }
+            NeuralStemRole role = NeuralStemSpatializer.ClassifyStemName(st.Name);
+            float stemGain = role is NeuralStemRole.LeadVocal or NeuralStemRole.Vocals
+                ? karaokeLeadGain
+                : (role == NeuralStemRole.BackingVocals ? karaokeBackGain : 1f);
+            if (stemGain <= 0.0001f) {
+                continue;
+            }
+
+            int len = Math.Min(totalSamples, st.Length);
+            bool monoCenter = role is NeuralStemRole.LeadVocal or NeuralStemRole.Vocals or NeuralStemRole.Bass;
+            if (monoCenter) {
+                float[] mono = new float[totalSamples];
+                for (int n = 0; n < len; n++) {
+                    mono[n] = Math.Clamp(0.5f * (st.Left[n] + st.Right[n]) * stemGain, -1f, 1f);
+                }
+                if (role == NeuralStemRole.Bass) {
+                    NeuralStemSpatializer.SplitLinkwitzRiley4Lfe(mono, sampleRate, 120f, out float[] hpBass, out float[] lpBass);
+                    for (int n = 0; n < totalSamples; n++) {
+                        lfeBed[n] += lpBass[n] * 0.75f;
+                    }
+                    mono = hpBass;
+                }
+                NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(null, SpatialChoreoMode.Off, i, role, 0f, 0.0, out Vector3 anchor);
+                objectSources.Add(new Source {
+                    Clip = new Clip(new MultichannelWaveform(mono), sampleRate),
+                    Position = anchor * env,
+                    LFE = false,
+                    Volume = 1f
+                });
+                stemIndices.Add(i);
+                sideSigns.Add(0f);
+            } else {
+                float[] leftBus = new float[totalSamples];
+                float[] rightBus = new float[totalSamples];
+                for (int n = 0; n < len; n++) {
+                    leftBus[n] = Math.Clamp(st.Left[n] * stemGain, -1f, 1f);
+                    rightBus[n] = Math.Clamp(st.Right[n] * stemGain, -1f, 1f);
+                }
+                if (role == NeuralStemRole.Drums) {
+                    NeuralStemSpatializer.SplitLinkwitzRiley4Lfe(leftBus, sampleRate, 120f, out float[] hpL, out float[] lpL);
+                    NeuralStemSpatializer.SplitLinkwitzRiley4Lfe(rightBus, sampleRate, 120f, out float[] hpR, out float[] lpR);
+                    for (int n = 0; n < totalSamples; n++) {
+                        lfeBed[n] += 0.35f * (lpL[n] + lpR[n]);
+                    }
+                    leftBus = hpL;
+                    rightBus = hpR;
+                }
+
+                NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(null, SpatialChoreoMode.Off, i, role, -1f, 0.0, out Vector3 anchorL);
+                objectSources.Add(new Source {
+                    Clip = new Clip(new MultichannelWaveform(leftBus), sampleRate),
+                    Position = anchorL * env,
+                    LFE = false,
+                    Volume = 1f
+                });
+                stemIndices.Add(i);
+                sideSigns.Add(-1f);
+
+                NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(null, SpatialChoreoMode.Off, i, role, 1f, 0.0, out Vector3 anchorR);
+                objectSources.Add(new Source {
+                    Clip = new Clip(new MultichannelWaveform(rightBus), sampleRate),
+                    Position = anchorR * env,
+                    LFE = false,
+                    Volume = 1f
+                });
+                stemIndices.Add(i);
+                sideSigns.Add(1f);
+            }
+        }
+
+        // Always attach the stationary discrete 120 Hz LR4 .1 LFE bed locked in place
+        for (int n = 0; n < totalSamples; n++) {
+            lfeBed[n] = Math.Clamp(lfeBed[n], -1f, 1f);
+        }
+        objectSources.Insert(0, new Source {
+            Clip = new Clip(new MultichannelWaveform(lfeBed), sampleRate),
+            Position = ChannelPrototype.AlternativePositions[(int)ReferenceChannel.ScreenLFE] * env,
+            LFE = true,
+            Volume = 1f
+        });
+        stemIndices.Insert(0, -1);
+        sideSigns.Insert(0, 0f);
+
+        if (hasRecordedVocal) {
+            Source vocalObj = BuildProcessedPerformanceSource(job, opts, sampleRate, totalSamples);
+            if (vocalObj != null) {
+                objectSources.Add(vocalObj);
+                stemIndices.Add(-1);
+                sideSigns.Add(0f);
+            }
+        }
+
+        int[] explicitMap = stemIndices.ToArray();
+        float[] explicitSigns = sideSigns.ToArray();
+        StudioCompressionTier effectiveTier = ResolveEffectiveTier(job, opts.BaseFormat);
+        string ffmpegPath = ResolveFfmpegPath(job);
+        Action onSigpipe = ResolveSigpipeShield(job);
+
+        // Route 1: Headphone 3D (Binaural) or Cinema 7.1.4 (12ch) rendered directly from moving semantic objects
+        if (opts.BaseFormat == StudioBaseOutputFormat.Headphone3D || opts.BaseFormat == StudioBaseOutputFormat.Cinema714) {
+            bool isHeadphone = opts.BaseFormat == StudioBaseOutputFormat.Headphone3D;
+            using IDisposable virtScope = isHeadphone ? VirtualizerFilter.BeginStaticStateScope() : null;
+            EnsureEnvironmentSize();
+            ReferenceChannel[] targetLayout;
+            int outSampleRate;
+            if (isHeadphone) {
+                new VirtualizerFilter().SetLayout();
+                Listener.HeadphoneVirtualizer = true;
+                outSampleRate = VirtualizerFilter.FilterSampleRate;
+                targetLayout = [ReferenceChannel.FrontLeft, ReferenceChannel.FrontRight];
+            } else {
+                Listener.HeadphoneVirtualizer = false;
+                targetLayout = Layout714;
+                Listener.ReplaceChannels(ChannelPrototype.ToLayout(targetLayout));
+                outSampleRate = sampleRate;
+            }
+
+            Listener listener = new(false) {
+                SampleRate = outSampleRate,
+                UpdateRate = updateRate,
+                AudioQuality = QualityModes.Perfect,
+                MaximumSources = 256,
+                LFESeparation = true,
+                Normalizer = 0f
+            };
+            for (int i = 0; i < objectSources.Count; i++) {
+                listener.AttachSource(objectSources[i]);
+            }
+            List<Source> activeSources = new(listener.ActiveSources);
+            ChoreoSourceMapper choreoMapper = new(activeSources, choreoTrack, explicitMap, explicitSigns);
+
+            int outCh = targetLayout.Length;
+            int stride = Math.Max(outCh, Listener.Channels.Length);
+            double rateRatio = outSampleRate / (double)Math.Max(1, sampleRate);
+            long outTotalSamples = Math.Max(updateRate, (long)Math.Round(totalSamples * rateRatio));
+
+            List<IPostProcessingStage> activePostStages = isHeadphone && opts.ApplyPersonalizedHeadphonePost
+                ? CloneOfflinePostStages(job.PostProcessingStages, outSampleRate, outCh)
+                : [];
+            LoudnessMeter meter = new(outSampleRate, outCh);
+            if (!isHeadphone) {
+                double[] weights = new double[outCh];
+                for (int c = 0; c < outCh; c++) {
+                    weights[c] = targetLayout[c] == ReferenceChannel.ScreenLFE ? 0.0 : 1.0;
+                }
+                meter.Configure(outSampleRate, outCh, weights);
+            }
+            TruePeakLimiter limiter = new(outSampleRate, outCh, job.TruePeakCeilingDbtp);
+            float[] blockOut = new float[updateRate * outCh];
+            SpatialSceneFrame stageContext = new() {
+                SampleRate = outSampleRate,
+                FrameCount = updateRate,
+                Metadata = SpatialProgramMetadata.CreateDefault()
+            };
+
+            long written = 0;
+            try {
+                using IStreamingExportSink sink = CreateStreamingSink(
+                    outPath,
+                    targetLayout,
+                    outCh,
+                    outSampleRate,
+                    job.BitDepth,
+                    outTotalSamples,
+                    effectiveTier,
+                    ffmpegPath,
+                    onSigpipe,
+                    isAmbisonics: false,
+                    metadata: ResolveMetadata(job));
+                long totalFrames = (outTotalSamples + updateRate - 1) / updateRate;
+                for (long f = 0; f < totalFrames; f++) {
+                    token.ThrowIfCancellationRequested();
+                    choreoMapper.ApplyFrame(activeSources, written / (double)outSampleRate);
+                    float[] rendered = listener.Render(1);
+                    int frames = (int)Math.Min(updateRate, outTotalSamples - written);
+                    for (int s = 0; s < frames; s++) {
+                        int srcBase = s * stride;
+                        int dstBase = s * outCh;
+                        for (int c = 0; c < outCh; c++) {
+                            blockOut[dstBase + c] = rendered[srcBase + c];
+                        }
+                    }
+                    if (activePostStages.Count > 0) {
+                        stageContext.FrameCount = frames;
+                        for (int i = 0; i < activePostStages.Count; i++) {
+                            activePostStages[i].ProcessInterleaved(blockOut, 0, frames, outCh, stageContext);
+                        }
+                    }
+                    limiter.ProcessInterleaved(blockOut, 0, frames, outCh);
+                    meter.AnalyzeInterleaved(blockOut, 0, frames, outCh);
+                    sink.WriteInterleavedBlock(blockOut, frames);
+                    written += frames;
+                    if ((f & 15) == 0 || f == totalFrames - 1) {
+                        onProgress?.Invoke(Math.Clamp((f + 1.0) / totalFrames, 0.0, 1.0));
+                    }
+                }
+            } finally {
+                DisposePostStages(activePostStages);
+            }
+
+            LoudnessAnalysisSnapshot snap = meter.Snapshot;
+            return new StudioBatchExportResult {
+                Preset = job.Preset,
+                OutputPath = outPath,
+                FormatSummary = formatSummary,
+                ChannelCount = outCh,
+                SampleRate = outSampleRate,
+                DurationSeconds = written / (double)Math.Max(1, outSampleRate),
+                IntegratedLufs = ResolveMeasuredLufs(snap),
+                LoudnessRangeLu = snap.LoudnessRangeLu,
+                MaxTruePeakDbtp = snap.MaxTruePeakDbtp,
+                CompressionTier = effectiveTier,
+                OutputBytes = SafeFileLength(outPath),
+                EffectiveChoreoMode = choreoMode,
+                Succeeded = true
+            };
+        }
+
+        // Route 2: Environmental Spatial Container (ADM BWF w/ true moving ITU-R BS.2076 objects, Eclipsa IAMF, 360° HOA)
+        Codec envCodec = opts.BaseFormat switch {
+            StudioBaseOutputFormat.EclipsaIamf => Codec.IAMF,
+            StudioBaseOutputFormat.Ambisonics360 => Codec.AmbisonicsHOA,
+            _ => job.UseDolbyAtmosAdmSubset ? Codec.ADM_BWF_Atmos : Codec.ADM_BWF
+        };
+        Listener.HeadphoneVirtualizer = false;
+        Listener envListener = new(false) {
+            SampleRate = sampleRate,
+            UpdateRate = updateRate,
+            AudioQuality = QualityModes.Perfect,
+            MaximumSources = 256,
+            LFESeparation = true,
+            Normalizer = 0f
+        };
+        for (int i = 0; i < objectSources.Count; i++) {
+            envListener.AttachSource(objectSources[i]);
+        }
+        List<Source> envSources = new(envListener.ActiveSources);
+        ChoreoSourceMapper envChoreoMapper = new(envSources, choreoTrack, explicitMap, explicitSigns);
+
+        int hoaOrder = Math.Clamp(job.HoaOrder, 1, 3);
+        int envOutCh = envCodec == Codec.AmbisonicsHOA || envCodec == Codec.IAMF
+            ? (hoaOrder + 1) * (hoaOrder + 1)
+            : Math.Max(1, envSources.Count);
+
+        if (envCodec == Codec.AmbisonicsHOA && effectiveTier != StudioCompressionTier.MasterPcm) {
+            FfmpegPipeCodec hoaPipe = effectiveTier == StudioCompressionTier.PortableLossy ? FfmpegPipeCodec.Opus : FfmpegPipeCodec.WavPack;
+            return ExportHoaStreamingPipe(
+                envListener,
+                envSources,
+                envChoreoMapper,
+                totalSamples,
+                sampleRate,
+                hoaOrder,
+                envOutCh,
+                job,
+                effectiveTier,
+                ffmpegPath,
+                onSigpipe,
+                hoaPipe,
+                outPath,
+                formatSummary,
+                onProgress,
+                token);
+        }
+
+        IamfCodecMode envIamfCodec = effectiveTier switch {
+            StudioCompressionTier.LosslessCompressed => IamfCodecMode.Flac,
+            StudioCompressionTier.PortableLossy => IamfCodecMode.Opus,
+            _ => IamfCodecMode.Ipcm
+        };
+
+        int meterCh = envSources.Count > 0 && envSources.Count <= 16 ? envSources.Count : 2;
+        LoudnessMeter envMeter = new(sampleRate, meterCh);
+        if (meterCh == envSources.Count) {
+            double[] weights = new double[meterCh];
+            for (int c = 0; c < meterCh; c++) {
+                weights[c] = envSources[c].LFE ? 0.0 : 1.0;
+            }
+            envMeter.Configure(sampleRate, meterCh, weights);
+        }
+        float[] envMeterBuf = new float[updateRate * meterCh];
+        long envWritten = 0;
+
+        using (EnvironmentWriter writer = envCodec switch {
+            Codec.IAMF => new IamfEnvironmentWriter(outPath, envListener, totalSamples, job.BitDepth, useSceneBasedHoa: true, hoaOrder: hoaOrder, mixLabel: job.TrackName, codecMode: envIamfCodec),
+            Codec.AmbisonicsHOA => new AmbisonicsHoaWriter(outPath, envListener, totalSamples, job.BitDepth, hoaOrder),
+            _ => EnvironmentWriter.Create(outPath, envCodec, envListener, totalSamples, job.BitDepth, renderer: null)
+        }) {
+            long totalFrames = (totalSamples + updateRate - 1) / updateRate;
+            for (long f = 0; f < totalFrames; f++) {
+                token.ThrowIfCancellationRequested();
+                envChoreoMapper.ApplyFrame(envSources, envWritten / (double)sampleRate);
+                writer.WriteNextFrame();
+
+                int frames = (int)Math.Min(updateRate, totalSamples - envWritten);
+                if (frames > 0 && envSources.Count > 0) {
+                    Array.Clear(envMeterBuf, 0, frames * meterCh);
+                    if (meterCh == envSources.Count) {
+                        for (int c = 0; c < meterCh; c++) {
+                            float[] srcSamples = envSources[c].Rendered?[0];
+                            if (srcSamples == null) continue;
+                            int lim = Math.Min(frames, srcSamples.Length);
+                            for (int s = 0; s < lim; s++) {
+                                envMeterBuf[s * meterCh + c] = srcSamples[s];
+                            }
+                        }
+                    } else {
+                        float foldNorm = 1f / MathF.Sqrt(Math.Max(1, envSources.Count));
+                        for (int c = 0; c < envSources.Count; c++) {
+                            if (envSources[c].LFE) continue;
+                            float[] srcSamples = envSources[c].Rendered?[0];
+                            if (srcSamples == null) continue;
+                            int lim = Math.Min(frames, srcSamples.Length);
+                            for (int s = 0; s < lim; s++) {
+                                float v = srcSamples[s] * foldNorm;
+                                envMeterBuf[s * 2] += v;
+                                envMeterBuf[s * 2 + 1] += v;
+                            }
+                        }
+                    }
+                    envMeter.AnalyzeInterleaved(envMeterBuf, 0, frames, meterCh);
+                }
+
+                envWritten += frames;
+                if ((f & 15) == 0 || f == totalFrames - 1) {
+                    onProgress?.Invoke(Math.Clamp((f + 1.0) / totalFrames, 0.0, 1.0));
+                }
+            }
+        }
+
+        LoudnessAnalysisSnapshot envSnap = envMeter.Snapshot;
+        return new StudioBatchExportResult {
+            Preset = job.Preset,
+            OutputPath = outPath,
+            FormatSummary = formatSummary,
+            ChannelCount = envOutCh,
+            SampleRate = sampleRate,
+            DurationSeconds = envWritten / (double)Math.Max(1, sampleRate),
+            IntegratedLufs = ResolveMeasuredLufs(envSnap),
+            LoudnessRangeLu = envSnap.LoudnessRangeLu,
+            MaxTruePeakDbtp = envSnap.MaxTruePeakDbtp,
+            CompressionTier = effectiveTier,
+            OutputBytes = SafeFileLength(outPath),
+            EffectiveChoreoMode = choreoMode,
             Succeeded = true
         };
     }

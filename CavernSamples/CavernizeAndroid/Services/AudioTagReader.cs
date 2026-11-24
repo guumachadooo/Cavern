@@ -16,7 +16,12 @@ public sealed class ParsedAudioTags {
     public int TrackNumber { get; set; }
     public int TrackTotal { get; set; }
     public int DiscNumber { get; set; }
+    public string Year { get; set; } = "";
+    public string Genre { get; set; } = "";
+    public string Comment { get; set; } = "";
     public string Lyrics { get; set; } = "";
+    /// <summary>True when container explicitly carries embedded front artwork (FLAC PICTURE, ID3 APIC, MP4 covr, Opus METADATA_BLOCK_PICTURE).</summary>
+    public bool HasEmbeddedArtwork { get; set; }
     /// <summary>
     /// Parsed media duration in milliseconds extracted directly from container headers
     /// (MP4 mvhd, FLAC STREAMINFO, WAV fmt/data), or 0 when unavailable.
@@ -47,7 +52,7 @@ public static partial class AudioTagReader {
     public static bool IsContainerSupported(string extensionWithDot) {
         if (string.IsNullOrEmpty(extensionWithDot)) return false;
         string ext = extensionWithDot.StartsWith('.') ? extensionWithDot.ToLowerInvariant() : "." + extensionWithDot.ToLowerInvariant();
-        return ext is ".mp4" or ".m4a" or ".m4v" or ".mov" or ".qt" or ".flac" or ".mp3" or ".wav";
+        return ext is ".mp4" or ".m4a" or ".m4v" or ".mov" or ".qt" or ".flac" or ".mp3" or ".wav" or ".amb" or ".opus" or ".ogg" or ".wv";
     }
 
     public static ParsedAudioTags TryReadTags(string filePath) {
@@ -72,8 +77,12 @@ public static partial class AudioTagReader {
                 if (!tags.HasEmbeddedMusicTags) {
                     ParseId3v1Fallback(fs, tags);
                 }
-            } else if (ext == ".wav") {
+            } else if (ext is ".wav" or ".amb") {
                 ParseRiffTags(fs, tags);
+            } else if (ext is ".opus" or ".ogg") {
+                ParseOggOpusTags(fs, tags);
+            } else if (ext == ".wv") {
+                ParseApeV2FooterTags(fs, tags);
             } else {
                 // Magic sniff fallback for renamed containers
                 Span<byte> head = stackalloc byte[12];
@@ -85,9 +94,14 @@ public static partial class AudioTagReader {
                         ParseFlacTags(fs, tags);
                     } else if (head[0] == 'I' && head[1] == 'D' && head[2] == '3') {
                         ParseId3v2Tags(fs, tags);
-                    } else if (head[0] == 'R' && head[1] == 'I' && head[2] == 'F' && head[3] == 'F' &&
+                    } else if (((head[0] == 'R' && head[1] == 'I' && head[2] == 'F' && head[3] == 'F') ||
+                                (head[0] == 'R' && head[1] == 'F' && head[2] == '6' && head[3] == '4')) &&
                                head[8] == 'W' && head[9] == 'A' && head[10] == 'V' && head[11] == 'E') {
                         ParseRiffTags(fs, tags);
+                    } else if (head[0] == 'O' && head[1] == 'g' && head[2] == 'g' && head[3] == 'S') {
+                        ParseOggOpusTags(fs, tags);
+                    } else if (head[0] == 'w' && head[1] == 'v' && head[2] == 'p' && head[3] == 'k') {
+                        ParseApeV2FooterTags(fs, tags);
                     }
                 }
             }
@@ -230,6 +244,7 @@ public static partial class AudioTagReader {
                     uint typeInd = BinaryPrimitives.ReadUInt32BigEndian(dataHdr[..4]) & 0xFFFFFF;
                     if (atomName == "covr") {
                         if (subEnd - fs.Position > 0 && typeInd is 13 or 14 or 27 or 0) {
+                            tags.HasEmbeddedArtwork = true;
                             tags.HasEmbeddedMusicTags = true;
                         }
                     } else {
@@ -306,6 +321,18 @@ public static partial class AudioTagReader {
                     tags.HasEmbeddedMusicTags = true;
                 }
                 break;
+            case "\u00A9day":
+                if (string.IsNullOrEmpty(tags.Year)) tags.Year = text;
+                tags.HasEmbeddedMusicTags = true;
+                break;
+            case "\u00A9gen":
+                if (string.IsNullOrEmpty(tags.Genre)) tags.Genre = text;
+                tags.HasEmbeddedMusicTags = true;
+                break;
+            case "\u00A9cmt":
+                if (string.IsNullOrEmpty(tags.Comment)) tags.Comment = text;
+                tags.HasEmbeddedMusicTags = true;
+                break;
             case "\u00A9lyr":
                 if (string.IsNullOrEmpty(tags.Lyrics)) tags.Lyrics = text;
                 tags.HasEmbeddedMusicTags = true;
@@ -352,6 +379,7 @@ public static partial class AudioTagReader {
                 sawVorbis = true;
             } else {
                 if (blockType == 6 && blockLen > 16) { // PICTURE
+                    tags.HasEmbeddedArtwork = true;
                     tags.HasEmbeddedMusicTags = true;
                     sawPicture = true;
                 }
@@ -425,6 +453,26 @@ public static partial class AudioTagReader {
                         tags.HasEmbeddedMusicTags = true;
                     }
                     break;
+                case "DATE":
+                case "YEAR":
+                    if (string.IsNullOrEmpty(tags.Year)) tags.Year = val;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+                case "GENRE":
+                    if (string.IsNullOrEmpty(tags.Genre)) tags.Genre = val;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+                case "COMMENT":
+                case "DESCRIPTION":
+                    if (string.IsNullOrEmpty(tags.Comment)) tags.Comment = val;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+                case "METADATA_BLOCK_PICTURE":
+                    if (val.Length > 24) {
+                        tags.HasEmbeddedArtwork = true;
+                        tags.HasEmbeddedMusicTags = true;
+                    }
+                    break;
                 case "SYNCEDLYRICS":
                     tags.Lyrics = val;
                     hasSyncedLyrics = true;
@@ -480,11 +528,13 @@ public static partial class AudioTagReader {
             if (fSize <= 0 || fs.Position + fSize > tagEnd) break;
             long frameEnd = fs.Position + fSize;
 
-            bool wantedText = id is "TIT2" or "TT2" or "TPE1" or "TP1" or "TPE2" or "TP2" or "TALB" or "TAL" or "TRCK" or "TRK" or "TPOS" or "TPA";
+            bool wantedText = id is "TIT2" or "TT2" or "TPE1" or "TP1" or "TPE2" or "TP2" or "TALB" or "TAL" or "TRCK" or "TRK" or "TPOS" or "TPA" or "TYER" or "TDRC" or "TCON";
             bool wantedLyrics = id is "USLT" or "ULT" or "SYLT";
+            bool wantedComment = id is "COMM" or "COM";
             if (id is "APIC" or "PIC" && fSize > 16) {
+                tags.HasEmbeddedArtwork = true;
                 tags.HasEmbeddedMusicTags = true;
-            } else if ((wantedText || wantedLyrics) && fSize <= 2 * 1024 * 1024) {
+            } else if ((wantedText || wantedLyrics || wantedComment) && fSize <= 2 * 1024 * 1024) {
                 byte[] buf = new byte[fSize];
                 int got = ReadExact(fs, buf, fSize);
                 if (got > 0) {
@@ -528,7 +578,22 @@ public static partial class AudioTagReader {
                                         tags.HasEmbeddedMusicTags = true;
                                     }
                                     break;
+                                case "TYER":
+                                case "TDRC":
+                                    if (string.IsNullOrEmpty(tags.Year)) tags.Year = txt;
+                                    tags.HasEmbeddedMusicTags = true;
+                                    break;
+                                case "TCON":
+                                    if (string.IsNullOrEmpty(tags.Genre)) tags.Genre = txt;
+                                    tags.HasEmbeddedMusicTags = true;
+                                    break;
                             }
+                        }
+                    } else if (wantedComment) {
+                        string comm = ParseId3Uslt(payload);
+                        if (IsMeaningfulTagText(comm)) {
+                            if (string.IsNullOrEmpty(tags.Comment)) tags.Comment = comm;
+                            tags.HasEmbeddedMusicTags = true;
                         }
                     } else if (id == "SYLT") {
                         string syltLrc = ParseId3SyltAsLrc(payload);
@@ -585,35 +650,51 @@ public static partial class AudioTagReader {
     static void ParseRiffTags(FileStream fs, ParsedAudioTags tags) {
         Span<byte> hdr = stackalloc byte[12];
         if (fs.Read(hdr) < 12) return;
-        if (hdr[0] != 'R' || hdr[1] != 'I' || hdr[2] != 'F' || hdr[3] != 'F' ||
-            hdr[8] != 'W' || hdr[9] != 'A' || hdr[10] != 'V' || hdr[11] != 'E') {
+        bool isRiff = hdr[0] == 'R' && hdr[1] == 'I' && hdr[2] == 'F' && hdr[3] == 'F';
+        bool isRf64 = hdr[0] == 'R' && hdr[1] == 'F' && hdr[2] == '6' && hdr[3] == '4';
+        if ((!isRiff && !isRf64) || hdr[8] != 'W' || hdr[9] != 'A' || hdr[10] != 'V' || hdr[11] != 'E') {
             return;
         }
 
-        uint riffSize = BinaryPrimitives.ReadUInt32LittleEndian(hdr.Slice(4, 4));
-        long endPos = Math.Min(fs.Length, 8L + riffSize);
+        uint riffSize32 = BinaryPrimitives.ReadUInt32LittleEndian(hdr.Slice(4, 4));
+        long endPos = isRf64 || riffSize32 == 0xFFFFFFFFu
+            ? fs.Length
+            : Math.Min(fs.Length, 8L + riffSize32);
         Span<byte> chunkHdr = stackalloc byte[8];
         Span<byte> listType = stackalloc byte[4];
         Span<byte> fmtBuf = stackalloc byte[16];
+        Span<byte> ds64Buf = stackalloc byte[24];
         uint avgBytesPerSec = 0;
         ulong dataChunkBytes = 0;
+        ulong rf64DataSize = 0;
 
         for (int n = 0; n < 256 && fs.Position + 8 <= endPos; n++) {
             if (fs.Read(chunkHdr) < 8) break;
             string chunkId = Encoding.Latin1.GetString(chunkHdr[..4]);
-            uint chunkSize = BinaryPrimitives.ReadUInt32LittleEndian(chunkHdr.Slice(4, 4));
+            uint chunkSize32 = BinaryPrimitives.ReadUInt32LittleEndian(chunkHdr.Slice(4, 4));
             long payloadStart = fs.Position;
+            long chunkSize = (chunkId == "data" && chunkSize32 == 0xFFFFFFFFu && rf64DataSize > 0)
+                ? (long)rf64DataSize
+                : chunkSize32;
             long nextPos = payloadStart + chunkSize + (chunkSize & 1L);
 
-            if (chunkId == "fmt " && chunkSize >= 16 && payloadStart + 16 <= endPos) {
+            if (chunkId == "ds64" && chunkSize >= 24 && payloadStart + 24 <= fs.Length) {
+                if (fs.Read(ds64Buf) == 24) {
+                    ulong rf64Riff = BinaryPrimitives.ReadUInt64LittleEndian(ds64Buf.Slice(0, 8));
+                    rf64DataSize = BinaryPrimitives.ReadUInt64LittleEndian(ds64Buf.Slice(8, 8));
+                    if (rf64Riff > 0 && rf64Riff <= (ulong)long.MaxValue - 8UL) {
+                        endPos = Math.Min(fs.Length, 8L + (long)rf64Riff);
+                    }
+                }
+            } else if (chunkId == "fmt " && chunkSize >= 16 && payloadStart + 16 <= endPos) {
                 if (fs.Read(fmtBuf) == 16) {
                     avgBytesPerSec = BinaryPrimitives.ReadUInt32LittleEndian(fmtBuf.Slice(8, 4));
                 }
             } else if (chunkId == "data" && chunkSize > 0) {
-                dataChunkBytes = chunkSize;
+                dataChunkBytes = (ulong)chunkSize;
             } else if (chunkId == "LIST" && chunkSize >= 4 && payloadStart + 4 <= endPos) {
                 if (fs.Read(listType) == 4 && listType[0] == 'I' && listType[1] == 'N' && listType[2] == 'F' && listType[3] == 'O') {
-                    int infoLen = (int)Math.Min(262144L, Math.Min(endPos - fs.Position, (long)chunkSize - 4L));
+                    int infoLen = (int)Math.Min(262144L, Math.Min(endPos - fs.Position, chunkSize - 4L));
                     if (infoLen >= 8) {
                         byte[] buf = new byte[infoLen];
                         int got = ReadExact(fs, buf, infoLen);
@@ -663,12 +744,183 @@ public static partial class AudioTagReader {
                             tags.HasEmbeddedMusicTags = true;
                         }
                         break;
+                    case "ICRD":
+                        if (string.IsNullOrEmpty(tags.Year)) tags.Year = text;
+                        tags.HasEmbeddedMusicTags = true;
+                        break;
+                    case "IGNR":
+                        if (string.IsNullOrEmpty(tags.Genre)) tags.Genre = text;
+                        tags.HasEmbeddedMusicTags = true;
+                        break;
+                    case "ICMT":
+                        if (string.IsNullOrEmpty(tags.Comment)) tags.Comment = text;
+                        tags.HasEmbeddedMusicTags = true;
+                        break;
                 }
             }
 
             int step = (int)sz + ((int)sz & 1);
             if (step <= 0 && sz == 0) continue;
             off += step;
+        }
+    }
+
+    static void ParseOggOpusTags(FileStream fs, ParsedAudioTags tags) {
+        // Scan first ~512 KB for OggS pages carrying the OpusTags (or Vorbis comment) header packet
+        int scanLen = (int)Math.Min(512 * 1024L, fs.Length);
+        if (scanLen < 32) return;
+        byte[] buf = new byte[scanLen];
+        int got = ReadExact(fs, buf, scanLen);
+        if (got < 32 || buf[0] != 'O' || buf[1] != 'g' || buf[2] != 'g' || buf[3] != 'S') {
+            return;
+        }
+
+        // Reassemble second Ogg packet across continuation pages for multi-page OpusTags (e.g. Base64 cover art)
+        using MemoryStream commentPacket = new(4096);
+        bool collecting = false;
+        int pos = 0;
+        while (pos + 27 <= got) {
+            if (buf[pos] != 'O' || buf[pos + 1] != 'g' || buf[pos + 2] != 'g' || buf[pos + 3] != 'S') {
+                pos++;
+                continue;
+            }
+            int segCount = buf[pos + 26];
+            if (pos + 27 + segCount > got) break;
+            int dataStart = pos + 27 + segCount;
+            int pageBodyLen = 0;
+            for (int s = 0; s < segCount; s++) {
+                pageBodyLen += buf[pos + 27 + s];
+            }
+            if (dataStart + pageBodyLen > got) break;
+
+            if (!collecting) {
+                if (pageBodyLen >= 16 &&
+                    buf[dataStart] == 'O' && buf[dataStart + 1] == 'p' && buf[dataStart + 2] == 'u' && buf[dataStart + 3] == 's' &&
+                    buf[dataStart + 4] == 'T' && buf[dataStart + 5] == 'a' && buf[dataStart + 6] == 'g' && buf[dataStart + 7] == 's') {
+                    collecting = true;
+                    commentPacket.Write(buf, dataStart + 8, pageBodyLen - 8);
+                    if (segCount > 0 && buf[pos + 27 + segCount - 1] < 255) {
+                        break;
+                    }
+                }
+            } else {
+                bool isContinuation = (buf[pos + 5] & 0x01) != 0;
+                if (!isContinuation) break;
+                commentPacket.Write(buf, dataStart, pageBodyLen);
+                if (segCount > 0 && buf[pos + 27 + segCount - 1] < 255) {
+                    break;
+                }
+            }
+            pos = dataStart + pageBodyLen;
+        }
+
+        if (commentPacket.Length >= 8) {
+            ParseVorbisComment(commentPacket.ToArray(), tags);
+        }
+    }
+
+    static void ParseApeV2FooterTags(FileStream fs, ParsedAudioTags tags) {
+        if (fs.Length < 32) return;
+        fs.Position = fs.Length - 32;
+        byte[] footer = new byte[32];
+        if (ReadExact(fs, footer, 32) < 32) return;
+        if (Encoding.ASCII.GetString(footer, 0, 8) != "APETAGEX") {
+            return;
+        }
+        int tagSize = BinaryPrimitives.ReadInt32LittleEndian(footer.AsSpan(12, 4));
+        int itemCount = BinaryPrimitives.ReadInt32LittleEndian(footer.AsSpan(16, 4));
+        if (tagSize <= 32 || tagSize > 2 * 1024 * 1024 || itemCount <= 0 || itemCount > 512) {
+            return;
+        }
+        long startPos = fs.Length - tagSize;
+        if (startPos < 0) return;
+
+        int itemsBytes = tagSize - 32;
+        fs.Position = startPos;
+        byte[] body = new byte[itemsBytes];
+        if (ReadExact(fs, body, itemsBytes) < itemsBytes) return;
+
+        int off = 0;
+        bool hasSyncedLyrics = false;
+        for (int i = 0; i < itemCount && off + 9 < body.Length; i++) {
+            int valLen = BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(off, 4));
+            uint flags = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(off + 4, 4));
+            off += 8;
+            int keyStart = off;
+            while (off < body.Length && body[off] != 0) off++;
+            if (off >= body.Length) break;
+            string key = Encoding.ASCII.GetString(body, keyStart, off - keyStart).Trim().ToUpperInvariant();
+            off++; // skip NUL
+            if (valLen < 0 || off + valLen > body.Length) break;
+
+            bool isBinary = ((flags >> 1) & 0x03) == 1;
+            if (isBinary) {
+                if (key.Contains("COVER", StringComparison.Ordinal) && valLen > 16) {
+                    tags.HasEmbeddedArtwork = true;
+                    tags.HasEmbeddedMusicTags = true;
+                }
+                off += valLen;
+                continue;
+            }
+
+            string val = Encoding.UTF8.GetString(body, off, valLen).Trim('\0', ' ', '\t', '\r', '\n');
+            off += valLen;
+            if (!IsMeaningfulTagText(val)) continue;
+
+            switch (key) {
+                case "TITLE":
+                    if (string.IsNullOrEmpty(tags.Title)) tags.Title = val;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+                case "ARTIST":
+                    if (string.IsNullOrEmpty(tags.Artist)) tags.Artist = val;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+                case "ALBUM ARTIST":
+                case "ALBUMARTIST":
+                    if (string.IsNullOrEmpty(tags.AlbumArtist)) tags.AlbumArtist = val;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+                case "ALBUM":
+                    if (string.IsNullOrEmpty(tags.Album)) tags.Album = val;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+                case "TRACK":
+                    if (TryParseSlashInt(val, out int t, out int tot)) {
+                        if (tags.TrackNumber <= 0) tags.TrackNumber = t;
+                        if (tot > 0 && tags.TrackTotal <= 0) tags.TrackTotal = tot;
+                        tags.HasEmbeddedMusicTags = true;
+                    }
+                    break;
+                case "DISC":
+                    if (TryParseSlashInt(val, out int d, out _)) {
+                        if (tags.DiscNumber <= 0) tags.DiscNumber = d;
+                        tags.HasEmbeddedMusicTags = true;
+                    }
+                    break;
+                case "YEAR":
+                case "DATE":
+                    if (string.IsNullOrEmpty(tags.Year)) tags.Year = val;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+                case "GENRE":
+                    if (string.IsNullOrEmpty(tags.Genre)) tags.Genre = val;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+                case "COMMENT":
+                    if (string.IsNullOrEmpty(tags.Comment)) tags.Comment = val;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+                case "SYNCEDLYRICS":
+                    tags.Lyrics = val;
+                    hasSyncedLyrics = true;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+                case "LYRICS":
+                    if (!hasSyncedLyrics && string.IsNullOrEmpty(tags.Lyrics)) tags.Lyrics = val;
+                    tags.HasEmbeddedMusicTags = true;
+                    break;
+            }
         }
     }
 

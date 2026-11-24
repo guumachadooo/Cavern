@@ -91,5 +91,27 @@ public sealed partial class AndroidStrings {
         d["TipHeadTrackerSource"] = "选择向 3D 双耳房间提供实时 3DoF 头部旋转的传感器：手动、Galaxy Buds IMU、手机 IMU 或 BLE/OSC。";
         d["TipProAudioPath"] = "选择全双工监听与 USB DAC 的音频传输通道：自动、Path B (libusb UAC2 位精确直通)、Path A (AAudio 独占) 或传统模式。";
         d["TipProAudioBuffer"] = "音频回调缓冲区帧数：64/128 可降低实时麦克风监听延迟，256 可提供更高的抗爆音稳定性。";
+        // Master Overhaul T5: 工作室动态 Atmos 对象运动、元数据/封面/歌词嵌入与公开存储路径
+        d["StudioDynamicMotionLabel"] = "动态 Atmos 对象运动:";
+        d["TipStudioDynamicMotion"] = "将分离后的乐器导出为真实运动的 3D 空间对象（时变 ITU-R BS.2076 ADM 轨迹、Eclipsa IAMF、HOA 360° 或双耳 3D），同时保持 LFE 低频固定（与 3D 房间实时播放设置独立）。";
+        d["StudioExportDeliveryHeader"] = "元数据、封面与输出目录";
+        d["StudioOptEmbedCoverTitle"] = "嵌入专辑封面";
+        d["StudioOptEmbedCoverDesc"] = "将原始或已缓存的专辑封面无损嵌入 FLAC、WAV、Opus 和 M4A 导出文件，不重新编码音频。";
+        d["StudioOptEmbedCoverReadyDesc"] = "已检测到封面图像，准备无损嵌入（零音频重编码）。";
+        d["StudioOptEmbedLyricsTitle"] = "嵌入同步歌词";
+        d["StudioOptEmbedLyricsDesc"] = "可用时将 LRC / 逐字增强 LRC 同步歌词（或纯文本歌词）写入导出文件标签。";
+        d["StudioOptEmbedLyricsSyncedReadyDesc"] = "已检测到同步 LRC 歌词，准备写入元数据标签。";
+        d["StudioOptEmbedLyricsPlainReadyDesc"] = "已检测到纯文本歌词，准备写入元数据标签。";
+        d["StudioExportFolderLabel"] = "导出保存目录:";
+        d["TipStudioExportFolder"] = "选择导出音频的公开存储目录：Music/Cavernize（推荐，立即显示在音乐播放器与文件管理器中）或 Download/Cavernize。特殊空间容器（.iamf、.wv、.amb）将自动保存至 Download/Cavernize 以兼容 Android MediaStore。";
+        d["StudioExportFolderMusic"] = "Music/Cavernize";
+        d["StudioExportFolderDownloads"] = "Download/Cavernize";
+        d["StudioExportFolderActiveFmt"] = "公开目录: {0}（已自动索引至播放器与文件管理）";
+        d["StudioExportFolderCompatNoteFmt"] = "{0} 格式将自动保存至 Download/Cavernize 以兼容 Android MediaStore。";
+        d["StudioTagMotionFmt"] = "动态 {0}";
+        d["LocateExportBtn"] = "定位";
+        d["LocateExportTitle"] = "已导出文件";
+        d["ExportSavedToFmt"] = "已保存至: {0}";
+        d["ExportCompatDownloadsBadge"] = "容器兼容";
     }
 }

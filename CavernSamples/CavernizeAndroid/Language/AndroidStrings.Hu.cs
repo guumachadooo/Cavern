@@ -91,5 +91,27 @@ public sealed partial class AndroidStrings {
         d["TipHeadTrackerSource"] = "A 3DoF fejkövetés érzékelőjének forrása: kézi, Galaxy Buds IMU, telefon IMU vagy BLE/OSC.";
         d["TipProAudioPath"] = "A full-duplex USB DAC hangút kiválasztása: Auto, Path B (libusb UAC2 bit-pontos), Path A (AAudio) vagy Legacy.";
         d["TipProAudioBuffer"] = "Hangpuffer mérete mintákban: 64/128 alacsony késleltetésű élő mikrofonhoz, 256 nagyobb stabilitáshoz.";
+        // Master Overhaul T5: Stúdió dinamikus Atmos mozgás, metaadat/borító/dalszöveg és nyilvános mappák
+        d["StudioDynamicMotionLabel"] = "Dinamikus Atmos objektummozgás:";
+        d["TipStudioDynamicMotion"] = "Valódi mozgó 3D objektumokat exportál (ITU-R BS.2076 ADM pályák, Eclipsa IAMF, HOA 360° vagy Binaurális 3D) a szeparált hangszerekből, miközben az LFE fix marad (független a 3D Szoba beállításától).";
+        d["StudioExportDeliveryHeader"] = "Metaadatok, borító és kimeneti mappa";
+        d["StudioOptEmbedCoverTitle"] = "Albumborító beágyazása";
+        d["StudioOptEmbedCoverDesc"] = "Beágyazza az eredeti vagy gyorsítótárazott borítót FLAC, WAV, Opus és M4A fájlokba a hang újrakódolása nélkül.";
+        d["StudioOptEmbedCoverReadyDesc"] = "Borító észlelve, beágyazásra kész (veszteségmentes, újrakódolás nélkül).";
+        d["StudioOptEmbedLyricsTitle"] = "Szinkronizált dalszöveg beágyazása";
+        d["StudioOptEmbedLyricsDesc"] = "Beágyazza az LRC / Enhanced LRC vagy sima dalszöveget az exportált metaadatokba, ha elérhető.";
+        d["StudioOptEmbedLyricsSyncedReadyDesc"] = "Szinkronizált LRC dalszöveg észlelve, beágyazásra kész.";
+        d["StudioOptEmbedLyricsPlainReadyDesc"] = "Dalszöveg észlelve, beágyazásra kész.";
+        d["StudioExportFolderLabel"] = "Exportálási kimeneti mappa:";
+        d["TipStudioExportFolder"] = "Válassza ki a nyilvános célmappát (Music/Cavernize ajánlott zenelejátszókhoz, vagy Download/Cavernize). A .iamf, .wv és .amb fájlok automatikusan a Download/Cavernize mappába kerülnek.";
+        d["StudioExportFolderMusic"] = "Music/Cavernize";
+        d["StudioExportFolderDownloads"] = "Download/Cavernize";
+        d["StudioExportFolderActiveFmt"] = "Nyilvános mappa: {0} (azonnal látható a lejátszókban)";
+        d["StudioExportFolderCompatNoteFmt"] = "A {0} fájlok kompatibilitás miatt automatikusan a Download/Cavernize mappába mentődnek.";
+        d["StudioTagMotionFmt"] = "Mozgás {0}";
+        d["LocateExportBtn"] = "Megnyitás";
+        d["LocateExportTitle"] = "Exportált fájlok";
+        d["ExportSavedToFmt"] = "Mentve: {0}";
+        d["ExportCompatDownloadsBadge"] = "Konténer kompat.";
     }
 }

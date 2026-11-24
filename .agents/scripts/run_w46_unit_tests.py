@@ -2213,12 +2213,388 @@ RunTest("T27_LiveChoreography_SingleSourceOfTruth_And_Hybrid714Exclusion", () =>
         "Turning Choreography Off must preserve user custom pin.");
 });
 
+// ---------- Test 28 (Stage 5 T5): Lossless FLAC + WAV/RF64 Metadata, Cover Art & Synced Lyrics Roundtrip ----------
+RunTest("T28_T5_ExportMetadata_FlacAndWavRoundtrip", () => {
+    string tmpDir = Path.Combine(Path.GetTempPath(), $"cavern_t28_{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tmpDir);
+    try {
+        int sr = 48000;
+        int frames = 4096;
+        float[] pcm = new float[frames * 2];
+        for (int i = 0; i < frames; i++) {
+            float s = 0.25f * MathF.Sin((float)(2.0 * Math.PI * 440.0 * i / sr));
+            pcm[i * 2] = s;
+            pcm[i * 2 + 1] = -s * 0.8f;
+        }
+        // Minimal valid JPEG header containing SOF0 (width=64, height=64) so TryReadImageDimensions parses exact dims
+        byte[] fakeJpeg = [
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+            0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x40, 0x00, 0x40, 0x01, 0x01, 0x11, 0x00,
+            0xFF, 0xD9
+        ];
+        ExportMetadataPackage pkg = new() {
+            Title = "Midnight Echoes",
+            Artist = "Nova Horizon",
+            AlbumArtist = "Nova Horizon",
+            Album = "Orbital Sessions",
+            TrackNumber = 3,
+            TrackTotal = 12,
+            DiscNumber = 1,
+            Year = "2026",
+            Genre = "Electronic",
+            Comment = "Mastered in Cavernize",
+            Encoder = "Cavernize",
+            EmbedCoverArt = true,
+            CoverArtBytes = fakeJpeg,
+            CoverArtMimeType = "image/jpeg",
+            EmbedLyrics = true,
+            SyncedLyricsLrc = "[00:00.50]Drifting through the soundfield\n[00:02.25]Objects orbiting overhead"
+        };
+
+        // 1. FLAC in-place lossless VORBIS_COMMENT + PICTURE injection (zero audio re-encode!)
+        string flacPath = Path.Combine(tmpDir, "test_t28.flac");
+        using (DirectFlacStreamingSink flacSink = new(flacPath, 2, sr, BitDepth.Int16)) {
+            flacSink.WriteInterleavedBlock(pcm, frames);
+        }
+        byte[] flacBefore = File.ReadAllBytes(flacPath);
+        int audioOffsetBefore = FindFlacAudioFrameStart(flacBefore);
+        Assert(audioOffsetBefore >= 42, $"Unexpected FLAC audio offset before embed: {audioOffsetBefore}");
+        byte[] audioFramesBefore = flacBefore[audioOffsetBefore..];
+
+        ExportMetadataEmbedResult flacRes = ExportMetadataEmbedder.EmbedInPlace(flacPath, pkg);
+        Assert(flacRes.EmbeddedTags && flacRes.EmbeddedCoverArt && flacRes.EmbeddedLyrics,
+            $"FLAC embed incomplete: meta={flacRes.EmbeddedTags}, art={flacRes.EmbeddedCoverArt}, lyr={flacRes.EmbeddedLyrics}, note={flacRes.Note}");
+
+        byte[] flacAfter = File.ReadAllBytes(flacPath);
+        Assert(flacAfter.Length > flacBefore.Length && Encoding.ASCII.GetString(flacAfter, 0, 4) == "fLaC", "Invalid FLAC magic after embed");
+        int audioOffsetAfter = FindFlacAudioFrameStart(flacAfter);
+        byte[] audioFramesAfter = flacAfter[audioOffsetAfter..];
+        Assert(audioFramesBefore.AsSpan().SequenceEqual(audioFramesAfter), "FLAC audio frames were altered! Must be bit-exact zero re-encode.");
+        string flacMetaAscii = Encoding.UTF8.GetString(flacAfter, 0, audioOffsetAfter);
+        Assert(flacMetaAscii.Contains("TITLE=Midnight Echoes", StringComparison.Ordinal) &&
+               flacMetaAscii.Contains("ARTIST=Nova Horizon", StringComparison.Ordinal) &&
+               flacMetaAscii.Contains("ALBUM=Orbital Sessions", StringComparison.Ordinal) &&
+               flacMetaAscii.Contains("LYRICS=[00:00.50]Drifting", StringComparison.Ordinal) &&
+               flacMetaAscii.Contains("image/jpeg", StringComparison.Ordinal),
+            "Missing expected Vorbis Comment / PICTURE fields in embedded FLAC.");
+
+        // 2. WAV RIFF LIST/INFO + id3 (ID3v2.3 TIT2/TPE1/TALB/USLT/SYLT/APIC) injection
+        string wavPath = Path.Combine(tmpDir, "test_t28.wav");
+        using (DirectPcmStreamingSink wavSink = new(wavPath, 2, sr, BitDepth.Int16)) {
+            wavSink.WriteInterleavedBlock(pcm, frames);
+        }
+        ExportMetadataEmbedResult wavRes = ExportMetadataEmbedder.EmbedInPlace(wavPath, pkg);
+        Assert(wavRes.EmbeddedTags && wavRes.EmbeddedCoverArt && wavRes.EmbeddedLyrics,
+            $"WAV embed incomplete: meta={wavRes.EmbeddedTags}, art={wavRes.EmbeddedCoverArt}, lyr={wavRes.EmbeddedLyrics}, note={wavRes.Note}");
+
+        byte[] wavAfter = File.ReadAllBytes(wavPath);
+        uint riffSize = BinaryPrimitives.ReadUInt32LittleEndian(wavAfter.AsSpan(4, 4));
+        Assert((long)riffSize + 8 == wavAfter.Length, $"WAV RIFF size mismatch: header={riffSize + 8}, actual={wavAfter.Length}");
+        string wavLatin = Encoding.Latin1.GetString(wavAfter);
+        Assert(wavLatin.Contains("LIST", StringComparison.Ordinal) && wavLatin.Contains("INFO", StringComparison.Ordinal) &&
+               wavLatin.Contains("INAM", StringComparison.Ordinal) && wavLatin.Contains("IART", StringComparison.Ordinal) &&
+               wavLatin.Contains("id3 ", StringComparison.Ordinal) && wavLatin.Contains("ID3", StringComparison.Ordinal) &&
+               wavLatin.Contains("TIT2", StringComparison.Ordinal) && wavLatin.Contains("TPE1", StringComparison.Ordinal) &&
+               wavLatin.Contains("USLT", StringComparison.Ordinal) && wavLatin.Contains("SYLT", StringComparison.Ordinal) &&
+               wavLatin.Contains("APIC", StringComparison.Ordinal),
+            "Missing expected LIST/INFO or ID3v2.3 frames (TIT2/TPE1/USLT/SYLT/APIC) in WAV.");
+    } finally {
+        try { Directory.Delete(tmpDir, true); } catch { }
+    }
+});
+
+// ---------- Test 29 (Stage 5 T5): Export Filename Hygiene, Sanitization & Collision Resolution ----------
+RunTest("T29_T5_ExportFileNameFormatter_HygieneAndCollision", () => {
+    ExportMetadataPackage meta = new() {
+        Title = "Starlight / Echoes: Live?",
+        Artist = "Daft * Punk"
+    };
+    string admName = ExportFileNameFormatter.FormatStudioFileName(
+        meta,
+        "cavern_input_998123",
+        StudioBaseOutputFormat.DolbyAtmosAdm,
+        StudioCompressionTier.MasterPcm,
+        enableAiUpmix: true,
+        enableKaraoke: false,
+        removeBackingVocals: false,
+        includePerformance: false,
+        enableLosslessTwin: false,
+        dynamicChoreoMode: SpatialChoreoMode.Orbit,
+        extensionWithDot: ".wav");
+    Assert(admName == "Daft Punk - Starlight Echoes Live (Dolby Atmos ADM - AI - Motion Orbit).wav",
+        $"Unexpected formatted Studio filename: '{admName}'");
+    Assert(!admName.Contains("cavern_input", StringComparison.OrdinalIgnoreCase), "Internal opaque token leaked into filename.");
+
+    string strippedRip = ExportFileNameFormatter.FormatClassicFileName(
+        null,
+        "04 - Neon_Dreams [24bit-96kHz FLAC] (WEB-DL)",
+        "7.1.4 Cinema",
+        ".flac");
+    Assert(strippedRip == "Neon Dreams (7.1.4 Cinema).flac", $"Rip-tag cleanup failed: '{strippedRip}'");
+
+    string opaqueFallback = ExportFileNameFormatter.FormatClassicFileName(null, "cavern_input_171234567", "Headphones 3D", ".wav");
+    Assert(opaqueFallback == "Cavernize Master (Headphones 3D).wav", $"Opaque fallback mismatch: '{opaqueFallback}'");
+
+    string longName = ExportFileNameFormatter.FormatStudioFileName(
+        new ExportMetadataPackage { Title = new string('A', 180), Artist = new string('B', 80) },
+        "fallback",
+        StudioBaseOutputFormat.Headphone3D,
+        StudioCompressionTier.LosslessCompressed,
+        true, true, true, true, true, SpatialChoreoMode.Cinematic, ".flac");
+    Assert(Path.GetFileNameWithoutExtension(longName).Length <= 120, $"Filename exceeded 120-char cap: {longName.Length}");
+
+    string tmpDir = Path.Combine(Path.GetTempPath(), $"cavern_t29_{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tmpDir);
+    try {
+        string p1 = ExportFileNameFormatter.ResolveUniqueOutputPath(tmpDir, "Artist - Song (Headphone 3D).flac");
+        File.WriteAllText(p1, "1");
+        string p2 = ExportFileNameFormatter.ResolveUniqueOutputPath(tmpDir, "Artist - Song (Headphone 3D).flac");
+        File.WriteAllText(p2, "2");
+        string p3 = ExportFileNameFormatter.ResolveUniqueOutputPath(tmpDir, "Artist - Song (Headphone 3D).flac");
+        Assert(Path.GetFileName(p2) == "Artist - Song (Headphone 3D) (2).flac", $"Unexpected (2) collision path: {p2}");
+        Assert(Path.GetFileName(p3) == "Artist - Song (Headphone 3D) (3).flac", $"Unexpected (3) collision path: {p3}");
+    } finally {
+        try { Directory.Delete(tmpDir, true); } catch { }
+    }
+});
+
+// ---------- Test 30 (Stage 5 T5): True Moving Semantic Atmos ADM BWF Objects + Stationary LFE + Embedded Tags ----------
+RunTest("T30_T5_DynamicAtmosAdm_SemanticMovingObjects", () => {
+    using IDisposable virtScope = Cavern.Virtualizer.VirtualizerFilter.BeginStaticStateScope();
+    string tmpDir = Path.Combine(Path.GetTempPath(), $"cavern_t30_{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tmpDir);
+    try {
+        int sr = 48000;
+        int len = sr * 3; // 3.0 s stereo source so Orbit choreography produces rich time-varying ADM blocks
+        string srcWav = Path.Combine(tmpDir, "source_stereo.wav");
+        float[] srcPcm = new float[len * 2];
+        for (int i = 0; i < len; i++) {
+            double t = i / (double)sr;
+            float bass = 0.25f * MathF.Sin((float)(2.0 * Math.PI * 65.0 * t));
+            float voc = 0.22f * MathF.Sin((float)(2.0 * Math.PI * 440.0 * t));
+            float synth = 0.18f * MathF.Sin((float)(2.0 * Math.PI * 780.0 * t));
+            srcPcm[i * 2] = bass + voc + synth;
+            srcPcm[i * 2 + 1] = bass + voc - synth * 0.7f;
+        }
+        using (DirectPcmStreamingSink w = new(srcWav, 2, sr, BitDepth.Int16)) {
+            w.WriteInterleavedBlock(srcPcm, len);
+        }
+
+        using MockT3MultiModelRuntime mockRt = new();
+        NeuralPipelineOrchestrator orch = new(mockRt, mockRt);
+        using RIFFWaveReader reader = new(srcWav);
+        reader.ReadHeader();
+        using CavernizeTrack track = new(reader, Codec.PCM_LE, 0);
+
+        string outAdm = Path.Combine(tmpDir, "Nova - Orbit (Dolby Atmos ADM - AI - Motion Orbit).wav");
+        StudioBatchExportJob job = new() {
+            TrackName = "Orbit",
+            Preset = StudioExportPreset.AdmBwfItuBs2076,
+            ComposableOptions = new StudioComposableExportOptions {
+                BaseFormat = StudioBaseOutputFormat.DolbyAtmosAdm,
+                CompressionTier = StudioCompressionTier.MasterPcm,
+                DynamicChoreoMode = SpatialChoreoMode.Orbit,
+                EnableAiSpatialUpmix = true
+            },
+            DynamicChoreoMode = SpatialChoreoMode.Orbit,
+            OutputPath = outAdm,
+            BitDepth = BitDepth.Int16,
+            NeuralRuntime = mockRt,
+            NeuralOrchestrator = orch,
+            NeuralConfig = new NeuralAudioConfig {
+                OrchestrationMode = NeuralOrchestrationMode.Auto,
+                StudioBundlePreset = NeuralEnsembleBundlePreset.StudioFullBand6Stem,
+                OverlapFactor = 2,
+                EnableTta = false,
+                EnablePhaseFix = false,
+                EnforceEnergyConservation = true,
+                TrackCacheEnabled = false
+            },
+            Metadata = new ExportMetadataPackage {
+                Title = "Orbit",
+                Artist = "Nova",
+                Album = "Spatial Lab",
+                EmbedLyrics = true,
+                SyncedLyricsLrc = "[00:00.50]Spinning in 3D space"
+            }
+        };
+
+        StudioBatchExportResult res = StudioBatchExporter.ExportSingle(track, job);
+        Assert(res.Succeeded && File.Exists(outAdm), $"Dynamic ADM export failed: {res.ErrorMessage}");
+        Assert(res.EffectiveChoreoMode == SpatialChoreoMode.Orbit, $"Expected EffectiveChoreoMode=Orbit, got {res.EffectiveChoreoMode}");
+        Assert(res.MetadataEmbedded && res.LyricsEmbedded, $"Expected MetadataEmbedded & LyricsEmbedded on ADM WAV");
+
+        byte[] admBytes = File.ReadAllBytes(outAdm);
+        string latin = Encoding.Latin1.GetString(admBytes);
+        Assert(latin.Contains("axml", StringComparison.Ordinal) &&
+               latin.Contains("chna", StringComparison.Ordinal) &&
+               latin.Contains("dbmd", StringComparison.Ordinal),
+            "ADM BWF chunks (axml/chna/dbmd) missing after metadata embed!");
+        Assert(latin.Contains("LIST", StringComparison.Ordinal) && latin.Contains("id3 ", StringComparison.Ordinal),
+            "Metadata LIST/INFO + id3 chunks missing on ADM BWF WAV!");
+
+        // Parse ADM axml chunk to verify real time-varying Cartesian coordinates on moving objects!
+        int axmlIdx = latin.IndexOf("<ebuCoreMain", StringComparison.Ordinal);
+        Assert(axmlIdx >= 0, "Could not locate <ebuCoreMain> XML in ADM BWF.");
+        int axmlEnd = latin.IndexOf("</ebuCoreMain>", axmlIdx, StringComparison.Ordinal);
+        Assert(axmlEnd > axmlIdx, "Could not locate closing </ebuCoreMain> in ADM BWF.");
+        string axml = latin.Substring(axmlIdx, (axmlEnd + "</ebuCoreMain>".Length) - axmlIdx);
+
+        int movingFormats = 0;
+        var cfMatches = System.Text.RegularExpressions.Regex.Matches(
+            axml,
+            @"<audioChannelFormat[^>]*typeDefinition=""Objects""[^>]*>(.*?)</audioChannelFormat>",
+            System.Text.RegularExpressions.RegexOptions.Singleline);
+        foreach (System.Text.RegularExpressions.Match m in cfMatches) {
+            var posMatches = System.Text.RegularExpressions.Regex.Matches(
+                m.Groups[1].Value,
+                @"<position coordinate=""X"">([^<]+)</position>\s*<position coordinate=""Y"">([^<]+)</position>\s*<position coordinate=""Z"">([^<]+)</position>");
+            HashSet<string> distinctCoords = new(StringComparer.Ordinal);
+            foreach (System.Text.RegularExpressions.Match pm in posMatches) {
+                distinctCoords.Add($"{pm.Groups[1].Value}|{pm.Groups[2].Value}|{pm.Groups[3].Value}");
+            }
+            if (distinctCoords.Count >= 4) {
+                movingFormats++;
+            }
+        }
+        Assert(movingFormats >= 2, $"Expected >=2 genuinely moving ADM Objects with >=4 distinct 3D positions, found {movingFormats}");
+        Assert(axml.Contains("typeDefinition=\"DirectSpeakers\"", StringComparison.Ordinal) &&
+               axml.Contains("LFE", StringComparison.OrdinalIgnoreCase),
+            "Expected stationary LFE DirectSpeakers bed alongside moving ADM Objects.");
+    } finally {
+        try { Directory.Delete(tmpDir, true); } catch { }
+    }
+});
+
+// ---------- Test 31 (Stage 5 T5): Dynamic Motion Eclipsa IAMF + Lossless FLAC Binaural Export w/ Cover & Lyrics ----------
+RunTest("T31_T5_DynamicAtmosIamfAndBinaural_MotionAndTags", () => {
+    using IDisposable virtScope = Cavern.Virtualizer.VirtualizerFilter.BeginStaticStateScope();
+    string tmpDir = Path.Combine(Path.GetTempPath(), $"cavern_t31_{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tmpDir);
+    try {
+        int sr = 48000;
+        int len = sr * 2; // 2.0 s stereo source
+        string srcWav = Path.Combine(tmpDir, "source_t31.wav");
+        float[] srcPcm = new float[len * 2];
+        for (int i = 0; i < len; i++) {
+            double t = i / (double)sr;
+            srcPcm[i * 2] = 0.25f * MathF.Sin((float)(2.0 * Math.PI * 330.0 * t)) + 0.15f * MathF.Sin((float)(2.0 * Math.PI * 80.0 * t));
+            srcPcm[i * 2 + 1] = 0.25f * MathF.Sin((float)(2.0 * Math.PI * 440.0 * t)) + 0.15f * MathF.Sin((float)(2.0 * Math.PI * 80.0 * t));
+        }
+        using (DirectPcmStreamingSink w = new(srcWav, 2, sr, BitDepth.Int16)) {
+            w.WriteInterleavedBlock(srcPcm, len);
+        }
+
+        byte[] fakeJpeg = [
+            0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x20, 0x00, 0x20, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xD9
+        ];
+        ExportMetadataPackage meta = new() {
+            Title = "Eclipse",
+            Artist = "Cavern Lab",
+            Album = "Tests",
+            EmbedCoverArt = true,
+            CoverArtBytes = fakeJpeg,
+            CoverArtMimeType = "image/jpeg",
+            EmbedLyrics = true,
+            SyncedLyricsLrc = "[00:00.10]Binaural motion active"
+        };
+
+        using MockT3MultiModelRuntime mockRt = new();
+        NeuralPipelineOrchestrator orch = new(mockRt, mockRt);
+        using RIFFWaveReader reader1 = new(srcWav);
+        reader1.ReadHeader();
+        using CavernizeTrack track1 = new(reader1, Codec.PCM_LE, 0);
+
+        // 1. Eclipsa IAMF with DynamicChoreoMode.Musical
+        string outIamf = Path.Combine(tmpDir, "Cavern Lab - Eclipse (Eclipsa IAMF - AI - Motion Musical).iamf");
+        StudioBatchExportJob iamfJob = new() {
+            TrackName = "Eclipse",
+            Preset = StudioExportPreset.EclipsaAudioIamf,
+            ComposableOptions = new StudioComposableExportOptions {
+                BaseFormat = StudioBaseOutputFormat.EclipsaIamf,
+                CompressionTier = StudioCompressionTier.MasterPcm,
+                DynamicChoreoMode = SpatialChoreoMode.Musical,
+                EnableAiSpatialUpmix = true
+            },
+            DynamicChoreoMode = SpatialChoreoMode.Musical,
+            OutputPath = outIamf,
+            BitDepth = BitDepth.Int16,
+            NeuralRuntime = mockRt,
+            NeuralOrchestrator = orch,
+            NeuralConfig = new NeuralAudioConfig {
+                OrchestrationMode = NeuralOrchestrationMode.Auto,
+                StudioBundlePreset = NeuralEnsembleBundlePreset.StudioFullBand6Stem,
+                OverlapFactor = 2,
+                EnableTta = false,
+                EnablePhaseFix = false,
+                EnforceEnergyConservation = true,
+                TrackCacheEnabled = false
+            },
+            Metadata = meta.Clone()
+        };
+        StudioBatchExportResult iamfRes = StudioBatchExporter.ExportSingle(track1, iamfJob);
+        Assert(iamfRes.Succeeded && File.Exists(outIamf) && new FileInfo(outIamf).Length > 1024,
+            $"Dynamic Eclipsa IAMF export failed: {iamfRes.ErrorMessage}");
+        Assert(iamfRes.EffectiveChoreoMode == SpatialChoreoMode.Musical, $"IAMF EffectiveChoreoMode mismatch: {iamfRes.EffectiveChoreoMode}");
+
+        // 2. Headphone 3D LosslessCompressed (.flac) with DynamicChoreoMode.Musical + Cover Art + Synced Lyrics
+        using RIFFWaveReader reader2 = new(srcWav);
+        reader2.ReadHeader();
+        using CavernizeTrack track2 = new(reader2, Codec.PCM_LE, 0);
+        string outFlac = Path.Combine(tmpDir, "Cavern Lab - Eclipse (Headphone 3D - Lossless - AI - Motion Musical).flac");
+        StudioBatchExportJob flacJob = new() {
+            TrackName = "Eclipse",
+            Preset = StudioExportPreset.PersonalizedLosslessBinaural,
+            ComposableOptions = new StudioComposableExportOptions {
+                BaseFormat = StudioBaseOutputFormat.Headphone3D,
+                CompressionTier = StudioCompressionTier.LosslessCompressed,
+                DynamicChoreoMode = SpatialChoreoMode.Musical,
+                EnableAiSpatialUpmix = true
+            },
+            DynamicChoreoMode = SpatialChoreoMode.Musical,
+            OutputPath = outFlac,
+            BitDepth = BitDepth.Int16,
+            NeuralRuntime = mockRt,
+            NeuralOrchestrator = orch,
+            NeuralConfig = new NeuralAudioConfig {
+                OrchestrationMode = NeuralOrchestrationMode.Auto,
+                StudioBundlePreset = NeuralEnsembleBundlePreset.StudioFullBand6Stem,
+                OverlapFactor = 2,
+                EnableTta = false,
+                EnablePhaseFix = false,
+                EnforceEnergyConservation = true,
+                TrackCacheEnabled = false
+            },
+            Metadata = meta.Clone()
+        };
+        StudioBatchExportResult flacRes = StudioBatchExporter.ExportSingle(track2, flacJob);
+        Assert(flacRes.Succeeded && File.Exists(outFlac), $"Dynamic Headphone3D FLAC export failed: {flacRes.ErrorMessage}");
+        Assert(flacRes.MetadataEmbedded && flacRes.CoverArtEmbedded && flacRes.LyricsEmbedded,
+            $"Headphone3D FLAC metadata flags missing: meta={flacRes.MetadataEmbedded}, art={flacRes.CoverArtEmbedded}, lyr={flacRes.LyricsEmbedded}");
+        Assert(double.IsFinite(flacRes.IntegratedLufs) && flacRes.IntegratedLufs > -70.0, $"Invalid Headphone3D LUFS: {flacRes.IntegratedLufs}");
+    } finally {
+        try { Directory.Delete(tmpDir, true); } catch { }
+    }
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
 }
-Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2/T3 UNIT TESTS PASSED (0 failures).");
+Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2/T3/T5 UNIT TESTS PASSED (0 failures).");
 return 0;
+
+static int FindFlacAudioFrameStart(byte[] flac) {
+    int pos = 4;
+    while (pos + 4 <= flac.Length) {
+        byte hdr = flac[pos];
+        bool isLast = (hdr & 0x80) != 0;
+        int len = (flac[pos + 1] << 16) | (flac[pos + 2] << 8) | flac[pos + 3];
+        pos += 4 + len;
+        if (isLast) return pos;
+    }
+    return -1;
+}
 
 // ---- Helpers for Test 4 & Test 6 ----
 static byte[] BuildSyntheticFp32OnnxModel() {
@@ -2878,6 +3254,64 @@ def _py_stage4_ux_motion_orbit_lyrics_contracts() -> None:
             assert f'["{key}"]' in lang_src, f"Missing T4 localization key '{key}' in {lang_file}"
 
 
+def _py_stage5_studio_export_hygiene_and_locate_wiring() -> None:
+    file_helper = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AndroidFileHelper.cs").read_text(encoding="utf-8")
+    for tok in ("enum ExportStorageDestination", "MusicCavernize", "DownloadsCavernize", "PublishExportedAudio", "GetExportWorkingDir", "IsStandardAndroidMusicExtension", "MediaScannerConnection"):
+        assert tok in file_helper, f"Missing {tok} in AndroidFileHelper.cs"
+
+    tag_reader = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AudioTagReader.cs").read_text(encoding="utf-8")
+    for tok in ("isRf64", "ds64", "OpusTags", "APETAGEX", "ParseOggOpusTags", "ParseApeV2FooterTags", "HasEmbeddedArtwork"):
+        assert tok in tag_reader, f"Missing {tok} in AudioTagReader.cs"
+
+    lyrics_svc = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "LyricsService.cs").read_text(encoding="utf-8")
+    assert "public static string SerializeToLrc(LyricsDocument doc)" in lyrics_svc, "Missing SerializeToLrc in LyricsService.cs"
+
+    meta_helper = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "MediaMetadataHelper.cs").read_text(encoding="utf-8")
+    assert "TryExtractCoverArtJpegBytes" in meta_helper, "Missing TryExtractCoverArtJpegBytes in MediaMetadataHelper.cs"
+
+    store_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AppSettingsStore.cs").read_text(encoding="utf-8")
+    for tok in ("StudioDynamicChoreoModeIndex", "StudioExportEmbedCoverArt", "StudioExportEmbedLyrics", "StudioExportFolderIndex"):
+        assert tok in store_src, f"Missing {tok} in AppSettingsStore.cs"
+
+    studio_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.StudioExport.cs").read_text(encoding="utf-8")
+    for tok in ("studioDynamicMotionSelector", "studioOptEmbedCoverSwitch", "studioOptEmbedLyricsSwitch", "studioExportFolderSelector", "BuildExportMetadataPackageForActiveTrack", "PublishExportedAudio"):
+        assert tok in studio_src, f"Missing {tok} in MainActivity.StudioExport.cs"
+    assert '"Renderizados"' not in studio_src, "Legacy Renderizados folder must be removed from MainActivity.StudioExport.cs"
+
+    conv_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.ConverterTab.cs").read_text(encoding="utf-8")
+    for tok in ("locateExportBtn", "lastExportPathText", "OnLocateExportClicked", "ShowPublishedExportActions", "PublishExportedAudio", "ExportFileNameFormatter.FormatClassicFileName"):
+        assert tok in conv_src, f"Missing {tok} in MainActivity.ConverterTab.cs"
+    assert '"Renderizados"' not in conv_src, "Legacy Renderizados folder must be removed from MainActivity.ConverterTab.cs"
+
+    t5_keys = (
+        "StudioDynamicMotionLabel",
+        "TipStudioDynamicMotion",
+        "StudioExportDeliveryHeader",
+        "StudioOptEmbedCoverTitle",
+        "StudioOptEmbedCoverDesc",
+        "StudioOptEmbedCoverReadyDesc",
+        "StudioOptEmbedLyricsTitle",
+        "StudioOptEmbedLyricsDesc",
+        "StudioOptEmbedLyricsSyncedReadyDesc",
+        "StudioOptEmbedLyricsPlainReadyDesc",
+        "StudioExportFolderLabel",
+        "TipStudioExportFolder",
+        "StudioExportFolderMusic",
+        "StudioExportFolderDownloads",
+        "StudioExportFolderActiveFmt",
+        "StudioExportFolderCompatNoteFmt",
+        "StudioTagMotionFmt",
+        "LocateExportBtn",
+        "LocateExportTitle",
+        "ExportSavedToFmt",
+        "ExportCompatDownloadsBadge",
+    )
+    for lang_file in ("AndroidStrings.cs", "AndroidStrings.PtBr.cs", "AndroidStrings.Hu.cs", "AndroidStrings.Zh.cs"):
+        lang_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Language" / lang_file).read_text(encoding="utf-8")
+        for key in t5_keys:
+            assert f'["{key}"]' in lang_src, f"Missing T5 localization key '{key}' in {lang_file}"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -2885,6 +3319,7 @@ PYTHON_CHECKS = [
     ("PY_T3_Stage3_AudioAi_Mvsep_CntcV3_Contracts", _py_stage3_audio_ai_mvsep_cntc_contracts),
     ("PY_Choreography_NoUiAudioTugOfWar", _py_choreography_no_ui_audio_tug_of_war),
     ("PY_T4_Stage4_UxClarity_Motion_OrbitDrag_Lyrics_Contracts", _py_stage4_ux_motion_orbit_lyrics_contracts),
+    ("PY_T5_StudioExportHygieneAndLocateWiring", _py_stage5_studio_export_hygiene_and_locate_wiring),
 ]
 
 

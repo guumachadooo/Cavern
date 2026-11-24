@@ -1126,10 +1126,10 @@ public sealed partial class AndroidStrings {
         d["ExportCardTitle"] = "Exportação";
         d["StudioW12BatchBtn"] = "Exportar em Lote (Presets)...";
         d["StudioW12BatchDialogTitle"] = "Exportação Studio em Lote";
-        d["StudioW12BatchDialogDesc"] = "Selecione um ou mais presets Studio Master para renderizar em sequência e salvar em Downloads/Cavernize/Renderizados.";
+        d["StudioW12BatchDialogDesc"] = "Selecione um ou mais presets Studio Master para renderizar em sequência e salvar na sua pasta pública de exportação (Music/Cavernize ou Download/Cavernize).";
         d["StudioW12BatchSelectAtLeastOne"] = "Selecione pelo menos um preset Studio Master.";
         d["StudioW12BatchProgressFormat"] = "Lote {0}/{1}: {2}";
-        d["StudioW12BatchDoneFormat"] = "Lote concluído: {0}/{1} masters Studio salvos em Downloads!";
+        d["StudioW12BatchDoneFormat"] = "Lote concluído: {0}/{1} masters Studio exportados!";
         d["ModeNeuralRestorer"] = "Restaurador Neural IA (Apollo / AP-BWE)";
         d["ModeLgsrHybridStems"] = "Stems Master Atmos Híbrido EM-MWF (LGSR)";
         d["ExtractOutputCardTitle"] = "Saída / Stems";
@@ -1284,7 +1284,7 @@ public sealed partial class AndroidStrings {
         d["StudioPresetHoaClean"] = "Cena Espacial 360° (.amb)";
         d["StudioPresetAdmClean"] = "Master Dolby Atmos (.wav)";
         d["StudioContextHybridReadyClean"] = "Gêmeo Lossless pronto ({0}) · EM-MWF + Restaurador Neural ativo";
-        d["StudioBatchDialogDescClean"] = "Selecione um ou mais presets Studio Master para renderizar em sequência e salvar em Downloads/Cavernize/Renderizados.";
+        d["StudioBatchDialogDescClean"] = "Selecione um ou mais presets Studio Master para renderizar em sequência e salvar na sua pasta pública de exportação (Music/Cavernize ou Download/Cavernize).";
         d["StudioBadgeFFmpegReady"] = "FFmpeg Pronto";
         d["StudioBadgeFFmpegMissing"] = "FFmpeg Ausente";
         d["StudioBadgeOnnxReady"] = "ONNX Pronto";
@@ -1649,5 +1649,27 @@ public sealed partial class AndroidStrings {
         d["TipHeadTrackerSource"] = "Seleciona qual sensor envia a rotação 3DoF da cabeça para a sala 3D: controle manual, IMU dos Galaxy Buds, IMU do celular Android ou rastreador externo BLE/OSC.";
         d["TipProAudioPath"] = "Escolhe o motor de transporte de áudio para monitoramento full-duplex e DACs USB:\n\n• Automático: Seleciona o caminho verificado de menor latência.\n• Caminho B (libusb UAC2): Áudio USB bit-perfect direto ignorando o mixer do Android.\n• Caminho A (AAudio Exclusivo): Caminho nativo Android de latência ultrabaixa.\n• Legado: Fallback padrão AudioTrack.";
         d["TipProAudioBuffer"] = "Tamanho do bloco de áudio em quadros. Buffers menores (64/128) reduzem a latência do microfone ao vivo; 256 oferece maior folga contra falhas (XRuns).";
+        // Master Overhaul T5: Movimento Dinâmico Atmos no Estúdio, Capa/Letras e Higiene de Exportação
+        d["StudioDynamicMotionLabel"] = "Movimento Dinâmico de Objetos Atmos:";
+        d["TipStudioDynamicMotion"] = "Exporta objetos 3D reais em movimento (trajetórias ITU-R BS.2076 ADM, Eclipsa IAMF dinâmico, HOA 360° ou Fone 3D) a partir dos instrumentos separados mantendo o LFE fixo.\n\n• Desligado (Estático): Posições ITU-R fixas.\n• Sutil: Respiração suave frontal e de altura.\n• Musical: Palco 3D alinhado a batidas e seções.\n• Cinematográfico: Arcos amplos em surround e teto.\n• Órbita: Movimento esférico contínuo ao redor do ouvinte.\n\nIndependente da configuração da Sala 3D ao vivo.";
+        d["StudioExportDeliveryHeader"] = "Metadados, Capa e Pasta de Saída";
+        d["StudioOptEmbedCoverTitle"] = "Embutir Capa do Álbum";
+        d["StudioOptEmbedCoverDesc"] = "Embute a capa original (ou capa verificada em cache) diretamente em FLAC, WAV, Opus e M4A sem recodificar o áudio.";
+        d["StudioOptEmbedCoverReadyDesc"] = "Capa detectada e pronta para embutir (sem recodificar o áudio).";
+        d["StudioOptEmbedLyricsTitle"] = "Embutir Letra Sincronizada";
+        d["StudioOptEmbedLyricsDesc"] = "Embute letras sincronizadas LRC / Enhanced LRC (ou texto simples) nas tags do arquivo exportado quando disponíveis.";
+        d["StudioOptEmbedLyricsSyncedReadyDesc"] = "Letra sincronizada (LRC) detectada e pronta para embutir nas tags.";
+        d["StudioOptEmbedLyricsPlainReadyDesc"] = "Letra detectada e pronta para embutir nas tags.";
+        d["StudioExportFolderLabel"] = "Pasta Pública de Exportação:";
+        d["TipStudioExportFolder"] = "Escolha onde os arquivos exportados serão salvos e indexados no Android:\n\n• Music/Cavernize (Recomendado): Visível imediatamente no Samsung Music, Arquivos e Biblioteca do Cavernize.\n• Download/Cavernize: Salva diretamente na pasta pública de Downloads.\n\nContêineres espaciais específicos (.iamf, .wv, .amb) salvam automaticamente em Download/Cavernize para compatibilidade com o MediaStore do Android.";
+        d["StudioExportFolderMusic"] = "Music/Cavernize";
+        d["StudioExportFolderDownloads"] = "Download/Cavernize";
+        d["StudioExportFolderActiveFmt"] = "Pasta pública: {0} (indexada imediatamente em players e Arquivos)";
+        d["StudioExportFolderCompatNoteFmt"] = "Arquivos {0} salvam automaticamente em Download/Cavernize por compatibilidade do MediaStore.";
+        d["StudioTagMotionFmt"] = "Movimento {0}";
+        d["LocateExportBtn"] = "Localizar";
+        d["LocateExportTitle"] = "Arquivos Exportados";
+        d["ExportSavedToFmt"] = "Salvo em: {0}";
+        d["ExportCompatDownloadsBadge"] = "Compat. contêiner";
     }
 }

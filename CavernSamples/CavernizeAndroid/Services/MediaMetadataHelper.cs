@@ -13,7 +13,14 @@ namespace CavernizeAndroid.Services;
 public sealed class MediaArtworkMetadata {
     public string Title { get; set; } = "";
     public string Artist { get; set; } = "";
+    public string AlbumArtist { get; set; } = "";
     public string Album { get; set; } = "";
+    public int TrackNumber { get; set; }
+    public int TrackTotal { get; set; }
+    public int DiscNumber { get; set; }
+    public string Year { get; set; } = "";
+    public string Genre { get; set; } = "";
+    public string Comment { get; set; } = "";
     public string MimeType { get; init; } = "";
     public string SourceMediaPath { get; init; } = "";
     public int EmbeddedSampleRate { get; init; }
@@ -58,7 +65,14 @@ public static class MediaMetadataHelper {
 
         string title = "";
         string artist = "";
+        string albumArtist = "";
         string album = "";
+        int trackNumber = 0;
+        int trackTotal = 0;
+        int discNumber = 0;
+        string year = "";
+        string genre = "";
+        string comment = "";
         string mime = "";
         int sampleRate = 0;
         int bitrateKbps = 0;
@@ -111,12 +125,29 @@ public static class MediaMetadataHelper {
                     string rawTitle = (retriever.ExtractMetadata(MetadataKey.Title) ?? "").Trim();
                     title = IsMissingTag(rawTitle) ? "" : rawTitle;
                     string rawArtist = (retriever.ExtractMetadata(MetadataKey.Artist) ?? "").Trim();
+                    string rawAlbumArtist = (retriever.ExtractMetadata(MetadataKey.Albumartist) ?? "").Trim();
+                    albumArtist = IsMissingTag(rawAlbumArtist) ? "" : rawAlbumArtist;
                     if (IsMissingTag(rawArtist)) {
-                        rawArtist = (retriever.ExtractMetadata(MetadataKey.Albumartist) ?? "").Trim();
+                        rawArtist = rawAlbumArtist;
                     }
                     artist = IsMissingTag(rawArtist) ? "" : rawArtist;
                     string rawAlbum = (retriever.ExtractMetadata(MetadataKey.Album) ?? "").Trim();
                     album = IsMissingTag(rawAlbum) ? "" : rawAlbum;
+                    string rawYear = (retriever.ExtractMetadata(MetadataKey.Year) ?? "").Trim();
+                    year = IsMissingTag(rawYear) ? "" : rawYear;
+                    string rawGenre = (retriever.ExtractMetadata(MetadataKey.Genre) ?? "").Trim();
+                    genre = IsMissingTag(rawGenre) ? "" : rawGenre;
+                    string rawTrack = (retriever.ExtractMetadata(MetadataKey.CdTrackNumber) ?? "").Trim();
+                    if (!string.IsNullOrEmpty(rawTrack)) {
+                        string[] parts = rawTrack.Split('/');
+                        if (int.TryParse(parts[0].Trim(), out int trk) && trk > 0) trackNumber = trk;
+                        if (parts.Length >= 2 && int.TryParse(parts[1].Trim(), out int tot) && tot > 0) trackTotal = tot;
+                    }
+                    string rawDisc = (retriever.ExtractMetadata(MetadataKey.DiscNumber) ?? "").Trim();
+                    if (!string.IsNullOrEmpty(rawDisc)) {
+                        string[] parts = rawDisc.Split('/');
+                        if (int.TryParse(parts[0].Trim(), out int dsk) && dsk > 0) discNumber = dsk;
+                    }
                     mime = (retriever.ExtractMetadata(MetadataKey.Mimetype) ?? "").Trim();
 
                     string bitrateRaw = retriever.ExtractMetadata(MetadataKey.Bitrate);
@@ -181,23 +212,23 @@ public static class MediaMetadataHelper {
             ? resolvedPath
             : ResolveDirectOrAudioPath(effectiveCtx, effectiveUri, hasVideo, IsMissingTag(title) || IsMissingTag(artist) || IsMissingTag(album));
 
-        // Fallback binary tag reader (especially critical for MP4 Atmos / M4A / FLAC where MediaMetadataRetriever omits tags or emits "<unknown>")
-        if (!string.IsNullOrEmpty(readableLocalPath) && CanOpenFileForRead(readableLocalPath) &&
-            (IsMissingTag(title) || IsMissingTag(artist) || IsMissingTag(album))) {
+        // Binary tag reader fills gaps (critical for Atmos MP4/M4A, FLAC, RF64 WAV/ADM, Opus, WavPack)
+        if (!string.IsNullOrEmpty(readableLocalPath) && CanOpenFileForRead(readableLocalPath)) {
             ParsedAudioTags binTags = AudioTagReader.TryReadTags(readableLocalPath);
             if (binTags != null) {
-                if (IsMissingTag(title) && !IsMissingTag(binTags.Title)) {
-                    title = binTags.Title;
-                }
+                if (IsMissingTag(title) && !IsMissingTag(binTags.Title)) title = binTags.Title;
                 if (IsMissingTag(artist)) {
                     string fallbackArt = !IsMissingTag(binTags.Artist) ? binTags.Artist : binTags.AlbumArtist;
-                    if (!IsMissingTag(fallbackArt)) {
-                        artist = fallbackArt;
-                    }
+                    if (!IsMissingTag(fallbackArt)) artist = fallbackArt;
                 }
-                if (IsMissingTag(album) && !IsMissingTag(binTags.Album)) {
-                    album = binTags.Album;
-                }
+                if (IsMissingTag(albumArtist) && !IsMissingTag(binTags.AlbumArtist)) albumArtist = binTags.AlbumArtist;
+                if (IsMissingTag(album) && !IsMissingTag(binTags.Album)) album = binTags.Album;
+                if (trackNumber <= 0 && binTags.TrackNumber > 0) trackNumber = binTags.TrackNumber;
+                if (trackTotal <= 0 && binTags.TrackTotal > 0) trackTotal = binTags.TrackTotal;
+                if (discNumber <= 0 && binTags.DiscNumber > 0) discNumber = binTags.DiscNumber;
+                if (IsMissingTag(year) && !IsMissingTag(binTags.Year)) year = binTags.Year;
+                if (IsMissingTag(genre) && !IsMissingTag(binTags.Genre)) genre = binTags.Genre;
+                if (IsMissingTag(comment) && !IsMissingTag(binTags.Comment)) comment = binTags.Comment;
             }
         }
 
@@ -236,7 +267,14 @@ public static class MediaMetadataHelper {
         return new MediaArtworkMetadata {
             Title = effectiveTitle,
             Artist = artist,
+            AlbumArtist = albumArtist,
             Album = album,
+            TrackNumber = trackNumber,
+            TrackTotal = trackTotal,
+            DiscNumber = discNumber,
+            Year = year,
+            Genre = genre,
+            Comment = comment,
             MimeType = mime,
             SourceMediaPath = !string.IsNullOrEmpty(readableLocalPath) ? readableLocalPath : mediaKey,
             EmbeddedSampleRate = sampleRate,
@@ -251,6 +289,125 @@ public static class MediaMetadataHelper {
             SecondaryAccent = secondary,
             Lyrics = lyrics
         };
+    }
+
+    /// <summary>
+    /// Extracts compressed front cover JPEG bytes (&lt;= <paramref name="maxBytes"/>) for export embedding from
+    /// manual override, embedded media picture, online cache, adjacent folder cover, or verified non-procedural bitmap.
+    /// Never embeds procedural fallback artwork.
+    /// </summary>
+    public static byte[] TryExtractCoverArtJpegBytes(
+        Context context,
+        MediaArtworkMetadata meta,
+        Android.Net.Uri sourceUri,
+        string resolvedPath,
+        out int width,
+        out int height,
+        int maxDim = 800,
+        int maxBytes = 250000) {
+        width = 0;
+        height = 0;
+        Context effectiveCtx = context ?? Android.App.Application.Context;
+        string mediaKey = !string.IsNullOrEmpty(resolvedPath) ? resolvedPath : (sourceUri?.ToString() ?? meta?.SourceMediaPath ?? "");
+
+        Bitmap decoded = null;
+        bool ownsBitmap = false;
+        try {
+            // 1. Manual user cover override
+            string manual = OnlineMetadataService.GetManualCoverOverridePath(effectiveCtx, mediaKey);
+            if (string.IsNullOrEmpty(manual) && sourceUri != null) {
+                manual = OnlineMetadataService.GetManualCoverOverridePath(effectiveCtx, sourceUri.ToString());
+            }
+            if (!string.IsNullOrEmpty(manual) && IOFile.Exists(manual)) {
+                decoded = MediaServiceUtils.DecodeScaledBitmapSafe(manual, maxDim);
+                ownsBitmap = decoded != null;
+            }
+
+            // 2. Embedded container picture via MediaMetadataRetriever
+            if (decoded == null && (sourceUri != null || CanOpenFileForRead(resolvedPath))) {
+                MediaMetadataRetriever retriever = null;
+                try {
+                    retriever = new MediaMetadataRetriever();
+                    bool opened = false;
+                    if (sourceUri != null && effectiveCtx != null) {
+                        try { retriever.SetDataSource(effectiveCtx, sourceUri); opened = true; } catch { opened = false; }
+                    }
+                    if (!opened && CanOpenFileForRead(resolvedPath)) {
+                        try { retriever.SetDataSource(resolvedPath); opened = true; } catch { opened = false; }
+                    }
+                    if (opened) {
+                        byte[] rawPic = retriever.GetEmbeddedPicture();
+                        if (rawPic != null && rawPic.Length >= 16) {
+                            decoded = MediaServiceUtils.DecodeScaledBitmapSafe(rawPic, maxDim);
+                            ownsBitmap = decoded != null;
+                        }
+                    }
+                } catch {
+                    // Best-effort
+                } finally {
+                    try { retriever?.Release(); } catch { }
+                    try { retriever?.Dispose(); } catch { }
+                }
+            }
+
+            // 3. Cached online cover art
+            if (decoded == null && effectiveCtx != null && meta != null) {
+                string cached = OnlineMetadataService.GetCachedCoverPath(effectiveCtx, meta.Title, meta.Artist, meta.Album, mediaKey);
+                if (!string.IsNullOrEmpty(cached) && IOFile.Exists(cached)) {
+                    decoded = MediaServiceUtils.DecodeScaledBitmapSafe(cached, maxDim);
+                    ownsBitmap = decoded != null;
+                }
+            }
+
+            // 4. Adjacent album folder cover
+            if (decoded == null && (!string.IsNullOrEmpty(resolvedPath) || sourceUri != null)) {
+                decoded = TryLoadAdjacentFolderCover(effectiveCtx, sourceUri, resolvedPath, maxDim);
+                ownsBitmap = decoded != null;
+            }
+
+            // 5. Loaded verified (non-procedural) bitmap on MediaArtworkMetadata
+            if (decoded == null && meta != null && meta.HasEmbeddedArtwork && meta.ArtworkBitmap != null && !meta.ArtworkBitmap.IsRecycled) {
+                decoded = meta.ArtworkBitmap;
+                ownsBitmap = false;
+            }
+
+            if (decoded == null || decoded.IsRecycled || decoded.Width <= 0 || decoded.Height <= 0) {
+                return null;
+            }
+
+            Bitmap scaled = decoded;
+            bool ownsScaled = false;
+            try {
+                if (Math.Max(decoded.Width, decoded.Height) > maxDim) {
+                    scaled = ScaleBitmapToMax(decoded, maxDim);
+                    ownsScaled = !ReferenceEquals(scaled, decoded);
+                }
+                width = scaled.Width;
+                height = scaled.Height;
+
+                int[] qualities = [88, 76, 64, 52];
+                for (int q = 0; q < qualities.Length; q++) {
+                    using MemoryStream ms = new(65536);
+                    if (scaled.Compress(Bitmap.CompressFormat.Jpeg!, qualities[q], ms)) {
+                        byte[] data = ms.ToArray();
+                        if (data.Length <= maxBytes || q == qualities.Length - 1) {
+                            return data.Length <= maxBytes ? data : null;
+                        }
+                    }
+                }
+            } finally {
+                if (ownsScaled && scaled != null && !scaled.IsRecycled) {
+                    scaled.Recycle();
+                }
+            }
+        } catch (Exception ex) {
+            AppLogger.Warn($"TryExtractCoverArtJpegBytes: {ex.Message}");
+        } finally {
+            if (ownsBitmap && decoded != null && !decoded.IsRecycled) {
+                decoded.Recycle();
+            }
+        }
+        return null;
     }
 
     public static Bitmap CreateSpatialFallbackArtwork(string seedTitle, Color primaryAccent, Color secondaryAccent, int size = 512) {

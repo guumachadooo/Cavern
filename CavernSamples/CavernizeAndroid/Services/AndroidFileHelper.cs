@@ -22,6 +22,28 @@ public sealed class MediaStoreEntry {
 }
 
 /// <summary>
+/// User-selectable public storage folder for Studio and Classic audio exports.
+/// </summary>
+public enum ExportStorageDestination {
+    /// <summary>Public <c>Music/Cavernize</c> folder indexed by Android Music players (standard audio extensions).</summary>
+    MusicCavernize = 0,
+    /// <summary>Public <c>Download/Cavernize</c> folder (also used automatically for <c>.iamf</c>, <c>.wv</c>, and <c>.amb</c>).</summary>
+    DownloadsCavernize = 1
+}
+
+/// <summary>
+/// Result returned after publishing an exported audio file to visible public Android storage.
+/// </summary>
+public sealed class ExportPublishResult {
+    public string PublicDisplayPath { get; init; } = "";
+    public string FolderDisplayPath { get; init; } = "";
+    public string PublicFolderAbsolutePath { get; init; } = "";
+    public string LocalPath { get; init; } = "";
+    public Android.Net.Uri ContentUri { get; init; }
+    public bool RoutedToDownloadsForContainerCompat { get; init; }
+}
+
+/// <summary>
 /// Resolves Android SAF content URIs to readable file paths, queries MediaStore under Scoped Storage,
 /// and publishes or shares exported files via <see cref="MediaStore"/> and <see cref="ApkFileProvider"/>.
 /// </summary>
@@ -191,10 +213,188 @@ public static class AndroidFileHelper {
     }
 
     /// <summary>
+    /// Returns true when <paramref name="fileNameOrExt"/> is a standard Android audio format accepted by
+    /// <see cref="MediaStore.Audio.Media"/> under <c>Music/Cavernize</c>. Specialized spatial containers
+    /// (<c>.iamf</c>, <c>.wv</c>, <c>.amb</c>) route to <c>Download/Cavernize</c> (<see cref="MediaStore.Downloads"/>).
+    /// </summary>
+    public static bool IsStandardAndroidMusicExtension(string fileNameOrExt) {
+        if (string.IsNullOrWhiteSpace(fileNameOrExt)) {
+            return true;
+        }
+        string ext = fileNameOrExt.Contains('.')
+            ? Path.GetExtension(fileNameOrExt).ToLowerInvariant()
+            : "." + fileNameOrExt.Trim().ToLowerInvariant();
+        return ext is ".flac" or ".wav" or ".opus" or ".m4a" or ".mp3" or ".eac3" or ".ec3" or ".ac3" or ".ogg";
+    }
+
+    /// <summary>
+    /// Resolves the best writable staging or direct-public directory for a Studio/Classic export.
+    /// Prefers direct writes to <c>Music/Cavernize</c> (standard audio) or <c>Download/Cavernize</c> (spatial containers or Downloads mode),
+    /// falling back to ephemeral cache staging cleaned up automatically by <see cref="PublishExportedAudio"/>.
+    /// </summary>
+    public static string GetExportWorkingDir(
+        Context context,
+        ExportStorageDestination requestedDest,
+        string extensionOrFileName,
+        out ExportStorageDestination effectiveDest,
+        out bool isDirectPublic) {
+        bool standardAudio = IsStandardAndroidMusicExtension(extensionOrFileName);
+        effectiveDest = requestedDest == ExportStorageDestination.MusicCavernize && standardAudio
+            ? ExportStorageDestination.MusicCavernize
+            : ExportStorageDestination.DownloadsCavernize;
+
+        string publicBase = effectiveDest == ExportStorageDestination.MusicCavernize
+            ? Android.OS.Environment.GetExternalStoragePublicDirectory(Android.OS.Environment.DirectoryMusic)?.AbsolutePath
+            : Android.OS.Environment.GetExternalStoragePublicDirectory(Android.OS.Environment.DirectoryDownloads)?.AbsolutePath;
+        if (!string.IsNullOrEmpty(publicBase)) {
+            string directPublic = Path.Combine(publicBase, "Cavernize");
+            if (CanWriteToDirectory(directPublic)) {
+                isDirectPublic = true;
+                return directPublic;
+            }
+        }
+
+        // Ephemeral staging directory (deleted immediately after atomic MediaStore commit — zero permanent private duplicates)
+        isDirectPublic = false;
+        string cacheRoot = context?.CacheDir?.AbsolutePath ?? context?.FilesDir?.AbsolutePath ?? "/tmp";
+        string stageDir = Path.Combine(cacheRoot, "export_stage");
+        Directory.CreateDirectory(stageDir);
+        return stageDir;
+    }
+
+    /// <summary>
+    /// Returns the public absolute directory path (<c>/storage/emulated/0/Music/Cavernize</c> or <c>Download/Cavernize</c>)
+    /// for folder browsing / <c>Locate</c> actions.
+    /// </summary>
+    public static string GetPublicExportFolderAbsolutePath(ExportStorageDestination dest) {
+        string baseDir = dest == ExportStorageDestination.MusicCavernize
+            ? Android.OS.Environment.GetExternalStoragePublicDirectory(Android.OS.Environment.DirectoryMusic)?.AbsolutePath
+            : Android.OS.Environment.GetExternalStoragePublicDirectory(Android.OS.Environment.DirectoryDownloads)?.AbsolutePath;
+        if (string.IsNullOrEmpty(baseDir)) {
+            string root = Android.OS.Environment.ExternalStorageDirectory?.AbsolutePath ?? "/storage/emulated/0";
+            baseDir = Path.Combine(root, dest == ExportStorageDestination.MusicCavernize ? "Music" : "Download");
+        }
+        return Path.Combine(baseDir, "Cavernize");
+    }
+
+    /// <summary>
+    /// Publishes an exported audio file to visible public storage (<c>Music/Cavernize</c> for standard audio,
+    /// <c>Download/Cavernize</c> for <c>.iamf</c>/<c>.wv</c>/<c>.amb</c> or when Downloads is selected), indexes it via
+    /// <see cref="MediaScannerConnection"/> / <see cref="MediaStore"/>, and deletes private staging copies after atomic commit.
+    /// </summary>
+    public static ExportPublishResult PublishExportedAudio(
+        Context context,
+        string localPath,
+        ExportStorageDestination requestedDest) {
+        if (context == null || string.IsNullOrEmpty(localPath) || !File.Exists(localPath)) {
+            return new ExportPublishResult { LocalPath = localPath ?? "" };
+        }
+
+        string fileName = Path.GetFileName(localPath);
+        bool standardAudio = IsStandardAndroidMusicExtension(fileName);
+        ExportStorageDestination effectiveDest = requestedDest == ExportStorageDestination.MusicCavernize && standardAudio
+            ? ExportStorageDestination.MusicCavernize
+            : ExportStorageDestination.DownloadsCavernize;
+        bool routedForCompat = requestedDest == ExportStorageDestination.MusicCavernize &&
+                               effectiveDest == ExportStorageDestination.DownloadsCavernize;
+
+        string folderDisplay = effectiveDest == ExportStorageDestination.MusicCavernize
+            ? "Music/Cavernize"
+            : "Download/Cavernize";
+        string publicFolderAbs = GetPublicExportFolderAbsolutePath(effectiveDest);
+        string mime = GetMimeType(fileName);
+
+        bool alreadyInTargetPublic = !string.IsNullOrEmpty(publicFolderAbs) &&
+            localPath.StartsWith(publicFolderAbs, StringComparison.OrdinalIgnoreCase);
+
+        if (alreadyInTargetPublic) {
+            try {
+                MediaScannerConnection.ScanFile(context, [localPath], [mime], null);
+            } catch {
+                // Best-effort scanner notification
+            }
+            Android.Net.Uri existingUri = effectiveDest == ExportStorageDestination.MusicCavernize
+                ? TryFindMediaStoreAudioUri(context, localPath)
+                : TryFindMediaStoreDownloadUri(context, localPath);
+            return new ExportPublishResult {
+                PublicDisplayPath = $"{folderDisplay}/{fileName}",
+                FolderDisplayPath = folderDisplay,
+                PublicFolderAbsolutePath = publicFolderAbs,
+                LocalPath = localPath,
+                ContentUri = existingUri ?? ApkFileProvider.GetUriForFile(context, localPath),
+                RoutedToDownloadsForContainerCompat = routedForCompat
+            };
+        }
+
+        // Atomic MediaStore commit (API 29+) into Music/Cavernize/ or Download/Cavernize/
+        if (OperatingSystem.IsAndroidVersionAtLeast(29)) {
+            Android.Net.Uri collectionUri = effectiveDest == ExportStorageDestination.MusicCavernize
+                ? MediaStore.Audio.Media.ExternalContentUri
+                : MediaStore.Downloads.ExternalContentUri;
+            Android.Net.Uri itemUri = null;
+            ContentResolver resolver = context.ContentResolver;
+            try {
+                ContentValues values = new();
+                values.Put(MediaStore.IMediaColumns.DisplayName, fileName);
+                values.Put(MediaStore.IMediaColumns.MimeType, mime);
+                values.Put(MediaStore.IMediaColumns.RelativePath, folderDisplay + "/");
+                values.Put(MediaStore.IMediaColumns.IsPending, 1);
+
+                itemUri = resolver?.Insert(collectionUri, values);
+                if (itemUri != null) {
+                    using (System.IO.Stream outStream = resolver.OpenOutputStream(itemUri)
+                        ?? throw new IOException("Cannot open MediaStore output stream."))
+                    using (FileStream inStream = File.OpenRead(localPath)) {
+                        inStream.CopyTo(outStream);
+                    }
+                    values.Clear();
+                    values.Put(MediaStore.IMediaColumns.IsPending, 0);
+                    resolver.Update(itemUri, values, null, null);
+
+                    string publishedDirectPath = TryGetDirectPath(context, itemUri) ?? Path.Combine(publicFolderAbs, fileName);
+                    // Delete ephemeral staging copy ONLY after MediaStore atomic commit succeeds (0 duplicate storage!)
+                    string cacheRoot = context.CacheDir?.AbsolutePath ?? "";
+                    bool isStagingFile = !string.IsNullOrEmpty(cacheRoot) &&
+                        localPath.StartsWith(cacheRoot, StringComparison.OrdinalIgnoreCase);
+                    if (isStagingFile) {
+                        try { File.Delete(localPath); } catch { }
+                    }
+                    return new ExportPublishResult {
+                        PublicDisplayPath = $"{folderDisplay}/{fileName}",
+                        FolderDisplayPath = folderDisplay,
+                        PublicFolderAbsolutePath = publicFolderAbs,
+                        LocalPath = File.Exists(publishedDirectPath) ? publishedDirectPath : (File.Exists(localPath) ? localPath : ""),
+                        ContentUri = itemUri,
+                        RoutedToDownloadsForContainerCompat = routedForCompat
+                    };
+                }
+            } catch (Exception ex) {
+                if (itemUri != null && resolver != null) {
+                    try { resolver.Delete(itemUri, null, null); } catch { }
+                }
+                AppLogger.Warn($"PublishExportedAudio MediaStore fallback ({folderDisplay}): {ex.Message}");
+            }
+        }
+
+        // Legacy fallback: retain file and expose shareable FileProvider URI
+        return new ExportPublishResult {
+            PublicDisplayPath = localPath,
+            FolderDisplayPath = Path.GetDirectoryName(localPath) ?? folderDisplay,
+            PublicFolderAbsolutePath = Path.GetDirectoryName(localPath) ?? publicFolderAbs,
+            LocalPath = localPath,
+            ContentUri = ApkFileProvider.GetUriForFile(context, localPath),
+            RoutedToDownloadsForContainerCompat = routedForCompat
+        };
+    }
+
+    /// <summary>
     /// Ensures a file written to <paramref name="localPath"/> is visible in the public Downloads/Cavernize folder,
     /// returning a MediaStore or <see cref="ApkFileProvider"/> <c>content://</c> URI for sharing.
     /// </summary>
     public static Android.Net.Uri PublishToDownloads(Context context, string localPath, string relativeSubfolder = null) {
+        if (string.IsNullOrEmpty(relativeSubfolder)) {
+            return PublishExportedAudio(context, localPath, ExportStorageDestination.DownloadsCavernize).ContentUri;
+        }
         if (context == null || string.IsNullOrEmpty(localPath) || !File.Exists(localPath)) {
             return null;
         }
@@ -204,7 +404,7 @@ public static class AndroidFileHelper {
             localPath.StartsWith(publicDownloads, StringComparison.OrdinalIgnoreCase);
 
         if (alreadyInPublicDownloads) {
-            MediaScannerConnection.ScanFile(context, [localPath], null, null);
+            MediaScannerConnection.ScanFile(context, [localPath], [GetMimeType(localPath)], null);
             return TryFindMediaStoreDownloadUri(context, localPath)
                 ?? ApkFileProvider.GetUriForFile(context, localPath);
         }
@@ -214,9 +414,7 @@ public static class AndroidFileHelper {
             ContentResolver resolver = context.ContentResolver;
             try {
                 string fileName = Path.GetFileName(localPath);
-                string relPath = string.IsNullOrEmpty(relativeSubfolder)
-                    ? "Download/Cavernize/"
-                    : $"Download/Cavernize/{relativeSubfolder.Trim('/')}/";
+                string relPath = $"Download/Cavernize/{relativeSubfolder.Trim('/')}/";
 
                 ContentValues values = new();
                 values.Put(MediaStore.IMediaColumns.DisplayName, fileName);
@@ -366,6 +564,32 @@ public static class AndroidFileHelper {
             }
         }
         return results;
+    }
+
+    static Android.Net.Uri TryFindMediaStoreAudioUri(Context context, string localPath) {
+        if (context?.ContentResolver == null || string.IsNullOrEmpty(localPath)) {
+            return null;
+        }
+        try {
+            using ICursor cursor = context.ContentResolver.Query(
+                MediaStore.Audio.Media.ExternalContentUri,
+                ["_id"],
+                "_data = ?",
+                [localPath],
+                null);
+            if (cursor != null && cursor.MoveToFirst()) {
+                int idIdx = cursor.GetColumnIndex("_id");
+                if (idIdx >= 0) {
+                    long id = cursor.GetLong(idIdx);
+                    if (id >= 0) {
+                        return ContentUris.WithAppendedId(MediaStore.Audio.Media.ExternalContentUri, id);
+                    }
+                }
+            }
+        } catch {
+            // Fall back to FileProvider
+        }
+        return null;
     }
 
     static Android.Net.Uri TryFindMediaStoreDownloadUri(Context context, string localPath) {
@@ -526,11 +750,16 @@ public static class AndroidFileHelper {
         string ext = Path.GetExtension(fileName ?? "").ToLowerInvariant();
         return ext switch {
             ".apk" => "application/vnd.android.package-archive",
-            ".wav" => "audio/wav",
+            ".wav" or ".amb" => "audio/wav",
             ".eac3" or ".ec3" => "audio/eac3",
             ".ac3" => "audio/ac3",
             ".flac" => "audio/flac",
             ".opus" => "audio/opus",
+            ".ogg" => "audio/ogg",
+            ".m4a" => "audio/mp4",
+            ".mp3" => "audio/mpeg",
+            ".wv" => "audio/x-wavpack",
+            ".iamf" => "application/octet-stream",
             ".mkv" => "video/x-matroska",
             ".mka" => "audio/x-matroska",
             ".mp4" => "video/mp4",

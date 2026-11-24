@@ -36,8 +36,10 @@ public partial class MainActivity {
     bool isStudioCodecDetailsExpanded;
     Switch studioOptAiUpmixSwitch, studioOptKaraokeSwitch, studioOptRemoveBackingSwitch, studioOptPerformanceSwitch;
     Switch studioOptLosslessTwinSwitch, studioOptHeadphonePersonalSwitch;
-    OneUiInlineSelector studioBundleSelector;
+    Switch studioOptEmbedCoverSwitch, studioOptEmbedLyricsSwitch;
+    OneUiInlineSelector studioBundleSelector, studioDynamicMotionSelector, studioExportFolderSelector;
     TextView studioOptPerformanceHintText, studioOptTwinHintText;
+    TextView studioOptEmbedCoverHintText, studioOptEmbedLyricsHintText, studioExportFolderHintText;
     LinearLayout studioOptHeadphonePersonalRow;
 
     LinearLayout BuildStudioPerformanceRecorderCard() {
@@ -330,6 +332,90 @@ public partial class MainActivity {
             out _);
         card.AddView(studioOptHeadphonePersonalRow);
 
+        // Master Overhaul T5: Explicit Studio Dynamic Atmos Object Choreography selector (independent of 3D Room playback)
+        AddDivider(card);
+        LinearLayout motionHdrRow = HRow();
+        motionHdrRow.SetPadding(0, Dp(2), 0, Dp(4));
+        motionHdrRow.AddView(Label(S["StudioDynamicMotionLabel"], 12f, ColMuted), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        motionHdrRow.AddView(CreateInlineHelpBtn(S["StudioDynamicMotionLabel"], S["TipStudioDynamicMotion"]), new LinearLayout.LayoutParams(Dp(24), Dp(24)));
+        card.AddView(motionHdrRow);
+
+        studioDynamicMotionSelector = new OneUiInlineSelector(this, S["StudioDynamicMotionLabel"]);
+        studioDynamicMotionSelector.SetItems(new[] {
+            S["SpatialChoreoOff"],
+            S["SpatialChoreoSubtle"],
+            S["SpatialChoreoMusical"],
+            S["SpatialChoreoCinematic"],
+            S["SpatialChoreoOrbit"]
+        }, Math.Clamp(store?.StudioDynamicChoreoModeIndex ?? 0, 0, 4));
+        studioDynamicMotionSelector.SelectionChanged += idx => {
+            if (store != null) {
+                store.StudioDynamicChoreoModeIndex = idx;
+            }
+            RefreshStudioW12ContextUi();
+        };
+        card.AddView(studioDynamicMotionSelector, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        // Master Overhaul T5: Metadata Preservation, Optional Cover Art & Synced Lyrics, and Public Storage Folder
+        AddDivider(card);
+        TextView deliveryHeader = Label(S["StudioExportDeliveryHeader"], 12.2f, OneUiTheme.TextPrimary);
+        deliveryHeader.SetTypeface(null, TypefaceStyle.Bold);
+        deliveryHeader.SetPadding(0, Dp(2), 0, Dp(4));
+        card.AddView(deliveryHeader);
+
+        studioOptEmbedCoverSwitch = AddExplainedSwitchRow(
+            card,
+            S["StudioOptEmbedCoverTitle"],
+            S["StudioOptEmbedCoverDesc"],
+            store?.StudioExportEmbedCoverArt ?? true,
+            on => {
+                if (store != null) {
+                    store.StudioExportEmbedCoverArt = on;
+                }
+                RefreshStudioW12ContextUi();
+            },
+            out studioOptEmbedCoverHintText);
+
+        studioOptEmbedLyricsSwitch = AddExplainedSwitchRow(
+            card,
+            S["StudioOptEmbedLyricsTitle"],
+            S["StudioOptEmbedLyricsDesc"],
+            store?.StudioExportEmbedLyrics ?? true,
+            on => {
+                if (store != null) {
+                    store.StudioExportEmbedLyrics = on;
+                }
+                RefreshStudioW12ContextUi();
+            },
+            out studioOptEmbedLyricsHintText);
+
+        LinearLayout folderHdrRow = HRow();
+        folderHdrRow.SetPadding(0, Dp(4), 0, Dp(4));
+        folderHdrRow.AddView(Label(S["StudioExportFolderLabel"], 12f, ColMuted), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        folderHdrRow.AddView(CreateInlineHelpBtn(S["StudioExportFolderLabel"], S["TipStudioExportFolder"]), new LinearLayout.LayoutParams(Dp(24), Dp(24)));
+        card.AddView(folderHdrRow);
+
+        studioExportFolderSelector = new OneUiInlineSelector(this, S["StudioExportFolderLabel"]);
+        studioExportFolderSelector.SetItems(new[] {
+            S["StudioExportFolderMusic"],
+            S["StudioExportFolderDownloads"]
+        }, Math.Clamp(store?.StudioExportFolderIndex ?? 0, 0, 1));
+        studioExportFolderSelector.SelectionChanged += idx => {
+            if (store != null) {
+                store.StudioExportFolderIndex = idx;
+            }
+            RefreshStudioW12ContextUi();
+        };
+        card.AddView(studioExportFolderSelector);
+
+        studioExportFolderHintText = Label("", 11.1f, OneUiTheme.TextSub);
+        studioExportFolderHintText.SetPadding(0, Dp(4), 0, Dp(6));
+        card.AddView(studioExportFolderHintText);
+
         studioW12ContextText = Label("", 11.4f, OneUiTheme.TextSub);
         studioW12ContextText.SetPadding(Dp(8), Dp(6), Dp(8), Dp(6));
         studioW12ContextText.Background = OneUiTheme.CreateRoundedDrawable(
@@ -378,8 +464,24 @@ public partial class MainActivity {
         return !string.IsNullOrEmpty(loc) && File.Exists(loc) ? loc : string.Empty;
     }
 
+    ExportStorageDestination GetSelectedExportDestination() =>
+        (store?.StudioExportFolderIndex ?? 0) == 1
+            ? ExportStorageDestination.DownloadsCavernize
+            : ExportStorageDestination.MusicCavernize;
+
+    SpatialChoreoMode GetSelectedStudioDynamicChoreoMode() =>
+        (SpatialChoreoMode)Math.Clamp(store?.StudioDynamicChoreoModeIndex ?? 0, 0, 4);
+
+    string GetStudioDynamicChoreoLabel(SpatialChoreoMode mode) => mode switch {
+        SpatialChoreoMode.Subtle => S["SpatialChoreoSubtle"],
+        SpatialChoreoMode.Musical => S["SpatialChoreoMusical"],
+        SpatialChoreoMode.Cinematic => S["SpatialChoreoCinematic"],
+        SpatialChoreoMode.Orbit => S["SpatialChoreoOrbit"],
+        _ => S["SpatialChoreoOff"]
+    };
+
     SpatialChoreoTrack ResolveActiveChoreoTrackForExport(bool buildIfMissing = false) {
-        SpatialChoreoMode mode = (SpatialChoreoMode)Math.Clamp(store?.SpatialChoreoModeIndex ?? 0, 0, 4);
+        SpatialChoreoMode mode = GetSelectedStudioDynamicChoreoMode();
         if (mode == SpatialChoreoMode.Off) {
             return null;
         }
@@ -389,15 +491,14 @@ public partial class MainActivity {
         }
         NeuralSeparatedTrack sep = playerEngine?.NeuralStage?.ActiveSpatialUpmixTrack;
         if (sep?.Stems == null || sep.Stems.Count == 0 || sep.IsProgressiveStreaming) {
-            return existing;
+            return null;
         }
         if (neuralTrackCache != null && neuralTrackCache.TryGetAttachedChoreoTrack(sep, out SpatialChoreoTrack cached) &&
             cached != null && cached.Mode == mode) {
-            playerEngine?.SceneHub?.SetChoreoTrack(cached);
             return cached;
         }
         if (!buildIfMissing) {
-            return existing;
+            return null;
         }
         LyricMoodDigest[] moodDigests = currentMediaMeta?.Lyrics != null
             ? Services.LyricsService.ExtractMoodDigest(currentMediaMeta.Lyrics)
@@ -406,19 +507,98 @@ public partial class MainActivity {
         SpatialChoreoTrack built = Cavern.Neural.NeuralStemSpatializer.BuildAndSetChoreoTrack(sep.Stems, sr, mode, moodDigests);
         if (built != null) {
             neuralTrackCache?.AttachChoreoTrack(sep, built);
-            playerEngine?.SceneHub?.SetChoreoTrack(built);
         }
         return built;
+    }
+
+    ExportMetadataPackage BuildExportMetadataPackageForActiveTrack(CavernizeTrack active) {
+        MediaArtworkMetadata meta = currentMediaMeta;
+        string sourcePath = meta?.SourceMediaPath ?? LoadedFile?.Path ?? active?.OriginalSourcePath ?? active?.Path ?? "";
+        ParsedAudioTags fileTags = !string.IsNullOrWhiteSpace(sourcePath) && File.Exists(sourcePath)
+            ? AudioTagReader.TryReadTags(sourcePath)
+            : null;
+
+        string title = !string.IsNullOrWhiteSpace(meta?.Title) ? meta.Title : fileTags?.Title;
+        string artist = !string.IsNullOrWhiteSpace(meta?.Artist) ? meta.Artist : fileTags?.Artist;
+        string albumArtist = !string.IsNullOrWhiteSpace(meta?.AlbumArtist) ? meta.AlbumArtist : fileTags?.AlbumArtist;
+        string album = !string.IsNullOrWhiteSpace(meta?.Album) ? meta.Album : fileTags?.Album;
+        int trackNum = meta != null && meta.TrackNumber > 0 ? meta.TrackNumber : (fileTags?.TrackNumber ?? 0);
+        int trackTotal = meta != null && meta.TrackTotal > 0 ? meta.TrackTotal : (fileTags?.TrackTotal ?? 0);
+        int discNum = meta != null && meta.DiscNumber > 0 ? meta.DiscNumber : (fileTags?.DiscNumber ?? 0);
+        string year = !string.IsNullOrWhiteSpace(meta?.Year) ? meta.Year : fileTags?.Year;
+        string genre = !string.IsNullOrWhiteSpace(meta?.Genre) ? meta.Genre : fileTags?.Genre;
+        string comment = !string.IsNullOrWhiteSpace(meta?.Comment) ? meta.Comment : fileTags?.Comment;
+
+        if (string.IsNullOrWhiteSpace(title)) {
+            string fallbackStem = Path.GetFileNameWithoutExtension(sourcePath);
+            title = ExportFileNameFormatter.BuildCleanTitleStem(null, fallbackStem);
+        }
+
+        bool embedCover = store?.StudioExportEmbedCoverArt ?? true;
+        byte[] coverBytes = null;
+        int coverW = 0;
+        int coverH = 0;
+        if (embedCover) {
+            coverBytes = MediaMetadataHelper.TryExtractCoverArtJpegBytes(
+                this,
+                meta,
+                currentMediaUri,
+                sourcePath,
+                out coverW,
+                out coverH);
+        }
+
+        bool embedLyrics = store?.StudioExportEmbedLyrics ?? true;
+        string syncedLrc = "";
+        string plainLyrics = "";
+        if (embedLyrics && meta?.Lyrics != null && meta.Lyrics.HasLyrics) {
+            string serialized = Services.LyricsService.SerializeToLrc(meta.Lyrics);
+            if (!string.IsNullOrWhiteSpace(serialized)) {
+                if (meta.Lyrics.IsSynced) {
+                    syncedLrc = serialized;
+                } else {
+                    plainLyrics = serialized;
+                }
+            }
+        }
+
+        return new ExportMetadataPackage {
+            Title = title ?? "",
+            Artist = artist ?? "",
+            AlbumArtist = albumArtist ?? "",
+            Album = album ?? "",
+            TrackNumber = trackNum,
+            TrackTotal = trackTotal,
+            DiscNumber = discNum,
+            Year = year ?? "",
+            Genre = genre ?? "",
+            Comment = comment ?? "",
+            Encoder = "Cavernize",
+            EmbedCoverArt = embedCover && coverBytes != null && coverBytes.Length > 0,
+            CoverArtBytes = coverBytes,
+            CoverArtMimeType = "image/jpeg",
+            CoverArtWidth = coverW,
+            CoverArtHeight = coverH,
+            EmbedLyrics = embedLyrics && (!string.IsNullOrWhiteSpace(syncedLrc) || !string.IsNullOrWhiteSpace(plainLyrics)),
+            SyncedLyricsLrc = syncedLrc,
+            PlainLyrics = plainLyrics
+        };
     }
 
     StudioComposableExportOptions BuildCurrentComposableOptions(bool buildChoreoIfMissing = false) {
         int fmtIdx = Math.Clamp(studioBaseFormatSelector?.SelectedIndex ?? store?.StudioBaseFormatIndex ?? 0, 0, 4);
         StudioCompressionTier tier = (StudioCompressionTier)Math.Clamp(store?.StudioCompressionTierIndex ?? 0, 0, 2);
+        SpatialChoreoMode dynamicMode = GetSelectedStudioDynamicChoreoMode();
+        LyricMoodDigest[] moodDigests = dynamicMode != SpatialChoreoMode.Off && currentMediaMeta?.Lyrics != null
+            ? Services.LyricsService.ExtractMoodDigest(currentMediaMeta.Lyrics)
+            : null;
         PerformanceRecordingTake take = playerEngine?.LiveMicBridge?.LatestRecordedTake;
         bool includePerf = store?.StudioOptPerformance ?? false;
         return new StudioComposableExportOptions {
             BaseFormat = (StudioBaseOutputFormat)fmtIdx,
             CompressionTier = tier,
+            DynamicChoreoMode = dynamicMode,
+            LyricMoodDigests = moodDigests,
             FfmpegExecutablePath = ResolveExportFfmpegPath(),
             ChoreoTrack = ResolveActiveChoreoTrackForExport(buildChoreoIfMissing),
             OnSigpipeShield = () => { NativeProAudioBridge.InstallSigpipeShield(); },
@@ -750,6 +930,64 @@ public partial class MainActivity {
             }
         }
 
+        if (studioDynamicMotionSelector != null) {
+            int mIdx = Math.Clamp(store.StudioDynamicChoreoModeIndex, 0, 4);
+            if (studioDynamicMotionSelector.SelectedIndex != mIdx) {
+                studioDynamicMotionSelector.SetSelection(mIdx, notify: false);
+            }
+        }
+        if (studioOptEmbedCoverSwitch != null && studioOptEmbedCoverSwitch.Checked != store.StudioExportEmbedCoverArt) {
+            studioOptEmbedCoverSwitch.Checked = store.StudioExportEmbedCoverArt;
+        }
+        if (studioOptEmbedLyricsSwitch != null && studioOptEmbedLyricsSwitch.Checked != store.StudioExportEmbedLyrics) {
+            studioOptEmbedLyricsSwitch.Checked = store.StudioExportEmbedLyrics;
+        }
+        if (studioExportFolderSelector != null) {
+            int fIdx = Math.Clamp(store.StudioExportFolderIndex, 0, 1);
+            if (studioExportFolderSelector.SelectedIndex != fIdx) {
+                studioExportFolderSelector.SetSelection(fIdx, notify: false);
+            }
+        }
+
+        if (studioOptEmbedCoverHintText != null) {
+            bool hasCover = currentMediaMeta != null && currentMediaMeta.HasEmbeddedArtwork;
+            if (store.StudioExportEmbedCoverArt && hasCover) {
+                studioOptEmbedCoverHintText.Text = S["StudioOptEmbedCoverReadyDesc"];
+                studioOptEmbedCoverHintText.SetTextColor(OneUiTheme.FunctionalGreen);
+            } else {
+                studioOptEmbedCoverHintText.Text = S["StudioOptEmbedCoverDesc"];
+                studioOptEmbedCoverHintText.SetTextColor(OneUiTheme.TextSub);
+            }
+        }
+
+        if (studioOptEmbedLyricsHintText != null) {
+            bool hasLyrics = currentMediaMeta?.Lyrics != null && currentMediaMeta.Lyrics.HasLyrics;
+            if (store.StudioExportEmbedLyrics && hasLyrics) {
+                studioOptEmbedLyricsHintText.Text = currentMediaMeta.Lyrics.IsSynced
+                    ? S["StudioOptEmbedLyricsSyncedReadyDesc"]
+                    : S["StudioOptEmbedLyricsPlainReadyDesc"];
+                studioOptEmbedLyricsHintText.SetTextColor(OneUiTheme.FunctionalGreen);
+            } else {
+                studioOptEmbedLyricsHintText.Text = S["StudioOptEmbedLyricsDesc"];
+                studioOptEmbedLyricsHintText.SetTextColor(OneUiTheme.TextSub);
+            }
+        }
+
+        if (studioExportFolderHintText != null) {
+            ExportStorageDestination dest = GetSelectedExportDestination();
+            if (dest == ExportStorageDestination.MusicCavernize &&
+                !AndroidFileHelper.IsStandardAndroidMusicExtension(effectiveExt)) {
+                studioExportFolderHintText.Text = string.Format(S["StudioExportFolderCompatNoteFmt"], effectiveExt);
+                studioExportFolderHintText.SetTextColor(OneUiTheme.PeachText);
+            } else {
+                string folderDisplay = dest == ExportStorageDestination.DownloadsCavernize
+                    ? S["StudioExportFolderDownloads"]
+                    : S["StudioExportFolderMusic"];
+                studioExportFolderHintText.Text = string.Format(S["StudioExportFolderActiveFmt"], folderDisplay);
+                studioExportFolderHintText.SetTextColor(OneUiTheme.TextSub);
+            }
+        }
+
         if (studioW12ContextText != null) {
             string tierTag = tier switch {
                 StudioCompressionTier.LosslessCompressed => S["StudioTierLossless"],
@@ -759,6 +997,9 @@ public partial class MainActivity {
             List<string> tags = [$"{GetStudioBaseFormatLabel(opts.BaseFormat)} ({tierTag})"];
             if (opts.EnableAiSpatialUpmix) {
                 tags.Add(IsActiveTrackMultichannelOrAtmos() ? S["StudioTagAtmosAi"] : S["StudioTagAiUpmix"]);
+            }
+            if (opts.DynamicChoreoMode != SpatialChoreoMode.Off) {
+                tags.Add(string.Format(S["StudioTagMotionFmt"], GetStudioDynamicChoreoLabel(opts.DynamicChoreoMode)));
             }
             if (opts.EnableKaraokeInstrumental) {
                 tags.Add(removeBacking
@@ -806,26 +1047,31 @@ public partial class MainActivity {
         return true;
     }
 
-    StudioBatchExportJob BuildComposableExportJob(StudioComposableExportOptions opts, string dir, string baseName) {
+    StudioBatchExportJob BuildComposableExportJob(
+        StudioComposableExportOptions opts,
+        string dir,
+        string fallbackSourceName,
+        ExportMetadataPackage metadata = null) {
         string ext = StudioBatchExporter.GetEffectiveOutputExtension(opts.BaseFormat, opts.CompressionTier, true);
-        List<string> slugParts = [opts.BaseFormat.ToString()];
-        if (opts.CompressionTier != StudioCompressionTier.MasterPcm) {
-            slugParts.Add(opts.CompressionTier.ToString());
-        }
-        if (opts.EnableAiSpatialUpmix) slugParts.Add("AI");
-        if (opts.EnableKaraokeInstrumental) slugParts.Add("Karaoke");
-        if (opts.IncludeRecordedPerformance) slugParts.Add("VocalTake");
-        if (opts.EnableLosslessTwinRestoration) slugParts.Add("Twin");
-        string suffix = string.Join("_", slugParts);
-        string outPath = Path.Combine(dir, $"{baseName}_{suffix}{ext}");
-        int n = 1;
-        while (File.Exists(outPath)) {
-            outPath = Path.Combine(dir, $"{baseName}_{suffix}_{n++}{ext}");
-        }
+        string cleanFileName = ExportFileNameFormatter.FormatStudioFileName(
+            metadata,
+            fallbackSourceName,
+            opts.BaseFormat,
+            opts.CompressionTier,
+            opts.EnableAiSpatialUpmix,
+            opts.EnableKaraokeInstrumental,
+            !(store?.KaraokePreserveBackingVocals ?? true),
+            opts.IncludeRecordedPerformance,
+            opts.EnableLosslessTwinRestoration,
+            opts.DynamicChoreoMode,
+            ext);
+        string outPath = ExportFileNameFormatter.ResolveUniqueOutputPath(dir, cleanFileName);
 
         PerformanceRecordingTake take = playerEngine?.LiveMicBridge?.LatestRecordedTake;
+        ExportMetadataPackage clonedMeta = metadata?.Clone();
+        opts.Metadata = clonedMeta;
         return new StudioBatchExportJob {
-            TrackName = baseName,
+            TrackName = !string.IsNullOrWhiteSpace(clonedMeta?.Title) ? clonedMeta.Title : fallbackSourceName,
             Preset = opts.BaseFormat switch {
                 StudioBaseOutputFormat.EclipsaIamf => StudioExportPreset.EclipsaAudioIamf,
                 StudioBaseOutputFormat.Ambisonics360 => StudioExportPreset.AmbisonicsHoa3rdOrder,
@@ -835,6 +1081,9 @@ public partial class MainActivity {
             },
             ComposableOptions = opts,
             CompressionTier = opts.CompressionTier,
+            DynamicChoreoMode = opts.DynamicChoreoMode,
+            LyricMoodDigests = opts.LyricMoodDigests,
+            Metadata = clonedMeta,
             FfmpegExecutablePath = opts.FfmpegExecutablePath ?? ResolveExportFfmpegPath(),
             ChoreoTrack = opts.ChoreoTrack,
             OnSigpipeShield = opts.OnSigpipeShield ?? (() => { NativeProAudioBridge.InstallSigpipeShield(); }),
@@ -928,7 +1177,9 @@ public partial class MainActivity {
             return;
         }
 
-        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
+        ExportStorageDestination dest = GetSelectedExportDestination();
+        string ext = StudioBatchExporter.GetEffectiveOutputExtension(opts.BaseFormat, opts.CompressionTier, true);
+        string dir = AndroidFileHelper.GetExportWorkingDir(this, dest, ext, out _, out _);
         if (!ExportMediaProcessingService.CheckFreeSpacePreflight(dir, EstimateStudioExportBytes(active, opts), out string spaceErr)) {
             ShowError(string.IsNullOrWhiteSpace(spaceErr) ? S["StudioExportLowSpaceError"] : spaceErr);
             return;
@@ -936,15 +1187,13 @@ public partial class MainActivity {
 
         playerEngine?.SetPerformancePreviewTake(null, enabled: false);
         StopPlayback();
-        string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
-        StudioBatchExportJob job = BuildComposableExportJob(opts, dir, baseName);
+        string baseName = Path.GetFileNameWithoutExtension(currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? "master");
         string label = GetStudioBaseFormatLabel(opts.BaseFormat);
         var appCtx = ApplicationContext ?? this;
 
         isOperationRunning = true;
         RunOnUiThread(() => {
-            if (shareExportBtn != null) shareExportBtn.Visibility = ViewStates.Gone;
-            if (playExportBtn != null) playExportBtn.Visibility = ViewStates.Gone;
+            HideLastExportActionBar();
             SetRunningUiState(true);
             SetConvertStatus(S["Starting"], 0);
         });
@@ -952,9 +1201,13 @@ public partial class MainActivity {
         _ = Task.Run(async () => {
             AndroidRuntimeTelemetry.ApplyBackgroundThreadQoS();
             StudioBatchExportResult res = null;
+            StudioBatchExportJob job = null;
+            ExportPublishResult publishResult = null;
             bool cancelled = false;
             Exception fatalEx = null;
             try {
+                ExportMetadataPackage metadata = BuildExportMetadataPackageForActiveTrack(active);
+                job = BuildComposableExportJob(opts, dir, baseName, metadata);
                 res = await ExportMediaProcessingService.EnqueueSingleExportAsync(
                     appCtx,
                     active,
@@ -976,14 +1229,17 @@ public partial class MainActivity {
                 AppLogger.Error("StartStudioComposableExport", ex);
             } finally {
                 bool ok = !cancelled && fatalEx == null && res != null && res.Succeeded && !string.IsNullOrEmpty(res.OutputPath) && File.Exists(res.OutputPath);
-                string finalPath = res?.OutputPath ?? job.OutputPath;
+                string finalPath = res?.OutputPath ?? job?.OutputPath;
                 try {
                     await ExportMediaProcessingService.CommitOrCleanupPendingMediaStoreAsync(appCtx, null, finalPath, ok).ConfigureAwait(false);
                     if (ok) {
-                        AndroidFileHelper.PublishToDownloads(appCtx, finalPath, "Renderizados");
+                        publishResult = AndroidFileHelper.PublishExportedAudio(appCtx, finalPath, dest);
+                        if (publishResult != null && !string.IsNullOrEmpty(publishResult.LocalPath)) {
+                            finalPath = publishResult.LocalPath;
+                        }
                     }
                 } catch (Exception cleanupEx) {
-                    AppLogger.Warn($"CommitOrCleanupPendingMediaStoreAsync: {cleanupEx.Message}");
+                    AppLogger.Warn($"PublishExportedAudio: {cleanupEx.Message}");
                 }
 
                 isOperationRunning = false;
@@ -1003,9 +1259,7 @@ public partial class MainActivity {
                             SetConvertStatus(errMsg, 0);
                             ShowError(errMsg);
                         } else {
-                            lastRenderedFilePath = finalPath;
-                            if (shareExportBtn != null) shareExportBtn.Visibility = ViewStates.Visible;
-                            if (playExportBtn != null) playExportBtn.Visibility = ViewStates.Visible;
+                            ShowPublishedExportActions(publishResult, finalPath);
                             SetConvertStatus(
                                 string.Format(S["StudioW12DoneFormat"], Path.GetFileName(finalPath), res.IntegratedLufs, res.MaxTruePeakDbtp),
                                 1.0);
@@ -1028,10 +1282,25 @@ public partial class MainActivity {
         }
         if (studioSwitchEclipsaBtn != null) studioSwitchEclipsaBtn.Enabled = !running;
         if (studioOptAiUpmixSwitch != null) studioOptAiUpmixSwitch.Enabled = !running;
+        if (studioBundleSelector != null) {
+            studioBundleSelector.Enabled = !running;
+            studioBundleSelector.Alpha = running ? 0.55f : 1f;
+        }
         if (studioOptKaraokeSwitch != null) studioOptKaraokeSwitch.Enabled = !running;
+        if (studioOptRemoveBackingSwitch != null) studioOptRemoveBackingSwitch.Enabled = !running;
         if (studioOptPerformanceSwitch != null) studioOptPerformanceSwitch.Enabled = !running;
         if (studioOptLosslessTwinSwitch != null) studioOptLosslessTwinSwitch.Enabled = !running;
         if (studioOptHeadphonePersonalSwitch != null) studioOptHeadphonePersonalSwitch.Enabled = !running;
+        if (studioDynamicMotionSelector != null) {
+            studioDynamicMotionSelector.Enabled = !running;
+            studioDynamicMotionSelector.Alpha = running ? 0.55f : 1f;
+        }
+        if (studioOptEmbedCoverSwitch != null) studioOptEmbedCoverSwitch.Enabled = !running;
+        if (studioOptEmbedLyricsSwitch != null) studioOptEmbedLyricsSwitch.Enabled = !running;
+        if (studioExportFolderSelector != null) {
+            studioExportFolderSelector.Enabled = !running;
+            studioExportFolderSelector.Alpha = running ? 0.55f : 1f;
+        }
         if (studioRecRecordBtn != null) studioRecRecordBtn.Enabled = !running;
         if (studioRecPreviewBtn != null) studioRecPreviewBtn.Enabled = !running;
         if (studioRecDiscardBtn != null) studioRecDiscardBtn.Enabled = !running;

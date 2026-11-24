@@ -31,11 +31,15 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
-    Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, shareExportBtn, playExportBtn, studioW12ExportBtn, studioW12BatchBtn;
+    Button selectTargetBtn, wiringBtn, renderBtn, cancelRenderBtn, locateExportBtn, shareExportBtn, playExportBtn, studioW12ExportBtn, studioW12BatchBtn;
     Button studioQueueAddBtn, studioQueueAddInQueueTabBtn, studioBatchAddBtn, studioQueueRemoveBtn, studioMetaBtn, studioReportBtn;
     Button studioBadgeFfmpegBtn, studioBadgeTruehdBtn, studioBadgeOnnxBtn, studioBadgeTwinBtn, studioPrereqJumpBtn;
     LayoutDiagramView layoutDiagram;
-    TextView convertStatusText, studioW12ContextText;
+    TextView convertStatusText, studioW12ContextText, lastExportPathText;
+    Android.Net.Uri lastExportContentUri;
+    string lastExportFolderAbsPath = "";
+    string lastExportPublicDisplayPath = "";
+    string lastExportSourcePath = "";
     OneUiInlineSelector studioWorkflowSelector, exportFormatSelector, containerSelector;
     readonly List<Button> studioWorkflowPillBtns = [];
     LinearLayout studioMasterSection, studioClassicSection, studioQueueSection;
@@ -355,18 +359,28 @@ public partial class MainActivity {
         footerCard.AddView(convertProgressBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, Dp(14)) { TopMargin = Dp(6) });
 
         convertStatusText = Label(S["Ready"], 12f, OneUiTheme.IconSystemInfo);
-        convertStatusText.SetPadding(0, Dp(6), 0, Dp(6));
+        convertStatusText.SetPadding(0, Dp(6), 0, Dp(4));
         footerCard.AddView(convertStatusText);
 
+        lastExportPathText = Label("", 11.2f, OneUiTheme.FunctionalGreen);
+        lastExportPathText.SetPadding(Dp(10), Dp(6), Dp(10), Dp(6));
+        lastExportPathText.Background = OneUiTheme.CreateRoundedDrawable(
+            this, OneUiTheme.SurfaceSubTile, 12f, OneUiTheme.BorderSubtle, 0.8f);
+        lastExportPathText.Visibility = ViewStates.Gone;
+        footerCard.AddView(lastExportPathText, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(6)
+        });
+
         LinearLayout postBtns = HRow();
-        shareExportBtn = PillButton(S["ShareFile"], () => ShareLocalFile(lastRenderedFilePath));
-        playExportBtn = PillButton(S["OpenPlayer"], () => {
-            if (!string.IsNullOrEmpty(lastRenderedFilePath) && File.Exists(lastRenderedFilePath)) {
-                OpenLocalPathWithFallbackAsync(lastRenderedFilePath, switchToTab: 0);
-            }
-        }, active: true);
+        locateExportBtn = PillButton(S["LocateExportBtn"], OnLocateExportClicked);
+        shareExportBtn = PillButton(S["ShareFile"], OnShareLastExportClicked);
+        playExportBtn = PillButton(S["OpenPlayer"], OnPlayLastExportClicked, active: true);
+        locateExportBtn.Visibility = ViewStates.Gone;
         shareExportBtn.Visibility = ViewStates.Gone;
         playExportBtn.Visibility = ViewStates.Gone;
+        postBtns.AddView(locateExportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
         postBtns.AddView(shareExportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
         postBtns.AddView(playExportBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         footerCard.AddView(postBtns);
@@ -977,7 +991,9 @@ public partial class MainActivity {
             return;
         }
 
-        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
+        ExportStorageDestination dest = GetSelectedExportDestination();
+        string preflightExt = StudioBatchExporter.GetEffectiveOutputExtension(formats[0], baseOpts.CompressionTier, true);
+        string preflightDir = AndroidFileHelper.GetExportWorkingDir(this, dest, preflightExt, out _, out _);
         long estTotalBytes = 0;
         for (int i = 0; i < formats.Count; i++) {
             StudioComposableExportOptions estOpts = new() {
@@ -986,35 +1002,41 @@ public partial class MainActivity {
             };
             estTotalBytes += EstimateStudioExportBytes(active, estOpts);
         }
-        if (!ExportMediaProcessingService.CheckFreeSpacePreflight(dir, estTotalBytes, out string spaceErr)) {
+        if (!ExportMediaProcessingService.CheckFreeSpacePreflight(preflightDir, estTotalBytes, out string spaceErr)) {
             ShowError(string.IsNullOrWhiteSpace(spaceErr) ? S["StudioExportLowSpaceError"] : spaceErr);
             return;
         }
 
         playerEngine?.SetPerformancePreviewTake(null, enabled: false);
         StopPlayback();
-        string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
-        List<StudioBatchExportJob> jobs = new(formats.Count);
-        for (int i = 0; i < formats.Count; i++) {
-            StudioComposableExportOptions jobOpts = new() {
-                BaseFormat = formats[i],
-                CompressionTier = baseOpts.CompressionTier,
-                FfmpegExecutablePath = baseOpts.FfmpegExecutablePath,
-                ChoreoTrack = baseOpts.ChoreoTrack,
-                OnSigpipeShield = baseOpts.OnSigpipeShield,
-                EnableAiSpatialUpmix = baseOpts.EnableAiSpatialUpmix,
-                EnableKaraokeInstrumental = baseOpts.EnableKaraokeInstrumental,
-                IncludeRecordedPerformance = baseOpts.IncludeRecordedPerformance,
-                EnableLosslessTwinRestoration = baseOpts.EnableLosslessTwinRestoration,
-                ApplyPersonalizedHeadphonePost = baseOpts.ApplyPersonalizedHeadphonePost,
-                RecordedPerformanceStartTrackSample = baseOpts.RecordedPerformanceStartTrackSample,
-                RecordedPerformanceSampleRate = baseOpts.RecordedPerformanceSampleRate
-            };
-            jobs.Add(BuildComposableExportJob(jobOpts, dir, baseName));
-        }
+        string baseName = Path.GetFileNameWithoutExtension(currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? "master");
 
         RunBackgroundOperation(token => {
             RunOnUiThread(() => SetConvertStatus(S["Starting"], 0));
+            ExportMetadataPackage sharedMetadata = BuildExportMetadataPackageForActiveTrack(active);
+            List<StudioBatchExportJob> jobs = new(formats.Count);
+            for (int i = 0; i < formats.Count; i++) {
+                string fmtExt = StudioBatchExporter.GetEffectiveOutputExtension(formats[i], baseOpts.CompressionTier, true);
+                string fmtDir = AndroidFileHelper.GetExportWorkingDir(this, dest, fmtExt, out _, out _);
+                StudioComposableExportOptions jobOpts = new() {
+                    BaseFormat = formats[i],
+                    CompressionTier = baseOpts.CompressionTier,
+                    DynamicChoreoMode = baseOpts.DynamicChoreoMode,
+                    LyricMoodDigests = baseOpts.LyricMoodDigests,
+                    FfmpegExecutablePath = baseOpts.FfmpegExecutablePath,
+                    ChoreoTrack = baseOpts.ChoreoTrack,
+                    OnSigpipeShield = baseOpts.OnSigpipeShield,
+                    EnableAiSpatialUpmix = baseOpts.EnableAiSpatialUpmix,
+                    EnableKaraokeInstrumental = baseOpts.EnableKaraokeInstrumental,
+                    IncludeRecordedPerformance = baseOpts.IncludeRecordedPerformance,
+                    EnableLosslessTwinRestoration = baseOpts.EnableLosslessTwinRestoration,
+                    ApplyPersonalizedHeadphonePost = baseOpts.ApplyPersonalizedHeadphonePost,
+                    RecordedPerformanceStartTrackSample = baseOpts.RecordedPerformanceStartTrackSample,
+                    RecordedPerformanceSampleRate = baseOpts.RecordedPerformanceSampleRate
+                };
+                jobs.Add(BuildComposableExportJob(jobOpts, fmtDir, baseName, sharedMetadata));
+            }
+
             List<StudioBatchExportResult> results = StudioBatchExporter.ExportBatch(
                 active,
                 jobs,
@@ -1032,6 +1054,7 @@ public partial class MainActivity {
             int okCount = 0;
             bool anyCancelled = token.IsCancellationRequested;
             string lastOkPath = null;
+            ExportPublishResult lastPub = null;
             string firstError = null;
             for (int i = 0; i < results.Count; i++) {
                 StudioBatchExportResult r = results[i];
@@ -1040,8 +1063,9 @@ public partial class MainActivity {
                 }
                 if (r.Succeeded && !r.IsCancelled && !string.IsNullOrEmpty(r.OutputPath) && File.Exists(r.OutputPath)) {
                     okCount++;
-                    lastOkPath = r.OutputPath;
-                    AndroidFileHelper.PublishToDownloads(this, r.OutputPath, "Renderizados");
+                    ExportPublishResult pub = AndroidFileHelper.PublishExportedAudio(this, r.OutputPath, dest);
+                    lastPub = pub;
+                    lastOkPath = !string.IsNullOrEmpty(pub?.LocalPath) ? pub.LocalPath : r.OutputPath;
                 } else if (!r.IsCancelled && firstError == null && !string.IsNullOrEmpty(r.ErrorMessage)) {
                     firstError = r.ErrorMessage;
                 }
@@ -1053,30 +1077,26 @@ public partial class MainActivity {
             if (okCount == 0 && !string.IsNullOrEmpty(firstError)) {
                 throw new InvalidOperationException(firstError);
             }
-            if (!string.IsNullOrEmpty(lastOkPath)) {
-                lastRenderedFilePath = lastOkPath;
-            }
             RunOnUiThread(() => {
                 SetConvertStatus(string.Format(S["StudioW12BatchDoneFormat"], okCount, results.Count), 1.0);
-                if (!string.IsNullOrEmpty(lastOkPath)) {
-                    shareExportBtn.Visibility = ViewStates.Visible;
-                    playExportBtn.Visibility = ViewStates.Visible;
+                if (!string.IsNullOrEmpty(lastOkPath) || lastPub != null) {
+                    ShowPublishedExportActions(lastPub, lastOkPath);
                 }
             });
         }, null);
     }
 
     string BuildDefaultExportPath(CavernizeTrack track) {
-        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
-        string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "render");
         int selIdx = containerSelector != null ? Math.Clamp(containerSelector.SelectedIndex, 0, Math.Max(0, availableContainerExts.Count - 1)) : 0;
         string ext = availableContainerExts.Count > 0 ? availableContainerExts[selIdx] : ".wav";
-        string candidate = Path.Combine(dir, $"{baseName}_cavernized{ext}");
-        int n = 1;
-        while (File.Exists(candidate)) {
-            candidate = Path.Combine(dir, $"{baseName}_cavernized_{n++}{ext}");
-        }
-        return candidate;
+        string dir = AndroidFileHelper.GetExportWorkingDir(this, GetSelectedExportDestination(), ext, out _, out _);
+        string fallbackSource = Path.GetFileNameWithoutExtension(currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? "render");
+        ExportMetadataPackage quickMeta = currentMediaMeta != null
+            ? new ExportMetadataPackage { Title = currentMediaMeta.Title ?? "", Artist = currentMediaMeta.Artist ?? "" }
+            : null;
+        string targetLabel = RenderTarget?.Name ?? ExportFormat?.Description ?? "Spatial";
+        string cleanFileName = ExportFileNameFormatter.FormatClassicFileName(quickMeta, fallbackSource, targetLabel, ext);
+        return ExportFileNameFormatter.ResolveUniqueOutputPath(dir, cleanFileName);
     }
 
     Action CreateRenderAction(string path, CavernizeTrack target = null) {
@@ -1176,14 +1196,20 @@ public partial class MainActivity {
             }
         }
 
-        if (!string.IsNullOrEmpty(finalName)) {
-            AndroidFileHelper.PublishToDownloads(this, finalName, "Renderizados");
-            lastRenderedFilePath = finalName;
-            AppLogger.Info($"Render finished successfully: '{finalName}'");
+        if (!string.IsNullOrEmpty(finalName) && File.Exists(finalName)) {
+            try {
+                ExportMetadataPackage classicMeta = BuildExportMetadataPackageForActiveTrack(target);
+                ExportMetadataEmbedder.EmbedInPlace(finalName, classicMeta);
+            } catch (Exception metaEx) {
+                AppLogger.Warn($"Classic export metadata embed skipped: {metaEx.Message}");
+            }
+            ExportPublishResult pub = AndroidFileHelper.PublishExportedAudio(this, finalName, GetSelectedExportDestination());
+            string displayPath = !string.IsNullOrEmpty(pub?.LocalPath) ? pub.LocalPath : finalName;
+            lastExportSourcePath = finalName;
+            AppLogger.Info($"Render finished successfully: '{displayPath}'");
             RunOnUiThread(() => {
-                SetConvertStatus(string.Format(S["ExportDone"], finalName), 1);
-                shareExportBtn.Visibility = ViewStates.Visible;
-                playExportBtn.Visibility = ViewStates.Visible;
+                SetConvertStatus(string.Format(S["ExportDone"], Path.GetFileName(displayPath)), 1);
+                ShowPublishedExportActions(pub, displayPath);
             });
         } else {
             RunOnUiThread(() => SetConvertStatus(S["ReportDone"], 1));
@@ -1422,26 +1448,32 @@ public partial class MainActivity {
         activeCts?.Dispose();
         activeCts = new CancellationTokenSource();
         CancellationToken token = activeCts.Token;
+        lastExportSourcePath = "";
 
         isOperationRunning = true;
         RunOnUiThread(() => {
-            if (shareExportBtn != null) shareExportBtn.Visibility = ViewStates.Gone;
-            if (playExportBtn != null) playExportBtn.Visibility = ViewStates.Gone;
+            HideLastExportActionBar();
             SetRunningUiState(true);
         });
         Task.Run(() => {
             AndroidRuntimeTelemetry.ApplyBackgroundThreadQoS();
             try {
                 work(token);
-                if (!string.IsNullOrEmpty(singleOutputPath) && File.Exists(singleOutputPath)) {
-                    AndroidFileHelper.PublishToDownloads(this, singleOutputPath, "Renderizados");
-                    lastRenderedFilePath = singleOutputPath;
-                    RunOnUiThread(() => {
-                        shareExportBtn.Visibility = ViewStates.Visible;
-                        playExportBtn.Visibility = ViewStates.Visible;
-                    });
+                if (!string.IsNullOrEmpty(singleOutputPath) &&
+                    !string.Equals(lastExportSourcePath, singleOutputPath, StringComparison.Ordinal) &&
+                    File.Exists(singleOutputPath)) {
+                    try {
+                        ExportMetadataPackage classicMeta = BuildExportMetadataPackageForActiveTrack(GetActiveTrack());
+                        ExportMetadataEmbedder.EmbedInPlace(singleOutputPath, classicMeta);
+                    } catch (Exception metaEx) {
+                        AppLogger.Warn($"Background export metadata embed skipped: {metaEx.Message}");
+                    }
+                    ExportPublishResult pub = AndroidFileHelper.PublishExportedAudio(this, singleOutputPath, GetSelectedExportDestination());
+                    string displayPath = !string.IsNullOrEmpty(pub?.LocalPath) ? pub.LocalPath : singleOutputPath;
+                    lastExportSourcePath = singleOutputPath;
+                    RunOnUiThread(() => ShowPublishedExportActions(pub, displayPath));
                 }
-            } catch (OperationCanceledException) {
+            } catch (System.OperationCanceledException) {
                 AppLogger.Info("Background render operation cancelled by user.");
                 RunOnUiThread(() => SetConvertStatus(S["CancelledStatus"], 0));
             } catch (Exception ex) {
@@ -1618,6 +1650,124 @@ public partial class MainActivity {
         }
     }
 
+    void HideLastExportActionBar() {
+        if (locateExportBtn != null) locateExportBtn.Visibility = ViewStates.Gone;
+        if (shareExportBtn != null) shareExportBtn.Visibility = ViewStates.Gone;
+        if (playExportBtn != null) playExportBtn.Visibility = ViewStates.Gone;
+        if (lastExportPathText != null) lastExportPathText.Visibility = ViewStates.Gone;
+    }
+
+    void ShowPublishedExportActions(ExportPublishResult publish, string fallbackFilePath) {
+        lastExportContentUri = publish?.ContentUri;
+        lastRenderedFilePath = !string.IsNullOrEmpty(publish?.LocalPath) && File.Exists(publish.LocalPath)
+            ? publish.LocalPath
+            : (!string.IsNullOrEmpty(fallbackFilePath) && File.Exists(fallbackFilePath) ? fallbackFilePath : "");
+        lastExportFolderAbsPath = !string.IsNullOrEmpty(publish?.PublicFolderAbsolutePath)
+            ? publish.PublicFolderAbsolutePath
+            : (!string.IsNullOrEmpty(lastRenderedFilePath) ? Path.GetDirectoryName(lastRenderedFilePath) ?? "" : "");
+        if (!string.IsNullOrEmpty(publish?.PublicDisplayPath)) {
+            lastExportPublicDisplayPath = publish.PublicDisplayPath;
+        } else {
+            string fileName = !string.IsNullOrEmpty(lastRenderedFilePath) ? Path.GetFileName(lastRenderedFilePath) : "";
+            string folderRel = !string.IsNullOrEmpty(publish?.FolderDisplayPath)
+                ? publish.FolderDisplayPath
+                : (GetSelectedExportDestination() == ExportStorageDestination.DownloadsCavernize ? "Download/Cavernize" : "Music/Cavernize");
+            lastExportPublicDisplayPath = !string.IsNullOrEmpty(fileName) ? $"{folderRel}/{fileName}" : folderRel;
+        }
+
+        if (lastExportPathText != null) {
+            string msg = string.Format(S["ExportSavedToFmt"], lastExportPublicDisplayPath);
+            if (publish?.RoutedToDownloadsForContainerCompat == true) {
+                msg += $" · {S["ExportCompatDownloadsBadge"]}";
+            }
+            lastExportPathText.Text = msg;
+            lastExportPathText.Visibility = ViewStates.Visible;
+        }
+        bool hasFileOrUri = !string.IsNullOrEmpty(lastRenderedFilePath) || lastExportContentUri != null;
+        if (locateExportBtn != null) locateExportBtn.Visibility = hasFileOrUri ? ViewStates.Visible : ViewStates.Gone;
+        if (shareExportBtn != null) shareExportBtn.Visibility = hasFileOrUri ? ViewStates.Visible : ViewStates.Gone;
+        if (playExportBtn != null) playExportBtn.Visibility = hasFileOrUri ? ViewStates.Visible : ViewStates.Gone;
+    }
+
+    void OnLocateExportClicked() {
+        string folderRel = lastExportPublicDisplayPath.StartsWith("Download/", StringComparison.OrdinalIgnoreCase)
+            ? "Download/Cavernize"
+            : "Music/Cavernize";
+        bool openedSystemFiles = false;
+        if (OperatingSystem.IsAndroidVersionAtLeast(26)) {
+            try {
+                Android.Net.Uri docUri = Android.Provider.DocumentsContract.BuildDocumentUri(
+                    "com.android.externalstorage.documents",
+                    $"primary:{folderRel}");
+                if (docUri != null) {
+                    Intent viewDir = new(Intent.ActionView);
+                    viewDir.SetDataAndType(docUri, "vnd.android.document/directory");
+                    viewDir.AddFlags(ActivityFlags.GrantReadUriPermission | ActivityFlags.NewTask);
+                    StartActivity(viewDir);
+                    openedSystemFiles = true;
+                }
+            } catch (Exception ex) {
+                AppLogger.Info($"Locate system folder intent fallback: {ex.Message}");
+            }
+        }
+        if (openedSystemFiles) {
+            Toast.MakeText(this, string.Format(S["ExportSavedToFmt"], lastExportPublicDisplayPath), ToastLength.Short).Show();
+            return;
+        }
+
+        string initDir = !string.IsNullOrEmpty(lastExportFolderAbsPath) && Directory.Exists(lastExportFolderAbsPath)
+            ? lastExportFolderAbsPath
+            : AndroidFileHelper.GetPublicExportFolderAbsolutePath(
+                folderRel.StartsWith("Download/", StringComparison.OrdinalIgnoreCase)
+                    ? ExportStorageDestination.DownloadsCavernize
+                    : ExportStorageDestination.MusicCavernize);
+        Toast.MakeText(this, string.Format(S["ExportSavedToFmt"], lastExportPublicDisplayPath), ToastLength.Long).Show();
+        if (!string.IsNullOrEmpty(initDir) && Directory.Exists(initDir)) {
+            OneUiFileExplorerDialog.Show(this, new FileExplorerOptions {
+                Title = S["LocateExportTitle"],
+                Mode = ExplorerPickMode.SingleFile,
+                AllowAllFiles = true,
+                InitialDirectory = initDir,
+                ConfirmLabel = S["OpenPlayer"],
+                OnConfirm = paths => {
+                    if (paths != null && paths.Count > 0 && File.Exists(paths[0])) {
+                        OpenLocalPathWithFallbackAsync(paths[0], switchToTab: 0);
+                    }
+                }
+            });
+        }
+    }
+
+    void OnShareLastExportClicked() {
+        if (lastExportContentUri != null) {
+            try {
+                string mime = !string.IsNullOrEmpty(lastExportPublicDisplayPath)
+                    ? AndroidFileHelper.GetMimeType(lastExportPublicDisplayPath)
+                    : "audio/*";
+                Intent share = new(Intent.ActionSend);
+                share.SetType(mime);
+                share.PutExtra(Intent.ExtraStream, lastExportContentUri);
+                share.AddFlags(ActivityFlags.GrantReadUriPermission);
+                StartActivity(Intent.CreateChooser(share, S["ShareFile"]));
+                return;
+            } catch (Exception ex) {
+                AppLogger.Warn($"Share ContentUri fallback: {ex.Message}");
+            }
+        }
+        ShareLocalFile(lastRenderedFilePath);
+    }
+
+    void OnPlayLastExportClicked() {
+        if (!string.IsNullOrEmpty(lastRenderedFilePath) && File.Exists(lastRenderedFilePath)) {
+            OpenLocalPathWithFallbackAsync(lastRenderedFilePath, switchToTab: 0);
+            return;
+        }
+        if (lastExportContentUri != null) {
+            SwitchTab(0);
+            LoadUriAsync(lastExportContentUri);
+        }
+    }
+
     void ShareLocalFile(string path) {
         if (string.IsNullOrEmpty(path) || !File.Exists(path)) {
             return;
@@ -1629,7 +1779,7 @@ public partial class MainActivity {
         Intent share = new(Intent.ActionSend);
         share.SetType(path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".log", StringComparison.OrdinalIgnoreCase)
             ? "text/plain"
-            : "*/*");
+            : AndroidFileHelper.GetMimeType(path));
         share.PutExtra(Intent.ExtraStream, uri);
         share.AddFlags(ActivityFlags.GrantReadUriPermission);
         StartActivity(Intent.CreateChooser(share, S["ShareFile"]));

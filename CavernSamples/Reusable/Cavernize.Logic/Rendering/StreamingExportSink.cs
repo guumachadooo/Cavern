@@ -476,6 +476,8 @@ public sealed class FfmpegStdinPipeSink : IStreamingExportSink {
     readonly Queue<string> stderrRing = new(MaxStderrLines);
     readonly object stderrLock = new();
     readonly int maxChunkFrames;
+    readonly string tempMetadataPath;
+    readonly string tempCoverPath;
     int stderrCharCount;
     bool disposed;
 
@@ -507,7 +509,8 @@ public sealed class FfmpegStdinPipeSink : IStreamingExportSink {
         Action onSigpipeShield = null,
         bool isAmbisonics = false,
         int opusMappingFamily = -1,
-        int bitrateKbps = 0) {
+        int bitrateKbps = 0,
+        ExportMetadataPackage metadata = null) {
         if (string.IsNullOrWhiteSpace(ffmpegExecutablePath) || !File.Exists(ffmpegExecutablePath)) {
             throw new FileNotFoundException("FFmpeg executable is unavailable for streaming pipe export.", ffmpegExecutablePath);
         }
@@ -532,6 +535,29 @@ public sealed class FfmpegStdinPipeSink : IStreamingExportSink {
         SampleRate = sampleRate;
         maxChunkFrames = StreamingExportBufferPool.ComputeMaxFramesForChannels(channelCount, sizeof(float));
 
+        bool supportsFfMeta = codec is FfmpegPipeCodec.Opus or FfmpegPipeCodec.WavPack or FfmpegPipeCodec.AacM4a or FfmpegPipeCodec.Flac;
+        if (supportsFfMeta && metadata != null && metadata.HasAnythingToEmbed) {
+            try {
+                tempMetadataPath = ExportMetadataEmbedder.WriteFfmpegMetadataFile(
+                    metadata,
+                    includeOpusBase64Picture: codec == FfmpegPipeCodec.Opus,
+                    tempDirectory: dir);
+                if (codec == FfmpegPipeCodec.AacM4a &&
+                    metadata.HasCoverArt &&
+                    metadata.CoverArtBytes.Length <= ExportMetadataEmbedder.MaxCoverArtBytes) {
+                    string ext = string.Equals(metadata.CoverArtMimeType, "image/png", StringComparison.OrdinalIgnoreCase) ? ".png" : ".jpg";
+                    string coverDir = !string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir) ? dir : Path.GetTempPath();
+                    tempCoverPath = Path.Combine(coverDir, $".cavern_cov_{Guid.NewGuid():N}{ext}");
+                    File.WriteAllBytes(tempCoverPath, metadata.CoverArtBytes);
+                }
+            } catch {
+                TryDeleteTempFile(tempMetadataPath);
+                TryDeleteTempFile(tempCoverPath);
+                tempMetadataPath = null;
+                tempCoverPath = null;
+            }
+        }
+
         ProcessStartInfo psi = new() {
             FileName = ffmpegExecutablePath,
             UseShellExecute = false,
@@ -541,12 +567,18 @@ public sealed class FfmpegStdinPipeSink : IStreamingExportSink {
             RedirectStandardError = true
         };
         ConfigureLibraryPath(psi, ffmpegExecutablePath);
-        BuildArguments(psi.ArgumentList, outputPath, channelCount, sampleRate, codec, isAmbisonics, opusMappingFamily, bitrateKbps);
+        BuildArguments(psi.ArgumentList, outputPath, channelCount, sampleRate, codec, isAmbisonics, opusMappingFamily, bitrateKbps, tempMetadataPath, tempCoverPath);
 
-        process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start FFmpeg pipe process.");
-        stdinStream = process.StandardInput.BaseStream;
-        stdoutDrainTask = DrainStreamAsync(process.StandardOutput, captureRing: false);
-        stderrDrainTask = DrainStreamAsync(process.StandardError, captureRing: true);
+        try {
+            process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start FFmpeg pipe process.");
+            stdinStream = process.StandardInput.BaseStream;
+            stdoutDrainTask = DrainStreamAsync(process.StandardOutput, captureRing: false);
+            stderrDrainTask = DrainStreamAsync(process.StandardError, captureRing: true);
+        } catch {
+            TryDeleteTempFile(tempMetadataPath);
+            TryDeleteTempFile(tempCoverPath);
+            throw;
+        }
     }
 
     /// <inheritdoc/>
@@ -671,7 +703,9 @@ public sealed class FfmpegStdinPipeSink : IStreamingExportSink {
         FfmpegPipeCodec codec,
         bool isAmbisonics,
         int opusMappingFamily,
-        int bitrateKbps) {
+        int bitrateKbps,
+        string metadataFilePath = null,
+        string coverArtFilePath = null) {
         args.Add("-y");
         args.Add("-hide_banner");
         args.Add("-loglevel");
@@ -685,8 +719,28 @@ public sealed class FfmpegStdinPipeSink : IStreamingExportSink {
         args.Add("-i");
         args.Add("pipe:0");
 
+        bool hasMetaInput = !string.IsNullOrWhiteSpace(metadataFilePath) && File.Exists(metadataFilePath);
+        bool hasCoverInput = hasMetaInput &&
+                             codec == FfmpegPipeCodec.AacM4a &&
+                             !string.IsNullOrWhiteSpace(coverArtFilePath) &&
+                             File.Exists(coverArtFilePath);
+        if (hasMetaInput) {
+            args.Add("-f");
+            args.Add("ffmetadata");
+            args.Add("-i");
+            args.Add(metadataFilePath);
+        }
+        if (hasCoverInput) {
+            args.Add("-i");
+            args.Add(coverArtFilePath);
+        }
+
         switch (codec) {
             case FfmpegPipeCodec.WavPack:
+                if (hasMetaInput) {
+                    args.Add("-map"); args.Add("0:a");
+                    args.Add("-map_metadata"); args.Add("1");
+                }
                 args.Add("-c:a");
                 args.Add("wavpack");
                 args.Add("-compression_level");
@@ -699,6 +753,10 @@ public sealed class FfmpegStdinPipeSink : IStreamingExportSink {
                 int mapFamily = opusMappingFamily >= 0
                     ? opusMappingFamily
                     : (isAmbisonics ? 2 : (channelCount > 8 ? 255 : -1));
+                if (hasMetaInput) {
+                    args.Add("-map"); args.Add("0:a");
+                    args.Add("-map_metadata"); args.Add("1");
+                }
                 args.Add("-c:a");
                 args.Add("libopus");
                 args.Add("-b:a");
@@ -713,10 +771,21 @@ public sealed class FfmpegStdinPipeSink : IStreamingExportSink {
 
             case FfmpegPipeCodec.AacM4a: {
                 int br = bitrateKbps > 0 ? bitrateKbps : Math.Clamp(channelCount * 96, 192, 768);
+                if (hasMetaInput) {
+                    args.Add("-map"); args.Add("0:a");
+                    if (hasCoverInput) {
+                        args.Add("-map"); args.Add("2:v");
+                    }
+                    args.Add("-map_metadata"); args.Add("1");
+                }
                 args.Add("-c:a");
                 args.Add("aac");
                 args.Add("-b:a");
                 args.Add($"{br}k");
+                if (hasCoverInput) {
+                    args.Add("-c:v"); args.Add("copy");
+                    args.Add("-disposition:v:0"); args.Add("attached_pic");
+                }
                 args.Add("-movflags");
                 args.Add("+frag_keyframe+empty_moov");
                 args.Add(outputPath);
@@ -724,6 +793,10 @@ public sealed class FfmpegStdinPipeSink : IStreamingExportSink {
             }
 
             case FfmpegPipeCodec.Flac:
+                if (hasMetaInput) {
+                    args.Add("-map"); args.Add("0:a");
+                    args.Add("-map_metadata"); args.Add("1");
+                }
                 args.Add("-c:a");
                 args.Add("flac");
                 args.Add(outputPath);
@@ -851,10 +924,22 @@ public sealed class FfmpegStdinPipeSink : IStreamingExportSink {
             }
         } finally {
             process.Dispose();
+            TryDeleteTempFile(tempMetadataPath);
+            TryDeleteTempFile(tempCoverPath);
         }
 
         if (finalizeError != null) {
             throw finalizeError;
+        }
+    }
+
+    static void TryDeleteTempFile(string path) {
+        try {
+            if (!string.IsNullOrEmpty(path) && File.Exists(path)) {
+                File.Delete(path);
+            }
+        } catch {
+            // Best-effort cleanup
         }
     }
 }
