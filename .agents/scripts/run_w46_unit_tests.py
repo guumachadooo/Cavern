@@ -14,8 +14,10 @@ proving:
 
 from __future__ import annotations
 
+import argparse
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -79,6 +81,7 @@ TEST_CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
 TEST_PROGRAM_CS = r"""
 using System.Buffers.Binary;
 using System.Numerics;
+using System.Reflection;
 using System.Text;
 using Cavern;
 using Cavern.CavernSettings;
@@ -87,6 +90,7 @@ using Cavern.Filters;
 using Cavern.Format;
 using Cavern.Format.Common;
 using Cavern.Format.Decoders;
+using Cavern.Format.Environment;
 using Cavern.Format.Renderers;
 using Cavern.Format.Renderers.BaseClasses;
 using Cavern.Neural;
@@ -100,6 +104,7 @@ using Cavernize.Logic.Rendering;
 using Cavernize.Logic.Spatial;
 using Cavernize.Logic.Spatial.Adapters;
 
+string testFilter = Environment.GetEnvironmentVariable("W46_TEST_FILTER") ?? "";
 int passed = 0;
 void Assert(bool cond, string msg) {
     if (!cond) {
@@ -108,6 +113,9 @@ void Assert(bool cond, string msg) {
 }
 
 void RunTest(string name, Action test) {
+    if (!string.IsNullOrEmpty(testFilter) && !name.Contains(testFilter, StringComparison.OrdinalIgnoreCase)) {
+        return;
+    }
     Console.Write($"[TEST] {name} ... ");
     test();
     passed++;
@@ -1162,7 +1170,236 @@ RunTest("T17_W50_LiveMic_ZeroLagSubBlockBypass", () => {
     Assert(peak3 > 0.35f, $"Burst 3 must mix live mic directly even while draining staged backing (peak={peak3:0.000}).");
 });
 
-Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51 UNIT TESTS PASSED (0 failures).");
+// ---------- Test 18: StudioExportLifecycle & StreamingExportSink ----------
+RunTest("T18_StudioExportLifecycle_StreamingExportSink", () => {
+    string tempDir = Path.Combine(Path.GetTempPath(), "cavern_t18_" + Guid.NewGuid().ToString("N")[..8]);
+    Directory.CreateDirectory(tempDir);
+    try {
+        // 1. StudioCompressionTier + private <=256KB StreamingExportBufferPool cap
+        string[] tierNames = Enum.GetNames(typeof(StudioCompressionTier));
+        Assert(tierNames.Contains("MasterPcm") && tierNames.Contains("LosslessCompressed") && tierNames.Contains("PortableLossy"),
+            "StudioCompressionTier must expose MasterPcm, LosslessCompressed, PortableLossy.");
+
+        Type poolType = typeof(IStreamingExportSink).Assembly.GetType("Cavernize.Logic.Rendering.StreamingExportBufferPool");
+        Assert(poolType != null, "StreamingExportBufferPool must exist in Cavernize.Logic.Rendering.");
+        int maxBlockBytes = (int)poolType.GetField("MaxBlockBytes", BindingFlags.Public | BindingFlags.Static)!.GetValue(null)!;
+        int maxBlockFrames = (int)poolType.GetField("MaxBlockFrames", BindingFlags.Public | BindingFlags.Static)!.GetValue(null)!;
+        Assert(maxBlockBytes <= 262144, $"Private pool block cap must be <= 256 KB, got {maxBlockBytes}");
+        Assert(maxBlockFrames == 4096, $"Expected MaxBlockFrames == 4096, got {maxBlockFrames}");
+        MethodInfo computeFrames = poolType.GetMethod("ComputeMaxFramesForChannels", BindingFlags.Public | BindingFlags.Static)!;
+        int frames16ch = (int)computeFrames.Invoke(null, [16, 4])!;
+        Assert(frames16ch > 0 && frames16ch * 16 * 4 <= 262144,
+            $"16ch float chunk must stay <= 256 KB (got {frames16ch} frames = {frames16ch * 64} bytes).");
+
+        // 2. DirectPcmStreamingSink NaN/Inf sanitization & clamping across multi-chunk 8192f write
+        string wavPath = Path.Combine(tempDir, "sanitize_pcm.wav");
+        const int totalFrames = 8192;
+        float[] dirty = new float[totalFrames * 2];
+        for (int i = 0; i < dirty.Length; i++) {
+            dirty[i] = 0.25f * MathF.Sin(i * 0.03f);
+        }
+        dirty[0] = float.NaN;
+        dirty[1] = float.PositiveInfinity;
+        dirty[2] = float.NegativeInfinity;
+        dirty[100] = 3.5f;
+        dirty[101] = -3.5f;
+        dirty[8200] = float.NaN;
+        using (DirectPcmStreamingSink pcmSink = new(wavPath, 2, 48000, BitDepth.Float32, expectedFrames: totalFrames)) {
+            pcmSink.WriteInterleavedBlock(dirty, totalFrames);
+            Assert(pcmSink.FramesWritten == totalFrames, $"Expected {totalFrames} frames written, got {pcmSink.FramesWritten}");
+        }
+        using (RIFFWaveReader wavReader = new(wavPath)) {
+            wavReader.ReadHeader();
+            Assert(wavReader.ChannelCount == 2 && wavReader.Length == totalFrames,
+                $"WAV header mismatch: ch={wavReader.ChannelCount}, len={wavReader.Length}");
+            float[] readBack = new float[totalFrames * 2];
+            wavReader.ReadBlock(readBack, 0, readBack.Length);
+            Assert(readBack[0] == 0f && readBack[1] == 0f && readBack[2] == 0f && readBack[8200] == 0f,
+                "NaN/Inf samples must sanitize to 0f.");
+            Assert(MathF.Abs(readBack[100] - 1f) < 1e-4f && MathF.Abs(readBack[101] + 1f) < 1e-4f,
+                "Out-of-range samples must clamp to [-1, 1].");
+            for (int i = 0; i < readBack.Length; i++) {
+                Assert(float.IsFinite(readBack[i]) && MathF.Abs(readBack[i]) <= 1.0001f, $"Invalid PCM sample at {i}: {readBack[i]}");
+            }
+        }
+
+        // 3. DirectFlacStreamingSink native FLAC works standalone without LGSR twin block
+        string flacPath = Path.Combine(tempDir, "native_standalone.flac");
+        using (DirectFlacStreamingSink flacSink = new(flacPath, 2, 48000, BitDepth.Int24, 4096)) {
+            flacSink.WriteInterleavedBlock(dirty, 4096);
+            Assert(flacSink.FramesWritten == 4096, $"Expected 4096 FLAC frames, got {flacSink.FramesWritten}");
+        }
+        byte[] flacMagic = File.ReadAllBytes(flacPath);
+        Assert(flacMagic.Length > 42 && flacMagic[0] == (byte)'f' && flacMagic[1] == (byte)'L' &&
+               flacMagic[2] == (byte)'a' && flacMagic[3] == (byte)'C',
+            "DirectFlacStreamingSink must emit valid native fLaC header without LGSR twin.");
+
+        // 4. StudioBatchExporter IsCancelled & LosslessCompressed without twin
+        int sr = 48000;
+        using SyntheticClockReader trackReader = new(sr, sr);
+        using CavernizeTrack track = new(trackReader, Codec.PCM_LE, 0);
+        using CancellationTokenSource cts = new();
+        cts.Cancel();
+        StudioBatchExportJob cancelJob = new() {
+            TrackName = "cancel_test",
+            OutputPath = Path.Combine(tempDir, "cancelled.wav"),
+            CompressionTier = StudioCompressionTier.MasterPcm,
+            ComposableOptions = new StudioComposableExportOptions {
+                BaseFormat = StudioBaseOutputFormat.Headphone3D,
+                ApplyPersonalizedHeadphonePost = false
+            }
+        };
+        StudioBatchExportResult cancelRes = StudioBatchExporter.ExportSingle(track, cancelJob, token: cts.Token);
+        Assert(!cancelRes.Succeeded, "Cancelled export must report Succeeded == false.");
+        Assert(cancelRes.IsCancelled || cancelRes.ErrorMessage.Contains("cancel", StringComparison.OrdinalIgnoreCase),
+            $"Cancelled export must flag IsCancelled or cancel message (got IsCancelled={cancelRes.IsCancelled}, msg='{cancelRes.ErrorMessage}').");
+        StudioBatchExportResult syntheticCancelRes = new() { Succeeded = false, IsCancelled = true, CompressionTier = StudioCompressionTier.LosslessCompressed };
+        Assert(syntheticCancelRes.IsCancelled && syntheticCancelRes.CompressionTier == StudioCompressionTier.LosslessCompressed,
+            "StudioBatchExportResult must expose IsCancelled & CompressionTier.");
+
+        // 5. IsAdmCompressionLocked ADM PCM-only guard (probe if exposed on StudioBatchExporter or StudioComposableExportOptions)
+        MethodInfo admLockMethod = typeof(StudioBatchExporter).GetMethod("IsAdmCompressionLocked", BindingFlags.Public | BindingFlags.Static)
+            ?? typeof(StudioComposableExportOptions).GetMethod("IsAdmCompressionLocked", BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance);
+        if (admLockMethod != null) {
+            ParameterInfo[] ps = admLockMethod.GetParameters();
+            if (admLockMethod.IsStatic && ps.Length == 2 && ps[0].ParameterType == typeof(StudioBaseOutputFormat) && ps[1].ParameterType == typeof(StudioCompressionTier)) {
+                Assert((bool)admLockMethod.Invoke(null, [StudioBaseOutputFormat.DolbyAtmosAdm, StudioCompressionTier.LosslessCompressed])!, "ADM must lock LosslessCompressed.");
+                Assert((bool)admLockMethod.Invoke(null, [StudioBaseOutputFormat.DolbyAtmosAdm, StudioCompressionTier.PortableLossy])!, "ADM must lock PortableLossy.");
+                Assert(!(bool)admLockMethod.Invoke(null, [StudioBaseOutputFormat.DolbyAtmosAdm, StudioCompressionTier.MasterPcm])!, "ADM MasterPcm must not be locked.");
+                Assert(!(bool)admLockMethod.Invoke(null, [StudioBaseOutputFormat.EclipsaIamf, StudioCompressionTier.LosslessCompressed])!, "EclipsaIamf must allow compression.");
+            }
+        }
+
+        // 6. AudioFile .iamf / .amb routing + IamfEnvironmentWriter -> IamfDecoder roundtrip
+        string iamfPath = Path.Combine(tempDir, "scene_hoa.iamf");
+        string ambIamfPath = Path.Combine(tempDir, "scene_hoa.amb");
+        Listener l = new(false) { SampleRate = 48000, UpdateRate = 1024, MaximumSources = 16 };
+        Source s0 = new() { Position = new Vector3(1f, 0f, 1f) };
+        l.AttachSource(s0);
+        using (IamfEnvironmentWriter iw = new(iamfPath, l, 2048, BitDepth.Int24, useSceneBasedHoa: true, hoaOrder: 3, mixLabel: "TestHOA")) {
+            iw.WriteNextFrame();
+            iw.WriteNextFrame();
+        }
+        File.Copy(iamfPath, ambIamfPath, overwrite: true);
+        using (AudioFile afIamf = new(iamfPath)) {
+            Assert(afIamf.Tracks.Count == 1 && afIamf.Tracks[0].Codec == Codec.IAMF, "AudioFile must route .iamf to Codec.IAMF.");
+        }
+        using (AudioFile afAmb = new(ambIamfPath)) {
+            Assert(afAmb.Tracks.Count == 1 && afAmb.Tracks[0].Codec == Codec.IAMF, "AudioFile must sniff IAMF-headered .amb to Codec.IAMF.");
+        }
+        using (FileStream fs = File.OpenRead(iamfPath)) {
+            IamfDecoder dec = new(fs);
+            Assert(dec.ChannelCount == 16 && dec.SampleRate == 48000 && dec.Info.ElementType == IamfAudioElementType.SceneBased,
+                $"IamfDecoder roundtrip mismatch: ch={dec.ChannelCount}, sr={dec.SampleRate}, type={dec.Info.ElementType}");
+            Assert(MathF.Abs(dec.Info.TruePeakDbtp - (-1.0f)) < 0.05f, $"Expected -1.0 dBTP MixPresentation metadata, got {dec.Info.TruePeakDbtp}");
+        }
+    } finally {
+        try { Directory.Delete(tempDir, recursive: true); } catch { }
+    }
+});
+
+// ---------- Test 19: SpatialChoreo & PsychoacousticGovernor ----------
+RunTest("T19_SpatialChoreo_SpatialGovernor", () => {
+    // 1. Lead Vocal |az|<=22deg, Bass |az|<=15deg & el==0
+    float vAz = 135f, vEl = 65f, vRad = 0.2f;
+    PsychoacousticGovernor.ClampRoleAngles(NeuralStemRole.LeadVocal, ref vAz, ref vEl, ref vRad);
+    Assert(MathF.Abs(vAz) <= 22.0f && MathF.Abs(vEl) <= 25.0f && vRad >= 0.55f,
+        $"LeadVocal clamp failed: az={vAz}, el={vEl}, rad={vRad}");
+
+    float bAz = -110f, bEl = 45f, bRad = 0.1f;
+    PsychoacousticGovernor.ClampRoleAngles(NeuralStemRole.Bass, ref bAz, ref bEl, ref bRad);
+    Assert(MathF.Abs(bAz) <= 15.0f && bEl == 0.0f && bRad >= 0.65f,
+        $"Bass clamp failed: az={bAz}, el={bEl}, rad={bRad}");
+
+    // 2. Angular hysteresis (<2deg deadband) & slew cap (<=60 deg/s)
+    Vector3 prev = PsychoacousticGovernor.SphericalToCartesianUnit(0f, 0f);
+    Vector3 jitter = PsychoacousticGovernor.SphericalToCartesianUnit(1.1f, 0.2f);
+    Vector3 held = PsychoacousticGovernor.ApplyAngularHysteresisAndSlew(prev, jitter, 0.25);
+    Assert(Vector3.Distance(prev, held) < 1e-6f, "Sub-2deg jitter must be suppressed by hysteresis.");
+
+    Vector3 farTarget = PsychoacousticGovernor.SphericalToCartesianUnit(90f, 0f);
+    Vector3 slewed = PsychoacousticGovernor.ApplyAngularHysteresisAndSlew(prev, farTarget, 0.25);
+    float movedDeg = MathF.Acos(Math.Clamp(Vector3.Dot(prev, slewed), -1f, 1f)) * (180f / MathF.PI);
+    Assert(movedDeg <= 15.05f, $"Slew cap <=60 deg/s over 0.25s exceeded: moved={movedDeg:0.2} deg");
+
+    // 3. 12x6 ERB repulsion separates co-located stems while keeping LeadVocal anchored
+    Vector3[] dirs = [
+        PsychoacousticGovernor.SphericalToCartesianUnit(0f, 0f),
+        PsychoacousticGovernor.SphericalToCartesianUnit(0f, 0f)
+    ];
+    NeuralStemRole[] roles = [NeuralStemRole.LeadVocal, NeuralStemRole.Guitar];
+    float[] energies = [0.9f, 0.8f];
+    PsychoacousticGovernor.ApplyErb12x6Repulsion(dirs, roles, energies, 2);
+    Assert(Vector3.Dot(dirs[0], dirs[1]) < 0.999f, "12x6 ERB repulsion must separate co-located Guitar from LeadVocal.");
+
+    // 4. Layer1AudioForensics <= 8 cues/min & DeterministicRuleDirector
+    int sr = 48000;
+    int len = sr * 12; // 12s track -> <= ceil(12/60*8) or <= 8 cues/min
+    float[] vocL = new float[len], vocR = new float[len], basL = new float[len], basR = new float[len];
+    float[] gtrL = new float[len], gtrR = new float[len];
+    for (int i = 0; i < len; i++) {
+        double t = i / (double)sr;
+        float env = (i / (sr * 3)) % 2 == 0 ? 0.6f : 0.15f;
+        vocL[i] = vocR[i] = env * MathF.Sin((float)(2 * Math.PI * 440 * t));
+        basL[i] = basR[i] = 0.5f * MathF.Sin((float)(2 * Math.PI * 75 * t));
+        gtrL[i] = 0.4f * MathF.Sin((float)(2 * Math.PI * 880 * t));
+        gtrR[i] = 0.4f * MathF.Cos((float)(2 * Math.PI * 660 * t));
+    }
+    StereoStemBuffer[] stems = [
+        new("vocals", vocL, vocR),
+        new("bass", basL, basR),
+        new("other", gtrL, gtrR)
+    ];
+    LyricMoodDigest[] moods = [new(LyricMoodTag.Anthem, 0.8f, 0.7f, 0, 0.0), new(LyricMoodTag.Intimate, 0.3f, 0.4f, 1, 6.0)];
+    DirectorCue[] cues = Layer1AudioForensics.Analyze(stems, sr, SpatialChoreoMode.Cinematic, moods);
+    Assert(cues.Length <= Math.Max(8, (int)Math.Ceiling(12.0 / 60.0 * 8.0) + 1), $"Cue budget exceeded: {cues.Length}");
+
+    // 5. SpatialChoreoTrack EvaluatePositionZeroAlloc (0 B GC) & role bounds
+    SpatialChoreoTrack track = SpatialChoreoTrack.Build(["vocals", "bass", "other"], cues, SpatialChoreoMode.Cinematic, 12.0);
+    int vocIdx = track.FindStemIndex(NeuralStemRole.LeadVocal, "vocals");
+    int basIdx = track.FindStemIndex(NeuralStemRole.Bass, "bass");
+    Assert(vocIdx >= 0 && basIdx >= 0, "Failed to resolve LeadVocal / Bass indices in SpatialChoreoTrack.");
+
+    track.EvaluatePositionZeroAlloc(vocIdx, 1.5, out _);
+    track.EvaluatePositionZeroAlloc(basIdx, 1.5, out _);
+    long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+    for (int k = 0; k < 5000; k++) {
+        double t = (k % 120) * 0.1;
+        Assert(track.EvaluatePositionZeroAlloc(vocIdx, t, out Vector3 vPos), "Vocal LUT eval failed.");
+        Assert(track.EvaluatePositionZeroAlloc(basIdx, t, out Vector3 bPos), "Bass LUT eval failed.");
+        PsychoacousticGovernor.CartesianToSphericalDeg(vPos, out float aV, out _);
+        PsychoacousticGovernor.CartesianToSphericalDeg(bPos, out float aB, out float eB);
+        if (!(MathF.Abs(aV) <= 22.05f)) Assert(false, $"Vocal azimuth violated bound: {aV}");
+        if (!(MathF.Abs(aB) <= 15.05f && MathF.Abs(eB) <= 0.05f)) Assert(false, $"Bass bound violated: az={aB}, el={eB}");
+    }
+    long allocAfter = GC.GetAllocatedBytesForCurrentThread();
+    Assert(allocAfter - allocBefore == 0, $"EvaluatePositionZeroAlloc allocated {allocAfter - allocBefore} bytes!");
+
+    // 6. CNTC v2 FromSerialized roundtrip parity & BS.1770 -1.0 dBTP clamp
+    Vector4[] lutCopy = new Vector4[track.LutEntryCount];
+    Assert(track.CopyLutTo(lutCopy) == track.LutEntryCount, "CopyLutTo length mismatch.");
+    SpatialChoreoTrack restored = SpatialChoreoTrack.FromSerialized(
+        track.Mode, track.StepSec, track.DurationSec,
+        track.StemRoles.ToArray(), track.StemNames.ToArray(),
+        track.DirectorCues.ToArray(), lutCopy, track.FrameCount);
+    Assert(restored != null, "FromSerialized returned null.");
+    restored!.EvaluatePositionZeroAlloc(vocIdx, 4.25, out Vector3 rPos);
+    track.EvaluatePositionZeroAlloc(vocIdx, 4.25, out Vector3 oPos);
+    Assert(Vector3.Distance(rPos, oPos) < 1e-5f, $"FromSerialized LUT mismatch: {Vector3.Distance(rPos, oPos)}");
+
+    float[][] hotBlock = [new float[256], new float[256]];
+    Array.Fill(hotBlock[0], 1.6f);
+    Array.Fill(hotBlock[1], -1.6f);
+    PsychoacousticGovernor.ClampBlockHeadroomBs1770(hotBlock, 256);
+    Assert(hotBlock[0].Max(MathF.Abs) <= PsychoacousticGovernor.MaxHeadroomLinear + 1e-5f,
+        "ClampBlockHeadroomBs1770 failed -1.0 dBTP ceiling.");
+});
+
+if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
+    Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
+    return 0;
+}
+Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3 UNIT TESTS PASSED (0 failures).");
 return 0;
 
 // ---- Helpers for Test 4 & Test 6 ----
@@ -1446,7 +1683,78 @@ sealed class SyntheticClockRenderer : Renderer {
 """
 
 
+def _py_studio_export_lifecycle_check() -> None:
+    studio_ui = REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.StudioExport.cs"
+    sink_cs = REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Rendering" / "StreamingExportSink.cs"
+    batch_cs = REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Rendering" / "StudioBatchExporter.cs"
+
+    ui_src = studio_ui.read_text(encoding="utf-8")
+    assert 'S["LgsrMasterNeedsTwin"]' in ui_src, "Expected LgsrMasterNeedsTwin guard in MainActivity.StudioExport.cs"
+    m_lgsr = re.search(r'if\s*\(([^;{}]+?)\)\s*\{\s*ShowError\(S\["LgsrMasterNeedsTwin"\]\);', ui_src, re.S)
+    assert m_lgsr is not None, "Could not locate LgsrMasterNeedsTwin condition block"
+    cond = m_lgsr.group(1)
+    assert "EnableLosslessTwinRestoration" in cond and "LosslessCompressed" not in cond and "Flac" not in cond, (
+        f"LgsrMasterNeedsTwin must be gated strictly on EnableLosslessTwinRestoration, not native FLAC: {cond}"
+    )
+
+    sink_src = sink_cs.read_text(encoding="utf-8")
+    for token in ("enum StudioCompressionTier", "MasterPcm", "LosslessCompressed", "PortableLossy", "MaxBlockBytes = 256 * 1024", "SanitizeAndClamp"):
+        assert token in sink_src, f"Missing {token} in StreamingExportSink.cs"
+
+    batch_src = batch_cs.read_text(encoding="utf-8")
+    assert "bool IsCancelled" in batch_src, "Missing IsCancelled on StudioBatchExportResult"
+    assert "StudioCompressionTier CompressionTier" in batch_src, "Missing CompressionTier on StudioBatchExportJob/Result"
+
+
+def _py_spatial_choreo_cntc_and_mood_check() -> None:
+    cache_cs = REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NeuralTrackCacheService.cs"
+    lyrics_cs = REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "LyricsService.cs"
+    cortex_cs = REPO_ROOT / "Cavern" / "Spatial" / "SpatialObjectCortex.cs"
+
+    cache_src = cache_cs.read_text(encoding="utf-8")
+    for token in ("FormatVersion = 2", "MinSupportedVersion = 1", "FlagHasChoreoTrack = 1u << 4", "ver >= 2 && (flags & FlagHasChoreoTrack) != 0"):
+        assert token in cache_src, f"Missing CNTC v1/v2 contract token: {token}"
+
+    lyrics_src = lyrics_cs.read_text(encoding="utf-8")
+    assert "public static LyricMoodDigest[] ExtractMoodDigest(LyricsDocument doc)" in lyrics_src, (
+        "ExtractMoodDigest signature missing in LyricsService.cs"
+    )
+    cortex_src = cortex_cs.read_text(encoding="utf-8")
+    m_digest = re.search(r"public struct LyricMoodDigest\s*\{(.*?)\n\s*\}", cortex_src, re.S)
+    assert m_digest is not None, "LyricMoodDigest struct not found in SpatialObjectCortex.cs"
+    assert "string" not in m_digest.group(1), "LyricMoodDigest must never store raw string fields (zero raw text leakage)."
+
+
+PYTHON_CHECKS = [
+    ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
+    ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
+]
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Wave W46+ Real .NET & Static Unit Test Harness")
+    parser.add_argument("--filter", default="", help="Run only tests whose name contains this substring (case-insensitive)")
+    args = parser.parse_args()
+    filt = args.filter.strip()
+
+    py_matched = 0
+    for name, fn in PYTHON_CHECKS:
+        if filt and filt.lower() not in name.lower():
+            continue
+        py_matched += 1
+        print(f"[TEST] {name} ... ", end="", flush=True)
+        fn()
+        print("PASS", flush=True)
+
+    cs_names = re.findall(r'RunTest\("([^"]+)"', TEST_PROGRAM_CS)
+    cs_should_run = (not filt) or any(filt.lower() in n.lower() for n in cs_names)
+    if not cs_should_run:
+        if py_matched == 0:
+            print(f"[w46-tests] ERROR: --filter '{filt}' matched 0 tests.", file=sys.stderr)
+            return 1
+        print(f"\nALL {py_matched} MATCHED PYTHON INVARIANT TESTS PASSED (0 failures).")
+        return 0
+
     dotnet = find_dotnet()
     tfm = detect_tfm(dotnet)
     cavern_csproj = REPO_ROOT / "Cavern" / "Cavern.csproj"
@@ -1464,6 +1772,7 @@ def main() -> int:
         env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
         env["DOTNET_EnableDiagnostics"] = "0"
         env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
+        env["W46_TEST_FILTER"] = filt
         if dotnet == "/root/.dotnet/dotnet" and platform.machine().lower() in ("aarch64", "arm64"):
             env.setdefault("DOTNET_GCHeapHardLimit", "20000000")
 

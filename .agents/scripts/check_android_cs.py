@@ -495,7 +495,7 @@ def _write_shadow_project(
             "    <EnableNETAnalyzers>true</EnableNETAnalyzers>",
             "    <AnalysisLevel>latest</AnalysisLevel>",
             "    <GenerateDocumentationFile>true</GenerateDocumentationFile>",
-            f"    <DocumentationFile>{saxutils.escape(str(shadow_dir / 'bin' / 'CavernizeAndroid.TypeCheck.xml'))}</DocumentationFile>",
+            f"    <DocumentationFile>{saxutils.escape(str(shadow_dir / 'bin' / f'{root_namespace}.TypeCheck.xml'))}</DocumentationFile>",
         ])
     else:
         extra_props.extend([
@@ -761,19 +761,24 @@ def main() -> int:
         layer_results.append(("05_Packaging_L10n", st5, e5, w5))
 
         # Layer 06: Optional standalone OmniAgentAndroid companion Roslyn + Analyzer verification
-        omni_csproj_path = repo / "CavernSamples" / "OmniAgentAndroid" / "OmniAgentAndroid.csproj"
-        if omni_csproj_path.is_file():
+        omni_candidates = [
+            (repo / "CavernSamples" / "OmniAgentAndroid" / "OmniAgentAndroid.csproj", repo, "CavernSamples/OmniAgentAndroid"),
+            (repo.parent / "OmniAgent" / "OmniAgentAndroid" / "OmniAgentAndroid.csproj", repo.parent / "OmniAgent", "OmniAgentAndroid"),
+        ]
+        omni_match = next(((p, r, s) for (p, r, s) in omni_candidates if p.is_file()), None)
+        if omni_match is not None:
+            _, omni_repo_root, omni_subdir = omni_match
             omni_shadow_dir = Path("/tmp/omniagent-android-typecheck")
             omni_shadow_csproj, omni_cs_count = _write_shadow_project(
-                repo, omni_shadow_dir, sdk_major, target_major, android_api, min_sdk, csproj_nowarns,
+                omni_repo_root, omni_shadow_dir, sdk_major, target_major, android_api, min_sdk, csproj_nowarns,
                 android_refs, extra_netcore_refs, analyzers, roslyn_props,
-                android_subdir="CavernSamples/OmniAgentAndroid",
+                android_subdir=omni_subdir,
                 root_namespace="OmniAgentAndroid",
                 include_cavern_refs=False,
             )
             print(f"Checking {omni_cs_count} OmniAgentAndroid C# files ({mode_tag})...", flush=True)
             rc_o, out_o = _run_layer_build(dotnet_bin, omni_shadow_csproj, omni_shadow_dir, env)
-            eo, wo = _extract_diags(out_o, repo)
+            eo, wo = _extract_diags(out_o, omni_repo_root)
             if rc_o != 0 and not eo:
                 eo.append(f"06_OmniAgentAndroid exited with code {rc_o}: {out_o[-400:]}")
             layer_results.append(("06_OmniAgentAndroid", "PASS" if rc_o == 0 else "FAIL", eo, wo))

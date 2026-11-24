@@ -5,6 +5,13 @@
 #include <mutex>
 #include <thread>
 
+#if defined(__ANDROID__)
+#include <jni.h>
+#endif
+#if !defined(_WIN32)
+#include <signal.h>
+#endif
+
 namespace cavernize {
 int32_t path_a_start(int32_t sr, int32_t buf_frames, int32_t enable_in, int32_t out_dev, int32_t in_dev);
 void path_a_stop();
@@ -57,6 +64,26 @@ static void stop_locked_jni() {
 } /* namespace */
 
 extern "C" {
+
+int32_t cav_install_sigpipe_shield(void) {
+#if !defined(_WIN32) && defined(SIGPIPE)
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = SIG_IGN;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    return sigaction(SIGPIPE, &sa, nullptr) == 0 ? 0 : -1;
+#else
+    return 0;
+#endif
+}
+
+#if defined(__ANDROID__)
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* /*vm*/, void* /*reserved*/) {
+    cav_install_sigpipe_shield();
+    return JNI_VERSION_1_6;
+}
+#endif
 
 int32_t cavernize_pa_get_version(void) {
     return 100; /* W10 v1.0 */
@@ -112,6 +139,7 @@ void cavernize_pa_notify_usb_detached(void) {
 }
 
 int32_t cavernize_pa_write_playback(const float* stereo_interleaved, int32_t frame_count) {
+    if (!stereo_interleaved || frame_count <= 0) return 0;
     IoInflightGuard guard(g_io_inflight);
     int32_t cur = g_active_backend.load(std::memory_order_acquire);
     if (cur == CAV_PA_BACKEND_PATH_B_LIBUSB) {
@@ -120,7 +148,7 @@ int32_t cavernize_pa_write_playback(const float* stereo_interleaved, int32_t fra
     if (cur == CAV_PA_BACKEND_PATH_A_AAUDIO) {
         return cavernize::path_a_write_playback(stereo_interleaved, frame_count);
     }
-    return 0;
+    return -1;
 }
 
 int32_t cavernize_pa_read_capture(float* stereo_interleaved, int32_t max_frames) {

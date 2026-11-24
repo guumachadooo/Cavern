@@ -630,6 +630,16 @@ public sealed class AppSettingsStore {
         set => Edit().PutInt("studioBaseFormatIndex", Math.Clamp(value, 0, 4)).Apply();
     }
 
+    public int StudioCompressionTierIndex {
+        get => Math.Clamp(prefs.GetInt("studioCompressionTierIndex", (int)Cavernize.Logic.Rendering.StudioCompressionTier.MasterPcm), 0, 2);
+        set => Edit().PutInt("studioCompressionTierIndex", Math.Clamp(value, 0, 2)).Apply();
+    }
+
+    public int SpatialChoreoModeIndex {
+        get => Math.Clamp(prefs.GetInt("spatialChoreoModeIndex", (int)Cavern.Spatial.SpatialChoreoMode.Off), 0, 4);
+        set => Edit().PutInt("spatialChoreoModeIndex", Math.Clamp(value, 0, 4)).Apply();
+    }
+
     public bool StudioOptAiUpmix {
         get => prefs.GetBoolean("studioOptAiUpmix", false);
         set => Edit().PutBoolean("studioOptAiUpmix", value).Apply();

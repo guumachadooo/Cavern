@@ -51,6 +51,11 @@ public partial class MainActivity {
     }
 
     OneUiInlineSelector rolloffSelector;
+    OneUiInlineSelector spatialChoreoSelector;
+    int choreoBuildGeneration;
+    NeuralSeparatedTrack lastChoreoBuiltStemTrack;
+    SpatialChoreoMode lastChoreoBuiltMode = SpatialChoreoMode.Off;
+    string lastChoreoBuiltLyricsSig = string.Empty;
     LinearLayout mixerContainer;
     readonly List<MixerRowRef> mixerRowRefs = [];
     readonly Dictionary<int, long> ceilingActiveSinceMs = [];
@@ -280,6 +285,31 @@ public partial class MainActivity {
         roomCtrlRow.AddView(fineTuneToggleBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.25f) { RightMargin = Dp(8) });
         roomCtrlRow.AddView(resetRoomBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         roomCard.AddView(roomCtrlRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+        SpatialChoreoMode initialChoreoMode = (SpatialChoreoMode)Math.Clamp(store.SpatialChoreoModeIndex, 0, 4);
+        if (playerEngine?.SceneHub != null) {
+            playerEngine.SceneHub.ActiveChoreoMode = initialChoreoMode;
+        }
+        Cavern.Neural.NeuralStemSpatializer.ActiveChoreoMode = initialChoreoMode;
+
+        spatialChoreoSelector = new OneUiInlineSelector(this, S["SpatialChoreoLabel"]);
+        spatialChoreoSelector.SetItems(new[] {
+            S["SpatialChoreoOff"],
+            S["SpatialChoreoSubtle"],
+            S["SpatialChoreoMusical"],
+            S["SpatialChoreoCinematic"],
+            S["SpatialChoreoOrbit"]
+        }, (int)initialChoreoMode);
+        spatialChoreoSelector.SelectionChanged += idx => {
+            OnSpatialChoreoModeSelected((SpatialChoreoMode)Math.Clamp(idx, 0, 4));
+        };
+        LinearLayout choreoWrap = WrapControlWithHelp(
+            spatialChoreoSelector,
+            S["SpatialChoreoLabel"].TrimEnd(':'),
+            S["TipSpatialChoreo"],
+            bottomMarginDp: 2);
+        choreoWrap.SetPadding(0, Dp(8), 0, 0);
+        roomCard.AddView(choreoWrap);
 
         fineTuneContainer = new LinearLayout(this) {
             Orientation = Orientation.Vertical,
@@ -1145,6 +1175,138 @@ public partial class MainActivity {
         }
         RefreshSignalChainBarUi();
         RefreshBottomActionBarVisuals();
+        SyncSpatialChoreoTrackIfNeeded();
+    }
+
+    void OnSpatialChoreoModeSelected(SpatialChoreoMode mode) {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        store.SpatialChoreoModeIndex = (int)mode;
+        if (playerEngine?.SceneHub != null) {
+            playerEngine.SceneHub.ActiveChoreoMode = mode;
+        }
+        Cavern.Neural.NeuralStemSpatializer.ActiveChoreoMode = mode;
+
+        if (mode == SpatialChoreoMode.Off) {
+            choreoBuildGeneration++;
+            lastChoreoBuiltStemTrack = null;
+            lastChoreoBuiltMode = SpatialChoreoMode.Off;
+            lastChoreoBuiltLyricsSig = string.Empty;
+            Cavern.Neural.NeuralStemSpatializer.SetChoreoTrack(null);
+            playerEngine?.SceneHub?.SetChoreoTrack(null);
+            IReadOnlyList<TrackSourceItem> items = trackSourceItems;
+            for (int i = 0; i < items.Count; i++) {
+                TrackSourceItem item = items[i];
+                if (!item.HasCustomPosition &&
+                    (item.Layer == SourceLayer.NeuralStem || item.Layer == SourceLayer.RestoredResidual)) {
+                    item.ResetPosition();
+                }
+            }
+            UpdateRoomCanvas();
+            return;
+        }
+
+        SyncSpatialChoreoTrackIfNeeded(forceRebuild: true);
+        UpdateRoomCanvas();
+    }
+
+    void SyncSpatialChoreoTrackIfNeeded(bool forceRebuild = false) {
+        if (uiDestroyed || store == null || playerEngine == null) {
+            return;
+        }
+        SpatialChoreoMode mode = (SpatialChoreoMode)Math.Clamp(store.SpatialChoreoModeIndex, 0, 4);
+        if (playerEngine.SceneHub != null) {
+            playerEngine.SceneHub.ActiveChoreoMode = mode;
+        }
+        Cavern.Neural.NeuralStemSpatializer.ActiveChoreoMode = mode;
+        if (spatialChoreoSelector != null && spatialChoreoSelector.SelectedIndex != (int)mode) {
+            spatialChoreoSelector.SetSelection((int)mode, notify: false);
+        }
+
+        if (mode == SpatialChoreoMode.Off) {
+            if (lastChoreoBuiltMode != SpatialChoreoMode.Off || playerEngine.SceneHub?.ActiveChoreoTrack != null) {
+                lastChoreoBuiltStemTrack = null;
+                lastChoreoBuiltMode = SpatialChoreoMode.Off;
+                lastChoreoBuiltLyricsSig = string.Empty;
+                Cavern.Neural.NeuralStemSpatializer.SetChoreoTrack(null);
+                playerEngine.SceneHub?.SetChoreoTrack(null);
+            }
+            return;
+        }
+
+        NeuralSeparatedTrack sep = playerEngine.NeuralStage?.ActiveSpatialUpmixTrack;
+        if (sep == null || sep.Stems == null || sep.Stems.Count == 0 || sep.IsProgressiveStreaming) {
+            if (lastChoreoBuiltStemTrack != null || playerEngine.SceneHub?.ActiveChoreoTrack != null) {
+                lastChoreoBuiltStemTrack = null;
+                lastChoreoBuiltLyricsSig = string.Empty;
+                Cavern.Neural.NeuralStemSpatializer.SetChoreoTrack(null);
+                playerEngine.SceneHub?.SetChoreoTrack(null);
+            }
+            return;
+        }
+
+        Services.LyricsDocument lyricsDoc = currentMediaMeta?.Lyrics;
+        string lyricsSig = lyricsDoc != null && lyricsDoc.HasLyrics
+            ? $"{lyricsDoc.SourceLabel}:{lyricsDoc.Lines?.Count ?? 0}:{lyricsDoc.RawUnsyncedText?.Length ?? 0}"
+            : string.Empty;
+
+        if (!forceRebuild &&
+            ReferenceEquals(lastChoreoBuiltStemTrack, sep) &&
+            lastChoreoBuiltMode == mode &&
+            string.Equals(lastChoreoBuiltLyricsSig, lyricsSig, StringComparison.Ordinal) &&
+            playerEngine.SceneHub?.ActiveChoreoTrack != null) {
+            return;
+        }
+
+        if (!forceRebuild &&
+            neuralTrackCache != null &&
+            neuralTrackCache.TryGetAttachedChoreoTrack(sep, out SpatialChoreoTrack attached) &&
+            attached != null &&
+            attached.Mode == mode) {
+            lastChoreoBuiltStemTrack = sep;
+            lastChoreoBuiltMode = mode;
+            lastChoreoBuiltLyricsSig = lyricsSig;
+            Cavern.Neural.NeuralStemSpatializer.SetChoreoTrack(attached);
+            playerEngine.SceneHub?.SetChoreoTrack(attached);
+            return;
+        }
+
+        int myGen = ++choreoBuildGeneration;
+        lastChoreoBuiltStemTrack = sep;
+        lastChoreoBuiltMode = mode;
+        lastChoreoBuiltLyricsSig = lyricsSig;
+        int sr = sep.SampleRate >= 8000 ? sep.SampleRate : (playerEngine.OutputSampleRate >= 8000 ? playerEngine.OutputSampleRate : 48000);
+        LyricMoodDigest[] moodDigests = lyricsDoc != null && lyricsDoc.HasLyrics
+            ? Services.LyricsService.ExtractMoodDigest(lyricsDoc)
+            : null;
+
+        _ = Task.Run(() => {
+            try {
+                SpatialChoreoTrack built = Cavern.Neural.NeuralStemSpatializer.BuildAndSetChoreoTrack(
+                    sep.Stems,
+                    sr,
+                    mode,
+                    moodDigests);
+                if (built == null) {
+                    return;
+                }
+                neuralTrackCache?.AttachChoreoTrack(sep, built);
+                RunOnUiThread(() => {
+                    if (uiDestroyed ||
+                        myGen != choreoBuildGeneration ||
+                        !ReferenceEquals(playerEngine?.NeuralStage?.ActiveSpatialUpmixTrack, sep) ||
+                        (SpatialChoreoMode)Math.Clamp(store?.SpatialChoreoModeIndex ?? 0, 0, 4) != mode) {
+                        return;
+                    }
+                    Cavern.Neural.NeuralStemSpatializer.SetChoreoTrack(built);
+                    playerEngine.SceneHub?.SetChoreoTrack(built);
+                    UpdateRoomCanvas();
+                });
+            } catch (Exception ex) {
+                Services.AppLogger.Warn($"SyncSpatialChoreoTrackIfNeeded: {ex.Message}");
+            }
+        });
     }
 
     void EnsureXRayInspectorExpanded() {
@@ -1620,6 +1782,11 @@ public partial class MainActivity {
     void UpdateRoomCanvas() {
         if (roomView == null || playerEngine == null) {
             return;
+        }
+        double curSec = playerEngine.HeardSeconds >= 0 ? playerEngine.HeardSeconds : playerEngine.CurrentSeconds;
+        SpatialSceneHub hub = playerEngine.SceneHub;
+        if (hub != null && hub.ActiveChoreoMode != SpatialChoreoMode.Off && hub.ActiveChoreoTrack != null) {
+            hub.SyncTelemetryFromTrackItems(trackSourceItems, playerEngine.EnvironmentSize, curSec, playerEngine.Loop);
         }
         roomView.UpdateState(
             trackSourceItems,

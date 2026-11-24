@@ -291,7 +291,12 @@ public partial class MainActivity {
         actRow.SetPadding(0, Dp(2), 0, Dp(6));
         renderBtn = PrimaryButton(S["StudioW12ExportBtn"], ExecuteActiveStudioPrimaryAction);
         studioW12ExportBtn = renderBtn;
-        cancelRenderBtn = PillButton(S["CancelBtn"], () => activeCts?.Cancel());
+        cancelRenderBtn = PillButton(S["CancelBtn"], () => {
+            if (ExportMediaProcessingService.IsExportActive) {
+                ExportMediaProcessingService.CancelActiveExport();
+            }
+            activeCts?.Cancel();
+        });
         cancelRenderBtn.Enabled = false;
         actRow.AddView(renderBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 2.1f) { RightMargin = Dp(8) });
         actRow.AddView(cancelRenderBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -425,16 +430,17 @@ public partial class MainActivity {
         if (renderBtn == null) {
             return;
         }
+        bool busy = isOperationRunning || isPreparingTrueHD || ExportMediaProcessingService.IsExportActive;
         if (selectedStudioWorkflow == 0) {
             renderBtn.Text = S["StudioW12ExportBtn"];
-            renderBtn.Enabled = !isOperationRunning && !isPreparingTrueHD;
+            renderBtn.Enabled = !busy;
         } else if (selectedStudioWorkflow == 1) {
             renderBtn.Text = S["RenderBtn"];
-            renderBtn.Enabled = !isOperationRunning && !isPreparingTrueHD;
+            renderBtn.Enabled = !busy;
         } else {
             int qCount = renderQueue?.Jobs.Count ?? 0;
             renderBtn.Text = qCount > 0 ? $"{S["ProcessQueueBtn"]} ({qCount})" : S["ProcessQueueBtn"];
-            renderBtn.Enabled = !isOperationRunning && !isPreparingTrueHD && qCount > 0;
+            renderBtn.Enabled = !busy && qCount > 0;
         }
     }
 
@@ -760,7 +766,7 @@ public partial class MainActivity {
 
     // ICavernizeApp Render Pipeline
     void PreRender() {
-        if (isOperationRunning || isPreparingTrueHD) {
+        if (isOperationRunning || isPreparingTrueHD || ExportMediaProcessingService.IsExportActive) {
             throw new ConcurrencyException(S["OpRunning"]);
         }
         CavernizeTrack active = GetActiveTrack();
@@ -835,7 +841,7 @@ public partial class MainActivity {
     }
 
     void StartSingleRender() {
-        if (isOperationRunning || isPreparingTrueHD) {
+        if (isOperationRunning || isPreparingTrueHD || ExportMediaProcessingService.IsExportActive) {
             ShowError(S["OpRunning"]);
             return;
         }
@@ -867,7 +873,7 @@ public partial class MainActivity {
     void StartStudioW12PresetExport() => StartStudioComposableExport();
 
     void ShowStudioW12BatchDialog() {
-        if (isOperationRunning || isPreparingTrueHD) {
+        if (isOperationRunning || isPreparingTrueHD || ExportMediaProcessingService.IsExportActive) {
             ShowError(S["OpRunning"]);
             return;
         }
@@ -933,7 +939,7 @@ public partial class MainActivity {
     }
 
     void StartStudioW12BatchExport(CavernizeTrack active, List<StudioBaseOutputFormat> formats) {
-        if (isOperationRunning || isPreparingTrueHD) {
+        if (isOperationRunning || isPreparingTrueHD || ExportMediaProcessingService.IsExportActive) {
             ShowError(S["OpRunning"]);
             return;
         }
@@ -957,7 +963,11 @@ public partial class MainActivity {
             StopStudioPerformanceRecording(autoSelectInExport: true);
         }
 
-        StudioComposableExportOptions baseOpts = BuildCurrentComposableOptions();
+        StudioComposableExportOptions baseOpts = BuildCurrentComposableOptions(buildChoreoIfMissing: true);
+        if (formats.Any(f => StudioBatchExporter.IsAdmCompressionLocked(f, baseOpts.CompressionTier))) {
+            ShowError(S["StudioAtmosTierLockWarn"]);
+            return;
+        }
         if (baseOpts.IncludeRecordedPerformance && !(playerEngine?.LiveMicBridge?.HasRecordedPerformance ?? false)) {
             ShowError(S["StudioRecNeedTakeToast"]);
             return;
@@ -972,14 +982,31 @@ public partial class MainActivity {
             return;
         }
 
+        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
+        long estTotalBytes = 0;
+        for (int i = 0; i < formats.Count; i++) {
+            StudioComposableExportOptions estOpts = new() {
+                BaseFormat = formats[i],
+                CompressionTier = baseOpts.CompressionTier
+            };
+            estTotalBytes += EstimateStudioExportBytes(active, estOpts);
+        }
+        if (!ExportMediaProcessingService.CheckFreeSpacePreflight(dir, estTotalBytes, out string spaceErr)) {
+            ShowError(string.IsNullOrWhiteSpace(spaceErr) ? S["StudioExportLowSpaceError"] : spaceErr);
+            return;
+        }
+
         playerEngine?.SetPerformancePreviewTake(null, enabled: false);
         StopPlayback();
-        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
         string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
         List<StudioBatchExportJob> jobs = new(formats.Count);
         for (int i = 0; i < formats.Count; i++) {
             StudioComposableExportOptions jobOpts = new() {
                 BaseFormat = formats[i],
+                CompressionTier = baseOpts.CompressionTier,
+                FfmpegExecutablePath = baseOpts.FfmpegExecutablePath,
+                ChoreoTrack = baseOpts.ChoreoTrack,
+                OnSigpipeShield = baseOpts.OnSigpipeShield,
                 EnableAiSpatialUpmix = baseOpts.EnableAiSpatialUpmix,
                 EnableKaraokeInstrumental = baseOpts.EnableKaraokeInstrumental,
                 IncludeRecordedPerformance = baseOpts.IncludeRecordedPerformance,
@@ -1008,19 +1035,26 @@ public partial class MainActivity {
                 token);
 
             int okCount = 0;
+            bool anyCancelled = token.IsCancellationRequested;
             string lastOkPath = null;
             string firstError = null;
             for (int i = 0; i < results.Count; i++) {
                 StudioBatchExportResult r = results[i];
-                if (r.Succeeded && !string.IsNullOrEmpty(r.OutputPath) && File.Exists(r.OutputPath)) {
+                if (r.IsCancelled) {
+                    anyCancelled = true;
+                }
+                if (r.Succeeded && !r.IsCancelled && !string.IsNullOrEmpty(r.OutputPath) && File.Exists(r.OutputPath)) {
                     okCount++;
                     lastOkPath = r.OutputPath;
                     AndroidFileHelper.PublishToDownloads(this, r.OutputPath, "Renderizados");
-                } else if (firstError == null && !string.IsNullOrEmpty(r.ErrorMessage)) {
+                } else if (!r.IsCancelled && firstError == null && !string.IsNullOrEmpty(r.ErrorMessage)) {
                     firstError = r.ErrorMessage;
                 }
             }
 
+            if (anyCancelled && okCount == 0) {
+                throw new System.OperationCanceledException(token);
+            }
             if (okCount == 0 && !string.IsNullOrEmpty(firstError)) {
                 throw new InvalidOperationException(firstError);
             }
@@ -1458,7 +1492,7 @@ public partial class MainActivity {
             containerSelector.Enabled = !running;
             containerSelector.Alpha = running ? 0.55f : 1f;
         }
-        if (cancelRenderBtn != null) cancelRenderBtn.Enabled = running;
+        if (cancelRenderBtn != null) cancelRenderBtn.Enabled = running || ExportMediaProcessingService.IsExportActive;
         if (extractBtn != null) extractBtn.Enabled = !running;
         if (cancelExtractBtn != null) cancelExtractBtn.Enabled = running;
         if (extractJsonCheck != null) extractJsonCheck.Enabled = !running;

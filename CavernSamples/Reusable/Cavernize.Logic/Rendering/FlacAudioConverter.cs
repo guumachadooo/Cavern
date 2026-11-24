@@ -26,80 +26,38 @@ public static class FlacAudioConverter {
         int sampleRate = reader.SampleRate;
         int bps = (reader.Bits == BitDepth.Int24 || reader.Bits == BitDepth.Float32) ? 24 : 16;
         long totalSamples = reader.Length;
-
-        Directory.CreateDirectory(Path.GetDirectoryName(flacPath) ?? ".");
-        using FileStream outFs = File.Create(flacPath);
-
-        // 1. Magic "fLaC" + placeholder STREAMINFO block (4-byte metadata header + 34-byte payload)
-        outFs.Write("fLaC"u8);
-        long streamInfoPos = outFs.Position;
-        outFs.Write(new byte[38]);
-
         int blockSize = (int)Math.Min(DefaultBlockSize, Math.Max(16, totalSamples));
-        int[][] chSamples = new int[channels][];
-        for (int c = 0; c < channels; c++) {
-            chSamples[c] = new int[blockSize];
-        }
 
-        using IncrementalHash md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+        using FlacStreamingEncoder encoder = new(flacPath, channels, sampleRate, bps, blockSize);
         float[] interleaved = new float[blockSize * channels];
-        byte[] md5Chunk = new byte[blockSize * channels * (bps / 8)];
-        int[] residualScratch = new int[blockSize];
         long remaining = totalSamples;
-        long frameNumber = 0;
-        BitWriter bw = new(outFs);
-
         while (remaining > 0) {
             int n = (int)Math.Min(blockSize, remaining);
-            long samplesNeeded = (long)n * channels;
-            reader.ReadBlock(interleaved, 0, samplesNeeded);
-
-            int md5Bytes = 0;
-            if (bps == 16) {
-                for (int s = 0; s < n; s++) {
-                    for (int c = 0; c < channels; c++) {
-                        float f = Math.Clamp(interleaved[s * channels + c], -1f, 1f);
-                        int val = Math.Clamp((int)Math.Round(f * 32767f), short.MinValue, short.MaxValue);
-                        chSamples[c][s] = val;
-                        md5Chunk[md5Bytes++] = (byte)(val & 0xFF);
-                        md5Chunk[md5Bytes++] = (byte)((val >> 8) & 0xFF);
-                    }
-                }
-            } else {
-                for (int s = 0; s < n; s++) {
-                    for (int c = 0; c < channels; c++) {
-                        float f = Math.Clamp(interleaved[s * channels + c], -1f, 1f);
-                        int val = Math.Clamp((int)Math.Round(f * 8388607f), -8388608, 8388607);
-                        chSamples[c][s] = val;
-                        md5Chunk[md5Bytes++] = (byte)(val & 0xFF);
-                        md5Chunk[md5Bytes++] = (byte)((val >> 8) & 0xFF);
-                        md5Chunk[md5Bytes++] = (byte)((val >> 16) & 0xFF);
-                    }
-                }
-            }
-            md5.AppendData(md5Chunk, 0, md5Bytes);
-
-            WriteFrame(bw, chSamples, n, channels, sampleRate, bps, frameNumber++, residualScratch);
+            reader.ReadBlock(interleaved, 0, (long)n * channels);
+            encoder.WriteInterleaved(interleaved, 0, n);
             remaining -= n;
         }
-
-        byte[] digest = md5.GetHashAndReset();
-        outFs.Position = streamInfoPos;
-        WriteStreamInfo(outFs, blockSize, sampleRate, channels, bps, totalSamples, digest);
-        outFs.Flush();
+        encoder.Complete();
     }
 
-    static void WriteStreamInfo(FileStream fs, int blockSize, int sampleRate, int channels, int bps, long totalSamples, byte[] md5) {
+    internal static void WriteStreamInfo(
+        Stream stream,
+        int minBlockSize,
+        int maxBlockSize,
+        int sampleRate,
+        int channels,
+        int bps,
+        long totalSamples,
+        byte[] md5) {
         // Metadata block header: Last=1 (0x80) | Type=0 -> 0x80, length=34 (0x000022)
         byte[] header = [0x80, 0x00, 0x00, 34];
-        fs.Write(header);
+        stream.Write(header);
 
         byte[] info = new byte[34];
-        // min/max block size (equal for fixed blocksize stream)
-        info[0] = (byte)(blockSize >> 8);
-        info[1] = (byte)(blockSize & 0xFF);
-        info[2] = info[0];
-        info[3] = info[1];
+        info[0] = (byte)(minBlockSize >> 8);
+        info[1] = (byte)(minBlockSize & 0xFF);
+        info[2] = (byte)(maxBlockSize >> 8);
+        info[3] = (byte)(maxBlockSize & 0xFF);
         // min/max frame size (0 = unknown)
         // sampleRate (20 bits) | channels-1 (3 bits) | bps-1 (5 bits) | totalSamples (36 bits) = 8 bytes (info[10..17])
         ulong packed = ((ulong)(sampleRate & 0xFFFFF) << 44)
@@ -110,7 +68,19 @@ public static class FlacAudioConverter {
             info[10 + i] = (byte)((packed >> ((7 - i) * 8)) & 0xFF);
         }
         Buffer.BlockCopy(md5, 0, info, 18, 16);
-        fs.Write(info);
+        stream.Write(info);
+    }
+
+    internal static void EncodeFrame(
+        BitWriter bw,
+        int[][] channelsData,
+        int blockSize,
+        int channels,
+        int sampleRate,
+        int bps,
+        long frameNumber,
+        int[] residualScratch) {
+        WriteFrame(bw, channelsData, blockSize, channels, sampleRate, bps, frameNumber, residualScratch);
     }
 
     static void WriteFrame(BitWriter bw, int[][] channelsData, int blockSize, int channels, int sampleRate, int bps, long frameNumber, int[] residualScratch) {
@@ -228,7 +198,7 @@ public static class FlacAudioConverter {
         _ => 0b0000 // Use STREAMINFO
     };
 
-    sealed class BitWriter(Stream stream) {
+    internal sealed class BitWriter(Stream stream) {
         static readonly byte[] Crc8Table = BuildCrc8Table();
         static readonly ushort[] Crc16Table = BuildCrc16Table();
 
@@ -332,6 +302,189 @@ public static class FlacAudioConverter {
                 t[i] = (ushort)c;
             }
             return t;
+        }
+    }
+}
+
+/// <summary>
+/// Chunked zero-temp-WAV streaming FLAC encoder supporting 1–8 channels and 16/24-bit PCM.
+/// Accumulates incoming interleaved blocks into fixed-size FLAC frames and backpatches <c>STREAMINFO</c> on completion.
+/// </summary>
+public sealed class FlacStreamingEncoder : IDisposable {
+    readonly Stream outStream;
+    readonly bool ownsStream;
+    readonly long streamInfoPos;
+    readonly int channels;
+    readonly int sampleRate;
+    readonly int bps;
+    readonly int blockSize;
+    readonly int[][] chSamples;
+    readonly byte[] md5Chunk;
+    readonly int[] residualScratch;
+    readonly IncrementalHash md5;
+    readonly FlacAudioConverter.BitWriter bitWriter;
+    int bufferedFrames;
+    int minBlockSizeSeen = int.MaxValue;
+    int maxBlockSizeSeen;
+    long frameNumber;
+    long totalFramesWritten;
+    bool completed;
+    bool disposed;
+
+    /// <summary>Total frames written so far (including buffered frames once flushed).</summary>
+    public long FramesWritten => totalFramesWritten;
+
+    /// <summary>Creates a streaming FLAC encoder writing directly to <paramref name="flacPath"/>.</summary>
+    public FlacStreamingEncoder(string flacPath, int channels, int sampleRate, int bitsPerSample = 24, int blockSize = 4096)
+        : this(CreateOutputStream(flacPath), ownsStream: true, channels, sampleRate, bitsPerSample, blockSize) { }
+
+    /// <summary>Creates a streaming FLAC encoder writing to <paramref name="outputStream"/>.</summary>
+    public FlacStreamingEncoder(Stream outputStream, bool ownsStream, int channels, int sampleRate, int bitsPerSample = 24, int blockSize = 4096) {
+        outStream = outputStream ?? throw new ArgumentNullException(nameof(outputStream));
+        this.ownsStream = ownsStream;
+        if (channels < 1 || channels > 8) {
+            throw new NotSupportedException($"FLAC supports 1 to 8 channels (got {channels}).");
+        }
+        if (sampleRate <= 0) {
+            throw new ArgumentOutOfRangeException(nameof(sampleRate));
+        }
+
+        this.channels = channels;
+        this.sampleRate = sampleRate;
+        bps = bitsPerSample >= 24 ? 24 : 16;
+        this.blockSize = Math.Clamp(blockSize, 16, 4096);
+
+        chSamples = new int[channels][];
+        for (int c = 0; c < channels; c++) {
+            chSamples[c] = new int[this.blockSize];
+        }
+        md5Chunk = new byte[this.blockSize * channels * (bps / 8)];
+        residualScratch = new int[this.blockSize];
+        md5 = IncrementalHash.CreateHash(HashAlgorithmName.MD5);
+        bitWriter = new FlacAudioConverter.BitWriter(outStream);
+
+        outStream.Write("fLaC"u8);
+        streamInfoPos = outStream.Position;
+        outStream.Write(new byte[38]);
+    }
+
+    static FileStream CreateOutputStream(string flacPath) {
+        if (string.IsNullOrWhiteSpace(flacPath)) {
+            throw new ArgumentException("Output FLAC path cannot be empty.", nameof(flacPath));
+        }
+        string dir = Path.GetDirectoryName(flacPath);
+        if (!string.IsNullOrEmpty(dir)) {
+            Directory.CreateDirectory(dir);
+        }
+        return File.Create(flacPath);
+    }
+
+    /// <summary>Appends <paramref name="frameCount"/> interleaved float frames starting at <paramref name="frameOffset"/>.</summary>
+    public void WriteInterleaved(float[] interleaved, int frameOffset, int frameCount) {
+        if (disposed || completed) {
+            throw new ObjectDisposedException(nameof(FlacStreamingEncoder));
+        }
+        if (interleaved == null || frameCount <= 0) {
+            return;
+        }
+
+        int remaining = frameCount;
+        int srcFrame = frameOffset;
+        while (remaining > 0) {
+            int space = blockSize - bufferedFrames;
+            int take = Math.Min(space, remaining);
+            for (int s = 0; s < take; s++) {
+                int baseIdx = (srcFrame + s) * channels;
+                int dstIdx = bufferedFrames + s;
+                for (int c = 0; c < channels; c++) {
+                    float raw = baseIdx + c < interleaved.Length ? interleaved[baseIdx + c] : 0f;
+                    float f = float.IsFinite(raw) ? Math.Clamp(raw, -1f, 1f) : 0f;
+                    int q = bps == 16
+                        ? Math.Clamp((int)Math.Round(f * 32767f), short.MinValue, short.MaxValue)
+                        : Math.Clamp((int)Math.Round(f * 8388607f), -8388608, 8388607);
+                    chSamples[c][dstIdx] = q;
+                }
+            }
+            bufferedFrames += take;
+            srcFrame += take;
+            remaining -= take;
+            totalFramesWritten += take;
+
+            if (bufferedFrames == blockSize) {
+                FlushBufferedBlock();
+            }
+        }
+    }
+
+    /// <summary>Flushes any trailing partial block and backpatches <c>STREAMINFO</c> (sample count + MD5).</summary>
+    public void Complete() {
+        if (completed || disposed) {
+            return;
+        }
+        completed = true;
+        if (bufferedFrames > 0) {
+            FlushBufferedBlock();
+        }
+        byte[] digest = md5.GetHashAndReset();
+        int minBs = minBlockSizeSeen == int.MaxValue ? blockSize : Math.Max(16, minBlockSizeSeen);
+        int maxBs = maxBlockSizeSeen > 0 ? maxBlockSizeSeen : blockSize;
+        if (minBs > maxBs) {
+            minBs = maxBs;
+        }
+        if (outStream.CanSeek) {
+            long endPos = outStream.Position;
+            outStream.Position = streamInfoPos;
+            FlacAudioConverter.WriteStreamInfo(outStream, minBs, maxBs, sampleRate, channels, bps, totalFramesWritten, digest);
+            outStream.Position = endPos;
+        }
+        outStream.Flush();
+    }
+
+    void FlushBufferedBlock() {
+        int n = bufferedFrames;
+        int md5Bytes = 0;
+        if (bps == 16) {
+            for (int s = 0; s < n; s++) {
+                for (int c = 0; c < channels; c++) {
+                    int val = chSamples[c][s];
+                    md5Chunk[md5Bytes++] = (byte)(val & 0xFF);
+                    md5Chunk[md5Bytes++] = (byte)((val >> 8) & 0xFF);
+                }
+            }
+        } else {
+            for (int s = 0; s < n; s++) {
+                for (int c = 0; c < channels; c++) {
+                    int val = chSamples[c][s];
+                    md5Chunk[md5Bytes++] = (byte)(val & 0xFF);
+                    md5Chunk[md5Bytes++] = (byte)((val >> 8) & 0xFF);
+                    md5Chunk[md5Bytes++] = (byte)((val >> 16) & 0xFF);
+                }
+            }
+        }
+        md5.AppendData(md5Chunk, 0, md5Bytes);
+        FlacAudioConverter.EncodeFrame(bitWriter, chSamples, n, channels, sampleRate, bps, frameNumber++, residualScratch);
+        if (n < minBlockSizeSeen) {
+            minBlockSizeSeen = n;
+        }
+        if (n > maxBlockSizeSeen) {
+            maxBlockSizeSeen = n;
+        }
+        bufferedFrames = 0;
+    }
+
+    /// <inheritdoc/>
+    public void Dispose() {
+        if (disposed) {
+            return;
+        }
+        try {
+            Complete();
+        } finally {
+            disposed = true;
+            md5.Dispose();
+            if (ownsStream) {
+                outStream.Dispose();
+            }
         }
     }
 }

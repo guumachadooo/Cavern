@@ -7,6 +7,8 @@ using System.Text.RegularExpressions;
 
 using Android.Content;
 
+using Cavern.Spatial;
+
 using IOFile = System.IO.File;
 using IOPath = System.IO.Path;
 
@@ -81,6 +83,189 @@ public static partial class LyricsService {
         if (doc == null || !doc.HasLyrics) return 0;
         if (doc.IsSyllableSynced) return 3;
         return doc.IsSynced ? 2 : 1;
+    }
+
+    const int MaxMoodDigestSections = 16;
+
+    static readonly HashSet<string> HighArousalTokens = new(StringComparer.OrdinalIgnoreCase) {
+        "fire", "burn", "run", "fly", "rise", "shout", "scream", "thunder", "storm", "fight",
+        "dance", "jump", "wild", "explode", "power", "free", "alive", "tonight", "higher", "fast",
+        "rush", "break", "bang", "crash", "electric", "glow", "shine", "roar", "rage", "heart"
+    };
+
+    static readonly HashSet<string> LowArousalTokens = new(StringComparer.OrdinalIgnoreCase) {
+        "sleep", "quiet", "silence", "soft", "slow", "whisper", "breathe", "calm", "still", "gentle",
+        "drift", "fade", "shadow", "moon", "night", "rest", "peace", "dream", "float", "hush",
+        "alone", "hollow", "cold", "rain", "mist", "memory", "sigh", "close", "stay", "hold"
+    };
+
+    static readonly HashSet<string> PositiveValenceTokens = new(StringComparer.OrdinalIgnoreCase) {
+        "love", "light", "bright", "sun", "shine", "smile", "hope", "joy", "free", "alive",
+        "fly", "rise", "dream", "home", "gold", "star", "heaven", "sweet", "together", "win",
+        "happy", "grace", "kiss", "warm", "bloom", "magic", "dance", "glory", "forever", "strong"
+    };
+
+    static readonly HashSet<string> NegativeValenceTokens = new(StringComparer.OrdinalIgnoreCase) {
+        "pain", "cry", "tears", "broken", "dark", "lost", "fear", "hate", "die", "dead",
+        "bleed", "hurt", "cold", "alone", "empty", "fall", "shadow", "ghost", "ache", "sorrow",
+        "burn", "scar", "lies", "gone", "goodbye", "nightmare", "crash", "trapped", "fade", "grief"
+    };
+
+    /// <summary>
+    /// Distills T0–T3 lyrics into bounded <see cref="LyricMoodDigest"/> enums and normalized arousal/valence scalars.
+    /// Anti-prompt-injection guard: never exposes or forwards any raw lyric text outside this method.
+    /// </summary>
+    public static LyricMoodDigest[] ExtractMoodDigest(LyricsDocument doc) {
+        if (doc == null || !doc.HasLyrics) {
+            return [];
+        }
+
+        if (!doc.IsSynced || doc.Lines == null || doc.Lines.Count == 0) {
+            string raw = doc.RawUnsyncedText ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(raw)) {
+                return [];
+            }
+            string[] rawLines = raw.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            List<string> cleanLines = new(rawLines.Length);
+            for (int i = 0; i < rawLines.Length; i++) {
+                string trimmed = rawLines[i].Trim();
+                if (trimmed.Length > 0 && !IsBreakText(trimmed)) {
+                    cleanLines.Add(trimmed);
+                }
+            }
+            if (cleanLines.Count == 0) {
+                return [];
+            }
+            int sectionCount = Math.Min(MaxMoodDigestSections, Math.Max(1, (int)Math.Ceiling(cleanLines.Count / 4.0)));
+            LyricMoodDigest[] result = new LyricMoodDigest[sectionCount];
+            for (int s = 0; s < sectionCount; s++) {
+                int startIdx = (s * cleanLines.Count) / sectionCount;
+                int endIdx = ((s + 1) * cleanLines.Count) / sectionCount;
+                result[s] = ScoreTextSliceToMoodDigest(cleanLines, startIdx, endIdx, wordRateHint: 0f, sectionIndex: s, startTimeSec: 0.0);
+            }
+            return result;
+        }
+
+        // Tier 2 / Tier 3 synced cues: segment by instrumental breaks, gaps >= 6s, or >= 4 lines
+        List<LyricMoodDigest> sections = new(MaxMoodDigestSections);
+        List<string> bucketLines = new(8);
+        double bucketStart = -1.0;
+        double lastTime = -1.0;
+        int bucketWordCount = 0;
+        double bucketWordSpan = 0.0;
+
+        void FlushBucket() {
+            if (bucketLines.Count == 0 || sections.Count >= MaxMoodDigestSections) {
+                bucketLines.Clear();
+                bucketWordCount = 0;
+                bucketWordSpan = 0.0;
+                bucketStart = -1.0;
+                return;
+            }
+            float wps = bucketWordSpan > 0.25 ? (float)(bucketWordCount / bucketWordSpan) : 0f;
+            sections.Add(ScoreTextSliceToMoodDigest(
+                bucketLines,
+                0,
+                bucketLines.Count,
+                wps,
+                sections.Count,
+                bucketStart >= 0.0 ? bucketStart : 0.0));
+            bucketLines.Clear();
+            bucketWordCount = 0;
+            bucketWordSpan = 0.0;
+            bucketStart = -1.0;
+        }
+
+        IReadOnlyList<LyricCue> cues = doc.Lines;
+        int targetLinesPerSection = Math.Max(4, (int)Math.Ceiling(cues.Count / (double)MaxMoodDigestSections));
+        for (int i = 0; i < cues.Count; i++) {
+            LyricCue cue = cues[i];
+            if (string.IsNullOrWhiteSpace(cue.Text) || IsBreakText(cue.Text)) {
+                FlushBucket();
+                continue;
+            }
+            if (bucketLines.Count > 0 && lastTime >= 0.0 &&
+                ((cue.TimeSeconds - lastTime >= 6.0) || bucketLines.Count >= targetLinesPerSection)) {
+                FlushBucket();
+            }
+            if (bucketStart < 0.0) {
+                bucketStart = Math.Max(0.0, cue.TimeSeconds);
+            }
+            bucketLines.Add(cue.Text);
+            if (cue.Words != null && cue.Words.Count > 0) {
+                bucketWordCount += cue.Words.Count;
+                double span = cue.Words[^1].EndSeconds - cue.Words[0].StartSeconds;
+                if (span > 0.05) {
+                    bucketWordSpan += span;
+                }
+            }
+            lastTime = Math.Max(lastTime, cue.EndTimeSeconds ?? cue.TimeSeconds);
+        }
+        FlushBucket();
+        return sections.ToArray();
+    }
+
+    static LyricMoodDigest ScoreTextSliceToMoodDigest(
+        IReadOnlyList<string> lines,
+        int startIdx,
+        int endIdx,
+        float wordRateHint,
+        int sectionIndex,
+        double startTimeSec) {
+        int exclam = 0;
+        int quest = 0;
+        int upperChars = 0;
+        int alphaChars = 0;
+        int tokenCount = 0;
+        int highHit = 0;
+        int lowHit = 0;
+        int posHit = 0;
+        int negHit = 0;
+
+        StringBuilder tok = new(24);
+        void ClassifyToken() {
+            if (tok.Length == 0) return;
+            string w = tok.ToString();
+            tok.Clear();
+            tokenCount++;
+            if (HighArousalTokens.Contains(w)) highHit++;
+            if (LowArousalTokens.Contains(w)) lowHit++;
+            if (PositiveValenceTokens.Contains(w)) posHit++;
+            if (NegativeValenceTokens.Contains(w)) negHit++;
+        }
+
+        for (int l = startIdx; l < endIdx; l++) {
+            string line = lines[l];
+            for (int c = 0; c < line.Length; c++) {
+                char ch = line[c];
+                if (ch == '!') exclam++;
+                else if (ch == '?') quest++;
+                if (char.IsLetter(ch)) {
+                    alphaChars++;
+                    if (char.IsUpper(ch)) upperChars++;
+                    tok.Append(ch);
+                } else {
+                    ClassifyToken();
+                }
+            }
+            ClassifyToken();
+        }
+
+        float upperRatio = alphaChars > 0 ? Math.Clamp(upperChars / (float)alphaChars, 0f, 1f) : 0f;
+        float punctBoost = Math.Clamp((exclam * 0.14f) + (quest * 0.05f), 0f, 0.35f);
+        float rateBoost = wordRateHint > 0f ? Math.Clamp((wordRateHint - 1.5f) / 3.5f, -0.15f, 0.30f) : 0f;
+        float lexArousal = tokenCount > 0 ? Math.Clamp((highHit - lowHit) / Math.Max(2f, tokenCount * 0.25f), -0.35f, 0.35f) : 0f;
+        float arousal = Math.Clamp(0.45f + punctBoost + upperRatio * 0.25f + rateBoost + lexArousal, 0f, 1f);
+
+        float lexValence = tokenCount > 0 ? Math.Clamp((posHit - negHit) / Math.Max(2f, tokenCount * 0.22f), -0.45f, 0.45f) : 0f;
+        float valence = Math.Clamp(0.52f + lexValence - quest * 0.03f, 0f, 1f);
+
+        LyricMoodTag tag = (arousal >= 0.62f && valence >= 0.50f) ? LyricMoodTag.Anthem
+            : (arousal >= 0.56f && valence < 0.50f) ? LyricMoodTag.Tense
+            : (arousal < 0.56f && valence < 0.48f) ? LyricMoodTag.Intimate
+            : LyricMoodTag.Calm;
+
+        return new LyricMoodDigest(tag, arousal, valence, sectionIndex, startTimeSec);
     }
 
     /// <summary>Fast check whether raw lyric text contains syllable/word-level timing markers (ELRC, YRC, KRC, or TTML spans).</summary>

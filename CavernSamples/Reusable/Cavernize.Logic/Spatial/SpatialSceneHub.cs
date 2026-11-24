@@ -26,6 +26,11 @@ public sealed class SpatialSceneHub {
     SoundfieldTelemetry telemetry = SoundfieldTelemetry.Empty();
     readonly SpatialXRayPowermap xrayPowermap = new();
     VocalChainTelemetry vocalChainDiagnostics;
+    SpatialChoreoMode activeChoreoMode = SpatialChoreoMode.Off;
+    SpatialChoreoTrack activeChoreoTrack;
+    int[] choreoSourceStemIndices = Array.Empty<int>();
+    float[] choreoSourceSideSigns = Array.Empty<float>();
+    Cavern.Neural.NeuralStemRole[] choreoSourceRoles = Array.Empty<Cavern.Neural.NeuralStemRole>();
 
     /// <summary>
     /// Raised when the structural scene (active track, decoder, source list, or binaural profile) changes.
@@ -285,6 +290,44 @@ public sealed class SpatialSceneHub {
     public bool VocalChainBypassed { get; set; }
 
     /// <summary>
+    /// Active BP3 Spatial Object Cortex choreography mode.
+    /// </summary>
+    public SpatialChoreoMode ActiveChoreoMode {
+        get {
+            lock (syncLock) {
+                return activeChoreoMode;
+            }
+        }
+        set {
+            lock (syncLock) {
+                activeChoreoMode = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Active precomputed C2 ring-LUT choreography track (thread-safe snapshot).
+    /// </summary>
+    public SpatialChoreoTrack ActiveChoreoTrack {
+        get { return Volatile.Read(ref activeChoreoTrack); }
+    }
+
+    /// <summary>
+    /// Binds a precomputed <see cref="SpatialChoreoTrack"/> (or clears choreography when null)
+    /// and pre-maps scene descriptors for zero-GC audio-thread evaluation.
+    /// </summary>
+    public void SetChoreoTrack(SpatialChoreoTrack track) {
+        lock (syncLock) {
+            Volatile.Write(ref activeChoreoTrack, track);
+            if (track != null) {
+                activeChoreoMode = track.Mode;
+            }
+            RebuildChoreoMappingLocked();
+        }
+        SceneChanged?.Invoke();
+    }
+
+    /// <summary>
     /// Current 6DoF listener pose (thread-safe snapshot).
     /// </summary>
     public ListenerPose6DoF ListenerPose {
@@ -340,6 +383,56 @@ public sealed class SpatialSceneHub {
 
     void PublishSourcesSnapshotLocked() {
         Volatile.Write(ref sourcesSnapshot, sources.Count == 0 ? Array.Empty<SpatialSourceDescriptor>() : sources.ToArray());
+        RebuildChoreoMappingLocked();
+    }
+
+    void RebuildChoreoMappingLocked() {
+        SpatialChoreoTrack track = activeChoreoTrack;
+        int count = sources.Count;
+        if (count == 0) {
+            choreoSourceStemIndices = Array.Empty<int>();
+            choreoSourceSideSigns = Array.Empty<float>();
+            choreoSourceRoles = Array.Empty<Cavern.Neural.NeuralStemRole>();
+            return;
+        }
+        if (choreoSourceStemIndices.Length != count) {
+            choreoSourceStemIndices = new int[count];
+            choreoSourceSideSigns = new float[count];
+            choreoSourceRoles = new Cavern.Neural.NeuralStemRole[count];
+        }
+        for (int i = 0; i < count; i++) {
+            SpatialSourceDescriptor desc = sources[i];
+            if (track == null || desc == null ||
+                (desc.Layer != SourceLayer.NeuralStem && desc.Layer != SourceLayer.RestoredResidual)) {
+                choreoSourceStemIndices[i] = -1;
+                choreoSourceSideSigns[i] = 0f;
+                choreoSourceRoles[i] = Cavern.Neural.NeuralStemRole.Other;
+                continue;
+            }
+            string rawName = desc.Name ?? string.Empty;
+            float side = 0f;
+            if (rawName.EndsWith(" L", StringComparison.Ordinal)) {
+                side = -1f;
+            } else if (rawName.EndsWith(" R", StringComparison.Ordinal)) {
+                side = 1f;
+            }
+            Cavern.Neural.NeuralStemRole role = Cavern.Neural.NeuralStemSpatializer.ClassifyStemName(rawName);
+            int stemIdx = track.FindStemIndex(role, StripAiSideLabel(rawName));
+            choreoSourceStemIndices[i] = stemIdx;
+            choreoSourceSideSigns[i] = side;
+            choreoSourceRoles[i] = role;
+        }
+    }
+
+    static string StripAiSideLabel(string label) {
+        if (string.IsNullOrEmpty(label)) {
+            return string.Empty;
+        }
+        string s = label.StartsWith("AI ", StringComparison.Ordinal) ? label.Substring(3) : label;
+        if (s.EndsWith(" L", StringComparison.Ordinal) || s.EndsWith(" R", StringComparison.Ordinal)) {
+            s = s.Substring(0, s.Length - 2);
+        }
+        return s.Trim();
     }
 
     /// <summary>
@@ -561,6 +654,18 @@ public sealed class SpatialSceneHub {
     /// and updates the zero-GC <see cref="XRayPowermap"/> without heap allocation.
     /// </summary>
     public void SyncTelemetryFromTrackItems(IReadOnlyList<TrackSourceItem> items, Vector3 environmentSize) {
+        SyncTelemetryFromTrackItems(items, environmentSize, -1.0, loop: false);
+    }
+
+    /// <summary>
+    /// Synchronizes live telemetry and optionally evaluates active BP3 <see cref="SpatialChoreoTrack"/> positions
+    /// at <paramref name="playbackTimeSec"/> with zero heap allocations, updating 3D Room X-Ray and descriptor coordinates.
+    /// </summary>
+    public void SyncTelemetryFromTrackItems(
+        IReadOnlyList<TrackSourceItem> items,
+        Vector3 environmentSize,
+        double playbackTimeSec,
+        bool loop = false) {
         if (items == null) {
             return;
         }
@@ -571,6 +676,8 @@ public sealed class SpatialSceneHub {
 
         lock (syncLock) {
             Vector3 listenerWorldMeters = listenerPose.Position;
+            SpatialChoreoTrack track = activeChoreoTrack;
+            bool applyChoreo = playbackTimeSec >= 0.0 && track != null && activeChoreoMode != SpatialChoreoMode.Off;
             int count = Math.Min(items.Count, sources.Count);
             for (int i = 0; i < count; i++) {
                 TrackSourceItem item = items[i];
@@ -580,8 +687,26 @@ public sealed class SpatialSceneHub {
                 desc.IsDynamicallyFilteredOut = item.IsDynamicallyFilteredOut;
                 desc.HasCustomPosition = item.HasCustomPosition;
                 desc.CustomNormalizedPosition = item.CustomNormalizedPosition;
-                desc.NormalizedPosition = item.NormalizedPosition;
-                desc.WorldPositionMeters = item.NormalizedPosition * safeEnv;
+
+                Vector3 normPos = item.NormalizedPosition;
+                if (applyChoreo && !item.HasCustomPosition && i < choreoSourceStemIndices.Length) {
+                    int stemIdx = choreoSourceStemIndices[i];
+                    if (stemIdx >= 0 && Cavern.Neural.NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(
+                            track,
+                            activeChoreoMode,
+                            stemIdx,
+                            choreoSourceRoles[i],
+                            choreoSourceSideSigns[i],
+                            playbackTimeSec,
+                            out Vector3 choreoPos,
+                            loop)) {
+                        normPos = choreoPos;
+                        item.NormalizedPosition = choreoPos;
+                    }
+                }
+
+                desc.NormalizedPosition = normPos;
+                desc.WorldPositionMeters = normPos * safeEnv;
                 desc.RmsLevel = item.RmsLevel;
                 desc.LowBandEnergy = item.LowBandEnergy;
                 desc.MidBandEnergy = item.MidBandEnergy;
@@ -589,6 +714,98 @@ public sealed class SpatialSceneHub {
                 desc.PropagationDelayMs = item.PropagationDelayMs;
             }
             xrayPowermap.Update(sources, listenerWorldMeters, 0.45f, ActiveXRayBandMode);
+        }
+    }
+
+    /// <summary>
+    /// Evaluates active BP3 choreography positions directly into <see cref="Sources"/> and <see cref="XRayPowermap"/>
+    /// with zero heap allocations (for renderer and 3D Room updates independent of <see cref="TrackSourceItem"/>).
+    /// </summary>
+    public bool EvaluateChoreoPositionsZeroAlloc(double playbackTimeSec, Vector3 environmentSize, bool loop = false) {
+        SpatialChoreoTrack track = Volatile.Read(ref activeChoreoTrack);
+        if (track == null || playbackTimeSec < 0.0) {
+            return false;
+        }
+        Vector3 safeEnv = new(
+            MathF.Max(0.25f, environmentSize.X),
+            MathF.Max(0.25f, environmentSize.Y),
+            MathF.Max(0.25f, environmentSize.Z));
+
+        bool updated = false;
+        lock (syncLock) {
+            if (activeChoreoMode == SpatialChoreoMode.Off) {
+                return false;
+            }
+            int count = Math.Min(sources.Count, choreoSourceStemIndices.Length);
+            for (int i = 0; i < count; i++) {
+                SpatialSourceDescriptor desc = sources[i];
+                int stemIdx = choreoSourceStemIndices[i];
+                if (desc == null || desc.HasCustomPosition || stemIdx < 0) {
+                    continue;
+                }
+                if (Cavern.Neural.NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(
+                        track,
+                        activeChoreoMode,
+                        stemIdx,
+                        choreoSourceRoles[i],
+                        choreoSourceSideSigns[i],
+                        playbackTimeSec,
+                        out Vector3 choreoPos,
+                        loop)) {
+                    desc.NormalizedPosition = choreoPos;
+                    desc.WorldPositionMeters = choreoPos * safeEnv;
+                    updated = true;
+                }
+            }
+            if (updated) {
+                xrayPowermap.Update(sources, listenerPose.Position, 0.45f, ActiveXRayBandMode);
+            }
+        }
+        return updated;
+    }
+
+    /// <summary>
+    /// Zero-allocation lookup of a choreographed source's world position in meters for live renderer <c>Source.Position</c> updates.
+    /// </summary>
+    public bool TryGetChoreoSourceWorldPositionZeroAlloc(
+        int sourceIndex,
+        double playbackTimeSec,
+        Vector3 environmentSize,
+        out Vector3 worldPositionMeters,
+        bool loop = false) {
+        worldPositionMeters = Vector3.Zero;
+        SpatialChoreoTrack track = Volatile.Read(ref activeChoreoTrack);
+        if (track == null || sourceIndex < 0 || playbackTimeSec < 0.0) {
+            return false;
+        }
+        lock (syncLock) {
+            if (activeChoreoMode == SpatialChoreoMode.Off ||
+                sourceIndex >= sources.Count ||
+                sourceIndex >= choreoSourceStemIndices.Length) {
+                return false;
+            }
+            SpatialSourceDescriptor desc = sources[sourceIndex];
+            int stemIdx = choreoSourceStemIndices[sourceIndex];
+            if (desc == null || desc.HasCustomPosition || stemIdx < 0) {
+                return false;
+            }
+            if (!Cavern.Neural.NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(
+                    track,
+                    activeChoreoMode,
+                    stemIdx,
+                    choreoSourceRoles[sourceIndex],
+                    choreoSourceSideSigns[sourceIndex],
+                    playbackTimeSec,
+                    out Vector3 choreoPos,
+                    loop)) {
+                return false;
+            }
+            Vector3 safeEnv = new(
+                MathF.Max(0.25f, environmentSize.X),
+                MathF.Max(0.25f, environmentSize.Y),
+                MathF.Max(0.25f, environmentSize.Z));
+            worldPositionMeters = choreoPos * safeEnv;
+            return true;
         }
     }
 

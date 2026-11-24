@@ -4,11 +4,13 @@ using Android.Widget;
 
 using Cavern.Format;
 using Cavern.Format.Common;
+using Cavern.Spatial;
 
 using Cavernize.Logic.Models;
 using Cavernize.Logic.Rendering;
 using Cavernize.Logic.Spatial;
 
+using CavernizeAndroid.Audio;
 using CavernizeAndroid.Services;
 using CavernizeAndroid.Theme;
 using CavernizeAndroid.Views;
@@ -26,6 +28,12 @@ public partial class MainActivity {
 
     OneUiInlineSelector studioBaseFormatSelector;
     TextView studioBaseFormatDescText;
+    readonly List<Button> studioTierPillBtns = [];
+    LinearLayout studioCodecDetailsHeader, studioCodecDetailsBody, studioAtmosLockBanner;
+    OneUiIconView studioCodecDetailsChevron;
+    TextView studioCodecDetailsSummaryText, studioCodecDetailsBodyText;
+    Button studioSwitchEclipsaBtn;
+    bool isStudioCodecDetailsExpanded;
     Switch studioOptAiUpmixSwitch, studioOptKaraokeSwitch, studioOptPerformanceSwitch;
     Switch studioOptLosslessTwinSwitch, studioOptHeadphonePersonalSwitch;
     TextView studioOptPerformanceHintText, studioOptTwinHintText;
@@ -90,6 +98,118 @@ public partial class MainActivity {
         studioBaseFormatDescText = Label("", 11.4f, OneUiTheme.TextSub);
         studioBaseFormatDescText.SetPadding(0, Dp(5), 0, Dp(8));
         card.AddView(studioBaseFormatDescText);
+
+        // One UI 9 3-pill StudioCompressionTier selector (Master PCM | Lossless | Portable Lossy)
+        LinearLayout tierHdrRow = HRow();
+        tierHdrRow.SetPadding(0, Dp(2), 0, Dp(5));
+        tierHdrRow.AddView(Label(S["StudioCompressionTierLabel"], 12f, ColMuted), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        tierHdrRow.AddView(CreateInlineHelpBtn(S["StudioCompressionTierLabel"], S["TipStudioCompressionTier"]), new LinearLayout.LayoutParams(Dp(24), Dp(24)));
+        card.AddView(tierHdrRow);
+
+        LinearLayout tierPillRow = HRow();
+        tierPillRow.SetPadding(0, 0, 0, Dp(6));
+        studioTierPillBtns.Clear();
+        string[] tierLabels = [
+            S["StudioTierMasterPcm"],
+            S["StudioTierLossless"],
+            S["StudioTierPortable"]
+        ];
+        int savedTierIdx = Math.Clamp(store?.StudioCompressionTierIndex ?? 0, 0, 2);
+        for (int i = 0; i < tierLabels.Length; i++) {
+            int tierIdx = i;
+            Button pill = PillButton(tierLabels[i], () => {
+                if (isOperationRunning || isPreparingTrueHD || ExportMediaProcessingService.IsExportActive) {
+                    return;
+                }
+                if (store != null) {
+                    store.StudioCompressionTierIndex = tierIdx;
+                }
+                RefreshStudioW12ContextUi();
+            }, active: i == savedTierIdx);
+            pill.TextSize = 11.2f;
+            pill.SetPadding(Dp(6), Dp(7), Dp(6), Dp(7));
+            studioTierPillBtns.Add(pill);
+            tierPillRow.AddView(pill, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
+                RightMargin = i < tierLabels.Length - 1 ? Dp(6) : 0
+            });
+        }
+        card.AddView(tierPillRow);
+
+        // Collapsed Codec Details summary line (GetCompressionSpecSummary + estimated extension)
+        studioCodecDetailsHeader = HRow();
+        studioCodecDetailsHeader.SetPadding(Dp(10), Dp(7), Dp(10), Dp(7));
+        studioCodecDetailsHeader.Background = OneUiTheme.CreateRoundedDrawable(
+            this, OneUiTheme.SurfaceSubTile, 12f, OneUiTheme.BorderSubtle, 0.8f);
+        OneUiTheme.AttachRecoil(studioCodecDetailsHeader, 0.98f);
+        studioCodecDetailsSummaryText = Label("", 11.2f, OneUiTheme.TextSecondary);
+        studioCodecDetailsSummaryText.SetSingleLine(true);
+        studioCodecDetailsSummaryText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        studioCodecDetailsChevron = new OneUiIconView(
+            this,
+            isStudioCodecDetailsExpanded ? OneUiIconType.ChevronUp : OneUiIconType.ChevronDown,
+            OneUiTheme.TextSub);
+        studioCodecDetailsHeader.AddView(studioCodecDetailsSummaryText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
+            RightMargin = Dp(6)
+        });
+        studioCodecDetailsHeader.AddView(studioCodecDetailsChevron, new LinearLayout.LayoutParams(Dp(14), Dp(14)));
+        card.AddView(studioCodecDetailsHeader, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(6)
+        });
+
+        studioCodecDetailsBody = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = isStudioCodecDetailsExpanded ? ViewStates.Visible : ViewStates.Gone
+        };
+        studioCodecDetailsBody.SetPadding(Dp(10), Dp(4), Dp(10), Dp(6));
+        studioCodecDetailsBodyText = Label("", 11f, OneUiTheme.TextSub);
+        studioCodecDetailsBody.AddView(studioCodecDetailsBodyText);
+        card.AddView(studioCodecDetailsBody);
+
+        studioCodecDetailsHeader.Click += (_, _) => {
+            isStudioCodecDetailsExpanded = !isStudioCodecDetailsExpanded;
+            SetExpandedWithAnimation(studioCodecDetailsBody, isStudioCodecDetailsExpanded);
+            studioCodecDetailsChevron.IconType = isStudioCodecDetailsExpanded
+                ? OneUiIconType.ChevronUp
+                : OneUiIconType.ChevronDown;
+        };
+
+        // Inline DolbyAtmosAdm Tier 2/3 lock warning banner with 1-tap "Switch to Eclipsa IAMF" button
+        studioAtmosLockBanner = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        studioAtmosLockBanner.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
+        studioAtmosLockBanner.Background = OneUiTheme.CreateRoundedDrawable(
+            this,
+            OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 28),
+            12f,
+            OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 140),
+            1f);
+        TextView lockWarnTv = Label(S["StudioAtmosTierLockWarn"], 11.2f, OneUiTheme.PeachText);
+        lockWarnTv.SetPadding(0, 0, 0, Dp(6));
+        studioAtmosLockBanner.AddView(lockWarnTv);
+        studioSwitchEclipsaBtn = PillButton(S["StudioSwitchToEclipsaBtn"], () => {
+            if (isOperationRunning || isPreparingTrueHD || ExportMediaProcessingService.IsExportActive) {
+                return;
+            }
+            int eclipsaIdx = (int)StudioBaseOutputFormat.EclipsaIamf;
+            if (store != null) {
+                store.StudioBaseFormatIndex = eclipsaIdx;
+            }
+            studioBaseFormatSelector?.SetSelection(eclipsaIdx, notify: false);
+            RefreshStudioW12ContextUi();
+        }, active: true);
+        studioSwitchEclipsaBtn.TextSize = 11.4f;
+        studioAtmosLockBanner.AddView(studioSwitchEclipsaBtn, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.WrapContent));
+        card.AddView(studioAtmosLockBanner, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
 
         TextView featuresHeader = Label(S["StudioExportModulesHeader"], 12.2f, OneUiTheme.TextPrimary);
         featuresHeader.SetTypeface(null, TypefaceStyle.Bold);
@@ -217,12 +337,59 @@ public partial class MainActivity {
         return sw;
     }
 
-    StudioComposableExportOptions BuildCurrentComposableOptions() {
+    string ResolveExportFfmpegPath() {
+        string resolved = FFmpegInstallerService.ResolveExistingFFmpegPath(this, store);
+        if (!string.IsNullOrEmpty(resolved) && File.Exists(resolved)) {
+            return resolved;
+        }
+        string loc = ffmpeg?.Location;
+        return !string.IsNullOrEmpty(loc) && File.Exists(loc) ? loc : string.Empty;
+    }
+
+    SpatialChoreoTrack ResolveActiveChoreoTrackForExport(bool buildIfMissing = false) {
+        SpatialChoreoMode mode = (SpatialChoreoMode)Math.Clamp(store?.SpatialChoreoModeIndex ?? 0, 0, 4);
+        if (mode == SpatialChoreoMode.Off) {
+            return null;
+        }
+        SpatialChoreoTrack existing = playerEngine?.SceneHub?.ActiveChoreoTrack;
+        if (existing != null && existing.Mode == mode) {
+            return existing;
+        }
+        NeuralSeparatedTrack sep = playerEngine?.NeuralStage?.ActiveSpatialUpmixTrack;
+        if (sep?.Stems == null || sep.Stems.Count == 0 || sep.IsProgressiveStreaming) {
+            return existing;
+        }
+        if (neuralTrackCache != null && neuralTrackCache.TryGetAttachedChoreoTrack(sep, out SpatialChoreoTrack cached) &&
+            cached != null && cached.Mode == mode) {
+            playerEngine?.SceneHub?.SetChoreoTrack(cached);
+            return cached;
+        }
+        if (!buildIfMissing) {
+            return existing;
+        }
+        LyricMoodDigest[] moodDigests = currentMediaMeta?.Lyrics != null
+            ? Services.LyricsService.ExtractMoodDigest(currentMediaMeta.Lyrics)
+            : null;
+        int sr = sep.SampleRate >= 8000 ? sep.SampleRate : (playerEngine?.OutputSampleRate >= 8000 ? playerEngine.OutputSampleRate : 48000);
+        SpatialChoreoTrack built = Cavern.Neural.NeuralStemSpatializer.BuildAndSetChoreoTrack(sep.Stems, sr, mode, moodDigests);
+        if (built != null) {
+            neuralTrackCache?.AttachChoreoTrack(sep, built);
+            playerEngine?.SceneHub?.SetChoreoTrack(built);
+        }
+        return built;
+    }
+
+    StudioComposableExportOptions BuildCurrentComposableOptions(bool buildChoreoIfMissing = false) {
         int fmtIdx = Math.Clamp(studioBaseFormatSelector?.SelectedIndex ?? store?.StudioBaseFormatIndex ?? 0, 0, 4);
+        StudioCompressionTier tier = (StudioCompressionTier)Math.Clamp(store?.StudioCompressionTierIndex ?? 0, 0, 2);
         PerformanceRecordingTake take = playerEngine?.LiveMicBridge?.LatestRecordedTake;
         bool includePerf = store?.StudioOptPerformance ?? false;
         return new StudioComposableExportOptions {
             BaseFormat = (StudioBaseOutputFormat)fmtIdx,
+            CompressionTier = tier,
+            FfmpegExecutablePath = ResolveExportFfmpegPath(),
+            ChoreoTrack = ResolveActiveChoreoTrackForExport(buildChoreoIfMissing),
+            OnSigpipeShield = () => { NativeProAudioBridge.InstallSigpipeShield(); },
             EnableAiSpatialUpmix = store?.StudioOptAiUpmix ?? false,
             EnableKaraokeInstrumental = store?.StudioOptKaraoke ?? false,
             IncludeRecordedPerformance = includePerf,
@@ -466,9 +633,37 @@ public partial class MainActivity {
             return;
         }
         StudioComposableExportOptions opts = BuildCurrentComposableOptions();
+        StudioCompressionTier tier = opts.CompressionTier;
+        int tierIdx = Math.Clamp((int)tier, 0, 2);
 
         if (studioBaseFormatDescText != null) {
             studioBaseFormatDescText.Text = GetStudioBaseFormatDescription(opts.BaseFormat);
+        }
+        for (int i = 0; i < studioTierPillBtns.Count; i++) {
+            bool sel = i == tierIdx;
+            Button pill = studioTierPillBtns[i];
+            pill.Background = sel
+                ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            pill.SetTypeface(null, sel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
+        }
+
+        string effectiveExt = StudioBatchExporter.GetEffectiveOutputExtension(opts.BaseFormat, tier, true);
+        string specSummary = StudioBatchExporter.GetCompressionSpecSummary(opts.BaseFormat, tier);
+        if (studioCodecDetailsSummaryText != null) {
+            studioCodecDetailsSummaryText.Text = string.Format(S["StudioCodecDetailsToggleFmt"], specSummary, effectiveExt);
+        }
+        if (studioCodecDetailsBodyText != null) {
+            studioCodecDetailsBodyText.Text = string.Format(
+                S["StudioCodecDetailsBodyFmt"],
+                effectiveExt,
+                specSummary,
+                store.ResolveTruePeakCeilingDbtp());
+        }
+        if (studioAtmosLockBanner != null) {
+            studioAtmosLockBanner.Visibility = StudioBatchExporter.IsAdmCompressionLocked(opts.BaseFormat, tier)
+                ? ViewStates.Visible
+                : ViewStates.Gone;
         }
         if (studioW12KaraokeContainer != null) {
             studioW12KaraokeContainer.Visibility = opts.EnableKaraokeInstrumental ? ViewStates.Visible : ViewStates.Gone;
@@ -514,7 +709,12 @@ public partial class MainActivity {
         }
 
         if (studioW12ContextText != null) {
-            List<string> tags = [GetStudioBaseFormatLabel(opts.BaseFormat)];
+            string tierTag = tier switch {
+                StudioCompressionTier.LosslessCompressed => S["StudioTierLossless"],
+                StudioCompressionTier.PortableLossy => S["StudioTierPortable"],
+                _ => S["StudioTierMasterPcm"]
+            };
+            List<string> tags = [$"{GetStudioBaseFormatLabel(opts.BaseFormat)} ({tierTag})"];
             if (opts.EnableAiSpatialUpmix) {
                 tags.Add(IsActiveTrackMultichannelOrAtmos() ? S["StudioTagAtmosAi"] : S["StudioTagAiUpmix"]);
             }
@@ -563,8 +763,11 @@ public partial class MainActivity {
     }
 
     StudioBatchExportJob BuildComposableExportJob(StudioComposableExportOptions opts, string dir, string baseName) {
-        string ext = StudioBatchExporter.GetDefaultExtension(opts.BaseFormat);
+        string ext = StudioBatchExporter.GetEffectiveOutputExtension(opts.BaseFormat, opts.CompressionTier, true);
         List<string> slugParts = [opts.BaseFormat.ToString()];
+        if (opts.CompressionTier != StudioCompressionTier.MasterPcm) {
+            slugParts.Add(opts.CompressionTier.ToString());
+        }
         if (opts.EnableAiSpatialUpmix) slugParts.Add("AI");
         if (opts.EnableKaraokeInstrumental) slugParts.Add("Karaoke");
         if (opts.IncludeRecordedPerformance) slugParts.Add("VocalTake");
@@ -587,6 +790,10 @@ public partial class MainActivity {
                 _ => StudioExportPreset.PersonalizedLosslessBinaural
             },
             ComposableOptions = opts,
+            CompressionTier = opts.CompressionTier,
+            FfmpegExecutablePath = opts.FfmpegExecutablePath ?? ResolveExportFfmpegPath(),
+            ChoreoTrack = opts.ChoreoTrack,
+            OnSigpipeShield = opts.OnSigpipeShield ?? (() => { NativeProAudioBridge.InstallSigpipeShield(); }),
             OutputPath = outPath,
             BitDepth = store.Force24Bit ? BitDepth.Int24 : BitDepth.Int16,
             TruePeakCeilingDbtp = store.ResolveTruePeakCeilingDbtp(),
@@ -614,8 +821,30 @@ public partial class MainActivity {
         };
     }
 
+    long EstimateStudioExportBytes(CavernizeTrack active, StudioComposableExportOptions opts) {
+        int sr = active != null && active.SampleRate > 0 ? active.SampleRate : 48000;
+        double durSec = active != null && active.Length > 0 && sr > 0
+            ? active.Length / (double)sr
+            : Math.Max(30.0, playerEngine?.TotalSeconds ?? 180.0);
+        int channels = opts.BaseFormat switch {
+            StudioBaseOutputFormat.Headphone3D => 2,
+            StudioBaseOutputFormat.Cinema714 => 12,
+            StudioBaseOutputFormat.DolbyAtmosAdm => Math.Max(12, active?.Renderer?.Objects?.Count ?? 12),
+            StudioBaseOutputFormat.EclipsaIamf => 16,
+            StudioBaseOutputFormat.Ambisonics360 => 16,
+            _ => 2
+        };
+        int bytesPerSample = (store?.Force24Bit ?? false) ? 3 : 2;
+        double bytesPerSec = opts.CompressionTier switch {
+            StudioCompressionTier.PortableLossy => 96000.0,
+            StudioCompressionTier.LosslessCompressed => sr * channels * bytesPerSample * 0.65,
+            _ => sr * channels * bytesPerSample
+        };
+        return Math.Max(4L * 1024L * 1024L, (long)Math.Ceiling(durSec * bytesPerSec * 1.15));
+    }
+
     void StartStudioComposableExport() {
-        if (isOperationRunning || isPreparingTrueHD) {
+        if (isOperationRunning || isPreparingTrueHD || ExportMediaProcessingService.IsExportActive) {
             ShowError(S["OpRunning"]);
             return;
         }
@@ -636,7 +865,11 @@ public partial class MainActivity {
             StopStudioPerformanceRecording(autoSelectInExport: true);
         }
 
-        StudioComposableExportOptions opts = BuildCurrentComposableOptions();
+        StudioComposableExportOptions opts = BuildCurrentComposableOptions(buildChoreoIfMissing: true);
+        if (StudioBatchExporter.IsAdmCompressionLocked(opts.BaseFormat, opts.CompressionTier)) {
+            ShowError(S["StudioAtmosTierLockWarn"]);
+            return;
+        }
         if (opts.IncludeRecordedPerformance && !(playerEngine?.LiveMicBridge?.HasRecordedPerformance ?? false)) {
             ShowError(S["StudioRecNeedTakeToast"]);
             return;
@@ -651,27 +884,92 @@ public partial class MainActivity {
             return;
         }
 
+        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
+        if (!ExportMediaProcessingService.CheckFreeSpacePreflight(dir, EstimateStudioExportBytes(active, opts), out string spaceErr)) {
+            ShowError(string.IsNullOrWhiteSpace(spaceErr) ? S["StudioExportLowSpaceError"] : spaceErr);
+            return;
+        }
+
         playerEngine?.SetPerformancePreviewTake(null, enabled: false);
         StopPlayback();
-        string dir = AndroidFileHelper.GetWorkingOutputDir(this, "Renderizados");
         string baseName = Path.GetFileNameWithoutExtension(LoadedFile?.Path ?? "master");
         StudioBatchExportJob job = BuildComposableExportJob(opts, dir, baseName);
         string label = GetStudioBaseFormatLabel(opts.BaseFormat);
+        var appCtx = ApplicationContext ?? this;
 
-        RunBackgroundOperation(token => {
-            RunOnUiThread(() => SetConvertStatus(S["Starting"], 0));
-            StudioBatchExportResult res = StudioBatchExporter.ExportSingle(
-                active,
-                job,
-                p => RunOnUiThread(() => SetConvertStatus(label, p)),
-                token);
-            if (!res.Succeeded) {
-                throw new InvalidOperationException(res.ErrorMessage);
+        isOperationRunning = true;
+        RunOnUiThread(() => {
+            if (shareExportBtn != null) shareExportBtn.Visibility = ViewStates.Gone;
+            if (playExportBtn != null) playExportBtn.Visibility = ViewStates.Gone;
+            SetRunningUiState(true);
+            SetConvertStatus(S["Starting"], 0);
+        });
+
+        _ = Task.Run(async () => {
+            StudioBatchExportResult res = null;
+            bool cancelled = false;
+            Exception fatalEx = null;
+            try {
+                res = await ExportMediaProcessingService.EnqueueSingleExportAsync(
+                    appCtx,
+                    active,
+                    job,
+                    p => {
+                        if (!uiDestroyed) {
+                            RunOnUiThread(() => SetConvertStatus(label, p));
+                        }
+                    },
+                    label,
+                    CancellationToken.None).ConfigureAwait(false);
+                if (res == null || res.IsCancelled) {
+                    cancelled = true;
+                }
+            } catch (System.OperationCanceledException) {
+                cancelled = true;
+            } catch (Exception ex) {
+                fatalEx = ex;
+                AppLogger.Error("StartStudioComposableExport", ex);
+            } finally {
+                bool ok = !cancelled && fatalEx == null && res != null && res.Succeeded && !string.IsNullOrEmpty(res.OutputPath) && File.Exists(res.OutputPath);
+                string finalPath = res?.OutputPath ?? job.OutputPath;
+                try {
+                    await ExportMediaProcessingService.CommitOrCleanupPendingMediaStoreAsync(appCtx, null, finalPath, ok).ConfigureAwait(false);
+                    if (ok) {
+                        AndroidFileHelper.PublishToDownloads(appCtx, finalPath, "Renderizados");
+                    }
+                } catch (Exception cleanupEx) {
+                    AppLogger.Warn($"CommitOrCleanupPendingMediaStoreAsync: {cleanupEx.Message}");
+                }
+
+                isOperationRunning = false;
+                if (!uiDestroyed) {
+                    RunOnUiThread(() => {
+                        if (uiDestroyed) {
+                            return;
+                        }
+                        if (cancelled) {
+                            SetConvertStatus(S["CancelledStatus"], 0);
+                            Toast.MakeText(this, S["StudioExportFgCancelledToast"], ToastLength.Short).Show();
+                        } else if (fatalEx != null) {
+                            SetConvertStatus(fatalEx.Message, 0);
+                            ShowError(fatalEx.Message);
+                        } else if (!ok) {
+                            string errMsg = !string.IsNullOrWhiteSpace(res?.ErrorMessage) ? res.ErrorMessage : S["RenderMergeUnknownError"];
+                            SetConvertStatus(errMsg, 0);
+                            ShowError(errMsg);
+                        } else {
+                            lastRenderedFilePath = finalPath;
+                            if (shareExportBtn != null) shareExportBtn.Visibility = ViewStates.Visible;
+                            if (playExportBtn != null) playExportBtn.Visibility = ViewStates.Visible;
+                            SetConvertStatus(
+                                string.Format(S["StudioW12DoneFormat"], Path.GetFileName(finalPath), res.IntegratedLufs, res.MaxTruePeakDbtp),
+                                1.0);
+                        }
+                        SetRunningUiState(false);
+                    });
+                }
             }
-            RunOnUiThread(() => SetConvertStatus(
-                string.Format(S["StudioW12DoneFormat"], Path.GetFileName(res.OutputPath), res.IntegratedLufs, res.MaxTruePeakDbtp),
-                1.0));
-        }, job.OutputPath);
+        });
     }
 
     void SetStudioExportControlsBusy(bool running) {
@@ -679,6 +977,11 @@ public partial class MainActivity {
             studioBaseFormatSelector.Enabled = !running;
             studioBaseFormatSelector.Alpha = running ? 0.55f : 1f;
         }
+        for (int i = 0; i < studioTierPillBtns.Count; i++) {
+            studioTierPillBtns[i].Enabled = !running;
+            studioTierPillBtns[i].Alpha = running ? 0.55f : 1f;
+        }
+        if (studioSwitchEclipsaBtn != null) studioSwitchEclipsaBtn.Enabled = !running;
         if (studioOptAiUpmixSwitch != null) studioOptAiUpmixSwitch.Enabled = !running;
         if (studioOptKaraokeSwitch != null) studioOptKaraokeSwitch.Enabled = !running;
         if (studioOptPerformanceSwitch != null) studioOptPerformanceSwitch.Enabled = !running;

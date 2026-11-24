@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -23,20 +25,99 @@ public sealed class UpdateCheckResult {
 
 /// <summary>
 /// Checks GitHub Releases (guumachadooo/Cavern tag android-latest), downloads APK updates with progress,
-/// and invokes the Android package installer.
+/// and invokes the Android package installer. Persists ETag (<c>If-None-Match</c> / <c>304 Not Modified</c>)
+/// and <c>/releases/latest</c> HTML redirect resolutions to keep GitHub 403/429 rates &lt;= 1%.
 /// </summary>
 public static class AppUpdateService {
     const string ReleaseApiUrl = "https://api.github.com/repos/guumachadooo/Cavern/releases/tags/android-latest";
     const string LatestWebReleaseUrl = "https://github.com/guumachadooo/Cavern/releases/latest";
     const string TargetAssetName = "Cavernize-Android.apk";
+    const string CachePrefsName = "cavernize_github_http_cache_v1";
+    const long RedirectCacheTtlSeconds = 600;
+    const long RateLimitCooldownSeconds = 300;
+
+    sealed record CachedApiEntry(string ETag, string Body, long SavedAtUnixSec);
+    sealed record CachedRedirectEntry(string Tag, string DownloadUrl, long SavedAtUnixSec);
 
     static readonly HttpClient http = BuildGitHubHttpClient();
+    static readonly ConcurrentDictionary<string, CachedApiEntry> apiCache = new(StringComparer.Ordinal);
+    static readonly ConcurrentDictionary<string, CachedRedirectEntry> redirectCache = new(StringComparer.Ordinal);
+    static readonly object cacheLock = new();
+    static Context cachedAppContext;
+    static bool cacheLoaded;
+    static long apiCooldownUntilUnixSec;
 
     static HttpClient BuildGitHubHttpClient() {
         HttpClient client = new() { Timeout = TimeSpan.FromSeconds(45) };
         client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", "2.1"));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         return client;
+    }
+
+    static Context ResolveAppContext(Context context) {
+        if (context != null) {
+            cachedAppContext = context.ApplicationContext ?? context;
+        }
+        return cachedAppContext ?? Application.Context;
+    }
+
+    static void EnsureCacheLoaded(Context context) {
+        Context appCtx = ResolveAppContext(context);
+        if (appCtx == null) {
+            return;
+        }
+        lock (cacheLock) {
+            if (cacheLoaded) {
+                return;
+            }
+            cacheLoaded = true;
+            try {
+                ISharedPreferences prefs = appCtx.GetSharedPreferences(CachePrefsName, FileCreationMode.Private);
+                if (prefs == null) {
+                    return;
+                }
+                apiCooldownUntilUnixSec = prefs.GetLong("api_cooldown_until", 0L);
+                string apiJson = prefs.GetString("api_entries", "") ?? "";
+                if (!string.IsNullOrWhiteSpace(apiJson)) {
+                    Dictionary<string, CachedApiEntry> loaded = JsonSerializer.Deserialize<Dictionary<string, CachedApiEntry>>(apiJson);
+                    if (loaded != null) {
+                        foreach (KeyValuePair<string, CachedApiEntry> kv in loaded) {
+                            apiCache[kv.Key] = kv.Value;
+                        }
+                    }
+                }
+                string redirJson = prefs.GetString("redirect_entries", "") ?? "";
+                if (!string.IsNullOrWhiteSpace(redirJson)) {
+                    Dictionary<string, CachedRedirectEntry> loaded = JsonSerializer.Deserialize<Dictionary<string, CachedRedirectEntry>>(redirJson);
+                    if (loaded != null) {
+                        foreach (KeyValuePair<string, CachedRedirectEntry> kv in loaded) {
+                            redirectCache[kv.Key] = kv.Value;
+                        }
+                    }
+                }
+            } catch {
+                // Best effort cache load
+            }
+        }
+    }
+
+    static void PersistCache(Context context) {
+        Context appCtx = ResolveAppContext(context);
+        if (appCtx == null) {
+            return;
+        }
+        lock (cacheLock) {
+            try {
+                ISharedPreferences prefs = appCtx.GetSharedPreferences(CachePrefsName, FileCreationMode.Private);
+                prefs?.Edit()
+                    ?.PutLong("api_cooldown_until", Interlocked.Read(ref apiCooldownUntilUnixSec))
+                    ?.PutString("api_entries", JsonSerializer.Serialize(new Dictionary<string, CachedApiEntry>(apiCache)))
+                    ?.PutString("redirect_entries", JsonSerializer.Serialize(new Dictionary<string, CachedRedirectEntry>(redirectCache)))
+                    ?.Apply();
+            } catch {
+                // Best effort cache save
+            }
+        }
     }
 
     public static (string versionName, long versionCode) GetInstalledVersion(Context context) {
@@ -53,20 +134,55 @@ public static class AppUpdateService {
     }
 
     public static async Task<UpdateCheckResult> CheckForUpdateAsync(Context context, CancellationToken token = default) {
+        EnsureCacheLoaded(context);
         (string currentVer, _) = GetInstalledVersion(context);
+        long nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        apiCache.TryGetValue(ReleaseApiUrl, out CachedApiEntry cached);
 
+        if (nowUnix < Interlocked.Read(ref apiCooldownUntilUnixSec)) {
+            UpdateCheckResult cooldownFallback = await CheckForUpdateViaWebRedirectAsync(context, currentVer, token).ConfigureAwait(false);
+            if (cooldownFallback != null) {
+                return cooldownFallback;
+            }
+            if (cached != null && !string.IsNullOrWhiteSpace(cached.Body)) {
+                return ParseReleaseApiJson(currentVer, cached.Body);
+            }
+        }
+
+        string json = null;
         using HttpRequestMessage req = new(HttpMethod.Get, ReleaseApiUrl);
+        if (cached != null && !string.IsNullOrWhiteSpace(cached.ETag)) {
+            req.Headers.IfNoneMatch.TryParseAdd(cached.ETag);
+        }
+
         using HttpResponseMessage resp = await http.SendAsync(req, token).ConfigureAwait(false);
-        if ((int)resp.StatusCode == 403 || (int)resp.StatusCode == 429) {
-            // GitHub unauthenticated REST API rate-limited (60/hr per IP): fall back to zero-rate-limit web redirect.
-            UpdateCheckResult webFallback = await CheckForUpdateViaWebRedirectAsync(currentVer, token).ConfigureAwait(false);
+        if (resp.StatusCode == HttpStatusCode.NotModified && cached != null && !string.IsNullOrWhiteSpace(cached.Body)) {
+            json = cached.Body;
+        } else if ((int)resp.StatusCode == 403 || (int)resp.StatusCode == 429) {
+            Interlocked.Exchange(ref apiCooldownUntilUnixSec, nowUnix + RateLimitCooldownSeconds);
+            PersistCache(context);
+            // GitHub unauthenticated REST API rate-limited (60/hr per IP): fall back to cached web redirect.
+            UpdateCheckResult webFallback = await CheckForUpdateViaWebRedirectAsync(context, currentVer, token).ConfigureAwait(false);
             if (webFallback != null) {
                 return webFallback;
             }
+            if (cached != null && !string.IsNullOrWhiteSpace(cached.Body)) {
+                json = cached.Body;
+            } else {
+                resp.EnsureSuccessStatusCode();
+            }
+        } else {
+            resp.EnsureSuccessStatusCode();
+            json = await resp.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+            string etag = resp.Headers.ETag?.ToString() ?? "";
+            apiCache[ReleaseApiUrl] = new CachedApiEntry(etag, json, nowUnix);
+            PersistCache(context);
         }
-        resp.EnsureSuccessStatusCode();
 
-        string json = await resp.Content.ReadAsStringAsync(token).ConfigureAwait(false);
+        return ParseReleaseApiJson(currentVer, json);
+    }
+
+    static UpdateCheckResult ParseReleaseApiJson(string currentVer, string json) {
         using JsonDocument doc = JsonDocument.Parse(json);
         JsonElement root = doc.RootElement;
 
@@ -118,7 +234,27 @@ public static class AppUpdateService {
         };
     }
 
-    static async Task<UpdateCheckResult> CheckForUpdateViaWebRedirectAsync(string currentVer, CancellationToken token) {
+    static async Task<UpdateCheckResult> CheckForUpdateViaWebRedirectAsync(Context context, string currentVer, CancellationToken token) {
+        EnsureCacheLoaded(context);
+        long nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        if (redirectCache.TryGetValue(LatestWebReleaseUrl, out CachedRedirectEntry cached) &&
+            !string.IsNullOrEmpty(cached.Tag) &&
+            !string.IsNullOrEmpty(cached.DownloadUrl) &&
+            nowUnix - cached.SavedAtUnixSec < RedirectCacheTtlSeconds) {
+            string cachedRemote = ExtractVersionString(cached.Tag) ?? "";
+            if (!string.IsNullOrEmpty(cachedRemote)) {
+                return new UpdateCheckResult {
+                    IsUpdateAvailable = IsRemoteNewer(currentVer, cachedRemote),
+                    CurrentVersion = currentVer,
+                    RemoteVersion = cachedRemote,
+                    DownloadUrl = cached.DownloadUrl,
+                    AssetSizeBytes = 0,
+                    ReleaseNotes = $"Release {cached.Tag} (cached GitHub web redirect)",
+                    PublishedAt = ""
+                };
+            }
+        }
+
         try {
             using HttpRequestMessage headReq = new(HttpMethod.Get, LatestWebReleaseUrl);
             headReq.Headers.Accept.Clear();
@@ -135,6 +271,8 @@ public static class AppUpdateService {
                 return null;
             }
             string dlUrl = $"https://github.com/guumachadooo/Cavern/releases/download/{Uri.EscapeDataString(tag)}/{TargetAssetName}";
+            redirectCache[LatestWebReleaseUrl] = new CachedRedirectEntry(tag, dlUrl, nowUnix);
+            PersistCache(context);
             return new UpdateCheckResult {
                 IsUpdateAvailable = IsRemoteNewer(currentVer, remoteVer),
                 CurrentVersion = currentVer,

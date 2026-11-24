@@ -2,8 +2,12 @@
 #include "cavernize_ringbuffer.h"
 
 #include <atomic>
+#include <cerrno>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <thread>
 
@@ -38,6 +42,7 @@ struct PathAAudioEngine {
     CavRingBuffer in_rb;
 
     std::atomic<bool> running{false};
+    std::atomic<bool> stream_disconnected{false};
     std::atomic<int32_t> io_inflight{0};
     std::atomic<bool> input_drained{false};
     std::atomic<int32_t> active_sr{48000};
@@ -71,17 +76,23 @@ struct PathAAudioEngine {
                 : static_cast<int32_t>(kMaxCallbackFrames);
             const uint32_t to_read = frames < static_cast<uint32_t>(safe_cap) ? frames : static_cast<uint32_t>(safe_cap);
             if (!self->input_drained.load(std::memory_order_relaxed)) {
-                /* Drain initial startup backlog (timeout=0, up to 64 bursts) until 0 frames remain */
+                /* Drain initial startup backlog (timeout=0, up to 64 bursts) until 0 / EAGAIN remains */
                 int32_t drained = 0;
                 int32_t iter = 0;
                 do {
                     drained = AAudioStream_read(self->in_stream, self->in_callback_scratch, static_cast<int32_t>(to_read), 0);
+                    if (drained == AAUDIO_ERROR_DISCONNECTED) {
+                        self->is_full_duplex.store(0, std::memory_order_relaxed);
+                        break;
+                    }
                     iter++;
                 } while (drained > 0 && iter < 64);
                 self->input_drained.store(true, std::memory_order_release);
             } else {
                 int32_t got = AAudioStream_read(self->in_stream, self->in_callback_scratch, static_cast<int32_t>(to_read), 0);
-                if (got > 0) {
+                if (got == AAUDIO_ERROR_DISCONNECTED) {
+                    self->is_full_duplex.store(0, std::memory_order_relaxed);
+                } else if (got > 0) {
                     if (in_ch == 1) {
                         /* Up-duplicate mono capture in-place (backwards) to stereo SPSC input ring */
                         for (int32_t i = got - 1; i >= 0; --i) {
@@ -126,10 +137,31 @@ struct PathAAudioEngine {
 
     static void on_stream_error(AAudioStream* /*stream*/, void* user_data, aaudio_result_t err) {
         auto* self = static_cast<PathAAudioEngine*>(user_data);
+        if (err == AAUDIO_ERROR_WOULD_BLOCK || static_cast<int32_t>(err) == -EAGAIN) {
+            return;
+        }
         CAV_LOGW("AAudio stream error callback: %d (%s)", static_cast<int>(err), AAudio_convertResultToText(err));
         if (self && err == AAUDIO_ERROR_DISCONNECTED) {
+            self->stream_disconnected.store(true, std::memory_order_release);
             self->running.store(false, std::memory_order_release);
         }
+    }
+
+    static bool is_transient_would_block(aaudio_result_t r) {
+        return r == AAUDIO_ERROR_WOULD_BLOCK || static_cast<int32_t>(r) == -EAGAIN;
+    }
+
+    static aaudio_result_t request_start_with_retry(AAudioStream* s) {
+        if (!s) return AAUDIO_ERROR_NULL;
+        aaudio_result_t res = AAUDIO_OK;
+        for (int attempt = 0; attempt < 4; ++attempt) {
+            res = AAudioStream_requestStart(s);
+            if (res == AAUDIO_OK || !is_transient_would_block(res)) {
+                return res;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return res;
     }
 
     bool open_single_stream(
@@ -141,7 +173,8 @@ struct PathAAudioEngine {
         bool with_callback,
         bool low_latency_duplex,
         int32_t input_preset,
-        AAudioStream** out_handle) {
+        AAudioStream** out_handle,
+        bool force_shared = false) {
         AAudioStreamBuilder* builder = nullptr;
         if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK || !builder) {
             return false;
@@ -151,7 +184,7 @@ struct PathAAudioEngine {
         AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
         AAudioStreamBuilder_setChannelCount(builder, channels);
         AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-        AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_EXCLUSIVE);
+        AAudioStreamBuilder_setSharingMode(builder, force_shared ? AAUDIO_SHARING_MODE_SHARED : AAUDIO_SHARING_MODE_EXCLUSIVE);
         if (sample_rate > 0) {
             AAudioStreamBuilder_setSampleRate(builder, sample_rate);
         }
@@ -178,13 +211,13 @@ struct PathAAudioEngine {
         if (with_callback) {
             AAudioStreamBuilder_setDataCallback(builder, on_output_ready, this);
             AAudioStreamBuilder_setErrorCallback(builder, on_stream_error, this);
-            if (buffer_frames == 64 || buffer_frames == 128 || buffer_frames == 256) {
+            if (!force_shared && (buffer_frames == 64 || buffer_frames == 128 || buffer_frames == 256)) {
                 AAudioStreamBuilder_setFramesPerDataCallback(builder, buffer_frames);
             }
         }
 
         aaudio_result_t res = AAudioStreamBuilder_openStream(builder, out_handle);
-        if (res != AAUDIO_OK || !(*out_handle)) {
+        if (!force_shared && (res != AAUDIO_OK || !(*out_handle))) {
             /* Graceful fallback: EXCLUSIVE -> SHARED, and drop fixed callback frame count if HAL rejects it */
             AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
             if (with_callback) {
@@ -257,6 +290,7 @@ struct PathAAudioEngine {
 
         cav_rb_init(&out_rb, out_storage, kRingSamples, 2u);
         cav_rb_init(&in_rb, in_storage, kRingSamples, 2u);
+        stream_disconnected.store(false, std::memory_order_relaxed);
         input_drained.store(false, std::memory_order_relaxed);
         last_xruns.store(0, std::memory_order_relaxed);
         tuner_cooldown.store(0, std::memory_order_relaxed);
@@ -274,7 +308,7 @@ struct PathAAudioEngine {
         if (enable_input) {
             /* Try stereo first (Scarlett 2i2 2-ch), fall back to mono, preferring UNPROCESSED -> VOICE_PERFORMANCE */
             if (open_input_with_preset_cascade(actual_sr, buffer_frames, in_dev_id)) {
-                if (AAudioStream_requestStart(in_stream) == AAUDIO_OK) {
+                if (request_start_with_retry(in_stream) == AAUDIO_OK) {
                     aaudio_stream_state_t in_state = AAUDIO_STREAM_STATE_UNKNOWN;
                     AAudioStream_waitForStateChange(in_stream, AAUDIO_STREAM_STATE_STARTING, &in_state, 50000000LL);
                     drain_input_backlog_nonblocking();
@@ -292,9 +326,26 @@ struct PathAAudioEngine {
         is_full_duplex.store(duplex_ok ? 1 : 0, std::memory_order_release);
         running.store(true, std::memory_order_release);
 
-        if (AAudioStream_requestStart(out_stream) != AAUDIO_OK) {
-            stop_locked();
-            return -11;
+        if (request_start_with_retry(out_stream) != AAUDIO_OK) {
+            bool recovered = false;
+            if (out_excl == 1) {
+                /* Some Android HALs accept EXCLUSIVE at openStream but fail requestStart (-11/WOULD_BLOCK); retry SHARED */
+                close_streams_offloaded(out_stream, nullptr);
+                out_stream = nullptr;
+                if (open_single_stream(AAUDIO_DIRECTION_OUTPUT, sample_rate, buffer_frames, out_dev_id, 2, true, duplex_requested, 0, &out_stream, true)) {
+                    actual_sr = AAudioStream_getSampleRate(out_stream);
+                    actual_burst = AAudioStream_getFramesPerBurst(out_stream);
+                    out_excl = 0;
+                    active_sr.store(actual_sr > 0 ? actual_sr : 48000, std::memory_order_release);
+                    active_burst.store(actual_burst > 0 ? actual_burst : buffer_frames, std::memory_order_release);
+                    is_exclusive.store(0, std::memory_order_release);
+                    recovered = (request_start_with_retry(out_stream) == AAUDIO_OK);
+                }
+            }
+            if (!recovered) {
+                stop_locked();
+                return -11;
+            }
         }
 
         int32_t buf_sz = AAudioStream_getBufferSizeInFrames(out_stream);
@@ -307,6 +358,46 @@ struct PathAAudioEngine {
         return 0;
     }
 
+    static void close_streams_offloaded(AAudioStream* old_out, AAudioStream* old_in) {
+        if (!old_out && !old_in) return;
+        struct CloseSync {
+            std::mutex mtx;
+            std::condition_variable cv;
+            bool done = false;
+        };
+        auto sync = std::make_shared<CloseSync>();
+        std::thread closer([old_out, old_in, sync]() {
+            /* Close output stream first so on_output_ready callback exits before touching old_in */
+            if (old_out) {
+                aaudio_stream_state_t next_state = AAUDIO_STREAM_STATE_UNKNOWN;
+                AAudioStream_requestStop(old_out);
+                AAudioStream_waitForStateChange(old_out, AAUDIO_STREAM_STATE_STOPPING, &next_state, 60000000LL);
+                AAudioStream_close(old_out);
+            }
+            if (old_in) {
+                aaudio_stream_state_t next_state = AAUDIO_STREAM_STATE_UNKNOWN;
+                AAudioStream_requestStop(old_in);
+                AAudioStream_waitForStateChange(old_in, AAUDIO_STREAM_STATE_STOPPING, &next_state, 60000000LL);
+                AAudioStream_close(old_in);
+            }
+            {
+                std::lock_guard<std::mutex> lk(sync->mtx);
+                sync->done = true;
+            }
+            sync->cv.notify_all();
+        });
+        {
+            std::unique_lock<std::mutex> lk(sync->mtx);
+            sync->cv.wait_for(lk, std::chrono::milliseconds(140), [&] { return sync->done; });
+        }
+        if (sync->done) {
+            if (closer.joinable()) closer.join();
+        } else {
+            CAV_LOGW("AAudio HAL close exceeded 140ms budget; detaching closer worker to avoid callback/mediaserver stall.");
+            closer.detach();
+        }
+    }
+
     void stop() {
         std::lock_guard<std::mutex> lock(lifecycle_mtx);
         stop_locked();
@@ -314,25 +405,17 @@ struct PathAAudioEngine {
 
     void stop_locked() {
         running.store(false, std::memory_order_release);
-        if (out_stream) {
-            aaudio_stream_state_t next_state = AAUDIO_STREAM_STATE_UNKNOWN;
-            AAudioStream_requestStop(out_stream);
-            AAudioStream_waitForStateChange(out_stream, AAUDIO_STREAM_STATE_STOPPING, &next_state, 200000000LL);
-            AAudioStream_close(out_stream);
-            out_stream = nullptr;
-        }
-        if (in_stream) {
-            aaudio_stream_state_t next_state = AAUDIO_STREAM_STATE_UNKNOWN;
-            AAudioStream_requestStop(in_stream);
-            AAudioStream_waitForStateChange(in_stream, AAUDIO_STREAM_STATE_STOPPING, &next_state, 200000000LL);
-            AAudioStream_close(in_stream);
-            in_stream = nullptr;
-        }
+        is_full_duplex.store(0, std::memory_order_release);
+        is_exclusive.store(0, std::memory_order_release);
         while (io_inflight.load(std::memory_order_acquire) > 0) {
             std::this_thread::yield();
         }
-        is_full_duplex.store(0, std::memory_order_release);
-        is_exclusive.store(0, std::memory_order_release);
+        AAudioStream* old_out = out_stream;
+        AAudioStream* old_in = in_stream;
+        out_stream = nullptr;
+        in_stream = nullptr;
+        close_streams_offloaded(old_out, old_in);
+        stream_disconnected.store(false, std::memory_order_release);
     }
 
     void fill_status(CavProAudioStatus* st) {
@@ -361,11 +444,24 @@ int32_t path_a_start(int32_t sr, int32_t buf_frames, int32_t enable_in, int32_t 
 }
 void path_a_stop() { g_aaudio.stop(); }
 int32_t path_a_write_playback(const float* data, int32_t frames) {
-    if (frames <= 0) return 0;
+    if (!data || frames <= 0) return 0;
     g_aaudio.io_inflight.fetch_add(1, std::memory_order_acq_rel);
-    int32_t written = g_aaudio.running.load(std::memory_order_acquire)
-        ? static_cast<int32_t>(cav_rb_write(&g_aaudio.out_rb, data, static_cast<uint32_t>(frames)))
-        : 0;
+    int32_t written = -1;
+    if (g_aaudio.running.load(std::memory_order_acquire) &&
+        !g_aaudio.stream_disconnected.load(std::memory_order_acquire)) {
+        written = static_cast<int32_t>(cav_rb_write(&g_aaudio.out_rb, data, static_cast<uint32_t>(frames)));
+        if (written == 0) {
+            for (int retry = 0; retry < 2 && written == 0; ++retry) {
+                std::this_thread::yield();
+                if (!g_aaudio.running.load(std::memory_order_acquire) ||
+                    g_aaudio.stream_disconnected.load(std::memory_order_acquire)) {
+                    written = -1;
+                    break;
+                }
+                written = static_cast<int32_t>(cav_rb_write(&g_aaudio.out_rb, data, static_cast<uint32_t>(frames)));
+            }
+        }
+    }
     g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);
     return written;
 }

@@ -705,13 +705,20 @@ namespace Cavern.ProAudio {
         }
 
         /// <summary>
-        /// Extracts the integer firmware version (uint32 LE at <c>PacketHeaderBytes + 8</c>) from a
-        /// <see cref="CmdInit2"/> response packet.
+        /// Builds a <see cref="CmdInfoDevmap"/> (<c>0x0080000C</c>) packet querying Gen 4 FCP device map info.
+        /// </summary>
+        public static byte[] BuildInfoDevmapPacket(ushort seq) {
+            return BuildCommandPacket(CmdInfoDevmap, seq, null);
+        }
+
+        /// <summary>
+        /// Extracts the integer firmware version from a <see cref="CmdInit2"/> response packet
+        /// (primary <c>PacketHeaderBytes + 8</c>, with safe fallbacks at <c>+4</c> and <c>+12</c> if zero).
         /// </summary>
         public static bool TryExtractFirmwareVersion(byte[] rxPacket, int rxLength, out int firmwareVersion) {
             firmwareVersion = 0;
             if (rxPacket == null ||
-                rxLength < PacketHeaderBytes + 12 ||
+                rxLength < PacketHeaderBytes + 8 ||
                 rxLength > rxPacket.Length) {
                 return false;
             }
@@ -720,12 +727,26 @@ namespace Cavern.ProAudio {
             if (errorCode != 0u || (cmd != 0u && cmd != CmdInit2)) {
                 return false;
             }
-            uint rawFw = ReadUInt32Le(rxPacket, PacketHeaderBytes + 8);
-            if (rawFw == 0u || rawFw > int.MaxValue) {
-                return false;
+            if (rxLength >= PacketHeaderBytes + 12) {
+                uint rawFw = ReadUInt32Le(rxPacket, PacketHeaderBytes + 8);
+                if (rawFw > 0u && rawFw <= int.MaxValue) {
+                    firmwareVersion = (int)rawFw;
+                    return true;
+                }
             }
-            firmwareVersion = (int)rawFw;
-            return true;
+            uint altFw4 = ReadUInt32Le(rxPacket, PacketHeaderBytes + 4);
+            if (altFw4 >= 100u && altFw4 <= 999999u) {
+                firmwareVersion = (int)altFw4;
+                return true;
+            }
+            if (rxLength >= PacketHeaderBytes + 16) {
+                uint altFw12 = ReadUInt32Le(rxPacket, PacketHeaderBytes + 12);
+                if (altFw12 >= 100u && altFw12 <= 999999u) {
+                    firmwareVersion = (int)altFw12;
+                    return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>
@@ -812,6 +833,39 @@ namespace Cavern.ProAudio {
                 default:
                     return false;
             }
+        }
+
+        /// <summary>
+        /// Resolves a candidate Gen 4 FCP configuration table for live hardware readback verification when
+        /// <see cref="CmdInit2"/> reported firmware 0 (unknown) on a known Gen 4 PID. Callers MUST still verify
+        /// multiple independent control registers via <c>CmdGetData</c> before setting <c>IsGen4FcpControlTableVerified</c>.
+        /// </summary>
+        public static bool TryGetGen4ProbeCandidateTable(int productId, int firmwareVersion, out ScarlettGen4ConfigTable table) {
+            if (TryResolveGen4ConfigTable(productId, firmwareVersion, out table)) {
+                return true;
+            }
+            if (productId == PidScarlett2i2Gen4 && firmwareVersion == 0) {
+                table = new ScarlettGen4ConfigTable(
+                    productId: productId,
+                    firmwareVersion: 0,
+                    paramBufAddr: 0xfcu,
+                    msd: new ScarlettConfigItem(0x49u, 8, 4, false),
+                    directMonitor: new ScarlettConfigItem(0x14au, 8, 16, true),
+                    directMonitorGain: new ScarlettConfigItem(0x2a4u, 16, 36, false),
+                    autoGainSwitch: new ScarlettConfigItem(0x135u, 8, 10, true),
+                    autoGainStatus: new ScarlettConfigItem(0x137u, 8, 0, false),
+                    phantomPower: new ScarlettConfigItem(0x48u, 8, 11, true),
+                    inputGain: new ScarlettConfigItem(0x4bu, 8, 12, true),
+                    levelSwitch: new ScarlettConfigItem(0x3cu, 8, 13, true),
+                    safeSwitch: new ScarlettConfigItem(0x147u, 8, 14, true),
+                    airSwitch: new ScarlettConfigItem(0x3eu, 8, 15, true),
+                    inputSelectSwitch: new ScarlettConfigItem(0x14bu, 8, 17, true),
+                    inputLinkSwitch: new ScarlettConfigItem(0x14eu, 8, 18, true),
+                    fallbackNote: "2i2 Gen4 probe candidate (FW unknown); requires live multi-register GET_DATA verification.");
+                return true;
+            }
+            table = null;
+            return false;
         }
 
         /// <summary>

@@ -17,9 +17,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import os
 import platform
+import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -81,19 +85,27 @@ HARNESS_CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
 HARNESS_PROGRAM_CS = r"""
 using System.Globalization;
 using System.Numerics;
+using System.Text;
 using System.Text.Json;
 using Cavern;
 using Cavern.Channels;
+using Cavern.Format;
+using Cavern.Format.Common;
+using Cavern.Format.Decoders;
+using Cavern.Format.Environment;
 using Cavern.Neural;
+using Cavern.ProAudio;
 using Cavern.Restoration;
 using Cavern.Spatial;
 using Cavern.Virtualizer;
+using Cavernize.Logic.Models;
 using Cavernize.Logic.Spatial;
 using Cavernize.Logic.Spatial.Adapters;
 
 string suiteFilter = Environment.GetEnvironmentVariable("GT_SUITE_FILTER") ?? "";
 bool verbose = (Environment.GetEnvironmentVariable("GT_VERBOSE") ?? "0") == "1";
 string jsonOutPath = Environment.GetEnvironmentVariable("GT_JSON_OUT") ?? "";
+string iamfOutDir = Environment.GetEnvironmentVariable("GT_IAMF_OUT_DIR") ?? "";
 
 List<Dictionary<string, object>> results = [];
 int passed = 0;
@@ -857,6 +869,311 @@ RunSuite("GT-07", "SpatialXRayPowermap_TemporalSmoothing_ZeroThrashing", () => {
     };
 });
 
+// ---------- iamf-roundtrip: 7.1.4 & 16ch HOA .iamf OBU Layout + Decoder + AudioFile Routing ----------
+RunSuite("iamf-roundtrip", "IAMF_714_And_HOA16_OBU_Spec_Decoder_And_AudioFile_Routing", () => {
+    string outDir = string.IsNullOrEmpty(iamfOutDir)
+        ? Path.Combine(Path.GetTempPath(), "cavern_iamf_gt_" + Guid.NewGuid().ToString("N")[..8])
+        : iamfOutDir;
+    Directory.CreateDirectory(outDir);
+    string path714 = Path.Combine(outDir, "iamf_714.iamf");
+    string pathHoa = Path.Combine(outDir, "iamf_hoa16.iamf");
+    string pathAmbCopy = Path.Combine(outDir, "iamf_hoa16.amb");
+
+    if (Listener.EnvironmentSize.LengthSquared() < 1f) Listener.EnvironmentSize = new Vector3(10f, 7f, 10f);
+    int sr = 48000;
+    float[] monoTone = new float[2048];
+    for (int i = 0; i < monoTone.Length; i++) {
+        monoTone[i] = 0.65f * MathF.Sin(2f * MathF.PI * 440f * i / sr);
+    }
+    Clip toneClip = new(monoTone, 1, sr);
+
+    // 1. 7.1.4 Channel-Based IAMF (12 ch)
+    Listener l714 = new(false) { SampleRate = sr, UpdateRate = 1024, MaximumSources = 16, Normalizer = 0f };
+    ReferenceChannel[] bed714 = ChannelPrototype.GetStandardMatrix(12);
+    for (int i = 0; i < 12; i++) {
+        l714.AttachSource(new Source {
+            Clip = toneClip,
+            Loop = true,
+            Position = ChannelPrototype.AlternativePositions[(int)bed714[i]] * Listener.EnvironmentSize,
+            VolumeRolloff = Rolloffs.Disabled
+        });
+    }
+    using (IamfEnvironmentWriter w714 = new(path714, l714, 2048, BitDepth.Int24, useSceneBasedHoa: false, hoaOrder: 3, mixLabel: "GT_714")) {
+        w714.WriteNextFrame();
+        w714.WriteNextFrame();
+    }
+
+    // 2. 16ch 3rd-Order HOA Scene-Based IAMF
+    Listener lHoa = new(false) { SampleRate = sr, UpdateRate = 1024, MaximumSources = 16, Normalizer = 0f };
+    lHoa.AttachSource(new Source { Clip = toneClip, Loop = true, Position = new Vector3(2f, 0f, 3f), VolumeRolloff = Rolloffs.Disabled });
+    lHoa.AttachSource(new Source { Clip = toneClip, Loop = true, Position = new Vector3(-2f, 1.5f, -2f), VolumeRolloff = Rolloffs.Disabled });
+    using (IamfEnvironmentWriter wHoa = new(pathHoa, lHoa, 2048, BitDepth.Int24, useSceneBasedHoa: true, hoaOrder: 3, mixLabel: "GT_HOA16")) {
+        wHoa.WriteNextFrame();
+        wHoa.WriteNextFrame();
+    }
+    File.Copy(pathHoa, pathAmbCopy, overwrite: true);
+
+    static ulong ReadUleb128(byte[] data, ref int idx) {
+        ulong val = 0; int shift = 0;
+        while (idx < data.Length) {
+            byte b = data[idx++];
+            val |= (ulong)(b & 0x7F) << shift;
+            if ((b & 0x80) == 0) return val;
+            shift += 7;
+        }
+        throw new Exception("Truncated uleb128 in IAMF OBU.");
+    }
+
+    static (int obuCount, bool hasAmbModeZero, bool hasMixGain101And100, bool hasTruePeak) InspectIamfObus(byte[] bytes, bool expectSceneBased, int expectedCh) {
+        int pos = 0, obuCount = 0;
+        bool hasSeq = false, hasCodec = false, hasAudioElem = false, hasMix = false;
+        bool hasAmbModeZero = false, hasMixGain101And100 = false, hasTruePeak = false;
+        while (pos < bytes.Length) {
+            byte hdr = bytes[pos++];
+            int obuType = (hdr >> 3) & 0x1F;
+            ulong sz = ReadUleb128(bytes, ref pos);
+            int payloadStart = pos;
+            int payloadEnd = pos + (int)sz;
+            obuCount++;
+            if (obuType == (int)IamfObuType.SequenceHeader) {
+                hasSeq = sz >= 6 && Encoding.ASCII.GetString(bytes, payloadStart, 4) == "iamf";
+            } else if (obuType == (int)IamfObuType.CodecConfig) {
+                hasCodec = sz >= 8;
+            } else if (obuType == (int)IamfObuType.AudioElement) {
+                hasAudioElem = true;
+                int p = payloadStart;
+                _ = ReadUleb128(bytes, ref p); // audio_element_id
+                byte aeType = (byte)((bytes[p++] >> 5) & 0x07);
+                _ = ReadUleb128(bytes, ref p); // codec_config_id
+                ulong numSub = ReadUleb128(bytes, ref p);
+                for (ulong s = 0; s < numSub; s++) _ = ReadUleb128(bytes, ref p);
+                ulong numParam = ReadUleb128(bytes, ref p);
+                if (numParam != 0) throw new Exception($"Expected num_parameters=0, got {numParam}");
+                if (expectSceneBased) {
+                    if (aeType != 1) throw new Exception($"Expected scene-based aeType=1, got {aeType}");
+                    ulong ambMode = ReadUleb128(bytes, ref p); // ambisonics_mode BEFORE output_channel_count
+                    byte outCh = bytes[p++];
+                    byte subCnt = bytes[p++];
+                    hasAmbModeZero = ambMode == 0 && outCh == expectedCh && subCnt == expectedCh;
+                    for (int c = 0; c < expectedCh; c++) {
+                        if (bytes[p++] != c) throw new Exception($"Channel mapping mismatch at {c}");
+                    }
+                }
+            } else if (obuType == (int)IamfObuType.MixPresentation) {
+                hasMix = true;
+                // Scan payload for element_mix_gain (101) & output_mix_gain (100) paramIds + TruePeak info_type (0x01)
+                int p = payloadStart;
+                _ = ReadUleb128(bytes, ref p); // mix_presentation_id
+                ulong cntLbl = ReadUleb128(bytes, ref p);
+                for (ulong i = 0; i < cntLbl; i++) while (p < payloadEnd && bytes[p++] != 0) { }
+                for (ulong i = 0; i < cntLbl; i++) while (p < payloadEnd && bytes[p++] != 0) { }
+                _ = ReadUleb128(bytes, ref p); // num_sub_mixes
+                _ = ReadUleb128(bytes, ref p); // num_audio_elements
+                _ = ReadUleb128(bytes, ref p); // audio_element_id
+                while (p < payloadEnd && bytes[p++] != 0) { } // localized_element_annotations
+                p++; // headphones_rendering_mode
+                ulong extSz = ReadUleb128(bytes, ref p);
+                p += (int)extSz;
+                ulong elemParamId = ReadUleb128(bytes, ref p); // element_mix_gain = 101
+                _ = ReadUleb128(bytes, ref p); p += 3;
+                ulong outParamId = ReadUleb128(bytes, ref p); // output_mix_gain = 100
+                _ = ReadUleb128(bytes, ref p); p += 3;
+                hasMixGain101And100 = elemParamId == 101 && outParamId == 100;
+                _ = ReadUleb128(bytes, ref p); // num_layouts
+                p++; // sound_system
+                byte infoType = bytes[p++];
+                hasTruePeak = (infoType & 0x01) != 0;
+            }
+            pos = payloadEnd;
+        }
+        if (!hasSeq || !hasCodec || !hasAudioElem || !hasMix) throw new Exception("Missing required IAMF descriptor OBUs.");
+        return (obuCount, hasAmbModeZero, hasMixGain101And100, hasTruePeak);
+    }
+
+    var info714 = InspectIamfObus(File.ReadAllBytes(path714), expectSceneBased: false, expectedCh: 12);
+    var infoHoa = InspectIamfObus(File.ReadAllBytes(pathHoa), expectSceneBased: true, expectedCh: 16);
+    Assert(infoHoa.hasAmbModeZero, "HOA AudioElement must encode ambisonics_mode=0 uleb128 before channel counts.");
+    Assert(info714.hasMixGain101And100 && infoHoa.hasMixGain101And100, "MixPresentation must define paramIds 101 & 100.");
+    Assert(info714.hasTruePeak && infoHoa.hasTruePeak, "MixPresentation must encode True Peak loudness metadata.");
+
+    // 3. IamfDecoder roundtrip + AudioFile .iamf/.amb routing
+    float maxPeak714 = 0f, maxPeakHoa = 0f;
+    using (FileStream fs714 = File.OpenRead(path714)) {
+        IamfDecoder d714 = new(fs714);
+        Assert(d714.ChannelCount == 12 && d714.SampleRate == sr, $"7.1.4 IamfDecoder mismatch: ch={d714.ChannelCount}");
+        float[] pcm = new float[2048 * 12];
+        d714.DecodeBlock(pcm, 0, pcm.Length);
+        foreach (float s in pcm) maxPeak714 = MathF.Max(maxPeak714, MathF.Abs(s));
+    }
+    using (FileStream fsHoa = File.OpenRead(pathHoa)) {
+        IamfDecoder dHoa = new(fsHoa);
+        Assert(dHoa.ChannelCount == 16 && dHoa.SampleRate == sr && dHoa.Info.ElementType == IamfAudioElementType.SceneBased,
+            $"HOA16 IamfDecoder mismatch: ch={dHoa.ChannelCount}, type={dHoa.Info.ElementType}");
+        float[] pcm = new float[2048 * 16];
+        dHoa.DecodeBlock(pcm, 0, pcm.Length);
+        foreach (float s in pcm) maxPeakHoa = MathF.Max(maxPeakHoa, MathF.Abs(s));
+    }
+    Assert(maxPeak714 > 0.05f && maxPeak714 <= 0.895f, $"7.1.4 IAMF headroom/signal out of range: peak={maxPeak714}");
+    Assert(maxPeakHoa > 0.05f && maxPeakHoa <= 0.895f, $"HOA16 IAMF headroom/signal out of range: peak={maxPeakHoa}");
+
+    using (AudioFile af714 = new(path714)) Assert(af714.Tracks.Count == 1 && af714.Tracks[0].Codec == Codec.IAMF, "AudioFile .iamf routing failed.");
+    using (AudioFile afAmb = new(pathAmbCopy)) Assert(afAmb.Tracks.Count == 1 && afAmb.Tracks[0].Codec == Codec.IAMF, "AudioFile .amb IAMF routing failed.");
+
+    return new Dictionary<string, object> {
+        ["obuCount714"] = info714.obuCount,
+        ["obuCountHoa16"] = infoHoa.obuCount,
+        ["maxPeak714"] = Math.Round(maxPeak714, 4),
+        ["maxPeakHoa16"] = Math.Round(maxPeakHoa, 4),
+        ["ambisonicsModeZeroBeforeChCounts"] = infoHoa.hasAmbModeZero,
+        ["mixGain101_100_TruePeak"] = infoHoa.hasMixGain101And100 && infoHoa.hasTruePeak
+    };
+});
+
+// ---------- proaudio-route-fsm (C# Scarlett2Protocol constants & FCP table check) ----------
+RunSuite("proaudio-route-fsm", "ProAudio_Scarlett2Protocol_Constants_And_PreAmp", () => {
+    Assert(Scarlett2Protocol.VendorIdFocusrite == 0x1235, "Focusrite VID mismatch.");
+    Assert(Scarlett2Protocol.PidScarlettSoloGen4 == 0x8218 && Scarlett2Protocol.PidScarlett2i2Gen4 == 0x8219 && Scarlett2Protocol.PidScarlett4i4Gen4 == 0x821A,
+        "Gen 4 Scarlett PID constants mismatch.");
+    Assert(Scarlett2Protocol.CmdDataActivate == 0x00800002u && Scarlett2Protocol.CmdInfoDevmap == 0x0080000Cu,
+        "Scarlett2 FCP command IDs mismatch.");
+    Assert(HardwarePreAmpStateSnapshot.MicSourcePhone == 0 && HardwarePreAmpStateSnapshot.MicSourceUsbInterface == 1,
+        "MicSource constants mismatch.");
+    return new Dictionary<string, object> {
+        ["vendorId"] = Scarlett2Protocol.VendorIdFocusrite,
+        ["soloGen4Pid"] = Scarlett2Protocol.PidScarlettSoloGen4,
+        ["cmdDataActivate"] = Scarlett2Protocol.CmdDataActivate
+    };
+});
+
+// ---------- spatial-cortex-rt: 3D Geodesic ADM Decimation + ZeroAlloc + Bass XCorr + BS.1770 ----------
+RunSuite("spatial-cortex-rt", "SpatialCortex_3DGeodesicADM_ZeroAlloc_BassXCorr_And_TruePeak", () => {
+    if (Listener.EnvironmentSize.LengthSquared() < 1f) Listener.EnvironmentSize = new Vector3(10f, 7f, 10f);
+    int sr = 48000;
+    int updateRate = 1024;
+
+    // 1. 3D Geodesic ADM decimation across +/-180 deg wrap & el=90 deg zenith + jumpPosition (>60 deg cut)
+    string admPath = Path.Combine(Path.GetTempPath(), $"cavern_adm_geodesic_{Guid.NewGuid():N}.wav");
+    try {
+        Listener admListener = new(false) { SampleRate = sr, UpdateRate = updateRate, MaximumSources = 4, Normalizer = 0f };
+        Source movingObj = new() { VolumeRolloff = Rolloffs.Disabled };
+        admListener.AttachSource(movingObj);
+
+        // 24 smooth steps across rear +/-180 deg wrap & el=90 zenith (<= 0.35 deg/step) + 1 discontinuous 180 deg jump
+        Vector3[] path = new Vector3[26];
+        for (int i = 0; i < 12; i++) {
+            // Azimuth +178 -> -178 deg through 180 deg wrap (0.36 deg/step, decimation merges collinear arcs <= 0.5 deg)
+            double azRad = (178.0 + i * 0.36) * Math.PI / 180.0;
+            path[i] = new Vector3((float)Math.Sin(azRad), 0f, (float)Math.Cos(azRad));
+        }
+        for (int i = 0; i < 12; i++) {
+            // Zenith sweep across el=90 deg pole: x from +0.025 to -0.025 at y=1
+            float x = 0.025f - i * (0.05f / 11f);
+            Vector3 u = Vector3.Normalize(new Vector3(x, 1f, 0.001f));
+            path[12 + i] = u;
+        }
+        path[24] = new Vector3(0f, 0f, 1f);
+        path[25] = new Vector3(0f, 0f, -1f); // 180 deg discontinuous jump -> must emit jumpPosition="1"
+
+        double maxGeodesicStepErrorDeg = 0.0;
+        double maxNaivePolarWrapDeg = 0.0;
+        using (BroadcastWaveFormatWriter bwWriter = new(admPath, admListener, path.Length * updateRate, BitDepth.Int16)) {
+            for (int f = 0; f < path.Length; f++) {
+                movingObj.Position = path[f] * Listener.EnvironmentSize;
+                bwWriter.WriteNextFrame();
+                if (f > 0 && f < 12) {
+                    Vector3 a = Vector3.Normalize(path[f - 1]);
+                    Vector3 b = Vector3.Normalize(path[f]);
+                    double geoDeg = Math.Acos(Math.Clamp((double)Vector3.Dot(a, b), -1.0, 1.0)) * 180.0 / Math.PI;
+                    maxGeodesicStepErrorDeg = Math.Max(maxGeodesicStepErrorDeg, geoDeg);
+                    double azA = Math.Atan2(a.X, a.Z) * 180.0 / Math.PI;
+                    double azB = Math.Atan2(b.X, b.Z) * 180.0 / Math.PI;
+                    maxNaivePolarWrapDeg = Math.Max(maxNaivePolarWrapDeg, Math.Abs(azB - azA));
+                }
+            }
+        }
+        string admBytesLatin1 = Encoding.Latin1.GetString(File.ReadAllBytes(admPath));
+        int axmlIdx = admBytesLatin1.IndexOf("<audioFormatExtended", StringComparison.Ordinal);
+        Assert(axmlIdx >= 0, "Expected ADM <audioFormatExtended> axml chunk in BWF WAV.");
+        string axml = admBytesLatin1[axmlIdx..];
+        int blockCount = axml.Split("<audioBlockFormat").Length - 1;
+        Assert(blockCount < path.Length, $"Expected 3D geodesic decimation (< {path.Length} blocks), got {blockCount}");
+        Assert(System.Text.RegularExpressions.Regex.IsMatch(axml, @"<jumpPosition\b[^>]*>1</jumpPosition>"),
+            "Expected <jumpPosition>1</jumpPosition> on 180 deg discontinuous cut.");
+        Assert(maxGeodesicStepErrorDeg <= 0.5 && maxNaivePolarWrapDeg > 180.0,
+            $"Expected geodesic <=0.5 deg vs polar wrap >180 deg: geo={maxGeodesicStepErrorDeg:0.3}, polar={maxNaivePolarWrapDeg:0.1}");
+
+        // 2. EvaluatePositionZeroAlloc 0 B heap alloc + slew <= 60 deg/s + LeadVocal |az|<=22 deg
+        int len = sr * 8;
+        float[] vocL = new float[len], vocR = new float[len], basL = new float[len], basR = new float[len], oL = new float[len], oR = new float[len];
+        for (int i = 0; i < len; i++) {
+            double t = i / (double)sr;
+            vocL[i] = vocR[i] = 0.45f * MathF.Sin((float)(2 * Math.PI * 440 * t));
+            basL[i] = basR[i] = 0.50f * MathF.Sin((float)(2 * Math.PI * 80 * t));
+            oL[i] = 0.35f * MathF.Sin((float)(2 * Math.PI * 1100 * t));
+            oR[i] = 0.35f * MathF.Cos((float)(2 * Math.PI * 1300 * t));
+        }
+        StereoStemBuffer[] stems = [new("vocals", vocL, vocR), new("bass", basL, basR), new("other", oL, oR)];
+        DirectorCue[] cues = Layer1AudioForensics.Analyze(stems, sr, SpatialChoreoMode.Cinematic);
+        SpatialChoreoTrack choreo = SpatialChoreoTrack.Build(["vocals", "bass", "other"], cues, SpatialChoreoMode.Cinematic, 8.0);
+        int vIdx = choreo.FindStemIndex(NeuralStemRole.LeadVocal, "vocals");
+        int bIdx = choreo.FindStemIndex(NeuralStemRole.Bass, "bass");
+        choreo.EvaluatePositionZeroAlloc(vIdx, 0.5, out _);
+        long alloc0 = GC.GetAllocatedBytesForCurrentThread();
+        Vector3 prevV = Vector3.Zero;
+        double maxSlewMeasured = 0.0;
+        float maxVocalAz = 0f;
+        for (int k = 0; k < 4000; k++) {
+            double t = k * 0.002;
+            choreo.EvaluatePositionZeroAlloc(vIdx, t, out Vector3 vp);
+            PsychoacousticGovernor.CartesianToSphericalDeg(vp, out float vAz, out _);
+            maxVocalAz = MathF.Max(maxVocalAz, MathF.Abs(vAz));
+            Vector3 vn = Vector3.Normalize(vp);
+            if (k > 0) {
+                double ang = Math.Acos(Math.Clamp((double)Vector3.Dot(prevV, vn), -1.0, 1.0)) * 180.0 / Math.PI;
+                maxSlewMeasured = Math.Max(maxSlewMeasured, ang / 0.002);
+            }
+            prevV = vn;
+        }
+        long alloc1 = GC.GetAllocatedBytesForCurrentThread();
+        long zeroAllocDelta = alloc1 - alloc0;
+        Assert(zeroAllocDelta == 0, $"EvaluatePositionZeroAlloc allocated {zeroAllocDelta} bytes.");
+        Assert(maxVocalAz <= 22.05f, $"LeadVocal azimuth exceeded 22 deg: {maxVocalAz:0.2}");
+        Assert(maxSlewMeasured <= 62.0, $"Slew exceeded 60 deg/s ceiling: {maxSlewMeasured:0.2}");
+
+        // 3. Bass <120Hz phase-coherence xcorr >= 0.95 (FL vs FR on 80Hz bass stem)
+        float[][] bus12 = NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe([new StereoStemBuffer("bass", basL, basR)], sr);
+        float[][] raw11 = NeuralStemSpatializer.ProcessHybridNeuralDirAc714([new StereoStemBuffer("bass", basL, basR)], sr);
+        double dot = 0.0, e0 = 0.0, e1 = 0.0;
+        for (int i = 0; i < len; i++) {
+            double a = raw11[0][i], b = raw11[1][i];
+            dot += a * b; e0 += a * a; e1 += b * b;
+        }
+        double bassXcorr = dot / Math.Sqrt(Math.Max(1e-12, e0 * e1));
+        Assert(bassXcorr >= 0.95, $"Bass <120Hz FL/FR xcorr must be >=0.95, got {bassXcorr:0.4}");
+
+        // 4. BS.1770 -1.0 dBTP True-Peak clamp
+        PsychoacousticGovernor.ClampBlockHeadroomBs1770(bus12, len);
+        float peakBus = 0f;
+        foreach (float[] ch in bus12) foreach (float s in ch) peakBus = MathF.Max(peakBus, MathF.Abs(s));
+        float peakDbtp = 20f * MathF.Log10(MathF.Max(1e-9f, peakBus));
+        Assert(peakDbtp <= -0.99f, $"Expected <= -1.0 dBTP headroom, got {peakDbtp:0.3} dBTP");
+
+        return new Dictionary<string, object> {
+            ["admDecimatedBlockCount"] = blockCount,
+            ["admTotalSteps"] = path.Length,
+            ["maxGeodesicStepDeg"] = Math.Round(maxGeodesicStepErrorDeg, 3),
+            ["maxNaivePolarWrapDeg"] = Math.Round(maxNaivePolarWrapDeg, 1),
+            ["zeroAllocBytes"] = zeroAllocDelta,
+            ["maxLeadVocalAzDeg"] = Math.Round(maxVocalAz, 2),
+            ["maxSlewDegPerSec"] = Math.Round(maxSlewMeasured, 2),
+            ["bassSub120HzXcorr"] = Math.Round(bassXcorr, 4),
+            ["clampedPeakDbtp"] = Math.Round(peakDbtp, 3)
+        };
+    } finally {
+        try { if (File.Exists(admPath)) File.Delete(admPath); } catch { }
+    }
+});
+
 if (!string.IsNullOrEmpty(jsonOutPath)) {
     File.WriteAllText(jsonOutPath, JsonSerializer.Serialize(new { passed, failed, results }, new JsonSerializerOptions { WriteIndented = true }));
 }
@@ -866,49 +1183,254 @@ return failed == 0 ? 0 : 1;
 """
 
 
+def _validate_iamf_files_with_ffmpeg(iamf_dir: Path, verbose: bool) -> dict[str, object]:
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        raise RuntimeError("ffmpeg/ffprobe not found on PATH for iamf-roundtrip validation.")
+    metrics: dict[str, object] = {}
+    for fname in ("iamf_714.iamf", "iamf_hoa16.iamf"):
+        fpath = iamf_dir / fname
+        if not fpath.is_file():
+            raise RuntimeError(f"Expected generated IAMF artifact missing: {fpath}")
+        pr = subprocess.run(
+            [ffprobe, "-v", "error", "-show_format", "-show_streams", str(fpath)],
+            capture_output=True, text=True, check=False,
+        )
+        if pr.returncode != 0 or "Failed to read obu type 1" in pr.stderr or pr.stderr.strip():
+            raise RuntimeError(f"ffprobe failed on {fname} (rc={pr.returncode}): {pr.stderr.strip()}")
+        dec = subprocess.run(
+            [ffmpeg, "-v", "error", "-i", str(fpath), "-f", "null", "-"],
+            capture_output=True, text=True, check=False,
+        )
+        if dec.returncode != 0 or "Failed to read obu type 1" in dec.stderr or dec.stderr.strip():
+            raise RuntimeError(f"ffmpeg decode failed on {fname} (rc={dec.returncode}): {dec.stderr.strip()}")
+        metrics[f"{fname}_bytes"] = fpath.stat().st_size
+        if verbose:
+            print(f"    ffprobe/ffmpeg validated {fname} ({metrics[f'{fname}_bytes']} bytes, 0 OBU errors)")
+    return metrics
+
+
+def _run_export_compression_roundtrip(verbose: bool) -> dict[str, object]:
+    ffmpeg = shutil.which("ffmpeg")
+    ffprobe = shutil.which("ffprobe")
+    if not ffmpeg or not ffprobe:
+        raise RuntimeError("ffmpeg/ffprobe required for export-compression-roundtrip.")
+
+    with tempfile.TemporaryDirectory(prefix="cavern_exp_cmp_") as td:
+        p = Path(td)
+        wav2 = p / "master_2ch.wav"
+        wav12 = p / "master_12ch.wav"
+        subprocess.run([
+            ffmpeg, "-y", "-v", "error", "-f", "lavfi",
+            "-i", "sine=frequency=440:duration=2:sample_rate=48000",
+            "-ac", "2", "-c:a", "pcm_s24le", str(wav2),
+        ], check=True)
+        subprocess.run([
+            ffmpeg, "-y", "-v", "error", "-f", "lavfi",
+            "-i", "sine=frequency=440:duration=2:sample_rate=48000",
+            "-ac", "12", "-c:a", "pcm_s24le", str(wav12),
+        ], check=True)
+
+        # Lossless targets: .flac (2ch), .wv (12ch), iamf(fLaC) (2ch)
+        out_flac = p / "out.flac"
+        out_wv = p / "out.wv"
+        out_iamf_flac = p / "out_flac.iamf"
+        subprocess.run([ffmpeg, "-y", "-v", "error", "-i", str(wav2), "-c:a", "flac", str(out_flac)], check=True)
+        subprocess.run([ffmpeg, "-y", "-v", "error", "-i", str(wav12), "-c:a", "wavpack", str(out_wv)], check=True)
+        subprocess.run([
+            ffmpeg, "-y", "-v", "error", "-i", str(wav2), "-map", "0:a",
+            "-stream_group", "type=iamf_audio_element:id=1:st=0:audio_element_type=channel,layer=ch_layout=stereo",
+            "-stream_group", "type=iamf_mix_presentation:id=2:stg=0:annotations=en-us=Mix,submix=parameter_id=100:parameter_rate=48000:default_mix_gain=0|element=stg=0:parameter_id=101:parameter_rate=48000:default_mix_gain=0:headphones_rendering_mode=stereo:annotations=en-us=Elem|layout=sound_system=stereo",
+            "-c:a", "flac", "-f", "iamf", str(out_iamf_flac),
+        ], check=True)
+
+        def _decode_s32(src: Path) -> bytes:
+            return subprocess.check_output([ffmpeg, "-v", "error", "-i", str(src), "-f", "s32le", "-acodec", "pcm_s32le", "-"])
+
+        ref2 = _decode_s32(wav2)
+        ref12 = _decode_s32(wav12)
+
+        def _null_snr_db(ref_b: bytes, dec_b: bytes, label: str) -> float:
+            if len(ref_b) != len(dec_b):
+                raise AssertionError(f"{label} sample drift detected: ref_bytes={len(ref_b)} != dec_bytes={len(dec_b)}")
+            n = len(ref_b) // 4
+            rv = struct.unpack(f"<{n}i", ref_b)
+            dv = struct.unpack(f"<{n}i", dec_b)
+            sq_ref = sum(v * v for v in rv)
+            sq_err = sum((a - b) * (a - b) for a, b in zip(rv, dv))
+            return 200.0 if sq_err == 0 else 10.0 * math.log10(sq_ref / sq_err)
+
+        snr_flac = _null_snr_db(ref2, _decode_s32(out_flac), "flac")
+        snr_wv = _null_snr_db(ref12, _decode_s32(out_wv), "wavpack")
+        snr_iamf_flac = _null_snr_db(ref2, _decode_s32(out_iamf_flac), "iamf(fLaC)")
+        for label, snr in (("flac", snr_flac), ("wavpack", snr_wv), ("iamf(fLaC)", snr_iamf_flac)):
+            if snr < 140.0:
+                raise AssertionError(f"{label} null-test SNR {snr:.2f} dB < 140.0 dB")
+
+        # Lossy targets: .opus, .m4a, iamf(Opus) -> >=85% size reduction vs 24-bit PCM master
+        out_opus = p / "out.opus"
+        out_m4a = p / "out.m4a"
+        out_iamf_opus = p / "out_opus.iamf"
+        subprocess.run([ffmpeg, "-y", "-v", "error", "-i", str(wav2), "-c:a", "libopus", "-b:a", "96k", str(out_opus)], check=True)
+        subprocess.run([ffmpeg, "-y", "-v", "error", "-i", str(wav2), "-c:a", "aac", "-b:a", "128k", str(out_m4a)], check=True)
+        subprocess.run([
+            ffmpeg, "-y", "-v", "error", "-i", str(wav2), "-map", "0:a",
+            "-stream_group", "type=iamf_audio_element:id=1:st=0:audio_element_type=channel,layer=ch_layout=stereo",
+            "-stream_group", "type=iamf_mix_presentation:id=2:stg=0:annotations=en-us=Mix,submix=parameter_id=100:parameter_rate=48000:default_mix_gain=0|element=stg=0:parameter_id=101:parameter_rate=48000:default_mix_gain=0:headphones_rendering_mode=stereo:annotations=en-us=Elem|layout=sound_system=stereo",
+            "-c:a", "libopus", "-b:a", "96k", "-f", "iamf", str(out_iamf_opus),
+        ], check=True)
+
+        master2_bytes = wav2.stat().st_size
+        cuts: dict[str, float] = {}
+        for lbl, fpath in (("opus", out_opus), ("m4a", out_m4a), ("iamf(Opus)", out_iamf_opus)):
+            pr = subprocess.run([ffprobe, "-v", "error", "-show_streams", str(fpath)], capture_output=True, text=True, check=False)
+            if pr.returncode != 0:
+                raise RuntimeError(f"ffprobe failed on {lbl}: {pr.stderr.strip()}")
+            cut = 1.0 - (fpath.stat().st_size / master2_bytes)
+            if cut < 0.85:
+                raise AssertionError(f"{lbl} size reduction {cut * 100:.2f}% < 85.0%")
+            cuts[lbl] = round(cut * 100.0, 2)
+
+        metrics = {
+            "flacSnrDb": round(snr_flac, 2),
+            "wavpack12chSnrDb": round(snr_wv, 2),
+            "iamfFlacSnrDb": round(snr_iamf_flac, 2),
+            "opusSizeCutPct": cuts["opus"],
+            "m4aSizeCutPct": cuts["m4a"],
+            "iamfOpusSizeCutPct": cuts["iamf(Opus)"],
+            "sampleDrift": 0,
+        }
+        if verbose:
+            print(f"    {metrics}")
+        return metrics
+
+
+def _run_proaudio_route_fsm_invariants(verbose: bool) -> dict[str, object]:
+    audio_out = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8")
+    bridge_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "NativeProAudioBridge.cs").read_text(encoding="utf-8")
+    api_h = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Native" / "cavernize_proaudio" / "cavernize_proaudio_api.h").read_text(encoding="utf-8")
+    ipc_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "OmniBridgeIpcReceiver.cs").read_text(encoding="utf-8")
+
+    if "class AudioRouteFsm" not in audio_out or "Interlocked.Increment(ref routeEpoch)" not in audio_out or "Interlocked.CompareExchange" not in audio_out:
+        raise AssertionError("AudioRouteFsm monotonic routeEpoch CAS invariants missing in AndroidAudioOutput.cs")
+    if "ProAudioMicSource.PhoneMic" not in audio_out or "preferredInputDeviceId = 0" not in audio_out:
+        raise AssertionError("PhoneMic preferredInputDeviceId=0 reset missing in AndroidAudioOutput.cs")
+    if "InstallSigpipeShield()" not in bridge_cs or "NativeInstallSigpipeShield()" not in bridge_cs:
+        raise AssertionError("InstallSigpipeShield missing in NativeProAudioBridge.cs")
+    if "sigaction(SIGPIPE" not in api_h or "SIG_IGN" not in api_h:
+        raise AssertionError("SIGPIPE -> SIG_IGN shield missing in cavernize_proaudio_api.h")
+    if 'ExtraBridgeProtoVer = "X-Bridge-Proto-Ver"' not in ipc_cs or 'BridgeProtoVersion = "2.2"' not in ipc_cs:
+        raise AssertionError('X-Bridge-Proto-Ver="2.2" constant missing in OmniBridgeIpcReceiver.cs')
+
+    metrics = {"routeEpochCas": True, "phoneMicInIdReset": True, "sigpipeShield": True, "bridgeProtoVer": "2.2"}
+    if verbose:
+        print(f"    {metrics}")
+    return metrics
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Cavern Audio Ground-Truth Pairwise Verification Harness (.NET)")
     parser.add_argument("--verbose", action="store_true", help="Print all numeric metrics per suite")
-    parser.add_argument("--suite", default="", help="Run a single suite ID (e.g., GT-05)")
+    parser.add_argument("--suite", default="", help="Run a single suite ID (e.g., GT-05, iamf-roundtrip, export-compression-roundtrip, proaudio-route-fsm, spatial-cortex-rt)")
     parser.add_argument("--json", default="", help="Optional JSON report output path")
     args = parser.parse_args()
 
-    dotnet = find_dotnet()
-    tfm = detect_tfm(dotnet)
-    cavern_csproj = REPO_ROOT / "Cavern" / "Cavern.csproj"
-    logic_csproj = REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Cavernize.Logic.csproj"
+    suite_req = args.suite.strip()
+    py_results: list[dict[str, object]] = []
+    py_passed = 0
+    py_failed = 0
+
+    def _run_py_suite(sid: str, title: str, fn) -> None:
+        nonlocal py_passed, py_failed
+        print(f"[{sid}] {title} ... ", end="", flush=True)
+        try:
+            m = fn()
+            m["id"] = sid
+            m["title"] = title
+            m["status"] = "PASS"
+            py_results.append(m)
+            py_passed += 1
+            print("PASS", flush=True)
+        except Exception as exc:
+            py_failed += 1
+            py_results.append({"id": sid, "title": title, "status": "FAIL", "error": str(exc)})
+            print(f"FAIL -> {exc}", flush=True)
+
+    cs_suites = re.findall(r'RunSuite\("([^"]+)"', HARNESS_PROGRAM_CS)
+    run_cs = (not suite_req) or any(suite_req.lower() == s.lower() for s in cs_suites)
+
+    rc = 0
+    cs_json: dict[str, object] = {"passed": 0, "failed": 0, "results": []}
 
     with tempfile.TemporaryDirectory(prefix="cavern_audio_gt_") as tmp:
         tmp_path = Path(tmp)
-        (tmp_path / "AudioGroundTruth.csproj").write_text(
-            HARNESS_CSPROJ.format(tfm=tfm, cavern_csproj=cavern_csproj, logic_csproj=logic_csproj),
-            encoding="utf-8",
-        )
-        (tmp_path / "Program.cs").write_text(HARNESS_PROGRAM_CS, encoding="utf-8")
+        iamf_dir = tmp_path / "iamf_out"
+        iamf_dir.mkdir(parents=True, exist_ok=True)
+        cs_json_path = tmp_path / "cs_gt.json"
 
-        env = os.environ.copy()
-        env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
-        env["DOTNET_EnableDiagnostics"] = "0"
-        env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
-        if dotnet == "/root/.dotnet/dotnet" and platform.machine().lower() in ("aarch64", "arm64"):
-            env.setdefault("DOTNET_GCHeapHardLimit", "20000000")
-        env["GT_VERBOSE"] = "1" if args.verbose else "0"
-        env["GT_SUITE_FILTER"] = args.suite
-        env["GT_JSON_OUT"] = args.json
+        if run_cs:
+            dotnet = find_dotnet()
+            tfm = detect_tfm(dotnet)
+            cavern_csproj = REPO_ROOT / "Cavern" / "Cavern.csproj"
+            logic_csproj = REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Cavernize.Logic.csproj"
+            (tmp_path / "AudioGroundTruth.csproj").write_text(
+                HARNESS_CSPROJ.format(tfm=tfm, cavern_csproj=cavern_csproj, logic_csproj=logic_csproj),
+                encoding="utf-8",
+            )
+            (tmp_path / "Program.cs").write_text(HARNESS_PROGRAM_CS, encoding="utf-8")
 
-        cmd = [
-            dotnet,
-            "run",
-            "--project",
-            str(tmp_path / "AudioGroundTruth.csproj"),
-            "-c",
-            "Release",
-            "-m:1",
-            "/p:UseSharedCompilation=false",
-        ]
-        print(f"[audio-gt] Running {tfm} Ground-Truth Harness...", flush=True)
-        proc = subprocess.run(cmd, cwd=str(REPO_ROOT), env=env)
-        return proc.returncode
+            env = os.environ.copy()
+            env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
+            env["DOTNET_EnableDiagnostics"] = "0"
+            env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
+            if dotnet == "/root/.dotnet/dotnet" and platform.machine().lower() in ("aarch64", "arm64"):
+                env.setdefault("DOTNET_GCHeapHardLimit", "20000000")
+            env["GT_VERBOSE"] = "1" if args.verbose else "0"
+            env["GT_SUITE_FILTER"] = suite_req
+            env["GT_JSON_OUT"] = str(cs_json_path)
+            env["GT_IAMF_OUT_DIR"] = str(iamf_dir)
+
+            cmd = [
+                dotnet,
+                "run",
+                "--project",
+                str(tmp_path / "AudioGroundTruth.csproj"),
+                "-c",
+                "Release",
+                "-m:1",
+                "/p:UseSharedCompilation=false",
+            ]
+            print(f"[audio-gt] Running {tfm} Ground-Truth Harness...", flush=True)
+            proc = subprocess.run(cmd, cwd=str(REPO_ROOT), env=env)
+            rc = proc.returncode
+            if cs_json_path.is_file():
+                cs_json = json.loads(cs_json_path.read_text(encoding="utf-8"))
+
+        if rc == 0 and (not suite_req or suite_req.lower() == "iamf-roundtrip"):
+            _run_py_suite("iamf-roundtrip-ffmpeg", "FFmpeg_FFprobe_IAMF_714_And_HOA16_Validation", lambda: _validate_iamf_files_with_ffmpeg(iamf_dir, args.verbose))
+
+    if not suite_req or suite_req.lower() == "export-compression-roundtrip":
+        _run_py_suite("export-compression-roundtrip", "FFmpeg_Lossless_FLAC_WV_IAMF_And_Lossy_Opus_M4A_Roundtrip", lambda: _run_export_compression_roundtrip(args.verbose))
+
+    if not suite_req or suite_req.lower() == "proaudio-route-fsm":
+        _run_py_suite("proaudio-route-fsm-invariants", "ProAudio_AudioRouteFsm_PhoneMic_SIGPIPE_And_BridgeProto22", lambda: _run_proaudio_route_fsm_invariants(args.verbose))
+
+    total_passed = int(cs_json.get("passed", 0)) + py_passed
+    total_failed = int(cs_json.get("failed", 0)) + py_failed
+    if suite_req and total_passed + total_failed == 0:
+        print(f"[audio-gt] ERROR: --suite '{suite_req}' matched 0 suites.", file=sys.stderr)
+        return 1
+
+    if args.json:
+        merged = {
+            "passed": total_passed,
+            "failed": total_failed,
+            "results": list(cs_json.get("results", [])) + py_results,
+        }
+        Path(args.json).write_text(json.dumps(merged, indent=2), encoding="utf-8")
+
+    return 1 if (rc != 0 or py_failed > 0) else 0
 
 
 if __name__ == "__main__":

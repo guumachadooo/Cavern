@@ -1527,5 +1527,25 @@ public sealed partial class AndroidStrings {
         d["SingDockMicSrcUsbChip"] = "Mic USB";
         d["SingDockMicSrcAutoChip"] = "Mic: Auto";
         d["ScarlettGen4VerifiedBadgeFmt"] = "FCP Gen 4 Verificado (FW {0})";
+
+        // Wave 2B Nível de Compressão Studio, Exportação em Segundo Plano e Coreografia 3D
+        d["StudioCompressionTierLabel"] = "Compressão e Qualidade";
+        d["TipStudioCompressionTier"] = "Escolha como o master espacial exportado será empacotado:\n\n• Master PCM: WAV, IAMF ou AMB PCM de estúdio sem compressão.\n• Lossless: FLAC / contêiner sem perdas menor e bit-exato (não requer gêmeo LGSR).\n• Portátil: Opus / E-AC-3 compacto para compartilhar no celular.";
+        d["StudioTierMasterPcm"] = "Master PCM";
+        d["StudioTierLossless"] = "Lossless";
+        d["StudioTierPortable"] = "Portátil";
+        d["StudioCodecDetailsToggleFmt"] = "Detalhes do Codec · {0} ({1})";
+        d["StudioCodecDetailsBodyFmt"] = "Contêiner: {0} · Spec: {1} · Teto: {2:0.0} dBTP";
+        d["StudioAtmosTierLockWarn"] = "Dolby Atmos ADM BWF exige Master PCM para preservar os metadados de objetos 3D dinâmicos. Mude para Eclipsa IAMF para compressão lossless ou portátil.";
+        d["StudioSwitchToEclipsaBtn"] = "Mudar para Eclipsa IAMF";
+        d["StudioExportLowSpaceError"] = "Espaço livre insuficiente no armazenamento para esta exportação.";
+        d["StudioExportFgCancelledToast"] = "Exportação cancelada.";
+        d["SpatialChoreoLabel"] = "Coreografia de Objetos 3D:";
+        d["TipSpatialChoreo"] = "Anima os stems 3D separados pela sala usando análise acústica e clima da letra (apenas posições de objetos 3D — zero efeitos na voz).\n\n• Desligado: âncoras estáticas ITU-R BS.2127.\n• Sutil: respiração suave frontal e de altura.\n• Musical: palco 3D alinhado a batidas e seções.\n• Cinematográfico: arcos amplos em surround e teto.\n• Órbita: movimento orbital esférico contínuo.";
+        d["SpatialChoreoOff"] = "Desligado (Estático)";
+        d["SpatialChoreoSubtle"] = "Sutil";
+        d["SpatialChoreoMusical"] = "Musical";
+        d["SpatialChoreoCinematic"] = "Cinematográfico";
+        d["SpatialChoreoOrbit"] = "Órbita";
     }
 }

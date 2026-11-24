@@ -49,6 +49,130 @@ namespace Cavern.Neural {
     /// expanding harmonic instruments and ambience into 7.1.4 surround and height layers via <see cref="ParametricStftAnalyzer"/>).
     /// </summary>
     public static class NeuralStemSpatializer {
+        static int activeChoreoMode = (int)SpatialChoreoMode.Off;
+        static SpatialChoreoTrack activeChoreoTrack;
+
+        /// <summary>
+        /// Active BP3 Spatial Object Cortex choreography mode.
+        /// </summary>
+        public static SpatialChoreoMode ActiveChoreoMode {
+            get { return (SpatialChoreoMode)System.Threading.Volatile.Read(ref activeChoreoMode); }
+            set { System.Threading.Volatile.Write(ref activeChoreoMode, (int)value); }
+        }
+
+        /// <summary>
+        /// Active precomputed C2 ring-LUT choreography track (thread-safe snapshot).
+        /// </summary>
+        public static SpatialChoreoTrack ActiveChoreoTrack {
+            get { return System.Threading.Volatile.Read(ref activeChoreoTrack); }
+            private set { System.Threading.Volatile.Write(ref activeChoreoTrack, value); }
+        }
+
+        /// <summary>
+        /// Atomically binds a precomputed <see cref="SpatialChoreoTrack"/> (or clears choreography when null).
+        /// </summary>
+        public static void SetChoreoTrack(SpatialChoreoTrack track) {
+            ActiveChoreoTrack = track;
+            if (track != null) {
+                ActiveChoreoMode = track.Mode;
+            }
+        }
+
+        /// <summary>
+        /// Builds and binds a governed C2 ring-LUT <see cref="SpatialChoreoTrack"/> from separated stems,
+        /// optional distilled <see cref="LyricMoodDigest"/> sections, and an optional semantic director.
+        /// </summary>
+        public static SpatialChoreoTrack BuildAndSetChoreoTrack(
+            IReadOnlyList<StereoStemBuffer> stems,
+            int sampleRate,
+            SpatialChoreoMode mode,
+            IReadOnlyList<LyricMoodDigest> moodDigests = null,
+            ISpatialSemanticDirector director = null) {
+            SpatialChoreoTrack track = BuildChoreoTrack(stems, sampleRate, mode, moodDigests, director);
+            SetChoreoTrack(track);
+            return track;
+        }
+
+        /// <summary>
+        /// Builds a governed C2 ring-LUT <see cref="SpatialChoreoTrack"/> without mutating static global state.
+        /// </summary>
+        public static SpatialChoreoTrack BuildChoreoTrack(
+            IReadOnlyList<StereoStemBuffer> stems,
+            int sampleRate,
+            SpatialChoreoMode mode,
+            IReadOnlyList<LyricMoodDigest> moodDigests = null,
+            ISpatialSemanticDirector director = null) {
+            if (stems == null || stems.Count == 0 || sampleRate < 8000) {
+                return null;
+            }
+            int maxLen = 0;
+            string[] names = new string[stems.Count];
+            for (int i = 0; i < stems.Count; i++) {
+                StereoStemBuffer st = stems[i];
+                names[i] = st != null && !string.IsNullOrWhiteSpace(st.Name) ? st.Name : ("Stem " + (i + 1));
+                if (st != null && st.Length > maxLen) {
+                    maxLen = st.Length;
+                }
+            }
+            if (maxLen <= 0) {
+                return null;
+            }
+            double durationSec = maxLen / (double)sampleRate;
+            ISpatialSemanticDirector activeDirector = director ?? new DeterministicRuleDirector();
+            bool usedFallback;
+            DirectorCue[] cues = activeDirector.GenerateCues(stems, sampleRate, mode, moodDigests, out usedFallback);
+            return SpatialChoreoTrack.Build(names, cues, mode, durationSec);
+        }
+
+        /// <summary>
+        /// Zero-allocation evaluation of a stem's normalized 3D room position from the currently active
+        /// <see cref="ActiveChoreoTrack"/> (falling back to static ITU-R BS.2127 anchors when Off or unbound).
+        /// </summary>
+        public static bool EvaluateStemPositionZeroAlloc(
+            int stemIdx,
+            NeuralStemRole role,
+            float sideSign,
+            double timeSec,
+            out Vector3 normalizedPos,
+            bool loop = false) {
+            return EvaluateStemPositionZeroAlloc(ActiveChoreoTrack, ActiveChoreoMode, stemIdx, role, sideSign, timeSec, out normalizedPos, loop);
+        }
+
+        /// <summary>
+        /// Zero-allocation evaluation of a stem's normalized 3D room position from <paramref name="track"/>
+        /// using 3D unit-SLERP shortest-arc interpolation with stereo pair spread and 0 B GC.
+        /// </summary>
+        public static bool EvaluateStemPositionZeroAlloc(
+            SpatialChoreoTrack track,
+            SpatialChoreoMode mode,
+            int stemIdx,
+            NeuralStemRole role,
+            float sideSign,
+            double timeSec,
+            out Vector3 normalizedPos,
+            bool loop = false) {
+            if (track == null || mode == SpatialChoreoMode.Off || track.Mode == SpatialChoreoMode.Off ||
+                !track.EvaluatePositionZeroAlloc(stemIdx, timeSec, out Vector3 corePos, loop)) {
+                normalizedPos = GetAnchorPosition(role, sideSign);
+                return false;
+            }
+            if (MathF.Abs(sideSign) > 0.01f && role != NeuralStemRole.LeadVocal && role != NeuralStemRole.Vocals && role != NeuralStemRole.Bass) {
+                float horizLenSq = corePos.X * corePos.X + corePos.Z * corePos.Z;
+                if (horizLenSq > 1e-6f) {
+                    float invH = 1f / MathF.Sqrt(horizLenSq);
+                    // Rightward tangent orthogonal to horizontal direction: (+Z, 0, -X)
+                    Vector3 tangent = new Vector3(corePos.Z * invH, 0f, -corePos.X * invH);
+                    corePos += tangent * (0.22f * sideSign);
+                    float len = corePos.Length();
+                    if (len > 1f) {
+                        corePos /= len;
+                    }
+                }
+            }
+            normalizedPos = corePos;
+            return true;
+        }
+
         /// <summary>
         /// Infers the semantic <see cref="NeuralStemRole"/> from a stem file or model output name.
         /// </summary>

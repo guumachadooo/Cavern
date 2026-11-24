@@ -51,5 +51,9 @@
     <!-- W44: Allow Android 12-17 access to Qualcomm Hexagon NPU FastRPC (QNN HTP) and OpenCL GPU libraries -->
     <uses-native-library android:name="libcdsprpc.so" android:required="false" />
     <uses-native-library android:name="libOpenCL.so" android:required="false" />
+    <service
+        android:name="hu.sbence.cavern.cavernize.ExportMediaProcessingService"
+        android:exported="false"
+        android:foregroundServiceType="mediaProcessing" />
   </application>
 </manifest>

@@ -2,6 +2,8 @@ using Android.App;
 using Android.Content;
 using Android.Content.PM;
 
+using CavernizeAndroid.Audio;
+
 namespace CavernizeAndroid.Services;
 
 /// <summary>
@@ -34,6 +36,12 @@ public sealed class OmniBridgeIpcReceiver : BroadcastReceiver {
     public const string ExtraOk = "ok";
     public const string ExtraBody = "body";
     public const string ExtraElapsedMs = "elapsed_ms";
+    public const string ExtraBridgeProtoVer = "X-Bridge-Proto-Ver";
+    public const string BridgeProtoVersion = "2.2";
+
+    const int ColdStartGateTimeoutMs = 4000;
+    static readonly object coldStartGateLock = new();
+    static Task coldStartGateTask;
 
     public const string ActionEnsureOmniAlive = "hu.sbence.cavern.ipc.OMNI_ENSURE_ALIVE";
 
@@ -102,6 +110,13 @@ public sealed class OmniBridgeIpcReceiver : BroadcastReceiver {
         PendingResult pending = GoAsync();
         _ = Task.Run(async () => {
             try {
+                // Bounded <=4s cold-start gate: eagerly initialize AppLogger + SIGPIPE shield before IPC commands
+                // so cold-start log_tail is never empty and BroadcastReceiver never hits Android 10s ANR.
+                Task gate = EnsureColdStartGateAsync(appCtx);
+                if (!gate.IsCompleted) {
+                    await Task.WhenAny(gate, Task.Delay(ColdStartGateTimeoutMs)).ConfigureAwait(false);
+                }
+
                 string normalizedCmd = (cmd ?? "").Trim().ToLowerInvariant();
                 if (normalizedCmd == "get_omni_bootstrap") {
                     string relayUrl = (store.LiveRelayUrl ?? "").Trim();
@@ -111,7 +126,8 @@ public sealed class OmniBridgeIpcReceiver : BroadcastReceiver {
                         relayUrl,
                         pairSecretHex = pairHex,
                         hasPairSecret = !string.IsNullOrEmpty(pairHex),
-                        hasRelayUrl = !string.IsNullOrEmpty(relayUrl)
+                        hasRelayUrl = !string.IsNullOrEmpty(relayUrl),
+                        bridgeProtoVer = BridgeProtoVersion
                     });
                     AppLogger.Info("IPC", $"OmniAgent local IPC bootstrap served (hasRelay={!string.IsNullOrEmpty(relayUrl)}, hasPair={!string.IsNullOrEmpty(pairHex)}).");
                     SendReply(appCtx, replyPkg, reqId, ok: true, body: payload, elapsedMs: 1);
@@ -138,6 +154,26 @@ public sealed class OmniBridgeIpcReceiver : BroadcastReceiver {
         });
     }
 
+    static Task EnsureColdStartGateAsync(Context appCtx) {
+        lock (coldStartGateLock) {
+            if (coldStartGateTask == null || coldStartGateTask.IsFaulted || coldStartGateTask.IsCanceled) {
+                coldStartGateTask = Task.Run(() => {
+                    try {
+                        AppLogger.Initialize(appCtx);
+                    } catch {
+                        // Best effort logger initialization
+                    }
+                    try {
+                        NativeProAudioBridge.InstallSigpipeShield();
+                    } catch {
+                        // Best effort native shield
+                    }
+                });
+            }
+            return coldStartGateTask;
+        }
+    }
+
     static void SendReply(Context context, string replyPkg, string reqId, bool ok, string body, long elapsedMs) {
         try {
             Intent reply = new(ActionReply);
@@ -146,6 +182,7 @@ public sealed class OmniBridgeIpcReceiver : BroadcastReceiver {
             reply.PutExtra(ExtraOk, ok);
             reply.PutExtra(ExtraBody, body ?? "");
             reply.PutExtra(ExtraElapsedMs, elapsedMs);
+            reply.PutExtra(ExtraBridgeProtoVer, BridgeProtoVersion);
             context.SendBroadcast(reply, OmniBridgePermission);
         } catch (Exception ex) {
             AppLogger.Warn("IPC", $"Failed to send OmniBridge IPC reply for '{reqId}': {ex.Message}");

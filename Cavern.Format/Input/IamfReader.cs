@@ -26,6 +26,18 @@ namespace Cavern.Format {
         public override IamfRenderer CreateRenderer(IamfDecoder decoder) => new IamfRenderer(decoder);
 
         /// <summary>
+        /// Gets the parsed AOMedia IAMF stream descriptor metadata.
+        /// </summary>
+        public IamfStreamInfo StreamInfo {
+            get {
+                if (Decoder == null) {
+                    ReadHeader();
+                }
+                return Decoder?.Info;
+            }
+        }
+
+        /// <summary>
         /// Gets the IAMF codec, audio element, and loudness metadata in human-readable format.
         /// </summary>
         public ReadableMetadata GetMetadata() {

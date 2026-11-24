@@ -93,13 +93,25 @@ namespace Cavern.Format.Decoders {
 
         /// <summary>Total decoded audio frame count.</summary>
         public int FrameCount { get; set; }
+
+        /// <summary>Codec lookahead roll distance (e.g., negative frame count for Opus).</summary>
+        public short AudioRollDistance { get; set; }
+
+        /// <summary>Opus pre-skip sample count when <see cref="CodecFourCc"/> is <c>"Opus"</c>.</summary>
+        public int PreSkip { get; set; }
+
+        /// <summary>Total sample count declared in FLAC <c>STREAMINFO</c> when <see cref="CodecFourCc"/> is <c>"fLaC"</c>.</summary>
+        public ulong TotalSamplesInStream { get; set; }
+
+        /// <summary>Default output mix gain (Q7.8 dB) from <c>MIX_PRESENTATION</c>.</summary>
+        public short DefaultMixGainQ78 { get; set; }
     }
 
     /// <summary>
     /// Pure C# 8.0 AOMedia IAMF v1.0.0 (Eclipsa Audio) Open Bitstream Unit (OBU) decoder.
-    /// Parses <c>IA_SEQUENCE_HEADER</c> (<c>"iamf"</c>), <c>CODEC_CONFIG</c> (<c>ipcm</c>),
+    /// Parses <c>IA_SEQUENCE_HEADER</c> (<c>"iamf"</c>), <c>CODEC_CONFIG</c> (<c>ipcm</c>, <c>fLaC</c>, <c>Opus</c>),
     /// <c>AUDIO_ELEMENT</c> (Channel-Based scalable layouts &amp; Scene-Based HOA Ambisonics up to 3rd order),
-    /// <c>MIX_PRESENTATION</c> (ITU-R BS.1770 Q7.8 loudness), and <c>AUDIO_FRAME</c> LPCM substreams.
+    /// <c>MIX_PRESENTATION</c> (gain definitions &amp; ITU-R BS.1770 Q7.8 loudness), and <c>AUDIO_FRAME</c> substreams.
     /// </summary>
     public class IamfDecoder : Decoder, IMetadataSupplier {
         /// <summary>IAMF sequence header FourCC magic <c>"iamf"</c> (big-endian <c>0x69616D66</c>).</summary>
@@ -107,6 +119,12 @@ namespace Cavern.Format.Decoders {
 
         /// <summary>LPCM codec FourCC <c>"ipcm"</c> (<c>0x6970636D</c>).</summary>
         public const uint CodecIpcm = 0x6970636Du;
+
+        /// <summary>FLAC codec FourCC <c>"fLaC"</c> (<c>0x664C6143</c>).</summary>
+        public const uint CodecFlac = 0x664C6143u;
+
+        /// <summary>Opus codec FourCC <c>"Opus"</c> (<c>0x4F707573</c>).</summary>
+        public const uint CodecOpus = 0x4F707573u;
 
         /// <summary>Parsed IAMF metadata descriptor.</summary>
         public IamfStreamInfo Info { get; } = new IamfStreamInfo();
@@ -293,23 +311,29 @@ namespace Cavern.Format.Decoders {
                     break;
                 }
                 long payloadStart = inputStream.Position;
-                long payloadEnd = Math.Min(inputStream.Length, payloadStart + (long)obuSize);
+                long remaining = Math.Max(0L, inputStream.Length - payloadStart);
+                long clampedObuSize = obuSize > (ulong)remaining ? remaining : (long)obuSize;
+                long payloadEnd = payloadStart + clampedObuSize;
 
-                if (hasTrimming) {
-                    TryReadUleb128Stream(inputStream, out _); // num_samples_to_trim_at_end
-                    TryReadUleb128Stream(inputStream, out _); // num_samples_to_trim_at_start
+                if (hasTrimming && inputStream.Position < payloadEnd) {
+                    TryReadUleb128Bounded(inputStream, payloadEnd, out _); // num_samples_to_trim_at_end
+                    if (inputStream.Position < payloadEnd) {
+                        TryReadUleb128Bounded(inputStream, payloadEnd, out _); // num_samples_to_trim_at_start
+                    }
                 }
-                if (hasExtension) {
-                    if (TryReadUleb128Stream(inputStream, out ulong extSize)) {
-                        inputStream.Position = Math.Min(payloadEnd, inputStream.Position + (long)extSize);
+                if (hasExtension && inputStream.Position < payloadEnd) {
+                    if (TryReadUleb128Bounded(inputStream, payloadEnd, out ulong extSize)) {
+                        long maxSkip = payloadEnd - inputStream.Position;
+                        long skip = extSize > (ulong)maxSkip ? maxSkip : (long)extSize;
+                        inputStream.Position += skip;
                     }
                 }
 
                 long bodyStart = inputStream.Position;
-                int bodyLength = (int)Math.Max(0, payloadEnd - bodyStart);
+                int bodyLength = (int)Math.Min(int.MaxValue, Math.Max(0L, payloadEnd - bodyStart));
 
                 if (obuType == (byte)IamfObuType.SequenceHeader) {
-                    byte[] payload = ReadExact(inputStream, bodyLength);
+                    byte[] payload = Slice(ReadExact(inputStream, bodyLength), 0, bodyLength);
                     if (payload.Length >= 6) {
                         uint magic = ReadUInt32BE(payload, 0);
                         if (magic != IaCodeMagic) {
@@ -320,20 +344,20 @@ namespace Cavern.Format.Decoders {
                         Info.AdditionalProfile = payload[5];
                     }
                 } else if (obuType == (byte)IamfObuType.CodecConfig) {
-                    byte[] payload = ReadExact(inputStream, bodyLength);
-                    ParseCodecConfig(payload);
+                    byte[] raw = ReadExact(inputStream, bodyLength);
+                    ParseCodecConfig(Slice(raw, 0, raw.Length));
                 } else if (obuType == (byte)IamfObuType.AudioElement) {
-                    byte[] payload = ReadExact(inputStream, bodyLength);
-                    totalSubstreams = ParseAudioElement(payload);
+                    byte[] raw = ReadExact(inputStream, bodyLength);
+                    totalSubstreams = ParseAudioElement(Slice(raw, 0, raw.Length));
                 } else if (obuType == (byte)IamfObuType.MixPresentation) {
-                    byte[] payload = ReadExact(inputStream, bodyLength);
-                    ParseMixPresentation(payload);
+                    byte[] raw = ReadExact(inputStream, bodyLength);
+                    ParseMixPresentation(Slice(raw, 0, raw.Length));
                 } else if (obuType >= (byte)IamfObuType.AudioFrame && obuType <= (byte)IamfObuType.AudioFrameId17) {
-                    if (obuType == (byte)IamfObuType.AudioFrame) {
-                        TryReadUleb128Stream(inputStream, out _); // explicit audio_substream_id
+                    if (obuType == (byte)IamfObuType.AudioFrame && inputStream.Position < payloadEnd) {
+                        TryReadUleb128Bounded(inputStream, payloadEnd, out _); // explicit audio_substream_id
                     }
-                    long pcmOffset = inputStream.Position;
-                    int pcmLen = (int)Math.Max(0, payloadEnd - pcmOffset);
+                    long pcmOffset = Math.Min(payloadEnd, inputStream.Position);
+                    int pcmLen = (int)Math.Min(int.MaxValue, Math.Max(0L, payloadEnd - pcmOffset));
                     frameOffsets.Add(pcmOffset);
                     frameByteLengths.Add(pcmLen);
                     substreamIndex++;
@@ -385,6 +409,7 @@ namespace Cavern.Format.Decoders {
             if (pos + 2 > data.Length) {
                 return;
             }
+            Info.AudioRollDistance = ReadInt16BE(data, pos);
             pos += 2; // audio_roll_distance (int16)
 
             if (codecId == CodecIpcm && pos + 6 <= data.Length) {
@@ -394,6 +419,42 @@ namespace Cavern.Format.Decoders {
                 Info.IsLittleEndian = (flags & 0x01) != 0;
                 Info.BitDepthBits = sampleSize;
                 Info.SampleRate = (int)sampleRate;
+            } else if (codecId == CodecFlac) {
+                while (pos + 4 <= data.Length) {
+                    byte blockHdr = data[pos];
+                    bool isLast = (blockHdr & 0x80) != 0;
+                    byte blockType = (byte)(blockHdr & 0x7F);
+                    int blockLen = (data[pos + 1] << 16) | (data[pos + 2] << 8) | data[pos + 3];
+                    pos += 4;
+                    int nextBlock = Math.Min(data.Length, pos + Math.Max(0, blockLen));
+                    if (blockType == 0 && pos + 34 <= nextBlock) {
+                        ushort minBlock = ReadUInt16BE(data, pos);
+                        ushort maxBlock = ReadUInt16BE(data, pos + 2);
+                        if (minBlock >= 16 && minBlock == maxBlock && Info.SamplesPerFrame <= 0) {
+                            Info.SamplesPerFrame = minBlock;
+                        }
+                        ulong packed = ReadUInt64BE(data, pos + 10);
+                        int sr = (int)((packed >> 44) & 0xFFFFFu);
+                        int bps = (int)(((packed >> 36) & 0x1Fu) + 1);
+                        Info.TotalSamplesInStream = packed & 0xFFFFFFFFFu;
+                        if (sr >= 8000) {
+                            Info.SampleRate = sr;
+                        }
+                        if (bps >= 8 && bps <= 32) {
+                            Info.BitDepthBits = bps;
+                        }
+                    }
+                    pos = nextBlock;
+                    if (isLast) {
+                        break;
+                    }
+                }
+            } else if (codecId == CodecOpus && pos + 11 <= data.Length) {
+                pos += 2; // version, output_channel_count
+                Info.PreSkip = ReadUInt16BE(data, pos);
+                pos += 2;
+                uint inputSampleRate = ReadUInt32BE(data, pos);
+                Info.SampleRate = inputSampleRate >= 8000 ? (int)inputSampleRate : 48000;
             }
         }
 
@@ -415,27 +476,71 @@ namespace Cavern.Format.Decoders {
                 return 1;
             }
             for (ulong i = 0; i < numSubstreams; i++) {
-                TryReadUleb128(data, data.Length, ref pos, out _); // audio_substream_id
+                if (!TryReadUleb128(data, data.Length, ref pos, out _)) { // audio_substream_id
+                    break;
+                }
             }
             if (!TryReadUleb128(data, data.Length, ref pos, out ulong numParams)) {
                 return (int)Math.Max(1, numSubstreams);
             }
-            for (ulong i = 0; i < numParams; i++) {
-                TryReadUleb128(data, data.Length, ref pos, out _);
+            for (ulong i = 0; i < numParams && pos < data.Length; i++) {
+                if (!TrySkipParamDefinition(data, ref pos, out _)) {
+                    break;
+                }
             }
 
             substreamChannelCounts.Clear();
             if (Info.ElementType == IamfAudioElementType.SceneBased) {
-                if (pos + 2 <= data.Length) {
-                    byte outputChannelCount = data[pos++];
-                    byte substreamCount = data[pos++];
-                    Info.ChannelCount = Math.Max(4, (int)outputChannelCount);
-                    Info.AmbisonicsOrder = Math.Max(1, (int)Math.Round(Math.Sqrt(Info.ChannelCount)) - 1);
-                    int subs = Math.Max(1, (int)substreamCount);
-                    for (int s = 0; s < subs; s++) {
-                        substreamChannelCounts.Add(1);
+                int ambisonicsStart = pos;
+                if (TryReadUleb128(data, data.Length, ref pos, out ulong ambisonicsMode)) {
+                    // Fallback for legacy buggy writers emitting output_channel_count (>=4) before ambisonics_mode (0 at byte +2)
+                    if (ambisonicsMode >= 4 && ambisonicsStart + 3 <= data.Length && data[ambisonicsStart + 2] == 0) {
+                        byte legacyOutCh = data[ambisonicsStart];
+                        byte legacySubCount = data[ambisonicsStart + 1];
+                        Info.ChannelCount = Math.Max(4, (int)legacyOutCh);
+                        Info.AmbisonicsOrder = Math.Max(1, (int)Math.Round(Math.Sqrt(Info.ChannelCount)) - 1);
+                        int legacySubs = Math.Max(1, (int)legacySubCount);
+                        for (int s = 0; s < legacySubs; s++) {
+                            substreamChannelCounts.Add(1);
+                        }
+                        return legacySubs;
                     }
-                    return subs;
+
+                    if (ambisonicsMode == 0 && pos + 2 <= data.Length) {
+                        byte outputChannelCount = data[pos++];
+                        byte substreamCount = data[pos++];
+                        // Tolerate optional zero coupled_substream_count byte if present before channel_mapping
+                        if (data.Length - pos == outputChannelCount + 1 && data[pos] == 0) {
+                            pos++;
+                        }
+                        pos = Math.Min(data.Length, pos + outputChannelCount);
+                        Info.ChannelCount = Math.Max(1, (int)outputChannelCount);
+                        Info.AmbisonicsOrder = Math.Max(1, (int)Math.Round(Math.Sqrt(Info.ChannelCount)) - 1);
+                        int subs = Math.Max(1, (int)substreamCount);
+                        for (int s = 0; s < subs; s++) {
+                            substreamChannelCounts.Add(1);
+                        }
+                        return subs;
+                    }
+
+                    if (ambisonicsMode == 1 && pos + 3 <= data.Length) {
+                        byte outputChannelCount = data[pos++];
+                        byte substreamCount = data[pos++];
+                        byte coupledCount = data[pos++];
+                        int matrixBytes = 2 * ((int)substreamCount + coupledCount) * outputChannelCount;
+                        pos = Math.Min(data.Length, pos + Math.Max(0, matrixBytes));
+                        Info.ChannelCount = Math.Max(1, (int)outputChannelCount);
+                        Info.AmbisonicsOrder = Math.Max(1, (int)Math.Round(Math.Sqrt(Info.ChannelCount)) - 1);
+                        for (int c = 0; c < coupledCount; c++) {
+                            substreamChannelCounts.Add(2);
+                        }
+                        for (int u = coupledCount; u < substreamCount; u++) {
+                            substreamChannelCounts.Add(1);
+                        }
+                        if (substreamChannelCounts.Count > 0) {
+                            return substreamChannelCounts.Count;
+                        }
+                    }
                 }
             } else {
                 if (pos < data.Length) {
@@ -485,14 +590,103 @@ namespace Cavern.Format.Decoders {
                     Info.MixLabel = label;
                 }
             }
-            // Scan tail for Q7.8 loudness triple (info_type byte + int16 integrated + int16 digital_peak [+ int16 true_peak])
-            if (data.Length >= 7) {
+
+            bool parsedLoudness = false;
+            if (TryReadUleb128(data, data.Length, ref pos, out ulong numSubMixes)) {
+                for (ulong sm = 0; sm < numSubMixes && pos < data.Length; sm++) {
+                    if (!TryReadUleb128(data, data.Length, ref pos, out ulong numAudioElements)) {
+                        break;
+                    }
+                    for (ulong ae = 0; ae < numAudioElements && pos < data.Length; ae++) {
+                        if (!TryReadUleb128(data, data.Length, ref pos, out _)) { // audio_element_id
+                            pos = data.Length;
+                            break;
+                        }
+                        for (ulong l = 0; l < countLabel && pos < data.Length; l++) {
+                            SkipNullTerminatedString(data, ref pos); // localized_element_annotations
+                        }
+                        if (pos >= data.Length) {
+                            break;
+                        }
+                        pos++; // headphones_rendering_mode + reserved
+                        if (TryReadUleb128(data, data.Length, ref pos, out ulong extSize)) {
+                            int skip = (int)Math.Min((ulong)(data.Length - pos), extSize);
+                            pos += skip;
+                        } else {
+                            break;
+                        }
+                        // element_mix_gain (MixGainParamDefinition: param_definition_type = 0)
+                        if (!TrySkipParamDefinitionBody(data, ref pos, 0, out _)) {
+                            pos = data.Length;
+                            break;
+                        }
+                    }
+
+                    // output_mix_gain (MixGainParamDefinition: param_definition_type = 0)
+                    if (!TrySkipParamDefinitionBody(data, ref pos, 0, out short outMixGain)) {
+                        break;
+                    }
+                    if (sm == 0) {
+                        Info.DefaultMixGainQ78 = outMixGain;
+                    }
+
+                    if (!TryReadUleb128(data, data.Length, ref pos, out ulong numLayouts)) {
+                        break;
+                    }
+                    for (ulong ly = 0; ly < numLayouts && pos < data.Length; ly++) {
+                        pos++; // loudness_layout (layout_type + sound_system/reserved)
+                        if (pos + 5 > data.Length) {
+                            pos = data.Length;
+                            break;
+                        }
+                        byte infoType = data[pos++];
+                        short integratedQ78 = ReadInt16BE(data, pos);
+                        short digitalPeakQ78 = ReadInt16BE(data, pos + 2);
+                        pos += 4;
+
+                        short truePeakQ78 = digitalPeakQ78;
+                        bool hasTruePeak = false;
+                        if ((infoType & 0x01) != 0 && pos + 2 <= data.Length) {
+                            truePeakQ78 = ReadInt16BE(data, pos);
+                            pos += 2;
+                            hasTruePeak = true;
+                        }
+                        if ((infoType & 0x02) != 0 && pos < data.Length) {
+                            // Legacy Cavern writers emitted 0x02 with a 2-byte true peak at the tail
+                            if (!hasTruePeak && pos + 2 == data.Length) {
+                                truePeakQ78 = ReadInt16BE(data, pos);
+                                pos += 2;
+                                hasTruePeak = true;
+                            } else {
+                                byte numAnchored = data[pos++];
+                                int anchoredBytes = numAnchored * 3;
+                                pos = Math.Min(data.Length, pos + anchoredBytes);
+                            }
+                        }
+                        if ((infoType & 0xFC) != 0 && TryReadUleb128(data, data.Length, ref pos, out ulong infoExtSize)) {
+                            pos = Math.Min(data.Length, pos + (int)Math.Min((ulong)(data.Length - pos), infoExtSize));
+                        }
+
+                        if (!parsedLoudness) {
+                            Info.IntegratedLoudnessLkfs = integratedQ78 / 256f;
+                            Info.DigitalPeakDbfs = digitalPeakQ78 / 256f;
+                            if (hasTruePeak) {
+                                Info.TruePeakDbtp = truePeakQ78 / 256f;
+                            }
+                            parsedLoudness = true;
+                        }
+                    }
+                }
+            }
+
+            // Legacy fallback if older stream omitted element/output mix gain param definitions
+            if (!parsedLoudness && data.Length >= 7) {
                 int tail = data.Length - 7;
                 byte infoType = data[tail];
                 short integratedQ78 = ReadInt16BE(data, tail + 1);
                 short digitalPeakQ78 = ReadInt16BE(data, tail + 3);
                 short truePeakQ78 = ReadInt16BE(data, tail + 5);
-                if ((infoType & 0x02) != 0) {
+                if ((infoType & 0x03) != 0) {
                     Info.IntegratedLoudnessLkfs = integratedQ78 / 256f;
                     Info.DigitalPeakDbfs = digitalPeakQ78 / 256f;
                     Info.TruePeakDbtp = truePeakQ78 / 256f;
@@ -647,11 +841,112 @@ namespace Cavern.Format.Decoders {
             return trimmed;
         }
 
+        static bool TryReadUleb128Bounded(Stream stream, long maxPosition, out ulong result) {
+            result = 0;
+            for (int i = 0; i < 8; i++) {
+                if (stream.Position >= maxPosition) {
+                    return false;
+                }
+                int b = stream.ReadByte();
+                if (b < 0) {
+                    return false;
+                }
+                result |= (ulong)(b & 0x7F) << (i * 7);
+                if ((b & 0x80) == 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        static bool TrySkipParamDefinition(byte[] data, ref int pos, out short defaultMixGain) {
+            defaultMixGain = 0;
+            if (!TryReadUleb128(data, data.Length, ref pos, out ulong paramType)) {
+                return false;
+            }
+            return TrySkipParamDefinitionBody(data, ref pos, paramType, out defaultMixGain);
+        }
+
+        static bool TrySkipParamDefinitionBody(byte[] data, ref int pos, ulong paramType, out short defaultMixGain) {
+            defaultMixGain = 0;
+            if (paramType >= 3) {
+                if (!TryReadUleb128(data, data.Length, ref pos, out ulong extSize)) {
+                    return false;
+                }
+                pos = Math.Min(data.Length, pos + (int)Math.Min((ulong)(data.Length - pos), extSize));
+                return true;
+            }
+
+            // Common ParamDefinition fields: parameter_id, parameter_rate, param_definition_mode
+            if (!TryReadUleb128(data, data.Length, ref pos, out _) ||
+                !TryReadUleb128(data, data.Length, ref pos, out _) ||
+                pos >= data.Length) {
+                return false;
+            }
+            bool mode1 = (data[pos++] & 0x80) != 0;
+            if (!mode1) {
+                if (!TryReadUleb128(data, data.Length, ref pos, out _) || // duration
+                    !TryReadUleb128(data, data.Length, ref pos, out ulong constSubblockDuration)) {
+                    return false;
+                }
+                if (constSubblockDuration == 0) {
+                    if (!TryReadUleb128(data, data.Length, ref pos, out ulong numSubblocks)) {
+                        return false;
+                    }
+                    for (ulong s = 0; s < numSubblocks; s++) {
+                        if (!TryReadUleb128(data, data.Length, ref pos, out _)) {
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            if (paramType == 0) { // MixGainParamDefinition
+                if (pos + 2 > data.Length) {
+                    return false;
+                }
+                defaultMixGain = ReadInt16BE(data, pos);
+                pos += 2;
+            } else if (paramType == 1) { // DemixingParamDefinition (DefaultDemixingInfoParameterData = 2 bytes)
+                if (pos + 2 > data.Length) {
+                    return false;
+                }
+                pos += 2;
+            }
+            return true;
+        }
+
+        static byte[] Slice(byte[] source, int offset, int length) {
+            if (source == null || length <= 0 || offset >= source.Length) {
+                return Array.Empty<byte>();
+            }
+            int clamped = Math.Min(length, source.Length - offset);
+            if (offset == 0 && clamped == source.Length) {
+                return source;
+            }
+            byte[] copy = new byte[clamped];
+            Array.Copy(source, offset, copy, 0, clamped);
+            return copy;
+        }
+
+        static ushort ReadUInt16BE(byte[] buf, int offset) =>
+            (ushort)((buf[offset] << 8) | buf[offset + 1]);
+
         static uint ReadUInt32BE(byte[] buf, int offset) =>
             ((uint)buf[offset] << 24) |
             ((uint)buf[offset + 1] << 16) |
             ((uint)buf[offset + 2] << 8) |
             buf[offset + 3];
+
+        static ulong ReadUInt64BE(byte[] buf, int offset) =>
+            ((ulong)buf[offset] << 56) |
+            ((ulong)buf[offset + 1] << 48) |
+            ((ulong)buf[offset + 2] << 40) |
+            ((ulong)buf[offset + 3] << 32) |
+            ((ulong)buf[offset + 4] << 24) |
+            ((ulong)buf[offset + 5] << 16) |
+            ((ulong)buf[offset + 6] << 8) |
+            buf[offset + 7];
 
         static short ReadInt16BE(byte[] buf, int offset) =>
             (short)((buf[offset] << 8) | buf[offset + 1]);

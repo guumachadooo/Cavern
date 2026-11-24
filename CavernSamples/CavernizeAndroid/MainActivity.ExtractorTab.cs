@@ -428,7 +428,7 @@ public partial class MainActivity {
     }
 
     void StartExtraction() {
-        if (isOperationRunning || isPreparingTrueHD) {
+        if (isOperationRunning || isPreparingTrueHD || ExportMediaProcessingService.IsExportActive) {
             ShowError(S["OpRunning"]);
             return;
         }

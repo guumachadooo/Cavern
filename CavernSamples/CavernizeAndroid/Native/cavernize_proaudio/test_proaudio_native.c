@@ -1,10 +1,15 @@
+#define _POSIX_C_SOURCE 200809L
+#include "cavernize_proaudio_api.h"
 #include "cavernize_ringbuffer.h"
 #include "cavernize_uac2_core.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <math.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 static void test_ring_buffer_wraparound(void) {
     float backing[256]; /* 128 stereo frames, usable = 127 frames */
@@ -182,10 +187,28 @@ static void test_pcm_pack_unpack_and_scarlett2(void) {
     printf("[PASS] UAC2 PCM24/PCM32/Float32 bit-exact packers & Scarlett2 packet codec\n");
 }
 
+static void test_sigpipe_shield(void) {
+    assert(cav_sigpipe_shield_apply() == 0);
+    struct sigaction cur;
+    assert(sigaction(SIGPIPE, NULL, &cur) == 0);
+    assert(cur.sa_handler == SIG_IGN);
+    assert(raise(SIGPIPE) == 0);
+
+    int pipefds[2] = { -1, -1 };
+    assert(pipe(pipefds) == 0);
+    assert(close(pipefds[0]) == 0);
+    errno = 0;
+    ssize_t wr = write(pipefds[1], "c", 1);
+    assert(wr == 1 || (wr == -1 && errno == EPIPE));
+    assert(close(pipefds[1]) == 0);
+    printf("[PASS] SIGPIPE shield (SIG_IGN + raise(SIGPIPE) survival)\n");
+}
+
 int main(void) {
     test_ring_buffer_wraparound();
     test_ring_buffer_discard_oldest();
     test_uac2_descriptor_and_feedback();
     test_pcm_pack_unpack_and_scarlett2();
+    test_sigpipe_shield();
     return 0;
 }

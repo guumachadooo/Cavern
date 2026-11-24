@@ -84,6 +84,9 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     volatile HardwarePreAmpStateSnapshot preAmpSnapshot = HardwarePreAmpStateSnapshot.Empty;
     ushort scarlettSeq = 1;
     bool scarlettInitialized;
+    long lastGen4FcpProbeMs;
+    int usbSessionEpoch;
+    volatile bool usbDetachedAbort;
     volatile bool pathBOwnsFileDescriptor;
     bool permissionReceiverRegistered;
     bool usbSystemReceiverRegistered;
@@ -1022,65 +1025,138 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
         return scarlettState.SupportsSoftwareControls;
     }
 
+    bool IsUsbDetachedOrAborted(int entryEpoch) =>
+        disposed ||
+        usbDetachedAbort ||
+        Volatile.Read(ref usbSessionEpoch) != entryEpoch;
+
     bool EnsureScarlettHandshakeLocked(out int vendorIf) {
         vendorIf = snapshot.Topology?.VendorControlInterface ?? -1;
         if (vendorIf < 0 ||
+            disposed ||
+            usbDetachedAbort ||
             (scarlettState.Generation != ScarlettGeneration.Gen4 && !scarlettState.SupportsSoftwareControls)) {
             return false;
         }
-        if (!scarlettInitialized) {
-            if (!SendScarlettInitStep0Locked(vendorIf)) {
-                return false;
+        int entryEpoch = Volatile.Read(ref usbSessionEpoch);
+        if (scarlettInitialized) {
+            if (scarlettState.Generation == ScarlettGeneration.Gen4 &&
+                !scarlettState.IsGen4FcpControlTableVerified &&
+                System.Environment.TickCount64 - lastGen4FcpProbeMs >= 2000) {
+                lastGen4FcpProbeMs = System.Environment.TickCount64;
+                TryVerifyGen4FcpTableLocked(vendorIf, entryEpoch);
+            }
+            return true;
+        }
+
+        bool handshakeOk = false;
+        for (int attempt = 0; attempt < 2 && !IsUsbDetachedOrAborted(entryEpoch); attempt++) {
+            if (attempt > 0) {
+                Thread.Sleep(25);
+                if (IsUsbDetachedOrAborted(entryEpoch)) {
+                    return false;
+                }
+            }
+            if (!SendScarlettInitStep0Locked(vendorIf) || IsUsbDetachedOrAborted(entryEpoch)) {
+                continue;
             }
             Thread.Sleep(20);
-            if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit1, null, out _)) {
+            if (IsUsbDetachedOrAborted(entryEpoch)) {
                 return false;
             }
-            if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit2, null, out int init2PayloadLen)) {
-                return false;
+            if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit1, null, out _) ||
+                IsUsbDetachedOrAborted(entryEpoch)) {
+                continue;
+            }
+            if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit2, null, out int init2PayloadLen) ||
+                IsUsbDetachedOrAborted(entryEpoch)) {
+                continue;
             }
             int init2TotalLen = Scarlett2Protocol.PacketHeaderBytes + init2PayloadLen;
             if (Scarlett2Protocol.TryExtractFirmwareVersion(scarlettRxScratch, init2TotalLen, out int fw)) {
                 scarlettState.FirmwareVersion = fw;
             }
-            scarlettInitialized = true;
+            handshakeOk = true;
+            break;
+        }
 
-            if (scarlettState.Generation == ScarlettGeneration.Gen4) {
-                if (Scarlett2Protocol.TryResolveGen4ConfigTable(scarlettState.ProductId, scarlettState.FirmwareVersion, out ScarlettGen4ConfigTable table)) {
-                    bool airOk = table.AirSwitch.IsValid &&
-                                 ReadScarlettConfigItemLocked(vendorIf, table.AirSwitch, 0, out int air0) &&
-                                 air0 >= 0 && air0 <= 2;
-                    bool gainOk = !table.InputGain.IsValid ||
-                                  (ReadScarlettConfigItemLocked(vendorIf, table.InputGain, 0, out int gain0) &&
-                                   gain0 >= 0 && gain0 <= 69);
-                    if (airOk && gainOk) {
-                        gen4ConfigTable = table;
-                        scarlettState.IsGen4FcpControlTableVerified = true;
-                        ReadScarlettHardwareStateLocked(vendorIf);
-                        preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
-                        AppLogger.Info(
-                            $"Scarlett Gen 4 FCP verified: {scarlettState.ModelName} " +
-                            $"(PID=0x{scarlettState.ProductId:X4}, FW={scarlettState.FirmwareVersion}, ParamBuf=0x{table.ParamBufAddr:X})");
-                    } else {
-                        gen4ConfigTable = null;
-                        scarlettState.IsGen4FcpControlTableVerified = false;
-                        AppLogger.Warn(
-                            $"Scarlett Gen 4 FCP sanity GET_DATA check failed (FW={scarlettState.FirmwareVersion}); " +
-                            "keeping controls safely locked.");
-                    }
-                } else {
-                    gen4ConfigTable = null;
-                    scarlettState.IsGen4FcpControlTableVerified = false;
-                    AppLogger.Info(
-                        $"Scarlett Gen 4 FCP table unavailable for PID=0x{scarlettState.ProductId:X4} " +
-                        $"FW={scarlettState.FirmwareVersion}; metering & Gain Assist remain active.");
-                }
-            } else {
-                ReadScarlettHardwareStateLocked(vendorIf);
-                preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+        if (!handshakeOk || IsUsbDetachedOrAborted(entryEpoch)) {
+            return false;
+        }
+
+        scarlettInitialized = true;
+        if (scarlettState.Generation == ScarlettGeneration.Gen4) {
+            lastGen4FcpProbeMs = System.Environment.TickCount64;
+            TryVerifyGen4FcpTableLocked(vendorIf, entryEpoch);
+        } else {
+            ReadScarlettHardwareStateLocked(vendorIf);
+            preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+        }
+        return !IsUsbDetachedOrAborted(entryEpoch);
+    }
+
+    void TryVerifyGen4FcpTableLocked(int vendorIf, int entryEpoch) {
+        if (IsUsbDetachedOrAborted(entryEpoch)) {
+            return;
+        }
+        bool resolvedExact = Scarlett2Protocol.TryResolveGen4ConfigTable(
+            scarlettState.ProductId,
+            scarlettState.FirmwareVersion,
+            out ScarlettGen4ConfigTable table);
+        if (!resolvedExact) {
+            // Probe CmdInfoDevmap (0x0080000C) and attempt live multi-register FCP candidate verification
+            SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInfoDevmap, null, out int devmapLen);
+            if (IsUsbDetachedOrAborted(entryEpoch)) {
+                return;
+            }
+            AppLogger.Info(
+                $"Scarlett Gen 4 CmdInfoDevmap probe: PID=0x{scarlettState.ProductId:X4}, FW={scarlettState.FirmwareVersion}, DevmapPayload={devmapLen}B");
+            if (!Scarlett2Protocol.TryGetGen4ProbeCandidateTable(
+                    scarlettState.ProductId,
+                    scarlettState.FirmwareVersion,
+                    out table)) {
+                gen4ConfigTable = null;
+                scarlettState.IsGen4FcpControlTableVerified = false;
+                AppLogger.Info(
+                    $"Scarlett Gen 4 FCP table unavailable for PID=0x{scarlettState.ProductId:X4} " +
+                    $"FW={scarlettState.FirmwareVersion}; metering & Gain Assist remain active.");
+                return;
             }
         }
-        return true;
+
+        bool airOk = table.AirSwitch.IsValid &&
+                     ReadScarlettConfigItemLocked(vendorIf, table.AirSwitch, 0, out int air0) &&
+                     air0 >= 0 && air0 <= 2;
+        bool gainOk = !table.InputGain.IsValid ||
+                      (ReadScarlettConfigItemLocked(vendorIf, table.InputGain, 0, out int gain0) &&
+                       gain0 >= 0 && gain0 <= 69);
+        bool extraRegOk = resolvedExact ||
+                          ((!table.PhantomPower.IsValid ||
+                            (ReadScarlettConfigItemLocked(vendorIf, table.PhantomPower, 0, out int ph0) && (ph0 == 0 || ph0 == 1))) &&
+                           (!table.LevelSwitch.IsValid ||
+                            (ReadScarlettConfigItemLocked(vendorIf, table.LevelSwitch, 0, out int lv0) && (lv0 == 0 || lv0 == 1))));
+
+        if (IsUsbDetachedOrAborted(entryEpoch)) {
+            gen4ConfigTable = null;
+            scarlettState.IsGen4FcpControlTableVerified = false;
+            return;
+        }
+
+        if (airOk && gainOk && extraRegOk) {
+            gen4ConfigTable = table;
+            scarlettState.IsGen4FcpControlTableVerified = true;
+            ReadScarlettHardwareStateLocked(vendorIf);
+            preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+            AppLogger.Info(
+                $"Scarlett Gen 4 FCP verified: {scarlettState.ModelName} " +
+                $"(PID=0x{scarlettState.ProductId:X4}, FW={scarlettState.FirmwareVersion}, Exact={resolvedExact}, ParamBuf=0x{table.ParamBufAddr:X})");
+        } else {
+            gen4ConfigTable = null;
+            scarlettState.IsGen4FcpControlTableVerified = false;
+            AppLogger.Warn(
+                $"Scarlett Gen 4 FCP sanity GET_DATA check failed (FW={scarlettState.FirmwareVersion}, AirOk={airOk}, GainOk={gainOk}); " +
+                "keeping controls safely locked.");
+        }
     }
 
     bool ReadScarlettConfigItemLocked(int vendorIf, ScarlettConfigItem item, int channelIndex, out int value) {
@@ -1235,6 +1311,9 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     /// it immediately afterward so Scarlett controls work cleanly under Path A (AAudio) or when idle.
     /// </summary>
     int TransferScarlettPacketLocked(int vendorIf, byte[] tx, byte[] rx) {
+        if (disposed || usbDetachedAbort) {
+            return -1;
+        }
         // 1. While Path B libusb owns the FD, NEVER issue direct Android UsbDeviceConnection transfers on the same FD
         if (IsPathBTransportActive()) {
             return NativeProAudioBridge.Scarlett2Xfer(vendorIf, tx, tx.Length, rx, rx.Length);
@@ -1247,7 +1326,7 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             }
             TryOpenActiveDeviceLocked();
         }
-        if (activeConnection == null || activeDevice == null) {
+        if (activeConnection == null || activeDevice == null || usbDetachedAbort) {
             return -1;
         }
 
@@ -1257,6 +1336,9 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             if (vendorUsbIf != null) {
                 claimed = activeConnection.ClaimInterface(vendorUsbIf, true);
             }
+            if (usbDetachedAbort) {
+                return -1;
+            }
             int sent = activeConnection.ControlTransfer(
                 (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceOut,
                 Scarlett2Protocol.UsbReqCmdSend,
@@ -1265,8 +1347,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
                 tx,
                 tx.Length,
                 ControlTransferTimeoutMs);
-            if (sent < 0) {
-                return sent;
+            if (sent < 0 || usbDetachedAbort) {
+                return sent < 0 ? sent : -1;
             }
             return activeConnection.ControlTransfer(
                 (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceIn,
@@ -1331,6 +1413,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             }
 
             ScarlettGeneration gen = Scarlett2Protocol.IdentifyDevice(activeDevice.VendorId, activeDevice.ProductId, out string scarlettModel);
+            usbDetachedAbort = false;
+            Interlocked.Increment(ref usbSessionEpoch);
             activeConnection = conn;
             conn = null;
             scarlettInitialized = false;
@@ -1594,8 +1678,10 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             }
 
             if (matchesActive) {
-                // Break syncLock <-> lifecycleLock AB-BA deadlock: notify native Path B lock-free FIRST,
+                // Break syncLock <-> lifecycleLock AB-BA deadlock: trip atomic USB_DETACHED abort FSM & notify native Path B lock-free FIRST,
                 // snapshot & clear connection under syncLock, RELEASE syncLock, then fire BeforeUsbConnectionClosing!
+                usbDetachedAbort = true;
+                Interlocked.Increment(ref usbSessionEpoch);
                 NativeProAudioBridge.NotifyUsbDetached();
                 UsbDeviceConnection connToClose;
                 HardwarePreAmpStateSnapshot prevPreAmp;
@@ -1671,6 +1757,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     public event Action BeforeUsbConnectionClosing;
 
     UsbDeviceConnection DetachConnectionLocked(bool resetDevice) {
+        usbDetachedAbort = true;
+        Interlocked.Increment(ref usbSessionEpoch);
         UsbDeviceConnection conn = activeConnection;
         activeConnection = null;
         pathBOwnsFileDescriptor = false;
@@ -1717,6 +1805,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             return;
         }
         disposed = true;
+        usbDetachedAbort = true;
+        Interlocked.Increment(ref usbSessionEpoch);
         if (permissionReceiverRegistered) {
             try {
                 context.UnregisterReceiver(permissionReceiver);

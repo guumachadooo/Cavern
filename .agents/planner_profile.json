@@ -1,6 +1,6 @@
 {
   "schema_version": 5,
-  "plugin_version": "2.14.0",
+  "plugin_version": "2.16.0",
   "project_name": "Cavern / CavernizeAndroid",
   "planner_mode": "auto",
   "read_budget": {
@@ -821,6 +821,12 @@
       "dotnet_build",
       "heavy_tests",
       "git_push"
-    ]
+    ],
+    "sub_subagent": {
+      "allow_nesting": true,
+      "default_model": "flash_lite",
+      "swarm_medium_model": "gemini-4-hydrogen-medium",
+      "allow_medium_tier": true
+    }
   }
 }

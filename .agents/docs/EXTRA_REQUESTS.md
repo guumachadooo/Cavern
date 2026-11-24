@@ -7,6 +7,7 @@
 (No pending requests.)
 
 ## Completed Requests
+- REQ|plugin-sub-subagent-tiering -> DONE (`v2.16.0` `delegation.sub_subagent` across `schema_migrations.py`, `planner_guard_delegation.py`, `planner_pre_invocation.py`, `planner_profile.json`, `rules/AGENTS.md`, `SKILL.md`, + `run_plugin_tests.py` `72/72` PASS && `evolve sync-all --apply` synced Cavern/OmniAgent/standalone/global to `v2.16.0`; remote push deferred to coordinator)
 - REQ|upmix-ui-simplify -> DONE (`AppSettingsStore.cs` forced `ParametricStft=true` && `MainActivity.SettingsTab.cs` unified `OneUiInlineSelector upmixModeSelector` Direct/Surround 7.1/Full 3D + gated `atmosAwareUpmixSection` + fixed SignalChain summary + `PlayerMusicTab.cs` `SyncUpmixModeUi`)
 - REQ|lyrics-sing-ondemand -> DONE (`MainActivity.PlayerMusicTab.cs` collapsed `musicLyricsSingDock` by default + added compact `musicLyricsSingToggleBtn` pill in `lyricsHeader` w/ active accent & recoil + auto-state indication)
 - REQ|overhaul-quality-gate -> DONE (`1250/1250` EN/PT-BR `AndroidStrings.cs` parity + One UI 9 layout safety + `MOD-WIRING-GATE` + `MOD-UX-CRITIQUE` + `verify_universal.py --build --git-stat` PASS)

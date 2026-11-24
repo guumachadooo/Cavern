@@ -2,6 +2,8 @@
 using Cavern.Format.Common;
 using Cavern.Format.Common.Metadata;
 using Cavern.Format.Container;
+using Cavern.Format.Decoders;
+using Cavern.Format.Renderers;
 
 using Cavernize.Logic.Exceptions;
 
@@ -104,12 +106,53 @@ public class AudioFile : IDisposable {
             case "wav":
                 AddStandaloneTrack(new RIFFWaveReader(Path));
                 break;
+            case "amb":
+                OpenAmbisonicsTrack();
+                break;
+            case "iamf":
+                AddStandaloneTrack(new IamfReader(Path), Codec.IAMF);
+                break;
             case "laf":
                 AddStandaloneTrack(new LimitlessAudioFormatReader(Path));
                 break;
             default:
                 throw new NotSupportedException();
         }
+    }
+
+    /// <summary>
+    /// Sniffs a <c>.amb</c> file header (RIFF/RF64 WAVE-EX vs IAMF) and routes B-Format streams cleanly
+    /// without throwing obscure sync exceptions into fallback probes.
+    /// </summary>
+    void OpenAmbisonicsTrack() {
+        byte[] header = new byte[16];
+        int read;
+        using (FileStream fs = File.OpenRead(Path)) {
+            read = fs.Read(header, 0, header.Length);
+        }
+        if (read >= 4) {
+            bool isRiff = header[0] == 'R' && header[1] == 'I' && header[2] == 'F' && header[3] == 'F';
+            bool isRf64 = header[0] == 'R' && header[1] == 'F' && header[2] == '6' && header[3] == '4';
+            if (isRiff || isRf64) {
+                RIFFWaveReader ambReader = new RIFFWaveReader(Path);
+                try {
+                    ambReader.ReadHeader();
+                    Codec codec = ambReader.GetRenderer() is RIFFWaveRenderer wavRenderer && wavRenderer.IsAmbisonicsHoa
+                        ? Codec.AmbisonicsHOA
+                        : (ambReader.Bits == BitDepth.Float32 ? Codec.PCM_Float : Codec.PCM_LE);
+                    AddStandaloneTrack(ambReader, codec);
+                    return;
+                } catch {
+                    ambReader.Dispose();
+                    throw;
+                }
+            }
+        }
+        if (IamfDecoder.IsIamfHeader(header, read)) {
+            AddStandaloneTrack(new IamfReader(Path), Codec.IAMF);
+            return;
+        }
+        throw new NotSupportedException();
     }
 
     /// <summary>

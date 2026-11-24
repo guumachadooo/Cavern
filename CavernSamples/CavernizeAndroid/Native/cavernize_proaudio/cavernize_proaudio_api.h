@@ -1,10 +1,28 @@
 #ifndef CAVERNIZE_PROAUDIO_API_H
 #define CAVERNIZE_PROAUDIO_API_H
 
+#include <stddef.h>
 #include <stdint.h>
+
+#if !defined(_WIN32) && (defined(__ANDROID__) || defined(__linux__) || defined(__unix__) || defined(__APPLE__))
+#include <signal.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+/* Installs process-wide SIGPIPE -> SIG_IGN shield so broken pipe writes (e.g. libffmpeg.so stdin) return EPIPE. */
+int32_t cav_install_sigpipe_shield(void);
+
+#if !defined(_WIN32) && defined(SIGPIPE) && (defined(__ANDROID__) || defined(__linux__) || defined(_POSIX_C_SOURCE) || defined(SA_RESTART))
+static inline int32_t cav_sigpipe_shield_apply(void) {
+    struct sigaction sa;
+    sa.sa_handler = SIG_IGN;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    return sigaction(SIGPIPE, &sa, NULL) == 0 ? 0 : -1;
+}
 #endif
 
 #define CAV_PA_BACKEND_NONE 0

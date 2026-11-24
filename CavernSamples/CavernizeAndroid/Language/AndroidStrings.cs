@@ -1618,6 +1618,26 @@ public sealed partial class AndroidStrings {
         ["SingDockMicSrcPhoneChip"] = "Phone Mic",
         ["SingDockMicSrcUsbChip"] = "USB Mic",
         ["SingDockMicSrcAutoChip"] = "Mic: Auto",
-        ["ScarlettGen4VerifiedBadgeFmt"] = "Gen 4 FCP Verified (FW {0})"
+        ["ScarlettGen4VerifiedBadgeFmt"] = "Gen 4 FCP Verified (FW {0})",
+
+        // Wave 2B Studio Compression Tier, Foreground Export & 3D Object Choreography
+        ["StudioCompressionTierLabel"] = "Compression & Quality",
+        ["TipStudioCompressionTier"] = "Choose how the exported spatial master is packaged:\n\n• Master PCM: uncompressed studio PCM WAV, IAMF, or AMB.\n• Lossless: smaller bit-exact lossless FLAC / compressed container (no LGSR twin required).\n• Portable Lossy: compact Opus / E-AC-3 for mobile sharing.",
+        ["StudioTierMasterPcm"] = "Master PCM",
+        ["StudioTierLossless"] = "Lossless",
+        ["StudioTierPortable"] = "Portable Lossy",
+        ["StudioCodecDetailsToggleFmt"] = "Codec Details · {0} ({1})",
+        ["StudioCodecDetailsBodyFmt"] = "Container: {0} · Spec: {1} · Ceiling: {2:0.0} dBTP",
+        ["StudioAtmosTierLockWarn"] = "Dolby Atmos ADM BWF requires Master PCM to preserve dynamic 3D object metadata. Switch to Eclipsa IAMF for lossless/portable compression.",
+        ["StudioSwitchToEclipsaBtn"] = "Switch to Eclipsa IAMF",
+        ["StudioExportLowSpaceError"] = "Not enough free storage space for this export.",
+        ["StudioExportFgCancelledToast"] = "Export cancelled.",
+        ["SpatialChoreoLabel"] = "3D Object Choreography:",
+        ["TipSpatialChoreo"] = "Animates separated 3D instrument stems smoothly across the 3D room using audio forensics and lyric mood (3D object positions only — zero vocal FX).\n\n• Off: static ITU-R BS.2127 anchors.\n• Subtle: gentle frontal/height breathing.\n• Musical: beat & section-aligned 3D stage.\n• Cinematic: wide surround & height arcs.\n• Orbit: smooth spherical orbital motion.",
+        ["SpatialChoreoOff"] = "Off (Static)",
+        ["SpatialChoreoSubtle"] = "Subtle",
+        ["SpatialChoreoMusical"] = "Musical",
+        ["SpatialChoreoCinematic"] = "Cinematic",
+        ["SpatialChoreoOrbit"] = "Orbit"
     };
 }

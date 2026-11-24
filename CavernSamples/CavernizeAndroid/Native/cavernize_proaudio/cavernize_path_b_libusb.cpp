@@ -38,6 +38,7 @@ static constexpr uint32_t kUsbRingSamples = 32768u;
 static constexpr int kIsoTransferCount = 4;
 static constexpr int kIsoPacketsPerTransfer = 8; /* 8 x 125 us = 1 ms per URB in High-Speed */
 static constexpr int kUsbDrainCeilingMs = 1200;
+static constexpr int kUsbDetachedDrainCeilingMs = 150;
 static constexpr int kScarlettControlTimeoutMs = 250;
 static constexpr uint8_t kScarlettUsbCmdInit = 0x00;
 
@@ -91,6 +92,7 @@ struct PathBLibUsbEngine {
     std::atomic<bool> running{false};
     std::atomic<bool> stopping{false};
     std::atomic<bool> device_gone{false};
+    std::atomic<uint64_t> usb_detach_seq{0};
     std::atomic<int32_t> io_inflight{0};
     std::atomic<int32_t> consec_transfer_errors{0};
     std::atomic<int32_t> full_duplex_flag{0};
@@ -397,6 +399,7 @@ struct PathBLibUsbEngine {
 
         if (usb_fd < 0) return -20;
 
+        const uint64_t start_detach_seq = usb_detach_seq.load(std::memory_order_seq_cst);
         /* Duplicate UsbManager FD so Android fdsan UsbDeviceConnection.Close() can never race libusb */
         int dup_fd = dup(usb_fd);
         if (dup_fd < 0) return -20;
@@ -509,14 +512,16 @@ struct PathBLibUsbEngine {
         float packet_ms = static_cast<float>(static_cast<double>(pkts_per_xfer) * 1000.0 / pb_pkts_per_sec);
         est_rtt_ms.store((kIsoTransferCount * packet_ms) + (has_cap ? packet_ms * 2.0f : 0.5f), std::memory_order_release);
 
-        if (device_gone.load(std::memory_order_acquire)) {
+        if (device_gone.load(std::memory_order_seq_cst) ||
+            usb_detach_seq.load(std::memory_order_seq_cst) != start_detach_seq) {
             stop_locked();
             return -28;
         }
         current_token = new UsbTransferToken();
         current_token->engine = this;
         running.store(true, std::memory_order_seq_cst);
-        if (device_gone.load(std::memory_order_seq_cst)) {
+        if (device_gone.load(std::memory_order_seq_cst) ||
+            usb_detach_seq.load(std::memory_order_seq_cst) != start_detach_seq) {
             running.store(false, std::memory_order_seq_cst);
             stop_locked();
             return -28;
@@ -622,7 +627,11 @@ struct PathBLibUsbEngine {
                         drain_start = now;
                     } else {
                         auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - drain_start).count();
-                        if (elapsed_ms >= kUsbDrainCeilingMs) {
+                        const int ceiling = (tok->detached.load(std::memory_order_acquire) ||
+                                             device_gone.load(std::memory_order_acquire))
+                            ? kUsbDetachedDrainCeilingMs
+                            : kUsbDrainCeilingMs;
+                        if (elapsed_ms >= ceiling) {
                             break;
                         }
                     }
@@ -728,6 +737,7 @@ struct PathBLibUsbEngine {
     }
 
     void notify_usb_detached() {
+        usb_detach_seq.fetch_add(1, std::memory_order_seq_cst);
         device_gone.store(true, std::memory_order_seq_cst);
         running.store(false, std::memory_order_seq_cst);
     }
@@ -787,6 +797,7 @@ struct PathBLibUsbEngine {
         }
 
         bool gone = device_gone.load(std::memory_order_acquire);
+        const int drain_ceiling_ms = gone ? kUsbDetachedDrainCeilingMs : kUsbDrainCeilingMs;
         if (!gone) {
             auto cancel_list = [&](std::vector<libusb_transfer*>& list) {
                 for (auto* x : list) {
@@ -809,7 +820,7 @@ struct PathBLibUsbEngine {
             std::this_thread::sleep_for(std::chrono::microseconds(100));
         }
 
-        /* Drain all cancelled URBs up to 1200 ms ceiling until active_xfers <= 0 */
+        /* Drain all cancelled URBs up to bounded ceiling (150ms on USB_DETACHED, 1200ms normal) until active_xfers <= 0 */
         if (event_thread.joinable()) {
             event_thread.join();
         } else if (ctx && current_token && current_token->active_xfers.load(std::memory_order_acquire) > 0) {
@@ -818,7 +829,7 @@ struct PathBLibUsbEngine {
             while (current_token->active_xfers.load(std::memory_order_acquire) > 0) {
                 auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - drain_start).count();
-                if (elapsed_ms >= kUsbDrainCeilingMs) {
+                if (elapsed_ms >= drain_ceiling_ms) {
                     break;
                 }
                 tv.tv_sec = 0;
@@ -952,7 +963,7 @@ int32_t path_b_write_playback(const float* data, int32_t frames) {
     if (!g_libusb.running.load(std::memory_order_acquire) ||
         g_libusb.stopping.load(std::memory_order_acquire) ||
         g_libusb.device_gone.load(std::memory_order_acquire)) {
-        return 0;
+        return -1;
     }
     return static_cast<int32_t>(cav_rb_write(&g_libusb.out_rb, data, static_cast<uint32_t>(frames)));
 }

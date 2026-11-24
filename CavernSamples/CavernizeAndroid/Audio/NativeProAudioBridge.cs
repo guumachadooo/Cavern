@@ -109,6 +109,7 @@ public static class NativeProAudioBridge {
                     abiVersion = NativeGetVersion();
                     capabilities = NativeGetCapabilities();
                     available = abiVersion >= 100 && capabilities != 0;
+                    TryInstallSigpipeShieldInternal();
                     AppLogger.Info($"NativeProAudioBridge loaded: ABI={abiVersion}, Caps=0x{capabilities:X} (PathA={SupportsPathAAudio}, PathB={SupportsPathBLibUsb})");
                 } else {
                     available = false;
@@ -285,6 +286,31 @@ public static class NativeProAudioBridge {
             return -2;
         }
     }
+
+    /// <summary>
+    /// Installs process-wide <c>sigaction(SIGPIPE, SIG_IGN)</c> via <c>libcavernize_proaudio.so</c>
+    /// so broken stdin pipe writes (e.g. <c>libffmpeg.so</c>) fail cleanly with <c>EPIPE</c> instead of terminating the process.
+    /// </summary>
+    public static bool InstallSigpipeShield() {
+        if (!IsAvailable) {
+            return false;
+        }
+        return TryInstallSigpipeShieldInternal();
+    }
+
+    static bool TryInstallSigpipeShieldInternal() {
+        try {
+            return NativeInstallSigpipeShield() == 0;
+        } catch (EntryPointNotFoundException) {
+            return false;
+        } catch (Exception ex) {
+            AppLogger.Warn($"NativeProAudioBridge.InstallSigpipeShield: {ex.Message}");
+            return false;
+        }
+    }
+
+    [DllImport(LibraryName, EntryPoint = "cav_install_sigpipe_shield", CallingConvention = CallingConvention.Cdecl)]
+    static extern int NativeInstallSigpipeShield();
 
     [DllImport(LibraryName, EntryPoint = "cavernize_pa_get_version", CallingConvention = CallingConvention.Cdecl)]
     static extern int NativeGetVersion();
