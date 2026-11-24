@@ -9,7 +9,7 @@ namespace Cavern.Filters {
     /// Supports both short HRIRs (128-512 taps) and long BRIRs (e.g. 0.3s / 14,400+ taps)
     /// in real time with zero extra block-buffering latency for any input buffer size.
     /// </summary>
-    public class PartitionedDualConvolver : IResettableFilter {
+    public class PartitionedDualConvolver : IResettableFilter, IDisposable {
         /// <summary>
         /// Maximum partition size in samples for long impulse responses.
         /// </summary>
@@ -178,6 +178,11 @@ namespace Cavern.Filters {
             fdlHead = 0;
             curFill = 0;
         }
+
+        /// <summary>
+        /// Releases the internal <see cref="FFTCache"/> immediately so it does not linger in the GC finalization queue.
+        /// </summary>
+        public void Dispose() => cache?.Dispose();
 
         /// <summary>
         /// Fast path when processing an aligned <see cref="partitionSize"/> block: 1 forward FFT + 1 inverse IFFT.

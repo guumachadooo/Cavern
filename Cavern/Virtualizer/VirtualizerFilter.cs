@@ -25,19 +25,80 @@ namespace Cavern.Virtualizer {
     /// </summary>
     public partial class VirtualizerFilter {
         /// <summary>
+        /// Thread-local virtualizer state active only inside <see cref="BeginStaticStateScope"/> so background
+        /// acoustic audits, fuzzers, and offline Studio exports never collide with live real-time playback.
+        /// Null on the real-time audio thread (zero allocation and negligible branch cost).
+        /// </summary>
+        sealed class ThreadIsolatedState {
+            public VirtualChannel[] SpatialChannels;
+            public int FilterSampleRate;
+            public float ReferenceDistance;
+            public int ActiveMaxImpulseLength;
+            public int ProfileVersion;
+            public bool CenterWallEcho;
+            public bool IsmRoomEnabled;
+            public IsmRoomPreset IsmPreset;
+            public IsmWallMaterial IsmWallMaterial;
+            public int IsmReflectionOrder;
+            public float IsmReflectionLevel;
+            public bool NearFieldCompensationEnabled;
+            public bool ExternalBrirGuardActive;
+            public IsmRoomGeometry ActiveRoomGeometry;
+            public Vector3 LiveListenerNormalizedPosition;
+            public Vector3 LiveListenerRotationDegrees;
+            public bool LastBlockNearFieldActive;
+            public IPreHrtfBusProcessor PreHrtfBusProcessor;
+            public float[] LiveChannelMinDistances;
+            public List<VirtualChannel[]> OwnedDefaultChannels;
+        }
+
+        [ThreadStatic]
+        static ThreadIsolatedState threadState;
+
+        /// <summary>
         /// Sample rate of the recorded HRIR filters. Only this system sample rate is allowed for virtualization.
         /// </summary>
-        public static int FilterSampleRate { get; private set; } = defaultSampleRate;
+        public static int FilterSampleRate {
+            get => threadState != null ? threadState.FilterSampleRate : filterSampleRate;
+            private set {
+                if (threadState != null) {
+                    threadState.FilterSampleRate = value;
+                } else {
+                    filterSampleRate = value;
+                }
+            }
+        }
+        static int filterSampleRate = defaultSampleRate;
 
         /// <summary>
         /// The active filter set's impulses were measured at this distance, meters.
         /// </summary>
-        public static float ReferenceDistance { get; private set; } = defaultDistance;
+        public static float ReferenceDistance {
+            get => threadState != null ? threadState.ReferenceDistance : referenceDistance;
+            private set {
+                if (threadState != null) {
+                    threadState.ReferenceDistance = value;
+                } else {
+                    referenceDistance = value;
+                }
+            }
+        }
+        static float referenceDistance = defaultDistance;
 
         /// <summary>
         /// Maximum impulse response tap length among active virtual channels.
         /// </summary>
-        public static int ActiveMaxImpulseLength { get; private set; }
+        public static int ActiveMaxImpulseLength {
+            get => threadState != null ? threadState.ActiveMaxImpulseLength : activeMaxImpulseLength;
+            private set {
+                if (threadState != null) {
+                    threadState.ActiveMaxImpulseLength = value;
+                } else {
+                    activeMaxImpulseLength = value;
+                }
+            }
+        }
+        static int activeMaxImpulseLength;
 
         /// <summary>
         /// True when the active virtualizer profile contains long measured room reflections
@@ -49,173 +110,281 @@ namespace Cavern.Virtualizer {
         /// <summary>
         /// Monotonically increasing version counter incremented whenever the active virtualizer profile changes.
         /// </summary>
-        public static int ProfileVersion { get; private set; }
+        public static int ProfileVersion {
+            get => threadState != null ? threadState.ProfileVersion : profileVersion;
+            private set {
+                if (threadState != null) {
+                    threadState.ProfileVersion = value;
+                } else {
+                    profileVersion = value;
+                }
+            }
+        }
+        static int profileVersion;
 
         /// <summary>
         /// Legacy artificial 7.5 ms center wall echo hack. Disabled by default so laboratory HRIR/BRIR profiles stay neutral.
         /// </summary>
-        public static bool CenterWallEcho { get; set; }
+        public static bool CenterWallEcho {
+            get => threadState != null ? threadState.CenterWallEcho : centerWallEcho;
+            set {
+                if (threadState != null) {
+                    threadState.CenterWallEcho = value;
+                } else {
+                    centerWallEcho = value;
+                }
+            }
+        }
+        static bool centerWallEcho;
 
         /// <summary>
         /// Enables real-time Allen &amp; Berkley shoebox ISM early reflections (Slot 5A).
         /// Disabled by default for zero-regression anechoic neutrality; automatically bypassed on measured BRIRs.
         /// </summary>
-        public static bool IsmRoomEnabled { get; set; }
+        public static bool IsmRoomEnabled {
+            get => threadState != null ? threadState.IsmRoomEnabled : ismRoomEnabled;
+            set {
+                if (threadState != null) {
+                    threadState.IsmRoomEnabled = value;
+                } else {
+                    ismRoomEnabled = value;
+                }
+            }
+        }
+        static bool ismRoomEnabled;
 
         /// <summary>
         /// Active room preset for Slot 5A ISM early reflections and physical room coordinate scaling.
         /// </summary>
-        public static IsmRoomPreset IsmPreset { get; set; } = IsmRoomPreset.MasteringStudio;
+        public static IsmRoomPreset IsmPreset {
+            get => threadState != null ? threadState.IsmPreset : ismPreset;
+            set {
+                if (threadState != null) {
+                    threadState.IsmPreset = value;
+                } else {
+                    ismPreset = value;
+                }
+            }
+        }
+        static IsmRoomPreset ismPreset = IsmRoomPreset.MasteringStudio;
 
         /// <summary>
         /// Active ISO 354 wall absorption material for Slot 5A ISM early reflections.
         /// </summary>
-        public static IsmWallMaterial IsmWallMaterial { get; set; } = IsmWallMaterial.StudioBroadband;
+        public static IsmWallMaterial IsmWallMaterial {
+            get => threadState != null ? threadState.IsmWallMaterial : ismWallMaterial;
+            set {
+                if (threadState != null) {
+                    threadState.IsmWallMaterial = value;
+                } else {
+                    ismWallMaterial = value;
+                }
+            }
+        }
+        static IsmWallMaterial ismWallMaterial = IsmWallMaterial.StudioBroadband;
 
         /// <summary>
         /// Reflection order for Slot 5A ISM early reflections (1 = 6 first-order, 2 = 24 first + second-order).
         /// </summary>
-        public static int IsmReflectionOrder { get; set; } = 2;
+        public static int IsmReflectionOrder {
+            get => threadState != null ? threadState.IsmReflectionOrder : ismReflectionOrder;
+            set {
+                if (threadState != null) {
+                    threadState.IsmReflectionOrder = value;
+                } else {
+                    ismReflectionOrder = value;
+                }
+            }
+        }
+        static int ismReflectionOrder = 2;
 
         /// <summary>
         /// Linear physical reflection level multiplier (1.0 = exact physical level, clamped to 0..1.5).
         /// </summary>
-        public static float IsmReflectionLevel { get; set; } = 1.0f;
+        public static float IsmReflectionLevel {
+            get => threadState != null ? threadState.IsmReflectionLevel : ismReflectionLevel;
+            set {
+                if (threadState != null) {
+                    threadState.IsmReflectionLevel = value;
+                } else {
+                    ismReflectionLevel = value;
+                }
+            }
+        }
+        static float ismReflectionLevel = 1.0f;
 
         /// <summary>
         /// Enables pure-physics Duda &amp; Martens (1998) spherical-head near-field DVF for sources closer than 1.0 m.
         /// Strictly 0.00 dB unity bypass at &gt;= 1.0 m or when distance &gt;= <see cref="ReferenceDistance"/>.
         /// </summary>
-        public static bool NearFieldCompensationEnabled { get; set; } = true;
+        public static bool NearFieldCompensationEnabled {
+            get => threadState != null ? threadState.NearFieldCompensationEnabled : nearFieldCompensationEnabled;
+            set {
+                if (threadState != null) {
+                    threadState.NearFieldCompensationEnabled = value;
+                } else {
+                    nearFieldCompensationEnabled = value;
+                }
+            }
+        }
+        static bool nearFieldCompensationEnabled = true;
 
         /// <summary>
         /// Additional BRIR guard flag mirrored from profile metadata (complements <see cref="IsMeasuredBrirActive"/>).
         /// </summary>
-        public static bool ExternalBrirGuardActive { get; set; }
+        public static bool ExternalBrirGuardActive {
+            get => threadState != null ? threadState.ExternalBrirGuardActive : externalBrirGuardActive;
+            set {
+                if (threadState != null) {
+                    threadState.ExternalBrirGuardActive = value;
+                } else {
+                    externalBrirGuardActive = value;
+                }
+            }
+        }
+        static bool externalBrirGuardActive;
 
         /// <summary>
         /// Active physical shoebox geometry and Sabine/Eyring RT60 telemetry for UI/hub diagnostics.
         /// </summary>
-        public static IsmRoomGeometry ActiveRoomGeometry { get; private set; } =
+        public static IsmRoomGeometry ActiveRoomGeometry {
+            get => threadState != null ? threadState.ActiveRoomGeometry : activeRoomGeometry;
+            private set {
+                if (threadState != null) {
+                    threadState.ActiveRoomGeometry = value;
+                } else {
+                    activeRoomGeometry = value;
+                }
+            }
+        }
+        static IsmRoomGeometry activeRoomGeometry =
             new IsmRoomGeometry(IsmRoomPreset.MasteringStudio, IsmWallMaterial.StudioBroadband, new Vector3(10f, 7f, 10f));
 
         /// <summary>
         /// Live normalized listener position inside the room (<c>[-1, +1]</c>) fed by Slot 5 adapter.
         /// </summary>
-        public static Vector3 LiveListenerNormalizedPosition { get; set; } = Vector3.Zero;
+        public static Vector3 LiveListenerNormalizedPosition {
+            get => threadState != null ? threadState.LiveListenerNormalizedPosition : liveListenerNormalizedPosition;
+            set {
+                if (threadState != null) {
+                    threadState.LiveListenerNormalizedPosition = value;
+                } else {
+                    liveListenerNormalizedPosition = value;
+                }
+            }
+        }
+        static Vector3 liveListenerNormalizedPosition = Vector3.Zero;
 
         /// <summary>
         /// Live listener Euler rotation in degrees (Pitch X, Yaw Y, Roll Z) fed by Slot 4/5 for head-tracked ISM reflections.
         /// </summary>
-        public static Vector3 LiveListenerRotationDegrees { get; set; } = Vector3.Zero;
+        public static Vector3 LiveListenerRotationDegrees {
+            get => threadState != null ? threadState.LiveListenerRotationDegrees : liveListenerRotationDegrees;
+            set {
+                if (threadState != null) {
+                    threadState.LiveListenerRotationDegrees = value;
+                } else {
+                    liveListenerRotationDegrees = value;
+                }
+            }
+        }
+        static Vector3 liveListenerRotationDegrees = Vector3.Zero;
 
         /// <summary>
         /// True when any virtual channel actively engaged Duda &amp; Martens near-field DVF on the last processed block.
         /// </summary>
-        public static bool LastBlockNearFieldActive { get; private set; }
+        public static bool LastBlockNearFieldActive {
+            get => threadState != null ? threadState.LastBlockNearFieldActive : lastBlockNearFieldActive;
+            private set {
+                if (threadState != null) {
+                    threadState.LastBlockNearFieldActive = value;
+                } else {
+                    lastBlockNearFieldActive = value;
+                }
+            }
+        }
+        static bool lastBlockNearFieldActive;
 
         /// <summary>
         /// Optional Pre-HRTF Virtual Speaker Bus processor invoked right before ISM room reflections and HRIR convolution
         /// (W09 Tier 1 LGSR spectral fusion preserving JOC cancellation). Set to null to bypass with zero overhead.
         /// </summary>
-        public static IPreHrtfBusProcessor PreHrtfBusProcessor { get; set; }
-
-        /// <summary>
-        /// Captures all static virtualizer configuration (<c>SpatialChannels</c>, <c>FilterSampleRate</c>,
-        /// <c>ReferenceDistance</c>, <c>PreHrtfBusProcessor</c>, and ISM/externalization room settings) and
-        /// restores them on <see cref="IDisposable.Dispose"/> so offline Studio exports never collide with live playback.
-        /// </summary>
-        public static IDisposable BeginStaticStateScope() {
-            lock (staticScopeLock) {
-                return new StaticStateScope();
+        public static IPreHrtfBusProcessor PreHrtfBusProcessor {
+            get => threadState != null ? threadState.PreHrtfBusProcessor : preHrtfBusProcessor;
+            set {
+                if (threadState != null) {
+                    threadState.PreHrtfBusProcessor = value;
+                } else {
+                    preHrtfBusProcessor = value;
+                }
             }
         }
+        static IPreHrtfBusProcessor preHrtfBusProcessor;
 
-        static readonly object staticScopeLock = new object();
+        /// <summary>
+        /// Isolates all static <see cref="VirtualizerFilter"/>, <see cref="Listener"/>, and
+        /// <see cref="AirAbsorptionFilter"/> configuration on the calling thread until disposed so offline Studio
+        /// exports, acoustic audits, and chaos fuzzers never race with or mutate concurrent live playback.
+        /// </summary>
+        public static IDisposable BeginStaticStateScope() {
+            IDisposable listenerScope = Listener.BeginThreadIsolatedScope();
+            IDisposable airScope = AirAbsorptionFilter.BeginThreadIsolatedScope();
+            ThreadIsolatedState prev = threadState;
+            float[] srcDists = ActiveLiveChannelMinDistances;
+            float[] clonedDists = new float[srcDists.Length];
+            Array.Copy(srcDists, clonedDists, srcDists.Length);
+            VirtualChannel[] curChannels = threadState != null ? threadState.SpatialChannels : spatialChannels;
+            threadState = new ThreadIsolatedState {
+                SpatialChannels = curChannels,
+                FilterSampleRate = FilterSampleRate,
+                ReferenceDistance = ReferenceDistance,
+                ActiveMaxImpulseLength = ActiveMaxImpulseLength,
+                ProfileVersion = ProfileVersion,
+                CenterWallEcho = CenterWallEcho,
+                IsmRoomEnabled = IsmRoomEnabled,
+                IsmPreset = IsmPreset,
+                IsmWallMaterial = IsmWallMaterial,
+                IsmReflectionOrder = IsmReflectionOrder,
+                IsmReflectionLevel = IsmReflectionLevel,
+                NearFieldCompensationEnabled = NearFieldCompensationEnabled,
+                ExternalBrirGuardActive = ExternalBrirGuardActive,
+                ActiveRoomGeometry = ActiveRoomGeometry,
+                LiveListenerNormalizedPosition = LiveListenerNormalizedPosition,
+                LiveListenerRotationDegrees = LiveListenerRotationDegrees,
+                LastBlockNearFieldActive = LastBlockNearFieldActive,
+                PreHrtfBusProcessor = PreHrtfBusProcessor,
+                LiveChannelMinDistances = clonedDists
+            };
+            return new StaticStateScope(prev, listenerScope, airScope);
+        }
 
         sealed class StaticStateScope : IDisposable {
-            readonly VirtualChannel[] savedSpatialChannels;
-            readonly int savedFilterSampleRate;
-            readonly float savedReferenceDistance;
-            readonly IPreHrtfBusProcessor savedPreHrtfBusProcessor;
-            readonly bool savedCenterWallEcho;
-            readonly bool savedIsmRoomEnabled;
-            readonly IsmRoomPreset savedIsmPreset;
-            readonly IsmWallMaterial savedIsmWallMaterial;
-            readonly int savedIsmReflectionOrder;
-            readonly float savedIsmReflectionLevel;
-            readonly bool savedNearFieldEnabled;
-            readonly bool savedExternalBrirGuard;
-            readonly IsmRoomGeometry savedActiveRoomGeometry;
-            readonly Vector3 savedLiveListenerNormalizedPosition;
-            readonly Vector3 savedLiveListenerRotationDegrees;
-            readonly bool savedAirAbsorptionEnabled;
-            readonly float savedAirAbsorptionTemp;
-            readonly float savedAirAbsorptionRh;
-            readonly Vector3 savedAirAbsorptionHalfSize;
-            readonly float[] savedLiveChannelMinDistances;
+            readonly ThreadIsolatedState previous;
+            readonly IDisposable listenerScope;
+            readonly IDisposable airScope;
             bool disposed;
 
-            public StaticStateScope() {
-                savedSpatialChannels = spatialChannels;
-                savedFilterSampleRate = FilterSampleRate;
-                savedReferenceDistance = ReferenceDistance;
-                savedPreHrtfBusProcessor = PreHrtfBusProcessor;
-                savedCenterWallEcho = CenterWallEcho;
-                savedIsmRoomEnabled = IsmRoomEnabled;
-                savedIsmPreset = IsmPreset;
-                savedIsmWallMaterial = IsmWallMaterial;
-                savedIsmReflectionOrder = IsmReflectionOrder;
-                savedIsmReflectionLevel = IsmReflectionLevel;
-                savedNearFieldEnabled = NearFieldCompensationEnabled;
-                savedExternalBrirGuard = ExternalBrirGuardActive;
-                savedActiveRoomGeometry = ActiveRoomGeometry;
-                savedLiveListenerNormalizedPosition = LiveListenerNormalizedPosition;
-                savedLiveListenerRotationDegrees = LiveListenerRotationDegrees;
-                savedAirAbsorptionEnabled = AirAbsorptionFilter.GlobalEnabled;
-                savedAirAbsorptionTemp = AirAbsorptionFilter.GlobalTemperatureCelsius;
-                savedAirAbsorptionRh = AirAbsorptionFilter.GlobalRelativeHumidityPct;
-                savedAirAbsorptionHalfSize = AirAbsorptionFilter.PhysicalRoomHalfSize;
-                savedLiveChannelMinDistances = (float[])liveChannelMinDistances.Clone();
+            public StaticStateScope(ThreadIsolatedState prev, IDisposable listener, IDisposable air) {
+                previous = prev;
+                listenerScope = listener;
+                airScope = air;
             }
 
             public void Dispose() {
-                lock (staticScopeLock) {
-                    if (disposed) {
-                        return;
-                    }
-                    disposed = true;
-
-                    bool profileChanged = !ReferenceEquals(spatialChannels, savedSpatialChannels) ||
-                        FilterSampleRate != savedFilterSampleRate ||
-                        ReferenceDistance != savedReferenceDistance;
-
-                    spatialChannels = savedSpatialChannels;
-                    ActiveMaxImpulseLength = ComputeMaxImpulseLength(savedSpatialChannels);
-                    FilterSampleRate = savedFilterSampleRate;
-                    ReferenceDistance = savedReferenceDistance;
-                    PreHrtfBusProcessor = savedPreHrtfBusProcessor;
-                    CenterWallEcho = savedCenterWallEcho;
-                    IsmRoomEnabled = savedIsmRoomEnabled;
-                    IsmPreset = savedIsmPreset;
-                    IsmWallMaterial = savedIsmWallMaterial;
-                    IsmReflectionOrder = savedIsmReflectionOrder;
-                    IsmReflectionLevel = savedIsmReflectionLevel;
-                    NearFieldCompensationEnabled = savedNearFieldEnabled;
-                    ExternalBrirGuardActive = savedExternalBrirGuard;
-                    ActiveRoomGeometry = savedActiveRoomGeometry;
-                    LiveListenerNormalizedPosition = savedLiveListenerNormalizedPosition;
-                    LiveListenerRotationDegrees = savedLiveListenerRotationDegrees;
-                    AirAbsorptionFilter.GlobalEnabled = savedAirAbsorptionEnabled;
-                    AirAbsorptionFilter.GlobalTemperatureCelsius = savedAirAbsorptionTemp;
-                    AirAbsorptionFilter.GlobalRelativeHumidityPct = savedAirAbsorptionRh;
-                    AirAbsorptionFilter.PhysicalRoomHalfSize = savedAirAbsorptionHalfSize;
-                    Array.Copy(savedLiveChannelMinDistances, liveChannelMinDistances, liveChannelMinDistances.Length);
-
-                    if (profileChanged) {
-                        ProfileVersion++;
-                    }
+                if (disposed) {
+                    return;
                 }
+                disposed = true;
+                ThreadIsolatedState current = threadState;
+                threadState = previous;
+                if (current != null && current.OwnedDefaultChannels != null) {
+                    for (int i = 0; i < current.OwnedDefaultChannels.Count; i++) {
+                        DisposeChannels(current.OwnedDefaultChannels[i]);
+                    }
+                    current.OwnedDefaultChannels.Clear();
+                }
+                airScope.Dispose();
+                listenerScope.Dispose();
             }
         }
 
@@ -256,16 +425,19 @@ namespace Cavern.Virtualizer {
         /// Called on the audio thread immediately prior to <see cref="Listener.Render(int)"/>.
         /// </summary>
         public static void SetLiveChannelMinDistances(float[] distancesMeters, int count) {
-            int limit = Math.Min(liveChannelMinDistances.Length, Math.Max(0, count));
+            float[] target = ActiveLiveChannelMinDistances;
+            int limit = Math.Min(target.Length, Math.Max(0, count));
             for (int i = 0; i < limit; i++) {
-                liveChannelMinDistances[i] = distancesMeters != null && i < distancesMeters.Length
+                target[i] = distancesMeters != null && i < distancesMeters.Length
                     ? distancesMeters[i]
                     : float.PositiveInfinity;
             }
-            for (int i = limit; i < liveChannelMinDistances.Length; i++) {
-                liveChannelMinDistances[i] = float.PositiveInfinity;
+            for (int i = limit; i < target.Length; i++) {
+                target[i] = float.PositiveInfinity;
             }
         }
+
+        static float[] ActiveLiveChannelMinDistances => threadState != null ? threadState.LiveChannelMinDistances : liveChannelMinDistances;
 
         static readonly float[] liveChannelMinDistances = InitInfinityDistances(64);
 
@@ -287,15 +459,27 @@ namespace Cavern.Virtualizer {
         /// </summary>
         static VirtualChannel[] SpatialChannels {
             get {
+                if (threadState != null) {
+                    if (threadState.SpatialChannels == null) {
+                        threadState.SpatialChannels = GetDefaultHRIRSet();
+                        threadState.ActiveMaxImpulseLength = ComputeMaxImpulseLength(threadState.SpatialChannels);
+                    }
+                    return threadState.SpatialChannels;
+                }
                 if (spatialChannels == null) {
                     spatialChannels = GetDefaultHRIRSet();
-                    ActiveMaxImpulseLength = ComputeMaxImpulseLength(spatialChannels);
+                    activeMaxImpulseLength = ComputeMaxImpulseLength(spatialChannels);
                 }
                 return spatialChannels;
             }
             set {
-                spatialChannels = value;
-                ActiveMaxImpulseLength = ComputeMaxImpulseLength(value);
+                if (threadState != null) {
+                    threadState.SpatialChannels = value;
+                    threadState.ActiveMaxImpulseLength = ComputeMaxImpulseLength(value);
+                } else {
+                    spatialChannels = value;
+                    activeMaxImpulseLength = ComputeMaxImpulseLength(value);
+                }
             }
         }
         static VirtualChannel[] spatialChannels;
@@ -349,6 +533,12 @@ namespace Cavern.Virtualizer {
         /// Cached speed of sound for the current audio block.
         /// </summary>
         double blockSpeedOfSound = 343.21;
+
+        // Per-block immutable snapshots read by Parallelizer worker threads so workers never touch TLS/static state
+        bool blockNearFieldEnabled = true;
+        float blockReferenceDistance = defaultDistance;
+        int blockFilterSampleRate = defaultSampleRate;
+        float[] blockMinDistances = liveChannelMinDistances;
 
         /// <summary>
         /// Length of split arrays.
@@ -429,6 +619,7 @@ namespace Cavern.Virtualizer {
 
             internal int ConvertInterleavedChannel(float[] interleaved, int channelOffset, int stride, int inSamples, float[] dst) {
                 int outIdx = 0;
+                int maxOut = dst.Length;
                 for (int i = 0; i < inSamples; i++) {
                     float x = interleaved[i * stride + channelOffset];
                     s0 = s1;
@@ -436,7 +627,9 @@ namespace Cavern.Virtualizer {
                     s2 = s3;
                     s3 = x;
                     while (accum < modDen) {
-                        dst[outIdx++] = EvalCatmullRom(s0, s1, s2, s3, (float)accum / modDen);
+                        if (outIdx < maxOut) {
+                            dst[outIdx++] = EvalCatmullRom(s0, s1, s2, s3, (float)accum / modDen);
+                        }
                         accum += stepNum;
                     }
                     accum -= modDen;
@@ -452,12 +645,14 @@ namespace Cavern.Virtualizer {
                     s2 = s3;
                     s3 = x;
                     while (accum < modDen) {
-                        fifo[writeIdx] = EvalCatmullRom(s0, s1, s2, s3, (float)accum / modDen);
-                        writeIdx++;
-                        if (writeIdx >= capacity) {
-                            writeIdx = 0;
+                        if (count < capacity) {
+                            fifo[writeIdx] = EvalCatmullRom(s0, s1, s2, s3, (float)accum / modDen);
+                            writeIdx++;
+                            if (writeIdx >= capacity) {
+                                writeIdx = 0;
+                            }
+                            count++;
                         }
-                        count++;
                         accum += stepNum;
                     }
                     accum -= modDen;
@@ -519,13 +714,17 @@ namespace Cavern.Virtualizer {
         /// </summary>
         public static void Reset(bool minimumPhase) {
             VirtualChannel[] defaults;
-            lock (resetLock) {
-                VirtualChannel.applyMinimumPhaseOnSubpar = minimumPhase;
-                try {
-                    defaults = GetDefaultHRIRSet();
-                } finally {
-                    VirtualChannel.applyMinimumPhaseOnSubpar = false;
+            VirtualChannel.applyMinimumPhaseOnSubpar = minimumPhase;
+            try {
+                defaults = GetDefaultHRIRSet();
+            } finally {
+                VirtualChannel.applyMinimumPhaseOnSubpar = false;
+            }
+            if (threadState != null) {
+                if (threadState.OwnedDefaultChannels == null) {
+                    threadState.OwnedDefaultChannels = new List<VirtualChannel[]>();
                 }
+                threadState.OwnedDefaultChannels.Add(defaults);
             }
             SpatialChannels = defaults;
             FilterSampleRate = defaultSampleRate;
@@ -533,7 +732,18 @@ namespace Cavern.Virtualizer {
             ProfileVersion++;
         }
 
-        static readonly object resetLock = new object();
+        /// <summary>
+        /// Releases the <see cref="PartitionedDualConvolver"/> FFT caches owned by a temporary or superseded
+        /// <see cref="VirtualChannel"/> set so they do not accumulate in the GC finalization queue.
+        /// </summary>
+        public static void DisposeChannels(VirtualChannel[] channels) {
+            if (channels == null) {
+                return;
+            }
+            for (int i = 0; i < channels.Length; i++) {
+                channels[i].Filter?.Dispose();
+            }
+        }
 
         /// <summary>
         /// Change the virtualized layout based on <see cref="Listener.Channels"/>, with added virtualized heights. Ground channels
@@ -806,6 +1016,10 @@ namespace Cavern.Virtualizer {
             }
 
             blockSpeedOfSound = AirAbsorptionFilter.ComputeSpeedOfSound(AirAbsorptionFilter.GlobalTemperatureCelsius);
+            blockNearFieldEnabled = NearFieldCompensationEnabled;
+            blockReferenceDistance = ReferenceDistance;
+            blockFilterSampleRate = FilterSampleRate;
+            blockMinDistances = ActiveLiveChannelMinDistances;
             processor.ForUnchecked(0, channels);
 
             bool anyNearFieldActive = false;
@@ -824,7 +1038,7 @@ namespace Cavern.Virtualizer {
             EnsureRateConversionBuffers(channels, inBlockSize, srcRate, fltRate);
 
             int fltBlockSize = inRateConverters[0].PredictOutputCount(inBlockSize);
-            int slotIdx = fltBlockSize == rateBaseFltBlockSize ? 0 : 1;
+            int slotIdx = fltBlockSize <= rateBaseFltBlockSize ? 0 : 1;
             RateSlotBuffers slot = rateSlots[slotIdx];
 
             for (int ch = 0; ch < channels; ch++) {
@@ -963,7 +1177,8 @@ namespace Cavern.Virtualizer {
             outRateConverterR = new ChannelRateConverter();
             outRateConverterR.Configure(fltRate, srcRate);
 
-            outFifoCapacity = Math.Max(64, inBlockSize + Math.Max(16, (int)Math.Ceiling((double)srcRate / fltRate) * 2 + 16));
+            int maxOutPerBlock = outRateConverterL.PredictOutputCount(rateBaseFltBlockSize + 1);
+            outFifoCapacity = Math.Max(64, Math.Max(inBlockSize, maxOutPerBlock) * 2 + 32);
             outFifoL = new float[outFifoCapacity];
             outFifoR = new float[outFifoCapacity];
             fifoReadL = 0;
@@ -1038,17 +1253,18 @@ namespace Cavern.Virtualizer {
             ch.Filter.Process(leftSplit[channel], rightSplit[channel]);
 
             if (nearFieldFilters != null && channel < nearFieldFilters.Length) {
-                float minDist = NearFieldCompensationEnabled && channel < liveChannelMinDistances.Length
-                    ? liveChannelMinDistances[channel]
+                float[] minDists = blockMinDistances;
+                float minDist = blockNearFieldEnabled && minDists != null && channel < minDists.Length
+                    ? minDists[channel]
                     : float.PositiveInfinity;
                 nearFieldFilters[channel].ProcessStereo(
                     leftSplit[channel],
                     rightSplit[channel],
                     blockSize,
                     minDist,
-                    ReferenceDistance,
+                    blockReferenceDistance,
                     channelCosRight[channel],
-                    FilterSampleRate,
+                    blockFilterSampleRate,
                     blockSpeedOfSound);
             }
         }

@@ -69,7 +69,7 @@ namespace Cavern {
         /// or simply "Virtualization".
         /// </summary>
         public static string GetLayoutName() {
-            if (headphoneVirtualizer) {
+            if (HeadphoneVirtualizer) {
                 return "Virtualization";
             } else {
                 int regular = 0, sub = 0, ceiling = 0, floor = 0;
@@ -215,7 +215,7 @@ namespace Cavern {
         /// </summary>
         /// <remarks>The output size is <paramref name="frames"/> * <see cref="UpdateRate"/> * <see cref="Channels"/>.Length.</remarks>
         public virtual float[] Render(int frames) {
-            if (SampleRate < 44100 || UpdateRate < 16) { // Don't work with wrong settings
+            if (SampleRate < 8000 || UpdateRate < 16) { // Don't work with wrong settings
                 return null;
             }
             for (int source = 0; source < sourceDistances.Length; source++) {
@@ -233,7 +233,7 @@ namespace Cavern {
             // Render the required number of frames
             if (frames == 1) {
                 float[] result = Frame();
-                if (headphoneVirtualizer && !BypassInternalVirtualizer) {
+                if (HeadphoneVirtualizer && !BypassInternalVirtualizer) {
                     virtualizer.Process(result, SampleRate);
                 }
                 return result;
@@ -251,7 +251,7 @@ namespace Cavern {
                     float[] frameBuffer = Frame();
                     Array.Copy(frameBuffer, 0, multiframeBuffer, frame * frameBuffer.Length, frameBuffer.Length);
                 }
-                if (headphoneVirtualizer && !BypassInternalVirtualizer) {
+                if (HeadphoneVirtualizer && !BypassInternalVirtualizer) {
                     virtualizer.Process(multiframeBuffer, SampleRate);
                 }
                 return multiframeBuffer;
@@ -277,7 +277,7 @@ namespace Cavern {
         /// A single update.
         /// </summary>
         float[] Frame() {
-            if (headphoneVirtualizer && !BypassInternalVirtualizer) {
+            if (HeadphoneVirtualizer && !BypassInternalVirtualizer) {
                 virtualizer ??= new VirtualizerFilter();
                 virtualizer.SetLayout();
             }

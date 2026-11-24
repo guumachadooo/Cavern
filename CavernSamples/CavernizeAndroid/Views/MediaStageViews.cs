@@ -945,11 +945,16 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
 
     public void ReleasePlayer() {
         CancelAutoHide();
+        bool wasPrepared = isPrepared;
         isPrepared = false;
-        try {
-            mediaPlayer?.Stop();
-        } catch {
-            // Ignore
+        if (wasPrepared && mediaPlayer != null) {
+            try {
+                if (mediaPlayer.IsPlaying) {
+                    mediaPlayer.Stop();
+                }
+            } catch {
+                // Ignore
+            }
         }
         try {
             mediaPlayer?.Release();

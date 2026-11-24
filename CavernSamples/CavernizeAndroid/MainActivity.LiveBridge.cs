@@ -137,7 +137,31 @@ public partial class MainActivity : ILiveBridgeAppHost {
         }, new JsonSerializerOptions { WriteIndented = true });
     });
 
+    void EnsureTabLaidOut(int tabIdx) {
+        if (tabContainers == null || tabIdx < 0 || tabIdx >= tabContainers.Length) {
+            return;
+        }
+        View tab = tabContainers[tabIdx];
+        if (tab == null || tab.Visibility != ViewStates.Visible) {
+            return;
+        }
+        if (tab.Width > 0 && tab.Height > 0 && !tab.IsLayoutRequested) {
+            return;
+        }
+        View host = (tab.Parent as View) ?? rootFrameHost ?? Window?.DecorView;
+        int w = host?.Width ?? 0;
+        int h = host?.Height ?? 0;
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        int wSpec = View.MeasureSpec.MakeMeasureSpec(w, MeasureSpecMode.Exactly);
+        int hSpec = View.MeasureSpec.MakeMeasureSpec(h, MeasureSpecMode.Exactly);
+        tab.Measure(wSpec, hSpec);
+        tab.Layout(0, 0, w, h);
+    }
+
     Task<string> ILiveBridgeAppHost.DumpUiTreeJsonAsync(int maxDepth) => RunOnUiThreadWithTimeoutAsync(() => {
+        EnsureTabLaidOut(activeTab);
         int nodes = 0;
         object Walk(View v, int depth) {
             if (v == null || nodes >= 320) {
@@ -246,6 +270,7 @@ public partial class MainActivity : ILiveBridgeAppHost {
             return (false, "Invalid tab index/name (valid: 0..4 or player/room/studio/stems/settings).");
         }
         SwitchTab(target);
+        EnsureTabLaidOut(target);
         return (true, $"Switched to tab {target}.");
     });
 

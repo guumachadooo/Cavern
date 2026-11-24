@@ -28,17 +28,73 @@ namespace Cavern.Virtualizer {
         /// </summary>
         public const float ReferencePressureKpa = 101.325f;
 
+        sealed class ThreadIsolatedState {
+            public bool GlobalEnabled;
+            public float GlobalTemperatureCelsius;
+            public float GlobalRelativeHumidityPct;
+            public System.Numerics.Vector3 PhysicalRoomHalfSize;
+        }
+
+        [ThreadStatic]
+        static ThreadIsolatedState threadState;
+
+        sealed class ThreadIsolationScope : IDisposable {
+            readonly ThreadIsolatedState previous;
+            bool disposed;
+
+            public ThreadIsolationScope(ThreadIsolatedState prev) => previous = prev;
+
+            public void Dispose() {
+                if (disposed) {
+                    return;
+                }
+                disposed = true;
+                threadState = previous;
+            }
+        }
+
+        /// <summary>
+        /// Isolates static atmospheric absorption settings on the calling thread until disposed.
+        /// </summary>
+        internal static IDisposable BeginThreadIsolatedScope() {
+            ThreadIsolatedState prev = threadState;
+            threadState = new ThreadIsolatedState {
+                GlobalEnabled = GlobalEnabled,
+                GlobalTemperatureCelsius = GlobalTemperatureCelsius,
+                GlobalRelativeHumidityPct = GlobalRelativeHumidityPct,
+                PhysicalRoomHalfSize = PhysicalRoomHalfSize
+            };
+            return new ThreadIsolationScope(prev);
+        }
+
         /// <summary>
         /// Global enable flag for direct-path ISO 9613-1 air absorption beyond <see cref="DirectPathThresholdMeters"/>.
         /// </summary>
-        public static bool GlobalEnabled { get; set; } = true;
+        public static bool GlobalEnabled {
+            get => threadState != null ? threadState.GlobalEnabled : globalEnabled;
+            set {
+                if (threadState != null) {
+                    threadState.GlobalEnabled = value;
+                } else {
+                    globalEnabled = value;
+                }
+            }
+        }
+        static bool globalEnabled = true;
 
         /// <summary>
         /// Global ambient air temperature in degrees Celsius (clamped to -10..45 C).
         /// </summary>
         public static float GlobalTemperatureCelsius {
-            get => globalTemperatureCelsius;
-            set => globalTemperatureCelsius = Math.Clamp(value, -10f, 45f);
+            get => threadState != null ? threadState.GlobalTemperatureCelsius : globalTemperatureCelsius;
+            set {
+                float clamped = Math.Clamp(value, -10f, 45f);
+                if (threadState != null) {
+                    threadState.GlobalTemperatureCelsius = clamped;
+                } else {
+                    globalTemperatureCelsius = clamped;
+                }
+            }
         }
         static float globalTemperatureCelsius = DefaultTemperatureCelsius;
 
@@ -46,15 +102,32 @@ namespace Cavern.Virtualizer {
         /// Global ambient relative humidity in percent (clamped to 10..95 %).
         /// </summary>
         public static float GlobalRelativeHumidityPct {
-            get => globalRelativeHumidityPct;
-            set => globalRelativeHumidityPct = Math.Clamp(value, 10f, 95f);
+            get => threadState != null ? threadState.GlobalRelativeHumidityPct : globalRelativeHumidityPct;
+            set {
+                float clamped = Math.Clamp(value, 10f, 95f);
+                if (threadState != null) {
+                    threadState.GlobalRelativeHumidityPct = clamped;
+                } else {
+                    globalRelativeHumidityPct = clamped;
+                }
+            }
         }
         static float globalRelativeHumidityPct = DefaultRelativeHumidityPct;
 
         /// <summary>
         /// Physical room half-dimensions (meters) used to map Cavern normalized room coordinates into real meters.
         /// </summary>
-        public static System.Numerics.Vector3 PhysicalRoomHalfSize { get; set; } = new System.Numerics.Vector3(2.6f, 1.55f, 3.2f);
+        public static System.Numerics.Vector3 PhysicalRoomHalfSize {
+            get => threadState != null ? threadState.PhysicalRoomHalfSize : physicalRoomHalfSize;
+            set {
+                if (threadState != null) {
+                    threadState.PhysicalRoomHalfSize = value;
+                } else {
+                    physicalRoomHalfSize = value;
+                }
+            }
+        }
+        static System.Numerics.Vector3 physicalRoomHalfSize = new System.Numerics.Vector3(2.6f, 1.55f, 3.2f);
 
         // Two cascaded RBJ high-shelf biquads fitted via closed-form 2x2 least squares to exact ISO 9613-1 dB targets.
         const double stage1CenterHz = 4200.0;

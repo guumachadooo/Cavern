@@ -57,7 +57,8 @@ public static class AndroidMediaFallbackDecoder {
                 }
             }
 
-            if (audioTrackIndex < 0 || trackFormat == null) {
+            if (audioTrackIndex < 0 || trackFormat == null || string.IsNullOrWhiteSpace(mime) ||
+                string.Equals(mime, "audio/unknown", StringComparison.OrdinalIgnoreCase)) {
                 throw new NotSupportedException("No decodable audio track found in file.");
             }
 
@@ -70,88 +71,111 @@ public static class AndroidMediaFallbackDecoder {
                 : (int)AudioEncoding.Pcm16bit;
             ResolveWavFormat(pcmEncoding, out short wavBitsPerSample, out bool wavIsFloat, out bool convertInt32ToFloat32);
 
-            codec = MediaCodec.CreateDecoderByType(mime);
-            codec.Configure(trackFormat, null, null, 0);
-            codec.Start();
+            bool codecStarted = false;
+            bool codecFaulted = false;
+            try {
+                codec = MediaCodec.CreateDecoderByType(mime);
+                codec.Configure(trackFormat, null, null, 0);
+                codec.Start();
+                codecStarted = true;
 
-            using FileStream fs = File.Create(wavPath);
-            WriteWavPlaceholderHeader(fs, channels, sampleRate, wavBitsPerSample, wavIsFloat);
+                using FileStream fs = File.Create(wavPath);
+                WriteWavPlaceholderHeader(fs, channels, sampleRate, wavBitsPerSample, wavIsFloat);
 
-            MediaCodec.BufferInfo info = new();
-            byte[] pcmScratch = Array.Empty<byte>();
-            bool inputDone = false;
-            bool outputDone = false;
-            long totalPcmBytes = 0;
-            int idleDrainRetries = 0;
+                using MediaCodec.BufferInfo info = new();
+                byte[] pcmScratch = Array.Empty<byte>();
+                bool inputDone = false;
+                bool outputDone = false;
+                long totalPcmBytes = 0;
+                int idleDrainRetries = 0;
 
-            while (!outputDone) {
-                token.ThrowIfCancellationRequested();
+                while (!outputDone) {
+                    token.ThrowIfCancellationRequested();
 
-                if (!inputDone) {
-                    int inIdx = codec.DequeueInputBuffer(10000);
-                    if (inIdx >= 0) {
-                        ByteBuffer inputBuf = codec.GetInputBuffer(inIdx);
-                        inputBuf.Clear();
-                        int sampleSize = extractor.ReadSampleData(inputBuf, 0);
-                        if (sampleSize < 0) {
-                            codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
-                            inputDone = true;
-                        } else {
-                            long pts = extractor.SampleTime;
-                            codec.QueueInputBuffer(inIdx, 0, sampleSize, pts, 0);
-                            extractor.Advance();
-                            if (durationUs > 0 && pts >= 0) {
-                                onProgress?.Invoke(Math.Clamp(pts / (double)durationUs, 0, 1));
+                    if (!inputDone) {
+                        int inIdx = codec.DequeueInputBuffer(10000);
+                        if (inIdx >= 0) {
+                            ByteBuffer inputBuf = codec.GetInputBuffer(inIdx);
+                            if (inputBuf == null) {
+                                codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
+                                inputDone = true;
+                            } else {
+                                inputBuf.Clear();
+                                int sampleSize = extractor.ReadSampleData(inputBuf, 0);
+                                if (sampleSize < 0) {
+                                    codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
+                                    inputDone = true;
+                                } else {
+                                    long pts = extractor.SampleTime;
+                                    codec.QueueInputBuffer(inIdx, 0, sampleSize, pts, 0);
+                                    extractor.Advance();
+                                    if (durationUs > 0 && pts >= 0) {
+                                        onProgress?.Invoke(Math.Clamp(pts / (double)durationUs, 0, 1));
+                                    }
+                                }
                             }
                         }
                     }
+
+                    int outIdx = codec.DequeueOutputBuffer(info, 10000);
+                    if (outIdx == -2) { // INFO_OUTPUT_FORMAT_CHANGED
+                        idleDrainRetries = 0;
+                        MediaFormat outFmt = codec.OutputFormat;
+                        if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) {
+                            sampleRate = outFmt.GetInteger(MediaFormat.KeySampleRate);
+                        }
+                        if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) {
+                            channels = outFmt.GetInteger(MediaFormat.KeyChannelCount);
+                        }
+                        if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) {
+                            pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
+                            ResolveWavFormat(pcmEncoding, out wavBitsPerSample, out wavIsFloat, out convertInt32ToFloat32);
+                        }
+                    } else if (outIdx >= 0) {
+                        idleDrainRetries = 0;
+                        if (info.Size > 0) {
+                            ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
+                            if (outBuf != null) {
+                                outBuf.Position(info.Offset);
+                                outBuf.Limit(info.Offset + info.Size);
+                                if (pcmScratch.Length < info.Size) {
+                                    pcmScratch = new byte[info.Size];
+                                }
+                                outBuf.Get(pcmScratch, 0, info.Size);
+                                if (convertInt32ToFloat32) {
+                                    ConvertSignedInt32LeToFloat32LeInPlace(pcmScratch, info.Size);
+                                }
+                                fs.Write(pcmScratch, 0, info.Size);
+                                totalPcmBytes += info.Size;
+                            }
+                        }
+                        codec.ReleaseOutputBuffer(outIdx, false);
+                        if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) {
+                            outputDone = true;
+                        }
+                    } else if (inputDone) {
+                        if (++idleDrainRetries > 200) {
+                            outputDone = true;
+                        }
+                    }
                 }
 
-                int outIdx = codec.DequeueOutputBuffer(info, 10000);
-                if (outIdx == -2) { // INFO_OUTPUT_FORMAT_CHANGED
-                    idleDrainRetries = 0;
-                    MediaFormat outFmt = codec.OutputFormat;
-                    if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) {
-                        sampleRate = outFmt.GetInteger(MediaFormat.KeySampleRate);
+                PatchWavHeader(fs, channels, sampleRate, wavBitsPerSample, wavIsFloat, totalPcmBytes);
+                succeeded = true;
+            } catch {
+                codecFaulted = true;
+                throw;
+            } finally {
+                if (codec != null) {
+                    if (codecStarted && !codecFaulted) {
+                        try { codec.Stop(); } catch { }
                     }
-                    if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) {
-                        channels = outFmt.GetInteger(MediaFormat.KeyChannelCount);
-                    }
-                    if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) {
-                        pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
-                        ResolveWavFormat(pcmEncoding, out wavBitsPerSample, out wavIsFloat, out convertInt32ToFloat32);
-                    }
-                } else if (outIdx >= 0) {
-                    idleDrainRetries = 0;
-                    if (info.Size > 0) {
-                        ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
-                        outBuf.Position(info.Offset);
-                        outBuf.Limit(info.Offset + info.Size);
-                        if (pcmScratch.Length < info.Size) {
-                            pcmScratch = new byte[info.Size];
-                        }
-                        outBuf.Get(pcmScratch, 0, info.Size);
-                        if (convertInt32ToFloat32) {
-                            ConvertSignedInt32LeToFloat32LeInPlace(pcmScratch, info.Size);
-                        }
-                        fs.Write(pcmScratch, 0, info.Size);
-                        totalPcmBytes += info.Size;
-                    }
-                    codec.ReleaseOutputBuffer(outIdx, false);
-                    if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) {
-                        outputDone = true;
-                    }
-                } else if (inputDone) {
-                    if (++idleDrainRetries > 200) {
-                        outputDone = true;
-                    }
+                    try { codec.Release(); } catch { }
+                    try { codec.Dispose(); } catch { }
+                    codec = null;
                 }
             }
-
-            PatchWavHeader(fs, channels, sampleRate, wavBitsPerSample, wavIsFloat, totalPcmBytes);
-            succeeded = true;
         } finally {
-            try { codec?.Stop(); } catch { }
             try { codec?.Release(); } catch { }
             try { codec?.Dispose(); } catch { }
             try { extractor?.Release(); } catch { }

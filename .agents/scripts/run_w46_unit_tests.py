@@ -105,6 +105,7 @@ using Cavern.Neural;
 using Cavern.ProAudio;
 using Cavern.Remapping;
 using Cavern.Spatial;
+using Cavern.Virtualizer;
 using Cavern.VocalChain;
 using Cavernize.Logic.CavernSettings;
 using Cavernize.Logic.Models;
@@ -1401,6 +1402,161 @@ RunTest("T19_SpatialChoreo_SpatialGovernor", () => {
     PsychoacousticGovernor.ClampBlockHeadroomBs1770(hotBlock, 256);
     Assert(hotBlock[0].Max(MathF.Abs) <= PsychoacousticGovernor.MaxHeadroomLinear + 1e-5f,
         "ClampBlockHeadroomBs1770 failed -1.0 dBTP ceiling.");
+});
+
+// ---------- Test 20: 8 kHz..192 kHz MinPhase Render + Concurrent Head-Track Thread Isolation + Convolver Disposal ----------
+RunTest("T20_LowSampleRate8kMinPhase_ConcurrentHeadTrackIsolation_And_ConvolverDisposal", () => {
+    // 1. Low & high sample rates (8 kHz, 22.05 kHz, 192 kHz) with Minimum-Phase HRIR must render non-null, finite, non-silent audio
+    int[] probeRates = [8000, 22050, 192000];
+    foreach (int sr in probeRates) {
+        using (VirtualizerFilter.BeginStaticStateScope()) {
+            Listener.HeadphoneVirtualizer = true;
+            Listener.EnvironmentSize = new Vector3(10f, 7f, 10f);
+            Listener.EnvironmentType = Environments.Studio;
+            VirtualizerFilter.Reset(minimumPhase: true);
+
+            const int updateRate = 512;
+            const int blocks = 12;
+            float[] white = new float[updateRate * blocks];
+            uint rng = 0x12345678u;
+            for (int i = 0; i < white.Length; i++) {
+                rng ^= rng << 13;
+                rng ^= rng >> 17;
+                rng ^= rng << 5;
+                white[i] = ((rng & 0xFFFF) / 32768f - 1f) * 0.25f;
+            }
+
+            Listener listener = new(false) {
+                SampleRate = sr,
+                UpdateRate = updateRate,
+                LFESeparation = true
+            };
+            Source src = new() {
+                Clip = new Clip(white, 1, sr),
+                Position = new Vector3(-10f, 0f, 0f),
+                Volume = 1f
+            };
+            listener.AttachSource(src);
+
+            double energyL = 0, energyR = 0;
+            for (int b = 0; b < blocks; b++) {
+                float[] rendered = listener.Render(1);
+                Assert(rendered != null && rendered.Length >= updateRate * 2, $"Listener.Render returned null/empty at {sr} Hz");
+                int stride = Math.Max(1, rendered.Length / updateRate);
+                for (int i = 0; i < updateRate; i++) {
+                    float l = rendered[i * stride];
+                    float r = rendered[i * stride + 1];
+                    Assert(float.IsFinite(l) && float.IsFinite(r), $"Non-finite sample at {sr} Hz");
+                    if (b >= 4) {
+                        energyL += l * l;
+                        energyR += r * r;
+                    }
+                }
+            }
+            Assert(energyL > 1e-4 && energyR > 1e-6, $"Silent output at {sr} Hz (eL={energyL}, eR={energyR})");
+            Assert(energyL > energyR * 1.5, $"Left-90 lateral cue collapsed at {sr} Hz (eL={energyL:F4}, eR={energyR:F4})");
+        }
+    }
+
+    // 2. Concurrent live playback thread hammering global Listener + VirtualizerFilter statics MUST NOT corrupt isolated B7 head-tracking
+    bool stopLive = false;
+    Exception liveEx = null;
+    Listener.HeadphoneVirtualizer = true;
+    Listener.EnvironmentSize = new Vector3(10f, 7f, 10f);
+    Listener.EnvironmentType = Environments.Studio;
+    VirtualizerFilter.Reset(false);
+
+    Task livePlaybackHammer = Task.Run(() => {
+        try {
+            Listener liveListener = new(false) { SampleRate = 48000, UpdateRate = 256, LFESeparation = true };
+            float[] tone = new float[256 * 8];
+            for (int i = 0; i < tone.Length; i++) tone[i] = 0.2f * MathF.Sin(2f * MathF.PI * 440f * i / 48000f);
+            liveListener.AttachSource(new Source { Clip = new Clip(tone, 1, 48000), Position = new Vector3(0f, 0f, 10f), Volume = 1f, Loop = true });
+            while (!Volatile.Read(ref stopLive)) {
+                VirtualizerFilter.LiveListenerRotationDegrees = Vector3.Zero;
+                VirtualizerFilter.LiveListenerNormalizedPosition = Vector3.Zero;
+                Listener.HeadphoneVirtualizer = true;
+                float[] outBuf = liveListener.Render(1);
+                if (outBuf == null || outBuf.Length == 0 || !float.IsFinite(outBuf[0])) {
+                    throw new Exception("Live playback thread received invalid frame during concurrent isolated probe");
+                }
+            }
+        } catch (Exception ex) {
+            liveEx = ex;
+        }
+    });
+
+    try {
+        for (int trial = 0; trial < 4; trial++) {
+            using (VirtualizerFilter.BeginStaticStateScope()) {
+                Listener.HeadphoneVirtualizer = true;
+                Listener.EnvironmentSize = new Vector3(10f, 7f, 10f);
+                Listener.EnvironmentType = Environments.Studio;
+                VirtualizerFilter.Reset(false);
+                VirtualizerFilter.ConfigureExternalization(false, IsmRoomPreset.MasteringStudio, IsmWallMaterial.StudioBroadband,
+                    2, 1f, false, false, 20f, 50f, new Vector3(5f, 3.5f, 5f), false);
+
+                float[] white = new float[512 * 10];
+                uint rng = 42u;
+                for (int i = 0; i < white.Length; i++) {
+                    rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                    white[i] = ((rng & 0xFFFF) / 32768f - 1f) * 0.25f;
+                }
+
+                static (double eL, double eR) RenderYaw(float[] sig, float yawDeg) {
+                    VirtualizerFilter.ResetActiveFilters();
+                    VirtualizerFilter.LiveListenerRotationDegrees = new Vector3(0f, yawDeg, 0f);
+                    Listener l = new(false) { SampleRate = 48000, UpdateRate = 512, LFESeparation = true, Rotation = new Vector3(0f, yawDeg, 0f) };
+                    l.AttachSource(new Source { Clip = new Clip(sig, 1, 48000), Position = new Vector3(0f, 0f, 10f), Volume = 1f });
+                    double eL = 0, eR = 0;
+                    for (int b = 0; b < 10; b++) {
+                        float[] ren = l.Render(1);
+                        int stride = Math.Max(1, ren.Length / 512);
+                        if (b >= 3) {
+                            for (int i = 0; i < 512; i++) {
+                                eL += ren[i * stride] * ren[i * stride];
+                                eR += ren[i * stride + 1] * ren[i * stride + 1];
+                            }
+                        }
+                    }
+                    return (eL, eR);
+                }
+
+                (double posL, double posR) = RenderYaw(white, 45f);
+                (double negL, double negR) = RenderYaw(white, -45f);
+                double ildPosDb = 10.0 * Math.Log10((posL + 1e-12) / (posR + 1e-12));
+                double ildNegDb = 10.0 * Math.Log10((negL + 1e-12) / (negR + 1e-12));
+                Assert(ildPosDb > 3.0, $"Concurrent B7 Yaw+45 corrupted on trial {trial}: ILD={ildPosDb:F2} dB");
+                Assert(ildNegDb < -3.0, $"Concurrent B7 Yaw-45 corrupted on trial {trial}: ILD={ildNegDb:F2} dB");
+            }
+        }
+    } finally {
+        Volatile.Write(ref stopLive, true);
+        livePlaybackHammer.Wait();
+    }
+    Assert(liveEx == null, $"Live playback hammer failed: {liveEx}");
+
+    // 3. PartitionedDualConvolver.Dispose() & VirtualizerFilter.DisposeChannels() keep GC heap bounded across 25 probe cycles
+    float[] irL = new float[256];
+    float[] irR = new float[256];
+    irL[4] = 0.8f; irR[12] = 0.6f;
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+    long memBefore = GC.GetTotalMemory(true);
+    for (int iter = 0; iter < 25; iter++) {
+        VirtualChannel[] chs = new VirtualChannel[12];
+        for (int c = 0; c < chs.Length; c++) {
+            chs[c] = VirtualChannel.FromMeasured(0f, -90f + c * 15f, irL, irR, 48000, 0f, minimumPhase: (iter & 1) == 0);
+        }
+        VirtualizerFilter.DisposeChannels(chs);
+    }
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    GC.Collect();
+    long memAfter = GC.GetTotalMemory(true);
+    long deltaMb = (memAfter - memBefore) / (1024 * 1024);
+    Assert(deltaMb < 16, $"Managed heap grew unexpectedly after 25 disposed probe cycles: delta={deltaMb} MB");
 });
 
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {

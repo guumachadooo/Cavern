@@ -168,13 +168,8 @@ public static class AcousticAuditEngine {
             Stopwatch totalSw = Stopwatch.StartNew();
             List<AcousticScenarioResult> results = [];
 
-            // Save global Listener static state in addition to VirtualizerFilter.BeginStaticStateScope
-            bool savedVirt = Listener.HeadphoneVirtualizer;
-            Vector3 savedEnvSize = Listener.EnvironmentSize;
-            Environments savedEnvType = Listener.EnvironmentType;
-            Channel[] savedChannels = Listener.Channels != null ? (Channel[])Listener.Channels.Clone() : null;
-
             string userSummary = DescribeUserConfig(store);
+            List<VirtualChannel[]> ownedProbeChannels = [];
 
             using (VirtualizerFilter.BeginStaticStateScope()) {
                 try {
@@ -199,6 +194,9 @@ public static class AcousticAuditEngine {
                     // Preload baseline SADIE D1 DFC (linear phase, no extras) once for Tier A/B differentials
                     (VirtualChannel[] sadieBaseCh, int sadieSr, float sadieRefDist, _, _, _) =
                         BinauralProfileService.LoadBundledProfileForProbe(context, BinauralProfileService.DefaultProfileId, false, HrtfPersonalizationConfig.Default);
+                    if (sadieBaseCh != null) {
+                        ownedProbeChannels.Add(sadieBaseCh);
+                    }
 
                     float[] baseCenterL = null, baseCenterR = null;
                     float[] baseLeft90L = null, baseLeft90R = null;
@@ -301,14 +299,18 @@ public static class AcousticAuditEngine {
                             }
                             (VirtualChannel[] mpCh, int mpSr, float mpRd, _, _, _) =
                                 BinauralProfileService.LoadBundledProfileForProbe(context, BinauralProfileService.DefaultProfileId, true, HrtfPersonalizationConfig.Default);
-                            VirtualizerFilter.Override(mpCh, mpSr, mpRd);
-                            (float[] mpL, float[] mpR) = RenderSingleSource(whiteL, wallCenter, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
-                            AcousticFingerprint fp = AnalyzeStereo(mpL, mpR, baseCenterL, baseCenterR, ProbeSampleRate, ProbeUpdateRate);
-                            float maxBandErr = MaxAbs5(fp.Sub20To120Db, fp.Bass120To500Db, fp.Mid500To2k5Db, fp.Pres2k5To8kDb, fp.Air8kTo20kDb);
-                            if (fp.NonFiniteCount > 0 || MathF.Abs(fp.GainDeltaDb) > 0.6f || maxBandErr > 1.2f) {
-                                return ("FAIL", $"Min-Phase altered magnitude spectrum (GainΔ={fp.GainDeltaDb:+0.00;-0.00;0.00}dB, maxBandErr={maxBandErr:0.00}dB)", fp);
+                            try {
+                                VirtualizerFilter.Override(mpCh, mpSr, mpRd);
+                                (float[] mpL, float[] mpR) = RenderSingleSource(whiteL, wallCenter, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
+                                AcousticFingerprint fp = AnalyzeStereo(mpL, mpR, baseCenterL, baseCenterR, ProbeSampleRate, ProbeUpdateRate);
+                                float maxBandErr = MaxAbs5(fp.Sub20To120Db, fp.Bass120To500Db, fp.Mid500To2k5Db, fp.Pres2k5To8kDb, fp.Air8kTo20kDb);
+                                if (fp.NonFiniteCount > 0 || MathF.Abs(fp.GainDeltaDb) > 0.6f || maxBandErr > 1.2f) {
+                                    return ("FAIL", $"Min-Phase altered magnitude spectrum (GainΔ={fp.GainDeltaDb:+0.00;-0.00;0.00}dB, maxBandErr={maxBandErr:0.00}dB)", fp);
+                                }
+                                return ("PASS", $"Exact cepstral magnitude invariance (GainΔ={fp.GainDeltaDb:+0.00;-0.00;0.00}dB, maxBandErr={maxBandErr:0.00}dB, IACC0={fp.IaccZero:0.00})", fp);
+                            } finally {
+                                VirtualizerFilter.DisposeChannels(mpCh);
                             }
-                            return ("PASS", $"Exact cepstral magnitude invariance (GainΔ={fp.GainDeltaDb:+0.00;-0.00;0.00}dB, maxBandErr={maxBandErr:0.00}dB, IACC0={fp.IaccZero:0.00})", fp);
                         }));
 
                     if (!quickSubset) {
@@ -320,24 +322,31 @@ public static class AcousticAuditEngine {
                             () => {
                                 HrtfPersonalizationConfig bigHead = new() { BiometricItdEnabled = true, HeadWidthCm = 18.0f };
                                 HrtfPersonalizationConfig smallHead = new() { BiometricItdEnabled = true, HeadWidthCm = 11.5f };
-                                (VirtualChannel[] cBig, int srB, float rdB, _, _, _) =
-                                    BinauralProfileService.LoadBundledProfileForProbe(context, BinauralProfileService.DefaultProfileId, false, bigHead);
-                                VirtualizerFilter.Override(cBig, srB, rdB);
-                                (float[] bL, float[] bR) = RenderSingleSource(whiteL, wallLeft90, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
-                                AcousticFingerprint fpBig = AnalyzeStereo(bL, bR, baseLeft90L, baseLeft90R, ProbeSampleRate, ProbeUpdateRate);
+                                VirtualChannel[] cBig = null;
+                                VirtualChannel[] cSmall = null;
+                                try {
+                                    (cBig, int srB, float rdB, _, _, _) =
+                                        BinauralProfileService.LoadBundledProfileForProbe(context, BinauralProfileService.DefaultProfileId, false, bigHead);
+                                    VirtualizerFilter.Override(cBig, srB, rdB);
+                                    (float[] bL, float[] bR) = RenderSingleSource(whiteL, wallLeft90, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
+                                    AcousticFingerprint fpBig = AnalyzeStereo(bL, bR, baseLeft90L, baseLeft90R, ProbeSampleRate, ProbeUpdateRate);
 
-                                (VirtualChannel[] cSmall, int srS, float rdS, _, _, _) =
-                                    BinauralProfileService.LoadBundledProfileForProbe(context, BinauralProfileService.DefaultProfileId, false, smallHead);
-                                VirtualizerFilter.Override(cSmall, srS, rdS);
-                                (float[] sL, float[] sR) = RenderSingleSource(whiteL, wallLeft90, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
-                                AcousticFingerprint fpSmall = AnalyzeStereo(sL, sR, baseLeft90L, baseLeft90R, ProbeSampleRate, ProbeUpdateRate);
+                                    (cSmall, int srS, float rdS, _, _, _) =
+                                        BinauralProfileService.LoadBundledProfileForProbe(context, BinauralProfileService.DefaultProfileId, false, smallHead);
+                                    VirtualizerFilter.Override(cSmall, srS, rdS);
+                                    (float[] sL, float[] sR) = RenderSingleSource(whiteL, wallLeft90, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
+                                    AcousticFingerprint fpSmall = AnalyzeStereo(sL, sR, baseLeft90L, baseLeft90R, ProbeSampleRate, ProbeUpdateRate);
 
-                                float itdSpan = fpBig.ItdUs - fpSmall.ItdUs;
-                                float maxErr = MaxAbs5(fpBig.Sub20To120Db, fpBig.Bass120To500Db, fpBig.Mid500To2k5Db, fpBig.Pres2k5To8kDb, fpBig.Air8kTo20kDb);
-                                if (itdSpan < 100f || maxErr > 0.5f) {
-                                    return ("FAIL", $"Biometric ITD delta invalid: 18cm={fpBig.ItdUs:0}us vs 11.5cm={fpSmall.ItdUs:0}us (span={itdSpan:0}us, eqErr={maxErr:0.00}dB)", fpBig);
+                                    float itdSpan = fpBig.ItdUs - fpSmall.ItdUs;
+                                    float maxErr = MaxAbs5(fpBig.Sub20To120Db, fpBig.Bass120To500Db, fpBig.Mid500To2k5Db, fpBig.Pres2k5To8kDb, fpBig.Air8kTo20kDb);
+                                    if (itdSpan < 100f || maxErr > 0.5f) {
+                                        return ("FAIL", $"Biometric ITD delta invalid: 18cm={fpBig.ItdUs:0}us vs 11.5cm={fpSmall.ItdUs:0}us (span={itdSpan:0}us, eqErr={maxErr:0.00}dB)", fpBig);
+                                    }
+                                    return ("PASS", $"ITD scaled cleanly: 11.5cm={fpSmall.ItdUs:0}us -> 18.0cm={fpBig.ItdUs:0}us (Δ={itdSpan:+0;-0;0}us, eqErr={maxErr:0.00}dB)", fpBig);
+                                } finally {
+                                    VirtualizerFilter.DisposeChannels(cBig);
+                                    VirtualizerFilter.DisposeChannels(cSmall);
                                 }
-                                return ("PASS", $"ITD scaled cleanly: 11.5cm={fpSmall.ItdUs:0}us -> 18.0cm={fpBig.ItdUs:0}us (Δ={itdSpan:+0;-0;0}us, eqErr={maxErr:0.00}dB)", fpBig);
                             }));
 
                         ct.ThrowIfCancellationRequested();
@@ -349,15 +358,19 @@ public static class AcousticAuditEngine {
                                 HrtfPersonalizationConfig magCfg = new() { MagLsMode = MagLsDecodeMode.Order3 };
                                 (VirtualChannel[] mCh, int mSr, float mRd, _, _, HrtfPersonalizationDiagnostics mDiag) =
                                     BinauralProfileService.LoadBundledProfileForProbe(context, BinauralProfileService.DefaultProfileId, false, magCfg);
-                                VirtualizerFilter.Override(mCh, mSr, mRd);
-                                (float[] mL, float[] mR) = RenderSingleSource(whiteL, wallLeft90, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
-                                AcousticFingerprint fp = AnalyzeStereo(mL, mR, baseLeft90L, baseLeft90R, ProbeSampleRate, ProbeUpdateRate);
-                                if (fp.NonFiniteCount > 0 || !mDiag.IsMagLsActive || fp.IldDb < 4.0f || fp.ItdUs < 350f) {
-                                    return ("FAIL", $"MagLS O3 defect: active={mDiag.IsMagLsActive}, ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us", fp);
+                                try {
+                                    VirtualizerFilter.Override(mCh, mSr, mRd);
+                                    (float[] mL, float[] mR) = RenderSingleSource(whiteL, wallLeft90, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
+                                    AcousticFingerprint fp = AnalyzeStereo(mL, mR, baseLeft90L, baseLeft90R, ProbeSampleRate, ProbeUpdateRate);
+                                    if (fp.NonFiniteCount > 0 || !mDiag.IsMagLsActive || fp.IldDb < 4.0f || fp.ItdUs < 350f) {
+                                        return ("FAIL", $"MagLS O3 defect: active={mDiag.IsMagLsActive}, ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us", fp);
+                                    }
+                                    bool warn = MathF.Abs(fp.GainDeltaDb) > 3.5f;
+                                    return (warn ? "WARN" : "PASS",
+                                        $"MagLS O{mDiag.MagLsOrder} (fc={mDiag.MagLsCutoffHz:0}Hz, hfErr={mDiag.MagLsHfErrorDb:0.0}dB, ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us)", fp);
+                                } finally {
+                                    VirtualizerFilter.DisposeChannels(mCh);
                                 }
-                                bool warn = MathF.Abs(fp.GainDeltaDb) > 3.5f;
-                                return (warn ? "WARN" : "PASS",
-                                    $"MagLS O{mDiag.MagLsOrder} (fc={mDiag.MagLsCutoffHz:0}Hz, hfErr={mDiag.MagLsHfErrorDb:0.0}dB, ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us)", fp);
                             }));
 
                         ct.ThrowIfCancellationRequested();
@@ -369,13 +382,17 @@ public static class AcousticAuditEngine {
                                 HrtfPersonalizationConfig magCfg = new() { MagLsMode = MagLsDecodeMode.Order3 };
                                 (VirtualChannel[] mCh, int mSr, float mRd, _, _, HrtfPersonalizationDiagnostics mDiag) =
                                     BinauralProfileService.LoadBundledProfileForProbe(context, BinauralProfileService.DefaultProfileId, true, magCfg);
-                                VirtualizerFilter.Override(mCh, mSr, mRd);
-                                (float[] mL, float[] mR) = RenderSingleSource(whiteL, wallLeft90, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
-                                AcousticFingerprint fp = AnalyzeStereo(mL, mR, baseLeft90L, baseLeft90R, ProbeSampleRate, ProbeUpdateRate);
-                                if (fp.NonFiniteCount > 0 || !mDiag.IsMagLsActive || fp.IldDb < 6.0f || fp.ItdUs < 550f) {
-                                    return ("FAIL", $"MinPhase+MagLS ITD/ILD collapse: ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us", fp);
+                                try {
+                                    VirtualizerFilter.Override(mCh, mSr, mRd);
+                                    (float[] mL, float[] mR) = RenderSingleSource(whiteL, wallLeft90, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
+                                    AcousticFingerprint fp = AnalyzeStereo(mL, mR, baseLeft90L, baseLeft90R, ProbeSampleRate, ProbeUpdateRate);
+                                    if (fp.NonFiniteCount > 0 || !mDiag.IsMagLsActive || fp.IldDb < 6.0f || fp.ItdUs < 550f) {
+                                        return ("FAIL", $"MinPhase+MagLS ITD/ILD collapse: ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us", fp);
+                                    }
+                                    return ("PASS", $"MinPhase+MagLS O3 ITD intact (ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us)", fp);
+                                } finally {
+                                    VirtualizerFilter.DisposeChannels(mCh);
                                 }
-                                return ("PASS", $"MinPhase+MagLS O3 ITD intact (ILD={fp.IldDb:+0.0;-0.0;0.0}dB, ITD={fp.ItdUs:+0;-0;0}us)", fp);
                             }));
                     }
 
@@ -409,20 +426,24 @@ public static class AcousticAuditEngine {
                             () => {
                                 (VirtualChannel[] brirCh, int bSr, float bRd, int taps, bool isBrir, _) =
                                     BinauralProfileService.LoadBundledProfileForProbe(context, "sadie_d1_brir", false, HrtfPersonalizationConfig.Default);
-                                VirtualizerFilter.Override(brirCh, bSr, bRd);
-                                bool detectedBrir = VirtualizerFilter.IsMeasuredBrirActive;
-                                (float[] offL, float[] offR) = RenderSingleSource(whiteL, wallCenter, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
-                                (float[] onL, float[] onR) = RenderSingleSource(whiteL, wallCenter, Vector3.Zero, lfeSeparation: true, ism: true, nearField: false, float.PositiveInfinity, ProbeSampleRate);
-                                float maxDiff = 0f;
-                                for (int i = 0; i < offL.Length; i++) {
-                                    float d = MathF.Max(MathF.Abs(offL[i] - onL[i]), MathF.Abs(offR[i] - onR[i]));
-                                    if (d > maxDiff) maxDiff = d;
+                                try {
+                                    VirtualizerFilter.Override(brirCh, bSr, bRd);
+                                    bool detectedBrir = VirtualizerFilter.IsMeasuredBrirActive;
+                                    (float[] offL, float[] offR) = RenderSingleSource(whiteL, wallCenter, Vector3.Zero, lfeSeparation: true, ism: false, nearField: false, float.PositiveInfinity, ProbeSampleRate);
+                                    (float[] onL, float[] onR) = RenderSingleSource(whiteL, wallCenter, Vector3.Zero, lfeSeparation: true, ism: true, nearField: false, float.PositiveInfinity, ProbeSampleRate);
+                                    float maxDiff = 0f;
+                                    for (int i = 0; i < offL.Length; i++) {
+                                        float d = MathF.Max(MathF.Abs(offL[i] - onL[i]), MathF.Abs(offR[i] - onR[i]));
+                                        if (d > maxDiff) maxDiff = d;
+                                    }
+                                    AcousticFingerprint fp = AnalyzeStereo(onL, onR, offL, offR, ProbeSampleRate, ProbeUpdateRate);
+                                    if (!isBrir || !detectedBrir || maxDiff > 1e-4f) {
+                                        return ("FAIL", $"BRIR double-room guard leaked: taps={taps}, detected={detectedBrir}, maxDiff={maxDiff:E2}", fp);
+                                    }
+                                    return ("PASS", $"BRIR ({taps} taps) auto-bypassed ISM bit-identically (maxDiff={maxDiff:E1})", fp);
+                                } finally {
+                                    VirtualizerFilter.DisposeChannels(brirCh);
                                 }
-                                AcousticFingerprint fp = AnalyzeStereo(onL, onR, offL, offR, ProbeSampleRate, ProbeUpdateRate);
-                                if (!isBrir || !detectedBrir || maxDiff > 1e-4f) {
-                                    return ("FAIL", $"BRIR double-room guard leaked: taps={taps}, detected={detectedBrir}, maxDiff={maxDiff:E2}", fp);
-                                }
-                                return ("PASS", $"BRIR ({taps} taps) auto-bypassed ISM bit-identically (maxDiff={maxDiff:E1})", fp);
                             }));
 
                         ct.ThrowIfCancellationRequested();
@@ -488,13 +509,10 @@ public static class AcousticAuditEngine {
                         }
                     }
                 } finally {
-                    // Restore Listener static properties cleanly before VirtualizerFilter scope disposes
-                    Listener.HeadphoneVirtualizer = savedVirt;
-                    Listener.EnvironmentSize = savedEnvSize;
-                    Listener.EnvironmentType = savedEnvType;
-                    if (savedChannels != null && savedChannels.Length > 0) {
-                        Listener.ReplaceChannels(savedChannels);
+                    for (int i = 0; i < ownedProbeChannels.Count; i++) {
+                        VirtualizerFilter.DisposeChannels(ownedProbeChannels[i]);
                     }
+                    ownedProbeChannels.Clear();
                 }
             }
 
@@ -520,10 +538,7 @@ public static class AcousticAuditEngine {
         req ??= new AcousticCustomProbeRequest();
         lock (auditLock) {
             Stopwatch sw = Stopwatch.StartNew();
-            bool savedVirt = Listener.HeadphoneVirtualizer;
-            Vector3 savedEnvSize = Listener.EnvironmentSize;
-            Environments savedEnvType = Listener.EnvironmentType;
-            Channel[] savedChannels = Listener.Channels != null ? (Channel[])Listener.Channels.Clone() : null;
+            VirtualChannel[] ownedProbeChannels = null;
 
             using (VirtualizerFilter.BeginStaticStateScope()) {
                 try {
@@ -547,6 +562,7 @@ public static class AcousticAuditEngine {
                     } else if (!isDirect) {
                         (VirtualChannel[] ch, int hSr, float hRd, _, bool bFlag, _) =
                             BinauralProfileService.LoadBundledProfileForProbe(context, req.ProfileId, req.MinimumPhase, pers);
+                        ownedProbeChannels = ch;
                         if (ch != null && ch.Length > 0) {
                             VirtualizerFilter.Override(ch, hSr, hRd);
                             isBrir = bFlag;
@@ -615,12 +631,7 @@ public static class AcousticAuditEngine {
                         fingerprint = fp
                     }, new JsonSerializerOptions { WriteIndented = true });
                 } finally {
-                    Listener.HeadphoneVirtualizer = savedVirt;
-                    Listener.EnvironmentSize = savedEnvSize;
-                    Listener.EnvironmentType = savedEnvType;
-                    if (savedChannels != null && savedChannels.Length > 0) {
-                        Listener.ReplaceChannels(savedChannels);
-                    }
+                    VirtualizerFilter.DisposeChannels(ownedProbeChannels);
                 }
             }
         }
@@ -639,29 +650,32 @@ public static class AcousticAuditEngine {
         PhysicalExternalizationConfig ext = store.BuildExternalizationConfig();
 
         bool isBrir = info?.IsBrir ?? false;
-        if (info == null || info.IsClassic || info.IsCustom || string.IsNullOrEmpty(info.AssetFile)) {
-            VirtualizerFilter.Reset(store.MinimumPhaseHrir);
-        } else {
-            (VirtualChannel[] ch, int sr, float rd, _, bool bFlag, _) =
-                BinauralProfileService.LoadBundledProfileForProbe(context, info.Id, store.MinimumPhaseHrir, pers);
-            isBrir = bFlag;
-            if (ch != null && ch.Length > 0) {
-                VirtualizerFilter.Override(ch, sr, rd);
-            } else {
+        VirtualChannel[] ownedUserChannels = null;
+        try {
+            if (info == null || info.IsClassic || info.IsCustom || string.IsNullOrEmpty(info.AssetFile)) {
                 VirtualizerFilter.Reset(store.MinimumPhaseHrir);
+            } else {
+                (VirtualChannel[] ch, int sr, float rd, _, bool bFlag, _) =
+                    BinauralProfileService.LoadBundledProfileForProbe(context, info.Id, store.MinimumPhaseHrir, pers);
+                ownedUserChannels = ch;
+                isBrir = bFlag;
+                if (ch != null && ch.Length > 0) {
+                    VirtualizerFilter.Override(ch, sr, rd);
+                } else {
+                    VirtualizerFilter.Reset(store.MinimumPhaseHrir);
+                }
             }
-        }
 
-        (float[] L, float[] R) = RenderSingleSource(
-            whiteL, sourcePos, Vector3.Zero,
-            lfeSeparation: true,
-            ism: ext.IsmRoomEnabled,
-            nearField: ext.NearFieldEnabled,
-            nearFieldDistM: float.PositiveInfinity,
-            sampleRate: ProbeSampleRate,
-            ismPreset: ext.RoomPreset,
-            ismLevel: ext.ReflectionLevel,
-            externalBrirGuard: isBrir);
+            (float[] L, float[] R) = RenderSingleSource(
+                whiteL, sourcePos, Vector3.Zero,
+                lfeSeparation: true,
+                ism: ext.IsmRoomEnabled,
+                nearField: ext.NearFieldEnabled,
+                nearFieldDistM: float.PositiveInfinity,
+                sampleRate: ProbeSampleRate,
+                ismPreset: ext.RoomPreset,
+                ismLevel: ext.ReflectionLevel,
+                externalBrirGuard: isBrir);
 
         // Apply active user post-processing stages (HpTF notch & ISO 226) to mirror actual listening output
         float[] interleaved = new float[L.Length * 2];
@@ -697,13 +711,16 @@ public static class AcousticAuditEngine {
         if (fp.NonFiniteCount > 0 || fp.RmsLeftDbfs < -75f) {
             return ("FAIL", $"User config produced invalid/silent output (nf={fp.NonFiniteCount}, rmsL={fp.RmsLeftDbfs:0.0}dBFS)", fp);
         }
-        if (isCenter && MathF.Abs(fp.IldDb) > 3.0f) {
-            return ("WARN", $"Center L/R imbalance ({fp.IldDb:+0.0;-0.0;0.0} dB) on user config — inspect HRIR/EQ", fp);
+            if (isCenter && MathF.Abs(fp.IldDb) > 3.0f) {
+                return ("WARN", $"Center L/R imbalance ({fp.IldDb:+0.0;-0.0;0.0} dB) on user config — inspect HRIR/EQ", fp);
+            }
+            if (!isCenter && (fp.IldDb < 3.0f || fp.ItdUs < 450f)) {
+                return ("WARN", $"Weak/collapsed lateral cues at -90 deg (ILD={fp.IldDb:+0.0;-0.0;0.0} dB, ITD={fp.ItdUs:+0;-0;0} us)", fp);
+            }
+            return ("PASS", fp.CompactMetrics(), fp);
+        } finally {
+            VirtualizerFilter.DisposeChannels(ownedUserChannels);
         }
-        if (!isCenter && (fp.IldDb < 3.0f || fp.ItdUs < 450f)) {
-            return ("WARN", $"Weak/collapsed lateral cues at -90 deg (ILD={fp.IldDb:+0.0;-0.0;0.0} dB, ITD={fp.ItdUs:+0;-0;0} us)", fp);
-        }
-        return ("PASS", fp.CompactMetrics(), fp);
     }
 
     static AcousticScenarioResult RunScenario(
@@ -779,7 +796,7 @@ public static class AcousticAuditEngine {
         Array.Fill(dists, nearField && float.IsFinite(nearFieldDistM) ? nearFieldDistM : float.PositiveInfinity);
         VirtualizerFilter.SetLiveChannelMinDistances(dists, 64);
 
-        Listener listener = new() {
+        Listener listener = new(false) {
             SampleRate = sampleRate,
             UpdateRate = ProbeUpdateRate,
             LFESeparation = lfeSeparation,
@@ -797,11 +814,18 @@ public static class AcousticAuditEngine {
         float[] outR = new float[outLen];
         for (int b = 0; b < blocks; b++) {
             float[] rendered = listener.Render(1);
-            int stride = Listener.Channels.Length;
+            if (rendered == null || rendered.Length == 0) {
+                continue;
+            }
+            int stride = Math.Max(1, rendered.Length / ProbeUpdateRate);
             int baseOff = b * ProbeUpdateRate;
             for (int i = 0; i < ProbeUpdateRate; i++) {
-                outL[baseOff + i] = rendered[i * stride];
-                outR[baseOff + i] = stride > 1 ? rendered[i * stride + 1] : rendered[i * stride];
+                int idx = i * stride;
+                if (idx >= rendered.Length) {
+                    break;
+                }
+                outL[baseOff + i] = rendered[idx];
+                outR[baseOff + i] = stride > 1 && idx + 1 < rendered.Length ? rendered[idx + 1] : rendered[idx];
             }
         }
         return (outL, outR);
@@ -835,7 +859,7 @@ public static class AcousticAuditEngine {
             customEnvironmentHalfSize: new Vector3(5f, 3.5f, 5f),
             externalBrirGuard: false);
 
-        Listener listener = new() {
+        Listener listener = new(false) {
             SampleRate = sampleRate,
             UpdateRate = ProbeUpdateRate,
             LFESeparation = true
@@ -863,11 +887,18 @@ public static class AcousticAuditEngine {
         float[] outR = new float[total];
         for (int b = 0; b < blocks; b++) {
             float[] ren = listener.Render(1);
-            int stride = Listener.Channels.Length;
+            if (ren == null || ren.Length == 0) {
+                continue;
+            }
+            int stride = Math.Max(1, ren.Length / ProbeUpdateRate);
             int baseOff = b * ProbeUpdateRate;
             for (int i = 0; i < ProbeUpdateRate; i++) {
-                outL[baseOff + i] = ren[i * stride];
-                outR[baseOff + i] = stride > 1 ? ren[i * stride + 1] : ren[i * stride];
+                int idx = i * stride;
+                if (idx >= ren.Length) {
+                    break;
+                }
+                outL[baseOff + i] = ren[idx];
+                outR[baseOff + i] = stride > 1 && idx + 1 < ren.Length ? ren[idx + 1] : ren[idx];
             }
         }
         return (outL, outR, inL, inR);
@@ -881,8 +912,9 @@ public static class AcousticAuditEngine {
         Array.Copy(flacL, lossyL, total);
         Array.Copy(flacR, lossyR, total);
 
-        Lowpass lpL = new(sampleRate, 6000);
-        Lowpass lpR = new(sampleRate, 6000);
+        double lpCutoff = Math.Min(6000.0, sampleRate * 0.42);
+        Lowpass lpL = new(sampleRate, lpCutoff);
+        Lowpass lpR = new(sampleRate, lpCutoff);
         lpL.Process(lossyL);
         lpR.Process(lossyR);
 
@@ -892,8 +924,8 @@ public static class AcousticAuditEngine {
             DynamicEnvelopeLock = true,
             ClippingGuardEnabled = true,
             UseBitstreamGuide = true,
-            BitstreamCouplingHz = 3500f,
-            BitstreamSpxHz = 6000f
+            BitstreamCouplingHz = Math.Min(3500f, sampleRate * 0.35f),
+            BitstreamSpxHz = Math.Min(6000f, sampleRate * 0.45f)
         };
 
         bool[] isLfe = [false, false];

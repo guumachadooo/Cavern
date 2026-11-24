@@ -1118,99 +1118,130 @@ public static class AudioQualityAnalyzer {
             }
 
             string trackMime = format.GetString(MediaFormat.KeyMime);
-            codec = MediaCodec.CreateDecoderByType(trackMime);
-            codec.Configure(format, null, null, MediaCodecConfigFlags.None);
-            codec.Start();
+            if (string.IsNullOrWhiteSpace(trackMime) ||
+                string.Equals(trackMime, "audio/unknown", StringComparison.OrdinalIgnoreCase)) {
+                return null;
+            }
 
-            int targetSamples = (int)Math.Min(sampleRate * 2.2, 210_000);
-            List<float> mono = new(targetSamples);
-            MediaCodec.BufferInfo info = new();
-            bool inputDone = false;
-            int pcmEncoding = (int)Android.Media.Encoding.Pcm16bit;
-            int outChannels = channels;
-            long nonSilent = 0;
-            long zeroLsb = 0;
-            int safetyIterations = 0;
+            bool codecStarted = false;
+            bool codecFaulted = false;
+            try {
+                codec = MediaCodec.CreateDecoderByType(trackMime);
+                codec.Configure(format, null, null, MediaCodecConfigFlags.None);
+                codec.Start();
+                codecStarted = true;
 
-            while (mono.Count < targetSamples && safetyIterations++ < 600) {
-                if (!inputDone) {
-                    int inIdx = codec.DequeueInputBuffer(8000);
-                    if (inIdx >= 0) {
-                        Java.Nio.ByteBuffer inBuf = codec.GetInputBuffer(inIdx);
-                        int read = extractor.ReadSampleData(inBuf, 0);
-                        if (read < 0) {
-                            codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
-                            inputDone = true;
-                        } else {
-                            codec.QueueInputBuffer(inIdx, 0, read, extractor.SampleTime, MediaCodecBufferFlags.None);
-                            extractor.Advance();
+                int targetSamples = (int)Math.Min(sampleRate * 2.2, 210_000);
+                List<float> mono = new(Math.Min(targetSamples, 65536));
+                using MediaCodec.BufferInfo info = new();
+                byte[] chunk = Array.Empty<byte>();
+                bool inputDone = false;
+                int pcmEncoding = (int)Android.Media.Encoding.Pcm16bit;
+                int outChannels = channels;
+                long nonSilent = 0;
+                long zeroLsb = 0;
+                int safetyIterations = 0;
+
+                while (mono.Count < targetSamples && safetyIterations++ < 600) {
+                    if (!inputDone) {
+                        int inIdx = codec.DequeueInputBuffer(8000);
+                        if (inIdx >= 0) {
+                            Java.Nio.ByteBuffer inBuf = codec.GetInputBuffer(inIdx);
+                            if (inBuf == null) {
+                                codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
+                                inputDone = true;
+                            } else {
+                                int read = extractor.ReadSampleData(inBuf, 0);
+                                if (read < 0) {
+                                    codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
+                                    inputDone = true;
+                                } else {
+                                    codec.QueueInputBuffer(inIdx, 0, read, extractor.SampleTime, MediaCodecBufferFlags.None);
+                                    extractor.Advance();
+                                }
+                            }
                         }
                     }
-                }
 
-                int outIdx = codec.DequeueOutputBuffer(info, 8000);
-                if (outIdx == (int)MediaCodecInfoState.OutputFormatChanged) {
-                    MediaFormat outFmt = codec.OutputFormat;
-                    if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) sampleRate = Math.Max(8000, outFmt.GetInteger(MediaFormat.KeySampleRate));
-                    if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) outChannels = Math.Max(1, outFmt.GetInteger(MediaFormat.KeyChannelCount));
-                    if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
-                } else if (outIdx >= 0) {
-                    if (info.Size > 0) {
-                        Java.Nio.ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
-                        outBuf.Position(info.Offset);
-                        byte[] chunk = new byte[info.Size];
-                        outBuf.Get(chunk);
-
-                        if (pcmEncoding == (int)Android.Media.Encoding.PcmFloat) {
-                            int frames = chunk.Length / (4 * outChannels);
-                            for (int f = 0; f < frames && mono.Count < targetSamples; f++) {
-                                float sum = 0f;
-                                for (int c = 0; c < outChannels; c++) {
-                                    sum += BinaryPrimitives.ReadSingleLittleEndian(chunk.AsSpan((f * outChannels + c) * 4, 4));
+                    int outIdx = codec.DequeueOutputBuffer(info, 8000);
+                    if (outIdx == (int)MediaCodecInfoState.OutputFormatChanged) {
+                        MediaFormat outFmt = codec.OutputFormat;
+                        if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) sampleRate = Math.Max(8000, outFmt.GetInteger(MediaFormat.KeySampleRate));
+                        if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) outChannels = Math.Max(1, outFmt.GetInteger(MediaFormat.KeyChannelCount));
+                        if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
+                    } else if (outIdx >= 0) {
+                        if (info.Size > 0) {
+                            Java.Nio.ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
+                            if (outBuf != null) {
+                                outBuf.Position(info.Offset);
+                                if (chunk.Length < info.Size) {
+                                    chunk = new byte[info.Size];
                                 }
-                                mono.Add(sum / outChannels);
-                            }
-                        } else if (OperatingSystem.IsAndroidVersionAtLeast(31) && pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked) {
-                            int frames = chunk.Length / (3 * outChannels);
-                            for (int f = 0; f < frames && mono.Count < targetSamples; f++) {
-                                float sum = 0f;
-                                for (int c = 0; c < outChannels; c++) {
-                                    int off = (f * outChannels + c) * 3;
-                                    byte b0 = chunk[off];
-                                    int v = b0 | (chunk[off + 1] << 8) | ((sbyte)chunk[off + 2] << 16);
-                                    if (Math.Abs(v) > 512) {
-                                        nonSilent++;
-                                        if (b0 == 0) zeroLsb++;
+                                outBuf.Get(chunk, 0, info.Size);
+
+                                if (pcmEncoding == (int)Android.Media.Encoding.PcmFloat) {
+                                    int frames = info.Size / (4 * outChannels);
+                                    for (int f = 0; f < frames && mono.Count < targetSamples; f++) {
+                                        float sum = 0f;
+                                        for (int c = 0; c < outChannels; c++) {
+                                            sum += BinaryPrimitives.ReadSingleLittleEndian(chunk.AsSpan((f * outChannels + c) * 4, 4));
+                                        }
+                                        mono.Add(sum / outChannels);
                                     }
-                                    sum += v / 8388608f;
+                                } else if (OperatingSystem.IsAndroidVersionAtLeast(31) && pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked) {
+                                    int frames = info.Size / (3 * outChannels);
+                                    for (int f = 0; f < frames && mono.Count < targetSamples; f++) {
+                                        float sum = 0f;
+                                        for (int c = 0; c < outChannels; c++) {
+                                            int off = (f * outChannels + c) * 3;
+                                            byte b0 = chunk[off];
+                                            int v = b0 | (chunk[off + 1] << 8) | ((sbyte)chunk[off + 2] << 16);
+                                            if (Math.Abs(v) > 512) {
+                                                nonSilent++;
+                                                if (b0 == 0) zeroLsb++;
+                                            }
+                                            sum += v / 8388608f;
+                                        }
+                                        mono.Add(sum / outChannels);
+                                    }
+                                } else {
+                                    int frames = info.Size / (2 * outChannels);
+                                    for (int f = 0; f < frames && mono.Count < targetSamples; f++) {
+                                        float sum = 0f;
+                                        for (int c = 0; c < outChannels; c++) {
+                                            sum += BinaryPrimitives.ReadInt16LittleEndian(chunk.AsSpan((f * outChannels + c) * 2, 2)) / 32768f;
+                                        }
+                                        mono.Add(sum / outChannels);
+                                    }
                                 }
-                                mono.Add(sum / outChannels);
-                            }
-                        } else {
-                            int frames = chunk.Length / (2 * outChannels);
-                            for (int f = 0; f < frames && mono.Count < targetSamples; f++) {
-                                float sum = 0f;
-                                for (int c = 0; c < outChannels; c++) {
-                                    sum += BinaryPrimitives.ReadInt16LittleEndian(chunk.AsSpan((f * outChannels + c) * 2, 2)) / 32768f;
-                                }
-                                mono.Add(sum / outChannels);
                             }
                         }
+                        codec.ReleaseOutputBuffer(outIdx, false);
+                        if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) break;
                     }
-                    codec.ReleaseOutputBuffer(outIdx, false);
-                    if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) break;
+                }
+
+                if (OperatingSystem.IsAndroidVersionAtLeast(31) && pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked && nonSilent >= 2048) {
+                    inspected24 = true;
+                    lsbZero = (double)zeroLsb / nonSilent > 0.992;
+                }
+                return mono.Count >= 4096 ? mono.ToArray() : null;
+            } catch {
+                codecFaulted = true;
+                return null;
+            } finally {
+                if (codec != null) {
+                    if (codecStarted && !codecFaulted) {
+                        try { codec.Stop(); } catch { }
+                    }
+                    try { codec.Release(); } catch { }
+                    try { codec.Dispose(); } catch { }
+                    codec = null;
                 }
             }
-
-            if (OperatingSystem.IsAndroidVersionAtLeast(31) && pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked && nonSilent >= 2048) {
-                inspected24 = true;
-                lsbZero = (double)zeroLsb / nonSilent > 0.992;
-            }
-            return mono.Count >= 4096 ? mono.ToArray() : null;
         } catch {
             return null;
         } finally {
-            try { codec?.Stop(); } catch { }
             try { codec?.Release(); } catch { }
             try { codec?.Dispose(); } catch { }
             try { extractor?.Release(); } catch { }

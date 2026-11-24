@@ -208,9 +208,11 @@ public partial class MainActivity {
             () => SetSettingsProMode(!isSettingsProMode),
             active: isSettingsProMode);
         settingsModeToggleBtn.TextSize = 11.5f;
+        settingsModeToggleBtn.SetMinimumWidth(Dp(72));
+        settingsModeToggleBtn.SetMinimumHeight(Dp(34));
         settingsModeToggleBtn.SetPadding(Dp(12), Dp(8), Dp(12), Dp(8));
         topRow.AddView(settingsModeToggleBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
-        page.AddView(topRow);
+        page.AddView(topRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         // Category Drill-Down & Back Header
         settingsCategoryHeaderBar = new LinearLayout(this) {

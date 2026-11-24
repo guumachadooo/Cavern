@@ -603,11 +603,24 @@ public static class BinauralProfileService {
         }
     }
 
+    sealed class CachedRawChrir {
+        public MeasuredHrirSpeaker[] Speakers;
+        public int SampleRate;
+        public float RefDist;
+        public float CrossoverHz;
+        public int TapCount;
+        public bool IsGzipped;
+    }
+
+    static readonly object chrirCacheLock = new();
+    static readonly Dictionary<string, CachedRawChrir> anechoicChrirCache = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Loads a bundled laboratory HRIR/BRIR profile into fresh <see cref="VirtualChannel"/> instances with the
     /// requested Slot 5B personalization parameters, without mutating <see cref="LastPersonalizationDiagnostics"/>
     /// or user settings. Used by Layer L11 <see cref="AcousticAuditEngine"/> inside an isolated
     /// <see cref="VirtualizerFilter.BeginStaticStateScope"/>.
+    /// Callers should release returned probe channels via <see cref="VirtualizerFilter.DisposeChannels"/> when finished.
     /// </summary>
     internal static (VirtualChannel[] channels, int sampleRate, float refDist, int tapCount, bool isBrir, HrtfPersonalizationDiagnostics diag) LoadBundledProfileForProbe(
         Context ctx,
@@ -618,10 +631,41 @@ public static class BinauralProfileService {
         if (info == null || info.IsDirectStereo || info.IsClassic || info.IsCustom || string.IsNullOrEmpty(info.AssetFile)) {
             return (null, VirtualizerFilter.FilterSampleRate, 1.0f, 0, false, HrtfPersonalizationDiagnostics.Default);
         }
+
+        CachedRawChrir cached = null;
+        if (!info.IsBrir) {
+            lock (chrirCacheLock) {
+                anechoicChrirCache.TryGetValue(info.AssetFile, out cached);
+            }
+        }
+        if (cached != null) {
+            (VirtualChannel[] cachedCh, HrtfPersonalizationDiagnostics cachedDiag) = BuildPersonalizedChannels(
+                cached.Speakers,
+                cached.SampleRate,
+                cached.CrossoverHz,
+                minimumPhase && !info.IsBrir,
+                personalization,
+                forceBrir: false,
+                formatLabel: cached.IsGzipped ? "CHRIR1 BRIR" : "CHRIR1 HRIR");
+            return (cachedCh, cached.SampleRate, cached.RefDist, cached.TapCount, info.IsBrir, cachedDiag);
+        }
+
         using Stream assetStream = ctx.Assets.Open("hrir/" + info.AssetFile);
-        (VirtualChannel[] channels, int sampleRate, float refDist, int taps, HrtfPersonalizationDiagnostics diag) =
-            ReadChrirStream(assetStream, info.IsGzipped, minimumPhase && !info.IsBrir, personalization, info.IsBrir);
-        return (channels, sampleRate, refDist, taps, info.IsBrir, diag);
+        CachedRawChrir parsed = ParseRawChrirStream(assetStream, info.IsGzipped);
+        if (!info.IsBrir && parsed.TapCount <= MinimumPhaseHrir.MaxAnechoicTaps) {
+            lock (chrirCacheLock) {
+                anechoicChrirCache[info.AssetFile] = parsed;
+            }
+        }
+        (VirtualChannel[] channels, HrtfPersonalizationDiagnostics diag) = BuildPersonalizedChannels(
+            parsed.Speakers,
+            parsed.SampleRate,
+            parsed.CrossoverHz,
+            minimumPhase && !info.IsBrir,
+            personalization,
+            forceBrir: info.IsBrir,
+            formatLabel: parsed.IsGzipped ? "CHRIR1 BRIR" : "CHRIR1 HRIR");
+        return (channels, parsed.SampleRate, parsed.RefDist, parsed.TapCount, info.IsBrir, diag);
     }
 
     static bool ApplyHrtfFilterOnly(Context ctx, AppSettingsStore store, string profileId, out string errorMessage) {
@@ -866,6 +910,19 @@ public static class BinauralProfileService {
         bool minimumPhase,
         HrtfPersonalizationConfig personalization,
         bool isBrirAsset) {
+        CachedRawChrir parsed = ParseRawChrirStream(source, gzipped);
+        (VirtualChannel[] channels, HrtfPersonalizationDiagnostics diag) = BuildPersonalizedChannels(
+            parsed.Speakers,
+            parsed.SampleRate,
+            parsed.CrossoverHz,
+            minimumPhase,
+            personalization,
+            forceBrir: isBrirAsset,
+            formatLabel: gzipped ? "CHRIR1 BRIR" : "CHRIR1 HRIR");
+        return (channels, parsed.SampleRate, parsed.RefDist, parsed.TapCount, diag);
+    }
+
+    static CachedRawChrir ParseRawChrirStream(Stream source, bool gzipped) {
         Stream dataStream = gzipped ? new GZipStream(source, CompressionMode.Decompress, leaveOpen: true) : source;
         try {
             using BinaryReader br = new(dataStream, Encoding.ASCII, leaveOpen: true);
@@ -910,15 +967,14 @@ public static class BinauralProfileService {
                 speakers[c] = new MeasuredHrirSpeaker(x, y, left, right);
             }
 
-            (VirtualChannel[] channels, HrtfPersonalizationDiagnostics diag) = BuildPersonalizedChannels(
-                speakers,
-                sampleRate,
-                crossoverHz,
-                minimumPhase,
-                personalization,
-                forceBrir: isBrirAsset,
-                formatLabel: gzipped ? "CHRIR1 BRIR" : "CHRIR1 HRIR");
-            return (channels, sampleRate, refDist, tapCount, diag);
+            return new CachedRawChrir {
+                Speakers = speakers,
+                SampleRate = sampleRate,
+                RefDist = refDist,
+                CrossoverHz = crossoverHz,
+                TapCount = tapCount,
+                IsGzipped = gzipped
+            };
         } finally {
             if (gzipped) {
                 dataStream.Dispose();

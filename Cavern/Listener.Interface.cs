@@ -13,14 +13,83 @@ namespace Cavern {
         // Renderer settings
         // ------------------------------------------------------------------
         /// <summary>
+        /// Thread-local override state active only inside <see cref="BeginThreadIsolatedScope"/> so background
+        /// acoustic audits, fuzzers, and offline renders never race with live real-time playback.
+        /// Null on the real-time audio thread (zero allocation and negligible branch cost).
+        /// </summary>
+        sealed class ThreadIsolatedState {
+            public Environments EnvironmentType;
+            public bool HeadphoneVirtualizer;
+            public Channel[] Channels;
+            public SourceRenderer Renderer;
+            public bool IsSymmetric;
+            public Vector3 EnvironmentSize;
+            public Vector3 EnvironmentSizeInverse;
+            public Vector2 ScreenSize;
+            public int LeftChannels;
+            public int RightChannels;
+        }
+
+        [ThreadStatic]
+        static ThreadIsolatedState threadState;
+
+        sealed class ThreadIsolationScope : IDisposable {
+            readonly ThreadIsolatedState previous;
+            bool disposed;
+
+            public ThreadIsolationScope(ThreadIsolatedState prev) => previous = prev;
+
+            public void Dispose() {
+                if (disposed) {
+                    return;
+                }
+                disposed = true;
+                threadState = previous;
+            }
+        }
+
+        /// <summary>
+        /// Isolates all static <see cref="Listener"/> properties (<see cref="Channels"/>, <see cref="HeadphoneVirtualizer"/>,
+        /// <see cref="EnvironmentType"/>, <see cref="EnvironmentSize"/>, <see cref="Renderer"/>, etc.) on the calling
+        /// thread until the returned handle is disposed, preventing cross-thread races with concurrent live playback.
+        /// </summary>
+        public static IDisposable BeginThreadIsolatedScope() {
+            ThreadIsolatedState prev = threadState;
+            Channel[] srcChannels = Channels;
+            Channel[] clonedChannels = srcChannels != null ? new Channel[srcChannels.Length] : Array.Empty<Channel>();
+            for (int i = 0; i < clonedChannels.Length; i++) {
+                Channel c = srcChannels[i];
+                clonedChannels[i] = new Channel(c.X, c.Y, c.LFE);
+            }
+            threadState = new ThreadIsolatedState {
+                EnvironmentType = EnvironmentType,
+                HeadphoneVirtualizer = HeadphoneVirtualizer,
+                Channels = clonedChannels,
+                Renderer = Renderer,
+                IsSymmetric = IsSymmetric,
+                EnvironmentSize = EnvironmentSize,
+                EnvironmentSizeInverse = EnvironmentSizeInverse,
+                ScreenSize = ScreenSize,
+                LeftChannels = LeftChannels,
+                RightChannels = RightChannels
+            };
+            Recalculate();
+            return new ThreadIsolationScope(prev);
+        }
+
+        /// <summary>
         /// 3D environment type.
         /// </summary>
         /// <remarks>Set by the user and applied when a <see cref="Listener"/> is created.
         /// Don't override without user interaction.</remarks>
         public static Environments EnvironmentType {
-            get => environmentType;
+            get => threadState != null ? threadState.EnvironmentType : environmentType;
             set {
-                environmentType = value;
+                if (threadState != null) {
+                    threadState.EnvironmentType = value;
+                } else {
+                    environmentType = value;
+                }
                 Recalculate();
             }
         }
@@ -31,9 +100,13 @@ namespace Cavern {
         /// <remarks>Set by the user and applied when a <see cref="Listener"/> is created.
         /// Don't override without user interaction.</remarks>
         public static bool HeadphoneVirtualizer {
-            get => headphoneVirtualizer;
+            get => threadState != null ? threadState.HeadphoneVirtualizer : headphoneVirtualizer;
             set {
-                headphoneVirtualizer = value;
+                if (threadState != null) {
+                    threadState.HeadphoneVirtualizer = value;
+                } else {
+                    headphoneVirtualizer = value;
+                }
                 Recalculate();
             }
         }
@@ -42,13 +115,33 @@ namespace Cavern {
         /// Output channel layout. The default setup is the standard 5.1.
         /// </summary>
         /// <remarks>Set by the user and applied when a <see cref="Listener"/> is created.</remarks>
-        public static Channel[] Channels { get; private set; } = { new Channel(0, -30), new Channel(0, 30),
+        public static Channel[] Channels {
+            get => threadState != null ? threadState.Channels : channels;
+            private set {
+                if (threadState != null) {
+                    threadState.Channels = value;
+                } else {
+                    channels = value;
+                }
+            }
+        }
+        static Channel[] channels = { new Channel(0, -30), new Channel(0, 30),
             new Channel(0, 0), new Channel(15, 15, true), new Channel(0, -110), new Channel(0, 110) };
 
         /// <summary>
         /// Algorithm used for rendering <see cref="Source"/>s to the set up <see cref="Channels"/>.
         /// </summary>
-        public static SourceRenderer Renderer { get; private set; } = new BalanceBasedRenderer();
+        public static SourceRenderer Renderer {
+            get => threadState != null ? threadState.Renderer : renderer;
+            private set {
+                if (threadState != null) {
+                    threadState.Renderer = value;
+                } else {
+                    renderer = value;
+                }
+            }
+        }
+        static SourceRenderer renderer = new BalanceBasedRenderer();
 
         /// <summary>
         /// Gets if the speakers are placed in a sphere according to current layout settings.
@@ -61,7 +154,17 @@ namespace Cavern {
         /// <summary>
         /// Is the user's speaker layout symmetrical?
         /// </summary>
-        public static bool IsSymmetric { get; internal set; } = true;
+        public static bool IsSymmetric {
+            get => threadState != null ? threadState.IsSymmetric : isSymmetric;
+            internal set {
+                if (threadState != null) {
+                    threadState.IsSymmetric = value;
+                } else {
+                    isSymmetric = value;
+                }
+            }
+        }
+        static bool isSymmetric = true;
 
         /// <summary>
         /// The single most important variable defining sound space in symmetric mode, the environment scaling.
@@ -72,10 +175,15 @@ namespace Cavern {
         /// respected, thus this vector should be scaled, not completely overridden.
         /// </summary>
         public static Vector3 EnvironmentSize {
-            get => environmentSize;
+            get => threadState != null ? threadState.EnvironmentSize : environmentSize;
             set {
-                environmentSize = value;
-                EnvironmentSizeInverse = Vector3.One / value;
+                if (threadState != null) {
+                    threadState.EnvironmentSize = value;
+                    threadState.EnvironmentSizeInverse = Vector3.One / value;
+                } else {
+                    environmentSize = value;
+                    environmentSizeInverse = Vector3.One / value;
+                }
             }
         }
 
@@ -83,7 +191,17 @@ namespace Cavern {
         /// Relative size of the screen to the front wall's width. Used for rendering screen-anchored objects.
         /// The user's settings should be respected, thus this vector should not be overridden without good reason.
         /// </summary>
-        public static Vector2 ScreenSize { get; set; } = new Vector2(.9f, .486f);
+        public static Vector2 ScreenSize {
+            get => threadState != null ? threadState.ScreenSize : screenSize;
+            set {
+                if (threadState != null) {
+                    threadState.ScreenSize = value;
+                } else {
+                    screenSize = value;
+                }
+            }
+        }
+        static Vector2 screenSize = new Vector2(.9f, .486f);
 
         /// <summary>
         /// How many sources can be played at the same time.
@@ -96,17 +214,47 @@ namespace Cavern {
         /// <summary>
         /// Channel count on the left side of the room, but 1 if there's none, as it's used for volume division.
         /// </summary>
-        internal static int LeftChannels { get; private set; } = 2;
+        internal static int LeftChannels {
+            get => threadState != null ? threadState.LeftChannels : leftChannels;
+            private set {
+                if (threadState != null) {
+                    threadState.LeftChannels = value;
+                } else {
+                    leftChannels = value;
+                }
+            }
+        }
+        static int leftChannels = 2;
 
         /// <summary>
         /// Channel count on the right side of the room, but 1 if there's none, as it's used for volume division.
         /// </summary>
-        internal static int RightChannels { get; private set; } = 2;
+        internal static int RightChannels {
+            get => threadState != null ? threadState.RightChannels : rightChannels;
+            private set {
+                if (threadState != null) {
+                    threadState.RightChannels = value;
+                } else {
+                    rightChannels = value;
+                }
+            }
+        }
+        static int rightChannels = 2;
 
         /// <summary>
         /// 1 / <see cref="EnvironmentSize"/> on each axis. Cached optimization value for when a division is needed.
         /// </summary>
-        internal static Vector3 EnvironmentSizeInverse { get; private set; } = new Vector3(1 / 10f, 1 / 7f, 1 / 10f);
+        internal static Vector3 EnvironmentSizeInverse {
+            get => threadState != null ? threadState.EnvironmentSizeInverse : environmentSizeInverse;
+            private set {
+                if (threadState != null) {
+                    threadState.EnvironmentSizeInverse = value;
+                } else {
+                    environmentSizeInverse = value;
+                }
+            }
+        }
+        static Vector3 environmentSizeInverse = new Vector3(1 / 10f, 1 / 7f, 1 / 10f);
 
         // ------------------------------------------------------------------
         // Listener settings
@@ -156,7 +304,7 @@ namespace Cavern {
         // Advanced settings
         // ------------------------------------------------------------------
         /// <summary>
-        /// Project sample rate (min. 44100). It's best to have all your audio clips in this sample rate for maximum performance.
+        /// Project sample rate (min. 8000). It's best to have all your audio clips in this sample rate for maximum performance.
         /// </summary>
         public int SampleRate { get; set; } = DefaultSampleRate;
 

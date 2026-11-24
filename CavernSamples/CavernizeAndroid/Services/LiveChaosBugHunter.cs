@@ -227,7 +227,7 @@ public static class LiveChaosBugHunter {
                 for (int w = 0; w < workers.Length; w++) {
                     int workerId = w;
                     workers[w] = Task.Run(() => {
-                        int[] rates = [44100, 48000, 96000];
+                        int[] rates = [8000, 44100, 48000, 96000];
                         for (int r = 0; r < Math.Min(clampedRounds, 6); r++) {
                             ct.ThrowIfCancellationRequested();
                             AcousticCustomProbeRequest req = new() {
@@ -437,6 +437,7 @@ public static class LiveChaosBugHunter {
                 })
             }, new JsonSerializerOptions { WriteIndented = true }));
         } finally {
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false);
             chaosGate.Release();
         }
     }

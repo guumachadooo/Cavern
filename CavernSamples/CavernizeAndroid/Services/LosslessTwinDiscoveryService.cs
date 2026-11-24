@@ -677,85 +677,118 @@ public static partial class LosslessTwinDiscoveryService {
             }
             int outChannels = format.ContainsKey(MediaFormat.KeyChannelCount) ? Math.Max(1, format.GetInteger(MediaFormat.KeyChannelCount)) : 2;
             string trackMime = format.GetString(MediaFormat.KeyMime);
+            if (string.IsNullOrWhiteSpace(trackMime) ||
+                string.Equals(trackMime, "audio/unknown", StringComparison.OrdinalIgnoreCase)) {
+                return false;
+            }
 
-            codec = MediaCodec.CreateDecoderByType(trackMime);
-            codec.Configure(format, null, null, MediaCodecConfigFlags.None);
-            codec.Start();
+            bool codecStarted = false;
+            bool codecFaulted = false;
+            try {
+                codec = MediaCodec.CreateDecoderByType(trackMime);
+                codec.Configure(format, null, null, MediaCodecConfigFlags.None);
+                codec.Start();
+                codecStarted = true;
 
-            List<float> listL = new(sampleRate * 60);
-            List<float> listR = new(sampleRate * 60);
-            MediaCodec.BufferInfo info = new();
-            bool inputDone = false;
-            int pcmEncoding = (int)Android.Media.Encoding.Pcm16bit;
-            int drainRetries = 0;
+                int initCap = Math.Min(Math.Max(sampleRate * 4, 65536), MaxDecodedTwinFrames);
+                List<float> listL = new(initCap);
+                List<float> listR = new(initCap);
+                using MediaCodec.BufferInfo info = new();
+                byte[] chunk = Array.Empty<byte>();
+                bool inputDone = false;
+                int pcmEncoding = (int)Android.Media.Encoding.Pcm16bit;
+                int drainRetries = 0;
 
-            while (listL.Count < MaxDecodedTwinFrames) {
-                ct.ThrowIfCancellationRequested();
-                if (!inputDone) {
-                    int inIdx = codec.DequeueInputBuffer(10000);
-                    if (inIdx >= 0) {
-                        Java.Nio.ByteBuffer inBuf = codec.GetInputBuffer(inIdx);
-                        int read = extractor.ReadSampleData(inBuf, 0);
-                        if (read < 0) {
-                            codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
-                            inputDone = true;
-                        } else {
-                            codec.QueueInputBuffer(inIdx, 0, read, extractor.SampleTime, MediaCodecBufferFlags.None);
-                            extractor.Advance();
-                        }
-                    }
-                }
-
-                int outIdx = codec.DequeueOutputBuffer(info, 10000);
-                if (outIdx == (int)MediaCodecInfoState.OutputFormatChanged) {
-                    drainRetries = 0;
-                    MediaFormat outFmt = codec.OutputFormat;
-                    if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) sampleRate = Math.Max(8000, outFmt.GetInteger(MediaFormat.KeySampleRate));
-                    if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) outChannels = Math.Max(1, outFmt.GetInteger(MediaFormat.KeyChannelCount));
-                    if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
-                } else if (outIdx >= 0) {
-                    drainRetries = 0;
-                    if (info.Size > 0) {
-                        Java.Nio.ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
-                        outBuf.Position(info.Offset);
-                        byte[] chunk = new byte[info.Size];
-                        outBuf.Get(chunk);
-
-                        ResolveMediaCodecPcmFormat(pcmEncoding, out int bits, out bool isFloat);
-                        int frameBytes = (bits / 8) * outChannels;
-                        int frames = frameBytes > 0 ? chunk.Length / frameBytes : 0;
-                        if (frames > 0) {
-                            KaiserSincResampler.UnifyPcmBytesToStereoFloat(chunk, frames * frameBytes, outChannels, bits, isFloat, out float[] cL, out float[] cR);
-                            int take = Math.Min(frames, MaxDecodedTwinFrames - listL.Count);
-                            for (int s = 0; s < take; s++) {
-                                listL.Add(cL[s]);
-                                listR.Add(cR[s]);
+                while (listL.Count < MaxDecodedTwinFrames) {
+                    ct.ThrowIfCancellationRequested();
+                    if (!inputDone) {
+                        int inIdx = codec.DequeueInputBuffer(10000);
+                        if (inIdx >= 0) {
+                            Java.Nio.ByteBuffer inBuf = codec.GetInputBuffer(inIdx);
+                            if (inBuf == null) {
+                                codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
+                                inputDone = true;
+                            } else {
+                                int read = extractor.ReadSampleData(inBuf, 0);
+                                if (read < 0) {
+                                    codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
+                                    inputDone = true;
+                                } else {
+                                    codec.QueueInputBuffer(inIdx, 0, read, extractor.SampleTime, MediaCodecBufferFlags.None);
+                                    extractor.Advance();
+                                }
                             }
                         }
                     }
-                    codec.ReleaseOutputBuffer(outIdx, false);
-                    if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) {
-                        break;
-                    }
-                } else if (inputDone && outIdx == (int)MediaCodecInfoState.TryAgainLater) {
-                    if (++drainRetries >= 40) {
-                        break;
+
+                    int outIdx = codec.DequeueOutputBuffer(info, 10000);
+                    if (outIdx == (int)MediaCodecInfoState.OutputFormatChanged) {
+                        drainRetries = 0;
+                        MediaFormat outFmt = codec.OutputFormat;
+                        if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) sampleRate = Math.Max(8000, outFmt.GetInteger(MediaFormat.KeySampleRate));
+                        if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) outChannels = Math.Max(1, outFmt.GetInteger(MediaFormat.KeyChannelCount));
+                        if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
+                    } else if (outIdx >= 0) {
+                        drainRetries = 0;
+                        if (info.Size > 0) {
+                            Java.Nio.ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
+                            if (outBuf != null) {
+                                outBuf.Position(info.Offset);
+                                if (chunk.Length < info.Size) {
+                                    chunk = new byte[info.Size];
+                                }
+                                outBuf.Get(chunk, 0, info.Size);
+
+                                ResolveMediaCodecPcmFormat(pcmEncoding, out int bits, out bool isFloat);
+                                int frameBytes = (bits / 8) * outChannels;
+                                int frames = frameBytes > 0 ? info.Size / frameBytes : 0;
+                                if (frames > 0) {
+                                    KaiserSincResampler.UnifyPcmBytesToStereoFloat(chunk, frames * frameBytes, outChannels, bits, isFloat, out float[] cL, out float[] cR);
+                                    int take = Math.Min(frames, MaxDecodedTwinFrames - listL.Count);
+                                    for (int s = 0; s < take; s++) {
+                                        listL.Add(cL[s]);
+                                        listR.Add(cR[s]);
+                                    }
+                                }
+                            }
+                        }
+                        codec.ReleaseOutputBuffer(outIdx, false);
+                        if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) {
+                            break;
+                        }
+                    } else if (inputDone && outIdx == (int)MediaCodecInfoState.TryAgainLater) {
+                        if (++drainRetries >= 40) {
+                            break;
+                        }
                     }
                 }
-            }
 
-            if (listL.Count < SubSampleSyncEngine.GccFftSize) {
+                if (listL.Count < SubSampleSyncEngine.GccFftSize) {
+                    return false;
+                }
+                left = listL.ToArray();
+                right = listR.ToArray();
+                return true;
+            } catch (OperationCanceledException) {
+                throw;
+            } catch {
+                codecFaulted = true;
                 return false;
+            } finally {
+                if (codec != null) {
+                    if (codecStarted && !codecFaulted) {
+                        try { codec.Stop(); } catch { }
+                    }
+                    try { codec.Release(); } catch { }
+                    try { codec.Dispose(); } catch { }
+                    codec = null;
+                }
             }
-            left = listL.ToArray();
-            right = listR.ToArray();
-            return true;
         } catch (OperationCanceledException) {
             throw;
         } catch {
             return false;
         } finally {
-            try { codec?.Stop(); } catch { }
             try { codec?.Release(); } catch { }
             try { codec?.Dispose(); } catch { }
             try { extractor?.Release(); } catch { }
@@ -901,83 +934,115 @@ public static partial class LosslessTwinDiscoveryService {
             int srcSr = format.ContainsKey(MediaFormat.KeySampleRate) ? Math.Max(8000, format.GetInteger(MediaFormat.KeySampleRate)) : targetSampleRate;
             int outChannels = format.ContainsKey(MediaFormat.KeyChannelCount) ? Math.Max(1, format.GetInteger(MediaFormat.KeyChannelCount)) : 2;
             string trackMime = format.GetString(MediaFormat.KeyMime);
+            if (string.IsNullOrWhiteSpace(trackMime) ||
+                string.Equals(trackMime, "audio/unknown", StringComparison.OrdinalIgnoreCase)) {
+                return null;
+            }
 
-            codec = MediaCodec.CreateDecoderByType(trackMime);
-            codec.Configure(format, null, null, MediaCodecConfigFlags.None);
-            codec.Start();
+            bool codecStarted = false;
+            bool codecFaulted = false;
+            try {
+                codec = MediaCodec.CreateDecoderByType(trackMime);
+                codec.Configure(format, null, null, MediaCodecConfigFlags.None);
+                codec.Start();
+                codecStarted = true;
 
-            int wantSamples = (int)Math.Ceiling(srcSr * seconds);
-            List<float> mono = new(wantSamples);
-            MediaCodec.BufferInfo info = new();
-            bool inputDone = false;
-            int pcmEncoding = (int)Android.Media.Encoding.Pcm16bit;
-            int guard = 0;
-            int drainRetries = 0;
+                int wantSamples = (int)Math.Ceiling(srcSr * seconds);
+                List<float> mono = new(Math.Min(wantSamples, 262144));
+                using MediaCodec.BufferInfo info = new();
+                byte[] chunk = Array.Empty<byte>();
+                bool inputDone = false;
+                int pcmEncoding = (int)Android.Media.Encoding.Pcm16bit;
+                int guard = 0;
+                int drainRetries = 0;
 
-            while (mono.Count < wantSamples && guard++ < 4000) {
-                ct.ThrowIfCancellationRequested();
-                if (!inputDone) {
-                    int inIdx = codec.DequeueInputBuffer(8000);
-                    if (inIdx >= 0) {
-                        Java.Nio.ByteBuffer inBuf = codec.GetInputBuffer(inIdx);
-                        int read = extractor.ReadSampleData(inBuf, 0);
-                        if (read < 0) {
-                            codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
-                            inputDone = true;
-                        } else {
-                            codec.QueueInputBuffer(inIdx, 0, read, extractor.SampleTime, MediaCodecBufferFlags.None);
-                            extractor.Advance();
-                        }
-                    }
-                }
-
-                int outIdx = codec.DequeueOutputBuffer(info, 8000);
-                if (outIdx == (int)MediaCodecInfoState.OutputFormatChanged) {
-                    drainRetries = 0;
-                    MediaFormat outFmt = codec.OutputFormat;
-                    if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) srcSr = Math.Max(8000, outFmt.GetInteger(MediaFormat.KeySampleRate));
-                    if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) outChannels = Math.Max(1, outFmt.GetInteger(MediaFormat.KeyChannelCount));
-                    if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
-                } else if (outIdx >= 0) {
-                    drainRetries = 0;
-                    if (info.Size > 0) {
-                        Java.Nio.ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
-                        outBuf.Position(info.Offset);
-                        byte[] chunk = new byte[info.Size];
-                        outBuf.Get(chunk);
-
-                        ResolveMediaCodecPcmFormat(pcmEncoding, out int bits, out bool isFloat);
-                        int bytesPerSample = bits / 8;
-                        int frameBytes = bytesPerSample * outChannels;
-                        int frames = frameBytes > 0 ? chunk.Length / frameBytes : 0;
-                        if (frames > 0) {
-                            KaiserSincResampler.UnifyPcmBytesToStereoFloat(chunk, frames * frameBytes, outChannels, bits, isFloat, out float[] cL, out float[] cR);
-                            int take = Math.Min(frames, wantSamples - mono.Count);
-                            for (int f = 0; f < take; f++) {
-                                mono.Add(0.5f * (cL[f] + cR[f]));
+                while (mono.Count < wantSamples && guard++ < 4000) {
+                    ct.ThrowIfCancellationRequested();
+                    if (!inputDone) {
+                        int inIdx = codec.DequeueInputBuffer(8000);
+                        if (inIdx >= 0) {
+                            Java.Nio.ByteBuffer inBuf = codec.GetInputBuffer(inIdx);
+                            if (inBuf == null) {
+                                codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
+                                inputDone = true;
+                            } else {
+                                int read = extractor.ReadSampleData(inBuf, 0);
+                                if (read < 0) {
+                                    codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
+                                    inputDone = true;
+                                } else {
+                                    codec.QueueInputBuffer(inIdx, 0, read, extractor.SampleTime, MediaCodecBufferFlags.None);
+                                    extractor.Advance();
+                                }
                             }
                         }
                     }
-                    codec.ReleaseOutputBuffer(outIdx, false);
-                    if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) break;
-                } else if (inputDone && outIdx == (int)MediaCodecInfoState.TryAgainLater) {
-                    if (++drainRetries >= 40) break;
+
+                    int outIdx = codec.DequeueOutputBuffer(info, 8000);
+                    if (outIdx == (int)MediaCodecInfoState.OutputFormatChanged) {
+                        drainRetries = 0;
+                        MediaFormat outFmt = codec.OutputFormat;
+                        if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) srcSr = Math.Max(8000, outFmt.GetInteger(MediaFormat.KeySampleRate));
+                        if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) outChannels = Math.Max(1, outFmt.GetInteger(MediaFormat.KeyChannelCount));
+                        if (outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
+                    } else if (outIdx >= 0) {
+                        drainRetries = 0;
+                        if (info.Size > 0) {
+                            Java.Nio.ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
+                            if (outBuf != null) {
+                                outBuf.Position(info.Offset);
+                                if (chunk.Length < info.Size) {
+                                    chunk = new byte[info.Size];
+                                }
+                                outBuf.Get(chunk, 0, info.Size);
+
+                                ResolveMediaCodecPcmFormat(pcmEncoding, out int bits, out bool isFloat);
+                                int bytesPerSample = bits / 8;
+                                int frameBytes = bytesPerSample * outChannels;
+                                int frames = frameBytes > 0 ? info.Size / frameBytes : 0;
+                                if (frames > 0) {
+                                    KaiserSincResampler.UnifyPcmBytesToStereoFloat(chunk, frames * frameBytes, outChannels, bits, isFloat, out float[] cL, out float[] cR);
+                                    int take = Math.Min(frames, wantSamples - mono.Count);
+                                    for (int f = 0; f < take; f++) {
+                                        mono.Add(0.5f * (cL[f] + cR[f]));
+                                    }
+                                }
+                            }
+                        }
+                        codec.ReleaseOutputBuffer(outIdx, false);
+                        if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) break;
+                    } else if (inputDone && outIdx == (int)MediaCodecInfoState.TryAgainLater) {
+                        if (++drainRetries >= 40) break;
+                    }
+                }
+
+                if (mono.Count < SubSampleSyncEngine.GccFftSize) {
+                    return null;
+                }
+                float[] rawMono = mono.ToArray();
+                return srcSr != targetSampleRate
+                    ? new KaiserSincResampler(srcSr, targetSampleRate).ResampleMono(rawMono)
+                    : rawMono;
+            } catch (OperationCanceledException) {
+                throw;
+            } catch {
+                codecFaulted = true;
+                return null;
+            } finally {
+                if (codec != null) {
+                    if (codecStarted && !codecFaulted) {
+                        try { codec.Stop(); } catch { }
+                    }
+                    try { codec.Release(); } catch { }
+                    try { codec.Dispose(); } catch { }
+                    codec = null;
                 }
             }
-
-            if (mono.Count < SubSampleSyncEngine.GccFftSize) {
-                return null;
-            }
-            float[] rawMono = mono.ToArray();
-            return srcSr != targetSampleRate
-                ? new KaiserSincResampler(srcSr, targetSampleRate).ResampleMono(rawMono)
-                : rawMono;
         } catch (OperationCanceledException) {
             throw;
         } catch {
             return null;
         } finally {
-            try { codec?.Stop(); } catch { }
             try { codec?.Release(); } catch { }
             try { codec?.Dispose(); } catch { }
             try { extractor?.Release(); } catch { }

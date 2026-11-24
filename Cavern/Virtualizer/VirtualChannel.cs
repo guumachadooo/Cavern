@@ -171,6 +171,7 @@ namespace Cavern.Virtualizer {
         /// <summary>
         /// Internal flag used by <see cref="VirtualizerFilter.Reset(bool)"/> to apply minimum-phase conversion to the default HRIR set.
         /// </summary>
+        [ThreadStatic]
         internal static bool applyMinimumPhaseOnSubpar;
 
         /// <summary>
