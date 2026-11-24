@@ -34,8 +34,9 @@ public partial class MainActivity {
     TextView studioCodecDetailsSummaryText, studioCodecDetailsBodyText;
     Button studioSwitchEclipsaBtn;
     bool isStudioCodecDetailsExpanded;
-    Switch studioOptAiUpmixSwitch, studioOptKaraokeSwitch, studioOptPerformanceSwitch;
+    Switch studioOptAiUpmixSwitch, studioOptKaraokeSwitch, studioOptRemoveBackingSwitch, studioOptPerformanceSwitch;
     Switch studioOptLosslessTwinSwitch, studioOptHeadphonePersonalSwitch;
+    OneUiInlineSelector studioBundleSelector;
     TextView studioOptPerformanceHintText, studioOptTwinHintText;
     LinearLayout studioOptHeadphonePersonalRow;
 
@@ -227,6 +228,25 @@ public partial class MainActivity {
             },
             out _);
 
+        studioBundleSelector = new OneUiInlineSelector(this, S["NeuralStudioBundleTitle"]);
+        studioBundleSelector.SetItems(new[] {
+            S["StudioBundleFastSingle"],
+            S["StudioBundleVocalEnsemble"],
+            S["StudioBundlePureInstrumental"],
+            S["StudioBundleFullBand6Stem"],
+            S["StudioBundleKaraoke2Stage"]
+        }, Math.Clamp(store.NeuralStudioBundleIndex, 0, 4));
+        studioBundleSelector.SelectionChanged += idx => {
+            store.NeuralStudioBundleIndex = idx;
+            ApplyAndRefreshNeuralAudio();
+            RefreshStudioW12ContextUi();
+        };
+        card.AddView(studioBundleSelector, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(6)
+        });
+
         studioOptKaraokeSwitch = AddExplainedSwitchRow(
             card,
             S["StudioOptKaraokeTitle"],
@@ -261,6 +281,18 @@ public partial class MainActivity {
             },
             "%",
             defaultValue: 5);
+        studioOptRemoveBackingSwitch = AddExplainedSwitchRow(
+            studioW12KaraokeContainer,
+            S["StudioOptRemoveBackingTitle"],
+            S["StudioOptRemoveBackingDesc"],
+            !store.KaraokePreserveBackingVocals,
+            removeAll => {
+                store.KaraokePreserveBackingVocals = !removeAll;
+                ApplyAndRefreshNeuralAudio();
+                RefreshLyricsSingDockUi();
+                RefreshStudioW12ContextUi();
+            },
+            out _);
         card.AddView(studioW12KaraokeContainer);
 
         studioOptPerformanceSwitch = AddExplainedSwitchRow(
@@ -673,6 +705,16 @@ public partial class MainActivity {
             studioW12KaraokeBar.Progress = vocPct;
             studioW12KaraokeBar.Invalidate();
         }
+        bool removeBacking = !store.KaraokePreserveBackingVocals;
+        if (studioOptRemoveBackingSwitch != null && studioOptRemoveBackingSwitch.Checked != removeBacking) {
+            studioOptRemoveBackingSwitch.Checked = removeBacking;
+        }
+        if (studioBundleSelector != null) {
+            int bIdx = Math.Clamp(store.NeuralStudioBundleIndex, 0, 4);
+            if (studioBundleSelector.SelectedIndex != bIdx) {
+                studioBundleSelector.SetSelection(bIdx, notify: false);
+            }
+        }
         if (studioOptHeadphonePersonalRow != null) {
             studioOptHeadphonePersonalRow.Visibility = opts.BaseFormat == StudioBaseOutputFormat.Headphone3D
                 ? ViewStates.Visible
@@ -719,7 +761,9 @@ public partial class MainActivity {
                 tags.Add(IsActiveTrackMultichannelOrAtmos() ? S["StudioTagAtmosAi"] : S["StudioTagAiUpmix"]);
             }
             if (opts.EnableKaraokeInstrumental) {
-                tags.Add(string.Format(S["StudioTagKaraokeFmt"], vocPct));
+                tags.Add(removeBacking
+                    ? string.Format(S["StudioTagPureInstrFmt"], vocPct)
+                    : string.Format(S["StudioTagKaraokeFmt"], vocPct));
             }
             if (opts.IncludeRecordedPerformance) {
                 tags.Add(S["StudioTagVocalTake"]);

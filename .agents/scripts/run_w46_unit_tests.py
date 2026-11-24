@@ -88,6 +88,8 @@ TEST_CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
 
 TEST_PROGRAM_CS = r"""
 using System.Buffers.Binary;
+using System.Net;
+using System.Net.Http;
 using System.Numerics;
 using System.Reflection;
 using System.Text;
@@ -1735,11 +1737,352 @@ RunTest("T23_Stage2_GlobalAiHeadroom_WorkerCap_And_ThermalYield", () => {
     }
 });
 
+// =========================================================================
+// TEST 24 (Stage 3 T3): CNTC v3 Lossless Compression, O(1) PeekHeader & v2 Compat
+// =========================================================================
+RunTest("T24_T3_CntcV3_LosslessCompression_PeekHeader_And_V2BackwardCompat", () => {
+    const int sr = 44100;
+    const int len = 44100 * 2; // 2.0 s realistic 4-stem stereo musical track
+    float[] vocL = new float[len], vocR = new float[len];
+    float[] drmL = new float[len], drmR = new float[len];
+    float[] basL = new float[len], basR = new float[len];
+    float[] othL = new float[len], othR = new float[len];
+    for (int i = 0; i < len; i++) {
+        double t = i / (double)sr;
+        float env = 0.7f + 0.3f * MathF.Sin((float)(2 * Math.PI * 1.5 * t));
+        vocL[i] = env * (0.35f * MathF.Sin((float)(2 * Math.PI * 440.0 * t)) + 0.12f * MathF.Sin((float)(2 * Math.PI * 880.0 * t)));
+        vocR[i] = vocL[i] * 0.98f + 0.01f * MathF.Sin((float)(2 * Math.PI * 660.0 * t));
+        drmL[i] = 0.25f * MathF.Sin((float)(2 * Math.PI * 110.0 * t)) * MathF.Exp(-(float)((t % 0.5) * 8.0));
+        drmR[i] = drmL[i] * 0.95f;
+        basL[i] = basR[i] = 0.42f * MathF.Sin((float)(2 * Math.PI * 65.0 * t));
+        othL[i] = 0.20f * MathF.Sin((float)(2 * Math.PI * 523.25 * t));
+        othR[i] = 0.20f * MathF.Sin((float)(2 * Math.PI * 659.25 * t));
+    }
+    StereoStemBuffer[] stems = [
+        new StereoStemBuffer("vocals", vocL, vocR),
+        new StereoStemBuffer("drums", drmL, drmR),
+        new StereoStemBuffer("bass", basL, basR),
+        new StereoStemBuffer("other", othL, othR)
+    ];
+    NeuralSeparatedTrack orig = new() {
+        SourceTrackKey = "content://media/audio/t24_song.flac",
+        SampleRate = sr,
+        Stems = stems,
+        MonoLeadVocalRef = (float[])vocL.Clone(),
+        DerivedFromLosslessTwin = true,
+        PlanSignature = "bs_roformer_sw_6stem_fp16|ov=4",
+        DisplayTitle = "Neon Horizon",
+        ArtistName = "Cavern Orchestra",
+        OriginTag = "MVSEP Cloud",
+        ModelSummary = "BS-RoFormer 6-Stem"
+    };
+    DirectorCue[] cues = Layer1AudioForensics.Analyze(stems, sr, SpatialChoreoMode.Musical);
+    SpatialChoreoTrack origChoreo = SpatialChoreoTrack.Build(["vocals", "drums", "bass", "other"], cues, SpatialChoreoMode.Musical, 2.0);
+
+    string tmpDir = Path.Combine(Path.GetTempPath(), $"cavern_t24_{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tmpDir);
+    try {
+        static double ComputeSnrDb(float[] a, float[] b) {
+            double sig = 0.0, err = 0.0;
+            for (int i = 0; i < a.Length; i++) {
+                sig += (double)a[i] * a[i];
+                double d = a[i] - b[i];
+                err += d * d;
+            }
+            return err < 1e-18 ? 180.0 : 10.0 * Math.Log10(sig / err);
+        }
+
+        // 1. Compact16Bit: SNR >= 90 dB, ratio >= 3.0x, O(1) PeekHeader exact, Choreo roundtrip
+        string p16 = Path.Combine(tmpDir, "compact16.ntc");
+        NeuralTrackCacheCodec.WriteTrackFile(p16, orig, origChoreo, NeuralTrackCacheCompressionMode.Compact16Bit);
+        NeuralTrackCacheEntryInfo info16 = NeuralTrackCacheCodec.PeekHeader(p16);
+        Assert(info16 != null, "PeekHeader(Compact16Bit) returned null");
+        Assert(info16.FormatVersion == 3, $"Expected CNTC v3, got v{info16.FormatVersion}");
+        Assert(info16.DisplayTitle == "Neon Horizon" && info16.ArtistName == "Cavern Orchestra", "PeekHeader metadata mismatch");
+        Assert(info16.OriginTag == "MVSEP Cloud" && info16.StemCount == 4, "PeekHeader origin/stemCount mismatch");
+        Assert(info16.CompressionMode == NeuralTrackCacheCompressionMode.Compact16Bit, "PeekHeader compression mode mismatch");
+        Assert(info16.CompressionRatio >= 3.0, $"Expected Compact16Bit ratio >= 3.0x, got {info16.CompressionRatio:0.00}x");
+        Assert(info16.SavedPercent >= 66.0, $"Expected Compact16Bit savings >= 66%, got {info16.SavedPercent:0.0}%");
+
+        NeuralSeparatedTrack r16 = NeuralTrackCacheCodec.ReadTrackFile(p16, out SpatialChoreoTrack c16);
+        Assert(r16 != null && r16.Stems.Count == 4 && c16 != null && c16.FrameCount == origChoreo.FrameCount, "Compact16Bit read/choreo mismatch");
+        double snr16 = ComputeSnrDb(vocL, r16.Stems[0].Left);
+        Assert(snr16 >= 90.0, $"Compact16Bit SNR must be >= 90 dB, got {snr16:0.0} dB");
+
+        // 2. Studio24Bit: SNR >= 135 dB, ratio >= 2.0x
+        string p24 = Path.Combine(tmpDir, "studio24.ntc");
+        NeuralTrackCacheCodec.WriteTrackFile(p24, orig, null, NeuralTrackCacheCompressionMode.Studio24Bit);
+        NeuralTrackCacheEntryInfo info24 = NeuralTrackCacheCodec.PeekHeader(p24);
+        Assert(info24 != null && info24.CompressionRatio >= 2.0, $"Expected Studio24Bit ratio >= 2.0x, got {info24?.CompressionRatio:0.00}x");
+        NeuralSeparatedTrack r24 = NeuralTrackCacheCodec.ReadTrackFile(p24, out _);
+        double snr24 = ComputeSnrDb(vocL, r24.Stems[0].Left);
+        Assert(snr24 >= 135.0, $"Studio24Bit SNR must be >= 135 dB, got {snr24:0.0} dB");
+
+        // 3. RawFloat32: bit-exact 0.0f max diff
+        string pRaw = Path.Combine(tmpDir, "raw32.ntc");
+        NeuralTrackCacheCodec.WriteTrackFile(pRaw, orig, null, NeuralTrackCacheCompressionMode.RawFloat32);
+        NeuralSeparatedTrack rRaw = NeuralTrackCacheCodec.ReadTrackFile(pRaw, out _);
+        float maxRawDiff = 0f;
+        for (int i = 0; i < len; i++) maxRawDiff = MathF.Max(maxRawDiff, MathF.Abs(vocL[i] - rRaw.Stems[0].Left[i]));
+        Assert(maxRawDiff == 0f, $"RawFloat32 must be bit-exact (0.0 diff), got {maxRawDiff}");
+
+        // 4. Backward compatibility: hand-craft a valid legacy CNTC v2 file and verify ReadTrackFile + PeekHeader
+        string pV2 = Path.Combine(tmpDir, "legacy_v2.ntc");
+        using (FileStream fs = new(pV2, FileMode.Create, FileAccess.Write))
+        using (BinaryWriter bw = new(fs, Encoding.UTF8)) {
+            bw.Write(NeuralTrackCacheCodec.FileMagic);
+            bw.Write((ushort)2); // v2
+            bw.Write((ushort)0); // reserved
+            bw.Write(sr);
+            bw.Write(0u); // flags
+            byte[] keyBytes = Encoding.UTF8.GetBytes("legacy/v2_track.flac");
+            bw.Write(keyBytes.Length); bw.Write(keyBytes);
+            byte[] sigBytes = Encoding.UTF8.GetBytes("legacy_sig");
+            bw.Write(sigBytes.Length); bw.Write(sigBytes);
+            bw.Write(1); // 1 stem
+            byte[] stName = Encoding.UTF8.GetBytes("vocals");
+            bw.Write(stName.Length); bw.Write(stName);
+            int nShort = 512;
+            bw.Write(nShort);
+            for (int i = 0; i < nShort; i++) bw.Write(vocL[i]);
+            bw.Write(nShort);
+            for (int i = 0; i < nShort; i++) bw.Write(vocR[i]);
+        }
+        NeuralTrackCacheEntryInfo infoV2 = NeuralTrackCacheCodec.PeekHeader(pV2);
+        Assert(infoV2 != null && infoV2.FormatVersion == 2 && infoV2.StemCount == 1, "PeekHeader(legacy v2) failed");
+        NeuralSeparatedTrack rV2 = NeuralTrackCacheCodec.ReadTrackFile(pV2, out _);
+        Assert(rV2 != null && rV2.Stems.Count == 1 && rV2.Stems[0].Length == 512, "ReadTrackFile(legacy v2) failed");
+        Assert(MathF.Abs(rV2.Stems[0].Left[100] - vocL[100]) < 1e-6f, "Legacy v2 sample mismatch");
+    } finally {
+        try { Directory.Delete(tmpDir, true); } catch { }
+    }
+});
+
+// =========================================================================
+// TEST 25 (Stage 3 T3): MVSEP Cloud REST Client, SSRF Guard & Token Redaction
+// =========================================================================
+RunTest("T25_T3_MvsepCloudClient_RestContract_SsrfGuard_And_TokenRedaction", () => {
+    const string secretToken = "mvsep_super_secret_token_987654321";
+    const int sr = 44100;
+    const int n = 4410; // 0.1 s stereo test tone
+    float[] mixL = new float[n], mixR = new float[n];
+    float[] vocL = new float[n], vocR = new float[n];
+    float[] instL = new float[n], instR = new float[n];
+    for (int i = 0; i < n; i++) {
+        double t = i / (double)sr;
+        vocL[i] = vocR[i] = 0.35f * MathF.Sin((float)(2 * Math.PI * 440.0 * t));
+        instL[i] = 0.25f * MathF.Sin((float)(2 * Math.PI * 190.0 * t));
+        instR[i] = 0.25f * MathF.Cos((float)(2 * Math.PI * 190.0 * t));
+        mixL[i] = vocL[i] + instL[i];
+        mixR[i] = vocR[i] + instR[i];
+    }
+    byte[] vocWav = MvsepCloudClient.EncodeStereoWav16(vocL, vocR, sr);
+    byte[] instWav = MvsepCloudClient.EncodeStereoWav16(instL, instR, sr);
+
+    using MockMvsepHttpHandler handler = new(vocWav, instWav);
+    using MvsepCloudClient client = new(handler);
+
+    // 1. FetchAlgorithmsAsync
+    IReadOnlyList<MvsepRemoteAlgorithmInfo> algos = client.FetchAlgorithmsAsync().GetAwaiter().GetResult();
+    Assert(algos.Count == 2 && algos[0].RenderId == 40 && algos[1].RenderId == 63, $"Unexpected algorithms count={algos.Count}");
+
+    // 2. Full SeparateTrackAsync pipeline (create -> waiting -> processing -> done -> download stems)
+    MvsepCloudOptions opts = new() {
+        ApiToken = secretToken,
+        BaseUrl = MvsepCloudOptions.DefaultBaseUrl,
+        OutputFormat = MvsepOutputFormat.Wav16Bit,
+        PollIntervalMs = 20,
+        MaxPollSeconds = 10
+    };
+    MvsepAlgorithmPreset preset = MvsepAlgorithmPreset.FindOrDefault("mvsep_bs_roformer_vocals");
+    NeuralSeparatedTrack separated = client.SeparateTrackAsync(
+        "track_mvsep_test", mixL, mixR, sr, preset, opts,
+        displayTitle: "Cloud Song", artistName: "Cloud Artist").GetAwaiter().GetResult();
+    Assert(separated != null && separated.Stems.Count == 2, $"Expected 2 stems from MVSEP mock, got {separated?.Stems.Count}");
+    Assert(separated.OriginTag == "MVSEP Cloud" && separated.DisplayTitle == "Cloud Song", "Origin/Title metadata mismatch");
+    Assert(handler.PollCount >= 3, $"Expected >=3 status polls (waiting/processing/done), got {handler.PollCount}");
+    Assert(separated.Stems.Any(s => s.Name == "vocals") && separated.Stems.Any(s => s.Name == "instrumental"),
+        "Canonical vocals + instrumental stem names expected");
+
+    // 3. SSRF guard: reject non-HTTPS and non-allowlisted hosts
+    bool rejectedEvil = false;
+    try { MvsepCloudClient.ValidateOfficialBaseUri("https://evil.example.com/api"); } catch (ArgumentException) { rejectedEvil = true; }
+    Assert(rejectedEvil, "SSRF guard failed to reject evil.example.com");
+    bool rejectedHttp = false;
+    try { MvsepCloudClient.ValidateOfficialBaseUri("http://mvsep.com/api"); } catch (ArgumentException) { rejectedHttp = true; }
+    Assert(rejectedHttp, "SSRF guard failed to reject plaintext http://mvsep.com/api");
+    bool rejectedDownload = false;
+    try { client.DownloadStemBytesAsync("https://evil.example.com/stem.wav").GetAwaiter().GetResult(); } catch (InvalidOperationException) { rejectedDownload = true; }
+    Assert(rejectedDownload, "DownloadStemBytesAsync failed to reject non-allowlisted host");
+
+    // 4. Token redaction & masking
+    string redacted = MvsepCloudClient.RedactSecrets($"Auth error for token={secretToken} on mvsep", secretToken);
+    Assert(!redacted.Contains(secretToken, StringComparison.Ordinal) && redacted.Contains("[REDACTED]", StringComparison.Ordinal),
+        $"Token leaked in RedactSecrets: {redacted}");
+    string masked = MvsepCloudClient.MaskToken(secretToken);
+    Assert(!masked.Contains("secret_token", StringComparison.Ordinal) && masked.Contains("••••", StringComparison.Ordinal),
+        $"Token insufficiently masked: {masked}");
+
+    // 5. Cancellation support
+    using CancellationTokenSource cts = new();
+    cts.Cancel();
+    bool cancelled = false;
+    try {
+        client.SeparateTrackAsync("cancel_test", mixL, mixR, sr, preset, opts, token: cts.Token).GetAwaiter().GetResult();
+    } catch (OperationCanceledException) {
+        cancelled = true;
+    }
+    Assert(cancelled, "Expected OperationCanceledException when CancellationToken is already cancelled");
+});
+
+// =========================================================================
+// TEST 26 (Stage 3 T3): Pure Instrumental Routing, Studio Bundles & BS-RoFormer STFT
+// =========================================================================
+RunTest("T26_T3_PureInstrumental_StudioBundles_And_BsRoFormerHostStft", () => {
+    const int sr = 44100;
+    const int len = 44100; // 1.0 s
+    float[] leadL = new float[len], leadR = new float[len];
+    float[] backL = new float[len], backR = new float[len];
+    float[] instL = new float[len], instR = new float[len];
+    float[] mixL = new float[len], mixR = new float[len];
+    for (int i = 0; i < len; i++) {
+        double t = i / (double)sr;
+        leadL[i] = leadR[i] = 0.35f * MathF.Sin((float)(2 * Math.PI * 440.0 * t));
+        backL[i] = 0.20f * MathF.Sin((float)(2 * Math.PI * 660.0 * t));
+        backR[i] = 0.20f * MathF.Cos((float)(2 * Math.PI * 660.0 * t));
+        instL[i] = 0.28f * MathF.Sin((float)(2 * Math.PI * 190.0 * t));
+        instR[i] = 0.28f * MathF.Cos((float)(2 * Math.PI * 190.0 * t));
+        mixL[i] = leadL[i] + backL[i] + instL[i];
+        mixR[i] = leadR[i] + backR[i] + instR[i];
+    }
+
+    // 1. NeuralStemStageProcessor safety: 2-stem kara_2 track MUST NOT sum mix-complement backing_vocals into target
+    using (NeuralStemStageProcessor proc = new()) {
+        proc.Configure(sr, SpatialProgramMetadata.CreateDefault());
+        proc.SetSourceTrackSampleRate(sr);
+        float[] complementL = new float[len], complementR = new float[len];
+        for (int i = 0; i < len; i++) {
+            complementL[i] = backL[i] + instL[i];
+            complementR[i] = backR[i] + instR[i];
+        }
+        NeuralSeparatedTrack kara2Track = new() {
+            SourceTrackKey = "kara2_safety",
+            SampleRate = sr,
+            Stems = [
+                new StereoStemBuffer("lead_vocal", leadL, leadR),
+                new StereoStemBuffer("backing_vocals", complementL, complementR)
+            ]
+        };
+        proc.BindKaraokeReferenceTrack(kara2Track);
+        proc.ApplyConfig(new NeuralAudioConfig {
+            SpatialKaraokeEnabled = true,
+            KaraokeVocalLevel = 0f,
+            KaraokePreserveBackingVocals = false // Pure Instrumental toggle on 2-stem kara_2
+        });
+        float[][] bus = [(float[])mixL.Clone(), (float[])mixR.Clone()];
+        SpatialSourceDescriptor[] desc = [
+            new() { Index = 0, Layer = SourceLayer.Bed, NormalizedPosition = new Vector3(-0.7f, 0f, 0.7f) },
+            new() { Index = 1, Layer = SourceLayer.Bed, NormalizedPosition = new Vector3(0.7f, 0f, 0.7f) }
+        ];
+        for (int off = 0; off < len; off += 1024) {
+            int blk = Math.Min(1024, len - off);
+            float[][] slice = [new float[blk], new float[blk]];
+            Array.Copy(bus[0], off, slice[0], 0, blk);
+            Array.Copy(bus[1], off, slice[1], 0, blk);
+            proc.Process(new SpatialSceneFrame {
+                SampleRate = sr,
+                FrameCount = blk,
+                TrackSamplePosition = off,
+                SourceBuffers = slice,
+                ActiveSourceBufferCount = 2,
+                Sources = desc
+            });
+            Array.Copy(slice[0], 0, bus[0], off, blk);
+            Array.Copy(slice[1], 0, bus[1], off, blk);
+        }
+        // Verify instrument 190 Hz energy remained intact (phase-invariant complex DFT; proves kara_2 complement was NOT subtracted!)
+        double reIn = 0.0, imIn = 0.0, reOut = 0.0, imOut = 0.0;
+        for (int i = 4096; i < len; i++) {
+            double ang = 2.0 * Math.PI * 190.0 * i / sr;
+            double c = Math.Cos(ang), s = Math.Sin(ang);
+            reIn += mixL[i] * c; imIn += mixL[i] * s;
+            reOut += bus[0][i] * c; imOut += bus[0][i] * s;
+        }
+        double magIn = Math.Sqrt(reIn * reIn + imIn * imIn);
+        double magOut = Math.Sqrt(reOut * reOut + imOut * imOut);
+        double instDeltaDb = 20.0 * Math.Log10(Math.Max(1e-9, magOut) / Math.Max(1e-9, magIn));
+        Assert(Math.Abs(instDeltaDb) < 2.0, $"kara_2 mix-complement safety violated! Instrument 190 Hz shifted by {instDeltaDb:0.00} dB");
+    }
+
+    // 2. StudioKaraokeLeadBacking (2-stage cascade) + StudioFullBand6Stem (6-stem + vocal anchor)
+    using MockT3MultiModelRuntime mockRt = new();
+    NeuralPipelineOrchestrator orch = new(mockRt, mockRt);
+    NeuralAudioConfig bundle2Cfg = new() {
+        OrchestrationMode = NeuralOrchestrationMode.Auto,
+        StudioBundlePreset = NeuralEnsembleBundlePreset.StudioKaraokeLeadBacking,
+        OverlapFactor = 2,
+        EnableTta = false,
+        EnablePhaseFix = false,
+        EnforceEnergyConservation = true,
+        TrackCacheEnabled = false
+    };
+    NeuralExecutionPlan plan2 = orch.BuildPlan(NeuralPipelineGoal.SpatialKaraoke, bundle2Cfg);
+    Assert(plan2.Steps.Count == 2, $"Expected 2-stage StudioKaraokeLeadBacking plan, got {plan2.Steps.Count} steps");
+    (NeuralSeparatedTrack cascadeTrack, _, _) = orch.ExecuteTrackPipeline(
+        "t26_cascade", 0L, 0L, mixL, mixR, sr, NeuralPipelineGoal.SpatialKaraoke, bundle2Cfg, displayTitle: "Cascade Test");
+    Assert(cascadeTrack.Stems.Any(s => s.Name == "lead_vocal") &&
+           cascadeTrack.Stems.Any(s => s.Name == "backing_vocals") &&
+           cascadeTrack.Stems.Any(s => s.Name == "instrumental"),
+        "2-stage cascade must emit lead_vocal + backing_vocals + instrumental");
+
+    NeuralAudioConfig bundle6Cfg = new() {
+        OrchestrationMode = NeuralOrchestrationMode.Auto,
+        StudioBundlePreset = NeuralEnsembleBundlePreset.StudioFullBand6Stem,
+        OverlapFactor = 2,
+        EnableTta = false,
+        EnablePhaseFix = false,
+        EnforceEnergyConservation = true,
+        TrackCacheEnabled = false
+    };
+    NeuralExecutionPlan plan6 = orch.BuildPlan(NeuralPipelineGoal.StemSeparation, bundle6Cfg);
+    Assert(plan6.Steps.Count == 2, $"Expected 2-step StudioFullBand6Stem plan (6-stem + vocal anchor), got {plan6.Steps.Count}");
+    (NeuralSeparatedTrack sixTrack, _, _) = orch.ExecuteTrackPipeline(
+        "t26_6stem", 0L, 0L, mixL, mixR, sr, NeuralPipelineGoal.StemSeparation, bundle6Cfg);
+    Assert(sixTrack.Stems.Count >= 6, $"Expected >=6 stems from StudioFullBand6Stem, got {sixTrack.Stems.Count}");
+
+    // 3. BsRoFormerHostStft dual-tensor STFT -> RunMultiInput -> iSTFT roundtrip (>= 30 dB reconstruction, 0 NaN/Inf)
+    using MockBsRoFormerRuntime bsRt = new();
+    NeuralAudioConfig bsCfg = new() {
+        OverlapFactor = 2,
+        EnableTta = false,
+        EnablePhaseFix = false,
+        EnforceEnergyConservation = false
+    };
+    (StereoStemBuffer[] bsStems, _) = NeuralAudioOfflinePipeline.RunSeparation(
+        bsRt,
+        ["bs_roformer_sw_6stem_fp16.onnx"],
+        [["vocals"]],
+        [1f],
+        mixL, mixR, sr, bsCfg, chunkSamples: 32768);
+    Assert(bsStems.Length == 1 && bsStems[0].Length == len, "BsRoFormerHostStft did not return expected stem length");
+    Assert(bsRt.MultiInputCalls > 0, "BsRoFormerHostStft must dispatch through INeuralSession.RunMultiInput");
+    double sigE = 0.0, errE = 0.0;
+    for (int i = 2048; i < len - 2048; i++) {
+        float y = bsStems[0].Left[i];
+        Assert(float.IsFinite(y), $"Non-finite sample at {i} in BsRoFormerHostStft output");
+        sigE += (double)mixL[i] * mixL[i];
+        double d = mixL[i] - y;
+        errE += d * d;
+    }
+    double bsSnr = errE < 1e-18 ? 180.0 : 10.0 * Math.Log10(sigE / errE);
+    Assert(bsSnr >= 30.0, $"BsRoFormerHostStft identity STFT/iSTFT SNR must be >= 30 dB, got {bsSnr:0.0} dB");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
 }
-Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2 UNIT TESTS PASSED (0 failures).");
+Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2/T3 UNIT TESTS PASSED (0 failures).");
 return 0;
 
 // ---- Helpers for Test 4 & Test 6 ----
@@ -2020,6 +2363,147 @@ sealed class SyntheticClockRenderer : Renderer {
         TotalDecodedSamples += samples;
     }
 }
+
+sealed class MockMvsepHttpHandler(byte[] vocWav, byte[] instWav) : HttpMessageHandler {
+    public int PollCount;
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
+        cancellationToken.ThrowIfCancellationRequested();
+        string path = request.RequestUri?.AbsolutePath ?? "";
+        if (path.EndsWith("/app/algorithms", StringComparison.OrdinalIgnoreCase)) {
+            string json = "[{\"render_id\":40,\"name\":\"BS-RoFormer\"},{\"render_id\":63,\"name\":\"BS-RoFormer 6-Stem\"}]";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") });
+        }
+        if (path.EndsWith("/separation/create", StringComparison.OrdinalIgnoreCase)) {
+            string json = "{\"success\":true,\"data\":{\"hash\":\"mockhash_t25\"}}";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") });
+        }
+        if (path.EndsWith("/separation/get", StringComparison.OrdinalIgnoreCase)) {
+            int p = Interlocked.Increment(ref PollCount);
+            string json = p switch {
+                1 => "{\"status\":\"waiting\",\"data\":{\"current_order\":2}}",
+                2 => "{\"status\":\"processing\",\"data\":{\"current_order\":0}}",
+                _ => "{\"status\":\"done\",\"data\":{\"files\":[{\"type\":\"vocals\",\"url\":\"https://files.mvsep.com/vocals.wav\",\"download\":\"vocals.wav\"},{\"type\":\"instrum\",\"url\":\"https://files.mvsep.com/instrum.wav\",\"download\":\"instrum.wav\"}]}}"
+            };
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") });
+        }
+        if (path.EndsWith("/vocals.wav", StringComparison.OrdinalIgnoreCase)) {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(vocWav) });
+        }
+        if (path.EndsWith("/instrum.wav", StringComparison.OrdinalIgnoreCase)) {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(instWav) });
+        }
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+    }
+}
+
+sealed class MockT3MultiModelRuntime : INeuralInferenceRuntime, INeuralModelRegistry {
+    readonly string tempDir;
+    readonly NeuralModelCatalogEntry[] models;
+    readonly Dictionary<string, string> paths = new(StringComparer.OrdinalIgnoreCase);
+
+    public MockT3MultiModelRuntime() {
+        tempDir = Path.Combine(Path.GetTempPath(), $"cavern_t26_models_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        models = [
+            new NeuralModelCatalogEntry {
+                Id = "mock_vocals_2s",
+                DisplayName = "Mock Vocals 2S",
+                FileName = "mock_vocals_2s.onnx",
+                Task = NeuralModelTask.VocalSeparation,
+                ContractKind = NeuralOnnxContractKind.WaveformStereo,
+                ExpectedSampleRate = 44100,
+                RecommendedChunkSamples = 44100,
+                OutputStemNames = ["vocals", "instrumental"]
+            },
+            new NeuralModelCatalogEntry {
+                Id = "mock_karaoke_2s",
+                DisplayName = "Mock Karaoke Lead/Back",
+                FileName = "mock_karaoke_2s.onnx",
+                Task = NeuralModelTask.KaraokeLeadBacking,
+                ContractKind = NeuralOnnxContractKind.WaveformStereo,
+                ExpectedSampleRate = 44100,
+                RecommendedChunkSamples = 44100,
+                OutputStemNames = ["lead_vocal", "backing_vocals"]
+            },
+            new NeuralModelCatalogEntry {
+                Id = "mock_6stem",
+                DisplayName = "Mock Full-Band 6S",
+                FileName = "mock_6stem.onnx",
+                Task = NeuralModelTask.StemSeparation6,
+                ContractKind = NeuralOnnxContractKind.WaveformStereo,
+                ExpectedSampleRate = 44100,
+                RecommendedChunkSamples = 44100,
+                OutputStemNames = ["drums", "bass", "other", "vocals", "guitar", "piano"]
+            }
+        ];
+        foreach (NeuralModelCatalogEntry m in models) {
+            string p = Path.Combine(tempDir, m.FileName);
+            File.WriteAllBytes(p, [0x08, 0x08]);
+            paths[m.Id] = p;
+        }
+    }
+
+    public NeuralRuntimeInfo GetRuntimeInfo() => new() { IsAvailable = true, ActiveProvider = "CPU" };
+    public IReadOnlyList<NeuralModelCatalogEntry> GetAllRegisteredModels() => models;
+    public IReadOnlyList<NeuralModelCatalogEntry> GetInstalledModels() => models;
+    public string ResolveInstalledModelPath(string modelId) => paths.TryGetValue(modelId ?? "", out string p) ? p : null;
+    public INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 0) => new MockWaveSession(modelPath);
+    public void Dispose() {
+        try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
+    }
+
+    sealed class MockWaveSession(string path) : INeuralSession {
+        public string ModelPath => path;
+        public string ExecutionProvider => "CPU";
+        public IReadOnlyList<string> InputNames => ["input"];
+        public IReadOnlyList<long[]> InputShapes => [[1L, 2L, -1L]];
+        public IReadOnlyList<string> OutputNames => ["output"];
+        public NeuralTensorFloat[] RunSingleInput(NeuralTensorFloat inputTensor) {
+            int n = (int)inputTensor.Shape[2];
+            float[] inp = inputTensor.Data;
+            int stems = path.Contains("6stem", StringComparison.OrdinalIgnoreCase) ? 6 : 2;
+            float[] outData = new float[stems * 2 * n];
+            float scale = 1f / stems;
+            for (int s = 0; s < stems; s++) {
+                int baseIdx = s * 2 * n;
+                for (int i = 0; i < n; i++) {
+                    outData[baseIdx + i] = inp[i] * scale;
+                    outData[baseIdx + n + i] = inp[n + i] * scale;
+                }
+            }
+            return [new NeuralTensorFloat([1L, stems, 2L, n], outData)];
+        }
+        public void Dispose() { }
+    }
+}
+
+sealed class MockBsRoFormerRuntime : INeuralInferenceRuntime {
+    public int MultiInputCalls;
+    public NeuralRuntimeInfo GetRuntimeInfo() => new() { IsAvailable = true, ActiveProvider = "WebGPU FP16" };
+    public string ResolveInstalledModelPath(string modelId) => modelId + ".onnx";
+    public INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 0) => new MockBsSession(this, modelPath);
+    public void Dispose() { }
+
+    sealed class MockBsSession(MockBsRoFormerRuntime owner, string path) : INeuralSession {
+        public string ModelPath => path;
+        public string ExecutionProvider => "WebGPU FP16";
+        public IReadOnlyList<string> InputNames => ["spec_real", "spec_imag"];
+        public IReadOnlyList<long[]> InputShapes => [[1L, 2L, 1025L, -1L], [1L, 2L, 1025L, -1L]];
+        public IReadOnlyList<string> OutputNames => ["out_spec_real", "out_spec_imag"];
+        public NeuralTensorFloat[] RunSingleInput(NeuralTensorFloat inputTensor) => [inputTensor];
+        public NeuralTensorFloat[] RunMultiInput(IReadOnlyDictionary<string, NeuralTensorFloat> inputs) {
+            Interlocked.Increment(ref owner.MultiInputCalls);
+            NeuralTensorFloat srT = inputs["spec_real"];
+            NeuralTensorFloat siT = inputs["spec_imag"];
+            return [
+                new NeuralTensorFloat((long[])srT.Shape.Clone(), (float[])srT.Data.Clone()),
+                new NeuralTensorFloat((long[])siT.Shape.Clone(), (float[])siT.Data.Clone())
+            ];
+        }
+        public void Dispose() { }
+    }
+}
 """
 
 
@@ -2047,13 +2531,18 @@ def _py_studio_export_lifecycle_check() -> None:
 
 
 def _py_spatial_choreo_cntc_and_mood_check() -> None:
+    codec_cs = REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "NeuralTrackCacheCodec.cs"
     cache_cs = REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NeuralTrackCacheService.cs"
     lyrics_cs = REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "LyricsService.cs"
     cortex_cs = REPO_ROOT / "Cavern" / "Spatial" / "SpatialObjectCortex.cs"
 
+    codec_src = codec_cs.read_text(encoding="utf-8")
+    for token in ("FormatVersion = 3", "MinSupportedVersion = 1", "FlagHasChoreoTrack = 1u << 4", "ver >= 2 && (flags & FlagHasChoreoTrack) != 0"):
+        assert token in codec_src, f"Missing CNTC v1/v2/v3 contract token in NeuralTrackCacheCodec.cs: {token}"
+
     cache_src = cache_cs.read_text(encoding="utf-8")
-    for token in ("FormatVersion = 2", "MinSupportedVersion = 1", "FlagHasChoreoTrack = 1u << 4", "ver >= 2 && (flags & FlagHasChoreoTrack) != 0"):
-        assert token in cache_src, f"Missing CNTC v1/v2 contract token: {token}"
+    for token in ("NeuralTrackCacheCodec.WriteTrackFile", "NeuralTrackCacheCodec.ReadTrackFile", "NeuralTrackCacheCodec.PeekHeader"):
+        assert token in cache_src, f"NeuralTrackCacheService.cs must delegate to {token}"
 
     lyrics_src = lyrics_cs.read_text(encoding="utf-8")
     assert "public static LyricMoodDigest[] ExtractMoodDigest(LyricsDocument doc)" in lyrics_src, (
@@ -2092,10 +2581,33 @@ def _py_stage2_runtime_stability_contracts() -> None:
     assert "(vsyncSampled && dropped >= 4)" in audit_src, "SelfAudit must gate dropped>=4 SLOW check on vsyncSampled"
 
 
+def _py_stage3_audio_ai_mvsep_cntc_contracts() -> None:
+    settings_neural = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.Neural.cs").read_text(encoding="utf-8")
+    for tok in ("ShowMvsepCloudConfigModal", "ShowNeuralTrackCacheBrowserModal", "neuralExecBackendSelector", "neuralStudioBundleSelector", "neuralTrackCacheEnabledSwitch"):
+        assert tok in settings_neural, f"Missing {tok} in MainActivity.Settings.Neural.cs"
+
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    for tok in ("CanUseMvsepCloud", "TogglePureInstrumentalMode", "DecodeTempStemBytesWithFfmpeg", "MvsepCloudClient"):
+        assert tok in wf_src, f"Missing {tok} in MainActivity.NeuralWorkflows.cs"
+
+    studio_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.StudioExport.cs").read_text(encoding="utf-8")
+    for tok in ("studioBundleSelector", "studioOptRemoveBackingSwitch", "StudioTagPureInstrFmt"):
+        assert tok in studio_src, f"Missing {tok} in MainActivity.StudioExport.cs"
+
+    pm_core = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.Core.cs").read_text(encoding="utf-8")
+    for tok in ("musicLyricsPureInstrBtn", "TogglePureInstrumentalMode"):
+        assert tok in pm_core, f"Missing {tok} in MainActivity.PlayerMusic.Core.cs"
+
+    np_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.NowPlaying.cs").read_text(encoding="utf-8")
+    for tok in ("musicLyricsPureInstrBtn", "SingDockPureInstrChip", "SingDockKeepBackingChip"):
+        assert tok in np_src, f"Missing {tok} in MainActivity.PlayerMusic.NowPlaying.cs"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
     ("PY_T2_Stage2_RuntimeStabilityAndLibraryContracts", _py_stage2_runtime_stability_contracts),
+    ("PY_T3_Stage3_AudioAi_Mvsep_CntcV3_Contracts", _py_stage3_audio_ai_mvsep_cntc_contracts),
 ]
 
 

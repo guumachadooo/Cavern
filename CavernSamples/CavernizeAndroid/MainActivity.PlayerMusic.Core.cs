@@ -237,7 +237,7 @@ public partial class MainActivity {
     OneUiIconView musicLyricsSingMicIcon;
     TextView musicLyricsSingPctText;
     OneUiSeekBar musicLyricsVocalSeekBar;
-    Button musicLyricsKaraokeBtn, musicLyricsLiveMicBtn, musicLyricsMicSourceBtn, musicLyricsAiPrepBtn, musicLyricsMixMatchBtn, musicLyricsVocalAbBtn, musicLyricsScarlettBtn;
+    Button musicLyricsKaraokeBtn, musicLyricsPureInstrBtn, musicLyricsLiveMicBtn, musicLyricsMicSourceBtn, musicLyricsAiPrepBtn, musicLyricsMixMatchBtn, musicLyricsVocalAbBtn, musicLyricsScarlettBtn;
     TextView musicLyricsAiStatusText;
 
     // Apple Music Title Row
@@ -544,6 +544,12 @@ public partial class MainActivity {
         musicLyricsKaraokeBtn = MakeSingDockChip(S["SingDockKaraokeChip"], () =>
             ApplyLyricsSingVocalLevel(store.SpatialKaraokeEnabled ? 100 : 20));
         singChipsRow.AddView(musicLyricsKaraokeBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+
+        musicLyricsPureInstrBtn = MakeSingDockChip(
+            store.KaraokePreserveBackingVocals ? S["SingDockKeepBackingChip"] : S["SingDockPureInstrChip"],
+            () => TogglePureInstrumentalMode(fromSingDock: true),
+            active: !store.KaraokePreserveBackingVocals);
+        singChipsRow.AddView(musicLyricsPureInstrBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
 
         musicLyricsLiveMicBtn = MakeSingDockChip(S["SingDockLiveMicChip"], () => {
             bool next = !store.LiveMicEnabled;

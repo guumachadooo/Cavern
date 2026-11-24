@@ -250,9 +250,10 @@ public partial class MainActivity {
         bool hasDna = playerEngine?.VocalMixMatchStage?.ActiveDna?.IsExtractedFromSong == true;
         bool hasVp = playerEngine?.VocalMixMatchStage?.HasMicVoiceprint == true;
         bool hasNeuralLead = playerEngine?.NeuralStage?.HasIsolatedNeuralVocalReference == true;
+        bool preserveBacking = store.KaraokePreserveBackingVocals;
         bool prepRunning = isNeuralPrepRunning;
 
-        string sig = $"{isLyricsSingDockExpanded}|{pct}|{micEnabled}|{micSrc}|{dryBypass}|{karaokeOn}|{hasUsb}|{hasDna}|{hasVp}|{hasNeuralLead}|{prepRunning}";
+        string sig = $"{isLyricsSingDockExpanded}|{pct}|{micEnabled}|{micSrc}|{dryBypass}|{karaokeOn}|{preserveBacking}|{hasUsb}|{hasDna}|{hasVp}|{hasNeuralLead}|{prepRunning}";
         if (string.Equals(lastLyricsSingDockSig, sig, StringComparison.Ordinal)) {
             return;
         }
@@ -302,6 +303,13 @@ public partial class MainActivity {
             musicLyricsKaraokeBtn.Text = S["SingDockKaraokeChip"];
             musicLyricsKaraokeBtn.Background = karaokeOn
                 ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.Primary, 86), 99f, OneUiTheme.WithAlpha(OneUiTheme.PrimaryHigh, 185), 1f)
+                : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f);
+        }
+        if (musicLyricsPureInstrBtn != null) {
+            bool pureInstr = !preserveBacking;
+            musicLyricsPureInstrBtn.Text = pureInstr ? S["SingDockPureInstrChip"] : S["SingDockKeepBackingChip"];
+            musicLyricsPureInstrBtn.Background = pureInstr
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconAtmosUpmix, 96), 99f, OneUiTheme.WithAlpha(OneUiTheme.IconAtmosUpmix, 200), 1f)
                 : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f);
         }
         if (musicLyricsLiveMicBtn != null) {

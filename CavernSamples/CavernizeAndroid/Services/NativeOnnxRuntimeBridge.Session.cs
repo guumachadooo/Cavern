@@ -59,6 +59,11 @@ public sealed partial class NativeOnnxRuntimeBridge {
             Dictionary<string, NeuralTensorFloat> inputs = new(1, StringComparer.Ordinal) {
                 [inputNames[0]] = inputTensor
             };
+            return RunMultiInput(inputs);
+        }
+
+        public NeuralTensorFloat[] RunMultiInput(IReadOnlyDictionary<string, NeuralTensorFloat> inputs) {
+            ArgumentNullException.ThrowIfNull(inputs);
             IReadOnlyDictionary<string, NeuralTensorFloat> outputs = Run(inputs);
             NeuralTensorFloat[] ordered = new NeuralTensorFloat[outputNames.Length];
             for (int o = 0; o < outputNames.Length; o++) {

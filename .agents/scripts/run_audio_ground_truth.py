@@ -1183,6 +1183,133 @@ RunSuite("spatial-cortex-rt", "SpatialCortex_3DGeodesicADM_ZeroAlloc_BassXCorr_A
     }
 });
 
+// =========================================================================
+// GT-11: Pure Instrumental (Remove Backing Vocals) vs Keep Backing Ground Truth
+// =========================================================================
+RunSuite("GT-11", "PureInstrumental_LeadAndBackingRemoval_ZeroInstrumentDamage", () => {
+    const int sr = 48000;
+    const int len = sr * 2; // 2.0 s
+    float[] leadL = new float[len], leadR = new float[len];
+    float[] backL = new float[len], backR = new float[len];
+    float[] instL = new float[len], instR = new float[len];
+    float[] vocAllL = new float[len], vocAllR = new float[len];
+    float[] mixL = new float[len], mixR = new float[len];
+
+    for (int i = 0; i < len; i++) {
+        double t = i / (double)sr;
+        leadL[i] = leadR[i] = 0.28f * MathF.Sin((float)(2 * Math.PI * 440.0 * t)) + 0.10f * MathF.Sin((float)(2 * Math.PI * 880.0 * t));
+        backL[i] = 0.20f * MathF.Sin((float)(2 * Math.PI * 660.0 * t)) + 0.08f * MathF.Sin((float)(2 * Math.PI * 990.0 * t));
+        backR[i] = 0.20f * MathF.Cos((float)(2 * Math.PI * 660.0 * t)) + 0.08f * MathF.Cos((float)(2 * Math.PI * 990.0 * t));
+        instL[i] = 0.24f * MathF.Sin((float)(2 * Math.PI * 185.0 * t)) + 0.14f * MathF.Sin((float)(2 * Math.PI * 1180.0 * t));
+        instR[i] = 0.24f * MathF.Cos((float)(2 * Math.PI * 185.0 * t)) + 0.14f * MathF.Sin((float)(2 * Math.PI * 1640.0 * t));
+        vocAllL[i] = leadL[i] + backL[i];
+        vocAllR[i] = leadR[i] + backR[i];
+        mixL[i] = vocAllL[i] + instL[i];
+        mixR[i] = vocAllR[i] + instR[i];
+    }
+
+    NeuralSeparatedTrack track = new() {
+        SourceTrackKey = "gt11_pure_instrumental",
+        SampleRate = sr,
+        Stems = [
+            new StereoStemBuffer("lead_vocal", leadL, leadR),
+            new StereoStemBuffer("backing_vocals", backL, backR),
+            new StereoStemBuffer("vocals", vocAllL, vocAllR),
+            new StereoStemBuffer("instrumental", instL, instR)
+        ]
+    };
+
+    static (float[] OutL, float[] OutR, int NonFinite, int Clips) RunMode(NeuralSeparatedTrack trk, float[] mL, float[] mR, bool preserveBacking) {
+        using NeuralStemStageProcessor proc = new();
+        proc.Configure(sr, SpatialProgramMetadata.CreateDefault());
+        proc.BindKaraokeReferenceTrack(trk);
+        proc.ApplyConfig(new NeuralAudioConfig {
+            SpatialKaraokeEnabled = true,
+            KaraokeVocalLevel = 0f,
+            KaraokePreserveBackingVocals = preserveBacking
+        });
+        float[] oL = (float[])mL.Clone();
+        float[] oR = (float[])mR.Clone();
+        SpatialSourceDescriptor[] desc = [
+            new() { Index = 0, Layer = SourceLayer.Bed, NormalizedPosition = new Vector3(-0.7f, 0f, 0.7f) },
+            new() { Index = 1, Layer = SourceLayer.Bed, NormalizedPosition = new Vector3(0.7f, 0f, 0.7f) }
+        ];
+        for (int off = 0; off < mL.Length; off += 1024) {
+            int blk = Math.Min(1024, mL.Length - off);
+            float[][] slice = [new float[blk], new float[blk]];
+            Array.Copy(oL, off, slice[0], 0, blk);
+            Array.Copy(oR, off, slice[1], 0, blk);
+            proc.Process(new SpatialSceneFrame {
+                SampleRate = sr,
+                FrameCount = blk,
+                TrackSamplePosition = off,
+                SourceBuffers = slice,
+                ActiveSourceBufferCount = 2,
+                Sources = desc
+            });
+            Array.Copy(slice[0], 0, oL, off, blk);
+            Array.Copy(slice[1], 0, oR, off, blk);
+        }
+        int nonFin = 0, clips = 0;
+        for (int i = 0; i < oL.Length; i++) {
+            if (!float.IsFinite(oL[i]) || !float.IsFinite(oR[i])) nonFin++;
+            if (MathF.Abs(oL[i]) > 1.0f || MathF.Abs(oR[i]) > 1.0f) clips++;
+        }
+        return (oL, oR, nonFin, clips);
+    }
+
+    static double MeasureToneDb(float[] buf, double freqHz, int startIdx) {
+        double re = 0.0, im = 0.0;
+        int n = buf.Length - startIdx;
+        for (int i = startIdx; i < buf.Length; i++) {
+            double ang = 2.0 * Math.PI * freqHz * i / sr;
+            re += buf[i] * Math.Cos(ang);
+            im += buf[i] * Math.Sin(ang);
+        }
+        double mag = 2.0 * Math.Sqrt(re * re + im * im) / n;
+        return 20.0 * Math.Log10(Math.Max(1e-9, mag));
+    }
+
+    const int settle = 8192;
+    double refLeadDb = MeasureToneDb(mixL, 440.0, settle);
+    double refBackDb = MeasureToneDb(mixL, 660.0, settle);
+    double refInstDb = MeasureToneDb(mixL, 185.0, settle);
+    double refInstHiDb = MeasureToneDb(mixL, 1180.0, settle);
+
+    var (keepL, _, nfKeep, clKeep) = RunMode(track, mixL, mixR, preserveBacking: true);
+    var (pureL, _, nfPure, clPure) = RunMode(track, mixL, mixR, preserveBacking: false);
+
+    Assert(nfKeep == 0 && clKeep == 0 && nfPure == 0 && clPure == 0, $"Non-finite or clips detected: keep=({nfKeep},{clKeep}) pure=({nfPure},{clPure})");
+
+    double keepLeadAttenDb = refLeadDb - MeasureToneDb(keepL, 440.0, settle);
+    double keepBackDeltaDb = Math.Abs(MeasureToneDb(keepL, 660.0, settle) - refBackDb);
+    double keepInstDeltaDb = Math.Abs(MeasureToneDb(keepL, 185.0, settle) - refInstDb);
+
+    double pureLeadAttenDb = refLeadDb - MeasureToneDb(pureL, 440.0, settle);
+    double pureBackAttenDb = refBackDb - MeasureToneDb(pureL, 660.0, settle);
+    double pureInstDeltaDb = Math.Abs(MeasureToneDb(pureL, 185.0, settle) - refInstDb);
+    double pureInstHiDeltaDb = Math.Abs(MeasureToneDb(pureL, 1180.0, settle) - refInstHiDb);
+
+    Assert(keepLeadAttenDb >= 20.0, $"KeepBacking must attenuate lead >= 20 dB, got {keepLeadAttenDb:0.2} dB");
+    Assert(keepBackDeltaDb <= 1.5, $"KeepBacking must preserve backing <= 1.5 dB delta, got {keepBackDeltaDb:0.2} dB");
+    Assert(keepInstDeltaDb <= 1.2, $"KeepBacking must preserve instruments <= 1.2 dB delta, got {keepInstDeltaDb:0.2} dB");
+
+    Assert(pureLeadAttenDb >= 20.0, $"PureInstrumental must attenuate lead >= 20 dB, got {pureLeadAttenDb:0.2} dB");
+    Assert(pureBackAttenDb >= 20.0, $"PureInstrumental must attenuate backing >= 20 dB, got {pureBackAttenDb:0.2} dB");
+    Assert(pureInstDeltaDb <= 1.2 && pureInstHiDeltaDb <= 1.2,
+        $"PureInstrumental damaged instruments: 185Hz={pureInstDeltaDb:0.2} dB, 1180Hz={pureInstHiDeltaDb:0.2} dB");
+
+    return new Dictionary<string, object> {
+        ["keepLeadAttenDb"] = Math.Round(keepLeadAttenDb, 2),
+        ["keepBackingDeltaDb"] = Math.Round(keepBackDeltaDb, 2),
+        ["keepInstDeltaDb"] = Math.Round(keepInstDeltaDb, 2),
+        ["pureLeadAttenDb"] = Math.Round(pureLeadAttenDb, 2),
+        ["pureBackingAttenDb"] = Math.Round(pureBackAttenDb, 2),
+        ["pureInstLowDeltaDb"] = Math.Round(pureInstDeltaDb, 2),
+        ["pureInstHiDeltaDb"] = Math.Round(pureInstHiDeltaDb, 2)
+    };
+});
+
 if (!string.IsNullOrEmpty(jsonOutPath)) {
     File.WriteAllText(jsonOutPath, JsonSerializer.Serialize(new { passed, failed, results }, new JsonSerializerOptions { WriteIndented = true }));
 }

@@ -67,6 +67,17 @@ public interface INeuralSession : IDisposable {
 
     /// <summary>Executes synchronous inference on the primary input tensor and returns all output tensors.</summary>
     NeuralTensorFloat[] RunSingleInput(NeuralTensorFloat inputTensor);
+
+    /// <summary>Executes synchronous inference on multiple named input tensors (e.g. <c>spec_real</c>/<c>spec_imag</c> for BS-RoFormer) and returns ordered output tensors.</summary>
+    NeuralTensorFloat[] RunMultiInput(IReadOnlyDictionary<string, NeuralTensorFloat> inputs) {
+        if (inputs == null || inputs.Count == 0) {
+            return Array.Empty<NeuralTensorFloat>();
+        }
+        foreach (NeuralTensorFloat t in inputs.Values) {
+            return RunSingleInput(t);
+        }
+        return Array.Empty<NeuralTensorFloat>();
+    }
 }
 
 /// <summary>
@@ -573,6 +584,8 @@ public static class NeuralAudioOfflinePipeline {
                     (catalogEntry.StftDimT - 1) * catalogEntry.StftHopSize,
                 NeuralOnnxContractKind.ScnetStft4Ch when catalogEntry.StftDimT > 0 && catalogEntry.StftHopSize > 0 =>
                     (catalogEntry.StftDimT - 1) * catalogEntry.StftHopSize,
+                NeuralOnnxContractKind.BsRoFormerHostStft when catalogEntry.RecommendedChunkSamples >= 4096 =>
+                    catalogEntry.RecommendedChunkSamples,
                 NeuralOnnxContractKind.WaveformStereo when session?.InputShapes != null && session.InputShapes.Count > 0 =>
                     ResolveFixedWaveformLength(session.InputShapes[0]),
                 _ => 0
@@ -590,7 +603,25 @@ public static class NeuralAudioOfflinePipeline {
         }
 
         string in0 = session?.InputNames != null && session.InputNames.Count > 0 ? (session.InputNames[0] ?? "") : "";
+        string in1 = session?.InputNames != null && session.InputNames.Count > 1 ? (session.InputNames[1] ?? "") : "";
         long[] s0 = session?.InputShapes != null && session.InputShapes.Count > 0 ? session.InputShapes[0] : null;
+
+        if ((string.Equals(in0, "spec_real", StringComparison.OrdinalIgnoreCase) &&
+             string.Equals(in1, "spec_imag", StringComparison.OrdinalIgnoreCase)) ||
+            (session?.InputNames != null && session.InputNames.Count >= 2 && s0 != null && s0.Length == 4 && s0[1] == 2 && s0[2] == 1025)) {
+            int dimT = s0 != null && s0.Length == 4 && s0[3] > 0 ? (int)s0[3] : 345;
+            int hop = dimT >= 750 ? 441 : 512;
+            int fixedChunk = dimT >= 750 ? 352800 : 176400;
+            return new ResolvedModelContract {
+                Kind = NeuralOnnxContractKind.BsRoFormerHostStft,
+                FftSize = 2048,
+                HopSize = hop,
+                DimF = 1025,
+                DimT = dimT,
+                Compensate = 1f,
+                FixedChunkSamples = fixedChunk
+            };
+        }
 
         if (string.Equals(in0, "stft_features", StringComparison.OrdinalIgnoreCase) ||
             (s0 != null && s0.Length == 3 && s0[2] == 4100)) {
@@ -648,6 +679,7 @@ public static class NeuralAudioOfflinePipeline {
     internal sealed class PreparedNeuralChunk {
         public ResolvedModelContract Contract { get; init; }
         public NeuralTensorFloat InputTensor { get; init; }
+        public IReadOnlyDictionary<string, NeuralTensorFloat> NamedInputs { get; init; }
         public int SafeChunkSamples { get; init; }
         public int NFft { get; init; }
         public int Hop { get; init; }
@@ -700,16 +732,23 @@ public static class NeuralAudioOfflinePipeline {
             NeuralOnnxContractKind.ScnetStft4Ch => PrepareScnetStftChunk(chunkLeft, chunkRight, safeChunk, contract),
             NeuralOnnxContractKind.MdxNetStft4Ch => PrepareMdxNetStftChunk(chunkLeft, chunkRight, safeChunk, contract),
             NeuralOnnxContractKind.MelBandRoFormerHostStft => PrepareMelBandRoFormerHostStftChunk(chunkLeft, chunkRight, safeChunk, contract),
+            NeuralOnnxContractKind.BsRoFormerHostStft => PrepareBsRoFormerHostStftChunk(session, chunkLeft, chunkRight, safeChunk, contract),
             NeuralOnnxContractKind.FlashSr16kTo48k => PrepareFlashSrChunk(chunkLeft, chunkRight, safeChunk, contract),
             _ => PrepareWaveformStereoChunk(chunkLeft, chunkRight, safeChunk, contract)
         };
     }
 
     /// <summary>
-    /// Stage 2 (GPU/ONNX Inference): dispatches <see cref="INeuralSession.RunSingleInput"/> on the prepared tensor.
+    /// Stage 2 (GPU/ONNX Inference): dispatches <see cref="INeuralSession.RunSingleInput"/> or <see cref="INeuralSession.RunMultiInput"/> on the prepared tensor(s).
     /// </summary>
     internal static NeuralTensorFloat[] InferPreparedChunk(INeuralSession session, PreparedNeuralChunk prepared) {
-        if (session == null || prepared == null || prepared.PassthroughEmpty || prepared.InputTensor == null) {
+        if (session == null || prepared == null || prepared.PassthroughEmpty) {
+            return Array.Empty<NeuralTensorFloat>();
+        }
+        if (prepared.NamedInputs != null && prepared.NamedInputs.Count > 0) {
+            return session.RunMultiInput(prepared.NamedInputs);
+        }
+        if (prepared.InputTensor == null) {
             return Array.Empty<NeuralTensorFloat>();
         }
         return session.RunSingleInput(prepared.InputTensor);
@@ -735,6 +774,7 @@ public static class NeuralAudioOfflinePipeline {
             NeuralOnnxContractKind.ScnetStft4Ch => FinalizeScnetStftChunk(prepared, outputs, safeChunk, expectedStemNames),
             NeuralOnnxContractKind.MdxNetStft4Ch => FinalizeMdxNetStftChunk(prepared, outputs, safeChunk, expectedStemNames),
             NeuralOnnxContractKind.MelBandRoFormerHostStft => FinalizeMelBandRoFormerHostStftChunk(prepared, outputs, safeChunk, expectedStemNames),
+            NeuralOnnxContractKind.BsRoFormerHostStft => FinalizeBsRoFormerHostStftChunk(prepared, outputs, safeChunk, expectedStemNames),
             NeuralOnnxContractKind.FlashSr16kTo48k => FinalizeFlashSrChunk(prepared, outputs, safeChunk, expectedStemNames),
             _ => FinalizeWaveformStereoChunk(outputs, safeChunk, expectedStemNames)
         };
@@ -1190,6 +1230,111 @@ public static class NeuralAudioOfflinePipeline {
             ];
         }
         return [new StereoStemBuffer(ResolveStemName(expectedStemNames, 0), leadL, leadR)];
+    }
+
+    static PreparedNeuralChunk PrepareBsRoFormerHostStftChunk(
+        INeuralSession session,
+        float[] chunkLeft,
+        float[] chunkRight,
+        int chunkSamples,
+        ResolvedModelContract contract) {
+        int nFft = contract.FftSize > 0 ? contract.FftSize : 2048;
+        int hop = contract.HopSize > 0 ? contract.HopSize : 512;
+        int bins = contract.DimF > 0 ? contract.DimF : (nFft / 2 + 1);
+        int fixedChunk = contract.FixedChunkSamples > 0 ? contract.FixedChunkSamples : chunkSamples;
+
+        float[] srcL = chunkLeft;
+        float[] srcR = chunkRight;
+        if (chunkSamples != fixedChunk) {
+            srcL = new float[fixedChunk];
+            srcR = new float[fixedChunk];
+            int copy = Math.Min(chunkSamples, fixedChunk);
+            Array.Copy(chunkLeft, srcL, copy);
+            Array.Copy(chunkRight, srcR, copy);
+        }
+
+        int computedFrames = MixedRadixFft.ComputeComplexStft(srcL, nFft, hop, bins, out float[] lRe, out float[] lIm);
+        MixedRadixFft.ComputeComplexStft(srcR, nFft, hop, bins, out float[] rRe, out float[] rIm);
+
+        int dimT = contract.DimT > 0 ? contract.DimT : computedFrames;
+        int copyFrames = Math.Min(computedFrames, dimT);
+        int plane = bins * dimT;
+        float[] specReal = new float[2 * plane];
+        float[] specImag = new float[2 * plane];
+
+        for (int b = 0; b < bins; b++) {
+            int srcRow = b * computedFrames;
+            int dstRow = b * dimT;
+            for (int f = 0; f < copyFrames; f++) {
+                specReal[dstRow + f] = lRe[srcRow + f];
+                specImag[dstRow + f] = lIm[srcRow + f];
+                specReal[plane + dstRow + f] = rRe[srcRow + f];
+                specImag[plane + dstRow + f] = rIm[srcRow + f];
+            }
+        }
+
+        string realName = session?.InputNames != null && session.InputNames.Count >= 1 && !string.IsNullOrWhiteSpace(session.InputNames[0])
+            ? session.InputNames[0]
+            : "spec_real";
+        string imagName = session?.InputNames != null && session.InputNames.Count >= 2 && !string.IsNullOrWhiteSpace(session.InputNames[1])
+            ? session.InputNames[1]
+            : "spec_imag";
+
+        Dictionary<string, NeuralTensorFloat> named = new(2, StringComparer.Ordinal) {
+            [realName] = new NeuralTensorFloat([1L, 2L, bins, dimT], specReal),
+            [imagName] = new NeuralTensorFloat([1L, 2L, bins, dimT], specImag)
+        };
+
+        return new PreparedNeuralChunk {
+            Contract = contract,
+            SafeChunkSamples = chunkSamples,
+            NFft = nFft,
+            Hop = hop,
+            DimF = bins,
+            DimT = dimT,
+            Frames = dimT,
+            NamedInputs = named
+        };
+    }
+
+    static StereoStemBuffer[] FinalizeBsRoFormerHostStftChunk(
+        PreparedNeuralChunk prepared,
+        NeuralTensorFloat[] outputs,
+        int chunkSamples,
+        string[] expectedStemNames) {
+        if (outputs == null || outputs.Length < 2 || outputs[0]?.Data == null || outputs[1]?.Data == null) {
+            return Array.Empty<StereoStemBuffer>();
+        }
+
+        NeuralTensorFloat tRe = outputs[0];
+        NeuralTensorFloat tIm = outputs[1];
+        long[] sShape = tRe.Shape ?? Array.Empty<long>();
+        int nFft = prepared.NFft > 0 ? prepared.NFft : 2048;
+        int hop = prepared.Hop > 0 ? prepared.Hop : 512;
+        int stemCount = sShape.Length == 5 ? (int)sShape[1] : Math.Max(1, expectedStemNames?.Length ?? 4);
+        int channels = sShape.Length == 5 ? (int)sShape[2] : 2;
+        int outBins = sShape.Length == 5 ? (int)sShape[3] : prepared.DimF;
+        int outFrames = sShape.Length == 5 ? (int)sShape[4] : prepared.DimT;
+
+        if (stemCount <= 0 || channels < 2 || outBins <= 0 || outFrames <= 0) {
+            throw new InvalidDataException($"Unexpected BS-RoFormer STFT output shape [{string.Join(",", sShape)}].");
+        }
+        long planeLong = (long)outBins * outFrames;
+        long totalNeeded = (long)stemCount * channels * planeLong;
+        if (tRe.Data.Length < totalNeeded || tIm.Data.Length < totalNeeded) {
+            throw new InvalidDataException($"BS-RoFormer STFT output underflow: expected {totalNeeded} floats per real/imag tensor.");
+        }
+        int plane = (int)planeLong;
+        StereoStemBuffer[] stems = new StereoStemBuffer[stemCount];
+
+        for (int s = 0; s < stemCount; s++) {
+            int baseL = s * channels * plane;
+            int baseR = baseL + plane;
+            float[] outL = MixedRadixFft.ComputeComplexIstft(tRe.Data, baseL, tIm.Data, baseL, outFrames, nFft, hop, outBins, chunkSamples);
+            float[] outR = MixedRadixFft.ComputeComplexIstft(tRe.Data, baseR, tIm.Data, baseR, outFrames, nFft, hop, outBins, chunkSamples);
+            stems[s] = new StereoStemBuffer(ResolveStemName(expectedStemNames, s), outL, outR);
+        }
+        return stems;
     }
 
     static PreparedNeuralChunk PrepareFlashSrChunk(

@@ -78,6 +78,33 @@ public partial class MainActivity {
             BottomMargin = Dp(6)
         });
 
+        neuralExecBackendSelector = new OneUiInlineSelector(this, S["NeuralExecBackendTitle"]);
+        string[] backendLabels = [
+            S["NeuralExecBackendOnDevice"],
+            S["NeuralExecBackendMvsep"],
+            S["NeuralExecBackendAutoHybrid"]
+        ];
+        neuralExecBackendSelector.SetItems(backendLabels, Math.Clamp(store.NeuralExecutionBackendIndex, 0, backendLabels.Length - 1));
+        neuralExecBackendSelector.SelectionChanged += pos => {
+            store.NeuralExecutionBackendIndex = pos;
+            ApplyAndRefreshNeuralAudio();
+            if (pos != 0 && string.IsNullOrWhiteSpace(store.MvsepApiToken)) {
+                ShowMvsepCloudConfigModal();
+            }
+        };
+        slot2bCard.AddView(WrapControlWithHelp(neuralExecBackendSelector, S["NeuralExecBackendTitle"], S["TipNeuralExecBackend"], bottomMarginDp: 4));
+
+        mvsepStatusText = Label("", 11.4f, OneUiTheme.TextSub);
+        mvsepStatusText.SetPadding(Dp(2), 0, Dp(2), Dp(6));
+        slot2bCard.AddView(mvsepStatusText);
+
+        mvsepConfigBtn = PillButton(S["MvsepConfigBtn"], ShowMvsepCloudConfigModal);
+        slot2bCard.AddView(mvsepConfigBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        AddDivider(slot2bCard);
+
         neuralOrchestrationSelector = new OneUiInlineSelector(this, S["NeuralOrchestrationTitle"]);
         string[] orchLabels = [
             S["NeuralOrchestrationAuto"],
@@ -90,11 +117,55 @@ public partial class MainActivity {
         };
         slot2bCard.AddView(WrapControlWithHelp(neuralOrchestrationSelector, S["NeuralOrchestrationTitle"], S["TipNeuralOrchestration"], bottomMarginDp: 4));
 
+        neuralStudioBundleSelector = new OneUiInlineSelector(this, S["NeuralStudioBundleTitle"]);
+        string[] bundleLabels = [
+            S["StudioBundleFastSingle"],
+            S["StudioBundleVocalEnsemble"],
+            S["StudioBundlePureInstrumental"],
+            S["StudioBundleFullBand6Stem"],
+            S["StudioBundleKaraoke2Stage"]
+        ];
+        neuralStudioBundleSelector.SetItems(bundleLabels, Math.Clamp(store.NeuralStudioBundleIndex, 0, bundleLabels.Length - 1));
+        neuralStudioBundleSelector.SelectionChanged += pos => {
+            store.NeuralStudioBundleIndex = pos;
+            ApplyAndRefreshNeuralAudio();
+            RefreshStudioW12ContextUi();
+        };
+        slot2bCard.AddView(WrapControlWithHelp(neuralStudioBundleSelector, S["NeuralStudioBundleTitle"], S["TipNeuralStudioBundle"], bottomMarginDp: 4));
+
         neuralPlanSummaryText = Label("", 11.5f, OneUiTheme.TextSub);
         neuralPlanSummaryText.SetSingleLine(true);
         neuralPlanSummaryText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         neuralPlanSummaryText.SetPadding(Dp(2), 0, Dp(2), Dp(6));
         slot2bCard.AddView(neuralPlanSummaryText);
+
+        AddDivider(slot2bCard);
+
+        neuralTrackCacheEnabledSwitch = AddSwitchRow(slot2bCard, S["NeuralTrackCacheAutoTitle"], store.NeuralTrackCacheEnabled, v => {
+            store.NeuralTrackCacheEnabled = v;
+            if (neuralTrackCache != null) {
+                neuralTrackCache.IsEnabled = v;
+            }
+            ApplyAndRefreshNeuralAudio();
+        }, helpBody: S["TipNeuralTrackCache"]);
+
+        neuralTrackCacheCompSelector = new OneUiInlineSelector(this, S["NeuralTrackCacheCompTitle"]);
+        string[] cacheCompLabels = [
+            S["NeuralTrackCacheComp16"],
+            S["NeuralTrackCacheComp24"],
+            S["NeuralTrackCacheCompRaw"]
+        ];
+        neuralTrackCacheCompSelector.SetItems(cacheCompLabels, Math.Clamp(store.NeuralTrackCacheCompressionIndex, 0, cacheCompLabels.Length - 1));
+        neuralTrackCacheCompSelector.SelectionChanged += pos => {
+            store.NeuralTrackCacheCompressionIndex = pos;
+            if (neuralTrackCache != null) {
+                neuralTrackCache.CompressionMode = (Cavernize.Logic.Spatial.NeuralTrackCacheCompressionMode)pos;
+            }
+            ApplyAndRefreshNeuralAudio();
+        };
+        slot2bCard.AddView(neuralTrackCacheCompSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(6)
+        });
 
         neuralTrackCacheCapSelector = new OneUiInlineSelector(this, S["NeuralTrackCacheCapTitle"]);
         string[] cacheCapLabels = ["256 MB", "512 MB", "1024 MB", "2048 MB", "4096 MB"];
@@ -104,8 +175,19 @@ public partial class MainActivity {
             ApplyNeuralTrackCacheMaxMb(mb);
         };
         slot2bCard.AddView(neuralTrackCacheCapSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(6)
+            BottomMargin = Dp(4)
         });
+
+        neuralTrackCacheSavingsText = Label("", 11.4f, OneUiTheme.IconSystemInfo);
+        neuralTrackCacheSavingsText.SetPadding(Dp(2), 0, Dp(2), Dp(6));
+        slot2bCard.AddView(neuralTrackCacheSavingsText);
+
+        neuralBrowseTrackCacheBtn = PillButton(S["NeuralCacheBrowserBtn"], ShowNeuralTrackCacheBrowserModal);
+        slot2bCard.AddView(neuralBrowseTrackCacheBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        AddDivider(slot2bCard);
 
         (neuralOverlapBar, _) = AddSliderRow(
             slot2bCard,
@@ -184,8 +266,9 @@ public partial class MainActivity {
         karaokePreserveBackingSwitch = AddSwitchRow(slot2bCard, S["KaraokePreserveBackingTitle"], store.KaraokePreserveBackingVocals, v => {
             store.KaraokePreserveBackingVocals = v;
             ApplyAndRefreshNeuralAudio();
+            RefreshLyricsSingDockUi();
             RefreshStudioW12ContextUi();
-        });
+        }, helpBody: S["TipKaraokePureInstrumental"]);
         AddDivider(slot2bCard);
 
         karaokeLosslessTwinSwitch = AddSwitchRow(slot2bCard, S["KaraokeLosslessTwinTitle"], store.UseLosslessTwinForKaraoke, v => {
@@ -214,7 +297,7 @@ public partial class MainActivity {
         };
         slot2bCard.AddView(WrapControlWithHelp(neuralUpmixModeSelector, S["NeuralUpmixModeTitle"], S["TipNeuralUpmix"], bottomMarginDp: 2));
 
-        RegisterSettingsCard(slot2bCard, categoryIndex: 2, isProOnly: false, "ai neural onnx runtime models orchestrator cache mb mvsep stems karaoke qnn xnnpack");
+        RegisterSettingsCard(slot2bCard, categoryIndex: 2, isProOnly: false, "ai neural onnx runtime models orchestrator cache mb mvsep cloud api token bundle ensemble roformer instrumental stems karaoke qnn xnnpack webgpu");
 
         // Universal Lossless Twin & Lossless-Guided Atmos Restoration (LGSR)
         LinearLayout slot2cCard = Card();
@@ -407,6 +490,26 @@ public partial class MainActivity {
             neuralPlanSummaryText.Text = planLine + cacheSuffix;
             neuralPlanSummaryText.Visibility = string.IsNullOrEmpty(neuralPlanSummaryText.Text) ? ViewStates.Gone : ViewStates.Visible;
         }
+        if (mvsepStatusText != null && store != null) {
+            bool hasToken = !string.IsNullOrWhiteSpace(store.MvsepApiToken);
+            Cavernize.Logic.Spatial.MvsepAlgorithmPreset preset = Cavernize.Logic.Spatial.MvsepAlgorithmPreset.FindOrDefault(store.MvsepPresetId);
+            mvsepStatusText.Text = hasToken
+                ? string.Format(S["MvsepStatusConfiguredFmt"], Cavernize.Logic.Spatial.MvsepCloudClient.MaskToken(store.MvsepApiToken), preset.DisplayName)
+                : S["MvsepStatusUnconfigured"];
+            mvsepStatusText.SetTextColor(hasToken ? OneUiTheme.IconSystemInfo : OneUiTheme.TextSub);
+        }
+        if (neuralTrackCacheSavingsText != null && store != null) {
+            Cavernize.Logic.Spatial.NeuralTrackCacheStats cs = neuralTrackCache?.GetStats() ?? default;
+            double diskMb = cs.TotalBytes / (1024.0 * 1024.0);
+            double rawMb = cs.TotalUncompressedBytes / (1024.0 * 1024.0);
+            double savedPct = cs.TotalUncompressedBytes > cs.TotalBytes && cs.TotalUncompressedBytes > 0
+                ? Math.Clamp((1.0 - (cs.TotalBytes / (double)cs.TotalUncompressedBytes)) * 100.0, 0.0, 99.0)
+                : 0.0;
+            neuralTrackCacheSavingsText.Text = cs.EntryCount > 0
+                ? string.Format(S["NeuralTrackCacheSavingsFmt"], cs.EntryCount, diskMb, savedPct, rawMb)
+                : S["NeuralTrackCacheEmptySummary"];
+            neuralTrackCacheSavingsText.SetTextColor(cs.EntryCount > 0 ? OneUiTheme.IconSystemInfo : OneUiTheme.TextSub);
+        }
         if (neuralTrackCacheCapSelector != null && store != null) {
             int capIdx = ResolveNeuralTrackCachePresetIndex(store.NeuralTrackCacheMaxMb);
             if (neuralTrackCacheCapSelector.SelectedIndex != capIdx) {
@@ -420,10 +523,31 @@ public partial class MainActivity {
                     neuralProviderSelector.SetSelection(pIdx, notify: false);
                 }
             }
+            if (neuralExecBackendSelector != null) {
+                int ebIdx = Math.Clamp(store.NeuralExecutionBackendIndex, 0, 2);
+                if (neuralExecBackendSelector.SelectedIndex != ebIdx) {
+                    neuralExecBackendSelector.SetSelection(ebIdx, notify: false);
+                }
+            }
             if (neuralOrchestrationSelector != null) {
                 int oIdx = Math.Clamp(store.NeuralOrchestrationModeIndex, 0, 1);
                 if (neuralOrchestrationSelector.SelectedIndex != oIdx) {
                     neuralOrchestrationSelector.SetSelection(oIdx, notify: false);
+                }
+            }
+            if (neuralStudioBundleSelector != null) {
+                int bIdx = Math.Clamp(store.NeuralStudioBundleIndex, 0, 4);
+                if (neuralStudioBundleSelector.SelectedIndex != bIdx) {
+                    neuralStudioBundleSelector.SetSelection(bIdx, notify: false);
+                }
+            }
+            if (neuralTrackCacheEnabledSwitch != null && neuralTrackCacheEnabledSwitch.Checked != store.NeuralTrackCacheEnabled) {
+                neuralTrackCacheEnabledSwitch.Checked = store.NeuralTrackCacheEnabled;
+            }
+            if (neuralTrackCacheCompSelector != null) {
+                int ccIdx = Math.Clamp(store.NeuralTrackCacheCompressionIndex, 0, 2);
+                if (neuralTrackCacheCompSelector.SelectedIndex != ccIdx) {
+                    neuralTrackCacheCompSelector.SetSelection(ccIdx, notify: false);
                 }
             }
             SyncSlider(neuralOverlapBar, store.NeuralOverlapFactor, 2, 8, "x");
@@ -766,6 +890,11 @@ public partial class MainActivity {
 
         RefreshModalInPlace(preserveScroll: false);
 
+        LinearLayout trackCacheBtnRow = HRow();
+        Button browseTracksBtn = PillButton(S["NeuralCacheBrowserBtn"], () => {
+            dialog?.Dismiss();
+            ShowNeuralTrackCacheBrowserModal();
+        });
         Button clearTracksBtn = PillButton(S["NeuralClearTrackCacheBtn"], () => {
             neuralTrackCache?.Clear();
             SyncNeuralRuntimeDiagnostics();
@@ -773,7 +902,9 @@ public partial class MainActivity {
             ShowToast(S["NeuralTrackCacheClearedToast"]);
             RefreshModalInPlace();
         });
-        content.AddView(clearTracksBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        trackCacheBtnRow.AddView(browseTracksBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+        trackCacheBtnRow.AddView(clearTracksBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        content.AddView(trackCacheBtnRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(2),
             BottomMargin = Dp(6)
         });
@@ -1097,6 +1228,285 @@ public partial class MainActivity {
             icon: OneUiIconType.Sliders,
             iconBadgeColor: OneUiTheme.IconSystemInfo,
             positiveText: S["CloseBtn"]);
+    }
+
+    void ShowMvsepCloudConfigModal() {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        Android.App.Dialog dialog = null;
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
+
+        TextView descTv = Label(S["MvsepConfigDesc"], 12.2f, OneUiTheme.TextSecondary);
+        descTv.SetPadding(0, 0, 0, Dp(10));
+        content.AddView(descTv);
+
+        TextView tokenLbl = Label(S["MvsepApiTokenLabel"], 12f, ColText);
+        tokenLbl.SetTypeface(null, TypefaceStyle.Bold);
+        tokenLbl.SetPadding(0, 0, 0, Dp(4));
+        content.AddView(tokenLbl);
+
+        EditText tokenInput = new(this) {
+            Hint = S["MvsepApiTokenHint"],
+            Text = store.MvsepApiToken,
+            InputType = Android.Text.InputTypes.ClassText | Android.Text.InputTypes.TextVariationPassword,
+            TextSize = 13f
+        };
+        tokenInput.SetTextColor(ColText);
+        tokenInput.SetHintTextColor(OneUiTheme.TextMuted);
+        tokenInput.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+        tokenInput.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceSubTile, 14f, OneUiTheme.BorderSubtle, 1f);
+        content.AddView(tokenInput, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        string[] serverUrls = [
+            Cavernize.Logic.Spatial.MvsepCloudOptions.DefaultBaseUrl,
+            Cavernize.Logic.Spatial.MvsepCloudOptions.MirrorBaseUrl
+        ];
+        string[] serverLabels = ["mvsep.com (Primary)", "de.mvsep.com (EU Mirror)"];
+        int serverIdx = string.Equals(store.MvsepServerBaseUrl, serverUrls[1], StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        OneUiInlineSelector serverSel = new(this, S["MvsepServerLabel"]);
+        serverSel.SetItems(serverLabels, serverIdx);
+        content.AddView(serverSel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(6)
+        });
+
+        IReadOnlyList<Cavernize.Logic.Spatial.MvsepAlgorithmPreset> presets = Cavernize.Logic.Spatial.MvsepAlgorithmPreset.Presets;
+        string[] presetLabels = presets.Select(p => p.DisplayName).ToArray();
+        int presetIdx = 0;
+        for (int i = 0; i < presets.Count; i++) {
+            if (string.Equals(presets[i].Id, store.MvsepPresetId, StringComparison.OrdinalIgnoreCase)) {
+                presetIdx = i;
+                break;
+            }
+        }
+        OneUiInlineSelector presetSel = new(this, S["MvsepPresetLabel"]);
+        presetSel.SetItems(presetLabels, presetIdx);
+        content.AddView(presetSel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(6)
+        });
+
+        Cavernize.Logic.Spatial.MvsepOutputFormat[] formatValues = [
+            Cavernize.Logic.Spatial.MvsepOutputFormat.Wav16Bit,
+            Cavernize.Logic.Spatial.MvsepOutputFormat.Flac16Bit,
+            Cavernize.Logic.Spatial.MvsepOutputFormat.Mp3_320
+        ];
+        int fmtIdx = Array.IndexOf(formatValues, (Cavernize.Logic.Spatial.MvsepOutputFormat)Math.Clamp(store.MvsepOutputFormatIndex, 0, 2));
+        if (fmtIdx < 0) {
+            fmtIdx = 0;
+        }
+        OneUiInlineSelector fmtSel = new(this, S["MvsepOutputFmtLabel"]);
+        fmtSel.SetItems(new[] {
+            S["MvsepFmtWav16"],
+            S["MvsepFmtFlac"],
+            S["MvsepFmtMp3"]
+        }, fmtIdx);
+        content.AddView(fmtSel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
+        TextView testStatusTv = Label("", 11.6f, OneUiTheme.TextSub);
+        testStatusTv.SetPadding(0, 0, 0, Dp(6));
+        content.AddView(testStatusTv);
+
+        LinearLayout actionRow = HRow();
+        Button testBtn = PillButton(S["MvsepTestConnBtn"], () => {
+            string chosenUrl = serverUrls[Math.Clamp(serverSel.SelectedIndex, 0, serverUrls.Length - 1)];
+            testStatusTv.Text = S["MvsepTestingStatus"];
+            testStatusTv.SetTextColor(OneUiTheme.Primary);
+            _ = Task.Run(async () => {
+                try {
+                    using Cavernize.Logic.Spatial.MvsepCloudClient client = new();
+                    IReadOnlyList<Cavernize.Logic.Spatial.MvsepRemoteAlgorithmInfo> algos =
+                        await client.FetchAlgorithmsAsync(chosenUrl).ConfigureAwait(false);
+                    RunOnUiThread(() => {
+                        if (uiDestroyed) return;
+                        testStatusTv.Text = string.Format(S["MvsepTestOkFmt"], algos.Count);
+                        testStatusTv.SetTextColor(OneUiTheme.FunctionalGreen);
+                    });
+                } catch (Exception ex) {
+                    string safe = Cavernize.Logic.Spatial.MvsepCloudClient.RedactSecrets(ex.Message, tokenInput.Text);
+                    RunOnUiThread(() => {
+                        if (uiDestroyed) return;
+                        testStatusTv.Text = string.Format(S["MvsepTestFailFmt"], safe);
+                        testStatusTv.SetTextColor(OneUiTheme.FunctionalRed);
+                    });
+                }
+            });
+        });
+        Button clearTokenBtn = PillButton(S["MvsepClearTokenBtn"], () => {
+            tokenInput.Text = "";
+            store.MvsepApiToken = "";
+            if (store.NeuralExecutionBackendIndex == (int)Cavernize.Logic.Spatial.NeuralExecutionBackend.MvsepCloud) {
+                store.NeuralExecutionBackendIndex = (int)Cavernize.Logic.Spatial.NeuralExecutionBackend.OnDevice;
+            }
+            ApplyAndRefreshNeuralAudio();
+            testStatusTv.Text = S["MvsepTokenClearedToast"];
+            testStatusTv.SetTextColor(OneUiTheme.TextSub);
+        });
+        actionRow.AddView(testBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
+        actionRow.AddView(clearTokenBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.85f));
+        content.AddView(actionRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(4)
+        });
+
+        dialog = OneUiModalDialog.Show(
+            this,
+            S["MvsepConfigTitle"],
+            customContent: content,
+            icon: OneUiIconType.Sparkles,
+            iconBadgeColor: OneUiTheme.IconAtmosUpmix,
+            positiveText: S["SaveBtn"],
+            onPositive: () => {
+                store.MvsepApiToken = (tokenInput.Text ?? "").Trim();
+                store.MvsepServerBaseUrl = serverUrls[Math.Clamp(serverSel.SelectedIndex, 0, serverUrls.Length - 1)];
+                int pIdx = Math.Clamp(presetSel.SelectedIndex, 0, presets.Count - 1);
+                store.MvsepPresetId = presets[pIdx].Id;
+                store.MvsepOutputFormatIndex = (int)formatValues[Math.Clamp(fmtSel.SelectedIndex, 0, formatValues.Length - 1)];
+                ApplyAndRefreshNeuralAudio();
+                ShowToast(S["MvsepConfigSavedToast"]);
+            },
+            negativeText: S["CancelBtn"]);
+    }
+
+    void ShowNeuralTrackCacheBrowserModal() {
+        if (uiDestroyed || neuralTrackCache == null || store == null) {
+            return;
+        }
+        Android.App.Dialog dialog = null;
+        bool modalClosed = false;
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
+
+        TextView headerSummaryTv = Label("", 12f, OneUiTheme.IconSystemInfo);
+        headerSummaryTv.SetPadding(0, 0, 0, Dp(2));
+        content.AddView(headerSummaryTv);
+
+        TextView folderPathTv = Label(neuralTrackCache.CacheDirectoryPath, 10.6f, OneUiTheme.TextMuted);
+        folderPathTv.SetTypeface(Typeface.Monospace, TypefaceStyle.Normal);
+        folderPathTv.SetPadding(0, 0, 0, Dp(8));
+        content.AddView(folderPathTv);
+
+        LinearLayout entriesContainer = new(this) { Orientation = Orientation.Vertical };
+        content.AddView(entriesContainer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+        void RefreshBrowserInPlace() {
+            if (uiDestroyed || modalClosed) {
+                return;
+            }
+            Cavernize.Logic.Spatial.NeuralTrackCacheStats stats = neuralTrackCache.GetStats();
+            double diskMb = stats.TotalBytes / (1024.0 * 1024.0);
+            double rawMb = stats.TotalUncompressedBytes / (1024.0 * 1024.0);
+            double savedPct = stats.TotalUncompressedBytes > stats.TotalBytes && stats.TotalUncompressedBytes > 0
+                ? Math.Clamp((1.0 - (stats.TotalBytes / (double)stats.TotalUncompressedBytes)) * 100.0, 0.0, 99.0)
+                : 0.0;
+            headerSummaryTv.Text = stats.EntryCount > 0
+                ? string.Format(S["NeuralCacheBrowserSummaryFmt"], stats.EntryCount, diskMb, store.NeuralTrackCacheMaxMb, savedPct, rawMb)
+                : S["NeuralTrackCacheEmptySummary"];
+
+            entriesContainer.RemoveAllViews();
+            IReadOnlyList<Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo> entries = neuralTrackCache.ListEntries();
+            if (entries.Count == 0) {
+                TextView emptyTv = Label(S["NeuralCacheBrowserEmpty"], 12.2f, OneUiTheme.TextSub);
+                emptyTv.SetPadding(Dp(10), Dp(14), Dp(10), Dp(14));
+                emptyTv.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
+                entriesContainer.AddView(emptyTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    BottomMargin = Dp(8)
+                });
+                return;
+            }
+
+            foreach (Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo entry in entries) {
+                Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo localEntry = entry;
+                LinearLayout tile = new(this) { Orientation = Orientation.Vertical };
+                tile.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
+                tile.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+
+                string headline = !string.IsNullOrWhiteSpace(localEntry.ArtistName)
+                    ? $"{localEntry.DisplayTitle} — {localEntry.ArtistName}"
+                    : localEntry.DisplayTitle;
+                TextView titleTv = Label(headline, 12.5f, ColText);
+                titleTv.SetTypeface(null, TypefaceStyle.Bold);
+                titleTv.SetSingleLine(true);
+                titleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+                tile.AddView(titleTv);
+
+                string compTag = localEntry.CompressionMode switch {
+                    Cavernize.Logic.Spatial.NeuralTrackCacheCompressionMode.Compact16Bit => "CNTC3 16-bit",
+                    Cavernize.Logic.Spatial.NeuralTrackCacheCompressionMode.Studio24Bit => "CNTC3 24-bit",
+                    _ => $"CNTC{localEntry.FormatVersion} Raw"
+                };
+                string durTag = localEntry.DurationSeconds > 0.5 ? FormatMmSs(localEntry.DurationSeconds) : "--:--";
+                TextView metaTv = Label(
+                    $"{localEntry.OriginTag} · {localEntry.StemCount} stems · {durTag} · {compTag}",
+                    11.2f,
+                    OneUiTheme.PrimaryHigh);
+                metaTv.SetPadding(0, Dp(2), 0, Dp(2));
+                tile.AddView(metaTv);
+
+                if (!string.IsNullOrWhiteSpace(localEntry.ModelSummary)) {
+                    TextView modelTv = Label(localEntry.ModelSummary, 10.8f, OneUiTheme.TextSub);
+                    modelTv.SetSingleLine(true);
+                    modelTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+                    tile.AddView(modelTv);
+                }
+
+                double entryMb = localEntry.CompressedBytes / (1024.0 * 1024.0);
+                double entryRawMb = localEntry.UncompressedBytes / (1024.0 * 1024.0);
+                string dateTag = localEntry.LastModifiedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+                string sizeLine = localEntry.SavedPercent >= 5.0
+                    ? string.Format(S["NeuralCacheEntrySizeSavedFmt"], entryMb, localEntry.SavedPercent, entryRawMb, dateTag)
+                    : string.Format(S["NeuralCacheEntrySizeRawFmt"], entryMb, dateTag);
+
+                LinearLayout bottomRow = HRow();
+                bottomRow.SetGravity(GravityFlags.CenterVertical);
+                TextView sizeTv = Label(sizeLine, 11f, OneUiTheme.TextSecondary);
+                bottomRow.AddView(sizeTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+
+                Button delBtn = PillButton(S["NeuralModelDeleteBtn"], () => {
+                    if (neuralTrackCache.DeleteEntry(localEntry.CacheKey)) {
+                        SyncNeuralRuntimeDiagnostics();
+                        RefreshNeuralAudioUi();
+                        ShowToast(S["NeuralCacheEntryDeletedToast"]);
+                        RefreshBrowserInPlace();
+                    }
+                });
+                delBtn.TextSize = 11f;
+                delBtn.SetPadding(Dp(12), Dp(6), Dp(12), Dp(6));
+                bottomRow.AddView(delBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+                tile.AddView(bottomRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    TopMargin = Dp(6)
+                });
+
+                entriesContainer.AddView(tile, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    BottomMargin = Dp(8)
+                });
+            }
+        }
+
+        RefreshBrowserInPlace();
+
+        Button clearAllBtn = PillButton(S["NeuralClearTrackCacheBtn"], () => {
+            neuralTrackCache.Clear();
+            SyncNeuralRuntimeDiagnostics();
+            RefreshNeuralAudioUi();
+            ShowToast(S["NeuralTrackCacheClearedToast"]);
+            RefreshBrowserInPlace();
+        });
+        content.AddView(clearAllBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(4)
+        });
+
+        dialog = OneUiModalDialog.Show(
+            this,
+            S["NeuralCacheBrowserTitle"],
+            customContent: content,
+            icon: OneUiIconType.Sparkles,
+            iconBadgeColor: OneUiTheme.IconSystemInfo,
+            positiveText: S["CloseBtn"]);
+        if (dialog != null) {
+            dialog.DismissEvent += (_, _) => modalClosed = true;
+        }
     }
 
     // Slot 1 / Slot 4: W10 Pro-Audio Full-Duplex USB Engine & Focusrite Scarlett 2i2 Helpers

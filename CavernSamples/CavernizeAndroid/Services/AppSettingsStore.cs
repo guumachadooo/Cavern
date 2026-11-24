@@ -675,6 +675,55 @@ public sealed class AppSettingsStore {
         set => Edit().PutInt("neuralTrackCacheMaxMb", Math.Clamp(value, 128, 4096)).Apply();
     }
 
+    public bool NeuralTrackCacheEnabled {
+        get => prefs.GetBoolean("neuralTrackCacheEnabled", true);
+        set => Edit().PutBoolean("neuralTrackCacheEnabled", value).Apply();
+    }
+
+    public int NeuralTrackCacheCompressionIndex {
+        get => Math.Clamp(prefs.GetInt("neuralTrackCacheCompIdx", (int)Cavernize.Logic.Spatial.NeuralTrackCacheCompressionMode.Compact16Bit), 0, 2);
+        set => Edit().PutInt("neuralTrackCacheCompIdx", Math.Clamp(value, 0, 2)).Apply();
+    }
+
+    public int NeuralStudioBundleIndex {
+        get => Math.Clamp(prefs.GetInt("neuralStudioBundleIdx", (int)Cavernize.Logic.Spatial.NeuralEnsembleBundlePreset.FastSingle), 0, 4);
+        set => Edit().PutInt("neuralStudioBundleIdx", Math.Clamp(value, 0, 4)).Apply();
+    }
+
+    public int NeuralExecutionBackendIndex {
+        get => Math.Clamp(prefs.GetInt("neuralExecBackendIdx", (int)Cavernize.Logic.Spatial.NeuralExecutionBackend.OnDevice), 0, 2);
+        set => Edit().PutInt("neuralExecBackendIdx", Math.Clamp(value, 0, 2)).Apply();
+    }
+
+    public string MvsepApiToken {
+        get => prefs.GetString("mvsepApiToken", "") ?? "";
+        set => Edit().PutString("mvsepApiToken", (value ?? "").Trim()).Apply();
+    }
+
+    public string MvsepServerBaseUrl {
+        get => prefs.GetString("mvsepServerBaseUrl", Cavernize.Logic.Spatial.MvsepCloudOptions.DefaultBaseUrl)
+            ?? Cavernize.Logic.Spatial.MvsepCloudOptions.DefaultBaseUrl;
+        set => Edit().PutString("mvsepServerBaseUrl",
+            string.IsNullOrWhiteSpace(value) ? Cavernize.Logic.Spatial.MvsepCloudOptions.DefaultBaseUrl : value.Trim()).Apply();
+    }
+
+    public string MvsepPresetId {
+        get => prefs.GetString("mvsepPresetId", "mvsep_bs_roformer_vocals") ?? "mvsep_bs_roformer_vocals";
+        set => Edit().PutString("mvsepPresetId",
+            string.IsNullOrWhiteSpace(value) ? "mvsep_bs_roformer_vocals" : value.Trim()).Apply();
+    }
+
+    public int MvsepOutputFormatIndex {
+        get => Math.Clamp(prefs.GetInt("mvsepOutputFormatIdx", (int)Cavernize.Logic.Spatial.MvsepOutputFormat.Wav16Bit), 0, 2);
+        set => Edit().PutInt("mvsepOutputFormatIdx", Math.Clamp(value, 0, 2)).Apply();
+    }
+
+    public Cavernize.Logic.Spatial.MvsepCloudOptions BuildMvsepCloudOptions() => new() {
+        ApiToken = MvsepApiToken,
+        BaseUrl = MvsepServerBaseUrl,
+        OutputFormat = (Cavernize.Logic.Spatial.MvsepOutputFormat)Math.Clamp(MvsepOutputFormatIndex, 0, 2)
+    };
+
     public string ActiveStemModelId {
         get => prefs.GetString("activeStemModelId", Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId);
         set => Edit().PutString("activeStemModelId", value ?? Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId).Apply();
@@ -794,7 +843,11 @@ public sealed class AppSettingsStore {
         KaraokePreserveBackingVocals = KaraokePreserveBackingVocals,
         UseLosslessTwinForKaraoke = UseLosslessTwinForKaraoke,
         SpatialUpmixMode = (Cavernize.Logic.Spatial.NeuralSpatialUpmixMode)Math.Clamp(NeuralSpatialUpmixModeIndex, 0, 2),
+        TrackCacheEnabled = NeuralTrackCacheEnabled,
+        TrackCacheCompressionMode = (Cavernize.Logic.Spatial.NeuralTrackCacheCompressionMode)Math.Clamp(NeuralTrackCacheCompressionIndex, 0, 2),
         TrackCacheMaxSizeMb = Math.Clamp(NeuralTrackCacheMaxMb, 128, 4096),
+        StudioBundlePreset = (Cavernize.Logic.Spatial.NeuralEnsembleBundlePreset)Math.Clamp(NeuralStudioBundleIndex, 0, 4),
+        ExecutionBackend = (Cavernize.Logic.Spatial.NeuralExecutionBackend)Math.Clamp(NeuralExecutionBackendIndex, 0, 2),
         TaskModelSlots = GetAllNeuralTaskModelSlots(),
         ActiveStemModelId = ActiveStemModelId,
         ActiveKaraokeModelId = ActiveKaraokeModelId,

@@ -472,6 +472,9 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     /// </summary>
     static bool IsWebGpuOptimalModel(string modelPath) {
         string name = Path.GetFileName(modelPath ?? string.Empty).ToLowerInvariant();
+        if (name.Contains("webgpu") || name.Contains("bs_roformer_sw_6stem")) {
+            return true;
+        }
         if (name.Contains("scnet") || name.Contains("demucs") || name.Contains("roformer")) {
             return false;
         }

@@ -15,8 +15,11 @@ public readonly struct NeuralTrackCacheStats {
     /// <summary>Total disk bytes occupied by cached separated tracks.</summary>
     public long TotalBytes { get; init; }
 
-    /// <summary>Configured maximum LRU cache cap in bytes.</summary>
+    /// <summary>Configured maximum cache size budget in bytes.</summary>
     public long MaxBytes { get; init; }
+
+    /// <summary>Total estimated raw uncompressed bytes across all cached entries (for savings reporting).</summary>
+    public long TotalUncompressedBytes { get; init; }
 }
 
 /// <summary>
@@ -24,8 +27,20 @@ public readonly struct NeuralTrackCacheStats {
 /// shared by Slot 2B (live 3D stems &amp; Spatial Karaoke), Slot 2D (Song Vocal Mix DNA), and Slot 8 (Offline Studio Mastering).
 /// </summary>
 public interface INeuralTrackCache {
+    /// <summary>True when persistent caching is enabled.</summary>
+    bool IsEnabled { get => true; set { } }
+
+    /// <summary>Active compression tier for newly persisted <c>CNTC v3</c> cache entries.</summary>
+    NeuralTrackCacheCompressionMode CompressionMode { get => NeuralTrackCacheCompressionMode.Compact16Bit; set { } }
+
     /// <summary>Returns current entry count, occupied bytes, and configured LRU cap.</summary>
     NeuralTrackCacheStats GetStats();
+
+    /// <summary>Lists O(1)-peeked metadata for all cached track bundles ordered newest-first for the In-App Cache Folder Browser.</summary>
+    IReadOnlyList<NeuralTrackCacheEntryInfo> ListEntries() => Array.Empty<NeuralTrackCacheEntryInfo>();
+
+    /// <summary>Deletes a single cached track entry by its <paramref name="cacheKey"/>.</summary>
+    bool DeleteEntry(string cacheKey) => false;
 
     /// <summary>Attempts to load a cached <see cref="NeuralSeparatedTrack"/> matching <paramref name="cacheKey"/>.</summary>
     bool TryLoad(string cacheKey, out NeuralSeparatedTrack track, CancellationToken token = default);
@@ -150,42 +165,61 @@ public sealed class NeuralPipelineOrchestrator {
         }
 
         bool isManual = safeCfg.OrchestrationMode == NeuralOrchestrationMode.Manual;
+        NeuralEnsembleBundlePreset bundle = safeCfg.StudioBundlePreset;
         List<NeuralExecutionStep> steps = [];
-        switch (goal) {
-            case NeuralPipelineGoal.StemSeparation:
-                AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: false));
-                // In Auto mode, run a single fast model (reserve extra Debleed pass for Manual mode / Studio Export).
-                if (isManual) {
-                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false));
-                }
-                break;
 
-            case NeuralPipelineGoal.SpatialKaraoke: {
-                NeuralExecutionStep karaokeStep = ResolveSingleTaskStep(NeuralModelTask.KaraokeLeadBacking, safeCfg, installed, installedById, allowEnsemble: isManual);
-                if (karaokeStep != null) {
-                    steps.Add(karaokeStep);
-                } else {
+        if (bundle != NeuralEnsembleBundlePreset.FastSingle &&
+            (goal == NeuralPipelineGoal.StemSeparation || goal == NeuralPipelineGoal.SpatialKaraoke)) {
+            BuildStudioBundleSteps(bundle, safeCfg, installed, installedById, steps);
+        }
+
+        if (steps.Count == 0) {
+            switch (goal) {
+                case NeuralPipelineGoal.StemSeparation:
+                    AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: false));
+                    if (isManual) {
+                        AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false));
+                    }
+                    break;
+
+                case NeuralPipelineGoal.SpatialKaraoke: {
+                    if (!safeCfg.KaraokePreserveBackingVocals) {
+                        // Pure Instrumental (Remove Backing Vocals): route to full-vocal removal first so BOTH lead & backing
+                        // vocals are eliminated cleanly without erasing instruments (never rely solely on lead-only kara_2!).
+                        NeuralExecutionStep fullVocalStep = ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: true);
+                        if (fullVocalStep != null) {
+                            steps.Add(fullVocalStep);
+                        } else {
+                            AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.KaraokeLeadBacking, safeCfg, installed, installedById, allowEnsemble: isManual));
+                        }
+                    } else {
+                        NeuralExecutionStep karaokeStep = ResolveSingleTaskStep(NeuralModelTask.KaraokeLeadBacking, safeCfg, installed, installedById, allowEnsemble: isManual);
+                        if (karaokeStep != null) {
+                            steps.Add(karaokeStep);
+                        } else {
+                            AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: true));
+                        }
+                    }
+                    if (isManual) {
+                        AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false));
+                    }
+                    break;
+                }
+
+                case NeuralPipelineGoal.VocalMixDna:
                     AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: true));
-                }
-                if (isManual) {
-                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false));
-                }
-                break;
+                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.Dereverb, safeCfg, installed, installedById, allowEnsemble: false));
+                    break;
+
+                case NeuralPipelineGoal.LosslessResidualRestore:
+                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.CodecRestoreApollo, safeCfg, installed, installedById, allowEnsemble: false));
+                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.BandwidthExtension, safeCfg, installed, installedById, allowEnsemble: false));
+                    break;
             }
-
-            case NeuralPipelineGoal.VocalMixDna:
-                AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: true));
-                AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.Dereverb, safeCfg, installed, installedById, allowEnsemble: false));
-                break;
-
-            case NeuralPipelineGoal.LosslessResidualRestore:
-                AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.CodecRestoreApollo, safeCfg, installed, installedById, allowEnsemble: false));
-                AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.BandwidthExtension, safeCfg, installed, installedById, allowEnsemble: false));
-                break;
         }
 
         string signature = ComputePlanSignature(goal, safeCfg, steps);
-        string summary = FormatPlanSummary(safeCfg.OrchestrationMode, steps);
+        string summary = FormatPlanSummary(safeCfg.OrchestrationMode, bundle, steps);
         return new NeuralExecutionPlan {
             Goal = goal,
             Mode = safeCfg.OrchestrationMode,
@@ -193,6 +227,84 @@ public sealed class NeuralPipelineOrchestrator {
             PlanSignature = signature,
             Summary = summary
         };
+    }
+
+    void BuildStudioBundleSteps(
+        NeuralEnsembleBundlePreset bundle,
+        NeuralAudioConfig cfg,
+        IReadOnlyList<NeuralModelCatalogEntry> installed,
+        Dictionary<string, NeuralModelCatalogEntry> installedById,
+        List<NeuralExecutionStep> steps) {
+        switch (bundle) {
+            case NeuralEnsembleBundlePreset.StudioVocalEnsemble: {
+                List<NeuralModelCatalogEntry> vocals = installed
+                    .Where(m => m.Task == NeuralModelTask.VocalSeparation)
+                    .OrderByDescending(m => m.PriorityRank)
+                    .ToList();
+                if (vocals.Count > 0) {
+                    AddStepIfValid(steps, BuildStepFromEntries(NeuralModelTask.VocalSeparation, vocals));
+                } else {
+                    AddStepIfValid(steps, ResolveSeparationStep(cfg, installed, installedById, preferVocalsOnly: true));
+                }
+                AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, cfg, installed, installedById, allowEnsemble: false));
+                break;
+            }
+            case NeuralEnsembleBundlePreset.StudioPureInstrumental: {
+                List<NeuralModelCatalogEntry> vocals = installed
+                    .Where(m => m.Task == NeuralModelTask.VocalSeparation)
+                    .OrderByDescending(m => m.PriorityRank)
+                    .ToList();
+                if (vocals.Count > 0) {
+                    AddStepIfValid(steps, BuildStepFromEntries(NeuralModelTask.VocalSeparation, vocals));
+                } else {
+                    AddStepIfValid(steps, ResolveSeparationStep(cfg, installed, installedById, preferVocalsOnly: true));
+                }
+                AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, cfg, installed, installedById, allowEnsemble: false));
+                break;
+            }
+            case NeuralEnsembleBundlePreset.StudioFullBand6Stem: {
+                // Step 1: Highest-SDR multi-stem separator (prefer BS-RoFormer 6-stem -> HTDemucs 6-stem -> BS-RoFormer 4-stem -> SCNet)
+                NeuralModelCatalogEntry bestMulti = installed
+                    .Where(m => m.Task == NeuralModelTask.StemSeparation6 || m.Task == NeuralModelTask.StemSeparation4)
+                    .OrderByDescending(m => m.Task == NeuralModelTask.StemSeparation6 ? 1 : 0)
+                    .ThenByDescending(m => m.PriorityRank)
+                    .FirstOrDefault();
+                if (bestMulti != null) {
+                    AddStepIfValid(steps, BuildStepFromEntries(bestMulti.Task, [bestMulti]));
+                }
+                // Step 2: Dedicated vocal anchor model (e.g., Mel-Band RoFormer Vocals / Kim Vocal 2) fused over multi-stem vocals
+                NeuralModelCatalogEntry bestVocal = installed
+                    .Where(m => m.Task == NeuralModelTask.VocalSeparation)
+                    .OrderByDescending(m => m.PriorityRank)
+                    .FirstOrDefault();
+                if (bestVocal != null) {
+                    AddStepIfValid(steps, BuildStepFromEntries(NeuralModelTask.VocalSeparation, [bestVocal]));
+                }
+                break;
+            }
+            case NeuralEnsembleBundlePreset.StudioKaraokeLeadBacking: {
+                // MVSEP 2-Stage Studio Karaoke Cascade (+1.13 dB SDR):
+                // Stage 1: Full-vocal extractor -> [vocals, instrumental] (pure instrumental!)
+                // Stage 2: Lead-vs-Backing model run strictly on isolated vocals -> [lead_vocal, backing_vocals]
+                NeuralModelCatalogEntry bestVocal = installed
+                    .Where(m => m.Task == NeuralModelTask.VocalSeparation)
+                    .OrderByDescending(m => m.PriorityRank)
+                    .FirstOrDefault();
+                if (bestVocal != null) {
+                    AddStepIfValid(steps, BuildStepFromEntries(NeuralModelTask.VocalSeparation, [bestVocal]));
+                } else {
+                    AddStepIfValid(steps, ResolveSeparationStep(cfg, installed, installedById, preferVocalsOnly: true));
+                }
+                NeuralModelCatalogEntry bestKaraoke = installed
+                    .Where(m => m.Task == NeuralModelTask.KaraokeLeadBacking)
+                    .OrderByDescending(m => m.PriorityRank)
+                    .FirstOrDefault();
+                if (bestKaraoke != null) {
+                    AddStepIfValid(steps, BuildStepFromEntries(NeuralModelTask.KaraokeLeadBacking, [bestKaraoke]));
+                }
+                break;
+            }
+        }
     }
 
     /// <summary>
@@ -303,7 +415,9 @@ public sealed class NeuralPipelineOrchestrator {
         bool derivedFromLosslessTwin = false,
         Action<double, string> onProgress = null,
         CancellationToken token = default,
-        Action<NeuralSeparatedTrack> onProgressiveTrackReady = null) {
+        Action<NeuralSeparatedTrack> onProgressiveTrackReady = null,
+        string displayTitle = null,
+        string artistName = null) {
         ArgumentNullException.ThrowIfNull(mixLeft);
         ArgumentNullException.ThrowIfNull(mixRight);
 
@@ -313,8 +427,9 @@ public sealed class NeuralPipelineOrchestrator {
             throw new InvalidOperationException("No installed ONNX model matches the requested neural pipeline goal.");
         }
 
+        bool allowCache = trackCache != null && safeCfg.TrackCacheEnabled && trackCache.IsEnabled;
         string cacheKey = ComputeTrackCacheKey(sourceTrackKey, fileSizeBytes, lastModifiedTicks, sampleRate, plan.PlanSignature);
-        if (trackCache != null && trackCache.TryLoad(cacheKey, out NeuralSeparatedTrack cached, token)) {
+        if (allowCache && trackCache.TryLoad(cacheKey, out NeuralSeparatedTrack cached, token)) {
             onProgress?.Invoke(1.0, $"Cache Hit ({plan.Summary})");
             return (cached, 0f, true);
         }
@@ -361,7 +476,35 @@ public sealed class NeuralPipelineOrchestrator {
             double stepStart = s / (double)totalSteps;
             double stepSpan = 1.0 / totalSteps;
 
-            if (step.Task == NeuralModelTask.StemSeparation4 ||
+            if (step.Task == NeuralModelTask.KaraokeLeadBacking && stems.Length > 0) {
+                // MVSEP 2-Stage Studio Karaoke Cascade: run Lead-vs-Backing strictly on the isolated full-vocal stem
+                // from Stage 1, producing 4 clean stems: lead_vocal, backing_vocals, vocals, and pure instrumental!
+                int vocalIdx = FindPrimaryVocalStemIndex(stems);
+                if (vocalIdx >= 0) {
+                    StereoStemBuffer isolatedVocals = stems[vocalIdx];
+                    NeuralAudioConfig stage2Cfg = new() {
+                        PreferredProvider = execCfg.PreferredProvider,
+                        OverlapFactor = execCfg.OverlapFactor,
+                        EnableTta = execCfg.EnableTta,
+                        EnablePhaseFix = false,
+                        EnforceEnergyConservation = false
+                    };
+                    (StereoStemBuffer[] splitVocals, float stepRtf) = RunStepSeparation(
+                        step, isolatedVocals.Left, isolatedVocals.Right, sampleRate, stage2Cfg,
+                        (p, msg) => onProgress?.Invoke(stepStart + p * stepSpan, $"Stage 2 Lead/Back: {msg}"), token);
+                    totalRtf += stepRtf;
+                    stems = MergeTwoStageKaraokeStems(workLeft, workRight, stems, isolatedVocals, splitVocals, execCfg);
+                }
+            } else if (step.Task == NeuralModelTask.VocalSeparation && stems.Length > 0 &&
+                       safeCfg.StudioBundlePreset == NeuralEnsembleBundlePreset.StudioFullBand6Stem) {
+                // Studio Full-Band 6-Stem Vocal-Anchor Fusion: replace multi-stem vocal with dedicated vocal model
+                // and re-conserve energy cleanly across all instruments.
+                (StereoStemBuffer[] vocalPass, float stepRtf) = RunStepSeparation(
+                    step, workLeft, workRight, sampleRate, execCfg,
+                    (p, msg) => onProgress?.Invoke(stepStart + p * stepSpan, $"Vocal Anchor: {msg}"), token);
+                totalRtf += stepRtf;
+                stems = FuseVocalAnchorIntoMultiStem(workLeft, workRight, stems, vocalPass, execCfg, token);
+            } else if (step.Task == NeuralModelTask.StemSeparation4 ||
                 step.Task == NeuralModelTask.StemSeparation6 ||
                 step.Task == NeuralModelTask.VocalSeparation ||
                 step.Task == NeuralModelTask.KaraokeLeadBacking) {
@@ -441,15 +584,112 @@ public sealed class NeuralPipelineOrchestrator {
             dereverbResult,
             derivedFromLosslessTwin,
             plan.PlanSignature);
+        track.OriginTag = safeCfg.StudioBundlePreset != NeuralEnsembleBundlePreset.FastSingle
+            ? "Studio Bundle"
+            : "Local AI";
+        track.ModelSummary = plan.Summary;
+        if (!string.IsNullOrWhiteSpace(displayTitle)) {
+            track.DisplayTitle = displayTitle.Trim();
+        }
+        if (!string.IsNullOrWhiteSpace(artistName)) {
+            track.ArtistName = artistName.Trim();
+        }
 
         // Only cache full-length track bundles in Slot 7B stem cache (avoid overwriting full track cache with a 40s DNA excerpt)
-        if (trackCache != null && stems.Length > 0 && !isExcerptDna) {
+        if (allowCache && stems.Length > 0 && !isExcerptDna) {
+            trackCache.CompressionMode = safeCfg.TrackCacheCompressionMode;
             trackCache.Save(cacheKey, track, token);
             trackCache.EvictToLimit((long)safeCfg.TrackCacheMaxSizeMb * 1024L * 1024L);
         }
 
         onProgress?.Invoke(1.0, $"Neural Ready ({plan.Summary})");
         return (track, totalRtf, false);
+    }
+
+    static StereoStemBuffer[] MergeTwoStageKaraokeStems(
+        float[] mixLeft,
+        float[] mixRight,
+        StereoStemBuffer[] stage1Stems,
+        StereoStemBuffer isolatedVocals,
+        StereoStemBuffer[] stage2Split,
+        NeuralAudioConfig cfg) {
+        int len = Math.Min(mixLeft.Length, mixRight.Length);
+        StereoStemBuffer lead = stage2Split != null && stage2Split.Length > 0 ? stage2Split[0] : isolatedVocals;
+        float[] leadL = new float[len];
+        float[] leadR = new float[len];
+        float[] backL = new float[len];
+        float[] backR = new float[len];
+        float[] instrL = new float[len];
+        float[] instrR = new float[len];
+
+        int copyLead = Math.Min(len, lead.Length);
+        int copyVoc = Math.Min(len, isolatedVocals.Length);
+        for (int i = 0; i < len; i++) {
+            float vl = i < copyVoc ? isolatedVocals.Left[i] : 0f;
+            float vr = i < copyVoc ? isolatedVocals.Right[i] : 0f;
+            float ll = i < copyLead ? lead.Left[i] : 0f;
+            float lr = i < copyLead ? lead.Right[i] : 0f;
+            leadL[i] = ll;
+            leadR[i] = lr;
+            // Exact vocal energy conservation: backing = isolated_vocals - lead_vocal (zero instruments in backing!)
+            backL[i] = vl - ll;
+            backR[i] = vr - lr;
+            // Exact mix energy conservation: instrumental = mix - isolated_vocals
+            instrL[i] = mixLeft[i] - vl;
+            instrR[i] = mixRight[i] - vr;
+        }
+
+        List<StereoStemBuffer> merged = [
+            new StereoStemBuffer("lead_vocal", leadL, leadR),
+            new StereoStemBuffer("backing_vocals", backL, backR),
+            new StereoStemBuffer("instrumental", instrL, instrR),
+            new StereoStemBuffer("vocals", isolatedVocals.Left, isolatedVocals.Right)
+        ];
+        return merged.ToArray();
+    }
+
+    static StereoStemBuffer[] FuseVocalAnchorIntoMultiStem(
+        float[] mixLeft,
+        float[] mixRight,
+        StereoStemBuffer[] multiStems,
+        StereoStemBuffer[] vocalPass,
+        NeuralAudioConfig cfg,
+        CancellationToken token) {
+        if (multiStems == null || multiStems.Length == 0 || vocalPass == null || vocalPass.Length == 0) {
+            return multiStems ?? Array.Empty<StereoStemBuffer>();
+        }
+        int anchorIdx = FindPrimaryVocalStemIndex(vocalPass);
+        StereoStemBuffer anchorVocal = anchorIdx >= 0 ? vocalPass[anchorIdx] : vocalPass[0];
+        List<StereoStemBuffer> fused = new(multiStems.Length + 1);
+        bool replacedVocal = false;
+
+        for (int i = 0; i < multiStems.Length; i++) {
+            NeuralStemRole role = NeuralStemSpatializer.ClassifyStemName(multiStems[i].Name);
+            if (role == NeuralStemRole.Residual && string.Equals(multiStems[i].Name, "residual", StringComparison.OrdinalIgnoreCase)) {
+                continue;
+            }
+            if ((role == NeuralStemRole.Vocals || role == NeuralStemRole.LeadVocal) && !replacedVocal) {
+                fused.Add(new StereoStemBuffer("vocals", anchorVocal.Left, anchorVocal.Right));
+                replacedVocal = true;
+            } else {
+                fused.Add(multiStems[i]);
+            }
+        }
+        if (!replacedVocal) {
+            fused.Add(new StereoStemBuffer("vocals", anchorVocal.Left, anchorVocal.Right));
+        }
+
+        StereoStemBuffer[] result = fused.ToArray();
+        if (cfg.EnforceEnergyConservation) {
+            result = MvsepAntiArtifactPipeline.AppendOrUpdateConservedResidual(mixLeft, mixRight, result);
+        }
+        if (cfg.EnablePhaseFix && result.Length > 1) {
+            MvsepAntiArtifactPipeline.ApplyPhaseFixWiener(mixLeft, mixRight, result, cfg.ToMvsepOptions().StftSize, 1.0f, token);
+            if (cfg.EnforceEnergyConservation) {
+                result = MvsepAntiArtifactPipeline.AppendOrUpdateConservedResidual(mixLeft, mixRight, result);
+            }
+        }
+        return result;
     }
 
     /// <summary>
@@ -701,6 +941,8 @@ public sealed class NeuralPipelineOrchestrator {
     static string ComputePlanSignature(NeuralPipelineGoal goal, NeuralAudioConfig cfg, List<NeuralExecutionStep> steps) {
         StringBuilder sb = new();
         sb.Append(goal).Append('|').Append(cfg.OrchestrationMode)
+            .Append("|b=").Append((int)cfg.StudioBundlePreset)
+            .Append("|pbv=").Append(cfg.KaraokePreserveBackingVocals ? '1' : '0')
             .Append("|ov=").Append(cfg.OverlapFactor)
             .Append("|tta=").Append(cfg.EnableTta ? '1' : '0')
             .Append("|ens=").Append(cfg.EnsembleMode)
@@ -721,8 +963,10 @@ public sealed class NeuralPipelineOrchestrator {
         return Convert.ToHexString(hash).Substring(0, 16).ToLowerInvariant();
     }
 
-    static string FormatPlanSummary(NeuralOrchestrationMode mode, List<NeuralExecutionStep> steps) {
-        string prefix = mode == NeuralOrchestrationMode.Auto ? "Auto" : "Manual";
+    static string FormatPlanSummary(NeuralOrchestrationMode mode, NeuralEnsembleBundlePreset bundle, List<NeuralExecutionStep> steps) {
+        string prefix = bundle != NeuralEnsembleBundlePreset.FastSingle
+            ? $"Bundle({bundle})"
+            : (mode == NeuralOrchestrationMode.Auto ? "Auto" : "Manual");
         if (steps == null || steps.Count == 0) {
             return $"{prefix}: —";
         }

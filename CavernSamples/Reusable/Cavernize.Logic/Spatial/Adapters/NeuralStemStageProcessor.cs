@@ -205,6 +205,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         lock (stateLock) {
             bool wasActive = config.SpatialKaraokeEnabled && config.KaraokeVocalLevel < 0.9999f;
             bool nowActive = safe.SpatialKaraokeEnabled && safe.KaraokeVocalLevel < 0.9999f;
+            bool backingModeChanged = config.KaraokePreserveBackingVocals != safe.KaraokePreserveBackingVocals;
             if (wasActive && !nowActive) {
                 karaokeTailBlocksRemaining = 3; // Allow 512-sample clickless fade-out to settle cleanly
             }
@@ -212,6 +213,9 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             karaokeEngine.IsEnabled = safe.SpatialKaraokeEnabled;
             karaokeEngine.VocalLevel = safe.KaraokeVocalLevel;
             karaokeEngine.PreserveBackingVocals = safe.KaraokePreserveBackingVocals;
+            if (backingModeChanged && (activeKaraokeTrack != null || activeSpatialUpmixTrack != null)) {
+                RebuildAlignedReferencesLocked();
+            }
         }
     }
 
@@ -653,9 +657,10 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         }
 
         int srcSr = vocalTrack.SampleRate >= 8000 ? vocalTrack.SampleRate : sampleRate;
-        StereoStemBuffer stereoLead = FindLeadOrVocalStem(vocalTrack);
-        float[] srcMonoLead = vocalTrack.MonoLeadVocalRef;
-        float[] srcBacking = vocalTrack.MonoBackingVocalRef;
+        bool preserveBacking = config.KaraokePreserveBackingVocals;
+        StereoStemBuffer stereoLead = FindVocalTargetStem(vocalTrack, preserveBacking);
+        float[] srcMonoLead = (!preserveBacking && stereoLead != null) ? null : vocalTrack.MonoLeadVocalRef;
+        float[] srcBacking = preserveBacking ? vocalTrack.MonoBackingVocalRef : null;
 
         // While progressive streaming is active, bind directly to the live incrementally-populated stem arrays
         // and perform zero-GC sub-sample Catmull-Rom rate mapping on read when srcSr != sampleRate
@@ -697,25 +702,53 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         }
     }
 
-    static StereoStemBuffer FindLeadOrVocalStem(NeuralSeparatedTrack track) {
+    static StereoStemBuffer FindVocalTargetStem(NeuralSeparatedTrack track, bool preserveBackingVocals) {
         if (track?.Stems == null || track.Stems.Count == 0) {
             return null;
         }
-        StereoStemBuffer fallbackVocal = null;
+        StereoStemBuffer leadStem = null;
+        StereoStemBuffer fullVocalStem = null;
+        StereoStemBuffer backingStem = null;
+        bool hasDistinctAccompaniment = false;
+
         for (int i = 0; i < track.Stems.Count; i++) {
             StereoStemBuffer st = track.Stems[i];
             if (st == null || st.Length <= 0) {
                 continue;
             }
             NeuralStemRole role = NeuralStemSpatializer.ClassifyStemName(st.Name);
-            if (role == NeuralStemRole.LeadVocal) {
-                return st;
-            }
-            if (role == NeuralStemRole.Vocals && fallbackVocal == null) {
-                fallbackVocal = st;
+            if (role == NeuralStemRole.LeadVocal && leadStem == null) {
+                leadStem = st;
+            } else if (role == NeuralStemRole.Vocals && fullVocalStem == null) {
+                fullVocalStem = st;
+            } else if (role == NeuralStemRole.BackingVocals && backingStem == null) {
+                backingStem = st;
+            } else if (role == NeuralStemRole.Instrumental || role == NeuralStemRole.Drums ||
+                       role == NeuralStemRole.Bass || role == NeuralStemRole.Other) {
+                hasDistinctAccompaniment = true;
             }
         }
-        return fallbackVocal;
+
+        if (!preserveBackingVocals) {
+            // Pure Instrumental (Remove Backing Vocals): remove ALL vocals (lead + backing).
+            if (fullVocalStem != null) {
+                return fullVocalStem;
+            }
+            // Only sum lead + backing when backing is truly isolated (distinct instrumental/band stems exist —
+            // never sum kara_2's 2-stem complement where backing_vocals contains all instruments!).
+            if (leadStem != null && backingStem != null && hasDistinctAccompaniment && leadStem.Length == backingStem.Length) {
+                float[] sumL = new float[leadStem.Length];
+                float[] sumR = new float[leadStem.Length];
+                for (int i = 0; i < leadStem.Length; i++) {
+                    sumL[i] = leadStem.Left[i] + backingStem.Left[i];
+                    sumR[i] = leadStem.Right[i] + backingStem.Right[i];
+                }
+                return new StereoStemBuffer("vocals", sumL, sumR);
+            }
+            return leadStem;
+        }
+
+        return leadStem ?? fullVocalStem;
     }
 
     long MapTrackSampleToOutputSampleLocked(long trackSamplePos) {

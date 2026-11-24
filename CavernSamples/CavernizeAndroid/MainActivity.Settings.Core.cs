@@ -89,11 +89,11 @@ public partial class MainActivity {
     OneUiSeekBar iso226RefSplBar, iso226ListenSplBar, dialogBoostBar;
     OneUiInlineSelector loudnessNormSelector, truePeakCeilingSelector;
     TextView loudnessMeterText, loudnessStatusText;
-    TextView neuralRuntimeStatusText, neuralPlanSummaryText;
-    Button neuralRuntimeCheckBtn, neuralModelsBtn;
-    OneUiInlineSelector neuralProviderSelector, neuralOrchestrationSelector, neuralEnsembleSelector, neuralUpmixModeSelector;
+    TextView neuralRuntimeStatusText, neuralPlanSummaryText, mvsepStatusText, neuralTrackCacheSavingsText;
+    Button neuralRuntimeCheckBtn, neuralModelsBtn, mvsepConfigBtn, neuralBrowseTrackCacheBtn;
+    OneUiInlineSelector neuralProviderSelector, neuralExecBackendSelector, neuralOrchestrationSelector, neuralStudioBundleSelector, neuralEnsembleSelector, neuralUpmixModeSelector, neuralTrackCacheCompSelector;
     OneUiSeekBar neuralOverlapBar, karaokeVocalLevelBar;
-    Switch neuralTtaSwitch, neuralPhaseFixSwitch, neuralConservationSwitch;
+    Switch neuralTtaSwitch, neuralPhaseFixSwitch, neuralConservationSwitch, neuralTrackCacheEnabledSwitch;
     Switch spatialKaraokeSwitch, karaokePreserveBackingSwitch, karaokeLosslessTwinSwitch;
     TextView lgsrStatusText;
     Switch lgsrEnabledSwitch, lgsrAutoDiscoverSwitch, lgsrEnvelopeLockSwitch, lgsrClippingGuardSwitch;

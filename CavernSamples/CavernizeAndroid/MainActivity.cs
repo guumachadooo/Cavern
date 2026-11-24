@@ -332,7 +332,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         playerEngine.ApplyLoudnessConfig(store.BuildLoudnessConfig());
         StemExtractor.TextResolver = key => AndroidStrings.Active[key];
         neuralRuntime = new NativeOnnxRuntimeBridge(this);
-        neuralTrackCache = new NeuralTrackCacheService(this, (long)store.NeuralTrackCacheMaxMb * 1024L * 1024L);
+        neuralTrackCache = new NeuralTrackCacheService(this, (long)store.NeuralTrackCacheMaxMb * 1024L * 1024L) {
+            IsEnabled = store.NeuralTrackCacheEnabled,
+            CompressionMode = (Cavernize.Logic.Spatial.NeuralTrackCacheCompressionMode)store.NeuralTrackCacheCompressionIndex
+        };
         neuralTrackCache.EvictToLimit((long)store.NeuralTrackCacheMaxMb * 1024L * 1024L);
         neuralOrchestrator = new Cavernize.Logic.Spatial.NeuralPipelineOrchestrator(neuralRuntime, neuralRuntime, neuralTrackCache);
         playerEngine.ApplyNeuralConfig(store.BuildNeuralAudioConfig());

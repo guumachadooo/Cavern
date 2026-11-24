@@ -94,6 +94,54 @@ public enum NeuralSpatialUpmixMode {
 }
 
 /// <summary>
+/// Lossless/Studio-lossless audio compression tier for the Slot 7B persistent AI stem cache (<c>CNTC v3</c>).
+/// </summary>
+public enum NeuralTrackCacheCompressionMode {
+    /// <summary>Compact 16-bit Mid/Side + 2nd-order LPC delta + ZLib lossless-within-16bit (&gt;96 dB SNR, ~5–7× smaller than float32).</summary>
+    Compact16Bit = 0,
+
+    /// <summary>Studio 24-bit Mid/Side + 2nd-order LPC delta + ZLib mastering-grade (&gt;140 dB SNR, ~3–4× smaller than float32).</summary>
+    Studio24Bit = 1,
+
+    /// <summary>Uncompressed IEEE-754 float32 PCM (legacy maximum speed, largest disk footprint).</summary>
+    RawFloat32 = 2
+}
+
+/// <summary>
+/// Offline multi-pass Studio Ensemble &amp; Bundle presets (MVSEP methodology for maximum SDR on non-real-time renders).
+/// </summary>
+public enum NeuralEnsembleBundlePreset {
+    /// <summary>Fast single-model pass optimized for interactive playback and minimal battery usage.</summary>
+    FastSingle = 0,
+
+    /// <summary>Studio Vocal Ensemble: combines all installed vocal models via MVSEP <c>min_fft</c>/<c>avg_wave</c> + Wiener <c>phase_fix</c>.</summary>
+    StudioVocalEnsemble = 1,
+
+    /// <summary>Studio Pure Instrumental: full-vocal removal (lead + backing) with optional Debleed &amp; conserved instrumental.</summary>
+    StudioPureInstrumental = 2,
+
+    /// <summary>Studio Full-Band 6-Stem Bundle: fuses dedicated high-SDR Vocal model with 4/6-stem separator via Vocal-Anchor conservation.</summary>
+    StudioFullBand6Stem = 3,
+
+    /// <summary>MVSEP 2-Stage Studio Karaoke Cascade: Mix -&gt; [AllVocals, PureInstrumental], then AllVocals -&gt; [LeadVocal, BackingVocals] (+1.1 dB SDR).</summary>
+    StudioKaraokeLeadBacking = 4
+}
+
+/// <summary>
+/// Execution backend for AI stem separation: on-device ONNX Runtime, Official MVSEP REST Cloud Offload, or Auto Hybrid.
+/// </summary>
+public enum NeuralExecutionBackend {
+    /// <summary>Local on-device ONNX Runtime (WebGPU Vulkan GPU / QNN HTP NPU / ARM64 KleidiAI CPU).</summary>
+    OnDevice = 0,
+
+    /// <summary>Official MVSEP REST API Cloud Offload (zero phone heat/GPU load; requires user-supplied MVSEP API token).</summary>
+    MvsepCloud = 1,
+
+    /// <summary>Auto Hybrid: uses MVSEP Cloud when token is configured and online, falling back seamlessly to On-Device ONNX.</summary>
+    AutoHybrid = 2
+}
+
+/// <summary>
 /// Forward-compatible Slot 1 contract implemented by W09 (<c>Universal Lossless Twin Service</c>).
 /// Allows Slot 2B Spatial Karaoke, Neural Stems, and Slot 6B Spatial Dialog to auto-accelerate and purify masks
 /// whenever a verified, sample-aligned lossless FLAC/WAV twin is paired with an Atmos/lossy track.
@@ -138,7 +186,10 @@ public enum NeuralOnnxContractKind {
     MelBandRoFormerHostStft = 4,
 
     /// <summary>FlashSR 16 kHz -> 48 kHz bandwidth-extension upsampler (<c>audio_values [B, n16k]</c> -> <c>reconstruction [B, 3*n16k]</c>).</summary>
-    FlashSr16kTo48k = 5
+    FlashSr16kTo48k = 5,
+
+    /// <summary>BS-RoFormer dual-tensor host-STFT (<c>spec_real</c>, <c>spec_imag</c> <c>[1, 2, 1025, T]</c> -> <c>out_spec_real</c>, <c>out_spec_imag</c> <c>[1, S, 2, 1025, T]</c>).</summary>
+    BsRoFormerHostStft = 6
 }
 
 /// <summary>
@@ -311,6 +362,70 @@ public static class NeuralModelCatalog {
             PriorityRank = 160
         },
         new NeuralModelCatalogEntry {
+            Id = "bs_roformer_sw_6stem_fp16",
+            DisplayName = "BS-RoFormer SW 6-Stem FP16 (WebGPU Studio)",
+            SourceRepository = "jarredou/BS-ROFO-SW + elicwhite/bs-roformer-sw-6stem-onnx",
+            License = "MIT",
+            Task = NeuralModelTask.StemSeparation6,
+            FileName = "bs_roformer_sw_6stem_fp16.onnx",
+            DownloadUrl = "https://huggingface.co/elicwhite/bs-roformer-sw-6stem-onnx/resolve/main/bs_roformer_sw_6stem_fp16.onnx",
+            FallbackDownloadUrls = [
+                "https://huggingface.co/Acapellas/bs-roformer-sw-6stem-FP16-FP32-onnx/resolve/main/bs_roformer_sw_6stem_fp16.onnx"
+            ],
+            RequiresManualOnnxImport = false,
+            ApproxSizeMb = 336.0f,
+            ExpectedSampleRate = 44100,
+            RecommendedChunkSamples = 176400,
+            OutputStemNames = ["bass", "drums", "other", "vocals", "guitar", "piano"],
+            ContractKind = NeuralOnnxContractKind.BsRoFormerHostStft,
+            StftFftSize = 2048,
+            StftHopSize = 512,
+            StftDimF = 1025,
+            StftDimT = 345,
+            IsMobileFast = false,
+            PriorityRank = 190
+        },
+        new NeuralModelCatalogEntry {
+            Id = "bs_roformer_4stem_rhythm_fp16",
+            DisplayName = "BS-RoFormer 4-Stem Rhythm FP16 (Studio)",
+            SourceRepository = "ZFTurbo/MSST + silverdaw/bs-roformer-rhythm-onnx",
+            License = "MIT",
+            Task = NeuralModelTask.StemSeparation4,
+            FileName = "bs_roformer_4stem_rhythm_fp16.onnx",
+            DownloadUrl = "https://huggingface.co/silverdaw/bs-roformer-rhythm-onnx/resolve/main/bs_roformer_4stem_rhythm_fp16.onnx",
+            FallbackDownloadUrls = Array.Empty<string>(),
+            RequiresManualOnnxImport = false,
+            ApproxSizeMb = 257.0f,
+            ExpectedSampleRate = 44100,
+            RecommendedChunkSamples = 352800,
+            OutputStemNames = ["drums", "bass", "other", "vocals"],
+            ContractKind = NeuralOnnxContractKind.BsRoFormerHostStft,
+            StftFftSize = 2048,
+            StftHopSize = 441,
+            StftDimF = 1025,
+            StftDimT = 801,
+            IsMobileFast = false,
+            PriorityRank = 170
+        },
+        new NeuralModelCatalogEntry {
+            Id = "mbr_vocals_roformer_sota",
+            DisplayName = "Mel-Band RoFormer Vocals (Studio SDR 11.0)",
+            SourceRepository = "KimberleyJSN/melbandroformer + smank/mel-band-roformer-vocals-onnx",
+            License = "MIT",
+            Task = NeuralModelTask.VocalSeparation,
+            FileName = "melband_roformer_vocals.onnx",
+            DownloadUrl = "https://huggingface.co/smank/mel-band-roformer-vocals-onnx/resolve/main/melband_roformer_vocals.onnx",
+            FallbackDownloadUrls = Array.Empty<string>(),
+            RequiresManualOnnxImport = false,
+            ApproxSizeMb = 953.3f,
+            ExpectedSampleRate = 44100,
+            RecommendedChunkSamples = 352800,
+            OutputStemNames = ["vocals", "instrumental"],
+            ContractKind = NeuralOnnxContractKind.WaveformStereo,
+            IsMobileFast = false,
+            PriorityRank = 185
+        },
+        new NeuralModelCatalogEntry {
             Id = DefaultKaraokeModelId,
             DisplayName = "UVR MDX-Net Karaoke 2 (Lead vs Backing)",
             SourceRepository = "Anjok07/UVR + TRvlvr/model_repo",
@@ -335,6 +450,29 @@ public static class NeuralModelCatalog {
             InvertPrimaryStem = true,
             IsMobileFast = true,
             PriorityRank = 150
+        },
+        new NeuralModelCatalogEntry {
+            Id = "mbr_karaoke_roformer_webgpu",
+            DisplayName = "Mel-Band RoFormer Karaoke FP16 (WebGPU SOTA)",
+            SourceRepository = "aufr33/viperx + Acapellas/mel-band-roformer-karaoke-webgpu",
+            License = "MIT",
+            Task = NeuralModelTask.KaraokeLeadBacking,
+            FileName = "mel_band_roformer_karaoke_webgpu_fp16.onnx",
+            DownloadUrl = "https://huggingface.co/Acapellas/mel-band-roformer-karaoke-webgpu/resolve/main/model_fp16.onnx",
+            FallbackDownloadUrls = [
+                "https://huggingface.co/Acapellas/mel-band-roformer-karaoke-webgpu/resolve/main/model.onnx"
+            ],
+            RequiresManualOnnxImport = false,
+            ApproxSizeMb = 460.4f,
+            ExpectedSampleRate = 44100,
+            RecommendedChunkSamples = 352800,
+            OutputStemNames = ["lead_vocal", "backing_vocals"],
+            ContractKind = NeuralOnnxContractKind.MelBandRoFormerHostStft,
+            StftFftSize = 2048,
+            StftHopSize = 441,
+            StftDimF = 1025,
+            IsMobileFast = false,
+            PriorityRank = 180
         },
         new NeuralModelCatalogEntry {
             Id = DefaultDereverbModelId,
@@ -511,7 +649,8 @@ public static class NeuralModelCatalog {
     public static string BuildAttributionNotice() =>
         "Slot 7 On-Device Neural Audio & MVSEP Pipeline Licenses:\n\n" +
         "• Microsoft ONNX Runtime (ARM64 XNNPACK / QNN EP) — MIT License (github.com/microsoft/onnxruntime)\n" +
-        "• ZFTurbo / MVSEP Anti-Artifact Pipeline (TTA, avg_wave/min_fft/avg_fft, Wiener phase_fix) — MIT License\n" +
+        "• ZFTurbo / MVSEP Anti-Artifact Pipeline & Official MVSEP REST API (TTA, avg_wave/min_fft/avg_fft, Wiener phase_fix) — MIT License\n" +
+        "• BS-RoFormer & Mel-Band RoFormer (ByteDance/lucidrains, KimberleyJSN, jarredou, aufr33/viperx, elicwhite, silverdaw, smank) — MIT License\n" +
         "• starrytong/SCNet & bgkb/scnet_onnx (4-Stem Mobile) — MIT License\n" +
         "• Meta Platforms Demucs v4 / StemSplitio htdemucs_6s (6-Stem Studio) — MIT License\n" +
         "• Anjok07 / TRvlvr UVR MDX-Net (Kim Vocal 2, Karaoke 2, FoxJoy Reverb HQ, aufr33 Crowd HQ) — MIT License\n" +
@@ -564,6 +703,18 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
 
     /// <summary>Maximum disk budget in megabytes for Slot 7B <c>CacheDir/neural_tracks/</c> LRU cache.</summary>
     public int TrackCacheMaxSizeMb { get; init; } = 512;
+
+    /// <summary>Enables automatic persistent storage of separated AI stems in <c>CNTC v3</c> compressed cache.</summary>
+    public bool TrackCacheEnabled { get; init; } = true;
+
+    /// <summary>Lossless compression tier for <c>CNTC v3</c> persistent stem cache.</summary>
+    public NeuralTrackCacheCompressionMode TrackCacheCompressionMode { get; init; } = NeuralTrackCacheCompressionMode.Compact16Bit;
+
+    /// <summary>Offline multi-pass Studio Ensemble/Bundle preset (FastSingle for instant playback; Studio* for multi-pass mastering).</summary>
+    public NeuralEnsembleBundlePreset StudioBundlePreset { get; init; } = NeuralEnsembleBundlePreset.FastSingle;
+
+    /// <summary>Selected AI separation execution backend (On-Device ONNX, MVSEP Cloud REST API, or Auto Hybrid).</summary>
+    public NeuralExecutionBackend ExecutionBackend { get; init; } = NeuralExecutionBackend.OnDevice;
 
     /// <summary>
     /// Inter-chunk GPU breathing yield in milliseconds (0..100 ms; default 16 ms) so WebGPU/Vulkan inference
@@ -629,6 +780,10 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
         UseLosslessTwinForKaraoke = UseLosslessTwinForKaraoke,
         SpatialUpmixMode = SpatialUpmixMode,
         TrackCacheMaxSizeMb = TrackCacheMaxSizeMb,
+        TrackCacheEnabled = TrackCacheEnabled,
+        TrackCacheCompressionMode = TrackCacheCompressionMode,
+        StudioBundlePreset = StudioBundlePreset,
+        ExecutionBackend = ExecutionBackend,
         GpuUiBreathingYieldMs = GpuUiBreathingYieldMs,
         EnableProgressiveStreaming = EnableProgressiveStreaming,
         TaskModelSlots = TaskModelSlots,
@@ -688,6 +843,10 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
             UseLosslessTwinForKaraoke = UseLosslessTwinForKaraoke,
             SpatialUpmixMode = Enum.IsDefined(SpatialUpmixMode) ? SpatialUpmixMode : NeuralSpatialUpmixMode.Off,
             TrackCacheMaxSizeMb = Math.Clamp(TrackCacheMaxSizeMb, 128, 4096),
+            TrackCacheEnabled = TrackCacheEnabled,
+            TrackCacheCompressionMode = Enum.IsDefined(TrackCacheCompressionMode) ? TrackCacheCompressionMode : NeuralTrackCacheCompressionMode.Compact16Bit,
+            StudioBundlePreset = Enum.IsDefined(StudioBundlePreset) ? StudioBundlePreset : NeuralEnsembleBundlePreset.FastSingle,
+            ExecutionBackend = Enum.IsDefined(ExecutionBackend) ? ExecutionBackend : NeuralExecutionBackend.OnDevice,
             GpuUiBreathingYieldMs = Math.Clamp(GpuUiBreathingYieldMs, 0, 100),
             EnableProgressiveStreaming = EnableProgressiveStreaming,
             TaskModelSlots = normalizedSlots,
@@ -757,6 +916,10 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
             || UseLosslessTwinForKaraoke != other.UseLosslessTwinForKaraoke
             || SpatialUpmixMode != other.SpatialUpmixMode
             || TrackCacheMaxSizeMb != other.TrackCacheMaxSizeMb
+            || TrackCacheEnabled != other.TrackCacheEnabled
+            || TrackCacheCompressionMode != other.TrackCacheCompressionMode
+            || StudioBundlePreset != other.StudioBundlePreset
+            || ExecutionBackend != other.ExecutionBackend
             || GpuUiBreathingYieldMs != other.GpuUiBreathingYieldMs
             || EnableProgressiveStreaming != other.EnableProgressiveStreaming
             || !string.Equals(ActiveStemModelId, other.ActiveStemModelId, StringComparison.OrdinalIgnoreCase)
@@ -818,6 +981,10 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
         hc.Add(UseLosslessTwinForKaraoke);
         hc.Add(SpatialUpmixMode);
         hc.Add(TrackCacheMaxSizeMb);
+        hc.Add(TrackCacheEnabled);
+        hc.Add(TrackCacheCompressionMode);
+        hc.Add(StudioBundlePreset);
+        hc.Add(ExecutionBackend);
         hc.Add(GpuUiBreathingYieldMs);
         hc.Add(EnableProgressiveStreaming);
         hc.Add(ActiveStemModelId, StringComparer.OrdinalIgnoreCase);
@@ -947,6 +1114,18 @@ public sealed class NeuralSeparatedTrack {
 
     /// <summary>Slot 7A orchestrator plan signature used to generate this stem bundle (for cache validation).</summary>
     public string PlanSignature { get; init; } = string.Empty;
+
+    /// <summary>Human-readable track title persisted into <c>CNTC v3</c> header for instant Cache Folder Browser display.</summary>
+    public string DisplayTitle { get; set; } = string.Empty;
+
+    /// <summary>Optional artist name persisted into <c>CNTC v3</c> header.</summary>
+    public string ArtistName { get; set; } = string.Empty;
+
+    /// <summary>Processing origin label persisted into <c>CNTC v3</c> header (e.g. "Local AI", "MVSEP Cloud", "Studio Bundle").</summary>
+    public string OriginTag { get; set; } = string.Empty;
+
+    /// <summary>Model or bundle summary persisted into <c>CNTC v3</c> header.</summary>
+    public string ModelSummary { get; set; } = string.Empty;
 
     /// <summary>Total stem length in samples per channel.</summary>
     public int TotalSampleCount => Stems != null && Stems.Count > 0 && Stems[0] != null ? Stems[0].Length : (MonoLeadVocalRef?.Length ?? 0);
