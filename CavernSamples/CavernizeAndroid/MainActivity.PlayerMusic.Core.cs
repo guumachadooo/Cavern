@@ -272,10 +272,10 @@ public partial class MainActivity {
     OneUiIconView musicPlayIcon;
     OneUiSeekBar musicVolSeekBar;
 
-    // Flanking Spatial Toggles ([Cavernize 3D] | [HRTF 3D] | [Matrix 7.1] | [AI 3D]) + Integrated Bottom Utility Row
-    LinearLayout musicCavernizeToggleBtn, musicBottomSpatialBtn, musicMatrixToggleBtn, musicAiToggleBtn;
-    OneUiIconView musicCavernizeIcon, musicBottomSpatialIcon, musicMatrixIcon, musicAiToggleIcon;
-    TextView musicCavernizeText, musicBottomSpatialText, musicMatrixText, musicAiToggleText;
+    // Unified Spatial & AI Hierarchy ([Upmix: Direct/7.1/3D] | [HRTF Profile] | [AI Engine] | [(i)]) + Integrated Bottom Utility Row
+    LinearLayout musicUpmixToggleBtn, musicBottomSpatialBtn, musicAiToggleBtn;
+    OneUiIconView musicUpmixIcon, musicBottomSpatialIcon, musicAiToggleIcon;
+    TextView musicUpmixText, musicBottomSpatialText, musicAiToggleText;
 
     FrameLayout musicBottomLeftBtn, musicBottomOnlineBtn, musicBottomLoopBtn, musicBottomMoreBtn;
     OneUiIconView musicBottomLeftIcon, musicBottomOnlineIcon, musicBottomLoopIcon, musicBottomMoreIcon;
@@ -452,7 +452,9 @@ public partial class MainActivity {
         });
         musicLyricsContainer.AddView(lyricsHeader);
 
-        musicLyricsView = new AppleMusicLyricsView(this);
+        musicLyricsView = new AppleMusicLyricsView(this) {
+            WordHighlightStyle = (LyricsWordHighlightStyle)store.LyricsHighlightStyleIndex
+        };
         musicLyricsView.LineSeekRequested += sec => SeekAbsoluteSeconds(sec);
         musicLyricsContainer.AddView(musicLyricsView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
 
@@ -795,20 +797,26 @@ public partial class MainActivity {
             BottomMargin = Dp(8)
         });
 
-        // 6. Flanking Spatial Toggles: [ Cavernize 3D ]  [ HRTF 3D ]  [ Matrix 7.1 ]  [ AI 3D ]
+        // 6. Unified Spatial & AI Hierarchy: [ Upmix: Direct / 7.1 / 3D ]  [ HRTF Profile ]  [ AI Engine ]  [ (i) ]
         LinearLayout spatialToggleRow = HRow();
         musicSpatialToggleRow = spatialToggleRow;
         spatialToggleRow.SetGravity(GravityFlags.CenterVertical);
 
-        (musicCavernizeToggleBtn, musicCavernizeIcon, musicCavernizeText) = MakeCompactSpatialPill(
-            OneUiIconType.HeightUp, "Cavernize 3D", sfSemi, () => {
-                bool next = !store.CavernizeUpmix;
-                store.CavernizeUpmix = next;
+        (musicUpmixToggleBtn, musicUpmixIcon, musicUpmixText) = MakeCompactSpatialPill(
+            OneUiIconType.HeightUp, S["PlayTabUpmixDirectShort"], sfSemi, () => {
+                int nextIdx = (ResolveUpmixModeIndex() + 1) % 3;
+                store.MatrixUpmixing = nextIdx >= 1;
+                store.CavernizeUpmix = nextIdx >= 2;
                 SyncUpmixModeUi();
                 RefreshSettingsCategorySubtitles();
                 _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
+                RefreshSpatialChoreoClarifierUi();
                 RefreshMusicPlayerControlsUi();
             });
+        musicUpmixToggleBtn.LongClick += (_, e) => {
+            ShowPlayTabSpatialUpmixDialog();
+            e.Handled = true;
+        };
 
         (musicBottomSpatialBtn, musicBottomSpatialIcon, musicBottomSpatialText) = MakeCompactSpatialPill(
             OneUiIconType.Headphones, S["BentoHrtf"], sfSemi, () => {
@@ -827,16 +835,6 @@ public partial class MainActivity {
             e.Handled = true;
         };
 
-        (musicMatrixToggleBtn, musicMatrixIcon, musicMatrixText) = MakeCompactSpatialPill(
-            OneUiIconType.Sparkles, "Matrix 7.1", sfSemi, () => {
-                bool next = !store.MatrixUpmixing;
-                store.MatrixUpmixing = next;
-                SyncUpmixModeUi();
-                RefreshSettingsCategorySubtitles();
-                _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
-                RefreshMusicPlayerControlsUi();
-            });
-
         (musicAiToggleBtn, musicAiToggleIcon, musicAiToggleText) = MakeCompactSpatialPill(
             OneUiIconType.Sparkles, S["PlayTabAiOffShort"], sfSemi, TogglePlayTabAiProcessing);
         musicAiToggleBtn.LongClick += (_, e) => {
@@ -844,10 +842,25 @@ public partial class MainActivity {
             e.Handled = true;
         };
 
-        spatialToggleRow.AddView(musicCavernizeToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(5) });
-        spatialToggleRow.AddView(musicBottomSpatialBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(5) });
-        spatialToggleRow.AddView(musicMatrixToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(5) });
-        spatialToggleRow.AddView(musicAiToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f));
+        FrameLayout spatialHelpBtn = new(this) {
+            ContentDescription = S["PlayTabSpatialGuideTitle"]
+        };
+        spatialHelpBtn.Background = OneUiTheme.CreateRoundedDrawable(
+            this,
+            Color.Argb(28, 255, 255, 255),
+            99f,
+            Color.Argb(40, 255, 255, 255),
+            0.8f);
+        OneUiTheme.AttachRecoil(spatialHelpBtn, 0.88f);
+        spatialHelpBtn.AddView(
+            new OneUiIconView(this, OneUiIconType.Info, Color.Argb(205, 244, 246, 252)),
+            new FrameLayout.LayoutParams(Dp(15), Dp(15)) { Gravity = GravityFlags.Center });
+        spatialHelpBtn.Click += (_, _) => ShowPlayTabSpatialHierarchyHelpDialog();
+
+        spatialToggleRow.AddView(musicUpmixToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(6) });
+        spatialToggleRow.AddView(musicBottomSpatialBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(6) });
+        spatialToggleRow.AddView(musicAiToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(6) });
+        spatialToggleRow.AddView(spatialHelpBtn, new LinearLayout.LayoutParams(Dp(30), Dp(30)));
         musicNowPlayingSection.AddView(spatialToggleRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });

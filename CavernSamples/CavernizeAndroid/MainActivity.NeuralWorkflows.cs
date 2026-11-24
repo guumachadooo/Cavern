@@ -283,8 +283,10 @@ public partial class MainActivity {
                     }
                     RefreshLgsrUi();
                     RefreshNeuralPrepUi();
+                    RefreshSpatialChoreoClarifierUi();
                     RefreshBottomActionBarVisuals();
-                });
+                },
+                helpBody: S["TipSlot2CLgsr"]);
             atmosSwitch.Tag = "playTabAtmosSwitch";
         } else {
             TextView desc = Label(S["PlayTabAiStereoDialogDesc"], 12.4f, OneUiTheme.TextSecondary);
@@ -302,12 +304,13 @@ public partial class MainActivity {
                 _ = playerEngine?.ApplyNeuralConfigAsync(store.BuildNeuralAudioConfig());
                 RefreshNeuralAudioUi();
                 RefreshNeuralPrepUi();
+                RefreshSpatialChoreoClarifierUi();
                 RefreshBottomActionBarVisuals();
                 if (idx != 0 && !(playerEngine?.NeuralStage?.HasPlayableSpatialUpmixStems ?? false) && GetActiveTrack() != null) {
                     PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, silentIfNotReady: false);
                 }
             };
-            content.AddView(modeSel);
+            content.AddView(WrapControlWithHelp(modeSel, S["PlayTabAiModeTitle"], S["TipNeuralUpmix"], bottomMarginDp: 2));
         }
 
         OneUiModalDialog.Show(
@@ -319,7 +322,70 @@ public partial class MainActivity {
             iconBadgeColor: OneUiTheme.IconSliderMedia,
             positiveText: S["NeuralModelsBtn"],
             onPositive: ShowNeuralModelsModal,
-            negativeText: S["CloseBtn"]);
+            negativeText: S["CloseBtn"],
+            onHelp: ShowPlayTabSpatialHierarchyHelpDialog,
+            helpContentDesc: S["PlayTabSpatialGuideTitle"]);
+    }
+
+    void ShowPlayTabSpatialUpmixDialog() {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
+
+        TextView desc = Label(S["PlayTabUpmixDialogDesc"], 12.4f, OneUiTheme.TextSecondary);
+        desc.SetPadding(0, 0, 0, Dp(10));
+        content.AddView(desc);
+
+        OneUiInlineSelector sel = new(this, S["UpmixModeLabel"]);
+        sel.SetItems(
+            [S["UpmixModeDirect"], S["UpmixModeSurround"], S["UpmixModeFull3D"]],
+            ResolveUpmixModeIndex());
+        sel.SelectionChanged += pos => {
+            store.MatrixUpmixing = pos >= 1;
+            store.CavernizeUpmix = pos >= 2;
+            SyncUpmixModeUi();
+            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
+            RefreshSpatialChoreoClarifierUi();
+            RefreshMusicPlayerControlsUi();
+            RefreshSettingsCategorySubtitles();
+        };
+        content.AddView(WrapControlWithHelp(sel, S["UpmixModeLabel"].TrimEnd(':'), S["TipUpmixMode"], bottomMarginDp: 6));
+
+        AddDivider(content);
+        AddSwitchRow(content, S["AtmosAwareUpmix"], store.AtmosAwareUpmix, v => {
+            store.AtmosAwareUpmix = v;
+            if (atmosAwareUpmixSwitch != null && atmosAwareUpmixSwitch.Checked != v) {
+                atmosAwareUpmixSwitch.Checked = v;
+            }
+            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
+            RefreshMusicPlayerControlsUi();
+            RefreshSettingsCategorySubtitles();
+        }, helpBody: S["TipAtmosAwareUpmix"]);
+
+        OneUiModalDialog.Show(
+            this,
+            S["UpmixTitle"],
+            null,
+            customContent: content,
+            icon: OneUiIconType.HeightUp,
+            iconBadgeColor: OneUiTheme.IconAtmosUpmix,
+            positiveText: S["CloseBtn"],
+            onHelp: ShowPlayTabSpatialHierarchyHelpDialog,
+            helpContentDesc: S["PlayTabSpatialGuideTitle"]);
+    }
+
+    void ShowPlayTabSpatialHierarchyHelpDialog() {
+        if (uiDestroyed) {
+            return;
+        }
+        OneUiModalDialog.Show(
+            this,
+            S["PlayTabSpatialGuideTitle"],
+            S["PlayTabSpatialGuideBody"],
+            icon: OneUiIconType.Info,
+            iconBadgeColor: OneUiTheme.Primary,
+            positiveText: S["OkBtn"]);
     }
 
     sealed class CachedVocalDnaRecord {

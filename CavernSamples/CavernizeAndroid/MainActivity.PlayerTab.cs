@@ -52,6 +52,7 @@ public partial class MainActivity {
 
     OneUiInlineSelector rolloffSelector;
     OneUiInlineSelector spatialChoreoSelector;
+    TextView spatialChoreoTierBadgeText;
     int choreoBuildGeneration;
     NeuralSeparatedTrack lastChoreoBuiltStemTrack;
     SpatialChoreoMode lastChoreoBuiltMode = SpatialChoreoMode.Off;
@@ -94,14 +95,9 @@ public partial class MainActivity {
 
     LinearLayout BuildPlayerTab() {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
-        page.SetPadding(Dp(14), Dp(6), Dp(14), Dp(116));
+        page.SetPadding(Dp(14), Dp(4), Dp(14), Dp(116));
 
-        // 0. Active File Source Bar (Clean workspace context & track selector)
-        page.AddView(CreateWorkspaceSourceBar(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(6)
-        });
-
-        // 0B. Live Tappable Active Signal Chain Bar ([Decoder/Format] -> [Upmix / AI 3D Stems] -> [LGSR / Twin] -> [Room / HRTF] -> [AutoEq / Loudness])
+        // 0. Live Tappable Active Signal Chain Bar (WorkspaceSourceBar is hoisted stationary above contentFrame)
         page.AddView(BuildActiveSignalChainBar(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
@@ -150,6 +146,7 @@ public partial class MainActivity {
         }
         roomView = new RoomSimulatorView(this) {
             IsPositionLocked = store.RoomPositionLocked,
+            InvertOrbitDrag = store.RoomInvertOrbitDrag,
             IsXRayEnabled = store.RoomXRayOverlayEnabled,
             XRayBandMode = initialBandMode
         };
@@ -311,6 +308,11 @@ public partial class MainActivity {
         choreoWrap.SetPadding(0, Dp(8), 0, 0);
         roomCard.AddView(choreoWrap);
 
+        spatialChoreoTierBadgeText = Label("", 11.2f, OneUiTheme.TextSub);
+        spatialChoreoTierBadgeText.SetPadding(Dp(4), Dp(2), Dp(4), Dp(2));
+        roomCard.AddView(spatialChoreoTierBadgeText);
+        RefreshSpatialChoreoClarifierUi();
+
         fineTuneContainer = new LinearLayout(this) {
             Orientation = Orientation.Vertical,
             Visibility = isFineTuneExpanded ? ViewStates.Visible : ViewStates.Gone
@@ -364,6 +366,16 @@ public partial class MainActivity {
             playerEngine.ListenerRotation = new Vector3(v, playerEngine.ListenerRotation.Y, 0);
             UpdateRoomCanvas();
         }, "°", defaultValue: 0);
+        AddDivider(fineTuneContainer);
+        roomInvertOrbitSwitch = AddSwitchRow(
+            fineTuneContainer,
+            S["RoomInvertOrbitTitle"],
+            store.RoomInvertOrbitDrag,
+            v => {
+                store.RoomInvertOrbitDrag = v;
+                SyncRoomInvertOrbitUi();
+            },
+            helpBody: S["TipRoomInvertOrbit"]);
         UpdateRoomLockButtonUi();
         roomCard.AddView(fineTuneContainer);
         page.AddView(roomCard);
@@ -1175,7 +1187,40 @@ public partial class MainActivity {
         }
         RefreshSignalChainBarUi();
         RefreshBottomActionBarVisuals();
+        RefreshSpatialChoreoClarifierUi();
         SyncSpatialChoreoTrackIfNeeded();
+    }
+
+    void RefreshSpatialChoreoClarifierUi() {
+        if (uiDestroyed || store == null || spatialChoreoTierBadgeText == null) {
+            return;
+        }
+        SpatialChoreoMode mode = (SpatialChoreoMode)Math.Clamp(store.SpatialChoreoModeIndex, 0, 4);
+        string motionDesc = mode switch {
+            SpatialChoreoMode.Subtle => S["SpatialChoreoDescSubtle"],
+            SpatialChoreoMode.Musical => S["SpatialChoreoDescMusical"],
+            SpatialChoreoMode.Cinematic => S["SpatialChoreoDescCinematic"],
+            SpatialChoreoMode.Orbit => S["SpatialChoreoDescOrbit"],
+            _ => S["SpatialChoreoDescOff"]
+        };
+
+        string tierLabel;
+        if (IsActiveTrackMultichannelOrAtmos()) {
+            tierLabel = store.PlayTabAtmosAiEnhancementEnabled ? S["SpatialTierAtmosAi"] : S["SpatialTierNativeAtmos"];
+        } else if (IsPlayTabAiActive()) {
+            tierLabel = store.NeuralSpatialUpmixModeIndex == (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.HybridNeuralDirAc
+                ? S["SpatialTierAiHybrid714"]
+                : S["SpatialTierAiStems3D"];
+        } else {
+            int upmixIdx = ResolveUpmixModeIndex();
+            tierLabel = upmixIdx switch {
+                2 => S["SpatialTierCavernize3D"],
+                1 => S["SpatialTierMatrix71"],
+                _ => S["SpatialTierDirect"]
+            };
+        }
+
+        spatialChoreoTierBadgeText.Text = string.Format(S["SpatialChoreoClarifierFmt"], tierLabel, motionDesc);
     }
 
     void OnSpatialChoreoModeSelected(SpatialChoreoMode mode) {
@@ -1187,6 +1232,7 @@ public partial class MainActivity {
             playerEngine.SceneHub.ActiveChoreoMode = mode;
         }
         Cavern.Neural.NeuralStemSpatializer.ActiveChoreoMode = mode;
+        RefreshSpatialChoreoClarifierUi();
 
         if (mode == SpatialChoreoMode.Off) {
             choreoBuildGeneration++;

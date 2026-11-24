@@ -109,6 +109,8 @@ public partial class MainActivity {
     OneUiInlineSelector upmixModeSelector;
     LinearLayout atmosAwareUpmixSection;
     Switch atmosAwareUpmixSwitch;
+    Switch settingsRoomInvertOrbitSwitch, roomInvertOrbitSwitch;
+    OneUiInlineSelector lyricsHighlightSelector;
 
     sealed class SettingsCardEntry {
         public LinearLayout Card;

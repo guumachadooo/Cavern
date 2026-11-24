@@ -63,9 +63,7 @@ public partial class MainActivity {
             store.IsmRoomPresetIndex = pos;
             ApplyAndRefreshExternalization();
         };
-        slot5aCard.AddView(ismRoomPresetSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
+        slot5aCard.AddView(WrapControlWithHelp(ismRoomPresetSelector, S["IsmRoomPresetTitle"].TrimEnd(':'), S["TipIsmRoomPreset"], bottomMarginDp: 8));
 
         ismWallMaterialSelector = new OneUiInlineSelector(this, S["IsmWallMaterialTitle"]);
         string[] ismMaterialLabels = [
@@ -80,9 +78,7 @@ public partial class MainActivity {
             store.IsmWallMaterialIndex = pos;
             ApplyAndRefreshExternalization();
         };
-        slot5aCard.AddView(ismWallMaterialSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
+        slot5aCard.AddView(WrapControlWithHelp(ismWallMaterialSelector, S["IsmWallMaterialTitle"].TrimEnd(':'), S["TipIsmWallMaterial"], bottomMarginDp: 8));
 
         ismOrderSelector = new OneUiInlineSelector(this, S["IsmOrderTitle"]);
         string[] ismOrderLabels = [S["IsmOrder1"], S["IsmOrder2"]];
@@ -91,9 +87,7 @@ public partial class MainActivity {
             store.IsmReflectionOrder = pos == 0 ? 1 : 2;
             ApplyAndRefreshExternalization();
         };
-        slot5aCard.AddView(ismOrderSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(6)
-        });
+        slot5aCard.AddView(WrapControlWithHelp(ismOrderSelector, S["IsmOrderTitle"].TrimEnd(':'), S["TipIsmOrder"], bottomMarginDp: 6));
 
         (ismLevelBar, _) = AddSliderRow(
             slot5aCard,
@@ -170,9 +164,7 @@ public partial class MainActivity {
             store.MagLsModeIndex = pos;
             ApplyAndRefreshPersonalization(rebuildHrir: true);
         };
-        slot5bCard.AddView(magLsModeSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
+        slot5bCard.AddView(WrapControlWithHelp(magLsModeSelector, S["MagLsModeTitle"].TrimEnd(':'), S["TipMagLsMode"], bottomMarginDp: 8));
 
         magLsCutoffSelector = new OneUiInlineSelector(this, S["MagLsCutoffTitle"]);
         string[] magLsCutoffLabels = [S["MagLsCutoffAuto"], "1.5 kHz", "2.5 kHz", "3.5 kHz", "5.0 kHz"];
@@ -182,9 +174,7 @@ public partial class MainActivity {
             store.MagLsCutoffHz = MagLsCutoffPresets[safe];
             ApplyAndRefreshPersonalization(rebuildHrir: true);
         };
-        slot5bCard.AddView(magLsCutoffSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
+        slot5bCard.AddView(WrapControlWithHelp(magLsCutoffSelector, S["MagLsCutoffTitle"].TrimEnd(':'), S["TipMagLsCutoff"], bottomMarginDp: 8));
 
         AddDivider(slot5bCard);
         biometricItdSwitch = AddSwitchRow(slot5bCard, S["BiometricItdEnableTitle"], store.BiometricItdEnabled, v => {

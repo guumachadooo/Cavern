@@ -38,11 +38,7 @@ public partial class MainActivity {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
         ApplyTabPageCutoutPadding(page);
 
-        // 0. Active File Source Bar (Clean workspace context & track selector)
-        page.AddView(CreateWorkspaceSourceBar(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
-
+        // WorkspaceSourceBar is hoisted stationary above contentFrame across non-Play tabs
         LinearLayout card = Card(S["ExtractTitle"], OneUiIconType.Scissors, OneUiTheme.IconStemsCalib);
         TextView desc = Label(S["ExtractDesc"], 12f, OneUiTheme.TextSub);
         desc.SetPadding(0, 0, 0, Dp(10));

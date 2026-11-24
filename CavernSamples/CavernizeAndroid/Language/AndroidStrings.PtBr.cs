@@ -1606,5 +1606,48 @@ public sealed partial class AndroidStrings {
         d["StudioOptRemoveBackingTitle"] = "Remover Backing Vocals (Instrumental Puro)";
         d["StudioOptRemoveBackingDesc"] = "Remove tanto a voz principal quanto os coros de apoio para um master instrumental limpo sem afetar os instrumentos.";
         d["StudioTagPureInstrFmt"] = "Instrumental Puro ({0}%)";
+        // Master Overhaul T4: Hierarquia Espacial, Clareza de Movimento, Arrasto 3D, Letras e Ajuda (i) Universal
+        d["PlayTabUpmixDirectShort"] = "Direto";
+        d["PlayTabUpmixMatrixShort"] = "Matrix 7.1";
+        d["PlayTabUpmix3DShort"] = "Cavernize 3D";
+        d["PlayTabUpmixDialogDesc"] = "Escolha como o DSP clássico em tempo real expande áudio estéreo ou 5.1 para a sala 3D. Toque na pílula para alternar ou configure a proteção Atmos-Aware abaixo.";
+        d["PlayTabSpatialGuideTitle"] = "Como Áudio Espacial e IA Trabalham Juntos";
+        d["PlayTabSpatialGuideBody"] = "Cada pílula controla uma camada clara da cadeia de áudio:\n\n• Upmix (Direto / Matrix 7.1 / Cavernize 3D): Expansão DSP em tempo real de estéreo ou 5.1 para surround e caixas de altura.\n• HRTF (Perfil Binaural): Renderiza a sala 3D nos fones usando respostas acústicas medidas de cabeça e orelha.\n• Motor IA (IA 3D / IA 7.1.4 / IA Atmos): Separa instrumentos em objetos 3D reais (ou restaura faixas Atmos via Gêmeo Lossless).\n• Coreografia 3D (na Sala 3D): Controla APENAS como os objetos 3D se movem (Estático, Sutil, Musical, Cinematográfico, Órbita) — independente do nível de IA ou Upmix.";
+        d["RoomInvertOrbitTitle"] = "Inverter Arrasto Orbital da Sala 3D";
+        d["TipRoomInvertOrbit"] = "DESLIGADO (Padrão — Manipulação Direta): Arrastar a sala 3D gira o ambiente naturalmente acompanhando o seu dedo.\n\nLIGADO (Órbita Clássica de Câmera): Inverte a direção horizontal e vertical do arrasto para mover a câmera virtual.";
+        d["LyricsHighlightStyleTitle"] = "Estilo de Destaque de Palavra (Letras):";
+        d["LyricsStyleSmoothGlow"] = "Brilho Suave (Padrão)";
+        d["LyricsStyleMinimalClean"] = "Limpo Minimalista";
+        d["LyricsStyleSoftPill"] = "Pílula Suave";
+        d["TipLyricsHighlightStyle"] = "Define como as palavras ativas animam em letras sincronizadas por palavra:\n\n• Brilho Suave: Varredura luminosa com borda macia, elevação sutil e zero caixa branca piscando.\n• Limpo Minimalista: Apenas iluminação progressiva nítida no texto.\n• Pílula Suave: Destaque translúcido discreto com entrada e saída graduais.";
+        d["SpatialChoreoDescOff"] = "Âncoras estáticas ITU-R";
+        d["SpatialChoreoDescSubtle"] = "Respiração suave frontal e de altura";
+        d["SpatialChoreoDescMusical"] = "Palco 3D alinhado a batidas e seções";
+        d["SpatialChoreoDescCinematic"] = "Arcos amplos em surround e teto";
+        d["SpatialChoreoDescOrbit"] = "Movimento orbital esférico contínuo";
+        d["SpatialTierDirect"] = "Direto";
+        d["SpatialTierMatrix71"] = "Matrix 7.1";
+        d["SpatialTierCavernize3D"] = "Cavernize 3D";
+        d["SpatialTierAiStems3D"] = "Stems 3D por IA";
+        d["SpatialTierAiHybrid714"] = "IA 7.1.4 Híbrido";
+        d["SpatialTierNativeAtmos"] = "Atmos Nativo";
+        d["SpatialTierAtmosAi"] = "Atmos + Gêmeo IA";
+        d["SpatialChoreoClarifierFmt"] = "Camada de Áudio: {0} · Perfil de Movimento: {1}";
+        d["TipLoudnessNorm"] = "Normaliza o volume de reprodução usando padrões ITU-R BS.1770-5 / EBU R128:\n\n• Desligado: Reproduz no volume original do master.\n• EBU R128 (-23 LUFS): Referência de broadcast e masterização.\n• Dolby Atmos (-18 LUFS): Alvo espacial de cinema e música.\n• Streaming (-14 LUFS): Volume moderno equilibrado.\n• Dialnorm: Segue os metadados de diálogo embutidos no Dolby.";
+        d["TipTruePeakCeiling"] = "Define o teto do limitador True-Peak com oversampling 4x para evitar distorção inter-sample em DACs e codecs Bluetooth (-1.0 dBTP recomendado).";
+        d["TipIsmRoomPreset"] = "Seleciona as dimensões da sala virtual usadas pelo Modelo de Fontes Virtuais (ISM) de Allen & Berkley para calcular reflexões iniciais físicas e sensação de som fora da cabeça.";
+        d["TipIsmWallMaterial"] = "Controla a absorção acústica por frequência das paredes simuladas — de salas de masterização tratadas até madeira ou alvenaria.";
+        d["TipIsmOrder"] = "1ª Ordem simula reflexões diretas nas paredes (limpo, baixo uso de CPU). 2ª Ordem adiciona rebatimentos entre cantos para maior realismo de sala.";
+        d["TipMagLsMode"] = "Decodificação Ambisonics MagLS preserva o timbre binaural de altas frequências sem coloração nas ordens 1 a 3 (ordem maior = localização mais precisa).";
+        d["TipMagLsCutoff"] = "Frequência acima da qual o MagLS prioriza fidelidade de magnitude nos ouvidos sobre fase. Auto escolhe o corte acústico ideal para a ordem ativa.";
+        d["TipNeuralProvider"] = "Escolhe o motor de hardware para modelos ONNX locais:\n\n• Automático: Prefere Qualcomm QNN HTP / XNNPACK / KleidiAI.\n• QNN HTP: Acelerador NPU Snapdragon.\n• XNNPACK / CPU: Fallback ARM64 NEON de alta precisão.\n• WebGPU: Aceleração por GPU quando disponível.";
+        d["TipNeuralTrackCacheComp"] = "Define como os stems de IA são comprimidos no cache CNTC v3:\n\n• Compacto 16-bit: ~5-7x menor, >96 dB SNR (ideal para grandes bibliotecas offline).\n• Estúdio 24-bit: ~3-4x menor, >140 dB SNR de masterização.\n• Float32 Bruto: PCM de referência sem compressão.";
+        d["TipNeuralEnsemble"] = "Define como múltiplos modelos são combinados nos pacotes Ensemble:\n\n• Média Temporal: Mistura suave no domínio do tempo.\n• Min-FFT: Mantém o menor vazamento por faixa de frequência (vocais mais limpos).\n• Média FFT: Mistura espectral balanceada.";
+        d["TipNeuralConservation"] = "Garante conservação matemática de energia para que a soma dos stems separados seja igual ao mix original, evitando variação de volume ou cancelamento de fase.";
+        d["TipKaraokeLosslessTwin"] = "Usa automaticamente um arquivo gêmeo lossless (FLAC/WAV) encontrado no aparelho como fonte para a remoção neural de voz ao reproduzir faixas Atmos/EAC3 com perda.";
+        d["TipLgsrRejectFake"] = "Analisa o corte espectral de altas frequências dos arquivos lossless candidatos e rejeita falsos FLAC transcodificados de MP3/AAC antes da restauração LGSR.";
+        d["TipHeadTrackerSource"] = "Seleciona qual sensor envia a rotação 3DoF da cabeça para a sala 3D: controle manual, IMU dos Galaxy Buds, IMU do celular Android ou rastreador externo BLE/OSC.";
+        d["TipProAudioPath"] = "Escolhe o motor de transporte de áudio para monitoramento full-duplex e DACs USB:\n\n• Automático: Seleciona o caminho verificado de menor latência.\n• Caminho B (libusb UAC2): Áudio USB bit-perfect direto ignorando o mixer do Android.\n• Caminho A (AAudio Exclusivo): Caminho nativo Android de latência ultrabaixa.\n• Legado: Fallback padrão AudioTrack.";
+        d["TipProAudioBuffer"] = "Tamanho do bloco de áudio em quadros. Buffers menores (64/128) reduzem a latência do microfone ao vivo; 256 oferece maior folga contra falhas (XRuns).";
     }
 }

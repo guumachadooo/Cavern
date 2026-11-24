@@ -2755,12 +2755,136 @@ def _py_choreography_no_ui_audio_tug_of_war() -> None:
     )
 
 
+def _py_stage4_ux_motion_orbit_lyrics_contracts() -> None:
+    store_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AppSettingsStore.cs").read_text(encoding="utf-8")
+    for tok in ("RoomInvertOrbitDrag", "LyricsHighlightStyleIndex"):
+        assert tok in store_src, f"Missing {tok} in AppSettingsStore.cs"
+    assert re.search(r'GetBoolean\("roomInvertOrbitDrag",\s*false\)', store_src), (
+        "RoomInvertOrbitDrag must default to false (direct intuitive finger-following drag)."
+    )
+    assert re.search(r'GetInt\("lyricsHighlightStyleIndex",\s*0\)', store_src), (
+        "LyricsHighlightStyleIndex must default to 0 (SmoothGlow)."
+    )
+
+    room_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Views" / "RoomSimulatorView.cs").read_text(encoding="utf-8")
+    for tok in ("public bool InvertOrbitDrag", "ComputeOrbitDelta", "invertDrag ? -1f : 1f"):
+        assert tok in room_src, f"Missing {tok} in RoomSimulatorView.cs"
+    assert "camYawDeg - stepX" not in room_src, "Legacy inverted horizontal orbit drag formula must be removed from RoomSimulatorView.cs"
+
+    lyrics_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Views" / "MediaStageViews.cs").read_text(encoding="utf-8")
+    for tok in (
+        "public enum LyricsWordHighlightStyle",
+        "SmoothGlow = 0",
+        "MinimalClean = 1",
+        "SoftWordPill = 2",
+        "ComputeSmoothWordProgress",
+        "ComputeActiveWordBellEnvelope",
+        "wordHighlightStyle == LyricsWordHighlightStyle.SoftWordPill",
+    ):
+        assert tok in lyrics_src, f"Missing {tok} in MediaStageViews.cs"
+    m_draw = re.search(r"void DrawSyllableSyncedLine\([^\)]*\)\s*\{(.*?)\n        \}", lyrics_src, re.S)
+    assert m_draw is not None, "Could not locate DrawSyllableSyncedLine in MediaStageViews.cs"
+    draw_body = m_draw.group(1)
+    assert "new " not in draw_body, "DrawSyllableSyncedLine must remain zero-allocation (found 'new ' inside method body)."
+    assert "SoftWordPill" in draw_body, "DrawSyllableSyncedLine must gate DrawRoundRect pill glow behind SoftWordPill opt-in style."
+
+    main_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.cs").read_text(encoding="utf-8")
+    nav_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Navigation.cs").read_text(encoding="utf-8")
+    assert "workspaceChromeHost" in main_src and "CreateWorkspaceSourceBar()" in main_src, (
+        "MainActivity.cs must hoist a single persistent workspaceChromeHost containing CreateWorkspaceSourceBar()."
+    )
+    for tok in ("UpdateWorkspaceChromeVisibility", "crossingPlayBoundary", "workspaceChromeAnimGen"):
+        assert tok in nav_src, f"Missing {tok} in MainActivity.Navigation.cs"
+
+    for tab_file in ("MainActivity.PlayerTab.cs", "MainActivity.ConverterTab.cs", "MainActivity.ExtractorTab.cs"):
+        tab_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / tab_file).read_text(encoding="utf-8")
+        assert "CreateWorkspaceSourceBar()" not in tab_src, (
+            f"{tab_file} must NOT duplicate CreateWorkspaceSourceBar() (hoisted into persistent workspaceChromeHost)."
+        )
+
+    player_tab = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerTab.cs").read_text(encoding="utf-8")
+    for tok in ("RefreshSpatialChoreoClarifierUi", "spatialChoreoTierBadgeText", "roomInvertOrbitSwitch", "InvertOrbitDrag"):
+        assert tok in player_tab, f"Missing {tok} in MainActivity.PlayerTab.cs"
+
+    pm_core = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.Core.cs").read_text(encoding="utf-8")
+    pm_np = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.NowPlaying.cs").read_text(encoding="utf-8")
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    ui_helpers = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.UiHelpers.cs").read_text(encoding="utf-8")
+
+    assert "musicUpmixToggleBtn" in pm_core and "musicUpmixToggleBtn" in pm_np, "Missing unified musicUpmixToggleBtn in Play tab"
+    assert "musicCavernizeToggleBtn" not in pm_core and "musicMatrixToggleBtn" not in pm_core, (
+        "Overlapping musicCavernizeToggleBtn/musicMatrixToggleBtn pills must be consolidated into musicUpmixToggleBtn."
+    )
+    for tok in ("ShowPlayTabSpatialUpmixDialog", "ShowPlayTabSpatialHierarchyHelpDialog"):
+        assert tok in wf_src, f"Missing {tok} in MainActivity.NeuralWorkflows.cs"
+    assert "OneUiIconType.Info" in ui_helpers, "CreateInlineHelpBtn must use OneUiIconType.Info"
+
+    settings_audio = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.Audio.cs").read_text(encoding="utf-8")
+    for tok in ("settingsRoomInvertOrbitSwitch", "lyricsHighlightSelector", "SyncRoomInvertOrbitUi"):
+        assert tok in settings_audio, f"Missing {tok} in MainActivity.Settings.Audio.cs"
+
+    oneui_ref = (REPO_ROOT / ".agents" / "docs" / "ONEUI9_REFERENCE.md").read_text(encoding="utf-8")
+    assert "## 9. One UI 9 Motion" in oneui_ref and "workspaceChromeHost" in oneui_ref, (
+        "ONEUI9_REFERENCE.md must document Section 9 One UI 9 Motion & Smart Chrome-Aware Tab Transitions."
+    )
+
+    t4_keys = (
+        "PlayTabUpmixDirectShort",
+        "PlayTabUpmixMatrixShort",
+        "PlayTabUpmix3DShort",
+        "PlayTabUpmixDialogDesc",
+        "PlayTabSpatialGuideTitle",
+        "PlayTabSpatialGuideBody",
+        "RoomInvertOrbitTitle",
+        "TipRoomInvertOrbit",
+        "LyricsHighlightStyleTitle",
+        "LyricsStyleSmoothGlow",
+        "LyricsStyleMinimalClean",
+        "LyricsStyleSoftPill",
+        "TipLyricsHighlightStyle",
+        "SpatialChoreoDescOff",
+        "SpatialChoreoDescSubtle",
+        "SpatialChoreoDescMusical",
+        "SpatialChoreoDescCinematic",
+        "SpatialChoreoDescOrbit",
+        "SpatialTierDirect",
+        "SpatialTierMatrix71",
+        "SpatialTierCavernize3D",
+        "SpatialTierAiStems3D",
+        "SpatialTierAiHybrid714",
+        "SpatialTierNativeAtmos",
+        "SpatialTierAtmosAi",
+        "SpatialChoreoClarifierFmt",
+        "TipLoudnessNorm",
+        "TipTruePeakCeiling",
+        "TipIsmRoomPreset",
+        "TipIsmWallMaterial",
+        "TipIsmOrder",
+        "TipMagLsMode",
+        "TipMagLsCutoff",
+        "TipNeuralProvider",
+        "TipNeuralTrackCacheComp",
+        "TipNeuralEnsemble",
+        "TipNeuralConservation",
+        "TipKaraokeLosslessTwin",
+        "TipLgsrRejectFake",
+        "TipHeadTrackerSource",
+        "TipProAudioPath",
+        "TipProAudioBuffer",
+    )
+    for lang_file in ("AndroidStrings.cs", "AndroidStrings.PtBr.cs", "AndroidStrings.Hu.cs", "AndroidStrings.Zh.cs"):
+        lang_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Language" / lang_file).read_text(encoding="utf-8")
+        for key in t4_keys:
+            assert f'["{key}"]' in lang_src, f"Missing T4 localization key '{key}' in {lang_file}"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
     ("PY_T2_Stage2_RuntimeStabilityAndLibraryContracts", _py_stage2_runtime_stability_contracts),
     ("PY_T3_Stage3_AudioAi_Mvsep_CntcV3_Contracts", _py_stage3_audio_ai_mvsep_cntc_contracts),
     ("PY_Choreography_NoUiAudioTugOfWar", _py_choreography_no_ui_audio_tug_of_war),
+    ("PY_T4_Stage4_UxClarity_Motion_OrbitDrag_Lyrics_Contracts", _py_stage4_ux_motion_orbit_lyrics_contracts),
 ]
 
 

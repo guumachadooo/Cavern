@@ -95,12 +95,7 @@ public partial class MainActivity {
         LinearLayout page = new(this) { Orientation = Orientation.Vertical };
         ApplyTabPageCutoutPadding(page);
 
-        // 0. Active File Source Bar (Clean workspace context & track selector)
-        page.AddView(CreateWorkspaceSourceBar(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
-
-        // 1. Segmented Workflow Selector (Master | Classic | Queue) + Readiness Pills Card
+        // 1. Segmented Workflow Selector (Master | Classic | Queue) + Readiness Pills Card (WorkspaceSourceBar hoisted above contentFrame)
         LinearLayout modeCard = Card();
         studioWorkflowSelector = new OneUiInlineSelector(this, S["StudioWorkflowLabel"]);
         string[] workflowNames = [

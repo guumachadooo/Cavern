@@ -283,10 +283,9 @@ public partial class MainActivity {
             headTrackingManager?.ApplySettings();
             RefreshHeadTrackingUi();
         };
-        slot4Card.AddView(headTrackerSourceSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(4),
-            BottomMargin = Dp(8)
-        });
+        LinearLayout htSrcWrap = WrapControlWithHelp(headTrackerSourceSelector, S["HeadTrackerSourceTitle"].TrimEnd(':'), S["TipHeadTrackerSource"], bottomMarginDp: 8);
+        htSrcWrap.SetPadding(0, Dp(4), 0, 0);
+        slot4Card.AddView(htSrcWrap);
 
         headTrackingAutoRecenterSwitch = AddSwitchRow(slot4Card, S["HeadTrackingAutoRecenterTitle"], store.HeadTrackingAutoRecenter, v => {
             store.HeadTrackingAutoRecenter = v;

@@ -640,6 +640,16 @@ public sealed class AppSettingsStore {
         set => Edit().PutInt("spatialChoreoModeIndex", Math.Clamp(value, 0, 4)).Apply();
     }
 
+    public bool RoomInvertOrbitDrag {
+        get => prefs.GetBoolean("roomInvertOrbitDrag", false);
+        set => Edit().PutBoolean("roomInvertOrbitDrag", value).Apply();
+    }
+
+    public int LyricsHighlightStyleIndex {
+        get => Math.Clamp(prefs.GetInt("lyricsHighlightStyleIndex", 0), 0, 2);
+        set => Edit().PutInt("lyricsHighlightStyleIndex", Math.Clamp(value, 0, 2)).Apply();
+    }
+
     public bool StudioOptAiUpmix {
         get => prefs.GetBoolean("studioOptAiUpmix", false);
         set => Edit().PutBoolean("studioOptAiUpmix", value).Apply();

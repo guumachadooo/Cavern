@@ -74,9 +74,7 @@ public partial class MainActivity {
             store.NeuralProviderIndex = pos;
             ApplyAndRefreshNeuralAudio();
         };
-        slot2bCard.AddView(neuralProviderSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(6)
-        });
+        slot2bCard.AddView(WrapControlWithHelp(neuralProviderSelector, S["NeuralProviderTitle"].TrimEnd(':'), S["TipNeuralProvider"], bottomMarginDp: 6));
 
         neuralExecBackendSelector = new OneUiInlineSelector(this, S["NeuralExecBackendTitle"]);
         string[] backendLabels = [
@@ -163,9 +161,7 @@ public partial class MainActivity {
             }
             ApplyAndRefreshNeuralAudio();
         };
-        slot2bCard.AddView(neuralTrackCacheCompSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(6)
-        });
+        slot2bCard.AddView(WrapControlWithHelp(neuralTrackCacheCompSelector, S["NeuralTrackCacheCompTitle"].TrimEnd(':'), S["TipNeuralTrackCacheComp"], bottomMarginDp: 6));
 
         neuralTrackCacheCapSelector = new OneUiInlineSelector(this, S["NeuralTrackCacheCapTitle"]);
         string[] cacheCapLabels = ["256 MB", "512 MB", "1024 MB", "2048 MB", "4096 MB"];
@@ -227,9 +223,7 @@ public partial class MainActivity {
             store.NeuralEnsembleModeIndex = pos;
             ApplyAndRefreshNeuralAudio();
         };
-        slot2bCard.AddView(neuralEnsembleSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(6)
-        });
+        slot2bCard.AddView(WrapControlWithHelp(neuralEnsembleSelector, S["NeuralEnsembleTitle"].TrimEnd(':'), S["TipNeuralEnsemble"], bottomMarginDp: 6));
 
         neuralPhaseFixSwitch = AddSwitchRow(slot2bCard, S["NeuralPhaseFixTitle"], store.NeuralPhaseFixEnabled, v => {
             store.NeuralPhaseFixEnabled = v;
@@ -240,7 +234,7 @@ public partial class MainActivity {
         neuralConservationSwitch = AddSwitchRow(slot2bCard, S["NeuralConservationTitle"], store.NeuralEnergyConservation, v => {
             store.NeuralEnergyConservation = v;
             ApplyAndRefreshNeuralAudio();
-        });
+        }, helpBody: S["TipNeuralConservation"]);
         AddDivider(slot2bCard);
 
         spatialKaraokeSwitch = AddSwitchRow(slot2bCard, S["SpatialKaraokeTitle"], store.SpatialKaraokeEnabled, v => {
@@ -274,7 +268,7 @@ public partial class MainActivity {
         karaokeLosslessTwinSwitch = AddSwitchRow(slot2bCard, S["KaraokeLosslessTwinTitle"], store.UseLosslessTwinForKaraoke, v => {
             store.UseLosslessTwinForKaraoke = v;
             ApplyAndRefreshNeuralAudio();
-        });
+        }, helpBody: S["TipKaraokeLosslessTwin"]);
         AddDivider(slot2bCard);
 
         neuralUpmixModeSelector = new OneUiInlineSelector(this, S["NeuralUpmixModeTitle"]);
@@ -360,7 +354,7 @@ public partial class MainActivity {
         lgsrRejectFakeSwitch = AddSwitchRow(slot2cCard, S["LgsrRejectFakeTitle"], store.LgsrRejectFakeLossless, v => {
             store.LgsrRejectFakeLossless = v;
             ApplyAndRefreshLgsr(rescanTwin: true);
-        });
+        }, helpBody: S["TipLgsrRejectFake"]);
         AddDivider(slot2cCard);
 
         lgsrTier3CleanupSwitch = AddSwitchRow(slot2cCard, S["LgsrTier3CleanupTitle"], store.LgsrTier3ResidualCleanup, v => {

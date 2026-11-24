@@ -95,10 +95,17 @@ public partial class MainActivity {
     }
 
     View CreateInlineHelpBtn(string optionTitle, string causeEffectHelp) {
-        FrameLayout badge = new(this);
-        badge.Background = OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceSubTile, 99f);
+        FrameLayout badge = new(this) {
+            ContentDescription = optionTitle
+        };
+        badge.Background = OneUiTheme.CreateRoundedDrawable(
+            this,
+            OneUiTheme.SurfaceSubTile,
+            99f,
+            OneUiTheme.BorderSubtle,
+            0.8f);
         OneUiTheme.AttachRecoil(badge, 0.88f);
-        OneUiIconView ico = new(this, OneUiIconType.HelpQuestion, OneUiTheme.TextSub);
+        OneUiIconView ico = new(this, OneUiIconType.Info, OneUiTheme.TextSub);
         badge.AddView(ico, new FrameLayout.LayoutParams(Dp(14), Dp(14)) { Gravity = GravityFlags.Center });
         badge.Click += (_, _) => OneUiModalDialog.Show(
             this,
@@ -106,7 +113,7 @@ public partial class MainActivity {
             causeEffectHelp,
             icon: OneUiIconType.Info,
             iconBadgeColor: ColAccent,
-            positiveText: "OK");
+            positiveText: S["OkBtn"]);
         return badge;
     }
 

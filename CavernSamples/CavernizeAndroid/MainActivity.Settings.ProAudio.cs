@@ -79,9 +79,7 @@ public partial class MainActivity {
             store.ProAudioPreferredPathIndex = pos;
             ApplyAndRefreshProAudio();
         };
-        proAudioCard.AddView(proAudioPathSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
+        proAudioCard.AddView(WrapControlWithHelp(proAudioPathSelector, S["ProAudioPathTitle"].TrimEnd(':'), S["TipProAudioPath"], bottomMarginDp: 8));
 
         proAudioBufferSelector = new OneUiInlineSelector(this, S["ProAudioBufferTitle"]);
         string[] proAudioBufLabels = [S["ProAudioBuf64"], S["ProAudioBuf128"], S["ProAudioBuf256"]];
@@ -91,9 +89,7 @@ public partial class MainActivity {
             store.ProAudioBufferFrames = pos == 0 ? 64 : (pos == 1 ? 128 : 256);
             ApplyAndRefreshProAudio();
         };
-        proAudioCard.AddView(proAudioBufferSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
+        proAudioCard.AddView(WrapControlWithHelp(proAudioBufferSelector, S["ProAudioBufferTitle"].TrimEnd(':'), S["TipProAudioBuffer"], bottomMarginDp: 8));
 
         proAudioSrSelector = new OneUiInlineSelector(this, S["ProAudioSampleRateTitle"]);
         string[] proAudioSrLabels = [S["ProAudioSrAuto"], "44.1 kHz", "48 kHz", "96 kHz", "192 kHz"];

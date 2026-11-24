@@ -61,3 +61,19 @@
 - **Edge-to-Edge `WindowInsets` & DisplayCutout (`MainActivity.cs` + Tabs):**
   - `ConfigureEdgeToEdgeWindow` (`SetDecorFitsSystemWindows(false)`, `LayoutInDisplayCutoutMode.Always`) + `RootInsetsListener` (`SystemBars() | DisplayCutout()`, `Ime()`).
   - `rootLayoutHost` applies `insetLeft/Top/Right`; `navFrostedHost` hides when `imeOpen` (`insetImeBottomPx > insetBarsBottomPx + 48dp`) & shifts `BottomMargin = 12dp + scrollBottom` w/o double L/R cutout padding; `tabCells[4]` `WrapContent`; `ApplyTabPageCutoutPadding` adds landscape cutout margins on `Converter`/`Extractor`; `fsRoot` applies `DisplayCutout|SystemBars` to fullscreen video HUD overlay only.
+
+## 9. One UI 9 Motion, Physics & Smart Chrome-Aware Tab Transitions (`T4`)
+- **Persistent Workspace Top Chrome (`MainActivity.cs` + `MainActivity.Navigation.cs`):**
+  - Single `workspaceChromeHost` (wrapping `CreateWorkspaceSourceBar()`) hoisted inside `rootLayoutHost` directly above `contentFrame` (ZERO duplicate source bars inside `PlayerTab`/`ConverterTab`/`ExtractorTab` scroll views).
+  - **Chrome-Aware Tab Transition Law:** Switching among non-Play workspace tabs (`1..4`: `3D Room`, `Studio`, `Stems`, `Settings`) keeps `workspaceChromeHost` 100% stationary (`0` layout jump, `0` re-fade, `0` re-translate), animating ONLY `contentFrame` (`190 ms`, `PathInterpolator(0.22f, 1f, 0.36f, 1f)`, `14 dp` directional slide + `0.985 -> 1.0` subtle scale).
+  - **Play Boundary Transition (`0 <-> 1..4`):** `UpdateWorkspaceChromeVisibility(show, animate: crossingPlayBoundary)` animates `workspaceChromeHost` strictly when entering/leaving Play (`0`): show (`190 ms`, `PathInterpolator(0.22f, 1f, 0.36f, 1f)`, `TranslationY -16dp -> 0`, `Alpha 0 -> 1`) and hide (`150 ms`, `PathInterpolator(0.4f, 0f, 1f, 1f)`, `TranslationY 0 -> -14dp`, `Alpha 1 -> 0` + auto-collapse `fileDetailsExpanded`), guarded by monotonic `workspaceChromeAnimGen` so rapid tab switches never leak stale `WithEndAction`.
+- **Play-Tab Spatial Hierarchy & Universal Inline `(i)` Info Sheets (`MainActivity.{UiHelpers,PlayerMusic.Core,NeuralWorkflows,Settings.*}.cs`):**
+  - Play bottom spatial bar consolidated to 3 orthogonal pills + inline `(i)` guide: `Upmix` (`Direct` / `Matrix 7.1` / `Cavernize 3D`) + `HRTF 3D` (headphone binaural output) + `AI 3D` (neural stem separation) + `OneUiIconType.Info` help button explaining full signal chain.
+  - `3D Room` explicitly separates **Processing Tier** (`Direct` / `Matrix 7.1` / `Cavernize 3D` / `AI Stems 3D` / `AI 7.1.4 Hybrid` / `Native Atmos` / `Atmos + AI Twin`) from **Motion Choreography Profile** (`Off` / `Subtle` / `Musical` / `Cinematic` / `Orbit`) via `RefreshSpatialChoreoClarifierUi`.
+  - Universal `CreateInlineHelpBtn` (`OneUiIconType.Info`, `26 dp` tap target, subtle border, localized `OkBtn`) wired to non-self-explanatory AI/DSP selectors and toggles across Play, 3D Room, and Settings.
+- **3D Room Direct Orbit Drag (`RoomSimulatorView.cs` + `AppSettingsStore.cs`):**
+  - Default (`RoomInvertOrbitDrag = false`) uses finger-following direct manipulation (`ComputeOrbitDelta`: `sign = invertDrag ? -1f : 1f`, `+stepX -> +camYawDeg` moving near room wall right with finger); optional persisted invert toggle exposed in Settings (Category 0) and 3D Room Fine-Tune panel.
+- **Synchronized Lyrics Word Illumination (`MediaStageViews.cs` + `AppSettingsStore.cs`):**
+  - `LyricsWordHighlightStyle` (`SmoothGlow = 0` default, `MinimalClean = 1`, `SoftWordPill = 2`) persisted via `LyricsHighlightStyleIndex`.
+  - Default `SmoothGlow` draws **0** white word-box/pill rectangles and allocates **0 B/frame** inside `DrawSyllableSyncedLine`: uses `ComputeSmoothWordProgress` Hermite sweep, 3-band feathered luminance edge (`<=18dp` sweep), and subtle `<=1.4 dp` sinusoidal `ComputeActiveWordBellEnvelope` micro-lift; opt-in `SoftWordPill` modulates pill alpha smoothly via the bell envelope.
+

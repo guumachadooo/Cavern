@@ -142,7 +142,39 @@ public partial class MainActivity {
         roomDimRow.AddView(rz, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
         roomDimRow.AddView(applyRoomBtn, new LinearLayout.LayoutParams(Dp(60), ViewGroup.LayoutParams.WrapContent));
         acousticsCard.AddView(roomDimRow);
-        RegisterSettingsCard(acousticsCard, categoryIndex: 0, isProOnly: false, "room acoustics gain height squeeze dimensions environment");
+
+        AddDivider(acousticsCard);
+        settingsRoomInvertOrbitSwitch = AddSwitchRow(
+            acousticsCard,
+            S["RoomInvertOrbitTitle"],
+            store.RoomInvertOrbitDrag,
+            v => {
+                store.RoomInvertOrbitDrag = v;
+                SyncRoomInvertOrbitUi();
+            },
+            helpBody: S["TipRoomInvertOrbit"]);
+
+        AddDivider(acousticsCard);
+        lyricsHighlightSelector = new OneUiInlineSelector(this, S["LyricsHighlightStyleTitle"]);
+        string[] lyricsStyleLabels = [
+            S["LyricsStyleSmoothGlow"],
+            S["LyricsStyleMinimalClean"],
+            S["LyricsStyleSoftPill"]
+        ];
+        lyricsHighlightSelector.SetItems(lyricsStyleLabels, Math.Clamp(store.LyricsHighlightStyleIndex, 0, lyricsStyleLabels.Length - 1));
+        lyricsHighlightSelector.SelectionChanged += pos => {
+            store.LyricsHighlightStyleIndex = pos;
+            if (musicLyricsView != null) {
+                musicLyricsView.WordHighlightStyle = (LyricsWordHighlightStyle)Math.Clamp(pos, 0, 2);
+            }
+        };
+        acousticsCard.AddView(WrapControlWithHelp(
+            lyricsHighlightSelector,
+            S["LyricsHighlightStyleTitle"].TrimEnd(':'),
+            S["TipLyricsHighlightStyle"],
+            bottomMarginDp: 2));
+
+        RegisterSettingsCard(acousticsCard, categoryIndex: 0, isProOnly: false, "room acoustics gain height squeeze dimensions environment orbit drag invert lyrics highlight glow word");
 
         // 3. Official Binaural Profile (HRIR / BRIR) & QuickEQ Calibration
 
@@ -215,9 +247,7 @@ public partial class MainActivity {
             store.LoudnessNormModeIndex = pos;
             ApplyAndRefreshLoudness();
         };
-        slot6bCard.AddView(loudnessNormSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
+        slot6bCard.AddView(WrapControlWithHelp(loudnessNormSelector, S["LoudnessNormTitle"].TrimEnd(':'), S["TipLoudnessNorm"], bottomMarginDp: 8));
 
         loudnessNormDetailsSection = new LinearLayout(this) {
             Orientation = Orientation.Vertical,
@@ -274,9 +304,7 @@ public partial class MainActivity {
             store.TruePeakCeilingIndex = pos;
             ApplyAndRefreshLoudness();
         };
-        slot6bCard.AddView(truePeakCeilingSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(8)
-        });
+        slot6bCard.AddView(WrapControlWithHelp(truePeakCeilingSelector, S["TruePeakCeilingTitle"].TrimEnd(':'), S["TipTruePeakCeiling"], bottomMarginDp: 8));
 
         Button resetLoudnessMeterBtn = PillButton(S["LoudnessResetMeterBtn"], () => {
             playerEngine?.ResetLoudnessMeter();
@@ -309,6 +337,23 @@ public partial class MainActivity {
         if (atmosAwareUpmixSection != null) {
             atmosAwareUpmixSection.Visibility = idx > 0 ? ViewStates.Visible : ViewStates.Gone;
         }
+        RefreshSpatialChoreoClarifierUi();
+    }
+
+    void SyncRoomInvertOrbitUi() {
+        if (store == null) {
+            return;
+        }
+        bool inv = store.RoomInvertOrbitDrag;
+        if (roomView != null) {
+            roomView.InvertOrbitDrag = inv;
+        }
+        if (settingsRoomInvertOrbitSwitch != null && settingsRoomInvertOrbitSwitch.Checked != inv) {
+            settingsRoomInvertOrbitSwitch.Checked = inv;
+        }
+        if (roomInvertOrbitSwitch != null && roomInvertOrbitSwitch.Checked != inv) {
+            roomInvertOrbitSwitch.Checked = inv;
+        }
     }
 
     void RefreshSettingsTabButtons() {
@@ -333,6 +378,16 @@ public partial class MainActivity {
             muteGroundSwitch.Checked = store.MuteGround;
         }
         SyncUpmixModeUi();
+        SyncRoomInvertOrbitUi();
+        if (lyricsHighlightSelector != null) {
+            int lIdx = Math.Clamp(store.LyricsHighlightStyleIndex, 0, 2);
+            if (lyricsHighlightSelector.SelectedIndex != lIdx) {
+                lyricsHighlightSelector.SetSelection(lIdx, notify: false);
+            }
+        }
+        if (musicLyricsView != null) {
+            musicLyricsView.WordHighlightStyle = (LyricsWordHighlightStyle)Math.Clamp(store.LyricsHighlightStyleIndex, 0, 2);
+        }
         if (atmosAwareUpmixSwitch != null && atmosAwareUpmixSwitch.Checked != store.AtmosAwareUpmix) {
             atmosAwareUpmixSwitch.Checked = store.AtmosAwareUpmix;
         }

@@ -343,10 +343,17 @@ public partial class MainActivity {
             svCur.TranslationX = 0f;
         }
         UpdateTabButtonStyles(animate: true);
+        bool crossingPlayBoundary = prevTab != idx && ((prevTab == 0) != (idx == 0));
+        if (idx == 0 && fileDetailsExpanded) {
+            fileDetailsExpanded = false;
+            UpdateInlineTrackListVisibility();
+        }
+        UpdateWorkspaceChromeVisibility(idx != 0, animate: crossingPlayBoundary);
         bool wantsNav = idx != 0 || isLibrarySectionOpen;
         SetBottomNavBarVisible(wantsNav, animate: prevTab != idx || isBottomNavVisible != wantsNav);
         if (idx == 1) {
             UpdateRoomCanvas();
+            RefreshSpatialChoreoClarifierUi();
         } else if (idx == 0) {
             RefreshMusicPlayerUi();
         } else if (idx == 4) {
@@ -358,6 +365,62 @@ public partial class MainActivity {
         }
         navFrostedHost?.RefreshBlur(force: true);
         SyncPredictiveBackRegistration();
+    }
+
+    /// <summary>
+    /// Smart Chrome-Aware Top Bar Transition (One UI 9 Motion):
+    /// Stays 100% stationary across non-Play tabs (3D Room / Studio / Stems / Settings) and
+    /// animates strictly when crossing the Play tab boundary (0 &lt;-&gt; 1..4).
+    /// </summary>
+    void UpdateWorkspaceChromeVisibility(bool show, bool animate) {
+        if (workspaceChromeHost == null) {
+            return;
+        }
+        bool currentlyVisible = workspaceChromeHost.Visibility == ViewStates.Visible && workspaceChromeHost.Alpha > 0.98f;
+        if (currentlyVisible == show && !animate) {
+            return;
+        }
+        int myGen = ++workspaceChromeAnimGen;
+        workspaceChromeHost.Animate()?.Cancel();
+
+        if (!animate) {
+            workspaceChromeHost.Visibility = show ? ViewStates.Visible : ViewStates.Gone;
+            workspaceChromeHost.Alpha = show ? 1f : 0f;
+            workspaceChromeHost.TranslationY = 0f;
+            return;
+        }
+
+        if (show) {
+            if (workspaceChromeHost.Visibility != ViewStates.Visible) {
+                workspaceChromeHost.Visibility = ViewStates.Visible;
+                workspaceChromeHost.Alpha = 0f;
+                workspaceChromeHost.TranslationY = -Dp(12);
+            }
+            workspaceChromeHost.Animate()
+                .Alpha(1f)
+                .TranslationY(0f)
+                .SetDuration(260)
+                .SetInterpolator(CreateOneUiEase())
+                .WithEndAction(new Java.Lang.Runnable(() => {
+                    if (uiDestroyed || myGen != workspaceChromeAnimGen) return;
+                    workspaceChromeHost.Alpha = 1f;
+                    workspaceChromeHost.TranslationY = 0f;
+                }))
+                .Start();
+        } else {
+            workspaceChromeHost.Animate()
+                .Alpha(0f)
+                .TranslationY(-Dp(10))
+                .SetDuration(185)
+                .SetInterpolator(new Android.Views.Animations.AccelerateInterpolator(1.25f))
+                .WithEndAction(new Java.Lang.Runnable(() => {
+                    if (uiDestroyed || myGen != workspaceChromeAnimGen) return;
+                    workspaceChromeHost.Visibility = ViewStates.Gone;
+                    workspaceChromeHost.Alpha = 1f;
+                    workspaceChromeHost.TranslationY = 0f;
+                }))
+                .Start();
+        }
     }
 
     void SetBottomNavBarVisible(bool visible, bool animate) {

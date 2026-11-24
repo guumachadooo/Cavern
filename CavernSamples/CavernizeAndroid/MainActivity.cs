@@ -172,6 +172,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     FrameLayout rootFrameHost;
     LinearLayout rootLayoutHost;
+    LinearLayout workspaceChromeHost;
     View bottomScrimView;
     OneUiBackdropView backdropView;
     OneUiFrostedCapsuleView navFrostedHost;
@@ -180,6 +181,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     bool isBottomNavVisible = true;
     int navVisAnimGen;
     int tabSwitchAnimGen;
+    int workspaceChromeAnimGen;
     int insetLeftPx;
     int insetTopPx;
     int insetRightPx;
@@ -572,6 +574,18 @@ public partial class MainActivity : Activity, ICavernizeApp {
         currentHeaderStatusText = S["SelectFilePill"];
         currentTrackSummaryText = "";
 
+        // Persistent Chrome-Aware Top Workspace Source Bar (stationary across 3D Room / Studio / Stems / Settings;
+        // animates ONLY when entering or leaving Play tab)
+        workspaceChromeHost = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = activeTab != 0 ? ViewStates.Visible : ViewStates.Gone
+        };
+        workspaceChromeHost.SetPadding(Dp(14), Dp(6), Dp(14), Dp(4));
+        workspaceChromeHost.AddView(
+            CreateWorkspaceSourceBar(),
+            new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        root.AddView(workspaceChromeHost, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
         // Tab content frame with horizontal swipe between non-Play tabs (can swipe into Play, never away from Play)
         TabSwipeHostLayout contentFrame = new(
             this,
@@ -716,6 +730,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         ApplyCurrentWindowInsetsPadding();
         rootFrame.RequestApplyInsets();
         UpdateTabButtonStyles(animate: false);
+        UpdateWorkspaceChromeVisibility(activeTab != 0, animate: false);
         SetBottomNavBarVisible(activeTab != 0 || isLibrarySectionOpen, animate: false);
         SyncPredictiveBackRegistration();
         navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
@@ -802,13 +817,25 @@ public partial class MainActivity : Activity, ICavernizeApp {
         if (musicLibraryScrollView != null) {
             musicLibraryScrollView.SetPadding(0, 0, 0, Dp(106) + scrollBottom);
         }
+        if (workspaceChromeHost != null) {
+            int cutoutL = 0;
+            int cutoutR = 0;
+            if (OperatingSystem.IsAndroidVersionAtLeast(28)) {
+                var cutout = Window?.DecorView?.RootWindowInsets?.DisplayCutout;
+                if (cutout != null) {
+                    cutoutL = Math.Max(0, cutout.SafeInsetLeft - insetLeftPx);
+                    cutoutR = Math.Max(0, cutout.SafeInsetRight - insetRightPx);
+                }
+            }
+            workspaceChromeHost.SetPadding(Dp(14) + cutoutL, Dp(6), Dp(14) + cutoutR, Dp(4));
+        }
         if (tabPages != null) {
             for (int i = 1; i < tabPages.Length; i++) {
                 LinearLayout page = tabPages[i];
                 if (page == null) {
                     continue;
                 }
-                int topDp = i == 4 ? 2 : 6;
+                int topDp = i == 4 ? 2 : 4;
                 page.SetPadding(Dp(14), Dp(topDp), Dp(14), Dp(116) + scrollBottom);
             }
         }

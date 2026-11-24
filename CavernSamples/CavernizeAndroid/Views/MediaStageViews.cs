@@ -981,7 +981,41 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
 /// - Staggered organic spring wave scroll as active verses advance
 /// - Manual browse automatically clears depth blur so all lines stay crisp while scrolling
 /// </summary>
+public enum LyricsWordHighlightStyle {
+    /// <summary>Smooth feathered progressive word illumination with subtle micro-lift and zero box flash (default).</summary>
+    SmoothGlow = 0,
+    /// <summary>Crisp minimal color sweep across sung words without glow or pill box.</summary>
+    MinimalClean = 1,
+    /// <summary>Optional soft translucent highlight pill with smooth sinusoidal fade-in/out envelope.</summary>
+    SoftWordPill = 2
+}
+
 public sealed class AppleMusicLyricsView : View {
+    LyricsWordHighlightStyle wordHighlightStyle = LyricsWordHighlightStyle.SmoothGlow;
+
+    /// <summary>Controls how active synchronized words are highlighted (default: SmoothGlow, zero box flash).</summary>
+    public LyricsWordHighlightStyle WordHighlightStyle {
+        get => wordHighlightStyle;
+        set {
+            if (wordHighlightStyle != value) {
+                wordHighlightStyle = value;
+                Invalidate();
+            }
+        }
+    }
+
+    /// <summary>Hermite smoothstep easing for organic syllable progression (zero abrupt linear jumps).</summary>
+    public static float ComputeSmoothWordProgress(float rawProgress) {
+        float t = Math.Clamp(rawProgress, 0f, 1f);
+        return t * t * (3f - 2f * t);
+    }
+
+    /// <summary>Smooth 0-&gt;1-&gt;0 bell-curve envelope for active word micro-lift or optional soft pill fade.</summary>
+    public static float ComputeActiveWordBellEnvelope(float rawProgress) {
+        float eased = ComputeSmoothWordProgress(rawProgress);
+        return MathF.Sin(MathF.PI * eased);
+    }
+
     sealed class VisualLineBounds {
         public float LeftX;
         public float RightX;
@@ -1535,7 +1569,7 @@ public sealed class AppleMusicLyricsView : View {
         float easedFocus,
         float edgeFactor,
         float dp) {
-        // 1. Dim base pass for unsung words on the active line
+        // 1. Dim base pass for unsung words on the active line (zero allocations)
         float dimFrac = inactiveAlpha + (0.44f - inactiveAlpha) * easedFocus;
         dimFrac += (Math.Max(dimFrac, 0.74f) - dimFrac) * manualClarity;
         int dimAlpha = Math.Clamp((int)Math.Round(255f * dimFrac * edgeFactor), 10, 255);
@@ -1543,44 +1577,53 @@ public sealed class AppleMusicLyricsView : View {
         linePaint.ClearShadowLayer();
         info.Layout.Draw(canvas);
 
-        // 2. Soft highlight pill behind currently singing syllable(s)
-        int pillAlpha = Math.Clamp((int)Math.Round(28f * easedFocus * edgeFactor), 0, 48);
-        if (pillAlpha > 2) {
-            syllableGlowPaint.Color = Color.Argb(pillAlpha, 255, 255, 255);
+        // 2. Optional soft translucent pill ONLY when explicitly selected (smooth sinusoidal fade-in/out; never flashes)
+        if (wordHighlightStyle == LyricsWordHighlightStyle.SoftWordPill) {
             for (int wi = 0; wi < info.WordSpans.Count; wi++) {
                 WordSpanInfo ws = info.WordSpans[wi];
                 if (effectiveSec <= ws.StartSec || effectiveSec >= ws.EndSec) {
                     continue;
                 }
                 float wDur = (float)Math.Max(0.05, ws.EndSec - ws.StartSec);
-                float prog = Math.Clamp((float)((effectiveSec - ws.StartSec) / wDur), 0f, 1f);
-                float filledInWord = ws.TotalWidth * prog;
+                float rawProg = Math.Clamp((float)((effectiveSec - ws.StartSec) / wDur), 0f, 1f);
+                float env = ComputeActiveWordBellEnvelope(rawProg);
+                int pillAlpha = Math.Clamp((int)Math.Round(22f * env * easedFocus * edgeFactor), 0, 32);
+                if (pillAlpha <= 1) {
+                    continue;
+                }
+                syllableGlowPaint.Color = Color.Argb(pillAlpha, 255, 255, 255);
+                float filledInWord = ws.TotalWidth * ComputeSmoothWordProgress(rawProg);
                 for (int si = 0; si < ws.Segments.Count; si++) {
                     WordSegment seg = ws.Segments[si];
                     float segW = Math.Max(0.5f, seg.RightX - seg.LeftX);
                     float segProg = Math.Clamp((filledInWord - seg.OffsetInWord) / segW, 0f, 1f);
                     if (segProg > 0f && segProg < 1f) {
-                        tempGlowRect.Set(seg.LeftX - 3f * dp, seg.TopY + 1f * dp, seg.RightX + 3f * dp, seg.BottomY - 1f * dp);
-                        canvas.DrawRoundRect(tempGlowRect, 6f * dp, 6f * dp, syllableGlowPaint);
+                        tempGlowRect.Set(seg.LeftX - 3f * dp, seg.TopY + 1.5f * dp, seg.RightX + 3f * dp, seg.BottomY - 1.5f * dp);
+                        canvas.DrawRoundRect(tempGlowRect, 7f * dp, 7f * dp, syllableGlowPaint);
                     }
                 }
             }
         }
 
-        // 3. Progressive bright glowing sweep per wrapped visual line (zero allocations)
-        int brightAlpha = Math.Clamp((int)Math.Round(255f * (0.44f + 0.56f * easedFocus) * edgeFactor), 10, 255);
-        int glowAlpha = Math.Clamp((int)Math.Round(88f * easedFocus * edgeFactor), 0, 120);
+        // 3. Smooth progressive feathered word illumination per wrapped visual line (0 B/frame alloc)
+        bool useGlowAndLift = wordHighlightStyle != LyricsWordHighlightStyle.MinimalClean;
+        int brightAlpha = Math.Clamp((int)Math.Round(255f * (0.46f + 0.54f * easedFocus) * edgeFactor), 10, 255);
+        int glowAlpha = useGlowAndLift ? Math.Clamp((int)Math.Round(72f * easedFocus * edgeFactor), 0, 96) : 0;
+        float featherWidth = 14f * dp;
+
         for (int li = 0; li < info.VisualLines.Length; li++) {
             VisualLineBounds vline = info.VisualLines[li];
             float lineBrightRightX = vline.LeftX;
             bool hasAnyWordOnLine = false;
             bool allLineDone = true;
+            float activeLiftEnv = 0f;
 
             for (int wi = 0; wi < info.WordSpans.Count; wi++) {
                 WordSpanInfo ws = info.WordSpans[wi];
                 float wDur = (float)Math.Max(0.05, ws.EndSec - ws.StartSec);
-                float prog = Math.Clamp((float)((effectiveSec - ws.StartSec) / wDur), 0f, 1f);
-                float filledInWord = ws.TotalWidth * prog;
+                float rawProg = Math.Clamp((float)((effectiveSec - ws.StartSec) / wDur), 0f, 1f);
+                float smoothProg = ComputeSmoothWordProgress(rawProg);
+                float filledInWord = ws.TotalWidth * smoothProg;
 
                 for (int si = 0; si < ws.Segments.Count; si++) {
                     WordSegment seg = ws.Segments[si];
@@ -1588,17 +1631,21 @@ public sealed class AppleMusicLyricsView : View {
                         continue;
                     }
                     hasAnyWordOnLine = true;
-                    if (prog >= 1f) {
+                    if (rawProg >= 1f) {
                         if (seg.RightX > lineBrightRightX) {
                             lineBrightRightX = seg.RightX;
                         }
-                    } else if (prog > 0f) {
+                    } else if (rawProg > 0f) {
                         float segW = Math.Max(0.5f, seg.RightX - seg.LeftX);
                         float segProg = Math.Clamp((filledInWord - seg.OffsetInWord) / segW, 0f, 1f);
                         if (segProg > 0f) {
                             float sx = seg.LeftX + segW * segProg;
                             if (sx > lineBrightRightX) {
                                 lineBrightRightX = sx;
+                            }
+                            float env = ComputeActiveWordBellEnvelope(segProg);
+                            if (env > activeLiftEnv) {
+                                activeLiftEnv = env;
                             }
                         }
                         if (segProg < 1f) {
@@ -1614,21 +1661,55 @@ public sealed class AppleMusicLyricsView : View {
                 continue;
             }
 
-            linePaint.Color = Color.Argb(brightAlpha, 255, 255, 255);
-            if (glowAlpha > 4) {
-                linePaint.SetShadowLayer(10f * dp * easedFocus, 0f, 0f, Color.Argb(glowAlpha, 255, 255, 255));
-            } else {
-                linePaint.ClearShadowLayer();
+            float microLiftPx = useGlowAndLift ? -1.4f * dp * activeLiftEnv * easedFocus : 0f;
+            float coreRightX = allLineDone ? (lineBrightRightX + 4f * dp) : Math.Max(vline.LeftX, lineBrightRightX - featherWidth * 0.55f);
+
+            // 3A. Solid illuminated sung region
+            if (coreRightX > vline.LeftX + 0.25f) {
+                linePaint.Color = Color.Argb(brightAlpha, 255, 255, 255);
+                if (glowAlpha > 4) {
+                    linePaint.SetShadowLayer(8.5f * dp * easedFocus, 0f, 0f, Color.Argb(glowAlpha, 255, 255, 255));
+                } else {
+                    linePaint.ClearShadowLayer();
+                }
+                tempClipRect.Set(
+                    vline.LeftX - 4f * dp,
+                    vline.TopY - 4f * dp,
+                    coreRightX,
+                    vline.BottomY + 4f * dp);
+                canvas.Save();
+                canvas.ClipRect(tempClipRect);
+                if (MathF.Abs(microLiftPx) > 0.05f) {
+                    canvas.Translate(0f, microLiftPx * 0.35f);
+                }
+                info.Layout.Draw(canvas);
+                canvas.Restore();
             }
-            tempClipRect.Set(
-                vline.LeftX - 4f * dp,
-                vline.TopY - 3f * dp,
-                lineBrightRightX + (allLineDone ? 4f * dp : 0f),
-                vline.BottomY + 3f * dp);
-            canvas.Save();
-            canvas.ClipRect(tempClipRect);
-            info.Layout.Draw(canvas);
-            canvas.Restore();
+
+            // 3B. 3-band soft feathered leading edge (smooth interpolated sweep without hard vertical razor cut)
+            if (!allLineDone) {
+                linePaint.ClearShadowLayer();
+                float bandStart = coreRightX;
+                float bandStep = featherWidth / 3f;
+                for (int b = 0; b < 3; b++) {
+                    float frac = b == 0 ? 0.78f : (b == 1 ? 0.50f : 0.26f);
+                    int bandAlpha = Math.Clamp((int)Math.Round(dimAlpha + (brightAlpha - dimAlpha) * frac), dimAlpha, brightAlpha);
+                    float x0 = bandStart + b * bandStep;
+                    float x1 = x0 + bandStep + 0.5f;
+                    if (x0 >= vline.RightX + 4f * dp) {
+                        break;
+                    }
+                    linePaint.Color = Color.Argb(bandAlpha, 255, 255, 255);
+                    tempClipRect.Set(x0, vline.TopY - 4f * dp, Math.Min(x1, vline.RightX + 4f * dp), vline.BottomY + 4f * dp);
+                    canvas.Save();
+                    canvas.ClipRect(tempClipRect);
+                    if (MathF.Abs(microLiftPx) > 0.05f) {
+                        canvas.Translate(0f, microLiftPx * frac);
+                    }
+                    info.Layout.Draw(canvas);
+                    canvas.Restore();
+                }
+            }
             linePaint.ClearShadowLayer();
         }
     }

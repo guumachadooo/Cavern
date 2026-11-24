@@ -27,6 +27,22 @@ namespace CavernizeAndroid.Views;
 ///   Right: One UI 9 vertical capsule elevation slider for Listener Height (Y)
 /// </summary>
 public sealed class RoomSimulatorView : View {
+    /// <summary>
+    /// When false (default), dragging the 3D room rotates the room directly with finger motion
+    /// (natural turntable manipulation). When true, uses classic inverted camera-orbit drag.
+    /// </summary>
+    public bool InvertOrbitDrag { get; set; }
+
+    /// <summary>
+    /// Pure orbit-drag math mapping screen-space touch deltas to 3D camera yaw/pitch deltas.
+    /// Direct mode (+dx -> +yaw) moves the near room face right when dragging right.
+    /// </summary>
+    public static (float dYawDeg, float dPitchDeg) ComputeOrbitDelta(float stepX, float stepY, float dp, bool invertDrag) {
+        float safeDp = Math.Max(0.5f, dp);
+        float sign = invertDrag ? -1f : 1f;
+        return (sign * stepX * 0.55f / safeDp, sign * stepY * 0.45f / safeDp);
+    }
+
     sealed class SmoothedSourceState {
         public Vector3 SmoothedPos;
         public Vector3 LastRawPos;
@@ -1769,8 +1785,9 @@ public sealed class RoomSimulatorView : View {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
                     float stepX = tx - lastX;
                     float stepY = ty - lastY;
-                    camYawDeg = NormalizeDeg(camYawDeg - stepX * 0.55f / dp);
-                    camPitchDeg = Math.Clamp(camPitchDeg + stepY * 0.45f / dp, 6f, 86f);
+                    (float dYaw, float dPitch) = ComputeOrbitDelta(stepX, stepY, dp, InvertOrbitDrag);
+                    camYawDeg = NormalizeDeg(camYawDeg + dYaw);
+                    camPitchDeg = Math.Clamp(camPitchDeg + dPitch, 6f, 86f);
                     Invalidate();
                     lastX = tx;
                     lastY = ty;

@@ -407,7 +407,7 @@ public partial class MainActivity {
             musicBottomLeftIcon.IconColor = lyricsActive ? Color.Rgb(20, 22, 28) : Color.Argb(195, 252, 252, 255);
         }
 
-        // Flanking spatial toggles: [Cavernize 3D] | [HRTF 3D / Direto] | [Matrix 7.1]
+        // Unified Spatial & AI pills: [Upmix: Direct / Matrix 7.1 / Cavernize 3D] | [HRTF Profile] | [AI Engine]
         void StyleSpatialPill(LinearLayout btn, OneUiIconView ico, TextView tv, bool on, Color accent, string labelText = null) {
             if (btn == null) return;
             if (labelText != null) tv.Text = labelText;
@@ -419,10 +419,16 @@ public partial class MainActivity {
             tv.SetTextColor(fg);
         }
 
-        StyleSpatialPill(musicCavernizeToggleBtn, musicCavernizeIcon, musicCavernizeText, store.CavernizeUpmix, OneUiTheme.IconAtmosUpmix);
+        int upmixIdx = ResolveUpmixModeIndex();
+        string upmixPillLabel = upmixIdx switch {
+            2 => S["PlayTabUpmix3DShort"],
+            1 => S["PlayTabUpmixMatrixShort"],
+            _ => S["PlayTabUpmixDirectShort"]
+        };
+        Color upmixPillAccent = upmixIdx == 2 ? OneUiTheme.IconAtmosUpmix : OneUiTheme.IconStudioExport;
+        StyleSpatialPill(musicUpmixToggleBtn, musicUpmixIcon, musicUpmixText, upmixIdx > 0, upmixPillAccent, upmixPillLabel);
         StyleSpatialPill(musicBottomSpatialBtn, musicBottomSpatialIcon, musicBottomSpatialText, store.HeadphoneVirtualizer, OneUiTheme.Primary,
             BinauralProfileService.GetActiveShortBadge(store, S));
-        StyleSpatialPill(musicMatrixToggleBtn, musicMatrixIcon, musicMatrixText, store.MatrixUpmixing, OneUiTheme.IconStudioExport);
 
         bool aiPrepBusy = isNeuralPrepRunning &&
                           activeNeuralPrepGoal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation;
