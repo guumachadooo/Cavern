@@ -130,6 +130,7 @@
         ".agents/agent/omni_protocol.py",
         ".agents/agent/bridge_auth.py",
         ".agents/agent/local_capabilities.py",
+        ".agents/agent/cavern_bug_hunter.py",
         ".agents/scripts/omni_agent.py",
         ".agents/scripts/live_phone_bridge.py",
         ".agents/bridge_profile.json"

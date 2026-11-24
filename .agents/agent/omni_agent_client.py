@@ -911,7 +911,38 @@ def main() -> int:
     p_rep = sub.add_parser("repos", help="3-Repo Federation manager (status|hydrate|diff|push|sync-mirrors across Cavern, OmniAgent & Fractal)")
     p_rep.add_argument("fed_args", nargs=argparse.REMAINDER, help="Arguments passed to repo_federation.py")
 
+    p_hunt = sub.add_parser("hunt", help="Live Adversarial Bug-Hunter & Chaos Fuzzer against running Cavernize app (8 vectors + --mode watch)")
+    p_hunt.add_argument("--mode", choices=("quick", "standard", "deep", "watch"), default="standard")
+    p_hunt.add_argument("--vectors", default="")
+    p_hunt.add_argument("--no-mutate", action="store_true")
+    p_hunt.add_argument("--duration", type=int, default=60)
+    p_hunt.add_argument("--interval", type=float, default=3.0)
+    p_hunt.add_argument("--out-md", default="/tmp/cavern_bug_hunt_latest.md")
+    p_hunt.add_argument("--out-json", default="/tmp/cavern_bug_hunt_latest.json")
+    p_hunt.add_argument("--quiet", action="store_true")
+
     args = parser.parse_args()
+
+    if args.action == "hunt":
+        import cavern_bug_hunter as bh
+        forwarded_h: list[str] = ["--mode", args.mode, "--duration", str(args.duration), "--interval", str(args.interval), "--timeout", str(args.timeout)]
+        if args.url:
+            forwarded_h += ["--url", args.url]
+        if args.pair_secret:
+            forwarded_h += ["--pair-secret", args.pair_secret]
+        if args.admin_key:
+            forwarded_h += ["--admin-key", args.admin_key]
+        if args.vectors:
+            forwarded_h += ["--vectors", args.vectors]
+        if args.no_mutate:
+            forwarded_h.append("--no-mutate")
+        if args.out_md:
+            forwarded_h += ["--out-md", args.out_md]
+        if args.out_json:
+            forwarded_h += ["--out-json", args.out_json]
+        if args.quiet:
+            forwarded_h.append("--quiet")
+        return bh.main(forwarded_h)
 
     if args.action == "repos":
         import repo_federation as rfed
@@ -1058,6 +1089,25 @@ def main() -> int:
             {"lines": args.lines, "filter": args.filter},
             channel=channel, admin_key=admin, timeout_sec=max(120, args.timeout),
         )
+        # Fallback to Cavernize own-UID sandbox logcat via OmniAgent Android IPC if ADB/Shizuku is unavailable
+        if not res.get("ok") or not str(res.get("output") or "").strip():
+            import cavern_bug_hunter as bh
+            bridge = bh.LiveCavernBridge(relay, secret, admin, timeout_sec=min(30, args.timeout))
+            own_out = bridge.fetch_logcat(lines=int(args.lines or 120), min_level="W" if not args.filter else "V")
+            clean_lines = [ln for ln in own_out.splitlines() if ln.strip() and not bh.is_benign_logcat_line(ln)]
+            if args.filter and clean_lines:
+                import re as _re
+                pat = _re.compile(args.filter, _re.IGNORECASE)
+                clean_lines = [ln for ln in clean_lines if pat.search(ln)]
+            own_out = "\n".join(clean_lines)
+            if own_out.strip():
+                res = {
+                    "ok": True,
+                    "cmd": "logcat_tail",
+                    "source": "cavernize_ipc_sandbox",
+                    "lines": len(clean_lines),
+                    "output": own_out,
+                }
     elif args.action == "ag-discover":
         res = send_agent_command(relay, secret, "ag_discover", {}, channel=channel, admin_key=admin, timeout_sec=max(120, args.timeout))
     elif args.action == "ag-sync":

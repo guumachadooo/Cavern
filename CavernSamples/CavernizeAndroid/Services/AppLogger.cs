@@ -176,6 +176,7 @@ public static class AppLogger {
                     string marker = ReadPendingCrashMarkerLocked();
                     WriteRawLocked("WARN", "SYS", $"Previous session ended with fatal crash marker: {marker}", allowCoalesce: false);
                 }
+                LiveChaosBugHunter.EnsureInitialized();
             }
         }
     }

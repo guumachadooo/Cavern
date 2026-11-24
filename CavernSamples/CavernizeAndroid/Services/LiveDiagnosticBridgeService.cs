@@ -148,10 +148,13 @@ public static partial class LiveDiagnosticBridgeService {
         new("ui_tree", 0, "Dump live Android View hierarchy of active MainActivity window", "{maxDepth?:1..10}"),
         new("acoustic_audit", 0, "Run L11 Intelligent Acoustic Differential Oracle (HRTF/Upmix/LGSR/ISM/UserConfig fingerprints)", "{quick?:bool, format?:'json'|'markdown'}"),
         new("get_design_tokens", 0, "Export active Cavernize One UI 9 runtime design tokens JSON for zero-quota companion UI sync", "{}"),
+        new("logcat_tail", 0, "Read Cavernize own-UID Android logcat cleanly (zero shell, filters fork noise)", "{lines?:10..800, minLevel?:'V'|'D'|'I'|'W'|'E'|'F', buffer?:'main'|'system'|'crash'|'events'}"),
+        new("anomalies", 0, "Read live in-memory RuntimeAnomalyRing captured from critical logs & chaos hunts", "{limit?:1..160, clear?:bool}"),
         new("batch", 0, "Execute up to 15 sequential commands in one round-trip (enforces each command's tier)", "{commands:[{cmd:string, args?:object}]}"),
 
         // Tier 1: Interactive App Control, QA & Total-App Live Audit
         new("ultra_check", 1, "Run 12-layer Total + Acoustic Differential + Live UI/Modal/Controls/Perf-Jank self-audit", "{}"),
+        new("chaos_hunt", 1, "Run high-speed in-process adversarial chaos & concurrent DSP/RingBuffer/malformed-file bug hunter", "{rounds?:1..20}"),
         new("ui_audit", 1, "Run L8-L10+L12 Live UI Tabs, 27-Modal Smoke, Controls & Choreographer Perf/Jank audit", "{}"),
         new("ui_perf_audit", 1, "Run L12 Choreographer UI open-latency, main-thread block & dropped-frame jank profile ranked slowest-first", "{}"),
         new("acoustic_probe", 1, "Run custom on-demand differential A/B psychoacoustic probe with arbitrary HRTF/ISM/MagLS/ITD/Yaw/Upmix/LGSR flags", "{profileId?:string, minPhase?:bool, magLsOrder?:0..3, bioItd?:bool, headWidthCm?:number, manualItdUs?:number, ismRoom?:bool, ismPreset?:0..4, ismLevel?:number, nearField?:bool, nearFieldDistM?:number, yawDeg?:number, pitchDeg?:number, sourceAzDeg?:number, sourceElDeg?:number, sampleRate?:number, upmix?:bool, lgsr?:bool, compareDirect?:bool, signal?:'white'|'pink'|'sine1k'|'impulse'}"),

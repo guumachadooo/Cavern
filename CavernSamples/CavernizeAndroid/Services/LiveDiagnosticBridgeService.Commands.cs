@@ -117,6 +117,21 @@ public static partial class LiveDiagnosticBridgeService {
                     store.LastSelfCheckSummary = rep.CompactSummary;
                     return (true, rep.ToMarkdown());
                 }
+                case "logcat_tail": {
+                    int lines = GetArgInt(argsEl, "lines", 150, 10, 800);
+                    string minLevel = GetArgString(argsEl, "minLevel", "W");
+                    string buffer = GetArgString(argsEl, "buffer", "main");
+                    return await LiveChaosBugHunter.ReadOwnLogcatAsync(lines, minLevel, buffer, ct).ConfigureAwait(false);
+                }
+                case "anomalies": {
+                    int limit = GetArgInt(argsEl, "limit", 80, 1, 160);
+                    bool clear = GetArgBool(argsEl, "clear", false);
+                    return (true, LiveChaosBugHunter.GetAnomaliesJson(limit, clear));
+                }
+                case "chaos_hunt": {
+                    int rounds = GetArgInt(argsEl, "rounds", 6, 1, 20);
+                    return await LiveChaosBugHunter.RunChaosHuntAsync(context, store, rounds, ct).ConfigureAwait(false);
+                }
                 case "acoustic_audit": {
                     bool quick = GetArgBool(argsEl, "quick", false);
                     string fmt = GetArgString(argsEl, "format", "json").Trim().ToLowerInvariant();
