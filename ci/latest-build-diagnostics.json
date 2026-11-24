@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-11-24T17:28:21Z",
-  "version": "2.9.67",
-  "runId": "45447893057",
-  "runNumber": "67",
-  "commitSha": "812279f719dcdb13c08ac8140844c11b729487db",
-  "runUrl": "https://github.com/guumachadooo/Cavern/actions/runs/45447893057",
+  "generatedAtUtc": "2026-11-24T18:26:44Z",
+  "version": "2.9.68",
+  "runId": "45458598129",
+  "runNumber": "68",
+  "commitSha": "63877cefaec88cd9ca5538281f5add1f5fe5f61b",
+  "runUrl": "https://github.com/guumachadooo/Cavern/actions/runs/45458598129",
   "outcomes": {
     "ndk": "success",
     "compile": "success",
@@ -13,21 +13,10 @@
   },
   "totals": {
     "errors": 0,
-    "warnings": 2
+    "warnings": 0
   },
-  "warningCodes": [
-    {
-      "code": "CA1416",
-      "count": 2,
-      "priority": "High"
-    }
-  ],
+  "warningCodes": [],
   "errorCodes": [],
   "errorsByLayer": {},
-  "warningsByLayer": {
-    "04_CavernizeAndroid": [
-      "CavernSamples/CavernizeAndroid/Services/ExportMediaProcessingService.cs(439,39): warning CA1416: This call site is reachable on: 'android' 34.0 and later. 'ForegroundService.TypeMediaProcessing' is only supported on: 'android' 35.0 and later. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]",
-      "CavernSamples/CavernizeAndroid/Services/ExportMediaProcessingService.cs(473,51): warning CA1416: This call site is reachable on: 'Android' 34.0 and later. 'ForegroundService.TypeMediaProcessing' is only supported on: 'android' 35.0 and later. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]"
-    ]
-  }
+  "warningsByLayer": {}
 }
