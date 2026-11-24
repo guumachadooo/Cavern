@@ -140,7 +140,7 @@ public partial class MainActivity {
 
     AudioFile TryOpenWithSmartFallbacks(string resolved, out string fallbackSessionDir) {
         fallbackSessionDir = null;
-        if (string.IsNullOrEmpty(resolved) || !File.Exists(resolved) || new FileInfo(resolved).Length == 0) {
+        if (string.IsNullOrEmpty(resolved) || !File.Exists(resolved) || new FileInfo(resolved).Length < 16) {
             throw new InvalidOperationException(S["MediaDecodeFailedCorrupt"]);
         }
         string containerExt = Path.GetExtension(resolved).ToLowerInvariant();
@@ -209,8 +209,19 @@ public partial class MainActivity {
             }
         }
 
-        if ((probe != null && probe.AudioStreams.Count == 0 && guessedContainer != Container.NotContainer) ||
-            HasVideoOnlyTrackViaMediaExtractor(resolved)) {
+        if (HasVideoOnlyTrackViaMediaExtractor(resolved) ||
+            (probe != null && probe.AudioStreams.Count == 0 && guessedContainer != Container.NotContainer &&
+             probe.RawOutput != null && probe.RawOutput.Contains("Video:", StringComparison.OrdinalIgnoreCase))) {
+            throw new InvalidOperationException(S["VideoNoAudioTrack"]);
+        }
+        if (probe != null && probe.AudioStreams.Count == 0 && !string.IsNullOrWhiteSpace(probe.RawOutput) &&
+            (probe.RawOutput.Contains("Invalid data found", StringComparison.OrdinalIgnoreCase) ||
+             probe.RawOutput.Contains("could not find codec", StringComparison.OrdinalIgnoreCase) ||
+             probe.RawOutput.Contains("moov atom not found", StringComparison.OrdinalIgnoreCase) ||
+             probe.RawOutput.Contains("End of file", StringComparison.OrdinalIgnoreCase))) {
+            throw new InvalidOperationException(S["MediaDecodeFailedCorrupt"]);
+        }
+        if (probe != null && probe.AudioStreams.Count == 0 && guessedContainer != Container.NotContainer) {
             throw new InvalidOperationException(S["VideoNoAudioTrack"]);
         }
 
@@ -412,7 +423,14 @@ public partial class MainActivity {
                 });
             } catch (Exception ex) {
                 pendingSeekAfterLoadSeconds = -1;
-                AppLogger.Error("OpenLocalPathWithFallbackAsync", ex);
+                bool isExpectedMediaReject = ex is InvalidOperationException &&
+                    (string.Equals(ex.Message, S["VideoNoAudioTrack"], StringComparison.Ordinal) ||
+                     string.Equals(ex.Message, S["MediaDecodeFailedCorrupt"], StringComparison.Ordinal));
+                if (isExpectedMediaReject) {
+                    AppLogger.Warn($"OpenLocalPathWithFallbackAsync rejected '{Path.GetFileName(path)}': {ex.Message}");
+                } else {
+                    AppLogger.Error("OpenLocalPathWithFallbackAsync", ex);
+                }
                 RunOnUiThread(() => {
                     pendingAutoPlayAfterLoad = false;
                     SetWorkspaceHeaderText(LoadedFile != null ? Path.GetFileName(LoadedFile.Path) : S["SelectFilePill"]);

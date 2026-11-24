@@ -185,14 +185,16 @@ public static class NeuralAudioOfflinePipeline {
                 }
             }
 
-            // Only apply GPU UI-headroom yield on GPU/NPU providers (CPU KleidiAI already yields naturally to OS scheduler)
+            // Apply background QoS and gentle UI-headroom yield on BOTH GPU/NPU (configured yield) and heavy CPU chunks (4 ms)
+            // so Android SurfaceFlinger/UI & audio threads never starve on multi-chunk neural inference.
+            MvsepAntiArtifactPipeline.GlobalBackgroundThreadQoSHook?.Invoke();
             bool isGpuProvider = session.ExecutionProvider != null &&
                 (session.ExecutionProvider.Contains("WebGPU", StringComparison.OrdinalIgnoreCase) ||
                  session.ExecutionProvider.Contains("Vulkan", StringComparison.OrdinalIgnoreCase) ||
                  session.ExecutionProvider.Contains("GPU", StringComparison.OrdinalIgnoreCase) ||
                  session.ExecutionProvider.Contains("NNAPI", StringComparison.OrdinalIgnoreCase));
             if (!isGpuProvider) {
-                passOpt.GpuUiBreathingYieldMs = 0;
+                passOpt.GpuUiBreathingYieldMs = Math.Min(4, Math.Max(0, passOpt.GpuUiBreathingYieldMs > 0 ? passOpt.GpuUiBreathingYieldMs : 4));
             }
 
             // Auto-RTF Progressive Streaming Gate: when single-model non-TTA separation outpaces real-time playback

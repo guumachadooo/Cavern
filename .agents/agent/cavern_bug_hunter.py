@@ -998,6 +998,7 @@ class LiveBugHunter:
 
         if len(boot) > 1 and boot[1]["ok"] and isinstance(boot[1]["json"], dict):
             cmd_names = {c.get("cmd") for c in (boot[1]["json"].get("commands") or []) if isinstance(c, dict)}
+            self._capabilities = {c for c in cmd_names if isinstance(c, str)}
             self._has_chaos_hunt_cmd = "chaos_hunt" in cmd_names
             self._has_native_logcat = "logcat_tail" in cmd_names
         if len(boot) > 2 and boot[2]["ok"] and isinstance(boot[2]["json"], dict):
@@ -1775,7 +1776,7 @@ class LiveBugHunter:
             notes.append(f"maxTabMs={max_ms:.0f}")
 
         # 9b. Stateful Library Album-Search Oracle (catches single-track truncation when track shares album name!)
-        lq = self.bridge.cmd("library_query", {"query": "", "limit": 100}, tier=0, timeout_sec=20)
+        lq = self.bridge.cmd("library_query", {"query": "", "limit": 100, "musicOnly": True}, tier=0, timeout_sec=20)
         if lq["ok"] and isinstance(lq["json"], dict):
             all_tracks = list(lq["json"].get("tracks") or [])
             album_counts: dict[str, int] = {}
@@ -1790,12 +1791,12 @@ class LiveBugHunter:
             # Prioritize title-track albums (e.g. "evermore") or any multi-track album
             multi_albums = [a for a in title_matches_album if album_counts.get(a, 0) >= 2]
             if not multi_albums:
-                multi_albums = [a for a, cnt in sorted(album_counts.items(), key=lambda kv: -kv[1]) if cnt >= 3][:2]
+                multi_albums = [a for a, cnt in sorted(album_counts.items(), key=lambda kv: -kv[1]) if cnt >= 2][:2]
             checked_albums = 0
             for alb in multi_albums[:2]:
                 checked_albums += 1
                 expected_cnt = album_counts[alb]
-                qr = self.bridge.cmd("library_query", {"query": alb, "limit": 100}, tier=0, timeout_sec=20)
+                qr = self.bridge.cmd("library_query", {"query": alb, "limit": 100, "musicOnly": True}, tier=0, timeout_sec=20)
                 if qr["ok"] and isinstance(qr["json"], dict):
                     returned = [
                         t for t in (qr["json"].get("tracks") or [])
@@ -1812,6 +1813,17 @@ class LiveBugHunter:
                             evidence=f"expected>={expected_cnt} tracks in album '{alb}', got {len(returned)}",
                         )
             notes.append(f"albumsAudited={checked_albums}")
+
+        # 9c. H2 Runtime Telemetry Hook (FrameMetrics, ApplicationExitInfo, AudioTrack/AAudio XRuns)
+        if "runtime_telemetry" in getattr(self, "_capabilities", ()):
+            rt = self.bridge.cmd("runtime_telemetry", {}, tier=0, timeout_sec=15)
+            if rt["ok"] and isinstance(rt["json"], dict):
+                fm = rt["json"].get("frameMetrics") or {}
+                xr = rt["json"].get("audioXRuns") or {}
+                notes.append(
+                    f"fm={fm.get('sampledFrames', 0)}/p95={fm.get('p95TotalMs', 0)}ms,"
+                    f"xruns={xr.get('audioTrackUnderrunCount', 0)}"
+                )
 
         self._watch_step_delta("V9_ui_latency_and_search_oracle", "UI latency & library search oracle", check_logcat=True)
         return ", ".join(notes) or "UI latency & library oracle OK"

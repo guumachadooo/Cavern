@@ -43,7 +43,7 @@ public partial class MainActivity {
             store.MatrixUpmixing = pos >= 1;
             store.CavernizeUpmix = pos >= 2;
             SyncUpmixModeUi();
-            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
             RefreshMusicPlayerControlsUi();
             RefreshSettingsCategorySubtitles();
         };
@@ -53,7 +53,7 @@ public partial class MainActivity {
         AddDivider(atmosAwareUpmixSection);
         atmosAwareUpmixSwitch = AddSwitchRow(atmosAwareUpmixSection, S["AtmosAwareUpmix"], store.AtmosAwareUpmix, v => {
             store.AtmosAwareUpmix = v;
-            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
             RefreshMusicPlayerControlsUi();
             RefreshSettingsCategorySubtitles();
         }, helpBody: S["TipAtmosAwareUpmix"]);
@@ -62,11 +62,11 @@ public partial class MainActivity {
         AddDivider(upmixCard);
         (upmixEffectBar, _) = AddSliderRow(upmixCard, S["UpmixEffect"], 0, 100, (int)Math.Round(store.UpmixEffect * 100), v => {
             store.UpmixEffect = v * 0.01f;
-            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
         }, "%", defaultValue: 75, helpBody: S["TipUpmixEffect"]);
         (upmixSmoothBar, _) = AddSliderRow(upmixCard, S["UpmixSmooth"], 0, 100, (int)Math.Round(store.UpmixSmoothness * 100), v => {
             store.UpmixSmoothness = v * 0.01f;
-            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
         }, "%", defaultValue: 80, helpBody: S["TipUpmixSmooth"]);
         Button resetUpmixBtn = PillButton(S["ResetUpmix"], () => {
             store.MatrixUpmixing = false;
@@ -78,7 +78,7 @@ public partial class MainActivity {
             atmosAwareUpmixSwitch.Checked = true;
             SyncSlider(upmixEffectBar, 75, 0, 100, "%");
             SyncSlider(upmixSmoothBar, 80, 0, 100, "%");
-            playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
             RefreshMusicPlayerControlsUi();
             RefreshSettingsCategorySubtitles();
         });

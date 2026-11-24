@@ -800,7 +800,7 @@ public partial class MainActivity {
                 store.CavernizeUpmix = next;
                 SyncUpmixModeUi();
                 RefreshSettingsCategorySubtitles();
-                playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+                _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
                 RefreshMusicPlayerControlsUi();
             });
 
@@ -827,7 +827,7 @@ public partial class MainActivity {
                 store.MatrixUpmixing = next;
                 SyncUpmixModeUi();
                 RefreshSettingsCategorySubtitles();
-                playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+                _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
                 RefreshMusicPlayerControlsUi();
             });
 

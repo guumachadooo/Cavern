@@ -67,6 +67,7 @@ public sealed class LibraryTrackItem {
     public int TrackNumber { get; set; }
     public int DiscNumber { get; set; }
     public bool IsVideo { get; set; }
+    public bool HasNoAudioTrack { get; set; }
     public int ChannelCount { get; set; }
     public bool IsSpatial { get; set; }
     public string AudioBadge { get; set; } = "";
@@ -174,7 +175,7 @@ public static partial class MediaLibraryService {
 
     public static MediaLibrarySnapshot CachedSnapshot => cachedSnapshot;
 
-    const string DiskCacheFileName = "library_cache_v4.json";
+    const string DiskCacheFileName = "library_cache_v5.json";
 
     [GeneratedRegex(@"^(?:WA-)?(?:PTT|AUD|VID)[-_]\d{8}[-_]WA\d+", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex WhatsAppNameRegex();
@@ -511,13 +512,15 @@ public static partial class MediaLibraryService {
                         && hasPrev
                         && prev.FileSizeBytes == len
                         && prev.LastModifiedTicks == modTicks
-                        && (!string.IsNullOrEmpty(prev.AudioBadge) || prev.ChannelCount > 0 || prev.IsSpatial);
+                        && (prev.DurationMs > 0 || prev.HasNoAudioTrack)
+                        && (!string.IsNullOrEmpty(prev.AudioBadge) || prev.ChannelCount > 0 || prev.IsSpatial || prev.HasNoAudioTrack);
 
                     if (matchedCache) {
                         current.ChannelCount = prev.ChannelCount;
                         current.IsSpatial = prev.IsSpatial;
                         current.AudioBadge = prev.AudioBadge;
                         current.IsVideo = prev.IsVideo;
+                        current.HasNoAudioTrack = prev.HasNoAudioTrack;
                         current.HasEmbeddedMusicTags = prev.HasEmbeddedMusicTags;
                         if (prev.DurationMs > 0 && current.DurationMs <= 0) current.DurationMs = prev.DurationMs;
                         if (prev.TrackNumber > 0) current.TrackNumber = prev.TrackNumber;
@@ -536,7 +539,9 @@ public static partial class MediaLibraryService {
                         }
                     }
 
-                    finalTracks.Add(current);
+                    if (!current.HasNoAudioTrack) {
+                        finalTracks.Add(current);
+                    }
                 }
 
                 foreach (string oldPath in previousByPath.Keys) {
@@ -1272,8 +1277,10 @@ public static partial class MediaLibraryService {
                 }
                 if (sawAudio && !sawVideo) {
                     item.IsVideo = false;
+                    item.HasNoAudioTrack = false;
                 } else if (sawVideo) {
                     item.IsVideo = true;
+                    item.HasNoAudioTrack = !sawAudio;
                 }
             } catch {
                 // Unsupported container for MediaExtractor (e.g. raw .thd/.mlp/.caf) -> handled via ext flags below
@@ -1282,14 +1289,22 @@ public static partial class MediaLibraryService {
                 try { extractor?.Dispose(); } catch { }
             }
 
-            // Read native MP4/M4A/FLAC/ID3/RIFF tags (fixes missing track numbers & albums on MP4 Atmos!)
+            if (!item.HasNoAudioTrack &&
+                (lowerName.Contains("_anull_video_", StringComparison.Ordinal) ||
+                 lowerName.Contains("_anull_trickplay_", StringComparison.Ordinal))) {
+                item.IsVideo = true;
+                item.HasNoAudioTrack = true;
+            }
+
+            // Read native MP4/M4A/FLAC/ID3/RIFF tags (fixes missing track numbers, durations & albums on MP4 Atmos!)
             tagPath = directReadable
                 ? item.FilePath
                 : (effectiveUri != null && effectiveCtx != null ? AndroidFileHelper.TryGetDirectPath(effectiveCtx, effectiveUri) : null);
-            if (CanOpenFileForRead(tagPath)) {
+            if (!item.HasNoAudioTrack && CanOpenFileForRead(tagPath)) {
                 ParsedAudioTags binTags = AudioTagReader.TryReadTags(tagPath);
                 if (binTags != null) {
                     item.HasEmbeddedMusicTags = binTags.HasEmbeddedMusicTags;
+                    if (item.DurationMs <= 0 && binTags.DurationMs > 0) item.DurationMs = binTags.DurationMs;
                     if (binTags.TrackNumber > 0) item.TrackNumber = binTags.TrackNumber;
                     if (binTags.DiscNumber > 0) item.DiscNumber = binTags.DiscNumber;
                     if (!string.IsNullOrWhiteSpace(binTags.AlbumArtist)) item.AlbumArtist = binTags.AlbumArtist;
@@ -1304,8 +1319,8 @@ public static partial class MediaLibraryService {
             }
 
             bool canReadTagContainer = CanOpenFileForRead(tagPath) && AudioTagReader.IsContainerSupported(ext);
-            bool needDurationFallback = item.DurationMs <= 0 && !extSpatial && !extSurround;
-            bool needTagFallback = !item.HasEmbeddedMusicTags && !extSpatial && !extSurround && !canReadTagContainer;
+            bool needDurationFallback = item.DurationMs <= 0 && !item.HasNoAudioTrack;
+            bool needTagFallback = !item.HasEmbeddedMusicTags && !item.HasNoAudioTrack && !extSpatial && !extSurround && !canReadTagContainer;
             if (needDurationFallback || needTagFallback) {
                 ProbeWithMediaMetadataRetriever(effectiveCtx, item, effectiveUri, directReadable, fileName, needDurationFallback, needTagFallback);
             }

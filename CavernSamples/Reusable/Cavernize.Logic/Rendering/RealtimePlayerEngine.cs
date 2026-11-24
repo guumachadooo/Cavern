@@ -85,6 +85,10 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     bool isRenderingLiveNeuralSources;
     NeuralSeparatedTrack cachedHybridTrack;
     float[][] cachedHybrid714Buses;
+    float cachedHybridEffect = float.NaN;
+    int hybrid714BuildCount;
+    long pipelineConfigGen;
+    volatile bool isDisposed;
     ProgressiveNeuralStemUpdater progressiveNeuralUpdater;
     readonly CompositePreHrtfBusProcessor compositePreHrtfBus = new();
     int activeNativeSampleRateRequest;
@@ -364,8 +368,14 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     }
 
     /// <summary>
+    /// Total number of full-track 7.1.4 Hybrid Neural+DirAC bus syntheses performed by this engine instance.
+    /// </summary>
+    public int Hybrid714BuildCount => Volatile.Read(ref hybrid714BuildCount);
+
+    /// <summary>
     /// Applies updated Slot 2A upmixing settings (<see cref="UpmixingSettings.ParametricStft"/>,
     /// <see cref="UpmixingSettings.AtmosAware"/>, Matrix, Cavernize) cleanly in real time with clickless crossfade.
+    /// Avoids redundant full-track 7.1.4 Hybrid Neural+DirAC rebuilds when <see cref="UpmixingSettings.Effect"/> is unchanged.
     /// </summary>
     public void ApplyUpmixingSettings(UpmixingSettings settings) {
         UpmixingSettings safe = settings ?? new UpmixingSettings(true);
@@ -373,24 +383,120 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
         lock (renderLock) {
             upmixingSettings = safe;
             parametricUpmixerStage.UpdateSettings(safe);
-            if (currentTrack != null &&
-                (!isRenderingLiveNeuralSources || neuralStemStage.Config.SpatialUpmixMode == NeuralSpatialUpmixMode.HybridNeuralDirAc)) {
-                if (IsPlaying && hasRenderedAudio) {
-                    ArmCrossfadeLocked();
-                }
-                if (isRenderingLiveNeuralSources) {
-                    cachedHybridTrack = null;
-                    cachedHybrid714Buses = null;
-                } else {
+            if (currentTrack != null) {
+                if (!isRenderingLiveNeuralSources) {
+                    if (IsPlaying && hasRenderedAudio) {
+                        ArmCrossfadeLocked();
+                    }
                     currentTrack.Seek(currentTrackSample);
+                    ConfigureListener(resetToStart: false);
+                    rebuilt = true;
+                } else if (neuralStemStage.Config.SpatialUpmixMode == NeuralSpatialUpmixMode.HybridNeuralDirAc) {
+                    bool effectChanged = float.IsNaN(cachedHybridEffect) || MathF.Abs(cachedHybridEffect - safe.Effect) > 1e-4f;
+                    if (effectChanged) {
+                        if (IsPlaying && hasRenderedAudio) {
+                            ArmCrossfadeLocked();
+                        }
+                        cachedHybridTrack = null;
+                        cachedHybrid714Buses = null;
+                        cachedHybridEffect = float.NaN;
+                        ConfigureListener(resetToStart: false);
+                        rebuilt = true;
+                    }
                 }
-                ConfigureListener(resetToStart: false);
-                rebuilt = true;
             }
         }
         if (rebuilt) {
             SourcesRebuilt?.Invoke();
         }
+    }
+
+    /// <summary>
+    /// Non-blocking UI-safe variant of <see cref="ApplyUpmixingSettings"/>: pre-synthesizes any required
+    /// 7.1.4 Hybrid Neural+DirAC buses off the UI thread and outside <see cref="renderLock"/> using a monotonic
+    /// generation guard, then swaps the listener atomically in &lt;1 ms.
+    /// </summary>
+    public Task ApplyUpmixingSettingsAsync(UpmixingSettings settings) {
+        UpmixingSettings safe = settings ?? new UpmixingSettings(true);
+        long gen = Interlocked.Increment(ref pipelineConfigGen);
+        return Task.Run(() => {
+            if (Volatile.Read(ref pipelineConfigGen) != gen || isDisposed) {
+                return;
+            }
+            NeuralSeparatedTrack prebuildTrack = null;
+            StereoStemBuffer[] prebuildStems = null;
+            int prebuildSr = 48000;
+            float prebuildHeightExp = 0.35f;
+            float prebuildEffect = safe.Effect;
+            bool needHybridRebuild = false;
+
+            lock (renderLock) {
+                if (isDisposed || Volatile.Read(ref pipelineConfigGen) != gen) {
+                    return;
+                }
+                if (currentTrack != null && isRenderingLiveNeuralSources &&
+                    neuralStemStage.Config.SpatialUpmixMode == NeuralSpatialUpmixMode.HybridNeuralDirAc) {
+                    NeuralSeparatedTrack sep = neuralStemStage.ActiveSpatialUpmixTrack;
+                    bool effectChanged = float.IsNaN(cachedHybridEffect) || MathF.Abs(cachedHybridEffect - safe.Effect) > 1e-4f;
+                    if (sep != null && !sep.IsProgressiveStreaming && sep.Stems != null && sep.Stems.Count > 0 &&
+                        (!ReferenceEquals(cachedHybridTrack, sep) || cachedHybrid714Buses == null || cachedHybrid714Buses.Length != 12 || effectChanged)) {
+                        needHybridRebuild = true;
+                        prebuildTrack = sep;
+                        prebuildStems = new StereoStemBuffer[sep.Stems.Count];
+                        for (int i = 0; i < sep.Stems.Count; i++) {
+                            prebuildStems[i] = sep.Stems[i];
+                        }
+                        int trackSr = currentTrack.SampleRate > 0 ? currentTrack.SampleRate : Listener.DefaultSampleRate;
+                        prebuildSr = sep.SampleRate > 0 ? sep.SampleRate : trackSr;
+                        prebuildHeightExp = Math.Clamp(safe.Effect * 0.5f, 0.10f, 0.65f);
+                    }
+                }
+            }
+
+            float[][] prebuiltBuses = null;
+            if (needHybridRebuild && prebuildStems != null) {
+                prebuiltBuses = NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe(prebuildStems, prebuildSr, prebuildHeightExp, 120f);
+                Interlocked.Increment(ref hybrid714BuildCount);
+            }
+
+            if (Volatile.Read(ref pipelineConfigGen) != gen || isDisposed) {
+                return;
+            }
+
+            bool rebuilt = false;
+            lock (renderLock) {
+                if (isDisposed || Volatile.Read(ref pipelineConfigGen) != gen) {
+                    return;
+                }
+                upmixingSettings = safe;
+                parametricUpmixerStage.UpdateSettings(safe);
+                if (prebuiltBuses != null && ReferenceEquals(neuralStemStage.ActiveSpatialUpmixTrack, prebuildTrack)) {
+                    cachedHybrid714Buses = prebuiltBuses;
+                    cachedHybridTrack = prebuildTrack;
+                    cachedHybridEffect = prebuildEffect;
+                }
+                if (currentTrack != null) {
+                    if (!isRenderingLiveNeuralSources) {
+                        if (IsPlaying && hasRenderedAudio) {
+                            ArmCrossfadeLocked();
+                        }
+                        currentTrack.Seek(currentTrackSample);
+                        ConfigureListener(resetToStart: false);
+                        rebuilt = true;
+                    } else if (needHybridRebuild && prebuiltBuses != null &&
+                               neuralStemStage.Config.SpatialUpmixMode == NeuralSpatialUpmixMode.HybridNeuralDirAc) {
+                        if (IsPlaying && hasRenderedAudio) {
+                            ArmCrossfadeLocked();
+                        }
+                        ConfigureListener(resetToStart: false);
+                        rebuilt = true;
+                    }
+                }
+            }
+            if (rebuilt) {
+                SourcesRebuilt?.Invoke();
+            }
+        });
     }
 
     /// <summary>
@@ -422,6 +528,91 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
         if (rebuilt) {
             SourcesRebuilt?.Invoke();
         }
+    }
+
+    /// <summary>
+    /// Non-blocking UI-safe variant of <see cref="ApplyNeuralConfig"/>: pre-computes 7.1.4 Hybrid Neural+DirAC
+    /// buses off the UI thread and outside <see cref="renderLock"/> before performing an atomic listener swap,
+    /// eliminating multi-second UI freezes when toggling IA 7.1 &lt;-&gt; UpMix / Cavernize.
+    /// </summary>
+    public Task ApplyNeuralConfigAsync(NeuralAudioConfig config) {
+        long gen = Interlocked.Increment(ref pipelineConfigGen);
+        return Task.Run(() => {
+            if (Volatile.Read(ref pipelineConfigGen) != gen || isDisposed) {
+                return;
+            }
+            NeuralSeparatedTrack prebuildTrack = null;
+            StereoStemBuffer[] prebuildStems = null;
+            int prebuildSr = 48000;
+            float prebuildHeightExp = 0.35f;
+            float prebuildEffect = 0.75f;
+
+            lock (renderLock) {
+                if (isDisposed || Volatile.Read(ref pipelineConfigGen) != gen) {
+                    return;
+                }
+                NeuralSpatialUpmixMode targetMode = config != null ? config.SpatialUpmixMode : NeuralSpatialUpmixMode.Off;
+                if (targetMode == NeuralSpatialUpmixMode.HybridNeuralDirAc && currentTrack != null) {
+                    NeuralSeparatedTrack sep = neuralStemStage.ActiveSpatialUpmixTrack;
+                    float curEffect = upmixingSettings != null ? upmixingSettings.Effect : 0.75f;
+                    bool effectChanged = float.IsNaN(cachedHybridEffect) || MathF.Abs(cachedHybridEffect - curEffect) > 1e-4f;
+                    if (sep != null && !sep.IsProgressiveStreaming && sep.Stems != null && sep.Stems.Count > 0 &&
+                        (!ReferenceEquals(cachedHybridTrack, sep) || cachedHybrid714Buses == null || cachedHybrid714Buses.Length != 12 || effectChanged)) {
+                        prebuildTrack = sep;
+                        prebuildStems = new StereoStemBuffer[sep.Stems.Count];
+                        for (int i = 0; i < sep.Stems.Count; i++) {
+                            prebuildStems[i] = sep.Stems[i];
+                        }
+                        int trackSr = currentTrack.SampleRate > 0 ? currentTrack.SampleRate : Listener.DefaultSampleRate;
+                        prebuildSr = sep.SampleRate > 0 ? sep.SampleRate : trackSr;
+                        prebuildEffect = curEffect;
+                        prebuildHeightExp = Math.Clamp(curEffect * 0.5f, 0.10f, 0.65f);
+                    }
+                }
+            }
+
+            float[][] prebuiltBuses = null;
+            if (prebuildStems != null) {
+                prebuiltBuses = NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe(prebuildStems, prebuildSr, prebuildHeightExp, 120f);
+                Interlocked.Increment(ref hybrid714BuildCount);
+            }
+
+            if (Volatile.Read(ref pipelineConfigGen) != gen || isDisposed) {
+                return;
+            }
+
+            bool rebuilt = false;
+            lock (renderLock) {
+                if (isDisposed || Volatile.Read(ref pipelineConfigGen) != gen) {
+                    return;
+                }
+                if (prebuiltBuses != null && ReferenceEquals(neuralStemStage.ActiveSpatialUpmixTrack, prebuildTrack)) {
+                    cachedHybrid714Buses = prebuiltBuses;
+                    cachedHybridTrack = prebuildTrack;
+                    cachedHybridEffect = prebuildEffect;
+                }
+                bool wasActive = neuralStemStage.IsKaraokeActivelyAttenuating;
+                NeuralSpatialUpmixMode prevMode = neuralStemStage.Config.SpatialUpmixMode;
+                neuralStemStage.ApplyConfig(config);
+                bool nowActive = neuralStemStage.IsKaraokeActivelyAttenuating;
+                NeuralSpatialUpmixMode nextMode = neuralStemStage.Config.SpatialUpmixMode;
+
+                if (prevMode != nextMode && currentTrack != null &&
+                    (neuralStemStage.HasPlayableSpatialUpmixStems || isRenderingLiveNeuralSources)) {
+                    if (IsPlaying && hasRenderedAudio) {
+                        ArmCrossfadeLocked();
+                    }
+                    ConfigureListener(resetToStart: false);
+                    rebuilt = true;
+                } else if (wasActive != nowActive && IsPlaying && hasRenderedAudio) {
+                    ArmCrossfadeLocked();
+                }
+                sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+            }
+            if (rebuilt) {
+                SourcesRebuilt?.Invoke();
+            }
+        });
     }
 
     /// <summary>
@@ -1158,6 +1349,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
 
     /// <inheritdoc/>
     public void Dispose() {
+        isDisposed = true;
         lock (renderLock) {
             IsPlaying = false;
             if (ReferenceEquals(VirtualizerFilter.PreHrtfBusProcessor, compositePreHrtfBus) ||

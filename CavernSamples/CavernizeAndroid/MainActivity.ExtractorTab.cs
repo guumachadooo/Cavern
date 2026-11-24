@@ -517,6 +517,7 @@ public partial class MainActivity {
         extractedFilesContainer.RemoveAllViews();
 
         Task.Run(() => {
+            AndroidRuntimeTelemetry.ApplyBackgroundThreadQoS();
             try {
                 store.ApplyGlobals();
                 List<string> created = [];

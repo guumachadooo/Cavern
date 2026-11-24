@@ -144,9 +144,9 @@ public partial class MainActivity {
 
         (string tier, int warnBudgetMs, int stallFailMs) = GetUiPerfBudget(targetName);
         string status;
-        if (uiBlockMs >= stallFailMs || firstFrameMs >= stallFailMs || worstFrameMs >= 250.0) {
+        if (uiBlockMs >= stallFailMs || firstFrameMs >= stallFailMs || (vsyncSampled && worstFrameMs >= 250.0)) {
             status = "STALL";
-        } else if (uiBlockMs > warnBudgetMs || firstFrameMs > warnBudgetMs || dropped >= 4) {
+        } else if (uiBlockMs > warnBudgetMs || firstFrameMs > warnBudgetMs || (vsyncSampled && dropped >= 4)) {
             status = "SLOW";
         } else {
             status = "OK";
@@ -447,10 +447,10 @@ public partial class MainActivity {
                 ? " [background UI-block mode]"
                 : (vsyncSampledCount < perfSamples.Count ? $" [{vsyncSampledCount}/{perfSamples.Count} vsync]" : "");
             if (stalls.Count > 0) {
-                string topStalls = string.Join(", ", stalls.Take(5).Select(s => $"{s.Target}({s.UiThreadBlockMs}ms/1st={s.FirstFrameMs}ms>{s.BudgetMs}ms)"));
+                string topStalls = string.Join(", ", stalls.Take(5).Select(s => $"{s.Target}(ui={s.UiThreadBlockMs}ms,1st={s.FirstFrameMs}ms,budget={s.BudgetMs}ms,drops={s.DroppedFrames})"));
                 detL12 = $"{stalls.Count} UI stall(s), {slows.Count} slow ({perfSamples.Count} targets, P50={p50}ms, P95={p95}ms, drops={totalDrops}){modeTag}: {topStalls}";
             } else if (slows.Count > 0) {
-                string topSlows = string.Join(", ", slows.Take(5).Select(s => $"{s.Target}({s.UiThreadBlockMs}ms/1st={s.FirstFrameMs}ms>{s.BudgetMs}ms)"));
+                string topSlows = string.Join(", ", slows.Take(5).Select(s => $"{s.Target}(ui={s.UiThreadBlockMs}ms,1st={s.FirstFrameMs}ms,budget={s.BudgetMs}ms,drops={s.DroppedFrames})"));
                 detL12 = $"0 stalls, {slows.Count} slower-than-budget target(s) ({perfSamples.Count} profiled, P50={p50}ms, P95={p95}ms, drops={totalDrops}){modeTag}: {topSlows}";
             } else {
                 string worstDesc = worst != null ? $"{worst.Target}={worst.FirstFrameMs}ms" : "n/a";

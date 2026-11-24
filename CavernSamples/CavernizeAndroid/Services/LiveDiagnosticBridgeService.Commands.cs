@@ -232,6 +232,10 @@ public static partial class LiveDiagnosticBridgeService {
                     return (true, BuildAudioRoutesSnapshot(context));
                 case "memory":
                     return (true, BuildMemoryJson(context));
+                case "runtime_telemetry":
+                    return host != null
+                        ? (true, await host.GetRuntimeTelemetryJsonAsync().ConfigureAwait(false))
+                        : (true, AndroidRuntimeTelemetry.BuildRuntimeTelemetryJson(context, null));
                 case "native_status":
                     return (true, BuildNativeLibsStatusJson(context));
                 case "app_state":
@@ -245,19 +249,30 @@ public static partial class LiveDiagnosticBridgeService {
                 case "library_query": {
                     string query = GetArgString(argsEl, "query", "");
                     int limit = GetArgInt(argsEl, "limit", 40, 1, 100);
+                    bool musicOnly = GetArgBool(argsEl, "musicOnly", false);
                     if (host != null) {
-                        return (true, await host.QueryLibraryJsonAsync(query, limit).ConfigureAwait(false));
+                        return (true, await host.QueryLibraryJsonAsync(query, limit, musicOnly).ConfigureAwait(false));
                     }
                     MediaLibrarySnapshot snap = MediaLibraryService.CachedSnapshot ?? MediaLibraryService.TryLoadCachedSnapshot(context);
-                    var tracks = (snap?.Tracks ?? []).Where(t =>
+                    IEnumerable<LibraryTrackItem> source = snap?.Tracks ?? [];
+                    if (musicOnly) {
+                        source = source.Where(t => !t.HasNoAudioTrack && !t.IsVideo && !t.IsLikelyNonMusic);
+                    }
+                    var matched = source.Where(t =>
                         string.IsNullOrWhiteSpace(query) ||
                         (t.Title?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
                         (t.Artist?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                        (t.FilePath?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
+                        (t.Album?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                        (t.FilePath?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false));
+                    if (string.IsNullOrWhiteSpace(query)) {
+                        matched = matched.OrderByDescending(t => !string.IsNullOrWhiteSpace(t.Album) && !t.IsVideo && !t.IsLikelyNonMusic)
+                            .ThenByDescending(t => t.DurationMs > 0);
+                    }
+                    var tracks = matched
                         .Take(limit)
                         .Select(t => new { t.Title, t.Artist, t.Album, t.DurationMs, t.FilePath })
                         .ToList();
-                    return (true, JsonSerializer.Serialize(new { totalCached = snap?.Tracks?.Count ?? 0, returned = tracks.Count, tracks }, new JsonSerializerOptions { WriteIndented = true }));
+                    return (true, JsonSerializer.Serialize(new { totalCached = snap?.Tracks?.Count ?? 0, returned = tracks.Count, musicOnly, tracks }, new JsonSerializerOptions { WriteIndented = true }));
                 }
                 case "ui_tree": {
                     if (host == null) {
@@ -847,12 +862,16 @@ public static partial class LiveDiagnosticBridgeService {
             threshMb = mi.Threshold / (1024 * 1024);
             lowMem = mi.LowMemory;
         }
+        int thermalCode = AndroidRuntimeTelemetry.GetThermalStatusCode(context);
         return JsonSerializer.Serialize(new {
             availRamMb = availMb,
             totalRamMb = totalMb,
             thresholdMb = threshMb,
             lowMemory = lowMem,
             managedGcMb = gcMb,
+            thermalStatus = AndroidRuntimeTelemetry.DescribeThermalStatus(thermalCode),
+            frameMetrics = AndroidRuntimeTelemetry.BuildFrameMetricsObject(),
+            exitReasons = AndroidRuntimeTelemetry.ReadHistoricalExitReasons(context, 3),
             utc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)
         }, new JsonSerializerOptions { WriteIndented = true });
     }

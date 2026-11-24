@@ -437,7 +437,9 @@ public static class LiveChaosBugHunter {
                 })
             }, new JsonSerializerOptions { WriteIndented = true }));
         } finally {
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: false);
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
             chaosGate.Release();
         }
     }

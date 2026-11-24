@@ -446,22 +446,57 @@ namespace Cavern.Neural {
         }
 
         /// <summary>
+        /// Optional platform hook returning additional thermal breathing yield in milliseconds (0..100 ms)
+        /// based on OS thermal pressure (e.g., Android <c>PowerManager.CurrentThermalStatus</c>).
+        /// </summary>
+        public static Func<int> GlobalThermalExtraYieldMsProvider { get; set; }
+
+        /// <summary>
+        /// Optional platform hook invoked on background neural/DSP worker threads to lower OS scheduling priority
+        /// (e.g., Android <c>Process.SetThreadPriority(ThreadPriority.Background)</c>) so UI and audio never starve.
+        /// </summary>
+        public static Action GlobalBackgroundThreadQoSHook { get; set; }
+
+        /// <summary>
+        /// Computes the non-starving background worker cap leaving at least 50% of CPU cores free for UI, OS,
+        /// and real-time audio rendering (clamped to [1; 4] on mobile SoCs).
+        /// </summary>
+        public static int ComputeHeadroomWorkerCap(int logicalCores) {
+            if (logicalCores <= 2) {
+                return 1;
+            }
+            if (logicalCores <= 5) {
+                return Math.Max(1, logicalCores - 2);
+            }
+            return Math.Min(4, logicalCores / 2);
+        }
+
+        /// <summary>
         /// Computes an adaptive inter-chunk GPU UI breathing yield (in ms) from the configured base yield and
         /// the measured Stage 2 inference dispatch duration, preventing Vulkan/WebGPU compositor stalls on heavy
         /// dispatches while adding zero overhead on fast (<c>&lt; 50 ms</c>) chunks.
         /// </summary>
         public static int ComputeAdaptiveGpuBreathingYieldMs(int baseYieldMs, double stage2InferElapsedMs) {
-            if (baseYieldMs <= 0) {
-                return 0;
-            }
+            return ComputeEffectiveBreathingYieldMs(baseYieldMs, stage2InferElapsedMs, 0);
+        }
+
+        /// <summary>
+        /// Computes the effective inter-chunk breathing yield combining base UI-headroom yield and live OS thermal
+        /// extra yield (0..100 ms), ensuring zero overhead on sub-50 ms chunks while throttling gracefully under heat.
+        /// </summary>
+        public static int ComputeEffectiveBreathingYieldMs(int baseYieldMs, double stage2InferElapsedMs, int thermalExtraMs) {
+            int safeThermal = thermalExtraMs <= 0 ? 0 : Math.Min(100, thermalExtraMs);
             if (stage2InferElapsedMs < 50.0) {
-                return 0;
+                return safeThermal >= 40 ? Math.Min(100, safeThermal / 2) : 0;
             }
-            int cappedBase = Math.Min(100, baseYieldMs);
-            if (stage2InferElapsedMs >= 500.0) {
-                return Math.Min(100, Math.Max(cappedBase, 32));
+            int effectiveBase = 0;
+            if (baseYieldMs > 0) {
+                int cappedBase = Math.Min(100, baseYieldMs);
+                effectiveBase = stage2InferElapsedMs >= 500.0
+                    ? Math.Min(100, Math.Max(cappedBase, 32))
+                    : cappedBase;
             }
-            return cappedBase;
+            return Math.Min(100, Math.Max(effectiveBase, safeThermal));
         }
 
         /// <summary>
@@ -530,7 +565,7 @@ namespace Cavern.Neural {
             float[] window = CreateSqrtHannWindow(fftSize);
             int stemCount = stems.Length;
             int numFrames = (length + hopSize - 1) / hopSize + 2;
-            int workers = Math.Max(1, Math.Min(6, Environment.ProcessorCount >= 8 ? 6 : Environment.ProcessorCount));
+            int workers = ComputeHeadroomWorkerCap(Environment.ProcessorCount);
             bool useParallel = workers > 1 && numFrames >= 24;
 
             // Process Left and Right channels with identical COLA sqrt(Hann) WOLA
@@ -561,6 +596,7 @@ namespace Cavern.Neural {
                         };
                         int batchSize = (count + workers - 1) / workers;
                         Parallel.For(0, workers, po, w => {
+                            GlobalBackgroundThreadQoSHook?.Invoke();
                             int idxFrom = w * batchSize;
                             int idxTo = Math.Min(count, idxFrom + batchSize);
                             if (idxFrom >= idxTo) {
@@ -1250,8 +1286,9 @@ namespace Cavern.Neural {
                         if (abortedEmpty) {
                             return Array.Empty<StereoStemBuffer>();
                         }
-                        if (opt.GpuUiBreathingYieldMs > 0 && c + 1 < totalChunks) {
-                            int yieldMs = ComputeAdaptiveGpuBreathingYieldMs(opt.GpuUiBreathingYieldMs, inferMs);
+                        if (c + 1 < totalChunks) {
+                            int thermalMs = GlobalThermalExtraYieldMsProvider != null ? GlobalThermalExtraYieldMsProvider() : 0;
+                            int yieldMs = ComputeEffectiveBreathingYieldMs(opt.GpuUiBreathingYieldMs, inferMs, thermalMs);
                             if (yieldMs > 0) {
                                 token.WaitHandle.WaitOne(yieldMs);
                             }
@@ -1271,6 +1308,7 @@ namespace Cavern.Neural {
                         float[] bufL = inLSlots[slot];
                         float[] bufR = inRSlots[slot];
                         return Task.Run(() => {
+                            GlobalBackgroundThreadQoSHook?.Invoke();
                             token.ThrowIfCancellationRequested();
                             Array.Copy(padL, st, bufL, 0, chunkSize);
                             Array.Copy(padR, st, bufR, 0, chunkSize);
@@ -1308,11 +1346,15 @@ namespace Cavern.Neural {
                             int capturedChunk = c;
                             TPrepared capturedPrep = curPrep;
                             TInferOut capturedInfer = curInfer;
-                            prevPostTask = Task.Run(() => runStage3Sequential(capturedChunk, capturedPrep, capturedInfer), token);
+                            prevPostTask = Task.Run(() => {
+                                GlobalBackgroundThreadQoSHook?.Invoke();
+                                runStage3Sequential(capturedChunk, capturedPrep, capturedInfer);
+                            }, token);
 
-                            // Adaptive Adreno/Vulkan UI-compositor headroom gap between consecutive GPU dispatches
-                            if (opt.GpuUiBreathingYieldMs > 0 && c + 1 < totalChunks) {
-                                int yieldMs = ComputeAdaptiveGpuBreathingYieldMs(opt.GpuUiBreathingYieldMs, inferMs);
+                            // Adaptive UI-compositor + OS thermal breathing gap between consecutive neural chunks
+                            if (c + 1 < totalChunks) {
+                                int thermalMs = GlobalThermalExtraYieldMsProvider != null ? GlobalThermalExtraYieldMsProvider() : 0;
+                                int yieldMs = ComputeEffectiveBreathingYieldMs(opt.GpuUiBreathingYieldMs, inferMs, thermalMs);
                                 if (yieldMs > 0) {
                                     token.WaitHandle.WaitOne(yieldMs);
                                 }
@@ -1463,7 +1505,7 @@ namespace Cavern.Neural {
             float[] window = CreateSqrtHannWindow(fftSize);
             int candCount = candidates.Length;
             int numFrames = (length + hopSize - 1) / hopSize + 2;
-            int workers = Math.Max(1, Math.Min(6, Environment.ProcessorCount >= 8 ? 6 : Environment.ProcessorCount));
+            int workers = ComputeHeadroomWorkerCap(Environment.ProcessorCount);
             bool useParallel = workers > 1 && numFrames >= 24;
 
             float[] outL = new float[length];
@@ -1488,6 +1530,7 @@ namespace Cavern.Neural {
                         };
                         int batchSize = (count + workers - 1) / workers;
                         Parallel.For(0, workers, po, w => {
+                            GlobalBackgroundThreadQoSHook?.Invoke();
                             int idxFrom = w * batchSize;
                             int idxTo = Math.Min(count, idxFrom + batchSize);
                             if (idxFrom >= idxTo) {

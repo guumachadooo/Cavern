@@ -1559,11 +1559,187 @@ RunTest("T20_LowSampleRate8kMinPhase_ConcurrentHeadTrackIsolation_And_ConvolverD
     Assert(deltaMb < 16, $"Managed heap grew unexpectedly after 25 disposed probe cycles: delta={deltaMb} MB");
 });
 
+// ---------- Test 21: Stage 2 (T2) Bug #2 SpatialObjectCortex Anti-Oscillation, SlerpUnitShortest & Monotonic Orbit ----------
+RunTest("T21_Stage2_SpatialObjectCortex_AntiOscillation_SlerpAndOrbit", () => {
+    // 1. SlerpUnitShortest must never negate vectors into opposite hemisphere or collapse magnitude
+    var slerpMethod = typeof(DirectorCue).Assembly
+        .GetType("Cavern.Spatial.SpatialCortexMath")!
+        .GetMethod("SlerpUnitShortest", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+    Vector3 Slerp(Vector3 a, Vector3 b, float t) => (Vector3)slerpMethod.Invoke(null, [a, b, t])!;
+
+    Vector3 a135 = Vector3.Normalize(new Vector3(-0.7071f, 0f, 0.7071f)); // -45 deg
+    Vector3 b135 = Vector3.Normalize(new Vector3(0.7071f, 0f, -0.7071f)); // +135 deg (180 deg antipodal)
+    Vector3 midAnti = Slerp(a135, b135, 0.5f);
+    Assert(MathF.Abs(midAnti.Length() - 1f) < 1e-3f, $"Antipodal slerp must stay unit-length, got {midAnti.Length():F4}");
+    Assert(MathF.Abs(midAnti.Y) < 0.05f, $"Horizontal antipodal slerp must sweep around horizontal perimeter, got Y={midAnti.Y:F3}");
+
+    Vector3 vLeft = Vector3.Normalize(new Vector3(-0.866f, 0f, 0.5f));   // -60 deg
+    Vector3 vBackRight = Vector3.Normalize(new Vector3(0.5f, 0f, -0.866f)); // +150 deg (150 deg from -60 -> dot = -0.866 < 0!)
+    Vector3 mid150 = Slerp(vLeft, vBackRight, 0.5f);
+    Assert(MathF.Abs(mid150.Length() - 1f) < 1e-3f, $"150 deg slerp must stay unit-length, got {mid150.Length():F4}");
+    // Midpoint between -60 deg and +150 deg along shortest 150 deg arc MUST be around -135 deg (X < 0, Z < 0), NOT negated to +45 deg!
+    Assert(Vector3.Dot(mid150, vLeft) > 0.1f && Vector3.Dot(mid150, vBackRight) > 0.1f,
+        $"150 deg SlerpUnitShortest flipped into wrong hemisphere: mid=({mid150.X:F3},{mid150.Y:F3},{mid150.Z:F3})");
+
+    // 2. Full 4-mode trajectory stability on transient 4-stem music fixture (matches S25U pre-fix repro)
+    int sr = 48000;
+    int len = sr * 18;
+    string[] names = ["vocals", "bass", "drums", "other"];
+    StereoStemBuffer[] stems = new StereoStemBuffer[4];
+    for (int s = 0; s < 4; s++) {
+        float[] l = new float[len];
+        float[] r = new float[len];
+        float panL = s == 2 ? 0.65f : (s == 3 ? 0.92f : 0.72f);
+        float panR = s == 2 ? 0.95f : (s == 3 ? 0.58f : 0.72f);
+        float freq = 180f + s * 310f;
+        for (int i = 0; i < len; i++) {
+            double t = i / (double)sr;
+            // Realistic beat bursts every 1.5s to trigger Layer1AudioForensics transient cues
+            double beatPhase = t % 1.5;
+            float env = beatPhase < 0.25 ? 0.90f : 0.22f;
+            float v = 0.40f * env * MathF.Sin((float)(2.0 * Math.PI * freq * t));
+            l[i] = v * panL;
+            r[i] = v * panR;
+        }
+        stems[s] = new StereoStemBuffer(names[s], l, r);
+    }
+
+    foreach (SpatialChoreoMode mode in new[] { SpatialChoreoMode.Subtle, SpatialChoreoMode.Musical, SpatialChoreoMode.Cinematic, SpatialChoreoMode.Orbit }) {
+        DirectorCue[] cues = Layer1AudioForensics.Analyze(stems, sr, mode, null);
+        SpatialChoreoTrack track = SpatialChoreoTrack.Build(names, cues, mode, 18.0, 0.05);
+
+        for (int s = 0; s < names.Length; s++) {
+            float prevAz = 0f;
+            float prevDelta = 0f;
+            int centerCrossings = 0;
+            int reversals = 0;
+            float minR = 999f;
+            float totalUnwrappedAz = 0f;
+            int steps = 360;
+            for (int k = 0; k <= steps; k++) {
+                double t = k * 0.05;
+                track.EvaluatePositionZeroAlloc(s, t, out Vector3 p, false);
+                float r = p.Length();
+                Assert(float.IsFinite(p.X) && float.IsFinite(p.Y) && float.IsFinite(p.Z), $"Non-finite pos in {mode}/{names[s]}");
+                if (r < minR) minR = r;
+                float az = MathF.Atan2(p.X, p.Z) * (180f / MathF.PI);
+                if (k > 0) {
+                    float dAz = az - prevAz;
+                    while (dAz > 180f) dAz -= 360f;
+                    while (dAz < -180f) dAz += 360f;
+                    totalUnwrappedAz += dAz;
+                    if (MathF.Abs(az) > 12f && MathF.Abs(prevAz) > 12f && MathF.Sign(az) != MathF.Sign(prevAz) && MathF.Abs(dAz) < 90f) {
+                        centerCrossings++;
+                    }
+                    if (MathF.Abs(dAz) > 0.45f) {
+                        if (MathF.Abs(prevDelta) > 0.45f && MathF.Sign(dAz) != MathF.Sign(prevDelta)) {
+                            reversals++;
+                        }
+                        prevDelta = dAz;
+                    }
+                }
+                prevAz = az;
+            }
+            Assert(minR >= 0.88f, $"{mode}/{names[s]} collapsed radially toward center: minR={minR:F3}");
+            if (mode == SpatialChoreoMode.Subtle || mode == SpatialChoreoMode.Musical) {
+                Assert(centerCrossings == 0, $"{mode}/{names[s]} oscillated across center (cc={centerCrossings})!");
+            }
+            if (mode == SpatialChoreoMode.Orbit && (names[s] == "drums" || names[s] == "other")) {
+                Assert(reversals == 0, $"Orbit/{names[s]} reversed direction (rev={reversals}) instead of monotonic orbit!");
+                Assert(MathF.Abs(totalUnwrappedAz) >= 120f, $"Orbit/{names[s]} stalled instead of orbiting (netAz={totalUnwrappedAz:F1} deg)");
+            }
+        }
+    }
+});
+
+// ---------- Test 22: Stage 2 (T2) Bug #1 Zero-Freeze Hybrid 7.1.4 Rebuild Skip & Async Config Swaps ----------
+RunTest("T22_Stage2_ZeroFreeze_Hybrid714NoRedundantRebuild_And_AsyncToggle", () => {
+    int sr = 48000;
+    int len = sr * 2;
+    using SyntheticClockReader reader = new(sr, len);
+    using CavernizeTrack track = new(reader, Codec.PCM_Float, 0);
+    using RealtimePlayerEngine engine = new();
+
+    UpmixingSettings upmix = new(true) { Cavernize = false, MatrixUpmixing = true, Effect = 0.5f };
+    RenderingSettings render = new();
+    engine.Load(track, upmix, render);
+
+    float[] sig = new float[len];
+    for (int i = 0; i < len; i++) sig[i] = 0.2f * MathF.Sin(2f * MathF.PI * 330f * i / sr);
+    NeuralSeparatedTrack sep = new() {
+        SourceTrackKey = "t22_test.flac",
+        SampleRate = sr,
+        Stems = [
+            new StereoStemBuffer("vocals", sig, sig),
+            new StereoStemBuffer("drums", sig, sig),
+            new StereoStemBuffer("bass", sig, sig),
+            new StereoStemBuffer("other", sig, sig)
+        ]
+    };
+    engine.BindSeparatedNeuralTrack(sep);
+    NeuralAudioConfig nCfg = new() {
+        SpatialUpmixMode = NeuralSpatialUpmixMode.HybridNeuralDirAc
+    };
+    engine.ApplyNeuralConfig(nCfg);
+    int initialBuilds = engine.Hybrid714BuildCount;
+    Assert(initialBuilds == 1, $"Expected exactly 1 initial Hybrid 7.1.4 build, got {initialBuilds}");
+
+    // Toggle UpMix / Cavernize rapidly 6 times with unchanged Effect: MUST NOT rebuild Hybrid 7.1.4!
+    for (int i = 0; i < 6; i++) {
+        upmix.Cavernize = (i & 1) == 0;
+        upmix.MatrixUpmixing = (i % 3) != 0;
+        engine.ApplyUpmixingSettingsAsync(upmix).GetAwaiter().GetResult();
+    }
+    Assert(engine.Hybrid714BuildCount == initialBuilds,
+        $"Toggling Cavernize/MatrixUpmixing with unchanged Effect caused redundant Hybrid 7.1.4 rebuilds: {engine.Hybrid714BuildCount} != {initialBuilds}");
+
+    // Changing spatial Effect via ApplyUpmixingSettingsAsync MUST trigger exactly 1 rebuild
+    upmix.Effect = 0.85f;
+    engine.ApplyUpmixingSettingsAsync(upmix).GetAwaiter().GetResult();
+    Assert(engine.Hybrid714BuildCount == initialBuilds + 1,
+        $"Expected exactly 1 rebuild after Effect change, got {engine.Hybrid714BuildCount}");
+
+    // Toggling off and back to HybridNeuralDirAc via ApplyNeuralConfigAsync must stay non-blocking & deterministic
+    engine.ApplyNeuralConfigAsync(new NeuralAudioConfig { SpatialUpmixMode = NeuralSpatialUpmixMode.Stems3DObjects }).GetAwaiter().GetResult();
+    Assert(engine.Hybrid714BuildCount == initialBuilds + 1,
+        $"Switching away from HybridNeuralDirAc should not rebuild Hybrid 7.1.4: got {engine.Hybrid714BuildCount}");
+    engine.ApplyNeuralConfigAsync(new NeuralAudioConfig { SpatialUpmixMode = NeuralSpatialUpmixMode.HybridNeuralDirAc }).GetAwaiter().GetResult();
+    Assert(engine.Hybrid714BuildCount >= initialBuilds + 1,
+        $"Re-enabling HybridNeuralDirAc via ApplyNeuralConfigAsync succeeded cleanly (builds={engine.Hybrid714BuildCount})");
+});
+
+// ---------- Test 23: Stage 2 (T2) Bug #11 Global AI Headroom Worker Cap & Thermal Breathing Yield ----------
+RunTest("T23_Stage2_GlobalAiHeadroom_WorkerCap_And_ThermalYield", () => {
+    Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(8) == 4, "8-core device must cap background DSP workers at 4 (50%).");
+    Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(12) == 4, "12-core device must cap background DSP workers at max 4.");
+    Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(4) == 2, "4-core device must cap at 2.");
+    Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(2) == 1, "2-core device must cap at 1.");
+
+    try {
+        MvsepAntiArtifactPipeline.GlobalThermalExtraYieldMsProvider = () => 0;
+        int coolFast = MvsepAntiArtifactPipeline.ComputeEffectiveBreathingYieldMs(12, 20.0, 0);
+        Assert(coolFast == 0, $"Fast cool chunk (<50ms) should not waste yield, got {coolFast}");
+        int coolHeavy = MvsepAntiArtifactPipeline.ComputeEffectiveBreathingYieldMs(12, 300.0, 0);
+        Assert(coolHeavy == 12, $"Heavy cool chunk should apply base yield 12ms, got {coolHeavy}");
+        int verySlow = MvsepAntiArtifactPipeline.ComputeEffectiveBreathingYieldMs(12, 600.0, 0);
+        Assert(verySlow == 32, $"Very slow chunk (>=500ms) should escalate to >=32ms, got {verySlow}");
+
+        MvsepAntiArtifactPipeline.GlobalThermalExtraYieldMsProvider = () => 40;
+        int thermalExtra = MvsepAntiArtifactPipeline.GlobalThermalExtraYieldMsProvider();
+        int warmHeavy = MvsepAntiArtifactPipeline.ComputeEffectiveBreathingYieldMs(12, 300.0, thermalExtra);
+        Assert(warmHeavy == 40, $"Thermal pressure (40ms) must raise yield above base 12ms -> 40ms, got {warmHeavy}");
+        int warmFast = MvsepAntiArtifactPipeline.ComputeEffectiveBreathingYieldMs(12, 20.0, 60);
+        Assert(warmFast == 30, $"Severe thermal pressure (60ms) on fast chunk must apply half-yield 30ms, got {warmFast}");
+    } finally {
+        MvsepAntiArtifactPipeline.GlobalThermalExtraYieldMsProvider = null;
+    }
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
 }
-Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3 UNIT TESTS PASSED (0 failures).");
+Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2 UNIT TESTS PASSED (0 failures).");
 return 0;
 
 // ---- Helpers for Test 4 & Test 6 ----
@@ -1889,9 +2065,37 @@ def _py_spatial_choreo_cntc_and_mood_check() -> None:
     assert "string" not in m_digest.group(1), "LyricMoodDigest must never store raw string fields (zero raw text leakage)."
 
 
+def _py_stage2_runtime_stability_contracts() -> None:
+    tag_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AudioTagReader.cs").read_text(encoding="utf-8")
+    for tok in ("public long DurationMs", "ParseMp4Mvhd", "blockType == 0 && blockLen >= 34", "avgBytesPerSec"):
+        assert tok in tag_src, f"Missing {tok} in AudioTagReader.cs"
+
+    lib_svc = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "MediaLibraryService.cs").read_text(encoding="utf-8")
+    for tok in ('"library_cache_v5.json"', "public bool HasNoAudioTrack", "!current.HasNoAudioTrack"):
+        assert tok in lib_svc, f"Missing {tok} in MediaLibraryService.cs"
+
+    lib_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.Library.cs").read_text(encoding="utf-8")
+    for tok in ("NormalizeSearchFold", "MatchesSearchQuery", "ShouldFilterDrilldownTracks", "cachedSmartCleanEntries != null"):
+        assert tok in lib_ui, f"Missing {tok} in MainActivity.PlayerMusic.Library.cs"
+
+    lib_views = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.LibraryViews.cs").read_text(encoding="utf-8")
+    assert lib_views.count("ShouldFilterDrilldownTracks") >= 3, "Expected ShouldFilterDrilldownTracks in Album, Artist, and Folder drilldowns"
+
+    rt_tel = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AndroidRuntimeTelemetry.cs").read_text(encoding="utf-8")
+    for tok in ("AttachFrameMetrics", "ReadHistoricalExitReasons", "BuildAudioXRunObject", "ApplyBackgroundThreadQoS", "GetAdaptiveThermalYieldMs"):
+        assert tok in rt_tel, f"Missing {tok} in AndroidRuntimeTelemetry.cs"
+
+    ort_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NativeOnnxRuntimeBridge.cs").read_text(encoding="utf-8")
+    assert "session.intra_op.allow_spinning" in ort_src, "Missing allow_spinning=0 in NativeOnnxRuntimeBridge.cs"
+
+    audit_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.SelfAudit.cs").read_text(encoding="utf-8")
+    assert "(vsyncSampled && dropped >= 4)" in audit_src, "SelfAudit must gate dropped>=4 SLOW check on vsyncSampled"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
+    ("PY_T2_Stage2_RuntimeStabilityAndLibraryContracts", _py_stage2_runtime_stability_contracts),
 ]
 
 

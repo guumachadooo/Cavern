@@ -250,11 +250,15 @@ public partial class MainActivity {
                 : MediaLibraryService.SortMergedTracks(
                     MediaLibraryService.MergeTrackVariants(FilterLibraryTracks(selectedLibraryFolder.Tracks), this),
                     store.LibrarySortMode, this);
-            if (hasQuery) {
-                fldMerged = fldMerged.Where(m =>
-                    m.Primary.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    m.Primary.Artist.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    m.Primary.Album.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (ShouldFilterDrilldownTracks(q, selectedLibraryFolder.FolderName, selectedLibraryFolder.FolderPath)) {
+                string normQ = NormalizeSearchFold(q);
+                List<LibraryMergedTrack> narrowed = fldMerged.Where(m =>
+                    MatchesSearchQuery(m.Primary.Title, normQ) ||
+                    MatchesSearchQuery(m.Primary.Artist, normQ) ||
+                    MatchesSearchQuery(m.Primary.Album, normQ)).ToList();
+                if (narrowed.Count > 0) {
+                    fldMerged = narrowed;
+                }
             }
             LibraryFolderGroup capturedFld = selectedLibraryFolder;
             RenderGroupTracksDrilldown(
@@ -277,10 +281,14 @@ public partial class MainActivity {
                     : MediaLibraryService.SortMergedTracks(
                         MediaLibraryService.MergeTrackVariants(FilterLibraryTracks(art.Tracks), this),
                         store.LibrarySortMode, this);
-                if (hasQuery) {
-                    artMerged = artMerged.Where(m =>
-                        m.Primary.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                        m.Primary.Album.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (ShouldFilterDrilldownTracks(q, art.Artist)) {
+                    string normQ = NormalizeSearchFold(q);
+                    List<LibraryMergedTrack> narrowed = artMerged.Where(m =>
+                        MatchesSearchQuery(m.Primary.Title, normQ) ||
+                        MatchesSearchQuery(m.Primary.Album, normQ)).ToList();
+                    if (narrowed.Count > 0) {
+                        artMerged = narrowed;
+                    }
                 }
                 RenderGroupTracksDrilldown(
                     art.Artist,
@@ -644,10 +652,14 @@ public partial class MainActivity {
             }
             merged = MediaLibraryService.MergeAlbumTrackVariants(filteredRaw, this);
         }
-        if (!string.IsNullOrEmpty(q)) {
-            merged = merged.Where(m =>
-                m.Primary.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                m.Primary.Artist.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (ShouldFilterDrilldownTracks(q, alb.AlbumTitle, alb.Artist)) {
+            string normQ = NormalizeSearchFold(q);
+            List<LibraryMergedTrack> narrowed = merged.Where(m =>
+                MatchesSearchQuery(m.Primary.Title, normQ) ||
+                MatchesSearchQuery(m.Primary.Artist, normQ)).ToList();
+            if (narrowed.Count > 0) {
+                merged = narrowed;
+            }
         }
         List<LibraryTrackItem> albumQueue = new(merged.Count);
         for (int i = 0; i < merged.Count; i++) {

@@ -154,6 +154,8 @@ public sealed partial class RealtimePlayerEngine {
                 // W48: Shared canonical 12-channel 7.1.4 builder with complementary 120 Hz LR4 ScreenLFE crossover
                 cachedHybrid714Buses = NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe(stemArr, stemSr, heightExp, 120f);
                 cachedHybridTrack = sep;
+                cachedHybridEffect = upmixingSettings.Effect;
+                Interlocked.Increment(ref hybrid714BuildCount);
             }
 
             // Canonical ITU/SMPTE/Cavern Layout714 order matching BuildHybrid714WithDiscreteLfe 1:1

@@ -302,6 +302,65 @@ class BugHunterUnitTests(unittest.TestCase):
         self.assertEqual(len(ledger.active_findings()), 2)
         self.assertEqual(ledger.counts_by_origin()["historical_archive"], 0)
 
+    def test_v9_music_only_album_oracle_and_runtime_telemetry(self) -> None:
+        class V9MockBridge(FakeBridge):
+            def __init__(self) -> None:
+                super().__init__()
+                self.last_lq_args: list[dict] = []
+
+            def cmd(self, name: str, args: dict | None = None, *, tier: int = 0, timeout_sec: int = 30) -> dict:
+                args = args or {}
+                if name == "capabilities":
+                    return {
+                        "ok": True,
+                        "body": "{}",
+                        "json": {
+                            "commands": [
+                                {"cmd": "ping"},
+                                {"cmd": "library_query"},
+                                {"cmd": "runtime_telemetry"},
+                                {"cmd": "tab_switch"},
+                                {"cmd": "log_tail"},
+                                {"cmd": "logcat_tail"},
+                                {"cmd": "anomalies"},
+                            ]
+                        },
+                        "elapsedMs": 5,
+                        "error": "",
+                    }
+                if name == "library_query":
+                    self.last_lq_args.append(dict(args))
+                    q = str(args.get("query") or "").lower()
+                    all_music = [
+                        {"Title": "willow", "Album": "evermore", "Artist": "Taylor Swift", "DurationMs": 214000, "FilePath": "/Music/evermore/01.flac"},
+                        {"Title": "evermore", "Album": "evermore", "Artist": "Taylor Swift", "DurationMs": 304000, "FilePath": "/Music/evermore/15.flac"},
+                        {"Title": "gold rush", "Album": "evermore", "Artist": "Taylor Swift", "DurationMs": 185000, "FilePath": "/Music/evermore/03.flac"},
+                    ]
+                    tracks = [t for t in all_music if not q or q in t["Album"].lower() or q in t["Title"].lower()]
+                    return {"ok": True, "body": "{}", "json": {"tracks": tracks, "musicOnly": bool(args.get("musicOnly"))}, "elapsedMs": 8, "error": ""}
+                if name == "runtime_telemetry":
+                    return {
+                        "ok": True,
+                        "body": "{}",
+                        "json": {
+                            "frameMetrics": {"sampledFrames": 120, "p95TotalMs": 9.4},
+                            "audioXRuns": {"audioTrackUnderrunCount": 0},
+                        },
+                        "elapsedMs": 4,
+                        "error": "",
+                    }
+                return super().cmd(name, args, tier=tier, timeout_sec=timeout_sec)
+
+        fb = V9MockBridge()
+        hunter = bh.LiveBugHunter(fb, mode="standard", allow_mutate=False, verbose=False)
+        report = hunter.run_hunt(selected_vectors=["V9"])
+        self.assertTrue(report["ok"])
+        self.assertTrue(any(a.get("musicOnly") is True for a in fb.last_lq_args))
+        v9_notes = report["vectors"][0]["notes"]
+        self.assertIn("albumsAudited=1", v9_notes)
+        self.assertIn("fm=120/p95=9.4ms,xruns=0", v9_notes)
+        self.assertEqual([f for f in report["findings"] if f["severity"] == "HIGH"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

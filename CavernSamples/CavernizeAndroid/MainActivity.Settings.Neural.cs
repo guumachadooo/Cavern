@@ -369,7 +369,7 @@ public partial class MainActivity {
     }
 
     void ApplyAndRefreshNeuralAudio() {
-        playerEngine?.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
+        _ = playerEngine?.ApplyNeuralConfigAsync(store.BuildNeuralAudioConfig());
         SyncNeuralRuntimeDiagnostics();
         RefreshNeuralAudioUi();
     }

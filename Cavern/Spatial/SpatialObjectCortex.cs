@@ -193,12 +193,20 @@ namespace Cavern.Spatial {
             Vector3 a = NormalizeSafe(u0, new Vector3(0f, 0f, 1f));
             Vector3 b = NormalizeSafe(u1, a);
             float dot = Clamp(Vector3.Dot(a, b), -1f, 1f);
-            if (dot < 0f) {
-                b = -b;
-                dot = -dot;
-            }
+            // Unit 3D room directions are NOT double-cover quaternions (-u != u):
+            // never negate b when dot < 0, otherwise >90 deg paths flip to the opposite hemisphere.
             if (dot > 0.9995f) {
                 return NormalizeSafe(a + (b - a) * alpha, a);
+            }
+            if (dot < -0.9995f) {
+                // Antipodal (180 deg): sweep smoothly along a deterministic horizontal great circle
+                Vector3 ortho = Vector3.Cross(Vector3.UnitY, a);
+                if (ortho.LengthSquared() <= 1e-5f) {
+                    ortho = Vector3.Cross(Vector3.UnitX, a);
+                }
+                ortho = NormalizeSafe(ortho, Vector3.UnitX);
+                float angle = alpha * MathF.PI;
+                return NormalizeSafe(a * MathF.Cos(angle) + ortho * MathF.Sin(angle), a);
             }
             float theta = MathF.Acos(dot);
             float sinTheta = MathF.Sin(theta);
@@ -273,6 +281,13 @@ namespace Cavern.Spatial {
             List<DirectorCue> rawCues = new List<DirectorCue>(candidateTimes.Count);
             double windowHalfSec = 1.2;
 
+            // Compute each stem's natural stereo pan sign once so choreography respects mix placement
+            // and never ping-pongs across front center on alternating cues.
+            float[] stemHomeSides = new float[stems.Count];
+            for (int i = 0; i < stems.Count; i++) {
+                stemHomeSides[i] = EstimateStemHomeSide(stems[i], i);
+            }
+
             for (int c = 0; c < candidateTimes.Count; c++) {
                 double tSec = candidateTimes[c];
                 int chosenStemIdx = SelectMostProminentStem(stems, stemOrder, sampleRate, tSec, windowHalfSec, c);
@@ -290,7 +305,19 @@ namespace Cavern.Spatial {
                 float azDeg;
                 float elDeg;
                 float radius;
-                ComputeTargetPolarForCue(role, mode, mood, c, candidateTimes.Count, centroidHz, subBassRatio, energy01, out azDeg, out elDeg, out radius);
+                float progress01 = durationSec > 1e-3 ? SpatialCortexMath.Clamp01((float)(tSec / durationSec)) : 0f;
+                ComputeTargetPolarForCue(
+                    role,
+                    mode,
+                    mood,
+                    stemHomeSides[chosenStemIdx],
+                    progress01,
+                    centroidHz,
+                    subBassRatio,
+                    energy01,
+                    out azDeg,
+                    out elDeg,
+                    out radius);
 
                 rawCues.Add(new DirectorCue(tSec, role, azDeg, elDeg, radius, energy01));
             }
@@ -736,45 +763,92 @@ namespace Cavern.Spatial {
             return moodDigests[Math.Max(0, idx)];
         }
 
+        static float EstimateStemHomeSide(StereoStemBuffer stem, int stemIdx) {
+            if (stem != null && stem.Left != null && stem.Right != null && stem.Length > 0) {
+                int len = Math.Min(stem.Length, Math.Min(stem.Left.Length, stem.Right.Length));
+                int step = Math.Max(1, len / 2048);
+                double sumL = 0.0;
+                double sumR = 0.0;
+                for (int i = 0; i < len; i += step) {
+                    float l = stem.Left[i];
+                    float r = stem.Right[i];
+                    sumL += l * l;
+                    sumR += r * r;
+                }
+                double total = sumL + sumR;
+                if (total > 1e-9) {
+                    // Cavern azimuth convention: +az is Right (+X), -az is Left (-X)
+                    double pan = (sumR - sumL) / total;
+                    if (Math.Abs(pan) > 0.06) {
+                        return pan > 0.0 ? 1f : -1f;
+                    }
+                }
+            }
+            return (stemIdx & 1) == 0 ? 1f : -1f;
+        }
+
+        static float GetRoleHomeAzimuthMag(NeuralStemRole role) {
+            switch (role) {
+                case NeuralStemRole.Drums:
+                    return 28f;
+                case NeuralStemRole.Piano:
+                    return 44f;
+                case NeuralStemRole.BackingVocals:
+                    return 52f;
+                case NeuralStemRole.Guitar:
+                    return 58f;
+                case NeuralStemRole.Residual:
+                    return 108f;
+                default:
+                    return 64f;
+            }
+        }
+
         static void ComputeTargetPolarForCue(
             NeuralStemRole role,
             SpatialChoreoMode mode,
             LyricMoodDigest mood,
-            int cueIdx,
-            int totalCues,
+            float homeSide,
+            float progress01,
             float centroidHz,
             float subBassRatio,
             float energy01,
             out float azDeg,
             out float elDeg,
             out float radius) {
-            float sign = (cueIdx & 1) == 0 ? 1f : -1f;
-            float moodWidth = mood.Tag == LyricMoodTag.Anthem ? 1.25f
-                : (mood.Tag == LyricMoodTag.Intimate ? 0.65f
-                : (mood.Tag == LyricMoodTag.Tense ? 1.10f : 0.85f));
+            float side = homeSide >= 0f ? 1f : -1f;
+            float homeMag = GetRoleHomeAzimuthMag(role);
+            float moodWidth = mood.Tag == LyricMoodTag.Anthem ? 1.18f
+                : (mood.Tag == LyricMoodTag.Intimate ? 0.72f
+                : (mood.Tag == LyricMoodTag.Tense ? 1.08f : 0.90f));
             float highBrightness = SpatialCortexMath.Clamp01((centroidHz - 500f) / 3500f);
 
             switch (mode) {
                 case SpatialChoreoMode.Subtle:
-                    azDeg = sign * (18f + 16f * energy01) * moodWidth;
+                    // Gentle bounded breathing in the stem's home sector — never crosses 0 deg center
+                    azDeg = side * (homeMag + (4f + 12f * energy01) * moodWidth);
                     elDeg = 4f + 10f * highBrightness;
-                    radius = 0.92f - 0.10f * (1f - mood.Arousal01);
+                    radius = 0.92f - 0.06f * (1f - mood.Arousal01);
                     break;
                 case SpatialChoreoMode.Cinematic:
-                    azDeg = sign * (55f + 85f * energy01) * moodWidth;
-                    elDeg = 10f + 38f * highBrightness * (1f - subBassRatio);
-                    radius = mood.Tag == LyricMoodTag.Intimate ? 0.72f : (0.85f + 0.15f * energy01);
+                    // Progressive outer-perimeter sweep within/around the stem's hemisphere without center ping-pong
+                    float cinematicSweep = homeMag + (16f + 44f * progress01 + 22f * energy01) * moodWidth;
+                    azDeg = SpatialCortexMath.WrapAzimuthDeg(side * Math.Min(162f, cinematicSweep));
+                    elDeg = 10f + 34f * highBrightness * (1f - subBassRatio);
+                    radius = mood.Tag == LyricMoodTag.Intimate ? 0.80f : (0.86f + 0.12f * energy01);
                     break;
                 case SpatialChoreoMode.Orbit:
-                    float frac = totalCues > 0 ? (cueIdx + 1) / (float)totalCues : 0.25f;
-                    azDeg = SpatialCortexMath.WrapAzimuthDeg(-150f + frac * 300f);
-                    elDeg = 8f + 24f * MathF.Sin(frac * MathF.PI * 2f) * (1f - subBassRatio);
+                    // Monotonic continuous azimuthal progression around the perimeter from the stem's home angle
+                    azDeg = SpatialCortexMath.WrapAzimuthDeg(side * homeMag + side * progress01 * 300f);
+                    elDeg = 10f + 20f * MathF.Sin(progress01 * MathF.PI * 2f) * (1f - subBassRatio);
                     radius = 0.88f;
                     break;
                 default: // Musical
-                    azDeg = sign * (32f + 52f * energy01) * moodWidth;
+                    // Phrase-locked lateral & elevation swell strictly inside the stem's natural hemisphere
+                    float musicalMag = homeMag + (6f + 26f * energy01) * moodWidth;
+                    azDeg = side * Math.Min(128f, musicalMag);
                     elDeg = 6f + 22f * highBrightness * (1f - subBassRatio);
-                    radius = mood.Tag == LyricMoodTag.Intimate ? 0.76f : 0.90f;
+                    radius = mood.Tag == LyricMoodTag.Intimate ? 0.82f : 0.90f;
                     break;
             }
 
@@ -1166,20 +1240,27 @@ namespace Cavern.Spatial {
                             }
                         }
                         if (gradient.LengthSquared() <= 1e-6f) {
-                            // Break symmetric saddle-point dead-center co-location laterally
+                            // Break symmetric saddle-point co-location consistently toward the stem's own side
                             Vector3 refUp = MathF.Abs(dir.Y) < 0.9f ? Vector3.UnitY : Vector3.UnitZ;
                             Vector3 lateral = SpatialCortexMath.NormalizeSafe(Vector3.Cross(refUp, dir), Vector3.UnitX);
-                            gradient = lateral * ((idx & 1) == 0 ? -1f : 1f);
+                            float consistentSide = MathF.Abs(dir.X) > 0.02f
+                                ? (dir.X >= 0f ? 1f : -1f)
+                                : ((idx & 1) == 0 ? 1f : -1f);
+                            gradient = lateral * consistentSide;
                         }
                         if (gradient.LengthSquared() > 1e-6f) {
-                            Vector3 repelled = SpatialCortexMath.NormalizeSafe(dir + Vector3.Normalize(gradient) * 0.42f, dir);
-                            float az;
-                            float el;
-                            float rad = 1f;
-                            CartesianToSphericalDeg(repelled, out az, out el);
-                            ClampRoleAngles(role, ref az, ref el, ref rad);
-                            dir = SphericalToCartesianUnit(az, el);
-                            stemUnitDirs[idx] = dir;
+                            // Proportional smooth push (no sudden step jump at occupancy=0.45 threshold)
+                            float pushWeight = 0.28f * SpatialCortexMath.Clamp01((currentOcc - 0.45f) * 2.0f);
+                            if (pushWeight > 1e-4f) {
+                                Vector3 repelled = SpatialCortexMath.NormalizeSafe(dir + Vector3.Normalize(gradient) * pushWeight, dir);
+                                float az;
+                                float el;
+                                float rad = 1f;
+                                CartesianToSphericalDeg(repelled, out az, out el);
+                                ClampRoleAngles(role, ref az, ref el, ref rad);
+                                dir = SphericalToCartesianUnit(az, el);
+                                stemUnitDirs[idx] = dir;
+                            }
                         }
                     }
                 }
@@ -1433,29 +1514,47 @@ namespace Cavern.Spatial {
             }
 
             // Step 1: Sample keyframe curves & apply C2 cubic B-spline interpolation per stem
+            int orbitingTotal = 0;
             for (int s = 0; s < stemCount; s++) {
-                List<DirectorCue> stemCues = CollectStemCues(sortedCues, roles[s], baseAnchors[s], safeDur, mode);
-                SampleStemC2Curve(stemCues, roles[s], lut, s * frameCount, frameCount, safeStep);
+                NeuralStemRole r = roles[s];
+                if (r != NeuralStemRole.LeadVocal && r != NeuralStemRole.Vocals && r != NeuralStemRole.Bass) {
+                    orbitingTotal++;
+                }
+            }
+            int orbitingSlot = 0;
+            for (int s = 0; s < stemCount; s++) {
+                NeuralStemRole r = roles[s];
+                bool isAnchored = r == NeuralStemRole.LeadVocal || r == NeuralStemRole.Vocals || r == NeuralStemRole.Bass;
+                float orbitPhaseOffsetDeg = (!isAnchored && orbitingTotal > 0)
+                    ? (orbitingSlot++ * (360f / orbitingTotal))
+                    : 0f;
+                List<DirectorCue> stemCues = CollectStemCues(sortedCues, r, baseAnchors[s], safeDur, mode, orbitPhaseOffsetDeg);
+                SampleStemC2Curve(stemCues, r, lut, s * frameCount, frameCount, safeStep);
             }
 
             // Step 2: Frame-wise 12x6 ERB repulsion across concurrent stems
-            Vector3[] frameDirs = new Vector3[stemCount];
-            float[] frameEnergies = new float[stemCount];
-            for (int f = 0; f < frameCount; f++) {
-                for (int s = 0; s < stemCount; s++) {
-                    Vector4 v = lut[s * frameCount + f];
-                    frameDirs[s] = new Vector3(v.X, v.Y, v.Z);
-                    frameEnergies[s] = v.W;
-                }
-                PsychoacousticGovernor.ApplyErb12x6Repulsion(frameDirs, roles, frameEnergies, stemCount);
-                for (int s = 0; s < stemCount; s++) {
-                    int off = s * frameCount + f;
-                    float rad = lut[off].W;
-                    lut[off] = new Vector4(frameDirs[s].X, frameDirs[s].Y, frameDirs[s].Z, rad);
+            // (Orbit mode trajectories are analytically phase-spaced & elevation-lifted over front anchors,
+            // so skipping horizontal ERB repulsion prevents azimuthal bounce-back when passing az=0 deg.)
+            if (mode != SpatialChoreoMode.Orbit) {
+                Vector3[] frameDirs = new Vector3[stemCount];
+                float[] frameEnergies = new float[stemCount];
+                for (int f = 0; f < frameCount; f++) {
+                    for (int s = 0; s < stemCount; s++) {
+                        Vector4 v = lut[s * frameCount + f];
+                        frameDirs[s] = new Vector3(v.X, v.Y, v.Z);
+                        frameEnergies[s] = v.W;
+                    }
+                    PsychoacousticGovernor.ApplyErb12x6Repulsion(frameDirs, roles, frameEnergies, stemCount);
+                    for (int s = 0; s < stemCount; s++) {
+                        int off = s * frameCount + f;
+                        float rad = lut[off].W;
+                        lut[off] = new Vector4(frameDirs[s].X, frameDirs[s].Y, frameDirs[s].Z, rad);
+                    }
                 }
             }
 
-            // Step 3: Enforce temporal 2-deg hysteresis, <= 60 deg/s slew cap, and final role angle clamps
+            // Step 3: Enforce <= 60 deg/s slew cap and final role angle clamps on the precomputed C2 LUT
+            // (0 deg LUT deadband avoids 2.0 deg staircase stalls at 20 Hz while preserving smooth motion)
             for (int s = 0; s < stemCount; s++) {
                 int baseIdx = s * frameCount;
                 NeuralStemRole role = roles[s];
@@ -1464,7 +1563,7 @@ namespace Cavern.Spatial {
                     Vector4 curr = lut[baseIdx + f];
                     Vector3 prevDir = new Vector3(prev.X, prev.Y, prev.Z);
                     Vector3 currDir = new Vector3(curr.X, curr.Y, curr.Z);
-                    Vector3 governed = PsychoacousticGovernor.ApplyAngularHysteresisAndSlew(prevDir, currDir, safeStep);
+                    Vector3 governed = PsychoacousticGovernor.ApplyAngularHysteresisAndSlew(prevDir, currDir, safeStep, hysteresisDeg: 0f);
                     float az;
                     float el;
                     float rad = curr.W;
@@ -1668,45 +1767,116 @@ namespace Cavern.Spatial {
             NeuralStemRole role,
             Vector4 anchor,
             double durationSec,
-            SpatialChoreoMode mode) {
+            SpatialChoreoMode mode,
+            float orbitPhaseOffsetDeg = 0f) {
             float anchorAz;
             float anchorEl;
             PsychoacousticGovernor.CartesianToSphericalDeg(new Vector3(anchor.X, anchor.Y, anchor.Z), out anchorAz, out anchorEl);
+            bool isAnchoredRole = role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals || role == NeuralStemRole.Bass;
 
             List<DirectorCue> list = new List<DirectorCue>();
+
+            if (mode == SpatialChoreoMode.Orbit && !isAnchoredRole && durationSec > 0.5) {
+                // Continuous monotonic perimeter orbit with even phase separation and front elevation clearance
+                float startAz = SpatialCortexMath.WrapAzimuthDeg(35f + orbitPhaseOffsetDeg);
+                float degPerSec = 22f; // smooth <= 22 deg/s well inside 60 deg/s slew limit
+                float totalSweepDeg = (float)Math.Min(360.0 * Math.Max(1.0, Math.Floor(durationSec / 16.0) + 1.0), degPerSec * durationSec);
+                int steps = Math.Max(12, (int)Math.Ceiling(totalSweepDeg / 30f));
+                for (int i = 0; i <= steps; i++) {
+                    float frac = i / (float)steps;
+                    double t = durationSec * frac;
+                    float az = SpatialCortexMath.WrapAzimuthDeg(startAz + totalSweepDeg * frac);
+                    float frontClearanceEl = 18f * MathF.Max(0f, MathF.Cos(az * SpatialCortexMath.DegToRad));
+                    float el = anchorEl + frontClearanceEl + 8f * MathF.Sin(frac * MathF.PI * 2f);
+                    float rad = anchor.W;
+                    PsychoacousticGovernor.ClampRoleAngles(role, ref az, ref el, ref rad);
+                    list.Add(new DirectorCue(t, role, az, el, rad, 0.65f));
+                }
+                return list;
+            }
+
             list.Add(new DirectorCue(0.0, role, anchorAz, anchorEl, anchor.W, 0.5f));
 
             if (mode != SpatialChoreoMode.Off) {
+                float homeSide = anchorAz >= 0f ? 1f : -1f;
                 for (int i = 0; i < allCues.Count; i++) {
                     DirectorCue c = allCues[i];
                     if (c.StemRole == role) {
-                        list.Add(c);
-                    } else if (role != NeuralStemRole.LeadVocal && role != NeuralStemRole.Vocals && role != NeuralStemRole.Bass &&
+                        float az = c.TargetAzDeg;
+                        float el = c.TargetElDeg;
+                        float rad = c.Radius;
+                        // In Subtle & Musical modes, keep dynamic cues inside the stem's natural hemisphere
+                        // so cues never pull the stem back-and-forth across 0 deg front center.
+                        if (!isAnchoredRole && (mode == SpatialChoreoMode.Subtle || mode == SpatialChoreoMode.Musical)) {
+                            if (MathF.Abs(az) < 12f || (az * homeSide) < 0f) {
+                                az = homeSide * MathF.Max(MathF.Abs(anchorAz), MathF.Abs(az));
+                            }
+                        }
+                        PsychoacousticGovernor.ClampRoleAngles(role, ref az, ref el, ref rad);
+                        AppendWithArcSubdivision(list, role, c.TimeSec, az, el, rad, c.Energy01, homeSide);
+                    } else if (!isAnchoredRole &&
                                (c.StemRole == NeuralStemRole.Other || c.StemRole == NeuralStemRole.Residual)) {
-                        // Gentle sympathetic counter-motion for ensemble stems lacking direct cues
-                        float coupledAz = anchorAz + (c.TargetAzDeg - anchorAz) * 0.30f;
+                        // Gentle sympathetic motion strictly on the stem's own side (zero center-crossing pull)
+                        float cueMag = MathF.Abs(c.TargetAzDeg);
+                        float anchorMag = MathF.Abs(anchorAz);
+                        float coupledAz = homeSide * (anchorMag + (cueMag - anchorMag) * 0.25f);
                         float coupledEl = anchorEl + (c.TargetElDeg - anchorEl) * 0.25f;
-                        float coupledRad = c.Radius;
+                        float coupledRad = anchor.W + (c.Radius - anchor.W) * 0.35f;
                         PsychoacousticGovernor.ClampRoleAngles(role, ref coupledAz, ref coupledEl, ref coupledRad);
-                        list.Add(new DirectorCue(c.TimeSec, role, coupledAz, coupledEl, coupledRad, c.Energy01 * 0.5f));
+                        AppendWithArcSubdivision(list, role, c.TimeSec, coupledAz, coupledEl, coupledRad, c.Energy01 * 0.5f, homeSide);
                     }
                 }
             }
 
             if (list.Count == 1 || list[list.Count - 1].TimeSec < durationSec - 0.1) {
-                Vector4 tail = mode == SpatialChoreoMode.Orbit ? new Vector4(anchor.X, anchor.Y, anchor.Z, anchor.W) : list[list.Count - 1].TimeSec > 0.0
-                    ? new Vector4(
-                        PsychoacousticGovernor.SphericalToCartesianUnit(anchorAz, anchorEl).X,
-                        PsychoacousticGovernor.SphericalToCartesianUnit(anchorAz, anchorEl).Y,
-                        PsychoacousticGovernor.SphericalToCartesianUnit(anchorAz, anchorEl).Z,
-                        anchor.W)
-                    : anchor;
-                float tailAz;
-                float tailEl;
-                PsychoacousticGovernor.CartesianToSphericalDeg(new Vector3(tail.X, tail.Y, tail.Z), out tailAz, out tailEl);
-                list.Add(new DirectorCue(durationSec, role, tailAz, tailEl, tail.W, 0.4f));
+                // Hold the settled end orientation instead of yanking the object back toward center at track end
+                DirectorCue last = list[list.Count - 1];
+                list.Add(new DirectorCue(durationSec, role, last.TargetAzDeg, last.TargetElDeg, last.Radius, 0.4f));
             }
             return list;
+        }
+
+        static void AppendWithArcSubdivision(
+            List<DirectorCue> list,
+            NeuralStemRole role,
+            double targetTimeSec,
+            float targetAzDeg,
+            float targetElDeg,
+            float targetRad,
+            float energy01,
+            float homeSide) {
+            if (list.Count == 0) {
+                list.Add(new DirectorCue(targetTimeSec, role, targetAzDeg, targetElDeg, targetRad, energy01));
+                return;
+            }
+            DirectorCue prev = list[list.Count - 1];
+            double dt = targetTimeSec - prev.TimeSec;
+            if (dt <= 0.05) {
+                list[list.Count - 1] = new DirectorCue(targetTimeSec, role, targetAzDeg, targetElDeg, targetRad, energy01);
+                return;
+            }
+            float deltaAz = SpatialCortexMath.WrapAzimuthDeg(targetAzDeg - prev.TargetAzDeg);
+            // If span exceeds 55 deg, insert intermediate perimeter waypoints so SLERP tracks the outer arc cleanly
+            float absDelta = MathF.Abs(deltaAz);
+            if (absDelta > 55f) {
+                // Prefer sweeping around the outer side rather than cutting across 0 deg front center
+                float midTest = SpatialCortexMath.WrapAzimuthDeg(prev.TargetAzDeg + deltaAz * 0.5f);
+                if (MathF.Abs(midTest) < 25f && MathF.Abs(prev.TargetAzDeg) > 40f && MathF.Abs(targetAzDeg) > 40f) {
+                    deltaAz = deltaAz >= 0f ? deltaAz - 360f : deltaAz + 360f;
+                    absDelta = MathF.Abs(deltaAz);
+                }
+                int segs = Math.Max(2, (int)Math.Ceiling(absDelta / 45f));
+                for (int s = 1; s < segs; s++) {
+                    float frac = s / (float)segs;
+                    double midT = prev.TimeSec + dt * frac;
+                    float midAz = SpatialCortexMath.WrapAzimuthDeg(prev.TargetAzDeg + deltaAz * frac);
+                    float midEl = prev.TargetElDeg + (targetElDeg - prev.TargetElDeg) * frac;
+                    float midRad = prev.Radius + (targetRad - prev.Radius) * frac;
+                    PsychoacousticGovernor.ClampRoleAngles(role, ref midAz, ref midEl, ref midRad);
+                    list.Add(new DirectorCue(midT, role, midAz, midEl, midRad, energy01));
+                }
+            }
+            list.Add(new DirectorCue(targetTimeSec, role, targetAzDeg, targetElDeg, targetRad, energy01));
         }
 
         static void SampleStemC2Curve(

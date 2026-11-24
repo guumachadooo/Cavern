@@ -179,7 +179,7 @@ public partial class MainActivity {
             if (nextOn) {
                 store.AtmosAwareUpmix = true;
                 upmixingSettings.AtmosAware = true;
-                playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+                _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
                 if (!store.LgsrEnabled) {
                     store.LgsrEnabled = true;
                 }
@@ -211,7 +211,7 @@ public partial class MainActivity {
         bool currentlyOn = store.NeuralSpatialUpmixModeIndex != (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.Off;
         if (currentlyOn) {
             store.NeuralSpatialUpmixModeIndex = (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.Off;
-            playerEngine?.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
+            _ = playerEngine?.ApplyNeuralConfigAsync(store.BuildNeuralAudioConfig());
             RefreshNeuralAudioUi();
             RefreshNeuralPrepUi();
             RefreshBottomActionBarVisuals();
@@ -231,7 +231,7 @@ public partial class MainActivity {
 
         int targetMode = store.LastActiveNeuralSpatialUpmixModeIndex;
         store.NeuralSpatialUpmixModeIndex = targetMode;
-        playerEngine?.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
+        _ = playerEngine?.ApplyNeuralConfigAsync(store.BuildNeuralAudioConfig());
         RefreshNeuralAudioUi();
         RefreshNeuralPrepUi();
         RefreshBottomActionBarVisuals();
@@ -267,7 +267,7 @@ public partial class MainActivity {
                     if (on) {
                         store.AtmosAwareUpmix = true;
                         upmixingSettings.AtmosAware = true;
-                        playerEngine?.ApplyUpmixingSettings(upmixingSettings);
+                        _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
                         store.LgsrEnabled = true;
                         if (playerEngine != null) {
                             playerEngine.LgsrBypassed = false;
@@ -297,7 +297,7 @@ public partial class MainActivity {
             }, Math.Clamp(store.NeuralSpatialUpmixModeIndex, 0, 2));
             modeSel.SelectionChanged += idx => {
                 store.NeuralSpatialUpmixModeIndex = idx;
-                playerEngine?.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
+                _ = playerEngine?.ApplyNeuralConfigAsync(store.BuildNeuralAudioConfig());
                 RefreshNeuralAudioUi();
                 RefreshNeuralPrepUi();
                 RefreshBottomActionBarVisuals();

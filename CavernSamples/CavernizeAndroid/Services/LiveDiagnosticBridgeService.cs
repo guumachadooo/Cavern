@@ -37,7 +37,7 @@ namespace CavernizeAndroid.Services;
 public interface ILiveBridgeAppHost {
     Task<string> GetAppStateJsonAsync();
     Task<string> GetDspTelemetryJsonAsync();
-    Task<string> QueryLibraryJsonAsync(string query, int limit);
+    Task<string> QueryLibraryJsonAsync(string query, int limit, bool musicOnly = false);
     Task<string> DumpUiTreeJsonAsync(int maxDepth);
     Task<string> CaptureUiScreenshotJsonAsync(int maxWidth, int quality);
     Task<(bool ok, string message)> SwitchTabAsync(int tabIndex, string tabName);
@@ -50,6 +50,7 @@ public interface ILiveBridgeAppHost {
     object GetReflectionRoot(string rootName);
     Task<(List<SelfCheckItem> Checks, List<UiPerfSample> PerfSamples)> RunLiveUiSelfAuditAsync(Action<string> onProgress, CancellationToken ct);
     Task ApplySettingsChangedAsync();
+    Task<string> GetRuntimeTelemetryJsonAsync();
 }
 
 /// <summary>
@@ -150,6 +151,7 @@ public static partial class LiveDiagnosticBridgeService {
         new("get_design_tokens", 0, "Export active Cavernize One UI 9 runtime design tokens JSON for zero-quota companion UI sync", "{}"),
         new("logcat_tail", 0, "Read Cavernize own-UID Android logcat cleanly (zero shell, filters fork noise)", "{lines?:10..800, minLevel?:'V'|'D'|'I'|'W'|'E'|'F', buffer?:'main'|'system'|'crash'|'events'}"),
         new("anomalies", 0, "Read live in-memory RuntimeAnomalyRing captured from critical logs & chaos hunts", "{limit?:1..160, clear?:bool}"),
+        new("runtime_telemetry", 0, "Inspect live FrameMetrics (P50/P95/P99/jank/frozen), ApplicationExitInfo, AAudio/AudioTrack XRuns & thermal QoS", "{}"),
         new("batch", 0, "Execute up to 15 sequential commands in one round-trip (enforces each command's tier)", "{commands:[{cmd:string, args?:object}]}"),
 
         // Tier 1: Interactive App Control, QA & Total-App Live Audit

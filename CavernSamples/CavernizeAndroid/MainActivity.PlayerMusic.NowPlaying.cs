@@ -220,7 +220,7 @@ public partial class MainActivity {
         bool shouldEnableKaraoke = clamped < 99;
         if (store.SpatialKaraokeEnabled != shouldEnableKaraoke) {
             store.SpatialKaraokeEnabled = shouldEnableKaraoke;
-            playerEngine?.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
+            _ = playerEngine?.ApplyNeuralConfigAsync(store.BuildNeuralAudioConfig());
         } else {
             playerEngine?.SetKaraokeVocalLevel(level01);
         }

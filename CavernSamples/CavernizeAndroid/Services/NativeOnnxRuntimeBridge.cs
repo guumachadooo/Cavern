@@ -644,10 +644,9 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                             ReleaseStatusQuietly(fnSetOptimizedModelPath(sessOpts, cachedOptPath));
                         }
                         if (fnAddSessionConfig != null) {
-                            // XNNPACK uses its own pthread pool: disable ORT intra-op spin-wait to prevent pool contention;
-                            // for CPU KleidiAI and GPU/NPU fallback ops, keep spin-wait active to avoid futex sleep/wake overhead.
-                            string allowSpin = candidate == NeuralExecutionProvider.Xnnpack ? "0" : "1";
-                            ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.intra_op.allow_spinning", allowSpin));
+                            // Disable busy-spin waiting globally across all EPs so Android UI/SurfaceFlinger & RT audio
+                            // threads never suffer big.LITTLE scheduler starvation or thermal burn during background AI.
+                            ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.intra_op.allow_spinning", "0"));
                             ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.inter_op.allow_spinning", "0"));
                             ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.set_denormal_as_zero", "1"));
                             if (candidate == NeuralExecutionProvider.QnnHtp && !usingQnnCtx && !string.IsNullOrEmpty(qnnCtxPath)) {

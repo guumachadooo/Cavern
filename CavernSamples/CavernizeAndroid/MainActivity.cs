@@ -217,9 +217,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         OneUiTheme.Initialize(this);
         AppLogger.Initialize(this);
+        AndroidRuntimeTelemetry.InstallGlobalComputeQoSHooks(ApplicationContext ?? this);
         _ = Task.Run(() => AudioQualityAnalyzer.EnsureCacheLoaded(ApplicationContext));
 
         ConfigureEdgeToEdgeWindow(Window);
+        AndroidRuntimeTelemetry.AttachFrameMetrics(this);
 
         store = new AppSettingsStore(this);
         store.ApplyGlobals();
@@ -473,6 +475,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     protected override void OnDestroy() {
         uiDestroyed = true;
+        AndroidRuntimeTelemetry.DetachFrameMetrics(this);
         AppLogger.CriticalEventLogged -= OnCriticalLogEvent;
         LiveDiagnosticBridgeService.StateChanged -= OnLiveBridgeStateChanged;
         LiveDiagnosticBridgeService.UnregisterAppHost(this);

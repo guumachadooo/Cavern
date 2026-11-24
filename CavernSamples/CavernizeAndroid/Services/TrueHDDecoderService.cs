@@ -40,6 +40,7 @@ public sealed class ProbedAudioStream {
 
 public sealed class ContainerProbeResult {
     public double DurationSeconds { get; set; }
+    public string RawOutput { get; set; } = "";
     public List<ProbedAudioStream> AudioStreams { get; } = [];
 }
 
@@ -114,6 +115,7 @@ public static class TrueHDDecoderService {
             AppLogger.Warn($"FFmpeg probe exit={exitCode} (empty stderr) for '{Path.GetFileName(inputPath)}'");
             return result;
         }
+        result.RawOutput = stderr;
 
         Match durMatch = Regex.Match(stderr, @"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)");
         double durationSec = 0;

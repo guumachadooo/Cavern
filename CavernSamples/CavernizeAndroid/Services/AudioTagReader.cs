@@ -18,6 +18,11 @@ public sealed class ParsedAudioTags {
     public int DiscNumber { get; set; }
     public string Lyrics { get; set; } = "";
     /// <summary>
+    /// Parsed media duration in milliseconds extracted directly from container headers
+    /// (MP4 mvhd, FLAC STREAMINFO, WAV fmt/data), or 0 when unavailable.
+    /// </summary>
+    public long DurationMs { get; set; }
+    /// <summary>
     /// True only when real embedded music metadata (title, artist, album, track/disc, lyrics, or artwork)
     /// was parsed from the media container itself; never set by filename heuristics.
     /// </summary>
@@ -161,6 +166,8 @@ public static partial class AudioTagReader {
 
             if (boxType is "moov" or "udta" or "trak" or "mdia") {
                 WalkMp4Box(fs, boxEnd, depth + 1, tags);
+            } else if (boxType == "mvhd" && tags.DurationMs <= 0) {
+                ParseMp4Mvhd(fs, boxEnd, tags);
             } else if (boxType == "meta") {
                 if (fs.Position + 4 <= boxEnd) {
                     fs.Position += 4; // FullBox version + flags
@@ -171,6 +178,30 @@ public static partial class AudioTagReader {
             }
 
             fs.Position = boxEnd;
+        }
+    }
+
+    static void ParseMp4Mvhd(FileStream fs, long boxEnd, ParsedAudioTags tags) {
+        long avail = boxEnd - fs.Position;
+        if (avail < 20) return;
+        int toRead = (int)Math.Min(32L, avail);
+        Span<byte> buf = stackalloc byte[32];
+        int got = fs.Read(buf[..toRead]);
+        if (got < 20) return;
+
+        byte version = buf[0];
+        if (version == 0) {
+            uint timescale = BinaryPrimitives.ReadUInt32BigEndian(buf.Slice(12, 4));
+            uint duration = BinaryPrimitives.ReadUInt32BigEndian(buf.Slice(16, 4));
+            if (timescale > 0 && duration > 0 && duration != uint.MaxValue) {
+                tags.DurationMs = (long)Math.Round(duration * 1000.0 / timescale);
+            }
+        } else if (version == 1 && got >= 32) {
+            uint timescale = BinaryPrimitives.ReadUInt32BigEndian(buf.Slice(20, 4));
+            ulong duration = BinaryPrimitives.ReadUInt64BigEndian(buf.Slice(24, 8));
+            if (timescale > 0 && duration > 0 && duration != ulong.MaxValue) {
+                tags.DurationMs = (long)Math.Round(duration * 1000.0 / timescale);
+            }
         }
     }
 
@@ -290,6 +321,7 @@ public static partial class AudioTagReader {
 
         bool sawVorbis = false;
         bool sawPicture = false;
+        Span<byte> si = stackalloc byte[34];
         while (fs.Position + 4 <= fs.Length) {
             if (fs.Read(hdr) < 4) break;
             bool isLast = (hdr[0] & 0x80) != 0;
@@ -297,7 +329,22 @@ public static partial class AudioTagReader {
             int blockLen = (hdr[1] << 16) | (hdr[2] << 8) | hdr[3];
             if (blockLen < 0 || fs.Position + blockLen > fs.Length) break;
 
-            if (blockType == 4 && !sawVorbis && blockLen <= 2 * 1024 * 1024) { // VORBIS_COMMENT
+            if (blockType == 0 && blockLen >= 34 && tags.DurationMs <= 0) { // STREAMINFO
+                if (fs.Read(si) == 34) {
+                    int sampleRate = (si[10] << 12) | (si[11] << 4) | (si[12] >> 4);
+                    long totalSamples = ((long)(si[13] & 0x0F) << 32)
+                        | ((long)si[14] << 24)
+                        | ((long)si[15] << 16)
+                        | ((long)si[16] << 8)
+                        | si[17];
+                    if (sampleRate > 0 && totalSamples > 0) {
+                        tags.DurationMs = (long)Math.Round(totalSamples * 1000.0 / sampleRate);
+                    }
+                }
+                if (blockLen > 34) {
+                    fs.Position += blockLen - 34;
+                }
+            } else if (blockType == 4 && !sawVorbis && blockLen <= 2 * 1024 * 1024) { // VORBIS_COMMENT
                 byte[] buf = new byte[blockLen];
                 if (fs.Read(buf, 0, blockLen) == blockLen) {
                     ParseVorbisComment(buf, tags);
@@ -310,7 +357,7 @@ public static partial class AudioTagReader {
                 }
                 fs.Position += blockLen;
             }
-            if (isLast || (sawVorbis && sawPicture)) break;
+            if (isLast || (sawVorbis && sawPicture && tags.DurationMs > 0)) break;
         }
     }
 
@@ -547,6 +594,9 @@ public static partial class AudioTagReader {
         long endPos = Math.Min(fs.Length, 8L + riffSize);
         Span<byte> chunkHdr = stackalloc byte[8];
         Span<byte> listType = stackalloc byte[4];
+        Span<byte> fmtBuf = stackalloc byte[16];
+        uint avgBytesPerSec = 0;
+        ulong dataChunkBytes = 0;
 
         for (int n = 0; n < 256 && fs.Position + 8 <= endPos; n++) {
             if (fs.Read(chunkHdr) < 8) break;
@@ -555,7 +605,13 @@ public static partial class AudioTagReader {
             long payloadStart = fs.Position;
             long nextPos = payloadStart + chunkSize + (chunkSize & 1L);
 
-            if (chunkId == "LIST" && chunkSize >= 4 && payloadStart + 4 <= endPos) {
+            if (chunkId == "fmt " && chunkSize >= 16 && payloadStart + 16 <= endPos) {
+                if (fs.Read(fmtBuf) == 16) {
+                    avgBytesPerSec = BinaryPrimitives.ReadUInt32LittleEndian(fmtBuf.Slice(8, 4));
+                }
+            } else if (chunkId == "data" && chunkSize > 0) {
+                dataChunkBytes = chunkSize;
+            } else if (chunkId == "LIST" && chunkSize >= 4 && payloadStart + 4 <= endPos) {
                 if (fs.Read(listType) == 4 && listType[0] == 'I' && listType[1] == 'N' && listType[2] == 'F' && listType[3] == 'O') {
                     int infoLen = (int)Math.Min(262144L, Math.Min(endPos - fs.Position, (long)chunkSize - 4L));
                     if (infoLen >= 8) {
@@ -570,6 +626,10 @@ public static partial class AudioTagReader {
 
             if (nextPos <= payloadStart) break;
             fs.Position = Math.Min(endPos, nextPos);
+        }
+
+        if (tags.DurationMs <= 0 && avgBytesPerSec > 0 && dataChunkBytes > 0) {
+            tags.DurationMs = (long)Math.Round(dataChunkBytes * 1000.0 / avgBytesPerSec);
         }
     }
 

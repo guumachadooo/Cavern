@@ -1435,6 +1435,7 @@ public partial class MainActivity {
             SetRunningUiState(true);
         });
         Task.Run(() => {
+            AndroidRuntimeTelemetry.ApplyBackgroundThreadQoS();
             try {
                 work(token);
                 if (!string.IsNullOrEmpty(singleOutputPath) && File.Exists(singleOutputPath)) {

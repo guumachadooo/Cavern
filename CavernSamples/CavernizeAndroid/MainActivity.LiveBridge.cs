@@ -89,6 +89,9 @@ public partial class MainActivity : ILiveBridgeAppHost {
         }, new JsonSerializerOptions { WriteIndented = true });
     });
 
+    Task<string> ILiveBridgeAppHost.GetRuntimeTelemetryJsonAsync() =>
+        Task.FromResult(AndroidRuntimeTelemetry.BuildRuntimeTelemetryJson(this, audioOutput));
+
     Task<string> ILiveBridgeAppHost.GetDspTelemetryJsonAsync() => RunOnUiThreadWithTimeoutAsync(() => {
         var rot = playerEngine?.ListenerRotation ?? default;
         var pos = playerEngine?.ListenerPosition ?? default;
@@ -97,6 +100,7 @@ public partial class MainActivity : ILiveBridgeAppHost {
             environmentType = playerEngine?.EnvironmentType.ToString() ?? "",
             audioQuality = playerEngine?.AudioQuality.ToString() ?? "",
             distanceSimulation = playerEngine?.DistanceSimulation ?? false,
+            hybrid714BuildCount = playerEngine?.Hybrid714BuildCount ?? 0,
             listenerRotation = new { pitch = Math.Round(rot.X, 2), yaw = Math.Round(rot.Y, 2), roll = Math.Round(rot.Z, 2) },
             listenerPosition = new { x = Math.Round(pos.X, 2), y = Math.Round(pos.Y, 2), z = Math.Round(pos.Z, 2) },
             iso226Enabled = store?.Iso226Enabled ?? false,
@@ -104,19 +108,34 @@ public partial class MainActivity : ILiveBridgeAppHost {
             loudnessNormMode = store?.LoudnessNormModeIndex ?? 0,
             headTrackingEnabled = store?.HeadTrackingEnabled ?? false,
             headTrackingAvailable = headTrackingManager != null,
-            proAudioBridgeAvailable = CavernizeAndroid.Audio.NativeProAudioBridge.IsAvailable
+            proAudioBridgeAvailable = CavernizeAndroid.Audio.NativeProAudioBridge.IsAvailable,
+            audioXRuns = AndroidRuntimeTelemetry.BuildAudioXRunObject(audioOutput),
+            frameMetrics = AndroidRuntimeTelemetry.BuildFrameMetricsObject(),
+            thermalStatus = AndroidRuntimeTelemetry.GetThermalStatusCode(this)
         }, new JsonSerializerOptions { WriteIndented = true });
     });
 
-    Task<string> ILiveBridgeAppHost.QueryLibraryJsonAsync(string query, int limit) => RunOnUiThreadWithTimeoutAsync(() => {
+    Task<string> ILiveBridgeAppHost.QueryLibraryJsonAsync(string query, int limit, bool musicOnly) => RunOnUiThreadWithTimeoutAsync(() => {
         MediaLibrarySnapshot snap = librarySnapshot ?? MediaLibraryService.CachedSnapshot ?? MediaLibraryService.TryLoadCachedSnapshot(this);
-        var tracks = (snap?.Tracks ?? [])
-            .Where(t =>
-                string.IsNullOrWhiteSpace(query) ||
-                (t.Title?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (t.Artist?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (t.Album?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false) ||
-                (t.FilePath?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false))
+        string normQ = NormalizeSearchFold(query);
+        bool hasQ = !string.IsNullOrEmpty(normQ);
+        IEnumerable<LibraryTrackItem> source = snap?.Tracks ?? [];
+        if (musicOnly) {
+            source = source.Where(t => !t.HasNoAudioTrack && !t.IsVideo && !t.IsLikelyNonMusic);
+        }
+        IEnumerable<LibraryTrackItem> filtered = source.Where(t =>
+            !hasQ ||
+            MatchesSearchQuery(t.Title, normQ) ||
+            MatchesSearchQuery(t.Artist, normQ) ||
+            MatchesSearchQuery(t.AlbumArtist, normQ) ||
+            MatchesSearchQuery(t.Album, normQ) ||
+            MatchesSearchQuery(t.FilePath, normQ));
+        if (!hasQ) {
+            filtered = filtered
+                .OrderByDescending(t => !string.IsNullOrWhiteSpace(t.Album) && !t.IsVideo && !t.IsLikelyNonMusic)
+                .ThenByDescending(t => t.DurationMs > 0);
+        }
+        var tracks = filtered
             .Take(Math.Clamp(limit, 1, 100))
             .Select(t => new {
                 t.Title,
@@ -132,6 +151,7 @@ public partial class MainActivity : ILiveBridgeAppHost {
         return JsonSerializer.Serialize(new {
             totalTracks = snap?.Tracks?.Count ?? 0,
             returned = tracks.Count,
+            musicOnly,
             query = query ?? "",
             tracks
         }, new JsonSerializerOptions { WriteIndented = true });

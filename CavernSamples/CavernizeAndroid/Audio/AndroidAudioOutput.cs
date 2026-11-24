@@ -1717,6 +1717,23 @@ public sealed class AndroidAudioOutput : IDisposable {
         PublishProAudioDiagnostics(usbSnapOverride: usbSnapOverride);
     }
 
+    /// <summary>
+    /// Live legacy <see cref="AudioTrack.UnderrunCount"/> (API &gt;= 24) with fallback to cached diagnostics.
+    /// </summary>
+    public int LastAudioTrackUnderrunCount {
+        get {
+            AudioTrack track = audioTrack;
+            if (track != null && OperatingSystem.IsAndroidVersionAtLeast(24)) {
+                try {
+                    return track.UnderrunCount;
+                } catch {
+                    // Fall through to cached diagnostics
+                }
+            }
+            return Diagnostics.UnderrunCount;
+        }
+    }
+
     void PublishProAudioDiagnostics(NativeProAudioStatus? nativeStatus = null, UsbProAudioDeviceSnapshot usbSnapOverride = null) {
         UsbProAudioDeviceSnapshot usbSnap = usbSnapOverride ?? usbManager?.CurrentSnapshot;
         bool hasNative = nativeStatus.HasValue;

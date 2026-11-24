@@ -662,7 +662,11 @@ public partial class MainActivity {
                 }
             }
 
-            List<SmartCleanInspectionEntry> entries = MediaLibraryService.GetSmartCleanInspectionList(librarySnapshot?.Tracks, store);
+            List<SmartCleanInspectionEntry> entries = (cachedSmartCleanEntries != null &&
+                cachedLibIndexSnap == librarySnapshot &&
+                cachedLibIndexRevision == libraryFilterRevision)
+                ? cachedSmartCleanEntries
+                : MediaLibraryService.GetSmartCleanInspectionList(librarySnapshot?.Tracks, store);
             TextView inspHdr = Label(string.Format(S["SmartCleanInspectedHeader"], entries.Count), 12.2f, OneUiTheme.PeachText);
             inspHdr.SetTypeface(sfBold, TypefaceStyle.Bold);
             inspHdr.SetPadding(Dp(2), Dp(6), Dp(2), Dp(4));
@@ -1208,6 +1212,39 @@ public partial class MainActivity {
         };
     }
 
+    internal static string NormalizeSearchFold(string text) {
+        if (string.IsNullOrWhiteSpace(text)) return "";
+        string decomposed = text.Trim().Normalize(System.Text.NormalizationForm.FormD);
+        System.Text.StringBuilder sb = new(decomposed.Length);
+        for (int i = 0; i < decomposed.Length; i++) {
+            char c = decomposed[i];
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) != System.Globalization.UnicodeCategory.NonSpacingMark) {
+                sb.Append(char.ToLowerInvariant(c));
+            }
+        }
+        return sb.ToString();
+    }
+
+    internal static bool MatchesSearchQuery(string haystack, string normalizedQuery) {
+        if (string.IsNullOrEmpty(normalizedQuery)) return true;
+        if (string.IsNullOrEmpty(haystack)) return false;
+        if (haystack.Contains(normalizedQuery, StringComparison.OrdinalIgnoreCase)) return true;
+        return NormalizeSearchFold(haystack).Contains(normalizedQuery, StringComparison.Ordinal);
+    }
+
+    internal static bool ShouldFilterDrilldownTracks(string rawQuery, params string[] containerLabels) {
+        string normQ = NormalizeSearchFold(rawQuery);
+        if (string.IsNullOrEmpty(normQ)) return false;
+        if (containerLabels != null) {
+            for (int i = 0; i < containerLabels.Length; i++) {
+                if (MatchesSearchQuery(containerLabels[i], normQ)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     void EnsureLibraryQueryCache(string q, LibraryCategory cat) {
         if (cachedQuerySnap == librarySnapshot &&
             cachedQueryRevision == libraryFilterRevision &&
@@ -1215,32 +1252,38 @@ public partial class MainActivity {
             string.Equals(cachedQueryStr, q, StringComparison.Ordinal)) {
             return;
         }
-        bool hasQuery = !string.IsNullOrEmpty(q);
+        string normQ = NormalizeSearchFold(q);
+        bool hasQuery = !string.IsNullOrEmpty(normQ);
         if (cat == LibraryCategory.Albums) {
             cachedQueryAlbums = cachedAlbumEntries
                 .Where(x => !hasQuery ||
-                    x.Alb.AlbumTitle.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    x.Alb.Artist.Contains(q, StringComparison.OrdinalIgnoreCase))
+                    MatchesSearchQuery(x.Alb.AlbumTitle, normQ) ||
+                    MatchesSearchQuery(x.Alb.Artist, normQ) ||
+                    x.Merged.Any(m => MatchesSearchQuery(m.Primary.Title, normQ) || MatchesSearchQuery(m.Primary.Artist, normQ)))
                 .Select(x => (x.Alb, x.Merged))
                 .ToList();
         } else if (cat == LibraryCategory.Tracks) {
             cachedQueryMergedTracks = hasQuery
                 ? cachedMergedTracks.Where(m =>
-                    m.Primary.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    m.Primary.Artist.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    m.Primary.Album.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    m.Primary.FolderName.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList()
+                    MatchesSearchQuery(m.Primary.Title, normQ) ||
+                    MatchesSearchQuery(m.Primary.Artist, normQ) ||
+                    MatchesSearchQuery(m.Primary.AlbumArtist, normQ) ||
+                    MatchesSearchQuery(m.Primary.Album, normQ) ||
+                    MatchesSearchQuery(m.Primary.FolderName, normQ)).ToList()
                 : cachedMergedTracks;
         } else if (cat == LibraryCategory.Artists) {
             cachedQueryArtists = cachedArtistEntries
-                .Where(x => !hasQuery || x.Art.Artist.Contains(q, StringComparison.OrdinalIgnoreCase))
+                .Where(x => !hasQuery ||
+                    MatchesSearchQuery(x.Art.Artist, normQ) ||
+                    x.Merged.Any(m => MatchesSearchQuery(m.Primary.Title, normQ) || MatchesSearchQuery(m.Primary.Album, normQ)))
                 .Select(x => (x.Art, x.Merged))
                 .ToList();
         } else {
             cachedQueryFolders = cachedFolderEntries
                 .Where(x => !hasQuery ||
-                    x.Fld.FolderName.Contains(q, StringComparison.OrdinalIgnoreCase) ||
-                    x.Fld.FolderPath.Contains(q, StringComparison.OrdinalIgnoreCase))
+                    MatchesSearchQuery(x.Fld.FolderName, normQ) ||
+                    MatchesSearchQuery(x.Fld.FolderPath, normQ) ||
+                    x.Merged.Any(m => MatchesSearchQuery(m.Primary.Title, normQ) || MatchesSearchQuery(m.Primary.Album, normQ)))
                 .Select(x => (x.Fld, x.Merged))
                 .ToList();
         }

@@ -241,6 +241,10 @@ public sealed partial class NativeOnnxRuntimeBridge {
             }
         }
 
+        static ParallelOptions CreateHeadroomParallelOptions() => new() {
+            MaxDegreeOfParallelism = Cavern.Neural.MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(Environment.ProcessorCount)
+        };
+
         static void ConvertFloat32ToFloat16(float[] src, ushort[] dst, int count) {
             const int Block = 16384;
             if (count < 65536) {
@@ -254,7 +258,8 @@ public sealed partial class NativeOnnxRuntimeBridge {
                 return;
             }
             int blocks = (count + Block - 1) / Block;
-            Parallel.For(0, blocks, b => {
+            Parallel.For(0, blocks, CreateHeadroomParallelOptions(), b => {
+                AndroidRuntimeTelemetry.ApplyBackgroundThreadQoS();
                 int start = b * Block;
                 int end = Math.Min(count, start + Block);
                 for (int k = start; k < end; k++) {
@@ -277,7 +282,8 @@ public sealed partial class NativeOnnxRuntimeBridge {
                 return;
             }
             int blocks = (count + Block - 1) / Block;
-            Parallel.For(0, blocks, b => {
+            Parallel.For(0, blocks, CreateHeadroomParallelOptions(), b => {
+                AndroidRuntimeTelemetry.ApplyBackgroundThreadQoS();
                 int start = b * Block;
                 int end = Math.Min(count, start + Block);
                 for (int k = start; k < end; k++) {
@@ -298,7 +304,8 @@ public sealed partial class NativeOnnxRuntimeBridge {
                 return;
             }
             int blocks = (count + Block - 1) / Block;
-            Parallel.For(0, blocks, b => {
+            Parallel.For(0, blocks, CreateHeadroomParallelOptions(), b => {
+                AndroidRuntimeTelemetry.ApplyBackgroundThreadQoS();
                 int start = b * Block;
                 int end = Math.Min(count, start + Block);
                 for (int k = start; k < end; k++) {

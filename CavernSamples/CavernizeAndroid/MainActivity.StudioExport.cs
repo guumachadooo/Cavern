@@ -906,6 +906,7 @@ public partial class MainActivity {
         });
 
         _ = Task.Run(async () => {
+            AndroidRuntimeTelemetry.ApplyBackgroundThreadQoS();
             StudioBatchExportResult res = null;
             bool cancelled = false;
             Exception fatalEx = null;
