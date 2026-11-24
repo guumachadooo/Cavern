@@ -152,6 +152,7 @@ public static partial class LiveDiagnosticBridgeService {
         new("logcat_tail", 0, "Read Cavernize own-UID Android logcat cleanly (zero shell, filters fork noise)", "{lines?:10..800, minLevel?:'V'|'D'|'I'|'W'|'E'|'F', buffer?:'main'|'system'|'crash'|'events'}"),
         new("anomalies", 0, "Read live in-memory RuntimeAnomalyRing captured from critical logs & chaos hunts", "{limit?:1..160, clear?:bool}"),
         new("runtime_telemetry", 0, "Inspect live FrameMetrics (P50/P95/P99/jank/frozen), ApplicationExitInfo, AAudio/AudioTrack XRuns & thermal QoS", "{}"),
+        new("cortex_profiles", 0, "Auto-characterize & export Phase-A Omniscient Cortex ComponentBehaviorProfile registry & conflict governance JSON", "{sampleRate?:16000..192000}"),
         new("batch", 0, "Execute up to 15 sequential commands in one round-trip (enforces each command's tier)", "{commands:[{cmd:string, args?:object}]}"),
 
         // Tier 1: Interactive App Control, QA & Total-App Live Audit

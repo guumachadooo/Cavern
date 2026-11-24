@@ -2577,11 +2577,152 @@ RunTest("T31_T5_DynamicAtmosIamfAndBinaural_MotionAndTags", () => {
     }
 });
 
+// ---------- Test 32 (Stage 6 T6): ComponentBehaviorRegistry & SpatialSceneHub Governance ----------
+RunTest("T32_T6_ComponentBehaviorRegistry_And_SceneHubGovernance", () => {
+    SpatialSceneHub hub = new();
+    ComponentBehaviorRegistry reg = hub.EnsureComponentBehaviorRegistry(48000);
+    Assert(reg.Count >= 6, $"Expected >=6 registered profiles in SpatialSceneHub, got {reg.Count}");
+    Assert(ReferenceEquals(reg, hub.ComponentRegistry), "Lazy ComponentRegistry getter must return cached instance.");
+
+    string json = reg.ToCompactManifestJson();
+    Assert(json.Contains("\"schema\":\"cavern-component-profiles-v1\"", StringComparison.Ordinal)
+        && json.Contains("\"count\":6", StringComparison.Ordinal)
+        && json.Contains("cavern.true_peak_limiter", StringComparison.Ordinal),
+        $"Unexpected ComponentBehaviorRegistry manifest JSON: {json}");
+
+    hub.IsMeasuredBrirActive = true;
+    HardwarePreAmpStateSnapshot preAmp = new(
+        airMode: ScarlettAirMode.PresenceAndDrive,
+        driveActive: true,
+        gainStepEpoch: 4,
+        micSource: HardwarePreAmpStateSnapshot.MicSourceUsbInterface,
+        isHardwareVerified: true);
+    ChainGovernancePlan plan = hub.EvaluateActiveChainGovernance(
+        [
+            ComponentBehaviorProfiler.IdLiveVocalChain,
+            ComponentBehaviorProfiler.IdAirHighShelf,
+            ComponentBehaviorProfiler.IdTruePeakLimiter
+        ],
+        referenceInputRmsDb: -16.0f,
+        preAmpSnapshot: preAmp);
+    Assert(ReferenceEquals(plan, hub.ActiveChainGovernance), "ActiveChainGovernance must reflect latest evaluated plan.");
+    Assert(plan.SkipSoftwareAir && plan.SkipSoftwareDrive && plan.SkipSyntheticRoom,
+        "SceneHub governance must detect Scarlett Air+Drive and measured BRIR.");
+    Assert(plan.IsTruePeakSafe && plan.PredictedPeakDbTp <= -0.95f,
+        $"SceneHub governed peak must remain <= -1.0 dBTP, got {plan.PredictedPeakDbTp:0.2}");
+    Assert(plan.ToCompactJson().Contains("\"tpSafe\":true", StringComparison.Ordinal),
+        $"ChainGovernancePlan compact JSON missing tpSafe=true: {plan.ToCompactJson()}");
+});
+
+// ---------- Test 33 (Stage 6 T6): MultiRefFdkfShield, OmniscientVocalStateBus & AcousticConstraintGovernor ----------
+RunTest("T33_T6_MultiRefFdkfShield_StateBus_And_HeadphoneBypass", () => {
+    OmniscientVocalStateBus bus = new();
+    OmniscientVocalStateSnapshot initial = bus.ReadSnapshot();
+    Assert(initial.IsShieldBypassed && !initial.PhaseBActive && initial.GovernorMaxMakeupDb >= 11.9f,
+        "Default OmniscientVocalStateBus snapshot must start passive/bypassed with PhaseBActive=false.");
+
+    // Zero-GC publish/read roundtrip check
+    OmniscientVocalStateSnapshot custom = new() {
+        SpeakerBleedErleDb = 28.4f,
+        EstimatedLoopGainLinear = 0.42f,
+        EstimatedLoopMarginDb = 7.5f,
+        GovernorMaxMakeupDb = 1.5f,
+        ShadowCommitCount = 19,
+        DoubleTalkActive = true,
+        LastGainStepEpoch = 3,
+        IsHeadphoneMonitoring = false,
+        IsShieldBypassed = false,
+        PhaseBActive = false
+    };
+    bus.PublishZeroGc(in custom);
+    long before = GC.GetAllocatedBytesForCurrentThread();
+    for (int i = 0; i < 64; i++) {
+        bus.PublishZeroGc(in custom);
+        OmniscientVocalStateSnapshot r = bus.ReadSnapshot();
+        Assert(r.ShadowCommitCount == 19 && r.DoubleTalkActive && !r.PhaseBActive, "StateBus snapshot corruption.");
+    }
+    long alloc = GC.GetAllocatedBytesForCurrentThread() - before;
+    Assert(alloc == 0, $"OmniscientVocalStateBus publish/read must allocate 0 B GC, got {alloc} B.");
+
+    // AcousticConstraintGovernor band ceilings in speaker vs headphone mode
+    AcousticConstraintGovernor gov = new(safetyMarginDb: 6.0f, headphoneMaxMakeupDb: 12.0f);
+    float[] coupling = [0.2f, 0.35f, 0.70f, 0.25f, 0.15f, 0.10f, 0.08f, 0.05f];
+    float spkMakeup;
+    gov.EvaluateZeroGc(coupling, 12.0f, isHeadphoneMonitoring: false, out spkMakeup);
+    Assert(spkMakeup < 0f && gov.CurrentLoopMarginDb >= 5.9f,
+        $"Expected speaker governor to attenuate makeup below 0 dB for |H|=0.70, got makeup={spkMakeup:0.2}, margin={gov.CurrentLoopMarginDb:0.2}");
+
+    float[] ceilings = new float[AcousticConstraintGovernor.SubBandCount];
+    gov.CopyBandCeilingsZeroGc(ceilings);
+    Assert(ceilings[2] < ceilings[7], "Modal resonance band [2] must have stricter gain ceiling than quiet band [7].");
+
+    float hpMakeup;
+    gov.EvaluateZeroGc(coupling, 12.0f, isHeadphoneMonitoring: true, out hpMakeup);
+    Assert(MathF.Abs(hpMakeup - 12.0f) < 0.01f && gov.CurrentLoopMarginDb >= 20f,
+        $"Headphone mode must relax governor back to +12 dB studio headroom, got {hpMakeup:0.2}");
+
+    // MultiRefFdkfShield headphone auto-bypass bit-exactness
+    MultiRefFdkfShield shield = new(128, 4, 3);
+    float[] mic = new float[128];
+    float[] orig = new float[128];
+    float[] refBuf = new float[128];
+    for (int i = 0; i < 128; i++) {
+        mic[i] = orig[i] = 0.2f * MathF.Sin(i * 0.21f);
+        refBuf[i] = 0.3f * MathF.Cos(i * 0.11f);
+    }
+    HardwarePreAmpStateSnapshot hpSnap = new(gainStepEpoch: 7, isHeadphoneMonitoring: true);
+    shield.ProcessBlockZeroGc(mic, 0, refBuf, 0, refBuf, 0, refBuf, 0, hpSnap, gov, bus);
+    Assert(shield.IsBypassed && shield.LastGainStepEpoch == 7, "Shield must bypass in headphone mode and track GainStepEpoch.");
+    for (int i = 0; i < 128; i++) {
+        Assert(mic[i] == orig[i], $"Headphone bypass altered sample[{i}].");
+    }
+});
+
+// ---------- Test 34 (Stage 6 T6): Phase-A Side-by-Side Legacy Vocal Coexistence ----------
+RunTest("T34_T6_PhaseA_SideBySide_LegacyVocalCoexistence", () => {
+    using VocalMixMatchStageProcessor stage = new();
+    Assert(ReferenceEquals(stage.PhaseBCalibrationHook, NullPhaseBCortexCalibrationHook.Instance),
+        "VocalMixMatchStageProcessor must default to passive NullPhaseBCortexCalibrationHook.Instance in Phase A.");
+    Assert(!stage.PhaseBCalibrationHook.IsCalibrated && stage.PhaseBCalibrationHook.GetPreferenceMakeupBiasDb() == 0f,
+        "Passive Phase-A calibration hook must report IsCalibrated=false and 0 dB bias.");
+    Assert(stage.VocalStateBus != null && !stage.VocalStateBus.ReadSnapshot().PhaseBActive,
+        "VocalStateBus must be attached side-by-side with PhaseBActive=false.");
+
+    // Verify legacy VocalMixMatchStageProcessor produces bit-exact identical output to standalone LiveVocalChainDsp
+    const int sr = 48000;
+    const int n = 256;
+    VocalMixDnaProfile dna = VocalMixDnaProfile.CreateStudioDefault();
+    VocalMacroSettings macros = new() {
+        Enabled = true, Bypass = false, MixMatchPct = 100f, DynamicsPct = 80f, WarmthPct = 35f, ReverbPct = 20f
+    };
+    stage.Configure(sr, SpatialProgramMetadata.CreateDefault());
+    stage.ApplyVocalProfile(dna, macros);
+
+    LiveVocalChainDsp referenceDsp = new(sr);
+    referenceDsp.Configure(sr, dna, macros);
+
+    float[] a = new float[n * 2];
+    float[] b = new float[n * 2];
+    for (int i = 0; i < n; i++) {
+        float s = 0.18f * MathF.Sin((float)(2.0 * Math.PI * 440.0 * i / sr));
+        a[i * 2] = a[i * 2 + 1] = s;
+        b[i * 2] = b[i * 2 + 1] = s;
+    }
+    stage.ProcessLiveVocalZeroGc(a, 0, n);
+    referenceDsp.ProcessStereoBlockZeroGc(b, 0, n);
+
+    float maxDiff = 0f;
+    for (int i = 0; i < a.Length; i++) {
+        maxDiff = MathF.Max(maxDiff, MathF.Abs(a[i] - b[i]));
+    }
+    Assert(maxDiff < 1e-6f, $"Phase-A side-by-side vocal hook altered legacy DSP output: maxDiff={maxDiff}");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
 }
-Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2/T3/T5 UNIT TESTS PASSED (0 failures).");
+Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2/T3/T5/T6 UNIT TESTS PASSED (0 failures).");
 return 0;
 
 static int FindFlacAudioFrameStart(byte[] flac) {
@@ -3312,6 +3453,37 @@ def _py_stage5_studio_export_hygiene_and_locate_wiring() -> None:
             assert f'["{key}"]' in lang_src, f"Missing T5 localization key '{key}' in {lang_file}"
 
 
+def _py_stage6_full_app_sota_audit_and_phase_a_contracts() -> None:
+    bp_path = REPO_ROOT / ".agents" / "docs" / "blueprints" / "BP_FULL_APP_SOTA_AUDIT.md"
+    assert bp_path.is_file(), "Missing BP_FULL_APP_SOTA_AUDIT.md blueprint"
+    bp_src = bp_path.read_text(encoding="utf-8")
+    for tok in ("KEEP", "REFACTOR", "ComponentBehaviorProfile", "MultiRefFdkfShield", "AcousticConstraintGovernor", "StudioBatchExporter.cs", "GT-12", "GT-13"):
+        assert tok in bp_src, f"Missing '{tok}' in BP_FULL_APP_SOTA_AUDIT.md"
+
+    plan_tool = REPO_ROOT / ".agents" / "plugins" / "dynamic-fractal-planner" / "scripts" / "plan_tool.py"
+    lint_proc = subprocess.run(
+        [sys.executable, "-B", str(plan_tool), "blueprint", "lint", str(bp_path), "--strict"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, check=False,
+    )
+    assert lint_proc.returncode == 0 and "BLUEPRINT PASS" in lint_proc.stdout, (
+        f"BP_FULL_APP_SOTA_AUDIT.md failed strict blueprint lint: {lint_proc.stdout} {lint_proc.stderr}"
+    )
+
+    bridge_main = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "LiveDiagnosticBridgeService.cs").read_text(encoding="utf-8")
+    bridge_cmds = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "LiveDiagnosticBridgeService.Commands.cs").read_text(encoding="utf-8")
+    assert '"cortex_profiles"' in bridge_main, "cortex_profiles must be registered in LiveDiagnosticBridgeService.cs"
+    assert 'case "cortex_profiles":' in bridge_cmds and "BuildCavernDefaultRegistry" in bridge_cmds and "ToCompactManifestJson" in bridge_cmds, (
+        "cortex_profiles handler missing in LiveDiagnosticBridgeService.Commands.cs"
+    )
+
+    # Enforce strict C# 8.0 (netstandard2.1) hygiene in T6 Cavern/ files
+    for rel in ("Cavern/Spatial/ComponentBehaviorProfile.cs", "Cavern/VocalChain/AcousticFeedbackShieldFoundation.cs"):
+        src = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert " is not " not in src, f"C# 9+ 'is not' found in netstandard2.1 file {rel}"
+        assert "new()" not in src, f"C# 9+ target-typed 'new()' found in netstandard2.1 file {rel}"
+        assert not re.search(r"^\s*namespace\s+[A-Za-z0-9_.]+\s*;\s*$", src, re.M), f"C# 10+ file-scoped namespace in {rel}"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -3320,6 +3492,7 @@ PYTHON_CHECKS = [
     ("PY_Choreography_NoUiAudioTugOfWar", _py_choreography_no_ui_audio_tug_of_war),
     ("PY_T4_Stage4_UxClarity_Motion_OrbitDrag_Lyrics_Contracts", _py_stage4_ux_motion_orbit_lyrics_contracts),
     ("PY_T5_StudioExportHygieneAndLocateWiring", _py_stage5_studio_export_hygiene_and_locate_wiring),
+    ("PY_T6_FullAppSotaAudit_And_PhaseAContracts", _py_stage6_full_app_sota_audit_and_phase_a_contracts),
 ]
 
 

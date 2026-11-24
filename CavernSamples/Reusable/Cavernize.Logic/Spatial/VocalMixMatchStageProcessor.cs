@@ -101,6 +101,19 @@ public sealed class VocalMixMatchStageProcessor : ISpatialStageProcessor {
     /// <summary>Latest hardware pre-ADC gain-step epoch stored for Phase 3 <c>Slot 2D-SHIELD</c> FDKF reset.</summary>
     public long LastGainStepEpoch => activePreAmpSnapshot?.GainStepEpoch ?? dsp.LastGainStepEpoch;
 
+    /// <summary>Phase-A lock-free vocal/shield state bus (side-by-side readiness hook; 0 impact on legacy vocal chain).</summary>
+    public OmniscientVocalStateBus VocalStateBus { get; } = new();
+
+    /// <summary>
+    /// Deferred Phase-B user calibration / preference hook (defaults to passive <see cref="NullPhaseBCortexCalibrationHook.Instance"/>
+    /// so Phase A never prompts the user and preserves 100% deterministic legacy DSP).
+    /// </summary>
+    public IPhaseBCortexCalibrationHook PhaseBCalibrationHook {
+        get => phaseBCalibrationHook;
+        set => phaseBCalibrationHook = value ?? NullPhaseBCortexCalibrationHook.Instance;
+    }
+    volatile IPhaseBCortexCalibrationHook phaseBCalibrationHook = NullPhaseBCortexCalibrationHook.Instance;
+
     /// <summary>Updates the lock-free hardware pre-ADC state snapshot (Scarlett Air/Drive/ClipSafe/GainEpoch/MicSource).</summary>
     public void UpdateHardwarePreAmpSnapshot(HardwarePreAmpStateSnapshot snapshot) {
         activePreAmpSnapshot = snapshot ?? HardwarePreAmpStateSnapshot.Empty;

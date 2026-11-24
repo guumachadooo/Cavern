@@ -236,6 +236,16 @@ public static partial class LiveDiagnosticBridgeService {
                     return host != null
                         ? (true, await host.GetRuntimeTelemetryJsonAsync().ConfigureAwait(false))
                         : (true, AndroidRuntimeTelemetry.BuildRuntimeTelemetryJson(context, null));
+                case "cortex_profiles": {
+                    int sr = GetArgInt(argsEl, "sampleRate", 48000, 16000, 192000);
+                    string json = await Task.Run(() => {
+                        var reg = Cavern.Spatial.ComponentBehaviorProfiler.BuildCavernDefaultRegistry(sr);
+                        var snap = reg.GetSnapshot();
+                        var plan = Cavern.Spatial.ComponentConflictGovernor.EvaluateChain(snap, -18.0f, 12.0f, null, false);
+                        return $"{{\"registry\":{reg.ToCompactManifestJson()},\"defaultChainGovernance\":{plan.ToCompactJson()}}}";
+                    }, ct).ConfigureAwait(false);
+                    return (true, json);
+                }
                 case "native_status":
                     return (true, BuildNativeLibsStatusJson(context));
                 case "app_state":

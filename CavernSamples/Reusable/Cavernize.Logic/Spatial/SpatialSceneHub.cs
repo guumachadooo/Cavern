@@ -31,11 +31,79 @@ public sealed class SpatialSceneHub {
     int[] choreoSourceStemIndices = Array.Empty<int>();
     float[] choreoSourceSideSigns = Array.Empty<float>();
     Cavern.Neural.NeuralStemRole[] choreoSourceRoles = Array.Empty<Cavern.Neural.NeuralStemRole>();
+    ComponentBehaviorRegistry componentRegistry;
+    ChainGovernancePlan activeChainGovernance;
+    readonly OmniscientVocalStateBus vocalStateBus = new();
 
     /// <summary>
     /// Raised when the structural scene (active track, decoder, source list, or binaural profile) changes.
     /// </summary>
     public event Action SceneChanged;
+
+    /// <summary>
+    /// Phase-A Omniscient Cortex lock-free vocal/shield state bus (side-by-side; passive until live shield activates).
+    /// </summary>
+    public OmniscientVocalStateBus VocalStateBus => vocalStateBus;
+
+    /// <summary>
+    /// Phase-A auto-characterized DSP <see cref="ComponentBehaviorRegistry"/> (built lazily on first access, zero user action).
+    /// </summary>
+    public ComponentBehaviorRegistry ComponentRegistry {
+        get {
+            ComponentBehaviorRegistry existing = Volatile.Read(ref componentRegistry);
+            if (existing != null) {
+                return existing;
+            }
+            return EnsureComponentBehaviorRegistry(48000);
+        }
+    }
+
+    /// <summary>
+    /// Latest inter-stage <see cref="ChainGovernancePlan"/> computed for the active DSP chain (null until evaluated).
+    /// </summary>
+    public ChainGovernancePlan ActiveChainGovernance => Volatile.Read(ref activeChainGovernance);
+
+    /// <summary>
+    /// Builds (or refreshes) the auto-measured <see cref="ComponentBehaviorRegistry"/> at <paramref name="sampleRateHz"/>
+    /// strictly offline without interrupting active playback.
+    /// </summary>
+    public ComponentBehaviorRegistry EnsureComponentBehaviorRegistry(int sampleRateHz = 48000, bool forceRebuild = false) {
+        if (!forceRebuild) {
+            ComponentBehaviorRegistry existing = Volatile.Read(ref componentRegistry);
+            if (existing != null) {
+                return existing;
+            }
+        }
+        ComponentBehaviorRegistry built = ComponentBehaviorProfiler.BuildCavernDefaultRegistry(sampleRateHz);
+        Volatile.Write(ref componentRegistry, built);
+        return built;
+    }
+
+    /// <summary>
+    /// Evaluates inter-stage conflict governance for the supplied component IDs + optional Scarlett hardware pre-ADC state.
+    /// </summary>
+    public ChainGovernancePlan EvaluateActiveChainGovernance(
+        IReadOnlyList<string> activeComponentIds,
+        float referenceInputRmsDb = -18.0f,
+        Cavern.ProAudio.HardwarePreAmpStateSnapshot preAmpSnapshot = null) {
+        ComponentBehaviorRegistry reg = ComponentRegistry;
+        List<ComponentBehaviorProfile> ordered = new();
+        if (activeComponentIds != null) {
+            for (int i = 0; i < activeComponentIds.Count; i++) {
+                if (reg.TryGet(activeComponentIds[i], out ComponentBehaviorProfile p)) {
+                    ordered.Add(p);
+                }
+            }
+        }
+        ChainGovernancePlan plan = ComponentConflictGovernor.EvaluateChain(
+            ordered,
+            referenceInputRmsDb,
+            programCrestDb: 12.0f,
+            preAmpSnapshot: preAmpSnapshot,
+            isMeasuredBrirActive: IsMeasuredBrirActive);
+        Volatile.Write(ref activeChainGovernance, plan);
+        return plan;
+    }
 
     /// <summary>
     /// Active Slot 1 spatial decoder.

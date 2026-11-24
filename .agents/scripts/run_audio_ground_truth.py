@@ -92,12 +92,14 @@ HARNESS_CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
 """
 
 HARNESS_PROGRAM_CS = r"""
+using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using Cavern;
 using Cavern.Channels;
+using Cavern.Filters;
 using Cavern.Format;
 using Cavern.Format.Common;
 using Cavern.Format.Decoders;
@@ -107,6 +109,7 @@ using Cavern.ProAudio;
 using Cavern.Restoration;
 using Cavern.Spatial;
 using Cavern.Virtualizer;
+using Cavern.VocalChain;
 using Cavernize.Logic.Models;
 using Cavernize.Logic.Spatial;
 using Cavernize.Logic.Spatial.Adapters;
@@ -120,8 +123,25 @@ List<Dictionary<string, object>> results = [];
 int passed = 0;
 int failed = 0;
 
+bool MatchesSuiteFilter(string id) {
+    if (string.IsNullOrEmpty(suiteFilter)) {
+        return true;
+    }
+    if (suiteFilter.Equals("spatial-cortex-rt", StringComparison.OrdinalIgnoreCase)) {
+        return id.Equals("spatial-cortex-rt", StringComparison.OrdinalIgnoreCase) ||
+               id.Equals("GT-12", StringComparison.OrdinalIgnoreCase) ||
+               id.Equals("GT-13", StringComparison.OrdinalIgnoreCase);
+    }
+    foreach (string part in suiteFilter.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)) {
+        if (id.Equals(part, StringComparison.OrdinalIgnoreCase)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void RunSuite(string id, string title, Func<Dictionary<string, object>> body) {
-    if (!string.IsNullOrEmpty(suiteFilter) && !id.Equals(suiteFilter, StringComparison.OrdinalIgnoreCase)) {
+    if (!MatchesSuiteFilter(id)) {
         return;
     }
     Console.Write($"[{id}] {title} ... ");
@@ -1310,6 +1330,378 @@ RunSuite("GT-11", "PureInstrumental_LeadAndBackingRemoval_ZeroInstrumentDamage",
     };
 });
 
+// =========================================================================
+// GT-12: Omniscient Cortex ComponentBehaviorProfile (<= 1.0 dB unseen RMS error) & Conflict Governor
+// =========================================================================
+RunSuite("GT-12", "ComponentBehaviorProfile_Accuracy_ConflictGovernance_And_Headroom", () => {
+    const int sr = 48000;
+    Stopwatch buildSw = Stopwatch.StartNew();
+    ComponentBehaviorRegistry reg = ComponentBehaviorProfiler.BuildCavernDefaultRegistry(sr);
+    buildSw.Stop();
+
+    Assert(reg.Count >= 6, $"Expected >=6 auto-profiled Cavern components, got {reg.Count}");
+    string manifestJson = reg.ToCompactManifestJson();
+    Assert(manifestJson.Contains(ComponentBehaviorProfiler.IdTruePeakLimiter, StringComparison.Ordinal) &&
+           manifestJson.Contains(ComponentBehaviorProfiler.IdLiveVocalChain, StringComparison.Ordinal),
+        "Registry compact JSON manifest missing expected component IDs.");
+
+    // Helper: measure actual steady-state output RMS on an unseen 1 kHz probe level
+    static float MeasureActualRmsDb(Action<float[]> proc, float targetRmsDb) {
+        int toneLen = 48000 / 2; // 500 ms
+        int settle = (int)(toneLen * 0.65f);
+        float amp = MathF.Pow(10f, targetRmsDb / 20f) * MathF.Sqrt(2f);
+        float[] buf = new float[toneLen];
+        double w = 2.0 * Math.PI * 1000.0 / 48000.0;
+        for (int i = 0; i < toneLen; i++) {
+            buf[i] = amp * (float)Math.Sin(w * i);
+        }
+        proc(buf);
+        double sq = 0.0;
+        int n = toneLen - settle;
+        for (int i = settle; i < toneLen; i++) {
+            sq += buf[i] * buf[i];
+        }
+        double rms = Math.Sqrt(sq / n);
+        return rms > 1e-7 ? (float)(20.0 * Math.Log10(rms)) : -140f;
+    }
+
+    (string Id, Func<Action<float[]>> Factory)[] targets = [
+        (ComponentBehaviorProfiler.IdTruePeakLimiter, () => {
+            TruePeakLimiter lim = new(sr, 1, -1.0f, 80f);
+            return b => lim.ProcessInterleaved(b, 0, b.Length, 1);
+        }),
+        (ComponentBehaviorProfiler.IdIso226Loudness, () => {
+            Iso226LoudnessFilter iso = new(sr, 1);
+            iso.SetParameters(true, 85f, 68f, false);
+            return b => iso.ProcessInterleaved(b, 0, b.Length, 1);
+        }),
+        (ComponentBehaviorProfiler.IdSpatialDialog, () => {
+            SpatialDialogEnhancer dlg = new();
+            dlg.Configure(sr);
+            dlg.SetParameters(true, 3.0f);
+            return b => {
+                float[] st = new float[b.Length * 2];
+                for (int i = 0; i < b.Length; i++) { st[i * 2] = st[i * 2 + 1] = b[i]; }
+                dlg.ProcessStereoInterleaved(st, 0, b.Length);
+                for (int i = 0; i < b.Length; i++) { b[i] = 0.5f * (st[i * 2] + st[i * 2 + 1]); }
+            };
+        }),
+        (ComponentBehaviorProfiler.IdNormalizer, () => {
+            Normalizer norm = new(true);
+            return b => norm.Process(b);
+        }),
+        (ComponentBehaviorProfiler.IdLiveVocalChain, () => {
+            LiveVocalChainDsp v = new(sr);
+            v.Configure(sr, VocalMixDnaProfile.CreateStudioDefault(), new VocalMacroSettings {
+                Enabled = true, Bypass = false, MixMatchPct = 100f, DynamicsPct = 100f, WarmthPct = 45f,
+                ReverbPct = 0f, EnableNoiseGate = false, EnableDeEsser = true, EnableSidechainPocketGlue = false
+            });
+            return b => {
+                float[] st = new float[b.Length * 2];
+                for (int i = 0; i < b.Length; i++) { st[i * 2] = st[i * 2 + 1] = b[i]; }
+                v.ProcessStereoBlockZeroGc(st, 0, b.Length);
+                for (int i = 0; i < b.Length; i++) { b[i] = 0.5f * (st[i * 2] + st[i * 2 + 1]); }
+            };
+        }),
+        (ComponentBehaviorProfiler.IdAirHighShelf, () => {
+            HighShelf shelf = new(sr, 8500.0, 0.71, 2.5);
+            return b => shelf.Process(b);
+        })
+    ];
+
+    float[] unseenLevels = [-27.0f, -15.0f, -9.0f];
+    float maxPredErrDb = 0f;
+    string worstComponent = "";
+    foreach (var (id, factory) in targets) {
+        Assert(reg.TryGet(id, out ComponentBehaviorProfile prof), $"Profile missing: {id}");
+        foreach (float lv in unseenLevels) {
+            float predDb = prof.PredictOutputRmsDb(lv);
+            float actualDb = MeasureActualRmsDb(factory(), lv);
+            float errDb = MathF.Abs(predDb - actualDb);
+            if (errDb > maxPredErrDb) {
+                maxPredErrDb = errDb;
+                worstComponent = $"{id}@{lv:0}dB";
+            }
+            Assert(errDb <= 1.0f, $"Profile RMS error > 1.0 dB on {id} @ {lv:0.0} dBFS: pred={predDb:0.2}, actual={actualDb:0.2}, err={errDb:0.2} dB");
+        }
+    }
+
+    // Verify ComponentConflictGovernor detects hardware Scarlett Air+Drive, measured BRIR, stacked makeup, and enforces <= -1.0 dBTP
+    HardwarePreAmpStateSnapshot scarlett = new(
+        airMode: ScarlettAirMode.PresenceAndDrive,
+        driveActive: true,
+        gainStepEpoch: 1,
+        micSource: HardwarePreAmpStateSnapshot.MicSourceUsbInterface,
+        isHardwareVerified: true);
+    List<ComponentBehaviorProfile> chain = [];
+    foreach (string cid in new[] {
+        ComponentBehaviorProfiler.IdLiveVocalChain,
+        ComponentBehaviorProfiler.IdSpatialDialog,
+        ComponentBehaviorProfiler.IdAirHighShelf,
+        ComponentBehaviorProfiler.IdTruePeakLimiter
+    }) {
+        Assert(reg.TryGet(cid, out ComponentBehaviorProfile p), $"Missing chain component {cid}");
+        chain.Add(p);
+    }
+    ChainGovernancePlan plan = ComponentConflictGovernor.EvaluateChain(chain, -12.0f, 12.0f, scarlett, isMeasuredBrirActive: true);
+    Assert(plan.SkipSoftwareAir && plan.SkipSoftwareDrive, "Governor must suppress redundant software Air & Drive when Scarlett PresenceAndDrive is active.");
+    Assert(plan.SkipSyntheticRoom, "Governor must suppress synthetic room when measured BRIR is active.");
+    Assert((plan.DetectedConflicts & ComponentConflictFlags.HighShelfAir) != 0 &&
+           (plan.DetectedConflicts & ComponentConflictFlags.AnalogDrive) != 0 &&
+           (plan.DetectedConflicts & ComponentConflictFlags.RoomEarlyReflections) != 0 &&
+           (plan.DetectedConflicts & ComponentConflictFlags.MakeupGain) != 0,
+        $"Expected Air|Drive|Room|Makeup conflicts, got {plan.DetectedConflicts}");
+    Assert(plan.IsTruePeakSafe && plan.PredictedPeakDbTp <= -0.95f,
+        $"Governed peak exceeded -1.0 dBTP ceiling: {plan.PredictedPeakDbTp:0.2} dBTP");
+
+    return new Dictionary<string, object> {
+        ["profiledComponents"] = reg.Count,
+        ["buildMs"] = Math.Round(buildSw.Elapsed.TotalMilliseconds, 1),
+        ["maxUnseenRmsErrDb"] = Math.Round(maxPredErrDb, 3),
+        ["worstPoint"] = worstComponent,
+        ["governedPeakDbTp"] = Math.Round(plan.PredictedPeakDbTp, 2),
+        ["conflictsDetected"] = (int)plan.DetectedConflicts
+    };
+});
+
+// =========================================================================
+// GT-13: Phase 3 Slot 2D-SHIELD (Multi-Ref FDKF + Shadow Filter + AcousticConstraintGovernor)
+// =========================================================================
+RunSuite("GT-13", "Slot2DShield_MultiRefFDKF_ShadowFilter_And_AcousticConstraintGovernor", () => {
+    const int sr = 48000;
+    const int blk = MultiRefFdkfShield.DefaultBlockSize; // 128
+    const int rirLen = 96;
+
+    // Deterministic synthetic acoustic room impulse responses (speaker L -> mic, speaker R -> mic, voice speaker -> mic)
+    float[] hL = new float[rirLen];
+    float[] hR = new float[rirLen];
+    float[] hV = new float[rirLen];
+    hL[12] = 0.42f; hL[29] = -0.21f; hL[51] = 0.12f; hL[77] = -0.06f;
+    hR[16] = 0.38f; hR[34] = 0.19f;  hR[59] = -0.11f; hR[83] = 0.05f;
+    hV[10] = 0.48f; hV[24] = 0.22f;  hV[43] = -0.10f; // Peak |H_v(w)| ~ 0.65-0.75
+
+    // Deterministic Xorshift32 broadband stereo excitation (uncorrelated L & R music)
+    uint rng = 0x13579BDFu;
+    float NextNoise() {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        return ((rng & 0xFFFF) / 32768f - 1f) * 0.25f;
+    }
+
+    int totalBlocks = 420;
+    int totalSamples = totalBlocks * blk;
+    float[] musicL = new float[totalSamples];
+    float[] musicR = new float[totalSamples];
+    float[] voiceRef = new float[totalSamples];
+    for (int i = 0; i < totalSamples; i++) {
+        double t = i / (double)sr;
+        musicL[i] = NextNoise() + 0.08f * MathF.Sin((float)(2 * Math.PI * 220.0 * t));
+        musicR[i] = NextNoise() + 0.08f * MathF.Cos((float)(2 * Math.PI * 310.0 * t));
+        // Voice feedback reference active in blocks 260..360 (simulating speaker feedback path identification)
+        if (i >= 260 * blk && i < 360 * blk) {
+            voiceRef[i] = NextNoise() * 0.85f;
+        }
+    }
+
+    static float ConvolveAt(float[] sig, float[] rir, int idx) {
+        float acc = 0f;
+        int lim = Math.Min(rir.Length, idx + 1);
+        for (int k = 0; k < lim; k++) {
+            float h = rir[k];
+            if (h != 0f) {
+                acc += sig[idx - k] * h;
+            }
+        }
+        return acc;
+    }
+
+    MultiRefFdkfShield shield = new(blk, partitions: 4, referenceCount: 3);
+    AcousticConstraintGovernor governor = new(safetyMarginDb: 6.0f, headphoneMaxMakeupDb: 12.0f);
+    OmniscientVocalStateBus stateBus = new();
+    HardwarePreAmpStateSnapshot speakerPreAmp = new(
+        gainStepEpoch: 1,
+        isHeadphoneMonitoring: false,
+        micSource: HardwarePreAmpStateSnapshot.MicSourceUsbInterface,
+        isHardwareVerified: true);
+
+    float[] micBlk = new float[blk];
+    float[] refLBlk = new float[blk];
+    float[] refRBlk = new float[blk];
+    float[] refVBlk = new float[blk];
+    float[] cleanVocalBlk = new float[blk];
+
+    double p1MicSq = 0, p1ErrSq = 0;
+    double p2CleanSq = 0, p2OutSq = 0;
+    double p3MicSq = 0, p3ErrSq = 0;
+    int nonFinite = 0;
+
+    // Phase 1 (blocks 0..139): Stereo music bleed convergence (no singing yet)
+    for (int b = 0; b < 140; b++) {
+        int off = b * blk;
+        for (int i = 0; i < blk; i++) {
+            int idx = off + i;
+            refLBlk[i] = musicL[idx];
+            refRBlk[i] = musicR[idx];
+            refVBlk[i] = 0f;
+            micBlk[i] = ConvolveAt(musicL, hL, idx) + ConvolveAt(musicR, hR, idx);
+        }
+        double micPow = 0;
+        for (int i = 0; i < blk; i++) { micPow += micBlk[i] * micBlk[i]; }
+
+        shield.ProcessBlockZeroGc(micBlk, 0, refLBlk, 0, refRBlk, 0, refVBlk, 0, speakerPreAmp, governor, stateBus);
+
+        double errPow = 0;
+        for (int i = 0; i < blk; i++) {
+            if (!float.IsFinite(micBlk[i])) nonFinite++;
+            errPow += micBlk[i] * micBlk[i];
+        }
+        if (b >= 100) {
+            p1MicSq += micPow;
+            p1ErrSq += errPow;
+        }
+    }
+    double p1ErleDb = 10.0 * Math.Log10(Math.Max(1e-12, p1MicSq) / Math.Max(1e-12, p1ErrSq));
+    Assert(nonFinite == 0, $"Non-finite samples in GT-13 Phase 1: {nonFinite}");
+    Assert(p1ErleDb >= 25.0, $"GT-13 Phase 1 Music-Bleed ERLE must be >= 25.0 dB, got {p1ErleDb:0.2} dB");
+    Assert(shield.ShadowCommitCount > 0, "Expected Two-Path Shadow Filter commits > 0.");
+
+    // Phase 2 (blocks 140..179): Simultaneous singing double-talk preservation
+    for (int b = 140; b < 180; b++) {
+        int off = b * blk;
+        for (int i = 0; i < blk; i++) {
+            int idx = off + i;
+            double t = idx / (double)sr;
+            float vocal = 0.30f * MathF.Sin((float)(2 * Math.PI * 440.0 * t)) +
+                          0.12f * MathF.Sin((float)(2 * Math.PI * 880.0 * t)) +
+                          0.06f * MathF.Sin((float)(2 * Math.PI * 1320.0 * t));
+            cleanVocalBlk[i] = vocal;
+            refLBlk[i] = musicL[idx];
+            refRBlk[i] = musicR[idx];
+            refVBlk[i] = 0f;
+            micBlk[i] = vocal + ConvolveAt(musicL, hL, idx) + ConvolveAt(musicR, hR, idx);
+        }
+        shield.ProcessBlockZeroGc(micBlk, 0, refLBlk, 0, refRBlk, 0, refVBlk, 0, speakerPreAmp, governor, stateBus);
+        for (int i = 0; i < blk; i++) {
+            if (!float.IsFinite(micBlk[i])) nonFinite++;
+            p2CleanSq += cleanVocalBlk[i] * cleanVocalBlk[i];
+            p2OutSq += micBlk[i] * micBlk[i];
+        }
+    }
+    double vocalRetentionDb = 10.0 * Math.Log10(Math.Max(1e-12, p2OutSq) / Math.Max(1e-12, p2CleanSq));
+    Assert(Math.Abs(vocalRetentionDb) <= 1.5, $"Double-talk vocal energy must stay within +/-1.5 dB of clean vocal, got {vocalRetentionDb:0.2} dB");
+
+    // Phase 3 (blocks 180..259): Scarlett preamp GainStepEpoch jump (+4.1 dB room scale) -> rapid reconvergence
+    HardwarePreAmpStateSnapshot steppedPreAmp = new(
+        gainStepEpoch: 2,
+        isHeadphoneMonitoring: false,
+        micSource: HardwarePreAmpStateSnapshot.MicSourceUsbInterface,
+        isHardwareVerified: true);
+    for (int b = 180; b < 260; b++) {
+        int off = b * blk;
+        for (int i = 0; i < blk; i++) {
+            int idx = off + i;
+            refLBlk[i] = musicL[idx];
+            refRBlk[i] = musicR[idx];
+            refVBlk[i] = 0f;
+            micBlk[i] = 1.6f * (ConvolveAt(musicL, hL, idx) + ConvolveAt(musicR, hR, idx));
+        }
+        double micPow = 0;
+        for (int i = 0; i < blk; i++) { micPow += micBlk[i] * micBlk[i]; }
+        shield.ProcessBlockZeroGc(micBlk, 0, refLBlk, 0, refRBlk, 0, refVBlk, 0, steppedPreAmp, governor, stateBus);
+        double errPow = 0;
+        for (int i = 0; i < blk; i++) { errPow += micBlk[i] * micBlk[i]; }
+        if (b >= 230) {
+            p3MicSq += micPow;
+            p3ErrSq += errPow;
+        }
+    }
+    double p3ErleDb = 10.0 * Math.Log10(Math.Max(1e-12, p3MicSq) / Math.Max(1e-12, p3ErrSq));
+    Assert(shield.LastGainStepEpoch == 2, $"Expected shield LastGainStepEpoch==2, got {shield.LastGainStepEpoch}");
+    Assert(p3ErleDb >= 22.0, $"Post-GainStepEpoch reconvergence ERLE must be >= 22.0 dB, got {p3ErleDb:0.2} dB");
+
+    // Phase 4 (blocks 260..359): Voice feedback path identification & AcousticConstraintGovernor GBF stability
+    for (int b = 260; b < 360; b++) {
+        int off = b * blk;
+        for (int i = 0; i < blk; i++) {
+            int idx = off + i;
+            refLBlk[i] = 0f;
+            refRBlk[i] = 0f;
+            refVBlk[i] = voiceRef[idx];
+            micBlk[i] = ConvolveAt(voiceRef, hV, idx);
+        }
+        shield.ProcessBlockZeroGc(micBlk, 0, refLBlk, 0, refRBlk, 0, refVBlk, 0, steppedPreAmp, governor, stateBus);
+    }
+    float[] identifiedCoupling = new float[AcousticConstraintGovernor.SubBandCount];
+    shield.CopyIdentifiedCouplingZeroGc(identifiedCoupling);
+    float peakIdentifiedH = governor.PeakRoomCouplingLinear;
+    Assert(peakIdentifiedH >= 0.45f, $"Expected identified voice feedback coupling |H_room| >= 0.45, got {peakIdentifiedH:0.3}");
+
+    // Naive ungoverned +12 dB vocal makeup gain vs AcousticConstraintGovernor
+    float requestedMakeupDb = 12.0f;
+    float governedMakeupDb;
+    governor.EvaluateZeroGc(identifiedCoupling, requestedMakeupDb, isHeadphoneMonitoring: false, out governedMakeupDb);
+    float ungovernedLoopGainDb = 20f * MathF.Log10(peakIdentifiedH) + requestedMakeupDb;
+    float governedLoopGainDb = 20f * MathF.Log10(peakIdentifiedH) + governedMakeupDb;
+    float gbfImprovementDb = ungovernedLoopGainDb - governedLoopGainDb;
+    Assert(ungovernedLoopGainDb > 0f, $"Test setup sanity: ungoverned +12 dB loop must exceed 0 dB, got {ungovernedLoopGainDb:0.2} dB");
+    Assert(governor.CurrentLoopMarginDb >= 5.5f && governedLoopGainDb <= -5.5f,
+        $"Governor must maintain >= 5.5 dB stability margin, got margin={governor.CurrentLoopMarginDb:0.2} dB, loop={governedLoopGainDb:0.2} dB");
+    Assert(gbfImprovementDb >= 8.0f, $"Expected GBF stability improvement >= +8.0 dB over ungoverned chain, got +{gbfImprovementDb:0.2} dB");
+
+    // Verify headphone monitoring auto-bypass (bit-exact passthrough & studio +12 dB headroom restored)
+    HardwarePreAmpStateSnapshot hpPreAmp = new(
+        gainStepEpoch: 2,
+        isHeadphoneMonitoring: true,
+        micSource: HardwarePreAmpStateSnapshot.MicSourceUsbInterface,
+        isHardwareVerified: true);
+    float[] hpExpected = new float[blk];
+    for (int i = 0; i < blk; i++) { micBlk[i] = hpExpected[i] = 0.17f * MathF.Sin(i * 0.13f); }
+    shield.ProcessBlockZeroGc(micBlk, 0, refLBlk, 0, refRBlk, 0, refVBlk, 0, hpPreAmp, governor, stateBus);
+    Assert(shield.IsBypassed, "Headphone monitoring must automatically bypass speaker-bleed shield.");
+    float hpMaxDiff = 0f;
+    for (int i = 0; i < blk; i++) { hpMaxDiff = MathF.Max(hpMaxDiff, MathF.Abs(micBlk[i] - hpExpected[i])); }
+    Assert(hpMaxDiff == 0f, $"Headphone bypass must be bit-exact passthrough, got maxDiff={hpMaxDiff}");
+    OmniscientVocalStateSnapshot busSnap = stateBus.ReadSnapshot();
+    Assert(busSnap.IsHeadphoneMonitoring && busSnap.IsShieldBypassed && !busSnap.PhaseBActive && busSnap.GovernorMaxMakeupDb >= 11.9f,
+        "StateBus snapshot mismatch after headphone bypass.");
+
+    // Phase 5 (blocks 360..419): Hard Real-Time 0 B GC & < 1.0 ms/block latency budget verification
+    // Clear prior suites' garbage & warm up 4 blocks in speaker mode before measuring allocation & median latency
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    for (int w = 0; w < 4; w++) {
+        shield.ProcessBlockZeroGc(micBlk, 0, refLBlk, 0, refRBlk, 0, refVBlk, 0, steppedPreAmp, governor, stateBus);
+    }
+    const int rtBlocks = 60;
+    double[] blockMsSamples = new double[rtBlocks];
+    double ticksToMs = 1000.0 / Stopwatch.Frequency;
+    long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+    for (int b = 0; b < rtBlocks; b++) {
+        long t0 = Stopwatch.GetTimestamp();
+        shield.ProcessBlockZeroGc(micBlk, 0, refLBlk, 0, refRBlk, 0, refVBlk, 0, steppedPreAmp, governor, stateBus);
+        blockMsSamples[b] = (Stopwatch.GetTimestamp() - t0) * ticksToMs;
+    }
+    long allocAfter = GC.GetAllocatedBytesForCurrentThread();
+    long rtAllocBytes = allocAfter - allocBefore;
+    Array.Sort(blockMsSamples);
+    double medianBlockMs = blockMsSamples[rtBlocks / 2];
+    Assert(rtAllocBytes == 0, $"MultiRefFdkfShield hot path must allocate 0 B GC, allocated {rtAllocBytes} B over {rtBlocks} blocks");
+    Assert(medianBlockMs < 1.0, $"MultiRefFdkfShield must run < 1.0 ms/block (median), measured {medianBlockMs:0.3} ms/block");
+
+    return new Dictionary<string, object> {
+        ["musicBleedErleDb"] = Math.Round(p1ErleDb, 2),
+        ["doubleTalkVocalDeltaDb"] = Math.Round(vocalRetentionDb, 2),
+        ["postGainStepErleDb"] = Math.Round(p3ErleDb, 2),
+        ["peakIdentifiedH"] = Math.Round(peakIdentifiedH, 3),
+        ["gbfImprovementDb"] = Math.Round(gbfImprovementDb, 2),
+        ["governorMarginDb"] = Math.Round(governor.CurrentLoopMarginDb, 2),
+        ["shadowCommits"] = shield.ShadowCommitCount,
+        ["rtAllocBytes"] = rtAllocBytes,
+        ["rtMedianBlockMs"] = Math.Round(medianBlockMs, 4)
+    };
+});
+
 if (!string.IsNullOrEmpty(jsonOutPath)) {
     File.WriteAllText(jsonOutPath, JsonSerializer.Serialize(new { passed, failed, results }, new JsonSerializerOptions { WriteIndented = true }));
 }
@@ -1540,7 +1932,12 @@ def main() -> int:
             print(f"FAIL -> {exc}", flush=True)
 
     cs_suites = re.findall(r'RunSuite\("([^"]+)"', HARNESS_PROGRAM_CS)
-    run_cs = (not suite_req) or any(suite_req.lower() == s.lower() for s in cs_suites)
+    cs_aliases = {"spatial-cortex-rt"}
+    req_parts = [p.strip().lower() for p in suite_req.split(",") if p.strip()]
+    run_cs = (not suite_req) or any(
+        p in cs_aliases or any(p == s.lower() for s in cs_suites)
+        for p in req_parts
+    )
 
     rc = 0
     cs_json: dict[str, object] = {"passed": 0, "failed": 0, "results": []}
