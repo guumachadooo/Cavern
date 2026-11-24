@@ -1,4 +1,2 @@
-VER=v2.9.67|SHA=812279f7|COMPILE=SUCCESS|PUBLISH=SUCCESS|ERR=0|WARN=2
-URL=https://github.com/guumachadooo/Cavern/actions/runs/45447893057
-WARN[04_CavernizeAndroid] CavernSamples/CavernizeAndroid/Services/ExportMediaProcessingService.cs(439,39): warning CA1416: This call site is reachable on: 'android' 34.0 and later. 'ForegroundService.TypeMediaProcessing' is only supported on: 'an
-WARN[04_CavernizeAndroid] CavernSamples/CavernizeAndroid/Services/ExportMediaProcessingService.cs(473,51): warning CA1416: This call site is reachable on: 'Android' 34.0 and later. 'ForegroundService.TypeMediaProcessing' is only supported on: 'an
+VER=v2.9.68|SHA=63877cef|COMPILE=SUCCESS|PUBLISH=SUCCESS|ERR=0|WARN=0
+URL=https://github.com/guumachadooo/Cavern/actions/runs/45458598129
