@@ -436,7 +436,10 @@ public sealed class ExportMediaProcessingService : Service {
         if (OperatingSystem.IsAndroidVersionAtLeast(34)) {
             base.OnTimeout(startId);
         }
-        HandleServiceTimeout(startId, Android.Content.PM.ForegroundService.TypeMediaProcessing);
+        Android.Content.PM.ForegroundService timeoutType = OperatingSystem.IsAndroidVersionAtLeast(35)
+            ? Android.Content.PM.ForegroundService.TypeMediaProcessing
+            : Android.Content.PM.ForegroundService.TypeShortService;
+        HandleServiceTimeout(startId, timeoutType);
     }
 
     /// <inheritdoc/>
@@ -469,7 +472,7 @@ public sealed class ExportMediaProcessingService : Service {
 
     bool TryEnterForeground(int id, Notification notification) {
         try {
-            if (OperatingSystem.IsAndroidVersionAtLeast(34)) {
+            if (OperatingSystem.IsAndroidVersionAtLeast(35)) {
                 StartForeground(id, notification, Android.Content.PM.ForegroundService.TypeMediaProcessing);
             } else {
                 StartForeground(id, notification);
