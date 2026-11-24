@@ -39,8 +39,14 @@ DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_E
 - Keep commits organized on `master` with clear messages and push to `origin/master`.
 
 ## 4. Monitor GitHub Actions (`Build Android APK`)
-- Wait for the workflow triggered by the push to finish cleanly (`completed` + `success`), inspecting build logs via `gh run list` / `gh run view --log-failed` or `python3 -B .agents/scripts/fetch_live_diagnostics.py --ci --lessons` (`origin/diagnostics:ci/latest-build-diagnostics.md` & `ci/latest-learned-lessons.md`).
-- Only report the APK build as passing after observing the workflow complete with zero errors. If any new recurring error/warning class appears, ingest it with `error_learner.py --fetch-live-ci --apply` before shipping the fix.
+- **Single blocking watch (NO polling loops):** Resolve the triggered run ID once and wait with a single blocking `gh run watch <id> -R guumachadooo/Cavern --exit-status --compact` chained (`&&`) directly with APK download in one command:
+  ```bash
+  RUN_ID=$(gh run list -R guumachadooo/Cavern --workflow BuildAndroid.yml --limit 1 --json databaseId --jq '.[0].databaseId') && \
+    gh run watch "$RUN_ID" -R guumachadooo/Cavern --exit-status --compact && \
+    gh run download "$RUN_ID" -R guumachadooo/Cavern -n Cavernize-APK -D /tmp/cavernize_apk_dl
+  ```
+- **FORBIDDEN:** Do **not** poll status with repeated `gh run list` / `gh run view` loops, `sleep`, `schedule`, or `manage_task` checks. Let the single `gh run watch --exit-status --compact` command block (or background once with `NotificationTimeoutSeconds`) until completion.
+- Only report the APK build as passing after `gh run watch --exit-status` returns 0. On failure, inspect logs once via `gh run view "$RUN_ID" -R guumachadooo/Cavern --log-failed` or `python3 -B .agents/scripts/fetch_live_diagnostics.py --ci --lessons` (`origin/diagnostics:ci/latest-build-diagnostics.md` & `ci/latest-learned-lessons.md`), and ingest any novel recurring error/warning class with `error_learner.py --fetch-live-ci --apply` before shipping the fix.
 
 ## 5. Deliver the Signed APK
 Once the run succeeds, download the `Cavernize-APK` artifact (or `android-latest` release asset) and place it in both locations if accessible:

@@ -17,6 +17,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
+import hashlib
 import json
 import math
 import os
@@ -30,6 +32,13 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+CACHE_DIR = Path("/tmp/cavern_audio_gt_cache")
+LOCK_PATH = Path("/tmp/cavern_proot_dotnet.lock")
+FINGERPRINT_SRC_DIRS = (
+    REPO_ROOT / "Cavern",
+    REPO_ROOT / "Cavern.Format",
+    REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic",
+)
 
 
 def find_dotnet() -> str:
@@ -1329,11 +1338,57 @@ def _run_proaudio_route_fsm_invariants(verbose: bool) -> dict[str, object]:
     return metrics
 
 
+def _compute_fingerprint(script_path: Path, dotnet: str, tfm: str) -> str:
+    """Compute deterministic SHA-256 fingerprint over harness, toolchain, and C# sources."""
+    h = hashlib.sha256()
+    h.update(script_path.read_bytes())
+    h.update(b"\0")
+    h.update(dotnet.encode("utf-8"))
+    h.update(b"\0")
+    h.update(tfm.encode("utf-8"))
+    h.update(b"\0")
+    entries: list[tuple[str, int, int]] = []
+    for base_dir in FINGERPRINT_SRC_DIRS:
+        if not base_dir.is_dir():
+            continue
+        for dirpath, dirnames, filenames in os.walk(base_dir):
+            dirnames[:] = sorted(d for d in dirnames if d not in ("bin", "obj", ".git"))
+            for fname in filenames:
+                if not (fname.endswith(".cs") or fname.endswith(".csproj")):
+                    continue
+                fpath = Path(dirpath) / fname
+                st = fpath.stat()
+                entries.append((fpath.relative_to(REPO_ROOT).as_posix(), st.st_size, st.st_mtime_ns))
+    entries.sort()
+    for rel, size, mtime_ns in entries:
+        h.update(f"{rel}\0{size}\0{mtime_ns}\n".encode("utf-8"))
+    return h.hexdigest()
+
+
+def _write_if_changed(path: Path, text: str) -> bool:
+    if path.is_file() and path.read_text(encoding="utf-8") == text:
+        return False
+    path.write_text(text, encoding="utf-8")
+    return True
+
+
+def _find_cached_run_cmd(cache_dir: Path, tfm: str, asm_name: str, dotnet: str) -> list[str] | None:
+    out_dir = cache_dir / "bin" / "Release" / tfm
+    exe = out_dir / asm_name
+    dll = out_dir / f"{asm_name}.dll"
+    if exe.is_file() and os.access(exe, os.X_OK):
+        return [str(exe)]
+    if dll.is_file():
+        return [dotnet, str(dll)]
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Cavern Audio Ground-Truth Pairwise Verification Harness (.NET)")
     parser.add_argument("--verbose", action="store_true", help="Print all numeric metrics per suite")
     parser.add_argument("--suite", default="", help="Run a single suite ID (e.g., GT-05, iamf-roundtrip, export-compression-roundtrip, proaudio-route-fsm, spatial-cortex-rt)")
     parser.add_argument("--json", default="", help="Optional JSON report output path")
+    parser.add_argument("--no-cache", action="store_true", help="Force full restore/rebuild and bypass incremental build cache")
     args = parser.parse_args()
 
     suite_req = args.suite.strip()
@@ -1363,52 +1418,100 @@ def main() -> int:
     rc = 0
     cs_json: dict[str, object] = {"passed": 0, "failed": 0, "results": []}
 
-    with tempfile.TemporaryDirectory(prefix="cavern_audio_gt_") as tmp:
-        tmp_path = Path(tmp)
-        iamf_dir = tmp_path / "iamf_out"
-        iamf_dir.mkdir(parents=True, exist_ok=True)
-        cs_json_path = tmp_path / "cs_gt.json"
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    iamf_dir = CACHE_DIR / "iamf_out"
+    iamf_dir.mkdir(parents=True, exist_ok=True)
+    cs_json_path = CACHE_DIR / "cs_gt.json"
 
-        if run_cs:
-            dotnet = find_dotnet()
-            tfm = detect_tfm(dotnet)
-            cavern_csproj = REPO_ROOT / "Cavern" / "Cavern.csproj"
-            logic_csproj = REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Cavernize.Logic.csproj"
-            (tmp_path / "AudioGroundTruth.csproj").write_text(
-                HARNESS_CSPROJ.format(tfm=tfm, cavern_csproj=cavern_csproj, logic_csproj=logic_csproj),
-                encoding="utf-8",
-            )
-            (tmp_path / "Program.cs").write_text(HARNESS_PROGRAM_CS, encoding="utf-8")
+    if run_cs:
+        dotnet = find_dotnet()
+        tfm = detect_tfm(dotnet)
+        cavern_csproj = REPO_ROOT / "Cavern" / "Cavern.csproj"
+        logic_csproj = REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Cavernize.Logic.csproj"
 
-            env = os.environ.copy()
-            env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
-            env["DOTNET_EnableDiagnostics"] = "0"
-            env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
-            if dotnet == "/root/.dotnet/dotnet" and platform.machine().lower() in ("aarch64", "arm64"):
-                env.setdefault("DOTNET_GCHeapHardLimit", "20000000")
-            env["GT_VERBOSE"] = "1" if args.verbose else "0"
-            env["GT_SUITE_FILTER"] = suite_req
-            env["GT_JSON_OUT"] = str(cs_json_path)
-            env["GT_IAMF_OUT_DIR"] = str(iamf_dir)
+        env = os.environ.copy()
+        env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
+        env["DOTNET_EnableDiagnostics"] = "0"
+        env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
+        dotnet_dir = str(Path(dotnet).parent)
+        env["DOTNET_ROOT"] = dotnet_dir
+        env["PATH"] = f"{dotnet_dir}:{env.get('PATH', '')}"
+        if dotnet == "/root/.dotnet/dotnet" and platform.machine().lower() in ("aarch64", "arm64"):
+            env.setdefault("DOTNET_GCHeapHardLimit", "20000000")
+        env["GT_VERBOSE"] = "1" if args.verbose else "0"
+        env["GT_SUITE_FILTER"] = suite_req
+        env["GT_JSON_OUT"] = str(cs_json_path)
+        env["GT_IAMF_OUT_DIR"] = str(iamf_dir)
 
-            cmd = [
-                dotnet,
-                "run",
-                "--project",
-                str(tmp_path / "AudioGroundTruth.csproj"),
-                "-c",
-                "Release",
-                "-m:1",
-                "/p:UseSharedCompilation=false",
-            ]
-            print(f"[audio-gt] Running {tfm} Ground-Truth Harness...", flush=True)
-            proc = subprocess.run(cmd, cwd=str(REPO_ROOT), env=env)
-            rc = proc.returncode
-            if cs_json_path.is_file():
-                cs_json = json.loads(cs_json_path.read_text(encoding="utf-8"))
+        LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with LOCK_PATH.open("a+", encoding="utf-8") as lock_file:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                print("[lock] waiting for active PRoot dotnet build...", file=sys.stderr, flush=True)
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                asm_name = "AudioGroundTruth"
+                fp_path = CACHE_DIR / ".fingerprint"
+                fingerprint = _compute_fingerprint(Path(__file__), dotnet, tfm)
+                cached_fp = fp_path.read_text(encoding="utf-8").strip() if fp_path.is_file() else ""
+                run_cmd = _find_cached_run_cmd(CACHE_DIR, tfm, asm_name, dotnet)
 
-        if rc == 0 and (not suite_req or suite_req.lower() == "iamf-roundtrip"):
-            _run_py_suite("iamf-roundtrip-ffmpeg", "FFmpeg_FFprobe_IAMF_714_And_HOA16_Validation", lambda: _validate_iamf_files_with_ffmpeg(iamf_dir, args.verbose))
+                if not args.no_cache and cached_fp == fingerprint and run_cmd is not None:
+                    print(f"[audio-gt] Cache hit ({tfm}); skipping dotnet build.", flush=True)
+                else:
+                    csproj_path = CACHE_DIR / f"{asm_name}.csproj"
+                    program_path = CACHE_DIR / "Program.cs"
+                    assets_path = CACHE_DIR / "obj" / "project.assets.json"
+                    csproj_text = HARNESS_CSPROJ.format(
+                        tfm=tfm,
+                        cavern_csproj=cavern_csproj,
+                        logic_csproj=logic_csproj,
+                    )
+                    csproj_changed = _write_if_changed(csproj_path, csproj_text)
+                    _write_if_changed(program_path, HARNESS_PROGRAM_CS)
+
+                    base_build_cmd = [
+                        dotnet,
+                        "build",
+                        str(csproj_path),
+                        "-c",
+                        "Release",
+                        "-m:1",
+                        "/p:UseSharedCompilation=false",
+                        "--nologo",
+                        "-v:minimal",
+                    ]
+                    use_no_restore = (not args.no_cache) and (not csproj_changed) and assets_path.is_file()
+                    build_cmd = base_build_cmd + (["--no-restore"] if use_no_restore else [])
+                    print(f"[audio-gt] Building: {' '.join(build_cmd)}", flush=True)
+                    build_proc = subprocess.run(build_cmd, cwd=str(REPO_ROOT), env=env)
+                    if build_proc.returncode != 0 and use_no_restore:
+                        print("[audio-gt] --no-restore build failed; retrying without --no-restore...", flush=True)
+                        build_proc = subprocess.run(base_build_cmd, cwd=str(REPO_ROOT), env=env)
+                    if build_proc.returncode != 0:
+                        fp_path.unlink(missing_ok=True)
+                        return build_proc.returncode
+                    fp_path.write_text(fingerprint, encoding="utf-8")
+                    run_cmd = _find_cached_run_cmd(CACHE_DIR, tfm, asm_name, dotnet)
+                    if run_cmd is None:
+                        print(
+                            f"[audio-gt] ERROR: Built executable not found under {CACHE_DIR / 'bin' / 'Release' / tfm}",
+                            file=sys.stderr,
+                        )
+                        return 1
+
+                cs_json_path.unlink(missing_ok=True)
+                print(f"[audio-gt] Running {tfm} Ground-Truth Harness...", flush=True)
+                proc = subprocess.run(run_cmd, cwd=str(REPO_ROOT), env=env)
+                rc = proc.returncode
+                if cs_json_path.is_file():
+                    cs_json = json.loads(cs_json_path.read_text(encoding="utf-8"))
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    if rc == 0 and (not suite_req or suite_req.lower() == "iamf-roundtrip"):
+        _run_py_suite("iamf-roundtrip-ffmpeg", "FFmpeg_FFprobe_IAMF_714_And_HOA16_Validation", lambda: _validate_iamf_files_with_ffmpeg(iamf_dir, args.verbose))
 
     if not suite_req or suite_req.lower() == "export-compression-roundtrip":
         _run_py_suite("export-compression-roundtrip", "FFmpeg_Lossless_FLAC_WV_IAMF_And_Lossy_Opus_M4A_Roundtrip", lambda: _run_export_compression_roundtrip(args.verbose))
