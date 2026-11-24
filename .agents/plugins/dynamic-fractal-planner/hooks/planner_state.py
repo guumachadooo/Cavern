@@ -1179,8 +1179,13 @@ def mark_docs_migrated(repo: Path, force: bool = False) -> tuple[bool, str, list
     return True, str(profile_path), managed
 
 
-def bootstrap_workspace(repo: Path, name: str = "", force: bool = False) -> tuple[list[str], list[str]]:
-    """Create missing `.agents/docs/*` and `.agents/planner_profile.json` without overwriting existing files."""
+def bootstrap_workspace(
+    repo: Path,
+    name: str = "",
+    force: bool = False,
+    embed_plugin: bool = False,
+) -> tuple[list[str], list[str]]:
+    """Create missing `.agents/docs/*` and `.agents/planner_profile.json` (plus optional embedded plugin/host matrix)."""
     agents_dir = repo / ".agents"
     docs_dir = agents_dir / "docs"
     docs_dir.mkdir(parents=True, exist_ok=True)
@@ -1214,13 +1219,25 @@ def bootstrap_workspace(repo: Path, name: str = "", force: bool = False) -> tupl
             "plugin_version": read_plugin_version(),
             "docs_format_version": CURRENT_DOCS_FORMAT_VERSION if all_current else 0,
             "project_name": name or repo.name,
-            "planner_mode": "lean",
+            "planner_mode": "auto" if embed_plugin else "lean",
             "read_budget": dict(DEFAULT_READ_BUDGET),
             "secret_guard": dict(DEFAULT_SECRET_GUARD),
             "blast_radius": dict(DEFAULT_BLAST_RADIUS),
             "code_weight_limits": dict(DEFAULT_CODE_WEIGHT_LIMITS),
             "memory_weight_limits": dict(DEFAULT_MEMORY_WEIGHT_LIMITS),
+            "file_budget_limits": {
+                "enabled": True,
+                "warn_files": 850,
+                "fail_files": 920,
+                "hard_platform_cap": 999,
+            },
             "delegation": copy.deepcopy(DEFAULT_DELEGATION_CONFIG),
+            "plugin_evolution": {
+                "enabled": True,
+                "plugin_path": ".agents/plugins/dynamic-fractal-planner",
+                "plugin_sync_doc": ".agents/plugins/dynamic-fractal-planner/.agents/docs/EXTERNAL_AI_SYNC.md",
+                "auto_sync_higher_version": True,
+            },
             "extra_requests_file": ".agents/docs/EXTRA_REQUESTS.md",
             "memory_feedback": {
                 "enabled": True,
@@ -1236,5 +1253,107 @@ def bootstrap_workspace(repo: Path, name: str = "", force: bool = False) -> tupl
         }
         profile_path.write_text(json.dumps(profile, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         created.append(profile_path.relative_to(repo).as_posix())
+
+    if embed_plugin:
+        import self_evolve  # noqa: E402
+
+        src_plugin = resolve_plugin_root()
+        glob_plugin = self_evolve.resolve_global_plugin_dir()
+        if (glob_plugin / "plugin.json").is_file() and compare_semver(
+            read_plugin_version(glob_plugin), read_plugin_version(src_plugin)
+        ) > 0:
+            src_plugin = glob_plugin
+        dst_plugin = agents_dir / "plugins" / "dynamic-fractal-planner"
+        plugin_rel = ".agents/plugins/dynamic-fractal-planner"
+        if src_plugin.resolve() != dst_plugin.resolve():
+            if (dst_plugin / "plugin.json").is_file() and not force:
+                skipped.append(plugin_rel)
+            else:
+                sync_fn = getattr(self_evolve, "_sync_plugin_tree", None) or getattr(self_evolve, "_copy_plugin_tree")
+                sync_fn(src_plugin, dst_plugin, snapshot_backup=False)
+                created.append(plugin_rel)
+
+        host_matrix_template = {
+            "schema": 1,
+            "strict_coverage": False,
+            "note": (
+                "Declarative multi-host tool & integration matrix (`antigravity-termux` <-> `antigravity-local` "
+                "<-> `ai-studio-cloud` <-> `ci-runner` <-> `local-ide`). Audited by `verify_universal.py` & `plan_tool.py host-audit`."
+            ),
+            "hosts": {
+                "antigravity-termux": {
+                    "label": "Antigravity (Termux PRoot)",
+                    "ignore_cloud_env_alerts": True,
+                    "boot_steps": [
+                        "python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py host-boot",
+                        "git status -sb",
+                    ],
+                },
+                "antigravity-local": {
+                    "label": "Antigravity (Local Workstation)",
+                    "ignore_cloud_env_alerts": True,
+                    "boot_steps": [
+                        "python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py host-boot",
+                        "git status -sb",
+                    ],
+                },
+                "ai-studio-cloud": {
+                    "label": "Google AI Studio Cloud Container",
+                    "ignore_cloud_env_alerts": False,
+                    "boot_steps": [
+                        "python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py host-boot",
+                    ],
+                },
+                "ci-runner": {
+                    "label": "CI Runner",
+                    "ignore_cloud_env_alerts": True,
+                    "boot_steps": [
+                        "python3 -B .agents/plugins/dynamic-fractal-planner/scripts/verify_universal.py --all",
+                    ],
+                },
+                "local-ide": {
+                    "label": "Generic Local IDE",
+                    "ignore_cloud_env_alerts": True,
+                    "boot_steps": [
+                        "python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py host-boot",
+                    ],
+                },
+            },
+            "scan_globs": [
+                ".agents/agent/*.py",
+                ".agents/agent/*.mjs",
+                ".agents/agent/*.sh",
+                ".agents/scripts/*.py",
+                ".agents/preview/*.mjs",
+                ".agents/host_matrix.json",
+            ],
+            "ignore_globs": [
+                "**/__pycache__/**",
+                "**/test_*.py",
+                "**/test_*.mjs",
+                "**/*.test.mjs",
+                "**/*_test.py",
+            ],
+            "entries": [
+                {
+                    "id": "host-matrix-config",
+                    "category": "universal",
+                    "paths": [".agents/host_matrix.json"],
+                    "purpose": "Declarative multi-host capability, routing & auto-classification manifest.",
+                    "per_host": {
+                        "antigravity-termux": {"mode": "active", "how": "checked by verify_universal.py & host-boot"},
+                        "antigravity-local": {"mode": "active", "how": "checked by verify_universal.py & host-boot"},
+                        "ai-studio-cloud": {"mode": "active", "how": "checked by verify_universal.py & host-boot"},
+                        "ci-runner": {"mode": "active", "how": "checked by verify_universal.py --all"},
+                        "local-ide": {"mode": "active", "how": "checked by verify_universal.py"},
+                    },
+                }
+            ],
+        }
+        _write_if_needed(agents_dir / "host_matrix.json", json.dumps(host_matrix_template, ensure_ascii=False, indent=2) + "\n")
+
+        reg_fn = getattr(self_evolve, "register_workspace", None)
+        if reg_fn is not None:
+            reg_fn(repo)
 
     return created, skipped

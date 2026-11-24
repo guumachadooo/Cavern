@@ -79,6 +79,14 @@ def main() -> None:
         if is_real_project_root(repo) and (repo / ".agents").is_dir():
             upgrade_info = auto_upgrade_workspace(repo)
 
+        if is_real_project_root(repo):
+            try:
+                import self_evolve  # noqa: E402
+
+                self_evolve.register_workspace(repo)
+            except Exception:
+                pass
+
         profile, profile_warnings = load_project_profile_with_warnings(repo)
         _, task_md, _, hook_file = get_paths(payload)
 

@@ -355,6 +355,38 @@ _BLUEPRINT_META_EDIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PLUGIN_SYNC_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(?:atualiz\w*|sincroniz\w*|sync\w*|updat\w*|propaga\w*|sobe|subir|push\w*|alinh\w*)\b"
+        r"[^\n.;!?]{0,45}"
+        r"\b(?:plugin|dynamic-fractal-planner|fractal)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:plugin|dynamic-fractal-planner)\b"
+        r"[^\n.;!?]{0,45}"
+        r"\b(?:github|todos\s+os\s+(?:reposit|projet)|3\s+repo|frota|fleet|global|cavern|omniagent)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^\s*(?:sync-plugin|evolve\s+sync-all)\b", re.IGNORECASE),
+)
+_PLUGIN_SYNC_EXCLUDE_RE = re.compile(
+    r"\b(?:cria\w*|creat\w*|implement\w*|adicion\w*|add\b|refator\w*|refactor\w*|architect\w*|arquitet\w*|"
+    r"blueprint|corrig\w*|fix\b|debug\w*|bug\b|erro\w*|error\b|por\s+que|why\b|explic\w*|explain\w*|"
+    r"como\s+funciona|how\s+does|novo\s+recurso|new\s+feature|edita\w*|edit\w*|escrev\w*|write\b|teste\w*|test\w*|revis\w*|review\b)\b",
+    re.IGNORECASE,
+)
+
+
+def detect_plugin_sync_intent(text: str) -> bool:
+    """Detect concise zero-thinking request to sync/push the plugin across Cavern/fleet."""
+    scoring = _strip_long_quotes(text or "").strip()
+    if not scoring or len(scoring) > 220:
+        return False
+    if _PLUGIN_SYNC_EXCLUDE_RE.search(scoring):
+        return False
+    return any(pat.search(scoring) for pat in _PLUGIN_SYNC_PATTERNS)
+
 
 def detect_blueprint_intent(text: str) -> bool:
     """Detect explicit request to author/scaffold a SOTA blueprint, RFC, or technical design spec."""
@@ -796,6 +828,26 @@ def analyze_prompt(
     action_clauses = _count_action_clauses(scoring_text)
     broad_scope = _has_broad_scope(scoring_lower)
     followup = classify_followup_intent(scoring_text)
+    plugin_sync_intent = detect_plugin_sync_intent(text)
+    if plugin_sync_intent:
+        return {
+            "tier": 0,
+            "tier_name": "DIRECT",
+            "breadth_est": 0,
+            "depth_level": "low",
+            "depth_signals": [],
+            "detected_domains": domains,
+            "research_strategy": "none",
+            "recommended_modules": [],
+            "doc_lookup_targets": [],
+            "source": "prompt",
+            "intent": "plugin_sync_fastpath",
+            "confidence": "high",
+            "file_refs": file_refs[:12],
+            "btw_queue_intent": False,
+            "blueprint_intent": False,
+            "plugin_sync_intent": True,
+        }
     btw_intent = detect_btw_queue_intent(text)
     bp_intent = detect_blueprint_intent(text)
     has_read_only = any(p.search(scoring_lower) for p in _READ_ONLY_GUARD_PATTERNS)
@@ -859,6 +911,7 @@ def analyze_prompt(
             "file_refs": file_refs[:12],
             "btw_queue_intent": btw_intent,
             "blueprint_intent": False,
+            "plugin_sync_intent": False,
         }
 
     if not can_inherit and is_pure_q:
@@ -878,6 +931,7 @@ def analyze_prompt(
             "file_refs": file_refs[:12],
             "btw_queue_intent": btw_intent,
             "blueprint_intent": bp_intent,
+            "plugin_sync_intent": False,
         }
 
     if is_tiny_fix:
@@ -897,6 +951,7 @@ def analyze_prompt(
             "file_refs": file_refs[:12],
             "btw_queue_intent": btw_intent,
             "blueprint_intent": False,
+            "plugin_sync_intent": False,
         }
 
     breadth_est = raw_breadth
@@ -956,6 +1011,7 @@ def analyze_prompt(
         "file_refs": file_refs[:12],
         "btw_queue_intent": btw_intent,
         "blueprint_intent": bp_intent,
+        "plugin_sync_intent": False,
     }
     if inherited_turn is not None:
         result["inherited_from_turn"] = inherited_turn

@@ -407,7 +407,12 @@ def cmd_init(args: argparse.Namespace, artifact_dir: Path, ws_root: Path) -> Non
 
 def cmd_bootstrap(args: argparse.Namespace, ws_root: Path) -> None:
     """Scaffold universal .agents memory docs and an auto-detected planner_profile.json."""
-    created, skipped = bootstrap_workspace(ws_root, name=args.name, force=args.force)
+    created, skipped = bootstrap_workspace(
+        ws_root,
+        name=args.name,
+        force=args.force,
+        embed_plugin=bool(args.embed_plugin),
+    )
 
     print(f"Bootstrapped universal agent structure in `{ws_root}`:")
     if created:
@@ -1015,6 +1020,28 @@ def cmd_evolve(args: argparse.Namespace, ws_root: Path) -> int:
             sub_argv.extend(["--plugin-rel", args.plugin_rel])
         if args.json:
             sub_argv.append("--json")
+    elif args.evolve_cmd == "sync-all":
+        if args.apply:
+            sub_argv.append("--apply")
+        if args.push:
+            sub_argv.append("--push")
+        if args.no_test:
+            sub_argv.append("--no-test")
+        if args.commit:
+            sub_argv.extend(["--commit", args.commit])
+        if args.global_dir:
+            sub_argv.extend(["--global-dir", args.global_dir])
+        if args.plugin_rel:
+            sub_argv.extend(["--plugin-rel", args.plugin_rel])
+        for repo in (args.repo or []):
+            sub_argv.extend(["--repo", repo])
+        if args.json:
+            sub_argv.append("--json")
+    elif args.evolve_cmd == "register-workspace":
+        if args.global_dir:
+            sub_argv.extend(["--global-dir", args.global_dir])
+        if args.json:
+            sub_argv.append("--json")
     return self_evolve.main(sub_argv)
 
 
@@ -1077,6 +1104,7 @@ def main() -> None:
     p_boot = sub.add_parser("bootstrap", help="Scaffold universal memory/extra-requests/profile docs in a project.")
     p_boot.add_argument("--name", default="")
     p_boot.add_argument("--force", action="store_true")
+    p_boot.add_argument("--embed-plugin", action="store_true")
 
     p_mig = sub.add_parser("migrate", help="Upgrade .agents/planner_profile.json on disk to current schema.")
     p_mig.add_argument("--dry-run", action="store_true")
@@ -1190,6 +1218,18 @@ def main() -> None:
     p_evo_psync.add_argument("--global-dir", default="")
     p_evo_psync.add_argument("--plugin-rel", default=".agents/plugins/dynamic-fractal-planner")
     p_evo_psync.add_argument("--json", action="store_true")
+    p_evo_all = evo_sub.add_parser("sync-all")
+    p_evo_all.add_argument("--apply", action="store_true")
+    p_evo_all.add_argument("--push", action="store_true")
+    p_evo_all.add_argument("--no-test", action="store_true")
+    p_evo_all.add_argument("--commit", default="")
+    p_evo_all.add_argument("--global-dir", default="")
+    p_evo_all.add_argument("--plugin-rel", default=".agents/plugins/dynamic-fractal-planner")
+    p_evo_all.add_argument("--repo", action="append", default=[])
+    p_evo_all.add_argument("--json", action="store_true")
+    p_evo_reg = evo_sub.add_parser("register-workspace")
+    p_evo_reg.add_argument("--global-dir", default="")
+    p_evo_reg.add_argument("--json", action="store_true")
 
     p_learn = sub.add_parser("learn", help="Run universal timeless build-error learner (forwards remaining args).")
     p_learn.add_argument("extra_args", nargs=argparse.REMAINDER)

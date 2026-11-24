@@ -81,7 +81,7 @@ DEFAULT_MANIFEST: dict[str, Any] = {
                 "scripts/verify_universal.py",
             ],
             "termuxPath": "/root/.gemini/antigravity/scratch/dynamic-fractal-planner",
-            "termuxGlobalPluginPath": "/root/.gemini/antigravity/plugins/dynamic-fractal-planner",
+            "termuxGlobalPluginPath": "/root/.gemini/config/plugins/dynamic-fractal-planner",
             "ciWorkflow": "",
         },
     },

@@ -208,6 +208,7 @@ def _run_pre_invocation_inner(t0: float) -> None:
             "recon_injected": False,
             "lens_injected": False,
             "blueprint_injected": False,
+            "plugin_sync_injected": False,
             "btw_injected": False,
         }
     else:
@@ -255,6 +256,12 @@ def _run_pre_invocation_inner(t0: float) -> None:
     if eco_mode and not hook_state.get("eco_injected"):
         hook_state["eco_injected"] = True
         inject_lines.append("[ECO_MODE|ON] Batch reads/greps in 1 turn && surgical edits only && terse <=8L reply && no optional docs.")
+
+    if triage.get("plugin_sync_intent") and not hook_state.get("plugin_sync_injected"):
+        hook_state["plugin_sync_injected"] = True
+        inject_lines.append(
+            f"[PLUGIN_SYNC_FASTPATH] 0-thinking 1-cmd ONLY (!read !explore !plan): run `sync-plugin` (or `python3 -B {plan_cli} evolve sync-all --apply --push`) && report <=3L."
+        )
 
     rec_state = hook_state.get("recon")
     if isinstance(rec_state, dict) and rec_state.get("active") and not hook_state.get("recon_injected"):

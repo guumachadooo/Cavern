@@ -19,14 +19,14 @@ Scripts (`~/.gemini/config/plugins/dynamic-fractal-planner/scripts/`): `plan_too
 | `recon` | `plan_tool.py recon start [--scope "..."]` | Read-only forensic sweep (`planner_guard_files` denies code edits; allows docs/plans); log `[BUG] \| [UNWIRED] \| [STRUCTURAL] \| [UPGRADE] @ path:line`; `recon stop` resumes |
 
 ## Tiers & Commands
-- `Tier 0 (DIRECT)` -> trivial Q&A / 1-line fix -> direct exec.
+- `Tier 0 (DIRECT)` -> trivial Q&A / 1-line fix / `[PLUGIN_SYNC_FASTPATH]` (concise plugin sync -> 0-thinking 1-cmd `sync-plugin` or `evolve sync-all --apply --push`, `<=3L` reply) -> direct exec.
 - `Tier 1 (STANDARD)` -> 1-2 focused edits -> `Blast Radius` guards >=4th file in `lean`.
 - `Tier 2 (META_MODULES)` -> `>=3` REQs \|\| `>=2` domains -> auto-REQs + domain JITs + `AUDIT_EXISTING` (`MOD-*`).
 - `Tier 3 (FRACTAL_DEEP)` -> high coupling/arch -> `AUDIT_EXISTING` + `CURATE_OSS` + `SOTA_PREFLIGHT` (`MOD-SOTA-PREFLIGHT`: falsify assumptions vs SOTA, math/physics vs AI tournament, execution-plane & hardware budget split, offline golden-bench proof gate) + `MOD-DISCOVERY -> MOD-SOTA-PREFLIGHT -> MOD-CONTRACT -> MOD-IMPL -> MOD-HARDEN -> MOD-AUDIT`.
 - Token Diet: `repo_map.py --workspace .` (`/tmp` cache) | `read_file` `<=250L` slice | archive docs `>150L` -> explicit `StartLine&EndLine <=120L` | `log_digest.py <log> [--errors-only]`.
 - Doc/Plan Style: ALL `plan_tool.py` args (`--goal`, `--req`, `--evidence`, `--summary`, `--next`) && agent memory docs -> lossless symbolic telegraphic EN (`!articles/copulas/filler`, ops `-> | && || ! w/ w/o`, verbatim `path:sym`, invariants).
 - External API Docs (MCP): Unknown external APIs/SDKs/flags -> consult `Context7` (`resolve-library-id`->`query-docs`) \|\| `Google Developer Knowledge` (`search_documents`/`answer_query`) BEFORE guessing.
-- Key CLI ops: `triage --prompt "..."` | `blueprint {classify|init|lint|score|status|list|handoff}` (playbook: `skills/sota-blueprint/SKILL.md`) | `init` | `start` | `expand-step` | `add-module` | `done` | `req-verify` | `finish --evidence "..."` | `recon {start|stop|status}` | `model-mode {set|get|list|clear}` | `docs-migrated` | `diag [--clear]` | `undo-turn [--dry-run]` | `handoff [--roadmap --wave --archive] --summary "..." --next "..."` | `stats`.
+- Key CLI ops: `triage --prompt "..."` | `bootstrap [--embed-plugin]` | `evolve {classify|sync|sync-plugin|sync-all --apply --push}` | `blueprint {classify|init|lint|score|status|list|handoff}` (playbook: `skills/sota-blueprint/SKILL.md`) | `init` | `start` | `expand-step` | `add-module` | `done` | `req-verify` | `finish --evidence "..."` | `recon {start|stop|status}` | `model-mode {set|get|list|clear}` | `docs-migrated` | `diag [--clear]` | `undo-turn [--dry-run]` | `handoff [--roadmap --wave --archive] --summary "..." --next "..."` | `stats`.
 - Verify pre-stop: `verify_universal.py [--build] [--full] --git-stat` (static `wiring_gate` + `key_parity_rules.ref_regex` + `diff_rules.path_prefixes` + multi-layer `build_rules` shadow cascade w/ global diag dedup; `Stop` runs silent static checks on `needs_verify && !needs_build`).
 
 ## Thin-Coordinator Delegation & Model Routing (v5)

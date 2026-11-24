@@ -4308,6 +4308,313 @@ class TestSotaBlueprintEngine(unittest.TestCase):
             self.assertEqual(len(fails), 1)
 
 
+class TestFleetSyncAndFastPath(unittest.TestCase):
+    def test_equal_semver_content_drift_mtime_and_in_sync(self) -> None:
+        import self_evolve
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "repo"
+            emb = repo / ".agents" / "plugins" / "dynamic-fractal-planner"
+            glob = root / "global_plugin"
+            emb.mkdir(parents=True)
+            glob.mkdir(parents=True)
+
+            manifest = json.dumps({"name": "dynamic-fractal-planner", "version": "2.14.0"})
+            (emb / "plugin.json").write_text(manifest, encoding="utf-8")
+            (glob / "plugin.json").write_text(manifest, encoding="utf-8")
+            (emb / "marker.txt").write_text("same", encoding="utf-8")
+            (glob / "marker.txt").write_text("same", encoding="utf-8")
+
+            eq = self_evolve.sync_plugin_versions(repo, global_dir=glob, apply=True)
+            self.assertEqual(eq["direction"], "in-sync")
+            self.assertFalse(eq["applied"])
+
+            t_old = 1_700_000_000.0
+            t_new = 1_700_000_100.0
+            (emb / "marker.txt").write_text("emb-newer", encoding="utf-8")
+            (glob / "marker.txt").write_text("glob-older", encoding="utf-8")
+            for p in (emb / "plugin.json", emb / "marker.txt"):
+                os.utime(p, (t_new, t_new))
+            for p in (glob / "plugin.json", glob / "marker.txt"):
+                os.utime(p, (t_old, t_old))
+
+            fwd = self_evolve.sync_plugin_versions(repo, global_dir=glob, apply=True)
+            self.assertEqual(fwd["direction"], "embedded->global")
+            self.assertTrue(fwd["applied"])
+            self.assertEqual((glob / "marker.txt").read_text(encoding="utf-8"), "emb-newer")
+
+            (glob / "marker.txt").write_text("glob-newer", encoding="utf-8")
+            (emb / "marker.txt").write_text("emb-older", encoding="utf-8")
+            for p in (glob / "plugin.json", glob / "marker.txt"):
+                os.utime(p, (t_new + 50, t_new + 50))
+            for p in (emb / "plugin.json", emb / "marker.txt"):
+                os.utime(p, (t_old, t_old))
+
+            rev = self_evolve.sync_plugin_versions(repo, global_dir=glob, apply=True)
+            self.assertEqual(rev["direction"], "global->embedded")
+            self.assertTrue(rev["applied"])
+            self.assertEqual((emb / "marker.txt").read_text(encoding="utf-8"), "glob-newer")
+
+    def test_standalone_host_excludes_and_preservation(self) -> None:
+        import self_evolve
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ws_file = root / ".workspaces.json"
+            glob = root / "global_plugin"
+            standalone = root / "standalone_plugin"
+            host = root / "host_repo"
+            emb = host / ".agents" / "plugins" / "dynamic-fractal-planner"
+            glob.mkdir(parents=True)
+            standalone.mkdir(parents=True)
+            emb.mkdir(parents=True)
+
+            host_sentinels = {
+                "package.json": '{"name":"standalone-shim"}\n',
+                "AGENTS.md": "# Standalone AGENTS\n",
+                ".agents/preview/server.mjs": "// keep preview server\n",
+                ".agents/federation.json": '{"standalone":true}\n',
+                ".agents/bridge_profile.json": '{"bridge":"keep"}\n',
+                ".agents/env_manifest.json": '{"env":"keep"}\n',
+                ".agents/host_matrix.json": '{"host":"keep"}\n',
+                ".agents/planner_profile.json": '{"planner_mode":"lean"}\n',
+            }
+            for rel, body in host_sentinels.items():
+                p = standalone / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(body, encoding="utf-8")
+
+            (standalone / "plugin.json").write_text(
+                json.dumps({"name": "dynamic-fractal-planner", "version": "2.0.0"}),
+                encoding="utf-8",
+            )
+            (standalone / "scripts").mkdir(parents=True)
+            (standalone / "scripts" / "core.py").write_text("VER = '2.0.0'\n", encoding="utf-8")
+
+            (emb / "plugin.json").write_text(
+                json.dumps({"name": "dynamic-fractal-planner", "version": "2.1.0"}),
+                encoding="utf-8",
+            )
+            (emb / "scripts").mkdir(parents=True)
+            (emb / "scripts" / "core.py").write_text("VER = '2.1.0'\n", encoding="utf-8")
+
+            with _patched_env({"PLANNER_WORKSPACES_FILE": str(ws_file)}):
+                res1 = self_evolve.sync_plugin_fleet(
+                    host,
+                    apply=True,
+                    push=False,
+                    run_tests=False,
+                    global_dir=glob,
+                    extra_repos=[str(standalone)],
+                )
+            self.assertTrue(res1["ok"])
+            self.assertEqual(res1["authoritative"]["kind"], "embedded")
+            self.assertEqual(json.loads((standalone / "plugin.json").read_text(encoding="utf-8"))["version"], "2.1.0")
+            self.assertEqual((standalone / "scripts" / "core.py").read_text(encoding="utf-8"), "VER = '2.1.0'\n")
+            for rel, body in host_sentinels.items():
+                self.assertEqual((standalone / rel).read_text(encoding="utf-8"), body, rel)
+
+            (standalone / "plugin.json").write_text(
+                json.dumps({"name": "dynamic-fractal-planner", "version": "2.2.0"}),
+                encoding="utf-8",
+            )
+            (standalone / "scripts" / "core.py").write_text("VER = '2.2.0'\n", encoding="utf-8")
+            with _patched_env({"PLANNER_WORKSPACES_FILE": str(ws_file)}):
+                res2 = self_evolve.sync_plugin_fleet(
+                    standalone,
+                    apply=True,
+                    push=False,
+                    run_tests=False,
+                    global_dir=glob,
+                    extra_repos=[str(host)],
+                )
+            self.assertTrue(res2["ok"])
+            self.assertEqual(res2["authoritative"]["kind"], "standalone")
+            self.assertEqual(json.loads((emb / "plugin.json").read_text(encoding="utf-8"))["version"], "2.2.0")
+            self.assertEqual((emb / "scripts" / "core.py").read_text(encoding="utf-8"), "VER = '2.2.0'\n")
+            for excl in self_evolve.STANDALONE_HOST_EXCLUDES:
+                self.assertFalse((emb / excl).exists(), f"excluded path leaked into embedded: {excl}")
+
+    def test_fleet_multi_repo_sync_and_metadata_bump(self) -> None:
+        import self_evolve
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ws_file = root / ".workspaces.json"
+            glob = root / "global_plugin"
+            standalone = root / "standalone_plugin"
+            host1 = root / "host_one"
+            host2 = root / "host_two"
+            for d in (glob, standalone, host1, host2):
+                d.mkdir(parents=True)
+
+            (standalone / "package.json").write_text('{"name":"dfp"}\n', encoding="utf-8")
+            (standalone / "plugin.json").write_text(
+                json.dumps({"name": "dynamic-fractal-planner", "version": "2.14.0"}),
+                encoding="utf-8",
+            )
+            (standalone / ".agents" / "docs").mkdir(parents=True)
+            (standalone / ".agents" / "docs" / "HANDOFF.md").write_text(
+                "# Handoff\n- `Release`: `v2.12.0`\n",
+                encoding="utf-8",
+            )
+
+            (glob / "plugin.json").write_text(
+                json.dumps({"name": "dynamic-fractal-planner", "version": "2.10.0"}),
+                encoding="utf-8",
+            )
+
+            for hdir, ver in ((host1, "2.10.0"), (host2, "2.11.0")):
+                emb = hdir / ".agents" / "plugins" / "dynamic-fractal-planner"
+                (emb / ".agents" / "docs").mkdir(parents=True)
+                (emb / "plugin.json").write_text(
+                    json.dumps({"name": "dynamic-fractal-planner", "version": ver}),
+                    encoding="utf-8",
+                )
+                (emb / ".agents" / "docs" / "HANDOFF.md").write_text(
+                    f"# Handoff\n- `Release`: `v{ver}`\n",
+                    encoding="utf-8",
+                )
+                (hdir / ".agents" / "planner_profile.json").write_text(
+                    json.dumps({"schema_version": 5, "plugin_version": ver}),
+                    encoding="utf-8",
+                )
+                (hdir / "AGENTS.md").write_text(
+                    f"# Repo\nPlanner (`dynamic-fractal-planner v{ver}`)\n",
+                    encoding="utf-8",
+                )
+
+            with _patched_env({"PLANNER_WORKSPACES_FILE": str(ws_file)}):
+                self.assertTrue(self_evolve.register_workspace(standalone, global_dir=glob))
+                self.assertTrue(self_evolve.register_workspace(host1, global_dir=glob))
+                res = self_evolve.sync_plugin_fleet(
+                    host1,
+                    apply=True,
+                    push=False,
+                    run_tests=False,
+                    global_dir=glob,
+                    extra_repos=[str(host2)],
+                )
+
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["authoritative"]["kind"], "standalone")
+            self.assertEqual(res["authoritative"]["version"], "2.14.0")
+            kinds = {t["kind"] for t in res["targets"]}
+            self.assertEqual(kinds, {"standalone", "global", "embedded"})
+            self.assertEqual(len(res["targets"]), 4)
+            for t in res["targets"]:
+                self.assertEqual(t["version_after"], "2.14.0")
+
+            self.assertIn("`v2.14.0`", (standalone / ".agents" / "docs" / "HANDOFF.md").read_text(encoding="utf-8"))
+            self.assertIn("`v2.14.0`", (glob / ".agents" / "docs" / "HANDOFF.md").read_text(encoding="utf-8"))
+            for hdir in (host1, host2):
+                prof = json.loads((hdir / ".agents" / "planner_profile.json").read_text(encoding="utf-8"))
+                self.assertEqual(prof["plugin_version"], "2.14.0")
+                self.assertIn("dynamic-fractal-planner v2.14.0", (hdir / "AGENTS.md").read_text(encoding="utf-8"))
+                emb_handoff = (hdir / ".agents" / "plugins" / "dynamic-fractal-planner" / ".agents" / "docs" / "HANDOFF.md").read_text(encoding="utf-8")
+                self.assertIn("`v2.14.0`", emb_handoff)
+
+            # Monotonic: lower target_ver never downgrades metadata or Release
+            self.assertEqual(self_evolve._update_host_metadata(host1, "2.10.0", apply=True), [])
+            self.assertFalse(self_evolve._refresh_plugin_handoff_release(standalone / ".agents" / "docs" / "HANDOFF.md", "2.10.0"))
+            self.assertEqual(json.loads((host1 / ".agents" / "planner_profile.json").read_text(encoding="utf-8"))["plugin_version"], "2.14.0")
+            self.assertIn("`v2.14.0`", (standalone / ".agents" / "docs" / "HANDOFF.md").read_text(encoding="utf-8"))
+
+    def test_detect_plugin_sync_intent_positive_and_negative(self) -> None:
+        positives = (
+            "Atualiza o plugin no cavern. Vai rápido",
+            "sincroniza o plugin em todos os repos",
+            "sync plugin",
+            "update plugin to github",
+        )
+        for p in positives:
+            self.assertTrue(complexity_triage.detect_plugin_sync_intent(p), f"expected True for: {p!r}")
+
+        negatives = (
+            "Implementa nova feature no plugin",
+            "Corrige bug no complexity_triage.py",
+            "Crie um blueprint do plugin",
+            "Como funciona o plugin?",
+            "sync plugin " + ("x" * 215),
+        )
+        for n in negatives:
+            self.assertFalse(complexity_triage.detect_plugin_sync_intent(n), f"expected False for: {n!r}")
+
+    def test_analyze_prompt_plugin_sync_fastpath(self) -> None:
+        res = complexity_triage.analyze_prompt("Atualiza o plugin no cavern. Vai rápido")
+        self.assertEqual(res["tier"], 0)
+        self.assertEqual(res["intent"], "plugin_sync_fastpath")
+        self.assertTrue(res["plugin_sync_intent"])
+
+    def test_pre_invocation_plugin_sync_fastpath_normal_and_eco(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            init_git_repo(repo)
+            (repo / ".agents" / "docs").mkdir(parents=True)
+            (repo / ".agents" / "planner_profile.json").write_text(
+                json.dumps({"schema_version": 5, "planner_mode": "lean"}),
+                encoding="utf-8",
+            )
+
+            with tempfile.TemporaryDirectory() as art1:
+                _, _, pre_norm = run_hook(
+                    "planner_pre_invocation.py",
+                    {
+                        "workspacePaths": [str(repo)],
+                        "artifactDirectoryPath": art1,
+                        "lastUserInput": "Atualiza o plugin no cavern. Vai rápido",
+                        "invocationNum": 1,
+                    },
+                )
+                msg_norm = pre_norm["injectSteps"][0]["systemMessage"]["systemMessage"]
+                self.assertIn("[PLUGIN_SYNC_FASTPATH]", msg_norm)
+                for forbidden in ("Triage|", "DELEGATE|", "SOTA_PREFLIGHT|"):
+                    self.assertNotIn(forbidden, msg_norm)
+
+            with tempfile.TemporaryDirectory() as art2:
+                _, _, pre_eco = run_hook(
+                    "planner_pre_invocation.py",
+                    {
+                        "workspacePaths": [str(repo)],
+                        "artifactDirectoryPath": art2,
+                        "lastUserInput": "low quota: sync plugin",
+                        "invocationNum": 1,
+                    },
+                )
+                msg_eco = pre_eco["injectSteps"][0]["systemMessage"]["systemMessage"]
+                self.assertIn("[ECO_MODE|ON]", msg_eco)
+                self.assertIn("[PLUGIN_SYNC_FASTPATH]", msg_eco)
+                for forbidden in ("Triage|", "DELEGATE|", "SOTA_PREFLIGHT|"):
+                    self.assertNotIn(forbidden, msg_eco)
+
+    def test_bootstrap_workspace_embed_plugin_and_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = root / "new_project"
+            repo.mkdir()
+            ws_file = root / ".workspaces.json"
+            gemini_home = root / ".gemini"
+
+            with _patched_env({"PLANNER_WORKSPACES_FILE": str(ws_file), "GEMINI_HOME": str(gemini_home)}):
+                created, _ = planner_state.bootstrap_workspace(repo, embed_plugin=True)
+
+            self.assertIn(".agents/planner_profile.json", created)
+            self.assertIn(".agents/plugins/dynamic-fractal-planner", created)
+            self.assertIn(".agents/host_matrix.json", created)
+
+            prof = json.loads((repo / ".agents" / "planner_profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(prof["planner_mode"], "auto")
+            self.assertIn("file_budget_limits", prof)
+            self.assertIn("plugin_evolution", prof)
+            self.assertTrue(prof["plugin_evolution"]["auto_sync_higher_version"])
+            self.assertTrue((repo / ".agents" / "plugins" / "dynamic-fractal-planner" / "plugin.json").is_file())
+            self.assertTrue((repo / ".agents" / "host_matrix.json").is_file())
+
+            reg = json.loads(ws_file.read_text(encoding="utf-8"))
+            self.assertIn(str(repo.resolve()), reg["workspaces"])
+
+
 def _stamp_plugin_tests_passed() -> None:
     art_dir = (os.environ.get("PLANNER_ARTIFACT_DIR") or os.environ.get("CAVERN_ARTIFACT_DIR") or "").strip()
     if not art_dir or os.environ.get("PLANNER_NO_HOOK_STAMP"):
