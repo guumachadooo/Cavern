@@ -588,7 +588,7 @@ public sealed class SpatialSceneHub {
                 desc.HighBandEnergy = item.HighBandEnergy;
                 desc.PropagationDelayMs = item.PropagationDelayMs;
             }
-            xrayPowermap.Update(sources, listenerWorldMeters);
+            xrayPowermap.Update(sources, listenerWorldMeters, 0.45f, ActiveXRayBandMode);
         }
     }
 

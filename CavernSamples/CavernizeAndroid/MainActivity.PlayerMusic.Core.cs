@@ -237,7 +237,7 @@ public partial class MainActivity {
     OneUiIconView musicLyricsSingMicIcon;
     TextView musicLyricsSingPctText;
     OneUiSeekBar musicLyricsVocalSeekBar;
-    Button musicLyricsKaraokeBtn, musicLyricsLiveMicBtn, musicLyricsAiPrepBtn, musicLyricsMixMatchBtn, musicLyricsVocalAbBtn, musicLyricsScarlettBtn;
+    Button musicLyricsKaraokeBtn, musicLyricsLiveMicBtn, musicLyricsMicSourceBtn, musicLyricsAiPrepBtn, musicLyricsMixMatchBtn, musicLyricsVocalAbBtn, musicLyricsScarlettBtn;
     TextView musicLyricsAiStatusText;
 
     // Apple Music Title Row
@@ -549,15 +549,25 @@ public partial class MainActivity {
             bool next = !store.LiveMicEnabled;
             if (next) {
                 RequestRecordAudioPermissionIfNeeded();
+                if (!store.ProAudioEnabled) {
+                    store.ProAudioEnabled = true;
+                }
             }
             store.LiveMicEnabled = next;
             if (proAudioLiveMicSwitch != null && proAudioLiveMicSwitch.Checked != next) {
                 proAudioLiveMicSwitch.Checked = next;
             }
+            ApplyAndRefreshProAudio();
             ApplyAndRefreshVocalChain();
             RefreshLyricsSingDockUi();
         });
         singChipsRow.AddView(musicLyricsLiveMicBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+
+        musicLyricsMicSourceBtn = MakeSingDockChip(S["SingDockMicSrcPhoneChip"], () => {
+            int nextSrc = (Math.Clamp(store.ProAudioMicSource, 0, 2) + 1) % 3;
+            ApplyMicSourceSelection((Cavernize.Logic.Spatial.ProAudioMicSource)nextSrc, showFeedbackToast: true);
+        });
+        singChipsRow.AddView(musicLyricsMicSourceBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
 
         musicLyricsMixMatchBtn = MakeSingDockChip(S["SingDockMixMatchChip"], ShowAutoVocalMixMatchModal);
         singChipsRow.AddView(musicLyricsMixMatchBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });

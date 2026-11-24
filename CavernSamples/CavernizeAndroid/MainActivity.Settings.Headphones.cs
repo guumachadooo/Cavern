@@ -34,6 +34,51 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    static readonly AutoEqNeutralTarget[] AutoEqTargetUiOrder = [
+        AutoEqNeutralTarget.NativeAutoEqProfile,
+        AutoEqNeutralTarget.Bk5128Jm1Neutral,
+        AutoEqNeutralTarget.HarmanNeutralNoBass,
+        AutoEqNeutralTarget.DiffuseFieldNeutral,
+        AutoEqNeutralTarget.Bk5128DiffuseField
+    ];
+
+    TextView autoEqTargetDescText;
+
+    static int AutoEqTargetToUiIndex(int targetIndex) {
+        AutoEqNeutralTarget target = (AutoEqNeutralTarget)Math.Clamp(
+            targetIndex,
+            (int)AutoEqNeutralTarget.DiffuseFieldNeutral,
+            (int)AutoEqNeutralTarget.NativeAutoEqProfile);
+        int idx = Array.IndexOf(AutoEqTargetUiOrder, target);
+        return idx >= 0 ? idx : 0;
+    }
+
+    static int AutoEqUiIndexToTargetIndex(int uiIndex) =>
+        (int)AutoEqTargetUiOrder[Math.Clamp(uiIndex, 0, AutoEqTargetUiOrder.Length - 1)];
+
+    void UpdateAutoEqTargetDescriptionText() {
+        if (autoEqTargetDescText == null) {
+            return;
+        }
+        AutoEqNeutralTarget target = (AutoEqNeutralTarget)Math.Clamp(
+            store.AutoEqTargetIndex,
+            (int)AutoEqNeutralTarget.DiffuseFieldNeutral,
+            (int)AutoEqNeutralTarget.NativeAutoEqProfile);
+        (string key, Color color) = target switch {
+            AutoEqNeutralTarget.NativeAutoEqProfile => ("AutoEqTargetDescNative", OneUiTheme.TextMuted),
+            AutoEqNeutralTarget.Bk5128Jm1Neutral => ("AutoEqTargetDescJm1", OneUiTheme.TextMuted),
+            AutoEqNeutralTarget.HarmanNeutralNoBass => ("AutoEqTargetDescLightBass", OneUiTheme.TextMuted),
+            AutoEqNeutralTarget.DiffuseFieldNeutral => ("AutoEqTargetDescDfNeutral", OneUiTheme.FunctionalAmber),
+            AutoEqNeutralTarget.Bk5128DiffuseField => ("AutoEqTargetDescBk5128Df", OneUiTheme.FunctionalAmber),
+            _ => ("AutoEqTargetDescNative", OneUiTheme.TextMuted)
+        };
+        string next = S[key];
+        if (!string.Equals(autoEqTargetDescText.Text, next, StringComparison.Ordinal)) {
+            autoEqTargetDescText.Text = next;
+        }
+        autoEqTargetDescText.SetTextColor(color);
+    }
+
     void BuildSettingsHeadphonesCards() {
         LinearLayout rendCard = Card(S["CalibTitle"], OneUiIconType.Headphones, OneUiTheme.IconStemsCalib);
 
@@ -105,20 +150,29 @@ public partial class MainActivity {
 
         autoEqTargetSelector = new OneUiInlineSelector(this, S["AutoEqTargetTitle"]);
         string[] targetNames = [
-            S["AutoEqTargetDfNeutral"],
-            S["AutoEqTargetBk5128Df"],
+            S["AutoEqTargetNative"],
             S["AutoEqTargetBk5128Jm1"],
             S["AutoEqTargetHarmanNoBass"],
-            S["AutoEqTargetNative"]
+            S["AutoEqTargetDfNeutral"],
+            S["AutoEqTargetBk5128Df"]
         ];
-        autoEqTargetSelector.SetItems(targetNames, Math.Clamp(store.AutoEqTargetIndex, 0, targetNames.Length - 1));
+        autoEqTargetSelector.SetItems(targetNames, AutoEqTargetToUiIndex(store.AutoEqTargetIndex));
         autoEqTargetSelector.SelectionChanged += pos => {
-            store.AutoEqTargetIndex = pos;
+            store.AutoEqTargetIndex = AutoEqUiIndexToTargetIndex(pos);
             ApplyAutoEqRespectingRoute();
             audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
             RefreshAutoEqUi();
         };
-        rendCard.AddView(WrapControlWithHelp(autoEqTargetSelector, S["AutoEqTargetTitle"], S["TipAutoEqTarget"], bottomMarginDp: 8));
+        rendCard.AddView(WrapControlWithHelp(autoEqTargetSelector, S["AutoEqTargetTitle"], S["TipAutoEqTarget"], bottomMarginDp: 2));
+
+        autoEqTargetDescText = Label("", 11.2f, OneUiTheme.TextMuted);
+        autoEqTargetDescText.SetMaxLines(2);
+        autoEqTargetDescText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        rendCard.AddView(autoEqTargetDescText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(1),
+            BottomMargin = Dp(8)
+        });
+        UpdateAutoEqTargetDescriptionText();
 
         autoEqDoubleEqGuardSwitch = AddSwitchRow(rendCard, S["AutoEqDoubleEqGuardTitle"], store.AutoEqDoubleEqGuard, v => {
             store.AutoEqDoubleEqGuard = v;
@@ -700,11 +754,12 @@ public partial class MainActivity {
             autoEqAutoSwitchDeviceSwitch.Checked = store.AutoEqAutoSwitchByDevice;
         }
         if (autoEqTargetSelector != null) {
-            int idx = Math.Clamp(store.AutoEqTargetIndex, 0, 4);
+            int idx = AutoEqTargetToUiIndex(store.AutoEqTargetIndex);
             if (autoEqTargetSelector.SelectedIndex != idx) {
                 autoEqTargetSelector.SetSelection(idx, notify: false);
             }
         }
+        UpdateAutoEqTargetDescriptionText();
 
         if (settingsAutoEqTitleText != null) {
             bool hasProf = !string.IsNullOrWhiteSpace(store.AutoEqProfileName);

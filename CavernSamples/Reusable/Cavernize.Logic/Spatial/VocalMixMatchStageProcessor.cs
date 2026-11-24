@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Threading;
 
 using Cavern.Neural;
+using Cavern.ProAudio;
 using Cavern.Spatial;
 using Cavern.VocalChain;
 
@@ -25,6 +26,7 @@ public sealed class VocalMixMatchStageProcessor : ISpatialStageProcessor {
     long configVersion;
     long appliedConfigVersion;
     volatile VocalConfigSnapshot pendingSnapshot;
+    volatile HardwarePreAmpStateSnapshot activePreAmpSnapshot = HardwarePreAmpStateSnapshot.Empty;
     volatile int telemetryClearedFlag;
 
     /// <summary>Creates the Slot 2D live vocal processor with a clean neutral studio baseline (0 dB flat EQ).</summary>
@@ -91,6 +93,17 @@ public sealed class VocalMixMatchStageProcessor : ISpatialStageProcessor {
             }
             return tel;
         }
+    }
+
+    /// <summary>Latest lock-free Focusrite / USB hardware pre-ADC state snapshot bound to this vocal stage.</summary>
+    public HardwarePreAmpStateSnapshot HardwarePreAmpSnapshot => activePreAmpSnapshot;
+
+    /// <summary>Latest hardware pre-ADC gain-step epoch stored for Phase 3 <c>Slot 2D-SHIELD</c> FDKF reset.</summary>
+    public long LastGainStepEpoch => activePreAmpSnapshot?.GainStepEpoch ?? dsp.LastGainStepEpoch;
+
+    /// <summary>Updates the lock-free hardware pre-ADC state snapshot (Scarlett Air/Drive/ClipSafe/GainEpoch/MicSource).</summary>
+    public void UpdateHardwarePreAmpSnapshot(HardwarePreAmpStateSnapshot snapshot) {
+        activePreAmpSnapshot = snapshot ?? HardwarePreAmpStateSnapshot.Empty;
     }
 
     /// <summary>Currently loaded song vocal mix DNA profile.</summary>
@@ -290,14 +303,20 @@ public sealed class VocalMixMatchStageProcessor : ISpatialStageProcessor {
         int vocalOffset,
         int frameCount,
         float[] backingStereoInterleaved = null,
-        int backingOffset = 0) {
+        int backingOffset = 0,
+        HardwarePreAmpStateSnapshot preAmpSnapshot = null) {
         if (vocalStereoInterleaved == null || frameCount <= 0) {
             return;
         }
 
+        if (preAmpSnapshot != null) {
+            activePreAmpSnapshot = preAmpSnapshot;
+        }
+        HardwarePreAmpStateSnapshot effectivePreAmp = preAmpSnapshot ?? activePreAmpSnapshot;
+
         VocalConfigSnapshot snap = pendingSnapshot;
         if (snap != null && snap.Version != appliedConfigVersion) {
-            dsp.Configure(snap.SampleRate, snap.Dna, snap.Macros, snap.MatchEqDeltasDb);
+            dsp.Configure(snap.SampleRate, snap.Dna, snap.Macros, snap.MatchEqDeltasDb, effectivePreAmp);
             appliedConfigVersion = snap.Version;
         }
 
@@ -307,7 +326,8 @@ public sealed class VocalMixMatchStageProcessor : ISpatialStageProcessor {
             vocalOffset,
             frameCount,
             backingStereoInterleaved,
-            backingOffset);
+            backingOffset,
+            effectivePreAmp);
     }
 
     /// <inheritdoc/>

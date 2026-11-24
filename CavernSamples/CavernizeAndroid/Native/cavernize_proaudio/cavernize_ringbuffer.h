@@ -14,6 +14,7 @@
 #define CAV_STORE_REL(x, v) (x).store((v), std::memory_order_release)
 #define CAV_STORE_RLX(x, v) (x).store((v), std::memory_order_relaxed)
 #define CAV_FETCH_ADD_RLX(x, v) (x).fetch_add((v), std::memory_order_relaxed)
+#define CAV_CAS_WEAK_U64(x, expected, desired) (x).compare_exchange_weak((expected), (desired), std::memory_order_acq_rel, std::memory_order_acquire)
 #else
 #include <stdatomic.h>
 #define CAV_ATOMIC_U32 _Atomic uint32_t
@@ -23,6 +24,7 @@
 #define CAV_STORE_REL(x, v) atomic_store_explicit(&(x), (v), memory_order_release)
 #define CAV_STORE_RLX(x, v) atomic_store_explicit(&(x), (v), memory_order_relaxed)
 #define CAV_FETCH_ADD_RLX(x, v) atomic_fetch_add_explicit(&(x), (v), memory_order_relaxed)
+#define CAV_CAS_WEAK_U64(x, expected, desired) atomic_compare_exchange_weak_explicit(&(x), &(expected), (desired), memory_order_acq_rel, memory_order_acquire)
 #endif
 
 /* Cache-line aligned (64B) zero-allocation Single-Producer Single-Consumer (SPSC)
@@ -40,6 +42,11 @@ typedef struct CavRingBuffer {
     uint8_t pad2[60];
     CAV_ATOMIC_U64 overruns;
     CAV_ATOMIC_U64 underruns;
+    uint8_t pad3[48];
+    /* Packed (generation << 32) | snapshot_write_idx for lock-free SPSC consumer flush */
+    CAV_ATOMIC_U64 flush_state;
+    uint8_t pad4[56];
+    CAV_ATOMIC_U64 consumer_flush_state;
 } CavRingBuffer;
 
 static inline int cav_rb_init(CavRingBuffer* rb, float* backing_storage, uint32_t power_of_two_samples, uint32_t channels) {
@@ -58,6 +65,8 @@ static inline int cav_rb_init(CavRingBuffer* rb, float* backing_storage, uint32_
     CAV_STORE_RLX(rb->read_idx, 0u);
     CAV_STORE_RLX(rb->overruns, 0u);
     CAV_STORE_RLX(rb->underruns, 0u);
+    CAV_STORE_RLX(rb->flush_state, 0u);
+    CAV_STORE_RLX(rb->consumer_flush_state, 0u);
     return 0;
 }
 
@@ -65,13 +74,36 @@ static inline void cav_rb_reset(CavRingBuffer* rb) {
     if (!rb) return;
     CAV_STORE_REL(rb->read_idx, 0u);
     CAV_STORE_REL(rb->write_idx, 0u);
+    CAV_STORE_REL(rb->flush_state, 0u);
+    CAV_STORE_REL(rb->consumer_flush_state, 0u);
     CAV_STORE_RLX(rb->overruns, 0u);
     CAV_STORE_RLX(rb->underruns, 0u);
 }
 
+static inline void cav_rb_request_flush(CavRingBuffer* rb) {
+    if (!rb || rb->capacity_samples == 0u) return;
+    uint64_t old_state = CAV_LOAD_ACQ(rb->flush_state);
+    uint64_t desired;
+    do {
+        uint32_t next_gen = (uint32_t)(old_state >> 32) + 1u;
+        if (next_gen == 0u) next_gen = 1u;
+        uint32_t w = CAV_LOAD_ACQ(rb->write_idx);
+        desired = (((uint64_t)next_gen) << 32) | (uint64_t)w;
+    } while (!CAV_CAS_WEAK_U64(rb->flush_state, old_state, desired));
+}
+
 static inline uint32_t cav_rb_avail_read_frames(const CavRingBuffer* rb) {
+    if (!rb || rb->channels == 0u) return 0u;
+    uint64_t fs = CAV_LOAD_ACQ(rb->flush_state);
+    uint64_t cfs = CAV_LOAD_ACQ(rb->consumer_flush_state);
+    uint32_t r = CAV_LOAD_ACQ(rb->read_idx);
     uint32_t w = CAV_LOAD_ACQ(rb->write_idx);
-    uint32_t r = CAV_LOAD_RLX(rb->read_idx);
+    if (fs != cfs) {
+        uint32_t target_w = (uint32_t)(fs & 0xFFFFFFFFu);
+        if (target_w < rb->capacity_samples) {
+            r = target_w;
+        }
+    }
     return ((w - r) & rb->mask) / rb->channels;
 }
 
@@ -110,11 +142,25 @@ static inline uint32_t cav_rb_read(CavRingBuffer* rb, float* dst, uint32_t frame
     if (!rb || !dst || frames == 0u) return 0u;
     uint32_t w = CAV_LOAD_ACQ(rb->write_idx);
     uint32_t r = CAV_LOAD_RLX(rb->read_idx);
+    uint64_t fs = CAV_LOAD_ACQ(rb->flush_state);
+    uint64_t cfs = CAV_LOAD_RLX(rb->consumer_flush_state);
+    int flushed = 0;
+    if (fs != cfs) {
+        uint32_t target_w = (uint32_t)(fs & 0xFFFFFFFFu);
+        if (target_w < rb->capacity_samples) {
+            r = target_w;
+            CAV_STORE_REL(rb->read_idx, r);
+        }
+        CAV_STORE_REL(rb->consumer_flush_state, fs);
+        flushed = 1;
+    }
     uint32_t avail_frames = ((w - r) & rb->mask) / rb->channels;
 
     uint32_t take = frames;
     if (take > avail_frames) {
-        CAV_FETCH_ADD_RLX(rb->underruns, 1u);
+        if (!flushed) {
+            CAV_FETCH_ADD_RLX(rb->underruns, 1u);
+        }
         take = avail_frames;
     }
 
@@ -134,6 +180,31 @@ static inline uint32_t cav_rb_read(CavRingBuffer* rb, float* dst, uint32_t frame
         memset(dst + (size_t)take * rb->channels, 0, (size_t)(frames - take) * rb->channels * sizeof(float));
     }
     return take;
+}
+
+/* Consumer-thread-only SPSC-safe discard of oldest queued frames, keeping at most keep_max_frames newest frames. */
+static inline uint32_t cav_rb_discard_oldest(CavRingBuffer* rb, uint32_t keep_max_frames) {
+    if (!rb || rb->capacity_samples == 0u || rb->channels == 0u) return 0u;
+    uint32_t w = CAV_LOAD_ACQ(rb->write_idx);
+    uint32_t r = CAV_LOAD_RLX(rb->read_idx);
+    uint64_t fs = CAV_LOAD_ACQ(rb->flush_state);
+    uint64_t cfs = CAV_LOAD_RLX(rb->consumer_flush_state);
+    if (fs != cfs) {
+        uint32_t target_w = (uint32_t)(fs & 0xFFFFFFFFu);
+        if (target_w < rb->capacity_samples) {
+            r = target_w;
+            CAV_STORE_REL(rb->read_idx, r);
+        }
+        CAV_STORE_REL(rb->consumer_flush_state, fs);
+    }
+    uint32_t avail_frames = ((w - r) & rb->mask) / rb->channels;
+    if (avail_frames <= keep_max_frames) {
+        return 0u;
+    }
+    uint32_t drop_frames = avail_frames - keep_max_frames;
+    uint32_t drop_samples = drop_frames * rb->channels;
+    CAV_STORE_REL(rb->read_idx, (r + drop_samples) & rb->mask);
+    return drop_frames;
 }
 
 #endif /* CAVERNIZE_RINGBUFFER_H */

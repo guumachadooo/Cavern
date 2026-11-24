@@ -977,9 +977,35 @@ public sealed class SyncedVideoStageView : FrameLayout, TextureView.ISurfaceText
 /// - Manual browse automatically clears depth blur so all lines stay crisp while scrolling
 /// </summary>
 public sealed class AppleMusicLyricsView : View {
+    sealed class VisualLineBounds {
+        public float LeftX;
+        public float RightX;
+        public float TopY;
+        public float BottomY;
+    }
+
+    sealed class WordSegment {
+        public int LineIndex;
+        public float LeftX;
+        public float RightX;
+        public float TopY;
+        public float BottomY;
+        public float OffsetInWord;
+    }
+
+    sealed class WordSpanInfo {
+        public double StartSec;
+        public double EndSec;
+        public List<WordSegment> Segments = [];
+        public float TotalWidth;
+    }
+
     sealed class LineLayoutInfo {
         public LyricCue Cue;
         public StaticLayout Layout;
+        public VisualLineBounds[] VisualLines;
+        public List<WordSpanInfo> WordSpans;
+        public bool HasWordTiming => WordSpans != null && WordSpans.Count > 0;
         public bool IsInstrumental;
         public double StartSec;
         public double EndSec;
@@ -993,12 +1019,21 @@ public sealed class AppleMusicLyricsView : View {
     readonly TextPaint linePaint = new(PaintFlags.AntiAlias);
     readonly TextPaint emptyPaint = new(PaintFlags.AntiAlias);
     readonly Paint dotPaint = new(PaintFlags.AntiAlias);
+    readonly Paint syllableGlowPaint = new(PaintFlags.AntiAlias);
+    readonly RectF tempClipRect = new();
+    readonly RectF tempGlowRect = new();
     readonly int touchSlop;
 
     LyricsDocument document = new();
     double currentSeconds;
+    double anchorTrackSec;
+    long anchorUptimeMs;
+    bool hasAnchor;
     bool isPlaying;
     string emptyMessage = "";
+    StaticLayout emptyLayout;
+    string lastEmptyMsg;
+    int lastEmptyWidth = -1;
 
     int lastBuiltWidth;
     float totalContentHeight;
@@ -1023,12 +1058,27 @@ public sealed class AppleMusicLyricsView : View {
         emptyPaint.TextSize = 14.5f * dp;
         emptyPaint.Color = OneUiTheme.TextSub;
         dotPaint.SetStyle(Paint.Style.Fill);
+        syllableGlowPaint.SetStyle(Paint.Style.Fill);
+    }
+
+    double GetEffectiveSeconds(long nowMs) {
+        if (!hasAnchor) {
+            return Math.Max(0.0, currentSeconds);
+        }
+        double elapsed = isPlaying ? Math.Max(0L, nowMs - anchorUptimeMs) * 0.001 : 0.0;
+        return Math.Max(0.0, anchorTrackSec + elapsed);
     }
 
     public void SetLyrics(LyricsDocument doc, string emptyText, Color _) {
         document = doc ?? new LyricsDocument();
         emptyMessage = emptyText ?? "";
+        emptyLayout = null;
+        lastEmptyWidth = -1;
         lastBuiltWidth = -1;
+        hasAnchor = false;
+        anchorTrackSec = 0;
+        anchorUptimeMs = 0;
+        currentSeconds = 0;
         scrollOffsetPx = 0f;
         targetScrollOffsetPx = 0f;
         manualBrowseUntilMs = 0;
@@ -1038,10 +1088,25 @@ public sealed class AppleMusicLyricsView : View {
     }
 
     public void UpdatePlayback(double seconds, bool playing) {
-        bool stateChanged = Math.Abs(currentSeconds - seconds) > 0.03 || isPlaying != playing;
-        currentSeconds = seconds;
+        long nowMs = SystemClock.UptimeMillis();
+        double predSec = GetEffectiveSeconds(nowMs);
+        double delta = seconds - predSec;
+        bool seekOrReset = !hasAnchor || isPlaying != playing || !playing || delta < -0.05 || delta > 0.15;
+
+        if (seekOrReset) {
+            anchorTrackSec = Math.Max(0.0, seconds);
+            anchorUptimeMs = nowMs;
+            hasAnchor = true;
+        } else {
+            // Gentle PLL correction against telemetry clock without backwards micro-jitter
+            anchorTrackSec = Math.Max(predSec - 0.002, predSec + delta * 0.25);
+            anchorUptimeMs = nowMs;
+        }
+
+        currentSeconds = Math.Max(0.0, seconds);
         isPlaying = playing;
-        if (stateChanged && Visibility == ViewStates.Visible) {
+
+        if ((seekOrReset || isPlaying) && Visibility == ViewStates.Visible) {
             PostInvalidateOnAnimation();
         }
     }
@@ -1104,9 +1169,18 @@ public sealed class AppleMusicLyricsView : View {
                 .SetIncludePad(false)
                 .Build();
             float h = sl.Height;
+            double lineEndSec = cue.EndTimeSeconds.HasValue && cue.EndTimeSeconds.Value > cue.TimeSeconds
+                ? cue.EndTimeSeconds.Value
+                : (i + 1 < document.Lines.Count ? document.Lines[i + 1].TimeSeconds : cue.TimeSeconds + 60.0);
+            VisualLineBounds[] vlines = BuildVisualLines(sl);
+            List<WordSpanInfo> wordSpans = (document.IsSynced && cue.Words != null && cue.Words.Count > 0 && !string.IsNullOrWhiteSpace(trimmed))
+                ? BuildWordSpans(txt, sl, vlines, cue.Words, lineEndSec)
+                : null;
             cachedLines.Add(new LineLayoutInfo {
                 Cue = cue,
                 Layout = sl,
+                VisualLines = vlines,
+                WordSpans = wordSpans,
                 IsInstrumental = false,
                 StartSec = cue.TimeSeconds,
                 EndSec = i + 1 < document.Lines.Count ? document.Lines[i + 1].TimeSeconds : cue.TimeSeconds + 60.0,
@@ -1150,20 +1224,127 @@ public sealed class AppleMusicLyricsView : View {
         }
         totalContentHeight = y + 96f * dp;
 
-        int initActive = ResolveActiveIndex();
+        int initActive = ResolveActiveIndex(GetEffectiveSeconds(SystemClock.UptimeMillis()));
         for (int i = 0; i < cachedLines.Count; i++) {
             cachedLines[i].FocusProgress = (!document.IsSynced || i == initActive) ? 1f : 0f;
         }
     }
 
-    int ResolveActiveIndex() {
+    static VisualLineBounds[] BuildVisualLines(StaticLayout sl) {
+        int count = Math.Max(0, sl.LineCount);
+        VisualLineBounds[] arr = new VisualLineBounds[count];
+        for (int li = 0; li < count; li++) {
+            arr[li] = new VisualLineBounds {
+                LeftX = sl.GetLineLeft(li),
+                RightX = sl.GetLineRight(li),
+                TopY = sl.GetLineTop(li),
+                BottomY = sl.GetLineBottom(li)
+            };
+        }
+        return arr;
+    }
+
+    static List<WordSpanInfo> BuildWordSpans(
+        string txt,
+        StaticLayout sl,
+        VisualLineBounds[] vlines,
+        IReadOnlyList<LyricWordCue> words,
+        double lineEndSec) {
+        if (string.IsNullOrEmpty(txt) || vlines.Length == 0 || words.Count == 0) {
+            return null;
+        }
+        List<WordSpanInfo> spans = new(words.Count);
+        int cursor = 0;
+        for (int wi = 0; wi < words.Count; wi++) {
+            LyricWordCue w = words[wi];
+            string token = w.Text ?? "";
+            if (string.IsNullOrWhiteSpace(token)) {
+                continue;
+            }
+            string tTrim = token.Trim();
+            int charStart = -1;
+            int charEnd = -1;
+
+            int idx = txt.IndexOf(token, cursor, StringComparison.Ordinal);
+            if (idx >= 0) {
+                charStart = idx;
+                charEnd = idx + token.Length;
+            } else if (!string.IsNullOrEmpty(tTrim)) {
+                idx = txt.IndexOf(tTrim, cursor, StringComparison.Ordinal);
+                if (idx < 0) {
+                    idx = txt.IndexOf(tTrim, cursor, StringComparison.OrdinalIgnoreCase);
+                }
+                if (idx >= 0) {
+                    charStart = idx;
+                    charEnd = idx + tTrim.Length;
+                }
+            }
+
+            if (charStart < 0 || charEnd <= charStart) {
+                continue;
+            }
+            cursor = charEnd;
+            while (charStart < charEnd && char.IsWhiteSpace(txt[charStart])) charStart++;
+            while (charEnd > charStart && char.IsWhiteSpace(txt[charEnd - 1])) charEnd--;
+            if (charEnd <= charStart) {
+                continue;
+            }
+
+            double wStart = Math.Max(0.0, w.StartSeconds);
+            double wEnd = w.EndSeconds;
+            if (wEnd <= wStart) {
+                double nextStart = wi + 1 < words.Count ? words[wi + 1].StartSeconds : lineEndSec;
+                wEnd = Math.Max(wStart + 0.14, nextStart);
+            }
+
+            int startLine = Math.Clamp(sl.GetLineForOffset(charStart), 0, vlines.Length - 1);
+            int endLine = Math.Clamp(sl.GetLineForOffset(charEnd - 1), startLine, vlines.Length - 1);
+            WordSpanInfo span = new() {
+                StartSec = wStart,
+                EndSec = wEnd
+            };
+            float accumW = 0f;
+            for (int li = startLine; li <= endLine; li++) {
+                int ls = sl.GetLineStart(li);
+                int le = sl.GetLineEnd(li);
+                int s0 = Math.Max(charStart, ls);
+                int s1 = Math.Min(charEnd, le);
+                if (s1 <= s0) {
+                    continue;
+                }
+                float rawA = s0 == ls ? sl.GetLineLeft(li) : sl.GetPrimaryHorizontal(s0);
+                float rawB = s1 >= le ? sl.GetLineRight(li) : sl.GetPrimaryHorizontal(s1);
+                float lx = Math.Min(rawA, rawB);
+                float rx = Math.Max(rawA, rawB);
+                if (rx <= lx) {
+                    continue;
+                }
+                span.Segments.Add(new WordSegment {
+                    LineIndex = li,
+                    LeftX = lx,
+                    RightX = rx,
+                    TopY = vlines[li].TopY,
+                    BottomY = vlines[li].BottomY,
+                    OffsetInWord = accumW
+                });
+                accumW += rx - lx;
+            }
+            span.TotalWidth = accumW;
+            if (span.Segments.Count > 0) {
+                spans.Add(span);
+            }
+        }
+        return spans.Count > 0 ? spans : null;
+    }
+
+    int ResolveActiveIndex(double effectiveSec) {
         if (!document.IsSynced || cachedLines.Count == 0) {
             return -1;
         }
         int active = -1;
         for (int i = 0; i < cachedLines.Count; i++) {
             double triggerTime = cachedLines[i].IsInstrumental ? cachedLines[i].StartSec : cachedLines[i].Cue.TimeSeconds;
-            if (triggerTime <= currentSeconds + 0.14) {
+            if (triggerTime <= effectiveSec) {
                 active = i;
             } else {
                 break;
@@ -1182,14 +1363,18 @@ public sealed class AppleMusicLyricsView : View {
         if (!document.HasLyrics || (cachedLines.Count == 0 && lastBuiltWidth == Width)) {
             int msgW = Math.Max(40, (int)(w - 40f * dp));
             string msg = emptyMessage ?? "";
-            StaticLayout emptySl = StaticLayout.Builder
-                .Obtain(msg, 0, msg.Length, emptyPaint, msgW)
-                .SetAlignment(Android.Text.Layout.Alignment.AlignCenter)
-                .SetLineSpacing(3f * dp, 1.15f)
-                .Build();
+            if (emptyLayout == null || lastEmptyWidth != Width || !string.Equals(lastEmptyMsg, msg, StringComparison.Ordinal)) {
+                lastEmptyWidth = Width;
+                lastEmptyMsg = msg;
+                emptyLayout = StaticLayout.Builder
+                    .Obtain(msg, 0, msg.Length, emptyPaint, msgW)
+                    .SetAlignment(Android.Text.Layout.Alignment.AlignCenter)
+                    .SetLineSpacing(3f * dp, 1.15f)
+                    .Build();
+            }
             canvas.Save();
-            canvas.Translate((w - msgW) * 0.5f, Math.Max(20f * dp, (h - emptySl.Height) * 0.45f));
-            emptySl.Draw(canvas);
+            canvas.Translate((w - msgW) * 0.5f, Math.Max(20f * dp, (h - emptyLayout.Height) * 0.45f));
+            emptyLayout.Draw(canvas);
             canvas.Restore();
             return;
         }
@@ -1206,7 +1391,8 @@ public sealed class AppleMusicLyricsView : View {
         float dt = Math.Clamp((nowMs - lastFrameMs) / 1000f, 0.001f, 0.05f);
         lastFrameMs = nowMs;
 
-        int activeIdx = ResolveActiveIndex();
+        double effectiveSec = GetEffectiveSeconds(nowMs);
+        int activeIdx = ResolveActiveIndex(effectiveSec);
         float maxScroll = Math.Max(0f, totalContentHeight - h * 0.55f);
         bool manualActive = isDragging || nowMs < manualBrowseUntilMs;
 
@@ -1273,7 +1459,7 @@ public sealed class AppleMusicLyricsView : View {
                 if (isActive || easedFocus > 0.08f) {
                     hasActiveInstrumental = hasActiveInstrumental || isActive;
                     double dur = Math.Max(0.8, info.EndSec - info.StartSec);
-                    float prog = Math.Clamp((float)((currentSeconds - info.StartSec) / dur), 0f, 1f);
+                    float prog = Math.Clamp((float)((effectiveSec - info.StartSec) / dur), 0f, 1f);
                     float breathe = (float)(0.5 + 0.5 * Math.Sin(nowMs * 0.0046));
                     float scaleInst = 0.84f + 0.16f * easedFocus;
                     for (int d = 0; d < 3; d++) {
@@ -1311,15 +1497,19 @@ public sealed class AppleMusicLyricsView : View {
             canvas.Translate(padX, drawY);
             canvas.Scale(scale, scale, 0f, info.Height * 0.5f);
 
-            linePaint.Color = Color.Argb(totalAlpha, 255, 255, 255);
-            if (easedFocus > 0.25f) {
-                linePaint.SetShadowLayer(8f * dp * easedFocus, 0f, 0f,
-                    Color.Argb((int)Math.Round(56f * easedFocus * edgeFactor), 255, 255, 255));
+            if (isActive && info.HasWordTiming && easedFocus > 0.05f && info.VisualLines != null) {
+                DrawSyllableSyncedLine(canvas, info, effectiveSec, inactiveAlpha, easedFocus, edgeFactor, dp);
             } else {
+                linePaint.Color = Color.Argb(totalAlpha, 255, 255, 255);
+                if (easedFocus > 0.25f) {
+                    linePaint.SetShadowLayer(8f * dp * easedFocus, 0f, 0f,
+                        Color.Argb((int)Math.Round(56f * easedFocus * edgeFactor), 255, 255, 255));
+                } else {
+                    linePaint.ClearShadowLayer();
+                }
+                info.Layout.Draw(canvas);
                 linePaint.ClearShadowLayer();
             }
-            info.Layout.Draw(canvas);
-            linePaint.ClearShadowLayer();
 
             canvas.Restore();
 
@@ -1329,6 +1519,112 @@ public sealed class AppleMusicLyricsView : View {
         if ((anyAnimating || hasActiveInstrumental || isPlaying)
             && Visibility == ViewStates.Visible) {
             PostInvalidateOnAnimation();
+        }
+    }
+
+    void DrawSyllableSyncedLine(
+        Canvas canvas,
+        LineLayoutInfo info,
+        double effectiveSec,
+        float inactiveAlpha,
+        float easedFocus,
+        float edgeFactor,
+        float dp) {
+        // 1. Dim base pass for unsung words on the active line
+        float dimFrac = inactiveAlpha + (0.44f - inactiveAlpha) * easedFocus;
+        dimFrac += (Math.Max(dimFrac, 0.74f) - dimFrac) * manualClarity;
+        int dimAlpha = Math.Clamp((int)Math.Round(255f * dimFrac * edgeFactor), 10, 255);
+        linePaint.Color = Color.Argb(dimAlpha, 255, 255, 255);
+        linePaint.ClearShadowLayer();
+        info.Layout.Draw(canvas);
+
+        // 2. Soft highlight pill behind currently singing syllable(s)
+        int pillAlpha = Math.Clamp((int)Math.Round(28f * easedFocus * edgeFactor), 0, 48);
+        if (pillAlpha > 2) {
+            syllableGlowPaint.Color = Color.Argb(pillAlpha, 255, 255, 255);
+            for (int wi = 0; wi < info.WordSpans.Count; wi++) {
+                WordSpanInfo ws = info.WordSpans[wi];
+                if (effectiveSec <= ws.StartSec || effectiveSec >= ws.EndSec) {
+                    continue;
+                }
+                float wDur = (float)Math.Max(0.05, ws.EndSec - ws.StartSec);
+                float prog = Math.Clamp((float)((effectiveSec - ws.StartSec) / wDur), 0f, 1f);
+                float filledInWord = ws.TotalWidth * prog;
+                for (int si = 0; si < ws.Segments.Count; si++) {
+                    WordSegment seg = ws.Segments[si];
+                    float segW = Math.Max(0.5f, seg.RightX - seg.LeftX);
+                    float segProg = Math.Clamp((filledInWord - seg.OffsetInWord) / segW, 0f, 1f);
+                    if (segProg > 0f && segProg < 1f) {
+                        tempGlowRect.Set(seg.LeftX - 3f * dp, seg.TopY + 1f * dp, seg.RightX + 3f * dp, seg.BottomY - 1f * dp);
+                        canvas.DrawRoundRect(tempGlowRect, 6f * dp, 6f * dp, syllableGlowPaint);
+                    }
+                }
+            }
+        }
+
+        // 3. Progressive bright glowing sweep per wrapped visual line (zero allocations)
+        int brightAlpha = Math.Clamp((int)Math.Round(255f * (0.44f + 0.56f * easedFocus) * edgeFactor), 10, 255);
+        int glowAlpha = Math.Clamp((int)Math.Round(88f * easedFocus * edgeFactor), 0, 120);
+        for (int li = 0; li < info.VisualLines.Length; li++) {
+            VisualLineBounds vline = info.VisualLines[li];
+            float lineBrightRightX = vline.LeftX;
+            bool hasAnyWordOnLine = false;
+            bool allLineDone = true;
+
+            for (int wi = 0; wi < info.WordSpans.Count; wi++) {
+                WordSpanInfo ws = info.WordSpans[wi];
+                float wDur = (float)Math.Max(0.05, ws.EndSec - ws.StartSec);
+                float prog = Math.Clamp((float)((effectiveSec - ws.StartSec) / wDur), 0f, 1f);
+                float filledInWord = ws.TotalWidth * prog;
+
+                for (int si = 0; si < ws.Segments.Count; si++) {
+                    WordSegment seg = ws.Segments[si];
+                    if (seg.LineIndex != li) {
+                        continue;
+                    }
+                    hasAnyWordOnLine = true;
+                    if (prog >= 1f) {
+                        if (seg.RightX > lineBrightRightX) {
+                            lineBrightRightX = seg.RightX;
+                        }
+                    } else if (prog > 0f) {
+                        float segW = Math.Max(0.5f, seg.RightX - seg.LeftX);
+                        float segProg = Math.Clamp((filledInWord - seg.OffsetInWord) / segW, 0f, 1f);
+                        if (segProg > 0f) {
+                            float sx = seg.LeftX + segW * segProg;
+                            if (sx > lineBrightRightX) {
+                                lineBrightRightX = sx;
+                            }
+                        }
+                        if (segProg < 1f) {
+                            allLineDone = false;
+                        }
+                    } else {
+                        allLineDone = false;
+                    }
+                }
+            }
+
+            if (!hasAnyWordOnLine || lineBrightRightX <= vline.LeftX + 0.25f) {
+                continue;
+            }
+
+            linePaint.Color = Color.Argb(brightAlpha, 255, 255, 255);
+            if (glowAlpha > 4) {
+                linePaint.SetShadowLayer(10f * dp * easedFocus, 0f, 0f, Color.Argb(glowAlpha, 255, 255, 255));
+            } else {
+                linePaint.ClearShadowLayer();
+            }
+            tempClipRect.Set(
+                vline.LeftX - 4f * dp,
+                vline.TopY - 3f * dp,
+                lineBrightRightX + (allLineDone ? 4f * dp : 0f),
+                vline.BottomY + 3f * dp);
+            canvas.Save();
+            canvas.ClipRect(tempClipRect);
+            info.Layout.Draw(canvas);
+            canvas.Restore();
+            linePaint.ClearShadowLayer();
         }
     }
 
@@ -1371,6 +1667,10 @@ public sealed class AppleMusicLyricsView : View {
                     foreach (var (rect, seekSec) in hitBoxes) {
                         if (rect.Contains(e.GetX(), ty)) {
                             manualBrowseUntilMs = 0;
+                            anchorTrackSec = Math.Max(0.0, seekSec);
+                            anchorUptimeMs = SystemClock.UptimeMillis();
+                            hasAnchor = true;
+                            currentSeconds = anchorTrackSec;
                             LineSeekRequested?.Invoke(seekSec);
                             PostInvalidateOnAnimation();
                             return true;

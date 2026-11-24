@@ -118,8 +118,8 @@ public sealed class AudioDeviceProfileBinding {
     /// <summary>Whether AutoEq neutral compensation is active for this device.</summary>
     public bool AutoEqEnabled { get; set; }
 
-    /// <summary>Saved <see cref="AutoEqNeutralTarget"/> index for this device.</summary>
-    public int AutoEqTargetIndex { get; set; } = (int)AutoEqNeutralTarget.DiffuseFieldNeutral;
+    /// <summary>Saved <see cref="AutoEqNeutralTarget"/> index for this device (defaults to Balanced Studio).</summary>
+    public int AutoEqTargetIndex { get; set; } = (int)AutoEqNeutralTarget.NativeAutoEqProfile;
 
     /// <summary>Saved binaural HRIR/BRIR profile ID (e.g. "sadie_d1_dfc", "direct_20", or empty to keep current).</summary>
     public string BinauralProfileId { get; set; } = string.Empty;

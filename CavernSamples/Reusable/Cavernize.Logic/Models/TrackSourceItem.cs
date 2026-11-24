@@ -38,6 +38,17 @@ public sealed class TrackSourceItem {
     public bool IsDynamicObject => !IsBed;
 
     /// <summary>
+    /// True when this element is driven by per-frame bitstream object trajectory metadata (e.g. Dolby Atmos / ADM objects)
+    /// rather than a fixed bed, virtual upmix slot, neural stem, or live microphone position.
+    /// </summary>
+    public bool HasDynamicTrajectory { get; }
+
+    /// <summary>
+    /// Stable source identity key (<c>TrackId:SourceIndex:ChannelOrLabel</c>) preserved across listener rebuilds.
+    /// </summary>
+    public string StableKey { get; }
+
+    /// <summary>
     /// True when the user can drag and pin this source in the interactive 6DoF 3D Room.
     /// </summary>
     public bool IsCustomDraggable => !IsBed || Layer == SourceLayer.NeuralStem || Layer == SourceLayer.RestoredResidual || Layer == SourceLayer.LiveMicrophone;
@@ -122,7 +133,9 @@ public sealed class TrackSourceItem {
         bool isLfe,
         ReferenceChannel? channel,
         Vector3 normalizedPosition,
-        SourceLayer? layer = null) {
+        SourceLayer? layer = null,
+        bool? hasDynamicTrajectory = null,
+        string stableKey = null) {
         Index = index;
         Name = name;
         IsBed = isBed;
@@ -130,7 +143,91 @@ public sealed class TrackSourceItem {
         Channel = channel;
         NormalizedPosition = normalizedPosition;
         DefaultNormalizedPosition = normalizedPosition;
-        Layer = layer ?? (isBed ? SourceLayer.Bed : SourceLayer.NativeObject);
+        SourceLayer resolvedLayer = layer ?? (isBed ? SourceLayer.Bed : SourceLayer.NativeObject);
+        Layer = resolvedLayer;
+        HasDynamicTrajectory = hasDynamicTrajectory ?? (!isBed && resolvedLayer == SourceLayer.NativeObject);
+        StableKey = string.IsNullOrEmpty(stableKey)
+            ? CreateStableKey(0, index, resolvedLayer, channel, name)
+            : stableKey;
+    }
+
+    /// <summary>
+    /// Clears any custom position pin: static beds, virtual upmixers, neural stems, and microphones restore to
+    /// <see cref="DefaultNormalizedPosition"/>, while dynamic objects (<see cref="HasDynamicTrajectory"/>) unlock
+    /// without overwriting their live trajectory coordinate.
+    /// </summary>
+    public void ResetPosition() {
+        HasCustomPosition = false;
+        CustomNormalizedPosition = Vector3.Zero;
+        if (!HasDynamicTrajectory) {
+            NormalizedPosition = DefaultNormalizedPosition;
+        }
+    }
+
+    /// <summary>
+    /// Returns true when <paramref name="channel"/> represents an overhead/ceiling height speaker position.
+    /// </summary>
+    public static bool IsHeightChannel(ReferenceChannel? channel) {
+        if (!channel.HasValue) {
+            return false;
+        }
+        return channel.Value switch {
+            ReferenceChannel.TopFrontLeft or
+            ReferenceChannel.TopFrontRight or
+            ReferenceChannel.TopSideLeft or
+            ReferenceChannel.TopSideRight or
+            ReferenceChannel.TopFrontCenter or
+            ReferenceChannel.GodsVoice or
+            ReferenceChannel.TopRearLeft or
+            ReferenceChannel.TopRearRight or
+            ReferenceChannel.TopRearCenter => true,
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// Builds a deterministic <c>TrackId:SourceIndex:ChannelName</c> key for preserving user overrides across rebuilds.
+    /// </summary>
+    public static string CreateStableKey(int trackId, int index, SourceLayer layer, ReferenceChannel? channel, string fallbackName = null) {
+        string channelToken = channel.HasValue && channel.Value != ReferenceChannel.Unknown
+            ? channel.Value.ToString()
+            : (!string.IsNullOrWhiteSpace(fallbackName) ? fallbackName.Trim() : layer.ToString());
+        return $"{trackId}:{index}:{channelToken}";
+    }
+
+    /// <summary>
+    /// Copies Solo, Mute, and custom 3D pin overrides from <paramref name="previousItems"/> onto matching items
+    /// in <paramref name="nextItems"/> (matched by <see cref="StableKey"/>, then fallback <see cref="Name"/>).
+    /// </summary>
+    public static void PreserveOverrides(IReadOnlyList<TrackSourceItem> nextItems, IReadOnlyList<TrackSourceItem> previousItems) {
+        if (nextItems == null || nextItems.Count == 0 || previousItems == null || previousItems.Count == 0) {
+            return;
+        }
+        Dictionary<string, TrackSourceItem> byKey = new(previousItems.Count, StringComparer.Ordinal);
+        Dictionary<string, TrackSourceItem> byName = new(previousItems.Count, StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < previousItems.Count; i++) {
+            TrackSourceItem prev = previousItems[i];
+            if (!string.IsNullOrEmpty(prev.StableKey) && !byKey.ContainsKey(prev.StableKey)) {
+                byKey[prev.StableKey] = prev;
+            }
+            if (!string.IsNullOrEmpty(prev.Name) && !byName.ContainsKey(prev.Name)) {
+                byName[prev.Name] = prev;
+            }
+        }
+        for (int i = 0; i < nextItems.Count; i++) {
+            TrackSourceItem next = nextItems[i];
+            if (!byKey.TryGetValue(next.StableKey ?? string.Empty, out TrackSourceItem matched) &&
+                (string.IsNullOrEmpty(next.Name) || !byName.TryGetValue(next.Name, out matched))) {
+                continue;
+            }
+            next.IsMuted = matched.IsMuted;
+            next.IsSolo = matched.IsSolo;
+            next.HasCustomPosition = matched.HasCustomPosition;
+            next.CustomNormalizedPosition = matched.CustomNormalizedPosition;
+            if (next.HasCustomPosition) {
+                next.NormalizedPosition = next.CustomNormalizedPosition;
+            }
+        }
     }
 
     /// <summary>
@@ -173,6 +270,7 @@ public sealed class TrackSourceItem {
             bedCount = objects.Count;
         }
 
+        int trackId = track?.Index ?? 0;
         int dynamicOrdinal = 1;
         for (int i = 0; i < objects.Count; i++) {
             Source src = objects[i];
@@ -188,6 +286,7 @@ public sealed class TrackSourceItem {
 
             bool isLfe = src.LFE || channel == ReferenceChannel.ScreenLFE;
             string name;
+            string stableToken;
             if (isBed && channel.HasValue && channel.Value != ReferenceChannel.Unknown) {
                 if (normPos == Vector3.Zero) {
                     normPos = ChannelPrototype.AlternativePositions[(int)channel.Value];
@@ -195,13 +294,27 @@ public sealed class TrackSourceItem {
                 string fullName = ChannelPrototype.Mapping[(int)channel.Value].Name;
                 string shortName = channel.Value.GetShortName();
                 name = $"#{i + 1} {fullName} ({shortName})";
+                stableToken = channel.Value.ToString();
             } else if (isBed) {
                 name = $"#{i + 1} Bed {i + 1}";
+                stableToken = $"Bed{i + 1}";
             } else {
-                name = $"#{i + 1} Object {dynamicOrdinal++} (3D)";
+                int ord = dynamicOrdinal++;
+                name = $"#{i + 1} Object {ord} (3D)";
+                stableToken = $"Object{ord}";
             }
 
-            items.Add(new TrackSourceItem(i, name, isBed, isLfe, channel, normPos));
+            SourceLayer layer = isBed ? SourceLayer.Bed : SourceLayer.NativeObject;
+            items.Add(new TrackSourceItem(
+                i,
+                name,
+                isBed,
+                isLfe,
+                channel,
+                normPos,
+                layer,
+                hasDynamicTrajectory: !isBed,
+                stableKey: CreateStableKey(trackId, i, layer, channel, stableToken)));
         }
         return items;
     }
@@ -222,6 +335,7 @@ public sealed class TrackSourceItem {
             envSize = new Vector3(10, 7, 10);
         }
 
+        int trackId = track?.Index ?? 0;
         SourceLayer[] layers = track?.ActiveSourceLayers;
         bool hasDirectBaseMatch = track?.Renderer?.Objects != null &&
             attachedSources.Count >= track.Renderer.Objects.Count;
@@ -245,11 +359,18 @@ public sealed class TrackSourceItem {
             Source src = attachedSources[i];
             Vector3 normPos = src.Position / envSize;
             ReferenceChannel ch = Renderer.ChannelFromPosition(normPos);
+            if (ch == ReferenceChannel.Unknown && normPos.Y > 0.10f) {
+                ch = Renderer.ChannelFromPosition(new Vector3(normPos.X, 1f, normPos.Z));
+            }
             bool isLfe = src.LFE || ch == ReferenceChannel.ScreenLFE;
             SourceLayer layer = layers != null && i < layers.Length
                 ? layers[i]
-                : (normPos.Y > 0.15f ? SourceLayer.VirtualHeight : SourceLayer.VirtualMatrix);
-            bool isBed = layer == SourceLayer.Bed || layer == SourceLayer.VirtualMatrix;
+                : (normPos.Y > 0.10f ? SourceLayer.VirtualHeight : SourceLayer.VirtualMatrix);
+            bool isHeightChannel = IsHeightChannel(ch);
+            if (layer == SourceLayer.VirtualMatrix && (normPos.Y > 0.10f || isHeightChannel)) {
+                layer = SourceLayer.VirtualHeight;
+            }
+            bool isBed = layer == SourceLayer.Bed || (layer == SourceLayer.VirtualMatrix && normPos.Y <= 0.10f && !isHeightChannel);
             string label;
             if (ch != ReferenceChannel.Unknown) {
                 string shortName = ch.GetShortName();
@@ -260,7 +381,17 @@ public sealed class TrackSourceItem {
                     ? $"#{i + 1} Virtual Height {i + 1}"
                     : $"#{i + 1} Virtual Upmix {i + 1}";
             }
-            items.Add(new TrackSourceItem(i, label, isBed, isLfe, ch != ReferenceChannel.Unknown ? ch : null, normPos, layer));
+            ReferenceChannel? resolvedCh = ch != ReferenceChannel.Unknown ? ch : null;
+            items.Add(new TrackSourceItem(
+                i,
+                label,
+                isBed,
+                isLfe,
+                resolvedCh,
+                normPos,
+                layer,
+                hasDynamicTrajectory: !isBed && layer == SourceLayer.NativeObject,
+                stableKey: CreateStableKey(trackId, i, layer, resolvedCh, label)));
         }
         return items;
     }

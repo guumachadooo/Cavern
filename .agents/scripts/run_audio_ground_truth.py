@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -889,6 +890,8 @@ def main() -> int:
         env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
         env["DOTNET_EnableDiagnostics"] = "0"
         env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
+        if dotnet == "/root/.dotnet/dotnet" and platform.machine().lower() in ("aarch64", "arm64"):
+            env.setdefault("DOTNET_GCHeapHardLimit", "20000000")
         env["GT_VERBOSE"] = "1" if args.verbose else "0"
         env["GT_SUITE_FILTER"] = args.suite
         env["GT_JSON_OUT"] = args.json

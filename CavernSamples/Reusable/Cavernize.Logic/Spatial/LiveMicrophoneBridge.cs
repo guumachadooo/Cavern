@@ -79,6 +79,7 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
     volatile bool isActive;
     volatile int sampleRate = 48000;
     volatile LiveMicRoutingMode routingMode = LiveMicRoutingMode.MonoChannel1;
+    volatile HardwarePreAmpStateSnapshot hardwarePreAmpSnapshot = HardwarePreAmpStateSnapshot.Empty;
     volatile float inputGainLinear = 1f;
     volatile float monitorLevel = 0.85f;
     volatile float rmsDbfs = -120f;
@@ -104,6 +105,9 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
 
     /// <summary>Active monitoring mix level in [0; 1.25].</summary>
     public float MonitorLevel => monitorLevel;
+
+    /// <summary>Latest lock-free Focusrite / USB hardware pre-ADC state snapshot.</summary>
+    public HardwarePreAmpStateSnapshot HardwarePreAmpSnapshot => hardwarePreAmpSnapshot;
 
     /// <summary>True while an MLS loopback round-trip latency measurement is in progress.</summary>
     public bool IsCalibratingLatency => activeCalibSession != null;
@@ -210,6 +214,14 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
             rmsDbfs = -120f;
             peakDbfs = -120f;
         }
+    }
+
+    /// <summary>
+    /// Publishes an immutable hardware pre-ADC snapshot (Scarlett Air/Drive/ClipSafe/GainEpoch/MicSource) lock-free
+    /// for Slot 2D vocal processing and Phase 3 <c>Slot 2D-SHIELD</c> covariance reset.
+    /// </summary>
+    public void UpdateHardwarePreAmpSnapshot(HardwarePreAmpStateSnapshot snapshot) {
+        hardwarePreAmpSnapshot = snapshot ?? HardwarePreAmpStateSnapshot.Empty;
     }
 
     /// <summary>
@@ -469,8 +481,8 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
             return false;
         }
 
-        // Keep capture backlog tightly bounded (< 3 blocks) to guarantee sample-locked Karaoke monitoring
-        TrimLatencyBacklog(Math.Max(256, frameCount * 2));
+        // Keep capture backlog tightly bounded (~2.7 ms @ 48 kHz) to guarantee low-latency live monitoring
+        TrimLatencyBacklog(Math.Max(frameCount, 128));
 
         // Compute equal-power 3D azimuth panning in Cavern world meters relative to head-tracked 6DoF listener pose
         float gainL;
@@ -509,7 +521,8 @@ public sealed class LiveMicrophoneBridge : ILiveMicrophoneProvider {
                     0,
                     chunk,
                     applyBackingSidechain ? stereoOutput : null,
-                    outOffset + done * 2);
+                    outOffset + done * 2,
+                    hardwarePreAmpSnapshot);
             }
 
             for (int f = 0; f < chunk; f++) {

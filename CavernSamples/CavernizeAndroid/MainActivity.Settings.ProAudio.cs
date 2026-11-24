@@ -34,7 +34,16 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    OneUiInlineSelector proAudioMicSourceSelector;
+
     void BuildSettingsProAudioCards() {
+        Cavernize.Logic.Spatial.ProAudioMicSource savedMicSrc =
+            (Cavernize.Logic.Spatial.ProAudioMicSource)Math.Clamp(store.ProAudioMicSource, 0, 2);
+        if (audioDeviceProfileManager != null) {
+            audioDeviceProfileManager.PreferredMicSource = savedMicSrc;
+        }
+        usbProAudioManager?.UpdateMicSource(savedMicSrc);
+
         // Pro-Audio Full-Duplex USB Engine (Path B libusb UAC2 + Path A AAudio Exclusive + Scarlett 2i2)
         LinearLayout proAudioCard = Card(S["ProAudioCardTitle"], OneUiIconType.Sliders, OneUiTheme.IconSpatial);
         proAudioEnabledSwitch = AddSwitchRow(proAudioCard, S["ProAudioEnableTitle"], store.ProAudioEnabled, v => {
@@ -51,7 +60,8 @@ public partial class MainActivity {
         });
 
         proAudioTelemetryText = Label("", 10.8f, OneUiTheme.TextMuted);
-        proAudioTelemetryText.SetSingleLine(true);
+        proAudioTelemetryText.SetSingleLine(false);
+        proAudioTelemetryText.SetMaxLines(2);
         proAudioTelemetryText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         proAudioCard.AddView(proAudioTelemetryText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
@@ -108,6 +118,21 @@ public partial class MainActivity {
             }
             ApplyAndRefreshProAudio();
         }, helpBody: S["TipProAudioLiveMic"]);
+
+        proAudioMicSourceSelector = new OneUiInlineSelector(this, S["ProAudioMicSourceTitle"]);
+        string[] micSourceLabels = [
+            S["ProAudioMicSrcPhone"],
+            S["ProAudioMicSrcUsb"],
+            S["ProAudioMicSrcAuto"]
+        ];
+        proAudioMicSourceSelector.SetItems(micSourceLabels, Math.Clamp(store.ProAudioMicSource, 0, micSourceLabels.Length - 1));
+        proAudioMicSourceSelector.SelectionChanged += pos => {
+            ApplyMicSourceSelection((Cavernize.Logic.Spatial.ProAudioMicSource)Math.Clamp(pos, 0, 2));
+        };
+        proAudioCard.AddView(proAudioMicSourceSelector, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(4),
+            BottomMargin = Dp(6)
+        });
 
         proAudioMicRouteSelector = new OneUiInlineSelector(this, S["ProAudioMicRouteTitle"]);
         string[] micRouteLabels = [
@@ -186,6 +211,31 @@ public partial class MainActivity {
 
     }
 
+    void ApplyMicSourceSelection(Cavernize.Logic.Spatial.ProAudioMicSource src, bool showFeedbackToast = false) {
+        if (store == null) {
+            return;
+        }
+        int clamped = Math.Clamp((int)src, 0, 2);
+        Cavernize.Logic.Spatial.ProAudioMicSource clean = (Cavernize.Logic.Spatial.ProAudioMicSource)clamped;
+        store.ProAudioMicSource = clamped;
+        if (audioDeviceProfileManager != null) {
+            audioDeviceProfileManager.PreferredMicSource = clean;
+            if (audioDeviceProfileManager.CurrentDevice != null) {
+                audioOutput?.UpdateOutputRoute(audioDeviceProfileManager.CurrentDevice);
+            }
+        }
+        usbProAudioManager?.UpdateMicSource(clean);
+        ApplyAndRefreshProAudio();
+        if (showFeedbackToast) {
+            string label = clean switch {
+                Cavernize.Logic.Spatial.ProAudioMicSource.UsbInterfaceMic => S["ProAudioMicSrcUsb"],
+                Cavernize.Logic.Spatial.ProAudioMicSource.Auto => S["ProAudioMicSrcAuto"],
+                _ => S["ProAudioMicSrcPhone"]
+            };
+            ShowToast(string.Format(S["ProAudioMicSrcSwitchedToast"], label));
+        }
+    }
+
     void ApplyAndRefreshProAudio() {
         if (store == null) {
             return;
@@ -225,6 +275,12 @@ public partial class MainActivity {
             int safeSrIdx = srIdx >= 0 ? srIdx : 0;
             if (proAudioSrSelector.SelectedIndex != safeSrIdx) {
                 proAudioSrSelector.SetSelection(safeSrIdx, notify: false);
+            }
+        }
+        if (proAudioMicSourceSelector != null) {
+            int srcIdx = Math.Clamp(store.ProAudioMicSource, 0, 2);
+            if (proAudioMicSourceSelector.SelectedIndex != srcIdx) {
+                proAudioMicSourceSelector.SetSelection(srcIdx, notify: false);
             }
         }
         if (proAudioMicRouteSelector != null) {
@@ -277,13 +333,16 @@ public partial class MainActivity {
                 nextCol = OneUiTheme.TextMuted;
             } else {
                 string syncMode = string.IsNullOrEmpty(diag.ClockSyncMode) ? "-" : diag.ClockSyncMode;
-                nextTel = string.Format(
+                string baseTel = string.Format(
                     S["ProAudioTelemetryFormat"],
                     syncMode,
                     diag.AsyncClockDriftPpm,
                     diag.OutputXRuns,
                     diag.InputXRuns,
                     diag.MicPeakDbfs);
+                string inSrc = string.IsNullOrEmpty(diag.ActiveInputSource) ? S["SingDockMicSrcPhoneChip"] : diag.ActiveInputSource;
+                string outMode = string.IsNullOrEmpty(diag.HeadphoneOutputMode) ? "-" : diag.HeadphoneOutputMode;
+                nextTel = $"{baseTel}\n{string.Format(S["ProAudioRouteTelemetryFmt"], inSrc, outMode)}";
                 nextCol = OneUiTheme.TextMuted;
             }
             if (!string.Equals(proAudioTelemetryText.Text, nextTel, StringComparison.Ordinal)) {
@@ -785,9 +844,16 @@ public partial class MainActivity {
             return;
         }
 
+        // Probe Step 0 + CmdInit1 + CmdInit2 + Gen 4 FCP control table BEFORE checking IsGen4FcpControlTableVerified
+        usbProAudioManager.TryInitializeScarlettControl(exitMsdMode: false);
+        st = usbProAudioManager.ScarlettState;
+
         if (st.Generation == ScarlettGeneration.Gen4 && !st.IsGen4FcpControlTableVerified) {
             LinearLayout gen4Content = new(this) { Orientation = Orientation.Vertical };
-            TextView gen4Hdr = Label($"{st.ModelName} (PID 0x{st.ProductId:X4})", 13f, OneUiTheme.Primary);
+            string hdrText = st.FirmwareVersion > 0
+                ? $"{st.ModelName} (PID 0x{st.ProductId:X4} · FW {st.FirmwareVersion})"
+                : $"{st.ModelName} (PID 0x{st.ProductId:X4})";
+            TextView gen4Hdr = Label(hdrText, 13f, OneUiTheme.Primary);
             gen4Hdr.Typeface = OneUiTheme.GetAppleFontBold(this);
             gen4Content.AddView(gen4Hdr, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
                 BottomMargin = Dp(6)
@@ -833,16 +899,30 @@ public partial class MainActivity {
             return;
         }
 
-        usbProAudioManager.TryInitializeScarlettControl(exitMsdMode: false);
         usbProAudioManager.ReadScarlettHardwareState();
         st = usbProAudioManager.ScarlettState;
+        bool hasCh2Preamp = st.ProductId != Scarlett2Protocol.PidScarlettSoloGen4;
+        bool hasDirectMonitor = st.ProductId != Scarlett2Protocol.PidScarlett4i4Gen4;
 
         LinearLayout content = new(this) { Orientation = Orientation.Vertical };
-        TextView modelHdr = Label($"{st.ModelName} (PID 0x{st.ProductId:X4})", 13f, OneUiTheme.Primary);
+        string verifiedHeader = st.FirmwareVersion > 0
+            ? $"{st.ModelName} (PID 0x{st.ProductId:X4} · FW {st.FirmwareVersion})"
+            : $"{st.ModelName} (PID 0x{st.ProductId:X4})";
+        TextView modelHdr = Label(verifiedHeader, 13f, OneUiTheme.Primary);
         modelHdr.Typeface = OneUiTheme.GetAppleFontBold(this);
         content.AddView(modelHdr, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(4)
+            BottomMargin = Dp(2)
         });
+
+        if (st.Generation == ScarlettGeneration.Gen4 && st.IsGen4FcpControlTableVerified) {
+            TextView fcpBadge = Label(
+                string.Format(S["ScarlettGen4VerifiedBadgeFmt"], st.FirmwareVersion),
+                11.0f,
+                OneUiTheme.FunctionalGreen);
+            content.AddView(fcpBadge, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(4)
+            });
+        }
 
         TextView safetyNote = Label(S["Scarlett48vSafetyNote"], 11.2f, OneUiTheme.PeachText);
         content.AddView(safetyNote, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
@@ -862,13 +942,13 @@ public partial class MainActivity {
         bool ch2Phantom = st.PhantomPowerCh2;
         AddSwitchRow(content, S["Scarlett48vCh1Title"], ch1Phantom, v => {
             ch1Phantom = v;
-            if (!st.SupportsIndependentPreampGain || linked) {
+            if (!st.SupportsIndependentPreampGain || !hasCh2Preamp || linked) {
                 ch2Phantom = v;
             }
             usbProAudioManager.SetScarlettPhantomPower(ch1Phantom, ch2Phantom);
         });
 
-        if (st.SupportsIndependentPreampGain) {
+        if (st.SupportsIndependentPreampGain && hasCh2Preamp) {
             AddDivider(content);
             AddSwitchRow(content, S["Scarlett48vCh2Title"], ch2Phantom, v => {
                 ch2Phantom = v;
@@ -890,7 +970,7 @@ public partial class MainActivity {
         air1Sel.SetItems(airLabels, Math.Clamp((int)air1, 0, airLabels.Length - 1));
         air1Sel.SelectionChanged += pos => {
             air1 = (ScarlettAirMode)pos;
-            if (linked) {
+            if (!hasCh2Preamp || linked) {
                 air2 = air1;
             }
             usbProAudioManager.SetScarlettAirMode(air1, air2);
@@ -900,66 +980,79 @@ public partial class MainActivity {
             BottomMargin = Dp(6)
         });
 
-        OneUiInlineSelector air2Sel = new(this, S["ScarlettAirCh2Title"]);
-        air2Sel.SetItems(airLabels, Math.Clamp((int)air2, 0, airLabels.Length - 1));
-        air2Sel.SelectionChanged += pos => {
-            air2 = (ScarlettAirMode)pos;
-            if (linked) {
-                air1 = air2;
-            }
-            usbProAudioManager.SetScarlettAirMode(air1, air2);
-        };
-        content.AddView(air2Sel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(6)
-        });
+        if (hasCh2Preamp) {
+            OneUiInlineSelector air2Sel = new(this, S["ScarlettAirCh2Title"]);
+            air2Sel.SetItems(airLabels, Math.Clamp((int)air2, 0, airLabels.Length - 1));
+            air2Sel.SelectionChanged += pos => {
+                air2 = (ScarlettAirMode)pos;
+                if (linked) {
+                    air1 = air2;
+                }
+                usbProAudioManager.SetScarlettAirMode(air1, air2);
+            };
+            content.AddView(air2Sel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(6)
+            });
+        }
 
         bool inst1 = st.InstrumentModeCh1;
         bool inst2 = st.InstrumentModeCh2;
         AddSwitchRow(content, S["ScarlettInstCh1Title"], inst1, v => {
             inst1 = v;
-            if (linked) {
+            if (!hasCh2Preamp || linked) {
                 inst2 = v;
             }
             usbProAudioManager.SetScarlettInstrumentMode(inst1, inst2);
         });
-        AddDivider(content);
-        AddSwitchRow(content, S["ScarlettInstCh2Title"], inst2, v => {
-            inst2 = v;
-            if (linked) {
-                inst1 = v;
+        if (hasCh2Preamp) {
+            AddDivider(content);
+            AddSwitchRow(content, S["ScarlettInstCh2Title"], inst2, v => {
+                inst2 = v;
+                if (linked) {
+                    inst1 = v;
+                }
+                usbProAudioManager.SetScarlettInstrumentMode(inst1, inst2);
+            });
+        }
+
+        if (hasDirectMonitor) {
+            AddDivider(content);
+            OneUiInlineSelector dmSel = new(this, S["ScarlettDirectMonTitle"]);
+            string[] dmLabels = [S["ScarlettDirectMonOff"], S["ScarlettDirectMonMono"], S["ScarlettDirectMonStereo"]];
+            dmSel.SetItems(dmLabels, Math.Clamp((int)st.DirectMonitor, 0, dmLabels.Length - 1));
+            dmSel.SelectionChanged += pos => {
+                usbProAudioManager.SetScarlettDirectMonitor((ScarlettDirectMonitorMode)pos);
+            };
+            content.AddView(dmSel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                TopMargin = Dp(4),
+                BottomMargin = Dp(6)
+            });
+
+            if (st.Generation == ScarlettGeneration.Gen4) {
+                AddSliderRow(content, S["ScarlettDirectMonMixTitle"], 0, 100, st.DirectMonitorMixPct, v => {
+                    usbProAudioManager.SetScarlettDirectMonitorMix(v);
+                }, "%", defaultValue: 50);
             }
-            usbProAudioManager.SetScarlettInstrumentMode(inst1, inst2);
-        });
+        }
 
-        AddDivider(content);
-        OneUiInlineSelector dmSel = new(this, S["ScarlettDirectMonTitle"]);
-        string[] dmLabels = [S["ScarlettDirectMonOff"], S["ScarlettDirectMonMono"], S["ScarlettDirectMonStereo"]];
-        dmSel.SetItems(dmLabels, Math.Clamp((int)st.DirectMonitor, 0, dmLabels.Length - 1));
-        dmSel.SelectionChanged += pos => {
-            usbProAudioManager.SetScarlettDirectMonitor((ScarlettDirectMonitorMode)pos);
-        };
-        content.AddView(dmSel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            TopMargin = Dp(4),
-            BottomMargin = Dp(6)
-        });
-
-        if (st.SupportsIndependentPreampGain) {
+        OneUiSeekBar gainBar1 = null;
+        OneUiSeekBar gainBar2 = null;
+        TextView autoGainStatusLabel = null;
+        if (st.SupportsIndependentPreampGain && hasCh2Preamp) {
             float g1 = st.InputGainCh1Db;
             float g2 = st.InputGainCh2Db;
             bool safe1 = st.ClipSafeCh1;
             bool safe2 = st.ClipSafeCh2;
-            bool outMute = st.OutputMute;
-            bool outDim = st.OutputDim;
 
             AddDivider(content);
-            AddSliderRow(content, S["ScarlettGainCh1Title"], 0, 69, (int)MathF.Round(g1), v => {
+            (gainBar1, _) = AddSliderRow(content, S["ScarlettGainCh1Title"], 0, 69, (int)MathF.Round(g1), v => {
                 g1 = v;
                 if (linked) {
                     g2 = v;
                 }
                 usbProAudioManager.SetScarlettGen4PreampGain(g1, g2);
             }, " dB", defaultValue: 24);
-            AddSliderRow(content, S["ScarlettGainCh2Title"], 0, 69, (int)MathF.Round(g2), v => {
+            (gainBar2, _) = AddSliderRow(content, S["ScarlettGainCh2Title"], 0, 69, (int)MathF.Round(g2), v => {
                 g2 = v;
                 if (linked) {
                     g1 = v;
@@ -968,7 +1061,7 @@ public partial class MainActivity {
             }, " dB", defaultValue: 24);
 
             // Gen 4 Hardware Auto Gain controls (Ch 1, Ch 2, Cancel + live status)
-            TextView autoGainStatusLabel = Label(
+            autoGainStatusLabel = Label(
                 string.Format(S["ScarlettAutoGainStatusFormat"], st.AutoGainStatusCh1, st.AutoGainStatusCh2),
                 11.2f,
                 OneUiTheme.TextSub);
@@ -1020,23 +1113,6 @@ public partial class MainActivity {
                     safe1 = v;
                 }
                 usbProAudioManager.SetScarlettGen4ClipSafe(safe1, safe2);
-            });
-            AddDivider(content);
-            AddSliderRow(content, S["ScarlettDirectMonMixTitle"], 0, 100, st.DirectMonitorMixPct, v => {
-                usbProAudioManager.SetScarlettDirectMonitorMix(v);
-            }, "%", defaultValue: 50);
-            AddSwitchRow(content, S["ScarlettOutputMuteTitle"], outMute, v => {
-                outMute = v;
-                usbProAudioManager.SetScarlettOutputMuteDim(outMute, outDim);
-            });
-            AddDivider(content);
-            AddSwitchRow(content, S["ScarlettOutputDimTitle"], outDim, v => {
-                outDim = v;
-                usbProAudioManager.SetScarlettOutputMuteDim(outMute, outDim);
-            });
-            AddDivider(content);
-            AddSwitchRow(content, S["ScarlettLoopbackTitle"], st.LoopbackEnabled, v => {
-                usbProAudioManager.SetScarlettLoopback(v);
             });
         }
 
@@ -1095,7 +1171,8 @@ public partial class MainActivity {
         nvramRow.AddView(msdBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         content.AddView(nvramRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
-        OneUiModalDialog.Show(
+        bool modalClosed = false;
+        Android.App.Dialog dlg = OneUiModalDialog.Show(
             this,
             S["ScarlettModalTitle"],
             customContent: content,
@@ -1104,6 +1181,34 @@ public partial class MainActivity {
             positiveText: S["CloseBtn"],
             onHelp: showScarlettHelp,
             helpContentDesc: S["ScarlettHelpTitle"]);
+
+        Java.Lang.Runnable scarlettPoll = null;
+        scarlettPoll = new Java.Lang.Runnable(() => {
+            if (modalClosed || uiDestroyed || usbProAudioManager == null) {
+                return;
+            }
+            ScarlettHardwareState cur = usbProAudioManager.ScarlettState;
+            if (autoGainStatusLabel != null &&
+                (cur.AutoGainStatusCh1 == ScarlettAutoGainStatus.Running ||
+                 cur.AutoGainStatusCh2 == ScarlettAutoGainStatus.Running)) {
+                if (usbProAudioManager.PollScarlettGen4AutoGainStatus(out ScarlettAutoGainStatus s1, out ScarlettAutoGainStatus s2)) {
+                    autoGainStatusLabel.Text = string.Format(S["ScarlettAutoGainStatusFormat"], s1, s2);
+                    ScarlettHardwareState updated = usbProAudioManager.ScarlettState;
+                    SyncSlider(gainBar1, (int)MathF.Round(updated.InputGainCh1Db), 0, 69, " dB");
+                    SyncSlider(gainBar2, (int)MathF.Round(updated.InputGainCh2Db), 0, 69, " dB");
+                }
+            }
+            uiHandler?.PostDelayed(scarlettPoll, 750);
+        });
+        uiHandler?.PostDelayed(scarlettPoll, 750);
+        if (dlg != null) {
+            dlg.DismissEvent += (_, _) => {
+                modalClosed = true;
+                if (scarlettPoll != null) {
+                    uiHandler?.RemoveCallbacks(scarlettPoll);
+                }
+            };
+        }
     }
 
     void ShowProAudioCreditsModal() {

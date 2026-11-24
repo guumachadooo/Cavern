@@ -247,8 +247,32 @@ public sealed class AppSettingsStore {
     }
 
     public int AutoEqTargetIndex {
-        get => prefs.GetInt("autoEqTargetIndex", (int)Cavern.Filters.AutoEqNeutralTarget.DiffuseFieldNeutral);
+        get => prefs.GetInt("autoEqTargetIndex", (int)Cavern.Filters.AutoEqNeutralTarget.NativeAutoEqProfile);
         set => Edit().PutInt("autoEqTargetIndex", value).Apply();
+    }
+
+    void MigrateLegacyAutoEqTargetDefault() {
+        if (prefs.GetBoolean("autoEqTargetDefaultMigratedW51", false)) {
+            return;
+        }
+        ISharedPreferencesEditor ed = Edit();
+        int nativeIdx = (int)Cavern.Filters.AutoEqNeutralTarget.NativeAutoEqProfile;
+        int legacyDfIdx = (int)Cavern.Filters.AutoEqNeutralTarget.DiffuseFieldNeutral;
+        if (prefs.Contains("autoEqTargetIndex") && prefs.GetInt("autoEqTargetIndex", nativeIdx) == legacyDfIdx) {
+            ed.PutInt("autoEqTargetIndex", nativeIdx);
+        }
+        List<Cavernize.Logic.Spatial.AudioDeviceProfileBinding> profiles = GetDeviceProfiles();
+        bool profilesChanged = false;
+        for (int i = 0; i < profiles.Count; i++) {
+            if (profiles[i].AutoEqTargetIndex == legacyDfIdx) {
+                profiles[i].AutoEqTargetIndex = nativeIdx;
+                profilesChanged = true;
+            }
+        }
+        if (profilesChanged) {
+            ed.PutString("deviceProfilesV1", System.Text.Json.JsonSerializer.Serialize(profiles));
+        }
+        ed.PutBoolean("autoEqTargetDefaultMigratedW51", true).Apply();
     }
 
     public bool AutoEqDoubleEqGuard {
@@ -857,6 +881,11 @@ public sealed class AppSettingsStore {
         set => Edit().PutInt("liveMicRoutingIdx", Math.Clamp(value, 0, 3)).Apply();
     }
 
+    public int ProAudioMicSource {
+        get => Math.Clamp(prefs.GetInt("proAudioMicSource", (int)Cavernize.Logic.Spatial.ProAudioMicSource.PhoneMic), 0, 2);
+        set => Edit().PutInt("proAudioMicSource", Math.Clamp(value, 0, 2)).Apply();
+    }
+
     public float LiveMicInputGainDb {
         get => prefs.GetFloat("liveMicInputGainDb", 0f);
         set => Edit().PutFloat("liveMicInputGainDb", Math.Clamp(value, -18f, 24f)).Apply();
@@ -888,6 +917,7 @@ public sealed class AppSettingsStore {
         LockedSampleRateHz = ProAudioLockedSampleRate,
         LiveMicEnabled = LiveMicEnabled,
         MicRouting = (Cavernize.Logic.Spatial.LiveMicRoutingMode)Math.Clamp(LiveMicRoutingIndex, 0, 3),
+        MicSource = (Cavernize.Logic.Spatial.ProAudioMicSource)Math.Clamp(ProAudioMicSource, 0, 2),
         MicInputGainDb = LiveMicInputGainDb,
         MicMonitorLevel = LiveMicMonitorLevel,
         CalibratedRoundTripSamples = CalibratedRoundTripSamples,
@@ -1461,6 +1491,7 @@ public sealed class AppSettingsStore {
         if (!string.IsNullOrEmpty(LanguageCode)) {
             LanguageSettings.CultureOverride = LanguageCode;
         }
+        MigrateLegacyAutoEqTargetDefault();
     }
 
     /// <summary>

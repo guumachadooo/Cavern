@@ -49,6 +49,7 @@ public sealed partial class RealtimePlayerEngine {
             hasRenderedAudio = false;
             crossfadeRemaining = 0;
             lastSourceMaskHash = 0;
+            OutputPipelineLatencySeconds = 0.0;
 
             if (neuralStemStage.ActiveSpatialUpmixTrack != null &&
                 !MatchesSeparatedTrack(neuralStemStage.ActiveSpatialUpmixTrack, track)) {
@@ -65,14 +66,13 @@ public sealed partial class RealtimePlayerEngine {
             lgsrStage.ClearExplicitLosslessStatus();
 
             neuralStemStage.SetSourceTrackSampleRate(track.SampleRate);
+            sourceItems = [];
             ConfigureListener(resetToStart: true);
-            if (!isRenderingLiveNeuralSources) {
-                sourceItems = TrackSourceItem.BuildFromAttachedSources(track, cachedActiveSources);
-                BindTrackToSceneHubLocked(track);
-            }
             sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
             sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
         }
+        outputFlushCallback?.Invoke();
+        SourcesRebuilt?.Invoke();
     }
 
     /// <summary>
@@ -125,13 +125,10 @@ public sealed partial class RealtimePlayerEngine {
 
             neuralStemStage.SetSourceTrackSampleRate(track.SampleRate);
             ConfigureListener(resetToStart: false);
-            if (!isRenderingLiveNeuralSources) {
-                sourceItems = TrackSourceItem.BuildFromAttachedSources(track, cachedActiveSources);
-                BindTrackToSceneHubLocked(track);
-            }
             sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
             IsPlaying = wasPlaying;
         }
+        SourcesRebuilt?.Invoke();
     }
 
     /// <summary>
@@ -156,9 +153,10 @@ public sealed partial class RealtimePlayerEngine {
     }
 
     /// <summary>
-    /// Seeks playback to <paramref name="seconds"/> with a clickless crossfade transition.
+    /// Seeks playback to <paramref name="seconds"/> with a clickless crossfade transition and flushes downstream output buffers.
     /// </summary>
     public void Seek(double seconds) {
+        bool didSeek = false;
         lock (renderLock) {
             if (currentTrack == null) {
                 return;
@@ -167,12 +165,18 @@ public sealed partial class RealtimePlayerEngine {
                 ArmCrossfadeLocked();
             }
             long targetSample = (long)Math.Round(seconds * currentTrack.SampleRate);
-            currentTrackSample = currentTrack.Seek(targetSample);
+            Volatile.Write(ref currentTrackSample, currentTrack.Seek(targetSample));
             currentTrackSampleExact = currentTrackSample;
             subBlockAvailableFrames = 0;
             subBlockReadOffset = 0;
             ConfigureListener(resetToStart: false);
             sceneHub.ResetStatefulStages();
+            OutputPipelineLatencySeconds = 0.0;
+            didSeek = true;
+        }
+        if (didSeek) {
+            outputFlushCallback?.Invoke();
+            SourcesRebuilt?.Invoke();
         }
     }
 
@@ -188,6 +192,7 @@ public sealed partial class RealtimePlayerEngine {
         }
 
         bool reachedEnd = false;
+        bool rebuiltSources = false;
         int totalFramesWritten = 0;
 
         lock (renderLock) {
@@ -229,51 +234,117 @@ public sealed partial class RealtimePlayerEngine {
 
             ApplyLiveParameters();
 
-            // Drain any previously staged sub-block frames first (used when Path B/A requests 64f or 128f bursts)
+            // When Path B/A requests sub-256f bursts (e.g. 64f/128f), stage backing track ONLY and bypass
+            // subBlockStaging for live microphone monitoring so live vocal path maintains 0 ms staging lag.
+            bool isSubBlockPath = subBlockAvailableFrames > 0 || (maxStereoFrames % updateRate) != 0;
+            bool hasRecordedPreview = isPreviewingRecordedPerformance && previewPerformanceTake != null && previewPerformanceTake.HasAudio;
+            bool liveMicActive = liveMicBridge.IsActive || liveMicBridge.IsCalibratingLatency;
+            bool deferLiveMicToDirectOutput = liveMicActive && !hasRecordedPreview && isSubBlockPath;
+
+            // Drain any previously staged sub-block backing frames first
             if (subBlockAvailableFrames > 0) {
                 int take = Math.Min(subBlockAvailableFrames, maxStereoFrames);
                 Array.Copy(subBlockStaging, subBlockReadOffset * 2, stereoOutput, 0, take * 2);
                 subBlockReadOffset += take;
                 subBlockAvailableFrames -= take;
                 totalFramesWritten += take;
-                if (totalFramesWritten >= maxStereoFrames) {
-                    return totalFramesWritten;
-                }
             }
 
             // If remaining request is smaller than updateRate (e.g., 64f/128f Path B/A burst),
-            // render one 256-frame block into subBlockStaging and deliver exact requested frames.
-            if (maxStereoFrames - totalFramesWritten < updateRate) {
-                int staged = RenderAlignedBlocksLocked(subBlockStaging, 0, updateRate, ref reachedEnd);
-                if (staged > 0) {
-                    int take = Math.Min(staged, maxStereoFrames - totalFramesWritten);
-                    Array.Copy(subBlockStaging, 0, stereoOutput, totalFramesWritten * 2, take * 2);
-                    subBlockReadOffset = take;
-                    subBlockAvailableFrames = staged - take;
-                    totalFramesWritten += take;
+            // render one 256-frame backing block into subBlockStaging and deliver exact requested frames.
+            if (totalFramesWritten < maxStereoFrames) {
+                if (maxStereoFrames - totalFramesWritten < updateRate) {
+                    int staged = RenderAlignedBlocksLocked(
+                        subBlockStaging,
+                        0,
+                        updateRate,
+                        mixLiveMic: !deferLiveMicToDirectOutput,
+                        ref reachedEnd,
+                        ref rebuiltSources);
+                    if (staged > 0) {
+                        int take = Math.Min(staged, maxStereoFrames - totalFramesWritten);
+                        Array.Copy(subBlockStaging, 0, stereoOutput, totalFramesWritten * 2, take * 2);
+                        subBlockReadOffset = take;
+                        subBlockAvailableFrames = staged - take;
+                        totalFramesWritten += take;
+                    }
+                } else {
+                    int alignedFrames = ((maxStereoFrames - totalFramesWritten) / updateRate) * updateRate;
+                    totalFramesWritten += RenderAlignedBlocksLocked(
+                        stereoOutput,
+                        totalFramesWritten * 2,
+                        alignedFrames,
+                        mixLiveMic: !deferLiveMicToDirectOutput,
+                        ref reachedEnd,
+                        ref rebuiltSources);
                 }
-            } else {
-                int alignedFrames = ((maxStereoFrames - totalFramesWritten) / updateRate) * updateRate;
-                totalFramesWritten += RenderAlignedBlocksLocked(stereoOutput, totalFramesWritten * 2, alignedFrames, ref reachedEnd);
+            }
+
+            if (deferLiveMicToDirectOutput && totalFramesWritten > 0) {
+                vocalMixMatchStage.EnsureSampleRate(listener.SampleRate);
+                liveMicBridge.MixIntoStereoOutputZeroGc(
+                    stereoOutput,
+                    0,
+                    totalFramesWritten,
+                    sceneHub.ListenerPose,
+                    Listener.EnvironmentSize,
+                    vocalProcessor: liveMicBridge.IsCalibratingLatency ? null : vocalMixMatchStage,
+                    applyBackingSidechain: true);
+                float ceilLin = truePeakLimiterPostStage.IsEnabled
+                    ? Math.Clamp(MathF.Pow(10f, truePeakLimiterPostStage.CeilingDbtp / 20f), 0.1f, 1f)
+                    : 1f;
+                for (int i = 0; i < totalFramesWritten * 2; i++) {
+                    stereoOutput[i] = Math.Clamp(stereoOutput[i], -ceilLin, ceilLin);
+                }
+                if (liveMicBridge.IsActive) {
+                    sceneHub.SetLiveMicrophoneDescriptor(liveMicBridge.BuildSceneDescriptor(Listener.EnvironmentSize, sceneHub.Sources.Count));
+                }
+                VocalChainTelemetry directVocalTel = vocalMixMatchStage.Telemetry;
+                SoundfieldTelemetry directMicTel = sceneHub.Telemetry;
+                directMicTel.LiveMicRmsDbfs = liveMicBridge.RmsDbfs;
+                directMicTel.LiveMicPeakDbfs = liveMicBridge.PeakDbfs;
+                directMicTel.FullDuplexRoundTripMs = liveMicBridge.RoundTripLatencyMs;
+                directMicTel.IsLiveMicActive = liveMicBridge.IsActive;
+                directMicTel.VocalChainInputDbfs = directVocalTel.InputDbfs;
+                directMicTel.VocalChainOutputDbfs = directVocalTel.OutputDbfs;
+                directMicTel.VocalChainGateReductionDb = directVocalTel.GateReductionDb;
+                directMicTel.VocalChainDeEsserReductionDb = directVocalTel.DeEsserReductionDb;
+                directMicTel.VocalChainCompressorReductionDb = directVocalTel.CompressorReductionDb;
+                directMicTel.VocalChainSidechainDuckDb = directVocalTel.SidechainPocketDuckDb;
+                directMicTel.VocalChainBypassed = vocalMixMatchStage.IsBypassed;
+                sceneHub.Telemetry = directMicTel;
+                sceneHub.VocalChainDiagnostics = directVocalTel;
             }
         }
 
+        if (rebuiltSources) {
+            SourcesRebuilt?.Invoke();
+        }
         if (reachedEnd) {
             PlaybackCompleted?.Invoke();
         }
         return totalFramesWritten;
     }
 
-    int RenderAlignedBlocksLocked(float[] stereoOutput, int baseSampleOffset, int maxAlignedFrames, ref bool reachedEnd) {
+    int RenderAlignedBlocksLocked(
+        float[] stereoOutput,
+        int baseSampleOffset,
+        int maxAlignedFrames,
+        bool mixLiveMic,
+        ref bool reachedEnd,
+        ref bool rebuiltSources) {
         int totalFramesWritten = 0;
 
             while (totalFramesWritten + updateRate <= maxAlignedFrames) {
                 if (currentTrack.Length > 0 && currentTrackSample >= currentTrack.Length) {
                     if (Loop) {
-                        currentTrackSample = currentTrack.Seek(0);
+                        Volatile.Write(ref currentTrackSample, currentTrack.Seek(0));
                         currentTrackSampleExact = currentTrackSample;
+                        subBlockAvailableFrames = 0;
+                        subBlockReadOffset = 0;
                         ConfigureListener(resetToStart: false);
                         ApplyLiveParameters();
+                        rebuiltSources = true;
                     } else {
                         IsPlaying = false;
                         reachedEnd = true;
@@ -299,6 +370,7 @@ public sealed partial class RealtimePlayerEngine {
                         }
                         ConfigureListener(resetToStart: false);
                         ApplyLiveParameters();
+                        rebuiltSources = true;
                     }
                 } else if (activeSep != null && activeSep.IsProgressiveStreaming && ShouldRenderLiveNeuralSourcesLocked()) {
                     if (hasRenderedAudio) {
@@ -306,6 +378,7 @@ public sealed partial class RealtimePlayerEngine {
                     }
                     ConfigureListener(resetToStart: false);
                     ApplyLiveParameters();
+                    rebuiltSources = true;
                 }
 
                 ApplySourceMutesAndProperties();
@@ -355,6 +428,11 @@ public sealed partial class RealtimePlayerEngine {
                 } else {
                     VirtualizerFilter.PreHrtfBusProcessor = null;
                 }
+                Source primarySource = isRenderingLiveNeuralSources
+                    ? (liveNeuralSources.Length > 0 ? liveNeuralSources[0] : null)
+                    : (cachedActiveSources.Length > 0 ? cachedActiveSources[0] : null);
+                long prevSourceSamples = primarySource != null ? primarySource.CumulativeSourceSamples : 0L;
+
                 IBinauralRenderer renderer = sceneHub.ActiveRenderer ?? virtualizerRenderer;
                 int blockFrames = renderer.RenderFrame(activeSceneFrame, stereoOutput, outOffset, requestedFrames);
                 if (blockFrames <= 0) {
@@ -383,7 +461,7 @@ public sealed partial class RealtimePlayerEngine {
                 // Mixed right before Slot 6 4x True-Peak Limiter so vocal + Karaoke + 1-4 kHz sidechain pocket never clip.
                 if (isPreviewingRecordedPerformance && previewPerformanceTake != null && previewPerformanceTake.HasAudio) {
                     MixRecordedPerformancePreviewZeroGc(previewPerformanceTake, stereoOutput, outOffset, blockFrames);
-                } else if (liveMicBridge.IsActive || liveMicBridge.IsCalibratingLatency) {
+                } else if (mixLiveMic && (liveMicBridge.IsActive || liveMicBridge.IsCalibratingLatency)) {
                     liveMicBridge.MixIntoStereoOutputZeroGc(
                         stereoOutput,
                         outOffset,
@@ -392,7 +470,7 @@ public sealed partial class RealtimePlayerEngine {
                         Listener.EnvironmentSize,
                         vocalProcessor: liveMicBridge.IsCalibratingLatency ? null : vocalMixMatchStage,
                         applyBackingSidechain: true);
-                } else {
+                } else if (!liveMicBridge.IsActive && !liveMicBridge.IsCalibratingLatency) {
                     vocalMixMatchStage.ClearTelemetryIfIdle();
                 }
 
@@ -457,9 +535,21 @@ public sealed partial class RealtimePlayerEngine {
 
                 RecordTailLocked(stereoOutput, outOffset, blockFrames);
 
-                double sampleAdvance = blockFrames * (currentTrack.SampleRate / (double)listener.SampleRate);
-                currentTrackSampleExact += sampleAdvance;
-                currentTrackSample = (long)Math.Round(currentTrackSampleExact);
+                long consumedSourceSamples = primarySource != null
+                    ? primarySource.CumulativeSourceSamples - prevSourceSamples
+                    : 0L;
+                if (consumedSourceSamples > 0) {
+                    if (isRenderingLiveNeuralSources && primarySource.Clip != null &&
+                        primarySource.Clip.SampleRate > 0 && primarySource.Clip.SampleRate != currentTrack.SampleRate) {
+                        currentTrackSampleExact += consumedSourceSamples * (currentTrack.SampleRate / (double)primarySource.Clip.SampleRate);
+                    } else {
+                        currentTrackSampleExact += consumedSourceSamples;
+                    }
+                } else {
+                    double sampleAdvance = blockFrames * (currentTrack.SampleRate / (double)Math.Max(1, listener.SampleRate));
+                    currentTrackSampleExact += sampleAdvance;
+                }
+                Volatile.Write(ref currentTrackSample, (long)Math.Round(currentTrackSampleExact));
                 totalFramesWritten += blockFrames;
 
                 UpdateSourceTelemetry();

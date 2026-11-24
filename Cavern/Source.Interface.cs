@@ -108,6 +108,11 @@ namespace Cavern {
         public bool PositionLocked { get; private set; }
 
         /// <summary>
+        /// True when a user-defined custom position lock is currently active on this source.
+        /// </summary>
+        public bool HasCustomPosition { get; private set; }
+
+        /// <summary>
         /// Target coordinates enforced while <see cref="PositionLocked"/> is active.
         /// </summary>
         Vector3 lockedPosition;
@@ -119,21 +124,41 @@ namespace Cavern {
             lockedPosition = position;
             Position = position;
             PositionLocked = true;
+            HasCustomPosition = true;
+        }
+
+        /// <summary>
+        /// Release any position lock without overwriting <see cref="Position"/> so dynamic object
+        /// trajectories resume seamlessly from live codec metadata.
+        /// </summary>
+        public void ReleaseCustomPositionLock() {
+            PositionLocked = false;
+            HasCustomPosition = false;
+        }
+
+        /// <summary>
+        /// Release any position lock cleanly: dynamic trajectories resume without snapping <see cref="Position"/>
+        /// back to stale initial coordinates, while static beds, virtual upmixers, and neural stems restore
+        /// <paramref name="basePosition"/>.
+        /// </summary>
+        public void ReleaseCustomPositionLock(Vector3 basePosition, bool isDynamicTrajectory = false) {
+            PositionLocked = false;
+            HasCustomPosition = false;
+            if (!isDynamicTrajectory) {
+                Position = basePosition;
+            }
         }
 
         /// <summary>
         /// Release any position lock so codec metadata drives <see cref="Position"/> normally.
         /// </summary>
-        public void UnlockCustomPosition() => PositionLocked = false;
+        public void UnlockCustomPosition() => ReleaseCustomPositionLock();
 
         /// <summary>
         /// Release any position lock and immediately restore <see cref="Position"/> to <paramref name="restorePosition"/>
         /// (needed for static beds, virtual upmix sources, and neural stems whose codec does not rewrite coordinates per block).
         /// </summary>
-        public void UnlockCustomPosition(Vector3 restorePosition) {
-            PositionLocked = false;
-            Position = restorePosition;
-        }
+        public void UnlockCustomPosition(Vector3 restorePosition) => ReleaseCustomPositionLock(restorePosition, false);
 
         /// <summary>
         /// Clip playback position in samples.

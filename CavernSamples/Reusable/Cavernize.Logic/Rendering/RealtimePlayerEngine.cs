@@ -77,6 +77,10 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     bool lastDynamicCeilingState;
     Source[] cachedActiveSources = Array.Empty<Source>();
     float[] cachedBaseSourceVolumes = Array.Empty<float>();
+    float[] xrayLpLowStates = Array.Empty<float>();
+    float[] xrayLpMidStates = Array.Empty<float>();
+    TrackSourceItem[] matchedSourceItemsScratch = Array.Empty<TrackSourceItem>();
+    bool[] usedSourceItemsScratch = Array.Empty<bool>();
     Source[] liveNeuralSources = Array.Empty<Source>();
     bool isRenderingLiveNeuralSources;
     NeuralSeparatedTrack cachedHybridTrack;
@@ -369,14 +373,18 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
         lock (renderLock) {
             upmixingSettings = safe;
             parametricUpmixerStage.UpdateSettings(safe);
-            if (currentTrack != null && !isRenderingLiveNeuralSources) {
+            if (currentTrack != null &&
+                (!isRenderingLiveNeuralSources || neuralStemStage.Config.SpatialUpmixMode == NeuralSpatialUpmixMode.HybridNeuralDirAc)) {
                 if (IsPlaying && hasRenderedAudio) {
                     ArmCrossfadeLocked();
                 }
-                currentTrack.Seek(currentTrackSample);
+                if (isRenderingLiveNeuralSources) {
+                    cachedHybridTrack = null;
+                    cachedHybrid714Buses = null;
+                } else {
+                    currentTrack.Seek(currentTrackSample);
+                }
                 ConfigureListener(resetToStart: false);
-                sourceItems = TrackSourceItem.BuildFromAttachedSources(currentTrack, cachedActiveSources);
-                BindTrackToSceneHubLocked(currentTrack);
                 rebuilt = true;
             }
         }
@@ -626,13 +634,22 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
             Math.Clamp(normalizedPosition.Y, -1f, 1f),
             Math.Clamp(normalizedPosition.Z, -1f, 1f));
         lock (renderLock) {
-            item.HasCustomPosition = true;
-            item.CustomNormalizedPosition = clamped;
-            item.NormalizedPosition = clamped;
-            if (item.Layer == SourceLayer.LiveMicrophone) {
-                liveMicBridge.SetNormalizedPosition(clamped);
+            TrackSourceItem target = ResolveEngineSourceItemLocked(item) ?? item;
+            target.HasCustomPosition = true;
+            target.CustomNormalizedPosition = clamped;
+            target.NormalizedPosition = clamped;
+            if (!ReferenceEquals(target, item)) {
+                item.HasCustomPosition = true;
+                item.CustomNormalizedPosition = clamped;
+                item.NormalizedPosition = clamped;
             }
-            sceneHub.SetSourceCustomPosition(item.Index, clamped);
+            if (target.Layer == SourceLayer.LiveMicrophone) {
+                liveMicBridge.SetNormalizedPosition(clamped);
+            } else if (target.Index >= 0 && target.Index < cachedActiveSources.Length && cachedActiveSources[target.Index] != null) {
+                cachedActiveSources[target.Index].LockCustomPosition(clamped * Listener.EnvironmentSize);
+            }
+            sceneHub.SetSourceCustomPosition(target.Index, clamped);
+            RefreshTelemetryAfterPositionResetLocked();
         }
     }
 
@@ -644,17 +661,28 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
             return;
         }
         lock (renderLock) {
-            item.HasCustomPosition = false;
-            item.CustomNormalizedPosition = Vector3.Zero;
-            item.NormalizedPosition = item.DefaultNormalizedPosition;
-            if (item.Layer == SourceLayer.LiveMicrophone) {
-                liveMicBridge.SetNormalizedPosition(proAudioConfig.MicNormalizedPosition);
-            } else if (item.Index >= 0 && item.Index < cachedActiveSources.Length) {
-                cachedActiveSources[item.Index].UnlockCustomPosition(item.DefaultNormalizedPosition * Listener.EnvironmentSize);
+            TrackSourceItem target = ResolveEngineSourceItemLocked(item) ?? item;
+            target.ResetPosition();
+            if (!ReferenceEquals(target, item)) {
+                item.ResetPosition();
             }
-            sceneHub.ClearSourceCustomPosition(item.Index);
+            if (target.Layer == SourceLayer.LiveMicrophone) {
+                liveMicBridge.SetNormalizedPosition(proAudioConfig.MicNormalizedPosition);
+            } else {
+                UnlockTrackedSourceLocked(target, target.Index);
+            }
+            sceneHub.ClearSourceCustomPosition(target.Index);
+            RefreshTelemetryAfterPositionResetLocked();
+            if (!ReferenceEquals(target, item)) {
+                item.NormalizedPosition = target.NormalizedPosition;
+            }
         }
     }
+
+    /// <summary>
+    /// Alias for <see cref="ClearSourceCustomPosition(TrackSourceItem)"/> resetting a single custom-pinned 3D source.
+    /// </summary>
+    public void ResetCustomPosition(TrackSourceItem item) => ClearSourceCustomPosition(item);
 
     /// <summary>
     /// Resets all manually dragged 3D object / stem / live mic pins back to their native trajectories or defaults.
@@ -663,15 +691,68 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
         lock (renderLock) {
             for (int i = 0; i < sourceItems.Count; i++) {
                 TrackSourceItem item = sourceItems[i];
-                item.HasCustomPosition = false;
-                item.CustomNormalizedPosition = Vector3.Zero;
-                item.NormalizedPosition = item.DefaultNormalizedPosition;
-                if (i < cachedActiveSources.Length) {
-                    cachedActiveSources[i].UnlockCustomPosition(item.DefaultNormalizedPosition * Listener.EnvironmentSize);
+                item.ResetPosition();
+                if (item.Layer != SourceLayer.LiveMicrophone) {
+                    UnlockTrackedSourceLocked(item, i);
                 }
             }
             liveMicBridge.SetNormalizedPosition(proAudioConfig.MicNormalizedPosition);
             sceneHub.ResetAllCustomPositions();
+            RefreshTelemetryAfterPositionResetLocked();
+        }
+    }
+
+    TrackSourceItem ResolveEngineSourceItemLocked(TrackSourceItem item) {
+        if (item == null || sourceItems.Count == 0) {
+            return null;
+        }
+        for (int i = 0; i < sourceItems.Count; i++) {
+            if (ReferenceEquals(sourceItems[i], item)) {
+                return sourceItems[i];
+            }
+        }
+        if (!string.IsNullOrEmpty(item.StableKey)) {
+            for (int i = 0; i < sourceItems.Count; i++) {
+                if (string.Equals(sourceItems[i].StableKey, item.StableKey, StringComparison.Ordinal)) {
+                    return sourceItems[i];
+                }
+            }
+        }
+        if (!string.IsNullOrEmpty(item.Name)) {
+            for (int i = 0; i < sourceItems.Count; i++) {
+                if (string.Equals(sourceItems[i].Name, item.Name, StringComparison.OrdinalIgnoreCase)) {
+                    return sourceItems[i];
+                }
+            }
+        }
+        return item.Index >= 0 && item.Index < sourceItems.Count ? sourceItems[item.Index] : null;
+    }
+
+    void UnlockTrackedSourceLocked(TrackSourceItem item, int sourceIndex) {
+        Vector3 envSize = Listener.EnvironmentSize;
+        Vector3 restoreWorld = item.DefaultNormalizedPosition * envSize;
+        bool isDynamic = item.HasDynamicTrajectory;
+        if (sourceIndex >= 0 && sourceIndex < cachedActiveSources.Length && cachedActiveSources[sourceIndex] != null) {
+            cachedActiveSources[sourceIndex].ReleaseCustomPositionLock(restoreWorld, isDynamic);
+        }
+        if (!isRenderingLiveNeuralSources && currentTrack?.Renderer?.Objects != null &&
+            sourceIndex >= 0 && sourceIndex < currentTrack.Renderer.Objects.Count) {
+            Source rawObj = currentTrack.Renderer.Objects[sourceIndex];
+            if (rawObj != null) {
+                rawObj.ReleaseCustomPositionLock(restoreWorld, isDynamic);
+                if (isDynamic && sourceIndex < cachedActiveSources.Length && cachedActiveSources[sourceIndex] != null &&
+                    !ReferenceEquals(rawObj, cachedActiveSources[sourceIndex])) {
+                    cachedActiveSources[sourceIndex].Position = rawObj.Position;
+                }
+            }
+        }
+    }
+
+    void RefreshTelemetryAfterPositionResetLocked() {
+        if (cachedActiveSources.Length > 0) {
+            UpdateSourceTelemetry();
+        } else if (sourceItems.Count > 0) {
+            sceneHub.SyncTelemetryFromTrackItems(sourceItems, Listener.EnvironmentSize);
         }
     }
 
@@ -866,11 +947,52 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
         : 0;
 
     /// <summary>
-    /// Current playback position in seconds.
+    /// Current playback position in seconds (render cursor).
     /// </summary>
-    public double CurrentSeconds => currentTrack != null && currentTrack.SampleRate > 0
-        ? currentTrackSample / (double)currentTrack.SampleRate
-        : 0;
+    public double CurrentSeconds {
+        get {
+            CavernizeTrack track = currentTrack;
+            long sample = Volatile.Read(ref currentTrackSample);
+            return track != null && track.SampleRate > 0
+                ? sample / (double)track.SampleRate
+                : 0;
+        }
+    }
+
+    /// <summary>
+    /// Live downstream hardware and ring-buffer output latency in seconds reported by the active audio output backend.
+    /// </summary>
+    public double OutputPipelineLatencySeconds {
+        get => Volatile.Read(ref outputPipelineLatencySeconds);
+        set => Volatile.Write(ref outputPipelineLatencySeconds, double.IsFinite(value) && value > 0.0 ? Math.Clamp(value, 0.0, 5.0) : 0.0);
+    }
+
+    /// <summary>
+    /// Estimated playback position in seconds currently heard by the listener after subtracting internal staging and downstream output latency.
+    /// </summary>
+    public double HeardSeconds {
+        get {
+            double totalSec;
+            double curSec;
+            double stagedSec;
+            lock (renderLock) {
+                if (currentTrack == null || currentTrack.SampleRate <= 0) {
+                    return 0.0;
+                }
+                totalSec = currentTrack.Length / (double)currentTrack.SampleRate;
+                curSec = currentTrackSample / (double)currentTrack.SampleRate;
+                int outSr = OutputSampleRate > 0 ? OutputSampleRate : Listener.DefaultSampleRate;
+                stagedSec = subBlockAvailableFrames > 0 ? subBlockAvailableFrames / (double)outSr : 0.0;
+            }
+            double heard = curSec - stagedSec - OutputPipelineLatencySeconds;
+            return totalSec > 0.0 ? Math.Clamp(heard, 0.0, totalSec) : Math.Max(0.0, heard);
+        }
+    }
+
+    /// <summary>
+    /// Registers an audio output backend flush callback invoked when seeking or reloading playback.
+    /// </summary>
+    public void RegisterOutputFlushCallback(Action flushCallback) => outputFlushCallback = flushCallback;
 
     /// <summary>Current track sample position (in native track sample rate units).</summary>
     public long CurrentTrackSample {
@@ -905,6 +1027,8 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
 
     long currentTrackSample;
     double currentTrackSampleExact;
+    double outputPipelineLatencySeconds;
+    Action outputFlushCallback;
 
     /// <summary>
     /// True when playback is currently active.

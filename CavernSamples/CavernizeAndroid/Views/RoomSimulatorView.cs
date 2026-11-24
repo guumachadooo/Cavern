@@ -38,6 +38,7 @@ public sealed class RoomSimulatorView : View {
         public int TrailHead;
         public int TrailCount;
         public bool Initialized;
+        public bool WasCustomPosition;
     }
 
     enum LabelVisibilityMode {
@@ -58,6 +59,7 @@ public sealed class RoomSimulatorView : View {
         LabelsClick,
         XRayClick,
         XRayBandClick,
+        ResetPinsClick,
         ZoomOutClick,
         ZoomInClick,
         ResetZoomClick
@@ -96,11 +98,13 @@ public sealed class RoomSimulatorView : View {
 
     readonly int touchSlop;
     readonly List<(TrackSourceItem item, float x, float y)> hitTargets = [];
-    readonly Dictionary<TrackSourceItem, SmoothedSourceState> smoothedStates = [];
+    readonly Dictionary<string, SmoothedSourceState> smoothedStates = new(StringComparer.Ordinal);
+    readonly Handler uiHandler = new(Looper.MainLooper);
     readonly RectF[] camPresetRects = [new(), new(), new()];
     RectF camLabelsBtnRect = new();
     RectF camXRayBtnRect = new();
     RectF camXRayBandBtnRect = new();
+    RectF resetPinsBtnRect = new();
     RectF camZoomOutRect = new();
     RectF camZoomInRect = new();
     RectF camResetLabelRect = new();
@@ -145,6 +149,8 @@ public sealed class RoomSimulatorView : View {
 
     TouchDragMode dragMode = TouchDragMode.None;
     TrackSourceItem draggedSource;
+    Java.Lang.Runnable pendingLongPressReset;
+    bool longPressResetTriggered;
     int pressedPresetIdx = -1;
     float downX;
     float downY;
@@ -154,6 +160,9 @@ public sealed class RoomSimulatorView : View {
 
     SpatialXRayPowermap xrayPowermap;
     SoundfieldTelemetry xrayTelemetry = SoundfieldTelemetry.Empty();
+    Vector3 smoothedDoaDir = new(0f, 0f, 1f);
+    bool hasSmoothedDoaDir;
+    float smoothedDoaCoherence;
 
     public bool IsPositionLocked { get; set; }
     public bool IsXRayEnabled { get; set; }
@@ -262,12 +271,20 @@ public sealed class RoomSimulatorView : View {
         subTextPaint.TextAlign = Paint.Align.Center;
     }
 
+    static string GetSourceStateKey(TrackSourceItem item) =>
+        item == null
+            ? string.Empty
+            : (!string.IsNullOrEmpty(item.StableKey) ? item.StableKey : $"{item.Index}:{item.Layer}:{item.Name}");
+
     public void UpdateState(IReadOnlyList<TrackSourceItem> sourceItems, Vector3 envSize, Vector3 pos, Vector3 rot, bool isPlaying = false) {
         IReadOnlyList<TrackSourceItem> nextSources = sourceItems ?? [];
         bool trackReplaced = sources.Count != nextSources.Count
-            || (sources.Count > 0 && nextSources.Count > 0 && !ReferenceEquals(sources[0], nextSources[0]));
+            || (sources.Count > 0 && nextSources.Count > 0
+                && !string.Equals(GetSourceStateKey(sources[0]), GetSourceStateKey(nextSources[0]), StringComparison.Ordinal));
         if (trackReplaced) {
             hasPlayedOnce = isPlaying;
+            hasSmoothedDoaDir = false;
+            smoothedDoaCoherence = 0f;
         } else if (isPlaying) {
             hasPlayedOnce = true;
         }
@@ -280,14 +297,17 @@ public sealed class RoomSimulatorView : View {
         isAudioPlaying = isPlaying;
 
         if (smoothedStates.Count > sources.Count + 8) {
-            HashSet<TrackSourceItem> activeSet = [.. sources];
-            List<TrackSourceItem> stale = [];
-            foreach (TrackSourceItem key in smoothedStates.Keys) {
+            HashSet<string> activeSet = new(StringComparer.Ordinal);
+            for (int i = 0; i < sources.Count; i++) {
+                activeSet.Add(GetSourceStateKey(sources[i]));
+            }
+            List<string> stale = [];
+            foreach (string key in smoothedStates.Keys) {
                 if (!activeSet.Contains(key)) {
                     stale.Add(key);
                 }
             }
-            foreach (TrackSourceItem k in stale) {
+            foreach (string k in stale) {
                 smoothedStates.Remove(k);
             }
         }
@@ -560,28 +580,36 @@ public sealed class RoomSimulatorView : View {
         return (sx, sy, persp, cam.Z);
     }
 
-    (float nx, float nz) UnprojectHorizontalPlane(
-        RectF r, float sx, float sy, float fixedNy, float camYawRad, float camPitchRad) {
+    Vector3 ProjectScreenDeltaToRoom(Vector3 curNorm, float dxPx, float dyPx) {
         const float camDist = 3.75f;
-        var (cx, cy, rad) = GetCameraFraming(r);
-        float u = (sx - cx) / Math.Max(1f, rad);
-        float v = (cy - sy) / Math.Max(1f, rad);
+        var (_, _, rad) = GetCameraFraming(roomCanvasRect);
+        float camYawRad = camYawDeg * (MathF.PI / 180f);
+        float camPitchRad = camPitchDeg * (MathF.PI / 180f);
 
-        float cosB = MathF.Cos(camPitchRad);
-        float sinB = MathF.Sin(camPitchRad);
-        float denom = camDist * sinB - v * cosB;
-        if (MathF.Abs(denom) < 0.08f) {
-            denom = denom >= 0 ? 0.08f : -0.08f;
-        }
-        float z1 = (v * camDist - v * fixedNy * sinB - camDist * fixedNy * cosB) / denom;
-        float z2 = -fixedNy * sinB + z1 * cosB;
-        float x1 = u * Math.Max(1.30f, camDist + z2) / camDist;
+        Vector3 camCur = TransformWorldToCamera(curNorm.X, curNorm.Y, curNorm.Z, camYawRad, camPitchRad);
+        float persp = camDist / Math.Max(1.30f, camDist + camCur.Z);
+        float pxPerUnit = Math.Max(1f, rad * persp);
+        float du = dxPx / pxPerUnit;
+        float dv = -dyPx / pxPerUnit;
 
         float cosA = MathF.Cos(camYawRad);
         float sinA = MathF.Sin(camYawRad);
-        float nx = Math.Clamp(x1 * cosA + z1 * sinA, -1f, 1f);
-        float nz = Math.Clamp(-x1 * sinA + z1 * cosA, -1f, 1f);
-        return (nx, nz);
+        float cosB = MathF.Cos(camPitchRad);
+        float sinB = MathF.Sin(camPitchRad);
+
+        Vector3 camRight = new(cosA, 0f, -sinA);
+        Vector3 camUpScreen = new(sinA * sinB, cosB, cosA * sinB);
+        Vector3 camForwardHoriz = new(sinA, 0f, cosA);
+        Vector3 floorDepthDir = camForwardHoriz * (1f / MathF.Max(0.25f, MathF.Abs(sinB)));
+
+        float t = Math.Clamp((camPitchDeg - 12f) / 14f, 0f, 1f);
+        float horizWeight = t * t * (3f - 2f * t);
+        Vector3 upMove = Vector3.Lerp(camUpScreen, floorDepthDir, horizWeight);
+        Vector3 next = curNorm + camRight * du + upMove * dv;
+        return new Vector3(
+            Math.Clamp(next.X, -1f, 1f),
+            Math.Clamp(next.Y, -1f, 1f),
+            Math.Clamp(next.Z, -1f, 1f));
     }
 
     static Vector3 HeadLookVector(float yawRad, float pitchRad) {
@@ -724,16 +752,21 @@ public sealed class RoomSimulatorView : View {
             bool effectivelyMuted = item.IsMuted || item.IsDynamicallyFilteredOut || (anySolo && !item.IsSolo);
             float targetRms = effectivelyMuted ? 0f : item.RmsLevel;
 
-            if (!smoothedStates.TryGetValue(item, out SmoothedSourceState st)) {
+            string stateKey = GetSourceStateKey(item);
+            if (!smoothedStates.TryGetValue(stateKey, out SmoothedSourceState st)) {
                 st = new SmoothedSourceState();
-                smoothedStates[item] = st;
+                smoothedStates[stateKey] = st;
             }
 
-            if (!st.Initialized) {
+            if (!st.Initialized || (st.WasCustomPosition && !item.HasCustomPosition)) {
                 st.SmoothedPos = targetPos;
                 st.LastRawPos = targetPos;
                 st.SmoothedRms = targetRms;
-                st.VisibilityAlpha = 1f;
+                if (!st.Initialized) {
+                    st.VisibilityAlpha = 1f;
+                }
+                st.TrailCount = 0;
+                st.TrailHead = 0;
                 st.Initialized = true;
             } else {
                 Vector3 rawMove = targetPos - st.LastRawPos;
@@ -743,7 +776,9 @@ public sealed class RoomSimulatorView : View {
                 st.LastRawPos = targetPos;
 
                 Vector3 delta = targetPos - st.SmoothedPos;
-                if (delta.LengthSquared() > 0.000008f) {
+                if (ReferenceEquals(draggedSource, item)) {
+                    st.SmoothedPos = targetPos;
+                } else if (delta.LengthSquared() > 0.000008f) {
                     st.SmoothedPos = Vector3.Lerp(st.SmoothedPos, targetPos, posBlend);
                     anyInterpolating = true;
                 } else {
@@ -758,12 +793,14 @@ public sealed class RoomSimulatorView : View {
                     st.SmoothedRms = targetRms;
                 }
             }
+            st.WasCustomPosition = item.HasCustomPosition;
 
             bool hasVolumeNow = targetRms > 0.0025f || st.SmoothedRms > 0.0035f;
             if (hasVolumeNow) st.SoundUntilMs = nowMs + 380;
 
             float targetVis;
             bool alwaysVisibleLayer = item.IsBed || !hasPlayedOnce || item.HasCustomPosition ||
+                item.Layer == SourceLayer.VirtualHeight ||
                 item.Layer == SourceLayer.NeuralStem ||
                 item.Layer == SourceLayer.RestoredResidual ||
                 item.Layer == SourceLayer.LiveMicrophone;
@@ -811,7 +848,7 @@ public sealed class RoomSimulatorView : View {
 
         // W13 Spatial X-Ray 3D Spherical Energy Heatmap + Dominant DoA Vector (behind sources for crisp legibility)
         if (IsXRayEnabled && xrayPowermap != null) {
-            DrawSpatialXRaySphericalOverlay(canvas, r, lnx, lny, lnz, camYawRad, camPitchRad, dp);
+            anyInterpolating |= DrawSpatialXRaySphericalOverlay(canvas, r, lnx, lny, lnz, camYawRad, camPitchRad, dt, dp);
         }
 
         renderQueue.Sort((a, b) => b.depth.CompareTo(a.depth));
@@ -1038,6 +1075,27 @@ public sealed class RoomSimulatorView : View {
             }
         }
 
+        if (!IsPositionLocked && HasAnyCustomPinnedSource()) {
+            string resetText = $"↺ {AndroidStrings.Active["RoomResetBtn"]}";
+            textPaint.TextAlign = Paint.Align.Center;
+            textPaint.TextSize = 8.9f * dp;
+            float pillH = 22f * dp;
+            float pillW = Math.Clamp(textPaint.MeasureText(resetText) + 18f * dp, 56f * dp, Math.Max(64f * dp, r.Width() * 0.42f));
+            resetPinsBtnRect = new RectF(r.Left + 10f * dp, r.Bottom - pillH - 10f * dp, r.Left + 10f * dp + pillW, r.Bottom - 10f * dp);
+            fillPaint.SetShader(null);
+            fillPaint.Color = Color.Argb(208, 16, 28, 42);
+            canvas.DrawRoundRect(resetPinsBtnRect, pillH * 0.5f, pillH * 0.5f, fillPaint);
+            strokePaint.StrokeWidth = 1.15f * dp;
+            strokePaint.Color = Color.Argb(185, 64, 224, 255);
+            canvas.DrawRoundRect(resetPinsBtnRect, pillH * 0.5f, pillH * 0.5f, strokePaint);
+            textPaint.Color = Color.Rgb(118, 232, 255);
+            DrawEllipsizedText(canvas, resetText, resetPinsBtnRect.CenterX(),
+                resetPinsBtnRect.CenterY() - (textPaint.Ascent() + textPaint.Descent()) * 0.5f,
+                pillW - 10f * dp, textPaint);
+        } else {
+            resetPinsBtnRect = new RectF(0, 0, 0, 0);
+        }
+
         canvas.Restore();
         return anyInterpolating;
     }
@@ -1060,8 +1118,8 @@ public sealed class RoomSimulatorView : View {
         Vector3 lookC = HeadLookVector(headYawRad, headPitchRad);
         Vector3 lookL = HeadLookVector(headYawRad - yawSpread, headPitchRad);
         Vector3 lookR = HeadLookVector(headYawRad + yawSpread, headPitchRad);
-        Vector3 lookU = HeadLookVector(headYawRad, Math.Clamp(headPitchRad + pitchSpread, -1.48f, 1.48f));
-        Vector3 lookD = HeadLookVector(headYawRad, Math.Clamp(headPitchRad - pitchSpread, -1.48f, 1.48f));
+        Vector3 lookU = HeadLookVector(headYawRad, Math.Clamp(headPitchRad - pitchSpread, -1.48f, 1.48f));
+        Vector3 lookD = HeadLookVector(headYawRad, Math.Clamp(headPitchRad + pitchSpread, -1.48f, 1.48f));
 
         (float sx, float sy, float persp, float depth) ProjVec(Vector3 dir, float scale) =>
             ProjectOrbit3D(r,
@@ -1116,10 +1174,12 @@ public sealed class RoomSimulatorView : View {
         canvas.DrawCircle(cx, cy, rad, strokePaint);
 
         Vector3 ProjectHeadPoint(float lx, float ly, float lz) {
+            // Matches Cavern.Utilities.VectorExtensions.Rotate((lx, ly, lz), (headPitch, headYaw, 0)):
+            // negative pitch tilts nose UP (+Y), positive pitch tilts nose DOWN (-Y).
             float cosP = MathF.Cos(headPitchRad);
             float sinP = MathF.Sin(headPitchRad);
-            float y1 = ly * cosP + lz * sinP;
-            float z1 = -ly * sinP + lz * cosP;
+            float y1 = ly * cosP - lz * sinP;
+            float z1 = ly * sinP + lz * cosP;
 
             float cosY = MathF.Cos(headYawRad);
             float sinY = MathF.Sin(headYawRad);
@@ -1339,10 +1399,10 @@ public sealed class RoomSimulatorView : View {
         canvas.DrawPath(scratchPath, paint);
     }
 
-    void DrawSpatialXRaySphericalOverlay(
+    bool DrawSpatialXRaySphericalOverlay(
         Canvas canvas, RectF r, float lnx, float lny, float lnz,
-        float camYawRad, float camPitchRad, float dp) {
-        if (xrayPowermap == null) return;
+        float camYawRad, float camPitchRad, float dt, float dp) {
+        if (xrayPowermap == null) return false;
         float peak = MathF.Max(0.02f, xrayPowermap.PeakCellEnergy);
         const float sphereRadius = 0.72f;
 
@@ -1386,22 +1446,68 @@ public sealed class RoomSimulatorView : View {
             fillPaint.SetShader(null);
         }
 
-        // Dominant Direction-of-Arrival (DoA) acoustic vector from listener
-        Vector3 doa = xrayPowermap.DominantDirection;
-        if (doa.LengthSquared() > 0.04f) {
-            var lPt = ProjectOrbit3D(r, lnx, lny, lnz, camYawRad, camPitchRad);
-            var tip = ProjectOrbit3D(r,
-                Math.Clamp(lnx + doa.X * 0.62f, -1f, 1f),
-                Math.Clamp(lny + doa.Y * 0.62f, -1f, 1f),
-                Math.Clamp(lnz + doa.Z * 0.62f, -1f, 1f),
-                camYawRad, camPitchRad);
-            strokePaint.StrokeWidth = 2.0f * dp;
-            strokePaint.Color = Color.Argb(205, 86, 232, 255);
-            canvas.DrawLine(lPt.sx, lPt.sy, tip.sx, tip.sy, strokePaint);
-            fillPaint.SetShader(null);
-            fillPaint.Color = Color.Rgb(86, 232, 255);
-            canvas.DrawCircle(tip.sx, tip.sy, 3.2f * dp, fillPaint);
+        // Dominant Direction-of-Arrival (DoA) acoustic vector: smooth angular slerp + slew clamp + coherence fade
+        bool slewing = false;
+        float targetCoh = Math.Clamp(xrayPowermap.DominantCoherence, 0f, 1f);
+        float cohBlend = 1f - MathF.Exp(-8f * dt);
+        smoothedDoaCoherence += (targetCoh - smoothedDoaCoherence) * cohBlend;
+        if (MathF.Abs(targetCoh - smoothedDoaCoherence) > 0.01f) {
+            slewing = true;
         }
+
+        Vector3 targetDoa = xrayPowermap.DominantDirection;
+        if (targetDoa.LengthSquared() > 0.04f) {
+            Vector3 targetUnit = Vector3.Normalize(targetDoa);
+            if (!hasSmoothedDoaDir) {
+                smoothedDoaDir = targetUnit;
+                hasSmoothedDoaDir = true;
+            } else {
+                float cosTheta = Math.Clamp(Vector3.Dot(smoothedDoaDir, targetUnit), -1f, 1f);
+                float angle = MathF.Acos(cosTheta);
+                if (angle > 0.004f) {
+                    slewing = true;
+                    float maxStep = 3.2f * dt;
+                    float expFrac = 1f - MathF.Exp(-7.5f * dt);
+                    float stepFrac = MathF.Min(expFrac, maxStep / angle);
+                    Vector3 interp;
+                    if (angle < 0.02f) {
+                        interp = Vector3.Normalize(Vector3.Lerp(smoothedDoaDir, targetUnit, stepFrac));
+                    } else if (angle > MathF.PI - 0.05f) {
+                        Vector3 fallbackAxis = MathF.Abs(smoothedDoaDir.Y) < 0.9f ? Vector3.UnitY : Vector3.UnitX;
+                        Vector3 perp = Vector3.Normalize(Vector3.Cross(smoothedDoaDir, fallbackAxis));
+                        float theta = stepFrac * angle;
+                        interp = Vector3.Normalize(smoothedDoaDir * MathF.Cos(theta) + perp * MathF.Sin(theta));
+                    } else {
+                        float sinA = MathF.Sin(angle);
+                        float w0 = MathF.Sin((1f - stepFrac) * angle) / sinA;
+                        float w1 = MathF.Sin(stepFrac * angle) / sinA;
+                        interp = Vector3.Normalize(smoothedDoaDir * w0 + targetUnit * w1);
+                    }
+                    smoothedDoaDir = interp;
+                }
+            }
+
+            float cohVis = smoothedDoaCoherence <= 0.08f
+                ? 0f
+                : (smoothedDoaCoherence < 0.20f
+                    ? Math.Clamp((smoothedDoaCoherence - 0.08f) / 0.12f * 0.35f, 0.08f, 0.35f)
+                    : Math.Clamp(0.35f + (smoothedDoaCoherence - 0.20f) / 0.35f * 0.65f, 0.35f, 1f));
+            if (cohVis > 0.04f) {
+                var lPt = ProjectOrbit3D(r, lnx, lny, lnz, camYawRad, camPitchRad);
+                var tip = ProjectOrbit3D(r,
+                    Math.Clamp(lnx + smoothedDoaDir.X * 0.62f, -1f, 1f),
+                    Math.Clamp(lny + smoothedDoaDir.Y * 0.62f, -1f, 1f),
+                    Math.Clamp(lnz + smoothedDoaDir.Z * 0.62f, -1f, 1f),
+                    camYawRad, camPitchRad);
+                strokePaint.StrokeWidth = 2.0f * dp;
+                strokePaint.Color = Color.Argb(Math.Clamp((int)Math.Round(205f * cohVis), 8, 205), 86, 232, 255);
+                canvas.DrawLine(lPt.sx, lPt.sy, tip.sx, tip.sy, strokePaint);
+                fillPaint.SetShader(null);
+                fillPaint.Color = Color.Argb(Math.Clamp((int)Math.Round(255f * cohVis), 12, 255), 86, 232, 255);
+                canvas.DrawCircle(tip.sx, tip.sy, 3.2f * dp, fillPaint);
+            }
+        }
+        return slewing;
     }
 
     static Color ResolveDolbyMeterColor(float rms, bool muted, bool isBed, bool isLfe, SourceLayer layer = SourceLayer.Bed) {
@@ -1534,6 +1640,13 @@ public sealed class RoomSimulatorView : View {
                 }
 
                 if (roomCanvasRect.Contains(tx, ty)) {
+                    if (!IsPositionLocked && resetPinsBtnRect.Width() > 0f &&
+                        (resetPinsBtnRect.Contains(tx, ty) || HitTestExpanded44Dp(resetPinsBtnRect, tx, ty, dp, maxPadX: 6f, maxPadY: 6f))) {
+                        dragMode = TouchDragMode.ResetPinsClick;
+                        Parent?.RequestDisallowInterceptTouchEvent(true);
+                        return true;
+                    }
+
                     // Direct listener position drag with ZERO obstructing Aim Orb
                     float headDist = MathF.Sqrt((tx - listenerScreenX) * (tx - listenerScreenX) + (ty - listenerScreenY) * (ty - listenerScreenY));
                     if (!IsPositionLocked && headDist <= 34f * dp) {
@@ -1542,11 +1655,26 @@ public sealed class RoomSimulatorView : View {
                         return true;
                     }
 
-                    // W13 Draggable 3D Objects / Neural Stems / Live Microphone (tap still toggles Solo)
+                    // W13 Draggable 3D Objects / Neural Stems / Live Microphone (tap still toggles Solo; hold or double-tap resets pin)
                     TrackSourceItem hitDraggable = FindNearestSource(tx, ty, 24f * dp);
                     if (!IsPositionLocked && hitDraggable != null && hitDraggable.IsCustomDraggable) {
                         draggedSource = hitDraggable;
                         dragMode = TouchDragMode.SourceDrag;
+                        longPressResetTriggered = false;
+                        CancelPendingLongPress();
+                        if (hitDraggable.HasCustomPosition) {
+                            pendingLongPressReset = new Java.Lang.Runnable(() => {
+                                if (dragMode == TouchDragMode.SourceDrag &&
+                                    ReferenceEquals(draggedSource, hitDraggable) &&
+                                    maxMoveDist < touchSlop * 0.55f &&
+                                    hitDraggable.HasCustomPosition) {
+                                    longPressResetTriggered = true;
+                                    PerformHapticFeedback(FeedbackConstants.LongPress);
+                                    RequestSourcePositionReset(hitDraggable);
+                                }
+                            });
+                            uiHandler.PostDelayed(pendingLongPressReset, 480);
+                        }
                         Parent?.RequestDisallowInterceptTouchEvent(true);
                         return true;
                     }
@@ -1561,6 +1689,7 @@ public sealed class RoomSimulatorView : View {
                 return false;
 
             case MotionEventActions.PointerDown:
+                CancelPendingLongPress();
                 if (e.PointerCount >= 2 && roomCanvasRect.Contains(tx, ty)) {
                     pinchStartDist = PointerDist(e);
                     pinchStartZoom = roomZoom;
@@ -1585,7 +1714,7 @@ public sealed class RoomSimulatorView : View {
                 float dist = MathF.Sqrt(dx * dx + dy * dy);
                 if (dist > maxMoveDist) maxMoveDist = dist;
 
-                if (dragMode is TouchDragMode.PresetClick or TouchDragMode.LabelsClick or TouchDragMode.XRayClick or TouchDragMode.XRayBandClick or TouchDragMode.ZoomOutClick or TouchDragMode.ZoomInClick or TouchDragMode.ResetZoomClick) {
+                if (dragMode is TouchDragMode.PresetClick or TouchDragMode.LabelsClick or TouchDragMode.XRayClick or TouchDragMode.XRayBandClick or TouchDragMode.ResetPinsClick or TouchDragMode.ZoomOutClick or TouchDragMode.ZoomInClick or TouchDragMode.ResetZoomClick) {
                     return true;
                 }
 
@@ -1617,7 +1746,7 @@ public sealed class RoomSimulatorView : View {
 
                 if (dragMode == TouchDragMode.ListenerMove && !IsPositionLocked) {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
-                    UpdateListenerFromRoomTouch(tx, ty, lastX, lastY, dp);
+                    UpdateListenerFromRoomTouch(tx, ty, lastX, lastY);
                     lastX = tx;
                     lastY = ty;
                     return true;
@@ -1626,7 +1755,10 @@ public sealed class RoomSimulatorView : View {
                 if (dragMode == TouchDragMode.SourceDrag && !IsPositionLocked && draggedSource != null) {
                     Parent?.RequestDisallowInterceptTouchEvent(true);
                     if (maxMoveDist >= touchSlop * 0.55f) {
-                        UpdateDraggedSourceFromRoomTouch(draggedSource, tx, ty, lastX, lastY, dp);
+                        CancelPendingLongPress();
+                        if (!longPressResetTriggered) {
+                            UpdateDraggedSourceFromRoomTouch(draggedSource, tx, ty, lastX, lastY);
+                        }
                     }
                     lastX = tx;
                     lastY = ty;
@@ -1651,6 +1783,7 @@ public sealed class RoomSimulatorView : View {
             }
 
             case MotionEventActions.PointerUp:
+                CancelPendingLongPress();
                 if (dragMode == TouchDragMode.PinchZoom && e.PointerCount <= 2) {
                     dragMode = TouchDragMode.None;
                     maxMoveDist = touchSlop + 1f;
@@ -1658,16 +1791,27 @@ public sealed class RoomSimulatorView : View {
                 return true;
 
             case MotionEventActions.Up: {
+                CancelPendingLongPress();
                 Parent?.RequestDisallowInterceptTouchEvent(false);
                 bool wasTap = maxMoveDist < touchSlop;
+                bool wasLongPressReset = longPressResetTriggered;
                 TouchDragMode endedMode = dragMode;
                 TrackSourceItem endedSource = draggedSource;
                 int preset = pressedPresetIdx;
                 dragMode = TouchDragMode.None;
                 draggedSource = null;
+                longPressResetTriggered = false;
                 pressedPresetIdx = -1;
 
-                if (!wasTap) {
+                if (!wasTap || wasLongPressReset) {
+                    Invalidate();
+                    return true;
+                }
+
+                if (endedMode == TouchDragMode.ResetPinsClick) {
+                    if (!IsPositionLocked) {
+                        ResetAllPinnedSources();
+                    }
                     Invalidate();
                     return true;
                 }
@@ -1688,14 +1832,14 @@ public sealed class RoomSimulatorView : View {
                 if (endedMode == TouchDragMode.SourceDrag && endedSource != null) {
                     DateTime now = DateTime.UtcNow;
                     if (endedSource.HasCustomPosition && ReferenceEquals(lastTappedSource, endedSource) &&
-                        (now - lastSourceTapTime).TotalMilliseconds < 320) {
+                        (now - lastSourceTapTime).TotalMilliseconds <= 500) {
                         lastTappedSource = null;
                         lastSourceTapTime = DateTime.MinValue;
                         if (endedSource.IsSolo != lastTappedSourcePrevSolo) {
                             endedSource.IsSolo = lastTappedSourcePrevSolo;
                             SourceSoloToggled?.Invoke(endedSource);
                         }
-                        SourcePositionResetRequested?.Invoke(endedSource);
+                        RequestSourcePositionReset(endedSource);
                     } else {
                         lastTappedSource = endedSource;
                         lastTappedSourcePrevSolo = endedSource.IsSolo;
@@ -1806,9 +1950,11 @@ public sealed class RoomSimulatorView : View {
             }
 
             case MotionEventActions.Cancel:
+                CancelPendingLongPress();
                 Parent?.RequestDisallowInterceptTouchEvent(false);
                 dragMode = TouchDragMode.None;
                 draggedSource = null;
+                longPressResetTriggered = false;
                 pressedPresetIdx = -1;
                 Invalidate();
                 return false;
@@ -1817,26 +1963,62 @@ public sealed class RoomSimulatorView : View {
         return base.OnTouchEvent(e);
     }
 
-    void UpdateDraggedSourceFromRoomTouch(TrackSourceItem item, float tx, float ty, float prevX, float prevY, float dp) {
-        if (item == null || roomCanvasRect.Width() <= 0 || roomCanvasRect.Height() <= 0) return;
-        float camYawRad = camYawDeg * (MathF.PI / 180f);
-        float camPitchRad = camPitchDeg * (MathF.PI / 180f);
-        Vector3 cur = item.HasCustomPosition ? item.CustomNormalizedPosition : item.NormalizedPosition;
-        Vector3 next;
-        if (camPitchDeg < 16f) {
-            float dyNorm = -(ty - prevY) / Math.Max(40f * dp, roomCanvasRect.Height() * 0.35f);
-            float dxNorm = (tx - prevX) / Math.Max(40f * dp, roomCanvasRect.Width() * 0.35f);
-            float nx = Math.Clamp(cur.X + dxNorm * MathF.Cos(camYawRad), -1f, 1f);
-            float nz = Math.Clamp(cur.Z - dxNorm * MathF.Sin(camYawRad), -1f, 1f);
-            float ny = Math.Clamp(cur.Y + dyNorm, -1f, 1f);
-            next = new Vector3(nx, ny, nz);
-        } else {
-            var (nx, nz) = UnprojectHorizontalPlane(roomCanvasRect, tx, ty, cur.Y, camYawRad, camPitchRad);
-            next = new Vector3(nx, cur.Y, nz);
+    protected override void OnDetachedFromWindow() {
+        CancelPendingLongPress();
+        base.OnDetachedFromWindow();
+    }
+
+    void CancelPendingLongPress() {
+        if (pendingLongPressReset != null) {
+            uiHandler.RemoveCallbacks(pendingLongPressReset);
+            pendingLongPressReset = null;
         }
+    }
+
+    bool HasAnyCustomPinnedSource() {
+        for (int i = 0; i < sources.Count; i++) {
+            if (sources[i].HasCustomPosition) return true;
+        }
+        return false;
+    }
+
+    void RequestSourcePositionReset(TrackSourceItem item) {
+        if (item == null) return;
+        item.ResetPosition();
+        if (smoothedStates.TryGetValue(GetSourceStateKey(item), out SmoothedSourceState st)) {
+            st.SmoothedPos = item.NormalizedPosition;
+            st.LastRawPos = item.NormalizedPosition;
+            st.TrailCount = 0;
+            st.TrailHead = 0;
+            st.WasCustomPosition = false;
+            if (item.HasDynamicTrajectory) {
+                st.Initialized = false;
+            }
+        }
+        SourcePositionResetRequested?.Invoke(item);
+        Invalidate();
+    }
+
+    void ResetAllPinnedSources() {
+        for (int i = 0; i < sources.Count; i++) {
+            if (sources[i].HasCustomPosition) {
+                RequestSourcePositionReset(sources[i]);
+            }
+        }
+    }
+
+    void UpdateDraggedSourceFromRoomTouch(TrackSourceItem item, float tx, float ty, float prevX, float prevY) {
+        if (item == null || roomCanvasRect.Width() <= 0 || roomCanvasRect.Height() <= 0) return;
+        Vector3 cur = item.HasCustomPosition ? item.CustomNormalizedPosition : item.NormalizedPosition;
+        Vector3 next = ProjectScreenDeltaToRoom(cur, tx - prevX, ty - prevY);
         item.HasCustomPosition = true;
         item.CustomNormalizedPosition = next;
         item.NormalizedPosition = next;
+        if (smoothedStates.TryGetValue(GetSourceStateKey(item), out SmoothedSourceState st)) {
+            st.SmoothedPos = next;
+            st.LastRawPos = next;
+            st.WasCustomPosition = true;
+        }
         SourcePositionDragged?.Invoke(item, next);
         Invalidate();
     }
@@ -1853,24 +2035,17 @@ public sealed class RoomSimulatorView : View {
         Invalidate();
     }
 
-    void UpdateListenerFromRoomTouch(float tx, float ty, float prevX, float prevY, float dp) {
+    void UpdateListenerFromRoomTouch(float tx, float ty, float prevX, float prevY) {
         if (roomCanvasRect.Width() <= 0 || roomCanvasRect.Height() <= 0) return;
-        float camYawRad = camYawDeg * (MathF.PI / 180f);
-        float camPitchRad = camPitchDeg * (MathF.PI / 180f);
-
-        if (camPitchDeg < 16f) {
-            float dyNorm = -(ty - prevY) / Math.Max(40f * dp, roomCanvasRect.Height() * 0.35f);
-            float dxNorm = (tx - prevX) / Math.Max(40f * dp, roomCanvasRect.Width() * 0.35f);
-            float lnx = Math.Clamp(listenerPosition.X / environmentSize.X + dxNorm * MathF.Cos(camYawRad), -1f, 1f);
-            float lnz = Math.Clamp(listenerPosition.Z / environmentSize.Z - dxNorm * MathF.Sin(camYawRad), -1f, 1f);
-            float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y + dyNorm, -1f, 1f);
-            listenerPosition = new Vector3(lnx * environmentSize.X, lny * environmentSize.Y, lnz * environmentSize.Z);
-        } else {
-            float lny = Math.Clamp(listenerPosition.Y / environmentSize.Y, -1f, 1f);
-            var (nx, nz) = UnprojectHorizontalPlane(roomCanvasRect, tx, ty, lny, camYawRad, camPitchRad);
-            listenerPosition = new Vector3(nx * environmentSize.X, listenerPosition.Y, nz * environmentSize.Z);
-        }
-
+        float ex = Math.Max(0.25f, environmentSize.X);
+        float ey = Math.Max(0.25f, environmentSize.Y);
+        float ez = Math.Max(0.25f, environmentSize.Z);
+        Vector3 curNorm = new(
+            Math.Clamp(listenerPosition.X / ex, -1f, 1f),
+            Math.Clamp(listenerPosition.Y / ey, -1f, 1f),
+            Math.Clamp(listenerPosition.Z / ez, -1f, 1f));
+        Vector3 nextNorm = ProjectScreenDeltaToRoom(curNorm, tx - prevX, ty - prevY);
+        listenerPosition = new Vector3(nextNorm.X * ex, nextNorm.Y * ey, nextNorm.Z * ez);
         ListenerPositionChanged?.Invoke(listenerPosition);
         Invalidate();
     }

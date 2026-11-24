@@ -42,6 +42,8 @@ namespace Cavern.Spatial {
 
         float peakCellEnergy;
         Vector3 dominantDirection = new Vector3(0f, 0f, 1f);
+        Vector3 smoothedResultant = new Vector3(0f, 0f, 1f);
+        float dominantCoherence;
 
         /// <summary>Precomputed unit direction vector for each spherical cell in room coordinates.</summary>
         public Vector3[] CellDirections {
@@ -76,6 +78,11 @@ namespace Cavern.Spatial {
         /// <summary>Energy-weighted dominant Direction-of-Arrival unit vector in room coordinates.</summary>
         public Vector3 DominantDirection {
             get { return dominantDirection; }
+        }
+
+        /// <summary>Smoothed spherical resultant Direction-of-Arrival coherence in [0; 1].</summary>
+        public float DominantCoherence {
+            get { return dominantCoherence; }
         }
 
         /// <summary>
@@ -132,9 +139,43 @@ namespace Cavern.Spatial {
             out float lowRms,
             out float midRms,
             out float highRms) {
+            float lpLow = samples != null && samples.Length > 0 && IsFinite(samples[0]) ? samples[0] : 0f;
+            float lpMid = lpLow;
+            EstimateThreeBandRmsCore(samples, sampleRate, ref lpLow, ref lpMid, out lowRms, out midRms, out highRms);
+        }
+
+        /// <summary>
+        /// Computes 3-band Low (&lt; 250 Hz), Mid (250–2500 Hz), and High (&gt; 2500 Hz) RMS energies
+        /// across contiguous blocks while preserving 1st-order crossover filter states (<paramref name="lpLow"/>
+        /// and <paramref name="lpMid"/>) with zero heap allocations.
+        /// </summary>
+        public static void EstimateThreeBandRms(
+            float[] samples,
+            int sampleRate,
+            ref float lpLow,
+            ref float lpMid,
+            out float lowRms,
+            out float midRms,
+            out float highRms) =>
+            EstimateThreeBandRmsCore(samples, sampleRate, ref lpLow, ref lpMid, out lowRms, out midRms, out highRms);
+
+        static void EstimateThreeBandRmsCore(
+            float[] samples,
+            int sampleRate,
+            ref float lpLow,
+            ref float lpMid,
+            out float lowRms,
+            out float midRms,
+            out float highRms) {
             lowRms = 0f;
             midRms = 0f;
             highRms = 0f;
+            if (!IsFinite(lpLow)) {
+                lpLow = 0f;
+            }
+            if (!IsFinite(lpMid)) {
+                lpMid = 0f;
+            }
             if (samples == null || samples.Length == 0 || sampleRate <= 0) {
                 return;
             }
@@ -142,8 +183,6 @@ namespace Cavern.Spatial {
             float alphaLow = 1f - (float)Math.Exp(-2.0 * Math.PI * 250.0 / sampleRate);
             float alphaHigh = 1f - (float)Math.Exp(-2.0 * Math.PI * 2500.0 / sampleRate);
 
-            float lpLow = 0f;
-            float lpMid = 0f;
             double sumLow = 0.0;
             double sumMid = 0.0;
             double sumHigh = 0.0;
@@ -176,11 +215,25 @@ namespace Cavern.Spatial {
         public void Update(
             IReadOnlyList<SpatialSourceDescriptor> sources,
             Vector3 listenerWorldMeters,
-            float temporalSmoothing = 0.45f) {
+            float temporalSmoothing = 0.45f) =>
+            Update(sources, listenerWorldMeters, temporalSmoothing, SpatialXRayBandMode.AllBands);
+
+        /// <summary>
+        /// Updates the 72-cell spherical 3-band energy powermap in place without heap allocations,
+        /// filtering the spherical resultant Direction-of-Arrival estimator by <paramref name="bandMode"/>
+        /// and gating updates on spherical resultant coherence (<c>R &gt;= 0.18</c>).
+        /// </summary>
+        public void Update(
+            IReadOnlyList<SpatialSourceDescriptor> sources,
+            Vector3 listenerWorldMeters,
+            float temporalSmoothing,
+            SpatialXRayBandMode bandMode) {
             float safeSmoothing = IsFinite(temporalSmoothing) ? temporalSmoothing : 0.45f;
             float smooth = Math.Max(0f, Math.Min(0.92f, safeSmoothing));
             float keep = smooth;
             float inject = 1f - smooth;
+            // Slow ~250-350 ms DoA EMA at 187.5 Hz block rate (prevents rapid transient spinning)
+            float dirAlpha = Math.Max(0.025f, Math.Min(0.040f, inject * 0.065f));
 
             if (!IsFiniteVector(listenerWorldMeters)) {
                 listenerWorldMeters = Vector3.Zero;
@@ -193,6 +246,7 @@ namespace Cavern.Spatial {
             }
 
             if (sources == null || sources.Count == 0) {
+                dominantCoherence += (0f - dominantCoherence) * dirAlpha;
                 peakCellEnergy = 0f;
                 for (int c = 0; c < TotalCells; c++) {
                     totalGrid[c] = 0f;
@@ -247,8 +301,26 @@ namespace Cavern.Spatial {
                 if (!IsFinite(totalPow) || totalPow <= 0f) {
                     continue;
                 }
-                weightedDir += dir * totalPow;
-                totalWeight += totalPow;
+
+                float dirPow;
+                switch (bandMode) {
+                    case SpatialXRayBandMode.LowOnly:
+                        dirPow = pLow;
+                        break;
+                    case SpatialXRayBandMode.MidOnly:
+                        dirPow = pMid;
+                        break;
+                    case SpatialXRayBandMode.HighOnly:
+                        dirPow = pHigh;
+                        break;
+                    default:
+                        dirPow = totalPow;
+                        break;
+                }
+                if (IsFinite(dirPow) && dirPow > 0f && (!src.IsLfe || bandMode == SpatialXRayBandMode.LowOnly)) {
+                    weightedDir += dir * dirPow;
+                    totalWeight += dirPow;
+                }
 
                 for (int c = 0; c < TotalCells; c++) {
                     float dot = Vector3.Dot(dir, cellDirections[c]);
@@ -266,17 +338,26 @@ namespace Cavern.Spatial {
                 }
             }
 
-            // Energy-gated exponential smoothing on dominant Direction-of-Arrival vector (prevents 187 Hz block jitter)
-            float dirAlpha = Math.Max(0.04f, Math.Min(0.28f, inject * 0.22f));
-            if (IsFinite(totalWeight) && totalWeight > 1e-6f && IsFiniteVector(weightedDir) && weightedDir.LengthSquared() > 1e-8f) {
-                Vector3 normDir = Vector3.Normalize(weightedDir);
-                if (IsFiniteVector(normDir)) {
-                    Vector3 blended = dominantDirection * (1f - dirAlpha) + normDir * dirAlpha;
-                    float lenSq = blended.LengthSquared();
+            // Spherical resultant coherence R = ||sum(w*d)|| / sum(w); suppress omnidirectional/diffuse DoA spinning
+            float coherenceR = IsFinite(totalWeight) && totalWeight > 1e-5f && IsFiniteVector(weightedDir)
+                ? Math.Min(1f, weightedDir.Length() / totalWeight)
+                : 0f;
+            if (!IsFinite(coherenceR)) {
+                coherenceR = 0f;
+            }
+            dominantCoherence += (coherenceR - dominantCoherence) * dirAlpha;
+            if (!IsFinite(dominantCoherence)) {
+                dominantCoherence = 0f;
+            }
+
+            if (totalWeight > 1e-5f && coherenceR >= 0.18f) {
+                Vector3 instResultant = weightedDir / totalWeight;
+                if (IsFiniteVector(instResultant)) {
+                    Vector3 prevResultant = smoothedResultant == Vector3.Zero ? dominantDirection : smoothedResultant;
+                    smoothedResultant = prevResultant * (1f - dirAlpha) + instResultant * dirAlpha;
+                    float lenSq = smoothedResultant.LengthSquared();
                     if (IsFinite(lenSq) && lenSq > 1e-8f) {
-                        dominantDirection = Vector3.Normalize(blended);
-                    } else {
-                        dominantDirection = normDir;
+                        dominantDirection = Vector3.Normalize(smoothedResultant);
                     }
                 }
             }

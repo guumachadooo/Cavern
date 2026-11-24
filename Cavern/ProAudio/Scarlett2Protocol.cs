@@ -203,6 +203,294 @@ namespace Cavern.ProAudio {
 
         /// <summary>Live hardware peak meter Channel 2 in dBFS (from <c>SCARLETT2_USB_GET_METER</c>).</summary>
         public float InputMeterCh2Dbfs { get; set; } = -120f;
+
+        /// <summary>Device firmware version reported by <c>CMD_INIT_2</c> (0 if unknown or unqueried).</summary>
+        public int FirmwareVersion { get; set; }
+    }
+
+    /// <summary>
+    /// Verified Focusrite Control Protocol (FCP) Gen 4 configuration item descriptor matching
+    /// Linux ALSA <c>sound/usb/mixer_scarlett2.c</c>.
+    /// </summary>
+    public readonly struct ScarlettConfigItem : IEquatable<ScarlettConfigItem> {
+        /// <summary>NVRAM/config byte offset within the device parameter memory space.</summary>
+        public uint Offset { get; }
+
+        /// <summary>Control bit width (typically 8 or 16 bits).</summary>
+        public int SizeBits { get; }
+
+        /// <summary>Activation command ID passed to <see cref="Scarlett2Protocol.CmdDataActivate"/> after writing (0 if none).</summary>
+        public int ActivateCmd { get; }
+
+        /// <summary>True when writes stage through <see cref="ScarlettGen4ConfigTable.ParamBufAddr"/> before activation.</summary>
+        public bool UseParamBuf { get; }
+
+        /// <summary>True when this item is populated for the active Gen 4 hardware model.</summary>
+        public bool IsValid {
+            get { return SizeBits > 0; }
+        }
+
+        /// <summary>Control byte width rounded up from <see cref="SizeBits"/>.</summary>
+        public int SizeBytes {
+            get { return (SizeBits + 7) / 8; }
+        }
+
+        /// <summary>Creates an immutable Scarlett Gen 4 FCP configuration item descriptor.</summary>
+        public ScarlettConfigItem(uint offset, int sizeBits, int activateCmd, bool useParamBuf = false) {
+            Offset = offset;
+            SizeBits = sizeBits;
+            ActivateCmd = activateCmd;
+            UseParamBuf = useParamBuf;
+        }
+
+        /// <inheritdoc/>
+        public bool Equals(ScarlettConfigItem other) {
+            return Offset == other.Offset &&
+                   SizeBits == other.SizeBits &&
+                   ActivateCmd == other.ActivateCmd &&
+                   UseParamBuf == other.UseParamBuf;
+        }
+
+        /// <inheritdoc/>
+        public override bool Equals(object obj) {
+            return obj is ScarlettConfigItem other && Equals(other);
+        }
+
+        /// <inheritdoc/>
+        public override int GetHashCode() {
+            unchecked {
+                int hash = (int)Offset;
+                hash = (hash * 397) ^ SizeBits;
+                hash = (hash * 397) ^ ActivateCmd;
+                hash = (hash * 397) ^ (UseParamBuf ? 1 : 0);
+                return hash;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Firmware-resolved Focusrite Scarlett 4th Gen FCP configuration offset table derived from
+    /// Linux kernel <c>sound/usb/mixer_scarlett2.c</c>.
+    /// </summary>
+    public sealed class ScarlettGen4ConfigTable {
+        /// <summary>USB Product ID associated with this Gen 4 config table.</summary>
+        public int ProductId { get; }
+
+        /// <summary>Firmware version used to resolve firmware-conditional offsets.</summary>
+        public int FirmwareVersion { get; }
+
+        /// <summary>Base parameter staging buffer address (<c>parambuf</c>) used by items with <see cref="ScarlettConfigItem.UseParamBuf"/>.</summary>
+        public uint ParamBufAddr { get; }
+
+        /// <summary>MSD ("Easy Start") mode toggle.</summary>
+        public ScarlettConfigItem Msd { get; }
+
+        /// <summary>Direct Monitor routing switch (Off/Mono/Stereo on Solo / 2i2).</summary>
+        public ScarlettConfigItem DirectMonitor { get; }
+
+        /// <summary>Direct Monitor level gain (16-bit on Solo / 2i2; firmware-conditional on 2i2 Gen 4).</summary>
+        public ScarlettConfigItem DirectMonitorGain { get; }
+
+        /// <summary>Hardware Auto Gain trigger switch (2i2 / 4i4).</summary>
+        public ScarlettConfigItem AutoGainSwitch { get; }
+
+        /// <summary>Hardware Auto Gain live status readout (2i2 / 4i4).</summary>
+        public ScarlettConfigItem AutoGainStatus { get; }
+
+        /// <summary>48V Phantom Power switch.</summary>
+        public ScarlettConfigItem PhantomPower { get; }
+
+        /// <summary>Digital preamp gain control (2i2 / 4i4).</summary>
+        public ScarlettConfigItem InputGain { get; }
+
+        /// <summary>Instrument Hi-Z / Line level switch.</summary>
+        public ScarlettConfigItem LevelSwitch { get; }
+
+        /// <summary>Clip Safe automatic overload guard switch (2i2 / 4i4).</summary>
+        public ScarlettConfigItem SafeSwitch { get; }
+
+        /// <summary>Air analog/DSP preamp emulation switch (Off / Presence / Presence+Drive).</summary>
+        public ScarlettConfigItem AirSwitch { get; }
+
+        /// <summary>Channel selector switch for shared front-panel preamp controls (2i2 / 4i4).</summary>
+        public ScarlettConfigItem InputSelectSwitch { get; }
+
+        /// <summary>Channels 1-2 stereo link switch (2i2 / 4i4).</summary>
+        public ScarlettConfigItem InputLinkSwitch { get; }
+
+        /// <summary>Diagnostic note documenting firmware gating and <see cref="Scarlett2Protocol.CmdInfoDevmap"/> fallback.</summary>
+        public string FallbackNote { get; }
+
+        /// <summary>Constructs an immutable verified Gen 4 FCP configuration offset table.</summary>
+        public ScarlettGen4ConfigTable(
+            int productId,
+            int firmwareVersion,
+            uint paramBufAddr,
+            ScarlettConfigItem msd,
+            ScarlettConfigItem directMonitor,
+            ScarlettConfigItem directMonitorGain,
+            ScarlettConfigItem autoGainSwitch,
+            ScarlettConfigItem autoGainStatus,
+            ScarlettConfigItem phantomPower,
+            ScarlettConfigItem inputGain,
+            ScarlettConfigItem levelSwitch,
+            ScarlettConfigItem safeSwitch,
+            ScarlettConfigItem airSwitch,
+            ScarlettConfigItem inputSelectSwitch,
+            ScarlettConfigItem inputLinkSwitch,
+            string fallbackNote = "") {
+            ProductId = productId;
+            FirmwareVersion = firmwareVersion;
+            ParamBufAddr = paramBufAddr;
+            Msd = msd;
+            DirectMonitor = directMonitor;
+            DirectMonitorGain = directMonitorGain;
+            AutoGainSwitch = autoGainSwitch;
+            AutoGainStatus = autoGainStatus;
+            PhantomPower = phantomPower;
+            InputGain = inputGain;
+            LevelSwitch = levelSwitch;
+            SafeSwitch = safeSwitch;
+            AirSwitch = airSwitch;
+            InputSelectSwitch = inputSelectSwitch;
+            InputLinkSwitch = inputLinkSwitch;
+            FallbackNote = fallbackNote ?? string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Immutable, lock-free hardware pre-ADC state snapshot published by Focusrite Scarlett / USB audio managers
+    /// so Slot 2D Vocal Chain avoids double-processing hardware Air/Drive and future Phase 3 <c>Slot 2D-SHIELD</c>
+    /// resets FDKF covariance cleanly on preamp gain steps.
+    /// </summary>
+    public sealed class HardwarePreAmpStateSnapshot : IEquatable<HardwarePreAmpStateSnapshot> {
+        /// <summary>Mic source integer constant matching built-in Phone Mic (<c>0</c>).</summary>
+        public const int MicSourcePhone = 0;
+
+        /// <summary>Mic source integer constant matching external USB Audio Interface Mic (<c>1</c>).</summary>
+        public const int MicSourceUsbInterface = 1;
+
+        /// <summary>Mic source integer constant matching automatic source selection (<c>2</c>).</summary>
+        public const int MicSourceAuto = 2;
+
+        static readonly HardwarePreAmpStateSnapshot empty = new HardwarePreAmpStateSnapshot();
+
+        /// <summary>Neutral unverified singleton snapshot when no verified USB preamp is active.</summary>
+        public static HardwarePreAmpStateSnapshot Empty {
+            get { return empty; }
+        }
+
+        /// <summary>Active hardware Air preamp coloration mode.</summary>
+        public ScarlettAirMode AirMode { get; }
+
+        /// <summary>True when hardware harmonic Drive saturation stage is engaged.</summary>
+        public bool DriveActive { get; }
+
+        /// <summary>True when hardware Auto Gain calibration is currently running.</summary>
+        public bool AutoGainActive { get; }
+
+        /// <summary>True when hardware Clip Safe overload protection is active.</summary>
+        public bool ClipSafeActive { get; }
+
+        /// <summary>Active hardware preamp gain in dB.</summary>
+        public float PreampGainDb { get; }
+
+        /// <summary>Monotonic counter incremented whenever hardware preamp gain steps (for Phase 3 <c>2D-SHIELD</c> FDKF reset).</summary>
+        public long GainStepEpoch { get; }
+
+        /// <summary>True when monitoring output is routed to headphones/IEMs rather than an open loudspeaker.</summary>
+        public bool IsHeadphoneMonitoring { get; }
+
+        /// <summary>Active microphone source index (<c>0 = PhoneMic</c>, <c>1 = UsbInterfaceMic</c>, <c>2 = Auto</c>).</summary>
+        public int MicSource { get; }
+
+        /// <summary>True when hardware telemetry came from a verified USB vendor/FCP control probe.</summary>
+        public bool IsHardwareVerified { get; }
+
+        /// <summary>Creates an immutable pre-ADC hardware state snapshot.</summary>
+        public HardwarePreAmpStateSnapshot(
+            ScarlettAirMode airMode = ScarlettAirMode.Off,
+            bool driveActive = false,
+            bool autoGainActive = false,
+            bool clipSafeActive = false,
+            float preampGainDb = 0f,
+            long gainStepEpoch = 0L,
+            bool isHeadphoneMonitoring = false,
+            int micSource = MicSourcePhone,
+            bool isHardwareVerified = false) {
+            AirMode = airMode;
+            DriveActive = driveActive;
+            AutoGainActive = autoGainActive;
+            ClipSafeActive = clipSafeActive;
+            PreampGainDb = float.IsNaN(preampGainDb) || float.IsInfinity(preampGainDb) ? 0f : preampGainDb;
+            GainStepEpoch = gainStepEpoch;
+            IsHeadphoneMonitoring = isHeadphoneMonitoring;
+            MicSource = micSource;
+            IsHardwareVerified = isHardwareVerified;
+        }
+
+        /// <summary>Returns a new immutable snapshot with only the specified properties modified.</summary>
+        public HardwarePreAmpStateSnapshot With(
+            ScarlettAirMode? airMode = null,
+            bool? driveActive = null,
+            bool? autoGainActive = null,
+            bool? clipSafeActive = null,
+            float? preampGainDb = null,
+            long? gainStepEpoch = null,
+            bool? isHeadphoneMonitoring = null,
+            int? micSource = null,
+            bool? isHardwareVerified = null) {
+            return new HardwarePreAmpStateSnapshot(
+                airMode.HasValue ? airMode.Value : AirMode,
+                driveActive.HasValue ? driveActive.Value : DriveActive,
+                autoGainActive.HasValue ? autoGainActive.Value : AutoGainActive,
+                clipSafeActive.HasValue ? clipSafeActive.Value : ClipSafeActive,
+                preampGainDb.HasValue ? preampGainDb.Value : PreampGainDb,
+                gainStepEpoch.HasValue ? gainStepEpoch.Value : GainStepEpoch,
+                isHeadphoneMonitoring.HasValue ? isHeadphoneMonitoring.Value : IsHeadphoneMonitoring,
+                micSource.HasValue ? micSource.Value : MicSource,
+                isHardwareVerified.HasValue ? isHardwareVerified.Value : IsHardwareVerified);
+        }
+
+        /// <inheritdoc/>
+        public bool Equals(HardwarePreAmpStateSnapshot other) {
+            if (other == null) {
+                return false;
+            }
+            if (ReferenceEquals(this, other)) {
+                return true;
+            }
+            return AirMode == other.AirMode &&
+                   DriveActive == other.DriveActive &&
+                   AutoGainActive == other.AutoGainActive &&
+                   ClipSafeActive == other.ClipSafeActive &&
+                   PreampGainDb.Equals(other.PreampGainDb) &&
+                   GainStepEpoch == other.GainStepEpoch &&
+                   IsHeadphoneMonitoring == other.IsHeadphoneMonitoring &&
+                   MicSource == other.MicSource &&
+                   IsHardwareVerified == other.IsHardwareVerified;
+        }
+
+        /// <inheritdoc/>
+        public override bool Equals(object obj) {
+            return Equals(obj as HardwarePreAmpStateSnapshot);
+        }
+
+        /// <inheritdoc/>
+        public override int GetHashCode() {
+            unchecked {
+                int hash = (int)AirMode;
+                hash = (hash * 397) ^ (DriveActive ? 1 : 0);
+                hash = (hash * 397) ^ (AutoGainActive ? 1 : 0);
+                hash = (hash * 397) ^ (ClipSafeActive ? 1 : 0);
+                hash = (hash * 397) ^ PreampGainDb.GetHashCode();
+                hash = (hash * 397) ^ GainStepEpoch.GetHashCode();
+                hash = (hash * 397) ^ (IsHeadphoneMonitoring ? 1 : 0);
+                hash = (hash * 397) ^ MicSource;
+                hash = (hash * 397) ^ (IsHardwareVerified ? 1 : 0);
+                return hash;
+            }
+        }
     }
 
     /// <summary>
@@ -230,6 +518,8 @@ namespace Cavern.ProAudio {
         /// <summary>Focusrite Scarlett 4i4 (4th Gen) USB Product ID.</summary>
         public const int PidScarlett4i4Gen4 = 0x821A;
 
+        /// <summary>USB control transfer bRequest: Step 0 protocol readiness / init query (IN, 0xA1, 24 bytes).</summary>
+        public const byte UsbReqCmdInit = 0x00;
         /// <summary>USB control transfer bRequest: send Scarlett2 command request (OUT, 0x21).</summary>
         public const byte UsbReqCmdSend = 0x02;
         /// <summary>USB control transfer bRequest: read Scarlett2 command response (IN, 0xA1).</summary>
@@ -250,6 +540,10 @@ namespace Cavern.ProAudio {
         public const uint CmdGetData = 0x00800000u;
         /// <summary>Command ID: write configuration data block (<c>SCARLETT2_USB_SET_DATA</c>).</summary>
         public const uint CmdSetData = 0x00800001u;
+        /// <summary>Command ID: commit/activate staged Gen 4 FCP configuration parameter (<c>SCARLETT2_USB_DATA_CMD</c>).</summary>
+        public const uint CmdDataActivate = 0x00800002u;
+        /// <summary>Command ID: query Gen 4 FCP device configuration memory map (<c>SCARLETT2_USB_INFO_DEVMAP</c>).</summary>
+        public const uint CmdInfoDevmap = 0x0080000Cu;
 
         // Public mixer_scarlett2.c Gen 3 Scarlett 2i2 configuration offsets (clean-room spec)
         /// <summary>Gen 3 2i2 NVRAM/config offset: MSD ("Easy Start") mode flag (0 = off / normal audio mode).</summary>
@@ -263,10 +557,10 @@ namespace Cavern.ProAudio {
         /// <summary>Gen 3 2i2 config offset: Direct Monitor mode (0=Off, 1=Mono, 2=Stereo).</summary>
         public const uint Gen3OffsetDirectMonitor = 0x00000014u;
 
-        // Focusrite Gen 4 interfaces use Focusrite Control Protocol (FCP) where control offsets are firmware-defined
-        // rather than fixed constants. These nominal reference offsets are gated behind IsGen4FcpControlTableVerified
-        // so Cavern never issues blind unverified SET_DATA writes to Gen 4 NVRAM.
-        /// <summary>Gen 4 FCP reference offset (gated): MSD ("Easy Start") mode flag.</summary>
+        // Nominal fallback Gen 4 reference offsets (used strictly when firmware table verification is gated off or
+        // awaiting CmdInfoDevmap 0x0080000C / TryResolveGen4ConfigTable resolution; never written blindly to NVRAM
+        // while IsGen4FcpControlTableVerified is false). For 2i2 Gen 4 (0x8219), verified static FCP offsets require fw >= 2115.
+        /// <summary>Gen 4 FCP fallback reference offset (gated): MSD ("Easy Start") mode flag.</summary>
         public const uint Gen4OffsetMsdMode = 0x00000008u;
         /// <summary>Gen 4 FCP reference offset (gated): Per-channel 48V Phantom Power (2 bytes).</summary>
         public const uint Gen4OffsetPhantomPower = 0x00000010u;
@@ -398,6 +692,126 @@ namespace Cavern.ProAudio {
             WriteUInt16Le(payload, 0, 0);
             WriteUInt16Le(payload, 2, meterCount);
             return BuildCommandPacket(CmdGetMeter, seq, payload);
+        }
+
+        /// <summary>
+        /// Builds a <see cref="CmdDataActivate"/> packet committing a staged Gen 4 FCP configuration write
+        /// using <paramref name="activateCmd"/> from <see cref="ScarlettConfigItem.ActivateCmd"/>.
+        /// </summary>
+        public static byte[] BuildActivateConfigPacket(ushort seq, uint activateCmd) {
+            byte[] payload = new byte[4];
+            WriteUInt32Le(payload, 0, activateCmd);
+            return BuildCommandPacket(CmdDataActivate, seq, payload);
+        }
+
+        /// <summary>
+        /// Extracts the integer firmware version (uint32 LE at <c>PacketHeaderBytes + 8</c>) from a
+        /// <see cref="CmdInit2"/> response packet.
+        /// </summary>
+        public static bool TryExtractFirmwareVersion(byte[] rxPacket, int rxLength, out int firmwareVersion) {
+            firmwareVersion = 0;
+            if (rxPacket == null ||
+                rxLength < PacketHeaderBytes + 12 ||
+                rxLength > rxPacket.Length) {
+                return false;
+            }
+            uint cmd = ReadUInt32Le(rxPacket, 0);
+            uint errorCode = ReadUInt32Le(rxPacket, 8);
+            if (errorCode != 0u || (cmd != 0u && cmd != CmdInit2)) {
+                return false;
+            }
+            uint rawFw = ReadUInt32Le(rxPacket, PacketHeaderBytes + 8);
+            if (rawFw == 0u || rawFw > int.MaxValue) {
+                return false;
+            }
+            firmwareVersion = (int)rawFw;
+            return true;
+        }
+
+        /// <summary>
+        /// Resolves the Linux ALSA <c>mixer_scarlett2.c</c>-verified Focusrite Control Protocol (FCP) Gen 4
+        /// configuration offset table for <paramref name="productId"/> and <paramref name="firmwareVersion"/>.
+        /// Returns <c>false</c> for unrecognized PIDs or unverified pre-2115 2i2 Gen 4 firmware so callers fall back
+        /// safely to <see cref="CmdInfoDevmap"/> probing or read-only metering rather than writing blind NVRAM offsets.
+        /// </summary>
+        public static bool TryResolveGen4ConfigTable(int productId, int firmwareVersion, out ScarlettGen4ConfigTable table) {
+            table = null;
+            switch (productId) {
+                case PidScarlett2i2Gen4: {
+                    // Verified mixer_scarlett2.c 2i2 Gen 4 table applies to firmware >= 2115
+                    // (DirectMonitorGain relocated from 0x2a0 to 0x2a4 in fw >= 2417).
+                    if (firmwareVersion < 2115) {
+                        return false;
+                    }
+                    uint dmGainOffset = firmwareVersion >= 2417 ? 0x2a4u : 0x2a0u;
+                    table = new ScarlettGen4ConfigTable(
+                        productId: productId,
+                        firmwareVersion: firmwareVersion,
+                        paramBufAddr: 0xfcu,
+                        msd: new ScarlettConfigItem(0x49u, 8, 4, false),
+                        directMonitor: new ScarlettConfigItem(0x14au, 8, 16, true),
+                        directMonitorGain: new ScarlettConfigItem(dmGainOffset, 16, 36, false),
+                        autoGainSwitch: new ScarlettConfigItem(0x135u, 8, 10, true),
+                        autoGainStatus: new ScarlettConfigItem(0x137u, 8, 0, false),
+                        phantomPower: new ScarlettConfigItem(0x48u, 8, 11, true),
+                        inputGain: new ScarlettConfigItem(0x4bu, 8, 12, true),
+                        levelSwitch: new ScarlettConfigItem(0x3cu, 8, 13, true),
+                        safeSwitch: new ScarlettConfigItem(0x147u, 8, 14, true),
+                        airSwitch: new ScarlettConfigItem(0x3eu, 8, 15, true),
+                        inputSelectSwitch: new ScarlettConfigItem(0x14bu, 8, 17, true),
+                        inputLinkSwitch: new ScarlettConfigItem(0x14eu, 8, 18, true),
+                        fallbackNote: "2i2 Gen4 verified for fw>=2115 (DirectMonitorGain 0x2a0 pre-2417, 0x2a4 >=2417); fallback to CmdInfoDevmap (0x0080000C) on older firmware.");
+                    return true;
+                }
+                case PidScarlettSoloGen4: {
+                    if (firmwareVersion < 0) {
+                        return false;
+                    }
+                    table = new ScarlettGen4ConfigTable(
+                        productId: productId,
+                        firmwareVersion: firmwareVersion,
+                        paramBufAddr: 0xd8u,
+                        msd: new ScarlettConfigItem(0x47u, 8, 4, false),
+                        directMonitor: new ScarlettConfigItem(0x108u, 8, 12, true),
+                        directMonitorGain: new ScarlettConfigItem(0x232u, 16, 26, false),
+                        autoGainSwitch: default(ScarlettConfigItem),
+                        autoGainStatus: default(ScarlettConfigItem),
+                        phantomPower: new ScarlettConfigItem(0x46u, 8, 9, true),
+                        inputGain: default(ScarlettConfigItem),
+                        levelSwitch: new ScarlettConfigItem(0x3du, 8, 10, true),
+                        safeSwitch: default(ScarlettConfigItem),
+                        airSwitch: new ScarlettConfigItem(0x3eu, 8, 11, true),
+                        inputSelectSwitch: default(ScarlettConfigItem),
+                        inputLinkSwitch: default(ScarlettConfigItem),
+                        fallbackNote: "Solo Gen4 verified mixer_scarlett2.c table; analog gain pot and no AutoGain/Safe/Link.");
+                    return true;
+                }
+                case PidScarlett4i4Gen4: {
+                    if (firmwareVersion < 0) {
+                        return false;
+                    }
+                    table = new ScarlettGen4ConfigTable(
+                        productId: productId,
+                        firmwareVersion: firmwareVersion,
+                        paramBufAddr: 0x130u,
+                        msd: new ScarlettConfigItem(0x5cu, 8, 4, false),
+                        directMonitor: default(ScarlettConfigItem),
+                        directMonitorGain: default(ScarlettConfigItem),
+                        autoGainSwitch: new ScarlettConfigItem(0x13eu, 8, 10, true),
+                        autoGainStatus: new ScarlettConfigItem(0x140u, 8, 0, false),
+                        phantomPower: new ScarlettConfigItem(0x5au, 8, 11, true),
+                        inputGain: new ScarlettConfigItem(0x5eu, 8, 12, true),
+                        levelSwitch: new ScarlettConfigItem(0x4eu, 8, 13, true),
+                        safeSwitch: new ScarlettConfigItem(0x150u, 8, 14, true),
+                        airSwitch: new ScarlettConfigItem(0x50u, 8, 15, true),
+                        inputSelectSwitch: new ScarlettConfigItem(0x153u, 8, 16, true),
+                        inputLinkSwitch: new ScarlettConfigItem(0x156u, 8, 17, true),
+                        fallbackNote: "4i4 Gen4 verified mixer_scarlett2.c table; matrix mixer routing replaces DirectMonitor switch.");
+                    return true;
+                }
+                default:
+                    return false;
+            }
         }
 
         /// <summary>

@@ -17,6 +17,11 @@ namespace Cavern {
         protected int PitchedUpdateRate { get; private set; }
 
         /// <summary>
+        /// Cumulative source samples consumed across rendered blocks since the last accumulator reset.
+        /// </summary>
+        public long CumulativeSourceSamples { get; private set; }
+
+        /// <summary>
         /// The <see cref="Listener"/> this source is attached to.
         /// </summary>
         protected internal Listener listener;
@@ -70,6 +75,21 @@ namespace Cavern {
         /// Sample rate multiplier to match the system sample rate.
         /// </summary>
         float resampleMult;
+
+        /// <summary>
+        /// Fractional sample-rate conversion accumulator preventing cumulative truncation drift across blocks.
+        /// </summary>
+        double sampleRateRemainder;
+
+        /// <summary>
+        /// Exact rational numerator remainder (modulo <see cref="Listener.SampleRate"/>) for zero-drift integer sample-rate ratios.
+        /// </summary>
+        long sampleRateNumeratorRem;
+
+        /// <summary>
+        /// Last <see cref="TimeSamples"/> value observed at the end of <see cref="AdvanceTimeSlot"/> for external seek detection.
+        /// </summary>
+        int lastExpectedTimeSamples = -1;
 
         /// <summary>
         /// Stereo mix cache to save allocation times.
@@ -150,9 +170,36 @@ namespace Cavern {
                     calculatedPitch = 1; // Disable any pitch change on low quality
                 }
 
-                resampleMult = listener.SampleRate != Clip.SampleRate ? (float)Clip.SampleRate / listener.SampleRate : 1;
-                baseUpdateRate = (int)(listener.UpdateRate * calculatedPitch);
-                PitchedUpdateRate = (int)(baseUpdateRate * resampleMult);
+                if (lastExpectedTimeSamples >= 0 && TimeSamples != lastExpectedTimeSamples) {
+                    sampleRateRemainder = 0.0;
+                    sampleRateNumeratorRem = 0;
+                }
+
+                double exactMult = listener.SampleRate > 0 && Clip.SampleRate > 0 && listener.SampleRate != Clip.SampleRate
+                    ? Clip.SampleRate / (double)listener.SampleRate
+                    : 1.0;
+                resampleMult = (float)exactMult;
+                double exactBase = listener.UpdateRate * (double)calculatedPitch;
+                baseUpdateRate = (int)exactBase;
+                int targetUpdateRate;
+                if (calculatedPitch == 1f && listener.SampleRate > 0 && Clip.SampleRate > 0) {
+                    long exactNum = (long)listener.UpdateRate * Clip.SampleRate + sampleRateNumeratorRem;
+                    targetUpdateRate = (int)(exactNum / listener.SampleRate);
+                    sampleRateNumeratorRem = exactNum % listener.SampleRate;
+                    if (targetUpdateRate < 1) {
+                        targetUpdateRate = 1;
+                    }
+                    sampleRateRemainder = sampleRateNumeratorRem / (double)listener.SampleRate;
+                } else {
+                    double exactPitched = exactBase * exactMult + sampleRateRemainder;
+                    targetUpdateRate = (int)Math.Floor(exactPitched);
+                    if (targetUpdateRate < 1) {
+                        targetUpdateRate = 1;
+                    }
+                    sampleRateRemainder = exactPitched - targetUpdateRate;
+                    sampleRateNumeratorRem = 0;
+                }
+                PitchedUpdateRate = targetUpdateRate;
                 if (samples.Length != PitchedUpdateRate) {
                     samples = new float[PitchedUpdateRate];
                 }
@@ -161,6 +208,17 @@ namespace Cavern {
                     rightSamples = new float[PitchedUpdateRate];
                 }
                 Rendered = GetSamples();
+                if (Rendered != null && Rendered.Channels > 0 && Rendered[0] != null && Rendered[0].Length != PitchedUpdateRate) {
+                    PitchedUpdateRate = Rendered[0].Length;
+                    if (samples.Length != PitchedUpdateRate) {
+                        samples = new float[PitchedUpdateRate];
+                    }
+                    if (Clip.Channels == 2 && leftSamples.Length != PitchedUpdateRate) {
+                        leftSamples = new float[PitchedUpdateRate];
+                        rightSamples = new float[PitchedUpdateRate];
+                    }
+                }
+                CumulativeSourceSamples += PitchedUpdateRate;
                 if (rendered.Length != Listener.Channels.Length * listener.UpdateRate) {
                     rendered = new float[Listener.Channels.Length * listener.UpdateRate];
                 }
@@ -308,6 +366,16 @@ namespace Cavern {
         }
 
         /// <summary>
+        /// Resets the fractional sample-rate conversion accumulator and cumulative consumed sample counter.
+        /// </summary>
+        public void ResetSampleRateAccumulator() {
+            sampleRateRemainder = 0.0;
+            sampleRateNumeratorRem = 0;
+            lastExpectedTimeSamples = -1;
+            CumulativeSourceSamples = 0;
+        }
+
+        /// <summary>
         /// Goes to the part in the clip which will be played on the next sample collection.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -321,6 +389,7 @@ namespace Cavern {
                     IsPlaying = false;
                 }
             }
+            lastExpectedTimeSamples = TimeSamples;
         }
 
         /// <summary>

@@ -1,5 +1,7 @@
 using System;
 
+using Cavern.ProAudio;
+
 namespace Cavern.VocalChain {
     /// <summary>
     /// Zero-latency, zero-GC mastering-class live vocal DSP rack (Slot 2D) implementing:
@@ -39,9 +41,11 @@ namespace Cavern.VocalChain {
         float optoSlowEnv;
         float voiceActivityEnv;
 
-        // ADAA anti-aliased tanh saturation state (x[n-1] and F1(x[n-1]))
+        // ADAA anti-aliased tanh saturation state (x[n-1], F1(x[n-1]), 4x interp prev, and HF-comp prev)
         float adaaPrevX;
         float adaaPrevF1;
+        float adaaPrevRaw;
+        float adaaPrevOut;
 
         // Stereo slapback delay + 8-channel Hadamard FDN reverb state (pre-allocated)
         readonly float[] delayBufL = new float[MaxDelaySamples];
@@ -57,10 +61,24 @@ namespace Cavern.VocalChain {
         readonly float[] fdnTempB = new float[FdnChannels];
 
         VocalChainTelemetry telemetry;
+        HardwarePreAmpStateSnapshot hardwarePreAmp = HardwarePreAmpStateSnapshot.Empty;
+        long lastGainStepEpoch;
+        float cachedRawAirGainDb;
+        bool appliedHwAirActive;
 
         /// <summary>Latest real-time metering snapshot.</summary>
         public VocalChainTelemetry Telemetry {
             get { return telemetry; }
+        }
+
+        /// <summary>Latest hardware pre-ADC gain-step epoch stored for Phase 3 <c>Slot 2D-SHIELD</c> FDKF covariance reset.</summary>
+        public long LastGainStepEpoch {
+            get { return lastGainStepEpoch; }
+        }
+
+        /// <summary>Latest hardware pre-ADC state snapshot bound to this DSP instance.</summary>
+        public HardwarePreAmpStateSnapshot HardwarePreAmpState {
+            get { return hardwarePreAmp; }
         }
 
         /// <summary>Creates and pre-allocates the zero-GC live vocal DSP rack.</summary>
@@ -73,9 +91,21 @@ namespace Cavern.VocalChain {
 
         /// <summary>Updates sample rate, song vocal DNA profile, and user macro settings.</summary>
         public void Configure(int sampleRateHz, VocalMixDnaProfile profile, VocalMacroSettings macroSettings, float[] matchEqDeltasDb = null) {
+            Configure(sampleRateHz, profile, macroSettings, matchEqDeltasDb, hardwarePreAmp);
+        }
+
+        /// <summary>Updates sample rate, song vocal DNA profile, user macro settings, and hardware pre-ADC preamp state.</summary>
+        public void Configure(
+            int sampleRateHz,
+            VocalMixDnaProfile profile,
+            VocalMacroSettings macroSettings,
+            float[] matchEqDeltasDb,
+            HardwarePreAmpStateSnapshot preAmpSnapshot) {
             sampleRate = Math.Max(16000, Math.Min(192000, sampleRateHz));
             dna = profile ?? VocalMixDnaProfile.CreateStudioDefault();
             macros = macroSettings ?? new VocalMacroSettings();
+            hardwarePreAmp = preAmpSnapshot ?? HardwarePreAmpStateSnapshot.Empty;
+            lastGainStepEpoch = hardwarePreAmp.GainStepEpoch;
 
             double srScale = sampleRate / 48000.0;
             for (int i = 0; i < FdnChannels; i++) {
@@ -97,14 +127,36 @@ namespace Cavern.VocalChain {
             float airDelta = hasCalibratedMatchEq && IsFinite(matchEqDeltasDb[5]) && IsFinite(matchEqDeltasDb[6])
                 ? 0.5f * (matchEqDeltasDb[5] + matchEqDeltasDb[6])
                 : 0f;
+            cachedRawAirGainDb = airDelta * matchScale;
+            appliedHwAirActive = IsHardwareAirActive(hardwarePreAmp);
+            float effectiveAirDb = Clamp(cachedRawAirGainDb - (appliedHwAirActive ? 2.5f : 0f), -6f, 6f);
 
             hpfState.SetHighPass(sampleRate, 92f, 0.707f);
             lowShelfMatch.SetLowShelf(sampleRate, 220f, Clamp(lowDelta * matchScale, -6f, 6f), 0.75f);
             midBellMatch.SetPeaking(sampleRate, 2200f, Clamp(midDelta * matchScale, -6f, 6f), 1.1f);
-            airShelfMatch.SetHighShelf(sampleRate, 8500f, Clamp(airDelta * matchScale, -6f, 6f), 0.71f);
+            airShelfMatch.SetHighShelf(sampleRate, 8500f, effectiveAirDb, 0.71f);
             deEssBandpass.SetBandPass(sampleRate, 7200f, 1.6f);
             pocketCarveL.SetPeaking(sampleRate, 2400f, 0f, 1.0f);
             pocketCarveR.SetPeaking(sampleRate, 2400f, 0f, 1.0f);
+        }
+
+        /// <summary>
+        /// Updates the hardware pre-ADC snapshot zero-GC on the audio thread and adapts the HF Air shelf only
+        /// when Scarlett Air / MicSource compensation state changes.
+        /// </summary>
+        public void SetHardwarePreAmpState(HardwarePreAmpStateSnapshot preAmpSnapshot) {
+            HardwarePreAmpStateSnapshot effective = preAmpSnapshot ?? HardwarePreAmpStateSnapshot.Empty;
+            if (ReferenceEquals(effective, hardwarePreAmp) || effective.Equals(hardwarePreAmp)) {
+                return;
+            }
+            hardwarePreAmp = effective;
+            lastGainStepEpoch = effective.GainStepEpoch;
+            bool hwAirActive = IsHardwareAirActive(effective);
+            if (hwAirActive != appliedHwAirActive) {
+                appliedHwAirActive = hwAirActive;
+                float effectiveAirDb = Clamp(cachedRawAirGainDb - (hwAirActive ? 2.5f : 0f), -6f, 6f);
+                airShelfMatch.SetHighShelf(sampleRate, 8500f, effectiveAirDb, 0.71f);
+            }
         }
 
         /// <summary>Zeroes real-time metering telemetry cleanly when bypassed or when live mic is inactive.</summary>
@@ -137,6 +189,8 @@ namespace Cavern.VocalChain {
             voiceActivityEnv = 0f;
             adaaPrevX = 0f;
             adaaPrevF1 = 0f;
+            adaaPrevRaw = 0f;
+            adaaPrevOut = 0f;
             Array.Clear(delayBufL, 0, delayBufL.Length);
             Array.Clear(delayBufR, 0, delayBufR.Length);
             delayWritePos = 0;
@@ -150,16 +204,22 @@ namespace Cavern.VocalChain {
 
         /// <summary>
         /// Processes a mono/stereo live vocal buffer in place into stereo output (interleaved L/R) with zero heap allocations.
-        /// Optionally carves a subtle 1-4 kHz vocal pocket into <paramref name="backingStereoInterleaved"/> when provided.
+        /// Optionally carves a subtle 1-4 kHz vocal pocket into <paramref name="backingStereoInterleaved"/> when provided,
+        /// and applies lock-free Scarlett / USB pre-ADC <paramref name="preAmpSnapshot"/> compensation when supplied.
         /// </summary>
         public void ProcessStereoBlockZeroGc(
             float[] vocalStereoInterleaved,
             int vocalOffset,
             int frameCount,
             float[] backingStereoInterleaved = null,
-            int backingOffset = 0) {
+            int backingOffset = 0,
+            HardwarePreAmpStateSnapshot preAmpSnapshot = null) {
             if (vocalStereoInterleaved == null || frameCount <= 0) {
                 return;
+            }
+
+            if (preAmpSnapshot != null) {
+                SetHardwarePreAmpState(preAmpSnapshot);
             }
 
             if (!macros.Enabled) {
@@ -208,7 +268,11 @@ namespace Cavern.VocalChain {
             float matchScale = Clamp(macros.MixMatchPct / 100f, 0f, 1.5f);
             float dynScale = Clamp(macros.DynamicsPct / 100f, 0f, 1.5f) * matchScale;
             float revScale = Clamp(macros.ReverbPct / 100f, 0f, 1.5f) * matchScale;
-            float warmthDrive = 1f + Clamp((macros.WarmthPct / 100f) * dna.HarmonicWarmth * 3.2f * matchScale, 0f, 3.5f);
+            // Avoid double-saturating Scarlett hardware Presence+Drive when USB mic is active
+            bool hwDriveActive = IsHardwareDriveActive(hardwarePreAmp);
+            float warmthDrive = hwDriveActive
+                ? 1f
+                : 1f + Clamp((macros.WarmthPct / 100f) * dna.HarmonicWarmth * 3.2f * matchScale, 0f, 3.5f);
 
             // Ballistics coefficients
             float gateAtk = ExpCoeff(0.002f);
@@ -324,9 +388,12 @@ namespace Cavern.VocalChain {
                     }
                 }
 
-                // 5. 1st-Order ADAA Anti-Aliased Analog Saturation (ChowDSP tanh antiderivative)
+                // 5. 4x-Oversampled 1st-Order ADAA Anti-Aliased Analog Saturation (ChowDSP tanh antiderivative + exact HF boxcar de-tilt)
                 if (warmthDrive > 1.02f) {
-                    x = ProcessAdaaTanh(x * warmthDrive) / warmthDrive;
+                    x = ProcessWarmthAdaa4x(x, warmthDrive);
+                } else {
+                    adaaPrevRaw = x;
+                    adaaPrevOut = x;
                 }
 
                 // Track voice activity for instrumental sidechain pocket glue
@@ -418,6 +485,20 @@ namespace Cavern.VocalChain {
             return y;
         }
 
+        float ProcessWarmthAdaa4x(float x, float drive) {
+            float delta = x - adaaPrevRaw;
+            float y = 0f;
+            for (int s = 1; s <= 4; s++) {
+                y = ProcessAdaaTanh((adaaPrevRaw + 0.25f * s * delta) * drive);
+            }
+            y /= drive;
+            // Cancel the linear-regime 4x ADAA boxcar response (0.875 + 0.125*z^-1) so 10-20 kHz air stays flat
+            float outSample = (y - 0.125f * adaaPrevOut) * (1f / 0.875f);
+            adaaPrevRaw = x;
+            adaaPrevOut = outSample;
+            return outSample;
+        }
+
         /// <summary>Overflow-safe <c>ln(cosh(x)) = |x| + ln(1 + e^(-2|x|)) - ln(2)</c>.</summary>
         public static float LogCosh(float x) {
             double ax = Math.Abs((double)x);
@@ -475,6 +556,20 @@ namespace Cavern.VocalChain {
             }
             outL = sumL * 0.35f;
             outR = sumR * 0.35f;
+        }
+
+        static bool IsHardwareAirActive(HardwarePreAmpStateSnapshot preAmp) {
+            return preAmp != null &&
+                   preAmp.IsHardwareVerified &&
+                   preAmp.MicSource == HardwarePreAmpStateSnapshot.MicSourceUsbInterface &&
+                   preAmp.AirMode != ScarlettAirMode.Off;
+        }
+
+        static bool IsHardwareDriveActive(HardwarePreAmpStateSnapshot preAmp) {
+            return preAmp != null &&
+                   preAmp.IsHardwareVerified &&
+                   preAmp.MicSource == HardwarePreAmpStateSnapshot.MicSourceUsbInterface &&
+                   (preAmp.DriveActive || preAmp.AirMode == ScarlettAirMode.PresenceAndDrive);
         }
 
         static bool IsFinite(float v) {

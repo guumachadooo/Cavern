@@ -90,7 +90,20 @@ public partial class MainActivity : Activity, ICavernizeApp {
     public RenderingSettings RenderingSettings => renderingSettings;
 
     CavernizeTrack selectedTrack;
-    List<TrackSourceItem> trackSourceItems = [];
+    IReadOnlyList<TrackSourceItem> fallbackTrackSourceItems = Array.Empty<TrackSourceItem>();
+    bool useLiveEngineSources;
+    IReadOnlyList<TrackSourceItem> trackSourceItems =>
+        useLiveEngineSources && playerEngine != null ? playerEngine.SourceItems : fallbackTrackSourceItems;
+
+    void SetLiveTrackSourceItems() {
+        useLiveEngineSources = true;
+        fallbackTrackSourceItems = Array.Empty<TrackSourceItem>();
+    }
+
+    void SetFallbackTrackSourceItems(IReadOnlyList<TrackSourceItem> items) {
+        useLiveEngineSources = false;
+        fallbackTrackSourceItems = items ?? Array.Empty<TrackSourceItem>();
+    }
     volatile bool isOperationRunning;
     CancellationTokenSource activeCts;
     string lastRenderedFilePath;
@@ -271,10 +284,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         };
         playerEngine.PlaybackCompleted += () => RunOnUiThread(OnPlayerCompleted);
         playerEngine.SourcesRebuilt += () => RunOnUiThread(() => {
-            if (uiDestroyed) {
+            if (uiDestroyed || selectedTrack == null || (selectedTrack.Codec == Codec.TrueHD && decodedTrueHDTrack == null)) {
                 return;
             }
-            trackSourceItems = [.. playerEngine.SourceItems];
+            SetLiveTrackSourceItems();
             RefreshPlayerSourcesList();
             RefreshExtractorChecklist();
             UpdateRoomCanvas();

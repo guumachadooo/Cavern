@@ -32,6 +32,52 @@ static void test_ring_buffer_wraparound(void) {
     printf("[PASS] SPSC Lock-Free RingBuffer wrap-around (20 rounds x 80 stereo frames, 0 xruns)\n");
 }
 
+static void test_ring_buffer_discard_oldest(void) {
+    float backing[256]; /* 128 stereo frames, usable = 127 frames */
+    CavRingBuffer rb;
+    assert(cav_rb_init(&rb, backing, 256u, 2u) == 0);
+    assert(cav_rb_discard_oldest(NULL, 10u) == 0u);
+
+    float in_blk[200];
+    float out_blk[200];
+    for (int i = 0; i < 200; i++) {
+        in_blk[i] = (float)(i + 1);
+    }
+    assert(cav_rb_write(&rb, in_blk, 100u) == 100u);
+    assert(cav_rb_read(&rb, out_blk, 50u, 0) == 50u); /* avail = 50, r = 100, w = 200 */
+
+    /* Second write wraps around 256-sample backing array */
+    for (int i = 0; i < 120; i++) {
+        in_blk[i] = (float)(1000 + i);
+    }
+    assert(cav_rb_write(&rb, in_blk, 60u) == 60u); /* avail = 110 */
+    assert(cav_rb_discard_oldest(&rb, 120u) == 0u);
+    assert(cav_rb_avail_read_frames(&rb) == 110u);
+
+    /* Discard oldest 94 frames across wrap boundary, keeping newest 16 frames */
+    assert(cav_rb_discard_oldest(&rb, 16u) == 94u);
+    assert(cav_rb_avail_read_frames(&rb) == 16u);
+    assert(cav_rb_read(&rb, out_blk, 16u, 0) == 16u);
+    for (int i = 0; i < 32; i++) {
+        float expected = (float)(1000 + (60 - 16) * 2 + i);
+        assert(fabsf(out_blk[i] - expected) < 1e-6f);
+    }
+
+    /* Discard down to 0 and flush parity */
+    assert(cav_rb_write(&rb, in_blk, 32u) == 32u);
+    assert(cav_rb_discard_oldest(&rb, 0u) == 32u);
+    assert(cav_rb_avail_read_frames(&rb) == 0u);
+    assert(cav_rb_avail_write_frames(&rb) == 127u);
+
+    assert(cav_rb_write(&rb, in_blk, 40u) == 40u);
+    cav_rb_request_flush(&rb);
+    assert(cav_rb_discard_oldest(&rb, 10u) == 0u);
+    assert(cav_rb_avail_read_frames(&rb) == 0u);
+    assert(rb.overruns == 0u);
+    assert(rb.underruns == 0u);
+    printf("[PASS] SPSC RingBuffer cav_rb_discard_oldest wrap-around, zero-cap & flush parity\n");
+}
+
 static void test_uac2_descriptor_and_feedback(void) {
     /* Synthetic Focusrite Scarlett 2i2 Gen 3/4 style UAC2 config descriptor:
      * AC if=0 (clock_id=41 programmable) + AS OUT if=1 alt=1 (2ch 24-in-32 async EP 0x01)
@@ -138,6 +184,7 @@ static void test_pcm_pack_unpack_and_scarlett2(void) {
 
 int main(void) {
     test_ring_buffer_wraparound();
+    test_ring_buffer_discard_oldest();
     test_uac2_descriptor_and_feedback();
     test_pcm_pack_unpack_and_scarlett2();
     return 0;

@@ -65,26 +65,34 @@ struct PathAAudioEngine {
 
         /* 1. Output-driven full-duplex capture (google/oboe golden rule: non-blocking read inside output callback) */
         if (self->in_stream && self->is_full_duplex.load(std::memory_order_relaxed)) {
-            uint32_t to_read = frames < kMaxCallbackFrames ? frames : kMaxCallbackFrames;
+            const int32_t in_ch = AAudioStream_getChannelCount(self->in_stream);
+            const int32_t safe_cap = (in_ch > 0)
+                ? static_cast<int32_t>((kMaxCallbackFrames * 2u) / static_cast<uint32_t>(in_ch))
+                : static_cast<int32_t>(kMaxCallbackFrames);
+            const uint32_t to_read = frames < static_cast<uint32_t>(safe_cap) ? frames : static_cast<uint32_t>(safe_cap);
             if (!self->input_drained.load(std::memory_order_relaxed)) {
-                /* Drain initial startup backlog so capture stays sample-locked to output burst */
+                /* Drain initial startup backlog (timeout=0, up to 64 bursts) until 0 frames remain */
                 int32_t drained = 0;
                 int32_t iter = 0;
                 do {
                     drained = AAudioStream_read(self->in_stream, self->in_callback_scratch, static_cast<int32_t>(to_read), 0);
                     iter++;
-                } while (drained == static_cast<int32_t>(to_read) && iter < 8);
+                } while (drained > 0 && iter < 64);
                 self->input_drained.store(true, std::memory_order_release);
             } else {
                 int32_t got = AAudioStream_read(self->in_stream, self->in_callback_scratch, static_cast<int32_t>(to_read), 0);
                 if (got > 0) {
-                    const int32_t in_ch = AAudioStream_getChannelCount(self->in_stream);
                     if (in_ch == 1) {
                         /* Up-duplicate mono capture in-place (backwards) to stereo SPSC input ring */
                         for (int32_t i = got - 1; i >= 0; --i) {
                             float s = self->in_callback_scratch[i];
                             self->in_callback_scratch[i * 2] = s;
                             self->in_callback_scratch[i * 2 + 1] = s;
+                        }
+                    } else if (in_ch > 2) {
+                        for (int32_t i = 0; i < got; ++i) {
+                            self->in_callback_scratch[i * 2] = self->in_callback_scratch[i * in_ch];
+                            self->in_callback_scratch[i * 2 + 1] = self->in_callback_scratch[i * in_ch + 1];
                         }
                     }
                     cav_rb_write(&self->in_rb, self->in_callback_scratch, static_cast<uint32_t>(got));
@@ -132,6 +140,7 @@ struct PathAAudioEngine {
         int32_t channels,
         bool with_callback,
         bool low_latency_duplex,
+        int32_t input_preset,
         AAudioStream** out_handle) {
         AAudioStreamBuilder* builder = nullptr;
         if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK || !builder) {
@@ -162,8 +171,8 @@ struct PathAAudioEngine {
             }
         } else {
             static auto fn_set_preset = reinterpret_cast<SetInt32Fn>(dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setInputPreset"));
-            if (fn_set_preset) {
-                fn_set_preset(builder, 9 /* AAUDIO_INPUT_PRESET_UNPROCESSED */);
+            if (fn_set_preset && input_preset > 0) {
+                fn_set_preset(builder, input_preset);
             }
         }
         if (with_callback) {
@@ -202,6 +211,46 @@ struct PathAAudioEngine {
         return true;
     }
 
+    bool open_input_with_preset_cascade(int32_t sample_rate, int32_t buffer_frames, int32_t in_dev_id) {
+        using SetInt32Fn = void (*)(AAudioStreamBuilder*, int32_t);
+        static auto fn_set_preset = reinterpret_cast<SetInt32Fn>(dlsym(RTLD_DEFAULT, "AAudioStreamBuilder_setInputPreset"));
+        if (!fn_set_preset) {
+            return open_single_stream(AAUDIO_DIRECTION_INPUT, sample_rate, buffer_frames, in_dev_id, 2, false, true, 0, &in_stream) ||
+                   open_single_stream(AAUDIO_DIRECTION_INPUT, sample_rate, buffer_frames, in_dev_id, 1, false, true, 0, &in_stream);
+        }
+        static constexpr int32_t kPresets[] = {
+            9,  /* AAUDIO_INPUT_PRESET_UNPROCESSED */
+            10, /* AAUDIO_INPUT_PRESET_VOICE_PERFORMANCE */
+            0   /* HAL default */
+        };
+        for (int32_t preset : kPresets) {
+            if (open_single_stream(AAUDIO_DIRECTION_INPUT, sample_rate, buffer_frames, in_dev_id, 2, false, true, preset, &in_stream) ||
+                open_single_stream(AAUDIO_DIRECTION_INPUT, sample_rate, buffer_frames, in_dev_id, 1, false, true, preset, &in_stream)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void drain_input_backlog_nonblocking() {
+        if (!in_stream) return;
+        const int32_t in_ch = AAudioStream_getChannelCount(in_stream);
+        const int32_t safe_cap = (in_ch > 0)
+            ? static_cast<int32_t>((kMaxCallbackFrames * 2u) / static_cast<uint32_t>(in_ch))
+            : static_cast<int32_t>(kMaxCallbackFrames);
+        int32_t burst = AAudioStream_getFramesPerBurst(in_stream);
+        if (burst <= 0) burst = active_burst.load(std::memory_order_relaxed);
+        if (burst <= 0) burst = 128;
+        if (burst > safe_cap) burst = safe_cap;
+
+        for (int32_t iter = 0; iter < 64; ++iter) {
+            int32_t got = AAudioStream_read(in_stream, in_callback_scratch, burst, 0);
+            if (got <= 0) {
+                break;
+            }
+        }
+    }
+
     int32_t start(int32_t sample_rate, int32_t buffer_frames, int32_t enable_input, int32_t out_dev_id, int32_t in_dev_id) {
         std::lock_guard<std::mutex> lock(lifecycle_mtx);
         stop_locked();
@@ -213,7 +262,7 @@ struct PathAAudioEngine {
         tuner_cooldown.store(0, std::memory_order_relaxed);
 
         bool duplex_requested = enable_input != 0;
-        if (!open_single_stream(AAUDIO_DIRECTION_OUTPUT, sample_rate, buffer_frames, out_dev_id, 2, true, duplex_requested, &out_stream)) {
+        if (!open_single_stream(AAUDIO_DIRECTION_OUTPUT, sample_rate, buffer_frames, out_dev_id, 2, true, duplex_requested, 0, &out_stream)) {
             return -10;
         }
 
@@ -223,10 +272,12 @@ struct PathAAudioEngine {
 
         bool duplex_ok = false;
         if (enable_input) {
-            /* Try stereo first (Scarlett 2i2 2-ch), fall back to mono if device/phone mic is 1-ch */
-            if (open_single_stream(AAUDIO_DIRECTION_INPUT, actual_sr, buffer_frames, in_dev_id, 2, false, true, &in_stream) ||
-                open_single_stream(AAUDIO_DIRECTION_INPUT, actual_sr, buffer_frames, in_dev_id, 1, false, true, &in_stream)) {
+            /* Try stereo first (Scarlett 2i2 2-ch), fall back to mono, preferring UNPROCESSED -> VOICE_PERFORMANCE */
+            if (open_input_with_preset_cascade(actual_sr, buffer_frames, in_dev_id)) {
                 if (AAudioStream_requestStart(in_stream) == AAUDIO_OK) {
+                    aaudio_stream_state_t in_state = AAUDIO_STREAM_STATE_UNKNOWN;
+                    AAudioStream_waitForStateChange(in_stream, AAUDIO_STREAM_STATE_STARTING, &in_state, 50000000LL);
+                    drain_input_backlog_nonblocking();
                     duplex_ok = true;
                 } else {
                     AAudioStream_close(in_stream);
@@ -319,11 +370,22 @@ int32_t path_a_write_playback(const float* data, int32_t frames) {
     return written;
 }
 int32_t path_a_read_capture(float* data, int32_t max_frames) {
-    if (max_frames <= 0) return 0;
+    if (!data || max_frames <= 0) return 0;
     g_aaudio.io_inflight.fetch_add(1, std::memory_order_acq_rel);
-    int32_t got = g_aaudio.running.load(std::memory_order_acquire)
-        ? static_cast<int32_t>(cav_rb_read(&g_aaudio.in_rb, data, static_cast<uint32_t>(max_frames), 0))
-        : 0;
+    int32_t got = 0;
+    if (g_aaudio.running.load(std::memory_order_acquire)) {
+        int32_t sr = g_aaudio.active_sr.load(std::memory_order_relaxed);
+        int32_t burst = g_aaudio.active_burst.load(std::memory_order_relaxed);
+        if (sr <= 0) sr = 48000;
+        if (burst <= 0) burst = 128;
+        int32_t min_burst_cap = burst + (burst / 2);
+        int32_t sr_cap = sr / 125; /* 8 ms RT cap */
+        int32_t cap_frames = min_burst_cap > sr_cap ? min_burst_cap : sr_cap;
+        if (cap_frames < 64) cap_frames = 64;
+        if (cap_frames > 4096) cap_frames = 4096;
+        cav_rb_discard_oldest(&g_aaudio.in_rb, static_cast<uint32_t>(cap_frames));
+        got = static_cast<int32_t>(cav_rb_read(&g_aaudio.in_rb, data, static_cast<uint32_t>(max_frames), 0));
+    }
     g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);
     return got;
 }
@@ -335,6 +397,21 @@ int32_t path_a_free_frames() {
     g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);
     return avail;
 }
+int32_t path_a_buffered_frames() {
+    g_aaudio.io_inflight.fetch_add(1, std::memory_order_acq_rel);
+    int32_t used = g_aaudio.running.load(std::memory_order_acquire)
+        ? static_cast<int32_t>(cav_rb_avail_read_frames(&g_aaudio.out_rb))
+        : 0;
+    g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);
+    return used;
+}
+void path_a_flush_playback() {
+    g_aaudio.io_inflight.fetch_add(1, std::memory_order_acq_rel);
+    if (g_aaudio.running.load(std::memory_order_acquire)) {
+        cav_rb_request_flush(&g_aaudio.out_rb);
+    }
+    g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);
+}
 void path_a_get_status(CavProAudioStatus* st) { g_aaudio.fill_status(st); }
 
 #else
@@ -344,6 +421,8 @@ void path_a_stop() {}
 int32_t path_a_write_playback(const float*, int32_t) { return 0; }
 int32_t path_a_read_capture(float*, int32_t) { return 0; }
 int32_t path_a_free_frames() { return 0; }
+int32_t path_a_buffered_frames() { return 0; }
+void path_a_flush_playback() {}
 void path_a_get_status(CavProAudioStatus* st) { if (st) memset(st, 0, sizeof(*st)); }
 
 #endif /* __ANDROID__ */

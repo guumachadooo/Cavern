@@ -5,6 +5,8 @@ using Android.OS;
 
 using Cavern.ProAudio;
 
+using Cavernize.Logic.Spatial;
+
 using CavernizeAndroid.Audio;
 
 namespace CavernizeAndroid.Services;
@@ -75,6 +77,11 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     UsbDeviceConnection activeConnection;
     UsbProAudioDeviceSnapshot snapshot = new();
     ScarlettHardwareState scarlettState = new();
+    ScarlettGen4ConfigTable gen4ConfigTable;
+    ProAudioMicSource configuredMicSource = ProAudioMicSource.PhoneMic;
+    bool headphoneMonitoringActive;
+    long gainStepEpoch;
+    volatile HardwarePreAmpStateSnapshot preAmpSnapshot = HardwarePreAmpStateSnapshot.Empty;
     ushort scarlettSeq = 1;
     bool scarlettInitialized;
     volatile bool pathBOwnsFileDescriptor;
@@ -84,6 +91,9 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
 
     /// <summary>Raised on the main thread when a USB audio interface attaches, detaches, or gets permission.</summary>
     public event Action<UsbProAudioDeviceSnapshot> DeviceStateChanged;
+
+    /// <summary>Raised outside internal locks whenever the hardware pre-ADC state snapshot changes.</summary>
+    public event Action<HardwarePreAmpStateSnapshot> PreAmpSnapshotChanged;
 
     /// <summary>Latest attached USB audio interface snapshot.</summary>
     public UsbProAudioDeviceSnapshot CurrentSnapshot {
@@ -101,6 +111,44 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
                 return scarlettState;
             }
         }
+    }
+
+    /// <summary>Latest lock-free Focusrite / USB pre-ADC hardware state snapshot.</summary>
+    public HardwarePreAmpStateSnapshot CurrentPreAmpSnapshot => preAmpSnapshot;
+
+    /// <summary>Updates the active microphone hardware source policy and publishes an updated pre-ADC snapshot.</summary>
+    public void UpdateMicSource(ProAudioMicSource micSource) {
+        ProAudioMicSource clean = Enum.IsDefined(typeof(ProAudioMicSource), micSource)
+            ? micSource
+            : ProAudioMicSource.PhoneMic;
+        HardwarePreAmpStateSnapshot prev;
+        HardwarePreAmpStateSnapshot next;
+        lock (syncLock) {
+            if (configuredMicSource == clean) {
+                return;
+            }
+            configuredMicSource = clean;
+            prev = preAmpSnapshot;
+            next = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+            preAmpSnapshot = next;
+        }
+        PublishPreAmpSnapshotIfChanged(next, prev);
+    }
+
+    /// <summary>Updates whether audio monitoring is routed to headphones/IEMs rather than an open loudspeaker.</summary>
+    public void UpdateHeadphoneMonitoring(bool isHeadphoneMonitoring) {
+        HardwarePreAmpStateSnapshot prev;
+        HardwarePreAmpStateSnapshot next;
+        lock (syncLock) {
+            if (headphoneMonitoringActive == isHeadphoneMonitoring) {
+                return;
+            }
+            headphoneMonitoringActive = isHeadphoneMonitoring;
+            prev = preAmpSnapshot;
+            next = BuildPreAmpSnapshotLocked(incrementGainEpoch: false);
+            preAmpSnapshot = next;
+        }
+        PublishPreAmpSnapshotIfChanged(next, prev);
     }
 
     public UsbProAudioDeviceManager(Context context) {
@@ -152,36 +200,54 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             return new UsbProAudioDeviceSnapshot();
         }
 
-        UsbProAudioDeviceSnapshot updated;
-        lock (syncLock) {
-            UsbDevice best = FindBestAudioUsbDevice();
-            if (best == null) {
-                CloseConnectionLocked();
-                activeDevice = null;
-                scarlettState = new ScarlettHardwareState();
-                updated = new UsbProAudioDeviceSnapshot();
-                snapshot = updated;
-            } else {
-                bool sameDevice = activeDevice != null &&
-                                  activeDevice.DeviceId == best.DeviceId &&
-                                  activeDevice.VendorId == best.VendorId &&
-                                  activeDevice.ProductId == best.ProductId;
-                if (!sameDevice) {
-                    CloseConnectionLocked();
-                    activeDevice = best;
-                    scarlettInitialized = false;
-                }
+        UsbProAudioDeviceSnapshot updated = null;
+        HardwarePreAmpStateSnapshot prevPreAmp = null;
+        HardwarePreAmpStateSnapshot nextPreAmp = null;
 
-                bool hasPerm = usbManager.HasPermission(best);
-                if (hasPerm && autoOpenIfPermitted && activeConnection == null) {
-                    TryOpenActiveDeviceLocked();
+        for (int attempt = 0; attempt < 2; attempt++) {
+            UsbDeviceConnection connToClose = null;
+            lock (syncLock) {
+                UsbDevice best = FindBestAudioUsbDevice();
+                if (best == null) {
+                    connToClose = DetachConnectionLocked(resetDevice: true);
+                    scarlettState = new ScarlettHardwareState();
+                    updated = new UsbProAudioDeviceSnapshot();
+                    snapshot = updated;
+                    prevPreAmp ??= preAmpSnapshot;
+                    nextPreAmp = BuildPreAmpSnapshotLocked(incrementGainEpoch: connToClose != null);
+                    preAmpSnapshot = nextPreAmp;
+                } else {
+                    bool sameDevice = IsSameUsbDevice(activeDevice, best);
+                    if (!sameDevice) {
+                        connToClose = DetachConnectionLocked(resetDevice: false);
+                        activeDevice = best;
+                        scarlettState = new ScarlettHardwareState();
+                    }
+                    if (connToClose == null) {
+                        bool hasPerm = usbManager.HasPermission(best);
+                        prevPreAmp ??= preAmpSnapshot;
+                        if (hasPerm && autoOpenIfPermitted && activeConnection == null) {
+                            TryOpenActiveDeviceLocked();
+                        }
+                        nextPreAmp = BuildPreAmpSnapshotLocked(incrementGainEpoch: false);
+                        preAmpSnapshot = nextPreAmp;
+                        updated = BuildSnapshotLocked(best, hasPerm);
+                        snapshot = updated;
+                    }
                 }
-
-                updated = BuildSnapshotLocked(best, hasPerm);
-                snapshot = updated;
             }
+            if (connToClose != null) {
+                ReleaseConnectionOutsideLock(connToClose, notifyDetached: true);
+                if (updated != null) {
+                    break;
+                }
+                continue;
+            }
+            break;
         }
 
+        updated ??= new UsbProAudioDeviceSnapshot();
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
         NotifyDeviceStateChanged(updated);
         return updated;
     }
@@ -238,70 +304,85 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     /// for Path B (<c>libusb_wrap_sys_device</c>), or -1 if unavailable.
     /// </summary>
     public int AcquireOpenFileDescriptor() {
+        HardwarePreAmpStateSnapshot prevPreAmp = null;
+        HardwarePreAmpStateSnapshot nextPreAmp = null;
+        int fd = -1;
         lock (syncLock) {
             if (activeDevice == null) {
                 activeDevice = FindBestAudioUsbDevice();
             }
-            if (activeDevice == null || usbManager == null || !usbManager.HasPermission(activeDevice)) {
-                return -1;
+            if (activeDevice != null && usbManager != null && usbManager.HasPermission(activeDevice)) {
+                if (activeConnection == null) {
+                    prevPreAmp = preAmpSnapshot;
+                    TryOpenActiveDeviceLocked();
+                    nextPreAmp = preAmpSnapshot;
+                }
+                fd = activeConnection != null ? activeConnection.FileDescriptor : -1;
             }
-            if (activeConnection == null) {
-                TryOpenActiveDeviceLocked();
-            }
-            return activeConnection != null ? activeConnection.FileDescriptor : -1;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return fd;
     }
 
     /// <summary>
-    /// Initializes Focusrite Scarlett2 host control mode (<c>CMD_INIT_1</c> + <c>CMD_INIT_2</c>) on verified
-    /// control-table devices (Gen 3, or Gen 4 once FCP table discovery is verified) and optionally disables
-    /// MSD ("Easy Start") mode so the interface operates in full UAC2 pro-audio mode.
+    /// Initializes Focusrite Scarlett2 host control mode (Step 0 + <c>CMD_INIT_1</c> + <c>CMD_INIT_2</c> +
+    /// Gen 4 FCP table verification) on Gen 3/4 devices and optionally disables MSD ("Easy Start") mode so
+    /// the interface operates in full UAC2 pro-audio mode.
     /// </summary>
     public bool TryInitializeScarlettControl(bool exitMsdMode = false) {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ready;
         lock (syncLock) {
-            if (!scarlettState.SupportsSoftwareControls) {
-                return false;
-            }
-            int vendorIf = snapshot.Topology?.VendorControlInterface ?? -1;
-            if (vendorIf < 0) {
-                return false;
-            }
-
-            if (!scarlettInitialized) {
-                if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit1, null, out _)) {
-                    return false;
-                }
-                if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit2, null, out _)) {
-                    return false;
-                }
-                scarlettInitialized = true;
-            }
-
-            if (exitMsdMode) {
-                uint msdOffset = scarlettState.Generation == ScarlettGeneration.Gen4
-                    ? Scarlett2Protocol.Gen4OffsetMsdMode
-                    : Scarlett2Protocol.Gen3OffsetMsdMode;
-                if (WriteScarlettConfigLocked(vendorIf, msdOffset, new byte[] { 0 })) {
+            prevPreAmp = preAmpSnapshot;
+            ready = EnsureScarlettReadyLocked(out int vendorIf);
+            if (ready && exitMsdMode) {
+                bool msdWritten = scarlettState.Generation == ScarlettGeneration.Gen4
+                    ? (gen4ConfigTable != null && gen4ConfigTable.Msd.IsValid &&
+                       WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.Msd, 0, 0))
+                    : WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen3OffsetMsdMode, new byte[] { 0 });
+                if (msdWritten) {
                     SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdConfigSave, null, out _);
                 }
             }
-            return true;
+            nextPreAmp = preAmpSnapshot;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ready;
     }
 
     /// <summary>Sets Focusrite Scarlett 48V Phantom Power (shared on Gen 3, independent Ch1/Ch2 on Gen 4).</summary>
     public bool SetScarlettPhantomPower(bool ch1Enabled, bool ch2Enabled) {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ok;
         lock (syncLock) {
+            prevPreAmp = preAmpSnapshot;
             if (!EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
-            }
-            bool ok;
-            if (scarlettState.Generation == ScarlettGeneration.Gen4) {
-                ok = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetPhantomPower,
-                    new byte[] { (byte)(ch1Enabled ? 1 : 0), (byte)(ch2Enabled ? 1 : 0) });
-                if (ok) {
-                    scarlettState.PhantomPowerCh1 = ch1Enabled;
-                    scarlettState.PhantomPowerCh2 = ch2Enabled;
+                nextPreAmp = preAmpSnapshot;
+                ok = false;
+            } else if (scarlettState.Generation == ScarlettGeneration.Gen4) {
+                if (gen4ConfigTable == null || !gen4ConfigTable.PhantomPower.IsValid) {
+                    nextPreAmp = preAmpSnapshot;
+                    ok = false;
+                } else {
+                    bool hasCh2 = scarlettState.ProductId != Scarlett2Protocol.PidScarlettSoloGen4;
+                    bool ok1 = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.PhantomPower, 0, ch1Enabled ? 1 : 0);
+                    bool ok2 = !hasCh2 || WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.PhantomPower, 1, ch2Enabled ? 1 : 0);
+                    if (ok1) {
+                        scarlettState.PhantomPowerCh1 = ch1Enabled;
+                        if (!hasCh2) {
+                            scarlettState.PhantomPowerCh2 = ch1Enabled;
+                        }
+                    }
+                    if (hasCh2 && ok2) {
+                        scarlettState.PhantomPowerCh2 = ch2Enabled;
+                    }
+                    ok = ok1 && ok2;
+                    if (ok1 || (hasCh2 && ok2)) {
+                        preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                    }
+                    nextPreAmp = preAmpSnapshot;
                 }
             } else {
                 // Gen 3 2i2 has a single shared 48V phantom switch
@@ -311,90 +392,184 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
                 if (ok) {
                     scarlettState.PhantomPowerCh1 = shared;
                     scarlettState.PhantomPowerCh2 = shared;
+                    preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
                 }
+                nextPreAmp = preAmpSnapshot;
             }
-            return ok;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ok;
     }
 
     /// <summary>Sets Focusrite Scarlett Air analog preamp emulation mode per channel.</summary>
     public bool SetScarlettAirMode(ScarlettAirMode ch1, ScarlettAirMode ch2) {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ok;
         lock (syncLock) {
+            prevPreAmp = preAmpSnapshot;
             if (!EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
-            }
-            bool ok;
-            if (scarlettState.Generation == ScarlettGeneration.Gen4) {
-                ok = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetAirMode,
-                    new byte[] { (byte)ch1, (byte)ch2 });
+                nextPreAmp = preAmpSnapshot;
+                ok = false;
+            } else if (scarlettState.Generation == ScarlettGeneration.Gen4) {
+                if (gen4ConfigTable == null || !gen4ConfigTable.AirSwitch.IsValid) {
+                    nextPreAmp = preAmpSnapshot;
+                    ok = false;
+                } else {
+                    bool hasCh2 = scarlettState.ProductId != Scarlett2Protocol.PidScarlettSoloGen4;
+                    ScarlettAirMode safe1 = (ScarlettAirMode)Math.Clamp((int)ch1, 0, 2);
+                    ScarlettAirMode safe2 = (ScarlettAirMode)Math.Clamp((int)ch2, 0, 2);
+                    bool ok1 = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.AirSwitch, 0, (int)safe1);
+                    bool ok2 = !hasCh2 || WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.AirSwitch, 1, (int)safe2);
+                    if (ok1) {
+                        scarlettState.AirCh1 = safe1;
+                        if (!hasCh2) {
+                            scarlettState.AirCh2 = safe1;
+                        }
+                    }
+                    if (hasCh2 && ok2) {
+                        scarlettState.AirCh2 = safe2;
+                    }
+                    ok = ok1 && ok2;
+                    if (ok1 || (hasCh2 && ok2)) {
+                        preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                    }
+                    nextPreAmp = preAmpSnapshot;
+                }
             } else {
                 byte b1 = ch1 != ScarlettAirMode.Off ? (byte)1 : (byte)0;
                 byte b2 = ch2 != ScarlettAirMode.Off ? (byte)1 : (byte)0;
                 ok = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen3OffsetAirSwitch, new byte[] { b1, b2 });
+                if (ok) {
+                    scarlettState.AirCh1 = ch1 != ScarlettAirMode.Off ? ScarlettAirMode.Presence : ScarlettAirMode.Off;
+                    scarlettState.AirCh2 = ch2 != ScarlettAirMode.Off ? ScarlettAirMode.Presence : ScarlettAirMode.Off;
+                    preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                }
+                nextPreAmp = preAmpSnapshot;
             }
-            if (ok) {
-                scarlettState.AirCh1 = ch1;
-                scarlettState.AirCh2 = ch2;
-            }
-            return ok;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ok;
     }
 
     /// <summary>Sets Focusrite Scarlett Instrument Hi-Z / Line level switch per channel.</summary>
     public bool SetScarlettInstrumentMode(bool instCh1, bool instCh2) {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ok;
         lock (syncLock) {
+            prevPreAmp = preAmpSnapshot;
             if (!EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
+                nextPreAmp = preAmpSnapshot;
+                ok = false;
+            } else if (scarlettState.Generation == ScarlettGeneration.Gen4) {
+                if (gen4ConfigTable == null || !gen4ConfigTable.LevelSwitch.IsValid) {
+                    nextPreAmp = preAmpSnapshot;
+                    ok = false;
+                } else {
+                    bool hasCh2 = scarlettState.ProductId != Scarlett2Protocol.PidScarlettSoloGen4;
+                    bool ok1 = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.LevelSwitch, 0, instCh1 ? 1 : 0);
+                    bool ok2 = !hasCh2 || WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.LevelSwitch, 1, instCh2 ? 1 : 0);
+                    if (ok1) {
+                        scarlettState.InstrumentModeCh1 = instCh1;
+                        if (!hasCh2) {
+                            scarlettState.InstrumentModeCh2 = instCh1;
+                        }
+                    }
+                    if (hasCh2 && ok2) {
+                        scarlettState.InstrumentModeCh2 = instCh2;
+                    }
+                    ok = ok1 && ok2;
+                    if (ok1 || (hasCh2 && ok2)) {
+                        preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                    }
+                    nextPreAmp = preAmpSnapshot;
+                }
+            } else {
+                ok = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen3OffsetLevelSwitch,
+                    new byte[] { (byte)(instCh1 ? 1 : 0), (byte)(instCh2 ? 1 : 0) });
+                if (ok) {
+                    scarlettState.InstrumentModeCh1 = instCh1;
+                    scarlettState.InstrumentModeCh2 = instCh2;
+                    preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                }
+                nextPreAmp = preAmpSnapshot;
             }
-            uint offset = scarlettState.Generation == ScarlettGeneration.Gen4
-                ? Scarlett2Protocol.Gen4OffsetLevelSwitch
-                : Scarlett2Protocol.Gen3OffsetLevelSwitch;
-            bool ok = WriteScarlettConfigLocked(vendorIf, offset,
-                new byte[] { (byte)(instCh1 ? 1 : 0), (byte)(instCh2 ? 1 : 0) });
-            if (ok) {
-                scarlettState.InstrumentModeCh1 = instCh1;
-                scarlettState.InstrumentModeCh2 = instCh2;
-            }
-            return ok;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ok;
     }
 
     /// <summary>Sets Focusrite Scarlett Direct Monitor hardware routing (Off / Mono / Stereo).</summary>
     public bool SetScarlettDirectMonitor(ScarlettDirectMonitorMode mode) {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ok;
         lock (syncLock) {
+            prevPreAmp = preAmpSnapshot;
             if (!EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
+                nextPreAmp = preAmpSnapshot;
+                ok = false;
+            } else if (scarlettState.Generation == ScarlettGeneration.Gen4) {
+                if (gen4ConfigTable == null || !gen4ConfigTable.DirectMonitor.IsValid) {
+                    nextPreAmp = preAmpSnapshot;
+                    ok = false;
+                } else {
+                    ScarlettDirectMonitorMode cleanMode = (ScarlettDirectMonitorMode)Math.Clamp((int)mode, 0, 2);
+                    ok = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.DirectMonitor, 0, (int)cleanMode);
+                    if (ok) {
+                        scarlettState.DirectMonitor = cleanMode;
+                        preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                    }
+                    nextPreAmp = preAmpSnapshot;
+                }
+            } else {
+                ScarlettDirectMonitorMode cleanMode = (ScarlettDirectMonitorMode)Math.Clamp((int)mode, 0, 2);
+                ok = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen3OffsetDirectMonitor, new byte[] { (byte)cleanMode });
+                if (ok) {
+                    scarlettState.DirectMonitor = cleanMode;
+                    preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                }
+                nextPreAmp = preAmpSnapshot;
             }
-            uint offset = scarlettState.Generation == ScarlettGeneration.Gen4
-                ? Scarlett2Protocol.Gen4OffsetDirectMonitor
-                : Scarlett2Protocol.Gen3OffsetDirectMonitor;
-            bool ok = WriteScarlettConfigLocked(vendorIf, offset, new byte[] { (byte)mode });
-            if (ok) {
-                scarlettState.DirectMonitor = mode;
-            }
-            return ok;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ok;
     }
 
     /// <summary>Sets Gen 4 Scarlett 2i2 software-controlled digital preamp gain (0..69 dB) for Ch 1 &amp; Ch 2.</summary>
     public bool SetScarlettGen4PreampGain(float gainCh1Db, float gainCh2Db) {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ok;
         lock (syncLock) {
-            if (scarlettState.Generation != ScarlettGeneration.Gen4 || !EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
+            prevPreAmp = preAmpSnapshot;
+            if (scarlettState.Generation != ScarlettGeneration.Gen4 ||
+                !EnsureScarlettReadyLocked(out int vendorIf) ||
+                gen4ConfigTable == null ||
+                !gen4ConfigTable.InputGain.IsValid) {
+                nextPreAmp = preAmpSnapshot;
+                ok = false;
+            } else {
+                int g1 = Math.Clamp((int)MathF.Round(gainCh1Db), 0, 69);
+                int g2 = Math.Clamp((int)MathF.Round(gainCh2Db), 0, 69);
+                bool ok1 = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.InputGain, 0, g1);
+                bool ok2 = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.InputGain, 1, g2);
+                if (ok1) {
+                    scarlettState.InputGainCh1Db = g1;
+                }
+                if (ok2) {
+                    scarlettState.InputGainCh2Db = g2;
+                }
+                ok = ok1 && ok2;
+                if (ok1 || ok2) {
+                    preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                }
+                nextPreAmp = preAmpSnapshot;
             }
-            short g1 = (short)Math.Clamp((int)MathF.Round(gainCh1Db), 0, 69);
-            short g2 = (short)Math.Clamp((int)MathF.Round(gainCh2Db), 0, 69);
-            byte[] payload = new byte[] {
-                (byte)(g1 & 0xFF), (byte)((g1 >> 8) & 0xFF),
-                (byte)(g2 & 0xFF), (byte)((g2 >> 8) & 0xFF)
-            };
-            bool ok = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetPreampGainDb, payload);
-            if (ok) {
-                scarlettState.InputGainCh1Db = g1;
-                scarlettState.InputGainCh2Db = g2;
-            }
-            return ok;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ok;
     }
 
     /// <summary>Toggles Gen 4 Scarlett 2i2 Clip Safe automatic preamp overload guard (linked convenience overload).</summary>
@@ -404,43 +579,70 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
 
     /// <summary>Toggles Gen 4 Scarlett 2i2/4i4 Clip Safe automatic preamp overload guard independently per channel.</summary>
     public bool SetScarlettGen4ClipSafe(bool ch1Enabled, bool ch2Enabled) {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ok;
         lock (syncLock) {
-            if (scarlettState.Generation != ScarlettGeneration.Gen4 || !EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
+            prevPreAmp = preAmpSnapshot;
+            if (scarlettState.Generation != ScarlettGeneration.Gen4 ||
+                !EnsureScarlettReadyLocked(out int vendorIf) ||
+                gen4ConfigTable == null ||
+                !gen4ConfigTable.SafeSwitch.IsValid) {
+                nextPreAmp = preAmpSnapshot;
+                ok = false;
+            } else {
+                bool eff2 = scarlettState.InputsLinked ? ch1Enabled : ch2Enabled;
+                bool ok1 = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.SafeSwitch, 0, ch1Enabled ? 1 : 0);
+                bool ok2 = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.SafeSwitch, 1, eff2 ? 1 : 0);
+                if (ok1) {
+                    scarlettState.ClipSafeCh1 = ch1Enabled;
+                }
+                if (ok2) {
+                    scarlettState.ClipSafeCh2 = eff2;
+                }
+                ok = ok1 && ok2;
+                if (ok1 || ok2) {
+                    preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                }
+                nextPreAmp = preAmpSnapshot;
             }
-            bool eff2 = scarlettState.InputsLinked ? ch1Enabled : ch2Enabled;
-            bool ok = WriteScarlettConfigLocked(
-                vendorIf,
-                Scarlett2Protocol.Gen4OffsetClipSafe,
-                new byte[] { (byte)(ch1Enabled ? 1 : 0), (byte)(eff2 ? 1 : 0) });
-            if (ok) {
-                scarlettState.ClipSafeCh1 = ch1Enabled;
-                scarlettState.ClipSafeCh2 = eff2;
-            }
-            return ok;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ok;
     }
 
     /// <summary>Links or unlinks Scarlett Gen 4 Channels 1 &amp; 2 as a synchronized stereo preamp pair.</summary>
     public bool SetScarlettGen4InputLink(bool linked) {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ok;
         lock (syncLock) {
-            if (!scarlettState.SupportsStereoLink || !EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
-            }
-            bool ok = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetInputLink, new byte[] { (byte)(linked ? 1 : 0) });
-            if (ok) {
-                scarlettState.InputsLinked = linked;
-                if (linked) {
-                    // Mirror Ch 1 settings cleanly onto Ch 2 when stereo link engages
-                    scarlettState.InputGainCh2Db = scarlettState.InputGainCh1Db;
-                    scarlettState.AirCh2 = scarlettState.AirCh1;
-                    scarlettState.ClipSafeCh2 = scarlettState.ClipSafeCh1;
-                    scarlettState.InstrumentModeCh2 = scarlettState.InstrumentModeCh1;
-                    scarlettState.PhantomPowerCh2 = scarlettState.PhantomPowerCh1;
+            prevPreAmp = preAmpSnapshot;
+            if (!EnsureScarlettReadyLocked(out int vendorIf) ||
+                !scarlettState.SupportsStereoLink ||
+                gen4ConfigTable == null ||
+                !gen4ConfigTable.InputLinkSwitch.IsValid) {
+                nextPreAmp = preAmpSnapshot;
+                ok = false;
+            } else {
+                ok = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.InputLinkSwitch, 0, linked ? 1 : 0);
+                if (ok) {
+                    scarlettState.InputsLinked = linked;
+                    if (linked) {
+                        // Mirror Ch 1 settings cleanly onto Ch 2 when stereo link engages
+                        scarlettState.InputGainCh2Db = scarlettState.InputGainCh1Db;
+                        scarlettState.AirCh2 = scarlettState.AirCh1;
+                        scarlettState.ClipSafeCh2 = scarlettState.ClipSafeCh1;
+                        scarlettState.InstrumentModeCh2 = scarlettState.InstrumentModeCh1;
+                        scarlettState.PhantomPowerCh2 = scarlettState.PhantomPowerCh1;
+                    }
+                    preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
                 }
+                nextPreAmp = preAmpSnapshot;
             }
-            return ok;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ok;
     }
 
     /// <summary>
@@ -448,83 +650,146 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     /// Pass <paramref name="channelIndex"/> = 0 for Ch 1, 1 for Ch 2, or -1 for both / linked stereo pair.
     /// </summary>
     public bool StartScarlettGen4AutoGain(int channelIndex) {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ok;
         lock (syncLock) {
-            if (!scarlettState.SupportsAutoGain || !EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
-            }
-            bool run1 = channelIndex <= 0 || scarlettState.InputsLinked;
-            bool run2 = channelIndex == 1 || channelIndex < 0 || scarlettState.InputsLinked;
-            bool ok = WriteScarlettConfigLocked(
-                vendorIf,
-                Scarlett2Protocol.Gen4OffsetAutoGainEnable,
-                new byte[] { (byte)(run1 ? 1 : 0), (byte)(run2 ? 1 : 0) });
-            if (ok) {
-                if (run1) {
+            prevPreAmp = preAmpSnapshot;
+            if (!EnsureScarlettReadyLocked(out int vendorIf) ||
+                !scarlettState.SupportsAutoGain ||
+                gen4ConfigTable == null ||
+                !gen4ConfigTable.AutoGainSwitch.IsValid) {
+                nextPreAmp = preAmpSnapshot;
+                ok = false;
+            } else {
+                bool run1 = channelIndex <= 0 || scarlettState.InputsLinked;
+                bool run2 = channelIndex == 1 || channelIndex < 0 || scarlettState.InputsLinked;
+                bool ok1 = !run1 || WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.AutoGainSwitch, 0, 1);
+                bool ok2 = !run2 || WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.AutoGainSwitch, 1, 1);
+                ok = (run1 ? ok1 : true) && (run2 ? ok2 : true);
+                if (run1 && ok1) {
                     scarlettState.AutoGainStatusCh1 = ScarlettAutoGainStatus.Running;
                 }
-                if (run2) {
+                if (run2 && ok2) {
                     scarlettState.AutoGainStatusCh2 = ScarlettAutoGainStatus.Running;
                 }
+                if ((run1 && ok1) || (run2 && ok2)) {
+                    preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                }
+                nextPreAmp = preAmpSnapshot;
             }
-            return ok;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ok;
     }
 
     /// <summary>Cancels any in-progress Gen 4 Scarlett hardware Auto Gain calibration.</summary>
     public bool CancelScarlettGen4AutoGain() {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ok;
         lock (syncLock) {
-            if (!scarlettState.SupportsAutoGain || !EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
-            }
-            bool ok = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetAutoGainEnable, new byte[] { 0, 0 });
-            if (ok) {
-                if (scarlettState.AutoGainStatusCh1 == ScarlettAutoGainStatus.Running) {
-                    scarlettState.AutoGainStatusCh1 = ScarlettAutoGainStatus.Idle;
+            prevPreAmp = preAmpSnapshot;
+            if (!EnsureScarlettReadyLocked(out int vendorIf) ||
+                !scarlettState.SupportsAutoGain ||
+                gen4ConfigTable == null ||
+                !gen4ConfigTable.AutoGainSwitch.IsValid) {
+                nextPreAmp = preAmpSnapshot;
+                ok = false;
+            } else {
+                bool ok1 = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.AutoGainSwitch, 0, 0);
+                bool ok2 = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.AutoGainSwitch, 1, 0);
+                ok = ok1 && ok2;
+                if (ok1 || ok2) {
+                    if (scarlettState.AutoGainStatusCh1 == ScarlettAutoGainStatus.Running) {
+                        scarlettState.AutoGainStatusCh1 = ScarlettAutoGainStatus.Idle;
+                    }
+                    if (scarlettState.AutoGainStatusCh2 == ScarlettAutoGainStatus.Running) {
+                        scarlettState.AutoGainStatusCh2 = ScarlettAutoGainStatus.Idle;
+                    }
+                    preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
                 }
-                if (scarlettState.AutoGainStatusCh2 == ScarlettAutoGainStatus.Running) {
-                    scarlettState.AutoGainStatusCh2 = ScarlettAutoGainStatus.Idle;
-                }
+                nextPreAmp = preAmpSnapshot;
             }
-            return ok;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ok;
     }
 
     /// <summary>Polls Gen 4 Auto Gain status and reads back the resulting preamp gains when finished.</summary>
     public bool PollScarlettGen4AutoGainStatus(out ScarlettAutoGainStatus ch1Status, out ScarlettAutoGainStatus ch2Status) {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ok;
         lock (syncLock) {
+            prevPreAmp = preAmpSnapshot;
             ch1Status = scarlettState.AutoGainStatusCh1;
             ch2Status = scarlettState.AutoGainStatusCh2;
-            if (!scarlettState.SupportsAutoGain || !EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
-            }
-            if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetAutoGainStatus, 2, out int payloadOff, out int payloadLen) && payloadLen >= 2) {
-                ch1Status = (ScarlettAutoGainStatus)Math.Clamp((int)scarlettRxScratch[payloadOff], 0, 3);
-                ch2Status = (ScarlettAutoGainStatus)Math.Clamp((int)scarlettRxScratch[payloadOff + 1], 0, 3);
-                scarlettState.AutoGainStatusCh1 = ch1Status;
-                scarlettState.AutoGainStatusCh2 = ch2Status;
+            if (!EnsureScarlettReadyLocked(out int vendorIf) ||
+                !scarlettState.SupportsAutoGain ||
+                gen4ConfigTable == null ||
+                !gen4ConfigTable.AutoGainStatus.IsValid) {
+                nextPreAmp = preAmpSnapshot;
+                ok = false;
+            } else {
+                ScarlettAutoGainStatus old1 = scarlettState.AutoGainStatusCh1;
+                ScarlettAutoGainStatus old2 = scarlettState.AutoGainStatusCh2;
+                float oldGain1 = scarlettState.InputGainCh1Db;
+                float oldGain2 = scarlettState.InputGainCh2Db;
 
-                if (ch1Status == ScarlettAutoGainStatus.Succeeded || ch2Status == ScarlettAutoGainStatus.Succeeded) {
-                    if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetPreampGainDb, 4, out int gOff, out int gLen) && gLen >= 4) {
-                        short g1 = (short)(scarlettRxScratch[gOff] | (scarlettRxScratch[gOff + 1] << 8));
-                        short g2 = (short)(scarlettRxScratch[gOff + 2] | (scarlettRxScratch[gOff + 3] << 8));
-                        scarlettState.InputGainCh1Db = Math.Clamp((int)g1, 0, 69);
-                        scarlettState.InputGainCh2Db = Math.Clamp((int)g2, 0, 69);
+                bool r1 = ReadScarlettConfigItemLocked(vendorIf, gen4ConfigTable.AutoGainStatus, 0, out int s1);
+                bool r2 = ReadScarlettConfigItemLocked(vendorIf, gen4ConfigTable.AutoGainStatus, 1, out int s2);
+                if (r1) {
+                    ch1Status = (ScarlettAutoGainStatus)Math.Clamp(s1, 0, 3);
+                    scarlettState.AutoGainStatusCh1 = ch1Status;
+                }
+                if (r2) {
+                    ch2Status = (ScarlettAutoGainStatus)Math.Clamp(s2, 0, 3);
+                    scarlettState.AutoGainStatusCh2 = ch2Status;
+                }
+                ok = r1 || r2;
+                if (ok &&
+                    (ch1Status == ScarlettAutoGainStatus.Succeeded ||
+                     ch2Status == ScarlettAutoGainStatus.Succeeded ||
+                     old1 == ScarlettAutoGainStatus.Running ||
+                     old2 == ScarlettAutoGainStatus.Running) &&
+                    gen4ConfigTable.InputGain.IsValid) {
+                    if (ReadScarlettConfigItemLocked(vendorIf, gen4ConfigTable.InputGain, 0, out int g1)) {
+                        scarlettState.InputGainCh1Db = Math.Clamp(g1, 0, 69);
+                    }
+                    if (ReadScarlettConfigItemLocked(vendorIf, gen4ConfigTable.InputGain, 1, out int g2)) {
+                        scarlettState.InputGainCh2Db = Math.Clamp(g2, 0, 69);
                     }
                 }
-                return true;
+                bool changed = old1 != ch1Status ||
+                               old2 != ch2Status ||
+                               !oldGain1.Equals(scarlettState.InputGainCh1Db) ||
+                               !oldGain2.Equals(scarlettState.InputGainCh2Db);
+                if (changed) {
+                    preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                }
+                nextPreAmp = preAmpSnapshot;
             }
-            return false;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ok;
     }
 
     /// <summary>Sets Direct Monitor Input vs Playback blend percentage (0..100%) on Gen 4 interfaces.</summary>
     public bool SetScarlettDirectMonitorMix(int mixPct) {
         lock (syncLock) {
-            if (scarlettState.Generation != ScarlettGeneration.Gen4 || !EnsureScarlettReadyLocked(out int vendorIf)) {
+            if (scarlettState.Generation != ScarlettGeneration.Gen4 ||
+                !EnsureScarlettReadyLocked(out int vendorIf) ||
+                gen4ConfigTable == null ||
+                !gen4ConfigTable.DirectMonitorGain.IsValid) {
                 return false;
             }
             int clamped = Math.Clamp(mixPct, 0, 100);
-            bool ok = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetDirectMonitorMix, new byte[] { (byte)clamped });
+            // Map 0% (100% Input) -> 0 dB (0), 100% (100% Playback) -> -80 dB (-160 in 0.5 dB mixer steps)
+            short gainHalfDb = clamped >= 99
+                ? (short)-160
+                : (short)Math.Clamp((int)MathF.Round(-160f * (clamped / 100f) * (clamped / 100f)), -160, 0);
+            bool ok = WriteScarlettConfigItemLocked(vendorIf, gen4ConfigTable, gen4ConfigTable.DirectMonitorGain, 0, gainHalfDb);
             if (ok) {
                 scarlettState.DirectMonitorMixPct = clamped;
             }
@@ -532,35 +797,20 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
         }
     }
 
-    /// <summary>Sets main monitor output Mute and Dim (-20 dB) switches on Gen 4 Scarlett interfaces.</summary>
+    /// <summary>Sets main monitor output Mute and Dim (-20 dB) switches when supported by the verified device table.</summary>
     public bool SetScarlettOutputMuteDim(bool mute, bool dim) {
         lock (syncLock) {
-            if (scarlettState.Generation != ScarlettGeneration.Gen4 || !EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
-            }
-            bool okMute = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetOutputMute, new byte[] { (byte)(mute ? 1 : 0) });
-            bool okDim = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetOutputDim, new byte[] { (byte)(dim ? 1 : 0) });
-            if (okMute) {
-                scarlettState.OutputMute = mute;
-            }
-            if (okDim) {
-                scarlettState.OutputDim = dim;
-            }
-            return okMute || okDim;
+            // Verified Scarlett 2i2/Solo/4i4 Gen 4 FCP config tables do not expose software output mute/dim offsets;
+            // never write unverified fallback offsets (0x3C/0x3E collide with LevelSwitch/AirSwitch on 2i2 Gen 4).
+            return false;
         }
     }
 
-    /// <summary>Enables or disables Gen 4 Scarlett virtual Loopback routing.</summary>
+    /// <summary>Enables or disables virtual Loopback routing when supported by the verified device table.</summary>
     public bool SetScarlettLoopback(bool enabled) {
         lock (syncLock) {
-            if (scarlettState.Generation != ScarlettGeneration.Gen4 || !EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
-            }
-            bool ok = WriteScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetLoopback, new byte[] { (byte)(enabled ? 1 : 0) });
-            if (ok) {
-                scarlettState.LoopbackEnabled = enabled;
-            }
-            return ok;
+            // Verified Gen 4 config tables route Loopback via mixer mux rather than a single NVRAM flag offset.
+            return false;
         }
     }
 
@@ -576,58 +826,140 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
 
     /// <summary>Reads current hardware switches and preamp gains from the Scarlett device into <see cref="ScarlettState"/>.</summary>
     public bool ReadScarlettHardwareState() {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool anyOk;
         lock (syncLock) {
+            prevPreAmp = preAmpSnapshot;
             if (!EnsureScarlettReadyLocked(out int vendorIf)) {
+                nextPreAmp = preAmpSnapshot;
+                anyOk = false;
+            } else {
+                anyOk = ReadScarlettHardwareStateLocked(vendorIf);
+                if (anyOk) {
+                    preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: false);
+                }
+                nextPreAmp = preAmpSnapshot;
+            }
+        }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return anyOk;
+    }
+
+    bool ReadScarlettHardwareStateLocked(int vendorIf) {
+        bool anyOk = false;
+        if (scarlettState.Generation == ScarlettGeneration.Gen4) {
+            ScarlettGen4ConfigTable table = gen4ConfigTable;
+            if (table == null || !scarlettState.IsGen4FcpControlTableVerified) {
                 return false;
             }
-            bool anyOk = false;
-            if (scarlettState.Generation == ScarlettGeneration.Gen4) {
-                if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetPhantomPower, 2, out int off, out int len) && len >= 2) {
-                    scarlettState.PhantomPowerCh1 = scarlettRxScratch[off] != 0;
-                    scarlettState.PhantomPowerCh2 = scarlettRxScratch[off + 1] != 0;
-                    anyOk = true;
+            bool hasCh2 = scarlettState.ProductId != Scarlett2Protocol.PidScarlettSoloGen4;
+
+            if (table.PhantomPower.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.PhantomPower, 0, out int p1)) {
+                scarlettState.PhantomPowerCh1 = p1 != 0;
+                if (!hasCh2) {
+                    scarlettState.PhantomPowerCh2 = scarlettState.PhantomPowerCh1;
                 }
-                if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetAirMode, 2, out off, out len) && len >= 2) {
-                    scarlettState.AirCh1 = (ScarlettAirMode)Math.Clamp((int)scarlettRxScratch[off], 0, 2);
-                    scarlettState.AirCh2 = (ScarlettAirMode)Math.Clamp((int)scarlettRxScratch[off + 1], 0, 2);
-                    anyOk = true;
-                }
-                if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetLevelSwitch, 2, out off, out len) && len >= 2) {
-                    scarlettState.InstrumentModeCh1 = scarlettRxScratch[off] != 0;
-                    scarlettState.InstrumentModeCh2 = scarlettRxScratch[off + 1] != 0;
-                    anyOk = true;
-                }
-                if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetPreampGainDb, 4, out off, out len) && len >= 4) {
-                    short g1 = (short)(scarlettRxScratch[off] | (scarlettRxScratch[off + 1] << 8));
-                    short g2 = (short)(scarlettRxScratch[off + 2] | (scarlettRxScratch[off + 3] << 8));
-                    scarlettState.InputGainCh1Db = Math.Clamp((int)g1, 0, 69);
-                    scarlettState.InputGainCh2Db = Math.Clamp((int)g2, 0, 69);
-                    anyOk = true;
-                }
-                if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetClipSafe, 2, out off, out len) && len >= 2) {
-                    scarlettState.ClipSafeCh1 = scarlettRxScratch[off] != 0;
-                    scarlettState.ClipSafeCh2 = scarlettRxScratch[off + 1] != 0;
-                    anyOk = true;
-                }
-                if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen4OffsetInputLink, 1, out off, out len) && len >= 1) {
-                    scarlettState.InputsLinked = scarlettRxScratch[off] != 0;
-                    anyOk = true;
-                }
-            } else {
-                if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen3OffsetPhantomPower, 1, out int off, out int len) && len >= 1) {
-                    bool p = scarlettRxScratch[off] != 0;
-                    scarlettState.PhantomPowerCh1 = p;
-                    scarlettState.PhantomPowerCh2 = p;
-                    anyOk = true;
-                }
-                if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen3OffsetAirSwitch, 2, out off, out len) && len >= 2) {
-                    scarlettState.AirCh1 = scarlettRxScratch[off] != 0 ? ScarlettAirMode.Presence : ScarlettAirMode.Off;
-                    scarlettState.AirCh2 = scarlettRxScratch[off + 1] != 0 ? ScarlettAirMode.Presence : ScarlettAirMode.Off;
-                    anyOk = true;
-                }
+                anyOk = true;
             }
-            return anyOk;
+            if (hasCh2 && table.PhantomPower.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.PhantomPower, 1, out int p2)) {
+                scarlettState.PhantomPowerCh2 = p2 != 0;
+                anyOk = true;
+            }
+
+            if (table.AirSwitch.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.AirSwitch, 0, out int a1)) {
+                scarlettState.AirCh1 = (ScarlettAirMode)Math.Clamp(a1, 0, 2);
+                if (!hasCh2) {
+                    scarlettState.AirCh2 = scarlettState.AirCh1;
+                }
+                anyOk = true;
+            }
+            if (hasCh2 && table.AirSwitch.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.AirSwitch, 1, out int a2)) {
+                scarlettState.AirCh2 = (ScarlettAirMode)Math.Clamp(a2, 0, 2);
+                anyOk = true;
+            }
+
+            if (table.LevelSwitch.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.LevelSwitch, 0, out int l1)) {
+                scarlettState.InstrumentModeCh1 = l1 != 0;
+                if (!hasCh2) {
+                    scarlettState.InstrumentModeCh2 = scarlettState.InstrumentModeCh1;
+                }
+                anyOk = true;
+            }
+            if (hasCh2 && table.LevelSwitch.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.LevelSwitch, 1, out int l2)) {
+                scarlettState.InstrumentModeCh2 = l2 != 0;
+                anyOk = true;
+            }
+
+            if (table.InputGain.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.InputGain, 0, out int g1)) {
+                scarlettState.InputGainCh1Db = Math.Clamp(g1, 0, 69);
+                anyOk = true;
+            }
+            if (hasCh2 && table.InputGain.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.InputGain, 1, out int g2)) {
+                scarlettState.InputGainCh2Db = Math.Clamp(g2, 0, 69);
+                anyOk = true;
+            }
+
+            if (table.SafeSwitch.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.SafeSwitch, 0, out int s1)) {
+                scarlettState.ClipSafeCh1 = s1 != 0;
+                anyOk = true;
+            }
+            if (hasCh2 && table.SafeSwitch.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.SafeSwitch, 1, out int s2)) {
+                scarlettState.ClipSafeCh2 = s2 != 0;
+                anyOk = true;
+            }
+
+            if (table.InputLinkSwitch.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.InputLinkSwitch, 0, out int lnk)) {
+                scarlettState.InputsLinked = lnk != 0;
+                anyOk = true;
+            }
+
+            if (table.DirectMonitor.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.DirectMonitor, 0, out int dm)) {
+                scarlettState.DirectMonitor = (ScarlettDirectMonitorMode)Math.Clamp(dm, 0, 2);
+                anyOk = true;
+            }
+
+            if (table.DirectMonitorGain.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.DirectMonitorGain, 0, out int dmGain)) {
+                if (dmGain <= 0 && dmGain >= -160) {
+                    double frac = Math.Sqrt(Math.Clamp(-dmGain / 160.0, 0.0, 1.0));
+                    scarlettState.DirectMonitorMixPct = Math.Clamp((int)Math.Round(frac * 100.0), 0, 100);
+                } else if (dmGain > 0 && dmGain <= 100) {
+                    scarlettState.DirectMonitorMixPct = dmGain;
+                }
+                anyOk = true;
+            }
+
+            if (table.AutoGainStatus.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.AutoGainStatus, 0, out int ag1)) {
+                scarlettState.AutoGainStatusCh1 = (ScarlettAutoGainStatus)Math.Clamp(ag1, 0, 3);
+                anyOk = true;
+            }
+            if (hasCh2 && table.AutoGainStatus.IsValid && ReadScarlettConfigItemLocked(vendorIf, table.AutoGainStatus, 1, out int ag2)) {
+                scarlettState.AutoGainStatusCh2 = (ScarlettAutoGainStatus)Math.Clamp(ag2, 0, 3);
+                anyOk = true;
+            }
+        } else {
+            if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen3OffsetPhantomPower, 1, out int off, out int len) && len >= 1) {
+                bool p = scarlettRxScratch[off] != 0;
+                scarlettState.PhantomPowerCh1 = p;
+                scarlettState.PhantomPowerCh2 = p;
+                anyOk = true;
+            }
+            if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen3OffsetAirSwitch, 2, out off, out len) && len >= 2) {
+                scarlettState.AirCh1 = scarlettRxScratch[off] != 0 ? ScarlettAirMode.Presence : ScarlettAirMode.Off;
+                scarlettState.AirCh2 = scarlettRxScratch[off + 1] != 0 ? ScarlettAirMode.Presence : ScarlettAirMode.Off;
+                anyOk = true;
+            }
+            if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen3OffsetLevelSwitch, 2, out off, out len) && len >= 2) {
+                scarlettState.InstrumentModeCh1 = scarlettRxScratch[off] != 0;
+                scarlettState.InstrumentModeCh2 = scarlettRxScratch[off + 1] != 0;
+                anyOk = true;
+            }
+            if (ReadScarlettConfigLocked(vendorIf, Scarlett2Protocol.Gen3OffsetDirectMonitor, 1, out off, out len) && len >= 1) {
+                scarlettState.DirectMonitor = (ScarlettDirectMonitorMode)Math.Clamp((int)scarlettRxScratch[off], 0, 2);
+                anyOk = true;
+            }
         }
+        return anyOk;
     }
 
     /// <summary>
@@ -635,30 +967,35 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     /// and updates <see cref="ScarlettHardwareState.InputMeterCh1Dbfs"/> / <see cref="ScarlettHardwareState.InputMeterCh2Dbfs"/>.
     /// </summary>
     public bool PollScarlettHardwareMeters(out float ch1Dbfs, out float ch2Dbfs) {
+        HardwarePreAmpStateSnapshot prevPreAmp;
+        HardwarePreAmpStateSnapshot nextPreAmp;
+        bool ok = false;
         lock (syncLock) {
+            prevPreAmp = preAmpSnapshot;
             ch1Dbfs = scarlettState.InputMeterCh1Dbfs;
             ch2Dbfs = scarlettState.InputMeterCh2Dbfs;
-            if (!EnsureScarlettReadyLocked(out int vendorIf)) {
-                return false;
-            }
-            ushort seq = NextScarlettSeqLocked();
-            byte[] tx = Scarlett2Protocol.BuildGetMeterPacket(seq, 4);
-            int rxLen = TransferScarlettPacketLocked(vendorIf, tx, scarlettRxScratch);
-            if (rxLen >= Scarlett2Protocol.PacketHeaderBytes &&
-                Scarlett2Protocol.TryParseResponseHeader(scarlettRxScratch, rxLen, Scarlett2Protocol.CmdGetMeter, seq, out _, out _)) {
-                int count = Scarlett2Protocol.ParseMeterResponseDbfs(scarlettRxScratch, rxLen, scarlettMeterScratch, 2);
-                if (count >= 1) {
-                    scarlettState.InputMeterCh1Dbfs = scarlettMeterScratch[0];
-                    ch1Dbfs = scarlettMeterScratch[0];
+            if (scarlettState.SupportsMeteringAndGainAssist && EnsureScarlettHandshakeLocked(out int vendorIf)) {
+                ushort seq = NextScarlettSeqLocked();
+                byte[] tx = Scarlett2Protocol.BuildGetMeterPacket(seq, 4);
+                int rxLen = TransferScarlettPacketLocked(vendorIf, tx, scarlettRxScratch);
+                if (rxLen >= Scarlett2Protocol.PacketHeaderBytes &&
+                    Scarlett2Protocol.TryParseResponseHeader(scarlettRxScratch, rxLen, Scarlett2Protocol.CmdGetMeter, seq, out _, out _)) {
+                    int count = Scarlett2Protocol.ParseMeterResponseDbfs(scarlettRxScratch, rxLen, scarlettMeterScratch, 2);
+                    if (count >= 1) {
+                        scarlettState.InputMeterCh1Dbfs = scarlettMeterScratch[0];
+                        ch1Dbfs = scarlettMeterScratch[0];
+                    }
+                    if (count >= 2) {
+                        scarlettState.InputMeterCh2Dbfs = scarlettMeterScratch[1];
+                        ch2Dbfs = scarlettMeterScratch[1];
+                    }
+                    ok = count > 0;
                 }
-                if (count >= 2) {
-                    scarlettState.InputMeterCh2Dbfs = scarlettMeterScratch[1];
-                    ch2Dbfs = scarlettMeterScratch[1];
-                }
-                return count > 0;
             }
-            return false;
+            nextPreAmp = preAmpSnapshot;
         }
+        PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+        return ok;
     }
 
     /// <summary>
@@ -679,21 +1016,190 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     }
 
     bool EnsureScarlettReadyLocked(out int vendorIf) {
+        if (!EnsureScarlettHandshakeLocked(out vendorIf)) {
+            return false;
+        }
+        return scarlettState.SupportsSoftwareControls;
+    }
+
+    bool EnsureScarlettHandshakeLocked(out int vendorIf) {
         vendorIf = snapshot.Topology?.VendorControlInterface ?? -1;
-        if (vendorIf < 0 || !scarlettState.SupportsSoftwareControls) {
+        if (vendorIf < 0 ||
+            (scarlettState.Generation != ScarlettGeneration.Gen4 && !scarlettState.SupportsSoftwareControls)) {
             return false;
         }
         if (!scarlettInitialized) {
+            if (!SendScarlettInitStep0Locked(vendorIf)) {
+                return false;
+            }
+            Thread.Sleep(20);
             if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit1, null, out _)) {
                 return false;
             }
-            if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit2, null, out _)) {
+            if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit2, null, out int init2PayloadLen)) {
                 return false;
             }
+            int init2TotalLen = Scarlett2Protocol.PacketHeaderBytes + init2PayloadLen;
+            if (Scarlett2Protocol.TryExtractFirmwareVersion(scarlettRxScratch, init2TotalLen, out int fw)) {
+                scarlettState.FirmwareVersion = fw;
+            }
             scarlettInitialized = true;
+
+            if (scarlettState.Generation == ScarlettGeneration.Gen4) {
+                if (Scarlett2Protocol.TryResolveGen4ConfigTable(scarlettState.ProductId, scarlettState.FirmwareVersion, out ScarlettGen4ConfigTable table)) {
+                    bool airOk = table.AirSwitch.IsValid &&
+                                 ReadScarlettConfigItemLocked(vendorIf, table.AirSwitch, 0, out int air0) &&
+                                 air0 >= 0 && air0 <= 2;
+                    bool gainOk = !table.InputGain.IsValid ||
+                                  (ReadScarlettConfigItemLocked(vendorIf, table.InputGain, 0, out int gain0) &&
+                                   gain0 >= 0 && gain0 <= 69);
+                    if (airOk && gainOk) {
+                        gen4ConfigTable = table;
+                        scarlettState.IsGen4FcpControlTableVerified = true;
+                        ReadScarlettHardwareStateLocked(vendorIf);
+                        preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                        AppLogger.Info(
+                            $"Scarlett Gen 4 FCP verified: {scarlettState.ModelName} " +
+                            $"(PID=0x{scarlettState.ProductId:X4}, FW={scarlettState.FirmwareVersion}, ParamBuf=0x{table.ParamBufAddr:X})");
+                    } else {
+                        gen4ConfigTable = null;
+                        scarlettState.IsGen4FcpControlTableVerified = false;
+                        AppLogger.Warn(
+                            $"Scarlett Gen 4 FCP sanity GET_DATA check failed (FW={scarlettState.FirmwareVersion}); " +
+                            "keeping controls safely locked.");
+                    }
+                } else {
+                    gen4ConfigTable = null;
+                    scarlettState.IsGen4FcpControlTableVerified = false;
+                    AppLogger.Info(
+                        $"Scarlett Gen 4 FCP table unavailable for PID=0x{scarlettState.ProductId:X4} " +
+                        $"FW={scarlettState.FirmwareVersion}; metering & Gain Assist remain active.");
+                }
+            } else {
+                ReadScarlettHardwareStateLocked(vendorIf);
+                preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+            }
         }
         return true;
     }
+
+    bool ReadScarlettConfigItemLocked(int vendorIf, ScarlettConfigItem item, int channelIndex, out int value) {
+        value = 0;
+        if (!item.IsValid) {
+            return false;
+        }
+        int sizeBytes = item.SizeBytes;
+        if (sizeBytes <= 0 || sizeBytes > 2) {
+            return false;
+        }
+        uint addr = item.Offset + (uint)Math.Max(0, channelIndex) * (uint)sizeBytes;
+        if (!ReadScarlettConfigLocked(vendorIf, addr, (uint)sizeBytes, out int off, out int len) || len < sizeBytes) {
+            return false;
+        }
+        if (sizeBytes == 1) {
+            value = scarlettRxScratch[off];
+        } else {
+            value = (short)(scarlettRxScratch[off] | (scarlettRxScratch[off + 1] << 8));
+        }
+        return true;
+    }
+
+    bool WriteScarlettConfigItemLocked(
+        int vendorIf,
+        ScarlettGen4ConfigTable table,
+        ScarlettConfigItem item,
+        int channelIndex,
+        int value) {
+        if (table == null || !item.IsValid) {
+            return false;
+        }
+        int sizeBytes = item.SizeBytes;
+        if (sizeBytes <= 0 || sizeBytes > 2) {
+            return false;
+        }
+        byte[] valBytes = sizeBytes == 1
+            ? new byte[] { (byte)(value & 0xFF) }
+            : new byte[] { (byte)(value & 0xFF), (byte)((value >> 8) & 0xFF) };
+
+        if (item.UseParamBuf) {
+            uint pbuf = table.ParamBufAddr;
+            byte idx = (byte)Math.Clamp(channelIndex, 0, 255);
+            if (!WriteScarlettConfigLocked(vendorIf, pbuf + 1u, new byte[] { idx })) {
+                return false;
+            }
+            if (!WriteScarlettConfigLocked(vendorIf, pbuf, valBytes)) {
+                return false;
+            }
+        } else {
+            uint addr = item.Offset + (uint)Math.Max(0, channelIndex) * (uint)sizeBytes;
+            if (!WriteScarlettConfigLocked(vendorIf, addr, valBytes)) {
+                return false;
+            }
+        }
+
+        if (item.ActivateCmd != 0) {
+            return SendActivateConfigLocked(vendorIf, (uint)item.ActivateCmd);
+        }
+        return true;
+    }
+
+    bool SendActivateConfigLocked(int vendorIf, uint activateCmd) {
+        ushort seq = NextScarlettSeqLocked();
+        byte[] tx = Scarlett2Protocol.BuildActivateConfigPacket(seq, activateCmd);
+        int rxLen = TransferScarlettPacketLocked(vendorIf, tx, scarlettRxScratch);
+        return rxLen >= Scarlett2Protocol.PacketHeaderBytes &&
+               Scarlett2Protocol.TryParseResponseHeader(scarlettRxScratch, rxLen, Scarlett2Protocol.CmdDataActivate, seq, out _, out _);
+    }
+
+    bool SendScarlettInitStep0Locked(int vendorIf) {
+        if (IsPathBTransportActive()) {
+            int rxBytes = NativeProAudioBridge.Scarlett2InitStep0(vendorIf, scarlettRxScratch, 24);
+            if (rxBytes < 0) {
+                AppLogger.Warn($"Scarlett2InitStep0 (Path B) returned {rxBytes}");
+                return false;
+            }
+            return true;
+        }
+        if (activeConnection == null || activeDevice == null) {
+            return false;
+        }
+        UsbInterface vendorUsbIf = FindInterfaceById(activeDevice, vendorIf);
+        bool claimed = false;
+        try {
+            if (vendorUsbIf != null) {
+                claimed = activeConnection.ClaimInterface(vendorUsbIf, true);
+            }
+            int rxBytes = activeConnection.ControlTransfer(
+                (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceIn,
+                Scarlett2Protocol.UsbReqCmdInit,
+                0,
+                vendorIf,
+                scarlettRxScratch,
+                24,
+                250);
+            if (rxBytes < 0) {
+                AppLogger.Warn($"Scarlett2InitStep0 (EP0) returned {rxBytes}");
+                return false;
+            }
+            return true;
+        } catch (Exception ex) {
+            AppLogger.Warn($"Scarlett2InitStep0 ControlTransfer error: {ex.Message}");
+            return false;
+        } finally {
+            if (claimed && vendorUsbIf != null) {
+                try {
+                    activeConnection.ReleaseInterface(vendorUsbIf);
+                } catch {
+                    // Ignore release failures on abrupt USB disconnect
+                }
+            }
+        }
+    }
+
+    bool IsPathBTransportActive() =>
+        pathBOwnsFileDescriptor ||
+        (NativeProAudioBridge.TryGetStatus(out NativeProAudioStatus st) &&
+         st.ActiveBackend == NativeProAudioBridge.BackendPathBLibUsb);
 
     bool ReadScarlettConfigLocked(int vendorIf, uint offset, uint length, out int payloadOffset, out int payloadLen) {
         payloadOffset = Scarlett2Protocol.PacketHeaderBytes;
@@ -730,9 +1236,7 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     /// </summary>
     int TransferScarlettPacketLocked(int vendorIf, byte[] tx, byte[] rx) {
         // 1. While Path B libusb owns the FD, NEVER issue direct Android UsbDeviceConnection transfers on the same FD
-        if (pathBOwnsFileDescriptor ||
-            (NativeProAudioBridge.TryGetStatus(out NativeProAudioStatus st) &&
-             st.ActiveBackend == NativeProAudioBridge.BackendPathBLibUsb)) {
+        if (IsPathBTransportActive()) {
             return NativeProAudioBridge.Scarlett2Xfer(vendorIf, tx, tx.Length, rx, rx.Length);
         }
 
@@ -811,28 +1315,31 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
         if (activeDevice == null || usbManager == null) {
             return;
         }
+        UsbDeviceConnection conn = null;
         try {
-            UsbDeviceConnection conn = usbManager.OpenDevice(activeDevice);
+            conn = usbManager.OpenDevice(activeDevice);
             if (conn == null) {
                 AppLogger.Warn($"UsbProAudioDeviceManager: OpenDevice returned null for {FormatDeviceName(activeDevice)}");
                 return;
             }
-            activeConnection = conn;
             byte[] rawDesc = conn.GetRawDescriptors();
             Uac2DeviceTopology topo = Uac2Protocol.ParseConfigurationDescriptor(rawDesc);
 
             int[] rates = Array.Empty<int>();
             if (topo.IsUac2 && topo.ClockSourceId != 0) {
-                rates = QueryUac2ClockSampleRatesLocked(conn, topo);
+                rates = QueryUac2ClockSampleRatesLocked(conn, activeDevice, topo);
             }
 
             ScarlettGeneration gen = Scarlett2Protocol.IdentifyDevice(activeDevice.VendorId, activeDevice.ProductId, out string scarlettModel);
+            activeConnection = conn;
+            conn = null;
+            scarlettInitialized = false;
+            gen4ConfigTable = null;
             scarlettState = new ScarlettHardwareState {
                 Generation = gen,
                 ModelName = scarlettModel,
                 ProductId = activeDevice.ProductId
             };
-            scarlettInitialized = false;
 
             snapshot = new UsbProAudioDeviceSnapshot {
                 IsAttached = true,
@@ -843,24 +1350,50 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
                 ProductId = activeDevice.ProductId,
                 DisplayName = string.IsNullOrEmpty(scarlettModel) ? FormatDeviceName(activeDevice) : scarlettModel,
                 DevicePath = activeDevice.DeviceName ?? string.Empty,
-                FileDescriptor = conn.FileDescriptor,
+                FileDescriptor = activeConnection.FileDescriptor,
                 Topology = topo,
                 ScarlettGeneration = gen,
                 SupportedSampleRates = rates
             };
 
+            if ((gen == ScarlettGeneration.Gen3 || gen == ScarlettGeneration.Gen4) && topo.VendorControlInterface >= 0) {
+                try {
+                    EnsureScarlettHandshakeLocked(out _);
+                } catch (Exception initEx) {
+                    AppLogger.Warn($"Scarlett initial handshake deferred: {initEx.Message}");
+                }
+            }
+            if (!scarlettInitialized) {
+                preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+            }
+
             AppLogger.Info(
                 $"USB Pro-Audio opened: '{snapshot.DisplayName}' (VID=0x{snapshot.VendorId:X4}, PID=0x{snapshot.ProductId:X4}, " +
                 $"UAC2={topo.IsUac2}, Duplex={topo.SupportsFullDuplex}, ClockID={topo.ClockSourceId}, " +
-                $"VendorIf={topo.VendorControlInterface}, Scarlett={gen}, Rates=[{string.Join(",", rates)}], FD={conn.FileDescriptor})");
+                $"VendorIf={topo.VendorControlInterface}, Scarlett={gen}, FW={scarlettState.FirmwareVersion}, " +
+                $"Gen4FcpVerified={scarlettState.IsGen4FcpControlTableVerified}, Rates=[{string.Join(",", rates)}], FD={activeConnection.FileDescriptor})");
         } catch (Exception ex) {
             AppLogger.Error("UsbProAudioDeviceManager.TryOpenActiveDeviceLocked", ex);
-            CloseConnectionLocked();
+            if (conn != null) {
+                CloseRawConnectionSafely(conn);
+            }
+            if (activeConnection != null) {
+                CloseRawConnectionSafely(activeConnection);
+                activeConnection = null;
+            }
+            pathBOwnsFileDescriptor = false;
+            scarlettInitialized = false;
+            gen4ConfigTable = null;
         }
     }
 
-    int[] QueryUac2ClockSampleRatesLocked(UsbDeviceConnection conn, Uac2DeviceTopology topo) {
+    int[] QueryUac2ClockSampleRatesLocked(UsbDeviceConnection conn, UsbDevice dev, Uac2DeviceTopology topo) {
+        UsbInterface acIf = FindInterfaceById(dev, topo.AudioControlInterface);
+        bool claimed = false;
         try {
+            if (acIf != null) {
+                claimed = conn.ClaimInterface(acIf, true);
+            }
             int wValue = Uac2Protocol.ClockSamFreqControl << 8;
             int wIndex = (topo.ClockSourceId << 8) | topo.AudioControlInterface;
 
@@ -913,6 +1446,14 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             }
         } catch (Exception ex) {
             AppLogger.Warn($"UAC2 Clock GET_RANGE skipped: {ex.Message}");
+        } finally {
+            if (claimed && acIf != null) {
+                try {
+                    conn.ReleaseInterface(acIf);
+                } catch {
+                    // Ignore release failures on abrupt USB disconnect
+                }
+            }
         }
         return Array.Empty<int>();
     }
@@ -999,6 +1540,15 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
         return false;
     }
 
+    static bool IsSameUsbDevice(UsbDevice a, UsbDevice b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.DeviceId == b.DeviceId &&
+               a.VendorId == b.VendorId &&
+               a.ProductId == b.ProductId;
+    }
+
     static string FormatDeviceName(UsbDevice dev) {
         string mfg = dev.ManufacturerName?.Trim() ?? string.Empty;
         string prod = dev.ProductName?.Trim() ?? string.Empty;
@@ -1020,8 +1570,88 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             bool granted = intent.GetBooleanExtra(UsbManager.ExtraPermissionGranted, false);
             AppLogger.Info($"UsbProAudioDeviceManager: USB permission result granted={granted}");
             ScanAttachedDevices(autoOpenIfPermitted: granted);
-        } else if (action == UsbManager.ActionUsbDeviceAttached || action == UsbManager.ActionUsbDeviceDetached) {
+        } else if (action == UsbManager.ActionUsbDeviceAttached) {
             ScanAttachedDevices(autoOpenIfPermitted: true);
+        } else if (action == UsbManager.ActionUsbDeviceDetached) {
+            UsbDevice detachedDev;
+            if (OperatingSystem.IsAndroidVersionAtLeast(33)) {
+                detachedDev = intent.GetParcelableExtra(UsbManager.ExtraDevice, Java.Lang.Class.FromType(typeof(UsbDevice))) as UsbDevice;
+            } else {
+#pragma warning disable CS0618, CA1422
+                detachedDev = intent.GetParcelableExtra(UsbManager.ExtraDevice) as UsbDevice;
+#pragma warning restore CS0618, CA1422
+            }
+
+            bool matchesActive;
+            lock (syncLock) {
+                matchesActive = detachedDev == null
+                    ? activeDevice != null || activeConnection != null
+                    : (IsSameUsbDevice(activeDevice, detachedDev) ||
+                       (activeDevice != null &&
+                        activeDevice.VendorId == detachedDev.VendorId &&
+                        activeDevice.ProductId == detachedDev.ProductId &&
+                        string.Equals(activeDevice.DeviceName, detachedDev.DeviceName, StringComparison.Ordinal)));
+            }
+
+            if (matchesActive) {
+                // Break syncLock <-> lifecycleLock AB-BA deadlock: notify native Path B lock-free FIRST,
+                // snapshot & clear connection under syncLock, RELEASE syncLock, then fire BeforeUsbConnectionClosing!
+                NativeProAudioBridge.NotifyUsbDetached();
+                UsbDeviceConnection connToClose;
+                HardwarePreAmpStateSnapshot prevPreAmp;
+                HardwarePreAmpStateSnapshot nextPreAmp;
+                lock (syncLock) {
+                    connToClose = DetachConnectionLocked(resetDevice: true);
+                    scarlettState = new ScarlettHardwareState();
+                    snapshot = new UsbProAudioDeviceSnapshot();
+                    prevPreAmp = preAmpSnapshot;
+                    nextPreAmp = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
+                    preAmpSnapshot = nextPreAmp;
+                }
+                if (connToClose != null) {
+                    InvokeBeforeUsbConnectionClosingSafely();
+                    CloseRawConnectionSafely(connToClose);
+                }
+                PublishPreAmpSnapshotIfChanged(nextPreAmp, prevPreAmp);
+            }
+            ScanAttachedDevices(autoOpenIfPermitted: true);
+        }
+    }
+
+    HardwarePreAmpStateSnapshot BuildPreAmpSnapshotLocked(bool incrementGainEpoch) {
+        if (incrementGainEpoch) {
+            gainStepEpoch++;
+        }
+        bool verified = scarlettState.Generation == ScarlettGeneration.Gen3 ||
+                        (scarlettState.Generation == ScarlettGeneration.Gen4 && scarlettState.IsGen4FcpControlTableVerified);
+        ScarlettAirMode air = scarlettState.AirCh1 != ScarlettAirMode.Off ? scarlettState.AirCh1 : scarlettState.AirCh2;
+        bool driveActive = scarlettState.AirCh1 == ScarlettAirMode.PresenceAndDrive ||
+                           scarlettState.AirCh2 == ScarlettAirMode.PresenceAndDrive;
+        bool autoGainActive = scarlettState.AutoGainStatusCh1 == ScarlettAutoGainStatus.Running ||
+                              scarlettState.AutoGainStatusCh2 == ScarlettAutoGainStatus.Running;
+        bool clipSafeActive = scarlettState.ClipSafeCh1 || scarlettState.ClipSafeCh2;
+        float gainDb = scarlettState.Generation == ScarlettGeneration.Gen4 && scarlettState.SupportsIndependentPreampGain
+            ? scarlettState.InputGainCh1Db
+            : 0f;
+        return new HardwarePreAmpStateSnapshot(
+            airMode: air,
+            driveActive: driveActive,
+            autoGainActive: autoGainActive,
+            clipSafeActive: clipSafeActive,
+            preampGainDb: gainDb,
+            gainStepEpoch: gainStepEpoch,
+            isHeadphoneMonitoring: headphoneMonitoringActive,
+            micSource: (int)configuredMicSource,
+            isHardwareVerified: verified);
+    }
+
+    void PublishPreAmpSnapshotIfChanged(HardwarePreAmpStateSnapshot nextSnapshot, HardwarePreAmpStateSnapshot prevSnapshot) {
+        if (nextSnapshot != null && !nextSnapshot.Equals(prevSnapshot)) {
+            try {
+                PreAmpSnapshotChanged?.Invoke(nextSnapshot);
+            } catch (Exception ex) {
+                AppLogger.Warn($"UsbProAudioDeviceManager.PreAmpSnapshotChanged: {ex.Message}");
+            }
         }
     }
 
@@ -1034,30 +1664,52 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     }
 
     /// <summary>
-    /// Raised synchronously immediately BEFORE <c>UsbDeviceConnection.Close()</c> closes the native USB file descriptor.
-    /// Allows Path B (<c>libusb-1.0</c>) to stop its event thread and release the FD cleanly, preventing Android <c>fdsan</c> <c>SIGABRT</c>.
+    /// Raised synchronously outside <c>syncLock</c> immediately BEFORE <c>UsbDeviceConnection.Close()</c> closes
+    /// the native USB file descriptor. Allows Path B (<c>libusb-1.0</c>) to stop its event thread and release the FD
+    /// cleanly, preventing Android <c>fdsan</c> <c>SIGABRT</c> and <c>syncLock &lt;-&gt; lifecycleLock</c> deadlocks.
     /// </summary>
     public event Action BeforeUsbConnectionClosing;
 
-    void CloseConnectionLocked() {
-        if (activeConnection != null) {
-            try {
-                BeforeUsbConnectionClosing?.Invoke();
-            } catch (Exception ex) {
-                AppLogger.Warn($"UsbProAudioDeviceManager: BeforeUsbConnectionClosing listener error: {ex.Message}");
-            }
-            pathBOwnsFileDescriptor = false;
-            try {
-                activeConnection.Close();
-                activeConnection.Dispose();
-            } catch {
-                // Ignore
-            }
-            activeConnection = null;
-        } else {
-            pathBOwnsFileDescriptor = false;
-        }
+    UsbDeviceConnection DetachConnectionLocked(bool resetDevice) {
+        UsbDeviceConnection conn = activeConnection;
+        activeConnection = null;
+        pathBOwnsFileDescriptor = false;
         scarlettInitialized = false;
+        gen4ConfigTable = null;
+        if (resetDevice) {
+            activeDevice = null;
+        }
+        return conn;
+    }
+
+    void ReleaseConnectionOutsideLock(UsbDeviceConnection connToClose, bool notifyDetached) {
+        if (notifyDetached) {
+            NativeProAudioBridge.NotifyUsbDetached();
+        }
+        if (connToClose != null) {
+            InvokeBeforeUsbConnectionClosingSafely();
+            CloseRawConnectionSafely(connToClose);
+        }
+    }
+
+    void InvokeBeforeUsbConnectionClosingSafely() {
+        try {
+            BeforeUsbConnectionClosing?.Invoke();
+        } catch (Exception ex) {
+            AppLogger.Warn($"UsbProAudioDeviceManager: BeforeUsbConnectionClosing listener error: {ex.Message}");
+        }
+    }
+
+    static void CloseRawConnectionSafely(UsbDeviceConnection conn) {
+        if (conn == null) {
+            return;
+        }
+        try {
+            conn.Close();
+            conn.Dispose();
+        } catch {
+            // Ignore close errors on already-detached USB descriptors
+        }
     }
 
     public void Dispose() {
@@ -1081,10 +1733,14 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             }
             usbSystemReceiverRegistered = false;
         }
+        UsbDeviceConnection connToClose;
         lock (syncLock) {
-            CloseConnectionLocked();
-            activeDevice = null;
+            connToClose = DetachConnectionLocked(resetDevice: true);
+            scarlettState = new ScarlettHardwareState();
+            snapshot = new UsbProAudioDeviceSnapshot();
+            preAmpSnapshot = BuildPreAmpSnapshotLocked(incrementGainEpoch: true);
         }
+        ReleaseConnectionOutsideLock(connToClose, notifyDetached: connToClose != null);
         GC.SuppressFinalize(this);
     }
 

@@ -159,17 +159,39 @@ public partial class MainActivity {
             SyncRoomSlidersFromEngine();
             UpdateRoomTelemetryText();
         };
-        roomView.SourceSoloToggled += _ => {
+        roomView.SourceSoloToggled += toggled => {
+            if (playerEngine != null && playerEngine.DynamicCeilingOnly) {
+                playerEngine.DynamicCeilingOnly = false;
+                ceilingActiveSinceMs.Clear();
+                ceilingPinUntilMs.Clear();
+                IReadOnlyList<TrackSourceItem> items = trackSourceItems;
+                for (int k = 0; k < items.Count; k++) {
+                    items[k].IsDynamicallyFilteredOut = false;
+                }
+            }
+            TrackSourceItem live = ResolveLiveSourceItem(toggled);
+            if (live != null && toggled != null && !ReferenceEquals(live, toggled)) {
+                live.IsSolo = toggled.IsSolo;
+            }
             SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
             RefreshFilterButtonsUi();
             refreshBentoTilesUi?.Invoke();
+            if (live != null && !ReferenceEquals(live, toggled)) {
+                UpdateRoomCanvas();
+            }
         };
         roomView.SourcePositionDragged += (item, normPos) => {
-            playerEngine.SetSourceCustomPosition(item, normPos);
-            UpdateMixerRowsLive();
+            TrackSourceItem live = ResolveLiveSourceItem(item) ?? item;
+            playerEngine?.SetSourceCustomPosition(live, normPos);
+            if (!ReferenceEquals(live, item)) {
+                UpdateRoomCanvas();
+            } else {
+                UpdateMixerRowsLive();
+            }
         };
         roomView.SourcePositionResetRequested += item => {
-            playerEngine.ClearSourceCustomPosition(item);
+            TrackSourceItem live = ResolveLiveSourceItem(item) ?? item;
+            playerEngine?.ClearSourceCustomPosition(live);
             UpdateRoomCanvas();
         };
         roomView.XRayToggled += enabled => {
@@ -244,6 +266,12 @@ public partial class MainActivity {
             playerEngine.ListenerPosition = Vector3.Zero;
             playerEngine.ListenerRotation = Vector3.Zero;
             playerEngine.ResetAllCustomPositions();
+            if (!useLiveEngineSources) {
+                IReadOnlyList<TrackSourceItem> items = trackSourceItems;
+                for (int i = 0; i < items.Count; i++) {
+                    items[i].ResetPosition();
+                }
+            }
             headTrackingManager?.Recenter();
             SyncRoomSlidersFromEngine();
             UpdateRoomCanvas();
@@ -1233,6 +1261,12 @@ public partial class MainActivity {
         });
         Button resetPinsBtn = PillButton(S["XRayResetPinsBtn"], () => {
             playerEngine.ResetAllCustomPositions();
+            if (!useLiveEngineSources) {
+                IReadOnlyList<TrackSourceItem> items = trackSourceItems;
+                for (int i = 0; i < items.Count; i++) {
+                    items[i].ResetPosition();
+                }
+            }
             UpdateRoomCanvas();
             Toast.MakeText(this, S["XRayPinsResetToast"], ToastLength.Short).Show();
         });
@@ -1444,7 +1478,8 @@ public partial class MainActivity {
         if (playerEngine.IsPlaying) {
             playerEngine.IsPlaying = false;
             audioOutput.Pause();
-            SyncPlaybackUi(false, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
+            double heardSec = playerEngine?.HeardSeconds ?? playerEngine?.CurrentSeconds ?? 0;
+            SyncPlaybackUi(false, heardSec, playerEngine.TotalSeconds);
             mediaNotification?.UpdatePlaybackState(false, playerEngine.CurrentSeconds, showNotification: true);
         } else {
             if (playerEngine.TotalSeconds > 0 && playerEngine.CurrentSeconds >= playerEngine.TotalSeconds - 0.05) {
@@ -1452,7 +1487,8 @@ public partial class MainActivity {
             }
             playerEngine.IsPlaying = true;
             audioOutput.Start();
-            SyncPlaybackUi(true, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
+            double heardSec = playerEngine?.HeardSeconds ?? playerEngine?.CurrentSeconds ?? 0;
+            SyncPlaybackUi(true, heardSec, playerEngine.TotalSeconds);
             mediaNotification?.UpdatePlaybackState(true, playerEngine.CurrentSeconds, showNotification: true);
         }
     }
@@ -1660,7 +1696,17 @@ public partial class MainActivity {
         if (mixerContainer == null) {
             return;
         }
-        if (mixerRowRefs.Count != trackSourceItems.Count) {
+        IReadOnlyList<TrackSourceItem> liveItems = trackSourceItems;
+        bool staleRefs = mixerRowRefs.Count != liveItems.Count;
+        if (!staleRefs) {
+            for (int i = 0; i < mixerRowRefs.Count; i++) {
+                if (!ReferenceEquals(mixerRowRefs[i].Item, liveItems[i])) {
+                    staleRefs = true;
+                    break;
+                }
+            }
+        }
+        if (staleRefs) {
             RefreshPlayerSourcesList();
             return;
         }
@@ -1777,8 +1823,40 @@ public partial class MainActivity {
         }
     }
 
+    TrackSourceItem ResolveLiveSourceItem(TrackSourceItem item) {
+        if (item == null) {
+            return null;
+        }
+        IReadOnlyList<TrackSourceItem> live = trackSourceItems;
+        for (int i = 0; i < live.Count; i++) {
+            if (ReferenceEquals(live[i], item)) {
+                return live[i];
+            }
+        }
+        if (!string.IsNullOrEmpty(item.StableKey)) {
+            for (int i = 0; i < live.Count; i++) {
+                if (string.Equals(live[i].StableKey, item.StableKey, StringComparison.Ordinal)) {
+                    return live[i];
+                }
+            }
+        }
+        if (!string.IsNullOrEmpty(item.Name)) {
+            for (int i = 0; i < live.Count; i++) {
+                if (string.Equals(live[i].Name, item.Name, StringComparison.OrdinalIgnoreCase)) {
+                    return live[i];
+                }
+            }
+        }
+        return item.Index >= 0 && item.Index < live.Count ? live[item.Index] : null;
+    }
+
     void UpdateMixerRowsLive() {
         if (mixerRowRefs.Count == 0 || activeTab != 1) {
+            return;
+        }
+        IReadOnlyList<TrackSourceItem> liveItems = trackSourceItems;
+        if (mixerRowRefs.Count != liveItems.Count || !ReferenceEquals(mixerRowRefs[0].Item, liveItems[0])) {
+            RefreshPlayerSourcesList();
             return;
         }
         bool dynCeil = playerEngine?.DynamicCeilingOnly ?? false;
@@ -1859,23 +1937,38 @@ public partial class MainActivity {
             };
 
             soloBtn.Click += (_, _) => {
+                TrackSourceItem live = ResolveLiveSourceItem(item);
+                if (live == null) {
+                    RefreshPlayerSourcesList();
+                    return;
+                }
+                IReadOnlyList<TrackSourceItem> liveItems = trackSourceItems;
                 if (playerEngine != null && playerEngine.DynamicCeilingOnly) {
                     playerEngine.DynamicCeilingOnly = false;
                     ceilingActiveSinceMs.Clear();
                     ceilingPinUntilMs.Clear();
-                    for (int k = 0; k < trackSourceItems.Count; k++) {
-                        trackSourceItems[k].IsDynamicallyFilteredOut = false;
+                    for (int k = 0; k < liveItems.Count; k++) {
+                        liveItems[k].IsDynamicallyFilteredOut = false;
                     }
                 }
-                item.IsSolo = !item.IsSolo;
+                live.IsSolo = !live.IsSolo;
                 SyncMixerRowsVisualAndOrder(animate: true, forceImmediate: true);
                 RefreshFilterButtonsUi();
                 refreshBentoTilesUi?.Invoke();
                 UpdateRoomCanvas();
             };
             muteBtn.Click += (_, _) => {
-                item.IsMuted = !item.IsMuted;
-                ApplyMixerRowVisualState(rowRef, playerEngine?.DynamicCeilingOnly ?? false, forceRedraw: true);
+                TrackSourceItem live = ResolveLiveSourceItem(item);
+                if (live == null) {
+                    RefreshPlayerSourcesList();
+                    return;
+                }
+                live.IsMuted = !live.IsMuted;
+                if (!ReferenceEquals(live, item)) {
+                    RefreshPlayerSourcesList();
+                } else {
+                    ApplyMixerRowVisualState(rowRef, playerEngine?.DynamicCeilingOnly ?? false, forceRedraw: true);
+                }
                 UpdateRoomCanvas();
             };
             ApplyMixerRowVisualState(rowRef, dynCeil, forceRedraw: true);
@@ -1896,7 +1989,8 @@ public partial class MainActivity {
                 return;
             }
             if (playerEngine != null && playerEngine.IsPlaying) {
-                SyncPlaybackUi(true, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
+                double heardSec = playerEngine?.HeardSeconds ?? playerEngine?.CurrentSeconds ?? 0;
+                SyncPlaybackUi(true, heardSec, playerEngine.TotalSeconds);
                 if ((++loudnessMeterTick & 3) == 0) {
                     RefreshLiveLoudnessMeterUi();
                     RefreshLgsrUi();

@@ -612,12 +612,17 @@ public sealed partial class AndroidStrings {
         d["AutoEqCatalogCountSub"] = "Toque para buscar {0:N0} perfis oficiais de laboratório (127 offline)";
         d["AutoEqActiveSummary"] = "{0} bandas SOS • Pré-amp {1:+0.0;-0.0;0.0} dB{2}";
         d["AutoEqGuardEngagedTag"] = "Guarda HRIR Raw";
-        d["AutoEqTargetTitle"] = "Curva Alvo Neutra";
-        d["AutoEqTargetDfNeutral"] = "Diffuse-Field Neutro (Recomendado)";
-        d["AutoEqTargetBk5128Df"] = "B&K 5128 Diffuse-Field (Plano)";
-        d["AutoEqTargetBk5128Jm1"] = "B&K 5128 JM-1 Neutro";
-        d["AutoEqTargetHarmanNoBass"] = "Harman Estúdio (Sem Reforço Grave)";
-        d["AutoEqTargetNative"] = "Alvo Original do AutoEq";
+        d["AutoEqTargetTitle"] = "Perfil de Som do Fone";
+        d["AutoEqTargetDfNeutral"] = "Referência Plana (Sem Grave de Sala)";
+        d["AutoEqTargetBk5128Df"] = "Medição Plana de Estúdio (5128)";
+        d["AutoEqTargetBk5128Jm1"] = "Sala Natural (JM-1)";
+        d["AutoEqTargetHarmanNoBass"] = "Graves Leves";
+        d["AutoEqTargetNative"] = "Estúdio Equilibrado (Padrão)";
+        d["AutoEqTargetDescNative"] = "Graves naturais completos e vozes equilibradas — ideal para música e filmes.";
+        d["AutoEqTargetDescJm1"] = "Equilíbrio de caixas em sala, com graves cheios e agudos suaves.";
+        d["AutoEqTargetDescLightBass"] = "Reduz levemente o subgrave mantendo as vozes e o corpo natural do som.";
+        d["AutoEqTargetDescDfNeutral"] = "Aviso (menos graves): remove o grave de sala (soa mais seco que caixas).";
+        d["AutoEqTargetDescBk5128Df"] = "Aviso (menos graves): curva plana de laboratório 5128 com pouco grave.";
         d["AutoEqDoubleEqGuardTitle"] = "Proteção Zero Duplo-EQ (HRIR Raw)";
         d["AutoEqAutoDeviceTitle"] = "Perfil Automático por Dispositivo";
         d["AutoEqDetectedDevice"] = "Saída ativa: {0}";
@@ -634,7 +639,7 @@ public sealed partial class AndroidStrings {
         d["AutoEqAppliedToast"] = "AutoEq aplicado: {0}";
         d["AutoEqAutoMatchedToast"] = "{0} conectado — AutoEq aplicado: {1}";
         d["TipAutoEq"] = "Aplica equalização paramétrica de precisão dupla (zero-GC) baseada nas medições oficiais do jaakkopasanen/AutoEq (oratory1990, crinacle, Rtings) para corrigir erros do fone com pré-amplificador automático contra clipping.";
-        d["TipAutoEqTarget"] = "Converte as medições AutoEq para uma curva neutra científica sem reforços artificiais:\n• Diffuse-Field Neutro: par exato para perfis espaciais HRIR/BRIR DFC.\n• B&K 5128 DF / JM-1: alvos neutros modernos do simulador Type 4.3.\n• Harman Estúdio (Sem Grave): referência plana de graves.";
+        d["TipAutoEqTarget"] = "Define como o fone calibrado deve soar:\n• Estúdio Equilibrado (Padrão): graves naturais completos e equilíbrio fiel.\n• Sala Natural (JM-1): som quente de caixas em sala com agudos mais suaves.\n• Graves Leves: atenua suavemente o subgrave para audição analítica.\n• Referência Plana / 5128 Plana: curvas cruas sem grave de sala (soam bem mais secas nos graves).";
         d["TipAutoEqDoubleEqGuard"] = "Detecta automaticamente quando um HRIR Raw sem compensação (como TH Köln Campo Distante Raw) está ativo e aplica a inversa exata do Diffuse-Field ISO 11904-1 para nunca aplicar ganho de canal auditivo/pina duas vezes.";
         d["TipAutoEqAutoDevice"] = "Usa o AudioDeviceCallback nativo do Android para lembrar e alternar automaticamente seu modelo AutoEq, curva alvo, perfil binaural HRIR e rastreamento de cabeça ao conectar fones Bluetooth, DAC USB-C, P2 3,5 mm ou Alto-falante.";
 
@@ -1221,8 +1226,20 @@ public sealed partial class AndroidStrings {
         d["RoomHeightEar"] = "Ouvido";
         d["LibAlbumsCount"] = "{0} álbum(ns)";
         d["OnlineExactMatchBadge"] = " • [Exata]";
-        d["OnlineSyncedLyricsBadge"] = "[Sincronizada • {0}]";
-        d["OnlinePlainLyricsBadge"] = "[Texto • {0}]";
+        d["OnlineSyllableLyricsBadge"] = "Sílabas • {0}";
+        d["OnlineSyncedLyricsBadge"] = "Sincronizada • {0}";
+        d["OnlinePlainLyricsBadge"] = "Texto • {0}";
+        d["OnlineRiskLowBadge"] = "Alta Confiança • {0}%";
+        d["OnlineRiskMedBadge"] = "Confiança Média • {0}%";
+        d["OnlineRiskHighBadge"] = "Risco Alto • {0}%";
+        d["OnlineCurrentLyricsPlainBanner"] = "Atual: Texto simples ({0}) — atualize para letra sincronizada ou por sílabas";
+        d["OnlineCurrentLyricsLineBanner"] = "Atual: Por linha ({0}) — busque online por sincronização por sílabas";
+        d["OnlineCurrentLyricsSyllableBanner"] = "Atual: Sílabas ({0})";
+        d["OnlineUpgradeLyricsBtn"] = "Atualizar";
+        d["OnlineLyricsSourceLocal"] = "Embutida / Cache";
+        d["LyricsSyllableSyncTag"] = "Sílabas";
+        d["LyricsLineSyncTag"] = "Sincronizada";
+        d["LyricsPlainTag"] = "Texto";
         d["MagLsCutoffTitle"] = "Frequência de Corte MagLS";
         d["MagLsCutoffAuto"] = "Auto";
         d["MagLsDirectHrirTag"] = "HRIR Direto";
@@ -1498,5 +1515,17 @@ public sealed partial class AndroidStrings {
         d["StudioTagVocalTake"] = "Voz Gravada";
         d["StudioTagLosslessTwin"] = "Gêmeo Lossless";
         d["StudioExportRecipeSummaryFmt"] = "Receita de exportação: {0} · Teto {1:0.0} dBTP";
+
+        // W50 Seletor de Fonte do Mic, Chip no Dock Sing e Selo FCP Gen 4 Verificado
+        d["ProAudioMicSourceTitle"] = "Fonte de Entrada do Microfone";
+        d["ProAudioMicSrcPhone"] = "Microfone do Celular (Integrado)";
+        d["ProAudioMicSrcUsb"] = "Microfone da Interface USB (ex.: Scarlett)";
+        d["ProAudioMicSrcAuto"] = "Automático (Preferir USB / Headset)";
+        d["ProAudioMicSrcSwitchedToast"] = "Fonte do microfone: {0}";
+        d["ProAudioRouteTelemetryFmt"] = "Ent: {0} · Saída: {1}";
+        d["SingDockMicSrcPhoneChip"] = "Mic Celular";
+        d["SingDockMicSrcUsbChip"] = "Mic USB";
+        d["SingDockMicSrcAutoChip"] = "Mic: Auto";
+        d["ScarlettGen4VerifiedBadgeFmt"] = "FCP Gen 4 Verificado (FW {0})";
     }
 }

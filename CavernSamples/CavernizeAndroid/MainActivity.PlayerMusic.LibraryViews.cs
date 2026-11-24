@@ -2,6 +2,7 @@ using Android.Animation;
 using Android.Content;
 using Android.Content.PM;
 using Android.Graphics;
+using Android.Graphics.Drawables;
 using Android.Text;
 using Android.Views;
 using Android.Widget;
@@ -18,6 +19,83 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    sealed class CachedLibraryTabView {
+        public LinearLayout Container;
+        public MediaLibrarySnapshot Snap;
+        public int Revision;
+        public string Query = "";
+        public int Limit;
+        public string LoadedPath = "";
+        public AudioTierCategory? PrefCategory;
+        public string PrefFormatKey = "";
+        public int ItemCount;
+        public bool IsComplete;
+    }
+
+    readonly CachedLibraryTabView[] cachedLibraryTabViews = new CachedLibraryTabView[4];
+    Drawable.ConstantState libTrackRowBgState;
+    Drawable.ConstantState libTrackRowPlayingBgState;
+    Drawable.ConstantState libGroupCardBgState;
+    Drawable.ConstantState libBadgeSpatialBgState;
+    Drawable.ConstantState libBadgeNormalBgState;
+    Drawable.ConstantState libPillPrimaryBgState;
+    Drawable.ConstantState libPillDangerBgState;
+    Drawable.ConstantState libPillNormalBgState;
+
+    void ClearLibraryTabViewCache() {
+        for (int i = 0; i < cachedLibraryTabViews.Length; i++) {
+            cachedLibraryTabViews[i] = null;
+        }
+    }
+
+    Drawable CloneCachedDrawable(ref Drawable.ConstantState slot, Func<Drawable> factory) {
+        if (slot == null) {
+            Drawable proto = factory();
+            slot = proto.GetConstantState();
+            return proto;
+        }
+        return slot.NewDrawable(Resources) ?? factory();
+    }
+
+    Drawable GetCachedTrackRowDrawable(bool isPlaying) => isPlaying
+        ? CloneCachedDrawable(ref libTrackRowPlayingBgState,
+            () => OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(ColAccent, 64), 16f, ColAccent, 1.1f))
+        : CloneCachedDrawable(ref libTrackRowBgState,
+            () => OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceSubTile, 16f, OneUiTheme.GlassRimMid, 1f));
+
+    Drawable GetCachedGroupCardDrawable() => CloneCachedDrawable(
+        ref libGroupCardBgState,
+        () => OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.SurfaceCard, 18f, OneUiTheme.GlassRimTop, 1f));
+
+    Drawable GetCachedBadgeDrawable(bool anySpatial) => anySpatial
+        ? CloneCachedDrawable(ref libBadgeSpatialBgState,
+            () => OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.Primary, 52), 6f))
+        : CloneCachedDrawable(ref libBadgeNormalBgState,
+            () => OneUiTheme.CreateRoundedDrawable(this, Color.Argb(40, 255, 255, 255), 6f));
+
+    Drawable GetCachedPillDrawable(bool primary, bool subtleDanger) {
+        if (primary) {
+            return CloneCachedDrawable(ref libPillPrimaryBgState,
+                () => OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp));
+        }
+        if (subtleDanger) {
+            return CloneCachedDrawable(ref libPillDangerBgState,
+                () => OneUiTheme.CreateRoundedDrawable(
+                    this,
+                    OneUiTheme.WithAlpha(OneUiTheme.FunctionalRedFill, 42),
+                    OneUiTheme.PillCornerDp,
+                    OneUiTheme.WithAlpha(OneUiTheme.FunctionalRed, 130),
+                    0.9f));
+        }
+        return CloneCachedDrawable(ref libPillNormalBgState,
+            () => OneUiTheme.CreateRoundedDrawable(
+                this,
+                OneUiTheme.SurfaceSubTile,
+                OneUiTheme.PillCornerDp,
+                Color.Argb(40, 255, 255, 255),
+                0.9f));
+    }
+
     void PlayLibraryQueueShuffled(IReadOnlyList<LibraryTrackItem> queue) {
         if (queue == null || queue.Count == 0) return;
         List<LibraryTrackItem> shuffled = queue.Where(t => t != null).ToList();
@@ -52,15 +130,7 @@ public partial class MainActivity {
         pill.SetGravity(GravityFlags.Center);
         pill.SetPadding(Dp(10), Dp(5), Dp(10), Dp(5));
         pill.SetMinimumHeight(Dp(30));
-        Color bg = primary
-            ? ColAccent
-            : (subtleDanger ? OneUiTheme.WithAlpha(OneUiTheme.FunctionalRedFill, 42) : OneUiTheme.SurfaceSubTile);
-        Color stroke = primary
-            ? OneUiTheme.PrimaryHigh
-            : (subtleDanger ? OneUiTheme.WithAlpha(OneUiTheme.FunctionalRed, 130) : Color.Argb(40, 255, 255, 255));
-        pill.Background = primary
-            ? OneUiTheme.CreateRippleRoundedDrawable(this, bg, OneUiTheme.PillCornerDp)
-            : OneUiTheme.CreateRoundedDrawable(this, bg, OneUiTheme.PillCornerDp, stroke, 0.9f);
+        pill.Background = GetCachedPillDrawable(primary, subtleDanger);
         OneUiTheme.AttachRecoil(pill, 0.94f);
 
         Color fg = subtleDanger ? OneUiTheme.FunctionalRed : ColText;
@@ -95,8 +165,48 @@ public partial class MainActivity {
         return bar;
     }
 
+    void ScheduleLibraryIncrementalRender(
+        int myRenderGen,
+        int startIndex,
+        int endIndex,
+        int step,
+        int incrementalBatchItems,
+        Action<int> appendItem,
+        Action onDone) {
+        int cursor = startIndex;
+        if (cursor >= endIndex) {
+            onDone?.Invoke();
+            return;
+        }
+        activeLibraryPumpRunnable = new Java.Lang.Runnable(() => {
+            if (uiDestroyed || myRenderGen != libraryRenderGeneration || libraryListHost == null) {
+                return;
+            }
+            int batchEnd = Math.Min(endIndex, cursor + incrementalBatchItems);
+            for (int idx = cursor; idx < batchEnd; idx += step) {
+                appendItem(idx);
+            }
+            cursor = batchEnd;
+            if (cursor < endIndex) {
+                libraryListHost.PostOnAnimation(activeLibraryPumpRunnable);
+            } else {
+                activeLibraryPumpRunnable = null;
+                onDone?.Invoke();
+            }
+        });
+        libraryListHost.PostOnAnimation(activeLibraryPumpRunnable);
+    }
+
+    string FormatRootTabStatusText(LibraryCategory cat, int count, string cacheTag) => cat switch {
+        LibraryCategory.Albums => $"{count} {S["LibAlbums"].ToLowerInvariant()} • {cacheTag}",
+        LibraryCategory.Tracks => $"{string.Format(S["LibSongsCount"], count)} • {cacheTag}",
+        LibraryCategory.Artists => $"{count} {S["LibArtists"].ToLowerInvariant()} • {cacheTag}",
+        _ => $"{count} {S["LibFolders"].ToLowerInvariant()} • {cacheTag}"
+    };
+
     void RenderLibraryView() {
         if (libraryListHost == null) return;
+        CancelLibraryRenderPump();
         int myRenderGen = ++libraryRenderGeneration;
         libraryListHost.RemoveAllViews();
 
@@ -115,13 +225,11 @@ public partial class MainActivity {
 
         string q = (librarySearchQuery ?? "").Trim();
         bool hasQuery = !string.IsNullOrEmpty(q);
-        int visibleSpatial = cachedVisibleTracks.Count(t => t.IsSurround);
         string cacheTag = isIncrementalSyncRunning
             ? S["LibSyncing"]
-            : string.Format(S["LibCacheSynced"], cachedVisibleTracks.Count, visibleSpatial);
-        if (cachedHiddenNoiseCount > 0 && !isIncrementalSyncRunning) {
-            cacheTag = $"{cacheTag} • {string.Format(S["LibHiddenNoiseCount"], cachedHiddenNoiseCount)}";
-        }
+            : (!string.IsNullOrEmpty(cachedLibraryBadgeText)
+                ? cachedLibraryBadgeText
+                : string.Format(S["LibCacheSynced"], cachedVisibleTracks.Count, cachedVisibleSpatialCount));
 
         bool hasAnyActiveFilter = store.LibraryFilterMode > 0
             || store.LibraryMediaTypeFilter > 0
@@ -131,7 +239,7 @@ public partial class MainActivity {
 
         // Detail Drill-Down inside Album / Artist / Folder (all merged via MergeTrackVariants + paginated)
         if (selectedLibraryAlbum != null) {
-            RenderAlbumDetailView(selectedLibraryAlbum, q);
+            RenderAlbumDetailView(selectedLibraryAlbum, q, myRenderGen);
             return;
         }
         if (selectedLibraryFolder != null) {
@@ -154,7 +262,8 @@ public partial class MainActivity {
                 $"{string.Format(S["LibSongsCount"], fldMerged.Count)} • {selectedLibraryFolder.FolderPath}",
                 fldMerged,
                 () => { selectedLibraryFolder = null; RenderLibraryView(); },
-                onHideFolder: () => HideFolderFromLibrary(capturedFld));
+                onHideFolder: () => HideFolderFromLibrary(capturedFld),
+                myRenderGen: myRenderGen);
             return;
         }
         if (!string.IsNullOrEmpty(selectedLibraryArtist)) {
@@ -177,45 +286,66 @@ public partial class MainActivity {
                     art.Artist,
                     string.Format(S["LibSongsCount"], artMerged.Count),
                     artMerged,
-                    () => { selectedLibraryArtist = null; RenderLibraryView(); });
+                    () => { selectedLibraryArtist = null; RenderLibraryView(); },
+                    myRenderGen: myRenderGen);
                 return;
             }
         }
 
+        int tabIdx = Math.Clamp((int)libraryCategory, 0, cachedLibraryTabViews.Length - 1);
+        string loadedPath = LoadedFile?.Path ?? "";
+        string prefFmt = preferredFormatVariantKey ?? "";
+        bool prefsMatchIndex = cachedBuiltPrefCategory == preferredAudioCategory &&
+            string.Equals(cachedBuiltPrefFormatKey, prefFmt, StringComparison.OrdinalIgnoreCase);
+
+        CachedLibraryTabView cachedTab = cachedLibraryTabViews[tabIdx];
+        if (cachedTab != null &&
+            cachedTab.IsComplete &&
+            cachedTab.Container != null &&
+            cachedTab.Snap == librarySnapshot &&
+            cachedTab.Revision == libraryFilterRevision &&
+            cachedTab.Limit == libraryRenderLimit &&
+            cachedTab.PrefCategory == preferredAudioCategory &&
+            string.Equals(cachedTab.PrefFormatKey, prefFmt, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(cachedTab.Query, q, StringComparison.Ordinal) &&
+            (libraryCategory != LibraryCategory.Tracks || string.Equals(cachedTab.LoadedPath, loadedPath, StringComparison.OrdinalIgnoreCase))) {
+            libraryStatusText.Text = FormatRootTabStatusText(libraryCategory, cachedTab.ItemCount, cacheTag);
+            if (cachedTab.Container.Parent is ViewGroup oldParent) {
+                oldParent.RemoveView(cachedTab.Container);
+            }
+            libraryListHost.AddView(cachedTab.Container, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            return;
+        }
+
         EnsureLibraryQueryCache(q, libraryCategory);
 
-        const int InitialBatchItems = 12;
-        const int IncrementalBatchItems = 12;
+        const int InitialBatchItems = 6;
+        const int IncrementalBatchItems = 6;
 
-        void ScheduleIncrementalRender(int startIndex, int endIndex, int step, Action<int> appendItem, Action onDone) {
-            int cursor = startIndex;
-            void Pump() {
-                if (uiDestroyed || myRenderGen != libraryRenderGeneration || libraryListHost == null) {
-                    return;
-                }
-                int batchEnd = Math.Min(endIndex, cursor + IncrementalBatchItems);
-                for (int idx = cursor; idx < batchEnd; idx += step) {
-                    appendItem(idx);
-                }
-                cursor = batchEnd;
-                if (cursor < endIndex) {
-                    libraryListHost.Post(Pump);
-                } else {
-                    onDone?.Invoke();
-                }
-            }
-            if (cursor < endIndex) {
-                libraryListHost.Post(Pump);
-            } else {
-                onDone?.Invoke();
-            }
-        }
+        LinearLayout tabContainer = new(this) { Orientation = Orientation.Vertical };
+        libraryListHost.AddView(tabContainer, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        CachedLibraryTabView tabCacheEntry = new() {
+            Container = tabContainer,
+            Snap = librarySnapshot,
+            Revision = libraryFilterRevision,
+            Query = q,
+            Limit = libraryRenderLimit,
+            LoadedPath = loadedPath,
+            PrefCategory = preferredAudioCategory,
+            PrefFormatKey = prefFmt,
+            IsComplete = false
+        };
+        cachedLibraryTabViews[tabIdx] = tabCacheEntry;
 
         if (libraryCategory == LibraryCategory.Albums) {
             List<(LibraryAlbumGroup Alb, List<LibraryMergedTrack> Merged)> filtered = cachedQueryAlbums;
-            libraryStatusText.Text = $"{filtered.Count} {S["LibAlbums"].ToLowerInvariant()} • {cacheTag}";
+            tabCacheEntry.ItemCount = filtered.Count;
+            libraryStatusText.Text = FormatRootTabStatusText(LibraryCategory.Albums, filtered.Count, cacheTag);
             if (filtered.Count == 0) {
-                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0);
+                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0, tabContainer);
+                tabCacheEntry.IsComplete = true;
                 return;
             }
 
@@ -231,7 +361,7 @@ public partial class MainActivity {
                 } else {
                     gridRow.AddView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
                 }
-                libraryListHost.AddView(gridRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                tabContainer.AddView(gridRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
                     BottomMargin = Dp(10)
                 });
             }
@@ -240,29 +370,38 @@ public partial class MainActivity {
             for (int i = 0; i < firstEnd; i += 2) {
                 AppendAlbumPair(i);
             }
-            ScheduleIncrementalRender(firstEnd, showCount, 2, AppendAlbumPair, () => AddLoadMoreIfNeeded(filtered.Count, showCount));
+            ScheduleLibraryIncrementalRender(myRenderGen, firstEnd, showCount, 2, IncrementalBatchItems, AppendAlbumPair, () => {
+                AddLoadMoreIfNeeded(filtered.Count, showCount, tabContainer);
+                tabCacheEntry.IsComplete = true;
+            });
         } else if (libraryCategory == LibraryCategory.Tracks) {
             List<LibraryMergedTrack> filtered = cachedQueryMergedTracks;
-            libraryStatusText.Text = $"{string.Format(S["LibSongsCount"], filtered.Count)} • {cacheTag}";
+            tabCacheEntry.ItemCount = filtered.Count;
+            libraryStatusText.Text = FormatRootTabStatusText(LibraryCategory.Tracks, filtered.Count, cacheTag);
             if (filtered.Count == 0) {
-                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0);
+                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0, tabContainer);
+                tabCacheEntry.IsComplete = true;
                 return;
             }
 
-            // Build queue incrementally in the same loop (avoids blocking UI thread with full-library LINQ scan on tab switch)
             int showCount = Math.Min(filtered.Count, libraryRenderLimit);
-            List<LibraryTrackItem> queue = new(showCount);
-            for (int i = 0; i < showCount; i++) {
-                LibraryTrackItem chosen = PickPreferredVariant(filtered[i]);
-                if (chosen != null) {
-                    queue.Add(chosen);
+            List<LibraryTrackItem> queue;
+            if (!hasQuery && prefsMatchIndex && cachedMergedTrackQueue.Count == filtered.Count) {
+                queue = cachedMergedTrackQueue;
+            } else {
+                queue = new List<LibraryTrackItem>(showCount);
+                for (int i = 0; i < showCount; i++) {
+                    LibraryTrackItem chosen = PickPreferredVariant(filtered[i]);
+                    if (chosen != null) {
+                        queue.Add(chosen);
+                    }
                 }
             }
             int renderCount = Math.Min(showCount, queue.Count);
             void AppendTrackRow(int i) {
                 LibraryMergedTrack m = filtered[i];
                 LibraryTrackItem chosen = queue[i];
-                libraryListHost.AddView(
+                tabContainer.AddView(
                     BuildLibraryTrackRow(
                         chosen,
                         queue,
@@ -279,12 +418,17 @@ public partial class MainActivity {
             for (int i = 0; i < firstEnd; i++) {
                 AppendTrackRow(i);
             }
-            ScheduleIncrementalRender(firstEnd, renderCount, 1, AppendTrackRow, () => AddLoadMoreIfNeeded(filtered.Count, renderCount));
+            ScheduleLibraryIncrementalRender(myRenderGen, firstEnd, renderCount, 1, IncrementalBatchItems, AppendTrackRow, () => {
+                AddLoadMoreIfNeeded(filtered.Count, renderCount, tabContainer);
+                tabCacheEntry.IsComplete = true;
+            });
         } else if (libraryCategory == LibraryCategory.Artists) {
             List<(LibraryArtistGroup Art, List<LibraryMergedTrack> Merged)> filtered = cachedQueryArtists;
-            libraryStatusText.Text = $"{filtered.Count} {S["LibArtists"].ToLowerInvariant()} • {cacheTag}";
+            tabCacheEntry.ItemCount = filtered.Count;
+            libraryStatusText.Text = FormatRootTabStatusText(LibraryCategory.Artists, filtered.Count, cacheTag);
             if (filtered.Count == 0) {
-                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0);
+                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0, tabContainer);
+                tabCacheEntry.IsComplete = true;
                 return;
             }
 
@@ -292,17 +436,26 @@ public partial class MainActivity {
             void AppendArtistRow(int i) {
                 LibraryArtistGroup art = filtered[i].Art;
                 List<LibraryMergedTrack> merged = filtered[i].Merged;
-                List<LibraryTrackItem> artQueue = new(merged.Count);
-                HashSet<string> albums = new(StringComparer.OrdinalIgnoreCase);
-                for (int j = 0; j < merged.Count; j++) {
-                    LibraryTrackItem pref = PickPreferredVariant(merged[j]);
-                    if (pref != null) artQueue.Add(pref);
-                    string albKey = string.IsNullOrWhiteSpace(merged[j].Primary.Album)
-                        ? merged[j].Primary.FolderPath
-                        : merged[j].Primary.Album;
-                    if (!string.IsNullOrEmpty(albKey)) albums.Add(albKey);
+                List<LibraryTrackItem> artQueue;
+                int albumCnt;
+                if (cachedArtistMeta.TryGetValue(art, out var meta) && meta.Queue != null && prefsMatchIndex) {
+                    artQueue = meta.Queue;
+                    albumCnt = meta.DistinctAlbumCount;
+                } else {
+                    artQueue = new List<LibraryTrackItem>(merged.Count);
+                    HashSet<string> albums = meta.DistinctAlbumCount > 0 ? null : new(StringComparer.OrdinalIgnoreCase);
+                    for (int j = 0; j < merged.Count; j++) {
+                        LibraryTrackItem pref = PickPreferredVariant(merged[j]);
+                        if (pref != null) artQueue.Add(pref);
+                        if (albums != null) {
+                            string albKey = string.IsNullOrWhiteSpace(merged[j].Primary.Album)
+                                ? merged[j].Primary.FolderPath
+                                : merged[j].Primary.Album;
+                            if (!string.IsNullOrEmpty(albKey)) albums.Add(albKey);
+                        }
+                    }
+                    albumCnt = meta.DistinctAlbumCount > 0 ? meta.DistinctAlbumCount : Math.Max(1, albums.Count);
                 }
-                int albumCnt = Math.Max(1, albums.Count);
                 LinearLayout row = BuildGroupRow(
                     art.Artist,
                     $"{string.Format(S["LibAlbumsCount"], albumCnt)} • {string.Format(S["LibSongsCount"], merged.Count)}",
@@ -313,7 +466,7 @@ public partial class MainActivity {
                         libraryRenderLimit = 72;
                         RenderLibraryView();
                     });
-                libraryListHost.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                tabContainer.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
                     BottomMargin = Dp(6)
                 });
             }
@@ -322,13 +475,18 @@ public partial class MainActivity {
             for (int i = 0; i < firstEnd; i++) {
                 AppendArtistRow(i);
             }
-            ScheduleIncrementalRender(firstEnd, showCount, 1, AppendArtistRow, () => AddLoadMoreIfNeeded(filtered.Count, showCount));
+            ScheduleLibraryIncrementalRender(myRenderGen, firstEnd, showCount, 1, IncrementalBatchItems, AppendArtistRow, () => {
+                AddLoadMoreIfNeeded(filtered.Count, showCount, tabContainer);
+                tabCacheEntry.IsComplete = true;
+            });
         } else {
-            libraryListHost.AddView(BuildFoldersToolbar());
+            tabContainer.AddView(BuildFoldersToolbar());
             List<(LibraryFolderGroup Fld, List<LibraryMergedTrack> Merged)> filtered = cachedQueryFolders;
-            libraryStatusText.Text = $"{filtered.Count} {S["LibFolders"].ToLowerInvariant()} • {cacheTag}";
+            tabCacheEntry.ItemCount = filtered.Count;
+            libraryStatusText.Text = FormatRootTabStatusText(LibraryCategory.Folders, filtered.Count, cacheTag);
             if (filtered.Count == 0) {
-                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0);
+                RenderLibraryEmptyCard(hasAnyActiveFilter && librarySnapshot.Tracks.Count > 0, tabContainer);
+                tabCacheEntry.IsComplete = true;
                 return;
             }
 
@@ -336,10 +494,15 @@ public partial class MainActivity {
             void AppendFolderRow(int i) {
                 LibraryFolderGroup fld = filtered[i].Fld;
                 List<LibraryMergedTrack> merged = filtered[i].Merged;
-                List<LibraryTrackItem> fldQueue = new(merged.Count);
-                for (int j = 0; j < merged.Count; j++) {
-                    LibraryTrackItem pref = PickPreferredVariant(merged[j]);
-                    if (pref != null) fldQueue.Add(pref);
+                List<LibraryTrackItem> fldQueue;
+                if (cachedFolderQueues.TryGetValue(fld, out var preQueue) && preQueue != null && prefsMatchIndex) {
+                    fldQueue = preQueue;
+                } else {
+                    fldQueue = new List<LibraryTrackItem>(merged.Count);
+                    for (int j = 0; j < merged.Count; j++) {
+                        LibraryTrackItem pref = PickPreferredVariant(merged[j]);
+                        if (pref != null) fldQueue.Add(pref);
+                    }
                 }
                 LibraryFolderGroup capturedFld = fld;
                 LinearLayout row = BuildGroupRow(
@@ -354,7 +517,7 @@ public partial class MainActivity {
                     },
                     isFolder: true,
                     onHideFolder: () => HideFolderFromLibrary(capturedFld));
-                libraryListHost.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                tabContainer.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
                     BottomMargin = Dp(6)
                 });
             }
@@ -363,22 +526,25 @@ public partial class MainActivity {
             for (int i = 0; i < firstEnd; i++) {
                 AppendFolderRow(i);
             }
-            ScheduleIncrementalRender(firstEnd, showCount, 1, AppendFolderRow, () => AddLoadMoreIfNeeded(filtered.Count, showCount));
+            ScheduleLibraryIncrementalRender(myRenderGen, firstEnd, showCount, 1, IncrementalBatchItems, AppendFolderRow, () => {
+                AddLoadMoreIfNeeded(filtered.Count, showCount, tabContainer);
+                tabCacheEntry.IsComplete = true;
+            });
         }
     }
 
-    void AddLoadMoreIfNeeded(int totalCount, int shown) {
+    void AddLoadMoreIfNeeded(int totalCount, int shown, LinearLayout targetHost = null) {
         if (shown >= totalCount) return;
         Button more = PillButton(string.Format(S["LibShowMore"], totalCount - shown), () => {
             libraryRenderLimit += 72;
             RenderLibraryView();
         });
-        libraryListHost.AddView(more, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        (targetHost ?? libraryListHost).AddView(more, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(6)
         });
     }
 
-    void RenderLibraryEmptyCard(bool isFilteredEmpty = false) {
+    void RenderLibraryEmptyCard(bool isFilteredEmpty = false, LinearLayout targetHost = null) {
         LinearLayout card = Card();
         TextView tv = Label(isFilteredEmpty ? S["LibEmptyFilteredMedia"] : S["LibEmpty"], 12.5f, OneUiTheme.TextSub);
         tv.SetPadding(0, 0, 0, Dp(10));
@@ -403,7 +569,7 @@ public partial class MainActivity {
             Button openPicker = PrimaryButton(S["LibOpenExplorer"], () => OpenMediaWithExplorer(switchToTab: 0));
             card.AddView(openPicker);
         }
-        libraryListHost.AddView(card);
+        (targetHost ?? libraryListHost).AddView(card);
     }
 
     LinearLayout BuildAlbumTileCard(LibraryAlbumGroup alb, List<LibraryMergedTrack> visibleMerged) {
@@ -411,11 +577,13 @@ public partial class MainActivity {
         Typeface sfReg = OneUiTheme.GetAppleFontRegular(this);
 
         LinearLayout tile = new(this) { Orientation = Orientation.Vertical };
-        tile.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceCard, 18f);
+        tile.Background = GetCachedGroupCardDrawable();
         tile.SetPadding(Dp(10), Dp(10), Dp(10), Dp(10));
         OneUiTheme.AttachRecoil(tile, 0.96f);
 
-        LibraryTrackItem thumbSample = visibleMerged?.FirstOrDefault()?.Primary ?? alb.Tracks.FirstOrDefault();
+        LibraryTrackItem thumbSample = (visibleMerged != null && visibleMerged.Count > 0)
+            ? visibleMerged[0].Primary
+            : (alb.Tracks.Count > 0 ? alb.Tracks[0] : null);
         int trackCount = visibleMerged?.Count ?? alb.Tracks.Count;
 
         RoundedArtworkView art = new(this) {
@@ -449,38 +617,43 @@ public partial class MainActivity {
 
     LibraryTrackItem PickPreferredVariant(LibraryMergedTrack m) {
         if (m == null) return null;
-        if (m.Variants.Count > 1) {
-            if (preferredAudioCategory.HasValue) {
-                LibraryTrackItem smartPick = AudioQualityAnalyzer.PickBestVariantForNextTrack(m.Variants, preferredAudioCategory.Value, this);
-                if (smartPick != null) return smartPick;
-            }
-            if (!string.IsNullOrEmpty(preferredFormatVariantKey)) {
-                LibraryTrackItem pref = m.Variants.FirstOrDefault(v =>
-                    string.Equals(MediaLibraryService.GetDistinctVariantLabel(v, m.Variants), preferredFormatVariantKey, StringComparison.OrdinalIgnoreCase));
-                if (pref != null) return pref;
-            }
+        if (m.PreferredVariant != null &&
+            cachedBuiltPrefCategory == preferredAudioCategory &&
+            string.Equals(cachedBuiltPrefFormatKey, preferredFormatVariantKey ?? "", StringComparison.OrdinalIgnoreCase)) {
+            return m.PreferredVariant;
         }
-        return m.Primary;
+        return MediaLibraryService.ResolvePreferredVariant(m, preferredAudioCategory, preferredFormatVariantKey);
     }
 
-    void RenderAlbumDetailView(LibraryAlbumGroup alb, string q = "") {
+    void RenderAlbumDetailView(LibraryAlbumGroup alb, string q = "", int myRenderGen = 0) {
         Typeface sfBold = OneUiTheme.GetAppleFontBold(this);
-        List<LibraryTrackItem> filteredRaw = FilterLibraryTracks(alb.Tracks);
-        if (filteredRaw.Count == 0 &&
-            store.LibraryFilterMode == 0 &&
-            store.LibraryMediaTypeFilter == 0 &&
-            store.LibraryFolderFilterMode == 0 &&
-            store.SmartCleanHiddenFolders.Count == 0 &&
-            !store.LibraryHideNonMusic) {
-            filteredRaw = alb.Tracks;
+        var albMatch = cachedAlbumEntries.FirstOrDefault(a => a.Alb == alb ||
+            string.Equals(a.Alb.Key, alb.Key, StringComparison.OrdinalIgnoreCase));
+        List<LibraryMergedTrack> merged;
+        if (albMatch.Alb != null) {
+            merged = albMatch.Merged;
+        } else {
+            List<LibraryTrackItem> filteredRaw = FilterLibraryTracks(alb.Tracks);
+            if (filteredRaw.Count == 0 &&
+                store.LibraryFilterMode == 0 &&
+                store.LibraryMediaTypeFilter == 0 &&
+                store.LibraryFolderFilterMode == 0 &&
+                store.SmartCleanHiddenFolders.Count == 0 &&
+                !store.LibraryHideNonMusic) {
+                filteredRaw = alb.Tracks;
+            }
+            merged = MediaLibraryService.MergeAlbumTrackVariants(filteredRaw, this);
         }
-        List<LibraryMergedTrack> merged = MediaLibraryService.MergeAlbumTrackVariants(filteredRaw, this);
         if (!string.IsNullOrEmpty(q)) {
             merged = merged.Where(m =>
                 m.Primary.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                 m.Primary.Artist.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
         }
-        List<LibraryTrackItem> albumQueue = merged.Select(PickPreferredVariant).Where(t => t != null).ToList();
+        List<LibraryTrackItem> albumQueue = new(merged.Count);
+        for (int i = 0; i < merged.Count; i++) {
+            LibraryTrackItem pref = PickPreferredVariant(merged[i]);
+            if (pref != null) albumQueue.Add(pref);
+        }
 
         libraryStatusText.Text = $"{alb.AlbumTitle} — {string.Format(S["LibSongsCount"], merged.Count)}";
 
@@ -497,7 +670,7 @@ public partial class MainActivity {
 
         LinearLayout hero = HRow();
         RoundedArtworkView cover = new(this) { PreferredSizeDp = 88, CornerDp = 14f };
-        BindThumbAsync(cover, albumQueue.FirstOrDefault(), alb.AlbumTitle);
+        BindThumbAsync(cover, albumQueue.Count > 0 ? albumQueue[0] : null, alb.AlbumTitle);
         hero.AddView(cover, new LinearLayout.LayoutParams(Dp(88), Dp(88)) { RightMargin = Dp(12) });
 
         LinearLayout meta = new(this) { Orientation = Orientation.Vertical };
@@ -530,8 +703,8 @@ public partial class MainActivity {
 
         bool multiDisc = merged.Select(m => m.Primary.DiscNumber).Where(d => d > 0).Distinct().Count() > 1;
         int lastDisc = -1;
-        int showCount = Math.Min(merged.Count, libraryRenderLimit);
-        for (int i = 0; i < showCount; i++) {
+        int showCount = Math.Min(merged.Count, Math.Min(libraryRenderLimit, albumQueue.Count));
+        void AppendAlbumTrackRow(int i) {
             LibraryMergedTrack m = merged[i];
             if (multiDisc && m.Primary.DiscNumber > 0 && m.Primary.DiscNumber != lastDisc) {
                 lastDisc = m.Primary.DiscNumber;
@@ -551,7 +724,15 @@ public partial class MainActivity {
                     allVariantsForHighlight: m.Variants),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
         }
-        AddLoadMoreIfNeeded(merged.Count, showCount);
+
+        const int InitialBatchItems = 6;
+        const int IncrementalBatchItems = 6;
+        int firstEnd = Math.Min(showCount, InitialBatchItems);
+        for (int i = 0; i < firstEnd; i++) {
+            AppendAlbumTrackRow(i);
+        }
+        ScheduleLibraryIncrementalRender(myRenderGen, firstEnd, showCount, 1, IncrementalBatchItems, AppendAlbumTrackRow,
+            () => AddLoadMoreIfNeeded(merged.Count, showCount));
     }
 
     void RenderGroupTracksDrilldown(
@@ -559,9 +740,14 @@ public partial class MainActivity {
         string sub,
         List<LibraryMergedTrack> mergedTracks,
         Action onBack,
-        Action onHideFolder = null) {
+        Action onHideFolder = null,
+        int myRenderGen = 0) {
         libraryStatusText.Text = $"{title} • {sub}";
-        List<LibraryTrackItem> queue = mergedTracks.Select(PickPreferredVariant).Where(t => t != null).ToList();
+        List<LibraryTrackItem> queue = new(mergedTracks.Count);
+        for (int i = 0; i < mergedTracks.Count; i++) {
+            LibraryTrackItem pref = PickPreferredVariant(mergedTracks[i]);
+            if (pref != null) queue.Add(pref);
+        }
 
         LinearLayout hdrCard = Card();
         LinearLayout topRow = HRow();
@@ -610,8 +796,8 @@ public partial class MainActivity {
             return;
         }
 
-        int showCount = Math.Min(mergedTracks.Count, libraryRenderLimit);
-        for (int i = 0; i < showCount; i++) {
+        int showCount = Math.Min(mergedTracks.Count, Math.Min(libraryRenderLimit, queue.Count));
+        void AppendDrilldownRow(int i) {
             LibraryMergedTrack m = mergedTracks[i];
             LibraryTrackItem chosen = queue[i];
             libraryListHost.AddView(
@@ -624,7 +810,15 @@ public partial class MainActivity {
                     allVariantsForHighlight: m.Variants),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
         }
-        AddLoadMoreIfNeeded(mergedTracks.Count, showCount);
+
+        const int InitialBatchItems = 6;
+        const int IncrementalBatchItems = 6;
+        int firstEnd = Math.Min(showCount, InitialBatchItems);
+        for (int i = 0; i < firstEnd; i++) {
+            AppendDrilldownRow(i);
+        }
+        ScheduleLibraryIncrementalRender(myRenderGen, firstEnd, showCount, 1, IncrementalBatchItems, AppendDrilldownRow,
+            () => AddLoadMoreIfNeeded(mergedTracks.Count, showCount));
     }
 
     LinearLayout BuildGroupRow(
@@ -636,7 +830,7 @@ public partial class MainActivity {
         bool isFolder = false,
         Action onHideFolder = null) {
         LinearLayout card = new(this) { Orientation = Orientation.Vertical };
-        card.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceCard, 18f);
+        card.Background = GetCachedGroupCardDrawable();
         card.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
         OneUiTheme.AttachRecoil(card, 0.97f);
 
@@ -663,10 +857,6 @@ public partial class MainActivity {
         topRow.AddView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         card.AddView(topRow);
 
-        HorizontalScrollView actScroll = new(this) {
-            HorizontalScrollBarEnabled = false,
-            OverScrollMode = OverScrollMode.Never
-        };
         LinearLayout actRow = HRow();
         actRow.AddView(
             BuildGroupActionPill(OneUiIconType.Play, S["Play"], () => {
@@ -683,8 +873,7 @@ public partial class MainActivity {
                 BuildGroupActionPill(OneUiIconType.CleanFilter, S["LibHideFolderBtn"], onHideFolder, subtleDanger: true),
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
         }
-        actScroll.AddView(actRow);
-        card.AddView(actScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        card.AddView(actRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(8)
         });
 
@@ -700,14 +889,23 @@ public partial class MainActivity {
         bool showThumb = true,
         string badgeOverride = null,
         IReadOnlyList<LibraryTrackItem> allVariantsForHighlight = null) {
-        bool isPlayingThis = LoadedFile != null && (
-            string.Equals(LoadedFile.Path, item.FilePath, StringComparison.OrdinalIgnoreCase) ||
-            (allVariantsForHighlight != null && allVariantsForHighlight.Any(v => string.Equals(LoadedFile.Path, v.FilePath, StringComparison.OrdinalIgnoreCase))));
+        string loadedPath = LoadedFile?.Path;
+        bool isPlayingThis = false;
+        if (loadedPath != null) {
+            if (string.Equals(loadedPath, item.FilePath, StringComparison.OrdinalIgnoreCase)) {
+                isPlayingThis = true;
+            } else if (allVariantsForHighlight != null) {
+                for (int vIdx = 0; vIdx < allVariantsForHighlight.Count; vIdx++) {
+                    if (string.Equals(loadedPath, allVariantsForHighlight[vIdx].FilePath, StringComparison.OrdinalIgnoreCase)) {
+                        isPlayingThis = true;
+                        break;
+                    }
+                }
+            }
+        }
 
         LinearLayout row = HRow();
-        row.Background = isPlayingThis
-            ? OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.WithAlpha(ColAccent, 64), 16f, ColAccent)
-            : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
+        row.Background = GetCachedTrackRowDrawable(isPlayingThis);
         row.SetPadding(Dp(10), Dp(9), Dp(10), Dp(9));
         OneUiTheme.AttachRecoil(row, 0.97f);
 
@@ -729,8 +927,11 @@ public partial class MainActivity {
         titleTv.SetSingleLine(true);
         titleTv.Ellipsize = TextUtils.TruncateAt.End;
 
-        string subLine = string.Join(" — ", new[] { item.Artist, item.Album }.Where(s => !string.IsNullOrWhiteSpace(s)));
-        if (string.IsNullOrWhiteSpace(subLine)) subLine = item.FolderName;
+        bool hasArtist = !string.IsNullOrWhiteSpace(item.Artist);
+        bool hasAlbum = !string.IsNullOrWhiteSpace(item.Album);
+        string subLine = (hasArtist && hasAlbum)
+            ? $"{item.Artist} — {item.Album}"
+            : (hasArtist ? item.Artist : (hasAlbum ? item.Album : item.FolderName));
         TextView subTv = Label(subLine, 11f, OneUiTheme.TextMuted);
         subTv.SetSingleLine(true);
         subTv.Ellipsize = TextUtils.TruncateAt.End;
@@ -749,21 +950,26 @@ public partial class MainActivity {
         if (string.IsNullOrWhiteSpace(badgeLabel)) {
             badgeLabel = item.IsVideo ? S["LibVideoBadge"] : S["AudioBadgeDefault"];
         }
-        bool anySpatial = item.IsSpatial || (allVariantsForHighlight?.Any(v => v.IsSpatial) ?? false);
-        bool anySurround = item.IsSurround || (allVariantsForHighlight?.Any(v => v.IsSurround) ?? false);
+        bool anySpatial = item.IsSpatial;
+        bool anySurround = item.IsSurround;
+        if ((!anySpatial || !anySurround) && allVariantsForHighlight != null) {
+            for (int vIdx = 0; vIdx < allVariantsForHighlight.Count; vIdx++) {
+                LibraryTrackItem v = allVariantsForHighlight[vIdx];
+                if (v.IsSpatial) anySpatial = true;
+                if (v.IsSurround) anySurround = true;
+                if (anySpatial && anySurround) break;
+            }
+        }
         Color badgeTextCol = anySpatial
             ? OneUiTheme.PrimaryHigh
             : (anySurround ? OneUiTheme.PeachText : OneUiTheme.TextMuted);
-        Color badgeBgCol = anySpatial
-            ? OneUiTheme.WithAlpha(OneUiTheme.Primary, 52)
-            : Color.Argb(40, 255, 255, 255);
         TextView fmtTv = Label(badgeLabel, 9.5f, badgeTextCol);
         fmtTv.SetTypeface(OneUiTheme.GetAppleFontBold(this), TypefaceStyle.Bold);
         fmtTv.SetSingleLine(true);
         fmtTv.Ellipsize = TextUtils.TruncateAt.End;
         fmtTv.SetMaxWidth(Dp(126));
         fmtTv.SetPadding(Dp(6), Dp(2), Dp(6), Dp(2));
-        fmtTv.Background = OneUiTheme.CreateRoundedDrawable(this, badgeBgCol, 6f);
+        fmtTv.Background = GetCachedBadgeDrawable(anySpatial);
         rightCol.AddView(fmtTv);
 
         if (item.DurationMs > 0) {

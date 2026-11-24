@@ -14,6 +14,11 @@ namespace Cavern.Remapping {
     /// </summary>
     public class CavernizeUpmixer : Upmixer, ISoundfieldTelemetryProvider, IDisposable {
         /// <summary>
+        /// Default normalized vertical elevation ratio assigned to synthesized height sources at attach time.
+        /// </summary>
+        public const float DefaultNormalizedHeightOffset = 0.68f;
+
+        /// <summary>
         /// Height separation effect strength.
         /// </summary>
         public float Effect { get; set; } = .75f;
@@ -93,16 +98,30 @@ namespace Cavern.Remapping {
             isInStftPair = new bool[sourceCount];
             alignDelays = new FixedSampleDelayLine[sourceCount];
 
+            Vector3 envSize = Listener.EnvironmentSize;
+            float envY = envSize.Y > 0.1f ? envSize.Y : 7f;
+            float initialHeightY = envY * DefaultNormalizedHeightOffset;
+            bool centerStaysAssigned = false;
+
             int heightSlot = sourceCount;
             for (int i = 0; i < sourceCount; i++) {
-                IntermediateSources[i].Position = sources[i].Position;
+                Vector3 basePos = sources[i].Position;
+                IntermediateSources[i].Position = basePos;
                 alignDelays[i] = new FixedSampleDelayLine(ParametricStftAnalyzer.LatencySamples);
                 if (sources[i].LFE) {
                     IntermediateSources[i].LFE = true;
                     heightOutputIndices[i] = -1;
                 } else {
                     filters[i] = new Cavernize(sampleRate, crossoverFrequency);
-                    heightOutputIndices[i] = heightSlot++;
+                    int hSlot = heightSlot++;
+                    heightOutputIndices[i] = hSlot;
+                    bool isCenter = CenterStays && !centerStaysAssigned && IsCenterFrontPosition(basePos);
+                    if (isCenter) {
+                        centerStaysAssigned = true;
+                        IntermediateSources[hSlot].Position = basePos;
+                    } else {
+                        IntermediateSources[hSlot].Position = new Vector3(basePos.X, MathF.Min(envY, basePos.Y + initialHeightY), basePos.Z);
+                    }
                 }
             }
 
@@ -181,7 +200,7 @@ namespace Cavern.Remapping {
 
         float[][] UpdateSourcesParametric(int samplesPerSource) {
             float[][] input = OnSamplesNeeded(samplesPerSource);
-            float envY = Listener.EnvironmentSize.Y;
+            float envY = Listener.EnvironmentSize.Y > 0.1f ? Listener.EnvironmentSize.Y : 7f;
 
             // 1. Process symmetric L/R ground pairs with DirAC/COMPASS diffuse height extraction + orthogonal decorrelation
             for (int p = 0; p < stftPairs.Length; p++) {
@@ -202,9 +221,11 @@ namespace Cavern.Remapping {
                     crossoverFrequency,
                     out float elevation);
 
-                float liftY = elevation * envY;
-                IntermediateSources[hLIdx].Position = IntermediateSources[lIdx].Position + new Vector3(0f, liftY, 0f);
-                IntermediateSources[hRIdx].Position = IntermediateSources[rIdx].Position + new Vector3(0f, liftY, 0f);
+                float liftY = ResolveEffectiveHeightLift(elevation, Effect, envY);
+                Vector3 leftGround = IntermediateSources[lIdx].Position;
+                Vector3 rightGround = IntermediateSources[rIdx].Position;
+                IntermediateSources[hLIdx].Position = new Vector3(leftGround.X, MathF.Min(envY, leftGround.Y + liftY), leftGround.Z);
+                IntermediateSources[hRIdx].Position = new Vector3(rightGround.X, MathF.Min(envY, rightGround.Y + liftY), rightGround.Z);
 
                 if (p == 0) {
                     LatestTelemetry = stftPairs[p].analyzer.LatestTelemetry;
@@ -223,7 +244,7 @@ namespace Cavern.Remapping {
                 }
                 int hIdx = heightOutputIndices[i];
                 Vector3 position = IntermediateSources[i].Position;
-                bool isCenter = centerToStay && MathF.Abs(position.X) < 0.01f && MathF.Abs(position.Y) < 0.01f && position.Z > 0f;
+                bool isCenter = centerToStay && IsCenterFrontPosition(position);
                 if (isCenter) {
                     centerToStay = false;
                     alignDelays[i].Process(input[i], output[i], samplesPerSource);
@@ -236,7 +257,8 @@ namespace Cavern.Remapping {
                     filters[i].Process(output[i]);
                     filters[i].GroundLevel.CopyTo(output[i]);
                     filters[i].HeightLevel.CopyTo(output[hIdx]);
-                    IntermediateSources[hIdx].Position = position + new Vector3(0f, filters[i].Height * envY, 0f);
+                    float liftY = ResolveEffectiveHeightLift(filters[i].Height, Effect, envY);
+                    IntermediateSources[hIdx].Position = new Vector3(position.X, MathF.Min(envY, position.Y + liftY), position.Z);
                 }
             }
 
@@ -263,7 +285,7 @@ namespace Cavern.Remapping {
                 }
 
                 Vector3 position = IntermediateSources[i].Position;
-                if (centerToStay && position.X == 0 && position.Y == 0 && position.Z > 0) {
+                if (centerToStay && IsCenterFrontPosition(position)) {
                     filters[i].Effect = 0;
                     centerToStay = false;
                 } else {
@@ -275,6 +297,7 @@ namespace Cavern.Remapping {
             }
 
             float[][] input = OnSamplesNeeded(samplesPerSource);
+            float envY = Listener.EnvironmentSize.Y > 0.1f ? Listener.EnvironmentSize.Y : 7f;
             int pair = input.Length;
             for (int i = 0; i < input.Length; i++) {
                 if (IntermediateSources[i].LFE) {
@@ -283,11 +306,24 @@ namespace Cavern.Remapping {
                     filters[i].Process(input[i]);
                     filters[i].GroundLevel.CopyTo(output[i]);
                     filters[i].HeightLevel.CopyTo(output[pair]);
-                    IntermediateSources[pair].Position = IntermediateSources[i].Position + new Vector3(0, filters[i].Height * Listener.EnvironmentSize.Y, 0);
+                    Vector3 groundPos = IntermediateSources[i].Position;
+                    float liftY = ResolveEffectiveHeightLift(filters[i].Height, filters[i].Effect, envY);
+                    IntermediateSources[pair].Position = new Vector3(groundPos.X, MathF.Min(envY, groundPos.Y + liftY), groundPos.Z);
                     pair++;
                 }
             }
             return output;
+        }
+
+        static bool IsCenterFrontPosition(Vector3 position) =>
+            MathF.Abs(position.X) < 0.01f && MathF.Abs(position.Y) < 0.01f && position.Z > 0f;
+
+        static float ResolveEffectiveHeightLift(float rawElevation, float effect, float envY) {
+            if (effect <= 0.01f) {
+                return 0f;
+            }
+            float clamped = MathF.Max(0f, MathF.Min(1f, rawElevation));
+            return MathF.Min(1f, 0.28f + clamped * 0.72f) * envY;
         }
 
         /// <inheritdoc/>

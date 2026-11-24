@@ -166,6 +166,23 @@ public static class NativeProAudioBridge {
         }
     }
 
+    /// <summary>
+    /// Lock-free notification that the active USB audio device was detached by Android <c>UsbManager</c>.
+    /// Marks Path B <c>libusb</c> as disconnected without waiting on mutexes.
+    /// </summary>
+    public static void NotifyUsbDetached() {
+        if (!IsAvailable) {
+            return;
+        }
+        try {
+            NativeNotifyUsbDetached();
+        } catch (EntryPointNotFoundException) {
+            // Graceful no-op if an older native binary is loaded
+        } catch (Exception ex) {
+            AppLogger.Warn($"NativeProAudioBridge.NotifyUsbDetached: {ex.Message}");
+        }
+    }
+
     /// <summary>Writes stereo interleaved float32 playback frames into the native lock-free OUT ring buffer.</summary>
     public static int WritePlayback(float[] stereoInterleaved, int frameCount) {
         if (!IsAvailable || stereoInterleaved == null || frameCount <= 0) {
@@ -190,6 +207,30 @@ public static class NativeProAudioBridge {
         return NativeGetPlaybackFreeFrames();
     }
 
+    /// <summary>Returns stereo frames currently buffered in the native playback ring buffer.</summary>
+    public static int GetPlaybackBufferedFrames() {
+        if (!IsAvailable) {
+            return 0;
+        }
+        try {
+            return NativeGetPlaybackBufferedFrames();
+        } catch (EntryPointNotFoundException) {
+            return 0;
+        }
+    }
+
+    /// <summary>Requests a lock-free SPSC-safe flush of all queued frames in the native playback ring buffer.</summary>
+    public static void FlushPlayback() {
+        if (!IsAvailable) {
+            return;
+        }
+        try {
+            NativeFlushPlayback();
+        } catch (EntryPointNotFoundException) {
+            // Graceful no-op if an older native binary is loaded
+        }
+    }
+
     /// <summary>Queries live hardware status, latency, clock drift ppm, and XRun counts.</summary>
     public static bool TryGetStatus(out NativeProAudioStatus status) {
         status = default;
@@ -201,6 +242,32 @@ public static class NativeProAudioBridge {
         } catch {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Sends Focusrite Scarlett2/Gen4 vendor init step 0 (<c>bmRequestType=0xA1</c>, <c>bRequest=0x00</c>, 24-byte read)
+    /// over the active Path B <c>libusb</c> handle. Returns bytes received in <paramref name="rxPacket"/>, or negative on error.
+    /// </summary>
+    public static int Scarlett2InitStep0(int vendorInterface, byte[] rxPacket, int rxCap) {
+        if (!SupportsPathBLibUsb || rxCap < 0 || (rxCap > 0 && rxPacket == null)) {
+            return -1;
+        }
+        try {
+            return NativeScarlett2InitStep0(vendorInterface, rxPacket, rxCap);
+        } catch (EntryPointNotFoundException) {
+            return -1;
+        } catch (Exception ex) {
+            AppLogger.Warn($"NativeProAudioBridge.Scarlett2InitStep0: {ex.Message}");
+            return -2;
+        }
+    }
+
+    /// <summary>
+    /// Sends Focusrite Scarlett2/Gen4 vendor init step 0 (<c>bmRequestType=0xA1</c>, <c>bRequest=0x00</c>, 24-byte read)
+    /// over the active Path B <c>libusb</c> handle.
+    /// </summary>
+    public static int Scarlett2InitStep0(int vendorInterface, byte[] rxPacket) {
+        return Scarlett2InitStep0(vendorInterface, rxPacket, rxPacket?.Length ?? 0);
     }
 
     /// <summary>
@@ -234,6 +301,9 @@ public static class NativeProAudioBridge {
     [DllImport(LibraryName, EntryPoint = "cavernize_pa_stop", CallingConvention = CallingConvention.Cdecl)]
     static extern void NativeStop();
 
+    [DllImport(LibraryName, EntryPoint = "cavernize_pa_notify_usb_detached", CallingConvention = CallingConvention.Cdecl)]
+    static extern void NativeNotifyUsbDetached();
+
     [DllImport(LibraryName, EntryPoint = "cavernize_pa_write_playback", CallingConvention = CallingConvention.Cdecl)]
     static extern int NativeWritePlayback([In] float[] stereoInterleaved, int frameCount);
 
@@ -243,8 +313,17 @@ public static class NativeProAudioBridge {
     [DllImport(LibraryName, EntryPoint = "cavernize_pa_get_playback_free_frames", CallingConvention = CallingConvention.Cdecl)]
     static extern int NativeGetPlaybackFreeFrames();
 
+    [DllImport(LibraryName, EntryPoint = "cavernize_pa_get_playback_buffered_frames", CallingConvention = CallingConvention.Cdecl)]
+    static extern int NativeGetPlaybackBufferedFrames();
+
+    [DllImport(LibraryName, EntryPoint = "cavernize_pa_flush_playback", CallingConvention = CallingConvention.Cdecl)]
+    static extern void NativeFlushPlayback();
+
     [DllImport(LibraryName, EntryPoint = "cavernize_pa_get_status", CallingConvention = CallingConvention.Cdecl)]
     static extern int NativeGetStatus(out NativeProAudioStatus outStatus);
+
+    [DllImport(LibraryName, EntryPoint = "cavernize_pa_scarlett2_init_step0", CallingConvention = CallingConvention.Cdecl)]
+    static extern int NativeScarlett2InitStep0(int vendorInterface, [Out] byte[] rxPacket, int rxCap);
 
     [DllImport(LibraryName, EntryPoint = "cavernize_pa_scarlett2_xfer", CallingConvention = CallingConvention.Cdecl)]
     static extern int NativeScarlett2Xfer(int vendorInterface, [In] byte[] txPacket, int txLen, [Out] byte[] rxPacket, int rxCap);

@@ -565,7 +565,7 @@ public partial class MainActivity {
                     activeFallbackSessionDir = newFallbackDir;
                     currentMediaMeta = meta;
                     currentMediaUri = targetVariant.ContentUri;
-                    trackSourceItems = [.. playerEngine.SourceItems];
+                    SetLiveTrackSourceItems();
 
                     // Keep current stage mode (Cover or Lyrics) intact without flashing
                     if (sameSong && meta?.HasVideo != true && musicStageMode != PlayerStageMode.Video) {
@@ -767,7 +767,7 @@ public partial class MainActivity {
         activeSubtitleTrackId = null;
         activeSubtitleCues = [];
         selectedTrack = null;
-        trackSourceItems = [];
+        SetFallbackTrackSourceItems(null);
         fileDetailsExpanded = false;
         SetWorkspaceHeaderText(S["SelectFilePill"]);
         SetWorkspaceSummaryText("");
@@ -872,7 +872,7 @@ public partial class MainActivity {
         if (selectedTrack == null) {
             fileDetailsExpanded = false;
             SetWorkspaceSummaryText("");
-            trackSourceItems = [];
+            SetFallbackTrackSourceItems(null);
             playerEngine?.BindSeparatedNeuralTrack(null);
             playerEngine?.VocalMixMatchStage?.ApplySongDna(Cavern.VocalChain.VocalMixDnaProfile.CreateStudioDefault());
             mediaNotification?.CancelNotification();
@@ -890,6 +890,7 @@ public partial class MainActivity {
 
         if (selectedTrack.Codec == Codec.TrueHD) {
             AppLogger.Info($"Selected TrueHD track: {selectedTrack.FormatHeader}");
+            SetFallbackTrackSourceItems(null);
             RebuildInlineTrackList();
             RefreshConverterTrackInfo();
             RefreshContainerOptions();
@@ -932,14 +933,14 @@ public partial class MainActivity {
         if (activeTrack.Supported && activeTrack.Codec != Codec.TrueHD) {
             try {
                 playerEngine.Load(activeTrack, upmixingSettings, renderingSettings);
-                trackSourceItems = [.. playerEngine.SourceItems];
+                SetLiveTrackSourceItems();
             } catch (Exception ex) {
                 AppLogger.Error("PlayerEngine.Load", ex);
-                trackSourceItems = TrackSourceItem.BuildFromTrack(activeTrack);
+                SetFallbackTrackSourceItems(TrackSourceItem.BuildFromTrack(activeTrack));
                 ShowError(ex.Message);
             }
         } else {
-            trackSourceItems = TrackSourceItem.BuildFromTrack(activeTrack);
+            SetFallbackTrackSourceItems(TrackSourceItem.BuildFromTrack(activeTrack));
         }
 
         double initialSeekSec = 0;

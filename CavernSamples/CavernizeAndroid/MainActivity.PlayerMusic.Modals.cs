@@ -413,6 +413,7 @@ public partial class MainActivity {
         }
         bool isPlaying = playerEngine?.IsPlaying ?? false;
         double curSec = playerEngine?.CurrentSeconds ?? 0;
+        double lyricsSec = playerEngine?.HeardSeconds ?? curSec;
         double totSec = playerEngine?.TotalSeconds ?? 0;
 
         musicArtworkView?.SetPlaying(isPlaying);
@@ -430,7 +431,7 @@ public partial class MainActivity {
                 playerEngine?.Loop ?? false,
                 S["VideoUnlockHint"]);
         } else if (musicStageMode == PlayerStageMode.Lyrics && activeTab == 0 && !isLibrarySectionOpen) {
-            musicLyricsView?.UpdatePlayback(curSec, isPlaying);
+            musicLyricsView?.UpdatePlayback(lyricsSec, isPlaying);
         }
         if (musicPlayIcon != null) {
             musicPlayIcon.IconType = isPlaying ? OneUiIconType.Pause : OneUiIconType.Play;
@@ -584,7 +585,7 @@ public partial class MainActivity {
 
         void ApplyLyricsCandidate(OnlineLyricsCandidate c, bool autoPicked) {
             dlg?.Dismiss();
-            string tName = currentMediaMeta?.Title ?? c.TrackName;
+            string tName = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title) ? currentMediaMeta.Title : c.TrackName;
             string arName = !string.IsNullOrWhiteSpace(currentMediaMeta?.Artist) ? currentMediaMeta.Artist : c.ArtistName;
             OnlineMetadataService.SaveLyricsToCache(this, tName, arName, c.BestContent);
             LyricsDocument doc = LyricsService.ParseLyricsText(c.BestContent, c.Source);
@@ -597,6 +598,26 @@ public partial class MainActivity {
                 ? string.Format(S["OnlineAutoBestAppliedLyrics"], c.Source, c.ArtistName, c.TrackName)
                 : S["OnlineAppliedLyrics"];
             Toast.MakeText(this, msg, ToastLength.Short).Show();
+        }
+
+        static int GetCandidateRiskPct(OnlineLyricsCandidate c) {
+            double raw = c.MatchRiskScore;
+            if ((raw > 0.0 && raw < 1.0) || (raw == 1.0 && !c.IsExactMatch && c.MatchScore < 200)) {
+                return Math.Clamp((int)Math.Round(raw * 100.0), 0, 100);
+            }
+            return Math.Clamp((int)Math.Round(raw), 0, 100);
+        }
+
+        TextView MakeCandidateBadgePill(string text, Color accent) {
+            TextView pill = Label(text, 10f, accent);
+            pill.SetTypeface(OneUiTheme.GetAppleFontSemibold(this), TypefaceStyle.Bold);
+            pill.SetIncludeFontPadding(false);
+            pill.SetSingleLine(true);
+            pill.Ellipsize = TextUtils.TruncateAt.End;
+            pill.SetPadding(Dp(7), Dp(3), Dp(7), Dp(3));
+            pill.Background = OneUiTheme.CreateRoundedDrawable(
+                this, OneUiTheme.WithAlpha(accent, 34), 999f, OneUiTheme.WithAlpha(accent, 118), 0.8f);
+            return pill;
         }
 
         void RunCoverSearch() {
@@ -684,7 +705,8 @@ public partial class MainActivity {
                     }
 
                     OnlineLyricsCandidate exactBest = store.OnlineAutoSelectBestMatch
-                        ? cands.FirstOrDefault(c => c.IsExactMatch)
+                        ? (cands.FirstOrDefault(c => (c.IsSyllableSynced || c.IsSynced) && (c.IsExactMatch || GetCandidateRiskPct(c) <= 25))
+                           ?? cands.FirstOrDefault(c => c.IsExactMatch))
                         : null;
                     if (exactBest != null) {
                         ApplyLyricsCandidate(exactBest, autoPicked: true);
@@ -704,15 +726,49 @@ public partial class MainActivity {
                         OneUiTheme.AttachRecoil(row, 0.97f);
 
                         LinearLayout col = new(this) { Orientation = Orientation.Vertical };
-                        string syncBadge = c.IsSynced
-                            ? string.Format(S["OnlineSyncedLyricsBadge"], c.Source)
-                            : string.Format(S["OnlinePlainLyricsBadge"], c.Source);
                         string exactTag = c.IsExactMatch ? S["OnlineExactMatchBadge"] : "";
                         TextView t1 = Label($"{c.TrackName} — {c.ArtistName}{exactTag}", 12.5f, ColText);
                         t1.SetTypeface(OneUiTheme.GetAppleFontBold(this), TypefaceStyle.Bold);
-                        TextView t2 = Label($"{syncBadge} • {c.AlbumName}", 11f, c.IsSynced ? OneUiTheme.PrimaryHigh : OneUiTheme.TextMuted);
                         col.AddView(t1);
-                        col.AddView(t2);
+
+                        LinearLayout badgeRow = HRow();
+                        badgeRow.SetPadding(0, Dp(4), 0, Dp(3));
+                        string tierText = c.IsSyllableSynced
+                            ? string.Format(S["OnlineSyllableLyricsBadge"], c.Source)
+                            : (c.IsSynced
+                                ? string.Format(S["OnlineSyncedLyricsBadge"], c.Source)
+                                : string.Format(S["OnlinePlainLyricsBadge"], c.Source));
+                        Color tierColor = c.IsSyllableSynced
+                            ? OneUiTheme.IconSystemInfo
+                            : (c.IsSynced ? OneUiTheme.PrimaryHigh : OneUiTheme.TextMuted);
+                        badgeRow.AddView(MakeCandidateBadgePill(tierText, tierColor),
+                            new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+
+                        int riskPct = GetCandidateRiskPct(c);
+                        int confPct = Math.Clamp(100 - riskPct, 0, 100);
+                        string riskText = riskPct <= 20
+                            ? string.Format(S["OnlineRiskLowBadge"], confPct)
+                            : (riskPct <= 50
+                                ? string.Format(S["OnlineRiskMedBadge"], confPct)
+                                : string.Format(S["OnlineRiskHighBadge"], confPct));
+                        Color riskColor = riskPct <= 20
+                            ? OneUiTheme.FunctionalGreen
+                            : (riskPct <= 50 ? OneUiTheme.PeachText : OneUiTheme.FunctionalOrange);
+                        badgeRow.AddView(MakeCandidateBadgePill(riskText, riskColor),
+                            new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+                        col.AddView(badgeRow);
+
+                        string durTag = c.DurationSec > 1 ? $" • {TimeSpan.FromSeconds(c.DurationSec):mm\\:ss}" : "";
+                        string subLine = !string.IsNullOrWhiteSpace(c.AlbumName) ? $"{c.AlbumName}{durTag}" : durTag.TrimStart(' ', '•');
+                        if (!string.IsNullOrWhiteSpace(subLine)) {
+                            TextView t2 = Label(subLine, 11f, OneUiTheme.TextMuted);
+                            col.AddView(t2);
+                        }
+                        if (!string.IsNullOrWhiteSpace(c.MatchRiskNotes)) {
+                            TextView riskNoteTv = Label(c.MatchRiskNotes, 10.5f, riskPct > 50 ? OneUiTheme.FunctionalOrange : OneUiTheme.TextMuted);
+                            riskNoteTv.SetPadding(0, Dp(2), 0, 0);
+                            col.AddView(riskNoteTv);
+                        }
                         row.AddView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
                         row.Click += (_, _) => ApplyLyricsCandidate(c, autoPicked: false);
@@ -721,6 +777,34 @@ public partial class MainActivity {
                         });
                     }
                 });
+            });
+        }
+
+        if (currentMediaMeta?.Lyrics is { HasLyrics: true } curLyr) {
+            string curSrc = string.IsNullOrWhiteSpace(curLyr.SourceLabel) ? S["OnlineLyricsSourceLocal"] : curLyr.SourceLabel;
+            Color bannerAccent = curLyr.IsSyllableSynced
+                ? OneUiTheme.IconSystemInfo
+                : (curLyr.IsSynced ? OneUiTheme.PrimaryHigh : OneUiTheme.PeachText);
+            string bannerText = curLyr.IsSyllableSynced
+                ? string.Format(S["OnlineCurrentLyricsSyllableBanner"], curSrc)
+                : (curLyr.IsSynced
+                    ? string.Format(S["OnlineCurrentLyricsLineBanner"], curSrc)
+                    : string.Format(S["OnlineCurrentLyricsPlainBanner"], curSrc));
+
+            LinearLayout curLyrBanner = HRow();
+            curLyrBanner.SetPadding(Dp(10), Dp(8), Dp(10), Dp(8));
+            curLyrBanner.Background = OneUiTheme.CreateRoundedDrawable(
+                this, OneUiTheme.WithAlpha(bannerAccent, 24), 12f, OneUiTheme.WithAlpha(bannerAccent, 110), 0.9f);
+            TextView curLyrTv = Label(bannerText, 11.2f, bannerAccent);
+            curLyrBanner.AddView(curLyrTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            if (!curLyr.IsSyllableSynced) {
+                TextView upgPill = MakeCandidateBadgePill(S["OnlineUpgradeLyricsBtn"], bannerAccent);
+                curLyrBanner.AddView(upgPill, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { LeftMargin = Dp(8) });
+                OneUiTheme.AttachRecoil(curLyrBanner, 0.97f);
+                curLyrBanner.Click += (_, _) => RunLyricsSearch();
+            }
+            box.AddView(curLyrBanner, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                BottomMargin = Dp(8)
             });
         }
 

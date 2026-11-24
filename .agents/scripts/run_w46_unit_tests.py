@@ -15,6 +15,7 @@ proving:
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -82,13 +83,18 @@ using System.Text;
 using Cavern;
 using Cavern.CavernSettings;
 using Cavern.Channels;
+using Cavern.Filters;
 using Cavern.Format;
 using Cavern.Format.Common;
 using Cavern.Format.Decoders;
 using Cavern.Format.Renderers;
 using Cavern.Format.Renderers.BaseClasses;
 using Cavern.Neural;
+using Cavern.ProAudio;
+using Cavern.Remapping;
 using Cavern.Spatial;
+using Cavern.VocalChain;
+using Cavernize.Logic.CavernSettings;
 using Cavernize.Logic.Models;
 using Cavernize.Logic.Rendering;
 using Cavernize.Logic.Spatial;
@@ -703,7 +709,460 @@ RunTest("T11_W48_ComposableExport_VocalTakeAndSpatial", () => {
     }
 });
 
-Console.WriteLine($"\nALL {passed} W46/W48 UNIT TESTS PASSED (0 failures).");
+// ---------- Test 12: W49 Sample-Rate Fractional Accumulator, 3-Min Drift (< 2 ms) & HeardSeconds ----------
+RunTest("T12_W49_ClockDrift_3Min_44k48k_And_HeardSeconds", () => {
+    using IDisposable virtScope = Cavern.Virtualizer.VirtualizerFilter.BeginStaticStateScope();
+
+    // Part A: Direct Source + Listener 3-minute (180s) synthetic render @ 44.1k->48k & 48k->44.1k
+    Listener.HeadphoneVirtualizer = false;
+    Listener.ReplaceChannels(2);
+    {
+        Listener l1 = new(false) { SampleRate = 48000, UpdateRate = 256 };
+        Clip c1 = new(new float[44100 * 182], 1, 44100);
+        Source s1 = new() { Clip = c1, SpatialBlend = 0f, Volume = 1f };
+        l1.AttachSource(s1);
+        for (int b = 0; b < 8437; b++) l1.Render(4);
+        l1.Render(2); // 8437*4 + 2 = 33750 blocks * 256 = 8,640,000 samples = 180.000s @ 48 kHz
+        double expected1 = 33750.0 * 256.0 * (44100.0 / 48000.0);
+        double driftMs1 = Math.Abs(s1.TimeSamples - expected1) * 1000.0 / 44100.0;
+        Assert(driftMs1 < 2.0, $"Direct Source 44.1k->48k 3-min drift {driftMs1:0.4} ms >= 2 ms");
+        Assert(s1.CumulativeSourceSamples == 7938000L, $"Expected exact 7,938,000 consumed samples, got {s1.CumulativeSourceSamples}");
+    }
+    {
+        Listener l2 = new(false) { SampleRate = 44100, UpdateRate = 256 };
+        Clip c2 = new(new float[48000 * 182], 1, 48000);
+        Source s2 = new() { Clip = c2, SpatialBlend = 0f, Volume = 1f };
+        l2.AttachSource(s2);
+        for (int b = 0; b < 7752; b++) l2.Render(4); // 31008 blocks * 256 = 7,938,048 samples @ 44.1 kHz
+        double expected2 = 31008.0 * 256.0 * (48000.0 / 44100.0);
+        double driftMs2 = Math.Abs(s2.TimeSamples - expected2) * 1000.0 / 48000.0;
+        Assert(driftMs2 < 2.0, $"Direct Source 48k->44.1k 3-min drift {driftMs2:0.4} ms >= 2 ms");
+    }
+
+    // Part B1: Full RealtimePlayerEngine 3-minute render @ 44.1 kHz track -> 48 kHz HRIR virtualizer
+    float[] renderBuf = new float[1024 * 2];
+    using (SyntheticClockReader r44 = new(44100, 44100L * 200L))
+    using (CavernizeTrack t44 = new(r44, Codec.PCM_LE, 0))
+    using (RealtimePlayerEngine engine = new()) {
+        engine.HeadphoneVirtualizer = true;
+        engine.Load(t44, new UpmixingSettings(false), new RenderingSettings());
+        engine.IsPlaying = true;
+        for (int b = 0; b < 8437; b++) {
+            int got = engine.RenderNextInterleavedBlock(renderBuf, 1024);
+            Assert(got == 1024, $"Expected 1024 frames, got {got}");
+        }
+        int rem = engine.RenderNextInterleavedBlock(renderBuf, 512);
+        Assert(rem == 512, $"Expected 512 frames, got {rem}");
+
+        double engineDriftMs = Math.Abs(engine.CurrentSeconds - 180.0) * 1000.0;
+        double decoderDriftMs = Math.Abs((r44.ClockRenderer.TotalDecodedSamples / 44100.0) - 180.0) * 1000.0;
+        Assert(engineDriftMs < 2.0, $"Engine 44.1k->48k 3-min drift {engineDriftMs:0.4} ms >= 2 ms");
+        Assert(decoderDriftMs < 2.0, $"Decoder 44.1k->48k 3-min drift {decoderDriftMs:0.4} ms >= 2 ms");
+    }
+
+    // Part B2: Full RealtimePlayerEngine 3-minute render @ 48 kHz track -> 44.1 kHz hardware override w/ HeadphoneVirtualizer=true
+    using (SyntheticClockReader r48 = new(48000, 48000L * 200L))
+    using (CavernizeTrack t48 = new(r48, Codec.PCM_LE, 0))
+    using (RealtimePlayerEngine engine = new()) {
+        engine.HeadphoneVirtualizer = true;
+        engine.SetPreferredHardwareSampleRate(44100);
+        engine.Load(t48, new UpmixingSettings(false), new RenderingSettings());
+        Assert(engine.OutputSampleRate == 44100, $"Expected OutputSampleRate=44100 under HRIR hardware override, got {engine.OutputSampleRate}");
+        Assert(Cavern.Virtualizer.VirtualizerFilter.FilterSampleRate == 48000, "HRIR FilterSampleRate must remain 48000 Hz.");
+        engine.IsPlaying = true;
+        for (int b = 0; b < 7752; b++) {
+            int got = engine.RenderNextInterleavedBlock(renderBuf, 1024);
+            Assert(got == 1024, $"Expected 1024 frames, got {got}");
+        }
+        double expectedSec = (7752.0 * 1024.0) / 44100.0;
+        double engineDriftMs = Math.Abs(engine.CurrentSeconds - expectedSec) * 1000.0;
+        double decoderDriftMs = Math.Abs((r48.ClockRenderer.TotalDecodedSamples / 48000.0) - expectedSec) * 1000.0;
+        Assert(engineDriftMs < 2.0, $"Engine 48k->44.1k 3-min drift {engineDriftMs:0.4} ms >= 2 ms");
+        Assert(decoderDriftMs < 2.0, $"Decoder 48k->44.1k 3-min drift {decoderDriftMs:0.4} ms >= 2 ms");
+    }
+
+    // Part C: Upmixer + StreamMaster alternating 235/236 PitchedUpdateRate stability (44.1k -> 48k)
+    using (SyntheticClockReader rUpmix = new(44100, 44100L * 10L))
+    using (CavernizeTrack tUpmix = new(rUpmix, Codec.PCM_LE, 0))
+    using (RealtimePlayerEngine engine = new()) {
+        engine.HeadphoneVirtualizer = true;
+        engine.Load(tUpmix, new UpmixingSettings(true), new RenderingSettings());
+        engine.IsPlaying = true;
+        for (int b = 0; b < 94; b++) {
+            int got = engine.RenderNextInterleavedBlock(renderBuf, 1024);
+            Assert(got == 1024, $"Expected 1024 frames under upmixer, got {got}");
+        }
+        double expectedSec = (94.0 * 1024.0) / 48000.0;
+        double upmixDriftMs = Math.Abs((rUpmix.ClockRenderer.TotalDecodedSamples / 44100.0) - expectedSec) * 1000.0;
+        Assert(upmixDriftMs < 2.0, $"Upmixer 44.1k->48k drift {upmixDriftMs:0.4} ms >= 2 ms");
+    }
+
+    // Part D: HeardSeconds latency compensation, subBlockStaging accounting, & Seek flush hook
+    using (SyntheticClockReader rLat = new(48000, 48000L * 60L))
+    using (CavernizeTrack tLat = new(rLat, Codec.PCM_LE, 0))
+    using (RealtimePlayerEngine engine = new()) {
+        int flushCount = 0;
+        engine.HeadphoneVirtualizer = true;
+        engine.RegisterOutputFlushCallback(() => flushCount++);
+        engine.Load(tLat, new UpmixingSettings(false), new RenderingSettings());
+        Assert(flushCount == 1, $"Expected Load() to invoke flush callback once, got {flushCount}");
+
+        engine.Seek(10.0);
+        Assert(flushCount == 2, $"Expected Seek() to invoke flush callback, got {flushCount}");
+        Assert(engine.OutputPipelineLatencySeconds == 0.0, "Seek() must reset OutputPipelineLatencySeconds to 0.");
+        Assert(Math.Abs(engine.HeardSeconds - 10.0) < 0.0005, $"Expected HeardSeconds=10.0 after Seek, got {engine.HeardSeconds}");
+
+        engine.IsPlaying = true;
+        int got128 = engine.RenderNextInterleavedBlock(renderBuf, 128);
+        Assert(got128 == 128, $"Expected 128 sub-block frames, got {got128}");
+        engine.OutputPipelineLatencySeconds = 0.150;
+        double expectedHeard = 10.0 + (256.0 - 128.0) / 48000.0 - 0.150;
+        double heardErrMs = Math.Abs(engine.HeardSeconds - expectedHeard) * 1000.0;
+        Assert(heardErrMs < 0.1, $"HeardSeconds latency error {heardErrMs:0.4} ms >= 0.1 ms");
+
+        engine.Seek(0.02);
+        engine.OutputPipelineLatencySeconds = 0.250;
+        Assert(engine.HeardSeconds == 0.0, $"Expected HeardSeconds clamped to 0.0, got {engine.HeardSeconds}");
+
+        engine.Seek(25.0);
+        Assert(flushCount == 4, $"Expected flushCount=4 after seeks, got {flushCount}");
+        Assert(engine.OutputPipelineLatencySeconds == 0.0, "Seek() must reset OutputPipelineLatencySeconds.");
+        int postSeekGot = engine.RenderNextInterleavedBlock(renderBuf, 128);
+        Assert(postSeekGot == 128, $"Expected 128 frames post-seek, got {postSeekGot}");
+        double expectedPostSeekCur = 25.0 + 256.0 / 48000.0;
+        Assert(Math.Abs(engine.CurrentSeconds - expectedPostSeekCur) < 0.0005, $"Post-seek subBlockStaging was not cleared cleanly (CurrentSeconds={engine.CurrentSeconds})");
+    }
+});
+
+// ---------- Test 13: W50 Scarlett Gen 4 FCP Tables, FW Extraction & PreAmp Anti-Double Bypass ----------
+RunTest("T13_W50_ScarlettGen4_FcpTables_And_PreAmpAntiDouble", () => {
+    Assert((int)ProAudioMicSource.PhoneMic == 0, $"ProAudioMicSource.PhoneMic must be 0, got {(int)ProAudioMicSource.PhoneMic}");
+
+    Assert(Scarlett2Protocol.TryResolveGen4ConfigTable(0x8219, 2417, out ScarlettGen4ConfigTable t2i2_2417), "2i2 Gen4 fw=2417 FCP table must resolve.");
+    Assert(t2i2_2417.ParamBufAddr == 0xfcu && t2i2_2417.DirectMonitorGain.Offset == 0x2a4u && t2i2_2417.AirSwitch.Offset == 0x3eu,
+        $"Unexpected 2i2 Gen4 fw=2417 offsets: param=0x{t2i2_2417.ParamBufAddr:X}, dmGain=0x{t2i2_2417.DirectMonitorGain.Offset:X}");
+    Assert(Scarlett2Protocol.TryResolveGen4ConfigTable(0x8219, 2115, out ScarlettGen4ConfigTable t2i2_2115), "2i2 Gen4 fw=2115 FCP table must resolve.");
+    Assert(t2i2_2115.DirectMonitorGain.Offset == 0x2a0u, $"Expected pre-2417 DirectMonitorGain 0x2a0, got 0x{t2i2_2115.DirectMonitorGain.Offset:X}");
+    Assert(!Scarlett2Protocol.TryResolveGen4ConfigTable(0x8219, 2000, out _), "Pre-2115 2i2 Gen4 firmware must return false.");
+
+    Assert(Scarlett2Protocol.TryResolveGen4ConfigTable(0x8218, 2200, out ScarlettGen4ConfigTable tSolo), "Solo Gen4 FCP table must resolve.");
+    Assert(tSolo.ParamBufAddr == 0xd8u && tSolo.AirSwitch.Offset == 0x3eu && !tSolo.AutoGainSwitch.IsValid, "Unexpected Solo Gen4 table.");
+
+    Assert(Scarlett2Protocol.TryResolveGen4ConfigTable(0x821A, 2200, out ScarlettGen4ConfigTable t4i4), "4i4 Gen4 FCP table must resolve.");
+    Assert(t4i4.ParamBufAddr == 0x130u && t4i4.AirSwitch.Offset == 0x50u && !t4i4.DirectMonitor.IsValid, "Unexpected 4i4 Gen4 table.");
+
+    byte[] init2Rx = Scarlett2Protocol.BuildCommandPacket(Scarlett2Protocol.CmdInit2, 1, new byte[12]);
+    BinaryPrimitives.WriteUInt32LittleEndian(init2Rx.AsSpan(Scarlett2Protocol.PacketHeaderBytes + 8, 4), 2417u);
+    Assert(Scarlett2Protocol.TryExtractFirmwareVersion(init2Rx, init2Rx.Length, out int extractedFw) && extractedFw == 2417,
+        $"Expected extracted fw=2417, got {extractedFw}");
+    byte[] badRx = (byte[])init2Rx.Clone();
+    BinaryPrimitives.WriteUInt32LittleEndian(badRx.AsSpan(8, 4), 1u);
+    Assert(!Scarlett2Protocol.TryExtractFirmwareVersion(badRx, badRx.Length, out _), "Non-zero error packet must fail FW extraction.");
+    Assert(!Scarlett2Protocol.TryExtractFirmwareVersion(init2Rx, 20, out _), "Truncated packet must fail FW extraction.");
+
+    float MeasureDspRms(HardwarePreAmpStateSnapshot snap, float freqHz, float amp) {
+        LiveVocalChainDsp dsp = new(48000);
+        VocalMixDnaProfile dna = VocalMixDnaProfile.CreateStudioDefault();
+        dna.HarmonicWarmth = 1f;
+        dna.ReverbWetMix = 0f;
+        dna.DelayWetMix = 0f;
+        VocalMacroSettings macros = new() {
+            Enabled = true,
+            MixMatchPct = 100f,
+            WarmthPct = 100f,
+            DynamicsPct = 0f,
+            ReverbPct = 0f,
+            EnableNoiseGate = false,
+            EnableDeEsser = false,
+            EnableSidechainPocketGlue = false
+        };
+        float[] matchDeltas = [0f, 0f, 0f, 0f, 0f, 4f, 4f, 0f];
+        dsp.Configure(48000, dna, macros, matchDeltas, snap);
+
+        int frames = 1024;
+        float[] buf = new float[frames * 2];
+        for (int i = 0; i < frames; i++) {
+            float v = amp * MathF.Sin(2f * MathF.PI * freqHz * i / 48000f);
+            buf[i * 2] = v;
+            buf[i * 2 + 1] = v;
+        }
+        dsp.ProcessStereoBlockZeroGc(buf, 0, frames);
+        double sumSq = 0.0;
+        for (int i = frames / 2; i < frames; i++) {
+            float v = buf[i * 2];
+            sumSq += v * v;
+        }
+        return (float)Math.Sqrt(sumSq / (frames - frames / 2));
+    }
+
+    HardwarePreAmpStateSnapshot snapVerifiedUsb = new(ScarlettAirMode.PresenceAndDrive, driveActive: true, micSource: 1, isHardwareVerified: true);
+    HardwarePreAmpStateSnapshot snapUnverifiedUsb = new(ScarlettAirMode.PresenceAndDrive, driveActive: true, micSource: 1, isHardwareVerified: false);
+    HardwarePreAmpStateSnapshot snapVerifiedPhone = new(ScarlettAirMode.PresenceAndDrive, driveActive: true, micSource: 0, isHardwareVerified: true);
+
+    float hfVerifiedUsb = MeasureDspRms(snapVerifiedUsb, 10000f, 0.02f);
+    float hfUnverified = MeasureDspRms(snapUnverifiedUsb, 10000f, 0.02f);
+    float hfPhone = MeasureDspRms(snapVerifiedPhone, 10000f, 0.02f);
+    double airBypassDeltaDb = 20.0 * Math.Log10((hfUnverified + 1e-9) / (hfVerifiedUsb + 1e-9));
+    Assert(MathF.Abs(hfUnverified - hfPhone) < 1e-4f, "PhoneMic (MicSource=0) and unverified USB must NOT bypass Air shelf.");
+    Assert(airBypassDeltaDb > 1.5 && airBypassDeltaDb < 3.5, $"Expected ~2.5 dB Air anti-double bypass only when verified USB, got {airBypassDeltaDb:0.2} dB.");
+
+    float driveVerifiedUsb = MeasureDspRms(snapVerifiedUsb, 500f, 0.70f);
+    float driveUnverified = MeasureDspRms(snapUnverifiedUsb, 500f, 0.70f);
+    float drivePhone = MeasureDspRms(snapVerifiedPhone, 500f, 0.70f);
+    Assert(MathF.Abs(driveUnverified - drivePhone) < 1e-4f, "PhoneMic and unverified USB must still apply software Drive.");
+    Assert(driveVerifiedUsb > 0.42f && driveUnverified < 0.28f,
+        $"Expected Drive bypassed (linear ~0.495) only on verified USB, got verified={driveVerifiedUsb:0.000}, unverified={driveUnverified:0.000}");
+});
+
+// ---------- Test 14: W51 AutoEq ATH-M40x Bass Preservation & HarmanOeToJm1 Tilt ----------
+RunTest("T14_W51_AutoEq_AthM40x_BassPreservation", () => {
+    AutoEqHeadphoneProfile m40x = new() {
+        Id = "oratory1990_over_ear_audio_technica_ath_m40x",
+        Name = "Audio-Technica ATH-M40x",
+        FormFactor = HeadphoneFormFactor.OverEar,
+        SourceTarget = AutoEqSourceTarget.HarmanOverEar2018,
+        ExplicitPreampDb = -5.6,
+        HasExplicitPreamp = true,
+        Bands = [
+            new ParametricBand(ParametricFilterType.LowShelf, 105.0, 17.6, 0.7),
+            new ParametricBand(ParametricFilterType.Peaking, 48.0, -16.9, 0.29),
+            new ParametricBand(ParametricFilterType.Peaking, 348.0, 6.0, 0.87),
+            new ParametricBand(ParametricFilterType.Peaking, 5150.0, 3.3, 4.1),
+            new ParametricBand(ParametricFilterType.Peaking, 2979.0, 1.8, 1.99),
+            new ParametricBand(ParametricFilterType.HighShelf, 10000.0, -6.9, 0.7),
+            new ParametricBand(ParametricFilterType.Peaking, 1378.0, -1.4, 2.13),
+            new ParametricBand(ParametricFilterType.Peaking, 796.0, 0.6, 1.67),
+            new ParametricBand(ParametricFilterType.Peaking, 6306.0, 1.6, 5.1),
+            new ParametricBand(ParametricFilterType.Peaking, 2225.0, 0.8, 3.7)
+        ]
+    };
+
+    using AutoEqPostProcessingStage stage = new() { UserEnabled = true };
+    stage.Configure(48000, 2);
+    stage.ApplyConfiguration(m40x, AutoEqNeutralTarget.NativeAutoEqProfile, BinauralCompensationMode.DiffuseFieldCompensatedHrir);
+    Assert(stage.IsEnabled && !stage.DoubleEqGuardActive, "NativeAutoEqProfile + DFC must be enabled without Raw double-EQ guard.");
+
+    double nat1k = stage.EvaluateMagnitudeDb(1000.0, includePreamp: false);
+    double nat80 = stage.EvaluateMagnitudeDb(80.0, includePreamp: false) - nat1k;
+    double nat100 = stage.EvaluateMagnitudeDb(100.0, includePreamp: false) - nat1k;
+    double nat120 = stage.EvaluateMagnitudeDb(120.0, includePreamp: false) - nat1k;
+    double nat5k = stage.EvaluateMagnitudeDb(5000.0, includePreamp: false) - nat1k;
+    Assert(nat80 > -4.5 && nat80 < 9.0, $"ATH-M40x 80 Hz delta vs 1 kHz out of bounds: {nat80:0.2} dB");
+    Assert(nat100 > -4.5 && nat100 < 9.0, $"ATH-M40x 100 Hz delta vs 1 kHz out of bounds: {nat100:0.2} dB");
+    Assert(nat120 > -4.5 && nat120 < 9.0, $"ATH-M40x 120 Hz delta vs 1 kHz out of bounds: {nat120:0.2} dB");
+    Assert(stage.EffectivePreampDb >= -9.0, $"Sub-28Hz resonance damp should protect preamp headroom, got {stage.EffectivePreampDb:0.2} dB");
+
+    stage.ApplyConfiguration(m40x, AutoEqNeutralTarget.DiffuseFieldNeutral, BinauralCompensationMode.DiffuseFieldCompensatedHrir);
+    double df1k = stage.EvaluateMagnitudeDb(1000.0, includePreamp: false);
+    double df80 = stage.EvaluateMagnitudeDb(80.0, includePreamp: false) - df1k;
+    double df100 = stage.EvaluateMagnitudeDb(100.0, includePreamp: false) - df1k;
+    Assert(nat80 - df80 > 5.0 && nat100 - df100 > 4.5, $"NativeAutoEqProfile must preserve >5 dB @80Hz / >4.5 dB @100Hz more bass than DiffuseFieldNeutral (nat={nat100:0.2}, df={df100:0.2}).");
+
+    stage.ApplyConfiguration(m40x, AutoEqNeutralTarget.Bk5128Jm1Neutral, BinauralCompensationMode.DiffuseFieldCompensatedHrir);
+    double jm1Mid1k = stage.EvaluateMagnitudeDb(1000.0, includePreamp: false);
+    double jm1Bass100 = stage.EvaluateMagnitudeDb(100.0, includePreamp: false) - jm1Mid1k;
+    double jm1_5k = stage.EvaluateMagnitudeDb(5000.0, includePreamp: false) - jm1Mid1k;
+    Assert(jm1Bass100 > -4.0 && jm1Bass100 - df100 > 4.0, $"HarmanOeToJm1 must preserve natural bass ({jm1Bass100:0.2} dB vs DF {df100:0.2} dB).");
+    Assert(jm1_5k < nat5k - 2.0, $"HarmanOeToJm1 must apply gentle studio in-room upper-mid/treble tilt ({jm1_5k:0.2} vs native {nat5k:0.2}).");
+});
+
+// ---------- Test 15: W51 3D Upmix Heights, Solo Preservation Across Rebuilds & Dynamic/Static Reset ----------
+RunTest("T15_W51_3DUpmix_SoloPreservation_And_Reset", () => {
+    using IDisposable virtScope = Cavern.Virtualizer.VirtualizerFilter.BeginStaticStateScope();
+    int sr = 48000;
+
+    // Part A & B: CavernizeUpmixer height Y > 0 (IsBed=false), Solo survival across Seek & Upmix mode rebuilds
+    using (SyntheticClockReader reader = new(sr, sr * 10L))
+    using (CavernizeTrack track = new(reader, Codec.PCM_LE, 0))
+    using (RealtimePlayerEngine engine = new()) {
+        int rebuildCount = 0;
+        engine.SourcesRebuilt += () => rebuildCount++;
+        engine.HeadphoneVirtualizer = true;
+        UpmixingSettings upmix = new(true) { MatrixUpmixing = false, Cavernize = true, ParametricStft = true };
+        engine.Load(track, upmix, new RenderingSettings());
+        Assert(rebuildCount == 1, $"Expected Load() to fire SourcesRebuilt once, got {rebuildCount}");
+        Assert(engine.SourceItems.Count == 4, $"Expected 4 sources (2 ground + 2 height), got {engine.SourceItems.Count}");
+        TrackSourceItem heightL = engine.SourceItems[2];
+        Assert(!heightL.IsBed && heightL.Layer == SourceLayer.VirtualHeight && heightL.NormalizedPosition.Y > 0.5f,
+            $"Expected VirtualHeight Y>0.5, got IsBed={heightL.IsBed}, Layer={heightL.Layer}, Y={heightL.NormalizedPosition.Y:0.2}");
+
+        // Set Solo on heightL, Mute on FL, CustomPin on heightR
+        heightL.IsSolo = true;
+        engine.SourceItems[0].IsMuted = true;
+        engine.SetSourceCustomPosition(engine.SourceItems[3], new Vector3(0.25f, 0.90f, -0.35f));
+
+        // 1) Seek rebuilds Listener & Sources via ConfigureListener
+        engine.Seek(1.0);
+        Assert(rebuildCount == 2, $"Expected Seek() to fire SourcesRebuilt, got {rebuildCount}");
+        Assert(engine.SourceItems.Count == 4 && engine.SourceItems[2].IsSolo, "Solo on heightL must survive Seek() ConfigureListener rebuild.");
+        Assert(engine.SourceItems[0].IsMuted, "Mute on FL must survive Seek() ConfigureListener rebuild.");
+        Assert(engine.SourceItems[3].HasCustomPosition && Vector3.Distance(engine.SourceItems[3].CustomNormalizedPosition, new Vector3(0.25f, 0.90f, -0.35f)) < 1e-4f,
+            "CustomPosition on heightR must survive Seek() ConfigureListener rebuild.");
+
+        // 2) Expand upmixer (4 -> 15 channels) and verify Solo survives & does NOT get muted by mismatched/new sources
+        engine.ApplyUpmixingSettings(new UpmixingSettings(true) { MatrixUpmixing = true, Cavernize = true, ParametricStft = true });
+        Assert(rebuildCount == 3, $"Expected ApplyUpmixingSettings to fire SourcesRebuilt, got {rebuildCount}");
+        Assert(engine.SourceItems.Count > 4, $"Expected expanded matrix+cavernize sources, got {engine.SourceItems.Count}");
+        Assert(engine.SourceItems.Count(x => x.IsSolo) == 1, $"Expected exactly 1 Solo item preserved after upmix expansion, got {engine.SourceItems.Count(x => x.IsSolo)}");
+        Assert(engine.SourceItems.First(x => x.IsSolo).Layer == SourceLayer.VirtualHeight, "Preserved Solo target must remain on VirtualHeight layer after expansion.");
+
+        // Verify audio block rendering applies Solo cleanly and static pin reset works
+        engine.IsPlaying = true;
+        float[] outBuf = new float[1024 * 2];
+        int written = engine.RenderNextInterleavedBlock(outBuf, 1024);
+        Assert(written == 1024, $"Expected 1024 frames rendered, got {written}");
+        TrackSourceItem pinnedHeight = engine.SourceItems.First(x => x.HasCustomPosition);
+        engine.ClearSourceCustomPosition(pinnedHeight);
+        Assert(!pinnedHeight.HasCustomPosition, "Static height ResetCustomPosition must clear HasCustomPosition.");
+        Assert(Vector3.Distance(pinnedHeight.NormalizedPosition, pinnedHeight.DefaultNormalizedPosition) < 1e-4f,
+            "Static source ResetCustomPosition must restore DefaultNormalizedPosition.");
+    }
+
+    // Part C: Dynamic Atmos Object ResetCustomPosition must resume live trajectory without snapping to t=0 DefaultPosition
+    using (SyntheticAtmosReader atmosReader = new(sr, sr * 10L))
+    using (CavernizeTrack atmosTrack = new(atmosReader, Codec.EnhancedAC3, 0))
+    using (RealtimePlayerEngine engine = new()) {
+        engine.HeadphoneVirtualizer = true;
+        engine.Load(atmosTrack, new UpmixingSettings(true) { MatrixUpmixing = true, Cavernize = true, AtmosAware = true }, new RenderingSettings());
+        TrackSourceItem dynObj = engine.SourceItems.First(x => x.HasDynamicTrajectory);
+        Vector3 t0Default = dynObj.DefaultNormalizedPosition;
+
+        Vector3 liveTrajPos = new(0.82f, 0.66f, -0.45f);
+        atmosTrack.Renderer.Objects[dynObj.Index].Position = liveTrajPos * Listener.EnvironmentSize;
+        engine.SetSourceCustomPosition(dynObj, new Vector3(-0.88f, 0.12f, 0.85f));
+        Assert(dynObj.HasCustomPosition, "Dynamic object should be custom pinned.");
+
+        engine.IsPlaying = true;
+        float[] buf = new float[1024 * 2];
+        engine.RenderNextInterleavedBlock(buf, 1024);
+
+        Vector3 newerTrajPos = new(0.18f, 0.92f, 0.30f);
+        atmosTrack.Renderer.Objects[dynObj.Index].Position = newerTrajPos * Listener.EnvironmentSize;
+        engine.ResetCustomPosition(dynObj);
+
+        Assert(!dynObj.HasCustomPosition, "ResetCustomPosition must clear HasCustomPosition on dynamic Atmos object.");
+        Assert(!atmosTrack.Renderer.Objects[dynObj.Index].PositionLocked, "Dynamic Atmos object PositionLocked must be false after reset.");
+        Assert(Vector3.Distance(dynObj.NormalizedPosition, t0Default) > 0.25f,
+            $"Dynamic object reset must NOT snap back to stale t=0 DefaultPosition ({t0Default}), got {dynObj.NormalizedPosition}");
+        Assert(Vector3.Distance(dynObj.NormalizedPosition, newerTrajPos) < 0.05f,
+            $"Expected dynamic object to resume live trajectory ({newerTrajPos}), got {dynObj.NormalizedPosition}");
+
+        // Also verify ResetAllCustomPositions on dynamic object
+        engine.SetSourceCustomPosition(dynObj, new Vector3(-0.5f, -0.2f, 0.5f));
+        Vector3 latestTraj = new(-0.25f, 0.80f, -0.60f);
+        atmosTrack.Renderer.Objects[dynObj.Index].Position = latestTraj * Listener.EnvironmentSize;
+        engine.ResetAllCustomPositions();
+        Assert(!dynObj.HasCustomPosition && Vector3.Distance(dynObj.NormalizedPosition, latestTraj) < 0.05f,
+            "ResetAllCustomPositions must unlock dynamic object to latest trajectory cleanly.");
+    }
+});
+
+// ---------- Test 16: W51 X-Ray Powermap Spherical Coherence Anti-Spin & Band Mode ----------
+RunTest("T16_W51_XRayPowermap_CoherenceAntiSpin", () => {
+    SpatialXRayPowermap map = new();
+    Vector3 initialDir = map.DominantDirection;
+
+    // 1. Symmetric diffuse field (R = 0 < 0.18): DominantDirection must NOT spin, DominantCoherence < 0.2
+    SpatialSourceDescriptor[] diffuse = [
+        new() { WorldPositionMeters = new Vector3(-5f, 0f, 5f), RmsLevel = 0.5f, LowBandEnergy = 0.2f, MidBandEnergy = 0.4f, HighBandEnergy = 0.2f },
+        new() { WorldPositionMeters = new Vector3(5f, 0f, 5f), RmsLevel = 0.5f, LowBandEnergy = 0.2f, MidBandEnergy = 0.4f, HighBandEnergy = 0.2f },
+        new() { WorldPositionMeters = new Vector3(-5f, 0f, -5f), RmsLevel = 0.5f, LowBandEnergy = 0.2f, MidBandEnergy = 0.4f, HighBandEnergy = 0.2f },
+        new() { WorldPositionMeters = new Vector3(5f, 0f, -5f), RmsLevel = 0.5f, LowBandEnergy = 0.2f, MidBandEnergy = 0.4f, HighBandEnergy = 0.2f }
+    ];
+    for (int f = 0; f < 40; f++) {
+        map.Update(diffuse, Vector3.Zero, 0.45f, SpatialXRayBandMode.AllBands);
+    }
+    Assert(map.DominantCoherence < 0.2f, $"Diffuse symmetric field coherence must be < 0.2, got {map.DominantCoherence:0.3}");
+    Assert(Vector3.Distance(initialDir, map.DominantDirection) < 1e-5f,
+        $"Diffuse symmetric field must hold steady DominantDirection without spinning (moved from {initialDir} to {map.DominantDirection}).");
+
+    // 2. Focused directional source: smooth EMA convergence without 1-frame snap
+    Vector3 targetWorld = new(8f, 2f, 0f);
+    Vector3 targetDir = Vector3.Normalize(targetWorld);
+    SpatialSourceDescriptor[] focused = [
+        new() { WorldPositionMeters = targetWorld, RmsLevel = 0.8f, LowBandEnergy = 0.3f, MidBandEnergy = 0.7f, HighBandEnergy = 0.4f }
+    ];
+    map.Update(focused, Vector3.Zero, 0.45f, SpatialXRayBandMode.AllBands);
+    float dot1Frame = Vector3.Dot(map.DominantDirection, targetDir);
+    Assert(dot1Frame < 0.55f, $"Focused source must converge smoothly without 1-frame whip (dot after 1 frame = {dot1Frame:0.3}).");
+
+    for (int f = 0; f < 140; f++) {
+        map.Update(focused, Vector3.Zero, 0.45f, SpatialXRayBandMode.AllBands);
+    }
+    Assert(map.DominantCoherence > 0.75f, $"Focused field coherence must exceed 0.75, got {map.DominantCoherence:0.3}");
+    Assert(Vector3.Distance(map.DominantDirection, targetDir) < 0.15f,
+        $"Focused field must converge smoothly to target {targetDir}, got {map.DominantDirection}");
+
+    // 3. Stateful 3-band crossover continuity across split blocks
+    float[] full512 = new float[512];
+    for (int i = 0; i < 512; i++) {
+        full512[i] = 0.4f * MathF.Sin(2f * MathF.PI * 100f * i / 48000f) + 0.3f * MathF.Sin(2f * MathF.PI * 5000f * i / 48000f);
+    }
+    float lpL0 = 0f, lpM0 = 0f;
+    SpatialXRayPowermap.EstimateThreeBandRms(full512, 48000, ref lpL0, ref lpM0, out float fullLow, out float fullMid, out float fullHigh);
+    float[] partA = full512[..256];
+    float[] partB = full512[256..];
+    float lpL1 = 0f, lpM1 = 0f;
+    SpatialXRayPowermap.EstimateThreeBandRms(partA, 48000, ref lpL1, ref lpM1, out float aL, out float aM, out float aH);
+    SpatialXRayPowermap.EstimateThreeBandRms(partB, 48000, ref lpL1, ref lpM1, out float bL, out float bM, out float bH);
+    Assert(MathF.Abs(lpL0 - lpL1) < 1e-5f && MathF.Abs(lpM0 - lpM1) < 1e-5f,
+        "Stateful EstimateThreeBandRms must yield bit-consistent crossover state across split blocks.");
+    double splitRmsLow = Math.Sqrt(0.5 * (aL * aL + bL * bL));
+    Assert(Math.Abs(splitRmsLow - fullLow) < 1e-4, $"Split low RMS {splitRmsLow:0.5} diverged from single pass {fullLow:0.5}");
+
+    SpatialSceneHub hub = new() { ActiveXRayBandMode = SpatialXRayBandMode.LowOnly };
+    Assert(hub.ActiveXRayBandMode == SpatialXRayBandMode.LowOnly, "SpatialSceneHub must retain ActiveXRayBandMode.");
+});
+
+// ---------- Test 17: W50 Live Microphone Zero-Lag Sub-Block Staging Bypass ----------
+RunTest("T17_W50_LiveMic_ZeroLagSubBlockBypass", () => {
+    using IDisposable virtScope = Cavern.Virtualizer.VirtualizerFilter.BeginStaticStateScope();
+    int sr = 48000;
+    using SyntheticClockReader reader = new(sr, sr * 10L);
+    using CavernizeTrack track = new(reader, Codec.PCM_LE, 0);
+    using RealtimePlayerEngine engine = new();
+    engine.HeadphoneVirtualizer = true;
+    engine.VocalChainBypassed = true;
+    engine.Load(track, new UpmixingSettings(false), new RenderingSettings());
+    engine.ApplyProAudioConfig(new ProAudioDuplexConfig {
+        Enabled = true,
+        LiveMicEnabled = true,
+        MicRouting = LiveMicRoutingMode.StereoPair,
+        MicMonitorLevel = 1f,
+        BufferFrames = ProAudioBufferPreset.Frames64
+    });
+    engine.LiveMicBridge.SetStreamingActive(true, sr);
+    engine.IsPlaying = true;
+
+    float[] burst = new float[64 * 2];
+    float[] micIn = new float[64 * 2];
+
+    // Burst 1: push +0.25 live mic pulse -> MUST appear in first 64f burst immediately (0 staging lag!)
+    Array.Fill(micIn, 0.25f);
+    engine.LiveMicBridge.PushCapturedInterleaved(micIn, 0, 64, 2);
+    int n1 = engine.RenderNextInterleavedBlock(burst, 64);
+    Assert(n1 == 64, $"Expected 64 frames in burst 1, got {n1}");
+    float peak1 = burst.Max(MathF.Abs);
+    Assert(peak1 > 0.20f, $"Burst 1 must deliver live mic immediately without staging lag (peak={peak1:0.000}).");
+
+    // Burst 2: push 0.0 silence -> backing drains from subBlockStaging with ZERO stale burst-1 mic bleed!
+    Array.Clear(micIn, 0, micIn.Length);
+    engine.LiveMicBridge.PushCapturedInterleaved(micIn, 0, 64, 2);
+    int n2 = engine.RenderNextInterleavedBlock(burst, 64);
+    Assert(n2 == 64, $"Expected 64 frames in burst 2, got {n2}");
+    float peak2 = burst.Max(MathF.Abs);
+    Assert(peak2 < 0.01f, $"Burst 2 must NOT leak staged burst-1 mic audio (peak={peak2:0.000}).");
+
+    // Burst 3: push +0.45 live mic pulse -> MUST appear immediately in burst 3 while subBlockStaging still has backing frames!
+    Array.Fill(micIn, 0.45f);
+    engine.LiveMicBridge.PushCapturedInterleaved(micIn, 0, 64, 2);
+    int n3 = engine.RenderNextInterleavedBlock(burst, 64);
+    Assert(n3 == 64, $"Expected 64 frames in burst 3, got {n3}");
+    float peak3 = burst.Max(MathF.Abs);
+    Assert(peak3 > 0.35f, $"Burst 3 must mix live mic directly even while draining staged backing (peak={peak3:0.000}).");
+});
+
+Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51 UNIT TESTS PASSED (0 failures).");
 return 0;
 
 // ---- Helpers for Test 4 & Test 6 ----
@@ -916,15 +1375,16 @@ sealed class SyntheticAtmosRenderer : Renderer, IMixedBedObjectRenderer {
         if (env.X <= 0.1f) env = new Vector3(10, 7, 10);
         for (int i = 0; i < Bed51.Length; i++) {
             ReferenceChannel ch = Bed51[i];
-            Source bed = new() {
+            Source bed = new Cavern.SpecialSources.StreamMasterSource(reader, i) {
                 LFE = ch == ReferenceChannel.ScreenLFE,
                 Position = ChannelPrototype.AlternativePositions[(int)ch] * env
             };
             objects.Add(bed);
         }
         // 2 dynamic moving 3D Dolby Atmos objects
-        objects.Add(new Source { Position = new Vector3(-0.4f, 0.3f, 0.7f) * env });
-        objects.Add(new Source { Position = new Vector3(0.6f, 0.5f, -0.3f) * env });
+        objects.Add(new Cavern.SpecialSources.StreamMasterSource(reader, Bed51.Length) { Position = new Vector3(-0.4f, 0.3f, 0.7f) * env });
+        objects.Add(new Cavern.SpecialSources.StreamMasterSource(reader, Bed51.Length + 1) { Position = new Vector3(0.6f, 0.5f, -0.3f) * env });
+        reader.SetupSources(objects, sampleRate);
         objectSamples = new float[objects.Count][];
         for (int i = 0; i < objectSamples.Length; i++) objectSamples[i] = new float[1024];
     }
@@ -936,6 +1396,51 @@ sealed class SyntheticAtmosRenderer : Renderer, IMixedBedObjectRenderer {
         for (int i = 0; i < objectSamples.Length; i++) {
             if (objectSamples[i].Length != samples) objectSamples[i] = new float[samples];
         }
+    }
+}
+
+sealed class SyntheticClockReader : AudioReader {
+    public readonly SyntheticClockRenderer ClockRenderer;
+    public override long Position { get; set; }
+
+    public SyntheticClockReader(int sampleRate, long length) : base(Stream.Null) {
+        SampleRate = sampleRate;
+        Length = length;
+        ChannelCount = 2;
+        Bits = BitDepth.Float32;
+        ClockRenderer = new SyntheticClockRenderer(sampleRate);
+    }
+
+    public override Renderer GetRenderer() => ClockRenderer;
+    public override void ReadHeader() { }
+    public override void ReadBlock(float[] samples, long from, long to) => Array.Clear(samples, (int)from, (int)(to - from));
+    public override void Reset() => Position = 0;
+}
+
+sealed class SyntheticClockRenderer : Renderer {
+    static readonly ReferenceChannel[] Stereo = [ReferenceChannel.FrontLeft, ReferenceChannel.FrontRight];
+    public long TotalDecodedSamples;
+
+    public SyntheticClockRenderer(int sampleRate) : base(null) {
+        for (int i = 0; i < Stereo.Length; i++) {
+            Source src = new Cavern.SpecialSources.StreamMasterSource(reader, i) {
+                Position = ChannelPrototype.AlternativePositions[(int)Stereo[i]] * Listener.EnvironmentSize,
+                VolumeRolloff = Rolloffs.Disabled
+            };
+            objects.Add(src);
+        }
+        reader.SetupSources(objects, sampleRate);
+        objectSamples = new float[Stereo.Length][];
+        for (int i = 0; i < objectSamples.Length; i++) objectSamples[i] = new float[256];
+    }
+
+    public override ReferenceChannel[] GetChannels() => Stereo;
+
+    public override void Update(int samples) {
+        for (int i = 0; i < objectSamples.Length; i++) {
+            if (objectSamples[i].Length != samples) objectSamples[i] = new float[samples];
+        }
+        TotalDecodedSamples += samples;
     }
 }
 """
@@ -959,6 +1464,8 @@ def main() -> int:
         env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
         env["DOTNET_EnableDiagnostics"] = "0"
         env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
+        if dotnet == "/root/.dotnet/dotnet" and platform.machine().lower() in ("aarch64", "arm64"):
+            env.setdefault("DOTNET_GCHeapHardLimit", "20000000")
 
         cmd = [dotnet, "run", "--project", str(tmp_path / "W46Tests.csproj"), "-c", "Release", "-m:1", "/p:UseSharedCompilation=false"]
         print(f"[w46-tests] Running: {' '.join(cmd)}", flush=True)

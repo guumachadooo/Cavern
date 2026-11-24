@@ -267,11 +267,22 @@ public class CavernizeTrack : IDisposable, IMetadataSupplier {
             if (attachables.Length != Renderer.Objects.Count ||
                 (attachables.Length > 0 && Renderer.Objects.Count > 0 && !ReferenceEquals(attachables[0], Renderer.Objects[0]))) {
                 Vector3 envSize = Listener.EnvironmentSize;
-                float invY = envSize.Y > 0.1f ? 1f / envSize.Y : 1f / 7f;
+                if (envSize.X <= 0.1f || envSize.Y <= 0.1f || envSize.Z <= 0.1f) {
+                    envSize = new Vector3(10f, 7f, 10f);
+                }
+                float invX = 1f / envSize.X;
+                float invY = 1f / envSize.Y;
+                float invZ = 1f / envSize.Z;
                 SourceLayer[] layers = new SourceLayer[attachables.Length];
                 for (int i = 0; i < attachables.Length; i++) {
-                    float ny = attachables[i].Position.Y * invY;
-                    layers[i] = ny > 0.15f ? SourceLayer.VirtualHeight : SourceLayer.VirtualMatrix;
+                    Vector3 pos = attachables[i].Position;
+                    Vector3 normPos = new(pos.X * invX, pos.Y * invY, pos.Z * invZ);
+                    ReferenceChannel ch = Renderer.ChannelFromPosition(normPos);
+                    if (ch == ReferenceChannel.Unknown && normPos.Y > 0.10f) {
+                        ch = Renderer.ChannelFromPosition(new Vector3(normPos.X, 1f, normPos.Z));
+                    }
+                    bool isHeight = normPos.Y > 0.10f || TrackSourceItem.IsHeightChannel(ch);
+                    layers[i] = isHeight ? SourceLayer.VirtualHeight : SourceLayer.VirtualMatrix;
                 }
                 ActiveSourceLayers = layers;
             }

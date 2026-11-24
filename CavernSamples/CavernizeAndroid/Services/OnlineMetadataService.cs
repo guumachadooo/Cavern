@@ -34,11 +34,14 @@ public sealed class OnlineLyricsCandidate {
     public string AlbumName { get; init; } = "";
     public string Source { get; init; } = "LRCLIB";
     public bool IsSynced { get; init; }
+    public bool IsSyllableSynced { get; init; }
     public string SyncedLrc { get; init; } = "";
     public string PlainLyrics { get; init; } = "";
     public double DurationSec { get; init; }
     public int SourceRank { get; init; } = 99;
     public int MatchScore { get; init; }
+    public int MatchRiskScore { get; init; }
+    public string MatchRiskNotes { get; init; } = "";
     public bool IsExactMatch { get; init; }
     public string BestContent => !string.IsNullOrWhiteSpace(SyncedLrc) ? SyncedLrc : PlainLyrics;
 }
@@ -76,11 +79,20 @@ public static partial class OnlineMetadataService {
     static long lastMusicBrainzRequestMs;
     static readonly HttpClient http = CreateHttpClient();
 
-    [GeneratedRegex(@"[\[\(].*?[\]\)]", RegexOptions.Compiled)]
+    const string TechNoiseTerms =
+        @"(?:\d+\s*bit|\d+(?:\.\d+)?\s*k?hz|flac|alac|aac|eac3|e-ac-3|ac3|dts(?:-?hd)?|atmos|dolby|joc|truehd|qobuz|tidal|deezer|web-?dl|webrip|bdrip|bluray|remux|mvsep|spatial|binaural|\d+\s*kbps|\d+\s*kbits|\d+ch|lossless|hi-?res|mqa|mp3|ogg|opus|wav|dsd\d*|cdrip|uhd|4k|1080p|720p|2160p|official\s+(?:audio|video|music\s+video|lyric\s+video|visualizer)|lyric\s+video)";
+
+    [GeneratedRegex(@"(?:\[[^\]]*\b" + TechNoiseTerms + @"\b[^\]]*\]|\([^\)]*\b" + TechNoiseTerms + @"\b[^\)]*\)|[\[\(]\s*(?:explicit|clean(?:\s+version)?)\s*[\]\)])", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex BracketNoiseRegex();
 
-    [GeneratedRegex(@"\[[^\]]*(?:bit|khz|hz|flac|aac|eac3|e-ac-3|ac3|atmos|joc|truehd|qobuz|tidal|web-dl|webrip|explicit|clean|mvsep|spatial|binaural|kbps|kbits|\d+ch)[^\]]*\]", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex(@"\[[^\]]*\b" + TechNoiseTerms + @"\b[^\]]*\]", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex TechnicalBracketRegex();
+
+    [GeneratedRegex(@"[\[\(].*?[\]\)]", RegexOptions.Compiled)]
+    private static partial Regex AllBracketsRegex();
+
+    [GeneratedRegex(@"\s+-\s+(?:live|remix|acoustic|instrumental|radio\s+edit|slowed|sped\s+up|unplugged|remaster(?:ed)?|karaoke|demo|edit)\b.*$", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex TrailingEditionDashRegex();
 
     [GeneratedRegex(@"^\d{1,3}\s*[-._]\s*", RegexOptions.Compiled)]
     private static partial Regex LeadingTrackNumRegex();
@@ -142,6 +154,14 @@ public static partial class OnlineMetadataService {
         s = TechnicalBracketRegex().Replace(s, " ");
         s = MultiSpaceRegex().Replace(s, " ").Trim();
         return s;
+    }
+
+    static string StripAllBrackets(string raw) {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        string s = raw.Replace('_', ' ');
+        s = LeadingTrackNumRegex().Replace(s, "");
+        s = AllBracketsRegex().Replace(s, " ");
+        return MultiSpaceRegex().Replace(s, " ").Trim();
     }
 
     static bool IsGenericAlbumName(string album) {
@@ -252,16 +272,33 @@ public static partial class OnlineMetadataService {
         if (ctx == null || string.IsNullOrWhiteSpace(title)) return null;
         string dir = GetCacheSubdir(ctx, "lyrics");
         if (string.IsNullOrEmpty(dir)) return null;
-        string p = IOPath.Combine(dir, HashKey($"lyr|{artist}|{title}") + ".lrc");
-        return IOFile.Exists(p) ? p : null;
+        string hash = HashKey($"lyr|{artist}|{title}");
+        foreach (string ext in new[] { ".elrc", ".ttml", ".krc", ".lrc" }) {
+            string p = IOPath.Combine(dir, hash + ext);
+            if (IOFile.Exists(p)) return p;
+        }
+        return null;
     }
 
-    public static string SaveLyricsToCache(Context ctx, string title, string artist, string content) {
+    public static string SaveLyricsToCache(Context ctx, string title, string artist, string content, bool onlyIfUpgrade = false) {
         if (ctx == null || string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(content)) return null;
         string dir = GetCacheSubdir(ctx, "lyrics");
         if (string.IsNullOrEmpty(dir)) return null;
         string p = IOPath.Combine(dir, HashKey($"lyr|{artist}|{title}") + ".lrc");
         try {
+            if (onlyIfUpgrade) {
+                string existingPath = GetCachedLyricsPath(ctx, title, artist);
+                if (!string.IsNullOrEmpty(existingPath) && IOFile.Exists(existingPath)) {
+                    string existingRaw = existingPath.EndsWith(".krc", StringComparison.OrdinalIgnoreCase)
+                        ? LyricsService.TryDecodeKrcBytes(IOFile.ReadAllBytes(existingPath))
+                        : MediaServiceUtils.ReadFileTextAutoEncoding(existingPath);
+                    int existingTier = LyricsService.GetSyncTier(LyricsService.ParseLyricsText(existingRaw, "Online Cache"));
+                    int newTier = LyricsService.GetSyncTier(LyricsService.ParseLyricsText(content, "Online Cache"));
+                    if (newTier <= existingTier) {
+                        return existingPath;
+                    }
+                }
+            }
             MediaServiceUtils.WriteTextAtomic(p, content);
             return p;
         } catch {
@@ -279,7 +316,7 @@ public static partial class OnlineMetadataService {
         string cleanQuery = CleanSearchTerm(query);
         string cleanArtist = CleanSearchTerm(artist);
         string fullAlbum = IsGenericAlbumName(album) ? "" : CleanAlbumForSearch(album);
-        string baseAlbum = IsGenericAlbumName(album) ? "" : CleanSearchTerm(album);
+        string baseAlbum = IsGenericAlbumName(album) ? "" : StripAllBrackets(album);
         if (string.IsNullOrWhiteSpace(cleanQuery) && string.IsNullOrWhiteSpace(fullAlbum)) {
             return raw;
         }
@@ -315,7 +352,7 @@ public static partial class OnlineMetadataService {
         string normTitle = NormalizeCompare(cleanQuery);
         string normArtist = NormalizeCompare(cleanArtist);
         string normFullAlbum = NormalizeCompareFull(fullAlbum);
-        string normBaseAlbum = NormalizeCompare(baseAlbum);
+        string normBaseAlbum = NormalizeAlnumSpaces(baseAlbum);
         bool hasEditionQualifier = !string.IsNullOrEmpty(normFullAlbum) && normFullAlbum != normBaseAlbum;
 
         List<OnlineCoverCandidate> ranked = raw
@@ -331,7 +368,7 @@ public static partial class OnlineMetadataService {
                 };
                 string cTitle = NormalizeCompare(c.Title);
                 string cFullAlbum = NormalizeCompareFull(c.Album);
-                string cBaseAlbum = NormalizeCompare(c.Album);
+                string cBaseAlbum = NormalizeAlnumSpaces(StripAllBrackets(c.Album));
 
                 bool titleMatch = !string.IsNullOrEmpty(normTitle) && cTitle == normTitle;
                 bool fullAlbumMatch = !string.IsNullOrEmpty(normFullAlbum) &&
@@ -582,6 +619,224 @@ public static partial class OnlineMetadataService {
         return (bmp, savedPath);
     }
 
+    [Flags]
+    enum LyricsEditionFlags {
+        None = 0,
+        Live = 1 << 0,
+        Remix = 1 << 1,
+        Instrumental = 1 << 2,
+        Acoustic = 1 << 3,
+        SpeedMod = 1 << 4,
+        RadioEdit = 1 << 5,
+        Remaster = 1 << 6
+    }
+
+    static readonly Regex EdLiveRegex = new(@"\b(live|unplugged|session|sessions|concert|tour)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    static readonly Regex EdRemixRegex = new(@"\b(remix|rmx|vip|dub\s+mix|club\s+mix|mashup|bootleg|rework)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    static readonly Regex EdInstRegex = new(@"\b(instrumental|karaoke|off\s+vocal|backing\s+track|no\s+vocals|acapella|a\s+capella)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    static readonly Regex EdAcousticRegex = new(@"\b(acoustic|piano\s+version|orchestral|stripped)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    static readonly Regex EdSpeedRegex = new(@"\b(slowed|sped\s+up|speed\s+up|nightcore|reverb)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    static readonly Regex EdRadioRegex = new(@"\b(radio\s+edit|single\s+edit|tv\s+size|short\s+edit)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    static readonly Regex EdRemasterRegex = new(@"\b(remaster|remastered)\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    static readonly Regex LrcLineTimestampCheckRegex = new(@"\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]", RegexOptions.Compiled);
+
+    static LyricsEditionFlags ExtractEditionFlags(string text) {
+        if (string.IsNullOrWhiteSpace(text)) return LyricsEditionFlags.None;
+        LyricsEditionFlags f = LyricsEditionFlags.None;
+        if (EdLiveRegex.IsMatch(text)) f |= LyricsEditionFlags.Live;
+        if (EdRemixRegex.IsMatch(text)) f |= LyricsEditionFlags.Remix;
+        if (EdInstRegex.IsMatch(text)) f |= LyricsEditionFlags.Instrumental;
+        if (EdAcousticRegex.IsMatch(text)) f |= LyricsEditionFlags.Acoustic;
+        if (EdSpeedRegex.IsMatch(text)) f |= LyricsEditionFlags.SpeedMod;
+        if (EdRadioRegex.IsMatch(text)) f |= LyricsEditionFlags.RadioEdit;
+        if (EdRemasterRegex.IsMatch(text)) f |= LyricsEditionFlags.Remaster;
+        return f;
+    }
+
+    static string StripEditionBase(string raw) {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        string s = CleanSearchTerm(raw);
+        s = AllBracketsRegex().Replace(s, " ");
+        s = TrailingEditionDashRegex().Replace(s, "");
+        return NormalizeAlnumSpaces(MultiSpaceRegex().Replace(s, " ").Trim());
+    }
+
+    static double TokenOverlapSimilarity(string normA, string normB) {
+        if (string.IsNullOrEmpty(normA) || string.IsNullOrEmpty(normB)) return 0;
+        if (normA == normB) return 1.0;
+        string[] tokA = normA.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        string[] tokB = normB.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokA.Length == 0 || tokB.Length == 0) return 0;
+        HashSet<string> setA = new(tokA, StringComparer.Ordinal);
+        HashSet<string> setB = new(tokB, StringComparer.Ordinal);
+        int inter = 0;
+        foreach (string t in setA) {
+            if (setB.Contains(t)) inter++;
+        }
+        int union = setA.Count + setB.Count - inter;
+        return union > 0 ? (double)inter / union : 0;
+    }
+
+    public static (int RiskScore, string Notes, bool IsExactMatch, int MatchScore) ComputeLyricsMatchRisk(
+        string queryTitle,
+        string queryArtist,
+        string queryAlbum,
+        double expectedDurationSec,
+        OnlineLyricsCandidate candidate) {
+        string cleanQTitle = CleanSearchTerm(queryTitle);
+        string cleanQArtist = CleanSearchTerm(queryArtist);
+        string cleanQAlbum = IsGenericAlbumName(queryAlbum) ? "" : CleanAlbumForSearch(queryAlbum);
+
+        string normFullQTitle = NormalizeAlnumSpaces(cleanQTitle);
+        string normFullCTitle = NormalizeAlnumSpaces(CleanSearchTerm(candidate.TrackName));
+        string normBaseQTitle = StripEditionBase(queryTitle);
+        string normBaseCTitle = StripEditionBase(candidate.TrackName);
+        string normQArtist = NormalizeCompare(cleanQArtist);
+        string normQAlbum = NormalizeCompareFull(cleanQAlbum);
+        string normBaseQAlbum = NormalizeAlnumSpaces(StripAllBrackets(cleanQAlbum));
+
+        int risk = 0;
+        List<string> notes = [];
+
+        // 1. Title similarity risk
+        bool fullTitleMatch = !string.IsNullOrEmpty(normFullQTitle) && normFullCTitle == normFullQTitle;
+        bool baseTitleMatch = !string.IsNullOrEmpty(normBaseQTitle) && normBaseCTitle == normBaseQTitle;
+        double titleSim = baseTitleMatch ? 1.0 : TokenOverlapSimilarity(normBaseQTitle, normBaseCTitle);
+        if (!baseTitleMatch) {
+            bool contained = !string.IsNullOrEmpty(normBaseQTitle) && !string.IsNullOrEmpty(normBaseCTitle) &&
+                (normBaseCTitle.Contains(normBaseQTitle, StringComparison.Ordinal) ||
+                 normBaseQTitle.Contains(normBaseCTitle, StringComparison.Ordinal));
+            if (contained || titleSim >= 0.80) {
+                risk += 12;
+                notes.Add("near title");
+            } else if (titleSim >= 0.55) {
+                risk += 28;
+                notes.Add("partial title");
+            } else {
+                risk += 55;
+                notes.Add("title mismatch");
+            }
+        }
+
+        // 2. Edition / version mismatch risk
+        LyricsEditionFlags qEd = ExtractEditionFlags(cleanQTitle);
+        LyricsEditionFlags cEd = ExtractEditionFlags(candidate.TrackName);
+        if (cEd == LyricsEditionFlags.None && !string.IsNullOrWhiteSpace(candidate.AlbumName)) {
+            cEd = ExtractEditionFlags(candidate.AlbumName) &
+                (LyricsEditionFlags.Live | LyricsEditionFlags.Instrumental | LyricsEditionFlags.Acoustic | LyricsEditionFlags.Remix);
+        }
+        LyricsEditionFlags edDiff = qEd ^ cEd;
+        bool majorEditionMismatch = false;
+        if ((edDiff & LyricsEditionFlags.Instrumental) != 0) {
+            risk += 70;
+            majorEditionMismatch = true;
+            notes.Add("edition: instrumental/karaoke");
+        }
+        if ((edDiff & LyricsEditionFlags.Live) != 0) {
+            risk += 55;
+            majorEditionMismatch = true;
+            notes.Add("edition: live/unplugged");
+        }
+        if ((edDiff & LyricsEditionFlags.Remix) != 0) {
+            risk += 55;
+            majorEditionMismatch = true;
+            notes.Add("edition: remix");
+        }
+        if ((edDiff & LyricsEditionFlags.SpeedMod) != 0) {
+            risk += 55;
+            majorEditionMismatch = true;
+            notes.Add("edition: slowed/sped up");
+        }
+        if ((edDiff & LyricsEditionFlags.Acoustic) != 0) {
+            risk += 48;
+            majorEditionMismatch = true;
+            notes.Add("edition: acoustic");
+        }
+        if ((edDiff & LyricsEditionFlags.RadioEdit) != 0) {
+            risk += 45;
+            majorEditionMismatch = true;
+            notes.Add("edition: radio edit");
+        }
+        if (!majorEditionMismatch && (edDiff & LyricsEditionFlags.Remaster) != 0) {
+            risk += 4;
+        }
+
+        // 3. Artist match risk
+        bool artistMatch = false;
+        if (!string.IsNullOrEmpty(normQArtist)) {
+            artistMatch = ArtistExactMatch(candidate.ArtistName, cleanQArtist);
+            if (!artistMatch) {
+                string normCArtist = NormalizeCompare(candidate.ArtistName);
+                double artSim = TokenOverlapSimilarity(normQArtist, normCArtist);
+                bool partialArtist = !string.IsNullOrEmpty(normCArtist) &&
+                    (normCArtist.Contains(normQArtist, StringComparison.Ordinal) ||
+                     normQArtist.Contains(normCArtist, StringComparison.Ordinal) ||
+                     artSim >= 0.45);
+                if (partialArtist) {
+                    risk += 18;
+                    notes.Add("partial artist");
+                } else {
+                    risk += 45;
+                    notes.Add("artist mismatch");
+                }
+            }
+        } else {
+            risk += 10;
+            notes.Add("no query artist");
+        }
+
+        // 4. Album match risk
+        bool albumMatch = false;
+        if (!string.IsNullOrEmpty(normQAlbum)) {
+            string normCAlbum = NormalizeCompareFull(candidate.AlbumName);
+            string normBaseCAlbum = NormalizeAlnumSpaces(StripAllBrackets(candidate.AlbumName));
+            if (normCAlbum == normQAlbum) {
+                albumMatch = true;
+            } else if (!string.IsNullOrEmpty(normBaseQAlbum) && normBaseCAlbum == normBaseQAlbum) {
+                risk += 3;
+            } else {
+                risk += 8;
+            }
+        }
+
+        // 5. Tight duration delta risk (<=3s 0, <=6s +10, <=12s +28, >15s +55)
+        bool durTight = false;
+        bool durOk = true;
+        if (expectedDurationSec > 1 && candidate.DurationSec > 1) {
+            double delta = Math.Abs(candidate.DurationSec - expectedDurationSec);
+            if (delta <= 3.0) {
+                durTight = true;
+            } else if (delta <= 6.0) {
+                risk += 10;
+                notes.Add($"dur Δ{delta:F1}s");
+            } else if (delta <= 12.0) {
+                risk += 28;
+                notes.Add($"dur Δ{delta:F1}s");
+            } else if (delta <= 15.0) {
+                risk += 40;
+                notes.Add($"dur Δ{delta:F1}s");
+            } else {
+                risk += 55;
+                durOk = false;
+                notes.Add($"dur Δ{delta:F0}s >15s");
+            }
+        } else if (expectedDurationSec > 1) {
+            risk += 8;
+        }
+
+        int riskScore = Math.Clamp(risk, 0, 100);
+        bool exact = riskScore <= 25 && (fullTitleMatch || baseTitleMatch) && artistMatch && durOk && !majorEditionMismatch;
+        int syncBonus = candidate.IsSyllableSynced ? 450 : (candidate.IsSynced ? 250 : 0);
+        int matchScore = (fullTitleMatch ? 550 : (baseTitleMatch ? 480 : (int)Math.Round(titleSim * 280)))
+            + (artistMatch ? 400 : 0)
+            + (albumMatch ? 120 : 0)
+            + syncBonus
+            + (durTight ? 160 : (durOk ? 30 : -220))
+            - (riskScore * 8);
+
+        return (riskScore, string.Join("; ", notes), exact, matchScore);
+    }
+
     public static async Task<List<OnlineLyricsCandidate>> SearchLyricsAsync(
         string title,
         string artist,
@@ -594,7 +849,7 @@ public static partial class OnlineMetadataService {
         string fullAlbum = IsGenericAlbumName(album) ? "" : CleanAlbumForSearch(album);
         if (string.IsNullOrWhiteSpace(cleanTitle)) return list;
 
-        // Source 1 & 3: LRCLIB (exact endpoint with album_name + broad search)
+        // Source 1: LRCLIB (exact endpoint with album_name + broad search)
         try {
             if (!string.IsNullOrWhiteSpace(cleanArtist)) {
                 string exactUrl = !string.IsNullOrWhiteSpace(fullAlbum)
@@ -642,9 +897,20 @@ public static partial class OnlineMetadataService {
             AppLogger.Warn($"OnlineMetadataService.LRCLIB: {ex.Message}");
         }
 
-        // Source 2: Netease Cloud Music (only when LRCLIB had no synced hit)
-        if (!list.Any(l => l.IsSynced)) {
-            await TrySearchNeteaseLyricsAsync(cleanTitle, cleanArtist, list, ct).ConfigureAwait(false);
+        // Source 2 & 3: Netease Cloud Music (yrc/klyric/lrc) & KuGou (krc/lrc) — never skip just because LRCLIB returned line-synced!
+        if (!list.Any(l => l.IsSyllableSynced)) {
+            List<OnlineLyricsCandidate> neteaseResults = [];
+            List<OnlineLyricsCandidate> kugouResults = [];
+            await Task.WhenAll(
+                TrySearchNeteaseLyricsAsync(cleanTitle, cleanArtist, neteaseResults, ct),
+                TrySearchKugouLyricsAsync(cleanTitle, cleanArtist, expectedDurationSec, kugouResults, ct)
+            ).ConfigureAwait(false);
+
+            foreach (OnlineLyricsCandidate cand in neteaseResults.Concat(kugouResults)) {
+                if (!list.Any(x => x.BestContent == cand.BestContent)) {
+                    list.Add(cand);
+                }
+            }
         }
 
         // Source 4: Lyrics.ovh (plain lyrics fallback)
@@ -652,52 +918,46 @@ public static partial class OnlineMetadataService {
             await TrySearchLyricsOvhAsync(cleanTitle, cleanArtist, list, ct).ConfigureAwait(false);
         }
 
-        string normTitle = NormalizeCompare(cleanTitle);
-        string normArtist = NormalizeCompare(cleanArtist);
-        string normAlbum = NormalizeCompareFull(fullAlbum);
-
         return list
             .Select(c => {
-                bool titleMatch = !string.IsNullOrEmpty(normTitle) && NormalizeCompare(c.TrackName) == normTitle;
-                bool artistMatch = !string.IsNullOrEmpty(normArtist) && ArtistExactMatch(c.ArtistName, cleanArtist);
-                bool albumMatch = !string.IsNullOrEmpty(normAlbum) && NormalizeCompareFull(c.AlbumName) == normAlbum;
-                bool durOk = expectedDurationSec <= 1 || c.DurationSec <= 1 || Math.Abs(c.DurationSec - expectedDurationSec) <= 15.0;
-                bool durTight = expectedDurationSec > 1 && c.DurationSec > 1 && Math.Abs(c.DurationSec - expectedDurationSec) <= 4.5;
-
-                int rank = (c.Source, c.IsSynced) switch {
-                    ("LRCLIB", true) => 1,
-                    ("Netease", true) => 2,
-                    ("LRCLIB", false) => 3,
-                    ("Netease", false) => 4,
-                    ("Lyrics.ovh", _) => 5,
-                    _ => 6
+                var (riskScore, riskNotes, exact, score) = ComputeLyricsMatchRisk(title, artist, fullAlbum, expectedDurationSec, c);
+                int rank = (c.Source, c.IsSyllableSynced, c.IsSynced) switch {
+                    ("Netease", true, _) => 1,
+                    ("KuGou", true, _) => 2,
+                    ("LRCLIB", true, _) => 1,
+                    ("LRCLIB", false, true) => 3,
+                    ("Netease", false, true) => 4,
+                    ("KuGou", false, true) => 5,
+                    ("LRCLIB", _, false) => 6,
+                    ("Netease", _, false) => 7,
+                    ("KuGou", _, false) => 8,
+                    ("Lyrics.ovh", _, _) => 9,
+                    _ => 10
                 };
+                string sourceDisplay = c.IsSyllableSynced
+                    ? $"{c.Source} Syllable"
+                    : (c.IsSynced ? $"{c.Source} Synced" : c.Source);
 
-                int score = (titleMatch ? 500 : (!string.IsNullOrEmpty(normTitle) && NormalizeCompare(c.TrackName).Contains(normTitle) ? 180 : 0))
-                    + (artistMatch ? 400 : 0)
-                    + (albumMatch ? 120 : 0)
-                    + (c.IsSynced ? 220 : 0)
-                    + (durTight ? 150 : (durOk ? 30 : -200))
-                    - (rank - 1) * 40;
-
-                bool exact = titleMatch && artistMatch && durOk;
                 return new OnlineLyricsCandidate {
                     TrackName = c.TrackName,
                     ArtistName = c.ArtistName,
                     AlbumName = c.AlbumName,
-                    Source = c.IsSynced ? $"{c.Source} Synced" : c.Source,
+                    Source = sourceDisplay,
                     IsSynced = c.IsSynced,
+                    IsSyllableSynced = c.IsSyllableSynced,
                     SyncedLrc = c.SyncedLrc,
                     PlainLyrics = c.PlainLyrics,
                     DurationSec = c.DurationSec,
                     SourceRank = rank,
                     MatchScore = score,
+                    MatchRiskScore = riskScore,
+                    MatchRiskNotes = riskNotes,
                     IsExactMatch = exact
                 };
             })
-            .OrderByDescending(c => c.IsExactMatch)
-            .ThenByDescending(c => c.IsSynced)
-            .ThenBy(c => c.SourceRank)
+            .OrderByDescending(c => c.MatchRiskScore <= 45)
+            .ThenByDescending(c => c.IsSyllableSynced ? 3 : (c.IsSynced ? 2 : 1))
+            .ThenBy(c => c.MatchRiskScore)
             .ThenByDescending(c => c.MatchScore)
             .ToList();
     }
@@ -711,16 +971,29 @@ public static partial class OnlineMetadataService {
             : "";
         if (string.IsNullOrWhiteSpace(synced) && string.IsNullOrWhiteSpace(plain)) return null;
 
+        bool isSynced = !string.IsNullOrWhiteSpace(synced);
+        bool isSyllable = isSynced && LyricsService.HasSyllableTags(synced);
         return new OnlineLyricsCandidate {
             TrackName = el.TryGetProperty("trackName", out JsonElement tEl) ? (tEl.GetString() ?? "") : "",
             ArtistName = el.TryGetProperty("artistName", out JsonElement arEl) ? (arEl.GetString() ?? "") : "",
             AlbumName = el.TryGetProperty("albumName", out JsonElement alEl) ? (alEl.GetString() ?? "") : "",
             Source = "LRCLIB",
-            IsSynced = !string.IsNullOrWhiteSpace(synced),
+            IsSynced = isSynced,
+            IsSyllableSynced = isSyllable,
             SyncedLrc = synced,
             PlainLyrics = plain,
             DurationSec = el.TryGetProperty("duration", out JsonElement dEl) && dEl.TryGetDouble(out double d) ? d : 0
         };
+    }
+
+    static string ExtractJsonLyricField(JsonElement root, string fieldName) {
+        if (root.TryGetProperty(fieldName, out JsonElement obj) &&
+            obj.ValueKind == JsonValueKind.Object &&
+            obj.TryGetProperty("lyric", out JsonElement lyrEl) &&
+            lyrEl.ValueKind == JsonValueKind.String) {
+            return lyrEl.GetString() ?? "";
+        }
+        return "";
     }
 
     static async Task TrySearchNeteaseLyricsAsync(
@@ -764,7 +1037,7 @@ public static partial class OnlineMetadataService {
                     ? (alNameEl.GetString() ?? "")
                     : "";
 
-                string lyrUrl = $"https://music.163.com/api/song/lyric?id={songId}&lv=1&kv=1&tv=-1";
+                string lyrUrl = $"https://music.163.com/api/song/lyric?id={songId}&lv=1&kv=1&tv=-1&rv=-1&yv=1";
                 using HttpRequestMessage lyrReq = new(HttpMethod.Get, lyrUrl);
                 lyrReq.Headers.Referrer = new Uri("https://music.163.com/");
                 using HttpResponseMessage lyrResp = await http.SendAsync(lyrReq, ct).ConfigureAwait(false);
@@ -772,26 +1045,134 @@ public static partial class OnlineMetadataService {
 
                 string lyrJson = await lyrResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
                 using JsonDocument lyrDoc = JsonDocument.Parse(lyrJson);
-                string lrc = lyrDoc.RootElement.TryGetProperty("lrc", out JsonElement lrcObj)
-                    && lrcObj.TryGetProperty("lyric", out JsonElement lrcStr)
-                    ? (lrcStr.GetString() ?? "")
-                    : "";
-                if (string.IsNullOrWhiteSpace(lrc)) continue;
+                string yrc = ExtractJsonLyricField(lyrDoc.RootElement, "yrc");
+                string klyric = ExtractJsonLyricField(lyrDoc.RootElement, "klyric");
+                string lrc = ExtractJsonLyricField(lyrDoc.RootElement, "lrc");
 
-                bool hasTimestamp = lrc.Contains('[') && lrc.Contains(':');
+                string chosen = "";
+                bool isSyllable = false;
+                bool isSynced = false;
+
+                if (LyricsService.HasSyllableTags(yrc)) {
+                    chosen = yrc;
+                    isSyllable = true;
+                    isSynced = true;
+                } else if (LyricsService.HasSyllableTags(klyric)) {
+                    chosen = klyric;
+                    isSyllable = true;
+                    isSynced = true;
+                } else if (!string.IsNullOrWhiteSpace(lrc) && LrcLineTimestampCheckRegex.IsMatch(lrc)) {
+                    chosen = lrc;
+                    isSyllable = LyricsService.HasSyllableTags(lrc);
+                    isSynced = true;
+                } else if (!string.IsNullOrWhiteSpace(klyric) && LrcLineTimestampCheckRegex.IsMatch(klyric)) {
+                    chosen = klyric;
+                    isSynced = true;
+                } else {
+                    chosen = !string.IsNullOrWhiteSpace(lrc) ? lrc : (!string.IsNullOrWhiteSpace(klyric) ? klyric : yrc);
+                }
+
+                if (string.IsNullOrWhiteSpace(chosen)) continue;
+
                 results.Add(new OnlineLyricsCandidate {
                     TrackName = songName,
                     ArtistName = artistName,
                     AlbumName = albName,
                     Source = "Netease",
-                    IsSynced = hasTimestamp,
-                    SyncedLrc = hasTimestamp ? lrc : "",
-                    PlainLyrics = hasTimestamp ? "" : lrc,
+                    IsSynced = isSynced,
+                    IsSyllableSynced = isSyllable,
+                    SyncedLrc = isSynced ? chosen : "",
+                    PlainLyrics = isSynced ? "" : chosen,
                     DurationSec = durSec
                 });
             }
         } catch (Exception ex) {
             AppLogger.Warn($"OnlineMetadataService.Netease: {ex.Message}");
+        }
+    }
+
+    static async Task TrySearchKugouLyricsAsync(
+        string cleanTitle,
+        string cleanArtist,
+        double expectedDurationSec,
+        List<OnlineLyricsCandidate> results,
+        CancellationToken ct) {
+        using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(5.5));
+        CancellationToken kCt = timeoutCts.Token;
+        try {
+            string q = string.IsNullOrWhiteSpace(cleanArtist) ? cleanTitle : $"{cleanArtist} - {cleanTitle}";
+            long durMs = expectedDurationSec > 1 ? (long)Math.Round(expectedDurationSec * 1000.0) : 0;
+            string durParam = durMs > 0 ? durMs.ToString(CultureInfo.InvariantCulture) : "";
+            string searchUrl = $"https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&keyword={Uri.EscapeDataString(q)}&duration={durParam}&hash=";
+            using HttpResponseMessage resp = await http.GetAsync(searchUrl, kCt).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return;
+
+            string json = await resp.Content.ReadAsStringAsync(kCt).ConfigureAwait(false);
+            using JsonDocument doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("candidates", out JsonElement candsEl) ||
+                candsEl.ValueKind != JsonValueKind.Array) {
+                return;
+            }
+
+            int tried = 0;
+            foreach (JsonElement candEl in candsEl.EnumerateArray()) {
+                if (tried >= 3) break;
+                string id = candEl.TryGetProperty("id", out JsonElement idEl) ? idEl.ToString() : "";
+                string accesskey = candEl.TryGetProperty("accesskey", out JsonElement akEl) ? (akEl.GetString() ?? "") : "";
+                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(accesskey)) continue;
+                tried++;
+
+                string songName = candEl.TryGetProperty("song", out JsonElement sEl) ? (sEl.GetString() ?? "") : cleanTitle;
+                string singer = candEl.TryGetProperty("singer", out JsonElement siEl) ? (siEl.GetString() ?? "") : cleanArtist;
+                double candDurSec = candEl.TryGetProperty("duration", out JsonElement dEl) && dEl.TryGetDouble(out double dMs)
+                    ? dMs / 1000.0
+                    : 0;
+
+                string decodedText = await DownloadKugouLyricContentAsync(id, accesskey, "krc", kCt).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(decodedText)) {
+                    decodedText = await DownloadKugouLyricContentAsync(id, accesskey, "lrc", kCt).ConfigureAwait(false);
+                }
+                if (string.IsNullOrWhiteSpace(decodedText)) continue;
+
+                LyricsDocument parsed = LyricsService.ParseLyricsText(decodedText, "KuGou");
+                if (!parsed.HasLyrics) continue;
+
+                results.Add(new OnlineLyricsCandidate {
+                    TrackName = string.IsNullOrWhiteSpace(songName) ? cleanTitle : songName,
+                    ArtistName = string.IsNullOrWhiteSpace(singer) ? cleanArtist : singer,
+                    Source = "KuGou",
+                    IsSynced = parsed.IsSynced,
+                    IsSyllableSynced = parsed.IsSyllableSynced,
+                    SyncedLrc = parsed.IsSynced ? decodedText : "",
+                    PlainLyrics = parsed.IsSynced ? "" : decodedText,
+                    DurationSec = candDurSec
+                });
+            }
+        } catch (OperationCanceledException) {
+            // Timeout or caller cancellation — fail gracefully
+        } catch (Exception ex) {
+            AppLogger.Warn($"OnlineMetadataService.KuGou: {ex.Message}");
+        }
+    }
+
+    static async Task<string> DownloadKugouLyricContentAsync(string id, string accesskey, string fmt, CancellationToken ct) {
+        try {
+            string dlUrl = $"https://lyrics.kugou.com/download?ver=1&client=pc&id={Uri.EscapeDataString(id)}&accesskey={Uri.EscapeDataString(accesskey)}&fmt={fmt}&charset=utf8";
+            using HttpResponseMessage resp = await http.GetAsync(dlUrl, ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return "";
+
+            string json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            using JsonDocument doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("content", out JsonElement cEl) || cEl.ValueKind != JsonValueKind.String) {
+                return "";
+            }
+            string b64 = cEl.GetString();
+            if (string.IsNullOrWhiteSpace(b64)) return "";
+            byte[] bytes = Convert.FromBase64String(b64);
+            return LyricsService.TryDecodeKrcBytes(bytes);
+        } catch {
+            return "";
         }
     }
 
@@ -1036,7 +1417,8 @@ public static partial class OnlineMetadataService {
         if (ctx == null || meta == null) return null;
 
         bool needCover = !meta.HasEmbeddedArtwork;
-        bool needLyrics = !meta.HasVideo && !(meta.Lyrics?.HasLyrics ?? false);
+        int currentLyricsTier = LyricsService.GetSyncTier(meta.Lyrics);
+        bool needLyrics = !meta.HasVideo && currentLyricsTier < 2;
         if (!needCover && !needLyrics) return null;
 
         Bitmap fetchedArt = null;
@@ -1063,11 +1445,13 @@ public static partial class OnlineMetadataService {
         Task lyricsTask = Task.Run(async () => {
             if (!needLyrics) return;
             List<OnlineLyricsCandidate> cands = await SearchLyricsAsync(meta.Title, meta.Artist, meta.Album, ct, meta.DurationSeconds).ConfigureAwait(false);
-            OnlineLyricsCandidate best = cands.FirstOrDefault(c => c.IsExactMatch);
+            OnlineLyricsCandidate best = cands.FirstOrDefault(c =>
+                (c.IsExactMatch || (c.IsSynced && c.MatchRiskScore <= 25)) &&
+                c.MatchRiskScore <= 45);
             if (best != null && !string.IsNullOrWhiteSpace(best.BestContent)) {
-                SaveLyricsToCache(ctx, meta.Title, meta.Artist, best.BestContent);
                 LyricsDocument doc = LyricsService.ParseLyricsText(best.BestContent, best.Source);
-                if (doc.HasLyrics) {
+                if (doc.HasLyrics && LyricsService.GetSyncTier(doc) > currentLyricsTier) {
+                    SaveLyricsToCache(ctx, meta.Title, meta.Artist, best.BestContent, onlyIfUpgrade: true);
                     fetchedLyrics = doc;
                     lyrSource = doc.SourceLabel;
                 }

@@ -44,6 +44,19 @@ public enum ProAudioBufferPreset {
 }
 
 /// <summary>
+/// Selectable physical microphone input hardware source for live monitoring &amp; recording.
+/// Defaults to <see cref="PhoneMic"/> so attaching a USB DAC/interface (e.g. Focusrite Scarlett) never auto-hijacks the phone mic.
+/// </summary>
+public enum ProAudioMicSource {
+    /// <summary>Built-in phone microphone (or wired 3.5mm headset when no USB override is selected).</summary>
+    PhoneMic = 0,
+    /// <summary>External USB audio interface microphone input (e.g. Focusrite Scarlett XLR Ch1/Ch2), falling back to phone mic if detached.</summary>
+    UsbInterfaceMic = 1,
+    /// <summary>Automatic Android priority cascade (prefers wired headset / attached USB interface mic).</summary>
+    Auto = 2
+}
+
+/// <summary>
 /// Live USB/pro-audio microphone input channel selection routed into <see cref="SourceLayer.LiveMicrophone"/>.
 /// </summary>
 public enum LiveMicRoutingMode {
@@ -80,6 +93,9 @@ public sealed class ProAudioDuplexConfig {
     /// <summary>Input channel routing mode (Ch1 mono, Ch2 mono, or Stereo 1+2).</summary>
     public LiveMicRoutingMode MicRouting { get; set; } = LiveMicRoutingMode.MonoChannel1;
 
+    /// <summary>Selected microphone hardware source (defaults to <see cref="ProAudioMicSource.PhoneMic"/> so USB interfaces never auto-hijack the phone mic).</summary>
+    public ProAudioMicSource MicSource { get; set; } = ProAudioMicSource.PhoneMic;
+
     /// <summary>Digital input trim gain applied to the captured mic stream in dB (-18..+24 dB).</summary>
     public float MicInputGainDb { get; set; }
 
@@ -114,6 +130,7 @@ public sealed class ProAudioDuplexConfig {
             LockedSampleRateHz = sr,
             LiveMicEnabled = LiveMicEnabled,
             MicRouting = Enum.IsDefined(typeof(LiveMicRoutingMode), MicRouting) ? MicRouting : LiveMicRoutingMode.MonoChannel1,
+            MicSource = Enum.IsDefined(typeof(ProAudioMicSource), MicSource) ? MicSource : ProAudioMicSource.PhoneMic,
             MicInputGainDb = Math.Clamp(MicInputGainDb, -18f, 24f),
             MicMonitorLevel = Math.Clamp(MicMonitorLevel, 0f, 1.25f),
             MicNormalizedPosition = new Vector3(
@@ -195,6 +212,15 @@ public sealed class ProAudioDuplexDiagnostics {
 
     /// <summary>Live microphone peak level in dBFS.</summary>
     public float MicPeakDbfs { get; init; } = -120f;
+
+    /// <summary>Configured microphone source preference (PhoneMic, UsbInterfaceMic, or Auto).</summary>
+    public ProAudioMicSource MicSource { get; init; } = ProAudioMicSource.PhoneMic;
+
+    /// <summary>Human-readable active microphone input device/source currently feeding capture.</summary>
+    public string ActiveInputSource { get; init; } = string.Empty;
+
+    /// <summary>Human-readable active headphone / monitoring output mode.</summary>
+    public string HeadphoneOutputMode { get; init; } = string.Empty;
 
     /// <summary>Human-readable fallback or error explanation when Path B could not be opened.</summary>
     public string StatusNote { get; init; } = string.Empty;

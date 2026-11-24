@@ -45,15 +45,20 @@ public sealed partial class RealtimePlayerEngine {
             };
         }
 
+        bool wasRenderingLiveNeural = isRenderingLiveNeuralSources;
+        List<TrackSourceItem> previousItems = sourceItems;
         if (ShouldRenderLiveNeuralSourcesLocked()) {
-            AttachLiveNeuralSourcesLocked(resetToStart);
-            parametricUpmixerStage.BindTelemetryProvider(null);
-            RebuildCachedActiveSourcesLocked();
+            AttachLiveNeuralSourcesLocked(resetToStart, previousItems);
         } else {
-            bool wasRenderingLiveNeural = isRenderingLiveNeuralSources;
             isRenderingLiveNeuralSources = false;
             progressiveNeuralUpdater = null;
             liveNeuralSources = Array.Empty<Source>();
+        }
+
+        if (isRenderingLiveNeuralSources) {
+            parametricUpmixerStage.BindTelemetryProvider(null);
+            RebuildCachedActiveSourcesLocked();
+        } else {
             if (resetToStart) {
                 currentTrack.Attach(listener, upmixingSettings);
             } else {
@@ -63,33 +68,61 @@ public sealed partial class RealtimePlayerEngine {
                 currentTrack.AttachFromCurrentPosition(listener, upmixingSettings);
             }
             RebuildCachedActiveSourcesLocked();
-            if (wasRenderingLiveNeural) {
-                sourceItems = TrackSourceItem.BuildFromAttachedSources(currentTrack, cachedActiveSources);
-                BindTrackToSceneHubLocked(currentTrack);
-                SpatialSourceDescriptor[] stemDescs = neuralStemStage.ActiveSpatialUpmixTrack != null
-                    ? neuralStemStage.BuildActiveStemDescriptors(EnvironmentSize, sceneHub.Sources.Count)
-                    : Array.Empty<SpatialSourceDescriptor>();
+            List<TrackSourceItem> nextItems = TrackSourceItem.BuildFromAttachedSources(currentTrack, cachedActiveSources);
+            PreserveSourceOverrides(nextItems, previousItems);
+            sourceItems = nextItems;
+
+            Vector3 envSize = Listener.EnvironmentSize;
+            for (int i = 0; i < sourceItems.Count && i < cachedActiveSources.Length; i++) {
+                if (sourceItems[i].HasCustomPosition && cachedActiveSources[i] != null) {
+                    cachedActiveSources[i].LockCustomPosition(sourceItems[i].CustomNormalizedPosition * envSize);
+                }
+            }
+
+            BindTrackToSceneHubLocked(currentTrack);
+            if (neuralStemStage.ActiveSpatialUpmixTrack != null) {
+                SpatialSourceDescriptor[] stemDescs = neuralStemStage.BuildActiveStemDescriptors(EnvironmentSize, sceneHub.Sources.Count);
                 sceneHub.RegisterNeuralStemDescriptors(stemDescs);
             }
             parametricUpmixerStage.BindTelemetryProvider(currentTrack.ActiveTelemetryProvider);
         }
 
         SetupOutputLayout();
+        ResetSourceAccumulatorsLocked();
+        ApplySourceMutesAndProperties();
     }
 
-    void AttachLiveNeuralSourcesLocked(bool resetToStart) {
+    void ResetSourceAccumulatorsLocked() {
+        for (int i = 0; i < cachedActiveSources.Length; i++) {
+            cachedActiveSources[i]?.ResetSampleRateAccumulator();
+        }
+        if (currentTrack?.Renderer?.Objects != null) {
+            IReadOnlyList<Source> objs = currentTrack.Renderer.Objects;
+            for (int i = 0; i < objs.Count; i++) {
+                objs[i]?.ResetSampleRateAccumulator();
+            }
+        }
+        for (int i = 0; i < liveNeuralSources.Length; i++) {
+            liveNeuralSources[i]?.ResetSampleRateAccumulator();
+        }
+        int stateCount = Math.Max(cachedActiveSources.Length, sourceItems.Count);
+        if (xrayLpLowStates.Length < stateCount) {
+            xrayLpLowStates = new float[stateCount];
+            xrayLpMidStates = new float[stateCount];
+        } else if (xrayLpLowStates.Length > 0) {
+            Array.Clear(xrayLpLowStates, 0, xrayLpLowStates.Length);
+            Array.Clear(xrayLpMidStates, 0, xrayLpMidStates.Length);
+        }
+    }
+
+    void AttachLiveNeuralSourcesLocked(bool resetToStart, IReadOnlyList<TrackSourceItem> previousItems) {
         NeuralSeparatedTrack sep = neuralStemStage.ActiveSpatialUpmixTrack;
         NeuralSpatialUpmixMode mode = neuralStemStage.Config.SpatialUpmixMode;
         bool isProgressive = sep != null && sep.IsProgressiveStreaming;
         Vector3 envSize = EnvironmentSize.X > 0.1f && EnvironmentSize.Y > 0.1f && EnvironmentSize.Z > 0.1f
             ? EnvironmentSize
             : new Vector3(10f, 7f, 10f);
-
-        // Preserve any existing user Solo/Mute/CustomPin overrides matched by source name across re-attaches
-        Dictionary<string, TrackSourceItem> prevByName = new(StringComparer.OrdinalIgnoreCase);
-        for (int i = 0; i < sourceItems.Count; i++) {
-            prevByName[sourceItems[i].Name] = sourceItems[i];
-        }
+        int trackId = currentTrack?.Index ?? 0;
 
         int trackSr = currentTrack != null && currentTrack.SampleRate > 0 ? currentTrack.SampleRate : Listener.DefaultSampleRate;
         int stemSr = sep != null && sep.SampleRate > 0 ? sep.SampleRate : trackSr;
@@ -105,11 +138,6 @@ public sealed partial class RealtimePlayerEngine {
             progressiveNeuralUpdater = null;
             isRenderingLiveNeuralSources = false;
             liveNeuralSources = Array.Empty<Source>();
-            if (resetToStart) {
-                currentTrack.Attach(listener, upmixingSettings);
-            } else {
-                currentTrack.AttachFromCurrentPosition(listener, upmixingSettings);
-            }
             return;
         }
 
@@ -156,17 +184,16 @@ public sealed partial class RealtimePlayerEngine {
                     LFE = isLfe,
                     Volume = 1f
                 };
-                TrackSourceItem item = new(idx, label, isBed: isLfe, isLfe: isLfe, ch, normPos, layer);
-                if (prevByName.TryGetValue(label, out TrackSourceItem old)) {
-                    item.IsMuted = old.IsMuted;
-                    item.IsSolo = old.IsSolo;
-                    item.HasCustomPosition = old.HasCustomPosition;
-                    item.CustomNormalizedPosition = old.CustomNormalizedPosition;
-                    if (item.HasCustomPosition) {
-                        src.Position = item.CustomNormalizedPosition * envSize;
-                        item.NormalizedPosition = item.CustomNormalizedPosition;
-                    }
-                }
+                TrackSourceItem item = new(
+                    idx,
+                    label,
+                    isBed: isLfe,
+                    isLfe: isLfe,
+                    ch,
+                    normPos,
+                    layer,
+                    hasDynamicTrajectory: false,
+                    stableKey: TrackSourceItem.CreateStableKey(trackId, idx, layer, ch, label));
                 builtSources.Add(src);
                 builtItems.Add(item);
                 builtDescriptors.Add(new SpatialSourceDescriptor {
@@ -260,20 +287,17 @@ public sealed partial class RealtimePlayerEngine {
                         Loop = Loop,
                         Volume = 1f
                     };
-                    TrackSourceItem item = new(idx, d.Name, isBed: false, isLfe: false, null, d.NormalizedPosition, layer);
-                    if (prevByName.TryGetValue(d.Name, out TrackSourceItem old)) {
-                        item.IsMuted = old.IsMuted;
-                        item.IsSolo = old.IsSolo;
-                        item.HasCustomPosition = old.HasCustomPosition;
-                        item.CustomNormalizedPosition = old.CustomNormalizedPosition;
-                        if (item.HasCustomPosition) {
-                            src.Position = item.CustomNormalizedPosition * envSize;
-                            item.NormalizedPosition = item.CustomNormalizedPosition;
-                        }
-                    }
+                    TrackSourceItem item = new(
+                        idx,
+                        d.Name,
+                        isBed: false,
+                        isLfe: false,
+                        null,
+                        d.NormalizedPosition,
+                        layer,
+                        hasDynamicTrajectory: false,
+                        stableKey: TrackSourceItem.CreateStableKey(trackId, idx, layer, null, d.Name));
                     d.Index = idx;
-                    d.HasCustomPosition = item.HasCustomPosition;
-                    d.CustomNormalizedPosition = item.CustomNormalizedPosition;
                     d.NormalizedPosition = item.NormalizedPosition;
                     d.WorldPositionMeters = item.NormalizedPosition * envSize;
                     builtSources.Add(src);
@@ -322,20 +346,17 @@ public sealed partial class RealtimePlayerEngine {
                             Loop = Loop,
                             Volume = 1f
                         };
-                        TrackSourceItem item = new(idx, d.Name, isBed: false, isLfe: false, null, d.NormalizedPosition, layer);
-                        if (prevByName.TryGetValue(d.Name, out TrackSourceItem old)) {
-                            item.IsMuted = old.IsMuted;
-                            item.IsSolo = old.IsSolo;
-                            item.HasCustomPosition = old.HasCustomPosition;
-                            item.CustomNormalizedPosition = old.CustomNormalizedPosition;
-                            if (item.HasCustomPosition) {
-                                src.Position = item.CustomNormalizedPosition * envSize;
-                                item.NormalizedPosition = item.CustomNormalizedPosition;
-                            }
-                        }
+                        TrackSourceItem item = new(
+                            idx,
+                            d.Name,
+                            isBed: false,
+                            isLfe: false,
+                            null,
+                            d.NormalizedPosition,
+                            layer,
+                            hasDynamicTrajectory: false,
+                            stableKey: TrackSourceItem.CreateStableKey(trackId, idx, layer, null, d.Name));
                         d.Index = idx;
-                        d.HasCustomPosition = item.HasCustomPosition;
-                        d.CustomNormalizedPosition = item.CustomNormalizedPosition;
                         d.NormalizedPosition = item.NormalizedPosition;
                         d.WorldPositionMeters = item.NormalizedPosition * envSize;
                         builtSources.Add(src);
@@ -357,11 +378,16 @@ public sealed partial class RealtimePlayerEngine {
                     LFE = true,
                     Volume = 1f
                 };
-                TrackSourceItem lfeItem = new(lfeIdx, lfeLabel, isBed: true, isLfe: true, ReferenceChannel.ScreenLFE, lfeNormPos, SourceLayer.NeuralStem);
-                if (prevByName.TryGetValue(lfeLabel, out TrackSourceItem oldLfe)) {
-                    lfeItem.IsMuted = oldLfe.IsMuted;
-                    lfeItem.IsSolo = oldLfe.IsSolo;
-                }
+                TrackSourceItem lfeItem = new(
+                    lfeIdx,
+                    lfeLabel,
+                    isBed: true,
+                    isLfe: true,
+                    ReferenceChannel.ScreenLFE,
+                    lfeNormPos,
+                    SourceLayer.NeuralStem,
+                    hasDynamicTrajectory: false,
+                    stableKey: TrackSourceItem.CreateStableKey(trackId, lfeIdx, SourceLayer.NeuralStem, ReferenceChannel.ScreenLFE, lfeLabel));
                 builtSources.Add(lfeSrc);
                 builtItems.Add(lfeItem);
                 builtDescriptors.Add(new SpatialSourceDescriptor {
@@ -383,12 +409,23 @@ public sealed partial class RealtimePlayerEngine {
             isRenderingLiveNeuralSources = false;
             progressiveNeuralUpdater = null;
             liveNeuralSources = Array.Empty<Source>();
-            if (resetToStart) {
-                currentTrack.Attach(listener, upmixingSettings);
-            } else {
-                currentTrack.AttachFromCurrentPosition(listener, upmixingSettings);
-            }
             return;
+        }
+
+        PreserveSourceOverrides(builtItems, previousItems);
+        for (int i = 0; i < builtItems.Count; i++) {
+            TrackSourceItem item = builtItems[i];
+            if (item.HasCustomPosition) {
+                builtSources[i].LockCustomPosition(item.CustomNormalizedPosition * envSize);
+                item.NormalizedPosition = item.CustomNormalizedPosition;
+            }
+            builtSources[i].Mute = item.IsMuted;
+            builtDescriptors[i].IsMuted = item.IsMuted;
+            builtDescriptors[i].IsSolo = item.IsSolo;
+            builtDescriptors[i].HasCustomPosition = item.HasCustomPosition;
+            builtDescriptors[i].CustomNormalizedPosition = item.CustomNormalizedPosition;
+            builtDescriptors[i].NormalizedPosition = item.NormalizedPosition;
+            builtDescriptors[i].WorldPositionMeters = item.NormalizedPosition * envSize;
         }
 
         if (progressiveNeuralUpdater != null) {
@@ -406,6 +443,90 @@ public sealed partial class RealtimePlayerEngine {
         sceneHub.BindDecoder(decoderAdapter, builtDescriptors);
         sceneHub.ConfigureStageProcessors(OutputSampleRate, decoderAdapter.Metadata);
         sceneHub.ConfigurePostProcessingStages(OutputSampleRate, 2);
+    }
+
+    static void PreserveSourceOverrides(IReadOnlyList<TrackSourceItem> nextItems, IReadOnlyList<TrackSourceItem> previousItems) {
+        if (nextItems == null || nextItems.Count == 0 || previousItems == null || previousItems.Count == 0) {
+            return;
+        }
+        bool anyOverride = false;
+        for (int i = 0; i < previousItems.Count; i++) {
+            TrackSourceItem prev = previousItems[i];
+            if (prev.IsMuted || prev.IsSolo || prev.HasCustomPosition) {
+                anyOverride = true;
+                break;
+            }
+        }
+        if (!anyOverride) {
+            return;
+        }
+
+        TrackSourceItem.PreserveOverrides(nextItems, previousItems);
+
+        bool[] nextMatched = new bool[nextItems.Count];
+        bool[] prevMatched = new bool[previousItems.Count];
+        for (int n = 0; n < nextItems.Count; n++) {
+            TrackSourceItem next = nextItems[n];
+            for (int p = 0; p < previousItems.Count; p++) {
+                if (prevMatched[p]) {
+                    continue;
+                }
+                TrackSourceItem prev = previousItems[p];
+                bool keyHit = !string.IsNullOrEmpty(next.StableKey) &&
+                              string.Equals(next.StableKey, prev.StableKey, StringComparison.Ordinal);
+                bool nameHit = !keyHit && !string.IsNullOrEmpty(next.Name) &&
+                               string.Equals(next.Name, prev.Name, StringComparison.OrdinalIgnoreCase);
+                if (keyHit || nameHit) {
+                    nextMatched[n] = true;
+                    prevMatched[p] = true;
+                    break;
+                }
+            }
+        }
+
+        for (int p = 0; p < previousItems.Count; p++) {
+            if (prevMatched[p]) {
+                continue;
+            }
+            TrackSourceItem prev = previousItems[p];
+            if (!prev.IsMuted && !prev.IsSolo && !prev.HasCustomPosition) {
+                continue;
+            }
+
+            int matchIdx = -1;
+            if (prev.Channel.HasValue && prev.Channel.Value != ReferenceChannel.Unknown) {
+                for (int n = 0; n < nextItems.Count; n++) {
+                    if (!nextMatched[n] && nextItems[n].Channel == prev.Channel && nextItems[n].Layer == prev.Layer) {
+                        matchIdx = n;
+                        break;
+                    }
+                }
+                if (matchIdx < 0) {
+                    for (int n = 0; n < nextItems.Count; n++) {
+                        if (!nextMatched[n] && nextItems[n].Channel == prev.Channel && nextItems[n].IsBed == prev.IsBed) {
+                            matchIdx = n;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (matchIdx < 0 && nextItems.Count == previousItems.Count && !nextMatched[p] &&
+                (nextItems[p].IsBed == prev.IsBed || nextItems[p].Layer == prev.Layer)) {
+                matchIdx = p;
+            }
+            if (matchIdx >= 0) {
+                nextMatched[matchIdx] = true;
+                prevMatched[p] = true;
+                TrackSourceItem next = nextItems[matchIdx];
+                next.IsMuted = prev.IsMuted;
+                next.IsSolo = prev.IsSolo;
+                next.HasCustomPosition = prev.HasCustomPosition;
+                next.CustomNormalizedPosition = prev.CustomNormalizedPosition;
+                if (next.HasCustomPosition) {
+                    next.NormalizedPosition = next.CustomNormalizedPosition;
+                }
+            }
+        }
     }
 
     static void SplitLinkwitzRiley4Lfe(float[] input, int sampleRate, float cutoffHz, out float[] highPass, out float[] lowPass) =>
@@ -467,13 +588,14 @@ public sealed partial class RealtimePlayerEngine {
                 Listener.HeadphoneVirtualizer = true;
             }
             new VirtualizerFilter().SetLayout();
-            listener.SampleRate = VirtualizerFilter.FilterSampleRate;
+            int desiredRate = ResolveVirtualizerOutputSampleRate();
+            listener.SampleRate = desiredRate;
             listener.LFESeparation = true;
             limiterPostStage.LimiterOnly = LimiterOnly;
             limiterPostStage.Reset();
             virtualizerInitialized = true;
             appliedProfileVersion = VirtualizerFilter.ProfileVersion;
-            activeNativeSampleRateRequest = listener.SampleRate;
+            activeNativeSampleRateRequest = desiredRate;
         } else {
             if (Listener.HeadphoneVirtualizer) {
                 Listener.HeadphoneVirtualizer = false;
@@ -494,6 +616,10 @@ public sealed partial class RealtimePlayerEngine {
         virtualizerRenderer.Bind(listener, HeadphoneVirtualizer, sceneHub.ActiveBinauralProfileName);
         SyncExternalizationLocked();
         sceneHub.ConfigurePostProcessingStages(listener.SampleRate, 2);
+        if (proAudioConfig.Enabled || liveMicBridge.IsActive) {
+            liveMicBridge.ApplyConfig(proAudioConfig, OutputSampleRate, EnvironmentSize);
+        }
+        ResetSourceAccumulatorsLocked();
     }
 
     void SyncExternalizationLocked() {
@@ -504,6 +630,17 @@ public sealed partial class RealtimePlayerEngine {
             externalizationConfig,
             brirActive,
             EnvironmentSize);
+    }
+
+    int ResolveVirtualizerOutputSampleRate() {
+        int filterRate = VirtualizerFilter.FilterSampleRate > 0
+            ? VirtualizerFilter.FilterSampleRate
+            : Listener.DefaultSampleRate;
+        if (PreferredHardwareSampleRate >= 44100 && PreferredHardwareSampleRate <= 192000 &&
+            PreferredHardwareSampleRate != filterRate) {
+            return PreferredHardwareSampleRate;
+        }
+        return filterRate;
     }
 
     int ResolveDirectOutputSampleRate() {
@@ -538,10 +675,10 @@ public sealed partial class RealtimePlayerEngine {
             Listener.EnvironmentSize = EnvironmentSize;
         }
 
-        int desiredDirectRate = !HeadphoneVirtualizer ? ResolveDirectOutputSampleRate() : VirtualizerFilter.FilterSampleRate;
+        int desiredOutputRate = !HeadphoneVirtualizer ? ResolveDirectOutputSampleRate() : ResolveVirtualizerOutputSampleRate();
         if (HeadphoneVirtualizer != virtualizerInitialized ||
             (HeadphoneVirtualizer && appliedProfileVersion != VirtualizerFilter.ProfileVersion) ||
-            (!HeadphoneVirtualizer && desiredDirectRate != activeNativeSampleRateRequest)) {
+            desiredOutputRate != activeNativeSampleRateRequest) {
             if (hasRenderedAudio) {
                 ArmCrossfadeLocked();
             }
@@ -611,42 +748,133 @@ public sealed partial class RealtimePlayerEngine {
         if (Listener.HeadphoneVirtualizer != HeadphoneVirtualizer) {
             Listener.HeadphoneVirtualizer = HeadphoneVirtualizer;
         }
+        if (listener == null) {
+            return;
+        }
 
         // Keep cached flat source array synchronized without per-block enumerator boxing
         if (cachedActiveSources.Length != listener.ActiveSources.Count) {
             RebuildCachedActiveSourcesLocked();
         }
 
-        IReadOnlyList<Source> activeObjects = isRenderingLiveNeuralSources
-            ? liveNeuralSources
-            : currentTrack.Renderer.Objects;
-        bool anySolo = false;
-        for (int i = 0; i < sourceItems.Count; i++) {
-            if (sourceItems[i].IsSolo) {
-                anySolo = true;
-                break;
+        long maskHash = (MuteBed ? 1L : 0L) | (OnlyBeds ? 2L : 0L) | (MuteGround ? 4L : 0L) | (DynamicCeilingOnly ? 8L : 0L);
+        Vector3 envSize = Listener.EnvironmentSize;
+        Vector3 invEnv = new(
+            1f / MathF.Max(0.25f, envSize.X),
+            1f / MathF.Max(0.25f, envSize.Y),
+            1f / MathF.Max(0.25f, envSize.Z));
+        SourceLayer[] activeLayers = isRenderingLiveNeuralSources ? null : currentTrack?.ActiveSourceLayers;
+        Source[] flatSources = cachedActiveSources;
+        if (matchedSourceItemsScratch.Length < flatSources.Length) {
+            matchedSourceItemsScratch = new TrackSourceItem[flatSources.Length];
+        }
+        if (usedSourceItemsScratch.Length < sourceItems.Count) {
+            usedSourceItemsScratch = new bool[sourceItems.Count];
+        }
+
+        bool anyMatchedSolo = false;
+        if (flatSources.Length == sourceItems.Count && flatSources.Length > 0) {
+            for (int i = 0; i < sourceItems.Count; i++) {
+                matchedSourceItemsScratch[i] = sourceItems[i];
+                if (sourceItems[i].IsSolo) {
+                    anyMatchedSolo = true;
+                }
+            }
+        } else {
+            if (flatSources.Length > 0) {
+                Array.Clear(matchedSourceItemsScratch, 0, flatSources.Length);
+            }
+            if (sourceItems.Count > 0) {
+                Array.Clear(usedSourceItemsScratch, 0, sourceItems.Count);
+            }
+            bool neuralMode = isRenderingLiveNeuralSources;
+            // Pass 1: Match by exact LFE or ReferenceChannel + height layer (prevents index shifts from muting Solo targets)
+            for (int idx = 0; idx < flatSources.Length; idx++) {
+                Source src = flatSources[idx];
+                if (src == null) {
+                    continue;
+                }
+                Vector3 normPos = src.Position * invEnv;
+                ReferenceChannel ch = Renderer.ChannelFromPosition(normPos);
+                if (ch == ReferenceChannel.Unknown && normPos.Y > 0.10f) {
+                    ch = Renderer.ChannelFromPosition(new Vector3(normPos.X, 1f, normPos.Z));
+                }
+                bool srcIsHeight = normPos.Y > 0.10f || TrackSourceItem.IsHeightChannel(ch);
+
+                int bestIdx = -1;
+                if (src.LFE) {
+                    for (int s = 0; s < sourceItems.Count; s++) {
+                        if (usedSourceItemsScratch[s]) continue;
+                        TrackSourceItem cand = sourceItems[s];
+                        bool candNeural = cand.Layer == SourceLayer.NeuralStem || cand.Layer == SourceLayer.RestoredResidual;
+                        if (cand.IsLFE && candNeural == neuralMode) {
+                            bestIdx = s;
+                            break;
+                        }
+                    }
+                } else if (ch != ReferenceChannel.Unknown) {
+                    for (int s = 0; s < sourceItems.Count; s++) {
+                        if (usedSourceItemsScratch[s]) continue;
+                        TrackSourceItem cand = sourceItems[s];
+                        bool candNeural = cand.Layer == SourceLayer.NeuralStem || cand.Layer == SourceLayer.RestoredResidual;
+                        if (candNeural != neuralMode || cand.Channel != ch) continue;
+                        bool candIsHeight = cand.Layer == SourceLayer.VirtualHeight || cand.NormalizedPosition.Y > 0.10f || TrackSourceItem.IsHeightChannel(cand.Channel);
+                        if (candIsHeight == srcIsHeight) {
+                            bestIdx = s;
+                            break;
+                        }
+                        if (bestIdx < 0) {
+                            bestIdx = s;
+                        }
+                    }
+                }
+                if (bestIdx >= 0) {
+                    usedSourceItemsScratch[bestIdx] = true;
+                    matchedSourceItemsScratch[idx] = sourceItems[bestIdx];
+                }
+            }
+            // Pass 2: Compatible index fallback for unmatched sources within the same layer family
+            for (int idx = 0; idx < flatSources.Length && idx < sourceItems.Count; idx++) {
+                if (matchedSourceItemsScratch[idx] != null || usedSourceItemsScratch[idx] || flatSources[idx] == null) {
+                    continue;
+                }
+                TrackSourceItem cand = sourceItems[idx];
+                bool candNeural = cand.Layer == SourceLayer.NeuralStem || cand.Layer == SourceLayer.RestoredResidual;
+                if (candNeural == neuralMode && cand.IsLFE == flatSources[idx].LFE) {
+                    usedSourceItemsScratch[idx] = true;
+                    matchedSourceItemsScratch[idx] = cand;
+                }
+            }
+            for (int idx = 0; idx < flatSources.Length; idx++) {
+                if (matchedSourceItemsScratch[idx]?.IsSolo == true) {
+                    anyMatchedSolo = true;
+                    break;
+                }
             }
         }
 
-        long maskHash = (MuteBed ? 1L : 0L) | (OnlyBeds ? 2L : 0L) | (MuteGround ? 4L : 0L) | (DynamicCeilingOnly ? 8L : 0L);
-        Vector3 invEnv = Vector3.One / Listener.EnvironmentSize;
-        SourceLayer[] activeLayers = isRenderingLiveNeuralSources ? null : currentTrack.ActiveSourceLayers;
-        Source[] flatSources = cachedActiveSources;
-
-        if (flatSources.Length == sourceItems.Count && flatSources.Length > 0) {
-            for (int idx = 0; idx < flatSources.Length; idx++) {
-                Source src = flatSources[idx];
-                TrackSourceItem item = sourceItems[idx];
+        for (int idx = 0; idx < flatSources.Length; idx++) {
+            Source src = flatSources[idx];
+            if (src == null) {
+                continue;
+            }
+            TrackSourceItem item = matchedSourceItemsScratch[idx];
+            if (item != null) {
                 if (item.HasCustomPosition) {
-                    src.LockCustomPosition(item.CustomNormalizedPosition * Listener.EnvironmentSize);
+                    src.LockCustomPosition(item.CustomNormalizedPosition * envSize);
                 } else if (src.PositionLocked) {
-                    src.UnlockCustomPosition(item.DefaultNormalizedPosition * Listener.EnvironmentSize);
+                    src.ReleaseCustomPositionLock(item.DefaultNormalizedPosition * envSize, item.HasDynamicTrajectory);
                 }
-                Vector3 rawPos = src.Position * invEnv;
-                bool dynFiltered = DynamicCeilingOnly && rawPos.Y <= 0.15f;
-                item.IsDynamicallyFilteredOut = dynFiltered;
+            } else if (src.PositionLocked) {
+                src.ReleaseCustomPositionLock();
+            }
 
-                bool mute = item.IsMuted || (anySolo && !item.IsSolo) || dynFiltered;
+            Vector3 rawPos = src.Position * invEnv;
+            bool dynFiltered = DynamicCeilingOnly && rawPos.Y <= 0.15f;
+            bool mute;
+            if (item != null) {
+                item.IsDynamicallyFilteredOut = dynFiltered;
+                mute = item.IsMuted || (anyMatchedSolo && !item.IsSolo) || dynFiltered;
                 if (MuteBed && item.IsBed) {
                     mute = true;
                 }
@@ -656,87 +884,19 @@ public sealed partial class RealtimePlayerEngine {
                 if (MuteGround && MathF.Abs(rawPos.Y) < 0.05f) {
                     mute = true;
                 }
-
-                if (mute) {
-                    maskHash ^= 1L << ((idx % 56) + 6);
-                }
-                src.Mute = mute;
-                src.DistanceSimulation = DistanceSimulation && HeadphoneVirtualizer;
-                src.VolumeRolloff = VolumeRolloff;
-            }
-        } else if (activeLayers != null && flatSources.Length == activeLayers.Length && sourceItems.Count == activeObjects.Count) {
-            for (int idx = 0; idx < flatSources.Length; idx++) {
-                Source src = flatSources[idx];
-                if (idx < sourceItems.Count && sourceItems[idx].HasCustomPosition) {
-                    src.LockCustomPosition(sourceItems[idx].CustomNormalizedPosition * Listener.EnvironmentSize);
-                } else if (src.PositionLocked) {
-                    if (idx < sourceItems.Count) {
-                        src.UnlockCustomPosition(sourceItems[idx].DefaultNormalizedPosition * Listener.EnvironmentSize);
-                    } else {
-                        src.UnlockCustomPosition();
-                    }
-                }
-                Vector3 rawPos = src.Position * invEnv;
-                bool dynFiltered = DynamicCeilingOnly && rawPos.Y <= 0.15f;
-                bool mute;
-                if (idx < sourceItems.Count) {
-                    TrackSourceItem item = sourceItems[idx];
-                    item.IsDynamicallyFilteredOut = dynFiltered;
-                    mute = item.IsMuted || (anySolo && !item.IsSolo) || dynFiltered;
-                    if (MuteBed && item.IsBed) {
-                        mute = true;
-                    }
-                    if (OnlyBeds && !item.IsBed) {
-                        mute = true;
-                    }
-                    if (MuteGround && MathF.Abs(rawPos.Y) < 0.05f) {
-                        mute = true;
-                    }
-                } else {
-                    bool isVirtualBed = activeLayers[idx] == SourceLayer.VirtualMatrix;
-                    mute = anySolo || dynFiltered || (MuteBed && isVirtualBed) || (OnlyBeds && !isVirtualBed) || (MuteGround && MathF.Abs(rawPos.Y) < 0.05f);
-                }
-                if (mute) {
-                    maskHash ^= 1L << ((idx % 56) + 6);
-                }
-                src.Mute = mute;
-                src.DistanceSimulation = DistanceSimulation && HeadphoneVirtualizer;
-                src.VolumeRolloff = VolumeRolloff;
-            }
-        } else {
-            for (int idx = 0; idx < flatSources.Length; idx++) {
-                Source src = flatSources[idx];
-                bool hasItem = idx < sourceItems.Count;
-                if (hasItem && sourceItems[idx].HasCustomPosition) {
-                    src.LockCustomPosition(sourceItems[idx].CustomNormalizedPosition * Listener.EnvironmentSize);
-                } else if (src.PositionLocked) {
-                    if (hasItem) {
-                        src.UnlockCustomPosition(sourceItems[idx].DefaultNormalizedPosition * Listener.EnvironmentSize);
-                    } else {
-                        src.UnlockCustomPosition();
-                    }
-                }
-                Vector3 rawPos = src.Position * invEnv;
-                bool isBedPos = hasItem
-                    ? sourceItems[idx].IsBed
+            } else {
+                bool isBedPos = activeLayers != null && idx < activeLayers.Length
+                    ? (activeLayers[idx] == SourceLayer.Bed || activeLayers[idx] == SourceLayer.VirtualMatrix)
                     : (MathF.Abs(rawPos.X) % 1 < .01f && MathF.Abs(rawPos.Y) % 1 < .01f && MathF.Abs(rawPos.Z) % 1 < .01f);
-                bool dynFiltered = DynamicCeilingOnly && rawPos.Y <= 0.15f;
-                bool mute = (hasItem && sourceItems[idx].IsMuted) ||
-                    (anySolo && (!hasItem || !sourceItems[idx].IsSolo)) ||
-                    (MuteBed && isBedPos) ||
-                    (OnlyBeds && !isBedPos) ||
-                    (MuteGround && MathF.Abs(rawPos.Y) < 0.05f) ||
-                    dynFiltered;
-                if (hasItem) {
-                    sourceItems[idx].IsDynamicallyFilteredOut = dynFiltered;
-                }
-                if (mute) {
-                    maskHash ^= 1L << ((idx % 56) + 6);
-                }
-                src.Mute = mute;
-                src.DistanceSimulation = DistanceSimulation && HeadphoneVirtualizer;
-                src.VolumeRolloff = VolumeRolloff;
+                mute = anyMatchedSolo || dynFiltered || (MuteBed && isBedPos) || (OnlyBeds && !isBedPos) || (MuteGround && MathF.Abs(rawPos.Y) < 0.05f);
             }
+
+            if (mute) {
+                maskHash ^= 1L << ((idx % 56) + 6);
+            }
+            src.Mute = mute;
+            src.DistanceSimulation = DistanceSimulation && HeadphoneVirtualizer;
+            src.VolumeRolloff = VolumeRolloff;
         }
 
         // Path A Spatial Dialog Enhancement (zero EQ smearing): isolate discrete FrontCenter bed and
@@ -746,11 +906,12 @@ public sealed partial class RealtimePlayerEngine {
         if (dialogRequested && flatSources.Length == cachedBaseSourceVolumes.Length) {
             for (int idx = 0; idx < flatSources.Length; idx++) {
                 Source src = flatSources[idx];
-                if (src.Mute) {
+                if (src == null || src.Mute) {
                     continue;
                 }
-                bool isCenterBed = idx < sourceItems.Count && sourceItems[idx].Channel == ReferenceChannel.FrontCenter;
-                bool isLfeSrc = idx < sourceItems.Count && sourceItems[idx].IsLFE;
+                TrackSourceItem item = matchedSourceItemsScratch[idx];
+                bool isCenterBed = item != null && item.Channel == ReferenceChannel.FrontCenter;
+                bool isLfeSrc = (item != null && item.IsLFE) || src.LFE;
                 Vector3 normPos = src.Position * invEnv;
                 if (SpatialDialogEnhancer.IsDialogueCandidate(isCenterBed, isLfeSrc, normPos)) {
                     hasSpatialDialogue = true;
@@ -770,12 +931,16 @@ public sealed partial class RealtimePlayerEngine {
         if (flatSources.Length == cachedBaseSourceVolumes.Length) {
             for (int idx = 0; idx < flatSources.Length; idx++) {
                 Source src = flatSources[idx];
+                if (src == null) {
+                    continue;
+                }
                 float baseVol = cachedBaseSourceVolumes[idx];
                 if (!hasSpatialDialogue || !dialogRequested) {
                     src.Volume = baseVol;
                 } else {
-                    bool isCenterBed = idx < sourceItems.Count && sourceItems[idx].Channel == ReferenceChannel.FrontCenter;
-                    bool isLfeSrc = idx < sourceItems.Count && sourceItems[idx].IsLFE;
+                    TrackSourceItem item = matchedSourceItemsScratch[idx];
+                    bool isCenterBed = item != null && item.Channel == ReferenceChannel.FrontCenter;
+                    bool isLfeSrc = (item != null && item.IsLFE) || src.LFE;
                     Vector3 normPos = src.Position * invEnv;
                     bool isDiag = SpatialDialogEnhancer.IsDialogueCandidate(isCenterBed, isLfeSrc, normPos);
                     src.Volume = baseVol * (isDiag ? dialogGain : (isLfeSrc ? 1f : ambientGain));
@@ -790,10 +955,11 @@ public sealed partial class RealtimePlayerEngine {
     }
 
     void UpdateSourceTelemetry() {
-        IReadOnlyList<Source> activeObjects = isRenderingLiveNeuralSources
-            ? liveNeuralSources
-            : currentTrack?.Renderer?.Objects;
-        if (activeObjects == null) {
+        if (listener != null && cachedActiveSources.Length != listener.ActiveSources.Count) {
+            RebuildCachedActiveSourcesLocked();
+        }
+        Source[] activeObjects = cachedActiveSources;
+        if (activeObjects == null || activeObjects.Length == 0) {
             return;
         }
         Vector3 envSize = Listener.EnvironmentSize;
@@ -805,10 +971,17 @@ public sealed partial class RealtimePlayerEngine {
         Vector3 physHalf = AirAbsorptionFilter.PhysicalRoomHalfSize;
         int sr = listener != null && listener.SampleRate > 0 ? listener.SampleRate : Listener.DefaultSampleRate;
 
-        int count = Math.Min(sourceItems.Count, activeObjects.Count);
+        int count = Math.Min(sourceItems.Count, activeObjects.Length);
+        if (xrayLpLowStates.Length < count) {
+            xrayLpLowStates = new float[count];
+            xrayLpMidStates = new float[count];
+        }
         for (int i = 0; i < count; i++) {
             Source src = activeObjects[i];
             TrackSourceItem item = sourceItems[i];
+            if (src == null) {
+                continue;
+            }
             Vector3 normPos = src.Position * invEnv;
             item.NormalizedPosition = normPos;
             Vector3 deltaMeters = (normPos - listenerNorm) * physHalf;
@@ -821,6 +994,8 @@ public sealed partial class RealtimePlayerEngine {
                 SpatialXRayPowermap.EstimateThreeBandRms(
                     rendered,
                     sr,
+                    ref xrayLpLowStates[i],
+                    ref xrayLpMidStates[i],
                     out float lowRms,
                     out float midRms,
                     out float highRms);
@@ -829,6 +1004,8 @@ public sealed partial class RealtimePlayerEngine {
                 item.HighBandEnergy = highRms;
                 item.RmsLevel = MathF.Sqrt(lowRms * lowRms + midRms * midRms + highRms * highRms);
             } else {
+                xrayLpLowStates[i] = 0f;
+                xrayLpMidStates[i] = 0f;
                 item.RmsLevel = 0f;
                 item.LowBandEnergy = 0f;
                 item.MidBandEnergy = 0f;

@@ -44,6 +44,12 @@ public sealed class AudioDeviceRouteInfo {
     /// <summary>Android <see cref="AudioDeviceInfo.Id"/> for matched microphone input device (0 = system default).</summary>
     public int InputDeviceId { get; init; }
 
+    /// <summary>Human-readable label of the selected input microphone device (empty if system default).</summary>
+    public string InputDisplayName { get; init; } = string.Empty;
+
+    /// <summary>Effective microphone source policy applied when selecting <see cref="NativeInputDevice"/>.</summary>
+    public ProAudioMicSource MicSource { get; init; } = ProAudioMicSource.PhoneMic;
+
     /// <summary>Hardware sample rates advertised by this output route (empty = arbitrary rates supported).</summary>
     public int[] SupportedSampleRates { get; init; } = Array.Empty<int>();
 }
@@ -65,6 +71,7 @@ public sealed class AudioDeviceProfileManager : IDisposable {
     readonly Java.Lang.Runnable debouncedRefreshRunnable;
 
     AudioDeviceRouteInfo currentDevice = new();
+    ProAudioMicSource preferredMicSource = ProAudioMicSource.PhoneMic;
     bool registered;
     bool disposed;
 
@@ -76,6 +83,26 @@ public sealed class AudioDeviceProfileManager : IDisposable {
 
     /// <summary>Currently active physical audio output route.</summary>
     public AudioDeviceRouteInfo CurrentDevice => currentDevice;
+
+    /// <summary>
+    /// Preferred microphone input hardware source (defaults to <see cref="ProAudioMicSource.PhoneMic"/>
+    /// so connecting a USB DAC/interface like Focusrite Scarlett never auto-hijacks the built-in phone mic).
+    /// </summary>
+    public ProAudioMicSource PreferredMicSource {
+        get => preferredMicSource;
+        set {
+            ProAudioMicSource clean = Enum.IsDefined(typeof(ProAudioMicSource), value)
+                ? value
+                : ProAudioMicSource.PhoneMic;
+            if (preferredMicSource == clean) {
+                return;
+            }
+            preferredMicSource = clean;
+            if (registered && !disposed) {
+                RefreshActiveDevice(applyAutoSwitch: false);
+            }
+        }
+    }
 
     public AudioDeviceProfileManager(Context context, AppSettingsStore store, RealtimePlayerEngine engine) {
         this.context = context;
@@ -117,10 +144,11 @@ public sealed class AudioDeviceProfileManager : IDisposable {
         try {
             AudioDeviceInfo[] outputs = audioManager.GetDevices(GetDevicesTargets.Outputs);
             AudioDeviceInfo[] inputs = audioManager.GetDevices(GetDevicesTargets.Inputs);
-            AudioDeviceRouteInfo detected = SelectPrimaryOutputRoute(outputs, inputs);
+            AudioDeviceRouteInfo detected = SelectPrimaryOutputRoute(outputs, inputs, preferredMicSource);
             bool changed = !string.Equals(detected.DeviceKey, currentDevice.DeviceKey, StringComparison.OrdinalIgnoreCase) ||
                            detected.OutputDeviceId != currentDevice.OutputDeviceId ||
-                           detected.InputDeviceId != currentDevice.InputDeviceId;
+                           detected.InputDeviceId != currentDevice.InputDeviceId ||
+                           detected.MicSource != currentDevice.MicSource;
             currentDevice = detected;
 
             engine.SceneHub.ActiveAudioDeviceKey = detected.DeviceKey;
@@ -297,7 +325,10 @@ public sealed class AudioDeviceProfileManager : IDisposable {
         }
     }
 
-    static AudioDeviceRouteInfo SelectPrimaryOutputRoute(AudioDeviceInfo[] outputs, AudioDeviceInfo[] inputs) {
+    static AudioDeviceRouteInfo SelectPrimaryOutputRoute(
+        AudioDeviceInfo[] outputs,
+        AudioDeviceInfo[] inputs,
+        ProAudioMicSource micSource = ProAudioMicSource.PhoneMic) {
         if (outputs == null || outputs.Length == 0) {
             return new AudioDeviceRouteInfo();
         }
@@ -333,7 +364,14 @@ public sealed class AudioDeviceProfileManager : IDisposable {
             rates = Array.Empty<int>();
         }
 
-        AudioDeviceInfo bestInput = SelectBestInputDevice(inputs, bestTransport, rawName);
+        AudioDeviceInfo bestInput = SelectBestInputDevice(inputs, bestTransport, rawName, micSource);
+        string rawInputName = bestInput?.ProductName?.ToString()?.Trim() ?? string.Empty;
+        string inputDisplayName = bestInput == null
+            ? string.Empty
+            : (bestInput.Type == AudioDeviceType.BuiltinMic &&
+               (string.IsNullOrEmpty(rawInputName) || rawInputName.Equals("Android", StringComparison.OrdinalIgnoreCase))
+                ? "Phone Mic"
+                : rawInputName);
 
         return new AudioDeviceRouteInfo {
             DeviceKey = key,
@@ -343,11 +381,23 @@ public sealed class AudioDeviceProfileManager : IDisposable {
             NativeInputDevice = bestInput,
             OutputDeviceId = best.Id,
             InputDeviceId = bestInput?.Id ?? 0,
+            InputDisplayName = inputDisplayName,
+            MicSource = micSource,
             SupportedSampleRates = rates
         };
     }
 
-    static AudioDeviceInfo SelectBestInputDevice(AudioDeviceInfo[] inputs, AudioDeviceTransport outputTransport, string outputName) {
+    /// <summary>
+    /// Selects the best Android microphone <see cref="AudioDeviceInfo"/> honoring <paramref name="micSource"/>:
+    /// <see cref="ProAudioMicSource.PhoneMic"/> ignores USB inputs and prioritizes <see cref="AudioDeviceType.BuiltinMic"/>;
+    /// <see cref="ProAudioMicSource.UsbInterfaceMic"/> prefers USB audio inputs with clean fallback to built-in mic;
+    /// <see cref="ProAudioMicSource.Auto"/> preserves automatic USB/wired headset priority.
+    /// </summary>
+    public static AudioDeviceInfo SelectBestInputDevice(
+        AudioDeviceInfo[] inputs,
+        AudioDeviceTransport outputTransport,
+        string outputName,
+        ProAudioMicSource micSource = ProAudioMicSource.PhoneMic) {
         if (inputs == null || inputs.Length == 0) {
             return null;
         }
@@ -358,16 +408,46 @@ public sealed class AudioDeviceProfileManager : IDisposable {
             if (dev == null || !dev.IsSource) {
                 continue;
             }
-            int score = dev.Type switch {
-                AudioDeviceType.UsbDevice => 100,
-                AudioDeviceType.UsbHeadset => 95,
-                AudioDeviceType.WiredHeadset => 70,
-                AudioDeviceType.LineAnalog or AudioDeviceType.LineDigital => 65,
-                AudioDeviceType.BuiltinMic => 20,
-                _ => 5
-            };
-            if (outputTransport == AudioDeviceTransport.UsbDac &&
-                (dev.Type == AudioDeviceType.UsbDevice || dev.Type == AudioDeviceType.UsbHeadset)) {
+            bool isUsbInput = dev.Type == AudioDeviceType.UsbDevice || dev.Type == AudioDeviceType.UsbHeadset;
+            if (micSource == ProAudioMicSource.PhoneMic && isUsbInput) {
+                continue;
+            }
+
+            int score;
+            switch (micSource) {
+                case ProAudioMicSource.PhoneMic:
+                    score = dev.Type switch {
+                        AudioDeviceType.BuiltinMic => 100,
+                        AudioDeviceType.WiredHeadset => 60,
+                        AudioDeviceType.LineAnalog or AudioDeviceType.LineDigital => 30,
+                        _ => 5
+                    };
+                    break;
+                case ProAudioMicSource.UsbInterfaceMic:
+                    score = dev.Type switch {
+                        AudioDeviceType.UsbDevice => 100,
+                        AudioDeviceType.UsbHeadset => 95,
+                        AudioDeviceType.LineAnalog or AudioDeviceType.LineDigital => 50,
+                        AudioDeviceType.BuiltinMic => 40,
+                        AudioDeviceType.WiredHeadset => 35,
+                        _ => 5
+                    };
+                    break;
+                default:
+                    score = dev.Type switch {
+                        AudioDeviceType.UsbDevice => 100,
+                        AudioDeviceType.UsbHeadset => 95,
+                        AudioDeviceType.WiredHeadset => 70,
+                        AudioDeviceType.LineAnalog or AudioDeviceType.LineDigital => 65,
+                        AudioDeviceType.BuiltinMic => 20,
+                        _ => 5
+                    };
+                    break;
+            }
+
+            if ((micSource == ProAudioMicSource.UsbInterfaceMic || micSource == ProAudioMicSource.Auto) &&
+                outputTransport == AudioDeviceTransport.UsbDac &&
+                isUsbInput) {
                 score += 40;
                 string inName = dev.ProductName?.ToString()?.Trim() ?? string.Empty;
                 if (!string.IsNullOrEmpty(outputName) &&

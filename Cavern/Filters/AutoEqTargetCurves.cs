@@ -20,17 +20,18 @@ namespace Cavern.Filters {
         Bk5128DiffuseField = 1,
 
         /// <summary>
-        /// Brüel &amp; Kjær Type 5128 JM-1 modern perceptual neutral reference (with Harman treble slope, flat bass).
+        /// B&amp;K Type 5128 JM-1 perceptual in-room neutral target (~-0.9 dB/oct studio tilt, natural bass preserved).
         /// </summary>
         Bk5128Jm1Neutral = 2,
 
         /// <summary>
-        /// Studio Harman Over-Ear 2018 neutral without artificial bass shelf (flat bass below 200 Hz).
+        /// Light Bass studio Harman Over-Ear 2018 target with a gentle -2.5 dB sub-bass shelf trim.
         /// </summary>
         HarmanNeutralNoBass = 3,
 
         /// <summary>
-        /// Applies the AutoEq profile's original measurement target verbatim (e.g. Harman 2018 OE or AutoEq IE).
+        /// Balanced Studio default: applies the AutoEq profile's calibrated Harman 2018 OE / AutoEq IE target
+        /// with full natural in-room bass and zero artificial bass cut.
         /// </summary>
         NativeAutoEqProfile = 4
     }
@@ -120,31 +121,32 @@ namespace Cavern.Filters {
             new ParametricBand(ParametricFilterType.Peaking, 15500.0, 1.58, 0.591, true)
         };
 
-        // Harman over-ear 2018.csv -> JM-1 with Harman treble filter.csv (RMS = 0.152 dB, Max = 0.466 dB)
+        // Harman over-ear 2018.csv -> B&K 5128 JM-1 perceptual in-room target (~-0.9 dB/oct studio tilt, natural bass ~0..-1 dB, RMS = 0.129 dB)
         static readonly ParametricBand[] HarmanOeToJm1 = new ParametricBand[] {
-            new ParametricBand(ParametricFilterType.LowShelf, 106.8, -7.71, 0.663, true),
-            new ParametricBand(ParametricFilterType.Peaking, 430.3, -0.75, 1.362, true),
-            new ParametricBand(ParametricFilterType.Peaking, 5750.2, -1.44, 2.798, true),
-            new ParametricBand(ParametricFilterType.Peaking, 4421.2, -1.66, 2.271, true),
-            new ParametricBand(ParametricFilterType.HighShelf, 9608.5, 3.46, 0.541, true),
-            new ParametricBand(ParametricFilterType.Peaking, 15500.0, 1.49, 1.601, true)
+            new ParametricBand(ParametricFilterType.LowShelf, 97.8, -1.20, 1.234, true),
+            new ParametricBand(ParametricFilterType.Peaking, 225.4, 1.17, 1.115, true),
+            new ParametricBand(ParametricFilterType.Peaking, 4969.8, -3.61, 0.904, true),
+            new ParametricBand(ParametricFilterType.HighShelf, 13706.8, 0.70, 1.288, true),
+            new ParametricBand(ParametricFilterType.Peaking, 17500.0, 0.37, 1.070, true)
         };
 
-        // AutoEq in-ear.csv -> JM-1 with Harman treble filter.csv (RMS = 0.134 dB, Max = 0.503 dB)
+        // AutoEq in-ear.csv -> B&K 5128 JM-1 perceptual in-room target (~-0.9 dB/oct studio tilt keeping natural bass, RMS = 0.165 dB)
         static readonly ParametricBand[] AutoEqIeToJm1 = new ParametricBand[] {
-            new ParametricBand(ParametricFilterType.LowShelf, 145.4, -2.11, 0.695, true),
-            new ParametricBand(ParametricFilterType.Peaking, 262.9, -0.78, 1.071, true),
-            new ParametricBand(ParametricFilterType.Peaking, 5410.5, -2.09, 2.684, true),
-            new ParametricBand(ParametricFilterType.Peaking, 6613.8, -1.28, 4.546, true),
-            new ParametricBand(ParametricFilterType.HighShelf, 9725.6, 3.27, 0.586, true),
-            new ParametricBand(ParametricFilterType.Peaking, 15500.0, 2.20, 1.509, true)
+            new ParametricBand(ParametricFilterType.LowShelf, 85.1, 5.04, 0.432, true),
+            new ParametricBand(ParametricFilterType.Peaking, 467.7, 0.50, 1.443, true),
+            new ParametricBand(ParametricFilterType.Peaking, 5730.3, -3.82, 0.880, true),
+            new ParametricBand(ParametricFilterType.HighShelf, 16418.0, 0.92, 0.492, true),
+            new ParametricBand(ParametricFilterType.Peaking, 17500.0, 1.89, 1.010, true)
         };
 
-        // Harman over-ear 2018.csv -> Harman over-ear 2018 without bass.csv (RMS = 0.012 dB, Max = 0.048 dB)
+        // Harman over-ear 2018.csv -> Light Bass clean moderate sub-bass trim (~-2.5 dB LowShelf, no bass strip)
         static readonly ParametricBand[] HarmanOeToHarmanNoBass = new ParametricBand[] {
-            new ParametricBand(ParametricFilterType.LowShelf, 105.0, -5.51, 0.710, true),
-            new ParametricBand(ParametricFilterType.Peaking, 34.1, -0.50, 0.350, true),
-            new ParametricBand(ParametricFilterType.Peaking, 196.1, 0.08, 1.757, true)
+            new ParametricBand(ParametricFilterType.LowShelf, 105.0, -2.50, 0.710, true)
+        };
+
+        // AutoEq in-ear.csv -> Light Bass gentle sub-bass trim (-1.2 dB LowShelf matching in-ear bass scale)
+        static readonly ParametricBand[] AutoEqIeToLightBass = new ParametricBand[] {
+            new ParametricBand(ParametricFilterType.LowShelf, 105.0, -1.20, 0.710, true)
         };
 
         // Inverse Diffuse field ISO 11904-1.csv: -H_DF(f) (RMS = 0.115 dB, Max = 0.450 dB)
@@ -232,8 +234,7 @@ namespace Cavern.Filters {
                     case AutoEqNeutralTarget.Bk5128Jm1Neutral:
                         return AutoEqIeToJm1;
                     case AutoEqNeutralTarget.HarmanNeutralNoBass:
-                        // AutoEq in-ear.csv already has flat neutral bass (-1.6 dB from 20..250 Hz)
-                        return Array.Empty<ParametricBand>();
+                        return AutoEqIeToLightBass;
                     default:
                         return Array.Empty<ParametricBand>();
                 }

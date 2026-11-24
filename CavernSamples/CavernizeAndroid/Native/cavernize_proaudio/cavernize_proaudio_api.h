@@ -49,6 +49,9 @@ int32_t cavernize_pa_start_libusb(
 /* Stops whichever native backend (Path A or Path B) is currently running. */
 void cavernize_pa_stop(void);
 
+/* Lock-free notification that the USB audio device was detached by Android UsbManager. */
+void cavernize_pa_notify_usb_detached(void);
+
 /* Writes stereo interleaved float32 playback frames into the native lock-free OUT ring buffer. */
 int32_t cavernize_pa_write_playback(const float* stereo_interleaved, int32_t frame_count);
 
@@ -58,8 +61,20 @@ int32_t cavernize_pa_read_capture(float* stereo_interleaved, int32_t max_frames)
 /* Returns free frames available in the playback ring buffer (for non-blocking producer pacing). */
 int32_t cavernize_pa_get_playback_free_frames(void);
 
+/* Returns frames currently buffered in the playback ring buffer (for watermark capping & live latency). */
+int32_t cavernize_pa_get_playback_buffered_frames(void);
+
+/* Requests a lock-free SPSC-safe flush of all currently buffered playback frames. */
+void cavernize_pa_flush_playback(void);
+
 /* Queries live hardware status, latency, clock drift ppm, and xrun counts. */
 int32_t cavernize_pa_get_status(CavProAudioStatus* out_status);
+
+/* Sends Focusrite Scarlett2/Gen4 vendor init step 0 (bmRequestType=0xA1, bRequest=0x00, 24B read) over Path B. */
+int32_t cavernize_pa_scarlett2_init_step0(
+    int32_t vendor_interface,
+    uint8_t* rx_packet,
+    int32_t rx_cap);
 
 /* Sends a Focusrite Scarlett2 vendor USB control command over the active Path B libusb handle. */
 int32_t cavernize_pa_scarlett2_xfer(

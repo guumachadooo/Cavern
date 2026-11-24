@@ -973,7 +973,7 @@ public partial class MainActivity {
             if (sec > 0) {
                 playerEngine.Seek(sec);
             }
-            trackSourceItems = [.. playerEngine.SourceItems];
+            SetLiveTrackSourceItems();
             RefreshPlayerSourcesList();
             RefreshExtractorChecklist();
             UpdateRoomCanvas();

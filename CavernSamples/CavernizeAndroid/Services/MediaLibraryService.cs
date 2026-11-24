@@ -99,6 +99,14 @@ public sealed class LibraryMergedTrack {
     public LibraryTrackItem Primary { get; init; }
     public List<LibraryTrackItem> Variants { get; } = [];
     public string CombinedBadgeLabel { get; set; } = "";
+    [System.Text.Json.Serialization.JsonIgnore]
+    public LibraryTrackItem PreferredVariant { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public LibraryTrackItem PreferredAtmosVariant { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public LibraryTrackItem PreferredSurroundVariant { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public LibraryTrackItem PreferredStereoVariant { get; set; }
 }
 
 public sealed class LibraryAlbumGroup {
@@ -856,14 +864,60 @@ public static partial class MediaLibraryService {
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             string badge = labels.Count > 1 ? string.Join(" + ", labels.Take(2)) + (labels.Count > 2 ? $" +{labels.Count - 2}" : "") : GetVariantShortLabel(bestPrimary);
+            LibraryTrackItem firstAtmos = null;
+            LibraryTrackItem firstSurround = null;
+            LibraryTrackItem firstStereo = null;
+            for (int vIdx = 0; vIdx < m.Variants.Count; vIdx++) {
+                LibraryTrackItem cand = m.Variants[vIdx];
+                AudioTierCategory cat = AudioQualityAnalyzer.ClassifyCategory(cand);
+                if (cat == AudioTierCategory.Atmos && firstAtmos == null) {
+                    firstAtmos = cand;
+                } else if (cat == AudioTierCategory.Surround && firstSurround == null) {
+                    firstSurround = cand;
+                } else if (cat == AudioTierCategory.Stereo && firstStereo == null) {
+                    firstStereo = cand;
+                }
+            }
             LibraryMergedTrack finalItem = new() {
                 Primary = bestPrimary,
-                CombinedBadgeLabel = badge
+                CombinedBadgeLabel = badge,
+                PreferredVariant = bestPrimary,
+                PreferredAtmosVariant = firstAtmos ?? firstSurround ?? firstStereo ?? bestPrimary,
+                PreferredSurroundVariant = firstSurround ?? firstAtmos ?? firstStereo ?? bestPrimary,
+                PreferredStereoVariant = firstStereo ?? firstAtmos ?? firstSurround ?? bestPrimary
             };
             finalItem.Variants.AddRange(m.Variants);
             finalized.Add(finalItem);
         }
         return finalized;
+    }
+
+    /// <summary>
+    /// Resolves the preferred variant in O(1) using precomputed category slots without invoking AudioQualityAnalyzer.
+    /// </summary>
+    public static LibraryTrackItem ResolvePreferredVariant(
+        LibraryMergedTrack m,
+        AudioTierCategory? preferredCategory,
+        string preferredFormatKey) {
+        if (m == null) return null;
+        if (m.Variants.Count <= 1) return m.PreferredVariant ?? m.Primary;
+        if (preferredCategory.HasValue) {
+            LibraryTrackItem catPick = preferredCategory.Value switch {
+                AudioTierCategory.Atmos => m.PreferredAtmosVariant,
+                AudioTierCategory.Surround => m.PreferredSurroundVariant,
+                _ => m.PreferredStereoVariant
+            };
+            if (catPick != null) return catPick;
+        }
+        if (!string.IsNullOrEmpty(preferredFormatKey)) {
+            for (int i = 0; i < m.Variants.Count; i++) {
+                LibraryTrackItem v = m.Variants[i];
+                if (string.Equals(GetDistinctVariantLabel(v, m.Variants), preferredFormatKey, StringComparison.OrdinalIgnoreCase)) {
+                    return v;
+                }
+            }
+        }
+        return m.PreferredVariant ?? m.Primary;
     }
 
     public static List<LibraryMergedTrack> MergeAlbumTrackVariants(IEnumerable<LibraryTrackItem> sourceTracks, Context ctx = null) {

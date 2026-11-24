@@ -127,6 +127,13 @@ public partial class MainActivity {
             tabTv.SetPadding(Dp(6), Dp(6), Dp(6), Dp(6));
             OneUiTheme.AttachRecoil(tabTv, 0.94f);
             tabTv.Click += (_, _) => {
+                if (libraryCategory == c &&
+                    selectedLibraryAlbum == null &&
+                    string.IsNullOrEmpty(selectedLibraryArtist) &&
+                    selectedLibraryFolder == null &&
+                    libraryListHost?.ChildCount > 0) {
+                    return;
+                }
                 libraryCategory = c;
                 selectedLibraryAlbum = null;
                 selectedLibraryArtist = null;
@@ -215,11 +222,28 @@ public partial class MainActivity {
         box.AddView(libraryStatusText);
 
         libraryListHost = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        ClearLibraryTabViewCache();
         box.AddView(libraryListHost, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         UpdateLibraryCatStyles();
         UpdateLibraryFilterStyles();
         return box;
+    }
+
+    int cachedVisibleSpatialCount;
+    string cachedLibraryBadgeText = "";
+    AudioTierCategory? cachedBuiltPrefCategory;
+    string cachedBuiltPrefFormatKey = "";
+    List<LibraryTrackItem> cachedMergedTrackQueue = [];
+    Dictionary<LibraryArtistGroup, (List<LibraryTrackItem> Queue, int DistinctAlbumCount)> cachedArtistMeta = [];
+    Dictionary<LibraryFolderGroup, List<LibraryTrackItem>> cachedFolderQueues = [];
+    Java.Lang.Runnable activeLibraryPumpRunnable;
+
+    void CancelLibraryRenderPump() {
+        if (activeLibraryPumpRunnable != null) {
+            libraryListHost?.RemoveCallbacks(activeLibraryPumpRunnable);
+            activeLibraryPumpRunnable = null;
+        }
     }
 
     void CancelLibrarySearchDebounce() {
@@ -234,6 +258,13 @@ public partial class MainActivity {
         cachedLibIndexSnap = null;
         cachedQuerySnap = null;
         cachedQueryRevision = -1;
+        cachedVisibleSpatialCount = 0;
+        cachedLibraryBadgeText = "";
+        cachedMergedTrackQueue = [];
+        cachedArtistMeta = [];
+        cachedFolderQueues = [];
+        CancelLibraryRenderPump();
+        ClearLibraryTabViewCache();
     }
 
     string GetLibrarySortShortLabel(int sortMode) => sortMode switch {
@@ -893,12 +924,18 @@ public partial class MainActivity {
         public int FolderMode;
         public string FoldersJson = "[]";
         public List<LibraryTrackItem> VisibleTracks = [];
+        public int VisibleSpatialCount;
+        public AudioTierCategory? BuiltPrefCategory;
+        public string BuiltPrefFormatKey = "";
         public List<SmartCleanInspectionEntry> SmartCleanEntries = [];
         public int HiddenNoiseCount;
         public List<LibraryMergedTrack> MergedTracks = [];
+        public List<LibraryTrackItem> MergedTrackQueue = [];
         public List<(LibraryAlbumGroup Alb, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> AlbumEntries = [];
         public List<(LibraryArtistGroup Art, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> ArtistEntries = [];
         public List<(LibraryFolderGroup Fld, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> FolderEntries = [];
+        public Dictionary<LibraryArtistGroup, (List<LibraryTrackItem> Queue, int DistinctAlbumCount)> ArtistMeta = [];
+        public Dictionary<LibraryFolderGroup, List<LibraryTrackItem>> FolderQueues = [];
     }
 
     bool IsLibraryBaseIndexStale() {
@@ -941,6 +978,8 @@ public partial class MainActivity {
         int folderMode = store.LibraryFolderFilterMode;
         string foldersJson = store.LibraryFilterFoldersJson ?? "[]";
         List<string> selectedFolders = store.GetLibraryFilterFolders();
+        AudioTierCategory? prefCat = preferredAudioCategory;
+        string prefFmtKey = preferredFormatVariantKey ?? "";
 
         _ = Task.Run(() => {
             MediaLibrarySnapshot loadedSnap = currentSnap;
@@ -951,7 +990,7 @@ public partial class MainActivity {
                 }
             }
             LibraryBaseIndexData built = loadedSnap != null
-                ? BuildLibraryBaseIndexSnapshot(appCtx, loadedSnap, rev, spatialMode, mediaMode, hideNoise, sortMode, folderMode, foldersJson, selectedFolders)
+                ? BuildLibraryBaseIndexSnapshot(appCtx, loadedSnap, rev, spatialMode, mediaMode, hideNoise, sortMode, folderMode, foldersJson, selectedFolders, prefCat, prefFmtKey)
                 : null;
 
             RunOnUiThread(() => {
@@ -964,12 +1003,22 @@ public partial class MainActivity {
                 }
                 if (built != null) {
                     cachedVisibleTracks = built.VisibleTracks;
+                    cachedVisibleSpatialCount = built.VisibleSpatialCount;
+                    cachedBuiltPrefCategory = built.BuiltPrefCategory;
+                    cachedBuiltPrefFormatKey = built.BuiltPrefFormatKey;
                     cachedSmartCleanEntries = built.SmartCleanEntries;
                     cachedHiddenNoiseCount = built.HiddenNoiseCount;
                     cachedMergedTracks = built.MergedTracks;
+                    cachedMergedTrackQueue = built.MergedTrackQueue;
                     cachedAlbumEntries = built.AlbumEntries;
                     cachedArtistEntries = built.ArtistEntries;
                     cachedFolderEntries = built.FolderEntries;
+                    cachedArtistMeta = built.ArtistMeta;
+                    cachedFolderQueues = built.FolderQueues;
+                    string baseBadge = string.Format(S["LibCacheSynced"], built.VisibleTracks.Count, built.VisibleSpatialCount);
+                    cachedLibraryBadgeText = built.HiddenNoiseCount > 0
+                        ? $"{baseBadge} • {string.Format(S["LibHiddenNoiseCount"], built.HiddenNoiseCount)}"
+                        : baseBadge;
                     cachedLibIndexSnap = built.Snapshot;
                     cachedLibIndexRevision = built.Revision;
                     cachedLibSpatialMode = built.SpatialMode;
@@ -979,6 +1028,7 @@ public partial class MainActivity {
                     cachedLibFolderMode = built.FolderMode;
                     cachedLibFoldersJson = built.FoldersJson;
                     cachedQueryRevision = -1;
+                    ClearLibraryTabViewCache();
                 }
                 UpdateLibraryFilterStyles();
                 RenderLibraryView();
@@ -996,9 +1046,17 @@ public partial class MainActivity {
         int sortMode,
         int folderMode,
         string foldersJson,
-        List<string> selectedFolders) {
+        List<string> selectedFolders,
+        AudioTierCategory? prefCat,
+        string prefFmtKey) {
         AppSettingsStore bgStore = new(appCtx);
         List<LibraryTrackItem> visible = MediaLibraryService.FilterTracks(snap.Tracks, bgStore);
+        int visibleSpatialCount = 0;
+        for (int i = 0; i < visible.Count; i++) {
+            if (visible[i].IsSurround) {
+                visibleSpatialCount++;
+            }
+        }
 
         List<LibraryTrackItem> scopeTracks = new(snap.Tracks.Count);
         for (int i = 0; i < snap.Tracks.Count; i++) {
@@ -1018,6 +1076,15 @@ public partial class MainActivity {
         HashSet<LibraryTrackItem> visSet = new(visible);
         List<LibraryMergedTrack> mergedTracksRaw = MediaLibraryService.MergeTrackVariants(visible, appCtx);
         List<LibraryMergedTrack> sortedTracks = MediaLibraryService.SortMergedTracks(mergedTracksRaw, sortMode, appCtx);
+        List<LibraryTrackItem> mergedTrackQueue = new(sortedTracks.Count);
+        for (int i = 0; i < sortedTracks.Count; i++) {
+            LibraryMergedTrack m = sortedTracks[i];
+            LibraryTrackItem pref = MediaLibraryService.ResolvePreferredVariant(m, prefCat, prefFmtKey);
+            m.PreferredVariant = pref;
+            if (pref != null) {
+                mergedTrackQueue.Add(pref);
+            }
+        }
 
         List<(LibraryAlbumGroup Alb, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> albEntries = [];
         for (int i = 0; i < snap.Albums.Count; i++) {
@@ -1026,6 +1093,9 @@ public partial class MainActivity {
             if (vt.Count == 0) continue;
             List<LibraryMergedTrack> merged = MediaLibraryService.MergeAlbumTrackVariants(vt, appCtx);
             if (merged.Count == 0) continue;
+            for (int j = 0; j < merged.Count; j++) {
+                merged[j].PreferredVariant = MediaLibraryService.ResolvePreferredVariant(merged[j], prefCat, prefFmtKey);
+            }
             ComputeGroupSortMetrics(appCtx, merged, sortMode, out long maxMod, out double maxScore, out int bestTier);
             albEntries.Add((alb, merged, maxMod, maxScore, bestTier));
         }
@@ -1045,6 +1115,7 @@ public partial class MainActivity {
         });
 
         List<(LibraryArtistGroup Art, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> artEntries = [];
+        Dictionary<LibraryArtistGroup, (List<LibraryTrackItem> Queue, int DistinctAlbumCount)> artistMeta = new(snap.Artists.Count);
         for (int i = 0; i < snap.Artists.Count; i++) {
             LibraryArtistGroup art = snap.Artists[i];
             List<LibraryTrackItem> vt = art.Tracks.Where(visSet.Contains).ToList();
@@ -1052,6 +1123,19 @@ public partial class MainActivity {
             List<LibraryMergedTrack> merged = MediaLibraryService.SortMergedTracks(
                 MediaLibraryService.MergeTrackVariants(vt, appCtx), sortMode, appCtx);
             if (merged.Count == 0) continue;
+            List<LibraryTrackItem> artQueue = new(merged.Count);
+            HashSet<string> albums = new(StringComparer.OrdinalIgnoreCase);
+            for (int j = 0; j < merged.Count; j++) {
+                LibraryMergedTrack m = merged[j];
+                LibraryTrackItem pref = MediaLibraryService.ResolvePreferredVariant(m, prefCat, prefFmtKey);
+                m.PreferredVariant = pref;
+                if (pref != null) artQueue.Add(pref);
+                string albKey = string.IsNullOrWhiteSpace(m.Primary.Album)
+                    ? m.Primary.FolderPath
+                    : m.Primary.Album;
+                if (!string.IsNullOrEmpty(albKey)) albums.Add(albKey);
+            }
+            artistMeta[art] = (artQueue, Math.Max(1, albums.Count));
             ComputeGroupSortMetrics(appCtx, merged, sortMode, out long maxMod, out double maxScore, out int bestTier);
             artEntries.Add((art, merged, maxMod, maxScore, bestTier));
         }
@@ -1068,6 +1152,7 @@ public partial class MainActivity {
         });
 
         List<(LibraryFolderGroup Fld, List<LibraryMergedTrack> Merged, long MaxModTicks, double MaxScore, int BestTier)> fldEntries = [];
+        Dictionary<LibraryFolderGroup, List<LibraryTrackItem>> folderQueues = new(snap.Folders.Count);
         for (int i = 0; i < snap.Folders.Count; i++) {
             LibraryFolderGroup fld = snap.Folders[i];
             List<LibraryTrackItem> vt = fld.Tracks.Where(visSet.Contains).ToList();
@@ -1075,6 +1160,14 @@ public partial class MainActivity {
             List<LibraryMergedTrack> merged = MediaLibraryService.SortMergedTracks(
                 MediaLibraryService.MergeTrackVariants(vt, appCtx), sortMode, appCtx);
             if (merged.Count == 0) continue;
+            List<LibraryTrackItem> fldQueue = new(merged.Count);
+            for (int j = 0; j < merged.Count; j++) {
+                LibraryMergedTrack m = merged[j];
+                LibraryTrackItem pref = MediaLibraryService.ResolvePreferredVariant(m, prefCat, prefFmtKey);
+                m.PreferredVariant = pref;
+                if (pref != null) fldQueue.Add(pref);
+            }
+            folderQueues[fld] = fldQueue;
             ComputeGroupSortMetrics(appCtx, merged, sortMode, out long maxMod, out double maxScore, out int bestTier);
             fldEntries.Add((fld, merged, maxMod, maxScore, bestTier));
         }
@@ -1100,12 +1193,18 @@ public partial class MainActivity {
             FolderMode = folderMode,
             FoldersJson = foldersJson,
             VisibleTracks = visible,
+            VisibleSpatialCount = visibleSpatialCount,
+            BuiltPrefCategory = prefCat,
+            BuiltPrefFormatKey = prefFmtKey,
             SmartCleanEntries = cleanEntries,
             HiddenNoiseCount = hiddenNoise,
             MergedTracks = sortedTracks,
+            MergedTrackQueue = mergedTrackQueue,
             AlbumEntries = albEntries,
             ArtistEntries = artEntries,
-            FolderEntries = fldEntries
+            FolderEntries = fldEntries,
+            ArtistMeta = artistMeta,
+            FolderQueues = folderQueues
         };
     }
 

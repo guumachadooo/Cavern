@@ -139,12 +139,17 @@ namespace Cavern.Format.Renderers {
 
         /// <inheritdoc/>
         public override void Update(int samples) {
-            if (lfeResult.Length != samples) {
+            if (timeslotResult == null) {
                 timeslotResult = new float[finalResult.Length][];
+                for (int obj = 0; obj < finalResult.Length; obj++) {
+                    timeslotResult[obj] = new float[QuadratureMirrorFilterBank.subbands];
+                }
+                lfeTimeslot = new float[QuadratureMirrorFilterBank.subbands];
+            }
+            if (lfeResult.Length != samples || (finalResult.Length > 0 && finalResult[0] == null)) {
                 for (int obj = 0; obj < finalResult.Length; obj++) {
                     finalResult[obj] = new float[samples];
                 }
-                lfeTimeslot = new float[samples];
                 lfeResult = new float[samples];
             }
             if (inputData.Length != stream.ChannelCount) {

@@ -153,7 +153,7 @@ public partial class MainActivity {
             View incoming = toLyrics ? (View)musicLyricsContainer : musicArtworkSlot;
 
             if (toLyrics) {
-                musicLyricsView?.UpdatePlayback(playerEngine?.CurrentSeconds ?? 0, playerEngine?.IsPlaying == true);
+                musicLyricsView?.UpdatePlayback(playerEngine?.HeardSeconds ?? playerEngine?.CurrentSeconds ?? 0, playerEngine?.IsPlaying == true);
             }
 
             outgoing.Visibility = ViewStates.Visible;
@@ -203,7 +203,7 @@ public partial class MainActivity {
                 musicLyricsContainer.ScaleY = 1f;
                 musicLyricsContainer.TranslationY = 0f;
                 if (mode == PlayerStageMode.Lyrics) {
-                    musicLyricsView?.UpdatePlayback(playerEngine?.CurrentSeconds ?? 0, playerEngine?.IsPlaying == true);
+                    musicLyricsView?.UpdatePlayback(playerEngine?.HeardSeconds ?? playerEngine?.CurrentSeconds ?? 0, playerEngine?.IsPlaying == true);
                 }
             }
         }
@@ -243,6 +243,7 @@ public partial class MainActivity {
         }
         int pct = Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100);
         bool micEnabled = store.LiveMicEnabled;
+        int micSrc = Math.Clamp(store.ProAudioMicSource, 0, 2);
         bool dryBypass = playerEngine?.VocalChainBypassed == true;
         bool karaokeOn = store.SpatialKaraokeEnabled || pct < 99;
         bool hasUsb = usbProAudioManager?.CurrentSnapshot?.IsAttached == true;
@@ -251,7 +252,7 @@ public partial class MainActivity {
         bool hasNeuralLead = playerEngine?.NeuralStage?.HasIsolatedNeuralVocalReference == true;
         bool prepRunning = isNeuralPrepRunning;
 
-        string sig = $"{isLyricsSingDockExpanded}|{pct}|{micEnabled}|{dryBypass}|{karaokeOn}|{hasUsb}|{hasDna}|{hasVp}|{hasNeuralLead}|{prepRunning}";
+        string sig = $"{isLyricsSingDockExpanded}|{pct}|{micEnabled}|{micSrc}|{dryBypass}|{karaokeOn}|{hasUsb}|{hasDna}|{hasVp}|{hasNeuralLead}|{prepRunning}";
         if (string.Equals(lastLyricsSingDockSig, sig, StringComparison.Ordinal)) {
             return;
         }
@@ -308,6 +309,23 @@ public partial class MainActivity {
             musicLyricsLiveMicBtn.Background = micEnabled
                 ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 76), 99f, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 175), 1f)
                 : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f);
+        }
+        if (musicLyricsMicSourceBtn != null) {
+            if (micSrc == (int)Cavernize.Logic.Spatial.ProAudioMicSource.UsbInterfaceMic) {
+                musicLyricsMicSourceBtn.Text = S["SingDockMicSrcUsbChip"];
+                Color usbCol = hasUsb ? OneUiTheme.IconSpatial : OneUiTheme.FunctionalOrange;
+                musicLyricsMicSourceBtn.Background = OneUiTheme.CreateRoundedDrawable(
+                    this, OneUiTheme.WithAlpha(usbCol, 76), 99f, OneUiTheme.WithAlpha(usbCol, 175), 1f);
+            } else if (micSrc == (int)Cavernize.Logic.Spatial.ProAudioMicSource.Auto) {
+                musicLyricsMicSourceBtn.Text = S["SingDockMicSrcAutoChip"];
+                musicLyricsMicSourceBtn.Background = OneUiTheme.CreateRoundedDrawable(
+                    this, OneUiTheme.WithAlpha(OneUiTheme.Primary, 72), 99f, OneUiTheme.WithAlpha(OneUiTheme.PrimaryHigh, 170), 1f);
+            } else {
+                musicLyricsMicSourceBtn.Text = S["SingDockMicSrcPhoneChip"];
+                musicLyricsMicSourceBtn.Background = micEnabled
+                    ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 68), 99f, OneUiTheme.WithAlpha(OneUiTheme.IconSystemInfo, 165), 1f)
+                    : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f);
+            }
         }
         if (musicLyricsMixMatchBtn != null) {
             bool micLive = micEnabled && !dryBypass;
@@ -489,9 +507,18 @@ public partial class MainActivity {
                 musicLyricsHeaderTitle.Text = title;
             }
             if (musicLyricsHeaderSub != null) {
-                musicLyricsHeaderSub.Text = !string.IsNullOrWhiteSpace(currentMediaMeta?.Artist)
+                string baseSub = !string.IsNullOrWhiteSpace(currentMediaMeta?.Artist)
                     ? currentMediaMeta.Artist
                     : active.FormatHeader;
+                LyricsDocument curLyr = currentMediaMeta?.Lyrics;
+                if (curLyr != null && curLyr.HasLyrics) {
+                    string tierTag = curLyr.IsSyllableSynced
+                        ? S["LyricsSyllableSyncTag"]
+                        : (curLyr.IsSynced ? S["LyricsLineSyncTag"] : S["LyricsPlainTag"]);
+                    musicLyricsHeaderSub.Text = string.IsNullOrWhiteSpace(baseSub) ? tierTag : $"{baseSub} • {tierTag}";
+                } else {
+                    musicLyricsHeaderSub.Text = baseSub;
+                }
             }
 
             badgeStr = BuildSpatialBadgeSummary(active);
