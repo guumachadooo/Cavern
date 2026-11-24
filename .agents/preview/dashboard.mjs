@@ -9,6 +9,7 @@ export const ALLOWED_DOCS = {
   sync: { label: 'Sync Ledger', relPath: '.agents/docs/EXTERNAL_AI_SYNC.md' },
   lessons: { label: 'Build Lessons', relPath: '.agents/docs/BUILD_LESSONS.md' },
   extra: { label: 'Extra Requests', relPath: '.agents/docs/EXTRA_REQUESTS.md' },
+  hostMatrix: { label: 'Host Matrix', relPath: '.agents/host_matrix.json' },
 };
 
 export function escapeHtml(value) {
@@ -37,11 +38,14 @@ export function parseCsprojMeta(xml) {
 
 export function parseHandoff(md) {
   const lines = String(md || '').split(/\r?\n/);
-  const fields = { wave: '—', summary: '', next: '', roadmap: '' };
+  const fields = { wave: '—', summary: '', next: '', roadmap: '', lastHost: '' };
   for (const line of lines) {
-    if (line.startsWith('WAVE|')) fields.wave = line.slice(5).trim();
-    else if (line.startsWith('SUMMARY|')) fields.summary = line.slice(8).trim();
-    else if (line.startsWith('NEXT|')) fields.next = line.slice(5).trim();
+    if (line.startsWith('ts=') || line.includes('|host=')) {
+      const m = line.match(/(?:^|\|)host=([^|\s]+)/);
+      if (m) fields.lastHost = m[1].trim();
+    } else if (line.startsWith('WAVE|')) fields.wave = line.slice(5).trim();
+    else if (line.startsWith('SUMMARY|') || line.startsWith('summary|')) fields.summary = line.slice(8).trim();
+    else if (line.startsWith('NEXT|') || line.startsWith('next|')) fields.next = line.slice(5).trim();
     else if (line.startsWith('ROADMAP|')) fields.roadmap = line.slice(8).trim();
   }
   return fields;
@@ -149,7 +153,7 @@ export function loadWorkspaceSnapshot(rootDir) {
   const recentSync = parseSyncEntries(syncMd, 4);
   const extra = parseExtraRequests(extraMd);
   const lessonsCount = countBuildLessons(lessonsMd);
-  const autoContextActive = agentsMd.includes('Auto-Loaded External AI');
+  const autoContextActive = agentsMd.includes('Auto-Loaded');
 
   return {
     generatedAt: new Date().toISOString(),

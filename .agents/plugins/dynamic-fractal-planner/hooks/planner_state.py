@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import glob
 import hashlib
 import json
@@ -28,6 +29,7 @@ from schema_migrations import (  # noqa: E402
     CURRENT_SCHEMA_VERSION,
     DEFAULT_BLAST_RADIUS,
     DEFAULT_CODE_WEIGHT_LIMITS,
+    DEFAULT_DELEGATION_CONFIG,
     DEFAULT_MEMORY_WEIGHT_LIMITS,
     DEFAULT_READ_BUDGET,
     DEFAULT_SECRET_GUARD,
@@ -769,6 +771,7 @@ def is_real_project_root(repo: Path) -> bool:
 
     home = Path.home().resolve()
     gemini_dir = (home / ".gemini").resolve()
+    scratch_dir = (gemini_dir / "antigravity" / "scratch").resolve()
     plugin_root = resolve_plugin_root().resolve()
     disallowed = {
         Path("/"),
@@ -778,9 +781,11 @@ def is_real_project_root(repo: Path) -> bool:
         Path("/var/tmp").resolve(),
         home,
         gemini_dir,
+        scratch_dir,
         plugin_root,
     }
-    if r in disallowed or gemini_dir in r.parents or plugin_root in r.parents:
+    in_scratch_project = scratch_dir in r.parents
+    if r in disallowed or plugin_root in r.parents or (gemini_dir in r.parents and not in_scratch_project):
         return False
 
     if (r / ".git").exists():
@@ -1059,7 +1064,7 @@ def read_plugin_version(plugin_dir: Path | None = None) -> str:
 
 
 def auto_upgrade_workspace(repo: Path) -> dict[str, Any]:
-    """Retroactively upgrade outdated profile schema (v1..v3->v4), plugin_version stamp & untouched legacy templates (0 tokens)."""
+    """Retroactively upgrade outdated profile schema (v1..v4->v5), plugin_version stamp & untouched legacy templates (0 tokens)."""
     res: dict[str, Any] = {
         "profile_migrated": None,
         "plugin_upgraded": None,
@@ -1215,6 +1220,7 @@ def bootstrap_workspace(repo: Path, name: str = "", force: bool = False) -> tupl
             "blast_radius": dict(DEFAULT_BLAST_RADIUS),
             "code_weight_limits": dict(DEFAULT_CODE_WEIGHT_LIMITS),
             "memory_weight_limits": dict(DEFAULT_MEMORY_WEIGHT_LIMITS),
+            "delegation": copy.deepcopy(DEFAULT_DELEGATION_CONFIG),
             "extra_requests_file": ".agents/docs/EXTRA_REQUESTS.md",
             "memory_feedback": {
                 "enabled": True,

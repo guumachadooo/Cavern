@@ -40,9 +40,10 @@ test('parseCsprojMeta extracts Android project metadata', () => {
   assert.equal(meta.minSdk, '26.0');
 });
 
-test('parseHandoff extracts wave, summary, and next step', () => {
+test('parseHandoff extracts wave, summary, next step, and lastHost', () => {
   const md = [
     '# Session Handoff',
+    'ts=1795461200|branch=master|head=51847562|dirty=0|host=antigravity-termux|fmt=1',
     'WAVE|W38',
     'SUMMARY|Added zero-dep preview',
     'NEXT|Push commit',
@@ -51,6 +52,7 @@ test('parseHandoff extracts wave, summary, and next step', () => {
   assert.equal(parsed.wave, 'W38');
   assert.equal(parsed.summary, 'Added zero-dep preview');
   assert.equal(parsed.next, 'Push commit');
+  assert.equal(parsed.lastHost, 'antigravity-termux');
 });
 
 test('parseSyncEntries extracts newest entries with section labels', () => {

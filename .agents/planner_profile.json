@@ -1,6 +1,6 @@
 {
-  "schema_version": 4,
-  "plugin_version": "2.10.1",
+  "schema_version": 5,
+  "plugin_version": "2.12.0",
   "project_name": "Cavern / CavernizeAndroid",
   "planner_mode": "auto",
   "read_budget": {
@@ -94,7 +94,7 @@
         "conditions": {
           "exists_path": "/root/.dotnet/dotnet"
         },
-        "text": "Termux ARM64 PRoot env: `/root/.dotnet/dotnet` requires `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 DOTNET_EnableDiagnostics=0 ... -m:1 /p:UseSharedCompilation=false`; run `python3 .agents/scripts/check_android_cs.py` for local Roslyn type-checking of `CavernizeAndroid`; final signed APK builds via `.github/workflows/BuildAndroid.yml`."
+        "text": "PRoot `.NET`: `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_GCHeapHardLimit=20000000 -m:1 /p:UseSharedCompilation=false`; Android check: `check_android_cs.py`; APK: `BuildAndroid.yml`."
       }
     ],
     "watch_paths": [
@@ -781,5 +781,46 @@
     "plugin_sync_doc": ".agents/plugins/dynamic-fractal-planner/.agents/docs/EXTERNAL_AI_SYNC.md",
     "host_sync_doc": ".agents/docs/EXTERNAL_AI_SYNC.md"
   },
-  "docs_format_version": 1
+  "docs_format_version": 1,
+  "delegation": {
+    "enabled": true,
+    "thin_coordinator_min_tier": 2,
+    "max_subagent_reply_lines": 20,
+    "require_explicit_model": true,
+    "prefer_cheap_models": true,
+    "enforce_google_only": true,
+    "exempt_subagent_types": [
+      "image-generator"
+    ],
+    "model_tiers": {
+      "trivial": "flash_lite",
+      "routine": "flash",
+      "complex": "pro"
+    },
+    "allowed_model_vendors": [
+      "google",
+      "gemini"
+    ],
+    "blocked_model_patterns": [
+      "claude",
+      "anthropic",
+      "opus",
+      "sonnet",
+      "haiku",
+      "gpt-",
+      "gpt4",
+      "gpt5",
+      "chatgpt",
+      "openai",
+      "o1-",
+      "o3-",
+      "o4-",
+      "codex"
+    ],
+    "sequential_proot_ops": [
+      "dotnet_build",
+      "heavy_tests",
+      "git_push"
+    ]
+  }
 }

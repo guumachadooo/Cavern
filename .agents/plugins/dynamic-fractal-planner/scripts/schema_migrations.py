@@ -6,7 +6,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Callable
 
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 CURRENT_DOCS_FORMAT_VERSION = 1
 
 DEFAULT_MEMORY_DOCS = [
@@ -39,6 +39,46 @@ DEFAULT_MEMORY_WEIGHT_LIMITS = {
     "project_history_max_kb": 28,
     "external_sync_max_kb": 48,
 }
+
+DEFAULT_DELEGATION_CONFIG: dict[str, Any] = {
+    "enabled": True,
+    "thin_coordinator_min_tier": 2,
+    "max_subagent_reply_lines": 20,
+    "require_explicit_model": True,
+    "prefer_cheap_models": True,
+    "enforce_google_only": True,
+    "exempt_subagent_types": ["image-generator"],
+    "model_tiers": {
+        "trivial": "flash_lite",
+        "routine": "flash",
+        "complex": "pro",
+    },
+    "allowed_model_vendors": ["google", "gemini"],
+    "blocked_model_patterns": [
+        "claude", "anthropic", "opus", "sonnet", "haiku",
+        "gpt-", "gpt4", "gpt5", "chatgpt", "openai",
+        "o1-", "o3-", "o4-", "codex",
+    ],
+    "sequential_proot_ops": ["dotnet_build", "heavy_tests", "git_push"],
+}
+
+
+def resolve_delegation_config(profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Merge profile `delegation` overrides cleanly onto DEFAULT_DELEGATION_CONFIG."""
+    merged = copy.deepcopy(DEFAULT_DELEGATION_CONFIG)
+    raw_del = profile.get("delegation") if isinstance(profile, dict) else None
+    if not isinstance(raw_del, dict):
+        return merged
+    for key, val in raw_del.items():
+        if val is None:
+            continue
+        if isinstance(merged.get(key), dict) and isinstance(val, dict):
+            sub = dict(merged[key])
+            sub.update(val)
+            merged[key] = sub
+        else:
+            merged[key] = copy.deepcopy(val)
+    return merged
 
 MigratorFn = Callable[[dict[str, Any]], dict[str, Any]]
 
@@ -163,10 +203,19 @@ def migrate_v3_to_v4(data: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def migrate_v4_to_v5(data: dict[str, Any]) -> dict[str, Any]:
+    """Losslessly migrate a v4 profile to schema v5 (thin-coordinator delegation & Google-only model routing)."""
+    out = copy.deepcopy(data)
+    out["schema_version"] = 5
+    out["delegation"] = resolve_delegation_config(out)
+    return out
+
+
 MIGRATORS: dict[int, MigratorFn] = {
     1: migrate_v1_to_v2,
     2: migrate_v2_to_v3,
     3: migrate_v3_to_v4,
+    4: migrate_v4_to_v5,
 }
 
 

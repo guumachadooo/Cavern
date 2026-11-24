@@ -6,6 +6,7 @@
 
 ---
 
+- IDEA|termux-auto-reopen-and-resume -> PRoot crash/kill diagnosis & self-healing resume (deferred Android/Termux app automation) | root-cause: Android 12+ Phantom Process Killer (32-child cap hit during 200+ subprocess `--full` plugin tests) + high RAM pressure (`8.7/11.1 GB` + `7.5 GB` swap) + missing wakelock; fixes: (1) S25U Developer Options `Disable child process restrictions` + Termux battery `Unrestricted` + `termux-wake-lock`; (2) Termux PRoot watchdog loop (`while true; do proot-distro login ...; sleep 1; done`) auto-restarting `language_server`/`antigravity`/`omni_agent_daemon.py` on crash; (3) OmniAgent `ForegroundService`/Tasker healthcheck pinging daemon loopback (`127.0.0.1:47921`) & relaunching Termux intent on timeout; (4) auto-resume reads `.agents/docs/HANDOFF.md` + `EXTRA_REQUESTS.md` via `SessionStart` (`HOST|`/`HANDOFF|`) to summarize prior state & resume active wave immediately w/o manual user re-prompting.
 - IDEA|`EvalWallRightX` (`v2.5.16` `OneUiTheme.cs:OneUiSeekBar`) -> elastic concave wall deformation when capsule progress `0 < fillRight < h` (`p=2.0->3.4` superellipse + inward dent `-0.18f` / subtler `-0.08f`) -> deferred for exact stock One UI 9 parity (`SecRoundedCornerSeekBarDrawable` uses outer semicircular `clipPath` over `drawRoundRect(..., fillRight * 0.5f)` w/o concave bend).
 ```csharp
 /// <summary>

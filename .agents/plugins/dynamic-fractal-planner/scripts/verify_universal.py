@@ -1493,6 +1493,29 @@ def check_file_budget(
         warns.append(msg)
 
 
+def check_host_matrix_coverage(repo: Path, fails: list[str], warns: list[str]) -> None:
+    """Validate `.agents/host_matrix.json` and flag unclassified or stale cross-host tools."""
+    import host_context  # noqa: E402
+
+    res = host_context.audit_host_matrix(repo)
+    if not res.get("present"):
+        return
+    for err in res.get("schema_errors") or []:
+        fails.append(f"host_matrix.json: {err}")
+    strict = bool(res.get("strict"))
+    sink = fails if strict else warns
+    stale = res.get("stale") or []
+    if stale:
+        sink.append(f"host_matrix.json: stale path(s) missing on disk -> {', '.join(stale[:5])}")
+    for item in res.get("unclassified") or []:
+        path_s = item.get("path", "")
+        cat = item.get("suggested_category", "universal")
+        sink.append(
+            f"host_matrix.json: unclassified tool `{path_s}` (suggest `{cat}`) -> "
+            f"run `plan_tool.py host-classify {path_s} --apply`"
+        )
+
+
 def run_static_checks(
     repo: Path,
     profile: dict[str, Any],
@@ -1517,6 +1540,7 @@ def run_static_checks(
     check_memory_weight(repo, profile, warns)
     check_code_weight(repo, files, profile, warns, scan_all=scan_all)
     check_file_budget(repo, profile, fails, warns)
+    check_host_matrix_coverage(repo, fails, warns)
     check_build_lessons_timelessness(repo, files, fails)
     check_plugin_sync_parity(repo, files, warns, scan_all=scan_all)
 
@@ -1579,7 +1603,7 @@ def run_plugin_tests(plugin_root: Path, fails: list[str], fast: bool = True) -> 
         cwd=str(plugin_root),
         capture_output=True,
         text=True,
-        timeout=240,
+        timeout=480,
         check=False,
     )
     if res.returncode == 0:

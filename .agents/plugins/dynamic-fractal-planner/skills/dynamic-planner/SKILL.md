@@ -14,7 +14,7 @@ Scripts (`~/.gemini/config/plugins/dynamic-fractal-planner/scripts/`): `plan_too
 | Mode | Activation | Flow |
 | :--- | :--- | :--- |
 | `auto` | `planner_mode:"auto"` \|\| `PLANNER_MODE=auto` | Exact cache/seed hit (`<1ms`, `0 net`); unseen -> safe `lean` + 1-time doc ctx -> `model-mode set`; `enter/exit_plan_mode` -> auto-pin `lean`; precedence `PLANNER_MODE` > profile > `auto_mode.overrides` |
-| `lean` (default) | `schema_version=3` default | `PreInvocation` auto-REQs + JIT + T2/T3 `DISC` (`AUDIT_EXISTING`/`CURATE_OSS`) + T3 `SOTA_PREFLIGHT` + `domains.*.lens` -> direct edits -> Blast Radius warn |
+| `lean` (default) | `schema_version=5` default | `PreInvocation` auto-REQs + JIT + `DELEGATE|` + T2/T3 `DISC` (`AUDIT_EXISTING`/`CURATE_OSS`) + T3 `SOTA_PREFLIGHT` + `domains.*.lens` -> direct edits -> Blast Radius warn |
 | `strict` | `planner_mode:"strict"` \|\| `PLANNER_MODE=strict` | `plan_tool.py init` pre-edit -> `start`/`expand-step`/`add-module` -> `plan_tool.py finish --evidence "..."` |
 | `recon` | `plan_tool.py recon start [--scope "..."]` | Read-only forensic sweep (`planner_guard_files` denies code edits; allows docs/plans); log `[BUG] \| [UNWIRED] \| [STRUCTURAL] \| [UPGRADE] @ path:line`; `recon stop` resumes |
 
@@ -28,3 +28,12 @@ Scripts (`~/.gemini/config/plugins/dynamic-fractal-planner/scripts/`): `plan_too
 - External API Docs (MCP): Unknown external APIs/SDKs/flags -> consult `Context7` (`resolve-library-id`->`query-docs`) \|\| `Google Developer Knowledge` (`search_documents`/`answer_query`) BEFORE guessing.
 - Key CLI ops: `triage --prompt "..."` | `init` | `start` | `expand-step` | `add-module` | `done` | `req-verify` | `finish --evidence "..."` | `recon {start|stop|status}` | `model-mode {set|get|list|clear}` | `docs-migrated` | `diag [--clear]` | `undo-turn [--dry-run]` | `handoff [--roadmap --wave --archive] --summary "..." --next "..."` | `stats`.
 - Verify pre-stop: `verify_universal.py [--build] [--full] --git-stat` (static `wiring_gate` + `key_parity_rules.ref_regex` + `diff_rules.path_prefixes` + multi-layer `build_rules` shadow cascade w/ global diag dedup; `Stop` runs silent static checks on `needs_verify && !needs_build`).
+
+## Thin-Coordinator Delegation & Model Routing (v5)
+- **Thin Coordinator (T2/T3 & `/goal`):** Main chat orchestrates ONLY — keep context small; delegate bulk reads, multi-module edits, log digests, & sequential PRoot builds/tests to max safe parallel `invoke_subagent` / `run_workflow` / `swarm` (`<=20L` symbolic EN replies).
+- **Subagent Context & Output Diet:** Subagents start fresh (0 parent ctx; `!swarm fork`). Prefer fresh 1-shot subagents per slice (`!reuse` after heavy logs or unrelated tasks; `send_message` ONLY for tiny stateful follow-ups `<=2` turns) && `!cmd-echo` (pass concise symbolic goal + target path/CLI verb ONLY — never paste long bash pipelines for subagent to echo back).
+- **Complexity-Tiered Google-Only Models (`!Claude/!OpenAI/!ChatGPT/!o1-o4`, guarded by `hooks/planner_guard_delegation.py`):**
+  - `L0 (trivial)` -> `flash_lite` (1-shot grep, file lists, trivial lookups)
+  - `L1-L2 (routine)` -> `flash` (audits, multi-file impl, unit tests, static verify)
+  - `L3 (complex)` -> `pro` (arch, DSP/physics, concurrency/races, SOTA preflight; tag `[L3]` on `research`)
+  - Exempt: `image-generator`; explicit `Model` required (`!omit`, `!unannotated inherit`).

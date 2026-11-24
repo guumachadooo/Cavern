@@ -1,12 +1,8 @@
 # Session Handoff
-ts=1795461200|branch=master|last_code=8af54d68|dirty=1|fmt=1
+ts=1795476813|branch=master|head=51847562|dirty=37|host=antigravity-termux|fmt=1
 ROADMAP|.agents/docs/MASTER_AUDIT_PLAN_W46_W51.md (archived Phase 2: .agents/docs/archive/PHASE2_ROADMAP.md)
-WAVE|W48 [x] (Decoupled AI, Play-tab AI toggle, dynamic Atmos object & discrete LFE preservation, Studio Record->Preview->Export & composable export builder) | W47 [x] | W46.j [x]
-ARCHIVE|.agents/docs/archive/{SPATIAL_ROADMAP,PHASE2_ROADMAP,PROJECT_HISTORY_ARCHIVE,EXTERNAL_AI_SYNC_ARCHIVE}.md (!read_full; slice <=120L only)
-FLIGHT_RECORDER|python3 -B .agents/scripts/flight_recorder.py recover (1-shot ship: `omni_agent.py ship --commit "..." --sync-deletes --auto-skip-ci --next "..."` | multi-repo: `omni_agent.py repos <status|hydrate|diff|push|sync-mirrors>`)
-SYNC_LEDGER|.agents/docs/EXTERNAL_AI_SYNC.md (Cavern + Plugin) && .agents/plugins/dynamic-fractal-planner/.agents/docs/EXTERNAL_AI_SYNC.md
-ONBOARDING|.agents/docs/EXTERNAL_AI_ONBOARDING.md (auto-booted via root `AGENTS.md` `## 0`)
-BUILD_LESSONS|.agents/docs/BUILD_LESSONS.md (`BL-001`..`BL-017`; plugin `v2.10.1` schema `v4` + `file_budget_limits` `warn=850/fail=920`)
-DEVICE_LOG|Local-First AI Studio Secrets (4/4 present via runtime_file) + Hub v6 SQLite DO + 3-Repo Federation (`/tmp/cavern-federation/{cavern,omniagent,fractal}`)
-SUMMARY|Completed **`W48`** across Cavern, Cavernize.Logic, & CavernizeAndroid: (1) **Decoupled AI Orchestration:** split `NeuralStemStageProcessor` (`ActiveSpatialUpmixTrack` vs `ActiveKaraokeTrack`) + role-aware `BindSeparatedNeuralTrack` so AI Upmix and Karaoke operate independently; (2) **Play-Tab AI Toggle:** added 4th spatial pill (`AI 3D / AI Atmos`, tap toggle + long-press mode sheet); (3) **Dynamic Atmos & Discrete LFE Preservation:** fixed `TrackSourceItem.BuildFromAttachedSources` `AtmosAwareUpmixer` prefix & `StudioBatchExporter.ExportHybrid714` Atmos preservation, added `NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe` (canonical 7.1.4 + 120 Hz LR4 `.1` discrete LFE across Bass + Drums), & updated `Stems3DObjects`, `RealtimePlayerEngine`, `StemExtractor`; (4) **Studio Recorder & Composable Export:** built `MainActivity.StudioExport.cs` (`Record -> Preview -> Export` w/ zero-GC `AudioRecord` fallback + track-switch hygiene + sample-rate-safe preview seek) & Composable Spatial Export Builder + commercial batch export; (5) **Plugin `v2.10.1`:** fixed `TestCavernV1V2V3Parity` dynamic `targetSdkVersion` + raw-docstring `SyntaxWarning`, synced global Termux plugin.
-NEXT|Install W48 Cavernize APK from `/sdcard/Download/Cavernize-Android.apk` -> start **`W49`** (Lyrics Sync Drift Fix, Syllable-by-Syllable Sync & Risk-Scored Hierarchy) from `.agents/docs/MASTER_AUDIT_PLAN_W46_W51.md`.
+WAVE|W48.b [x] (Multi-Host Framework + Plugin v2.11.0) | W48 [x] | W47 [x]
+ARCHIVE|.agents/docs/archive/{SPATIAL_ROADMAP,PHASE2_ROADMAP,PROJECT_HISTORY_ARCHIVE,EXTERNAL_AI_SYNC_ARCHIVE}.md (!read_full; slice only on demand)
+summary|Plugin v2.12.0 (schema v5): thin-coord delegation, fresh 1-shot & !cmd-echo/!fork diet, complexity model routing (L0:flash_lite|L1-2:flash|L3:pro), Google-only PreToolUse guard + T2/T3 DELEGATE| + PRoot --fast default in install.sh; synced global & Cavern; W49-W51 untouched for fresh chat
+next|Start fresh chat for Wave W49 (Lyrics sync/syllable/risk) -> W50 -> W51 using v2.12.0 thin-coord delegation
+files|M .agents/agent/bridge_auth.py, M .agents/agent/local_capabilities.py, M .agents/agent/omni_agent_client.py, M .agents/agent/repo_federation.py, M .agents/agent/test_omni_agent.py (+32)

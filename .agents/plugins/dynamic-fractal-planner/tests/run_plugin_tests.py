@@ -221,8 +221,8 @@ class TestSchemaMigrations(unittest.TestCase):
         migrated, ver, warnings = schema_migrations.migrate_profile(raw)
 
         self.assertEqual(raw, snapshot, "migrate_profile must never mutate input dict")
-        self.assertEqual(ver, 4)
-        self.assertEqual(migrated["schema_version"], 4)
+        self.assertEqual(ver, 5)
+        self.assertEqual(migrated["schema_version"], 5)
         self.assertEqual(warnings, [])
         self.assertEqual(migrated["custom_owner_note"], "preserve-me-losslessly")
         self.assertEqual(migrated["planner_mode"], "lean")
@@ -230,6 +230,9 @@ class TestSchemaMigrations(unittest.TestCase):
         self.assertEqual(migrated["secret_guard"], {"enabled": True})
         self.assertEqual(migrated["blast_radius"], {"simple_tier_max_files": 3})
         self.assertEqual(migrated["code_weight_limits"], {"enabled": True, "warn_lines": 1500, "warn_lines_all": 2000})
+        self.assertTrue(migrated["delegation"]["enabled"])
+        self.assertTrue(migrated["delegation"]["enforce_google_only"])
+        self.assertEqual(migrated["delegation"]["model_tiers"], {"trivial": "flash_lite", "routine": "flash", "complex": "pro"})
 
         cmds = {r.get("label"): r for r in (migrated.get("build_rules") or [])}
         self.assertIn("verify_command", cmds)
@@ -243,7 +246,7 @@ class TestSchemaMigrations(unittest.TestCase):
         v1 = json.loads((FIXTURES_DIR / "profile_v1_cavern.json").read_text(encoding="utf-8"))
         self.assertNotIn("schema_version", v1)
         m1, ver1, w1 = schema_migrations.migrate_profile(v1)
-        self.assertEqual(ver1, 4)
+        self.assertEqual(ver1, 5)
         self.assertEqual(w1, [])
         self.assertEqual(m1["build_rules"], v1["build_rules"])
         self.assertEqual(m1["file_guards"], v1["file_guards"])
@@ -253,9 +256,9 @@ class TestSchemaMigrations(unittest.TestCase):
         v2 = json.loads((FIXTURES_DIR / "profile_v2_cavern.json").read_text(encoding="utf-8"))
         self.assertEqual(v2.get("schema_version"), 2)
         m2, ver2, w2 = schema_migrations.migrate_profile(v2)
-        self.assertEqual(ver2, 4)
+        self.assertEqual(ver2, 5)
         self.assertEqual(w2, [])
-        self.assertEqual(m2["schema_version"], 4)
+        self.assertEqual(m2["schema_version"], 5)
         self.assertEqual(m2["planner_mode"], "lean")
         self.assertEqual(m2["build_rules"], v2["build_rules"])
         self.assertEqual(m2["command_guards"], v2["command_guards"])
@@ -264,12 +267,23 @@ class TestSchemaMigrations(unittest.TestCase):
         v3 = json.loads((FIXTURES_DIR / "profile_v3_cavern.json").read_text(encoding="utf-8"))
         self.assertEqual(v3.get("schema_version"), 3)
         m3, ver3, w3 = schema_migrations.migrate_profile(v3)
-        self.assertEqual(ver3, 4)
+        self.assertEqual(ver3, 5)
         self.assertEqual(w3, [])
-        self.assertEqual(m3["schema_version"], 4)
+        self.assertEqual(m3["schema_version"], 5)
         self.assertEqual(m3["planner_mode"], "auto")
         self.assertEqual(m3["diff_rules"], v3["diff_rules"])
         self.assertTrue(m3["code_weight_limits"]["enabled"])
+
+        v4 = json.loads((FIXTURES_DIR / "profile_v4_cavern.json").read_text(encoding="utf-8"))
+        self.assertEqual(v4.get("schema_version"), 4)
+        m4, ver4, w4 = schema_migrations.migrate_profile(v4)
+        self.assertEqual(ver4, 5)
+        self.assertEqual(w4, [])
+        self.assertEqual(m4["schema_version"], 5)
+        self.assertEqual(m4["code_weight_limits"], v4["code_weight_limits"])
+        self.assertEqual(m4["file_budget_limits"], v4["file_budget_limits"])
+        self.assertTrue(m4["delegation"]["enabled"])
+        self.assertTrue(m4["delegation"]["enforce_google_only"])
 
     def test_synthetic_chain_v1_to_v10(self) -> None:
         def make_hop(src_v: int):
@@ -315,14 +329,14 @@ class TestSchemaMigrations(unittest.TestCase):
             prof_file.write_text(v1_text, encoding="utf-8")
 
             loaded = planner_state.load_project_profile(repo)
-            self.assertEqual(loaded["schema_version"], 4)
+            self.assertEqual(loaded["schema_version"], 5)
             self.assertEqual(prof_file.read_text(encoding="utf-8"), v1_text)
 
             res = run_script("plan_tool.py", ["--workspace", str(repo), "migrate"])
             self.assertEqual(res.returncode, 0, res.stderr + res.stdout)
             self.assertTrue((agents_dir / "planner_profile.json.bak").is_file())
             disk_after = json.loads(prof_file.read_text(encoding="utf-8"))
-            self.assertEqual(disk_after["schema_version"], 4)
+            self.assertEqual(disk_after["schema_version"], 5)
             self.assertEqual(disk_after["planner_mode"], "lean")
 
             res2 = run_script("plan_tool.py", ["--workspace", str(repo), "migrate"])
@@ -356,8 +370,9 @@ class TestAutoBootstrapAndHeadings(unittest.TestCase):
             (r / "tsconfig.json").write_text("{}", encoding="utf-8")
             planner_state.bootstrap_workspace(r)
             prof = json.loads((r / ".agents" / "planner_profile.json").read_text(encoding="utf-8"))
-            self.assertEqual(prof["schema_version"], 4)
+            self.assertEqual(prof["schema_version"], 5)
             self.assertEqual(prof["planner_mode"], "lean")
+            self.assertTrue(prof["delegation"]["enabled"])
             cmds = [x["command"] for x in prof["build_rules"]]
             self.assertIn("npx tsc --noEmit", cmds)
             self.assertIn("npm run lint", cmds)
@@ -399,7 +414,7 @@ class TestAutoBootstrapAndHeadings(unittest.TestCase):
             msg = parsed["injectSteps"][0]["systemMessage"]["systemMessage"]
             self.assertIn("Auto-initialized project docs/profile", msg)
             prof = json.loads((repo / ".agents" / "planner_profile.json").read_text(encoding="utf-8"))
-            self.assertEqual(prof["schema_version"], 4)
+            self.assertEqual(prof["schema_version"], 5)
 
         with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as art:
             empty_dir = Path(td)
@@ -1370,9 +1385,11 @@ class TestCavernV1V2V3Parity(unittest.TestCase):
             self.assertIn("UNIVERSAL VERIFY PASS", v_pass.stdout)
 
     def test_cavern_v1_v2_and_live_parity(self) -> None:
-        if not FAST_MODE:  # v1->v3 migration parity already covered by TestSchemaMigrations fixtures
+        if not FAST_MODE:  # v1->v5 migration parity already covered by TestSchemaMigrations fixtures
             v1_cavern = json.loads((FIXTURES_DIR / "profile_v1_cavern.json").read_text(encoding="utf-8"))
             self._assert_parity_for_profile("v1_cavern_fixture", v1_cavern)
+            v4_cavern = json.loads((FIXTURES_DIR / "profile_v4_cavern.json").read_text(encoding="utf-8"))
+            self._assert_parity_for_profile("v4_cavern_fixture", v4_cavern)
 
         v2_cavern = json.loads((FIXTURES_DIR / "profile_v2_cavern.json").read_text(encoding="utf-8"))
         self.assertEqual(v2_cavern.get("schema_version"), 2)
@@ -1380,7 +1397,7 @@ class TestCavernV1V2V3Parity(unittest.TestCase):
 
         if self.LIVE_CAVERN_PROFILE.is_file():
             live_cavern = json.loads(self.LIVE_CAVERN_PROFILE.read_text(encoding="utf-8"))
-            self.assertIn(live_cavern.get("schema_version"), (2, 3, 4))
+            self.assertIn(live_cavern.get("schema_version"), (2, 3, 4, 5))
             self._assert_parity_for_profile(f"live_v{live_cavern.get('schema_version')}_cavern", live_cavern)
 
 
@@ -2103,7 +2120,7 @@ class TestSymbolicTelegraphicStyle(unittest.TestCase):
             self.assertNotIn("DOCS_AUTO_MIGRATE", ss_msg)
 
             upgraded_prof = json.loads(prof_file.read_text(encoding="utf-8"))
-            self.assertEqual(upgraded_prof["schema_version"], 4)
+            self.assertEqual(upgraded_prof["schema_version"], 5)
             self.assertEqual(upgraded_prof["docs_format_version"], 1)
             self.assertEqual(upgraded_prof["custom_owner_note"], "preserve-me-losslessly")
 
@@ -2148,7 +2165,7 @@ class TestSymbolicTelegraphicStyle(unittest.TestCase):
             self.assertNotIn("EXTRA_REQUESTS.md", ss_msg.split("DOCS_AUTO_MIGRATE", 1)[1].split("ACT:", 1)[0])
 
             prof_after_ss = json.loads(prof_file.read_text(encoding="utf-8"))
-            self.assertEqual(prof_after_ss["schema_version"], 4)
+            self.assertEqual(prof_after_ss["schema_version"], 5)
             self.assertEqual(prof_after_ss.get("docs_format_version", 0), 0)
             self.assertEqual((docs_dir / "PROJECT_HISTORY.md").read_text(encoding="utf-8"), pop_hist)
             self.assertEqual((docs_dir / "SAVED_IDEAS.md").read_text(encoding="utf-8"), pop_ideas)
@@ -2575,7 +2592,7 @@ class TestAdaptiveTriageAndContinuity(unittest.TestCase):
             repo = Path(td)
             init_git_repo(repo)
             (repo / "src").mkdir()
-            env_diag = {"PLANNER_DIAGNOSTICS_DIR": diag_dir}
+            env_diag = {"PLANNER_DIAGNOSTICS_DIR": diag_dir, "PLANNER_SLOW_HOOK_MS": "10000"}
             hook_file = Path(art) / "scratch" / ".hook_state.json"
 
             # Turn 1: Large Tier 3 proposal (0 edits)
@@ -3572,11 +3589,11 @@ class TestV260UniversalEfficiencyAndSelfEvolution(unittest.TestCase):
                 encoding="utf-8",
             )
             up = planner_state.auto_upgrade_workspace(repo)
-            self.assertEqual(up["profile_migrated"], (3, 4))
+            self.assertEqual(up["profile_migrated"], (3, 5))
             self.assertEqual(up["plugin_upgraded"][0], "2.5.1")
             self.assertEqual(up["plugin_upgraded"][1], planner_state.read_plugin_version())
             disk = json.loads(prof_p.read_text(encoding="utf-8"))
-            self.assertEqual(disk["schema_version"], 4)
+            self.assertEqual(disk["schema_version"], 5)
             self.assertEqual(disk["plugin_version"], planner_state.read_plugin_version())
 
             # Higher workspace plugin_version must NEVER downgrade
@@ -3742,6 +3759,333 @@ class TestV260UniversalEfficiencyAndSelfEvolution(unittest.TestCase):
             )
             self.assertTrue(any("6/999" in f for f in f3), f3)
             self.assertEqual(w3, [])
+
+    def test_v211_host_context_matrix_baton_and_auto_classifier(self) -> None:
+        import host_context  # noqa: E402
+
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as art:
+            repo = Path(td)
+            (repo / ".agents" / "scripts").mkdir(parents=True)
+            (repo / ".agents" / "preview").mkdir(parents=True)
+            (repo / ".agents" / "docs").mkdir(parents=True)
+
+            # Isolated empty probe paths so host OS (/sdcard, /root/.dotnet) never bleeds into unit checks
+            empty_probes = {
+                "termux_dir": repo / ".no_termux",
+                "sdcard_dir": repo / ".no_sdcard",
+                "local_dotnet_bin": repo / ".no_dotnet",
+                "gh_hosts_file": repo / ".no_gh",
+                "omni_local_config": repo / ".no_omni",
+                "runtime_env_bridge": repo / ".no_rt_env",
+            }
+
+            # 1. Host detection across all 5 host profiles
+            (repo / ".agents" / "preview" / "server.mjs").write_text("// preview\n", encoding="utf-8")
+            h_cloud = host_context.detect_host(repo, env={}, probe_paths=empty_probes)
+            self.assertEqual(h_cloud["host_id"], "ai-studio-cloud")
+            self.assertTrue(h_cloud["is_cloud"])
+
+            h_ci = host_context.detect_host(repo, env={"GITHUB_ACTIONS": "true"}, probe_paths=empty_probes)
+            self.assertEqual(h_ci["host_id"], "ci-runner")
+
+            h_ag_local = host_context.detect_host(repo, env={"ANTIGRAVITY_AGENT": "1"}, probe_paths=empty_probes)
+            self.assertEqual(h_ag_local["host_id"], "antigravity-local")
+            self.assertTrue(h_ag_local["is_antigravity"])
+
+            termux_probes = dict(empty_probes)
+            termux_probes["termux_dir"] = repo / "fake_termux"
+            termux_probes["termux_dir"].mkdir()
+            h_ag_termux = host_context.detect_host(repo, env={"ANTIGRAVITY_AGENT": "1"}, probe_paths=termux_probes)
+            self.assertEqual(h_ag_termux["host_id"], "antigravity-termux")
+
+            (repo / ".git").mkdir()
+            h_ide = host_context.detect_host(repo, env={}, probe_paths=empty_probes)
+            self.assertEqual(h_ide["host_id"], "local-ide")
+
+            # 2. Matrix audit catches unclassified new script & stale exact path
+            (repo / ".agents" / "scripts" / "check_ok.py").write_text("# universal\n", encoding="utf-8")
+            (repo / ".agents" / "scripts" / "cloud_watcher.py").write_text(
+                "# /tmp/.cavern_runtime_env.json watcher\n", encoding="utf-8"
+            )
+            (repo / ".agents" / "host_matrix.json").write_text(
+                json.dumps(
+                    {
+                        "schema": 1,
+                        "strict_coverage": False,
+                        "hosts": {
+                            "antigravity-termux": {"ignore_cloud_env_alerts": True, "boot_steps": ["host-boot"]},
+                            "ai-studio-cloud": {"ignore_cloud_env_alerts": False, "boot_steps": ["recover"]},
+                        },
+                        "scan_globs": [".agents/scripts/*.py"],
+                        "ignore_globs": ["**/test_*.py"],
+                        "entries": [
+                            {
+                                "id": "check-ok",
+                                "category": "universal",
+                                "paths": [".agents/scripts/check_ok.py", ".agents/scripts/missing_gone.py"],
+                                "purpose": "Universal check",
+                                "per_host": {"antigravity-termux": {"mode": "active"}},
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            aud = host_context.audit_host_matrix(repo)
+            self.assertFalse(aud["ok"])
+            self.assertEqual(aud["stale"], [".agents/scripts/missing_gone.py"])
+            self.assertEqual(len(aud["unclassified"]), 1)
+            self.assertEqual(aud["unclassified"][0]["path"], ".agents/scripts/cloud_watcher.py")
+            self.assertEqual(aud["unclassified"][0]["suggested_category"], "ai-studio-only")
+
+            # verify_universal surfaces unclassified + stale warnings
+            vf_fails: list[str] = []
+            vf_warns: list[str] = []
+            verify_universal.check_host_matrix_coverage(repo, vf_fails, vf_warns)
+            self.assertEqual(vf_fails, [])
+            self.assertTrue(any("missing_gone.py" in w for w in vf_warns), vf_warns)
+            self.assertTrue(any("cloud_watcher.py" in w and "host-classify" in w for w in vf_warns), vf_warns)
+
+            # 3. host-classify --apply registers tool & clears unclassified
+            cls_res = run_script(
+                "plan_tool.py",
+                ["--workspace", str(repo), "host-classify", ".agents/scripts/cloud_watcher.py", "--apply", "--json"],
+                cwd=repo,
+            )
+            self.assertEqual(cls_res.returncode, 0, cls_res.stderr)
+            cls_json = json.loads(cls_res.stdout)
+            self.assertTrue(cls_json["applied"])
+            self.assertEqual(cls_json["category"], "ai-studio-only")
+            aud2 = host_context.audit_host_matrix(repo)
+            self.assertEqual(aud2["unclassified"], [])
+
+            # 4. handoff auto-stamps host= & preserves ROADMAP| / WAVE| / ARCHIVE|
+            handoff_p = repo / ".agents" / "docs" / "HANDOFF.md"
+            handoff_p.write_text(
+                "# Session Handoff\n"
+                "ts=1700000000|branch=master|head=abc1234|dirty=0|host=ai-studio-cloud|fmt=1\n"
+                "ROADMAP|.agents/docs/PLAN.md\n"
+                "WAVE|W48 [x]\n"
+                "ARCHIVE|.agents/docs/archive/{A,B}.md (!read_full)\n",
+                encoding="utf-8",
+            )
+            ho_res = run_script(
+                "plan_tool.py",
+                ["--workspace", str(repo), "handoff", "--summary", "Shipped host matrix", "--next", "Start W49"],
+                cwd=repo,
+                env_extra={"PLANNER_HOST_OVERRIDE": "antigravity-termux"},
+            )
+            self.assertEqual(ho_res.returncode, 0, ho_res.stderr)
+            ho_txt = handoff_p.read_text(encoding="utf-8")
+            self.assertIn("host=antigravity-termux", ho_txt)
+            self.assertIn("ROADMAP|.agents/docs/PLAN.md", ho_txt)
+            self.assertIn("WAVE|W48 [x]", ho_txt)
+            self.assertIn("ARCHIVE|.agents/docs/archive/{A,B}.md", ho_txt)
+
+            # 5. BATON_SWITCH & BRIDGE_AHEAD detection
+            bridge_ho = repo / "LATEST_HANDOFF.md"
+            bridge_ho.write_text(
+                "# AI Studio — live\n- **UTC**: `2099-01-01T00:00:00Z`\nLive AI Studio edit\n",
+                encoding="utf-8",
+            )
+            now_t = time.time()
+            os.utime(handoff_p, (now_t - 120, now_t - 120))
+            os.utime(bridge_ho, (now_t, now_t))
+            baton = host_context.detect_baton_state(repo, "ai-studio-cloud", bridge_handoff_path=bridge_ho)
+            self.assertTrue(baton["switched"])
+            self.assertEqual(baton["from_host"], "antigravity-termux")
+            self.assertEqual(baton["to_host"], "ai-studio-cloud")
+            self.assertTrue(baton["bridge_ahead"])
+
+            ss_lines = host_context.format_session_start_lines(
+                repo, env={"PLANNER_HOST_OVERRIDE": "ai-studio-cloud"}, bridge_handoff_path=bridge_ho, probe_paths=empty_probes
+            )
+            self.assertTrue(any(ln.startswith("HOST|") for ln in ss_lines), ss_lines)
+            self.assertTrue(any("BATON_SWITCH|" in ln and "BRIDGE_AHEAD|" in ln for ln in ss_lines), ss_lines)
+
+            # 6. Real Cavern SessionStart char budget (<1800) when host_matrix.json present
+            live_cavern = Path("/root/.gemini/antigravity/scratch/Cavern")
+            if live_cavern.is_dir() and (live_cavern / ".agents" / "host_matrix.json").is_file():
+                rc_ss, err_ss, ss_live = run_hook(
+                    "planner_session_start.py",
+                    {"workspacePaths": [str(live_cavern)], "artifactDirectoryPath": art},
+                )
+                self.assertEqual(rc_ss, 0, err_ss)
+                msg_live = ss_live["injectSteps"][0]["systemMessage"]["systemMessage"]
+                self.assertIn("HOST|", msg_live)
+                self.assertLess(len(msg_live), 1800, f"SessionStart bloat ({len(msg_live)} chars):\n{msg_live}")
+
+
+
+class TestDelegationGuardAndPreInvocation(unittest.TestCase):
+    def _guard(self, repo: Path, art: str, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+        rc, err, parsed = run_hook(
+            "planner_guard_delegation.py",
+            {
+                "workspacePaths": [str(repo)],
+                "artifactDirectoryPath": art,
+                "toolCall": {"name": tool_name, "args": args},
+            },
+        )
+        self.assertEqual(rc, 0, err)
+        return parsed
+
+    def test_v212_delegation_guard_google_only_and_complexity_routing(self) -> None:
+        hooks_cfg = json.loads((PLUGIN_ROOT / "hooks.json").read_text(encoding="utf-8"))
+        pre_hooks = hooks_cfg["dynamic-fractal-planner"]["PreToolUse"]
+        self.assertTrue(
+            any(
+                h.get("matcher") == "invoke_subagent|swarm|run_workflow"
+                and any("planner_guard_delegation.py" in sub.get("command", "") for sub in h.get("hooks", []))
+                for h in pre_hooks
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as art:
+            repo = Path(td)
+            (repo / ".agents").mkdir(parents=True)
+            (repo / ".agents" / "planner_profile.json").write_text(
+                json.dumps({"schema_version": 5, "planner_mode": "lean"}),
+                encoding="utf-8",
+            )
+
+            # 1) Non-Google/OpenAI/Claude models are denied across invoke_subagent, swarm, run_workflow
+            for bad in ("claude-3-7-sonnet", "claude-opus-4", "gpt-4o", "openai/o3-mini", "o3", "chatgpt-4o-latest", "anthropic/haiku", "codex-mini"):
+                res = self._guard(repo, art, "invoke_subagent", {"TypeName": "research", "Role": "Finder", "Prompt": "find files", "Model": bad})
+                self.assertEqual(res["decision"], "deny", f"{bad}: {res}")
+                self.assertIn("google_only", res["reason"])
+
+                sw = self._guard(repo, art, "swarm", {"action": "add", "name": "w1", "model": bad, "brief": "do work"})
+                self.assertEqual(sw["decision"], "deny", bad)
+                sw_m = self._guard(repo, art, "swarm", {"action": "model", "name": "w1", "model": bad})
+                self.assertEqual(sw_m["decision"], "deny", bad)
+
+            wf_deny = self._guard(
+                repo,
+                art,
+                "run_workflow",
+                {"Description": "fanout", "Script": 'agent("audit", model="claude-3-5-sonnet")'},
+            )
+            self.assertEqual(wf_deny["decision"], "deny")
+            self.assertIn("google_only", wf_deny["reason"])
+            wf_ok = self._guard(
+                repo,
+                art,
+                "run_workflow",
+                {"Description": "fanout", "Script": 'agent("audit", model="gemini-2.5-flash")'},
+            )
+            self.assertEqual(wf_ok["decision"], "allow")
+
+            # 2) Omitted Model & unannotated inherit are denied; exempt image-generator passes
+            omit = self._guard(repo, art, "invoke_subagent", {"TypeName": "research", "Role": "Scout", "Prompt": "check files"})
+            self.assertEqual(omit["decision"], "deny")
+            self.assertIn("explicit_model", omit["reason"])
+
+            inh_bad = self._guard(repo, art, "invoke_subagent", {"TypeName": "self", "Role": "Worker", "Prompt": "edit file", "Model": "inherit"})
+            self.assertEqual(inh_bad["decision"], "deny")
+            inh_ok = self._guard(repo, art, "invoke_subagent", {"TypeName": "self", "Role": "Worker [L3]", "Prompt": "complex refactor", "Model": "inherit"})
+            self.assertEqual(inh_ok["decision"], "allow")
+
+            img_ok = self._guard(repo, art, "invoke_subagent", {"TypeName": "image-generator", "Role": "Icon", "Prompt": "make icon"})
+            self.assertEqual(img_ok["decision"], "allow")
+
+            # 3) Trivial research+pro is denied vs [L3]/dsp allow; flash_lite/flash pass
+            triv_pro = self._guard(repo, art, "invoke_subagent", {"TypeName": "research", "Role": "File Finder", "Prompt": "list files in src", "Model": "pro"})
+            self.assertEqual(triv_pro["decision"], "deny")
+            dsp_pro = self._guard(repo, art, "invoke_subagent", {"TypeName": "research", "Role": "DSP Auditor", "Prompt": "audit kalman dsp math", "Model": "pro"})
+            self.assertEqual(dsp_pro["decision"], "allow")
+            self.assertEqual(
+                self._guard(repo, art, "invoke_subagent", {"TypeName": "research", "Role": "Finder", "Prompt": "grep foo", "Model": "flash_lite"})["decision"],
+                "allow",
+            )
+            self.assertEqual(
+                self._guard(repo, art, "invoke_subagent", {"TypeName": "self", "Role": "Impl", "Prompt": "implement helper", "Model": "flash"})["decision"],
+                "allow",
+            )
+
+            # 4) Swarm add without model denies; explicit gemini-2.5-flash & status allow
+            self.assertEqual(self._guard(repo, art, "swarm", {"action": "add", "name": "w1", "brief": "work"})["decision"], "deny")
+            self.assertEqual(self._guard(repo, art, "swarm", {"action": "add", "name": "w1", "model": "gemini-2.5-flash", "brief": "work"})["decision"], "allow")
+            self.assertEqual(self._guard(repo, art, "swarm", {"action": "status"})["decision"], "allow")
+
+            # 5) delegation.enabled: false bypasses all delegation checks
+            (repo / ".agents" / "planner_profile.json").write_text(
+                json.dumps({"schema_version": 5, "planner_mode": "lean", "delegation": {"enabled": False}}),
+                encoding="utf-8",
+            )
+            self.assertEqual(self._guard(repo, art, "invoke_subagent", {"TypeName": "research", "Role": "R", "Prompt": "p"})["decision"], "allow")
+            self.assertEqual(
+                self._guard(repo, art, "invoke_subagent", {"TypeName": "research", "Role": "R", "Prompt": "p", "Model": "claude-3-5-sonnet"})["decision"],
+                "allow",
+            )
+
+    def test_v212_pre_invocation_delegate_directive(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            init_git_repo(repo)
+            (repo / ".agents" / "docs").mkdir(parents=True)
+            (repo / ".agents" / "planner_profile.json").write_text(
+                json.dumps({"schema_version": 5, "planner_mode": "lean"}),
+                encoding="utf-8",
+            )
+            t2_prompt = "1. Refactor playback state machine\n2. Add batch queue unit tests\n3. Update docs"
+
+            # T2 normal & eco_mode both emit DELEGATE|
+            with tempfile.TemporaryDirectory() as art2:
+                _, _, pre2 = run_hook(
+                    "planner_pre_invocation.py",
+                    {"workspacePaths": [str(repo)], "artifactDirectoryPath": art2, "lastUserInput": t2_prompt, "invocationNum": 1},
+                )
+                msg2 = pre2["injectSteps"][0]["systemMessage"]["systemMessage"]
+                self.assertIn("DELEGATE|", msg2)
+                self.assertIn("!cmd-echo", msg2)
+                self.assertIn("Google-only(L0:flash_lite|L1-2:flash|L3:pro)", msg2)
+                self.assertIn("reply<=20L", msg2)
+
+            with tempfile.TemporaryDirectory() as art3:
+                _, _, pre3 = run_hook(
+                    "planner_pre_invocation.py",
+                    {
+                        "workspacePaths": [str(repo)],
+                        "artifactDirectoryPath": art3,
+                        "lastUserInput": "Architect audio dsp filter, api schema, auth pipeline, ui tabs and tests across 5 modules",
+                        "invocationNum": 1,
+                    },
+                )
+                msg3 = pre3["injectSteps"][0]["systemMessage"]["systemMessage"]
+                self.assertIn("DELEGATE|", msg3)
+                self.assertIn("SOTA_PREFLIGHT|", msg3)
+                self.assertLessEqual(len(msg3), 1500)
+
+            with tempfile.TemporaryDirectory() as art_eco:
+                _, _, pre_eco = run_hook(
+                    "planner_pre_invocation.py",
+                    {"workspacePaths": [str(repo)], "artifactDirectoryPath": art_eco, "lastUserInput": "low quota: " + t2_prompt, "invocationNum": 1},
+                )
+                msg_eco = pre_eco["injectSteps"][0]["systemMessage"]["systemMessage"]
+                self.assertIn("DELEGATE|", msg_eco)
+
+            # T0/T1 trivial prompt omits DELEGATE|
+            with tempfile.TemporaryDirectory() as art0:
+                _, _, pre0 = run_hook(
+                    "planner_pre_invocation.py",
+                    {"workspacePaths": [str(repo)], "artifactDirectoryPath": art0, "lastUserInput": "fix typo in README.md", "invocationNum": 1},
+                )
+                self.assertEqual(pre0, {})
+
+            # delegation.enabled: false suppresses DELEGATE|
+            (repo / ".agents" / "planner_profile.json").write_text(
+                json.dumps({"schema_version": 5, "planner_mode": "lean", "delegation": {"enabled": False}}),
+                encoding="utf-8",
+            )
+            with tempfile.TemporaryDirectory() as art_off:
+                _, _, pre_off = run_hook(
+                    "planner_pre_invocation.py",
+                    {"workspacePaths": [str(repo)], "artifactDirectoryPath": art_off, "lastUserInput": t2_prompt, "invocationNum": 1},
+                )
+                msg_off = pre_off["injectSteps"][0]["systemMessage"]["systemMessage"]
+                self.assertNotIn("DELEGATE|", msg_off)
 
 
 def _stamp_plugin_tests_passed() -> None:
