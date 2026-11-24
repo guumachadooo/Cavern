@@ -381,6 +381,7 @@ public sealed partial class RealtimePlayerEngine {
                     rebuiltSources = true;
                 }
 
+                ApplyLiveChoreographyPositionsLocked(GetCurrentTrackSecondsLocked());
                 ApplySourceMutesAndProperties();
 
                 // Refresh live per-block E-AC-3 Coupling / SPX bitstream cutoffs prior to Slot 2 & Pre-HRTF LGSR

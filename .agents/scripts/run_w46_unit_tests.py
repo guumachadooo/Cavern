@@ -2078,6 +2078,141 @@ RunTest("T26_T3_PureInstrumental_StudioBundles_And_BsRoFormerHostStft", () => {
     Assert(bsSnr >= 30.0, $"BsRoFormerHostStft identity STFT/iSTFT SNR must be >= 30 dB, got {bsSnr:0.0} dB");
 });
 
+// ---------- Test 27: Live Choreography Single Source of Truth, Hybrid 7.1.4 & LFE Exclusion, Pause/Unpause Stability ----------
+RunTest("T27_LiveChoreography_SingleSourceOfTruth_And_Hybrid714Exclusion", () => {
+    using IDisposable virtScope = Cavern.Virtualizer.VirtualizerFilter.BeginStaticStateScope();
+    int sr = 48000;
+    int len = sr * 12; // 12s stereo track + 4 stems
+
+    StereoStemBuffer MakeStem(string name, float freqL, float freqR) {
+        float[] l = new float[len];
+        float[] r = new float[len];
+        for (int i = 0; i < len; i++) {
+            double t = i / (double)sr;
+            l[i] = 0.25f * MathF.Sin((float)(2.0 * Math.PI * freqL * t));
+            r[i] = 0.25f * MathF.Sin((float)(2.0 * Math.PI * freqR * t));
+        }
+        return new StereoStemBuffer(name, l, r);
+    }
+
+    StereoStemBuffer[] stems = [
+        MakeStem("vocals", 440f, 440f),
+        MakeStem("bass", 75f, 75f),
+        MakeStem("drums", 180f, 220f),
+        MakeStem("other", 620f, 880f)
+    ];
+    NeuralSeparatedTrack sep = new() {
+        SourceTrackKey = "t27_choreo_track",
+        SampleRate = sr,
+        Stems = stems
+    };
+    SpatialChoreoTrack choreo = NeuralStemSpatializer.BuildChoreoTrack(stems, sr, SpatialChoreoMode.Orbit);
+    Assert(choreo != null && choreo.StemCount == 4, "Failed to build SpatialChoreoTrack for T27.");
+
+    using SyntheticClockReader reader = new(sr, len);
+    using CavernizeTrack track = new(reader, Codec.PCM_LE, 0);
+    using RealtimePlayerEngine engine = new();
+    engine.HeadphoneVirtualizer = true;
+    engine.Load(track, new UpmixingSettings(true), new RenderingSettings());
+
+    // Part A: HybridNeuralDirAc (IA 7.1.4) MUST NEVER collapse or move any of the 12 fixed speaker buses
+    engine.ApplyNeuralConfig(new NeuralAudioConfig { SpatialUpmixMode = NeuralSpatialUpmixMode.HybridNeuralDirAc });
+    engine.BindSpatialUpmixTrack(sep);
+    engine.SceneHub.ActiveChoreoMode = SpatialChoreoMode.Orbit;
+    engine.SceneHub.SetChoreoTrack(choreo);
+    engine.SyncChoreographyPositions();
+    Assert(engine.SourceItems.Count == 12, $"Expected 12 Hybrid 7.1.4 buses, got {engine.SourceItems.Count}");
+
+    float[] outBuf = new float[1024 * 2];
+    engine.IsPlaying = true;
+    for (int b = 0; b < 40; b++) {
+        engine.RenderNextInterleavedBlock(outBuf, 1024);
+    }
+    // Pause and explicitly probe SyncTelemetryFromTrackItems with playbackTimeSec > 0 (must still ignore fixed BedChannel buses!)
+    engine.IsPlaying = false;
+    engine.SyncChoreographyPositions();
+    engine.SceneHub.SyncTelemetryFromTrackItems(engine.SourceItems, engine.EnvironmentSize, 4.5, loop: false);
+    for (int i = 0; i < engine.SourceItems.Count; i++) {
+        TrackSourceItem bus = engine.SourceItems[i];
+        float drift = Vector3.Distance(bus.NormalizedPosition, bus.DefaultNormalizedPosition);
+        Assert(drift < 1e-4f, $"Hybrid 7.1.4 bus '{bus.Name}' drifted by {drift:F4} under Orbit choreography!");
+    }
+
+    // Part B: Stems3DObjects MUST drive live Source.Position monotonically with ZERO tug-of-war, keep LFE pinned,
+    // freeze cleanly on pause, preserve custom pins, and restore static anchors cleanly on Off.
+    engine.ApplyNeuralConfig(new NeuralAudioConfig { SpatialUpmixMode = NeuralSpatialUpmixMode.Stems3DObjects });
+    engine.Seek(0.0);
+    engine.SceneHub.ActiveChoreoMode = SpatialChoreoMode.Orbit;
+    engine.SceneHub.SetChoreoTrack(choreo);
+    engine.SyncChoreographyPositions();
+
+    TrackSourceItem lfeItem = engine.SourceItems.FirstOrDefault(x => x.IsLFE);
+    Assert(lfeItem != null, "Expected dedicated AI LFE (.1) source in Stems3DObjects mode.");
+    TrackSourceItem movingItem = engine.SourceItems.FirstOrDefault(x => x.Name.Contains("other", StringComparison.OrdinalIgnoreCase) && !x.IsLFE);
+    Assert(movingItem != null, "Expected moving 'other' neural stem in Stems3DObjects mode.");
+    TrackSourceItem pinnedItem = engine.SourceItems.FirstOrDefault(x => x.Name.Contains("drums", StringComparison.OrdinalIgnoreCase) && !x.IsLFE);
+    Assert(pinnedItem != null, "Expected 'drums' neural stem in Stems3DObjects mode.");
+
+    Vector3 customPin = new(-0.65f, 0.45f, -0.55f);
+    engine.SetSourceCustomPosition(pinnedItem, customPin);
+
+    engine.IsPlaying = true;
+    Vector3 prevPos = movingItem.NormalizedPosition;
+    Vector3 prevDelta = Vector3.Zero;
+    float maxStep = 0f;
+    float maxDistFromDefault = 0f;
+    int sharpReversals = 0;
+    for (int b = 0; b < 140; b++) { // ~3.0 seconds of continuous playback
+        int written = engine.RenderNextInterleavedBlock(outBuf, 1024);
+        Assert(written == 1024, $"Expected 1024 frames in Stems3DObjects block {b}, got {written}");
+
+        Vector3 curPos = movingItem.NormalizedPosition;
+        Vector3 step = curPos - prevPos;
+        float stepLen = step.Length();
+        if (stepLen > maxStep) maxStep = stepLen;
+        float distDef = Vector3.Distance(curPos, movingItem.DefaultNormalizedPosition);
+        if (distDef > maxDistFromDefault) maxDistFromDefault = distDef;
+        if (b > 2 && prevDelta.Length() > 0.002f && stepLen > 0.002f) {
+            float cosAngle = Vector3.Dot(Vector3.Normalize(prevDelta), Vector3.Normalize(step));
+            if (cosAngle < -0.5f) {
+                sharpReversals++;
+            }
+        }
+        prevDelta = step;
+        prevPos = curPos;
+
+        // LFE and custom pin must remain strictly fixed every single block
+        Assert(Vector3.Distance(lfeItem.NormalizedPosition, lfeItem.DefaultNormalizedPosition) < 1e-4f,
+            $"AI LFE (.1) moved during choreography on block {b}: {lfeItem.NormalizedPosition}");
+        Assert(Vector3.Distance(pinnedItem.NormalizedPosition, customPin) < 1e-4f,
+            $"Custom-pinned stem '{pinnedItem.Name}' was overwritten by choreography on block {b}: {pinnedItem.NormalizedPosition}");
+    }
+    Assert(maxDistFromDefault > 0.08f, $"Expected Orbit choreography to visibly move '{movingItem.Name}' (maxDistFromDefault={maxDistFromDefault:F4}).");
+    Assert(maxStep < 0.08f, $"Detected discontinuous position jump in '{movingItem.Name}': maxStep={maxStep:F4}");
+    Assert(sharpReversals == 0, $"Detected back-and-forth tug-of-war oscillation in '{movingItem.Name}': sharpReversals={sharpReversals}");
+
+    // Pause -> SyncChoreographyPositions -> Unpause continuity (must NOT snap to another point!)
+    Vector3 posAtPause = movingItem.NormalizedPosition;
+    engine.IsPlaying = false;
+    engine.SyncChoreographyPositions();
+    Assert(Vector3.Distance(movingItem.NormalizedPosition, posAtPause) < 0.01f,
+        $"Paused position snapped away from {posAtPause} to {movingItem.NormalizedPosition}");
+    engine.IsPlaying = true;
+    engine.RenderNextInterleavedBlock(outBuf, 1024);
+    Assert(Vector3.Distance(movingItem.NormalizedPosition, posAtPause) < 0.05f,
+        $"Unpause caused position jump from {posAtPause} to {movingItem.NormalizedPosition}");
+
+    // Turning Choreography Off MUST cleanly restore non-pinned neural stems to DefaultNormalizedPosition while keeping custom pin
+    engine.IsPlaying = false;
+    engine.SceneHub.ActiveChoreoMode = SpatialChoreoMode.Off;
+    engine.SceneHub.SetChoreoTrack(null);
+    engine.SyncChoreographyPositions();
+    Assert(Vector3.Distance(movingItem.NormalizedPosition, movingItem.DefaultNormalizedPosition) < 1e-4f,
+        $"Turning Choreography Off failed to restore '{movingItem.Name}' to default anchor: got {movingItem.NormalizedPosition} vs {movingItem.DefaultNormalizedPosition}");
+    Assert(Vector3.Distance(pinnedItem.NormalizedPosition, customPin) < 1e-4f,
+        "Turning Choreography Off must preserve user custom pin.");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
@@ -2603,11 +2738,29 @@ def _py_stage3_audio_ai_mvsep_cntc_contracts() -> None:
         assert tok in np_src, f"Missing {tok} in MainActivity.PlayerMusic.NowPlaying.cs"
 
 
+def _py_choreography_no_ui_audio_tug_of_war() -> None:
+    player_tab = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerTab.cs").read_text(encoding="utf-8")
+    m_canvas = re.search(r"void UpdateRoomCanvas\(\)\s*\{(.*?)\n    \}", player_tab, re.S)
+    assert m_canvas is not None, "Could not locate UpdateRoomCanvas() in MainActivity.PlayerTab.cs"
+    assert "SyncTelemetryFromTrackItems" not in m_canvas.group(1), (
+        "UpdateRoomCanvas() must NOT mutate trackSourceItems via SyncTelemetryFromTrackItems on the UI thread (causes audio-vs-UI tug-of-war)."
+    )
+    assert "SyncChoreographyPositions()" in player_tab, (
+        "MainActivity.PlayerTab.cs must call playerEngine.SyncChoreographyPositions() on choreography mode/track changes."
+    )
+
+    hub_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "SpatialSceneHub.cs").read_text(encoding="utf-8")
+    assert "desc.IsLfe || desc.BedChannel.HasValue" in hub_src, (
+        "SpatialSceneHub.RebuildChoreoMappingLocked must exclude IsLfe and fixed BedChannel sources."
+    )
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
     ("PY_T2_Stage2_RuntimeStabilityAndLibraryContracts", _py_stage2_runtime_stability_contracts),
     ("PY_T3_Stage3_AudioAi_Mvsep_CntcV3_Contracts", _py_stage3_audio_ai_mvsep_cntc_contracts),
+    ("PY_Choreography_NoUiAudioTugOfWar", _py_choreography_no_ui_audio_tug_of_war),
 ]
 
 

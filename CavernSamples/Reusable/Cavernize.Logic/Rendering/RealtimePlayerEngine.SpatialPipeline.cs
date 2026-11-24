@@ -441,10 +441,14 @@ public sealed partial class RealtimePlayerEngine {
         listener.AttachSources(liveNeuralSources);
 
         sourceItems = builtItems;
+        choreoPositionsApplied = false;
         CavernTrackDecoderAdapter decoderAdapter = new(currentTrack, sourceItems);
         sceneHub.BindDecoder(decoderAdapter, builtDescriptors);
         sceneHub.ConfigureStageProcessors(OutputSampleRate, decoderAdapter.Metadata);
         sceneHub.ConfigurePostProcessingStages(OutputSampleRate, 2);
+        RebuildCachedActiveSourcesLocked();
+        ApplyLiveChoreographyPositionsLocked(GetCurrentTrackSecondsLocked());
+        UpdateSourceTelemetry();
     }
 
     static void PreserveSourceOverrides(IReadOnlyList<TrackSourceItem> nextItems, IReadOnlyList<TrackSourceItem> previousItems) {
@@ -954,6 +958,50 @@ public sealed partial class RealtimePlayerEngine {
             ArmCrossfadeLocked();
         }
         lastSourceMaskHash = maskHash;
+    }
+
+    double GetCurrentTrackSecondsLocked() {
+        return currentTrack != null && currentTrack.SampleRate > 0
+            ? currentTrackSample / (double)currentTrack.SampleRate
+            : 0.0;
+    }
+
+    void ApplyLiveChoreographyPositionsLocked(double playbackTimeSec, bool forceRestoreWhenOff = false) {
+        if (!isRenderingLiveNeuralSources || liveNeuralSources == null || liveNeuralSources.Length == 0) {
+            choreoPositionsApplied = false;
+            return;
+        }
+        bool isStems3D = neuralStemStage.Config.SpatialUpmixMode == NeuralSpatialUpmixMode.Stems3DObjects;
+        bool choreoActive = isStems3D &&
+            sceneHub.ActiveChoreoMode != SpatialChoreoMode.Off &&
+            sceneHub.ActiveChoreoTrack != null;
+        Vector3 envSize = Listener.EnvironmentSize;
+        int count = Math.Min(liveNeuralSources.Length, sourceItems.Count);
+        if (choreoActive) {
+            for (int i = 0; i < count; i++) {
+                Source src = liveNeuralSources[i];
+                TrackSourceItem item = sourceItems[i];
+                if (src == null || item == null || item.HasCustomPosition || src.PositionLocked ||
+                    item.IsLFE || item.IsBed || item.Channel.HasValue) {
+                    continue;
+                }
+                if (sceneHub.TryGetChoreoSourceWorldPositionZeroAlloc(i, playbackTimeSec, envSize, out Vector3 worldPos, Loop)) {
+                    src.Position = worldPos;
+                    choreoPositionsApplied = true;
+                }
+            }
+        } else if (choreoPositionsApplied || (forceRestoreWhenOff && isStems3D)) {
+            for (int i = 0; i < count; i++) {
+                Source src = liveNeuralSources[i];
+                TrackSourceItem item = sourceItems[i];
+                if (src == null || item == null || item.HasCustomPosition || src.PositionLocked ||
+                    item.IsLFE || item.IsBed || item.Channel.HasValue) {
+                    continue;
+                }
+                src.Position = item.DefaultNormalizedPosition * envSize;
+            }
+            choreoPositionsApplied = false;
+        }
     }
 
     void UpdateSourceTelemetry() {

@@ -83,6 +83,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     bool[] usedSourceItemsScratch = Array.Empty<bool>();
     Source[] liveNeuralSources = Array.Empty<Source>();
     bool isRenderingLiveNeuralSources;
+    bool choreoPositionsApplied;
     NeuralSeparatedTrack cachedHybridTrack;
     float[][] cachedHybrid714Buses;
     float cachedHybridEffect = float.NaN;
@@ -940,10 +941,30 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     }
 
     void RefreshTelemetryAfterPositionResetLocked() {
+        ApplyLiveChoreographyPositionsLocked(GetCurrentTrackSecondsLocked());
         if (cachedActiveSources.Length > 0) {
             UpdateSourceTelemetry();
         } else if (sourceItems.Count > 0) {
             sceneHub.SyncTelemetryFromTrackItems(sourceItems, Listener.EnvironmentSize);
+        }
+    }
+
+    /// <summary>
+    /// Synchronizes live 3D neural stem <see cref="Source.Position"/> coordinates and room telemetry with the active
+    /// <see cref="SpatialSceneHub.ActiveChoreoTrack"/> at the current playhead (or restores static anchors when Off).
+    /// Safe to call from the UI thread while playing or paused without racing the audio thread.
+    /// </summary>
+    public void SyncChoreographyPositions() {
+        lock (renderLock) {
+            if (!isRenderingLiveNeuralSources) {
+                return;
+            }
+            ApplyLiveChoreographyPositionsLocked(GetCurrentTrackSecondsLocked(), forceRestoreWhenOff: true);
+            if (cachedActiveSources.Length > 0) {
+                UpdateSourceTelemetry();
+            } else if (sourceItems.Count > 0) {
+                sceneHub.SyncTelemetryFromTrackItems(sourceItems, Listener.EnvironmentSize);
+            }
         }
     }
 

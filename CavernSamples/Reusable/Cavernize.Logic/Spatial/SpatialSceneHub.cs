@@ -402,7 +402,7 @@ public sealed class SpatialSceneHub {
         }
         for (int i = 0; i < count; i++) {
             SpatialSourceDescriptor desc = sources[i];
-            if (track == null || desc == null ||
+            if (track == null || desc == null || desc.IsLfe || desc.BedChannel.HasValue ||
                 (desc.Layer != SourceLayer.NeuralStem && desc.Layer != SourceLayer.RestoredResidual)) {
                 choreoSourceStemIndices[i] = -1;
                 choreoSourceSideSigns[i] = 0f;
@@ -689,7 +689,8 @@ public sealed class SpatialSceneHub {
                 desc.CustomNormalizedPosition = item.CustomNormalizedPosition;
 
                 Vector3 normPos = item.NormalizedPosition;
-                if (applyChoreo && !item.HasCustomPosition && i < choreoSourceStemIndices.Length) {
+                if (applyChoreo && !item.HasCustomPosition && !item.IsLFE && !item.IsBed && !item.Channel.HasValue &&
+                    !desc.IsLfe && !desc.BedChannel.HasValue && i < choreoSourceStemIndices.Length) {
                     int stemIdx = choreoSourceStemIndices[i];
                     if (stemIdx >= 0 && Cavern.Neural.NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(
                             track,
@@ -740,7 +741,7 @@ public sealed class SpatialSceneHub {
             for (int i = 0; i < count; i++) {
                 SpatialSourceDescriptor desc = sources[i];
                 int stemIdx = choreoSourceStemIndices[i];
-                if (desc == null || desc.HasCustomPosition || stemIdx < 0) {
+                if (desc == null || desc.HasCustomPosition || desc.IsLfe || desc.BedChannel.HasValue || stemIdx < 0) {
                     continue;
                 }
                 if (Cavern.Neural.NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(
@@ -786,7 +787,7 @@ public sealed class SpatialSceneHub {
             }
             SpatialSourceDescriptor desc = sources[sourceIndex];
             int stemIdx = choreoSourceStemIndices[sourceIndex];
-            if (desc == null || desc.HasCustomPosition || stemIdx < 0) {
+            if (desc == null || desc.HasCustomPosition || desc.IsLfe || desc.BedChannel.HasValue || stemIdx < 0) {
                 return false;
             }
             if (!Cavern.Neural.NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(

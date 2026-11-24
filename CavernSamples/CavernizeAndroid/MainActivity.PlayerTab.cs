@@ -1195,14 +1195,7 @@ public partial class MainActivity {
             lastChoreoBuiltLyricsSig = string.Empty;
             Cavern.Neural.NeuralStemSpatializer.SetChoreoTrack(null);
             playerEngine?.SceneHub?.SetChoreoTrack(null);
-            IReadOnlyList<TrackSourceItem> items = trackSourceItems;
-            for (int i = 0; i < items.Count; i++) {
-                TrackSourceItem item = items[i];
-                if (!item.HasCustomPosition &&
-                    (item.Layer == SourceLayer.NeuralStem || item.Layer == SourceLayer.RestoredResidual)) {
-                    item.ResetPosition();
-                }
-            }
+            playerEngine?.SyncChoreographyPositions();
             UpdateRoomCanvas();
             return;
         }
@@ -1231,6 +1224,7 @@ public partial class MainActivity {
                 lastChoreoBuiltLyricsSig = string.Empty;
                 Cavern.Neural.NeuralStemSpatializer.SetChoreoTrack(null);
                 playerEngine.SceneHub?.SetChoreoTrack(null);
+                playerEngine.SyncChoreographyPositions();
             }
             return;
         }
@@ -1242,6 +1236,7 @@ public partial class MainActivity {
                 lastChoreoBuiltLyricsSig = string.Empty;
                 Cavern.Neural.NeuralStemSpatializer.SetChoreoTrack(null);
                 playerEngine.SceneHub?.SetChoreoTrack(null);
+                playerEngine.SyncChoreographyPositions();
             }
             return;
         }
@@ -1269,6 +1264,8 @@ public partial class MainActivity {
             lastChoreoBuiltLyricsSig = lyricsSig;
             Cavern.Neural.NeuralStemSpatializer.SetChoreoTrack(attached);
             playerEngine.SceneHub?.SetChoreoTrack(attached);
+            playerEngine.SyncChoreographyPositions();
+            UpdateRoomCanvas();
             return;
         }
 
@@ -1301,6 +1298,7 @@ public partial class MainActivity {
                     }
                     Cavern.Neural.NeuralStemSpatializer.SetChoreoTrack(built);
                     playerEngine.SceneHub?.SetChoreoTrack(built);
+                    playerEngine.SyncChoreographyPositions();
                     UpdateRoomCanvas();
                 });
             } catch (Exception ex) {
@@ -1782,11 +1780,6 @@ public partial class MainActivity {
     void UpdateRoomCanvas() {
         if (roomView == null || playerEngine == null) {
             return;
-        }
-        double curSec = playerEngine.HeardSeconds >= 0 ? playerEngine.HeardSeconds : playerEngine.CurrentSeconds;
-        SpatialSceneHub hub = playerEngine.SceneHub;
-        if (hub != null && hub.ActiveChoreoMode != SpatialChoreoMode.Off && hub.ActiveChoreoTrack != null) {
-            hub.SyncTelemetryFromTrackItems(trackSourceItems, playerEngine.EnvironmentSize, curSec, playerEngine.Loop);
         }
         roomView.UpdateState(
             trackSourceItems,
