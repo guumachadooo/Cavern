@@ -80,6 +80,136 @@ HIGH_SIGNAL_LOGCAT_PATTERNS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
 )
 
 SEVERITY_RANK = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+ORIGIN_RANK = {"live_triggered": 0, "current_session": 1, "historical_archive": 2}
+SESSION_HEADER_RE = re.compile(r"===\s*Session started\s*\[sid=(?P<sid>[A-Za-z0-9_-]+)\]", re.IGNORECASE)
+
+
+def split_applog_by_session(text: str, current_session_id: str) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Partition AppLogger entries into (current_session_entries, historical_archive_entries)."""
+    cur_sid = (current_session_id or "").strip().lower()
+    if not cur_sid:
+        return [], parse_app_logger_lines(text)
+    active_lines: list[str] = []
+    hist_lines: list[str] = []
+    in_current = False
+    saw_any_header = False
+    for raw_line in (text or "").splitlines():
+        m = SESSION_HEADER_RE.search(raw_line)
+        if m:
+            saw_any_header = True
+            in_current = m.group("sid").strip().lower() == cur_sid
+            continue
+        if in_current:
+            active_lines.append(raw_line)
+        else:
+            hist_lines.append(raw_line)
+    if not saw_any_header:
+        return [], parse_app_logger_lines(text)
+    return parse_app_logger_lines("\n".join(active_lines)), parse_app_logger_lines("\n".join(hist_lines))
+
+
+def classify_ui_latency_ms(elapsed_ms: float, action: str) -> dict[str, str] | None:
+    """Flag UI main-thread stalls (>400ms) and freezes (>1500ms) per BP_LIVE_QA_BUG_HUNTER_SOTA."""
+    if elapsed_ms >= 1500.0:
+        return {
+            "severity": "HIGH",
+            "category": "ui_freeze",
+            "message": f"UI freeze detected on '{action}' ({elapsed_ms:.0f} ms >= 1500 ms budget)",
+        }
+    if elapsed_ms >= 400.0:
+        return {
+            "severity": "MEDIUM",
+            "category": "ui_stall",
+            "message": f"UI stall detected on '{action}' ({elapsed_ms:.0f} ms >= 400 ms budget)",
+        }
+    return None
+
+
+def analyze_spatial_trajectory(samples: list[dict[str, Any]], mode_name: str, stem_name: str = "stem") -> list[dict[str, str]]:
+    """Detect radial center-pull collapse & alternating-sign azimuth ping-pong oscillation in 3D trajectories."""
+    import math as _math
+
+    issues: list[dict[str, str]] = []
+    if not samples or len(samples) < 4 or str(mode_name).lower() == "off":
+        return issues
+
+    radii: list[float] = []
+    azimuths: list[float] = []
+    for s in samples:
+        x = float(s.get("x", 0.0))
+        y = float(s.get("y", 0.0))
+        z = float(s.get("z", 1.0))
+        if not (_math.isfinite(x) and _math.isfinite(y) and _math.isfinite(z)):
+            issues.append({
+                "severity": "CRITICAL",
+                "category": "spatial_trajectory_nan",
+                "message": f"SpatialChoreo({mode_name}/{stem_name}) emitted NaN/Infinity coordinates",
+            })
+            return issues
+        r = _math.sqrt(x * x + y * y + z * z)
+        az = _math.degrees(_math.atan2(x, z))
+        radii.append(r)
+        azimuths.append(az)
+
+    r_min, r_max = min(radii), max(radii)
+    if r_min < 0.50 or (r_max - r_min) > 0.25:
+        issues.append({
+            "severity": "HIGH",
+            "category": "spatial_radial_collapse",
+            "message": (
+                f"SpatialChoreo({mode_name}/{stem_name}) exhibits radial collapse/oscillation toward center "
+                f"(r_min={r_min:.2f}, r_max={r_max:.2f}, span={r_max - r_min:.2f})"
+            ),
+        })
+
+    # Detect back-and-forth ping-pong swings across center (azimuth sign reversals with significant amplitude)
+    sign_reversals = 0
+    prev_sign = 0
+    large_swings = 0
+    prev_az = azimuths[0]
+    for az in azimuths[1:]:
+        if abs(az - prev_az) >= 20.0:
+            large_swings += 1
+        cur_sign = 1 if az > 8.0 else (-1 if az < -8.0 else 0)
+        if cur_sign != 0:
+            if prev_sign != 0 and cur_sign != prev_sign:
+                sign_reversals += 1
+            prev_sign = cur_sign
+        prev_az = az
+
+    # Orbit is expected to sweep 360deg smoothly (1 wrap); other modes shouldn't ping-pong >=3 times across center
+    max_reversals = 2 if str(mode_name).lower() == "orbit" else 2
+    if sign_reversals > max_reversals and (max(azimuths) - min(azimuths)) >= 30.0:
+        issues.append({
+            "severity": "HIGH",
+            "category": "spatial_pingpong_oscillation",
+            "message": (
+                f"SpatialChoreo({mode_name}/{stem_name}) oscillates back-and-forth across center "
+                f"({sign_reversals} azimuth sign reversals, az=[{min(azimuths):+.1f}..{max(azimuths):+.1f}]deg)"
+            ),
+        })
+
+    # Detect radial direction reversals (in-out-in-out pumping toward center)
+    rad_reversals = 0
+    prev_dr_sign = 0
+    for i in range(1, len(radii)):
+        dr = radii[i] - radii[i - 1]
+        if abs(dr) < 0.015:
+            continue
+        dr_sign = 1 if dr > 0 else -1
+        if prev_dr_sign != 0 and dr_sign != prev_dr_sign:
+            rad_reversals += 1
+        prev_dr_sign = dr_sign
+    if rad_reversals >= 3 and (r_max - r_min) >= 0.12:
+        issues.append({
+            "severity": "MEDIUM",
+            "category": "spatial_radial_pingpong",
+            "message": (
+                f"SpatialChoreo({mode_name}/{stem_name}) pumps toward/away from center "
+                f"({rad_reversals} radial reversals, r=[{r_min:.2f}..{r_max:.2f}])"
+            ),
+        })
+    return issues
 
 
 def normalize_signature(source: str, category: str, text: str) -> str:
@@ -390,6 +520,7 @@ class Finding:
     title: str
     repro_step: str
     evidence: str
+    origin: str = "live_triggered"
     count: int = 1
     first_seen_utc: str = ""
     last_seen_utc: str = ""
@@ -397,7 +528,7 @@ class Finding:
 
 
 class FindingLedger:
-    """Deduplicating bug ledger ranked by severity and frequency."""
+    """Deduplicating bug ledger ranked by origin (active before historical), severity, and frequency."""
 
     def __init__(self) -> None:
         self._items: dict[str, Finding] = {}
@@ -412,8 +543,10 @@ class FindingLedger:
         title: str,
         repro_step: str,
         evidence: str,
+        origin: str = "live_triggered",
     ) -> tuple[bool, Finding]:
         sev = severity.upper() if severity.upper() in SEVERITY_RANK else "MEDIUM"
+        orig = origin if origin in ORIGIN_RANK else "live_triggered"
         sig = normalize_signature(source, category, title)
         now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         existing = self._items.get(sig)
@@ -422,6 +555,11 @@ class FindingLedger:
             existing.last_seen_utc = now
             if SEVERITY_RANK[sev] < SEVERITY_RANK[existing.severity]:
                 existing.severity = sev
+            # Promote origin if a historical defect is reproduced live in the active session
+            if ORIGIN_RANK[orig] < ORIGIN_RANK.get(existing.origin, 2):
+                existing.origin = orig
+                existing.vector = vector
+                existing.repro_step = (repro_step or "").strip()[:240]
             ev_short = (evidence or "").strip()[:300]
             if ev_short and ev_short != existing.evidence and len(existing.extra_examples) < 3:
                 if ev_short not in existing.extra_examples:
@@ -437,6 +575,7 @@ class FindingLedger:
             title=(title or "").strip()[:240],
             repro_step=(repro_step or "").strip()[:240],
             evidence=(evidence or "").strip()[:400],
+            origin=orig,
             count=1,
             first_seen_utc=now,
             last_seen_utc=now,
@@ -447,14 +586,34 @@ class FindingLedger:
     def ranked(self) -> list[Finding]:
         return sorted(
             self._items.values(),
-            key=lambda x: (SEVERITY_RANK.get(x.severity, 9), -x.count, x.vector, x.title),
+            key=lambda x: (
+                ORIGIN_RANK.get(x.origin, 2),
+                SEVERITY_RANK.get(x.severity, 9),
+                -x.count,
+                x.vector,
+                x.title,
+            ),
         )
 
-    def counts_by_severity(self) -> dict[str, int]:
+    def active_findings(self) -> list[Finding]:
+        return [f for f in self.ranked() if f.origin != "historical_archive"]
+
+    def historical_findings(self) -> list[Finding]:
+        return [f for f in self.ranked() if f.origin == "historical_archive"]
+
+    def counts_by_severity(self, active_only: bool = False) -> dict[str, int]:
         counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
-        for f in self._items.values():
+        pool = self.active_findings() if active_only else list(self._items.values())
+        for f in pool:
             if f.severity in counts:
                 counts[f.severity] += 1
+        return counts
+
+    def counts_by_origin(self) -> dict[str, int]:
+        counts = {"live_triggered": 0, "current_session": 0, "historical_archive": 0}
+        for f in self._items.values():
+            key = f.origin if f.origin in counts else "live_triggered"
+            counts[key] += 1
         return counts
 
     def to_dicts(self) -> list[dict[str, Any]]:
@@ -462,6 +621,7 @@ class FindingLedger:
             {
                 "signature": f.signature,
                 "severity": f.severity,
+                "origin": f.origin,
                 "vector": f.vector,
                 "source": f.source,
                 "category": f.category,
@@ -478,14 +638,21 @@ class FindingLedger:
 
 
 def generate_report_markdown(report: dict[str, Any]) -> str:
-    """Render a concise, actionable Markdown bug dossier."""
+    """Render a concise, stratified Markdown bug dossier (Active Live/Session vs Historical Archive)."""
     lines: list[str] = []
     meta = report.get("meta") or {}
     counts = report.get("severityCounts") or {}
-    lines.append("# Cavernize Live Adversarial Bug-Hunter Report")
+    active_counts = report.get("activeSeverityCounts") or counts
+    origins = report.get("originCounts") or {}
+    findings = report.get("findings") or []
+    active_list = [f for f in findings if f.get("origin", "live_triggered") != "historical_archive"]
+    hist_list = [f for f in findings if f.get("origin") == "historical_archive"]
+
+    lines.append("# Cavernize Live Adversarial Bug-Hunter Report (SOTA v2)")
     lines.append("")
     lines.append(
         f"- **App:** `v{meta.get('appVersion', '?')}` (build `{meta.get('appBuild', '?')}`) | "
+        f"**Session:** `{meta.get('sessionId', '?')}` | "
         f"**Device:** `{meta.get('device', '?')}` | **Android:** `{meta.get('android', '?')}`"
     )
     lines.append(
@@ -493,12 +660,22 @@ def generate_report_markdown(report: dict[str, Any]) -> str:
         f"**Elapsed:** `{meta.get('elapsedSec', 0):.1f}s`"
     )
     lines.append(
-        f"- **Unique Findings:** `{report.get('totalUniqueFindings', 0)}` "
-        f"(`CRITICAL={counts.get('CRITICAL', 0)}` · `HIGH={counts.get('HIGH', 0)}` · "
-        f"`MEDIUM={counts.get('MEDIUM', 0)}` · `LOW={counts.get('LOW', 0)}`)"
+        f"- **Active Findings (Live + Current Session):** `{len(active_list)}` "
+        f"(`CRITICAL={active_counts.get('CRITICAL', 0)}` · `HIGH={active_counts.get('HIGH', 0)}` · "
+        f"`MEDIUM={active_counts.get('MEDIUM', 0)}` · `LOW={active_counts.get('LOW', 0)}`)"
+    )
+    lines.append(
+        f"- **Origin Breakdown:** `live_triggered={origins.get('live_triggered', 0)}` · "
+        f"`current_session={origins.get('current_session', 0)}` · "
+        f"`historical_archive={origins.get('historical_archive', len(hist_list))}` "
+        f"(Total unique: `{report.get('totalUniqueFindings', len(findings))}`)"
     )
     if meta.get("restoredState") is not None:
-        lines.append(f"- **State Restored Cleanly:** `{meta.get('restoredState')}`")
+        diff_keys = meta.get("restoreDiffKeys") or []
+        lines.append(
+            f"- **State Restored Cleanly:** `{meta.get('restoredState')}` "
+            f"(settings diff keys: `{len(diff_keys)}`)"
+        )
     lines.append("")
 
     vectors = report.get("vectors") or []
@@ -508,32 +685,43 @@ def generate_report_markdown(report: dict[str, Any]) -> str:
         lines.append("| Vector | Status | New Findings | Elapsed | Notes |")
         lines.append("|---|---|---:|---:|---|")
         for v in vectors:
-            notes = str(v.get("notes") or "").replace("|", "\\|").replace("\n", " ")[:120]
+            notes = str(v.get("notes") or "").replace("|", "\\|").replace("\n", " ")[:140]
             lines.append(
                 f"| `{v.get('name')}` | **{v.get('status')}** | {v.get('newFindings', 0)} | "
                 f"{v.get('elapsedSec', 0):.1f}s | {notes} |"
             )
         lines.append("")
 
-    findings = report.get("findings") or []
-    if not findings:
-        lines.append("## Findings")
+    def _render_findings(section_title: str, items: list[dict[str, Any]], empty_msg: str) -> None:
+        lines.append(f"## {section_title}")
         lines.append("")
-        lines.append("No anomalies or errors triggered during this hunt.")
-        return "\n".join(lines) + "\n"
+        if not items:
+            lines.append(empty_msg)
+            lines.append("")
+            return
+        for idx, f in enumerate(items, 1):
+            orig = f.get("origin", "live_triggered")
+            lines.append(
+                f"### {idx}. [{f['severity']}] `{f['category']}` ({f['count']}x · `{orig}`) — {f['title']}"
+            )
+            lines.append(f"- **Vector:** `{f['vector']}` | **Source:** `{f['source']}` | **Sig:** `{f['signature']}`")
+            lines.append(f"- **Trigger / Repro:** `{f['reproStep']}`")
+            lines.append(f"- **Evidence:** `{f['evidence']}`")
+            for ex in f.get("extraExamples") or []:
+                lines.append(f"  - *Also seen:* `{ex}`")
+            lines.append("")
 
-    lines.append("## Ranked Bugs & Anomalies (Deduplicated)")
-    lines.append("")
-    for idx, f in enumerate(findings, 1):
-        lines.append(
-            f"### {idx}. [{f['severity']}] `{f['category']}` ({f['count']}x) — {f['title']}"
+    _render_findings(
+        "Active Findings — Current Build & Live Triggered (Actionable)",
+        active_list,
+        "No active anomalies or errors triggered on the current build session.",
+    )
+    if hist_list:
+        _render_findings(
+            "Historical Pre-Fix Archive (Prior Sessions in Retained AppLogger — Non-Blocking)",
+            hist_list,
+            "None.",
         )
-        lines.append(f"- **Vector:** `{f['vector']}` | **Source:** `{f['source']}` | **Sig:** `{f['signature']}`")
-        lines.append(f"- **Trigger / Repro:** `{f['reproStep']}`")
-        lines.append(f"- **Evidence:** `{f['evidence']}`")
-        for ex in f.get("extraExamples") or []:
-            lines.append(f"  - *Also seen:* `{ex}`")
-        lines.append("")
     return "\n".join(lines)
 
 
@@ -871,8 +1059,11 @@ class LiveBugHunter:
         snap = {
             "ok": True,
             "meta": dict(self.meta, stepsExecuted=self.bridge.calls, restoredState=restored),
-            "severityCounts": self.ledger.counts_by_severity(),
+            "severityCounts": self.ledger.counts_by_severity(active_only=False),
+            "activeSeverityCounts": self.ledger.counts_by_severity(active_only=True),
+            "originCounts": self.ledger.counts_by_origin(),
             "totalUniqueFindings": len(self.ledger.ranked()),
+            "totalActiveFindings": len(self.ledger.active_findings()),
             "vectors": self.vector_summaries,
             "findings": self.ledger.to_dicts(),
         }
@@ -948,20 +1139,22 @@ class LiveBugHunter:
             fr = res[idx]
             idx += 1
             if fr["ok"] and fr["body"]:
-                entries = parse_app_logger_lines(fr["body"])
-                mined_lines = len(entries)
-                for e in entries:
-                    if e["level"] in ("WARN", "ERROR", "FATAL"):
-                        sev, cat = classify_applog_severity(e)
-                        self.ledger.record(
-                            severity=sev,
-                            vector="V1_log_forensics",
-                            source="applogger_history",
-                            category=cat,
-                            title=e["msg"][:200],
-                            repro_step=f"historical_log ({e['ts'] or 'recent'})",
-                            evidence=e["raw"],
-                        )
+                cur_entries, hist_entries = split_applog_by_session(fr["body"], str(self.meta.get("sessionId") or ""))
+                mined_lines = len(cur_entries) + len(hist_entries)
+                for origin_tag, entry_list in (("current_session", cur_entries), ("historical_archive", hist_entries)):
+                    for e in entry_list:
+                        if e["level"] in ("WARN", "ERROR", "FATAL"):
+                            sev, cat = classify_applog_severity(e)
+                            self.ledger.record(
+                                severity=sev,
+                                vector="V1_log_forensics",
+                                source="applogger_current" if origin_tag == "current_session" else "applogger_history",
+                                category=cat,
+                                title=e["msg"][:200],
+                                repro_step=f"{origin_tag} ({e['ts'] or 'recent'})",
+                                evidence=e["raw"],
+                                origin=origin_tag,
+                            )
 
         def _extract_lc(r_item: dict[str, Any]) -> str:
             if not r_item.get("ok"):
@@ -980,6 +1173,7 @@ class LiveBugHunter:
                     title=an["message"][:200],
                     repro_step="logcat -d *:W",
                     evidence=an["raw"],
+                    origin="historical_archive",
                 )
             idx += 1
         if idx < len(res):
@@ -992,6 +1186,7 @@ class LiveBugHunter:
                     title=an["message"][:200],
                     repro_step="logcat -d -b crash",
                     evidence=an["raw"],
+                    origin="historical_archive",
                 )
             idx += 1
         if idx < len(res):
@@ -1005,9 +1200,10 @@ class LiveBugHunter:
                         title=an["message"][:200],
                         repro_step="logcat -d *:I (Choreographer/Audio/GC)",
                         evidence=an["raw"],
+                        origin="historical_archive",
                     )
 
-        return f"mined {mined_lines} AppLogger entries + logcat W/E/crash/Choreographer"
+        return f"mined {mined_lines} AppLogger entries (stratified active vs historical) + logcat W/E/crash/Choreographer"
 
     # ==================== VECTOR 2: CONCURRENT PLAYBACK x ACOUSTIC ORACLE ====================
     def _v2_concurrent_playback_oracle(self) -> str:
@@ -1156,9 +1352,15 @@ class LiveBugHunter:
         labels.append("log_tail post-fuzz")
 
         res = self.bridge.pipeline(steps, stop_on_error=False, tier=2, timeout_sec=45)
+        boundary_rejected_ok = 0
         for i, item in enumerate(res):
             lbl = labels[i] if i < len(labels) else f"step#{i}"
+            is_boundary = lbl.startswith("boundary ")
             if item["subCmd"] == "settings_set" and not item["ok"]:
+                if is_boundary:
+                    # Rejecting an intentionally out-of-range boundary probe is safe validation, NOT a bug!
+                    boundary_rejected_ok += 1
+                    continue
                 self.ledger.record(
                     severity="MEDIUM",
                     vector="V3_settings_chaos_fuzzer",
@@ -1184,7 +1386,7 @@ class LiveBugHunter:
 
         self._restore_settings()
         self._watch_step_delta("V3_settings_chaos_fuzzer", "settings chaos burst + restore", check_logcat=True)
-        return f"executed {len(steps)} rapid-fire DSP/boundary steps in 1 burst and restored settings"
+        return f"executed {len(steps)} rapid-fire DSP/boundary steps (safe boundary rejects={boundary_rejected_ok}) & restored settings"
 
     # ==================== VECTOR 4: REAL USER LIBRARY EDGE-CASE & DECODER TORTURE ====================
     def _v4_real_library_edge_hunter(self) -> str:
@@ -1544,6 +1746,205 @@ class LiveBugHunter:
 
         return ", ".join(notes_parts) or "bridge security & memory OK"
 
+    # ==================== VECTOR 9: INTERACTIVE UI FREEZE WATCHDOG & LIBRARY/PLAY ORACLE ====================
+    def _v9_ui_latency_and_search_oracle(self) -> str:
+        """Measure real per-action UI latency (stall >400ms / freeze >1500ms) & audit Library album-search consistency."""
+        notes: list[str] = []
+        max_ms = 0.0
+
+        # 9a. Time individual tab switches to catch real UI stalls/freezes
+        if self.meta.get("uiHostAttached") and self.allow_mutate:
+            for tab_idx, tab_name in ((2, "Play"), (4, "Settings"), (0, "Converter"), (2, "Play")):
+                t0 = time.monotonic()
+                r = self.bridge.cmd("tab_switch", {"index": tab_idx}, tier=1, timeout_sec=20)
+                dt_ms = (time.monotonic() - t0) * 1000.0
+                # Prefer on-device elapsedMs when available so cloud network RTT never creates false UI-freeze alarms
+                dev_ms = float(r.get("elapsedMs") or dt_ms)
+                max_ms = max(max_ms, dev_ms)
+                lat_issue = classify_ui_latency_ms(dev_ms, f"tab_switch({tab_name})")
+                if lat_issue:
+                    self.ledger.record(
+                        severity=lat_issue["severity"],
+                        vector="V9_ui_latency_and_search_oracle",
+                        source="ui_latency_watchdog",
+                        category=lat_issue["category"],
+                        title=lat_issue["message"],
+                        repro_step=f"tab_switch index={tab_idx} ({tab_name})",
+                        evidence=f"deviceElapsedMs={dev_ms:.0f} wallMs={dt_ms:.0f}",
+                    )
+            notes.append(f"maxTabMs={max_ms:.0f}")
+
+        # 9b. Stateful Library Album-Search Oracle (catches single-track truncation when track shares album name!)
+        lq = self.bridge.cmd("library_query", {"query": "", "limit": 100}, tier=0, timeout_sec=20)
+        if lq["ok"] and isinstance(lq["json"], dict):
+            all_tracks = list(lq["json"].get("tracks") or [])
+            album_counts: dict[str, int] = {}
+            title_matches_album: list[str] = []
+            for tr in all_tracks:
+                alb = str(tr.get("Album") or "").strip()
+                tit = str(tr.get("Title") or "").strip()
+                if alb:
+                    album_counts[alb] = album_counts.get(alb, 0) + 1
+                    if tit and tit.lower() == alb.lower() and alb not in title_matches_album:
+                        title_matches_album.append(alb)
+            # Prioritize title-track albums (e.g. "evermore") or any multi-track album
+            multi_albums = [a for a in title_matches_album if album_counts.get(a, 0) >= 2]
+            if not multi_albums:
+                multi_albums = [a for a, cnt in sorted(album_counts.items(), key=lambda kv: -kv[1]) if cnt >= 3][:2]
+            checked_albums = 0
+            for alb in multi_albums[:2]:
+                checked_albums += 1
+                expected_cnt = album_counts[alb]
+                qr = self.bridge.cmd("library_query", {"query": alb, "limit": 100}, tier=0, timeout_sec=20)
+                if qr["ok"] and isinstance(qr["json"], dict):
+                    returned = [
+                        t for t in (qr["json"].get("tracks") or [])
+                        if str(t.get("Album") or "").strip().lower() == alb.lower()
+                    ]
+                    if len(returned) < expected_cnt:
+                        self.ledger.record(
+                            severity="HIGH",
+                            vector="V9_ui_latency_and_search_oracle",
+                            source="library_search_oracle",
+                            category="library_album_search_truncated",
+                            title=f"Library search for album '{alb}' returned {len(returned)}/{expected_cnt} album tracks",
+                            repro_step=f"library_query query='{alb}'",
+                            evidence=f"expected>={expected_cnt} tracks in album '{alb}', got {len(returned)}",
+                        )
+            notes.append(f"albumsAudited={checked_albums}")
+
+        self._watch_step_delta("V9_ui_latency_and_search_oracle", "UI latency & library search oracle", check_logcat=True)
+        return ", ".join(notes) or "UI latency & library oracle OK"
+
+    # ==================== VECTOR 10: SPATIAL TRAJECTORY & IN-RAM HOT-EXEC ORACLE ====================
+    def _v10_spatial_trajectory_and_hot_exec(self) -> str:
+        """Verify In-RAM hot_exec closed-loop capability AND sample SpatialObjectCortex trajectories across all modes."""
+        if not hasattr(self.bridge, "relay"):
+            return "skipped (offline mock bridge)"
+
+        # Compile & execute a tiny collectible C# probe purely in running Cavernize RAM (zero APK rebuild!)
+        probe_cs = r"""
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Numerics;
+using System.Text;
+using Cavern.Neural;
+using Cavern.Spatial;
+
+public static class SpatialTrajectoryHotProbe {
+    public static string Run() {
+        int sr = 48000;
+        int len = sr * 24;
+        var stems = new List<StereoStemBuffer>();
+        string[] names = new[] { "vocals", "bass", "drums", "other" };
+        for (int s = 0; s < names.Length; s++) {
+            float[] l = new float[len];
+            float[] r = new float[len];
+            float freq = 180f + s * 320f;
+            for (int i = 0; i < len; i++) {
+                float env = 0.25f + 0.75f * (0.5f + 0.5f * MathF.Sin(2f * MathF.PI * (0.25f + 0.1f * s) * i / sr));
+                float v = 0.35f * env * MathF.Sin(2f * MathF.PI * freq * i / sr);
+                l[i] = v;
+                r[i] = v * 0.9f;
+            }
+            stems.Add(new StereoStemBuffer(names[s], l, r));
+        }
+
+        var modes = new[] { SpatialChoreoMode.Subtle, SpatialChoreoMode.Musical, SpatialChoreoMode.Cinematic, SpatialChoreoMode.Orbit };
+        var sb = new StringBuilder();
+        sb.Append("{\"ok\":true,\"modes\":{");
+        for (int m = 0; m < modes.Length; m++) {
+            if (m > 0) sb.Append(',');
+            var mode = modes[m];
+            var cues = Layer1AudioForensics.Analyze(stems, sr, mode, null);
+            var track = SpatialChoreoTrack.Build(names, cues, mode, 24.0, 0.05);
+            sb.Append('"').Append(mode.ToString()).Append("\":{\"cueCount\":").Append(cues.Length).Append(",\"stems\":{");
+            for (int s = 0; s < names.Length; s++) {
+                if (s > 0) sb.Append(',');
+                sb.Append('"').Append(names[s]).Append("\":[");
+                for (int step = 0; step <= 48; step++) {
+                    double t = step * 0.5;
+                    Vector3 p;
+                    track.EvaluatePositionZeroAlloc(s, t, out p, false);
+                    if (step > 0) sb.Append(',');
+                    sb.Append("{\"t\":").Append(t.ToString("0.0", CultureInfo.InvariantCulture))
+                      .Append(",\"x\":").Append(p.X.ToString("0.000", CultureInfo.InvariantCulture))
+                      .Append(",\"y\":").Append(p.Y.ToString("0.000", CultureInfo.InvariantCulture))
+                      .Append(",\"z\":").Append(p.Z.ToString("0.000", CultureInfo.InvariantCulture)).Append('}');
+                }
+                sb.Append(']');
+            }
+            sb.Append("}}");
+        }
+        sb.Append("}}");
+        return sb.ToString();
+    }
+}
+"""
+        try:
+            import hot_probe_compiler as hpc
+            import secrets as _sec
+
+            comp = hpc.compile_hot_probe(probe_cs, probe_name="SpatialTrajectoryHotProbe", include_android=False)
+            if not comp.get("ok"):
+                return f"hot_exec compile skipped ({str(comp.get('error') or 'no local dotnet')[:80]})"
+            req_id = f"hot_v10_{int(time.time())}_{_sec.token_hex(4)}"
+            hot_args = hpc.build_signed_hot_exec_args(
+                comp["dllBytes"],
+                self.bridge.secret,
+                req_id,
+                entry_type="SpatialTrajectoryHotProbe",
+                timeout_sec=20,
+            )
+            res = self.bridge.cmd("hot_exec", hot_args, tier=2, timeout_sec=35)
+            if not res["ok"] or not isinstance(res["json"], dict):
+                self.ledger.record(
+                    severity="MEDIUM",
+                    vector="V10_spatial_trajectory_and_hot_exec",
+                    source="hot_exec",
+                    category="hot_exec_probe_failed",
+                    title=f"In-RAM hot_exec spatial probe failed: {(res['error'] or res['body'])[:140]}",
+                    repro_step="hot_exec SpatialTrajectoryHotProbe",
+                    evidence=(res["error"] or res["body"])[:300],
+                )
+                return "hot_exec probe failed"
+
+            hj = res["json"]
+            if hj.get("unloaded") is False:
+                self.ledger.record(
+                    severity="MEDIUM",
+                    vector="V10_spatial_trajectory_and_hot_exec",
+                    source="hot_exec",
+                    category="hot_exec_alc_not_unloaded",
+                    title="Collectible AssemblyLoadContext remained alive after hot_exec probe",
+                    repro_step="hot_exec SpatialTrajectoryHotProbe",
+                    evidence=res["body"][:260],
+                )
+
+            payload_str = str(hj.get("output") or "")
+            parsed = json.loads(payload_str) if payload_str.strip().startswith("{") else {}
+            modes_map = parsed.get("modes") or {}
+            modes_checked = 0
+            anomalies_found = 0
+            for mode_name, mdata in modes_map.items():
+                modes_checked += 1
+                for stem_name, samples in (mdata.get("stems") or {}).items():
+                    for iss in analyze_spatial_trajectory(samples, mode_name, stem_name):
+                        anomalies_found += 1
+                        self.ledger.record(
+                            severity=iss["severity"],
+                            vector="V10_spatial_trajectory_and_hot_exec",
+                            source="spatial_trajectory_oracle",
+                            category=iss["category"],
+                            title=iss["message"],
+                            repro_step=f"hot_exec SpatialChoreoTrack.Build({mode_name}, {stem_name})",
+                            evidence=f"cues={mdata.get('cueCount')} samples={len(samples)}",
+                        )
+            return f"hot_exec RAM probe OK ({hj.get('elapsedMs', 0)}ms, unloaded={hj.get('unloaded')}), audited {modes_checked} choreo modes (anomalies={anomalies_found})"
+        except Exception as exc:
+            return f"hot_exec trajectory probe unavailable ({type(exc).__name__}: {str(exc)[:80]})"
+
     # ==================== GUARANTEED CLEAN STATE RESTORE ====================
     def _restore_settings(self) -> bool:
         if not self._baseline_settings:
@@ -1563,6 +1964,7 @@ class LiveBugHunter:
 
     def _restore_all(self) -> bool:
         ok = True
+        self.meta["restoreDiffKeys"] = []
         if not self.allow_mutate:
             return True
         try:
@@ -1588,9 +1990,16 @@ class LiveBugHunter:
                 steps.append({"cmd": "open_file", "args": {"path": orig_file, "autoPlay": was_playing}})
             if isinstance(orig_tab, int) and 0 <= orig_tab <= 4:
                 steps.append({"cmd": "tab_switch", "args": {"index": orig_tab}})
+            steps.append({"cmd": "settings_get"})
             if steps:
                 res = self.bridge.pipeline(steps, stop_on_error=False, tier=2, timeout_sec=30)
                 ok = any(r.get("ok") for r in res)
+                if res and res[-1].get("subCmd") == "settings_get" and res[-1].get("ok") and isinstance(res[-1].get("json"), dict):
+                    after = res[-1]["json"]
+                    diff_keys = [k for k, v in subset.items() if after.get(k) != v]
+                    self.meta["restoreDiffKeys"] = diff_keys
+                    if diff_keys:
+                        ok = False
         except Exception:
             ok = False
         return ok
@@ -1609,6 +2018,8 @@ class LiveBugHunter:
                 ("V6_ui_monkey_and_audit", self._v6_ui_monkey_and_audit),
                 ("V7_acoustic_extreme_fuzzer", self._v7_acoustic_extreme_fuzzer),
                 ("V8_inapp_chaos_and_watchdog", self._v8_inapp_chaos_and_watchdog),
+                ("V9_ui_latency_and_search_oracle", self._v9_ui_latency_and_search_oracle),
+                ("V10_spatial_trajectory_and_hot_exec", self._v10_spatial_trajectory_and_hot_exec),
             ]
             try:
                 for vname, vfn in all_vectors:
@@ -1627,8 +2038,11 @@ class LiveBugHunter:
         report = {
             "ok": True,
             "meta": self.meta,
-            "severityCounts": self.ledger.counts_by_severity(),
+            "severityCounts": self.ledger.counts_by_severity(active_only=False),
+            "activeSeverityCounts": self.ledger.counts_by_severity(active_only=True),
+            "originCounts": self.ledger.counts_by_origin(),
             "totalUniqueFindings": len(self.ledger.ranked()),
+            "totalActiveFindings": len(self.ledger.active_findings()),
             "vectors": self.vector_summaries,
             "findings": self.ledger.to_dicts(),
         }

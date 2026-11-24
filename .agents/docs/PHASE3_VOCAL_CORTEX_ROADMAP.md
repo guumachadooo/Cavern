@@ -27,7 +27,11 @@
 - **Scarlett Gen 4 Pre-ADC Hardware Awareness (`HardwarePreAmpStateSnapshot` from `W50`):**
   - Consumes lock-free hardware telemetry (`Air`, `Presence/Drive`, `AutoGain/ClipSafe`, preamp gain delta, `PhoneMic` vs `UsbMic` mode) from `Scarlett2Protocol` / `UsbProAudioDeviceManager` so sudden preamp gain steps trigger instant FDKF covariance reset (preventing echo bursts) and software color operators never double-process hardware Air/Drive.
 
-### 2.2 Pillar B (Priority #2) — `AcousticConstraintGovernor` & Omniscient Joint Multi-Objective Solver
+### 2.2 Pillar B (Priority #2) — `AcousticConstraintGovernor`, Component Behavioral Profiling & Omniscient Joint Multi-Objective Solver
+- **Component Behavioral Profiling / Transfer-Function Fingerprinting (Anti-Conflict Precision):**
+  - Instead of tuning blind parameter names (`threshold`, `ratio`, `gain`), every DSP component/operator registers a machine-readable `ComponentBehaviorProfile` (I/O transfer curve, knee & attack/release ballistics, phase/group-delay topology, harmonic coloration, headroom ceiling, & inter-stage conflict matrix) auto-measured offline via deterministic impulse/step/sine-sweep probes (`0` user training needed). Prevents cross-stage clashes, pumping, & redundant makeup gain.
+- **Autonomous-First Staging & Side-by-Side Legacy Coexistence:**
+  - All engineering infrastructure, golden benches, & `ComponentBehaviorProfile` registries ship autonomously (`Phase A`, zero user prompts); interactive user calibration/training (`Phase B`) stays cleanly decoupled and deferred, while every existing working DSP/vocal path remains active side-by-side (`0` regressions).
 - **Eliminating the "Suicidal Compressor / Auto-EQ" Trap:**
   - Naive independent Auto-Mix + Mix-Match chains push high-shelf EQ + heavy makeup gain/compression in the exact frequency bands where the mic-to-speaker loop gain $|H_{\text{room}}(\omega) G_{\text{chain}}(\omega)| \to 1$, triggering instant howling.
 - **Joint Multi-Objective Constrained Optimizer (Plane 3 `15–30 ms` -> Lock-Free Plane 2 Targets):**

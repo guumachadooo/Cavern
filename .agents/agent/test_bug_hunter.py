@@ -189,6 +189,118 @@ class BugHunterUnitTests(unittest.TestCase):
         self.assertTrue(any("static state race" in t for t in titles))
         md = bh.generate_report_markdown(report)
         self.assertIn("Cavernize Live Adversarial Bug-Hunter Report", md)
+        self.assertIn("Active Findings", md)
+        self.assertEqual(report["meta"].get("restoreDiffKeys"), [])
+
+    def test_split_applog_by_session_stratification(self) -> None:
+        raw = "\n".join([
+            "[2026-11-23 10:00:00.000] [INFO] [T#1] [SYS] === Session started [sid=old001] ===",
+            "[2026-11-23 10:01:00.000] [ERROR] [T#2] [DSP] Pre-fix error from yesterday",
+            "[2026-11-24 14:00:00.000] [INFO] [T#1] [SYS] === Session started [sid=cur999] ===",
+            "[2026-11-24 14:02:00.000] [WARN] [T#3] [AUDIO] Current session warning",
+        ])
+        cur, hist = bh.split_applog_by_session(raw, "cur999")
+        self.assertEqual(len(cur), 1)
+        self.assertEqual(len(hist), 1)
+        self.assertIn("Current session warning", cur[0]["msg"])
+        self.assertIn("Pre-fix error", hist[0]["msg"])
+
+        # Missing session id treats all entries as historical rather than falsely active
+        cur_empty, hist_all = bh.split_applog_by_session(raw, "")
+        self.assertEqual(len(cur_empty), 0)
+        self.assertEqual(len(hist_all), 4)
+
+    def test_classify_ui_latency_ms(self) -> None:
+        self.assertIsNone(bh.classify_ui_latency_ms(120.0, "tap_upmix"))
+        stall = bh.classify_ui_latency_ms(450.0, "tap_upmix")
+        self.assertIsNotNone(stall)
+        assert stall is not None
+        self.assertEqual(stall["severity"], "MEDIUM")
+        self.assertEqual(stall["category"], "ui_stall")
+        freeze = bh.classify_ui_latency_ms(2100.0, "tap_cavernize")
+        self.assertIsNotNone(freeze)
+        assert freeze is not None
+        self.assertEqual(freeze["severity"], "HIGH")
+        self.assertEqual(freeze["category"], "ui_freeze")
+
+    def test_analyze_spatial_trajectory_clean_vs_collapse_vs_pingpong(self) -> None:
+        # Clean smooth arc at constant radius r=1.0
+        clean = [
+            {"x": 0.0, "y": 0.0, "z": 1.0},
+            {"x": 0.2588, "y": 0.0, "z": 0.9659},
+            {"x": 0.5, "y": 0.0, "z": 0.866},
+            {"x": 0.7071, "y": 0.0, "z": 0.7071},
+            {"x": 0.866, "y": 0.0, "z": 0.5},
+        ]
+        self.assertEqual(bh.analyze_spatial_trajectory(clean, "Musical", "Guitar"), [])
+
+        # Radial collapse toward center + pumping
+        collapse = [
+            {"x": 0.8, "y": 0.0, "z": 0.6},
+            {"x": 0.2, "y": 0.0, "z": 0.2},
+            {"x": 0.8, "y": 0.0, "z": 0.6},
+            {"x": 0.15, "y": 0.0, "z": 0.15},
+            {"x": 0.8, "y": 0.0, "z": 0.6},
+            {"x": 0.2, "y": 0.0, "z": 0.2},
+        ]
+        collapse_cats = {i["category"] for i in bh.analyze_spatial_trajectory(collapse, "Cinematic", "Drums")}
+        self.assertIn("spatial_radial_collapse", collapse_cats)
+        self.assertIn("spatial_radial_pingpong", collapse_cats)
+
+        # Azimuth ping-pong across center (alternating left/right sign flips)
+        pingpong = [
+            {"x": 0.7, "y": 0.0, "z": 0.714},
+            {"x": -0.7, "y": 0.0, "z": 0.714},
+            {"x": 0.7, "y": 0.0, "z": 0.714},
+            {"x": -0.7, "y": 0.0, "z": 0.714},
+            {"x": 0.7, "y": 0.0, "z": 0.714},
+        ]
+        pp_cats = {i["category"] for i in bh.analyze_spatial_trajectory(pingpong, "Musical", "Lead")}
+        self.assertIn("spatial_pingpong_oscillation", pp_cats)
+
+    def test_finding_ledger_origin_stratification_and_live_promotion(self) -> None:
+        ledger = bh.FindingLedger()
+        ledger.record(
+            severity="HIGH",
+            vector="V1",
+            source="applogger",
+            category="audio_error",
+            title="Native backend disconnect",
+            repro_step="historical_log",
+            evidence="old",
+            origin="historical_archive",
+        )
+        ledger.record(
+            severity="MEDIUM",
+            vector="V1",
+            source="applogger",
+            category="perf",
+            title="Current session jank",
+            repro_step="current_log",
+            evidence="cur",
+            origin="current_session",
+        )
+        self.assertEqual(len(ledger.active_findings()), 1)
+        self.assertEqual(len(ledger.historical_findings()), 1)
+        self.assertEqual(ledger.counts_by_severity(active_only=True)["HIGH"], 0)
+        self.assertEqual(ledger.counts_by_severity(active_only=False)["HIGH"], 1)
+
+        # Reproducing the historical defect live must promote it to live_triggered!
+        is_new, promoted = ledger.record(
+            severity="HIGH",
+            vector="V5",
+            source="applogger",
+            category="audio_error",
+            title="Native backend disconnect",
+            repro_step="live_repro_step",
+            evidence="new",
+            origin="live_triggered",
+        )
+        self.assertFalse(is_new)
+        self.assertEqual(promoted.origin, "live_triggered")
+        self.assertEqual(promoted.vector, "V5")
+        self.assertEqual(len(ledger.active_findings()), 2)
+        self.assertEqual(ledger.counts_by_origin()["historical_archive"], 0)
 
 
 if __name__ == "__main__":

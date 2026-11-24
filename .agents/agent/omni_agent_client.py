@@ -206,6 +206,55 @@ def cmd_connect(args: argparse.Namespace) -> int:
     return 0
 
 
+def wake_linux_daemon(
+    relay_url: str,
+    pair_secret_hex: str,
+    admin_key: str = "",
+    *,
+    wait_sec: float = 15.0,
+    poll_interval: float = 1.5,
+) -> dict[str, Any]:
+    """Wake sleeping Termux/Debian PRoot daemon via OmniAgent Android `launch_termux_daemon` (single-shot, bounded wait)."""
+    if _is_channel_online(relay_url, pair_secret_hex, "termux", admin_key):
+        return {"ok": True, "alreadyOnline": True, "woke": False, "channel": "termux"}
+    if not _is_channel_online(relay_url, pair_secret_hex, "android", admin_key):
+        return {"ok": False, "alreadyOnline": False, "woke": False, "error": "android channel is offline; cannot dispatch launch_termux_daemon"}
+
+    dispatch = send_agent_command(
+        relay_url,
+        pair_secret_hex,
+        "launch_termux_daemon",
+        {},
+        channel="android",
+        admin_key=admin_key,
+        timeout_sec=25,
+        auto_wake=False,
+    )
+    if not dispatch.get("ok"):
+        return {
+            "ok": False,
+            "alreadyOnline": False,
+            "woke": False,
+            "dispatch": dispatch,
+            "error": str(dispatch.get("error") or dispatch.get("message") or "launch_termux_daemon failed"),
+        }
+
+    deadline = time.time() + max(1.0, float(wait_sec))
+    while time.time() < deadline:
+        if _is_channel_online(relay_url, pair_secret_hex, "termux", admin_key):
+            return {"ok": True, "alreadyOnline": False, "woke": True, "channel": "termux", "dispatch": dispatch}
+        time.sleep(min(max(0.2, poll_interval), max(0.05, deadline - time.time())))
+    online = _is_channel_online(relay_url, pair_secret_hex, "termux", admin_key)
+    return {
+        "ok": online,
+        "alreadyOnline": False,
+        "woke": online,
+        "channel": "termux",
+        "dispatch": dispatch,
+        "error": "" if online else f"Dispatched launch_termux_daemon, but termux did not heartbeat within {wait_sec:.0f}s",
+    }
+
+
 def send_agent_command(
     relay_url: str,
     pair_secret_hex: str,
@@ -214,7 +263,15 @@ def send_agent_command(
     channel: str = "termux",
     admin_key: str = "",
     timeout_sec: int = 120,
+    auto_wake: bool = True,
 ) -> dict[str, Any]:
+    # Single-shot auto-wake if a Linux/Termux command is invoked while Termux is sleeping and Android is online
+    if auto_wake and channel in ("termux", "debian"):
+        if not _is_channel_online(relay_url, pair_secret_hex, channel, admin_key):
+            if _is_channel_online(relay_url, pair_secret_hex, "android", admin_key):
+                print(f"[omni-agent] Channel '{channel}' is asleep — auto-waking Linux/PRoot via android launch_termux_daemon...", file=sys.stderr)
+                wake_linux_daemon(relay_url, pair_secret_hex, admin_key=admin_key, wait_sec=15.0)
+
     headers = proto.derive_agent_headers(pair_secret_hex, channel=channel, admin_key=admin_key)
     req_id = f"r_{int(time.time())}_{secrets.token_hex(6)}"
     payload = {"cmd": cmd, "args": args_obj or {}, "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
@@ -780,6 +837,8 @@ def main() -> int:
 
     sub.add_parser("status", help="Check online status of all agent channels (termux, android, debian)")
     sub.add_parser("ping", help="Ping target agent channel and print detected tools/environment")
+    p_wl = sub.add_parser("wake-linux", help="Wake sleeping Termux/Debian PRoot daemon via OmniAgent Android `launch_termux_daemon`")
+    p_wl.add_argument("--wait", type=float, default=15.0, help="Seconds to wait for termux channel heartbeat (default 15s)")
 
     p_cmd = sub.add_parser("cmd", help="Send any arbitrary OmniAgent command + JSON args")
     p_cmd.add_argument("name")
@@ -1045,6 +1104,10 @@ def main() -> int:
         return 0 if res.get("ok") else 1
 
     relay, secret, admin = _resolve_auth(args, allow_knock=True)
+    if args.action == "wake-linux":
+        res = wake_linux_daemon(relay, secret, admin_key=admin, wait_sec=float(args.wait))
+        print(json.dumps(res, indent=2, ensure_ascii=False))
+        return 0 if res.get("ok") else 1
     if args.action == "status":
         headers = proto.derive_agent_headers(secret, channel="termux", admin_key=admin)
         st, resp = proto.http_json("GET", f"{relay}/v1/agent/status?all=1", headers, timeout=15)

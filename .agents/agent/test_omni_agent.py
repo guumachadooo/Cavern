@@ -1026,6 +1026,49 @@ class OmniAgentProtocolTests(unittest.TestCase):
             self.assertIn("ScheduleUserInitiated", src_w)
             self.assertIn("OmniAgentBinder", src_f)
 
+    def test_wake_linux_daemon_and_single_shot_auto_wake(self) -> None:
+        from unittest import mock
+
+        # 1. Already online -> zero launch_termux_daemon dispatches
+        with mock.patch.object(oac, "_is_channel_online", return_value=True), \
+             mock.patch.object(oac, "send_agent_command") as m_send:
+            res = oac.wake_linux_daemon("https://relay.test", self.KEY, wait_sec=2.0)
+        self.assertTrue(res["ok"])
+        self.assertTrue(res["alreadyOnline"])
+        self.assertFalse(res["woke"])
+        m_send.assert_not_called()
+
+        # 2. Termux offline + android offline -> clean error, no dispatch
+        with mock.patch.object(oac, "_is_channel_online", return_value=False), \
+             mock.patch.object(oac, "send_agent_command") as m_send:
+            res_off = oac.wake_linux_daemon("https://relay.test", self.KEY, wait_sec=2.0)
+        self.assertFalse(res_off["ok"])
+        self.assertIn("android channel is offline", res_off["error"])
+        m_send.assert_not_called()
+
+        # 3. Termux offline + android online -> dispatches launch_termux_daemon once & succeeds when heartbeat appears
+        checks = {"termux": 0}
+
+        def _fake_online(relay, secret, ch, admin=""):
+            if ch == "android":
+                return True
+            if ch == "termux":
+                checks["termux"] += 1
+                return checks["termux"] >= 2  # offline on initial check, online on first poll
+            return False
+
+        with mock.patch.object(oac, "_is_channel_online", side_effect=_fake_online), \
+             mock.patch.object(oac, "send_agent_command", return_value={"ok": True, "dispatched": True}) as m_send, \
+             mock.patch.object(oac.time, "sleep", return_value=None):
+            res_wake = oac.wake_linux_daemon("https://relay.test", self.KEY, wait_sec=3.0, poll_interval=0.2)
+        self.assertTrue(res_wake["ok"])
+        self.assertTrue(res_wake["woke"])
+        self.assertFalse(res_wake["alreadyOnline"])
+        m_send.assert_called_once()
+        self.assertEqual(m_send.call_args.args[2], "launch_termux_daemon")
+        self.assertEqual(m_send.call_args.kwargs["channel"], "android")
+        self.assertFalse(m_send.call_args.kwargs["auto_wake"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
