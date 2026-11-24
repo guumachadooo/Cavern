@@ -37,6 +37,7 @@ for p in (str(SCRIPTS_DIR), str(HOOKS_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+import blueprint_engine  # noqa: E402
 import complexity_triage  # noqa: E402
 import log_digest  # noqa: E402
 import model_mode_cache  # noqa: E402
@@ -4086,6 +4087,225 @@ class TestDelegationGuardAndPreInvocation(unittest.TestCase):
                 )
                 msg_off = pre_off["injectSteps"][0]["systemMessage"]["systemMessage"]
                 self.assertNotIn("DELEGATE|", msg_off)
+
+
+class TestSotaBlueprintEngine(unittest.TestCase):
+    """Tests for v2.13.0 Universal 6-Stage SOTA Blueprint Engine & Popperian Linter."""
+
+    @staticmethod
+    def _valid_blueprint_text(status: str = "SEED-v1", h2_override: str | None = None, body_override: dict[str, str] | None = None) -> str:
+        sections = {
+            "meta": f"BP_META|id=BP_OMNISCIENT_SPATIAL|domain_vec=dsp-hw:1.00,ai-ml:0.85,ux-product:0.45|door=1-way|tier=T3|status={status}|h1_wave=W0",
+            "value": "VALUE|Convert stereo songs into beat-locked 3D Atmos/IAMF trajectories achieving >=4.2/5 MOS listener preference.",
+            "wardley": "WARDLEY|Custom Trajectory Governor + Lyric Director (Genesis) over existing ONNX stems & ADM/IAMF writers (Product/OSS).",
+            "ng1": "NON_GOAL|Zero per-song neural retraining on user phone.",
+            "ng2": "NON_GOAL|Never pan Lead Vocals >15 deg or rotate LFE sub-bass.",
+            "sota": "SOTA_SOURCES|Audio-driven beat/onset trackers + BS.2076 audioBlockFormat + constrained LLM JSON choreography.",
+            "triz": "TRIZ_CONTRADICTION|Rich 3D motion vs vocal clarity/motion-sickness -> Dynamics + Cushion-in-advance (Governor clamps).",
+            "c1": "CANDIDATE|A|Pure DSP LFO Orbit|Zero AI, deterministic beat-synchronous panning; misses lyric semantics.",
+            "r1": "REJECTED_BECAUSE|A|Fails lyric cues ('left/right') and repeats generic 8D motion yielding <2.8 MOS.",
+            "c2": "CANDIDATE|B|Unconstrained Video/LLM Frame Predictor|Predicts raw XYZ per 20ms frame directly from LLM.",
+            "r2": "REJECTED_BECAUSE|B|Exceeds 50 ms frame jitter budget and rotates Lead Vocal/Kick causing >25 deg phase smear.",
+            "win": "WINNER|3-Plane Hybrid: Offline Beat/Stem Forensics + Compact INT4 JSON Cue Director + Deterministic Spline Governor (<0.3 ms/block).",
+            "pm": "PREMORTEM|T+6mo|Bad external BPM tag or unguarded LLM cue rotates Lead Vocal mid-chorus causing listener fatigue.",
+            "th": "THREAT|Malformed LLM JSON / OOD tempo sweep -> strict schema validator + angular velocity ceiling <=45 deg/s.",
+            "k1": "KILL|R1|Vocal phase smearing|vocal_anchor_err_deg > 15 deg|10 songs eval|Lock Lead Vocal azimuth <= 10 deg.",
+            "k2": "KILL|R2|Mobile OOM/thermal stall|peak_rss_mb > 900 MB|10 min batch|Switch SLM to rule-only semantic cue fallback.",
+            "budget": "BUDGET|latency=<0.5 ms/block|mem=<450 MB|cost=0 USD offline|degraded_floor=DSP-only stem orbits",
+            "planes": "PLANES|offline=stems+beat+SLM JSON cues|rt=0-alloc Catmull-Rom trajectory interpolator|async=section telemetry bus",
+            "q1": "QAS|Q1|Tempo transition 90->140 BPM|On-device offline|Spline locks beat grid|<=15 ms drift|pytest tests/test_traj.py",
+            "q2": "QAS|Q2|Lyric cue 'left, right'|Sync LRC+ADM|Voice/ad-lib sweeps L->R|<=0.1 deg zipper|dotnet test --filter AdmTraj",
+            "spike": "SPIKE|S1|VoI=0.8|Test BS.2076 audioBlockFormat + IAMF decoder parity|ffmpeg + IamfReader roundtrip == 0 errors",
+            "h1": "SLICE|W1|TrajectoryGovernor+BeatMap|stems+LRC->spline keyframes|pytest tests/test_traj.py",
+            "h2": h2_override if h2_override is not None else "STUB|W2|Wire ADM/IAMF block writers & 3D Room X-Ray playback <=1% CPU overhead.",
+            "fit": "FITNESS|CI runs python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py blueprint lint BP_OMNISCIENT_SPATIAL.md --strict",
+            "evo": "EVOLVE_RULE|on(kill_trigger || fitness_fail) -> mark SEED-v1 SUPERSEDED && delta-reenter Stage2-3",
+        }
+        if body_override:
+            sections.update(body_override)
+        return (
+            "# Omniscient Spatial Cortex (`BP_OMNISCIENT_SPATIAL`)\n\n"
+            "> STYLE|lossless symbolic telegraphic EN ONLY.\n\n"
+            f"## 0. Meta & Lineage\n{sections['meta']}\nPARENT_ADR|none\n\n"
+            f"## 1. Value & Non-Goals\n{sections['value']}\n{sections['wardley']}\n{sections['ng1']}\n{sections['ng2']}\n\n"
+            f"## 2. Live SOTA & Blind Morphogenesis\n{sections['sota']}\n{sections['triz']}\n"
+            f"{sections['c1']}\n{sections['r1']}\n{sections['c2']}\n{sections['r2']}\n{sections['win']}\n\n"
+            f"## 3. Cold-Ctx Red-Team, Pre-Mortem & Kill Criteria\n{sections['pm']}\n{sections['th']}\n{sections['k1']}\n{sections['k2']}\n\n"
+            f"## 4. Invariants, Budgets & QAS\n{sections['budget']}\n{sections['planes']}\n{sections['q1']}\n{sections['q2']}\n\n"
+            f"## 5. Epistemic Wave-0 Spikes\n{sections['spike']}\n\n"
+            f"## 6. Rolling-Wave DSM Graph\n### H1 Atomic Slices\n{sections['h1']}\n\n### H2+ Outcome Stubs\n{sections['h2']}\n\n"
+            f"## 7. Fitness Functions & Evolution\n{sections['fit']}\n{sections['evo']}\n"
+        )
+
+    def test_classify_multi_domain_and_topology(self) -> None:
+        c1 = blueprint_engine.classify_blueprint_request(
+            "Build real-time spatial audio DSP + ONNX neural classifier + OneUI 3D screen"
+        )
+        self.assertIn("dsp-hw", c1["active_domains"])
+        self.assertIn("ai-ml", c1["active_domains"])
+        self.assertEqual(c1["risk_tier"], "T3")
+        for lens in c1["active_lenses"].values():
+            self.assertLessEqual(len(lens), 420)
+        self.assertGreaterEqual(len(c1["morph_axes"]), 2)
+        topo = c1["subagent_topology"]
+        self.assertEqual(topo["stage_1_scouts"]["model"], "flash")
+        self.assertEqual(topo["stage_2_blind_solvers"]["model"], "pro")
+        self.assertEqual(topo["stage_3_cold_redteam"]["round_cap"], 1)
+
+        c2 = blueprint_engine.classify_blueprint_request("OAuth JWT API microservice with SELinux key isolation and UI login modal")
+        self.assertIn("security", c2["active_domains"])
+        self.assertIn("software", c2["active_domains"])
+
+        c3 = blueprint_engine.classify_blueprint_request("Wardley strategy pricing unit econ SLA roadmap for Q3")
+        self.assertIn("biz-org", c3["active_domains"])
+
+    def test_detect_blueprint_intent_positive_and_negative(self) -> None:
+        pos = (
+            "Cria um blueprint SOTA completo para o córtex espacial",
+            "Write a SOTA blueprint and RFC for our distributed audio sync protocol",
+            "Elabora uma especificação técnica / design doc para autenticação zero-trust",
+        )
+        for p in pos:
+            self.assertTrue(complexity_triage.detect_blueprint_intent(p), f"Expected True for: {p}")
+            res = complexity_triage.analyze_prompt(p)
+            self.assertIn("blueprint_intent", res)
+            self.assertTrue(res["blueprint_intent"], f"analyze_prompt missed blueprint_intent for: {p}")
+
+        neg = (
+            "Architect audio dsp filter, api schema, auth pipeline, ui tabs and tests across 5 modules",
+            "Fix null reference crash in MainActivity.cs when exporting IAMF",
+            "O que é um blueprint?",
+            "Update blueprint_engine.py to fix typo",
+            "obrigado",
+        )
+        for n in neg:
+            self.assertFalse(complexity_triage.detect_blueprint_intent(n), f"Expected False for: {n}")
+            res = complexity_triage.analyze_prompt(n)
+            self.assertIn("blueprint_intent", res)
+            self.assertFalse(res["blueprint_intent"], f"analyze_prompt false positive for: {n}")
+
+    def test_scaffold_and_popperian_lint_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            sc = blueprint_engine.scaffold_blueprint("Spatial Cortex", "spatial_cortex", repo, prompt="DSP audio AI neural system")
+            bp_path = Path(sc["path"])
+            self.assertTrue(bp_path.is_file())
+            r_sc = blueprint_engine.lint_blueprint(bp_path, strict=True)
+            self.assertFalse(r_sc["passed"])
+            self.assertGreater(r_sc["metrics"]["placeholders"], 0)
+
+            good_path = repo / ".agents" / "docs" / "blueprints" / "BP_GOOD.md"
+            good_path.write_text(self._valid_blueprint_text(), encoding="utf-8")
+            r_good = blueprint_engine.lint_blueprint(good_path, strict=True)
+            self.assertTrue(r_good["passed"], f"Expected PASS, got issues={r_good['issues']}")
+            self.assertGreaterEqual(r_good["score"], 90)
+
+            # Unqualified weasel words fail WBS
+            weasel_p = repo / "BP_WEASEL.md"
+            weasel_p.write_text(
+                self._valid_blueprint_text(body_override={"value": "VALUE|Deliver fast, robust and seamless spatial audio.", "q1": "QAS|Q1|Beat|Live|Seamless fast output|fast|<cmd>"}),
+                encoding="utf-8",
+            )
+            r_w = blueprint_engine.lint_blueprint(weasel_p, strict=True)
+            self.assertFalse(r_w["passed"])
+            self.assertLess(r_w["subscores"]["WBS"], 10)
+
+            # Missing REJECTED_BECAUSE fails ORI
+            noori_p = repo / "BP_NOORI.md"
+            noori_p.write_text(self._valid_blueprint_text(body_override={"r1": "", "r2": ""}), encoding="utf-8")
+            r_o = blueprint_engine.lint_blueprint(noori_p, strict=True)
+            self.assertFalse(r_o["passed"])
+            self.assertEqual(r_o["subscores"]["ORI"], 0)
+
+            # Missing KILL fails KCC (drops below 15 when PREMORTEM exists, 0 when both absent)
+            nokill_p = repo / "BP_NOKILL.md"
+            nokill_p.write_text(self._valid_blueprint_text(body_override={"k1": "", "k2": ""}), encoding="utf-8")
+            r_k = blueprint_engine.lint_blueprint(nokill_p, strict=True)
+            self.assertFalse(r_k["passed"])
+            self.assertLess(r_k["subscores"]["KCC"], 15)
+
+            # Bloated H2+ with code leak fails AWF
+            bloat_h2 = "\n".join(
+                ["STUB|W2|Implement Cavern/Spatial/TrajectoryEngine.cs `public class TrajectoryEngine { }`"]
+                + [f"STUB|W{i}|Extra verbose step {i} detailing internal structs" for i in range(3, 18)]
+            )
+            awf_p = repo / "BP_AWF.md"
+            awf_p.write_text(self._valid_blueprint_text(h2_override=bloat_h2), encoding="utf-8")
+            r_a = blueprint_engine.lint_blueprint(awf_p, strict=True)
+            self.assertFalse(r_a["passed"])
+            self.assertLess(r_a["subscores"]["AWF"], 10)
+
+    def test_cli_pre_invocation_and_verify_integration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / ".agents").mkdir(parents=True)
+            (repo / ".agents" / "planner_profile.json").write_text(
+                json.dumps({"schema_version": 5, "planner_mode": "lean"}),
+                encoding="utf-8",
+            )
+            p_cls = run_script("plan_tool.py", ["--workspace", str(repo), "blueprint", "classify", "--prompt", "Create DSP AI blueprint", "--json"], cwd=repo)
+            self.assertEqual(p_cls.returncode, 0, p_cls.stderr)
+            self.assertIn("dsp-hw", json.loads(p_cls.stdout)["active_domains"])
+
+            p_init = run_script("plan_tool.py", ["--workspace", str(repo), "blueprint", "init", "--title", "Demo BP", "--slug", "DEMO_BP", "--prompt", "DSP AI system"], cwd=repo)
+            self.assertEqual(p_init.returncode, 0, p_init.stderr)
+            bp_file = repo / ".agents" / "docs" / "blueprints" / "BP_DEMO_BP.md"
+            self.assertTrue(bp_file.is_file())
+
+            # Replace with valid complete blueprint and test lint + status + handoff
+            bp_file.write_text(self._valid_blueprint_text(status="LOCKED"), encoding="utf-8")
+            p_lint = run_script("plan_tool.py", ["--workspace", str(repo), "blueprint", "lint", str(bp_file), "--strict"], cwd=repo)
+            self.assertEqual(p_lint.returncode, 0, p_lint.stdout + p_lint.stderr)
+            p_st = run_script("plan_tool.py", ["--workspace", str(repo), "blueprint", "status"], cwd=repo)
+            self.assertEqual(p_st.returncode, 0)
+            self.assertIn("PASS", p_st.stdout)
+            p_ho = run_script("plan_tool.py", ["--workspace", str(repo), "blueprint", "handoff", str(bp_file), "--json"], cwd=repo)
+            self.assertEqual(p_ho.returncode, 0)
+            self.assertIn("plan_tool.py init", json.loads(p_ho.stdout)["plan_init_cmd"])
+
+            # PreInvocation hook injects [BLUEPRINT_MODE|SOTA] within 1500c cap, silent on normal prompts
+            with tempfile.TemporaryDirectory() as art1:
+                _, _, pre_bp = run_hook(
+                    "planner_pre_invocation.py",
+                    {
+                        "workspacePaths": [str(repo)],
+                        "artifactDirectoryPath": art1,
+                        "lastUserInput": "Crie um blueprint SOTA completo para audio espacial, neural e interface 3D",
+                        "invocationNum": 1,
+                    },
+                )
+                msg_bp = pre_bp["injectSteps"][0]["systemMessage"]["systemMessage"]
+                self.assertIn("[BLUEPRINT_MODE|SOTA]", msg_bp)
+                self.assertLessEqual(len(msg_bp), 1500)
+
+            with tempfile.TemporaryDirectory() as art2:
+                _, _, pre_norm = run_hook(
+                    "planner_pre_invocation.py",
+                    {
+                        "workspacePaths": [str(repo)],
+                        "artifactDirectoryPath": art2,
+                        "lastUserInput": "Refactor audio decoder buffer, cache, and unit tests across 3 files",
+                        "invocationNum": 1,
+                    },
+                )
+                msg_norm = pre_norm["injectSteps"][0]["systemMessage"]["systemMessage"]
+                self.assertNotIn("[BLUEPRINT_MODE|SOTA]", msg_norm)
+
+            # verify_universal check_blueprint_quality warn vs strict fail & pass
+            fails: list[str] = []
+            warns: list[str] = []
+            verify_universal.check_blueprint_quality(repo, [".agents/docs/blueprints/BP_DEMO_BP.md"], {}, fails, warns)
+            self.assertEqual(fails, [])
+            self.assertEqual(warns, [])
+
+            bad_rel = ".agents/docs/blueprints/BP_BAD.md"
+            (repo / bad_rel).write_text("# Bad (`BP_BAD`)\nBP_META|id=BP_BAD|status=SEED-v1\n<FILL:x>\n", encoding="utf-8")
+            warns.clear()
+            verify_universal.check_blueprint_quality(repo, [bad_rel], {}, fails, warns)
+            self.assertEqual(fails, [])
+            self.assertEqual(len(warns), 1)
+            verify_universal.check_blueprint_quality(repo, [bad_rel], {"blueprint": {"strict_verify": True}}, fails, warns)
+            self.assertEqual(len(fails), 1)
 
 
 def _stamp_plugin_tests_passed() -> None:

@@ -207,6 +207,7 @@ def _run_pre_invocation_inner(t0: float) -> None:
             "recon": prev_recon,
             "recon_injected": False,
             "lens_injected": False,
+            "blueprint_injected": False,
             "btw_injected": False,
         }
     else:
@@ -417,6 +418,21 @@ def _run_pre_invocation_inner(t0: float) -> None:
             f"T{tier} edited={total_ed} (code={len(hook_state.get('code_files_edited') or [])},plugin={len(hook_state.get('plugin_files_edited') or [])})",
             repo=repo,
         )
+
+    # SOTA Blueprint directive (after SOTA_PREFLIGHT|, before LENS|; suppressed in ECO_MODE)
+    if (
+        triage.get("blueprint_intent")
+        and not eco_mode
+        and not is_btw_short
+        and not hook_state.get("blueprint_injected")
+    ):
+        bp_line = (
+            "[BLUEPRINT_MODE|SOTA] Follow `skills/sota-blueprint/SKILL.md` "
+            "(6-stage Blind-Morphogenesis + Cold-RedTeam + VoI-Spike) && "
+            "run `plan_tool.py blueprint {classify|init|lint --strict}` (score>=85)."
+        )
+        if _append_within_budget(bp_line):
+            hook_state["blueprint_injected"] = True
 
     # Domain lenses (1-line active-domain critique, suppressed in ECO_MODE & within bloat budget)
     if not is_btw_short and not eco_mode and not plan_ready and not hook_state.get("lens_injected") and tier >= 1:

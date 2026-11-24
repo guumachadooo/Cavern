@@ -1034,6 +1034,14 @@ def cmd_live_diag(args: argparse.Namespace, ws_root: Path) -> int:
     return live_diagnostics.main(sub_argv)
 
 
+def cmd_blueprint(args: argparse.Namespace, ws_root: Path) -> int:
+    """Delegate to Universal SOTA Blueprint Engine (`blueprint_engine.py`)."""
+    import blueprint_engine  # noqa: E402
+
+    sub_argv = ["--workspace", str(ws_root), *(args.extra_args or [])]
+    return blueprint_engine.main(sub_argv)
+
+
 def cmd_host(args: argparse.Namespace, ws_root: Path) -> int:
     """Delegate multi-host boot, status, matrix audit, or tool classification to `host_context.py`."""
     import host_context  # noqa: E402
@@ -1189,6 +1197,9 @@ def main() -> None:
     p_ldiag = sub.add_parser("live-diag", help="Fetch uncached live CI & runtime diagnostics from GitHub (forwards remaining args).")
     p_ldiag.add_argument("extra_args", nargs=argparse.REMAINDER)
 
+    p_bp = sub.add_parser("blueprint", help="Universal SOTA Blueprint Engine (classify|init|lint|score|status|list|handoff).")
+    p_bp.add_argument("extra_args", nargs=argparse.REMAINDER)
+
     for h_cmd, h_help in (
         ("host-boot", "Run unified host-aware session boot (Antigravity local vs AI Studio cloud)."),
         ("host-status", "Show detected host capabilities, matrix view, and baton state."),
@@ -1238,6 +1249,8 @@ def main() -> None:
         raise SystemExit(cmd_learn(args, ws_root))
     if args.cmd == "live-diag":
         raise SystemExit(cmd_live_diag(args, ws_root))
+    if args.cmd == "blueprint":
+        raise SystemExit(cmd_blueprint(args, ws_root))
     if args.cmd in ("host-boot", "host-status", "host-audit", "host-classify"):
         raise SystemExit(cmd_host(args, ws_root))
 

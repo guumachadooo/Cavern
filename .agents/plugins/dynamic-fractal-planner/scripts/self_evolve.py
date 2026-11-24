@@ -43,7 +43,7 @@ SYNC_PRESERVE_NAMES = frozenset({
 
 UNIVERSAL_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("build/CI error learning & timelessness", re.compile(r"\b(?:error.?learn|build.?lessons|timeless|anti-?obsolescence|ci.?diag|diagnostic.?fetch|log.?digest)\b", re.I)),
-    ("planner/hooks/triage/guardrails/verification", re.compile(r"\b(?:planner|hook|triage|verify_universal|plan_tool|guardrail|wiring.?gate|parity.?rule|diff.?rule|circuit.?breaker|eco.?mode|recon)\b", re.I)),
+    ("planner/hooks/triage/guardrails/verification", re.compile(r"\b(?:planner|hook|triage|verify_universal|plan_tool|guardrail|wiring.?gate|parity.?rule|diff.?rule|circuit.?breaker|eco.?mode|recon|sota.?blueprint|blueprint.?engine|blueprint)\b", re.I)),
     ("multi-AI memory/sync/handoff/self-evolution", re.compile(r"\b(?:external_ai_sync|handoff|project_history|saved_ideas|extra_requests|self.?evolv|dual.?scope|sync.?ledger|auto.?migrat)\b", re.I)),
     ("generic relay/bridge protocol client", re.compile(r"\b(?:relay.?client|bridge.?client|cloudflare.?worker|hmac.?wake|encrypt-?then-?mac|live.?bridge.?protocol)\b", re.I)),
     ("multi-host adaptive framework & baton", re.compile(r"\b(?:host.?context|host.?matrix|multi-?host|cross-?host|baton.?switch|host-?boot|host-?audit|host-?classify)\b", re.I)),

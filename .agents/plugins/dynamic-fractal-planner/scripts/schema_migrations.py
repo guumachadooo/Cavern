@@ -62,6 +62,15 @@ DEFAULT_DELEGATION_CONFIG: dict[str, Any] = {
     "sequential_proot_ops": ["dotnet_build", "heavy_tests", "git_push"],
 }
 
+DEFAULT_BLUEPRINT_CONFIG: dict[str, Any] = {
+    "dir": ".agents/docs/blueprints",
+    "min_score": 85,
+    "max_lines": 350,
+    "max_kb": 24,
+    "max_h2_ratio": 0.25,
+    "strict_verify": False,
+}
+
 
 def resolve_delegation_config(profile: dict[str, Any] | None = None) -> dict[str, Any]:
     """Merge profile `delegation` overrides cleanly onto DEFAULT_DELEGATION_CONFIG."""
@@ -77,6 +86,18 @@ def resolve_delegation_config(profile: dict[str, Any] | None = None) -> dict[str
             sub.update(val)
             merged[key] = sub
         else:
+            merged[key] = copy.deepcopy(val)
+    return merged
+
+
+def resolve_blueprint_config(profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Merge profile `blueprint` overrides cleanly onto DEFAULT_BLUEPRINT_CONFIG."""
+    merged = copy.deepcopy(DEFAULT_BLUEPRINT_CONFIG)
+    raw_bp = profile.get("blueprint") if isinstance(profile, dict) else None
+    if not isinstance(raw_bp, dict):
+        return merged
+    for key, val in raw_bp.items():
+        if val is not None:
             merged[key] = copy.deepcopy(val)
     return merged
 
