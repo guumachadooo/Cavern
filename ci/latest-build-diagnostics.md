@@ -1,10 +1,10 @@
-# Cavernize Android CI Build Diagnostics (`v2.9.77`)
+# Cavernize Android CI Build Diagnostics (`v2.9.78`)
 
-- **Generated (UTC):** `2026-11-25T01:05:56Z`
-- **Commit:** `2db9f84bba53c9672333154d8c050ff9e21c6523`
-- **Build / Run:** `#77` (https://github.com/guumachadooo/Cavern/actions/runs/45522882927)
-- **Outcome:** `compile=FAILURE` · `publish=SKIPPED`
-- **Totals:** **2 unique error(s)** · **0 unique warning(s)**
+- **Generated (UTC):** `2026-11-25T01:30:22Z`
+- **Commit:** `fdb4ef6d6be6059fbacb5b89c7c0f6ee0eb2b66f`
+- **Build / Run:** `#78` (https://github.com/guumachadooo/Cavern/actions/runs/45525535422)
+- **Outcome:** `compile=SUCCESS` · `publish=SUCCESS`
+- **Totals:** **0 unique error(s)** · **0 unique warning(s)**
 
 ## Layer Status
 - **00_Native_NDK**: `SUCCESS` (errors: `0`, warnings: `0`)
@@ -12,17 +12,12 @@
 - **01_Cavern**: `PASS` (errors: `0`, warnings: `0`)
 - **02_Cavern.Format**: `PASS` (errors: `0`, warnings: `0`)
 - **03_Cavernize.Logic**: `PASS` (errors: `0`, warnings: `0`)
-- **04_CavernizeAndroid**: `FAIL` (errors: `2`, warnings: `0`)
+- **04_CavernizeAndroid**: `PASS` (errors: `0`, warnings: `0`)
 - **05_Shadow_FullApp**: `SKIPPED` (errors: `0`, warnings: `0`)
-- **06_Publish_APK**: `SKIPPED` (errors: `0`, warnings: `0`)
+- **06_Publish_APK**: `SUCCESS` (errors: `0`, warnings: `0`)
 
-## Consolidated Errors (2 unique)
-
-### 04_CavernizeAndroid (2)
-```text
-CavernSamples/CavernizeAndroid/MainActivity.cs(594,16): error CS1593: Delegate 'Func<int, View>' does not take 0 arguments [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]
-CavernSamples/CavernizeAndroid/MainActivity.cs(595,13): error CS1503: Argument 5: cannot convert from 'method group' to 'System.Action<int, float>' [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]
-```
+## Consolidated Errors
+Zero compilation/packaging errors.
 
 ## Consolidated Warnings
 Zero build warnings.
