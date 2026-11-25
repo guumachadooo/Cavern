@@ -23,7 +23,7 @@
       "label": "Google AI Studio Cloud Container",
       "ignore_cloud_env_alerts": false,
       "boot_steps": [
-        "python3 -B .agents/scripts/flight_recorder.py recover",
+        "python3 -B .agents/scripts/flight_recorder.py resume",
         "python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py host-boot"
       ]
     },

@@ -952,7 +952,13 @@ def main() -> int:
     p_cav.add_argument("--tier", type=int, default=2, choices=(0, 1, 2))
 
     p_cp = sub.add_parser("checkpoint", help="Anti-Cancellation 3-tier Session Flight Recorder (forwards to flight_recorder.py)")
-    p_cp.add_argument("fr_args", nargs=argparse.REMAINDER, help="Arguments passed directly to flight_recorder.py (init|save|recover|restore|status|close)")
+    p_cp.add_argument("fr_args", nargs=argparse.REMAINDER, help="Arguments passed directly to flight_recorder.py (init|save|pin|resume|recover|restore|status|close)")
+
+    p_rsm = sub.add_parser("resume", help="1-shot zero-waste parallel session resume packet (forwards to flight_recorder.py resume)")
+    p_rsm.add_argument("fr_args", nargs=argparse.REMAINDER, help="Flags forwarded to flight_recorder.py resume (--auto-restore|--compact|--json|--skip-github)")
+
+    p_pin = sub.add_parser("pin", help="Zero-friction semantic breadcrumb write (forwards to flight_recorder.py pin)")
+    p_pin.add_argument("fr_args", nargs=argparse.REMAINDER, help="Flags forwarded to flight_recorder.py pin (-b|--goal|--done|--pending|--next)")
 
     p_ship = sub.add_parser("ship", help="1-shot quota-saving pipeline: verify + file-budget + auto [skip ci] push + Termux sync + Flight Recorder close")
     p_ship.add_argument("--commit", required=True, help="Commit message")
@@ -1007,7 +1013,7 @@ def main() -> int:
         import repo_federation as rfed
         return rfed.main(list(args.fed_args or []))
 
-    if args.action == "checkpoint":
+    if args.action in ("checkpoint", "resume", "pin"):
         import flight_recorder as fr
         forwarded: list[str] = []
         if args.url:
@@ -1016,6 +1022,8 @@ def main() -> int:
             forwarded += ["--pair-secret", args.pair_secret]
         if args.admin_key:
             forwarded += ["--admin-key", args.admin_key]
+        if args.action in ("resume", "pin"):
+            forwarded.append(args.action)
         forwarded += list(args.fr_args or [])
         return fr.main(forwarded)
 
