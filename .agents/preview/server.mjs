@@ -136,9 +136,6 @@ function readFederationStatus() {
   return { ok: true, status: 'warming', mountRoot: '/tmp/cavern-federation' };
 }
 
-startLiveSyncWatcher();
-warmFederatedRepos();
-
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
@@ -149,68 +146,93 @@ function sendJson(res, status, payload) {
 }
 
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  try {
+    const rawHost = String(req.headers.host || 'localhost').replace(/[^a-zA-Z0-9.:[\]-]/g, '') || 'localhost';
+    const url = new URL(req.url || '/', `http://${rawHost}`);
+    const isHead = req.method === 'HEAD';
 
-  if (url.pathname === '/health') {
-    return sendJson(res, 200, {
-      ok: true,
-      service: 'cavernize-workspace-preview',
-      port: PORT,
-      liveSyncWatcher: Boolean(liveWatcherProc && !liveWatcherProc.killed),
-    });
-  }
-
-  if (url.pathname === '/api/live-sync') {
-    return sendJson(res, 200, readLiveSyncStatus());
-  }
-
-  if (url.pathname === '/api/federation') {
-    return sendJson(res, 200, readFederationStatus());
-  }
-
-  if (url.pathname === '/favicon.ico') {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
-  if (url.pathname === '/api/context') {
-    return sendJson(res, 200, loadWorkspaceSnapshot(ROOT_DIR));
-  }
-
-  if (url.pathname === '/api/doc') {
-    const id = url.searchParams.get('id') || 'handoff';
-    const doc = readWhitelistedDoc(ROOT_DIR, id);
-    if (!doc) {
-      return sendJson(res, 404, { error: 'Unknown document id' });
+    if (url.pathname === '/health') {
+      const payload = {
+        ok: true,
+        service: 'cavernize-workspace-preview',
+        port: PORT,
+        liveSyncWatcher: Boolean(liveWatcherProc && !liveWatcherProc.killed),
+      };
+      if (isHead) {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.end();
+        return;
+      }
+      return sendJson(res, 200, payload);
     }
-    return sendJson(res, 200, doc);
-  }
 
-  if (url.pathname === '/' || url.pathname === '/index.html') {
-    const snapshot = loadWorkspaceSnapshot(ROOT_DIR);
-    const initialDoc = readWhitelistedDoc(ROOT_DIR, 'handoff') || {
-      id: 'handoff',
-      label: 'Handoff',
-      path: '.agents/docs/HANDOFF.md',
-      lines: 0,
-      content: '',
-    };
-    const html = renderDashboardHtml(snapshot, initialDoc);
-    res.writeHead(200, {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'no-store',
-    });
-    res.end(html);
-    return;
-  }
+    if (url.pathname === '/api/live-sync') {
+      return sendJson(res, 200, readLiveSyncStatus());
+    }
 
-  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
-  res.end('Not found');
+    if (url.pathname === '/api/federation') {
+      return sendJson(res, 200, readFederationStatus());
+    }
+
+    if (url.pathname === '/favicon.ico') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    if (url.pathname === '/api/context') {
+      return sendJson(res, 200, loadWorkspaceSnapshot(ROOT_DIR));
+    }
+
+    if (url.pathname === '/api/doc') {
+      const id = url.searchParams.get('id') || 'handoff';
+      const doc = readWhitelistedDoc(ROOT_DIR, id);
+      if (!doc) {
+        return sendJson(res, 404, { error: 'Unknown document id' });
+      }
+      return sendJson(res, 200, doc);
+    }
+
+    if (url.pathname === '/' || url.pathname === '/index.html') {
+      const snapshot = loadWorkspaceSnapshot(ROOT_DIR);
+      const initialDoc = readWhitelistedDoc(ROOT_DIR, 'handoff') || {
+        id: 'handoff',
+        label: 'Handoff',
+        path: '.agents/docs/HANDOFF.md',
+        lines: 0,
+        content: '',
+      };
+      const html = renderDashboardHtml(snapshot, initialDoc);
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+      });
+      res.end(isHead ? undefined : html);
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(isHead ? undefined : 'Not found');
+  } catch (err) {
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+    }
+    res.end(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : 'Internal error' }));
+  }
+});
+
+server.on('error', (err) => {
+  console.error(`Cavernize preview server error on ${HOST}:${PORT}:`, err instanceof Error ? err.message : err);
+  process.exit(1);
 });
 
 server.listen(PORT, HOST, () => {
   console.log(`Cavernize Android workspace preview listening at http://${HOST}:${PORT}`);
+  const bootTimer = setTimeout(() => {
+    startLiveSyncWatcher();
+    warmFederatedRepos();
+  }, 1500);
+  bootTimer.unref?.();
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
@@ -223,6 +245,9 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
         // Best effort
       }
     }
+    const forceExit = setTimeout(() => process.exit(0), 1000);
+    forceExit.unref?.();
+    server.closeAllConnections?.();
     server.close(() => process.exit(0));
   });
 }
