@@ -872,15 +872,19 @@ public sealed class OneUiFrostedCapsuleView : FrameLayout {
     readonly int[] targetLoc = new int[2];
 
     Bitmap blurBitmap;
+    BitmapShader cachedBmpShader;
+    readonly Matrix cachedShaderMatrix = new();
     int[] pixelScratch;
     Canvas captureCanvas;
     bool isCapturing;
     long lastCaptureMs;
+    Java.Lang.Runnable deferredBlurRunnable;
 
     public Func<View[]> BehindViewsProvider { get; set; }
     public float CornerRadiusDp { get; set; } = 30f;
     public Color? GlazeTopColor { get; set; }
     public Color? GlazeBottomColor { get; set; }
+    public bool IsSuspendedForTransition { get; set; }
 
     public OneUiFrostedCapsuleView(Context context) : base(context) {
         SetWillNotDraw(false);
@@ -889,12 +893,41 @@ public sealed class OneUiFrostedCapsuleView : FrameLayout {
         rimPaint.StrokeWidth = Math.Max(1.5f, OneUiTheme.Dp(context, 1.0f));
     }
 
+    /// <summary>
+    /// Debounces frosted backdrop capture until after scrolling or tab transitions settle,
+    /// keeping 120 Hz animations completely free of synchronous software View.Draw() passes.
+    /// </summary>
+    public void ScheduleDeferredBlur(long delayMs = 180) {
+        if (Visibility != ViewStates.Visible || Width <= 0 || Height <= 0) {
+            return;
+        }
+        deferredBlurRunnable ??= new Java.Lang.Runnable(() => {
+            if (!IsSuspendedForTransition && IsAttachedToWindow && Visibility == ViewStates.Visible) {
+                RefreshBlur(force: true);
+            }
+        });
+        RemoveCallbacks(deferredBlurRunnable);
+        PostDelayed(deferredBlurRunnable, Math.Max(48L, delayMs));
+    }
+
+    protected override void OnDetachedFromWindow() {
+        if (deferredBlurRunnable != null) {
+            RemoveCallbacks(deferredBlurRunnable);
+        }
+        base.OnDetachedFromWindow();
+    }
+
     public void RefreshBlur(bool force = false) {
         if (isCapturing || Width <= 0 || Height <= 0 || Visibility != ViewStates.Visible) {
             return;
         }
+        if (IsSuspendedForTransition) {
+            ScheduleDeferredBlur(160);
+            return;
+        }
         long now = SystemClock.UptimeMillis();
-        if (!force && now - lastCaptureMs < 24) {
+        if (!force && now - lastCaptureMs < 220) {
+            ScheduleDeferredBlur(180);
             return;
         }
         CaptureBehindRegion();
@@ -913,10 +946,13 @@ public sealed class OneUiFrostedCapsuleView : FrameLayout {
 
         if (blurBitmap == null || blurBitmap.IsRecycled || blurBitmap.Width != bw || blurBitmap.Height != bh) {
             captureCanvas?.Dispose();
+            cachedBmpShader?.Dispose();
+            cachedBmpShader = null;
             blurBitmap?.Recycle();
             blurBitmap?.Dispose();
             blurBitmap = Bitmap.CreateBitmap(bw, bh, Bitmap.Config.Argb8888!);
             captureCanvas = new Canvas(blurBitmap);
+            cachedBmpShader = new BitmapShader(blurBitmap, Shader.TileMode.Clamp!, Shader.TileMode.Clamp!);
             pixelScratch = new int[bw * bh];
         }
 
@@ -958,7 +994,7 @@ public sealed class OneUiFrostedCapsuleView : FrameLayout {
             return;
         }
 
-        if (blurBitmap == null) {
+        if (blurBitmap == null && !IsSuspendedForTransition) {
             CaptureBehindRegion();
         }
 
@@ -966,13 +1002,12 @@ public sealed class OneUiFrostedCapsuleView : FrameLayout {
         float halfStroke = rimPaint.StrokeWidth * 0.5f;
         RectF bounds = new(halfStroke, halfStroke, w - halfStroke, h - halfStroke);
 
-        // Analytical GPU-anti-aliased rounded-rect draw (zero ClipPath polygonal tessellation artifacts)
-        if (blurBitmap != null && !blurBitmap.IsRecycled && blurBitmap.Width > 0 && blurBitmap.Height > 0) {
-            using BitmapShader bmpShader = new(blurBitmap, Shader.TileMode.Clamp!, Shader.TileMode.Clamp!);
-            using Matrix m = new();
-            m.SetScale(w / blurBitmap.Width, h / blurBitmap.Height);
-            bmpShader.SetLocalMatrix(m);
-            bitmapPaint.SetShader(bmpShader);
+        // Analytical GPU-anti-aliased rounded-rect draw reusing cached BitmapShader + Matrix (zero per-frame alloc)
+        if (blurBitmap != null && !blurBitmap.IsRecycled && blurBitmap.Width > 0 && blurBitmap.Height > 0 && cachedBmpShader != null) {
+            cachedShaderMatrix.Reset();
+            cachedShaderMatrix.SetScale(w / blurBitmap.Width, h / blurBitmap.Height);
+            cachedBmpShader.SetLocalMatrix(cachedShaderMatrix);
+            bitmapPaint.SetShader(cachedBmpShader);
             canvas.DrawRoundRect(bounds, rad, rad, bitmapPaint);
             bitmapPaint.SetShader(null);
         }
@@ -1803,14 +1838,48 @@ public static class OneUiMotionBlur {
     }
 
     /// <summary>
-    /// Applies blended optical defocus + subtle horizontal motion blur to <paramref name="view"/> on Android 12+ (API 31+),
-    /// clearing back to <c>null</c> immediately when <paramref name="blurRadiusPx"/> drops below 0.75 px.
+    /// Guard disabling full-screen per-frame RenderEffect blur allocation (which triggers 1440p offscreen
+    /// GPU render-target churn &gt; 8.3 ms at 120 Hz). Keep false by default for silky 120 Hz transitions.
+    /// </summary>
+    public static bool EnableFullScreenRenderEffectBlur { get; set; }
+
+    /// <summary>Promotes <paramref name="view"/> to a GPU hardware texture layer for smooth 120 Hz transitions.</summary>
+    public static void EnableHardwareLayer(View view) {
+        if (view == null) {
+            return;
+        }
+        try {
+            if (view.LayerType != LayerType.Hardware) {
+                view.SetLayerType(LayerType.Hardware, null);
+            }
+        } catch {
+            // Ignore
+        }
+    }
+
+    /// <summary>Restores <paramref name="view"/> back to <see cref="LayerType.None"/> after a transition finishes.</summary>
+    public static void ClearHardwareLayer(View view) {
+        if (view == null) {
+            return;
+        }
+        try {
+            if (view.LayerType != LayerType.None) {
+                view.SetLayerType(LayerType.None, null);
+            }
+        } catch {
+            // Ignore
+        }
+    }
+
+    /// <summary>
+    /// Applies blended optical defocus + subtle horizontal motion blur to <paramref name="view"/> on Android 12+ (API 31+)
+    /// only when <see cref="EnableFullScreenRenderEffectBlur"/> is explicitly opted in; otherwise acts as a zero-cost GPU no-op.
     /// </summary>
     public static void ApplyHorizontalMotionBlur(
         View view,
         float blurRadiusPx,
         float opticalDefocusRatio = DefaultOpticalDefocusRatio) {
-        if (view == null || !OperatingSystem.IsAndroidVersionAtLeast(31)) {
+        if (view == null || !EnableFullScreenRenderEffectBlur || !OperatingSystem.IsAndroidVersionAtLeast(31)) {
             return;
         }
         try {

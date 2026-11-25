@@ -985,7 +985,11 @@ public sealed class NeuralPipelineOrchestrator {
             }
         }
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
-        return Convert.ToHexString(hash).Substring(0, 16).ToLowerInvariant();
+        string hash16 = Convert.ToHexString(hash).Substring(0, 16).ToLowerInvariant();
+        string modelIds = steps.Count > 0
+            ? string.Join("+", steps.SelectMany(st => st.Models.Select(m => m.Id)))
+            : "none";
+        return $"{hash16}|cfg:v1;g={goal};bk={cfg.ExecutionBackend};om={cfg.OrchestrationMode};bd={(int)cfg.StudioBundlePreset};pbv={(cfg.KaraokePreserveBackingVocals ? 1 : 0)};ov={cfg.OverlapFactor};tta={(cfg.EnableTta ? 1 : 0)};ens={cfg.EnsembleMode};pf={(cfg.EnablePhaseFix ? 1 : 0)};ec={(cfg.EnforceEnergyConservation ? 1 : 0)};m={modelIds}";
     }
 
     static string FormatPlanSummary(NeuralOrchestrationMode mode, NeuralEnsembleBundlePreset bundle, List<NeuralExecutionStep> steps) {

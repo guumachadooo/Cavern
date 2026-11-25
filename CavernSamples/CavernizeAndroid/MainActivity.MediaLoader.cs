@@ -557,7 +557,16 @@ public partial class MainActivity {
                     bool swapped = false;
                     if (readyTrack.Supported && readyTrack.Codec != Codec.TrueHD) {
                         try {
-                            playerEngine.HotSwapTrackSeamless(readyTrack, liveSec, upmixingSettings, renderingSettings);
+                            RecordActiveTrackMeasuredLoudnessIfValid();
+                            double crossOffset = ComputeCrossVariantNeuralOffsetSamples(readyTrack, meta?.SourceMediaPath ?? targetPath);
+                            playerEngine.HotSwapTrackSeamless(
+                                readyTrack,
+                                liveSec,
+                                upmixingSettings,
+                                renderingSettings,
+                                preserveNeuralStems: sameSong,
+                                neuralReferenceOffset: crossOffset);
+                            PrimeEngineLoudnessForPath(meta?.SourceMediaPath ?? targetPath, meta);
                             swapped = true;
                         } catch (Exception swapEx) {
                             AppLogger.Warn($"HotSwapTrackSeamless fallback: {swapEx.Message}");
@@ -618,6 +627,15 @@ public partial class MainActivity {
                     RefreshContainerOptions();
                     SyncPlaybackUi(playerEngine.IsPlaying, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
                     UpdateRoomCanvas();
+                    SyncNeuralReferenceOffsetForActiveTrack(readyTrack);
+                    if (!(playerEngine?.NeuralStage?.HasPlayableSeparatedStems ?? false)) {
+                        TryAutoBindCachedNeuralStemsAsync(readyTrack, startupDelayMs: wasPlaying ? 350 : 0);
+                    }
+                    StartLosslessTwinDiscoveryAsync(readyTrack, startupDelayMs: wasPlaying ? 900 : 0);
+                    RefreshNeuralAudioUi();
+                    RefreshNeuralPrepUi();
+                    RefreshLyricsSingDockUi();
+                    RefreshBottomActionBarVisuals();
                     ShowToast(string.Format(S["FormatSwitchedToast"], preferredFormatVariantKey));
 
                     // Clean up previous file/session resources AFTER engine has atomically switched
@@ -950,7 +968,9 @@ public partial class MainActivity {
 
         if (activeTrack.Supported && activeTrack.Codec != Codec.TrueHD) {
             try {
+                RecordActiveTrackMeasuredLoudnessIfValid();
                 playerEngine.Load(activeTrack, upmixingSettings, renderingSettings);
+                PrimeEngineLoudnessForPath(activeSourcePath, currentMediaMeta);
                 SetLiveTrackSourceItems();
             } catch (Exception ex) {
                 AppLogger.Error("PlayerEngine.Load", ex);
@@ -996,10 +1016,90 @@ public partial class MainActivity {
         SyncPlaybackUi(false, initialSeekSec, playerEngine.TotalSeconds);
         UpdateRoomCanvas();
         playerEngine?.VocalMixMatchStage?.ApplySongDna(Cavern.VocalChain.VocalMixDnaProfile.CreateStudioDefault());
-        StartLosslessTwinDiscoveryAsync(activeTrack);
-        TryLoadCachedSongVocalDnaAsync(activeTrack);
-        TryAutoBindCachedNeuralStemsAsync(activeTrack);
+        // W51.5: Stagger heavy background scans so the first ~3s of playback have 100% uninterrupted RT CPU headroom
+        StartLosslessTwinDiscoveryAsync(activeTrack, startupDelayMs: 1400);
+        TryLoadCachedSongVocalDnaAsync(activeTrack, startupDelayMs: 300);
+        TryAutoBindCachedNeuralStemsAsync(activeTrack, startupDelayMs: 450);
+        ScheduleNextTrackLoudnessPreScan(activeSourcePath);
         RefreshNeuralPrepUi();
+    }
+
+    string lastLoudnessMeasuredPath = "";
+    CancellationTokenSource nextTrackLoudnessCts;
+
+    void RecordActiveTrackMeasuredLoudnessIfValid() {
+        try {
+            if (string.IsNullOrWhiteSpace(lastLoudnessMeasuredPath) || playerEngine == null) {
+                return;
+            }
+            float integrated = playerEngine.LoudnessMeterStage.Snapshot.IntegratedLufs;
+            if (float.IsFinite(integrated) && integrated >= -55f && integrated <= 3f) {
+                AudioQualityAnalyzer.RecordMeasuredTrackIntegratedLufs(ApplicationContext, lastLoudnessMeasuredPath, integrated);
+            }
+        } catch {
+            // Best-effort loudness caching
+        }
+    }
+
+    void PrimeEngineLoudnessForPath(string trackPath, MediaArtworkMetadata meta) {
+        lastLoudnessMeasuredPath = trackPath ?? "";
+        if (playerEngine == null) {
+            return;
+        }
+        if (meta?.TrackIntegratedLufs is float tagLufs && float.IsFinite(tagLufs)) {
+            playerEngine.PrimeTrackLoudnessLufs(tagLufs);
+            if (!string.IsNullOrEmpty(trackPath)) {
+                AudioQualityAnalyzer.RecordMeasuredTrackIntegratedLufs(ApplicationContext, trackPath, tagLufs);
+            }
+            AppLogger.Info($"W51.6 Loudness primed from embedded tag: {tagLufs:F1} LUFS ({Path.GetFileName(trackPath ?? "")})");
+            return;
+        }
+        if (!string.IsNullOrEmpty(trackPath) &&
+            AudioQualityAnalyzer.TryGetCachedTrackIntegratedLufs(ApplicationContext, trackPath, out float cachedLufs)) {
+            playerEngine.PrimeTrackLoudnessLufs(cachedLufs);
+            AppLogger.Info($"W51.6 Loudness primed from cache: {cachedLufs:F1} LUFS ({Path.GetFileName(trackPath)})");
+        }
+    }
+
+    void ScheduleNextTrackLoudnessPreScan(string currentTrackPath) {
+        try { nextTrackLoudnessCts?.Cancel(); } catch { }
+        CancellationTokenSource cts = new();
+        nextTrackLoudnessCts = cts;
+        CancellationToken ct = cts.Token;
+
+        string nextQueuePath = null;
+        if (activeLibraryQueue != null && activeLibraryQueueIndex >= 0 && activeLibraryQueueIndex + 1 < activeLibraryQueue.Count) {
+            nextQueuePath = activeLibraryQueue[activeLibraryQueueIndex + 1]?.FilePath;
+        }
+        string ffmpegLoc = ffmpeg?.Found == true ? ffmpeg.Location : null;
+        Context appCtx = ApplicationContext;
+
+        _ = Task.Run(async () => {
+            try {
+                // 1. Pre-scan next track in album/queue first (eliminates loud next-track transition spikes!)
+                if (!string.IsNullOrEmpty(nextQueuePath) && File.Exists(nextQueuePath)) {
+                    float? nextLufs = await AudioQualityAnalyzer.PreScanTrackIntegratedLufsAsync(
+                        appCtx, nextQueuePath, ffmpegLoc, startupDelayMs: 2600, ct).ConfigureAwait(false);
+                    if (nextLufs.HasValue) {
+                        AppLogger.Info($"W51.6 Pre-scanned next album track loudness: {nextLufs.Value:F1} LUFS ({Path.GetFileName(nextQueuePath)})");
+                    }
+                }
+                // 2. Also pre-scan current track if uncached so future replays & cross-variant switches start at 0 dB error
+                if (!string.IsNullOrEmpty(currentTrackPath) && File.Exists(currentTrackPath) &&
+                    !AudioQualityAnalyzer.TryGetCachedTrackIntegratedLufs(appCtx, currentTrackPath, out _)) {
+                    await AudioQualityAnalyzer.PreScanTrackIntegratedLufsAsync(
+                        appCtx, currentTrackPath, ffmpegLoc, startupDelayMs: 3600, ct).ConfigureAwait(false);
+                }
+            } catch (System.OperationCanceledException) {
+                // Superseded by track change
+            } catch (ObjectDisposedException) {
+                // CTS already disposed during teardown
+            } catch {
+                // Best-effort background pre-scan
+            } finally {
+                try { cts.Dispose(); } catch { }
+            }
+        });
     }
 
 }

@@ -34,6 +34,7 @@ public sealed class MediaArtworkMetadata {
     public Color PrimaryAccent { get; set; }
     public Color SecondaryAccent { get; set; }
     public LyricsDocument Lyrics { get; set; }
+    public float? TrackIntegratedLufs { get; set; }
 }
 
 /// <summary>
@@ -82,6 +83,7 @@ public static class MediaMetadataHelper {
         int videoHeight = 0;
         Bitmap artwork = null;
         bool hasEmbedded = false;
+        float? trackIntegratedLufs = null;
 
         string mediaKey = !string.IsNullOrEmpty(resolvedPath) ? resolvedPath : (effectiveUri?.ToString() ?? "");
         string manualOverride = OnlineMetadataService.GetManualCoverOverridePath(effectiveCtx, mediaKey);
@@ -229,6 +231,7 @@ public static class MediaMetadataHelper {
                 if (IsMissingTag(year) && !IsMissingTag(binTags.Year)) year = binTags.Year;
                 if (IsMissingTag(genre) && !IsMissingTag(binTags.Genre)) genre = binTags.Genre;
                 if (IsMissingTag(comment) && !IsMissingTag(binTags.Comment)) comment = binTags.Comment;
+                if (binTags.TrackIntegratedLufs.HasValue) trackIntegratedLufs = binTags.TrackIntegratedLufs;
             }
         }
 
@@ -287,7 +290,8 @@ public static class MediaMetadataHelper {
             ArtworkBitmap = artwork,
             PrimaryAccent = primary,
             SecondaryAccent = secondary,
-            Lyrics = lyrics
+            Lyrics = lyrics,
+            TrackIntegratedLufs = trackIntegratedLufs
         };
     }
 

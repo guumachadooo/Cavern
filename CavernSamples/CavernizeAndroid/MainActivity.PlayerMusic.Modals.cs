@@ -1206,21 +1206,161 @@ public partial class MainActivity {
             customContent: list);
     }
 
-    void SetMasterVolumePercent(int percent) {
-        percent = Math.Clamp(percent, 0, 200);
-        float vol = percent / 100f;
-        store.PlayerVolume = vol;
-        playerEngine.Volume = vol;
+    bool isSyncingSystemVolumeUi;
 
-        if (seekBarVolume != null && seekBarVolume.Progress != percent) {
-            seekBarVolume.Progress = percent;
-            seekBarVolume.ValueText = $"{percent}%";
-            seekBarVolume.Invalidate();
+    /// <summary>
+    /// True ONLY when Path B direct libusb UAC2 is streaming (bypassing Android AudioFlinger's media volume mixer).
+    /// All standard Android audio routes (speaker, headphones, Bluetooth, AAudio, AudioTrack) link directly to Stream.Music.
+    /// </summary>
+    bool IsDirectUsbSoftwareVolumeActive() =>
+        audioOutput?.ProAudioDiagnostics.ActiveBackend == Cavernize.Logic.Spatial.ActiveProAudioBackendKind.LibUsbUac2Direct;
+
+    int ReadSystemMediaVolumePercent(out int curIdx, out int maxIdx) {
+        curIdx = 0;
+        maxIdx = 15;
+        try {
+            if (GetSystemService(AudioService) is Android.Media.AudioManager am) {
+                maxIdx = Math.Max(1, am.GetStreamMaxVolume(Android.Media.Stream.Music));
+                curIdx = Math.Clamp(am.GetStreamVolume(Android.Media.Stream.Music), 0, maxIdx);
+                return Math.Clamp((int)Math.Round(curIdx * 100.0 / maxIdx), 0, 100);
+            }
+        } catch {
+            // Fallback outside AudioManager runtime
         }
-        if (musicVolSeekBar != null && musicVolSeekBar.Progress != percent) {
-            musicVolSeekBar.Progress = percent;
-            musicVolSeekBar.Invalidate();
+        return Math.Clamp((int)Math.Round((store?.PlayerVolume ?? 1f) * 100f), 0, 100);
+    }
+
+    int GetCurrentMasterVolumePercent() =>
+        IsDirectUsbSoftwareVolumeActive()
+            ? Math.Clamp((int)Math.Round((store?.PlayerVolume ?? 1f) * 100f), 0, 100)
+            : ReadSystemMediaVolumePercent(out _, out _);
+
+    void SyncUiFromSystemMediaVolume(bool updateEngine = true) {
+        if (uiDestroyed || isSyncingSystemVolumeUi) {
+            return;
         }
-        RefreshMusicPlayerControlsUi();
+        isSyncingSystemVolumeUi = true;
+        try {
+            int pct;
+            if (IsDirectUsbSoftwareVolumeActive()) {
+                pct = Math.Clamp((int)Math.Round((store?.PlayerVolume ?? 1f) * 100f), 0, 100);
+                if (updateEngine && playerEngine != null) {
+                    playerEngine.Volume = pct / 100f;
+                    playerEngine.SystemPlaybackVolume01 = 1f;
+                }
+            } else {
+                pct = ReadSystemMediaVolumePercent(out int curIdx, out int maxIdx);
+                float ratio01 = maxIdx > 0 ? Math.Clamp(curIdx / (float)maxIdx, 0f, 1f) : 1f;
+                if (updateEngine && playerEngine != null) {
+                    // Keep DSP master gain at unity 1.0f (zero double attenuation) while feeding real hardware ratio to ISO 226
+                    playerEngine.Volume = 1.0f;
+                    playerEngine.SystemPlaybackVolume01 = ratio01;
+                }
+            }
+
+            if (seekBarVolume != null) {
+                if (seekBarVolume.Max != 100) seekBarVolume.Max = 100;
+                if (seekBarVolume.Progress != pct) {
+                    seekBarVolume.Progress = pct;
+                    seekBarVolume.ValueText = $"{pct}%";
+                    seekBarVolume.Invalidate();
+                } else if (!string.Equals(seekBarVolume.ValueText, $"{pct}%", StringComparison.Ordinal)) {
+                    seekBarVolume.ValueText = $"{pct}%";
+                    seekBarVolume.Invalidate();
+                }
+            }
+            if (musicVolSeekBar != null) {
+                if (musicVolSeekBar.Max != 100) musicVolSeekBar.Max = 100;
+                if (musicVolSeekBar.Progress != pct) {
+                    musicVolSeekBar.Progress = pct;
+                    musicVolSeekBar.Invalidate();
+                }
+            }
+            if (roomMiniVolChip != null) {
+                roomMiniVolChip.Text = string.Format(S["RoomMiniVolFmt"], pct);
+            }
+            RefreshMusicPlayerControlsUi();
+        } finally {
+            isSyncingSystemVolumeUi = false;
+        }
+    }
+
+    void StepMasterVolumeByDelta(int deltaSteps) {
+        if (deltaSteps == 0) {
+            return;
+        }
+        if (IsDirectUsbSoftwareVolumeActive()) {
+            int curPct = Math.Clamp((int)Math.Round((store?.PlayerVolume ?? 1f) * 100f), 0, 100);
+            SetMasterVolumePercent(Math.Clamp(curPct + deltaSteps * 10, 0, 100));
+            return;
+        }
+        try {
+            if (GetSystemService(AudioService) is Android.Media.AudioManager am) {
+                int maxIdx = Math.Max(1, am.GetStreamMaxVolume(Android.Media.Stream.Music));
+                int curIdx = am.GetStreamVolume(Android.Media.Stream.Music);
+                int nextIdx = Math.Clamp(curIdx + deltaSteps, 0, maxIdx);
+                if (nextIdx != curIdx) {
+                    am.SetStreamVolume(Android.Media.Stream.Music, nextIdx, (Android.Media.VolumeNotificationFlags)0);
+                }
+                SyncUiFromSystemMediaVolume(updateEngine: true);
+                return;
+            }
+        } catch {
+            // Fall back to percent step
+        }
+        SetMasterVolumePercent(Math.Clamp(ReadSystemMediaVolumePercent(out _, out _) + deltaSteps * 10, 0, 100));
+    }
+
+    void SetMasterVolumePercent(int percent) {
+        if (isSyncingSystemVolumeUi) {
+            return;
+        }
+        percent = Math.Clamp(percent, 0, 100);
+        isSyncingSystemVolumeUi = true;
+        try {
+            if (IsDirectUsbSoftwareVolumeActive()) {
+                float vol = percent / 100f;
+                store.PlayerVolume = vol;
+                if (playerEngine != null) {
+                    playerEngine.Volume = vol;
+                    playerEngine.SystemPlaybackVolume01 = 1f;
+                }
+            } else {
+                float ratio01 = percent / 100f;
+                try {
+                    if (GetSystemService(AudioService) is Android.Media.AudioManager am) {
+                        int maxIdx = Math.Max(1, am.GetStreamMaxVolume(Android.Media.Stream.Music));
+                        int curIdx = am.GetStreamVolume(Android.Media.Stream.Music);
+                        int targetIdx = Math.Clamp((int)Math.Round(percent * maxIdx / 100.0), 0, maxIdx);
+                        if (targetIdx != curIdx) {
+                            am.SetStreamVolume(Android.Media.Stream.Music, targetIdx, (Android.Media.VolumeNotificationFlags)0);
+                        }
+                        ratio01 = Math.Clamp(targetIdx / (float)maxIdx, 0f, 1f);
+                    }
+                } catch {
+                    // Best-effort system stream write
+                }
+                if (playerEngine != null) {
+                    playerEngine.Volume = 1.0f;
+                    playerEngine.SystemPlaybackVolume01 = ratio01;
+                }
+            }
+
+            if (seekBarVolume != null && seekBarVolume.Progress != percent) {
+                seekBarVolume.Progress = percent;
+                seekBarVolume.ValueText = $"{percent}%";
+                seekBarVolume.Invalidate();
+            }
+            if (musicVolSeekBar != null && musicVolSeekBar.Progress != percent) {
+                musicVolSeekBar.Progress = percent;
+                musicVolSeekBar.Invalidate();
+            }
+            if (roomMiniVolChip != null) {
+                roomMiniVolChip.Text = string.Format(S["RoomMiniVolFmt"], percent);
+            }
+            RefreshMusicPlayerControlsUi();
+        } finally {
+            isSyncingSystemVolumeUi = false;
+        }
     }
 }

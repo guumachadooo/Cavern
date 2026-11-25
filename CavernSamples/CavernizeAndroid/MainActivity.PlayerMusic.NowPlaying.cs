@@ -74,13 +74,15 @@ public partial class MainActivity {
                 }
             } else {
                 float dir = openLibrary ? 1f : -1f;
-                float density = Resources?.DisplayMetrics?.Density ?? 3f;
-                const float SectionMaxBlurDp = 12f;
-                float maxBlurPx = SectionMaxBlurDp * density;
+                if (navFrostedHost != null) {
+                    navFrostedHost.IsSuspendedForTransition = true;
+                }
+                OneUiMotionBlur.EnableHardwareLayer(entering);
+                OneUiMotionBlur.EnableHardwareLayer(leaving);
                 entering.Visibility = ViewStates.Visible;
-                entering.Alpha = 1f;
-                entering.ScaleX = 1f;
-                entering.ScaleY = 1f;
+                entering.Alpha = 0.92f;
+                entering.ScaleX = 0.988f;
+                entering.ScaleY = 0.988f;
                 entering.TranslationX = dir * viewportW;
                 leaving.Visibility = ViewStates.Visible;
                 leaving.Alpha = 1f;
@@ -88,42 +90,25 @@ public partial class MainActivity {
                 leaving.ScaleY = 1f;
                 leaving.TranslationX = 0f;
 
-                float prevT = 0f;
-                long prevMs = Android.OS.SystemClock.UptimeMillis();
-                float smoothedBlurPx = 0f;
                 ValueAnimator anim = ValueAnimator.OfFloat(0f, 1f);
-                anim.SetDuration(300);
+                anim.SetDuration(260);
                 anim.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
                 anim.Update += (_, e) => {
                     if (uiDestroyed) return;
                     float t = (float)(e.Animation?.AnimatedValue ?? 1f);
-                    long nowMs = Android.OS.SystemClock.UptimeMillis();
-                    float vel = MathF.Abs(t - prevT) * viewportW / Math.Max(0.004f, (nowMs - prevMs) * 0.001f);
-                    prevT = t;
-                    prevMs = nowMs;
-                    float targetBlur = OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(vel, density, maxBlurDp: SectionMaxBlurDp);
-                    smoothedBlurPx = targetBlur > smoothedBlurPx
-                        ? smoothedBlurPx + (targetBlur - smoothedBlurPx) * 0.45f
-                        : smoothedBlurPx + (targetBlur - smoothedBlurPx) * 0.34f;
-                    if (smoothedBlurPx < 0.75f) {
-                        smoothedBlurPx = 0f;
-                    }
+                    float arch = 4f * t * (1f - t); // Smooth 0 -> 1 -> 0 breathing curve
                     entering.TranslationX = dir * (1f - t) * viewportW;
                     leaving.TranslationX = -dir * t * viewportW;
-                    OneUiMotionBlur.ApplyHorizontalMotionBlur(entering, smoothedBlurPx, opticalDefocusRatio: 0.56f);
-                    OneUiMotionBlur.ApplyHorizontalMotionBlur(leaving, smoothedBlurPx, opticalDefocusRatio: 0.56f);
-                    (float inSc, float inAl) = OneUiMotionBlur.ComputeTransitionOpticalDepth(smoothedBlurPx, maxBlurPx, isEntering: true);
-                    (float outSc, float outAl) = OneUiMotionBlur.ComputeTransitionOpticalDepth(smoothedBlurPx, maxBlurPx, isEntering: false);
-                    entering.ScaleX = inSc;
-                    entering.ScaleY = inSc;
-                    entering.Alpha = inAl;
-                    leaving.ScaleX = outSc;
-                    leaving.ScaleY = outSc;
-                    leaving.Alpha = outAl;
+                    entering.ScaleX = 1f - 0.012f * (1f - t);
+                    entering.ScaleY = entering.ScaleX;
+                    entering.Alpha = 0.92f + 0.08f * t;
+                    leaving.ScaleX = 1f - 0.014f * arch;
+                    leaving.ScaleY = leaving.ScaleX;
+                    leaving.Alpha = 1f - 0.14f * t;
                 };
                 void Done() {
-                    OneUiMotionBlur.ClearMotionBlur(entering);
-                    OneUiMotionBlur.ClearMotionBlur(leaving);
+                    OneUiMotionBlur.ClearHardwareLayer(entering);
+                    OneUiMotionBlur.ClearHardwareLayer(leaving);
                     entering.TranslationX = 0f;
                     entering.ScaleX = 1f;
                     entering.ScaleY = 1f;
@@ -135,20 +120,27 @@ public partial class MainActivity {
                     leaving.Alpha = 1f;
                     leaving.Visibility = ViewStates.Gone;
                     playLibStripAnimator = null;
+                    if (navFrostedHost != null) {
+                        navFrostedHost.IsSuspendedForTransition = false;
+                        navFrostedHost.ScheduleDeferredBlur(140);
+                    }
                     if (!openLibrary) {
                         musicTabRootPage?.Post(() => UpdatePlayTabSpacingForViewport(force: true));
                     }
                 }
                 anim.AnimationEnd += (_, _) => Done();
                 anim.AnimationCancel += (_, _) => {
-                    OneUiMotionBlur.ClearMotionBlur(entering);
-                    OneUiMotionBlur.ClearMotionBlur(leaving);
+                    OneUiMotionBlur.ClearHardwareLayer(entering);
+                    OneUiMotionBlur.ClearHardwareLayer(leaving);
                     entering.ScaleX = 1f;
                     entering.ScaleY = 1f;
                     entering.Alpha = 1f;
                     leaving.ScaleX = 1f;
                     leaving.ScaleY = 1f;
                     leaving.Alpha = 1f;
+                    if (navFrostedHost != null) {
+                        navFrostedHost.IsSuspendedForTransition = false;
+                    }
                 };
                 playLibStripAnimator = anim;
                 anim.Start();
@@ -216,23 +208,8 @@ public partial class MainActivity {
             }
         }
 
-        // Simplified Lyrics Mode: hide non-essential rows so Lyrics expands smoothly across the entire viewport
+        // Simplified Lyrics Mode: hide non-essential rows cleanly (zero conflicting TransitionManager layout thrash)
         ViewStates chromeVis = mode == PlayerStageMode.Lyrics ? ViewStates.Gone : ViewStates.Visible;
-        if (canAnimateCoverLyrics && musicNowPlayingSection != null) {
-            try {
-                Android.Transitions.TransitionSet ts = new();
-                ts.SetOrdering(Android.Transitions.TransitionOrdering.Together);
-                Android.Transitions.ChangeBounds cb = new();
-                cb.SetDuration(340);
-                Android.Transitions.Fade fd = new();
-                fd.SetDuration(220);
-                ts.AddTransition(cb);
-                ts.AddTransition(fd);
-                ts.SetInterpolator(CreateOneUiEase());
-                Android.Transitions.TransitionManager.BeginDelayedTransition(musicNowPlayingSection, ts);
-            } catch { }
-        }
-
         if (musicTitleRow != null) {
             musicTitleRow.Visibility = chromeVis;
             musicTitleRow.Alpha = 1f;
@@ -262,11 +239,12 @@ public partial class MainActivity {
             outgoing.Visibility = ViewStates.Visible;
             outgoing.Animate()
                 .Alpha(0f)
-                .ScaleX(0.95f)
-                .ScaleY(0.95f)
-                .TranslationY(toLyrics ? -Dp(12) : Dp(12))
-                .SetDuration(190)
+                .ScaleX(0.96f)
+                .ScaleY(0.96f)
+                .TranslationY(toLyrics ? -Dp(10) : Dp(10))
+                .SetDuration(175)
                 .SetInterpolator(CreateOneUiEase())
+                .WithLayer()
                 .WithEndAction(new Java.Lang.Runnable(() => {
                     if (uiDestroyed || myAnimGen != stageAnimGen) return;
                     outgoing.Visibility = ViewStates.Gone;
@@ -281,15 +259,16 @@ public partial class MainActivity {
             incoming.Alpha = 0f;
             incoming.ScaleX = 0.96f;
             incoming.ScaleY = 0.96f;
-            incoming.TranslationY = toLyrics ? Dp(16) : -Dp(16);
+            incoming.TranslationY = toLyrics ? Dp(14) : -Dp(14);
             incoming.Animate()
                 .Alpha(1f)
                 .ScaleX(1f)
                 .ScaleY(1f)
                 .TranslationY(0f)
-                .SetStartDelay(45)
-                .SetDuration(320)
+                .SetStartDelay(30)
+                .SetDuration(260)
                 .SetInterpolator(new Android.Views.Animations.PathInterpolator(0.16f, 1f, 0.3f, 1f))
+                .WithLayer()
                 .Start();
         } else {
             if (musicArtworkSlot != null) {
@@ -318,16 +297,16 @@ public partial class MainActivity {
 
     void ApplyLyricsSingVocalLevel(int pct) {
         int clamped = Math.Clamp(pct, 0, 100);
-        float level01 = clamped * 0.01f;
-        store.KaraokeVocalLevel = level01;
         bool shouldEnableKaraoke = clamped < 99;
+        float level01 = shouldEnableKaraoke ? clamped * 0.01f : 1.0f;
+        store.KaraokeVocalLevel = level01;
         if (store.SpatialKaraokeEnabled != shouldEnableKaraoke) {
             store.SpatialKaraokeEnabled = shouldEnableKaraoke;
             _ = playerEngine?.ApplyNeuralConfigAsync(store.BuildNeuralAudioConfig());
         } else {
             playerEngine?.SetKaraokeVocalLevel(level01);
         }
-        if (karaokeVocalLevelBar != null) {
+        if (karaokeVocalLevelBar != null && karaokeVocalLevelBar.Progress != clamped) {
             karaokeVocalLevelBar.Progress = clamped;
             karaokeVocalLevelBar.Invalidate();
         }
@@ -348,7 +327,7 @@ public partial class MainActivity {
         bool micEnabled = store.LiveMicEnabled;
         int micSrc = Math.Clamp(store.ProAudioMicSource, 0, 2);
         bool dryBypass = playerEngine?.VocalChainBypassed == true;
-        bool karaokeOn = store.SpatialKaraokeEnabled || pct < 99;
+        bool karaokeOn = store.SpatialKaraokeEnabled && pct < 99;
         bool hasUsb = usbProAudioManager?.CurrentSnapshot?.IsAttached == true;
         bool hasDna = playerEngine?.VocalMixMatchStage?.ActiveDna?.IsExtractedFromSong == true;
         bool hasVp = playerEngine?.VocalMixMatchStage?.HasMicVoiceprint == true;
@@ -356,7 +335,17 @@ public partial class MainActivity {
         bool preserveBacking = store.KaraokePreserveBackingVocals;
         bool prepRunning = isNeuralPrepRunning;
 
-        string sig = $"{isLyricsSingDockExpanded}|{pct}|{micEnabled}|{micSrc}|{dryBypass}|{karaokeOn}|{preserveBacking}|{hasUsb}|{hasDna}|{hasVp}|{hasNeuralLead}|{prepRunning}";
+        Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo dockCacheEntry = null;
+        Cavernize.Logic.Spatial.NeuralCacheConfigComparison dockCacheCmp = null;
+        int cacheBadgeState = 0; // 0 = not cached, 1 = cached match, 2 = cached diff
+        if (isLyricsSingDockExpanded) {
+            (dockCacheEntry, dockCacheCmp) = InspectActiveSongCacheState(Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke);
+            if (dockCacheEntry != null) {
+                cacheBadgeState = dockCacheCmp != null && !dockCacheCmp.MatchesCurrentConfig ? 2 : 1;
+            }
+        }
+
+        string sig = $"{isLyricsSingDockExpanded}|{pct}|{micEnabled}|{micSrc}|{dryBypass}|{karaokeOn}|{preserveBacking}|{hasUsb}|{hasDna}|{hasVp}|{hasNeuralLead}|{prepRunning}|{cacheBadgeState}";
         if (string.Equals(lastLyricsSingDockSig, sig, StringComparison.Ordinal)) {
             return;
         }
@@ -460,6 +449,16 @@ public partial class MainActivity {
             musicLyricsScarlettBtn.Background = hasUsb
                 ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 76), 99f, OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 175), 1f)
                 : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f);
+        }
+        if (musicLyricsCacheBtn != null && isLyricsSingDockExpanded) {
+            bool isCached = dockCacheEntry != null;
+            bool hasDiff = cacheBadgeState == 2;
+            musicLyricsCacheBtn.Text = hasDiff ? S["SingDockCacheDiffChip"] : S["SingDockCacheChip"];
+            musicLyricsCacheBtn.Background = hasDiff
+                ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 82), 99f, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 190), 1f)
+                : (isCached
+                    ? OneUiTheme.CreateRoundedDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 76), 99f, OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 175), 1f)
+                    : OneUiTheme.CreateRoundedDrawable(this, Color.Argb(34, 255, 255, 255), 99f, Color.Argb(48, 255, 255, 255), 0.9f));
         }
         if (isLyricsSingDockExpanded || prepRunning) {
             RefreshNeuralPrepUi();

@@ -190,7 +190,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
     Android.Window.IOnBackInvokedCallback predictiveBackCallback;
     bool isPredictiveBackRegistered;
     View tabIndicatorPill;
-    ValueAnimator tabPillAnimator;
     LinearLayout[] tabPages;
     View[] tabContainers;
     LinearLayout[] tabCells;
@@ -202,6 +201,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
     bool uiDestroyed;
     volatile bool isActivityResumed;
     volatile bool isRunningUiSelfAudit;
+    SystemVolumeBroadcastReceiver systemVolumeReceiver;
+    SystemVolumeContentObserver systemVolumeObserver;
 
     // Dynamic One UI 9 Color Tokens (automatically adapt to system Wallpaper Palette on API 31+)
     static Color ColBg => OneUiTheme.BgScreen;
@@ -223,6 +224,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         _ = Task.Run(() => AudioQualityAnalyzer.EnsureCacheLoaded(ApplicationContext));
 
         ConfigureEdgeToEdgeWindow(Window);
+        VolumeControlStream = Android.Media.Stream.Music;
         AndroidRuntimeTelemetry.AttachFrameMetrics(this);
 
         store = new AppSettingsStore(this);
@@ -277,7 +279,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             HeadphoneVirtualizer = store.HeadphoneVirtualizer,
             DistanceSimulation = store.DistanceSimulation,
             VolumeRolloff = (Rolloffs)Math.Clamp(store.VolumeRolloffIndex, 0, 3),
-            Volume = store.PlayerVolume,
+            Volume = 1.0f,
             LFEVolume = store.LfeVolume,
             EnvironmentType = (Environments)Math.Clamp(store.EnvironmentTypeIndex, 0, 3),
             EnvironmentSize = new System.Numerics.Vector3(store.RoomSizeX, store.RoomSizeY, store.RoomSizeZ),
@@ -303,7 +305,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
             UsbDacNativeSampleRate = store.UsbDacNativeSampleRate
         };
         audioOutput.DiagnosticsUpdated += _ => RunOnUiThread(RefreshHeadTrackingUi);
-        audioOutput.ProAudioDiagnosticsUpdated += _ => RunOnUiThread(RefreshProAudioUi);
+        audioOutput.ProAudioDiagnosticsUpdated += _ => RunOnUiThread(() => {
+            RefreshProAudioUi();
+            SyncUiFromSystemMediaVolume(updateEngine: true);
+        });
 
         usbProAudioManager = new UsbProAudioDeviceManager(this);
         usbProAudioManager.DeviceStateChanged += _ => RunOnUiThread(RefreshProAudioUi);
@@ -362,6 +367,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         uiHandler = new Handler(Looper.MainLooper);
         BuildRootUi();
+        RegisterSystemVolumeListeners();
+        SyncUiFromSystemMediaVolume(updateEngine: true);
         audioDeviceProfileManager.Start();
         usbProAudioManager.Start();
         audioOutput.UpdateOutputRoute(audioDeviceProfileManager.CurrentDevice);
@@ -459,12 +466,83 @@ public partial class MainActivity : Activity, ICavernizeApp {
     protected override void OnResume() {
         base.OnResume();
         isActivityResumed = true;
+        SyncUiFromSystemMediaVolume(updateEngine: true);
         if (!string.IsNullOrEmpty(pendingInstallApkPath) &&
             File.Exists(pendingInstallApkPath) &&
             AppUpdateService.CanInstallPackages(this)) {
             string path = pendingInstallApkPath;
             pendingInstallApkPath = null;
             AppUpdateService.LaunchInstaller(this, path);
+        }
+    }
+
+    public override bool DispatchKeyEvent(KeyEvent e) {
+        bool handled = base.DispatchKeyEvent(e);
+        if (e != null && (e.KeyCode == Keycode.VolumeUp || e.KeyCode == Keycode.VolumeDown || e.KeyCode == Keycode.VolumeMute)) {
+            uiHandler?.Post(() => SyncUiFromSystemMediaVolume(updateEngine: true));
+        }
+        return handled;
+    }
+
+    void RegisterSystemVolumeListeners() {
+        try {
+            if (systemVolumeReceiver == null) {
+                systemVolumeReceiver = new SystemVolumeBroadcastReceiver(() => {
+                    if (!uiDestroyed) {
+                        RunOnUiThread(() => SyncUiFromSystemMediaVolume(updateEngine: true));
+                    }
+                });
+                IntentFilter filter = new("android.media.VOLUME_CHANGED_ACTION");
+                if (OperatingSystem.IsAndroidVersionAtLeast(33)) {
+                    RegisterReceiver(systemVolumeReceiver, filter, ReceiverFlags.Exported);
+                } else {
+                    RegisterReceiver(systemVolumeReceiver, filter);
+                }
+            }
+        } catch (Exception ex) {
+            AppLogger.Warn($"RegisterSystemVolumeReceiver: {ex.Message}");
+        }
+        try {
+            if (systemVolumeObserver == null && ContentResolver != null) {
+                systemVolumeObserver = new SystemVolumeContentObserver(uiHandler ?? new Handler(Looper.MainLooper), () => {
+                    if (!uiDestroyed) {
+                        SyncUiFromSystemMediaVolume(updateEngine: true);
+                    }
+                });
+                ContentResolver.RegisterContentObserver(Android.Provider.Settings.System.ContentUri!, true, systemVolumeObserver);
+            }
+        } catch (Exception ex) {
+            AppLogger.Warn($"RegisterSystemVolumeObserver: {ex.Message}");
+        }
+    }
+
+    void UnregisterSystemVolumeListeners() {
+        if (systemVolumeReceiver != null) {
+            try { UnregisterReceiver(systemVolumeReceiver); } catch { }
+            try { systemVolumeReceiver.Dispose(); } catch { }
+            systemVolumeReceiver = null;
+        }
+        if (systemVolumeObserver != null) {
+            try { ContentResolver?.UnregisterContentObserver(systemVolumeObserver); } catch { }
+            try { systemVolumeObserver.Dispose(); } catch { }
+            systemVolumeObserver = null;
+        }
+    }
+
+    sealed class SystemVolumeBroadcastReceiver(Action onVolumeChanged) : BroadcastReceiver {
+        public override void OnReceive(Context context, Intent intent) {
+            if (intent == null) return;
+            int streamType = intent.GetIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1);
+            if (streamType == -1 || streamType == (int)Android.Media.Stream.Music) {
+                onVolumeChanged?.Invoke();
+            }
+        }
+    }
+
+    sealed class SystemVolumeContentObserver(Handler handler, Action onVolumeChanged) : Android.Database.ContentObserver(handler) {
+        public override void OnChange(bool selfChange) {
+            base.OnChange(selfChange);
+            onVolumeChanged?.Invoke();
         }
     }
 
@@ -480,6 +558,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     protected override void OnDestroy() {
         uiDestroyed = true;
+        RecordActiveTrackMeasuredLoudnessIfValid();
+        UnregisterSystemVolumeListeners();
+        try { nextTrackLoudnessCts?.Cancel(); } catch { }
+        try { nextTrackLoudnessCts?.Dispose(); } catch { }
+        nextTrackLoudnessCts = null;
         AndroidRuntimeTelemetry.DetachFrameMetrics(this);
         AppLogger.CriticalEventLogged -= OnCriticalLogEvent;
         LiveDiagnosticBridgeService.StateChanged -= OnLiveBridgeStateChanged;
@@ -506,8 +589,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         neuralPrepCts = null;
         activeLosslessTwin?.Dispose();
         activeLosslessTwin = null;
-        tabPillAnimator?.Cancel();
-        tabPillAnimator?.Dispose();
+        tabIndicatorPill?.Animate()?.Cancel();
         formatPillAnimator?.Cancel();
         formatPillAnimator?.Dispose();
         mediaNotification?.Dispose();
@@ -614,7 +696,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 };
                 sv.SetClipToPadding(false);
                 sv.SetBackgroundColor(Color.Transparent);
-                sv.ScrollChange += (_, _) => navFrostedHost?.RefreshBlur();
+                sv.ScrollChange += (_, _) => navFrostedHost?.ScheduleDeferredBlur(180);
                 sv.AddView(tabPages[i]);
                 sv.Visibility = i == activeTab ? ViewStates.Visible : ViewStates.Gone;
                 tabContainers[i] = sv;

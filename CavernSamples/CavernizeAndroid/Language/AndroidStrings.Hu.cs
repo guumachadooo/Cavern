@@ -134,5 +134,31 @@ public sealed partial class AndroidStrings {
         d["NeuralGroupNoneActive"] = "Nincs";
         d["NeuralModelAutoActiveTag"] = "Auto aktív";
         d["NeuralModelAutoLockedTag"] = "Auto kezeli";
+        // W51.2 / W51.3: Egységes Atmos <-> FLAC MI gyorsítótár, beállítás-eltérés és kezelés
+        d["AiCacheSectionTitle"] = "Dal MI gyorsítótár (Dolby Atmos és FLAC)";
+        d["AiCacheSharedNote"] = "Az MI sávok automatikusan megosztódnak ugyanannak a dalnak a Dolby Atmos és FLAC változatai között.";
+        d["AiCacheStatusCachedFmt"] = "Gyorsítótárban: {0} sáv • {1:0.0} MB • forrás: {2}";
+        d["AiCacheStatusNotCached"] = "Ez a dal még nincs az MI gyorsítótárban.";
+        d["AiCacheConfigMatches"] = "Megegyezik a jelenlegi MI beállításokkal.";
+        d["AiCacheConfigDiffersHeader"] = "Eltérő MI beállításokkal készült:";
+        d["AiCacheRemoveBtn"] = "Eltávolítás a gyorsítótárból";
+        d["AiCacheRemovedToast"] = "Dal eltávolítva az MI gyorsítótárból.";
+        d["AiCacheReextractCurrentBtn"] = "Újragenerálás a jelenlegi beállításokkal";
+        d["AiCacheExtractNowBtn"] = "MI sávok kivonása most";
+        d["SingDockCacheChip"] = "MI Cache";
+        d["SingDockCacheDiffChip"] = "MI Cache (!)";
+        d["KaraokeCacheDialogTitle"] = "Karaoke és dal MI gyorsítótár";
+        d["AiCacheDiffFieldBackend"] = "MI motor";
+        d["AiCacheDiffFieldModels"] = "Modellek";
+        d["AiCacheDiffFieldBundle"] = "Szétválasztási mód";
+        d["AiCacheDiffFieldOrchestration"] = "Vezérlés";
+        d["AiCacheDiffFieldOverlap"] = "Átfedés";
+        d["AiCacheDiffFieldTta"] = "TTA";
+        d["AiCacheDiffFieldEnsemble"] = "Ensemble keverés";
+        d["AiCacheDiffFieldPhaseFix"] = "Fázisjavítás";
+        d["AiCacheDiffFieldEnergyConservation"] = "Energiamegmaradás";
+        d["AiCacheDiffFieldBackingVocals"] = "Vokál (Backing)";
+        d["AiCacheDiffValKeepBacking"] = "Vokál megtartása";
+        d["AiCacheDiffValPureInstr"] = "Tiszta hangszeres";
     }
 }

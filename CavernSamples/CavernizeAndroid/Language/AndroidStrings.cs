@@ -1783,6 +1783,32 @@ public sealed partial class AndroidStrings {
         ["NeuralGroupActiveCountFmt"] = "{0} active",
         ["NeuralGroupNoneActive"] = "None",
         ["NeuralModelAutoActiveTag"] = "Auto Active",
-        ["NeuralModelAutoLockedTag"] = "Auto-Managed"
+        ["NeuralModelAutoLockedTag"] = "Auto-Managed",
+        // W51.2 / W51.3: Unified Atmos <-> FLAC AI Cache Status, Config Diff & Cache Controls
+        ["AiCacheSectionTitle"] = "Song AI Cache (Dolby Atmos & FLAC)",
+        ["AiCacheSharedNote"] = "AI stems are shared automatically between Dolby Atmos and FLAC versions of the same song.",
+        ["AiCacheStatusCachedFmt"] = "Cached: {0} stems • {1:0.0} MB • extracted from {2}",
+        ["AiCacheStatusNotCached"] = "Not cached yet for this song.",
+        ["AiCacheConfigMatches"] = "Matches your current AI settings.",
+        ["AiCacheConfigDiffersHeader"] = "Cached with different AI settings:",
+        ["AiCacheRemoveBtn"] = "Remove from Cache",
+        ["AiCacheRemovedToast"] = "Song removed from AI cache.",
+        ["AiCacheReextractCurrentBtn"] = "Re-extract with Current Settings",
+        ["AiCacheExtractNowBtn"] = "Extract AI Stems Now",
+        ["SingDockCacheChip"] = "AI Cache",
+        ["SingDockCacheDiffChip"] = "AI Cache (!)",
+        ["KaraokeCacheDialogTitle"] = "Karaoke & Song AI Cache",
+        ["AiCacheDiffFieldBackend"] = "AI Engine",
+        ["AiCacheDiffFieldModels"] = "Models",
+        ["AiCacheDiffFieldBundle"] = "Separation Mode",
+        ["AiCacheDiffFieldOrchestration"] = "Orchestration",
+        ["AiCacheDiffFieldOverlap"] = "Overlap",
+        ["AiCacheDiffFieldTta"] = "TTA",
+        ["AiCacheDiffFieldEnsemble"] = "Ensemble Blend",
+        ["AiCacheDiffFieldPhaseFix"] = "Phase Fix",
+        ["AiCacheDiffFieldEnergyConservation"] = "Energy Conservation",
+        ["AiCacheDiffFieldBackingVocals"] = "Backing Vocals",
+        ["AiCacheDiffValKeepBacking"] = "Keep Backing",
+        ["AiCacheDiffValPureInstr"] = "Pure Instrumental"
     };
 }

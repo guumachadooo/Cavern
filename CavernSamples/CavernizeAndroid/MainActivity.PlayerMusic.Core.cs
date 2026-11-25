@@ -298,7 +298,7 @@ public partial class MainActivity {
     OneUiIconView musicLyricsSingMicIcon;
     TextView musicLyricsSingPctText;
     OneUiSeekBar musicLyricsVocalSeekBar;
-    Button musicLyricsKaraokeBtn, musicLyricsPureInstrBtn, musicLyricsLiveMicBtn, musicLyricsMicSourceBtn, musicLyricsAiPrepBtn, musicLyricsMixMatchBtn, musicLyricsVocalAbBtn, musicLyricsScarlettBtn;
+    Button musicLyricsKaraokeBtn, musicLyricsPureInstrBtn, musicLyricsLiveMicBtn, musicLyricsMicSourceBtn, musicLyricsAiPrepBtn, musicLyricsCacheBtn, musicLyricsMixMatchBtn, musicLyricsVocalAbBtn, musicLyricsScarlettBtn;
     TextView musicLyricsAiStatusText;
 
     // Apple Music Title Row
@@ -659,7 +659,10 @@ public partial class MainActivity {
 
         musicLyricsAiPrepBtn = MakeSingDockChip(S["NeuralPrepBtn"], () =>
             PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke));
-        singChipsRow.AddView(musicLyricsAiPrepBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        singChipsRow.AddView(musicLyricsAiPrepBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(6) });
+
+        musicLyricsCacheBtn = MakeSingDockChip(S["SingDockCacheChip"], ShowKaraokeCacheInspectorDialog);
+        singChipsRow.AddView(musicLyricsCacheBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
 
         HorizontalScrollView singChipsScroll = new(this) {
             HorizontalScrollBarEnabled = false,
@@ -839,14 +842,17 @@ public partial class MainActivity {
         volRow.SetGravity(GravityFlags.CenterVertical);
 
         OneUiIconView lowSpk = new(this, OneUiIconType.SpeakerLow, Color.Argb(165, 252, 252, 255));
-        lowSpk.Click += (_, _) => SetMasterVolumePercent(Math.Max(0, (int)Math.Round(store.PlayerVolume * 100) - 15));
+        lowSpk.Click += (_, _) => StepMasterVolumeByDelta(-1);
         volRow.AddView(lowSpk, new LinearLayout.LayoutParams(Dp(18), Dp(18)) { RightMargin = Dp(10) });
 
+        int initVolPct = IsDirectUsbSoftwareVolumeActive()
+            ? Math.Clamp((int)Math.Round(store.PlayerVolume * 100), 0, 100)
+            : ReadSystemMediaVolumePercent(out _, out _);
         musicVolSeekBar = new OneUiSeekBar(this) {
-            Max = 200,
-            Progress = Math.Clamp((int)Math.Round(store.PlayerVolume * 100), 0, 200),
-            DefaultProgress = 100,
-            HasDefaultReset = true,
+            Max = 100,
+            Progress = initVolPct,
+            DefaultProgress = 50,
+            HasDefaultReset = false,
             SlimVolumeMode = true
         };
         musicVolSeekBar.UserProgressChanged += v => SetMasterVolumePercent(v);
@@ -854,7 +860,7 @@ public partial class MainActivity {
         volRow.AddView(musicVolSeekBar, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
         OneUiIconView highSpk = new(this, OneUiIconType.SpeakerHigh, Color.Argb(165, 252, 252, 255));
-        highSpk.Click += (_, _) => SetMasterVolumePercent(Math.Min(200, (int)Math.Round(store.PlayerVolume * 100) + 15));
+        highSpk.Click += (_, _) => StepMasterVolumeByDelta(+1);
         volRow.AddView(highSpk, new LinearLayout.LayoutParams(Dp(20), Dp(20)) { LeftMargin = Dp(10) });
 
         musicNowPlayingSection.AddView(volRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
@@ -1014,7 +1020,7 @@ public partial class MainActivity {
         };
         musicLibraryScrollView.SetClipToPadding(false);
         musicLibraryScrollView.SetPadding(0, 0, 0, Dp(106));
-        musicLibraryScrollView.ScrollChange += (_, _) => navFrostedHost?.RefreshBlur();
+        musicLibraryScrollView.ScrollChange += (_, _) => navFrostedHost?.ScheduleDeferredBlur(180);
         musicLibraryScrollView.AddView(musicLibrarySection, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
             ViewGroup.LayoutParams.WrapContent));

@@ -1099,6 +1099,11 @@ public sealed class AndroidAudioOutput : IDisposable {
             }
         } else {
             int baseMusic = Math.Max(Math.Max(burst, halBurst) * 4, (int)(sr * 0.036));
+            // W51.5: Keep generous >= 52 ms ring floor during first 3.5 s of cold playback start to absorb decoder/JIT/UI bursts
+            bool inStartupWarmup = (System.Environment.TickCount64 - lastNativeStartTickMs) < 3500;
+            if (inStartupWarmup) {
+                baseMusic = Math.Max(baseMusic, (int)(sr * 0.052));
+            }
             int capMusic = Math.Min(12288, Math.Max(baseMusic, (int)(sr * 0.068)));
             maxBuffered = Math.Clamp(baseMusic + adaptiveWatermarkBoostFrames, 512, capMusic);
             // Align playback rendering to full Cavern DSP blocks (256..512f) to avoid sub-block lock/copy thrash
@@ -1108,7 +1113,7 @@ public sealed class AndroidAudioOutput : IDisposable {
         int bufferedFrames = NativeProAudioBridge.GetPlaybackBufferedFrames();
         int freeFrames = NativeProAudioBridge.GetPlaybackFreeFrames();
         bool wroteAny = false;
-        int maxChunksPerIter = duplexOrLiveMic ? 2 : 6;
+        int maxChunksPerIter = duplexOrLiveMic ? 2 : 8;
 
         // 3. Multi-chunk drain-to-watermark loop (refills ring smoothly without sleeping between bursts!)
         for (int chunkIdx = 0; chunkIdx < maxChunksPerIter && running; chunkIdx++) {
@@ -1487,7 +1492,12 @@ public sealed class AndroidAudioOutput : IDisposable {
             }
         }
 
-        // Phase 4: Notify Path B FD ownership & publish diagnostics OUTSIDE lifecycleLock!
+        // Phase 4: Pre-prime native playback ring immediately (before UI diagnostic events) to prevent cold-start stutter!
+        if (startedNative && engine.IsPlaying && !needInput && running) {
+            PreFillNativePlaybackRing(activeSampleRate);
+        }
+
+        // Phase 5: Notify Path B FD ownership & publish diagnostics OUTSIDE lifecycleLock!
         if (startedPathB) {
             if (Volatile.Read(ref usbDetachEpoch) == detachEpoch) {
                 mgr?.NotifyPathBFileDescriptorState(ownedByPathB: true);
@@ -1500,6 +1510,36 @@ public sealed class AndroidAudioOutput : IDisposable {
         }
         PushEffectivePreAmpSnapshot(mgr?.CurrentPreAmpSnapshot);
         PublishDiagnostics(usbSnap);
+    }
+
+    /// <summary>
+    /// Pre-fills 3..4 DSP blocks (~24..40 ms) directly into the native AAudio/libusb playback ring right after stream open
+    /// so the HAL real-time callback never wakes up on a 0-frame ring during the first seconds of playback.
+    /// </summary>
+    void PreFillNativePlaybackRing(int sr) {
+        try {
+            int safeSr = Math.Max(44100, sr);
+            int targetFrames = Math.Clamp((int)(safeSr * 0.036), 1024, 4096);
+            int chunk = 512;
+            int epochBefore = Volatile.Read(ref flushEpoch);
+            for (int i = 0; i < 6 && running; i++) {
+                int buffered = NativeProAudioBridge.GetPlaybackBufferedFrames();
+                int free = NativeProAudioBridge.GetPlaybackFreeFrames();
+                if (buffered >= targetFrames || free < chunk) {
+                    break;
+                }
+                int rendered = engine.RenderNextInterleavedBlock(floatRenderBuffer, Math.Min(chunk, free));
+                if (rendered <= 0 || Volatile.Read(ref flushEpoch) != epochBefore) {
+                    break;
+                }
+                int written = NativeProAudioBridge.WritePlayback(floatRenderBuffer, rendered);
+                if (written <= 0) {
+                    break;
+                }
+            }
+        } catch {
+            // Best-effort startup pre-prime
+        }
     }
 
     bool StopNativeBackendLocked(bool forceStopNative = false) {

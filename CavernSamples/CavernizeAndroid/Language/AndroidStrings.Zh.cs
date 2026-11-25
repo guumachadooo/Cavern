@@ -134,5 +134,31 @@ public sealed partial class AndroidStrings {
         d["NeuralGroupNoneActive"] = "无";
         d["NeuralModelAutoActiveTag"] = "自动已选";
         d["NeuralModelAutoLockedTag"] = "自动托管";
+        // W51.2 / W51.3: 统一 Atmos <-> FLAC AI 缓存状态、配置差异与缓存控制
+        d["AiCacheSectionTitle"] = "歌曲 AI 缓存（Dolby Atmos 与 FLAC）";
+        d["AiCacheSharedNote"] = "同一首歌的 Dolby Atmos 与 FLAC 版本会自动共享 AI 分轨缓存。";
+        d["AiCacheStatusCachedFmt"] = "已缓存: {0} 轨 • {1:0.0} MB • 来源 {2}";
+        d["AiCacheStatusNotCached"] = "当前歌曲尚未缓存 AI 分轨。";
+        d["AiCacheConfigMatches"] = "与当前 AI 设置完全一致。";
+        d["AiCacheConfigDiffersHeader"] = "与当前 AI 设置存在以下差异:";
+        d["AiCacheRemoveBtn"] = "从缓存移除";
+        d["AiCacheRemovedToast"] = "已从 AI 缓存中移除该歌曲。";
+        d["AiCacheReextractCurrentBtn"] = "使用当前设置重新提取";
+        d["AiCacheExtractNowBtn"] = "立即提取 AI 分轨";
+        d["SingDockCacheChip"] = "AI 缓存";
+        d["SingDockCacheDiffChip"] = "AI 缓存 (!)";
+        d["KaraokeCacheDialogTitle"] = "卡拉 OK 与歌曲 AI 缓存";
+        d["AiCacheDiffFieldBackend"] = "AI 引擎";
+        d["AiCacheDiffFieldModels"] = "模型";
+        d["AiCacheDiffFieldBundle"] = "分离模式";
+        d["AiCacheDiffFieldOrchestration"] = "编排模式";
+        d["AiCacheDiffFieldOverlap"] = "重叠率";
+        d["AiCacheDiffFieldTta"] = "TTA";
+        d["AiCacheDiffFieldEnsemble"] = "集成混合";
+        d["AiCacheDiffFieldPhaseFix"] = "相位修复";
+        d["AiCacheDiffFieldEnergyConservation"] = "能量守恒";
+        d["AiCacheDiffFieldBackingVocals"] = "和声处理";
+        d["AiCacheDiffValKeepBacking"] = "保留和声";
+        d["AiCacheDiffValPureInstr"] = "纯伴奏";
     }
 }

@@ -187,8 +187,65 @@ public sealed class NeuralTrackCacheService : INeuralTrackCache {
     }
 
     /// <summary>
-    /// Pure deterministic matcher enforcing cache-first stem reuse across backend/preset changes while strictly
-    /// preventing cross-track stem pollution (returns 0 on mismatch or insufficient stem count for <paramref name="goal"/>).
+    /// Returns all cached entries matching the given song across variants (e.g. Dolby Atmos &lt;-&gt; FLAC),
+    /// sorted by descending match quality and recency.
+    /// </summary>
+    public IReadOnlyList<NeuralTrackCacheEntryInfo> FindEntriesForTrack(
+        string sourceTrackKey,
+        string displayTitle,
+        string artistName,
+        NeuralPipelineGoal goal = NeuralPipelineGoal.StemSeparation) {
+        IReadOnlyList<NeuralTrackCacheEntryInfo> entries = ListEntries();
+        if (entries == null || entries.Count == 0) {
+            return Array.Empty<NeuralTrackCacheEntryInfo>();
+        }
+        List<(NeuralTrackCacheEntryInfo Entry, int Score)> scored = [];
+        for (int i = 0; i < entries.Count; i++) {
+            int s = ScoreCacheEntryMatch(entries[i], sourceTrackKey, displayTitle, artistName, goal);
+            if (s > 0) {
+                scored.Add((entries[i], s));
+            }
+        }
+        scored.Sort((a, b) => {
+            int cmp = b.Score.CompareTo(a.Score);
+            return cmp != 0 ? cmp : b.Entry.LastModifiedUtc.CompareTo(a.Entry.LastModifiedUtc);
+        });
+        List<NeuralTrackCacheEntryInfo> result = new(scored.Count);
+        for (int i = 0; i < scored.Count; i++) {
+            result.Add(scored[i].Entry);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Deletes all cached stem bundles matching the specified song (across both Atmos and FLAC variants) and returns the count removed.
+    /// </summary>
+    public int DeleteEntriesForTrack(string sourceTrackKey, string displayTitle, string artistName) {
+        IReadOnlyList<NeuralTrackCacheEntryInfo> all = ListEntries();
+        if (all == null || all.Count == 0) {
+            return 0;
+        }
+        HashSet<string> keysToDelete = new(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < all.Count; i++) {
+            NeuralTrackCacheEntryInfo e = all[i];
+            int scoreStem = ScoreCacheEntryMatch(e, sourceTrackKey, displayTitle, artistName, NeuralPipelineGoal.StemSeparation);
+            int scoreKara = ScoreCacheEntryMatch(e, sourceTrackKey, displayTitle, artistName, NeuralPipelineGoal.SpatialKaraoke);
+            if (scoreStem > 0 || scoreKara > 0) {
+                keysToDelete.Add(e.CacheKey);
+            }
+        }
+        int removed = 0;
+        foreach (string key in keysToDelete) {
+            if (DeleteEntry(key)) {
+                removed++;
+            }
+        }
+        return removed;
+    }
+
+    /// <summary>
+    /// Pure deterministic matcher enforcing unified cross-variant (Dolby Atmos &lt;-&gt; FLAC) cache-first stem reuse
+    /// while strictly preventing cross-song pollution (returns 0 on mismatch or insufficient stem count).
     /// </summary>
     public static int ScoreCacheEntryMatch(
         NeuralTrackCacheEntryInfo entry,
@@ -213,33 +270,60 @@ public sealed class NeuralTrackCacheService : INeuralTrackCache {
         string normEntryPath = NormalizeTrackPath(entry.SourceTrackKey);
         string normQueryFile = ExtractNormalizedFileStem(sourceTrackKey);
         string normEntryFile = ExtractNormalizedFileStem(entry.SourceTrackKey);
-        string normQueryTitle = NormalizeMetaToken(displayTitle);
-        string normEntryTitle = NormalizeMetaToken(entry.DisplayTitle);
+        string canonicalQueryFile = ExtractCanonicalSongStem(sourceTrackKey);
+        string canonicalEntryFile = ExtractCanonicalSongStem(entry.SourceTrackKey);
+        string canonicalQueryTitle = ExtractCanonicalSongStem(displayTitle);
+        string canonicalEntryTitle = ExtractCanonicalSongStem(entry.DisplayTitle);
         string normQueryArtist = NormalizeMetaToken(artistName);
         string normEntryArtist = NormalizeMetaToken(entry.ArtistName);
+
+        // Reject cross-song collision if both entries declare distinct non-empty artists
+        bool artistConflict = !string.IsNullOrEmpty(normQueryArtist) &&
+                              !string.IsNullOrEmpty(normEntryArtist) &&
+                              !string.Equals(normQueryArtist, normEntryArtist, StringComparison.Ordinal) &&
+                              !normQueryArtist.Contains(normEntryArtist, StringComparison.Ordinal) &&
+                              !normEntryArtist.Contains(normQueryArtist, StringComparison.Ordinal);
 
         int identityScore = 0;
         if (!string.IsNullOrEmpty(normQueryPath) &&
             !string.IsNullOrEmpty(normEntryPath) &&
             string.Equals(normQueryPath, normEntryPath, StringComparison.OrdinalIgnoreCase)) {
             identityScore = 1000;
-        } else if (!string.IsNullOrEmpty(normQueryFile) &&
+        } else if (!artistConflict &&
+                   !string.IsNullOrEmpty(normQueryFile) &&
                    !string.IsNullOrEmpty(normEntryFile) &&
                    string.Equals(normQueryFile, normEntryFile, StringComparison.Ordinal)) {
-            // Reject filename collision if both entries declare distinct non-empty artists
-            if (!string.IsNullOrEmpty(normQueryArtist) &&
-                !string.IsNullOrEmpty(normEntryArtist) &&
-                !string.Equals(normQueryArtist, normEntryArtist, StringComparison.Ordinal)) {
+            identityScore = 750;
+        } else if (!artistConflict &&
+                   !string.IsNullOrEmpty(canonicalQueryFile) &&
+                   !string.IsNullOrEmpty(canonicalEntryFile) &&
+                   string.Equals(canonicalQueryFile, canonicalEntryFile, StringComparison.Ordinal)) {
+            // Cross-variant filename match: e.g. "01. Lavender Haze.m4a.mp4" <-> "01 - Lavender Haze.flac"
+            identityScore = 650;
+        } else if (!artistConflict &&
+                   !string.IsNullOrEmpty(canonicalQueryTitle) &&
+                   !string.IsNullOrEmpty(canonicalEntryTitle) &&
+                   string.Equals(canonicalQueryTitle, canonicalEntryTitle, StringComparison.Ordinal)) {
+            bool bothArtistsMatch = !string.IsNullOrEmpty(normQueryArtist) && !string.IsNullOrEmpty(normEntryArtist);
+            bool canonicalFileCorroborates = (!string.IsNullOrEmpty(canonicalQueryFile) &&
+                                              string.Equals(canonicalQueryFile, canonicalEntryTitle, StringComparison.Ordinal)) ||
+                                             (!string.IsNullOrEmpty(canonicalEntryFile) &&
+                                              string.Equals(canonicalEntryFile, canonicalQueryTitle, StringComparison.Ordinal));
+            if (bothArtistsMatch || canonicalFileCorroborates || canonicalQueryTitle.Length >= 4) {
+                identityScore = bothArtistsMatch ? 600 : 520;
+            } else {
                 return 0;
             }
-            identityScore = 700;
-        } else if (!string.IsNullOrEmpty(normQueryTitle) &&
-                   !string.IsNullOrEmpty(normEntryTitle) &&
-                   !string.IsNullOrEmpty(normQueryArtist) &&
-                   !string.IsNullOrEmpty(normEntryArtist) &&
-                   string.Equals(normQueryTitle, normEntryTitle, StringComparison.Ordinal) &&
-                   string.Equals(normQueryArtist, normEntryArtist, StringComparison.Ordinal)) {
-            identityScore = 450;
+        } else if (!artistConflict &&
+                   !string.IsNullOrEmpty(canonicalQueryTitle) &&
+                   !string.IsNullOrEmpty(canonicalEntryFile) &&
+                   string.Equals(canonicalQueryTitle, canonicalEntryFile, StringComparison.Ordinal)) {
+            identityScore = 540;
+        } else if (!artistConflict &&
+                   !string.IsNullOrEmpty(canonicalQueryFile) &&
+                   !string.IsNullOrEmpty(canonicalEntryTitle) &&
+                   string.Equals(canonicalQueryFile, canonicalEntryTitle, StringComparison.Ordinal)) {
+            identityScore = 540;
         } else {
             return 0;
         }
@@ -258,6 +342,118 @@ public sealed class NeuralTrackCacheService : INeuralTrackCache {
         }
 
         return identityScore + goalBonus;
+    }
+
+    static readonly string[] KnownMediaExtensions = [
+        ".mp4", ".m4a", ".m4v", ".flac", ".wav", ".mkv", ".mka", ".eac3", ".ec3",
+        ".ac3", ".thd", ".mlp", ".mp3", ".aac", ".ogg", ".opus", ".alac", ".aiff",
+        ".aif", ".atmos", ".webm", ".weba", ".wv", ".ape", ".tta"
+    ];
+
+    static readonly string[] FormatEditionTags = [
+        "dolby atmos", "atmos", "spatial audio", "spatial", "flac", "lossless",
+        "hi res", "hires", "24bit", "24 bit", "16bit", "16 bit", "master", "mqa",
+        "eac3", "truehd", "alac", "explicit"
+    ];
+
+    /// <summary>
+    /// Extracts a canonical cross-variant song stem so Dolby Atmos and FLAC files of the same song
+    /// (e.g. <c>"02. Maroon.m4a (1).mp4"</c> and <c>"02 - Maroon.flac"</c>) normalize identically.
+    /// </summary>
+    public static string ExtractCanonicalSongStem(string pathOrTitle) {
+        if (string.IsNullOrWhiteSpace(pathOrTitle)) {
+            return string.Empty;
+        }
+        string cleaned = pathOrTitle.Trim().Replace('\\', '/');
+        int slash = cleaned.LastIndexOf('/');
+        if (slash >= 0 && slash < cleaned.Length - 1) {
+            cleaned = cleaned[(slash + 1)..];
+        }
+
+        // Iteratively strip trailing media extensions and browser duplicate counters like " (1)" / " (2)"
+        bool changed = true;
+        int guard = 0;
+        while (changed && guard++ < 6) {
+            changed = false;
+            cleaned = cleaned.Trim();
+            for (int i = 0; i < KnownMediaExtensions.Length; i++) {
+                if (cleaned.EndsWith(KnownMediaExtensions[i], StringComparison.OrdinalIgnoreCase) &&
+                    cleaned.Length > KnownMediaExtensions[i].Length) {
+                    cleaned = cleaned[..^KnownMediaExtensions[i].Length].Trim();
+                    changed = true;
+                    break;
+                }
+            }
+            if (cleaned.EndsWith(')')) {
+                int open = cleaned.LastIndexOf('(');
+                if (open > 0) {
+                    string inside = cleaned.Substring(open + 1, cleaned.Length - open - 2).Trim();
+                    bool allDigits = inside.Length > 0 && inside.Length <= 2 && inside.All(char.IsDigit);
+                    bool isFormatTag = IsFormatEditionTag(inside);
+                    if (allDigits || isFormatTag) {
+                        cleaned = cleaned[..open].Trim();
+                        changed = true;
+                    }
+                }
+            } else if (cleaned.EndsWith(']')) {
+                int open = cleaned.LastIndexOf('[');
+                if (open > 0) {
+                    string inside = cleaned.Substring(open + 1, cleaned.Length - open - 2).Trim();
+                    if (IsFormatEditionTag(inside)) {
+                        cleaned = cleaned[..open].Trim();
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        // Strip leading track numbers like "01. ", "01 - ", "1-02 ", "09_"
+        cleaned = StripLeadingTrackNumber(cleaned);
+        return NormalizeMetaToken(cleaned);
+    }
+
+    static bool IsFormatEditionTag(string token) {
+        if (string.IsNullOrWhiteSpace(token)) {
+            return false;
+        }
+        string norm = NormalizeMetaToken(token);
+        for (int i = 0; i < FormatEditionTags.Length; i++) {
+            if (string.Equals(norm, FormatEditionTags[i], StringComparison.Ordinal)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static string StripLeadingTrackNumber(string s) {
+        if (string.IsNullOrEmpty(s)) {
+            return string.Empty;
+        }
+        int i = 0;
+        while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
+        int startDigits = i;
+        while (i < s.Length && char.IsDigit(s[i])) i++;
+        if (i == startDigits || i - startDigits > 3) {
+            return s;
+        }
+        // Optional disc-track separator like "1-02"
+        if (i < s.Length && s[i] == '-') {
+            int j = i + 1;
+            int d2 = j;
+            while (j < s.Length && char.IsDigit(s[j])) j++;
+            if (j > d2 && j - d2 <= 3) {
+                i = j;
+            }
+        }
+        int sepStart = i;
+        while (i < s.Length && (s[i] == '.' || s[i] == '-' || s[i] == '_' || s[i] == ')' || char.IsWhiteSpace(s[i]))) {
+            i++;
+        }
+        // Only strip if there was an explicit separator/whitespace and meaningful title remains
+        if (i > sepStart && i < s.Length) {
+            return s[i..].TrimStart();
+        }
+        return s;
     }
 
     static string NormalizeTrackPath(string path) {

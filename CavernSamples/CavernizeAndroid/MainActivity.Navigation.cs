@@ -333,13 +333,14 @@ public partial class MainActivity {
                 }
             }
 
-            float prevPos = startStripPos;
-            long prevTimeMs = SystemClock.UptimeMillis();
-            float smoothedBlurPx = 0f;
-            const float TabMaxBlurDp = 14f;
-            float maxBlurPx = TabMaxBlurDp * density;
-            const long FixedStripDurationMs = 310L; // Constant duration regardless of span -> multi-tab jumps travel faster with deeper soft optical defocus
+            if (navFrostedHost != null) {
+                navFrostedHost.IsSuspendedForTransition = true;
+            }
+            for (int i = low; i <= high; i++) {
+                OneUiMotionBlur.EnableHardwareLayer(tabContainers[i]);
+            }
 
+            const long FixedStripDurationMs = 260L;
             ValueAnimator anim = ValueAnimator.OfFloat(startStripPos, endStripPos);
             anim.SetDuration(FixedStripDurationMs);
             anim.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
@@ -348,22 +349,10 @@ public partial class MainActivity {
                     return;
                 }
                 float curPos = (float)(e.Animation?.AnimatedValue ?? endStripPos);
-                long nowMs = SystemClock.UptimeMillis();
-                float dtSec = Math.Max(0.004f, (nowMs - prevTimeMs) * 0.001f);
-                float velPxPerSec = MathF.Abs(curPos - prevPos) * viewportW / dtSec;
-                prevPos = curPos;
-                prevTimeMs = nowMs;
-
-                float targetBlur = allowBlur
-                    ? OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(velPxPerSec, density, maxBlurDp: TabMaxBlurDp)
-                    : 0f;
-                // Silky optical rise/decay envelope so defocus blooms gently and settles cleanly into focus
-                smoothedBlurPx = targetBlur > smoothedBlurPx
-                    ? smoothedBlurPx + (targetBlur - smoothedBlurPx) * 0.45f
-                    : smoothedBlurPx + (targetBlur - smoothedBlurPx) * 0.34f;
-                if (smoothedBlurPx < 0.75f) {
-                    smoothedBlurPx = 0f;
-                }
+                float progress = MathF.Abs(endStripPos - startStripPos) > 1e-4f
+                    ? Math.Clamp((curPos - startStripPos) / (endStripPos - startStripPos), 0f, 1f)
+                    : 1f;
+                float arch = 4f * progress * (1f - progress);
 
                 for (int i = low; i <= high; i++) {
                     View c = tabContainers[i];
@@ -374,15 +363,13 @@ public partial class MainActivity {
                     c.TranslationX = tx;
                     bool onScreen = MathF.Abs(tx) < viewportW * 1.15f;
                     c.Visibility = onScreen ? ViewStates.Visible : ViewStates.Invisible;
-                    if (onScreen && smoothedBlurPx >= 0.75f) {
-                        OneUiMotionBlur.ApplyHorizontalMotionBlur(c, smoothedBlurPx, opticalDefocusRatio: 0.54f);
-                        (float sc, float al) = OneUiMotionBlur.ComputeTransitionOpticalDepth(
-                            smoothedBlurPx, maxBlurPx, isEntering: i == idx);
+                    if (onScreen) {
+                        float sc = i == idx ? (1f - 0.012f * (1f - progress)) : (1f - 0.014f * arch);
+                        float al = i == idx ? (0.94f + 0.06f * progress) : (1f - 0.14f * progress);
                         c.ScaleX = sc;
                         c.ScaleY = sc;
                         c.Alpha = al;
                     } else {
-                        OneUiMotionBlur.ClearMotionBlur(c);
                         c.ScaleX = 1f;
                         c.ScaleY = 1f;
                         c.Alpha = 1f;
@@ -399,6 +386,7 @@ public partial class MainActivity {
                         continue;
                     }
                     OneUiMotionBlur.ClearMotionBlur(c);
+                    OneUiMotionBlur.ClearHardwareLayer(c);
                     c.Alpha = 1f;
                     c.ScaleX = 1f;
                     c.ScaleY = 1f;
@@ -409,7 +397,10 @@ public partial class MainActivity {
                 if (idx == 0 && !isLibrarySectionOpen) {
                     musicTabRootPage?.Post(() => UpdatePlayTabSpacingForViewport(force: true));
                 }
-                navFrostedHost?.RefreshBlur(force: true);
+                if (navFrostedHost != null) {
+                    navFrostedHost.IsSuspendedForTransition = false;
+                    navFrostedHost.ScheduleDeferredBlur(140);
+                }
             }
             anim.AnimationEnd += (_, _) => FinalizeStrip();
             anim.AnimationCancel += (_, _) => {
@@ -417,10 +408,14 @@ public partial class MainActivity {
                 for (int i = 0; i < tabContainers.Length; i++) {
                     View c = tabContainers[i];
                     if (c != null) {
+                        OneUiMotionBlur.ClearHardwareLayer(c);
                         c.ScaleX = 1f;
                         c.ScaleY = 1f;
                         c.Alpha = 1f;
                     }
+                }
+                if (navFrostedHost != null) {
+                    navFrostedHost.IsSuspendedForTransition = false;
                 }
             };
             tabStripAnimator = anim;
@@ -428,6 +423,7 @@ public partial class MainActivity {
         } else if (tabContainers[idx] is View svCur) {
             svCur.Animate()?.Cancel();
             OneUiMotionBlur.ClearMotionBlur(svCur);
+            OneUiMotionBlur.ClearHardwareLayer(svCur);
             svCur.Visibility = ViewStates.Visible;
             svCur.Alpha = 1f;
             svCur.ScaleX = 1f;
@@ -458,7 +454,9 @@ public partial class MainActivity {
                 RefreshSettingsCategorySubtitles();
             }
         }
-        navFrostedHost?.RefreshBlur(force: true);
+        if (tabStripAnimator == null) {
+            navFrostedHost?.ScheduleDeferredBlur(160);
+        }
         SyncPredictiveBackRegistration();
     }
 
@@ -550,7 +548,7 @@ public partial class MainActivity {
             if (visible) {
                 navFrostedHost.Post(() => {
                     PositionTabIndicator(animate: false);
-                    navFrostedHost?.RefreshBlur(force: true);
+                    navFrostedHost?.ScheduleDeferredBlur(140);
                 });
             }
             return;
@@ -560,21 +558,22 @@ public partial class MainActivity {
             if (navFrostedHost.Visibility != ViewStates.Visible) {
                 navFrostedHost.Visibility = ViewStates.Visible;
                 navFrostedHost.Alpha = 0f;
-                navFrostedHost.TranslationY = Dp(32);
-                navFrostedHost.ScaleX = 0.94f;
-                navFrostedHost.ScaleY = 0.94f;
+                navFrostedHost.TranslationY = Dp(28);
+                navFrostedHost.ScaleX = 0.95f;
+                navFrostedHost.ScaleY = 0.95f;
             }
             navFrostedHost.Animate()
                 .Alpha(1f)
                 .TranslationY(0f)
                 .ScaleX(1f)
                 .ScaleY(1f)
-                .SetDuration(290)
+                .SetDuration(250)
                 .SetInterpolator(CreateOneUiEase())
+                .WithLayer()
                 .WithEndAction(new Java.Lang.Runnable(() => {
                     if (uiDestroyed || myGen != navVisAnimGen) return;
                     PositionTabIndicator(animate: false);
-                    navFrostedHost?.RefreshBlur(force: true);
+                    navFrostedHost?.ScheduleDeferredBlur(140);
                 }))
                 .Start();
             if (bottomScrimView != null) {
@@ -644,52 +643,44 @@ public partial class MainActivity {
 
         float startX = tabIndicatorPill.TranslationX;
         float endX = targetHost.Left;
-        int startW = tabIndicatorPill.Width > 0 ? tabIndicatorPill.Width : targetW;
+        float currentRenderedW = (tabIndicatorPill.Width > 0 ? tabIndicatorPill.Width : targetW) * tabIndicatorPill.ScaleX;
 
         var lp = tabIndicatorPill.LayoutParameters;
-        if (lp != null && lp.Height != targetH) {
-            lp.Height = targetH;
-            tabIndicatorPill.LayoutParameters = lp;
-        }
-
-        tabPillAnimator?.Cancel();
-        OneUiMotionBlur.ClearMotionBlur(tabIndicatorPill);
-        if (!animate) {
-            tabIndicatorPill.TranslationX = endX;
-            if (lp != null) {
+        bool layoutChanged = false;
+        if (lp != null) {
+            if (lp.Height != targetH) {
+                lp.Height = targetH;
+                layoutChanged = true;
+            }
+            if (lp.Width != targetW) {
                 lp.Width = targetW;
+                layoutChanged = true;
+            }
+            if (layoutChanged) {
                 tabIndicatorPill.LayoutParameters = lp;
             }
+        }
+
+        tabIndicatorPill.Animate()?.Cancel();
+        OneUiMotionBlur.ClearMotionBlur(tabIndicatorPill);
+        tabIndicatorPill.PivotX = 0f;
+        if (!animate || targetW <= 0) {
+            tabIndicatorPill.TranslationX = endX;
+            tabIndicatorPill.ScaleX = 1f;
             return;
         }
 
-        float density = Resources?.DisplayMetrics?.Density ?? 3f;
-        float prevPillX = startX;
-        long prevPillMs = SystemClock.UptimeMillis();
-
-        tabPillAnimator = ValueAnimator.OfFloat(0f, 1f);
-        tabPillAnimator.SetDuration(300);
-        tabPillAnimator.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
-        tabPillAnimator.Update += (_, e) => {
-            float f = (float)(e.Animation?.AnimatedValue ?? 1f);
-            float curX = startX + (endX - startX) * f;
-            tabIndicatorPill.TranslationX = curX;
-            var curLp = tabIndicatorPill.LayoutParameters;
-            if (curLp != null) {
-                curLp.Width = (int)Math.Round(startW + (targetW - startW) * f);
-                tabIndicatorPill.LayoutParameters = curLp;
-            }
-            long nowMs = SystemClock.UptimeMillis();
-            float dtSec = Math.Max(0.004f, (nowMs - prevPillMs) * 0.001f);
-            float vel = MathF.Abs(curX - prevPillX) / dtSec;
-            prevPillX = curX;
-            prevPillMs = nowMs;
-            float pillBlur = OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(vel * 1.8f, density, maxBlurDp: 6f);
-            OneUiMotionBlur.ApplyHorizontalMotionBlur(tabIndicatorPill, pillBlur, opticalDefocusRatio: 0.48f);
-        };
-        tabPillAnimator.AnimationEnd += (_, _) => OneUiMotionBlur.ClearMotionBlur(tabIndicatorPill);
-        tabPillAnimator.AnimationCancel += (_, _) => OneUiMotionBlur.ClearMotionBlur(tabIndicatorPill);
-        tabPillAnimator.Start();
+        // Pure GPU TranslationX + ScaleX animation (ZERO requestLayout / LayoutParameters mutations per frame)
+        float startScaleX = Math.Clamp(currentRenderedW / Math.Max(1f, targetW), 0.5f, 2f);
+        tabIndicatorPill.TranslationX = startX;
+        tabIndicatorPill.ScaleX = startScaleX;
+        tabIndicatorPill.Animate()
+            .TranslationX(endX)
+            .ScaleX(1f)
+            .SetDuration(250)
+            .SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f))
+            .WithLayer()
+            .Start();
     }
 
     void RequestMediaPermissionsIfNeeded() {
@@ -999,25 +990,25 @@ public partial class MainActivity {
                     }
                     peekingNeighborTab = desiredNeighbor;
 
-                    float blurPx = OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(liveVelPxPerSec, density, maxBlurDp: 11f);
-                    (float dragScale, float dragAlpha) = OneUiMotionBlur.ComputeTransitionOpticalDepth(
-                        blurPx, 11f * density, isEntering: false);
+                    float dragFrac = Math.Clamp(MathF.Abs(offsetX) / Math.Max(1f, viewportW), 0f, 1f);
+                    float dragScale = 1f - 0.014f * dragFrac;
+                    float dragAlpha = 1f - 0.08f * dragFrac;
                     if (activeView != null) {
+                        OneUiMotionBlur.EnableHardwareLayer(activeView);
                         activeView.TranslationX = offsetX;
                         activeView.ScaleX = dragScale;
                         activeView.ScaleY = dragScale;
                         activeView.Alpha = dragAlpha;
-                        OneUiMotionBlur.ApplyHorizontalMotionBlur(activeView, blurPx, opticalDefocusRatio: 0.54f);
                     }
                     if (desiredNeighbor >= 0) {
                         View neighbor = getContainerAt(desiredNeighbor);
                         if (neighbor != null) {
+                            OneUiMotionBlur.EnableHardwareLayer(neighbor);
                             neighbor.Visibility = ViewStates.Visible;
-                            neighbor.Alpha = dragAlpha;
-                            neighbor.ScaleX = dragScale;
-                            neighbor.ScaleY = dragScale;
+                            neighbor.Alpha = 0.92f + 0.08f * dragFrac;
+                            neighbor.ScaleX = 0.988f + 0.012f * dragFrac;
+                            neighbor.ScaleY = neighbor.ScaleX;
                             neighbor.TranslationX = offsetX + (desiredNeighbor - curTab) * viewportW;
-                            OneUiMotionBlur.ApplyHorizontalMotionBlur(neighbor, blurPx, opticalDefocusRatio: 0.54f);
                         }
                     }
                     return true;
@@ -1047,37 +1038,30 @@ public partial class MainActivity {
                     } else {
                         View neighbor = neighborIdx >= 0 ? getContainerAt(neighborIdx) : null;
                         ValueAnimator snap = ValueAnimator.OfFloat(currentOffset, 0f);
-                        snap.SetDuration(220);
+                        snap.SetDuration(200);
                         snap.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
-                        float pOff = currentOffset;
-                        long pMs = SystemClock.UptimeMillis();
                         snap.Update += (_, e) => {
                             float cur = (float)(e.Animation?.AnimatedValue ?? 0f);
-                            long nMs = SystemClock.UptimeMillis();
-                            float vel = MathF.Abs(cur - pOff) / Math.Max(0.004f, (nMs - pMs) * 0.001f);
-                            pOff = cur;
-                            pMs = nMs;
-                            float b = OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(vel, density, maxBlurDp: 9f);
-                            (float snapSc, float snapAl) = OneUiMotionBlur.ComputeTransitionOpticalDepth(
-                                b, 9f * density, isEntering: true);
+                            float frac = Math.Clamp(MathF.Abs(cur) / Math.Max(1f, viewportW), 0f, 1f);
+                            float snapSc = 1f - 0.012f * frac;
+                            float snapAl = 1f - 0.06f * frac;
                             if (activeView != null) {
                                 activeView.TranslationX = cur;
                                 activeView.ScaleX = snapSc;
                                 activeView.ScaleY = snapSc;
                                 activeView.Alpha = snapAl;
-                                OneUiMotionBlur.ApplyHorizontalMotionBlur(activeView, b, opticalDefocusRatio: 0.54f);
                             }
                             if (neighbor != null) {
                                 neighbor.TranslationX = cur + (neighborIdx - curTab) * viewportW;
                                 neighbor.ScaleX = snapSc;
                                 neighbor.ScaleY = snapSc;
                                 neighbor.Alpha = snapAl;
-                                OneUiMotionBlur.ApplyHorizontalMotionBlur(neighbor, b, opticalDefocusRatio: 0.54f);
                             }
                         };
                         void CleanSnap() {
                             if (activeView != null) {
                                 OneUiMotionBlur.ClearMotionBlur(activeView);
+                                OneUiMotionBlur.ClearHardwareLayer(activeView);
                                 activeView.TranslationX = 0f;
                                 activeView.ScaleX = 1f;
                                 activeView.ScaleY = 1f;
@@ -1085,6 +1069,7 @@ public partial class MainActivity {
                             }
                             if (neighbor != null) {
                                 OneUiMotionBlur.ClearMotionBlur(neighbor);
+                                OneUiMotionBlur.ClearHardwareLayer(neighbor);
                                 neighbor.TranslationX = 0f;
                                 neighbor.ScaleX = 1f;
                                 neighbor.ScaleY = 1f;

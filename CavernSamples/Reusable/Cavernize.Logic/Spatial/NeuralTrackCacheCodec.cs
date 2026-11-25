@@ -71,6 +71,298 @@ public sealed class NeuralTrackCacheEntryInfo {
         : 0.0;
 }
 
+/// <summary>Single field-level difference between a cached AI stem bundle and the user's current AI settings.</summary>
+public sealed class NeuralCacheConfigDiffItem {
+    /// <summary>Stable key identifying the differing setting (e.g. "Backend", "Models", "Overlap", "BackingVocals").</summary>
+    public string FieldKey { get; init; } = string.Empty;
+
+    /// <summary>Value recorded when the cached stems were extracted.</summary>
+    public string CachedValue { get; init; } = string.Empty;
+
+    /// <summary>Currently configured setting value.</summary>
+    public string CurrentValue { get; init; } = string.Empty;
+}
+
+/// <summary>Result of comparing a cached <see cref="NeuralTrackCacheEntryInfo"/> against current AI settings.</summary>
+public sealed class NeuralCacheConfigComparison {
+    /// <summary>True when all comparable settings match current configuration.</summary>
+    public bool MatchesCurrentConfig { get; init; }
+
+    /// <summary>True when the cache entry contained full structured <c>cfg:v1</c> metadata.</summary>
+    public bool HasStructuredMetadata { get; init; }
+
+    /// <summary>Human-readable source format tag derived from the cached track path (e.g. "Dolby Atmos", "FLAC").</summary>
+    public string SourceFormatLabel { get; init; } = string.Empty;
+
+    /// <summary>Ordered list of settings that differ between the cached extraction and current settings.</summary>
+    public IReadOnlyList<NeuralCacheConfigDiffItem> Differences { get; init; } = Array.Empty<NeuralCacheConfigDiffItem>();
+}
+
+/// <summary>
+/// Pure deterministic comparator checking whether a cached AI stem bundle matches current <see cref="NeuralAudioConfig"/>
+/// and listing exact per-setting differences (supports both rich <c>cfg:v1</c> and legacy <c>CNTC v1-v3</c> files).
+/// </summary>
+public static class NeuralCacheConfigDiff {
+    /// <summary>Builds a structured MVSEP Cloud signature carrying full config tokens for exact cache diffing.</summary>
+    public static string BuildMvsepPlanSignature(
+        MvsepAlgorithmPreset preset,
+        NeuralAudioConfig cfg,
+        NeuralPipelineGoal goal = NeuralPipelineGoal.StemSeparation) {
+        string presetId = preset?.Id ?? "mvsep_default";
+        NeuralAudioConfig safe = (cfg ?? NeuralAudioConfig.Default).Sanitize();
+        return $"mvsep:{presetId}|pbv={(safe.KaraokePreserveBackingVocals ? 1 : 0)}|cfg:v1;g={goal};bk={NeuralExecutionBackend.MvsepCloud};om={safe.OrchestrationMode};bd={(int)safe.StudioBundlePreset};pbv={(safe.KaraokePreserveBackingVocals ? 1 : 0)};ov={safe.OverlapFactor};tta={(safe.EnableTta ? 1 : 0)};ens={safe.EnsembleMode};pf={(safe.EnablePhaseFix ? 1 : 0)};ec={(safe.EnforceEnergyConservation ? 1 : 0)};m={presetId}";
+    }
+
+    /// <summary>Derives a concise format label (e.g. "Dolby Atmos", "FLAC", "WAV") from a cached source path.</summary>
+    public static string ExtractSourceFormatLabel(string sourceTrackKey) {
+        if (string.IsNullOrWhiteSpace(sourceTrackKey)) {
+            return "Audio";
+        }
+        string lower = sourceTrackKey.ToLowerInvariant();
+        if (lower.EndsWith(".atmos", StringComparison.Ordinal) ||
+            lower.EndsWith(".ec3", StringComparison.Ordinal) ||
+            lower.EndsWith(".eac3", StringComparison.Ordinal) ||
+            lower.EndsWith(".thd", StringComparison.Ordinal) ||
+            lower.EndsWith(".mlp", StringComparison.Ordinal) ||
+            lower.Contains("atmos", StringComparison.Ordinal) ||
+            lower.EndsWith(".m4a.mp4", StringComparison.Ordinal) ||
+            lower.EndsWith(".mp4", StringComparison.Ordinal) ||
+            lower.EndsWith(".mkv", StringComparison.Ordinal)) {
+            return "Dolby Atmos / Spatial";
+        }
+        if (lower.EndsWith(".flac", StringComparison.Ordinal)) return "FLAC";
+        if (lower.EndsWith(".wav", StringComparison.Ordinal)) return "WAV";
+        if (lower.EndsWith(".alac", StringComparison.Ordinal) || lower.EndsWith(".m4a", StringComparison.Ordinal)) return "ALAC / M4A";
+        if (lower.EndsWith(".mp3", StringComparison.Ordinal)) return "MP3";
+        if (lower.EndsWith(".opus", StringComparison.Ordinal) || lower.EndsWith(".ogg", StringComparison.Ordinal)) return "Opus / OGG";
+        string ext = Path.GetExtension(sourceTrackKey).TrimStart('.').ToUpperInvariant();
+        return string.IsNullOrEmpty(ext) ? "Audio" : ext;
+    }
+
+    /// <summary>Compares a cached bundle's recorded metadata against the active <paramref name="currentConfig"/> and plan.</summary>
+    public static NeuralCacheConfigComparison Compare(
+        NeuralTrackCacheEntryInfo entry,
+        NeuralAudioConfig currentConfig,
+        NeuralExecutionPlan currentLocalPlan,
+        string currentMvsepPresetId,
+        bool currentUsesCloud,
+        NeuralPipelineGoal goal) {
+        if (entry == null) {
+            return new NeuralCacheConfigComparison {
+                MatchesCurrentConfig = false,
+                HasStructuredMetadata = false,
+                SourceFormatLabel = string.Empty,
+                Differences = Array.Empty<NeuralCacheConfigDiffItem>()
+            };
+        }
+
+        NeuralAudioConfig safe = (currentConfig ?? NeuralAudioConfig.Default).Sanitize();
+        Dictionary<string, string> meta = ParseStructuredSignature(entry.PlanSignature);
+        bool hasStructured = meta.Count > 0;
+        List<NeuralCacheConfigDiffItem> diffs = [];
+
+        bool cachedIsCloud = (meta.TryGetValue("bk", out string bkVal) &&
+                              bkVal.Contains("Mvsep", StringComparison.OrdinalIgnoreCase)) ||
+                             (!string.IsNullOrEmpty(entry.OriginTag) &&
+                              entry.OriginTag.Contains("MVSEP", StringComparison.OrdinalIgnoreCase)) ||
+                             (!string.IsNullOrEmpty(entry.PlanSignature) &&
+                              entry.PlanSignature.StartsWith("mvsep:", StringComparison.OrdinalIgnoreCase));
+        string cachedBackendLabel = cachedIsCloud ? "MVSEP Cloud" : "Local AI";
+        string currentBackendLabel = currentUsesCloud ? "MVSEP Cloud" : "Local AI";
+        if (cachedIsCloud != currentUsesCloud) {
+            diffs.Add(new NeuralCacheConfigDiffItem {
+                FieldKey = "Backend",
+                CachedValue = cachedBackendLabel,
+                CurrentValue = currentBackendLabel
+            });
+        }
+
+        string currentModelIds = currentUsesCloud
+            ? (string.IsNullOrWhiteSpace(currentMvsepPresetId) ? "mvsep_default" : currentMvsepPresetId)
+            : (currentLocalPlan != null && currentLocalPlan.Steps.Count > 0
+                ? string.Join("+", currentLocalPlan.Steps.SelectMany(st => st.Models.Select(m => m.Id)))
+                : "none");
+
+        if (meta.TryGetValue("m", out string cachedModelIds) && !string.IsNullOrWhiteSpace(cachedModelIds)) {
+            if (!string.Equals(cachedModelIds, currentModelIds, StringComparison.OrdinalIgnoreCase)) {
+                diffs.Add(new NeuralCacheConfigDiffItem {
+                    FieldKey = "Models",
+                    CachedValue = FormatModelTokenList(cachedModelIds, entry.ModelSummary),
+                    CurrentValue = FormatModelTokenList(currentModelIds, currentLocalPlan?.Summary)
+                });
+            }
+        } else if (!string.IsNullOrWhiteSpace(entry.ModelSummary)) {
+            string curSummary = currentUsesCloud
+                ? (MvsepAlgorithmPreset.FindOrDefault(currentMvsepPresetId)?.DisplayName ?? currentMvsepPresetId ?? "MVSEP")
+                : (currentLocalPlan?.Summary ?? string.Empty);
+            if (!string.IsNullOrWhiteSpace(curSummary) &&
+                !curSummary.Contains(entry.ModelSummary, StringComparison.OrdinalIgnoreCase) &&
+                !entry.ModelSummary.Contains(curSummary, StringComparison.OrdinalIgnoreCase)) {
+                diffs.Add(new NeuralCacheConfigDiffItem {
+                    FieldKey = "Models",
+                    CachedValue = entry.ModelSummary,
+                    CurrentValue = curSummary
+                });
+            }
+        }
+
+        if (meta.TryGetValue("bd", out string bdStr) && int.TryParse(bdStr, out int cachedBd)) {
+            int curBd = (int)safe.StudioBundlePreset;
+            if (cachedBd != curBd) {
+                diffs.Add(new NeuralCacheConfigDiffItem {
+                    FieldKey = "Bundle",
+                    CachedValue = ((NeuralEnsembleBundlePreset)Math.Clamp(cachedBd, 0, 16)).ToString(),
+                    CurrentValue = safe.StudioBundlePreset.ToString()
+                });
+            }
+        }
+
+        if (meta.TryGetValue("om", out string omStr) && !string.IsNullOrWhiteSpace(omStr) && !currentUsesCloud && !cachedIsCloud) {
+            string curOm = safe.OrchestrationMode.ToString();
+            if (!string.Equals(omStr, curOm, StringComparison.OrdinalIgnoreCase)) {
+                diffs.Add(new NeuralCacheConfigDiffItem {
+                    FieldKey = "Orchestration",
+                    CachedValue = omStr,
+                    CurrentValue = curOm
+                });
+            }
+        }
+
+        if (!currentUsesCloud && !cachedIsCloud) {
+            if (meta.TryGetValue("ov", out string ovStr) && int.TryParse(ovStr, out int cachedOv) && cachedOv != safe.OverlapFactor) {
+                diffs.Add(new NeuralCacheConfigDiffItem {
+                    FieldKey = "Overlap",
+                    CachedValue = $"{cachedOv}x",
+                    CurrentValue = $"{safe.OverlapFactor}x"
+                });
+            }
+            if (meta.TryGetValue("tta", out string ttaStr)) {
+                bool cachedTta = ttaStr == "1";
+                if (cachedTta != safe.EnableTta) {
+                    diffs.Add(new NeuralCacheConfigDiffItem {
+                        FieldKey = "TTA",
+                        CachedValue = cachedTta ? "On" : "Off",
+                        CurrentValue = safe.EnableTta ? "On" : "Off"
+                    });
+                }
+            }
+            if (meta.TryGetValue("ens", out string ensStr) && !string.IsNullOrWhiteSpace(ensStr)) {
+                string curEns = safe.EnsembleMode.ToString();
+                if (!string.Equals(ensStr, curEns, StringComparison.OrdinalIgnoreCase)) {
+                    diffs.Add(new NeuralCacheConfigDiffItem {
+                        FieldKey = "Ensemble",
+                        CachedValue = ensStr,
+                        CurrentValue = curEns
+                    });
+                }
+            }
+            if (meta.TryGetValue("pf", out string pfStr)) {
+                bool cachedPf = pfStr == "1";
+                if (cachedPf != safe.EnablePhaseFix) {
+                    diffs.Add(new NeuralCacheConfigDiffItem {
+                        FieldKey = "PhaseFix",
+                        CachedValue = cachedPf ? "On" : "Off",
+                        CurrentValue = safe.EnablePhaseFix ? "On" : "Off"
+                    });
+                }
+            }
+            if (meta.TryGetValue("ec", out string ecStr)) {
+                bool cachedEc = ecStr == "1";
+                if (cachedEc != safe.EnforceEnergyConservation) {
+                    diffs.Add(new NeuralCacheConfigDiffItem {
+                        FieldKey = "EnergyConservation",
+                        CachedValue = cachedEc ? "On" : "Off",
+                        CurrentValue = safe.EnforceEnergyConservation ? "On" : "Off"
+                    });
+                }
+            }
+        }
+
+        if (goal == NeuralPipelineGoal.SpatialKaraoke || meta.ContainsKey("pbv")) {
+            if (meta.TryGetValue("pbv", out string pbvStr)) {
+                bool cachedPbv = pbvStr == "1";
+                if (cachedPbv != safe.KaraokePreserveBackingVocals) {
+                    diffs.Add(new NeuralCacheConfigDiffItem {
+                        FieldKey = "BackingVocals",
+                        CachedValue = cachedPbv ? "KeepBacking" : "PureInstrumental",
+                        CurrentValue = safe.KaraokePreserveBackingVocals ? "KeepBacking" : "PureInstrumental"
+                    });
+                }
+            } else if (goal == NeuralPipelineGoal.SpatialKaraoke && !safe.KaraokePreserveBackingVocals && entry.StemCount <= 2) {
+                // Legacy 2-stem cache lacks full combined vocals for Pure Instrumental mode
+                diffs.Add(new NeuralCacheConfigDiffItem {
+                    FieldKey = "BackingVocals",
+                    CachedValue = "KeepBacking",
+                    CurrentValue = "PureInstrumental"
+                });
+            }
+        }
+
+        return new NeuralCacheConfigComparison {
+            MatchesCurrentConfig = diffs.Count == 0,
+            HasStructuredMetadata = hasStructured,
+            SourceFormatLabel = ExtractSourceFormatLabel(entry.SourceTrackKey),
+            Differences = diffs
+        };
+    }
+
+    static Dictionary<string, string> ParseStructuredSignature(string planSignature) {
+        Dictionary<string, string> dict = new(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(planSignature)) {
+            return dict;
+        }
+        int cfgIdx = planSignature.IndexOf("cfg:v1;", StringComparison.OrdinalIgnoreCase);
+        if (cfgIdx >= 0) {
+            string tail = planSignature.Substring(cfgIdx + 7);
+            string[] parts = tail.Split(';', StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++) {
+                int eq = parts[i].IndexOf('=');
+                if (eq > 0 && eq < parts[i].Length - 1) {
+                    string k = parts[i].Substring(0, eq).Trim();
+                    string v = parts[i].Substring(eq + 1).Trim();
+                    if (k.Length > 0) {
+                        dict[k] = v;
+                    }
+                }
+            }
+            return dict;
+        }
+        // Legacy MVSEP format: "mvsep:<presetId>|pbv=<0|1>"
+        if (planSignature.StartsWith("mvsep:", StringComparison.OrdinalIgnoreCase)) {
+            dict["bk"] = NeuralExecutionBackend.MvsepCloud.ToString();
+            string[] parts = planSignature.Split('|', StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < parts.Length; i++) {
+                if (parts[i].StartsWith("mvsep:", StringComparison.OrdinalIgnoreCase)) {
+                    dict["m"] = parts[i].Substring(6).Trim();
+                } else if (parts[i].StartsWith("pbv=", StringComparison.OrdinalIgnoreCase)) {
+                    dict["pbv"] = parts[i].Substring(4).Trim();
+                }
+            }
+        }
+        return dict;
+    }
+
+    static string FormatModelTokenList(string modelIds, string fallbackSummary) {
+        if (string.IsNullOrWhiteSpace(modelIds) || string.Equals(modelIds, "none", StringComparison.OrdinalIgnoreCase)) {
+            return string.IsNullOrWhiteSpace(fallbackSummary) ? "—" : fallbackSummary;
+        }
+        string[] ids = modelIds.Split('+', StringSplitOptions.RemoveEmptyEntries);
+        List<string> labels = new(ids.Length);
+        for (int i = 0; i < ids.Length; i++) {
+            string id = ids[i].Trim();
+            NeuralModelCatalogEntry cat = NeuralModelCatalog.FindById(id);
+            if (cat != null) {
+                labels.Add(cat.DisplayName);
+                continue;
+            }
+            MvsepAlgorithmPreset preset = MvsepAlgorithmPreset.Presets.FirstOrDefault(p =>
+                string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
+            labels.Add(preset != null ? preset.DisplayName : id);
+        }
+        return string.Join(" + ", labels);
+    }
+}
+
 /// <summary>
 /// Pure-C# lossless/studio-lossless binary codec for Slot 7B Persistent AI Stem Cache (<c>CNTC v3</c>),
 /// with 100% backward-compatible read support for legacy <c>CNTC v1</c> and <c>CNTC v2</c> files.

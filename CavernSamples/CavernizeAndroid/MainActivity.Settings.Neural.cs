@@ -252,7 +252,24 @@ public partial class MainActivity {
 
         spatialKaraokeSwitch = AddSwitchRow(slot2bCard, S["SpatialKaraokeTitle"], store.SpatialKaraokeEnabled, v => {
             store.SpatialKaraokeEnabled = v;
+            if (!v && store.KaraokeVocalLevel < 0.99f) {
+                // Keep vocal slider coherent when explicitly disabling Karaoke
+                store.KaraokeVocalLevel = 1.0f;
+                if (karaokeVocalLevelBar != null && karaokeVocalLevelBar.Progress != 100) {
+                    karaokeVocalLevelBar.Progress = 100;
+                    karaokeVocalLevelBar.Invalidate();
+                }
+            } else if (v && store.KaraokeVocalLevel >= 0.99f) {
+                // Turning Karaoke ON from 100% defaults to 0% vocal so user immediately hears attenuation
+                store.KaraokeVocalLevel = 0.0f;
+                if (karaokeVocalLevelBar != null && karaokeVocalLevelBar.Progress != 0) {
+                    karaokeVocalLevelBar.Progress = 0;
+                    karaokeVocalLevelBar.Invalidate();
+                }
+            }
             ApplyAndRefreshNeuralAudio();
+            RefreshLyricsSingDockUi();
+            RefreshStudioW12ContextUi();
         }, helpBody: S["TipSpatialKaraoke"]);
 
         (karaokeVocalLevelBar, _) = AddSliderRow(
@@ -262,10 +279,7 @@ public partial class MainActivity {
             100,
             Math.Clamp((int)Math.Round(store.KaraokeVocalLevel * 100f), 0, 100),
             v => {
-                store.KaraokeVocalLevel = v * 0.01f;
-                playerEngine?.SetKaraokeVocalLevel(store.KaraokeVocalLevel);
-                RefreshLyricsSingDockUi();
-                RefreshStudioW12ContextUi();
+                ApplyLyricsSingVocalLevel(v);
             },
             "%",
             defaultValue: 100);

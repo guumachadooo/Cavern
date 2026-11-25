@@ -36,7 +36,83 @@ namespace CavernizeAndroid;
 
 
 public partial class MainActivity {
-    void StartLosslessTwinDiscoveryAsync(CavernizeTrack activeTrack, bool forceRescan = false) {
+    readonly Dictionary<string, (double OffsetSamples, int SampleRate)> crossVariantOffsetByCanonicalSong = new(StringComparer.OrdinalIgnoreCase);
+
+    double ComputeCrossVariantNeuralOffsetSamples(CavernizeTrack targetTrack, string targetPath) {
+        if (targetTrack == null || playerEngine?.NeuralStage == null) {
+            return 0.0;
+        }
+        Cavernize.Logic.Spatial.NeuralSeparatedTrack activeSep =
+            playerEngine.NeuralStage.ActiveKaraokeTrack ?? playerEngine.NeuralStage.ActiveSpatialUpmixTrack;
+        if (activeSep == null) {
+            return 0.0;
+        }
+        bool targetIsAtmos = IsTrackMultichannelOrAtmos(targetTrack, targetPath);
+        bool stemsOnAtmosTimeline = activeSep.DerivedFromLosslessTwin ||
+            IsPathAtmosOrSpatialContainer(activeSep.SourceTrackKey);
+        if (targetIsAtmos == stemsOnAtmosTimeline) {
+            return 0.0;
+        }
+
+        string canon = NeuralTrackCacheService.ExtractCanonicalSongStem(
+            !string.IsNullOrWhiteSpace(currentMediaMeta?.Title) ? currentMediaMeta.Title : targetPath);
+        double baseOffset = 0.0;
+        int offsetSr = 48000;
+        if (activeLosslessTwin != null && activeLosslessTwin.HasSyncedLosslessTwin) {
+            baseOffset = activeLosslessTwin.SyncResult.BaseOffsetSamples;
+            offsetSr = activeLosslessTwin.SampleRate >= 8000 ? activeLosslessTwin.SampleRate : 48000;
+        } else if (!string.IsNullOrEmpty(canon) && crossVariantOffsetByCanonicalSong.TryGetValue(canon, out var cached)) {
+            baseOffset = cached.OffsetSamples;
+            offsetSr = cached.SampleRate >= 8000 ? cached.SampleRate : 48000;
+        } else {
+            return 0.0;
+        }
+
+        int outSr = playerEngine.OutputSampleRate >= 8000 ? playerEngine.OutputSampleRate : 48000;
+        double scaledOffset = offsetSr == outSr ? baseOffset : baseOffset * (outSr / (double)offsetSr);
+        // SubSampleSyncEngine: losslessIndex = BaseOffsetSamples + atmosIndex
+        // Atmos stems playing on FLAC -> stemIdx = losslessIdx - BaseOffsetSamples
+        // FLAC stems playing on Atmos -> stemIdx = atmosIdx + BaseOffsetSamples
+        return stemsOnAtmosTimeline && !targetIsAtmos ? -scaledOffset : scaledOffset;
+    }
+
+    void SyncNeuralReferenceOffsetForActiveTrack(CavernizeTrack activeTrack) {
+        if (activeTrack == null || playerEngine?.NeuralStage == null) {
+            return;
+        }
+        string activePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        double offset = ComputeCrossVariantNeuralOffsetSamples(activeTrack, activePath);
+        playerEngine.NeuralStage.ReferenceSampleOffset = offset;
+    }
+
+    static bool IsTrackMultichannelOrAtmos(CavernizeTrack track, string path) {
+        if (track != null) {
+            if ((track.Renderer != null && (track.Renderer.HasObjects || track.Renderer.Objects.Count > 2)) ||
+                (track.Reader != null && track.Reader.ChannelCount > 2) ||
+                track.Codec == Codec.EnhancedAC3 ||
+                track.Codec == Codec.TrueHD ||
+                track.SourceCodec == Codec.TrueHD) {
+                return true;
+            }
+        }
+        return IsPathAtmosOrSpatialContainer(path);
+    }
+
+    static bool IsPathAtmosOrSpatialContainer(string path) {
+        if (string.IsNullOrWhiteSpace(path)) {
+            return false;
+        }
+        string lower = path.ToLowerInvariant();
+        return lower.EndsWith(".atmos", StringComparison.Ordinal) ||
+               lower.EndsWith(".ec3", StringComparison.Ordinal) ||
+               lower.EndsWith(".eac3", StringComparison.Ordinal) ||
+               lower.EndsWith(".thd", StringComparison.Ordinal) ||
+               lower.EndsWith(".mlp", StringComparison.Ordinal) ||
+               lower.EndsWith(".m4a.mp4", StringComparison.Ordinal) ||
+               lower.Contains("atmos", StringComparison.Ordinal);
+    }
+
+    void StartLosslessTwinDiscoveryAsync(CavernizeTrack activeTrack, bool forceRescan = false, int startupDelayMs = 0) {
         if (uiDestroyed || activeTrack == null || playerEngine == null) {
             return;
         }
@@ -96,6 +172,10 @@ public partial class MainActivity {
 
         _ = Task.Run(async () => {
             try {
+                try { Android.OS.Process.SetThreadPriority(Android.OS.ThreadPriority.Background); } catch { }
+                if (startupDelayMs > 0) {
+                    await Task.Delay(startupDelayMs, ct).ConfigureAwait(false);
+                }
                 ct.ThrowIfCancellationRequested();
                 Cavernize.Logic.Spatial.UniversalLosslessTwinProvider twin =
                     await LosslessTwinDiscoveryService.DiscoverAndSyncAsync(
@@ -118,7 +198,14 @@ public partial class MainActivity {
                     activeLosslessTwin = twin;
                     lastLgsrSyncedPath = twin != null ? activePath : "";
                     lastLgsrSyncedConfigHash = cfgHash;
+                    if (twin != null && twin.HasSyncedLosslessTwin) {
+                        string canon = NeuralTrackCacheService.ExtractCanonicalSongStem(!string.IsNullOrWhiteSpace(title) ? title : activePath);
+                        if (!string.IsNullOrEmpty(canon)) {
+                            crossVariantOffsetByCanonicalSong[canon] = (twin.SyncResult.BaseOffsetSamples, twin.SampleRate >= 8000 ? twin.SampleRate : 48000);
+                        }
+                    }
                     playerEngine.BindLosslessReference(twin);
+                    SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                     RefreshLgsrUi();
                 });
             } catch (System.OperationCanceledException) {
@@ -323,25 +410,15 @@ public partial class MainActivity {
                 }
             };
             content.AddView(WrapControlWithHelp(modeSel, S["PlayTabAiModeTitle"], S["TipNeuralUpmix"], bottomMarginDp: 2));
-
-            bool hasActiveStems = playerEngine?.NeuralStage?.HasPlayableSpatialUpmixStems == true;
-            if (hasActiveStems && GetActiveTrack() != null) {
-                Button reextractBtn = PillButton(S["NeuralReextractStemsBtn"], () => {
-                    PrepareActiveTrackNeuralStemsAsync(
-                        Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
-                        silentIfNotReady: false,
-                        forceReextract: true);
-                });
-                reextractBtn.TextSize = 11.8f;
-                content.AddView(reextractBtn, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MatchParent,
-                    ViewGroup.LayoutParams.WrapContent) {
-                    TopMargin = Dp(8)
-                });
-            }
         }
 
-        OneUiModalDialog.Show(
+        Android.App.Dialog activeDialog = null;
+        AddSongAiCacheInspectorSection(
+            content,
+            Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
+            () => activeDialog?.Dismiss());
+
+        activeDialog = OneUiModalDialog.Show(
             this,
             S["PlayTabAiDialogTitle"],
             null,
@@ -353,6 +430,198 @@ public partial class MainActivity {
             negativeText: S["CloseBtn"],
             onHelp: ShowPlayTabSpatialHierarchyHelpDialog,
             helpContentDesc: S["PlayTabSpatialGuideTitle"]);
+    }
+
+    void ShowKaraokeCacheInspectorDialog() {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
+        Android.App.Dialog activeDialog = null;
+        AddSongAiCacheInspectorSection(
+            content,
+            Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke,
+            () => activeDialog?.Dismiss());
+
+        activeDialog = OneUiModalDialog.Show(
+            this,
+            S["KaraokeCacheDialogTitle"],
+            null,
+            customContent: content,
+            icon: OneUiIconType.Microphone,
+            iconBadgeColor: OneUiTheme.Primary,
+            positiveText: S["OpenAiSettingsBtn"],
+            onPositive: () => JumpToSettingsCategory(2),
+            negativeText: S["CloseBtn"]);
+    }
+
+    string FormatCacheDiffFieldName(string fieldKey) => fieldKey switch {
+        "Backend" => S["AiCacheDiffFieldBackend"],
+        "Models" => S["AiCacheDiffFieldModels"],
+        "Bundle" => S["AiCacheDiffFieldBundle"],
+        "Orchestration" => S["AiCacheDiffFieldOrchestration"],
+        "Overlap" => S["AiCacheDiffFieldOverlap"],
+        "TTA" => S["AiCacheDiffFieldTta"],
+        "Ensemble" => S["AiCacheDiffFieldEnsemble"],
+        "PhaseFix" => S["AiCacheDiffFieldPhaseFix"],
+        "EnergyConservation" => S["AiCacheDiffFieldEnergyConservation"],
+        "BackingVocals" => S["AiCacheDiffFieldBackingVocals"],
+        _ => fieldKey ?? ""
+    };
+
+    string FormatCacheDiffValue(string fieldKey, string rawVal) {
+        if (string.Equals(fieldKey, "BackingVocals", StringComparison.OrdinalIgnoreCase)) {
+            if (string.Equals(rawVal, "KeepBacking", StringComparison.OrdinalIgnoreCase)) return S["AiCacheDiffValKeepBacking"];
+            if (string.Equals(rawVal, "PureInstrumental", StringComparison.OrdinalIgnoreCase)) return S["AiCacheDiffValPureInstr"];
+        }
+        return rawVal ?? "—";
+    }
+
+    (Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo BestEntry, Cavernize.Logic.Spatial.NeuralCacheConfigComparison Comparison) InspectActiveSongCacheState(
+        Cavernize.Logic.Spatial.NeuralPipelineGoal goal) {
+        CavernizeTrack activeTrack = GetActiveTrack();
+        if (activeTrack == null || neuralTrackCache == null || store == null) {
+            return (null, null);
+        }
+        string activePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        string title = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+            ? currentMediaMeta.Title
+            : Path.GetFileNameWithoutExtension(activePath);
+        string artist = (currentMediaMeta?.Artist ?? "").Trim();
+
+        IReadOnlyList<Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo> matches =
+            neuralTrackCache.FindEntriesForTrack(activePath, title, artist, goal);
+        if (matches == null || matches.Count == 0) {
+            return (null, null);
+        }
+
+        Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo best = matches[0];
+        Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
+        bool usesCloud = CanUseMvsepCloud(cfg);
+        Cavernize.Logic.Spatial.NeuralExecutionPlan localPlan = neuralOrchestrator?.BuildPlan(goal, cfg);
+        string cloudPresetId = usesCloud ? ResolveMvsepPresetForGoal(goal, cfg)?.Id : null;
+        Cavernize.Logic.Spatial.NeuralCacheConfigComparison cmp = Cavernize.Logic.Spatial.NeuralCacheConfigDiff.Compare(
+            best, cfg, localPlan, cloudPresetId, usesCloud, goal);
+        return (best, cmp);
+    }
+
+    void AddSongAiCacheInspectorSection(
+        LinearLayout parent,
+        Cavernize.Logic.Spatial.NeuralPipelineGoal goal,
+        Action dismissDialog) {
+        if (parent == null || store == null) {
+            return;
+        }
+        CavernizeTrack activeTrack = GetActiveTrack();
+        LinearLayout card = new(this) { Orientation = Orientation.Vertical };
+        card.SetPadding(Dp(12), Dp(10), Dp(12), Dp(10));
+        card.Background = OneUiTheme.CreateRoundedDrawable(
+            this, OneUiTheme.WithAlpha(OneUiTheme.SurfaceElevated, 215), 16f, OneUiTheme.Divider, 1f);
+
+        TextView titleTv = Label(S["AiCacheSectionTitle"], 12.6f, OneUiTheme.TextPrimary);
+        titleTv.SetTypeface(OneUiTheme.GetAppleFontSemibold(this), TypefaceStyle.Bold);
+        card.AddView(titleTv);
+
+        TextView sharedNote = Label(S["AiCacheSharedNote"], 11.2f, OneUiTheme.TextSub);
+        sharedNote.SetPadding(0, Dp(2), 0, Dp(6));
+        card.AddView(sharedNote);
+
+        if (activeTrack == null) {
+            card.AddView(Label(S["NeuralPrepNoTrackToast"], 11.8f, OneUiTheme.TextSecondary));
+        } else {
+            (Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo best, Cavernize.Logic.Spatial.NeuralCacheConfigComparison cmp) =
+                InspectActiveSongCacheState(goal);
+
+            if (best == null) {
+                TextView emptyTv = Label(S["AiCacheStatusNotCached"], 12f, OneUiTheme.TextSecondary);
+                emptyTv.SetPadding(0, Dp(2), 0, Dp(8));
+                card.AddView(emptyTv);
+
+                Button extractBtn = PillButton(S["AiCacheExtractNowBtn"], () => {
+                    dismissDialog?.Invoke();
+                    PrepareActiveTrackNeuralStemsAsync(goal, silentIfNotReady: false, forceReextract: false);
+                }, active: true);
+                extractBtn.TextSize = 11.8f;
+                card.AddView(extractBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            } else {
+                double sizeMb = best.CompressedBytes / (1024.0 * 1024.0);
+                string formatBadge = !string.IsNullOrWhiteSpace(cmp?.SourceFormatLabel)
+                    ? cmp.SourceFormatLabel
+                    : Cavernize.Logic.Spatial.NeuralCacheConfigDiff.ExtractSourceFormatLabel(best.SourceTrackKey);
+                TextView statusTv = Label(
+                    string.Format(S["AiCacheStatusCachedFmt"], best.StemCount, sizeMb, formatBadge),
+                    12.2f,
+                    OneUiTheme.FunctionalGreen);
+                statusTv.SetTypeface(OneUiTheme.GetAppleFontMedium(this), TypefaceStyle.Normal);
+                card.AddView(statusTv);
+
+                bool matches = cmp == null || cmp.MatchesCurrentConfig;
+                TextView matchTv = Label(
+                    matches ? S["AiCacheConfigMatches"] : S["AiCacheConfigDiffersHeader"],
+                    11.8f,
+                    matches ? OneUiTheme.PrimaryHigh : OneUiTheme.FunctionalOrange);
+                matchTv.SetPadding(0, Dp(4), 0, Dp(4));
+                matchTv.SetTypeface(OneUiTheme.GetAppleFontSemibold(this), TypefaceStyle.Bold);
+                card.AddView(matchTv);
+
+                if (!matches && cmp?.Differences != null && cmp.Differences.Count > 0) {
+                    LinearLayout diffBox = new(this) { Orientation = Orientation.Vertical };
+                    diffBox.SetPadding(Dp(10), Dp(7), Dp(10), Dp(7));
+                    diffBox.Background = OneUiTheme.CreateRoundedDrawable(
+                        this, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 26), 12f, OneUiTheme.WithAlpha(OneUiTheme.FunctionalOrange, 96), 0.9f);
+                    for (int i = 0; i < cmp.Differences.Count; i++) {
+                        Cavernize.Logic.Spatial.NeuralCacheConfigDiffItem d = cmp.Differences[i];
+                        string fieldLabel = FormatCacheDiffFieldName(d.FieldKey);
+                        string oldVal = FormatCacheDiffValue(d.FieldKey, d.CachedValue);
+                        string newVal = FormatCacheDiffValue(d.FieldKey, d.CurrentValue);
+                        TextView lineTv = Label($"• {fieldLabel}: {oldVal}  →  {newVal}", 11.4f, OneUiTheme.TextPrimary);
+                        if (i > 0) {
+                            lineTv.SetPadding(0, Dp(2), 0, 0);
+                        }
+                        diffBox.AddView(lineTv);
+                    }
+                    card.AddView(diffBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                        BottomMargin = Dp(8)
+                    });
+                }
+
+                Button reextractBtn = PillButton(S["AiCacheReextractCurrentBtn"], () => {
+                    dismissDialog?.Invoke();
+                    PrepareActiveTrackNeuralStemsAsync(goal, silentIfNotReady: false, forceReextract: true);
+                }, active: !matches);
+                reextractBtn.TextSize = 11.8f;
+                card.AddView(reextractBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    TopMargin = Dp(4)
+                });
+
+                Button removeBtn = PillButton(S["AiCacheRemoveBtn"], () => {
+                    string activePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+                    string title = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+                        ? currentMediaMeta.Title
+                        : Path.GetFileNameWithoutExtension(activePath);
+                    string artist = (currentMediaMeta?.Artist ?? "").Trim();
+                    neuralTrackCache?.DeleteEntriesForTrack(activePath, title, artist);
+                    playerEngine?.NeuralStage?.ClearAllSeparatedTracks();
+                    playerEngine?.BindSeparatedNeuralTrack(null);
+                    SyncNeuralRuntimeDiagnostics();
+                    RefreshNeuralAudioUi();
+                    RefreshNeuralPrepUi();
+                    RefreshLyricsSingDockUi();
+                    RefreshBottomActionBarVisuals();
+                    Toast.MakeText(this, S["AiCacheRemovedToast"], ToastLength.Short).Show();
+                    dismissDialog?.Invoke();
+                });
+                removeBtn.TextSize = 11.6f;
+                removeBtn.SetTextColor(OneUiTheme.FunctionalRed);
+                card.AddView(removeBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    TopMargin = Dp(6)
+                });
+            }
+        }
+
+        parent.AddView(card, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(10)
+        });
     }
 
     void ShowPlayTabSpatialUpmixDialog() {
@@ -497,7 +766,7 @@ public partial class MainActivity {
         }
     }
 
-    void TryLoadCachedSongVocalDnaAsync(CavernizeTrack activeTrack) {
+    void TryLoadCachedSongVocalDnaAsync(CavernizeTrack activeTrack, int startupDelayMs = 0) {
         if (uiDestroyed || activeTrack == null || playerEngine == null) {
             return;
         }
@@ -506,8 +775,19 @@ public partial class MainActivity {
         if (string.IsNullOrEmpty(cachePath) || !File.Exists(cachePath)) {
             return;
         }
-        _ = Task.Run(() => {
+        _ = Task.Run(async () => {
             try {
+                if (startupDelayMs > 0) {
+                    await Task.Delay(startupDelayMs).ConfigureAwait(false);
+                }
+                if (uiDestroyed || gen != vocalDnaLoadGeneration) {
+                    return;
+                }
+                try {
+                    Android.OS.Process.SetThreadPriority(Android.OS.ThreadPriority.Background);
+                } catch {
+                    // Best-effort QoS
+                }
                 string json = File.ReadAllText(cachePath);
                 CachedVocalDnaRecord rec = System.Text.Json.JsonSerializer.Deserialize<CachedVocalDnaRecord>(json);
                 if (rec == null || rec.BandEnergyDb == null || rec.BandEnergyDb.Length != Cavern.VocalChain.VocalMixDnaProfile.AnalysisBandHz.Length) {
@@ -580,7 +860,7 @@ public partial class MainActivity {
         PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna);
     }
 
-    void TryAutoBindCachedNeuralStemsAsync(CavernizeTrack activeTrack) {
+    void TryAutoBindCachedNeuralStemsAsync(CavernizeTrack activeTrack, int startupDelayMs = 0) {
         if (uiDestroyed || activeTrack == null || neuralOrchestrator == null || neuralTrackCache == null || playerEngine == null) {
             return;
         }
@@ -592,8 +872,15 @@ public partial class MainActivity {
         Cavernize.Logic.Spatial.NeuralAudioConfig cfg = store.BuildNeuralAudioConfig();
         int sr = activeTrack.SampleRate >= 8000 ? activeTrack.SampleRate : 48000;
 
-        _ = Task.Run(() => {
+        _ = Task.Run(async () => {
             try {
+                try { Android.OS.Process.SetThreadPriority(Android.OS.ThreadPriority.Background); } catch { }
+                if (startupDelayMs > 0) {
+                    await Task.Delay(startupDelayMs).ConfigureAwait(false);
+                }
+                if (uiDestroyed || gen != neuralPrepGeneration) {
+                    return;
+                }
                 FileInfo fi = new(sourceKey);
                 Cavernize.Logic.Spatial.NeuralSeparatedTrack spatialUpmixTrack = null;
                 Cavernize.Logic.Spatial.NeuralSeparatedTrack karaokeTrack = null;
@@ -687,9 +974,11 @@ public partial class MainActivity {
                         if (karaokeTrack != null) {
                             playerEngine.BindKaraokeReferenceTrack(karaokeTrack);
                         }
+                        SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                         ApplyExtractedSongDnaOnUiThread(extractedDna);
                         RefreshNeuralAudioUi();
                         RefreshNeuralPrepUi();
+                        RefreshLyricsSingDockUi();
                     });
                 }
             } catch (Exception ex) {
@@ -721,11 +1010,9 @@ public partial class MainActivity {
 
     static string BuildMvsepPlanSignature(
         Cavernize.Logic.Spatial.MvsepAlgorithmPreset preset,
-        Cavernize.Logic.Spatial.NeuralAudioConfig cfg) {
-        string presetId = preset?.Id ?? "mvsep_default";
-        bool pbv = cfg?.KaraokePreserveBackingVocals ?? true;
-        return $"mvsep:{presetId}|pbv={(pbv ? 1 : 0)}";
-    }
+        Cavernize.Logic.Spatial.NeuralAudioConfig cfg,
+        Cavernize.Logic.Spatial.NeuralPipelineGoal goal = Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation) =>
+        Cavernize.Logic.Spatial.NeuralCacheConfigDiff.BuildMvsepPlanSignature(preset, cfg, goal);
 
     void TogglePureInstrumentalMode(bool fromSingDock = false) {
         if (uiDestroyed || store == null) {
@@ -740,6 +1027,9 @@ public partial class MainActivity {
                 store.KaraokeVocalLevel = 0.0f;
             }
         }
+        // Apply instantly via zero-alloc DSP update (NEVER auto-spawn a heavy 2.3 GB ONNX separation pass on toggle,
+        // which caused overlapping native allocations and Android LMKD LOW_MEMORY kills). Users can explicitly
+        // re-extract with updated settings via the Play / Karaoke Cache Status & Diff panel.
         ApplyAndRefreshNeuralAudio();
         RefreshLyricsSingDockUi();
         RefreshStudioW12ContextUi();
@@ -748,19 +1038,6 @@ public partial class MainActivity {
             ? S["KaraokeBackingKeptToast"]
             : S["KaraokePureInstrumentalToast"];
         Toast.MakeText(this, toastText, ToastLength.Short).Show();
-
-        // If user switched to Pure Instrumental while only a 2-stem lead/backing karaoke track is bound
-        // (lacking full combined vocals or distinct accompaniment stems), re-separate cleanly when possible.
-        if (!nextPreserveBacking && store.SpatialKaraokeEnabled && !isNeuralPrepRunning) {
-            Cavernize.Logic.Spatial.NeuralSeparatedTrack activeKara = playerEngine?.NeuralStage?.ActiveKaraokeTrack;
-            bool hasFullVocalOrMulti = activeKara != null &&
-                activeKara.Stems != null &&
-                (activeKara.Stems.Any(s => string.Equals(s.Name, "vocals", StringComparison.OrdinalIgnoreCase)) ||
-                 activeKara.Stems.Count >= 4);
-            if (activeKara != null && !hasFullVocalOrMulti && GetActiveTrack() != null) {
-                PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke, silentIfNotReady: true);
-            }
-        }
     }
 
     void PrepareActiveTrackNeuralStemsAsync(

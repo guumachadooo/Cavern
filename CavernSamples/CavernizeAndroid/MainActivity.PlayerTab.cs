@@ -461,11 +461,14 @@ public partial class MainActivity {
         };
         refreshBentoTilesUi();
 
-        (seekBarVolume, _) = AddSliderRow(quickCard, S["MasterVol"], 0, 200, (int)Math.Round(store.PlayerVolume * 100),
+        int initMasterVolPct = IsDirectUsbSoftwareVolumeActive()
+            ? Math.Clamp((int)Math.Round(store.PlayerVolume * 100), 0, 100)
+            : ReadSystemMediaVolumePercent(out _, out _);
+        (seekBarVolume, _) = AddSliderRow(quickCard, S["MasterVol"], 0, 100, initMasterVolPct,
             v => {
                 SetMasterVolumePercent(v);
                 RefreshRoomTransportButtons();
-            }, "%", defaultValue: 100);
+            }, "%", defaultValue: 50);
 
         (seekBarLfe, _) = AddSliderRow(quickCard, S["LfeVol"], 0, 200, (int)Math.Round(store.LfeVolume * 100), v => {
             float vol = v / 100f;
@@ -749,7 +752,7 @@ public partial class MainActivity {
         roomMiniTimeText.SetPadding(Dp(6), Dp(4), Dp(6), Dp(4));
         roomMiniTimeText.Click += (_, _) => ToggleInlineSeekDrawer();
 
-        roomMiniVolChip = PillButton(string.Format(S["RoomMiniVolFmt"], (int)Math.Round(store.PlayerVolume * 100)), ToggleInlineSeekDrawer);
+        roomMiniVolChip = PillButton(string.Format(S["RoomMiniVolFmt"], GetCurrentMasterVolumePercent()), ToggleInlineSeekDrawer);
         roomMiniVolChip.TextSize = 10.8f;
         roomMiniVolChip.SetSingleLine(true);
         roomMiniVolChip.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
@@ -1771,7 +1774,7 @@ public partial class MainActivity {
             roomTransportLoopIcon.IconColor = loop ? ColText : OneUiTheme.TextSub;
         }
         if (roomMiniVolChip != null && store != null) {
-            roomMiniVolChip.Text = string.Format(S["RoomMiniVolFmt"], (int)Math.Round(store.PlayerVolume * 100));
+            roomMiniVolChip.Text = string.Format(S["RoomMiniVolFmt"], GetCurrentMasterVolumePercent());
         }
         if (roomMiniHrtfChip != null && store != null) {
             bool hrtf = store.HeadphoneVirtualizer;

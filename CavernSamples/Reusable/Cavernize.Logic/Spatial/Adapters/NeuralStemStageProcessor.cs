@@ -29,12 +29,15 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     long preHrtfSampleCursor;
     int karaokeTailBlocksRemaining;
 
-    // Sample-rate-locked neural vocal reference buffers resampled once to output sampleRate (fixes 44.1 kHz -> 48 kHz drift)
+    // Direct zero-alloc neural vocal reference pointers (resampled/offset-aligned on the fly via Catmull-Rom in scratch!)
     float[] alignedLeadMono;
     float[] alignedLeadLeft;
     float[] alignedLeadRight;
+    float[] alignedExtraLeadLeft;
+    float[] alignedExtraLeadRight;
     float[] alignedBackingMono;
     int alignedRefSampleRate;
+    double referenceSampleOffset;
 
     // Pre-allocated zero-GC scratch arrays for real-time multichannel Karaoke masking
     readonly float[][] channelScratch = new float[SpatialKaraokeEngine.MaxSpatialChannels][];
@@ -44,10 +47,33 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     readonly SpatialSourceDescriptor[] preHrtfDescriptors = CreatePreHrtfDescriptorPool();
     float[] leadRefScratch = new float[2048];
     float[] leadRefRightScratch = new float[2048];
+    float[] extraLeadLeftScratch = new float[2048];
+    float[] extraLeadRightScratch = new float[2048];
     float[] backingRefScratch = new float[2048];
     float[] twinLeftScratch = new float[2048];
     float[] twinRightScratch = new float[2048];
     int upstreamBusLatencySamples;
+
+    /// <summary>
+    /// Optional sub-sample offset (in output-rate samples) applied when reusing cached neural stems
+    /// across cross-variant versions of the same song (e.g. Dolby Atmos &lt;-&gt; FLAC with constant encoder lead-in delta).
+    /// </summary>
+    public double ReferenceSampleOffset {
+        get {
+            lock (stateLock) {
+                return referenceSampleOffset;
+            }
+        }
+        set {
+            double safe = double.IsFinite(value) ? Math.Clamp(value, -960000.0, 960000.0) : 0.0;
+            lock (stateLock) {
+                if (Math.Abs(referenceSampleOffset - safe) > 0.25) {
+                    referenceSampleOffset = safe;
+                    karaokeEngine.ResetAdaptationState();
+                }
+            }
+        }
+    }
 
     /// <summary>
     /// Optional dynamic upstream bus latency provider in output samples (e.g., Slot 2C LGSR WOLA 512-sample delay)
@@ -181,7 +207,8 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     public bool HasIsolatedNeuralVocalReference {
         get {
             lock (stateLock) {
-                return alignedLeadMono != null && alignedLeadMono.Length > 0;
+                return (alignedLeadLeft != null && alignedLeadLeft.Length > 0) ||
+                       (alignedLeadMono != null && alignedLeadMono.Length > 0);
             }
         }
     }
@@ -199,7 +226,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         }
     }
 
-    /// <summary>Updates Slot 2B configuration cleanly without audio glitches.</summary>
+    /// <summary>Updates Slot 2B configuration cleanly without audio glitches or heap allocations.</summary>
     public void ApplyConfig(NeuralAudioConfig newConfig) {
         NeuralAudioConfig safe = (newConfig ?? NeuralAudioConfig.Default).Sanitize();
         lock (stateLock) {
@@ -208,13 +235,20 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             bool backingModeChanged = config.KaraokePreserveBackingVocals != safe.KaraokePreserveBackingVocals;
             if (wasActive && !nowActive) {
                 karaokeTailBlocksRemaining = 3; // Allow 512-sample clickless fade-out to settle cleanly
+            } else if (!nowActive) {
+                karaokeTailBlocksRemaining = 0;
             }
             config = safe;
             karaokeEngine.IsEnabled = safe.SpatialKaraokeEnabled;
             karaokeEngine.VocalLevel = safe.KaraokeVocalLevel;
             karaokeEngine.PreserveBackingVocals = safe.KaraokePreserveBackingVocals;
-            if (backingModeChanged && (activeKaraokeTrack != null || activeSpatialUpmixTrack != null)) {
-                RebuildAlignedReferencesLocked();
+            if (backingModeChanged) {
+                if (activeKaraokeTrack != null || activeSpatialUpmixTrack != null) {
+                    RebuildAlignedReferencesLocked();
+                }
+                karaokeEngine.ResetAdaptationState();
+            } else if (wasActive != nowActive) {
+                karaokeEngine.ResetAdaptationState();
             }
         }
     }
@@ -227,6 +261,8 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             bool nowActive = config.SpatialKaraokeEnabled && clamped < 0.9999f;
             if (wasActive && !nowActive) {
                 karaokeTailBlocksRemaining = 3;
+            } else if (!nowActive) {
+                karaokeTailBlocksRemaining = 0;
             }
             config = config.WithKaraokeVocalLevel(clamped);
             karaokeEngine.VocalLevel = clamped;
@@ -242,7 +278,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             activeSpatialUpmixTrack = separatedTrack;
             if (activeKaraokeTrack == null) {
                 RebuildAlignedReferencesLocked();
-                karaokeEngine.Reset();
+                karaokeEngine.ResetAdaptationState();
             }
         }
     }
@@ -255,7 +291,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         lock (stateLock) {
             activeKaraokeTrack = separatedTrack;
             RebuildAlignedReferencesLocked();
-            karaokeEngine.Reset();
+            karaokeEngine.ResetAdaptationState();
         }
     }
 
@@ -264,6 +300,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         lock (stateLock) {
             activeSpatialUpmixTrack = null;
             activeKaraokeTrack = null;
+            referenceSampleOffset = 0.0;
             RebuildAlignedReferencesLocked();
             karaokeEngine.Reset();
         }
@@ -332,7 +369,8 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
                 ((losslessReference != null && losslessReference.HasSyncedLosslessTwin) ||
                  (vocalTrack != null && vocalTrack.DerivedFromLosslessTwin) ||
                  (activeSpatialUpmixTrack != null && activeSpatialUpmixTrack.DerivedFromLosslessTwin));
-            bool hasNeuralLead = (alignedLeadMono != null && alignedLeadMono.Length > 0) ||
+            bool hasNeuralLead = (alignedLeadLeft != null && alignedLeadLeft.Length > 0) ||
+                (alignedLeadMono != null && alignedLeadMono.Length > 0) ||
                 (vocalTrack?.MonoLeadVocalRef != null && vocalTrack.MonoLeadVocalRef.Length > 0);
             bool activeKaraoke = IsEnabled && config.SpatialKaraokeEnabled && config.KaraokeVocalLevel < 0.999f;
 
@@ -622,8 +660,11 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             alignedLeadMono = null;
             alignedLeadLeft = null;
             alignedLeadRight = null;
+            alignedExtraLeadLeft = null;
+            alignedExtraLeadRight = null;
             alignedBackingMono = null;
             alignedRefSampleRate = 0;
+            referenceSampleOffset = 0.0;
             losslessReference = null;
             karaokeTailBlocksRemaining = 0;
         }
@@ -637,17 +678,23 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             VocalLevel = config.KaraokeVocalLevel,
             PreserveBackingVocals = config.KaraokePreserveBackingVocals
         };
-        NeuralSeparatedTrack vocalTrack = activeKaraokeTrack ?? activeSpatialUpmixTrack;
-        if (vocalTrack != null &&
-            (vocalTrack.IsProgressiveStreaming || alignedRefSampleRate != safeRate)) {
+        if (activeKaraokeTrack != null || activeSpatialUpmixTrack != null) {
             RebuildAlignedReferencesLocked();
         }
     }
 
+    /// <summary>
+    /// Zero-allocation reference pointer binding: NEVER runs synchronous KaiserSincResampler or full-song array
+    /// copies inside stateLock/renderLock (eliminates 160 MB/toggle OOM spikes &amp; RT audio stalls). Rate conversion
+    /// (44.1 &lt;-&gt; 48 kHz), cross-variant sample-offset alignment, and lead+backing summing execute on-the-fly in
+    /// pre-allocated scratch buffers via Catmull-Rom cubic interpolation.
+    /// </summary>
     void RebuildAlignedReferencesLocked() {
         alignedLeadMono = null;
         alignedLeadLeft = null;
         alignedLeadRight = null;
+        alignedExtraLeadLeft = null;
+        alignedExtraLeadRight = null;
         alignedBackingMono = null;
         alignedRefSampleRate = sampleRate;
 
@@ -658,53 +705,35 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
 
         int srcSr = vocalTrack.SampleRate >= 8000 ? vocalTrack.SampleRate : sampleRate;
         bool preserveBacking = config.KaraokePreserveBackingVocals;
-        StereoStemBuffer stereoLead = FindVocalTargetStem(vocalTrack, preserveBacking);
-        float[] srcMonoLead = (!preserveBacking && stereoLead != null) ? null : vocalTrack.MonoLeadVocalRef;
+        FindVocalTargetStemsZeroAlloc(
+            vocalTrack,
+            preserveBacking,
+            out StereoStemBuffer primaryVocal,
+            out StereoStemBuffer extraBackingToRemove);
+
+        float[] srcMonoLead = (!preserveBacking && (primaryVocal != null || extraBackingToRemove != null))
+            ? null
+            : vocalTrack.MonoLeadVocalRef;
         float[] srcBacking = preserveBacking ? vocalTrack.MonoBackingVocalRef : null;
 
-        // While progressive streaming is active, bind directly to the live incrementally-populated stem arrays
-        // and perform zero-GC sub-sample Catmull-Rom rate mapping on read when srcSr != sampleRate
-        // (avoids freezing a one-shot Kaiser-sinc resample over mostly-zero unfinalized chunks).
-        if (srcSr == sampleRate || vocalTrack.IsProgressiveStreaming) {
-            if (srcMonoLead != null && srcMonoLead.Length > 0) {
-                alignedLeadMono = srcMonoLead;
-            } else if (stereoLead != null && stereoLead.Length > 0) {
-                int n = stereoLead.Length;
-                float[] mono = new float[n];
-                for (int i = 0; i < n; i++) {
-                    mono[i] = 0.5f * (stereoLead.Left[i] + stereoLead.Right[i]);
-                }
-                alignedLeadMono = mono;
-            }
-            alignedLeadLeft = stereoLead?.Left;
-            alignedLeadRight = stereoLead?.Right;
-            alignedBackingMono = srcBacking;
-            alignedRefSampleRate = srcSr;
-            return;
-        }
-
-        // Exact polyphase Kaiser-sinc resampling to output sample rate (prevents 44.1 kHz <-> 48 kHz drift)
-        KaiserSincResampler resampler = new(srcSr, sampleRate);
-        if (stereoLead != null && stereoLead.Length > 0) {
-            alignedLeadLeft = resampler.ResampleMono(stereoLead.Left);
-            alignedLeadRight = resampler.ResampleMono(stereoLead.Right);
-            int n = Math.Min(alignedLeadLeft.Length, alignedLeadRight.Length);
-            alignedLeadMono = new float[n];
-            for (int i = 0; i < n; i++) {
-                alignedLeadMono[i] = 0.5f * (alignedLeadLeft[i] + alignedLeadRight[i]);
-            }
-        } else if (srcMonoLead != null && srcMonoLead.Length > 0) {
-            alignedLeadMono = resampler.ResampleMono(srcMonoLead);
-        }
-
-        if (srcBacking != null && srcBacking.Length > 0) {
-            alignedBackingMono = resampler.ResampleMono(srcBacking);
-        }
+        alignedLeadLeft = primaryVocal?.Left;
+        alignedLeadRight = primaryVocal?.Right;
+        alignedExtraLeadLeft = extraBackingToRemove?.Left;
+        alignedExtraLeadRight = extraBackingToRemove?.Right;
+        alignedLeadMono = (srcMonoLead != null && srcMonoLead.Length > 0) ? srcMonoLead : null;
+        alignedBackingMono = (srcBacking != null && srcBacking.Length > 0) ? srcBacking : null;
+        alignedRefSampleRate = srcSr;
     }
 
-    static StereoStemBuffer FindVocalTargetStem(NeuralSeparatedTrack track, bool preserveBackingVocals) {
+    static void FindVocalTargetStemsZeroAlloc(
+        NeuralSeparatedTrack track,
+        bool preserveBackingVocals,
+        out StereoStemBuffer primaryStem,
+        out StereoStemBuffer extraBackingStem) {
+        primaryStem = null;
+        extraBackingStem = null;
         if (track?.Stems == null || track.Stems.Count == 0) {
-            return null;
+            return;
         }
         StereoStemBuffer leadStem = null;
         StereoStemBuffer fullVocalStem = null;
@@ -730,25 +759,23 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         }
 
         if (!preserveBackingVocals) {
-            // Pure Instrumental (Remove Backing Vocals): remove ALL vocals (lead + backing).
+            // Pure Instrumental (Remove Backing Vocals): remove ALL vocals (lead + backing) with 0 heap allocation.
             if (fullVocalStem != null) {
-                return fullVocalStem;
+                primaryStem = fullVocalStem;
+                return;
             }
-            // Only sum lead + backing when backing is truly isolated (distinct instrumental/band stems exist —
+            // Only combine lead + backing when backing is truly isolated (distinct instrumental/band stems exist —
             // never sum kara_2's 2-stem complement where backing_vocals contains all instruments!).
             if (leadStem != null && backingStem != null && hasDistinctAccompaniment && leadStem.Length == backingStem.Length) {
-                float[] sumL = new float[leadStem.Length];
-                float[] sumR = new float[leadStem.Length];
-                for (int i = 0; i < leadStem.Length; i++) {
-                    sumL[i] = leadStem.Left[i] + backingStem.Left[i];
-                    sumR[i] = leadStem.Right[i] + backingStem.Right[i];
-                }
-                return new StereoStemBuffer("vocals", sumL, sumR);
+                primaryStem = leadStem;
+                extraBackingStem = backingStem;
+                return;
             }
-            return leadStem;
+            primaryStem = leadStem;
+            return;
         }
 
-        return leadStem ?? fullVocalStem;
+        primaryStem = leadStem ?? fullVocalStem;
     }
 
     long MapTrackSampleToOutputSampleLocked(long trackSamplePos) {
@@ -775,6 +802,8 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             int alloc = Math.Max(2048, frameCount);
             leadRefScratch = new float[alloc];
             leadRefRightScratch = new float[alloc];
+            extraLeadLeftScratch = new float[alloc];
+            extraLeadRightScratch = new float[alloc];
             backingRefScratch = new float[alloc];
             twinLeftScratch = new float[alloc];
             twinRightScratch = new float[alloc];
@@ -836,46 +865,82 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         isFullMixTwinReference = false;
 
         // Guard progressive streaming reads: only read neural stem references inside the permanently finalized sample window.
-        // If playback seeks ahead of ReadySampleCount, seamlessly fall back until progressive inference catches up.
+        // Apply cross-variant sub-sample referenceSampleOffset so Atmos <-> FLAC shared stems stay 0-sample phase-locked.
         NeuralSeparatedTrack vocalTrack = activeKaraokeTrack ?? activeSpatialUpmixTrack;
         int readyLimit = vocalTrack != null && vocalTrack.IsProgressiveStreaming
             ? vocalTrack.ReadySampleCount
             : int.MaxValue;
-        bool needsLiveRateMap = alignedRefSampleRate > 0 && alignedRefSampleRate != sampleRate;
+        double effectiveOutputPos = outputSamplePos + referenceSampleOffset;
+        bool hasFractionalOffset = Math.Abs(referenceSampleOffset - Math.Round(referenceSampleOffset)) > 1e-4;
+        bool needsLiveRateMap = (alignedRefSampleRate > 0 && alignedRefSampleRate != sampleRate) || hasFractionalOffset;
 
         if (!needsLiveRateMap) {
-            long endPos = outputSamplePos + frameCount;
+            long intOutputPos = (long)Math.Round(effectiveOutputPos);
+            long endPos = intOutputPos + frameCount;
             bool sampleWindowReady = endPos <= readyLimit;
             if (sampleWindowReady) {
-                if (wantStereoLead && alignedLeadLeft != null && alignedLeadRight != null &&
-                    CopyWithLeadingZeroOffset(alignedLeadLeft, readyLimit, outputSamplePos, leadRefScratch, frameCount) &&
-                    CopyWithLeadingZeroOffset(alignedLeadRight, readyLimit, outputSamplePos, leadRefRightScratch, frameCount)) {
-                    leadRefL = leadRefScratch;
-                    leadRefR = leadRefRightScratch;
+                if (alignedLeadLeft != null && alignedLeadRight != null &&
+                    CopyWithLeadingZeroOffset(alignedLeadLeft, readyLimit, intOutputPos, leadRefScratch, frameCount) &&
+                    CopyWithLeadingZeroOffset(alignedLeadRight, readyLimit, intOutputPos, leadRefRightScratch, frameCount)) {
+                    if (alignedExtraLeadLeft != null && alignedExtraLeadRight != null &&
+                        CopyWithLeadingZeroOffset(alignedExtraLeadLeft, readyLimit, intOutputPos, extraLeadLeftScratch, frameCount) &&
+                        CopyWithLeadingZeroOffset(alignedExtraLeadRight, readyLimit, intOutputPos, extraLeadRightScratch, frameCount)) {
+                        for (int i = 0; i < frameCount; i++) {
+                            leadRefScratch[i] += extraLeadLeftScratch[i];
+                            leadRefRightScratch[i] += extraLeadRightScratch[i];
+                        }
+                    }
+                    if (wantStereoLead) {
+                        leadRefL = leadRefScratch;
+                        leadRefR = leadRefRightScratch;
+                    } else {
+                        for (int i = 0; i < frameCount; i++) {
+                            leadRefScratch[i] = 0.5f * (leadRefScratch[i] + leadRefRightScratch[i]);
+                        }
+                        leadRefL = leadRefScratch;
+                    }
                 } else if (alignedLeadMono != null &&
-                    CopyWithLeadingZeroOffset(alignedLeadMono, readyLimit, outputSamplePos, leadRefScratch, frameCount)) {
+                    CopyWithLeadingZeroOffset(alignedLeadMono, readyLimit, intOutputPos, leadRefScratch, frameCount)) {
                     leadRefL = leadRefScratch;
                 }
 
                 if (config.KaraokePreserveBackingVocals && alignedBackingMono != null &&
-                    CopyWithLeadingZeroOffset(alignedBackingMono, readyLimit, outputSamplePos, backingRefScratch, frameCount)) {
+                    CopyWithLeadingZeroOffset(alignedBackingMono, readyLimit, intOutputPos, backingRefScratch, frameCount)) {
                     backingRef = backingRefScratch;
                 }
             }
         } else {
-            double ratio = alignedRefSampleRate / (double)sampleRate;
-            double srcStart = outputSamplePos * ratio;
+            double ratio = (alignedRefSampleRate > 0 ? alignedRefSampleRate : sampleRate) / (double)sampleRate;
+            double srcStart = effectiveOutputPos * ratio;
             int maxNeededIdx = (int)Math.Floor(srcStart + Math.Max(0, frameCount - 1) * ratio) + 2;
             bool sampleWindowReady = maxNeededIdx < readyLimit;
             if (sampleWindowReady) {
-                if (wantStereoLead && alignedLeadLeft != null && alignedLeadRight != null &&
+                if (alignedLeadLeft != null && alignedLeadRight != null &&
                     srcStart < alignedLeadLeft.Length && srcStart < alignedLeadRight.Length) {
                     int capL = Math.Min(alignedLeadLeft.Length, readyLimit);
                     int capR = Math.Min(alignedLeadRight.Length, readyLimit);
                     ResampleCatmullRomBlock(alignedLeadLeft, capL, srcStart, ratio, leadRefScratch, frameCount);
                     ResampleCatmullRomBlock(alignedLeadRight, capR, srcStart, ratio, leadRefRightScratch, frameCount);
-                    leadRefL = leadRefScratch;
-                    leadRefR = leadRefRightScratch;
+                    if (alignedExtraLeadLeft != null && alignedExtraLeadRight != null &&
+                        srcStart < alignedExtraLeadLeft.Length && srcStart < alignedExtraLeadRight.Length) {
+                        int capExL = Math.Min(alignedExtraLeadLeft.Length, readyLimit);
+                        int capExR = Math.Min(alignedExtraLeadRight.Length, readyLimit);
+                        ResampleCatmullRomBlock(alignedExtraLeadLeft, capExL, srcStart, ratio, extraLeadLeftScratch, frameCount);
+                        ResampleCatmullRomBlock(alignedExtraLeadRight, capExR, srcStart, ratio, extraLeadRightScratch, frameCount);
+                        for (int i = 0; i < frameCount; i++) {
+                            leadRefScratch[i] += extraLeadLeftScratch[i];
+                            leadRefRightScratch[i] += extraLeadRightScratch[i];
+                        }
+                    }
+                    if (wantStereoLead) {
+                        leadRefL = leadRefScratch;
+                        leadRefR = leadRefRightScratch;
+                    } else {
+                        for (int i = 0; i < frameCount; i++) {
+                            leadRefScratch[i] = 0.5f * (leadRefScratch[i] + leadRefRightScratch[i]);
+                        }
+                        leadRefL = leadRefScratch;
+                    }
                 } else if (alignedLeadMono != null && srcStart < alignedLeadMono.Length) {
                     int cap = Math.Min(alignedLeadMono.Length, readyLimit);
                     ResampleCatmullRomBlock(alignedLeadMono, cap, srcStart, ratio, leadRefScratch, frameCount);

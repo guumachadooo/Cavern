@@ -2910,6 +2910,240 @@ RunTest("T38_BP_UiAi_Q1_Q3_AlphaClampSafety_And_VelocityBlurCurve", () => {
     Assert(blurY >= 0.75f && blurY < b2, $"Blended optical defocus Y ({blurY:0.2}px) must be >= 0.75px and softer than X ({b2:0.2}px).");
 });
 
+// ---------- Test 39 (W51.1 & W51.2): Zero-Alloc Karaoke Toggle, Blind Backing Selectivity & ReferenceSampleOffset ----------
+RunTest("T39_W51_1_KaraokeZeroAllocToggle_BlindBackingSelectivity_And_Offset", () => {
+    int sr = 48000;
+    int frames = 4096;
+    // Blind multichannel discrete-center selectivity test (5.1: FL, FR, FC, LFE, RL, RR)
+    float[][] MakeTest51() {
+        float[][] ch = new float[6][];
+        for (int c = 0; c < 6; c++) ch[c] = new float[frames];
+        for (int f = 0; f < frames; f++) {
+            double t = f / (double)sr;
+            float leadCenter = 0.55f * MathF.Sin((float)(2 * Math.PI * 520 * t));
+            float backingWide = 0.35f * MathF.Sin((float)(2 * Math.PI * 1180 * t));
+            ch[0][f] = backingWide + 0.42f * leadCenter; // FL: wide backing + harmonic vocal bleed
+            ch[1][f] = -backingWide + 0.42f * leadCenter; // FR: wide backing + harmonic vocal bleed
+            ch[2][f] = leadCenter;                        // FC: discrete center lead vocal
+            ch[3][f] = 0f;                                // LFE
+            ch[4][f] = 0.5f * backingWide + 0.25f * leadCenter; // RL
+            ch[5][f] = -0.5f * backingWide + 0.25f * leadCenter; // RR
+        }
+        return ch;
+    }
+
+    bool[] isLfe = [false, false, false, true, false, false];
+    bool[] frontMask = [true, true, true, false, false, false];
+    bool[] strictCenter = [false, false, true, false, false, false];
+
+    SpatialKaraokeEngine engKeep = new(sr) { IsEnabled = true, VocalLevel = 0f, PreserveBackingVocals = true };
+    float[][] bufKeep = MakeTest51();
+    engKeep.ProcessMultichannelInPlace(bufKeep, isLfe, frontMask, 6, frames, isStrictCenter: strictCenter);
+
+    SpatialKaraokeEngine engPure = new(sr) { IsEnabled = true, VocalLevel = 0f, PreserveBackingVocals = false };
+    float[][] bufPure = MakeTest51();
+    engPure.ProcessMultichannelInPlace(bufPure, isLfe, frontMask, 6, frames, isStrictCenter: strictCenter);
+
+    double keepSideEnergy = 0, pureSideEnergy = 0, keepCenterEnergy = 0;
+    for (int f = frames / 2; f < frames; f++) {
+        keepSideEnergy += bufKeep[0][f] * bufKeep[0][f] + bufKeep[1][f] * bufKeep[1][f];
+        pureSideEnergy += bufPure[0][f] * bufPure[0][f] + bufPure[1][f] * bufPure[1][f];
+        keepCenterEnergy += bufKeep[2][f] * bufKeep[2][f];
+    }
+    Assert(keepSideEnergy > pureSideEnergy * 1.15,
+        $"Expected PreserveBackingVocals=true to preserve more non-center backing energy ({keepSideEnergy:F4} vs {pureSideEnergy:F4}).");
+    engKeep.ResetAdaptationState();
+    Assert(double.IsFinite(keepCenterEnergy), "Center energy must be finite.");
+
+    // Zero-alloc toggle stress test on NeuralStemStageProcessor with 44.1 kHz stems -> 48 kHz output
+    int stemSr = 44100;
+    int stemLen = 44100 * 4;
+    float[] leadL = new float[stemLen], leadR = new float[stemLen];
+    float[] backL = new float[stemLen], backR = new float[stemLen];
+    for (int i = 0; i < stemLen; i++) {
+        double t = i / (double)stemSr;
+        leadL[i] = 0.4f * MathF.Sin((float)(2 * Math.PI * 440 * t));
+        leadR[i] = leadL[i];
+        backL[i] = 0.25f * MathF.Sin((float)(2 * Math.PI * 660 * t));
+        backR[i] = -backL[i];
+    }
+    NeuralSeparatedTrack sepTrack = new() {
+        SourceTrackKey = "w51_test.flac",
+        SampleRate = stemSr,
+        Stems = [
+            new StereoStemBuffer("lead_vocal", leadL, leadR),
+            new StereoStemBuffer("backing_vocals", backL, backR)
+        ]
+    };
+    NeuralStemStageProcessor proc = new();
+    proc.Configure(48000, new SpatialProgramMetadata());
+    proc.ApplyConfig(new NeuralAudioConfig { SpatialKaraokeEnabled = true, KaraokeVocalLevel = 0f, KaraokePreserveBackingVocals = true });
+    proc.BindKaraokeReferenceTrack(sepTrack);
+    proc.ReferenceSampleOffset = 512.5;
+    Assert(Math.Abs(proc.ReferenceSampleOffset - 512.5) < 0.001, "ReferenceSampleOffset setter failed.");
+
+    float[] block = new float[512 * 2];
+    // Warm up scratch buffers once
+    proc.ProcessStereoInterleavedKaraoke(block, 0, 512, 1024);
+    long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+    for (int iter = 0; iter < 20; iter++) {
+        bool keepBacking = (iter % 2) == 0;
+        float vLvl = (iter % 4) * 0.25f;
+        proc.ApplyConfig(new NeuralAudioConfig { SpatialKaraokeEnabled = true, KaraokeVocalLevel = vLvl, KaraokePreserveBackingVocals = keepBacking });
+        for (int i = 0; i < 512; i++) {
+            float s = 0.4f * MathF.Sin(2f * MathF.PI * 440f * (1024 + iter * 512 + i) / 48000f);
+            block[i * 2] = s;
+            block[i * 2 + 1] = s;
+        }
+        proc.ProcessStereoInterleavedKaraoke(block, 0, 512, 1024 + iter * 512);
+        for (int i = 0; i < block.Length; i++) {
+            if (!float.IsFinite(block[i])) {
+                Assert(false, $"Non-finite sample after toggle iter {iter}.");
+            }
+        }
+    }
+    long allocDelta = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+    Assert(allocDelta < 128 * 1024, $"Expected <128 KB managed allocation across 20 vocal/backing toggles, got {allocDelta} bytes.");
+});
+
+// ---------- Test 40 (W51.3): Structured Plan Signature & AI Cache Config Diff Inspector ----------
+RunTest("T40_W51_3_NeuralCacheConfigDiff_StructuredDiffs_And_LegacyFallback", () => {
+    using MockT3MultiModelRuntime mockRt = new();
+    NeuralPipelineOrchestrator orch = new(mockRt, mockRt);
+    NeuralAudioConfig baseCfg = new NeuralAudioConfig {
+        ExecutionBackend = NeuralExecutionBackend.OnDevice,
+        OrchestrationMode = NeuralOrchestrationMode.Auto,
+        OverlapFactor = 2,
+        EnableTta = false,
+        EnablePhaseFix = true,
+        EnforceEnergyConservation = true,
+        KaraokePreserveBackingVocals = true
+    }.Sanitize();
+
+    NeuralExecutionPlan planA = orch.BuildPlan(NeuralPipelineGoal.SpatialKaraoke, baseCfg);
+    string sigA = planA.PlanSignature;
+    Assert(sigA.Contains("|cfg:v1;", StringComparison.Ordinal), $"Expected structured cfg token in signature: {sigA}");
+
+    NeuralTrackCacheEntryInfo entryA = new() {
+        CacheKey = "k1",
+        SourceTrackKey = "/storage/emulated/0/Music/01. Lavender Haze.m4a.mp4",
+        PlanSignature = sigA,
+        OriginTag = "Local AI",
+        StemCount = 2,
+        CompressedBytes = 12 * 1024 * 1024
+    };
+
+    NeuralCacheConfigComparison sameCmp = NeuralCacheConfigDiff.Compare(
+        entryA, baseCfg, planA, "bs_roformer_vocals", currentUsesCloud: false, NeuralPipelineGoal.SpatialKaraoke);
+    Assert(sameCmp.MatchesCurrentConfig, "Identical config must report MatchesCurrentConfig=true.");
+    Assert(sameCmp.Differences.Count == 0, $"Expected 0 diffs, got {sameCmp.Differences.Count}.");
+    Assert(sameCmp.SourceFormatLabel.Contains("Atmos", StringComparison.OrdinalIgnoreCase),
+        $"Expected Atmos format label for .m4a.mp4, got '{sameCmp.SourceFormatLabel}'.");
+
+    NeuralAudioConfig changedCfg = new NeuralAudioConfig {
+        ExecutionBackend = NeuralExecutionBackend.OnDevice,
+        OrchestrationMode = NeuralOrchestrationMode.Auto,
+        OverlapFactor = 4,
+        EnableTta = true,
+        EnablePhaseFix = true,
+        EnforceEnergyConservation = true,
+        KaraokePreserveBackingVocals = false
+    }.Sanitize();
+    NeuralExecutionPlan planChanged = orch.BuildPlan(NeuralPipelineGoal.SpatialKaraoke, changedCfg);
+    NeuralCacheConfigComparison diffCmp = NeuralCacheConfigDiff.Compare(
+        entryA, changedCfg, planChanged, "bs_roformer_vocals", currentUsesCloud: false, NeuralPipelineGoal.SpatialKaraoke);
+    Assert(!diffCmp.MatchesCurrentConfig, "Changed overlap/TTA/backing config must report MatchesCurrentConfig=false.");
+    Assert(diffCmp.Differences.Any(d => d.FieldKey == "Overlap"), "Missing 'Overlap' diff.");
+    Assert(diffCmp.Differences.Any(d => d.FieldKey == "TTA"), "Missing 'TTA' diff.");
+    Assert(diffCmp.Differences.Any(d => d.FieldKey == "BackingVocals"), "Missing 'BackingVocals' diff.");
+
+    NeuralAudioConfig cloudCfg = new NeuralAudioConfig {
+        ExecutionBackend = NeuralExecutionBackend.MvsepCloud,
+        OrchestrationMode = NeuralOrchestrationMode.Auto,
+        OverlapFactor = 2,
+        KaraokePreserveBackingVocals = true
+    }.Sanitize();
+    NeuralCacheConfigComparison cloudCmp = NeuralCacheConfigDiff.Compare(
+        entryA, cloudCfg, planA, "bs_roformer_vocals",
+        currentUsesCloud: true, NeuralPipelineGoal.SpatialKaraoke);
+    Assert(!cloudCmp.MatchesCurrentConfig && cloudCmp.Differences.Any(d => d.FieldKey == "Backend"),
+        "Expected 'Backend' diff when switching Local AI -> MVSEP Cloud.");
+});
+
+// ---------- Test 41 (W51.6): Sample-0 Primed Loudness & Cold-Start Downward Safety Guard ----------
+RunTest("T41_W51_6_Bs1770Sample0PrimedLoudness_And_ColdStartDownwardGuard", () => {
+    int sr = 48000;
+    int frames = 2048;
+    // -7.0 LUFS loud FLAC under -18.0 LUFS target => needs -11.0 dB gain (0.2818x) on sample 0!
+    Bs1770LoudnessPostProcessingStage primed = new();
+    primed.Configure(sr, 2);
+    primed.ApplyParameters(LoudnessNormalizationMode.AtmosMusicMinus18, respectDialnorm: false);
+    primed.PrimeInitialTrackLoudnessLufs(-7.0f);
+
+    float[] loudBuf = new float[frames * 2];
+    for (int i = 0; i < frames; i++) {
+        float s = 0.65f * MathF.Sin(2f * MathF.PI * 1000f * i / sr);
+        loudBuf[i * 2] = s;
+        loudBuf[i * 2 + 1] = s;
+    }
+    primed.ProcessInterleaved(loudBuf, 0, frames, 2, null);
+
+    // Measure first 256 frames (5.3 ms) RMS vs input RMS (0.65 / sqrt(2) = 0.4596)
+    double sumSq = 0;
+    for (int i = 0; i < 256; i++) sumSq += loudBuf[i * 2] * loudBuf[i * 2];
+    double outRms = Math.Sqrt(sumSq / 256.0);
+    double inRms = 0.65 / Math.Sqrt(2.0);
+    double appliedDb = 20.0 * Math.Log10(Math.Max(1e-9, outRms / inRms));
+    Assert(Math.Abs(appliedDb - (-11.0)) <= 0.6,
+        $"Primed sample-0 gain must be ~-11.0 dB (got {appliedDb:F2} dB — volume spike regression!).");
+
+    // Unprimed cold-start downward-only safety guard:
+    // 1) Loud -6 dBFS input must be attenuated downward quickly (within 40 ms) before 400 ms BS.1770 integrates
+    Bs1770LoudnessPostProcessingStage coldLoud = new();
+    coldLoud.Configure(sr, 2);
+    coldLoud.ApplyParameters(LoudnessNormalizationMode.AtmosMusicMinus18, respectDialnorm: false);
+    float[] coldLoudBuf = new float[2048 * 2];
+    for (int i = 0; i < 2048; i++) {
+        float s = 0.85f * MathF.Sin(2f * MathF.PI * 1000f * i / sr);
+        coldLoudBuf[i * 2] = s;
+        coldLoudBuf[i * 2 + 1] = s;
+    }
+    coldLoud.ProcessInterleaved(coldLoudBuf, 0, 2048, 2, null);
+    double tailSq = 0;
+    for (int i = 1536; i < 2048; i++) tailSq += coldLoudBuf[i * 2] * coldLoudBuf[i * 2];
+    double tailDb = 20.0 * Math.Log10(Math.Max(1e-9, Math.Sqrt(tailSq / 512.0) / (0.85 / Math.Sqrt(2.0))));
+    Assert(tailDb < -3.0, $"Cold-start downward safety guard failed to tame loud unprimed input (got {tailDb:F2} dB).");
+
+    // 2) Quiet unprimed intro (-34 dBFS) must NEVER be boosted cold (appliedDb <= +0.25 dB)
+    Bs1770LoudnessPostProcessingStage coldQuiet = new();
+    coldQuiet.Configure(sr, 2);
+    coldQuiet.ApplyParameters(LoudnessNormalizationMode.AtmosMusicMinus18, respectDialnorm: false);
+    float[] coldQuietBuf = new float[2048 * 2];
+    for (int i = 0; i < 2048; i++) {
+        float s = 0.02f * MathF.Sin(2f * MathF.PI * 1000f * i / sr);
+        coldQuietBuf[i * 2] = s;
+        coldQuietBuf[i * 2 + 1] = s;
+    }
+    coldQuiet.ProcessInterleaved(coldQuietBuf, 0, 2048, 2, null);
+    double quietSq = 0;
+    for (int i = 1536; i < 2048; i++) quietSq += coldQuietBuf[i * 2] * coldQuietBuf[i * 2];
+    double quietDb = 20.0 * Math.Log10(Math.Max(1e-9, Math.Sqrt(quietSq / 512.0) / (0.02 / Math.Sqrt(2.0))));
+    Assert(quietDb <= 0.25, $"Cold-start safety guard must never boost quiet unprimed intros (got {quietDb:F2} dB).");
+});
+
+// ---------- Test 42 (W51.7): Linked SystemPlaybackVolume01 -> ISO 226 Coupling (Zero Double Attenuation) ----------
+RunTest("T42_W51_7_SystemPlaybackVolume_Iso226Coupling_ZeroDoubleAttenuation", () => {
+    using RealtimePlayerEngine engine = new();
+    engine.Volume = 1.0f;
+    engine.SystemPlaybackVolume01 = 0.35f;
+    Assert(Math.Abs(engine.Volume - 1.0f) < 0.0001f, "Software DSP Volume must remain 1.0f when linked to Android Stream.Music.");
+    Assert(Math.Abs(engine.SystemPlaybackVolume01 - 0.35f) < 0.0001f, "SystemPlaybackVolume01 setter failed.");
+    engine.SystemPlaybackVolume01 = 1.5f;
+    Assert(Math.Abs(engine.SystemPlaybackVolume01 - 1.0f) < 0.0001f, "SystemPlaybackVolume01 must clamp to [0..1].");
+    engine.SystemPlaybackVolume01 = -0.2f;
+    Assert(Math.Abs(engine.SystemPlaybackVolume01 - 0.0f) < 0.0001f, "SystemPlaybackVolume01 must clamp negative values to 0.");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
@@ -3728,19 +3962,19 @@ def _py_stage7_ui_ai_org_motion_stability_contracts() -> None:
     for tok in ("TryLoadBestForSourceTrack", "ScoreCacheEntryMatch", "ExtractNormalizedFileStem", "LosslessResidualRestore"):
         assert tok in cache_svc, f"Q2 failed: missing {tok} in NeuralTrackCacheService.cs"
     wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
-    for tok in ("TryLoadBestForSourceTrack", "bool forceReextract = false", "NeuralReextractStemsBtn", "OpenAiSettingsBtn", "JumpToSettingsCategory(2)"):
+    for tok in ("TryLoadBestForSourceTrack", "bool forceReextract = false", "AiCacheReextractCurrentBtn", "OpenAiSettingsBtn", "JumpToSettingsCategory(2)"):
         assert tok in wf_src, f"Q2/Q4 failed: missing {tok} in MainActivity.NeuralWorkflows.cs"
 
-    # Q3: OneUiMotionBlur blended optical defocus + horizontal motion + clear on end/cancel + 1:1 album framing + NowPlaying overlay stack
+    # Q3: OneUiMotionBlur helper intact + W51.4 GPU hardware-layer transitions + clear on end/cancel + 1:1 album framing + NowPlaying overlay stack
     theme_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Theme" / "OneUiTheme.cs").read_text(encoding="utf-8")
-    for tok in ("class OneUiMotionBlur", "ComputeHorizontalBlurRadiusPx", "ComputeBlendedBlurRadiiPx", "ComputeTransitionOpticalDepth", "CreateBlurEffect(clampedX, clampedY", "SetRenderEffect(null)"):
+    for tok in ("class OneUiMotionBlur", "ComputeHorizontalBlurRadiusPx", "ComputeBlendedBlurRadiiPx", "ComputeTransitionOpticalDepth", "CreateBlurEffect(clampedX, clampedY", "SetRenderEffect(null)", "EnableHardwareLayer"):
         assert tok in theme_src, f"Q3 failed: missing {tok} in OneUiTheme.cs"
     nav_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Navigation.cs").read_text(encoding="utf-8")
-    for tok in ("OneUiMotionBlur.ComputeHorizontalBlurRadiusPx", "OneUiMotionBlur.ApplyHorizontalMotionBlur", "OneUiMotionBlur.ClearMotionBlur", "ComputeTransitionOpticalDepth"):
-        assert tok in nav_src, f"Q3 failed: missing {tok} in MainActivity.Navigation.cs"
+    for tok in ("OneUiMotionBlur.EnableHardwareLayer", "OneUiMotionBlur.ClearHardwareLayer", "OneUiMotionBlur.ClearMotionBlur"):
+        assert tok in nav_src, f"Q3/W51.4 failed: missing {tok} in MainActivity.Navigation.cs"
     np_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.NowPlaying.cs").read_text(encoding="utf-8")
-    for tok in ("OneUiMotionBlur.ApplyHorizontalMotionBlur", "OneUiMotionBlur.ClearMotionBlur", "ComputeTransitionOpticalDepth", "HideSoftInputFromWindow"):
-        assert tok in np_src, f"Q3 failed: missing {tok} in NowPlaying.cs"
+    for tok in ("OneUiMotionBlur.EnableHardwareLayer", "OneUiMotionBlur.ClearMotionBlur", "HideSoftInputFromWindow"):
+        assert tok in np_src, f"Q3/W51.4 failed: missing {tok} in NowPlaying.cs"
     lib_views = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.LibraryViews.cs").read_text(encoding="utf-8")
     pm_core = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.Core.cs").read_text(encoding="utf-8")
     assert "FillWidthSquare = true" in lib_views, "Q3 failed: album tile FillWidthSquare = true missing in LibraryViews.cs"
@@ -3844,6 +4078,75 @@ def _py_stage8_scarlett_proaudio_stability_contracts() -> None:
         assert tok in bridge_src, f"BUG #8 regression: missing {tok} in MainActivity.LiveBridge.cs"
 
 
+def _py_stage9_w51_vocal_cache_ux_loudness_volume_contracts() -> None:
+    # W51.1: Zero-alloc vocal/backing toggle & no OOM ONNX cascade
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    m_toggle = re.search(r"void TogglePureInstrumentalMode\([^\)]*\)\s*\{(.*?)\n    \}", wf_src, re.S)
+    assert m_toggle is not None, "W51.1: TogglePureInstrumentalMode not found"
+    assert "PrepareActiveTrackNeuralStemsAsync" not in m_toggle.group(1), (
+        "W51.1 OOM regression: TogglePureInstrumentalMode must NEVER auto-spawn ONNX extraction cascade!"
+    )
+
+    proc_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "Adapters" / "NeuralStemStageProcessor.cs").read_text(encoding="utf-8")
+    m_rebuild = re.search(r"void RebuildAlignedReferencesLocked\(\)\s*\{(.*?)\n    \}", proc_src, re.S)
+    assert m_rebuild is not None, "W51.1: RebuildAlignedReferencesLocked not found"
+    assert "KaiserSincResampler" not in m_rebuild.group(1), (
+        "W51.1 OOM/glitch regression: RebuildAlignedReferencesLocked must be zero-alloc (no KaiserSincResampler)!"
+    )
+    assert "ReferenceSampleOffset" in proc_src and "extraLeadLeftScratch" in proc_src, "W51.1/W51.2 missing zero-alloc scratch or offset"
+
+    # W51.2: Unified Atmos <-> FLAC AI cache
+    cache_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NeuralTrackCacheService.cs").read_text(encoding="utf-8")
+    for tok in ("ExtractCanonicalSongStem", "FindEntriesForTrack", "DeleteEntriesForTrack"):
+        assert tok in cache_src, f"W51.2 missing {tok} in NeuralTrackCacheService.cs"
+    stream_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Rendering" / "RealtimePlayerEngine.Streaming.cs").read_text(encoding="utf-8")
+    assert "preserveNeuralStems" in stream_src and "neuralReferenceOffset" in stream_src, "W51.2 missing HotSwapTrackSeamless stem preservation"
+    loader_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.MediaLoader.cs").read_text(encoding="utf-8")
+    assert "preserveNeuralStems: sameSong" in loader_src and "ComputeCrossVariantNeuralOffsetSamples" in loader_src, "W51.2 missing cross-variant handoff"
+
+    # W51.3: Play & Karaoke AI Cache Inspector + 4-language parity
+    for tok in ("AddSongAiCacheInspectorSection", "ShowKaraokeCacheInspectorDialog", "InspectActiveSongCacheState"):
+        assert tok in wf_src, f"W51.3 missing {tok} in MainActivity.NeuralWorkflows.cs"
+    pm_core = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.Core.cs").read_text(encoding="utf-8")
+    assert "musicLyricsCacheBtn" in pm_core and "ShowKaraokeCacheInspectorDialog" in pm_core, "W51.3 missing Karaoke cache button"
+    w51_keys = (
+        "AiCacheSectionTitle", "AiCacheSharedNote", "AiCacheStatusCachedFmt", "AiCacheStatusNotCached",
+        "AiCacheConfigMatches", "AiCacheConfigDiffersHeader", "AiCacheRemoveBtn", "AiCacheReextractCurrentBtn",
+        "AiCacheExtractNowBtn", "AiCacheRemovedToast", "SingDockCacheChip", "SingDockCacheDiffChip",
+    )
+    for lang_file in ("AndroidStrings.cs", "AndroidStrings.PtBr.cs", "AndroidStrings.Hu.cs", "AndroidStrings.Zh.cs"):
+        lang_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Language" / lang_file).read_text(encoding="utf-8")
+        for key in w51_keys:
+            assert f'["{key}"]' in lang_src, f"W51.3 missing L10n key '{key}' in {lang_file}"
+
+    # W51.4: 120 Hz zero-jank transitions
+    theme_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Theme" / "OneUiTheme.cs").read_text(encoding="utf-8")
+    for tok in ("IsSuspendedForTransition", "ScheduleDeferredBlur", "public static bool EnableFullScreenRenderEffectBlur { get; set; }"):
+        assert tok in theme_src, f"W51.4 missing {tok} in OneUiTheme.cs"
+    nav_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Navigation.cs").read_text(encoding="utf-8")
+    assert ".ScaleX(1f)" in nav_src and "IsSuspendedForTransition" in nav_src, "W51.4 missing GPU tab pill or blur suspension"
+
+    # W51.5: First-3s startup stutter elimination
+    out_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8")
+    assert "PreFillNativePlaybackRing(" in out_src, "W51.5 missing PreFillNativePlaybackRing in AndroidAudioOutput.cs"
+    assert "startupDelayMs: 1400" in loader_src, "W51.5 missing staggered LGSR startupDelayMs"
+
+    # W51.6: Next-track loudness pre-scan & sample-0 priming
+    tag_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AudioTagReader.cs").read_text(encoding="utf-8")
+    assert "TryParseLoudnessTagToLufs" in tag_src and "TrackIntegratedLufs" in tag_src, "W51.6 missing tag loudness parser"
+    qa_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AudioQualityAnalyzer.cs").read_text(encoding="utf-8")
+    assert "PreScanTrackIntegratedLufsAsync" in qa_src and "track_loudness_lufs_v1.json" in qa_src, "W51.6 missing loudness pre-scanner/cache"
+    assert "ScheduleNextTrackLoudnessPreScan" in loader_src and "PrimeTrackLoudnessLufs" in loader_src, "W51.6 missing next-track pre-scan wiring"
+
+    # W51.7: Bidirectional App <-> Android System Media Volume link
+    main_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.cs").read_text(encoding="utf-8")
+    for tok in ("VolumeControlStream = Android.Media.Stream.Music", "SystemVolumeBroadcastReceiver", "SystemVolumeContentObserver"):
+        assert tok in main_src, f"W51.7 missing {tok} in MainActivity.cs"
+    modals_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.Modals.cs").read_text(encoding="utf-8")
+    for tok in ("IsDirectUsbSoftwareVolumeActive", "SyncUiFromSystemMediaVolume", "SetMasterVolumePercent", "StepMasterVolumeByDelta"):
+        assert tok in modals_src, f"W51.7 missing {tok} in MainActivity.PlayerMusic.Modals.cs"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -3855,6 +4158,7 @@ PYTHON_CHECKS = [
     ("PY_T6_FullAppSotaAudit_And_PhaseAContracts", _py_stage6_full_app_sota_audit_and_phase_a_contracts),
     ("PY_T7_BpUiAiOrgMotionStability_Q1_Q6_Contracts", _py_stage7_ui_ai_org_motion_stability_contracts),
     ("PY_T8_ScarlettProAudioStabilityContracts", _py_stage8_scarlett_proaudio_stability_contracts),
+    ("PY_T9_W51_VocalCacheUxLoudnessVolumeContracts", _py_stage9_w51_vocal_cache_ux_loudness_volume_contracts),
 ]
 
 

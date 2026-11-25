@@ -58,16 +58,22 @@ public sealed class AudioQualityReport {
 /// </summary>
 public static class AudioQualityAnalyzer {
     const string CacheFileName = "quality_analysis_v1.json";
+    const string LoudnessCacheFileName = "track_loudness_lufs_v1.json";
     const int MaxCacheEntries = 4000;
 
     static readonly ConcurrentDictionary<string, AudioQualityReport> memCache = new(StringComparer.OrdinalIgnoreCase);
     static readonly ConcurrentDictionary<string, byte> inFlight = new(StringComparer.OrdinalIgnoreCase);
+    static readonly ConcurrentDictionary<string, float> loudnessMemCache = new(StringComparer.OrdinalIgnoreCase);
+    static readonly ConcurrentDictionary<string, byte> loudnessInFlight = new(StringComparer.OrdinalIgnoreCase);
     static readonly LinkedList<string> cacheLru = new();
     static readonly Dictionary<string, LinkedListNode<string>> cacheLruNodes = new(StringComparer.OrdinalIgnoreCase);
     static readonly object cacheLruLock = new();
     static readonly object diskLock = new();
+    static readonly object loudnessDiskLock = new();
     static bool diskLoaded;
+    static bool loudnessDiskLoaded;
     static string cachedDiskPath;
+    static string loudnessDiskPath;
 
     /// <summary>
     /// Classifies a track into one of the three strict audio tiers: Atmos, Surround, or Stereo.
@@ -1581,5 +1587,352 @@ public static class AudioQualityAnalyzer {
             remaining -= got;
         }
         return true;
+    }
+
+    // =========================================================================
+    // W51.6: Persistent Track Integrated Loudness Cache & Next-Track Pre-Scan
+    // =========================================================================
+
+    static string BuildLoudnessFileKey(string filePath) {
+        if (string.IsNullOrWhiteSpace(filePath)) {
+            return "";
+        }
+        try {
+            if (IOFile.Exists(filePath)) {
+                FileInfo fi = new(filePath);
+                return $"{filePath}|{fi.Length}|{fi.LastWriteTimeUtc.Ticks}";
+            }
+        } catch {
+            // Fall back to path-only key
+        }
+        return filePath;
+    }
+
+    public static void EnsureLoudnessCacheLoaded(Context ctx) {
+        if (loudnessDiskLoaded || ctx == null) {
+            return;
+        }
+        lock (loudnessDiskLock) {
+            if (loudnessDiskLoaded) {
+                return;
+            }
+            try {
+                string dir = ctx.CacheDir?.AbsolutePath ?? ctx.FilesDir?.AbsolutePath ?? "";
+                if (!string.IsNullOrEmpty(dir)) {
+                    loudnessDiskPath = IOPath.Combine(dir, LoudnessCacheFileName);
+                    if (IOFile.Exists(loudnessDiskPath)) {
+                        string json = IOFile.ReadAllText(loudnessDiskPath);
+                        Dictionary<string, float> loaded = JsonSerializer.Deserialize<Dictionary<string, float>>(json);
+                        if (loaded != null) {
+                            foreach (KeyValuePair<string, float> kv in loaded) {
+                                if (!string.IsNullOrWhiteSpace(kv.Key) && float.IsFinite(kv.Value) && kv.Value >= -60f && kv.Value <= 6f) {
+                                    loudnessMemCache[kv.Key] = kv.Value;
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch {
+                // Corrupt or missing cache starts clean
+            }
+            loudnessDiskLoaded = true;
+        }
+    }
+
+    public static bool TryGetCachedTrackIntegratedLufs(Context ctx, string filePath, out float integratedLufs) {
+        integratedLufs = float.NaN;
+        if (string.IsNullOrWhiteSpace(filePath)) {
+            return false;
+        }
+        EnsureLoudnessCacheLoaded(ctx);
+        string key = BuildLoudnessFileKey(filePath);
+        if (!string.IsNullOrEmpty(key) && loudnessMemCache.TryGetValue(key, out float cached) && float.IsFinite(cached)) {
+            integratedLufs = cached;
+            return true;
+        }
+        return false;
+    }
+
+    public static void RecordMeasuredTrackIntegratedLufs(Context ctx, string filePath, float integratedLufs) {
+        if (string.IsNullOrWhiteSpace(filePath) || !float.IsFinite(integratedLufs) || integratedLufs < -60f || integratedLufs > 6f) {
+            return;
+        }
+        EnsureLoudnessCacheLoaded(ctx);
+        string key = BuildLoudnessFileKey(filePath);
+        if (string.IsNullOrEmpty(key)) {
+            return;
+        }
+        loudnessMemCache[key] = integratedLufs;
+        PersistLoudnessCacheAsync();
+    }
+
+    static void PersistLoudnessCacheAsync() {
+        string path = loudnessDiskPath;
+        if (string.IsNullOrEmpty(path)) {
+            return;
+        }
+        _ = Task.Run(() => {
+            lock (loudnessDiskLock) {
+                try {
+                    Dictionary<string, float> snap = new(StringComparer.OrdinalIgnoreCase);
+                    int count = 0;
+                    foreach (KeyValuePair<string, float> kv in loudnessMemCache) {
+                        snap[kv.Key] = kv.Value;
+                        if (++count >= MaxCacheEntries) {
+                            break;
+                        }
+                    }
+                    string tmp = path + ".tmp";
+                    IOFile.WriteAllText(tmp, JsonSerializer.Serialize(snap));
+                    IOFile.Move(tmp, path, overwrite: true);
+                } catch {
+                    // Best-effort cache persistence
+                }
+            }
+        });
+    }
+
+    /// <summary>
+    /// Fast background ITU-R BS.1770-5 integrated loudness pre-scanner for the next album track.
+    /// Checks persistent cache and ReplayGain/R128/iTunNORM tags first (~1 ms); otherwise decodes
+    /// 3 short stereo windows (15%, 45%, 72%) at background priority into <see cref="Cavern.Filters.LoudnessMeter"/>.
+    /// </summary>
+    public static Task<float?> PreScanTrackIntegratedLufsAsync(
+        Context ctx,
+        string filePath,
+        string ffmpegPath,
+        int startupDelayMs = 2000,
+        CancellationToken ct = default) {
+        if (string.IsNullOrWhiteSpace(filePath) || !IOFile.Exists(filePath)) {
+            return Task.FromResult<float?>(null);
+        }
+        if (TryGetCachedTrackIntegratedLufs(ctx, filePath, out float alreadyCached)) {
+            return Task.FromResult<float?>(alreadyCached);
+        }
+        string key = BuildLoudnessFileKey(filePath);
+        if (string.IsNullOrEmpty(key) || !loudnessInFlight.TryAdd(key, 1)) {
+            return Task.FromResult<float?>(null);
+        }
+
+        return Task.Run(async () => {
+            try {
+                if (startupDelayMs > 0) {
+                    await Task.Delay(startupDelayMs, ct).ConfigureAwait(false);
+                }
+                ct.ThrowIfCancellationRequested();
+                try {
+                    Android.OS.Process.SetThreadPriority(Android.OS.ThreadPriority.Background);
+                } catch {
+                    // Best-effort background QoS
+                }
+
+                // 1. Instant embedded loudness tag check (ReplayGain / R128 / iTunNORM)
+                ParsedAudioTags tags = AudioTagReader.TryReadTags(filePath);
+                if (tags?.TrackIntegratedLufs is float tagLufs && float.IsFinite(tagLufs)) {
+                    RecordMeasuredTrackIntegratedLufs(ctx, filePath, tagLufs);
+                    return (float?)tagLufs;
+                }
+
+                long durationMs = tags?.DurationMs ?? 0;
+                float? measured = MeasureTrackLufsWithMediaCodec(ctx, filePath, durationMs, ct);
+                if (!measured.HasValue && !string.IsNullOrEmpty(ffmpegPath) && IOFile.Exists(ffmpegPath)) {
+                    measured = MeasureTrackLufsWithFfmpeg(filePath, ffmpegPath, durationMs, ct);
+                }
+                if (measured is float validLufs && float.IsFinite(validLufs) && validLufs >= -55f && validLufs <= 3f) {
+                    RecordMeasuredTrackIntegratedLufs(ctx, filePath, validLufs);
+                    return (float?)validLufs;
+                }
+                return null;
+            } catch (System.OperationCanceledException) {
+                return null;
+            } catch {
+                return null;
+            } finally {
+                loudnessInFlight.TryRemove(key, out _);
+            }
+        }, ct);
+    }
+
+    static float? MeasureTrackLufsWithMediaCodec(Context ctx, string filePath, long durationMs, CancellationToken ct) {
+        MediaExtractor extractor = null;
+        MediaCodec codec = null;
+        bool codecStarted = false;
+        try {
+            extractor = new MediaExtractor();
+            extractor.SetDataSource(filePath);
+            int audioIdx = -1;
+            MediaFormat format = null;
+            for (int i = 0; i < extractor.TrackCount; i++) {
+                MediaFormat f = extractor.GetTrackFormat(i);
+                string mime = f.GetString(MediaFormat.KeyMime) ?? "";
+                if (mime.StartsWith("audio/", StringComparison.OrdinalIgnoreCase)) {
+                    audioIdx = i;
+                    format = f;
+                    break;
+                }
+            }
+            if (audioIdx < 0 || format == null) {
+                return null;
+            }
+            string trackMime = format.GetString(MediaFormat.KeyMime) ?? "";
+            if (string.IsNullOrWhiteSpace(trackMime) || trackMime.Equals("audio/unknown", StringComparison.OrdinalIgnoreCase)) {
+                return null;
+            }
+            extractor.SelectTrack(audioIdx);
+            int sr = format.ContainsKey(MediaFormat.KeySampleRate) ? Math.Max(8000, format.GetInteger(MediaFormat.KeySampleRate)) : 48000;
+            int outChannels = format.ContainsKey(MediaFormat.KeyChannelCount) ? Math.Max(1, format.GetInteger(MediaFormat.KeyChannelCount)) : 2;
+            if (durationMs <= 0 && format.ContainsKey(MediaFormat.KeyDuration)) {
+                durationMs = format.GetLong(MediaFormat.KeyDuration) / 1000L;
+            }
+
+            codec = MediaCodec.CreateDecoderByType(trackMime);
+            codec.Configure(format, null, null, MediaCodecConfigFlags.None);
+            codec.Start();
+            codecStarted = true;
+
+            Cavern.Filters.LoudnessMeter meter = new(sr, 2);
+            double[] windowFractions = durationMs > 25000 ? [0.15, 0.45, 0.72] : [0.0];
+            int framesPerWindow = (int)Math.Min(sr * 1.6, 120_000);
+            float[] stereoBuf = new float[8192];
+            byte[] rawBuf = Array.Empty<byte>();
+            using MediaCodec.BufferInfo info = new();
+            int pcmEncoding = (int)Android.Media.Encoding.Pcm16bit;
+
+            for (int w = 0; w < windowFractions.Length; w++) {
+                ct.ThrowIfCancellationRequested();
+                if (w > 0) {
+                    long seekUs = (long)(durationMs * 1000.0 * windowFractions[w]);
+                    extractor.SeekTo(seekUs, MediaExtractorSeekTo.ClosestSync);
+                    codec.Flush();
+                } else if (durationMs > 25000) {
+                    extractor.SeekTo((long)(durationMs * 1000.0 * windowFractions[0]), MediaExtractorSeekTo.ClosestSync);
+                }
+
+                int collectedFrames = 0;
+                bool inputDone = false;
+                int safety = 0;
+                while (collectedFrames < framesPerWindow && safety++ < 260) {
+                    ct.ThrowIfCancellationRequested();
+                    if (!inputDone) {
+                        int inIdx = codec.DequeueInputBuffer(4000);
+                        if (inIdx >= 0) {
+                            Java.Nio.ByteBuffer inBuf = codec.GetInputBuffer(inIdx);
+                            int read = inBuf != null ? extractor.ReadSampleData(inBuf, 0) : -1;
+                            if (read < 0) {
+                                codec.QueueInputBuffer(inIdx, 0, 0, 0, MediaCodecBufferFlags.EndOfStream);
+                                inputDone = true;
+                            } else {
+                                codec.QueueInputBuffer(inIdx, 0, read, extractor.SampleTime, MediaCodecBufferFlags.None);
+                                extractor.Advance();
+                            }
+                        }
+                    }
+
+                    int outIdx = codec.DequeueOutputBuffer(info, 4000);
+                    if (outIdx == (int)MediaCodecInfoState.OutputFormatChanged) {
+                        MediaFormat outFmt = codec.OutputFormat;
+                        if (outFmt.ContainsKey(MediaFormat.KeyChannelCount)) {
+                            outChannels = Math.Max(1, outFmt.GetInteger(MediaFormat.KeyChannelCount));
+                        }
+                        if (outFmt.ContainsKey(MediaFormat.KeySampleRate)) {
+                            int nextSr = Math.Max(8000, outFmt.GetInteger(MediaFormat.KeySampleRate));
+                            if (nextSr != sr) {
+                                sr = nextSr;
+                                meter.Configure(sr, 2);
+                            }
+                        }
+                        if (OperatingSystem.IsAndroidVersionAtLeast(24) && outFmt.ContainsKey(MediaFormat.KeyPcmEncoding)) {
+                            pcmEncoding = outFmt.GetInteger(MediaFormat.KeyPcmEncoding);
+                        }
+                    } else if (outIdx >= 0) {
+                        Java.Nio.ByteBuffer outBuf = codec.GetOutputBuffer(outIdx);
+                        if (outBuf != null && info.Size > 0) {
+                            if (rawBuf.Length < info.Size) {
+                                rawBuf = new byte[info.Size];
+                            }
+                            outBuf.Position(info.Offset);
+                            outBuf.Get(rawBuf, 0, info.Size);
+                            int bytesPerSample = pcmEncoding == (int)Android.Media.Encoding.PcmFloat ? 4
+                                : (OperatingSystem.IsAndroidVersionAtLeast(31) && pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked ? 3
+                                : (OperatingSystem.IsAndroidVersionAtLeast(31) && pcmEncoding == (int)Android.Media.Encoding.Pcm32bit ? 4 : 2));
+                            int frameBytes = Math.Max(1, outChannels * bytesPerSample);
+                            int frames = info.Size / frameBytes;
+                            if (frames > 0) {
+                                if (stereoBuf.Length < frames * 2) {
+                                    stereoBuf = new float[frames * 2];
+                                }
+                                for (int f = 0; f < frames; f++) {
+                                    int fOff = f * frameBytes;
+                                    float l = ReadPcmSampleNormalized(rawBuf, fOff, pcmEncoding);
+                                    float r = outChannels >= 2
+                                        ? ReadPcmSampleNormalized(rawBuf, fOff + bytesPerSample, pcmEncoding)
+                                        : l;
+                                    stereoBuf[f * 2] = l;
+                                    stereoBuf[f * 2 + 1] = r;
+                                }
+                                meter.AnalyzeInterleaved(stereoBuf, 0, frames, 2);
+                                collectedFrames += frames;
+                            }
+                        }
+                        codec.ReleaseOutputBuffer(outIdx, false);
+                        if ((info.Flags & MediaCodecBufferFlags.EndOfStream) != 0) {
+                            break;
+                        }
+                    } else if (outIdx == (int)MediaCodecInfoState.TryAgainLater && inputDone) {
+                        break;
+                    }
+                }
+            }
+
+            Cavern.Filters.LoudnessAnalysisSnapshot snap = meter.Snapshot;
+            if (!float.IsNaN(snap.IntegratedLufs)) return snap.IntegratedLufs;
+            if (!float.IsNaN(snap.ShortTermLufs)) return snap.ShortTermLufs;
+            if (!float.IsNaN(snap.MomentaryLufs)) return snap.MomentaryLufs;
+            return null;
+        } catch {
+            return null;
+        } finally {
+            try { if (codecStarted) codec?.Stop(); } catch { }
+            try { codec?.Release(); } catch { }
+            try { codec?.Dispose(); } catch { }
+            try { extractor?.Release(); } catch { }
+            try { extractor?.Dispose(); } catch { }
+        }
+    }
+
+    static float ReadPcmSampleNormalized(byte[] buf, int off, int pcmEncoding) {
+        if (pcmEncoding == (int)Android.Media.Encoding.PcmFloat && off + 4 <= buf.Length) {
+            return BitConverter.ToSingle(buf, off);
+        }
+        if (OperatingSystem.IsAndroidVersionAtLeast(31) && pcmEncoding == (int)Android.Media.Encoding.Pcm32bit && off + 4 <= buf.Length) {
+            return BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(off, 4)) / 2147483648f;
+        }
+        if (OperatingSystem.IsAndroidVersionAtLeast(31) && pcmEncoding == (int)Android.Media.Encoding.Pcm24bitPacked && off + 3 <= buf.Length) {
+            int s24 = buf[off] | (buf[off + 1] << 8) | ((sbyte)buf[off + 2] << 16);
+            return s24 / 8388608f;
+        }
+        if (off + 2 <= buf.Length) {
+            return BinaryPrimitives.ReadInt16LittleEndian(buf.AsSpan(off, 2)) / 32768f;
+        }
+        return 0f;
+    }
+
+    static float? MeasureTrackLufsWithFfmpeg(string filePath, string ffmpegPath, long durationMs, CancellationToken ct) {
+        float[] mono = DecodeWithFfmpegS32Window(filePath, ffmpegPath, durationMs, 48000, ct, out int actualSr, out _, out _);
+        if (mono == null || mono.Length < 4096) {
+            return null;
+        }
+        float[] stereo = new float[mono.Length * 2];
+        for (int i = 0; i < mono.Length; i++) {
+            stereo[i * 2] = mono[i];
+            stereo[i * 2 + 1] = mono[i];
+        }
+        Cavern.Filters.LoudnessMeter meter = new(actualSr, 2);
+        meter.AnalyzeInterleaved(stereo, 0, mono.Length, 2);
+        Cavern.Filters.LoudnessAnalysisSnapshot snap = meter.Snapshot;
+        if (!float.IsNaN(snap.IntegratedLufs)) return snap.IntegratedLufs;
+        if (!float.IsNaN(snap.ShortTermLufs)) return snap.ShortTermLufs;
+        if (!float.IsNaN(snap.MomentaryLufs)) return snap.MomentaryLufs;
+        return null;
     }
 }

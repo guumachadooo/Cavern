@@ -1692,5 +1692,31 @@ public sealed partial class AndroidStrings {
         d["NeuralGroupNoneActive"] = "Nenhum";
         d["NeuralModelAutoActiveTag"] = "Auto Ativo";
         d["NeuralModelAutoLockedTag"] = "Gerido por Auto";
+        // W51.2 / W51.3: Cache Unificado de IA (Dolby Atmos <-> FLAC), Diff de Config e Controles
+        d["AiCacheSectionTitle"] = "Cache de IA da Música (Dolby Atmos e FLAC)";
+        d["AiCacheSharedNote"] = "Os stems de IA são compartilhados automaticamente entre as versões Dolby Atmos e FLAC da mesma música.";
+        d["AiCacheStatusCachedFmt"] = "Em cache: {0} stems • {1:0.0} MB • gerado de {2}";
+        d["AiCacheStatusNotCached"] = "Esta música ainda não está no cache de IA.";
+        d["AiCacheConfigMatches"] = "Mesmas configurações atuais de IA.";
+        d["AiCacheConfigDiffersHeader"] = "Configurações diferentes do cache salvo:";
+        d["AiCacheRemoveBtn"] = "Remover do Cache";
+        d["AiCacheRemovedToast"] = "Música removida do cache de IA.";
+        d["AiCacheReextractCurrentBtn"] = "Refazer com Config. Atuais";
+        d["AiCacheExtractNowBtn"] = "Extrair IA Agora";
+        d["SingDockCacheChip"] = "Cache IA";
+        d["SingDockCacheDiffChip"] = "Cache IA (!)";
+        d["KaraokeCacheDialogTitle"] = "Cache de IA do Karaokê e da Música";
+        d["AiCacheDiffFieldBackend"] = "Motor de IA";
+        d["AiCacheDiffFieldModels"] = "Modelos";
+        d["AiCacheDiffFieldBundle"] = "Modo de Separação";
+        d["AiCacheDiffFieldOrchestration"] = "Orquestração";
+        d["AiCacheDiffFieldOverlap"] = "Overlap";
+        d["AiCacheDiffFieldTta"] = "TTA";
+        d["AiCacheDiffFieldEnsemble"] = "Mistura Ensemble";
+        d["AiCacheDiffFieldPhaseFix"] = "Correção de Fase";
+        d["AiCacheDiffFieldEnergyConservation"] = "Conservação de Energia";
+        d["AiCacheDiffFieldBackingVocals"] = "Backing Vocals";
+        d["AiCacheDiffValKeepBacking"] = "Manter Backing";
+        d["AiCacheDiffValPureInstr"] = "Instrumental Puro";
     }
 }

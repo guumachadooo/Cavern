@@ -92,11 +92,19 @@ namespace Cavern.Neural {
         float smoothedTransientProtect;
         float smoothedStrictCenterEnergy;
         float smoothedFrontPairEnergy;
+        int lastRefModeSignature = -1;
 
         /// <summary>Enables or bypasses Spatial Karaoke processing.</summary>
         public bool IsEnabled {
             get { return isEnabled; }
-            set { isEnabled = value; }
+            set {
+                if (isEnabled != value) {
+                    isEnabled = value;
+                    if (!value) {
+                        ResetAdaptationState();
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -120,7 +128,12 @@ namespace Cavern.Neural {
         /// </summary>
         public bool PreserveBackingVocals {
             get { return preserveBackingVocals; }
-            set { preserveBackingVocals = value; }
+            set {
+                if (preserveBackingVocals != value) {
+                    preserveBackingVocals = value;
+                    ResetAdaptationState();
+                }
+            }
         }
 
         /// <summary>
@@ -196,13 +209,12 @@ namespace Cavern.Neural {
             transientBinEnd = tEnd < transientBinStart ? transientBinStart : tEnd;
         }
 
-        /// <summary>Clears all overlap-add tails and cross-spectral coherence accumulators.</summary>
-        public void Reset() {
+        /// <summary>
+        /// Clears only cross-spectral covariance and energy adaptation trackers while preserving overlap-add
+        /// continuity buffers (zero-alloc, click-free mode/reference switch).
+        /// </summary>
+        public void ResetAdaptationState() {
             for (int c = 0; c < MaxSpatialChannels; c++) {
-                Array.Clear(prevIn[c], 0, HopSize);
-                Array.Clear(currIn[c], 0, HopSize);
-                Array.Clear(olaTail[c], 0, HopSize);
-                Array.Clear(readyOut[c], 0, HopSize);
                 Array.Clear(covCC[c], 0, SpectrumBins);
                 Array.Clear(covCVRe[c], 0, SpectrumBins);
                 Array.Clear(covCVIm[c], 0, SpectrumBins);
@@ -210,12 +222,6 @@ namespace Cavern.Neural {
                 Array.Clear(covCSoRe[c], 0, SpectrumBins);
                 Array.Clear(covCSoIm[c], 0, SpectrumBins);
             }
-            Array.Clear(prevRefLead, 0, HopSize);
-            Array.Clear(currRefLead, 0, HopSize);
-            Array.Clear(prevRefLeadR, 0, HopSize);
-            Array.Clear(currRefLeadR, 0, HopSize);
-            Array.Clear(prevRefBacking, 0, HopSize);
-            Array.Clear(currRefBacking, 0, HopSize);
             Array.Clear(covVV, 0, SpectrumBins);
             Array.Clear(covVVR, 0, SpectrumBins);
             Array.Clear(covSMRe, 0, SpectrumBins);
@@ -226,14 +232,32 @@ namespace Cavern.Neural {
             Array.Clear(covSide, 0, SpectrumBins);
             Array.Clear(prevRefMag, 0, SpectrumBins);
             Array.Clear(currRefMag, 0, SpectrumBins);
-            inFill = 0;
-            hasPrimedHop = false;
-            wasBypassed = true;
-            bypassFadeMix = 0f;
             latestVocalActivity = 0f;
             smoothedTransientProtect = 0f;
             smoothedStrictCenterEnergy = 0f;
             smoothedFrontPairEnergy = 0f;
+            lastRefModeSignature = -1;
+        }
+
+        /// <summary>Clears all overlap-add tails and cross-spectral coherence accumulators.</summary>
+        public void Reset() {
+            for (int c = 0; c < MaxSpatialChannels; c++) {
+                Array.Clear(prevIn[c], 0, HopSize);
+                Array.Clear(currIn[c], 0, HopSize);
+                Array.Clear(olaTail[c], 0, HopSize);
+                Array.Clear(readyOut[c], 0, HopSize);
+            }
+            Array.Clear(prevRefLead, 0, HopSize);
+            Array.Clear(currRefLead, 0, HopSize);
+            Array.Clear(prevRefLeadR, 0, HopSize);
+            Array.Clear(currRefLeadR, 0, HopSize);
+            Array.Clear(prevRefBacking, 0, HopSize);
+            Array.Clear(currRefBacking, 0, HopSize);
+            inFill = 0;
+            hasPrimedHop = false;
+            wasBypassed = true;
+            bypassFadeMix = 0f;
+            ResetAdaptationState();
         }
 
         /// <summary>
@@ -322,6 +346,15 @@ namespace Cavern.Neural {
             bool hasNeuralLeadRight = hasNeuralLead && !isFullMixTwinReference &&
                 neuralLeadVocalRefRight != null && neuralLeadVocalRefRight.Length >= sampleCount;
             bool hasNeuralBacking = neuralBackingVocalRef != null && neuralBackingVocalRef.Length >= sampleCount;
+            int refSig = (hasNeuralLead ? 1 : 0) |
+                         (hasNeuralLeadRight ? 2 : 0) |
+                         (hasNeuralBacking ? 4 : 0) |
+                         (isFullMixTwinReference ? 8 : 0) |
+                         (preserveBackingVocals ? 16 : 0);
+            if (lastRefModeSignature >= 0 && lastRefModeSignature != refSig) {
+                ResetAdaptationState();
+            }
+            lastRefModeSignature = refSig;
             const float fadeStep = 1f / HopSize;
 
             for (int n = 0; n < sampleCount; n++) {
@@ -1052,6 +1085,15 @@ namespace Cavern.Neural {
                     covCVRe[c][k] += a * (cvRe - covCVRe[c][k]);
                     covCVIm[c][k] += a * (cvIm - covCVIm[c][k]);
 
+                    float channelBinStrength = binStrength;
+                    if (!useIsolatedNeuralLead && useDiscreteStrictCenter && preserveBackingVocals) {
+                        bool chIsStrict = isStrictCenter != null && c < isStrictCenter.Length && isStrictCenter[c];
+                        if (!chIsStrict) {
+                            // Keep wide/surround harmonies and backing vocals protected while still removing dry center bleed
+                            channelBinStrength *= 0.42f;
+                        }
+                    }
+
                     Complex y = ApplyTwoRefSubspaceSubtraction(
                         x,
                         vM,
@@ -1067,7 +1109,7 @@ namespace Cavern.Neural {
                         ref covCSoRe[c][k],
                         ref covCSoIm[c][k],
                         a,
-                        binStrength,
+                        channelBinStrength,
                         useIsolatedNeuralLead);
 
                     chSpec[c][k] = y;

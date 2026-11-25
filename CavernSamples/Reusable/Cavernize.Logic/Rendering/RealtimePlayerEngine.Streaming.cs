@@ -84,7 +84,9 @@ public sealed partial class RealtimePlayerEngine {
         CavernizeTrack track,
         double startSeconds,
         UpmixingSettings upmixing = null,
-        RenderingSettings rendering = null) {
+        RenderingSettings rendering = null,
+        bool preserveNeuralStems = false,
+        double neuralReferenceOffset = double.NaN) {
         ArgumentNullException.ThrowIfNull(track);
         if (!track.Supported) {
             throw new NotSupportedException("Track format is not supported by Cavern.");
@@ -112,15 +114,20 @@ public sealed partial class RealtimePlayerEngine {
             subBlockReadOffset = 0;
             lastSourceMaskHash = 0;
 
-            if (neuralStemStage.ActiveSpatialUpmixTrack != null &&
-                !MatchesSeparatedTrack(neuralStemStage.ActiveSpatialUpmixTrack, track)) {
-                neuralStemStage.BindSpatialUpmixTrack(null);
-                cachedHybridTrack = null;
-                cachedHybrid714Buses = null;
-            }
-            if (neuralStemStage.ActiveKaraokeTrack != null &&
-                !MatchesSeparatedTrack(neuralStemStage.ActiveKaraokeTrack, track)) {
-                neuralStemStage.BindKaraokeReferenceTrack(null);
+            if (!preserveNeuralStems) {
+                if (neuralStemStage.ActiveSpatialUpmixTrack != null &&
+                    !MatchesSeparatedTrack(neuralStemStage.ActiveSpatialUpmixTrack, track)) {
+                    neuralStemStage.BindSpatialUpmixTrack(null);
+                    cachedHybridTrack = null;
+                    cachedHybrid714Buses = null;
+                }
+                if (neuralStemStage.ActiveKaraokeTrack != null &&
+                    !MatchesSeparatedTrack(neuralStemStage.ActiveKaraokeTrack, track)) {
+                    neuralStemStage.BindKaraokeReferenceTrack(null);
+                }
+                neuralStemStage.ReferenceSampleOffset = 0.0;
+            } else if (!double.IsNaN(neuralReferenceOffset)) {
+                neuralStemStage.ReferenceSampleOffset = neuralReferenceOffset;
             }
             lgsrStage.ClearExplicitLosslessStatus();
 
@@ -478,7 +485,7 @@ public sealed partial class RealtimePlayerEngine {
 
                 // Slot 6: Ordered transparent post-processing stages
                 // (100 AutoEq, 110 HpTF, 300 ISO 226:2023, 400 BS.1770/Dialnorm, 500 Dialog Path B, 900 4x True-Peak Limiter)
-                iso226PostStage.UpdatePlaybackVolume(Volume);
+                iso226PostStage.UpdatePlaybackVolume(Volume * systemPlaybackVolume01);
                 limiterPostStage.LimiterOnly = true;
                 limiterPostStage.IsEnabled = false;
                 truePeakLimiterPostStage.IsEnabled = loudnessConfig.TruePeakLimiterEnabled;

@@ -32,6 +32,11 @@ public sealed class ParsedAudioTags {
     /// was parsed from the media container itself; never set by filename heuristics.
     /// </summary>
     public bool HasEmbeddedMusicTags { get; set; }
+    /// <summary>
+    /// Embedded track integrated loudness in LUFS parsed from ReplayGain (-18 LUFS ref),
+    /// EBU R128 Q7.8 (-23 LUFS ref), or Apple iTunNORM SoundCheck tags, or null when absent.
+    /// </summary>
+    public float? TrackIntegratedLufs { get; set; }
 }
 
 /// <summary>
@@ -231,6 +236,7 @@ public static partial class AudioTagReader {
             long itemEnd = Math.Min(ilstEnd, itemStart + itemSize);
             string atomName = Encoding.Latin1.GetString(hdr[4..8]);
 
+            string freeformName = "";
             while (fs.Position + 8 <= itemEnd) {
                 long subStart = fs.Position;
                 if (fs.Read(hdr) < 8) break;
@@ -239,13 +245,30 @@ public static partial class AudioTagReader {
                 long subEnd = Math.Min(itemEnd, subStart + subSize);
                 string subType = Encoding.Latin1.GetString(hdr[4..8]);
 
-                if (subType == "data" && subEnd - fs.Position >= 8) {
+                if (atomName == "----" && subType == "name" && subEnd - fs.Position > 4) {
+                    fs.Position += 4; // FullBox version + flags
+                    int nameLen = (int)Math.Min(128, Math.Max(0, subEnd - fs.Position));
+                    if (nameLen > 0) {
+                        byte[] nb = new byte[nameLen];
+                        int nRead = ReadExact(fs, nb, nameLen);
+                        freeformName = Encoding.UTF8.GetString(nb, 0, nRead).Trim('\0', ' ', '\t', '\r', '\n');
+                    }
+                } else if (subType == "data" && subEnd - fs.Position >= 8) {
                     if (fs.Read(dataHdr[..8]) < 8) break;
                     uint typeInd = BinaryPrimitives.ReadUInt32BigEndian(dataHdr[..4]) & 0xFFFFFF;
                     if (atomName == "covr") {
                         if (subEnd - fs.Position > 0 && typeInd is 13 or 14 or 27 or 0) {
                             tags.HasEmbeddedArtwork = true;
                             tags.HasEmbeddedMusicTags = true;
+                        }
+                    } else if (atomName == "----" && !string.IsNullOrEmpty(freeformName) && typeInd is 1 or 2 or 0) {
+                        int payloadLen = (int)Math.Min(4096, Math.Max(0, subEnd - fs.Position));
+                        if (payloadLen > 0) {
+                            byte[] buf = new byte[payloadLen];
+                            int read = ReadExact(fs, buf, payloadLen);
+                            string val = (typeInd == 2 ? Encoding.BigEndianUnicode.GetString(buf, 0, read) : Encoding.UTF8.GetString(buf, 0, read))
+                                .Trim('\0', ' ', '\t', '\r', '\n');
+                            ApplyLoudnessTagIfPresent(freeformName, val, tags);
                         }
                     } else {
                         bool isKnownBinary = atomName is "trkn" or "disk";
@@ -262,6 +285,73 @@ public static partial class AudioTagReader {
                 fs.Position = subEnd;
             }
             fs.Position = itemEnd;
+        }
+    }
+
+    /// <summary>
+    /// Converts ReplayGain (track/album), EBU R128 Q7.8 fixed-point, or Apple iTunNORM SoundCheck tag values
+    /// into an absolute integrated loudness estimate in LUFS.
+    /// </summary>
+    public static bool TryParseLoudnessTagToLufs(string key, string value, out float lufs) {
+        lufs = float.NaN;
+        if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value)) {
+            return false;
+        }
+        string k = key.Trim().ToUpperInvariant();
+        string v = value.Trim();
+
+        if (k is "REPLAYGAIN_TRACK_GAIN" or "REPLAYGAIN_ALBUM_GAIN" or "REPLAYGAIN_GAIN") {
+            string cleaned = v.Replace("dB", "", StringComparison.OrdinalIgnoreCase).Trim();
+            if (float.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out float gainDb) &&
+                float.IsFinite(gainDb) && gainDb >= -30f && gainDb <= 30f) {
+                // ReplayGain 2.0 reference is -18.0 LUFS -> integratedLufs = -18.0 - gainDb
+                lufs = Math.Clamp(-18.0f - gainDb, -50f, 0f);
+                return true;
+            }
+            return false;
+        }
+
+        if (k is "R128_TRACK_GAIN" or "R128_ALBUM_GAIN") {
+            if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out int q78) &&
+                q78 >= -12800 && q78 <= 12800) {
+                // RFC 7845 / EBU R128 Q7.8 gain is relative to -23.0 LUFS
+                float gainDb = q78 / 256.0f;
+                lufs = Math.Clamp(-23.0f - gainDb, -50f, 0f);
+                return true;
+            }
+            return false;
+        }
+
+        if (k == "ITUNNORM") {
+            string[] parts = v.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2 &&
+                uint.TryParse(parts[0], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint scL) &&
+                uint.TryParse(parts[1], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out uint scR)) {
+                uint sc = Math.Max(scL, scR);
+                if (sc >= 1 && sc <= 1000000) {
+                    // Apple SoundCheck: 1000 = -16 LUFS reference; gainDb = -10 * log10(sc / 1000)
+                    float gainDb = (float)(-10.0 * Math.Log10(sc / 1000.0));
+                    lufs = Math.Clamp(-16.0f - gainDb, -50f, 0f);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        return false;
+    }
+
+    static void ApplyLoudnessTagIfPresent(string key, string value, ParsedAudioTags tags) {
+        if (tags == null) {
+            return;
+        }
+        bool isTrackSpecific = key.Contains("TRACK", StringComparison.OrdinalIgnoreCase) ||
+                               key.Equals("ITUNNORM", StringComparison.OrdinalIgnoreCase);
+        if (tags.TrackIntegratedLufs.HasValue && !isTrackSpecific) {
+            return;
+        }
+        if (TryParseLoudnessTagToLufs(key, value, out float lufs)) {
+            tags.TrackIntegratedLufs = lufs;
         }
     }
 
@@ -483,6 +573,13 @@ public static partial class AudioTagReader {
                     if (!hasSyncedLyrics && string.IsNullOrEmpty(tags.Lyrics)) tags.Lyrics = val;
                     tags.HasEmbeddedMusicTags = true;
                     break;
+                case "REPLAYGAIN_TRACK_GAIN":
+                case "REPLAYGAIN_ALBUM_GAIN":
+                case "R128_TRACK_GAIN":
+                case "R128_ALBUM_GAIN":
+                case "ITUNNORM":
+                    ApplyLoudnessTagIfPresent(key, val, tags);
+                    break;
             }
         }
     }
@@ -529,17 +626,20 @@ public static partial class AudioTagReader {
             long frameEnd = fs.Position + fSize;
 
             bool wantedText = id is "TIT2" or "TT2" or "TPE1" or "TP1" or "TPE2" or "TP2" or "TALB" or "TAL" or "TRCK" or "TRK" or "TPOS" or "TPA" or "TYER" or "TDRC" or "TCON";
+            bool wantedTxxx = id is "TXXX" or "TXX";
             bool wantedLyrics = id is "USLT" or "ULT" or "SYLT";
             bool wantedComment = id is "COMM" or "COM";
             if (id is "APIC" or "PIC" && fSize > 16) {
                 tags.HasEmbeddedArtwork = true;
                 tags.HasEmbeddedMusicTags = true;
-            } else if ((wantedText || wantedLyrics || wantedComment) && fSize <= 2 * 1024 * 1024) {
+            } else if ((wantedText || wantedTxxx || wantedLyrics || wantedComment) && fSize <= 2 * 1024 * 1024) {
                 byte[] buf = new byte[fSize];
                 int got = ReadExact(fs, buf, fSize);
                 if (got > 0) {
                     ReadOnlySpan<byte> payload = buf.AsSpan(0, got);
-                    if (wantedText) {
+                    if (wantedTxxx) {
+                        ParseId3TxxxLoudness(payload, tags);
+                    } else if (wantedText) {
                         string txt = DecodeId3Text(payload);
                         if (IsMeaningfulTagText(txt)) {
                             switch (id) {
@@ -615,6 +715,34 @@ public static partial class AudioTagReader {
             // Seek cleanly past APIC/artwork and any large or unhandled frames without capping the tag scan
             fs.Position = frameEnd;
         }
+    }
+
+    static void ParseId3TxxxLoudness(ReadOnlySpan<byte> payload, ParsedAudioTags tags) {
+        if (payload.Length < 4 || tags == null) {
+            return;
+        }
+        byte enc = payload[0];
+        ReadOnlySpan<byte> body = payload[1..];
+        string full;
+        if (enc == 1 || enc == 2) {
+            Encoding u16 = enc == 2 ? Encoding.BigEndianUnicode : Encoding.Unicode;
+            if (enc == 1 && body.Length >= 2 && body[0] == 0xFE && body[1] == 0xFF) {
+                u16 = Encoding.BigEndianUnicode;
+                body = body[2..];
+            } else if (enc == 1 && body.Length >= 2 && body[0] == 0xFF && body[1] == 0xFE) {
+                body = body[2..];
+            }
+            full = u16.GetString(body);
+        } else {
+            full = (enc == 3 ? Encoding.UTF8 : Encoding.Latin1).GetString(body);
+        }
+        int nul = full.IndexOf('\0');
+        if (nul <= 0 || nul + 1 >= full.Length) {
+            return;
+        }
+        string desc = full[..nul].Trim();
+        string val = full[(nul + 1)..].Trim('\0', ' ', '\t', '\r', '\n');
+        ApplyLoudnessTagIfPresent(desc, val, tags);
     }
 
     static void ParseId3v1Fallback(FileStream fs, ParsedAudioTags tags) {

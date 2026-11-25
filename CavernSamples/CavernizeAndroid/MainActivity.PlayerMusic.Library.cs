@@ -146,45 +146,20 @@ public partial class MainActivity {
                 if (libraryListHost != null && prevCatIdx != nextCatIdx) {
                     int span = Math.Abs(nextCatIdx - prevCatIdx);
                     float dir = nextCatIdx > prevCatIdx ? 1f : -1f;
-                    float distPx = Dp(Math.Min(120, 44 * span));
-                    float density = Resources?.DisplayMetrics?.Density ?? 3f;
-                    const float CatMaxBlurDp = 8f;
-                    float maxBlurPx = CatMaxBlurDp * density;
+                    float distPx = Dp(Math.Min(72, 32 * span));
                     libraryListHost.Animate()?.Cancel();
                     OneUiMotionBlur.ClearMotionBlur(libraryListHost);
-                    float prevX = dir * distPx;
-                    long prevMs = Android.OS.SystemClock.UptimeMillis();
-                    libraryListHost.TranslationX = prevX;
-                    ValueAnimator catAnim = ValueAnimator.OfFloat(prevX, 0f);
-                    catAnim.SetDuration(230);
-                    catAnim.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
-                    catAnim.Update += (_, ev) => {
-                        if (uiDestroyed || libraryListHost == null) return;
-                        float curX = (float)(ev.Animation?.AnimatedValue ?? 0f);
-                        long nowMs = Android.OS.SystemClock.UptimeMillis();
-                        float vel = MathF.Abs(curX - prevX) / Math.Max(0.004f, (nowMs - prevMs) * 0.001f);
-                        prevX = curX;
-                        prevMs = nowMs;
-                        float blurPx = OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(vel * 1.25f, density, maxBlurDp: CatMaxBlurDp);
-                        (float sc, float al) = OneUiMotionBlur.ComputeTransitionOpticalDepth(blurPx, maxBlurPx, isEntering: true);
-                        libraryListHost.TranslationX = curX;
-                        libraryListHost.ScaleX = sc;
-                        libraryListHost.ScaleY = sc;
-                        libraryListHost.Alpha = al;
-                        OneUiMotionBlur.ApplyHorizontalMotionBlur(libraryListHost, blurPx, opticalDefocusRatio: 0.56f);
-                    };
-                    void ResetCatHost() {
-                        if (libraryListHost != null) {
-                            libraryListHost.TranslationX = 0f;
-                            libraryListHost.ScaleX = 1f;
-                            libraryListHost.ScaleY = 1f;
-                            libraryListHost.Alpha = 1f;
-                            OneUiMotionBlur.ClearMotionBlur(libraryListHost);
-                        }
-                    }
-                    catAnim.AnimationEnd += (_, _) => ResetCatHost();
-                    catAnim.AnimationCancel += (_, _) => ResetCatHost();
-                    catAnim.Start();
+                    libraryListHost.TranslationX = dir * distPx;
+                    libraryListHost.Alpha = 0.72f;
+                    libraryListHost.ScaleX = 1f;
+                    libraryListHost.ScaleY = 1f;
+                    libraryListHost.Animate()
+                        .TranslationX(0f)
+                        .Alpha(1f)
+                        .SetDuration(210)
+                        .SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f))
+                        .WithLayer()
+                        .Start();
                 }
             };
             libCatTabs[idx] = tabTv;

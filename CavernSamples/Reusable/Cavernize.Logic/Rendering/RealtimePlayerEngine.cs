@@ -513,6 +513,11 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
             neuralStemStage.ApplyConfig(config);
             bool nowActive = neuralStemStage.IsKaraokeActivelyAttenuating;
             NeuralSpatialUpmixMode nextMode = neuralStemStage.Config.SpatialUpmixMode;
+            if (nextMode != NeuralSpatialUpmixMode.HybridNeuralDirAc) {
+                cachedHybrid714Buses = null;
+                cachedHybridTrack = null;
+                cachedHybridEffect = float.NaN;
+            }
 
             if (prevMode != nextMode && currentTrack != null &&
                 (neuralStemStage.HasPlayableSpatialUpmixStems || isRenderingLiveNeuralSources)) {
@@ -597,6 +602,11 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
                 neuralStemStage.ApplyConfig(config);
                 bool nowActive = neuralStemStage.IsKaraokeActivelyAttenuating;
                 NeuralSpatialUpmixMode nextMode = neuralStemStage.Config.SpatialUpmixMode;
+                if (nextMode != NeuralSpatialUpmixMode.HybridNeuralDirAc) {
+                    cachedHybrid714Buses = null;
+                    cachedHybridTrack = null;
+                    cachedHybridEffect = float.NaN;
+                }
 
                 if (prevMode != nextMode && currentTrack != null &&
                     (neuralStemStage.HasPlayableSpatialUpmixStems || isRenderingLiveNeuralSources)) {
@@ -1061,6 +1071,21 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     /// </summary>
     public LoudnessStandardsDiagnostics LoudnessDiagnostics => sceneHub.LoudnessDiagnostics;
 
+    volatile float systemPlaybackVolume01 = 1f;
+
+    /// <summary>
+    /// Normalized hardware/system playback volume ratio [0..1] reported by Android AudioManager Stream.Music
+    /// so ISO 226 equal-loudness tracks real system volume accurately without double-attenuating DSP gain.
+    /// </summary>
+    public float SystemPlaybackVolume01 {
+        get => systemPlaybackVolume01;
+        set {
+            float clamped = Math.Clamp(float.IsFinite(value) ? value : 1f, 0f, 1f);
+            systemPlaybackVolume01 = clamped;
+            iso226PostStage.UpdatePlaybackVolume(Volume * clamped);
+        }
+    }
+
     /// <summary>
     /// Applies updated Slot 6B psychoacoustics &amp; studio loudness standards parameters cleanly in real time.
     /// </summary>
@@ -1073,12 +1098,26 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
                 safe.Iso226ReferenceSplPhon,
                 safe.Iso226ListeningSplPhon,
                 safe.Iso226TrackVolume);
-            iso226PostStage.UpdatePlaybackVolume(Volume);
+            iso226PostStage.UpdatePlaybackVolume(Volume * systemPlaybackVolume01);
             bs1770PostStage.ApplyParameters(safe.NormalizationMode, safe.RespectDolbyDialnorm);
             spatialDialogPostStage.ApplyParameters(safe.DialogEnhancementEnabled, safe.DialogEnhancementDb);
             truePeakLimiterPostStage.ApplyParameters(
                 safe.TruePeakLimiterEnabled,
                 safe.TruePeakCeilingDbtp);
+            PublishLoudnessDiagnosticsLocked();
+        }
+    }
+
+    /// <summary>
+    /// Primes the BS.1770 loudness stage with a known integrated LUFS value (from ReplayGain/R128 tag or pre-scan cache)
+    /// BEFORE sample 0 plays, eliminating loud next-track startup volume spikes.
+    /// </summary>
+    public void PrimeTrackLoudnessLufs(float integratedLufs) {
+        if (!float.IsFinite(integratedLufs)) {
+            return;
+        }
+        lock (renderLock) {
+            bs1770PostStage.PrimeInitialTrackLoudnessLufs(integratedLufs);
             PublishLoudnessDiagnosticsLocked();
         }
     }
