@@ -1,36 +1,22 @@
 {
   "schemaVersion": 1,
-  "generatedAtUtc": "2026-11-25T01:05:56Z",
-  "version": "2.9.77",
-  "runId": "45522882927",
-  "runNumber": "77",
-  "commitSha": "2db9f84bba53c9672333154d8c050ff9e21c6523",
-  "runUrl": "https://github.com/guumachadooo/Cavern/actions/runs/45522882927",
+  "generatedAtUtc": "2026-11-25T01:30:22Z",
+  "version": "2.9.78",
+  "runId": "45525535422",
+  "runNumber": "78",
+  "commitSha": "fdb4ef6d6be6059fbacb5b89c7c0f6ee0eb2b66f",
+  "runUrl": "https://github.com/guumachadooo/Cavern/actions/runs/45525535422",
   "outcomes": {
     "ndk": "success",
-    "compile": "failure",
-    "publish": "skipped"
+    "compile": "success",
+    "publish": "success"
   },
   "totals": {
-    "errors": 2,
+    "errors": 0,
     "warnings": 0
   },
   "warningCodes": [],
-  "errorCodes": [
-    {
-      "code": "CS1593",
-      "count": 1
-    },
-    {
-      "code": "CS1503",
-      "count": 1
-    }
-  ],
-  "errorsByLayer": {
-    "04_CavernizeAndroid": [
-      "CavernSamples/CavernizeAndroid/MainActivity.cs(594,16): error CS1593: Delegate 'Func<int, View>' does not take 0 arguments [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]",
-      "CavernSamples/CavernizeAndroid/MainActivity.cs(595,13): error CS1503: Argument 5: cannot convert from 'method group' to 'System.Action<int, float>' [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]"
-    ]
-  },
+  "errorCodes": [],
+  "errorsByLayer": {},
   "warningsByLayer": {}
 }
