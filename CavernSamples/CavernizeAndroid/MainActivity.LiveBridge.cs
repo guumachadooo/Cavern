@@ -202,6 +202,18 @@ public partial class MainActivity : ILiveBridgeAppHost {
                 for (int i = 0; i < vg.ChildCount && nodes < 320; i++) {
                     View ch = vg.GetChildAt(i);
                     if (ch != null && ch.Visibility == ViewStates.Visible) {
+                        bool isInactiveTab = false;
+                        if (tabContainers != null) {
+                            for (int t = 0; t < tabContainers.Length; t++) {
+                                if (ReferenceEquals(ch, tabContainers[t]) && t != activeTab) {
+                                    isInactiveTab = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (isInactiveTab) {
+                            continue;
+                        }
                         object cNode = Walk(ch, depth + 1);
                         if (cNode != null) {
                             children.Add(cNode);

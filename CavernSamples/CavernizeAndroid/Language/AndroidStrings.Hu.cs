@@ -160,5 +160,8 @@ public sealed partial class AndroidStrings {
         d["AiCacheDiffFieldBackingVocals"] = "Vokál (Backing)";
         d["AiCacheDiffValKeepBacking"] = "Vokál megtartása";
         d["AiCacheDiffValPureInstr"] = "Tiszta hangszeres";
+        // ONNX / RoFormer alacsony RAM védelem és automatikus könnyű modell visszalépés
+        d["NeuralLowRamFallbackToast"] = "Kevés RAM: könnyű modellel befejezve ({0})";
+        d["NeuralLowRamNeedLightModelFmt"] = "Nincs elég szabad RAM ehhez a nagy MI modellhez. Telepítsen gyors mobil modellt (SCNet / Kim Vocal) vagy használja az MVSEP Cloud szolgáltatást. ({0})";
     }
 }

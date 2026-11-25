@@ -171,7 +171,10 @@ public sealed class NeuralPipelineOrchestrator {
     /// Builds a deterministic <see cref="NeuralExecutionPlan"/> for <paramref name="goal"/> given the user's
     /// <paramref name="config"/> and the models currently installed on disk.
     /// </summary>
-    public NeuralExecutionPlan BuildPlan(NeuralPipelineGoal goal, NeuralAudioConfig config) {
+    public NeuralExecutionPlan BuildPlan(
+        NeuralPipelineGoal goal,
+        NeuralAudioConfig config,
+        bool preferLightweightOnly = false) {
         NeuralAudioConfig safeCfg = (config ?? NeuralAudioConfig.Default).Sanitize();
         IReadOnlyList<NeuralModelCatalogEntry> installed = registry.GetInstalledModels() ?? Array.Empty<NeuralModelCatalogEntry>();
         Dictionary<string, NeuralModelCatalogEntry> installedById = new(StringComparer.OrdinalIgnoreCase);
@@ -179,8 +182,10 @@ public sealed class NeuralPipelineOrchestrator {
             installedById[installed[i].Id] = installed[i];
         }
 
-        bool isManual = safeCfg.OrchestrationMode == NeuralOrchestrationMode.Manual;
-        NeuralEnsembleBundlePreset bundle = safeCfg.StudioBundlePreset;
+        bool isManual = !preferLightweightOnly && safeCfg.OrchestrationMode == NeuralOrchestrationMode.Manual;
+        NeuralEnsembleBundlePreset bundle = preferLightweightOnly
+            ? NeuralEnsembleBundlePreset.FastSingle
+            : safeCfg.StudioBundlePreset;
         List<NeuralExecutionStep> steps = [];
 
         if (bundle != NeuralEnsembleBundlePreset.FastSingle &&
@@ -191,9 +196,9 @@ public sealed class NeuralPipelineOrchestrator {
         if (steps.Count == 0) {
             switch (goal) {
                 case NeuralPipelineGoal.StemSeparation:
-                    AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: false));
+                    AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: false, preferLightweightOnly: preferLightweightOnly));
                     if (isManual) {
-                        AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false));
+                        AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false, preferLightweightOnly: preferLightweightOnly));
                     }
                     break;
 
@@ -201,34 +206,34 @@ public sealed class NeuralPipelineOrchestrator {
                     if (!safeCfg.KaraokePreserveBackingVocals) {
                         // Pure Instrumental (Remove Backing Vocals): route to full-vocal removal first so BOTH lead & backing
                         // vocals are eliminated cleanly without erasing instruments (never rely solely on lead-only kara_2!).
-                        NeuralExecutionStep fullVocalStep = ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: true);
+                        NeuralExecutionStep fullVocalStep = ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: true, preferLightweightOnly: preferLightweightOnly);
                         if (fullVocalStep != null) {
                             steps.Add(fullVocalStep);
                         } else {
-                            AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.KaraokeLeadBacking, safeCfg, installed, installedById, allowEnsemble: isManual));
+                            AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.KaraokeLeadBacking, safeCfg, installed, installedById, allowEnsemble: isManual, preferLightweightOnly: preferLightweightOnly));
                         }
                     } else {
-                        NeuralExecutionStep karaokeStep = ResolveSingleTaskStep(NeuralModelTask.KaraokeLeadBacking, safeCfg, installed, installedById, allowEnsemble: isManual);
+                        NeuralExecutionStep karaokeStep = ResolveSingleTaskStep(NeuralModelTask.KaraokeLeadBacking, safeCfg, installed, installedById, allowEnsemble: isManual, preferLightweightOnly: preferLightweightOnly);
                         if (karaokeStep != null) {
                             steps.Add(karaokeStep);
                         } else {
-                            AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: true));
+                            AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: true, preferLightweightOnly: preferLightweightOnly));
                         }
                     }
                     if (isManual) {
-                        AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false));
+                        AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.DebleedDenoise, safeCfg, installed, installedById, allowEnsemble: false, preferLightweightOnly: preferLightweightOnly));
                     }
                     break;
                 }
 
                 case NeuralPipelineGoal.VocalMixDna:
-                    AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: true));
-                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.Dereverb, safeCfg, installed, installedById, allowEnsemble: false));
+                    AddStepIfValid(steps, ResolveSeparationStep(safeCfg, installed, installedById, preferVocalsOnly: true, preferLightweightOnly: preferLightweightOnly));
+                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.Dereverb, safeCfg, installed, installedById, allowEnsemble: false, preferLightweightOnly: preferLightweightOnly));
                     break;
 
                 case NeuralPipelineGoal.LosslessResidualRestore:
-                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.CodecRestoreApollo, safeCfg, installed, installedById, allowEnsemble: false));
-                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.BandwidthExtension, safeCfg, installed, installedById, allowEnsemble: false));
+                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.CodecRestoreApollo, safeCfg, installed, installedById, allowEnsemble: false, preferLightweightOnly: preferLightweightOnly));
+                    AddStepIfValid(steps, ResolveSingleTaskStep(NeuralModelTask.BandwidthExtension, safeCfg, installed, installedById, allowEnsemble: false, preferLightweightOnly: preferLightweightOnly));
                     break;
             }
         }
@@ -453,6 +458,90 @@ public sealed class NeuralPipelineOrchestrator {
             }
         }
 
+        try {
+            return ExecutePlanCore(
+                sourceTrackKey,
+                fileSizeBytes,
+                lastModifiedTicks,
+                mixLeft,
+                mixRight,
+                sampleRate,
+                goal,
+                safeCfg,
+                plan,
+                cacheKey,
+                allowCache,
+                derivedFromLosslessTwin,
+                onProgress,
+                token,
+                onProgressiveTrackReady,
+                displayTitle,
+                artistName,
+                isMemoryFallbackPass: false,
+                memoryFallbackReason: string.Empty);
+        } catch (Exception memEx) when (memEx is InsufficientMemoryException || memEx is OutOfMemoryException) {
+            token.ThrowIfCancellationRequested();
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+
+            NeuralAudioConfig fallbackCfg = safeCfg.WithMemorySafeFallback();
+            NeuralExecutionPlan fallbackPlan = BuildPlan(goal, fallbackCfg, preferLightweightOnly: true);
+            if (!fallbackPlan.IsRunnable || ArePlanModelsIdentical(plan, fallbackPlan)) {
+                throw;
+            }
+
+            string fallbackCacheKey = ComputeTrackCacheKey(sourceTrackKey, fileSizeBytes, lastModifiedTicks, sampleRate, fallbackPlan.PlanSignature);
+            if (allowCache && !forceReextract && trackCache.TryLoad(fallbackCacheKey, out NeuralSeparatedTrack cachedFallback, token)) {
+                cachedFallback.UsedMemorySafeFallback = true;
+                cachedFallback.MemoryFallbackReason = memEx.Message;
+                onProgress?.Invoke(1.0, $"Cache Hit ({fallbackPlan.Summary})");
+                return (cachedFallback, 0f, true);
+            }
+
+            onProgress?.Invoke(0.05, $"Low RAM — switching to {fallbackPlan.Summary}...");
+            return ExecutePlanCore(
+                sourceTrackKey,
+                fileSizeBytes,
+                lastModifiedTicks,
+                mixLeft,
+                mixRight,
+                sampleRate,
+                goal,
+                fallbackCfg,
+                fallbackPlan,
+                fallbackCacheKey,
+                allowCache,
+                derivedFromLosslessTwin,
+                onProgress,
+                token,
+                onProgressiveTrackReady,
+                displayTitle,
+                artistName,
+                isMemoryFallbackPass: true,
+                memoryFallbackReason: memEx.Message);
+        }
+    }
+
+    (NeuralSeparatedTrack Track, float RealTimeFactor, bool FromCache) ExecutePlanCore(
+        string sourceTrackKey,
+        long fileSizeBytes,
+        long lastModifiedTicks,
+        float[] mixLeft,
+        float[] mixRight,
+        int sampleRate,
+        NeuralPipelineGoal goal,
+        NeuralAudioConfig safeCfg,
+        NeuralExecutionPlan plan,
+        string cacheKey,
+        bool allowCache,
+        bool derivedFromLosslessTwin,
+        Action<double, string> onProgress,
+        CancellationToken token,
+        Action<NeuralSeparatedTrack> onProgressiveTrackReady,
+        string displayTitle,
+        string artistName,
+        bool isMemoryFallbackPass,
+        string memoryFallbackReason) {
         // For VocalMixDna, analyze a smart ~40s peak vocal-activity excerpt with 2x COLA overlap (fast & accurate DNA extraction
         // instead of processing 4-6 full minutes through multiple models + 6144-pt Reverb HQ).
         float[] workLeft = mixLeft;
@@ -603,10 +692,14 @@ public sealed class NeuralPipelineOrchestrator {
             dereverbResult,
             derivedFromLosslessTwin,
             plan.PlanSignature);
-        track.OriginTag = safeCfg.StudioBundlePreset != NeuralEnsembleBundlePreset.FastSingle
-            ? "Studio Bundle"
-            : "Local AI";
+        track.OriginTag = isMemoryFallbackPass
+            ? "Local AI (Low-RAM Fallback)"
+            : (safeCfg.StudioBundlePreset != NeuralEnsembleBundlePreset.FastSingle
+                ? "Studio Bundle"
+                : "Local AI");
         track.ModelSummary = plan.Summary;
+        track.UsedMemorySafeFallback = isMemoryFallbackPass;
+        track.MemoryFallbackReason = memoryFallbackReason ?? string.Empty;
         if (!string.IsNullOrWhiteSpace(displayTitle)) {
             track.DisplayTitle = displayTitle.Trim();
         }
@@ -623,6 +716,39 @@ public sealed class NeuralPipelineOrchestrator {
 
         onProgress?.Invoke(1.0, $"Neural Ready ({plan.Summary})");
         return (track, totalRtf, false);
+    }
+
+    static bool ArePlanModelsIdentical(NeuralExecutionPlan a, NeuralExecutionPlan b) {
+        if (a == null || b == null || a.Steps.Count != b.Steps.Count) {
+            return false;
+        }
+        for (int i = 0; i < a.Steps.Count; i++) {
+            NeuralExecutionStep sa = a.Steps[i];
+            NeuralExecutionStep sb = b.Steps[i];
+            if (sa.Task != sb.Task || sa.Models.Count != sb.Models.Count) {
+                return false;
+            }
+            for (int m = 0; m < sa.Models.Count; m++) {
+                if (!string.Equals(sa.Models[m].Id, sb.Models[m].Id, StringComparison.OrdinalIgnoreCase)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    bool IsEntryLightweight(NeuralModelCatalogEntry entry) {
+        if (entry == null) {
+            return false;
+        }
+        long fileBytes = 0L;
+        try {
+            string path = registry.ResolveInstalledModelPath(entry.Id);
+            if (!string.IsNullOrEmpty(path) && File.Exists(path)) {
+                fileBytes = new FileInfo(path).Length;
+            }
+        } catch { }
+        return !NeuralModelCatalog.IsMemoryHeavyModel(entry, fileBytes);
     }
 
     static StereoStemBuffer[] MergeTwoStageKaraokeStems(
@@ -806,8 +932,9 @@ public sealed class NeuralPipelineOrchestrator {
         NeuralAudioConfig cfg,
         IReadOnlyList<NeuralModelCatalogEntry> installed,
         Dictionary<string, NeuralModelCatalogEntry> installedById,
-        bool preferVocalsOnly) {
-        if (cfg.OrchestrationMode == NeuralOrchestrationMode.Manual) {
+        bool preferVocalsOnly,
+        bool preferLightweightOnly = false) {
+        if (!preferLightweightOnly && cfg.OrchestrationMode == NeuralOrchestrationMode.Manual) {
             List<NeuralModelCatalogEntry> chosen = [];
             HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
 
@@ -846,6 +973,20 @@ public sealed class NeuralPipelineOrchestrator {
         }
         if (sepModels.Count == 0) {
             return null;
+        }
+
+        if (preferLightweightOnly) {
+            // Low-RAM fallback strictly prioritizes lightweight (<200 MB non-RoFormer/non-Demucs) checkpoints first,
+            // so installing a 909 MB Mel-Band RoFormer never blocks fallback to Kim Vocal 2 (67 MB) or SCNet (22 MB).
+            NeuralModelCatalogEntry bestLight = sepModels
+                .OrderByDescending(m => IsEntryLightweight(m) ? 1 : 0)
+                .ThenByDescending(m => m.IsMobileFast ? 1 : 0)
+                .ThenByDescending(m => preferVocalsOnly
+                    ? (m.Task == NeuralModelTask.VocalSeparation ? 1 : 0)
+                    : (m.Task == NeuralModelTask.StemSeparation4 || m.Task == NeuralModelTask.StemSeparation6 ? 1 : 0))
+                .ThenByDescending(m => m.PriorityRank)
+                .First();
+            return BuildStepFromEntries(bestLight.Task, [bestLight]);
         }
 
         if (preferVocalsOnly) {
@@ -888,9 +1029,10 @@ public sealed class NeuralPipelineOrchestrator {
         NeuralAudioConfig cfg,
         IReadOnlyList<NeuralModelCatalogEntry> installed,
         Dictionary<string, NeuralModelCatalogEntry> installedById,
-        bool allowEnsemble) {
+        bool allowEnsemble,
+        bool preferLightweightOnly = false) {
         List<NeuralModelCatalogEntry> chosen = [];
-        if (cfg.OrchestrationMode == NeuralOrchestrationMode.Manual) {
+        if (!preferLightweightOnly && cfg.OrchestrationMode == NeuralOrchestrationMode.Manual) {
             IReadOnlyList<string> ids = cfg.GetModelsForTask(task);
             for (int i = 0; i < ids.Count; i++) {
                 if (installedById.TryGetValue(ids[i], out NeuralModelCatalogEntry entry)) {
@@ -901,10 +1043,16 @@ public sealed class NeuralPipelineOrchestrator {
                 }
             }
         } else {
-            List<NeuralModelCatalogEntry> matches = installed
-                .Where(m => m.Task == task)
-                .OrderByDescending(m => m.IsMobileFast ? 1 : 0)
-                .ThenByDescending(m => m.PriorityRank)
+            List<NeuralModelCatalogEntry> matches = (preferLightweightOnly
+                    ? installed
+                        .Where(m => m.Task == task)
+                        .OrderByDescending(m => IsEntryLightweight(m) ? 1 : 0)
+                        .ThenByDescending(m => m.IsMobileFast ? 1 : 0)
+                        .ThenByDescending(m => m.PriorityRank)
+                    : installed
+                        .Where(m => m.Task == task)
+                        .OrderByDescending(m => m.IsMobileFast ? 1 : 0)
+                        .ThenByDescending(m => m.PriorityRank))
                 .ToList();
             if (matches.Count > 0) {
                 // Single best model in Auto mode for fast mobile responsiveness

@@ -1809,6 +1809,9 @@ public sealed partial class AndroidStrings {
         ["AiCacheDiffFieldEnergyConservation"] = "Energy Conservation",
         ["AiCacheDiffFieldBackingVocals"] = "Backing Vocals",
         ["AiCacheDiffValKeepBacking"] = "Keep Backing",
-        ["AiCacheDiffValPureInstr"] = "Pure Instrumental"
+        ["AiCacheDiffValPureInstr"] = "Pure Instrumental",
+        // RoFormer / ONNX Low-RAM Discipline & Automatic Lightweight Fallback
+        ["NeuralLowRamFallbackToast"] = "Low RAM: completed with lightweight model ({0})",
+        ["NeuralLowRamNeedLightModelFmt"] = "Not enough free RAM for this heavy AI model. Install a fast mobile model (SCNet / Kim Vocal) or use MVSEP Cloud. ({0})"
     };
 }

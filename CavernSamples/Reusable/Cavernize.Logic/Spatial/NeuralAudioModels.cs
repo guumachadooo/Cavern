@@ -289,6 +289,29 @@ public static class NeuralModelCatalog {
     /// <summary>Default Bandwidth Extension model identifier (<c>AP-BWE / FlashSR 48 kHz</c>).</summary>
     public const string DefaultBweModelId = "ap_bwe_flashsr_48k";
 
+    /// <summary>Threshold in megabytes above which a checkpoint is treated as memory-heavy on mobile ARM64 devices.</summary>
+    public const float HeavyModelSizeThresholdMb = 200f;
+
+    /// <summary>
+    /// Returns true when <paramref name="entry"/> (or its on-disk byte size) represents a memory-heavy
+    /// Transformer/RoFormer/HTDemucs or &gt;=200 MB checkpoint that requires strict mobile RAM headroom.
+    /// </summary>
+    public static bool IsMemoryHeavyModel(NeuralModelCatalogEntry entry, long fileSizeBytes = 0L) {
+        if (fileSizeBytes >= (long)(HeavyModelSizeThresholdMb * 1024f * 1024f)) {
+            return true;
+        }
+        if (entry == null) {
+            return false;
+        }
+        if (entry.ApproxSizeMb >= HeavyModelSizeThresholdMb) {
+            return true;
+        }
+        string id = (entry.Id ?? string.Empty).ToLowerInvariant();
+        string file = (entry.FileName ?? string.Empty).ToLowerInvariant();
+        return id.Contains("roformer") || id.Contains("demucs") ||
+               file.Contains("roformer") || file.Contains("demucs");
+    }
+
     /// <summary>All curated open-source ONNX checkpoints registered in Slot 7A.</summary>
     public static IReadOnlyList<NeuralModelCatalogEntry> Entries { get; } = [
         new NeuralModelCatalogEntry {
@@ -814,6 +837,38 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
         ActiveRestorerModelId = ActiveRestorerModelId
     }.Sanitize();
 
+    /// <summary>
+    /// Returns a lower-RAM single-pass <see cref="NeuralOrchestrationMode.Auto"/> / <see cref="NeuralEnsembleBundlePreset.FastSingle"/>
+    /// fallback snapshot when a heavy Studio Bundle or manual checkpoint exceeds available device memory.
+    /// </summary>
+    public NeuralAudioConfig WithMemorySafeFallback() => new NeuralAudioConfig {
+        PreferredProvider = PreferredProvider,
+        OrchestrationMode = NeuralOrchestrationMode.Auto,
+        OverlapFactor = Math.Min(OverlapFactor, MvsepPipelineOptions.MinOverlap),
+        EnableTta = false,
+        EnsembleMode = EnsembleMode,
+        EnablePhaseFix = EnablePhaseFix,
+        EnforceEnergyConservation = EnforceEnergyConservation,
+        SpatialKaraokeEnabled = SpatialKaraokeEnabled,
+        KaraokeVocalLevel = KaraokeVocalLevel,
+        KaraokePreserveBackingVocals = KaraokePreserveBackingVocals,
+        UseLosslessTwinForKaraoke = UseLosslessTwinForKaraoke,
+        SpatialUpmixMode = SpatialUpmixMode,
+        TrackCacheMaxSizeMb = TrackCacheMaxSizeMb,
+        TrackCacheEnabled = TrackCacheEnabled,
+        TrackCacheCompressionMode = TrackCacheCompressionMode,
+        StudioBundlePreset = NeuralEnsembleBundlePreset.FastSingle,
+        ExecutionBackend = ExecutionBackend,
+        GpuUiBreathingYieldMs = GpuUiBreathingYieldMs,
+        EnableProgressiveStreaming = EnableProgressiveStreaming,
+        TaskModelSlots = null,
+        ActiveStemModelId = NeuralModelCatalog.DefaultStemModelId,
+        ActiveKaraokeModelId = ActiveKaraokeModelId,
+        ActiveDereverbModelId = ActiveDereverbModelId,
+        ActiveDebleedModelId = ActiveDebleedModelId,
+        ActiveRestorerModelId = ActiveRestorerModelId
+    }.Sanitize();
+
     /// <summary>Returns a clamped, validated copy of this configuration with synchronized <see cref="TaskModelSlots"/>.</summary>
     public NeuralAudioConfig Sanitize() {
         string stemId = string.IsNullOrWhiteSpace(ActiveStemModelId) ? NeuralModelCatalog.DefaultStemModelId : ActiveStemModelId.Trim();
@@ -1151,6 +1206,12 @@ public sealed class NeuralSeparatedTrack {
 
     /// <summary>Model or bundle summary persisted into <c>CNTC v3</c> header.</summary>
     public string ModelSummary { get; set; } = string.Empty;
+
+    /// <summary>True when a heavy model/bundle exceeded free RAM and the orchestrator automatically completed via a lightweight fallback model.</summary>
+    public bool UsedMemorySafeFallback { get; set; }
+
+    /// <summary>Optional diagnostic reason when <see cref="UsedMemorySafeFallback"/> was triggered.</summary>
+    public string MemoryFallbackReason { get; set; } = string.Empty;
 
     /// <summary>Total stem length in samples per channel.</summary>
     public int TotalSampleCount => Stems != null && Stems.Count > 0 && Stems[0] != null ? Stems[0].Length : (MonoLeadVocalRef?.Length ?? 0);

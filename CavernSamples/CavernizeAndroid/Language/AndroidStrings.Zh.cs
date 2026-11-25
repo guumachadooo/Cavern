@@ -160,5 +160,8 @@ public sealed partial class AndroidStrings {
         d["AiCacheDiffFieldBackingVocals"] = "和声处理";
         d["AiCacheDiffValKeepBacking"] = "保留和声";
         d["AiCacheDiffValPureInstr"] = "纯伴奏";
+        // ONNX / RoFormer 低内存保护与自动轻量模型回退
+        d["NeuralLowRamFallbackToast"] = "内存不足：已自动使用轻量模型完成（{0}）";
+        d["NeuralLowRamNeedLightModelFmt"] = "可用内存不足以运行此大型 AI 模型。请安装快速移动模型（SCNet / Kim Vocal）或使用 MVSEP 云端。({0})";
     }
 }

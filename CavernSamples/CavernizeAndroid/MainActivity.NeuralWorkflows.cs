@@ -1367,14 +1367,20 @@ public partial class MainActivity {
                     RefreshNeuralAudioUi();
                     RefreshNeuralPrepUi();
                     string toastMsg;
-                    if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna && extractedDna != null && extractedDna.IsExtractedFromSong) {
+                    ToastLength toastLen = ToastLength.Short;
+                    if (separated.UsedMemorySafeFallback) {
+                        string fallbackModel = string.IsNullOrWhiteSpace(separated.ModelSummary) ? "Mobile AI" : separated.ModelSummary;
+                        AppLogger.Warn($"Low-RAM fallback completed via '{fallbackModel}': {separated.MemoryFallbackReason}");
+                        toastMsg = string.Format(S["NeuralLowRamFallbackToast"], fallbackModel);
+                        toastLen = ToastLength.Long;
+                    } else if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna && extractedDna != null && extractedDna.IsExtractedFromSong) {
                         toastMsg = string.Format(S["VocalDnaReadyToast"], extractedDna.TargetVocalLufs, extractedDna.ReverbRt60Sec, extractedDna.ActiveWindowCount);
                     } else {
                         toastMsg = fromCache
                             ? string.Format(S["NeuralPrepCacheHitToast"], separated.Stems.Count)
                             : string.Format(S["NeuralPrepDoneToast"], separated.Stems.Count, rtf);
                     }
-                    Toast.MakeText(this, toastMsg, ToastLength.Short).Show();
+                    Toast.MakeText(this, toastMsg, toastLen).Show();
                 });
             } catch (System.OperationCanceledException) {
                 RunOnUiThread(() => {
@@ -1397,6 +1403,20 @@ public partial class MainActivity {
                     neuralPrepProgress = 0;
                     neuralPrepStatusText = "";
                     RefreshNeuralPrepUi();
+                });
+            } catch (InsufficientMemoryException memEx) {
+                string safeMsg = Cavernize.Logic.Spatial.MvsepCloudClient.RedactSecrets(memEx.Message, store?.MvsepApiToken);
+                AppLogger.Warn($"ONNX low-RAM guard (no lightweight fallback available): {safeMsg}");
+                RunOnUiThread(() => {
+                    if (uiDestroyed || myGen != neuralPrepGeneration) {
+                        return;
+                    }
+                    isNeuralPrepRunning = false;
+                    activeNeuralPrepGoal = null;
+                    neuralPrepProgress = 0;
+                    neuralPrepStatusText = "";
+                    RefreshNeuralPrepUi();
+                    Toast.MakeText(this, string.Format(S["NeuralLowRamNeedLightModelFmt"], safeMsg), ToastLength.Long).Show();
                 });
             } catch (Exception ex) {
                 string safeMsg = Cavernize.Logic.Spatial.MvsepCloudClient.RedactSecrets(ex.Message, store?.MvsepApiToken);

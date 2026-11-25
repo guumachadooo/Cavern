@@ -258,6 +258,38 @@ class BugHunterUnitTests(unittest.TestCase):
         pp_cats = {i["category"] for i in bh.analyze_spatial_trajectory(pingpong, "Musical", "Lead")}
         self.assertIn("spatial_pingpong_oscillation", pp_cats)
 
+    def test_orbit_unwrapped_angular_velocity_avoids_wrap_false_positives(self) -> None:
+        import math as _math
+        # Smooth continuous 2-revolution 360deg orbit crossing 0deg and +/-180deg multiple times
+        smooth_orbit = []
+        for k in range(49):
+            ang = _math.radians(-170.0 + k * 15.0)
+            smooth_orbit.append({"x": _math.sin(ang), "y": 0.1, "z": _math.cos(ang)})
+        self.assertEqual(bh.analyze_spatial_trajectory(smooth_orbit, "Orbit", "drums"), [])
+
+        # Erratic back-and-forth angular velocity reversals in Orbit mode must still be caught
+        erratic_angles = [0.0, 25.0, 5.0, 35.0, 10.0, 40.0, 15.0]
+        erratic_orbit = [
+            {"x": _math.sin(_math.radians(a)), "y": 0.0, "z": _math.cos(_math.radians(a))}
+            for a in erratic_angles
+        ]
+        cats = {i["category"] for i in bh.analyze_spatial_trajectory(erratic_orbit, "Orbit", "other")}
+        self.assertIn("spatial_pingpong_oscillation", cats)
+
+    def test_v5_corrupt_file_expected_rejections_suppressed_while_crashes_caught(self) -> None:
+        fb = FakeBridge()
+        hunter = bh.LiveBugHunter(fb, mode="standard", allow_mutate=False, verbose=False)
+        sample_log = "\n".join([
+            "[2026-11-25 08:32:37.713] [WARN] [T#7] [APP] OpenLocalPathWithFallbackAsync rejected 'corrupt.mp3': Could not decode this audio file. It may be corrupted or use an unsupported codec.",
+            "[2026-11-25 08:32:37.716] [ERROR] [UI] [UI] UI Error shown: Could not decode this audio file. It may be corrupted or use an unsupported codec.",
+            "[2026-11-25 08:32:37.800] [ERROR] [T#9] [DSP] NullReferenceException in corrupt header parser",
+        ])
+        added = hunter._ingest_applog_delta(sample_log, "V5_corrupt_file_fuzzer", "corrupt fuzz burst")
+        self.assertEqual(added, 1)
+        findings = hunter.ledger.ranked()
+        self.assertEqual(len(findings), 1)
+        self.assertIn("NullReferenceException", findings[0].title)
+
     def test_finding_ledger_origin_stratification_and_live_promotion(self) -> None:
         ledger = bh.FindingLedger()
         ledger.record(

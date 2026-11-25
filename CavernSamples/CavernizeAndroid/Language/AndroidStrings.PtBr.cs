@@ -1718,5 +1718,8 @@ public sealed partial class AndroidStrings {
         d["AiCacheDiffFieldBackingVocals"] = "Backing Vocals";
         d["AiCacheDiffValKeepBacking"] = "Manter Backing";
         d["AiCacheDiffValPureInstr"] = "Instrumental Puro";
+        // Disciplina de RAM ONNX / RoFormer e Fallback Automático Leve
+        d["NeuralLowRamFallbackToast"] = "RAM baixa: concluído com modelo leve ({0})";
+        d["NeuralLowRamNeedLightModelFmt"] = "RAM livre insuficiente para este modelo de IA pesado. Instale um modelo móvel rápido (SCNet / Kim Vocal) ou use MVSEP Cloud. ({0})";
     }
 }

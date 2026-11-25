@@ -162,32 +162,54 @@ def analyze_spatial_trajectory(samples: list[dict[str, Any]], mode_name: str, st
             ),
         })
 
-    # Detect back-and-forth ping-pong swings across center (azimuth sign reversals with significant amplitude)
-    sign_reversals = 0
-    prev_sign = 0
-    large_swings = 0
-    prev_az = azimuths[0]
-    for az in azimuths[1:]:
-        if abs(az - prev_az) >= 20.0:
-            large_swings += 1
-        cur_sign = 1 if az > 8.0 else (-1 if az < -8.0 else 0)
-        if cur_sign != 0:
-            if prev_sign != 0 and cur_sign != prev_sign:
-                sign_reversals += 1
-            prev_sign = cur_sign
-        prev_az = az
+    if str(mode_name).lower() == "orbit":
+        # Orbit sweeps smoothly around 360deg, naturally crossing both 0deg and +/-180deg.
+        # Only flag ping-pong if unwrapped angular velocity actually reverses direction repeatedly!
+        vel_reversals = 0
+        prev_vel_sign = 0
+        for i in range(1, len(azimuths)):
+            d_az = azimuths[i] - azimuths[i - 1]
+            while d_az > 180.0:
+                d_az -= 360.0
+            while d_az < -180.0:
+                d_az += 360.0
+            if abs(d_az) < 5.0:
+                continue
+            vel_sign = 1 if d_az > 0 else -1
+            if prev_vel_sign != 0 and vel_sign != prev_vel_sign:
+                vel_reversals += 1
+            prev_vel_sign = vel_sign
+        if vel_reversals >= 3:
+            issues.append({
+                "severity": "HIGH",
+                "category": "spatial_pingpong_oscillation",
+                "message": (
+                    f"SpatialChoreo({mode_name}/{stem_name}) reversed orbital direction repeatedly "
+                    f"({vel_reversals} angular-velocity reversals)"
+                ),
+            })
+    else:
+        # Detect back-and-forth ping-pong swings across center (azimuth sign reversals with significant amplitude)
+        sign_reversals = 0
+        prev_sign = 0
+        prev_az = azimuths[0]
+        for az in azimuths[1:]:
+            cur_sign = 1 if az > 8.0 else (-1 if az < -8.0 else 0)
+            if cur_sign != 0:
+                if prev_sign != 0 and cur_sign != prev_sign:
+                    sign_reversals += 1
+                prev_sign = cur_sign
+            prev_az = az
 
-    # Orbit is expected to sweep 360deg smoothly (1 wrap); other modes shouldn't ping-pong >=3 times across center
-    max_reversals = 2 if str(mode_name).lower() == "orbit" else 2
-    if sign_reversals > max_reversals and (max(azimuths) - min(azimuths)) >= 30.0:
-        issues.append({
-            "severity": "HIGH",
-            "category": "spatial_pingpong_oscillation",
-            "message": (
-                f"SpatialChoreo({mode_name}/{stem_name}) oscillates back-and-forth across center "
-                f"({sign_reversals} azimuth sign reversals, az=[{min(azimuths):+.1f}..{max(azimuths):+.1f}]deg)"
-            ),
-        })
+        if sign_reversals > 2 and (max(azimuths) - min(azimuths)) >= 30.0:
+            issues.append({
+                "severity": "HIGH",
+                "category": "spatial_pingpong_oscillation",
+                "message": (
+                    f"SpatialChoreo({mode_name}/{stem_name}) oscillates back-and-forth across center "
+                    f"({sign_reversals} azimuth sign reversals, az=[{min(azimuths):+.1f}..{max(azimuths):+.1f}]deg)"
+                ),
+            })
 
     # Detect radial direction reversals (in-out-in-out pumping toward center)
     rad_reversals = 0
@@ -926,6 +948,14 @@ class LiveBugHunter:
                 fresh.append(s)
         for entry in parse_app_logger_lines("\n".join(fresh)):
             if entry["level"] in ("WARN", "ERROR", "FATAL"):
+                if vector == "V5_corrupt_file_fuzzer" and entry["level"] in ("WARN", "ERROR"):
+                    low_msg = entry["msg"].lower()
+                    if (
+                        "could not decode this audio file" in low_msg
+                        or "openlocalpathwithfallbackasync rejected" in low_msg
+                    ):
+                        # Expected graceful rejection of intentionally malformed synthetic fuzz files
+                        continue
                 sev, cat = classify_applog_severity(entry)
                 is_new, _ = self.ledger.record(
                     severity=sev,

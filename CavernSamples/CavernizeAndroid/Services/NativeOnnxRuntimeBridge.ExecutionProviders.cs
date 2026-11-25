@@ -313,8 +313,12 @@ public sealed partial class NativeOnnxRuntimeBridge {
         fnSetGraphOpt = GetSlotDelegate<SetGraphOptimizationLevelDelegate>("SetSessionGraphOptimizationLevel");
         fnSetOptimizedModelPath = TryGetSlotDelegate<SetOptimizedModelFilePathDelegate>("SetOptimizedModelFilePath");
         fnEnableCpuMemArena = TryGetSlotDelegate<EnableSessionOptionFlagDelegate>("EnableCpuMemArena");
+        fnDisableCpuMemArena = TryGetSlotDelegate<EnableSessionOptionFlagDelegate>("DisableCpuMemArena");
         fnEnableMemPattern = TryGetSlotDelegate<EnableSessionOptionFlagDelegate>("EnableMemPattern");
+        fnDisableMemPattern = TryGetSlotDelegate<EnableSessionOptionFlagDelegate>("DisableMemPattern");
         fnAddSessionConfig = TryGetSlotDelegate<AddSessionConfigEntryDelegate>("AddSessionConfigEntry");
+        fnCreateRunOptions = TryGetSlotDelegate<CreateRunOptionsDelegate>("CreateRunOptions");
+        fnAddRunConfig = TryGetSlotDelegate<AddRunConfigEntryDelegate>("AddRunConfigEntry");
         fnAppendEp = TryGetSlotDelegate<SessionOptionsAppendEpDelegate>("SessionOptionsAppendExecutionProvider");
         fnCreateSession = GetSlotDelegate<CreateSessionDelegate>("CreateSession");
         fnGetInputCount = GetSlotDelegate<SessionGetCountDelegate>("SessionGetInputCount");
@@ -340,6 +344,7 @@ public sealed partial class NativeOnnxRuntimeBridge {
         fnReleaseEnv = GetSlotDelegate<ReleaseHandleDelegate>("ReleaseEnv");
         fnReleaseSession = GetSlotDelegate<ReleaseHandleDelegate>("ReleaseSession");
         fnReleaseSessionOptions = GetSlotDelegate<ReleaseHandleDelegate>("ReleaseSessionOptions");
+        fnReleaseRunOptions = TryGetSlotDelegate<ReleaseHandleDelegate>("ReleaseRunOptions");
         fnReleaseValue = GetSlotDelegate<ReleaseHandleDelegate>("ReleaseValue");
         fnReleaseMemoryInfo = GetSlotDelegate<ReleaseHandleDelegate>("ReleaseMemoryInfo");
         fnReleaseTensorTypeAndShapeInfo = GetSlotDelegate<ReleaseHandleDelegate>("ReleaseTensorTypeAndShapeInfo");
@@ -410,8 +415,12 @@ public sealed partial class NativeOnnxRuntimeBridge {
         fnSetGraphOpt = null;
         fnSetOptimizedModelPath = null;
         fnEnableCpuMemArena = null;
+        fnDisableCpuMemArena = null;
         fnEnableMemPattern = null;
+        fnDisableMemPattern = null;
         fnAddSessionConfig = null;
+        fnCreateRunOptions = null;
+        fnAddRunConfig = null;
         fnAppendEp = null;
         fnCreateSession = null;
         fnGetInputCount = null;
@@ -435,6 +444,7 @@ public sealed partial class NativeOnnxRuntimeBridge {
         fnReleaseEnv = null;
         fnReleaseSession = null;
         fnReleaseSessionOptions = null;
+        fnReleaseRunOptions = null;
         fnReleaseValue = null;
         fnReleaseMemoryInfo = null;
         fnReleaseTensorTypeAndShapeInfo = null;

@@ -19,6 +19,7 @@ public sealed partial class NativeOnnxRuntimeBridge {
         readonly NativeOnnxRuntimeBridge bridge;
         readonly object sessionLock = new();
         IntPtr sessionHandle;
+        IntPtr runOptionsHandle;
         readonly string[] inputNames;
         readonly string[] outputNames;
         readonly long[][] inputShapes;
@@ -27,7 +28,7 @@ public sealed partial class NativeOnnxRuntimeBridge {
         long totalRunElapsedMs;
         bool disposed;
 
-        public NativeOnnxSession(NativeOnnxRuntimeBridge bridge, string modelPath, IntPtr handle, string activeEp) {
+        public NativeOnnxSession(NativeOnnxRuntimeBridge bridge, string modelPath, IntPtr handle, string activeEp, bool enableArenaShrinkage = false) {
             this.bridge = bridge;
             ModelPath = modelPath ?? string.Empty;
             sessionHandle = handle;
@@ -36,7 +37,25 @@ public sealed partial class NativeOnnxRuntimeBridge {
                 inputNames = ReadNames(isInput: true);
                 outputNames = ReadNames(isInput: false);
                 (inputShapes, inputElementTypes) = ReadInputMetadata(inputNames);
+                if (enableArenaShrinkage && bridge.fnCreateRunOptions != null && bridge.fnAddRunConfig != null && bridge.fnReleaseRunOptions != null) {
+                    IntPtr stOpts = bridge.fnCreateRunOptions(out IntPtr ro);
+                    if (stOpts == IntPtr.Zero && ro != IntPtr.Zero) {
+                        IntPtr stCfg = bridge.fnAddRunConfig(ro, "memory.enable_memory_arena_shrinkage", "cpu:0");
+                        if (stCfg == IntPtr.Zero) {
+                            runOptionsHandle = ro;
+                        } else {
+                            bridge.ReleaseStatusQuietly(stCfg);
+                            bridge.fnReleaseRunOptions(ro);
+                        }
+                    } else {
+                        bridge.ReleaseStatusQuietly(stOpts);
+                    }
+                }
             } catch {
+                if (runOptionsHandle != IntPtr.Zero) {
+                    bridge.fnReleaseRunOptions?.Invoke(runOptionsHandle);
+                    runOptionsHandle = IntPtr.Zero;
+                }
                 if (sessionHandle != IntPtr.Zero) {
                     bridge.fnReleaseSession?.Invoke(sessionHandle);
                     sessionHandle = IntPtr.Zero;
@@ -150,7 +169,7 @@ public sealed partial class NativeOnnxRuntimeBridge {
                     Stopwatch swRun = Stopwatch.StartNew();
                     bridge.CheckStatus(bridge.fnRun(
                         sessionHandle,
-                        IntPtr.Zero,
+                        runOptionsHandle,
                         inNamePtrs,
                         inValPtrs,
                         (UIntPtr)inCount,
@@ -432,6 +451,10 @@ public sealed partial class NativeOnnxRuntimeBridge {
                 if (!disposed) {
                     disposed = true;
                     shouldReleaseRef = true;
+                    if (runOptionsHandle != IntPtr.Zero) {
+                        bridge.fnReleaseRunOptions?.Invoke(runOptionsHandle);
+                        runOptionsHandle = IntPtr.Zero;
+                    }
                     if (sessionHandle != IntPtr.Zero) {
                         bridge.fnReleaseSession?.Invoke(sessionHandle);
                         sessionHandle = IntPtr.Zero;

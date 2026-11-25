@@ -3144,6 +3144,90 @@ RunTest("T42_W51_7_SystemPlaybackVolume_Iso226Coupling_ZeroDoubleAttenuation", (
     Assert(Math.Abs(engine.SystemPlaybackVolume01 - 0.0f) < 0.0001f, "SystemPlaybackVolume01 must clamp negative values to 0.");
 });
 
+// ---------- Test 43: RoFormer / Heavy ONNX Low-RAM Memory Discipline & Automatic Lightweight Fallback ----------
+RunTest("T43_NeuralLowRamMemoryDisciplineAndFallback", () => {
+    // 1. Catalog heavy-model detection & WithMemorySafeFallback() contract
+    NeuralModelCatalogEntry roformer = new() {
+        Id = "mel_band_roformer_vocals_kim",
+        DisplayName = "Mel-Band RoFormer Vocals",
+        FileName = "melband_roformer_vocals.onnx",
+        ApproxSizeMb = 953f,
+        IsMobileFast = false,
+        Task = NeuralModelTask.VocalSeparation
+    };
+    NeuralModelCatalogEntry scnet = new() {
+        Id = "scnet_4stem_fp16",
+        DisplayName = "SCNet 4-Stem FP16",
+        FileName = "scnet_4stem_fp16.onnx",
+        ApproxSizeMb = 22f,
+        IsMobileFast = true,
+        Task = NeuralModelTask.StemSeparation4
+    };
+    Assert(NeuralModelCatalog.IsMemoryHeavyModel(roformer), "RoFormer 953 MB must be classified as memory-heavy.");
+    Assert(!NeuralModelCatalog.IsMemoryHeavyModel(scnet), "SCNet 22 MB FP16 must be classified as lightweight.");
+    Assert(NeuralModelCatalog.IsMemoryHeavyModel(scnet, 250L * 1024L * 1024L), "File size >= 200 MB must trigger heavy classification.");
+
+    NeuralAudioConfig heavyCfg = new() {
+        OrchestrationMode = NeuralOrchestrationMode.Manual,
+        StudioBundlePreset = NeuralEnsembleBundlePreset.StudioFullBand6Stem,
+        ActiveStemModelId = roformer.Id,
+        OverlapFactor = 4,
+        EnableTta = true,
+        TaskModelSlots = new Dictionary<NeuralModelTask, IReadOnlyList<string>> {
+            [NeuralModelTask.VocalSeparation] = [roformer.Id]
+        }
+    };
+    NeuralAudioConfig safeCfg = heavyCfg.WithMemorySafeFallback();
+    Assert(safeCfg.OrchestrationMode == NeuralOrchestrationMode.Auto, "WithMemorySafeFallback must reset OrchestrationMode to Auto.");
+    Assert(safeCfg.StudioBundlePreset == NeuralEnsembleBundlePreset.FastSingle, "WithMemorySafeFallback must reset StudioBundlePreset to FastSingle.");
+    Assert(safeCfg.OverlapFactor == MvsepPipelineOptions.MinOverlap, "WithMemorySafeFallback must clamp OverlapFactor to MinOverlap.");
+    Assert(!safeCfg.EnableTta, "WithMemorySafeFallback must disable TTA.");
+    Assert(safeCfg.ActiveStemModelId == NeuralModelCatalog.DefaultStemModelId, "WithMemorySafeFallback must reset ActiveStemModelId.");
+    Assert(!safeCfg.GetModelsForTask(NeuralModelTask.VocalSeparation).Contains(roformer.Id), "WithMemorySafeFallback must drop heavy manual vocal slot.");
+
+    // 2. BuildPlan(..., preferLightweightOnly: true) strictly prefers lightweight SCNet over installed heavy RoFormer
+    using MockLowRamFallbackRuntime rt = new(includeLightweightModel: true);
+    NeuralPipelineOrchestrator orch = new(rt, rt);
+    NeuralExecutionPlan lightPlan = orch.BuildPlan(NeuralPipelineGoal.SpatialKaraoke, heavyCfg, preferLightweightOnly: true);
+    Assert(lightPlan.Steps.Count == 1 && lightPlan.Steps[0].Models.Count == 1, "Lightweight plan must resolve to a single fast step.");
+    Assert(lightPlan.Steps[0].Models[0].Id == "scnet_4stem_fp16", $"Expected lightweight fallback SCNet, got {lightPlan.Steps[0].Models[0].Id}");
+
+    // 3. ExecuteTrackPipeline automatically catches InsufficientMemoryException from heavy RoFormer and completes via SCNet
+    const int sr = 44100;
+    const int n = 44100;
+    float[] mixL = new float[n], mixR = new float[n];
+    for (int i = 0; i < n; i++) {
+        mixL[i] = 0.3f * MathF.Sin((float)(2.0 * Math.PI * 440.0 * i / sr));
+        mixR[i] = 0.3f * MathF.Cos((float)(2.0 * Math.PI * 220.0 * i / sr));
+    }
+    NeuralAudioConfig autoCfg = new() {
+        OrchestrationMode = NeuralOrchestrationMode.Auto,
+        OverlapFactor = 2,
+        EnableTta = false,
+        TrackCacheEnabled = false
+    };
+    (NeuralSeparatedTrack recovered, _, bool fromCache) = orch.ExecuteTrackPipeline(
+        "t43_lowram_track.flac", 0L, 0L, mixL, mixR, sr, NeuralPipelineGoal.SpatialKaraoke, autoCfg, displayTitle: "LowRAM Song");
+    Assert(!fromCache && recovered != null && recovered.Stems.Count >= 4, "Expected recovered stems from lightweight fallback.");
+    Assert(recovered.UsedMemorySafeFallback, "Recovered track must flag UsedMemorySafeFallback=true.");
+    Assert(recovered.OriginTag == "Local AI (Low-RAM Fallback)", $"Unexpected OriginTag: {recovered.OriginTag}");
+    Assert(!string.IsNullOrWhiteSpace(recovered.MemoryFallbackReason), "Recovered track must preserve MemoryFallbackReason.");
+    Assert(rt.HeavyRejectCount == 1 && rt.LightSuccessCount == 1, $"Expected 1 heavy reject + 1 light success, got heavy={rt.HeavyRejectCount}, light={rt.LightSuccessCount}");
+
+    // 4. When ONLY a heavy model is installed, ExecuteTrackPipeline must rethrow InsufficientMemoryException cleanly without infinite loop
+    using MockLowRamFallbackRuntime heavyOnlyRt = new(includeLightweightModel: false);
+    NeuralPipelineOrchestrator heavyOnlyOrch = new(heavyOnlyRt, heavyOnlyRt);
+    bool threwMemEx = false;
+    try {
+        heavyOnlyOrch.ExecuteTrackPipeline(
+            "t43_heavy_only.flac", 0L, 0L, mixL, mixR, sr, NeuralPipelineGoal.SpatialKaraoke, autoCfg);
+    } catch (InsufficientMemoryException) {
+        threwMemEx = true;
+    }
+    Assert(threwMemEx, "Expected InsufficientMemoryException when no lightweight fallback model is installed.");
+    Assert(heavyOnlyRt.HeavyRejectCount == 1, $"Expected single attempt without retry loop, got {heavyOnlyRt.HeavyRejectCount}");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
@@ -3609,6 +3693,93 @@ sealed class MockCacheFirstTrackCache(NeuralSeparatedTrack cachedTrack) : INeura
     public void Save(string cacheKey, NeuralSeparatedTrack track, CancellationToken token = default) => SaveCalls++;
     public void EvictToLimit(long maxBytes) { }
     public void Clear() { }
+}
+
+sealed class MockLowRamFallbackRuntime : INeuralInferenceRuntime, INeuralModelRegistry {
+    readonly string tempDir;
+    readonly NeuralModelCatalogEntry[] models;
+    readonly Dictionary<string, string> paths = new(StringComparer.OrdinalIgnoreCase);
+    public int HeavyRejectCount;
+    public int LightSuccessCount;
+
+    public MockLowRamFallbackRuntime(bool includeLightweightModel) {
+        tempDir = Path.Combine(Path.GetTempPath(), $"cavern_t43_models_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        List<NeuralModelCatalogEntry> list = [
+            new NeuralModelCatalogEntry {
+                Id = "mel_band_roformer_vocals_kim",
+                DisplayName = "Mel-Band RoFormer Vocals",
+                FileName = "melband_roformer_vocals.onnx",
+                ApproxSizeMb = 953f,
+                IsMobileFast = false,
+                Task = NeuralModelTask.VocalSeparation,
+                ContractKind = NeuralOnnxContractKind.WaveformStereo,
+                ExpectedSampleRate = 44100,
+                RecommendedChunkSamples = 44100,
+                OutputStemNames = ["vocals", "instrumental"]
+            }
+        ];
+        if (includeLightweightModel) {
+            list.Add(new NeuralModelCatalogEntry {
+                Id = "scnet_4stem_fp16",
+                DisplayName = "SCNet 4-Stem FP16",
+                FileName = "mock_light_4stem.onnx",
+                ApproxSizeMb = 22f,
+                IsMobileFast = true,
+                Task = NeuralModelTask.StemSeparation4,
+                ContractKind = NeuralOnnxContractKind.WaveformStereo,
+                ExpectedSampleRate = 44100,
+                RecommendedChunkSamples = 44100,
+                OutputStemNames = ["drums", "bass", "other", "vocals"]
+            });
+        }
+        models = list.ToArray();
+        foreach (NeuralModelCatalogEntry m in models) {
+            string p = Path.Combine(tempDir, m.FileName);
+            File.WriteAllBytes(p, [0x08, 0x08]);
+            paths[m.Id] = p;
+        }
+    }
+
+    public NeuralRuntimeInfo GetRuntimeInfo() => new() { IsAvailable = true, ActiveProvider = "CPU" };
+    public IReadOnlyList<NeuralModelCatalogEntry> GetAllRegisteredModels() => models;
+    public IReadOnlyList<NeuralModelCatalogEntry> GetInstalledModels() => models;
+    public string ResolveInstalledModelPath(string modelId) => paths.TryGetValue(modelId ?? "", out string p) ? p : null;
+
+    public INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 0) {
+        if (modelPath != null && modelPath.Contains("roformer", StringComparison.OrdinalIgnoreCase)) {
+            Interlocked.Increment(ref HeavyRejectCount);
+            throw new InsufficientMemoryException("Simulated ONNX memory guard: need=2520.8 MB, avail=2093.8 MB");
+        }
+        Interlocked.Increment(ref LightSuccessCount);
+        return new MockLightWaveSession(modelPath);
+    }
+
+    public void Dispose() {
+        try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
+    }
+
+    sealed class MockLightWaveSession(string path) : INeuralSession {
+        public string ModelPath => path;
+        public string ExecutionProvider => "CPU";
+        public IReadOnlyList<string> InputNames => ["input"];
+        public IReadOnlyList<long[]> InputShapes => [[1L, 2L, -1L]];
+        public IReadOnlyList<string> OutputNames => ["output"];
+        public NeuralTensorFloat[] RunSingleInput(NeuralTensorFloat inputTensor) {
+            int n = (int)inputTensor.Shape[2];
+            float[] inp = inputTensor.Data;
+            float[] outData = new float[4 * 2 * n];
+            for (int s = 0; s < 4; s++) {
+                int baseIdx = s * 2 * n;
+                for (int i = 0; i < n; i++) {
+                    outData[baseIdx + i] = inp[i] * 0.25f;
+                    outData[baseIdx + n + i] = inp[n + i] * 0.25f;
+                }
+            }
+            return [new NeuralTensorFloat([1L, 4L, 2L, n], outData)];
+        }
+        public void Dispose() { }
+    }
 }
 """
 
@@ -4147,6 +4318,56 @@ def _py_stage9_w51_vocal_cache_ux_loudness_volume_contracts() -> None:
         assert tok in modals_src, f"W51.7 missing {tok} in MainActivity.PlayerMusic.Modals.cs"
 
 
+def _py_stage10_onnx_low_ram_discipline_and_qa_contracts() -> None:
+    ort_main = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NativeOnnxRuntimeBridge.cs").read_text(encoding="utf-8")
+    for tok in (
+        "IsMemoryHeavyModel",
+        "RoFormerMemoryExpansionFactor",
+        "HeavyModelSafetyHeadroomBytes",
+        "fnDisableCpuMemArena",
+        "fnDisableMemPattern",
+        "session.disable_prepacking",
+        "enableArenaShrinkage",
+    ):
+        assert tok in ort_main, f"ONNX low-RAM discipline missing '{tok}' in NativeOnnxRuntimeBridge.cs"
+    # RoFormer must be excluded BEFORE webgpu substring check to avoid Adreno Dawn unified-RAM LMKD kills
+    m_webgpu = re.search(r"static bool IsWebGpuOptimalModel\([^\)]*\)\s*\{(.*?)\n    \}", ort_main, re.S)
+    assert m_webgpu is not None, "IsWebGpuOptimalModel not found in NativeOnnxRuntimeBridge.cs"
+    webgpu_body = m_webgpu.group(1)
+    roformer_idx = webgpu_body.find("roformer")
+    webgpu_idx = webgpu_body.find('"webgpu"')
+    assert roformer_idx != -1 and webgpu_idx != -1 and roformer_idx < webgpu_idx, (
+        "IsWebGpuOptimalModel must exclude 'roformer' BEFORE matching 'webgpu'!"
+    )
+
+    ort_ep = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NativeOnnxRuntimeBridge.ExecutionProviders.cs").read_text(encoding="utf-8")
+    for tok in ("DisableCpuMemArena", "DisableMemPattern", "CreateRunOptions", "AddRunConfigEntry", "ReleaseRunOptions"):
+        assert tok in ort_ep, f"Missing ORT C API binding '{tok}' in NativeOnnxRuntimeBridge.ExecutionProviders.cs"
+
+    ort_sess = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NativeOnnxRuntimeBridge.Session.cs").read_text(encoding="utf-8")
+    assert "memory.enable_memory_arena_shrinkage" in ort_sess and "runOptionsHandle" in ort_sess, (
+        "NativeOnnxRuntimeBridge.Session.cs missing per-Run arena shrinkage RunOptions"
+    )
+
+    orch_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "NeuralPipelineOrchestrator.cs").read_text(encoding="utf-8")
+    for tok in ("bool preferLightweightOnly = false", "WithMemorySafeFallback()", "UsedMemorySafeFallback", "ArePlanModelsIdentical"):
+        assert tok in orch_src, f"Missing '{tok}' in NeuralPipelineOrchestrator.cs"
+
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    for tok in ("UsedMemorySafeFallback", "NeuralLowRamFallbackToast", "catch (InsufficientMemoryException", "NeuralLowRamNeedLightModelFmt"):
+        assert tok in wf_src, f"Missing '{tok}' in MainActivity.NeuralWorkflows.cs"
+
+    bridge_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.LiveBridge.cs").read_text(encoding="utf-8")
+    assert "tabContainers" in bridge_src and "activeTab" in bridge_src, (
+        "MainActivity.LiveBridge.cs must skip inactive tabContainers during DumpUiTreeJsonAsync"
+    )
+
+    for lang_file in ("AndroidStrings.cs", "AndroidStrings.PtBr.cs", "AndroidStrings.Hu.cs", "AndroidStrings.Zh.cs"):
+        lang_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Language" / lang_file).read_text(encoding="utf-8")
+        for key in ("NeuralLowRamFallbackToast", "NeuralLowRamNeedLightModelFmt"):
+            assert f'["{key}"]' in lang_src, f"Missing L10n key '{key}' in {lang_file}"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -4159,6 +4380,7 @@ PYTHON_CHECKS = [
     ("PY_T7_BpUiAiOrgMotionStability_Q1_Q6_Contracts", _py_stage7_ui_ai_org_motion_stability_contracts),
     ("PY_T8_ScarlettProAudioStabilityContracts", _py_stage8_scarlett_proaudio_stability_contracts),
     ("PY_T9_W51_VocalCacheUxLoudnessVolumeContracts", _py_stage9_w51_vocal_cache_ux_loudness_volume_contracts),
+    ("PY_T10_OnnxLowRamDisciplineAndQaContracts", _py_stage10_onnx_low_ram_discipline_and_qa_contracts),
 ]
 
 

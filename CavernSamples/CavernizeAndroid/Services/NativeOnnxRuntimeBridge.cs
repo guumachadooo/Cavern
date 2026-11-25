@@ -55,6 +55,12 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     delegate IntPtr AddSessionConfigEntryDelegate(IntPtr options, [MarshalAs(UnmanagedType.LPUTF8Str)] string key, [MarshalAs(UnmanagedType.LPUTF8Str)] string value);
 
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate IntPtr CreateRunOptionsDelegate(out IntPtr options);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    delegate IntPtr AddRunConfigEntryDelegate(IntPtr options, [MarshalAs(UnmanagedType.LPUTF8Str)] string key, [MarshalAs(UnmanagedType.LPUTF8Str)] string value);
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     delegate IntPtr SessionOptionsAppendEpDelegate(
         IntPtr options,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string providerName,
@@ -137,9 +143,13 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     const int OnnxTensorElementDataTypeDouble = 11;
     const long MaxTensorElements = 64L * 1024L * 1024L; // 256 MB float32 ceiling to prevent mobile OOM / 32-bit length overflow
     const float Float16FiniteMax = 65504f;
-    const double ModelMemoryExpansionFactor = 2.5; // Protobuf parse + graph opt + EP weight packing peak multiplier
-    const long SessionBaseOverheadBytes = 32L * 1024L * 1024L; // 32 MB base ORT runtime & activation arena overhead
+    const long HeavyModelBytesThreshold = 200L * 1024L * 1024L; // 200 MB+ models disable ORT power-of-2 CPU arena & opt-cache duplication
+    const long UltraHeavyModelBytesThreshold = 400L * 1024L * 1024L; // 400 MB+ models also disable mem-pattern & weight prepacking
+    const double ModelMemoryExpansionFactor = 2.5; // Standard CNN/MDX protobuf parse + graph opt + EP weight packing multiplier
+    const double RoFormerMemoryExpansionFactor = 3.2; // Transformer/RoFormer axial-attention peak multiplier (w/ arena disabled)
+    const long SessionBaseOverheadBytes = 32L * 1024L * 1024L; // 32 MB base ORT runtime & activation overhead
     const long MinimumSafetyHeadroomBytes = 192L * 1024L * 1024L; // 192 MB OS/audio engine LMK safety headroom
+    const long HeavyModelSafetyHeadroomBytes = 384L * 1024L * 1024L; // 384 MB Android LMKD margin for 200+ MB Transformer graphs
 
     [DllImport("libc", EntryPoint = "setenv", CallingConvention = CallingConvention.Cdecl)]
     static extern int NativeSetEnv(
@@ -181,8 +191,12 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     SetGraphOptimizationLevelDelegate fnSetGraphOpt;
     SetOptimizedModelFilePathDelegate fnSetOptimizedModelPath;
     EnableSessionOptionFlagDelegate fnEnableCpuMemArena;
+    EnableSessionOptionFlagDelegate fnDisableCpuMemArena;
     EnableSessionOptionFlagDelegate fnEnableMemPattern;
+    EnableSessionOptionFlagDelegate fnDisableMemPattern;
     AddSessionConfigEntryDelegate fnAddSessionConfig;
+    CreateRunOptionsDelegate fnCreateRunOptions;
+    AddRunConfigEntryDelegate fnAddRunConfig;
     SessionOptionsAppendEpDelegate fnAppendEp;
     CreateSessionDelegate fnCreateSession;
     SessionGetCountDelegate fnGetInputCount;
@@ -206,6 +220,7 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     ReleaseHandleDelegate fnReleaseEnv;
     ReleaseHandleDelegate fnReleaseSession;
     ReleaseHandleDelegate fnReleaseSessionOptions;
+    ReleaseHandleDelegate fnReleaseRunOptions;
     ReleaseHandleDelegate fnReleaseValue;
     ReleaseHandleDelegate fnReleaseMemoryInfo;
     ReleaseHandleDelegate fnReleaseTensorTypeAndShapeInfo;
@@ -379,7 +394,8 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     /// </summary>
     public ModelMemoryCheckResult CheckMemoryForModelBytes(long modelBytes, string modelLabel = "") {
         long safeModelBytes = Math.Max(0L, modelBytes);
-        long estimatedModelBytes = EstimateRequiredModelBytes(safeModelBytes);
+        bool memoryHeavy = IsMemoryHeavyModel(modelLabel, safeModelBytes);
+        long estimatedModelBytes = EstimateRequiredModelBytes(safeModelBytes, modelLabel);
 
         if (!TryReadSystemMemory(out long availBytes, out long totalBytes, out long thresholdBytes, out bool isLowMemory, out string source)) {
             return new ModelMemoryCheckResult {
@@ -390,13 +406,13 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                 AvailableSystemBytes = 0L,
                 TotalSystemBytes = 0L,
                 LowMemoryThresholdBytes = 0L,
-                SafetyHeadroomBytes = MinimumSafetyHeadroomBytes,
+                SafetyHeadroomBytes = memoryHeavy ? HeavyModelSafetyHeadroomBytes : MinimumSafetyHeadroomBytes,
                 Source = "Unavailable",
                 DiagnosticMessage = $"System RAM telemetry unavailable; proceeding with model '{modelLabel}' ({FormatMiB(safeModelBytes)} MB, est. {FormatMiB(estimatedModelBytes)} MB)."
             };
         }
 
-        long headroomBytes = ComputeEffectiveSafetyHeadroom(totalBytes, thresholdBytes);
+        long headroomBytes = ComputeEffectiveSafetyHeadroom(totalBytes, thresholdBytes, memoryHeavy);
         long requiredBudgetBytes = estimatedModelBytes > long.MaxValue - headroomBytes
             ? long.MaxValue
             : estimatedModelBytes + headroomBytes;
@@ -468,22 +484,35 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     /// <summary>
     /// Returns true when <paramref name="modelPath"/> matches static CNN / U-Net STFT architectures (e.g. UVR MDX-Net,
     /// Kim Vocal, Reverb HQ, Apollo) that achieve 4-5× speedup on WebGPU Vulkan GPUs.
-    /// Dynamic subband-slicing / dual-path RNN graphs (SCNet, HTDemucs) contain numerous Slice/Mod/Gather ops lacking
-    /// WebGPU kernels, which trigger severe CPU-GPU synchronization stalls; Auto mode routes them to ARM64 KleidiAI CPU.
+    /// Dynamic subband-slicing / dual-path RNN / axial-attention Transformer graphs (SCNet, HTDemucs, BS/Mel-Band RoFormer)
+    /// either suffer CPU-GPU sync stalls or Dawn unified-RAM buffer explosion (4.6+ GB PSS LMKD kills on mobile Adreno);
+    /// Auto mode routes them to ARM64 KleidiAI CPU with bounded memory arenas.
     /// </summary>
     static bool IsWebGpuOptimalModel(string modelPath) {
         string name = Path.GetFileName(modelPath ?? string.Empty).ToLowerInvariant();
-        if (name.Contains("webgpu") || name.Contains("bs_roformer_sw_6stem")) {
-            return true;
-        }
         if (name.Contains("scnet") || name.Contains("demucs") || name.Contains("roformer")) {
             return false;
+        }
+        if (name.Contains("webgpu")) {
+            return true;
         }
         return true;
     }
 
+    /// <summary>
+    /// Returns true for large (&gt;=200 MB) or Transformer/RoFormer/HTDemucs audio models that require
+    /// strict ORT memory-arena discipline to avoid Android LMKD kills.
+    /// </summary>
+    internal static bool IsMemoryHeavyModel(string modelPathOrLabel, long modelBytes) {
+        if (modelBytes >= HeavyModelBytesThreshold) {
+            return true;
+        }
+        string name = Path.GetFileName(modelPathOrLabel ?? string.Empty).ToLowerInvariant();
+        return name.Contains("roformer") || name.Contains("demucs");
+    }
+
     string TryResolveOptimizedCachePath(string modelPath, long modelBytes, NeuralExecutionProvider ep) {
-        if (ep == NeuralExecutionProvider.QnnHtp || ep == NeuralExecutionProvider.WebGpu) {
+        if (ep == NeuralExecutionProvider.QnnHtp || ep == NeuralExecutionProvider.WebGpu || IsMemoryHeavyModel(modelPath, modelBytes)) {
             return null;
         }
         // Only cache self-contained ONNX files (avoid splitting external-data checkpoints)
@@ -638,10 +667,21 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                         if (fnSetInterOpNumThreads != null) {
                             ReleaseStatusQuietly(fnSetInterOpNumThreads(sessOpts, 1));
                         }
-                        if (fnEnableCpuMemArena != null) {
+                        // Memory discipline for mobile ARM64 (prevents 4.6 GB PSS Android LMKD kills on RoFormer/Demucs):
+                        // - 200+ MB / RoFormer / Demucs: disable ORT's power-of-two CPU memory arena so huge attention
+                        //   intermediates are returned immediately to Android instead of doubling and pinning forever.
+                        // - 400+ MB (e.g. 909 MB Mel-Band RoFormer FP32): also disable static mem-pattern & weight
+                        //   prepacking so ORT does not keep both raw protobuf and repacked weight copies simultaneously.
+                        bool memoryHeavy = IsMemoryHeavyModel(modelPath, modelBytes);
+                        bool ultraHeavy = modelBytes >= UltraHeavyModelBytesThreshold;
+                        if (memoryHeavy && fnDisableCpuMemArena != null) {
+                            ReleaseStatusQuietly(fnDisableCpuMemArena(sessOpts));
+                        } else if (fnEnableCpuMemArena != null) {
                             ReleaseStatusQuietly(fnEnableCpuMemArena(sessOpts));
                         }
-                        if (fnEnableMemPattern != null) {
+                        if (ultraHeavy && fnDisableMemPattern != null) {
+                            ReleaseStatusQuietly(fnDisableMemPattern(sessOpts));
+                        } else if (fnEnableMemPattern != null) {
                             ReleaseStatusQuietly(fnEnableMemPattern(sessOpts));
                         }
                         CheckStatus(fnSetGraphOpt(sessOpts, (usingCachedOpt || usingQnnCtx) ? 1 : OrtEnableAll));
@@ -654,6 +694,9 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                             ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.intra_op.allow_spinning", "0"));
                             ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.inter_op.allow_spinning", "0"));
                             ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.set_denormal_as_zero", "1"));
+                            if (ultraHeavy) {
+                                ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.disable_prepacking", "1"));
+                            }
                             if (candidate == NeuralExecutionProvider.QnnHtp && !usingQnnCtx && !string.IsNullOrEmpty(qnnCtxPath)) {
                                 // Only pass ep.context_enable=1 when compiling the original model (never when loading existing ctx .onnx)
                                 try {
@@ -685,8 +728,9 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                             string cacheTag = usingFp16Cache
                                 ? (convertedFp16Now ? " [webgpu-fp16-conv]" : " [webgpu-fp16-hit]")
                                 : (usingQnnCtx ? " [qnn-ctx-hit]" : (usingCachedOpt ? " [opt-cache-hit]" : ""));
-                            AppLogger.Info($"ONNX session ready [{activeEp}]{cacheTag} threads={threads} init={swCreate.ElapsedMilliseconds}ms model='{Path.GetFileName(modelPath)}'");
-                            NativeOnnxSession session = new(this, modelPath, sessionHandle, activeEp);
+                            string memTag = ultraHeavy ? " [low-ram:no-arena+no-prepack]" : (memoryHeavy ? " [low-ram:no-arena]" : " [arena-shrink]");
+                            AppLogger.Info($"ONNX session ready [{activeEp}]{cacheTag}{memTag} threads={threads} init={swCreate.ElapsedMilliseconds}ms model='{Path.GetFileName(modelPath)}'");
+                            NativeOnnxSession session = new(this, modelPath, sessionHandle, activeEp, enableArenaShrinkage: !memoryHeavy);
                             handoffComplete = true;
                             return session;
                         }
@@ -771,18 +815,21 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
         return total;
     }
 
-    static long EstimateRequiredModelBytes(long modelBytes) {
+    static long EstimateRequiredModelBytes(long modelBytes, string modelLabel = "") {
         if (modelBytes <= 0) {
             return SessionBaseOverheadBytes;
         }
-        double expanded = modelBytes * ModelMemoryExpansionFactor;
+        double factor = IsMemoryHeavyModel(modelLabel, modelBytes)
+            ? RoFormerMemoryExpansionFactor
+            : ModelMemoryExpansionFactor;
+        double expanded = modelBytes * factor;
         if (!double.IsFinite(expanded) || expanded >= long.MaxValue - SessionBaseOverheadBytes) {
             return long.MaxValue;
         }
         return (long)Math.Ceiling(expanded) + SessionBaseOverheadBytes;
     }
 
-    static long ComputeEffectiveSafetyHeadroom(long totalSystemBytes, long lowMemoryThresholdBytes) {
+    static long ComputeEffectiveSafetyHeadroom(long totalSystemBytes, long lowMemoryThresholdBytes, bool memoryHeavy = false) {
         long cappedThreshold = lowMemoryThresholdBytes > 0 ? lowMemoryThresholdBytes : 0L;
         if (totalSystemBytes > 0) {
             long quarterRam = totalSystemBytes / 4L;
@@ -790,7 +837,8 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                 cappedThreshold = quarterRam;
             }
         }
-        return Math.Max(MinimumSafetyHeadroomBytes, cappedThreshold);
+        long floorBytes = memoryHeavy ? HeavyModelSafetyHeadroomBytes : MinimumSafetyHeadroomBytes;
+        return Math.Max(floorBytes, cappedThreshold);
     }
 
     bool TryReadSystemMemory(
