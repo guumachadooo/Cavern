@@ -1,6 +1,7 @@
 # Cavernize Android — Master Overhaul Plan (`MASTER_OVERHAUL_PLAN.md`)
 
 > STYLE|lossless symbolic telegraphic EN ONLY (`!articles/copulas/filler`, ops `-> | && || ! w/ w/o`, verbatim paths/symbols).
+> STATUS|DONE (T1-T6 100% Complete — Indexed in `.agents/docs/PLANS_HUB.md`; active pending work tracked centrally in `PLANS_HUB.md`).
 > GOVERNANCE|1 Stage per chat (never rush multi-theme mega-commits). Every theme follows: `SOTA Blueprint (>=85/100 --strict)` -> `Impl` -> `In-RAM hot-exec / Unit / CI-parity verify` -> `Live S25U Bug-Hunter v2 verify` -> `Ship + Handoff`.
 
 ## Global Operating Invariants

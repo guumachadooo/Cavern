@@ -3,8 +3,9 @@
 > STYLE|lossless symbolic telegraphic EN ONLY (`!articles/copulas/filler`, ops `-> | && || ! w/ w/o`).
 
 ## 0. Meta & Lineage
-BP_META|id=BP_OMNISCIENT_SPATIAL_OBJECT_CORTEX|domain_vec=ai-ml:1.00,dsp-hw:0.80,ux-product:0.40|door=1-way|tier=T3|status=SOTA-v2|h1_wave=W0
+BP_META|id=BP_OMNISCIENT_SPATIAL_OBJECT_CORTEX|domain_vec=ai-ml:1.00,dsp-hw:0.80,ux-product:0.40|door=1-way|tier=T3|status=DEFERRED|h1_wave=W0
 PARENT_ADR|BP_OMNISCIENT_SPATIAL_OBJECT_CORTEX:SOTA-v1
+CONFLICT_RESOLVED|Phase-A W1-W3 shipped in T6; Phase-B W4 local INT4 LLM deferred & MUST execute in isolated :worker process under v2.9.82 low-RAM discipline (S25U LMKD OOM observed @ 2.0-4.4 GB PSS).
 - `ai-ml`: Use AI ONLY where problem invariants generalize (0 per-song/user retraining); bound tokens/VRAM/latency; prove delta vs deterministic heuristic.
 - `dsp-hw`: Split Offline / RT 0-alloc 0-lock hot-path (<1ms/block) / Async control; fuse owned signals/hw; prove math in offline golden bench first.
 - `ux-product`: Progressive disclosure (single primary CTA, zero jargon), offline/error clarity, <=3 taps to value, 60/120Hz zero-jank & 100% l10n parity.

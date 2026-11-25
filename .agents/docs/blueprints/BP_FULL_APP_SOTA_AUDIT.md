@@ -3,8 +3,9 @@
 > STYLE|lossless symbolic telegraphic EN ONLY (`!articles/copulas/filler`, ops `-> | && || ! w/ w/o`, verbatim paths/symbols).
 
 ## 0. Meta & Lineage
-BP_META|id=BP_FULL_APP_SOTA_AUDIT|domain_vec=dsp-hw:0.90,ux-product:0.75,ai-ml:0.75,infra-ops:0.65|door=2-way|tier=T3|status=ACTIVE-v1|h1_wave=W0
+BP_META|id=BP_FULL_APP_SOTA_AUDIT|domain_vec=dsp-hw:0.90,ux-product:0.75,ai-ml:0.75,infra-ops:0.65|door=2-way|tier=T3|status=PARTIAL|h1_wave=W0
 PARENT_ADR|MASTER_OVERHAUL_PLAN:T6
+HYGIENE_NOTE|W1-W3 DONE (T6); W4 monolith backlog updated to 5 files >2000L (added AndroidAudioOutput.cs 2157L); W5 speaker-shield wiring maps to PHASE3 W31.
 - `dsp-hw`: Split Offline / RT 0-alloc 0-lock hot-path (<1ms/block) / Async control; fuse owned signals/hw; prove math in offline golden bench first.
 - `ux-product`: Progressive disclosure (single primary CTA, zero jargon), offline/error clarity, <=3 taps to value, 60/120Hz zero-jank & 100% l10n parity.
 - `ai-ml`: Use AI ONLY where problem invariants generalize (0 per-song/user retraining); bound tokens/VRAM/latency; prove delta vs deterministic heuristic.

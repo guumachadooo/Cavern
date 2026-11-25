@@ -1,6 +1,6 @@
 {
   "schema_version": 5,
-  "plugin_version": "2.17.0",
+  "plugin_version": "2.19.0",
   "project_name": "Cavern / CavernizeAndroid",
   "planner_mode": "auto",
   "read_budget": {
@@ -28,6 +28,13 @@
     "warn_files": 850,
     "fail_files": 920,
     "hard_platform_cap": 999
+  },
+  "blueprint": {
+    "dir": ".agents/docs/blueprints",
+    "hub_file": ".agents/docs/PLANS_HUB.md",
+    "require_by_default": true,
+    "default_min_tier": 1,
+    "require_pre_resume_hygiene": true
   },
   "code_path_prefixes": [
     "Cavern/",
@@ -59,7 +66,8 @@
     ".agents/docs/archive/SPATIAL_ROADMAP.md",
     ".agents/docs/archive/PHASE2_ROADMAP.md",
     ".agents/docs/archive/PROJECT_HISTORY_ARCHIVE.md",
-    ".agents/docs/archive/EXTERNAL_AI_SYNC_ARCHIVE.md"
+    ".agents/docs/archive/EXTERNAL_AI_SYNC_ARCHIVE.md",
+    ".agents/docs/archive/BLUEPRINTS_DONE_LEDGER.md"
   ],
   "wiring_gate": {
     "enabled": true,
@@ -109,6 +117,7 @@
       }
     ],
     "extra_docs": [
+      ".agents/docs/PLANS_HUB.md",
       ".agents/docs/BUILD_LESSONS.md",
       ".agents/docs/ONEUI9_REFERENCE.md",
       ".agents/docs/PHASE3_VOCAL_CORTEX_ROADMAP.md"

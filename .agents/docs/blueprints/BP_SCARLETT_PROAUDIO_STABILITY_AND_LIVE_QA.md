@@ -3,8 +3,9 @@
 > STYLE|lossless symbolic telegraphic EN ONLY (`!articles/copulas/filler`, ops `-> | && || ! w/ w/o`).
 
 ## 0. Meta & Lineage
-BP_META|id=BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA|domain_vec=dsp-hw:1.00|door=2-way|tier=T2|status=ACTIVE-v1|h1_wave=W1
+BP_META|id=BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA|domain_vec=dsp-hw:1.00|door=2-way|tier=T2|status=PARTIAL|h1_wave=W1
 PARENT_ADR|BP_CORE_RUNTIME_STABILITY_AND_SCHEDULING,BP_LIVE_QA_BUG_HUNTER_SOTA
+HYGIENE_NOTE|W1 native/C# code DONE (v2.9.80); W2-LiveReverify physical Scarlett 2i2 Gen4 S25U test pending.
 - `dsp-hw`: Split Offline / RT 0-alloc 0-lock hot-path (<1ms/block) / Async control; fuse owned signals/hw; prove math in offline golden bench first.
 - Live S25U (`SM-S938B`, Android 17 / SDK 37) + Focusrite Scarlett 2i2 4th Gen (`VID=0x1235 PID=0x8219`, UAC2 `ClockID=41`, `Rates=[44.1..192kHz]`, `IF1 EP 0x01` OUT Sync 2ch 24-in-32 `maxPkt=200`, `IF2 EP 0x81` IN Sync 4ch 24-in-32 `maxPkt=400`, `IF3` Vendor FCP `EP 0x83`) baseline measurements:
   - Path A (`AAudio EXCLUSIVE MMAP`) @ 192 kHz 256f Atmos 15-obj: `ox=0` (lied!) while native `out_rb` starved `291/881` ticks (`33%` silence, `37` dropouts / 2.2s) + `+8..+10` Gen0 GCs / 2.2s.

@@ -3,8 +3,9 @@
 > STYLE|lossless symbolic telegraphic EN ONLY (`!articles/copulas/filler`, ops `-> | && || ! w/ w/o`).
 
 ## 0. Meta & Lineage
-BP_META|id=BP_VOCAL_STABILITY_CACHE_UX_LOUDNESS|domain_vec=ux-product:1.00,dsp-hw:0.67,ai-ml:0.33,data-bi:0.33,infra-ops:0.33,software:0.33|door=1-way|tier=T3|status=ACTIVE-v1|h1_wave=W51
+BP_META|id=BP_VOCAL_STABILITY_CACHE_UX_LOUDNESS|domain_vec=ux-product:1.00,dsp-hw:0.67,ai-ml:0.33,data-bi:0.33,infra-ops:0.33,software:0.33|door=1-way|tier=T3|status=PARTIAL|h1_wave=W51
 PARENT_ADR|BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA|BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY|BP_AUDIO_AI_SEPARATION_ENSEMBLE_AND_MVSEP
+HYGIENE_NOTE|W51.1-W51.7 code DONE (v2.9.81) + ONNX low-RAM fixes (v2.9.82); W52 live S25U verification pending.
 - `ux-product`: Progressive disclosure (single primary CTA, zero jargon), offline/error clarity, <=3 taps to value, 60/120Hz zero-jank & 100% 4-lang l10n parity.
 - `dsp-hw`: Split Offline / RT 0-alloc 0-lock hot-path (<1ms/block) / Async control; fuse owned signals/hw; prove math in offline golden bench first.
 - `ai-ml`: Use AI ONLY where problem invariants generalize (0 per-song/user retraining); bound tokens/VRAM/latency; prove delta vs deterministic heuristic.
