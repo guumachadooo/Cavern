@@ -102,13 +102,19 @@ public static partial class LyricsService {
                 }
                 sb.Append('[').Append(FormatLrcTimestamp(cue.TimeSeconds)).Append(']');
                 if (doc.IsSyllableSynced && cue.Words != null && cue.Words.Count > 0) {
+                    bool wordsCarrySpaces = cue.Words.Any(wd => !string.IsNullOrEmpty(wd.Text) && wd.Text.Contains(' '));
+                    bool lineHasSpaces = cue.Text.Contains(' ');
                     for (int w = 0; w < cue.Words.Count; w++) {
                         LyricWordCue word = cue.Words[w];
                         if (string.IsNullOrEmpty(word.Text)) continue;
                         sb.Append('<').Append(FormatLrcTimestamp(word.StartSeconds)).Append('>').Append(word.Text);
-                        if (w + 1 < cue.Words.Count && !word.Text.EndsWith(' ')) {
+                        if (!wordsCarrySpaces && lineHasSpaces && w + 1 < cue.Words.Count && !word.Text.EndsWith(' ')) {
                             sb.Append(' ');
                         }
+                    }
+                    LyricWordCue lastWord = cue.Words[^1];
+                    if (lastWord.EndSeconds > lastWord.StartSeconds + 0.05) {
+                        sb.Append('<').Append(FormatLrcTimestamp(lastWord.EndSeconds)).Append('>');
                     }
                 } else {
                     sb.Append(cue.Text.Trim());
@@ -135,27 +141,54 @@ public static partial class LyricsService {
     const int MaxMoodDigestSections = 16;
 
     static readonly HashSet<string> HighArousalTokens = new(StringComparer.OrdinalIgnoreCase) {
+        // EN
         "fire", "burn", "run", "fly", "rise", "shout", "scream", "thunder", "storm", "fight",
         "dance", "jump", "wild", "explode", "power", "free", "alive", "tonight", "higher", "fast",
-        "rush", "break", "bang", "crash", "electric", "glow", "shine", "roar", "rage", "heart"
+        "rush", "break", "bang", "crash", "electric", "glow", "shine", "roar", "rage", "heart",
+        // PT-BR / ES (accent-folded)
+        "fogo", "queimar", "queima", "correr", "corre", "voar", "voa", "subir", "gritar", "grita",
+        "trovao", "tempestade", "lutar", "luta", "dancar", "danca", "pular", "pula", "selvagem",
+        "explodir", "poder", "forca", "livre", "vivo", "viva", "hoje", "rapido", "quebrar",
+        "quebra", "eletrico", "brilhar", "brilha", "furia", "raiva", "coracao", "fuego", "volar",
+        "bailar", "saltar", "fuerza", "tormenta", "latir"
     };
 
     static readonly HashSet<string> LowArousalTokens = new(StringComparer.OrdinalIgnoreCase) {
+        // EN
         "sleep", "quiet", "silence", "soft", "slow", "whisper", "breathe", "calm", "still", "gentle",
         "drift", "fade", "shadow", "moon", "night", "rest", "peace", "dream", "float", "hush",
-        "alone", "hollow", "cold", "rain", "mist", "memory", "sigh", "close", "stay", "hold"
+        "alone", "hollow", "cold", "rain", "mist", "memory", "sigh", "close", "stay", "hold",
+        // PT-BR / ES (accent-folded)
+        "dormir", "dorme", "quieto", "silencio", "suave", "devagar", "lento", "sussurro", "respirar",
+        "respira", "calma", "calmo", "tranquilo", "sombra", "lua", "noite", "descanso", "paz",
+        "sonho", "sonhar", "flutuar", "sozinho", "sozinha", "vazio", "frio", "chuva", "neblina",
+        "memoria", "suspiro", "ficar", "fica", "abraco", "saudade", "sueno", "noche", "luna",
+        "lluvia", "despacio", "susurro", "solo", "sola"
     };
 
     static readonly HashSet<string> PositiveValenceTokens = new(StringComparer.OrdinalIgnoreCase) {
+        // EN
         "love", "light", "bright", "sun", "shine", "smile", "hope", "joy", "free", "alive",
         "fly", "rise", "dream", "home", "gold", "star", "heaven", "sweet", "together", "win",
-        "happy", "grace", "kiss", "warm", "bloom", "magic", "dance", "glory", "forever", "strong"
+        "happy", "grace", "kiss", "warm", "bloom", "magic", "dance", "glory", "forever", "strong",
+        // PT-BR / ES (accent-folded)
+        "amor", "amar", "amo", "luz", "brilho", "sol", "brilhar", "sorriso", "sorrir", "esperanca",
+        "alegria", "feliz", "felicidade", "livre", "vivo", "voar", "sonho", "casa", "ouro", "estrela",
+        "ceu", "doce", "juntos", "vencer", "graca", "beijo", "quente", "flor", "magia", "dancar",
+        "gloria", "sempre", "forte", "paixao", "encanto", "esperanza", "estrella", "cielo", "beso", "sonrisa"
     };
 
     static readonly HashSet<string> NegativeValenceTokens = new(StringComparer.OrdinalIgnoreCase) {
+        // EN
         "pain", "cry", "tears", "broken", "dark", "lost", "fear", "hate", "die", "dead",
         "bleed", "hurt", "cold", "alone", "empty", "fall", "shadow", "ghost", "ache", "sorrow",
-        "burn", "scar", "lies", "gone", "goodbye", "nightmare", "crash", "trapped", "fade", "grief"
+        "burn", "scar", "lies", "gone", "goodbye", "nightmare", "crash", "trapped", "fade", "grief",
+        // PT-BR / ES (accent-folded)
+        "dor", "chorar", "choro", "lagrimas", "lagrima", "quebrado", "partido", "escuro", "escuridao",
+        "perdido", "perdida", "medo", "odio", "morrer", "morto", "sangrar", "machucar", "ferida",
+        "frio", "sozinho", "sozinha", "vazio", "cair", "sombra", "fantasma", "triste", "tristeza",
+        "cicatriz", "mentira", "mentiras", "adeus", "pesadelo", "preso", "saudade", "luto", "solidao",
+        "dolor", "llorar", "roto", "oscuro", "miedo", "morir", "soledad", "herida"
     };
 
     /// <summary>
@@ -272,8 +305,9 @@ public static partial class LyricsService {
         StringBuilder tok = new(24);
         void ClassifyToken() {
             if (tok.Length == 0) return;
-            string w = tok.ToString();
+            string w = FoldDiacriticsLower(tok.ToString());
             tok.Clear();
+            if (w.Length == 0) return;
             tokenCount++;
             if (HighArousalTokens.Contains(w)) highHit++;
             if (LowArousalTokens.Contains(w)) lowHit++;
@@ -703,6 +737,7 @@ public static partial class LyricsService {
         if (normalized.Contains("<p", StringComparison.OrdinalIgnoreCase) && normalized.Contains("begin=", StringComparison.OrdinalIgnoreCase)) {
             List<LyricCue> ttmlCues = ParseTtmlCues(normalized);
             if (ttmlCues.Count >= 1) {
+                ttmlCues = StripLeadingTrailingCredits(ttmlCues);
                 InferTrailingLineAndWordEnds(ttmlCues);
                 return new LyricsDocument {
                     IsSynced = true,
@@ -737,7 +772,6 @@ public static partial class LyricsService {
 
         double offsetSec = 0;
         List<LyricCue> synced = [];
-        List<LyricCue> yrcCredits = [];
         List<string> unsynced = [];
         bool sawMsTimedLine = false;
 
@@ -756,9 +790,8 @@ public static partial class LyricsService {
                 continue;
             }
 
-            // NetEase YRC JSON credit header line: {"t":0,"c":[{"tx":"..."}]}
-            if (line.StartsWith('{') && TryParseNeteaseCreditJsonLine(line, offsetSec, out LyricCue creditCue)) {
-                yrcCredits.Add(creditCue);
+            // NetEase YRC JSON credit header line: {"t":0,"c":[{"tx":"..."}]} -> never inject into synced playback cues
+            if (line.StartsWith('{') && TryParseNeteaseCreditJsonLine(line, offsetSec, out _)) {
                 continue;
             }
 
@@ -818,12 +851,11 @@ public static partial class LyricsService {
             }
         }
 
-        if (sawMsTimedLine && yrcCredits.Count > 0) {
-            synced.AddRange(yrcCredits);
-        }
-
+        // Stage A: Never inject NetEase YRC JSON credit headers (yrcCredits) into synced playback cues,
+        // and strip deterministic multi-language leading/trailing credit legends cleanly.
         if (synced.Count >= 2 || (sawMsTimedLine && synced.Count >= 1)) {
             synced.Sort((a, b) => a.TimeSeconds.CompareTo(b.TimeSeconds));
+            synced = StripLeadingTrailingCredits(synced);
             InferTrailingLineAndWordEnds(synced);
             return new LyricsDocument {
                 IsSynced = true,
@@ -1262,5 +1294,443 @@ public static partial class LyricsService {
             return true;
         }
         return false;
+    }
+
+    // ---- W4: 2-Stage Synced Lyrics Credit Stripping & Fuzzy Plain-Lyrics Alignment ----
+
+    static readonly string[] CjkCreditPrefixes = [
+        "作词", "作曲", "编曲", "制作人", "词曲", "演唱", "原唱", "翻唱", "混音", "母带",
+        "录音", "监制", "出品", "和声", "吉他", "贝斯", "键盘", "发行", "统筹", "企划",
+        "后期", "混音师", "录音师", "母带工程师", "词", "曲", "鼓"
+    ];
+
+    static readonly string[] LatinCreditPrefixes = [
+        "lyrics", "lyricist", "written by", "writer", "words by", "words",
+        "music by", "music", "composed by", "composer", "produced by", "producer",
+        "arranged by", "arrangement", "mixed by", "mixing", "mastered by", "mastering",
+        "vocals by", "vocalist", "performed by", "singer", "artist", "recording",
+        "engineered by", "engineer", "guitar", "bass", "drums", "piano", "keyboard",
+        "copyright", "license", "synced by", "lrc by", "powered by",
+        // PT-BR & ES
+        "letra", "composicao", "compositor", "compositores", "producao", "produtor",
+        "arranjo", "arranjos", "mixagem", "masterizacao", "interprete", "gravacao",
+        "voz", "vocal", "edicao", "direcao", "musica por", "letra por", "escrita por",
+        "produzido por", "compuesto por", "producido por", "mezcla", "masterizacion", "arreglos"
+    ];
+
+    static readonly string[] WatermarkSubstrings = [
+        "qqmusic", "netease", "kugou", "musixmatch", "all rights reserved",
+        "http://", "https://", "www.", "lrc by", "synced by"
+    ];
+
+    /// <summary>
+    /// Stage-A deterministic classifier for non-lyric credit/metadata legends across EN, PT-BR, ES, and CJK.
+    /// </summary>
+    public static bool IsCreditLegendLine(string text, string trackTitle = null, string trackArtist = null) {
+        if (string.IsNullOrWhiteSpace(text)) {
+            return false;
+        }
+        string trimmed = text.Trim();
+        if (IsBreakText(trimmed)) {
+            return false;
+        }
+        if (trimmed.Contains('©') || trimmed.Contains('℗')) {
+            return true;
+        }
+
+        // Check CJK credit prefix labels (e.g. "作词 : ...", "编曲：...", "制作人: ...")
+        for (int i = 0; i < CjkCreditPrefixes.Length; i++) {
+            string pfx = CjkCreditPrefixes[i];
+            if (trimmed.StartsWith(pfx, StringComparison.Ordinal)) {
+                int rest = pfx.Length;
+                while (rest < trimmed.Length && char.IsWhiteSpace(trimmed[rest])) rest++;
+                if (rest < trimmed.Length && (trimmed[rest] == ':' || trimmed[rest] == '：' || trimmed[rest] == '-' || trimmed[rest] == '—')) {
+                    return true;
+                }
+            }
+        }
+
+        string folded = FoldDiacriticsLower(trimmed);
+        for (int i = 0; i < WatermarkSubstrings.Length; i++) {
+            if (folded.Contains(WatermarkSubstrings[i], StringComparison.Ordinal)) {
+                return true;
+            }
+        }
+
+        // Check EN / PT-BR / ES credit labels ("Lyrics by ...", "Letra: ...", "Produção: ...", "Mix/Master: ...")
+        if (folded.StartsWith("mix/master", StringComparison.Ordinal) ||
+            folded.StartsWith("mix & master", StringComparison.Ordinal) ||
+            folded.StartsWith("mix and master", StringComparison.Ordinal)) {
+            return true;
+        }
+        for (int i = 0; i < LatinCreditPrefixes.Length; i++) {
+            string pfx = LatinCreditPrefixes[i];
+            if (folded.StartsWith(pfx, StringComparison.Ordinal)) {
+                if (folded.Length == pfx.Length) {
+                    continue;
+                }
+                int rest = pfx.Length;
+                // Multi-word "by"/"por" prefixes match with just a following space
+                if (pfx.EndsWith(" by", StringComparison.Ordinal) || pfx.EndsWith(" por", StringComparison.Ordinal)) {
+                    if (char.IsWhiteSpace(folded[rest]) || folded[rest] == ':' || folded[rest] == '：') {
+                        return true;
+                    }
+                    continue;
+                }
+                while (rest < folded.Length && char.IsWhiteSpace(folded[rest])) rest++;
+                if (rest < folded.Length && (folded[rest] == ':' || folded[rest] == '：')) {
+                    return true;
+                }
+            }
+        }
+
+        // Detect "Title - Artist" or "Artist - Title" header legend when track metadata is provided
+        if ((!string.IsNullOrWhiteSpace(trackTitle) || !string.IsNullOrWhiteSpace(trackArtist)) &&
+            (trimmed.Contains(" - ", StringComparison.Ordinal) || trimmed.Contains(" — ", StringComparison.Ordinal))) {
+            string normTitle = FoldDiacriticsLower(trackTitle ?? "");
+            string normArtist = FoldDiacriticsLower(trackArtist ?? "");
+            bool hasTitle = normTitle.Length >= 2 && folded.Contains(normTitle, StringComparison.Ordinal);
+            bool hasArtist = normArtist.Length >= 2 && folded.Contains(normArtist, StringComparison.Ordinal);
+            if ((hasTitle && hasArtist) || (hasTitle && trimmed.Length <= (trackTitle?.Length ?? 0) + 32)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Stage-A credit cleaner: strips leading/trailing credit legends without ever removing lyrics from the song body.
+    /// </summary>
+    public static List<LyricCue> StripLeadingTrailingCredits(
+        IReadOnlyList<LyricCue> cues,
+        string trackTitle = null,
+        string trackArtist = null) {
+        if (cues == null || cues.Count == 0) {
+            return [];
+        }
+        List<LyricCue> working = new(cues);
+        if (working.Count <= 1) {
+            return working;
+        }
+
+        // 1. Scan leading metadata zone (up to first 16 cues; stop once 2 consecutive real lyric lines are seen)
+        int scanLimit = Math.Min(16, working.Count);
+        HashSet<int> removeIndices = [];
+        int consecutiveReal = 0;
+        int lastLeadingCreditIdx = -1;
+        for (int i = 0; i < scanLimit; i++) {
+            LyricCue c = working[i];
+            if (IsBreakText(c.Text)) {
+                continue;
+            }
+            if (IsCreditLegendLine(c.Text, trackTitle, trackArtist) ||
+                (i == 0 && c.TimeSeconds <= 10.0 && LooksLikeTitleArtistHeader(c.Text))) {
+                removeIndices.Add(i);
+                lastLeadingCreditIdx = i;
+                consecutiveReal = 0;
+            } else {
+                consecutiveReal++;
+                if (consecutiveReal >= 2) {
+                    break;
+                }
+            }
+        }
+        // Drop empty break markers that were strictly between removed leading credits
+        if (lastLeadingCreditIdx >= 0) {
+            for (int i = 0; i <= lastLeadingCreditIdx; i++) {
+                if (IsBreakText(working[i].Text)) {
+                    removeIndices.Add(i);
+                }
+            }
+        }
+
+        // 2. Scan trailing metadata zone (last 8 cues, walking backwards while credits/trailing breaks appear)
+        int tailFloor = Math.Max(0, working.Count - 8);
+        bool sawTailCredit = false;
+        for (int i = working.Count - 1; i >= tailFloor; i--) {
+            LyricCue c = working[i];
+            if (IsBreakText(c.Text)) {
+                if (sawTailCredit) {
+                    removeIndices.Add(i);
+                }
+                continue;
+            }
+            if (IsCreditLegendLine(c.Text, trackTitle, trackArtist)) {
+                removeIndices.Add(i);
+                sawTailCredit = true;
+            } else {
+                break;
+            }
+        }
+
+        if (removeIndices.Count == 0 || removeIndices.Count >= working.Count) {
+            return working;
+        }
+        List<LyricCue> cleaned = new(working.Count - removeIndices.Count);
+        for (int i = 0; i < working.Count; i++) {
+            if (!removeIndices.Contains(i)) {
+                cleaned.Add(working[i]);
+            }
+        }
+        // Trim any leading break cue left behind right after removed credits
+        while (cleaned.Count > 1 && IsBreakText(cleaned[0].Text) && lastLeadingCreditIdx >= 0) {
+            cleaned.RemoveAt(0);
+        }
+        return cleaned.Count > 0 ? cleaned : working;
+    }
+
+    /// <summary>
+    /// Stage-A + Stage-B cleaner: applies deterministic credit stripping and then aligns synced cues against a
+    /// clean plain-lyrics reference using accent-folded token Dice similarity + edit-distance-1 matching.
+    /// Strict safety guard: scans prefix strictly in <c>k in [1..min(12, count-2)]</c> requiring either
+    /// 2 consecutive matches <c>&gt;= 0.55</c> OR 1 high-confidence match <c>&gt;= 0.78</c> with <c>&gt;= 3</c> words.
+    /// </summary>
+    public static LyricsDocument AlignAndCleanWithPlainLyrics(
+        LyricsDocument syncedDoc,
+        string plainLyrics,
+        string trackTitle = null,
+        string trackArtist = null) {
+        if (syncedDoc == null || !syncedDoc.IsSynced || syncedDoc.Lines == null || syncedDoc.Lines.Count == 0) {
+            return syncedDoc ?? new LyricsDocument();
+        }
+
+        List<LyricCue> cues = StripLeadingTrailingCredits(syncedDoc.Lines, trackTitle, trackArtist);
+
+        if (!string.IsNullOrWhiteSpace(plainLyrics) && cues.Count >= 3) {
+            List<string> plainLines = ExtractCleanPlainLines(plainLyrics, trackTitle, trackArtist);
+            if (plainLines.Count >= 2) {
+                // Find first non-break cue index
+                int firstLyricIdx = 0;
+                while (firstLyricIdx < cues.Count && IsBreakText(cues[firstLyricIdx].Text)) {
+                    firstLyricIdx++;
+                }
+
+                // Only attempt prefix trimming if cue[firstLyricIdx] does NOT already match plainLines[0]
+                if (firstLyricIdx < cues.Count &&
+                    ComputeFuzzyLineSimilarity(cues[firstLyricIdx].Text, plainLines[0]) < 0.55) {
+                    int maxK = Math.Min(12, cues.Count - 2);
+                    int matchedStart = -1;
+                    for (int k = Math.Max(1, firstLyricIdx + 1); k <= maxK; k++) {
+                        if (IsBreakText(cues[k].Text)) {
+                            continue;
+                        }
+                        double sim0 = ComputeFuzzyLineSimilarity(cues[k].Text, plainLines[0]);
+                        if (sim0 < 0.55) {
+                            continue;
+                        }
+                        bool highConfSingle = sim0 >= 0.78 && CountWords(plainLines[0]) >= 3;
+                        bool twoConsecutive = false;
+                        int nextNonBreak = k + 1;
+                        while (nextNonBreak < cues.Count && IsBreakText(cues[nextNonBreak].Text)) {
+                            nextNonBreak++;
+                        }
+                        if (nextNonBreak < cues.Count &&
+                            ComputeFuzzyLineSimilarity(cues[nextNonBreak].Text, plainLines[1]) >= 0.55) {
+                            twoConsecutive = true;
+                        }
+                        if (twoConsecutive || highConfSingle) {
+                            // Verify no skipped prefix line strongly matches any plain lyric line
+                            bool wouldDropRealLyric = false;
+                            for (int p = 0; p < k; p++) {
+                                if (IsBreakText(cues[p].Text) || IsCreditLegendLine(cues[p].Text, trackTitle, trackArtist)) {
+                                    continue;
+                                }
+                                int checkRange = Math.Min(plainLines.Count, 8);
+                                for (int pl = 0; pl < checkRange; pl++) {
+                                    if (ComputeFuzzyLineSimilarity(cues[p].Text, plainLines[pl]) >= 0.65) {
+                                        wouldDropRealLyric = true;
+                                        break;
+                                    }
+                                }
+                                if (wouldDropRealLyric) break;
+                            }
+                            if (!wouldDropRealLyric) {
+                                matchedStart = k;
+                            }
+                            break;
+                        }
+                    }
+
+                    if (matchedStart > 0 && matchedStart < cues.Count) {
+                        cues = cues.GetRange(matchedStart, cues.Count - matchedStart);
+                    }
+                }
+
+                // Trailing junk check (last <= 6 cues after verified final plain line)
+                if (cues.Count >= 3 && plainLines.Count >= 2) {
+                    string lastPlain = plainLines[^1];
+                    int minTailIdx = Math.Max(1, cues.Count - 6);
+                    int lastMatchedCue = -1;
+                    for (int m = cues.Count - 1; m >= minTailIdx; m--) {
+                        if (IsBreakText(cues[m].Text)) continue;
+                        if (ComputeFuzzyLineSimilarity(cues[m].Text, lastPlain) >= 0.65) {
+                            lastMatchedCue = m;
+                            break;
+                        }
+                    }
+                    if (lastMatchedCue >= 0 && lastMatchedCue < cues.Count - 1) {
+                        bool tailHasRealLyric = false;
+                        for (int t = lastMatchedCue + 1; t < cues.Count; t++) {
+                            if (IsBreakText(cues[t].Text) || IsCreditLegendLine(cues[t].Text, trackTitle, trackArtist)) {
+                                continue;
+                            }
+                            int tailPlainStart = Math.Max(0, plainLines.Count - 6);
+                            for (int pl = tailPlainStart; pl < plainLines.Count; pl++) {
+                                if (ComputeFuzzyLineSimilarity(cues[t].Text, plainLines[pl]) >= 0.55) {
+                                    tailHasRealLyric = true;
+                                    break;
+                                }
+                            }
+                            if (tailHasRealLyric) break;
+                        }
+                        if (!tailHasRealLyric) {
+                            cues = cues.GetRange(0, lastMatchedCue + 1);
+                        }
+                    }
+                }
+            }
+        }
+
+        InferTrailingLineAndWordEnds(cues);
+        return new LyricsDocument {
+            IsSynced = true,
+            IsSyllableSynced = cues.Any(c => c.Words is { Count: > 0 }),
+            Lines = cues,
+            RawUnsyncedText = string.Join("\n", cues.Select(c => c.Text)),
+            SourceLabel = syncedDoc.SourceLabel
+        };
+    }
+
+    /// <summary>
+    /// Computes accent-folded token Sørensen–Dice similarity in [0..1] allowing Levenshtein edit distance &lt;= 1
+    /// on tokens of length &gt;= 4 (tolerating minor punctuation, accent, or spelling variations across providers).
+    /// </summary>
+    public static double ComputeFuzzyLineSimilarity(string a, string b) {
+        List<string> tokA = TokenizeForLyricsAlign(a);
+        List<string> tokB = TokenizeForLyricsAlign(b);
+        if (tokA.Count == 0 || tokB.Count == 0) {
+            return 0.0;
+        }
+        bool[] usedB = new bool[tokB.Count];
+        int matches = 0;
+        for (int i = 0; i < tokA.Count; i++) {
+            string wa = tokA[i];
+            for (int j = 0; j < tokB.Count; j++) {
+                if (usedB[j]) continue;
+                string wb = tokB[j];
+                if (string.Equals(wa, wb, StringComparison.Ordinal) ||
+                    (wa.Length >= 4 && wb.Length >= 4 && IsEditDistanceAtMostOne(wa, wb))) {
+                    usedB[j] = true;
+                    matches++;
+                    break;
+                }
+            }
+        }
+        return (2.0 * matches) / (tokA.Count + tokB.Count);
+    }
+
+    static bool LooksLikeTitleArtistHeader(string text) {
+        if (string.IsNullOrWhiteSpace(text) || text.Length > 72) {
+            return false;
+        }
+        int sep = text.IndexOf(" - ", StringComparison.Ordinal);
+        if (sep <= 0 || sep >= text.Length - 3) {
+            return false;
+        }
+        // Only treat concise "Song - Artist" headers with <= 4 words per side and no lyric punctuation
+        string left = text[..sep].Trim();
+        string right = text[(sep + 3)..].Trim();
+        return !text.Contains('!') && !text.Contains('?') && !text.Contains(',') &&
+               CountWords(left) is >= 1 and <= 4 && CountWords(right) is >= 1 and <= 4;
+    }
+
+    static List<string> ExtractCleanPlainLines(string plainLyrics, string trackTitle, string trackArtist) {
+        string[] raw = plainLyrics.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        List<string> clean = new(raw.Length);
+        for (int i = 0; i < raw.Length; i++) {
+            string line = raw[i].Trim();
+            if (string.IsNullOrWhiteSpace(line) || IsBreakText(line)) {
+                continue;
+            }
+            // Skip structural section tags like "[Verse 1]", "[Chorus]", "(Intro)"
+            if ((line.StartsWith('[') && line.EndsWith(']') && line.Length <= 32) ||
+                (line.StartsWith('(') && line.EndsWith(')') && line.Length <= 24)) {
+                continue;
+            }
+            if (IsCreditLegendLine(line, trackTitle, trackArtist)) {
+                continue;
+            }
+            clean.Add(line);
+        }
+        return clean;
+    }
+
+    static List<string> TokenizeForLyricsAlign(string text) {
+        List<string> tokens = [];
+        if (string.IsNullOrWhiteSpace(text)) {
+            return tokens;
+        }
+        string folded = FoldDiacriticsLower(text);
+        StringBuilder cur = new(16);
+        for (int i = 0; i < folded.Length; i++) {
+            char c = folded[i];
+            if (char.IsLetterOrDigit(c)) {
+                // Treat CJK ideographs individually so unspaced Chinese/Japanese/Korean lines tokenize cleanly
+                if (c >= '\u4E00' && c <= '\u9FFF') {
+                    if (cur.Length > 0) {
+                        tokens.Add(cur.ToString());
+                        cur.Clear();
+                    }
+                    tokens.Add(c.ToString());
+                } else {
+                    cur.Append(c);
+                }
+            } else if (cur.Length > 0) {
+                tokens.Add(cur.ToString());
+                cur.Clear();
+            }
+        }
+        if (cur.Length > 0) {
+            tokens.Add(cur.ToString());
+        }
+        return tokens;
+    }
+
+    static int CountWords(string text) => TokenizeForLyricsAlign(text).Count;
+
+    static bool IsEditDistanceAtMostOne(string a, string b) {
+        int diff = a.Length - b.Length;
+        if (diff > 1 || diff < -1) return false;
+        int i = 0, j = 0, edits = 0;
+        while (i < a.Length && j < b.Length) {
+            if (a[i] == b[j]) {
+                i++;
+                j++;
+            } else {
+                if (++edits > 1) return false;
+                if (a.Length > b.Length) i++;
+                else if (b.Length > a.Length) j++;
+                else { i++; j++; }
+            }
+        }
+        if (i < a.Length || j < b.Length) edits++;
+        return edits <= 1;
+    }
+
+    static string FoldDiacriticsLower(string input) {
+        if (string.IsNullOrEmpty(input)) {
+            return string.Empty;
+        }
+        string formD = input.Normalize(NormalizationForm.FormD);
+        StringBuilder sb = new(formD.Length);
+        for (int i = 0; i < formD.Length; i++) {
+            char c = formD[i];
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) == System.Globalization.UnicodeCategory.NonSpacingMark) {
+                continue;
+            }
+            sb.Append(char.ToLowerInvariant(c));
+        }
+        return sb.ToString();
     }
 }

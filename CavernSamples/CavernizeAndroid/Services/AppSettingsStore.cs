@@ -700,6 +700,18 @@ public sealed class AppSettingsStore {
         set => Edit().PutInt("neuralOrchestrationMode", Math.Clamp(value, 0, 1)).Apply();
     }
 
+    /// <summary>
+    /// AI Compute Headroom tier: 0 = Eco, 1 = Balanced (Recommended, default), 2 = Fast (Max 75% CPU/NPU cap).
+    /// </summary>
+    public int AiComputeBudgetTier {
+        get => Math.Clamp(prefs.GetInt("aiComputeBudgetTier", 1), 0, 2);
+        set {
+            int clamped = Math.Clamp(value, 0, 2);
+            Edit().PutInt("aiComputeBudgetTier", clamped).Apply();
+            AndroidRuntimeTelemetry.SetComputeBudgetTier(clamped);
+        }
+    }
+
     public int NeuralTrackCacheMaxMb {
         get => prefs.GetInt("neuralTrackCacheMaxMb", 512);
         set => Edit().PutInt("neuralTrackCacheMaxMb", Math.Clamp(value, 128, 4096)).Apply();
@@ -848,7 +860,42 @@ public sealed class AppSettingsStore {
             added = true;
         }
         SetNeuralTaskModelIds(task, list);
+        SyncPrimarySlotFromTaskSlots(task);
         return added;
+    }
+
+    /// <summary>
+    /// Keeps legacy single-slot primary IDs synchronized with <see cref="NeuralTaskSlotsJson"/> without
+    /// re-activating a model that was just toggled off in Custom Ensemble mode.
+    /// </summary>
+    public void SyncPrimarySlotFromTaskSlots(Cavernize.Logic.Spatial.NeuralModelTask task) {
+        switch (task) {
+            case Cavernize.Logic.Spatial.NeuralModelTask.StemSeparation6:
+            case Cavernize.Logic.Spatial.NeuralModelTask.StemSeparation4:
+            case Cavernize.Logic.Spatial.NeuralModelTask.VocalSeparation: {
+                string next = GetNeuralTaskModelIds(Cavernize.Logic.Spatial.NeuralModelTask.StemSeparation6).FirstOrDefault()
+                    ?? GetNeuralTaskModelIds(Cavernize.Logic.Spatial.NeuralModelTask.StemSeparation4).FirstOrDefault()
+                    ?? GetNeuralTaskModelIds(Cavernize.Logic.Spatial.NeuralModelTask.VocalSeparation).FirstOrDefault()
+                    ?? string.Empty;
+                ActiveStemModelId = next;
+                break;
+            }
+            case Cavernize.Logic.Spatial.NeuralModelTask.KaraokeLeadBacking:
+                ActiveKaraokeModelId = GetNeuralTaskModelIds(task).FirstOrDefault() ?? string.Empty;
+                break;
+            case Cavernize.Logic.Spatial.NeuralModelTask.Dereverb:
+                ActiveDereverbModelId = GetNeuralTaskModelIds(task).FirstOrDefault() ?? string.Empty;
+                break;
+            case Cavernize.Logic.Spatial.NeuralModelTask.DebleedDenoise:
+                ActiveDebleedModelId = GetNeuralTaskModelIds(task).FirstOrDefault() ?? string.Empty;
+                break;
+            case Cavernize.Logic.Spatial.NeuralModelTask.CodecRestoreApollo:
+            case Cavernize.Logic.Spatial.NeuralModelTask.BandwidthExtension:
+                ActiveRestorerModelId = GetNeuralTaskModelIds(Cavernize.Logic.Spatial.NeuralModelTask.CodecRestoreApollo).FirstOrDefault()
+                    ?? GetNeuralTaskModelIds(Cavernize.Logic.Spatial.NeuralModelTask.BandwidthExtension).FirstOrDefault()
+                    ?? string.Empty;
+                break;
+        }
     }
 
     Dictionary<string, List<string>> LoadRawTaskSlots() {
@@ -1609,6 +1656,7 @@ public sealed class AppSettingsStore {
         Cavern.Format.Common.CavernFormatGlobal.Pedantic = Pedantic;
         Cavern.Format.Common.CavernFormatGlobal.Unsafe = Unsafe;
         RenderingSettings.KeepTempFiles = KeepTempFiles;
+        AndroidRuntimeTelemetry.SetComputeBudgetTier(AiComputeBudgetTier);
     }
 }
 

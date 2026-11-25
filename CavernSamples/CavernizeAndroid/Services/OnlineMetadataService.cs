@@ -918,7 +918,7 @@ public static partial class OnlineMetadataService {
             await TrySearchLyricsOvhAsync(cleanTitle, cleanArtist, list, ct).ConfigureAwait(false);
         }
 
-        return list
+        List<OnlineLyricsCandidate> ranked = list
             .Select(c => {
                 var (riskScore, riskNotes, exact, score) = ComputeLyricsMatchRisk(title, artist, fullAlbum, expectedDurationSec, c);
                 int rank = (c.Source, c.IsSyllableSynced, c.IsSynced) switch {
@@ -960,6 +960,51 @@ public static partial class OnlineMetadataService {
             .ThenBy(c => c.MatchRiskScore)
             .ThenByDescending(c => c.MatchScore)
             .ToList();
+
+        // W4 Stage-B: Find the cleanest verified plain-lyrics reference (preferring LRCLIB) to scrub
+        // leading/trailing credit legends from synced & syllable-synced providers (NetEase/KuGou/etc.).
+        string cleanPlainRef = ranked
+            .Where(c => c.MatchRiskScore <= 35 && !string.IsNullOrWhiteSpace(c.PlainLyrics))
+            .OrderByDescending(c => c.Source.StartsWith("LRCLIB", StringComparison.OrdinalIgnoreCase))
+            .ThenBy(c => c.MatchRiskScore)
+            .Select(c => c.PlainLyrics)
+            .FirstOrDefault();
+
+        for (int i = 0; i < ranked.Count; i++) {
+            OnlineLyricsCandidate cand = ranked[i];
+            if (!cand.IsSynced || string.IsNullOrWhiteSpace(cand.SyncedLrc)) {
+                continue;
+            }
+            string refPlain = !string.IsNullOrWhiteSpace(cand.PlainLyrics) ? cand.PlainLyrics : cleanPlainRef;
+            LyricsDocument parsed = LyricsService.ParseLyricsText(cand.SyncedLrc, cand.Source);
+            if (!parsed.IsSynced || parsed.Lines.Count == 0) {
+                continue;
+            }
+            LyricsDocument cleaned = LyricsService.AlignAndCleanWithPlainLyrics(parsed, refPlain, title, artist);
+            if (cleaned.IsSynced && cleaned.Lines.Count > 0) {
+                string serialized = LyricsService.SerializeToLrc(cleaned);
+                if (!string.IsNullOrWhiteSpace(serialized)) {
+                    ranked[i] = new OnlineLyricsCandidate {
+                        TrackName = cand.TrackName,
+                        ArtistName = cand.ArtistName,
+                        AlbumName = cand.AlbumName,
+                        Source = cand.Source,
+                        IsSynced = true,
+                        IsSyllableSynced = cleaned.IsSyllableSynced,
+                        SyncedLrc = serialized,
+                        PlainLyrics = cand.PlainLyrics,
+                        DurationSec = cand.DurationSec,
+                        SourceRank = cand.SourceRank,
+                        MatchScore = cand.MatchScore,
+                        MatchRiskScore = cand.MatchRiskScore,
+                        MatchRiskNotes = cand.MatchRiskNotes,
+                        IsExactMatch = cand.IsExactMatch
+                    };
+                }
+            }
+        }
+
+        return ranked;
     }
 
     static OnlineLyricsCandidate ParseLrcLibItem(JsonElement el) {

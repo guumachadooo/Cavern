@@ -543,7 +543,15 @@ public partial class MainActivity {
         roomNeuralPrepBtn.SetSingleLine(true);
         roomNeuralPrepBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         roomNeuralPrepBtn.SetPadding(Dp(12), Dp(6), Dp(12), Dp(6));
-        neuralPrepRow.AddView(roomNeuralPrepBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        neuralPrepRow.AddView(roomNeuralPrepBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) {
+            RightMargin = Dp(6)
+        });
+
+        Button roomAiSettingsBtn = PillButton(S["OpenAiSettingsShortBtn"], () => JumpToSettingsCategory(2));
+        roomAiSettingsBtn.TextSize = 11f;
+        roomAiSettingsBtn.SetSingleLine(true);
+        roomAiSettingsBtn.SetPadding(Dp(10), Dp(6), Dp(10), Dp(6));
+        neuralPrepRow.AddView(roomAiSettingsBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
         mixerCard.AddView(neuralPrepRow);
 
         mixerContainer = new LinearLayout(this) { Orientation = Orientation.Vertical };

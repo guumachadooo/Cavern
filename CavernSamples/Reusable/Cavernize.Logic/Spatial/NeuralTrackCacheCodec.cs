@@ -33,6 +33,12 @@ public sealed class NeuralTrackCacheEntryInfo {
     /// <summary>Model or bundle summary label.</summary>
     public string ModelSummary { get; init; } = string.Empty;
 
+    /// <summary>Original source track path or URI recorded when this cache bundle was created.</summary>
+    public string SourceTrackKey { get; init; } = string.Empty;
+
+    /// <summary>Pipeline plan signature recorded when this cache bundle was created.</summary>
+    public string PlanSignature { get; init; } = string.Empty;
+
     /// <summary>Number of separated stereo stems in this bundle.</summary>
     public int StemCount { get; init; }
 
@@ -319,7 +325,7 @@ public static class NeuralTrackCacheCodec {
                 string origin = ReadUtf8String(br);
                 string modelSummary = ReadUtf8String(br);
                 string sourceKey = ReadUtf8String(br);
-                ReadUtf8String(br); // planSignature
+                string planSig = ReadUtf8String(br);
                 int stemCount = br.ReadInt32();
                 NeuralTrackCacheCompressionMode mode = Enum.IsDefined(typeof(NeuralTrackCacheCompressionMode), (int)modeRaw)
                     ? (NeuralTrackCacheCompressionMode)modeRaw
@@ -333,6 +339,8 @@ public static class NeuralTrackCacheCodec {
                     ArtistName = artist,
                     OriginTag = string.IsNullOrWhiteSpace(origin) ? "Local AI" : origin,
                     ModelSummary = modelSummary,
+                    SourceTrackKey = sourceKey,
+                    PlanSignature = planSig,
                     StemCount = Math.Max(0, stemCount),
                     SampleRate = sampleRate,
                     DurationSeconds = totalSamples > 0 ? totalSamples / (double)sampleRate : 0.0,
@@ -343,7 +351,7 @@ public static class NeuralTrackCacheCodec {
                 };
             } else {
                 string sourceKey = ReadUtf8String(br);
-                ReadUtf8String(br); // planSignature
+                string planSig = ReadUtf8String(br);
                 int stemCount = br.ReadInt32();
                 // Peek first stem length for duration estimate without reading samples
                 int firstStemSamples = 0;
@@ -359,6 +367,8 @@ public static class NeuralTrackCacheCodec {
                     ArtistName = string.Empty,
                     OriginTag = "Local AI (v2)",
                     ModelSummary = string.Empty,
+                    SourceTrackKey = sourceKey,
+                    PlanSignature = planSig,
                     StemCount = Math.Max(0, stemCount),
                     SampleRate = sampleRate,
                     DurationSeconds = firstStemSamples > 0 ? firstStemSamples / (double)sampleRate : 0.0,

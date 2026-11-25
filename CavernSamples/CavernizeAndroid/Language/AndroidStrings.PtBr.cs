@@ -1671,5 +1671,26 @@ public sealed partial class AndroidStrings {
         d["LocateExportTitle"] = "Arquivos Exportados";
         d["ExportSavedToFmt"] = "Salvo em: {0}";
         d["ExportCompatDownloadsBadge"] = "Compat. contêiner";
+        // BP Organização IA/UI, Folga de Processamento, Ensemble Agrupado e Reuso de Cache
+        d["NeuralReextractStemsBtn"] = "Reextrair Stems (Ignorar Cache)";
+        d["OpenAiSettingsBtn"] = "Abrir Configurações de IA";
+        d["OpenAiSettingsShortBtn"] = "Config. IA";
+        d["NeuralComputeBudgetTitle"] = "Folga de Processamento IA:";
+        d["NeuralComputeBudgetEco"] = "Eco (Frio e Fluido)";
+        d["NeuralComputeBudgetBalanced"] = "Equilibrado (Recomendado)";
+        d["NeuralComputeBudgetFast"] = "Rápido (Limite Máx. 75%)";
+        d["TipNeuralComputeBudget"] = "Controla a folga de CPU/NPU durante a separação por IA e exportações do Estúdio para manter a interface em 120 Hz e o áudio sempre fluidos:\n\n• Eco: Menos threads e maior respiro térmico.\n• Equilibrado (Recomendado): Velocidade ideal mantendo a UI responsiva.\n• Rápido (Máx. 75%): Maior desempenho com teto estrito de 75% da capacidade do aparelho.";
+        d["NeuralOrchestrationAutoLockedHint"] = "O modo Automático escolhe o melhor modelo instalado para cada tarefa. Mude para Ensemble Personalizado acima para selecionar modelos manualmente.";
+        d["NeuralEnsembleCustomHint"] = "Ensemble Personalizado ativo: toque nos modelos de qualquer categoria abaixo para adicionar ou remover livremente.";
+        d["NeuralGroupMultiStem"] = "Separação Multi-Stem (4 / 6 Stems)";
+        d["NeuralGroupVocals"] = "Separação Vocal";
+        d["NeuralGroupKaraoke"] = "Karaokê (Voz Principal vs. Backing)";
+        d["NeuralGroupDereverb"] = "Dereverb (Voz Seca / Reverberação)";
+        d["NeuralGroupDebleed"] = "Debleed e Redução de Ruído";
+        d["NeuralGroupRestore"] = "Restauração Harmônica e BWE";
+        d["NeuralGroupActiveCountFmt"] = "{0} ativo(s)";
+        d["NeuralGroupNoneActive"] = "Nenhum";
+        d["NeuralModelAutoActiveTag"] = "Auto Ativo";
+        d["NeuralModelAutoLockedTag"] = "Gerido por Auto";
     }
 }

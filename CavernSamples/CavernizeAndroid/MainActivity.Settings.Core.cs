@@ -91,7 +91,7 @@ public partial class MainActivity {
     TextView loudnessMeterText, loudnessStatusText;
     TextView neuralRuntimeStatusText, neuralPlanSummaryText, mvsepStatusText, neuralTrackCacheSavingsText;
     Button neuralRuntimeCheckBtn, neuralModelsBtn, mvsepConfigBtn, neuralBrowseTrackCacheBtn;
-    OneUiInlineSelector neuralProviderSelector, neuralExecBackendSelector, neuralOrchestrationSelector, neuralStudioBundleSelector, neuralEnsembleSelector, neuralUpmixModeSelector, neuralTrackCacheCompSelector;
+    OneUiInlineSelector neuralProviderSelector, neuralExecBackendSelector, neuralComputeBudgetSelector, neuralOrchestrationSelector, neuralStudioBundleSelector, neuralEnsembleSelector, neuralUpmixModeSelector, neuralTrackCacheCompSelector;
     OneUiSeekBar neuralOverlapBar, karaokeVocalLevelBar;
     Switch neuralTtaSwitch, neuralPhaseFixSwitch, neuralConservationSwitch, neuralTrackCacheEnabledSwitch;
     Switch spatialKaraokeSwitch, karaokePreserveBackingSwitch, karaokeLosslessTwinSwitch;

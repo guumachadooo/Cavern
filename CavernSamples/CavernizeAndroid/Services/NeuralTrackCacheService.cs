@@ -152,6 +152,160 @@ public sealed class NeuralTrackCacheService : INeuralTrackCache {
     }
 
     /// <inheritdoc/>
+    public bool TryLoadBestForSourceTrack(
+        string sourceTrackKey,
+        string displayTitle,
+        string artistName,
+        NeuralPipelineGoal goal,
+        out NeuralSeparatedTrack track,
+        CancellationToken token = default) {
+        track = null;
+        if (!isEnabled) {
+            return false;
+        }
+        IReadOnlyList<NeuralTrackCacheEntryInfo> entries = ListEntries();
+        if (entries == null || entries.Count == 0) {
+            return false;
+        }
+
+        NeuralTrackCacheEntryInfo best = null;
+        int bestScore = 0;
+        for (int i = 0; i < entries.Count; i++) {
+            token.ThrowIfCancellationRequested();
+            NeuralTrackCacheEntryInfo entry = entries[i];
+            int score = ScoreCacheEntryMatch(entry, sourceTrackKey, displayTitle, artistName, goal);
+            if (score > bestScore ||
+                (score > 0 && score == bestScore && best != null && entry.LastModifiedUtc > best.LastModifiedUtc)) {
+                bestScore = score;
+                best = entry;
+            }
+        }
+        if (best == null || bestScore <= 0) {
+            return false;
+        }
+        return TryLoad(best.CacheKey, out track, token);
+    }
+
+    /// <summary>
+    /// Pure deterministic matcher enforcing cache-first stem reuse across backend/preset changes while strictly
+    /// preventing cross-track stem pollution (returns 0 on mismatch or insufficient stem count for <paramref name="goal"/>).
+    /// </summary>
+    public static int ScoreCacheEntryMatch(
+        NeuralTrackCacheEntryInfo entry,
+        string sourceTrackKey,
+        string displayTitle,
+        string artistName,
+        NeuralPipelineGoal goal) {
+        if (entry == null || entry.StemCount <= 0) {
+            return 0;
+        }
+        if (goal == NeuralPipelineGoal.LosslessResidualRestore) {
+            // Restoration caches are stereo mixes rather than multi-stem separation bundles
+            if (string.IsNullOrEmpty(entry.PlanSignature) ||
+                !entry.PlanSignature.Contains("LosslessResidualRestore", StringComparison.OrdinalIgnoreCase)) {
+                return 0;
+            }
+        } else if (entry.StemCount < 2) {
+            return 0;
+        }
+
+        string normQueryPath = NormalizeTrackPath(sourceTrackKey);
+        string normEntryPath = NormalizeTrackPath(entry.SourceTrackKey);
+        string normQueryFile = ExtractNormalizedFileStem(sourceTrackKey);
+        string normEntryFile = ExtractNormalizedFileStem(entry.SourceTrackKey);
+        string normQueryTitle = NormalizeMetaToken(displayTitle);
+        string normEntryTitle = NormalizeMetaToken(entry.DisplayTitle);
+        string normQueryArtist = NormalizeMetaToken(artistName);
+        string normEntryArtist = NormalizeMetaToken(entry.ArtistName);
+
+        int identityScore = 0;
+        if (!string.IsNullOrEmpty(normQueryPath) &&
+            !string.IsNullOrEmpty(normEntryPath) &&
+            string.Equals(normQueryPath, normEntryPath, StringComparison.OrdinalIgnoreCase)) {
+            identityScore = 1000;
+        } else if (!string.IsNullOrEmpty(normQueryFile) &&
+                   !string.IsNullOrEmpty(normEntryFile) &&
+                   string.Equals(normQueryFile, normEntryFile, StringComparison.Ordinal)) {
+            // Reject filename collision if both entries declare distinct non-empty artists
+            if (!string.IsNullOrEmpty(normQueryArtist) &&
+                !string.IsNullOrEmpty(normEntryArtist) &&
+                !string.Equals(normQueryArtist, normEntryArtist, StringComparison.Ordinal)) {
+                return 0;
+            }
+            identityScore = 700;
+        } else if (!string.IsNullOrEmpty(normQueryTitle) &&
+                   !string.IsNullOrEmpty(normEntryTitle) &&
+                   !string.IsNullOrEmpty(normQueryArtist) &&
+                   !string.IsNullOrEmpty(normEntryArtist) &&
+                   string.Equals(normQueryTitle, normEntryTitle, StringComparison.Ordinal) &&
+                   string.Equals(normQueryArtist, normEntryArtist, StringComparison.Ordinal)) {
+            identityScore = 450;
+        } else {
+            return 0;
+        }
+
+        int goalBonus = Math.Min(entry.StemCount, 8) * 35;
+        if (goal == NeuralPipelineGoal.SpatialKaraoke) {
+            bool karaokeTagged = !string.IsNullOrEmpty(entry.PlanSignature) &&
+                (entry.PlanSignature.Contains("SpatialKaraoke", StringComparison.OrdinalIgnoreCase) ||
+                 entry.PlanSignature.Contains("karaoke", StringComparison.OrdinalIgnoreCase) ||
+                 entry.PlanSignature.Contains("pbv=", StringComparison.OrdinalIgnoreCase));
+            if (karaokeTagged) {
+                goalBonus += 120;
+            }
+        } else if (goal == NeuralPipelineGoal.StemSeparation && entry.StemCount >= 4) {
+            goalBonus += 90;
+        }
+
+        return identityScore + goalBonus;
+    }
+
+    static string NormalizeTrackPath(string path) {
+        if (string.IsNullOrWhiteSpace(path)) {
+            return string.Empty;
+        }
+        return path.Trim().Replace('\\', '/');
+    }
+
+    static string ExtractNormalizedFileStem(string path) {
+        if (string.IsNullOrWhiteSpace(path)) {
+            return string.Empty;
+        }
+        try {
+            string cleaned = path.Trim().Replace('\\', '/');
+            int slash = cleaned.LastIndexOf('/');
+            string name = slash >= 0 ? cleaned[(slash + 1)..] : cleaned;
+            string stem = IOPath.GetFileNameWithoutExtension(name);
+            return NormalizeMetaToken(stem);
+        } catch {
+            return string.Empty;
+        }
+    }
+
+    static string NormalizeMetaToken(string value) {
+        if (string.IsNullOrWhiteSpace(value)) {
+            return string.Empty;
+        }
+        string formD = value.Trim().Normalize(NormalizationForm.FormD);
+        StringBuilder sb = new(formD.Length);
+        bool prevSpace = true;
+        for (int i = 0; i < formD.Length; i++) {
+            char c = formD[i];
+            if (System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c) == System.Globalization.UnicodeCategory.NonSpacingMark) {
+                continue;
+            }
+            if (char.IsLetterOrDigit(c)) {
+                sb.Append(char.ToLowerInvariant(c));
+                prevSpace = false;
+            } else if (!prevSpace) {
+                sb.Append(' ');
+                prevSpace = true;
+            }
+        }
+        return sb.ToString().Trim();
+    }
+
+    /// <inheritdoc/>
     public void Save(string cacheKey, NeuralSeparatedTrack track, CancellationToken token = default) {
         SpatialChoreoTrack attached = null;
         if (track != null) {

@@ -45,6 +45,21 @@ public interface INeuralTrackCache {
     /// <summary>Attempts to load a cached <see cref="NeuralSeparatedTrack"/> matching <paramref name="cacheKey"/>.</summary>
     bool TryLoad(string cacheKey, out NeuralSeparatedTrack track, CancellationToken token = default);
 
+    /// <summary>
+    /// Cache-first source-track fallback: scans O(1) headers to reuse an existing cached stem bundle for the same
+    /// source track across backend/preset changes unless the user explicitly requested re-extraction.
+    /// </summary>
+    bool TryLoadBestForSourceTrack(
+        string sourceTrackKey,
+        string displayTitle,
+        string artistName,
+        NeuralPipelineGoal goal,
+        out NeuralSeparatedTrack track,
+        CancellationToken token = default) {
+        track = null;
+        return false;
+    }
+
     /// <summary>Atomically writes <paramref name="track"/> under <paramref name="cacheKey"/> and enforces the LRU disk budget.</summary>
     void Save(string cacheKey, NeuralSeparatedTrack track, CancellationToken token = default);
 
@@ -417,7 +432,8 @@ public sealed class NeuralPipelineOrchestrator {
         CancellationToken token = default,
         Action<NeuralSeparatedTrack> onProgressiveTrackReady = null,
         string displayTitle = null,
-        string artistName = null) {
+        string artistName = null,
+        bool forceReextract = false) {
         ArgumentNullException.ThrowIfNull(mixLeft);
         ArgumentNullException.ThrowIfNull(mixRight);
 
@@ -429,9 +445,12 @@ public sealed class NeuralPipelineOrchestrator {
 
         bool allowCache = trackCache != null && safeCfg.TrackCacheEnabled && trackCache.IsEnabled;
         string cacheKey = ComputeTrackCacheKey(sourceTrackKey, fileSizeBytes, lastModifiedTicks, sampleRate, plan.PlanSignature);
-        if (allowCache && trackCache.TryLoad(cacheKey, out NeuralSeparatedTrack cached, token)) {
-            onProgress?.Invoke(1.0, $"Cache Hit ({plan.Summary})");
-            return (cached, 0f, true);
+        if (allowCache && !forceReextract) {
+            if (trackCache.TryLoad(cacheKey, out NeuralSeparatedTrack cached, token) ||
+                trackCache.TryLoadBestForSourceTrack(sourceTrackKey, displayTitle, artistName, goal, out cached, token)) {
+                onProgress?.Invoke(1.0, $"Cache Hit ({plan.Summary})");
+                return (cached, 0f, true);
+            }
         }
 
         // For VocalMixDna, analyze a smart ~40s peak vocal-activity excerpt with 2x COLA overlap (fast & accurate DNA extraction
@@ -796,15 +815,21 @@ public sealed class NeuralPipelineOrchestrator {
                 ? [NeuralModelTask.VocalSeparation, NeuralModelTask.StemSeparation6, NeuralModelTask.StemSeparation4]
                 : [NeuralModelTask.StemSeparation6, NeuralModelTask.StemSeparation4, NeuralModelTask.VocalSeparation];
 
+            bool hasAnyExplicitSeparationSlot = false;
             foreach (NeuralModelTask t in order) {
                 IReadOnlyList<string> ids = cfg.GetModelsForTask(t);
+                if (ids.Count > 0) {
+                    hasAnyExplicitSeparationSlot = true;
+                }
                 for (int i = 0; i < ids.Count; i++) {
                     if (installedById.TryGetValue(ids[i], out NeuralModelCatalogEntry entry) && seen.Add(entry.Id)) {
                         chosen.Add(entry);
                     }
                 }
             }
-            if (chosen.Count == 0 && installedById.TryGetValue(cfg.ActiveStemModelId, out NeuralModelCatalogEntry fallback)) {
+            if (!hasAnyExplicitSeparationSlot && chosen.Count == 0 &&
+                !string.IsNullOrWhiteSpace(cfg.ActiveStemModelId) &&
+                installedById.TryGetValue(cfg.ActiveStemModelId, out NeuralModelCatalogEntry fallback)) {
                 chosen.Add(fallback);
             }
             return BuildStepFromEntries(chosen.Count > 0 ? chosen[0].Task : NeuralModelTask.StemSeparation4, chosen);

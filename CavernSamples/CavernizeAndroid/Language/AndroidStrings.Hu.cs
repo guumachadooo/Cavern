@@ -113,5 +113,26 @@ public sealed partial class AndroidStrings {
         d["LocateExportTitle"] = "Exportált fájlok";
         d["ExportSavedToFmt"] = "Mentve: {0}";
         d["ExportCompatDownloadsBadge"] = "Konténer kompat.";
+        // BP UI/MI szervezés, számítási tartalék, csoportosított ensemble és gyorsítótár-újrahasznosítás
+        d["NeuralReextractStemsBtn"] = "Sávok újrakivonása (Gyorsítótár kihagyása)";
+        d["OpenAiSettingsBtn"] = "MI beállítások megnyitása";
+        d["OpenAiSettingsShortBtn"] = "MI beáll.";
+        d["NeuralComputeBudgetTitle"] = "MI számítási tartalék:";
+        d["NeuralComputeBudgetEco"] = "Eco (Hűvös és sima)";
+        d["NeuralComputeBudgetBalanced"] = "Kiegyensúlyozott (Ajánlott)";
+        d["NeuralComputeBudgetFast"] = "Gyors (Max. 75% korlát)";
+        d["TipNeuralComputeBudget"] = "Szabályozza a CPU/NPU tartalékot MI szétválasztás és Stúdió exportálás közben, hogy a 120 Hz-es felület és a hang sose akadjon meg (Eco, Kiegyensúlyozott vagy Max. 75%).";
+        d["NeuralOrchestrationAutoLockedHint"] = "Az Automatikus mód minden feladathoz a legjobb telepített modellt választja. Váltson Egyéni Ensemble módra a kézi kijelöléshez.";
+        d["NeuralEnsembleCustomHint"] = "Egyéni Ensemble aktív: érintse meg a modelleket bármely kategóriában a szabad hozzáadáshoz vagy eltávolításhoz.";
+        d["NeuralGroupMultiStem"] = "Többsávos szétválasztás (4 / 6 sáv)";
+        d["NeuralGroupVocals"] = "Vokál szétválasztás";
+        d["NeuralGroupKaraoke"] = "Karaoke (Fő ének vs. vokál)";
+        d["NeuralGroupDereverb"] = "Dereverb (Száraz / visszhang)";
+        d["NeuralGroupDebleed"] = "Áthallás- és zajcsökkentés";
+        d["NeuralGroupRestore"] = "Harmonikus helyreállítás és BWE";
+        d["NeuralGroupActiveCountFmt"] = "{0} aktív";
+        d["NeuralGroupNoneActive"] = "Nincs";
+        d["NeuralModelAutoActiveTag"] = "Auto aktív";
+        d["NeuralModelAutoLockedTag"] = "Auto kezeli";
     }
 }

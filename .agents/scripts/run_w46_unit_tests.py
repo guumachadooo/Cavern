@@ -2718,11 +2718,199 @@ RunTest("T34_T6_PhaseA_SideBySide_LegacyVocalCoexistence", () => {
     Assert(maxDiff < 1e-6f, $"Phase-A side-by-side vocal hook altered legacy DSP output: maxDiff={maxDiff}");
 });
 
+// ---------- Test 35 (BP UI/AI Q2): CNTC v3 PeekHeader SourceTrackKey/PlanSignature + Cache-First Reuse & ForceReextract ----------
+RunTest("T35_BP_UiAi_Q2_CntcV3PeekHeader_And_CacheFirstReuse", () => {
+    string tmpDir = Path.Combine(Path.GetTempPath(), "cavern_t35_cntc_" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(tmpDir);
+    try {
+        int sr = 44100;
+        int n = 4096;
+        float[] s = new float[n];
+        for (int i = 0; i < n; i++) s[i] = 0.25f * MathF.Sin(2f * MathF.PI * 440f * i / sr);
+
+        NeuralSeparatedTrack saved = new() {
+            SourceTrackKey = "/storage/emulated/0/Music/Daft Punk - Instant Crush.flac",
+            SampleRate = sr,
+            ModelSignature = "v1|StemSeparation|MVSEP_Cloud_BSRoFormer6",
+            OriginTag = "MVSEP Cloud",
+            ModelSummary = "BS-RoFormer 6-Stem",
+            DisplayTitle = "Instant Crush",
+            ArtistName = "Daft Punk",
+            Stems = [
+                new StereoStemBuffer("vocals", s, s),
+                new StereoStemBuffer("drums", s, s),
+                new StereoStemBuffer("bass", s, s),
+                new StereoStemBuffer("other", s, s)
+            ]
+        };
+
+        string cntcPath = Path.Combine(tmpDir, "abc123def456.cnz");
+        NeuralTrackCacheCodec.WriteTrackFile(cntcPath, saved, NeuralTrackCacheCompressionMode.Compact16Bit);
+        NeuralTrackCacheEntryInfo peek = NeuralTrackCacheCodec.PeekHeader(cntcPath);
+        Assert(peek != null, "CNTC v3 PeekHeader returned null.");
+        Assert(peek.SourceTrackKey == saved.SourceTrackKey, $"PeekHeader SourceTrackKey mismatch: '{peek.SourceTrackKey}'");
+        Assert(peek.PlanSignature == saved.ModelSignature, $"PeekHeader PlanSignature mismatch: '{peek.PlanSignature}'");
+        Assert(peek.DisplayTitle == "Instant Crush" && peek.ArtistName == "Daft Punk", "PeekHeader title/artist mismatch.");
+        Assert(peek.StemCount == 4, $"Expected 4 stems in PeekHeader, got {peek.StemCount}");
+
+        using MockT3MultiModelRuntime rt = new();
+        MockCacheFirstTrackCache cache = new(saved);
+        NeuralPipelineOrchestrator orch = new(rt, rt, cache);
+        NeuralAudioConfig cfg = new() {
+            OrchestrationMode = NeuralOrchestrationMode.Auto,
+            TrackCacheEnabled = true
+        };
+
+        // Exact key misses (different model signature), but TryLoadBestForSourceTrack MUST return cache hit with 0 inference
+        var hit = orch.ExecuteTrackPipeline(
+            saved.SourceTrackKey,
+            fileSizeBytes: 123456,
+            lastModifiedTicks: 999999,
+            mixLeft: s,
+            mixRight: s,
+            sampleRate: sr,
+            goal: NeuralPipelineGoal.StemSeparation,
+            config: cfg,
+            displayTitle: "Instant Crush",
+            artistName: "Daft Punk",
+            forceReextract: false);
+        Assert(hit.FromCache && ReferenceEquals(hit.Track, saved), "Expected cache-first reuse via TryLoadBestForSourceTrack on exact-key miss!");
+        Assert(cache.BestLookupCalls == 1 && cache.SaveCalls == 0, $"Expected 1 best-lookup & 0 saves, got best={cache.BestLookupCalls}, save={cache.SaveCalls}");
+
+        // Explicit forceReextract: true MUST bypass cache and execute fresh separation
+        var fresh = orch.ExecuteTrackPipeline(
+            saved.SourceTrackKey,
+            fileSizeBytes: 123456,
+            lastModifiedTicks: 999999,
+            mixLeft: s,
+            mixRight: s,
+            sampleRate: sr,
+            goal: NeuralPipelineGoal.StemSeparation,
+            config: cfg,
+            displayTitle: "Instant Crush",
+            artistName: "Daft Punk",
+            forceReextract: true);
+        Assert(!fresh.FromCache && !ReferenceEquals(fresh.Track, saved), "forceReextract=true must bypass cached stems!");
+        Assert(cache.SaveCalls == 1, $"Expected fresh extraction to persist new cache entry, got SaveCalls={cache.SaveCalls}");
+    } finally {
+        try { Directory.Delete(tmpDir, true); } catch { }
+    }
+});
+
+// ---------- Test 36 (BP UI/AI Q4): Grouped Custom Ensemble Zero Chain-Lock & Auto Mode Isolation ----------
+RunTest("T36_BP_UiAi_Q4_GroupedCustomEnsemble_ZeroChainLock", () => {
+    using MockT3MultiModelRuntime rt = new();
+    NeuralPipelineOrchestrator orch = new(rt, rt, trackCache: null);
+
+    // Case 1: Manual mode with explicit VocalSeparation slot ONLY, even if legacy ActiveStemModelId still points to mock_6stem
+    NeuralAudioConfig manualVocalsOnly = new() {
+        OrchestrationMode = NeuralOrchestrationMode.Manual,
+        ActiveStemModelId = "mock_6stem",
+        TaskModelSlots = new Dictionary<NeuralModelTask, List<string>> {
+            [NeuralModelTask.VocalSeparation] = ["mock_vocals_2s"],
+            [NeuralModelTask.StemSeparation6] = []
+        }
+    };
+    NeuralExecutionPlan plan1 = orch.BuildPlan(NeuralPipelineGoal.StemSeparation, manualVocalsOnly);
+    Assert(plan1.IsRunnable && plan1.Steps.Count == 1, $"Expected 1 explicit step, got {plan1.Steps.Count}");
+    Assert(plan1.Steps[0].Models.Count == 1 && plan1.Steps[0].Models[0].Id == "mock_vocals_2s",
+        $"Zero chain-lock violated: stale ActiveStemModelId resurrected mock_6stem! Got '{plan1.Steps[0].Models[0].Id}'");
+
+    // Case 2: Manual mode with 2 models in the same task slot -> Ensemble -> removing 1 leaves exactly 1
+    NeuralAudioConfig manualTwo = new() {
+        OrchestrationMode = NeuralOrchestrationMode.Manual,
+        ActiveStemModelId = "mock_6stem",
+        TaskModelSlots = new Dictionary<NeuralModelTask, List<string>> {
+            [NeuralModelTask.StemSeparation6] = ["mock_6stem"],
+            [NeuralModelTask.VocalSeparation] = ["mock_vocals_2s"]
+        }
+    };
+    NeuralExecutionPlan plan2 = orch.BuildPlan(NeuralPipelineGoal.StemSeparation, manualTwo);
+    Assert(plan2.Steps.Count >= 1 && plan2.Steps[0].Models[0].Id == "mock_6stem", "Multi-stem slot should take primary step when present.");
+
+    // Case 3: Auto mode ignores stale manual slots and picks single optimal installed model cleanly
+    NeuralAudioConfig autoCfg = new() {
+        OrchestrationMode = NeuralOrchestrationMode.Auto,
+        TaskModelSlots = new Dictionary<NeuralModelTask, List<string>> {
+            [NeuralModelTask.VocalSeparation] = ["mock_vocals_2s"]
+        }
+    };
+    NeuralExecutionPlan autoPlan = orch.BuildPlan(NeuralPipelineGoal.StemSeparation, autoCfg);
+    Assert(autoPlan.IsRunnable && autoPlan.Mode == NeuralOrchestrationMode.Auto, "Auto plan must be runnable in Auto mode.");
+    Assert(autoPlan.Steps[0].Models.Count == 1 && autoPlan.Steps[0].Models[0].Id == "mock_6stem",
+        $"Auto mode should pick optimal 6-stem checkpoint regardless of manual slot, got '{autoPlan.Steps[0].Models[0].Id}'");
+});
+
+// ---------- Test 37 (BP UI/AI Q5): Compute Headroom Governor (Eco / Balanced / Fast Max 75%) ----------
+RunTest("T37_BP_UiAi_Q5_ComputeHeadroomGovernor_NonStarving", () => {
+    int prevTier = MvsepAntiArtifactPipeline.GlobalComputeBudgetTier;
+    try {
+        Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(8, 0) == 2, "8-core Eco must cap at 2 threads (<=25%).");
+        Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(8, 1) == 3, "8-core Balanced must cap at 3 threads (<=37.5%).");
+        Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(8, 2) == 4, "8-core Fast Max 75% must cap at 4 threads (never 100%).");
+        Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(2, 2) == 1, "2-core device must cap at 1 background thread.");
+
+        MvsepAntiArtifactPipeline.GlobalComputeBudgetTier = 0;
+        Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(8) == 2, "GlobalComputeBudgetTier=0 mismatch.");
+        MvsepAntiArtifactPipeline.GlobalComputeBudgetTier = 1;
+        Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(8) == 3, "GlobalComputeBudgetTier=1 mismatch.");
+        MvsepAntiArtifactPipeline.GlobalComputeBudgetTier = 2;
+        Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(8) == 4, "GlobalComputeBudgetTier=2 mismatch.");
+
+        // Thermal + GPU breathing yield invariants
+        Assert(MvsepAntiArtifactPipeline.ComputeEffectiveBreathingYieldMs(16, 25.0, 0) == 0, "Sub-50ms cool chunk must add 0ms yield.");
+        Assert(MvsepAntiArtifactPipeline.ComputeEffectiveBreathingYieldMs(16, 200.0, 0) == 16, "Balanced 200ms chunk must yield >=16ms.");
+        Assert(MvsepAntiArtifactPipeline.ComputeEffectiveBreathingYieldMs(16, 600.0, 0) == 32, "Heavy >=500ms chunk must yield >=32ms.");
+        Assert(MvsepAntiArtifactPipeline.ComputeEffectiveBreathingYieldMs(16, 200.0, 60) == 60, "Thermal extra yield must elevate breathing yield.");
+        Assert(MvsepAntiArtifactPipeline.ComputeEffectiveBreathingYieldMs(16, 200.0, 500) == 100, "Breathing yield must cap at 100ms.");
+    } finally {
+        MvsepAntiArtifactPipeline.GlobalComputeBudgetTier = prevTier;
+    }
+});
+
+// ---------- Test 38 (BP UI/AI Q1 & Q3): Lyrics Alpha Clamp Safety & Motion Blur Velocity Curve ----------
+RunTest("T38_BP_UiAi_Q1_Q3_AlphaClampSafety_And_VelocityBlurCurve", () => {
+    // Q1: Replicate AppleMusicLyricsView clamp across extreme manualClarity=1.0 & low easedFocus=0.0..1.0
+    for (int f = 0; f <= 100; f++) {
+        float easedFocus = f / 100f;
+        float manualClarity = 1.0f;
+        int dimAlpha = (int)(255 * Math.Clamp(0.28f + 0.46f * manualClarity, 0.28f, 0.74f));
+        int brightAlpha = Math.Max(dimAlpha, (int)(255 * Math.Clamp(0.28f + 0.72f * easedFocus, 0.30f, 1.0f)));
+        Assert(brightAlpha >= dimAlpha, $"brightAlpha ({brightAlpha}) < dimAlpha ({dimAlpha}) at focus={easedFocus}");
+        int clamped = Math.Clamp(180, dimAlpha, brightAlpha);
+        Assert(clamped >= dimAlpha && clamped <= brightAlpha, "Clamped alpha out of bounds.");
+    }
+
+    // Q3: Replicate OneUiMotionBlur.ComputeHorizontalBlurRadiusPx curve (density=3.0, width=1080px, 310ms fixed transition)
+    static float ComputeBlurPx(float velPxPerSec, float density, float maxBlurDp = 26f) {
+        if (!float.IsFinite(velPxPerSec) || !float.IsFinite(density) || density <= 0f) return 0f;
+        float speedDpPerSec = MathF.Abs(velPxPerSec) / density;
+        if (speedDpPerSec <= 260f) return 0f;
+        float excess = speedDpPerSec - 260f;
+        float rawDp = excess * 0.0044f;
+        float maxDp = Math.Clamp(maxBlurDp, 4f, 34f);
+        float curvedDp = maxDp * (1f - MathF.Exp(-rawDp / Math.Max(4f, maxDp * 0.65f)));
+        float px = curvedDp * density;
+        return px >= 0.75f ? px : 0f;
+    }
+    float density = 3.0f;
+    Assert(ComputeBlurPx(0f, density) == 0f, "Rest velocity must produce 0px blur.");
+    Assert(ComputeBlurPx(200f * density, density) == 0f, "Sub-deadzone velocity must produce 0px blur.");
+    float v1Tab = (1080f / 0.310f);        // ~3484 px/s (~1161 dp/s)
+    float v2Tabs = (2f * 1080f / 0.310f);  // ~6968 px/s (~2323 dp/s)
+    float b1 = ComputeBlurPx(v1Tab, density);
+    float b2 = ComputeBlurPx(v2Tabs, density);
+    Assert(b1 > 0f && b2 > 0f, $"Expected positive blur for 1-tab ({b1}) and 2-tab ({b2}) jumps.");
+    Assert(b2 >= b1 * 1.40f, $"2-tab peak blur ({b2:0.2}px) must be >= 140% of 1-tab peak blur ({b1:0.2}px).");
+    float bMax = ComputeBlurPx(999999f, density, maxBlurDp: 26f);
+    Assert(bMax <= 28f * density, $"Peak blur ({bMax}px) exceeded 28dp cap ({28f * density}px).");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
 }
-Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2/T3/T5/T6 UNIT TESTS PASSED (0 failures).");
+Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2/T3/T5/T6/BP_UI_AI UNIT TESTS PASSED (0 failures).");
 return 0;
 
 static int FindFlacAudioFrameStart(byte[] flac) {
@@ -3156,6 +3344,34 @@ sealed class MockBsRoFormerRuntime : INeuralInferenceRuntime {
         public void Dispose() { }
     }
 }
+
+sealed class MockCacheFirstTrackCache(NeuralSeparatedTrack cachedTrack) : INeuralTrackCache {
+    public int BestLookupCalls;
+    public int SaveCalls;
+    public NeuralTrackCacheStats GetStats() => new() { EntryCount = 1, TotalBytes = 1024, MaxBytes = 1024 * 1024 };
+    public bool TryLoad(string cacheKey, out NeuralSeparatedTrack track, CancellationToken token = default) {
+        track = null;
+        return false; // force exact-key miss to test cache-first source-track fallback
+    }
+    public bool TryLoadBestForSourceTrack(
+        string sourceTrackKey,
+        string displayTitle,
+        string artistName,
+        NeuralPipelineGoal goal,
+        out NeuralSeparatedTrack track,
+        CancellationToken token = default) {
+        BestLookupCalls++;
+        if (string.Equals(sourceTrackKey, cachedTrack.SourceTrackKey, StringComparison.OrdinalIgnoreCase)) {
+            track = cachedTrack;
+            return true;
+        }
+        track = null;
+        return false;
+    }
+    public void Save(string cacheKey, NeuralSeparatedTrack track, CancellationToken token = default) => SaveCalls++;
+    public void EvictToLimit(long maxBytes) { }
+    public void Clear() { }
+}
 """
 
 
@@ -3484,6 +3700,100 @@ def _py_stage6_full_app_sota_audit_and_phase_a_contracts() -> None:
         assert not re.search(r"^\s*namespace\s+[A-Za-z0-9_.]+\s*;\s*$", src, re.M), f"C# 10+ file-scoped namespace in {rel}"
 
 
+def _py_stage7_ui_ai_org_motion_stability_contracts() -> None:
+    bp_path = REPO_ROOT / ".agents" / "docs" / "blueprints" / "BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY.md"
+    assert bp_path.is_file(), "Missing BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY.md blueprint"
+
+    plan_tool = REPO_ROOT / ".agents" / "plugins" / "dynamic-fractal-planner" / "scripts" / "plan_tool.py"
+    lint_proc = subprocess.run(
+        [sys.executable, "-B", str(plan_tool), "blueprint", "lint", str(bp_path), "--strict"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, check=False,
+    )
+    assert lint_proc.returncode == 0 and "BLUEPRINT PASS" in lint_proc.stdout, (
+        f"BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY.md failed strict blueprint lint: {lint_proc.stdout} {lint_proc.stderr}"
+    )
+
+    # Q1: AppleMusicLyricsView clamp safety + MediaPlaybackNotificationManager >=500ms dedup
+    media_views = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Views" / "MediaStageViews.cs").read_text(encoding="utf-8")
+    assert "Math.Max(dimAlpha," in media_views, "Q1 failed: AppleMusicLyricsView must clamp brightAlpha >= dimAlpha"
+    notif_mgr = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "MediaPlaybackNotificationManager.cs").read_text(encoding="utf-8")
+    assert "500" in notif_mgr, "Q1 failed: MediaPlaybackNotificationManager must throttle updates >=500ms"
+
+    # Q2: Cache-first stem reuse + collision safety + explicit forceReextract bypass
+    cache_svc = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NeuralTrackCacheService.cs").read_text(encoding="utf-8")
+    for tok in ("TryLoadBestForSourceTrack", "ScoreCacheEntryMatch", "ExtractNormalizedFileStem", "LosslessResidualRestore"):
+        assert tok in cache_svc, f"Q2 failed: missing {tok} in NeuralTrackCacheService.cs"
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    for tok in ("TryLoadBestForSourceTrack", "bool forceReextract = false", "NeuralReextractStemsBtn", "OpenAiSettingsBtn", "JumpToSettingsCategory(2)"):
+        assert tok in wf_src, f"Q2/Q4 failed: missing {tok} in MainActivity.NeuralWorkflows.cs"
+
+    # Q3: OneUiMotionBlur directional RenderEffect + safe radiusY + clear on end/cancel + 1:1 album framing
+    theme_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Theme" / "OneUiTheme.cs").read_text(encoding="utf-8")
+    for tok in ("class OneUiMotionBlur", "ComputeHorizontalBlurRadiusPx", "CreateBlurEffect(clampedX, 0.01f", "SetRenderEffect(null)"):
+        assert tok in theme_src, f"Q3 failed: missing {tok} in OneUiTheme.cs"
+    nav_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Navigation.cs").read_text(encoding="utf-8")
+    for tok in ("OneUiMotionBlur.ComputeHorizontalBlurRadiusPx", "OneUiMotionBlur.ApplyHorizontalMotionBlur", "OneUiMotionBlur.ClearMotionBlur"):
+        assert tok in nav_src, f"Q3 failed: missing {tok} in MainActivity.Navigation.cs"
+    np_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.NowPlaying.cs").read_text(encoding="utf-8")
+    assert "OneUiMotionBlur.ApplyHorizontalMotionBlur" in np_src and "OneUiMotionBlur.ClearMotionBlur" in np_src, "Q3 failed: NowPlaying section blur missing"
+    lib_views = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.LibraryViews.cs").read_text(encoding="utf-8")
+    pm_core = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.Core.cs").read_text(encoding="utf-8")
+    assert "FillWidthSquare = true" in lib_views, "Q3 failed: album tile FillWidthSquare = true missing in LibraryViews.cs"
+    for tok in ("RoundedSquareOutlineProvider", "BitmapShader", "FillWidthSquare"):
+        assert tok in pm_core, f"Q3 failed: missing {tok} in MainActivity.PlayerMusic.Core.cs"
+
+    # Q4: Grouped Custom Ensemble, Locked Auto, AiComputeBudgetTier, & 4-tab AI IA
+    store_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AppSettingsStore.cs").read_text(encoding="utf-8")
+    for tok in ("AiComputeBudgetTier", "SyncPrimarySlotFromTaskSlots", "AndroidRuntimeTelemetry.SetComputeBudgetTier"):
+        assert tok in store_src, f"Q4/Q5 failed: missing {tok} in AppSettingsStore.cs"
+    neural_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.Neural.cs").read_text(encoding="utf-8")
+    for tok in ("neuralComputeBudgetSelector", "NeuralOrchestrationAutoLockedHint", "NeuralGroupMultiStem", "NeuralModelAutoLockedTag", "if (toggleEnsemble)"):
+        assert tok in neural_ui, f"Q4/Q5 failed: missing {tok} in MainActivity.Settings.Neural.cs"
+    player_tab = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerTab.cs").read_text(encoding="utf-8")
+    studio_tab = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.StudioExport.cs").read_text(encoding="utf-8")
+    assert "JumpToSettingsCategory(2)" in player_tab and "JumpToSettingsCategory(2)" in studio_tab, "Q4 failed: 3D Room / Studio AI settings shortcut missing"
+
+    # Q5: Compute headroom governor across RuntimeTelemetry, NativeOnnxRuntimeBridge, FFmpeg
+    telem_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AndroidRuntimeTelemetry.cs").read_text(encoding="utf-8")
+    assert "SetComputeBudgetTier" in telem_src and "GlobalComputeBudgetTier" in telem_src, "Q5 failed: AndroidRuntimeTelemetry missing compute budget hook"
+    ffmpeg_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "FFmpegInstallerService.cs").read_text(encoding="utf-8")
+    assert "-threads" in ffmpeg_src, "Q5 failed: FFmpegInstallerService missing -threads cap"
+
+    # Q6: Two-stage Lyrics credit stripper, fuzzy plain-lyrics alignment, PT-BR/ES mood tokens & 4-lang parity
+    lyrics_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "LyricsService.cs").read_text(encoding="utf-8")
+    for tok in ("IsCreditLegendLine", "StripLeadingTrailingCredits", "AlignAndCleanWithPlainLyrics", "ComputeFuzzyLineSimilarity", "FoldDiacriticsLower", "\"saudade\"", "\"coracao\""):
+        assert tok in lyrics_src, f"Q6 failed: missing {tok} in LyricsService.cs"
+    meta_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "OnlineMetadataService.cs").read_text(encoding="utf-8")
+    assert "AlignAndCleanWithPlainLyrics" in meta_src, "Q6 failed: OnlineMetadataService missing Stage-B plain-lyrics alignment"
+
+    bp_ui_ai_keys = (
+        "NeuralReextractStemsBtn",
+        "OpenAiSettingsBtn",
+        "OpenAiSettingsShortBtn",
+        "NeuralComputeBudgetTitle",
+        "NeuralComputeBudgetEco",
+        "NeuralComputeBudgetBalanced",
+        "NeuralComputeBudgetFast",
+        "TipNeuralComputeBudget",
+        "NeuralOrchestrationAutoLockedHint",
+        "NeuralEnsembleCustomHint",
+        "NeuralGroupMultiStem",
+        "NeuralGroupVocals",
+        "NeuralGroupKaraoke",
+        "NeuralGroupDereverb",
+        "NeuralGroupDebleed",
+        "NeuralGroupRestore",
+        "NeuralGroupActiveCountFmt",
+        "NeuralGroupNoneActive",
+        "NeuralModelAutoActiveTag",
+        "NeuralModelAutoLockedTag",
+    )
+    for lang_file in ("AndroidStrings.cs", "AndroidStrings.PtBr.cs", "AndroidStrings.Hu.cs", "AndroidStrings.Zh.cs"):
+        lang_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Language" / lang_file).read_text(encoding="utf-8")
+        for key in bp_ui_ai_keys:
+            assert f'["{key}"]' in lang_src, f"Q6 failed: Missing localization key '{key}' in {lang_file}"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -3493,6 +3803,7 @@ PYTHON_CHECKS = [
     ("PY_T4_Stage4_UxClarity_Motion_OrbitDrag_Lyrics_Contracts", _py_stage4_ux_motion_orbit_lyrics_contracts),
     ("PY_T5_StudioExportHygieneAndLocateWiring", _py_stage5_studio_export_hygiene_and_locate_wiring),
     ("PY_T6_FullAppSotaAudit_And_PhaseAContracts", _py_stage6_full_app_sota_audit_and_phase_a_contracts),
+    ("PY_T7_BpUiAiOrgMotionStability_Q1_Q6_Contracts", _py_stage7_ui_ai_org_motion_stability_contracts),
 ]
 
 

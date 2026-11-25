@@ -249,6 +249,14 @@ public partial class MainActivity {
             BottomMargin = Dp(6)
         });
 
+        Button studioAiSettingsLinkBtn = PillButton(S["OpenAiSettingsBtn"], () => JumpToSettingsCategory(2));
+        studioAiSettingsLinkBtn.TextSize = 11.4f;
+        card.AddView(studioAiSettingsLinkBtn, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
+
         studioOptKaraokeSwitch = AddExplainedSwitchRow(
             card,
             S["StudioOptKaraokeTitle"],

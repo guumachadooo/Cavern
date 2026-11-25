@@ -311,6 +311,22 @@ public partial class MainActivity {
                 }
             };
             content.AddView(WrapControlWithHelp(modeSel, S["PlayTabAiModeTitle"], S["TipNeuralUpmix"], bottomMarginDp: 2));
+
+            bool hasActiveStems = playerEngine?.NeuralStage?.HasPlayableSpatialUpmixStems == true;
+            if (hasActiveStems && GetActiveTrack() != null) {
+                Button reextractBtn = PillButton(S["NeuralReextractStemsBtn"], () => {
+                    PrepareActiveTrackNeuralStemsAsync(
+                        Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
+                        silentIfNotReady: false,
+                        forceReextract: true);
+                });
+                reextractBtn.TextSize = 11.8f;
+                content.AddView(reextractBtn, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MatchParent,
+                    ViewGroup.LayoutParams.WrapContent) {
+                    TopMargin = Dp(8)
+                });
+            }
         }
 
         OneUiModalDialog.Show(
@@ -320,8 +336,8 @@ public partial class MainActivity {
             customContent: content,
             icon: OneUiIconType.Sparkles,
             iconBadgeColor: OneUiTheme.IconSliderMedia,
-            positiveText: S["NeuralModelsBtn"],
-            onPositive: ShowNeuralModelsModal,
+            positiveText: S["OpenAiSettingsBtn"],
+            onPositive: () => JumpToSettingsCategory(2),
             negativeText: S["CloseBtn"],
             onHelp: ShowPlayTabSpatialHierarchyHelpDialog,
             helpContentDesc: S["PlayTabSpatialGuideTitle"]);
@@ -571,7 +587,12 @@ public partial class MainActivity {
                 Cavernize.Logic.Spatial.NeuralSeparatedTrack karaokeTrack = null;
                 Cavernize.Logic.Spatial.NeuralSeparatedTrack dnaTrack = null;
 
-                // W48: Independently auto-bind BOTH Spatial Upmix (full-mix) AND Karaoke caches without clobbering
+                string summaryTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+                    ? currentMediaMeta.Title
+                    : Path.GetFileNameWithoutExtension(sourceKey);
+                string summaryArtist = (currentMediaMeta?.Artist ?? "").Trim();
+
+                // W48 + BP W3: Cache-first auto-bind for BOTH Spatial Upmix AND Karaoke caches across backend/preset changes
                 Cavernize.Logic.Spatial.NeuralExecutionPlan spatialPlan = neuralOrchestrator.BuildPlan(
                     Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, cfg);
                 if (CanUseMvsepCloud(cfg)) {
@@ -589,6 +610,13 @@ public partial class MainActivity {
                     if (neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedSpatial)) {
                         spatialUpmixTrack = cachedSpatial;
                     }
+                }
+                if (spatialUpmixTrack == null &&
+                    neuralTrackCache.TryLoadBestForSourceTrack(
+                        sourceKey, summaryTitle, summaryArtist,
+                        Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
+                        out Cavernize.Logic.Spatial.NeuralSeparatedTrack fallbackSpatial)) {
+                    spatialUpmixTrack = fallbackSpatial;
                 }
 
                 Cavernize.Logic.Spatial.NeuralExecutionPlan karaokePlan = neuralOrchestrator.BuildPlan(
@@ -609,6 +637,13 @@ public partial class MainActivity {
                         karaokeTrack = cachedKaraoke;
                     }
                 }
+                if (karaokeTrack == null &&
+                    neuralTrackCache.TryLoadBestForSourceTrack(
+                        sourceKey, summaryTitle, summaryArtist,
+                        Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke,
+                        out Cavernize.Logic.Spatial.NeuralSeparatedTrack fallbackKaraoke)) {
+                    karaokeTrack = fallbackKaraoke;
+                }
 
                 // Also check dedicated Slot 7A VocalMixDna cache (includes Dereverb dry/wet analysis when available)
                 Cavernize.Logic.Spatial.NeuralExecutionPlan dnaPlan = neuralOrchestrator.BuildPlan(
@@ -622,9 +657,6 @@ public partial class MainActivity {
                 }
 
                 Cavernize.Logic.Spatial.NeuralSeparatedTrack dnaSource = dnaTrack ?? karaokeTrack ?? spatialUpmixTrack;
-                string summaryTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
-                    ? currentMediaMeta.Title
-                    : Path.GetFileNameWithoutExtension(sourceKey);
                 Cavern.VocalChain.VocalMixDnaProfile extractedDna = dnaSource != null
                     ? Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(dnaSource, summaryTitle)
                     : null;
@@ -719,7 +751,10 @@ public partial class MainActivity {
         }
     }
 
-    void PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal goal, bool silentIfNotReady = false) {
+    void PrepareActiveTrackNeuralStemsAsync(
+        Cavernize.Logic.Spatial.NeuralPipelineGoal goal,
+        bool silentIfNotReady = false,
+        bool forceReextract = false) {
         if (uiDestroyed) {
             return;
         }
@@ -864,10 +899,12 @@ public partial class MainActivity {
                     : cacheKey;
 
                 bool allowCache = neuralTrackCache != null && cfg.TrackCacheEnabled && neuralTrackCache.IsEnabled;
-                // Instant Slot 7B cache hit before decoding PCM
-                if (allowCache &&
+                // Instant Slot 7B cache-first hit before decoding PCM or uploading to MVSEP Cloud
+                // (bypassed only when the user explicitly requests "Re-extract Stems").
+                if (allowCache && !forceReextract &&
                     (neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedTrack, ct) ||
-                     (cloudRequested && neuralTrackCache.TryLoad(cloudPlainCacheKey, out cachedTrack, ct)))) {
+                     (cloudRequested && neuralTrackCache.TryLoad(cloudPlainCacheKey, out cachedTrack, ct)) ||
+                     neuralTrackCache.TryLoadBestForSourceTrack(activePath, summaryTitle, summaryArtist, goal, out cachedTrack, ct))) {
                     Cavern.VocalChain.VocalMixDnaProfile cachedDna = Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(
                         cachedTrack, summaryTitle);
                     if (cachedDna != null && cachedDna.IsExtractedFromSong) {
@@ -1008,7 +1045,8 @@ public partial class MainActivity {
                         token: ct,
                         onProgressiveTrackReady: progressiveCallback,
                         displayTitle: summaryTitle,
-                        artistName: summaryArtist);
+                        artistName: summaryArtist,
+                        forceReextract: forceReextract);
                 }
 
                 Cavern.VocalChain.VocalMixDnaProfile extractedDna = Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(

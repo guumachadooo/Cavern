@@ -113,5 +113,26 @@ public sealed partial class AndroidStrings {
         d["LocateExportTitle"] = "已导出文件";
         d["ExportSavedToFmt"] = "已保存至: {0}";
         d["ExportCompatDownloadsBadge"] = "容器兼容";
+        // BP UI/AI 架构、算力余量、分组集成与缓存优先复用
+        d["NeuralReextractStemsBtn"] = "重新提取分轨（跳过缓存）";
+        d["OpenAiSettingsBtn"] = "打开 AI 设置";
+        d["OpenAiSettingsShortBtn"] = "AI 设置";
+        d["NeuralComputeBudgetTitle"] = "AI 算力余量:";
+        d["NeuralComputeBudgetEco"] = "节能（清凉流畅）";
+        d["NeuralComputeBudgetBalanced"] = "均衡（推荐）";
+        d["NeuralComputeBudgetFast"] = "高速（最高 75% 上限）";
+        d["TipNeuralComputeBudget"] = "在 AI 分轨与工作室导出期间控制 CPU/NPU 算力余量，确保 120 Hz 界面与音频永不卡顿（节能、均衡或最高 75% 上限）。";
+        d["NeuralOrchestrationAutoLockedHint"] = "自动模式会为每项任务自动挑选最佳已安装模型。切换到上方的自定义集成即可自由组合模型。";
+        d["NeuralEnsembleCustomHint"] = "自定义集成已启用：点击下方任意功能分组中的模型即可自由添加或移除。";
+        d["NeuralGroupMultiStem"] = "多分轨分离（4 / 6 轨）";
+        d["NeuralGroupVocals"] = "人声分离";
+        d["NeuralGroupKaraoke"] = "卡拉 OK（主唱与和声）";
+        d["NeuralGroupDereverb"] = "去混响（干声 / 湿声）";
+        d["NeuralGroupDebleed"] = "去串音与降噪";
+        d["NeuralGroupRestore"] = "谐波修复与带宽扩展";
+        d["NeuralGroupActiveCountFmt"] = "{0} 个已启用";
+        d["NeuralGroupNoneActive"] = "无";
+        d["NeuralModelAutoActiveTag"] = "自动已选";
+        d["NeuralModelAutoLockedTag"] = "自动托管";
     }
 }

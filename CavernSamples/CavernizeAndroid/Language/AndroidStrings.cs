@@ -1762,6 +1762,27 @@ public sealed partial class AndroidStrings {
         ["LocateExportBtn"] = "Locate",
         ["LocateExportTitle"] = "Exported Files",
         ["ExportSavedToFmt"] = "Saved to: {0}",
-        ["ExportCompatDownloadsBadge"] = "Container compat"
+        ["ExportCompatDownloadsBadge"] = "Container compat",
+        // BP UI/AI Organization, Compute Headroom, Grouped Ensemble & Cache-First Reuse
+        ["NeuralReextractStemsBtn"] = "Re-extract Stems (Bypass Cache)",
+        ["OpenAiSettingsBtn"] = "Open AI Settings",
+        ["OpenAiSettingsShortBtn"] = "AI Settings",
+        ["NeuralComputeBudgetTitle"] = "AI Compute Headroom:",
+        ["NeuralComputeBudgetEco"] = "Eco (Cool & Smooth)",
+        ["NeuralComputeBudgetBalanced"] = "Balanced (Recommended)",
+        ["NeuralComputeBudgetFast"] = "Fast (Max 75% Cap)",
+        ["TipNeuralComputeBudget"] = "Controls CPU/NPU headroom during AI separation and Studio exports so 120 Hz UI animations and audio never freeze:\n\n• Eco: Minimum threads, generous thermal breathing.\n• Balanced (Recommended): Optimal speed with responsive UI.\n• Fast (Max 75%): Higher throughput capped strictly at 75% system capacity.",
+        ["NeuralOrchestrationAutoLockedHint"] = "Auto mode automatically picks the best installed model per task. Switch to Custom Ensemble above to pick models manually.",
+        ["NeuralEnsembleCustomHint"] = "Custom Ensemble active: tap models in any functional category below to add or remove them freely.",
+        ["NeuralGroupMultiStem"] = "Multi-Stem Separation (4 / 6 Stems)",
+        ["NeuralGroupVocals"] = "Vocal Separation",
+        ["NeuralGroupKaraoke"] = "Karaoke (Lead vs. Backing Vocals)",
+        ["NeuralGroupDereverb"] = "Dereverb (Dry / Wet Vocal)",
+        ["NeuralGroupDebleed"] = "Debleed & Denoise",
+        ["NeuralGroupRestore"] = "Harmonic Restoration & BWE",
+        ["NeuralGroupActiveCountFmt"] = "{0} active",
+        ["NeuralGroupNoneActive"] = "None",
+        ["NeuralModelAutoActiveTag"] = "Auto Active",
+        ["NeuralModelAutoLockedTag"] = "Auto-Managed"
     };
 }

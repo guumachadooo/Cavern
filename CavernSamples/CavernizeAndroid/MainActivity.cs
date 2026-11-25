@@ -591,8 +591,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
             this,
             () => activeTab,
             () => tabContainers?.Length ?? 0,
-            () => (tabContainers != null && activeTab >= 0 && activeTab < tabContainers.Length) ? tabContainers[activeTab] : null,
-            SwitchTab);
+            idx => (tabContainers != null && idx >= 0 && idx < tabContainers.Length) ? tabContainers[idx] : null,
+            SwitchTabInternal);
         LinearLayout musicTab = BuildMusicPlayerTab();
         LinearLayout playerTab = BuildPlayerTab();
         LinearLayout convertTab = BuildConverterTab();
