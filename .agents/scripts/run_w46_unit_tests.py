@@ -1712,8 +1712,10 @@ RunTest("T22_Stage2_ZeroFreeze_Hybrid714NoRedundantRebuild_And_AsyncToggle", () 
 
 // ---------- Test 23: Stage 2 (T2) Bug #11 Global AI Headroom Worker Cap & Thermal Breathing Yield ----------
 RunTest("T23_Stage2_GlobalAiHeadroom_WorkerCap_And_ThermalYield", () => {
-    Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(8) == 4, "8-core device must cap background DSP workers at 4 (50%).");
-    Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(12) == 4, "12-core device must cap background DSP workers at max 4.");
+    Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(8) == 3, "8-core Balanced default must cap background DSP workers at 3 (<=37.5%).");
+    Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(12) == 3, "12-core Balanced default must cap background DSP workers at max 3.");
+    Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(8, 2) == 4, "8-core Fast Max 75% must cap background DSP workers at 4 (50%).");
+    Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(12, 2) == 4, "12-core Fast Max 75% must cap background DSP workers at max 4.");
     Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(4) == 2, "4-core device must cap at 2.");
     Assert(MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(2) == 1, "2-core device must cap at 1.");
 
@@ -2731,7 +2733,7 @@ RunTest("T35_BP_UiAi_Q2_CntcV3PeekHeader_And_CacheFirstReuse", () => {
         NeuralSeparatedTrack saved = new() {
             SourceTrackKey = "/storage/emulated/0/Music/Daft Punk - Instant Crush.flac",
             SampleRate = sr,
-            ModelSignature = "v1|StemSeparation|MVSEP_Cloud_BSRoFormer6",
+            PlanSignature = "v1|StemSeparation|MVSEP_Cloud_BSRoFormer6",
             OriginTag = "MVSEP Cloud",
             ModelSummary = "BS-RoFormer 6-Stem",
             DisplayTitle = "Instant Crush",
@@ -2745,11 +2747,11 @@ RunTest("T35_BP_UiAi_Q2_CntcV3PeekHeader_And_CacheFirstReuse", () => {
         };
 
         string cntcPath = Path.Combine(tmpDir, "abc123def456.cnz");
-        NeuralTrackCacheCodec.WriteTrackFile(cntcPath, saved, NeuralTrackCacheCompressionMode.Compact16Bit);
+        NeuralTrackCacheCodec.WriteTrackFile(cntcPath, saved, choreoTrack: null, NeuralTrackCacheCompressionMode.Compact16Bit);
         NeuralTrackCacheEntryInfo peek = NeuralTrackCacheCodec.PeekHeader(cntcPath);
         Assert(peek != null, "CNTC v3 PeekHeader returned null.");
         Assert(peek.SourceTrackKey == saved.SourceTrackKey, $"PeekHeader SourceTrackKey mismatch: '{peek.SourceTrackKey}'");
-        Assert(peek.PlanSignature == saved.ModelSignature, $"PeekHeader PlanSignature mismatch: '{peek.PlanSignature}'");
+        Assert(peek.PlanSignature == saved.PlanSignature, $"PeekHeader PlanSignature mismatch: '{peek.PlanSignature}'");
         Assert(peek.DisplayTitle == "Instant Crush" && peek.ArtistName == "Daft Punk", "PeekHeader title/artist mismatch.");
         Assert(peek.StemCount == 4, $"Expected 4 stems in PeekHeader, got {peek.StemCount}");
 
@@ -2806,9 +2808,9 @@ RunTest("T36_BP_UiAi_Q4_GroupedCustomEnsemble_ZeroChainLock", () => {
     NeuralAudioConfig manualVocalsOnly = new() {
         OrchestrationMode = NeuralOrchestrationMode.Manual,
         ActiveStemModelId = "mock_6stem",
-        TaskModelSlots = new Dictionary<NeuralModelTask, List<string>> {
-            [NeuralModelTask.VocalSeparation] = ["mock_vocals_2s"],
-            [NeuralModelTask.StemSeparation6] = []
+        TaskModelSlots = new Dictionary<NeuralModelTask, IReadOnlyList<string>> {
+            [NeuralModelTask.VocalSeparation] = new[] { "mock_vocals_2s" },
+            [NeuralModelTask.StemSeparation6] = Array.Empty<string>()
         }
     };
     NeuralExecutionPlan plan1 = orch.BuildPlan(NeuralPipelineGoal.StemSeparation, manualVocalsOnly);
@@ -2820,9 +2822,9 @@ RunTest("T36_BP_UiAi_Q4_GroupedCustomEnsemble_ZeroChainLock", () => {
     NeuralAudioConfig manualTwo = new() {
         OrchestrationMode = NeuralOrchestrationMode.Manual,
         ActiveStemModelId = "mock_6stem",
-        TaskModelSlots = new Dictionary<NeuralModelTask, List<string>> {
-            [NeuralModelTask.StemSeparation6] = ["mock_6stem"],
-            [NeuralModelTask.VocalSeparation] = ["mock_vocals_2s"]
+        TaskModelSlots = new Dictionary<NeuralModelTask, IReadOnlyList<string>> {
+            [NeuralModelTask.StemSeparation6] = new[] { "mock_6stem" },
+            [NeuralModelTask.VocalSeparation] = new[] { "mock_vocals_2s" }
         }
     };
     NeuralExecutionPlan plan2 = orch.BuildPlan(NeuralPipelineGoal.StemSeparation, manualTwo);
@@ -2831,8 +2833,8 @@ RunTest("T36_BP_UiAi_Q4_GroupedCustomEnsemble_ZeroChainLock", () => {
     // Case 3: Auto mode ignores stale manual slots and picks single optimal installed model cleanly
     NeuralAudioConfig autoCfg = new() {
         OrchestrationMode = NeuralOrchestrationMode.Auto,
-        TaskModelSlots = new Dictionary<NeuralModelTask, List<string>> {
-            [NeuralModelTask.VocalSeparation] = ["mock_vocals_2s"]
+        TaskModelSlots = new Dictionary<NeuralModelTask, IReadOnlyList<string>> {
+            [NeuralModelTask.VocalSeparation] = new[] { "mock_vocals_2s" }
         }
     };
     NeuralExecutionPlan autoPlan = orch.BuildPlan(NeuralPipelineGoal.StemSeparation, autoCfg);

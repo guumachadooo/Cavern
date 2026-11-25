@@ -748,8 +748,16 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
 
     /// <summary>Returns the configured ordered list of model IDs assigned to <paramref name="task"/>.</summary>
     public IReadOnlyList<string> GetModelsForTask(NeuralModelTask task) {
-        if (TaskModelSlots != null && TaskModelSlots.TryGetValue(task, out IReadOnlyList<string> configured) && configured != null && configured.Count > 0) {
-            return configured;
+        if (TaskModelSlots != null && TaskModelSlots.TryGetValue(task, out IReadOnlyList<string> configured)) {
+            if (configured != null && configured.Count > 0) {
+                return configured;
+            }
+            if (OrchestrationMode == NeuralOrchestrationMode.Manual) {
+                return Array.Empty<string>();
+            }
+        }
+        if (OrchestrationMode == NeuralOrchestrationMode.Manual && HasAnyNonEmptyTaskSlot(TaskModelSlots)) {
+            return Array.Empty<string>();
         }
         string fallback = task switch {
             NeuralModelTask.StemSeparation4 => ActiveStemModelId,
@@ -763,6 +771,18 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
             _ => string.Empty
         };
         return string.IsNullOrWhiteSpace(fallback) ? Array.Empty<string>() : [fallback.Trim()];
+    }
+
+    static bool HasAnyNonEmptyTaskSlot(IReadOnlyDictionary<NeuralModelTask, IReadOnlyList<string>> slots) {
+        if (slots == null || slots.Count == 0) {
+            return false;
+        }
+        foreach (IReadOnlyList<string> list in slots.Values) {
+            if (list != null && list.Count > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>Returns a copy of this configuration with only <see cref="KaraokeVocalLevel"/> updated, preserving all task slots.</summary>
@@ -822,12 +842,17 @@ public sealed class NeuralAudioConfig : IEquatable<NeuralAudioConfig> {
             }
         }
 
-        // Ensure canonical single-ID properties and dynamic task slots remain synchronized in both directions
-        EnsurePrimarySlot(normalizedSlots, ResolveStemTask(stemId), stemId);
-        EnsurePrimarySlot(normalizedSlots, NeuralModelTask.KaraokeLeadBacking, karaokeId);
-        EnsurePrimarySlot(normalizedSlots, NeuralModelTask.Dereverb, dereverbId);
-        EnsurePrimarySlot(normalizedSlots, NeuralModelTask.DebleedDenoise, debleedId);
-        EnsurePrimarySlot(normalizedSlots, ResolveRestorerTask(restorerId), restorerId);
+        // In Manual mode with explicit TaskModelSlots, preserve user-chosen grouped slots strictly so removing
+        // a model from one category never resurrects stale legacy single-ID fields (zero chain-lock).
+        bool hasExplicitManualSlots = OrchestrationMode == NeuralOrchestrationMode.Manual && normalizedSlots.Count > 0;
+        if (!hasExplicitManualSlots) {
+            // Ensure canonical single-ID properties and dynamic task slots remain synchronized in both directions
+            EnsurePrimarySlot(normalizedSlots, ResolveStemTask(stemId), stemId);
+            EnsurePrimarySlot(normalizedSlots, NeuralModelTask.KaraokeLeadBacking, karaokeId);
+            EnsurePrimarySlot(normalizedSlots, NeuralModelTask.Dereverb, dereverbId);
+            EnsurePrimarySlot(normalizedSlots, NeuralModelTask.DebleedDenoise, debleedId);
+            EnsurePrimarySlot(normalizedSlots, ResolveRestorerTask(restorerId), restorerId);
+        }
 
         return new NeuralAudioConfig {
             PreferredProvider = Enum.IsDefined(PreferredProvider) ? PreferredProvider : NeuralExecutionProvider.Auto,
