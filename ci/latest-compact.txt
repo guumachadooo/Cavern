@@ -1,4 +1,2 @@
-VER=v2.9.77|SHA=2db9f84b|COMPILE=FAILURE|PUBLISH=SKIPPED|ERR=2|WARN=0
-URL=https://github.com/guumachadooo/Cavern/actions/runs/45522882927
-ERR[04_CavernizeAndroid] CavernSamples/CavernizeAndroid/MainActivity.cs(594,16): error CS1593: Delegate 'Func<int, View>' does not take 0 arguments [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]
-ERR[04_CavernizeAndroid] CavernSamples/CavernizeAndroid/MainActivity.cs(595,13): error CS1503: Argument 5: cannot convert from 'method group' to 'System.Action<int, float>' [CavernSamples/CavernizeAndroid/CavernizeAndroid.csproj]
+VER=v2.9.78|SHA=fdb4ef6d|COMPILE=SUCCESS|PUBLISH=SUCCESS|ERR=0|WARN=0
+URL=https://github.com/guumachadooo/Cavern/actions/runs/45525535422
