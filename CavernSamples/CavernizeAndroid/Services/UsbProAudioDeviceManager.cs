@@ -75,8 +75,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
 
     UsbDevice activeDevice;
     UsbDeviceConnection activeConnection;
-    UsbProAudioDeviceSnapshot snapshot = new();
-    ScarlettHardwareState scarlettState = new();
+    volatile UsbProAudioDeviceSnapshot snapshot = new();
+    volatile ScarlettHardwareState scarlettState = new();
     ScarlettGen4ConfigTable gen4ConfigTable;
     ProAudioMicSource configuredMicSource = ProAudioMicSource.PhoneMic;
     bool headphoneMonitoringActive;
@@ -98,23 +98,11 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     /// <summary>Raised outside internal locks whenever the hardware pre-ADC state snapshot changes.</summary>
     public event Action<HardwarePreAmpStateSnapshot> PreAmpSnapshotChanged;
 
-    /// <summary>Latest attached USB audio interface snapshot.</summary>
-    public UsbProAudioDeviceSnapshot CurrentSnapshot {
-        get {
-            lock (syncLock) {
-                return snapshot;
-            }
-        }
-    }
+    /// <summary>Latest attached USB audio interface snapshot (100% lock-free for RT audio and UI threads).</summary>
+    public UsbProAudioDeviceSnapshot CurrentSnapshot => snapshot;
 
-    /// <summary>Latest Focusrite Scarlett 2i2 hardware control state and live peak meters.</summary>
-    public ScarlettHardwareState ScarlettState {
-        get {
-            lock (syncLock) {
-                return scarlettState;
-            }
-        }
-    }
+    /// <summary>Latest Focusrite Scarlett 2i2 hardware control state and live peak meters (100% lock-free).</summary>
+    public ScarlettHardwareState ScarlettState => scarlettState;
 
     /// <summary>Latest lock-free Focusrite / USB pre-ADC hardware state snapshot.</summary>
     public HardwarePreAmpStateSnapshot CurrentPreAmpSnapshot => preAmpSnapshot;
@@ -1050,9 +1038,9 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
         }
 
         bool handshakeOk = false;
-        for (int attempt = 0; attempt < 2 && !IsUsbDetachedOrAborted(entryEpoch); attempt++) {
+        for (int attempt = 0; attempt < 3 && !IsUsbDetachedOrAborted(entryEpoch); attempt++) {
             if (attempt > 0) {
-                Thread.Sleep(25);
+                Thread.Sleep(25 * attempt);
                 if (IsUsbDetachedOrAborted(entryEpoch)) {
                     return false;
                 }
@@ -1064,17 +1052,21 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             if (IsUsbDetachedOrAborted(entryEpoch)) {
                 return false;
             }
-            if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit1, null, out _) ||
+            if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit1, null, out _, expectedRespPayloadBytes: 0) ||
                 IsUsbDetachedOrAborted(entryEpoch)) {
+                AppLogger.Warn($"Scarlett handshake attempt {attempt + 1}: CmdInit1 failed (vendorIf={vendorIf}, PID=0x{scarlettState.ProductId:X4})");
                 continue;
             }
-            if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit2, null, out int init2PayloadLen) ||
+            if (!SendScarlettCommandLocked(vendorIf, Scarlett2Protocol.CmdInit2, null, out int init2PayloadLen, expectedRespPayloadBytes: 32) ||
                 IsUsbDetachedOrAborted(entryEpoch)) {
+                AppLogger.Warn($"Scarlett handshake attempt {attempt + 1}: CmdInit2 failed (vendorIf={vendorIf}, PID=0x{scarlettState.ProductId:X4})");
                 continue;
             }
             int init2TotalLen = Scarlett2Protocol.PacketHeaderBytes + init2PayloadLen;
             if (Scarlett2Protocol.TryExtractFirmwareVersion(scarlettRxScratch, init2TotalLen, out int fw)) {
                 scarlettState.FirmwareVersion = fw;
+            } else {
+                AppLogger.Info($"Scarlett CmdInit2 returned {init2PayloadLen}B payload without recognized FW offset: {FormatHexPrefix(scarlettRxScratch, Math.Min(init2TotalLen, 32))}");
             }
             handshakeOk = true;
             break;
@@ -1282,7 +1274,8 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
         payloadLen = 0;
         ushort seq = NextScarlettSeqLocked();
         byte[] tx = Scarlett2Protocol.BuildGetDataPacket(seq, offset, length);
-        int rxLen = TransferScarlettPacketLocked(vendorIf, tx, scarlettRxScratch);
+        int expectedRx = Math.Clamp(Scarlett2Protocol.PacketHeaderBytes + (int)length, Scarlett2Protocol.PacketHeaderBytes, scarlettRxScratch.Length);
+        int rxLen = TransferScarlettPacketLocked(vendorIf, tx, scarlettRxScratch, expectedRx);
         return rxLen >= Scarlett2Protocol.PacketHeaderBytes &&
                Scarlett2Protocol.TryParseResponseHeader(scarlettRxScratch, rxLen, Scarlett2Protocol.CmdGetData, seq, out _, out payloadLen);
     }
@@ -1290,33 +1283,62 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
     bool WriteScarlettConfigLocked(int vendorIf, uint offset, byte[] valueBytes) {
         ushort seq = NextScarlettSeqLocked();
         byte[] tx = Scarlett2Protocol.BuildSetDataPacket(seq, offset, valueBytes);
-        int rxLen = TransferScarlettPacketLocked(vendorIf, tx, scarlettRxScratch);
+        int rxLen = TransferScarlettPacketLocked(vendorIf, tx, scarlettRxScratch, Scarlett2Protocol.PacketHeaderBytes);
         return rxLen >= Scarlett2Protocol.PacketHeaderBytes &&
                Scarlett2Protocol.TryParseResponseHeader(scarlettRxScratch, rxLen, Scarlett2Protocol.CmdSetData, seq, out _, out _);
     }
 
-    bool SendScarlettCommandLocked(int vendorIf, uint cmd, byte[] payload, out int payloadSize) {
+    bool SendScarlettCommandLocked(int vendorIf, uint cmd, byte[] payload, out int payloadSize, int expectedRespPayloadBytes = -1) {
         payloadSize = 0;
         ushort seq = NextScarlettSeqLocked();
         byte[] tx = Scarlett2Protocol.BuildCommandPacket(cmd, seq, payload);
-        int rxLen = TransferScarlettPacketLocked(vendorIf, tx, scarlettRxScratch);
-        return rxLen >= Scarlett2Protocol.PacketHeaderBytes &&
-               Scarlett2Protocol.TryParseResponseHeader(scarlettRxScratch, rxLen, cmd, seq, out _, out payloadSize);
+        int rxCap = expectedRespPayloadBytes >= 0
+            ? Math.Clamp(Scarlett2Protocol.PacketHeaderBytes + expectedRespPayloadBytes, Scarlett2Protocol.PacketHeaderBytes, scarlettRxScratch.Length)
+            : scarlettRxScratch.Length;
+        int rxLen = TransferScarlettPacketLocked(vendorIf, tx, scarlettRxScratch, rxCap);
+        if (rxLen < Scarlett2Protocol.PacketHeaderBytes) {
+            AppLogger.Warn($"Scarlett cmd 0x{cmd:X8} seq={seq} short/failed rxLen={rxLen} (reqRx={rxCap})");
+            return false;
+        }
+        bool ok = Scarlett2Protocol.TryParseResponseHeader(scarlettRxScratch, rxLen, cmd, seq, out uint errCode, out payloadSize);
+        if (!ok) {
+            AppLogger.Warn($"Scarlett cmd 0x{cmd:X8} seq={seq} header mismatch rxLen={rxLen} err=0x{errCode:X8} hdr={FormatHexPrefix(scarlettRxScratch, Math.Min(rxLen, 24))}");
+        }
+        return ok;
+    }
+
+    static string FormatHexPrefix(byte[] buf, int count) {
+        if (buf == null || count <= 0) {
+            return string.Empty;
+        }
+        int n = Math.Min(count, buf.Length);
+        char[] hex = new char[n * 2];
+        const string digits = "0123456789ABCDEF";
+        for (int i = 0; i < n; i++) {
+            byte b = buf[i];
+            hex[i * 2] = digits[b >> 4];
+            hex[i * 2 + 1] = digits[b & 0x0F];
+        }
+        return new string(hex);
     }
 
     /// <summary>
     /// Dual-transport Scarlett2 vendor control exchange: routes exclusively through Path B <c>libusb</c> while Path B
-    /// owns the USB file descriptor (preventing dual-FD <c>usbfs</c> contention), otherwise claims the vendor
-    /// <see cref="UsbInterface"/> before invoking Android <see cref="UsbDeviceConnection.ControlTransfer(UsbAddressing, int, int, int, byte[], int, int)"/> and releases
-    /// it immediately afterward so Scarlett controls work cleanly under Path A (AAudio) or when idle.
+    /// owns the USB file descriptor (preventing dual-FD <c>usbfs</c> contention), otherwise claims ONLY the vendor
+    /// <see cref="UsbInterface"/> (never AudioControl IF0!) with Linux <c>mixer_scarlett2.c</c> <c>-EPROTO</c> retry backoff.
     /// </summary>
-    int TransferScarlettPacketLocked(int vendorIf, byte[] tx, byte[] rx) {
+    int TransferScarlettPacketLocked(int vendorIf, byte[] tx, byte[] rx, int requestedRxLen = -1) {
         if (disposed || usbDetachedAbort) {
             return -1;
         }
+        int rxLenCap = requestedRxLen > 0 ? Math.Min(requestedRxLen, rx.Length) : rx.Length;
         // 1. While Path B libusb owns the FD, NEVER issue direct Android UsbDeviceConnection transfers on the same FD
         if (IsPathBTransportActive()) {
-            return NativeProAudioBridge.Scarlett2Xfer(vendorIf, tx, tx.Length, rx, rx.Length);
+            int res = NativeProAudioBridge.Scarlett2Xfer(vendorIf, tx, tx.Length, rx, rxLenCap);
+            if (res < 0 && rxLenCap < rx.Length && !usbDetachedAbort) {
+                res = NativeProAudioBridge.Scarlett2Xfer(vendorIf, tx, tx.Length, rx, rx.Length);
+            }
+            return res;
         }
 
         // 2. Direct Android UsbDeviceConnection control EP0 transfer (works under Path A AAudio or idle)
@@ -1339,25 +1361,45 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
             if (usbDetachedAbort) {
                 return -1;
             }
-            int sent = activeConnection.ControlTransfer(
-                (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceOut,
-                Scarlett2Protocol.UsbReqCmdSend,
-                0,
-                vendorIf,
-                tx,
-                tx.Length,
-                ControlTransferTimeoutMs);
+            int sent = -1;
+            for (int attempt = 0; attempt < 3 && !usbDetachedAbort; attempt++) {
+                if (attempt > 0) {
+                    Thread.Sleep(10 * attempt);
+                }
+                sent = activeConnection.ControlTransfer(
+                    (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceOut,
+                    Scarlett2Protocol.UsbReqCmdSend,
+                    0,
+                    vendorIf,
+                    tx,
+                    tx.Length,
+                    ControlTransferTimeoutMs);
+                if (sent >= 0) {
+                    break;
+                }
+            }
             if (sent < 0 || usbDetachedAbort) {
                 return sent < 0 ? sent : -1;
             }
-            return activeConnection.ControlTransfer(
-                (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceIn,
-                Scarlett2Protocol.UsbReqCmdRecv,
-                0,
-                vendorIf,
-                rx,
-                rx.Length,
-                ControlTransferTimeoutMs);
+            int recvd = -1;
+            for (int attempt = 0; attempt < 3 && !usbDetachedAbort; attempt++) {
+                if (attempt > 0) {
+                    Thread.Sleep(10 * attempt);
+                }
+                int tryLen = attempt == 2 ? rx.Length : rxLenCap;
+                recvd = activeConnection.ControlTransfer(
+                    (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceIn,
+                    Scarlett2Protocol.UsbReqCmdRecv,
+                    0,
+                    vendorIf,
+                    rx,
+                    tryLen,
+                    ControlTransferTimeoutMs);
+                if (recvd >= 0) {
+                    break;
+                }
+            }
+            return recvd;
         } catch (Exception ex) {
             AppLogger.Warn($"Scarlett2 ControlTransfer error: {ex.Message}");
             return -2;
@@ -1471,18 +1513,60 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
         }
     }
 
+    int[] QueryAndroidUsbAudioSampleRates() {
+        try {
+            if (context?.GetSystemService(Context.AudioService) is Android.Media.AudioManager am) {
+                Android.Media.AudioDeviceInfo[] outputs = am.GetDevices(Android.Media.GetDevicesTargets.Outputs);
+                if (outputs != null) {
+                    for (int i = 0; i < outputs.Length; i++) {
+                        Android.Media.AudioDeviceInfo dev = outputs[i];
+                        if (dev != null && dev.IsSink &&
+                            (dev.Type == Android.Media.AudioDeviceType.UsbDevice ||
+                             dev.Type == Android.Media.AudioDeviceType.UsbHeadset)) {
+                            int[] rawRates = dev.GetSampleRates();
+                            if (rawRates != null && rawRates.Length > 0) {
+                                List<int> valid = new(rawRates.Length);
+                                for (int r = 0; r < rawRates.Length; r++) {
+                                    int hz = rawRates[r];
+                                    if (hz >= 44100 && hz <= 192000 && !valid.Contains(hz)) {
+                                        valid.Add(hz);
+                                    }
+                                }
+                                if (valid.Count > 0) {
+                                    valid.Sort();
+                                    return valid.ToArray();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Fall through to non-detaching UAC2 probe
+        }
+        return Array.Empty<int>();
+    }
+
     int[] QueryUac2ClockSampleRatesLocked(UsbDeviceConnection conn, UsbDevice dev, Uac2DeviceTopology topo) {
+        // CRITICAL INVARIANT: NEVER call conn.ClaimInterface(acIf, force: true) on AudioControl IF 0!
+        // On Linux/Android usbfs, force=true executes USBDEVFS_DISCONNECT, permanently detaching kernel
+        // snd-usb-audio and causing Path A AAudioStream_requestStart() to fail with -11 until physical replug.
+        // First query Android's AudioManager USB Audio HAL (zero kernel driver disruption, returns all UAC2 rates).
+        int[] halRates = QueryAndroidUsbAudioSampleRates();
+        if (halRates.Length > 0) {
+            return halRates;
+        }
+
+        // Non-detaching EP0 fallback only (force: false): if kernel snd-usb-audio owns IF0, never kick it off!
         UsbInterface acIf = FindInterfaceById(dev, topo.AudioControlInterface);
         bool claimed = false;
         try {
             if (acIf != null) {
-                claimed = conn.ClaimInterface(acIf, true);
+                claimed = conn.ClaimInterface(acIf, false);
             }
             int wValue = Uac2Protocol.ClockSamFreqControl << 8;
             int wIndex = (topo.ClockSourceId << 8) | topo.AudioControlInterface;
 
-            // Phase 1 (UAC2 spec §5.2.3.1.2 / Linux sound/usb/clock.c): read 2-byte wNumSubRanges first so strict
-            // XMOS / Focusrite Scarlett Gen 4 firmware returns exact range count without STALLing on oversized wLength.
             byte[] hdr = new byte[2];
             int hdrRead = conn.ControlTransfer(
                 (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceIn,
@@ -1513,7 +1597,6 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
                 }
             }
 
-            // Phase 2 fallback: single-shot 256-byte GET_RANGE for firmwares that reject 2-byte partial reads
             byte[] buf = new byte[256];
             int n = conn.ControlTransfer(
                 (UsbAddressing)Uac2Protocol.ReqTypeClassInterfaceIn,
@@ -1529,7 +1612,7 @@ public sealed class UsbProAudioDeviceManager : IDisposable {
                 return Uac2Protocol.ParseClockSampleRateRange(trimmed);
             }
         } catch (Exception ex) {
-            AppLogger.Warn($"UAC2 Clock GET_RANGE skipped: {ex.Message}");
+            AppLogger.Warn($"UAC2 Clock GET_RANGE skipped (non-detaching): {ex.Message}");
         } finally {
             if (claimed && acIf != null) {
                 try {

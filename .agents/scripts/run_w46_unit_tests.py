@@ -2883,15 +2883,15 @@ RunTest("T38_BP_UiAi_Q1_Q3_AlphaClampSafety_And_VelocityBlurCurve", () => {
         Assert(clamped >= dimAlpha && clamped <= brightAlpha, "Clamped alpha out of bounds.");
     }
 
-    // Q3: Replicate OneUiMotionBlur.ComputeHorizontalBlurRadiusPx curve (density=3.0, width=1080px, 310ms fixed transition)
-    static float ComputeBlurPx(float velPxPerSec, float density, float maxBlurDp = 26f) {
+    // Q3: Replicate OneUiMotionBlur blended optical defocus + horizontal motion curve (density=3.0, width=1080px, 310ms fixed transition)
+    static float ComputeBlurPx(float velPxPerSec, float density, float maxBlurDp = 14f) {
         if (!float.IsFinite(velPxPerSec) || !float.IsFinite(density) || density <= 0f) return 0f;
         float speedDpPerSec = MathF.Abs(velPxPerSec) / density;
-        if (speedDpPerSec <= 260f) return 0f;
-        float excess = speedDpPerSec - 260f;
-        float rawDp = excess * 0.0044f;
-        float maxDp = Math.Clamp(maxBlurDp, 4f, 34f);
-        float curvedDp = maxDp * (1f - MathF.Exp(-rawDp / Math.Max(4f, maxDp * 0.65f)));
+        if (speedDpPerSec <= 240f) return 0f;
+        float excess = speedDpPerSec - 240f;
+        float rawDp = excess * 0.0036f;
+        float maxDp = Math.Clamp(maxBlurDp, 3f, 20f);
+        float curvedDp = maxDp * (1f - MathF.Exp(-rawDp / Math.Max(3.5f, maxDp * 0.72f)));
         float px = curvedDp * density;
         return px >= 0.75f ? px : 0f;
     }
@@ -2904,8 +2904,10 @@ RunTest("T38_BP_UiAi_Q1_Q3_AlphaClampSafety_And_VelocityBlurCurve", () => {
     float b2 = ComputeBlurPx(v2Tabs, density);
     Assert(b1 > 0f && b2 > 0f, $"Expected positive blur for 1-tab ({b1}) and 2-tab ({b2}) jumps.");
     Assert(b2 >= b1 * 1.40f, $"2-tab peak blur ({b2:0.2}px) must be >= 140% of 1-tab peak blur ({b1:0.2}px).");
-    float bMax = ComputeBlurPx(999999f, density, maxBlurDp: 26f);
-    Assert(bMax <= 28f * density, $"Peak blur ({bMax}px) exceeded 28dp cap ({28f * density}px).");
+    float bMax = ComputeBlurPx(999999f, density, maxBlurDp: 14f);
+    Assert(bMax <= 20f * density, $"Peak blur ({bMax}px) exceeded 20dp soft ceiling ({20f * density}px).");
+    float blurY = Math.Clamp(Math.Clamp(b2, 0.75f, 52f) * 0.52f, 0.75f, 36f);
+    Assert(blurY >= 0.75f && blurY < b2, $"Blended optical defocus Y ({blurY:0.2}px) must be >= 0.75px and softer than X ({b2:0.2}px).");
 });
 
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
@@ -3729,20 +3731,31 @@ def _py_stage7_ui_ai_org_motion_stability_contracts() -> None:
     for tok in ("TryLoadBestForSourceTrack", "bool forceReextract = false", "NeuralReextractStemsBtn", "OpenAiSettingsBtn", "JumpToSettingsCategory(2)"):
         assert tok in wf_src, f"Q2/Q4 failed: missing {tok} in MainActivity.NeuralWorkflows.cs"
 
-    # Q3: OneUiMotionBlur directional RenderEffect + safe radiusY + clear on end/cancel + 1:1 album framing
+    # Q3: OneUiMotionBlur blended optical defocus + horizontal motion + clear on end/cancel + 1:1 album framing + NowPlaying overlay stack
     theme_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Theme" / "OneUiTheme.cs").read_text(encoding="utf-8")
-    for tok in ("class OneUiMotionBlur", "ComputeHorizontalBlurRadiusPx", "CreateBlurEffect(clampedX, 0.01f", "SetRenderEffect(null)"):
+    for tok in ("class OneUiMotionBlur", "ComputeHorizontalBlurRadiusPx", "ComputeBlendedBlurRadiiPx", "ComputeTransitionOpticalDepth", "CreateBlurEffect(clampedX, clampedY", "SetRenderEffect(null)"):
         assert tok in theme_src, f"Q3 failed: missing {tok} in OneUiTheme.cs"
     nav_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Navigation.cs").read_text(encoding="utf-8")
-    for tok in ("OneUiMotionBlur.ComputeHorizontalBlurRadiusPx", "OneUiMotionBlur.ApplyHorizontalMotionBlur", "OneUiMotionBlur.ClearMotionBlur"):
+    for tok in ("OneUiMotionBlur.ComputeHorizontalBlurRadiusPx", "OneUiMotionBlur.ApplyHorizontalMotionBlur", "OneUiMotionBlur.ClearMotionBlur", "ComputeTransitionOpticalDepth"):
         assert tok in nav_src, f"Q3 failed: missing {tok} in MainActivity.Navigation.cs"
     np_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.NowPlaying.cs").read_text(encoding="utf-8")
-    assert "OneUiMotionBlur.ApplyHorizontalMotionBlur" in np_src and "OneUiMotionBlur.ClearMotionBlur" in np_src, "Q3 failed: NowPlaying section blur missing"
+    for tok in ("OneUiMotionBlur.ApplyHorizontalMotionBlur", "OneUiMotionBlur.ClearMotionBlur", "ComputeTransitionOpticalDepth", "HideSoftInputFromWindow"):
+        assert tok in np_src, f"Q3 failed: missing {tok} in NowPlaying.cs"
     lib_views = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.LibraryViews.cs").read_text(encoding="utf-8")
     pm_core = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.Core.cs").read_text(encoding="utf-8")
     assert "FillWidthSquare = true" in lib_views, "Q3 failed: album tile FillWidthSquare = true missing in LibraryViews.cs"
-    for tok in ("RoundedSquareOutlineProvider", "BitmapShader", "FillWidthSquare"):
+    for tok in ("RoundedSquareOutlineProvider", "BitmapShader", "FillWidthSquare", "musicSectionStack", "lastMusicScrollHeightPx"):
         assert tok in pm_core, f"Q3 failed: missing {tok} in MainActivity.PlayerMusic.Core.cs"
+
+    # Log-audit stability regressions: CTS ownership, Scarlett/USB PhoneMic preservation + 140ms debounce, version-scoped SelfCheck
+    for tok in ("myPrepCts.Dispose()", "myTwinCts.Dispose()", "catch (ObjectDisposedException)"):
+        assert tok in wf_src, f"Stability regression: missing {tok} in MainActivity.NeuralWorkflows.cs"
+    audio_out = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8")
+    for tok in ("routeDebounceUntilMs", "proAudioConfig.MicSource != ProAudioMicSource.PhoneMic"):
+        assert tok in audio_out, f"Stability regression: missing {tok} in AndroidAudioOutput.cs"
+    diag_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "SelfDiagnosticEngine.cs").read_text(encoding="utf-8")
+    for tok in ("TryExtractLogSessionVersion", "currentVersionFatals", "priorVersionFatals"):
+        assert tok in diag_src, f"Stability regression: missing {tok} in SelfDiagnosticEngine.cs"
 
     # Q4: Grouped Custom Ensemble, Locked Auto, AiComputeBudgetTier, & 4-tab AI IA
     store_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AppSettingsStore.cs").read_text(encoding="utf-8")
@@ -3796,6 +3809,41 @@ def _py_stage7_ui_ai_org_motion_stability_contracts() -> None:
             assert f'["{key}"]' in lang_src, f"Q6 failed: Missing localization key '{key}' in {lang_file}"
 
 
+def _py_stage8_scarlett_proaudio_stability_contracts() -> None:
+    usb_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "UsbProAudioDeviceManager.cs").read_text(encoding="utf-8")
+    assert "QueryAndroidUsbAudioSampleRates(" in usb_src, "BUG #1 regression: UsbProAudioDeviceManager missing Android AudioManager sample-rate query"
+    assert "ClaimInterface(acIf, false)" in usb_src, "BUG #1 regression: QueryUac2ClockSampleRatesLocked must use non-destructive ClaimInterface(acIf, false)"
+    assert "ClaimInterface(acIf, true)" not in usb_src, "BUG #1 regression: ClaimInterface(acIf, true) detaches snd-usb-audio and breaks AAudio Path A!"
+    assert "volatile UsbProAudioDeviceSnapshot snapshot" in usb_src and "volatile ScarlettHardwareState scarlettState" in usb_src, "BUG #5 regression: UsbProAudioDeviceManager snapshots must be volatile/lock-free"
+    assert "EnsureScarlettHandshakeLocked" in usb_src and "attempt < 3" in usb_src, "BUG #7 regression: Scarlett Gen 4 FCP 3-attempt retry missing"
+
+    out_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8")
+    for tok in ("activeHalBurstFrames", "adaptiveWatermarkBoostFrames", "lastObservedNativeXRuns", "needStartPlay", "WriteBlockZeroGc(preFrames)"):
+        assert tok in out_src, f"BUG #2/#4 regression: missing {tok} in AndroidAudioOutput.cs"
+    assert "transportAllowsLowLatTrack" in out_src, "BUG #2 regression: USB/BT AudioTrack must avoid fragile LowLatency mode"
+
+    path_a = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Native" / "cavernize_proaudio" / "cavernize_path_a_aaudio.cpp").read_text(encoding="utf-8")
+    for tok in ("cav_rb_apply_glitch_ramp", "rb_underrun_xruns", "playback_primed", "cached_out_xruns"):
+        assert tok in path_a, f"BUG #3 regression: missing {tok} in cavernize_path_a_aaudio.cpp"
+    fill_idx = path_a.index("void fill_status(")
+    fill_body = path_a[fill_idx:fill_idx + 1200]
+    assert "lock_guard" not in fill_body, "BUG #5 regression: Path A fill_status must remain lock-free"
+
+    path_b = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Native" / "cavernize_proaudio" / "cavernize_path_b_libusb.cpp").read_text(encoding="utf-8")
+    for tok in ("kIsoTransferCount = 6", "kTransientErrorAbortThreshold = 8", "cav_rb_apply_glitch_ramp", "attempt < 3"):
+        assert tok in path_b, f"BUG #3/#7 regression: missing {tok} in cavernize_path_b_libusb.cpp"
+
+    stream_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Rendering" / "RealtimePlayerEngine.Streaming.cs").read_text(encoding="utf-8")
+    assert "telemetryFramesSincePublish" in stream_src and "SyncSourceNormalizedPositionsLocked()" in stream_src, "BUG #6 regression: RT 20 Hz telemetry throttle or block-accurate position sync missing"
+
+    pro_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.ProAudio.cs").read_text(encoding="utf-8")
+    assert "RunScarlettUsbAsync(" in pro_ui, "BUG #5 UI regression: Scarlett USB modal operations must run off UI thread"
+
+    bridge_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.LiveBridge.cs").read_text(encoding="utf-8")
+    for tok in ("ApplyProAudioConfig(store.BuildProAudioConfig())", "UsbDacNativeSampleRate"):
+        assert tok in bridge_src, f"BUG #8 regression: missing {tok} in MainActivity.LiveBridge.cs"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -3806,6 +3854,7 @@ PYTHON_CHECKS = [
     ("PY_T5_StudioExportHygieneAndLocateWiring", _py_stage5_studio_export_hygiene_and_locate_wiring),
     ("PY_T6_FullAppSotaAudit_And_PhaseAContracts", _py_stage6_full_app_sota_audit_and_phase_a_contracts),
     ("PY_T7_BpUiAiOrgMotionStability_Q1_Q6_Contracts", _py_stage7_ui_ai_org_motion_stability_contracts),
+    ("PY_T8_ScarlettProAudioStabilityContracts", _py_stage8_scarlett_proaudio_stability_contracts),
 ]
 
 

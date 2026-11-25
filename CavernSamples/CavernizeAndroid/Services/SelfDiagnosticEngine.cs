@@ -1100,36 +1100,88 @@ public static class SelfDiagnosticEngine {
         return (SelfCheckStatus.Pass, $"GitHub legacy configured -> {store.CloudLogRepo}@{branch} ({logPath})");
     }
 
+    static string TryExtractLogSessionVersion(string line) {
+        if (string.IsNullOrEmpty(line) || !line.Contains("=== Session started", StringComparison.Ordinal)) {
+            return null;
+        }
+        int marker = line.IndexOf("| Cavernize v", StringComparison.Ordinal);
+        if (marker < 0) {
+            return null;
+        }
+        int start = marker + "| Cavernize ".Length;
+        int end = line.IndexOf(' ', start);
+        if (end < 0) {
+            end = line.IndexOf('|', start);
+        }
+        string ver = (end > start ? line[start..end] : line[start..]).Trim();
+        return ver.StartsWith('v') && ver.Length > 1 ? ver : null;
+    }
+
     static (SelfCheckStatus, string) CheckRuntimeLogHealth() {
         bool hasPendingCrash = AppLogger.HasPendingCrashReport;
         int fatals = AppLogger.SessionFatalCount;
         int errors = AppLogger.SessionErrorCount;
         string recent = AppLogger.ReadRecentLines(400);
         string[] lines = string.IsNullOrEmpty(recent) ? [] : recent.Split('\n');
-        List<string> fatalSnippets = [];
-        List<string> errorSnippets = [];
+
+        string latestVersion = null;
+        for (int i = lines.Length - 1; i >= 0; i--) {
+            string ver = TryExtractLogSessionVersion(lines[i]);
+            if (ver != null) {
+                latestVersion = ver;
+                break;
+            }
+        }
+
+        List<string> currentVersionFatals = [];
+        List<string> currentVersionErrors = [];
+        List<string> priorVersionFatals = [];
+        string activeVersion = null;
 
         foreach (string raw in lines) {
             string ln = raw.Trim();
-            if (string.IsNullOrEmpty(ln) || ln.Contains("SelfCheck finished:", StringComparison.Ordinal) || ln.Contains("SelfCheck FAIL", StringComparison.Ordinal) || ln.Contains("SelfCheck WARN", StringComparison.Ordinal)) {
+            if (string.IsNullOrEmpty(ln)) {
                 continue;
             }
+            string hdrVer = TryExtractLogSessionVersion(ln);
+            if (hdrVer != null) {
+                activeVersion = hdrVer;
+                continue;
+            }
+            if (ln.Contains("SelfCheck finished:", StringComparison.Ordinal) ||
+                ln.Contains("SelfCheck FAIL", StringComparison.Ordinal) ||
+                ln.Contains("SelfCheck WARN", StringComparison.Ordinal)) {
+                continue;
+            }
+            bool isPriorVersion = latestVersion != null &&
+                                  activeVersion != null &&
+                                  !string.Equals(activeVersion, latestVersion, StringComparison.OrdinalIgnoreCase);
             if (ln.Contains("[FATAL]", StringComparison.Ordinal) || ln.Contains("SIGSEGV", StringComparison.Ordinal)) {
-                fatalSnippets.Add(ln.Length > 95 ? ln[..95] + "..." : ln);
+                string snippet = ln.Length > 95 ? ln[..95] + "..." : ln;
+                if (isPriorVersion) {
+                    priorVersionFatals.Add(snippet);
+                } else {
+                    currentVersionFatals.Add(snippet);
+                }
             } else if (ln.Contains("[ERROR]", StringComparison.Ordinal) || ln.Contains("UnhandledException", StringComparison.OrdinalIgnoreCase)) {
-                errorSnippets.Add(ln.Length > 95 ? ln[..95] + "..." : ln);
+                if (!isPriorVersion) {
+                    currentVersionErrors.Add(ln.Length > 95 ? ln[..95] + "..." : ln);
+                }
             }
         }
 
-        if (hasPendingCrash || fatals > 0 || fatalSnippets.Count > 0) {
-            string sample = fatalSnippets.Count > 0 ? fatalSnippets[^1] : "Pending crash marker";
-            return (SelfCheckStatus.Fail, $"Session fatals={fatals}, pendingCrash={hasPendingCrash}, logFatals={fatalSnippets.Count} | Latest: {sample}");
+        if (hasPendingCrash || fatals > 0 || currentVersionFatals.Count > 0) {
+            string sample = currentVersionFatals.Count > 0 ? currentVersionFatals[^1] : "Pending crash marker";
+            return (SelfCheckStatus.Fail, $"Session fatals={fatals}, pendingCrash={hasPendingCrash}, logFatals={currentVersionFatals.Count} | Latest: {sample}");
         }
-        if (errors > 0 || errorSnippets.Count > 0) {
-            string sample = errorSnippets.Count > 0 ? errorSnippets[^1] : $"{errors} runtime error(s)";
-            return (SelfCheckStatus.Warn, $"Session errors={errors}, recentLogErrors={errorSnippets.Count} | Latest: {sample}");
+        if (errors > 0 || currentVersionErrors.Count > 0) {
+            string sample = currentVersionErrors.Count > 0 ? currentVersionErrors[^1] : $"{errors} runtime error(s)";
+            return (SelfCheckStatus.Warn, $"Session errors={errors}, recentLogErrors={currentVersionErrors.Count} | Latest: {sample}");
         }
-        return (SelfCheckStatus.Pass, $"0 fatals, 0 crashes, 0 runtime errors across last {lines.Length} log lines");
+        string histNote = priorVersionFatals.Count > 0
+            ? $" ({priorVersionFatals.Count} historical fatal(s) from prior version ignored)"
+            : "";
+        return (SelfCheckStatus.Pass, $"0 fatals, 0 crashes, 0 runtime errors in {latestVersion ?? "current"} across last {lines.Length} log lines{histNote}");
     }
 
     static SpatialSceneFrame CreateSyntheticFrame(int sampleRate, int frameCount) => new() {

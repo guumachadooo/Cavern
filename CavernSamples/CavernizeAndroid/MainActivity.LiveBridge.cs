@@ -575,6 +575,19 @@ public partial class MainActivity : ILiveBridgeAppHost {
         RunLiveUiSelfAuditInternalAsync(onProgress, ct);
 
     Task ILiveBridgeAppHost.ApplySettingsChangedAsync() => RunOnUiThreadWithTimeoutAsync(() => {
+        if (store != null) {
+            Cavernize.Logic.Spatial.ProAudioMicSource micSrc =
+                (Cavernize.Logic.Spatial.ProAudioMicSource)Math.Clamp(store.ProAudioMicSource, 0, 2);
+            if (audioDeviceProfileManager != null) {
+                audioDeviceProfileManager.PreferredMicSource = micSrc;
+            }
+            usbProAudioManager?.UpdateMicSource(micSrc);
+            if (audioOutput != null) {
+                audioOutput.LowLatencyMode = store.LowLatencyAudio;
+                audioOutput.UsbDacNativeSampleRate = store.UsbDacNativeSampleRate;
+                audioOutput.ApplyProAudioConfig(store.BuildProAudioConfig());
+            }
+        }
         RefreshAllUiState();
         RefreshLogSummaryLabel();
         return true;

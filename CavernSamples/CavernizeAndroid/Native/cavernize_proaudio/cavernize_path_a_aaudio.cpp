@@ -43,6 +43,7 @@ struct PathAAudioEngine {
 
     std::atomic<bool> running{false};
     std::atomic<bool> stream_disconnected{false};
+    std::atomic<bool> playback_primed{false};
     std::atomic<int32_t> io_inflight{0};
     std::atomic<bool> input_drained{false};
     std::atomic<int32_t> active_sr{48000};
@@ -50,8 +51,13 @@ struct PathAAudioEngine {
     std::atomic<int32_t> is_exclusive{0};
     std::atomic<int32_t> is_full_duplex{0};
     std::atomic<int32_t> last_xruns{0};
+    std::atomic<int32_t> cached_out_xruns{0};
+    std::atomic<int32_t> cached_in_xruns{0};
+    std::atomic<int32_t> rb_underrun_xruns{0};
     std::atomic<int32_t> tuner_cooldown{0};
     std::atomic<float> measured_rtt_ms{0.0f};
+    int underrun_ramp_state = 1;
+    float last_out_sample[2] = {0.0f, 0.0f};
 
     static aaudio_data_callback_result_t on_output_ready(
         AAudioStream* stream,
@@ -111,16 +117,27 @@ struct PathAAudioEngine {
             }
         }
 
-        /* 2. Pull stereo playback frames from lock-free OUT ring (zero-fill on underrun for glitch safety) */
+        /* 2. Pull stereo playback frames from lock-free OUT ring w/ zero-click micro-ramp & post-prime XRun tracking */
         auto* out_f32 = static_cast<float*>(audio_data);
-        cav_rb_read(&self->out_rb, out_f32, frames, 1);
+        const bool had_flush = self->out_rb.flush_state.load(std::memory_order_acquire) !=
+                               self->out_rb.consumer_flush_state.load(std::memory_order_relaxed);
+        const uint32_t got = cav_rb_read(&self->out_rb, out_f32, frames, 1);
+        cav_rb_apply_glitch_ramp(out_f32, frames, 2u, got, &self->underrun_ramp_state, self->last_out_sample);
+        if (got < frames && !had_flush && self->playback_primed.load(std::memory_order_acquire)) {
+            self->rb_underrun_xruns.fetch_add(1, std::memory_order_relaxed);
+        }
 
-        /* 3. Dynamic LatencyTuner (oboe-style: grow buffer by 1 burst on XRun, up to capacity) */
-        int32_t xruns = AAudioStream_getXRunCount(stream);
+        /* 3. Lock-free cached XRun telemetry + Dynamic LatencyTuner (AAudio HAL + SPSC ring underruns) */
+        int32_t hal_out_xruns = AAudioStream_getXRunCount(stream);
+        self->cached_out_xruns.store(hal_out_xruns, std::memory_order_relaxed);
+        if (self->in_stream && self->is_full_duplex.load(std::memory_order_relaxed)) {
+            self->cached_in_xruns.store(AAudioStream_getXRunCount(self->in_stream), std::memory_order_relaxed);
+        }
+        int32_t total_xruns = hal_out_xruns + self->rb_underrun_xruns.load(std::memory_order_relaxed);
         int32_t prev_x = self->last_xruns.load(std::memory_order_relaxed);
         int32_t cd = self->tuner_cooldown.load(std::memory_order_relaxed);
-        if (xruns > prev_x && cd <= 0) {
-            self->last_xruns.store(xruns, std::memory_order_relaxed);
+        if (total_xruns > prev_x && cd <= 0) {
+            self->last_xruns.store(total_xruns, std::memory_order_relaxed);
             int32_t burst = AAudioStream_getFramesPerBurst(stream);
             int32_t cur_buf = AAudioStream_getBufferSizeInFrames(stream);
             int32_t cap = AAudioStream_getBufferCapacityInFrames(stream);
@@ -291,9 +308,16 @@ struct PathAAudioEngine {
         cav_rb_init(&out_rb, out_storage, kRingSamples, 2u);
         cav_rb_init(&in_rb, in_storage, kRingSamples, 2u);
         stream_disconnected.store(false, std::memory_order_relaxed);
+        playback_primed.store(false, std::memory_order_relaxed);
         input_drained.store(false, std::memory_order_relaxed);
         last_xruns.store(0, std::memory_order_relaxed);
+        cached_out_xruns.store(0, std::memory_order_relaxed);
+        cached_in_xruns.store(0, std::memory_order_relaxed);
+        rb_underrun_xruns.store(0, std::memory_order_relaxed);
         tuner_cooldown.store(0, std::memory_order_relaxed);
+        underrun_ramp_state = 1;
+        last_out_sample[0] = 0.0f;
+        last_out_sample[1] = 0.0f;
 
         bool duplex_requested = enable_input != 0;
         if (!open_single_stream(AAUDIO_DIRECTION_OUTPUT, sample_rate, buffer_frames, out_dev_id, 2, true, duplex_requested, 0, &out_stream)) {
@@ -420,18 +444,19 @@ struct PathAAudioEngine {
 
     void fill_status(CavProAudioStatus* st) {
         if (!st) return;
-        std::lock_guard<std::mutex> lock(lifecycle_mtx);
-        st->active_backend = (running.load(std::memory_order_acquire) && out_stream != nullptr)
-            ? CAV_PA_BACKEND_PATH_A_AAUDIO
-            : CAV_PA_BACKEND_NONE;
+        /* 100% lock-free status read (never contends with lifecycle_mtx during HAL open/close) */
+        const bool active = running.load(std::memory_order_acquire) &&
+                            !stream_disconnected.load(std::memory_order_acquire);
+        st->active_backend = active ? CAV_PA_BACKEND_PATH_A_AAUDIO : CAV_PA_BACKEND_NONE;
         st->sample_rate = active_sr.load(std::memory_order_relaxed);
         st->bit_depth = 32;
         st->buffer_frames = active_burst.load(std::memory_order_relaxed);
         st->is_exclusive = is_exclusive.load(std::memory_order_relaxed);
         st->is_full_duplex = is_full_duplex.load(std::memory_order_relaxed);
         st->sync_mode = 0;
-        st->output_xruns = out_stream ? AAudioStream_getXRunCount(out_stream) : 0;
-        st->input_xruns = in_stream ? AAudioStream_getXRunCount(in_stream) : 0;
+        st->output_xruns = cached_out_xruns.load(std::memory_order_relaxed) +
+                           rb_underrun_xruns.load(std::memory_order_relaxed);
+        st->input_xruns = cached_in_xruns.load(std::memory_order_relaxed);
         st->estimated_rtt_ms = measured_rtt_ms.load(std::memory_order_relaxed);
         st->async_drift_ppm = 0.0f;
     }
@@ -460,6 +485,9 @@ int32_t path_a_write_playback(const float* data, int32_t frames) {
                 }
                 written = static_cast<int32_t>(cav_rb_write(&g_aaudio.out_rb, data, static_cast<uint32_t>(frames)));
             }
+        }
+        if (written > 0) {
+            g_aaudio.playback_primed.store(true, std::memory_order_release);
         }
     }
     g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);
@@ -504,6 +532,7 @@ int32_t path_a_buffered_frames() {
 void path_a_flush_playback() {
     g_aaudio.io_inflight.fetch_add(1, std::memory_order_acq_rel);
     if (g_aaudio.running.load(std::memory_order_acquire)) {
+        g_aaudio.playback_primed.store(false, std::memory_order_release);
         cav_rb_request_flush(&g_aaudio.out_rb);
     }
     g_aaudio.io_inflight.fetch_sub(1, std::memory_order_release);

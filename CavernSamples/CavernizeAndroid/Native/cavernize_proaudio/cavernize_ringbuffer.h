@@ -207,4 +207,74 @@ static inline uint32_t cav_rb_discard_oldest(CavRingBuffer* rb, uint32_t keep_ma
     return drop_frames;
 }
 
+/* Zero-allocation RT click-suppression micro-ramp (24 frames) for underrun entry & recovery.
+ * Eliminates hard step discontinuities when SPSC ring starves or resumes from silence. */
+static inline void cav_rb_apply_glitch_ramp(
+    float* interleaved,
+    uint32_t frames,
+    uint32_t channels,
+    uint32_t valid_frames,
+    int* in_underrun_state,
+    float* last_sample_frame) {
+    if (!interleaved || frames == 0u || channels == 0u || channels > 8u || !in_underrun_state || !last_sample_frame) {
+        return;
+    }
+    const uint32_t kRampFrames = 24u;
+    if (valid_frames >= frames) {
+        if (*in_underrun_state != 0) {
+            uint32_t ramp = frames < kRampFrames ? frames : kRampFrames;
+            float inv = 1.0f / (float)(ramp + 1u);
+            for (uint32_t f = 0u; f < ramp; ++f) {
+                float g = (float)(f + 1u) * inv;
+                for (uint32_t c = 0u; c < channels; ++c) {
+                    interleaved[f * channels + c] *= g;
+                }
+            }
+            *in_underrun_state = 0;
+        }
+        for (uint32_t c = 0u; c < channels; ++c) {
+            last_sample_frame[c] = interleaved[(frames - 1u) * channels + c];
+        }
+        return;
+    }
+
+    if (valid_frames > 0u) {
+        if (*in_underrun_state != 0) {
+            uint32_t up = valid_frames < kRampFrames ? valid_frames : kRampFrames;
+            float inv_up = 1.0f / (float)(up + 1u);
+            for (uint32_t f = 0u; f < up; ++f) {
+                float g = (float)(f + 1u) * inv_up;
+                for (uint32_t c = 0u; c < channels; ++c) {
+                    interleaved[f * channels + c] *= g;
+                }
+            }
+        }
+        uint32_t down = valid_frames < kRampFrames ? valid_frames : kRampFrames;
+        uint32_t start = valid_frames - down;
+        float inv_down = 1.0f / (float)(down + 1u);
+        for (uint32_t i = 0u; i < down; ++i) {
+            float g = (float)(down - i) * inv_down;
+            uint32_t f = start + i;
+            for (uint32_t c = 0u; c < channels; ++c) {
+                interleaved[f * channels + c] *= g;
+            }
+        }
+    } else if (*in_underrun_state == 0) {
+        /* Write a short decay tail from the previous block's final sample into the zero-filled gap */
+        uint32_t down = frames < kRampFrames ? frames : kRampFrames;
+        float inv_down = 1.0f / (float)(down + 1u);
+        for (uint32_t i = 0u; i < down; ++i) {
+            float g = (float)(down - i) * inv_down;
+            for (uint32_t c = 0u; c < channels; ++c) {
+                interleaved[i * channels + c] = last_sample_frame[c] * g;
+            }
+        }
+    }
+
+    for (uint32_t c = 0u; c < channels; ++c) {
+        last_sample_frame[c] = 0.0f;
+    }
+    *in_underrun_state = 1;
+}
+
 #endif /* CAVERNIZE_RINGBUFFER_H */

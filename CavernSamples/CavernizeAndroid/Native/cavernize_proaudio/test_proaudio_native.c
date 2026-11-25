@@ -204,10 +204,85 @@ static void test_sigpipe_shield(void) {
     printf("[PASS] SIGPIPE shield (SIG_IGN + raise(SIGPIPE) survival)\n");
 }
 
+static void test_scarlett2i2_gen4_exact_descriptor(void) {
+    /* Exact live S25U Focusrite Scarlett 2i2 4th Gen (VID=0x1235 PID=0x8219) UAC2 descriptor:
+     * IF 0 AC ClockID=41; IF 1 AS OUT EP 0x01 Sync (bmAttr=0x0D) 2ch 24-in-32 maxPkt=200;
+     * IF 2 AS IN EP 0x81 Sync (bmAttr=0x0D) 4ch 24-in-32 maxPkt=400 (Mic1-2 + Loopback3-4);
+     * IF 3 Vendor FCP (cls=0xFF sub=1 proto=0x20, EP 0x83 Interrupt 64B). */
+    const uint8_t desc[] = {
+        9, 0x02, 114, 0, 4, 1, 0, 0x80, 250,
+        9, 0x04, 0, 0, 0, 0x01, 0x01, 0x20, 0,
+        8, 0x24, 0x0A, 41, 0x01, 0x03, 0, 0,
+        9, 0x04, 1, 1, 1, 0x01, 0x02, 0x20, 0,
+        16, 0x24, 0x01, 1, 0, 1, 1, 0, 0, 0, 2, 3, 0, 0, 0, 0,
+        6, 0x24, 0x02, 1, 4, 24,
+        7, 0x05, 0x01, 0x0D, 0xC8, 0x00, 1, /* maxPkt = 200 (0x00C8), Sync = 0x0D */
+        9, 0x04, 2, 1, 1, 0x01, 0x02, 0x20, 0,
+        16, 0x24, 0x01, 2, 0, 1, 1, 0, 0, 0, 4, 15, 0, 0, 0, 0, /* 4ch capture */
+        6, 0x24, 0x02, 1, 4, 24,
+        7, 0x05, 0x81, 0x0D, 0x90, 0x01, 1, /* maxPkt = 400 (0x0190), Sync = 0x0D */
+        9, 0x04, 3, 0, 1, 0xFF, 0x01, 0x20, 0,
+        7, 0x05, 0x83, 0x03, 0x40, 0x00, 1
+    };
+
+    CavUac2Topology topo;
+    assert(cav_uac2_parse_config_desc(desc, sizeof(desc), &topo) == 0);
+    assert(topo.is_uac2 == 1);
+    assert(topo.clock_source_id == 41);
+    assert(topo.vendor_interface_num == 3);
+    assert(topo.playback_count == 1);
+    assert(topo.capture_count == 1);
+    assert(topo.playback[0].data_ep_addr == 0x01);
+    assert(topo.playback[0].channels == 2);
+    assert(topo.playback[0].max_packet_size == 200);
+    assert(topo.playback[0].implicit_feedback == 0); /* 0x0D Synchronous != Async */
+    assert(topo.capture[0].data_ep_addr == 0x81);
+    assert(topo.capture[0].channels == 4);
+    assert(topo.capture[0].max_packet_size == 400);
+    assert(topo.capture[0].format == CAV_UAC2_FMT_PCM24_IN_32_LE);
+    printf("[PASS] Focusrite Scarlett 2i2 4th Gen exact UAC2 descriptor (2ch OUT 200B + 4ch IN 400B + IF3 FCP)\n");
+}
+
+static void test_ring_underrun_glitch_ramp(void) {
+    float buf[128 * 2];
+    int in_underrun = 0;
+    float last[2] = { 0.8f, -0.6f };
+
+    /* 1. Zero-frame starvation writes smooth decay tail instead of hard step to 0 */
+    memset(buf, 0, sizeof(buf));
+    cav_rb_apply_glitch_ramp(buf, 64u, 2u, 0u, &in_underrun, last);
+    assert(in_underrun == 1);
+    assert(buf[0] > 0.70f && buf[0] < 0.80f);
+    assert(buf[1] < -0.50f && buf[1] > -0.60f);
+    assert(fabsf(buf[24 * 2]) < 1e-6f);
+    assert(fabsf(buf[24 * 2 + 1]) < 1e-6f);
+
+    /* 2. Recovery fades smoothly in from silence over 24 frames */
+    for (int i = 0; i < 64 * 2; ++i) buf[i] = 1.0f;
+    cav_rb_apply_glitch_ramp(buf, 64u, 2u, 64u, &in_underrun, last);
+    assert(in_underrun == 0);
+    assert(buf[0] > 0.0f && buf[0] < 0.1f);
+    assert(buf[23 * 2] > 0.90f && buf[23 * 2] < 1.0f);
+    assert(fabsf(buf[24 * 2] - 1.0f) < 1e-6f);
+    assert(fabsf(last[0] - 1.0f) < 1e-6f);
+
+    /* 3. Partial underrun fades out trailing valid frames cleanly to 0 */
+    for (int i = 0; i < 40 * 2; ++i) buf[i] = 0.5f;
+    for (int i = 40 * 2; i < 64 * 2; ++i) buf[i] = 0.0f;
+    cav_rb_apply_glitch_ramp(buf, 64u, 2u, 40u, &in_underrun, last);
+    assert(in_underrun == 1);
+    assert(fabsf(buf[10 * 2] - 0.5f) < 1e-6f);
+    assert(buf[39 * 2] > 0.0f && buf[39 * 2] < 0.05f);
+    assert(fabsf(buf[40 * 2]) < 1e-6f);
+    printf("[PASS] Zero-click 24-frame RT underrun decay tail, partial fade-out, and fade-in recovery\n");
+}
+
 int main(void) {
     test_ring_buffer_wraparound();
     test_ring_buffer_discard_oldest();
     test_uac2_descriptor_and_feedback();
+    test_scarlett2i2_gen4_exact_descriptor();
+    test_ring_underrun_glitch_ramp();
     test_pcm_pack_unpack_and_scarlett2();
     test_sigpipe_shield();
     return 0;

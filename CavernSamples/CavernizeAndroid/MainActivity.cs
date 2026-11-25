@@ -500,10 +500,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
         activeCts?.Dispose();
         truehdPrepareCts?.Cancel();
         truehdPrepareCts?.Dispose();
-        losslessTwinCts?.Cancel();
-        losslessTwinCts?.Dispose();
-        neuralPrepCts?.Cancel();
-        neuralPrepCts?.Dispose();
+        try { losslessTwinCts?.Cancel(); } catch { }
+        losslessTwinCts = null;
+        try { neuralPrepCts?.Cancel(); } catch { }
+        neuralPrepCts = null;
         activeLosslessTwin?.Dispose();
         activeLosslessTwin = null;
         tabPillAnimator?.Cancel();

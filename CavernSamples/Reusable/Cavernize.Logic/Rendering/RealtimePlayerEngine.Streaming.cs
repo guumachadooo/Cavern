@@ -49,6 +49,7 @@ public sealed partial class RealtimePlayerEngine {
             hasRenderedAudio = false;
             crossfadeRemaining = 0;
             lastSourceMaskHash = 0;
+            telemetryFramesSincePublish = int.MaxValue / 2;
             OutputPipelineLatencySeconds = 0.0;
 
             if (neuralStemStage.ActiveSpatialUpmixTrack != null &&
@@ -553,20 +554,31 @@ public sealed partial class RealtimePlayerEngine {
                 Volatile.Write(ref currentTrackSample, (long)Math.Round(currentTrackSampleExact));
                 totalFramesWritten += blockFrames;
 
-                UpdateSourceTelemetry();
-                if (liveMicBridge.IsActive) {
-                    sceneHub.SetLiveMicrophoneDescriptor(liveMicBridge.BuildSceneDescriptor(Listener.EnvironmentSize, sceneHub.Sources.Count));
+                // Throttle heavier RMS/HUD telemetry & diagnostics snapshot allocations to ~20 Hz (50 ms) instead of 187-750 Hz
+                // so 96/192 kHz RT playback stays zero-GC on the hot audio thread, while keeping NormalizedPosition block-accurate.
+                int telemetryIntervalFrames = Math.Max(blockFrames, listener.SampleRate / 20);
+                telemetryFramesSincePublish += blockFrames;
+                if (telemetryFramesSincePublish >= telemetryIntervalFrames) {
+                    telemetryFramesSincePublish = 0;
+                    UpdateSourceTelemetry();
+                    if (liveMicBridge.IsActive) {
+                        sceneHub.SetLiveMicrophoneDescriptor(liveMicBridge.BuildSceneDescriptor(Listener.EnvironmentSize, sceneHub.Sources.Count));
+                    }
+                    parametricUpmixerStage.SyncTelemetry(activeSceneFrame);
+                    sceneHub.Telemetry = activeSceneFrame.Telemetry;
+                    sceneHub.VocalChainDiagnostics = vocalTel;
+                    sceneHub.ExternalizationDiagnostics = virtualizerRenderer.Diagnostics;
+                    PublishLoudnessDiagnosticsLocked();
+                    sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
+                    sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
+                } else {
+                    SyncSourceNormalizedPositionsLocked();
                 }
-                parametricUpmixerStage.SyncTelemetry(activeSceneFrame);
-                sceneHub.Telemetry = activeSceneFrame.Telemetry;
-                sceneHub.VocalChainDiagnostics = vocalTel;
-                sceneHub.ExternalizationDiagnostics = virtualizerRenderer.Diagnostics;
-                PublishLoudnessDiagnosticsLocked();
-                sceneHub.NeuralDiagnostics = neuralStemStage.BuildDiagnosticsSnapshot();
-                sceneHub.LgsrDiagnostics = lgsrStage.BuildDiagnosticsSnapshot();
             }
         return totalFramesWritten;
     }
+
+    int telemetryFramesSincePublish = int.MaxValue / 2;
 
     void RecordTailLocked(float[] stereoOutput, int outOffset, int blockFrames) {
         for (int s = 0; s < blockFrames; s++) {

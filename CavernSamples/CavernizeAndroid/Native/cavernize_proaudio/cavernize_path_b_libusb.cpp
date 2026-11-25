@@ -35,8 +35,9 @@ namespace cavernize {
 #if defined(CAVERNIZE_HAVE_LIBUSB)
 
 static constexpr uint32_t kUsbRingSamples = 32768u;
-static constexpr int kIsoTransferCount = 4;
+static constexpr int kIsoTransferCount = 6;
 static constexpr int kIsoPacketsPerTransfer = 8; /* 8 x 125 us = 1 ms per URB in High-Speed */
+static constexpr int kTransientErrorAbortThreshold = 8;
 static constexpr int kUsbDrainCeilingMs = 1200;
 static constexpr int kUsbDetachedDrainCeilingMs = 150;
 static constexpr int kScarlettControlTimeoutMs = 250;
@@ -92,6 +93,7 @@ struct PathBLibUsbEngine {
     std::atomic<bool> running{false};
     std::atomic<bool> stopping{false};
     std::atomic<bool> device_gone{false};
+    std::atomic<bool> playback_primed{false};
     std::atomic<uint64_t> usb_detach_seq{0};
     std::atomic<int32_t> io_inflight{0};
     std::atomic<int32_t> consec_transfer_errors{0};
@@ -110,6 +112,8 @@ struct PathBLibUsbEngine {
 
     float pack_scratch[1024];
     float unpack_scratch[1024];
+    int underrun_ramp_state = 1;
+    float last_out_sample[2] = {0.0f, 0.0f};
 
     struct IoGuard {
         std::atomic<int32_t>& counter;
@@ -177,7 +181,7 @@ struct PathBLibUsbEngine {
 
         if (has_error) {
             int32_t errs = self->consec_transfer_errors.fetch_add(1, std::memory_order_acq_rel) + 1;
-            if (errs >= 3) {
+            if (errs >= kTransientErrorAbortThreshold) {
                 self->device_gone.store(true, std::memory_order_release);
                 self->running.store(false, std::memory_order_release);
                 tok->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
@@ -207,7 +211,7 @@ struct PathBLibUsbEngine {
             }
             tok->active_xfers.fetch_sub(1, std::memory_order_acq_rel);
             int32_t errs = self->consec_transfer_errors.fetch_add(1, std::memory_order_acq_rel) + 1;
-            if (rc == LIBUSB_ERROR_NO_DEVICE || errs >= 3) {
+            if (rc == LIBUSB_ERROR_NO_DEVICE || errs >= kTransientErrorAbortThreshold) {
                 self->device_gone.store(true, std::memory_order_release);
                 self->running.store(false, std::memory_order_release);
             }
@@ -352,7 +356,8 @@ struct PathBLibUsbEngine {
                 bool had_flush = out_rb.flush_state.load(std::memory_order_acquire) !=
                                  out_rb.consumer_flush_state.load(std::memory_order_relaxed);
                 uint32_t got = cav_rb_read(&out_rb, pack_scratch, frames, 1);
-                if (got < frames && !had_flush) {
+                cav_rb_apply_glitch_ramp(pack_scratch, frames, 2u, got, &underrun_ramp_state, last_out_sample);
+                if (got < frames && !had_flush && playback_primed.load(std::memory_order_acquire)) {
                     out_xruns.fetch_add(1, std::memory_order_relaxed);
                 }
             }
@@ -487,8 +492,12 @@ struct PathBLibUsbEngine {
 
         cav_rb_init(&out_rb, out_storage, kUsbRingSamples, 2u);
         cav_rb_init(&in_rb, in_storage, kUsbRingSamples, 2u);
+        playback_primed.store(false, std::memory_order_relaxed);
         out_xruns.store(0, std::memory_order_relaxed);
         in_xruns.store(0, std::memory_order_relaxed);
+        underrun_ramp_state = 1;
+        last_out_sample[0] = 0.0f;
+        last_out_sample[1] = 0.0f;
         stopping.store(false, std::memory_order_release);
         phase_accum_1616 = 0;
 
@@ -714,24 +723,39 @@ struct PathBLibUsbEngine {
         }
         uint16_t wIndex = static_cast<uint16_t>(target_if);
 
-        int sent = libusb_control_transfer(devh, 0x21, CAV_SCARLETT_USB_REQ_SEND, 0, wIndex,
+        int sent = -1;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            if (stopping.load(std::memory_order_acquire) || device_gone.load(std::memory_order_acquire)) {
+                return -1;
+            }
+            sent = libusb_control_transfer(devh, 0x21, CAV_SCARLETT_USB_REQ_SEND, 0, wIndex,
                                            const_cast<uint8_t*>(tx), static_cast<uint16_t>(tx_len), kScarlettControlTimeoutMs);
-        if (sent == LIBUSB_ERROR_NO_DEVICE) {
-            device_gone.store(true, std::memory_order_release);
-            running.store(false, std::memory_order_release);
-            return sent;
+            if (sent == LIBUSB_ERROR_NO_DEVICE) {
+                device_gone.store(true, std::memory_order_release);
+                running.store(false, std::memory_order_release);
+                return sent;
+            }
+            if (sent >= 0) break;
+            /* Linux mixer_scarlett2.c parity: retry transient -EPROTO / -EPIPE / -EIO with 10ms backoff */
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         if (sent < 0) return sent;
         if (!rx || rx_cap < CAV_SCARLETT_PKT_HDR_SIZE) return sent;
-        if (stopping.load(std::memory_order_acquire) || device_gone.load(std::memory_order_acquire)) {
-            return -1;
-        }
 
-        int recvd = libusb_control_transfer(devh, 0xA1, CAV_SCARLETT_USB_REQ_RECV, 0, wIndex,
+        int recvd = -1;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            if (stopping.load(std::memory_order_acquire) || device_gone.load(std::memory_order_acquire)) {
+                return -1;
+            }
+            recvd = libusb_control_transfer(devh, 0xA1, CAV_SCARLETT_USB_REQ_RECV, 0, wIndex,
                                             rx, static_cast<uint16_t>(rx_cap), kScarlettControlTimeoutMs);
-        if (recvd == LIBUSB_ERROR_NO_DEVICE) {
-            device_gone.store(true, std::memory_order_release);
-            running.store(false, std::memory_order_release);
+            if (recvd == LIBUSB_ERROR_NO_DEVICE) {
+                device_gone.store(true, std::memory_order_release);
+                running.store(false, std::memory_order_release);
+                return recvd;
+            }
+            if (recvd >= 0) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         return recvd;
     }
@@ -965,7 +989,11 @@ int32_t path_b_write_playback(const float* data, int32_t frames) {
         g_libusb.device_gone.load(std::memory_order_acquire)) {
         return -1;
     }
-    return static_cast<int32_t>(cav_rb_write(&g_libusb.out_rb, data, static_cast<uint32_t>(frames)));
+    int32_t written = static_cast<int32_t>(cav_rb_write(&g_libusb.out_rb, data, static_cast<uint32_t>(frames)));
+    if (written > 0) {
+        g_libusb.playback_primed.store(true, std::memory_order_release);
+    }
+    return written;
 }
 int32_t path_b_read_capture(float* data, int32_t max_frames) {
     if (!data || max_frames <= 0) return 0;
@@ -1010,6 +1038,7 @@ void path_b_flush_playback() {
     if (g_libusb.running.load(std::memory_order_acquire) &&
         !g_libusb.stopping.load(std::memory_order_acquire) &&
         !g_libusb.device_gone.load(std::memory_order_acquire)) {
+        g_libusb.playback_primed.store(false, std::memory_order_release);
         cav_rb_request_flush(&g_libusb.out_rb);
     }
 }

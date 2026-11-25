@@ -26,6 +26,16 @@ public partial class MainActivity {
         if (openLibrary && isFormatPillExpanded) {
             SetFormatPillExpanded(false, animate: false);
         }
+        if (!openLibrary && librarySearchInput != null) {
+            try {
+                librarySearchInput.ClearFocus();
+                if (GetSystemService(InputMethodService) is Android.Views.InputMethods.InputMethodManager imm) {
+                    imm.HideSoftInputFromWindow(librarySearchInput.WindowToken, Android.Views.InputMethods.HideSoftInputFlags.None);
+                }
+            } catch {
+                // Best effort keyboard dismissal
+            }
+        }
         ApplyCurrentWindowInsetsPadding();
         UpdateSectionSwitcherStyle();
         SyncPredictiveBackRegistration();
@@ -51,24 +61,38 @@ public partial class MainActivity {
             if (wasOpen == openLibrary || viewportW <= 1f) {
                 leaving.Visibility = ViewStates.Gone;
                 leaving.TranslationX = 0f;
+                leaving.ScaleX = 1f;
+                leaving.ScaleY = 1f;
                 leaving.Alpha = 1f;
                 entering.Visibility = ViewStates.Visible;
                 entering.TranslationX = 0f;
+                entering.ScaleX = 1f;
+                entering.ScaleY = 1f;
                 entering.Alpha = 1f;
+                if (!openLibrary) {
+                    musicTabRootPage?.Post(() => UpdatePlayTabSpacingForViewport(force: true));
+                }
             } else {
                 float dir = openLibrary ? 1f : -1f;
                 float density = Resources?.DisplayMetrics?.Density ?? 3f;
+                const float SectionMaxBlurDp = 12f;
+                float maxBlurPx = SectionMaxBlurDp * density;
                 entering.Visibility = ViewStates.Visible;
                 entering.Alpha = 1f;
+                entering.ScaleX = 1f;
+                entering.ScaleY = 1f;
                 entering.TranslationX = dir * viewportW;
                 leaving.Visibility = ViewStates.Visible;
                 leaving.Alpha = 1f;
+                leaving.ScaleX = 1f;
+                leaving.ScaleY = 1f;
                 leaving.TranslationX = 0f;
 
                 float prevT = 0f;
                 long prevMs = Android.OS.SystemClock.UptimeMillis();
+                float smoothedBlurPx = 0f;
                 ValueAnimator anim = ValueAnimator.OfFloat(0f, 1f);
-                anim.SetDuration(290);
+                anim.SetDuration(300);
                 anim.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
                 anim.Update += (_, e) => {
                     if (uiDestroyed) return;
@@ -77,27 +101,54 @@ public partial class MainActivity {
                     float vel = MathF.Abs(t - prevT) * viewportW / Math.Max(0.004f, (nowMs - prevMs) * 0.001f);
                     prevT = t;
                     prevMs = nowMs;
-                    float blurPx = OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(vel, density, maxBlurDp: 22f);
+                    float targetBlur = OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(vel, density, maxBlurDp: SectionMaxBlurDp);
+                    smoothedBlurPx = targetBlur > smoothedBlurPx
+                        ? smoothedBlurPx + (targetBlur - smoothedBlurPx) * 0.45f
+                        : smoothedBlurPx + (targetBlur - smoothedBlurPx) * 0.34f;
+                    if (smoothedBlurPx < 0.75f) {
+                        smoothedBlurPx = 0f;
+                    }
                     entering.TranslationX = dir * (1f - t) * viewportW;
                     leaving.TranslationX = -dir * t * viewportW;
-                    OneUiMotionBlur.ApplyHorizontalMotionBlur(entering, blurPx);
-                    OneUiMotionBlur.ApplyHorizontalMotionBlur(leaving, blurPx);
+                    OneUiMotionBlur.ApplyHorizontalMotionBlur(entering, smoothedBlurPx, opticalDefocusRatio: 0.56f);
+                    OneUiMotionBlur.ApplyHorizontalMotionBlur(leaving, smoothedBlurPx, opticalDefocusRatio: 0.56f);
+                    (float inSc, float inAl) = OneUiMotionBlur.ComputeTransitionOpticalDepth(smoothedBlurPx, maxBlurPx, isEntering: true);
+                    (float outSc, float outAl) = OneUiMotionBlur.ComputeTransitionOpticalDepth(smoothedBlurPx, maxBlurPx, isEntering: false);
+                    entering.ScaleX = inSc;
+                    entering.ScaleY = inSc;
+                    entering.Alpha = inAl;
+                    leaving.ScaleX = outSc;
+                    leaving.ScaleY = outSc;
+                    leaving.Alpha = outAl;
                 };
                 void Done() {
                     OneUiMotionBlur.ClearMotionBlur(entering);
                     OneUiMotionBlur.ClearMotionBlur(leaving);
                     entering.TranslationX = 0f;
+                    entering.ScaleX = 1f;
+                    entering.ScaleY = 1f;
                     entering.Alpha = 1f;
                     entering.Visibility = ViewStates.Visible;
                     leaving.TranslationX = 0f;
+                    leaving.ScaleX = 1f;
+                    leaving.ScaleY = 1f;
                     leaving.Alpha = 1f;
                     leaving.Visibility = ViewStates.Gone;
                     playLibStripAnimator = null;
+                    if (!openLibrary) {
+                        musicTabRootPage?.Post(() => UpdatePlayTabSpacingForViewport(force: true));
+                    }
                 }
                 anim.AnimationEnd += (_, _) => Done();
                 anim.AnimationCancel += (_, _) => {
                     OneUiMotionBlur.ClearMotionBlur(entering);
                     OneUiMotionBlur.ClearMotionBlur(leaving);
+                    entering.ScaleX = 1f;
+                    entering.ScaleY = 1f;
+                    entering.Alpha = 1f;
+                    leaving.ScaleX = 1f;
+                    leaving.ScaleY = 1f;
+                    leaving.Alpha = 1f;
                 };
                 playLibStripAnimator = anim;
                 anim.Start();

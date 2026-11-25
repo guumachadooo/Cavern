@@ -60,10 +60,11 @@ public partial class MainActivity {
             return;
         }
 
-        losslessTwinCts?.Cancel();
-        losslessTwinCts?.Dispose();
-        losslessTwinCts = new CancellationTokenSource();
-        CancellationToken ct = losslessTwinCts.Token;
+        CancellationTokenSource prevTwinCts = losslessTwinCts;
+        losslessTwinCts = null;
+        try {
+            prevTwinCts?.Cancel();
+        } catch { }
         int gen = ++losslessTwinGeneration;
 
         bool alreadyLossless = LosslessTwinDiscoveryService.IsTrackAlreadyLossless(activeTrack, activePath);
@@ -83,6 +84,10 @@ public partial class MainActivity {
             return;
         }
 
+        CancellationTokenSource myTwinCts = new();
+        losslessTwinCts = myTwinCts;
+        CancellationToken ct = myTwinCts.Token;
+
         MediaLibrarySnapshot snap = librarySnapshot ?? MediaLibraryService.CachedSnapshot;
         string title = currentMediaMeta?.Title ?? "";
         string artist = currentMediaMeta?.Artist ?? "";
@@ -91,6 +96,7 @@ public partial class MainActivity {
 
         _ = Task.Run(async () => {
             try {
+                ct.ThrowIfCancellationRequested();
                 Cavernize.Logic.Spatial.UniversalLosslessTwinProvider twin =
                     await LosslessTwinDiscoveryService.DiscoverAndSyncAsync(
                         this,
@@ -106,7 +112,7 @@ public partial class MainActivity {
 
                 RunOnUiThread(() => {
                     if (uiDestroyed || gen != losslessTwinGeneration) {
-                        twin.Dispose();
+                        twin?.Dispose();
                         return;
                     }
                     activeLosslessTwin = twin;
@@ -117,19 +123,25 @@ public partial class MainActivity {
                 });
             } catch (System.OperationCanceledException) {
                 // Superseded by newer track selection
+            } catch (ObjectDisposedException) when (ct.IsCancellationRequested || gen != losslessTwinGeneration) {
+                // Superseded while previous CTS was tearing down
             } catch (Exception ex) {
                 AppLogger.Warn($"W09 StartLosslessTwinDiscoveryAsync: {ex.Message}");
+            } finally {
+                try {
+                    myTwinCts.Dispose();
+                } catch { }
             }
-        }, ct);
+        });
     }
 
     void CancelNeuralTrackPrep(bool silent = false) {
         neuralPrepGeneration++;
-        try {
-            neuralPrepCts?.Cancel();
-            neuralPrepCts?.Dispose();
-        } catch { }
+        CancellationTokenSource prevPrepCts = neuralPrepCts;
         neuralPrepCts = null;
+        try {
+            prevPrepCts?.Cancel();
+        } catch { }
         isNeuralPrepRunning = false;
         activeNeuralPrepGoal = null;
         neuralPrepProgress = 0;
@@ -802,10 +814,13 @@ public partial class MainActivity {
             return;
         }
 
-        neuralPrepCts?.Cancel();
-        neuralPrepCts?.Dispose();
-        neuralPrepCts = new CancellationTokenSource();
-        CancellationToken ct = neuralPrepCts.Token;
+        CancellationTokenSource prevPrepCts = neuralPrepCts;
+        CancellationTokenSource myPrepCts = new();
+        neuralPrepCts = myPrepCts;
+        try {
+            prevPrepCts?.Cancel();
+        } catch { }
+        CancellationToken ct = myPrepCts.Token;
         int myGen = ++neuralPrepGeneration;
         isNeuralPrepRunning = true;
         activeNeuralPrepGoal = goal;
@@ -828,6 +843,7 @@ public partial class MainActivity {
 
         _ = Task.Run(async () => {
             try {
+                ct.ThrowIfCancellationRequested();
                 FileInfo keyInfo = new(activePath);
 
                 // Fast path for VocalMixDna: if full separated stems for this track are already loaded in RAM or cached on disk,
@@ -1094,6 +1110,17 @@ public partial class MainActivity {
                     neuralPrepStatusText = "";
                     RefreshNeuralPrepUi();
                 });
+            } catch (ObjectDisposedException) when (ct.IsCancellationRequested || myGen != neuralPrepGeneration) {
+                RunOnUiThread(() => {
+                    if (uiDestroyed || myGen != neuralPrepGeneration) {
+                        return;
+                    }
+                    isNeuralPrepRunning = false;
+                    activeNeuralPrepGoal = null;
+                    neuralPrepProgress = 0;
+                    neuralPrepStatusText = "";
+                    RefreshNeuralPrepUi();
+                });
             } catch (Exception ex) {
                 string safeMsg = Cavernize.Logic.Spatial.MvsepCloudClient.RedactSecrets(ex.Message, store?.MvsepApiToken);
                 AppLogger.Warn($"W18/W19.b/T3 PrepareActiveTrackNeuralStemsAsync: {safeMsg}");
@@ -1108,8 +1135,12 @@ public partial class MainActivity {
                     RefreshNeuralPrepUi();
                     Toast.MakeText(this, string.Format(S["NeuralPrepFailedFmt"], safeMsg), ToastLength.Long).Show();
                 });
+            } finally {
+                try {
+                    myPrepCts.Dispose();
+                } catch { }
             }
-        }, ct);
+        });
     }
 
     (float[] Left, float[] Right, int SampleRate) DecodeTempStemBytesWithFfmpeg(

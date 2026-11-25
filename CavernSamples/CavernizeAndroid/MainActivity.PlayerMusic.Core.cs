@@ -324,9 +324,12 @@ public partial class MainActivity {
     List<LibraryTrackItem> currentTrackVariants = [];
     int stageAnimGen;
     int lastMusicViewportHeightPx;
+    int lastMusicViewportWidthPx;
+    int lastMusicScrollHeightPx;
     int lastMusicViewportPadPx = -1;
     bool lastMusicViewportLandscape;
     PlayerStageMode? lastMusicViewportStageMode;
+    FrameLayout musicSectionStack;
     LinearLayout musicTransportRow, musicVolRow, musicSpatialToggleRow, musicBottomActionRow;
 
     FrameLayout musicSeekBackBtn, musicRewBtn, musicPlayCircleBtn, musicFwdBtn, musicSeekFwdBtn;
@@ -998,7 +1001,6 @@ public partial class MainActivity {
         musicNowPlayingScrollView.AddView(musicNowPlayingSection, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
             ViewGroup.LayoutParams.WrapContent));
-        page.AddView(musicNowPlayingScrollView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
 
         // ============================================================
         // SECTION B: IN-APP LIBRARY (Internally Scrollable, Full Nav Bar Visible)
@@ -1016,9 +1018,26 @@ public partial class MainActivity {
         musicLibraryScrollView.AddView(musicLibrarySection, new FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
             ViewGroup.LayoutParams.WrapContent));
-        page.AddView(musicLibraryScrollView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
+
+        // Overlay stack ensures Now Playing & Library always share 100% viewport height during horizontal slide
+        // (never splitting vertically 50/50 inside the parent vertical LinearLayout).
+        musicSectionStack = new FrameLayout(this);
+        musicSectionStack.SetClipChildren(false);
+        musicSectionStack.SetClipToPadding(false);
+        musicSectionStack.AddView(musicNowPlayingScrollView, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.MatchParent));
+        musicSectionStack.AddView(musicLibraryScrollView, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent,
+            ViewGroup.LayoutParams.MatchParent));
+        page.AddView(musicSectionStack, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
 
         page.LayoutChange += (_, _) => UpdatePlayTabSpacingForViewport();
+        musicNowPlayingScrollView.LayoutChange += (_, _) => {
+            if (!isLibrarySectionOpen) {
+                UpdatePlayTabSpacingForViewport();
+            }
+        };
 
         UpdateSectionSwitcherStyle();
         RefreshMusicPlayerUi();
@@ -1029,20 +1048,34 @@ public partial class MainActivity {
         if (musicTabRootPage == null || musicNowPlayingSection == null || mediaStageFrame == null) {
             return;
         }
+        // Never shrink Now Playing layout while hidden behind Library (avoids stale/transient inset squishing)
+        if (isLibrarySectionOpen || musicNowPlayingScrollView?.Visibility != ViewStates.Visible) {
+            return;
+        }
         int vpH = musicTabRootPage.Height;
+        int vpW = musicTabRootPage.Width;
         if (vpH <= 0) {
+            return;
+        }
+        int scrollH = musicNowPlayingScrollView?.Height ?? 0;
+        // Ignore transient pre-layout / collapsing-IME frames smaller than 180dp
+        if (scrollH > 0 && scrollH < Dp(180)) {
             return;
         }
         int padV = musicTabRootPage.PaddingTop + musicTabRootPage.PaddingBottom;
         bool isLandscape = Resources?.Configuration?.Orientation == Android.Content.Res.Orientation.Landscape;
         if (!force &&
             Math.Abs(vpH - lastMusicViewportHeightPx) < Dp(8) &&
+            Math.Abs(vpW - lastMusicViewportWidthPx) < Dp(8) &&
+            Math.Abs(scrollH - lastMusicScrollHeightPx) < Dp(8) &&
             padV == lastMusicViewportPadPx &&
             isLandscape == lastMusicViewportLandscape &&
             lastMusicViewportStageMode == musicStageMode) {
             return;
         }
         lastMusicViewportHeightPx = vpH;
+        lastMusicViewportWidthPx = vpW;
+        lastMusicScrollHeightPx = scrollH;
         lastMusicViewportPadPx = padV;
         lastMusicViewportLandscape = isLandscape;
         lastMusicViewportStageMode = musicStageMode;
@@ -1082,7 +1115,6 @@ public partial class MainActivity {
         // Guard stage height against compact/landscape vertical crush so Lyrics/Video/Cover never collapse <= 40dp
         int minStageDp = isLyricsOrVideo ? (isLandscape ? 230 : 250) : 170;
         int minStagePx = Dp(minStageDp);
-        int scrollH = musicNowPlayingScrollView?.Height ?? 0;
         int otherControlsPx = 0;
         if (scrollH > 0) {
             for (int i = 0; i < musicNowPlayingSection.ChildCount; i++) {

@@ -1733,19 +1733,21 @@ public sealed class OneUiSwitch : Switch {
 }
 
 /// <summary>
-/// Hardware-accelerated velocity-scaled directional horizontal motion blur engine (API 31+ <see cref="RenderEffect"/>).
-/// Faster horizontal travel (e.g., jumping 2–4 tabs in the same fixed duration or fast finger swipe) proportionally
-/// increases the horizontal blur radius while keeping vertical sharpness crisp, and clears cleanly to <c>null</c> at rest.
+/// Hardware-accelerated blended optical defocus + velocity-scaled horizontal motion blur engine
+/// (API 31+ <see cref="RenderEffect"/>). Instead of harsh 1D shutter-speed smearing, combines soft
+/// isotropic Gaussian defocus (<c>radiusY</c>) with subtle directional horizontal stretch (<c>radiusX</c>)
+/// and delicate depth breathing so transitions feel lush, calm, and glass-like, clearing cleanly to <c>null</c> at rest.
 /// </summary>
 public static class OneUiMotionBlur {
-    const float DeadzoneDpPerSec = 260f;
-    const float ScaleGain = 0.0044f;
+    const float DeadzoneDpPerSec = 240f;
+    const float ScaleGain = 0.0036f;
+    const float DefaultOpticalDefocusRatio = 0.52f;
 
     /// <summary>
-    /// Computes the horizontal directional blur radius in pixels from instantaneous horizontal speed in px/sec.
-    /// Guarantees <c>0</c> below deadzone, monotonic velocity scaling, and a safe GPU-friendly ceiling.
+    /// Computes the horizontal blur radius in pixels from instantaneous horizontal speed in px/sec.
+    /// Guarantees <c>0</c> below deadzone, monotonic velocity scaling, and an aesthetically soft GPU ceiling.
     /// </summary>
-    public static float ComputeHorizontalBlurRadiusPx(float velocityPxPerSec, float density, float maxBlurDp = 26f) {
+    public static float ComputeHorizontalBlurRadiusPx(float velocityPxPerSec, float density, float maxBlurDp = 14f) {
         if (!float.IsFinite(velocityPxPerSec) || !float.IsFinite(density) || density <= 0f) {
             return 0f;
         }
@@ -1755,18 +1757,59 @@ public static class OneUiMotionBlur {
         }
         float excess = speedDpPerSec - DeadzoneDpPerSec;
         float rawDp = excess * ScaleGain;
-        float maxDp = Math.Clamp(maxBlurDp, 4f, 34f);
-        // Smooth soft-knee saturation so 1-tab vs 2-tab vs 3-tab jumps stay visibly distinct without GPU over-blur
-        float curvedDp = maxDp * (1f - MathF.Exp(-rawDp / Math.Max(4f, maxDp * 0.65f)));
+        float maxDp = Math.Clamp(maxBlurDp, 3f, 20f);
+        // Smooth soft-knee saturation keeping 1-tab vs 2-tab vs 3-tab jumps distinct without harsh streaking
+        float curvedDp = maxDp * (1f - MathF.Exp(-rawDp / Math.Max(3.5f, maxDp * 0.72f)));
         float px = curvedDp * density;
         return px >= 0.75f ? px : 0f;
     }
 
     /// <summary>
-    /// Applies directional horizontal-only motion blur to <paramref name="view"/> on Android 12+ (API 31+),
+    /// Computes blended 2D elliptical blur radii (<c>BlurX</c> directional motion + <c>BlurY</c> soft optical defocus).
+    /// When active, <c>BlurX &gt;= BlurY &gt;= 0.75px</c>, avoiding harsh 1D scanline streaks.
+    /// </summary>
+    public static (float BlurX, float BlurY) ComputeBlendedBlurRadiiPx(
+        float velocityPxPerSec,
+        float density,
+        float maxBlurDp = 14f,
+        float opticalDefocusRatio = DefaultOpticalDefocusRatio) {
+        float blurX = ComputeHorizontalBlurRadiusPx(velocityPxPerSec, density, maxBlurDp);
+        if (blurX < 0.75f) {
+            return (0f, 0f);
+        }
+        float ratio = Math.Clamp(opticalDefocusRatio, 0.30f, 0.85f);
+        float clampedX = Math.Clamp(blurX, 0.75f, 52f);
+        float clampedY = Math.Clamp(clampedX * ratio, 0.75f, 36f);
+        return (clampedX, clampedY);
+    }
+
+    /// <summary>
+    /// Computes subtle optical depth micro-scale and silky alpha veil proportional to normalized blur intensity,
+    /// returning exactly <c>(1f, 1f)</c> at rest.
+    /// </summary>
+    public static (float Scale, float Alpha) ComputeTransitionOpticalDepth(
+        float blurRadiusPx,
+        float maxBlurPx,
+        bool isEntering = false) {
+        if (!float.IsFinite(blurRadiusPx) || !float.IsFinite(maxBlurPx) || blurRadiusPx < 0.75f || maxBlurPx <= 0.75f) {
+            return (1f, 1f);
+        }
+        float norm = Math.Clamp(blurRadiusPx / maxBlurPx, 0f, 1f);
+        // Smooth quadratic ease so gentle movement stays crisp and fast travel breathes softly
+        float soft = norm * (0.65f + 0.35f * norm);
+        float scale = 1f - (isEntering ? 0.018f : 0.024f) * soft;
+        float alpha = 1f - (isEntering ? 0.06f : 0.14f) * soft;
+        return (scale, alpha);
+    }
+
+    /// <summary>
+    /// Applies blended optical defocus + subtle horizontal motion blur to <paramref name="view"/> on Android 12+ (API 31+),
     /// clearing back to <c>null</c> immediately when <paramref name="blurRadiusPx"/> drops below 0.75 px.
     /// </summary>
-    public static void ApplyHorizontalMotionBlur(View view, float blurRadiusPx) {
+    public static void ApplyHorizontalMotionBlur(
+        View view,
+        float blurRadiusPx,
+        float opticalDefocusRatio = DefaultOpticalDefocusRatio) {
         if (view == null || !OperatingSystem.IsAndroidVersionAtLeast(31)) {
             return;
         }
@@ -1775,9 +1818,10 @@ public static class OneUiMotionBlur {
                 view.SetRenderEffect(null);
                 return;
             }
-            float clampedX = Math.Clamp(blurRadiusPx, 0.75f, 96f);
-            // Keep radiusY at a tiny positive epsilon (0.01f) for pure horizontal smear while avoiding Skia 0f quirks
-            using RenderEffect effect = RenderEffect.CreateBlurEffect(clampedX, 0.01f, Shader.TileMode.Clamp!);
+            float ratio = Math.Clamp(opticalDefocusRatio, 0.30f, 0.85f);
+            float clampedX = Math.Clamp(blurRadiusPx, 0.75f, 52f);
+            float clampedY = Math.Clamp(clampedX * ratio, 0.75f, 36f);
+            using RenderEffect effect = RenderEffect.CreateBlurEffect(clampedX, clampedY, Shader.TileMode.Clamp!);
             view.SetRenderEffect(effect);
         } catch {
             try {
@@ -1800,4 +1844,5 @@ public static class OneUiMotionBlur {
         }
     }
 }
+
 

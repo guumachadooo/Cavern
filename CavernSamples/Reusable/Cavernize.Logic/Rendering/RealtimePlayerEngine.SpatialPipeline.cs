@@ -1004,6 +1004,28 @@ public sealed partial class RealtimePlayerEngine {
         }
     }
 
+    void SyncSourceNormalizedPositionsLocked() {
+        if (listener != null && cachedActiveSources.Length != listener.ActiveSources.Count) {
+            RebuildCachedActiveSourcesLocked();
+        }
+        Source[] activeObjects = cachedActiveSources;
+        if (activeObjects == null || activeObjects.Length == 0) {
+            return;
+        }
+        Vector3 envSize = Listener.EnvironmentSize;
+        Vector3 invEnv = new(
+            1f / MathF.Max(0.25f, envSize.X),
+            1f / MathF.Max(0.25f, envSize.Y),
+            1f / MathF.Max(0.25f, envSize.Z));
+        int count = Math.Min(sourceItems.Count, activeObjects.Length);
+        for (int i = 0; i < count; i++) {
+            Source src = activeObjects[i];
+            if (src != null) {
+                sourceItems[i].NormalizedPosition = src.Position * invEnv;
+            }
+        }
+    }
+
     void UpdateSourceTelemetry() {
         if (listener != null && cachedActiveSources.Length != listener.ActiveSources.Count) {
             RebuildCachedActiveSourcesLocked();

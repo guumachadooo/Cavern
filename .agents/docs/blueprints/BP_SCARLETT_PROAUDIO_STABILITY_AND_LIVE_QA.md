@@ -1,0 +1,61 @@
+# SOTA Focusrite Scarlett Pro-Audio Stability, Zero-Stutter RT Pipeline & Live QA Verification (`BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA`)
+
+> STYLE|lossless symbolic telegraphic EN ONLY (`!articles/copulas/filler`, ops `-> | && || ! w/ w/o`).
+
+## 0. Meta & Lineage
+BP_META|id=BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA|domain_vec=dsp-hw:1.00|door=2-way|tier=T2|status=ACTIVE-v1|h1_wave=W1
+PARENT_ADR|BP_CORE_RUNTIME_STABILITY_AND_SCHEDULING,BP_LIVE_QA_BUG_HUNTER_SOTA
+- `dsp-hw`: Split Offline / RT 0-alloc 0-lock hot-path (<1ms/block) / Async control; fuse owned signals/hw; prove math in offline golden bench first.
+- Live S25U (`SM-S938B`, Android 17 / SDK 37) + Focusrite Scarlett 2i2 4th Gen (`VID=0x1235 PID=0x8219`, UAC2 `ClockID=41`, `Rates=[44.1..192kHz]`, `IF1 EP 0x01` OUT Sync 2ch 24-in-32 `maxPkt=200`, `IF2 EP 0x81` IN Sync 4ch 24-in-32 `maxPkt=400`, `IF3` Vendor FCP `EP 0x83`) baseline measurements:
+  - Path A (`AAudio EXCLUSIVE MMAP`) @ 192 kHz 256f Atmos 15-obj: `ox=0` (lied!) while native `out_rb` starved `291/881` ticks (`33%` silence, `37` dropouts / 2.2s) + `+8..+10` Gen0 GCs / 2.2s.
+  - Legacy `AudioTrack` @ 48 kHz 256f Atmos: `161` underruns / 2.2s (`73/sec`) from `10.6 ms` USB LowLatency buffer.
+  - `ClaimInterface(IF0, force=true)` in `QueryUac2ClockSampleRatesLocked` permanently detached kernel `snd-usb-audio` -> immediate Path A `AAudioStream_requestStart` `-11` failure after USB permission grant.
+
+## 1. Value & Non-Goals
+VALUE|Eliminate 100% of Scarlett 2i2 4th Gen Path A `-11` kernel-detach failures, silent `out_rb` ring starvations (37 -> 0 @ 192 kHz), Legacy AudioTrack underruns (161 -> 0 / 2.2s), RT lock-inversion/GC stalls (+10 -> <=1 Gen0 GC / 2.2s), & UI USB blocks while hardening Path B `libusb` & Gen 4 FCP handshake.
+WARDLEY|commodity=Android AAudio/AudioTrack/AudioManager + libusb-1.0 + Linux ALSA `mixer_scarlett2.c` FCP spec | custom=SR-scaled HAL-burst-aware SPSC watermark pacer, zero-click underrun micro-ramp, non-detaching UAC2 probe, & lock-free diagnostics/telemetry pipeline.
+NON_GOAL|No root/SELinux bypass or custom kernel modules; remain 100% unrooted Android `targetSdkVersion=35` + `NativeLibraryDir` W^X compliant.
+NON_GOAL|No acoustic feedback loops during live QA (never play unattenuated mic loopback or loud speaker audio while Scarlett headphone cup sits over phone mic/speaker).
+
+## 2. Live SOTA & Blind Morphogenesis
+SOTA_SOURCES|Google Oboe/AAudio MMAP tuning (exclusive burst alignment + adaptive LatencyTuner + lock-free callback), Linux ALSA `sound/usb/mixer_scarlett2.c` (Geoffrey Bennett FCP Gen 4 `0x8219` exact `wLength` + `-EPROTO` retry w/ backoff + non-detaching rate discovery via OS HAL), USB Audio Class 2.0 (`usbfs` `USBDEVFS_DISCONNECT` irreversibility on `ClaimInterface(force=true)`), & RT audio zero-alloc / zero-lock SPSC patterns (click-free 16-32 sample fade ramp on underrun).
+TRIZ_CONTRADICTION|Ultra-low latency duplex (`<=12 ms` live mic) vs zero-stutter high-SR Atmos playback (`192 kHz`, `384f` HAL burst, thermal CPU throttling) -> Principle #15 (Dynamization) + #1 (Segmentation): split playback-only vs live-mic-duplex watermarks scaled by `(sampleRate, halBurst)` + multi-chunk drain-to-watermark loop + adaptive XRun headroom.
+CANDIDATE|A|Fixed Tiny Watermark (`max(burst*4, 512)`) + Single-Burst Pump + Blocking `ClaimInterface(IF0, true)` + Per-Block 750 Hz Telemetry|Status-quo design: uniform `512..1024f` ring target across `44.1..192 kHz`, 1 chunk per `Thread.Sleep(1)`, `syncLock` read from RT thread, & `ClaimInterface(acIf, true)` on USB open.
+REJECTED_BECAUSE|A|Catastrophically fails live S25U benchmarks: `33%` silence (`37` hidden dropouts in 2.2s @ 192 kHz), `161` AudioTrack underruns / 2.2s, `-11` AAudio start failure right after USB permission grant, & `+10` Gen0 GCs / 2.2s.
+CANDIDATE|B|Giant Static Pre-Buffer (`200 ms`) + Disable Exclusive/Path B + Polling-Only Controls|Oversized fixed buffers on all paths regardless of live mic mode, abandoning exclusive MMAP/libusb and FCP controls.
+REJECTED_BECAUSE|B|Destroys live vocal monitoring RTT budget (`200 ms >> 18 ms` psychoacoustic slapback threshold), introduces sluggish seek/pause feel, & violates Cavernize Pro-Audio feature invariant.
+WINNER|Dual-Mode Adaptive RT Plane + Non-Detaching USB/FCP Architecture: (1) OS `AudioManager` USB rate discovery (zero `ClaimInterface(IF0, force)` kernel detach); (2) Dual watermark (`playback: max(halBurst*4, 32ms)` up to `65ms` adaptive; `duplex: max(max(burst,halBurst)*2, 8ms)`) + multi-chunk refill loop + 256/512f aligned rendering; (3) Native `out_rb.underruns` surfaced in `output_xruns` + 24-sample zero-click underrun fade ramp + lock-free `fill_status`; (4) Lock-free `volatile` USB/Scarlett snapshots + UI USB ops offloaded to `Task.Run`; (5) `20 Hz` sample-counted DSP telemetry throttle; (6) `mixer_scarlett2.c`-parity FCP exact `rxLen` + `-EPROTO` retry + 6-URB Path B ISO ring.
+
+## 3. Cold-Ctx Red-Team, Pre-Mortem & Kill Criteria
+PREMORTEM|T+6mo|User connects Scarlett 2i2 4th Gen w/ loose USB-C cable while playing 192 kHz Atmos -> cable micro-bounces trigger `USB_DETACHED`/`ATTACHED` storm -> `ClaimInterface(IF0, true)` kills `snd-usb-audio` -> Path A fails `-11` -> falls back to `10.6 ms` Legacy `AudioTrack` (`73` underruns/sec) -> `syncLock` held 1.5s during FCP timeout stalls RT audio thread -> continuous harsh clicks & UI ANR.
+THREAT|Acoustic Feedback Howl (Physical Safety): Scarlett headphone left cup over S25U speaker/mic + live XLR mic on Scarlett -> ANY unattenuated live mic monitor or loud speaker playback creates runaway positive feedback -> Defense: enforce `LiveMicEnabled=false` & phone-speaker silence during automated probes; never auto-enable monitoring.
+THREAT|Loose-Cable Hot-Unplug UAF / `fdsan` `SIGABRT` & AB-BA Deadlock: Abrupt detach mid-URB or mid-FCP transfer races `UsbDeviceConnection.Close()` vs `libusb` vs `lifecycleLock`/`syncLock` -> Defense: `dup()` owned FD + `QuarantinedUsbSession` + lock-free `volatile` snapshots + `usbDetachedAbort` epoch checked outside locks + immediate abort on `LIBUSB_TRANSFER_NO_DEVICE`.
+THREAT|Hidden Starvation / False-Green Telemetry: `AAudioStream_getXRunCount()` returns `0` while `out_rb` feeds digital zeros -> Defense: include post-prime `out_rb.underruns` in `CavProAudioStatus.output_xruns` & trigger adaptive watermark bump + zero-click fade ramp.
+KILL|R1|Silent ring starvation or audible dropouts on Atmos 48/96/192 kHz Path A|ring_zero_ticks > 0 OR output_xruns_delta > 0|5s steady-state window per config|Auto-bump playback watermark to max(halBurst*6, 50ms) && verify DSP WCET < 50% period.
+KILL|R2|Kernel snd-usb-audio detached on USB permission grant breaking Path A|StartAAudio_rc == -11 after TryOpenActiveDeviceLocked|Immediate post-permission open|Enforce zero ClaimInterface(IF0, force) outside Path B libusb_start && keep AudioManager rate probe primary.
+KILL|R3|Legacy AudioTrack fallback underruns on USB DAC|AudioTrack_UnderrunCount_delta > 0|5s playback on Legacy fallback|Enforce >= 48 ms buffer + Balanced performance mode + 2-block prefill before Play().
+
+## 4. Invariants, Budgets & QAS
+BUDGET|latency=playback<=45ms && live_mic_duplex<=14ms|mem=0B/block RT hot-path allocs (<=1 Gen0 GC / 2.2s @ 192kHz)|cost=0 external API / 0 new deps (<850 files)|degraded_floor=48kHz Float32 Balanced AudioTrack >=48ms buffer, 0 underruns
+PLANES|offline=C11 native unit tests (`test_proaudio_native.c`) + W46-W51 C# unit bench (`run_w46_unit_tests.py`) + audio ground-truth suite|rt=0-alloc 0-lock AAudio/libusb callback (<0.2ms) + lock-free SPSC + 24-sample fade ramp + multi-chunk producer pump + 20Hz telemetry throttle|async=USB permission/FCP handshake + Scarlett controls/meters on `Task.Run` + `volatile` immutable snapshots + `ApplySettingsChangedAsync` bridge sync
+QAS|Q1|Atmos 15-obj playback @ 48/96/192 kHz (64/128/256f) on S25U + Scarlett Path A|AAudio EXCLUSIVE MMAP, thermal load|Zero `out_rb` starvation & accurate XRun reporting|`ring_zero_ticks == 0 && output_xruns == 0 && gen0_gc <= 2 / 2.2s`|`hot-exec` `DeepStutterProfiler` + `gcc test_proaudio_native.c`
+QAS|Q2|Legacy `AudioTrack` fallback @ 48 kHz Atmos on S25U + Scarlett|USB DAC route, `LegacyAudioTrack` backend|Zero-underrun playback|`AudioTrack.UnderrunCount delta == 0 over 3s`|`hot-exec` `DeepStutterProfiler` (`ATMOS_AT_256F_48K`)
+QAS|Q3|USB Host permission granted & opened for Scarlett 2i2 4th Gen|Android 17 `UsbManager` + Path A active|Kernel `snd-usb-audio` stays attached; Path A starts with `rc==0`; FCP retries `-EPROTO` w/ 10ms backoff|`StartAAudio_rc == 0 && force_claim_if0 == 0 calls && fcp_retry_backoff <= 50ms`|`check_android_cs.py --ci-parity --strict-warnings && run_w46_unit_tests.py`
+QAS|Q4|Scarlett 2i2 4th Gen real descriptor (`EP 0x01 0x0D 2ch 200B`, `EP 0x81 0x0D 4ch 400B`, `IF3` Vendor) + Path B ISO & ring underrun ramp|C11 host test bench|Exact topology parse, 4ch->2ch capture safety, post-prime underrun count, & zero-click ramp|`100% C11 assertions PASS (0 warnings -Wall -Wextra)`|`gcc -std=c11 -O2 -Wall -Wextra ... test_proaudio_native.c && ./test_proaudio_native`
+
+## 5. Epistemic Wave-0 Spikes
+SPIKE|S1|VoI=0.9*High|Real S25U Scarlett 2i2 4th Gen descriptors, HAL burst sizes (`96/192/384f`), Path A `-11` causal timeline, & multi-config Atmos stutter matrix|DONE: Proved all 8 root causes (`ClaimInterface(IF0, true)`, 10.6ms AudioTrack, hidden `out_rb.underruns`, unscaled watermark, `syncLock` contention, 750Hz GC allocs, FCP retry/wLength, `ApplySettingsChangedAsync`).
+SPIKE|S2|VoI=0.7*Med|Safe feedback-free S25U headphone->phone-mic acoustic coupling & `AudioManager` USB rate probe|DONE: `AudioManager.GetDevices(Outputs)` exposes all 6 exact Scarlett rates `[44.1..192 kHz]` w/o `usbfs` claim; `AudioRecord` from background app returns OS-silenced zeros (Android 17 privacy) so live QA uses in-process DSP/ring/XRun telemetry unless foreground.
+
+## 6. Rolling-Wave DSM Graph
+### H1 Atomic Slices
+SLICE|W1-Native|Native C/C++ RT hardening (`cavernize_path_a_aaudio.cpp`, `cavernize_path_b_libusb.cpp`, `cavernize_ringbuffer.h`, `test_proaudio_native.c`)|primed-aware `out_rb` XRuns + 24-sample click-free underrun fade ramp + lock-free `fill_status` + 6-URB Path B ISO & transient error tolerance -> `libcavernize_proaudio.so`|`gcc -std=c11 -O2 -Wall -Wextra ... test_proaudio_native.c` PASS
+SLICE|W1-USB-FCP|Non-detaching USB/FCP & lock-free snapshots (`UsbProAudioDeviceManager.cs`, `Scarlett2Protocol.cs`, `MainActivity.Settings.ProAudio.cs`)|`AudioManager` rate probe (zero `ClaimInterface(IF0, true)`), `volatile` lock-free snapshots, `mixer_scarlett2.c` exact `rxLen` + `-EPROTO` retries + hex diagnostics, async UI Scarlett modal -> zero RT/UI stalls|`check_android_cs.py --ci-parity --strict-warnings && run_w46_unit_tests.py` PASS
+SLICE|W1-RT-Pump|RT producer pacing, AudioTrack fix, GC slash & bridge sync (`AndroidAudioOutput.cs`, `RealtimePlayerEngine.Streaming.cs`, `MainActivity.LiveBridge.cs`)|SR/HAL-burst-scaled dual watermark + multi-chunk drain loop + adaptive XRun headroom + >=48ms AudioTrack + 20Hz telemetry throttle + `ApplySettingsChangedAsync` Pro-Audio propagation -> 0 dropouts|`run_w46_unit_tests.py && run_audio_ground_truth.py && hot-exec` live S25U verify
+
+### H2+ Outcome Stubs
+STUB|W2-LiveReverify|Build & deliver signed CI APK `v2.9.80` to S25U, re-run full `DeepStutterProfiler` (48/96/192 kHz Path A + Legacy + Path B w/ USB permission) & verify `0` ring zeros, `0` XRuns, `0` AudioTrack underruns, & verified Gen 4 FCP firmware/controls.
+
+## 7. Fitness Functions & Evolution
+FITNESS|Run `gcc -std=c11 -O2 -Wall -Wextra ... test_proaudio_native.c && python3 -B .agents/scripts/check_android_cs.py --ci-parity --strict-warnings && python3 -B .agents/scripts/run_w46_unit_tests.py && python3 -B .agents/scripts/run_audio_ground_truth.py && python3 -B .agents/scripts/file_budget_guard.py --check && python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py host-audit && python3 -B .agents/plugins/dynamic-fractal-planner/scripts/verify_universal.py --all` + live S25U `hot-exec` stutter sweep.
+EVOLVE_RULE|on(kill_trigger || fitness_fail) -> mark SEED/ADR SUPERSEDED && delta-reenter Stage2-3 (!full rewrite)
