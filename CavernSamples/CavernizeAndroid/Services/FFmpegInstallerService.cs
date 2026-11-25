@@ -68,6 +68,15 @@ public static class FFmpegInstallerService {
             return;
         }
         try {
+            int workerCap = Cavern.Neural.MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(Environment.ProcessorCount);
+            psi.Environment["OMP_NUM_THREADS"] = workerCap.ToString();
+            string fileName = Path.GetFileName(executablePath);
+            if (fileName.Contains("ffmpeg", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(psi.Arguments) &&
+                !psi.Arguments.Contains("-threads", StringComparison.OrdinalIgnoreCase) &&
+                !psi.Arguments.TrimStart().StartsWith("-version", StringComparison.OrdinalIgnoreCase)) {
+                psi.Arguments = $"-threads {workerCap} {psi.Arguments}";
+            }
             string libDir = Path.GetDirectoryName(executablePath);
             if (string.IsNullOrEmpty(libDir) || !Directory.Exists(libDir)) {
                 return;

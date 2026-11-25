@@ -363,9 +363,9 @@ public partial class MainActivity {
                     Orientation = Orientation.Horizontal,
                     BaselineAligned = false
                 };
-                gridRow.AddView(BuildAlbumTileCard(filtered[i].Alb, filtered[i].Merged), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
+                gridRow.AddView(BuildAlbumTileCard(filtered[i].Alb, filtered[i].Merged), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 1f) { RightMargin = Dp(8) });
                 if (i + 1 < showCount) {
-                    gridRow.AddView(BuildAlbumTileCard(filtered[i + 1].Alb, filtered[i + 1].Merged), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+                    gridRow.AddView(BuildAlbumTileCard(filtered[i + 1].Alb, filtered[i + 1].Merged), new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 1f));
                 } else {
                     gridRow.AddView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
                 }
@@ -595,8 +595,10 @@ public partial class MainActivity {
         int trackCount = visibleMerged?.Count ?? alb.Tracks.Count;
 
         RoundedArtworkView art = new(this) {
-            PreferredSizeDp = 148,
-            CornerDp = 12f
+            PreferredSizeDp = 164,
+            FillWidthSquare = true,
+            ElevationDp = 0f,
+            CornerDp = 14f
         };
         BindThumbAsync(art, thumbSample, alb.AlbumTitle);
         tile.AddView(art, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
@@ -605,15 +607,19 @@ public partial class MainActivity {
 
         TextView titleTv = Label(alb.AlbumTitle, 13f, ColText);
         titleTv.SetTypeface(sfBold, TypefaceStyle.Bold);
+        titleTv.SetIncludeFontPadding(false);
         titleTv.SetSingleLine(true);
         titleTv.Ellipsize = TextUtils.TruncateAt.End;
-        tile.AddView(titleTv);
+        tile.AddView(titleTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
         TextView subTv = Label($"{alb.Artist} • {trackCount}", 11f, OneUiTheme.TextMuted);
         subTv.SetTypeface(sfReg, TypefaceStyle.Normal);
+        subTv.SetIncludeFontPadding(false);
         subTv.SetSingleLine(true);
         subTv.Ellipsize = TextUtils.TruncateAt.End;
-        tile.AddView(subTv);
+        tile.AddView(subTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(3)
+        });
 
         tile.Click += (_, _) => {
             selectedLibraryAlbum = alb;
@@ -681,16 +687,19 @@ public partial class MainActivity {
         hdrCard.AddView(backRow);
 
         LinearLayout hero = HRow();
-        RoundedArtworkView cover = new(this) { PreferredSizeDp = 88, CornerDp = 14f };
+        RoundedArtworkView cover = new(this) { PreferredSizeDp = 88, CornerDp = 14f, ElevationDp = 2f };
         BindThumbAsync(cover, albumQueue.Count > 0 ? albumQueue[0] : null, alb.AlbumTitle);
         hero.AddView(cover, new LinearLayout.LayoutParams(Dp(88), Dp(88)) { RightMargin = Dp(12) });
 
         LinearLayout meta = new(this) { Orientation = Orientation.Vertical };
+        meta.SetGravity(GravityFlags.CenterVertical);
         TextView tTv = Label(alb.AlbumTitle, 16f, ColText);
         tTv.SetTypeface(sfBold, TypefaceStyle.Bold);
+        tTv.SetIncludeFontPadding(false);
         TextView aTv = Label(alb.Artist, 13f, OneUiTheme.PeachText);
+        aTv.SetIncludeFontPadding(false);
         meta.AddView(tTv);
-        meta.AddView(aTv);
+        meta.AddView(aTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(3) });
 
         LinearLayout albActions = HRow();
         albActions.SetPadding(0, Dp(8), 0, 0);
@@ -848,24 +857,27 @@ public partial class MainActivity {
 
         LinearLayout topRow = HRow();
         if (isFolder) {
-            topRow.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Folder, OneUiTheme.IconStudioExport, 40),
-                new LinearLayout.LayoutParams(Dp(40), Dp(40)) { RightMargin = Dp(12) });
+            topRow.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Folder, OneUiTheme.IconStudioExport, 44),
+                new LinearLayout.LayoutParams(Dp(44), Dp(44)) { RightMargin = Dp(12) });
         } else {
-            RoundedArtworkView thumb = new(this) { PreferredSizeDp = 42, CornerDp = 10f };
+            RoundedArtworkView thumb = new(this) { PreferredSizeDp = 44, CornerDp = 10f, ElevationDp = 0f };
             BindThumbAsync(thumb, sample, title);
-            topRow.AddView(thumb, new LinearLayout.LayoutParams(Dp(42), Dp(42)) { RightMargin = Dp(12) });
+            topRow.AddView(thumb, new LinearLayout.LayoutParams(Dp(44), Dp(44)) { RightMargin = Dp(12) });
         }
 
         LinearLayout col = new(this) { Orientation = Orientation.Vertical };
+        col.SetGravity(GravityFlags.CenterVertical);
         TextView tv = Label(title, 13.5f, ColText);
         tv.SetTypeface(OneUiTheme.GetAppleFontBold(this), TypefaceStyle.Bold);
+        tv.SetIncludeFontPadding(false);
         tv.SetSingleLine(true);
         tv.Ellipsize = TextUtils.TruncateAt.End;
         TextView stv = Label(sub, 11f, OneUiTheme.TextMuted);
+        stv.SetIncludeFontPadding(false);
         stv.SetSingleLine(true);
         stv.Ellipsize = TextUtils.TruncateAt.End;
         col.AddView(tv);
-        col.AddView(stv);
+        col.AddView(stv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(3) });
         topRow.AddView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         card.AddView(topRow);
 
@@ -918,24 +930,28 @@ public partial class MainActivity {
 
         LinearLayout row = HRow();
         row.Background = GetCachedTrackRowDrawable(isPlayingThis);
+        row.SetMinimumHeight(Dp(62));
         row.SetPadding(Dp(10), Dp(9), Dp(10), Dp(9));
         OneUiTheme.AttachRecoil(row, 0.97f);
 
         if (showThumb) {
-            RoundedArtworkView thumb = new(this) { PreferredSizeDp = 44, CornerDp = 10f };
+            RoundedArtworkView thumb = new(this) { PreferredSizeDp = 44, CornerDp = 10f, ElevationDp = 0f };
             BindThumbAsync(thumb, item, item.Title);
-            row.AddView(thumb, new LinearLayout.LayoutParams(Dp(44), Dp(44)) { RightMargin = Dp(10) });
+            row.AddView(thumb, new LinearLayout.LayoutParams(Dp(44), Dp(44)) { RightMargin = Dp(11) });
         } else {
             string numStr = item.TrackNumber > 0 ? $"{item.TrackNumber}" : $"{indexInQueue + 1}";
             TextView numTv = Label(numStr, 12.5f, isPlayingThis ? OneUiTheme.PrimaryHigh : OneUiTheme.TextMuted);
             numTv.Gravity = GravityFlags.Center;
+            numTv.SetIncludeFontPadding(false);
             numTv.SetTypeface(OneUiTheme.GetAppleFontBold(this), TypefaceStyle.Bold);
             row.AddView(numTv, new LinearLayout.LayoutParams(Dp(26), ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(8) });
         }
 
         LinearLayout col = new(this) { Orientation = Orientation.Vertical };
+        col.SetGravity(GravityFlags.CenterVertical);
         TextView titleTv = Label(item.Title, 13.5f, isPlayingThis ? OneUiTheme.PrimaryHigh : ColText);
         titleTv.SetTypeface(OneUiTheme.GetAppleFontSemibold(this), TypefaceStyle.Bold);
+        titleTv.SetIncludeFontPadding(false);
         titleTv.SetSingleLine(true);
         titleTv.Ellipsize = TextUtils.TruncateAt.End;
 
@@ -945,15 +961,16 @@ public partial class MainActivity {
             ? $"{item.Artist} — {item.Album}"
             : (hasArtist ? item.Artist : (hasAlbum ? item.Album : item.FolderName));
         TextView subTv = Label(subLine, 11f, OneUiTheme.TextMuted);
+        subTv.SetIncludeFontPadding(false);
         subTv.SetSingleLine(true);
         subTv.Ellipsize = TextUtils.TruncateAt.End;
         col.AddView(titleTv);
-        col.AddView(subTv);
+        col.AddView(subTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(3) });
         row.AddView(col, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
 
         // Spatial / Container format badge (or merged ATMOS + FLAC badge) & duration column
         LinearLayout rightCol = new(this) { Orientation = Orientation.Vertical };
-        rightCol.SetGravity(GravityFlags.End);
+        rightCol.SetGravity(GravityFlags.End | GravityFlags.CenterVertical);
         string badgeLabel = !string.IsNullOrEmpty(badgeOverride)
             ? badgeOverride
             : (!string.IsNullOrEmpty(item.AudioBadge) && item.AudioBadge != item.FormatBadge
@@ -977,17 +994,19 @@ public partial class MainActivity {
             : (anySurround ? OneUiTheme.PeachText : OneUiTheme.TextMuted);
         TextView fmtTv = Label(badgeLabel, 9.5f, badgeTextCol);
         fmtTv.SetTypeface(OneUiTheme.GetAppleFontBold(this), TypefaceStyle.Bold);
+        fmtTv.SetIncludeFontPadding(false);
         fmtTv.SetSingleLine(true);
         fmtTv.Ellipsize = TextUtils.TruncateAt.End;
         fmtTv.SetMaxWidth(Dp(126));
-        fmtTv.SetPadding(Dp(6), Dp(2), Dp(6), Dp(2));
+        fmtTv.SetPadding(Dp(6), Dp(3), Dp(6), Dp(3));
         fmtTv.Background = GetCachedBadgeDrawable(anySpatial);
         rightCol.AddView(fmtTv);
 
         if (item.DurationMs > 0) {
             TimeSpan ts = TimeSpan.FromMilliseconds(item.DurationMs);
             TextView durTv = Label(ts.TotalHours >= 1 ? ts.ToString(@"h\:mm\:ss") : ts.ToString(@"mm\:ss"), 10f, OneUiTheme.TextMuted);
-            durTv.SetPadding(0, Dp(2), 0, 0);
+            durTv.SetIncludeFontPadding(false);
+            durTv.SetPadding(0, Dp(3), 0, 0);
             rightCol.AddView(durTv);
         }
         row.AddView(rightCol);

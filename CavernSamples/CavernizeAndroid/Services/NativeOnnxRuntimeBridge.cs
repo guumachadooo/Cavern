@@ -455,13 +455,14 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                     }
                 }
                 if (perfCores >= 2) {
-                    return Math.Clamp(perfCores, 2, 4);
+                    int cap = Cavern.Neural.MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(totalCores);
+                    return Math.Clamp(Math.Min(perfCores, cap), 1, cap);
                 }
             }
         } catch {
             // Fall through to core-count heuristic
         }
-        return Math.Clamp(totalCores / 2, 2, 4);
+        return Cavern.Neural.MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(totalCores);
     }
 
     /// <summary>
@@ -574,8 +575,9 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
 
         bool handoffComplete = false;
         try {
-            int defaultThreads = DetectPerformanceCoreCount();
-            int threads = intraOpThreads > 0 ? Math.Clamp(intraOpThreads, 1, 8) : defaultThreads;
+            int headroomCap = Cavern.Neural.MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(Environment.ProcessorCount);
+            int defaultThreads = Math.Min(DetectPerformanceCoreCount(), headroomCap);
+            int threads = intraOpThreads > 0 ? Math.Clamp(intraOpThreads, 1, headroomCap) : defaultThreads;
             List<NeuralExecutionProvider> candidates = BuildSessionProviderCascade(preferredProvider, modelPath);
             Exception lastErr = null;
             DateTime srcWriteUtc = File.GetLastWriteTimeUtc(modelPath);

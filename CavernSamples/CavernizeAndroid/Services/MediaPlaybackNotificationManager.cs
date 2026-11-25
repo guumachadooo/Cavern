@@ -151,7 +151,7 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         mediaSession.SetMetadata(meta.Build());
 
         if (isNotificationPosted) {
-            PostOrUpdateNotification(currentIsPlaying);
+            PostOrUpdateNotification(currentIsPlaying, forceVisualRefresh: true);
         }
         if (previousCustom != null && !ReferenceEquals(previousCustom, customArtworkBitmap)) {
             try {
@@ -161,6 +161,10 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
             }
         }
     }
+
+    bool lastNotifiedIsPlaying;
+    string lastNotifiedMetaKey = "";
+    long lastNotifiedElapsedMs;
 
     static bool IsBitmapUsable(Bitmap source) {
         if (source == null) {
@@ -223,22 +227,42 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
         isPlaybackActive = showNotification && isPlaying;
 
         if (showNotification) {
-            PostOrUpdateNotification(isPlaying);
+            PostOrUpdateNotification(isPlaying, forceVisualRefresh: false);
         } else {
             CancelNotification();
         }
     }
 
-    void PostOrUpdateNotification(bool isPlaying) {
+    void PostOrUpdateNotification(bool isPlaying, bool forceVisualRefresh = false) {
         try {
+            long nowMs = SystemClock.ElapsedRealtime();
+            string metaKey = $"{currentTitle}|{currentArtist}|{currentAlbum}|{currentDurationMs}|{(customArtworkBitmap != null ? customArtworkBitmap.Handle.ToInt64() : 0L)}";
+            bool stateChanged = !isNotificationPosted ||
+                                lastNotifiedIsPlaying != isPlaying ||
+                                !string.Equals(lastNotifiedMetaKey, metaKey, StringComparison.Ordinal);
+
+            // MediaSession.SetPlaybackState drives live seekbar/position smoothly on Android without reposting
+            // the foreground Notification. Reposting Notify(9021) at >5 Hz triggers Android NotificationManager shedding.
+            if (!forceVisualRefresh && !stateChanged) {
+                return;
+            }
+            if (!stateChanged && nowMs - lastNotifiedElapsedMs < 500L) {
+                return;
+            }
+
+            bool wasPosted = isNotificationPosted;
+            bool wasPlaying = lastNotifiedIsPlaying;
             Notification notif = BuildNotification(isPlaying);
             activeServiceNotification = notif;
             isNotificationPosted = true;
             isPlaybackActive = isPlaying;
+            lastNotifiedIsPlaying = isPlaying;
+            lastNotifiedMetaKey = metaKey;
+            lastNotifiedElapsedMs = nowMs;
 
             try {
-                Intent svc = new(appContext, typeof(CavernizePlaybackService));
-                if (isPlaying) {
+                if (isPlaying && (!wasPosted || !wasPlaying)) {
+                    Intent svc = new(appContext, typeof(CavernizePlaybackService));
                     if (OperatingSystem.IsAndroidVersionAtLeast(26)) {
                         appContext.StartForegroundService(svc);
                     } else {
@@ -258,6 +282,8 @@ public sealed class MediaPlaybackNotificationManager : IDisposable {
     public void CancelNotification() {
         isNotificationPosted = false;
         isPlaybackActive = false;
+        lastNotifiedIsPlaying = false;
+        lastNotifiedMetaKey = "";
         activeServiceNotification = null;
         try {
             appContext.StopService(new Intent(appContext, typeof(CavernizePlaybackService)));

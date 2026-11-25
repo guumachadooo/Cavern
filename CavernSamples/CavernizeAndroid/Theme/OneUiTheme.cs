@@ -966,14 +966,15 @@ public sealed class OneUiFrostedCapsuleView : FrameLayout {
         float halfStroke = rimPaint.StrokeWidth * 0.5f;
         RectF bounds = new(halfStroke, halfStroke, w - halfStroke, h - halfStroke);
 
-        clipPath.Reset();
-        clipPath.AddRoundRect(bounds, rad, rad, Android.Graphics.Path.Direction.Cw);
-
-        int save = canvas.Save();
-        canvas.ClipPath(clipPath);
-
-        if (blurBitmap != null && !blurBitmap.IsRecycled) {
-            canvas.DrawBitmap(blurBitmap, null, new RectF(0f, 0f, w, h), bitmapPaint);
+        // Analytical GPU-anti-aliased rounded-rect draw (zero ClipPath polygonal tessellation artifacts)
+        if (blurBitmap != null && !blurBitmap.IsRecycled && blurBitmap.Width > 0 && blurBitmap.Height > 0) {
+            using BitmapShader bmpShader = new(blurBitmap, Shader.TileMode.Clamp!, Shader.TileMode.Clamp!);
+            using Matrix m = new();
+            m.SetScale(w / blurBitmap.Width, h / blurBitmap.Height);
+            bmpShader.SetLocalMatrix(m);
+            bitmapPaint.SetShader(bmpShader);
+            canvas.DrawRoundRect(bounds, rad, rad, bitmapPaint);
+            bitmapPaint.SetShader(null);
         }
 
         // Translucent smoked One UI 9 frosted glaze + top subtle reflection highlight (supports Samsung Gallery #E63A3A3D)
@@ -985,9 +986,8 @@ public sealed class OneUiFrostedCapsuleView : FrameLayout {
             [0f, 1f],
             Shader.TileMode.Clamp!);
         frostOverlayPaint.SetShader(glaze);
-        canvas.DrawRect(0f, 0f, w, h, frostOverlayPaint);
+        canvas.DrawRoundRect(bounds, rad, rad, frostOverlayPaint);
         frostOverlayPaint.SetShader(null);
-        canvas.RestoreToCount(save);
 
         using LinearGradient rimGrad = new(
             0f, 0f, 0f, h,
@@ -1731,3 +1731,73 @@ public sealed class OneUiSwitch : Switch {
         return base.OnTouchEvent(e);
     }
 }
+
+/// <summary>
+/// Hardware-accelerated velocity-scaled directional horizontal motion blur engine (API 31+ <see cref="RenderEffect"/>).
+/// Faster horizontal travel (e.g., jumping 2–4 tabs in the same fixed duration or fast finger swipe) proportionally
+/// increases the horizontal blur radius while keeping vertical sharpness crisp, and clears cleanly to <c>null</c> at rest.
+/// </summary>
+public static class OneUiMotionBlur {
+    const float DeadzoneDpPerSec = 260f;
+    const float ScaleGain = 0.0044f;
+
+    /// <summary>
+    /// Computes the horizontal directional blur radius in pixels from instantaneous horizontal speed in px/sec.
+    /// Guarantees <c>0</c> below deadzone, monotonic velocity scaling, and a safe GPU-friendly ceiling.
+    /// </summary>
+    public static float ComputeHorizontalBlurRadiusPx(float velocityPxPerSec, float density, float maxBlurDp = 26f) {
+        if (!float.IsFinite(velocityPxPerSec) || !float.IsFinite(density) || density <= 0f) {
+            return 0f;
+        }
+        float speedDpPerSec = MathF.Abs(velocityPxPerSec) / density;
+        if (speedDpPerSec <= DeadzoneDpPerSec) {
+            return 0f;
+        }
+        float excess = speedDpPerSec - DeadzoneDpPerSec;
+        float rawDp = excess * ScaleGain;
+        float maxDp = Math.Clamp(maxBlurDp, 4f, 34f);
+        // Smooth soft-knee saturation so 1-tab vs 2-tab vs 3-tab jumps stay visibly distinct without GPU over-blur
+        float curvedDp = maxDp * (1f - MathF.Exp(-rawDp / Math.Max(4f, maxDp * 0.65f)));
+        float px = curvedDp * density;
+        return px >= 0.75f ? px : 0f;
+    }
+
+    /// <summary>
+    /// Applies directional horizontal-only motion blur to <paramref name="view"/> on Android 12+ (API 31+),
+    /// clearing back to <c>null</c> immediately when <paramref name="blurRadiusPx"/> drops below 0.75 px.
+    /// </summary>
+    public static void ApplyHorizontalMotionBlur(View view, float blurRadiusPx) {
+        if (view == null || !OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            return;
+        }
+        try {
+            if (!float.IsFinite(blurRadiusPx) || blurRadiusPx < 0.75f) {
+                view.SetRenderEffect(null);
+                return;
+            }
+            float clampedX = Math.Clamp(blurRadiusPx, 0.75f, 96f);
+            // Keep radiusY at a tiny positive epsilon (0.01f) for pure horizontal smear while avoiding Skia 0f quirks
+            using RenderEffect effect = RenderEffect.CreateBlurEffect(clampedX, 0.01f, Shader.TileMode.Clamp!);
+            view.SetRenderEffect(effect);
+        } catch {
+            try {
+                view.SetRenderEffect(null);
+            } catch {
+                // Ignore
+            }
+        }
+    }
+
+    /// <summary>Clears any active motion blur <see cref="RenderEffect"/> from <paramref name="view"/>.</summary>
+    public static void ClearMotionBlur(View view) {
+        if (view == null || !OperatingSystem.IsAndroidVersionAtLeast(31)) {
+            return;
+        }
+        try {
+            view.SetRenderEffect(null);
+        } catch {
+            // Ignore
+        }
+    }
+}
+

@@ -268,7 +268,22 @@ public partial class MainActivity {
     bool ShouldShowSettingsDot() =>
         latestUpdateInfo?.IsUpdateAvailable == true;
 
-    void SwitchTab(int idx) {
+    ValueAnimator tabStripAnimator;
+
+    void ClearAllTabMotionBlur() {
+        if (tabContainers == null) {
+            return;
+        }
+        for (int i = 0; i < tabContainers.Length; i++) {
+            if (tabContainers[i] != null) {
+                OneUiMotionBlur.ClearMotionBlur(tabContainers[i]);
+            }
+        }
+    }
+
+    void SwitchTab(int idx) => SwitchTabInternal(idx, startOffsetPx: 0f);
+
+    void SwitchTabInternal(int idx, float startOffsetPx) {
         if (tabContainers == null || idx < 0 || idx >= tabContainers.Length) {
             return;
         }
@@ -283,59 +298,113 @@ public partial class MainActivity {
         }
 
         int myGen = ++tabSwitchAnimGen;
+        tabStripAnimator?.Cancel();
+        tabStripAnimator = null;
+        ClearAllTabMotionBlur();
+
         if (prevTab != idx) {
-            int dir = idx > prevTab ? 1 : -1;
+            int low = Math.Min(prevTab, idx);
+            int high = Math.Max(prevTab, idx);
+            float viewportW = tabContainers[idx]?.Parent is View pv && pv.Width > 0
+                ? pv.Width
+                : (Resources?.DisplayMetrics?.WidthPixels ?? 1080);
+            float density = Resources?.DisplayMetrics?.Density ?? 3f;
+
+            // Compute continuous strip start index taking any live drag translation into account
+            float startStripPos = prevTab - (viewportW > 1f ? startOffsetPx / viewportW : 0f);
+            float endStripPos = idx;
+            bool allowBlur = AndroidRuntimeTelemetry.GetThermalStatusCode(ApplicationContext ?? this) < 3;
+
             for (int i = 0; i < tabContainers.Length; i++) {
                 View container = tabContainers[i];
                 if (container == null) {
                     continue;
                 }
                 container.Animate()?.Cancel();
-                if (i == idx) {
+                container.Alpha = 1f;
+                container.ScaleX = 1f;
+                container.ScaleY = 1f;
+                if (i >= low && i <= high) {
                     container.Visibility = ViewStates.Visible;
-                    container.Alpha = 0f;
-                    container.ScaleX = 0.985f;
-                    container.ScaleY = 0.985f;
-                    container.TranslationX = dir * Dp(26);
-                    container.Animate()
-                        .Alpha(1f)
-                        .ScaleX(1f)
-                        .ScaleY(1f)
-                        .TranslationX(0f)
-                        .SetDuration(290)
-                        .SetInterpolator(CreateOneUiEase())
-                        .WithEndAction(new Java.Lang.Runnable(() => {
-                            if (uiDestroyed || myGen != tabSwitchAnimGen) return;
-                            navFrostedHost?.RefreshBlur(force: true);
-                        }))
-                        .Start();
-                } else if (i == prevTab) {
-                    View outgoing = container;
-                    outgoing.Visibility = ViewStates.Visible;
-                    outgoing.Animate()
-                        .Alpha(0f)
-                        .TranslationX(-dir * Dp(18))
-                        .SetDuration(175)
-                        .SetInterpolator(new Android.Views.Animations.AccelerateInterpolator(1.2f))
-                        .WithEndAction(new Java.Lang.Runnable(() => {
-                            if (uiDestroyed || myGen != tabSwitchAnimGen) return;
-                            outgoing.Visibility = ViewStates.Gone;
-                            outgoing.Alpha = 1f;
-                            outgoing.ScaleX = 1f;
-                            outgoing.ScaleY = 1f;
-                            outgoing.TranslationX = 0f;
-                        }))
-                        .Start();
+                    container.TranslationX = (i - startStripPos) * viewportW;
                 } else {
                     container.Visibility = ViewStates.Gone;
-                    container.Alpha = 1f;
-                    container.ScaleX = 1f;
-                    container.ScaleY = 1f;
                     container.TranslationX = 0f;
                 }
             }
+
+            float prevPos = startStripPos;
+            long prevTimeMs = SystemClock.UptimeMillis();
+            float smoothedBlurPx = 0f;
+            const long FixedStripDurationMs = 310L; // Constant duration regardless of span -> 2x span = 2x speed = stronger motion blur!
+
+            ValueAnimator anim = ValueAnimator.OfFloat(startStripPos, endStripPos);
+            anim.SetDuration(FixedStripDurationMs);
+            anim.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
+            anim.Update += (_, e) => {
+                if (uiDestroyed || myGen != tabSwitchAnimGen) {
+                    return;
+                }
+                float curPos = (float)(e.Animation?.AnimatedValue ?? endStripPos);
+                long nowMs = SystemClock.UptimeMillis();
+                float dtSec = Math.Max(0.004f, (nowMs - prevTimeMs) * 0.001f);
+                float velPxPerSec = MathF.Abs(curPos - prevPos) * viewportW / dtSec;
+                prevPos = curPos;
+                prevTimeMs = nowMs;
+
+                float targetBlur = allowBlur
+                    ? OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(velPxPerSec, density, maxBlurDp: 26f)
+                    : 0f;
+                // Smooth rise/decay envelope so motion blur feels optical and never pops sharply
+                smoothedBlurPx = targetBlur > smoothedBlurPx
+                    ? smoothedBlurPx + (targetBlur - smoothedBlurPx) * 0.55f
+                    : smoothedBlurPx + (targetBlur - smoothedBlurPx) * 0.38f;
+                if (smoothedBlurPx < 0.75f) {
+                    smoothedBlurPx = 0f;
+                }
+
+                for (int i = low; i <= high; i++) {
+                    View c = tabContainers[i];
+                    if (c == null) {
+                        continue;
+                    }
+                    float tx = (i - curPos) * viewportW;
+                    c.TranslationX = tx;
+                    bool onScreen = MathF.Abs(tx) < viewportW * 1.15f;
+                    c.Visibility = onScreen ? ViewStates.Visible : ViewStates.Invisible;
+                    if (onScreen && smoothedBlurPx >= 0.75f) {
+                        OneUiMotionBlur.ApplyHorizontalMotionBlur(c, smoothedBlurPx);
+                    } else {
+                        OneUiMotionBlur.ClearMotionBlur(c);
+                    }
+                }
+            };
+            void FinalizeStrip() {
+                if (uiDestroyed || myGen != tabSwitchAnimGen) {
+                    return;
+                }
+                for (int i = 0; i < tabContainers.Length; i++) {
+                    View c = tabContainers[i];
+                    if (c == null) {
+                        continue;
+                    }
+                    OneUiMotionBlur.ClearMotionBlur(c);
+                    c.Alpha = 1f;
+                    c.ScaleX = 1f;
+                    c.ScaleY = 1f;
+                    c.TranslationX = 0f;
+                    c.Visibility = i == idx ? ViewStates.Visible : ViewStates.Gone;
+                }
+                tabStripAnimator = null;
+                navFrostedHost?.RefreshBlur(force: true);
+            }
+            anim.AnimationEnd += (_, _) => FinalizeStrip();
+            anim.AnimationCancel += (_, _) => ClearAllTabMotionBlur();
+            tabStripAnimator = anim;
+            anim.Start();
         } else if (tabContainers[idx] is View svCur) {
             svCur.Animate()?.Cancel();
+            OneUiMotionBlur.ClearMotionBlur(svCur);
             svCur.Visibility = ViewStates.Visible;
             svCur.Alpha = 1f;
             svCur.ScaleX = 1f;
@@ -558,6 +627,7 @@ public partial class MainActivity {
         }
 
         tabPillAnimator?.Cancel();
+        OneUiMotionBlur.ClearMotionBlur(tabIndicatorPill);
         if (!animate) {
             tabIndicatorPill.TranslationX = endX;
             if (lp != null) {
@@ -567,18 +637,32 @@ public partial class MainActivity {
             return;
         }
 
+        float density = Resources?.DisplayMetrics?.Density ?? 3f;
+        float prevPillX = startX;
+        long prevPillMs = SystemClock.UptimeMillis();
+
         tabPillAnimator = ValueAnimator.OfFloat(0f, 1f);
-        tabPillAnimator.SetDuration(270);
-        tabPillAnimator.SetInterpolator(CreateOneUiEase());
+        tabPillAnimator.SetDuration(300);
+        tabPillAnimator.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
         tabPillAnimator.Update += (_, e) => {
             float f = (float)(e.Animation?.AnimatedValue ?? 1f);
-            tabIndicatorPill.TranslationX = startX + (endX - startX) * f;
+            float curX = startX + (endX - startX) * f;
+            tabIndicatorPill.TranslationX = curX;
             var curLp = tabIndicatorPill.LayoutParameters;
             if (curLp != null) {
                 curLp.Width = (int)Math.Round(startW + (targetW - startW) * f);
                 tabIndicatorPill.LayoutParameters = curLp;
             }
+            long nowMs = SystemClock.UptimeMillis();
+            float dtSec = Math.Max(0.004f, (nowMs - prevPillMs) * 0.001f);
+            float vel = MathF.Abs(curX - prevPillX) / dtSec;
+            prevPillX = curX;
+            prevPillMs = nowMs;
+            float pillBlur = OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(vel * 2.2f, density, maxBlurDp: 10f);
+            OneUiMotionBlur.ApplyHorizontalMotionBlur(tabIndicatorPill, pillBlur);
         };
+        tabPillAnimator.AnimationEnd += (_, _) => OneUiMotionBlur.ClearMotionBlur(tabIndicatorPill);
+        tabPillAnimator.AnimationCancel += (_, _) => OneUiMotionBlur.ClearMotionBlur(tabIndicatorPill);
         tabPillAnimator.Start();
     }
 
@@ -763,32 +847,37 @@ public partial class MainActivity {
     sealed class TabSwipeHostLayout : FrameLayout {
         readonly Func<int> getActiveTab;
         readonly Func<int> getTabCount;
-        readonly Func<View> getActiveContainer;
-        readonly Action<int> switchTab;
+        readonly Func<int, View> getContainerAt;
+        readonly Action<int, float> switchTabFromDrag;
         readonly float touchSlop;
         readonly float commitDistPx;
         readonly float flingVelPxPerSec;
+        readonly float density;
 
         float downRawX;
         float downRawY;
+        float lastMoveRawX;
+        long lastMoveTimeMs;
         long downTimeMs;
+        float liveVelPxPerSec;
         bool ignoreGesture;
         bool isSwiping;
+        int peekingNeighborTab = -1;
 
         public TabSwipeHostLayout(
             Context ctx,
             Func<int> getActiveTab,
             Func<int> getTabCount,
-            Func<View> getActiveContainer,
-            Action<int> switchTab) : base(ctx) {
+            Func<int, View> getContainerAt,
+            Action<int, float> switchTabFromDrag) : base(ctx) {
             this.getActiveTab = getActiveTab;
             this.getTabCount = getTabCount;
-            this.getActiveContainer = getActiveContainer;
-            this.switchTab = switchTab;
-            float density = ctx.Resources?.DisplayMetrics?.Density ?? 3f;
+            this.getContainerAt = getContainerAt;
+            this.switchTabFromDrag = switchTabFromDrag;
+            density = ctx.Resources?.DisplayMetrics?.Density ?? 3f;
             touchSlop = ViewConfiguration.Get(ctx)?.ScaledTouchSlop ?? (int)(8f * density);
-            commitDistPx = 56f * density;
-            flingVelPxPerSec = 380f * density;
+            commitDistPx = 64f * density;
+            flingVelPxPerSec = 360f * density;
         }
 
         public override bool OnInterceptTouchEvent(MotionEvent ev) {
@@ -807,9 +896,13 @@ public partial class MainActivity {
                 case MotionEventActions.Down:
                     downRawX = ev.RawX;
                     downRawY = ev.RawY;
+                    lastMoveRawX = downRawX;
                     downTimeMs = SystemClock.UptimeMillis();
+                    lastMoveTimeMs = downTimeMs;
+                    liveVelPxPerSec = 0f;
                     isSwiping = false;
-                    ignoreGesture = IsTouchInsideHorizontalControl(getActiveContainer(), downRawX, downRawY);
+                    peekingNeighborTab = -1;
+                    ignoreGesture = IsTouchInsideHorizontalControl(getContainerAt(curTab), downRawX, downRawY);
                     return false;
 
                 case MotionEventActions.Move:
@@ -828,6 +921,8 @@ public partial class MainActivity {
                         bool canGoRight = dx < 0 && curTab < count - 1;
                         if (canGoLeft || canGoRight) {
                             isSwiping = true;
+                            lastMoveRawX = ev.RawX;
+                            lastMoveTimeMs = SystemClock.UptimeMillis();
                             return true;
                         }
                     }
@@ -848,24 +943,63 @@ public partial class MainActivity {
             }
             int curTab = getActiveTab();
             int count = getTabCount();
-            View activeView = getActiveContainer();
+            View activeView = getContainerAt(curTab);
+            float viewportW = Math.Max(1f, Width);
             float dx = ev.RawX - downRawX;
 
             switch (ev.ActionMasked) {
-                case MotionEventActions.Move:
+                case MotionEventActions.Move: {
+                    long nowMs = SystemClock.UptimeMillis();
+                    float dtSec = Math.Max(0.004f, (nowMs - lastMoveTimeMs) * 0.001f);
+                    float instVel = MathF.Abs(ev.RawX - lastMoveRawX) / dtSec;
+                    liveVelPxPerSec = liveVelPxPerSec * 0.45f + instVel * 0.55f;
+                    lastMoveRawX = ev.RawX;
+                    lastMoveTimeMs = nowMs;
+
+                    bool allowedLeft = dx > 0 && curTab > 0;
+                    bool allowedRight = dx < 0 && curTab < count - 1;
+                    float offsetX = (allowedLeft || allowedRight)
+                        ? Math.Clamp(dx, -viewportW, viewportW)
+                        : dx * 0.14f;
+
+                    int desiredNeighbor = allowedLeft ? curTab - 1 : (allowedRight ? curTab + 1 : -1);
+                    if (peekingNeighborTab >= 0 && peekingNeighborTab != desiredNeighbor) {
+                        View oldN = getContainerAt(peekingNeighborTab);
+                        if (oldN != null) {
+                            OneUiMotionBlur.ClearMotionBlur(oldN);
+                            oldN.TranslationX = 0f;
+                            oldN.Visibility = ViewStates.Gone;
+                        }
+                    }
+                    peekingNeighborTab = desiredNeighbor;
+
+                    float blurPx = OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(liveVelPxPerSec, density, maxBlurDp: 20f);
                     if (activeView != null) {
-                        bool allowed = (dx > 0 && curTab > 0) || (dx < 0 && curTab < count - 1);
-                        activeView.TranslationX = allowed ? dx * 0.24f : dx * 0.06f;
+                        activeView.TranslationX = offsetX;
+                        OneUiMotionBlur.ApplyHorizontalMotionBlur(activeView, blurPx);
+                    }
+                    if (desiredNeighbor >= 0) {
+                        View neighbor = getContainerAt(desiredNeighbor);
+                        if (neighbor != null) {
+                            neighbor.Visibility = ViewStates.Visible;
+                            neighbor.Alpha = 1f;
+                            neighbor.ScaleX = 1f;
+                            neighbor.ScaleY = 1f;
+                            neighbor.TranslationX = offsetX + (desiredNeighbor - curTab) * viewportW;
+                            OneUiMotionBlur.ApplyHorizontalMotionBlur(neighbor, blurPx);
+                        }
                     }
                     return true;
+                }
 
                 case MotionEventActions.Up:
-                case MotionEventActions.Cancel:
+                case MotionEventActions.Cancel: {
                     isSwiping = false;
                     long dt = Math.Max(16, SystemClock.UptimeMillis() - downTimeMs);
-                    float vel = MathF.Abs(dx) * 1000f / dt;
+                    float avgVel = MathF.Abs(dx) * 1000f / dt;
+                    float effectiveVel = Math.Max(avgVel, liveVelPxPerSec);
                     bool commit = ev.ActionMasked == MotionEventActions.Up &&
-                                  (MathF.Abs(dx) >= commitDistPx || (MathF.Abs(dx) >= touchSlop * 2f && vel >= flingVelPxPerSec));
+                                  (MathF.Abs(dx) >= commitDistPx || (MathF.Abs(dx) >= touchSlop * 2f && effectiveVel >= flingVelPxPerSec));
                     int target = curTab;
                     if (commit) {
                         if (dx > 0 && curTab > 0) {
@@ -874,16 +1008,51 @@ public partial class MainActivity {
                             target = curTab + 1;
                         }
                     }
+                    int neighborIdx = peekingNeighborTab;
+                    peekingNeighborTab = -1;
+                    float currentOffset = activeView?.TranslationX ?? 0f;
                     if (target != curTab) {
-                        switchTab(target);
-                    } else if (activeView != null) {
-                        activeView.Animate()
-                            .TranslationX(0f)
-                            .SetDuration(200)
-                            .SetInterpolator(CreateOneUiEase())
-                            .Start();
+                        switchTabFromDrag(target, currentOffset);
+                    } else {
+                        View neighbor = neighborIdx >= 0 ? getContainerAt(neighborIdx) : null;
+                        ValueAnimator snap = ValueAnimator.OfFloat(currentOffset, 0f);
+                        snap.SetDuration(220);
+                        snap.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
+                        float pOff = currentOffset;
+                        long pMs = SystemClock.UptimeMillis();
+                        snap.Update += (_, e) => {
+                            float cur = (float)(e.Animation?.AnimatedValue ?? 0f);
+                            long nMs = SystemClock.UptimeMillis();
+                            float vel = MathF.Abs(cur - pOff) / Math.Max(0.004f, (nMs - pMs) * 0.001f);
+                            pOff = cur;
+                            pMs = nMs;
+                            float b = OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(vel, density, maxBlurDp: 16f);
+                            if (activeView != null) {
+                                activeView.TranslationX = cur;
+                                OneUiMotionBlur.ApplyHorizontalMotionBlur(activeView, b);
+                            }
+                            if (neighbor != null) {
+                                neighbor.TranslationX = cur + (neighborIdx - curTab) * viewportW;
+                                OneUiMotionBlur.ApplyHorizontalMotionBlur(neighbor, b);
+                            }
+                        };
+                        void CleanSnap() {
+                            if (activeView != null) {
+                                OneUiMotionBlur.ClearMotionBlur(activeView);
+                                activeView.TranslationX = 0f;
+                            }
+                            if (neighbor != null) {
+                                OneUiMotionBlur.ClearMotionBlur(neighbor);
+                                neighbor.TranslationX = 0f;
+                                neighbor.Visibility = ViewStates.Gone;
+                            }
+                        }
+                        snap.AnimationEnd += (_, _) => CleanSnap();
+                        snap.AnimationCancel += (_, _) => CleanSnap();
+                        snap.Start();
                     }
                     return true;
+                }
             }
             return true;
         }

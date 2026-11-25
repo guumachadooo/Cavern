@@ -1607,7 +1607,10 @@ public sealed class AppleMusicLyricsView : View {
 
         // 3. Smooth progressive feathered word illumination per wrapped visual line (0 B/frame alloc)
         bool useGlowAndLift = wordHighlightStyle != LyricsWordHighlightStyle.MinimalClean;
-        int brightAlpha = Math.Clamp((int)Math.Round(255f * (0.46f + 0.54f * easedFocus) * edgeFactor), 10, 255);
+        float brightFrac = Math.Max(0.46f + 0.54f * easedFocus, 0.22f + 0.52f * manualClarity);
+        int brightAlpha = Math.Clamp((int)Math.Round(255f * brightFrac * edgeFactor), Math.Min(255, dimAlpha), 255);
+        int minBandAlpha = Math.Min(dimAlpha, brightAlpha);
+        int maxBandAlpha = Math.Max(dimAlpha, brightAlpha);
         int glowAlpha = useGlowAndLift ? Math.Clamp((int)Math.Round(72f * easedFocus * edgeFactor), 0, 96) : 0;
         float featherWidth = 14f * dp;
 
@@ -1693,7 +1696,7 @@ public sealed class AppleMusicLyricsView : View {
                 float bandStep = featherWidth / 3f;
                 for (int b = 0; b < 3; b++) {
                     float frac = b == 0 ? 0.78f : (b == 1 ? 0.50f : 0.26f);
-                    int bandAlpha = Math.Clamp((int)Math.Round(dimAlpha + (brightAlpha - dimAlpha) * frac), dimAlpha, brightAlpha);
+                    int bandAlpha = Math.Clamp((int)Math.Round(minBandAlpha + (maxBandAlpha - minBandAlpha) * frac), minBandAlpha, maxBandAlpha);
                     float x0 = bandStart + b * bandStep;
                     float x1 = x0 + bandStep + 0.5f;
                     if (x0 >= vline.RightX + 4f * dp) {

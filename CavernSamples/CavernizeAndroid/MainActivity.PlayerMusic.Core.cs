@@ -18,29 +18,67 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    sealed class RoundedSquareOutlineProvider(Func<float> getCornerPx) : ViewOutlineProvider {
+        public override void GetOutline(View view, Outline outline) {
+            if (view == null || outline == null) {
+                return;
+            }
+            int w = view.Width;
+            int h = view.Height;
+            if (w <= 0 || h <= 0) {
+                return;
+            }
+            float rad = Math.Clamp(getCornerPx(), 0f, Math.Min(w, h) * 0.5f);
+            outline.SetRoundRect(0, 0, w, h, rad);
+        }
+    }
+
     sealed class RoundedArtworkView : View {
         readonly Paint bgPaint = new(PaintFlags.AntiAlias);
         readonly Paint bmpPaint = new(PaintFlags.AntiAlias | PaintFlags.FilterBitmap);
         readonly Paint rimPaint = new(PaintFlags.AntiAlias);
-        readonly Android.Graphics.Path clipPath = new();
         readonly Matrix drawMatrix = new();
 
         Bitmap bitmap;
+        Bitmap cachedShaderBitmap;
+        BitmapShader cachedBitmapShader;
         Color accentTint = OneUiTheme.Primary;
         bool isPlayingState;
+        float elevationDp = 10f;
 
         public int PreferredSizeDp { get; set; } = 286;
         public float CornerDp { get; set; } = 16f;
+
+        /// <summary>
+        /// When true and measured with <see cref="MeasureSpecMode.Exactly"/> width (e.g. 2-column album grid tiles),
+        /// expands edge-to-edge to a pixel-perfect 1:1 square matching the container width instead of shrinking flush-left.
+        /// </summary>
+        public bool FillWidthSquare { get; set; }
+
+        public float ElevationDp {
+            get => elevationDp;
+            set {
+                elevationDp = Math.Max(0f, value);
+                Elevation = elevationDp > 0f ? OneUiTheme.Dp(Context, elevationDp) : 0f;
+            }
+        }
 
         public RoundedArtworkView(Context ctx) : base(ctx) {
             bgPaint.SetStyle(Paint.Style.Fill);
             rimPaint.SetStyle(Paint.Style.Stroke);
             rimPaint.StrokeWidth = Math.Max(1.5f, OneUiTheme.Dp(ctx, 1.0f));
             rimPaint.Color = Color.Argb(48, 255, 255, 255);
-            Elevation = OneUiTheme.Dp(ctx, 10f);
+            OutlineProvider = new RoundedSquareOutlineProvider(() => OneUiTheme.Dp(Context, CornerDp));
+            ClipToOutline = true;
+            Elevation = OneUiTheme.Dp(ctx, elevationDp);
         }
 
         public void SetArtwork(Bitmap bmp, Color accent) {
+            if (!ReferenceEquals(bitmap, bmp)) {
+                cachedBitmapShader?.Dispose();
+                cachedBitmapShader = null;
+                cachedShaderBitmap = null;
+            }
             bitmap = bmp;
             accentTint = accent;
             Invalidate();
@@ -68,12 +106,20 @@ public partial class MainActivity {
             int maxW = MeasureSpec.GetSize(widthMeasureSpec);
             int maxH = MeasureSpec.GetSize(heightMeasureSpec);
             int prefPx = OneUiTheme.Dp(Context, PreferredSizeDp);
-            int target = prefPx;
-            if (wMode != MeasureSpecMode.Unspecified && maxW > 0) {
-                target = Math.Min(target, maxW);
-            }
-            if (hMode != MeasureSpecMode.Unspecified && maxH > 0) {
-                target = Math.Min(target, maxH);
+            int target;
+            if (FillWidthSquare && wMode == MeasureSpecMode.Exactly && maxW > 0) {
+                target = maxW;
+                if (hMode == MeasureSpecMode.Exactly && maxH > 0) {
+                    target = Math.Min(target, maxH);
+                }
+            } else {
+                target = prefPx;
+                if (wMode != MeasureSpecMode.Unspecified && maxW > 0) {
+                    target = Math.Min(target, maxW);
+                }
+                if (hMode != MeasureSpecMode.Unspecified && maxH > 0) {
+                    target = Math.Min(target, maxH);
+                }
             }
             target = Math.Max(OneUiTheme.Dp(Context, 40), target);
             SetMeasuredDimension(target, target);
@@ -87,20 +133,22 @@ public partial class MainActivity {
                 return;
             }
 
-            float rad = OneUiTheme.Dp(Context, CornerDp);
+            float rad = Math.Clamp(OneUiTheme.Dp(Context, CornerDp), 0f, Math.Min(w, h) * 0.5f);
             RectF rect = new(0f, 0f, w, h);
 
-            clipPath.Reset();
-            clipPath.AddRoundRect(rect, rad, rad, Android.Graphics.Path.Direction.Cw);
-            int save = canvas.Save();
-            canvas.ClipPath(clipPath);
-
+            // Analytical GPU anti-aliased DrawRoundRect + BitmapShader (eliminates Skia ClipPath polygonal corners)
+            bgPaint.SetShader(null);
             bgPaint.Color = Color.Argb(255, 16, 18, 26);
-            canvas.DrawRect(rect, bgPaint);
+            canvas.DrawRoundRect(rect, rad, rad, bgPaint);
 
             bool drewBitmap = false;
             try {
                 if (bitmap != null && bitmap.Handle != IntPtr.Zero && !bitmap.IsRecycled && bitmap.Width > 0 && bitmap.Height > 0) {
+                    if (cachedBitmapShader == null || !ReferenceEquals(cachedShaderBitmap, bitmap)) {
+                        cachedBitmapShader?.Dispose();
+                        cachedBitmapShader = new BitmapShader(bitmap, Shader.TileMode.Clamp!, Shader.TileMode.Clamp!);
+                        cachedShaderBitmap = bitmap;
+                    }
                     float bw = bitmap.Width;
                     float bh = bitmap.Height;
                     float scale = Math.Max(w / bw, h / bh);
@@ -109,10 +157,14 @@ public partial class MainActivity {
                     drawMatrix.Reset();
                     drawMatrix.PostScale(scale, scale);
                     drawMatrix.PostTranslate(dx, dy);
-                    canvas.DrawBitmap(bitmap, drawMatrix, bmpPaint);
+                    cachedBitmapShader.SetLocalMatrix(drawMatrix);
+                    bmpPaint.SetShader(cachedBitmapShader);
+                    canvas.DrawRoundRect(rect, rad, rad, bmpPaint);
+                    bmpPaint.SetShader(null);
                     drewBitmap = true;
                 }
             } catch {
+                bmpPaint.SetShader(null);
                 drewBitmap = false;
             }
             if (!drewBitmap) {
@@ -120,14 +172,23 @@ public partial class MainActivity {
                     [Color.Argb(215, accentTint.R, accentTint.G, accentTint.B).ToArgb(), Color.Rgb(16, 18, 25).ToArgb()],
                     [0f, 1f], Shader.TileMode.Clamp!);
                 bgPaint.SetShader(grad);
-                canvas.DrawRect(rect, bgPaint);
+                canvas.DrawRoundRect(rect, rad, rad, bgPaint);
                 bgPaint.SetShader(null);
             }
-            canvas.RestoreToCount(save);
 
+            float halfRim = rimPaint.StrokeWidth * 0.5f;
             canvas.DrawRoundRect(
-                new RectF(0.75f, 0.75f, w - 0.75f, h - 0.75f),
-                rad, rad, rimPaint);
+                new RectF(halfRim, halfRim, w - halfRim, h - halfRim),
+                Math.Max(0f, rad - halfRim), Math.Max(0f, rad - halfRim), rimPaint);
+        }
+
+        protected override void Dispose(bool disposing) {
+            if (disposing) {
+                cachedBitmapShader?.Dispose();
+                cachedBitmapShader = null;
+                cachedShaderBitmap = null;
+            }
+            base.Dispose(disposing);
         }
     }
 

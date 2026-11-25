@@ -45,12 +45,62 @@ public static class AndroidRuntimeTelemetry {
     static FrameMetricsListenerImpl activeFrameListener;
     static int lastLoggedThermalLevel = -1;
 
+    static int computeBudgetTier = 1; // 0 = Eco, 1 = Balanced (default), 2 = Fast (Max 75%)
+
+    /// <summary>Active AI compute budget tier (0 = Eco, 1 = Balanced, 2 = Fast Max 75%).</summary>
+    public static int ComputeBudgetTier => Volatile.Read(ref computeBudgetTier);
+
+    /// <summary>Updates the global CPU/GPU/NPU headroom budget tier across native ONNX, DSP pipelines, and FFmpeg.</summary>
+    public static void SetComputeBudgetTier(int tier) {
+        int clamped = Math.Clamp(tier, 0, 2);
+        Volatile.Write(ref computeBudgetTier, clamped);
+        MvsepAntiArtifactPipeline.GlobalComputeBudgetTier = clamped;
+    }
+
+    /// <summary>
+    /// Returns the Qualcomm QNN HTP NPU performance profile for the active compute budget tier.
+    /// Never uses <c>burst</c> so the NPU &amp; SoC thermal envelope preserve headroom for the OS and 120 Hz UI.
+    /// </summary>
+    public static string GetQnnPerformanceMode(int? tierOverride = null) {
+        int tier = Math.Clamp(tierOverride ?? ComputeBudgetTier, 0, 2);
+        return tier switch {
+            0 => "power_saver",
+            2 => "sustained_high_performance",
+            _ => "balanced"
+        };
+    }
+
+    /// <summary>
+    /// Computes an adaptive inter-chunk GPU/NPU duty-cycle yield (in ms) so continuous WebGPU (Vulkan) or QNN HTP
+    /// dispatches always leave command-queue headroom for Android SurfaceFlinger and UI RenderThread.
+    /// </summary>
+    public static int GetAdaptiveAcceleratorYieldMs(long chunkElapsedMs, bool isGpuOrNpu, int? tierOverride = null) {
+        int tier = Math.Clamp(tierOverride ?? ComputeBudgetTier, 0, 2);
+        int thermalExtra = GetAdaptiveThermalYieldMs();
+        if (!isGpuOrNpu) {
+            return thermalExtra;
+        }
+        if (chunkElapsedMs < 12L) {
+            return Math.Min(60, thermalExtra);
+        }
+        double dutyRatio = tier switch {
+            0 => 0.65, // Eco: generous 65% breathing window between GPU/NPU dispatches
+            2 => 0.20, // Fast (Max 75%): guarantees >=20% GPU/NPU headroom
+            _ => 0.35  // Balanced (default): ~60% active duty, ~40% UI/OS headroom
+        };
+        int baseYield = (int)Math.Round(chunkElapsedMs * dutyRatio);
+        int minYield = tier == 0 ? 28 : (tier == 2 ? 14 : 20);
+        int maxYield = tier == 0 ? 180 : (tier == 2 ? 80 : 125);
+        return Math.Clamp(baseYield + thermalExtra, minYield, maxYield);
+    }
+
     /// <summary>
     /// Installs global background compute QoS and live Android thermal yield hooks into
     /// <see cref="MvsepAntiArtifactPipeline"/> so every AI / export / extraction tab inherits non-starving scheduling.
     /// </summary>
-    public static void InstallGlobalComputeQoSHooks(Context context) {
+    public static void InstallGlobalComputeQoSHooks(Context context, int initialBudgetTier = 1) {
         cachedAppContext = context?.ApplicationContext ?? context;
+        SetComputeBudgetTier(initialBudgetTier);
         MvsepAntiArtifactPipeline.GlobalBackgroundThreadQoSHook = ApplyBackgroundThreadQoS;
         MvsepAntiArtifactPipeline.GlobalThermalExtraYieldMsProvider = GetAdaptiveThermalYieldMs;
     }

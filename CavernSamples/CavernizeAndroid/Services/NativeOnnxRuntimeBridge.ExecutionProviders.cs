@@ -79,10 +79,11 @@ public sealed partial class NativeOnnxRuntimeBridge {
             OnnxRuntimeInstallerService.IsQualcommSnapdragonDevice()) {
             EnsureQnnAdspLibraryPath();
             string qnnPath = OnnxRuntimeInstallerService.GetManagedQnnHtpPath(appContext);
+            string qnnMode = AndroidRuntimeTelemetry.GetQnnPerformanceMode();
             if (TryAppendEp(sessOpts, "QNN",
                 ["backend_path", "htp_performance_mode", "enable_htp_fp16_precision", "htp_graph_finalization_optimization_mode"],
-                [qnnPath, "burst", "1", "3"])) {
-                return "QNN HTP (NPU)";
+                [qnnPath, qnnMode, "1", "3"])) {
+                return $"QNN HTP (NPU · {qnnMode})";
             }
             return "CPU (ARM64 KleidiAI)";
         }
@@ -138,7 +139,7 @@ public sealed partial class NativeOnnxRuntimeBridge {
             string qnnPath = OnnxRuntimeInstallerService.GetManagedQnnHtpPath(appContext);
             supportsQnnHtp = ProbeSingle("QNN",
                 ["backend_path", "htp_performance_mode", "enable_htp_fp16_precision"],
-                [qnnPath, "burst", "1"]);
+                [qnnPath, AndroidRuntimeTelemetry.GetQnnPerformanceMode(), "1"]);
         }
 
         if (supportsWebGpu) {

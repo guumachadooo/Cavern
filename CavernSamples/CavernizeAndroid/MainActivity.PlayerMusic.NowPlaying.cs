@@ -18,7 +18,10 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    ValueAnimator playLibStripAnimator;
+
     void SetMusicPlayerSection(bool openLibrary) {
+        bool wasOpen = isLibrarySectionOpen;
         isLibrarySectionOpen = openLibrary;
         if (openLibrary && isFormatPillExpanded) {
             SetFormatPillExpanded(false, animate: false);
@@ -33,23 +36,72 @@ public partial class MainActivity {
         }
 
         if (musicNowPlayingScrollView != null && musicLibraryScrollView != null) {
+            playLibStripAnimator?.Cancel();
+            playLibStripAnimator = null;
             View entering = openLibrary ? (View)musicLibraryScrollView : musicNowPlayingScrollView;
             View leaving = openLibrary ? (View)musicNowPlayingScrollView : musicLibraryScrollView;
-
+            entering.Animate()?.Cancel();
             leaving.Animate()?.Cancel();
-            leaving.Visibility = ViewStates.Gone;
-            leaving.Alpha = 1f;
-            leaving.TranslationX = 0f;
+            OneUiMotionBlur.ClearMotionBlur(entering);
+            OneUiMotionBlur.ClearMotionBlur(leaving);
 
-            entering.Visibility = ViewStates.Visible;
-            entering.Alpha = 0f;
-            entering.TranslationX = openLibrary ? Dp(18) : -Dp(18);
-            entering.Animate()
-                .Alpha(1f)
-                .TranslationX(0f)
-                .SetDuration(260)
-                .SetInterpolator(CreateOneUiEase())
-                .Start();
+            float viewportW = entering.Parent is View pv && pv.Width > 0
+                ? pv.Width
+                : (Resources?.DisplayMetrics?.WidthPixels ?? 1080);
+            if (wasOpen == openLibrary || viewportW <= 1f) {
+                leaving.Visibility = ViewStates.Gone;
+                leaving.TranslationX = 0f;
+                leaving.Alpha = 1f;
+                entering.Visibility = ViewStates.Visible;
+                entering.TranslationX = 0f;
+                entering.Alpha = 1f;
+            } else {
+                float dir = openLibrary ? 1f : -1f;
+                float density = Resources?.DisplayMetrics?.Density ?? 3f;
+                entering.Visibility = ViewStates.Visible;
+                entering.Alpha = 1f;
+                entering.TranslationX = dir * viewportW;
+                leaving.Visibility = ViewStates.Visible;
+                leaving.Alpha = 1f;
+                leaving.TranslationX = 0f;
+
+                float prevT = 0f;
+                long prevMs = Android.OS.SystemClock.UptimeMillis();
+                ValueAnimator anim = ValueAnimator.OfFloat(0f, 1f);
+                anim.SetDuration(290);
+                anim.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
+                anim.Update += (_, e) => {
+                    if (uiDestroyed) return;
+                    float t = (float)(e.Animation?.AnimatedValue ?? 1f);
+                    long nowMs = Android.OS.SystemClock.UptimeMillis();
+                    float vel = MathF.Abs(t - prevT) * viewportW / Math.Max(0.004f, (nowMs - prevMs) * 0.001f);
+                    prevT = t;
+                    prevMs = nowMs;
+                    float blurPx = OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(vel, density, maxBlurDp: 22f);
+                    entering.TranslationX = dir * (1f - t) * viewportW;
+                    leaving.TranslationX = -dir * t * viewportW;
+                    OneUiMotionBlur.ApplyHorizontalMotionBlur(entering, blurPx);
+                    OneUiMotionBlur.ApplyHorizontalMotionBlur(leaving, blurPx);
+                };
+                void Done() {
+                    OneUiMotionBlur.ClearMotionBlur(entering);
+                    OneUiMotionBlur.ClearMotionBlur(leaving);
+                    entering.TranslationX = 0f;
+                    entering.Alpha = 1f;
+                    entering.Visibility = ViewStates.Visible;
+                    leaving.TranslationX = 0f;
+                    leaving.Alpha = 1f;
+                    leaving.Visibility = ViewStates.Gone;
+                    playLibStripAnimator = null;
+                }
+                anim.AnimationEnd += (_, _) => Done();
+                anim.AnimationCancel += (_, _) => {
+                    OneUiMotionBlur.ClearMotionBlur(entering);
+                    OneUiMotionBlur.ClearMotionBlur(leaving);
+                };
+                playLibStripAnimator = anim;
+                anim.Start();
+            }
         }
 
         if (openLibrary) {

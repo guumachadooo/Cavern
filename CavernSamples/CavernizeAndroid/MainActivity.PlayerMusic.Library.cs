@@ -134,6 +134,8 @@ public partial class MainActivity {
                     libraryListHost?.ChildCount > 0) {
                     return;
                 }
+                int prevCatIdx = (int)libraryCategory;
+                int nextCatIdx = (int)c;
                 libraryCategory = c;
                 selectedLibraryAlbum = null;
                 selectedLibraryArtist = null;
@@ -141,6 +143,40 @@ public partial class MainActivity {
                 libraryRenderLimit = 72;
                 UpdateLibraryCatStyles();
                 RenderLibraryView();
+                if (libraryListHost != null && prevCatIdx != nextCatIdx) {
+                    int span = Math.Abs(nextCatIdx - prevCatIdx);
+                    float dir = nextCatIdx > prevCatIdx ? 1f : -1f;
+                    float distPx = Dp(Math.Min(120, 44 * span));
+                    float density = Resources?.DisplayMetrics?.Density ?? 3f;
+                    libraryListHost.Animate()?.Cancel();
+                    OneUiMotionBlur.ClearMotionBlur(libraryListHost);
+                    float prevX = dir * distPx;
+                    long prevMs = Android.OS.SystemClock.UptimeMillis();
+                    libraryListHost.TranslationX = prevX;
+                    ValueAnimator catAnim = ValueAnimator.OfFloat(prevX, 0f);
+                    catAnim.SetDuration(220);
+                    catAnim.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
+                    catAnim.Update += (_, ev) => {
+                        if (uiDestroyed || libraryListHost == null) return;
+                        float curX = (float)(ev.Animation?.AnimatedValue ?? 0f);
+                        long nowMs = Android.OS.SystemClock.UptimeMillis();
+                        float vel = MathF.Abs(curX - prevX) / Math.Max(0.004f, (nowMs - prevMs) * 0.001f);
+                        prevX = curX;
+                        prevMs = nowMs;
+                        libraryListHost.TranslationX = curX;
+                        OneUiMotionBlur.ApplyHorizontalMotionBlur(
+                            libraryListHost,
+                            OneUiMotionBlur.ComputeHorizontalBlurRadiusPx(vel * 1.4f, density, maxBlurDp: 14f));
+                    };
+                    catAnim.AnimationEnd += (_, _) => {
+                        if (libraryListHost != null) {
+                            libraryListHost.TranslationX = 0f;
+                            OneUiMotionBlur.ClearMotionBlur(libraryListHost);
+                        }
+                    };
+                    catAnim.AnimationCancel += (_, _) => OneUiMotionBlur.ClearMotionBlur(libraryListHost);
+                    catAnim.Start();
+                }
             };
             libCatTabs[idx] = tabTv;
             catCapsule.AddView(tabTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));

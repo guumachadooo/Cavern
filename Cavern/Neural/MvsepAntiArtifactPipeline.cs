@@ -458,17 +458,44 @@ namespace Cavern.Neural {
         public static Action GlobalBackgroundThreadQoSHook { get; set; }
 
         /// <summary>
-        /// Computes the non-starving background worker cap leaving at least 50% of CPU cores free for UI, OS,
-        /// and real-time audio rendering (clamped to [1; 4] on mobile SoCs).
+        /// Global AI compute headroom tier: <c>0 = Eco (40% max)</c>, <c>1 = Balanced (60% max, default)</c>,
+        /// <c>2 = Fast (75% max — never 100%)</c>.
+        /// </summary>
+        public static int GlobalComputeBudgetTier { get; set; } = 1;
+
+        /// <summary>
+        /// Computes the non-starving background worker cap for the active <see cref="GlobalComputeBudgetTier"/>,
+        /// always reserving guaranteed CPU cores for Android UI/SurfaceFlinger and real-time audio rendering.
         /// </summary>
         public static int ComputeHeadroomWorkerCap(int logicalCores) {
+            return ComputeHeadroomWorkerCap(logicalCores, GlobalComputeBudgetTier);
+        }
+
+        /// <summary>
+        /// Computes the non-starving background worker cap for a specific compute budget tier
+        /// (<c>0 = Eco</c>, <c>1 = Balanced</c>, <c>2 = FastMax75</c>). Never allows 100% CPU saturation.
+        /// </summary>
+        public static int ComputeHeadroomWorkerCap(int logicalCores, int budgetTier) {
+            int tier = budgetTier < 0 ? 0 : (budgetTier > 2 ? 2 : budgetTier);
             if (logicalCores <= 2) {
                 return 1;
             }
-            if (logicalCores <= 5) {
-                return Math.Max(1, logicalCores - 2);
+            if (tier == 0) {
+                // Eco: <=25-33% CPU (2 threads on 8-core)
+                int eco = logicalCores / 4;
+                return eco < 1 ? 1 : (eco > 2 ? 2 : eco);
             }
-            return Math.Min(4, logicalCores / 2);
+            if (tier == 1) {
+                // Balanced (default): <=37.5-50% CPU (3 threads on 8-core, leaving 5/8 = 62.5% free)
+                int bal = (logicalCores * 3) / 8;
+                if (bal < 2) {
+                    bal = logicalCores >= 4 ? 2 : 1;
+                }
+                return bal > 3 ? 3 : bal;
+            }
+            // Fast (Max 75% overall ceiling -> strictly <=50% raw threads on 8-core = 4 threads max)
+            int fast = logicalCores <= 5 ? Math.Max(1, logicalCores - 2) : (logicalCores / 2);
+            return fast > 4 ? 4 : fast;
         }
 
         /// <summary>

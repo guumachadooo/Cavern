@@ -74,6 +74,8 @@ public sealed partial class NativeOnnxRuntimeBridge {
 
         public IReadOnlyDictionary<string, NeuralTensorFloat> Run(IReadOnlyDictionary<string, NeuralTensorFloat> inputs) {
             ArgumentNullException.ThrowIfNull(inputs);
+            Dictionary<string, NeuralTensorFloat> results;
+            long runElapsedMs;
             lock (sessionLock) {
                 if (disposed || sessionHandle == IntPtr.Zero) {
                     throw new ObjectDisposedException(nameof(NativeOnnxSession));
@@ -156,10 +158,11 @@ public sealed partial class NativeOnnxRuntimeBridge {
                         (UIntPtr)outCount,
                         outValPtrs));
                     swRun.Stop();
+                    runElapsedMs = swRun.ElapsedMilliseconds;
                     runCount++;
-                    totalRunElapsedMs += swRun.ElapsedMilliseconds;
+                    totalRunElapsedMs += runElapsedMs;
 
-                    Dictionary<string, NeuralTensorFloat> results = new(outCount, StringComparer.Ordinal);
+                    results = new(outCount, StringComparer.Ordinal);
                     for (int o = 0; o < outCount; o++) {
                         IntPtr outVal = outValPtrs[o];
                         if (outVal == IntPtr.Zero) {
@@ -228,8 +231,6 @@ public sealed partial class NativeOnnxRuntimeBridge {
                         }
                         results[outputNames[o]] = new NeuralTensorFloat(dims, managed);
                     }
-
-                    return results;
                 } finally {
                     for (int i = 0; i < inCount; i++) {
                         if (inValPtrs[i] != IntPtr.Zero) bridge.fnReleaseValue?.Invoke(inValPtrs[i]);
@@ -244,6 +245,21 @@ public sealed partial class NativeOnnxRuntimeBridge {
                     }
                 }
             }
+
+            // Reserve guaranteed GPU/NPU & OS headroom between inference dispatches (never starve SurfaceFlinger/120Hz UI)
+            bool isMainThread = Android.OS.Looper.MainLooper != null && Android.OS.Looper.MyLooper() == Android.OS.Looper.MainLooper;
+            if (!isMainThread) {
+                bool isAccel = !string.IsNullOrEmpty(ExecutionProvider) &&
+                               (ExecutionProvider.Contains("WebGPU", StringComparison.OrdinalIgnoreCase) ||
+                                ExecutionProvider.Contains("QNN", StringComparison.OrdinalIgnoreCase) ||
+                                ExecutionProvider.Contains("GPU", StringComparison.OrdinalIgnoreCase) ||
+                                ExecutionProvider.Contains("NPU", StringComparison.OrdinalIgnoreCase));
+                int yieldMs = AndroidRuntimeTelemetry.GetAdaptiveAcceleratorYieldMs(runElapsedMs, isAccel);
+                if (yieldMs > 0) {
+                    Thread.Sleep(yieldMs);
+                }
+            }
+            return results;
         }
 
         static ParallelOptions CreateHeadroomParallelOptions() => new() {
