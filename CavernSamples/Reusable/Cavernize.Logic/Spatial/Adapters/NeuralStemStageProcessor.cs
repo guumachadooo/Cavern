@@ -431,11 +431,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             if (stemTrack == null || stemTrack.Stems == null || stemTrack.Stems.Count == 0) {
                 return Array.Empty<SpatialSourceDescriptor>();
             }
-            string[] names = new string[stemTrack.Stems.Count];
-            for (int i = 0; i < names.Length; i++) {
-                names[i] = stemTrack.Stems[i].Name;
-            }
-            return NeuralStemSpatializer.BuildSceneDescriptors(names, environmentSize, startIndex);
+            return NeuralStemSpatializer.BuildSceneDescriptors(stemTrack.Stems, environmentSize, startIndex);
         }
     }
 

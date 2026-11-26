@@ -121,7 +121,8 @@ namespace Cavern.Neural {
             ISpatialSemanticDirector activeDirector = director ?? new DeterministicRuleDirector();
             bool usedFallback;
             DirectorCue[] cues = activeDirector.GenerateCues(stems, sampleRate, mode, moodDigests, out usedFallback);
-            return SpatialChoreoTrack.Build(names, cues, mode, durationSec);
+            float[] homeAzDegs = StereoPanAzimuthEstimator.EstimateAllHomeAzimuthsDeg(stems);
+            return SpatialChoreoTrack.Build(names, cues, mode, durationSec, 0.05, homeAzDegs);
         }
 
         /// <summary>
@@ -249,6 +250,69 @@ namespace Cavern.Neural {
                     float diffuse = GetDefaultDiffuseness(role);
                     for (int side = -1; side <= 1; side += 2) {
                         Vector3 normPos = GetAnchorPosition(role, sideSign: side);
+                        list.Add(new SpatialSourceDescriptor {
+                            Index = idx++,
+                            Name = FormatDisplayLabel(rawName, role, side),
+                            Layer = layer,
+                            IsDialogue = role == NeuralStemRole.BackingVocals,
+                            IsLfe = false,
+                            NormalizedPosition = normPos,
+                            WorldPositionMeters = normPos * environmentSize,
+                            Gain = 1f,
+                            Diffuse = diffuse,
+                            Divergence = diffuse * 0.5f,
+                            Importance = 0.75f
+                        });
+                    }
+                }
+            }
+            return list.ToArray();
+        }
+
+        /// <summary>
+        /// Creates ITU-R BS.2127-aligned 3D <see cref="SpatialSourceDescriptor"/> objects from separated stereo stems,
+        /// preserving each stem's measured constant-power stereo pan azimuth (&lt;= 5 deg centroid error) and natural
+        /// inter-channel stereo width when dynamic choreography is disabled (fixed 3D objects).
+        /// </summary>
+        public static SpatialSourceDescriptor[] BuildSceneDescriptors(
+            IReadOnlyList<StereoStemBuffer> stems,
+            Vector3 environmentSize,
+            int startIndex = 0) {
+            if (stems == null || stems.Count == 0) {
+                return Array.Empty<SpatialSourceDescriptor>();
+            }
+            List<SpatialSourceDescriptor> list = new List<SpatialSourceDescriptor>(stems.Count * 2);
+            int idx = startIndex;
+
+            for (int i = 0; i < stems.Count; i++) {
+                StereoStemBuffer stem = stems[i];
+                string rawName = stem != null && !string.IsNullOrWhiteSpace(stem.Name) ? stem.Name : ("Stem " + (i + 1));
+                NeuralStemRole role = ClassifyStemName(rawName);
+                SourceLayer layer = role == NeuralStemRole.Residual ? SourceLayer.RestoredResidual : SourceLayer.NeuralStem;
+                StereoPanEstimate pan = StereoPanAzimuthEstimator.Estimate(stem);
+
+                if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals || role == NeuralStemRole.Bass) {
+                    Vector3 normPos = GetPanPreservedAnchorPosition(role, pan, sideSign: 0f);
+                    list.Add(new SpatialSourceDescriptor {
+                        Index = idx++,
+                        Name = FormatDisplayLabel(rawName, role, 0),
+                        Layer = layer,
+                        IsDialogue = role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals,
+                        IsLfe = false,
+                        NormalizedPosition = normPos,
+                        WorldPositionMeters = normPos * environmentSize,
+                        Gain = 1f,
+                        Diffuse = role == NeuralStemRole.Bass ? 0f : 0.05f,
+                        Divergence = role == NeuralStemRole.Bass ? 0f : 0.08f,
+                        Importance = role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals ? 1f : 0.9f
+                    });
+                } else {
+                    float baseDiffuse = GetDefaultDiffuseness(role);
+                    float diffuse = pan.HasSignal
+                        ? Math.Min(baseDiffuse, baseDiffuse * (0.25f + 0.75f * pan.StereoWidth01))
+                        : baseDiffuse;
+                    for (int side = -1; side <= 1; side += 2) {
+                        Vector3 normPos = GetPanPreservedAnchorPosition(role, pan, sideSign: side);
                         list.Add(new SpatialSourceDescriptor {
                             Index = idx++,
                             Name = FormatDisplayLabel(rawName, role, side),
@@ -585,6 +649,43 @@ namespace Cavern.Neural {
                 default:
                     return new Vector3(0.85f * sideSign, 0.25f, 0.20f);
             }
+        }
+
+        static Vector3 GetPanPreservedAnchorPosition(NeuralStemRole role, StereoPanEstimate pan, float sideSign) {
+            if (!pan.HasSignal) {
+                return GetAnchorPosition(role, sideSign);
+            }
+
+            Vector3 refAnchor = GetAnchorPosition(role, sideSign == 0f ? 0f : 1f);
+            float refAz;
+            float refEl;
+            PsychoacousticGovernor.CartesianToSphericalDeg(refAnchor, out refAz, out refEl);
+            float refRad = refAnchor.Length();
+            if (refRad < 0.35f || refRad > 1.0f) {
+                refRad = 0.94f;
+            }
+
+            if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals || role == NeuralStemRole.Bass) {
+                float az = pan.PanAzimuthDeg;
+                float el = refEl;
+                float rad = refRad;
+                PsychoacousticGovernor.ClampRoleAngles(role, ref az, ref el, ref rad);
+                return PsychoacousticGovernor.SphericalToCartesianUnit(az, el) * rad;
+            }
+
+            // Compute stereo half-spread proportional to measured inter-channel stereo width (0 for coherent point source)
+            float maxHalfSpread = Math.Min(MathF.Abs(refAz), 58f);
+            if (maxHalfSpread < 12f) {
+                maxHalfSpread = 32f;
+            }
+            float halfSpreadDeg = maxHalfSpread * SpatialCortexMath.Clamp01(pan.StereoWidth01);
+            // Power-balance midpoint compensation: wL*(mid - s) + wR*(mid + s) == pan.PanAzimuthDeg identically
+            float midAz = pan.PanAzimuthDeg - pan.PowerBalance * halfSpreadDeg;
+            float targetAz = SpatialCortexMath.Clamp(midAz + sideSign * halfSpreadDeg, -110f, 110f);
+            float targetEl = refEl;
+            float targetRad = refRad;
+            PsychoacousticGovernor.ClampRoleAngles(role, ref targetAz, ref targetEl, ref targetRad);
+            return PsychoacousticGovernor.SphericalToCartesianUnit(targetAz, targetEl) * targetRad;
         }
 
         static float GetDefaultDiffuseness(NeuralStemRole role) {

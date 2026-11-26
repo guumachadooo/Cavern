@@ -394,10 +394,14 @@ public static class NeuralTrackCacheCodec {
         using BinaryWriter bw = new(fs, Encoding.UTF8, leaveOpen: false);
 
         bool hasChoreo = choreoTrack != null && choreoTrack.StemCount > 0 && choreoTrack.FrameCount > 0;
+        bool omitLeadRef = compressionMode != NeuralTrackCacheCompressionMode.RawFloat32 &&
+            CanDeriveMonoRefFromStems(track.Stems, track.MonoLeadVocalRef, isBacking: false);
+        bool omitBackingRef = compressionMode != NeuralTrackCacheCompressionMode.RawFloat32 &&
+            CanDeriveMonoRefFromStems(track.Stems, track.MonoBackingVocalRef, isBacking: true);
         uint flags = 0u;
         if (track.DerivedFromLosslessTwin) flags |= FlagDerivedFromLosslessTwin;
-        if (track.MonoLeadVocalRef != null && track.MonoLeadVocalRef.Length > 0) flags |= FlagHasLeadRef;
-        if (track.MonoBackingVocalRef != null && track.MonoBackingVocalRef.Length > 0) flags |= FlagHasBackingRef;
+        if (!omitLeadRef && track.MonoLeadVocalRef != null && track.MonoLeadVocalRef.Length > 0) flags |= FlagHasLeadRef;
+        if (!omitBackingRef && track.MonoBackingVocalRef != null && track.MonoBackingVocalRef.Length > 0) flags |= FlagHasBackingRef;
         if (track.DereverbAnalysis?.DryVocal != null && track.DereverbAnalysis?.WetReverb != null) flags |= FlagHasDereverb;
         if (hasChoreo) flags |= FlagHasChoreoTrack;
 
@@ -531,10 +535,14 @@ public static class NeuralTrackCacheCodec {
         float[] leadRef = null;
         if ((flags & FlagHasLeadRef) != 0) {
             leadRef = ver >= 3 ? ReadMonoPayload(br, mode, token) : ReadFloatArray(br, token);
+        } else {
+            leadRef = SynthesizeMonoRefFromStems(stems, isBacking: false);
         }
         float[] backingRef = null;
         if ((flags & FlagHasBackingRef) != 0) {
             backingRef = ver >= 3 ? ReadMonoPayload(br, mode, token) : ReadFloatArray(br, token);
+        } else {
+            backingRef = SynthesizeMonoRefFromStems(stems, isBacking: true);
         }
 
         DereverbDecompositionResult dereverb = null;
@@ -673,6 +681,101 @@ public static class NeuralTrackCacheCodec {
         } catch {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Losslessly re-packs a cached <c>.ntc</c> file into <paramref name="targetMode"/> CNTC v3 (with mono-ref deduplication
+    /// and optimal ZLib entropy coding), replacing the file atomically only if the compacted payload is strictly smaller.
+    /// Returns bytes reclaimed (0 when already optimal).
+    /// </summary>
+    public static long CompactFileIfBeneficial(
+        string filePath,
+        NeuralTrackCacheCompressionMode targetMode = NeuralTrackCacheCompressionMode.Compact16Bit,
+        CancellationToken token = default) {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath) || targetMode == NeuralTrackCacheCompressionMode.RawFloat32) {
+            return 0L;
+        }
+        long origBytes = new FileInfo(filePath).Length;
+        if (origBytes <= 0L) {
+            return 0L;
+        }
+        NeuralSeparatedTrack track = ReadTrackFile(filePath, out SpatialChoreoTrack choreo, token);
+        if (track == null || track.Stems == null || track.Stems.Count == 0) {
+            return 0L;
+        }
+        string tmpPath = filePath + $".cmp.{Guid.NewGuid():N}.tmp";
+        try {
+            WriteTrackFile(tmpPath, track, choreo, targetMode, token);
+            long newBytes = new FileInfo(tmpPath).Length;
+            if (newBytes > 0 && newBytes < origBytes) {
+                File.Move(tmpPath, filePath, overwrite: true);
+                return origBytes - newBytes;
+            }
+            return 0L;
+        } finally {
+            try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
+        }
+    }
+
+    static StereoStemBuffer FindStemForMonoRef(IReadOnlyList<StereoStemBuffer> stems, bool isBacking) {
+        if (stems == null || stems.Count == 0) {
+            return null;
+        }
+        if (isBacking) {
+            for (int i = 0; i < stems.Count; i++) {
+                if (stems[i] != null && NeuralStemSpatializer.ClassifyStemName(stems[i].Name) == NeuralStemRole.BackingVocals) {
+                    return stems[i];
+                }
+            }
+            return null;
+        }
+        StereoStemBuffer fallbackVocals = null;
+        for (int i = 0; i < stems.Count; i++) {
+            StereoStemBuffer st = stems[i];
+            if (st == null) continue;
+            NeuralStemRole r = NeuralStemSpatializer.ClassifyStemName(st.Name);
+            if (r == NeuralStemRole.LeadVocal) {
+                return st;
+            }
+            if (r == NeuralStemRole.Vocals && fallbackVocals == null) {
+                fallbackVocals = st;
+            }
+        }
+        return fallbackVocals;
+    }
+
+    static bool CanDeriveMonoRefFromStems(IReadOnlyList<StereoStemBuffer> stems, float[] monoRef, bool isBacking) {
+        if (monoRef == null || monoRef.Length == 0) {
+            return false;
+        }
+        StereoStemBuffer stem = FindStemForMonoRef(stems, isBacking);
+        if (stem == null || stem.Length != monoRef.Length || stem.Left == null || stem.Right == null) {
+            return false;
+        }
+        // Verify exact match to 0.5*(L+R) across strided + boundary samples so custom dereverb/aligned refs are never dropped
+        int len = monoRef.Length;
+        int step = Math.Max(1, len / 4096);
+        for (int i = 0; i < len; i += step) {
+            float expected = 0.5f * (stem.Left[i] + stem.Right[i]);
+            if (MathF.Abs(monoRef[i] - expected) > 1e-4f) {
+                return false;
+            }
+        }
+        float lastExpected = 0.5f * (stem.Left[len - 1] + stem.Right[len - 1]);
+        return MathF.Abs(monoRef[len - 1] - lastExpected) <= 1e-4f;
+    }
+
+    static float[] SynthesizeMonoRefFromStems(IReadOnlyList<StereoStemBuffer> stems, bool isBacking) {
+        StereoStemBuffer stem = FindStemForMonoRef(stems, isBacking);
+        if (stem == null || stem.Length <= 0 || stem.Left == null || stem.Right == null) {
+            return null;
+        }
+        int len = Math.Min(stem.Length, Math.Min(stem.Left.Length, stem.Right.Length));
+        float[] mono = new float[len];
+        for (int i = 0; i < len; i++) {
+            mono[i] = 0.5f * (stem.Left[i] + stem.Right[i]);
+        }
+        return mono;
     }
 
     static long EstimateUncompressedBytes(NeuralSeparatedTrack track) {
@@ -861,7 +964,7 @@ public static class NeuralTrackCacheCodec {
         byte[] planeBuf = new byte[BlockFrames * planesPerCh * 2];
 
         using MemoryStream ms = new(Math.Max(4096, len / 2));
-        using (ZLibStream zs = new(ms, CompressionLevel.Fastest, leaveOpen: true)) {
+        using (ZLibStream zs = new(ms, CompressionLevel.Optimal, leaveOpen: true)) {
             int mPrev1 = 0, mPrev2 = 0;
             int sPrev1 = 0, sPrev2 = 0;
             int offset = 0;
@@ -971,7 +1074,7 @@ public static class NeuralTrackCacheCodec {
         byte[] planeBuf = new byte[BlockFrames * planes];
 
         using MemoryStream ms = new(Math.Max(2048, len / 4));
-        using (ZLibStream zs = new(ms, CompressionLevel.Fastest, leaveOpen: true)) {
+        using (ZLibStream zs = new(ms, CompressionLevel.Optimal, leaveOpen: true)) {
             int prev1 = 0, prev2 = 0;
             int offset = 0;
             int maxQ = bytesPerSample == 3 ? 8388607 : 32767;

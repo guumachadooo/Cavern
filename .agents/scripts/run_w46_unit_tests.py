@@ -3408,6 +3408,252 @@ RunTest("T44_W53_1_MvsepTwoStageCascade_LowBandFix_And_CrossVariantAligner", () 
     Assert(autoKara.IsTwoStageCascade, $"Expected SpatialKaraoke+preserveBacking to auto-resolve 2-stage cascade, got {autoKara.Id}");
 });
 
+// T45: W53.2 Wave B (CNTC v3 Lossless Mono-Ref Dedup + Optimal Compaction + Incremental Stage-1 Vocal Reuse)
+RunTest("T45_W53_2_CntcV3MonoRefDedup_CompactStorage_And_IncrementalVocalReuse", () => {
+    int sr = 44100;
+    int len = sr; // 1.0 s
+    float[] leadL = new float[len], leadR = new float[len];
+    float[] backL = new float[len], backR = new float[len];
+    float[] instrL = new float[len], instrR = new float[len];
+    float[] monoLead = new float[len], monoBack = new float[len];
+    for (int i = 0; i < len; i++) {
+        double t = i / (double)sr;
+        leadL[i] = 0.35f * (float)Math.Sin(2.0 * Math.PI * 440.0 * t);
+        leadR[i] = 0.31f * (float)Math.Sin(2.0 * Math.PI * 440.0 * t + 0.12);
+        backL[i] = 0.18f * (float)Math.Sin(2.0 * Math.PI * 660.0 * t);
+        backR[i] = 0.16f * (float)Math.Sin(2.0 * Math.PI * 660.0 * t + 0.25);
+        instrL[i] = 0.42f * (float)Math.Sin(2.0 * Math.PI * 110.0 * t);
+        instrR[i] = 0.39f * (float)Math.Sin(2.0 * Math.PI * 110.0 * t + 0.18);
+        monoLead[i] = 0.5f * (leadL[i] + leadR[i]);
+        monoBack[i] = 0.5f * (backL[i] + backR[i]);
+    }
+    List<StereoStemBuffer> karaStems = [
+        new StereoStemBuffer("lead_vocal", leadL, leadR),
+        new StereoStemBuffer("backing_vocals", backL, backR),
+        new StereoStemBuffer("instrumental", instrL, instrR)
+    ];
+    NeuralSeparatedTrack track = new() {
+        SourceTrackKey = "/music/wave_b_test.flac",
+        DisplayTitle = "Wave B Dedup Test",
+        ArtistName = "Cavern QA",
+        OriginTag = "Local AI",
+        ModelSummary = "TestLeadBack",
+        PlanSignature = "goal:SpatialKaraoke|cfg:v1|backend=OnDevice|backing=KeepBacking",
+        SampleRate = sr,
+        Stems = karaStems,
+        MonoLeadVocalRef = monoLead,
+        MonoBackingVocalRef = monoBack
+    };
+
+    string tmpDir = Path.Combine(Path.GetTempPath(), $"cavern_t45_{Guid.NewGuid():N}");
+    Directory.CreateDirectory(tmpDir);
+    try {
+        string rawFile = Path.Combine(tmpDir, "raw.ntc");
+        string compactFile = Path.Combine(tmpDir, "compact.ntc");
+        NeuralTrackCacheCodec.WriteTrackFile(rawFile, track, null, NeuralTrackCacheCompressionMode.RawFloat32);
+        NeuralTrackCacheCodec.WriteTrackFile(compactFile, track, null, NeuralTrackCacheCompressionMode.Compact16Bit);
+        long rawBytes = new FileInfo(rawFile).Length;
+        long compactBytes = new FileInfo(compactFile).Length;
+        Assert(compactBytes < rawBytes * 0.45,
+            $"CNTC v3 Optimal + mono-ref dedup must shrink significantly vs RawFloat32 (compact={compactBytes}, raw={rawBytes})");
+
+        NeuralSeparatedTrack reloaded = NeuralTrackCacheCodec.ReadTrackFile(compactFile, out _);
+        Assert(reloaded != null && reloaded.MonoLeadVocalRef != null && reloaded.MonoBackingVocalRef != null,
+            "CNTC v3 ReadTrackFile must transparently synthesize omitted derivable MonoLeadVocalRef & MonoBackingVocalRef");
+        Assert(reloaded.MonoLeadVocalRef.Length == len && reloaded.MonoBackingVocalRef.Length == len,
+            "Synthesized mono refs length mismatch");
+
+        double sigPow = 0.0, errPow = 0.0;
+        for (int i = 0; i < len; i++) {
+            double s = monoLead[i];
+            double e = reloaded.MonoLeadVocalRef[i] - s;
+            sigPow += s * s;
+            errPow += e * e;
+        }
+        double snrDb = 10.0 * Math.Log10(Math.Max(1e-12, sigPow) / Math.Max(1e-12, errPow));
+        Assert(snrDb >= 85.0, $"Reconstructed deduplicated MonoLeadVocalRef SNR must be >= 85 dB, got {snrDb:0.1} dB");
+
+        // Verify custom (dereverbed / non-derivable) mono ref is preserved verbatim (never deduplicated away)
+        float[] customLead = new float[len];
+        for (int i = 0; i < len; i++) {
+            customLead[i] = 0.25f * (float)Math.Sin(2.0 * Math.PI * 880.0 * (i / (double)sr));
+        }
+        NeuralSeparatedTrack customTrack = new() {
+            SourceTrackKey = track.SourceTrackKey,
+            DisplayTitle = track.DisplayTitle,
+            ArtistName = track.ArtistName,
+            OriginTag = track.OriginTag,
+            ModelSummary = track.ModelSummary,
+            PlanSignature = track.PlanSignature,
+            SampleRate = sr,
+            Stems = karaStems,
+            MonoLeadVocalRef = customLead,
+            MonoBackingVocalRef = monoBack
+        };
+        string customFile = Path.Combine(tmpDir, "custom.ntc");
+        NeuralTrackCacheCodec.WriteTrackFile(customFile, customTrack, null, NeuralTrackCacheCompressionMode.Compact16Bit);
+        NeuralSeparatedTrack reloadedCustom = NeuralTrackCacheCodec.ReadTrackFile(customFile, out _);
+        double cErr = 0.0, cSig = 0.0;
+        for (int i = 0; i < len; i++) {
+            double s = customLead[i];
+            double e = reloadedCustom.MonoLeadVocalRef[i] - s;
+            cSig += s * s;
+            cErr += e * e;
+        }
+        double customSnrDb = 10.0 * Math.Log10(Math.Max(1e-12, cSig) / Math.Max(1e-12, cErr));
+        Assert(customSnrDb >= 85.0, $"Custom dereverb MonoLeadVocalRef must be preserved intact (SNR={customSnrDb:0.1} dB)");
+
+        // Verify in-place lossless compaction reclaims bytes from RawFloat32
+        long reclaimed = NeuralTrackCacheCodec.CompactFileIfBeneficial(rawFile, NeuralTrackCacheCompressionMode.Compact16Bit);
+        Assert(reclaimed > rawBytes / 2, $"CompactFileIfBeneficial must reclaim >50% from RawFloat32, got {reclaimed}/{rawBytes}");
+        NeuralSeparatedTrack postCompact = NeuralTrackCacheCodec.ReadTrackFile(rawFile, out _);
+        Assert(postCompact != null && postCompact.Stems.Count == 3 && postCompact.MonoLeadVocalRef != null,
+            "Compacted .ntc file failed integrity reload");
+    } finally {
+        try { if (Directory.Exists(tmpDir)) Directory.Delete(tmpDir, true); } catch { }
+    }
+
+    // Verify incremental Stage-1 vocal reuse skips Stage-1 model execution completely in Local ONNX orchestrator
+    using MockT3MultiModelRuntime mockRt = new();
+    NeuralPipelineOrchestrator orch = new(mockRt, mockRt);
+    NeuralAudioConfig cfg = new() {
+        OrchestrationMode = NeuralOrchestrationMode.Auto,
+        StudioBundlePreset = NeuralEnsembleBundlePreset.StudioKaraokeLeadBacking,
+        KaraokePreserveBackingVocals = true,
+        TrackCacheEnabled = false
+    };
+    NeuralSeparatedTrack preExtractedStage1 = new() {
+        SourceTrackKey = "/music/wave_b_reuse.flac",
+        SampleRate = sr,
+        Stems = [
+            new StereoStemBuffer("vocals", leadL, leadR),
+            new StereoStemBuffer("drums", instrL, instrR),
+            new StereoStemBuffer("bass", backL, backR),
+            new StereoStemBuffer("other", instrL, instrR)
+        ]
+    };
+    (NeuralSeparatedTrack reusedOut, _, bool reusedFromCache) = orch.ExecuteTrackPipeline(
+        sourceTrackKey: "/music/wave_b_reuse.flac",
+        fileSizeBytes: 123456,
+        lastModifiedTicks: 1000,
+        mixLeft: instrL,
+        mixRight: instrR,
+        sampleRate: sr,
+        goal: NeuralPipelineGoal.SpatialKaraoke,
+        config: cfg,
+        preExtractedTrack: preExtractedStage1);
+    Assert(!reusedFromCache && reusedOut != null, "Incremental reuse should produce a new Stage-2 Karaoke track");
+    Assert(reusedOut.FindStem("lead_vocal") != null && reusedOut.FindStem("backing_vocals") != null,
+        "Incremental reuse output must contain lead_vocal and backing_vocals from Stage-2");
+    Assert(reusedOut.FindStem("drums") != null && reusedOut.FindStem("bass") != null,
+        "Incremental reuse must preserve instrumental stems from pre-extracted Stage-1 track");
+    Assert(mockRt.CreatedSessionModelPaths.Count == 1 &&
+           mockRt.CreatedSessionModelPaths[0].Contains("mock_karaoke_2s", StringComparison.OrdinalIgnoreCase),
+        $"Expected ONLY Stage-2 karaoke session to run when Stage-1 vocals exist, ran: [{string.Join(", ", mockRt.CreatedSessionModelPaths)}]");
+});
+
+// T46: W53.3 Wave C (Stereo-Pan Azimuth Preservation for Fixed 3D Objects + Mood-Aware Choreography)
+RunTest("T46_W53_3_StereoPanAzimuthEstimator_FixedObjectPan_And_MoodChoreo", () => {
+    int sr = 48000;
+    int len = sr * 2; // 2.0s so choreography has multiple keyframes
+    float[] baseSig = new float[len];
+    for (int i = 0; i < len; i++) {
+        double t = i / (double)sr;
+        baseSig[i] = 0.4f * (float)Math.Sin(2.0 * Math.PI * 520.0 * t)
+                   + 0.15f * (float)Math.Sin(2.0 * Math.PI * 1040.0 * t);
+    }
+
+    // 1. Constant-power pan angle recovery across [-60°, +60°]
+    float[] targetAngles = [-55f, -35f, -15f, 0f, 20f, 45f, 58f];
+    foreach (float expectedAz in targetAngles) {
+        double panNorm = expectedAz / 60.0;
+        double phi = (panNorm + 1.0) * (Math.PI * 0.25);
+        float gL = (float)Math.Cos(phi);
+        float gR = (float)Math.Sin(phi);
+        float[] l = new float[len], r = new float[len];
+        for (int i = 0; i < len; i++) {
+            l[i] = baseSig[i] * gL;
+            r[i] = baseSig[i] * gR;
+        }
+        StereoPanEstimate est = StereoPanAzimuthEstimator.Estimate(new StereoStemBuffer("guitar", l, r));
+        Assert(est.HasSignal, $"StereoPanEstimate must have signal for az={expectedAz}°");
+        Assert(MathF.Abs(est.PanAzimuthDeg - expectedAz) <= 0.5f,
+            $"StereoPanAzimuthEstimator error for {expectedAz}° too high: got {est.PanAzimuthDeg:0.00}°");
+        Assert(est.InterChannelCoherence >= 0.99f && est.StereoWidth01 <= 0.05f,
+            $"Coherent panned mono stem should have IC>=0.99 & width<=0.05, got IC={est.InterChannelCoherence:0.00}, width={est.StereoWidth01:0.00}");
+    }
+
+    // 2. Fixed 3D scene descriptors preserve exact descriptor count AND acoustic pan centroid (<= 1.0° error)
+    float[] guitarL = new float[len], guitarR = new float[len];
+    float[] pianoL = new float[len], pianoR = new float[len];
+    float[] vocalL = new float[len], vocalR = new float[len];
+    float[] bassL = new float[len], bassR = new float[len];
+    double gPhi = ((-42.0 / 60.0) + 1.0) * (Math.PI * 0.25);
+    double pPhi = ((36.0 / 60.0) + 1.0) * (Math.PI * 0.25);
+    for (int i = 0; i < len; i++) {
+        // Add small uncorrelated reverb tail to guitar to test stereo-width midpoint compensation
+        float decorr = 0.06f * (float)Math.Sin(2.0 * Math.PI * 1730.0 * (i / (double)sr));
+        guitarL[i] = baseSig[i] * (float)Math.Cos(gPhi) + decorr;
+        guitarR[i] = baseSig[i] * (float)Math.Sin(gPhi) - decorr;
+        pianoL[i] = baseSig[i] * (float)Math.Cos(pPhi);
+        pianoR[i] = baseSig[i] * (float)Math.Sin(pPhi);
+        vocalL[i] = baseSig[i] * 0.7071f;
+        vocalR[i] = baseSig[i] * 0.7071f;
+        bassL[i] = 0.4f * (float)Math.Sin(2.0 * Math.PI * 75.0 * (i / (double)sr));
+        bassR[i] = bassL[i];
+    }
+    StereoStemBuffer guitarStem = new("guitar", guitarL, guitarR);
+    StereoStemBuffer pianoStem = new("piano", pianoL, pianoR);
+    List<StereoStemBuffer> stems = [
+        new StereoStemBuffer("vocals", vocalL, vocalR),
+        new StereoStemBuffer("bass", bassL, bassR),
+        guitarStem,
+        pianoStem
+    ];
+    Vector3 env = new(2f, 2f, 2f);
+    SpatialSourceDescriptor[] descs = NeuralStemSpatializer.BuildSceneDescriptors(stems, env);
+    Assert(descs.Length == 6, $"Expected 6 scene descriptors (1 vocal + 1 bass + 2 guitar + 2 piano), got {descs.Length}");
+
+    static float DescriptorAzDeg(Vector3 pos) => MathF.Atan2(pos.X, pos.Z) * (180f / MathF.PI);
+    StereoPanEstimate guitarPan = StereoPanAzimuthEstimator.Estimate(guitarStem);
+    float gAzL = DescriptorAzDeg(descs[2].NormalizedPosition);
+    float gAzR = DescriptorAzDeg(descs[3].NormalizedPosition);
+    float gCentroid = 0.5f * (1f - guitarPan.PowerBalance) * gAzL + 0.5f * (1f + guitarPan.PowerBalance) * gAzR;
+    Assert(MathF.Abs(gCentroid - guitarPan.PanAzimuthDeg) <= 1.0f,
+        $"Guitar L/R power-weighted 3D centroid must match mix pan ({guitarPan.PanAzimuthDeg:0.00}°), got {gCentroid:0.00}° (L={gAzL:0.0}°, R={gAzR:0.0}°)");
+
+    StereoPanEstimate pianoPan = StereoPanAzimuthEstimator.Estimate(pianoStem);
+    float pAzL = DescriptorAzDeg(descs[4].NormalizedPosition);
+    float pAzR = DescriptorAzDeg(descs[5].NormalizedPosition);
+    float pCentroid = 0.5f * (1f - pianoPan.PowerBalance) * pAzL + 0.5f * (1f + pianoPan.PowerBalance) * pAzR;
+    Assert(MathF.Abs(pCentroid - pianoPan.PanAzimuthDeg) <= 1.0f,
+        $"Piano L/R power-weighted 3D centroid must match mix pan ({pianoPan.PanAzimuthDeg:0.00}°), got {pCentroid:0.00}°");
+
+    // 3. Mood-aware expressive choreography orbits relative to measured stereo pan while respecting slew & safety bounds
+    IReadOnlyList<LyricMoodDigest> intimateMoods = [new LyricMoodDigest(LyricMoodTag.Intimate, 0.22f, 0.30f, 0, 0.0)];
+    IReadOnlyList<LyricMoodDigest> anthemMoods = [new LyricMoodDigest(LyricMoodTag.Anthem, 0.90f, 0.85f, 0, 0.0)];
+    SpatialChoreoTrack trackOff = NeuralStemSpatializer.BuildChoreoTrack(stems, sr, SpatialChoreoMode.Off, intimateMoods);
+    SpatialChoreoTrack trackIntimate = NeuralStemSpatializer.BuildChoreoTrack(stems, sr, SpatialChoreoMode.Cinematic, intimateMoods);
+    SpatialChoreoTrack trackAnthem = NeuralStemSpatializer.BuildChoreoTrack(stems, sr, SpatialChoreoMode.Cinematic, anthemMoods);
+    Assert(trackOff != null && trackIntimate != null && trackAnthem != null, "Choreo tracks must build cleanly");
+
+    // Off mode must anchor guitar near its measured stereo pan (~ -42°) rather than hardcoded +55°
+    Assert(trackOff.EvaluatePositionZeroAlloc(2, 0.5, out Vector3 offGuitarPos), "Off mode eval failed");
+    PsychoacousticGovernor.CartesianToSphericalDeg(Vector3.Normalize(offGuitarPos), out float offGuitarAz, out _);
+    Assert(MathF.Abs(offGuitarAz - guitarPan.PanAzimuthDeg) <= 2.5f,
+        $"Choreo Off mode must preserve guitar stereo pan ({guitarPan.PanAzimuthDeg:0.0}°), got {offGuitarAz:0.0}°");
+
+    // Anthem mood must produce higher vertical lift / wider stage than Intimate mood on guitar
+    Assert(trackIntimate.EvaluatePositionZeroAlloc(2, 1.0, out Vector3 intGuitarPos), "Intimate eval failed");
+    Assert(trackAnthem.EvaluatePositionZeroAlloc(2, 1.0, out Vector3 antGuitarPos), "Anthem eval failed");
+    PsychoacousticGovernor.CartesianToSphericalDeg(Vector3.Normalize(intGuitarPos), out _, out float intEl);
+    PsychoacousticGovernor.CartesianToSphericalDeg(Vector3.Normalize(antGuitarPos), out _, out float antEl);
+    Assert(antEl > intEl + 1.5f,
+        $"Anthem mood must elevate guitar more than Intimate mood (anthem={antEl:0.1}°, intimate={intEl:0.1}°)");
+    Assert(intGuitarPos.Length() < antGuitarPos.Length(),
+        $"Intimate mood must draw guitar closer than Anthem mood (intimateR={intGuitarPos.Length():0.00}, anthemR={antGuitarPos.Length():0.00})");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
@@ -3836,11 +4082,15 @@ sealed class MockT3MultiModelRuntime : INeuralInferenceRuntime, INeuralModelRegi
         }
     }
 
+    public List<string> CreatedSessionModelPaths { get; } = [];
     public NeuralRuntimeInfo GetRuntimeInfo() => new() { IsAvailable = true, ActiveProvider = "CPU" };
     public IReadOnlyList<NeuralModelCatalogEntry> GetAllRegisteredModels() => models;
     public IReadOnlyList<NeuralModelCatalogEntry> GetInstalledModels() => models;
     public string ResolveInstalledModelPath(string modelId) => paths.TryGetValue(modelId ?? "", out string p) ? p : null;
-    public INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 0) => new MockWaveSession(modelPath);
+    public INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 0) {
+        CreatedSessionModelPaths.Add(modelPath ?? "");
+        return new MockWaveSession(modelPath);
+    }
     public void Dispose() {
         try { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true); } catch { }
     }
@@ -4643,6 +4893,59 @@ def _py_stage11_w53_1_wave_a_contracts() -> None:
         assert tok in wf_src, f"W53.1 B3/B4 missing '{tok}' in MainActivity.NeuralWorkflows.cs"
 
 
+def _py_stage12_w53_2_w53_3_wave_b_wave_c_contracts() -> None:
+    # Wave C (B6): Stereo-Pan Azimuth Estimator + Fixed 3D Descriptors + Mood Choreography
+    cortex_src = (REPO_ROOT / "Cavern" / "Spatial" / "SpatialObjectCortex.cs").read_text(encoding="utf-8")
+    for tok in ("struct StereoPanEstimate", "class StereoPanAzimuthEstimator", "EstimateAllHomeAzimuthsDeg", "stemHomeAzimuthsDeg"):
+        assert tok in cortex_src, f"W53.3 Wave C missing '{tok}' in SpatialObjectCortex.cs"
+
+    spat_src = (REPO_ROOT / "Cavern" / "Neural" / "NeuralStemSpatializer.cs").read_text(encoding="utf-8")
+    for tok in ("IReadOnlyList<StereoStemBuffer> stems", "GetPanPreservedAnchorPosition", "EstimateAllHomeAzimuthsDeg"):
+        assert tok in spat_src, f"W53.3 Wave C missing '{tok}' in NeuralStemSpatializer.cs"
+
+    proc_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "Adapters" / "NeuralStemStageProcessor.cs").read_text(encoding="utf-8")
+    assert "NeuralStemSpatializer.BuildSceneDescriptors(stemTrack.Stems," in proc_src, (
+        "W53.3 Wave C: NeuralStemStageProcessor must pass StereoStemBuffer list to BuildSceneDescriptors"
+    )
+
+    # Wave B (B7): Unified AI Sheet, Multi-Variant Cache, Lossless Compaction, Incremental Stage-1 Reuse
+    codec_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "NeuralTrackCacheCodec.cs").read_text(encoding="utf-8")
+    for tok in ("CanDeriveMonoRefFromStems", "SynthesizeMonoRefFromStems", "CompactFileIfBeneficial", "CompressionLevel.Optimal"):
+        assert tok in codec_src, f"W53.2 Wave B missing '{tok}' in NeuralTrackCacheCodec.cs"
+
+    orch_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "NeuralPipelineOrchestrator.cs").read_text(encoding="utf-8")
+    assert "NeuralSeparatedTrack preExtractedTrack = null" in orch_src and "seededFromReusableVocals" in orch_src, (
+        "W53.2 Wave B: NeuralPipelineOrchestrator missing preExtractedTrack Stage-1 skip"
+    )
+
+    cache_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NeuralTrackCacheService.cs").read_text(encoding="utf-8")
+    for tok in ("TryFindBestReusableVocalTrack", "OptimizeCacheStorage"):
+        assert tok in cache_src, f"W53.2 Wave B missing '{tok}' in NeuralTrackCacheService.cs"
+
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    for tok in (
+        "ShowUnifiedAiExtractionSheet",
+        "ActivateCachedVariantAsync",
+        "TryFindBestReusableVocalTrack",
+        "OptimizeCacheStorage",
+        "preExtractedTrack: reusableStage1",
+    ):
+        assert tok in wf_src, f"W53.2 Wave B missing '{tok}' in MainActivity.NeuralWorkflows.cs"
+
+    # 4-Language parity check for all new Wave B UI keys
+    w53_2_keys = (
+        "AiCacheVariantsHeaderFmt", "AiCacheVariantRowFmt", "AiCacheVariantActiveBadge",
+        "AiCacheVariantUseBtn", "AiCacheVariantDeleteBtn", "AiCacheVariantActivatedToast",
+        "AiCacheVariantDeletedToast", "AiCacheExtractNewVariantBtn", "AiCacheRemoveAllVariantsBtn",
+        "AiCacheOptimizeStorageBtn", "AiCacheOptimizeDoneToastFmt", "AiCacheOptimizeAlreadyCompactToast",
+        "AiCacheIncrementalReuseHint", "KaraokePreserveBackingTitle",
+    )
+    for lang_file in ("AndroidStrings.cs", "AndroidStrings.PtBr.cs", "AndroidStrings.Hu.cs", "AndroidStrings.Zh.cs"):
+        lang_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Language" / lang_file).read_text(encoding="utf-8")
+        for key in w53_2_keys:
+            assert f'["{key}"]' in lang_src, f"W53.2 Wave B missing L10n key '{key}' in {lang_file}"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -4657,6 +4960,7 @@ PYTHON_CHECKS = [
     ("PY_T9_W51_VocalCacheUxLoudnessVolumeContracts", _py_stage9_w51_vocal_cache_ux_loudness_volume_contracts),
     ("PY_T10_OnnxLowRamDisciplineAndQaContracts", _py_stage10_onnx_low_ram_discipline_and_qa_contracts),
     ("PY_T11_W53_1_WaveAContracts", _py_stage11_w53_1_wave_a_contracts),
+    ("PY_T12_W53_2_W53_3_WaveB_WaveC_Contracts", _py_stage12_w53_2_w53_3_wave_b_wave_c_contracts),
 ]
 
 

@@ -1962,6 +1962,137 @@ RunSuite("GT-14", "W53_1_LowBandVocalRumbleFix_And_FlacAtmosCrossVariantGccPhatK
     };
 });
 
+// GT-15: W53.3 Wave C — Stereo-Pan Azimuth Preservation (QAS|Q4 pan_err_deg <= 5.0) & Mood-Aware 3D Choreography (0 B RT GC)
+RunSuite("GT-15", "W53_3_WaveC_StereoPanPreservation_And_MoodAwareChoreo_QAS_Q4", () => {
+    int sr = 48000;
+    int len = sr * 4; // 4.0 seconds
+    float[] synthSig = new float[len];
+    float[] reverbTailL = new float[len];
+    float[] reverbTailR = new float[len];
+    for (int i = 0; i < len; i++) {
+        double t = i / (double)sr;
+        double env = 0.55 + 0.45 * Math.Sin(2.0 * Math.PI * 0.5 * t);
+        synthSig[i] = (float)(env * (0.35 * Math.Sin(2.0 * Math.PI * 440.0 * t)
+                                   + 0.18 * Math.Sin(2.0 * Math.PI * 880.0 * t)
+                                   + 0.10 * Math.Sin(2.0 * Math.PI * 1320.0 * t)));
+        // Uncorrelated isotropic stereo diffuse reverb tails (E[reverbL * reverbR] == 0)
+        reverbTailL[i] = 0.08f * (float)Math.Sin(2.0 * Math.PI * 1610.0 * t + 1.3);
+        reverbTailR[i] = 0.08f * (float)Math.Sin(2.0 * Math.PI * 1970.0 * t + 2.7);
+    }
+
+    // 1. Test 5 stereo pan angles + diffuse stereo width on fixed 3D descriptors
+    float[] testPans = [-52f, -28f, 0f, 24f, 48f];
+    double maxPanErrDeg = 0.0;
+    Vector3 roomEnv = new(2f, 2f, 2f);
+    foreach (float targetAz in testPans) {
+        double phi = ((targetAz / 60.0) + 1.0) * (Math.PI * 0.25);
+        float gL = (float)Math.Cos(phi);
+        float gR = (float)Math.Sin(phi);
+        float[] sL = new float[len], sR = new float[len];
+        for (int i = 0; i < len; i++) {
+            sL[i] = synthSig[i] * gL + reverbTailL[i];
+            sR[i] = synthSig[i] * gR + reverbTailR[i];
+        }
+        StereoStemBuffer stemBuf = new("guitar", sL, sR);
+        StereoPanEstimate est = StereoPanAzimuthEstimator.Estimate(stemBuf);
+        List<StereoStemBuffer> singleStem = [stemBuf];
+        SpatialSourceDescriptor[] descs = NeuralStemSpatializer.BuildSceneDescriptors(singleStem, roomEnv);
+        Assert(descs.Length == 2, $"Expected 2 descriptors for stereo guitar stem, got {descs.Length}");
+        float azL = MathF.Atan2(descs[0].NormalizedPosition.X, descs[0].NormalizedPosition.Z) * (180f / MathF.PI);
+        float azR = MathF.Atan2(descs[1].NormalizedPosition.X, descs[1].NormalizedPosition.Z) * (180f / MathF.PI);
+        float centroidAz = 0.5f * (1f - est.PowerBalance) * azL + 0.5f * (1f + est.PowerBalance) * azR;
+        double errDeg = Math.Abs(centroidAz - est.PanAzimuthDeg);
+        if (errDeg > maxPanErrDeg) maxPanErrDeg = errDeg;
+        double targetErrDeg = Math.Abs(est.PanAzimuthDeg - targetAz);
+        Assert(targetErrDeg <= 2.5, $"GT-15 pan estimator drift on {targetAz}° w/ diffuse tail: est={est.PanAzimuthDeg:F2}°");
+    }
+    Assert(maxPanErrDeg <= 5.0, $"GT-15 QAS|Q4 fixed 3D pan_err_deg must be <= 5.0°, got {maxPanErrDeg:F2}°");
+
+    // 2. Dynamic Choreography across Musical / Cinematic / Orbit with Mood Digests + Slew & Safety Bounds + 0 B RT GC
+    float[] vocL = new float[len], vocR = new float[len];
+    float[] basL = new float[len], basR = new float[len];
+    float[] gtrL = new float[len], gtrR = new float[len];
+    float[] pnoL = new float[len], pnoR = new float[len];
+    double gPhi = ((-40.0 / 60.0) + 1.0) * (Math.PI * 0.25);
+    double pPhi = ((35.0 / 60.0) + 1.0) * (Math.PI * 0.25);
+    for (int i = 0; i < len; i++) {
+        double t = i / (double)sr;
+        vocL[i] = 0.35f * (float)Math.Sin(2.0 * Math.PI * 330.0 * t);
+        vocR[i] = vocL[i];
+        basL[i] = 0.45f * (float)Math.Sin(2.0 * Math.PI * 72.0 * t);
+        basR[i] = basL[i];
+        gtrL[i] = synthSig[i] * (float)Math.Cos(gPhi);
+        gtrR[i] = synthSig[i] * (float)Math.Sin(gPhi);
+        pnoL[i] = synthSig[i] * (float)Math.Cos(pPhi);
+        pnoR[i] = synthSig[i] * (float)Math.Sin(pPhi);
+    }
+    List<StereoStemBuffer> multiStems = [
+        new StereoStemBuffer("vocals", vocL, vocR),
+        new StereoStemBuffer("bass", basL, basR),
+        new StereoStemBuffer("guitar", gtrL, gtrR),
+        new StereoStemBuffer("piano", pnoL, pnoR)
+    ];
+
+    IReadOnlyList<LyricMoodDigest> anthemMoods = [new LyricMoodDigest(LyricMoodTag.Anthem, 0.90f, 0.88f, 0, 0.0)];
+    IReadOnlyList<LyricMoodDigest> intimateMoods = [new LyricMoodDigest(LyricMoodTag.Intimate, 0.20f, 0.30f, 0, 0.0)];
+    SpatialChoreoTrack anthemTrack = NeuralStemSpatializer.BuildChoreoTrack(multiStems, sr, SpatialChoreoMode.Cinematic, anthemMoods);
+    SpatialChoreoTrack intimateTrack = NeuralStemSpatializer.BuildChoreoTrack(multiStems, sr, SpatialChoreoMode.Cinematic, intimateMoods);
+
+    float maxSlewDegPerSec = 0f;
+    float maxVocalAz = 0f;
+    float maxBassAz = 0f;
+    float maxBassEl = 0f;
+    double dt = 0.05;
+    for (int s = 0; s < multiStems.Count; s++) {
+        anthemTrack.EvaluatePositionZeroAlloc(s, 0.0, out Vector3 prevPos);
+        PsychoacousticGovernor.CartesianToSphericalDeg(Vector3.Normalize(prevPos), out float prevAz, out _);
+        for (double t = dt; t <= 3.8; t += dt) {
+            anthemTrack.EvaluatePositionZeroAlloc(s, t, out Vector3 curPos);
+            PsychoacousticGovernor.CartesianToSphericalDeg(Vector3.Normalize(curPos), out float curAz, out float curEl);
+            float dAz = MathF.Abs(curAz - prevAz);
+            if (dAz > 180f) dAz = 360f - dAz;
+            float slew = dAz / (float)dt;
+            if (slew > maxSlewDegPerSec) maxSlewDegPerSec = slew;
+            if (s == 0) maxVocalAz = MathF.Max(maxVocalAz, MathF.Abs(curAz));
+            if (s == 1) {
+                maxBassAz = MathF.Max(maxBassAz, MathF.Abs(curAz));
+                maxBassEl = MathF.Max(maxBassEl, MathF.Abs(curEl));
+            }
+            prevAz = curAz;
+        }
+    }
+    Assert(maxSlewDegPerSec <= 62.0f, $"GT-15 choreography slew exceeded 60 deg/s ceiling: {maxSlewDegPerSec:F1} deg/s");
+    Assert(maxVocalAz <= 22.5f, $"GT-15 lead vocal azimuth exceeded 22 deg anchor limit: {maxVocalAz:F1} deg");
+    Assert(maxBassAz <= 15.5f && maxBassEl <= 0.5f, $"GT-15 bass anchor violated (az={maxBassAz:F1}, el={maxBassEl:F1})");
+
+    // Verify 0 B RT GC during real-time pose sampling
+    anthemTrack.EvaluatePositionZeroAlloc(2, 0.25, out _);
+    long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+    float accum = 0f;
+    for (int step = 0; step < 500; step++) {
+        anthemTrack.EvaluatePositionZeroAlloc(step & 3, (step % 75) * 0.05, out Vector3 p);
+        accum += p.X + p.Y + p.Z;
+    }
+    long rtAllocBytes = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+    Assert(rtAllocBytes == 0 && float.IsFinite(accum), $"GT-15 RT choreo sampling must allocate 0 B GC, got {rtAllocBytes} B");
+
+    // Mood expressiveness contrast: Anthem elevates higher than Intimate
+    anthemTrack.EvaluatePositionZeroAlloc(2, 1.5, out Vector3 antPos);
+    intimateTrack.EvaluatePositionZeroAlloc(2, 1.5, out Vector3 intPos);
+    PsychoacousticGovernor.CartesianToSphericalDeg(Vector3.Normalize(antPos), out _, out float antEl);
+    PsychoacousticGovernor.CartesianToSphericalDeg(Vector3.Normalize(intPos), out _, out float intEl);
+    Assert(antEl > intEl + 1.5f, $"GT-15 mood expressiveness: Anthem elevation ({antEl:F1}°) must exceed Intimate ({intEl:F1}°)");
+
+    return new Dictionary<string, object> {
+        ["maxFixedPanErrDeg"] = Math.Round(maxPanErrDeg, 3),
+        ["maxSlewDegPerSec"] = Math.Round(maxSlewDegPerSec, 2),
+        ["maxVocalAzDeg"] = Math.Round(maxVocalAz, 2),
+        ["maxBassAzDeg"] = Math.Round(maxBassAz, 2),
+        ["anthemVsIntimateElDeltaDeg"] = Math.Round(antEl - intEl, 2),
+        ["rtAllocBytes"] = rtAllocBytes
+    };
+});
+
 if (!string.IsNullOrEmpty(jsonOutPath)) {
     File.WriteAllText(jsonOutPath, JsonSerializer.Serialize(new { passed, failed, results }, new JsonSerializerOptions { WriteIndented = true }));
 }

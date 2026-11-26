@@ -365,14 +365,38 @@ public partial class MainActivity {
         }
     }
 
-    void ShowPlayTabAiModeDialog() {
+    void ShowPlayTabAiModeDialog() =>
+        ShowUnifiedAiExtractionSheet(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation);
+
+    void ShowKaraokeCacheInspectorDialog() =>
+        ShowUnifiedAiExtractionSheet(Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke);
+
+    /// <summary>
+    /// W53.2 (Wave B): Context-aware unified Play &amp; Sing AI Extraction &amp; Multi-Variant Cache Sheet.
+    /// Consolidates AI mode controls, Karaoke backing-vocal preference, incremental Stage-1 vocal reuse notice,
+    /// multi-variant non-destructive cache switcher, and lossless storage compaction into one sheet.
+    /// </summary>
+    void ShowUnifiedAiExtractionSheet(Cavernize.Logic.Spatial.NeuralPipelineGoal contextGoal) {
         if (uiDestroyed || store == null) {
             return;
         }
+        bool isKaraokeContext = contextGoal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke;
         bool isAtmos = IsActiveTrackMultichannelOrAtmos();
         LinearLayout content = new(this) { Orientation = Orientation.Vertical };
 
-        if (isAtmos) {
+        if (isKaraokeContext) {
+            Switch backingSwitch = AddSwitchRow(
+                content,
+                S["KaraokePreserveBackingTitle"],
+                store.KaraokePreserveBackingVocals,
+                preserveBacking => {
+                    store.KaraokePreserveBackingVocals = preserveBacking;
+                    ApplyAndRefreshNeuralAudio();
+                    RefreshLyricsSingDockUi();
+                    RefreshStudioW12ContextUi();
+                });
+            backingSwitch.Tag = "karaokeBackingSwitch";
+        } else if (isAtmos) {
             TextView desc = Label(S["PlayTabAiAtmosDialogDesc"], 12.6f, OneUiTheme.TextSecondary);
             desc.SetPadding(0, 0, 0, Dp(10));
             content.AddView(desc);
@@ -433,44 +457,21 @@ public partial class MainActivity {
         Android.App.Dialog activeDialog = null;
         AddSongAiCacheInspectorSection(
             content,
-            Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation,
+            contextGoal,
             () => activeDialog?.Dismiss());
 
         activeDialog = OneUiModalDialog.Show(
             this,
-            S["PlayTabAiDialogTitle"],
+            isKaraokeContext ? S["KaraokeCacheDialogTitle"] : S["PlayTabAiDialogTitle"],
             null,
             customContent: content,
-            icon: OneUiIconType.Sparkles,
-            iconBadgeColor: OneUiTheme.IconSliderMedia,
+            icon: isKaraokeContext ? OneUiIconType.Microphone : OneUiIconType.Sparkles,
+            iconBadgeColor: isKaraokeContext ? OneUiTheme.Primary : OneUiTheme.IconSliderMedia,
             positiveText: S["OpenAiSettingsBtn"],
             onPositive: () => JumpToSettingsCategory(2),
             negativeText: S["CloseBtn"],
             onHelp: ShowPlayTabSpatialHierarchyHelpDialog,
             helpContentDesc: S["PlayTabSpatialGuideTitle"]);
-    }
-
-    void ShowKaraokeCacheInspectorDialog() {
-        if (uiDestroyed || store == null) {
-            return;
-        }
-        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
-        Android.App.Dialog activeDialog = null;
-        AddSongAiCacheInspectorSection(
-            content,
-            Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke,
-            () => activeDialog?.Dismiss());
-
-        activeDialog = OneUiModalDialog.Show(
-            this,
-            S["KaraokeCacheDialogTitle"],
-            null,
-            customContent: content,
-            icon: OneUiIconType.Microphone,
-            iconBadgeColor: OneUiTheme.Primary,
-            positiveText: S["OpenAiSettingsBtn"],
-            onPositive: () => JumpToSettingsCategory(2),
-            negativeText: S["CloseBtn"]);
     }
 
     string FormatCacheDiffFieldName(string fieldKey) => fieldKey switch {
@@ -523,6 +524,68 @@ public partial class MainActivity {
         return (best, cmp);
     }
 
+    IReadOnlyList<Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo> FindAllActiveSongCacheVariants(
+        Cavernize.Logic.Spatial.NeuralPipelineGoal goal) {
+        CavernizeTrack activeTrack = GetActiveTrack();
+        if (activeTrack == null || neuralTrackCache == null) {
+            return Array.Empty<Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo>();
+        }
+        string activePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        string title = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+            ? currentMediaMeta.Title
+            : Path.GetFileNameWithoutExtension(activePath);
+        string artist = (currentMediaMeta?.Artist ?? "").Trim();
+        return neuralTrackCache.FindEntriesForTrack(activePath, title, artist, goal);
+    }
+
+    void ActivateCachedVariantAsync(
+        Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo entry,
+        Cavernize.Logic.Spatial.NeuralPipelineGoal goal,
+        CavernizeTrack activeTrack,
+        Action onActivated) {
+        if (entry == null || neuralTrackCache == null || playerEngine == null || activeTrack == null) {
+            return;
+        }
+        string activePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+        string title = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+            ? currentMediaMeta.Title
+            : Path.GetFileNameWithoutExtension(activePath);
+        int sr = activeTrack.SampleRate >= 8000 ? activeTrack.SampleRate : 48000;
+        string ffLoc = ffmpeg?.Found == true ? ffmpeg.Location : null;
+        _ = Task.Run(() => {
+            if (!neuralTrackCache.TryLoad(entry.CacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack loaded) || loaded == null) {
+                return;
+            }
+            if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
+                EnsureCrossVariantAlignmentForCachedTrack(activeTrack, activePath, title, sr, ffLoc, loaded, CancellationToken.None);
+            }
+            Cavern.VocalChain.VocalMixDnaProfile dna =
+                Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(loaded, title);
+            if (dna != null && dna.IsExtractedFromSong) {
+                SaveCachedSongVocalDna(activeTrack, dna);
+            }
+            RunOnUiThread(() => {
+                if (uiDestroyed || GetActiveTrack() != activeTrack) {
+                    return;
+                }
+                if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
+                    playerEngine.BindKaraokeReferenceTrack(loaded);
+                } else {
+                    playerEngine.BindSpatialUpmixTrack(loaded);
+                }
+                SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
+                ApplyExtractedSongDnaOnUiThread(dna);
+                SyncNeuralRuntimeDiagnostics();
+                RefreshNeuralAudioUi();
+                RefreshNeuralPrepUi();
+                RefreshLyricsSingDockUi();
+                RefreshBottomActionBarVisuals();
+                Toast.MakeText(this, string.Format(S["AiCacheVariantActivatedToast"], loaded.Stems.Count), ToastLength.Short).Show();
+                onActivated?.Invoke();
+            });
+        });
+    }
+
     void AddSongAiCacheInspectorSection(
         LinearLayout parent,
         Cavernize.Logic.Spatial.NeuralPipelineGoal goal,
@@ -547,8 +610,20 @@ public partial class MainActivity {
         if (activeTrack == null) {
             card.AddView(Label(S["NeuralPrepNoTrackToast"], 11.8f, OneUiTheme.TextSecondary));
         } else {
+            IReadOnlyList<Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo> variants = FindAllActiveSongCacheVariants(goal);
             (Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo best, Cavernize.Logic.Spatial.NeuralCacheConfigComparison cmp) =
                 InspectActiveSongCacheState(goal);
+
+            if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
+                bool hasReusableVocals =
+                    (playerEngine?.NeuralStage?.ActiveSpatialUpmixTrack?.FindStem("vocals") != null) ||
+                    (variants != null && variants.Count > 0);
+                if (hasReusableVocals) {
+                    TextView reuseHint = Label(S["AiCacheIncrementalReuseHint"], 11.2f, OneUiTheme.PrimaryHigh);
+                    reuseHint.SetPadding(0, 0, 0, Dp(6));
+                    card.AddView(reuseHint);
+                }
+            }
 
             if (best == null) {
                 TextView emptyTv = Label(S["AiCacheStatusNotCached"], 12f, OneUiTheme.TextSecondary);
@@ -603,16 +678,142 @@ public partial class MainActivity {
                     });
                 }
 
-                Button reextractBtn = PillButton(S["AiCacheReextractCurrentBtn"], () => {
+                // Multi-variant non-destructive cache switcher (shows all saved variants for this song)
+                if (variants != null && variants.Count > 0) {
+                    TextView varHdr = Label(string.Format(S["AiCacheVariantsHeaderFmt"], variants.Count), 11.4f, OneUiTheme.TextSecondary);
+                    varHdr.SetTypeface(OneUiTheme.GetAppleFontSemibold(this), TypefaceStyle.Bold);
+                    varHdr.SetPadding(0, Dp(4), 0, Dp(4));
+                    card.AddView(varHdr);
+
+                    Cavernize.Logic.Spatial.NeuralSeparatedTrack activeBound =
+                        goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke
+                            ? playerEngine?.NeuralStage?.ActiveKaraokeTrack
+                            : playerEngine?.NeuralStage?.ActiveSpatialUpmixTrack;
+
+                    int visibleCount = Math.Min(variants.Count, 5);
+                    for (int vi = 0; vi < visibleCount; vi++) {
+                        Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo entry = variants[vi];
+                        bool isActiveVariant = activeBound != null &&
+                            !string.IsNullOrEmpty(entry.PlanSignature) &&
+                            string.Equals(activeBound.PlanSignature, entry.PlanSignature, StringComparison.OrdinalIgnoreCase);
+
+                        LinearLayout row = new(this) { Orientation = Orientation.Vertical };
+                        row.SetPadding(Dp(9), Dp(6), Dp(9), Dp(6));
+                        row.Background = OneUiTheme.CreateRoundedDrawable(
+                            this,
+                            isActiveVariant
+                                ? OneUiTheme.WithAlpha(OneUiTheme.Primary, 32)
+                                : OneUiTheme.WithAlpha(OneUiTheme.SurfaceElevated, 235),
+                            12f,
+                            isActiveVariant ? OneUiTheme.Primary : OneUiTheme.Divider,
+                            isActiveVariant ? 1.2f : 0.8f);
+
+                        string originLabel = !string.IsNullOrWhiteSpace(entry.OriginTag) ? entry.OriginTag : "AI";
+                        string fmtLabel = Cavernize.Logic.Spatial.NeuralCacheConfigDiff.ExtractSourceFormatLabel(entry.SourceTrackKey);
+                        double entryMb = entry.CompressedBytes / (1024.0 * 1024.0);
+                        string rowText = string.Format(
+                            S["AiCacheVariantRowFmt"],
+                            originLabel,
+                            entry.StemCount,
+                            entryMb,
+                            entry.SavedPercent,
+                            fmtLabel);
+                        if (isActiveVariant) {
+                            rowText = $"[{S["AiCacheVariantActiveBadge"]}] {rowText}";
+                        }
+                        TextView rowTv = Label(rowText, 11.3f, isActiveVariant ? OneUiTheme.TextPrimary : OneUiTheme.TextSecondary);
+                        row.AddView(rowTv);
+
+                        if (!string.IsNullOrWhiteSpace(entry.ModelSummary)) {
+                            TextView modelTv = Label(entry.ModelSummary, 10.6f, OneUiTheme.TextSub);
+                            modelTv.SetPadding(0, Dp(1), 0, Dp(4));
+                            row.AddView(modelTv);
+                        }
+
+                        LinearLayout btnBar = new(this) { Orientation = Orientation.Horizontal, BaselineAligned = false };
+                        if (!isActiveVariant) {
+                            Button useBtn = PillButton(S["AiCacheVariantUseBtn"], () => {
+                                ActivateCachedVariantAsync(entry, goal, activeTrack, dismissDialog);
+                            }, active: true);
+                            useBtn.TextSize = 11.0f;
+                            btnBar.AddView(useBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) {
+                                RightMargin = Dp(6)
+                            });
+                        }
+                        Button delOneBtn = PillButton(S["AiCacheVariantDeleteBtn"], () => {
+                            string keyToDelete = entry.CacheKey;
+                            _ = Task.Run(() => {
+                                neuralTrackCache?.DeleteEntry(keyToDelete);
+                                RunOnUiThread(() => {
+                                    if (uiDestroyed) {
+                                        return;
+                                    }
+                                    if (isActiveVariant) {
+                                        if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
+                                            playerEngine?.BindKaraokeReferenceTrack(null);
+                                        } else {
+                                            playerEngine?.BindSpatialUpmixTrack(null);
+                                        }
+                                    }
+                                    SyncNeuralRuntimeDiagnostics();
+                                    RefreshNeuralAudioUi();
+                                    RefreshNeuralPrepUi();
+                                    RefreshLyricsSingDockUi();
+                                    RefreshBottomActionBarVisuals();
+                                    Toast.MakeText(this, S["AiCacheVariantDeletedToast"], ToastLength.Short).Show();
+                                    dismissDialog?.Invoke();
+                                });
+                            });
+                        });
+                        delOneBtn.TextSize = 11.0f;
+                        delOneBtn.SetTextColor(OneUiTheme.FunctionalRed);
+                        btnBar.AddView(delOneBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+                        row.AddView(btnBar);
+
+                        card.AddView(row, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                            BottomMargin = Dp(6)
+                        });
+                    }
+                }
+
+                string extractBtnLabel = !matches
+                    ? S["AiCacheExtractNewVariantBtn"]
+                    : S["AiCacheReextractCurrentBtn"];
+                Button reextractBtn = PillButton(extractBtnLabel, () => {
                     dismissDialog?.Invoke();
                     PrepareActiveTrackNeuralStemsAsync(goal, silentIfNotReady: false, forceReextract: true);
                 }, active: !matches);
                 reextractBtn.TextSize = 11.8f;
                 card.AddView(reextractBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-                    TopMargin = Dp(4)
+                    TopMargin = Dp(2)
                 });
 
-                Button removeBtn = PillButton(S["AiCacheRemoveBtn"], () => {
+                Button compactBtn = PillButton(S["AiCacheOptimizeStorageBtn"], () => {
+                    _ = Task.Run(() => {
+                        (int compactedCount, long reclaimedBytes) = neuralTrackCache != null
+                            ? neuralTrackCache.OptimizeCacheStorage()
+                            : (0, 0L);
+                        RunOnUiThread(() => {
+                            if (uiDestroyed) {
+                                return;
+                            }
+                            SyncNeuralRuntimeDiagnostics();
+                            string msg = compactedCount > 0 && reclaimedBytes > 0L
+                                ? string.Format(S["AiCacheOptimizeDoneToastFmt"], compactedCount, reclaimedBytes / (1024.0 * 1024.0))
+                                : S["AiCacheOptimizeAlreadyCompactToast"];
+                            Toast.MakeText(this, msg, ToastLength.Short).Show();
+                        });
+                    });
+                });
+                compactBtn.TextSize = 11.4f;
+                card.AddView(compactBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+                    TopMargin = Dp(6)
+                });
+
+                string removeLabel = variants != null && variants.Count > 1
+                    ? string.Format(S["AiCacheRemoveAllVariantsBtn"], variants.Count)
+                    : S["AiCacheRemoveBtn"];
+                Button removeBtn = PillButton(removeLabel, () => {
                     string activePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
                     string title = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
                         ? currentMediaMeta.Title
@@ -1352,6 +1553,28 @@ public partial class MainActivity {
                     RefreshNeuralPrepUi();
                 });
 
+                // W53.2 (Wave B): Incremental Stage-1 vocal reuse across both RAM & disk cache.
+                // When Karaoke needs Stage-2 Lead/Backing split and this song already has separated vocals
+                // (e.g., from Play 4/6-stem separation), skip Stage 1 completely in both MVSEP Cloud and Local ONNX.
+                Cavernize.Logic.Spatial.NeuralSeparatedTrack reusableStage1 = null;
+                if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke && !forceReextract) {
+                    Cavernize.Logic.Spatial.NeuralSeparatedTrack liveSpatial = playerEngine?.NeuralStage?.ActiveSpatialUpmixTrack;
+                    if (liveSpatial != null &&
+                        string.Equals(liveSpatial.SourceTrackKey, activePath, StringComparison.OrdinalIgnoreCase) &&
+                        liveSpatial.FindStem("vocals") != null) {
+                        reusableStage1 = liveSpatial;
+                        AppLogger.Info("W53.2 Incremental Stage-1 vocal reuse: using live RAM SpatialUpmix stems.");
+                    } else if (allowCache &&
+                        neuralTrackCache.TryFindBestReusableVocalTrack(
+                            activePath, summaryTitle, summaryArtist, decodedSr,
+                            out Cavernize.Logic.Spatial.NeuralSeparatedTrack diskReusable,
+                            out Cavernize.Logic.Spatial.NeuralTrackCacheEntryInfo reusableInfo,
+                            ct)) {
+                        reusableStage1 = diskReusable;
+                        AppLogger.Info($"W53.2 Incremental Stage-1 vocal reuse: loaded cached vocals from '{reusableInfo?.OriginTag}' ({reusableInfo?.StemCount} stems).");
+                    }
+                }
+
                 if (cloudRequested) {
                     try {
                         System.Diagnostics.Stopwatch cloudSw = System.Diagnostics.Stopwatch.StartNew();
@@ -1368,15 +1591,6 @@ public partial class MainActivity {
                             if (store.TryGetPendingMvsepJobHash(cloudPlainCacheKey, s2Key, out string savedS2)) {
                                 pendingS2Hash = savedS2;
                                 AppLogger.Info($"MVSEP 2-Stage: Resuming Stage-2 vocals-only job hash={savedS2} ({cloudPreset.Id}).");
-                            }
-                            Cavernize.Logic.Spatial.NeuralSeparatedTrack reusableStage1 = null;
-                            if (!forceReextract) {
-                                Cavernize.Logic.Spatial.NeuralSeparatedTrack liveSpatial = playerEngine?.NeuralStage?.ActiveSpatialUpmixTrack;
-                                if (liveSpatial != null &&
-                                    string.Equals(liveSpatial.SourceTrackKey, activePath, StringComparison.OrdinalIgnoreCase) &&
-                                    liveSpatial.FindStem("vocals") != null) {
-                                    reusableStage1 = liveSpatial;
-                                }
                             }
                             separated = await mvsepClient.SeparateTwoStageCascadeAsync(
                                 sourceTrackKey: activePath,
@@ -1475,7 +1689,8 @@ public partial class MainActivity {
                             onProgressiveTrackReady: progressiveCallback,
                             displayTitle: summaryTitle,
                             artistName: summaryArtist,
-                            forceReextract: forceReextract);
+                            forceReextract: forceReextract,
+                            preExtractedTrack: reusableStage1);
                     } catch (InsufficientMemoryException memEx) when (
                         cfg.StudioBundlePreset != Cavernize.Logic.Spatial.NeuralEnsembleBundlePreset.FastSingle ||
                         cfg.OrchestrationMode == Cavernize.Logic.Spatial.NeuralOrchestrationMode.Manual) {
@@ -1501,7 +1716,8 @@ public partial class MainActivity {
                                 onProgressiveTrackReady: progressiveCallback,
                                 displayTitle: summaryTitle,
                                 artistName: summaryArtist,
-                                forceReextract: forceReextract);
+                                forceReextract: forceReextract,
+                                preExtractedTrack: reusableStage1);
                         } else {
                             throw;
                         }

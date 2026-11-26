@@ -163,5 +163,20 @@ public sealed partial class AndroidStrings {
         // ONNX / RoFormer 低内存保护与自动轻量模型回退
         d["NeuralLowRamFallbackToast"] = "内存不足：已自动使用轻量模型完成（{0}）";
         d["NeuralLowRamNeedLightModelFmt"] = "可用内存不足以运行此大型 AI 模型。请安装快速移动模型（SCNet / Kim Vocal）或使用 MVSEP 云端。({0})";
+        // W53.2 (Wave B): 统一 AI 分轨提取面板、多版本缓存与无损存储压缩
+        d["AiCacheVariantsHeaderFmt"] = "该歌曲共有 {0} 个已缓存版本";
+        d["AiCacheVariantRowFmt"] = "{0} • {1} 轨 • {2:0.0} MB（省 {3:0}%）• {4}";
+        d["AiCacheVariantActiveBadge"] = "当前使用";
+        d["AiCacheVariantUseBtn"] = "切换使用";
+        d["AiCacheVariantDeleteBtn"] = "删除";
+        d["AiCacheVariantActivatedToast"] = "已切换至缓存 AI 版本（{0} 轨）。";
+        d["AiCacheVariantDeletedToast"] = "已删除该缓存 AI 版本。";
+        d["AiCacheExtractNewVariantBtn"] = "提取新版本（保留已有缓存）";
+        d["AiCacheRemoveAllVariantsBtn"] = "移除全部版本（{0}）";
+        d["AiCacheOptimizeStorageBtn"] = "优化缓存空间";
+        d["AiCacheOptimizeDoneToastFmt"] = "已压缩 {0} 个缓存文件，释放 {1:0.0} MB。";
+        d["AiCacheOptimizeAlreadyCompactToast"] = "AI 缓存已是最佳压缩状态。";
+        d["AiCacheIncrementalReuseHint"] = "检测到已缓存人声 — 卡拉 OK 将自动复用第 1 阶段。";
+        d["KaraokePreserveBackingTitle"] = "保留和声人声";
     }
 }

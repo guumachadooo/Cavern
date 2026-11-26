@@ -1812,6 +1812,20 @@ public sealed partial class AndroidStrings {
         ["AiCacheDiffValPureInstr"] = "Pure Instrumental",
         // RoFormer / ONNX Low-RAM Discipline & Automatic Lightweight Fallback
         ["NeuralLowRamFallbackToast"] = "Low RAM: completed with lightweight model ({0})",
-        ["NeuralLowRamNeedLightModelFmt"] = "Not enough free RAM for this heavy AI model. Install a fast mobile model (SCNet / Kim Vocal) or use MVSEP Cloud. ({0})"
+        ["NeuralLowRamNeedLightModelFmt"] = "Not enough free RAM for this heavy AI model. Install a fast mobile model (SCNet / Kim Vocal) or use MVSEP Cloud. ({0})",
+        // W53.2 (Wave B): Unified Play/Sing AI Extraction Sheet, Multi-Variant Cache & Lossless Compaction
+        ["AiCacheVariantsHeaderFmt"] = "{0} cached variant(s) for this song",
+        ["AiCacheVariantRowFmt"] = "{0} • {1} stems • {2:0.0} MB ({3:0}% saved) • {4}",
+        ["AiCacheVariantActiveBadge"] = "Active",
+        ["AiCacheVariantUseBtn"] = "Use",
+        ["AiCacheVariantDeleteBtn"] = "Delete",
+        ["AiCacheVariantActivatedToast"] = "Switched to cached AI variant ({0} stems).",
+        ["AiCacheVariantDeletedToast"] = "Cached AI variant deleted.",
+        ["AiCacheExtractNewVariantBtn"] = "Extract New Variant (Keep Saved)",
+        ["AiCacheRemoveAllVariantsBtn"] = "Remove All Variants ({0})",
+        ["AiCacheOptimizeStorageBtn"] = "Optimize Cache Storage",
+        ["AiCacheOptimizeDoneToastFmt"] = "Compacted {0} cache file(s), freed {1:0.0} MB.",
+        ["AiCacheOptimizeAlreadyCompactToast"] = "AI cache is already compact.",
+        ["AiCacheIncrementalReuseHint"] = "Cached vocals detected — Karaoke will reuse Stage 1 automatically."
     };
 }

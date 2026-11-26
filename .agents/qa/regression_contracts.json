@@ -523,6 +523,64 @@
           "message": "MainActivity.OnPause() must invoke PauseTelemetryTimer() to prevent cached CPU burn"
         }
       ]
+    },
+    {
+      "id": "REG-B6-STEREO-PAN-CHOREO",
+      "bug_ref": "B6/W53.3",
+      "title": "Preserve constant-power stereo-pan azimuth estimator for fixed 3D descriptors (pan_err_deg<=5.0) and mood-aware choreography",
+      "domain": "dsp-format",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_audio_ground_truth.py:GT-15 + run_w46_unit_tests.py:T46 + PY_T12",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "Cavern/Spatial/SpatialObjectCortex.cs",
+          "pattern": "public\\s+static\\s+class\\s+StereoPanAzimuthEstimator",
+          "message": "StereoPanAzimuthEstimator must remain in Cavern/Spatial/SpatialObjectCortex.cs"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "Cavern/Neural/NeuralStemSpatializer.cs",
+          "pattern": "BuildSceneDescriptors\\(\\s*IReadOnlyList<StereoStemBuffer>",
+          "message": "Pan-preserving BuildSceneDescriptors(IReadOnlyList<StereoStemBuffer>, ...) must remain in NeuralStemSpatializer.cs"
+        }
+      ]
+    },
+    {
+      "id": "REG-B7-UNIFIED-CACHE-REUSE",
+      "bug_ref": "B7/W53.2",
+      "title": "Preserve unified Play/Sing AI extraction sheet, CNTC v3 mono-ref dedup/compaction, and incremental Stage-1 vocal reuse",
+      "domain": "ai-ml",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T45 + PY_T12",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.NeuralWorkflows.cs",
+          "pattern": "void\\s+ShowUnifiedAiExtractionSheet\\s*\\(",
+          "message": "Unified Play/Sing AI extraction sheet ShowUnifiedAiExtractionSheet must remain intact"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/NeuralTrackCacheCodec.cs",
+          "pattern": "public\\s+static\\s+long\\s+CompactFileIfBeneficial\\s*\\(",
+          "message": "CNTC v3 lossless CompactFileIfBeneficial must remain intact"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/NeuralPipelineOrchestrator.cs",
+          "pattern": "NeuralSeparatedTrack\\s+preExtractedTrack\\s*=\\s*null",
+          "message": "Incremental Stage-1 vocal reuse parameter preExtractedTrack must remain in NeuralPipelineOrchestrator.cs"
+        }
+      ]
     }
   ]
 }

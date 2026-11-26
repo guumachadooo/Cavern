@@ -438,7 +438,8 @@ public sealed class NeuralPipelineOrchestrator {
         Action<NeuralSeparatedTrack> onProgressiveTrackReady = null,
         string displayTitle = null,
         string artistName = null,
-        bool forceReextract = false) {
+        bool forceReextract = false,
+        NeuralSeparatedTrack preExtractedTrack = null) {
         ArgumentNullException.ThrowIfNull(mixLeft);
         ArgumentNullException.ThrowIfNull(mixRight);
 
@@ -478,7 +479,8 @@ public sealed class NeuralPipelineOrchestrator {
                 displayTitle,
                 artistName,
                 isMemoryFallbackPass: false,
-                memoryFallbackReason: string.Empty);
+                memoryFallbackReason: string.Empty,
+                preExtractedTrack: preExtractedTrack);
         } catch (Exception memEx) when (memEx is InsufficientMemoryException || memEx is OutOfMemoryException) {
             token.ThrowIfCancellationRequested();
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
@@ -518,7 +520,8 @@ public sealed class NeuralPipelineOrchestrator {
                 displayTitle,
                 artistName,
                 isMemoryFallbackPass: true,
-                memoryFallbackReason: memEx.Message);
+                memoryFallbackReason: memEx.Message,
+                preExtractedTrack: preExtractedTrack);
         }
     }
 
@@ -541,7 +544,8 @@ public sealed class NeuralPipelineOrchestrator {
         string displayTitle,
         string artistName,
         bool isMemoryFallbackPass,
-        string memoryFallbackReason) {
+        string memoryFallbackReason,
+        NeuralSeparatedTrack preExtractedTrack = null) {
         // For VocalMixDna, analyze a smart ~40s peak vocal-activity excerpt with 2x COLA overlap (fast & accurate DNA extraction
         // instead of processing 4-6 full minutes through multiple models + 6144-pt Reverb HQ).
         float[] workLeft = mixLeft;
@@ -578,11 +582,49 @@ public sealed class NeuralPipelineOrchestrator {
         DereverbDecompositionResult dereverbResult = null;
         int totalSteps = plan.Steps.Count;
 
+        // Wave B (W53.2) Incremental Vocal-Stem Reuse:
+        // When running SpatialKaraoke (2-stage Lead/Backing or Dereverb) and a compatible cached/RAM separation
+        // already provides an isolated 'vocals' stem matching workLeft/workRight length & sample rate,
+        // seed stems directly and skip redundant Stage-1 full-mix separation!
+        bool seededFromReusableVocals = false;
+        if (!isExcerptDna &&
+            goal == NeuralPipelineGoal.SpatialKaraoke &&
+            preExtractedTrack != null &&
+            preExtractedTrack.Stems != null &&
+            preExtractedTrack.Stems.Count > 0 &&
+            (preExtractedTrack.SampleRate <= 0 || preExtractedTrack.SampleRate == sampleRate)) {
+            StereoStemBuffer reusableVoc = preExtractedTrack.FindStem("vocals");
+            if (reusableVoc != null && reusableVoc.Length == workLeft.Length) {
+                bool hasStage2Refinement = false;
+                for (int k = 0; k < totalSteps; k++) {
+                    NeuralModelTask t = plan.Steps[k].Task;
+                    if (t == NeuralModelTask.KaraokeLeadBacking || t == NeuralModelTask.Dereverb || t == NeuralModelTask.DebleedDenoise) {
+                        hasStage2Refinement = true;
+                        break;
+                    }
+                }
+                if (hasStage2Refinement) {
+                    stems = [.. preExtractedTrack.Stems];
+                    seededFromReusableVocals = true;
+                    onProgress?.Invoke(0.08, "Reusing cached vocal stem (skipping Stage 1)...");
+                }
+            }
+        }
+
         for (int s = 0; s < totalSteps; s++) {
             token.ThrowIfCancellationRequested();
             NeuralExecutionStep step = plan.Steps[s];
             double stepStart = s / (double)totalSteps;
             double stepSpan = 1.0 / totalSteps;
+
+            if (seededFromReusableVocals &&
+                (step.Task == NeuralModelTask.StemSeparation4 ||
+                 step.Task == NeuralModelTask.StemSeparation6 ||
+                 step.Task == NeuralModelTask.VocalSeparation)) {
+                // Stage-1 full-mix vocal separation already satisfied by incremental vocal stem reuse!
+                onProgress?.Invoke(stepStart + stepSpan, "Stage 1 reused from cached vocals");
+                continue;
+            }
 
             if (step.Task == NeuralModelTask.KaraokeLeadBacking && stems.Length > 0) {
                 // MVSEP 2-Stage Studio Karaoke Cascade: run Lead-vs-Backing strictly on the isolated full-vocal stem
@@ -784,12 +826,37 @@ public sealed class NeuralPipelineOrchestrator {
             instrR[i] = mixRight[i] - vr;
         }
 
+        List<StereoStemBuffer> discreteBandStems = [];
+        if (stage1Stems != null) {
+            for (int s = 0; s < stage1Stems.Length; s++) {
+                StereoStemBuffer st = stage1Stems[s];
+                if (st == null || st.Length <= 0) {
+                    continue;
+                }
+                NeuralStemRole role = NeuralStemSpatializer.ClassifyStemName(st.Name);
+                if (role == NeuralStemRole.Drums ||
+                    role == NeuralStemRole.Bass ||
+                    role == NeuralStemRole.Other ||
+                    role == NeuralStemRole.Guitar ||
+                    role == NeuralStemRole.Piano ||
+                    role == NeuralStemRole.Residual) {
+                    discreteBandStems.Add(st);
+                }
+            }
+        }
+
         List<StereoStemBuffer> merged = [
             new StereoStemBuffer("lead_vocal", leadL, leadR),
-            new StereoStemBuffer("backing_vocals", backL, backR),
-            new StereoStemBuffer("instrumental", instrL, instrR),
-            new StereoStemBuffer("vocals", isolatedVocals.Left, isolatedVocals.Right)
+            new StereoStemBuffer("backing_vocals", backL, backR)
         ];
+        if (discreteBandStems.Count > 0) {
+            // Preserve all discrete multi-stem instruments from Stage 1 (e.g. incremental reuse from 4/6-stem Play cache)
+            // without duplicating accompaniment energy in a redundant 'instrumental' sum.
+            merged.AddRange(discreteBandStems);
+        } else {
+            merged.Add(new StereoStemBuffer("instrumental", instrL, instrR));
+        }
+        merged.Add(new StereoStemBuffer("vocals", isolatedVocals.Left, isolatedVocals.Right));
         return merged.ToArray();
     }
 

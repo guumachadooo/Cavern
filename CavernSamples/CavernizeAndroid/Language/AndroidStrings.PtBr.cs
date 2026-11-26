@@ -1721,5 +1721,19 @@ public sealed partial class AndroidStrings {
         // Disciplina de RAM ONNX / RoFormer e Fallback Automático Leve
         d["NeuralLowRamFallbackToast"] = "RAM baixa: concluído com modelo leve ({0})";
         d["NeuralLowRamNeedLightModelFmt"] = "RAM livre insuficiente para este modelo de IA pesado. Instale um modelo móvel rápido (SCNet / Kim Vocal) ou use MVSEP Cloud. ({0})";
+        // W53.2 (Wave B): Painel Unificado de Extração IA, Cache Multivariante e Compactação Sem Perdas
+        d["AiCacheVariantsHeaderFmt"] = "{0} variante(s) em cache para esta música";
+        d["AiCacheVariantRowFmt"] = "{0} • {1} stems • {2:0.0} MB ({3:0}% econ.) • {4}";
+        d["AiCacheVariantActiveBadge"] = "Ativo";
+        d["AiCacheVariantUseBtn"] = "Usar";
+        d["AiCacheVariantDeleteBtn"] = "Excluir";
+        d["AiCacheVariantActivatedToast"] = "Variante de IA ativada ({0} stems).";
+        d["AiCacheVariantDeletedToast"] = "Variante de IA removida do cache.";
+        d["AiCacheExtractNewVariantBtn"] = "Extrair Nova Variante (Manter Salvas)";
+        d["AiCacheRemoveAllVariantsBtn"] = "Remover Todas as Variantes ({0})";
+        d["AiCacheOptimizeStorageBtn"] = "Otimizar Espaço do Cache";
+        d["AiCacheOptimizeDoneToastFmt"] = "{0} arquivo(s) otimizado(s), {1:0.0} MB liberados.";
+        d["AiCacheOptimizeAlreadyCompactToast"] = "O cache de IA já está otimizado.";
+        d["AiCacheIncrementalReuseHint"] = "Vocais em cache detectados — o Karaokê reutilizará a Etapa 1 automaticamente.";
     }
 }

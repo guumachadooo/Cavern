@@ -244,6 +244,91 @@ public sealed class NeuralTrackCacheService : INeuralTrackCache {
     }
 
     /// <summary>
+    /// Searches all cached variants of the same song for an already-separated vocal stem (e.g., from a 4/6-stem
+    /// Play separation or prior vocal split) so Karaoke / Lead+Backing extraction can skip Stage 1 completely.
+    /// </summary>
+    public bool TryFindBestReusableVocalTrack(
+        string sourceTrackKey,
+        string displayTitle,
+        string artistName,
+        int expectedSampleRate,
+        out NeuralSeparatedTrack reusableTrack,
+        out NeuralTrackCacheEntryInfo entryInfo,
+        CancellationToken token = default) {
+        reusableTrack = null;
+        entryInfo = null;
+        if (!isEnabled) {
+            return false;
+        }
+        IReadOnlyList<NeuralTrackCacheEntryInfo> candidates = FindEntriesForTrack(
+            sourceTrackKey,
+            displayTitle,
+            artistName,
+            NeuralPipelineGoal.StemSeparation);
+        if (candidates == null || candidates.Count == 0) {
+            return false;
+        }
+        for (int i = 0; i < candidates.Count; i++) {
+            token.ThrowIfCancellationRequested();
+            NeuralTrackCacheEntryInfo info = candidates[i];
+            if (info == null || info.StemCount < 2) {
+                continue;
+            }
+            if (expectedSampleRate >= 8000 && info.SampleRate >= 8000 && info.SampleRate != expectedSampleRate) {
+                continue;
+            }
+            if (TryLoad(info.CacheKey, out NeuralSeparatedTrack loaded, token) &&
+                loaded != null &&
+                (loaded.FindStem("vocals") != null || loaded.FindStem("lead_vocal") != null)) {
+                reusableTrack = loaded;
+                entryInfo = info;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Losslessly compacts legacy or sub-optimally packed <c>*.ntc</c> entries in-place using CNTC v3 mono-ref
+    /// deduplication and optimal ZLib entropy coding without removing any cached variants.
+    /// </summary>
+    public (int CompactedCount, long ReclaimedBytes) OptimizeCacheStorage(CancellationToken token = default) {
+        NeuralTrackCacheCompressionMode targetMode = CompressionMode == NeuralTrackCacheCompressionMode.RawFloat32
+            ? NeuralTrackCacheCompressionMode.Compact16Bit
+            : CompressionMode;
+        int compacted = 0;
+        long reclaimed = 0L;
+        lock (cacheLock) {
+            if (!Directory.Exists(cacheDir)) {
+                return (0, 0L);
+            }
+            foreach (string file in Directory.GetFiles(cacheDir, "*" + FileExtension)) {
+                token.ThrowIfCancellationRequested();
+                try {
+                    NeuralTrackCacheEntryInfo info = NeuralTrackCacheCodec.PeekHeader(file);
+                    if (info == null) {
+                        continue;
+                    }
+                    // Preserve Studio24Bit precision when entry was explicitly saved in Studio24Bit
+                    NeuralTrackCacheCompressionMode entryTarget = info.CompressionMode == NeuralTrackCacheCompressionMode.Studio24Bit
+                        ? NeuralTrackCacheCompressionMode.Studio24Bit
+                        : targetMode;
+                    long saved = NeuralTrackCacheCodec.CompactFileIfBeneficial(file, entryTarget, token);
+                    if (saved > 0L) {
+                        compacted++;
+                        reclaimed += saved;
+                    }
+                } catch (System.OperationCanceledException) {
+                    throw;
+                } catch (Exception ex) {
+                    AppLogger.Warn($"Slot 7B neural cache compact warning ({IOPath.GetFileName(file)}): {ex.Message}");
+                }
+            }
+        }
+        return (compacted, reclaimed);
+    }
+
+    /// <summary>
     /// Pure deterministic matcher enforcing unified cross-variant (Dolby Atmos &lt;-&gt; FLAC) cache-first stem reuse
     /// while strictly preventing cross-song pollution (returns 0 on mismatch or insufficient stem count).
     /// </summary>

@@ -163,5 +163,20 @@ public sealed partial class AndroidStrings {
         // ONNX / RoFormer alacsony RAM védelem és automatikus könnyű modell visszalépés
         d["NeuralLowRamFallbackToast"] = "Kevés RAM: könnyű modellel befejezve ({0})";
         d["NeuralLowRamNeedLightModelFmt"] = "Nincs elég szabad RAM ehhez a nagy MI modellhez. Telepítsen gyors mobil modellt (SCNet / Kim Vocal) vagy használja az MVSEP Cloud szolgáltatást. ({0})";
+        // W53.2 (Wave B): Egységes MI kivonó panel, többváltozatos gyorsítótár és veszteségmentes tömörítés
+        d["AiCacheVariantsHeaderFmt"] = "{0} gyorsítótárazott változat ehhez a dalhoz";
+        d["AiCacheVariantRowFmt"] = "{0} • {1} sáv • {2:0.0} MB ({3:0}% megtak.) • {4}";
+        d["AiCacheVariantActiveBadge"] = "Aktív";
+        d["AiCacheVariantUseBtn"] = "Használat";
+        d["AiCacheVariantDeleteBtn"] = "Törlés";
+        d["AiCacheVariantActivatedToast"] = "MI változat aktiválva ({0} sáv).";
+        d["AiCacheVariantDeletedToast"] = "MI változat törölve a gyorsítótárból.";
+        d["AiCacheExtractNewVariantBtn"] = "Új változat kivonása (megtartva a többit)";
+        d["AiCacheRemoveAllVariantsBtn"] = "Összes változat eltávolítása ({0})";
+        d["AiCacheOptimizeStorageBtn"] = "Gyorsítótár tömörítése";
+        d["AiCacheOptimizeDoneToastFmt"] = "{0} fájl tömörítve, {1:0.0} MB felszabadítva.";
+        d["AiCacheOptimizeAlreadyCompactToast"] = "Az MI gyorsítótár már optimális.";
+        d["AiCacheIncrementalReuseHint"] = "Gyorsítótárazott ének észlelve — a Karaoke automatikusan újrahasznosítja az 1. lépést.";
+        d["KaraokePreserveBackingTitle"] = "Háttérvokál megtartása";
     }
 }

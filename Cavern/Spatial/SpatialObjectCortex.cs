@@ -220,6 +220,175 @@ namespace Cavern.Spatial {
     }
 
     /// <summary>
+    /// Measured stereo mix azimuth, inter-channel coherence, and perceived stereo width for a separated stem.
+    /// Used to preserve original stereo pan placement for fixed 3D objects (&lt;= 5 deg error) and to anchor
+    /// dynamic choreography relative to the stem's natural mix position.
+    /// </summary>
+    public struct StereoPanEstimate {
+        /// <summary>Estimated constant-power stereo pan azimuth in degrees (0 = center, - = left, + = right).</summary>
+        public float PanAzimuthDeg { get; set; }
+
+        /// <summary>Normalized constant-power pan position in [-1; +1] (-1 = hard left, 0 = center, +1 = hard right).</summary>
+        public float PanNormalized { get; set; }
+
+        /// <summary>Power-weighted L/R energy balance <c>(sumR - sumL) / (sumL + sumR)</c> in [-1; +1].</summary>
+        public float PowerBalance { get; set; }
+
+        /// <summary>Normalized zero-lag inter-channel correlation (IC) in [-1; +1] (+1 = coherent point source, 0 = diffuse stereo).</summary>
+        public float InterChannelCoherence { get; set; }
+
+        /// <summary>Estimated stereo spread width in [0; 1] (0 = tight mono/panned point source, 1 = wide decorrelated stereo).</summary>
+        public float StereoWidth01 { get; set; }
+
+        /// <summary>Confidence in [0; 1] reflecting active signal energy and panning clarity.</summary>
+        public float Confidence01 { get; set; }
+
+        /// <summary>True when the stem contains audible non-silent stereo PCM energy.</summary>
+        public bool HasSignal { get; set; }
+    }
+
+    /// <summary>
+    /// Deterministic constant-power stereo pan azimuth and inter-channel coherence (IC) estimator.
+    /// Maps constant-power stereo L/R stems back onto Cavern's virtual front stage azimuths with sub-degree accuracy
+    /// while preserving wide stereo spread for decorrelated ambient stems.
+    /// </summary>
+    public static class StereoPanAzimuthEstimator {
+        /// <summary>Default virtual stereo stage half-width in degrees (<c>[-60; +60]</c> deg ITU/Cavern wide stage).</summary>
+        public const float DefaultStageHalfWidthDeg = 60f;
+
+        /// <summary>
+        /// Estimates the constant-power stereo pan azimuth, power balance, inter-channel coherence, and stereo width
+        /// of <paramref name="stem"/>.
+        /// </summary>
+        public static StereoPanEstimate Estimate(StereoStemBuffer stem, float stageHalfWidthDeg = DefaultStageHalfWidthDeg) {
+            float safeStage = SpatialCortexMath.Clamp(stageHalfWidthDeg, 20f, 90f);
+            if (stem == null || stem.Left == null || stem.Right == null || stem.Length <= 0) {
+                return new StereoPanEstimate {
+                    PanAzimuthDeg = 0f,
+                    PanNormalized = 0f,
+                    PowerBalance = 0f,
+                    InterChannelCoherence = 0f,
+                    StereoWidth01 = 0.5f,
+                    Confidence01 = 0f,
+                    HasSignal = false
+                };
+            }
+
+            int len = Math.Min(stem.Length, Math.Min(stem.Left.Length, stem.Right.Length));
+            if (len <= 0) {
+                return new StereoPanEstimate {
+                    PanAzimuthDeg = 0f,
+                    PanNormalized = 0f,
+                    PowerBalance = 0f,
+                    InterChannelCoherence = 0f,
+                    StereoWidth01 = 0.5f,
+                    Confidence01 = 0f,
+                    HasSignal = false
+                };
+            }
+
+            // Strided energy integration (up to ~16384 frames covers full song dynamics with <0.1 ms cost)
+            int step = Math.Max(1, len / 16384);
+            double sumL = 0.0;
+            double sumR = 0.0;
+            double sumLR = 0.0;
+            int counted = 0;
+
+            for (int i = 0; i < len; i += step) {
+                float l = stem.Left[i];
+                float r = stem.Right[i];
+                if (!SpatialCortexMath.IsFinite(l)) {
+                    l = 0f;
+                }
+                if (!SpatialCortexMath.IsFinite(r)) {
+                    r = 0f;
+                }
+                sumL += (double)l * l;
+                sumR += (double)r * r;
+                sumLR += (double)l * r;
+                counted++;
+            }
+
+            double totalEnergy = sumL + sumR;
+            double meanPower = counted > 0 ? totalEnergy / counted : 0.0;
+            if (totalEnergy <= 1e-12 || meanPower <= 1e-11) {
+                return new StereoPanEstimate {
+                    PanAzimuthDeg = 0f,
+                    PanNormalized = 0f,
+                    PowerBalance = 0f,
+                    InterChannelCoherence = 0f,
+                    StereoWidth01 = 0.5f,
+                    Confidence01 = 0f,
+                    HasSignal = false
+                };
+            }
+
+            double rmsL = Math.Sqrt(sumL / counted);
+            double rmsR = Math.Sqrt(sumR / counted);
+            // Constant-power panning law inverse: L = cos(phi), R = sin(phi) where phi in [0, pi/2]
+            // phi = 0 -> hard Left (-1), phi = pi/4 -> Center (0), phi = pi/2 -> hard Right (+1)
+            double phiRms = Math.Atan2(rmsR, rmsL);
+            double denom = Math.Sqrt(sumL * sumR);
+            float ic = denom > 1e-12
+                ? SpatialCortexMath.Clamp((float)(sumLR / denom), -1f, 1f)
+                : 1f; // Pure single-channel hard-panned stem is a coherent point source
+
+            // Stokes / 2x2 covariance principal-eigenvector pan extraction:
+            // For a coherent panned source [cos(phi), sin(phi)] + isotropic uncorrelated stereo reverb sigma^2*I,
+            // Q = sumL - sumR = Ps*cos(2*phi) and U = 2*sumLR = Ps*sin(2*phi) are invariant to isotropic reverb!
+            double stokesQ = sumL - sumR;
+            double stokesU = 2.0 * sumLR;
+            double polarizedNorm = Math.Sqrt(stokesQ * stokesQ + stokesU * stokesU);
+            float degreeOfPolarization = SpatialCortexMath.Clamp01((float)(polarizedNorm / totalEnergy));
+            double phi = phiRms;
+            if (sumLR > 0.0 && ic > 0.05f && degreeOfPolarization > 0.20f) {
+                double phiPca = 0.5 * Math.Atan2(stokesU, stokesQ);
+                float pcaWeight = SpatialCortexMath.Clamp01((degreeOfPolarization - 0.20f) / 0.30f)
+                    * SpatialCortexMath.Clamp01((ic - 0.05f) / 0.15f);
+                phi = phiRms + (phiPca - phiRms) * pcaWeight;
+            }
+
+            float panNorm = SpatialCortexMath.Clamp((float)((phi / (Math.PI * 0.25)) - 1.0), -1f, 1f);
+            float panAzDeg = panNorm * safeStage;
+            float powerBalance = SpatialCortexMath.Clamp((float)((sumR - sumL) / totalEnergy), -1f, 1f);
+
+            // Point sources (high positive IC or hard-panned) collapse to tight width; balanced decorrelated stems stay wide
+            float decorrelation = SpatialCortexMath.Clamp01(1f - Math.Max(0f, ic));
+            float centerWeight = SpatialCortexMath.Clamp01(1f - MathF.Abs(panNorm));
+            float stereoWidth = SpatialCortexMath.Clamp01(decorrelation * (0.25f + 0.75f * centerWeight));
+            float confidence = SpatialCortexMath.Clamp01(0.45f + 0.55f * Math.Max(MathF.Abs(panNorm), Math.Max(0f, ic)));
+
+            return new StereoPanEstimate {
+                PanAzimuthDeg = panAzDeg,
+                PanNormalized = panNorm,
+                PowerBalance = powerBalance,
+                InterChannelCoherence = ic,
+                StereoWidth01 = stereoWidth,
+                Confidence01 = confidence,
+                HasSignal = true
+            };
+        }
+
+        /// <summary>
+        /// Computes continuous stereo-pan home azimuths (degrees) for every stem in <paramref name="stems"/>,
+        /// returning <see cref="float.NaN"/> for silent/unpanned stems so role defaults apply cleanly.
+        /// </summary>
+        public static float[] EstimateAllHomeAzimuthsDeg(
+            IReadOnlyList<StereoStemBuffer> stems,
+            float stageHalfWidthDeg = DefaultStageHalfWidthDeg) {
+            if (stems == null || stems.Count == 0) {
+                return Array.Empty<float>();
+            }
+            float[] result = new float[stems.Count];
+            for (int i = 0; i < stems.Count; i++) {
+                StereoPanEstimate est = Estimate(stems[i], stageHalfWidthDeg);
+                result[i] = est.HasSignal ? est.PanAzimuthDeg : float.NaN;
+            }
+            return result;
+        }
+    }
+
+    /// <summary>
     /// Deterministic 0 MB Layer-1 audio forensics engine: extracts spectral-flux beat/onset peaks,
     /// Self-Similarity Matrix (SSM) structural section boundaries, and per-stem RMS/spectral centroid
     /// features to produce bounded musical choreography cues (&lt;= 8 cues/min).
@@ -281,11 +450,16 @@ namespace Cavern.Spatial {
             List<DirectorCue> rawCues = new List<DirectorCue>(candidateTimes.Count);
             double windowHalfSec = 1.2;
 
-            // Compute each stem's natural stereo pan sign once so choreography respects mix placement
-            // and never ping-pongs across front center on alternating cues.
-            float[] stemHomeSides = new float[stems.Count];
+            // Measure each stem's continuous stereo pan azimuth once so dynamic choreography
+            // anchors and orbits relative to the original stereo mix placement.
+            StereoPanEstimate[] panEstimates = new StereoPanEstimate[stems.Count];
+            float[] stemHomeAzimuths = new float[stems.Count];
             for (int i = 0; i < stems.Count; i++) {
-                stemHomeSides[i] = EstimateStemHomeSide(stems[i], i);
+                panEstimates[i] = StereoPanAzimuthEstimator.Estimate(stems[i]);
+                NeuralStemRole sRole = stems[i] != null
+                    ? NeuralStemSpatializer.ClassifyStemName(stems[i].Name)
+                    : NeuralStemRole.Other;
+                stemHomeAzimuths[i] = ResolveStemHomeAzimuthDeg(panEstimates[i], sRole, i);
             }
 
             for (int c = 0; c < candidateTimes.Count; c++) {
@@ -300,7 +474,7 @@ namespace Cavern.Spatial {
                 ComputeStemRmsAndCentroid(stem, sampleRate, Math.Max(0.0, tSec - windowHalfSec), Math.Min(durationSec, tSec + windowHalfSec), out rms, out centroidHz, out subBassRatio);
 
                 LyricMoodDigest mood = ResolveMoodAtTime(moodDigests, tSec, durationSec);
-                float energy01 = SpatialCortexMath.Clamp01(rms * 3.2f * (0.7f + 0.3f * mood.Arousal01));
+                float energy01 = SpatialCortexMath.Clamp01(rms * 3.2f * (0.65f + 0.35f * mood.Arousal01));
 
                 float azDeg;
                 float elDeg;
@@ -310,7 +484,8 @@ namespace Cavern.Spatial {
                     role,
                     mode,
                     mood,
-                    stemHomeSides[chosenStemIdx],
+                    stemHomeAzimuths[chosenStemIdx],
+                    panEstimates[chosenStemIdx].StereoWidth01,
                     progress01,
                     centroidHz,
                     subBassRatio,
@@ -763,28 +938,18 @@ namespace Cavern.Spatial {
             return moodDigests[Math.Max(0, idx)];
         }
 
-        static float EstimateStemHomeSide(StereoStemBuffer stem, int stemIdx) {
-            if (stem != null && stem.Left != null && stem.Right != null && stem.Length > 0) {
-                int len = Math.Min(stem.Length, Math.Min(stem.Left.Length, stem.Right.Length));
-                int step = Math.Max(1, len / 2048);
-                double sumL = 0.0;
-                double sumR = 0.0;
-                for (int i = 0; i < len; i += step) {
-                    float l = stem.Left[i];
-                    float r = stem.Right[i];
-                    sumL += l * l;
-                    sumR += r * r;
-                }
-                double total = sumL + sumR;
-                if (total > 1e-9) {
-                    // Cavern azimuth convention: +az is Right (+X), -az is Left (-X)
-                    double pan = (sumR - sumL) / total;
-                    if (Math.Abs(pan) > 0.06) {
-                        return pan > 0.0 ? 1f : -1f;
-                    }
-                }
+        static float ResolveStemHomeAzimuthDeg(StereoPanEstimate est, NeuralStemRole role, int stemIdx) {
+            if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals) {
+                return est.HasSignal ? SpatialCortexMath.Clamp(est.PanAzimuthDeg, -18f, 18f) : 0f;
             }
-            return (stemIdx & 1) == 0 ? 1f : -1f;
+            if (role == NeuralStemRole.Bass) {
+                return est.HasSignal ? SpatialCortexMath.Clamp(est.PanAzimuthDeg, -12f, 12f) : 0f;
+            }
+            if (est.HasSignal && MathF.Abs(est.PanAzimuthDeg) >= 4f) {
+                return est.PanAzimuthDeg;
+            }
+            float fallbackSide = (stemIdx & 1) == 0 ? 1f : -1f;
+            return fallbackSide * GetRoleHomeAzimuthMag(role);
         }
 
         static float GetRoleHomeAzimuthMag(NeuralStemRole role) {
@@ -808,7 +973,8 @@ namespace Cavern.Spatial {
             NeuralStemRole role,
             SpatialChoreoMode mode,
             LyricMoodDigest mood,
-            float homeSide,
+            float homeAzDeg,
+            float stereoWidth01,
             float progress01,
             float centroidHz,
             float subBassRatio,
@@ -816,39 +982,51 @@ namespace Cavern.Spatial {
             out float azDeg,
             out float elDeg,
             out float radius) {
-            float side = homeSide >= 0f ? 1f : -1f;
-            float homeMag = GetRoleHomeAzimuthMag(role);
-            float moodWidth = mood.Tag == LyricMoodTag.Anthem ? 1.18f
-                : (mood.Tag == LyricMoodTag.Intimate ? 0.72f
-                : (mood.Tag == LyricMoodTag.Tense ? 1.08f : 0.90f));
+            float side = homeAzDeg >= 0f ? 1f : -1f;
+            float homeMag = MathF.Abs(homeAzDeg);
+            // Expressive lyrics-mood multipliers: Intimate narrows & draws closer, Anthem widens & lifts, Tense adds kinetic tension
+            float moodWidth = mood.Tag == LyricMoodTag.Anthem ? 1.32f
+                : (mood.Tag == LyricMoodTag.Intimate ? 0.56f
+                : (mood.Tag == LyricMoodTag.Tense ? 1.16f : 0.88f));
+            float moodElevBias = mood.Tag == LyricMoodTag.Anthem ? 12f * (0.4f + 0.6f * mood.Arousal01)
+                : (mood.Tag == LyricMoodTag.Intimate ? -3f
+                : (mood.Tag == LyricMoodTag.Tense ? 7f * mood.Arousal01 : 2f));
+            float moodRadiusDelta = mood.Tag == LyricMoodTag.Intimate ? -0.14f
+                : (mood.Tag == LyricMoodTag.Anthem ? 0.06f
+                : (mood.Tag == LyricMoodTag.Tense ? -0.05f : -0.02f));
+            float tenseOsc = mood.Tag == LyricMoodTag.Tense
+                ? MathF.Sin(progress01 * MathF.PI * 4f) * (8f + 10f * energy01)
+                : 0f;
             float highBrightness = SpatialCortexMath.Clamp01((centroidHz - 500f) / 3500f);
+            float widthFactor = 0.78f + 0.35f * SpatialCortexMath.Clamp01(stereoWidth01);
 
             switch (mode) {
                 case SpatialChoreoMode.Subtle:
-                    // Gentle bounded breathing in the stem's home sector — never crosses 0 deg center
-                    azDeg = side * (homeMag + (4f + 12f * energy01) * moodWidth);
-                    elDeg = 4f + 10f * highBrightness;
-                    radius = 0.92f - 0.06f * (1f - mood.Arousal01);
+                    // Gentle expressive breathing anchored directly around the stem's measured stereo pan
+                    float subtleDelta = (3f + 11f * energy01) * moodWidth * widthFactor + tenseOsc * 0.35f;
+                    azDeg = side * Math.Min(115f, Math.Max(4f, homeMag + subtleDelta));
+                    elDeg = 3f + 11f * highBrightness * (1f - subBassRatio) + moodElevBias * 0.45f;
+                    radius = 0.90f + moodRadiusDelta * 0.6f + 0.04f * energy01;
                     break;
                 case SpatialChoreoMode.Cinematic:
-                    // Progressive outer-perimeter sweep within/around the stem's hemisphere without center ping-pong
-                    float cinematicSweep = homeMag + (16f + 44f * progress01 + 22f * energy01) * moodWidth;
-                    azDeg = SpatialCortexMath.WrapAzimuthDeg(side * Math.Min(162f, cinematicSweep));
-                    elDeg = 10f + 34f * highBrightness * (1f - subBassRatio);
-                    radius = mood.Tag == LyricMoodTag.Intimate ? 0.80f : (0.86f + 0.12f * energy01);
+                    // Wide dramatic arc launching from original mix pan, blooming vertically & laterally on anthems
+                    float cinematicSweep = homeMag + (14f + 42f * progress01 + 26f * energy01) * moodWidth * widthFactor + tenseOsc;
+                    azDeg = SpatialCortexMath.WrapAzimuthDeg(side * Math.Min(164f, Math.Max(6f, cinematicSweep)));
+                    elDeg = 8f + 32f * highBrightness * (1f - subBassRatio) + moodElevBias;
+                    radius = 0.88f + moodRadiusDelta + 0.10f * energy01;
                     break;
                 case SpatialChoreoMode.Orbit:
-                    // Monotonic continuous azimuthal progression around the perimeter from the stem's home angle
-                    azDeg = SpatialCortexMath.WrapAzimuthDeg(side * homeMag + side * progress01 * 300f);
-                    elDeg = 10f + 20f * MathF.Sin(progress01 * MathF.PI * 2f) * (1f - subBassRatio);
-                    radius = 0.88f;
+                    // Continuous monotonic orbital progression anchored at the stem's original stereo mix azimuth
+                    azDeg = SpatialCortexMath.WrapAzimuthDeg(homeAzDeg + side * progress01 * 300f);
+                    elDeg = 10f + (16f + 8f * mood.Arousal01) * MathF.Sin(progress01 * MathF.PI * 2f) * (1f - subBassRatio) + moodElevBias * 0.5f;
+                    radius = 0.88f + moodRadiusDelta * 0.5f;
                     break;
                 default: // Musical
-                    // Phrase-locked lateral & elevation swell strictly inside the stem's natural hemisphere
-                    float musicalMag = homeMag + (6f + 26f * energy01) * moodWidth;
-                    azDeg = side * Math.Min(128f, musicalMag);
-                    elDeg = 6f + 22f * highBrightness * (1f - subBassRatio);
-                    radius = mood.Tag == LyricMoodTag.Intimate ? 0.82f : 0.90f;
+                    // Lyrics- and energy-coupled expansion strictly around the stem's measured mix hemisphere
+                    float musicalDelta = (5f + 26f * energy01) * moodWidth * widthFactor + tenseOsc * 0.65f;
+                    azDeg = side * Math.Min(132f, Math.Max(4f, homeMag + musicalDelta));
+                    elDeg = 5f + 22f * highBrightness * (1f - subBassRatio) + moodElevBias * 0.75f;
+                    radius = 0.89f + moodRadiusDelta * 0.85f + 0.05f * energy01;
                     break;
             }
 
@@ -1471,6 +1649,21 @@ namespace Cavern.Spatial {
             SpatialChoreoMode mode,
             double durationSec,
             double stepSec = 0.05) {
+            return Build(stemNames, cues, mode, durationSec, stepSec, stemHomeAzimuthsDeg: null);
+        }
+
+        /// <summary>
+        /// Builds a governed, C2-smoothed, ERB-repelled ring-LUT choreography track from stem names, cues,
+        /// and optional measured per-stem stereo pan azimuths (degrees) so objects anchor and orbit relative
+        /// to their original stereo mix placement.
+        /// </summary>
+        public static SpatialChoreoTrack Build(
+            IReadOnlyList<string> stemNames,
+            DirectorCue[] cues,
+            SpatialChoreoMode mode,
+            double durationSec,
+            double stepSec,
+            float[] stemHomeAzimuthsDeg) {
             if (stemNames == null || stemNames.Count == 0) {
                 return new SpatialChoreoTrack(
                     mode,
@@ -1509,8 +1702,13 @@ namespace Cavern.Spatial {
 
             Vector4[] lut = new Vector4[stemCount * frameCount];
             Vector4[] baseAnchors = new Vector4[stemCount];
+            bool[] hasMeasuredHome = new bool[stemCount];
             for (int s = 0; s < stemCount; s++) {
-                baseAnchors[s] = GetDefaultStemAnchor(roles[s], s, stemCount);
+                float measuredAz = (stemHomeAzimuthsDeg != null && s < stemHomeAzimuthsDeg.Length)
+                    ? stemHomeAzimuthsDeg[s]
+                    : float.NaN;
+                hasMeasuredHome[s] = SpatialCortexMath.IsFinite(measuredAz);
+                baseAnchors[s] = GetDefaultStemAnchor(roles[s], s, stemCount, measuredAz);
             }
 
             // Step 1: Sample keyframe curves & apply C2 cubic B-spline interpolation per stem
@@ -1528,14 +1726,14 @@ namespace Cavern.Spatial {
                 float orbitPhaseOffsetDeg = (!isAnchored && orbitingTotal > 0)
                     ? (orbitingSlot++ * (360f / orbitingTotal))
                     : 0f;
-                List<DirectorCue> stemCues = CollectStemCues(sortedCues, r, baseAnchors[s], safeDur, mode, orbitPhaseOffsetDeg);
+                List<DirectorCue> stemCues = CollectStemCues(sortedCues, r, baseAnchors[s], safeDur, mode, orbitPhaseOffsetDeg, hasMeasuredHome[s]);
                 SampleStemC2Curve(stemCues, r, lut, s * frameCount, frameCount, safeStep);
             }
 
             // Step 2: Frame-wise 12x6 ERB repulsion across concurrent stems
-            // (Orbit mode trajectories are analytically phase-spaced & elevation-lifted over front anchors,
-            // so skipping horizontal ERB repulsion prevents azimuthal bounce-back when passing az=0 deg.)
-            if (mode != SpatialChoreoMode.Orbit) {
+            // (Skip in Orbit mode so phase-spaced perimeter sweeps never bounce back at az=0 deg, and skip in Off mode
+            // so stationary objects preserve their exact measured stereo mix pan azimuth without artificial outward push.)
+            if (mode != SpatialChoreoMode.Orbit && mode != SpatialChoreoMode.Off) {
                 Vector3[] frameDirs = new Vector3[stemCount];
                 float[] frameEnergies = new float[stemCount];
                 for (int f = 0; f < frameCount; f++) {
@@ -1708,7 +1906,7 @@ namespace Cavern.Spatial {
                 frameCount);
         }
 
-        static Vector4 GetDefaultStemAnchor(NeuralStemRole role, int stemIdx, int totalStems) {
+        static Vector4 GetDefaultStemAnchor(NeuralStemRole role, int stemIdx, int totalStems, float measuredHomeAzDeg = float.NaN) {
             float az;
             float el;
             float rad = 0.92f;
@@ -1757,6 +1955,12 @@ namespace Cavern.Spatial {
                     rad = 0.90f;
                     break;
             }
+            if (SpatialCortexMath.IsFinite(measuredHomeAzDeg)) {
+                // Anchor directly on measured stereo mix azimuth (vocal/bass still clamped cleanly by governor)
+                if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals || role == NeuralStemRole.Bass || MathF.Abs(measuredHomeAzDeg) >= 3f) {
+                    az = measuredHomeAzDeg;
+                }
+            }
             PsychoacousticGovernor.ClampRoleAngles(role, ref az, ref el, ref rad);
             Vector3 unit = PsychoacousticGovernor.SphericalToCartesianUnit(az, el);
             return new Vector4(unit.X, unit.Y, unit.Z, rad);
@@ -1768,7 +1972,8 @@ namespace Cavern.Spatial {
             Vector4 anchor,
             double durationSec,
             SpatialChoreoMode mode,
-            float orbitPhaseOffsetDeg = 0f) {
+            float orbitPhaseOffsetDeg = 0f,
+            bool hasMeasuredHomeAz = false) {
             float anchorAz;
             float anchorEl;
             PsychoacousticGovernor.CartesianToSphericalDeg(new Vector3(anchor.X, anchor.Y, anchor.Z), out anchorAz, out anchorEl);
@@ -1777,15 +1982,18 @@ namespace Cavern.Spatial {
             List<DirectorCue> list = new List<DirectorCue>();
 
             if (mode == SpatialChoreoMode.Orbit && !isAnchoredRole && durationSec > 0.5) {
-                // Continuous monotonic perimeter orbit with even phase separation and front elevation clearance
-                float startAz = SpatialCortexMath.WrapAzimuthDeg(35f + orbitPhaseOffsetDeg);
+                // Continuous monotonic perimeter orbit launching from measured mix pan (or evenly phase-spaced fallback)
+                float startAz = hasMeasuredHomeAz && MathF.Abs(anchorAz) >= 3f
+                    ? anchorAz
+                    : SpatialCortexMath.WrapAzimuthDeg(35f + orbitPhaseOffsetDeg);
+                float orbitDir = anchorAz < -3f ? -1f : 1f;
                 float degPerSec = 22f; // smooth <= 22 deg/s well inside 60 deg/s slew limit
                 float totalSweepDeg = (float)Math.Min(360.0 * Math.Max(1.0, Math.Floor(durationSec / 16.0) + 1.0), degPerSec * durationSec);
                 int steps = Math.Max(12, (int)Math.Ceiling(totalSweepDeg / 30f));
                 for (int i = 0; i <= steps; i++) {
                     float frac = i / (float)steps;
                     double t = durationSec * frac;
-                    float az = SpatialCortexMath.WrapAzimuthDeg(startAz + totalSweepDeg * frac);
+                    float az = SpatialCortexMath.WrapAzimuthDeg(startAz + orbitDir * totalSweepDeg * frac);
                     float frontClearanceEl = 18f * MathF.Max(0f, MathF.Cos(az * SpatialCortexMath.DegToRad));
                     float el = anchorEl + frontClearanceEl + 8f * MathF.Sin(frac * MathF.PI * 2f);
                     float rad = anchor.W;
