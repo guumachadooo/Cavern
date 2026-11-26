@@ -29,10 +29,13 @@ from typing import Any, Callable
 
 AGENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = AGENT_DIR.parents[1]
-if str(AGENT_DIR) not in sys.path:
-    sys.path.insert(0, str(AGENT_DIR))
+PLUGIN_SCRIPTS_DIR = REPO_ROOT / ".agents" / "plugins" / "dynamic-fractal-planner" / "scripts"
+for _sp in (str(AGENT_DIR), str(PLUGIN_SCRIPTS_DIR)):
+    if _sp not in sys.path:
+        sys.path.insert(0, _sp)
 
 import omni_agent_client as oac  # noqa: E402
+import qa_gate  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Pure Parsers, Classifiers & Normalizers (100% unit-testable offline)
@@ -527,6 +530,7 @@ def analyze_ui_geometry_oracle(
             parent_clips: bool,
             parent_clickable_ok: bool,
             eff_bg_argb: int,
+            ancestor_custom_bg: bool = False,
         ) -> None:
             if not isinstance(node, dict) or depth > 22:
                 return
@@ -543,6 +547,10 @@ def analyze_ui_geometry_oracle(
 
             node_bg = node.get("bg")
             cur_bg = int(node_bg) if isinstance(node_bg, int) else eff_bg_argb
+            is_custom_canvas = ntype in ("OneUiFrostedCapsuleView", "OneUiGlassCardView")
+            cur_custom_bg = bool(node.get("customBg")) or is_custom_canvas or (
+                ancestor_custom_bg and not isinstance(node_bg, int)
+            )
 
             # G3: Zero-size visible interactive or text view on laid-out screen
             if laid_out and (nw <= 0 or nh <= 0):
@@ -659,7 +667,7 @@ def analyze_ui_geometry_oracle(
                     "message": f"{root_scope}: {ntype} '{label}' font size {sp:.1f}sp is below 9sp readability floor",
                 })
             fg = node.get("fg")
-            has_custom_bg = bool(node.get("customBg"))
+            has_custom_bg = cur_custom_bg
             if isinstance(fg, int) and txt and enabled and not has_custom_bg:
                 fg_a = (fg >> 24) & 0xFF
                 if fg_a >= 96:
@@ -783,6 +791,7 @@ def analyze_ui_geometry_oracle(
                     next_clips,
                     this_clickable_ok,
                     cur_bg,
+                    cur_custom_bg,
                 )
 
         walk(
@@ -794,6 +803,7 @@ def analyze_ui_geometry_oracle(
             parent_clips=True,
             parent_clickable_ok=False,
             eff_bg_argb=base_bg_argb,
+            ancestor_custom_bg=False,
         )
 
     if tree_obj.get("activity"):
@@ -2297,6 +2307,136 @@ def analyze_acoustic_probe_result(probe_obj: Any, label: str) -> list[dict[str, 
     return issues
 
 
+# ---------------------------------------------------------------------------
+# Q4 Frozen Regression Contracts, Blocking QA Gate & Offline M4 Canary
+# ---------------------------------------------------------------------------
+
+def evaluate_cavern_qa_gate(
+    report: dict[str, Any],
+    contracts_eval: dict[str, Any] | None = None,
+    *,
+    p95_budget_ms: float = 12.0,
+) -> dict[str, Any]:
+    """Evaluate Cavernize QA Gate verdict (`CRITICAL=0, HIGH=0, GEOM=0, EXIT_CRASH_NEW=0, P95<=12ms, CONTRACTS=0`)."""
+    thresholds = {
+        "max_critical": 0,
+        "max_high": 0,
+        "max_geom": 0,
+        "max_exit_crash_new": 0,
+        "max_frame_p95_ms": float(p95_budget_ms),
+        "max_contracts_failed": 0,
+        "require_soak_pass": True,
+    }
+    return qa_gate.evaluate_qa_gate(report, contracts_eval, thresholds)
+
+
+def run_m4_mutation_canary_offline() -> dict[str, Any]:
+    """Mutation-testing ('test-the-test') canary for QA Layer Q4 (`W53.Q4`).
+
+    Verifies:
+      - 2 clean baselines (empty active + historical-archive-only) -> 0 false positives (PASS)
+      - 10 adversarial Q4 mutations -> 100% caught (FAIL)
+    """
+    clean_report = {
+        "ok": True,
+        "findings": [],
+        "q2GateSummary": {"passed": True, "exitInfoNewFatal": 0, "totalFrames": 60, "frameCpuP95Ms": 7.2, "frozenFrames": 0},
+        "q3SoakSummary": {"passed": True, "cycles": 10},
+        "q4GateSummary": {"passed": 12, "failed": 0, "total": 12, "schemaErrors": []},
+    }
+    hist_only_report = {
+        "ok": True,
+        "findings": [
+            {"severity": "CRITICAL", "category": "exit_info_crash", "origin": "historical_archive", "title": "old crash"},
+            {"severity": "HIGH", "category": "ui_screen_overflow", "origin": "historical_archive", "title": "old overflow"},
+        ],
+        "q2GateSummary": {"passed": True, "exitInfoNewFatal": 0, "totalFrames": 40, "frameCpuP95Ms": 8.4, "frozenFrames": 0},
+        "q3SoakSummary": {"passed": True, "cycles": 10},
+        "q4GateSummary": {"passed": 12, "failed": 0, "total": 12, "schemaErrors": []},
+    }
+
+    clean_fps = 0
+    if not evaluate_cavern_qa_gate(clean_report)["ok"]:
+        clean_fps += 1
+    if not evaluate_cavern_qa_gate(hist_only_report)["ok"]:
+        clean_fps += 1
+
+    mutations: list[tuple[str, str, Callable[[], bool]]] = [
+        ("M4_active_critical_blocks", "CRITICAL=1>0", lambda: (
+            not evaluate_cavern_qa_gate({**clean_report, "findings": [{"severity": "CRITICAL", "category": "crash", "origin": "live_triggered"}]})["ok"]
+        )),
+        ("M4_active_high_blocks", "HIGH=1>0", lambda: (
+            not evaluate_cavern_qa_gate({**clean_report, "findings": [{"severity": "HIGH", "category": "exception", "origin": "live_triggered"}]})["ok"]
+        )),
+        ("M4_geom_overflow_blocks", "GEOM=1>0", lambda: (
+            "GEOM=1>0" in evaluate_cavern_qa_gate({**clean_report, "findings": [{"severity": "HIGH", "category": "ui_parent_horizontal_clip", "origin": "live_triggered"}]})["reasons"]
+        )),
+        ("M4_exit_crash_new_blocks", "EXIT_CRASH_NEW=1>0", lambda: (
+            "EXIT_CRASH_NEW=1>0" in evaluate_cavern_qa_gate({**clean_report, "q2GateSummary": {**clean_report["q2GateSummary"], "exitInfoNewFatal": 1}})["reasons"]
+        )),
+        ("M4_frame_p95_exceeded_blocks", "P95=15.40ms>12.0ms", lambda: (
+            any(r.startswith("P95=") for r in evaluate_cavern_qa_gate({**clean_report, "q2GateSummary": {**clean_report["q2GateSummary"], "frameCpuP95Ms": 15.4}})["reasons"])
+        )),
+        ("M4_soak_v11_fail_blocks", "SOAK_V11=FAIL", lambda: (
+            "SOAK_V11=FAIL" in evaluate_cavern_qa_gate({**clean_report, "q3SoakSummary": {"passed": False, "cycles": 10}})["reasons"]
+        )),
+        ("M4_frozen_contract_fail_blocks", "CONTRACTS_FAIL=1>0", lambda: (
+            "CONTRACTS_FAIL=1>0" in evaluate_cavern_qa_gate({**clean_report, "q4GateSummary": {"passed": 11, "failed": 1, "total": 12, "schemaErrors": []}})["reasons"]
+        )),
+        ("M4_live_contract_finding_blocks", "CONTRACTS_FAIL=1>0", lambda: (
+            "CONTRACTS_FAIL=1>0" in evaluate_cavern_qa_gate({**clean_report, "findings": [{"severity": "HIGH", "category": "regression_contract_failed", "origin": "live_triggered"}]})["reasons"]
+        )),
+        ("M4_tampered_disabled_contract_rejected", "schema_error", lambda: (
+            len(qa_gate.validate_contracts_registry({
+                "version": 1,
+                "contracts": [{
+                    "id": "REG-TEST-TAMPER",
+                    "bug_ref": "B99",
+                    "title": "Tampered",
+                    "domain": "ui",
+                    "severity": "HIGH",
+                    "status": "disabled",
+                    "immutable": False,
+                    "mode": "offline",
+                    "test_ref": "test_x",
+                    "offline_checks": [{"kind": "file_exists", "path": "README.md"}],
+                }],
+            })) >= 2
+        )),
+        ("M4_cold_context_prompt_isolation", "cold_prompt_ok", lambda: (
+            (lambda p: p["isolated"] is True and p["stripBuilderHistory"] is True
+             and "COLD_CONTEXT_ADVERSARIAL_QA_DESTROYER" in p["prompt"]
+             and "1-bug=1-test-first" in p["prompt"]
+             and "QA_GATE|VERDICT=PASS|FAIL" in p["prompt"])(
+                qa_gate.build_cold_context_qa_prompt(
+                    "Verify playback & 3D room",
+                    changed_files=["MainActivity.PlayerTab.cs"],
+                    acceptance_criteria=["Repeat chip never clips"],
+                    contracts_count=12,
+                )
+            )
+        )),
+    ]
+
+    details: list[dict[str, Any]] = []
+    caught = 0
+    for name, expected, fn in mutations:
+        hit = bool(fn())
+        if hit:
+            caught += 1
+        details.append({"mutation": name, "expected": expected, "caught": hit})
+
+    total = len(mutations)
+    return {
+        "ok": (caught == total) and (clean_fps == 0),
+        "caught": caught,
+        "total": total,
+        "detectRate": round(caught / float(total), 4) if total else 0.0,
+        "cleanFalsePositives": clean_fps,
+        "details": details,
+    }
+
+
 def classify_applog_severity(entry: dict[str, str]) -> tuple[str, str]:
     """Map an AppLogger entry to (severity, category)."""
     lvl = entry.get("level", "INFO").upper()
@@ -2505,6 +2645,16 @@ def generate_report_markdown(report: dict[str, Any]) -> str:
             f"ΔViews=`{q3.get('viewDelta', 0):+d}` | ΔThreads=`{q3.get('threadDelta', 0):+d}` | "
             f"stuckOp=`{q3.get('stuckOp', False)}` | dialogs=`{q3.get('leakedDialogs', 0)}`"
         )
+    q4 = report.get("q4GateSummary")
+    if isinstance(q4, dict) and q4.get("total", 0) > 0:
+        lines.append(
+            f"- **Q4 Frozen Regression Contracts (`V12`):** `{'PASS' if q4.get('failed', 0) == 0 and not q4.get('schemaErrors') else 'FAIL'}` | "
+            f"passed=`{q4.get('passed', 0)}/{q4.get('total', 0)}` | failed=`{q4.get('failed', 0)}` | "
+            f"live=`{q4.get('livePassed', 0)}/{q4.get('liveTotal', 0)}` | hotExec=`{q4.get('hotExecVerified', False)}`"
+        )
+    gate_obj = report.get("qaGate")
+    if isinstance(gate_obj, dict) and gate_obj.get("summaryLine"):
+        lines.append(f"- **Blocking QA Gate Verdict:** `{gate_obj['summaryLine']}`")
     lines.append("")
 
     vectors = report.get("vectors") or []
@@ -2755,6 +2905,8 @@ class LiveBugHunter:
         q2_p95_budget_ms: float = 12.0,
         q2_touch_budget_ms: float = 50.0,
         soak_cycles: int = 16,
+        contracts_file: str = "",
+        gate_mode: bool = False,
     ) -> None:
         self.bridge = bridge
         self.mode = mode
@@ -2768,12 +2920,15 @@ class LiveBugHunter:
         self.q2_p95_budget_ms = float(q2_p95_budget_ms)
         self.q2_touch_budget_ms = float(q2_touch_budget_ms)
         self.soak_cycles = max(2, min(30, int(soak_cycles)))
+        self.contracts_file = contracts_file
+        self.gate_mode = bool(gate_mode)
         self.ledger = FindingLedger()
         self.vector_summaries: list[dict[str, Any]] = []
         self.meta: dict[str, Any] = {
             "mode": mode,
             "allowMutate": allow_mutate,
             "strictModeEnabled": enable_strict_mode,
+            "gateMode": bool(gate_mode),
             "startedUtc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
 
@@ -2809,6 +2964,18 @@ class LiveBugHunter:
             "rageTargets": 0,
             "dragSweeps": 0,
             "reflowTabs": 0,
+        }
+        self._q4_summary: dict[str, Any] = {
+            "passed": 0,
+            "failed": 0,
+            "total": 0,
+            "offlinePassed": 0,
+            "offlineFailed": 0,
+            "livePassed": 0,
+            "liveTotal": 0,
+            "hotExecVerified": False,
+            "schemaErrors": [],
+            "failedIds": [],
         }
         self._created_cache_files: list[str] = []
         self._has_chaos_hunt_cmd = False
@@ -4293,6 +4460,286 @@ public static class SpatialTrajectoryHotProbe {
             f"stuckOp={ev['stuckOp']}, dialogs={ev['leakedDialogs']}"
         )
 
+    # ==================== VECTOR 12: Q4 FROZEN REGRESSION & STATE-MACHINE CONTRACTS ====================
+    def _run_hot_exec_state_contract_probe(self) -> dict[str, Any] | None:
+        """Compile & execute in-RAM CavernQ4StateContractProbe via collectible AssemblyLoadContext."""
+        probe_cs = r"""
+using System;
+using System.Reflection;
+using Cavern.Neural;
+
+public static class CavernQ4StateContractProbe {
+    public static string Run() {
+        bool blurDisabled = false;
+        bool onnxPssOk = false;
+        long onnxCapMb = 0;
+        bool karaokeOk = false;
+        bool noStuckOp = true;
+        string err = "";
+        try {
+            Assembly appAsm = null;
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies()) {
+                var n = asm.GetName().Name ?? "";
+                if (string.Equals(n, "CavernizeAndroid", StringComparison.OrdinalIgnoreCase)) {
+                    appAsm = asm;
+                    break;
+                }
+            }
+            if (appAsm == null) {
+                err = "CavernizeAndroid assembly not loaded";
+            } else {
+                var blurT = appAsm.GetType("CavernizeAndroid.Theme.OneUiMotionBlur");
+                var blurProp = blurT?.GetProperty("EnableFullScreenRenderEffectBlur", BindingFlags.Public | BindingFlags.Static);
+                if (blurProp == null) {
+                    err += "Missing OneUiMotionBlur.EnableFullScreenRenderEffectBlur; ";
+                } else {
+                    blurDisabled = !Convert.ToBoolean(blurProp.GetValue(null));
+                }
+                var onnxT = appAsm.GetType("CavernizeAndroid.Services.NativeOnnxRuntimeBridge");
+                var pssField = onnxT?.GetField("MaxSingleProcessModelPssBytes", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static);
+                if (pssField == null) {
+                    err += "Missing NativeOnnxRuntimeBridge.MaxSingleProcessModelPssBytes; ";
+                } else {
+                    long capBytes = Convert.ToInt64(pssField.GetRawConstantValue() ?? pssField.GetValue(null));
+                    onnxCapMb = capBytes / (1024L * 1024L);
+                    onnxPssOk = (onnxCapMb > 0 && onnxCapMb <= 2600L);
+                }
+            }
+            // Verify SpatialKaraokeEngine reset + zero-NaN DSP invariant in live runtime
+            using (var engine = new SpatialKaraokeEngine(48000, 2)) {
+                engine.IsEnabled = true;
+                engine.VocalLevel = 0.0f;
+                engine.ResetAdaptationState();
+                float[] mixL = new float[512];
+                float[] mixR = new float[512];
+                float[] refL = new float[512];
+                float[] refR = new float[512];
+                for (int i = 0; i < 512; i++) {
+                    float s = 0.25f * MathF.Sin(2f * MathF.PI * 440f * i / 48000f);
+                    mixL[i] = s; mixR[i] = s; refL[i] = s; refR[i] = s;
+                }
+                float[][] channels = new float[][] { mixL, mixR };
+                bool[] isLfe = new bool[] { false, false };
+                bool[] isFront = new bool[] { true, true };
+                engine.ProcessMultichannelInPlace(channels, isLfe, isFront, 2, 512, refL, null, false, refR, null);
+                bool finite = true;
+                for (int i = 0; i < 512; i++) {
+                    if (!float.IsFinite(mixL[i]) || !float.IsFinite(mixR[i])) { finite = false; break; }
+                }
+                engine.ResetAdaptationState();
+                karaokeOk = finite;
+            }
+        } catch (Exception ex) {
+            err = ex.GetType().Name + ": " + ex.Message;
+        }
+        bool ok = blurDisabled && onnxPssOk && karaokeOk && noStuckOp && string.IsNullOrEmpty(err);
+        return "{\"ok\":" + (ok ? "true" : "false")
+            + ",\"blur_disabled\":" + (blurDisabled ? "true" : "false")
+            + ",\"onnx_pss_cap_lte_2600mb\":" + (onnxPssOk ? "true" : "false")
+            + ",\"onnxCapMb\":" + onnxCapMb
+            + ",\"spatial_karaoke_reset_zero_nan\":" + (karaokeOk ? "true" : "false")
+            + ",\"no_stuck_operation\":" + (noStuckOp ? "true" : "false")
+            + ",\"error\":\"" + err.Replace("\\", "\\\\").Replace("\"", "'") + "\"}";
+    }
+}
+"""
+        if hasattr(self.bridge, "run_hot_exec_probe"):
+            return self.bridge.run_hot_exec_probe(probe_cs)
+        if not hasattr(self.bridge, "relay") or "hot_exec" not in getattr(self, "_capabilities", ()):
+            return None
+        try:
+            import secrets as _secrets
+            import hot_probe_compiler as hpc  # noqa: E402
+            comp = hpc.compile_hot_probe(probe_cs, probe_name="CavernQ4StateContractProbe", include_android=False)
+            if not comp.get("ok"):
+                return {"ok": False, "error": f"compile_failed:{comp.get('error', '')[:160]}"}
+            req_id = f"q4_{int(time.time())}_{_secrets.token_hex(4)}"
+            args_payload = hpc.build_signed_hot_exec_args(
+                comp["dllBytes"],
+                self.bridge.secret,
+                req_id,
+                entry_type="CavernQ4StateContractProbe",
+                args_json="{}",
+                timeout_sec=20,
+            )
+            res = self.bridge.cmd("hot_exec", args_payload, tier=2, timeout_sec=45)
+            if not res.get("ok"):
+                return {"ok": False, "error": f"hot_exec_failed:{res.get('error', '')[:160]}"}
+            j = res.get("json") or {}
+            raw_ret = j.get("output") if j.get("output") is not None else j.get("result")
+            if isinstance(raw_ret, str) and raw_ret.strip():
+                try:
+                    parsed = json.loads(raw_ret)
+                    if isinstance(parsed, dict):
+                        return parsed
+                except Exception:
+                    return {"ok": False, "error": f"bad_probe_json:{raw_ret[:160]}"}
+            return j if isinstance(j, dict) else {"ok": False, "error": "empty_probe_result"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:160]}
+
+    def _v12_regression_state_contracts(self) -> str:
+        """Execute Q4 frozen 1-bug=1-test regression contracts (offline + live bridge/hot_exec state machines)."""
+        cpath = qa_gate.resolve_contracts_path(REPO_ROOT, None, self.contracts_file)
+        data, load_errs = qa_gate.load_contracts_registry(cpath)
+        if load_errs or data is None:
+            self._q4_summary["schemaErrors"] = list(load_errs)
+            self._q4_summary["failed"] = 1
+            self.ledger.record(
+                severity="HIGH",
+                vector="V12_regression_state_contracts",
+                source="regression_contract_q4",
+                category="regression_contract_failed",
+                title=f"Frozen regression contracts missing/invalid: {'; '.join(load_errs)[:180]}",
+                repro_step=f"qa_gate.load_contracts_registry({cpath})",
+                evidence="; ".join(load_errs)[:320],
+            )
+            return f"contracts load FAILED: {'; '.join(load_errs)}"
+
+        off_ev = qa_gate.evaluate_offline_contracts(REPO_ROOT, data)
+        failed_ids: list[str] = []
+        for s_err in off_ev.get("schemaErrors") or []:
+            self.ledger.record(
+                severity="HIGH",
+                vector="V12_regression_state_contracts",
+                source="regression_contract_q4",
+                category="regression_contract_failed",
+                title=f"Frozen contract schema violation: {s_err[:180]}",
+                repro_step="plan_tool.py qa verify-contracts --strict",
+                evidence=str(s_err)[:320],
+            )
+        for f_item in off_ev.get("failures") or []:
+            cid = str(f_item.get("id") or "REG-UNKNOWN")
+            failed_ids.append(cid)
+            errs_s = "; ".join(f_item.get("errors") or [])
+            self.ledger.record(
+                severity=str(f_item.get("severity") or "HIGH"),
+                vector="V12_regression_state_contracts",
+                source="regression_contract_q4",
+                category="regression_contract_failed",
+                title=f"Frozen contract {cid} ({f_item.get('bug_ref', '')}) FAILED: {errs_s[:160]}",
+                repro_step=f"V12 offline contract {cid} ({f_item.get('test_ref', '')})",
+                evidence=errs_s[:320],
+            )
+
+        # Execute live bridge + hot_exec state-machine contracts
+        live_total = 0
+        live_passed = 0
+        live_failed = 0
+        hot_exec_res: dict[str, Any] | None = None
+        hot_exec_attempted = False
+
+        for item in data.get("contracts") or []:
+            if not isinstance(item, dict) or str(item.get("status") or "frozen").lower() == "waived":
+                continue
+            lc = item.get("live_check")
+            if not isinstance(lc, dict) or not lc.get("kind"):
+                continue
+            cid = str(item.get("id") or "REG-LIVE")
+            sev = str(item.get("severity") or "HIGH")
+            kind = str(lc.get("kind") or "")
+            live_total += 1
+            ok_live = True
+            detail = ""
+
+            if kind == "reflect_equals":
+                if "reflect_get" in getattr(self, "_capabilities", ()):
+                    r = self.bridge.cmd("reflect_get", {"type": lc.get("type", ""), "path": lc.get("path", "")}, tier=2, timeout_sec=15)
+                    if r.get("ok") and isinstance(r.get("json"), dict) and "value" in r["json"]:
+                        actual = r["json"].get("value")
+                        expected = lc.get("expected")
+                        if actual != expected:
+                            ok_live = False
+                            detail = f"{lc.get('type')}.{lc.get('path')} expected {expected!r}, got {actual!r}"
+                    else:
+                        ok_live = False
+                        detail = f"reflect_get failed for {lc.get('type')}.{lc.get('path')}: {str(r.get('error') or r.get('body') or 'missing value')[:160]}"
+                else:
+                    detail = "reflect_get not in capabilities"
+
+            elif kind == "settings_roundtrip":
+                key = str(lc.get("key") or "Iso226Enabled")
+                if not self.allow_mutate:
+                    detail = "read-only skip (--no-mutate)"
+                else:
+                    orig = bool(self._baseline_settings.get(key, False))
+                    flipped = not orig
+                    try:
+                        r1 = self.bridge.cmd("settings_set", {"key": key, "value": flipped}, tier=1, timeout_sec=15)
+                        r2 = self.bridge.cmd("settings_get", {}, tier=0, timeout_sec=15)
+                        got_flip = (r2.get("json") or {}).get(key) if r2.get("ok") else None
+                        if not r1.get("ok") or got_flip != flipped:
+                            ok_live = False
+                            detail = f"settings_set({key}={flipped}) -> settings_get returned {got_flip!r}"
+                    finally:
+                        self.bridge.cmd("settings_set", {"key": key, "value": orig}, tier=1, timeout_sec=15)
+                    r3 = self.bridge.cmd("settings_get", {}, tier=0, timeout_sec=15)
+                    got_rest = (r3.get("json") or {}).get(key) if r3.get("ok") else None
+                    if ok_live and got_rest != orig:
+                        ok_live = False
+                        detail = f"settings_restore({key}={orig}) -> settings_get returned {got_rest!r}"
+
+            elif kind in ("hot_exec_invariant", "hot_exec_bundle"):
+                if not hot_exec_attempted:
+                    hot_exec_attempted = True
+                    hot_exec_res = self._run_hot_exec_state_contract_probe()
+                    if isinstance(hot_exec_res, dict) and "soak_snapshot" in getattr(self, "_capabilities", ()):
+                        rs = self.bridge.cmd("soak_snapshot", {"forceGc": False}, tier=0, timeout_sec=15)
+                        if rs.get("ok") and isinstance(rs.get("json"), dict) and "isOperationRunning" in rs["json"]:
+                            hot_exec_res["no_stuck_operation"] = not bool(rs["json"].get("isOperationRunning"))
+                if hot_exec_res is None:
+                    detail = "hot_exec unavailable in offline mock"
+                elif str(hot_exec_res.get("error") or "").strip():
+                    ok_live = False
+                    detail = f"hot_exec probe error: {str(hot_exec_res.get('error'))[:200]}"
+                else:
+                    invs = lc.get("invariants") if kind == "hot_exec_bundle" else [lc.get("invariant")]
+                    missing = [iv for iv in (invs or []) if iv and hot_exec_res.get(iv) is not True]
+                    if missing:
+                        ok_live = False
+                        detail = f"hot_exec invariants failed: {', '.join(missing)}"
+                    elif not hot_exec_res.get("ok") and not invs:
+                        ok_live = False
+                        detail = f"hot_exec probe failed: {json.dumps(hot_exec_res, ensure_ascii=False)[:200]}"
+
+            if ok_live:
+                live_passed += 1
+            else:
+                live_failed += 1
+                if cid not in failed_ids:
+                    failed_ids.append(cid)
+                self.ledger.record(
+                    severity=sev,
+                    vector="V12_regression_state_contracts",
+                    source="regression_contract_q4",
+                    category="regression_contract_failed",
+                    title=f"Live state contract {cid} FAILED: {detail[:180]}",
+                    repro_step=f"V12 live contract {cid} ({kind})",
+                    evidence=detail[:320],
+                )
+
+        total_contracts = int(off_ev.get("total") or 0)
+        total_failed = len(set(failed_ids)) + len(off_ev.get("schemaErrors") or [])
+        total_passed = max(0, total_contracts - len(set(failed_ids)) - int(off_ev.get("waived") or 0))
+        self._q4_summary.update({
+            "passed": total_passed,
+            "failed": total_failed,
+            "total": total_contracts,
+            "offlinePassed": int(off_ev.get("passed") or 0),
+            "offlineFailed": int(off_ev.get("failed") or 0),
+            "livePassed": live_passed,
+            "liveTotal": live_total,
+            "hotExecVerified": bool(hot_exec_res and hot_exec_res.get("ok")),
+            "schemaErrors": list(off_ev.get("schemaErrors") or []),
+            "failedIds": failed_ids,
+        })
+        self._watch_step_delta("V12_regression_state_contracts", "Q4 frozen regression & state contracts", check_logcat=False)
+        return (
+            f"contracts {total_passed}/{total_contracts} PASS "
+            f"(offline={off_ev.get('passed', 0)}/{off_ev.get('offlineChecked', 0)}, "
+            f"live={live_passed}/{live_total}, hotExec={self._q4_summary['hotExecVerified']}, fail={total_failed})"
+        )
+
     # ==================== GUARANTEED CLEAN STATE RESTORE ====================
     def _restore_settings(self) -> bool:
         if not self._baseline_settings:
@@ -4379,6 +4826,7 @@ public static class SpatialTrajectoryHotProbe {
                 ("V9_ui_latency_and_search_oracle", self._v9_ui_latency_and_search_oracle),
                 ("V10_spatial_trajectory_and_hot_exec", self._v10_spatial_trajectory_and_hot_exec),
                 ("V11_dirty_state_soak", self._v11_dirty_state_soak),
+                ("V12_regression_state_contracts", self._v12_regression_state_contracts),
             ]
             try:
                 for vname, vfn in all_vectors:
@@ -4404,9 +4852,11 @@ public static class SpatialTrajectoryHotProbe {
             "totalActiveFindings": len(self.ledger.active_findings()),
             "q2GateSummary": dict(self._q2_summary),
             "q3SoakSummary": dict(self._q3_summary),
+            "q4GateSummary": dict(self._q4_summary),
             "vectors": self.vector_summaries,
             "findings": self.ledger.to_dicts(),
         }
+        report["qaGate"] = evaluate_cavern_qa_gate(report, p95_budget_ms=self.q2_p95_budget_ms)
         return report
 
     def run_watch(self, duration_sec: int = 60, interval_sec: float = 3.0) -> dict[str, Any]:
@@ -4469,6 +4919,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--q2-p95-ms", type=float, default=12.0, help="Q2 120 Hz FrameMetrics P95 budget in ms (default: 12.0)")
     p.add_argument("--q2-touch-ms", type=float, default=50.0, help="Q2 gesture/tab touch-to-first-frame budget in ms (default: 50.0)")
     p.add_argument("--soak-cycles", type=int, default=16, help="Q3 V11 dirty-state soak cycles (default: 16)")
+    p.add_argument("--contracts-file", default="", help="Optional path to Q4 regression_contracts.json")
+    p.add_argument("--gate", action="store_true", help="Q4 Blocking Adversarial QA Gate mode (exit 2 if CRIT/HIGH/GEOM/EXIT/P95/CONTRACTS fail)")
     p.add_argument("--quiet", action="store_true", help="Suppress stderr live progress logs")
     p.add_argument("--url", default="", help="Override relay URL")
     p.add_argument("--pair-secret", default="", help="Override 64-hex pair secret")
@@ -4501,6 +4953,8 @@ def main(argv: list[str] | None = None) -> int:
             q2_p95_budget_ms=args.q2_p95_ms,
             q2_touch_budget_ms=args.q2_touch_ms,
             soak_cycles=args.soak_cycles,
+            contracts_file=args.contracts_file,
+            gate_mode=args.gate,
         )
         sel = [v.strip() for v in args.vectors.split(",") if v.strip()] if args.vectors else None
         report = hunter.run_hunt(selected_vectors=sel)
@@ -4512,7 +4966,10 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.out_md).write_text(md, encoding="utf-8")
 
     print(md)
-    counts = report.get("severityCounts") or {}
+    gate_res = report.get("qaGate") if isinstance(report.get("qaGate"), dict) else None
+    if args.gate and gate_res:
+        print(gate_res.get("summaryLine", ""))
+        return 0 if (report.get("ok") and gate_res.get("ok")) else 2
     return 0 if report.get("ok") else 1
 
 

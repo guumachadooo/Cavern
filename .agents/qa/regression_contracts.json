@@ -1,0 +1,302 @@
+{
+  "version": 1,
+  "policy": "1-bug=1-permanent-automated-test-first",
+  "description": "Frozen Cavern / CavernizeAndroid regression contracts enforced offline by verify_universal.py & qa_gate.py and live on S25U by cavern_bug_hunter.py V12/--gate.",
+  "contracts": [
+    {
+      "id": "REG-H1-BLUR-DISABLED",
+      "bug_ref": "H1/W51.4",
+      "title": "Keep EnableFullScreenRenderEffectBlur disabled by default for 120 Hz zero-jank UI",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "hybrid",
+      "test_ref": "cavern_bug_hunter.py:V12_regression_state_contracts + BP_VOCAL_STABILITY_CACHE_UX_LOUDNESS",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs",
+          "pattern": "public\\s+static\\s+bool\\s+EnableFullScreenRenderEffectBlur\\s*\\{\\s*get;\\s*set;\\s*\\}",
+          "message": "EnableFullScreenRenderEffectBlur must remain false-by-default auto-property"
+        },
+        {
+          "kind": "file_forbids_regex",
+          "path": "CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs",
+          "pattern": "EnableFullScreenRenderEffectBlur\\s*\\{\\s*get;\\s*set;\\s*\\}\\s*=\\s*true",
+          "message": "H1 VIOLATION: EnableFullScreenRenderEffectBlur must NEVER default to true"
+        }
+      ],
+      "live_check": {
+        "kind": "reflect_equals",
+        "type": "CavernizeAndroid.Theme.OneUiMotionBlur",
+        "path": "EnableFullScreenRenderEffectBlur",
+        "expected": false
+      }
+    },
+    {
+      "id": "REG-B11-ROFORMER-PSS-CAP",
+      "bug_ref": "B11/W53.0",
+      "title": "Enforce <=2600 MB single-process ONNX PSS cap and WebGPU Device-is-lost CPU fallback",
+      "domain": "ai-ml",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "hybrid",
+      "test_ref": "check_android_cs.py + run_w46_unit_tests.py:T43",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/NativeOnnxRuntimeBridge.cs",
+          "pattern": "MaxSingleProcessModelPssBytes\\s*=\\s*(?:1\\d{3}|2[0-5]\\d{2}|2600)L\\s*\\*\\s*1024L\\s*\\*\\s*1024L",
+          "message": "MaxSingleProcessModelPssBytes must remain <= 2600 MB to prevent S25U LMKD OOM kills"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/NativeOnnxRuntimeBridge.cs",
+          "pattern": "Device is lost",
+          "message": "WebGPU 'Device is lost' CPU fallback guard must remain intact"
+        }
+      ],
+      "live_check": {
+        "kind": "hot_exec_invariant",
+        "invariant": "onnx_pss_cap_lte_2600mb"
+      }
+    },
+    {
+      "id": "REG-B1-MVSEP-CANCEL-RESUME",
+      "bug_ref": "B1/W53.0",
+      "title": "Persist MVSEP pending job hashes (mvsepPendingJobsV1) to prevent duplicate credit burn on cancel",
+      "domain": "ai-ml",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py + BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP:Q3",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/AppSettingsStore.cs",
+          "pattern": "MvsepPendingJobsPrefKey\\s*=\\s*\"mvsepPendingJobsV1\"",
+          "message": "mvsepPendingJobsV1 preference key must stay wired for cancel-safe MVSEP job resume"
+        }
+      ]
+    },
+    {
+      "id": "REG-B5-MVSEP-SILENT-PRUNE",
+      "bug_ref": "B5/W53.0",
+      "title": "Prune silent extra MVSEP stems via IsStemAudible before storing or spatializing",
+      "domain": "ai-ml",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py + MvsepCloudClient.IsStemAudible",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/MvsepCloudClient.cs",
+          "pattern": "public\\s+static\\s+bool\\s+IsStemAudible\\s*\\(",
+          "message": "MvsepCloudClient.IsStemAudible must exist to prune silent stems"
+        }
+      ]
+    },
+    {
+      "id": "REG-B8-120HZ-VOLUME-SMOOTH",
+      "bug_ref": "B8/W53.0",
+      "title": "Use exponential smoothing (1 - MathF.Exp) in OneUiSeekBar to prevent 120 Hz idle-wake teleport",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "check_android_cs.py + BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP:W53.0",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs",
+          "pattern": "1f\\s*-\\s*MathF\\.Exp\\(-ratioSpeed\\s*\\*\\s*dt\\)",
+          "message": "OneUiSeekBar must preserve exponential dt-clamped smoothing"
+        }
+      ]
+    },
+    {
+      "id": "REG-B9-3DROOM-VOL-DECOUPLED",
+      "bug_ref": "B9/W53.0",
+      "title": "Keep 3D Room volume slider in decoupled roomMiniVolDrawer so Repeat chip never clips",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "cavern_bug_hunter.py:V6 + MainActivity.PlayerTab.cs",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs",
+          "pattern": "roomMiniVolDrawer\\s*=\\s*new\\s+LinearLayout",
+          "message": "3D Room volume drawer must remain decoupled in roomMiniVolDrawer"
+        }
+      ]
+    },
+    {
+      "id": "REG-W51-1-ZERO-ALLOC-KARAOKE",
+      "bug_ref": "W51.1",
+      "title": "Preserve SpatialKaraokeEngine.ResetAdaptationState and zero-alloc reference binding on vocal toggles",
+      "domain": "dsp-format",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "hybrid",
+      "test_ref": "run_w46_unit_tests.py:T39",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "Cavern/Neural/SpatialKaraokeEngine.cs",
+          "pattern": "public\\s+void\\s+ResetAdaptationState\\s*\\(\\s*\\)",
+          "message": "SpatialKaraokeEngine.ResetAdaptationState() must remain intact"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/Adapters/NeuralStemStageProcessor.cs",
+          "pattern": "void\\s+RebuildAlignedReferencesLocked\\s*\\(\\s*\\)",
+          "message": "NeuralStemStageProcessor.RebuildAlignedReferencesLocked() must remain intact"
+        }
+      ],
+      "live_check": {
+        "kind": "hot_exec_invariant",
+        "invariant": "spatial_karaoke_reset_zero_nan"
+      }
+    },
+    {
+      "id": "REG-W51-7-BIDIR-VOLUME-LINK",
+      "bug_ref": "W51.7",
+      "title": "Preserve SystemPlaybackVolume01 bidirectional Android Stream.Music coupling without double attenuation",
+      "domain": "media-native",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T42",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.PlayerMusic.Modals.cs",
+          "pattern": "SystemPlaybackVolume01",
+          "message": "SystemPlaybackVolume01 coupling must stay wired"
+        }
+      ]
+    },
+    {
+      "id": "REG-W53-0-ANDROID-WX-FGS",
+      "bug_ref": "W23/W53.0",
+      "title": "Enforce targetSdkVersion>=35, W^X extractNativeLibs=true, Predictive Back, and zero requestLegacyExternalStorage",
+      "domain": "media-native",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "verify_universal.py:file_guards + AndroidManifest.xml",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml",
+          "pattern": "android:targetSdkVersion=\"(?:35|36)\"",
+          "message": "AndroidManifest.xml must keep targetSdkVersion >= 35"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml",
+          "pattern": "android:extractNativeLibs=\"true\"",
+          "message": "AndroidManifest.xml must keep extractNativeLibs=true for W^X NativeLibraryDir"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml",
+          "pattern": "android:enableOnBackInvokedCallback=\"true\"",
+          "message": "AndroidManifest.xml must keep Predictive Back enabled"
+        },
+        {
+          "kind": "file_forbids_regex",
+          "path": "CavernSamples/CavernizeAndroid/Properties/AndroidManifest.xml",
+          "pattern": "requestLegacyExternalStorage",
+          "message": "requestLegacyExternalStorage is forbidden on targetSdkVersion >= 35"
+        }
+      ]
+    },
+    {
+      "id": "REG-SCARLETT-DUAL-WATERMARK",
+      "bug_ref": "W2-Scarlett/v2.9.80",
+      "title": "Preserve click-free cav_rb_apply_glitch_ramp and non-detaching USB audio rate probe",
+      "domain": "media-native",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "test_proaudio_native.c + run_w46_unit_tests.py:PY_T8",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Native/cavernize_proaudio/cavernize_ringbuffer.h",
+          "pattern": "void\\s+cav_rb_apply_glitch_ramp\\s*\\(",
+          "message": "Click-free cav_rb_apply_glitch_ramp must stay in cavernize_ringbuffer.h"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/UsbProAudioDeviceManager.cs",
+          "pattern": "int\\[\\]\\s+QueryAndroidUsbAudioSampleRates\\s*\\(",
+          "message": "HAL-first QueryAndroidUsbAudioSampleRates must stay intact"
+        }
+      ]
+    },
+    {
+      "id": "REG-STATE-SETTINGS-ROUNDTRIP",
+      "bug_ref": "W53.Q4/STATE-01",
+      "title": "Live state-machine contract: settings_set -> settings_get -> restore round-trip leaves 0 diff keys and 0 stuck ops",
+      "domain": "infra-ops",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "live",
+      "test_ref": "cavern_bug_hunter.py:V12_regression_state_contracts + test_bug_hunter.py:test_q4_v12_and_gate",
+      "added_date": "2026-11-26",
+      "offline_checks": [],
+      "live_check": {
+        "kind": "settings_roundtrip",
+        "key": "Iso226Enabled"
+      }
+    },
+    {
+      "id": "REG-STATE-HOTEXEC-INVARIANTS",
+      "bug_ref": "W53.Q4/STATE-02",
+      "title": "Live in-RAM hot_exec contract: verify OneUiMotionBlur blur OFF, ONNX PSS cap <=2600MB, SpatialKaraokeEngine reset, and clean activity state",
+      "domain": "infra-ops",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "live",
+      "test_ref": "cavern_bug_hunter.py:V12_regression_state_contracts + test_bug_hunter.py:test_q4_m4_canary",
+      "added_date": "2026-11-26",
+      "offline_checks": [],
+      "live_check": {
+        "kind": "hot_exec_bundle",
+        "invariants": [
+          "blur_disabled",
+          "onnx_pss_cap_lte_2600mb",
+          "spatial_karaoke_reset_zero_nan",
+          "no_stuck_operation"
+        ]
+      }
+    }
+  ]
+}

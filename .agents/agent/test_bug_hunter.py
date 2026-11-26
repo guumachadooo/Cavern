@@ -890,6 +890,190 @@ class BugHunterUnitTests(unittest.TestCase):
         md = bh.generate_report_markdown(rep)
         self.assertIn("Q3 Soak & Stress Gate (`V11`)", md)
 
+    def test_q1_frosted_capsule_ancestor_custom_bg_no_wcag_fp(self) -> None:
+        dark_bg = -15658728  # #FF111118
+        dark_fg = -14998748  # #FF1B1B24
+        # Child TextView inside OneUiFrostedCapsuleView has no bg on itself, inheriting custom canvas backdrop -> 0 WCAG FP
+        frosted_tree = {
+            "schemaVersion": 2,
+            "dpDensity": 3.0,
+            "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400},
+            "activity": {
+                "type": "FrameLayout", "x": 0, "y": 0, "w": 1080, "h": 2400, "bg": dark_bg,
+                "children": [
+                    {
+                        "type": "OneUiFrostedCapsuleView", "x": 40, "y": 2100, "w": 1000, "h": 180,
+                        "children": [
+                            {"type": "TextView", "text": "Player", "x": 80, "y": 2140, "w": 180, "h": 80, "fg": dark_fg, "sp": 13.0},
+                            {"type": "TextView", "text": "3D Room", "x": 280, "y": 2140, "w": 180, "h": 80, "fg": dark_fg, "sp": 13.0},
+                        ],
+                    },
+                ],
+            },
+        }
+        res_clean = bh.analyze_ui_geometry_oracle(frosted_tree, "Tab0")
+        wcag_clean = [f for f in res_clean if f["category"] == "ui_wcag_contrast_fail"]
+        self.assertEqual(wcag_clean, [], f"Frosted capsule children should not trigger WCAG FP: {wcag_clean}")
+
+        # Ordinary LinearLayout with dark text on dark solid bg MUST still fail WCAG
+        bad_tree = {
+            "schemaVersion": 2,
+            "dpDensity": 3.0,
+            "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400},
+            "activity": {
+                "type": "LinearLayout", "orient": "v", "x": 0, "y": 0, "w": 1080, "h": 2400, "bg": dark_bg,
+                "children": [
+                    {"type": "TextView", "text": "Unreadable", "x": 40, "y": 200, "w": 300, "h": 80, "fg": dark_fg, "bg": dark_bg, "sp": 13.0},
+                ],
+            },
+        }
+        res_bad = bh.analyze_ui_geometry_oracle(bad_tree, "Tab0")
+        wcag_bad = [f for f in res_bad if f["category"] == "ui_wcag_contrast_fail"]
+        self.assertEqual(len(wcag_bad), 1)
+
+    def test_q4_m4_mutation_canary_offline_100pct_catch_zero_fp(self) -> None:
+        res = bh.run_m4_mutation_canary_offline()
+        self.assertTrue(res["ok"], f"M4 canary failed: {res}")
+        self.assertEqual(res["caught"], res["total"])
+        self.assertEqual(res["total"], 10)
+        self.assertAlmostEqual(res["detectRate"], 1.0, places=6)
+        self.assertEqual(res["cleanFalsePositives"], 0)
+
+    def test_q4_v12_contracts_and_gate_orchestrator(self) -> None:
+        import tempfile as _tf
+
+        class Q4MockBridge(FakeBridge):
+            def __init__(self, *, blur_enabled: bool = False, break_settings: bool = False, hot_exec_fail: bool = False) -> None:
+                super().__init__()
+                self.blur_enabled = blur_enabled
+                self.break_settings = break_settings
+                self.hot_exec_fail = hot_exec_fail
+                self.hot_exec_called = False
+
+            def cmd(self, name: str, args: dict | None = None, *, tier: int = 0, timeout_sec: int = 30) -> dict:
+                a = dict(args or {})
+                self.history.append((name, a))
+                if name == "capabilities":
+                    return {"ok": True, "body": "{}", "json": {"commands": [
+                        {"cmd": "ping"}, {"cmd": "app_state"}, {"cmd": "settings_get"}, {"cmd": "settings_set"},
+                        {"cmd": "reflect_get"}, {"cmd": "hot_exec"}, {"cmd": "log_tail"}, {"cmd": "logcat_tail"},
+                    ]}, "elapsedMs": 3, "error": ""}
+                if name == "reflect_get":
+                    if a.get("path") == "EnableFullScreenRenderEffectBlur":
+                        return {"ok": True, "body": "{}", "json": {"value": self.blur_enabled, "type": "Boolean"}, "elapsedMs": 3, "error": ""}
+                    return {"ok": True, "body": "{}", "json": {"value": "ok"}, "elapsedMs": 3, "error": ""}
+                if name == "settings_set" and self.break_settings:
+                    # Simulate broken persistence that drops the write silently
+                    return {"ok": True, "body": "{}", "json": {"ok": True}, "elapsedMs": 3, "error": ""}
+                return super().cmd(name, args, tier=tier, timeout_sec=timeout_sec)
+
+            def run_hot_exec_probe(self, probe_cs: str) -> dict:
+                self.hot_exec_called = True
+                assert "ProcessMultichannelInPlace" in probe_cs
+                if self.hot_exec_fail:
+                    return {
+                        "ok": False,
+                        "blur_disabled": False,
+                        "onnx_pss_cap_lte_2600mb": True,
+                        "spatial_karaoke_reset_zero_nan": False,
+                        "no_stuck_operation": True,
+                        "error": "injected_fail",
+                    }
+                return {
+                    "ok": True,
+                    "blur_disabled": True,
+                    "onnx_pss_cap_lte_2600mb": True,
+                    "onnxCapMb": 2400,
+                    "spatial_karaoke_reset_zero_nan": True,
+                    "no_stuck_operation": True,
+                    "error": "",
+                }
+
+        contracts_doc = {
+            "version": 1,
+            "policy": "1-bug=1-permanent-automated-test-first",
+            "contracts": [
+                {
+                    "id": "REG-TEST-BLUR",
+                    "bug_ref": "H1",
+                    "title": "Blur stays disabled.",
+                    "domain": "ui",
+                    "severity": "HIGH",
+                    "status": "frozen",
+                    "immutable": True,
+                    "mode": "hybrid",
+                    "test_ref": ".agents/agent/test_bug_hunter.py::test_q4_v12_contracts_and_gate_orchestrator",
+                    "offline_checks": [{"kind": "file_exists", "path": ".agents/agent/cavern_bug_hunter.py"}],
+                    "live_check": {
+                        "kind": "reflect_equals",
+                        "type": "CavernizeAndroid.Theme.OneUiMotionBlur",
+                        "path": "EnableFullScreenRenderEffectBlur",
+                        "expected": False,
+                    },
+                },
+                {
+                    "id": "REG-TEST-ROUNDTRIP",
+                    "bug_ref": "STATE1",
+                    "title": "Settings roundtrip persists and restores.",
+                    "domain": "state",
+                    "severity": "HIGH",
+                    "status": "frozen",
+                    "immutable": True,
+                    "mode": "hybrid",
+                    "test_ref": ".agents/agent/test_bug_hunter.py::test_q4_v12_contracts_and_gate_orchestrator",
+                    "offline_checks": [{"kind": "file_exists", "path": ".agents/agent/cavern_bug_hunter.py"}],
+                    "live_check": {"kind": "settings_roundtrip", "key": "Iso226Enabled"},
+                },
+                {
+                    "id": "REG-TEST-HOTEXEC",
+                    "bug_ref": "STATE2",
+                    "title": "In-RAM hot_exec state probe passes.",
+                    "domain": "runtime",
+                    "severity": "HIGH",
+                    "status": "frozen",
+                    "immutable": True,
+                    "mode": "hybrid",
+                    "test_ref": ".agents/agent/test_bug_hunter.py::test_q4_v12_contracts_and_gate_orchestrator",
+                    "offline_checks": [{"kind": "file_exists", "path": ".agents/agent/cavern_bug_hunter.py"}],
+                    "live_check": {
+                        "kind": "hot_exec_bundle",
+                        "invariants": ["blur_disabled", "onnx_pss_cap_lte_2600mb", "spatial_karaoke_reset_zero_nan"],
+                    },
+                },
+            ],
+        }
+
+        with _tf.TemporaryDirectory() as td:
+            cpath = str(Path(td) / "contracts.json")
+            with open(cpath, "w", encoding="utf-8") as fh:
+                json.dump(contracts_doc, fh)
+
+            # 1. Clean run -> PASS
+            fb_ok = Q4MockBridge()
+            h_ok = bh.LiveBugHunter(fb_ok, mode="quick", allow_mutate=True, verbose=False, contracts_file=cpath)
+            rep_ok = h_ok.run_hunt(selected_vectors=["V12"])
+            self.assertTrue(rep_ok["ok"])
+            self.assertTrue(fb_ok.hot_exec_called)
+            self.assertEqual(rep_ok["q4GateSummary"]["failed"], 0, rep_ok["q4GateSummary"])
+            self.assertEqual(rep_ok["q4GateSummary"]["passed"], 3, rep_ok["q4GateSummary"])
+            self.assertTrue(rep_ok["q4GateSummary"]["hotExecVerified"])
+            self.assertEqual(rep_ok["qaGate"]["verdict"], "PASS", rep_ok["qaGate"])
+            md_ok = bh.generate_report_markdown(rep_ok)
+            self.assertIn("Q4 Frozen Regression Contracts (`V12`)", md_ok)
+            self.assertIn("QA_GATE|VERDICT=PASS", md_ok)
+
+            # 2. Regression in reflect_get + broken settings roundtrip + hot_exec failure -> FAIL
+            fb_bad = Q4MockBridge(blur_enabled=True, break_settings=True, hot_exec_fail=True)
+            h_bad = bh.LiveBugHunter(fb_bad, mode="quick", allow_mutate=True, verbose=False, contracts_file=cpath)
+            rep_bad = h_bad.run_hunt(selected_vectors=["V12"])
+            self.assertGreaterEqual(rep_bad["q4GateSummary"]["failed"], 3)
+            self.assertFalse(rep_bad["q4GateSummary"]["hotExecVerified"])
+            self.assertEqual(rep_bad["qaGate"]["verdict"], "FAIL")
+            cats_bad = {f["category"] for f in rep_bad["findings"]}
+            self.assertIn("regression_contract_failed", cats_bad)
+            md_bad = bh.generate_report_markdown(rep_bad)
+            self.assertIn("QA_GATE|VERDICT=FAIL", md_bad)
+
 
 if __name__ == "__main__":
     unittest.main()

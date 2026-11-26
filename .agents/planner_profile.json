@@ -1,6 +1,6 @@
 {
   "schema_version": 5,
-  "plugin_version": "2.19.0",
+  "plugin_version": "2.20.0",
   "project_name": "Cavern / CavernizeAndroid",
   "planner_mode": "auto",
   "read_budget": {
@@ -35,6 +35,21 @@
     "require_by_default": true,
     "default_min_tier": 1,
     "require_pre_resume_hygiene": true
+  },
+  "adversarial_qa": {
+    "enabled": true,
+    "contracts_file": ".agents/qa/regression_contracts.json",
+    "strict_verify": true,
+    "require_cold_context_subagent": true,
+    "destroyer_model_tier": "flash",
+    "gate_command": "python3 -B .agents/agent/cavern_bug_hunter.py --vectors V6,V9,V11,V12 --gate",
+    "max_critical": 0,
+    "max_high": 0,
+    "max_geom": 0,
+    "max_exit_crash_new": 0,
+    "max_frame_p95_ms": 12.0,
+    "max_contracts_failed": 0,
+    "require_soak_pass": true
   },
   "code_path_prefixes": [
     "Cavern/",

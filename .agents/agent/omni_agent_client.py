@@ -1146,7 +1146,7 @@ def main() -> int:
     p_rep = sub.add_parser("repos", help="3-Repo Federation manager (status|hydrate|diff|push|sync-mirrors across Cavern, OmniAgent & Fractal)")
     p_rep.add_argument("fed_args", nargs=argparse.REMAINDER, help="Arguments passed to repo_federation.py")
 
-    p_hunt = sub.add_parser("hunt", help="Live Adversarial Bug-Hunter & Chaos Fuzzer against running Cavernize app (Q1/Q2 gates + --mode watch)")
+    p_hunt = sub.add_parser("hunt", help="Live Adversarial Bug-Hunter & Chaos Fuzzer against running Cavernize app (Q1-Q4 gates + --mode watch)")
     p_hunt.add_argument("--mode", choices=("quick", "standard", "deep", "watch"), default="standard")
     p_hunt.add_argument("--vectors", default="")
     p_hunt.add_argument("--no-mutate", action="store_true")
@@ -1155,6 +1155,9 @@ def main() -> int:
     p_hunt.add_argument("--update-goldens", action="store_true")
     p_hunt.add_argument("--q2-p95-ms", type=float, default=12.0)
     p_hunt.add_argument("--q2-touch-ms", type=float, default=50.0)
+    p_hunt.add_argument("--soak-cycles", type=int, default=16)
+    p_hunt.add_argument("--contracts-file", default="")
+    p_hunt.add_argument("--gate", action="store_true")
     p_hunt.add_argument("--duration", type=int, default=60)
     p_hunt.add_argument("--interval", type=float, default=3.0)
     p_hunt.add_argument("--out-md", default="/tmp/cavern_bug_hunt_latest.md")
@@ -1194,7 +1197,11 @@ def main() -> int:
             forwarded_h += ["--golden-dir", args.golden_dir]
         if args.update_goldens:
             forwarded_h.append("--update-goldens")
-        forwarded_h += ["--q2-p95-ms", str(args.q2_p95_ms), "--q2-touch-ms", str(args.q2_touch_ms)]
+        forwarded_h += ["--q2-p95-ms", str(args.q2_p95_ms), "--q2-touch-ms", str(args.q2_touch_ms), "--soak-cycles", str(args.soak_cycles)]
+        if args.contracts_file:
+            forwarded_h += ["--contracts-file", args.contracts_file]
+        if args.gate:
+            forwarded_h.append("--gate")
         if args.out_md:
             forwarded_h += ["--out-md", args.out_md]
         if args.out_json:
