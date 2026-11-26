@@ -987,6 +987,10 @@ public partial class MainActivity {
             RightMargin = Dp(7)
         });
         musicBottomMoreBtn.Click += (_, _) => SwitchTab(1);
+        musicBottomMoreBtn.LongClick += (_, ev) => {
+            ShowModularLayoutEditorDialog(isRoomTab: false);
+            ev.Handled = true;
+        };
 
         LinearLayout slot1 = HRow(); slot1.SetGravity(GravityFlags.Center); slot1.AddView(musicBottomLeftBtn, new LinearLayout.LayoutParams(Dp(46), Dp(34)));
         LinearLayout slot2 = HRow(); slot2.SetGravity(GravityFlags.Center); slot2.AddView(musicBottomOnlineBtn, new LinearLayout.LayoutParams(Dp(46), Dp(34)));
@@ -1046,6 +1050,7 @@ public partial class MainActivity {
             }
         };
 
+        RegisterPlayModularBlocks(musicNowPlayingSection);
         UpdateSectionSwitcherStyle();
         RefreshMusicPlayerUi();
         return page;

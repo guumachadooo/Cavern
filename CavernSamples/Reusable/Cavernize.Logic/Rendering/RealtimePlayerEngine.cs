@@ -48,6 +48,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     readonly Iso226LoudnessPostProcessingStage iso226PostStage = new();
     readonly Bs1770LoudnessPostProcessingStage bs1770PostStage = new();
     readonly SpatialDialogPostProcessingStage spatialDialogPostStage = new();
+    readonly TransauralXtcPostProcessingStage transauralXtcPostStage = new();
     readonly NormalizerPostProcessingAdapter limiterPostStage = new(true);
     readonly TruePeakLimiterPostProcessingStage truePeakLimiterPostStage = new();
     readonly LiveMicrophoneBridge liveMicBridge = new();
@@ -270,6 +271,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
         sceneHub.RegisterPostProcessingStage(iso226PostStage);
         sceneHub.RegisterPostProcessingStage(bs1770PostStage);
         sceneHub.RegisterPostProcessingStage(spatialDialogPostStage);
+        sceneHub.RegisterPostProcessingStage(transauralXtcPostStage);
         sceneHub.RegisterPostProcessingStage(limiterPostStage);
         sceneHub.RegisterPostProcessingStage(truePeakLimiterPostStage);
         neuralStemStage.UpstreamLatencySamplesProvider = () => lgsrBypassed ? 0 : lgsrStage.LastAppliedLatencySamples;
@@ -297,6 +299,43 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     /// Live Slot 1 / Slot 4 Pro-Audio full-duplex USB &amp; Scarlett 2i2 telemetry snapshot.
     /// </summary>
     public ProAudioDuplexDiagnostics ProAudioDiagnostics => sceneHub.ProAudioDiagnostics;
+
+    /// <summary>
+    /// Wave F (W53.6 / B13) Slot 6 Physical Transaural XTC post-processing stage (Priority 820)
+    /// for built-in phone stereo speakers and external stereo speakers with bit-exact headphone bypass.
+    /// </summary>
+    public TransauralXtcPostProcessingStage TransauralXtcStage => transauralXtcPostStage;
+
+    /// <summary>
+    /// Active Wave F physical transaural XTC configuration.
+    /// </summary>
+    public TransauralXtcConfig TransauralXtcConfig => transauralXtcPostStage.Config;
+
+    /// <summary>
+    /// Live Wave F physical transaural XTC diagnostics (active mode, cancellation dB, headphone bypass state).
+    /// </summary>
+    public TransauralXtcDiagnostics TransauralXtcDiagnostics => transauralXtcPostStage.GetDiagnostics();
+
+    /// <summary>
+    /// Applies updated Wave F physical transaural XTC speaker spatializer configuration safely in real time.
+    /// </summary>
+    public void ApplyTransauralXtcConfig(TransauralXtcConfig config) {
+        lock (renderLock) {
+            transauralXtcPostStage.Configure(OutputSampleRate, 2);
+            transauralXtcPostStage.ApplyConfig(config);
+        }
+    }
+
+    /// <summary>
+    /// Updates the physical output route for Wave F transaural XTC. Automatically engages bit-exact
+    /// (0.0f error) bypass whenever <paramref name="isHeadphoneRoute"/> is true.
+    /// </summary>
+    public void UpdateOutputRouteForTransaural(bool isHeadphoneRoute, AudioDeviceTransport transport = AudioDeviceTransport.Unknown) {
+        lock (renderLock) {
+            transauralXtcPostStage.Configure(OutputSampleRate, 2);
+            transauralXtcPostStage.UpdateOutputRoute(isHeadphoneRoute, transport);
+        }
+    }
 
     /// <summary>
     /// True when live microphone monitoring or MLS loopback RTT calibration requires the audio engine to remain active even while track playback is paused.

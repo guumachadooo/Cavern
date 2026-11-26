@@ -178,5 +178,63 @@ public sealed partial class AndroidStrings {
         d["AiCacheOptimizeAlreadyCompactToast"] = "AI 缓存已是最佳压缩状态。";
         d["AiCacheIncrementalReuseHint"] = "检测到已缓存人声 — 卡拉 OK 将自动复用第 1 阶段。";
         d["KaraokePreserveBackingTitle"] = "保留和声人声";
+
+        // Wave D (W53.4 / B10): One UI 9 模块化可编辑控制面板布局
+        d["BtnDone"] = "完成";
+        d["ModLayoutCardTitle"] = "模块化控制布局 (One UI 9)";
+        d["ModLayoutCardDesc"] = "像 One UI 9 快捷面板一样自由排序或隐藏播放页与 3D 房间页的控制模块。核心播放控件始终保持锁定保护。";
+        d["ModLayoutEditPlayBtn"] = "自定义播放页";
+        d["ModLayoutEditRoomBtn"] = "自定义 3D 房间";
+        d["ModLayoutPlayTitle"] = "自定义播放页布局";
+        d["ModLayoutRoomTitle"] = "自定义 3D 房间布局";
+        d["ModLayoutSubtitle"] = "使用箭头调整模块顺序，或通过开关显示/隐藏可选面板。";
+        d["ModLayoutResetBtn"] = "恢复默认";
+        d["ModLayoutResetToast"] = "已恢复 One UI 9 默认布局。";
+        d["ModBlockPinnedTag"] = "置顶 · 核心模块";
+        d["ModBlockEssentialTag"] = "核心模块 · 始终显示";
+        d["ModBlockPlayStage"] = "媒体舞台（封面 · 歌词 · 视频）";
+        d["ModBlockPlayTitle"] = "歌曲标题与艺人";
+        d["ModBlockPlaySeek"] = "波形进度条";
+        d["ModBlockPlayBadges"] = "空间音效与格式徽章";
+        d["ModBlockPlayTransport"] = "播放控制栏";
+        d["ModBlockPlayVolume"] = "主音量滑块";
+        d["ModBlockPlaySpatialPills"] = "快捷胶囊（上混 · HRTF · AI）";
+        d["ModBlockPlayBottomActions"] = "底部工具栏（歌词 · 在线 · 循环 · 3D）";
+        d["ModBlockRoomSignalChain"] = "实时信号链状态栏";
+        d["ModBlockRoomCanvas"] = "3D 房间模拟器与预设";
+        d["ModBlockRoomMiniTransport"] = "迷你播放与音量条";
+        d["ModBlockRoomXRay"] = "空间 X-Ray 透视面板";
+        d["ModBlockRoomQuickPanel"] = "快捷空间面板与滑块";
+        d["ModBlockRoomMixer"] = "实时声道与 3D 对象混音器";
+
+        // Wave E (W53.5 / B12): 移动端 ONNX 量化与 SoC 绑定 QNN 上下文缓存
+        d["NeuralQuantModeTitle"] = "移动端 ONNX 权重精度:";
+        d["NeuralQuantAuto"] = "自动（FP16 / 大模型 W8A16）";
+        d["NeuralQuantFp32"] = "FP32（原始参考精度）";
+        d["NeuralQuantFp16"] = "FP16（半精度 · 2x 压缩）";
+        d["NeuralQuantW8A16"] = "W8A16（INT8 权重 · ~3.8x）";
+        d["TipNeuralQuantMode"] = "在保持音频激活值高精度的同时大幅降低移动内存占用并加速推理，防止大型模型内存溢出。";
+        d["NeuralQnnCacheTitle"] = "SoC 绑定 QNN HTP 上下文缓存";
+        d["TipNeuralQnnCache"] = "按系统 Build Fingerprint、芯片型号、ORT 版本与模型 SHA-256 缓存编译后的 Hexagon NPU 二进制上下文，系统更新后自动清理旧缓存。";
+        d["NeuralQnnCacheStatusFmt"] = "芯片: {0} · 缓存: {1} 个文件 ({2:0.0} MB)";
+        d["NeuralQnnCacheClearBtn"] = "清理 QNN 与量化缓存";
+        d["NeuralQnnCacheClearedToast"] = "已清理 {0} 个 ONNX 优化缓存文件。";
+
+        // Wave F (W53.6 / B13): 扬声器物理跨耳串扰消除 (XTC) 与耳机位精确直通
+        d["TransauralCardTitle"] = "扬声器物理 3D 串扰消除 (XTC)";
+        d["TransauralEnableTitle"] = "启用物理串扰消除";
+        d["TipTransauralXtc"] = "采用 Bauck-Cooper / BACCH 因果物理串扰消除算法，在手机内置立体声扬声器或外接音箱上呈现宽广的 3D 声场。";
+        d["TransauralPresetTitle"] = "扬声器几何预设:";
+        d["TipTransauralPreset"] = "选择物理扬声器布局以计算精确的跨耳传播延迟与头部声影衍射。";
+        d["TransauralPresetPhoneLand"] = "手机横屏扬声器";
+        d["TransauralPresetPhonePort"] = "手机竖屏扬声器";
+        d["TransauralPresetDesktop"] = "桌面监听音箱 (±20°)";
+        d["TransauralPresetHiFi"] = "立体声 Hi-Fi (±30°)";
+        d["TransauralStrengthTitle"] = "串扰消除深度";
+        d["TransauralAutoBypassTitle"] = "连接耳机自动直通（位精确）";
+        d["TipTransauralAutoBypass"] = "检测到蓝牙、USB-C 或有线耳机时自动切换 0.0 误差位精确直通，绝不染色耳机听感。";
+        d["TransauralStatusOff"] = "未启用 — 使用立体声扬声器时可开启";
+        d["TransauralStatusHeadphoneBypass"] = "位精确直通已启用（已连接耳机）";
+        d["TransauralStatusActive"] = "扬声器已激活 · ±{0:0.0}° · Δτ {1:0} µs · ~{2:0.0} dB XTC";
     }
 }

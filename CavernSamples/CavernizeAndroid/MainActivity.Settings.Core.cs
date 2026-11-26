@@ -556,6 +556,7 @@ public partial class MainActivity {
         AddDivider(helpCard);
         autoCheckUpdatesSwitch = AddSwitchRow(helpCard, S["AutoCheckSwitch"], store.AutoCheckUpdates, v => store.AutoCheckUpdates = v);
         RegisterSettingsCard(helpCard, categoryIndex: 5, isProOnly: false, "language about version ota update guide credits");
+        RegisterSettingsCard(BuildSettingsModularLayoutCard(), categoryIndex: 5, isProOnly: false, "modular layout quick panel reorder customize play room oneui9 blocks");
 
     }
 

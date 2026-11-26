@@ -25,12 +25,16 @@ public sealed class AudioDeviceRouteInfo {
     /// <summary>Detected hardware transport category.</summary>
     public AudioDeviceTransport Transport { get; init; } = AudioDeviceTransport.BuiltinSpeaker;
 
+    /// <summary>True when Android explicitly reports an acoustic loudspeaker sink (built-in speaker, HDMI/line-out, or BLE speaker).</summary>
+    public bool IsSpeakerHardware { get; init; }
+
     /// <summary>True when the output is a personal headphone/IEM/DAC route suitable for binaural HRTF &amp; AutoEq.</summary>
     public bool IsHeadphoneRoute =>
-        Transport == AudioDeviceTransport.BluetoothA2dp ||
-        Transport == AudioDeviceTransport.BleAudio ||
-        Transport == AudioDeviceTransport.UsbDac ||
-        Transport == AudioDeviceTransport.WiredJack;
+        !IsSpeakerHardware &&
+        (Transport == AudioDeviceTransport.BluetoothA2dp ||
+         Transport == AudioDeviceTransport.BleAudio ||
+         Transport == AudioDeviceTransport.UsbDac ||
+         Transport == AudioDeviceTransport.WiredJack);
 
     /// <summary>Underlying Android <see cref="AudioDeviceInfo"/> handle for preferred USB DAC output routing.</summary>
     public AudioDeviceInfo NativeDevice { get; init; }
@@ -153,6 +157,7 @@ public sealed class AudioDeviceProfileManager : IDisposable {
 
             engine.SceneHub.ActiveAudioDeviceKey = detected.DeviceKey;
             engine.SceneHub.ActiveAudioDeviceName = detected.DisplayName;
+            engine.UpdateOutputRouteForTransaural(detected.IsHeadphoneRoute, detected.Transport);
 
             if (changed) {
                 AppLogger.Info($"Audio route changed -> '{detected.DisplayName}' [{detected.Transport}] (key='{detected.DeviceKey}')");
@@ -469,7 +474,7 @@ public sealed class AudioDeviceProfileManager : IDisposable {
                 return (AudioDeviceTransport.BleAudio, 100);
             }
             if (type == AudioDeviceType.BleSpeaker) {
-                return (AudioDeviceTransport.BleAudio, 88);
+                return (AudioDeviceTransport.HdmiOrLineOut, 88);
             }
         }
         return type switch {

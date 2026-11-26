@@ -3654,6 +3654,193 @@ RunTest("T46_W53_3_StereoPanAzimuthEstimator_FixedObjectPan_And_MoodChoreo", () 
         $"Intimate mood must draw guitar closer than Anthem mood (intimateR={intGuitarPos.Length():0.00}, anthemR={antGuitarPos.Length():0.00})");
 });
 
+// T47: W53.4 Wave D (One UI 9 Modular Editable Quick-Panel Control Blocks — Persistence, Locks, Pinned-Top & Schema Merge)
+RunTest("T47_W53_4_WaveD_ModularQuickPanelLayout_Persistence_Locks_And_Merge", () => {
+    Cavernize.Logic.Models.ModularQuickPanelLayout playDef = Cavernize.Logic.Models.ModularQuickPanelLayout.CreateDefaultPlayLayout();
+    Cavernize.Logic.Models.ModularQuickPanelLayout play = Cavernize.Logic.Models.ModularQuickPanelLayout.CreateDefaultPlayLayout();
+    Assert(play.Blocks.Count == 8, $"Expected 8 default Play blocks, got {play.Blocks.Count}");
+    Assert(!play.IsCustomized(playDef), "Fresh Play layout must not report customized");
+
+    // Stage is pinned-top & locked: cannot move down, cannot hide, and Title cannot move above Stage
+    Assert(!play.CanMoveDown(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Stage), "Stage must stay pinned at top");
+    Assert(!play.MoveUp(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Title), "Title must not overtake pinned Stage");
+    Assert(!play.SetVisible(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Transport, false), "Locked Transport must refuse hiding");
+    Assert(play.IsVisible(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Transport), "Locked Transport must stay visible");
+
+    // Reorder optional blocks & hide Badges
+    Assert(play.MoveUp(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Volume), "Volume should move up cleanly");
+    Assert(play.SetVisible(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Badges, false), "Badges should hide cleanly");
+    Assert(!play.IsVisible(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Badges), "Badges visibility should be false");
+    Assert(play.IsCustomized(playDef), "Modified Play layout must report customized");
+
+    // JSON round-trip preserves exact custom order & visibility
+    string savedJson = play.ToJson();
+    Cavernize.Logic.Models.ModularQuickPanelLayout restored = Cavernize.Logic.Models.ModularQuickPanelLayout.FromJsonOrDefault(savedJson, playDef);
+    Assert(restored.Blocks.Count == play.Blocks.Count, "Restored Play block count mismatch");
+    for (int i = 0; i < play.Blocks.Count; i++) {
+        Assert(restored.Blocks[i].Id == play.Blocks[i].Id && restored.Blocks[i].Visible == play.Blocks[i].Visible,
+            $"Restored Play block[{i}] mismatch: expected {play.Blocks[i].Id}/{play.Blocks[i].Visible}, got {restored.Blocks[i].Id}/{restored.Blocks[i].Visible}");
+    }
+
+    // Corrupt / partial / hostile JSON payload (hiding locked block, unknown IDs, missing canonical blocks, unpinning stage)
+    string hostileJson = "{\"SchemaVersion\":1,\"Blocks\":[{\"Id\":\"unknown_junk\",\"Visible\":true},{\"Id\":\"transport\",\"Visible\":false},{\"Id\":\"stage\",\"Visible\":false}]}";
+    Cavernize.Logic.Models.ModularQuickPanelLayout merged = Cavernize.Logic.Models.ModularQuickPanelLayout.FromJsonOrDefault(hostileJson, playDef);
+    Assert(merged.Blocks.Count == playDef.Blocks.Count, $"Merged layout must restore all {playDef.Blocks.Count} canonical blocks, got {merged.Blocks.Count}");
+    Assert(merged.Blocks[0].Id == Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Stage, "Pinned Stage must always be forced back to index 0");
+    Assert(merged.IsVisible(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Transport), "Locked Transport must stay visible even if JSON says false");
+
+    // 3D Room layout customization & reset
+    Cavernize.Logic.Models.ModularQuickPanelLayout roomDef = Cavernize.Logic.Models.ModularQuickPanelLayout.CreateDefaultRoomLayout();
+    Cavernize.Logic.Models.ModularQuickPanelLayout room = Cavernize.Logic.Models.ModularQuickPanelLayout.CreateDefaultRoomLayout();
+    Assert(room.Blocks.Count == 6, $"Expected 6 default 3D Room blocks, got {room.Blocks.Count}");
+    Assert(!room.SetVisible(Cavernize.Logic.Models.ModularQuickPanelLayout.RoomIds.RoomCanvas, false), "Locked 3D Room Canvas must refuse hiding");
+    Assert(room.MoveUp(Cavernize.Logic.Models.ModularQuickPanelLayout.RoomIds.QuickPanel), "QuickPanel should move up");
+    Assert(room.SetVisible(Cavernize.Logic.Models.ModularQuickPanelLayout.RoomIds.ChannelMixer, false), "ChannelMixer should hide");
+    room.ResetFrom(roomDef);
+    Assert(!room.IsCustomized(roomDef), "ResetFrom must restore default 3D Room layout");
+});
+
+// T48: W53.5 Wave E (Pure-C# W8A16 Per-Channel ONNX Weight-Only Quantizer & Mobile PSS Budget)
+RunTest("T48_W53_5_WaveE_OnnxMobileQuantizer_W8A16_SQNR_And_PssBudget", () => {
+    // Build a synthetic ONNX FP32 model with a 2D [64, 64] MatMul weight (4096 floats) + 1D [64] bias
+    float[] weights = new float[64 * 64];
+    for (int r = 0; r < 64; r++) {
+        float rowScale = 0.25f + (r % 7) * 0.15f;
+        for (int c = 0; c < 64; c++) {
+            weights[r * 64 + c] = rowScale * MathF.Sin(0.19f * (r + 1) * (c + 1));
+        }
+    }
+    float[] bias = new float[64];
+    for (int i = 0; i < 64; i++) bias[i] = 0.05f * MathF.Cos(i * 0.3f);
+
+    byte[] Build2DFloatTensor(string name, int rows, int cols, float[] vals) {
+        using MemoryStream ms = new();
+        WriteVarintField(ms, 1, (ulong)rows);
+        WriteVarintField(ms, 1, (ulong)cols);
+        WriteVarintField(ms, 2, 1); // FLOAT
+        WriteStringField(ms, 8, name);
+        byte[] raw = new byte[vals.Length * 4];
+        for (int i = 0; i < vals.Length; i++) BinaryPrimitives.WriteSingleLittleEndian(raw.AsSpan(i * 4, 4), vals[i]);
+        WriteLenField(ms, 9, raw);
+        return ms.ToArray();
+    }
+
+    using MemoryStream graph = new();
+    WriteLenField(graph, 1, BuildNode("MatMul", ["x", "fc1.weight"], ["mm_out"], Array.Empty<byte[]>()));
+    WriteLenField(graph, 1, BuildNode("Add", ["mm_out", "fc1.bias"], ["y"], Array.Empty<byte[]>()));
+    WriteLenField(graph, 5, Build2DFloatTensor("fc1.weight", 64, 64, weights));
+    WriteLenField(graph, 5, BuildRawFloatTensor("fc1.bias", bias));
+    WriteLenField(graph, 11, BuildValueInfo("x", 1));
+    WriteLenField(graph, 12, BuildValueInfo("y", 1));
+
+    using MemoryStream model = new();
+    WriteVarintField(model, 1, 8);
+    WriteLenField(model, 7, graph.ToArray());
+    byte[] srcOnnx = model.ToArray();
+
+    Cavernize.Logic.Spatial.OnnxW8A16QuantizationResult qRes =
+        Cavernize.Logic.Spatial.OnnxMobileQuantizer.ConvertBytesToW8A16(srcOnnx, out byte[] w8a16Bytes);
+    Assert(qRes.Success && w8a16Bytes != null && w8a16Bytes.Length > 64, $"W8A16 quantization failed: {qRes.Message}");
+    Assert(qRes.QuantizedTensors == 1, $"Expected exactly 1 quantized 2D MatMul weight, got {qRes.QuantizedTensors}");
+    Assert(qRes.PreservedTensors >= 1, $"Expected 1D bias tensor preserved, got {qRes.PreservedTensors}");
+    Assert(qRes.QuantizedElements == 4096, $"Expected 4096 quantized weights, got {qRes.QuantizedElements}");
+    Assert(qRes.CompressionRatio >= 2.5, $"Expected W8A16 compression >= 2.5x, got {qRes.CompressionRatio:F2}x");
+    Assert(qRes.MinTensorSnrDb >= 35.0, $"Expected per-channel INT8 weight SQNR >= 35 dB, got {qRes.MinTensorSnrDb:F2} dB");
+
+    string payloadAscii = Encoding.ASCII.GetString(w8a16Bytes);
+    Assert(payloadAscii.Contains("DequantizeLinear", StringComparison.Ordinal), "W8A16 output must inject DequantizeLinear node");
+    Assert(payloadAscii.Contains("fc1.weight__w8q", StringComparison.Ordinal), "W8A16 output must emit INT8 __w8q initializer");
+    Assert(payloadAscii.Contains("fc1.weight__w8s", StringComparison.Ordinal), "W8A16 output must emit FP32 __w8s scale initializer");
+
+    // Verify Auto mode selects W8A16 for >=200 MB checkpoints and keeps estimated PSS < 1400 MB mobile target
+    long heavyModelBytes = 320L * 1024L * 1024L;
+    Cavernize.Logic.Spatial.NeuralQuantizationMode autoHeavy = Cavernize.Logic.Spatial.OnnxMobileQuantizer.ResolveEffectiveMode(
+        Cavernize.Logic.Spatial.NeuralQuantizationMode.Auto,
+        heavyModelBytes,
+        NeuralExecutionProvider.Cpu,
+        isWebGpuOptimal: false);
+    Assert(autoHeavy == Cavernize.Logic.Spatial.NeuralQuantizationMode.W8A16, $"Auto mode must select W8A16 for 320 MB model, got {autoHeavy}");
+    double estPssMb = Cavernize.Logic.Spatial.OnnxMobileQuantizer.EstimatePeakPssMb(heavyModelBytes, autoHeavy);
+    Assert(estPssMb < 1400.0, $"W8A16 estimated PSS ({estPssMb:F1} MB) must stay strictly below 1400 MB mobile target");
+});
+
+// T49: W53.6 Wave F (Physical Transaural XTC Speaker Cancellation, Zero-Alloc RT & Bit-Exact 0.0f Headphone Bypass KILL R3)
+RunTest("T49_W53_6_WaveF_TransauralXtc_Cancellation_And_BitExactHeadphoneBypass", () => {
+    int sr = 48000;
+    int frames = 4096;
+    float[] src = new float[frames * 2];
+    for (int f = 0; f < frames; f++) {
+        double t = f / (double)sr;
+        // Left-only 1 kHz + 2 kHz probe signal
+        src[f * 2] = 0.35f * MathF.Sin((float)(2.0 * Math.PI * 1000.0 * t))
+                   + 0.20f * MathF.Sin((float)(2.0 * Math.PI * 2000.0 * t));
+        src[f * 2 + 1] = 0f;
+    }
+
+    using Cavernize.Logic.Spatial.Adapters.TransauralXtcPostProcessingStage stage = new();
+    stage.Configure(sr, 2);
+    stage.ApplyConfig(new Cavernize.Logic.Spatial.TransauralXtcConfig {
+        Enabled = true,
+        Preset = Cavern.Virtualizer.TransauralSpeakerPreset.PhoneBuiltInLandscape,
+        Strength = 0.90f,
+        AutoBypassOnHeadphones = true
+    });
+
+    // 1. KILL R3: Headphone route must produce BIT-EXACT 0.0f pass-through on every float
+    stage.UpdateOutputRoute(headphoneRoute: true, AudioDeviceTransport.WiredJack);
+    Assert(stage.IsHeadphoneBypassEngaged && !stage.IsActivelyProcessing, "Headphone bypass must engage immediately on wired headphones");
+    float[] hpBuf = (float[])src.Clone();
+    stage.ProcessInterleaved(hpBuf, 0, frames, 2, default);
+    for (int i = 0; i < hpBuf.Length; i++) {
+        Assert(BitConverter.SingleToInt32Bits(hpBuf[i]) == BitConverter.SingleToInt32Bits(src[i]),
+            $"KILL R3 VIOLATION: Headphone bypass mutated sample[{i}] ({src[i]} -> {hpBuf[i]})");
+    }
+
+    // 2. Speaker route: verify >= 12 dB ear-level crosstalk cancellation improvement under physical 2x2 speaker-to-ear matrix
+    stage.UpdateOutputRoute(headphoneRoute: false, AudioDeviceTransport.BuiltinSpeaker);
+    Assert(!stage.IsHeadphoneBypassEngaged && stage.IsActivelyProcessing, "XTC must activate on built-in stereo speakers");
+
+    Cavern.Virtualizer.TransauralGeometryParams geo = Cavern.Virtualizer.TransauralXtcFilter.ComputeGeometry(
+        Cavern.Virtualizer.TransauralSpeakerPreset.PhoneBuiltInLandscape);
+
+    float[] rawEars = new float[frames * 2];
+    Cavern.Virtualizer.TransauralXtcFilter.SimulatePhysicalSpeakerToEar(src, rawEars, frames, sr, geo);
+
+    float[] xtcSpeakers = (float[])src.Clone();
+    stage.ProcessInterleaved(xtcSpeakers, 0, frames, 2, default);
+    float[] xtcEars = new float[frames * 2];
+    Cavern.Virtualizer.TransauralXtcFilter.SimulatePhysicalSpeakerToEar(xtcSpeakers, xtcEars, frames, sr, geo);
+
+    double MeasureChannelSeparationDb(float[] stereo, int startFrame, int endFrame) {
+        double pL = 0.0, pR = 0.0;
+        for (int f = startFrame; f < endFrame; f++) {
+            float l = stereo[f * 2];
+            float r = stereo[f * 2 + 1];
+            Assert(float.IsFinite(l) && float.IsFinite(r), "Transaural XTC produced non-finite sample");
+            pL += (double)l * l;
+            pR += (double)r * r;
+        }
+        return 10.0 * Math.Log10((pL + 1e-18) / (pR + 1e-18));
+    }
+
+    double rawSepDb = MeasureChannelSeparationDb(rawEars, 512, frames);
+    double xtcSepDb = MeasureChannelSeparationDb(xtcEars, 512, frames);
+    double improvementDb = xtcSepDb - rawSepDb;
+    Assert(improvementDb >= 12.0,
+        $"Transaural XTC separation improvement too low: raw={rawSepDb:F2} dB, xtc={xtcSepDb:F2} dB, gain={improvementDb:F2} dB (need >= 12 dB)");
+
+    // 3. Steady-state 0 B RT GC check
+    float[] rtBlock = new float[1024 * 2];
+    Array.Copy(src, rtBlock, rtBlock.Length);
+    stage.ProcessInterleaved(rtBlock, 0, 1024, 2, default);
+    long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+    for (int iter = 0; iter < 16; iter++) {
+        stage.ProcessInterleaved(rtBlock, 0, 1024, 2, default);
+    }
+    long rtAlloc = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+    Assert(rtAlloc == 0, $"Transaural XTC RT processing must allocate 0 B GC, got {rtAlloc} B");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
@@ -4946,6 +5133,69 @@ def _py_stage12_w53_2_w53_3_wave_b_wave_c_contracts() -> None:
             assert f'["{key}"]' in lang_src, f"W53.2 Wave B missing L10n key '{key}' in {lang_file}"
 
 
+def _py_stage13_w53_4_to_w53_6_wave_d_e_f_contracts() -> None:
+    # Wave D (B10): Modular One UI 9 quick-panel control blocks
+    mod_model = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Models" / "ModularQuickPanelLayout.cs").read_text(encoding="utf-8")
+    for tok in ("class ModularQuickPanelLayout", "CreateDefaultPlayLayout", "CreateDefaultRoomLayout", "FromJsonOrDefault"):
+        assert tok in mod_model, f"W53.4 Wave D missing '{tok}' in ModularQuickPanelLayout.cs"
+
+    mod_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.ModularBlocks.cs").read_text(encoding="utf-8")
+    for tok in ("ShowModularLayoutEditorDialog", "ReorderLinearLayoutInPlace", "OneUiTheme.OnPrimary", "BaselineAligned = false"):
+        assert tok in mod_ui, f"W53.4 Wave D missing '{tok}' in MainActivity.ModularBlocks.cs"
+
+    # Wave E (B12): W8A16 ONNX quantizer + SoC-keyed QNN context cache + Settings wiring
+    quant_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "OnnxMobileQuantizer.cs").read_text(encoding="utf-8")
+    for tok in ("enum NeuralQuantizationMode", "ConvertBytesToW8A16", "ResolveEffectiveMode", "EstimatePeakPssMb", "DequantizeLinear"):
+        assert tok in quant_src, f"W53.5 Wave E missing '{tok}' in OnnxMobileQuantizer.cs"
+
+    qnn_mgr = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "OnnxQnnContextCacheManager.cs").read_text(encoding="utf-8")
+    for tok in ("ComputeSocContextKey", "Build.Fingerprint", "ProbeDeviceQnnCapabilities", "ResolveOrBuildQuantizedModelPath"):
+        assert tok in qnn_mgr, f"W53.5 Wave E missing '{tok}' in OnnxQnnContextCacheManager.cs"
+
+    bridge_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NativeOnnxRuntimeBridge.cs").read_text(encoding="utf-8")
+    for tok in ("PreferredQuantizationMode", "QnnContextCacheEnabled", "OnnxQnnContextCacheManager.ResolveOrBuildQuantizedModelPath"):
+        assert tok in bridge_src, f"W53.5 Wave E missing '{tok}' in NativeOnnxRuntimeBridge.cs"
+
+    # Wave F (B13): Physical Transaural XTC + bit-exact headphone bypass + engine/route/settings wiring
+    xtc_core = (REPO_ROOT / "Cavern" / "Virtualizer" / "TransauralXtcFilter.cs").read_text(encoding="utf-8")
+    for tok in ("enum TransauralSpeakerPreset", "class TransauralXtcFilter", "SimulatePhysicalSpeakerToEar", "if (buffer == null || !enabled || bypassed"):
+        assert tok in xtc_core, f"W53.6 Wave F missing '{tok}' in TransauralXtcFilter.cs"
+
+    xtc_stage = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "Adapters" / "TransauralXtcPostProcessingStage.cs").read_text(encoding="utf-8")
+    for tok in ("Priority => 820", "UpdateOutputRoute", "forceBitExactBypass"):
+        assert tok in xtc_stage, f"W53.6 Wave F missing '{tok}' in TransauralXtcPostProcessingStage.cs"
+
+    engine_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Rendering" / "RealtimePlayerEngine.cs").read_text(encoding="utf-8")
+    for tok in ("TransauralXtcPostProcessingStage", "ApplyTransauralXtcConfig", "UpdateOutputRouteForTransaural"):
+        assert tok in engine_src, f"W53.6 Wave F missing '{tok}' in RealtimePlayerEngine.cs"
+
+    dev_mgr = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AudioDeviceProfileManager.cs").read_text(encoding="utf-8")
+    assert "UpdateOutputRouteForTransaural" in dev_mgr and "IsSpeakerHardware" in dev_mgr, (
+        "W53.6 Wave F missing automatic speaker/headphone route wiring in AudioDeviceProfileManager.cs"
+    )
+
+    # Full 4-Language parity check across all 52 new Wave D + Wave E + Wave F keys
+    wave_def_keys = (
+        "BtnDone", "ModLayoutCardTitle", "ModLayoutCardDesc", "ModLayoutEditPlayBtn", "ModLayoutEditRoomBtn",
+        "ModLayoutPlayTitle", "ModLayoutRoomTitle", "ModLayoutSubtitle", "ModLayoutResetBtn", "ModLayoutResetToast",
+        "ModBlockPinnedTag", "ModBlockEssentialTag",
+        "ModBlockPlayStage", "ModBlockPlayTitle", "ModBlockPlaySeek", "ModBlockPlayBadges",
+        "ModBlockPlayTransport", "ModBlockPlayVolume", "ModBlockPlaySpatialPills", "ModBlockPlayBottomActions",
+        "ModBlockRoomSignalChain", "ModBlockRoomCanvas", "ModBlockRoomMiniTransport", "ModBlockRoomXRay",
+        "ModBlockRoomQuickPanel", "ModBlockRoomMixer",
+        "NeuralQuantModeTitle", "NeuralQuantAuto", "NeuralQuantFp32", "NeuralQuantFp16", "NeuralQuantW8A16", "TipNeuralQuantMode",
+        "NeuralQnnCacheTitle", "TipNeuralQnnCache", "NeuralQnnCacheStatusFmt", "NeuralQnnCacheClearBtn", "NeuralQnnCacheClearedToast",
+        "TransauralCardTitle", "TransauralEnableTitle", "TipTransauralXtc", "TransauralPresetTitle", "TipTransauralPreset",
+        "TransauralPresetPhoneLand", "TransauralPresetPhonePort", "TransauralPresetDesktop", "TransauralPresetHiFi",
+        "TransauralStrengthTitle", "TransauralAutoBypassTitle", "TipTransauralAutoBypass",
+        "TransauralStatusOff", "TransauralStatusHeadphoneBypass", "TransauralStatusActive",
+    )
+    for lang_file in ("AndroidStrings.cs", "AndroidStrings.PtBr.cs", "AndroidStrings.Hu.cs", "AndroidStrings.Zh.cs"):
+        lang_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Language" / lang_file).read_text(encoding="utf-8")
+        for key in wave_def_keys:
+            assert f'["{key}"]' in lang_src, f"W53.4-W53.6 missing L10n key '{key}' in {lang_file}"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -4961,6 +5211,7 @@ PYTHON_CHECKS = [
     ("PY_T10_OnnxLowRamDisciplineAndQaContracts", _py_stage10_onnx_low_ram_discipline_and_qa_contracts),
     ("PY_T11_W53_1_WaveAContracts", _py_stage11_w53_1_wave_a_contracts),
     ("PY_T12_W53_2_W53_3_WaveB_WaveC_Contracts", _py_stage12_w53_2_w53_3_wave_b_wave_c_contracts),
+    ("PY_T13_W53_4_W53_5_W53_6_WaveD_WaveE_WaveF_Contracts", _py_stage13_w53_4_to_w53_6_wave_d_e_f_contracts),
 ]
 
 

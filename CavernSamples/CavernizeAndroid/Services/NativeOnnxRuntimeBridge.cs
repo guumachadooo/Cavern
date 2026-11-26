@@ -543,46 +543,11 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
         }
     }
 
-    string TryResolveWebGpuFp16CachePath(string modelPath, long modelBytes, DateTime srcWriteUtc) {
-        if (!IsWebGpuOptimalModel(modelPath)) {
-            return null;
-        }
-        string fileName = Path.GetFileName(modelPath ?? string.Empty);
-        if (fileName.Contains("fp16", StringComparison.OrdinalIgnoreCase)) {
-            return null;
-        }
-        if (File.Exists(modelPath + ".data") || File.Exists(modelPath + "_data")) {
-            return null;
-        }
-        try {
-            string cacheRoot = appContext.CacheDir?.AbsolutePath;
-            if (string.IsNullOrEmpty(cacheRoot)) {
-                return null;
-            }
-            string fp16Dir = Path.Combine(cacheRoot, "ort_fp16");
-            Directory.CreateDirectory(fp16Dir);
-            string baseName = Path.GetFileNameWithoutExtension(modelPath);
-            return Path.Combine(fp16Dir, $"{baseName}_{modelBytes}_{srcWriteUtc.Ticks}_fp16.onnx");
-        } catch {
-            return null;
-        }
-    }
+    /// <summary>Wave E (W53.5 / B12) preferred mobile ONNX weight precision mode (Auto, FP32, FP16, or W8A16).</summary>
+    public NeuralQuantizationMode PreferredQuantizationMode { get; set; } = NeuralQuantizationMode.Auto;
 
-    string TryResolveQnnContextModelPath(string modelPath, long modelBytes) {
-        try {
-            string cacheRoot = appContext.CacheDir?.AbsolutePath;
-            if (string.IsNullOrEmpty(cacheRoot)) {
-                return null;
-            }
-            string qnnDir = Path.Combine(cacheRoot, "qnn_cache");
-            Directory.CreateDirectory(qnnDir);
-            string baseName = Path.GetFileNameWithoutExtension(modelPath);
-            string safeVer = string.IsNullOrEmpty(loadedVersion) ? "ort" : loadedVersion.Replace('.', '_');
-            return Path.Combine(qnnDir, $"{baseName}_{modelBytes}_{safeVer}_qnn_ctx.onnx");
-        } catch {
-            return null;
-        }
-    }
+    /// <summary>Wave E (W53.5 / B12) enables SoC-keyed QNN HTP Hexagon NPU context binary caching.</summary>
+    public bool QnnContextCacheEnabled { get; set; } = true;
 
     /// <inheritdoc/>
     public INeuralSession CreateSession(string modelPath, NeuralExecutionProvider preferredProvider, int intraOpThreads = 0) {
@@ -627,61 +592,52 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                     new FileInfo(cachedOptPath).Length >= 1024 &&
                     File.GetLastWriteTimeUtc(cachedOptPath) >= srcWriteUtc;
 
-                string qnnCtxPath = candidate == NeuralExecutionProvider.QnnHtp
-                    ? TryResolveQnnContextModelPath(modelPath, modelBytes)
-                    : null;
-                bool hasValidQnnCtx = !string.IsNullOrEmpty(qnnCtxPath) &&
-                    File.Exists(qnnCtxPath) &&
-                    new FileInfo(qnnCtxPath).Length >= 1024 &&
-                    File.GetLastWriteTimeUtc(qnnCtxPath) >= srcWriteUtc;
+                bool isWebGpuOptimal = IsWebGpuOptimalModel(modelPath);
+                NeuralQuantizationMode effectiveQuantMode = OnnxMobileQuantizer.ResolveEffectiveMode(
+                    PreferredQuantizationMode, modelBytes, candidate, isWebGpuOptimal);
 
-                // W46 IEEE-754 FP32 -> FP16 WebGPU cache (strictly no INT8 quantization):
-                // Achieves ~1.40x real-time on Snapdragon Adreno Vulkan GPU (SNR > 37 dB, 0 NaN/Inf)
-                // with automatic fallback to original FP32 if conversion or WebGPU session creation fails.
-                string fp16CachePath = candidate == NeuralExecutionProvider.WebGpu
-                    ? TryResolveWebGpuFp16CachePath(modelPath, modelBytes, srcWriteUtc)
-                    : null;
-                bool hasValidFp16Cache = !string.IsNullOrEmpty(fp16CachePath) &&
-                    File.Exists(fp16CachePath) &&
-                    new FileInfo(fp16CachePath).Length >= 1024 &&
-                    File.GetLastWriteTimeUtc(fp16CachePath) >= srcWriteUtc;
-                bool convertedFp16Now = false;
-                if (!hasValidFp16Cache && !string.IsNullOrEmpty(fp16CachePath)) {
-                    OnnxFp16ConversionResult fp16Res = OnnxFp16ModelConverter.TryConvertFileToFp16(modelPath, fp16CachePath);
-                    if (fp16Res.Success) {
-                        hasValidFp16Cache = true;
-                        convertedFp16Now = true;
-                        AppLogger.Info($"W46 WebGPU FP16 cache generated for '{Path.GetFileName(modelPath)}': {fp16Res.Message}");
-                    } else if (!fp16Res.SkippedAlreadyFp16 && !fp16Res.SkippedExternalData) {
-                        AppLogger.Warn($"W46 WebGPU FP16 conversion skipped for '{Path.GetFileName(modelPath)}': {fp16Res.Message}");
+                // Wave E (W53.5): Mobile ONNX FP16 / W8A16 weight-only quantization cache (cuts heavy FP32 models <1.4 GB PSS)
+                string activePrecisionTag = "FP32";
+                string quantizedModelPath = null;
+                bool hasValidQuantCache = false;
+                if (effectiveQuantMode == NeuralQuantizationMode.W8A16 ||
+                    effectiveQuantMode == NeuralQuantizationMode.Fp16) {
+                    string resolvedQuant = OnnxQnnContextCacheManager.ResolveOrBuildQuantizedModelPath(
+                        appContext, modelPath, effectiveQuantMode, out activePrecisionTag);
+                    if (!string.Equals(resolvedQuant, modelPath, StringComparison.OrdinalIgnoreCase) &&
+                        File.Exists(resolvedQuant)) {
+                        quantizedModelPath = resolvedQuant;
+                        hasValidQuantCache = true;
                     }
                 }
 
-                // Attempt cached FP16 / graph / QNN context load first; if unavailable or rejected, load original FP32
-                bool canTryCachedFirst = hasValidFp16Cache || hasValidCachedOpt || hasValidQnnCtx;
+                // Wave E (W53.5): SoC-keyed QNN HTP context binary cache (Build.Fingerprint + SocModel + ORT + model SHA-256)
+                string qnnSourcePath = hasValidQuantCache ? quantizedModelPath : modelPath;
+                string qnnCtxPath = null;
+                bool hasValidQnnCtx = false;
+                if (candidate == NeuralExecutionProvider.QnnHtp && QnnContextCacheEnabled) {
+                    (qnnCtxPath, hasValidQnnCtx, _) = OnnxQnnContextCacheManager.ResolveContextBinaryPath(
+                        appContext, qnnSourcePath, loadedVersion, effectiveQuantMode);
+                }
+
+                // Attempt cached quantized / QNN context / graph-opt load first; if unavailable or rejected, load original FP32 cleanly
+                bool canTryCachedFirst = hasValidQnnCtx || hasValidQuantCache || hasValidCachedOpt;
                 for (int attempt = canTryCachedFirst ? 0 : 1; attempt < 2; attempt++) {
-                    bool usingFp16Cache = attempt == 0 && hasValidFp16Cache;
-                    bool usingCachedOpt = attempt == 0 && !usingFp16Cache && hasValidCachedOpt;
-                    bool usingQnnCtx = attempt == 0 && !usingFp16Cache && hasValidQnnCtx;
-                    string loadPath = usingFp16Cache
-                        ? fp16CachePath
-                        : (usingQnnCtx ? qnnCtxPath : (usingCachedOpt ? cachedOptPath : modelPath));
+                    bool usingQnnCtx = attempt == 0 && hasValidQnnCtx;
+                    bool usingQuantCache = attempt == 0 && !usingQnnCtx && hasValidQuantCache;
+                    bool usingCachedOpt = attempt == 0 && !usingQnnCtx && !usingQuantCache && hasValidCachedOpt;
+                    string loadPath = usingQnnCtx
+                        ? qnnCtxPath
+                        : (usingQuantCache ? quantizedModelPath : (usingCachedOpt ? cachedOptPath : modelPath));
                     IntPtr sessOpts = IntPtr.Zero;
                     CheckStatus(fnCreateSessionOptions(out sessOpts));
                     try {
-                        // Keep full CPU intra-op threads even for XNNPACK (with spinning disabled per ORT guidance)
-                        // so non-XNNPACK layers (ConvTranspose/Gelu/RNN) never starve on a single CPU core.
                         CheckStatus(fnSetIntraOpNumThreads(sessOpts, threads));
                         if (fnSetInterOpNumThreads != null) {
                             ReleaseStatusQuietly(fnSetInterOpNumThreads(sessOpts, 1));
                         }
-                        // Memory discipline for mobile ARM64 (prevents 4.6 GB PSS Android LMKD kills on RoFormer/Demucs):
-                        // - 200+ MB / RoFormer / Demucs: disable ORT's power-of-two CPU memory arena so huge attention
-                        //   intermediates are returned immediately to Android instead of doubling and pinning forever.
-                        // - 400+ MB (e.g. 909 MB Mel-Band RoFormer FP32): also disable static mem-pattern & weight
-                        //   prepacking so ORT does not keep both raw protobuf and repacked weight copies simultaneously.
                         bool memoryHeavy = IsMemoryHeavyModel(modelPath, modelBytes);
-                        bool ultraHeavy = modelBytes >= UltraHeavyModelBytesThreshold;
+                        bool ultraHeavy = modelBytes >= UltraHeavyModelBytesThreshold && !usingQuantCache;
                         if (memoryHeavy && fnDisableCpuMemArena != null) {
                             ReleaseStatusQuietly(fnDisableCpuMemArena(sessOpts));
                         } else if (fnEnableCpuMemArena != null) {
@@ -693,49 +649,50 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                             ReleaseStatusQuietly(fnEnableMemPattern(sessOpts));
                         }
                         CheckStatus(fnSetGraphOpt(sessOpts, (usingCachedOpt || usingQnnCtx) ? 1 : OrtEnableAll));
-                        if (!usingCachedOpt && !usingFp16Cache && !string.IsNullOrEmpty(cachedOptPath) && fnSetOptimizedModelPath != null) {
+                        if (!usingCachedOpt && !usingQuantCache && !usingQnnCtx && !string.IsNullOrEmpty(cachedOptPath) && fnSetOptimizedModelPath != null) {
                             ReleaseStatusQuietly(fnSetOptimizedModelPath(sessOpts, cachedOptPath));
                         }
                         if (fnAddSessionConfig != null) {
-                            // Disable busy-spin waiting globally across all EPs so Android UI/SurfaceFlinger & RT audio
-                            // threads never suffer big.LITTLE scheduler starvation or thermal burn during background AI.
                             ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.intra_op.allow_spinning", "0"));
                             ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.inter_op.allow_spinning", "0"));
                             ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.set_denormal_as_zero", "1"));
                             if (ultraHeavy) {
                                 ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.disable_prepacking", "1"));
                             }
-                            if (candidate == NeuralExecutionProvider.QnnHtp && !usingQnnCtx && !string.IsNullOrEmpty(qnnCtxPath)) {
-                                // Only pass ep.context_enable=1 when compiling the original model (never when loading existing ctx .onnx)
+                            if (candidate == NeuralExecutionProvider.QnnHtp && QnnContextCacheEnabled && !usingQnnCtx && !string.IsNullOrEmpty(qnnCtxPath)) {
                                 try {
                                     if (File.Exists(qnnCtxPath)) File.Delete(qnnCtxPath);
                                 } catch { }
                                 ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "ep.context_enable", "1"));
+                                ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "ep.context_embed_mode", "0"));
                                 ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "ep.context_file_path", qnnCtxPath));
                             }
                         }
 
                         string activeEp = ConfigureSingleExecutionProvider(sessOpts, candidate, threads);
                         if (candidate != NeuralExecutionProvider.Cpu && activeEp.StartsWith("CPU", StringComparison.Ordinal)) {
-                            // Requested accelerator EP could not be appended; skip duplicate CPU run if CPU is already queued next
                             if (c + 1 < candidates.Count) {
                                 break;
                             }
                         }
-                        if (usingFp16Cache && activeEp.Contains("WebGPU", StringComparison.OrdinalIgnoreCase)) {
-                            activeEp = "WebGPU FP16 (Vulkan GPU)";
+                        if (usingQuantCache) {
+                            activeEp = $"{activeEp} [{activePrecisionTag}]";
                         }
 
                         Stopwatch swCreate = Stopwatch.StartNew();
                         IntPtr st = fnCreateSession(ortEnv, loadPath, sessOpts, out IntPtr sessionHandle);
                         swCreate.Stop();
                         if (st == IntPtr.Zero && sessionHandle != IntPtr.Zero) {
+                            if (candidate == NeuralExecutionProvider.QnnHtp && QnnContextCacheEnabled && !usingQnnCtx && !string.IsNullOrEmpty(qnnCtxPath)) {
+                                OnnxQnnContextCacheManager.RecordCompiledContextMetadata(
+                                    appContext, qnnCtxPath, qnnSourcePath, loadedVersion, effectiveQuantMode);
+                            }
                             lock (initLock) {
                                 lastActiveProvider = activeEp;
                             }
-                            string cacheTag = usingFp16Cache
-                                ? (convertedFp16Now ? " [webgpu-fp16-conv]" : " [webgpu-fp16-hit]")
-                                : (usingQnnCtx ? " [qnn-ctx-hit]" : (usingCachedOpt ? " [opt-cache-hit]" : ""));
+                            string cacheTag = usingQnnCtx
+                                ? " [qnn-soc-ctx-hit]"
+                                : (usingQuantCache ? $" [quant-{activePrecisionTag.ToLowerInvariant()}]" : (usingCachedOpt ? " [opt-cache-hit]" : ""));
                             string memTag = ultraHeavy ? " [low-ram:no-arena+no-prepack]" : (memoryHeavy ? " [low-ram:no-arena]" : " [arena-shrink]");
                             AppLogger.Info($"ONNX session ready [{activeEp}]{cacheTag}{memTag} threads={threads} init={swCreate.ElapsedMilliseconds}ms model='{Path.GetFileName(modelPath)}'");
                             NativeOnnxSession session = new(this, modelPath, sessionHandle, activeEp, enableArenaShrinkage: !memoryHeavy);
@@ -744,9 +701,9 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                         }
 
                         string errMsg = ReadAndReleaseStatus(st);
-                        if (usingFp16Cache) {
-                            try { File.Delete(fp16CachePath); } catch { }
-                            AppLogger.Warn($"W46 WebGPU FP16 session rejected for '{Path.GetFileName(modelPath)}'; falling back cleanly to FP32: {errMsg}");
+                        if (usingQuantCache) {
+                            try { File.Delete(quantizedModelPath); } catch { }
+                            AppLogger.Warn($"Wave E {activePrecisionTag} session rejected for '{Path.GetFileName(modelPath)}'; falling back cleanly to FP32: {errMsg}");
                             continue;
                         }
                         if (usingCachedOpt) {
@@ -756,7 +713,7 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                         }
                         if (usingQnnCtx) {
                             try { File.Delete(qnnCtxPath); } catch { }
-                            AppLogger.Warn($"ONNX QNN context cache invalidated for '{Path.GetFileName(modelPath)}'; recompiling cleanly.");
+                            AppLogger.Warn($"Wave E SoC QNN context cache invalidated for '{Path.GetFileName(modelPath)}'; recompiling cleanly.");
                             continue;
                         }
                         lastErr = new InvalidOperationException($"ONNX Runtime error ({activeEp}): {errMsg}");

@@ -101,7 +101,8 @@ public partial class MainActivity {
         page.SetPadding(Dp(14), Dp(4), Dp(14), Dp(116));
 
         // 0. Live Tappable Active Signal Chain Bar (WorkspaceSourceBar is hoisted stationary above contentFrame)
-        page.AddView(BuildActiveSignalChainBar(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        HorizontalScrollView signalChainBar = BuildActiveSignalChainBar();
+        page.AddView(signalChainBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
         });
 
@@ -390,10 +391,12 @@ public partial class MainActivity {
         page.AddView(roomCard);
 
         // 1B. Compact 1-Row Mini Transport & Master Strip (keeps 3D Room canvas above the fold without 5-card vertical bloat)
-        page.AddView(BuildMiniTransportStrip());
+        LinearLayout miniTransportStrip = BuildMiniTransportStrip();
+        page.AddView(miniTransportStrip);
 
         // 1C. W13 Studio Spatial X-Ray Inspector Card (Native One UI 9 Collapsible HUD with Essential / Pro Telemetry Disclosure)
-        page.AddView(BuildSpatialXRayInspectorCard());
+        LinearLayout xrayInspectorCard = BuildSpatialXRayInspectorCard();
+        page.AddView(xrayInspectorCard);
 
         // 3. One UI 9 Quick Spatial Panel Card (1x2 Bento Toggles + Fat Dynamic Capsules + In-App Rolloff Selector)
         LinearLayout quickCard = Card(S["QuickPanelTitle"], OneUiIconType.Sliders, OneUiTheme.IconAtmosUpmix);
@@ -494,6 +497,11 @@ public partial class MainActivity {
             playerEngine.VolumeRolloff = (Rolloffs)pos;
         };
         quickCard.AddView(WrapControlWithHelp(rolloffSelector, S["RolloffLabel"].TrimEnd(':'), S["TipRolloff"]));
+        Button roomEditLayoutBtn = PillButton(S["ModLayoutEditRoomBtn"], () => ShowModularLayoutEditorDialog(isRoomTab: true));
+        roomEditLayoutBtn.SetMinimumHeight(Dp(44));
+        quickCard.AddView(roomEditLayoutBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(8)
+        });
         page.AddView(quickCard);
 
         // 4. Live Channel & 3D Object Mixer Card (Filter buttons visibly toggle Solo state)
@@ -571,6 +579,7 @@ public partial class MainActivity {
         mixerCard.AddView(mixerContainer);
         page.AddView(mixerCard);
 
+        RegisterRoomModularBlocks(page, signalChainBar, roomCard, miniTransportStrip, xrayInspectorCard, quickCard, mixerCard);
         RefreshFilterButtonsUi();
         RefreshNeuralPrepUi();
         RefreshSignalChainBarUi();

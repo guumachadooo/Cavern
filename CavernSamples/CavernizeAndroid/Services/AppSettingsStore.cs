@@ -1698,6 +1698,56 @@ public sealed class AppSettingsStore {
         set => Edit().PutString("lastExplorerDir", value ?? "").Apply();
     }
 
+    // Wave D (W53.4 / B10): One UI 9 Modular Editable Quick-Panel Layouts (Play & 3D Room)
+    public string ModularPlayLayoutJson {
+        get => prefs.GetString("modularPlayLayoutV1", "");
+        set => Edit().PutString("modularPlayLayoutV1", value ?? "").Apply();
+    }
+
+    public string ModularRoomLayoutJson {
+        get => prefs.GetString("modularRoomLayoutV1", "");
+        set => Edit().PutString("modularRoomLayoutV1", value ?? "").Apply();
+    }
+
+    // Wave E (W53.5 / B12): Mobile ONNX Quantization (0=Auto, 1=FP32, 2=FP16, 3=W8A16) & QNN SoC Context Cache
+    public int NeuralQuantizationModeIndex {
+        get => prefs.GetInt("neuralQuantizationModeIdx", 0);
+        set => Edit().PutInt("neuralQuantizationModeIdx", Math.Clamp(value, 0, 3)).Apply();
+    }
+
+    public bool NeuralQnnContextCacheEnabled {
+        get => prefs.GetBoolean("neuralQnnContextCacheEnabled", true);
+        set => Edit().PutBoolean("neuralQnnContextCacheEnabled", value).Apply();
+    }
+
+    // Wave F (W53.6 / B13): Physical Transaural XTC Spatializer for Phone & External Stereo Speakers
+    public bool TransauralXtcEnabled {
+        get => prefs.GetBoolean("transauralXtcEnabled", false);
+        set => Edit().PutBoolean("transauralXtcEnabled", value).Apply();
+    }
+
+    public int TransauralXtcPresetIndex {
+        get => prefs.GetInt("transauralXtcPresetIdx", 0);
+        set => Edit().PutInt("transauralXtcPresetIdx", Math.Clamp(value, 0, 4)).Apply();
+    }
+
+    public float TransauralXtcStrength {
+        get => prefs.GetFloat("transauralXtcStrength", 0.85f);
+        set => Edit().PutFloat("transauralXtcStrength", Math.Clamp(value, 0f, 1f)).Apply();
+    }
+
+    public bool TransauralXtcAutoBypassHeadphones {
+        get => prefs.GetBoolean("transauralXtcAutoBypassHeadphones", true);
+        set => Edit().PutBoolean("transauralXtcAutoBypassHeadphones", value).Apply();
+    }
+
+    public Cavernize.Logic.Spatial.TransauralXtcConfig BuildTransauralXtcConfig() => new Cavernize.Logic.Spatial.TransauralXtcConfig {
+        Enabled = TransauralXtcEnabled,
+        Preset = (Cavern.Virtualizer.TransauralSpeakerPreset)Math.Clamp(TransauralXtcPresetIndex, 0, 4),
+        Strength = TransauralXtcStrength,
+        AutoBypassOnHeadphones = TransauralXtcAutoBypassHeadphones
+    }.Sanitize();
+
     public AppSettingsStore(Context context) {
         prefs = context.GetSharedPreferences(PrefsName, FileCreationMode.Private);
         string rawFfmpeg = prefs.GetString("ffmpegPath", "");

@@ -581,6 +581,96 @@
           "message": "Incremental Stage-1 vocal reuse parameter preExtractedTrack must remain in NeuralPipelineOrchestrator.cs"
         }
       ]
+    },
+    {
+      "id": "REG-B10-MODULAR-ONEUI9",
+      "bug_ref": "B10/W53.4",
+      "title": "Preserve Wave D One UI 9 modular editable quick-panel control blocks with schema-safe persistence and in-place 120 Hz reorder",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T47 + PY_T13",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Models/ModularQuickPanelLayout.cs",
+          "pattern": "public\\s+static\\s+ModularQuickPanelLayout\\s+FromJsonOrDefault\\s*\\(",
+          "message": "ModularQuickPanelLayout.FromJsonOrDefault must remain intact for schema-safe persistence"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.ModularBlocks.cs",
+          "pattern": "void\\s+ShowModularLayoutEditorDialog\\s*\\(",
+          "message": "ShowModularLayoutEditorDialog must remain intact in MainActivity.ModularBlocks.cs"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.ModularBlocks.cs",
+          "pattern": "void\\s+ReorderLinearLayoutInPlace\\s*\\(",
+          "message": "Zero-jank ReorderLinearLayoutInPlace must remain intact in MainActivity.ModularBlocks.cs"
+        }
+      ]
+    },
+    {
+      "id": "REG-B12-QNN-FP16-W8A16-CACHE",
+      "bug_ref": "B12/W53.5",
+      "title": "Preserve Wave E pure-C# W8A16 ONNX weight-only quantizer and SoC-fingerprint-keyed QNN context cache manager",
+      "domain": "ai-ml",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T48 + PY_T13",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/OnnxMobileQuantizer.cs",
+          "pattern": "public\\s+static\\s+OnnxW8A16QuantizationResult\\s+ConvertBytesToW8A16\\s*\\(",
+          "message": "OnnxMobileQuantizer.ConvertBytesToW8A16 must remain intact"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/OnnxQnnContextCacheManager.cs",
+          "pattern": "public\\s+static\\s+string\\s+ComputeSocContextKey\\s*\\(",
+          "message": "OnnxQnnContextCacheManager.ComputeSocContextKey must remain intact"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/OnnxQnnContextCacheManager.cs",
+          "pattern": "Build\\.Fingerprint",
+          "message": "SoC context cache key must remain bound to Android Build.Fingerprint for OS-upgrade safety"
+        }
+      ]
+    },
+    {
+      "id": "REG-B13-TRANSAURAL-XTC-BYPASS",
+      "bug_ref": "B13/W53.6",
+      "title": "Preserve Wave F physical speaker transaural XTC filter and guaranteed bit-exact 0.0f headphone bypass (KILL R3)",
+      "domain": "dsp-format",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_audio_ground_truth.py:GT-16 + run_w46_unit_tests.py:T49 + PY_T13",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "Cavern/Virtualizer/TransauralXtcFilter.cs",
+          "pattern": "if\\s*\\(buffer\\s*==\\s*null\\s*\\|\\|\\s*!enabled\\s*\\|\\|\\s*bypassed",
+          "message": "TransauralXtcFilter.ProcessInterleaved must enforce hard bit-exact bypass when bypassed or disabled"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Spatial/Adapters/TransauralXtcPostProcessingStage.cs",
+          "pattern": "if\\s*\\(forceBitExactBypass\\s*\\|\\|",
+          "message": "TransauralXtcPostProcessingStage must enforce lock-free bit-exact headphone bypass fast path"
+        }
+      ]
     }
   ]
 }

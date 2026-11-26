@@ -1735,5 +1735,63 @@ public sealed partial class AndroidStrings {
         d["AiCacheOptimizeDoneToastFmt"] = "{0} arquivo(s) otimizado(s), {1:0.0} MB liberados.";
         d["AiCacheOptimizeAlreadyCompactToast"] = "O cache de IA já está otimizado.";
         d["AiCacheIncrementalReuseHint"] = "Vocais em cache detectados — o Karaokê reutilizará a Etapa 1 automaticamente.";
+
+        // Wave D (W53.4 / B10): Layout Modular Editável Estilo One UI 9
+        d["BtnDone"] = "Concluir";
+        d["ModLayoutCardTitle"] = "Layout Modular de Controles (One UI 9)";
+        d["ModLayoutCardDesc"] = "Reordene ou oculte blocos de controle nas abas Play e Sala 3D como no Painel Rápido da One UI 9. Blocos essenciais permanecem protegidos.";
+        d["ModLayoutEditPlayBtn"] = "Personalizar Play";
+        d["ModLayoutEditRoomBtn"] = "Personalizar Sala 3D";
+        d["ModLayoutPlayTitle"] = "Personalizar Layout do Play";
+        d["ModLayoutRoomTitle"] = "Personalizar Layout da Sala 3D";
+        d["ModLayoutSubtitle"] = "Use as setas para reordenar blocos ou ative/desative os painéis opcionais.";
+        d["ModLayoutResetBtn"] = "Restaurar Padrão";
+        d["ModLayoutResetToast"] = "Layout restaurado para o padrão One UI 9.";
+        d["ModBlockPinnedTag"] = "Fixo no topo · Essencial";
+        d["ModBlockEssentialTag"] = "Essencial · Sempre visível";
+        d["ModBlockPlayStage"] = "Palco de Mídia (Capa · Letra · Vídeo)";
+        d["ModBlockPlayTitle"] = "Título e Artista";
+        d["ModBlockPlaySeek"] = "Barra de Progresso Wave";
+        d["ModBlockPlayBadges"] = "Selos Espaciais e Formato";
+        d["ModBlockPlayTransport"] = "Controles de Reprodução";
+        d["ModBlockPlayVolume"] = "Controle de Volume";
+        d["ModBlockPlaySpatialPills"] = "Pílulas Rápidas (Upmix · HRTF · IA)";
+        d["ModBlockPlayBottomActions"] = "Barra Inferior (Letra · Online · Repetir · 3D)";
+        d["ModBlockRoomSignalChain"] = "Barra de Cadeia de Sinal Ativa";
+        d["ModBlockRoomCanvas"] = "Simulador Sala 3D e Presets";
+        d["ModBlockRoomMiniTransport"] = "Mini Transporte e Volume";
+        d["ModBlockRoomXRay"] = "Inspetor Espacial X-Ray";
+        d["ModBlockRoomQuickPanel"] = "Painel Espacial Rápido e Sliders";
+        d["ModBlockRoomMixer"] = "Mixer de Canais e Objetos 3D";
+
+        // Wave E (W53.5 / B12): Precisão ONNX Móvel (FP16 / W8A16) e Cache Binário QNN por SoC
+        d["NeuralQuantModeTitle"] = "Precisão dos Pesos ONNX Móvel:";
+        d["NeuralQuantAuto"] = "Automático (FP16 / W8A16 Pesados)";
+        d["NeuralQuantFp32"] = "FP32 (Referência Original)";
+        d["NeuralQuantFp16"] = "FP16 (Meia Precisão · 2x)";
+        d["NeuralQuantW8A16"] = "W8A16 (Pesos INT8 · ~3,8x)";
+        d["TipNeuralQuantMode"] = "Reduz o uso de RAM dos modelos ONNX e acelera a inferência no celular mantendo as ativações de áudio em alta precisão:\n\n• Automático: FP16 em WebGPU/QNN e W8A16 em modelos >=200 MB para ficar abaixo de 1,4 GB PSS.\n• FP32: Pesos originais sem alteração.\n• FP16: Grafo IEEE-754 de meia precisão.\n• W8A16: Pesos INT8 por canal com ativações via DequantizeLinear (~3,8x menor).";
+        d["NeuralQnnCacheTitle"] = "Cache de Contexto QNN HTP por SoC";
+        d["TipNeuralQnnCache"] = "Armazena binários compilados da NPU Qualcomm Hexagon vinculados ao Build Fingerprint do Android, SoC, versão do ORT e SHA-256 do modelo. Arquivos obsoletos são limpos automaticamente após atualizações.";
+        d["NeuralQnnCacheStatusFmt"] = "SoC: {0} · Cache: {1} arquivo(s) ({2:0.0} MB)";
+        d["NeuralQnnCacheClearBtn"] = "Limpar Cache QNN e Quantização";
+        d["NeuralQnnCacheClearedToast"] = "{0} arquivo(s) de otimização ONNX removido(s).";
+
+        // Wave F (W53.6 / B13): Espacializador Transaural XTC para Alto-Falantes com Bypass Bit-Exato em Fones
+        d["TransauralCardTitle"] = "3D Transaural para Alto-Falantes (XTC)";
+        d["TransauralEnableTitle"] = "Ativar Cancelamento Físico de Crosstalk";
+        d["TipTransauralXtc"] = "Usa cancelamento causal Bauck-Cooper / BACCH para projetar um palco 3D amplo fora dos alto-falantes estéreo do celular ou caixas externas.";
+        d["TransauralPresetTitle"] = "Geometria dos Alto-Falantes:";
+        d["TipTransauralPreset"] = "Selecione o arranjo físico das caixas para calcular o atraso contralateral e difração da cabeça exatos:\n\n• Celular Paisagem: Alto-falantes estéreo integrados (~15,5 cm a 40 cm).\n• Celular Retrato: Uso próximo na vertical.\n• Monitores de Mesa: Caixas próximas (±20°) ou soundbar.\n• Estéreo Hi-Fi: Triângulo padrão ITU-R (±30°).";
+        d["TransauralPresetPhoneLand"] = "Celular Paisagem";
+        d["TransauralPresetPhonePort"] = "Celular Retrato";
+        d["TransauralPresetDesktop"] = "Monitores de Mesa (±20°)";
+        d["TransauralPresetHiFi"] = "Estéreo Hi-Fi (±30°)";
+        d["TransauralStrengthTitle"] = "Profundidade do Cancelamento (XTC)";
+        d["TransauralAutoBypassTitle"] = "Bypass Automático em Fones (Bit-Exato)";
+        d["TipTransauralAutoBypass"] = "Garante passagem bit-exata (erro 0.0) automaticamente sempre que fones Bluetooth, USB-C ou cabeados estiverem conectados, evitando qualquer coloração nos fones.";
+        d["TransauralStatusOff"] = "Inativo — ative ao ouvir nos alto-falantes estéreo";
+        d["TransauralStatusHeadphoneBypass"] = "Bypass Bit-Exato Ativo (Fones conectados)";
+        d["TransauralStatusActive"] = "Ativo nos Alto-Falantes · ±{0:0.0}° · Δτ {1:0} µs · ~{2:0.0} dB XTC";
     }
 }

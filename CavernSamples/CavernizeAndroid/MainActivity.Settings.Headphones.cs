@@ -649,6 +649,7 @@ public partial class MainActivity {
             RefreshAutoEqUi();
             RefreshHeadTrackingUi();
             ApplyAndRefreshExternalization();
+            RefreshTransauralXtcUi();
             RefreshPersonalizationUi();
             RefreshMusicPlayerControlsUi();
             if (autoMatched && binding != null && !string.IsNullOrEmpty(binding.AutoEqProfileName)) {

@@ -2093,6 +2093,119 @@ RunSuite("GT-15", "W53_3_WaveC_StereoPanPreservation_And_MoodAwareChoreo_QAS_Q4"
     };
 });
 
+// GT-16: W53.6 Wave F — Physical Transaural XTC Speaker Cancellation (>= 10 dB) & Bit-Exact 0.0f Headphone Bypass (KILL R3)
+RunSuite("GT-16", "W53_6_WaveF_TransauralXtc_Cancellation_And_BitExactHeadphoneBypass", () => {
+    const int sr = 48000;
+    const int frames = 8192;
+    double[] probeFreqs = [400.0, 800.0, 1500.0, 2800.0];
+    float[] multiToneLeft = new float[frames * 2];
+    for (int f = 0; f < frames; f++) {
+        double t = f / (double)sr;
+        double sum = 0.0;
+        for (int k = 0; k < probeFreqs.Length; k++) {
+            sum += 0.18 * Math.Sin(2.0 * Math.PI * probeFreqs[k] * t);
+        }
+        multiToneLeft[f * 2] = (float)sum;
+        multiToneLeft[f * 2 + 1] = 0f;
+    }
+
+    double MeasureSepImprovementDb(
+        Cavern.Virtualizer.TransauralSpeakerPreset preset,
+        float[] probeStereo,
+        int sampleRate,
+        int frameCount,
+        out double rawSepDb,
+        out double xtcSepDb) {
+        using Cavernize.Logic.Spatial.Adapters.TransauralXtcPostProcessingStage stage = new();
+        stage.Configure(sampleRate, 2);
+        stage.ApplyConfig(new Cavernize.Logic.Spatial.TransauralXtcConfig {
+            Enabled = true,
+            Preset = preset,
+            Strength = 0.90f,
+            AutoBypassOnHeadphones = true
+        });
+        stage.UpdateOutputRoute(headphoneRoute: false, AudioDeviceTransport.BuiltinSpeaker);
+
+        Cavern.Virtualizer.TransauralGeometryParams geo = Cavern.Virtualizer.TransauralXtcFilter.ComputeGeometry(preset);
+        float[] rawEars = new float[frameCount * 2];
+        Cavern.Virtualizer.TransauralXtcFilter.SimulatePhysicalSpeakerToEar(probeStereo, rawEars, frameCount, sampleRate, geo);
+
+        float[] xtcSpk = (float[])probeStereo.Clone();
+        stage.ProcessInterleaved(xtcSpk, 0, frameCount, 2, default);
+        float[] xtcEars = new float[frameCount * 2];
+        Cavern.Virtualizer.TransauralXtcFilter.SimulatePhysicalSpeakerToEar(xtcSpk, xtcEars, frameCount, sampleRate, geo);
+
+        double rawL = 0, rawR = 0, xtcL = 0, xtcR = 0;
+        for (int f = 1024; f < frameCount; f++) {
+            float rl = rawEars[f * 2], rr = rawEars[f * 2 + 1];
+            float xl = xtcEars[f * 2], xr = xtcEars[f * 2 + 1];
+            Assert(float.IsFinite(xl) && float.IsFinite(xr), $"GT-16 non-finite output on {preset}");
+            rawL += (double)rl * rl; rawR += (double)rr * rr;
+            xtcL += (double)xl * xl; xtcR += (double)xr * xr;
+        }
+        rawSepDb = 10.0 * Math.Log10((rawL + 1e-18) / (rawR + 1e-18));
+        xtcSepDb = 10.0 * Math.Log10((xtcL + 1e-18) / (xtcR + 1e-18));
+        return xtcSepDb - rawSepDb;
+    }
+
+    double phoneGainDb = MeasureSepImprovementDb(
+        Cavern.Virtualizer.TransauralSpeakerPreset.PhoneBuiltInLandscape,
+        multiToneLeft, sr, frames, out double phoneRawDb, out double phoneXtcDb);
+    double deskGainDb = MeasureSepImprovementDb(
+        Cavern.Virtualizer.TransauralSpeakerPreset.DesktopMonitors,
+        multiToneLeft, sr, frames, out double deskRawDb, out double deskXtcDb);
+
+    Assert(phoneGainDb >= 10.0, $"GT-16 PhoneBuiltInLandscape XTC cancellation gain {phoneGainDb:F2} dB < 10.0 dB");
+    Assert(deskGainDb >= 10.0, $"GT-16 DesktopMonitors XTC cancellation gain {deskGainDb:F2} dB < 10.0 dB");
+
+    // Verify KILL R3: Bit-exact 0.0f headphone bypass + 0 B RT GC + < 1.0 ms per 1024-frame block
+    using Cavernize.Logic.Spatial.Adapters.TransauralXtcPostProcessingStage rtStage = new();
+    rtStage.Configure(sr, 2);
+    rtStage.ApplyConfig(new Cavernize.Logic.Spatial.TransauralXtcConfig {
+        Enabled = true,
+        Preset = Cavern.Virtualizer.TransauralSpeakerPreset.PhoneBuiltInLandscape,
+        Strength = 0.90f,
+        AutoBypassOnHeadphones = true
+    });
+    rtStage.UpdateOutputRoute(headphoneRoute: true, AudioDeviceTransport.UsbDac);
+    float[] hpCheck = (float[])multiToneLeft.Clone();
+    rtStage.ProcessInterleaved(hpCheck, 0, frames, 2, default);
+    double maxHpErr = 0.0;
+    for (int i = 0; i < hpCheck.Length; i++) {
+        if (BitConverter.SingleToInt32Bits(hpCheck[i]) != BitConverter.SingleToInt32Bits(multiToneLeft[i])) {
+            maxHpErr = Math.Max(maxHpErr, Math.Abs(hpCheck[i] - multiToneLeft[i]) + 1e-9);
+        }
+    }
+    Assert(maxHpErr == 0.0, $"GT-16 KILL R3 VIOLATION: headphone bypass error={maxHpErr}");
+
+    rtStage.UpdateOutputRoute(headphoneRoute: false, AudioDeviceTransport.BuiltinSpeaker);
+    float[] rtBlock = new float[1024 * 2];
+    Array.Copy(multiToneLeft, rtBlock, rtBlock.Length);
+    rtStage.ProcessInterleaved(rtBlock, 0, 1024, 2, default); // warmup
+    long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+    Stopwatch sw = Stopwatch.StartNew();
+    for (int iter = 0; iter < 50; iter++) {
+        rtStage.ProcessInterleaved(rtBlock, 0, 1024, 2, default);
+    }
+    sw.Stop();
+    long rtAllocBytes = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+    double msPerBlock = sw.Elapsed.TotalMilliseconds / 50.0;
+    Assert(rtAllocBytes == 0, $"GT-16 RT XTC must allocate 0 B GC, got {rtAllocBytes} B");
+    Assert(msPerBlock < 1.0, $"GT-16 RT XTC block time {msPerBlock:F3} ms >= 1.0 ms budget");
+
+    return new Dictionary<string, object> {
+        ["phoneRawSepDb"] = Math.Round(phoneRawDb, 2),
+        ["phoneXtcSepDb"] = Math.Round(phoneXtcDb, 2),
+        ["phoneCancellationGainDb"] = Math.Round(phoneGainDb, 2),
+        ["desktopRawSepDb"] = Math.Round(deskRawDb, 2),
+        ["desktopXtcSepDb"] = Math.Round(deskXtcDb, 2),
+        ["desktopCancellationGainDb"] = Math.Round(deskGainDb, 2),
+        ["headphoneBypassErr"] = maxHpErr,
+        ["rtAllocBytes"] = rtAllocBytes,
+        ["msPer1024Block"] = Math.Round(msPerBlock, 4)
+    };
+});
+
 if (!string.IsNullOrEmpty(jsonOutPath)) {
     File.WriteAllText(jsonOutPath, JsonSerializer.Serialize(new { passed, failed, results }, new JsonSerializerOptions { WriteIndented = true }));
 }

@@ -208,22 +208,26 @@ public partial class MainActivity {
             }
         }
 
-        // Simplified Lyrics Mode: hide non-essential rows cleanly (zero conflicting TransitionManager layout thrash)
-        ViewStates chromeVis = mode == PlayerStageMode.Lyrics ? ViewStates.Gone : ViewStates.Visible;
+        // Simplified Lyrics Mode: hide non-essential rows cleanly while preserving Wave D modular visibility preferences
+        bool isLyrics = mode == PlayerStageMode.Lyrics;
         if (musicTitleRow != null) {
-            musicTitleRow.Visibility = chromeVis;
+            musicTitleRow.Visibility = (!isLyrics && IsPlayModularBlockVisible(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Title))
+                ? ViewStates.Visible : ViewStates.Gone;
             musicTitleRow.Alpha = 1f;
         }
         if (badgeFormatRow != null) {
-            badgeFormatRow.Visibility = chromeVis;
+            badgeFormatRow.Visibility = (!isLyrics && IsPlayModularBlockVisible(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Badges))
+                ? ViewStates.Visible : ViewStates.Gone;
             badgeFormatRow.Alpha = 1f;
         }
         if (musicVolRow != null) {
-            musicVolRow.Visibility = chromeVis;
+            musicVolRow.Visibility = (!isLyrics && IsPlayModularBlockVisible(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.Volume))
+                ? ViewStates.Visible : ViewStates.Gone;
             musicVolRow.Alpha = 1f;
         }
         if (musicSpatialToggleRow != null) {
-            musicSpatialToggleRow.Visibility = chromeVis;
+            musicSpatialToggleRow.Visibility = (!isLyrics && IsPlayModularBlockVisible(Cavernize.Logic.Models.ModularQuickPanelLayout.PlayIds.SpatialPills))
+                ? ViewStates.Visible : ViewStates.Gone;
             musicSpatialToggleRow.Alpha = 1f;
         }
 

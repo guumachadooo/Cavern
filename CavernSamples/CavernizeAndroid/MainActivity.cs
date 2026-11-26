@@ -341,8 +341,12 @@ public partial class MainActivity : Activity, ICavernizeApp {
         playerEngine.ApplyExternalizationConfig(store.BuildExternalizationConfig());
         playerEngine.ApplyPersonalizationConfig(store.BuildPersonalizationConfig());
         playerEngine.ApplyLoudnessConfig(store.BuildLoudnessConfig());
+        playerEngine.ApplyTransauralXtcConfig(store.BuildTransauralXtcConfig());
         StemExtractor.TextResolver = key => AndroidStrings.Active[key];
-        neuralRuntime = new NativeOnnxRuntimeBridge(this);
+        neuralRuntime = new NativeOnnxRuntimeBridge(this) {
+            PreferredQuantizationMode = (Cavernize.Logic.Spatial.NeuralQuantizationMode)Math.Clamp(store.NeuralQuantizationModeIndex, 0, 3),
+            QnnContextCacheEnabled = store.NeuralQnnContextCacheEnabled
+        };
         neuralTrackCache = new NeuralTrackCacheService(this, (long)store.NeuralTrackCacheMaxMb * 1024L * 1024L) {
             IsEnabled = store.NeuralTrackCacheEnabled,
             CompressionMode = (Cavernize.Logic.Spatial.NeuralTrackCacheCompressionMode)store.NeuralTrackCacheCompressionIndex
@@ -384,6 +388,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         RefreshHeadTrackingUi();
         RefreshProAudioUi();
         RefreshExternalizationUi();
+        RefreshTransauralXtcUi();
         RefreshPersonalizationUi();
         RefreshLoudnessUi();
         RefreshNeuralAudioUi();

@@ -178,5 +178,63 @@ public sealed partial class AndroidStrings {
         d["AiCacheOptimizeAlreadyCompactToast"] = "Az MI gyorsítótár már optimális.";
         d["AiCacheIncrementalReuseHint"] = "Gyorsítótárazott ének észlelve — a Karaoke automatikusan újrahasznosítja az 1. lépést.";
         d["KaraokePreserveBackingTitle"] = "Háttérvokál megtartása";
+
+        // Wave D (W53.4 / B10): One UI 9 moduláris vezérlőelrendezés
+        d["BtnDone"] = "Kész";
+        d["ModLayoutCardTitle"] = "Moduláris vezérlőelrendezés (One UI 9)";
+        d["ModLayoutCardDesc"] = "Rendezze át vagy rejtse el a vezérlőblokkokat a Lejátszás és a 3D Szoba lapokon. Az alapvető vezérlők védve maradnak.";
+        d["ModLayoutEditPlayBtn"] = "Lejátszás testreszabása";
+        d["ModLayoutEditRoomBtn"] = "3D Szoba testreszabása";
+        d["ModLayoutPlayTitle"] = "Lejátszás elrendezése";
+        d["ModLayoutRoomTitle"] = "3D Szoba elrendezése";
+        d["ModLayoutSubtitle"] = "Nyilakkal rendezze át a blokkokat, kapcsolókkal rejtse el a nem kötelező paneleket.";
+        d["ModLayoutResetBtn"] = "Alapértelmezett";
+        d["ModLayoutResetToast"] = "Elrendezés visszaállítva az One UI 9 alapértelmezésre.";
+        d["ModBlockPinnedTag"] = "Rögzített · Alapvető";
+        d["ModBlockEssentialTag"] = "Alapvető · Mindig látható";
+        d["ModBlockPlayStage"] = "Médiaszínpad (Borító · Szöveg · Videó)";
+        d["ModBlockPlayTitle"] = "Cím és előadó";
+        d["ModBlockPlaySeek"] = "Hullámos keresősáv";
+        d["ModBlockPlayBadges"] = "Térhangzás és formátum jelvények";
+        d["ModBlockPlayTransport"] = "Lejátszásvezérlők";
+        d["ModBlockPlayVolume"] = "Hangerő csúszka";
+        d["ModBlockPlaySpatialPills"] = "Gyorsgombok (Upmix · HRTF · MI)";
+        d["ModBlockPlayBottomActions"] = "Alsó eszköztár (Szöveg · Online · Ismétlés · 3D)";
+        d["ModBlockRoomSignalChain"] = "Aktív jellánc sáv";
+        d["ModBlockRoomCanvas"] = "3D Szoba szimulátor";
+        d["ModBlockRoomMiniTransport"] = "Mini lejátszó és hangerő";
+        d["ModBlockRoomXRay"] = "Térbeli X-Ray inspektori HUD";
+        d["ModBlockRoomQuickPanel"] = "Gyors térbeli panel";
+        d["ModBlockRoomMixer"] = "Élő csatorna- és 3D keverő";
+
+        // Wave E (W53.5 / B12): Mobil ONNX kvantálás és SoC QNN kontextus gyorsítótár
+        d["NeuralQuantModeTitle"] = "Mobil ONNX súlypontosság:";
+        d["NeuralQuantAuto"] = "Automatikus (FP16 / W8A16)";
+        d["NeuralQuantFp32"] = "FP32 (Eredeti referencia)";
+        d["NeuralQuantFp16"] = "FP16 (Félpontosság · 2x)";
+        d["NeuralQuantW8A16"] = "W8A16 (INT8 súlyok · ~3,8x)";
+        d["TipNeuralQuantMode"] = "Csökkenti a RAM-használatot és gyorsítja a helyi MI futtatást, miközben a hangaktivációk nagy pontosságon maradnak.";
+        d["NeuralQnnCacheTitle"] = "SoC-alapú QNN HTP kontextus gyorsítótár";
+        d["TipNeuralQnnCache"] = "A Qualcomm Hexagon NPU kontextusfájljait a pontos Android Build Fingerprint, SoC, ORT és modell SHA-256 alapján tárolja.";
+        d["NeuralQnnCacheStatusFmt"] = "SoC: {0} · Cache: {1} fájl ({2:0.0} MB)";
+        d["NeuralQnnCacheClearBtn"] = "QNN és kvantálási cache törlése";
+        d["NeuralQnnCacheClearedToast"] = "{0} optimalizált ONNX fájl törölve.";
+
+        // Wave F (W53.6 / B13): Fizikai transzaurális XTC hangszóró térhangzás
+        d["TransauralCardTitle"] = "Hangszóró transzaurális 3D (XTC)";
+        d["TransauralEnableTitle"] = "Fizikai áthallás-kioltás engedélyezése";
+        d["TipTransauralXtc"] = "Bauck-Cooper / BACCH áthallás-kioltással széles 3D teret vetít a telefon vagy külső sztereó hangszórókon.";
+        d["TransauralPresetTitle"] = "Hangszóró-elrendezés:";
+        d["TipTransauralPreset"] = "Válassza ki a hangszórók fizikai geometriáját a pontos késleltetéshez és fejárnyékoláshoz.";
+        d["TransauralPresetPhoneLand"] = "Telefon fekvő";
+        d["TransauralPresetPhonePort"] = "Telefon álló";
+        d["TransauralPresetDesktop"] = "Asztali monitorok (±20°)";
+        d["TransauralPresetHiFi"] = "Sztereó Hi-Fi (±30°)";
+        d["TransauralStrengthTitle"] = "Áthallás-kioltás mélysége";
+        d["TransauralAutoBypassTitle"] = "Automatikus fejhallgató bypass (bitpontos)";
+        d["TipTransauralAutoBypass"] = "Fejhallgató vagy fülhallgató csatlakoztatásakor automatikusan bitpontos (0.0 hiba) átengedésre vált.";
+        d["TransauralStatusOff"] = "Inaktív — kapcsolja be sztereó hangszórókhoz";
+        d["TransauralStatusHeadphoneBypass"] = "Bitpontos bypass aktív (Fejhallgató csatlakoztatva)";
+        d["TransauralStatusActive"] = "Aktív hangszórón · ±{0:0.0}° · Δτ {1:0} µs · ~{2:0.0} dB XTC";
     }
 }

@@ -34,6 +34,11 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    Switch transauralXtcSwitch, transauralHeadphoneBypassSwitch;
+    OneUiInlineSelector transauralPresetSelector;
+    OneUiSeekBar transauralStrengthBar;
+    TextView transauralStatusText;
+
     void BuildSettingsSpatialCards() {
         // Physical Externalization (Allen & Berkley ISM Room, Duda & Martens Near-Field DVF & ISO 9613-1)
         LinearLayout slot5aCard = Card(S["Slot5ACardTitle"], OneUiIconType.Speaker, OneUiTheme.IconSpatial);
@@ -283,6 +288,112 @@ public partial class MainActivity {
 
         RegisterSettingsCard(slot5bCard, categoryIndex: 1, isProOnly: true, "hrtf personalization magls ambisonics biometric itd head width hptf notch wizard");
 
+        // Wave F (W53.6 / B13): Physical Transaural XTC Spatializer (Phone & External Stereo Speakers, Bit-Exact Headphone Bypass)
+        LinearLayout xtcCard = Card(S["TransauralCardTitle"], OneUiIconType.Speaker, OneUiTheme.IconSpatial);
+        transauralXtcSwitch = AddSwitchRow(xtcCard, S["TransauralEnableTitle"], store.TransauralXtcEnabled, v => {
+            store.TransauralXtcEnabled = v;
+            ApplyAndRefreshTransauralXtc();
+        }, helpBody: S["TipTransauralXtc"]);
+
+        transauralStatusText = Label("", 11.4f, OneUiTheme.TextSub);
+        transauralStatusText.SetSingleLine(false);
+        transauralStatusText.SetMaxLines(2);
+        xtcCard.AddView(transauralStatusText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            TopMargin = Dp(2),
+            BottomMargin = Dp(8)
+        });
+
+        transauralPresetSelector = new OneUiInlineSelector(this, S["TransauralPresetTitle"]);
+        string[] xtcPresetLabels = [
+            S["TransauralPresetPhoneLand"],
+            S["TransauralPresetPhonePort"],
+            S["TransauralPresetDesktop"],
+            S["TransauralPresetHiFi"]
+        ];
+        transauralPresetSelector.SetItems(xtcPresetLabels, Math.Clamp(store.TransauralXtcPresetIndex, 0, xtcPresetLabels.Length - 1));
+        transauralPresetSelector.SelectionChanged += pos => {
+            store.TransauralXtcPresetIndex = pos;
+            ApplyAndRefreshTransauralXtc();
+        };
+        xtcCard.AddView(WrapControlWithHelp(transauralPresetSelector, S["TransauralPresetTitle"].TrimEnd(':'), S["TipTransauralPreset"], bottomMarginDp: 6));
+
+        (transauralStrengthBar, _) = AddSliderRow(
+            xtcCard,
+            S["TransauralStrengthTitle"],
+            20,
+            100,
+            Math.Clamp((int)Math.Round(store.TransauralXtcStrength * 100f), 20, 100),
+            v => {
+                store.TransauralXtcStrength = v * 0.01f;
+                ApplyAndRefreshTransauralXtc();
+            },
+            "%",
+            defaultValue: 85);
+
+        AddDivider(xtcCard);
+        transauralHeadphoneBypassSwitch = AddSwitchRow(xtcCard, S["TransauralAutoBypassTitle"], store.TransauralXtcAutoBypassHeadphones, v => {
+            store.TransauralXtcAutoBypassHeadphones = v;
+            ApplyAndRefreshTransauralXtc();
+        }, helpBody: S["TipTransauralAutoBypass"]);
+
+        RegisterSettingsCard(xtcCard, categoryIndex: 1, isProOnly: false, "transaural xtc crosstalk cancellation speaker spatializer bacch phone stereo speakers headphone bypass");
+    }
+
+    void ApplyAndRefreshTransauralXtc() {
+        if (store == null || playerEngine == null) {
+            return;
+        }
+        playerEngine.ApplyTransauralXtcConfig(store.BuildTransauralXtcConfig());
+        if (audioDeviceProfileManager?.CurrentDevice != null) {
+            AudioDeviceRouteInfo route = audioDeviceProfileManager.CurrentDevice;
+            playerEngine.UpdateOutputRouteForTransaural(route.IsHeadphoneRoute, route.Transport);
+        }
+        RefreshTransauralXtcUi();
+    }
+
+    void RefreshTransauralXtcUi() {
+        if (uiDestroyed || store == null) {
+            return;
+        }
+        if (transauralXtcSwitch != null && transauralXtcSwitch.Checked != store.TransauralXtcEnabled) {
+            transauralXtcSwitch.Checked = store.TransauralXtcEnabled;
+        }
+        if (transauralHeadphoneBypassSwitch != null && transauralHeadphoneBypassSwitch.Checked != store.TransauralXtcAutoBypassHeadphones) {
+            transauralHeadphoneBypassSwitch.Checked = store.TransauralXtcAutoBypassHeadphones;
+        }
+        if (transauralPresetSelector != null) {
+            int pIdx = Math.Clamp(store.TransauralXtcPresetIndex, 0, 3);
+            if (transauralPresetSelector.SelectedIndex != pIdx) {
+                transauralPresetSelector.SetSelection(pIdx, notify: false);
+            }
+        }
+        if (transauralStrengthBar != null) {
+            int pct = Math.Clamp((int)Math.Round(store.TransauralXtcStrength * 100f), 20, 100);
+            if (transauralStrengthBar.Progress != pct) {
+                transauralStrengthBar.Progress = pct;
+            }
+        }
+        if (transauralStatusText != null && playerEngine != null) {
+            Cavernize.Logic.Spatial.TransauralXtcDiagnostics diag = playerEngine.TransauralXtcDiagnostics;
+            if (!diag.UserEnabled) {
+                transauralStatusText.Text = S["TransauralStatusOff"];
+                transauralStatusText.SetTextColor(OneUiTheme.TextMuted);
+            } else if (diag.HeadphoneBypassEngaged) {
+                transauralStatusText.Text = S["TransauralStatusHeadphoneBypass"];
+                transauralStatusText.SetTextColor(OneUiTheme.PeachText);
+            } else if (diag.IsActive) {
+                transauralStatusText.Text = string.Format(
+                    CultureInfo.InvariantCulture,
+                    S["TransauralStatusActive"],
+                    diag.HalfAngleDegrees,
+                    diag.ContralateralDelayUs,
+                    diag.EstimatedCancellationDb);
+                transauralStatusText.SetTextColor(OneUiTheme.PrimaryHigh);
+            } else {
+                transauralStatusText.Text = S["TransauralStatusOff"];
+                transauralStatusText.SetTextColor(OneUiTheme.TextSub);
+            }
+        }
     }
 
     void ApplyAndRefreshExternalization() {

@@ -34,6 +34,11 @@ using Path = System.IO.Path;
 namespace CavernizeAndroid;
 
 public partial class MainActivity {
+    OneUiInlineSelector neuralQuantModeSelector;
+    Switch neuralQnnCtxCacheSwitch;
+    TextView neuralSocCacheStatusText;
+    Button neuralClearQnnCacheBtn;
+
     void BuildSettingsNeuralCards() {
         // On-Device Neural Audio Runtime (ONNX), MVSEP Anti-Artifact & Spatial Karaoke
         LinearLayout slot2bCard = Card();
@@ -75,6 +80,51 @@ public partial class MainActivity {
             ApplyAndRefreshNeuralAudio();
         };
         slot2bCard.AddView(WrapControlWithHelp(neuralProviderSelector, S["NeuralProviderTitle"].TrimEnd(':'), S["TipNeuralProvider"], bottomMarginDp: 6));
+
+        // Wave E (W53.5 / B12): Mobile ONNX Precision (Auto / FP32 / FP16 / W8A16) & SoC-Keyed QNN Context Binary Cache
+        neuralQuantModeSelector = new OneUiInlineSelector(this, S["NeuralQuantModeTitle"]);
+        string[] quantLabels = [
+            S["NeuralQuantAuto"],
+            S["NeuralQuantFp32"],
+            S["NeuralQuantFp16"],
+            S["NeuralQuantW8A16"]
+        ];
+        neuralQuantModeSelector.SetItems(quantLabels, Math.Clamp(store.NeuralQuantizationModeIndex, 0, quantLabels.Length - 1));
+        neuralQuantModeSelector.SelectionChanged += pos => {
+            store.NeuralQuantizationModeIndex = pos;
+            if (neuralRuntime != null) {
+                neuralRuntime.PreferredQuantizationMode = (Cavernize.Logic.Spatial.NeuralQuantizationMode)Math.Clamp(pos, 0, 3);
+            }
+            RefreshNeuralAudioUi();
+        };
+        slot2bCard.AddView(WrapControlWithHelp(neuralQuantModeSelector, S["NeuralQuantModeTitle"].TrimEnd(':'), S["TipNeuralQuantMode"], bottomMarginDp: 4));
+
+        neuralQnnCtxCacheSwitch = AddSwitchRow(slot2bCard, S["NeuralQnnCacheTitle"], store.NeuralQnnContextCacheEnabled, v => {
+            store.NeuralQnnContextCacheEnabled = v;
+            if (neuralRuntime != null) {
+                neuralRuntime.QnnContextCacheEnabled = v;
+            }
+            RefreshNeuralAudioUi();
+        }, helpBody: S["TipNeuralQnnCache"]);
+
+        neuralSocCacheStatusText = Label("", 11.2f, OneUiTheme.TextSub);
+        neuralSocCacheStatusText.SetPadding(Dp(2), 0, Dp(2), Dp(4));
+        slot2bCard.AddView(neuralSocCacheStatusText);
+
+        neuralClearQnnCacheBtn = PillButton(S["NeuralQnnCacheClearBtn"], () => {
+            _ = Task.Run(() => {
+                int removed = OnnxQnnContextCacheManager.ClearAllCaches(this);
+                if (!uiDestroyed) {
+                    RunOnUiThread(() => {
+                        ShowToast(string.Format(S["NeuralQnnCacheClearedToast"], removed));
+                        RefreshNeuralAudioUi();
+                    });
+                }
+            });
+        });
+        slot2bCard.AddView(neuralClearQnnCacheBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(8)
+        });
 
         neuralExecBackendSelector = new OneUiInlineSelector(this, S["NeuralExecBackendTitle"]);
         string[] backendLabels = [
@@ -543,6 +593,35 @@ public partial class MainActivity {
                 if (neuralProviderSelector.SelectedIndex != pIdx) {
                     neuralProviderSelector.SetSelection(pIdx, notify: false);
                 }
+            }
+            if (neuralQuantModeSelector != null) {
+                int qIdx = Math.Clamp(store.NeuralQuantizationModeIndex, 0, 3);
+                if (neuralQuantModeSelector.SelectedIndex != qIdx) {
+                    neuralQuantModeSelector.SetSelection(qIdx, notify: false);
+                }
+            }
+            if (neuralQnnCtxCacheSwitch != null && neuralQnnCtxCacheSwitch.Checked != store.NeuralQnnContextCacheEnabled) {
+                neuralQnnCtxCacheSwitch.Checked = store.NeuralQnnContextCacheEnabled;
+            }
+            if (neuralSocCacheStatusText != null) {
+                _ = Task.Run(() => {
+                    QnnHardwareCapabilitySnapshot cap = OnnxQnnContextCacheManager.ProbeDeviceQnnCapabilities(this);
+                    (int files, long bytes) = OnnxQnnContextCacheManager.GetCacheStats(this);
+                    double mb = bytes / (1024.0 * 1024.0);
+                    string line = string.Format(
+                        CultureInfo.InvariantCulture,
+                        S["NeuralQnnCacheStatusFmt"],
+                        cap.Summary,
+                        files,
+                        mb);
+                    if (!uiDestroyed) {
+                        RunOnUiThread(() => {
+                            if (neuralSocCacheStatusText != null) {
+                                neuralSocCacheStatusText.Text = line;
+                            }
+                        });
+                    }
+                });
             }
             if (neuralExecBackendSelector != null) {
                 int ebIdx = Math.Clamp(store.NeuralExecutionBackendIndex, 0, 2);
