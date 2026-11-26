@@ -289,7 +289,7 @@ public partial class MainActivity : ILiveBridgeAppHost {
             } catch {
                 // Ignore
             }
-            return (col, rad, !col.HasValue);
+            return (col, rad, false);
         }
         if (bg is LayerDrawable ld && ld.NumberOfLayers > 0) {
             int? col = null;
@@ -297,6 +297,11 @@ public partial class MainActivity : ILiveBridgeAppHost {
             bool hasCustom = false;
             int limit = Math.Min(ld.NumberOfLayers, 4);
             for (int i = 0; i < limit; i++) {
+                // RippleDrawable inherits LayerDrawable and stores an opaque white mask at Android.Resource.Id.Mask;
+                // never report the ripple hit mask as the visible background color.
+                if (ld.GetId(i) == Android.Resource.Id.Mask) {
+                    continue;
+                }
                 (int? lc, float? lr, bool lCustom) = InspectDrawableVisuals(ld.GetDrawable(i), density);
                 col ??= lc;
                 rad ??= lr;
@@ -370,10 +375,12 @@ public partial class MainActivity : ILiveBridgeAppHost {
             ? tabContainers[activeTab]
             : null;
 
-        object Walk(View v, int depth) {
+        object Walk(View v, int depth, float cumScaleX, float cumScaleY) {
             if (v == null || nodes >= maxNodes) {
                 return null;
             }
+            float nextScaleX = cumScaleX * (float.IsFinite(v.ScaleX) && v.ScaleX > 0.01f ? v.ScaleX : 1f);
+            float nextScaleY = cumScaleY * (float.IsFinite(v.ScaleY) && v.ScaleY > 0.01f ? v.ScaleY : 1f);
             if (activeTabContainer != null && tabContainers != null && v != activeTabContainer) {
                 for (int ti = 0; ti < tabContainers.Length; ti++) {
                     if (ti != activeTab && ReferenceEquals(v, tabContainers[ti])) {
@@ -427,6 +434,11 @@ public partial class MainActivity : ILiveBridgeAppHost {
                 }
                 bool hasCustomBg;
                 (bg, radDp, hasCustomBg) = InspectDrawableVisuals(v.Background, density);
+                if (v is OneUiFrostedCapsuleView fc && !bg.HasValue) {
+                    Color glaze = fc.GlazeBottomColor ?? fc.GlazeTopColor ?? OneUiTheme.SurfaceFloatingBar;
+                    bg = glaze.ToArgb();
+                    hasCustomBg = false;
+                }
                 if (hasCustomBg) {
                     customBg = true;
                 }
@@ -488,13 +500,15 @@ public partial class MainActivity : ILiveBridgeAppHost {
                         if (isInactiveTab) {
                             continue;
                         }
-                        object cNode = Walk(ch, depth + 1);
+                        object cNode = Walk(ch, depth + 1, nextScaleX, nextScaleY);
                         if (cNode != null) {
                             children.Add(cNode);
                         }
                     }
                 }
             }
+            int emitW = includeGeometry ? Math.Max(0, (int)Math.Round(v.Width * nextScaleX)) : v.Width;
+            int emitH = includeGeometry ? Math.Max(0, (int)Math.Round(v.Height * nextScaleY)) : v.Height;
             return new {
                 type = v.GetType().Name,
                 clickable = isClickable ? (bool?)true : null,
@@ -507,8 +521,8 @@ public partial class MainActivity : ILiveBridgeAppHost {
                 selectedIdx,
                 x,
                 y,
-                w = v.Width,
-                h = v.Height,
+                w = emitW,
+                h = emitH,
                 scrollAxis,
                 orient,
                 baselineAligned,
@@ -533,11 +547,11 @@ public partial class MainActivity : ILiveBridgeAppHost {
             for (int i = 0; i < activeDlgs.Count; i++) {
                 View dv = activeDlgs[i]?.Window?.DecorView;
                 if (dv != null) {
-                    dialogTrees.Add(Walk(dv, 0));
+                    dialogTrees.Add(Walk(dv, 0, 1f, 1f));
                 }
             }
         }
-        object activityTree = mainRoot != null ? Walk(mainRoot, 0) : null;
+        object activityTree = mainRoot != null ? Walk(mainRoot, 0, 1f, 1f) : null;
         walkSw.Stop();
 
         return new {
@@ -632,18 +646,80 @@ public partial class MainActivity : ILiveBridgeAppHost {
             return (false, "Invalid tab index/name (valid: 0..4 or player/room/studio/stems/settings).");
         }
         SwitchTab(target);
-        if (tabContainers != null && target < tabContainers.Length && tabContainers[target] != null) {
-            View tc = tabContainers[target];
-            tc.Animate()?.Cancel();
-            tc.TranslationX = 0f;
-            tc.TranslationY = 0f;
-            tc.ScaleX = 1f;
-            tc.ScaleY = 1f;
-            tc.Alpha = 1f;
-        }
+        SettleActiveUiAnimationsForAudit(target);
         EnsureTabLaidOut(target);
         return (true, $"Switched to tab {target}.");
     });
+
+    void SettleActiveUiAnimationsForAudit(int? targetTab = null) {
+        if (tabStripAnimator != null) {
+            try { tabStripAnimator.Cancel(); } catch { }
+            try { tabStripAnimator.Dispose(); } catch { }
+            tabStripAnimator = null;
+        }
+        int settledTab = targetTab ?? activeTab;
+        if (tabContainers != null) {
+            for (int i = 0; i < tabContainers.Length; i++) {
+                View tc = tabContainers[i];
+                if (tc == null) continue;
+                tc.Animate()?.Cancel();
+                tc.TranslationX = 0f;
+                tc.TranslationY = 0f;
+                tc.ScaleX = 1f;
+                tc.ScaleY = 1f;
+                tc.Alpha = 1f;
+                tc.Visibility = i == settledTab ? ViewStates.Visible : ViewStates.Gone;
+            }
+        }
+        if (navFrostedHost != null) {
+            navVisAnimGen++;
+            navFrostedHost.Animate()?.Cancel();
+            bool shouldShowNav = isBottomNavVisible;
+            navFrostedHost.Visibility = shouldShowNav ? ViewStates.Visible : ViewStates.Gone;
+            navFrostedHost.Alpha = shouldShowNav ? 1f : 0f;
+            navFrostedHost.TranslationX = 0f;
+            navFrostedHost.TranslationY = 0f;
+            navFrostedHost.ScaleX = 1f;
+            navFrostedHost.ScaleY = 1f;
+        }
+        if (bottomScrimView != null) {
+            bottomScrimView.Animate()?.Cancel();
+            bottomScrimView.Visibility = isBottomNavVisible ? ViewStates.Visible : ViewStates.Gone;
+            bottomScrimView.Alpha = isBottomNavVisible ? 1f : 0f;
+        }
+        if (tabIndicatorPill != null) {
+            tabIndicatorPill.Animate()?.Cancel();
+            PositionTabIndicator(animate: false);
+        }
+        IReadOnlyList<Dialog> dlgs = OneUiModalDialog.GetActiveDialogs();
+        for (int i = 0; i < dlgs.Count; i++) {
+            View dv = dlgs[i]?.Window?.DecorView;
+            if (dv != null) {
+                SettleViewSubtreeAnimations(dv, 0);
+            }
+        }
+    }
+
+    static void SettleViewSubtreeAnimations(View v, int depth) {
+        if (v == null || depth > 8) {
+            return;
+        }
+        v.Animate()?.Cancel();
+        if (MathF.Abs(v.ScaleX - 1f) > 0.001f && v is not RoundedArtworkView) {
+            v.ScaleX = 1f;
+        }
+        if (MathF.Abs(v.ScaleY - 1f) > 0.001f && v is not RoundedArtworkView) {
+            v.ScaleY = 1f;
+        }
+        if (v.Alpha < 0.99f && v.Visibility == ViewStates.Visible) {
+            v.Alpha = 1f;
+        }
+        if (v is ViewGroup vg) {
+            for (int i = 0; i < vg.ChildCount; i++) {
+                SettleViewSubtreeAnimations(vg.GetChildAt(i), depth + 1);
+            }
+        }
+    }
 
     Task<(bool ok, string message)> ILiveBridgeAppHost.PlaybackControlAsync(string action, double? value) => RunOnUiThreadWithTimeoutAsync(() => {
         string act = (action ?? "").Trim().ToLowerInvariant();

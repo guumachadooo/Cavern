@@ -44,9 +44,19 @@ public static class TruehddInstallerService {
         return string.IsNullOrEmpty(dir) ? "" : Path.Combine(dir, BundledLibraryFileName);
     }
 
+    static volatile string cachedBundledTruehddPath;
+
     public static string ResolveExistingTruehddPath(Context context, AppSettingsStore store) {
+        string cached = cachedBundledTruehddPath;
+        if (!string.IsNullOrEmpty(cached)) {
+            if (store != null && !string.Equals(store.TruehddLocation, cached, StringComparison.Ordinal)) {
+                store.TruehddLocation = cached;
+            }
+            return cached;
+        }
         string bundled = GetManagedTruehddPath(context);
         if (!string.IsNullOrEmpty(bundled) && File.Exists(bundled)) {
+            cachedBundledTruehddPath = bundled;
             CleanupLegacyWritableBin(context);
             if (store != null && !string.Equals(store.TruehddLocation, bundled, StringComparison.Ordinal)) {
                 store.TruehddLocation = bundled;

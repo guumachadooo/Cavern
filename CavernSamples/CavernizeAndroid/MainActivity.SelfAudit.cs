@@ -209,6 +209,7 @@ public partial class MainActivity {
                 perfSamples.Add(perf);
 
                 await RunOnUiThreadWithTimeoutAsync(() => {
+                    SettleActiveUiAnimationsForAudit(tabIdx);
                     EnsureTabLaidOut(tabIdx);
                     AuditViewTree(rootFrameHost ?? Window?.DecorView, tabLabels[tabIdx], accL8, checkZeroSize: true);
                     return true;
@@ -313,6 +314,7 @@ public partial class MainActivity {
                             for (int i = 0; i < liveDlgs.Count; i++) {
                                 View decor = liveDlgs[i]?.Window?.DecorView;
                                 if (decor != null) {
+                                    SettleViewSubtreeAnimations(decor, 0);
                                     AuditViewTree(decor, $"Modal:{modalName}", accL9, checkZeroSize: decor.Width > 0 && decor.Height > 0);
                                 }
                             }
@@ -509,7 +511,6 @@ public partial class MainActivity {
         int rootLeft = rootLoc[0];
         int rootRight = rootLeft + rootW;
         int[] loc = new int[2];
-        int[] childLocA = new int[2];
         View activeTabContainer = (tabContainers != null && activeTab >= 0 && activeTab < tabContainers.Length)
             ? tabContainers[activeTab]
             : null;
@@ -629,14 +630,19 @@ public partial class MainActivity {
                     if (ch == null || ch.Visibility != ViewStates.Visible || ch.Width <= 0 || ch.Height <= 0) {
                         continue;
                     }
-                    ch.GetLocationOnScreen(childLocA);
+                    // Use unscaled layout coordinates (Left/Right/Top/Bottom + translation) so ancestor modal
+                    // scale-in animations never produce phantom sibling overlaps while real negative-margin overlaps are caught.
+                    int chLeft = ch.Left + (int)Math.Round(ch.TranslationX);
+                    int chRight = ch.Right + (int)Math.Round(ch.TranslationX);
+                    int chTop = ch.Top + (int)Math.Round(ch.TranslationY);
+                    int chBottom = ch.Bottom + (int)Math.Round(ch.TranslationY);
                     if (isHoriz) {
-                        if (prevRight != int.MinValue && childLocA[0] < prevRight - overlapTolPx) {
-                            acc.Failures.Add($"{scopeName}: overlapping horizontal siblings in LinearLayout (overlap={prevRight - childLocA[0]}px)");
+                        if (prevRight != int.MinValue && chLeft < prevRight - overlapTolPx) {
+                            acc.Failures.Add($"{scopeName}: overlapping horizontal siblings in LinearLayout (overlap={prevRight - chLeft}px)");
                         }
-                        prevRight = Math.Max(prevRight, childLocA[0] + ch.Width);
+                        prevRight = Math.Max(prevRight, chRight);
                         if (ch is Button && ch is not CompoundButton) {
-                            int cy = childLocA[1] + ch.Height / 2;
+                            int cy = (chTop + chBottom) / 2;
                             if (firstBtnCenterY == int.MinValue) {
                                 firstBtnCenterY = cy;
                             } else if (Math.Abs(cy - firstBtnCenterY) > alignTolPx) {
@@ -644,10 +650,10 @@ public partial class MainActivity {
                             }
                         }
                     } else {
-                        if (prevBottom != int.MinValue && childLocA[1] < prevBottom - overlapTolPx) {
-                            acc.Failures.Add($"{scopeName}: overlapping vertical siblings in LinearLayout (overlap={prevBottom - childLocA[1]}px)");
+                        if (prevBottom != int.MinValue && chTop < prevBottom - overlapTolPx) {
+                            acc.Failures.Add($"{scopeName}: overlapping vertical siblings in LinearLayout (overlap={prevBottom - chTop}px)");
                         }
-                        prevBottom = Math.Max(prevBottom, childLocA[1] + ch.Height);
+                        prevBottom = Math.Max(prevBottom, chBottom);
                     }
                 }
             }

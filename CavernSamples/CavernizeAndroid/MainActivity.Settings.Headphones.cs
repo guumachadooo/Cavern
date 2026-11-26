@@ -547,7 +547,7 @@ public partial class MainActivity {
                 for (int d = 0; d < BinauralProfileService.ThKolnDistanceSeries.Length; d++) {
                     var (distId, _, shortLbl) = BinauralProfileService.ThKolnDistanceSeries[d];
                     bool dSel = string.Equals(currentId, distId, StringComparison.OrdinalIgnoreCase);
-                    TextView dpBtn = Label(shortLbl, 10.8f, dSel ? Color.White : OneUiTheme.TextSecondary);
+                    TextView dpBtn = Label(shortLbl, 10.8f, dSel ? OneUiTheme.OnPrimary : OneUiTheme.TextSecondary);
                     dpBtn.SetIncludeFontPadding(false);
                     dpBtn.Typeface = dSel ? OneUiTheme.GetAppleFontBold(this) : OneUiTheme.GetAppleFontMedium(this);
                     dpBtn.Gravity = GravityFlags.Center;

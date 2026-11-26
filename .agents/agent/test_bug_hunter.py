@@ -1074,6 +1074,22 @@ class BugHunterUnitTests(unittest.TestCase):
             md_bad = bh.generate_report_markdown(rep_bad)
             self.assertIn("QA_GATE|VERDICT=FAIL", md_bad)
 
+    def test_w53_1b_codec2_probe_noise_filtered_while_real_mediacodec_error_caught(self) -> None:
+        raw = "\n".join([
+            "E/MediaCodec(10778): Failed to query component interface for required system resources: 6",
+            "E/CCodec(10778): Failed to query component interface for required system resources: 6",
+            "E/MediaCodec(10778): Codec reported fatal error 0xffffffea during configure",
+        ])
+        anomalies = bh.parse_logcat_anomalies(raw)
+        self.assertEqual(len(anomalies), 1)
+        self.assertEqual(anomalies[0]["category"], "codec")
+        self.assertIn("Codec reported fatal error", anomalies[0]["message"])
+
+    def test_w53_1b_v6_play_button_rage_click_targets_framelayout(self) -> None:
+        src = (AGENT_DIR / "cavern_bug_hunter.py").read_text(encoding="utf-8")
+        self.assertIn('"Tab0:PlayButton"', src)
+        self.assertIn('"type": "FrameLayout", "text": "Play"', src)
+
 
 if __name__ == "__main__":
     unittest.main()

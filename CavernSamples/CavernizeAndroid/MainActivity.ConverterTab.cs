@@ -403,6 +403,7 @@ public partial class MainActivity {
             b.Background = sel
                 ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
                 : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            b.SetTextColor(sel ? OneUiTheme.OnPrimary : ColText);
             b.SetTypeface(null, sel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
         }
         if (studioMasterSection != null) {

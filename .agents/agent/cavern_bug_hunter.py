@@ -70,6 +70,7 @@ BENIGN_LOGCAT_PATTERNS = (
     re.compile(r"ImeFocusController.*skipped hasWindowFocus=false", re.IGNORECASE),
     re.compile(r"ViewPostIme pointer", re.IGNORECASE),
     re.compile(r"Input channel (constructed|destroyed)", re.IGNORECASE),
+    re.compile(r"Failed to query component interface for required system resources:\s*6\b", re.IGNORECASE),
 )
 
 HIGH_SIGNAL_LOGCAT_PATTERNS: tuple[tuple[str, str, re.Pattern[str]], ...] = (
@@ -351,6 +352,10 @@ def parse_logcat_anomalies(text: str) -> list[dict[str, Any]]:
             break
 
         if not matched and level in ("E", "F", "A"):
+            # Samsung / Android 17 Codec2 CCodec internal probe for optional system resources returns C2_NOT_FOUND (6)
+            # during normal MediaExtractor/MediaCodec codec capability probing (benign vendor logcat noise).
+            if level == "E" and "failed to query component interface for required system resources: 6" in line.lower():
+                continue
             anomalies.append({
                 "severity": "CRITICAL" if level in ("F", "A") else "HIGH",
                 "category": "logcat_error",
@@ -3802,7 +3807,7 @@ class LiveBugHunter:
         if self.allow_mutate:
             # 6c-1. Hostile Rage-Clicks across Play / 3D Room / Settings interactive controls
             for r_tab, r_label, r_args in (
-                (0, "Tab0:PlayButton", {"action": "rage_click", "type": "Button", "index": 0, "count": 6, "intervalMs": 22}),
+                (0, "Tab0:PlayButton", {"action": "rage_click", "type": "FrameLayout", "text": "Play", "index": 0, "count": 6, "intervalMs": 22}),
                 (1, "Tab1:3DRoomButton", {"action": "rage_click", "type": "Button", "index": 0, "count": 6, "intervalMs": 22}),
                 (4, "Tab4:SettingsButton", {"action": "rage_click", "type": "Button", "index": 0, "count": 5, "intervalMs": 25}),
             ):

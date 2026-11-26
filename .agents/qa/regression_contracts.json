@@ -375,6 +375,154 @@
           "message": "Stage-2 Karaoke preset must preserve add_opt2=\"0\" (Use as is on isolated vocals)"
         }
       ]
+    },
+    {
+      "id": "REG-QA-016-WCAG-ONPRIMARY",
+      "bug_ref": "W53.1b/QA-5",
+      "title": "Compute WCAG-guaranteed OneUiTheme.OnPrimary (>=4.5:1) for dynamic Material You pastel accents across primary buttons and active pills",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "cavern_bug_hunter.py:V6 + OneUiTheme.GetContrastingTextColor",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs",
+          "pattern": "public\\s+static\\s+Color\\s+OnPrimary\\s*\\{\\s*get;\\s*private\\s+set;\\s*\\}",
+          "message": "OneUiTheme.OnPrimary property must remain defined"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs",
+          "pattern": "public\\s+static\\s+Color\\s+GetContrastingTextColor\\s*\\(",
+          "message": "OneUiTheme.GetContrastingTextColor must remain defined for WCAG >=4.5:1 contrast"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.UiHelpers.cs",
+          "pattern": "OneUiTheme\\.OnPrimary",
+          "message": "MainActivity.UiHelpers.cs must use OneUiTheme.OnPrimary for primary buttons/pills"
+        }
+      ]
+    },
+    {
+      "id": "REG-QA-017-STRICTMODE-UI-CACHES",
+      "bug_ref": "W53.1b/QA-1",
+      "title": "Eliminate UI-thread StrictMode DiskRead/KeyStore IPC via RAM caches in RelayCrypto, AppLogger, and installer services",
+      "domain": "infra-ops",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "cavern_bug_hunter.py:V9(--strict-mode) + check_android_cs.py",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/LiveDiagnosticBridgeService.RelayCrypto.cs",
+          "pattern": "PrewarmPairSecretCacheAsync\\s*\\(",
+          "message": "RelayCrypto must prewarm and cache pair secret off the UI thread"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/AppLogger.cs",
+          "pattern": "Volatile\\.Read\\(ref\\s+cachedLogSizeBytes\\)",
+          "message": "AppLogger.GetLogSizeBytes() must return atomic RAM-cached size without UI-thread stat()"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/OnnxRuntimeInstallerService.cs",
+          "pattern": "GetCachedInstalledModelCount\\s*\\(",
+          "message": "OnnxRuntimeInstallerService must expose GetCachedInstalledModelCount() for UI-thread status labels"
+        }
+      ]
+    },
+    {
+      "id": "REG-QA-018-WAVESEEKBAR-SHADER-CACHE",
+      "bug_ref": "W53.1b/QA-6",
+      "title": "Cache Skia LinearGradient/RadialGradient shaders in OneUiWaveMediaSeekBar to prevent 120 Hz JNI drag jank",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "cavern_bug_hunter.py:V6(drag_sweep) + OneUiWaveMediaSeekBar.cs",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Views/OneUiWaveMediaSeekBar.cs",
+          "pattern": "void\\s+EnsureCachedShaders\\s*\\(",
+          "message": "OneUiWaveMediaSeekBar must cache gradients via EnsureCachedShaders()"
+        },
+        {
+          "kind": "file_forbids_regex",
+          "path": "CavernSamples/CavernizeAndroid/Views/OneUiWaveMediaSeekBar.cs",
+          "pattern": "using\\s+(?:LinearGradient|RadialGradient)\\s+",
+          "message": "OneUiWaveMediaSeekBar must NEVER allocate per-frame using LinearGradient/RadialGradient in OnDraw"
+        }
+      ]
+    },
+    {
+      "id": "REG-QA-019-RIPPLE-MASK-SETTLE-HWUI",
+      "bug_ref": "W53.1b/QA-2-FP1",
+      "title": "Skip RippleDrawable Android.Resource.Id.Mask in InspectDrawableVisuals, settle UI animations before audit, and forbid .WithLayer() on navFrostedHost",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "cavern_bug_hunter.py:V6 + MainActivity.LiveBridge.cs + MainActivity.Navigation.cs",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.LiveBridge.cs",
+          "pattern": "Android\\.Resource\\.Id\\.Mask",
+          "message": "InspectDrawableVisuals must skip Android.Resource.Id.Mask so RippleDrawable masks are never reported as solid white bg"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.LiveBridge.cs",
+          "pattern": "void\\s+SettleActiveUiAnimationsForAudit\\s*\\(",
+          "message": "SettleActiveUiAnimationsForAudit must settle tab/nav animations before UI audits"
+        },
+        {
+          "kind": "file_forbids_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.Navigation.cs",
+          "pattern": "\\.WithLayer\\(\\)",
+          "message": "MainActivity.Navigation.cs must not call .WithLayer() on navFrostedHost/tabIndicatorPill (HWUI buildLayer warning)"
+        }
+      ]
+    },
+    {
+      "id": "REG-QA-020-TELEMETRY-PAUSE-LIFECYCLE",
+      "bug_ref": "W53.1b/QA-6",
+      "title": "Pause 65ms UI telemetry timer in MainActivity.OnPause() to prevent Android cached-process EXCESSIVE_RESOURCE_USAGE kills",
+      "domain": "media-native",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "cavern_bug_hunter.py:V9(exitReasons) + MainActivity.cs + MainActivity.PlayerTab.cs",
+      "added_date": "2026-11-26",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs",
+          "pattern": "void\\s+PauseTelemetryTimer\\s*\\(\\s*\\)",
+          "message": "MainActivity.PlayerTab.cs must define PauseTelemetryTimer()"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.cs",
+          "pattern": "PauseTelemetryTimer\\(\\)",
+          "message": "MainActivity.OnPause() must invoke PauseTelemetryTimer() to prevent cached CPU burn"
+        }
+      ]
     }
   ]
 }

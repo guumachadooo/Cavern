@@ -565,7 +565,6 @@ public partial class MainActivity {
                 .ScaleY(1f)
                 .SetDuration(250)
                 .SetInterpolator(CreateOneUiEase())
-                .WithLayer()
                 .WithEndAction(new Java.Lang.Runnable(() => {
                     if (uiDestroyed || myGen != navVisAnimGen) return;
                     PositionTabIndicator(animate: false);
@@ -675,7 +674,6 @@ public partial class MainActivity {
             .ScaleX(1f)
             .SetDuration(250)
             .SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f))
-            .WithLayer()
             .Start();
     }
 

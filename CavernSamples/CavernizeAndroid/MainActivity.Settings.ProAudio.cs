@@ -481,12 +481,11 @@ public partial class MainActivity {
                 analyzeDnaBtn.Text = isNeuralPrepRunning
                     ? string.Format(S["VocalDnaBusyBtn"], neuralPrepProgress)
                     : S["VocalDnaAnalyzeBtn"];
-                analyzeDnaBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
-                    this,
-                    isNeuralPrepRunning
-                        ? OneUiTheme.FunctionalOrange
-                        : (dna.IsExtractedFromSong ? OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 76) : OneUiTheme.SurfaceCard),
-                    OneUiTheme.PillCornerDp);
+                Color dnaBg = isNeuralPrepRunning
+                    ? OneUiTheme.FunctionalOrange
+                    : (dna.IsExtractedFromSong ? OneUiTheme.WithAlpha(OneUiTheme.FunctionalGreen, 76) : OneUiTheme.SurfaceCard);
+                analyzeDnaBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, dnaBg, OneUiTheme.PillCornerDp);
+                analyzeDnaBtn.SetTextColor(isNeuralPrepRunning ? OneUiTheme.GetContrastingTextColor(dnaBg) : ColText);
             }
 
             if (resetVpBtn != null) {
@@ -498,11 +497,9 @@ public partial class MainActivity {
             if (abCompareBtn != null) {
                 bool dryBypass = playerEngine.VocalChainBypassed;
                 abCompareBtn.Text = dryBypass ? S["VocalAbStateDry"] : S["VocalAbStateWet"];
-                abCompareBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(
-                    this,
-                    dryBypass ? OneUiTheme.FunctionalOrange : OneUiTheme.Primary,
-                    OneUiTheme.PillCornerDp);
-                abCompareBtn.SetTextColor(Color.White);
+                Color abBg = dryBypass ? OneUiTheme.FunctionalOrange : OneUiTheme.Primary;
+                abCompareBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, abBg, OneUiTheme.PillCornerDp);
+                abCompareBtn.SetTextColor(OneUiTheme.GetContrastingTextColor(abBg));
             }
             if (bypassSwitchRef != null && bypassSwitchRef.Checked != playerEngine.VocalChainBypassed) {
                 bypassSwitchRef.Checked = playerEngine.VocalChainBypassed;
@@ -514,7 +511,8 @@ public partial class MainActivity {
             RefreshModalLiveState();
         });
         analyzeDnaBtn.TextSize = 11.4f;
-        analyzeDnaBtn.SetSingleLine(true);
+        analyzeDnaBtn.SetSingleLine(false);
+        analyzeDnaBtn.SetMaxLines(2);
         analyzeDnaBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         dnaActionRow.AddView(analyzeDnaBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
 
@@ -561,7 +559,8 @@ public partial class MainActivity {
             RefreshModalLiveState();
         });
         calibrateMicBtn.TextSize = 11.4f;
-        calibrateMicBtn.SetSingleLine(true);
+        calibrateMicBtn.SetSingleLine(false);
+        calibrateMicBtn.SetMaxLines(2);
         calibrateMicBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         dnaActionRow.AddView(calibrateMicBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         dnaCard.AddView(dnaActionRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
@@ -581,7 +580,8 @@ public partial class MainActivity {
             RefreshModalLiveState();
         });
         abCompareBtn.TextSize = 11.6f;
-        abCompareBtn.SetSingleLine(true);
+        abCompareBtn.SetSingleLine(false);
+        abCompareBtn.SetMaxLines(2);
         abCompareBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         abActionRow.AddView(abCompareBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 

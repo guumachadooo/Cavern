@@ -874,7 +874,7 @@ public partial class MainActivity {
             libCatTabs[i].Background = sel
                 ? OneUiTheme.CreateRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
                 : null;
-            libCatTabs[i].SetTextColor(sel ? Color.White : OneUiTheme.TextSub);
+            libCatTabs[i].SetTextColor(sel ? OneUiTheme.OnPrimary : OneUiTheme.TextSub);
         }
     }
 

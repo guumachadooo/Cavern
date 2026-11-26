@@ -824,6 +824,7 @@ public partial class MainActivity {
         musicRewBtn = MakeUnifiedGlassTransportBtn(OneUiIconType.SkipPrevious, 48, 26, frostedCircle: false, Color.Argb(245, 252, 252, 255), HandleMusicSkipPrevious, out _);
         musicSeekBackBtn = MakeUnifiedGlassTransportBtn(OneUiIconType.Rewind10, 44, 21, frostedCircle: false, Color.Argb(186, 252, 252, 255), () => SeekRelative(-10), out _);
         musicPlayCircleBtn = MakeUnifiedGlassTransportBtn(OneUiIconType.Play, 62, 31, frostedCircle: true, Color.White, TogglePlayPause, out musicPlayIcon);
+        musicPlayCircleBtn.ContentDescription = "Play / Pause";
         musicSeekFwdBtn = MakeUnifiedGlassTransportBtn(OneUiIconType.Forward10, 44, 21, frostedCircle: false, Color.Argb(186, 252, 252, 255), () => SeekRelative(10), out _);
         musicFwdBtn = MakeUnifiedGlassTransportBtn(OneUiIconType.SkipNext, 48, 26, frostedCircle: false, Color.Argb(245, 252, 252, 255), HandleMusicSkipNext, out _);
 
@@ -927,9 +928,9 @@ public partial class MainActivity {
             new FrameLayout.LayoutParams(Dp(15), Dp(15)) { Gravity = GravityFlags.Center });
         spatialHelpBtn.Click += (_, _) => ShowPlayTabSpatialHierarchyHelpDialog();
 
-        spatialToggleRow.AddView(musicUpmixToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(6) });
-        spatialToggleRow.AddView(musicBottomSpatialBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(6) });
-        spatialToggleRow.AddView(musicAiToggleBtn, new LinearLayout.LayoutParams(0, Dp(32), 1f) { RightMargin = Dp(6) });
+        spatialToggleRow.AddView(musicUpmixToggleBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(5) });
+        spatialToggleRow.AddView(musicBottomSpatialBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(5) });
+        spatialToggleRow.AddView(musicAiToggleBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(5) });
         spatialToggleRow.AddView(spatialHelpBtn, new LinearLayout.LayoutParams(Dp(30), Dp(30)));
         musicNowPlayingSection.AddView(spatialToggleRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
@@ -1098,6 +1099,12 @@ public partial class MainActivity {
 
         if (musicArtworkView != null) {
             int targetArtDp = isCompact ? Math.Clamp(availHDp - 310, 150, 220) : 340;
+            if (vpW > 0) {
+                int availWDp = (int)((vpW - musicTabRootPage.PaddingLeft - musicTabRootPage.PaddingRight) / density) - 4;
+                if (availWDp > 0) {
+                    targetArtDp = Math.Min(targetArtDp, Math.Clamp(availWDp, 150, 340));
+                }
+            }
             if (musicArtworkView.PreferredSizeDp != targetArtDp) {
                 musicArtworkView.PreferredSizeDp = targetArtDp;
                 musicArtworkView.RequestLayout();
@@ -1154,18 +1161,21 @@ public partial class MainActivity {
         OneUiIconType iconType, string text, Typeface tf, Action onClick) {
         LinearLayout pill = HRow();
         pill.SetGravity(GravityFlags.Center);
-        pill.SetPadding(Dp(8), Dp(5), Dp(8), Dp(5));
+        pill.SetMinimumHeight(Dp(34));
+        pill.SetPadding(Dp(6), Dp(4), Dp(6), Dp(4));
         OneUiTheme.AttachRecoil(pill, 0.93f);
 
         OneUiIconView ico = new(this, iconType, ColText);
-        TextView tv = Label(text, 10.8f, ColText);
+        TextView tv = Label(text, 10.2f, ColText);
         tv.SetTypeface(tf, TypefaceStyle.Bold);
         tv.SetIncludeFontPadding(false);
-        tv.SetSingleLine(true);
+        tv.Gravity = GravityFlags.Center;
+        tv.SetSingleLine(false);
+        tv.SetMaxLines(2);
         tv.Ellipsize = TextUtils.TruncateAt.End;
 
-        pill.AddView(ico, new LinearLayout.LayoutParams(Dp(13), Dp(13)) { RightMargin = Dp(4) });
-        pill.AddView(tv);
+        pill.AddView(ico, new LinearLayout.LayoutParams(Dp(12), Dp(12)) { RightMargin = Dp(3) });
+        pill.AddView(tv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
         pill.Click += (_, _) => onClick?.Invoke();
         return (pill, ico, tv);
     }
@@ -1214,7 +1224,7 @@ public partial class MainActivity {
             : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceElevated, 99f);
         OneUiTheme.AttachRecoil(btn, 0.92f);
         int icoPx = Dp(Math.Max(16, (int)(sizeDp * 0.44f)));
-        iconOut = new OneUiIconView(this, icon, ColText);
+        iconOut = new OneUiIconView(this, icon, primary ? OneUiTheme.OnPrimary : ColText);
         btn.AddView(iconOut, new LinearLayout.LayoutParams(icoPx, icoPx));
         btn.Click += (_, _) => onClick?.Invoke();
         return btn;

@@ -282,6 +282,12 @@ public partial class MainActivity {
             UpdateRoomCanvas();
         });
         roomResetAllBtn = resetRoomBtn;
+        fineTuneToggleBtn.SetSingleLine(false);
+        fineTuneToggleBtn.SetMaxLines(2);
+        fineTuneToggleBtn.SetPadding(Dp(10), Dp(7), Dp(10), Dp(7));
+        resetRoomBtn.SetSingleLine(false);
+        resetRoomBtn.SetMaxLines(2);
+        resetRoomBtn.SetPadding(Dp(10), Dp(7), Dp(10), Dp(7));
         roomCtrlRow.AddView(fineTuneToggleBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.25f) { RightMargin = Dp(8) });
         roomCtrlRow.AddView(resetRoomBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         roomCard.AddView(roomCtrlRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
@@ -755,7 +761,9 @@ public partial class MainActivity {
 
         roomMiniTimeText = Label("00:00 / 00:00", 10.6f, OneUiTheme.TextSecondary);
         roomMiniTimeText.SetIncludeFontPadding(false);
-        roomMiniTimeText.SetSingleLine(true);
+        roomMiniTimeText.SetSingleLine(false);
+        roomMiniTimeText.SetMaxLines(2);
+        roomMiniTimeText.Gravity = GravityFlags.CenterVertical;
         roomMiniTimeText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         roomMiniTimeText.Typeface = OneUiTheme.GetAppleFontMedium(this);
         roomMiniTimeText.SetMinWidth(0);
@@ -832,7 +840,9 @@ public partial class MainActivity {
                     musicWaveSeekBar.Progress = prog;
                     musicWaveSeekBar.CurrentTimeText = curStr;
                     musicWaveSeekBar.TotalTimeText = totStr;
-                    musicWaveSeekBar.Invalidate();
+                    if (musicWaveSeekBar.IsShown) {
+                        musicWaveSeekBar.Invalidate();
+                    }
                 }
             }
         };
@@ -924,7 +934,8 @@ public partial class MainActivity {
         TextView titleTv = Label(title, 12.5f, ColText);
         titleTv.SetIncludeFontPadding(false);
         titleTv.SetTypeface(null, TypefaceStyle.Bold);
-        titleTv.SetSingleLine(true);
+        titleTv.SetSingleLine(false);
+        titleTv.SetMaxLines(2);
         titleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         TextView stateTv = Label("", 10.8f, OneUiTheme.TextSub);
         stateTv.SetSingleLine(true);
@@ -1125,6 +1136,7 @@ public partial class MainActivity {
             b.Background = active
                 ? OneUiTheme.CreateRippleRoundedDrawable(this, accent, OneUiTheme.PillCornerDp)
                 : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            b.SetTextColor(active ? OneUiTheme.GetContrastingTextColor(accent) : ColText);
             b.SetTypeface(null, active ? TypefaceStyle.Bold : TypefaceStyle.Normal);
         }
 
@@ -1412,7 +1424,8 @@ public partial class MainActivity {
         hdr.SetPadding(0, 0, 0, Dp(4));
         hdr.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Sliders, OneUiTheme.IconStemsCalib, 30));
         TextView titleTv = SectionTitle(S["XRayInspectorTitle"]);
-        titleTv.SetSingleLine(true);
+        titleTv.SetSingleLine(false);
+        titleTv.SetMaxLines(2);
         titleTv.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         titleTv.SetPadding(Dp(8), 0, Dp(8), 0);
         hdr.AddView(titleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -1604,6 +1617,7 @@ public partial class MainActivity {
             b.Background = on
                 ? OneUiTheme.CreateRippleRoundedDrawable(this, accents[i], OneUiTheme.PillCornerDp)
                 : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            b.SetTextColor(on ? OneUiTheme.GetContrastingTextColor(accents[i]) : ColText);
             b.SetTypeface(null, on ? TypefaceStyle.Bold : TypefaceStyle.Normal);
         }
     }
@@ -1667,6 +1681,7 @@ public partial class MainActivity {
             xrayLgsrBypassBtn.Background = byp
                 ? OneUiTheme.CreateRippleRoundedDrawable(this, ColDanger, OneUiTheme.PillCornerDp)
                 : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            xrayLgsrBypassBtn.SetTextColor(byp ? OneUiTheme.GetContrastingTextColor(ColDanger) : ColText);
         }
         if (xrayVocalBypassBtn != null) {
             bool byp = playerEngine.VocalChainBypassed;
@@ -1674,6 +1689,7 @@ public partial class MainActivity {
             xrayVocalBypassBtn.Background = byp
                 ? OneUiTheme.CreateRippleRoundedDrawable(this, ColDanger, OneUiTheme.PillCornerDp)
                 : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            xrayVocalBypassBtn.SetTextColor(byp ? OneUiTheme.GetContrastingTextColor(ColDanger) : ColText);
         }
         RefreshSignalChainBarUi();
     }
@@ -1683,8 +1699,11 @@ public partial class MainActivity {
             return;
         }
         bool locked = store.RoomPositionLocked;
+        Color lockInk = locked ? OneUiTheme.OnPrimary : ColText;
         roomLockIcon.IconType = locked ? OneUiIconType.Lock : OneUiIconType.Unlock;
+        roomLockIcon.IconColor = lockInk;
         roomLockText.Text = locked ? S["UnlockRoom"] : S["LockRoom"];
+        roomLockText.SetTextColor(lockInk);
         roomLockBtn.Background = locked
             ? OneUiTheme.CreateRippleRoundedDrawable(this, OneUiTheme.Primary, OneUiTheme.PillCornerDp)
             : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
@@ -2236,10 +2255,14 @@ public partial class MainActivity {
         ReorderMixerRows(animate: false, forceImmediate: true);
     }
 
+    Java.Lang.Runnable telemetryTickRunnable;
+    bool isTelemetryTimerActive;
+
     void StartTelemetryTimer() {
         int loudnessMeterTick = 0;
-        void Tick() {
-            if (uiDestroyed) {
+        telemetryTickRunnable ??= new Java.Lang.Runnable(() => {
+            if (uiDestroyed || !isActivityResumed) {
+                isTelemetryTimerActive = false;
                 return;
             }
             if (playerEngine != null && playerEngine.IsPlaying) {
@@ -2253,9 +2276,27 @@ public partial class MainActivity {
                     }
                 }
             }
-            uiHandler?.PostDelayed(Tick, 65);
+            if (!uiDestroyed && isActivityResumed && isTelemetryTimerActive) {
+                uiHandler?.PostDelayed(telemetryTickRunnable, 65);
+            }
+        });
+        ResumeTelemetryTimer();
+    }
+
+    void ResumeTelemetryTimer() {
+        if (uiDestroyed || telemetryTickRunnable == null || isTelemetryTimerActive) {
+            return;
         }
-        uiHandler?.PostDelayed(Tick, 65);
+        isTelemetryTimerActive = true;
+        uiHandler?.RemoveCallbacks(telemetryTickRunnable);
+        uiHandler?.PostDelayed(telemetryTickRunnable, 65);
+    }
+
+    void PauseTelemetryTimer() {
+        isTelemetryTimerActive = false;
+        if (telemetryTickRunnable != null) {
+            uiHandler?.RemoveCallbacks(telemetryTickRunnable);
+        }
     }
 
     (OneUiSeekBar bar, TextView valLabel) AddSliderRow(

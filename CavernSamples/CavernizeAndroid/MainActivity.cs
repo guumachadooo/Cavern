@@ -229,6 +229,8 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         store = new AppSettingsStore(this);
         store.ApplyGlobals();
+        LiveDiagnosticBridgeService.PrewarmPairSecretCacheAsync(store);
+        OnnxRuntimeInstallerService.PrewarmStatusCacheAsync(this);
         AppLogger.LogAudioConfigSnapshot(store);
         upmixingSettings = new AndroidUpmixingSettings(store);
         renderingSettings = new AndroidRenderingSettings(store);
@@ -473,6 +475,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     protected override void OnResume() {
         base.OnResume();
         isActivityResumed = true;
+        ResumeTelemetryTimer();
         LiveDiagnosticBridgeService.StartDirectAgentBridge(this, store);
         SyncUiFromSystemMediaVolume(updateEngine: true);
         if (!string.IsNullOrEmpty(pendingInstallApkPath) &&
@@ -556,6 +559,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     protected override void OnPause() {
         isActivityResumed = false;
+        PauseTelemetryTimer();
         base.OnPause();
     }
 
@@ -566,6 +570,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     protected override void OnDestroy() {
         uiDestroyed = true;
+        PauseTelemetryTimer();
         RecordActiveTrackMeasuredLoudnessIfValid();
         UnregisterSystemVolumeListeners();
         try { nextTrackLoudnessCts?.Cancel(); } catch { }

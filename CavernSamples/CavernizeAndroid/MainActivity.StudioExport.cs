@@ -826,6 +826,7 @@ public partial class MainActivity {
             if (studioRecRecordBtn != null) {
                 studioRecRecordBtn.Text = S["StudioRecReRecordBtn"];
                 studioRecRecordBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, OneUiTheme.Primary, OneUiTheme.PillCornerDp);
+                studioRecRecordBtn.SetTextColor(OneUiTheme.OnPrimary);
             }
             if (studioRecPreviewBtn != null) {
                 studioRecPreviewBtn.Text = isPreviewing ? S["StudioRecStopPreviewBtn"] : S["StudioRecPreviewBtn"];
@@ -841,6 +842,7 @@ public partial class MainActivity {
             if (studioRecRecordBtn != null) {
                 studioRecRecordBtn.Text = S["StudioRecStartBtn"];
                 studioRecRecordBtn.Background = OneUiTheme.CreateRippleRoundedDrawable(this, OneUiTheme.Primary, OneUiTheme.PillCornerDp);
+                studioRecRecordBtn.SetTextColor(OneUiTheme.OnPrimary);
             }
             if (studioRecActionRow != null) {
                 studioRecActionRow.Visibility = ViewStates.Gone;
@@ -865,6 +867,7 @@ public partial class MainActivity {
             pill.Background = sel
                 ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
                 : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            pill.SetTextColor(sel ? OneUiTheme.OnPrimary : ColText);
             pill.SetTypeface(null, sel ? TypefaceStyle.Bold : TypefaceStyle.Normal);
         }
 

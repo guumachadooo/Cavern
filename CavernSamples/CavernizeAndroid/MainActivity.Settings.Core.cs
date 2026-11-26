@@ -613,6 +613,7 @@ public partial class MainActivity {
             settingsModeToggleBtn.Background = isSettingsProMode
                 ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
                 : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceElevated, OneUiTheme.PillCornerDp);
+            settingsModeToggleBtn.SetTextColor(isSettingsProMode ? OneUiTheme.OnPrimary : ColText);
         }
         if (settingsCategoryStatusChip != null) {
             OneUiComponents.UpdateStatusChip(
@@ -694,7 +695,7 @@ public partial class MainActivity {
                 return $"{hrirTitle} · AutoEq: {eqTag} · {extTag}";
             }
             case 2: {
-                int modelCount = OnnxRuntimeInstallerService.GetInstalledModelIds(this).Count;
+                int modelCount = OnnxRuntimeInstallerService.GetCachedInstalledModelCount(this);
                 bool installed = OnnxRuntimeInstallerService.IsRuntimeInstalled(this);
                 string ep = playerEngine?.NeuralDiagnostics.ActiveProviderName ?? (installed ? "CPU (ARM64 KleidiAI)" : "Not Installed");
                 string restTag = store.LgsrEnabled

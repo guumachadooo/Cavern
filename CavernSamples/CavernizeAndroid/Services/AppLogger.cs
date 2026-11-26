@@ -60,6 +60,7 @@ public static class AppLogger {
 
     static string cachedAppVersion = "";
     static long cachedAppBuild;
+    static long cachedLogSizeBytes;
 
     public static string SessionId => sessionId;
     public static DateTime SessionStartUtc => sessionStartUtc;
@@ -134,6 +135,17 @@ public static class AppLogger {
                 sharedLogPath = Path.Combine(extDir, "cavernize_log.txt");
             } catch {
                 sharedLogPath = internalLogPath;
+            }
+
+            try {
+                string activePath = !string.IsNullOrEmpty(sharedLogPath) && File.Exists(sharedLogPath)
+                    ? sharedLogPath
+                    : (!string.IsNullOrEmpty(internalLogPath) && File.Exists(internalLogPath) ? internalLogPath : "");
+                if (!string.IsNullOrEmpty(activePath)) {
+                    Interlocked.Exchange(ref cachedLogSizeBytes, new FileInfo(activePath).Length);
+                }
+            } catch {
+                // Best-effort initial size seed
             }
 
             if (!initialized) {
@@ -457,6 +469,7 @@ public static class AppLogger {
                     // Ignore
                 }
             }
+            Interlocked.Exchange(ref cachedLogSizeBytes, 0);
             (string ver, long code) = AppUpdateService.GetInstalledVersion(context);
             WriteSessionBannerLocked(
                 $"Session started [sid={sessionId}] (Log reset) | Cavernize v{ver} (build {code}) | {Build.Manufacturer} {Build.Model}");
@@ -479,16 +492,7 @@ public static class AppLogger {
         return !string.IsNullOrEmpty(path) ? AndroidFileHelper.PublishToDownloads(context, path, "Logs") : null;
     }
 
-    public static long GetLogSizeBytes() {
-        lock (sync) {
-            string p = SharedLogPath;
-            try {
-                return !string.IsNullOrEmpty(p) && File.Exists(p) ? new FileInfo(p).Length : 0;
-            } catch {
-                return 0;
-            }
-        }
-    }
+    public static long GetLogSizeBytes() => Volatile.Read(ref cachedLogSizeBytes);
 
     static void WriteFatalException(string source, Exception ex, Context context) {
         string summary = ex != null ? $"{source}: {FormatExceptionChain(ex)}" : source;
@@ -653,7 +657,10 @@ public static class AppLogger {
             }
 
             // Atomic trim when log exceeds 2 MB: preserve newest ~1.2 MB aligned to line boundary
-            if (File.Exists(path) && new FileInfo(path).Length > MaxLogBytes) {
+            bool trackSize = string.Equals(path, sharedLogPath, StringComparison.Ordinal) ||
+                             (string.IsNullOrEmpty(sharedLogPath) && string.Equals(path, internalLogPath, StringComparison.Ordinal));
+            long currentSize = trackSize ? Volatile.Read(ref cachedLogSizeBytes) : 0;
+            if ((trackSize ? currentSize > MaxLogBytes : (File.Exists(path) && new FileInfo(path).Length > MaxLogBytes))) {
                 byte[] tailBuf = new byte[TrimTargetBytes];
                 int read;
                 using (FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite)) {
@@ -666,8 +673,14 @@ public static class AppLogger {
                 string tmpPath = path + ".trim.tmp";
                 File.WriteAllText(tmpPath, trimmed, System.Text.Encoding.UTF8);
                 File.Move(tmpPath, path, overwrite: true);
+                if (trackSize) {
+                    Interlocked.Exchange(ref cachedLogSizeBytes, System.Text.Encoding.UTF8.GetByteCount(trimmed));
+                }
             }
             File.AppendAllText(path, line, System.Text.Encoding.UTF8);
+            if (trackSize) {
+                Interlocked.Add(ref cachedLogSizeBytes, System.Text.Encoding.UTF8.GetByteCount(line));
+            }
         } catch {
             // Avoid secondary failures during logging
         }

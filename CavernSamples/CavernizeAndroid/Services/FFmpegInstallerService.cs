@@ -41,9 +41,19 @@ public static class FFmpegInstallerService {
     public static string GetManagedFFmpegLibDir(Context context) =>
         GetNativeLibraryDir(context);
 
+    static volatile string cachedBundledFfmpegPath;
+
     public static string ResolveExistingFFmpegPath(Context context, AppSettingsStore store) {
+        string cached = cachedBundledFfmpegPath;
+        if (!string.IsNullOrEmpty(cached)) {
+            if (store != null && !string.Equals(store.FFmpegLocation, cached, StringComparison.Ordinal)) {
+                store.FFmpegLocation = cached;
+            }
+            return cached;
+        }
         string bundled = GetManagedFFmpegPath(context);
         if (!string.IsNullOrEmpty(bundled) && File.Exists(bundled)) {
+            cachedBundledFfmpegPath = bundled;
             CleanupLegacyWritableBin(context);
             if (store != null && !string.Equals(store.FFmpegLocation, bundled, StringComparison.Ordinal)) {
                 store.FFmpegLocation = bundled;

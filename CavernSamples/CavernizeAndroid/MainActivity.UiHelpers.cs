@@ -162,7 +162,7 @@ public partial class MainActivity {
         b.SetMinimumWidth(0);
         b.SetMinimumHeight(Dp(42));
         b.Background = OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp);
-        b.SetTextColor(ColText);
+        b.SetTextColor(OneUiTheme.OnPrimary);
         b.Typeface = OneUiTheme.GetAppleFontBold(this);
         b.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
         OneUiTheme.AttachRecoil(b);
@@ -200,7 +200,7 @@ public partial class MainActivity {
         b.Background = active
             ? OneUiTheme.CreateRippleRoundedDrawable(this, ColAccent, OneUiTheme.PillCornerDp)
             : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
-        b.SetTextColor(ColText);
+        b.SetTextColor(active ? OneUiTheme.OnPrimary : ColText);
         b.Typeface = active ? OneUiTheme.GetAppleFontBold(this) : OneUiTheme.GetAppleFontMedium(this);
         b.SetPadding(Dp(11), Dp(8), Dp(11), Dp(8));
         OneUiTheme.AttachRecoil(b);

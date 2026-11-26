@@ -59,6 +59,14 @@ public sealed class OneUiWaveMediaSeekBar : View {
     float downY;
     int initialProgress;
 
+    // Cached GPU shaders + reusable Matrix (0 per-frame JNI shader alloc/dispose during 120 Hz drag/playback)
+    LinearGradient cachedLineGrad;
+    RadialGradient cachedThumbGlowGrad;
+    LinearGradient[] cachedWaveGrads;
+    readonly Matrix shaderMatrix = new();
+    int cachedShaderColorSig;
+    bool shadersDirty = true;
+
     public string CurrentTimeText { get; set; } = "00:00";
     public string TotalTimeText { get; set; } = "00:00";
 
@@ -83,7 +91,9 @@ public sealed class OneUiWaveMediaSeekBar : View {
                     renderedRatio = targetRatio;
                     hasInitializedRatio = true;
                 }
-                PostInvalidateOnAnimation();
+                if (IsAttachedToWindow && IsShown) {
+                    PostInvalidateOnAnimation();
+                }
             }
         }
     }
@@ -94,7 +104,9 @@ public sealed class OneUiWaveMediaSeekBar : View {
             if (isPlaying != value) {
                 isPlaying = value;
                 lastFrameMs = SystemClock.UptimeMillis();
-                PostInvalidateOnAnimation();
+                if (IsAttachedToWindow && IsShown) {
+                    PostInvalidateOnAnimation();
+                }
             }
         }
     }
@@ -239,16 +251,16 @@ public sealed class OneUiWaveMediaSeekBar : View {
 
         // 2. Active Base Line + MultiWaveAreaTrackRenderer (5 layered translucent gradient wave ribbons)
         if (thumbX > trackLeft + 1f) {
+            EnsureCachedShaders();
             if (motionActivity > 0.01f && thumbX - trackLeft > 12f * dp) {
                 DrawMultiWaveRibbons(canvas, trackLeft, thumbX, centerY, dp);
             }
-            if (dragExpand > 0.05f || motionActivity > 0.05f) {
-                using LinearGradient lineGrad = new(
-                    trackLeft, centerY, thumbX, centerY,
-                    [layers[0].StartColor.ToArgb(), layers[0].EndColor.ToArgb()],
-                    [0f, 1f],
-                    Shader.TileMode.Clamp);
-                baseTrackPaint.SetShader(lineGrad);
+            if ((dragExpand > 0.05f || motionActivity > 0.05f) && cachedLineGrad != null) {
+                shaderMatrix.Reset();
+                shaderMatrix.SetScale(Math.Max(1f, thumbX - trackLeft), 1f);
+                shaderMatrix.PostTranslate(trackLeft, centerY);
+                cachedLineGrad.SetLocalMatrix(shaderMatrix);
+                baseTrackPaint.SetShader(cachedLineGrad);
             } else {
                 baseTrackPaint.SetShader(null);
                 baseTrackPaint.Color = thumbCenterColor;
@@ -259,13 +271,15 @@ public sealed class OneUiWaveMediaSeekBar : View {
 
         // 3. Signature One UI 9 Thumb: sleek flush cap at rest; radial glow + translucent ring during drag
         if (dragExpand > 0.01f) {
+            EnsureCachedShaders();
             float glowRadius = 11f * dp * dragExpand;
-            using (RadialGradient glow = new(
-                thumbX, centerY, Math.Max(1f, glowRadius),
-                [Color.Argb((int)(135 * dragExpand), thumbGlowColor.R, thumbGlowColor.G, thumbGlowColor.B).ToArgb(), Color.Transparent.ToArgb()],
-                [0f, 1f],
-                Shader.TileMode.Clamp)) {
-                thumbGlowPaint.SetShader(glow);
+            if (cachedThumbGlowGrad != null && glowRadius >= 1f) {
+                shaderMatrix.Reset();
+                shaderMatrix.SetScale(glowRadius, glowRadius);
+                shaderMatrix.PostTranslate(thumbX, centerY);
+                cachedThumbGlowGrad.SetLocalMatrix(shaderMatrix);
+                thumbGlowPaint.Alpha = Math.Clamp((int)(255 * dragExpand), 0, 255);
+                thumbGlowPaint.SetShader(cachedThumbGlowGrad);
                 canvas.DrawCircle(thumbX, centerY, glowRadius, thumbGlowPaint);
                 thumbGlowPaint.SetShader(null);
             }
@@ -282,9 +296,89 @@ public sealed class OneUiWaveMediaSeekBar : View {
         canvas.DrawText(CurrentTimeText ?? "00:00", trackLeft, timeY, timeLeftPaint);
         canvas.DrawText(TotalTimeText ?? "00:00", trackRight, timeY, timeRightPaint);
 
-        if (isPlaying || MathF.Abs(motionActivity - targetActivity) > 0.004f || MathF.Abs(dragExpand - targetDrag) > 0.004f || MathF.Abs(targetRatio - renderedRatio) > 0.0004f) {
+        bool needsNextFrame = isPlaying ||
+                              MathF.Abs(motionActivity - targetActivity) > 0.004f ||
+                              MathF.Abs(dragExpand - targetDrag) > 0.004f ||
+                              MathF.Abs(targetRatio - renderedRatio) > 0.0004f;
+        if (needsNextFrame && IsAttachedToWindow && IsShown && WindowVisibility == ViewStates.Visible) {
             PostInvalidateOnAnimation();
         }
+    }
+
+    int ComputeShaderColorSignature() {
+        unchecked {
+            int sig = thumbGlowColor.ToArgb() * 397 ^ layers.Count;
+            for (int i = 0; i < layers.Count; i++) {
+                sig = (sig * 397) ^ layers[i].StartColor.ToArgb();
+                sig = (sig * 397) ^ layers[i].EndColor.ToArgb();
+                sig = (sig * 397) ^ layers[i].Alpha;
+            }
+            return sig;
+        }
+    }
+
+    void EnsureCachedShaders() {
+        int sig = ComputeShaderColorSignature();
+        if (!shadersDirty && sig == cachedShaderColorSig && cachedLineGrad != null && cachedThumbGlowGrad != null &&
+            cachedWaveGrads != null && cachedWaveGrads.Length == layers.Count) {
+            return;
+        }
+        DisposeCachedShaders();
+        cachedShaderColorSig = sig;
+        shadersDirty = false;
+        if (layers.Count > 0) {
+            cachedLineGrad = new LinearGradient(
+                0f, 0f, 1f, 0f,
+                [layers[0].StartColor.ToArgb(), layers[0].EndColor.ToArgb()],
+                [0f, 1f],
+                Shader.TileMode.Clamp);
+            cachedWaveGrads = new LinearGradient[layers.Count];
+            for (int i = 0; i < layers.Count; i++) {
+                WaveLayerSpec spec = layers[i];
+                Color startC = Color.Argb(spec.Alpha, spec.StartColor.R, spec.StartColor.G, spec.StartColor.B);
+                Color endC = Color.Argb((byte)(spec.Alpha * 0.78f), spec.EndColor.R, spec.EndColor.G, spec.EndColor.B);
+                cachedWaveGrads[i] = new LinearGradient(
+                    0f, 0f, 1f, 0f,
+                    [startC.ToArgb(), endC.ToArgb()],
+                    [0f, 1f],
+                    Shader.TileMode.Clamp);
+            }
+        }
+        cachedThumbGlowGrad = new RadialGradient(
+            0f, 0f, 1f,
+            [Color.Argb(135, thumbGlowColor.R, thumbGlowColor.G, thumbGlowColor.B).ToArgb(), Color.Transparent.ToArgb()],
+            [0f, 1f],
+            Shader.TileMode.Clamp);
+    }
+
+    void DisposeCachedShaders() {
+        baseTrackPaint.SetShader(null);
+        wavePaint.SetShader(null);
+        thumbGlowPaint.SetShader(null);
+        try { cachedLineGrad?.Dispose(); } catch { }
+        cachedLineGrad = null;
+        try { cachedThumbGlowGrad?.Dispose(); } catch { }
+        cachedThumbGlowGrad = null;
+        if (cachedWaveGrads != null) {
+            for (int i = 0; i < cachedWaveGrads.Length; i++) {
+                try { cachedWaveGrads[i]?.Dispose(); } catch { }
+            }
+            cachedWaveGrads = null;
+        }
+        shadersDirty = true;
+    }
+
+    protected override void OnDetachedFromWindow() {
+        DisposeCachedShaders();
+        base.OnDetachedFromWindow();
+    }
+
+    protected override void Dispose(bool disposing) {
+        if (disposing) {
+            DisposeCachedShaders();
+            try { shaderMatrix.Dispose(); } catch { }
+        }
+        base.Dispose(disposing);
     }
 
     void DrawMultiWaveRibbons(Canvas canvas, float trackLeft, float thumbX, float centerY, float dp) {
@@ -342,12 +436,15 @@ public sealed class OneUiWaveMediaSeekBar : View {
             }
             wavePath.Close();
 
-            Color startC = Color.Argb(spec.Alpha, spec.StartColor.R, spec.StartColor.G, spec.StartColor.B);
-            Color endC = Color.Argb((byte)(spec.Alpha * 0.78f), spec.EndColor.R, spec.EndColor.G, spec.EndColor.B);
-            using LinearGradient grad = new(trackLeft, centerY, thumbX, centerY, [startC.ToArgb(), endC.ToArgb()], [0f, 1f], Shader.TileMode.Clamp);
-            wavePaint.SetShader(grad);
-            canvas.DrawPath(wavePath, wavePaint);
-            wavePaint.SetShader(null);
+            if (cachedWaveGrads != null && layerIdx < cachedWaveGrads.Length && cachedWaveGrads[layerIdx] != null) {
+                shaderMatrix.Reset();
+                shaderMatrix.SetScale(Math.Max(1f, activeLen), 1f);
+                shaderMatrix.PostTranslate(trackLeft, centerY);
+                cachedWaveGrads[layerIdx].SetLocalMatrix(shaderMatrix);
+                wavePaint.SetShader(cachedWaveGrads[layerIdx]);
+                canvas.DrawPath(wavePath, wavePaint);
+                wavePaint.SetShader(null);
+            }
         }
     }
 

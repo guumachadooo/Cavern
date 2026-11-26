@@ -33,9 +33,40 @@ namespace CavernizeAndroid.Services;
 public static partial class LiveDiagnosticBridgeService {
     // ==================== PAIRING SECRET & CRYPTO (ANDROID KEYSTORE + ENCRYPT-THEN-MAC) ====================
 
-    public static bool HasPairedSecret(AppSettingsStore store) =>
-        !string.IsNullOrWhiteSpace(store?.LiveBridgeEncryptedPairSecret) &&
-        !string.IsNullOrEmpty(LoadPairSecretHex(store));
+    static readonly object pairSecretCacheLock = new();
+    static string cachedPairSecretCipher = "";
+    static string cachedPairSecretHex = "";
+
+    public static bool HasPairedSecret(AppSettingsStore store) {
+        string stored = store?.LiveBridgeEncryptedPairSecret;
+        if (string.IsNullOrWhiteSpace(stored)) {
+            return false;
+        }
+        lock (pairSecretCacheLock) {
+            if (string.Equals(cachedPairSecretCipher, stored, StringComparison.Ordinal)) {
+                return cachedPairSecretHex.Length == 64;
+            }
+        }
+        // Validate encrypted payload format without blocking the UI thread on Android KeyStore Binder IPC
+        if (!stored.StartsWith(KeystorePrefix, StringComparison.Ordinal)) {
+            return false;
+        }
+        int sep = stored.IndexOf(':', KeystorePrefix.Length);
+        return sep > KeystorePrefix.Length && sep < stored.Length - 1;
+    }
+
+    public static void PrewarmPairSecretCacheAsync(AppSettingsStore store) {
+        if (store == null || string.IsNullOrWhiteSpace(store.LiveBridgeEncryptedPairSecret)) {
+            return;
+        }
+        _ = Task.Run(() => {
+            try {
+                _ = LoadPairSecretHex(store);
+            } catch {
+                // Best-effort background KeyStore cache warm-up
+            }
+        });
+    }
 
     public static string GenerateAndStorePairSecret(AppSettingsStore store) {
         if (store == null) {
@@ -49,6 +80,10 @@ public static partial class LiveDiagnosticBridgeService {
             return "";
         }
         store.LiveBridgeEncryptedPairSecret = encrypted;
+        lock (pairSecretCacheLock) {
+            cachedPairSecretCipher = encrypted;
+            cachedPairSecretHex = hex;
+        }
         AppLogger.Info("CLOUD", "Generated & stored new 256-bit Live Bridge pairing secret in Android Keystore.");
         NotifyStateChanged();
         return $"CAVPAIR-{hex}";
@@ -65,6 +100,10 @@ public static partial class LiveDiagnosticBridgeService {
         }
         store.LiveBridgeEncryptedPairSecret = "";
         store.LiveBridgeStandbyEnabled = false;
+        lock (pairSecretCacheLock) {
+            cachedPairSecretCipher = "";
+            cachedPairSecretHex = "";
+        }
         AppLogger.Info("CLOUD", "Revoked Live Bridge pairing secret and disabled background wake.");
         NotifyStateChanged();
     }
@@ -74,8 +113,18 @@ public static partial class LiveDiagnosticBridgeService {
         if (string.IsNullOrWhiteSpace(stored)) {
             return "";
         }
+        lock (pairSecretCacheLock) {
+            if (string.Equals(cachedPairSecretCipher, stored, StringComparison.Ordinal)) {
+                return cachedPairSecretHex;
+            }
+        }
         string hex = DecryptWithKeystore(stored).Trim().ToLowerInvariant();
-        return hex.Length == 64 ? hex : "";
+        string validHex = hex.Length == 64 ? hex : "";
+        lock (pairSecretCacheLock) {
+            cachedPairSecretCipher = stored;
+            cachedPairSecretHex = validHex;
+        }
+        return validHex;
     }
 
     internal static string GetPairSecretHexForInternalAuth(AppSettingsStore store) => LoadPairSecretHex(store);

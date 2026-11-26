@@ -120,9 +120,44 @@ public static class OnnxRuntimeInstallerService {
     public static string ReadBundledVersionText(Context context) =>
         ReadAssetText(context, BundledVersionAssetPath).Trim();
 
+    static volatile int cachedRuntimeInstalled = -1; // -1 unknown, 0 false, 1 true
+    static volatile int cachedInstalledModelCount = -1;
+
     public static bool IsRuntimeInstalled(Context context) {
+        int cached = cachedRuntimeInstalled;
+        if (cached >= 0) {
+            return cached == 1;
+        }
         string lib = GetManagedLibraryPath(context);
-        return !string.IsNullOrEmpty(lib) && File.Exists(lib) && new FileInfo(lib).Length > 100_000;
+        bool ok = !string.IsNullOrEmpty(lib) && File.Exists(lib) && new FileInfo(lib).Length > 100_000;
+        cachedRuntimeInstalled = ok ? 1 : 0;
+        return ok;
+    }
+
+    public static int GetCachedInstalledModelCount(Context context) {
+        int cached = cachedInstalledModelCount;
+        if (cached >= 0) {
+            return cached;
+        }
+        PrewarmStatusCacheAsync(context);
+        return 0;
+    }
+
+    public static void InvalidateModelCountCache() => cachedInstalledModelCount = -1;
+
+    public static void PrewarmStatusCacheAsync(Context context) {
+        if (context == null) {
+            return;
+        }
+        Context appCtx = context.ApplicationContext ?? context;
+        _ = Task.Run(() => {
+            try {
+                _ = IsRuntimeInstalled(appCtx);
+                cachedInstalledModelCount = GetInstalledModelIds(appCtx).Count;
+            } catch {
+                // Best-effort background cache warm-up
+            }
+        });
     }
 
     public static bool IsQnnAvailableOnDisk(Context context) {
@@ -426,6 +461,7 @@ public static class OnnxRuntimeInstallerService {
                     File.Delete(destPath);
                 }
                 File.Move(partPath, destPath);
+                InvalidateModelCountCache();
                 AppLogger.Info($"Downloaded neural model '{entry.Id}' from mirror #{u + 1} to {destPath}");
                 onProgress?.Invoke(1.0, $"{entry.DisplayName} Ready");
                 return destPath;
@@ -484,6 +520,7 @@ public static class OnnxRuntimeInstallerService {
         if (catalogEntry != null) {
             string destPath = Path.Combine(modelsDir, catalogEntry.FileName);
             File.Copy(sourceFilePath, destPath, overwrite: true);
+            InvalidateModelCountCache();
             AppLogger.Info($"Imported local ONNX model '{Path.GetFileName(sourceFilePath)}' into catalog slot '{catalogEntry.Id}'");
             return catalogEntry;
         }
@@ -525,6 +562,7 @@ public static class OnnxRuntimeInstallerService {
         };
         string metaPath = customDestPath + CustomMetaSuffix;
         File.WriteAllText(metaPath, JsonSerializer.Serialize(meta));
+        InvalidateModelCountCache();
 
         long fileBytes = new FileInfo(customDestPath).Length;
         AppLogger.Info($"Registered custom ONNX model '{safeId}' (Task={task}, SR={sr} Hz, {fileBytes / (1024.0 * 1024.0):0.0} MB)");
@@ -547,6 +585,7 @@ public static class OnnxRuntimeInstallerService {
         File.Delete(path);
         string metaPath = path + CustomMetaSuffix;
         try { if (File.Exists(metaPath)) File.Delete(metaPath); } catch { }
+        InvalidateModelCountCache();
         return true;
     }
 
