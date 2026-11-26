@@ -4111,16 +4111,20 @@ def _py_stage6_full_app_sota_audit_and_phase_a_contracts() -> None:
 
 def _py_stage7_ui_ai_org_motion_stability_contracts() -> None:
     bp_path = REPO_ROOT / ".agents" / "docs" / "blueprints" / "BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY.md"
-    assert bp_path.is_file(), "Missing BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY.md blueprint"
-
-    plan_tool = REPO_ROOT / ".agents" / "plugins" / "dynamic-fractal-planner" / "scripts" / "plan_tool.py"
-    lint_proc = subprocess.run(
-        [sys.executable, "-B", str(plan_tool), "blueprint", "lint", str(bp_path), "--strict"],
-        cwd=str(REPO_ROOT), capture_output=True, text=True, check=False,
-    )
-    assert lint_proc.returncode == 0 and "BLUEPRINT PASS" in lint_proc.stdout, (
-        f"BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY.md failed strict blueprint lint: {lint_proc.stdout} {lint_proc.stderr}"
-    )
+    ledger_path = REPO_ROOT / ".agents" / "docs" / "archive" / "BLUEPRINTS_DONE_LEDGER.md"
+    if bp_path.is_file():
+        plan_tool = REPO_ROOT / ".agents" / "plugins" / "dynamic-fractal-planner" / "scripts" / "plan_tool.py"
+        lint_proc = subprocess.run(
+            [sys.executable, "-B", str(plan_tool), "blueprint", "lint", str(bp_path), "--strict"],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, check=False,
+        )
+        assert lint_proc.returncode == 0 and "BLUEPRINT PASS" in lint_proc.stdout, (
+            f"BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY.md failed strict blueprint lint: {lint_proc.stdout} {lint_proc.stderr}"
+        )
+    else:
+        assert ledger_path.is_file() and "BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY" in ledger_path.read_text(encoding="utf-8"), (
+            "Missing BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY.md (neither active nor archived in BLUEPRINTS_DONE_LEDGER.md)"
+        )
 
     # Q1: AppleMusicLyricsView clamp safety + MediaPlaybackNotificationManager >=500ms dedup
     media_views = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Views" / "MediaStageViews.cs").read_text(encoding="utf-8")

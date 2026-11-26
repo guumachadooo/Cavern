@@ -264,7 +264,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 ffmpeg.Location, inputPath, stream.StreamIndex, destThd, "truehd", probe.DurationSeconds,
                 (p, _) => prog?.Invoke(p), ct);
         };
-        TrueHDDecoderService.CleanupOrphanedCache(this);
+        _ = Task.Run(() => {
+            try { TrueHDDecoderService.CleanupOrphanedCache(this); } catch { }
+        });
 
         RenderTarget[] allTargets = RenderTarget.Targets;
         RenderTarget = allTargets[Math.Clamp(store.RenderTargetIndex, 0, allTargets.Length - 1)];
@@ -343,7 +345,11 @@ public partial class MainActivity : Activity, ICavernizeApp {
             IsEnabled = store.NeuralTrackCacheEnabled,
             CompressionMode = (Cavernize.Logic.Spatial.NeuralTrackCacheCompressionMode)store.NeuralTrackCacheCompressionIndex
         };
-        neuralTrackCache.EvictToLimit((long)store.NeuralTrackCacheMaxMb * 1024L * 1024L);
+        long initialCacheLimitBytes = (long)store.NeuralTrackCacheMaxMb * 1024L * 1024L;
+        NeuralTrackCacheService cacheRef = neuralTrackCache;
+        _ = Task.Run(() => {
+            try { cacheRef.EvictToLimit(initialCacheLimitBytes); } catch { }
+        });
         neuralOrchestrator = new Cavernize.Logic.Spatial.NeuralPipelineOrchestrator(neuralRuntime, neuralRuntime, neuralTrackCache);
         playerEngine.ApplyNeuralConfig(store.BuildNeuralAudioConfig());
         playerEngine.ApplyLgsrConfig(store.BuildLgsrConfig());
@@ -401,6 +407,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         SchedulePostUpdateSelfCheckIfNeeded();
         LiveDiagnosticBridgeService.RegisterAppHost(this);
         LiveDiagnosticBridgeService.StateChanged += OnLiveBridgeStateChanged;
+        LiveDiagnosticBridgeService.StartDirectAgentBridge(this, store);
         if (OmniBridgeIpcReceiver.IsOmniAgentInstalledWithMatchingSignature(this)) {
             LiveBridgeWakeService.Stop(this);
             OmniBridgeIpcReceiver.NotifyOmniAgentWake(this);
@@ -466,6 +473,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
     protected override void OnResume() {
         base.OnResume();
         isActivityResumed = true;
+        LiveDiagnosticBridgeService.StartDirectAgentBridge(this, store);
         SyncUiFromSystemMediaVolume(updateEngine: true);
         if (!string.IsNullOrEmpty(pendingInstallApkPath) &&
             File.Exists(pendingInstallApkPath) &&
@@ -566,6 +574,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         AndroidRuntimeTelemetry.DetachFrameMetrics(this);
         AppLogger.CriticalEventLogged -= OnCriticalLogEvent;
         LiveDiagnosticBridgeService.StateChanged -= OnLiveBridgeStateChanged;
+        LiveDiagnosticBridgeService.StopDirectAgentBridge();
         LiveDiagnosticBridgeService.UnregisterAppHost(this);
         if (store == null || !store.LiveBridgeStandbyEnabled) {
             _ = LiveDiagnosticBridgeService.StopSessionAsync();
@@ -815,7 +824,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         UpdateWorkspaceChromeVisibility(activeTab != 0, animate: false);
         SetBottomNavBarVisible(activeTab != 0 || isLibrarySectionOpen, animate: false);
         SyncPredictiveBackRegistration();
-        navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
+        navFrostedHost.Post(() => navFrostedHost?.ScheduleDeferredBlur(220));
         RefreshAllUiState();
     }
 
@@ -938,7 +947,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 navLp.BottomMargin = targetBottom;
                 navFrostedHost.LayoutParameters = navLp;
                 if (!imeOpen) {
-                    navFrostedHost.Post(() => navFrostedHost?.RefreshBlur(force: true));
+                    navFrostedHost.Post(() => navFrostedHost?.ScheduleDeferredBlur(180));
                 }
             }
         }
@@ -960,7 +969,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 if (shouldShowNav) {
                     navFrostedHost.Post(() => {
                         PositionTabIndicator(animate: false);
-                        navFrostedHost?.RefreshBlur(force: true);
+                        navFrostedHost?.ScheduleDeferredBlur(180);
                     });
                 }
             }

@@ -14,7 +14,7 @@ namespace CavernizeAndroid.Services;
 /// even when Cavernize Android is closed — listening for cryptographically signed AI wake requests
 /// on the paired Cloudflare Worker channel and presenting a native BiometricPrompt approval overlay.
 /// </summary>
-[Service(Exported = false, ForegroundServiceType = Android.Content.PM.ForegroundService.TypeDataSync)]
+[Service(Exported = false, ForegroundServiceType = Android.Content.PM.ForegroundService.TypeRemoteMessaging | Android.Content.PM.ForegroundService.TypeDataSync)]
 public sealed class LiveBridgeWakeService : Service {
     const int StandbyNotificationId = 9055;
     const int WakeAlertNotificationId = 9056;
@@ -366,7 +366,9 @@ public sealed class LiveBridgeWakeService : Service {
     }
 
     void StartForegroundCompat(int id, Notification notification) {
-        if (OperatingSystem.IsAndroidVersionAtLeast(29)) {
+        if (OperatingSystem.IsAndroidVersionAtLeast(34)) {
+            StartForeground(id, notification, Android.Content.PM.ForegroundService.TypeRemoteMessaging);
+        } else if (OperatingSystem.IsAndroidVersionAtLeast(29)) {
             StartForeground(id, notification, Android.Content.PM.ForegroundService.TypeDataSync);
         } else {
             StartForeground(id, notification);

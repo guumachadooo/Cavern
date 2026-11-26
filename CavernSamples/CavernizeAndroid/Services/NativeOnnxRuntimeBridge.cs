@@ -146,10 +146,11 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     const long HeavyModelBytesThreshold = 200L * 1024L * 1024L; // 200 MB+ models disable ORT power-of-2 CPU arena & opt-cache duplication
     const long UltraHeavyModelBytesThreshold = 400L * 1024L * 1024L; // 400 MB+ models also disable mem-pattern & weight prepacking
     const double ModelMemoryExpansionFactor = 2.5; // Standard CNN/MDX protobuf parse + graph opt + EP weight packing multiplier
-    const double RoFormerMemoryExpansionFactor = 3.2; // Transformer/RoFormer axial-attention peak multiplier (w/ arena disabled)
+    const double RoFormerMemoryExpansionFactor = 3.8; // Transformer/RoFormer axial-attention peak multiplier (Android LMKD-safe)
     const long SessionBaseOverheadBytes = 32L * 1024L * 1024L; // 32 MB base ORT runtime & activation overhead
     const long MinimumSafetyHeadroomBytes = 192L * 1024L * 1024L; // 192 MB OS/audio engine LMK safety headroom
-    const long HeavyModelSafetyHeadroomBytes = 384L * 1024L * 1024L; // 384 MB Android LMKD margin for 200+ MB Transformer graphs
+    const long HeavyModelSafetyHeadroomBytes = 640L * 1024L * 1024L; // 640 MB Android LMKD margin for 200+ MB Transformer graphs
+    const long MaxSingleProcessModelPssBytes = 2600L * 1024L * 1024L; // Android LMKD single-process PSS ceiling on <=12 GB phones
 
     [DllImport("libc", EntryPoint = "setenv", CallingConvention = CallingConvention.Cdecl)]
     static extern int NativeSetEnv(
@@ -177,6 +178,7 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     string lastActiveProvider = "";
     string lastInitError = "";
     bool supportsWebGpu;
+    volatile bool webGpuDeviceLostThisProcess;
     bool supportsXnnpack;
     bool supportsQnnHtp;
     int activeSessionCount;
@@ -417,10 +419,16 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
             ? long.MaxValue
             : estimatedModelBytes + headroomBytes;
 
-        bool sufficient = !isLowMemory && availBytes >= requiredBudgetBytes;
+        // Android ActivityManager.availMem includes ~1.5-2 GB reclaimable page cache that LMKD will not grant
+        // to a single foreground process; enforce a realistic per-process PSS ceiling for heavy FP32 Transformers.
+        long perProcessPssCap = totalBytes > 0
+            ? Math.Min(Math.Max(totalBytes / 4L, 1800L * 1024L * 1024L), MaxSingleProcessModelPssBytes)
+            : MaxSingleProcessModelPssBytes;
+        bool exceedsProcessCap = memoryHeavy && estimatedModelBytes > perProcessPssCap;
+        bool sufficient = !isLowMemory && !exceedsProcessCap && availBytes >= requiredBudgetBytes;
         string namePart = string.IsNullOrWhiteSpace(modelLabel) ? "ONNX model" : $"'{modelLabel}'";
-        string status = sufficient ? "OK" : (isLowMemory ? "LOW_MEMORY" : "INSUFFICIENT_RAM");
-        string diag = $"{status} [{source}] for {namePart}: file={FormatMiB(safeModelBytes)} MB, estLoad={FormatMiB(estimatedModelBytes)} MB, headroom={FormatMiB(headroomBytes)} MB, need={FormatMiB(requiredBudgetBytes)} MB, avail={FormatMiB(availBytes)} MB / total={FormatMiB(totalBytes)} MB (lowMem={isLowMemory})";
+        string status = sufficient ? "OK" : (isLowMemory ? "LOW_MEMORY" : (exceedsProcessCap ? "PSS_CAP_EXCEEDED" : "INSUFFICIENT_RAM"));
+        string diag = $"{status} [{source}] for {namePart}: file={FormatMiB(safeModelBytes)} MB, estLoad={FormatMiB(estimatedModelBytes)} MB, pssCap={FormatMiB(perProcessPssCap)} MB, headroom={FormatMiB(headroomBytes)} MB, need={FormatMiB(requiredBudgetBytes)} MB, avail={FormatMiB(availBytes)} MB / total={FormatMiB(totalBytes)} MB (lowMem={isLowMemory})";
 
         return new ModelMemoryCheckResult {
             HasSufficientMemory = sufficient,
@@ -767,6 +775,84 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
         } finally {
             if (!handoffComplete) {
                 ReleaseSessionRef();
+            }
+        }
+    }
+
+    internal static bool IsWebGpuDeviceLostError(string message) {
+        if (string.IsNullOrWhiteSpace(message)) {
+            return false;
+        }
+        return message.Contains("Device] is lost", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("Device is lost", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("MapAsyncStatus", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("webgpu", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("buffer_manager", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal bool TryRebuildSessionOnCpuAfterWebGpuLoss(string modelPath, out IntPtr newHandle, out string newEp, out bool enableArenaShrink) {
+        newHandle = IntPtr.Zero;
+        newEp = "CPU (ARM64 KleidiAI)";
+        enableArenaShrink = false;
+        webGpuDeviceLostThisProcess = true;
+        lock (initLock) {
+            supportsWebGpu = false;
+            lastActiveProvider = newEp;
+            if (disposeRequested || !initialized || ortEnv == IntPtr.Zero || fnCreateSessionOptions == null || fnCreateSession == null) {
+                return false;
+            }
+        }
+        if (string.IsNullOrWhiteSpace(modelPath) || !File.Exists(modelPath)) {
+            return false;
+        }
+        IntPtr sessOpts = IntPtr.Zero;
+        try {
+            long modelBytes = new FileInfo(modelPath).Length;
+            int headroomCap = Cavern.Neural.MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(Environment.ProcessorCount);
+            int threads = Math.Min(DetectPerformanceCoreCount(), headroomCap);
+            bool memoryHeavy = IsMemoryHeavyModel(modelPath, modelBytes);
+            bool ultraHeavy = modelBytes >= UltraHeavyModelBytesThreshold;
+            enableArenaShrink = !memoryHeavy;
+
+            CheckStatus(fnCreateSessionOptions(out sessOpts));
+            CheckStatus(fnSetIntraOpNumThreads(sessOpts, threads));
+            if (fnSetInterOpNumThreads != null) {
+                ReleaseStatusQuietly(fnSetInterOpNumThreads(sessOpts, 1));
+            }
+            if (memoryHeavy && fnDisableCpuMemArena != null) {
+                ReleaseStatusQuietly(fnDisableCpuMemArena(sessOpts));
+            } else if (fnEnableCpuMemArena != null) {
+                ReleaseStatusQuietly(fnEnableCpuMemArena(sessOpts));
+            }
+            if (ultraHeavy && fnDisableMemPattern != null) {
+                ReleaseStatusQuietly(fnDisableMemPattern(sessOpts));
+            } else if (fnEnableMemPattern != null) {
+                ReleaseStatusQuietly(fnEnableMemPattern(sessOpts));
+            }
+            CheckStatus(fnSetGraphOpt(sessOpts, OrtEnableAll));
+            if (fnAddSessionConfig != null) {
+                ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.intra_op.allow_spinning", "0"));
+                ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.inter_op.allow_spinning", "0"));
+                ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.set_denormal_as_zero", "1"));
+                if (ultraHeavy) {
+                    ReleaseStatusQuietly(fnAddSessionConfig(sessOpts, "session.disable_prepacking", "1"));
+                }
+            }
+            IntPtr st = fnCreateSession(ortEnv, modelPath, sessOpts, out IntPtr rebuilt);
+            if (st == IntPtr.Zero && rebuilt != IntPtr.Zero) {
+                newHandle = rebuilt;
+                AppLogger.Info($"ONNX WebGPU recovery succeeded: switched '{Path.GetFileName(modelPath)}' transparently to [{newEp}] threads={threads}.");
+                return true;
+            }
+            string err = ReadAndReleaseStatus(st);
+            AppLogger.Warn($"ONNX WebGPU->CPU recovery session creation failed: {err}");
+            return false;
+        } catch (Exception ex) {
+            AppLogger.Warn($"ONNX WebGPU->CPU recovery threw: {ex.Message}");
+            return false;
+        } finally {
+            if (sessOpts != IntPtr.Zero) {
+                fnReleaseSessionOptions?.Invoke(sessOpts);
             }
         }
     }

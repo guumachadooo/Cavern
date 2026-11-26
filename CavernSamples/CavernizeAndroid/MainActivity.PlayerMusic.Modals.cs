@@ -1207,6 +1207,8 @@ public partial class MainActivity {
     }
 
     bool isSyncingSystemVolumeUi;
+    int lastSyncedMasterVolPct = -1;
+    bool lastSyncedDirectUsbVol;
 
     /// <summary>
     /// True ONLY when Path B direct libusb UAC2 is streaming (bypassing Android AudioFlinger's media volume mixer).
@@ -1241,8 +1243,9 @@ public partial class MainActivity {
         }
         isSyncingSystemVolumeUi = true;
         try {
+            bool isDirectUsb = IsDirectUsbSoftwareVolumeActive();
             int pct;
-            if (IsDirectUsbSoftwareVolumeActive()) {
+            if (isDirectUsb) {
                 pct = Math.Clamp((int)Math.Round((store?.PlayerVolume ?? 1f) * 100f), 0, 100);
                 if (updateEngine && playerEngine != null) {
                     playerEngine.Volume = pct / 100f;
@@ -1258,14 +1261,25 @@ public partial class MainActivity {
                 }
             }
 
+            string pctLabel = $"{pct}%";
+            bool uiMatches = pct == lastSyncedMasterVolPct &&
+                             isDirectUsb == lastSyncedDirectUsbVol &&
+                             (seekBarVolume == null || (seekBarVolume.Progress == pct && string.Equals(seekBarVolume.ValueText, pctLabel, StringComparison.Ordinal))) &&
+                             (musicVolSeekBar == null || musicVolSeekBar.Progress == pct);
+            if (uiMatches) {
+                return;
+            }
+            lastSyncedMasterVolPct = pct;
+            lastSyncedDirectUsbVol = isDirectUsb;
+
             if (seekBarVolume != null) {
                 if (seekBarVolume.Max != 100) seekBarVolume.Max = 100;
                 if (seekBarVolume.Progress != pct) {
                     seekBarVolume.Progress = pct;
-                    seekBarVolume.ValueText = $"{pct}%";
+                    seekBarVolume.ValueText = pctLabel;
                     seekBarVolume.Invalidate();
-                } else if (!string.Equals(seekBarVolume.ValueText, $"{pct}%", StringComparison.Ordinal)) {
-                    seekBarVolume.ValueText = $"{pct}%";
+                } else if (!string.Equals(seekBarVolume.ValueText, pctLabel, StringComparison.Ordinal)) {
+                    seekBarVolume.ValueText = pctLabel;
                     seekBarVolume.Invalidate();
                 }
             }
@@ -1274,6 +1288,13 @@ public partial class MainActivity {
                 if (musicVolSeekBar.Progress != pct) {
                     musicVolSeekBar.Progress = pct;
                     musicVolSeekBar.Invalidate();
+                }
+            }
+            if (roomMiniVolSeekBar != null) {
+                if (roomMiniVolSeekBar.Max != 100) roomMiniVolSeekBar.Max = 100;
+                if (roomMiniVolSeekBar.Progress != pct) {
+                    roomMiniVolSeekBar.Progress = pct;
+                    roomMiniVolSeekBar.Invalidate();
                 }
             }
             if (roomMiniVolChip != null) {
@@ -1318,7 +1339,8 @@ public partial class MainActivity {
         percent = Math.Clamp(percent, 0, 100);
         isSyncingSystemVolumeUi = true;
         try {
-            if (IsDirectUsbSoftwareVolumeActive()) {
+            bool isDirectUsb = IsDirectUsbSoftwareVolumeActive();
+            if (isDirectUsb) {
                 float vol = percent / 100f;
                 store.PlayerVolume = vol;
                 if (playerEngine != null) {
@@ -1346,14 +1368,27 @@ public partial class MainActivity {
                 }
             }
 
-            if (seekBarVolume != null && seekBarVolume.Progress != percent) {
-                seekBarVolume.Progress = percent;
-                seekBarVolume.ValueText = $"{percent}%";
-                seekBarVolume.Invalidate();
+            lastSyncedMasterVolPct = percent;
+            lastSyncedDirectUsbVol = isDirectUsb;
+
+            string pctLabel = $"{percent}%";
+            if (seekBarVolume != null) {
+                if (seekBarVolume.Progress != percent) {
+                    seekBarVolume.Progress = percent;
+                    seekBarVolume.ValueText = pctLabel;
+                    seekBarVolume.Invalidate();
+                } else if (!string.Equals(seekBarVolume.ValueText, pctLabel, StringComparison.Ordinal)) {
+                    seekBarVolume.ValueText = pctLabel;
+                    seekBarVolume.Invalidate();
+                }
             }
             if (musicVolSeekBar != null && musicVolSeekBar.Progress != percent) {
                 musicVolSeekBar.Progress = percent;
                 musicVolSeekBar.Invalidate();
+            }
+            if (roomMiniVolSeekBar != null && roomMiniVolSeekBar.Progress != percent) {
+                roomMiniVolSeekBar.Progress = percent;
+                roomMiniVolSeekBar.Invalidate();
             }
             if (roomMiniVolChip != null) {
                 roomMiniVolChip.Text = string.Format(S["RoomMiniVolFmt"], percent);

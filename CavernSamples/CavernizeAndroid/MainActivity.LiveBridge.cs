@@ -157,7 +157,30 @@ public partial class MainActivity : ILiveBridgeAppHost {
         }, new JsonSerializerOptions { WriteIndented = true });
     });
 
+    void EnsureRootLaidOut() {
+        View root = rootFrameHost ?? Window?.DecorView;
+        if (root == null) {
+            return;
+        }
+        int w = root.Width;
+        int h = root.Height;
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+        bool needsLayout = root.IsLayoutRequested ||
+            (rootLayoutHost != null && rootLayoutHost.IsLayoutRequested) ||
+            (workspaceChromeHost != null && workspaceChromeHost.Visibility == ViewStates.Visible && workspaceChromeHost.Height <= 0);
+        if (!needsLayout) {
+            return;
+        }
+        int wSpec = View.MeasureSpec.MakeMeasureSpec(w, MeasureSpecMode.Exactly);
+        int hSpec = View.MeasureSpec.MakeMeasureSpec(h, MeasureSpecMode.Exactly);
+        root.Measure(wSpec, hSpec);
+        root.Layout(root.Left, root.Top, root.Left + w, root.Top + h);
+    }
+
     void EnsureTabLaidOut(int tabIdx) {
+        EnsureRootLaidOut();
         if (tabContainers == null || tabIdx < 0 || tabIdx >= tabContainers.Length) {
             return;
         }
@@ -183,9 +206,19 @@ public partial class MainActivity : ILiveBridgeAppHost {
     Task<string> ILiveBridgeAppHost.DumpUiTreeJsonAsync(int maxDepth) => RunOnUiThreadWithTimeoutAsync(() => {
         EnsureTabLaidOut(activeTab);
         int nodes = 0;
+        View activeTabContainer = (tabContainers != null && activeTab >= 0 && activeTab < tabContainers.Length)
+            ? tabContainers[activeTab]
+            : null;
         object Walk(View v, int depth) {
             if (v == null || nodes >= 320) {
                 return null;
+            }
+            if (activeTabContainer != null && tabContainers != null && v != activeTabContainer) {
+                for (int ti = 0; ti < tabContainers.Length; ti++) {
+                    if (ti != activeTab && ReferenceEquals(v, tabContainers[ti])) {
+                        return null;
+                    }
+                }
             }
             nodes++;
             string txt = v is TextView tv ? (tv.Text ?? "") : "";
@@ -256,6 +289,7 @@ public partial class MainActivity : ILiveBridgeAppHost {
     });
 
     Task<string> ILiveBridgeAppHost.CaptureUiScreenshotJsonAsync(int maxWidth, int quality) => RunOnUiThreadWithTimeoutAsync(() => {
+        EnsureTabLaidOut(activeTab);
         IReadOnlyList<Dialog> dlgs = OneUiModalDialog.GetActiveDialogs();
         View root = dlgs.Count > 0 ? (dlgs[^1]?.Window?.DecorView?.RootView ?? Window?.DecorView?.RootView) : (Window?.DecorView?.RootView ?? rootFrameHost);
         if (root == null || root.Width <= 0 || root.Height <= 0) {

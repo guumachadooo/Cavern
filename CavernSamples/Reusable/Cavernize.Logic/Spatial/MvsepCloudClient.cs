@@ -514,31 +514,61 @@ public sealed class MvsepCloudClient : IDisposable {
         string artistName = "",
         Func<byte[], string, (float[] Left, float[] Right, int SampleRate)> externalDecoder = null,
         Action<double, string> onProgress = null,
-        CancellationToken token = default) {
+        CancellationToken token = default,
+        string existingJobHash = null,
+        Action<string> onJobCreated = null,
+        Action<string> onJobTerminal = null) {
         ArgumentNullException.ThrowIfNull(mixLeft);
         ArgumentNullException.ThrowIfNull(mixRight);
         ArgumentNullException.ThrowIfNull(preset);
         ArgumentNullException.ThrowIfNull(options);
 
         int sr = sampleRate >= 8000 ? sampleRate : 44100;
-        onProgress?.Invoke(0.05, $"MVSEP Cloud: Encoding upload ({preset.DisplayName})...");
-        byte[] wavPayload = EncodeStereoWav16(mixLeft, mixRight, sr);
+        string hash = string.Empty;
+        MvsepJobStatus status = null;
 
-        onProgress?.Invoke(0.15, $"MVSEP Cloud: Uploading ({wavPayload.Length / (1024.0 * 1024.0):0.0} MB)...");
-        string hash = await CreateSeparationAsync(wavPayload, "cavernize_input.wav", preset, options, token).ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(existingJobHash)) {
+            string candidateHash = existingJobHash.Trim();
+            onProgress?.Invoke(0.18, $"MVSEP Cloud: Resuming active job ({preset.DisplayName})...");
+            try {
+                MvsepJobStatus probe = await GetSeparationStatusAsync(candidateHash, options, token).ConfigureAwait(false);
+                if (probe != null && !probe.IsFailed) {
+                    hash = candidateHash;
+                    status = probe;
+                } else {
+                    onJobTerminal?.Invoke(candidateHash);
+                }
+            } catch (OperationCanceledException) {
+                throw;
+            } catch {
+                // Expired or unreachable remote job hash — clear and submit a fresh job below.
+                onJobTerminal?.Invoke(candidateHash);
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(hash)) {
+            onProgress?.Invoke(0.05, $"MVSEP Cloud: Encoding upload ({preset.DisplayName})...");
+            byte[] wavPayload = EncodeStereoWav16(mixLeft, mixRight, sr);
+
+            onProgress?.Invoke(0.15, $"MVSEP Cloud: Uploading ({wavPayload.Length / (1024.0 * 1024.0):0.0} MB)...");
+            hash = await CreateSeparationAsync(wavPayload, "cavernize_input.wav", preset, options, token).ConfigureAwait(false);
+            onJobCreated?.Invoke(hash);
+        }
 
         int basePollMs = Math.Clamp(options.PollIntervalMs, 20, 10000);
         DateTime deadlineUtc = DateTime.UtcNow.AddSeconds(Math.Clamp(options.MaxPollSeconds, 5, 3600));
-        MvsepJobStatus status = null;
         int pollStep = 0;
 
         while (true) {
             token.ThrowIfCancellationRequested();
-            status = await GetSeparationStatusAsync(hash, options, token).ConfigureAwait(false);
+            if (status == null) {
+                status = await GetSeparationStatusAsync(hash, options, token).ConfigureAwait(false);
+            }
             if (status.IsDone) {
                 break;
             }
             if (status.IsFailed) {
+                onJobTerminal?.Invoke(hash);
                 string err = string.IsNullOrWhiteSpace(status.Message) ? "Remote separation failed." : status.Message;
                 throw new InvalidOperationException($"MVSEP Cloud failed: {err}");
             }
@@ -549,11 +579,13 @@ public sealed class MvsepCloudClient : IDisposable {
             double pollProg = Math.Min(0.72, 0.22 + pollStep * 0.04);
             string qText = status.QueueOrder > 0 ? $" (queue #{status.QueueOrder})" : string.Empty;
             onProgress?.Invoke(pollProg, $"MVSEP Cloud: {status.Status}{qText}...");
+            status = null;
             int delayMs = Math.Min(6000, basePollMs + Math.Min(pollStep, 6) * (basePollMs / 4));
             await Task.Delay(delayMs, token).ConfigureAwait(false);
         }
 
         if (status.Files == null || status.Files.Count == 0) {
+            onJobTerminal?.Invoke(hash);
             throw new InvalidOperationException("MVSEP Cloud completed but returned zero stem files.");
         }
 
@@ -617,6 +649,21 @@ public sealed class MvsepCloudClient : IDisposable {
             stems.Add(new StereoStemBuffer("vocals", combL, combR));
         }
 
+        // Prune completely silent extra stems (e.g., empty piano/guitar stems from 6-stem models) so UI/3D room stays clean
+        if (stems.Count > 2) {
+            List<StereoStemBuffer> audibleStems = new(stems.Count);
+            for (int i = 0; i < stems.Count; i++) {
+                StereoStemBuffer st = stems[i];
+                if (string.Equals(st.Name, "instrumental", StringComparison.OrdinalIgnoreCase) ||
+                    IsStemAudible(st.Left, st.Right)) {
+                    audibleStems.Add(st);
+                }
+            }
+            if (audibleStems.Count > 0) {
+                stems = audibleStems;
+            }
+        }
+
         string planSig = $"mvsep_s{preset.SeparationType}_o1{preset.Opt1}_o2{preset.Opt2}";
         NeuralSeparatedTrack separated = NeuralAudioOfflinePipeline.BuildSeparatedTrack(
             sourceTrackKey,
@@ -630,8 +677,37 @@ public sealed class MvsepCloudClient : IDisposable {
         separated.OriginTag = "MVSEP Cloud";
         separated.ModelSummary = preset.DisplayName;
 
+        onJobTerminal?.Invoke(hash);
         onProgress?.Invoke(1.0, $"MVSEP Cloud Ready ({preset.DisplayName})");
         return separated;
+    }
+
+    /// <summary>
+    /// Returns true when a stereo stem contains audible signal above digital silence (<paramref name="peakThreshold"/> / <paramref name="rmsThreshold"/>).
+    /// </summary>
+    public static bool IsStemAudible(float[] left, float[] right, float peakThreshold = 1e-4f, float rmsThreshold = 3e-5f) {
+        int len = Math.Min(left?.Length ?? 0, right?.Length ?? 0);
+        if (len <= 0) {
+            return false;
+        }
+        float peak = 0f;
+        double sumSq = 0.0;
+        for (int i = 0; i < len; i++) {
+            float l = left[i];
+            float r = right[i];
+            if (float.IsFinite(l)) {
+                float al = MathF.Abs(l);
+                if (al > peak) peak = al;
+                sumSq += l * (double)l;
+            }
+            if (float.IsFinite(r)) {
+                float ar = MathF.Abs(r);
+                if (ar > peak) peak = ar;
+                sumSq += r * (double)r;
+            }
+        }
+        double rms = Math.Sqrt(sumSq / (2.0 * len));
+        return peak >= peakThreshold || rms >= rmsThreshold;
     }
 
     /// <summary>Maps MVSEP API stem labels and filenames into Cavern canonical stem names.</summary>

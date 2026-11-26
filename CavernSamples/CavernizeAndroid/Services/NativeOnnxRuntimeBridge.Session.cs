@@ -65,7 +65,7 @@ public sealed partial class NativeOnnxRuntimeBridge {
         }
 
         public string ModelPath { get; }
-        public string ExecutionProvider { get; }
+        public string ExecutionProvider { get; private set; }
         public IReadOnlyList<string> InputNames => inputNames;
         public IReadOnlyList<long[]> InputShapes => inputShapes;
         public IReadOnlyList<string> OutputNames => outputNames;
@@ -167,7 +167,7 @@ public sealed partial class NativeOnnxRuntimeBridge {
                     }
 
                     Stopwatch swRun = Stopwatch.StartNew();
-                    bridge.CheckStatus(bridge.fnRun(
+                    IntPtr runStatus = bridge.fnRun(
                         sessionHandle,
                         runOptionsHandle,
                         inNamePtrs,
@@ -175,7 +175,61 @@ public sealed partial class NativeOnnxRuntimeBridge {
                         (UIntPtr)inCount,
                         outNamePtrs,
                         (UIntPtr)outCount,
-                        outValPtrs));
+                        outValPtrs);
+                    if (runStatus != IntPtr.Zero) {
+                        string runErr = bridge.ReadAndReleaseStatus(runStatus);
+                        bool isWebGpuSession = !string.IsNullOrEmpty(ExecutionProvider) &&
+                                               ExecutionProvider.Contains("WebGPU", StringComparison.OrdinalIgnoreCase);
+                        if (isWebGpuSession && IsWebGpuDeviceLostError(runErr)) {
+                            AppLogger.Warn($"WebGPU Vulkan device lost during inference on '{Path.GetFileName(ModelPath)}' — disabling WebGPU for this process and retrying transparently on CPU (ARM64 KleidiAI): {runErr}");
+                            for (int o = 0; o < outCount; o++) {
+                                if (outValPtrs[o] != IntPtr.Zero) {
+                                    bridge.fnReleaseValue?.Invoke(outValPtrs[o]);
+                                    outValPtrs[o] = IntPtr.Zero;
+                                }
+                            }
+                            if (runOptionsHandle != IntPtr.Zero) {
+                                bridge.fnReleaseRunOptions?.Invoke(runOptionsHandle);
+                                runOptionsHandle = IntPtr.Zero;
+                            }
+                            if (sessionHandle != IntPtr.Zero) {
+                                bridge.fnReleaseSession?.Invoke(sessionHandle);
+                                sessionHandle = IntPtr.Zero;
+                            }
+                            if (bridge.TryRebuildSessionOnCpuAfterWebGpuLoss(ModelPath, out IntPtr rebuiltHandle, out string rebuiltEp, out bool rebuildArenaShrink)) {
+                                sessionHandle = rebuiltHandle;
+                                ExecutionProvider = rebuiltEp;
+                                if (rebuildArenaShrink && bridge.fnCreateRunOptions != null && bridge.fnAddRunConfig != null && bridge.fnReleaseRunOptions != null) {
+                                    IntPtr stRo = bridge.fnCreateRunOptions(out IntPtr ro);
+                                    if (stRo == IntPtr.Zero && ro != IntPtr.Zero) {
+                                        IntPtr stCfg = bridge.fnAddRunConfig(ro, "memory.enable_memory_arena_shrinkage", "cpu:0");
+                                        if (stCfg == IntPtr.Zero) {
+                                            runOptionsHandle = ro;
+                                        } else {
+                                            bridge.ReleaseStatusQuietly(stCfg);
+                                            bridge.fnReleaseRunOptions(ro);
+                                        }
+                                    } else {
+                                        bridge.ReleaseStatusQuietly(stRo);
+                                    }
+                                }
+                                swRun.Restart();
+                                bridge.CheckStatus(bridge.fnRun(
+                                    sessionHandle,
+                                    runOptionsHandle,
+                                    inNamePtrs,
+                                    inValPtrs,
+                                    (UIntPtr)inCount,
+                                    outNamePtrs,
+                                    (UIntPtr)outCount,
+                                    outValPtrs));
+                            } else {
+                                throw new InvalidOperationException($"ONNX Runtime error (WebGPU lost & CPU recovery failed): {runErr}");
+                            }
+                        } else {
+                            throw new InvalidOperationException($"ONNX Runtime error: {runErr}");
+                        }
+                    }
                     swRun.Stop();
                     runElapsedMs = swRun.ElapsedMilliseconds;
                     runCount++;

@@ -1359,9 +1359,40 @@ class OmniAgentProtocolTests(unittest.TestCase):
             self.assertEqual((phone / "tracked.txt").read_text(encoding="utf-8"), "new-tracked-on-origin\n")
             self.assertEqual((phone / "new_remote.txt").read_text(encoding="utf-8"), "brand-new-on-origin\n")
 
+    def test_pick_cavernize_channel_auto_fallback(self) -> None:
+        orig_http = proto.http_json
+        try:
+            proto.http_json = lambda *a, **kw: (
+                200,
+                {
+                    "ok": True,
+                    "channels": {
+                        "android": {"online": False, "standbyReachable": True},
+                        "cavernize": {"online": True},
+                    },
+                },
+            )
+            self.assertEqual(oac.pick_cavernize_channel("https://example.workers.dev", self.KEY, "auto"), "cavernize")
+            self.assertEqual(oac.pick_cavernize_channel("https://example.workers.dev", self.KEY, "android"), "android")
+
+            proto.http_json = lambda *a, **kw: (
+                200,
+                {
+                    "ok": True,
+                    "channels": {
+                        "android": {"online": True},
+                        "cavernize": {"online": True},
+                    },
+                },
+            )
+            self.assertEqual(oac.pick_cavernize_channel("https://example.workers.dev", self.KEY, "auto"), "android")
+        finally:
+            proto.http_json = orig_http
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
 
 
 

@@ -13,10 +13,18 @@
 - **Anti-Regression & Live S25U Discipline:** Never regress verified `v2.9.80–v2.9.82` fixes (`EnableFullScreenRenderEffectBlur=false`, Scarlett dual-watermark RT `<10 ms` duplex & bit-exact bypass, low-RAM/`:worker` ONNX isolation, `W51.1–W51.6` vocal/cache/loudness/volume guards). Verify C# probes in RAM via `omni_agent.py hot-exec` (`<3s`) before 6-min APK builds.
 
 ## 2. Prioritized Pending Work Queue
-- **P0 | Physical S25U Live Validation (`v2.9.82` APK):**
-  1. `W52` (`BP_VOCAL_STABILITY_CACHE_UX_LOUDNESS.md`): Live S25U check of vocal stability, neural stem cache TTL/hit-rate, 120 Hz zero-jank (`EnableFullScreenRenderEffectBlur=false`), EBU R128 loudness match, & smooth volume ramp.
-  2. `W2-LiveReverify` (`BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA.md`): Live Scarlett 2i2 Gen 4 USB-C duplex check (`<10 ms` RT mic duplex, 0 xruns, bit-exact headphone bypass, hot-plug recovery).
-  3. `CavernBugHunter v2` (`omni_agent.py hunt`): Post-`v2.9.82` clean 0-finding confirmation pass on live device.
+- **P0 | Physical S25U Live Validation (`v2.9.83+` & OmniAgent `v2.2.0` APKs):**
+  1. `W53.0-Verify` (`BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP.md`): Install updated OmniAgent `v2.2.0` + Cavernize APKs to lock in 24/7 `remoteMessaging` FGS + direct `channel="cavernize"` + WebGPU/RoFormer crash recovery + smooth 120 Hz volume + decoupled 3D Room bar + MVSEP cancel-safe resume.
+  2. `W52` (`BP_VOCAL_STABILITY_CACHE_UX_LOUDNESS.md`): Live S25U check of vocal stability, neural stem cache TTL/hit-rate, 120 Hz zero-jank (`EnableFullScreenRenderEffectBlur=false`), EBU R128 loudness match, & smooth volume ramp.
+  3. `W2-LiveReverify` (`BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA.md`): Live Scarlett 2i2 Gen 4 USB-C duplex check (`<10 ms` RT mic duplex, 0 xruns, bit-exact headphone bypass, hot-plug recovery).
+  4. `CavernBugHunter v2` (`omni_agent.py hunt`): Clean 0-finding confirmation pass on live device.
+- **P1 | V3 AI Separation, Spatial Motion, Modular One UI 9, Mobile ONNX & Transaural Roadmap (`BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP.md`, `W53.1–W53.6`):**
+  1. `W53.1` (Wave A): MVSEP low-band vocal-rumble fix + FLAC/Atmos GCC-PHAT phase-coherent separate-reference karaoke + MVSEP custom API Single-Stems -> Lead/Backing-on-vocals-only cascade.
+  2. `W53.2` (Wave B): Unified Play/Sing context-aware AI extraction sheet + incremental vocal-stem reuse + multi-variant non-destructive cache + lossless storage optimization.
+  3. `W53.3` (Wave C): Stereo-pan azimuth preservation for fixed 3D objects + expressive lyrics/energy-aware 3D choreography.
+  4. `W53.4` (Wave D): One UI 9 modular editable quick-panel control blocks.
+  5. `W53.5` (Wave E): Mobile ONNX QNN HTP Hexagon NPU + FP16/W8A16 quantization + SoC-keyed context binary caching.
+  6. `W53.6` (Wave F): Phone built-in & external speaker transaural XTC spatializer w/ bit-exact headphone auto-bypass.
 - **P1 | Phase 3 Vocal Cortex (`PHASE3_VOCAL_CORTEX_ROADMAP.md`, `W31–W42`):**
   1. `W31` (Next DSP wave): Wire ALREADY-VERIFIED C# 8.0 `Cavern/VocalChain/AcousticFeedbackShieldFoundation.cs` (`GT-13` `34.31 dB` ERLE, `+16.06 dB` GBF, `0 B` GC, `0.356 ms/blk`) into live Android mic duplex chain — strictly preserving `v2.9.80–v2.9.81` Scarlett dual-watermark RT invariants (`!re-port from Python`).
   2. `W32` (Vocal AI / Neural enhancement): Enforce `:worker` process isolation + `v2.9.82` low-RAM discipline (`NativeOnnxRuntimeBridge` memory guard, zero LMKD OOM on S25U).
@@ -35,7 +43,7 @@
 
 ## 4. Live Machine-Synced Inventory
 <!-- HUB:AUTO_START -->
-HUB_STATS|blueprints=5 (done=1, partial=3, active=0, deferred=1, superseded=0)|archived_done=10|min_score=100/100|open_conflicts=0|monoliths_gt2000=5
+HUB_STATS|blueprints=6 (done=1, partial=4, active=0, deferred=1, superseded=0)|archived_done=10|min_score=100/100|open_conflicts=0|monoliths_gt2000=5
 
 | Blueprint ID | Status | Score | Tier | H2+ Stubs | Hygiene / Lineage Note |
 | :--- | :---: | :---: | :---: | :---: | :--- |
@@ -43,6 +51,7 @@ HUB_STATS|blueprints=5 (done=1, partial=3, active=0, deferred=1, superseded=0)|a
 | `BP_FULL_APP_SOTA_AUDIT` | `PARTIAL` | `100/100` | `T3` | `2` | W1-W3 DONE (T6); W4 monolith backlog updated to 5 files >2000L (added AndroidAudioOutput.cs 2157L); W5 speaker |
 | `BP_OMNISCIENT_SPATIAL_OBJECT_CORTEX` | `DEFERRED` | `100/100` | `T3` | `2` | resolved=Phase-A W1-W3 shipped in T6; Phase-B W4 local INT4 LLM deferred & MUST execute in isolated :worker p |
 | `BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA` | `PARTIAL` | `100/100` | `T2` | `1` | W1 native/C# code DONE (v2.9.80); W2-LiveReverify physical Scarlett 2i2 Gen4 S25U test pending. |
+| `BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP` | `PARTIAL` | `100/100` | `T3` | `1` | W53.0 immediate fixes shipped (Hub v6.1 + OmniAgent v2.2 remoteMessaging FGS + Cavernize direct channel + WebG |
 | `BP_VOCAL_STABILITY_CACHE_UX_LOUDNESS` | `PARTIAL` | `100/100` | `T3` | `1` | W51.1-W51.7 code DONE (v2.9.81) + ONNX low-RAM fixes (v2.9.82); W52 live S25U verification pending. |
 
 ARCHIVED_DONE|count=10|ledger=`.agents/docs/archive/BLUEPRINTS_DONE_LEDGER.md`|tarball=`.agents/docs/archive/blueprints_done.tar.gz`|ids=`BP_AUDIO_AI_SEPARATION_ENSEMBLE_AND_MVSEP`, `BP_CORE_RUNTIME_STABILITY_AND_SCHEDULING`, `BP_DEVICE_LOG_REMEDIATION`, `BP_INSTANT_ZERO_WASTE_RESUME`, `BP_LIVE_QA_BUG_HUNTER_SOTA`, `BP_ONEUI9_UX_MOTION_DISCOVERY_AND_LYRICS`, `BP_PLAN_GOVERNANCE_AND_CENTRAL_HUB`, `BP_STUDIO_EXPORT_METADATA_AND_DYNAMIC_ATMOS`, `BP_STUDIO_SPATIAL_EXPORT_COMPRESSION`, `BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY`
@@ -51,8 +60,8 @@ ARCHIVED_DONE|count=10|ledger=`.agents/docs/archive/BLUEPRINTS_DONE_LEDGER.md`|t
 | File | Lines | Cap |
 | :--- | ---: | ---: |
 | `CavernSamples/Reusable/Cavernize.Logic/Rendering/StudioBatchExporter.cs` | `3578` | `2000` |
-| `CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs` | `2296` | `2000` |
-| `CavernSamples/CavernizeAndroid/Audio/AndroidAudioOutput.cs` | `2157` | `2000` |
+| `CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs` | `2333` | `2000` |
+| `CavernSamples/CavernizeAndroid/Audio/AndroidAudioOutput.cs` | `2161` | `2000` |
 | `CavernSamples/CavernizeAndroid/Views/RoomSimulatorView.cs` | `2096` | `2000` |
 | `CavernSamples/CavernizeAndroid/Services/MediaLibraryService.cs` | `2046` | `2000` |
 <!-- HUB:AUTO_END -->

@@ -147,7 +147,16 @@ def cmd_connect(args: argparse.Namespace) -> int:
             st_a, a_resp = proto.http_json("GET", f"{conn['relayUrl']}/v1/agent/status?all=1", headers, timeout=12)
             if st_a == 200 and a_resp.get("ok"):
                 summary["channels"] = {
-                    k: {"online": bool(v.get("online")), "device": v.get("device", ""), "mode": v.get("securityMode", "")}
+                    k: {
+                        "online": bool(v.get("online")),
+                        "standbyReachable": bool(v.get("standbyReachable")),
+                        "ageSeconds": v.get("ageSeconds"),
+                        "lastSeenUtc": v.get("lastSeenUtc"),
+                        "device": v.get("device", ""),
+                        "mode": v.get("securityMode", ""),
+                        "fgsMode": v.get("fgsMode", ""),
+                        "batteryUnrestricted": v.get("batteryUnrestricted"),
+                    }
                     for k, v in (a_resp.get("channels") or {}).items()
                 }
         caps = lcap.inspect_capabilities()
@@ -317,10 +326,28 @@ def pick_channel(relay_url: str, pair_secret_hex: str, preferred: str, admin_key
     st, resp = proto.http_json("GET", f"{relay_url}/v1/agent/status?all=1", headers, timeout=15)
     if st == 200 and resp.get("ok"):
         chans = resp.get("channels") or {}
-        for c in ("termux", "debian", "android"):
+        for c in ("termux", "debian", "android", "cavernize"):
             if (chans.get(c) or {}).get("online"):
                 return c
     return "termux"
+
+
+def pick_cavernize_channel(relay_url: str, pair_secret_hex: str, preferred: str = "auto", admin_key: str = "") -> str:
+    """Select best live transport for Cavernize commands: online 'android' IPC -> direct 'cavernize' channel."""
+    if preferred in ("android", "cavernize"):
+        return preferred
+    try:
+        headers = proto.derive_agent_headers(pair_secret_hex, channel="termux", admin_key=admin_key)
+        st, resp = proto.http_json("GET", f"{relay_url}/v1/agent/status?all=1", headers, timeout=10)
+        if st == 200 and resp.get("ok"):
+            chans = resp.get("channels") or {}
+            if (chans.get("android") or {}).get("online"):
+                return "android"
+            if (chans.get("cavernize") or {}).get("online"):
+                return "cavernize"
+    except Exception:
+        pass
+    return "android"
 
 
 def cmd_push_workspace(args: argparse.Namespace) -> int:
@@ -669,14 +696,21 @@ def cmd_hot_exec(args: argparse.Namespace) -> int:
 
     via = getattr(args, "via", "auto")
     code = (args.code_session or os.environ.get("CAVERN_SESSION_CODE") or "").strip()
-    use_android_ipc = via == "android" or (via == "auto" and not code and _is_channel_online(relay, secret, "android", admin))
-    if use_android_ipc:
+    target_cav_chan = ""
+    if via in ("android", "cavernize"):
+        target_cav_chan = via
+    elif via == "auto" and not code:
+        if _is_channel_online(relay, secret, "android", admin):
+            target_cav_chan = "android"
+        elif _is_channel_online(relay, secret, "cavernize", admin):
+            target_cav_chan = "cavernize"
+    if target_cav_chan:
         res = send_agent_command(
             relay,
             secret,
             "cavernize_cmd",
             build_cavernize_cmd_payload("hot_exec", hot_args, tier=2, timeout_sec=max(90, args.timeout + 30)),
-            channel="android",
+            channel=target_cav_chan,
             admin_key=admin,
             timeout_sec=max(90, args.timeout + 30),
         )
@@ -908,7 +942,7 @@ def main() -> int:
     p_hot.add_argument("--entry-type", default="")
     p_hot.add_argument("--args-json", default="{}")
     p_hot.add_argument("--code-session", default="", help="Optional existing Live Bridge CAV-... code")
-    p_hot.add_argument("--via", choices=("auto", "android", "bridge"), default="auto", help="Transport: auto prefers online android IPC channel")
+    p_hot.add_argument("--via", choices=("auto", "android", "cavernize", "bridge"), default="auto", help="Transport: auto prefers online android IPC, then direct cavernize channel")
     p_hot.add_argument("--with-android-refs", action="store_true", help="Opt-in Android TypeCheck refs (default False; use reflection on device)")
     p_hot.add_argument("--no-android-refs", action="store_true", help="Compat flag (already default)")
     p_hot.add_argument("--compile-only", action="store_true")
@@ -1124,12 +1158,13 @@ def main() -> int:
 
     if args.action == "cavernize-cmd":
         payload = build_cavernize_cmd_payload(args.name, args.args, args.tier, args.timeout)
+        cav_chan = pick_cavernize_channel(relay, secret, args.channel, admin)
         res = send_agent_command(
             relay,
             secret,
             "cavernize_cmd",
             payload,
-            channel="android",
+            channel=cav_chan,
             admin_key=admin,
             timeout_sec=max(60, args.timeout),
         )

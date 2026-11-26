@@ -1274,6 +1274,11 @@ public partial class MainActivity {
                 if (cloudRequested) {
                     try {
                         System.Diagnostics.Stopwatch cloudSw = System.Diagnostics.Stopwatch.StartNew();
+                        string pendingJobHash = null;
+                        if (store.TryGetPendingMvsepJobHash(cloudPlainCacheKey, cloudPreset.Id, out string savedHash)) {
+                            pendingJobHash = savedHash;
+                            AppLogger.Info($"MVSEP Cloud: Resuming previously submitted job hash={savedHash} (preset={cloudPreset.Id}) to preserve API credits.");
+                        }
                         using Cavernize.Logic.Spatial.MvsepCloudClient mvsepClient = new();
                         separated = await mvsepClient.SeparateTrackAsync(
                             sourceTrackKey: activePath,
@@ -1286,7 +1291,13 @@ public partial class MainActivity {
                             artistName: summaryArtist,
                             externalDecoder: (rawBytes, fileName) => DecodeTempStemBytesWithFfmpeg(rawBytes, fileName, decodedSr, ffLoc, ct),
                             onProgress: reportProgress,
-                            token: ct).ConfigureAwait(false);
+                            token: ct,
+                            existingJobHash: pendingJobHash,
+                            onJobCreated: createdHash => {
+                                store.SavePendingMvsepJobHash(cloudPlainCacheKey, cloudPreset.Id, createdHash);
+                                AppLogger.Info($"MVSEP Cloud: Saved active job hash={createdHash} for cancel-safe resume.");
+                            },
+                            onJobTerminal: _ => store.ClearPendingMvsepJobHash(cloudPlainCacheKey, cloudPreset.Id)).ConfigureAwait(false);
                         cloudSw.Stop();
                         double audioSec = decodedSr > 0 ? mixL.Length / (double)decodedSr : 1.0;
                         rtf = audioSec > 0.01 ? (float)(cloudSw.Elapsed.TotalSeconds / audioSec) : 0f;
@@ -1324,22 +1335,53 @@ public partial class MainActivity {
                             })
                             : null;
 
-                    (separated, rtf, fromCache) = neuralOrchestrator.ExecuteTrackPipeline(
-                        sourceTrackKey: activePath,
-                        fileSizeBytes: keyInfo.Length,
-                        lastModifiedTicks: keyInfo.LastWriteTimeUtc.Ticks,
-                        mixLeft: mixL,
-                        mixRight: mixR,
-                        sampleRate: decodedSr,
-                        goal: goal,
-                        config: cfg,
-                        derivedFromLosslessTwin: usedAlignedTwin || derivedFromTwin,
-                        onProgress: reportProgress,
-                        token: ct,
-                        onProgressiveTrackReady: progressiveCallback,
-                        displayTitle: summaryTitle,
-                        artistName: summaryArtist,
-                        forceReextract: forceReextract);
+                    try {
+                        (separated, rtf, fromCache) = neuralOrchestrator.ExecuteTrackPipeline(
+                            sourceTrackKey: activePath,
+                            fileSizeBytes: keyInfo.Length,
+                            lastModifiedTicks: keyInfo.LastWriteTimeUtc.Ticks,
+                            mixLeft: mixL,
+                            mixRight: mixR,
+                            sampleRate: decodedSr,
+                            goal: goal,
+                            config: cfg,
+                            derivedFromLosslessTwin: usedAlignedTwin || derivedFromTwin,
+                            onProgress: reportProgress,
+                            token: ct,
+                            onProgressiveTrackReady: progressiveCallback,
+                            displayTitle: summaryTitle,
+                            artistName: summaryArtist,
+                            forceReextract: forceReextract);
+                    } catch (InsufficientMemoryException memEx) when (
+                        cfg.StudioBundlePreset != Cavernize.Logic.Spatial.NeuralEnsembleBundlePreset.FastSingle ||
+                        cfg.OrchestrationMode == Cavernize.Logic.Spatial.NeuralOrchestrationMode.Manual) {
+                        AppLogger.Warn($"ONNX heavy bundle exceeded safe RAM budget ({memEx.Message}); automatically falling back to memory-safe FastSingle local plan.");
+                        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: false);
+                        GC.WaitForPendingFinalizers();
+                        Cavernize.Logic.Spatial.NeuralAudioConfig liteCfg = cfg.WithMemorySafeFallback();
+                        Cavernize.Logic.Spatial.NeuralExecutionPlan litePlan = neuralOrchestrator.BuildPlan(goal, liteCfg);
+                        if (litePlan != null && litePlan.IsRunnable && !string.Equals(litePlan.PlanSignature, plan?.PlanSignature, StringComparison.Ordinal)) {
+                            reportProgress(0.06, S["MvsepAutoFallbackStatus"]);
+                            (separated, rtf, fromCache) = neuralOrchestrator.ExecuteTrackPipeline(
+                                sourceTrackKey: activePath,
+                                fileSizeBytes: keyInfo.Length,
+                                lastModifiedTicks: keyInfo.LastWriteTimeUtc.Ticks,
+                                mixLeft: mixL,
+                                mixRight: mixR,
+                                sampleRate: decodedSr,
+                                goal: goal,
+                                config: liteCfg,
+                                derivedFromLosslessTwin: usedAlignedTwin || derivedFromTwin,
+                                onProgress: reportProgress,
+                                token: ct,
+                                onProgressiveTrackReady: progressiveCallback,
+                                displayTitle: summaryTitle,
+                                artistName: summaryArtist,
+                                forceReextract: forceReextract);
+                        } else {
+                            throw;
+                        }
+                    }
                 }
 
                 Cavern.VocalChain.VocalMixDnaProfile extractedDna = Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(

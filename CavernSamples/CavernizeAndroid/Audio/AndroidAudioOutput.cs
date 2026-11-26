@@ -1140,6 +1140,10 @@ public sealed class AndroidAudioOutput : IDisposable {
             }
             int written = NativeProAudioBridge.WritePlayback(spscPlaybackBuffer, framesToWrite);
             if (written < 0) {
+                // Intentional stop or track rebuild already in progress -> never emit bogus disconnect warning/double-rebuild
+                if (trackRebuildRequested || !running) {
+                    return;
+                }
                 // Explicit native backend disconnect/stop (< 0) -> trigger recovery
                 nativeStallTicks = 0;
                 HandleNativeStreamDisconnect($"WritePlayback={written}");

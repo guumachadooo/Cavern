@@ -17,13 +17,14 @@ namespace CavernizeAndroid.Services;
 public sealed partial class NativeOnnxRuntimeBridge {
     List<NeuralExecutionProvider> BuildSessionProviderCascade(NeuralExecutionProvider preferred, string modelPath) {
         List<NeuralExecutionProvider> list = [];
+        bool webGpuReady = supportsWebGpu && !webGpuDeviceLostThisProcess;
         bool qnnReady = supportsQnnHtp &&
                         OnnxRuntimeInstallerService.IsQnnAvailableOnDisk(appContext) &&
                         OnnxRuntimeInstallerService.IsQualcommSnapdragonDevice();
         bool gpuOptimal = IsWebGpuOptimalModel(modelPath);
 
         if (preferred == NeuralExecutionProvider.WebGpu) {
-            if (supportsWebGpu) {
+            if (webGpuReady) {
                 list.Add(NeuralExecutionProvider.WebGpu);
             }
             list.Add(NeuralExecutionProvider.Cpu);
@@ -33,7 +34,7 @@ public sealed partial class NativeOnnxRuntimeBridge {
             if (qnnReady) {
                 list.Add(NeuralExecutionProvider.QnnHtp);
             }
-            if (supportsWebGpu && gpuOptimal) {
+            if (webGpuReady && gpuOptimal) {
                 list.Add(NeuralExecutionProvider.WebGpu);
             }
             list.Add(NeuralExecutionProvider.Cpu);
@@ -54,7 +55,7 @@ public sealed partial class NativeOnnxRuntimeBridge {
         // Auto mode: empirically verified fastest per-architecture cascade on mobile ARM64:
         // - Static CNN / U-Net STFT models (UVR MDX-Net Karaoke/Vocal/Reverb/Crowd, Apollo): WebGPU Vulkan GPU (5x faster!) -> CPU KleidiAI
         // - Dynamic subband/RNN models (SCNet, HTDemucs, RoFormer): CPU ARM64 KleidiAI 4-thread (3x faster than XNNPACK, zero GPU sync stalls!)
-        if (supportsWebGpu && gpuOptimal) {
+        if (webGpuReady && gpuOptimal) {
             list.Add(NeuralExecutionProvider.WebGpu);
         }
         if (qnnReady) {

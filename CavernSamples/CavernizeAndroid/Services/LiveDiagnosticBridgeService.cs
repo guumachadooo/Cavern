@@ -117,6 +117,8 @@ public static partial class LiveDiagnosticBridgeService {
 
     static WeakReference<ILiveBridgeAppHost> hostRef;
     static CancellationTokenSource sessionCts;
+    static CancellationTokenSource directAgentCts;
+    static volatile bool directAgentForceHb;
     static string activeSessionCode = "";
     static string activeRelayUrl = "";
     static int activeMaxTier = 1;
@@ -605,6 +607,191 @@ public static partial class LiveDiagnosticBridgeService {
             return (false, $"{ex.GetType().Name}: {ex.Message}", sw.ElapsedMilliseconds);
         } finally {
             argsDoc?.Dispose();
+        }
+    }
+
+    // ==================== DIRECT ACTIVE CHANNEL ('cavernize') E2E BRIDGE ====================
+
+    /// <summary>
+    /// Keeps Cavernize directly reachable on Cloudflare Hub channel <c>cavernize</c> whenever
+    /// <see cref="MainActivity"/> is open and paired (zero extra Foreground Service required),
+    /// ensuring remote AI commands &amp; <c>hot-exec</c> work even when OmniAgent/Termux are offline.
+    /// </summary>
+    public static void StartDirectAgentBridge(Context context, AppSettingsStore store) {
+        if (context == null || store == null) {
+            return;
+        }
+        if (!HasPairedSecret(store) || !TryNormalizeRelayUrl(store.LiveRelayUrl, out _)) {
+            return;
+        }
+        directAgentForceHb = true;
+        lock (stateLock) {
+            if (directAgentCts != null && !directAgentCts.IsCancellationRequested) {
+                return;
+            }
+            directAgentCts?.Dispose();
+            directAgentCts = new CancellationTokenSource();
+            CancellationToken ct = directAgentCts.Token;
+            Context appCtx = context.ApplicationContext ?? context;
+            _ = Task.Run(() => DirectAgentLoopAsync(appCtx, ct));
+        }
+    }
+
+    public static void StopDirectAgentBridge() {
+        CancellationTokenSource oldCts;
+        lock (stateLock) {
+            oldCts = directAgentCts;
+            directAgentCts = null;
+        }
+        if (oldCts != null) {
+            try {
+                oldCts.Cancel();
+                oldCts.Dispose();
+            } catch {
+                // Ignore
+            }
+        }
+    }
+
+    static HttpRequestMessage CreateDirectAgentReq(HttpMethod method, string url, string devHash, string agentKey) {
+        HttpRequestMessage req = new(method, url);
+        req.Headers.Add("X-Device-Hash", devHash);
+        req.Headers.Add("X-Agent-Key", agentKey);
+        req.Headers.Add("X-Agent-Channel", "cavernize");
+        return req;
+    }
+
+    static async Task DirectAgentLoopAsync(Context appCtx, CancellationToken ct) {
+        DateTime lastHb = DateTime.MinValue;
+        int idleTicks = 0;
+        try {
+            while (!ct.IsCancellationRequested) {
+                AppSettingsStore store = new(appCtx);
+                string pairHex = LoadPairSecretHex(store);
+                if (string.IsNullOrEmpty(pairHex) || !TryNormalizeRelayUrl(store.LiveRelayUrl, out string baseUrl)) {
+                    await Task.Delay(15_000, ct).ConfigureAwait(false);
+                    continue;
+                }
+
+                string devHash = ComputeWakeChannelHash(pairHex);
+                string agentKey = ComputeAgentKey(pairHex);
+
+                bool hbDue = directAgentForceHb || (DateTime.UtcNow - lastHb).TotalSeconds >= 60;
+                if (hbDue) {
+                    try {
+                        (string ver, long build) = AppUpdateService.GetInstalledVersion(appCtx);
+                        using HttpRequestMessage hbReq = CreateDirectAgentReq(HttpMethod.Post, $"{baseUrl}/v1/agent/heartbeat", devHash, agentKey);
+                        object hbPayload = new {
+                            agentVersion = $"v{ver} ({build})",
+                            hostEnv = "cavernize-direct-activity",
+                            device = $"{Build.Manufacturer} {Build.Model}".Trim(),
+                            securityMode = "smart",
+                            fgsMode = "foreground-activity",
+                            androidSdk = (int)Build.VERSION.SdkInt,
+                            lastExitReason = "active",
+                            capabilities = new[] { "ping", "status", "cavernize_cmd", "hot_exec" }
+                        };
+                        hbReq.Content = new StringContent(JsonSerializer.Serialize(hbPayload), System.Text.Encoding.UTF8, "application/json");
+                        using HttpResponseMessage hbResp = await http.SendAsync(hbReq, ct).ConfigureAwait(false);
+                        if (hbResp.IsSuccessStatusCode) {
+                            lastHb = DateTime.UtcNow;
+                            directAgentForceHb = false;
+                        } else {
+                            lastHb = DateTime.UtcNow.AddSeconds(-48);
+                        }
+                    } catch (System.OperationCanceledException) {
+                        break;
+                    } catch {
+                        lastHb = DateTime.UtcNow.AddSeconds(-48);
+                    }
+                }
+
+                try {
+                    using HttpRequestMessage pollReq = CreateDirectAgentReq(HttpMethod.Get, $"{baseUrl}/v1/agent/poll", devHash, agentKey);
+                    using HttpResponseMessage pollResp = await http.SendAsync(pollReq, ct).ConfigureAwait(false);
+                    if (pollResp.IsSuccessStatusCode) {
+                        string body = await pollResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                        using JsonDocument doc = JsonDocument.Parse(body);
+                        if (doc.RootElement.TryGetProperty("hasCommand", out JsonElement hasEl) &&
+                            hasEl.GetBoolean() &&
+                            doc.RootElement.TryGetProperty("command", out JsonElement cmdWrap)) {
+                            idleTicks = 0;
+                            string reqId = cmdWrap.TryGetProperty("requestId", out JsonElement idEl) ? (idEl.GetString() ?? "") : "";
+                            JsonElement envEl = cmdWrap.GetProperty("envelope");
+                            object resultObj = await HandleDirectAgentCommandAsync(appCtx, store, pairHex, reqId, envEl, ct).ConfigureAwait(false);
+                            object resEnv = EncryptV4Envelope(pairHex, $"res:{reqId}", resultObj);
+                            using HttpRequestMessage postRes = CreateDirectAgentReq(HttpMethod.Post, $"{baseUrl}/v1/agent/result", devHash, agentKey);
+                            postRes.Content = new StringContent(
+                                JsonSerializer.Serialize(new { requestId = reqId, envelope = resEnv }),
+                                System.Text.Encoding.UTF8,
+                                "application/json");
+                            using HttpResponseMessage _ = await http.SendAsync(postRes, ct).ConfigureAwait(false);
+                            continue;
+                        }
+                        idleTicks = Math.Min(idleTicks + 1, 10);
+                    }
+                } catch (System.OperationCanceledException) {
+                    break;
+                } catch {
+                    idleTicks = Math.Min(idleTicks + 1, 10);
+                }
+
+                await Task.Delay(idleTicks >= 4 ? 6_000 : 2_500, ct).ConfigureAwait(false);
+            }
+        } catch (System.OperationCanceledException) {
+            // Normal activity shutdown
+        }
+    }
+
+    static async Task<object> HandleDirectAgentCommandAsync(
+        Context appCtx,
+        AppSettingsStore store,
+        string pairHex,
+        string reqId,
+        JsonElement envEl,
+        CancellationToken ct) {
+        try {
+            using JsonDocument cmdDoc = DecryptV4Envelope(pairHex, $"cmd:{reqId}", envEl);
+            JsonElement root = cmdDoc.RootElement;
+            string outerCmd = root.TryGetProperty("cmd", out JsonElement cEl) ? (cEl.GetString() ?? "").Trim().ToLowerInvariant() : "";
+            JsonElement outerArgs = root.TryGetProperty("args", out JsonElement aEl) && aEl.ValueKind == JsonValueKind.Object ? aEl : default;
+
+            if (outerCmd == "ping" || outerCmd == "status") {
+                (string ver, long build) = AppUpdateService.GetInstalledVersion(appCtx);
+                return new {
+                    ok = true,
+                    channel = "cavernize",
+                    appVersion = $"v{ver} ({build})",
+                    device = $"{Build.Manufacturer} {Build.Model}".Trim(),
+                    hostAttached = TryGetHost() != null
+                };
+            }
+
+            string innerCmd = outerCmd;
+            string innerArgsJson = outerArgs.ValueKind == JsonValueKind.Object ? outerArgs.GetRawText() : "{}";
+            int tier = 2;
+            if (outerCmd == "cavernize_cmd" && outerArgs.ValueKind == JsonValueKind.Object) {
+                innerCmd = GetArgString(outerArgs, "cmd", "");
+                tier = GetArgInt(outerArgs, "tier", 2, 0, 2);
+                innerArgsJson = outerArgs.TryGetProperty("args", out JsonElement innerA) && innerA.ValueKind == JsonValueKind.Object
+                    ? innerA.GetRawText()
+                    : "{}";
+            }
+
+            (bool ok, string body, long elapsedMs) = await ExecuteLocalIpcCommandAsync(appCtx, store, tier, innerCmd, innerArgsJson, ct).ConfigureAwait(false);
+            return new {
+                ok,
+                channel = "cavernize",
+                cmd = innerCmd,
+                elapsedMs,
+                body
+            };
+        } catch (Exception ex) {
+            return new {
+                ok = false,
+                channel = "cavernize",
+                error = $"{ex.GetType().Name}: {ex.Message}"
+            };
         }
     }
 

@@ -209,7 +209,7 @@ public partial class MainActivity {
             }
         }
 
-        if (HasVideoOnlyTrackViaMediaExtractor(resolved) ||
+        if ((probe == null && HasVideoOnlyTrackViaMediaExtractor(resolved)) ||
             (probe != null && probe.AudioStreams.Count == 0 && guessedContainer != Container.NotContainer &&
              probe.RawOutput != null && probe.RawOutput.Contains("Video:", StringComparison.OrdinalIgnoreCase))) {
             throw new InvalidOperationException(S["VideoNoAudioTrack"]);

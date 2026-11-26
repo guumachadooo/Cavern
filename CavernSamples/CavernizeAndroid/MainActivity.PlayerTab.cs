@@ -36,7 +36,10 @@ public partial class MainActivity {
     Button roomResetAllBtn;
     Button signalChainDecoderPill, signalChainUpmixPill, signalChainLgsrPill, signalChainRoomHrtfPill, signalChainAutoEqLoudnessPill;
     LinearLayout roomMiniSeekDrawer;
-    bool isMiniSeekExpanded;
+    bool isMiniSeekExpanded = true;
+    LinearLayout roomMiniVolDrawer;
+    OneUiSeekBar roomMiniVolSeekBar;
+    bool isMiniVolExpanded;
     TextView roomMiniTimeText;
     Button roomMiniVolChip, roomMiniHrtfChip;
     LinearLayout mixerCardRef;
@@ -734,52 +737,78 @@ public partial class MainActivity {
         }
 
         LinearLayout row = HRow();
-        roomTransportPlayBtn = MakeMiniIconBtn(OneUiIconType.Play, 19, true, Color.White, TogglePlayPause, out roomTransportPlayIcon);
-        LinearLayout back10Btn = MakeMiniIconBtn(OneUiIconType.Rewind10, 16, false, Color.Argb(210, 252, 252, 255), () => SeekRelative(-10), out _);
-        LinearLayout fwd10Btn = MakeMiniIconBtn(OneUiIconType.Forward10, 16, false, Color.Argb(210, 252, 252, 255), () => SeekRelative(10), out _);
-        roomTransportLoopBtn = MakeMiniIconBtn(OneUiIconType.RepeatLoop, 15, false, Color.Argb(215, 252, 252, 255), ToggleLoopMode, out roomTransportLoopIcon);
+        roomTransportPlayBtn = MakeMiniIconBtn(OneUiIconType.Play, 17, true, Color.White, TogglePlayPause, out roomTransportPlayIcon);
+        LinearLayout back10Btn = MakeMiniIconBtn(OneUiIconType.Rewind10, 15, false, Color.Argb(210, 252, 252, 255), () => SeekRelative(-10), out _);
+        LinearLayout fwd10Btn = MakeMiniIconBtn(OneUiIconType.Forward10, 15, false, Color.Argb(210, 252, 252, 255), () => SeekRelative(10), out _);
+        roomTransportLoopBtn = MakeMiniIconBtn(OneUiIconType.RepeatLoop, 14, false, Color.Argb(215, 252, 252, 255), ToggleLoopMode, out roomTransportLoopIcon);
 
         void ToggleInlineSeekDrawer() {
             isMiniSeekExpanded = !isMiniSeekExpanded;
             SetExpandedWithAnimation(roomMiniSeekDrawer, isMiniSeekExpanded);
         }
 
-        roomMiniTimeText = Label("00:00 / 00:00", 11.2f, OneUiTheme.TextSecondary);
+        void ToggleInlineVolDrawer() {
+            isMiniVolExpanded = !isMiniVolExpanded;
+            SetExpandedWithAnimation(roomMiniVolDrawer, isMiniVolExpanded);
+            RefreshRoomTransportButtons();
+        }
+
+        roomMiniTimeText = Label("00:00 / 00:00", 10.6f, OneUiTheme.TextSecondary);
         roomMiniTimeText.SetIncludeFontPadding(false);
         roomMiniTimeText.SetSingleLine(true);
         roomMiniTimeText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         roomMiniTimeText.Typeface = OneUiTheme.GetAppleFontMedium(this);
-        roomMiniTimeText.SetPadding(Dp(6), Dp(4), Dp(6), Dp(4));
+        roomMiniTimeText.SetMinWidth(0);
+        roomMiniTimeText.SetPadding(Dp(3), Dp(4), Dp(3), Dp(4));
         roomMiniTimeText.Click += (_, _) => ToggleInlineSeekDrawer();
 
-        roomMiniVolChip = PillButton(string.Format(S["RoomMiniVolFmt"], GetCurrentMasterVolumePercent()), ToggleInlineSeekDrawer);
-        roomMiniVolChip.TextSize = 10.8f;
+        roomMiniVolChip = PillButton(string.Format(S["RoomMiniVolFmt"], GetCurrentMasterVolumePercent()), ToggleInlineVolDrawer);
+        roomMiniVolChip.TextSize = 10.2f;
         roomMiniVolChip.SetSingleLine(true);
         roomMiniVolChip.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        roomMiniVolChip.SetMinimumHeight(Dp(32));
-        roomMiniVolChip.SetPadding(Dp(9), Dp(4), Dp(9), Dp(4));
+        roomMiniVolChip.SetMinWidth(0);
+        roomMiniVolChip.SetMinimumWidth(0);
+        roomMiniVolChip.SetMinimumHeight(Dp(30));
+        roomMiniVolChip.SetPadding(Dp(7), Dp(4), Dp(7), Dp(4));
 
         roomMiniHrtfChip = PillButton(store.HeadphoneVirtualizer ? S["BentoHrtf"] : S["PlayerDirectShort"], ToggleRoomHrtfVirtualizer);
-        roomMiniHrtfChip.TextSize = 10.8f;
+        roomMiniHrtfChip.TextSize = 10.2f;
         roomMiniHrtfChip.SetSingleLine(true);
         roomMiniHrtfChip.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        roomMiniHrtfChip.SetMinimumHeight(Dp(32));
-        roomMiniHrtfChip.SetPadding(Dp(9), Dp(4), Dp(9), Dp(4));
+        roomMiniHrtfChip.SetMinWidth(0);
+        roomMiniHrtfChip.SetMinimumWidth(0);
+        roomMiniHrtfChip.SetMinimumHeight(Dp(30));
+        roomMiniHrtfChip.SetPadding(Dp(7), Dp(4), Dp(7), Dp(4));
 
-        row.AddView(roomTransportPlayBtn, new LinearLayout.LayoutParams(Dp(38), Dp(38)) { RightMargin = Dp(6) });
-        row.AddView(back10Btn, new LinearLayout.LayoutParams(Dp(32), Dp(32)) { RightMargin = Dp(4) });
-        row.AddView(fwd10Btn, new LinearLayout.LayoutParams(Dp(32), Dp(32)) { RightMargin = Dp(4) });
+        row.AddView(roomTransportPlayBtn, new LinearLayout.LayoutParams(Dp(34), Dp(34)) { RightMargin = Dp(4) });
+        row.AddView(back10Btn, new LinearLayout.LayoutParams(Dp(30), Dp(30)) { RightMargin = Dp(4) });
+        row.AddView(fwd10Btn, new LinearLayout.LayoutParams(Dp(30), Dp(30)) { RightMargin = Dp(4) });
         row.AddView(roomMiniTimeText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(4) });
-        row.AddView(roomMiniVolChip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(5) });
-        row.AddView(roomMiniHrtfChip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(5) });
-        row.AddView(roomTransportLoopBtn, new LinearLayout.LayoutParams(Dp(32), Dp(32)));
+        row.AddView(roomMiniVolChip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(4) });
+        row.AddView(roomMiniHrtfChip, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent) { RightMargin = Dp(4) });
+        row.AddView(roomTransportLoopBtn, new LinearLayout.LayoutParams(Dp(30), Dp(30)));
         stripCard.AddView(row);
+
+        roomMiniVolDrawer = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = isMiniVolExpanded ? ViewStates.Visible : ViewStates.Gone
+        };
+        roomMiniVolDrawer.SetPadding(Dp(2), Dp(6), Dp(2), Dp(2));
+        roomMiniVolSeekBar = new OneUiSeekBar(this) {
+            Max = 100,
+            Progress = GetCurrentMasterVolumePercent(),
+            SlimVolumeMode = true,
+            HasDefaultReset = false
+        };
+        roomMiniVolSeekBar.UserProgressChanged += v => SetMasterVolumePercent(v);
+        roomMiniVolDrawer.AddView(roomMiniVolSeekBar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        stripCard.AddView(roomMiniVolDrawer);
 
         roomMiniSeekDrawer = new LinearLayout(this) {
             Orientation = Orientation.Vertical,
             Visibility = isMiniSeekExpanded ? ViewStates.Visible : ViewStates.Gone
         };
-        roomMiniSeekDrawer.SetPadding(0, Dp(8), 0, Dp(2));
+        roomMiniSeekDrawer.SetPadding(0, Dp(6), 0, Dp(2));
 
         playbackSeekBar = new OneUiWaveMediaSeekBar(this) {
             Max = 1000,
@@ -1774,7 +1803,15 @@ public partial class MainActivity {
             roomTransportLoopIcon.IconColor = loop ? ColText : OneUiTheme.TextSub;
         }
         if (roomMiniVolChip != null && store != null) {
-            roomMiniVolChip.Text = string.Format(S["RoomMiniVolFmt"], GetCurrentMasterVolumePercent());
+            int curVolPct = GetCurrentMasterVolumePercent();
+            roomMiniVolChip.Text = string.Format(S["RoomMiniVolFmt"], curVolPct);
+            roomMiniVolChip.Background = isMiniVolExpanded
+                ? OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.WithAlpha(ColAccent, 78), OneUiTheme.PillCornerDp, OneUiTheme.WithAlpha(ColAccent, 185))
+                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
+            if (roomMiniVolSeekBar != null && roomMiniVolSeekBar.Progress != curVolPct) {
+                roomMiniVolSeekBar.Progress = curVolPct;
+                roomMiniVolSeekBar.Invalidate();
+            }
         }
         if (roomMiniHrtfChip != null && store != null) {
             bool hrtf = store.HeadphoneVirtualizer;

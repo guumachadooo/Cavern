@@ -88,6 +88,12 @@ public static partial class LiveDiagnosticBridgeService {
         return Convert.ToHexString(digest).ToLowerInvariant();
     }
 
+    internal static string ComputeAgentKey(string pairSecretHex) {
+        byte[] input = System.Text.Encoding.UTF8.GetBytes($"agent-access-v4:{pairSecretHex.ToLowerInvariant()}");
+        byte[] digest = SHA256.HashData(input);
+        return Convert.ToHexString(digest).ToLowerInvariant();
+    }
+
     /// <summary>
     /// Computes the public double-hashed Smart Knock mailbox ID (<c>sha256("knock-channel-v5:" + deviceHash)</c>).
     /// Safe to store in public <c>.agents/bridge_profile.json</c> (cannot derive deviceHash or pairSecret).
@@ -156,7 +162,7 @@ public static partial class LiveDiagnosticBridgeService {
         return (serverPubB64, env);
     }
 
-    static object EncryptV4Envelope(string keyHex64, string contextId, object payloadObj) {
+    internal static object EncryptV4Envelope(string keyHex64, string contextId, object payloadObj) {
         byte[] key = Convert.FromHexString(keyHex64);
         byte[] iv = new byte[16];
         RandomNumberGenerator.Fill(iv);
@@ -202,6 +208,54 @@ public static partial class LiveDiagnosticBridgeService {
             ct = Convert.ToBase64String(ct),
             tag = Convert.ToBase64String(tag)
         };
+    }
+
+    internal static JsonDocument DecryptV4Envelope(string keyHex64, string contextId, JsonElement envelope) {
+        if (envelope.ValueKind != JsonValueKind.Object ||
+            !envelope.TryGetProperty("v", out JsonElement vEl) ||
+            vEl.GetInt32() != 4) {
+            throw new InvalidOperationException("Unsupported OmniAgent v4 envelope version.");
+        }
+        byte[] key = Convert.FromHexString(keyHex64);
+        byte[] iv = Convert.FromBase64String(envelope.GetProperty("nonce").GetString() ?? "");
+        byte[] ct = Convert.FromBase64String(envelope.GetProperty("ct").GetString() ?? "");
+        byte[] tag = Convert.FromBase64String(envelope.GetProperty("tag").GetString() ?? "");
+        bool useGz = envelope.TryGetProperty("gz", out JsonElement gzEl) && gzEl.GetBoolean();
+
+        byte[] macKey = HMACSHA256.HashData(key, ConcatBytes(System.Text.Encoding.UTF8.GetBytes("omni-mac-v4:"), iv));
+        byte[] prefix = System.Text.Encoding.UTF8.GetBytes($"omni-v4|{contextId}|{(useGz ? "1" : "0")}|");
+        byte[] expectedTag = HMACSHA256.HashData(macKey, ConcatBytes(prefix, iv, ct));
+        if (tag.Length != expectedTag.Length || !CryptographicOperations.FixedTimeEquals(tag, expectedTag)) {
+            throw new CryptographicException("Direct agent envelope HMAC-SHA256 verification failed.");
+        }
+
+        byte[] encKey = HMACSHA256.HashData(key, ConcatBytes(System.Text.Encoding.UTF8.GetBytes("omni-enc-v4:"), iv));
+        byte[] plain = new byte[ct.Length];
+        uint counter = 0;
+        int offset = 0;
+        byte[] ctrBuf = new byte[4];
+        while (offset < ct.Length) {
+            ctrBuf[0] = (byte)((counter >> 24) & 0xFF);
+            ctrBuf[1] = (byte)((counter >> 16) & 0xFF);
+            ctrBuf[2] = (byte)((counter >> 8) & 0xFF);
+            ctrBuf[3] = (byte)(counter & 0xFF);
+            byte[] ksBlock = SHA256.HashData(ConcatBytes(encKey, iv, ctrBuf));
+            int take = Math.Min(ksBlock.Length, ct.Length - offset);
+            for (int i = 0; i < take; i++) {
+                plain[offset + i] = (byte)(ct[offset + i] ^ ksBlock[i]);
+            }
+            offset += take;
+            counter++;
+        }
+
+        if (useGz) {
+            using MemoryStream src = new(plain);
+            using GZipStream gz = new(src, CompressionMode.Decompress);
+            using MemoryStream dst = new();
+            gz.CopyTo(dst);
+            plain = dst.ToArray();
+        }
+        return JsonDocument.Parse(plain);
     }
 
     internal static bool VerifyWakeRequestSignature(string pairSecretHex, LiveBridgeWakeRequest req, out string rejectReason) {

@@ -766,6 +766,91 @@ public sealed class AppSettingsStore {
         OutputFormat = (Cavernize.Logic.Spatial.MvsepOutputFormat)Math.Clamp(MvsepOutputFormatIndex, 0, 2)
     };
 
+    sealed class PendingMvsepJobEntry {
+        public string Hash { get; set; } = string.Empty;
+        public long CreatedUtcTicks { get; set; }
+    }
+
+    readonly object mvsepPendingJobsLock = new();
+    const string MvsepPendingJobsPrefKey = "mvsepPendingJobsV1";
+    static readonly TimeSpan MvsepPendingJobTtl = TimeSpan.FromHours(24);
+
+    static string BuildMvsepPendingJobKey(string trackKey, string presetId) =>
+        $"{(trackKey ?? string.Empty).Trim()}|{(presetId ?? string.Empty).Trim()}";
+
+    public bool TryGetPendingMvsepJobHash(string trackKey, string presetId, out string hash) {
+        hash = string.Empty;
+        if (string.IsNullOrWhiteSpace(trackKey) || string.IsNullOrWhiteSpace(presetId)) {
+            return false;
+        }
+        lock (mvsepPendingJobsLock) {
+            Dictionary<string, PendingMvsepJobEntry> map = LoadPendingMvsepJobsUnlocked();
+            string key = BuildMvsepPendingJobKey(trackKey, presetId);
+            if (!map.TryGetValue(key, out PendingMvsepJobEntry entry) || entry == null || string.IsNullOrWhiteSpace(entry.Hash)) {
+                return false;
+            }
+            if (DateTime.UtcNow.Ticks - entry.CreatedUtcTicks > MvsepPendingJobTtl.Ticks) {
+                map.Remove(key);
+                SavePendingMvsepJobsUnlocked(map);
+                return false;
+            }
+            hash = entry.Hash.Trim();
+            return true;
+        }
+    }
+
+    public void SavePendingMvsepJobHash(string trackKey, string presetId, string hash) {
+        if (string.IsNullOrWhiteSpace(trackKey) || string.IsNullOrWhiteSpace(presetId) || string.IsNullOrWhiteSpace(hash)) {
+            return;
+        }
+        lock (mvsepPendingJobsLock) {
+            Dictionary<string, PendingMvsepJobEntry> map = LoadPendingMvsepJobsUnlocked();
+            long nowTicks = DateTime.UtcNow.Ticks;
+            foreach (string expired in map.Where(kv => kv.Value == null || nowTicks - kv.Value.CreatedUtcTicks > MvsepPendingJobTtl.Ticks).Select(kv => kv.Key).ToList()) {
+                map.Remove(expired);
+            }
+            map[BuildMvsepPendingJobKey(trackKey, presetId)] = new PendingMvsepJobEntry {
+                Hash = hash.Trim(),
+                CreatedUtcTicks = nowTicks
+            };
+            while (map.Count > 16) {
+                string oldestKey = map.OrderBy(kv => kv.Value?.CreatedUtcTicks ?? 0L).First().Key;
+                map.Remove(oldestKey);
+            }
+            SavePendingMvsepJobsUnlocked(map);
+        }
+    }
+
+    public void ClearPendingMvsepJobHash(string trackKey, string presetId) {
+        if (string.IsNullOrWhiteSpace(trackKey) || string.IsNullOrWhiteSpace(presetId)) {
+            return;
+        }
+        lock (mvsepPendingJobsLock) {
+            Dictionary<string, PendingMvsepJobEntry> map = LoadPendingMvsepJobsUnlocked();
+            if (map.Remove(BuildMvsepPendingJobKey(trackKey, presetId))) {
+                SavePendingMvsepJobsUnlocked(map);
+            }
+        }
+    }
+
+    Dictionary<string, PendingMvsepJobEntry> LoadPendingMvsepJobsUnlocked() {
+        try {
+            string json = prefs.GetString(MvsepPendingJobsPrefKey, "{}");
+            return System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, PendingMvsepJobEntry>>(json)
+                ?? new Dictionary<string, PendingMvsepJobEntry>(StringComparer.OrdinalIgnoreCase);
+        } catch {
+            return new Dictionary<string, PendingMvsepJobEntry>(StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    void SavePendingMvsepJobsUnlocked(Dictionary<string, PendingMvsepJobEntry> map) {
+        try {
+            Edit().PutString(MvsepPendingJobsPrefKey, System.Text.Json.JsonSerializer.Serialize(map)).Apply();
+        } catch {
+            // Best-effort persistence
+        }
+    }
+
     public string ActiveStemModelId {
         get => prefs.GetString("activeStemModelId", Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId);
         set => Edit().PutString("activeStemModelId", value ?? Cavernize.Logic.Spatial.NeuralModelCatalog.DefaultStemModelId).Apply();

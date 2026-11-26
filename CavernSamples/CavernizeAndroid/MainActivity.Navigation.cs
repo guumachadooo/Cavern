@@ -303,18 +303,18 @@ public partial class MainActivity {
         ClearAllTabMotionBlur();
 
         if (prevTab != idx) {
-            int low = Math.Min(prevTab, idx);
-            int high = Math.Max(prevTab, idx);
             float viewportW = tabContainers[idx]?.Parent is View pv && pv.Width > 0
                 ? pv.Width
                 : (Resources?.DisplayMetrics?.WidthPixels ?? 1080);
-            float density = Resources?.DisplayMetrics?.Density ?? 3f;
+            float dir = idx > prevTab ? 1f : -1f;
+            float outStart = startOffsetPx;
+            float outEnd = -dir * viewportW;
+            float inStart = dir * viewportW + startOffsetPx;
 
-            // Compute continuous strip start index taking any live drag translation into account
-            float startStripPos = prevTab - (viewportW > 1f ? startOffsetPx / viewportW : 0f);
-            float endStripPos = idx;
-            bool allowBlur = AndroidRuntimeTelemetry.GetThermalStatusCode(ApplicationContext ?? this) < 3;
+            View outView = prevTab >= 0 && prevTab < tabContainers.Length ? tabContainers[prevTab] : null;
+            View inView = tabContainers[idx];
 
+            // Keep strictly the outgoing and incoming tabs visible (max 2 GPU layers, ZERO unmeasured intermediate tabs)
             for (int i = 0; i < tabContainers.Length; i++) {
                 View container = tabContainers[i];
                 if (container == null) {
@@ -324,9 +324,12 @@ public partial class MainActivity {
                 container.Alpha = 1f;
                 container.ScaleX = 1f;
                 container.ScaleY = 1f;
-                if (i >= low && i <= high) {
+                if (i == prevTab) {
                     container.Visibility = ViewStates.Visible;
-                    container.TranslationX = (i - startStripPos) * viewportW;
+                    container.TranslationX = outStart;
+                } else if (i == idx) {
+                    container.Visibility = ViewStates.Visible;
+                    container.TranslationX = inStart;
                 } else {
                     container.Visibility = ViewStates.Gone;
                     container.TranslationX = 0f;
@@ -336,44 +339,37 @@ public partial class MainActivity {
             if (navFrostedHost != null) {
                 navFrostedHost.IsSuspendedForTransition = true;
             }
-            for (int i = low; i <= high; i++) {
-                OneUiMotionBlur.EnableHardwareLayer(tabContainers[i]);
+            if (outView != null) {
+                OneUiMotionBlur.EnableHardwareLayer(outView);
+            }
+            if (inView != null) {
+                OneUiMotionBlur.EnableHardwareLayer(inView);
             }
 
-            const long FixedStripDurationMs = 260L;
-            ValueAnimator anim = ValueAnimator.OfFloat(startStripPos, endStripPos);
+            const long FixedStripDurationMs = 240L;
+            ValueAnimator anim = ValueAnimator.OfFloat(0f, 1f);
             anim.SetDuration(FixedStripDurationMs);
             anim.SetInterpolator(new Android.Views.Animations.PathInterpolator(0.22f, 1f, 0.36f, 1f));
             anim.Update += (_, e) => {
                 if (uiDestroyed || myGen != tabSwitchAnimGen) {
                     return;
                 }
-                float curPos = (float)(e.Animation?.AnimatedValue ?? endStripPos);
-                float progress = MathF.Abs(endStripPos - startStripPos) > 1e-4f
-                    ? Math.Clamp((curPos - startStripPos) / (endStripPos - startStripPos), 0f, 1f)
-                    : 1f;
+                float progress = Math.Clamp((float)(e.Animation?.AnimatedValue ?? 1f), 0f, 1f);
                 float arch = 4f * progress * (1f - progress);
 
-                for (int i = low; i <= high; i++) {
-                    View c = tabContainers[i];
-                    if (c == null) {
-                        continue;
-                    }
-                    float tx = (i - curPos) * viewportW;
-                    c.TranslationX = tx;
-                    bool onScreen = MathF.Abs(tx) < viewportW * 1.15f;
-                    c.Visibility = onScreen ? ViewStates.Visible : ViewStates.Invisible;
-                    if (onScreen) {
-                        float sc = i == idx ? (1f - 0.012f * (1f - progress)) : (1f - 0.014f * arch);
-                        float al = i == idx ? (0.94f + 0.06f * progress) : (1f - 0.14f * progress);
-                        c.ScaleX = sc;
-                        c.ScaleY = sc;
-                        c.Alpha = al;
-                    } else {
-                        c.ScaleX = 1f;
-                        c.ScaleY = 1f;
-                        c.Alpha = 1f;
-                    }
+                if (outView != null) {
+                    outView.TranslationX = outStart + (outEnd - outStart) * progress;
+                    float outSc = 1f - 0.014f * arch;
+                    outView.ScaleX = outSc;
+                    outView.ScaleY = outSc;
+                    outView.Alpha = 1f - 0.14f * progress;
+                }
+                if (inView != null) {
+                    inView.TranslationX = inStart * (1f - progress);
+                    float inSc = 1f - 0.012f * (1f - progress);
+                    inView.ScaleX = inSc;
+                    inView.ScaleY = inSc;
+                    inView.Alpha = 0.94f + 0.06f * progress;
                 }
             };
             void FinalizeStrip() {
