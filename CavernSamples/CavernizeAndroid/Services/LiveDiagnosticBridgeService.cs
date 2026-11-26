@@ -51,6 +51,7 @@ public interface ILiveBridgeAppHost {
     Task<(List<SelfCheckItem> Checks, List<UiPerfSample> PerfSamples)> RunLiveUiSelfAuditAsync(Action<string> onProgress, CancellationToken ct);
     Task ApplySettingsChangedAsync();
     Task<string> GetRuntimeTelemetryJsonAsync();
+    Task<string> GetSoakSnapshotJsonAsync(bool forceGc = false);
 }
 
 /// <summary>
@@ -154,6 +155,7 @@ public static partial class LiveDiagnosticBridgeService {
         new("logcat_tail", 0, "Read Cavernize own-UID Android logcat cleanly (zero shell, filters fork noise)", "{lines?:10..800, minLevel?:'V'|'D'|'I'|'W'|'E'|'F', buffer?:'main'|'system'|'crash'|'events'}"),
         new("anomalies", 0, "Read live in-memory RuntimeAnomalyRing captured from critical logs & chaos hunts", "{limit?:1..160, clear?:bool}"),
         new("runtime_telemetry", 0, "Inspect live 120 Hz FrameMetrics, StrictMode violations, ApplicationExitInfo, AAudio/AudioTrack XRuns & thermal QoS", "{resetFrameMetrics?:bool, clearStrictMode?:bool, maxExitReasons?:1..10}"),
+        new("soak_snapshot", 0, "Capture Q3 dirty-state & resource soak snapshot (Total/Native PSS, managed GC, /proc/self/fd, OS threads, View count, dialogs, isOperationRunning)", "{forceGc?:bool}"),
         new("cortex_profiles", 0, "Auto-characterize & export Phase-A Omniscient Cortex ComponentBehaviorProfile registry & conflict governance JSON", "{sampleRate?:16000..192000}"),
         new("batch", 0, "Execute up to 15 sequential commands in one round-trip (enforces each command's tier)", "{commands:[{cmd:string, args?:object}]}"),
 
@@ -183,7 +185,7 @@ public static partial class LiveDiagnosticBridgeService {
         new("reflect_get", 2, "Dynamically read any static or instance property/field path (secret-redacted)", "{type?:string, root?:'activity'|'store'|'player'|'audiodevice'|'headtracking'|'proaudio'|'dialogs', path:string, uiThread?:bool}"),
         new("reflect_set", 2, "Dynamically set any non-secret static or instance property/field path", "{type?:string, root?:string, path:string, value:any, uiThread?:bool}"),
         new("reflect_invoke", 2, "Dynamically invoke any .NET method (static/instance, sync/async Task, $context/$activity/$store/$null tokens)", "{type?:string, root?:string, path?:string, method:string, args?:[any], uiThread?:bool}"),
-        new("ui_interact", 2, "Universal live UI automation across MainActivity & open dialogs (find/click/long_click/set_text/set_checked/set_progress/select_item/scroll_by/tap_xy/swipe_xy/back/dismiss_dialogs/dump_dialogs)", "{action:string, query?:string, type?:string, index?:number, value?:any, dy?:number, x?:number, y?:number, x1?:number, y1?:number, x2?:number, y2?:number}"),
+        new("ui_interact", 2, "Universal live UI automation across MainActivity & open dialogs (find/click/long_click/rage_click/drag_sweep/reflow_probe/set_text/set_checked/set_progress/select_item/scroll_by/tap_xy/swipe_xy/back/dismiss_dialogs/dump_dialogs)", "{action:string, query?:string, type?:string, index?:number, value?:any, count?:number, intervalMs?:number, steps?:number, stepMs?:number, mode?:string, fontScale?:number, dy?:number, x?:number, y?:number, x1?:number, y1?:number, x2?:number, y2?:number}"),
         new("shell_exec", 2, "Execute sandboxed /system/bin/sh diagnostic command inside app sandbox (20s timeout, W^X guarded)", "{command:string, cwd?:string, timeoutSec?:1..20}"),
         new("hot_probe_status", 0, "Inspect W^X-compliant in-memory AssemblyLoadContext hot_exec readiness & HMAC key status", "{}"),
         new("hot_exec", 2, "Execute HMAC-SHA256 signed C# IL probe purely in RAM via collectible AssemblyLoadContext (zero APK rebuild)", "{requestId:string, timestampUnix:number, signature:string, dllBase64:string, entryType?:string, argsJson?:string, timeoutSec?:2..45}"),

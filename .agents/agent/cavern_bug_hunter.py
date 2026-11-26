@@ -1682,6 +1682,479 @@ def run_m2_mutation_canary_offline() -> dict[str, Any]:
     }
 
 
+def compute_ols_slope(values: list[float]) -> tuple[float, float]:
+    """Compute Ordinary Least Squares (slope_per_step, r_squared) in pure Python."""
+    n = len(values)
+    if n < 2:
+        return 0.0, 0.0
+    xs = [float(i) for i in range(n)]
+    mean_x = sum(xs) / n
+    mean_y = sum(values) / n
+    sxx = sum((x - mean_x) ** 2 for x in xs)
+    if sxx <= 1e-12:
+        return 0.0, 0.0
+    sxy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, values))
+    slope = sxy / sxx
+    syy = sum((y - mean_y) ** 2 for y in values)
+    if syy <= 1e-12:
+        return slope, 0.0
+    r2 = (sxy * sxy) / (sxx * syy)
+    return slope, max(0.0, min(1.0, r2))
+
+
+def _median_num(vals: list[float]) -> float:
+    if not vals:
+        return 0.0
+    s = sorted(vals)
+    m = len(s) // 2
+    return s[m] if len(s) % 2 == 1 else (s[m - 1] + s[m]) / 2.0
+
+
+def evaluate_soak_leak_gate(
+    samples: list[dict[str, Any]],
+    *,
+    max_pss_delta_mb: float = 25.0,
+    max_fd_delta: int = 8,
+    max_gc_delta_mb: float = 25.0,
+    max_view_delta: int = 80,
+    max_thread_delta: int = 12,
+) -> dict[str, Any]:
+    """Q3 Dirty-State & Resource Soak Gate (V11).
+
+    Evaluates 15-20 cycle soak telemetry for monotonic leaks in native PSS, managed GC heap,
+    `/proc/self/fd` open file descriptors, OS thread count, and Android View tree nodes,
+    plus dirty-state invariants (`isOperationRunning`, leaked dialogs, fatal crashes).
+    Ignores cycle-0 cold warm-up transient when >=5 samples are available.
+    """
+    findings: list[dict[str, str]] = []
+    if not samples:
+        return {
+            "passed": True,
+            "cycles": 0,
+            "pssDeltaMb": 0.0,
+            "pssSlopeMbPerCycle": 0.0,
+            "fdDelta": 0,
+            "fdSlopePerCycle": 0.0,
+            "gcDeltaMb": 0.0,
+            "viewDelta": 0,
+            "threadDelta": 0,
+            "stuckOp": False,
+            "leakedDialogs": 0,
+            "findings": findings,
+        }
+
+    def _series(key: str, *, allow_neg: bool = False) -> list[float]:
+        out: list[float] = []
+        for s in samples:
+            if not isinstance(s, dict):
+                continue
+            v = s.get(key)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                fv = float(v)
+                if math.isfinite(fv) and (allow_neg or fv >= 0.0):
+                    out.append(fv)
+        return out
+
+    def _delta_and_slope(vals: list[float]) -> tuple[float, float, float, float, float]:
+        if len(vals) < 2:
+            v0 = vals[0] if vals else 0.0
+            return 0.0, 0.0, 0.0, v0, v0
+        # Skip cycle-0 cold warm-up when we have enough cycles so initial JIT/cache warmup never false-positives
+        post = vals[1:] if len(vals) >= 5 else vals
+        base = _median_num(post[:2]) if len(post) >= 8 else post[0]
+        tail = _median_num(post[-2:]) if len(post) >= 8 else post[-1]
+        slope, r2 = compute_ols_slope(post)
+        delta = tail - base
+        if len(post) >= 4 and r2 >= 0.70 and slope > 0.0:
+            delta = max(delta, slope * (len(post) - 1))
+        return delta, slope, r2, base, tail
+
+    pss_vals = _series("nativePssMb")
+    pss_delta, pss_slope, pss_r2, pss_base, pss_tail = _delta_and_slope(pss_vals)
+    if len(pss_vals) >= 2 and pss_delta > max_pss_delta_mb and pss_slope > 0.25:
+        findings.append({
+            "severity": "HIGH",
+            "category": "soak_pss_leak",
+            "message": (
+                f"Native/Total PSS grew by +{pss_delta:.1f} MB over {len(samples)} soak cycles "
+                f"({pss_base:.1f}->{pss_tail:.1f} MB, slope={pss_slope:+.2f} MB/cycle, R2={pss_r2:.2f}, budget <= +{max_pss_delta_mb:.0f} MB)"
+            ),
+        })
+
+    fd_vals = _series("openFdCount")
+    fd_delta_f, fd_slope, fd_r2, fd_base, fd_tail = _delta_and_slope(fd_vals)
+    fd_delta = int(round(fd_delta_f))
+    if len(fd_vals) >= 2 and fd_delta > max_fd_delta and fd_slope > 0.10:
+        findings.append({
+            "severity": "HIGH",
+            "category": "soak_fd_leak",
+            "message": (
+                f"Open /proc/self/fd file descriptors leaked by +{fd_delta} over {len(samples)} soak cycles "
+                f"({int(round(fd_base))}->{int(round(fd_tail))}, slope={fd_slope:+.2f} FD/cycle, R2={fd_r2:.2f}, budget <= +{max_fd_delta})"
+            ),
+        })
+
+    gc_vals = _series("managedGcMb")
+    gc_delta, gc_slope, gc_r2, gc_base, gc_tail = _delta_and_slope(gc_vals)
+    if len(gc_vals) >= 2 and gc_delta > max_gc_delta_mb and gc_slope > 0.25:
+        findings.append({
+            "severity": "HIGH",
+            "category": "soak_managed_heap_leak",
+            "message": (
+                f"Managed GC heap grew by +{gc_delta:.1f} MB over {len(samples)} soak cycles "
+                f"({gc_base:.1f}->{gc_tail:.1f} MB, slope={gc_slope:+.2f} MB/cycle, R2={gc_r2:.2f}, budget <= +{max_gc_delta_mb:.0f} MB)"
+            ),
+        })
+
+    view_vals = _series("viewCount")
+    view_delta_f, view_slope, view_r2, view_base, view_tail = _delta_and_slope(view_vals)
+    view_delta = int(round(view_delta_f))
+    if len(view_vals) >= 2 and view_delta > max_view_delta and view_slope > 0.50:
+        findings.append({
+            "severity": "HIGH",
+            "category": "soak_view_count_leak",
+            "message": (
+                f"Android View tree leaked +{view_delta} nodes over {len(samples)} soak cycles "
+                f"({int(round(view_base))}->{int(round(view_tail))}, slope={view_slope:+.2f} views/cycle, R2={view_r2:.2f}, budget <= +{max_view_delta})"
+            ),
+        })
+
+    thread_vals = _series("threadCount")
+    thread_delta_f, thread_slope, thread_r2, thread_base, thread_tail = _delta_and_slope(thread_vals)
+    thread_delta = int(round(thread_delta_f))
+    if len(thread_vals) >= 2 and thread_delta > max_thread_delta and thread_slope > 0.15:
+        findings.append({
+            "severity": "HIGH",
+            "category": "soak_thread_leak",
+            "message": (
+                f"Process OS threads leaked by +{thread_delta} over {len(samples)} soak cycles "
+                f"({int(round(thread_base))}->{int(round(thread_tail))}, slope={thread_slope:+.2f} threads/cycle, R2={thread_r2:.2f}, budget <= +{max_thread_delta})"
+            ),
+        })
+
+    last = samples[-1] if isinstance(samples[-1], dict) else {}
+    first = samples[0] if isinstance(samples[0], dict) else {}
+    stuck_op = bool(last.get("isOperationRunning"))
+    if stuck_op:
+        findings.append({
+            "severity": "HIGH",
+            "category": "dirty_state_operation_stuck",
+            "message": f"Dirty-state lock: isOperationRunning remained TRUE after {len(samples)} soak cycles",
+        })
+
+    leaked_dialogs = int(last.get("activeDialogs") or 0)
+    if leaked_dialogs > 0:
+        findings.append({
+            "severity": "HIGH",
+            "category": "dirty_state_dialog_leak",
+            "message": f"Dirty-state modal leak: {leaked_dialogs} active dialog(s) remained open after soak completion",
+        })
+
+    fatal_start = int(first.get("sessionFatalCount") or 0)
+    fatal_end = int(last.get("sessionFatalCount") or 0)
+    if fatal_end > fatal_start:
+        findings.append({
+            "severity": "CRITICAL",
+            "category": "soak_fatal_crash",
+            "message": f"Fatal AppLogger error count increased during soak ({fatal_start} -> {fatal_end})",
+        })
+
+    if any(isinstance(s, dict) and s.get("lowMemory") is True for s in samples):
+        findings.append({
+            "severity": "HIGH",
+            "category": "soak_low_memory",
+            "message": "Android reported lowMemory=true during V11 soak",
+        })
+
+    return {
+        "passed": len(findings) == 0,
+        "cycles": len(samples),
+        "pssDeltaMb": round(pss_delta, 2),
+        "pssSlopeMbPerCycle": round(pss_slope, 3),
+        "fdDelta": fd_delta,
+        "fdSlopePerCycle": round(fd_slope, 3),
+        "gcDeltaMb": round(gc_delta, 2),
+        "viewDelta": view_delta,
+        "threadDelta": thread_delta,
+        "stuckOp": stuck_op,
+        "leakedDialogs": leaked_dialogs,
+        "findings": findings,
+    }
+
+
+def evaluate_rage_click_result(
+    res: dict[str, Any] | None,
+    *,
+    target_label: str,
+    max_block_ms: float = 1500.0,
+    expect_settled: bool = True,
+) -> dict[str, Any]:
+    """Evaluate a Q3 hostile rage-click burst for race exceptions, UI freezes, stacked modals, or stuck flags."""
+    findings: list[dict[str, str]] = []
+    if not isinstance(res, dict):
+        return {"passed": True, "maxBlockMs": 0.0, "succeeded": 0, "exceptionsCount": 0, "findings": findings}
+
+    excs = [str(e) for e in (res.get("exceptions") or []) if str(e).strip()]
+    max_blk = float(res.get("maxBlockMs") or 0.0)
+    succ = int(res.get("succeeded") or 0)
+    dlgs = int(res.get("activeDialogsAfter") or 0)
+    op_running = bool(res.get("isOperationRunningAfter"))
+
+    if excs:
+        findings.append({
+            "severity": "HIGH",
+            "category": "hostile_rage_click_exception",
+            "message": f"Rage-click on '{target_label}' threw {len(excs)} exception(s): {excs[0][:140]}",
+        })
+    if max_blk >= max_block_ms:
+        findings.append({
+            "severity": "HIGH",
+            "category": "hostile_rage_click_freeze",
+            "message": f"Rage-click on '{target_label}' froze UI thread for {max_blk:.0f}ms (>= {max_block_ms:.0f}ms budget)",
+        })
+    if dlgs > 1:
+        findings.append({
+            "severity": "HIGH",
+            "category": "dirty_state_dialog_leak",
+            "message": f"Rage-click on '{target_label}' stacked {dlgs} concurrent modal dialogs (missing debounce/re-entrancy guard)",
+        })
+    if expect_settled and op_running:
+        findings.append({
+            "severity": "HIGH",
+            "category": "dirty_state_operation_stuck",
+            "message": f"Rage-click on '{target_label}' left isOperationRunning=true after settle",
+        })
+    return {
+        "passed": len(findings) == 0,
+        "maxBlockMs": round(max_blk, 2),
+        "succeeded": succ,
+        "exceptionsCount": len(excs),
+        "findings": findings,
+    }
+
+
+def evaluate_drag_sweep_result(
+    sweep_res: dict[str, Any] | None,
+    frame_metrics: dict[str, Any] | None,
+    *,
+    target_label: str,
+    p95_budget_ms: float = 12.0,
+    max_step_block_ms: float = 50.0,
+) -> dict[str, Any]:
+    """Evaluate a Q3 continuous SeekBar/volume drag sweep under 120 Hz FrameMetrics."""
+    findings: list[dict[str, str]] = []
+    if not isinstance(sweep_res, dict):
+        return {"passed": True, "maxStepUiBlockMs": 0.0, "cpuP95Ms": None, "p95Ms": 0.0, "frozenFrames": 0, "findings": findings}
+
+    err = str(sweep_res.get("error") or "").strip()
+    if err or sweep_res.get("ok") is False:
+        # Ignore benign "No visible SeekBar" skip unless an actual runtime exception occurred
+        if "no visible seekbar" not in err.lower():
+            findings.append({
+                "severity": "HIGH",
+                "category": "drag_sweep_error",
+                "message": f"Continuous drag sweep on '{target_label}' failed: {err[:160]}",
+            })
+
+    max_step_blk = float(sweep_res.get("maxStepUiBlockMs") or 0.0)
+    if max_step_blk >= max_step_block_ms:
+        findings.append({
+            "severity": "HIGH",
+            "category": "drag_sweep_ui_stall",
+            "message": f"Continuous drag sweep on '{target_label}' stalled UI thread for {max_step_blk:.1f}ms (>= {max_step_block_ms:.0f}ms)",
+        })
+
+    fm_cpu_p95: float | None = None
+    fm_p95 = 0.0
+    fm_frozen = 0
+    if isinstance(frame_metrics, dict):
+        fm_ev = evaluate_frame_metrics_gate(frame_metrics, p95_budget_ms=p95_budget_ms, max_frozen_frames=0, min_frames=5)
+        fm_cpu_p95 = fm_ev.get("cpuP95Ms")
+        fm_p95 = float(fm_ev.get("p95Ms") or 0.0)
+        fm_frozen = int(fm_ev.get("frozenFrames") or 0)
+        for ff in fm_ev.get("findings") or []:
+            findings.append({
+                "severity": ff["severity"],
+                "category": "drag_sweep_jank_120hz",
+                "message": f"Drag sweep '{target_label}' 120 Hz jank: {ff['message']}",
+            })
+
+    return {
+        "passed": len(findings) == 0,
+        "maxStepUiBlockMs": round(max_step_blk, 2),
+        "cpuP95Ms": fm_cpu_p95,
+        "p95Ms": fm_p95,
+        "frozenFrames": fm_frozen,
+        "findings": findings,
+    }
+
+
+def evaluate_reflow_probe_result(reflow_obj: dict[str, Any] | None, scope: str) -> dict[str, Any]:
+    """Evaluate Q3 `1.3x` font-scale and landscape orientation reflow snapshots using the Q1 geometric oracle."""
+    findings: list[dict[str, str]] = []
+    variants_checked = 0
+    high_cnt = 0
+    warn_cnt = 0
+    if not isinstance(reflow_obj, dict):
+        return {"passed": True, "variantsChecked": 0, "highDefectCount": 0, "warnCount": 0, "findings": findings}
+
+    for variant in ("font_130", "landscape"):
+        sub_tree = reflow_obj.get(variant)
+        if not isinstance(sub_tree, dict):
+            continue
+        variants_checked += 1
+        geom_defects = analyze_ui_geometry_oracle(sub_tree, f"{scope}:{variant}")
+        for d in geom_defects:
+            sev = str(d.get("severity") or "MEDIUM").upper()
+            sub_cat = str(d.get("category") or "layout")
+            if sev in ("CRITICAL", "HIGH"):
+                high_cnt += 1
+                findings.append({
+                    "severity": sev,
+                    "category": "reflow_layout_defect",
+                    "message": f"[{variant}/{sub_cat}] {d['message']}",
+                })
+            elif sev == "MEDIUM":
+                warn_cnt += 1
+                findings.append({
+                    "severity": "MEDIUM",
+                    "category": "reflow_layout_warn",
+                    "message": f"[{variant}/{sub_cat}] {d['message']}",
+                })
+    return {
+        "passed": high_cnt == 0,
+        "variantsChecked": variants_checked,
+        "highDefectCount": high_cnt,
+        "warnCount": warn_cnt,
+        "findings": findings,
+    }
+
+
+def run_m3_mutation_canary_offline() -> dict[str, Any]:
+    """Prove Q3 Hostile Stress, Reflow & Dirty-State Soak (`V11`) catches 10/10 injected M3 faults with 0 FP."""
+    # Clean 20-cycle baseline (includes realistic cycle-0 cold warmup jump that plateaus!)
+    clean_samples: list[dict[str, Any]] = []
+    for i in range(20):
+        warmup = 0.0 if i == 0 else 18.0
+        clean_samples.append({
+            "nativePssMb": round(210.0 + warmup + (i % 3) * 1.2, 2),
+            "managedGcMb": round(28.0 + (4.0 if i > 0 else 0.0) + (i % 2) * 0.8, 2),
+            "openFdCount": 142 + (3 if i > 0 else 0) + (i % 2),
+            "viewCount": 310 + (4 if i % 2 == 0 else 0),
+            "threadCount": 44 + (1 if i % 3 == 0 else 0),
+            "activeDialogs": 0,
+            "isOperationRunning": False,
+            "sessionFatalCount": 0,
+            "lowMemory": False,
+        })
+    clean_soak = evaluate_soak_leak_gate(clean_samples)
+    clean_rage = evaluate_rage_click_result(
+        {"ok": True, "succeeded": 8, "maxBlockMs": 11.4, "activeDialogsAfter": 0, "isOperationRunningAfter": False, "exceptions": []},
+        target_label="Tab0:PlayBtn",
+    )
+    clean_drag = evaluate_drag_sweep_result(
+        {"ok": True, "stepsDispatched": 24, "maxStepUiBlockMs": 4.8, "error": ""},
+        {"totalFrames": 30, "ringCount": 30, "p50Ms": 4.2, "p95Ms": 9.8, "cpuP95Ms": 3.9, "frozenFrames": 0, "refreshRateHz": 120.0},
+        target_label="Tab0:VolumeSeekBar",
+    )
+    clean_reflow_tree = {
+        "schemaVersion": 2,
+        "dpDensity": 3.0,
+        "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400},
+        "activity": {
+            "type": "LinearLayout", "orient": "v", "x": 0, "y": 0, "w": 1080, "h": 2400,
+            "children": [
+                {"type": "Button", "text": "Play", "clickable": True, "x": 40, "y": 100, "w": 260, "h": 144, "fg": -1, "sp": 16.0},
+            ],
+        },
+    }
+    clean_reflow = evaluate_reflow_probe_result({"font_130": clean_reflow_tree, "landscape": clean_reflow_tree}, "Tab0")
+    clean_fp = (
+        list(clean_soak["findings"])
+        + list(clean_rage["findings"])
+        + list(clean_drag["findings"])
+        + list(clean_reflow["findings"])
+    )
+
+    def _leak_samples(field: str, per_cycle: float) -> list[dict[str, Any]]:
+        out = [dict(s) for s in clean_samples]
+        for idx, s in enumerate(out):
+            if idx >= 1:
+                val = float(s[field]) + idx * per_cycle
+                s[field] = int(round(val)) if isinstance(s[field], int) else round(val, 2)
+        return out
+
+    stuck_op_samples = [dict(s) for s in clean_samples]
+    stuck_op_samples[-1]["isOperationRunning"] = True
+
+    leaked_dlg_samples = [dict(s) for s in clean_samples]
+    leaked_dlg_samples[-1]["activeDialogs"] = 2
+
+    reflow_overflow_tree = {
+        "schemaVersion": 2,
+        "dpDensity": 3.0,
+        "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400},
+        "activity": {
+            "type": "LinearLayout", "orient": "v", "x": 0, "y": 0, "w": 1080, "h": 2400,
+            "children": [
+                {"type": "Button", "text": "Spatialize Audio Now", "clickable": True, "x": 850, "y": 100, "w": 360, "h": 144, "ell": 5, "ellMode": "end", "fg": -1, "sp": 18.0},
+            ],
+        },
+    }
+
+    checks: list[tuple[str, str, list[dict[str, str]]]] = [
+        ("M3.1_soak_pss_leak", "soak_pss_leak", evaluate_soak_leak_gate(_leak_samples("nativePssMb", 2.2))["findings"]),
+        ("M3.2_soak_fd_leak", "soak_fd_leak", evaluate_soak_leak_gate(_leak_samples("openFdCount", 1.0))["findings"]),
+        ("M3.3_soak_managed_heap_leak", "soak_managed_heap_leak", evaluate_soak_leak_gate(_leak_samples("managedGcMb", 1.9))["findings"]),
+        ("M3.4_soak_view_count_leak", "soak_view_count_leak", evaluate_soak_leak_gate(_leak_samples("viewCount", 7.0))["findings"]),
+        ("M3.5_soak_thread_leak", "soak_thread_leak", evaluate_soak_leak_gate(_leak_samples("threadCount", 1.1))["findings"]),
+        ("M3.6_dirty_state_operation_stuck", "dirty_state_operation_stuck", evaluate_soak_leak_gate(stuck_op_samples)["findings"]),
+        ("M3.7_dirty_state_dialog_leak", "dirty_state_dialog_leak", evaluate_soak_leak_gate(leaked_dlg_samples)["findings"]),
+        (
+            "M3.8_hostile_rage_click_exception",
+            "hostile_rage_click_exception",
+            evaluate_rage_click_result(
+                {"ok": False, "succeeded": 3, "maxBlockMs": 40.0, "activeDialogsAfter": 2, "isOperationRunningAfter": False, "exceptions": ["InvalidOperationException: reentrant dialog"]},
+                target_label="Tab0:AiBtn",
+            )["findings"],
+        ),
+        (
+            "M3.9_drag_sweep_jank_120hz",
+            "drag_sweep_jank_120hz",
+            evaluate_drag_sweep_result(
+                {"ok": True, "stepsDispatched": 24, "maxStepUiBlockMs": 14.0, "error": ""},
+                {"totalFrames": 36, "ringCount": 36, "p50Ms": 10.0, "p95Ms": 22.0, "cpuP95Ms": 17.8, "frozenFrames": 0, "refreshRateHz": 120.0},
+                target_label="Tab0:SeekBar",
+            )["findings"],
+        ),
+        (
+            "M3.10_reflow_layout_defect",
+            "reflow_layout_defect",
+            evaluate_reflow_probe_result({"font_130": reflow_overflow_tree, "landscape": clean_reflow_tree}, "Tab0")["findings"],
+        ),
+    ]
+
+    caught = 0
+    details: list[dict[str, Any]] = []
+    for name, expected_cat, flist in checks:
+        cats = [str(f.get("category") or "") for f in flist]
+        hit = expected_cat in cats
+        if hit:
+            caught += 1
+        details.append({"canary": name, "expected": expected_cat, "caught": hit, "got": cats})
+
+    total = len(checks)
+    return {
+        "ok": caught == total and len(clean_fp) == 0,
+        "caught": caught,
+        "total": total,
+        "detectRate": caught / total,
+        "cleanFalsePositives": len(clean_fp),
+        "cleanDefects": clean_fp,
+        "details": details,
+    }
+
+
 def analyze_ui_tree_anomalies(tree_obj: Any, scope: str) -> list[dict[str, str]]:
     """Inspect a `ui_tree` JSON object for real user-visible UI & Q1 geometric/visual defects."""
     defects: list[dict[str, str]] = []
@@ -2022,6 +2495,16 @@ def generate_report_markdown(report: dict[str, Any]) -> str:
             f"frozen=`{q2.get('frozenFrames', 0)}` | "
             f"strictMode=`{q2.get('strictModeViolations', 0)}`"
         )
+    q3 = report.get("q3SoakSummary")
+    if isinstance(q3, dict) and q3.get("cycles", 0) > 0:
+        lines.append(
+            f"- **Q3 Soak & Stress Gate (`V11`):** `{'PASS' if q3.get('passed') else 'FAIL'}` | "
+            f"cycles=`{q3.get('cycles', 0)}` | "
+            f"ΔPSS=`{q3.get('pssDeltaMb', 0):+.1f}MB` (`{q3.get('pssSlopeMbPerCycle', 0):+.2f}/cyc`) | "
+            f"ΔFD=`{q3.get('fdDelta', 0):+d}` | ΔGC=`{q3.get('gcDeltaMb', 0):+.1f}MB` | "
+            f"ΔViews=`{q3.get('viewDelta', 0):+d}` | ΔThreads=`{q3.get('threadDelta', 0):+d}` | "
+            f"stuckOp=`{q3.get('stuckOp', False)}` | dialogs=`{q3.get('leakedDialogs', 0)}`"
+        )
     lines.append("")
 
     vectors = report.get("vectors") or []
@@ -2271,6 +2754,7 @@ class LiveBugHunter:
         enable_strict_mode: bool = False,
         q2_p95_budget_ms: float = 12.0,
         q2_touch_budget_ms: float = 50.0,
+        soak_cycles: int = 16,
     ) -> None:
         self.bridge = bridge
         self.mode = mode
@@ -2283,6 +2767,7 @@ class LiveBugHunter:
         self.enable_strict_mode = enable_strict_mode
         self.q2_p95_budget_ms = float(q2_p95_budget_ms)
         self.q2_touch_budget_ms = float(q2_touch_budget_ms)
+        self.soak_cycles = max(2, min(30, int(soak_cycles)))
         self.ledger = FindingLedger()
         self.vector_summaries: list[dict[str, Any]] = []
         self.meta: dict[str, Any] = {
@@ -2309,6 +2794,21 @@ class LiveBugHunter:
             "frameCpuP95Ms": None,
             "frozenFrames": 0,
             "strictModeViolations": 0,
+        }
+        self._q3_summary: dict[str, Any] = {
+            "passed": True,
+            "cycles": 0,
+            "pssDeltaMb": 0.0,
+            "pssSlopeMbPerCycle": 0.0,
+            "fdDelta": 0,
+            "gcDeltaMb": 0.0,
+            "viewDelta": 0,
+            "threadDelta": 0,
+            "stuckOp": False,
+            "leakedDialogs": 0,
+            "rageTargets": 0,
+            "dragSweeps": 0,
+            "reflowTabs": 0,
         }
         self._created_cache_files: list[str] = []
         self._has_chaos_hunt_cmd = False
@@ -2513,6 +3013,7 @@ class LiveBugHunter:
             "totalUniqueFindings": len(self.ledger.ranked()),
             "totalActiveFindings": len(self.ledger.active_findings()),
             "q2GateSummary": dict(self._q2_summary),
+            "q3SoakSummary": dict(self._q3_summary),
             "vectors": self.vector_summaries,
             "findings": self.ledger.to_dicts(),
         }
@@ -3114,6 +3615,9 @@ class LiveBugHunter:
                         )
 
         steps: list[dict[str, Any]] = []
+        rage_done = 0
+        drag_done = 0
+        reflow_done = 0
         if self.allow_mutate:
             steps.append({"cmd": "tab_switch", "args": {"index": 4}})
             for q in ("binaural", ".*+?[]()", "🎧🔥", "zzzz_no_match_999", "a" * 160, ""):
@@ -3127,8 +3631,123 @@ class LiveBugHunter:
         if res and res[-1]["subCmd"] == "log_tail" and res[-1]["ok"]:
             self._ingest_applog_delta(res[-1]["body"], "V6_ui_monkey_and_audit", "tab thrash + search fuzz")
 
-        self._watch_step_delta("V6_ui_monkey_and_audit", "ui_audit + Q1 geometric scan + search fuzz", check_logcat=True)
-        return f"ran ui_audit + Q1 geom scan ({geom_tabs_scanned} tabs, ssim={ssim_tabs_checked}) + search fuzz burst"
+        # 6c. Q3 Hostile Rage-Clicks, Mid-Load Back, Continuous Drag Sweep (120 Hz) & Reflow Audit (1.3x Font + Landscape)
+        if self.allow_mutate:
+            # 6c-1. Hostile Rage-Clicks across Play / 3D Room / Settings interactive controls
+            for r_tab, r_label, r_args in (
+                (0, "Tab0:PlayButton", {"action": "rage_click", "type": "Button", "index": 0, "count": 6, "intervalMs": 22}),
+                (1, "Tab1:3DRoomButton", {"action": "rage_click", "type": "Button", "index": 0, "count": 6, "intervalMs": 22}),
+                (4, "Tab4:SettingsButton", {"action": "rage_click", "type": "Button", "index": 0, "count": 5, "intervalMs": 25}),
+            ):
+                self.bridge.cmd("tab_switch", {"index": r_tab}, tier=1, timeout_sec=15)
+                rc = self.bridge.cmd("ui_interact", r_args, tier=2, timeout_sec=20)
+                if isinstance(rc.get("json"), dict) and rc["json"].get("action") == "rage_click":
+                    rage_done += 1
+                    rc_ev = evaluate_rage_click_result(rc["json"], target_label=r_label)
+                    for rf in rc_ev["findings"]:
+                        self.ledger.record(
+                            severity=rf["severity"],
+                            vector="V6_ui_monkey_and_audit",
+                            source="hostile_rage_q3",
+                            category=rf["category"],
+                            title=rf["message"][:200],
+                            repro_step=f"tab_switch({r_tab}) -> ui_interact(rage_click)",
+                            evidence=rc["body"][:300],
+                        )
+                self.bridge.cmd("ui_interact", {"action": "dismiss_dialogs"}, tier=2, timeout_sec=10)
+
+            # 6c-2. Mid-Load Back Press Stress (verify no stuck isOperationRunning or leaked dialog)
+            orig_loaded = str(self._baseline_state.get("loadedFile") or "")
+            if orig_loaded:
+                ml = self.bridge.pipeline([
+                    {"cmd": "tab_switch", "args": {"index": 0}},
+                    {"cmd": "open_file", "args": {"path": orig_loaded, "autoPlay": False}},
+                    {"cmd": "ui_interact", "args": {"action": "back"}},
+                    {"cmd": "ui_interact", "args": {"action": "dismiss_dialogs"}},
+                    {"cmd": "app_state"},
+                ], stop_on_error=False, tier=2, timeout_sec=30)
+                if len(ml) >= 5 and ml[-1]["ok"] and isinstance(ml[-1]["json"], dict):
+                    st_after = ml[-1]["json"]
+                    if st_after.get("isOperationRunning"):
+                        self.ledger.record(
+                            severity="HIGH",
+                            vector="V6_ui_monkey_and_audit",
+                            source="hostile_back_q3",
+                            category="dirty_state_operation_stuck",
+                            title="Mid-load Back press left isOperationRunning=true",
+                            repro_step="open_file -> immediate ui_interact(back)",
+                            evidence=ml[-1]["body"][:260],
+                        )
+
+            # 6c-3. Continuous SeekBar / Volume Drag Sweep under 120 Hz FrameMetrics
+            has_rt = "runtime_telemetry" in getattr(self, "_capabilities", ())
+            for d_tab, d_label in ((0, "Tab0:MediaSeekBar"), (1, "Tab1:RoomSeekBar")):
+                self.bridge.cmd("tab_switch", {"index": d_tab}, tier=1, timeout_sec=15)
+                if has_rt:
+                    self.bridge.cmd("runtime_telemetry", {"resetFrameMetrics": True}, tier=0, timeout_sec=15)
+                ds = self.bridge.cmd(
+                    "ui_interact",
+                    {"action": "drag_sweep", "steps": 20, "stepMs": 14, "restoreProgress": True},
+                    tier=2,
+                    timeout_sec=20,
+                )
+                if isinstance(ds.get("json"), dict) and ds["json"].get("action") == "drag_sweep":
+                    if ds["json"].get("ok") or "no visible seekbar" not in str(ds["json"].get("error") or "").lower():
+                        drag_done += 1
+                        fm_after = None
+                        if has_rt:
+                            rt_d = self.bridge.cmd("runtime_telemetry", {}, tier=0, timeout_sec=15)
+                            if rt_d["ok"] and isinstance(rt_d["json"], dict):
+                                fm_after = rt_d["json"].get("frameMetrics")
+                        ds_ev = evaluate_drag_sweep_result(
+                            ds["json"],
+                            fm_after,
+                            target_label=d_label,
+                            p95_budget_ms=self.q2_p95_budget_ms,
+                        )
+                        for df in ds_ev["findings"]:
+                            self.ledger.record(
+                                severity=df["severity"],
+                                vector="V6_ui_monkey_and_audit",
+                                source="drag_sweep_q3",
+                                category=df["category"],
+                                title=df["message"][:200],
+                                repro_step=f"tab_switch({d_tab}) -> ui_interact(drag_sweep) -> frameMetrics",
+                                evidence=ds["body"][:260],
+                            )
+
+            # 6c-4. Reversible 1.3x Font-Scale & Landscape Orientation Reflow Audit
+            for rf_tab, rf_label in ((0, "Tab0"), (1, "Tab1"), (4, "Tab4")):
+                self.bridge.cmd("tab_switch", {"index": rf_tab}, tier=1, timeout_sec=15)
+                rp = self.bridge.cmd(
+                    "ui_interact",
+                    {"action": "reflow_probe", "mode": "both", "fontScale": 1.3, "maxDepth": 12},
+                    tier=2,
+                    timeout_sec=25,
+                )
+                if rp["ok"] and isinstance(rp.get("json"), dict) and rp["json"].get("action") == "reflow_probe":
+                    reflow_done += 1
+                    rf_ev = evaluate_reflow_probe_result(rp["json"], rf_label)
+                    for rff in rf_ev["findings"]:
+                        self.ledger.record(
+                            severity=rff["severity"],
+                            vector="V6_ui_monkey_and_audit",
+                            source="reflow_q3",
+                            category=rff["category"],
+                            title=rff["message"][:200],
+                            repro_step=f"tab_switch({rf_tab}) -> ui_interact(reflow_probe fontScale=1.3 + landscape)",
+                            evidence=rff["message"][:320],
+                        )
+
+            self._q3_summary["rageTargets"] = rage_done
+            self._q3_summary["dragSweeps"] = drag_done
+            self._q3_summary["reflowTabs"] = reflow_done
+
+        self._watch_step_delta("V6_ui_monkey_and_audit", "ui_audit + Q1 geom + Q3 hostile stress/reflow", check_logcat=True)
+        return (
+            f"ran ui_audit + Q1 geom ({geom_tabs_scanned} tabs, ssim={ssim_tabs_checked}) + "
+            f"Q3 hostile (rage={rage_done}, drag={drag_done}, reflow={reflow_done})"
+        )
 
     # ==================== VECTOR 7: ACOUSTIC EXTREME PARAMETER FUZZER ====================
     def _v7_acoustic_extreme_fuzzer(self) -> str:
@@ -3566,6 +4185,114 @@ public static class SpatialTrajectoryHotProbe {
         except Exception as exc:
             return f"hot_exec trajectory probe unavailable ({type(exc).__name__}: {str(exc)[:80]})"
 
+    # ==================== VECTOR 11: Q3 15-20 CYCLE DIRTY-STATE, PSS, HEAP, VIEW & FD SOAK ====================
+    def _capture_soak_sample(self, *, force_gc: bool = False) -> dict[str, Any] | None:
+        """Capture one Q3 soak sample via native `soak_snapshot` (with pre-Q3 APK fallback)."""
+        if "soak_snapshot" in getattr(self, "_capabilities", ()):
+            r = self.bridge.cmd("soak_snapshot", {"forceGc": force_gc}, tier=0, timeout_sec=15)
+            if r["ok"] and isinstance(r.get("json"), dict):
+                return r["json"]
+        # Seamless fallback for pre-Q3 APKs using memory + app_state + /proc/self/fd shell probe
+        fb = self.bridge.pipeline([
+            {"cmd": "memory"},
+            {"cmd": "app_state"},
+            {"cmd": "shell_exec", "args": {"command": "ls /proc/self/fd 2>/dev/null | wc -l", "timeoutSec": 6}},
+        ], stop_on_error=False, tier=2, timeout_sec=20)
+        mem = fb[0]["json"] if len(fb) > 0 and fb[0]["ok"] and isinstance(fb[0]["json"], dict) else {}
+        st = fb[1]["json"] if len(fb) > 1 and fb[1]["ok"] and isinstance(fb[1]["json"], dict) else {}
+        fd_cnt = -1
+        if len(fb) > 2 and fb[2]["ok"] and isinstance(fb[2]["json"], dict):
+            try:
+                fd_cnt = int(str(fb[2]["json"].get("stdout") or "").strip().splitlines()[0])
+            except Exception:
+                fd_cnt = -1
+        if not mem and not st:
+            return None
+        return {
+            "nativePssMb": mem.get("nativePssMb", -1.0),
+            "managedGcMb": mem.get("managedGcMb", -1.0),
+            "openFdCount": mem.get("openFdCount", fd_cnt),
+            "threadCount": mem.get("threadCount", -1),
+            "viewCount": -1,
+            "activeDialogs": int(st.get("activeDialogCount") or 0),
+            "isOperationRunning": bool(st.get("isOperationRunning")),
+            "lowMemory": bool(mem.get("lowMemory")),
+            "sessionFatalCount": 0,
+        }
+
+    def _v11_dirty_state_soak(self) -> str:
+        """Run 15-20 cycle dirty-state soak tracking native PSS, managed GC, View count, threads, /proc/self/fd, & stuck flags."""
+        if not self.allow_mutate:
+            return "skipped (--no-mutate)"
+
+        cycles = 8 if self.mode == "quick" else self.soak_cycles
+        samples: list[dict[str, Any]] = []
+        base_iso = bool(self._baseline_settings.get("Iso226Enabled", False))
+        has_soak_cmd = "soak_snapshot" in getattr(self, "_capabilities", ())
+
+        s0 = self._capture_soak_sample(force_gc=True)
+        if s0:
+            samples.append(s0)
+
+        for cyc in range(cycles):
+            flip_iso = (not base_iso) if (cyc % 2 == 0) else base_iso
+            tab_a = cyc % 5
+            tab_b = (cyc + 2) % 5
+            steps: list[dict[str, Any]] = [
+                {"cmd": "tab_switch", "args": {"index": tab_a}},
+                {"cmd": "settings_set", "args": {"key": "Iso226Enabled", "value": flip_iso}},
+                {"cmd": "tab_switch", "args": {"index": tab_b}},
+                {"cmd": "ui_interact", "args": {"action": "scroll_by", "dy": 420 if cyc % 2 == 0 else -420}},
+                {"cmd": "ui_interact", "args": {"action": "dismiss_dialogs"}},
+            ]
+            if has_soak_cmd:
+                steps.append({"cmd": "soak_snapshot", "args": {"forceGc": (cyc == cycles - 1)}})
+            res = self.bridge.pipeline(steps, stop_on_error=False, tier=2, timeout_sec=30)
+            if has_soak_cmd and len(res) >= 6 and res[-1]["ok"] and isinstance(res[-1].get("json"), dict):
+                samples.append(res[-1]["json"])
+            elif not has_soak_cmd and (cyc % 2 == 1 or cyc == cycles - 1):
+                sn = self._capture_soak_sample(force_gc=(cyc == cycles - 1))
+                if sn:
+                    samples.append(sn)
+
+        # Ensure Iso226Enabled restored & final forced-GC settled snapshot recorded
+        self.bridge.cmd("settings_set", {"key": "Iso226Enabled", "value": base_iso}, tier=1, timeout_sec=15)
+        self.bridge.cmd("ui_interact", {"action": "dismiss_dialogs"}, tier=2, timeout_sec=10)
+        s_end = self._capture_soak_sample(force_gc=True)
+        if s_end:
+            samples.append(s_end)
+
+        ev = evaluate_soak_leak_gate(samples)
+        self._q3_summary.update({
+            "passed": ev["passed"],
+            "cycles": ev["cycles"],
+            "pssDeltaMb": ev["pssDeltaMb"],
+            "pssSlopeMbPerCycle": ev["pssSlopeMbPerCycle"],
+            "fdDelta": ev["fdDelta"],
+            "gcDeltaMb": ev["gcDeltaMb"],
+            "viewDelta": ev["viewDelta"],
+            "threadDelta": ev["threadDelta"],
+            "stuckOp": ev["stuckOp"],
+            "leakedDialogs": ev["leakedDialogs"],
+        })
+        for f in ev["findings"]:
+            self.ledger.record(
+                severity=f["severity"],
+                vector="V11_dirty_state_soak",
+                source="soak_gate_q3",
+                category=f["category"],
+                title=f["message"][:200],
+                repro_step=f"V11 {cycles}-cycle dirty-state soak",
+                evidence=json.dumps(self._q3_summary, ensure_ascii=False)[:360],
+            )
+        self._watch_step_delta("V11_dirty_state_soak", f"{cycles}-cycle dirty-state soak", check_logcat=True)
+        return (
+            f"soak {ev['cycles']} samples: ΔPSS={ev['pssDeltaMb']:+.1f}MB "
+            f"(slope={ev['pssSlopeMbPerCycle']:+.2f}/cyc), ΔFD={ev['fdDelta']:+d}, "
+            f"ΔGC={ev['gcDeltaMb']:+.1f}MB, ΔViews={ev['viewDelta']:+d}, "
+            f"stuckOp={ev['stuckOp']}, dialogs={ev['leakedDialogs']}"
+        )
+
     # ==================== GUARANTEED CLEAN STATE RESTORE ====================
     def _restore_settings(self) -> bool:
         if not self._baseline_settings:
@@ -3651,6 +4378,7 @@ public static class SpatialTrajectoryHotProbe {
                 ("V8_inapp_chaos_and_watchdog", self._v8_inapp_chaos_and_watchdog),
                 ("V9_ui_latency_and_search_oracle", self._v9_ui_latency_and_search_oracle),
                 ("V10_spatial_trajectory_and_hot_exec", self._v10_spatial_trajectory_and_hot_exec),
+                ("V11_dirty_state_soak", self._v11_dirty_state_soak),
             ]
             try:
                 for vname, vfn in all_vectors:
@@ -3675,6 +4403,7 @@ public static class SpatialTrajectoryHotProbe {
             "totalUniqueFindings": len(self.ledger.ranked()),
             "totalActiveFindings": len(self.ledger.active_findings()),
             "q2GateSummary": dict(self._q2_summary),
+            "q3SoakSummary": dict(self._q3_summary),
             "vectors": self.vector_summaries,
             "findings": self.ledger.to_dicts(),
         }
@@ -3739,6 +4468,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strict-mode", action="store_true", help="Enable opt-in Q2 QA StrictMode main-thread violation detector (auto-restored OFF)")
     p.add_argument("--q2-p95-ms", type=float, default=12.0, help="Q2 120 Hz FrameMetrics P95 budget in ms (default: 12.0)")
     p.add_argument("--q2-touch-ms", type=float, default=50.0, help="Q2 gesture/tab touch-to-first-frame budget in ms (default: 50.0)")
+    p.add_argument("--soak-cycles", type=int, default=16, help="Q3 V11 dirty-state soak cycles (default: 16)")
     p.add_argument("--quiet", action="store_true", help="Suppress stderr live progress logs")
     p.add_argument("--url", default="", help="Override relay URL")
     p.add_argument("--pair-secret", default="", help="Override 64-hex pair secret")
@@ -3770,6 +4500,7 @@ def main(argv: list[str] | None = None) -> int:
             enable_strict_mode=args.strict_mode,
             q2_p95_budget_ms=args.q2_p95_ms,
             q2_touch_budget_ms=args.q2_touch_ms,
+            soak_cycles=args.soak_cycles,
         )
         sel = [v.strip() for v in args.vectors.split(",") if v.strip()] if args.vectors else None
         report = hunter.run_hunt(selected_vectors=sel)

@@ -246,6 +246,12 @@ public static partial class LiveDiagnosticBridgeService {
                         ? (true, await host.GetRuntimeTelemetryJsonAsync().ConfigureAwait(false))
                         : (true, AndroidRuntimeTelemetry.BuildRuntimeTelemetryJson(context, null, maxExits));
                 }
+                case "soak_snapshot": {
+                    bool forceGc = GetArgBool(argsEl, "forceGc", false);
+                    return host != null
+                        ? (true, await host.GetSoakSnapshotJsonAsync(forceGc).ConfigureAwait(false))
+                        : (true, AndroidRuntimeTelemetry.BuildSoakSnapshotJson(context, forceGc));
+                }
                 case "cortex_profiles": {
                     int sr = GetArgInt(argsEl, "sampleRate", 48000, 16000, 192000);
                     string json = await Task.Run(() => {
@@ -893,12 +899,17 @@ public static partial class LiveDiagnosticBridgeService {
             lowMem = mi.LowMemory;
         }
         int thermalCode = AndroidRuntimeTelemetry.GetThermalStatusCode(context);
+        (double totalPssMb, _, _, _, double nativeHeapAllocMb) = AndroidRuntimeTelemetry.ReadProcessMemoryBreakdownMb();
         return JsonSerializer.Serialize(new {
             availRamMb = availMb,
             totalRamMb = totalMb,
             thresholdMb = threshMb,
             lowMemory = lowMem,
             managedGcMb = gcMb,
+            nativePssMb = totalPssMb,
+            nativeHeapAllocMb,
+            openFdCount = AndroidRuntimeTelemetry.ReadOpenFdCount(),
+            threadCount = AndroidRuntimeTelemetry.ReadThreadCount(),
             thermalStatus = AndroidRuntimeTelemetry.DescribeThermalStatus(thermalCode),
             frameMetrics = AndroidRuntimeTelemetry.BuildFrameMetricsObject(),
             exitReasons = AndroidRuntimeTelemetry.ReadHistoricalExitReasons(context, 3),

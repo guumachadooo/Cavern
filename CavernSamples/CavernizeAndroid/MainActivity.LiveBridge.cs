@@ -96,6 +96,45 @@ public partial class MainActivity : ILiveBridgeAppHost {
     Task<string> ILiveBridgeAppHost.GetRuntimeTelemetryJsonAsync() =>
         Task.FromResult(AndroidRuntimeTelemetry.BuildRuntimeTelemetryJson(this, audioOutput));
 
+    async Task<string> ILiveBridgeAppHost.GetSoakSnapshotJsonAsync(bool forceGc) {
+        (int views, int clickables, int dlgs, bool opRunning, int tab) = await RunOnUiThreadWithTimeoutAsync(() => {
+            (int total, int clickable) = CountInspectableViews();
+            return (total, clickable, OneUiModalDialog.GetActiveDialogs().Count, isOperationRunning, activeTab);
+        }, 5000).ConfigureAwait(false);
+        return AndroidRuntimeTelemetry.BuildSoakSnapshotJson(
+            this,
+            forceGc: forceGc,
+            viewCount: views,
+            clickableViewCount: clickables,
+            activeDialogs: dlgs,
+            isOperationRunning: opRunning,
+            activeTab: tab);
+    }
+
+    (int totalViews, int clickableViews) CountInspectableViews() {
+        int total = 0;
+        int clickable = 0;
+        void WalkCount(View v, int depth) {
+            if (v == null || depth > 28) {
+                return;
+            }
+            total++;
+            if (v.Clickable && v.Enabled) {
+                clickable++;
+            }
+            if (v is ViewGroup vg) {
+                int cnt = vg.ChildCount;
+                for (int i = 0; i < cnt; i++) {
+                    WalkCount(vg.GetChildAt(i), depth + 1);
+                }
+            }
+        }
+        foreach (View r in GetInspectableUiRoots(includeDialogs: true)) {
+            WalkCount(r, 0);
+        }
+        return (total, clickable);
+    }
+
     Task<string> ILiveBridgeAppHost.GetDspTelemetryJsonAsync() => RunOnUiThreadWithTimeoutAsync(() => {
         var rot = playerEngine?.ListenerRotation ?? default;
         var pos = playerEngine?.ListenerPosition ?? default;
@@ -296,16 +335,35 @@ public partial class MainActivity : ILiveBridgeAppHost {
 
     Task<string> ILiveBridgeAppHost.DumpUiTreeJsonAsync(int maxDepth, bool includeGeometry) => RunOnUiThreadWithTimeoutAsync(() => {
         EnsureTabLaidOut(activeTab);
+        object snap = BuildUiTreeSnapshotObject(maxDepth, includeGeometry);
+        return JsonSerializer.Serialize(snap, new JsonSerializerOptions {
+            WriteIndented = !includeGeometry,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        });
+    });
+
+    object BuildUiTreeSnapshotObject(
+        int maxDepth,
+        bool includeGeometry,
+        View rootOverride = null,
+        int? overrideDispX = null,
+        int? overrideDispY = null,
+        int? overrideDispW = null,
+        int? overrideDispH = null,
+        float? overrideFontScale = null,
+        bool includeDialogs = true) {
         Stopwatch walkSw = Stopwatch.StartNew();
         int nodes = 0;
         const int maxNodes = 480;
         float density = Math.Max(0.75f, Resources?.DisplayMetrics?.Density ?? 3f);
-        float fontScale = Math.Max(0.5f, Resources?.Configuration?.FontScale ?? 1f);
+        float fontScale = overrideFontScale ?? Math.Max(0.5f, Resources?.Configuration?.FontScale ?? 1f);
         int screenW = Resources?.DisplayMetrics?.WidthPixels ?? 1080;
         int screenH = Resources?.DisplayMetrics?.HeightPixels ?? 2400;
-        View mainRoot = rootFrameHost ?? Window?.DecorView;
-        int dispW = mainRoot != null && mainRoot.Width > 0 ? mainRoot.Width : screenW;
-        int dispH = mainRoot != null && mainRoot.Height > 0 ? mainRoot.Height : screenH;
+        View mainRoot = rootOverride ?? rootFrameHost ?? Window?.DecorView;
+        int dispX = overrideDispX ?? 0;
+        int dispY = overrideDispY ?? 0;
+        int dispW = overrideDispW ?? (mainRoot != null && mainRoot.Width > 0 ? mainRoot.Width : screenW);
+        int dispH = overrideDispH ?? (mainRoot != null && mainRoot.Height > 0 ? mainRoot.Height : screenH);
         int[] locBuf = new int[2];
 
         View activeTabContainer = (tabContainers != null && activeTab >= 0 && activeTab < tabContainers.Length)
@@ -469,24 +527,26 @@ public partial class MainActivity : ILiveBridgeAppHost {
             };
         }
 
-        IReadOnlyList<Dialog> activeDlgs = OneUiModalDialog.GetActiveDialogs();
         List<object> dialogTrees = [];
-        for (int i = 0; i < activeDlgs.Count; i++) {
-            View dv = activeDlgs[i]?.Window?.DecorView;
-            if (dv != null) {
-                dialogTrees.Add(Walk(dv, 0));
+        if (includeDialogs) {
+            IReadOnlyList<Dialog> activeDlgs = OneUiModalDialog.GetActiveDialogs();
+            for (int i = 0; i < activeDlgs.Count; i++) {
+                View dv = activeDlgs[i]?.Window?.DecorView;
+                if (dv != null) {
+                    dialogTrees.Add(Walk(dv, 0));
+                }
             }
         }
         object activityTree = mainRoot != null ? Walk(mainRoot, 0) : null;
         walkSw.Stop();
 
-        return JsonSerializer.Serialize(new {
+        return new {
             schemaVersion = includeGeometry ? 2 : 1,
             activeTab,
             activeDialogs = dialogTrees.Count,
             dpDensity = includeGeometry ? (float?)Math.Round(density, 2) : null,
             fontScale = includeGeometry ? (float?)Math.Round(fontScale, 2) : null,
-            displayRect = includeGeometry ? new { x = 0, y = 0, w = dispW, h = dispH, screenW, screenH } : null,
+            displayRect = includeGeometry ? new { x = dispX, y = dispY, w = dispW, h = dispH, screenW, screenH } : null,
             walkMs = includeGeometry ? (double?)Math.Round(walkSw.Elapsed.TotalMilliseconds, 2) : null,
             nodeCount = nodes,
             designTokens = includeGeometry ? new {
@@ -501,11 +561,8 @@ public partial class MainActivity : ILiveBridgeAppHost {
             } : null,
             dialogs = dialogTrees.Count > 0 ? dialogTrees : null,
             activity = activityTree
-        }, new JsonSerializerOptions {
-            WriteIndented = !includeGeometry,
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-        });
-    });
+        };
+    }
 
     Task<string> ILiveBridgeAppHost.CaptureUiScreenshotJsonAsync(int maxWidth, int quality) => RunOnUiThreadWithTimeoutAsync(() => {
         EnsureTabLaidOut(activeTab);
@@ -678,14 +735,24 @@ public partial class MainActivity : ILiveBridgeAppHost {
         return (clicked, clicked ? $"Clicked match #{pick} of {matches.Count} for '{textQuery}'." : $"PerformClick returned false for '{textQuery}'.");
     });
 
-    Task<(bool ok, string json)> ILiveBridgeAppHost.UiInteractAsync(JsonElement argsEl) => RunOnUiThreadWithTimeoutAsync(() => {
-        string action = ReadJsonStr(argsEl, "action", "find").Trim().ToLowerInvariant();
-        string query = ReadJsonStr(argsEl, "query", ReadJsonStr(argsEl, "text", ""));
-        string typeFilter = ReadJsonStr(argsEl, "type", "");
-        int index = ReadJsonInt(argsEl, "index", 0, 0, 200);
-        bool includeDialogs = ReadJsonBool(argsEl, "includeDialogs", true);
+    async Task<(bool ok, string json)> ILiveBridgeAppHost.UiInteractAsync(JsonElement argsEl) {
+        string topAction = ReadJsonStr(argsEl, "action", "find").Trim().ToLowerInvariant();
+        if (topAction == "rage_click") {
+            return await ExecuteRageClickAsync(argsEl).ConfigureAwait(false);
+        }
+        if (topAction == "drag_sweep") {
+            return await ExecuteDragSweepAsync(argsEl).ConfigureAwait(false);
+        }
+        return await RunOnUiThreadWithTimeoutAsync(() => {
+            string action = topAction;
+            string query = ReadJsonStr(argsEl, "query", ReadJsonStr(argsEl, "text", ""));
+            string typeFilter = ReadJsonStr(argsEl, "type", "");
+            int index = ReadJsonInt(argsEl, "index", 0, 0, 200);
+            bool includeDialogs = ReadJsonBool(argsEl, "includeDialogs", true);
 
-        switch (action) {
+            switch (action) {
+                case "reflow_probe":
+                    return ExecuteReflowProbeOnUiThread(argsEl);
             case "dismiss_dialogs": {
                 int count = OneUiModalDialog.DismissAllActiveDialogs();
                 return (true, JsonSerializer.Serialize(new { action, dismissed = count }));
@@ -845,9 +912,329 @@ public partial class MainActivity : ILiveBridgeAppHost {
                 return (true, JsonSerializer.Serialize(new { action, x1, y1, x2, y2, end }));
             }
             default:
-                return (false, $"Unknown ui_interact action '{action}'. Valid: find, click, long_click, set_text, set_checked, set_progress, select_item, scroll_by, tap_xy, swipe_xy, back, dismiss_dialogs, dump_dialogs.");
+                return (false, $"Unknown ui_interact action '{action}'. Valid: find, click, long_click, rage_click, drag_sweep, reflow_probe, set_text, set_checked, set_progress, select_item, scroll_by, tap_xy, swipe_xy, back, dismiss_dialogs, dump_dialogs.");
         }
-    });
+        }).ConfigureAwait(false);
+    }
+
+    async Task<(bool ok, string json)> ExecuteRageClickAsync(JsonElement argsEl) {
+        string query = ReadJsonStr(argsEl, "query", ReadJsonStr(argsEl, "text", ""));
+        string typeFilter = ReadJsonStr(argsEl, "type", "");
+        int index = ReadJsonInt(argsEl, "index", 0, 0, 200);
+        int count = ReadJsonInt(argsEl, "count", 8, 2, 16);
+        int intervalMs = ReadJsonInt(argsEl, "intervalMs", 25, 8, 150);
+        bool includeDialogs = ReadJsonBool(argsEl, "includeDialogs", true);
+
+        int succeeded = 0;
+        int failed = 0;
+        double maxBlockMs = 0.0;
+        List<string> exceptions = [];
+        string targetType = "";
+        Stopwatch totalSw = Stopwatch.StartNew();
+
+        for (int i = 0; i < count; i++) {
+            (bool clicked, double blockMs, string tType, string err) = await RunOnUiThreadWithTimeoutAsync(() => {
+                Stopwatch sw = Stopwatch.StartNew();
+                try {
+                    List<View> matches = FindViews(query, typeFilter, clickableOnly: true, includeDialogs);
+                    if (matches.Count == 0) {
+                        matches = FindViews(query, typeFilter, clickableOnly: false, includeDialogs);
+                    }
+                    if (matches.Count == 0) {
+                        sw.Stop();
+                        return (false, sw.Elapsed.TotalMilliseconds, "", $"No visible View found matching query='{query}' type='{typeFilter}'.");
+                    }
+                    View target = matches[Math.Clamp(index, 0, matches.Count - 1)];
+                    bool ok = target.PerformClick();
+                    sw.Stop();
+                    return (ok, sw.Elapsed.TotalMilliseconds, target.GetType().Name, "");
+                } catch (Exception ex) {
+                    sw.Stop();
+                    return (false, sw.Elapsed.TotalMilliseconds, "", $"{ex.GetType().Name}: {ex.Message}");
+                }
+            }, 6000).ConfigureAwait(false);
+
+            if (!string.IsNullOrEmpty(tType)) {
+                targetType = tType;
+            }
+            if (blockMs > maxBlockMs) {
+                maxBlockMs = blockMs;
+            }
+            if (!string.IsNullOrEmpty(err)) {
+                failed++;
+                if (exceptions.Count < 5) {
+                    exceptions.Add(err);
+                }
+            } else if (clicked) {
+                succeeded++;
+            } else {
+                failed++;
+            }
+            if (i + 1 < count) {
+                await Task.Delay(intervalMs).ConfigureAwait(false);
+            }
+        }
+        totalSw.Stop();
+
+        (int activeDlgs, bool opRunning) = await RunOnUiThreadWithTimeoutAsync(() =>
+            (OneUiModalDialog.GetActiveDialogs().Count, isOperationRunning), 4000).ConfigureAwait(false);
+
+        bool overallOk = succeeded > 0 && exceptions.Count == 0;
+        return (overallOk, JsonSerializer.Serialize(new {
+            action = "rage_click",
+            ok = overallOk,
+            query,
+            type = targetType,
+            requested = count,
+            intervalMs,
+            succeeded,
+            failed,
+            maxBlockMs = Math.Round(maxBlockMs, 2),
+            totalMs = Math.Round(totalSw.Elapsed.TotalMilliseconds, 1),
+            activeDialogsAfter = activeDlgs,
+            isOperationRunningAfter = opRunning,
+            exceptions
+        }, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    async Task<(bool ok, string json)> ExecuteDragSweepAsync(JsonElement argsEl) {
+        string query = ReadJsonStr(argsEl, "query", ReadJsonStr(argsEl, "text", ""));
+        string typeFilter = ReadJsonStr(argsEl, "type", "");
+        int index = ReadJsonInt(argsEl, "index", 0, 0, 200);
+        int steps = ReadJsonInt(argsEl, "steps", 24, 6, 60);
+        int stepMs = ReadJsonInt(argsEl, "stepMs", 14, 8, 40);
+        float fromRatio = Math.Clamp((float)ReadJsonDouble(argsEl, "fromRatio", 0.12), 0.02f, 0.98f);
+        float toRatio = Math.Clamp((float)ReadJsonDouble(argsEl, "toRatio", 0.88), 0.02f, 0.98f);
+        bool restoreProgress = ReadJsonBool(argsEl, "restoreProgress", true);
+        bool includeDialogs = ReadJsonBool(argsEl, "includeDialogs", true);
+
+        (bool found, View target, string targetType, int startProg, int width, int height) = await RunOnUiThreadWithTimeoutAsync(() => {
+            List<View> matches = FindViews(query, typeFilter, clickableOnly: false, includeDialogs)
+                .Where(v => v is SeekBar or OneUiWaveMediaSeekBar)
+                .ToList();
+            if (matches.Count == 0) {
+                return (false, (View)null, "", 0, 0, 0);
+            }
+            View v = matches[Math.Clamp(index, 0, matches.Count - 1)];
+            int prog = v is OneUiWaveMediaSeekBar osb ? osb.Progress : (v is SeekBar sb ? sb.Progress : 0);
+            return (true, v, v.GetType().Name, prog, v.Width, v.Height);
+        }, 5000).ConfigureAwait(false);
+
+        if (!found || target == null || width <= 4 || height <= 2) {
+            return (false, JsonSerializer.Serialize(new {
+                action = "drag_sweep",
+                ok = false,
+                error = $"No visible SeekBar/OneUiWaveMediaSeekBar found matching query='{query}' type='{typeFilter}'."
+            }));
+        }
+
+        long downTime = SystemClock.UptimeMillis();
+        float yMid = height * 0.5f;
+        float xStart = width * fromRatio;
+        float xEnd = width * toRatio;
+        double maxStepBlockMs = 0.0;
+        int dispatched = 0;
+        string sweepErr = "";
+        int endProg = startProg;
+
+        try {
+            double downBlock = await RunOnUiThreadWithTimeoutAsync(() => {
+                Stopwatch sw = Stopwatch.StartNew();
+                using MotionEvent down = MotionEvent.Obtain(downTime, SystemClock.UptimeMillis(), MotionEventActions.Down, xStart, yMid, 0);
+                target.DispatchTouchEvent(down);
+                sw.Stop();
+                return sw.Elapsed.TotalMilliseconds;
+            }, 4000).ConfigureAwait(false);
+            maxStepBlockMs = Math.Max(maxStepBlockMs, downBlock);
+            dispatched++;
+
+            for (int s = 1; s <= steps; s++) {
+                await Task.Delay(stepMs).ConfigureAwait(false);
+                float t = s / (float)steps;
+                // Sweep forward then halfway back so both increase & decrease paths get stressed
+                float x = t <= 0.65f
+                    ? xStart + (xEnd - xStart) * (t / 0.65f)
+                    : xEnd - (xEnd - xStart) * ((t - 0.65f) / 0.35f) * 0.5f;
+                double blk = await RunOnUiThreadWithTimeoutAsync(() => {
+                    Stopwatch sw = Stopwatch.StartNew();
+                    using MotionEvent mv = MotionEvent.Obtain(downTime, SystemClock.UptimeMillis(), MotionEventActions.Move, x, yMid, 0);
+                    target.DispatchTouchEvent(mv);
+                    sw.Stop();
+                    return sw.Elapsed.TotalMilliseconds;
+                }, 4000).ConfigureAwait(false);
+                if (blk > maxStepBlockMs) {
+                    maxStepBlockMs = blk;
+                }
+                dispatched++;
+            }
+
+            (double upBlock, int curProg) = await RunOnUiThreadWithTimeoutAsync(() => {
+                Stopwatch sw = Stopwatch.StartNew();
+                float xFinal = xStart + (xEnd - xStart) * 0.5f;
+                using MotionEvent up = MotionEvent.Obtain(downTime, SystemClock.UptimeMillis(), MotionEventActions.Up, xFinal, yMid, 0);
+                target.DispatchTouchEvent(up);
+                sw.Stop();
+                int p = target is OneUiWaveMediaSeekBar osb ? osb.Progress : (target is SeekBar sb ? sb.Progress : 0);
+                return (sw.Elapsed.TotalMilliseconds, p);
+            }, 4000).ConfigureAwait(false);
+            maxStepBlockMs = Math.Max(maxStepBlockMs, upBlock);
+            endProg = curProg;
+            dispatched++;
+        } catch (Exception ex) {
+            sweepErr = $"{ex.GetType().Name}: {ex.Message}";
+        } finally {
+            if (restoreProgress) {
+                try {
+                    await RunOnUiThreadWithTimeoutAsync(() => {
+                        if (target is OneUiWaveMediaSeekBar osb) {
+                            osb.Progress = startProg;
+                        } else if (target is SeekBar sb) {
+                            sb.Progress = startProg;
+                        }
+                        return true;
+                    }, 3000).ConfigureAwait(false);
+                } catch {
+                    // Best effort restore
+                }
+            }
+        }
+
+        bool ok = string.IsNullOrEmpty(sweepErr) && dispatched >= steps;
+        return (ok, JsonSerializer.Serialize(new {
+            action = "drag_sweep",
+            ok,
+            type = targetType,
+            stepsRequested = steps,
+            stepsDispatched = dispatched,
+            stepMs,
+            startProgress = startProg,
+            endProgress = endProg,
+            restoredProgress = restoreProgress,
+            maxStepUiBlockMs = Math.Round(maxStepBlockMs, 2),
+            error = sweepErr
+        }, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    (bool ok, string json) ExecuteReflowProbeOnUiThread(JsonElement argsEl) {
+        string mode = ReadJsonStr(argsEl, "mode", "both").Trim().ToLowerInvariant();
+        float fontScale = Math.Clamp((float)ReadJsonDouble(argsEl, "fontScale", 1.3), 1.05f, 2.0f);
+        int maxDepth = ReadJsonInt(argsEl, "maxDepth", 12, 4, 16);
+
+        EnsureTabLaidOut(activeTab);
+        View targetRoot = (tabContainers != null && activeTab >= 0 && activeTab < tabContainers.Length && tabContainers[activeTab] != null)
+            ? tabContainers[activeTab]
+            : (rootFrameHost ?? Window?.DecorView);
+        if (targetRoot == null || targetRoot.Width <= 0 || targetRoot.Height <= 0) {
+            return (false, "Active tab root is not laid out for reflow_probe.");
+        }
+
+        int origW = targetRoot.Width;
+        int origH = targetRoot.Height;
+        int origLeft = targetRoot.Left;
+        int origTop = targetRoot.Top;
+        int origRight = targetRoot.Right;
+        int origBottom = targetRoot.Bottom;
+        int[] rootLoc = new int[2];
+        targetRoot.GetLocationOnScreen(rootLoc);
+        float baseFontScale = Math.Max(0.5f, Resources?.Configuration?.FontScale ?? 1f);
+
+        object fontTree = null;
+        object landTree = null;
+        int scaledViews = 0;
+
+        // 1. Reversible 1.3x font-scale reflow audit
+        if (mode is "font_130" or "font" or "both") {
+            List<(TextView tv, float origPx)> savedSizes = [];
+            void CollectTextViews(View v) {
+                if (v == null || v.Visibility != ViewStates.Visible) {
+                    return;
+                }
+                if (v is TextView tv && !string.IsNullOrEmpty(tv.Text)) {
+                    savedSizes.Add((tv, tv.TextSize));
+                }
+                if (v is ViewGroup vg) {
+                    for (int i = 0; i < vg.ChildCount; i++) {
+                        CollectTextViews(vg.GetChildAt(i));
+                    }
+                }
+            }
+            CollectTextViews(targetRoot);
+            scaledViews = savedSizes.Count;
+            try {
+                foreach ((TextView tv, float origPx) in savedSizes) {
+                    tv.SetTextSize(Android.Util.ComplexUnitType.Px, origPx * fontScale);
+                }
+                int wSpec = View.MeasureSpec.MakeMeasureSpec(origW, MeasureSpecMode.Exactly);
+                int hSpec = View.MeasureSpec.MakeMeasureSpec(origH, MeasureSpecMode.Exactly);
+                targetRoot.Measure(wSpec, hSpec);
+                targetRoot.Layout(origLeft, origTop, origRight, origBottom);
+                fontTree = BuildUiTreeSnapshotObject(
+                    maxDepth,
+                    includeGeometry: true,
+                    rootOverride: targetRoot,
+                    overrideDispX: rootLoc[0],
+                    overrideDispY: rootLoc[1],
+                    overrideDispW: origW,
+                    overrideDispH: origH,
+                    overrideFontScale: baseFontScale * fontScale,
+                    includeDialogs: false);
+            } finally {
+                foreach ((TextView tv, float origPx) in savedSizes) {
+                    tv.SetTextSize(Android.Util.ComplexUnitType.Px, origPx);
+                }
+                int wSpec = View.MeasureSpec.MakeMeasureSpec(origW, MeasureSpecMode.Exactly);
+                int hSpec = View.MeasureSpec.MakeMeasureSpec(origH, MeasureSpecMode.Exactly);
+                targetRoot.Measure(wSpec, hSpec);
+                targetRoot.Layout(origLeft, origTop, origRight, origBottom);
+            }
+        }
+
+        // 2. Reversible landscape orientation reflow audit (swapped viewport aspect ratio)
+        int landW = Math.Max(origW, origH);
+        int landH = Math.Min(origW, origH);
+        if (mode is "landscape" or "orientation" or "both") {
+            try {
+                int wSpec = View.MeasureSpec.MakeMeasureSpec(landW, MeasureSpecMode.Exactly);
+                int hSpec = View.MeasureSpec.MakeMeasureSpec(landH, MeasureSpecMode.Exactly);
+                targetRoot.Measure(wSpec, hSpec);
+                targetRoot.Layout(origLeft, origTop, origLeft + landW, origTop + landH);
+                int[] landLoc = new int[2];
+                targetRoot.GetLocationOnScreen(landLoc);
+                landTree = BuildUiTreeSnapshotObject(
+                    maxDepth,
+                    includeGeometry: true,
+                    rootOverride: targetRoot,
+                    overrideDispX: landLoc[0],
+                    overrideDispY: landLoc[1],
+                    overrideDispW: landW,
+                    overrideDispH: landH,
+                    overrideFontScale: baseFontScale,
+                    includeDialogs: false);
+            } finally {
+                int wSpec = View.MeasureSpec.MakeMeasureSpec(origW, MeasureSpecMode.Exactly);
+                int hSpec = View.MeasureSpec.MakeMeasureSpec(origH, MeasureSpecMode.Exactly);
+                targetRoot.Measure(wSpec, hSpec);
+                targetRoot.Layout(origLeft, origTop, origRight, origBottom);
+            }
+        }
+
+        return (true, JsonSerializer.Serialize(new {
+            action = "reflow_probe",
+            ok = true,
+            mode,
+            activeTab,
+            fontScale,
+            scaledTextViews = scaledViews,
+            portraitBounds = new { w = origW, h = origH },
+            landscapeBounds = new { w = landW, h = landH },
+            restored = true,
+            font_130 = fontTree,
+            landscape = landTree
+        }, new JsonSerializerOptions {
+            WriteIndented = false,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        }));
+    }
 
     Task<(bool ok, string output)> ILiveBridgeAppHost.ExecuteOnUiThreadReflectAsync(Func<(bool ok, string output)> fn) =>
         RunOnUiThreadWithTimeoutAsync(fn, 15_000);

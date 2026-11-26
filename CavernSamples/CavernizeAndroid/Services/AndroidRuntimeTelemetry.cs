@@ -622,11 +622,138 @@ public static class AndroidRuntimeTelemetry {
         };
     }
 
+    /// <summary>Counts currently open Linux file descriptors in <c>/proc/self/fd</c> (-1 if unavailable).</summary>
+    public static int ReadOpenFdCount() {
+        try {
+            if (System.IO.Directory.Exists("/proc/self/fd")) {
+                int count = 0;
+                foreach (string _ in System.IO.Directory.EnumerateFileSystemEntries("/proc/self/fd")) {
+                    count++;
+                }
+                return count;
+            }
+        } catch {
+            // Restricted environment
+        }
+        return -1;
+    }
+
+    /// <summary>Counts active OS threads for this process via <c>/proc/self/task</c> (with managed fallback).</summary>
+    public static int ReadThreadCount() {
+        try {
+            if (System.IO.Directory.Exists("/proc/self/task")) {
+                int count = 0;
+                foreach (string _ in System.IO.Directory.EnumerateFileSystemEntries("/proc/self/task")) {
+                    count++;
+                }
+                return count;
+            }
+        } catch {
+            // Fall back to Process.Threads
+        }
+        try {
+            return System.Diagnostics.Process.GetCurrentProcess().Threads.Count;
+        } catch {
+            return -1;
+        }
+    }
+
+    /// <summary>Reads current process Total PSS, Native PSS, Dalvik PSS, Other PSS, and Native Heap allocated (all in MB).</summary>
+    public static (double totalPssMb, double nativePssMb, double dalvikPssMb, double otherPssMb, double nativeHeapAllocMb) ReadProcessMemoryBreakdownMb() {
+        double totalPss = -1.0;
+        double nativePss = -1.0;
+        double dalvikPss = -1.0;
+        double otherPss = -1.0;
+        double nativeHeap = -1.0;
+        try {
+            using Android.OS.Debug.MemoryInfo dmi = new();
+            Android.OS.Debug.GetMemoryInfo(dmi);
+            totalPss = Math.Round(dmi.TotalPss / 1024.0, 2);
+            nativePss = Math.Round(dmi.NativePss / 1024.0, 2);
+            dalvikPss = Math.Round(dmi.DalvikPss / 1024.0, 2);
+            otherPss = Math.Round(dmi.OtherPss / 1024.0, 2);
+        } catch {
+            // Ignore
+        }
+        try {
+            nativeHeap = Math.Round(Android.OS.Debug.NativeHeapAllocatedSize / (1024.0 * 1024.0), 2);
+        } catch {
+            // Ignore
+        }
+        return (totalPss, nativePss, dalvikPss, otherPss, nativeHeap);
+    }
+
+    /// <summary>
+    /// Builds a compact Q3 dirty-state &amp; resource soak snapshot (Total/Native PSS, managed GC heap,
+    /// <c>/proc/self/fd</c> open FD count, OS thread count, View tree node count, active dialogs,
+    /// <c>isOperationRunning</c>, and session error/fatal counts).
+    /// </summary>
+    public static string BuildSoakSnapshotJson(
+        Context context,
+        bool forceGc = false,
+        int viewCount = -1,
+        int clickableViewCount = -1,
+        int activeDialogs = -1,
+        bool isOperationRunning = false,
+        int activeTab = -1) {
+        if (forceGc) {
+            try {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            } catch {
+                // Ignore
+            }
+        }
+        (double totalPssMb, double nativePssMb, double dalvikPssMb, double otherPssMb, double nativeHeapAllocMb) =
+            ReadProcessMemoryBreakdownMb();
+        double managedGcMb = Math.Round(GC.GetTotalMemory(false) / (1024.0 * 1024.0), 2);
+        int openFdCount = ReadOpenFdCount();
+        int threadCount = ReadThreadCount();
+        bool lowMem = false;
+        long availRamMb = -1;
+        try {
+            if ((context ?? cachedAppContext)?.GetSystemService(Context.ActivityService) is ActivityManager am) {
+                ActivityManager.MemoryInfo mi = new();
+                am.GetMemoryInfo(mi);
+                lowMem = mi.LowMemory;
+                availRamMb = mi.AvailMem / (1024 * 1024);
+            }
+        } catch {
+            // Ignore
+        }
+        return JsonSerializer.Serialize(new {
+            ok = true,
+            pid = Android.OS.Process.MyPid(),
+            forceGc,
+            nativePssMb = totalPssMb,
+            nativeOnlyPssMb = nativePssMb,
+            dalvikPssMb,
+            otherPssMb,
+            nativeHeapAllocMb,
+            managedGcMb,
+            availRamMb,
+            lowMemory = lowMem,
+            openFdCount,
+            threadCount,
+            viewCount,
+            clickableViewCount,
+            activeDialogs,
+            isOperationRunning,
+            activeTab,
+            sessionWarnCount = AppLogger.SessionWarnCount,
+            sessionErrorCount = AppLogger.SessionErrorCount,
+            sessionFatalCount = AppLogger.SessionFatalCount,
+            utc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)
+        }, new JsonSerializerOptions { WriteIndented = true });
+    }
+
     /// <summary>Builds the full JSON response for the Tier-0 Live Bridge <c>runtime_telemetry</c> command.</summary>
     public static string BuildRuntimeTelemetryJson(Context context, AndroidAudioOutput audioOutput, int maxExitReasons = 8) {
         Context ctx = context ?? cachedAppContext;
         int thermalCode = GetThermalStatusCode(ctx);
         int extraYieldMs = GetAdaptiveThermalYieldMs();
+        (double totalPssMb, _, _, _, double nativeHeapAllocMb) = ReadProcessMemoryBreakdownMb();
         return JsonSerializer.Serialize(new {
             ok = true,
             pid = Android.OS.Process.MyPid(),
@@ -634,6 +761,13 @@ public static class AndroidRuntimeTelemetry {
             timestampUtc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             apiLevel = (int)Build.VERSION.SdkInt,
             processorCount = System.Environment.ProcessorCount,
+            processHealth = new {
+                nativePssMb = totalPssMb,
+                nativeHeapAllocMb,
+                managedGcMb = Math.Round(GC.GetTotalMemory(false) / (1024.0 * 1024.0), 2),
+                openFdCount = ReadOpenFdCount(),
+                threadCount = ReadThreadCount()
+            },
             computeQoS = new {
                 headroomWorkerCap = MvsepAntiArtifactPipeline.ComputeHeadroomWorkerCap(System.Environment.ProcessorCount),
                 onnxAllowSpinning = false,

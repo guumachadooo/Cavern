@@ -688,8 +688,211 @@ class BugHunterUnitTests(unittest.TestCase):
         self.assertIn(("external_watchdog_q2", "external_watchdog_anr_timeout"), cats)
         self.assertIn(("external_crash_forensics_q2", "external_crash_logcat"), cats)
 
+    def test_q3_ols_slope_and_soak_leak_gate_ignores_warmup_catches_leaks(self) -> None:
+        slope, r2 = bh.compute_ols_slope([10.0, 12.0, 14.0, 16.0, 18.0])
+        self.assertAlmostEqual(slope, 2.0, places=5)
+        self.assertAlmostEqual(r2, 1.0, places=5)
+
+        # Realistic cycle-0 cold warmup jump that plateaus MUST pass with 0 findings
+        clean_samples = []
+        for i in range(16):
+            clean_samples.append({
+                "nativePssMb": 180.0 if i == 0 else 218.0 + (i % 2) * 1.5,
+                "managedGcMb": 20.0 if i == 0 else 32.0 + (i % 3) * 0.5,
+                "openFdCount": 120 if i == 0 else 135 + (i % 2),
+                "viewCount": 250 + (i % 2) * 4,
+                "threadCount": 38 + (i % 2),
+                "activeDialogs": 0,
+                "isOperationRunning": False,
+                "sessionFatalCount": 0,
+                "lowMemory": False,
+            })
+        ev_clean = bh.evaluate_soak_leak_gate(clean_samples)
+        self.assertTrue(ev_clean["passed"], f"Clean warmup+plateau should pass: {ev_clean}")
+        self.assertEqual(ev_clean["findings"], [])
+
+        # Multi-fault leak + dirty-state + fatal crash + lowMemory
+        leaking = [dict(s) for s in clean_samples]
+        for idx in range(1, len(leaking)):
+            leaking[idx]["nativePssMb"] = round(218.0 + idx * 2.5, 2)
+            leaking[idx]["openFdCount"] = 135 + idx * 1
+            leaking[idx]["managedGcMb"] = round(32.0 + idx * 2.2, 2)
+            leaking[idx]["viewCount"] = 250 + idx * 8
+            leaking[idx]["threadCount"] = 38 + idx * 1
+        leaking[-1]["isOperationRunning"] = True
+        leaking[-1]["activeDialogs"] = 2
+        leaking[-1]["sessionFatalCount"] = 1
+        leaking[-2]["lowMemory"] = True
+        ev_bad = bh.evaluate_soak_leak_gate(leaking)
+        self.assertFalse(ev_bad["passed"])
+        cats = {f["category"] for f in ev_bad["findings"]}
+        for expected in (
+            "soak_pss_leak",
+            "soak_fd_leak",
+            "soak_managed_heap_leak",
+            "soak_view_count_leak",
+            "soak_thread_leak",
+            "dirty_state_operation_stuck",
+            "dirty_state_dialog_leak",
+            "soak_fatal_crash",
+            "soak_low_memory",
+        ):
+            self.assertIn(expected, cats)
+
+    def test_q3_rage_click_drag_sweep_and_reflow_evaluators(self) -> None:
+        rage_ok = bh.evaluate_rage_click_result(
+            {"ok": True, "succeeded": 6, "maxBlockMs": 14.2, "activeDialogsAfter": 0, "isOperationRunningAfter": False, "exceptions": []},
+            target_label="Tab0:Play",
+        )
+        self.assertTrue(rage_ok["passed"])
+
+        rage_bad = bh.evaluate_rage_click_result(
+            {"ok": False, "succeeded": 4, "maxBlockMs": 1850.0, "activeDialogsAfter": 3, "isOperationRunningAfter": True, "exceptions": ["InvalidOperationException: race"]},
+            target_label="Tab0:Export",
+        )
+        self.assertFalse(rage_bad["passed"])
+        rcats = {f["category"] for f in rage_bad["findings"]}
+        self.assertEqual(rcats, {
+            "hostile_rage_click_exception",
+            "hostile_rage_click_freeze",
+            "dirty_state_dialog_leak",
+            "dirty_state_operation_stuck",
+        })
+
+        # Benign "No visible SeekBar" skip should not trigger drag_sweep_error
+        drag_skip = bh.evaluate_drag_sweep_result(
+            {"ok": False, "stepsDispatched": 0, "maxStepUiBlockMs": 0.0, "error": "No visible SeekBar found"},
+            None,
+            target_label="Tab1:None",
+        )
+        self.assertTrue(drag_skip["passed"])
+
+        drag_bad = bh.evaluate_drag_sweep_result(
+            {"ok": True, "stepsDispatched": 20, "maxStepUiBlockMs": 68.0, "error": ""},
+            {"totalFrames": 24, "ringCount": 24, "p50Ms": 9.0, "p95Ms": 22.0, "cpuP95Ms": 18.2, "frozenFrames": 1, "refreshRateHz": 120.0},
+            target_label="Tab0:SeekBar",
+        )
+        self.assertFalse(drag_bad["passed"])
+        dcats = {f["category"] for f in drag_bad["findings"]}
+        self.assertIn("drag_sweep_ui_stall", dcats)
+        self.assertIn("drag_sweep_jank_120hz", dcats)
+
+        overflow_tree = {
+            "schemaVersion": 2,
+            "dpDensity": 3.0,
+            "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400},
+            "activity": {
+                "type": "LinearLayout", "orient": "v", "x": 0, "y": 0, "w": 1080, "h": 2400,
+                "children": [
+                    {"type": "Button", "text": "OverflowBtn", "clickable": True, "x": 920, "y": 100, "w": 320, "h": 144, "fg": -1, "sp": 18.0},
+                ],
+            },
+        }
+        reflow_bad = bh.evaluate_reflow_probe_result({"font_130": overflow_tree}, "Tab0")
+        self.assertFalse(reflow_bad["passed"])
+        self.assertEqual(reflow_bad["variantsChecked"], 1)
+        self.assertGreaterEqual(reflow_bad["highDefectCount"], 1)
+        self.assertEqual(reflow_bad["findings"][0]["category"], "reflow_layout_defect")
+
+    def test_q3_m3_mutation_canary_offline_100pct_catch_zero_fp(self) -> None:
+        res = bh.run_m3_mutation_canary_offline()
+        self.assertTrue(res["ok"], f"M3 canary failed: {res}")
+        self.assertEqual(res["caught"], res["total"])
+        self.assertEqual(res["total"], 10)
+        self.assertAlmostEqual(res["detectRate"], 1.0, places=6)
+        self.assertEqual(res["cleanFalsePositives"], 0)
+
+    def test_q3_v6_hostile_and_v11_soak_orchestrator_integration(self) -> None:
+        class Q3MockBridge(FakeBridge):
+            def __init__(self) -> None:
+                super().__init__()
+                self.soak_idx = 0
+                self.hostile_actions: list[str] = []
+
+            def cmd(self, name: str, args: dict | None = None, *, tier: int = 0, timeout_sec: int = 30) -> dict:
+                a = dict(args or {})
+                self.history.append((name, a))
+                if name == "capabilities":
+                    return {"ok": True, "body": "{}", "json": {"commands": [
+                        {"cmd": "ping"}, {"cmd": "app_state"}, {"cmd": "settings_get"}, {"cmd": "settings_set"},
+                        {"cmd": "tab_switch"}, {"cmd": "ui_tree"}, {"cmd": "ui_interact"}, {"cmd": "soak_snapshot"},
+                        {"cmd": "runtime_telemetry"}, {"cmd": "memory"}, {"cmd": "log_tail"}, {"cmd": "logcat_tail"},
+                    ]}, "elapsedMs": 3, "error": ""}
+                if name == "soak_snapshot":
+                    idx = self.soak_idx
+                    self.soak_idx += 1
+                    return {"ok": True, "body": "{}", "json": {
+                        "nativePssMb": round(200.0 + idx * 4.5, 2),
+                        "managedGcMb": round(26.0 + idx * 0.4, 2),
+                        "openFdCount": 140 + idx * 2,
+                        "viewCount": 300,
+                        "threadCount": 42,
+                        "activeDialogs": 0,
+                        "isOperationRunning": (idx >= 9),
+                        "sessionFatalCount": 0,
+                        "lowMemory": False,
+                    }, "elapsedMs": 4, "error": ""}
+                if name == "ui_interact":
+                    act = str(a.get("action") or "")
+                    self.hostile_actions.append(act)
+                    if act == "rage_click":
+                        return {"ok": True, "body": "{}", "json": {
+                            "ok": False, "action": "rage_click", "succeeded": 3, "maxBlockMs": 22.0,
+                            "activeDialogsAfter": 2, "isOperationRunningAfter": False,
+                            "exceptions": ["ObjectDisposedException: rage race"],
+                        }, "elapsedMs": 12, "error": ""}
+                    if act == "drag_sweep":
+                        return {"ok": True, "body": "{}", "json": {
+                            "ok": True, "action": "drag_sweep", "stepsDispatched": 20, "maxStepUiBlockMs": 64.0, "error": "",
+                        }, "elapsedMs": 15, "error": ""}
+                    if act == "reflow_probe":
+                        bad_tree = {
+                            "schemaVersion": 2, "dpDensity": 3.0,
+                            "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400},
+                            "activity": {
+                                "type": "LinearLayout", "orient": "v", "x": 0, "y": 0, "w": 1080, "h": 2400,
+                                "children": [
+                                    {"type": "Button", "text": "WideLabel", "clickable": True, "x": 900, "y": 120, "w": 360, "h": 144, "fg": -1, "sp": 18.0},
+                                ],
+                            },
+                        }
+                        return {"ok": True, "body": "{}", "json": {
+                            "ok": True, "action": "reflow_probe", "font_130": bad_tree, "landscape": bad_tree,
+                        }, "elapsedMs": 20, "error": ""}
+                    return {"ok": True, "body": "{}", "json": {"ok": True}, "elapsedMs": 5, "error": ""}
+                if name == "runtime_telemetry":
+                    return {"ok": True, "body": "{}", "json": {
+                        "pid": 7001,
+                        "frameMetrics": {"totalFrames": 24, "ringCount": 24, "p50Ms": 6.0, "p95Ms": 18.5, "cpuP95Ms": 16.0, "frozenFrames": 0, "refreshRateHz": 120.0},
+                        "audioXRuns": {"totalOutputUnderruns": 0},
+                        "exitReasons": [],
+                    }, "elapsedMs": 4, "error": ""}
+                return super().cmd(name, args, tier=tier, timeout_sec=timeout_sec)
+
+        fb = Q3MockBridge()
+        hunter = bh.LiveBugHunter(fb, mode="quick", allow_mutate=True, verbose=False, soak_cycles=8)
+        rep = hunter.run_hunt(selected_vectors=["V6", "V11"])
+        self.assertTrue(rep["ok"])
+        self.assertIn("q3SoakSummary", rep)
+        self.assertFalse(rep["q3SoakSummary"]["passed"])
+        self.assertGreater(rep["q3SoakSummary"]["fdDelta"], 8)
+        self.assertGreater(rep["q3SoakSummary"]["pssDeltaMb"], 25.0)
+        self.assertTrue(rep["q3SoakSummary"]["stuckOp"])
+        for act in ("rage_click", "drag_sweep", "reflow_probe"):
+            self.assertIn(act, fb.hostile_actions)
+        cats = {f["category"] for f in rep["findings"]}
+        self.assertIn("soak_pss_leak", cats)
+        self.assertIn("soak_fd_leak", cats)
+        self.assertIn("dirty_state_operation_stuck", cats)
+        self.assertIn("hostile_rage_click_exception", cats)
+        self.assertIn("drag_sweep_ui_stall", cats)
+        self.assertIn("reflow_layout_defect", cats)
+        md = bh.generate_report_markdown(rep)
+        self.assertIn("Q3 Soak & Stress Gate (`V11`)", md)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 
