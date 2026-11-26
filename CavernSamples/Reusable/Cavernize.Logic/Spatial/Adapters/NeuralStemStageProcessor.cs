@@ -38,6 +38,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
     float[] alignedBackingMono;
     int alignedRefSampleRate;
     double referenceSampleOffset;
+    double referenceDriftPpm;
 
     // Pre-allocated zero-GC scratch arrays for real-time multichannel Karaoke masking
     readonly float[][] channelScratch = new float[SpatialKaraokeEngine.MaxSpatialChannels][];
@@ -69,6 +70,27 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             lock (stateLock) {
                 if (Math.Abs(referenceSampleOffset - safe) > 0.25) {
                     referenceSampleOffset = safe;
+                    karaokeEngine.ResetAdaptationState();
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// B3: Optional linear clock drift (parts-per-million) applied alongside <see cref="ReferenceSampleOffset"/>
+    /// when reusing cached neural stems across Dolby Atmos ↔ FLAC variants (<c>stemPos = outputPos * (1 + ppm*1e-6) + offset</c>).
+    /// </summary>
+    public double ReferenceDriftPpm {
+        get {
+            lock (stateLock) {
+                return referenceDriftPpm;
+            }
+        }
+        set {
+            double safe = double.IsFinite(value) ? Math.Clamp(value, -500.0, 500.0) : 0.0;
+            lock (stateLock) {
+                if (Math.Abs(referenceDriftPpm - safe) > 0.05) {
+                    referenceDriftPpm = safe;
                     karaokeEngine.ResetAdaptationState();
                 }
             }
@@ -301,6 +323,7 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
             activeSpatialUpmixTrack = null;
             activeKaraokeTrack = null;
             referenceSampleOffset = 0.0;
+            referenceDriftPpm = 0.0;
             RebuildAlignedReferencesLocked();
             karaokeEngine.Reset();
         }
@@ -865,14 +888,16 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
         isFullMixTwinReference = false;
 
         // Guard progressive streaming reads: only read neural stem references inside the permanently finalized sample window.
-        // Apply cross-variant sub-sample referenceSampleOffset so Atmos <-> FLAC shared stems stay 0-sample phase-locked.
+        // Apply cross-variant sub-sample referenceSampleOffset + referenceDriftPpm so Atmos <-> FLAC shared stems stay 0-sample phase-locked.
         NeuralSeparatedTrack vocalTrack = activeKaraokeTrack ?? activeSpatialUpmixTrack;
         int readyLimit = vocalTrack != null && vocalTrack.IsProgressiveStreaming
             ? vocalTrack.ReadySampleCount
             : int.MaxValue;
-        double effectiveOutputPos = outputSamplePos + referenceSampleOffset;
+        double driftScale = 1.0 + referenceDriftPpm * 1e-6;
+        double effectiveOutputPos = outputSamplePos * driftScale + referenceSampleOffset;
         bool hasFractionalOffset = Math.Abs(referenceSampleOffset - Math.Round(referenceSampleOffset)) > 1e-4;
-        bool needsLiveRateMap = (alignedRefSampleRate > 0 && alignedRefSampleRate != sampleRate) || hasFractionalOffset;
+        bool hasClockDrift = Math.Abs(referenceDriftPpm) > 1e-4;
+        bool needsLiveRateMap = (alignedRefSampleRate > 0 && alignedRefSampleRate != sampleRate) || hasFractionalOffset || hasClockDrift;
 
         if (!needsLiveRateMap) {
             long intOutputPos = (long)Math.Round(effectiveOutputPos);
@@ -910,8 +935,9 @@ public sealed class NeuralStemStageProcessor : ISpatialStageProcessor, IPreHrtfB
                 }
             }
         } else {
-            double ratio = (alignedRefSampleRate > 0 ? alignedRefSampleRate : sampleRate) / (double)sampleRate;
-            double srcStart = effectiveOutputPos * ratio;
+            double srRatio = (alignedRefSampleRate > 0 ? alignedRefSampleRate : sampleRate) / (double)sampleRate;
+            double ratio = srRatio * driftScale;
+            double srcStart = effectiveOutputPos * srRatio;
             int maxNeededIdx = (int)Math.Floor(srcStart + Math.Max(0, frameCount - 1) * ratio) + 2;
             bool sampleWindowReady = maxNeededIdx < readyLimit;
             if (sampleWindowReady) {

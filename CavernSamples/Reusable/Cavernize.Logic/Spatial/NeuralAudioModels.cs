@@ -1235,4 +1235,18 @@ public sealed class NeuralSeparatedTrack {
         }
         set => Volatile.Write(ref readySampleCount, Math.Max(0, value));
     }
+
+    /// <summary>Finds a stem by case-insensitive name, or returns <c>null</c> if absent.</summary>
+    public StereoStemBuffer FindStem(string name) {
+        if (string.IsNullOrWhiteSpace(name) || Stems == null) {
+            return null;
+        }
+        for (int i = 0; i < Stems.Count; i++) {
+            StereoStemBuffer st = Stems[i];
+            if (st != null && string.Equals(st.Name, name, StringComparison.OrdinalIgnoreCase)) {
+                return st;
+            }
+        }
+        return null;
+    }
 }

@@ -36,44 +36,57 @@ namespace CavernizeAndroid;
 
 
 public partial class MainActivity {
-    readonly Dictionary<string, (double OffsetSamples, int SampleRate)> crossVariantOffsetByCanonicalSong = new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, (double OffsetSamples, double DriftPpm, int SampleRate, float Confidence)> crossVariantOffsetByCanonicalSong = new(StringComparer.OrdinalIgnoreCase);
 
-    double ComputeCrossVariantNeuralOffsetSamples(CavernizeTrack targetTrack, string targetPath) {
+    (double OffsetSamples, double DriftPpm, bool HasAlignment) ComputeCrossVariantNeuralAlignment(CavernizeTrack targetTrack, string targetPath) {
         if (targetTrack == null || playerEngine?.NeuralStage == null) {
-            return 0.0;
+            return (0.0, 0.0, false);
         }
         Cavernize.Logic.Spatial.NeuralSeparatedTrack activeSep =
             playerEngine.NeuralStage.ActiveKaraokeTrack ?? playerEngine.NeuralStage.ActiveSpatialUpmixTrack;
         if (activeSep == null) {
-            return 0.0;
+            return (0.0, 0.0, false);
         }
         bool targetIsAtmos = IsTrackMultichannelOrAtmos(targetTrack, targetPath);
         bool stemsOnAtmosTimeline = activeSep.DerivedFromLosslessTwin ||
             IsPathAtmosOrSpatialContainer(activeSep.SourceTrackKey);
         if (targetIsAtmos == stemsOnAtmosTimeline) {
-            return 0.0;
+            return (0.0, 0.0, true);
         }
 
         string canon = NeuralTrackCacheService.ExtractCanonicalSongStem(
             !string.IsNullOrWhiteSpace(currentMediaMeta?.Title) ? currentMediaMeta.Title : targetPath);
         double baseOffset = 0.0;
+        double baseDriftPpm = 0.0;
         int offsetSr = 48000;
         if (activeLosslessTwin != null && activeLosslessTwin.HasSyncedLosslessTwin) {
             baseOffset = activeLosslessTwin.SyncResult.BaseOffsetSamples;
+            baseDriftPpm = activeLosslessTwin.SyncResult.DriftPpm;
             offsetSr = activeLosslessTwin.SampleRate >= 8000 ? activeLosslessTwin.SampleRate : 48000;
         } else if (!string.IsNullOrEmpty(canon) && crossVariantOffsetByCanonicalSong.TryGetValue(canon, out var cached)) {
             baseOffset = cached.OffsetSamples;
+            baseDriftPpm = cached.DriftPpm;
             offsetSr = cached.SampleRate >= 8000 ? cached.SampleRate : 48000;
         } else {
-            return 0.0;
+            return (0.0, 0.0, false);
         }
 
         int outSr = playerEngine.OutputSampleRate >= 8000 ? playerEngine.OutputSampleRate : 48000;
         double scaledOffset = offsetSr == outSr ? baseOffset : baseOffset * (outSr / (double)offsetSr);
-        // SubSampleSyncEngine: losslessIndex = BaseOffsetSamples + atmosIndex
-        // Atmos stems playing on FLAC -> stemIdx = losslessIdx - BaseOffsetSamples
-        // FLAC stems playing on Atmos -> stemIdx = atmosIdx + BaseOffsetSamples
-        return stemsOnAtmosTimeline && !targetIsAtmos ? -scaledOffset : scaledOffset;
+        // SubSampleSyncEngine: losslessIndex = BaseOffsetSamples + atmosIndex * (1 + DriftPpm*1e-6)
+        // Atmos stems playing on FLAC -> stemIdx = losslessIdx * (1 - DriftPpm*1e-6) - BaseOffsetSamples
+        // FLAC stems playing on Atmos -> stemIdx = atmosIdx * (1 + DriftPpm*1e-6) + BaseOffsetSamples
+        bool invert = stemsOnAtmosTimeline && !targetIsAtmos;
+        return (invert ? -scaledOffset : scaledOffset, invert ? -baseDriftPpm : baseDriftPpm, true);
+    }
+
+    double ComputeCrossVariantNeuralOffsetSamples(CavernizeTrack targetTrack, string targetPath) =>
+        ComputeCrossVariantNeuralAlignment(targetTrack, targetPath).OffsetSamples;
+
+    double ComputeCrossVariantNeuralOffsetSamples(CavernizeTrack targetTrack, string targetPath, out double driftPpm) {
+        var align = ComputeCrossVariantNeuralAlignment(targetTrack, targetPath);
+        driftPpm = align.DriftPpm;
+        return align.OffsetSamples;
     }
 
     void SyncNeuralReferenceOffsetForActiveTrack(CavernizeTrack activeTrack) {
@@ -81,8 +94,9 @@ public partial class MainActivity {
             return;
         }
         string activePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
-        double offset = ComputeCrossVariantNeuralOffsetSamples(activeTrack, activePath);
-        playerEngine.NeuralStage.ReferenceSampleOffset = offset;
+        var align = ComputeCrossVariantNeuralAlignment(activeTrack, activePath);
+        playerEngine.NeuralStage.ReferenceSampleOffset = align.OffsetSamples;
+        playerEngine.NeuralStage.ReferenceDriftPpm = align.DriftPpm;
     }
 
     static bool IsTrackMultichannelOrAtmos(CavernizeTrack track, string path) {
@@ -201,7 +215,11 @@ public partial class MainActivity {
                     if (twin != null && twin.HasSyncedLosslessTwin) {
                         string canon = NeuralTrackCacheService.ExtractCanonicalSongStem(!string.IsNullOrWhiteSpace(title) ? title : activePath);
                         if (!string.IsNullOrEmpty(canon)) {
-                            crossVariantOffsetByCanonicalSong[canon] = (twin.SyncResult.BaseOffsetSamples, twin.SampleRate >= 8000 ? twin.SampleRate : 48000);
+                            crossVariantOffsetByCanonicalSong[canon] = (
+                                twin.SyncResult.BaseOffsetSamples,
+                                twin.SyncResult.DriftPpm,
+                                twin.SampleRate >= 8000 ? twin.SampleRate : 48000,
+                                twin.SyncResult.Confidence);
                         }
                     }
                     playerEngine.BindLosslessReference(twin);
@@ -955,6 +973,14 @@ public partial class MainActivity {
                     }
                 }
 
+                // B3: GCC-PHAT cross-variant alignment for cached FLAC <-> Atmos stems on cold start or variant load.
+                // Never applies an unaligned cross-variant karaoke stem at offset 0; rejects incompatible studio masters cleanly.
+                Cavernize.Logic.Spatial.NeuralSeparatedTrack crossRef = karaokeTrack ?? spatialUpmixTrack;
+                if (crossRef != null &&
+                    !EnsureCrossVariantAlignmentForCachedTrack(activeTrack, sourceKey, summaryTitle, sr, ffmpeg?.Found == true ? ffmpeg.Location : null, crossRef, CancellationToken.None)) {
+                    karaokeTrack = null;
+                }
+
                 Cavernize.Logic.Spatial.NeuralSeparatedTrack dnaSource = dnaTrack ?? karaokeTrack ?? spatialUpmixTrack;
                 Cavern.VocalChain.VocalMixDnaProfile extractedDna = dnaSource != null
                     ? Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(dnaSource, summaryTitle)
@@ -985,6 +1011,58 @@ public partial class MainActivity {
                 AppLogger.Warn($"W18/W19.b/W48 TryAutoBindCachedNeuralStemsAsync: {ex.Message}");
             }
         });
+    }
+
+    bool EnsureCrossVariantAlignmentForCachedTrack(
+        CavernizeTrack activeTrack,
+        string sourceKey,
+        string summaryTitle,
+        int sr,
+        string ffLoc,
+        Cavernize.Logic.Spatial.NeuralSeparatedTrack crossRef,
+        CancellationToken ct) {
+        if (activeTrack == null || crossRef == null || string.IsNullOrWhiteSpace(sourceKey)) {
+            return true;
+        }
+        bool targetIsAtmos = IsTrackMultichannelOrAtmos(activeTrack, sourceKey);
+        bool stemsOnAtmosTimeline = crossRef.DerivedFromLosslessTwin ||
+            IsPathAtmosOrSpatialContainer(crossRef.SourceTrackKey);
+        if (targetIsAtmos == stemsOnAtmosTimeline) {
+            return true;
+        }
+        string canonSong = NeuralTrackCacheService.ExtractCanonicalSongStem(
+            !string.IsNullOrWhiteSpace(summaryTitle) ? summaryTitle : sourceKey);
+        bool alreadyKnown = (activeLosslessTwin != null && activeLosslessTwin.HasSyncedLosslessTwin) ||
+            (!string.IsNullOrEmpty(canonSong) && crossVariantOffsetByCanonicalSong.ContainsKey(canonSong));
+        if (alreadyKnown) {
+            return true;
+        }
+        if (LosslessTwinDiscoveryService.TryDecodeTrackToStereoFloat(
+            sourceKey, sr, ffLoc, ct, out float[] playL, out float[] playR, out int playSr) &&
+            playL != null && playR != null && playL.Length >= 4096) {
+            int mLen = Math.Min(playL.Length, playR.Length);
+            float[] playMono = new float[mLen];
+            for (int i = 0; i < mLen; i++) {
+                playMono[i] = 0.5f * (playL[i] + playR[i]);
+            }
+            Cavernize.Logic.Spatial.CrossVariantAlignmentResult cvAlign =
+                Cavernize.Logic.Spatial.CrossVariantVocalAligner.Align(playMono, playSr, crossRef);
+            if (cvAlign.IsAligned) {
+                bool invertToCanonical = stemsOnAtmosTimeline && !targetIsAtmos;
+                double canonOffset = invertToCanonical ? -cvAlign.OffsetSamples : cvAlign.OffsetSamples;
+                double canonDrift = invertToCanonical ? -cvAlign.DriftPpm : cvAlign.DriftPpm;
+                if (!string.IsNullOrEmpty(canonSong)) {
+                    crossVariantOffsetByCanonicalSong[canonSong] = (canonOffset, canonDrift, playSr, cvAlign.Confidence);
+                }
+                AppLogger.Info($"B3 CrossVariantVocalAligner locked '{canonSong}' via {cvAlign.ProbeSource} (offset={cvAlign.OffsetSamples:0.00} smp, drift={cvAlign.DriftPpm:0.0} ppm, conf={cvAlign.Confidence:0.00}).");
+                return true;
+            }
+            if (cvAlign.ShouldPreferSeparateExtraction) {
+                AppLogger.Info($"B3 CrossVariantVocalAligner rejected mismatched cross-variant cache for '{canonSong}' (conf={cvAlign.Confidence:0.00}, probe={cvAlign.ProbeSource}); falling back to separate extraction.");
+                return false;
+            }
+        }
+        return true;
     }
 
     bool CanUseMvsepCloud(Cavernize.Logic.Spatial.NeuralAudioConfig cfg) {
@@ -1193,11 +1271,13 @@ public partial class MainActivity {
 
                 bool allowCache = neuralTrackCache != null && cfg.TrackCacheEnabled && neuralTrackCache.IsEnabled;
                 // Instant Slot 7B cache-first hit before decoding PCM or uploading to MVSEP Cloud
-                // (bypassed only when the user explicitly requests "Re-extract Stems").
+                // (bypassed only when the user explicitly requests "Re-extract Stems" or cross-variant alignment rejects a mismatched master).
                 if (allowCache && !forceReextract &&
                     (neuralTrackCache.TryLoad(cacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack cachedTrack, ct) ||
                      (cloudRequested && neuralTrackCache.TryLoad(cloudPlainCacheKey, out cachedTrack, ct)) ||
-                     neuralTrackCache.TryLoadBestForSourceTrack(activePath, summaryTitle, summaryArtist, goal, out cachedTrack, ct))) {
+                     neuralTrackCache.TryLoadBestForSourceTrack(activePath, summaryTitle, summaryArtist, goal, out cachedTrack, ct)) &&
+                    (goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke ||
+                     EnsureCrossVariantAlignmentForCachedTrack(activeTrack, activePath, summaryTitle, prefSr, ffLoc, cachedTrack, ct))) {
                     Cavern.VocalChain.VocalMixDnaProfile cachedDna = Cavernize.Logic.Spatial.VocalMixMatchStageProcessor.ExtractSongVocalDna(
                         cachedTrack, summaryTitle);
                     if (cachedDna != null && cachedDna.IsExtractedFromSong) {
@@ -1216,6 +1296,7 @@ public partial class MainActivity {
                         } else if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
                             playerEngine.BindKaraokeReferenceTrack(cachedTrack);
                         }
+                        SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                         ApplyExtractedSongDnaOnUiThread(cachedDna);
                         RefreshNeuralAudioUi();
                         RefreshNeuralPrepUi();
@@ -1274,30 +1355,73 @@ public partial class MainActivity {
                 if (cloudRequested) {
                     try {
                         System.Diagnostics.Stopwatch cloudSw = System.Diagnostics.Stopwatch.StartNew();
-                        string pendingJobHash = null;
-                        if (store.TryGetPendingMvsepJobHash(cloudPlainCacheKey, cloudPreset.Id, out string savedHash)) {
-                            pendingJobHash = savedHash;
-                            AppLogger.Info($"MVSEP Cloud: Resuming previously submitted job hash={savedHash} (preset={cloudPreset.Id}) to preserve API credits.");
-                        }
                         using Cavernize.Logic.Spatial.MvsepCloudClient mvsepClient = new();
-                        separated = await mvsepClient.SeparateTrackAsync(
-                            sourceTrackKey: activePath,
-                            mixLeft: mixL,
-                            mixRight: mixR,
-                            sampleRate: decodedSr,
-                            preset: cloudPreset,
-                            options: cloudOptions,
-                            displayTitle: summaryTitle,
-                            artistName: summaryArtist,
-                            externalDecoder: (rawBytes, fileName) => DecodeTempStemBytesWithFfmpeg(rawBytes, fileName, decodedSr, ffLoc, ct),
-                            onProgress: reportProgress,
-                            token: ct,
-                            existingJobHash: pendingJobHash,
-                            onJobCreated: createdHash => {
-                                store.SavePendingMvsepJobHash(cloudPlainCacheKey, cloudPreset.Id, createdHash);
-                                AppLogger.Info($"MVSEP Cloud: Saved active job hash={createdHash} for cancel-safe resume.");
-                            },
-                            onJobTerminal: _ => store.ClearPendingMvsepJobHash(cloudPlainCacheKey, cloudPreset.Id)).ConfigureAwait(false);
+                        if (cloudPreset.IsTwoStageCascade) {
+                            string s1Key = $"{cloudPreset.Id}:s1";
+                            string s2Key = $"{cloudPreset.Id}:s2";
+                            string pendingS1Hash = null;
+                            string pendingS2Hash = null;
+                            if (store.TryGetPendingMvsepJobHash(cloudPlainCacheKey, s1Key, out string savedS1)) {
+                                pendingS1Hash = savedS1;
+                                AppLogger.Info($"MVSEP 2-Stage: Resuming Stage-1 job hash={savedS1} ({cloudPreset.Id}).");
+                            }
+                            if (store.TryGetPendingMvsepJobHash(cloudPlainCacheKey, s2Key, out string savedS2)) {
+                                pendingS2Hash = savedS2;
+                                AppLogger.Info($"MVSEP 2-Stage: Resuming Stage-2 vocals-only job hash={savedS2} ({cloudPreset.Id}).");
+                            }
+                            Cavernize.Logic.Spatial.NeuralSeparatedTrack reusableStage1 = null;
+                            if (!forceReextract) {
+                                Cavernize.Logic.Spatial.NeuralSeparatedTrack liveSpatial = playerEngine?.NeuralStage?.ActiveSpatialUpmixTrack;
+                                if (liveSpatial != null &&
+                                    string.Equals(liveSpatial.SourceTrackKey, activePath, StringComparison.OrdinalIgnoreCase) &&
+                                    liveSpatial.FindStem("vocals") != null) {
+                                    reusableStage1 = liveSpatial;
+                                }
+                            }
+                            separated = await mvsepClient.SeparateTwoStageCascadeAsync(
+                                sourceTrackKey: activePath,
+                                mixLeft: mixL,
+                                mixRight: mixR,
+                                sampleRate: decodedSr,
+                                stage1Preset: cloudPreset,
+                                options: cloudOptions,
+                                preExtractedStage1Track: reusableStage1,
+                                displayTitle: summaryTitle,
+                                artistName: summaryArtist,
+                                externalDecoder: (rawBytes, fileName) => DecodeTempStemBytesWithFfmpeg(rawBytes, fileName, decodedSr, ffLoc, ct),
+                                onProgress: reportProgress,
+                                token: ct,
+                                existingStage1JobHash: pendingS1Hash,
+                                onStage1JobCreated: h => store.SavePendingMvsepJobHash(cloudPlainCacheKey, s1Key, h),
+                                onStage1JobTerminal: _ => store.ClearPendingMvsepJobHash(cloudPlainCacheKey, s1Key),
+                                existingStage2JobHash: pendingS2Hash,
+                                onStage2JobCreated: h => store.SavePendingMvsepJobHash(cloudPlainCacheKey, s2Key, h),
+                                onStage2JobTerminal: _ => store.ClearPendingMvsepJobHash(cloudPlainCacheKey, s2Key)).ConfigureAwait(false);
+                        } else {
+                            string pendingJobHash = null;
+                            if (store.TryGetPendingMvsepJobHash(cloudPlainCacheKey, cloudPreset.Id, out string savedHash)) {
+                                pendingJobHash = savedHash;
+                                AppLogger.Info($"MVSEP Cloud: Resuming previously submitted job hash={savedHash} (preset={cloudPreset.Id}) to preserve API credits.");
+                            }
+                            separated = await mvsepClient.SeparateTrackAsync(
+                                sourceTrackKey: activePath,
+                                mixLeft: mixL,
+                                mixRight: mixR,
+                                sampleRate: decodedSr,
+                                preset: cloudPreset,
+                                options: cloudOptions,
+                                displayTitle: summaryTitle,
+                                artistName: summaryArtist,
+                                externalDecoder: (rawBytes, fileName) => DecodeTempStemBytesWithFfmpeg(rawBytes, fileName, decodedSr, ffLoc, ct),
+                                onProgress: reportProgress,
+                                token: ct,
+                                existingJobHash: pendingJobHash,
+                                onJobCreated: createdHash => {
+                                    store.SavePendingMvsepJobHash(cloudPlainCacheKey, cloudPreset.Id, createdHash);
+                                    AppLogger.Info($"MVSEP Cloud: Saved active job hash={createdHash} for cancel-safe resume.");
+                                },
+                                onJobTerminal: _ => store.ClearPendingMvsepJobHash(cloudPlainCacheKey, cloudPreset.Id)).ConfigureAwait(false);
+                        }
                         cloudSw.Stop();
                         double audioSec = decodedSr > 0 ? mixL.Length / (double)decodedSr : 1.0;
                         rtf = audioSec > 0.01 ? (float)(cloudSw.Elapsed.TotalSeconds / audioSec) : 0f;
@@ -1404,6 +1528,7 @@ public partial class MainActivity {
                     } else if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
                         playerEngine.BindKaraokeReferenceTrack(separated);
                     }
+                    SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                     ApplyExtractedSongDnaOnUiThread(extractedDna);
                     SyncNeuralRuntimeDiagnostics();
                     RefreshNeuralAudioUi();

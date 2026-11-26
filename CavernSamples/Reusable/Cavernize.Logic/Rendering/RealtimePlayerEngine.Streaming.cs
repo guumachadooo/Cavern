@@ -86,7 +86,8 @@ public sealed partial class RealtimePlayerEngine {
         UpmixingSettings upmixing = null,
         RenderingSettings rendering = null,
         bool preserveNeuralStems = false,
-        double neuralReferenceOffset = double.NaN) {
+        double neuralReferenceOffset = double.NaN,
+        double neuralReferenceDriftPpm = double.NaN) {
         ArgumentNullException.ThrowIfNull(track);
         if (!track.Supported) {
             throw new NotSupportedException("Track format is not supported by Cavern.");
@@ -126,8 +127,14 @@ public sealed partial class RealtimePlayerEngine {
                     neuralStemStage.BindKaraokeReferenceTrack(null);
                 }
                 neuralStemStage.ReferenceSampleOffset = 0.0;
-            } else if (!double.IsNaN(neuralReferenceOffset)) {
-                neuralStemStage.ReferenceSampleOffset = neuralReferenceOffset;
+                neuralStemStage.ReferenceDriftPpm = 0.0;
+            } else {
+                if (!double.IsNaN(neuralReferenceOffset)) {
+                    neuralStemStage.ReferenceSampleOffset = neuralReferenceOffset;
+                }
+                if (!double.IsNaN(neuralReferenceDriftPpm)) {
+                    neuralStemStage.ReferenceDriftPpm = neuralReferenceDriftPpm;
+                }
             }
             lgsrStage.ClearExplicitLosslessStatus();
 

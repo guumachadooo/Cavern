@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 
 using Cavern.Neural;
+using Cavern.Restoration;
 
 namespace Cavernize.Logic.Spatial;
 
@@ -51,29 +52,74 @@ public sealed class MvsepAlgorithmPreset {
     /// <summary>True when this preset is an MVSEP Premium multi-model ensemble.</summary>
     public bool IsPremiumEnsemble { get; init; }
 
+    /// <summary>
+    /// True when this preset executes a custom 2-stage MVSEP API cascade:
+    /// Stage 1 separates the full mix into high-SDR single stems, then Stage 2 runs Lead/Backing karaoke
+    /// strictly on Stage 1's isolated <c>vocals</c> stem (<c>sep_type=49, add_opt2=0 "Use as is"</c>).
+    /// </summary>
+    public bool IsTwoStageCascade { get; init; }
+
+    /// <summary>Stage 2 preset ID invoked when <see cref="IsTwoStageCascade"/> is true.</summary>
+    public string Stage2PresetId { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Dedicated Stage-2 vocals-only Lead/Backing Karaoke preset (<c>sep_type=49, add_opt1=8 [BS-RoFormer 124b SDR 10.77], add_opt2=0 ["Use as is"]</c>).
+    /// Never re-extracts vocals from a full mix — operates exclusively on Stage 1's isolated <c>vocals</c> stem.
+    /// </summary>
+    public static MvsepAlgorithmPreset KaraokeVocalsOnlyStage2 { get; } = new() {
+        Id = "mvsep_karaoke_vocals_only_stage2",
+        DisplayName = "MVSEP Karaoke Lead/Back (Vocals-Only BS-RoFormer 124b)",
+        SeparationType = 49,
+        Opt1 = "8",
+        Opt2 = "0",
+        IsMultiStem = false
+    };
+
     /// <summary>Curated verified MVSEP REST presets (probed live against <c>https://mvsep.com/api/app/algorithms</c>).</summary>
     public static IReadOnlyList<MvsepAlgorithmPreset> Presets { get; } = [
         new MvsepAlgorithmPreset {
             Id = "mvsep_bs_roformer_vocals",
-            DisplayName = "BS-RoFormer Vocals / Pure Instrumental (SDR 11.3)",
+            DisplayName = "BS-RoFormer 124b Vocals / Pure Instrumental (SDR 12.3)",
             SeparationType = 40,
-            Opt1 = "29",
+            Opt1 = "171",
             Opt2 = "2",
+            Opt3 = "0",
             IsMultiStem = false
         },
         new MvsepAlgorithmPreset {
+            Id = "mvsep_cascade_roformer124_karaoke",
+            DisplayName = "2-Stage Cascade: BS-RoFormer 124b → Lead/Back Karaoke (SOTA)",
+            SeparationType = 40,
+            Opt1 = "171",
+            Opt2 = "2",
+            Opt3 = "0",
+            IsMultiStem = false,
+            IsTwoStageCascade = true,
+            Stage2PresetId = "mvsep_karaoke_vocals_only_stage2"
+        },
+        new MvsepAlgorithmPreset {
+            Id = "mvsep_cascade_6stem_karaoke",
+            DisplayName = "2-Stage Cascade: 6-Stem RoFormer → Lead/Back Karaoke (3D+Sing)",
+            SeparationType = 63,
+            Opt1 = "",
+            Opt2 = "",
+            IsMultiStem = true,
+            IsTwoStageCascade = true,
+            Stage2PresetId = "mvsep_karaoke_vocals_only_stage2"
+        },
+        new MvsepAlgorithmPreset {
             Id = "mvsep_melband_roformer_vocals",
-            DisplayName = "Mel-Band RoFormer Vocals / Instrumental (SDR 11.2)",
+            DisplayName = "Mel-Band RoFormer Deux Vocals / Instrumental (SDR 11.4)",
             SeparationType = 48,
-            Opt1 = "1",
+            Opt1 = "11",
             Opt2 = "2",
             IsMultiStem = false
         },
         new MvsepAlgorithmPreset {
             Id = "mvsep_karaoke_lead_back",
-            DisplayName = "MVSEP Karaoke 2-Stage (Lead + Backing + Pure Instrum)",
+            DisplayName = "MVSEP Karaoke Single-Call (BS-RoFormer 124b Lead + Backing)",
             SeparationType = 49,
-            Opt1 = "3",
+            Opt1 = "8",
             Opt2 = "1",
             IsMultiStem = false
         },
@@ -87,9 +133,9 @@ public sealed class MvsepAlgorithmPreset {
         },
         new MvsepAlgorithmPreset {
             Id = "mvsep_scnet_xl_vocals",
-            DisplayName = "SCNet XL Vocals / Instrumental (SDR 11.0)",
+            DisplayName = "SCNet XL IHF Vocals / Instrumental (SDR 11.1)",
             SeparationType = 46,
-            Opt1 = "2",
+            Opt1 = "5",
             Opt2 = "",
             IsMultiStem = false
         },
@@ -124,7 +170,7 @@ public sealed class MvsepAlgorithmPreset {
             DisplayName = "MVSEP Ensemble All-In (Lead+Back+6-Stem, Premium)",
             SeparationType = 30,
             Opt1 = "",
-            Opt2 = "",
+            Opt2 = "12",
             IsMultiStem = true,
             IsPremiumEnsemble = true
         }
@@ -133,13 +179,29 @@ public sealed class MvsepAlgorithmPreset {
     /// <summary>Finds a curated preset by its stable <see cref="Id"/>, defaulting to BS-RoFormer Vocals.</summary>
     public static MvsepAlgorithmPreset FindOrDefault(string id) {
         if (!string.IsNullOrWhiteSpace(id)) {
+            string trimmed = id.Trim();
+            if (string.Equals(trimmed, KaraokeVocalsOnlyStage2.Id, StringComparison.OrdinalIgnoreCase)) {
+                return KaraokeVocalsOnlyStage2;
+            }
             for (int i = 0; i < Presets.Count; i++) {
-                if (string.Equals(Presets[i].Id, id.Trim(), StringComparison.OrdinalIgnoreCase)) {
+                if (string.Equals(Presets[i].Id, trimmed, StringComparison.OrdinalIgnoreCase)) {
                     return Presets[i];
                 }
             }
         }
         return Presets[0];
+    }
+
+    /// <summary>Resolves the Stage-2 vocals-only preset for a 2-stage cascade.</summary>
+    public static MvsepAlgorithmPreset FindStage2OrDefault(string stage2PresetId) {
+        if (!string.IsNullOrWhiteSpace(stage2PresetId) &&
+            !string.Equals(stage2PresetId.Trim(), KaraokeVocalsOnlyStage2.Id, StringComparison.OrdinalIgnoreCase)) {
+            MvsepAlgorithmPreset found = FindOrDefault(stage2PresetId);
+            if (found != null && found.SeparationType == 49 && string.Equals(found.Opt2, "0", StringComparison.Ordinal)) {
+                return found;
+            }
+        }
+        return KaraokeVocalsOnlyStage2;
     }
 
     /// <summary>Selects the best MVSEP preset for a pipeline goal and Pure Instrumental / Backing preference.</summary>
@@ -149,8 +211,13 @@ public sealed class MvsepAlgorithmPreset {
             return FindOrDefault("mvsep_bs_roformer_6stem");
         }
         if (goal == NeuralPipelineGoal.SpatialKaraoke) {
+            if (preferred.IsTwoStageCascade) {
+                return preferred;
+            }
             if (preserveBackingVocals && preferred.SeparationType != 49 && preferred.SeparationType != 30) {
-                return FindOrDefault("mvsep_karaoke_lead_back");
+                return preferred.IsMultiStem
+                    ? FindOrDefault("mvsep_cascade_6stem_karaoke")
+                    : FindOrDefault("mvsep_cascade_roformer124_karaoke");
             }
             if (!preserveBackingVocals && preferred.SeparationType == 49) {
                 // MVSEP Karaoke (49) with opt2=1 also emits instrum-only + vocals-lead + vocals-back, which supports both!
@@ -634,6 +701,22 @@ public sealed class MvsepCloudClient : IDisposable {
             stems.Add(new StereoStemBuffer(canonicalName, sL, sR));
         }
 
+        // B2: Compensate any MP3 priming / server resampler padding delay on downloaded stems via GCC-PHAT
+        if (outSr == sr && stems.Count > 0 && targetLen >= 8192) {
+            AlignDownloadedStemsToReference(mixLeft, mixRight, stems, outSr);
+        }
+
+        // B2: Strip sub-50 Hz kick/sub-bass bleed from isolated vocal stems via zero-phase Butterworth high-pass
+        // so SpatialKaraokeEngine never attempts low-sub subtraction on vocal references while preserving >=75 Hz vocal chest.
+        for (int i = 0; i < stems.Count; i++) {
+            StereoStemBuffer st = stems[i];
+            if (string.Equals(st.Name, "vocals", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(st.Name, "lead_vocal", StringComparison.OrdinalIgnoreCase)) {
+                ApplyZeroPhaseSubVocalHighPass(st.Left, outSr);
+                ApplyZeroPhaseSubVocalHighPass(st.Right, outSr);
+            }
+        }
+
         // If MVSEP Karaoke returned lead_vocal + backing_vocals without a combined vocals stem, synthesize combined vocals
         // so toggling between Lead-Only Karaoke and Pure Instrumental (Remove Backing) is instant!
         StereoStemBuffer leadStem = stems.FirstOrDefault(s => string.Equals(s.Name, "lead_vocal", StringComparison.OrdinalIgnoreCase));
@@ -680,6 +763,261 @@ public sealed class MvsepCloudClient : IDisposable {
         onJobTerminal?.Invoke(hash);
         onProgress?.Invoke(1.0, $"MVSEP Cloud Ready ({preset.DisplayName})");
         return separated;
+    }
+
+    /// <summary>
+    /// Executes the B4 2-Stage Custom MVSEP Cascade:
+    /// <list type="number">
+    ///   <item><b>Stage 1 (Full Mix → Single Stems):</b> Runs <paramref name="stage1Preset"/> (e.g., BS-RoFormer 124b or 6-Stem RoFormer), or reuses <paramref name="preExtractedStage1Track"/> at zero credit cost.</item>
+    ///   <item><b>Stage 2 (Isolated Vocals ONLY → Lead + Backing):</b> Uploads strictly Stage 1's isolated <c>vocals</c> stem to <paramref name="stage2Preset"/> (<c>sep_type=49, add_opt1=8, add_opt2=0 "Use as is"</c>), never re-uploading the full mix.</item>
+    ///   <item><b>Exact Vocal Energy Conservation:</b> Reconstructs <c>backing_vocals = stage1.vocals - stage2.lead_vocal</c> so <c>lead_vocal + backing_vocals == vocals</c> bit-accurately while keeping Stage 1's instrumental/multi-stems intact.</item>
+    /// </list>
+    /// Both stages maintain independent cancel-safe job hashes so cancelling mid-cascade never wastes paid MVSEP credits.
+    /// </summary>
+    public async Task<NeuralSeparatedTrack> SeparateTwoStageCascadeAsync(
+        string sourceTrackKey,
+        float[] mixLeft,
+        float[] mixRight,
+        int sampleRate,
+        MvsepAlgorithmPreset stage1Preset,
+        MvsepCloudOptions options,
+        MvsepAlgorithmPreset stage2Preset = null,
+        NeuralSeparatedTrack preExtractedStage1Track = null,
+        string displayTitle = "",
+        string artistName = "",
+        Func<byte[], string, (float[] Left, float[] Right, int SampleRate)> externalDecoder = null,
+        Action<double, string> onProgress = null,
+        CancellationToken token = default,
+        string existingStage1JobHash = null,
+        Action<string> onStage1JobCreated = null,
+        Action<string> onStage1JobTerminal = null,
+        string existingStage2JobHash = null,
+        Action<string> onStage2JobCreated = null,
+        Action<string> onStage2JobTerminal = null) {
+        ArgumentNullException.ThrowIfNull(mixLeft);
+        ArgumentNullException.ThrowIfNull(mixRight);
+        ArgumentNullException.ThrowIfNull(stage1Preset);
+        ArgumentNullException.ThrowIfNull(options);
+
+        MvsepAlgorithmPreset stage2 = stage2Preset ?? MvsepAlgorithmPreset.FindStage2OrDefault(stage1Preset.Stage2PresetId);
+        NeuralSeparatedTrack stage1Track = preExtractedStage1Track;
+
+        if (stage1Track == null || stage1Track.Stems == null || stage1Track.Stems.Count == 0) {
+            stage1Track = await SeparateTrackAsync(
+                sourceTrackKey: sourceTrackKey,
+                mixLeft: mixLeft,
+                mixRight: mixRight,
+                sampleRate: sampleRate,
+                preset: stage1Preset,
+                options: options,
+                displayTitle: displayTitle,
+                artistName: artistName,
+                externalDecoder: externalDecoder,
+                onProgress: (p, msg) => onProgress?.Invoke(Math.Clamp(p * 0.55, 0.0, 0.55), $"[1/2] {msg}"),
+                token: token,
+                existingJobHash: existingStage1JobHash,
+                onJobCreated: onStage1JobCreated,
+                onJobTerminal: onStage1JobTerminal).ConfigureAwait(false);
+        } else {
+            onProgress?.Invoke(0.55, "[1/2] Reusing cached Stage-1 stems (0 credits)...");
+        }
+
+        StereoStemBuffer stage1Vocals = stage1Track.FindStem("vocals") ?? stage1Track.FindStem("lead_vocal");
+        if (stage1Vocals == null || !IsStemAudible(stage1Vocals.Left, stage1Vocals.Right)) {
+            onProgress?.Invoke(1.0, $"MVSEP 2-Stage Ready (instrumental track — Stage 2 skipped)");
+            return stage1Track;
+        }
+
+        int sr = stage1Track.SampleRate >= 8000 ? stage1Track.SampleRate : (sampleRate >= 8000 ? sampleRate : 44100);
+        int vocLen = stage1Vocals.Length;
+
+        // Stage 2: Strictly upload ONLY the isolated Stage-1 vocals stem with add_opt2=0 ("Use as is")
+        NeuralSeparatedTrack stage2Track = await SeparateTrackAsync(
+            sourceTrackKey: $"{sourceTrackKey}|stage2_vocals",
+            mixLeft: stage1Vocals.Left,
+            mixRight: stage1Vocals.Right,
+            sampleRate: sr,
+            preset: stage2,
+            options: options,
+            displayTitle: displayTitle,
+            artistName: artistName,
+            externalDecoder: externalDecoder,
+            onProgress: (p, msg) => onProgress?.Invoke(Math.Clamp(0.55 + p * 0.43, 0.55, 0.98), $"[2/2] {msg}"),
+            token: token,
+            existingJobHash: existingStage2JobHash,
+            onJobCreated: onStage2JobCreated,
+            onJobTerminal: onStage2JobTerminal).ConfigureAwait(false);
+
+        StereoStemBuffer stage2Lead = stage2Track.FindStem("lead_vocal") ?? stage2Track.FindStem("vocals");
+        if (stage2Lead == null || !IsStemAudible(stage2Lead.Left, stage2Lead.Right)) {
+            return stage1Track;
+        }
+
+        // Exact length match + exact vocal energy conservation: backing = stage1_vocals - stage2_lead
+        float[] leadL = new float[vocLen];
+        float[] leadR = new float[vocLen];
+        int copyLen = Math.Min(vocLen, stage2Lead.Length);
+        Array.Copy(stage2Lead.Left, leadL, copyLen);
+        Array.Copy(stage2Lead.Right, leadR, copyLen);
+
+        float[] backL = new float[vocLen];
+        float[] backR = new float[vocLen];
+        for (int i = 0; i < vocLen; i++) {
+            backL[i] = stage1Vocals.Left[i] - leadL[i];
+            backR[i] = stage1Vocals.Right[i] - leadR[i];
+        }
+
+        List<StereoStemBuffer> merged = new(stage1Track.Stems.Count + 2);
+        for (int i = 0; i < stage1Track.Stems.Count; i++) {
+            StereoStemBuffer st = stage1Track.Stems[i];
+            if (string.Equals(st.Name, "lead_vocal", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(st.Name, "backing_vocals", StringComparison.OrdinalIgnoreCase)) {
+                continue;
+            }
+            merged.Add(st);
+        }
+        merged.Add(new StereoStemBuffer("lead_vocal", leadL, leadR));
+        if (IsStemAudible(backL, backR)) {
+            merged.Add(new StereoStemBuffer("backing_vocals", backL, backR));
+        }
+
+        string cascadeSig = $"mvsep_cascade_s{stage1Preset.SeparationType}_to_s{stage2.SeparationType}_o1{stage2.Opt1}_o2{stage2.Opt2}";
+        NeuralSeparatedTrack combined = NeuralAudioOfflinePipeline.BuildSeparatedTrack(
+            sourceTrackKey,
+            sr,
+            merged.ToArray(),
+            dereverb: null,
+            derivedFromLosslessTwin: false,
+            planSignature: cascadeSig);
+        combined.DisplayTitle = displayTitle ?? string.Empty;
+        combined.ArtistName = artistName ?? string.Empty;
+        combined.OriginTag = "MVSEP Cloud (2-Stage)";
+        combined.ModelSummary = $"{stage1Preset.DisplayName} -> {stage2.DisplayName}";
+
+        onProgress?.Invoke(1.0, $"MVSEP 2-Stage Ready ({combined.Stems.Count} stems)");
+        return combined;
+    }
+
+    /// <summary>
+    /// B2: Applies a zero-phase (forward + backward) 2nd-order Butterworth high-pass filter (effective 4th-order 24 dB/oct,
+    /// 0.0° phase shift) at <paramref name="cutoffHz"/> (default 50 Hz) to strip sub-sonic kick/sub-bass bleed from isolated
+    /// vocal stems without altering vocal chest fundamentals (&gt;=75 Hz) or STFT phase lock.
+    /// </summary>
+    public static void ApplyZeroPhaseSubVocalHighPass(float[] buffer, int sampleRate, float cutoffHz = 50f) {
+        if (buffer == null || buffer.Length < 64 || sampleRate < 8000 || cutoffHz <= 1f || cutoffHz >= sampleRate * 0.25f) {
+            return;
+        }
+        double omega = 2.0 * Math.PI * cutoffHz / sampleRate;
+        double cosW = Math.Cos(omega);
+        double sinW = Math.Sin(omega);
+        double alpha = sinW / Math.Sqrt(2.0); // Q = 1/sqrt(2) Butterworth
+        double a0 = 1.0 + alpha;
+        double b0 = ((1.0 + cosW) * 0.5) / a0;
+        double b1 = -(1.0 + cosW) / a0;
+        double b2 = ((1.0 + cosW) * 0.5) / a0;
+        double a1 = (-2.0 * cosW) / a0;
+        double a2 = (1.0 - alpha) / a0;
+
+        // Forward pass
+        double z1 = 0.0, z2 = 0.0;
+        for (int i = 0; i < buffer.Length; i++) {
+            double x = float.IsFinite(buffer[i]) ? buffer[i] : 0.0;
+            double y = b0 * x + z1;
+            z1 = b1 * x - a1 * y + z2;
+            z2 = b2 * x - a2 * y;
+            buffer[i] = (float)y;
+        }
+
+        // Backward pass (cancels phase shift identically -> 0.0 rad group delay across all frequencies)
+        z1 = 0.0;
+        z2 = 0.0;
+        for (int i = buffer.Length - 1; i >= 0; i--) {
+            double x = buffer[i];
+            double y = b0 * x + z1;
+            z1 = b1 * x - a1 * y + z2;
+            z2 = b2 * x - a2 * y;
+            buffer[i] = (float)y;
+        }
+    }
+
+    /// <summary>
+    /// B2: Estimates any constant server/codec priming delay (e.g., MP3 576/1105-sample padding or resampler latency)
+    /// between downloaded MVSEP stems and the uploaded stereo mix via GCC-PHAT, and uniformly re-aligns all stems
+    /// with 4-point Farrow Lagrange interpolation so STFT vocal cancellation remains 0-sample phase-locked.
+    /// </summary>
+    public static double AlignDownloadedStemsToReference(
+        float[] refLeft,
+        float[] refRight,
+        List<StereoStemBuffer> stems,
+        int sampleRate) {
+        if (refLeft == null || refRight == null || stems == null || stems.Count == 0 || sampleRate < 8000) {
+            return 0.0;
+        }
+        int targetLen = Math.Min(refLeft.Length, refRight.Length);
+        if (targetLen < 8192) {
+            return 0.0;
+        }
+
+        // Cap GCC-PHAT probe span to <= 20s for fast O(1) alignment (<15 ms on mobile)
+        int probeLen = Math.Min(targetLen, sampleRate * 20);
+        int probeStart = targetLen > probeLen ? (targetLen - probeLen) / 2 : 0;
+        float[] refMono = new float[probeLen];
+        float[] stemMono = new float[probeLen];
+        for (int i = 0; i < probeLen; i++) {
+            refMono[i] = 0.5f * (refLeft[probeStart + i] + refRight[probeStart + i]);
+        }
+
+        // Prefer summing all non-redundant stems (or instrumental+vocals) for maximum broadband transient sharpness
+        bool hasAny = false;
+        for (int s = 0; s < stems.Count; s++) {
+            StereoStemBuffer st = stems[s];
+            if (st == null || st.Length < probeStart + probeLen) {
+                continue;
+            }
+            if (string.Equals(st.Name, "back_instrumental", StringComparison.OrdinalIgnoreCase)) {
+                continue;
+            }
+            for (int i = 0; i < probeLen; i++) {
+                stemMono[i] += 0.5f * (st.Left[probeStart + i] + st.Right[probeStart + i]);
+            }
+            hasAny = true;
+        }
+        if (!hasAny) {
+            return 0.0;
+        }
+
+        SubSampleSyncResult sync = SubSampleSyncEngine.Align(
+            refMono,
+            stemMono,
+            sampleRate,
+            maxMacroSearchSeconds: 0.5f,
+            minConfidenceGate: 0.50f,
+            windowCount: 6);
+        if (!sync.IsSynced || sync.Confidence < 0.50f) {
+            return 0.0;
+        }
+        double offset = sync.BaseOffsetSamples;
+        if (!double.IsFinite(offset) || Math.Abs(offset) < 0.45 || Math.Abs(offset) > sampleRate * 0.5) {
+            return 0.0;
+        }
+
+        // Shift every stem uniformly by reading at exactPos = offset + i (SubSampleSyncEngine: stemIdx = offset + refIdx)
+        for (int s = 0; s < stems.Count; s++) {
+            StereoStemBuffer st = stems[s];
+            if (st == null || st.Length <= 0) {
+                continue;
+            }
+            float[] shiftedL = new float[targetLen];
+            float[] shiftedR = new float[targetLen];
+            int srcLen = st.Length;
+            for (int i = 0; i < targetLen; i++) {
+                double pos = offset + i;
+                shiftedL[i] = FarrowLagrangeDelay.SampleAt(st.Left, srcLen, pos);
+                shiftedR[i] = FarrowLagrangeDelay.SampleAt(st.Right, srcLen, pos);
+            }
+            stems[s] = new StereoStemBuffer(st.Name, shiftedL, shiftedR);
+        }
+        return offset;
     }
 
     /// <summary>

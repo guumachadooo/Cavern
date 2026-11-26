@@ -178,9 +178,52 @@ namespace Cavern.Restoration {
             int sr = sampleRate > 0 ? sampleRate : 48000;
             float maxSearchSec = Math.Clamp(maxMacroSearchSeconds, 0.5f, 30f);
 
-            // Stage 1: Macro onset/envelope cross-correlation (±15 s)
-            long macroOffset = EstimateMacroOffset(atmosMono, losslessMono, sr, maxSearchSec, out float macroConf);
+            // Stage 1: Macro onset/envelope cross-correlation (±15 s) with multi-peak fallback for periodic beats
+            long[] macroCandidates = EstimateMacroOffsetCandidates(
+                atmosMono,
+                losslessMono,
+                sr,
+                maxSearchSec,
+                maxCandidates: 8,
+                out float macroConf);
+            if (macroCandidates.Length == 0) {
+                return SubSampleSyncResult.Unsynced();
+            }
 
+            SubSampleSyncResult bestOverall = SubSampleSyncResult.Unsynced();
+            bestOverall.MacroOffsetSamples = macroCandidates[0];
+            bestOverall.BaseOffsetSamples = macroCandidates[0];
+            bestOverall.Confidence = macroConf * 0.25f;
+
+            for (int cIdx = 0; cIdx < macroCandidates.Length; cIdx++) {
+                SubSampleSyncResult candResult = AlignAroundMacroOffset(
+                    atmosMono,
+                    losslessMono,
+                    sr,
+                    macroCandidates[cIdx],
+                    macroConf,
+                    minConfidenceGate,
+                    windowCount);
+                if (candResult.IsSynced && (!bestOverall.IsSynced || candResult.Confidence > bestOverall.Confidence)) {
+                    bestOverall = candResult;
+                    if (candResult.Confidence >= 0.55f) {
+                        return bestOverall;
+                    }
+                } else if (!bestOverall.IsSynced && candResult.Confidence > bestOverall.Confidence) {
+                    bestOverall = candResult;
+                }
+            }
+            return bestOverall;
+        }
+
+        static SubSampleSyncResult AlignAroundMacroOffset(
+            float[] atmosMono,
+            float[] losslessMono,
+            int sr,
+            long macroOffset,
+            float macroConf,
+            float minConfidenceGate,
+            int windowCount) {
             // Stage 2: Sliding-window GCC-PHAT across overlapping track span
             long overlapStart = Math.Max(0L, -macroOffset);
             long overlapEnd = Math.Min((long)atmosMono.Length, losslessMono.Length - macroOffset);
@@ -357,13 +400,24 @@ namespace Cavern.Restoration {
             int sampleRate,
             float maxSearchSeconds,
             out float confidence) {
+            long[] candidates = EstimateMacroOffsetCandidates(atmosMono, losslessMono, sampleRate, maxSearchSeconds, 1, out confidence);
+            return candidates.Length > 0 ? candidates[0] : 0L;
+        }
+
+        static long[] EstimateMacroOffsetCandidates(
+            float[] atmosMono,
+            float[] losslessMono,
+            int sampleRate,
+            float maxSearchSeconds,
+            int maxCandidates,
+            out float confidence) {
             confidence = 0f;
             int hop = Math.Max(64, sampleRate / 100); // 10 ms envelope frames (100 Hz)
             int maxFrames = Math.Min(6000, Math.Max(atmosMono.Length, losslessMono.Length) / hop); // up to 60s probe
             int lenA = Math.Min(maxFrames, atmosMono.Length / hop);
             int lenB = Math.Min(maxFrames, losslessMono.Length / hop);
             if (lenA < 8 || lenB < 8) {
-                return 0L;
+                return new long[] { 0L };
             }
 
             float[] envA = BuildLogOnsetEnvelope(atmosMono, lenA, hop);
@@ -398,8 +452,7 @@ namespace Cavern.Restoration {
             }
 
             int maxLagFrames = Math.Min((fftLen / 2) - 1, (int)Math.Ceiling(maxSearchSeconds * sampleRate / hop));
-            double bestVal = double.NegativeInfinity;
-            int bestLag = 0;
+            int targetCount = Math.Clamp(maxCandidates, 1, 8);
             double sumSq = 0.0;
             int count = 0;
 
@@ -408,16 +461,56 @@ namespace Cavern.Restoration {
                 float v = specA[idx].Real;
                 sumSq += (double)v * v;
                 count++;
-                if (v > bestVal) {
-                    bestVal = v;
-                    bestLag = lag;
+            }
+
+            // Greedy non-maximum suppression (4-frame / 40 ms radius) to collect top distinct macro peaks
+            int[] bestLags = new int[targetCount];
+            double[] bestVals = new double[targetCount];
+            int found = 0;
+            const int minSeparationFrames = 4;
+
+            for (int c = 0; c < targetCount; c++) {
+                double candVal = double.NegativeInfinity;
+                int candLag = 0;
+                bool any = false;
+                for (int lag = -maxLagFrames; lag <= maxLagFrames; lag++) {
+                    bool nearExisting = false;
+                    for (int p = 0; p < found; p++) {
+                        if (Math.Abs(lag - bestLags[p]) < minSeparationFrames) {
+                            nearExisting = true;
+                            break;
+                        }
+                    }
+                    if (nearExisting) {
+                        continue;
+                    }
+                    int idx = lag >= 0 ? lag : (fftLen + lag);
+                    float v = specA[idx].Real;
+                    if (v > candVal) {
+                        candVal = v;
+                        candLag = lag;
+                        any = true;
+                    }
                 }
+                if (!any) {
+                    break;
+                }
+                bestLags[found] = candLag;
+                bestVals[found] = candVal;
+                found++;
             }
 
             double rms = Math.Sqrt(sumSq / Math.Max(1, count));
-            double psr = rms > 1e-12 ? (bestVal / rms) : 0.0;
+            double psr = (found > 0 && rms > 1e-12) ? (bestVals[0] / rms) : 0.0;
             confidence = (float)Math.Clamp((psr - 2.0) / 10.0, 0.0, 1.0);
-            return (long)bestLag * hop;
+            if (found == 0) {
+                return new long[] { 0L };
+            }
+            long[] result = new long[found];
+            for (int i = 0; i < found; i++) {
+                result[i] = (long)bestLags[i] * hop;
+            }
+            return result;
         }
 
         /// <summary>
@@ -735,26 +828,55 @@ namespace Cavern.Restoration {
 
         static float[] BuildLogOnsetEnvelope(float[] mono, int frames, int hop) {
             float[] env = new float[frames];
+            bool[] active = new bool[frames];
+            // 40 ms Hann-windowed RMS (4x hop @ 100 Hz envelope rate): places first spectral null at 50 Hz
+            // Nyquist (-32 dB sidelobes) so bass/vocal cross-terms (>50 Hz) cannot alias into spurious beat lags,
+            // while 75% overlap preserves peak correlation across arbitrary fractional-frame offsets.
+            int win = Math.Max(hop, hop * 4);
+            float[] hann = BuildHannWindow(win);
+            int halfWin = win >> 1;
+            int halfHop = hop >> 1;
+            int monoLen = mono.Length;
+
             float prevLog = 0f;
-            float mean = 0f;
+            double activeSum = 0.0;
+            int activeCount = 0;
             for (int f = 0; f < frames; f++) {
-                int start = f * hop;
+                int s0 = f * hop + halfHop - halfWin;
+                int kStart = s0 < 0 ? -s0 : 0;
+                int kEnd = s0 + win > monoLen ? (monoLen - s0) : win;
                 double sumSq = 0.0;
-                for (int i = 0; i < hop; i++) {
-                    float v = mono[start + i];
-                    sumSq += v * v;
+                double wSum = 0.0;
+                for (int k = kStart; k < kEnd; k++) {
+                    float w = hann[k];
+                    float v = mono[s0 + k];
+                    sumSq += (double)w * v * v;
+                    wSum += w;
                 }
-                float rms = (float)Math.Sqrt(sumSq / hop);
+                float rms = wSum > 1e-9 ? (float)Math.Sqrt(sumSq / wSum) : 0f;
+                if (rms < 1e-5f) {
+                    // Keep studio lead-in/tail silence strictly 0 so it never becomes a negative -mean block
+                    // that spuriously correlates with quiet valleys at wrong lags.
+                    env[f] = 0f;
+                    prevLog = 0f;
+                    continue;
+                }
                 float logE = MathF.Log(1f + 25f * rms);
-                // Half-wave rectified onset flux + subtle sustained energy keeps both percussive & ambient cues locked
+                // Half-wave rectified onset flux + sustained log-energy keeps both percussive & ambient cues locked
                 float onset = MathF.Max(0f, logE - prevLog) + 0.25f * logE;
                 env[f] = onset;
-                mean += onset;
+                active[f] = true;
+                activeSum += onset;
+                activeCount++;
                 prevLog = logE;
             }
-            mean /= Math.Max(1, frames);
-            for (int f = 0; f < frames; f++) {
-                env[f] -= mean;
+            if (activeCount > 0) {
+                float mean = (float)(activeSum / activeCount);
+                for (int f = 0; f < frames; f++) {
+                    if (active[f]) {
+                        env[f] -= mean;
+                    }
+                }
             }
             return env;
         }

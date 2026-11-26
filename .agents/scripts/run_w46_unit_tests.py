@@ -3228,6 +3228,186 @@ RunTest("T43_NeuralLowRamMemoryDisciplineAndFallback", () => {
     Assert(heavyOnlyRt.HeavyRejectCount == 1, $"Expected single attempt without retry loop, got {heavyOnlyRt.HeavyRejectCount}");
 });
 
+// =========================================================================
+// T44: W53.1 Wave A (B2 Low-Band Sub-50Hz HP + Stem Align, B3 CrossVariantAligner + DriftPpm, B4 MVSEP 2-Stage Cascade)
+// =========================================================================
+RunTest("T44_W53_1_MvsepTwoStageCascade_LowBandFix_And_CrossVariantAligner", () => {
+    const int sr = 44100;
+    const int n = sr * 2; // 2.0 s
+    float[] leadL = new float[n], leadR = new float[n];
+    float[] backL = new float[n], backR = new float[n];
+    float[] bassL = new float[n], bassR = new float[n];
+    float[] drumsL = new float[n], drumsR = new float[n];
+    float[] silentL = new float[n], silentR = new float[n];
+    float[] vocL = new float[n], vocR = new float[n];
+    float[] mixL = new float[n], mixR = new float[n];
+
+    Random rng = new(53144);
+    for (int i = 0; i < n; i++) {
+        double t = i / (double)sr;
+        float lead = 0.24f * MathF.Sin((float)(2 * Math.PI * 220.0 * t)) + 0.16f * MathF.Sin((float)(2 * Math.PI * 660.0 * t));
+        float back = 0.14f * MathF.Sin((float)(2 * Math.PI * 330.0 * t + 0.6));
+        float bass = 0.30f * MathF.Sin((float)(2 * Math.PI * 65.0 * t)) + 0.18f * (float)(rng.NextDouble() * 2.0 - 1.0) * ((i % 4410) < 120 ? 1f : 0.15f);
+        float drums = 0.18f * MathF.Sin((float)(2 * Math.PI * 140.0 * t));
+        leadL[i] = leadR[i] = lead;
+        backL[i] = back;
+        backR[i] = -back;
+        vocL[i] = leadL[i] + backL[i];
+        vocR[i] = leadR[i] + backR[i];
+        bassL[i] = bassR[i] = bass;
+        drumsL[i] = drumsR[i] = drums;
+        mixL[i] = vocL[i] + bassL[i] + drumsL[i];
+        mixR[i] = vocR[i] + bassR[i] + drumsR[i];
+    }
+
+    // 1. B4 MVSEP 2-Stage Custom Cascade: Stage 1 (sep_type=63) -> Stage 2 (sep_type=49, opt1=8, opt2=0 "Use as is" on isolated vocals ONLY)
+    byte[] s1VocWav = MvsepCloudClient.EncodeStereoWav16(vocL, vocR, sr);
+    byte[] s1BassWav = MvsepCloudClient.EncodeStereoWav16(bassL, bassR, sr);
+    byte[] s1DrumsWav = MvsepCloudClient.EncodeStereoWav16(drumsL, drumsR, sr);
+    byte[] s1SilentWav = MvsepCloudClient.EncodeStereoWav16(silentL, silentR, sr);
+    byte[] s2LeadWav = MvsepCloudClient.EncodeStereoWav16(leadL, leadR, sr);
+    byte[] s2BackWav = MvsepCloudClient.EncodeStereoWav16(backL, backR, sr);
+
+    using MockMvsepCascadeHttpHandler cascadeHandler = new(s1VocWav, s1BassWav, s1DrumsWav, s1SilentWav, s2LeadWav, s2BackWav);
+    using MvsepCloudClient client = new(cascadeHandler);
+    MvsepCloudOptions opts = new() {
+        ApiToken = "test_cascade_token_531",
+        BaseUrl = MvsepCloudOptions.DefaultBaseUrl,
+        OutputFormat = MvsepOutputFormat.Wav16Bit,
+        PollIntervalMs = 20,
+        MaxPollSeconds = 10
+    };
+    MvsepAlgorithmPreset cascadePreset = MvsepAlgorithmPreset.FindOrDefault("mvsep_cascade_6stem_karaoke");
+    Assert(cascadePreset.IsTwoStageCascade && cascadePreset.SeparationType == 63, "mvsep_cascade_6stem_karaoke preset contract mismatch");
+
+    List<string> createdHashes = [];
+    List<string> terminalHashes = [];
+    NeuralSeparatedTrack cascadeOut = client.SeparateTwoStageCascadeAsync(
+        sourceTrackKey: "song_cascade.flac",
+        mixLeft: mixL,
+        mixRight: mixR,
+        sampleRate: sr,
+        stage1Preset: cascadePreset,
+        options: opts,
+        displayTitle: "Cascade Song",
+        artistName: "Cavern",
+        onStage1JobCreated: h => createdHashes.Add("s1:" + h),
+        onStage1JobTerminal: h => terminalHashes.Add("s1:" + h),
+        onStage2JobCreated: h => createdHashes.Add("s2:" + h),
+        onStage2JobTerminal: h => terminalHashes.Add("s2:" + h)).GetAwaiter().GetResult();
+
+    Assert(cascadeHandler.CreateCalls.Count == 2, $"Expected exactly 2 MVSEP create calls (Stage 1 + Stage 2), got {cascadeHandler.CreateCalls.Count}");
+    Assert(cascadeHandler.CreateCalls[0].SepType == "63", $"Stage 1 must use sep_type=63, got {cascadeHandler.CreateCalls[0].SepType}");
+    Assert(cascadeHandler.CreateCalls[1].SepType == "49" && cascadeHandler.CreateCalls[1].Opt1 == "8" && cascadeHandler.CreateCalls[1].Opt2 == "0",
+        $"Stage 2 must use sep_type=49, add_opt1=8, add_opt2=0 ('Use as is'), got sep={cascadeHandler.CreateCalls[1].SepType}, o1={cascadeHandler.CreateCalls[1].Opt1}, o2={cascadeHandler.CreateCalls[1].Opt2}");
+
+    // Prove Stage 2 uploaded ONLY isolated Stage-1 vocals (NOT full mix containing 65 Hz bass!)
+    Assert(MvsepCloudClient.TryDecodePcmWavStereo(cascadeHandler.CreateCalls[1].AudioBytes, out float[] upL, out float[] upR, out int upSr),
+        "Stage 2 uploaded payload must be valid PCM WAV");
+    double mixRe = 0, mixIm = 0, upRe = 0, upIm = 0;
+    for (int i = 0; i < n; i++) {
+        double ang = 2 * Math.PI * 65.0 * i / sr;
+        double c65 = Math.Cos(ang);
+        double s65 = Math.Sin(ang);
+        mixRe += mixL[i] * c65;
+        mixIm += mixL[i] * s65;
+        upRe += upL[i] * c65;
+        upIm += upL[i] * s65;
+    }
+    double bassInMix = Math.Sqrt(mixRe * mixRe + mixIm * mixIm);
+    double bassInStage2Upload = Math.Sqrt(upRe * upRe + upIm * upIm);
+    double bassLeakRatio = bassInStage2Upload / Math.Max(1e-9, bassInMix);
+    Assert(bassLeakRatio < 0.05, $"Stage 2 MUST upload vocals-only stem (not full mix!); 65 Hz bass leak ratio={bassLeakRatio:0.4}");
+
+    // Verify exact vocal energy conservation: lead_vocal + backing_vocals == stage1 vocals
+    StereoStemBuffer outVoc = cascadeOut.FindStem("vocals");
+    StereoStemBuffer outLead = cascadeOut.FindStem("lead_vocal");
+    StereoStemBuffer outBack = cascadeOut.FindStem("backing_vocals");
+    Assert(outVoc != null && outLead != null && outBack != null, "Cascade output must include vocals, lead_vocal, and backing_vocals");
+    Assert(cascadeOut.FindStem("piano") == null, "Silent piano stem must be pruned via IsStemAudible");
+    Assert(cascadeOut.FindStem("bass") != null && cascadeOut.FindStem("drums") != null, "Audible Stage 1 stems (bass, drums) must be preserved");
+    float maxConsErr = 0f;
+    for (int i = 0; i < n; i++) {
+        maxConsErr = MathF.Max(maxConsErr, MathF.Abs((outLead.Left[i] + outBack.Left[i]) - outVoc.Left[i]));
+        maxConsErr = MathF.Max(maxConsErr, MathF.Abs((outLead.Right[i] + outBack.Right[i]) - outVoc.Right[i]));
+    }
+    Assert(maxConsErr < 1e-5f, $"Vocal energy conservation failed: max |lead+back - vocals| = {maxConsErr}");
+    Assert(createdHashes.Contains("s1:cascade_s1") && createdHashes.Contains("s2:cascade_s2"), "Independent :s1/:s2 job creation callbacks missing");
+    Assert(terminalHashes.Contains("s1:cascade_s1") && terminalHashes.Contains("s2:cascade_s2"), "Independent :s1/:s2 terminal callbacks missing");
+
+    // 2. Verify Stage-1 reuse + Stage-2 cancel-safe resume spend 0 duplicate create calls!
+    int createsBeforeResume = cascadeHandler.CreateCalls.Count;
+    NeuralSeparatedTrack resumed = client.SeparateTwoStageCascadeAsync(
+        sourceTrackKey: "song_cascade.flac",
+        mixLeft: mixL,
+        mixRight: mixR,
+        sampleRate: sr,
+        stage1Preset: cascadePreset,
+        options: opts,
+        preExtractedStage1Track: cascadeOut,
+        existingStage2JobHash: "cascade_s2").GetAwaiter().GetResult();
+    Assert(cascadeHandler.CreateCalls.Count == createsBeforeResume,
+        $"Resuming Stage-2 hash with cached Stage-1 must issue 0 new create calls, issued {cascadeHandler.CreateCalls.Count - createsBeforeResume}");
+    Assert(resumed.FindStem("lead_vocal") != null, "Resumed cascade must still produce lead_vocal");
+
+    // 3. B2 Zero-phase sub-50 Hz high-pass check (attenuates 30 Hz >= 18 dB, preserves 110 Hz within 0.5 dB, 0-sample phase shift)
+    float[] hpTest = new float[sr];
+    float[] ref110 = new float[sr];
+    for (int i = 0; i < sr; i++) {
+        double t = i / (double)sr;
+        float s110 = 0.5f * MathF.Sin((float)(2 * Math.PI * 110.0 * t));
+        ref110[i] = s110;
+        hpTest[i] = s110 + 0.5f * MathF.Sin((float)(2 * Math.PI * 30.0 * t));
+    }
+    MvsepCloudClient.ApplyZeroPhaseSubVocalHighPass(hpTest, sr, 50f);
+    double p30Before = 0, p30After = 0, re110 = 0, im110 = 0, p110Ref = 0;
+    for (int i = sr / 4; i < (3 * sr) / 4; i++) {
+        double t = i / (double)sr;
+        double s30 = Math.Sin(2 * Math.PI * 30.0 * t);
+        double s110 = Math.Sin(2 * Math.PI * 110.0 * t);
+        double c110 = Math.Cos(2 * Math.PI * 110.0 * t);
+        p30Before += 0.5 * s30 * s30;
+        p30After += hpTest[i] * s30;
+        re110 += hpTest[i] * s110;
+        im110 += hpTest[i] * c110;
+        p110Ref += 0.5 * s110 * s110;
+    }
+    double att30Db = 20.0 * Math.Log10(Math.Max(1e-9, Math.Abs(p30After)) / Math.Max(1e-9, p30Before));
+    double mag110 = Math.Sqrt(re110 * re110 + im110 * im110);
+    double gain110Db = 20.0 * Math.Log10(Math.Max(1e-9, mag110) / Math.Max(1e-9, p110Ref));
+    double phase110Deg = Math.Abs(Math.Atan2(im110, re110) * (180.0 / Math.PI));
+    Assert(att30Db <= -18.0, $"Sub-50 Hz HP must attenuate 30 Hz by >= 18 dB, got {att30Db:F2} dB");
+    Assert(Math.Abs(gain110Db) <= 0.5, $"Sub-50 Hz HP must preserve 110 Hz within +/-0.5 dB, got {gain110Db:F2} dB");
+    Assert(phase110Deg <= 0.5, $"Zero-phase HP must preserve 110 Hz with ~0.0 deg phase shift, got {phase110Deg:F3} deg");
+
+    // 4. B2 GCC-PHAT priming shift recovery (+576 samples MP3 padding -> aligned back to 0.0)
+    const int primeDelay = 576;
+    float[] delayedVocL = new float[n], delayedVocR = new float[n];
+    float[] delayedBassL = new float[n], delayedBassR = new float[n];
+    for (int i = primeDelay; i < n; i++) {
+        delayedVocL[i] = vocL[i - primeDelay];
+        delayedVocR[i] = vocR[i - primeDelay];
+        delayedBassL[i] = bassL[i - primeDelay] + drumsL[i - primeDelay];
+        delayedBassR[i] = bassR[i - primeDelay] + drumsR[i - primeDelay];
+    }
+    List<StereoStemBuffer> shiftedStems = [
+        new StereoStemBuffer("vocals", delayedVocL, delayedVocR),
+        new StereoStemBuffer("instrumental", delayedBassL, delayedBassR)
+    ];
+    double recoveredShift = MvsepCloudClient.AlignDownloadedStemsToReference(mixL, mixR, shiftedStems, sr);
+    Assert(Math.Abs(recoveredShift - primeDelay) <= 1.0,
+        $"AlignDownloadedStemsToReference must recover +{primeDelay}-sample priming delay, got {recoveredShift:0.2}");
+
+    // 5. B3 ReferenceDriftPpm property clamping & ResolveForGoal cascade preference
+    NeuralStemStageProcessor stage = new();
+    stage.ReferenceDriftPpm = 25.0;
+    Assert(Math.Abs(stage.ReferenceDriftPpm - 25.0) < 1e-6, "ReferenceDriftPpm setter mismatch");
+    stage.ReferenceDriftPpm = 9999.0;
+    Assert(Math.Abs(stage.ReferenceDriftPpm - 500.0) < 1e-6, "ReferenceDriftPpm clamp mismatch");
+    MvsepAlgorithmPreset autoKara = MvsepAlgorithmPreset.ResolveForGoal(NeuralPipelineGoal.SpatialKaraoke, true, "mvsep_bs_roformer_vocals");
+    Assert(autoKara.IsTwoStageCascade, $"Expected SpatialKaraoke+preserveBacking to auto-resolve 2-stage cascade, got {autoKara.Id}");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
@@ -3556,6 +3736,56 @@ sealed class MockMvsepHttpHandler(byte[] vocWav, byte[] instWav) : HttpMessageHa
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(instWav) });
         }
         return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+    }
+}
+
+sealed class MockMvsepCascadeHttpHandler(
+    byte[] s1VocWav,
+    byte[] s1BassWav,
+    byte[] s1DrumsWav,
+    byte[] s1SilentWav,
+    byte[] s2LeadWav,
+    byte[] s2BackWav) : HttpMessageHandler {
+    public sealed record CapturedCreateCall(string SepType, string Opt1, string Opt2, byte[] AudioBytes);
+    public readonly List<CapturedCreateCall> CreateCalls = [];
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
+        cancellationToken.ThrowIfCancellationRequested();
+        string path = request.RequestUri?.AbsolutePath ?? "";
+        string query = request.RequestUri?.Query ?? "";
+        if (path.EndsWith("/separation/create", StringComparison.OrdinalIgnoreCase)) {
+            string sep = "", o1 = "", o2 = "";
+            byte[] audioBytes = [];
+            if (request.Content is MultipartFormDataContent mp) {
+                foreach (HttpContent part in mp) {
+                    string name = (part.Headers.ContentDisposition?.Name ?? "").Trim('"');
+                    if (name == "sep_type") sep = await part.ReadAsStringAsync(cancellationToken);
+                    else if (name == "add_opt1") o1 = await part.ReadAsStringAsync(cancellationToken);
+                    else if (name == "add_opt2") o2 = await part.ReadAsStringAsync(cancellationToken);
+                    else if (name == "audiofile") audioBytes = await part.ReadAsByteArrayAsync(cancellationToken);
+                }
+            }
+            CreateCalls.Add(new CapturedCreateCall(sep, o1, o2, audioBytes));
+            string hash = sep == "49" ? "cascade_s2" : "cascade_s1";
+            return new HttpResponseMessage(HttpStatusCode.OK) {
+                Content = new StringContent($"{{\"success\":true,\"data\":{{\"hash\":\"{hash}\"}}}}", Encoding.UTF8, "application/json")
+            };
+        }
+        if (path.EndsWith("/separation/get", StringComparison.OrdinalIgnoreCase)) {
+            if (query.Contains("cascade_s2", StringComparison.OrdinalIgnoreCase)) {
+                string s2Json = "{\"status\":\"done\",\"data\":{\"files\":[{\"type\":\"vocals-lead\",\"url\":\"https://files.mvsep.com/s2_lead.wav\",\"download\":\"s2_lead.wav\"},{\"type\":\"vocals-back\",\"url\":\"https://files.mvsep.com/s2_back.wav\",\"download\":\"s2_back.wav\"}]}}";
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(s2Json, Encoding.UTF8, "application/json") };
+            }
+            string s1Json = "{\"status\":\"done\",\"data\":{\"files\":[{\"type\":\"vocals\",\"url\":\"https://files.mvsep.com/s1_voc.wav\",\"download\":\"s1_voc.wav\"},{\"type\":\"bass\",\"url\":\"https://files.mvsep.com/s1_bass.wav\",\"download\":\"s1_bass.wav\"},{\"type\":\"drums\",\"url\":\"https://files.mvsep.com/s1_drums.wav\",\"download\":\"s1_drums.wav\"},{\"type\":\"piano\",\"url\":\"https://files.mvsep.com/s1_piano.wav\",\"download\":\"s1_piano.wav\"}]}}";
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(s1Json, Encoding.UTF8, "application/json") };
+        }
+        if (path.EndsWith("/s1_voc.wav", StringComparison.OrdinalIgnoreCase)) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(s1VocWav) };
+        if (path.EndsWith("/s1_bass.wav", StringComparison.OrdinalIgnoreCase)) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(s1BassWav) };
+        if (path.EndsWith("/s1_drums.wav", StringComparison.OrdinalIgnoreCase)) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(s1DrumsWav) };
+        if (path.EndsWith("/s1_piano.wav", StringComparison.OrdinalIgnoreCase)) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(s1SilentWav) };
+        if (path.EndsWith("/s2_lead.wav", StringComparison.OrdinalIgnoreCase)) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(s2LeadWav) };
+        if (path.EndsWith("/s2_back.wav", StringComparison.OrdinalIgnoreCase)) return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(s2BackWav) };
+        return new HttpResponseMessage(HttpStatusCode.NotFound);
     }
 }
 
@@ -4372,6 +4602,47 @@ def _py_stage10_onnx_low_ram_discipline_and_qa_contracts() -> None:
             assert f'["{key}"]' in lang_src, f"Missing L10n key '{key}' in {lang_file}"
 
 
+def _py_stage11_w53_1_wave_a_contracts() -> None:
+    # B2: Lower-Mid Anchor MAP + frequency-adaptive covariance + sub-50 Hz vocal guard + 2nd-order Wiener leadPurity
+    sk_src = (REPO_ROOT / "Cavern" / "Neural" / "SpatialKaraokeEngine.cs").read_text(encoding="utf-8")
+    for tok in (
+        "neuralSubVocalWeight",
+        "anchorPriorWeight",
+        "AccumulateAnchorBin",
+        "FinalizeChannelAnchors",
+        "ComputeAdaptiveSmoothTauSec",
+        "ComputeNeuralSubVocalWeight",
+    ):
+        assert tok in sk_src, f"W53.1 B2 missing '{tok}' in SpatialKaraokeEngine.cs"
+
+    # B4: MVSEP 2-Stage Cascade + live-verified sub-model IDs + vocals-only opt2=0
+    mv_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "MvsepCloudClient.cs").read_text(encoding="utf-8")
+    for tok in (
+        "IsTwoStageCascade",
+        "KaraokeVocalsOnlyStage2",
+        "SeparateTwoStageCascadeAsync",
+        "ApplyZeroPhaseSubVocalHighPass",
+        "AlignDownloadedStemsToReference",
+        'Opt1 = "171"',
+        'Opt2 = "0"',
+    ):
+        assert tok in mv_src, f"W53.1 B2/B4 missing '{tok}' in MvsepCloudClient.cs"
+
+    # B3: CrossVariantVocalAligner + ReferenceDriftPpm + MainActivity wiring
+    align_path = REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "CrossVariantVocalAligner.cs"
+    assert align_path.is_file(), "W53.1 B3 CrossVariantVocalAligner.cs missing"
+    align_src = align_path.read_text(encoding="utf-8")
+    for tok in ("CrossVariantAlignmentResult", "ShouldPreferSeparateExtraction", "SubSampleSyncEngine.Align"):
+        assert tok in align_src, f"W53.1 B3 missing '{tok}' in CrossVariantVocalAligner.cs"
+
+    proc_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "Adapters" / "NeuralStemStageProcessor.cs").read_text(encoding="utf-8")
+    assert "public double ReferenceDriftPpm" in proc_src and "referenceDriftPpm" in proc_src, "W53.1 B3 missing ReferenceDriftPpm in NeuralStemStageProcessor.cs"
+
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    for tok in ("SeparateTwoStageCascadeAsync", "CrossVariantVocalAligner.Align", ":s1", ":s2", "ReferenceDriftPpm"):
+        assert tok in wf_src, f"W53.1 B3/B4 missing '{tok}' in MainActivity.NeuralWorkflows.cs"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -4385,6 +4656,7 @@ PYTHON_CHECKS = [
     ("PY_T8_ScarlettProAudioStabilityContracts", _py_stage8_scarlett_proaudio_stability_contracts),
     ("PY_T9_W51_VocalCacheUxLoudnessVolumeContracts", _py_stage9_w51_vocal_cache_ux_loudness_volume_contracts),
     ("PY_T10_OnnxLowRamDisciplineAndQaContracts", _py_stage10_onnx_low_ram_discipline_and_qa_contracts),
+    ("PY_T11_W53_1_WaveAContracts", _py_stage11_w53_1_wave_a_contracts),
 ]
 
 

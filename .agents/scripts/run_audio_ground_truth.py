@@ -206,6 +206,11 @@ static double BandRms(float[] x, int start, int count, int sr, double freqHz) {
     return 2.0 * Math.Sqrt(re * re + im * im) / n;
 }
 
+static double GoertzelPower(float[] x, int start, int count, int sr, double freqHz) {
+    double amp = BandRms(x, start, count, sr, freqHz);
+    return amp * amp;
+}
+
 static double MultiToneRms(float[] x, int start, int count, int sr, double[] freqs) {
     double sumSq = 0.0;
     foreach (double f in freqs) {
@@ -1699,6 +1704,261 @@ RunSuite("GT-13", "Slot2DShield_MultiRefFDKF_ShadowFilter_And_AcousticConstraint
         ["shadowCommits"] = shield.ShadowCommitCount,
         ["rtAllocBytes"] = rtAllocBytes,
         ["rtMedianBlockMs"] = Math.Round(medianBlockMs, 4)
+    };
+});
+
+// =========================================================================
+// GT-14: W53.1 B2 Low-Band Vocal Rumble Fix (Under +12 dB Bass) + B3 FLAC<->Atmos Cross-Variant GCC-PHAT Karaoke
+// =========================================================================
+RunSuite("GT-14", "W53_1_LowBandVocalRumbleFix_And_FlacAtmosCrossVariantGccPhatKaraoke", () => {
+    const int sr = 48000;
+    const int nA = sr * 3; // 3.0 s stereo + LFE low-band bass-masked vocal test
+    float[] cleanVocal = new float[nA];
+    float[] vocalWithSubBleed = new float[nA];
+    float[] backingBleed = new float[nA];
+    float[] bassL = new float[nA];
+    float[] bassR = new float[nA];
+    float[] lfe = new float[nA];
+    float[] mixL = new float[nA];
+    float[] mixR = new float[nA];
+
+    for (int i = 0; i < nA; i++) {
+        double t = i / (double)sr;
+        // Realistic vocal: low chest fundamentals (105, 155, 225 Hz) + mid formants (520, 980, 1420 Hz)
+        float vLow = 0.055f * MathF.Sin((float)(2 * Math.PI * 105.0 * t))
+                   + 0.050f * MathF.Sin((float)(2 * Math.PI * 155.0 * t + 0.4))
+                   + 0.045f * MathF.Sin((float)(2 * Math.PI * 225.0 * t + 1.1));
+        float vMid = 0.060f * MathF.Sin((float)(2 * Math.PI * 520.0 * t + 0.2))
+                   + 0.055f * MathF.Sin((float)(2 * Math.PI * 980.0 * t + 0.9))
+                   + 0.040f * MathF.Sin((float)(2 * Math.PI * 1420.0 * t + 1.7));
+        float v = vLow + vMid;
+        cleanVocal[i] = v;
+        // Simulate MVSEP sub-50 Hz kick bleed (36 Hz) inside neural vocal stem
+        vocalWithSubBleed[i] = v + 0.08f * MathF.Sin((float)(2 * Math.PI * 36.0 * t));
+        // Simulate -10 dB lead bleed inside backing stem (tests 2nd-order Wiener leadPurity)
+        backingBleed[i] = 0.316f * v;
+
+        // Loud uncorrelated bass (+12 dB hotter than low vocal fundamentals, sharing 46.875 Hz STFT bins!)
+        float b1 = 0.28f * MathF.Sin((float)(2 * Math.PI * 58.0 * t + 0.7));
+        float b2 = 0.24f * MathF.Sin((float)(2 * Math.PI * 112.0 * t + 1.9));
+        float b3 = 0.20f * MathF.Sin((float)(2 * Math.PI * 172.0 * t + 2.6));
+        bassL[i] = b1 + b2 + b3;
+        bassR[i] = b1 - 0.85f * b2 + 0.90f * b3;
+        lfe[i] = 0.40f * MathF.Sin((float)(2 * Math.PI * 42.0 * t));
+
+        mixL[i] = v + bassL[i];
+        mixR[i] = v + bassR[i];
+    }
+
+    // Apply zero-phase sub-50 Hz HP to vocal reference just as MvsepCloudClient does
+    float[] filteredVocalRef = (float[])vocalWithSubBleed.Clone();
+    MvsepCloudClient.ApplyZeroPhaseSubVocalHighPass(filteredVocalRef, sr, 50f);
+
+    // Run real-time SpatialKaraokeEngine in 512-sample blocks on 3 channels (FL, FR, LFE)
+    using SpatialKaraokeEngine rtKaraoke = new(sr, 3) {
+        IsEnabled = true,
+        VocalLevel = 0.0f,
+        PreserveBackingVocals = true
+    };
+    float[][] rtCh = [(float[])mixL.Clone(), (float[])mixR.Clone(), (float[])lfe.Clone()];
+    bool[] isLfe3 = [false, false, true];
+    bool[] isFront3 = [true, true, false];
+    const int blk = 512;
+    float[][] blkCh = [new float[blk], new float[blk], new float[blk]];
+    float[] blkVoc = new float[blk];
+    float[] blkBack = new float[blk];
+    long rtAllocBytes = 0;
+
+    // Warm up first 10 blocks, then measure RT GC allocations over 60 steady-state blocks
+    for (int off = 0, bIdx = 0; off + blk <= nA; off += blk, bIdx++) {
+        Array.Copy(rtCh[0], off, blkCh[0], 0, blk);
+        Array.Copy(rtCh[1], off, blkCh[1], 0, blk);
+        Array.Copy(rtCh[2], off, blkCh[2], 0, blk);
+        Array.Copy(filteredVocalRef, off, blkVoc, 0, blk);
+        Array.Copy(backingBleed, off, blkBack, 0, blk);
+
+        if (bIdx == 20) {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+        long a0 = bIdx >= 20 && bIdx < 80 ? GC.GetAllocatedBytesForCurrentThread() : 0;
+        rtKaraoke.ProcessMultichannelInPlace(blkCh, isLfe3, isFront3, 3, blk, blkVoc, blkBack);
+        if (bIdx >= 20 && bIdx < 80) {
+            rtAllocBytes += GC.GetAllocatedBytesForCurrentThread() - a0;
+        }
+
+        Array.Copy(blkCh[0], 0, rtCh[0], off, blk);
+        Array.Copy(blkCh[1], 0, rtCh[1], off, blk);
+        Array.Copy(blkCh[2], 0, rtCh[2], off, blk);
+    }
+
+    // Account for exact 512-sample COLA hop latency in streaming mode when comparing steady-state [0.7s..2.7s]
+    int steadyStart = (int)(sr * 0.7);
+    int steadyLen = (int)(sr * 2.0);
+    double vocalLowOrigPow = 0, vocalLowResPow = 0, bassOrigPow = 0, bassOutPow = 0;
+    double[] lowVocFreqs = [105.0, 155.0, 225.0];
+    double[] bassFreqs = [58.0, 112.0, 172.0];
+    foreach (double f in lowVocFreqs) {
+        vocalLowOrigPow += GoertzelPower(mixL, steadyStart, steadyLen, sr, f);
+        vocalLowResPow += GoertzelPower(rtCh[0], steadyStart + SpatialKaraokeEngine.HopSize, steadyLen, sr, f);
+    }
+    foreach (double f in bassFreqs) {
+        bassOrigPow += GoertzelPower(bassL, steadyStart, steadyLen, sr, f);
+        bassOutPow += GoertzelPower(rtCh[0], steadyStart + SpatialKaraokeEngine.HopSize, steadyLen, sr, f);
+    }
+    double lowBandResidualDb = 10.0 * Math.Log10(Math.Max(1e-12, vocalLowResPow) / Math.Max(1e-12, vocalLowOrigPow));
+    double bassDeltaDb = 10.0 * Math.Log10(Math.Max(1e-12, bassOutPow) / Math.Max(1e-12, bassOrigPow));
+    float lfeMaxDiff = 0f;
+    for (int i = 0; i < nA; i++) {
+        lfeMaxDiff = MathF.Max(lfeMaxDiff, MathF.Abs(rtCh[2][i] - lfe[i]));
+    }
+    Assert(lfeMaxDiff == 0f, $"GT-14 LFE must remain bit-exact (0.00 dB), got maxDiff={lfeMaxDiff}");
+    Assert(rtAllocBytes == 0, $"GT-14 SpatialKaraokeEngine RT path must allocate 0 B GC, allocated {rtAllocBytes} B");
+    Assert(lowBandResidualDb <= -24.0, $"GT-14 B2 low-band vocal residual under +12 dB bass must be <= -24.0 dB, got {lowBandResidualDb:F2} dB");
+    Assert(Math.Abs(bassDeltaDb) <= 1.0, $"GT-14 B2 uncorrelated bass energy delta must be within +/-1.0 dB, got {bassDeltaDb:F2} dB");
+
+    // Part B: B3 FLAC <-> Atmos separate-reference karaoke with +187.35 ms offset & +25.0 ppm clock drift
+    const int nB = sr * 6; // 6.0 s so sliding GCC-PHAT Theil-Sen estimates drift cleanly
+    const double trueOffsetSamples = 0.18735 * sr; // +8992.8 samples
+    const double trueDriftPpm = 25.0;
+    const double driftScale = 1.0 + trueDriftPpm * 1e-6;
+    int flacLen = nB + 16000;
+
+    // Deterministic rich musical signal (non-periodic drum/chord onsets + band-limited musical texture + chest/mid vocals)
+    Random rng = new(53101);
+    float[] masterVoc = new float[flacLen];
+    float[] masterInstL = new float[flacLen];
+    float[] masterInstR = new float[flacLen];
+    double[] hitTimesSec = [0.25, 0.72, 1.08, 1.63, 2.05, 2.48, 3.12, 3.55, 3.91, 4.47, 4.98, 5.42];
+    int leadIn = (int)Math.Floor(trueOffsetSamples);
+    float lpCenter = 0f, lpSide = 0f;
+    for (int i = 0; i < flacLen; i++) {
+        // Real FLAC vs Atmos lead-in offset: FLAC starts after +187.35 ms (+8992.8 samples) of silence
+        if (i < leadIn - 16) {
+            continue;
+        }
+        double t = (i - trueOffsetSamples) / (double)sr;
+        if (t < 0.0) {
+            continue;
+        }
+        float env = 0.65f + 0.35f * MathF.Sin((float)(2 * Math.PI * 2.3 * t));
+        masterVoc[i] = env * (
+            0.09f * MathF.Sin((float)(2 * Math.PI * 125.0 * t)) +
+            0.08f * MathF.Sin((float)(2 * Math.PI * 215.0 * t + 0.5)) +
+            0.10f * MathF.Sin((float)(2 * Math.PI * 640.0 * t + 1.1)) +
+            0.08f * MathF.Sin((float)(2 * Math.PI * 1350.0 * t + 1.8)));
+        float hitEnv = 0.32f;
+        for (int h = 0; h < hitTimesSec.Length; h++) {
+            double dt = t - hitTimesSec[h];
+            if (dt >= 0.0 && dt < 0.18) {
+                hitEnv += 0.90f * MathF.Exp((float)(-dt / 0.045));
+            }
+        }
+        lpCenter = 0.65f * lpCenter + 0.35f * (float)(rng.NextDouble() * 2.0 - 1.0);
+        lpSide = 0.65f * lpSide + 0.35f * (float)(rng.NextDouble() * 2.0 - 1.0);
+        float bass = 0.15f * MathF.Sin((float)(2 * Math.PI * 82.0 * t));
+        masterInstL[i] = 0.30f * hitEnv * lpCenter + 0.10f * hitEnv * lpSide + bass;
+        masterInstR[i] = 0.28f * hitEnv * lpCenter - 0.10f * hitEnv * lpSide + bass;
+    }
+
+    // Build Atmos timeline sampled from FLAC master via: flacIndex = trueOffsetSamples + atmosIndex * (1 + trueDriftPpm * 1e-6)
+    float[] atmosFL = new float[nB];
+    float[] atmosFR = new float[nB];
+    float[] atmosFC = new float[nB];
+    float[] atmosLFE = new float[nB];
+    float[] atmosMono = new float[nB];
+    for (int i = 0; i < nB; i++) {
+        double pos = trueOffsetSamples + i * driftScale;
+        float vAt = FarrowLagrangeDelay.SampleAt(masterVoc, flacLen, pos);
+        float insLAt = FarrowLagrangeDelay.SampleAt(masterInstL, flacLen, pos);
+        float insRAt = FarrowLagrangeDelay.SampleAt(masterInstR, flacLen, pos);
+        atmosFC[i] = vAt;
+        atmosFL[i] = 0.35f * vAt + insLAt;
+        atmosFR[i] = 0.35f * vAt + insRAt;
+        atmosLFE[i] = 0.30f * MathF.Sin((float)(2 * Math.PI * 40.0 * i / sr));
+        atmosMono[i] = 0.5f * (atmosFL[i] + atmosFR[i]) + 0.5f * atmosFC[i];
+    }
+
+    NeuralSeparatedTrack flacStems = NeuralAudioOfflinePipeline.BuildSeparatedTrack(
+        "song_flac_variant.flac",
+        sr,
+        [
+            new StereoStemBuffer("vocals", masterVoc, masterVoc),
+            new StereoStemBuffer("instrumental", masterInstL, masterInstR)
+        ],
+        dereverb: null,
+        derivedFromLosslessTwin: false,
+        planSignature: "mvsep_test_flac");
+
+    CrossVariantAlignmentResult align = CrossVariantVocalAligner.Align(atmosMono, sr, flacStems);
+    Assert(align.IsAligned && !align.ShouldPreferSeparateExtraction,
+        $"GT-14 B3 CrossVariantVocalAligner failed to align FLAC<->Atmos (conf={align.Confidence:F3}, probe={align.ProbeSource}, off={align.OffsetSamples:F2}, drift={align.DriftPpm:F2})");
+    Assert(Math.Abs(align.OffsetSamples - trueOffsetSamples) <= 1.2,
+        $"GT-14 B3 offset error too high: expected {trueOffsetSamples:F2}, got {align.OffsetSamples:F2}");
+    Assert(Math.Abs(align.DriftPpm - trueDriftPpm) <= 10.0,
+        $"GT-14 B3 drift error too high: expected {trueDriftPpm:F1} ppm, got {align.DriftPpm:F1} ppm");
+
+    // Verify NeuralStemStageProcessor applies both ReferenceSampleOffset & ReferenceDriftPpm seamlessly in real time
+    NeuralStemStageProcessor stage = new();
+    stage.SetSourceTrackSampleRate(sr);
+    stage.ApplyConfig(new NeuralAudioConfig {
+        SpatialKaraokeEnabled = true,
+        KaraokeVocalLevel = 0.0f,
+        KaraokePreserveBackingVocals = false
+    });
+    stage.BindKaraokeReferenceTrack(flacStems);
+    stage.ReferenceSampleOffset = align.OffsetSamples;
+    stage.ReferenceDriftPpm = align.DriftPpm;
+
+    float[][] atmosBus = [(float[])atmosFL.Clone(), (float[])atmosFR.Clone(), (float[])atmosFC.Clone(), (float[])atmosLFE.Clone()];
+    VirtualChannel[] chLayout = [
+        new VirtualChannel { y = -30f, x = 0f, isLfe = false },
+        new VirtualChannel { y = 30f, x = 0f, isLfe = false },
+        new VirtualChannel { y = 0f, x = 0f, isLfe = false },
+        new VirtualChannel { y = 0f, x = 0f, isLfe = true }
+    ];
+    float[][] vBlk = [new float[blk], new float[blk], new float[blk], new float[blk]];
+    for (int off = 0; off + blk <= nB; off += blk) {
+        for (int c = 0; c < 4; c++) {
+            Array.Copy(atmosBus[c], off, vBlk[c], 0, blk);
+        }
+        stage.ProcessPreHrtfBus(vBlk, chLayout, 4, blk, sr);
+        for (int c = 0; c < 4; c++) {
+            Array.Copy(vBlk[c], 0, atmosBus[c], off, blk);
+        }
+    }
+
+    int lateStart = sr * 3; // evaluate late in track (3s..5.5s) where uncompensated +25 ppm drift would cause severe phase drift!
+    int lateLen = (int)(sr * 2.2);
+    double atmosFcOrig = 0, atmosFcOut = 0;
+    foreach (double f in new[] { 125.0, 215.0, 640.0, 1350.0 }) {
+        atmosFcOrig += GoertzelPower(atmosFC, lateStart, lateLen, sr, f);
+        atmosFcOut += GoertzelPower(atmosBus[2], lateStart + SpatialKaraokeEngine.HopSize, lateLen, sr, f);
+    }
+    double crossVariantResDb = 10.0 * Math.Log10(Math.Max(1e-12, atmosFcOut) / Math.Max(1e-12, atmosFcOrig));
+    Assert(crossVariantResDb <= -24.0,
+        $"GT-14 B3 cross-variant FLAC<->Atmos karaoke residual (late 3..5.5s w/ +187.35ms +25ppm) must be <= -24.0 dB, got {crossVariantResDb:F2} dB");
+
+    // Verify incompatible master rejection (genuinely unrelated noise/edit -> IsAligned == false)
+    float[] unrelated = new float[sr * 4];
+    Random rngBad = new(99991);
+    for (int i = 0; i < unrelated.Length; i++) {
+        unrelated[i] = 0.25f * (float)(rngBad.NextDouble() * 2.0 - 1.0);
+    }
+    CrossVariantAlignmentResult rejected = CrossVariantVocalAligner.Align(unrelated, sr, flacStems);
+    Assert(!rejected.IsAligned && rejected.ShouldPreferSeparateExtraction,
+        $"GT-14 B3 incompatible master must be rejected cleanly, got IsAligned={rejected.IsAligned}, conf={rejected.Confidence:F3}");
+
+    return new Dictionary<string, object> {
+        ["lowBandVocalResidualDb"] = Math.Round(lowBandResidualDb, 2),
+        ["bassEnergyDeltaDb"] = Math.Round(bassDeltaDb, 2),
+        ["lfeMaxDiff"] = lfeMaxDiff,
+        ["rtAllocBytes"] = rtAllocBytes,
+        ["crossVariantOffsetErrSmp"] = Math.Round(Math.Abs(align.OffsetSamples - trueOffsetSamples), 3),
+        ["crossVariantDriftPpm"] = Math.Round(align.DriftPpm, 2),
+        ["crossVariantConf"] = Math.Round(align.Confidence, 3),
+        ["crossVariantKaraokeResDb"] = Math.Round(crossVariantResDb, 2),
+        ["incompatibleMasterRejected"] = !rejected.IsAligned
     };
 });
 

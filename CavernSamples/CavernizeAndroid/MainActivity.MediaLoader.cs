@@ -558,14 +558,15 @@ public partial class MainActivity {
                     if (readyTrack.Supported && readyTrack.Codec != Codec.TrueHD) {
                         try {
                             RecordActiveTrackMeasuredLoudnessIfValid();
-                            double crossOffset = ComputeCrossVariantNeuralOffsetSamples(readyTrack, meta?.SourceMediaPath ?? targetPath);
+                            double crossOffset = ComputeCrossVariantNeuralOffsetSamples(readyTrack, meta?.SourceMediaPath ?? targetPath, out double crossDriftPpm);
                             playerEngine.HotSwapTrackSeamless(
                                 readyTrack,
                                 liveSec,
                                 upmixingSettings,
                                 renderingSettings,
                                 preserveNeuralStems: sameSong,
-                                neuralReferenceOffset: crossOffset);
+                                neuralReferenceOffset: crossOffset,
+                                neuralReferenceDriftPpm: crossDriftPpm);
                             PrimeEngineLoudnessForPath(meta?.SourceMediaPath ?? targetPath, meta);
                             swapped = true;
                         } catch (Exception swapEx) {
