@@ -288,8 +288,9 @@ public static partial class LiveDiagnosticBridgeService {
                     if (host == null) {
                         return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
                     }
-                    int maxDepth = GetArgInt(argsEl, "maxDepth", 6, 1, 10);
-                    return (true, await host.DumpUiTreeJsonAsync(maxDepth).ConfigureAwait(false));
+                    int maxDepth = GetArgInt(argsEl, "maxDepth", 10, 1, 16);
+                    bool includeGeometry = GetArgBool(argsEl, "geometry", true);
+                    return (true, await host.DumpUiTreeJsonAsync(maxDepth, includeGeometry).ConfigureAwait(false));
                 }
                 case "settings_get":
                     return ExecuteSettingsGet(store, argsEl);

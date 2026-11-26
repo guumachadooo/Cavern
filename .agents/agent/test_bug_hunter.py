@@ -393,6 +393,141 @@ class BugHunterUnitTests(unittest.TestCase):
         self.assertIn("fm=120/p95=9.4ms,xruns=0", v9_notes)
         self.assertEqual([f for f in report["findings"] if f["severity"] == "HIGH"], [])
 
+    def test_q1_wcag_contrast_and_alpha_compositing(self) -> None:
+        # Pure white (#FFFFFFFF = -1) on One UI 9 BgScreen (#FF080A10 = -16250868)
+        white_on_dark = bh.compute_wcag_contrast(-1, -16250868)
+        self.assertGreater(white_on_dark, 15.0)
+        # Near-black (#FF141822) on BgScreen (#FF080A10) fails WCAG (<3.0)
+        dark_on_dark = bh.compute_wcag_contrast(0xFF141822, -16250868)
+        self.assertLess(dark_on_dark, 3.0)
+        # Semi-transparent white (50% alpha) over dark still composited deterministically
+        semi_white = bh.compute_wcag_contrast(0x80FFFFFF, -16250868)
+        self.assertGreater(semi_white, 4.5)
+        self.assertLess(semi_white, white_on_dark)
+
+    def test_q1_rect_iou_geometry(self) -> None:
+        # Disjoint rectangles
+        iou0, ow0, oh0 = bh.compute_rect_iou((0, 0, 100, 100), (120, 0, 100, 100))
+        self.assertEqual((iou0, ow0, oh0), (0.0, 0, 0))
+        # Half overlap horizontally (50x100 intersection over 150x100 union = 1/3)
+        iou1, ow1, oh1 = bh.compute_rect_iou((0, 0, 100, 100), (50, 0, 100, 100))
+        self.assertAlmostEqual(iou1, 1.0 / 3.0, places=4)
+        self.assertEqual((ow1, oh1), (50, 100))
+        # Identical rectangles -> IoU 1.0
+        iou2, ow2, oh2 = bh.compute_rect_iou((10, 20, 80, 40), (10, 20, 80, 40))
+        self.assertAlmostEqual(iou2, 1.0, places=6)
+        self.assertEqual((ow2, oh2), (80, 40))
+
+    def test_q1_golden_ssim_seed_pass_fail_and_dim_mismatch(self) -> None:
+        import base64 as _b64
+        import tempfile as _tf
+
+        w, h = 48, 64
+        ref = bytes(((x * 5 + y * 3) % 256) for y in range(h) for x in range(w))
+        mut = bytearray(ref)
+        for y in range(8, 56):
+            for x in range(4, 44):
+                mut[y * w + x] = 255 if (x + y) % 2 == 0 else 0
+
+        same_res = bh.compute_ssim_luma_grid(w, h, list(ref), list(ref))
+        self.assertTrue(same_res["ok"])
+        self.assertAlmostEqual(same_res["ssim"], 1.0, places=5)
+        self.assertIsNone(same_res["diffBBox"])
+
+        diff_res = bh.compute_ssim_luma_grid(w, h, list(ref), list(mut))
+        self.assertTrue(diff_res["ok"])
+        self.assertLess(diff_res["ssim"], 0.6)
+        self.assertIsNotNone(diff_res["diffBBox"])
+
+        with _tf.TemporaryDirectory() as td:
+            ref_payload = {"lumaW": w, "lumaH": h, "lumaB64": _b64.b64encode(ref).decode("ascii")}
+            mut_payload = {"lumaW": w, "lumaH": h, "lumaB64": _b64.b64encode(bytes(mut)).decode("ascii")}
+            bad_dim_payload = {"lumaW": 32, "lumaH": 32, "lumaB64": _b64.b64encode(bytes(32 * 32)).decode("ascii")}
+
+            seeded = bh.compare_screenshot_against_golden("Tab0", ref_payload, td)
+            self.assertEqual(seeded["status"], "SEEDED")
+            passed = bh.compare_screenshot_against_golden("Tab0", ref_payload, td)
+            self.assertEqual(passed["status"], "PASS")
+            self.assertIsNone(passed["finding"])
+            failed = bh.compare_screenshot_against_golden("Tab0", mut_payload, td)
+            self.assertEqual(failed["status"], "FAIL")
+            self.assertEqual(failed["finding"]["category"], "ui_visual_regression_ssim")
+            dim_drift = bh.compare_screenshot_against_golden("Tab0", bad_dim_payload, td)
+            self.assertEqual(dim_drift["status"], "MISMATCH_DIM")
+            self.assertEqual(dim_drift["finding"]["category"], "ui_visual_dimension_drift")
+
+    def test_q1_m1_mutation_canary_offline_100pct_catch_zero_fp(self) -> None:
+        import tempfile as _tf
+
+        with _tf.TemporaryDirectory() as td:
+            res = bh.run_m1_mutation_canary_offline(td)
+            self.assertTrue(res["ok"], f"M1 canary failed: {res}")
+            self.assertEqual(res["caught"], res["total"])
+            self.assertEqual(res["total"], 10)
+            self.assertAlmostEqual(res["detectRate"], 1.0, places=6)
+            self.assertEqual(res["cleanFalsePositives"], 0, f"Unexpected FP: {res['cleanDefects']}")
+
+    def test_v6_q1_geometry_and_golden_ssim_integration(self) -> None:
+        import base64 as _b64
+        import tempfile as _tf
+
+        w, h = 48, 48
+        ref_grid = bytes(((x * 4 + y * 4) % 256) for y in range(h) for x in range(w))
+        bad_grid = bytes((255 if (x + y) % 2 == 0 else 0) for y in range(h) for x in range(w))
+
+        class V6Q1MockBridge(FakeBridge):
+            def __init__(self, fail_tab2_ssim: bool) -> None:
+                super().__init__()
+                self.active_tab = 0
+                self.fail_tab2_ssim = fail_tab2_ssim
+
+            def cmd(self, name: str, args: dict | None = None, tier: int = 2, timeout_sec: int | None = None) -> dict:
+                a = dict(args or {})
+                self.history.append((name, a))
+                if name == "tab_switch":
+                    self.active_tab = int(a.get("index") or 0)
+                    return {"ok": True, "elapsedMs": 5, "body": "{}", "json": {"tab": self.active_tab}, "error": ""}
+                if name == "ui_audit":
+                    return {"ok": True, "elapsedMs": 10, "body": "{}", "json": {"checks": []}, "error": ""}
+                if name == "ui_tree":
+                    # Inject a real Q1 button ellipsis defect on Tab 4
+                    children = []
+                    if self.active_tab == 4:
+                        children.append({
+                            "type": "Button", "text": "A/B Compare: ACTIVE", "clickable": True,
+                            "x": 40, "y": 100, "w": 220, "h": 128, "ell": 7, "ellMode": "end", "fg": -1, "sp": 13.0,
+                        })
+                    payload = {
+                        "schemaVersion": 2, "activeTab": self.active_tab, "dpDensity": 3.0,
+                        "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400},
+                        "activity": {"type": "LinearLayout", "orient": "v", "x": 0, "y": 0, "w": 1080, "h": 2400, "children": children},
+                    }
+                    return {"ok": True, "elapsedMs": 8, "body": json.dumps(payload), "json": payload, "error": ""}
+                if name == "screenshot_ui":
+                    grid = bad_grid if (self.fail_tab2_ssim and self.active_tab == 2) else ref_grid
+                    payload = {"lumaW": w, "lumaH": h, "lumaB64": _b64.b64encode(grid).decode("ascii")}
+                    return {"ok": True, "elapsedMs": 12, "body": "{}", "json": payload, "error": ""}
+                return super().cmd(name, args, tier=tier, timeout_sec=timeout_sec)
+
+        with _tf.TemporaryDirectory() as td:
+            # First run seeds goldens cleanly
+            fb_seed = V6Q1MockBridge(fail_tab2_ssim=False)
+            h_seed = bh.LiveBugHunter(fb_seed, mode="quick", allow_mutate=False, verbose=False, golden_dir=td, update_goldens=True)
+            rep_seed = h_seed.run_hunt(selected_vectors=["V6"])
+            self.assertTrue(rep_seed["ok"])
+            ui_tree_calls = [a for n, a in fb_seed.history if n == "ui_tree"]
+            self.assertEqual(len(ui_tree_calls), 5)
+            self.assertTrue(all(a.get("geometry") is True and a.get("maxDepth") == 12 for a in ui_tree_calls))
+
+            # Second run detects BOTH Q1 Tab4 button ellipsis AND Tab2 Golden SSIM regression
+            fb_chk = V6Q1MockBridge(fail_tab2_ssim=True)
+            h_chk = bh.LiveBugHunter(fb_chk, mode="quick", allow_mutate=False, verbose=False, golden_dir=td, update_goldens=False)
+            rep_chk = h_chk.run_hunt(selected_vectors=["V6"])
+            cats = {(f["source"], f["category"]) for f in rep_chk["findings"]}
+            self.assertIn(("ui_tree_q1", "ui_button_text_ellipsized"), cats)
+            self.assertIn(("golden_ssim_q1", "ui_visual_regression_ssim"), cats)
+
 
 if __name__ == "__main__":
     unittest.main()
+

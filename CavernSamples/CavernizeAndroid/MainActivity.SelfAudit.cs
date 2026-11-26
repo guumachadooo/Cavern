@@ -209,7 +209,8 @@ public partial class MainActivity {
                 perfSamples.Add(perf);
 
                 await RunOnUiThreadWithTimeoutAsync(() => {
-                    AuditViewTree(rootFrameHost ?? Window?.DecorView, tabLabels[tabIdx], accL8, checkZeroSize: false);
+                    EnsureTabLaidOut(tabIdx);
+                    AuditViewTree(rootFrameHost ?? Window?.DecorView, tabLabels[tabIdx], accL8, checkZeroSize: true);
                     return true;
                 }, 4000).ConfigureAwait(false);
             }
@@ -233,7 +234,8 @@ public partial class MainActivity {
                 perfSamples.Add(perf);
 
                 await RunOnUiThreadWithTimeoutAsync(() => {
-                    AuditViewTree((View)settingsCardsContainer ?? rootFrameHost, catLabel, accL8, checkZeroSize: false);
+                    EnsureTabLaidOut(4);
+                    AuditViewTree((View)settingsCardsContainer ?? rootFrameHost, catLabel, accL8, checkZeroSize: true);
                     return true;
                 }, 4000).ConfigureAwait(false);
             }
@@ -311,7 +313,7 @@ public partial class MainActivity {
                             for (int i = 0; i < liveDlgs.Count; i++) {
                                 View decor = liveDlgs[i]?.Window?.DecorView;
                                 if (decor != null) {
-                                    AuditViewTree(decor, $"Modal:{modalName}", accL9, checkZeroSize: false);
+                                    AuditViewTree(decor, $"Modal:{modalName}", accL9, checkZeroSize: decor.Width > 0 && decor.Height > 0);
                                 }
                             }
                         }
@@ -496,16 +498,57 @@ public partial class MainActivity {
         if (root == null) {
             return;
         }
-        int minButtonPx = Dp(18);
+        int minButtonPx = Dp(24);
+        int overflowTolPx = Math.Max(2, Dp(2));
+        int overlapTolPx = Math.Max(3, Dp(4));
+        int alignTolPx = Math.Max(4, Dp(5));
+        int hardClipTolPx = Math.Max(4, Dp(4));
+        int rootW = root.Width > 0 ? root.Width : (Resources?.DisplayMetrics?.WidthPixels ?? 1080);
+        int[] rootLoc = new int[2];
+        root.GetLocationOnScreen(rootLoc);
+        int rootLeft = rootLoc[0];
+        int rootRight = rootLeft + rootW;
+        int[] loc = new int[2];
+        int[] childLocA = new int[2];
+        View activeTabContainer = (tabContainers != null && activeTab >= 0 && activeTab < tabContainers.Length)
+            ? tabContainers[activeTab]
+            : null;
 
-        void Walk(View v, int depth) {
+        void Walk(View v, int depth, bool inHScroll, bool inVScroll, int parentLeft, int parentRight) {
             if (v == null || depth > 24 || v.Visibility != ViewStates.Visible) {
                 return;
             }
+            if (activeTabContainer != null && tabContainers != null && v != activeTabContainer) {
+                for (int ti = 0; ti < tabContainers.Length; ti++) {
+                    if (ti != activeTab && ReferenceEquals(v, tabContainers[ti])) {
+                        return;
+                    }
+                }
+            }
             acc.ViewsInspected++;
+
+            v.GetLocationOnScreen(loc);
+            int vx = loc[0];
+            int vy = loc[1];
+            int vw = v.Width;
+            int vh = v.Height;
 
             if (v is OneUiInlineSelector) {
                 acc.SelectorsInspected++;
+            }
+
+            // Horizontal overflow outside HorizontalScrollView (catches clipped transport/action buttons)
+            if (!inHScroll && vw > 0 && vh > 0 && rootW > 0) {
+                int vRight = vx + vw;
+                if (vRight > rootRight + overflowTolPx || vx < rootLeft - overflowTolPx) {
+                    string label = v is TextView tvOv ? TruncateAuditText(tvOv.Text) : v.GetType().Name;
+                    acc.Failures.Add($"{scopeName}: horizontal screen overflow on {v.GetType().Name} '{label}' (x={vx}, right={vRight}, rootRight={rootRight})");
+                } else if (parentRight > parentLeft && (vRight > parentRight + overflowTolPx || vx < parentLeft - overflowTolPx)) {
+                    if (v.Parent is ViewGroup pVg && pVg.ClipChildren) {
+                        string label = v is TextView tvOv ? TruncateAuditText(tvOv.Text) : v.GetType().Name;
+                        acc.Warnings.Add($"{scopeName}: parent horizontal clip on {v.GetType().Name} '{label}' (right={vRight} > parentRight={parentRight})");
+                    }
+                }
             }
 
             if (v is TextView tv) {
@@ -524,15 +567,37 @@ public partial class MainActivity {
                     if (trimmed.Length >= 8 && CamelKeyCandidateRegex.IsMatch(trimmed) && AndroidStrings.IsKnownKey(trimmed)) {
                         acc.Failures.Add($"{scopeName}: untranslated string key '{trimmed}'");
                     }
+                    // Check zero-size non-empty TextView on laid-out screens
+                    if (checkZeroSize && (vw <= 0 || vh <= 0)) {
+                        acc.Warnings.Add($"{scopeName}: zero-size visible TextView '{TruncateAuditText(txt)}'");
+                    }
+                    // Check hard-clipped single-line TextView without ellipsize
+                    if (vw > 0 && tv.MaxLines == 1 && tv.Ellipsize == null && tv.Paint != null) {
+                        float meas = tv.Paint.MeasureText(txt) + tv.CompoundPaddingLeft + tv.CompoundPaddingRight;
+                        if (float.IsFinite(meas) && meas > vw + hardClipTolPx) {
+                            acc.Warnings.Add($"{scopeName}: hard-clipped text in {v.GetType().Name} '{TruncateAuditText(txt)}' (meas={(int)Math.Ceiling(meas)}px > w={vw}px)");
+                        }
+                    }
+                    // Check ellipsized Button text (action buttons must not truncate labels)
+                    if (v is Button && v is not CompoundButton && tv.Layout != null) {
+                        int ellSum = 0;
+                        int lc = tv.Layout.LineCount;
+                        for (int li = 0; li < lc; li++) {
+                            ellSum += tv.Layout.GetEllipsisCount(li);
+                        }
+                        if (ellSum > 0) {
+                            acc.Warnings.Add($"{scopeName}: ellipsized Button '{TruncateAuditText(txt)}' (ell={ellSum})");
+                        }
+                    }
                 }
             }
 
             if (v is Button btn && btn is not CompoundButton) {
                 acc.ButtonsInspected++;
-                if (btn.Height > 0 && btn.Height < minButtonPx) {
-                    acc.Warnings.Add($"{scopeName}: clipped button '{TruncateAuditText(btn.Text)}' (h={btn.Height}px)");
+                if (vh > 0 && (vh < minButtonPx || vw < minButtonPx)) {
+                    acc.Failures.Add($"{scopeName}: crushed button touch target '{TruncateAuditText(btn.Text)}' ({vw}x{vh}px < {minButtonPx}px)");
                 }
-                if (checkZeroSize && btn.Width == 0 && btn.Height == 0) {
+                if (checkZeroSize && (vw <= 0 || vh <= 0)) {
                     acc.Warnings.Add($"{scopeName}: zero-size visible button '{TruncateAuditText(btn.Text)}'");
                 }
                 if (btn.Clickable && btn.Enabled && !btn.HasOnClickListeners) {
@@ -540,28 +605,65 @@ public partial class MainActivity {
                 }
             }
 
-            // Detect horizontal LinearLayouts with >=2 visible Buttons missing BaselineAligned = false (BL-013)
-            if (v is LinearLayout ll && ll.Orientation == Orientation.Horizontal && ll.BaselineAligned) {
-                int visBtnCount = 0;
-                for (int i = 0; i < ll.ChildCount; i++) {
-                    View ch = ll.GetChildAt(i);
-                    if (ch is Button b && b is not CompoundButton && b.Visibility == ViewStates.Visible) {
-                        visBtnCount++;
+            // Detect horizontal LinearLayouts with >=2 visible Buttons missing BaselineAligned = false (BL-013),
+            // sibling overlap, and vertical center-Y alignment drift
+            if (v is LinearLayout ll) {
+                bool isHoriz = ll.Orientation == Orientation.Horizontal;
+                if (isHoriz && ll.BaselineAligned) {
+                    int visBtnCount = 0;
+                    for (int i = 0; i < ll.ChildCount; i++) {
+                        View ch = ll.GetChildAt(i);
+                        if (ch is Button b && b is not CompoundButton && b.Visibility == ViewStates.Visible) {
+                            visBtnCount++;
+                        }
+                    }
+                    if (visBtnCount >= 2) {
+                        acc.Warnings.Add($"{scopeName}: horizontal button row missing BaselineAligned=false ({visBtnCount} btns)");
                     }
                 }
-                if (visBtnCount >= 2) {
-                    acc.Warnings.Add($"{scopeName}: horizontal button row missing BaselineAligned=false ({visBtnCount} btns)");
+                int prevRight = int.MinValue;
+                int prevBottom = int.MinValue;
+                int firstBtnCenterY = int.MinValue;
+                for (int i = 0; i < ll.ChildCount; i++) {
+                    View ch = ll.GetChildAt(i);
+                    if (ch == null || ch.Visibility != ViewStates.Visible || ch.Width <= 0 || ch.Height <= 0) {
+                        continue;
+                    }
+                    ch.GetLocationOnScreen(childLocA);
+                    if (isHoriz) {
+                        if (prevRight != int.MinValue && childLocA[0] < prevRight - overlapTolPx) {
+                            acc.Failures.Add($"{scopeName}: overlapping horizontal siblings in LinearLayout (overlap={prevRight - childLocA[0]}px)");
+                        }
+                        prevRight = Math.Max(prevRight, childLocA[0] + ch.Width);
+                        if (ch is Button && ch is not CompoundButton) {
+                            int cy = childLocA[1] + ch.Height / 2;
+                            if (firstBtnCenterY == int.MinValue) {
+                                firstBtnCenterY = cy;
+                            } else if (Math.Abs(cy - firstBtnCenterY) > alignTolPx) {
+                                acc.Warnings.Add($"{scopeName}: misaligned horizontal button row (dy={Math.Abs(cy - firstBtnCenterY)}px)");
+                            }
+                        }
+                    } else {
+                        if (prevBottom != int.MinValue && childLocA[1] < prevBottom - overlapTolPx) {
+                            acc.Failures.Add($"{scopeName}: overlapping vertical siblings in LinearLayout (overlap={prevBottom - childLocA[1]}px)");
+                        }
+                        prevBottom = Math.Max(prevBottom, childLocA[1] + ch.Height);
+                    }
                 }
             }
 
             if (v is ViewGroup vg) {
+                bool nextHScroll = inHScroll || v is HorizontalScrollView;
+                bool nextVScroll = inVScroll || v is ScrollView || v is AbsListView;
+                int nextPLeft = vw > 0 ? vx : parentLeft;
+                int nextPRight = vw > 0 ? vx + vw : parentRight;
                 for (int i = 0; i < vg.ChildCount; i++) {
-                    Walk(vg.GetChildAt(i), depth + 1);
+                    Walk(vg.GetChildAt(i), depth + 1, nextHScroll, nextVScroll, nextPLeft, nextPRight);
                 }
             }
         }
 
-        Walk(root, 0);
+        Walk(root, 0, inHScroll: false, inVScroll: false, parentLeft: rootLeft, parentRight: rootRight);
     }
 
     static string TruncateAuditText(string s) {

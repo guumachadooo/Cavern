@@ -38,7 +38,7 @@ public interface ILiveBridgeAppHost {
     Task<string> GetAppStateJsonAsync();
     Task<string> GetDspTelemetryJsonAsync();
     Task<string> QueryLibraryJsonAsync(string query, int limit, bool musicOnly = false);
-    Task<string> DumpUiTreeJsonAsync(int maxDepth);
+    Task<string> DumpUiTreeJsonAsync(int maxDepth, bool includeGeometry = true);
     Task<string> CaptureUiScreenshotJsonAsync(int maxWidth, int quality);
     Task<(bool ok, string message)> SwitchTabAsync(int tabIndex, string tabName);
     Task<(bool ok, string message)> PlaybackControlAsync(string action, double? value);
@@ -148,7 +148,7 @@ public static partial class LiveDiagnosticBridgeService {
         new("files_list", 0, "List files inside confined app/log directories", "{scope?:'logs'|'files'|'cache'|'downloads'|'native', subdir?:string}"),
         new("file_read", 0, "Read bounded sanitized text snippet from confined app/log file", "{path:string, maxChars?:100..60000, tail?:bool}"),
         new("native_status", 0, "Verify bundled W^X ARM64 NativeLibraryDir binaries & sizes", "{}"),
-        new("ui_tree", 0, "Dump live Android View hierarchy of active MainActivity window", "{maxDepth?:1..10}"),
+        new("ui_tree", 0, "Dump live Android View hierarchy with Q1 screen geometry, ellipsis, contrast & One UI 9 tokens", "{maxDepth?:1..16, geometry?:bool}"),
         new("acoustic_audit", 0, "Run L11 Intelligent Acoustic Differential Oracle (HRTF/Upmix/LGSR/ISM/UserConfig fingerprints)", "{quick?:bool, format?:'json'|'markdown'}"),
         new("get_design_tokens", 0, "Export active Cavernize One UI 9 runtime design tokens JSON for zero-quota companion UI sync", "{}"),
         new("logcat_tail", 0, "Read Cavernize own-UID Android logcat cleanly (zero shell, filters fork noise)", "{lines?:10..800, minLevel?:'V'|'D'|'I'|'W'|'E'|'F', buffer?:'main'|'system'|'crash'|'events'}"),

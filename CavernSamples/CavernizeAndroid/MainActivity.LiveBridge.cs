@@ -1,12 +1,16 @@
+using System.Diagnostics;
 using System.Text.Json;
 
 using Android.App;
 using Android.Graphics;
+using Android.Graphics.Drawables;
 using Android.OS;
+using Android.Text;
 using Android.Views;
 using Android.Widget;
 
 using CavernizeAndroid.Services;
+using CavernizeAndroid.Theme;
 using CavernizeAndroid.Views;
 
 using File = System.IO.File;
@@ -203,14 +207,113 @@ public partial class MainActivity : ILiveBridgeAppHost {
         tab.Layout(0, 0, w, h);
     }
 
-    Task<string> ILiveBridgeAppHost.DumpUiTreeJsonAsync(int maxDepth) => RunOnUiThreadWithTimeoutAsync(() => {
+    static (int? bgArgb, float? cornerRadDp, bool customBg) InspectDrawableVisuals(Drawable bg, float density) {
+        if (bg == null) {
+            return (null, null, false);
+        }
+        if (bg is ColorDrawable cd) {
+            int argb = cd.Color.ToArgb();
+            return (Color.GetAlphaComponent(argb) > 0 ? argb : null, null, false);
+        }
+        if (bg is GradientDrawable gd) {
+            int? col = null;
+            try {
+                if (gd.Color != null) {
+                    int c = gd.Color.DefaultColor;
+                    if (Color.GetAlphaComponent(c) > 0) {
+                        col = c;
+                    }
+                }
+                if (!col.HasValue) {
+                    int[] cols = gd.GetColors();
+                    if (cols != null && cols.Length > 0) {
+                        int c0 = cols[0];
+                        int c1 = cols[^1];
+                        int a = (Color.GetAlphaComponent(c0) + Color.GetAlphaComponent(c1)) / 2;
+                        if (a > 0) {
+                            int r = (Color.GetRedComponent(c0) + Color.GetRedComponent(c1)) / 2;
+                            int g = (Color.GetGreenComponent(c0) + Color.GetGreenComponent(c1)) / 2;
+                            int b = (Color.GetBlueComponent(c0) + Color.GetBlueComponent(c1)) / 2;
+                            col = Color.Argb(a, r, g, b);
+                        }
+                    }
+                }
+            } catch {
+                // Ignore drawable color lookup edge cases
+            }
+            float? rad = null;
+            try {
+                float rPx = gd.CornerRadius;
+                if (float.IsFinite(rPx) && rPx > 0.5f && density > 0f) {
+                    rad = (float)Math.Round(rPx / density, 1);
+                }
+            } catch {
+                // Ignore
+            }
+            return (col, rad, !col.HasValue);
+        }
+        if (bg is LayerDrawable ld && ld.NumberOfLayers > 0) {
+            int? col = null;
+            float? rad = null;
+            bool hasCustom = false;
+            int limit = Math.Min(ld.NumberOfLayers, 4);
+            for (int i = 0; i < limit; i++) {
+                (int? lc, float? lr, bool lCustom) = InspectDrawableVisuals(ld.GetDrawable(i), density);
+                col ??= lc;
+                rad ??= lr;
+                hasCustom |= lCustom;
+                if (col.HasValue && rad.HasValue) {
+                    break;
+                }
+            }
+            return (col, rad, !col.HasValue && hasCustom);
+        }
+        if (bg is DrawableWrapper dw && dw.Drawable != null) {
+            return InspectDrawableVisuals(dw.Drawable, density);
+        }
+        return (null, null, true);
+    }
+
+    static string GetScrollAxisTag(View v) => v switch {
+        HorizontalScrollView => "h",
+        ScrollView => "v",
+        AbsListView => "v",
+        _ => v.GetType().Name.Contains("Scroll", StringComparison.OrdinalIgnoreCase)
+            ? (v.GetType().Name.Contains("Horizontal", StringComparison.OrdinalIgnoreCase) ? "h" : "v")
+            : null
+    };
+
+    static string GetEllipsizeModeTag(TextUtils.TruncateAt ellipsize) {
+        if (ellipsize == null) {
+            return null;
+        }
+        if (ellipsize == TextUtils.TruncateAt.End) return "end";
+        if (ellipsize == TextUtils.TruncateAt.Middle) return "middle";
+        if (ellipsize == TextUtils.TruncateAt.Start) return "start";
+        if (ellipsize == TextUtils.TruncateAt.Marquee) return "marquee";
+        return ellipsize.ToString()?.ToLowerInvariant();
+    }
+
+    Task<string> ILiveBridgeAppHost.DumpUiTreeJsonAsync(int maxDepth, bool includeGeometry) => RunOnUiThreadWithTimeoutAsync(() => {
         EnsureTabLaidOut(activeTab);
+        Stopwatch walkSw = Stopwatch.StartNew();
         int nodes = 0;
+        const int maxNodes = 480;
+        float density = Math.Max(0.75f, Resources?.DisplayMetrics?.Density ?? 3f);
+        float fontScale = Math.Max(0.5f, Resources?.Configuration?.FontScale ?? 1f);
+        int screenW = Resources?.DisplayMetrics?.WidthPixels ?? 1080;
+        int screenH = Resources?.DisplayMetrics?.HeightPixels ?? 2400;
+        View mainRoot = rootFrameHost ?? Window?.DecorView;
+        int dispW = mainRoot != null && mainRoot.Width > 0 ? mainRoot.Width : screenW;
+        int dispH = mainRoot != null && mainRoot.Height > 0 ? mainRoot.Height : screenH;
+        int[] locBuf = new int[2];
+
         View activeTabContainer = (tabContainers != null && activeTab >= 0 && activeTab < tabContainers.Length)
             ? tabContainers[activeTab]
             : null;
+
         object Walk(View v, int depth) {
-            if (v == null || nodes >= 320) {
+            if (v == null || nodes >= maxNodes) {
                 return null;
             }
             if (activeTabContainer != null && tabContainers != null && v != activeTabContainer) {
@@ -221,18 +324,98 @@ public partial class MainActivity : ILiveBridgeAppHost {
                 }
             }
             nodes++;
-            string txt = v is TextView tv ? (tv.Text ?? "") : "";
-            if (txt.Length > 100) {
-                txt = txt[..100] + "...";
-            }
+            string txt = v is TextView tvRaw ? (tvRaw.Text ?? "") : "";
+            string txtEmit = txt.Length > 100 ? txt[..100] + "..." : txt;
             string cd = v.ContentDescription ?? "";
+            bool isClickable = v.Clickable && v.Enabled;
             bool? isChecked = v is CompoundButton cb ? cb.Checked : null;
             int? progress = v is SeekBar sb ? sb.Progress : (v is OneUiWaveMediaSeekBar osb ? osb.Progress : null);
             int? selectedIdx = v is OneUiInlineSelector sel ? sel.SelectedIndex : null;
+
+            int? x = null;
+            int? y = null;
+            string scrollAxis = null;
+            string orient = null;
+            bool? baselineAligned = null;
+            bool? clipCh = null;
+            int? ell = null;
+            string ellMode = null;
+            int? maxL = null;
+            int? measW = null;
+            int? fg = null;
+            int? bg = null;
+            bool? customBg = null;
+            float? sp = null;
+            float? radDp = null;
+            int[] padDp = null;
+            bool? hasClick = null;
+
+            if (includeGeometry) {
+                v.GetLocationOnScreen(locBuf);
+                x = locBuf[0];
+                y = locBuf[1];
+                scrollAxis = GetScrollAxisTag(v);
+                if (v is LinearLayout ll) {
+                    orient = ll.Orientation == Orientation.Horizontal ? "h" : "v";
+                    if (ll.Orientation == Orientation.Horizontal && ll.BaselineAligned) {
+                        baselineAligned = true;
+                    }
+                }
+                if (v is ViewGroup vgClip && !vgClip.ClipChildren) {
+                    clipCh = false;
+                }
+                if (isClickable && !v.HasOnClickListeners) {
+                    hasClick = false;
+                }
+                bool hasCustomBg;
+                (bg, radDp, hasCustomBg) = InspectDrawableVisuals(v.Background, density);
+                if (hasCustomBg) {
+                    customBg = true;
+                }
+                if (v is TextView tv) {
+                    if (!string.IsNullOrEmpty(txt)) {
+                        fg = tv.CurrentTextColor;
+                        sp = (float)Math.Round(tv.TextSize / (density * fontScale), 1);
+                        ellMode = GetEllipsizeModeTag(tv.Ellipsize);
+                        int ml = tv.MaxLines;
+                        if (ml is >= 1 and <= 4) {
+                            maxL = ml;
+                        }
+                        Android.Text.Layout layout = tv.Layout;
+                        if (layout != null) {
+                            int ellSum = 0;
+                            int lc = layout.LineCount;
+                            for (int li = 0; li < lc; li++) {
+                                ellSum += layout.GetEllipsisCount(li);
+                            }
+                            if (ellSum > 0) {
+                                ell = ellSum;
+                            }
+                        }
+                        if (ml == 1 && v.Width > 0 && tv.Paint != null) {
+                            float measured = tv.Paint.MeasureText(txt) + tv.CompoundPaddingLeft + tv.CompoundPaddingRight;
+                            if (float.IsFinite(measured) && measured > v.Width + 2f) {
+                                measW = (int)Math.Ceiling(measured);
+                            }
+                        }
+                    }
+                }
+                if (v.PaddingLeft > 0 || v.PaddingTop > 0 || v.PaddingRight > 0 || v.PaddingBottom > 0) {
+                    if (v is Button || v is LinearLayout || v is FrameLayout) {
+                        padDp = [
+                            (int)Math.Round(v.PaddingLeft / density),
+                            (int)Math.Round(v.PaddingTop / density),
+                            (int)Math.Round(v.PaddingRight / density),
+                            (int)Math.Round(v.PaddingBottom / density)
+                        ];
+                    }
+                }
+            }
+
             List<object> children = null;
             if (depth < maxDepth && v is ViewGroup vg && vg.ChildCount > 0) {
                 children = [];
-                for (int i = 0; i < vg.ChildCount && nodes < 320; i++) {
+                for (int i = 0; i < vg.ChildCount && nodes < maxNodes; i++) {
                     View ch = vg.GetChildAt(i);
                     if (ch != null && ch.Visibility == ViewStates.Visible) {
                         bool isInactiveTab = false;
@@ -256,15 +439,32 @@ public partial class MainActivity : ILiveBridgeAppHost {
             }
             return new {
                 type = v.GetType().Name,
-                clickable = v.Clickable && v.Enabled,
-                enabled = v.Enabled,
-                text = string.IsNullOrEmpty(txt) ? null : txt,
+                clickable = isClickable ? (bool?)true : null,
+                enabled = v.Enabled ? null : (bool?)false,
+                hasClick,
+                text = string.IsNullOrEmpty(txtEmit) ? null : txtEmit,
                 desc = string.IsNullOrEmpty(cd) ? null : cd,
                 @checked = isChecked,
                 progress,
                 selectedIdx,
+                x,
+                y,
                 w = v.Width,
                 h = v.Height,
+                scrollAxis,
+                orient,
+                baselineAligned,
+                clipCh,
+                ell,
+                ellMode,
+                maxL,
+                measW,
+                fg,
+                bg,
+                customBg,
+                sp,
+                radDp,
+                padDp,
                 children = children != null && children.Count > 0 ? children : null
             };
         }
@@ -277,13 +477,32 @@ public partial class MainActivity : ILiveBridgeAppHost {
                 dialogTrees.Add(Walk(dv, 0));
             }
         }
-        View mainRoot = rootFrameHost ?? Window?.DecorView;
+        object activityTree = mainRoot != null ? Walk(mainRoot, 0) : null;
+        walkSw.Stop();
+
         return JsonSerializer.Serialize(new {
+            schemaVersion = includeGeometry ? 2 : 1,
+            activeTab,
             activeDialogs = dialogTrees.Count,
+            dpDensity = includeGeometry ? (float?)Math.Round(density, 2) : null,
+            fontScale = includeGeometry ? (float?)Math.Round(fontScale, 2) : null,
+            displayRect = includeGeometry ? new { x = 0, y = 0, w = dispW, h = dispH, screenW, screenH } : null,
+            walkMs = includeGeometry ? (double?)Math.Round(walkSw.Elapsed.TotalMilliseconds, 2) : null,
+            nodeCount = nodes,
+            designTokens = includeGeometry ? new {
+                cardCornerDp = OneUiTheme.EffectiveCardCornerDp,
+                buttonCornerDp = OneUiTheme.EffectiveButtonCornerDp,
+                tileCornerDp = OneUiTheme.EffectiveTileCornerDp,
+                bgScreen = OneUiTheme.BgScreen.ToArgb(),
+                surfaceCard = OneUiTheme.SurfaceCard.ToArgb(),
+                textPrimary = OneUiTheme.TextPrimary.ToArgb(),
+                textSecondary = OneUiTheme.TextSecondary.ToArgb(),
+                primary = OneUiTheme.Primary.ToArgb()
+            } : null,
             dialogs = dialogTrees.Count > 0 ? dialogTrees : null,
-            activity = mainRoot != null ? Walk(mainRoot, 0) : null
+            activity = activityTree
         }, new JsonSerializerOptions {
-            WriteIndented = true,
+            WriteIndented = !includeGeometry,
             DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
         });
     });
@@ -306,6 +525,23 @@ public partial class MainActivity : ILiveBridgeAppHost {
         canvas.Scale(scale, scale);
         root.Draw(canvas);
 
+        // Deterministic downsampled BT.709 grayscale grid (48px wide) for zero-dep Golden SSIM visual diff
+        int lumaW = 48;
+        int lumaH = Math.Clamp((int)Math.Round((double)dstH * lumaW / Math.Max(1, dstW)), 32, 128);
+        byte[] lumaBytes = new byte[lumaW * lumaH];
+        using (Bitmap small = Bitmap.CreateScaledBitmap(bmp, lumaW, lumaH, true)) {
+            int[] pxBuf = new int[lumaW * lumaH];
+            small.GetPixels(pxBuf, 0, lumaW, 0, 0, lumaW, lumaH);
+            for (int i = 0; i < pxBuf.Length; i++) {
+                int argb = pxBuf[i];
+                int r = (argb >> 16) & 0xFF;
+                int g = (argb >> 8) & 0xFF;
+                int b = argb & 0xFF;
+                int yVal = (int)Math.Round(0.2126 * r + 0.7152 * g + 0.0722 * b);
+                lumaBytes[i] = (byte)Math.Clamp(yVal, 0, 255);
+            }
+        }
+
         using MemoryStream ms = new();
         bmp.Compress(Bitmap.CompressFormat.Jpeg, Math.Clamp(quality, 40, 90), ms);
         string b64 = Convert.ToBase64String(ms.ToArray());
@@ -316,6 +552,9 @@ public partial class MainActivity : ILiveBridgeAppHost {
             bytes = ms.Length,
             mime = "image/jpeg",
             capturedDialog = dlgs.Count > 0,
+            lumaW,
+            lumaH,
+            lumaB64 = Convert.ToBase64String(lumaBytes),
             imageBase64 = b64
         });
     });
@@ -336,6 +575,15 @@ public partial class MainActivity : ILiveBridgeAppHost {
             return (false, "Invalid tab index/name (valid: 0..4 or player/room/studio/stems/settings).");
         }
         SwitchTab(target);
+        if (tabContainers != null && target < tabContainers.Length && tabContainers[target] != null) {
+            View tc = tabContainers[target];
+            tc.Animate()?.Cancel();
+            tc.TranslationX = 0f;
+            tc.TranslationY = 0f;
+            tc.ScaleX = 1f;
+            tc.ScaleY = 1f;
+            tc.Alpha = 1f;
+        }
         EnsureTabLaidOut(target);
         return (true, $"Switched to tab {target}.");
     });

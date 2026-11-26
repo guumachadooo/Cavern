@@ -14,8 +14,10 @@ Zero external Python dependencies (stdlib only). Guaranteed settings & state res
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -374,8 +376,759 @@ def parse_logcat_anomalies(text: str) -> list[dict[str, Any]]:
     return anomalies
 
 
+ONEUI9_STANDARD_RADII_DP: tuple[float, ...] = (
+    4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 32.0, 36.0
+)
+
+
+def _argb_to_rgba(argb: int) -> tuple[int, int, int, int]:
+    u = int(argb) & 0xFFFFFFFF
+    return ((u >> 16) & 0xFF, (u >> 8) & 0xFF, u & 0xFF, (u >> 24) & 0xFF)
+
+
+def _composite_over(fg_rgba: tuple[int, int, int, int], bg_rgb: tuple[float, float, float]) -> tuple[float, float, float]:
+    r, g, b, a = fg_rgba
+    alpha = max(0.0, min(1.0, a / 255.0))
+    return (
+        r * alpha + bg_rgb[0] * (1.0 - alpha),
+        g * alpha + bg_rgb[1] * (1.0 - alpha),
+        b * alpha + bg_rgb[2] * (1.0 - alpha),
+    )
+
+
+def _srgb_channel_linear(c_255: float) -> float:
+    s = max(0.0, min(1.0, c_255 / 255.0))
+    return s / 12.92 if s <= 0.03928 else ((s + 0.055) / 1.055) ** 2.4
+
+
+def _relative_luminance(rgb: tuple[float, float, float]) -> float:
+    return (
+        0.2126 * _srgb_channel_linear(rgb[0])
+        + 0.7152 * _srgb_channel_linear(rgb[1])
+        + 0.0722 * _srgb_channel_linear(rgb[2])
+    )
+
+
+def compute_wcag_contrast(fg_argb: int, bg_argb: int | None, base_bg_argb: int = -16250868) -> float:
+    """Compute WCAG 2.1 contrast ratio (1.0..21.0) with alpha compositing over the base screen surface."""
+    br, bg, bb, _ = _argb_to_rgba(base_bg_argb)
+    eff_bg: tuple[float, float, float] = (float(br), float(bg), float(bb))
+    if bg_argb is not None:
+        eff_bg = _composite_over(_argb_to_rgba(bg_argb), eff_bg)
+    eff_fg = _composite_over(_argb_to_rgba(fg_argb), eff_bg)
+    l1 = _relative_luminance(eff_fg)
+    l2 = _relative_luminance(eff_bg)
+    hi, lo = (l1, l2) if l1 >= l2 else (l2, l1)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def compute_rect_iou(
+    r1: tuple[int, int, int, int],
+    r2: tuple[int, int, int, int],
+) -> tuple[float, int, int]:
+    """Return (IoU, overlap_w_px, overlap_h_px) for two (x, y, w, h) rectangles."""
+    x1, y1, w1, h1 = r1
+    x2, y2, w2, h2 = r2
+    if w1 <= 0 or h1 <= 0 or w2 <= 0 or h2 <= 0:
+        return 0.0, 0, 0
+    ix1 = max(x1, x2)
+    iy1 = max(y1, y2)
+    ix2 = min(x1 + w1, x2 + w2)
+    iy2 = min(y1 + h1, y2 + h2)
+    ow = max(0, ix2 - ix1)
+    oh = max(0, iy2 - iy1)
+    inter = ow * oh
+    if inter <= 0:
+        return 0.0, 0, 0
+    union = w1 * h1 + w2 * h2 - inter
+    return (inter / union if union > 0 else 0.0), ow, oh
+
+
+def _node_has_geometry(node: Any) -> bool:
+    if not isinstance(node, dict):
+        return False
+    if "x" in node and "y" in node:
+        return True
+    for ch in node.get("children") or []:
+        if _node_has_geometry(ch):
+            return True
+    return False
+
+
+def analyze_ui_geometry_oracle(
+    tree_obj: Any,
+    scope: str,
+    design_tokens: dict[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    """Q1 Deterministic Native Android Visual & Geometric Oracle.
+
+    Evaluates screen/parent overflow (scroll-axis-aware), sibling overlap IoU,
+    laid-out zero-size interactive/text views, touch target ergonomics, ellipsis &
+    hard text clipping, horizontal row alignment, WCAG 2.1 contrast, & One UI 9 token grid.
+    """
+    defects: list[dict[str, str]] = []
+    if not isinstance(tree_obj, dict):
+        return defects
+
+    density = float(tree_obj.get("dpDensity") or 3.0)
+    if density <= 0.1:
+        density = 3.0
+    tokens = design_tokens if isinstance(design_tokens, dict) else (tree_obj.get("designTokens") or {})
+    base_bg_argb = int(tokens.get("bgScreen")) if isinstance(tokens.get("bgScreen"), int) else -16250868
+    allowed_radii = set(ONEUI9_STANDARD_RADII_DP)
+    for tk in ("cardCornerDp", "buttonCornerDp", "tileCornerDp"):
+        val = tokens.get(tk)
+        if isinstance(val, (int, float)) and val > 0:
+            allowed_radii.add(float(val))
+
+    disp = tree_obj.get("displayRect") if isinstance(tree_obj.get("displayRect"), dict) else {}
+    disp_x = int(disp.get("x") or 0)
+    disp_y = int(disp.get("y") or 0)
+    disp_w = int(disp.get("w") or disp.get("screenW") or 0)
+    disp_h = int(disp.get("h") or disp.get("screenH") or 0)
+
+    tol_px = max(2, int(round(2.0 * density)))
+    overlap_min_px = max(2, int(round(2.0 * density)))
+    align_tol_px = max(3, int(round(3.5 * density)))
+    hard_clip_tol_px = max(3, int(round(4.0 * density)))
+
+    def _is_interactive_leaf(ntype: str) -> bool:
+        return ntype in (
+            "Button", "OneUiButton", "ImageButton", "EditText",
+            "SeekBar", "OneUiWaveMediaSeekBar", "OneUiInlineSelector",
+            "Switch", "OneUiSwitch", "CheckBox",
+        )
+
+    def _is_compact_allowed_clickable(ntype: str) -> bool:
+        return ntype in (
+            "Switch", "OneUiSwitch", "CheckBox", "RadioButton",
+            "EditText", "OneUiIconView", "ImageView", "TextView",
+        )
+
+    def _inspect_root(root_node: Any, root_scope: str, is_dialog: bool) -> None:
+        if not isinstance(root_node, dict):
+            return
+        r_x = int(root_node.get("x") or disp_x)
+        r_y = int(root_node.get("y") or disp_y)
+        r_w = int(root_node.get("w") or disp_w)
+        r_h = int(root_node.get("h") or disp_h)
+        bounds_w = r_w if (is_dialog and r_w > 0) else (disp_w or r_w)
+        bounds_h = r_h if (is_dialog and r_h > 0) else (disp_h or r_h)
+        bounds_left = r_x if is_dialog else disp_x
+        bounds_top = r_y if is_dialog else disp_y
+        laid_out = bounds_w > 0 and bounds_h > 0
+
+        def walk(
+            node: Any,
+            depth: int,
+            in_h_scroll: bool,
+            in_v_scroll: bool,
+            parent_rect: tuple[int, int, int, int] | None,
+            parent_clips: bool,
+            parent_clickable_ok: bool,
+            eff_bg_argb: int,
+        ) -> None:
+            if not isinstance(node, dict) or depth > 22:
+                return
+            ntype = str(node.get("type") or "View")
+            txt = str(node.get("text") or "")
+            label = txt[:36] if txt else str(node.get("desc") or ntype)[:36]
+            clickable = bool(node.get("clickable"))
+            enabled = node.get("enabled") is not False
+            has_xy = ("x" in node and "y" in node)
+            nx = int(node.get("x") or 0)
+            ny = int(node.get("y") or 0)
+            nw = int(node.get("w") or 0)
+            nh = int(node.get("h") or 0)
+
+            node_bg = node.get("bg")
+            cur_bg = int(node_bg) if isinstance(node_bg, int) else eff_bg_argb
+
+            # G3: Zero-size visible interactive or text view on laid-out screen
+            if laid_out and (nw <= 0 or nh <= 0):
+                if clickable or (txt and ntype in ("TextView", "Button", "OneUiButton", "EditText")) or _is_interactive_leaf(ntype):
+                    cat = "ui_zero_size_button" if ntype in ("Button", "OneUiButton") else "ui_zero_size_interactive"
+                    defects.append({
+                        "severity": "HIGH",
+                        "category": cat,
+                        "message": f"{root_scope}: Laid-out visible {ntype} '{label}' has zero size ({nw}x{nh})",
+                    })
+
+            # G1: Screen & parent bounds overflow (scroll-axis-aware)
+            if has_xy and nw > 0 and nh > 0 and bounds_w > 0:
+                if not in_h_scroll:
+                    right = nx + nw
+                    if right > bounds_left + bounds_w + tol_px or nx < bounds_left - tol_px:
+                        defects.append({
+                            "severity": "HIGH",
+                            "category": "ui_horizontal_overflow",
+                            "message": (
+                                f"{root_scope}: {ntype} '{label}' overflows screen horizontally "
+                                f"(x={nx}, right={right}, screen=[{bounds_left}..{bounds_left + bounds_w}])"
+                            ),
+                        })
+                    elif parent_rect is not None and parent_clips:
+                        px, _py, pw, _ph = parent_rect
+                        if pw > 0 and (right > px + pw + tol_px or nx < px - tol_px):
+                            defects.append({
+                                "severity": "HIGH",
+                                "category": "ui_parent_horizontal_clip",
+                                "message": (
+                                    f"{root_scope}: {ntype} '{label}' clips parent bounds horizontally "
+                                    f"(x={nx}..{right} outside parent {px}..{px + pw})"
+                                ),
+                            })
+                if not in_v_scroll and bounds_h > 0:
+                    bottom = ny + nh
+                    if bottom > bounds_top + bounds_h + tol_px or ny < bounds_top - tol_px:
+                        defects.append({
+                            "severity": "HIGH",
+                            "category": "ui_vertical_overflow",
+                            "message": (
+                                f"{root_scope}: {ntype} '{label}' overflows screen vertically "
+                                f"(y={ny}, bottom={bottom}, screen=[{bounds_top}..{bounds_top + bounds_h}])"
+                            ),
+                        })
+
+            # G4: Touch target ergonomics (respect clickable parent wrappers & compact controls)
+            if clickable and enabled and nw > 0 and nh > 0 and not parent_clickable_ok:
+                w_dp = nw / density
+                h_dp = nh / density
+                min_dp = min(w_dp, h_dp)
+                if not _is_compact_allowed_clickable(ntype):
+                    if min_dp < 24.0:
+                        defects.append({
+                            "severity": "HIGH",
+                            "category": "ui_touch_target_crushed",
+                            "message": (
+                                f"{root_scope}: Crushed touch target on {ntype} '{label}' "
+                                f"({w_dp:.1f}x{h_dp:.1f}dp < 24dp)"
+                            ),
+                        })
+                    elif ntype in ("Button", "OneUiButton", "ImageButton") and min_dp < 28.0:
+                        defects.append({
+                            "severity": "MEDIUM",
+                            "category": "ui_touch_target_small",
+                            "message": (
+                                f"{root_scope}: Undersized button touch target on {ntype} '{label}' "
+                                f"({w_dp:.1f}x{h_dp:.1f}dp < 28dp)"
+                            ),
+                        })
+
+            # Dead clickable control
+            if clickable and enabled and node.get("hasClick") is False and ntype in ("Button", "OneUiButton", "ImageButton"):
+                defects.append({
+                    "severity": "MEDIUM",
+                    "category": "ui_dead_clickable",
+                    "message": f"{root_scope}: Clickable {ntype} '{label}' has no OnClickListener attached",
+                })
+
+            # G5: Ellipsis & hard text clipping
+            ell = int(node.get("ell") or 0)
+            ell_mode = str(node.get("ellMode") or "")
+            meas_w = int(node.get("measW") or 0)
+            if ell > 0:
+                if ntype in ("Button", "OneUiButton"):
+                    defects.append({
+                        "severity": "HIGH",
+                        "category": "ui_button_text_ellipsized",
+                        "message": f"{root_scope}: Button '{label}' text is ellipsized ({ell} chars truncated)",
+                    })
+                elif len(txt.strip()) <= 24:
+                    defects.append({
+                        "severity": "MEDIUM",
+                        "category": "ui_text_ellipsized",
+                        "message": f"{root_scope}: Short {ntype} '{label}' text is ellipsized ({ell} chars truncated)",
+                    })
+            if meas_w > 0 and nw > 0 and not ell_mode and meas_w > nw + hard_clip_tol_px:
+                defects.append({
+                    "severity": "HIGH",
+                    "category": "ui_text_hard_clipped",
+                    "message": (
+                        f"{root_scope}: {ntype} '{label}' text hard-clipped without ellipsis "
+                        f"(measured={meas_w}px > width={nw}px)"
+                    ),
+                })
+
+            # G7: WCAG 2.1 contrast & G8: minimum readable font size
+            sp = node.get("sp")
+            if isinstance(sp, (int, float)) and txt and sp > 0 and sp < 9.0:
+                defects.append({
+                    "severity": "MEDIUM",
+                    "category": "ui_text_too_small",
+                    "message": f"{root_scope}: {ntype} '{label}' font size {sp:.1f}sp is below 9sp readability floor",
+                })
+            fg = node.get("fg")
+            has_custom_bg = bool(node.get("customBg"))
+            if isinstance(fg, int) and txt and enabled and not has_custom_bg:
+                fg_a = (fg >> 24) & 0xFF
+                if fg_a >= 96:
+                    ratio = compute_wcag_contrast(fg, cur_bg, base_bg_argb)
+                    if ratio < 2.2:
+                        defects.append({
+                            "severity": "HIGH",
+                            "category": "ui_wcag_contrast_fail",
+                            "message": (
+                                f"{root_scope}: Unreadable WCAG contrast ({ratio:.2f}:1 < 2.2) on {ntype} '{label}'"
+                            ),
+                        })
+                    elif ratio < 3.0:
+                        defects.append({
+                            "severity": "MEDIUM",
+                            "category": "ui_wcag_contrast_warn",
+                            "message": (
+                                f"{root_scope}: Low WCAG contrast ({ratio:.2f}:1 < 3.0) on {ntype} '{label}'"
+                            ),
+                        })
+
+            # G8: One UI 9 corner radius token grid
+            rad_dp = node.get("radDp")
+            if isinstance(rad_dp, (int, float)) and 0.5 < rad_dp < 200.0 and nw > 0 and nh > 0:
+                min_half_dp = min(nw, nh) / (2.0 * density)
+                is_capsule = abs(rad_dp - min_half_dp) <= 2.5 or rad_dp >= min_half_dp - 1.5
+                if not is_capsule:
+                    nearest = min(allowed_radii, key=lambda t: abs(t - rad_dp))
+                    if abs(nearest - rad_dp) > 2.0:
+                        defects.append({
+                            "severity": "LOW",
+                            "category": "ui_token_radius_drift",
+                            "message": (
+                                f"{root_scope}: Non-token corner radius {rad_dp:.1f}dp on {ntype} '{label}' "
+                                f"(nearest One UI 9 token={nearest:.0f}dp)"
+                            ),
+                        })
+
+            # G2 & G6: Sibling overlap IoU & horizontal row alignment
+            children = node.get("children") or []
+            if len(children) >= 2:
+                is_linear = ntype == "LinearLayout"
+                orient = str(node.get("orient") or "")
+                vis_children = [
+                    ch for ch in children
+                    if isinstance(ch, dict) and "x" in ch and "y" in ch
+                    and int(ch.get("w") or 0) > 0 and int(ch.get("h") or 0) > 0
+                ]
+                for i in range(len(vis_children)):
+                    c1 = vis_children[i]
+                    r1 = (int(c1["x"]), int(c1["y"]), int(c1["w"]), int(c1["h"]))
+                    c1_click = bool(c1.get("clickable")) and c1.get("enabled") is not False
+                    for j in range(i + 1, len(vis_children)):
+                        c2 = vis_children[j]
+                        r2 = (int(c2["x"]), int(c2["y"]), int(c2["w"]), int(c2["h"]))
+                        iou, ow, oh = compute_rect_iou(r1, r2)
+                        if is_linear and iou > 0.05 and ow > overlap_min_px and oh > overlap_min_px:
+                            l1 = str(c1.get("text") or c1.get("type") or "View")[:24]
+                            l2 = str(c2.get("text") or c2.get("type") or "View")[:24]
+                            defects.append({
+                                "severity": "HIGH",
+                                "category": "ui_sibling_overlap",
+                                "message": (
+                                    f"{root_scope}: Overlapping LinearLayout siblings '{l1}' & '{l2}' "
+                                    f"(IoU={iou:.2f}, overlap={ow}x{oh}px)"
+                                ),
+                            })
+                        elif (not is_linear) and c1_click and bool(c2.get("clickable")) and c2.get("enabled") is not False:
+                            if iou > 0.15 and ow > overlap_min_px and oh > overlap_min_px:
+                                l1 = str(c1.get("text") or c1.get("type") or "View")[:24]
+                                l2 = str(c2.get("text") or c2.get("type") or "View")[:24]
+                                defects.append({
+                                    "severity": "HIGH",
+                                    "category": "ui_clickable_overlap",
+                                    "message": (
+                                        f"{root_scope}: Overlapping clickable siblings '{l1}' & '{l2}' "
+                                        f"(IoU={iou:.2f}, overlap={ow}x{oh}px)"
+                                    ),
+                                })
+
+                if is_linear and orient == "h":
+                    btns = [
+                        ch for ch in vis_children
+                        if str(ch.get("type") or "") in ("Button", "OneUiButton")
+                    ]
+                    if len(btns) >= 2:
+                        if node.get("baselineAligned") is True:
+                            defects.append({
+                                "severity": "MEDIUM",
+                                "category": "ui_row_misalignment",
+                                "message": f"{root_scope}: Horizontal button row ({len(btns)} btns) missing BaselineAligned=false",
+                            })
+                        cys = [int(b["y"]) + int(b["h"]) / 2.0 for b in btns]
+                        drift = max(cys) - min(cys)
+                        if drift > align_tol_px:
+                            defects.append({
+                                "severity": "MEDIUM",
+                                "category": "ui_row_misalignment",
+                                "message": (
+                                    f"{root_scope}: Horizontal button row vertical center drift "
+                                    f"({drift / density:.1f}dp > 3.5dp across {len(btns)} buttons)"
+                                ),
+                            })
+
+            # Recurse into children
+            scroll_ax = str(node.get("scrollAxis") or "")
+            next_h_scroll = in_h_scroll or scroll_ax == "h" or ntype == "HorizontalScrollView"
+            next_v_scroll = in_v_scroll or scroll_ax == "v" or ntype in ("ScrollView", "NestedScrollView", "ListView")
+            next_rect = (nx, ny, nw, nh) if (has_xy and nw > 0 and nh > 0) else parent_rect
+            next_clips = node.get("clipCh") is not False
+            this_clickable_ok = parent_clickable_ok or (
+                clickable and enabled and nw > 0 and nh > 0 and min(nw / density, nh / density) >= 40.0
+            )
+            for ch in children:
+                walk(
+                    ch,
+                    depth + 1,
+                    next_h_scroll,
+                    next_v_scroll,
+                    next_rect,
+                    next_clips,
+                    this_clickable_ok,
+                    cur_bg,
+                )
+
+        walk(
+            root_node,
+            0,
+            in_h_scroll=False,
+            in_v_scroll=False,
+            parent_rect=(bounds_left, bounds_top, bounds_w, bounds_h) if laid_out else None,
+            parent_clips=True,
+            parent_clickable_ok=False,
+            eff_bg_argb=base_bg_argb,
+        )
+
+    if tree_obj.get("activity"):
+        _inspect_root(tree_obj["activity"], scope, is_dialog=False)
+    for idx, dlg in enumerate(tree_obj.get("dialogs") or []):
+        _inspect_root(dlg, f"{scope}:Dialog{idx}", is_dialog=True)
+    return defects
+
+
+def decode_luma_grid(payload: dict[str, Any]) -> tuple[int, int, list[int]] | None:
+    """Decode a deterministic grayscale luma grid from `screenshot_ui` (`lumaB64`) or raw PGM/PPM bytes."""
+    if not isinstance(payload, dict):
+        return None
+    b64 = payload.get("lumaB64")
+    lw = int(payload.get("lumaW") or 0)
+    lh = int(payload.get("lumaH") or 0)
+    if isinstance(b64, str) and b64 and lw > 0 and lh > 0:
+        try:
+            raw = base64.b64decode(b64)
+            if len(raw) == lw * lh:
+                return lw, lh, list(raw)
+        except Exception:
+            return None
+    # Pure-Python binary PGM (P5) fallback
+    pgm_bytes = payload.get("pgmBytes")
+    if isinstance(pgm_bytes, (bytes, bytearray)) and pgm_bytes.startswith(b"P5"):
+        parts = pgm_bytes.split(None, 3)
+        if len(parts) == 4:
+            try:
+                pw, ph, _maxv = int(parts[1]), int(parts[2]), int(parts[3].split(None, 1)[0])
+                pix = parts[3].split(None, 1)[1]
+                if len(pix) >= pw * ph:
+                    return pw, ph, list(pix[: pw * ph])
+            except Exception:
+                return None
+    return None
+
+
+def compute_ssim_luma_grid(
+    width: int,
+    height: int,
+    ref_px: list[int],
+    cur_px: list[int],
+    block_size: int = 8,
+) -> dict[str, Any]:
+    """Pure-Python Wang et al. (2004) windowed SSIM over 8-bit grayscale grids (zero external deps)."""
+    if width <= 0 or height <= 0 or len(ref_px) != width * height or len(cur_px) != width * height:
+        return {"ok": False, "ssim": 0.0, "minBlockSsim": 0.0, "changedBlocks": 0, "totalBlocks": 0, "diffBBox": None}
+
+    c1 = (0.01 * 255.0) ** 2
+    c2 = (0.03 * 255.0) ** 2
+    bs = max(2, min(block_size, width, height))
+
+    ssim_sum = 0.0
+    min_ssim = 1.0
+    total_blocks = 0
+    changed_blocks = 0
+    min_bx, min_by, max_bx, max_by = width, height, 0, 0
+
+    for by in range(0, height - bs + 1, bs):
+        for bx in range(0, width - bs + 1, bs):
+            n = bs * bs
+            sx = 0.0
+            sy = 0.0
+            sxx = 0.0
+            syy = 0.0
+            sxy = 0.0
+            for dy in range(bs):
+                row_off = (by + dy) * width + bx
+                for dx in range(bs):
+                    x = float(ref_px[row_off + dx])
+                    y = float(cur_px[row_off + dx])
+                    sx += x
+                    sy += y
+                    sxx += x * x
+                    syy += y * y
+                    sxy += x * y
+            mx = sx / n
+            my = sy / n
+            vx = max(0.0, sxx / n - mx * mx)
+            vy = max(0.0, syy / n - my * my)
+            cov = sxy / n - mx * my
+            num = (2.0 * mx * my + c1) * (2.0 * cov + c2)
+            den = (mx * mx + my * my + c1) * (vx + vy + c2)
+            b_ssim = num / den if den > 1e-12 else 1.0
+            b_ssim = max(-1.0, min(1.0, b_ssim))
+            ssim_sum += b_ssim
+            total_blocks += 1
+            if b_ssim < min_ssim:
+                min_ssim = b_ssim
+            if b_ssim < 0.90:
+                changed_blocks += 1
+                min_bx = min(min_bx, bx)
+                min_by = min(min_by, by)
+                max_bx = max(max_bx, bx + bs)
+                max_by = max(max_by, by + bs)
+
+    mean_ssim = ssim_sum / total_blocks if total_blocks > 0 else 1.0
+    bbox = [min_bx, min_by, max_bx - min_bx, max_by - min_by] if changed_blocks > 0 else None
+    return {
+        "ok": True,
+        "ssim": round(mean_ssim, 5),
+        "minBlockSsim": round(min_ssim, 5),
+        "changedBlocks": changed_blocks,
+        "totalBlocks": total_blocks,
+        "diffBBox": bbox,
+    }
+
+
+def compare_screenshot_against_golden(
+    screen_key: str,
+    shot_payload: dict[str, Any],
+    golden_dir: str | Path,
+    *,
+    update_goldens: bool = False,
+    fail_threshold: float = 0.92,
+    warn_threshold: float = 0.97,
+) -> dict[str, Any]:
+    """Compare a captured `screenshot_ui` luma grid against a golden baseline (or seed/update baseline)."""
+    decoded = decode_luma_grid(shot_payload)
+    if decoded is None:
+        return {"status": "SKIP", "reason": "no_luma_grid", "finding": None}
+    w, h, cur_px = decoded
+    safe_key = re.sub(r"[^A-Za-z0-9_.-]+", "_", screen_key).strip("_") or "screen"
+    gdir = Path(golden_dir)
+    gfile = gdir / f"{safe_key}.luma.json"
+
+    if update_goldens or not gfile.is_file():
+        gdir.mkdir(parents=True, exist_ok=True)
+        gfile.write_text(
+            json.dumps({
+                "screen": screen_key,
+                "lumaW": w,
+                "lumaH": h,
+                "lumaB64": base64.b64encode(bytes(cur_px)).decode("ascii"),
+                "updatedUtc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }, indent=2),
+            encoding="utf-8",
+        )
+        return {"status": "SEEDED", "goldenPath": str(gfile), "ssim": 1.0, "finding": None}
+
+    try:
+        ref_obj = json.loads(gfile.read_text(encoding="utf-8"))
+        ref_dec = decode_luma_grid(ref_obj)
+    except Exception as exc:
+        return {"status": "ERROR", "reason": str(exc), "finding": None}
+    if ref_dec is None or ref_dec[0] != w or ref_dec[1] != h:
+        return {
+            "status": "MISMATCH_DIM",
+            "reason": f"golden={ref_dec[0] if ref_dec else 0}x{ref_dec[1] if ref_dec else 0} vs cur={w}x{h}",
+            "finding": {
+                "severity": "MEDIUM",
+                "category": "ui_visual_dimension_drift",
+                "message": f"{screen_key}: Golden SSIM grid size changed ({ref_dec[0] if ref_dec else 0}x{ref_dec[1] if ref_dec else 0} -> {w}x{h})",
+            },
+        }
+
+    res = compute_ssim_luma_grid(w, h, ref_dec[2], cur_px)
+    ssim_val = float(res["ssim"])
+    finding = None
+    status = "PASS"
+    if ssim_val < fail_threshold:
+        status = "FAIL"
+        finding = {
+            "severity": "HIGH",
+            "category": "ui_visual_regression_ssim",
+            "message": (
+                f"{screen_key}: Visual regression vs golden (SSIM={ssim_val:.4f} < {fail_threshold:.2f}, "
+                f"minBlock={res['minBlockSsim']:.3f}, changed={res['changedBlocks']}/{res['totalBlocks']}, bbox={res['diffBBox']})"
+            ),
+        }
+    elif ssim_val < warn_threshold:
+        status = "WARN"
+        finding = {
+            "severity": "MEDIUM",
+            "category": "ui_visual_drift_ssim",
+            "message": (
+                f"{screen_key}: Visual drift vs golden (SSIM={ssim_val:.4f} < {warn_threshold:.2f}, "
+                f"changed={res['changedBlocks']}/{res['totalBlocks']})"
+            ),
+        }
+    return {"status": status, **res, "finding": finding}
+
+
+def run_m1_mutation_canary_offline(tmp_dir: str | Path) -> dict[str, Any]:
+    """Prove Q1 Visual & Geometric Oracle is non-decorative: 100% catch rate on injected M1 defects & 0% FP on clean One UI 9 tree."""
+    tokens = {
+        "cardCornerDp": 26.0,
+        "buttonCornerDp": 18.0,
+        "tileCornerDp": 22.0,
+        "bgScreen": -16250868,  # #FF080A10
+    }
+    clean_tree = {
+        "schemaVersion": 2,
+        "dpDensity": 3.0,
+        "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400},
+        "designTokens": tokens,
+        "activity": {
+            "type": "FrameLayout",
+            "x": 0, "y": 0, "w": 1080, "h": 2400,
+            "children": [
+                # Intentional FrameLayout overlay pill (non-clickable background pill behind nav buttons)
+                {"type": "View", "x": 40, "y": 2160, "w": 200, "h": 150, "bg": 0x1AFFFFFF, "radDp": 25.0},
+                {
+                    "type": "LinearLayout", "orient": "v", "x": 0, "y": 100, "w": 1080, "h": 2000,
+                    "children": [
+                        {
+                            "type": "HorizontalScrollView", "scrollAxis": "h", "x": 24, "y": 120, "w": 1032, "h": 140,
+                            "children": [
+                                # Off-screen chip inside HorizontalScrollView -> MUST NOT false-positive!
+                                {"type": "Button", "text": "Chip Far Right", "clickable": True, "x": 960, "y": 124, "w": 360, "h": 128, "fg": -1, "bg": -1139140063, "sp": 13.0, "radDp": 18.0},
+                            ],
+                        },
+                        {
+                            "type": "LinearLayout", "orient": "h", "x": 24, "y": 300, "w": 1032, "h": 140,
+                            "children": [
+                                {"type": "Button", "text": "Play", "clickable": True, "x": 24, "y": 306, "w": 490, "h": 128, "fg": -1, "bg": -13083393, "sp": 14.0, "radDp": 18.0},
+                                {"type": "Button", "text": "Queue", "clickable": True, "x": 540, "y": 306, "w": 490, "h": 128, "fg": -1, "bg": -1139140063, "sp": 14.0, "radDp": 18.0},
+                            ],
+                        },
+                        # Disabled muted button -> MUST NOT fail WCAG!
+                        {"type": "Button", "text": "Cancel", "enabled": False, "x": 24, "y": 480, "w": 300, "h": 128, "fg": 0x66404450, "bg": -16250868, "sp": 13.0, "radDp": 18.0},
+                        # Empty hidden-slot LinearLayout (non-clickable, no text) -> MUST NOT fail zero-size!
+                        {"type": "LinearLayout", "x": 24, "y": 640, "w": 1032, "h": 0},
+                    ],
+                },
+            ],
+        },
+    }
+    clean_defects = analyze_ui_tree_anomalies(clean_tree, "CleanOneUi9")
+
+    mutations: list[tuple[str, str, dict[str, Any]]] = [
+        ("M1_horiz_overflow", "ui_horizontal_overflow", {
+            "schemaVersion": 2, "dpDensity": 3.0, "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400}, "designTokens": tokens,
+            "activity": {"type": "LinearLayout", "orient": "h", "x": 0, "y": 0, "w": 1080, "h": 200, "children": [
+                {"type": "Button", "text": "Repeat", "clickable": True, "x": 980, "y": 20, "w": 180, "h": 128, "fg": -1, "sp": 14.0}
+            ]},
+        }),
+        ("M1_sibling_overlap", "ui_sibling_overlap", {
+            "schemaVersion": 2, "dpDensity": 3.0, "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400}, "designTokens": tokens,
+            "activity": {"type": "LinearLayout", "orient": "h", "x": 0, "y": 0, "w": 1080, "h": 200, "children": [
+                {"type": "Button", "text": "Vol", "clickable": True, "x": 20, "y": 20, "w": 300, "h": 128, "fg": -1, "sp": 14.0},
+                {"type": "Button", "text": "Loop", "clickable": True, "x": 200, "y": 20, "w": 300, "h": 128, "fg": -1, "sp": 14.0},
+            ]},
+        }),
+        ("M1_clickable_overlap", "ui_clickable_overlap", {
+            "schemaVersion": 2, "dpDensity": 3.0, "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400}, "designTokens": tokens,
+            "activity": {"type": "FrameLayout", "x": 0, "y": 0, "w": 1080, "h": 200, "children": [
+                {"type": "Button", "text": "A", "clickable": True, "x": 40, "y": 20, "w": 200, "h": 128, "fg": -1, "sp": 14.0},
+                {"type": "Button", "text": "B", "clickable": True, "x": 80, "y": 20, "w": 200, "h": 128, "fg": -1, "sp": 14.0},
+            ]},
+        }),
+        ("M1_crushed_target", "ui_touch_target_crushed", {
+            "schemaVersion": 2, "dpDensity": 3.0, "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400}, "designTokens": tokens,
+            "activity": {"type": "LinearLayout", "orient": "v", "x": 0, "y": 0, "w": 1080, "h": 200, "children": [
+                {"type": "Button", "text": "X", "clickable": True, "x": 40, "y": 20, "w": 48, "h": 48, "fg": -1, "sp": 12.0},
+            ]},
+        }),
+        ("M1_zero_size_interactive", "ui_zero_size_interactive", {
+            "schemaVersion": 2, "dpDensity": 3.0, "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400}, "designTokens": tokens,
+            "activity": {"type": "LinearLayout", "orient": "v", "x": 0, "y": 0, "w": 1080, "h": 200, "children": [
+                {"type": "OneUiInlineSelector", "clickable": True, "x": 40, "y": 20, "w": 0, "h": 0},
+            ]},
+        }),
+        ("M1_button_ellipsis", "ui_button_text_ellipsized", {
+            "schemaVersion": 2, "dpDensity": 3.0, "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400}, "designTokens": tokens,
+            "activity": {"type": "LinearLayout", "orient": "v", "x": 0, "y": 0, "w": 1080, "h": 200, "children": [
+                {"type": "Button", "text": "A/B Compare: ACTIVE", "clickable": True, "x": 40, "y": 20, "w": 220, "h": 128, "ell": 7, "ellMode": "end", "fg": -1, "sp": 13.0},
+            ]},
+        }),
+        ("M1_text_hard_clipped", "ui_text_hard_clipped", {
+            "schemaVersion": 2, "dpDensity": 3.0, "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400}, "designTokens": tokens,
+            "activity": {"type": "LinearLayout", "orient": "v", "x": 0, "y": 0, "w": 1080, "h": 200, "children": [
+                {"type": "TextView", "text": "Unclipped Overflow Title", "x": 40, "y": 20, "w": 180, "h": 60, "measW": 340, "fg": -1, "sp": 14.0},
+            ]},
+        }),
+        ("M1_row_misaligned", "ui_row_misalignment", {
+            "schemaVersion": 2, "dpDensity": 3.0, "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400}, "designTokens": tokens,
+            "activity": {"type": "LinearLayout", "orient": "h", "x": 0, "y": 0, "w": 1080, "h": 220, "children": [
+                {"type": "Button", "text": "Left", "clickable": True, "x": 20, "y": 20, "w": 240, "h": 128, "fg": -1, "sp": 14.0},
+                {"type": "Button", "text": "Right", "clickable": True, "x": 300, "y": 50, "w": 240, "h": 128, "fg": -1, "sp": 14.0},
+            ]},
+        }),
+        ("M1_wcag_low_contrast", "ui_wcag_contrast_fail", {
+            "schemaVersion": 2, "dpDensity": 3.0, "displayRect": {"x": 0, "y": 0, "w": 1080, "h": 2400}, "designTokens": tokens,
+            "activity": {"type": "LinearLayout", "orient": "v", "x": 0, "y": 0, "w": 1080, "h": 200, "children": [
+                {"type": "TextView", "text": "Invisible Text", "x": 40, "y": 20, "w": 400, "h": 80, "fg": 0xFF151822, "bg": -16250868, "sp": 14.0},
+            ]},
+        }),
+    ]
+
+    caught = 0
+    details: dict[str, bool] = {}
+    for m_name, expected_cat, m_tree in mutations:
+        found = analyze_ui_tree_anomalies(m_tree, m_name)
+        hit = any(d["category"] == expected_cat for d in found)
+        details[m_name] = hit
+        if hit:
+            caught += 1
+
+    # Also prove Golden SSIM canary: identical passes (~1.0), mutated banner fails (<0.92)
+    w, h = 48, 96
+    ref_grid = bytes(((x * 3 + y * 2) % 256) for y in range(h) for x in range(w))
+    mut_grid = bytearray(ref_grid)
+    for y in range(10, 60):
+        for x in range(4, 44):
+            mut_grid[y * w + x] = 250 if (x + y) % 2 == 0 else 5
+    gdir = Path(tmp_dir) / "m1_goldens"
+    seed = compare_screenshot_against_golden("tab0", {"lumaW": w, "lumaH": h, "lumaB64": base64.b64encode(ref_grid).decode("ascii")}, gdir)
+    same = compare_screenshot_against_golden("tab0", {"lumaW": w, "lumaH": h, "lumaB64": base64.b64encode(ref_grid).decode("ascii")}, gdir)
+    diff = compare_screenshot_against_golden("tab0", {"lumaW": w, "lumaH": h, "lumaB64": base64.b64encode(bytes(mut_grid)).decode("ascii")}, gdir)
+    ssim_canary_ok = (
+        seed["status"] == "SEEDED"
+        and same["status"] == "PASS"
+        and diff["status"] == "FAIL"
+        and (diff.get("finding") or {}).get("category") == "ui_visual_regression_ssim"
+    )
+    details["M1_golden_ssim"] = ssim_canary_ok
+    if ssim_canary_ok:
+        caught += 1
+
+    total = len(mutations) + 1
+    return {
+        "ok": caught == total and len(clean_defects) == 0,
+        "caught": caught,
+        "total": total,
+        "detectRate": caught / total,
+        "cleanFalsePositives": len(clean_defects),
+        "cleanDefects": clean_defects,
+        "details": details,
+    }
+
+
 def analyze_ui_tree_anomalies(tree_obj: Any, scope: str) -> list[dict[str, str]]:
-    """Inspect a `ui_tree` JSON object for real user-visible UI defects."""
+    """Inspect a `ui_tree` JSON object for real user-visible UI & Q1 geometric/visual defects."""
     defects: list[dict[str, str]] = []
     if not isinstance(tree_obj, dict):
         return defects
@@ -387,6 +1140,8 @@ def analyze_ui_tree_anomalies(tree_obj: Any, scope: str) -> list[dict[str, str]]
             "category": "ui_stacked_dialogs",
             "message": f"{scope}: {active_dialogs} stacked modal dialogs simultaneously open",
         })
+
+    has_geom = int(tree_obj.get("schemaVersion") or 1) >= 2 or _node_has_geometry(tree_obj.get("activity"))
 
     def walk(node: Any, depth: int) -> None:
         if not isinstance(node, dict):
@@ -421,15 +1176,16 @@ def analyze_ui_tree_anomalies(tree_obj: Any, scope: str) -> list[dict[str, str]]
                     "category": "ui_raw_string_key",
                     "message": f"{scope}: Possible untranslated string key in {ntype}: '{txt[:60]}'",
                 })
-        w = int(node.get("w") or 0)
-        h = int(node.get("h") or 0)
-        clickable = bool(node.get("clickable"))
-        if clickable and ntype in ("Button", "OneUiButton") and (w <= 0 or h <= 0):
-            defects.append({
-                "severity": "LOW",
-                "category": "ui_zero_size_button",
-                "message": f"{scope}: Visible clickable {ntype} '{txt[:40]}' has zero size ({w}x{h})",
-            })
+        if not has_geom:
+            w = int(node.get("w") or 0)
+            h = int(node.get("h") or 0)
+            clickable = bool(node.get("clickable"))
+            if clickable and ntype in ("Button", "OneUiButton") and (w <= 0 or h <= 0):
+                defects.append({
+                    "severity": "LOW",
+                    "category": "ui_zero_size_button",
+                    "message": f"{scope}: Visible clickable {ntype} '{txt[:40]}' has zero size ({w}x{h})",
+                })
         for ch in node.get("children") or []:
             walk(ch, depth + 1)
 
@@ -437,6 +1193,9 @@ def analyze_ui_tree_anomalies(tree_obj: Any, scope: str) -> list[dict[str, str]]
         walk(tree_obj["activity"], 0)
     for idx, dlg in enumerate(tree_obj.get("dialogs") or []):
         walk(dlg, 0)
+
+    if has_geom:
+        defects.extend(analyze_ui_geometry_oracle(tree_obj, scope))
     return defects
 
 
@@ -906,6 +1665,8 @@ class LiveBugHunter:
         verbose: bool = True,
         out_md: str = "",
         out_json: str = "",
+        golden_dir: str = "",
+        update_goldens: bool = False,
     ) -> None:
         self.bridge = bridge
         self.mode = mode
@@ -913,6 +1674,8 @@ class LiveBugHunter:
         self.verbose = verbose
         self.out_md = out_md
         self.out_json = out_json
+        self.golden_dir = golden_dir
+        self.update_goldens = update_goldens
         self.ledger = FindingLedger()
         self.vector_summaries: list[dict[str, Any]] = []
         self.meta: dict[str, Any] = {
@@ -1607,13 +2370,48 @@ class LiveBugHunter:
                         evidence=det[:360],
                     )
 
-        # 6b. Rapid Tab Thrash + ui_tree Anomaly Inspection + Search Fuzz in 1 pipeline!
-        steps: list[dict[str, Any]] = []
-        tab_tree_indices: list[tuple[int, int]] = []
+        # 6b. Rapid Tab Thrash + Full Q1 Geometric/Visual ui_tree Inspection + optional Golden SSIM
+        geom_tabs_scanned = 0
+        ssim_tabs_checked = 0
         for tab_idx in (0, 4, 1, 3, 2):
-            steps.append({"cmd": "tab_switch", "args": {"index": tab_idx}})
-            tab_tree_indices.append((len(steps), tab_idx))
-            steps.append({"cmd": "ui_tree", "args": {"maxDepth": 6}})
+            self.bridge.cmd("tab_switch", {"index": tab_idx}, tier=1, timeout_sec=15)
+            ut = self.bridge.cmd("ui_tree", {"maxDepth": 12, "geometry": True}, tier=0, timeout_sec=20)
+            if ut["ok"] and isinstance(ut["json"], dict):
+                geom_tabs_scanned += 1
+                for d in analyze_ui_tree_anomalies(ut["json"], f"Tab{tab_idx}"):
+                    self.ledger.record(
+                        severity=d["severity"],
+                        vector="V6_ui_monkey_and_audit",
+                        source="ui_tree_q1",
+                        category=d["category"],
+                        title=d["message"],
+                        repro_step=f"tab_switch({tab_idx}) -> ui_tree(maxDepth=12,geometry=true)",
+                        evidence=d["message"],
+                    )
+            if self.golden_dir:
+                sh = self.bridge.cmd("screenshot_ui", {"maxWidth": 480, "quality": 65}, tier=1, timeout_sec=20)
+                if sh["ok"] and isinstance(sh["json"], dict):
+                    ssim_res = compare_screenshot_against_golden(
+                        f"Tab{tab_idx}",
+                        sh["json"],
+                        self.golden_dir,
+                        update_goldens=self.update_goldens,
+                    )
+                    if ssim_res.get("status") in ("PASS", "WARN", "FAIL", "SEEDED", "MISMATCH_DIM"):
+                        ssim_tabs_checked += 1
+                    f_ssim = ssim_res.get("finding")
+                    if isinstance(f_ssim, dict):
+                        self.ledger.record(
+                            severity=f_ssim["severity"],
+                            vector="V6_ui_monkey_and_audit",
+                            source="golden_ssim_q1",
+                            category=f_ssim["category"],
+                            title=f_ssim["message"],
+                            repro_step=f"tab_switch({tab_idx}) -> screenshot_ui -> SSIM",
+                            evidence=f_ssim["message"],
+                        )
+
+        steps: list[dict[str, Any]] = []
         if self.allow_mutate:
             steps.append({"cmd": "tab_switch", "args": {"index": 4}})
             for q in ("binaural", ".*+?[]()", "🎧🔥", "zzzz_no_match_999", "a" * 160, ""):
@@ -1624,23 +2422,11 @@ class LiveBugHunter:
         steps.append({"cmd": "log_tail", "args": {"lines": 80, "errorsOnly": True}})
 
         res = self.bridge.pipeline(steps, stop_on_error=False, tier=2, timeout_sec=45)
-        for step_pos, tab_idx in tab_tree_indices:
-            if step_pos < len(res) and res[step_pos]["ok"] and isinstance(res[step_pos]["json"], dict):
-                for d in analyze_ui_tree_anomalies(res[step_pos]["json"], f"Tab{tab_idx}"):
-                    self.ledger.record(
-                        severity=d["severity"],
-                        vector="V6_ui_monkey_and_audit",
-                        source="ui_tree",
-                        category=d["category"],
-                        title=d["message"],
-                        repro_step=f"tab_switch({tab_idx}) -> ui_tree",
-                        evidence=d["message"],
-                    )
         if res and res[-1]["subCmd"] == "log_tail" and res[-1]["ok"]:
             self._ingest_applog_delta(res[-1]["body"], "V6_ui_monkey_and_audit", "tab thrash + search fuzz")
 
-        self._watch_step_delta("V6_ui_monkey_and_audit", "ui_audit + tab thrash + search fuzz", check_logcat=True)
-        return f"ran ui_audit + 5-tab ui_tree scan + search fuzz burst"
+        self._watch_step_delta("V6_ui_monkey_and_audit", "ui_audit + Q1 geometric scan + search fuzz", check_logcat=True)
+        return f"ran ui_audit + Q1 geom scan ({geom_tabs_scanned} tabs, ssim={ssim_tabs_checked}) + search fuzz burst"
 
     # ==================== VECTOR 7: ACOUSTIC EXTREME PARAMETER FUZZER ====================
     def _v7_acoustic_extreme_fuzzer(self) -> str:
@@ -2144,6 +2930,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--interval", type=float, default=3.0, help="Poll interval seconds for --mode watch")
     p.add_argument("--out-md", default="/tmp/cavern_bug_hunt_latest.md", help="Output Markdown report path")
     p.add_argument("--out-json", default="/tmp/cavern_bug_hunt_latest.json", help="Output JSON report path")
+    p.add_argument("--golden-dir", default="", help="Optional directory for Q1 Golden SSIM visual diff baselines")
+    p.add_argument("--update-goldens", action="store_true", help="Refresh/seed Q1 Golden SSIM baselines in --golden-dir")
     p.add_argument("--quiet", action="store_true", help="Suppress stderr live progress logs")
     p.add_argument("--url", default="", help="Override relay URL")
     p.add_argument("--pair-secret", default="", help="Override 64-hex pair secret")
@@ -2163,7 +2951,16 @@ def main(argv: list[str] | None = None) -> int:
         report = hunter.run_watch(duration_sec=args.duration, interval_sec=args.interval)
     else:
         allow_mutate = (not args.no_mutate) and (args.mode != "quick")
-        hunter = LiveBugHunter(bridge, mode=args.mode, allow_mutate=allow_mutate, verbose=not args.quiet, out_md=args.out_md, out_json=args.out_json)
+        hunter = LiveBugHunter(
+            bridge,
+            mode=args.mode,
+            allow_mutate=allow_mutate,
+            verbose=not args.quiet,
+            out_md=args.out_md,
+            out_json=args.out_json,
+            golden_dir=args.golden_dir,
+            update_goldens=args.update_goldens,
+        )
         sel = [v.strip() for v in args.vectors.split(",") if v.strip()] if args.vectors else None
         report = hunter.run_hunt(selected_vectors=sel)
 

@@ -18,13 +18,17 @@
   2. `W52` (`BP_VOCAL_STABILITY_CACHE_UX_LOUDNESS.md`): Live S25U check of vocal stability, neural stem cache TTL/hit-rate, 120 Hz zero-jank (`EnableFullScreenRenderEffectBlur=false`), EBU R128 loudness match, & smooth volume ramp.
   3. `W2-LiveReverify` (`BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA.md`): Live Scarlett 2i2 Gen 4 USB-C duplex check (`<10 ms` RT mic duplex, 0 xruns, bit-exact headphone bypass, hot-plug recovery).
   4. `CavernBugHunter v2` (`omni_agent.py hunt`): Clean 0-finding confirmation pass on live device.
-- **P1 | V3 AI Separation, Spatial Motion, Modular One UI 9, Mobile ONNX & Transaural Roadmap (`BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP.md`, `W53.1–W53.6`):**
-  1. `W53.1` (Wave A): MVSEP low-band vocal-rumble fix + FLAC/Atmos GCC-PHAT phase-coherent separate-reference karaoke + MVSEP custom API Single-Stems -> Lead/Backing-on-vocals-only cascade.
-  2. `W53.2` (Wave B): Unified Play/Sing context-aware AI extraction sheet + incremental vocal-stem reuse + multi-variant non-destructive cache + lossless storage optimization.
-  3. `W53.3` (Wave C): Stereo-pan azimuth preservation for fixed 3D objects + expressive lyrics/energy-aware 3D choreography.
-  4. `W53.4` (Wave D): One UI 9 modular editable quick-panel control blocks.
-  5. `W53.5` (Wave E): Mobile ONNX QNN HTP Hexagon NPU + FP16/W8A16 quantization + SoC-keyed context binary caching.
-  6. `W53.6` (Wave F): Phone built-in & external speaker transaural XTC spatializer w/ bit-exact headphone auto-bypass.
+- **P1 | V3 Adversarial QA Gate, AI Separation, Spatial Motion, Modular One UI 9, Mobile ONNX & Transaural Roadmap (`BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP.md`, `W53.Q1–W53.Q4` + `W53.1–W53.6`):**
+  1. `W53.Q1` (`[DONE]` QA Layer Q1 + M1 Canary): Native Android View geometric/overlap/touch-target/ellipsis/alignment/WCAG/token-grid oracle + zero-dep BT.709 Golden SSIM across 5 tabs & modals (proved: Spike S3 `maxWalk=9.18ms`, offline M1 `10/10` `0-FP`, live S25U M1 `7/7=100%`, caught 2 real S25U UI bugs).
+  2. `W53.Q2` (QA Layer Q2 + M2 Canary): External OmniAgent PID/ANR watchdog + blocking `ApplicationExitInfo` / `StrictMode` / 120 Hz `FrameMetrics` (`P95<=12ms`, `frozen==0`) gates (proved via M2 canary).
+  3. `W53.Q3` (QA Layer Q3 + M3 Canary): Hostile UI stress (rage-clicks, mid-load Back, drag sweeps, rotation/`1.3x` font-scale reflow) + 15–20 cycle dirty-state soak (`V11`: native PSS, GC heap, View/listener & `/proc/self/fd` slope; proved via M3 canary).
+  4. `W53.Q4` (QA Layer Q4 + M4 Canary): Frozen "1-bug=1-test" regression contracts (`regression_contracts.json` + stateful `hot_exec`/UI contracts) + cold-context Adversarial QA subagent gate (`CRITICAL=0, HIGH=0, GEOM=0, EXIT_CRASH_NEW=0`).
+  5. `W53.1` (Wave A): MVSEP low-band vocal-rumble fix + FLAC/Atmos GCC-PHAT phase-coherent separate-reference karaoke + MVSEP custom API Single-Stems -> Lead/Backing-on-vocals-only cascade.
+  6. `W53.2` (Wave B): Unified Play/Sing context-aware AI extraction sheet + incremental vocal-stem reuse + multi-variant non-destructive cache + lossless storage optimization.
+  7. `W53.3` (Wave C): Stereo-pan azimuth preservation for fixed 3D objects + expressive lyrics/energy-aware 3D choreography.
+  8. `W53.4` (Wave D): One UI 9 modular editable quick-panel control blocks.
+  9. `W53.5` (Wave E): Mobile ONNX QNN HTP Hexagon NPU + FP16/W8A16 quantization + SoC-keyed context binary caching.
+  10. `W53.6` (Wave F): Phone built-in & external speaker transaural XTC spatializer w/ bit-exact headphone auto-bypass.
 - **P1 | Phase 3 Vocal Cortex (`PHASE3_VOCAL_CORTEX_ROADMAP.md`, `W31–W42`):**
   1. `W31` (Next DSP wave): Wire ALREADY-VERIFIED C# 8.0 `Cavern/VocalChain/AcousticFeedbackShieldFoundation.cs` (`GT-13` `34.31 dB` ERLE, `+16.06 dB` GBF, `0 B` GC, `0.356 ms/blk`) into live Android mic duplex chain — strictly preserving `v2.9.80–v2.9.81` Scarlett dual-watermark RT invariants (`!re-port from Python`).
   2. `W32` (Vocal AI / Neural enhancement): Enforce `:worker` process isolation + `v2.9.82` low-RAM discipline (`NativeOnnxRuntimeBridge` memory guard, zero LMKD OOM on S25U).
