@@ -1127,6 +1127,561 @@ def run_m1_mutation_canary_offline(tmp_dir: str | Path) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Q2 Deterministic Crash / ANR Watchdog, StrictMode & 120 Hz Motion Gates
+# ---------------------------------------------------------------------------
+
+FATAL_EXIT_REASONS = frozenset({
+    "ANR",
+    "CRASH",
+    "CRASH_NATIVE",
+    "EXCESSIVE_RESOURCE_USAGE",
+    "SIGNALED",
+    "INITIALIZATION_FAILURE",
+})
+
+BENIGN_EXIT_REASONS = frozenset({
+    "USER_REQUESTED",
+    "USER_STOPPED",
+    "EXIT_SELF",
+    "PACKAGEUPDATED",
+    "PACKAGE_UPDATED",
+    "PACKAGE_STATE_CHANGE",
+    "PERMISSION_CHANGE",
+    "OTHER",
+})
+
+
+def _parse_iso_ts_ms(ts_utc: str, fallback_ms: int = 0) -> int:
+    if fallback_ms and fallback_ms > 0:
+        return int(fallback_ms)
+    s = (ts_utc or "").strip()
+    if not s:
+        return 0
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        return int(datetime.fromisoformat(s).timestamp() * 1000)
+    except Exception:
+        return 0
+
+
+def make_exit_reason_key(rec: dict[str, Any]) -> str:
+    """Stable deduplication key for an Android ApplicationExitInfo record."""
+    return (
+        f"{int(rec.get('pid') or 0)}|"
+        f"{int(rec.get('reasonCode') or 0)}|"
+        f"{str(rec.get('reason') or '').upper()}|"
+        f"{str(rec.get('timestampUtc') or rec.get('timestampMs') or '')}"
+    )
+
+
+def evaluate_exit_info_gate(
+    exit_reasons: list[dict[str, Any]] | None,
+    *,
+    baseline_keys: set[str] | None = None,
+    low_memory_fg_pss_mb: float = 1500.0,
+) -> dict[str, Any]:
+    """Q2 Blocking ApplicationExitInfo Gate (`ANR` / `CRASH` / `CRASH_NATIVE` / foreground `LOW_MEMORY`).
+
+    Stratifies findings cleanly:
+      - NEW fatal exit not in `baseline_keys` -> `CRITICAL` (`origin='live_triggered'`, hard FAIL)
+      - Fatal exit AFTER latest `PACKAGEUPDATED` -> `CRITICAL`/`HIGH` (`origin='current_session'`, hard FAIL)
+      - Fatal exit BEFORE latest `PACKAGEUPDATED` -> `historical_archive` (forensic record, non-blocking)
+      - Background CACHED (`importance >= 400`) low-PSS LMKD -> ignored (normal Android reclamation)
+    """
+    records = [r for r in (exit_reasons or []) if isinstance(r, dict)]
+    latest_pkg_update_ms = 0
+    for r in records:
+        reason = str(r.get("reason") or "").strip().upper()
+        if reason in ("PACKAGEUPDATED", "PACKAGE_UPDATED"):
+            ts_ms = _parse_iso_ts_ms(str(r.get("timestampUtc") or ""), int(r.get("timestampMs") or 0))
+            if ts_ms > latest_pkg_update_ms:
+                latest_pkg_update_ms = ts_ms
+
+    findings: list[dict[str, str]] = []
+    new_fatal_count = 0
+    current_build_fatal_count = 0
+    historical_fatal_count = 0
+
+    for r in records:
+        reason = str(r.get("reason") or "").strip().upper()
+        if not reason or reason in BENIGN_EXIT_REASONS:
+            continue
+        pss_mb = float(r.get("pssMb") or 0.0)
+        imp = r.get("importance")
+        imp_int = int(imp) if isinstance(imp, (int, float)) else -1
+        is_fg_or_service = (imp_int > 0 and imp_int <= 230)
+
+        if reason == "LOW_MEMORY":
+            # Only fail on foreground/visible/perceptible OOM OR massive PSS (>=1500 MB) LMKD kill
+            if not (is_fg_or_service or pss_mb >= low_memory_fg_pss_mb):
+                continue
+        elif reason not in FATAL_EXIT_REASONS:
+            continue
+
+        key = make_exit_reason_key(r)
+        ts_ms = _parse_iso_ts_ms(str(r.get("timestampUtc") or ""), int(r.get("timestampMs") or 0))
+        is_new_since_baseline = baseline_keys is not None and key not in baseline_keys
+        is_pre_update = latest_pkg_update_ms > 0 and ts_ms > 0 and ts_ms < latest_pkg_update_ms
+
+        if is_new_since_baseline:
+            origin = "live_triggered"
+            sev = "CRITICAL"
+            cat = f"exit_info_new_{reason.lower()}"
+            new_fatal_count += 1
+        elif is_pre_update:
+            origin = "historical_archive"
+            sev = "HIGH" if reason == "LOW_MEMORY" else "CRITICAL"
+            cat = f"exit_info_historical_{reason.lower()}"
+            historical_fatal_count += 1
+        else:
+            origin = "current_session"
+            sev = "CRITICAL" if reason in ("ANR", "CRASH", "CRASH_NATIVE", "LOW_MEMORY") else "HIGH"
+            cat = f"exit_info_current_{reason.lower()}"
+            current_build_fatal_count += 1
+
+        desc = str(r.get("description") or "").strip()
+        imp_name = str(r.get("importanceName") or (f"imp={imp_int}" if imp_int > 0 else "imp=?"))
+        findings.append({
+            "severity": sev,
+            "category": cat,
+            "origin": origin,
+            "message": (
+                f"ApplicationExitInfo {reason} (pid={r.get('pid', '?')}, {imp_name}, "
+                f"pss={pss_mb:.1f}MB, ts={r.get('timestampUtc', '?')})"
+                + (f": {desc[:120]}" if desc else "")
+            ),
+        })
+
+    passed = (new_fatal_count == 0 and current_build_fatal_count == 0)
+    return {
+        "passed": passed,
+        "newFatalCount": new_fatal_count,
+        "currentBuildFatalCount": current_build_fatal_count,
+        "historicalFatalCount": historical_fatal_count,
+        "findings": findings,
+    }
+
+
+def evaluate_frame_metrics_gate(
+    frame_metrics: dict[str, Any] | None,
+    *,
+    p95_budget_ms: float = 12.0,
+    max_frozen_frames: int = 0,
+    min_frames: int = 8,
+    max_deadline_miss_pct: float = 20.0,
+) -> dict[str, Any]:
+    """Q2 Blocking 120 Hz FrameMetrics Gate (`P95 <= 12.0 ms`, `frozen == 0`).
+
+    Supports both current `AndroidRuntimeTelemetry` keys (`totalFrames`, `ringCount`, `p95Ms`,
+    `cpuP95Ms`, `frozenFrames`, `deadlineMissedFrames`) and legacy aliases (`sampledFrames`, `p95TotalMs`).
+    """
+    fm = frame_metrics if isinstance(frame_metrics, dict) else {}
+    total_frames = int(fm.get("totalFrames") or fm.get("ringCount") or fm.get("sampledFrames") or 0)
+    ring_count = int(fm.get("ringCount") or total_frames)
+    p95_ms = float(fm.get("p95Ms") if fm.get("p95Ms") is not None else (fm.get("p95TotalMs") or 0.0))
+    has_cpu_p95 = fm.get("cpuP95Ms") is not None and float(fm.get("cpuP95Ms") or 0.0) > 0.0
+    cpu_p95_ms = float(fm.get("cpuP95Ms") or 0.0)
+    frozen = int(fm.get("frozenFrames") or 0)
+    deadline_missed = int(fm.get("deadlineMissedFrames") or 0)
+    refresh_hz = float(fm.get("refreshRateHz") or 120.0)
+
+    findings: list[dict[str, str]] = []
+    if frozen > max_frozen_frames:
+        findings.append({
+            "severity": "CRITICAL",
+            "category": "frame_metrics_frozen_frames",
+            "message": (
+                f"120 Hz FrameMetrics gate FAIL: {frozen} frozen frame(s) (>700ms) detected "
+                f"(budget == {max_frozen_frames}, sessionMax={fm.get('sessionMaxMs', 0)}ms)"
+            ),
+        })
+
+    if total_frames >= min_frames:
+        # Gate pure app CPU/RenderThread sync P95 strictly against 12ms when available,
+        # and also gate total P95 against 12ms (or 16.67ms when cpuP95Ms already proves app work <=12ms on LTPO idle).
+        if has_cpu_p95:
+            if cpu_p95_ms > p95_budget_ms:
+                findings.append({
+                    "severity": "HIGH",
+                    "category": "frame_metrics_120hz_p95_exceeded",
+                    "message": (
+                        f"120 Hz FrameMetrics CPU/Sync P95={cpu_p95_ms:.2f}ms exceeds {p95_budget_ms:.1f}ms budget "
+                        f"(totalP95={p95_ms:.2f}ms across {total_frames} frames @ {refresh_hz:.0f}Hz)"
+                    ),
+                })
+            elif p95_ms > max(p95_budget_ms, 16.67) and refresh_hz >= 90.0:
+                findings.append({
+                    "severity": "MEDIUM",
+                    "category": "frame_metrics_total_p95_high",
+                    "message": (
+                        f"120 Hz FrameMetrics Total P95={p95_ms:.2f}ms elevated despite CPU P95={cpu_p95_ms:.2f}ms "
+                        f"(GPU/SurfaceFlinger pressure across {total_frames} frames)"
+                    ),
+                })
+        elif p95_ms > p95_budget_ms:
+            findings.append({
+                "severity": "HIGH",
+                "category": "frame_metrics_120hz_p95_exceeded",
+                "message": (
+                    f"120 Hz FrameMetrics P95={p95_ms:.2f}ms exceeds {p95_budget_ms:.1f}ms budget "
+                    f"(p50={fm.get('p50Ms', 0)}ms, p99={fm.get('p99Ms', 0)}ms across {total_frames} frames)"
+                ),
+            })
+
+        if deadline_missed > 0 and total_frames > 0:
+            miss_pct = (deadline_missed * 100.0) / total_frames
+            if miss_pct > max_deadline_miss_pct:
+                findings.append({
+                    "severity": "MEDIUM",
+                    "category": "frame_metrics_deadline_missed",
+                    "message": (
+                        f"FrameMetrics deadline missed on {deadline_missed}/{total_frames} frames "
+                        f"({miss_pct:.1f}% > {max_deadline_miss_pct:.0f}%)"
+                    ),
+                })
+
+    blocking = [f for f in findings if f["severity"] in ("CRITICAL", "HIGH")]
+    return {
+        "passed": len(blocking) == 0,
+        "totalFrames": total_frames,
+        "ringCount": ring_count,
+        "p95Ms": p95_ms,
+        "cpuP95Ms": cpu_p95_ms if has_cpu_p95 else None,
+        "frozenFrames": frozen,
+        "deadlineMissedFrames": deadline_missed,
+        "findings": findings,
+    }
+
+
+def evaluate_gesture_latency_gate(
+    perf_samples: list[dict[str, Any]] | None,
+    *,
+    touch_budget_ms: float = 50.0,
+    heavy_modal_budget_ms: float = 160.0,
+) -> dict[str, Any]:
+    """Q2 Blocking Gesture / Tab Touch-to-First-Frame Gate (`<50 ms` fast/tab interactions, `<160 ms` heavy modals)."""
+    findings: list[dict[str, str]] = []
+    worst_fast_ms = 0.0
+    checked = 0
+    for s in (perf_samples or []):
+        if not isinstance(s, dict):
+            continue
+        checked += 1
+        target = str(s.get("Target") or s.get("target") or "target")
+        complexity = str(s.get("Complexity") or s.get("complexity") or "").lower()
+        first_ms = float(s.get("FirstFrameMs") if s.get("FirstFrameMs") is not None else (s.get("firstFrameMs") or 0.0))
+        ui_block_ms = float(s.get("UiThreadBlockMs") if s.get("UiThreadBlockMs") is not None else (s.get("uiThreadBlockMs") or 0.0))
+        is_heavy = target.startswith("Modal:") or ("heavy" in complexity) or ("complex" in complexity)
+        budget = heavy_modal_budget_ms if is_heavy else touch_budget_ms
+        if not is_heavy:
+            worst_fast_ms = max(worst_fast_ms, first_ms)
+        if first_ms > budget:
+            findings.append({
+                "severity": "HIGH",
+                "category": "modal_touch_to_frame_exceeded" if is_heavy else "gesture_touch_to_frame_exceeded",
+                "message": (
+                    f"Touch-to-first-frame on '{target}' took {first_ms:.0f}ms "
+                    f"(uiBlock={ui_block_ms:.0f}ms, budget <= {budget:.0f}ms)"
+                ),
+            })
+    return {
+        "passed": len(findings) == 0,
+        "checked": checked,
+        "worstFastMs": worst_fast_ms,
+        "findings": findings,
+    }
+
+
+def evaluate_strict_mode_gate(
+    strict_mode_obj: dict[str, Any] | None,
+    logcat_text: str = "",
+) -> dict[str, Any]:
+    """Q2 Blocking StrictMode Gate: promotes main-thread disk/network/VM StrictMode violations to HIGH FAIL."""
+    findings: list[dict[str, str]] = []
+    seen_msgs: set[str] = set()
+    sm = strict_mode_obj if isinstance(strict_mode_obj, dict) else {}
+    for v in (sm.get("violations") or []):
+        if not isinstance(v, dict):
+            continue
+        kind = str(v.get("kind") or "thread")
+        viol = str(v.get("violation") or "StrictModeViolation").strip()
+        stack = str(v.get("stackTop") or "").strip()
+        key = f"{kind}:{viol[:100]}:{stack[:80]}"
+        if key in seen_msgs:
+            continue
+        seen_msgs.add(key)
+        findings.append({
+            "severity": "HIGH",
+            "category": "strict_mode_main_thread_violation" if kind == "thread" else "strict_mode_vm_violation",
+            "message": f"StrictMode ({kind}) violation: {viol}" + (f" @ {stack}" if stack else ""),
+        })
+
+    for raw_line in (logcat_text or "").splitlines():
+        if "StrictMode" not in raw_line:
+            continue
+        if re.search(r"StrictMode.*(violation|DiskRead|DiskWrite|Network|Leaked|policy violation)", raw_line, re.IGNORECASE):
+            clean = raw_line.strip()
+            k2 = clean[:120]
+            if k2 in seen_msgs:
+                continue
+            seen_msgs.add(k2)
+            findings.append({
+                "severity": "HIGH",
+                "category": "strict_mode_main_thread_violation",
+                "message": f"StrictMode logcat violation: {clean[:180]}",
+            })
+
+    return {
+        "passed": len(findings) == 0,
+        "violationCount": len(findings),
+        "findings": findings,
+    }
+
+
+def evaluate_external_watchdog_probe(
+    probe_res: dict[str, Any] | None,
+    *,
+    expected_pid: int | None = None,
+    expected_session_id: str = "",
+) -> dict[str, Any]:
+    """Q2 External OmniAgent PID/Heartbeat/ANR Watchdog Evaluator."""
+    p = probe_res if isinstance(probe_res, dict) else {}
+    state = str(p.get("state") or "").upper()
+    alive = bool(p.get("alive"))
+    pid = int(p.get("pid") or 0)
+    sid = str(p.get("sessionId") or "")
+    detail = str(p.get("detail") or p.get("error") or "")
+    findings: list[dict[str, str]] = []
+
+    if state in ("NOT_INSTALLED", "SIGNATURE_MISMATCH"):
+        findings.append({
+            "severity": "CRITICAL",
+            "category": "external_watchdog_unavailable",
+            "message": f"External OmniAgent watchdog failed ({state}): {detail}",
+        })
+    elif state == "UNRESPONSIVE_ANR" or (state != "WATCHDOG_TRANSPORT_ERROR" and not alive):
+        findings.append({
+            "severity": "CRITICAL",
+            "category": "external_watchdog_anr_timeout",
+            "message": f"External OmniAgent watchdog detected Cavernize ANR/freeze timeout ({p.get('elapsedMs', 0)}ms): {detail}",
+        })
+    elif state == "PID_RESTARTED_CRASH" or bool(p.get("pidRestarted")):
+        findings.append({
+            "severity": "CRITICAL",
+            "category": "external_watchdog_crash_restart",
+            "message": (
+                f"External OmniAgent watchdog detected silent Cavernize crash-restart "
+                f"(pid {p.get('prevPid', expected_pid)}->{pid}, sid '{p.get('prevSessionId', expected_session_id)}'->'{sid}')"
+            ),
+        })
+    else:
+        pid_changed = bool(expected_pid and expected_pid > 0 and pid > 0 and pid != expected_pid)
+        sid_changed = bool(expected_session_id and sid and sid != expected_session_id)
+        if pid_changed or sid_changed:
+            findings.append({
+                "severity": "CRITICAL",
+                "category": "external_watchdog_crash_restart",
+                "message": (
+                    f"External watchdog detected Cavernize process identity change "
+                    f"(pid {expected_pid}->{pid}, sid '{expected_session_id}'->'{sid}')"
+                ),
+            })
+
+    return {
+        "passed": len(findings) == 0,
+        "state": state or ("ALIVE" if alive else "UNKNOWN"),
+        "alive": alive,
+        "pid": pid,
+        "sessionId": sid,
+        "findings": findings,
+    }
+
+
+def parse_external_crash_forensics(raw_text: str) -> list[dict[str, str]]:
+    """Parse crash/ANR/Fatal evidence captured externally via Termux/ADB when Cavernize is dead or frozen."""
+    findings: list[dict[str, str]] = []
+    if not (raw_text or "").strip():
+        return findings
+    for an in parse_logcat_anomalies(raw_text):
+        if an["severity"] in ("CRITICAL", "HIGH") or an["category"] in ("crash", "oom", "strict_mode"):
+            findings.append({
+                "severity": "CRITICAL" if an["category"] in ("crash", "oom") else an["severity"],
+                "category": "external_crash_logcat" if an["category"] in ("crash", "oom") else f"external_{an['category']}",
+                "message": f"External Termux/ADB forensics: {an['message'][:180]}",
+                "raw": an["raw"],
+            })
+    # Also detect `dumpsys activity exit-info` fatal lines even when not in brief logcat format
+    for ln in raw_text.splitlines():
+        s = ln.strip()
+        if re.search(r"reason=(ANR|CRASH|CRASH_NATIVE|LOW_MEMORY)", s, re.IGNORECASE):
+            findings.append({
+                "severity": "CRITICAL",
+                "category": "external_crash_logcat",
+                "message": f"External dumpsys exit-info: {s[:180]}",
+                "raw": s,
+            })
+    return findings
+
+
+def run_m2_mutation_canary_offline() -> dict[str, Any]:
+    """Prove Q2 External Watchdog, ExitInfo, StrictMode & 120 Hz Motion Gates are non-decorative (10/10 catch, 0 FP)."""
+    # 0. Clean baseline (with pre-update historical LOW_MEMORY + low-PSS cached background LMKD that MUST NOT false-positive!)
+    baseline_exits = [
+        {
+            "pid": 1000, "reasonCode": 16, "reason": "PACKAGEUPDATED",
+            "timestampUtc": "2026-11-26T10:00:00Z", "pssMb": 420.0, "importance": 100, "importanceName": "FOREGROUND",
+        },
+        {
+            "pid": 950, "reasonCode": 3, "reason": "LOW_MEMORY",
+            "timestampUtc": "2026-11-26T09:30:00Z", "pssMb": 3800.0, "importance": 100, "importanceName": "FOREGROUND",
+        },
+        {
+            "pid": 1020, "reasonCode": 3, "reason": "LOW_MEMORY",
+            "timestampUtc": "2026-11-26T10:15:00Z", "pssMb": 115.0, "importance": 400, "importanceName": "CACHED",
+        },
+    ]
+    baseline_keys = {make_exit_reason_key(r) for r in baseline_exits}
+    clean_exit_res = evaluate_exit_info_gate(baseline_exits, baseline_keys=baseline_keys)
+    clean_fm_res = evaluate_frame_metrics_gate({
+        "totalFrames": 120, "ringCount": 120, "p50Ms": 5.2, "p95Ms": 9.8, "cpuP95Ms": 6.4,
+        "frozenFrames": 0, "deadlineMissedFrames": 2, "refreshRateHz": 120.0,
+    })
+    clean_gest_res = evaluate_gesture_latency_gate([
+        {"Target": "Tab:Play", "Complexity": "Simple", "FirstFrameMs": 18, "UiThreadBlockMs": 4},
+        {"Target": "Modal:AutoEQ", "Complexity": "Heavy", "FirstFrameMs": 92, "UiThreadBlockMs": 28},
+    ])
+    clean_sm_res = evaluate_strict_mode_gate({"enabled": True, "violations": []}, "")
+    clean_wd_res = evaluate_external_watchdog_probe(
+        {"ok": True, "state": "ALIVE", "alive": True, "pid": 2048, "sessionId": "sidA", "elapsedMs": 6},
+        expected_pid=2048,
+        expected_session_id="sidA",
+    )
+    clean_active_fp = (
+        [f for f in clean_exit_res["findings"] if f.get("origin") != "historical_archive"]
+        + clean_fm_res["findings"]
+        + clean_gest_res["findings"]
+        + clean_sm_res["findings"]
+        + clean_wd_res["findings"]
+    )
+
+    checks: list[tuple[str, str, list[dict[str, Any]]]] = [
+        (
+            "M2.1_exit_info_new_anr",
+            "exit_info_new_anr",
+            evaluate_exit_info_gate(
+                baseline_exits + [{
+                    "pid": 2048, "reasonCode": 6, "reason": "ANR",
+                    "timestampUtc": "2026-11-26T11:05:00Z", "pssMb": 510.0, "importance": 100, "importanceName": "FOREGROUND",
+                    "description": "Input dispatching timed out",
+                }],
+                baseline_keys=baseline_keys,
+            )["findings"],
+        ),
+        (
+            "M2.2_exit_info_new_crash_native",
+            "exit_info_new_crash_native",
+            evaluate_exit_info_gate(
+                baseline_exits + [{
+                    "pid": 2049, "reasonCode": 5, "reason": "CRASH_NATIVE",
+                    "timestampUtc": "2026-11-26T11:06:00Z", "pssMb": 480.0, "importance": 100, "importanceName": "FOREGROUND",
+                    "description": "SIGSEGV in libonnxruntime.so",
+                }],
+                baseline_keys=baseline_keys,
+            )["findings"],
+        ),
+        (
+            "M2.3_exit_info_new_fg_oom",
+            "exit_info_new_low_memory",
+            evaluate_exit_info_gate(
+                baseline_exits + [{
+                    "pid": 2050, "reasonCode": 3, "reason": "LOW_MEMORY",
+                    "timestampUtc": "2026-11-26T11:07:00Z", "pssMb": 2950.0, "importance": 100, "importanceName": "FOREGROUND",
+                    "description": "LMKD foreground kill",
+                }],
+                baseline_keys=baseline_keys,
+            )["findings"],
+        ),
+        (
+            "M2.4_frame_metrics_p95_exceeded",
+            "frame_metrics_120hz_p95_exceeded",
+            evaluate_frame_metrics_gate({
+                "totalFrames": 120, "ringCount": 120, "p50Ms": 9.0, "p95Ms": 19.4, "cpuP95Ms": 16.2,
+                "frozenFrames": 0, "refreshRateHz": 120.0,
+            })["findings"],
+        ),
+        (
+            "M2.5_frame_metrics_frozen",
+            "frame_metrics_frozen_frames",
+            evaluate_frame_metrics_gate({
+                "totalFrames": 60, "ringCount": 60, "p50Ms": 5.0, "p95Ms": 9.0, "cpuP95Ms": 5.5,
+                "frozenFrames": 1, "sessionMaxMs": 820.0, "refreshRateHz": 120.0,
+            })["findings"],
+        ),
+        (
+            "M2.6_gesture_touch_to_frame_gt_50ms",
+            "gesture_touch_to_frame_exceeded",
+            evaluate_gesture_latency_gate([
+                {"Target": "Tab:Settings", "Complexity": "Simple", "FirstFrameMs": 84, "UiThreadBlockMs": 62},
+            ])["findings"],
+        ),
+        (
+            "M2.7_strict_mode_disk_read",
+            "strict_mode_main_thread_violation",
+            evaluate_strict_mode_gate({
+                "enabled": True,
+                "violations": [{"kind": "thread", "violation": "DiskReadViolation", "stackTop": "MainActivity.OnClick"}],
+            })["findings"],
+        ),
+        (
+            "M2.8_external_watchdog_anr_timeout",
+            "external_watchdog_anr_timeout",
+            evaluate_external_watchdog_probe(
+                {"ok": False, "state": "UNRESPONSIVE_ANR", "alive": False, "elapsedMs": 6012, "detail": "ping timeout"},
+                expected_pid=2048,
+                expected_session_id="sidA",
+            )["findings"],
+        ),
+        (
+            "M2.9_external_watchdog_crash_restart",
+            "external_watchdog_crash_restart",
+            evaluate_external_watchdog_probe(
+                {"ok": False, "state": "PID_RESTARTED_CRASH", "alive": True, "pid": 4096, "prevPid": 2048, "sessionId": "sidB", "prevSessionId": "sidA", "pidRestarted": True},
+                expected_pid=2048,
+                expected_session_id="sidA",
+            )["findings"],
+        ),
+        (
+            "M2.10_external_termux_crash_logcat",
+            "external_crash_logcat",
+            parse_external_crash_forensics(
+                "F/libc(2048): Fatal signal 11 (SIGSEGV), code 1 (SEGV_MAPERR) in hu.sbence.cavern.cavernize\n"
+            ),
+        ),
+    ]
+
+    caught = 0
+    details: list[dict[str, Any]] = []
+    for name, expected_cat, flist in checks:
+        cats = [str(f.get("category") or "") for f in flist]
+        hit = expected_cat in cats
+        if hit:
+            caught += 1
+        details.append({"canary": name, "expected": expected_cat, "caught": hit, "got": cats})
+
+    total = len(checks)
+    return {
+        "ok": caught == total and len(clean_active_fp) == 0,
+        "caught": caught,
+        "total": total,
+        "detectRate": caught / total,
+        "cleanFalsePositives": len(clean_active_fp),
+        "cleanDefects": clean_active_fp,
+        "details": details,
+    }
+
+
 def analyze_ui_tree_anomalies(tree_obj: Any, scope: str) -> list[dict[str, str]]:
     """Inspect a `ui_tree` JSON object for real user-visible UI & Q1 geometric/visual defects."""
     defects: list[dict[str, str]] = []
@@ -1457,6 +2012,16 @@ def generate_report_markdown(report: dict[str, Any]) -> str:
             f"- **State Restored Cleanly:** `{meta.get('restoredState')}` "
             f"(settings diff keys: `{len(diff_keys)}`)"
         )
+    q2 = report.get("q2GateSummary")
+    if isinstance(q2, dict) and q2:
+        lines.append(
+            f"- **Q2 Crash/ANR/120Hz Gate:** `{'PASS' if q2.get('passed') else 'FAIL'}` | "
+            f"watchdog=`{q2.get('watchdogState', '?')}` | "
+            f"exitNewFatal=`{q2.get('exitInfoNewFatal', 0)}` | "
+            f"p95=`{q2.get('frameP95Ms', 0)}ms` (cpuP95=`{q2.get('frameCpuP95Ms', 'n/a')}`) | "
+            f"frozen=`{q2.get('frozenFrames', 0)}` | "
+            f"strictMode=`{q2.get('strictModeViolations', 0)}`"
+        )
     lines.append("")
 
     vectors = report.get("vectors") or []
@@ -1652,6 +2217,42 @@ class LiveCavernBridge:
             return str(sh["json"].get("stdout") or "")
         return ""
 
+    def watchdog_probe(self, timeout_sec: int = 6, reset_baseline: bool = False) -> dict[str, Any]:
+        """External Q2 Cavernize PID/heartbeat/ANR probe executed in OmniAgent's separate process."""
+        return oac.probe_cavernize_watchdog(
+            self.relay,
+            self.secret,
+            self.admin,
+            timeout_sec=timeout_sec,
+            reset_baseline=reset_baseline,
+        )
+
+    def fetch_external_crash_forensics(self) -> str:
+        """External Termux/ADB crash logcat & exit-info fallback when Cavernize itself is dead or frozen."""
+        cmd = (
+            "({ logcat -d -b crash -t 80 -v brief 2>/dev/null || "
+            "adb logcat -d -b crash -t 80 -v brief 2>/dev/null || true; }; "
+            "{ dumpsys activity exit-info hu.sbence.cavern.cavernize 2>/dev/null || "
+            "adb shell dumpsys activity exit-info hu.sbence.cavern.cavernize 2>/dev/null || true; } | head -n 60; "
+            "ls -t /sdcard/Download/Cavernize/*.txt 2>/dev/null | head -n 1 | xargs -r tail -n 40 2>/dev/null || true)"
+        )
+        try:
+            res = oac.send_agent_command(
+                self.relay,
+                self.secret,
+                "shell",
+                {"command": cmd, "timeoutSec": 12},
+                channel="termux",
+                admin_key=self.admin,
+                timeout_sec=20,
+                auto_wake=False,
+            )
+            if isinstance(res, dict):
+                return str(res.get("stdout") or res.get("output") or res.get("body") or "")
+        except Exception:
+            pass
+        return ""
+
 
 class LiveBugHunter:
     """Runs adversarial attack vectors while continuously watching AppLogger, Logcat & AppState."""
@@ -1667,6 +2268,9 @@ class LiveBugHunter:
         out_json: str = "",
         golden_dir: str = "",
         update_goldens: bool = False,
+        enable_strict_mode: bool = False,
+        q2_p95_budget_ms: float = 12.0,
+        q2_touch_budget_ms: float = 50.0,
     ) -> None:
         self.bridge = bridge
         self.mode = mode
@@ -1676,11 +2280,15 @@ class LiveBugHunter:
         self.out_json = out_json
         self.golden_dir = golden_dir
         self.update_goldens = update_goldens
+        self.enable_strict_mode = enable_strict_mode
+        self.q2_p95_budget_ms = float(q2_p95_budget_ms)
+        self.q2_touch_budget_ms = float(q2_touch_budget_ms)
         self.ledger = FindingLedger()
         self.vector_summaries: list[dict[str, Any]] = []
         self.meta: dict[str, Any] = {
             "mode": mode,
             "allowMutate": allow_mutate,
+            "strictModeEnabled": enable_strict_mode,
             "startedUtc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
 
@@ -1690,9 +2298,22 @@ class LiveBugHunter:
         self._baseline_settings: dict[str, Any] = {}
         self._baseline_memory: dict[str, Any] = {}
         self._baseline_counts: dict[str, int] = {}
+        self._baseline_exit_keys: set[str] = set()
+        self._baseline_pid: int = 0
+        self._strict_mode_activated: bool = False
+        self._q2_summary: dict[str, Any] = {
+            "passed": True,
+            "watchdogState": "UNPROBED",
+            "exitInfoNewFatal": 0,
+            "frameP95Ms": 0.0,
+            "frameCpuP95Ms": None,
+            "frozenFrames": 0,
+            "strictModeViolations": 0,
+        }
         self._created_cache_files: list[str] = []
         self._has_chaos_hunt_cmd = False
         self._has_native_logcat = False
+        self._capabilities: set[str] = set()
 
     def _emit(self, msg: str) -> None:
         if self.verbose:
@@ -1786,6 +2407,8 @@ class LiveBugHunter:
         self.meta["device"] = p.get("device", "?")
         self.meta["android"] = p.get("android", "?")
         self.meta["sessionId"] = p.get("sessionId", "")
+        self.meta["pid"] = int(p.get("pid") or 0)
+        self._baseline_pid = int(p.get("pid") or 0)
         self.meta["uiHostAttached"] = bool(p.get("uiHostAttached"))
         self._baseline_counts = dict(p.get("counts") or {})
 
@@ -1812,6 +2435,37 @@ class LiveBugHunter:
             p2 = self.bridge.cmd("ping", tier=0, timeout_sec=15)
             if p2["ok"] and isinstance(p2["json"], dict):
                 self.meta["uiHostAttached"] = bool(p2["json"].get("uiHostAttached"))
+                if p2["json"].get("pid"):
+                    self._baseline_pid = int(p2["json"].get("pid") or 0)
+                    self.meta["pid"] = self._baseline_pid
+
+        # Q2: Seed baseline ApplicationExitInfo keys & optionally activate opt-in QA StrictMode
+        if "runtime_telemetry" in self._capabilities:
+            rt0 = self.bridge.cmd("runtime_telemetry", {}, tier=0, timeout_sec=15)
+            if rt0["ok"] and isinstance(rt0["json"], dict):
+                if rt0["json"].get("pid") and not self._baseline_pid:
+                    self._baseline_pid = int(rt0["json"].get("pid") or 0)
+                    self.meta["pid"] = self._baseline_pid
+                for er in (rt0["json"].get("exitReasons") or []):
+                    if isinstance(er, dict):
+                        self._baseline_exit_keys.add(make_exit_reason_key(er))
+
+        if self.enable_strict_mode and "strict_mode" in self._capabilities:
+            sm_on = self.bridge.cmd("strict_mode", {"enable": True, "clear": True}, tier=2, timeout_sec=15)
+            if sm_on["ok"]:
+                self._strict_mode_activated = True
+                self._emit("Q2 StrictMode QA detector ENABLED (will auto-restore OFF in finally).")
+
+        if hasattr(self.bridge, "watchdog_probe"):
+            try:
+                wp0 = self.bridge.watchdog_probe(timeout_sec=6, reset_baseline=True)
+                if isinstance(wp0, dict) and wp0.get("state"):
+                    self._q2_summary["watchdogState"] = str(wp0.get("state"))
+                    if wp0.get("pid") and not self._baseline_pid:
+                        self._baseline_pid = int(wp0.get("pid") or 0)
+                        self.meta["pid"] = self._baseline_pid
+            except Exception:
+                pass
 
         lc = self.bridge.fetch_logcat(lines=180, min_level="W")
         for ln in lc.splitlines():
@@ -1820,7 +2474,7 @@ class LiveBugHunter:
 
         self._emit(
             f"Connected: Cavernize v{self.meta['appVersion']} ({self.meta['appBuild']}) on "
-            f"{self.meta['device']} | uiHost={self.meta['uiHostAttached']} | "
+            f"{self.meta['device']} | pid={self._baseline_pid or '?'} | uiHost={self.meta['uiHostAttached']} | "
             f"tab={self._baseline_state.get('activeTab')} | playing={self._baseline_state.get('isPlaying')} | "
             f"tracks={self._baseline_state.get('libraryTrackCount')}"
         )
@@ -1858,6 +2512,7 @@ class LiveBugHunter:
             "originCounts": self.ledger.counts_by_origin(),
             "totalUniqueFindings": len(self.ledger.ranked()),
             "totalActiveFindings": len(self.ledger.active_findings()),
+            "q2GateSummary": dict(self._q2_summary),
             "vectors": self.vector_summaries,
             "findings": self.ledger.to_dicts(),
         }
@@ -1868,6 +2523,51 @@ class LiveBugHunter:
                 Path(self.out_md).write_text(generate_report_markdown(snap), encoding="utf-8")
         except Exception:
             pass
+
+    def _run_external_watchdog_check(self, vector_name: str, repro_step: str) -> None:
+        """Q2 External OmniAgent PID/Heartbeat/ANR Watchdog + Termux/ADB external crash forensics fallback."""
+        if not hasattr(self.bridge, "watchdog_probe"):
+            return
+        try:
+            probe = self.bridge.watchdog_probe(timeout_sec=6, reset_baseline=False)
+        except Exception:
+            return
+        if not isinstance(probe, dict) or str(probe.get("state") or "").upper() == "WATCHDOG_TRANSPORT_ERROR":
+            return
+        ev = evaluate_external_watchdog_probe(
+            probe,
+            expected_pid=self._baseline_pid or None,
+            expected_session_id=str(self.meta.get("sessionId") or ""),
+        )
+        self._q2_summary["watchdogState"] = ev["state"]
+        if not ev["passed"]:
+            self._q2_summary["passed"] = False
+            for f in ev["findings"]:
+                self.ledger.record(
+                    severity=f["severity"],
+                    vector=vector_name,
+                    source="external_watchdog_q2",
+                    category=f["category"],
+                    title=f["message"][:200],
+                    repro_step=repro_step,
+                    evidence=json.dumps(probe, ensure_ascii=False)[:400],
+                )
+            # Capture external Termux/ADB crash logcat & dumpsys exit-info when Cavernize dies/freezes!
+            if hasattr(self.bridge, "fetch_external_crash_forensics"):
+                try:
+                    raw_ext = self.bridge.fetch_external_crash_forensics(timeout_sec=15)
+                    for cf in parse_external_crash_forensics(raw_ext):
+                        self.ledger.record(
+                            severity=cf["severity"],
+                            vector=vector_name,
+                            source="external_crash_forensics_q2",
+                            category=cf["category"],
+                            title=cf["message"][:200],
+                            repro_step=f"termux_external_forensics:{repro_step}",
+                            evidence=cf.get("raw", "")[:320],
+                        )
+                except Exception:
+                    pass
 
     def _run_vector(self, name: str, fn: Callable[[], str]) -> None:
         self._emit(f"--- Vector: {name} ---")
@@ -1889,6 +2589,8 @@ class LiveBugHunter:
                 repro_step=f"vector:{name}",
                 evidence=notes,
             )
+        finally:
+            self._run_external_watchdog_check(name, f"post-vector:{name}")
         elapsed = time.monotonic() - t0
         new_found = len(self.ledger.ranked()) - before_total
         if new_found > 0 and status == "OK":
@@ -2569,8 +3271,12 @@ class LiveBugHunter:
         notes: list[str] = []
         max_ms = 0.0
 
-        # 9a. Time individual tab switches to catch real UI stalls/freezes
+        # 9a. Reset Q2 FrameMetrics window (if supported) and time individual tab switches
+        has_rt = "runtime_telemetry" in getattr(self, "_capabilities", ())
+        tab_perf_samples: list[dict[str, Any]] = []
         if self.meta.get("uiHostAttached") and self.allow_mutate:
+            if has_rt:
+                self.bridge.cmd("runtime_telemetry", {"resetFrameMetrics": True}, tier=0, timeout_sec=15)
             for tab_idx, tab_name in ((2, "Play"), (4, "Settings"), (0, "Converter"), (2, "Play")):
                 t0 = time.monotonic()
                 r = self.bridge.cmd("tab_switch", {"index": tab_idx}, tier=1, timeout_sec=20)
@@ -2578,6 +3284,13 @@ class LiveBugHunter:
                 # Prefer on-device elapsedMs when available so cloud network RTT never creates false UI-freeze alarms
                 dev_ms = float(r.get("elapsedMs") or dt_ms)
                 max_ms = max(max_ms, dev_ms)
+                if r.get("elapsedMs") is not None:
+                    tab_perf_samples.append({
+                        "Target": f"Tab:{tab_name}",
+                        "Complexity": "fast",
+                        "FirstFrameMs": dev_ms,
+                        "UiThreadBlockMs": dev_ms,
+                    })
                 lat_issue = classify_ui_latency_ms(dev_ms, f"tab_switch({tab_name})")
                 if lat_issue:
                     self.ledger.record(
@@ -2630,16 +3343,96 @@ class LiveBugHunter:
                         )
             notes.append(f"albumsAudited={checked_albums}")
 
-        # 9c. H2 Runtime Telemetry Hook (FrameMetrics, ApplicationExitInfo, AudioTrack/AAudio XRuns)
-        if "runtime_telemetry" in getattr(self, "_capabilities", ()):
+        # 9c. Q2 Blocking Runtime Telemetry Gates (ApplicationExitInfo, 120 Hz FrameMetrics, StrictMode, Gesture Latency)
+        if has_rt:
             rt = self.bridge.cmd("runtime_telemetry", {}, tier=0, timeout_sec=15)
             if rt["ok"] and isinstance(rt["json"], dict):
-                fm = rt["json"].get("frameMetrics") or {}
-                xr = rt["json"].get("audioXRuns") or {}
-                notes.append(
-                    f"fm={fm.get('sampledFrames', 0)}/p95={fm.get('p95TotalMs', 0)}ms,"
-                    f"xruns={xr.get('audioTrackUnderrunCount', 0)}"
+                rj = rt["json"]
+                fm = rj.get("frameMetrics") or {}
+                xr = rj.get("audioXRuns") or {}
+
+                # ExitInfo gate
+                exit_ev = evaluate_exit_info_gate(
+                    rj.get("exitReasons"),
+                    baseline_keys=self._baseline_exit_keys or None,
                 )
+                self._q2_summary["exitInfoNewFatal"] = int(exit_ev["newFatalCount"])
+                if not exit_ev["passed"]:
+                    self._q2_summary["passed"] = False
+                for ef in exit_ev["findings"]:
+                    self.ledger.record(
+                        severity=ef["severity"],
+                        vector="V9_ui_latency_and_search_oracle",
+                        source="exit_info_q2",
+                        category=ef["category"],
+                        title=ef["message"][:200],
+                        repro_step="runtime_telemetry.exitReasons",
+                        evidence=ef["message"],
+                        origin=ef.get("origin", "live_triggered"),
+                    )
+
+                # 120 Hz FrameMetrics gate
+                fm_ev = evaluate_frame_metrics_gate(
+                    fm,
+                    p95_budget_ms=self.q2_p95_budget_ms,
+                    max_frozen_frames=0,
+                )
+                self._q2_summary["frameP95Ms"] = fm_ev["p95Ms"]
+                self._q2_summary["frameCpuP95Ms"] = fm_ev["cpuP95Ms"]
+                self._q2_summary["frozenFrames"] = fm_ev["frozenFrames"]
+                if not fm_ev["passed"]:
+                    self._q2_summary["passed"] = False
+                for ff in fm_ev["findings"]:
+                    self.ledger.record(
+                        severity=ff["severity"],
+                        vector="V9_ui_latency_and_search_oracle",
+                        source="frame_metrics_q2",
+                        category=ff["category"],
+                        title=ff["message"][:200],
+                        repro_step="runtime_telemetry.frameMetrics",
+                        evidence=json.dumps(fm, ensure_ascii=False)[:320],
+                    )
+
+                # StrictMode gate
+                sm_ev = evaluate_strict_mode_gate(rj.get("strictMode"))
+                self._q2_summary["strictModeViolations"] = sm_ev["violationCount"]
+                if not sm_ev["passed"]:
+                    self._q2_summary["passed"] = False
+                for sf in sm_ev["findings"]:
+                    self.ledger.record(
+                        severity=sf["severity"],
+                        vector="V9_ui_latency_and_search_oracle",
+                        source="strict_mode_q2",
+                        category=sf["category"],
+                        title=sf["message"][:200],
+                        repro_step="runtime_telemetry.strictMode",
+                        evidence=sf["message"],
+                    )
+
+                fm_frames = fm.get("totalFrames", fm.get("sampledFrames", fm.get("ringCount", 0)))
+                fm_p95 = fm.get("p95Ms", fm.get("p95TotalMs", 0))
+                xrun_cnt = xr.get("totalOutputUnderruns", xr.get("audioTrackUnderrunCount", 0))
+                notes.append(f"fm={fm_frames}/p95={fm_p95}ms,xruns={xrun_cnt}")
+                if fm_ev["cpuP95Ms"] is not None:
+                    notes.append(f"cpuP95={fm_ev['cpuP95Ms']}ms")
+                if fm_ev["frozenFrames"] > 0:
+                    notes.append(f"frozen={fm_ev['frozenFrames']}")
+
+        # 9d. Q2 Gesture / Tab Touch-to-First-Frame Gate (<50ms fast targets)
+        if tab_perf_samples:
+            gest_ev = evaluate_gesture_latency_gate(tab_perf_samples, touch_budget_ms=self.q2_touch_budget_ms)
+            if not gest_ev["passed"]:
+                self._q2_summary["passed"] = False
+                for gf in gest_ev["findings"]:
+                    self.ledger.record(
+                        severity=gf["severity"],
+                        vector="V9_ui_latency_and_search_oracle",
+                        source="gesture_latency_q2",
+                        category=gf["category"],
+                        title=gf["message"][:200],
+                        repro_step="V9 tab_switch gesture latency",
+                        evidence=gf["message"],
+                    )
 
         self._watch_step_delta("V9_ui_latency_and_search_oracle", "UI latency & library search oracle", check_logcat=True)
         return ", ".join(notes) or "UI latency & library oracle OK"
@@ -2793,8 +3586,18 @@ public static class SpatialTrajectoryHotProbe {
     def _restore_all(self) -> bool:
         ok = True
         self.meta["restoreDiffKeys"] = []
+        # Always restore QA StrictMode OFF in finally even during read-only (--no-mutate) runs!
+        if self._strict_mode_activated:
+            try:
+                sm_off = self.bridge.cmd("strict_mode", {"enable": False}, tier=2, timeout_sec=15)
+                if sm_off.get("ok"):
+                    self._strict_mode_activated = False
+                else:
+                    ok = False
+            except Exception:
+                ok = False
         if not self.allow_mutate:
-            return True
+            return ok
         try:
             steps: list[dict[str, Any]] = []
             if self._created_cache_files:
@@ -2821,7 +3624,7 @@ public static class SpatialTrajectoryHotProbe {
             steps.append({"cmd": "settings_get"})
             if steps:
                 res = self.bridge.pipeline(steps, stop_on_error=False, tier=2, timeout_sec=30)
-                ok = any(r.get("ok") for r in res)
+                ok = ok and any(r.get("ok") for r in res)
                 if res and res[-1].get("subCmd") == "settings_get" and res[-1].get("ok") and isinstance(res[-1].get("json"), dict):
                     after = res[-1]["json"]
                     diff_keys = [k for k, v in subset.items() if after.get(k) != v]
@@ -2871,6 +3674,7 @@ public static class SpatialTrajectoryHotProbe {
             "originCounts": self.ledger.counts_by_origin(),
             "totalUniqueFindings": len(self.ledger.ranked()),
             "totalActiveFindings": len(self.ledger.active_findings()),
+            "q2GateSummary": dict(self._q2_summary),
             "vectors": self.vector_summaries,
             "findings": self.ledger.to_dicts(),
         }
@@ -2932,6 +3736,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out-json", default="/tmp/cavern_bug_hunt_latest.json", help="Output JSON report path")
     p.add_argument("--golden-dir", default="", help="Optional directory for Q1 Golden SSIM visual diff baselines")
     p.add_argument("--update-goldens", action="store_true", help="Refresh/seed Q1 Golden SSIM baselines in --golden-dir")
+    p.add_argument("--strict-mode", action="store_true", help="Enable opt-in Q2 QA StrictMode main-thread violation detector (auto-restored OFF)")
+    p.add_argument("--q2-p95-ms", type=float, default=12.0, help="Q2 120 Hz FrameMetrics P95 budget in ms (default: 12.0)")
+    p.add_argument("--q2-touch-ms", type=float, default=50.0, help="Q2 gesture/tab touch-to-first-frame budget in ms (default: 50.0)")
     p.add_argument("--quiet", action="store_true", help="Suppress stderr live progress logs")
     p.add_argument("--url", default="", help="Override relay URL")
     p.add_argument("--pair-secret", default="", help="Override 64-hex pair secret")
@@ -2960,6 +3767,9 @@ def main(argv: list[str] | None = None) -> int:
             out_json=args.out_json,
             golden_dir=args.golden_dir,
             update_goldens=args.update_goldens,
+            enable_strict_mode=args.strict_mode,
+            q2_p95_budget_ms=args.q2_p95_ms,
+            q2_touch_budget_ms=args.q2_touch_ms,
         )
         sel = [v.strip() for v in args.vectors.split(",") if v.strip()] if args.vectors else None
         report = hunter.run_hunt(selected_vectors=sel)

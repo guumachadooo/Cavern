@@ -527,7 +527,169 @@ class BugHunterUnitTests(unittest.TestCase):
             self.assertIn(("ui_tree_q1", "ui_button_text_ellipsized"), cats)
             self.assertIn(("golden_ssim_q1", "ui_visual_regression_ssim"), cats)
 
+    def test_q2_exit_info_gate_stratifies_new_current_historical_and_cached_lmkd(self) -> None:
+        # 1. Pre-PACKAGEUPDATED historical LOW_MEMORY + low-PSS CACHED LMKD must NOT fail the gate
+        baseline = [
+            {
+                "pid": 100, "reasonCode": 16, "reason": "PACKAGEUPDATED",
+                "timestampUtc": "2026-11-26T10:00:00Z", "pssMb": 410.0, "importance": 100, "importanceName": "FOREGROUND",
+            },
+            {
+                "pid": 99, "reasonCode": 3, "reason": "LOW_MEMORY",
+                "timestampUtc": "2026-11-26T09:00:00Z", "pssMb": 3892.5, "importance": 100, "importanceName": "FOREGROUND",
+            },
+            {
+                "pid": 101, "reasonCode": 3, "reason": "LOW_MEMORY",
+                "timestampUtc": "2026-11-26T10:05:00Z", "pssMb": 119.9, "importance": 400, "importanceName": "CACHED",
+            },
+        ]
+        ev_clean = bh.evaluate_exit_info_gate(baseline)
+        self.assertTrue(ev_clean["passed"], ev_clean)
+        self.assertEqual(ev_clean["newFatalCount"], 0)
+        self.assertEqual(ev_clean["currentBuildFatalCount"], 0)
+        # Historical pre-update LOW_MEMORY is recorded as historical_archive, not live blocking
+        self.assertEqual(ev_clean["historicalFatalCount"], 1)
+        self.assertEqual(ev_clean["findings"][0]["origin"], "historical_archive")
+
+        # 2. New ANR / CRASH_NATIVE / foreground LOW_MEMORY after baseline MUST fail with CRITICAL/HIGH
+        keys = {bh.make_exit_reason_key(r) for r in baseline}
+        for reason, code, expected_cat in (
+            ("ANR", 6, "exit_info_new_anr"),
+            ("CRASH_NATIVE", 5, "exit_info_new_crash_native"),
+            ("LOW_MEMORY", 3, "exit_info_new_low_memory"),
+        ):
+            mut = [{
+                "pid": 200 + code, "reasonCode": code, "reason": reason,
+                "timestampUtc": "2026-11-26T10:20:00Z", "pssMb": 2400.0, "importance": 100, "importanceName": "FOREGROUND",
+                "description": f"simulated {reason}",
+            }] + baseline
+            ev_bad = bh.evaluate_exit_info_gate(mut, baseline_keys=keys)
+            self.assertFalse(ev_bad["passed"])
+            self.assertEqual(ev_bad["newFatalCount"], 1)
+            self.assertIn(expected_cat, [f["category"] for f in ev_bad["findings"]])
+
+    def test_q2_frame_metrics_and_gesture_latency_gates_120hz(self) -> None:
+        clean_fm = {
+            "totalFrames": 90, "ringCount": 90, "p50Ms": 4.2, "p95Ms": 10.1,
+            "cpuP95Ms": 5.8, "frozenFrames": 0, "deadlineMissedFrames": 1, "refreshRateHz": 120.0,
+        }
+        ev_ok = bh.evaluate_frame_metrics_gate(clean_fm, p95_budget_ms=12.0, max_frozen_frames=0)
+        self.assertTrue(ev_ok["passed"], ev_ok)
+        self.assertEqual(ev_ok["cpuP95Ms"], 5.8)
+
+        # CPU P95 > 12ms fails 120 Hz gate
+        slow_fm = dict(clean_fm, cpuP95Ms=18.5, p95Ms=24.0)
+        ev_slow = bh.evaluate_frame_metrics_gate(slow_fm, p95_budget_ms=12.0)
+        self.assertFalse(ev_slow["passed"])
+        self.assertIn("frame_metrics_120hz_p95_exceeded", [f["category"] for f in ev_slow["findings"]])
+
+        # Frozen frame > 0 fails CRITICAL even with good P95
+        frozen_fm = dict(clean_fm, frozenFrames=1, sessionMaxMs=912.0)
+        ev_frozen = bh.evaluate_frame_metrics_gate(frozen_fm, p95_budget_ms=12.0)
+        self.assertFalse(ev_frozen["passed"])
+        self.assertIn("frame_metrics_frozen_frames", [f["category"] for f in ev_frozen["findings"]])
+
+        # Gesture touch-to-first-frame (<50ms fast, <160ms heavy modal)
+        gest_ok = bh.evaluate_gesture_latency_gate([
+            {"Target": "Tab:Play", "Complexity": "fast", "FirstFrameMs": 22.0, "UiThreadBlockMs": 8.0},
+            {"Target": "Modal:ProAudioSheet", "Complexity": "heavy", "FirstFrameMs": 110.0, "UiThreadBlockMs": 30.0},
+        ])
+        self.assertTrue(gest_ok["passed"])
+        gest_bad = bh.evaluate_gesture_latency_gate([
+            {"Target": "Tab:Settings", "Complexity": "fast", "FirstFrameMs": 88.0, "UiThreadBlockMs": 72.0},
+        ])
+        self.assertFalse(gest_bad["passed"])
+        self.assertEqual(gest_bad["findings"][0]["category"], "gesture_touch_to_frame_exceeded")
+
+    def test_q2_strict_mode_external_watchdog_and_crash_forensics(self) -> None:
+        sm_bad = bh.evaluate_strict_mode_gate(
+            {"enabled": True, "violationCount": 1, "violations": [{"kind": "thread", "violation": "DiskReadViolation", "stackTop": "MainActivity.cs:42"}]},
+            logcat_text="D/StrictMode: StrictMode policy violation; ~duration=12 ms: DiskWriteViolation",
+        )
+        self.assertFalse(sm_bad["passed"])
+        self.assertEqual(sm_bad["violationCount"], 2)
+
+        w_anr = bh.evaluate_external_watchdog_probe({"state": "UNRESPONSIVE_ANR", "alive": False, "elapsedMs": 6012, "detail": "timeout"})
+        self.assertFalse(w_anr["passed"])
+        self.assertEqual(w_anr["findings"][0]["category"], "external_watchdog_anr_timeout")
+
+        w_pid = bh.evaluate_external_watchdog_probe({"state": "ALIVE", "alive": True, "pid": 9001, "sessionId": "new-sid"}, expected_pid=8000, expected_session_id="old-sid")
+        self.assertFalse(w_pid["passed"])
+        self.assertEqual(w_pid["findings"][0]["category"], "external_watchdog_crash_restart")
+
+        forensics = bh.parse_external_crash_forensics(
+            "E/AndroidRuntime: FATAL EXCEPTION: main\n"
+            "E/DEBUG: signal 11 (SIGSEGV), code 1 (SEGV_MAPERR)\n"
+        )
+        self.assertGreaterEqual(len(forensics), 2)
+        self.assertTrue(any(f["severity"] == "CRITICAL" for f in forensics))
+
+    def test_q2_m2_mutation_canary_offline_100pct_catch_zero_fp(self) -> None:
+        res = bh.run_m2_mutation_canary_offline()
+        self.assertTrue(res["ok"], f"M2 canary failed: {res}")
+        self.assertEqual(res["caught"], res["total"])
+        self.assertEqual(res["total"], 10)
+        self.assertAlmostEqual(res["detectRate"], 1.0, places=6)
+        self.assertEqual(res["cleanFalsePositives"], 0)
+
+    def test_q2_v9_strict_mode_watchdog_and_finally_restore_integration(self) -> None:
+        class Q2MockBridge(FakeBridge):
+            def __init__(self) -> None:
+                super().__init__()
+                self.strict_calls: list[dict] = []
+                self.watchdog_calls = 0
+                self.forensics_called = False
+
+            def cmd(self, name: str, args: dict | None = None, *, tier: int = 0, timeout_sec: int = 30) -> dict:
+                a = dict(args or {})
+                self.history.append((name, a))
+                if name == "ping":
+                    return {"ok": True, "body": "{}", "json": {"appVersion": "2.9.84", "appBuild": 84, "device": "S25U", "android": "17", "sessionId": "sid-q2", "pid": 7001, "uiHostAttached": True}, "elapsedMs": 4, "error": ""}
+                if name == "capabilities":
+                    return {"ok": True, "body": "{}", "json": {"commands": [
+                        {"cmd": "ping"}, {"cmd": "runtime_telemetry"}, {"cmd": "strict_mode"},
+                        {"cmd": "library_query"}, {"cmd": "tab_switch"}, {"cmd": "log_tail"}, {"cmd": "logcat_tail"},
+                    ]}, "elapsedMs": 4, "error": ""}
+                if name == "strict_mode":
+                    self.strict_calls.append(a)
+                    return {"ok": True, "body": "{}", "json": {"enabled": bool(a.get("enable"))}, "elapsedMs": 5, "error": ""}
+                if name == "runtime_telemetry":
+                    return {"ok": True, "body": "{}", "json": {
+                        "pid": 7001,
+                        "frameMetrics": {"totalFrames": 48, "p95Ms": 14.5, "cpuP95Ms": 14.5, "frozenFrames": 0, "refreshRateHz": 120.0},
+                        "audioXRuns": {"totalOutputUnderruns": 0},
+                        "exitReasons": [],
+                        "strictMode": {"enabled": True, "violationCount": 1, "violations": [{"kind": "thread", "violation": "DiskReadViolation", "stackTop": "Test.cs:1"}]},
+                    }, "elapsedMs": 4, "error": ""}
+                return super().cmd(name, args, tier=tier, timeout_sec=timeout_sec)
+
+            def watchdog_probe(self, timeout_sec: int = 6, reset_baseline: bool = False) -> dict:
+                self.watchdog_calls += 1
+                if reset_baseline:
+                    return {"ok": True, "alive": True, "state": "ALIVE", "pid": 7001, "sessionId": "sid-q2", "elapsedMs": 6}
+                return {"ok": False, "alive": False, "state": "UNRESPONSIVE_ANR", "pid": 7001, "elapsedMs": 6010, "detail": "injected ANR"}
+
+            def fetch_external_crash_forensics(self, timeout_sec: int = 15) -> str:
+                self.forensics_called = True
+                return "E/AndroidRuntime: FATAL EXCEPTION: main\nANR in hu.sbence.cavern.cavernize\n"
+
+        fb = Q2MockBridge()
+        hunter = bh.LiveBugHunter(fb, mode="quick", allow_mutate=False, verbose=False, enable_strict_mode=True)
+        rep = hunter.run_hunt(selected_vectors=["V9"])
+        self.assertTrue(rep["ok"])
+        self.assertFalse(rep["q2GateSummary"]["passed"])
+        self.assertEqual(rep["q2GateSummary"]["watchdogState"], "UNRESPONSIVE_ANR")
+        self.assertTrue(fb.forensics_called)
+        # StrictMode enabled at prime and MUST be restored OFF in finally even with allow_mutate=False!
+        self.assertEqual([c.get("enable") for c in fb.strict_calls], [True, False])
+        cats = {(f["source"], f["category"]) for f in rep["findings"]}
+        self.assertIn(("frame_metrics_q2", "frame_metrics_120hz_p95_exceeded"), cats)
+        self.assertIn(("strict_mode_q2", "strict_mode_main_thread_violation"), cats)
+        self.assertIn(("external_watchdog_q2", "external_watchdog_anr_timeout"), cats)
+        self.assertIn(("external_crash_forensics_q2", "external_crash_logcat"), cats)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

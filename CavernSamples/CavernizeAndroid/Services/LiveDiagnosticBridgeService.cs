@@ -153,7 +153,7 @@ public static partial class LiveDiagnosticBridgeService {
         new("get_design_tokens", 0, "Export active Cavernize One UI 9 runtime design tokens JSON for zero-quota companion UI sync", "{}"),
         new("logcat_tail", 0, "Read Cavernize own-UID Android logcat cleanly (zero shell, filters fork noise)", "{lines?:10..800, minLevel?:'V'|'D'|'I'|'W'|'E'|'F', buffer?:'main'|'system'|'crash'|'events'}"),
         new("anomalies", 0, "Read live in-memory RuntimeAnomalyRing captured from critical logs & chaos hunts", "{limit?:1..160, clear?:bool}"),
-        new("runtime_telemetry", 0, "Inspect live FrameMetrics (P50/P95/P99/jank/frozen), ApplicationExitInfo, AAudio/AudioTrack XRuns & thermal QoS", "{}"),
+        new("runtime_telemetry", 0, "Inspect live 120 Hz FrameMetrics, StrictMode violations, ApplicationExitInfo, AAudio/AudioTrack XRuns & thermal QoS", "{resetFrameMetrics?:bool, clearStrictMode?:bool, maxExitReasons?:1..10}"),
         new("cortex_profiles", 0, "Auto-characterize & export Phase-A Omniscient Cortex ComponentBehaviorProfile registry & conflict governance JSON", "{sampleRate?:16000..192000}"),
         new("batch", 0, "Execute up to 15 sequential commands in one round-trip (enforces each command's tier)", "{commands:[{cmd:string, args?:object}]}"),
 
@@ -174,6 +174,7 @@ public static partial class LiveDiagnosticBridgeService {
 
         // Tier 2: Unrestricted Dynamic Programmable Control, Visual & Shell (biometric-gated)
         new("screenshot_ui", 2, "Capture downscaled JPEG base64 screenshot of active dialog or MainActivity window", "{maxWidth?:360..1080, quality?:40..90}"),
+        new("strict_mode", 2, "Toggle opt-in Q2 QA StrictMode main-thread disk/network/VM leak detector (off by default in production)", "{enable?:bool, detectDisk?:bool, detectNetwork?:bool, detectLeaks?:bool, clear?:bool}"),
         new("native_tool_exec", 2, "Run bundled NativeLibraryDir libffmpeg.so or libtruehdd.so probe w/ ArgumentList (zero shell)", "{tool:'ffmpeg'|'truehdd', args:[string]}"),
         new("file_delete", 2, "Delete a single confined file inside CacheDir or Logs directory", "{path:string}"),
         new("settings_reset", 2, "Reset one specific non-secret setting key or clear temporary bridge cache", "{key:string}"),

@@ -58,6 +58,8 @@ public static partial class LiveDiagnosticBridgeService {
                     (string ver, long build) = AppUpdateService.GetInstalledVersion(context);
                     return (true, JsonSerializer.Serialize(new {
                         status = "online",
+                        pid = Android.OS.Process.MyPid(),
+                        processStartUtc = AndroidRuntimeTelemetry.ProcessStartUtc.ToString("O", CultureInfo.InvariantCulture),
                         bridgeVersion = 3,
                         supportsDynamicExecution = true,
                         supportsTelemetry = true,
@@ -232,10 +234,18 @@ public static partial class LiveDiagnosticBridgeService {
                     return (true, BuildAudioRoutesSnapshot(context));
                 case "memory":
                     return (true, BuildMemoryJson(context));
-                case "runtime_telemetry":
+                case "runtime_telemetry": {
+                    if (GetArgBool(argsEl, "resetFrameMetrics", false)) {
+                        AndroidRuntimeTelemetry.ResetFrameMetricsWindow();
+                    }
+                    if (GetArgBool(argsEl, "clearStrictMode", false)) {
+                        AndroidRuntimeTelemetry.ClearStrictModeViolations();
+                    }
+                    int maxExits = GetArgInt(argsEl, "maxExitReasons", 8, 1, 10);
                     return host != null
                         ? (true, await host.GetRuntimeTelemetryJsonAsync().ConfigureAwait(false))
-                        : (true, AndroidRuntimeTelemetry.BuildRuntimeTelemetryJson(context, null));
+                        : (true, AndroidRuntimeTelemetry.BuildRuntimeTelemetryJson(context, null, maxExits));
+                }
                 case "cortex_profiles": {
                     int sr = GetArgInt(argsEl, "sampleRate", 48000, 16000, 192000);
                     string json = await Task.Run(() => {
@@ -430,6 +440,15 @@ public static partial class LiveDiagnosticBridgeService {
                     int maxWidth = GetArgInt(argsEl, "maxWidth", 720, 360, 1080);
                     int quality = GetArgInt(argsEl, "quality", 72, 40, 90);
                     return (true, await host.CaptureUiScreenshotJsonAsync(maxWidth, quality).ConfigureAwait(false));
+                }
+                case "strict_mode": {
+                    bool enable = GetArgBool(argsEl, "enable", true);
+                    bool detectDisk = GetArgBool(argsEl, "detectDisk", true);
+                    bool detectNetwork = GetArgBool(argsEl, "detectNetwork", true);
+                    bool detectLeaks = GetArgBool(argsEl, "detectLeaks", false);
+                    bool clear = GetArgBool(argsEl, "clear", false);
+                    return await AndroidRuntimeTelemetry.ConfigureQaStrictModeAsync(
+                        enable, detectDisk, detectNetwork, detectLeaks, clear).ConfigureAwait(false);
                 }
                 case "native_tool_exec":
                     return await ExecuteNativeToolProbeAsync(context, argsEl, ct).ConfigureAwait(false);
