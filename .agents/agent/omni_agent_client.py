@@ -980,6 +980,25 @@ def cmd_ship(args: argparse.Namespace) -> int:
     if rc != 0:
         return rc
 
+    # Keep dynamic-fractal-planner automatically synchronized across fractal + omniagent + Termux global
+    plugin_touched = any(p.replace("\\", "/").startswith(".agents/plugins/dynamic-fractal-planner/") for p in touched)
+    try:
+        import repo_federation as rfed
+
+        cav_ver = rfed._read_plugin_version(ws / ".agents" / "plugins" / "dynamic-fractal-planner")
+        manifest = rfed.load_manifest(ws)
+        mroot = rfed.get_mount_root(manifest)
+        frac_ver = rfed._read_plugin_version(rfed.get_repo_path("fractal", ws, manifest, mroot))
+        if plugin_touched or (cav_ver and frac_ver and rfed._semver_tuple(cav_ver) > rfed._semver_tuple(frac_ver)):
+            sync_res = rfed.auto_sync_plugin_fleet(
+                ws,
+                force=plugin_touched,
+                no_sync_termux=bool(args.no_sync_termux),
+            )
+            print(json.dumps({"pluginFleetAutoSync": sync_res}, indent=2, ensure_ascii=False))
+    except Exception as exc:
+        print(json.dumps({"pluginFleetAutoSync": {"ok": False, "error": str(exc)}}, indent=2, ensure_ascii=False))
+
     if not args.no_close_fr:
         fr_script = ws / ".agents/scripts/flight_recorder.py"
         if fr_script.is_file():
