@@ -26,7 +26,7 @@ public partial class MainActivity {
     bool isFineTuneExpanded;
     OneUiSeekBar seekBarPosX, seekBarPosZ, seekBarPosY, seekBarYaw, seekBarPitch;
     OneUiWaveMediaSeekBar playbackSeekBar;
-    OneUiSeekBar seekBarVolume, seekBarLfe;
+    OneUiSeekBar seekBarLfe;
     TextView roomTelemetryText;
     LinearLayout roomTransportPlayBtn;
     OneUiIconView roomTransportPlayIcon;
@@ -376,16 +376,6 @@ public partial class MainActivity {
             playerEngine.ListenerRotation = new Vector3(v, playerEngine.ListenerRotation.Y, 0);
             UpdateRoomCanvas();
         }, "°", defaultValue: 0);
-        AddDivider(fineTuneContainer);
-        roomInvertOrbitSwitch = AddSwitchRow(
-            fineTuneContainer,
-            S["RoomInvertOrbitTitle"],
-            store.RoomInvertOrbitDrag,
-            v => {
-                store.RoomInvertOrbitDrag = v;
-                SyncRoomInvertOrbitUi();
-            },
-            helpBody: S["TipRoomInvertOrbit"]);
         UpdateRoomLockButtonUi();
         roomCard.AddView(fineTuneContainer);
         page.AddView(roomCard);
@@ -407,7 +397,7 @@ public partial class MainActivity {
         var tileHrtf = CreateBentoToggle(
             OneUiIconType.Headphones, S["BentoHrtf"],
             () => store.HeadphoneVirtualizer,
-            ToggleRoomHrtfVirtualizer,
+            ToggleActiveOutputSpatialization,
             OneUiTheme.IconSpatial,
             helpBody: S["TipHrtf"]);
 
@@ -419,12 +409,21 @@ public partial class MainActivity {
             OneUiTheme.IconSliderMedia,
             helpBody: S["TipDistSim"]);
 
+        var tileSpeakerXtc = CreateBentoToggle(
+            OneUiIconType.Speaker, S["BentoSpeakerXtc"],
+            () => store.TransauralXtcEnabled,
+            ToggleActiveOutputSpatialization,
+            OneUiTheme.IconSpatial,
+            helpBody: S["TipBentoSpeakerXtc"]);
+
         bentoRow1.AddView(tileHrtf.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
         bentoRow1.AddView(tileDist.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        bentoRow1.AddView(tileSpeakerXtc.view, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
         quickCard.AddView(bentoRow1);
 
         LinearLayout roomProfRow = HRow();
+        roomProfRowRef = roomProfRow;
         roomProfRow.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 16f);
         roomProfRow.SetPadding(Dp(12), Dp(9), Dp(12), Dp(9));
         OneUiTheme.AttachRecoil(roomProfRow, 0.98f);
@@ -439,48 +438,10 @@ public partial class MainActivity {
         roomProfRow.AddView(new OneUiIconView(this, OneUiIconType.ChevronDown, OneUiTheme.TextSub), new LinearLayout.LayoutParams(Dp(15), Dp(15)));
         roomProfRow.Click += (_, _) => ShowBinauralProfileSelectorDialog();
         quickCard.AddView(roomProfRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
+        quickCard.AddView(BuildRoomSpeakerXtcQuickRow(), new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
 
-        refreshBentoTilesUi = () => {
-            bool showDist = Services.BinauralProfileService.HasVariableDistance(store);
-            if (lastDistTileVisible.HasValue && lastDistTileVisible.Value != showDist && bentoRow1 != null && bentoRow1.IsLaidOut) {
-                try {
-                    Android.Transitions.TransitionSet ts = new();
-                    ts.SetOrdering(Android.Transitions.TransitionOrdering.Together);
-                    Android.Transitions.ChangeBounds cb = new();
-                    cb.SetDuration(280);
-                    Android.Transitions.Fade fd = new();
-                    fd.SetDuration(200);
-                    ts.AddTransition(cb);
-                    ts.AddTransition(fd);
-                    ts.SetInterpolator(CreateOneUiEase());
-                    Android.Transitions.TransitionManager.BeginDelayedTransition(bentoRow1, ts);
-                } catch { }
-            }
-            lastDistTileVisible = showDist;
-
-            tileDist.view.Visibility = showDist ? ViewStates.Visible : ViewStates.Gone;
-            if (tileHrtf.view.LayoutParameters is LinearLayout.LayoutParams hlp) {
-                int targetRight = showDist ? Dp(8) : 0;
-                if (hlp.RightMargin != targetRight) {
-                    hlp.RightMargin = targetRight;
-                    tileHrtf.view.LayoutParameters = hlp;
-                }
-            }
-            tileHrtf.refresh();
-            if (showDist) {
-                tileDist.refresh();
-            }
-        };
+        refreshBentoTilesUi = () => SyncRoomBentoOutputUi(tileHrtf, tileDist, tileSpeakerXtc);
         refreshBentoTilesUi();
-
-        int initMasterVolPct = IsDirectUsbSoftwareVolumeActive()
-            ? Math.Clamp((int)Math.Round(store.PlayerVolume * 100), 0, 100)
-            : ReadSystemMediaVolumePercent(out _, out _);
-        (seekBarVolume, _) = AddSliderRow(quickCard, S["MasterVol"], 0, 100, initMasterVolPct,
-            v => {
-                SetMasterVolumePercent(v);
-                RefreshRoomTransportButtons();
-            }, "%", defaultValue: 50);
 
         (seekBarLfe, _) = AddSliderRow(quickCard, S["LfeVol"], 0, 200, (int)Math.Round(store.LfeVolume * 100), v => {
             float vol = v / 100f;
@@ -535,8 +496,8 @@ public partial class MainActivity {
         neuralPrepRow.SetGravity(GravityFlags.CenterVertical);
         neuralPrepRow.SetPadding(0, Dp(8), 0, Dp(2));
         roomNeuralStatusText = Label("", 11.2f, OneUiTheme.TextSub);
-        roomNeuralStatusText.SetSingleLine(true);
-        roomNeuralStatusText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        roomNeuralStatusText.SetSingleLine(true); roomNeuralStatusText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        roomNeuralStatusText.Click += (_, _) => ShowUnifiedAiModelPickerDialog();
         neuralPrepRow.AddView(roomNeuralStatusText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
 
         roomNeuralPrepBtn = PillButton(S["NeuralPrep3DBtn"], () => {
@@ -586,19 +547,7 @@ public partial class MainActivity {
         return page;
     }
 
-    void ToggleRoomHrtfVirtualizer() {
-        store.HeadphoneVirtualizer = !store.HeadphoneVirtualizer;
-        playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
-        Services.BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
-        Services.AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
-        RefreshBinauralProfileUi();
-        RefreshPersonalizationUi();
-        RefreshAutoEqUi();
-        RefreshSpatialChoreoClarifierUi();
-        RefreshMusicPlayerControlsUi();
-        RefreshRoomTransportButtons();
-        refreshBentoTilesUi?.Invoke();
-    }
+    void ToggleRoomHrtfVirtualizer() => ToggleActiveOutputSpatialization();
 
     HorizontalScrollView BuildActiveSignalChainBar() {
         HorizontalScrollView scroll = new(this) { HorizontalScrollBarEnabled = false };
@@ -648,7 +597,7 @@ public partial class MainActivity {
                 RefreshSignalChainBarUi();
             }
         });
-        signalChainRoomHrtfPill = MakeStagePill(S["SignalChainHrtfDirect"], ShowBinauralProfileSelectorDialog);
+        signalChainRoomHrtfPill = MakeStagePill(S["SignalChainHrtfDirect"], OpenActiveOutputSpatializationSheet);
         signalChainAutoEqLoudnessPill = MakeStagePill(S["SignalChainEqLoudIdle"], () => SwitchTab(4));
 
         row.AddView(signalChainDecoderPill);
@@ -715,11 +664,8 @@ public partial class MainActivity {
             : (lgsrLive ? S["SignalChainLgsrActive"] : (store?.LgsrEnabled == true ? S["SignalChainLgsrIdle"] : S["SignalChainLgsrOff"]));
         StyleStagePill(signalChainLgsrPill, lgsrLabel, hasTrack && !lgsrByp && (lgsrLive || store?.LgsrEnabled == true), OneUiTheme.IconStemsCalib);
 
-        bool hrtfOn = store?.HeadphoneVirtualizer == true;
-        string hrtfLabel = hrtfOn
-            ? string.Format(S["SignalChainHrtfOnFmt"], Services.BinauralProfileService.GetActiveDistanceShortText(store, S))
-            : S["SignalChainHrtfDirect"];
-        StyleStagePill(signalChainRoomHrtfPill, hrtfLabel, hrtfOn, OneUiTheme.IconSpatial);
+        string spatialLabel = GetRoomSignalChainSpatialLabel(out bool spatialActive);
+        StyleStagePill(signalChainRoomHrtfPill, spatialLabel, spatialActive, OneUiTheme.IconSpatial);
 
         bool autoEqOn = store?.AutoEqEnabled == true && !string.IsNullOrEmpty(store.AutoEqProfileId);
         bool loudOn = store?.Iso226Enabled == true || (store?.LoudnessNormModeIndex ?? 0) > 0 || store?.DialogEnhancementEnabled == true;
@@ -788,14 +734,7 @@ public partial class MainActivity {
         roomMiniVolChip.SetMinimumHeight(Dp(30));
         roomMiniVolChip.SetPadding(Dp(7), Dp(4), Dp(7), Dp(4));
 
-        roomMiniHrtfChip = PillButton(store.HeadphoneVirtualizer ? S["BentoHrtf"] : S["PlayerDirectShort"], ToggleRoomHrtfVirtualizer);
-        roomMiniHrtfChip.TextSize = 10.2f;
-        roomMiniHrtfChip.SetSingleLine(true);
-        roomMiniHrtfChip.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        roomMiniHrtfChip.SetMinWidth(0);
-        roomMiniHrtfChip.SetMinimumWidth(0);
-        roomMiniHrtfChip.SetMinimumHeight(Dp(30));
-        roomMiniHrtfChip.SetPadding(Dp(7), Dp(4), Dp(7), Dp(4));
+        roomMiniHrtfChip = BuildRoomMiniSpatialChip();
 
         row.AddView(roomTransportPlayBtn, new LinearLayout.LayoutParams(Dp(34), Dp(34)) { RightMargin = Dp(4) });
         row.AddView(back10Btn, new LinearLayout.LayoutParams(Dp(30), Dp(30)) { RightMargin = Dp(4) });
@@ -1246,9 +1185,9 @@ public partial class MainActivity {
                 roomNeuralStatusText.SetTextColor(OneUiTheme.TextSub);
             }
         }
-        RefreshSignalChainBarUi();
-        RefreshBottomActionBarVisuals();
-        RefreshSpatialChoreoClarifierUi();
+        if (!IsCoordinatorUpdating) {
+            RefreshSignalChainBarUi(); RefreshBottomActionBarVisuals(); RefreshSpatialChoreoClarifierUi();
+        }
         SyncSpatialChoreoTrackIfNeeded();
     }
 
@@ -1714,14 +1653,7 @@ public partial class MainActivity {
                 roomMiniVolSeekBar.Invalidate();
             }
         }
-        if (roomMiniHrtfChip != null && store != null) {
-            bool hrtf = store.HeadphoneVirtualizer;
-            roomMiniHrtfChip.Text = hrtf ? S["BentoHrtf"] : S["PlayerDirectShort"];
-            roomMiniHrtfChip.Background = hrtf
-                ? OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 78), OneUiTheme.PillCornerDp, OneUiTheme.WithAlpha(OneUiTheme.IconSpatial, 185))
-                : OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, OneUiTheme.PillCornerDp);
-            roomMiniHrtfChip.SetTypeface(null, hrtf ? TypefaceStyle.Bold : TypefaceStyle.Normal);
-        }
+        SyncRoomMiniSpatialChipUi(roomMiniHrtfChip);
         RefreshSignalChainBarUi();
     }
 

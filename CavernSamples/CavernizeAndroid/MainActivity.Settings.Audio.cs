@@ -37,52 +37,43 @@ public partial class MainActivity {
     void BuildSettingsAudioCards() {
         // 1. Spatial 3D Upmixing (DirAC 1024-pt STFT always active internally)
         LinearLayout upmixCard = Card(S["UpmixTitle"], OneUiIconType.Sparkles, OneUiTheme.IconAtmosUpmix);
+        upmixArbitratedHintText = Label(S["UpmixHiddenAtmosHint"], 11.4f, OneUiTheme.PeachText);
+        upmixArbitratedHintText.Visibility = ViewStates.Gone;
+        upmixArbitratedHintText.SetPadding(0, 0, 0, Dp(6));
+        upmixCard.AddView(upmixArbitratedHintText);
+
+        upmixControlsGroup = new LinearLayout(this) { Orientation = Orientation.Vertical };
         upmixModeSelector = new OneUiInlineSelector(this, S["UpmixModeLabel"]);
         upmixModeSelector.SetItems([S["UpmixModeDirect"], S["UpmixModeSurround"], S["UpmixModeFull3D"]], ResolveUpmixModeIndex());
-        upmixModeSelector.SelectionChanged += pos => {
-            store.MatrixUpmixing = pos >= 1;
-            store.CavernizeUpmix = pos >= 2;
-            SyncUpmixModeUi();
-            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
-            RefreshMusicPlayerControlsUi();
-            RefreshSettingsCategorySubtitles();
-        };
-        upmixCard.AddView(WrapControlWithHelp(upmixModeSelector, S["UpmixModeLabel"].TrimEnd(':'), S["TipUpmixMode"], bottomMarginDp: 2));
+        upmixModeSelector.SelectionChanged += pos => SetClassicUpmixMode(pos);
+        upmixControlsGroup.AddView(WrapControlWithHelp(upmixModeSelector, S["UpmixModeLabel"].TrimEnd(':'), S["TipUpmixMode"], bottomMarginDp: 2));
 
         atmosAwareUpmixSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
         AddDivider(atmosAwareUpmixSection);
-        atmosAwareUpmixSwitch = AddSwitchRow(atmosAwareUpmixSection, S["AtmosAwareUpmix"], store.AtmosAwareUpmix, v => {
-            store.AtmosAwareUpmix = v;
-            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
-            RefreshMusicPlayerControlsUi();
-            RefreshSettingsCategorySubtitles();
-        }, helpBody: S["TipAtmosAwareUpmix"]);
+        atmosAwareUpmixSwitch = AddSwitchRow(atmosAwareUpmixSection, S["AtmosAwareUpmix"], store.AtmosAwareUpmix, SetAtmosAwareUpmix, helpBody: S["TipAtmosAwareUpmix"]);
         atmosAwareUpmixSection.Visibility = (store.MatrixUpmixing || store.CavernizeUpmix) ? ViewStates.Visible : ViewStates.Gone;
-        upmixCard.AddView(atmosAwareUpmixSection, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        AddDivider(upmixCard);
-        (upmixEffectBar, _) = AddSliderRow(upmixCard, S["UpmixEffect"], 0, 100, (int)Math.Round(store.UpmixEffect * 100), v => {
+        upmixControlsGroup.AddView(atmosAwareUpmixSection, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        AddDivider(upmixControlsGroup);
+        (upmixEffectBar, _) = AddSliderRow(upmixControlsGroup, S["UpmixEffect"], 0, 100, (int)Math.Round(store.UpmixEffect * 100), v => {
+            if (IsCoordinatorUpdating) return;
             store.UpmixEffect = v * 0.01f;
             _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
         }, "%", defaultValue: 75, helpBody: S["TipUpmixEffect"]);
-        (upmixSmoothBar, _) = AddSliderRow(upmixCard, S["UpmixSmooth"], 0, 100, (int)Math.Round(store.UpmixSmoothness * 100), v => {
+        (upmixSmoothBar, _) = AddSliderRow(upmixControlsGroup, S["UpmixSmooth"], 0, 100, (int)Math.Round(store.UpmixSmoothness * 100), v => {
+            if (IsCoordinatorUpdating) return;
             store.UpmixSmoothness = v * 0.01f;
             _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
         }, "%", defaultValue: 80, helpBody: S["TipUpmixSmooth"]);
         Button resetUpmixBtn = PillButton(S["ResetUpmix"], () => {
-            store.MatrixUpmixing = false;
-            store.CavernizeUpmix = false;
-            store.AtmosAwareUpmix = true;
             store.UpmixEffect = 0.75f;
             store.UpmixSmoothness = 0.80f;
-            SyncUpmixModeUi();
-            atmosAwareUpmixSwitch.Checked = true;
+            SetAtmosAwareUpmix(true);
+            SetClassicUpmixMode(0);
             SyncSlider(upmixEffectBar, 75, 0, 100, "%");
             SyncSlider(upmixSmoothBar, 80, 0, 100, "%");
-            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
-            RefreshMusicPlayerControlsUi();
-            RefreshSettingsCategorySubtitles();
         });
-        upmixCard.AddView(resetUpmixBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
+        upmixControlsGroup.AddView(resetUpmixBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = Dp(4) });
+        upmixCard.AddView(upmixControlsGroup);
         RegisterSettingsCard(upmixCard, categoryIndex: 0, isProOnly: false, "upmix matrix cavernize dirac stft atmos spatial 3d surround direct");
 
         // 2. Room Acoustics & Pre-Render Gain
@@ -149,6 +140,7 @@ public partial class MainActivity {
             S["RoomInvertOrbitTitle"],
             store.RoomInvertOrbitDrag,
             v => {
+                if (IsCoordinatorUpdating) return;
                 store.RoomInvertOrbitDrag = v;
                 SyncRoomInvertOrbitUi();
             },
@@ -330,14 +322,31 @@ public partial class MainActivity {
     }
 
     void SyncUpmixModeUi() {
+        bool hideChannelUpmix = ShouldHideChannelUpmixSelectors();
+        if (upmixControlsGroup != null) {
+            upmixControlsGroup.Visibility = hideChannelUpmix ? ViewStates.Gone : ViewStates.Visible;
+        }
+        if (upmixArbitratedHintText != null) {
+            upmixArbitratedHintText.Visibility = hideChannelUpmix ? ViewStates.Visible : ViewStates.Gone;
+            if (hideChannelUpmix) {
+                upmixArbitratedHintText.Text = IsActiveTrackMultichannelOrAtmos()
+                    ? S["UpmixHiddenAtmosHint"]
+                    : S["UpmixHiddenAi3DHint"];
+            }
+        }
         int idx = ResolveUpmixModeIndex();
         if (upmixModeSelector != null && upmixModeSelector.SelectedIndex != idx) {
             upmixModeSelector.SetSelection(idx, notify: false);
         }
+        if (atmosAwareUpmixSwitch != null && store != null && atmosAwareUpmixSwitch.Checked != store.AtmosAwareUpmix) {
+            uiCoordinator.RunGuarded(() => atmosAwareUpmixSwitch.Checked = store.AtmosAwareUpmix);
+        }
         if (atmosAwareUpmixSection != null) {
             atmosAwareUpmixSection.Visibility = idx > 0 ? ViewStates.Visible : ViewStates.Gone;
         }
-        RefreshSpatialChoreoClarifierUi();
+        if (!IsCoordinatorUpdating) {
+            RefreshSpatialChoreoClarifierUi();
+        }
     }
 
     void SyncRoomInvertOrbitUi() {
@@ -349,23 +358,24 @@ public partial class MainActivity {
             roomView.InvertOrbitDrag = inv;
         }
         if (settingsRoomInvertOrbitSwitch != null && settingsRoomInvertOrbitSwitch.Checked != inv) {
-            settingsRoomInvertOrbitSwitch.Checked = inv;
-        }
-        if (roomInvertOrbitSwitch != null && roomInvertOrbitSwitch.Checked != inv) {
-            roomInvertOrbitSwitch.Checked = inv;
+            uiCoordinator.RunGuarded(() => settingsRoomInvertOrbitSwitch.Checked = inv);
         }
     }
 
     void RefreshSettingsTabButtons() {
-        RefreshBinauralProfileUi();
-        RefreshAutoEqUi();
-        RefreshExternalizationUi();
-        RefreshPersonalizationUi();
-        RefreshLoudnessUi();
-        RefreshHeadTrackingUi();
-        RefreshProAudioUi();
-        RefreshNeuralAudioUi();
-        RefreshLgsrUi();
+        if (!IsCoordinatorUpdating) {
+            RefreshBinauralProfileUi();
+            RefreshAutoEqUi();
+            RefreshExternalizationUi();
+            RefreshPersonalizationUi();
+            RefreshLoudnessUi();
+            RefreshHeadTrackingUi();
+            RefreshProAudioUi();
+            RefreshNeuralAudioUi();
+            RefreshLgsrUi();
+            SyncUpmixModeUi();
+            SyncRoomInvertOrbitUi();
+        }
         if (filtersBtn != null) {
             filtersBtn.Text = renderingSettings.RoomCorrection != null
                 ? $"{S["ClearFilters"]} ({Path.GetFileName(store.RoomCorrectionPath)})"
@@ -377,8 +387,6 @@ public partial class MainActivity {
         if (muteGroundSwitch != null && muteGroundSwitch.Checked != store.MuteGround) {
             muteGroundSwitch.Checked = store.MuteGround;
         }
-        SyncUpmixModeUi();
-        SyncRoomInvertOrbitUi();
         if (lyricsHighlightSelector != null) {
             int lIdx = Math.Clamp(store.LyricsHighlightStyleIndex, 0, 2);
             if (lyricsHighlightSelector.SelectedIndex != lIdx) {

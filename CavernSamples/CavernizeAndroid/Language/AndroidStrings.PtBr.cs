@@ -1805,5 +1805,32 @@ public sealed partial class AndroidStrings {
         d["ConfirmClearMvsepTokenMsg"] = "Remover seu token de API MVSEP Cloud salvo neste aparelho?";
         d["ConfirmClearQnnCacheMsg"] = "Excluir os arquivos compilados de cache QNN e ONNX quantizados? Eles serão recriados na próxima execução.";
         d["ConfirmRemoveQueueJobMsg"] = "Remover o último trabalho da fila de conversão em lote?";
+
+        // W55.3: Coordenador Reativo, Arbitragem Anti-Conflito e Seletor Unificado de IA Local/Nuvem
+        d["BentoSpeakerXtc"] = "XTC Alto-Falantes";
+        d["TipBentoSpeakerXtc"] = "Alterna o cancelamento físico de crosstalk Bauck-Cooper / BACCH (XTC) para alto-falantes estéreo do celular ou caixas externas.";
+        d["SpatialOutSpeakerXtcOnShort"] = "XTC 3D";
+        d["SpatialOutSpeakerXtcOffShort"] = "Caixas";
+        d["SignalChainSpeakerXtcOnFmt"] = "XTC ±{0:0}°";
+        d["SignalChainSpeakerDirect"] = "Caixas Direto";
+        d["RoomXtcPresetRowLabel"] = "Geometria XTC das Caixas";
+        d["ExtStatusSpeakerBypass"] = "Bypass automático na saída de caixas/XTC (acústica física ativa)";
+        d["HeadphoneCalibSpeakerBypassHint"] = "Saída de caixas / XTC ativa — controles de HRIR e AutoEq de fones ocultos e em bypass.";
+        d["UpmixHiddenAtmosHint"] = "Upmix 5.1/7.1 oculto automaticamente porque esta faixa já possui objetos Atmos / áudio multicanal nativo.";
+        d["UpmixHiddenAi3DHint"] = "Upmix clássico 5.1/7.1 oculto enquanto a Separação Espacial IA 3D está ativa.";
+        d["AiPickerLaunchBtn"] = "Seletor Rápido IA (Local e Nuvem)";
+        d["AiPickerTitle"] = "Seletor de Modelos IA (Local e Nuvem)";
+        d["AiPickerSubtitle"] = "Seleção em 1 toque de modelos ONNX locais e receitas MVSEP Cloud com mapa de stems (escolhas Manuais/Nuvem permanecem isoladas dos pacotes Studio).";
+        d["AiPickerSectionLocal"] = "Modelos ONNX no Aparelho";
+        d["AiPickerSectionCloud"] = "Receitas MVSEP na Nuvem";
+        d["AiPickerReturnAutoBtn"] = "Voltar ao Modo Pacote Automático";
+        d["AiPickerReturnAutoToast"] = "Modo de orquestração automática por pacotes ativado.";
+        d["AiPickerManualIsolatedTag"] = "ONNX Manual";
+        d["AiPickerCloudIsolatedTag"] = "MVSEP Nuvem";
+        d["AiPickerAutoBundleTag"] = "Pacote Auto";
+        d["AiPickerStemMapFmt"] = "Stems: {0}";
+        d["AiPickerAppliedToastFmt"] = "Modelo IA ativo: {0} ({1})";
+        d["AiPickerActiveModelFmt"] = "Modelo IA: {0}";
+        d["AiPickerNeedDownloadToast"] = "Baixe ou importe '{0}' primeiro em Modelos e Cache.";
     }
 }

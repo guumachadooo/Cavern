@@ -248,5 +248,32 @@ public sealed partial class AndroidStrings {
         d["ConfirmClearMvsepTokenMsg"] = "确定移除此设备上保存的 MVSEP Cloud API 令牌吗？";
         d["ConfirmClearQnnCacheMsg"] = "确定删除已编译的 Qualcomm QNN 与量化 ONNX 优化缓存文件吗？下次运行时会自动重建。";
         d["ConfirmRemoveQueueJobMsg"] = "确定从批量转换队列中移除最后一个任务吗？";
+
+        // W55.3: 响应式 UI 协调器、防冲突仲裁与本地/云端统一 AI 模型选择器
+        d["BentoSpeakerXtc"] = "扬声器 XTC";
+        d["TipBentoSpeakerXtc"] = "切换手机内置或外接立体声扬声器的物理跨耳串扰消除 (XTC)。";
+        d["SpatialOutSpeakerXtcOnShort"] = "XTC 3D";
+        d["SpatialOutSpeakerXtcOffShort"] = "扬声器";
+        d["SignalChainSpeakerXtcOnFmt"] = "XTC ±{0:0}°";
+        d["SignalChainSpeakerDirect"] = "扬声器直通";
+        d["RoomXtcPresetRowLabel"] = "扬声器 XTC 几何预设";
+        d["ExtStatusSpeakerBypass"] = "扬声器/XTC 输出自动旁路虚拟房间（保留真实物理声场）";
+        d["HeadphoneCalibSpeakerBypassHint"] = "当前为扬声器 / XTC 输出 — 已隐藏并自动旁路耳机 HRIR 与 AutoEq 控制。";
+        d["UpmixHiddenAtmosHint"] = "当前曲目自带原生 Atmos / 多声道空间对象，已自动隐藏 5.1/7.1 声道上混选择器。";
+        d["UpmixHiddenAi3DHint"] = "AI 3D 分轨空间模式已启用，传统 5.1/7.1 声道上混已隐藏。";
+        d["AiPickerLaunchBtn"] = "快速 AI 模型选择器（本地与云端）";
+        d["AiPickerTitle"] = "本地与云端 AI 模型选择";
+        d["AiPickerSubtitle"] = "一键切换本地 ONNX 与云端 MVSEP 方案并预览分轨映射（手动与云端选择与 Studio 套装严格隔离）。";
+        d["AiPickerSectionLocal"] = "端侧本地 ONNX 模型";
+        d["AiPickerSectionCloud"] = "MVSEP 云端方案";
+        d["AiPickerReturnAutoBtn"] = "切回自动套装模式";
+        d["AiPickerReturnAutoToast"] = "已切回自动 AI 套装调度模式。";
+        d["AiPickerManualIsolatedTag"] = "手动 ONNX";
+        d["AiPickerCloudIsolatedTag"] = "云端 MVSEP";
+        d["AiPickerAutoBundleTag"] = "自动套装";
+        d["AiPickerStemMapFmt"] = "分轨: {0}";
+        d["AiPickerAppliedToastFmt"] = "已启用 AI 模型: {0} ({1})";
+        d["AiPickerActiveModelFmt"] = "AI 模型: {0}";
+        d["AiPickerNeedDownloadToast"] = "请先在“模型与缓存”中下载或导入“{0}”。";
     }
 }

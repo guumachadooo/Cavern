@@ -130,19 +130,7 @@ public partial class MainActivity {
                     RefreshLgsrUi();
                     RefreshSpatialXRayHud();
                 } else {
-                    bool wantSpatial = !wantOriginal;
-                    store.HeadphoneVirtualizer = wantSpatial;
-                    if (playerEngine != null) {
-                        playerEngine.HeadphoneVirtualizer = wantSpatial;
-                        BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
-                    }
-                    AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
-                    RefreshBinauralProfileUi();
-                    RefreshPersonalizationUi();
-                    RefreshAutoEqUi();
-                    refreshBentoTilesUi?.Invoke();
-                    RefreshSpatialChoreoClarifierUi();
-                    RefreshMusicPlayerControlsUi();
+                    SetHeadphoneVirtualizerState(!wantOriginal);
                     UpdateSpatialBadgePillVisuals();
                     RefreshAbHeaderVisuals();
                 }
@@ -1264,10 +1252,8 @@ public partial class MainActivity {
                 }
             }
 
-            string pctLabel = $"{pct}%";
             bool uiMatches = pct == lastSyncedMasterVolPct &&
                              isDirectUsb == lastSyncedDirectUsbVol &&
-                             (seekBarVolume == null || (seekBarVolume.Progress == pct && string.Equals(seekBarVolume.ValueText, pctLabel, StringComparison.Ordinal))) &&
                              (musicVolSeekBar == null || musicVolSeekBar.Progress == pct);
             if (uiMatches) {
                 return;
@@ -1275,17 +1261,6 @@ public partial class MainActivity {
             lastSyncedMasterVolPct = pct;
             lastSyncedDirectUsbVol = isDirectUsb;
 
-            if (seekBarVolume != null) {
-                if (seekBarVolume.Max != 100) seekBarVolume.Max = 100;
-                if (seekBarVolume.Progress != pct) {
-                    seekBarVolume.Progress = pct;
-                    seekBarVolume.ValueText = pctLabel;
-                    seekBarVolume.Invalidate();
-                } else if (!string.Equals(seekBarVolume.ValueText, pctLabel, StringComparison.Ordinal)) {
-                    seekBarVolume.ValueText = pctLabel;
-                    seekBarVolume.Invalidate();
-                }
-            }
             if (musicVolSeekBar != null) {
                 if (musicVolSeekBar.Max != 100) musicVolSeekBar.Max = 100;
                 if (musicVolSeekBar.Progress != pct) {
@@ -1374,17 +1349,6 @@ public partial class MainActivity {
             lastSyncedMasterVolPct = percent;
             lastSyncedDirectUsbVol = isDirectUsb;
 
-            string pctLabel = $"{percent}%";
-            if (seekBarVolume != null) {
-                if (seekBarVolume.Progress != percent) {
-                    seekBarVolume.Progress = percent;
-                    seekBarVolume.ValueText = pctLabel;
-                    seekBarVolume.Invalidate();
-                } else if (!string.Equals(seekBarVolume.ValueText, pctLabel, StringComparison.Ordinal)) {
-                    seekBarVolume.ValueText = pctLabel;
-                    seekBarVolume.Invalidate();
-                }
-            }
             if (musicVolSeekBar != null && musicVolSeekBar.Progress != percent) {
                 musicVolSeekBar.Progress = percent;
                 musicVolSeekBar.Invalidate();

@@ -620,22 +620,17 @@ public partial class MainActivity {
                         meta?.ArtworkBitmap);
 
                     RebuildInlineTrackList();
-                    RefreshPlayerSourcesList();
-                    RefreshMusicPlayerUi();
-                    RefreshExtractorChecklist();
                     RefreshConverterTrackInfo();
                     RefreshContainerOptions();
                     SyncPlaybackUi(playerEngine.IsPlaying, playerEngine.CurrentSeconds, playerEngine.TotalSeconds);
-                    UpdateRoomCanvas();
                     SyncNeuralReferenceOffsetForActiveTrack(readyTrack);
                     if (!(playerEngine?.NeuralStage?.HasPlayableSeparatedStems ?? false)) {
                         TryAutoBindCachedNeuralStemsAsync(readyTrack, startupDelayMs: wasPlaying ? 350 : 0);
                     }
                     StartLosslessTwinDiscoveryAsync(readyTrack, startupDelayMs: wasPlaying ? 900 : 0);
-                    RefreshNeuralAudioUi();
-                    RefreshNeuralPrepUi();
-                    RefreshLyricsSingDockUi();
-                    RefreshBottomActionBarVisuals();
+                    NotifyUiDomainChanged(
+                        UiStateDomain.Room3D | UiStateDomain.StudioExport | UiStateDomain.Neural | UiStateDomain.Playback,
+                        immediate: true);
                     ShowToast(string.Format(S["FormatSwitchedToast"], preferredFormatVariantKey));
 
                     // Clean up previous file/session resources AFTER engine has atomically switched

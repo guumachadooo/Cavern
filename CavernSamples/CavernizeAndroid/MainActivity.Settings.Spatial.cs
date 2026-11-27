@@ -42,18 +42,21 @@ public partial class MainActivity {
     void BuildSettingsSpatialCards() {
         // Physical Externalization (Allen & Berkley ISM Room, Duda & Martens Near-Field DVF & ISO 9613-1)
         LinearLayout slot5aCard = Card(S["Slot5ACardTitle"], OneUiIconType.Speaker, OneUiTheme.IconSpatial);
-        ismRoomEnabledSwitch = AddSwitchRow(slot5aCard, S["IsmRoomEnableTitle"], store.IsmRoomEnabled, v => {
-            store.IsmRoomEnabled = v;
-            ApplyAndRefreshExternalization();
-        }, helpBody: S["TipIsmRoom"]);
-
+        slot5aCardRef = slot5aCard;
         externalizationStatusText = Label("", 11.4f, OneUiTheme.TextSub);
-        externalizationStatusText.SetSingleLine(true);
-        externalizationStatusText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        externalizationStatusText.SetSingleLine(false);
+        externalizationStatusText.SetMaxLines(2);
         slot5aCard.AddView(externalizationStatusText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(2),
             BottomMargin = Dp(8)
         });
+
+        externalizationDetailsSection = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        ismRoomEnabledSwitch = AddSwitchRow(externalizationDetailsSection, S["IsmRoomEnableTitle"], store.IsmRoomEnabled, v => {
+            if (IsCoordinatorUpdating) return;
+            store.IsmRoomEnabled = v;
+            ApplyAndRefreshExternalization();
+        }, helpBody: S["TipIsmRoom"]);
 
         ismRoomPresetSelector = new OneUiInlineSelector(this, S["IsmRoomPresetTitle"]);
         string[] ismPresetLabels = [
@@ -65,10 +68,11 @@ public partial class MainActivity {
         ];
         ismRoomPresetSelector.SetItems(ismPresetLabels, Math.Clamp(store.IsmRoomPresetIndex, 0, ismPresetLabels.Length - 1));
         ismRoomPresetSelector.SelectionChanged += pos => {
+            if (IsCoordinatorUpdating) return;
             store.IsmRoomPresetIndex = pos;
             ApplyAndRefreshExternalization();
         };
-        slot5aCard.AddView(WrapControlWithHelp(ismRoomPresetSelector, S["IsmRoomPresetTitle"].TrimEnd(':'), S["TipIsmRoomPreset"], bottomMarginDp: 8));
+        externalizationDetailsSection.AddView(WrapControlWithHelp(ismRoomPresetSelector, S["IsmRoomPresetTitle"].TrimEnd(':'), S["TipIsmRoomPreset"], bottomMarginDp: 8));
 
         ismWallMaterialSelector = new OneUiInlineSelector(this, S["IsmWallMaterialTitle"]);
         string[] ismMaterialLabels = [
@@ -80,52 +84,58 @@ public partial class MainActivity {
         ];
         ismWallMaterialSelector.SetItems(ismMaterialLabels, Math.Clamp(store.IsmWallMaterialIndex, 0, ismMaterialLabels.Length - 1));
         ismWallMaterialSelector.SelectionChanged += pos => {
+            if (IsCoordinatorUpdating) return;
             store.IsmWallMaterialIndex = pos;
             ApplyAndRefreshExternalization();
         };
-        slot5aCard.AddView(WrapControlWithHelp(ismWallMaterialSelector, S["IsmWallMaterialTitle"].TrimEnd(':'), S["TipIsmWallMaterial"], bottomMarginDp: 8));
+        externalizationDetailsSection.AddView(WrapControlWithHelp(ismWallMaterialSelector, S["IsmWallMaterialTitle"].TrimEnd(':'), S["TipIsmWallMaterial"], bottomMarginDp: 8));
 
         ismOrderSelector = new OneUiInlineSelector(this, S["IsmOrderTitle"]);
         string[] ismOrderLabels = [S["IsmOrder1"], S["IsmOrder2"]];
         ismOrderSelector.SetItems(ismOrderLabels, store.IsmReflectionOrder <= 1 ? 0 : 1);
         ismOrderSelector.SelectionChanged += pos => {
+            if (IsCoordinatorUpdating) return;
             store.IsmReflectionOrder = pos == 0 ? 1 : 2;
             ApplyAndRefreshExternalization();
         };
-        slot5aCard.AddView(WrapControlWithHelp(ismOrderSelector, S["IsmOrderTitle"].TrimEnd(':'), S["TipIsmOrder"], bottomMarginDp: 6));
+        externalizationDetailsSection.AddView(WrapControlWithHelp(ismOrderSelector, S["IsmOrderTitle"].TrimEnd(':'), S["TipIsmOrder"], bottomMarginDp: 6));
 
         (ismLevelBar, _) = AddSliderRow(
-            slot5aCard,
+            externalizationDetailsSection,
             S["IsmLevelTitle"],
             0,
             150,
             Math.Clamp((int)Math.Round(store.IsmReflectionLevel * 100f), 0, 150),
             v => {
+                if (IsCoordinatorUpdating) return;
                 store.IsmReflectionLevel = v * 0.01f;
                 ApplyAndRefreshExternalization();
             },
             "%",
             defaultValue: 100);
 
-        AddDivider(slot5aCard);
-        nearFieldEnabledSwitch = AddSwitchRow(slot5aCard, S["NearFieldEnableTitle"], store.NearFieldCompensationEnabled, v => {
+        AddDivider(externalizationDetailsSection);
+        nearFieldEnabledSwitch = AddSwitchRow(externalizationDetailsSection, S["NearFieldEnableTitle"], store.NearFieldCompensationEnabled, v => {
+            if (IsCoordinatorUpdating) return;
             store.NearFieldCompensationEnabled = v;
             ApplyAndRefreshExternalization();
         }, helpBody: S["TipNearField"]);
 
-        AddDivider(slot5aCard);
-        airAbsorptionEnabledSwitch = AddSwitchRow(slot5aCard, S["AirAbsEnableTitle"], store.AirAbsorptionEnabled, v => {
+        AddDivider(externalizationDetailsSection);
+        airAbsorptionEnabledSwitch = AddSwitchRow(externalizationDetailsSection, S["AirAbsEnableTitle"], store.AirAbsorptionEnabled, v => {
+            if (IsCoordinatorUpdating) return;
             store.AirAbsorptionEnabled = v;
             ApplyAndRefreshExternalization();
         }, helpBody: S["TipAirAbsorption"]);
 
         (airTempBar, _) = AddSliderRow(
-            slot5aCard,
+            externalizationDetailsSection,
             S["AirTempTitle"],
             0,
             40,
             Math.Clamp((int)Math.Round(store.AirTemperatureCelsius), 0, 40),
             v => {
+                if (IsCoordinatorUpdating) return;
                 store.AirTemperatureCelsius = v;
                 ApplyAndRefreshExternalization();
             },
@@ -133,22 +143,25 @@ public partial class MainActivity {
             defaultValue: 20);
 
         (airHumidityBar, _) = AddSliderRow(
-            slot5aCard,
+            externalizationDetailsSection,
             S["AirHumidityTitle"],
             15,
             90,
             Math.Clamp((int)Math.Round(store.AirRelativeHumidityPct), 15, 90),
             v => {
+                if (IsCoordinatorUpdating) return;
                 store.AirRelativeHumidityPct = v;
                 ApplyAndRefreshExternalization();
             },
             "%",
             defaultValue: 50);
 
+        slot5aCard.AddView(externalizationDetailsSection);
         RegisterSettingsCard(slot5aCard, categoryIndex: 1, isProOnly: true, "physical externalization ism room reflections near field dvf air absorption temperature humidity");
 
         // MagLS Ambisonics, Woodworth-Schlosberg Biometric ITD & HpTF Ear-Canal Notch
         LinearLayout slot5bCard = Card(S["Slot5BCardTitle"], OneUiIconType.Headphones, OneUiTheme.IconSpatial);
+        slot5bCardRef = slot5bCard;
 
         personalizationStatusText = Label("", 11.4f, OneUiTheme.TextSub);
         personalizationStatusText.SetSingleLine(true);
@@ -290,7 +303,9 @@ public partial class MainActivity {
 
         // Wave F (W53.6 / B13): Physical Transaural XTC Spatializer (Phone & External Stereo Speakers, Bit-Exact Headphone Bypass)
         LinearLayout xtcCard = Card(S["TransauralCardTitle"], OneUiIconType.Speaker, OneUiTheme.IconSpatial);
+        xtcCardRef = xtcCard;
         transauralXtcSwitch = AddSwitchRow(xtcCard, S["TransauralEnableTitle"], store.TransauralXtcEnabled, v => {
+            if (IsCoordinatorUpdating) return;
             store.TransauralXtcEnabled = v;
             ApplyAndRefreshTransauralXtc();
         }, helpBody: S["TipTransauralXtc"]);
@@ -312,6 +327,7 @@ public partial class MainActivity {
         ];
         transauralPresetSelector.SetItems(xtcPresetLabels, Math.Clamp(store.TransauralXtcPresetIndex, 0, xtcPresetLabels.Length - 1));
         transauralPresetSelector.SelectionChanged += pos => {
+            if (IsCoordinatorUpdating) return;
             store.TransauralXtcPresetIndex = pos;
             ApplyAndRefreshTransauralXtc();
         };
@@ -324,6 +340,7 @@ public partial class MainActivity {
             100,
             Math.Clamp((int)Math.Round(store.TransauralXtcStrength * 100f), 20, 100),
             v => {
+                if (IsCoordinatorUpdating) return;
                 store.TransauralXtcStrength = v * 0.01f;
                 ApplyAndRefreshTransauralXtc();
             },
@@ -332,6 +349,7 @@ public partial class MainActivity {
 
         AddDivider(xtcCard);
         transauralHeadphoneBypassSwitch = AddSwitchRow(xtcCard, S["TransauralAutoBypassTitle"], store.TransauralXtcAutoBypassHeadphones, v => {
+            if (IsCoordinatorUpdating) return;
             store.TransauralXtcAutoBypassHeadphones = v;
             ApplyAndRefreshTransauralXtc();
         }, helpBody: S["TipTransauralAutoBypass"]);
@@ -348,7 +366,10 @@ public partial class MainActivity {
             AudioDeviceRouteInfo route = audioDeviceProfileManager.CurrentDevice;
             playerEngine.UpdateOutputRouteForTransaural(route.IsHeadphoneRoute, route.Transport);
         }
-        RefreshTransauralXtcUi();
+        ApplyArbitratedExternalizationAndBrirBypass();
+        NotifyUiDomainChanged(
+            UiStateDomain.SpatialOutput | UiStateDomain.Room3D | UiStateDomain.Playback | UiStateDomain.Settings,
+            immediate: true);
     }
 
     void RefreshTransauralXtcUi() {
@@ -400,13 +421,17 @@ public partial class MainActivity {
         if (store == null || playerEngine == null) {
             return;
         }
-        playerEngine.ApplyExternalizationConfig(store.BuildExternalizationConfig());
-        RefreshExternalizationUi();
+        ApplyArbitratedExternalizationAndBrirBypass();
+        NotifyUiDomainChanged(UiStateDomain.SpatialOutput | UiStateDomain.Room3D, immediate: true);
     }
 
     void RefreshExternalizationUi() {
         if (uiDestroyed || store == null) {
             return;
+        }
+        bool speakerBypass = ShouldAutoBypassRoomAmbienceForSpeakers();
+        if (externalizationDetailsSection != null) {
+            externalizationDetailsSection.Visibility = speakerBypass ? ViewStates.Gone : ViewStates.Visible;
         }
         if (ismRoomEnabledSwitch != null && ismRoomEnabledSwitch.Checked != store.IsmRoomEnabled) {
             ismRoomEnabledSwitch.Checked = store.IsmRoomEnabled;
@@ -441,7 +466,10 @@ public partial class MainActivity {
         if (externalizationStatusText != null) {
             var diag = playerEngine?.ExternalizationDiagnostics ?? Cavernize.Logic.Spatial.PhysicalExternalizationDiagnostics.Default;
             bool isBrir = BinauralProfileService.IsActiveProfileBrir(store);
-            if (!store.HeadphoneVirtualizer) {
+            if (speakerBypass) {
+                externalizationStatusText.Text = S["ExtStatusSpeakerBypass"];
+                externalizationStatusText.SetTextColor(OneUiTheme.PeachText);
+            } else if (!store.HeadphoneVirtualizer) {
                 externalizationStatusText.Text = S["ExtStatusDirect"];
                 externalizationStatusText.SetTextColor(OneUiTheme.TextMuted);
             } else if (isBrir) {

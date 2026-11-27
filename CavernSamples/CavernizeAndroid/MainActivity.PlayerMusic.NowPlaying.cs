@@ -536,16 +536,25 @@ public partial class MainActivity {
             tv.SetTextColor(fg);
         }
 
-        int upmixIdx = ResolveUpmixModeIndex();
-        string upmixPillLabel = upmixIdx switch {
-            2 => S["PlayTabUpmix3DShort"],
-            1 => S["PlayTabUpmixMatrixShort"],
-            _ => S["PlayTabUpmixDirectShort"]
-        };
-        Color upmixPillAccent = upmixIdx == 2 ? OneUiTheme.IconAtmosUpmix : OneUiTheme.IconStudioExport;
-        StyleSpatialPill(musicUpmixToggleBtn, musicUpmixIcon, musicUpmixText, upmixIdx > 0, upmixPillAccent, upmixPillLabel);
-        StyleSpatialPill(musicBottomSpatialBtn, musicBottomSpatialIcon, musicBottomSpatialText, store.HeadphoneVirtualizer, OneUiTheme.Primary,
-            BinauralProfileService.GetActiveShortBadge(store, S));
+        bool hideChannelUpmix = ShouldHideChannelUpmixSelectors();
+        musicUpmixToggleBtn.Visibility = hideChannelUpmix ? ViewStates.Gone : ViewStates.Visible;
+        if (!hideChannelUpmix) {
+            int upmixIdx = ResolveUpmixModeIndex();
+            string upmixPillLabel = upmixIdx switch {
+                2 => S["PlayTabUpmix3DShort"],
+                1 => S["PlayTabUpmixMatrixShort"],
+                _ => S["PlayTabUpmixDirectShort"]
+            };
+            Color upmixPillAccent = upmixIdx == 2 ? OneUiTheme.IconAtmosUpmix : OneUiTheme.IconStudioExport;
+            StyleSpatialPill(musicUpmixToggleBtn, musicUpmixIcon, musicUpmixText, upmixIdx > 0, upmixPillAccent, upmixPillLabel);
+        }
+        bool isSpeakerRoute = IsActiveOutputSpeakerRoute();
+        bool spatialOn = isSpeakerRoute ? store.TransauralXtcEnabled : store.HeadphoneVirtualizer;
+        string spatialBadge = isSpeakerRoute
+            ? (spatialOn ? S["SpatialOutSpeakerXtcOnShort"] : S["SpatialOutSpeakerXtcOffShort"])
+            : BinauralProfileService.GetActiveShortBadge(store, S);
+        musicBottomSpatialIcon.IconType = isSpeakerRoute ? OneUiIconType.Speaker : OneUiIconType.Headphones;
+        StyleSpatialPill(musicBottomSpatialBtn, musicBottomSpatialIcon, musicBottomSpatialText, spatialOn, OneUiTheme.Primary, spatialBadge);
 
         bool aiPrepBusy = isNeuralPrepRunning &&
                           activeNeuralPrepGoal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation;

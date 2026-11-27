@@ -40,7 +40,8 @@ public partial class MainActivity {
     string lastExportFolderAbsPath = "";
     string lastExportPublicDisplayPath = "";
     string lastExportSourcePath = "";
-    OneUiInlineSelector studioWorkflowSelector, exportFormatSelector, containerSelector;
+    OneUiInlineSelector exportFormatSelector, containerSelector;
+    LinearLayout studioReadinessContainer, studioReadinessBadgeRow1, studioReadinessBadgeRow2;
     readonly List<Button> studioWorkflowPillBtns = [];
     LinearLayout studioMasterSection, studioClassicSection, studioQueueSection;
     LinearLayout studioProContentContainer;
@@ -101,18 +102,14 @@ public partial class MainActivity {
 
         // 1. Segmented Workflow Selector (Master | Classic | Queue) + Readiness Pills Card (WorkspaceSourceBar hoisted above contentFrame)
         LinearLayout modeCard = Card();
-        studioWorkflowSelector = new OneUiInlineSelector(this, S["StudioWorkflowLabel"]);
         string[] workflowNames = [
             S["StudioModeMaster"],
             S["StudioModeClassic"],
             S["StudioModeQueue"]
         ];
-        studioWorkflowSelector.SetItems(workflowNames, selectedStudioWorkflow);
-        studioWorkflowSelector.SelectionChanged += idx => SetStudioWorkflowMode(idx);
-        modeCard.AddView(studioWorkflowSelector);
 
         LinearLayout segRow = HRow();
-        segRow.SetPadding(0, Dp(8), 0, Dp(10));
+        segRow.SetPadding(0, Dp(2), 0, Dp(6));
         studioWorkflowPillBtns.Clear();
         for (int i = 0; i < workflowNames.Length; i++) {
             int modeIdx = i;
@@ -126,28 +123,33 @@ public partial class MainActivity {
         }
         modeCard.AddView(segRow);
 
-        AddDivider(modeCard);
+        studioReadinessContainer = new LinearLayout(this) {
+            Orientation = Orientation.Vertical,
+            Visibility = ViewStates.Gone
+        };
+        AddDivider(studioReadinessContainer);
         TextView readyHdr = Label(S["StudioReadinessHeader"], 11.5f, ColMuted);
         readyHdr.SetPadding(0, Dp(2), 0, Dp(6));
-        modeCard.AddView(readyHdr);
+        studioReadinessContainer.AddView(readyHdr);
 
-        LinearLayout badgeRow1 = HRow();
+        studioReadinessBadgeRow1 = HRow();
         studioBadgeTruehdBtn = PillButton(S["StudioBadgeTrueHdReady"], OnTrueHdReadinessBadgeClicked);
         studioBadgeFfmpegBtn = PillButton(S["StudioBadgeFFmpegReady"], () => SwitchTab(4));
         studioBadgeTruehdBtn.TextSize = 11f;
         studioBadgeFfmpegBtn.TextSize = 11f;
-        badgeRow1.AddView(studioBadgeTruehdBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        badgeRow1.AddView(studioBadgeFfmpegBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        modeCard.AddView(badgeRow1, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
+        studioReadinessBadgeRow1.AddView(studioBadgeTruehdBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        studioReadinessBadgeRow1.AddView(studioBadgeFfmpegBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        studioReadinessContainer.AddView(studioReadinessBadgeRow1, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
 
-        LinearLayout badgeRow2 = HRow();
+        studioReadinessBadgeRow2 = HRow();
         studioBadgeOnnxBtn = PillButton(S["StudioBadgeOnnxReady"], OnOnnxReadinessBadgeClicked);
         studioBadgeTwinBtn = PillButton(S["StudioBadgeTwinNone"], OnTwinReadinessBadgeClicked);
         studioBadgeOnnxBtn.TextSize = 11f;
         studioBadgeTwinBtn.TextSize = 11f;
-        badgeRow2.AddView(studioBadgeOnnxBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        badgeRow2.AddView(studioBadgeTwinBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        modeCard.AddView(badgeRow2);
+        studioReadinessBadgeRow2.AddView(studioBadgeOnnxBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        studioReadinessBadgeRow2.AddView(studioBadgeTwinBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        studioReadinessContainer.AddView(studioReadinessBadgeRow2);
+        modeCard.AddView(studioReadinessContainer);
 
         studioPrereqJumpBtn = SecondaryButton(S["OpenSettingsBtn"], OnStudioPrerequisiteJumpClicked);
         studioPrereqJumpBtn.Visibility = ViewStates.Gone;
@@ -394,9 +396,6 @@ public partial class MainActivity {
 
     void SetStudioWorkflowMode(int modeIdx) {
         selectedStudioWorkflow = Math.Clamp(modeIdx, 0, 2);
-        if (studioWorkflowSelector != null && studioWorkflowSelector.SelectedIndex != selectedStudioWorkflow) {
-            studioWorkflowSelector.SetSelection(selectedStudioWorkflow, notify: false);
-        }
         for (int i = 0; i < studioWorkflowPillBtns.Count; i++) {
             bool sel = i == selectedStudioWorkflow;
             Button b = studioWorkflowPillBtns[i];
@@ -490,45 +489,72 @@ public partial class MainActivity {
         string thdPath = TruehddInstallerService.ResolveExistingTruehddPath(this, store);
         bool thdInstalled = !string.IsNullOrEmpty(thdPath) && File.Exists(thdPath);
         bool thdPendingDecode = selectedTrack != null && selectedTrack.Codec == Codec.TrueHD && decodedTrueHDTrack == null;
-        if (!thdInstalled) {
-            StyleReadinessBadge(studioBadgeTruehdBtn, S["StudioBadgeTrueHdMissing"], ColDanger, true);
-        } else if (thdPendingDecode) {
-            StyleReadinessBadge(studioBadgeTruehdBtn, S["StudioBadgeTrueHdPending"], OneUiTheme.FunctionalOrange, true);
-        } else {
-            StyleReadinessBadge(studioBadgeTruehdBtn, S["StudioBadgeTrueHdReady"], OneUiTheme.FunctionalGreen, false);
+        bool showTrueHdBadge = !thdInstalled || thdPendingDecode;
+        if (studioBadgeTruehdBtn != null) {
+            studioBadgeTruehdBtn.Visibility = showTrueHdBadge ? ViewStates.Visible : ViewStates.Gone;
+            if (!thdInstalled) {
+                StyleReadinessBadge(studioBadgeTruehdBtn, S["StudioBadgeTrueHdMissing"], ColDanger, true);
+            } else if (thdPendingDecode) {
+                StyleReadinessBadge(studioBadgeTruehdBtn, S["StudioBadgeTrueHdPending"], OneUiTheme.FunctionalOrange, true);
+            }
         }
 
         bool ffReady = ffmpeg != null && ffmpeg.Found;
-        StyleReadinessBadge(
-            studioBadgeFfmpegBtn,
-            ffReady ? S["StudioBadgeFFmpegReady"] : S["StudioBadgeFFmpegMissing"],
-            ffReady ? OneUiTheme.FunctionalGreen : OneUiTheme.FunctionalOrange,
-            !ffReady);
+        bool showFfmpegBadge = !ffReady;
+        if (studioBadgeFfmpegBtn != null) {
+            studioBadgeFfmpegBtn.Visibility = showFfmpegBadge ? ViewStates.Visible : ViewStates.Gone;
+            if (showFfmpegBadge) {
+                StyleReadinessBadge(studioBadgeFfmpegBtn, S["StudioBadgeFFmpegMissing"], OneUiTheme.FunctionalOrange, true);
+            }
+        }
 
         StudioComposableExportOptions activeOpts = BuildCurrentComposableOptions();
+        bool needsOnnxNow = selectedStudioWorkflow == 0 &&
+            ((activeOpts.EnableAiSpatialUpmix && !IsActiveTrackMultichannelOrAtmos()) ||
+             activeOpts.EnableKaraokeInstrumental ||
+             activeOpts.EnableLosslessTwinRestoration);
         bool onnxReady = IsComposableExportNeuralReady(activeOpts, out _);
-        StyleReadinessBadge(
-            studioBadgeOnnxBtn,
-            onnxReady ? S["StudioBadgeOnnxReady"] : S["StudioBadgeOnnxMissing"],
-            onnxReady ? OneUiTheme.FunctionalGreen : OneUiTheme.FunctionalOrange,
-            !onnxReady);
+        bool showOnnxBadge = !onnxReady && (needsOnnxNow || !OnnxRuntimeInstallerService.IsRuntimeInstalled(this));
+        if (studioBadgeOnnxBtn != null) {
+            studioBadgeOnnxBtn.Visibility = showOnnxBadge ? ViewStates.Visible : ViewStates.Gone;
+            if (showOnnxBadge) {
+                StyleReadinessBadge(studioBadgeOnnxBtn, S["StudioBadgeOnnxMissing"], OneUiTheme.FunctionalOrange, true);
+            }
+        }
 
         Cavernize.Logic.Spatial.LgsrDiagnostics lgsr = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
+        bool needsTwinNow = selectedStudioWorkflow == 0 && activeOpts.EnableLosslessTwinRestoration;
         bool twinSynced = IsLosslessTwinSynced(out _);
-        if (twinSynced) {
-            StyleReadinessBadge(studioBadgeTwinBtn, S["StudioBadgeTwinSynced"], OneUiTheme.FunctionalGreen, true);
-        } else if (lgsr.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedAlreadyLossless) {
-            StyleReadinessBadge(studioBadgeTwinBtn, S["StudioBadgeTwinNative"], OneUiTheme.IconSystemInfo, false);
-        } else {
-            StyleReadinessBadge(studioBadgeTwinBtn, S["StudioBadgeTwinNone"], OneUiTheme.PeachText, activeOpts.EnableLosslessTwinRestoration);
+        bool showTwinBadge = needsTwinNow && !twinSynced &&
+            lgsr.State != Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedAlreadyLossless;
+        if (studioBadgeTwinBtn != null) {
+            studioBadgeTwinBtn.Visibility = showTwinBadge ? ViewStates.Visible : ViewStates.Gone;
+            if (showTwinBadge) {
+                StyleReadinessBadge(studioBadgeTwinBtn, S["StudioBadgeTwinNone"], OneUiTheme.PeachText, true);
+            }
+        }
+
+        if (studioReadinessBadgeRow1 != null) {
+            studioReadinessBadgeRow1.Visibility = (showTrueHdBadge || showFfmpegBadge) ? ViewStates.Visible : ViewStates.Gone;
+            if (studioBadgeTruehdBtn?.LayoutParameters is LinearLayout.LayoutParams lp1) {
+                lp1.RightMargin = (showTrueHdBadge && showFfmpegBadge) ? Dp(6) : 0;
+                studioBadgeTruehdBtn.LayoutParameters = lp1;
+            }
+        }
+        if (studioReadinessBadgeRow2 != null) {
+            studioReadinessBadgeRow2.Visibility = (showOnnxBadge || showTwinBadge) ? ViewStates.Visible : ViewStates.Gone;
+            if (studioBadgeOnnxBtn?.LayoutParameters is LinearLayout.LayoutParams lp2) {
+                lp2.RightMargin = (showOnnxBadge && showTwinBadge) ? Dp(6) : 0;
+                studioBadgeOnnxBtn.LayoutParameters = lp2;
+            }
+        }
+        if (studioReadinessContainer != null) {
+            studioReadinessContainer.Visibility = (showTrueHdBadge || showFfmpegBadge || showOnnxBadge || showTwinBadge)
+                ? ViewStates.Visible
+                : ViewStates.Gone;
         }
 
         if (studioPrereqJumpBtn != null) {
-            bool needsOnnxNow = selectedStudioWorkflow == 0 &&
-                ((activeOpts.EnableAiSpatialUpmix && !IsActiveTrackMultichannelOrAtmos()) ||
-                 activeOpts.EnableKaraokeInstrumental ||
-                 activeOpts.EnableLosslessTwinRestoration);
-            bool needsTwinNow = selectedStudioWorkflow == 0 && activeOpts.EnableLosslessTwinRestoration;
             bool missingAny = (!thdInstalled && selectedTrack?.Codec == Codec.TrueHD) ||
                               (!ffReady && selectedStudioWorkflow == 1) ||
                               (needsOnnxNow && !onnxReady) ||
@@ -1507,10 +1533,6 @@ public partial class MainActivity {
         }
         for (int i = 0; i < studioWorkflowPillBtns.Count; i++) {
             studioWorkflowPillBtns[i].Enabled = !running;
-        }
-        if (studioWorkflowSelector != null) {
-            studioWorkflowSelector.Enabled = !running;
-            studioWorkflowSelector.Alpha = running ? 0.55f : 1f;
         }
         SetStudioExportControlsBusy(running);
         if (exportFormatSelector != null) {

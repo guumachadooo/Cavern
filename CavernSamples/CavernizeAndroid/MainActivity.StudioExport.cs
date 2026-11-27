@@ -37,7 +37,8 @@ public partial class MainActivity {
     Switch studioOptAiUpmixSwitch, studioOptKaraokeSwitch, studioOptRemoveBackingSwitch, studioOptPerformanceSwitch;
     Switch studioOptLosslessTwinSwitch, studioOptHeadphonePersonalSwitch;
     Switch studioOptEmbedCoverSwitch, studioOptEmbedLyricsSwitch;
-    OneUiInlineSelector studioBundleSelector, studioDynamicMotionSelector, studioExportFolderSelector;
+    OneUiInlineSelector studioDynamicMotionSelector, studioExportFolderSelector;
+    Button studioAiModelPickerBtn;
     TextView studioOptPerformanceHintText, studioOptTwinHintText;
     TextView studioOptEmbedCoverHintText, studioOptEmbedLyricsHintText, studioExportFolderHintText;
     LinearLayout studioOptHeadphonePersonalRow;
@@ -230,20 +231,11 @@ public partial class MainActivity {
             },
             out _);
 
-        studioBundleSelector = new OneUiInlineSelector(this, S["NeuralStudioBundleTitle"]);
-        studioBundleSelector.SetItems(new[] {
-            S["StudioBundleFastSingle"],
-            S["StudioBundleVocalEnsemble"],
-            S["StudioBundlePureInstrumental"],
-            S["StudioBundleFullBand6Stem"],
-            S["StudioBundleKaraoke2Stage"]
-        }, Math.Clamp(store.NeuralStudioBundleIndex, 0, 4));
-        studioBundleSelector.SelectionChanged += idx => {
-            store.NeuralStudioBundleIndex = idx;
-            ApplyAndRefreshNeuralAudio();
-            RefreshStudioW12ContextUi();
-        };
-        card.AddView(studioBundleSelector, new LinearLayout.LayoutParams(
+        studioAiModelPickerBtn = PillButton(BuildActiveAiPickerSummaryText(), () => ShowUnifiedAiModelPickerDialog());
+        studioAiModelPickerBtn.TextSize = 11.4f;
+        studioAiModelPickerBtn.SetSingleLine(true);
+        studioAiModelPickerBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        card.AddView(studioAiModelPickerBtn, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent,
             ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(6)
@@ -900,11 +892,8 @@ public partial class MainActivity {
         if (studioOptRemoveBackingSwitch != null && studioOptRemoveBackingSwitch.Checked != removeBacking) {
             studioOptRemoveBackingSwitch.Checked = removeBacking;
         }
-        if (studioBundleSelector != null) {
-            int bIdx = Math.Clamp(store.NeuralStudioBundleIndex, 0, 4);
-            if (studioBundleSelector.SelectedIndex != bIdx) {
-                studioBundleSelector.SetSelection(bIdx, notify: false);
-            }
+        if (studioAiModelPickerBtn != null) {
+            studioAiModelPickerBtn.Text = BuildActiveAiPickerSummaryText();
         }
         if (studioOptHeadphonePersonalRow != null) {
             studioOptHeadphonePersonalRow.Visibility = opts.BaseFormat == StudioBaseOutputFormat.Headphone3D
@@ -1293,9 +1282,9 @@ public partial class MainActivity {
         }
         if (studioSwitchEclipsaBtn != null) studioSwitchEclipsaBtn.Enabled = !running;
         if (studioOptAiUpmixSwitch != null) studioOptAiUpmixSwitch.Enabled = !running;
-        if (studioBundleSelector != null) {
-            studioBundleSelector.Enabled = !running;
-            studioBundleSelector.Alpha = running ? 0.55f : 1f;
+        if (studioAiModelPickerBtn != null) {
+            studioAiModelPickerBtn.Enabled = !running;
+            studioAiModelPickerBtn.Alpha = running ? 0.55f : 1f;
         }
         if (studioOptKaraokeSwitch != null) studioOptKaraokeSwitch.Enabled = !running;
         if (studioOptRemoveBackingSwitch != null) studioOptRemoveBackingSwitch.Enabled = !running;

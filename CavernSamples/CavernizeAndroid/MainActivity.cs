@@ -298,11 +298,9 @@ public partial class MainActivity : Activity, ICavernizeApp {
                 return;
             }
             SetLiveTrackSourceItems();
-            RefreshPlayerSourcesList();
-            RefreshExtractorChecklist();
-            UpdateRoomCanvas();
-            RefreshNeuralPrepUi();
-            RefreshNeuralAudioUi();
+            NotifyUiDomainChanged(
+                UiStateDomain.Room3D | UiStateDomain.StudioExport | UiStateDomain.Neural | UiStateDomain.Playback,
+                immediate: true);
         });
         audioOutput = new AndroidAudioOutput(playerEngine) {
             LowLatencyMode = store.LowLatencyAudio,
@@ -337,10 +335,10 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
         BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
         playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
-        playerEngine.ApplyExternalizationConfig(store.BuildExternalizationConfig());
         playerEngine.ApplyPersonalizationConfig(store.BuildPersonalizationConfig());
         playerEngine.ApplyLoudnessConfig(store.BuildLoudnessConfig());
         playerEngine.ApplyTransauralXtcConfig(store.BuildTransauralXtcConfig());
+        ApplyArbitratedExternalizationAndBrirBypass();
         StemExtractor.TextResolver = key => AndroidStrings.Active[key];
         neuralRuntime = new NativeOnnxRuntimeBridge(this) {
             PreferredQuantizationMode = (Cavernize.Logic.Spatial.NeuralQuantizationMode)Math.Clamp(store.NeuralQuantizationModeIndex, 0, 3),
@@ -383,14 +381,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         usbProAudioManager.Start();
         audioOutput.UpdateOutputRoute(audioDeviceProfileManager.CurrentDevice);
         headTrackingManager.ApplySettings();
-        RefreshHeadTrackingUi();
-        RefreshProAudioUi();
-        RefreshExternalizationUi();
-        RefreshTransauralXtcUi();
-        RefreshPersonalizationUi();
-        RefreshLoudnessUi();
-        RefreshNeuralAudioUi();
-        RefreshLgsrUi();
+        NotifyUiDomainChanged(UiStateDomain.SpatialOutput | UiStateDomain.Neural | UiStateDomain.Settings, immediate: true);
         RequestMediaPermissionsIfNeeded();
         StartTelemetryTimer();
 
@@ -622,6 +613,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         neuralRuntime?.Dispose();
         playerEngine?.CancelMicVoiceprintCalibration();
         playerEngine?.Dispose();
+        uiCoordinator?.Dispose();
         decodedTrueHDTrack?.Dispose();
         LoadedFile?.Dispose();
         TrueHDDecoderService.CleanupWorkDirectory(activeTrueHDSessionDir);
@@ -654,6 +646,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
 
     void BuildRootUi() {
         OneUiTheme.Initialize(this);
+        InitializeUiCoordinator();
 
         FrameLayout rootFrame = new(this);
         rootFrameHost = rootFrame;

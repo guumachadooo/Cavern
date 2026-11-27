@@ -37,16 +37,7 @@ namespace CavernizeAndroid;
 
 public partial class MainActivity {
     void RefreshAllUiState() {
-        RefreshConverterTabState();
-        RefreshPlayerSourcesList();
-        RefreshMusicPlayerUi();
-        RefreshExtractorChecklist();
-        RefreshSettingsTabButtons();
-        RefreshSettingsDot();
-        RefreshFFmpegCardUi();
-        RefreshTruehddCardUi();
-        RefreshSettingsUpdateUi();
-        UpdateRoomCanvas();
+        NotifyUiDomainChanged(UiStateDomain.All, immediate: true);
     }
 
     void RefreshSettingsDot() {

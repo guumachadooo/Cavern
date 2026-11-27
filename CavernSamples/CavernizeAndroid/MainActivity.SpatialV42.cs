@@ -32,6 +32,7 @@ public sealed partial class MainActivity {
             return false;
         }
         return store.HeadphoneVirtualizer ||
+            IsSpeakerXtcOutputActive() ||
             store.CavernizeUpmix ||
             store.MatrixUpmixing ||
             IsActiveTrackMultichannelOrAtmos() ||
@@ -315,10 +316,9 @@ public sealed partial class MainActivity {
                     BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
                     AutoEqService.ApplySavedToEngine(this, store, playerEngine);
                     SyncNeuralRuntimeDiagnostics();
-                    RefreshBinauralProfileUi();
-                    RefreshAutoEqUi();
-                    RefreshNeuralAudioUi();
-                    RefreshSpatialChoreoClarifierUi();
+                    NotifyUiDomainChanged(
+                        UiStateDomain.SpatialOutput | UiStateDomain.Neural | UiStateDomain.Upmix,
+                        immediate: true);
                 });
             } catch (System.OperationCanceledException) {
             } catch (Exception ex) {
@@ -432,20 +432,17 @@ public sealed partial class MainActivity {
             playerEngine?.TotalSeconds ?? 0,
             currentMediaMeta?.ArtworkBitmap);
 
-        RefreshPlayerSourcesList();
-        RefreshMusicPlayerUi();
-        RefreshExtractorChecklist();
         RefreshConverterTrackInfo();
         RefreshContainerOptions();
         SyncPlaybackUi(false, initialSeekSec, playerEngine?.TotalSeconds ?? 0);
-        UpdateRoomCanvas();
         playerEngine?.VocalMixMatchStage?.ApplySongDna(Cavern.VocalChain.VocalMixDnaProfile.CreateStudioDefault());
         StartLosslessTwinDiscoveryAsync(activeTrack, startupDelayMs: 1400);
         TryLoadCachedSongVocalDnaAsync(activeTrack, startupDelayMs: 300);
         TryAutoBindCachedNeuralStemsAsync(activeTrack, startupDelayMs: 450);
         ScheduleNextTrackLoudnessPreScan(activeSourcePath);
-        RefreshNeuralPrepUi();
-        RefreshSpatialChoreoClarifierUi();
+        NotifyUiDomainChanged(
+            UiStateDomain.Room3D | UiStateDomain.Playback | UiStateDomain.StudioExport | UiStateDomain.Neural | UiStateDomain.Upmix,
+            immediate: true);
         if (autoPlayAfter && activeTrack.Supported && !(playerEngine?.IsPlaying ?? false)) {
             TogglePlayPause();
         }
@@ -501,10 +498,9 @@ public sealed partial class MainActivity {
                         return;
                     }
                     SetLiveTrackSourceItems();
-                    RefreshPlayerSourcesList();
-                    RefreshExtractorChecklist();
-                    RefreshSpatialChoreoClarifierUi();
-                    UpdateRoomCanvas();
+                    NotifyUiDomainChanged(
+                        UiStateDomain.Room3D | UiStateDomain.StudioExport | UiStateDomain.Upmix,
+                        immediate: true);
                 });
             } catch (System.OperationCanceledException) {
             } catch (Exception ex) {

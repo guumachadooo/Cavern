@@ -28,6 +28,9 @@ namespace Cavern.Internals {
             if (!IKnowWhatIAmDoing) {
                 throw new DevHasNoIdeaException();
             }
+            if (!ListenerContext.IsDesktopConfigSupported) {
+                throw new PlatformNotSupportedException("Cavern desktop configuration path is unavailable on non-desktop platforms.");
+            }
 
             string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Cavern");
             if (!Directory.Exists(path)) {

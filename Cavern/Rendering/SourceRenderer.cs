@@ -40,7 +40,7 @@ namespace Cavern.Rendering {
         /// layout has no dedicated LFE channel (e.g. Direct 2.0, 2.0, 4.0, 4.0.4).
         /// </summary>
         protected static void MixToLFE(Listener listener, bool isLfeSource, float[] samples, float[] rendered, float gain) {
-            Channel[] channels = Listener.Channels;
+            Channel[] channels = (listener != null ? listener.Context : ListenerContext.Current).Channels;
             bool hasLfe = false;
             for (int channel = 0; channel < channels.Length; channel++) {
                 if (channels[channel].LFE) {

@@ -23,9 +23,9 @@ public partial class MainActivity {
 
     CheckBox extractJsonCheck, extractResidualCheck;
     LinearLayout extractBitSection, extractJsonCheckWrap, extractResidualCheckWrap, extractSelectionSection;
-    LinearLayout extractAiChainCard;
+    LinearLayout extractAiChainCard, extractBadgeRow;
     TextView extractAiChainSummaryText;
-    Button extractBadgeOnnxBtn, extractBadgeTwinBtn;
+    Button extractBadgeOnnxBtn, extractBadgeTwinBtn, extractAiModelPickerBtn;
     LinearLayout extractorChecklistContainer, extractedFilesContainer;
     Button extractBtn, cancelExtractBtn;
     ProgressBar extractProgressBar;
@@ -141,14 +141,22 @@ public partial class MainActivity {
         extractAiChainSummaryText.SetPadding(0, Dp(4), 0, Dp(8));
         extractAiChainCard.AddView(extractAiChainSummaryText);
 
-        LinearLayout aiBadgeRow = HRow();
-        extractBadgeOnnxBtn = PillButton(S["StudioBadgeOnnxReady"], OnOnnxReadinessBadgeClicked);
+        extractAiModelPickerBtn = PillButton(S["AiPickerLaunchBtn"], () => ShowUnifiedAiModelPickerDialog());
+        extractAiModelPickerBtn.TextSize = 11.2f;
+        extractAiModelPickerBtn.SetSingleLine(true);
+        extractAiModelPickerBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        extractAiChainCard.AddView(extractAiModelPickerBtn, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
+
+        extractBadgeRow = HRow();
+        extractBadgeRow.Visibility = ViewStates.Gone;
+        extractBadgeOnnxBtn = PillButton(S["StudioBadgeOnnxMissing"], OnOnnxReadinessBadgeClicked);
         extractBadgeTwinBtn = PillButton(S["StudioBadgeTwinNone"], OnTwinReadinessBadgeClicked);
         extractBadgeOnnxBtn.TextSize = 11f;
         extractBadgeTwinBtn.TextSize = 11f;
-        aiBadgeRow.AddView(extractBadgeOnnxBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
-        aiBadgeRow.AddView(extractBadgeTwinBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        extractAiChainCard.AddView(aiBadgeRow);
+        extractBadgeRow.AddView(extractBadgeOnnxBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(6) });
+        extractBadgeRow.AddView(extractBadgeTwinBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        extractAiChainCard.AddView(extractBadgeRow);
 
         card.AddView(extractAiChainCard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(10)
@@ -333,22 +341,33 @@ public partial class MainActivity {
             }
         }
 
-        StyleReadinessBadge(
-            extractBadgeOnnxBtn,
-            modelReady ? S["StudioBadgeOnnxReady"] : S["StudioBadgeOnnxMissing"],
-            modelReady ? OneUiTheme.FunctionalGreen : OneUiTheme.FunctionalOrange,
-            !modelReady);
+        if (extractAiModelPickerBtn != null) {
+            extractAiModelPickerBtn.Text = BuildActiveAiPickerSummaryText();
+        }
 
+        bool showOnnxErr = !modelReady;
+        if (extractBadgeOnnxBtn != null) {
+            extractBadgeOnnxBtn.Visibility = showOnnxErr ? ViewStates.Visible : ViewStates.Gone;
+            if (showOnnxErr) {
+                StyleReadinessBadge(extractBadgeOnnxBtn, S["StudioBadgeOnnxMissing"], OneUiTheme.FunctionalOrange, true);
+            }
+        }
+
+        bool twinSynced = IsLosslessTwinSynced(out _);
+        Cavernize.Logic.Spatial.LgsrDiagnostics lgsr = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
+        bool showTwinErr = mode == 6 && !twinSynced &&
+            lgsr.State != Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedAlreadyLossless;
         if (extractBadgeTwinBtn != null) {
-            extractBadgeTwinBtn.Visibility = (mode == 4 || mode == 6) ? ViewStates.Visible : ViewStates.Gone;
-            bool twinSynced = IsLosslessTwinSynced(out _);
-            Cavernize.Logic.Spatial.LgsrDiagnostics lgsr = playerEngine?.LgsrDiagnostics ?? Cavernize.Logic.Spatial.LgsrDiagnostics.Default;
-            if (twinSynced) {
-                StyleReadinessBadge(extractBadgeTwinBtn, S["StudioBadgeTwinSynced"], OneUiTheme.FunctionalGreen, true);
-            } else if (lgsr.State == Cavernize.Logic.Spatial.LosslessTwinVerificationState.BypassedAlreadyLossless && mode != 6) {
-                StyleReadinessBadge(extractBadgeTwinBtn, S["StudioBadgeTwinNative"], OneUiTheme.IconSystemInfo, false);
-            } else {
-                StyleReadinessBadge(extractBadgeTwinBtn, S["StudioBadgeTwinNone"], OneUiTheme.PeachText, mode == 6);
+            extractBadgeTwinBtn.Visibility = showTwinErr ? ViewStates.Visible : ViewStates.Gone;
+            if (showTwinErr) {
+                StyleReadinessBadge(extractBadgeTwinBtn, S["StudioBadgeTwinNone"], OneUiTheme.PeachText, true);
+            }
+        }
+        if (extractBadgeRow != null) {
+            extractBadgeRow.Visibility = (showOnnxErr || showTwinErr) ? ViewStates.Visible : ViewStates.Gone;
+            if (extractBadgeOnnxBtn?.LayoutParameters is LinearLayout.LayoutParams lpOnnx) {
+                lpOnnx.RightMargin = (showOnnxErr && showTwinErr) ? Dp(6) : 0;
+                extractBadgeOnnxBtn.LayoutParameters = lpOnnx;
             }
         }
     }

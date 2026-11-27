@@ -162,7 +162,12 @@ namespace Cavern {
         /// <summary>
         /// Recalculates properties.
         /// </summary>
-        internal void Recalculate() {
+        internal void Recalculate() => Recalculate(ListenerContext.Current?.IsSpherical ?? false);
+
+        /// <summary>
+        /// Recalculates properties for the specified room shape.
+        /// </summary>
+        internal void Recalculate(bool isSpherical) {
             float xRad = X * VectorExtensions.Deg2Rad,
                 yRad = Y * VectorExtensions.Deg2Rad,
                 sinX = MathF.Sin(xRad),
@@ -171,7 +176,8 @@ namespace Cavern {
                 cosY = MathF.Cos(yRad);
             SphericalPos = new Vector3(sinY * cosX, -sinX, cosY * cosX);
             CubicalPos = SphericalPos.MapToCube();
-            FinalizeSpace();
+            SpatialPos = isSpherical ? SphericalPos : CubicalPos;
+            Distance = SpatialPos.Length();
         }
 
         /// <summary>
@@ -182,14 +188,6 @@ namespace Cavern {
             X = x;
             Y = y;
             Recalculate();
-        }
-
-        /// <summary>
-        /// Set <see cref="SpatialPos"/> and <see cref="Distance"/> if <see cref="SphericalPos"/> or <see cref="CubicalPos"/> changed.
-        /// </summary>
-        void FinalizeSpace() {
-            SpatialPos = Listener.IsSpherical ? SphericalPos : CubicalPos;
-            Distance = SpatialPos.Length();
         }
     }
 }

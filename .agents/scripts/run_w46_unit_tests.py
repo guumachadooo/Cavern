@@ -83,12 +83,14 @@ TEST_CSPROJ = """<Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="{cavern_csproj}" />
     <ProjectReference Include="{logic_csproj}" />
+    <Compile Include="{ui_coordinator_cs}" Link="UiStateCoordinator.cs" />
   </ItemGroup>
 </Project>
 """
 
 TEST_PROGRAM_CS = r"""
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Numerics;
@@ -104,6 +106,8 @@ using Cavern.Format.Decoders;
 using Cavern.Format.Environment;
 using Cavern.Format.Renderers;
 using Cavern.Format.Renderers.BaseClasses;
+using Cavern.Format.Transcoders;
+using Cavern.Format.Utilities;
 using Cavern.Neural;
 using Cavern.ProAudio;
 using Cavern.Remapping;
@@ -118,6 +122,7 @@ using Cavernize.Logic.Models;
 using Cavernize.Logic.Rendering;
 using Cavernize.Logic.Spatial;
 using Cavernize.Logic.Spatial.Adapters;
+using CavernizeAndroid.Services;
 
 string testFilter = Environment.GetEnvironmentVariable("W46_TEST_FILTER") ?? "";
 int passed = 0;
@@ -4480,12 +4485,318 @@ RunTest("T54_W55_2_SpatialChoreoActivity_LyricMood_EarCandy", () => {
         $"Expected active ear-candy micro-objects for 9.5 kHz chime, got count={activeNodes}, sparkle={sparkle01:F3}");
 });
 
+// ---------- Test 55: W57.2 ListenerContext Isolation, Desktop Config Guard, VBR E-AC-3 Seek & Async FFmpeg ----------
+RunTest("T55_W57_2_ListenerContext_VbrEac3Seek_AsyncFfmpeg", () => {
+    // 1. Concurrent ListenerContext isolation: 7.1.4 Virtualizer playback vs 5.1 Direct export -> 0 cross-corruption
+    ListenerContext defaultBefore = ListenerContext.Default;
+    int defaultChBefore = defaultBefore.Channels.Length;
+    bool defaultVirtBefore = defaultBefore.HeadphoneVirtualizer;
+
+    ListenerContext playbackCtx = new() {
+        EnvironmentType = Environments.Studio,
+        HeadphoneVirtualizer = true,
+        EnvironmentSize = new Vector3(12f, 8f, 12f)
+    };
+    playbackCtx.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.ref714));
+    Listener playbackListener = new(playbackCtx, loadGlobals: false) {
+        SampleRate = 48000,
+        UpdateRate = 64,
+        BypassInternalVirtualizer = true
+    };
+
+    ListenerContext exportCtx = new() {
+        EnvironmentType = Environments.Home,
+        HeadphoneVirtualizer = false,
+        EnvironmentSize = new Vector3(5f, 3f, 5f)
+    };
+    exportCtx.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.GetStandardMatrix(6)));
+    Listener exportListener = new(exportCtx, loadGlobals: false) { SampleRate = 48000, UpdateRate = 64 };
+
+    Assert(playbackListener.Context.Channels.Length == 12, $"Expected 7.1.4 (12ch) playback context, got {playbackListener.Context.Channels.Length}");
+    Assert(exportListener.Context.Channels.Length == 6, $"Expected 5.1 (6ch) export context, got {exportListener.Context.Channels.Length}");
+
+    Exception workerEx = null;
+    Task tPlayback = Task.Run(() => {
+        try {
+            for (int i = 0; i < 40; i++) {
+                using ListenerContext.Scope scope = playbackCtx.EnterScope();
+                Assert(ReferenceEquals(ListenerContext.Current, playbackCtx), "Playback thread lost ListenerContext scope");
+                Assert(ListenerContext.Current.HeadphoneVirtualizer, "Playback context virtualizer flag corrupted");
+                Assert(ListenerContext.Current.Channels.Length == 12, "Playback context channel count corrupted");
+                float[] rendered = playbackListener.Render(1);
+                Assert(rendered != null && rendered.Length == 12 * 64, "Playback render buffer layout mismatch");
+            }
+        } catch (Exception ex) { workerEx ??= ex; }
+    });
+    Task tExport = Task.Run(() => {
+        try {
+            for (int i = 0; i < 40; i++) {
+                using ListenerContext.Scope scope = exportCtx.EnterScope();
+                Assert(ReferenceEquals(ListenerContext.Current, exportCtx), "Export thread lost ListenerContext scope");
+                Assert(!ListenerContext.Current.HeadphoneVirtualizer, "Export context virtualizer flag corrupted");
+                Assert(ListenerContext.Current.Channels.Length == 6, "Export context channel count corrupted");
+                float[] rendered = exportListener.Render(1);
+                Assert(rendered != null && rendered.Length == 6 * 64, "Export render buffer layout mismatch");
+            }
+        } catch (Exception ex) { workerEx ??= ex; }
+    });
+    Task.WaitAll(tPlayback, tExport);
+    if (workerEx != null) {
+        throw workerEx;
+    }
+    Assert(ListenerContext.Default.Channels.Length == defaultChBefore &&
+           ListenerContext.Default.HeadphoneVirtualizer == defaultVirtBefore,
+        "Concurrent isolated contexts mutated ListenerContext.Default");
+
+    // 2. ListenerContext.IsDesktopConfigSupported & %APPDATA% skip contract
+    FieldInfo desktopFlagField = typeof(ListenerContext).GetField("IsDesktopConfigSupported", BindingFlags.Static | BindingFlags.NonPublic);
+    MethodInfo detectMethod = typeof(ListenerContext).GetMethod("DetectNonDesktopPlatform", BindingFlags.Static | BindingFlags.NonPublic);
+    FieldInfo nonDesktopMethodsField = typeof(ListenerContext).GetField("nonDesktopOsMethods", BindingFlags.Static | BindingFlags.NonPublic);
+    Assert(desktopFlagField != null && detectMethod != null && nonDesktopMethodsField != null,
+        "ListenerContext must expose IsDesktopConfigSupported / DetectNonDesktopPlatform guards");
+    string[] mobileChecks = nonDesktopMethodsField.GetValue(null) as string[];
+    Assert(mobileChecks != null && Array.IndexOf(mobileChecks, "IsAndroid") >= 0 && Array.IndexOf(mobileChecks, "IsIOS") >= 0,
+        "ListenerContext.nonDesktopOsMethods must guard Android/iOS");
+    Listener nonGlobalListener = new(exportCtx, loadGlobals: false);
+    Assert(nonGlobalListener.Context == exportCtx, "Listener(context, loadGlobals: false) must preserve isolated context without %APPDATA%");
+
+    // 3. Raw VBR EnhancedAC3Decoder.Seek (<= 1 frame drift across non-uniform frame sizes)
+    int[] vbrFrameWords = [48, 64, 80, 52, 96, 56, 88, 60, 112, 68, 76, 64];
+    byte[] vbrEac3 = BuildSyntheticVbrEac3Stream(vbrFrameWords);
+    using MemoryStream eac3Ms = new(vbrEac3, writable: false);
+    BlockBuffer<byte> eac3Buf = BlockBuffer<byte>.Create(eac3Ms, 4096);
+    EnhancedAC3Decoder eac3Dec = new(eac3Buf, vbrEac3.Length);
+    Assert(eac3Dec.IndexedFrameCount == vbrFrameWords.Length,
+        $"Expected {vbrFrameWords.Length} indexed VBR E-AC-3 frames, got {eac3Dec.IndexedFrameCount}");
+    Assert(eac3Dec.Length == vbrFrameWords.Length * 1536L,
+        $"Expected exact VBR duration {vbrFrameWords.Length * 1536L}, got {eac3Dec.Length}");
+
+    long[] seekTargets = [9 * 1536L + 256L, 3 * 1536L + 128L, 11 * 1536L];
+    float[] postSeekPcm = new float[510];
+    foreach (long target in seekTargets) {
+        eac3Dec.Seek(target);
+        long posAfterSeek = eac3Dec.Position;
+        Assert(Math.Abs(posAfterSeek - target) <= eac3Dec.FrameSize,
+            $"VBR E-AC-3 Seek({target}) drift exceeded 1 frame: Position={posAfterSeek}");
+        eac3Dec.DecodeBlock(postSeekPcm, 0, postSeekPcm.Length);
+        Assert(eac3Dec.Position == target + postSeekPcm.Length / Math.Max(1, eac3Dec.ChannelCount),
+            $"VBR E-AC-3 post-seek DecodeBlock Position mismatch: {eac3Dec.Position}");
+    }
+
+    // 4. FFmpeg.FindExecutable + LaunchAsync progress + mid-run cancellation (0 orphan processes)
+    if (!OperatingSystem.IsWindows()) {
+        string shPath = VoidX.WPF.FFmpeg.FFmpeg.FindExecutable("sh");
+        Assert(!string.IsNullOrEmpty(shPath) && File.Exists(shPath), "FFmpeg.FindExecutable(\"sh\") failed on POSIX");
+
+        string tmpDir = Path.Combine(Path.GetTempPath(), $"cavern_w57_ffmpeg_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tmpDir);
+        try {
+            string progressScript = Path.Combine(tmpDir, "mock_ffmpeg_progress.sh");
+            File.WriteAllText(progressScript,
+                "#!/bin/sh\n" +
+                "echo 'out_time_us=500000'\n" +
+                "echo 'out_time_us=1000000'\n" +
+                "echo 'progress=end'\n" +
+                "exit 0\n");
+            File.SetUnixFileMode(progressScript, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Assert(VoidX.WPF.FFmpeg.FFmpeg.FindExecutable(progressScript) == Path.GetFullPath(progressScript),
+                "FFmpeg.FindExecutable failed on direct script path");
+
+            TestFfmpegRunner runner = new() { Location = progressScript };
+            Assert(runner.Found, "TestFfmpegRunner.Found should be true for executable mock script");
+            List<double> reported = [];
+            object reportLock = new();
+            IProgress<double> prog = new SyncProgress(v => { lock (reportLock) reported.Add(v); });
+            bool ok = runner.LaunchAsync("-i dummy out.wav", CancellationToken.None, prog, totalDurationSeconds: 2.0).GetAwaiter().GetResult();
+            Assert(ok && runner.LastExitCode == 0, $"FFmpeg.LaunchAsync progress run failed: {runner.LastError}");
+            Assert(reported.Count >= 2 && reported[^1] == 1.0 && reported[0] > 0.0,
+                $"FFmpeg.LaunchAsync progress values invalid: [{string.Join(", ", reported)}]");
+
+            string pidFile = Path.Combine(tmpDir, "child.pid");
+            string cancelScript = Path.Combine(tmpDir, "mock_ffmpeg_cancel.sh");
+            File.WriteAllText(cancelScript,
+                $"#!/bin/sh\necho $$ > \"{pidFile}\"\nsleep 30\n");
+            File.SetUnixFileMode(cancelScript, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+
+            TestFfmpegRunner cancelRunner = new() { Location = cancelScript };
+            using CancellationTokenSource cts = new();
+            Task<bool> cancelTask = cancelRunner.LaunchAsync("-i slow out.wav", cts.Token);
+            for (int w = 0; w < 40 && !File.Exists(pidFile); w++) {
+                Thread.Sleep(25);
+            }
+            Assert(File.Exists(pidFile), "Mock cancel FFmpeg process did not start in time");
+            int spawnedPid = int.Parse(File.ReadAllText(pidFile).Trim());
+            cts.Cancel();
+
+            bool threwCancel = false;
+            try {
+                cancelTask.GetAwaiter().GetResult();
+            } catch (OperationCanceledException) {
+                threwCancel = true;
+            }
+            Assert(threwCancel, "FFmpeg.LaunchAsync did not throw OperationCanceledException on cancel");
+
+            bool alive = true;
+            for (int w = 0; w < 20; w++) {
+                try {
+                    using Process p = Process.GetProcessById(spawnedPid);
+                    if (p.HasExited) { alive = false; break; }
+                } catch (ArgumentException) {
+                    alive = false;
+                    break;
+                }
+                Thread.Sleep(25);
+            }
+            Assert(!alive, $"Orphan FFmpeg child process {spawnedPid} remained alive after cancellation");
+        } finally {
+            try { Directory.Delete(tmpDir, true); } catch { }
+        }
+    }
+});
+
+// ---------- Test 56: W55.3 UiStateCoordinator & Speaker/XTC BRIR+ISM Bypass ----------
+RunTest("T56_W55_3_UiStateCoordinator_SpeakerXtcBypass", () => {
+    // 1. UiStateCoordinator: IsUpdatingFromCoordinator, RunGuarded reentrancy prevention, coalesced NotifyChanged/FlushPending
+    UiStateCoordinator coord = new();
+    Assert(!coord.IsUpdatingFromCoordinator, "Coordinator must start outside update guard");
+
+    List<Action> queuedBatches = [];
+    coord.SetDispatcher(a => queuedBatches.Add(a));
+
+    List<string> trace = [];
+    coord.Subscribe(UiStateDomain.Room3D, () => {
+        Assert(coord.IsUpdatingFromCoordinator, "IsUpdatingFromCoordinator must be true inside handler");
+        trace.Add("Room3D");
+        coord.NotifyChanged(UiStateDomain.Playback); // reentrant notification must not synchronously recurse
+    }, order: 50);
+    coord.Subscribe(UiStateDomain.Volume, () => {
+        Assert(coord.IsUpdatingFromCoordinator, "IsUpdatingFromCoordinator must be true inside Volume handler");
+        trace.Add("Volume");
+    }, order: 10);
+    coord.Subscribe(UiStateDomain.Playback, () => trace.Add("Playback"), order: 60);
+
+    bool guardedFlag = false;
+    coord.RunGuarded(() => {
+        guardedFlag = coord.IsUpdatingFromCoordinator;
+        coord.NotifyChanged(UiStateDomain.Volume); // must not flush immediately while guarded
+    });
+    Assert(guardedFlag && !coord.IsUpdatingFromCoordinator, "RunGuarded must scope IsUpdatingFromCoordinator cleanly");
+    Assert(trace.Count == 0 && queuedBatches.Count == 0, "NotifyChanged inside RunGuarded must not dispatch synchronously");
+
+    coord.NotifyChanged(UiStateDomain.Room3D);
+    coord.NotifyChanged(UiStateDomain.Volume | UiStateDomain.Room3D);
+    Assert(queuedBatches.Count == 1, $"Expected coalesced single dispatcher callback, got {queuedBatches.Count}");
+    queuedBatches[0]();
+    Assert(trace.SequenceEqual(["Volume", "Room3D", "Playback"]),
+        $"Expected deterministic ordered + cascade flush [Volume, Room3D, Playback], got [{string.Join(", ", trace)}]");
+    Assert(!coord.IsUpdatingFromCoordinator, "IsUpdatingFromCoordinator must reset after FlushPending");
+    coord.Dispose();
+
+    // 2. Speaker/XTC BRIR+ISM bypass in RealtimePlayerEngine
+    using RealtimePlayerEngine engine = new() { HeadphoneVirtualizer = true };
+    PhysicalExternalizationConfig ismCfg = new() {
+        IsmRoomEnabled = true,
+        RoomPreset = IsmRoomPreset.MasteringStudio,
+        WallMaterial = IsmWallMaterial.ReflectiveWood,
+        ReflectionOrder = 1,
+        ReflectionLevel = 0.8f,
+        NearFieldEnabled = true,
+        AirAbsorptionEnabled = true
+    };
+
+    engine.UpdateOutputRouteForTransaural(isHeadphoneRoute: true);
+    engine.ApplyTransauralXtcConfig(new TransauralXtcConfig { Enabled = false, AutoBypassOnHeadphones = true });
+    engine.ApplyExternalizationConfig(ismCfg);
+    Assert(engine.ExternalizationDiagnostics.IsIsmActive && VirtualizerFilter.IsmRoomEnabled,
+        "Expected ISM active on headphone route without BRIR or XTC");
+
+    // Switching to speaker route must bypass ISM + NearField and engage externalBrirGuard
+    engine.UpdateOutputRouteForTransaural(isHeadphoneRoute: false);
+    Assert(!engine.ExternalizationDiagnostics.IsIsmActive && !VirtualizerFilter.IsmRoomEnabled && VirtualizerFilter.ExternalBrirGuardActive,
+        "Speaker route must bypass ISM room ambience and set ExternalBrirGuardActive");
+    Assert(!VirtualizerFilter.NearFieldCompensationEnabled,
+        "Speaker route must disable NearFieldCompensationEnabled");
+
+    // Enabling speaker XTC keeps ISM bypassed
+    engine.ApplyTransauralXtcConfig(new TransauralXtcConfig { Enabled = true, AutoBypassOnHeadphones = true });
+    Assert(engine.TransauralXtcStage.IsActivelyProcessing && !engine.ExternalizationDiagnostics.IsIsmActive && !VirtualizerFilter.IsmRoomEnabled,
+        "Active speaker XTC must keep ISM room ambience bypassed");
+
+    // Returning to headphone route auto-bypasses XTC and restores ISM
+    engine.UpdateOutputRouteForTransaural(isHeadphoneRoute: true);
+    Assert(!engine.TransauralXtcStage.IsActivelyProcessing && engine.ExternalizationDiagnostics.IsIsmActive && VirtualizerFilter.IsmRoomEnabled,
+        "Returning to headphone route must restore ISM room ambience and auto-bypass XTC");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
 }
 Console.WriteLine($"\nALL {passed} W46/W48/W49/W50/W51/BP1-3/T2/T3/T5/T6/BP_UI_AI UNIT TESTS PASSED (0 failures).");
 return 0;
+
+static byte[] BuildSyntheticVbrEac3Stream(int[] frameWords) {
+    using MemoryStream ms = new();
+    foreach (int words in frameWords) {
+        byte[] frame = new byte[words * 2];
+        int bitPos = 0;
+        void WriteBits(int val, int bits) {
+            for (int b = bits - 1; b >= 0; b--) {
+                if (((val >> b) & 1) != 0) {
+                    frame[bitPos >> 3] |= (byte)(1 << (7 - (bitPos & 7)));
+                }
+                bitPos++;
+            }
+        }
+        // E-AC-3 header (54 bits): syncword=0x0B77, strmtyp=0, substream=0, frmsiz=words-1, fscod=0(48k), numblkscod=3(6blks), acmod=3(L/C/R), lfe=0, bsid=16
+        WriteBits(0x0B77, 16);
+        WriteBits(0, 2);
+        WriteBits(0, 3);
+        WriteBits(words - 1, 11);
+        WriteBits(0, 2);
+        WriteBits(3, 2);
+        WriteBits(3, 3);
+        WriteBits(0, 1);
+        WriteBits(16, 5);
+        WriteBits(24, 5); // dialnorm
+        WriteBits(0, 1);  // compre
+        WriteBits(0, 1);  // mixmdate
+        WriteBits(0, 1);  // infomdate
+        WriteBits(0, 1);  // addbsie
+        // Audio frame header: expstre=1, ahte=0, snroffststr=0, flags=0, cplinu[0]=0, cplstre[1..5]=0
+        WriteBits(1, 1);
+        WriteBits(0, 1);
+        WriteBits(0, 2);
+        WriteBits(0, 8);
+        WriteBits(0, 1); // cplinu[0] = 0
+        WriteBits(0, 5); // cplstre[1..5] = 0
+        // blk 0: chexpstr[0..2]=1(D15), blk 1..5: chexpstr=0(Reuse)
+        for (int ch = 0; ch < 3; ch++) {
+            WriteBits(1, 2);
+        }
+        WriteBits(0, 5 * 3 * 2);
+        WriteBits(0, 3 * 5); // convexpstr[0..2]
+        WriteBits(0, 6);     // frmcsnroffst
+        WriteBits(0, 4);     // frmfsnroffst
+        // 6 audio blocks (block 0 carries chbwcod=0 + 12*7+6 exponent bits per channel; blocks 1..5 reuse exponents, zero mantissas)
+        for (int blk = 0; blk < 6; blk++) {
+            WriteBits(0, 2); // dynrnge=0, spxinu=0
+            if (blk == 0) {
+                for (int ch = 0; ch < 3; ch++) {
+                    WriteBits(0, 6); // chbwcod[ch] = 0 -> endmant = 37, nchgrps = 12
+                }
+                for (int ch = 0; ch < 3; ch++) {
+                    WriteBits(0, 4);  // absexp
+                    WriteBits(0, 84); // 12 groups * 7 bits
+                    WriteBits(0, 2);  // gainrng
+                }
+            }
+            WriteBits(0, 1); // convsnroffste=0
+        }
+        ms.Write(frame, 0, frame.Length);
+    }
+    return ms.ToArray();
+}
 
 static int FindFlacAudioFrameStart(byte[] flac) {
     int pos = 4;
@@ -5087,6 +5398,14 @@ sealed class MockLowRamFallbackRuntime : INeuralInferenceRuntime, INeuralModelRe
         public void Dispose() { }
     }
 }
+
+sealed class TestFfmpegRunner : VoidX.WPF.FFmpeg.FFmpeg {
+    public override void UpdateStatusText(string text) { }
+}
+
+sealed class SyncProgress(Action<double> onReport) : IProgress<double> {
+    public void Report(double value) => onReport(value);
+}
 """
 
 
@@ -5174,8 +5493,9 @@ def _py_stage3_audio_ai_mvsep_cntc_contracts() -> None:
         assert tok in wf_src, f"Missing {tok} in MainActivity.NeuralWorkflows.cs"
 
     studio_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.StudioExport.cs").read_text(encoding="utf-8")
-    for tok in ("studioBundleSelector", "studioOptRemoveBackingSwitch", "StudioTagPureInstrFmt"):
+    for tok in ("studioAiModelPickerBtn", "studioOptRemoveBackingSwitch", "StudioTagPureInstrFmt"):
         assert tok in studio_src, f"Missing {tok} in MainActivity.StudioExport.cs"
+    assert "studioBundleSelector" not in studio_src, "Duplicate studioBundleSelector must be removed from MainActivity.StudioExport.cs"
 
     pm_core = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.Core.cs").read_text(encoding="utf-8")
     for tok in ("musicLyricsPureInstrBtn", "TogglePureInstrumentalMode"):
@@ -5251,8 +5571,9 @@ def _py_stage4_ux_motion_orbit_lyrics_contracts() -> None:
         )
 
     player_tab = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerTab.cs").read_text(encoding="utf-8")
-    for tok in ("RefreshSpatialChoreoClarifierUi", "spatialChoreoTierBadgeText", "roomInvertOrbitSwitch", "InvertOrbitDrag"):
+    for tok in ("RefreshSpatialChoreoClarifierUi", "spatialChoreoTierBadgeText", "InvertOrbitDrag"):
         assert tok in player_tab, f"Missing {tok} in MainActivity.PlayerTab.cs"
+    assert "roomInvertOrbitSwitch" not in player_tab, "Duplicate roomInvertOrbitSwitch must be removed from MainActivity.PlayerTab.cs"
 
     pm_core = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.Core.cs").read_text(encoding="utf-8")
     pm_np = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerMusic.NowPlaying.cs").read_text(encoding="utf-8")
@@ -5949,6 +6270,43 @@ def _py_stage16_w55_2_collapse_when_disabled_and_w57_1_contracts() -> None:
     assert "HilbertAllpassBranch" in joc_src, "W57.1 JointObjectCodingApplier.cs must implement HilbertAllpassBranch"
 
 
+def _py_stage17_w55_3_and_w57_2_contracts() -> None:
+    """W55.3 + W57.2: Hard control deduplication, UiStateCoordinator wiring, speaker/XTC BRIR+ISM bypass, ListenerContext & Async FFmpeg."""
+    studio_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.StudioExport.cs").read_text(encoding="utf-8")
+    assert "studioWorkflowSelector" not in studio_src, "W55.3 studioWorkflowSelector must be removed from MainActivity.StudioExport.cs"
+    assert "studioBundleSelector" not in studio_src, "W55.3 studioBundleSelector must be removed from MainActivity.StudioExport.cs"
+    assert "studioAiModelPickerBtn" in studio_src, "W55.3 studioAiModelPickerBtn must exist in MainActivity.StudioExport.cs"
+
+    player_tab = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.PlayerTab.cs").read_text(encoding="utf-8")
+    assert "roomInvertOrbitSwitch" not in player_tab, "W55.3 roomInvertOrbitSwitch must be removed from MainActivity.PlayerTab.cs"
+
+    settings_audio = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.Audio.cs").read_text(encoding="utf-8")
+    assert "settingsRoomInvertOrbitSwitch" in settings_audio, "W55.3 settingsRoomInvertOrbitSwitch must be the canonical control in MainActivity.Settings.Audio.cs"
+
+    coord_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "UiStateCoordinator.cs").read_text(encoding="utf-8")
+    for tok in ("IsUpdatingFromCoordinator", "RunGuarded", "NotifyChanged", "FlushPending"):
+        assert tok in coord_cs, f"W55.3 UiStateCoordinator missing {tok}"
+
+    main_coord = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Coordinator.cs").read_text(encoding="utf-8")
+    for tok in ("UiStateCoordinator", "ShouldAutoBypassRoomAmbienceForSpeakers", "ApplyArbitratedExternalizationAndBrirBypass"):
+        assert tok in main_coord, f"W55.3 MainActivity.Coordinator.cs missing {tok}"
+
+    spatial_pipe = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Rendering" / "RealtimePlayerEngine.SpatialPipeline.cs").read_text(encoding="utf-8")
+    assert "!transauralXtcPostStage.IsHeadphoneRoute || transauralXtcPostStage.IsActivelyProcessing" in spatial_pipe, (
+        "W55.3 RealtimePlayerEngine.SpatialPipeline.cs must bypass BRIR+ISM on speaker/XTC routes"
+    )
+
+    listener_cs = (REPO_ROOT / "Cavern" / "Listener.cs").read_text(encoding="utf-8")
+    assert "IsDesktopConfigSupported" in listener_cs and "ListenerContext" in listener_cs, "W57.2 ListenerContext/IsDesktopConfigSupported missing"
+
+    eac3_cs = (REPO_ROOT / "Cavern.Format" / "Decoders" / "EnhancedAC3Decoder.cs").read_text(encoding="utf-8")
+    assert "SeekFrameEntry" in eac3_cs and "IndexedFrameCount" in eac3_cs, "W57.2 VBR EnhancedAC3Decoder seek index missing"
+
+    ffmpeg_cs = (REPO_ROOT / "CavernSamples" / "VoidX.WPF" / "FFmpeg" / "FFmpeg.cs").read_text(encoding="utf-8")
+    for tok in ("FindExecutable", "LaunchAsync", "TerminateProcessTree"):
+        assert tok in ffmpeg_cs, f"W57.2 FFmpeg.cs missing {tok}"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -5968,6 +6326,7 @@ PYTHON_CHECKS = [
     ("PY_T14_W55_1_V4Reform_P0_Contracts", _py_stage14_v4_1_reform_p0_contracts),
     ("PY_T15_W56_4_CoEvolve_BridgeCmd_Packaging_SettingsSchema_DspParity", _py_stage15_w56_4_co_evolve_zero_static_contracts),
     ("PY_T16_W55_2_CollapseWhenDisabled_And_W57_1_JocInlineContracts", _py_stage16_w55_2_collapse_when_disabled_and_w57_1_contracts),
+    ("PY_T17_W55_3_And_W57_2_Dedup_Coordinator_ListenerCtx_VbrEac3_Ffmpeg", _py_stage17_w55_3_and_w57_2_contracts),
 ]
 
 
@@ -5992,6 +6351,10 @@ def _compute_fingerprint(script_path: Path, dotnet: str, tfm: str) -> str:
                 fpath = Path(dirpath) / fname
                 st = fpath.stat()
                 entries.append((fpath.relative_to(REPO_ROOT).as_posix(), st.st_size, st.st_mtime_ns))
+    ui_coord_cs = REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "UiStateCoordinator.cs"
+    if ui_coord_cs.is_file():
+        st = ui_coord_cs.stat()
+        entries.append((ui_coord_cs.relative_to(REPO_ROOT).as_posix(), st.st_size, st.st_mtime_ns))
     entries.sort()
     for rel, size, mtime_ns in entries:
         h.update(f"{rel}\0{size}\0{mtime_ns}\n".encode("utf-8"))
@@ -6045,6 +6408,7 @@ def main() -> int:
     tfm = detect_tfm(dotnet)
     cavern_csproj = REPO_ROOT / "Cavern" / "Cavern.csproj"
     logic_csproj = REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Cavernize.Logic.csproj"
+    ui_coordinator_cs = REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "UiStateCoordinator.cs"
 
     env = os.environ.copy()
     env["DOTNET_SYSTEM_GLOBALIZATION_INVARIANT"] = "1"
@@ -6078,7 +6442,12 @@ def main() -> int:
                 csproj_path = CACHE_DIR / f"{asm_name}.csproj"
                 program_path = CACHE_DIR / "Program.cs"
                 assets_path = CACHE_DIR / "obj" / "project.assets.json"
-                csproj_text = TEST_CSPROJ.format(tfm=tfm, cavern_csproj=cavern_csproj, logic_csproj=logic_csproj)
+                csproj_text = TEST_CSPROJ.format(
+                    tfm=tfm,
+                    cavern_csproj=cavern_csproj,
+                    logic_csproj=logic_csproj,
+                    ui_coordinator_cs=ui_coordinator_cs,
+                )
                 csproj_changed = _write_if_changed(csproj_path, csproj_text)
                 _write_if_changed(program_path, TEST_PROGRAM_CS)
 

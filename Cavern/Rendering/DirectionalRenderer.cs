@@ -38,9 +38,8 @@ namespace Cavern.Rendering {
         /// Angle match calculations (exact <see cref="MathF.Acos"/> or linearized fast mode) into <paramref name="angleMatches"/>.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static void CalculateAngleMatches(Channel[] channels, float[] angleMatches, Vector3 direction, bool linearize) {
+        static void CalculateAngleMatches(Channel[] channels, float[] angleMatches, Vector3 direction, bool linearize, bool theatre) {
             float dirMagnitudeRecip = 1f / (direction.Length() + .0001f);
-            bool theatre = Listener.EnvironmentType == Environments.Theatre;
             for (int channel = 0; channel < channels.Length; channel++) {
                 Channel currentChannel = channels[channel];
                 if (!currentChannel.LFE) {
@@ -246,12 +245,14 @@ namespace Cavern.Rendering {
             }
 
             // Angle match calculations (zero-alloc reusable scratch)
-            Channel[] channels = Listener.Channels;
+            ListenerContext ctx = listener != null ? listener.Context : ListenerContext.Current;
+            Channel[] channels = ctx.Channels;
             float[] angleMatches = GetAngleMatchScratch(channels.Length);
+            bool theatre = ctx.EnvironmentType == Environments.Theatre;
             if (UseBs2127Vbap) {
                 CalculateBs2127Vbap(channels, angleMatches, direction);
             } else {
-                CalculateAngleMatches(channels, angleMatches, direction, listener.AudioQuality < QualityModes.High);
+                CalculateAngleMatches(channels, angleMatches, direction, listener.AudioQuality < QualityModes.High, theatre);
             }
 
             // Object size extension
@@ -283,7 +284,7 @@ namespace Cavern.Rendering {
             }
 
             // Only use the closest 3 speakers on non-Perfect qualities or in Theatre mode (legacy directional mode)
-            if (!UseBs2127Vbap && (listener.AudioQuality != QualityModes.Perfect || Listener.EnvironmentType == Environments.Theatre)) {
+            if (!UseBs2127Vbap && (listener.AudioQuality != QualityModes.Perfect || theatre)) {
                 float top0 = 0, top1 = 0, top2 = 0;
                 for (int channel = 0; channel < channels.Length; channel++) {
                     if (!channels[channel].LFE) {

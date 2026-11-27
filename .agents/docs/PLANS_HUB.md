@@ -58,7 +58,7 @@
 
 ## 4. Live Machine-Synced Inventory
 <!-- HUB:AUTO_START -->
-HUB_STATS|blueprints=8 (done=0, partial=7, active=0, deferred=1, superseded=0)|archived_done=12|min_score=100/100|open_conflicts=0|monoliths_gt2000=6
+HUB_STATS|blueprints=8 (done=0, partial=7, active=0, deferred=1, superseded=0)|archived_done=12|min_score=100/100|open_conflicts=0|monoliths_gt2000=5
 
 | Blueprint ID | Status | Score | Tier | H2+ Stubs | Hygiene / Lineage Note |
 | :--- | :---: | :---: | :---: | :---: | :--- |
@@ -76,12 +76,11 @@ ARCHIVED_DONE|count=12|ledger=`.agents/docs/archive/BLUEPRINTS_DONE_LEDGER.md`|t
 ### Oversized Code Files (`>2,000L` Live Scan)
 | File | Lines | Cap |
 | :--- | ---: | ---: |
-| `CavernSamples/Reusable/Cavernize.Logic/Rendering/StudioBatchExporter.cs` | `3578` | `2000` |
-| `CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs` | `2250` | `2000` |
+| `CavernSamples/Reusable/Cavernize.Logic/Rendering/StudioBatchExporter.cs` | `3572` | `2000` |
+| `CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs` | `2182` | `2000` |
 | `CavernSamples/CavernizeAndroid/Audio/AndroidAudioOutput.cs` | `2161` | `2000` |
 | `CavernSamples/CavernizeAndroid/Services/MediaLibraryService.cs` | `2046` | `2000` |
 | `CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs` | `2013` | `2000` |
-| `CavernSamples/CavernizeAndroid/MainActivity.NeuralWorkflows.cs` | `2004` | `2000` |
 COHERENCE_HUB|.agents/docs/COHERENCE_HUB.md
 <!-- HUB:AUTO_END -->
 

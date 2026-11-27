@@ -107,9 +107,11 @@ public partial class MainActivity {
     Switch pedanticSwitch, unsafeSwitch, keepTempSwitch;
     OneUiSeekBar upmixEffectBar, upmixSmoothBar;
     OneUiInlineSelector upmixModeSelector;
-    LinearLayout atmosAwareUpmixSection;
+    LinearLayout atmosAwareUpmixSection, upmixControlsGroup, headphoneOnlyCalibGroup, slot5aCardRef, slot5bCardRef, xtcCardRef, externalizationDetailsSection;
+    TextView upmixArbitratedHintText, headphoneCalibBypassHintText;
+    Button neuralModelPickerBtn;
     Switch atmosAwareUpmixSwitch;
-    Switch settingsRoomInvertOrbitSwitch, roomInvertOrbitSwitch;
+    Switch settingsRoomInvertOrbitSwitch;
     OneUiInlineSelector lyricsHighlightSelector;
 
     sealed class SettingsCardEntry {
@@ -791,10 +793,13 @@ public partial class MainActivity {
                     }
                 }
             } else {
+                bool isSpeakerRoute = IsActiveOutputSpeakerRoute();
                 bool inCat = entry.CategoryIndex == activeSettingsCategory;
                 if (inCat && entry.IsProOnly && !isSettingsProMode) {
                     show = false;
                     hiddenProCount++;
+                } else if (inCat && ((entry.Card == slot5bCardRef && isSpeakerRoute) || (entry.Card == xtcCardRef && !isSpeakerRoute))) {
+                    show = false;
                 } else {
                     show = inCat;
                 }

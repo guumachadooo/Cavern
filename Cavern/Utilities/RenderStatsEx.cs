@@ -120,15 +120,16 @@ namespace Cavern.Utilities {
             int lfeChannels = 0,
                 surroundChannels = 0,
                 heightChannels = 0;
-            for (int i = 0; i < Listener.Channels.Length; i++) {
-                if (Listener.Channels[i].LFE) {
-                    lfeRMS += WaveformUtils.GetRMS(frame, i, Listener.Channels.Length);
+            Channel[] channels = (listener != null ? listener.Context : ListenerContext.Current).Channels;
+            for (int i = 0; i < channels.Length; i++) {
+                if (channels[i].LFE) {
+                    lfeRMS += WaveformUtils.GetRMS(frame, i, channels.Length);
                     lfeChannels++;
-                } else if (!Listener.Channels[i].IsScreenChannel) {
-                    float channelRms = WaveformUtils.GetRMS(frame, i, Listener.Channels.Length);
+                } else if (!channels[i].IsScreenChannel) {
+                    float channelRms = WaveformUtils.GetRMS(frame, i, channels.Length);
                     surroundRMS += channelRms;
                     surroundChannels++;
-                    if (Listener.Channels[i].X != 0) {
+                    if (channels[i].X != 0) {
                         heightRMS += channelRms;
                         heightChannels++;
                     }

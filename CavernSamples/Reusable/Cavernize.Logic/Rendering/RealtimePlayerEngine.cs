@@ -63,7 +63,13 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     CavernizeTrack currentTrack;
     UpmixingSettings upmixingSettings = new(true);
     RenderingSettings renderingSettings = new();
+    readonly ListenerContext listenerContext = new();
     Listener listener;
+
+    /// <summary>
+    /// Isolated <see cref="Cavern.ListenerContext"/> owned by this playback engine instance.
+    /// </summary>
+    public ListenerContext ListenerContext => listenerContext;
     bool virtualizerInitialized;
     int appliedProfileVersion = -1;
 
@@ -330,6 +336,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
         lock (renderLock) {
             transauralXtcPostStage.Configure(OutputSampleRate, 2);
             transauralXtcPostStage.ApplyConfig(config);
+            SyncExternalizationLocked();
         }
     }
 
@@ -341,6 +348,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
         lock (renderLock) {
             transauralXtcPostStage.Configure(OutputSampleRate, 2);
             transauralXtcPostStage.UpdateOutputRoute(isHeadphoneRoute, transport);
+            SyncExternalizationLocked();
         }
     }
 
@@ -1011,7 +1019,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
             if (target.Layer == SourceLayer.LiveMicrophone) {
                 liveMicBridge.SetNormalizedPosition(clamped);
             } else if (target.Index >= 0 && target.Index < cachedActiveSources.Length && cachedActiveSources[target.Index] != null) {
-                cachedActiveSources[target.Index].LockCustomPosition(clamped * Listener.EnvironmentSize);
+                cachedActiveSources[target.Index].LockCustomPosition(clamped * listenerContext.EnvironmentSize);
             }
             sceneHub.SetSourceCustomPosition(target.Index, clamped);
             RefreshTelemetryAfterPositionResetLocked();
@@ -1094,7 +1102,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     }
 
     void UnlockTrackedSourceLocked(TrackSourceItem item, int sourceIndex) {
-        Vector3 envSize = Listener.EnvironmentSize;
+        Vector3 envSize = listenerContext.EnvironmentSize;
         Vector3 restoreWorld = item.DefaultNormalizedPosition * envSize;
         bool isDynamic = item.HasDynamicTrajectory;
         if (sourceIndex >= 0 && sourceIndex < cachedActiveSources.Length && cachedActiveSources[sourceIndex] != null) {
@@ -1118,7 +1126,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
         if (cachedActiveSources.Length > 0) {
             UpdateSourceTelemetry();
         } else if (sourceItems.Count > 0) {
-            sceneHub.SyncTelemetryFromTrackItems(sourceItems, Listener.EnvironmentSize);
+            sceneHub.SyncTelemetryFromTrackItems(sourceItems, listenerContext.EnvironmentSize);
         }
     }
 
@@ -1136,7 +1144,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
             if (cachedActiveSources.Length > 0) {
                 UpdateSourceTelemetry();
             } else if (sourceItems.Count > 0) {
-                sceneHub.SyncTelemetryFromTrackItems(sourceItems, Listener.EnvironmentSize);
+                sceneHub.SyncTelemetryFromTrackItems(sourceItems, listenerContext.EnvironmentSize);
             }
         }
     }

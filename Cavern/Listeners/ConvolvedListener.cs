@@ -56,13 +56,20 @@ namespace Cavern.Listeners {
         public ConvolvedListener(bool loadGlobals) : base(loadGlobals) { }
 
         /// <summary>
+        /// Center of a listening space bound to an isolated <see cref="ListenerContext"/>.
+        /// </summary>
+        /// <param name="context">Isolated rendering context for this listener instance</param>
+        /// <param name="loadGlobals">Load desktop global settings into <paramref name="context"/> when supported</param>
+        public ConvolvedListener(ListenerContext context, bool loadGlobals = false) : base(context, loadGlobals) { }
+
+        /// <summary>
         /// Updates the internal convolver when the convolution clip changes.
         /// </summary>
         /// <exception cref="ArgumentException">Thrown when the <see cref="ConvolutionClip"/> channel count doesn't match the output channel count.</exception>
         void UpdateConvolver() {
             if (convolutionClip == null) {
                 convolver = null;
-            } else if (convolutionClip.Channels != Channels.Length) {
+            } else if (convolutionClip.Channels != Context.Channels.Length) {
                 throw new ChannelCountMismatchException();
             } else if (convolutionClip.SampleRate != SampleRate) {
                 throw new SampleRateMismatchException();

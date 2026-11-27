@@ -874,36 +874,17 @@ public partial class MainActivity {
         spatialToggleRow.SetGravity(GravityFlags.CenterVertical);
 
         (musicUpmixToggleBtn, musicUpmixIcon, musicUpmixText) = MakeCompactSpatialPill(
-            OneUiIconType.HeightUp, S["PlayTabUpmixDirectShort"], sfSemi, () => {
-                int nextIdx = (ResolveUpmixModeIndex() + 1) % 3;
-                store.MatrixUpmixing = nextIdx >= 1;
-                store.CavernizeUpmix = nextIdx >= 2;
-                SyncUpmixModeUi();
-                RefreshSettingsCategorySubtitles();
-                _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
-                RefreshSpatialChoreoClarifierUi();
-                RefreshMusicPlayerControlsUi();
-            });
+            OneUiIconType.HeightUp, S["PlayTabUpmixDirectShort"], sfSemi,
+            () => SetClassicUpmixMode((ResolveUpmixModeIndex() + 1) % 3));
         musicUpmixToggleBtn.LongClick += (_, e) => {
             ShowPlayTabSpatialUpmixDialog();
             e.Handled = true;
         };
 
         (musicBottomSpatialBtn, musicBottomSpatialIcon, musicBottomSpatialText) = MakeCompactSpatialPill(
-            OneUiIconType.Headphones, S["BentoHrtf"], sfSemi, () => {
-                store.HeadphoneVirtualizer = !store.HeadphoneVirtualizer;
-                playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
-                Services.BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
-                Services.AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
-                RefreshBinauralProfileUi();
-                RefreshPersonalizationUi();
-                RefreshAutoEqUi();
-                refreshBentoTilesUi?.Invoke();
-                RefreshSpatialChoreoClarifierUi();
-                RefreshMusicPlayerControlsUi();
-            });
+            OneUiIconType.Headphones, S["BentoHrtf"], sfSemi, ToggleActiveOutputSpatialization);
         musicBottomSpatialBtn.LongClick += (_, e) => {
-            ShowBinauralProfileSelectorDialog();
+            OpenActiveOutputSpatializationSheet();
             e.Handled = true;
         };
 

@@ -248,6 +248,7 @@ public sealed partial class RealtimePlayerEngine {
                 return 0;
             }
 
+            using ListenerContext.Scope listenerScope = listenerContext.EnterScope();
             ApplyLiveParameters();
 
             // When Path B/A requests sub-256f bursts (e.g. 64f/128f), stage backing track ONLY and bypass
@@ -303,7 +304,7 @@ public sealed partial class RealtimePlayerEngine {
                     0,
                     totalFramesWritten,
                     sceneHub.ListenerPose,
-                    Listener.EnvironmentSize,
+                    listenerContext.EnvironmentSize,
                     vocalProcessor: liveMicBridge.IsCalibratingLatency ? null : vocalMixMatchStage,
                     applyBackingSidechain: true);
                 float ceilLin = truePeakLimiterPostStage.IsEnabled
@@ -313,7 +314,7 @@ public sealed partial class RealtimePlayerEngine {
                     stereoOutput[i] = Math.Clamp(stereoOutput[i], -ceilLin, ceilLin);
                 }
                 if (liveMicBridge.IsActive) {
-                    sceneHub.SetLiveMicrophoneDescriptor(liveMicBridge.BuildSceneDescriptor(Listener.EnvironmentSize, sceneHub.Sources.Count));
+                    sceneHub.SetLiveMicrophoneDescriptor(liveMicBridge.BuildSceneDescriptor(listenerContext.EnvironmentSize, sceneHub.Sources.Count));
                 }
                 VocalChainTelemetry directVocalTel = vocalMixMatchStage.Telemetry;
                 SoundfieldTelemetry directMicTel = sceneHub.Telemetry;
@@ -359,7 +360,8 @@ public sealed partial class RealtimePlayerEngine {
                         subBlockAvailableFrames = 0;
                         subBlockReadOffset = 0;
                         ConfigureListener(resetToStart: false);
-                        ApplyLiveParameters();
+                        using ListenerContext.Scope listenerScope = listenerContext.EnterScope();
+            ApplyLiveParameters();
                         rebuiltSources = true;
                     } else {
                         IsPlaying = false;
@@ -385,7 +387,8 @@ public sealed partial class RealtimePlayerEngine {
                             ArmCrossfadeLocked();
                         }
                         ConfigureListener(resetToStart: false);
-                        ApplyLiveParameters();
+                        using ListenerContext.Scope listenerScope = listenerContext.EnterScope();
+            ApplyLiveParameters();
                         rebuiltSources = true;
                     }
                 } else if (activeSep != null && activeSep.IsProgressiveStreaming && ShouldRenderLiveNeuralSourcesLocked()) {
@@ -393,7 +396,8 @@ public sealed partial class RealtimePlayerEngine {
                         ArmCrossfadeLocked();
                     }
                     ConfigureListener(resetToStart: false);
-                    ApplyLiveParameters();
+                    using ListenerContext.Scope listenerScope = listenerContext.EnterScope();
+            ApplyLiveParameters();
                     rebuiltSources = true;
                 }
 
@@ -417,8 +421,8 @@ public sealed partial class RealtimePlayerEngine {
                     requestedFrames,
                     currentTrackSample,
                     Stopwatch.GetTimestamp(),
-                    Listener.EnvironmentSize,
-                    Listener.EnvironmentType,
+                    listenerContext.EnvironmentSize,
+                    listenerContext.EnvironmentType,
                     HeadphoneVirtualizer,
                     sceneHub.ListenerPose,
                     sceneHub.ProgramMetadata,
@@ -467,9 +471,9 @@ public sealed partial class RealtimePlayerEngine {
                 if (cachedActiveSources.Length > 1 || isRenderingLiveNeuralSources) {
                     int slotCount = Math.Min(cachedActiveSources.Length, EarCandySpectralDetector.MaxSlots);
                     Vector3 envInv = new(
-                        1f / MathF.Max(0.25f, Listener.EnvironmentSize.X),
-                        1f / MathF.Max(0.25f, Listener.EnvironmentSize.Y),
-                        1f / MathF.Max(0.25f, Listener.EnvironmentSize.Z));
+                        1f / MathF.Max(0.25f, listenerContext.EnvironmentSize.X),
+                        1f / MathF.Max(0.25f, listenerContext.EnvironmentSize.Y),
+                        1f / MathF.Max(0.25f, listenerContext.EnvironmentSize.Z));
                     for (int s = 0; s < slotCount; s++) {
                         Source src = cachedActiveSources[s];
                         TrackSourceItem item = s < sourceItems.Count ? sourceItems[s] : null;
@@ -511,7 +515,7 @@ public sealed partial class RealtimePlayerEngine {
                         outOffset,
                         blockFrames,
                         sceneHub.ListenerPose,
-                        Listener.EnvironmentSize,
+                        listenerContext.EnvironmentSize,
                         vocalProcessor: liveMicBridge.IsCalibratingLatency ? null : vocalMixMatchStage,
                         applyBackingSidechain: true);
                 } else if (!liveMicBridge.IsActive && !liveMicBridge.IsCalibratingLatency) {
@@ -612,7 +616,7 @@ public sealed partial class RealtimePlayerEngine {
                     UpdateSourceTelemetry();
                     hasMeasuredLiveSourceRms = true;
                     if (liveMicBridge.IsActive) {
-                        sceneHub.SetLiveMicrophoneDescriptor(liveMicBridge.BuildSceneDescriptor(Listener.EnvironmentSize, sceneHub.Sources.Count));
+                        sceneHub.SetLiveMicrophoneDescriptor(liveMicBridge.BuildSceneDescriptor(listenerContext.EnvironmentSize, sceneHub.Sources.Count));
                     }
                     parametricUpmixerStage.SyncTelemetry(activeSceneFrame);
                     sceneHub.Telemetry = activeSceneFrame.Telemetry;

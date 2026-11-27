@@ -249,8 +249,9 @@ namespace Cavern {
                     resampledRight = new float[listener.UpdateRate];
                 }
                 CumulativeSourceSamples += PitchedUpdateRate;
-                if (rendered.Length != Listener.Channels.Length * listener.UpdateRate) {
-                    rendered = new float[Listener.Channels.Length * listener.UpdateRate];
+                int channelLen = (listener != null ? listener.Context : ListenerContext.Current).Channels.Length;
+                if (rendered.Length != channelLen * listener.UpdateRate) {
+                    rendered = new float[channelLen * listener.UpdateRate];
                 }
                 return true;
             }
@@ -266,7 +267,8 @@ namespace Cavern {
                 Position = lockedPosition;
             }
             // Preparations, clean environment
-            Channel[] channels = Listener.Channels;
+            ListenerContext ctx = listener != null ? listener.Context : ListenerContext.Current;
+            Channel[] channels = ctx.Channels;
             int updateRate = listener.UpdateRate;
             Array.Clear(rendered, 0, rendered.Length);
 
@@ -346,14 +348,14 @@ namespace Cavern {
                             Array.Copy(leftSamples, 0, resampledLeft, 0, updateRate);
                             Array.Copy(rightSamples, 0, resampledRight, 0, updateRate);
                         }
-                        Stereo1DMix(resampledLeft, resampledRight, volume1D);
+                        Stereo1DMix(resampledLeft, resampledRight, volume1D, ctx);
                     }
                 }
 
                 // 3D mix, if the source is in range
                 if (need3D) {
                     Vector3 position = screenLocked
-                        ? new Vector3(Listener.ScreenSize.X * Position.X, Listener.ScreenSize.Y * Position.Y, Position.Z + 1)
+                        ? new Vector3(ctx.ScreenSize.X * Position.X, ctx.ScreenSize.Y * Position.Y, Position.Z + 1)
                         : Position;
                     Vector3 direction = (position - listener.Position).RotateInverse(listener.Rotation);
                     float rolloffDistance = GetRolloff();
@@ -363,7 +365,7 @@ namespace Cavern {
 
                     // Pure-physics ISO 9613-1 atmospheric air absorption for physical source distances > 5.0 m (unity bypass <= 5.0 m)
                     if (AirAbsorptionFilter.GlobalEnabled && !LFE) {
-                        Vector3 physDelta = (position - listener.Position) * Listener.EnvironmentSizeInverse * AirAbsorptionFilter.PhysicalRoomHalfSize;
+                        Vector3 physDelta = (position - listener.Position) * ctx.EnvironmentSizeInverse * AirAbsorptionFilter.PhysicalRoomHalfSize;
                         float physicalDist = physDelta.Length();
                         if (physicalDist > AirAbsorptionFilter.DirectPathThresholdMeters) {
                             if (airAbsorptionFilter == null) {
@@ -389,7 +391,7 @@ namespace Cavern {
                         if (propagationDelayLine == null) {
                             propagationDelayLine = new AcousticPropagationDelayLine();
                         }
-                        Vector3 propDelta = (position - listener.Position) * Listener.EnvironmentSizeInverse * AirAbsorptionFilter.PhysicalRoomHalfSize;
+                        Vector3 propDelta = (position - listener.Position) * ctx.EnvironmentSizeInverse * AirAbsorptionFilter.PhysicalRoomHalfSize;
                         float propDistMeters = propDelta.Length();
                         propagationDelayLine.ProcessInPlace(resampledSamples, 0, resampledSamples.Length, propDistMeters, listener.SampleRate);
                     } else if (propagationDelayLine != null && propagationDelayLine.ActiveDelayMs > 0f) {
@@ -397,7 +399,7 @@ namespace Cavern {
                     }
 
                     // Distance simulation for HRTF (skip on dedicated LFE subwoofer sources)
-                    if (DistanceSimulation && Listener.HeadphoneVirtualizer && !LFE) {
+                    if (DistanceSimulation && ctx.HeadphoneVirtualizer && !LFE) {
                         distancer ??= new Distancer(this) {
                             trueGain = false
                         };
@@ -405,7 +407,7 @@ namespace Cavern {
                     }
 
                     // Final mixing
-                    Listener.Renderer.Render(listener, this, direction, resampledSamples, rendered, Volume * rolloffDistance * SpatialBlend);
+                    ctx.Renderer.Render(listener, this, direction, resampledSamples, rendered, Volume * rolloffDistance * SpatialBlend);
                 }
             }
             return rendered;
@@ -477,26 +479,27 @@ namespace Cavern {
         /// <summary>
         /// Render the stereo side mix.
         /// </summary>
-        void Stereo1DMix(float[] left, float[] right, float volume1D) {
-            float leftVolume = volume1D / Listener.LeftChannels,
-                rightVolume = volume1D / Listener.RightChannels;
+        void Stereo1DMix(float[] left, float[] right, float volume1D, ListenerContext ctx) {
+            float leftVolume = volume1D / ctx.LeftChannels,
+                rightVolume = volume1D / ctx.RightChannels;
             if (stereoPan < 0) {
                 rightVolume *= 1 - stereoPan * stereoPan;
             } else if (stereoPan > 0) {
                 leftVolume *= 1 - stereoPan * stereoPan;
             }
             float halfVolume1D = volume1D * .5f;
-            for (int channel = 0; channel < Listener.Channels.Length; ++channel) {
-                if (Listener.Channels[channel].LFE) {
+            Channel[] channels = ctx.Channels;
+            for (int channel = 0; channel < channels.Length; ++channel) {
+                if (channels[channel].LFE) {
                     if (!listener.LFESeparation || LFE) {
-                        WaveformUtils.Mix(left, rendered, channel, Listener.Channels.Length, halfVolume1D);
-                        WaveformUtils.Mix(right, rendered, channel, Listener.Channels.Length, halfVolume1D);
+                        WaveformUtils.Mix(left, rendered, channel, channels.Length, halfVolume1D);
+                        WaveformUtils.Mix(right, rendered, channel, channels.Length, halfVolume1D);
                     }
                 } else if (!LFE) {
-                    if (Listener.Channels[channel].Y < 0) {
-                        WaveformUtils.Mix(left, rendered, channel, Listener.Channels.Length, leftVolume);
-                    } else if (Listener.Channels[channel].Y > 0) {
-                        WaveformUtils.Mix(right, rendered, channel, Listener.Channels.Length, rightVolume);
+                    if (channels[channel].Y < 0) {
+                        WaveformUtils.Mix(left, rendered, channel, channels.Length, leftVolume);
+                    } else if (channels[channel].Y > 0) {
+                        WaveformUtils.Mix(right, rendered, channel, channels.Length, rightVolume);
                     }
                 }
             }

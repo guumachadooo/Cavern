@@ -82,6 +82,13 @@ public partial class MainActivity {
     void BuildSettingsHeadphonesCards() {
         LinearLayout rendCard = Card(S["CalibTitle"], OneUiIconType.Headphones, OneUiTheme.IconStemsCalib);
 
+        headphoneCalibBypassHintText = Label(S["HeadphoneCalibSpeakerBypassHint"], 11.4f, OneUiTheme.PeachText);
+        headphoneCalibBypassHintText.Visibility = ViewStates.Gone;
+        headphoneCalibBypassHintText.SetPadding(0, 0, 0, Dp(6));
+        rendCard.AddView(headphoneCalibBypassHintText);
+
+        headphoneOnlyCalibGroup = new LinearLayout(this) { Orientation = Orientation.Vertical };
+
         LinearLayout profileRow = HRow();
         profileRow.Background = OneUiTheme.CreateGlassCardDrawable(this, OneUiTheme.SurfaceSubTile, 18f);
         profileRow.SetPadding(Dp(12), Dp(11), Dp(12), Dp(11));
@@ -103,19 +110,20 @@ public partial class MainActivity {
         profileRow.AddView(profTextCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
         profileRow.AddView(new OneUiIconView(this, OneUiIconType.ChevronDown, OneUiTheme.TextSub), new LinearLayout.LayoutParams(Dp(16), Dp(16)));
         profileRow.Click += (_, _) => ShowBinauralProfileSelectorDialog();
-        rendCard.AddView(WrapControlWithHelp(profileRow, S["BinauralProfileTitle"], S["TipBinauralProfile"], bottomMarginDp: 8));
+        headphoneOnlyCalibGroup.AddView(WrapControlWithHelp(profileRow, S["BinauralProfileTitle"], S["TipBinauralProfile"], bottomMarginDp: 8));
 
         LinearLayout hrirActionsRow = HRow();
         Button importHrirBtn = PillButton(S["BinauralProfileImportBtn"], LaunchCustomHrirImporter);
         Button creditsHrirBtn = PillButton(S["BinauralProfileCreditsBtn"], ShowBinauralLicenseCreditsDialog);
         hrirActionsRow.AddView(importHrirBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
         hrirActionsRow.AddView(creditsHrirBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        rendCard.AddView(hrirActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
+        headphoneOnlyCalibGroup.AddView(hrirActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
 
-        AddDivider(rendCard);
+        AddDivider(headphoneOnlyCalibGroup);
 
         // 3B. Slot 6A: AutoEq Neutral Headphone Engine & Auto-Profile per Device
-        autoEqEnabledSwitch = AddSwitchRow(rendCard, S["AutoEqEnableTitle"], store.AutoEqEnabled, v => {
+        autoEqEnabledSwitch = AddSwitchRow(headphoneOnlyCalibGroup, S["AutoEqEnableTitle"], store.AutoEqEnabled, v => {
+            if (IsCoordinatorUpdating) return;
             store.AutoEqEnabled = v;
             ApplyAutoEqRespectingRoute();
             audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
@@ -143,7 +151,7 @@ public partial class MainActivity {
         autoEqRow.AddView(autoEqCol, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
         autoEqRow.AddView(new OneUiIconView(this, OneUiIconType.ChevronDown, OneUiTheme.TextSub), new LinearLayout.LayoutParams(Dp(16), Dp(16)));
         autoEqRow.Click += (_, _) => ShowAutoEqProfileSelectorDialog();
-        rendCard.AddView(autoEqRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        headphoneOnlyCalibGroup.AddView(autoEqRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(4),
             BottomMargin = Dp(8)
         });
@@ -158,36 +166,49 @@ public partial class MainActivity {
         ];
         autoEqTargetSelector.SetItems(targetNames, AutoEqTargetToUiIndex(store.AutoEqTargetIndex));
         autoEqTargetSelector.SelectionChanged += pos => {
+            if (IsCoordinatorUpdating) return;
             store.AutoEqTargetIndex = AutoEqUiIndexToTargetIndex(pos);
             ApplyAutoEqRespectingRoute();
             audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
             RefreshAutoEqUi();
         };
-        rendCard.AddView(WrapControlWithHelp(autoEqTargetSelector, S["AutoEqTargetTitle"], S["TipAutoEqTarget"], bottomMarginDp: 2));
+        headphoneOnlyCalibGroup.AddView(WrapControlWithHelp(autoEqTargetSelector, S["AutoEqTargetTitle"], S["TipAutoEqTarget"], bottomMarginDp: 2));
 
         autoEqTargetDescText = Label("", 11.2f, OneUiTheme.TextMuted);
         autoEqTargetDescText.SetMaxLines(2);
         autoEqTargetDescText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        rendCard.AddView(autoEqTargetDescText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        headphoneOnlyCalibGroup.AddView(autoEqTargetDescText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(1),
             BottomMargin = Dp(8)
         });
         UpdateAutoEqTargetDescriptionText();
 
-        autoEqDoubleEqGuardSwitch = AddSwitchRow(rendCard, S["AutoEqDoubleEqGuardTitle"], store.AutoEqDoubleEqGuard, v => {
+        autoEqDoubleEqGuardSwitch = AddSwitchRow(headphoneOnlyCalibGroup, S["AutoEqDoubleEqGuardTitle"], store.AutoEqDoubleEqGuard, v => {
+            if (IsCoordinatorUpdating) return;
             store.AutoEqDoubleEqGuard = v;
             ApplyAutoEqRespectingRoute();
             RefreshAutoEqUi();
         }, helpBody: S["TipAutoEqDoubleEqGuard"]);
-        AddDivider(rendCard);
+        AddDivider(headphoneOnlyCalibGroup);
 
-        autoEqAutoSwitchDeviceSwitch = AddSwitchRow(rendCard, S["AutoEqAutoDeviceTitle"], store.AutoEqAutoSwitchByDevice, v => {
+        autoEqAutoSwitchDeviceSwitch = AddSwitchRow(headphoneOnlyCalibGroup, S["AutoEqAutoDeviceTitle"], store.AutoEqAutoSwitchByDevice, v => {
+            if (IsCoordinatorUpdating) return;
             store.AutoEqAutoSwitchByDevice = v;
             if (v) {
                 audioDeviceProfileManager?.RefreshActiveDevice(applyAutoSwitch: true);
             }
             RefreshAutoEqUi();
         }, helpBody: S["TipAutoEqAutoDevice"]);
+
+        LinearLayout autoEqActionsRow = HRow();
+        Button importAutoEqBtn = PillButton(S["AutoEqImportBtn"], LaunchCustomAutoEqImporter);
+        Button creditsAutoEqBtn = PillButton(S["AutoEqCreditsBtn"], ShowAutoEqLicenseCreditsDialog);
+        autoEqActionsRow.AddView(importAutoEqBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
+        autoEqActionsRow.AddView(creditsAutoEqBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        headphoneOnlyCalibGroup.AddView(autoEqActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
+
+        AddDivider(headphoneOnlyCalibGroup);
+        rendCard.AddView(headphoneOnlyCalibGroup);
 
         settingsAudioDeviceText = Label("", 11.2f, OneUiTheme.TextMuted);
         settingsAudioDeviceText.SetSingleLine(true);
@@ -196,15 +217,6 @@ public partial class MainActivity {
             TopMargin = Dp(2),
             BottomMargin = Dp(8)
         });
-
-        LinearLayout autoEqActionsRow = HRow();
-        Button importAutoEqBtn = PillButton(S["AutoEqImportBtn"], LaunchCustomAutoEqImporter);
-        Button creditsAutoEqBtn = PillButton(S["AutoEqCreditsBtn"], ShowAutoEqLicenseCreditsDialog);
-        autoEqActionsRow.AddView(importAutoEqBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
-        autoEqActionsRow.AddView(creditsAutoEqBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        rendCard.AddView(autoEqActionsRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(10) });
-
-        AddDivider(rendCard);
 
         filtersBtn = PillButton(S["LoadFilters"], () => {
             if (renderingSettings.RoomCorrection != null) {
@@ -333,6 +345,13 @@ public partial class MainActivity {
     }
 
     void RefreshBinauralProfileUi() {
+        bool isSpeakerRoute = IsActiveOutputSpeakerRoute();
+        if (headphoneCalibBypassHintText != null) {
+            headphoneCalibBypassHintText.Visibility = isSpeakerRoute ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (headphoneOnlyCalibGroup != null) {
+            headphoneOnlyCalibGroup.Visibility = isSpeakerRoute ? ViewStates.Gone : ViewStates.Visible;
+        }
         string activeId = BinauralProfileService.GetEffectiveProfileId(store);
         BinauralProfileInfo info = BinauralProfileService.FindById(activeId) ?? BinauralProfileService.FindById(BinauralProfileService.DefaultProfileId);
         string title = BinauralProfileService.GetActiveDisplayTitle(store, S);
@@ -346,7 +365,9 @@ public partial class MainActivity {
         if (roomBinauralProfileText != null) {
             roomBinauralProfileText.Text = title;
         }
-        refreshBentoTilesUi?.Invoke();
+        if (!IsCoordinatorUpdating) {
+            refreshBentoTilesUi?.Invoke();
+        }
     }
 
     void LaunchCustomHrirImporter() {
@@ -372,13 +393,11 @@ public partial class MainActivity {
                         BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
                     }
                     AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
-                    ApplyAndRefreshExternalization();
+                    ApplyArbitratedExternalizationAndBrirBypass();
                     audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
-                    RefreshBinauralProfileUi();
-                    RefreshPersonalizationUi();
-                    RefreshAutoEqUi();
-                    RefreshMusicPlayerControlsUi();
-                    RefreshSettingsCategorySubtitles();
+                    NotifyUiDomainChanged(
+                        UiStateDomain.SpatialOutput | UiStateDomain.Room3D | UiStateDomain.Playback | UiStateDomain.Settings,
+                        immediate: true);
                     ShowToast(string.Format(S["BinauralProfileApplied"], BinauralProfileService.GetActiveDisplayTitle(store, S)));
                 } else {
                     ShowError(err ?? S["HrirLoadFailedFallback"]);
@@ -399,13 +418,11 @@ public partial class MainActivity {
                         BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
                     }
                     AutoEqService.SyncBinauralModeToEngine(store, playerEngine);
-                    ApplyAndRefreshExternalization();
+                    ApplyArbitratedExternalizationAndBrirBypass();
                     audioDeviceProfileManager?.SaveCurrentSettingsForActiveDevice();
-                    RefreshBinauralProfileUi();
-                    RefreshPersonalizationUi();
-                    RefreshAutoEqUi();
-                    RefreshMusicPlayerControlsUi();
-                    RefreshSettingsCategorySubtitles();
+                    NotifyUiDomainChanged(
+                        UiStateDomain.SpatialOutput | UiStateDomain.Room3D | UiStateDomain.Playback | UiStateDomain.Settings,
+                        immediate: true);
                     if (showToast) {
                         ShowToast(string.Format(S["BinauralProfileApplied"], BinauralProfileService.GetActiveDisplayTitle(store, S)));
                     }
@@ -645,13 +662,10 @@ public partial class MainActivity {
                 return;
             }
             headTrackingManager?.OnAudioDeviceChanged(device);
-            RefreshBinauralProfileUi();
-            RefreshAutoEqUi();
-            RefreshHeadTrackingUi();
-            ApplyAndRefreshExternalization();
-            RefreshTransauralXtcUi();
-            RefreshPersonalizationUi();
-            RefreshMusicPlayerControlsUi();
+            ApplyArbitratedExternalizationAndBrirBypass();
+            NotifyUiDomainChanged(
+                UiStateDomain.SpatialOutput | UiStateDomain.Room3D | UiStateDomain.Playback | UiStateDomain.Settings,
+                immediate: true);
             if (autoMatched && binding != null && !string.IsNullOrEmpty(binding.AutoEqProfileName)) {
                 ShowToast(string.Format(S["AutoEqAutoMatchedToast"], device.DisplayName, binding.AutoEqProfileName));
             }
@@ -744,6 +758,13 @@ public partial class MainActivity {
     }
 
     void RefreshAutoEqUi() {
+        bool isSpeakerRoute = IsActiveOutputSpeakerRoute();
+        if (headphoneCalibBypassHintText != null) {
+            headphoneCalibBypassHintText.Visibility = isSpeakerRoute ? ViewStates.Visible : ViewStates.Gone;
+        }
+        if (headphoneOnlyCalibGroup != null) {
+            headphoneOnlyCalibGroup.Visibility = isSpeakerRoute ? ViewStates.Gone : ViewStates.Visible;
+        }
         if (autoEqEnabledSwitch != null && autoEqEnabledSwitch.Checked != store.AutoEqEnabled) {
             autoEqEnabledSwitch.Checked = store.AutoEqEnabled;
         }

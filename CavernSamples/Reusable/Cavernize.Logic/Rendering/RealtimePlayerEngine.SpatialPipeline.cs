@@ -26,19 +26,20 @@ namespace Cavernize.Logic.Rendering;
 
 public sealed partial class RealtimePlayerEngine {
     void ConfigureListener(bool resetToStart) {
-        Listener.EnvironmentType = EnvironmentType;
-        Listener.EnvironmentSize = EnvironmentSize;
-        Listener.HeadphoneVirtualizer = false;
+        using ListenerContext.Scope listenerScope = listenerContext.EnterScope();
+        listenerContext.EnvironmentType = EnvironmentType;
+        listenerContext.EnvironmentSize = EnvironmentSize;
+        listenerContext.HeadphoneVirtualizer = false;
 
         if (renderingSettings.RoomCorrectionUsable && !HeadphoneVirtualizer) {
-            listener = new ConvolvedListener(false) {
+            listener = new ConvolvedListener(listenerContext, false) {
                 ConvolutionClip = renderingSettings.RoomCorrection,
                 UpdateRate = updateRate,
                 AudioQuality = AudioQuality,
                 MaximumSources = 256
             };
         } else {
-            listener = new Listener(false) {
+            listener = new Listener(listenerContext, false) {
                 UpdateRate = updateRate,
                 AudioQuality = AudioQuality,
                 MaximumSources = 256
@@ -74,7 +75,7 @@ public sealed partial class RealtimePlayerEngine {
             PreserveSourceOverrides(nextItems, previousItems);
             sourceItems = nextItems;
 
-            Vector3 envSize = Listener.EnvironmentSize;
+            Vector3 envSize = listenerContext.EnvironmentSize;
             for (int i = 0; i < sourceItems.Count && i < cachedActiveSources.Length; i++) {
                 if (sourceItems[i].HasCustomPosition && cachedActiveSources[i] != null) {
                     cachedActiveSources[i].LockCustomPosition(sourceItems[i].CustomNormalizedPosition * envSize);
@@ -623,10 +624,15 @@ public sealed partial class RealtimePlayerEngine {
         };
     }
 
+    /// <summary>
+    /// Configures the isolated <see cref="ListenerContext"/> layout and <see cref="VirtualizerFilter"/> state
+    /// (mirrors <see cref="Listener.HeadphoneVirtualizer"/> per engine instance without mutating static globals).
+    /// </summary>
     void SetupOutputLayout() {
+        using ListenerContext.Scope listenerScope = listenerContext.EnterScope();
         if (HeadphoneVirtualizer) {
-            if (!Listener.HeadphoneVirtualizer) {
-                Listener.HeadphoneVirtualizer = true;
+            if (!listenerContext.HeadphoneVirtualizer) {
+                listenerContext.HeadphoneVirtualizer = true;
             }
             new VirtualizerFilter().SetLayout();
             int desiredRate = ResolveVirtualizerOutputSampleRate();
@@ -638,10 +644,10 @@ public sealed partial class RealtimePlayerEngine {
             appliedProfileVersion = VirtualizerFilter.ProfileVersion;
             activeNativeSampleRateRequest = desiredRate;
         } else {
-            if (Listener.HeadphoneVirtualizer) {
-                Listener.HeadphoneVirtualizer = false;
+            if (listenerContext.HeadphoneVirtualizer) {
+                listenerContext.HeadphoneVirtualizer = false;
             }
-            Listener.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.ref200));
+            listenerContext.ReplaceChannels(ChannelPrototype.ToLayout(ChannelPrototype.ref200));
             listener.LFESeparation = true;
             int desiredRate = ResolveDirectOutputSampleRate();
             listener.SampleRate = desiredRate;
@@ -664,12 +670,28 @@ public sealed partial class RealtimePlayerEngine {
     }
 
     void SyncExternalizationLocked() {
+        bool speakerOrXtcBypass = !transauralXtcPostStage.IsHeadphoneRoute || transauralXtcPostStage.IsActivelyProcessing;
         bool brirActive = sceneHub.IsMeasuredBrirActive || VirtualizerFilter.IsMeasuredBrirActive;
-        lastExternalizationBrirState = brirActive;
+        bool bypassBrirAndIsm = brirActive || speakerOrXtcBypass;
+        lastExternalizationBrirState = bypassBrirAndIsm;
         lastExternalizationEnvSize = EnvironmentSize;
+        PhysicalExternalizationConfig effectiveConfig = speakerOrXtcBypass &&
+            (externalizationConfig.IsmRoomEnabled || externalizationConfig.NearFieldEnabled)
+            ? new PhysicalExternalizationConfig {
+                IsmRoomEnabled = false,
+                RoomPreset = externalizationConfig.RoomPreset,
+                WallMaterial = externalizationConfig.WallMaterial,
+                ReflectionOrder = externalizationConfig.ReflectionOrder,
+                ReflectionLevel = externalizationConfig.ReflectionLevel,
+                NearFieldEnabled = false,
+                AirAbsorptionEnabled = externalizationConfig.AirAbsorptionEnabled,
+                AirTemperatureCelsius = externalizationConfig.AirTemperatureCelsius,
+                AirRelativeHumidityPct = externalizationConfig.AirRelativeHumidityPct
+            }
+            : externalizationConfig;
         sceneHub.ExternalizationDiagnostics = virtualizerRenderer.ApplyExternalization(
-            externalizationConfig,
-            brirActive,
+            effectiveConfig,
+            bypassBrirAndIsm,
             EnvironmentSize);
     }
 
@@ -708,12 +730,12 @@ public sealed partial class RealtimePlayerEngine {
     }
 
     void ApplyLiveParameters() {
-        if (Listener.EnvironmentType != EnvironmentType) {
-            Listener.EnvironmentType = EnvironmentType;
+        if (listenerContext.EnvironmentType != EnvironmentType) {
+            listenerContext.EnvironmentType = EnvironmentType;
         }
         if (EnvironmentSize.X > 0.1f && EnvironmentSize.Y > 0.1f && EnvironmentSize.Z > 0.1f &&
-            Listener.EnvironmentSize != EnvironmentSize) {
-            Listener.EnvironmentSize = EnvironmentSize;
+            listenerContext.EnvironmentSize != EnvironmentSize) {
+            listenerContext.EnvironmentSize = EnvironmentSize;
         }
 
         int desiredOutputRate = !HeadphoneVirtualizer ? ResolveDirectOutputSampleRate() : ResolveVirtualizerOutputSampleRate();
@@ -724,7 +746,10 @@ public sealed partial class RealtimePlayerEngine {
                 ArmCrossfadeLocked();
             }
             SetupOutputLayout();
-        } else if (lastExternalizationBrirState != (sceneHub.IsMeasuredBrirActive || VirtualizerFilter.IsMeasuredBrirActive) ||
+        } else if (lastExternalizationBrirState != (sceneHub.IsMeasuredBrirActive ||
+                VirtualizerFilter.IsMeasuredBrirActive ||
+                !transauralXtcPostStage.IsHeadphoneRoute ||
+                transauralXtcPostStage.IsActivelyProcessing) ||
             Vector3.DistanceSquared(lastExternalizationEnvSize, EnvironmentSize) > 1e-4f) {
             SyncExternalizationLocked();
         }
@@ -786,8 +811,8 @@ public sealed partial class RealtimePlayerEngine {
     }
 
     void ApplySourceMutesAndProperties() {
-        if (Listener.HeadphoneVirtualizer != HeadphoneVirtualizer) {
-            Listener.HeadphoneVirtualizer = HeadphoneVirtualizer;
+        if (listenerContext.HeadphoneVirtualizer != HeadphoneVirtualizer) {
+            listenerContext.HeadphoneVirtualizer = HeadphoneVirtualizer;
         }
         if (listener == null) {
             return;
@@ -799,7 +824,7 @@ public sealed partial class RealtimePlayerEngine {
         }
 
         long maskHash = (MuteBed ? 1L : 0L) | (OnlyBeds ? 2L : 0L) | (MuteGround ? 4L : 0L) | (DynamicCeilingOnly ? 8L : 0L);
-        Vector3 envSize = Listener.EnvironmentSize;
+        Vector3 envSize = listenerContext.EnvironmentSize;
         Vector3 invEnv = new(
             1f / MathF.Max(0.25f, envSize.X),
             1f / MathF.Max(0.25f, envSize.Y),
@@ -1033,7 +1058,7 @@ public sealed partial class RealtimePlayerEngine {
         bool choreoActive = isStems3D &&
             sceneHub.ActiveChoreoMode != SpatialChoreoMode.Off &&
             sceneHub.ActiveChoreoTrack != null;
-        Vector3 envSize = Listener.EnvironmentSize;
+        Vector3 envSize = listenerContext.EnvironmentSize;
         Vector3 safeEnv = new(
             MathF.Max(0.25f, envSize.X),
             MathF.Max(0.25f, envSize.Y),
@@ -1112,7 +1137,7 @@ public sealed partial class RealtimePlayerEngine {
         if (activeObjects == null || activeObjects.Length == 0) {
             return;
         }
-        Vector3 envSize = Listener.EnvironmentSize;
+        Vector3 envSize = listenerContext.EnvironmentSize;
         Vector3 invEnv = new(
             1f / MathF.Max(0.25f, envSize.X),
             1f / MathF.Max(0.25f, envSize.Y),
@@ -1134,7 +1159,7 @@ public sealed partial class RealtimePlayerEngine {
         if (activeObjects == null || activeObjects.Length == 0) {
             return;
         }
-        Vector3 envSize = Listener.EnvironmentSize;
+        Vector3 envSize = listenerContext.EnvironmentSize;
         Vector3 invEnv = new(
             1f / MathF.Max(0.25f, envSize.X),
             1f / MathF.Max(0.25f, envSize.Y),

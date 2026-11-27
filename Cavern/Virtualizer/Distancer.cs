@@ -96,7 +96,8 @@ namespace Cavern.Virtualizer {
                     }
                 }
             }
-            distanceFactor = Math.Max(Math.Max(Listener.EnvironmentSize.X, Listener.EnvironmentSize.Y), Listener.EnvironmentSize.Z);
+            Vector3 envSize = (source.listener != null ? source.listener.Context : ListenerContext.Current).EnvironmentSize;
+            distanceFactor = Math.Max(Math.Max(envSize.X, envSize.Y), envSize.Z);
             filter = new SpikeConvolver(new float[filterSize], 0);
         }
 

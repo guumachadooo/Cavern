@@ -1896,6 +1896,33 @@ public sealed partial class AndroidStrings {
         ["ConfirmRemoveAllVariantsMsg"] = "Permanently delete all cached AI stem variants for the current track?",
         ["ConfirmClearMvsepTokenMsg"] = "Remove your saved MVSEP Cloud API token from this device?",
         ["ConfirmClearQnnCacheMsg"] = "Delete compiled Qualcomm QNN and quantized ONNX optimization cache files? They will be rebuilt on next run.",
-        ["ConfirmRemoveQueueJobMsg"] = "Remove the last queued conversion job from the batch queue?"
+        ["ConfirmRemoveQueueJobMsg"] = "Remove the last queued conversion job from the batch queue?",
+
+        // W55.3: Reactive Coordinator, Anti-Conflict Arbitration & Unified Local/Cloud AI Picker
+        ["BentoSpeakerXtc"] = "Speaker XTC",
+        ["TipBentoSpeakerXtc"] = "Toggles physical Bauck-Cooper / BACCH crosstalk cancellation (XTC) for built-in phone stereo speakers or external stereo speakers.",
+        ["SpatialOutSpeakerXtcOnShort"] = "XTC 3D",
+        ["SpatialOutSpeakerXtcOffShort"] = "Speaker",
+        ["SignalChainSpeakerXtcOnFmt"] = "XTC ±{0:0}°",
+        ["SignalChainSpeakerDirect"] = "Speaker Direct",
+        ["RoomXtcPresetRowLabel"] = "Speaker XTC Geometry",
+        ["ExtStatusSpeakerBypass"] = "Auto-bypassed on Speaker/XTC output (physical room acoustics active)",
+        ["HeadphoneCalibSpeakerBypassHint"] = "Speaker / XTC output active — Headphone HRIR & AutoEq controls are auto-bypassed and hidden.",
+        ["UpmixHiddenAtmosHint"] = "Channel upmix (5.1/7.1) is hidden because this track carries native Atmos / multichannel spatial audio.",
+        ["UpmixHiddenAi3DHint"] = "Classic 5.1/7.1 channel upmix is hidden while AI 3D Stem Separation is active.",
+        ["AiPickerLaunchBtn"] = "Quick AI Model Picker (Local & Cloud)",
+        ["AiPickerTitle"] = "Local & Cloud AI Model Picker",
+        ["AiPickerSubtitle"] = "1-tap selection for on-device ONNX checkpoints and MVSEP Cloud presets with stem maps (Manual/Cloud choices stay isolated from Studio Bundle presets).",
+        ["AiPickerSectionLocal"] = "On-Device ONNX Models",
+        ["AiPickerSectionCloud"] = "MVSEP Cloud Recipes",
+        ["AiPickerReturnAutoBtn"] = "Use Auto Bundle Mode",
+        ["AiPickerReturnAutoToast"] = "Switched back to Auto Bundle AI orchestration.",
+        ["AiPickerManualIsolatedTag"] = "Manual ONNX",
+        ["AiPickerCloudIsolatedTag"] = "Cloud MVSEP",
+        ["AiPickerAutoBundleTag"] = "Auto Bundle",
+        ["AiPickerStemMapFmt"] = "Stems: {0}",
+        ["AiPickerAppliedToastFmt"] = "AI Model active: {0} ({1})",
+        ["AiPickerActiveModelFmt"] = "AI Model: {0}",
+        ["AiPickerNeedDownloadToast"] = "Download or import '{0}' first in Models & Cache."
     };
 }

@@ -13,21 +13,22 @@ namespace Cavern.Rendering {
         /// <summary>
         /// Check and assign a channel if it's the closest left/right from a given position.
         /// </summary>
+        /// <param name="channels">Output channel array to inspect</param>
         /// <param name="channel">Checked channel ID</param>
         /// <param name="left">Closest left channel ID</param>
         /// <param name="right">Closest right channel ID</param>
         /// <param name="posX">Reference position on the X axis</param>
         /// <param name="channelX">Currently checked channel position on the X axis</param>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static void AssignLR(int channel, ref int left, ref int right, float posX, float channelX) {
+        static void AssignLR(Channel[] channels, int channel, ref int left, ref int right, float posX, float channelX) {
             if (channelX == posX) { // Exact match
                 left = channel;
                 right = channel;
             } else if (channelX < posX) { // Left
-                if (left == -1 || Listener.Channels[left].CubicalPos.X < channelX) {
+                if (left == -1 || channels[left].CubicalPos.X < channelX) {
                     left = channel;
                 }
-            } else if (right == -1 || Listener.Channels[right].CubicalPos.X > channelX) { // Right
+            } else if (right == -1 || channels[right].CubicalPos.X > channelX) { // Right
                 right = channel;
             }
         }
@@ -108,13 +109,14 @@ namespace Cavern.Rendering {
                 closestBR = -2665;
 
             // Find closest horizontal layers
-            if (Listener.HeadphoneVirtualizer) {
-                direction = direction.WarpToCube() * Listener.EnvironmentSizeInverse;
+            ListenerContext ctx = listener != null ? listener.Context : ListenerContext.Current;
+            if (ctx.HeadphoneVirtualizer) {
+                direction = direction.WarpToCube() * ctx.EnvironmentSizeInverse;
             } else {
-                direction *= Listener.EnvironmentSizeInverse;
+                direction *= ctx.EnvironmentSizeInverse;
             }
 
-            Channel[] channels = Listener.Channels;
+            Channel[] channels = ctx.Channels;
             for (int channel = 0; channel < channels.Length; channel++) {
                 if (!channels[channel].LFE) {
                     // World-space scaling and its inverse can move an exact speaker placement by a float ULP, so snap if panned very near of a channel
@@ -163,18 +165,18 @@ namespace Cavern.Rendering {
                     Vector3 channelPos = channels[channel].CubicalPos;
                     if (channelPos.Y == closestBottom) { // Bottom layer
                         if (channelPos.Z == closestBF) {
-                            AssignLR(channel, ref bottomFrontLeft, ref bottomFrontRight, direction.X, channelPos.X);
+                            AssignLR(channels, channel, ref bottomFrontLeft, ref bottomFrontRight, direction.X, channelPos.X);
                         }
                         if (channelPos.Z == closestBR) {
-                            AssignLR(channel, ref bottomRearLeft, ref bottomRearRight, direction.X, channelPos.X);
+                            AssignLR(channels, channel, ref bottomRearLeft, ref bottomRearRight, direction.X, channelPos.X);
                         }
                     }
                     if (channelPos.Y == closestTop) { // Top layer
                         if (channelPos.Z == closestTF) {
-                            AssignLR(channel, ref topFrontLeft, ref topFrontRight, direction.X, channelPos.X);
+                            AssignLR(channels, channel, ref topFrontLeft, ref topFrontRight, direction.X, channelPos.X);
                         }
                         if (channelPos.Z == closestTR) {
-                            AssignLR(channel, ref topRearLeft, ref topRearRight, direction.X, channelPos.X);
+                            AssignLR(channels, channel, ref topRearLeft, ref topRearRight, direction.X, channelPos.X);
                         }
                     }
                 }

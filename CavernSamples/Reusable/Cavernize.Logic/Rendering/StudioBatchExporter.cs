@@ -260,7 +260,7 @@ public sealed class StudioBatchExportResult {
 /// Hybrid Neural+DirAC Stereo->7.1.4, Spatial Karaoke Atmos, Live Karaoke Performance Mixdown,
 /// and FLAC+Atmos Hybrid Lossless Spatial Master.
 /// </summary>
-public static class StudioBatchExporter {
+public static partial class StudioBatchExporter {
     const int updateRate = 1024;
 
     static readonly ReferenceChannel[] Layout714 = [
@@ -671,7 +671,7 @@ public static class StudioBatchExporter {
             Directory.CreateDirectory(dir);
         }
 
-        using StemExtractor.ListenerStateScope listenerScope = new();
+        using ListenerContext.Scope listenerScope = BeginIsolatedExportScope();
         try {
             token.ThrowIfCancellationRequested();
             StudioBatchExportResult result;
@@ -3568,11 +3568,5 @@ public static class StudioBatchExporter {
             EffectiveChoreoMode = choreoMode,
             Succeeded = true
         };
-    }
-
-    static void EnsureEnvironmentSize() {
-        if (Listener.EnvironmentSize.X == 0 || Listener.EnvironmentSize.Y == 0 || Listener.EnvironmentSize.Z == 0) {
-            Listener.EnvironmentSize = new Vector3(10, 7, 10);
-        }
     }
 }

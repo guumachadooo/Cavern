@@ -386,8 +386,7 @@ public partial class MainActivity {
                 preserveBacking => {
                     store.KaraokePreserveBackingVocals = preserveBacking;
                     ApplyAndRefreshNeuralAudio();
-                    RefreshLyricsSingDockUi();
-                    RefreshStudioW12ContextUi();
+                    NotifyUiDomainChanged(UiStateDomain.Playback | UiStateDomain.StudioExport, immediate: true);
                 });
             backingSwitch.Tag = "karaokeBackingSwitch";
         } else if (isAtmos) {
@@ -416,10 +415,7 @@ public partial class MainActivity {
                     } else if (playerEngine != null) {
                         playerEngine.LgsrBypassed = true;
                     }
-                    RefreshLgsrUi();
-                    RefreshNeuralPrepUi();
-                    RefreshSpatialChoreoClarifierUi();
-                    RefreshBottomActionBarVisuals();
+                    NotifyUiDomainChanged(UiStateDomain.Neural | UiStateDomain.Upmix | UiStateDomain.Playback, immediate: true);
                 },
                 helpBody: S["TipSlot2CLgsr"]);
             atmosSwitch.Tag = "playTabAtmosSwitch";
@@ -434,18 +430,17 @@ public partial class MainActivity {
                 S["PlayTabAiModeStems3D"],
                 S["PlayTabAiModeHybrid714"]
             }, Math.Clamp(store.NeuralSpatialUpmixModeIndex, 0, 2));
-            modeSel.SelectionChanged += idx => {
-                store.NeuralSpatialUpmixModeIndex = idx;
-                _ = playerEngine?.ApplyNeuralConfigAsync(store.BuildNeuralAudioConfig());
-                RefreshNeuralAudioUi();
-                RefreshNeuralPrepUi();
-                RefreshSpatialChoreoClarifierUi();
-                RefreshBottomActionBarVisuals();
-                if (idx != 0 && !(playerEngine?.NeuralStage?.HasPlayableSpatialUpmixStems ?? false) && GetActiveTrack() != null) {
-                    PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation, silentIfNotReady: false);
-                }
-            };
-            content.AddView(WrapControlWithHelp(modeSel, S["PlayTabAiModeTitle"], S["TipNeuralUpmix"], bottomMarginDp: 2));
+            modeSel.SelectionChanged += idx => SetNeuralSpatialUpmixMode(idx);
+            content.AddView(WrapControlWithHelp(modeSel, S["PlayTabAiModeTitle"], S["TipNeuralUpmix"], bottomMarginDp: 6));
+
+            Button pickerBtn = null;
+            pickerBtn = PillButton(string.Format(S["AiPickerActiveModelFmt"], BuildActiveAiPickerSummaryText()), () =>
+                ShowUnifiedAiModelPickerDialog(() => {
+                    if (pickerBtn != null) pickerBtn.Text = string.Format(S["AiPickerActiveModelFmt"], BuildActiveAiPickerSummaryText());
+                }));
+            pickerBtn.TextSize = 11.4f;
+            pickerBtn.SetSingleLine(true); pickerBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+            content.AddView(pickerBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(4) });
         }
 
         Android.App.Dialog activeDialog = null;
@@ -568,11 +563,7 @@ public partial class MainActivity {
                 SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                 ApplyExtractedSongDnaOnUiThread(dna);
                 SyncNeuralRuntimeDiagnostics();
-                RefreshNeuralAudioUi();
-                RefreshNeuralPrepUi();
-                RefreshLyricsSingDockUi();
-                RefreshSpatialChoreoClarifierUi();
-                RefreshBottomActionBarVisuals();
+                NotifyUiDomainChanged(UiStateDomain.Neural | UiStateDomain.Playback | UiStateDomain.Upmix, immediate: true);
                 Toast.MakeText(this, string.Format(S["AiCacheVariantActivatedToast"], loaded.Stems.Count), ToastLength.Short).Show();
                 onActivated?.Invoke();
             });
@@ -754,10 +745,7 @@ public partial class MainActivity {
                                                 }
                                             }
                                             SyncNeuralRuntimeDiagnostics();
-                                            RefreshNeuralAudioUi();
-                                            RefreshNeuralPrepUi();
-                                            RefreshLyricsSingDockUi();
-                                            RefreshBottomActionBarVisuals();
+                                            NotifyUiDomainChanged(UiStateDomain.Neural | UiStateDomain.Playback, immediate: true);
                                             Toast.MakeText(this, S["AiCacheVariantDeletedToast"], ToastLength.Short).Show();
                                             dismissDialog?.Invoke();
                                         });
@@ -826,10 +814,7 @@ public partial class MainActivity {
                             playerEngine?.NeuralStage?.ClearAllSeparatedTracks();
                             playerEngine?.BindSeparatedNeuralTrack(null);
                             SyncNeuralRuntimeDiagnostics();
-                            RefreshNeuralAudioUi();
-                            RefreshNeuralPrepUi();
-                            RefreshLyricsSingDockUi();
-                            RefreshBottomActionBarVisuals();
+                            NotifyUiDomainChanged(UiStateDomain.Neural | UiStateDomain.Playback, immediate: true);
                             Toast.MakeText(this, S["AiCacheRemovedToast"], ToastLength.Short).Show();
                             dismissDialog?.Invoke();
                         });
@@ -857,31 +842,20 @@ public partial class MainActivity {
         desc.SetPadding(0, 0, 0, Dp(10));
         content.AddView(desc);
 
-        OneUiInlineSelector sel = new(this, S["UpmixModeLabel"]);
-        sel.SetItems(
-            [S["UpmixModeDirect"], S["UpmixModeSurround"], S["UpmixModeFull3D"]],
-            ResolveUpmixModeIndex());
-        sel.SelectionChanged += pos => {
-            store.MatrixUpmixing = pos >= 1;
-            store.CavernizeUpmix = pos >= 2;
-            SyncUpmixModeUi();
-            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
-            RefreshSpatialChoreoClarifierUi();
-            RefreshMusicPlayerControlsUi();
-            RefreshSettingsCategorySubtitles();
-        };
-        content.AddView(WrapControlWithHelp(sel, S["UpmixModeLabel"].TrimEnd(':'), S["TipUpmixMode"], bottomMarginDp: 6));
+        if (ShouldHideChannelUpmixSelectors()) {
+            string reason = IsActiveTrackMultichannelOrAtmos() ? S["UpmixHiddenAtmosHint"] : S["UpmixHiddenAi3DHint"];
+            TextView hiddenHint = Label(reason, 12.0f, OneUiTheme.PeachText);
+            hiddenHint.SetPadding(0, 0, 0, Dp(6));
+            content.AddView(hiddenHint);
+        } else {
+            OneUiInlineSelector sel = new(this, S["UpmixModeLabel"]);
+            sel.SetItems([S["UpmixModeDirect"], S["UpmixModeSurround"], S["UpmixModeFull3D"]], ResolveUpmixModeIndex());
+            sel.SelectionChanged += pos => SetClassicUpmixMode(pos);
+            content.AddView(WrapControlWithHelp(sel, S["UpmixModeLabel"].TrimEnd(':'), S["TipUpmixMode"], bottomMarginDp: 6));
+        }
 
         AddDivider(content);
-        AddSwitchRow(content, S["AtmosAwareUpmix"], store.AtmosAwareUpmix, v => {
-            store.AtmosAwareUpmix = v;
-            if (atmosAwareUpmixSwitch != null && atmosAwareUpmixSwitch.Checked != v) {
-                atmosAwareUpmixSwitch.Checked = v;
-            }
-            _ = playerEngine?.ApplyUpmixingSettingsAsync(upmixingSettings);
-            RefreshMusicPlayerControlsUi();
-            RefreshSettingsCategorySubtitles();
-        }, helpBody: S["TipAtmosAwareUpmix"]);
+        AddSwitchRow(content, S["AtmosAwareUpmix"], store.AtmosAwareUpmix, SetAtmosAwareUpmix, helpBody: S["TipAtmosAwareUpmix"]);
 
         OneUiModalDialog.Show(
             this,
@@ -1201,10 +1175,7 @@ public partial class MainActivity {
                         if (uiDestroyed || gen != neuralPrepGeneration || GetActiveTrack() != activeTrack) return;
                         SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                         ApplyExtractedSongDnaOnUiThread(extractedDna);
-                        RefreshNeuralAudioUi();
-                        RefreshNeuralPrepUi();
-                        RefreshLyricsSingDockUi();
-                        RefreshSpatialChoreoClarifierUi();
+                        NotifyUiDomainChanged(UiStateDomain.Neural | UiStateDomain.Playback | UiStateDomain.Upmix, immediate: true);
                     });
                 }
             } catch (Exception ex) {
@@ -1453,8 +1424,7 @@ public partial class MainActivity {
                                     playerEngine.BindSeparatedNeuralTrack(existingForDna);
                                 }
                                 ApplyExtractedSongDnaOnUiThread(instantDna);
-                                RefreshNeuralAudioUi();
-                                RefreshNeuralPrepUi();
+                                NotifyUiDomainChanged(UiStateDomain.Neural, immediate: true);
                                 Toast.MakeText(this, string.Format(S["VocalDnaReadyToast"], instantDna.TargetVocalLufs, instantDna.ReverbRt60Sec, instantDna.ActiveWindowCount), ToastLength.Short).Show();
                             });
                             return;
@@ -1502,9 +1472,7 @@ public partial class MainActivity {
                         neuralPrepStatusText = "";
                         SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                         ApplyExtractedSongDnaOnUiThread(cachedDna);
-                        RefreshNeuralAudioUi();
-                        RefreshNeuralPrepUi();
-                        RefreshSpatialChoreoClarifierUi();
+                        NotifyUiDomainChanged(UiStateDomain.Neural | UiStateDomain.Upmix, immediate: true);
                         string msg = (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna && cachedDna != null && cachedDna.IsExtractedFromSong)
                             ? string.Format(S["VocalDnaReadyToast"], cachedDna.TargetVocalLufs, cachedDna.ReverbRt60Sec, cachedDna.ActiveWindowCount)
                             : string.Format(S["NeuralPrepCacheHitToast"], cachedTrack.Stems.Count);
@@ -1667,7 +1635,7 @@ public partial class MainActivity {
                                 if (uiDestroyed || myGen != neuralPrepGeneration || progressiveTrack == null) return;
                                 if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation) playerEngine.BindSpatialUpmixTrack(progressiveTrack);
                                 else if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) playerEngine.BindKaraokeReferenceTrack(progressiveTrack);
-                                RunOnUiThread(() => { if (!uiDestroyed && myGen == neuralPrepGeneration) { RefreshNeuralAudioUi(); RefreshNeuralPrepUi(); RefreshSpatialChoreoClarifierUi(); } });
+                                RunOnUiThread(() => { if (!uiDestroyed && myGen == neuralPrepGeneration) { NotifyUiDomainChanged(UiStateDomain.Neural | UiStateDomain.Upmix, immediate: true); } });
                             }
                             : null;
 
@@ -1740,9 +1708,7 @@ public partial class MainActivity {
                     SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                     ApplyExtractedSongDnaOnUiThread(extractedDna);
                     SyncNeuralRuntimeDiagnostics();
-                    RefreshNeuralAudioUi();
-                    RefreshNeuralPrepUi();
-                    RefreshSpatialChoreoClarifierUi();
+                    NotifyUiDomainChanged(UiStateDomain.Neural | UiStateDomain.Upmix, immediate: true);
                     string toastMsg;
                     ToastLength toastLen = ToastLength.Short;
                     if (separated.UsedMemorySafeFallback) {

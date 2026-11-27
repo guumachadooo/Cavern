@@ -178,6 +178,7 @@ public partial class MainActivity {
         ];
         neuralOrchestrationSelector.SetItems(orchLabels, Math.Clamp(store.NeuralOrchestrationModeIndex, 0, orchLabels.Length - 1));
         neuralOrchestrationSelector.SelectionChanged += pos => {
+            if (IsCoordinatorUpdating) return;
             store.NeuralOrchestrationModeIndex = pos;
             ApplyAndRefreshNeuralAudio();
         };
@@ -193,11 +194,19 @@ public partial class MainActivity {
         ];
         neuralStudioBundleSelector.SetItems(bundleLabels, Math.Clamp(store.NeuralStudioBundleIndex, 0, bundleLabels.Length - 1));
         neuralStudioBundleSelector.SelectionChanged += pos => {
+            if (IsCoordinatorUpdating) return;
             store.NeuralStudioBundleIndex = pos;
             ApplyAndRefreshNeuralAudio();
             RefreshStudioW12ContextUi();
         };
         slot2bCard.AddView(WrapControlWithHelp(neuralStudioBundleSelector, S["NeuralStudioBundleTitle"], S["TipNeuralStudioBundle"], bottomMarginDp: 4));
+
+        neuralModelPickerBtn = PillButton(BuildActiveAiPickerSummaryText(), () => ShowUnifiedAiModelPickerDialog());
+        neuralModelPickerBtn.TextSize = 11.4f;
+        neuralModelPickerBtn.SetSingleLine(true);
+        neuralModelPickerBtn.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        slot2bCard.AddView(neuralModelPickerBtn, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { BottomMargin = Dp(6) });
 
         neuralPlanSummaryText = Label("", 11.5f, OneUiTheme.TextSub);
         neuralPlanSummaryText.SetSingleLine(true);
@@ -694,9 +703,14 @@ public partial class MainActivity {
                 }
             }
         }
-        RefreshSettingsCategorySubtitles();
-        if (activeSettingsCategory == 2) {
-            RefreshSettingsHubVisibility();
+        if (neuralModelPickerBtn != null) {
+            neuralModelPickerBtn.Text = BuildActiveAiPickerSummaryText();
+        }
+        if (!IsCoordinatorUpdating) {
+            RefreshSettingsCategorySubtitles();
+            if (activeSettingsCategory == 2) {
+                RefreshSettingsHubVisibility();
+            }
         }
     }
 

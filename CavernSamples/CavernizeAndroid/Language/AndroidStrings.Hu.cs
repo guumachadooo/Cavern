@@ -248,5 +248,32 @@ public sealed partial class AndroidStrings {
         d["ConfirmClearMvsepTokenMsg"] = "Eltávolítja a mentett MVSEP Cloud API tokent erről a készülékről?";
         d["ConfirmClearQnnCacheMsg"] = "Törli a lefordított Qualcomm QNN és kvantált ONNX cache fájlokat? A következő futtatáskor újra létrejönnek.";
         d["ConfirmRemoveQueueJobMsg"] = "Eltávolítja az utolsó feladatot a konvertálási sorból?";
+
+        // W55.3: Reaktív UI koordinátor, konfliktuskezelés és egységes helyi/felhős MI modellválasztó
+        d["BentoSpeakerXtc"] = "Hangszóró XTC";
+        d["TipBentoSpeakerXtc"] = "Kapcsolja a fizikai Bauck-Cooper / BACCH áthallás-kioltást (XTC) telefonos vagy külső sztereó hangszórókhoz.";
+        d["SpatialOutSpeakerXtcOnShort"] = "XTC 3D";
+        d["SpatialOutSpeakerXtcOffShort"] = "Hangszóró";
+        d["SignalChainSpeakerXtcOnFmt"] = "XTC ±{0:0}°";
+        d["SignalChainSpeakerDirect"] = "Hangszóró direkt";
+        d["RoomXtcPresetRowLabel"] = "Hangszóró XTC geometria";
+        d["ExtStatusSpeakerBypass"] = "Automatikus bypass hangszóró/XTC kimeneten (valós térakusztika aktív)";
+        d["HeadphoneCalibSpeakerBypassHint"] = "Hangszóró / XTC kimenet aktív — a fejhallgató HRIR és AutoEq vezérlők rejtve vannak.";
+        d["UpmixHiddenAtmosHint"] = "Az 5.1/7.1 upmix rejtve van, mert a sáv natív Atmos / többcsatornás objektumokat tartalmaz.";
+        d["UpmixHiddenAi3DHint"] = "A klasszikus 5.1/7.1 upmix rejtve van, amíg az MI 3D stem-szétválasztás aktív.";
+        d["AiPickerLaunchBtn"] = "Gyors MI-modell választó (Helyi és Felhő)";
+        d["AiPickerTitle"] = "Helyi és Felhő MI-modell választó";
+        d["AiPickerSubtitle"] = "1 érintéses választás helyi ONNX modellek és felhős MVSEP receptek között sávtérképpel (Kézi/Felhő választás elszigetelve a csomagoktól).";
+        d["AiPickerSectionLocal"] = "Helyi ONNX modellek";
+        d["AiPickerSectionCloud"] = "MVSEP felhős receptek";
+        d["AiPickerReturnAutoBtn"] = "Váltás automatikus csomag módra";
+        d["AiPickerReturnAutoToast"] = "Visszaváltva automatikus csomag-hangolásra.";
+        d["AiPickerManualIsolatedTag"] = "Kézi ONNX";
+        d["AiPickerCloudIsolatedTag"] = "MVSEP Felhő";
+        d["AiPickerAutoBundleTag"] = "Auto csomag";
+        d["AiPickerStemMapFmt"] = "Sávok: {0}";
+        d["AiPickerAppliedToastFmt"] = "Aktív MI-modell: {0} ({1})";
+        d["AiPickerActiveModelFmt"] = "MI-modell: {0}";
+        d["AiPickerNeedDownloadToast"] = "Előbb töltse le vagy importálja a(z) '{0}' modellt.";
     }
 }
