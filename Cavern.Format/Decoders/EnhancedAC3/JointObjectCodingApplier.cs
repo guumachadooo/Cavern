@@ -1,17 +1,119 @@
 using System;
 using System.Runtime.CompilerServices;
-using System.Threading;
 
 using Cavern.Filters;
+using Cavern.Filters.Interfaces;
 using Cavern.Utilities;
 
 namespace Cavern.Format.Decoders.EnhancedAC3 {
+    /// <summary>
+    /// Zero-block-latency 4-stage <c>z^-2</c> IIR Hilbert allpass phase-difference branch (Olli Niemitalo 4+4 design).
+    /// Paired reference and quadrature branches maintain exact unity magnitude and a
+    /// 90-degree phase difference (<c>&lt;= 0.70 deg</c> error across 60 Hz..23.9 kHz at 48 kHz) with zero runtime allocations.
+    /// </summary>
+    sealed class HilbertAllpassBranch : Filter, IResettableFilter {
+        const double DenormalGuard = 1e-200;
+
+        static readonly double[] BranchASquaredCoeffs = {
+            0.6923878 * 0.6923878,
+            0.9360654322959 * 0.9360654322959,
+            0.9882295226860 * 0.9882295226860,
+            0.9987488452737 * 0.9987488452737
+        };
+
+        static readonly double[] BranchBSquaredCoeffs = {
+            0.4021921162426 * 0.4021921162426,
+            0.8561710882420 * 0.8561710882420,
+            0.9722909545651 * 0.9722909545651,
+            0.9952884791278 * 0.9952884791278
+        };
+
+        readonly double[] coeffs;
+        readonly bool applyUnitDelay;
+        readonly double[] x1 = new double[4];
+        readonly double[] x2 = new double[4];
+        readonly double[] y1 = new double[4];
+        readonly double[] y2 = new double[4];
+        double delayState;
+
+        /// <summary>
+        /// Creates a Hilbert allpass network branch.
+        /// </summary>
+        /// <param name="quadratureBranch">False for 0-deg reference branch A (with 1-sample phase alignment),
+        /// true for +90-deg quadrature branch B</param>
+        public HilbertAllpassBranch(bool quadratureBranch) {
+            applyUnitDelay = !quadratureBranch;
+            coeffs = quadratureBranch ? BranchBSquaredCoeffs : BranchASquaredCoeffs;
+        }
+
+        /// <inheritdoc/>
+        public void Reset() {
+            Array.Clear(x1, 0, x1.Length);
+            Array.Clear(x2, 0, x2.Length);
+            Array.Clear(y1, 0, y1.Length);
+            Array.Clear(y2, 0, y2.Length);
+            delayState = 0.0;
+        }
+
+        /// <inheritdoc/>
+        public override void Process(float[] samples) => ProcessRange(samples, 0, 1);
+
+        /// <inheritdoc/>
+        public override void Process(float[] samples, int channel, int channels) => ProcessRange(samples, channel, channels);
+
+        /// <inheritdoc/>
+        public override object Clone() => new HilbertAllpassBranch(!applyUnitDelay);
+
+        void ProcessRange(float[] samples, int start, int step) {
+            if (samples == null || samples.Length == 0 || start < 0 || step <= 0 || start >= samples.Length) {
+                return;
+            }
+            double c0 = coeffs[0], c1 = coeffs[1], c2 = coeffs[2], c3 = coeffs[3];
+            double sx10 = x1[0], sx20 = x2[0], sy10 = y1[0], sy20 = y2[0];
+            double sx11 = x1[1], sx21 = x2[1], sy11 = y1[1], sy21 = y2[1];
+            double sx12 = x1[2], sx22 = x2[2], sy12 = y1[2], sy22 = y2[2];
+            double sx13 = x1[3], sx23 = x2[3], sy13 = y1[3], sy23 = y2[3];
+            double d = delayState;
+
+            for (int i = start; i < samples.Length; i += step) {
+                double v = samples[i];
+                double y = c0 * (sy20 - v) + sx20 + DenormalGuard;
+                sx20 = sx10; sx10 = v; sy20 = sy10; sy10 = y; v = y;
+
+                y = c1 * (sy21 - v) + sx21 + DenormalGuard;
+                sx21 = sx11; sx11 = v; sy21 = sy11; sy11 = y; v = y;
+
+                y = c2 * (sy22 - v) + sx22 + DenormalGuard;
+                sx22 = sx12; sx12 = v; sy22 = sy12; sy12 = y; v = y;
+
+                y = c3 * (sy23 - v) + sx23 + DenormalGuard;
+                sx23 = sx13; sx13 = v; sy23 = sy13; sy13 = y; v = y;
+
+                if (applyUnitDelay) {
+                    double prev = d;
+                    d = v;
+                    v = prev;
+                }
+                samples[i] = (float)v;
+            }
+
+            x1[0] = FlushDenormal(sx10); x2[0] = FlushDenormal(sx20); y1[0] = FlushDenormal(sy10); y2[0] = FlushDenormal(sy20);
+            x1[1] = FlushDenormal(sx11); x2[1] = FlushDenormal(sx21); y1[1] = FlushDenormal(sy11); y2[1] = FlushDenormal(sy21);
+            x1[2] = FlushDenormal(sx12); x2[2] = FlushDenormal(sx22); y1[2] = FlushDenormal(sy12); y2[2] = FlushDenormal(sy22);
+            x1[3] = FlushDenormal(sx13); x2[3] = FlushDenormal(sx23); y1[3] = FlushDenormal(sy13); y2[3] = FlushDenormal(sy23);
+            delayState = FlushDenormal(d);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        static double FlushDenormal(double v) => Math.Abs(v) < 1e-150 ? 0.0 : v;
+    }
+
     /// <summary>
     /// Converts a channel-based audio stream and JOC to object output samples.
     /// </summary>
     class JointObjectCodingApplier : IDisposable {
         /// <summary>
-        /// Cavern is run by a Mono runtime, use functions optimized for that.
+        /// Cavern is run by a legacy Mono runtime without hardware SIMD; prefer scalar paths when true.
         /// </summary>
         readonly bool mono;
 
@@ -36,19 +138,24 @@ namespace Cavern.Format.Decoders.EnhancedAC3 {
         readonly (float[] real, float[] imaginary)[] qmfbCache;
 
         /// <summary>
-        /// Used for waiting while started tasks work.
-        /// </summary>
-        readonly ManualResetEventSlim taskWaiter = new ManualResetEventSlim(false);
-
-        /// <summary>
         /// Recycled QMFB transform objects.
         /// </summary>
         readonly QuadratureMirrorFilterBank[] converters;
 
         /// <summary>
-        /// Applies phase shifting to the last two channels if the JOC indicates so.
+        /// Pre-allocated reference-branch Hilbert allpass filters for non-phase-shifted bed channels.
+        /// </summary>
+        readonly HilbertAllpassBranch[] referencePhaseFilters;
+
+        /// <summary>
+        /// Applies 90-degree quadrature Hilbert phase compensation to the last two channels when <see cref="JointObjectCoding.LastPairPhaseShift"/> is active.
         /// </summary>
         Filter[] phaseShift;
+
+        /// <summary>
+        /// Tracks whether <see cref="JointObjectCoding.LastPairPhaseShift"/> was active on the previous timeslot.
+        /// </summary>
+        bool lastPairPhaseShiftActive;
 
         /// <summary>
         /// Channels to objects matrix.
@@ -82,6 +189,15 @@ namespace Cavern.Format.Decoders.EnhancedAC3 {
             for (int i = 0; i < converterCount; i++) {
                 converters[i] = new QuadratureMirrorFilterBank();
             }
+
+            referencePhaseFilters = new HilbertAllpassBranch[maxChannels];
+            for (int i = 0; i < maxChannels; i++) {
+                referencePhaseFilters[i] = new HilbertAllpassBranch(false);
+            }
+            phaseShift = new Filter[] {
+                new HilbertAllpassBranch(true),
+                new HilbertAllpassBranch(true)
+            };
         }
 
         /// <summary>
@@ -93,59 +209,46 @@ namespace Cavern.Format.Decoders.EnhancedAC3 {
             }
 
             if (joc.LastPairPhaseShift) {
-                // TODO: Use a phase shifter filter when we have one with no latency
-                phaseShift ??= new Filter[] {
-                    new BypassFilter("JOC surround compensation"),
-                    new BypassFilter("JOC surround compensation")
-                };
+                if (!lastPairPhaseShiftActive) {
+                    for (int i = 0; i < referencePhaseFilters.Length; i++) {
+                        referencePhaseFilters[i].Reset();
+                    }
+                    for (int i = 0; i < phaseShift.Length; i++) {
+                        ((HilbertAllpassBranch)phaseShift[i]).Reset();
+                    }
+                    lastPairPhaseShiftActive = true;
+                }
                 int startChannel = joc.ChannelCount - 2;
+                for (int ch = 0; ch < startChannel; ch++) {
+                    referencePhaseFilters[ch].Process(input[ch]);
+                }
                 for (int ch = startChannel; ch < joc.ChannelCount; ch++) {
                     phaseShift[ch - startChannel].Process(input[ch]);
                 }
-            } else if (phaseShift != null) {
-                phaseShift = null;
+            } else if (lastPairPhaseShiftActive) {
+                lastPairPhaseShiftActive = false;
             }
 
-            // Forward transformations
-            int runs = joc.ChannelCount;
-            taskWaiter.Reset();
+            // Inline forward QMFB transformations (zero ThreadPool wakeups/allocations per 64-sample timeslot)
             for (int ch = 0; ch < joc.ChannelCount; ch++) {
-                ThreadPool.QueueUserWorkItem(channel => {
-                    int ch = (int)channel;
-                    fixed (float* pInput = input[ch]) {
-                        if (!mono) {
-                            results[ch] = converters[ch].ProcessForward(pInput);
-                        } else {
-                            results[ch] = converters[ch].ProcessForward_Mono(pInput);
-                        }
-                    }
-                    if (Interlocked.Decrement(ref runs) == 0) {
-                        taskWaiter.Set();
-                    }
-                }, ch);
+                fixed (float* pInput = input[ch]) {
+                    results[ch] = !mono
+                        ? converters[ch].ProcessForward(pInput)
+                        : converters[ch].ProcessForward_Mono(pInput);
+                }
             }
-            taskWaiter.Wait();
 
-            // Inverse transformations
+            // Inline inverse QMFB transformations
             int objects = joc.ObjectCount;
-            runs = objects;
-            taskWaiter.Reset();
             for (int obj = 0; obj < objects; obj++) {
-                ThreadPool.QueueUserWorkItem(objectIndex => {
-                    int obj = (int)objectIndex;
-                    if (CavernAmp.Available) {
-                        ProcessObject_Amp(joc, obj, mixMatrix[obj][timeslot], joc.Gain);
-                    } else if (!mono) {
-                        ProcessObject(joc, obj, mixMatrix[obj][timeslot], joc.Gain);
-                    } else {
-                        ProcessObject_Mono(joc, obj, mixMatrix[obj][timeslot], joc.Gain);
-                    }
-                    if (Interlocked.Decrement(ref runs) == 0) {
-                        taskWaiter.Set();
-                    }
-                }, obj);
+                if (CavernAmp.Available) {
+                    ProcessObject_Amp(joc, obj, mixMatrix[obj][timeslot], joc.Gain);
+                } else if (!mono) {
+                    ProcessObject(joc, obj, mixMatrix[obj][timeslot], joc.Gain);
+                } else {
+                    ProcessObject_Mono(joc, obj, mixMatrix[obj][timeslot], joc.Gain);
+                }
             }
-            taskWaiter.Wait();
 
             if (++timeslot == input.Length) {
                 timeslot = 0;
@@ -156,7 +259,7 @@ namespace Cavern.Format.Decoders.EnhancedAC3 {
         /// <summary>
         /// Free up resources used by this object.
         /// </summary>
-        public void Dispose() => taskWaiter.Dispose();
+        public void Dispose() { }
 
         /// <summary>
         /// Mixes channel-based samples by a matrix to the objects.

@@ -378,6 +378,41 @@ namespace Cavern.Spatial {
         public bool VocalChainBypassed { get; set; }
 
         /// <summary>
+        /// True when a distilled lyric mood digest timeline is driving live room and choreography FX.
+        /// </summary>
+        public bool HasActiveLyricMood { get; set; }
+
+        /// <summary>
+        /// Currently active distilled lyric mood tag (strictly enum/numeric; zero raw lyric text).
+        /// </summary>
+        public LyricMoodTag ActiveLyricMoodTag { get; set; }
+
+        /// <summary>
+        /// Normalized live lyric mood arousal in [0; 1].
+        /// </summary>
+        public float ActiveLyricMoodArousal01 { get; set; }
+
+        /// <summary>
+        /// Normalized live lyric mood valence in [0; 1].
+        /// </summary>
+        public float ActiveLyricMoodValence01 { get; set; }
+
+        /// <summary>
+        /// Active lyric-driven virtual room/ambience scale multiplier around 1.0.
+        /// </summary>
+        public float ActiveLyricRoomScale { get; set; }
+
+        /// <summary>
+        /// Normalized instantaneous spectral/transient ear-candy sparkle intensity in [0; 1].
+        /// </summary>
+        public float EarCandySparkle01 { get; set; }
+
+        /// <summary>
+        /// Number of currently active DSP micro-object ear-candy nodes in the 3D soundfield.
+        /// </summary>
+        public int EarCandyActiveNodeCount { get; set; }
+
+        /// <summary>
         /// Returns an empty telemetry snapshot.
         /// </summary>
         public static SoundfieldTelemetry Empty() {
@@ -412,7 +447,14 @@ namespace Cavern.Spatial {
                 VocalChainDeEsserReductionDb = 0f,
                 VocalChainCompressorReductionDb = 0f,
                 VocalChainSidechainDuckDb = 0f,
-                VocalChainBypassed = false
+                VocalChainBypassed = false,
+                HasActiveLyricMood = false,
+                ActiveLyricMoodTag = LyricMoodTag.Calm,
+                ActiveLyricMoodArousal01 = 0.5f,
+                ActiveLyricMoodValence01 = 0.5f,
+                ActiveLyricRoomScale = 1f,
+                EarCandySparkle01 = 0f,
+                EarCandyActiveNodeCount = 0
             };
         }
     }

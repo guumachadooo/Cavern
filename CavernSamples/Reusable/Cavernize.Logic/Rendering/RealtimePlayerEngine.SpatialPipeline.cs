@@ -480,6 +480,8 @@ public sealed partial class RealtimePlayerEngine {
         sceneHub.ConfigureStageProcessors(OutputSampleRate, decoderAdapter.Metadata);
         sceneHub.ConfigurePostProcessingStages(OutputSampleRate, 2);
         RebuildCachedActiveSourcesLocked();
+        hasMeasuredLiveSourceRms = false;
+        telemetryFramesSincePublish = int.MaxValue / 2;
         ApplyLiveChoreographyPositionsLocked(GetCurrentTrackSecondsLocked());
         UpdateSourceTelemetry();
     }
@@ -1020,6 +1022,9 @@ public sealed partial class RealtimePlayerEngine {
     }
 
     void ApplyLiveChoreographyPositionsLocked(double playbackTimeSec, bool forceRestoreWhenOff = false) {
+        LyricSpatialResponseFx lyricFx = sceneHub.EvaluateLyricFxZeroAlloc(playbackTimeSec, TotalSeconds);
+        lastBlockLyricFx = lyricFx;
+
         if (!isRenderingLiveNeuralSources || liveNeuralSources == null || liveNeuralSources.Length == 0) {
             choreoPositionsApplied = false;
             return;
@@ -1029,6 +1034,12 @@ public sealed partial class RealtimePlayerEngine {
             sceneHub.ActiveChoreoMode != SpatialChoreoMode.Off &&
             sceneHub.ActiveChoreoTrack != null;
         Vector3 envSize = Listener.EnvironmentSize;
+        Vector3 safeEnv = new(
+            MathF.Max(0.25f, envSize.X),
+            MathF.Max(0.25f, envSize.Y),
+            MathF.Max(0.25f, envSize.Z));
+        Vector3 invEnv = new(1f / safeEnv.X, 1f / safeEnv.Y, 1f / safeEnv.Z);
+        bool gateByLiveRms = hasMeasuredLiveSourceRms && IsPlaying;
         int count = Math.Min(liveNeuralSources.Length, sourceItems.Count);
         if (choreoActive) {
             for (int i = 0; i < count; i++) {
@@ -1038,9 +1049,45 @@ public sealed partial class RealtimePlayerEngine {
                     item.IsLFE || item.IsBed || item.Channel.HasValue) {
                     continue;
                 }
-                if (sceneHub.TryGetChoreoSourceWorldPositionZeroAlloc(i, playbackTimeSec, envSize, out Vector3 worldPos, Loop)) {
-                    src.Position = worldPos;
+                NeuralStemRole role = i < liveNeuralSourceRoles.Length
+                    ? liveNeuralSourceRoles[i]
+                    : NeuralStemSpatializer.ClassifyStemName(item.Name);
+                bool isAnchoredRole = role == NeuralStemRole.LeadVocal ||
+                    role == NeuralStemRole.Vocals ||
+                    role == NeuralStemRole.Bass;
+                Vector3 anchorWorld = item.DefaultNormalizedPosition * safeEnv;
+                if (isAnchoredRole && sceneHub.ActiveChoreoMode == SpatialChoreoMode.Orbit) {
+                    src.Position = anchorWorld;
+                    continue;
+                }
+                if (sceneHub.TryGetChoreoSourceWorldPositionZeroAlloc(i, playbackTimeSec, safeEnv, out Vector3 worldPos, Loop)) {
+                    float gate;
+                    if (gateByLiveRms) {
+                        gate = sceneHub.ChoreoRtGate.UpdateAndEvaluateZeroAlloc(i, item.RmsLevel, isAnchoredRole);
+                    } else if (hasMeasuredLiveSourceRms) {
+                        gate = isAnchoredRole ? 0f : sceneHub.ChoreoRtGate.GetGateZeroAlloc(i);
+                    } else {
+                        gate = isAnchoredRole ? 0f : 1f;
+                        sceneHub.ChoreoRtGate.PrimeSlotZeroAlloc(i, gate);
+                    }
+                    if (isAnchoredRole && sceneHub.ActiveChoreoMode == SpatialChoreoMode.Subtle) {
+                        gate = 0f;
+                    }
+                    Vector3 targetWorld = anchorWorld + (worldPos - anchorWorld) * (isAnchoredRole ? 0.20f : gate);
+                    if (lyricFx.HasMood && !isAnchoredRole && gate > 0.05f) {
+                        Vector3 norm = targetWorld * invEnv;
+                        float rad = Math.Clamp(norm.Length(), 0.35f, 1.0f);
+                        PsychoacousticGovernor.CartesianToSphericalDeg(norm, out float az, out float el);
+                        az *= lyricFx.StageWidthScale;
+                        el += lyricFx.ElevationLiftDeg * gate;
+                        rad = Math.Clamp(rad * lyricFx.RadiusScale, 0.35f, 1.0f);
+                        PsychoacousticGovernor.ClampRoleAngles(role, ref az, ref el, ref rad);
+                        targetWorld = (PsychoacousticGovernor.SphericalToCartesianUnit(az, el) * rad) * safeEnv;
+                    }
+                    src.Position = targetWorld;
                     choreoPositionsApplied = true;
+                } else {
+                    src.Position = anchorWorld;
                 }
             }
         } else if (choreoPositionsApplied || (forceRestoreWhenOff && isStems3D)) {

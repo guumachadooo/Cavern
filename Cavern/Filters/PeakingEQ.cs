@@ -63,13 +63,17 @@ namespace Cavern.Filters {
             wipConfig.Add($"Filter: ON PK Fc {centerFreq} Hz Gain {gain} dB Q {q}");
 
         /// <inheritdoc/>
-        protected override void Reset(float cosW0, float alpha, float _) {
-            float a = (float)Math.Pow(10, gain * .025f); // A = sqrt(gain), hence /40 instead of /20
-            float divisor = 1 / (1 + alpha / a);
-            b0 = (1 + alpha * a) * divisor;
-            b2 = (1 - alpha * a) * divisor;
-            a1 = b1 = -2 * cosW0 * divisor;
-            a2 = (1 - alpha / a) * divisor;
+        protected override void ResetCoefficients(double cosW0, double alpha, double _) {
+            double a = Math.Pow(10.0, gain * 0.025); // A = sqrt(gain), hence /40 instead of /20
+            double invA = 1.0 / a;
+            double divisor = 1.0 / (1.0 + alpha * invA);
+            double a1Val = -2.0 * cosW0 * divisor;
+            SetCoefficients(
+                (1.0 + alpha * a) * divisor,
+                a1Val,
+                (1.0 - alpha * a) * divisor,
+                a1Val,
+                (1.0 - alpha * invA) * divisor);
         }
     }
 }

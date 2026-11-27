@@ -517,6 +517,32 @@ public partial class MainActivity {
                     readyTrack = newDecodedTrueHD;
                 }
 
+                bool sameSong = prevMetaSnap != null &&
+                    (string.Equals(prevTitle, meta?.Title, StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(meta?.Title));
+                double liveSec = (wasPlaying && playerEngine.IsPlaying)
+                    ? playerEngine.CurrentSeconds
+                    : (wasPlaying ? baseSec + (SystemClock.ElapsedRealtime() - startElapsedMs) / 1000.0 : baseSec);
+                bool swapped = false;
+                if (!uiDestroyed && myGen == variantSwitchGeneration && readyTrack.Supported && readyTrack.Codec != Codec.TrueHD) {
+                    try {
+                        RecordActiveTrackMeasuredLoudnessIfValid();
+                        double crossOffset = ComputeCrossVariantNeuralOffsetSamples(readyTrack, meta?.SourceMediaPath ?? targetPath, out double crossDriftPpm);
+                        playerEngine.HotSwapTrackSeamless(
+                            readyTrack,
+                            liveSec,
+                            upmixingSettings,
+                            renderingSettings,
+                            preserveNeuralStems: sameSong,
+                            neuralReferenceOffset: crossOffset,
+                            neuralReferenceDriftPpm: crossDriftPpm);
+                        PrimeEngineLoudnessForPath(meta?.SourceMediaPath ?? targetPath, meta);
+                        swapped = true;
+                    } catch (Exception swapEx) {
+                        AppLogger.Warn($"HotSwapTrackSeamless fallback: {swapEx.Message}");
+                        swapped = false;
+                    }
+                }
+
                 RunOnUiThread(() => {
                     if (uiDestroyed || myGen != variantSwitchGeneration || readyTrack == null) {
                         newDecodedTrueHD?.Dispose();
@@ -527,8 +553,6 @@ public partial class MainActivity {
                     }
 
                     // Preserve high-res artwork & synced lyrics from current song to prevent visual flash
-                    bool sameSong = prevMetaSnap != null &&
-                        (string.Equals(prevTitle, meta?.Title, StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(meta?.Title));
                     if (meta != null && sameSong) {
                         if (!meta.HasEmbeddedArtwork && IsBitmapUsable(prevMetaSnap.ArtworkBitmap)) {
                             meta.ArtworkBitmap = prevMetaSnap.ArtworkBitmap;
@@ -544,36 +568,10 @@ public partial class MainActivity {
                         if (string.IsNullOrWhiteSpace(meta.Album)) meta.Album = prevMetaSnap.Album;
                     }
 
-                    // Exact real-time elapsed timestamp so playback NEVER jumps backward
-                    double liveSec = (wasPlaying && playerEngine.IsPlaying)
-                        ? playerEngine.CurrentSeconds
-                        : (wasPlaying ? baseSec + (SystemClock.ElapsedRealtime() - startElapsedMs) / 1000.0 : baseSec);
-
                     AudioFile oldFile = LoadedFile;
                     ExternalDecodedTrack oldDecoded = decodedTrueHDTrack;
                     string oldTrueHDSession = activeTrueHDSessionDir;
                     string oldFallback = activeFallbackSessionDir;
-
-                    bool swapped = false;
-                    if (readyTrack.Supported && readyTrack.Codec != Codec.TrueHD) {
-                        try {
-                            RecordActiveTrackMeasuredLoudnessIfValid();
-                            double crossOffset = ComputeCrossVariantNeuralOffsetSamples(readyTrack, meta?.SourceMediaPath ?? targetPath, out double crossDriftPpm);
-                            playerEngine.HotSwapTrackSeamless(
-                                readyTrack,
-                                liveSec,
-                                upmixingSettings,
-                                renderingSettings,
-                                preserveNeuralStems: sameSong,
-                                neuralReferenceOffset: crossOffset,
-                                neuralReferenceDriftPpm: crossDriftPpm);
-                            PrimeEngineLoudnessForPath(meta?.SourceMediaPath ?? targetPath, meta);
-                            swapped = true;
-                        } catch (Exception swapEx) {
-                            AppLogger.Warn($"HotSwapTrackSeamless fallback: {swapEx.Message}");
-                            swapped = false;
-                        }
-                    }
 
                     if (!swapped) {
                         // Safe fallback if seamless swap couldn't initialize
@@ -593,6 +591,7 @@ public partial class MainActivity {
                     activeFallbackSessionDir = newFallbackDir;
                     currentMediaMeta = meta;
                     currentMediaUri = targetVariant.ContentUri;
+                    SyncTrackLyricsMoodToEngine();
                     SetLiveTrackSourceItems();
 
                     // Keep current stage mode (Cover or Lyrics) intact without flashing
@@ -938,91 +937,12 @@ public partial class MainActivity {
             return;
         }
 
-        BindActiveTrackToUiAndPlayer(selectedTrack);
-        if (shouldAutoPlay && selectedTrack.Supported && !(playerEngine?.IsPlaying ?? false)) {
-            TogglePlayPause();
-        }
+        // Bind track & offload HotSwapTrackSeamless off UI thread so Atmos/FLAC/Opus switching causes 0 freezes
+        BindActiveTrackToUiAndPlayer(selectedTrack, autoPlayAfter: shouldAutoPlay && selectedTrack.Supported && !(playerEngine?.IsPlaying ?? false));
     }
 
-    void BindActiveTrackToUiAndPlayer(CavernizeTrack activeTrack) {
-        if (activeTrack == null) {
-            return;
-        }
-        string activeSourcePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
-        if (!string.Equals(activeSourcePath, lastRecordedTrackSourcePath, StringComparison.OrdinalIgnoreCase)) {
-            StopStudioPerformanceRecording(autoSelectInExport: false);
-            playerEngine?.SetPerformancePreviewTake(null, enabled: false);
-            playerEngine?.LiveMicBridge?.ClearRecordedPerformance();
-            if (store != null && store.StudioOptPerformance) {
-                store.StudioOptPerformance = false;
-                if (studioOptPerformanceSwitch != null && studioOptPerformanceSwitch.Checked) {
-                    studioOptPerformanceSwitch.Checked = false;
-                }
-            }
-            lastRecordedTrackSourcePath = activeSourcePath;
-            RefreshStudioW12ContextUi();
-        }
-        AppLogger.Info($"Active track ready: {activeTrack.FormatHeader}");
-        string details = string.Join(" | ", activeTrack.Details.Select(d => $"{d.property}: {d.value}"));
-        SetWorkspaceSummaryText($"{activeTrack.FormatHeader}\n{details}");
-        RebuildInlineTrackList();
-
-        if (activeTrack.Supported && activeTrack.Codec != Codec.TrueHD) {
-            try {
-                RecordActiveTrackMeasuredLoudnessIfValid();
-                playerEngine.Load(activeTrack, upmixingSettings, renderingSettings);
-                PrimeEngineLoudnessForPath(activeSourcePath, currentMediaMeta);
-                SetLiveTrackSourceItems();
-            } catch (Exception ex) {
-                AppLogger.Error("PlayerEngine.Load", ex);
-                SetFallbackTrackSourceItems(TrackSourceItem.BuildFromTrack(activeTrack));
-                ShowError(ex.Message);
-            }
-        } else {
-            SetFallbackTrackSourceItems(TrackSourceItem.BuildFromTrack(activeTrack));
-        }
-
-        double initialSeekSec = 0;
-        if (pendingSeekAfterLoadSeconds >= 0 && activeTrack.Supported && activeTrack.Codec != Codec.TrueHD && playerEngine.TotalSeconds > 0) {
-            initialSeekSec = Math.Clamp(pendingSeekAfterLoadSeconds, 0, Math.Max(0, playerEngine.TotalSeconds - 0.1));
-            pendingSeekAfterLoadSeconds = -1;
-            playerEngine.Seek(initialSeekSec);
-            musicVideoStage?.SeekTo(initialSeekSec);
-        } else {
-            pendingSeekAfterLoadSeconds = -1;
-        }
-
-        string metaTitle = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
-            ? currentMediaMeta.Title
-            : (LoadedFile != null ? Path.GetFileNameWithoutExtension(LoadedFile.Path) : "Cavernize 3D");
-        string metaArtist = !string.IsNullOrWhiteSpace(currentMediaMeta?.Artist)
-            ? currentMediaMeta.Artist
-            : $"Cavernize 3D • {activeTrack.FormatHeader}";
-        string metaAlbum = !string.IsNullOrWhiteSpace(currentMediaMeta?.Album)
-            ? currentMediaMeta.Album
-            : activeTrack.FormatHeader;
-
-        mediaNotification?.UpdateMetadata(
-            metaTitle,
-            metaArtist,
-            metaAlbum,
-            playerEngine.TotalSeconds,
-            currentMediaMeta?.ArtworkBitmap);
-
-        RefreshPlayerSourcesList();
-        RefreshMusicPlayerUi();
-        RefreshExtractorChecklist();
-        RefreshConverterTrackInfo();
-        RefreshContainerOptions();
-        SyncPlaybackUi(false, initialSeekSec, playerEngine.TotalSeconds);
-        UpdateRoomCanvas();
-        playerEngine?.VocalMixMatchStage?.ApplySongDna(Cavern.VocalChain.VocalMixDnaProfile.CreateStudioDefault());
-        // W51.5: Stagger heavy background scans so the first ~3s of playback have 100% uninterrupted RT CPU headroom
-        StartLosslessTwinDiscoveryAsync(activeTrack, startupDelayMs: 1400);
-        TryLoadCachedSongVocalDnaAsync(activeTrack, startupDelayMs: 300);
-        TryAutoBindCachedNeuralStemsAsync(activeTrack, startupDelayMs: 450);
-        ScheduleNextTrackLoudnessPreScan(activeSourcePath);
-        RefreshNeuralPrepUi();
+    void BindActiveTrackToUiAndPlayer(CavernizeTrack activeTrack, bool autoPlayAfter = false) {
+        BindActiveTrackToUiAndPlayerOffUi(activeTrack, autoPlayAfter);
     }
 
     string lastLoudnessMeasuredPath = "";

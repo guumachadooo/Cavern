@@ -76,10 +76,10 @@ namespace Cavern.Filters {
         public override void ExportToEqualizerAPO(List<string> wipConfig) => wipConfig.Add($"Filter: ON NO Fc {centerFreq} Hz Q {q}");
 
         /// <inheritdoc/>
-        protected override void Reset(float cosW0, float alpha, float divisor) {
-            b0 = (float)Math.Pow(10, gain * .025f) * divisor;
-            a1 = b1 = -2 * cosW0 * (b2 = divisor);
-            a2 = (1 - alpha) * divisor;
+        protected override void ResetCoefficients(double cosW0, double alpha, double divisor) {
+            double b0Val = (gain == 0.0 ? 1.0 : Math.Pow(10.0, gain * 0.025)) * divisor;
+            double a1Val = -2.0 * cosW0 * divisor;
+            SetCoefficients(b0Val, a1Val, divisor, a1Val, (1.0 - alpha) * divisor);
         }
     }
 }

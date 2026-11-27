@@ -26,7 +26,7 @@ namespace CavernizeAndroid.Views;
 ///   Left: Articulated 3D Head Trackball with attitude horizon ring for free Yaw &amp; Pitch steering
 ///   Right: One UI 9 vertical capsule elevation slider for Listener Height (Y)
 /// </summary>
-public sealed class RoomSimulatorView : View {
+public sealed partial class RoomSimulatorView : View {
     /// <summary>
     /// When false (default), dragging the 3D room rotates the room directly with finger motion
     /// (natural turntable manipulation). When true, uses classic inverted camera-orbit drag.
@@ -329,17 +329,6 @@ public sealed class RoomSimulatorView : View {
         }
 
         PostInvalidateOnAnimation();
-    }
-
-    /// <summary>
-    /// Synchronizes live W13 3D spherical X-Ray powermap and soundfield telemetry for overlay rendering.
-    /// </summary>
-    public void UpdateXRayState(SpatialXRayPowermap powermap, SoundfieldTelemetry telemetry) {
-        xrayPowermap = powermap;
-        xrayTelemetry = telemetry;
-        if (IsXRayEnabled) {
-            PostInvalidateOnAnimation();
-        }
     }
 
     public void AnimateToCameraPreset(float yawDeg, float pitchDeg) {
@@ -1088,6 +1077,8 @@ public sealed class RoomSimulatorView : View {
                 }
             }
         }
+
+        anyInterpolating |= DrawEarCandyOverlay(canvas, r, dt, nowMs, camYawRad, camPitchRad, dp);
 
         if (!IsPositionLocked && HasAnyCustomPinnedSource()) {
             string resetText = $"↺ {AndroidStrings.Active["RoomResetBtn"]}";
@@ -1995,100 +1986,5 @@ public sealed class RoomSimulatorView : View {
             if (sources[i].HasCustomPosition) return true;
         }
         return false;
-    }
-
-    void RequestSourcePositionReset(TrackSourceItem item) {
-        if (item == null) return;
-        item.ResetPosition();
-        if (smoothedStates.TryGetValue(GetSourceStateKey(item), out SmoothedSourceState st)) {
-            st.SmoothedPos = item.NormalizedPosition;
-            st.LastRawPos = item.NormalizedPosition;
-            st.TrailCount = 0;
-            st.TrailHead = 0;
-            st.WasCustomPosition = false;
-            if (item.HasDynamicTrajectory) {
-                st.Initialized = false;
-            }
-        }
-        SourcePositionResetRequested?.Invoke(item);
-        Invalidate();
-    }
-
-    void ResetAllPinnedSources() {
-        for (int i = 0; i < sources.Count; i++) {
-            if (sources[i].HasCustomPosition) {
-                RequestSourcePositionReset(sources[i]);
-            }
-        }
-    }
-
-    void UpdateDraggedSourceFromRoomTouch(TrackSourceItem item, float tx, float ty, float prevX, float prevY) {
-        if (item == null || roomCanvasRect.Width() <= 0 || roomCanvasRect.Height() <= 0) return;
-        Vector3 cur = item.HasCustomPosition ? item.CustomNormalizedPosition : item.NormalizedPosition;
-        Vector3 next = ProjectScreenDeltaToRoom(cur, tx - prevX, ty - prevY);
-        item.HasCustomPosition = true;
-        item.CustomNormalizedPosition = next;
-        item.NormalizedPosition = next;
-        if (smoothedStates.TryGetValue(GetSourceStateKey(item), out SmoothedSourceState st)) {
-            st.SmoothedPos = next;
-            st.LastRawPos = next;
-            st.WasCustomPosition = true;
-        }
-        SourcePositionDragged?.Invoke(item, next);
-        Invalidate();
-    }
-
-    void UpdateHeightFromCapsuleTouch(float ty) {
-        float pad = dockHeightCapsuleRect.Width() * 0.35f;
-        float top = dockHeightCapsuleRect.Top + pad;
-        float bot = dockHeightCapsuleRect.Bottom - pad;
-        float h = Math.Max(12f, bot - top);
-        float frac = Math.Clamp((ty - top) / h, 0f, 1f);
-        float ny = 1f - frac * 2f;
-        listenerPosition = new Vector3(listenerPosition.X, ny * environmentSize.Y, listenerPosition.Z);
-        ListenerPositionChanged?.Invoke(listenerPosition);
-        Invalidate();
-    }
-
-    void UpdateListenerFromRoomTouch(float tx, float ty, float prevX, float prevY) {
-        if (roomCanvasRect.Width() <= 0 || roomCanvasRect.Height() <= 0) return;
-        float ex = Math.Max(0.25f, environmentSize.X);
-        float ey = Math.Max(0.25f, environmentSize.Y);
-        float ez = Math.Max(0.25f, environmentSize.Z);
-        Vector3 curNorm = new(
-            Math.Clamp(listenerPosition.X / ex, -1f, 1f),
-            Math.Clamp(listenerPosition.Y / ey, -1f, 1f),
-            Math.Clamp(listenerPosition.Z / ez, -1f, 1f));
-        Vector3 nextNorm = ProjectScreenDeltaToRoom(curNorm, tx - prevX, ty - prevY);
-        listenerPosition = new Vector3(nextNorm.X * ex, nextNorm.Y * ey, nextNorm.Z * ez);
-        ListenerPositionChanged?.Invoke(listenerPosition);
-        Invalidate();
-    }
-
-    TrackSourceItem FindNearestSource(float tx, float ty, float maxRadiusPx) {
-        TrackSourceItem best = null;
-        float bestDistSq = maxRadiusPx * maxRadiusPx;
-        for (int i = 0; i < hitTargets.Count; i++) {
-            var (item, sx, sy) = hitTargets[i];
-            float d2 = (tx - sx) * (tx - sx) + (ty - sy) * (ty - sy);
-            if (d2 <= bestDistSq) {
-                bestDistSq = d2;
-                best = item;
-            }
-        }
-        return best;
-    }
-
-    static float PointerDist(MotionEvent e) {
-        if (e == null || e.PointerCount < 2) return 0f;
-        float dx = e.GetX(0) - e.GetX(1);
-        float dy = e.GetY(0) - e.GetY(1);
-        return MathF.Sqrt(dx * dx + dy * dy);
-    }
-
-    static float NormalizeDeg(float deg) {
-        while (deg > 180f) deg -= 360f;
-        while (deg < -180f) deg += 360f;
-        return deg;
     }
 }

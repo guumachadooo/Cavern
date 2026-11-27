@@ -968,25 +968,7 @@ public partial class MainActivity {
     }
 
     void ReattachPlayerTrack() {
-        if (playerEngine == null) {
-            return;
-        }
-        CavernizeTrack active = GetActiveTrack();
-        if (active != null && active.Supported && active.Codec != Codec.TrueHD) {
-            bool wasPlaying = playerEngine.IsPlaying;
-            double sec = playerEngine.CurrentSeconds;
-            playerEngine.Load(active, upmixingSettings, renderingSettings);
-            if (sec > 0) {
-                playerEngine.Seek(sec);
-            }
-            SetLiveTrackSourceItems();
-            RefreshPlayerSourcesList();
-            RefreshExtractorChecklist();
-            UpdateRoomCanvas();
-            if (wasPlaying) {
-                playerEngine.IsPlaying = true;
-            }
-        }
+        ReattachPlayerTrackV42();
     }
 
     static void SyncSlider(OneUiSeekBar bar, int value, int min, int max, string suffix, string overrideValueText = null) {

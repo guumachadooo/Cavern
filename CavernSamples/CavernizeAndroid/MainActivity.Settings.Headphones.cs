@@ -778,7 +778,7 @@ public partial class MainActivity {
             } else if (store.AutoEqEnabled && dev != null && !dev.IsHeadphoneRoute) {
                 settingsAutoEqSubText.Text = string.Format(S["AutoEqBypassedSpeakerSub"], dev.DisplayName);
             } else {
-                int total = AutoEqService.GetTotalCatalogCount(this);
+                int total = AutoEqService.CachedCatalogCount;
                 settingsAutoEqSubText.Text = string.Format(S["AutoEqCatalogCountSub"], total);
             }
         }

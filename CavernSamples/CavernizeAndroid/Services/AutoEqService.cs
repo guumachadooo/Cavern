@@ -36,7 +36,13 @@ public static class AutoEqService {
     static List<AutoEqHeadphoneProfile> bundledList;
     static List<AutoEqCatalogEntry> catalogEntries;
     static Dictionary<string, AutoEqCatalogEntry> catalogById;
-    static bool assetsLoaded;
+    static volatile bool assetsLoaded;
+
+    /// <summary>True once the bundled and 8,850-model AutoEq databases have finished warming up off-UI.</summary>
+    public static bool IsLoaded => assetsLoaded;
+
+    /// <summary>Non-blocking count of indexed AutoEq headphone models (falls back to 8,850 until warmup completes).</summary>
+    public static int CachedCatalogCount => catalogEntries?.Count ?? 8850;
 
     static readonly HashSet<string> GenericDeviceStopWords = new(StringComparer.OrdinalIgnoreCase) {
         "audio", "bluetooth", "bt", "device", "earbuds", "earphone", "earphones",

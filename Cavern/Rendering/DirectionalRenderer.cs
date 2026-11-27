@@ -10,53 +10,230 @@ namespace Cavern.Rendering {
     /// </summary>
     public class DirectionalRenderer : SourceRenderer {
         /// <summary>
-        /// Angle match calculations.
+        /// When true, uses ITU-R BS.2127 3D triplet / 2D pair Vector Base Amplitude Panning (VBAP) instead of
+        /// Cavern's default directional power-law matching. Defaults to false for exact legacy parity.
+        /// </summary>
+        public bool UseBs2127Vbap { get; set; }
+
+        /// <summary>
+        /// Thread-local scratch buffer eliminating per-block channel gain array allocations while preserving thread safety.
+        /// </summary>
+        [ThreadStatic]
+        static float[] angleMatchScratch;
+
+        /// <summary>
+        /// Retrieve or grow the thread-local scratch buffer for channel gain calculations.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static float[] CalculateAngleMatches(int channels, Vector3 direction) {
-            float[] angleMatches = new float[channels];
-            float dirMagnitudeRecip = 1f / (direction.Length() + .0001f);
-            for (int channel = 0; channel < channels; channel++) {
-                Channel currentChannel = Listener.Channels[channel];
-                if (!currentChannel.LFE) {
-                    float sample = MathF.PI - MathF.Acos(Vector3.Dot(direction, currentChannel.SphericalPos) * dirMagnitudeRecip);
-                    sample *= sample;
-                    sample *= sample;
-                    angleMatches[channel] = sample * sample; // Angle match modifier function is x^8
-                }
+        static float[] GetAngleMatchScratch(int channels) {
+            float[] scratch = angleMatchScratch;
+            if (scratch == null || scratch.Length < channels) {
+                scratch = new float[channels];
+                angleMatchScratch = scratch;
             }
-            if (Listener.EnvironmentType == Environments.Theatre) {
-                for (int channel = 0; channel < channels; channel++) {
-                    angleMatches[channel] *= angleMatches[channel]; // Theatre angle match modifier function is x^16
-                }
-            }
-            return angleMatches;
+            return scratch;
         }
 
         /// <summary>
-        /// Linearized <see cref="CalculateAngleMatches(int, Vector3)"/>:
-        /// pi / 2 - pi / 2 * x, angle match: pi - (lin acos) = pi / 2 + pi / 2 * x.
+        /// Angle match calculations (exact <see cref="MathF.Acos"/> or linearized fast mode) into <paramref name="angleMatches"/>.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        static float[] LinearizeAngleMatches(int channels, Vector3 direction) {
-            float[] angleMatches = new float[channels];
+        static void CalculateAngleMatches(Channel[] channels, float[] angleMatches, Vector3 direction, bool linearize) {
             float dirMagnitudeRecip = 1f / (direction.Length() + .0001f);
-            for (int channel = 0; channel < channels; channel++) {
-                Channel currentChannel = Listener.Channels[channel];
+            bool theatre = Listener.EnvironmentType == Environments.Theatre;
+            for (int channel = 0; channel < channels.Length; channel++) {
+                Channel currentChannel = channels[channel];
                 if (!currentChannel.LFE) {
-                    float sample = 1.570796326f +
-                        1.570796326f * Vector3.Dot(direction, currentChannel.SphericalPos) * dirMagnitudeRecip;
+                    float dot = Vector3.Dot(direction, currentChannel.SphericalPos) * dirMagnitudeRecip;
+                    float sample = linearize
+                        ? 1.570796326f + 1.570796326f * dot
+                        : MathF.PI - MathF.Acos(Math.Clamp(dot, -1f, 1f));
                     sample *= sample;
                     sample *= sample;
-                    angleMatches[channel] = sample * sample; // Angle match modifier function is x^8
+                    sample *= sample; // Angle match modifier function is x^8
+                    if (theatre) {
+                        sample *= sample; // Theatre angle match modifier function is x^16
+                    }
+                    angleMatches[channel] = sample;
+                } else {
+                    angleMatches[channel] = 0f;
                 }
             }
-            if (Listener.EnvironmentType == Environments.Theatre) {
-                for (int channel = 0; channel < channels; channel++) {
-                    angleMatches[channel] *= angleMatches[channel]; // Theatre angle match modifier function is x^16
+        }
+
+        /// <summary>
+        /// ITU-R BS.2127 3D triplet / 2D pair Vector Base Amplitude Panning (VBAP) into <paramref name="angleMatches"/>.
+        /// </summary>
+        static void CalculateBs2127Vbap(Channel[] channels, float[] angleMatches, Vector3 direction) {
+            int count = channels.Length;
+            Array.Clear(angleMatches, 0, count);
+
+            int nonLfeCount = 0;
+            int singleIdx = -1;
+            for (int i = 0; i < count; i++) {
+                if (!channels[i].LFE) {
+                    nonLfeCount++;
+                    singleIdx = i;
                 }
             }
-            return angleMatches;
+            if (nonLfeCount == 0) {
+                return;
+            }
+            if (nonLfeCount == 1) {
+                angleMatches[singleIdx] = 1f;
+                return;
+            }
+
+            float dirLen = direction.Length();
+            if (dirLen <= 1e-6f) {
+                float uniform = 1f / MathF.Sqrt(nonLfeCount);
+                for (int i = 0; i < count; i++) {
+                    if (!channels[i].LFE) {
+                        angleMatches[i] = uniform;
+                    }
+                }
+                return;
+            }
+
+            Vector3 u = direction / dirLen;
+            for (int i = 0; i < count; i++) {
+                if (!channels[i].LFE && Vector3.Dot(u, channels[i].SphericalPos) >= 0.99999f) {
+                    angleMatches[i] = 1f;
+                    return;
+                }
+            }
+
+            // 3D triplet search (Pulkki 1997 / ITU-R BS.2127)
+            int bestI = -1, bestJ = -1, bestK = -1;
+            float bestWA = 0f, bestWB = 0f, bestWC = 0f;
+            float bestScore = float.NegativeInfinity;
+
+            for (int i = 0; i < count - 2; i++) {
+                if (channels[i].LFE) {
+                    continue;
+                }
+                Vector3 a = channels[i].SphericalPos;
+                float ua = Vector3.Dot(u, a);
+                for (int j = i + 1; j < count - 1; j++) {
+                    if (channels[j].LFE) {
+                        continue;
+                    }
+                    Vector3 b = channels[j].SphericalPos;
+                    float ub = Vector3.Dot(u, b);
+                    for (int k = j + 1; k < count; k++) {
+                        if (channels[k].LFE) {
+                            continue;
+                        }
+                        Vector3 c = channels[k].SphericalPos;
+                        Vector3 bc = Vector3.Cross(b, c);
+                        float det = Vector3.Dot(a, bc);
+                        if (Math.Abs(det) <= 1e-4f) {
+                            continue;
+                        }
+                        float invDet = 1f / det;
+                        float wA = Vector3.Dot(u, bc) * invDet;
+                        float wB = Vector3.Dot(a, Vector3.Cross(u, c)) * invDet;
+                        float wC = Vector3.Dot(a, Vector3.Cross(b, u)) * invDet;
+                        if (wA >= -1e-4f && wB >= -1e-4f && wC >= -1e-4f) {
+                            float uc = Vector3.Dot(u, c);
+                            float minDot = Math.Min(ua, Math.Min(ub, uc));
+                            float score = minDot + 0.01f * (ua + ub + uc);
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestI = i;
+                                bestJ = j;
+                                bestK = k;
+                                bestWA = Math.Max(0f, wA);
+                                bestWB = Math.Max(0f, wB);
+                                bestWC = Math.Max(0f, wC);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (bestI >= 0) {
+                float norm = MathF.Sqrt(bestWA * bestWA + bestWB * bestWB + bestWC * bestWC);
+                if (norm > 1e-6f) {
+                    float invNorm = 1f / norm;
+                    angleMatches[bestI] = bestWA * invNorm;
+                    angleMatches[bestJ] = bestWB * invNorm;
+                    angleMatches[bestK] = bestWC * invNorm;
+                    return;
+                }
+            }
+
+            // 2D pair VBAP fallback (planar layouts or outside 3D hull)
+            bestI = -1;
+            bestJ = -1;
+            bestScore = float.NegativeInfinity;
+            for (int i = 0; i < count - 1; i++) {
+                if (channels[i].LFE) {
+                    continue;
+                }
+                Vector3 a = channels[i].SphericalPos;
+                float ua = Vector3.Dot(u, a);
+                for (int j = i + 1; j < count; j++) {
+                    if (channels[j].LFE) {
+                        continue;
+                    }
+                    Vector3 b = channels[j].SphericalPos;
+                    float ab = Vector3.Dot(a, b);
+                    float det2 = 1f - ab * ab;
+                    if (det2 <= 1e-4f) {
+                        continue;
+                    }
+                    float ub = Vector3.Dot(u, b);
+                    float wA = (ua - ab * ub) / det2;
+                    float wB = (ub - ab * ua) / det2;
+                    if (wA >= -1e-4f && wB >= -1e-4f && (wA * ua + wB * ub) > 0f) {
+                        float score = Math.Min(ua, ub) + 0.01f * (ua + ub);
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestI = i;
+                            bestJ = j;
+                            bestWA = Math.Max(0f, wA);
+                            bestWB = Math.Max(0f, wB);
+                        }
+                    }
+                }
+            }
+
+            if (bestI >= 0) {
+                float norm = MathF.Sqrt(bestWA * bestWA + bestWB * bestWB);
+                if (norm > 1e-6f) {
+                    float invNorm = 1f / norm;
+                    angleMatches[bestI] = bestWA * invNorm;
+                    angleMatches[bestJ] = bestWB * invNorm;
+                    return;
+                }
+            }
+
+            // Nearest speaker fallback (symmetric tie split)
+            float maxDot = float.NegativeInfinity;
+            for (int i = 0; i < count; i++) {
+                if (!channels[i].LFE) {
+                    float d = Vector3.Dot(u, channels[i].SphericalPos);
+                    if (d > maxDot) {
+                        maxDot = d;
+                    }
+                }
+            }
+            int ties = 0;
+            for (int i = 0; i < count; i++) {
+                if (!channels[i].LFE && maxDot - Vector3.Dot(u, channels[i].SphericalPos) <= 1e-4f) {
+                    angleMatches[i] = 1f;
+                    ties++;
+                }
+            }
+            if (ties > 1) {
+                float tieGain = 1f / MathF.Sqrt(ties);
+                for (int i = 0; i < count; i++) {
+                    if (angleMatches[i] != 0f) {
+                        angleMatches[i] = tieGain;
+                    }
+                }
+            }
         }
 
         /// <inheritdoc/>
@@ -68,30 +245,45 @@ namespace Cavern.Rendering {
                 }
             }
 
-            // Angle match calculations
-            float[] angleMatches;
+            // Angle match calculations (zero-alloc reusable scratch)
             Channel[] channels = Listener.Channels;
-            if (listener.AudioQuality >= QualityModes.High) {
-                angleMatches = CalculateAngleMatches(channels.Length, direction);
+            float[] angleMatches = GetAngleMatchScratch(channels.Length);
+            if (UseBs2127Vbap) {
+                CalculateBs2127Vbap(channels, angleMatches, direction);
             } else {
-                angleMatches = LinearizeAngleMatches(channels.Length, direction);
+                CalculateAngleMatches(channels, angleMatches, direction, listener.AudioQuality < QualityModes.High);
             }
 
             // Object size extension
             if (source.Size != 0) {
-                float maxAngleMatch = angleMatches[0];
-                for (int channel = 1; channel < channels.Length; channel++) {
-                    if (maxAngleMatch < angleMatches[channel]) {
-                        maxAngleMatch = angleMatches[channel];
+                if (UseBs2127Vbap) {
+                    int nonLfeCount = 0;
+                    for (int channel = 0; channel < channels.Length; channel++) {
+                        if (!channels[channel].LFE) {
+                            nonLfeCount++;
+                        }
                     }
-                }
-                for (int channel = 0; channel < channels.Length; channel++) {
-                    angleMatches[channel] = QMath.Lerp(angleMatches[channel], maxAngleMatch, source.Size);
+                    float uniform = nonLfeCount > 0 ? 1f / MathF.Sqrt(nonLfeCount) : 0f;
+                    for (int channel = 0; channel < channels.Length; channel++) {
+                        if (!channels[channel].LFE) {
+                            angleMatches[channel] = QMath.Lerp(angleMatches[channel], uniform, source.Size);
+                        }
+                    }
+                } else {
+                    float maxAngleMatch = angleMatches[0];
+                    for (int channel = 1; channel < channels.Length; channel++) {
+                        if (maxAngleMatch < angleMatches[channel]) {
+                            maxAngleMatch = angleMatches[channel];
+                        }
+                    }
+                    for (int channel = 0; channel < channels.Length; channel++) {
+                        angleMatches[channel] = QMath.Lerp(angleMatches[channel], maxAngleMatch, source.Size);
+                    }
                 }
             }
 
-            // Only use the closest 3 speakers on non-Perfect qualities or in Theatre mode
-            if (listener.AudioQuality != QualityModes.Perfect || Listener.EnvironmentType == Environments.Theatre) {
+            // Only use the closest 3 speakers on non-Perfect qualities or in Theatre mode (legacy directional mode)
+            if (!UseBs2127Vbap && (listener.AudioQuality != QualityModes.Perfect || Listener.EnvironmentType == Environments.Theatre)) {
                 float top0 = 0, top1 = 0, top2 = 0;
                 for (int channel = 0; channel < channels.Length; channel++) {
                     if (!channels[channel].LFE) {
@@ -119,6 +311,9 @@ namespace Cavern.Rendering {
                 totalAngleMatch += angleMatches[channel] * angleMatches[channel];
             }
             totalAngleMatch = MathF.Sqrt(totalAngleMatch);
+            if (totalAngleMatch <= 1e-12f) {
+                return;
+            }
 
             // Place in sphere, write data to output channels
             float gain3D = gain / totalAngleMatch;

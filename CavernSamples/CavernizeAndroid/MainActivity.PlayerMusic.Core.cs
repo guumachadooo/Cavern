@@ -899,6 +899,7 @@ public partial class MainActivity {
                 RefreshPersonalizationUi();
                 RefreshAutoEqUi();
                 refreshBentoTilesUi?.Invoke();
+                RefreshSpatialChoreoClarifierUi();
                 RefreshMusicPlayerControlsUi();
             });
         musicBottomSpatialBtn.LongClick += (_, e) => {

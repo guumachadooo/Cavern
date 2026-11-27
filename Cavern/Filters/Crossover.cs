@@ -41,8 +41,8 @@ namespace Cavern.Filters {
         /// <summary>
         /// Number of filters per pass.
         /// </summary>
-        /// <remarks>A value of 2 is recommended for notch prevention when mixing
-        /// <see cref="LowOutput"/> and <see cref="HighOutput"/> back together.</remarks>
+        /// <remarks>A value of 2 configures a 4th-order Linkwitz-Riley (LR4) crossover with in-phase flat summation;
+        /// all orders configure exact Linkwitz-Riley Q factors and polarity alignment.</remarks>
         [DisplayName("Order")]
         public int Order {
             get => lowpasses.Length;
@@ -70,14 +70,40 @@ namespace Cavern.Filters {
         Highpass[] highpasses;
 
         /// <summary>
-        /// Create filters for each pass.
+        /// True for odd half-orders (e.g. LR2, LR6) where highpass polarity inversion aligns phases for flat sum.
+        /// </summary>
+        bool invertHighOutput;
+
+        /// <summary>
+        /// Create Linkwitz-Riley cascaded filters with exact Butterworth Q placement and phase alignment.
         /// </summary>
         void RecreateFilters(double frequency, int order) {
+            if (order < 1) {
+                throw new ArgumentOutOfRangeException(nameof(order), "Crossover order must be at least 1.");
+            }
+
             lowpasses = new Lowpass[order];
             highpasses = new Highpass[order];
-            for (int i = 0; i < order; i++) {
-                lowpasses[i] = new Lowpass(SampleRate, frequency);
-                highpasses[i] = new Highpass(SampleRate, frequency);
+            invertHighOutput = (order & 1) != 0;
+
+            int idx = 0;
+            if (invertHighOutput) {
+                lowpasses[idx] = new Lowpass(SampleRate, frequency, 0.5);
+                highpasses[idx] = new Highpass(SampleRate, frequency, 0.5);
+                idx++;
+            }
+
+            int pairCount = order >> 1;
+            for (int k = 0; k < pairCount; k++) {
+                double angle = invertHighOutput
+                    ? (k + 1) * Math.PI / order
+                    : (2 * k + 1) * Math.PI / (2.0 * order);
+                double sectionQ = 1.0 / (2.0 * Math.Cos(angle));
+                for (int copy = 0; copy < 2; copy++) {
+                    lowpasses[idx] = new Lowpass(SampleRate, frequency, sectionQ);
+                    highpasses[idx] = new Highpass(SampleRate, frequency, sectionQ);
+                    idx++;
+                }
             }
         }
 
@@ -127,6 +153,11 @@ namespace Cavern.Filters {
             for (int i = 0; i < lowpasses.Length; i++) {
                 lowpasses[i].Process(LowOutput, channel, channels);
                 highpasses[i].Process(HighOutput, channel, channels);
+            }
+            if (invertHighOutput) {
+                for (int sample = channel; sample < sampleCount; sample += channels) {
+                    HighOutput[sample] = -HighOutput[sample];
+                }
             }
         }
 

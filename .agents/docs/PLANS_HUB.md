@@ -58,13 +58,13 @@
 
 ## 4. Live Machine-Synced Inventory
 <!-- HUB:AUTO_START -->
-HUB_STATS|blueprints=8 (done=0, partial=6, active=1, deferred=1, superseded=0)|archived_done=12|min_score=100/100|open_conflicts=0|monoliths_gt2000=8
+HUB_STATS|blueprints=8 (done=0, partial=7, active=0, deferred=1, superseded=0)|archived_done=12|min_score=100/100|open_conflicts=0|monoliths_gt2000=6
 
 | Blueprint ID | Status | Score | Tier | H2+ Stubs | Hygiene / Lineage Note |
 | :--- | :---: | :---: | :---: | :---: | :--- |
 | `BP_ECOSYSTEM_COHERENCE_AND_SELF_GOVERNANCE` | `PARTIAL` | `100/100` | `T3` | `3` | ALL H1 Track A slices (`W56.1->W56.5`, `DFP v2.24.0`) DONE & verified: Zero-Accumulation Token-Tax & Side-Effe |
 | `BP_FULL_APP_SOTA_AUDIT` | `PARTIAL` | `100/100` | `T3` | `2` | W1-W3 DONE (T6); W4 monolith backlog updated to 5 files >2000L (added AndroidAudioOutput.cs 2157L); W5 speaker |
-| `BP_LEGACY_CAVERN_CORE_AND_SUITE_PARITY` | `ACTIVE` | `100/100` | `T3` | `1` | Exhaustive SOTA audit of ALL ~55k active legacy VoidX C# lines (`Cavern/`, `Cavern.Format/`, `Cavernize.Logic/ |
+| `BP_LEGACY_CAVERN_CORE_AND_SUITE_PARITY` | `PARTIAL` | `100/100` | `T3` | `1` | Exhaustive SOTA audit of ALL ~55k active legacy VoidX C# lines (`Cavern/`, `Cavern.Format/`, `Cavernize.Logic/ |
 | `BP_OMNISCIENT_SPATIAL_OBJECT_CORTEX` | `DEFERRED` | `100/100` | `T3` | `2` | resolved=Phase-A W1-W3 shipped in T6; Phase-B W4 local INT4 LLM deferred & MUST execute in isolated :worker p |
 | `BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA` | `PARTIAL` | `100/100` | `T2` | `1` | W1 native/C# code DONE (v2.9.80); W2-LiveReverify physical Scarlett 2i2 Gen4 S25U test pending. |
 | `BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP` | `PARTIAL` | `100/100` | `T3` | `1` | ALL H1 slices (`W53.0`, `W53.Q1–Q4`, `W53.1`, `W53.1b`, `W53.2`, `W53.3`, `W53.4`, `W53.5`, `W53.6`) DONE & CI |
@@ -77,13 +77,11 @@ ARCHIVED_DONE|count=12|ledger=`.agents/docs/archive/BLUEPRINTS_DONE_LEDGER.md`|t
 | File | Lines | Cap |
 | :--- | ---: | ---: |
 | `CavernSamples/Reusable/Cavernize.Logic/Rendering/StudioBatchExporter.cs` | `3578` | `2000` |
-| `CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs` | `2383` | `2000` |
+| `CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs` | `2250` | `2000` |
 | `CavernSamples/CavernizeAndroid/Audio/AndroidAudioOutput.cs` | `2161` | `2000` |
-| `Cavern/Spatial/SpatialObjectCortex.cs` | `2152` | `2000` |
-| `CavernSamples/CavernizeAndroid/Views/RoomSimulatorView.cs` | `2094` | `2000` |
 | `CavernSamples/CavernizeAndroid/Services/MediaLibraryService.cs` | `2046` | `2000` |
-| `CavernSamples/CavernizeAndroid/MainActivity.NeuralWorkflows.cs` | `2027` | `2000` |
 | `CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs` | `2013` | `2000` |
+| `CavernSamples/CavernizeAndroid/MainActivity.NeuralWorkflows.cs` | `2004` | `2000` |
 COHERENCE_HUB|.agents/docs/COHERENCE_HUB.md
 <!-- HUB:AUTO_END -->
 

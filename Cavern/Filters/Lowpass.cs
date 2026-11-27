@@ -67,6 +67,6 @@ namespace Cavern.Filters {
         }
 
         /// <inheritdoc/>
-        protected override void Reset(float cosW0, float alpha, float divisor) => SetupPass(cosW0, alpha, divisor, 1 - cosW0);
+        protected override void ResetCoefficients(double cosW0, double alpha, double divisor) => SetupPass(cosW0, alpha, divisor, 1.0 - cosW0);
     }
 }

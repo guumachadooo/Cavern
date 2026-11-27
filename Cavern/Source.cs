@@ -107,6 +107,25 @@ namespace Cavern {
         float[] samples = Array.Empty<float>();
 
         /// <summary>
+        /// Resampled output caches matching <see cref="Listener.UpdateRate"/> for zero steady-state allocations.
+        /// </summary>
+        float[] resampledSamples = Array.Empty<float>(),
+            resampledLeft = Array.Empty<float>(),
+            resampledRight = Array.Empty<float>();
+
+        /// <summary>
+        /// Stateful polyphase Kaiser-windowed sinc resamplers for 1D/3D mono and 1D stereo paths.
+        /// </summary>
+        PolyphaseSincResampler monoResampler, leftResampler, rightResampler;
+
+        /// <summary>
+        /// Tracks active clip, sample rate, and resampling transitions to flush resampler history cleanly.
+        /// </summary>
+        Clip lastResampleClip;
+        int lastResampleListenerRate;
+        bool wasResamplingMono, wasResamplingStereo;
+
+        /// <summary>
         /// Remaining delay until starting playback.
         /// </summary>
         long delay;
@@ -170,9 +189,13 @@ namespace Cavern {
                     calculatedPitch = 1; // Disable any pitch change on low quality
                 }
 
-                if (lastExpectedTimeSamples >= 0 && TimeSamples != lastExpectedTimeSamples) {
+                if ((lastExpectedTimeSamples >= 0 && TimeSamples != lastExpectedTimeSamples) ||
+                    !ReferenceEquals(Clip, lastResampleClip) || listener.SampleRate != lastResampleListenerRate) {
                     sampleRateRemainder = 0.0;
                     sampleRateNumeratorRem = 0;
+                    ResetResamplers();
+                    lastResampleClip = Clip;
+                    lastResampleListenerRate = listener.SampleRate;
                 }
 
                 double exactMult = listener.SampleRate > 0 && Clip.SampleRate > 0 && listener.SampleRate != Clip.SampleRate
@@ -200,23 +223,30 @@ namespace Cavern {
                     sampleRateNumeratorRem = 0;
                 }
                 PitchedUpdateRate = targetUpdateRate;
-                if (samples.Length != PitchedUpdateRate) {
+                if (samples.Length < PitchedUpdateRate) {
                     samples = new float[PitchedUpdateRate];
                 }
-                if (Clip.Channels == 2 && leftSamples.Length != PitchedUpdateRate) {
+                if (Clip.Channels == 2 && leftSamples.Length < PitchedUpdateRate) {
                     leftSamples = new float[PitchedUpdateRate];
                     rightSamples = new float[PitchedUpdateRate];
                 }
                 Rendered = GetSamples();
                 if (Rendered != null && Rendered.Channels > 0 && Rendered[0] != null && Rendered[0].Length != PitchedUpdateRate) {
                     PitchedUpdateRate = Rendered[0].Length;
-                    if (samples.Length != PitchedUpdateRate) {
+                    if (samples.Length < PitchedUpdateRate) {
                         samples = new float[PitchedUpdateRate];
                     }
-                    if (Clip.Channels == 2 && leftSamples.Length != PitchedUpdateRate) {
+                    if (Clip.Channels == 2 && leftSamples.Length < PitchedUpdateRate) {
                         leftSamples = new float[PitchedUpdateRate];
                         rightSamples = new float[PitchedUpdateRate];
                     }
+                }
+                if (resampledSamples.Length != listener.UpdateRate) {
+                    resampledSamples = new float[listener.UpdateRate];
+                }
+                if (Clip.Channels == 2 && resampledLeft.Length != listener.UpdateRate) {
+                    resampledLeft = new float[listener.UpdateRate];
+                    resampledRight = new float[listener.UpdateRate];
                 }
                 CumulativeSourceSamples += PitchedUpdateRate;
                 if (rendered.Length != Listener.Channels.Length * listener.UpdateRate) {
@@ -243,53 +273,93 @@ namespace Cavern {
             // Render audio if not muted
             if (!Mute) {
                 int clipChannels = Clip.Channels;
+                bool need1D = SpatialBlend != 1;
+                bool need3D = SpatialBlend != 0 && distance < listener.Range;
+                bool needMonoPath = need3D || (need1D && clipChannels != 2);
+                bool needStereoPath = need1D && clipChannels == 2;
+                bool needsResample = PitchedUpdateRate != updateRate ||
+                    (listener.SampleRate > 0 && Clip.SampleRate > 0 && Clip.SampleRate != listener.SampleRate) ||
+                    calculatedPitch != 1f;
+                double stepRatio = listener.SampleRate > 0 && Clip.SampleRate > 0
+                    ? (Clip.SampleRate / (double)listener.SampleRate) * calculatedPitch
+                    : (calculatedPitch != 1f ? calculatedPitch : (updateRate > 0 ? (double)PitchedUpdateRate / updateRate : 1.0));
 
-                // 3D renderer preprocessing
-                if (SpatialBlend != 0) {
+                // Mono downmix / extraction and zero-alloc stateful Kaiser-sinc resampling
+                if (needMonoPath) {
                     if (listener.AudioQuality >= QualityModes.High && clipChannels != 1) { // Mono downmix above medium quality
                         Array.Clear(samples, 0, PitchedUpdateRate);
                         for (int channel = 0; channel < clipChannels; channel++) {
                             WaveformUtils.Mix(Rendered[channel], samples);
                         }
-                        WaveformUtils.Gain(samples, 1f / clipChannels);
+                        float invChannels = 1f / clipChannels;
+                        for (int i = 0; i < PitchedUpdateRate; i++) {
+                            samples[i] *= invChannels;
+                        }
                     } else { // First channel only otherwise
                         Array.Copy(Rendered[0], samples, PitchedUpdateRate);
+                    }
+
+                    if (resampledSamples.Length != updateRate) {
+                        resampledSamples = new float[updateRate];
+                    }
+                    if (needsResample) {
+                        (monoResampler ??= new PolyphaseSincResampler()).Process(samples, PitchedUpdateRate, resampledSamples, updateRate, stepRatio);
+                        wasResamplingMono = true;
+                    } else {
+                        if (wasResamplingMono) {
+                            monoResampler?.Reset();
+                            wasResamplingMono = false;
+                        }
+                        Array.Copy(samples, 0, resampledSamples, 0, updateRate);
                     }
                 }
 
                 // 1D renderer
-                if (SpatialBlend != 1) {
+                if (need1D) {
                     float volume1D = Volume * (1f - SpatialBlend);
                     // 1:1 mix for non-stereo sources
                     if (clipChannels != 2) {
-                        samples = Resample.Adaptive(samples, updateRate, listener.AudioQuality);
                         float gain = volume1D / channels.Length;
                         for (int channel = 0; channel < channels.Length; channel++) {
-                            WaveformUtils.Mix(samples, rendered, channel, channels.Length, gain);
+                            WaveformUtils.Mix(resampledSamples, rendered, channel, channels.Length, gain);
                         }
                     }
 
                     // Full side mix for stereo sources
-                    else {
+                    else if (needStereoPath) {
                         Array.Copy(Rendered[0], leftSamples, PitchedUpdateRate);
                         Array.Copy(Rendered[1], rightSamples, PitchedUpdateRate);
-                        leftSamples = Resample.Adaptive(leftSamples, updateRate, listener.AudioQuality);
-                        rightSamples = Resample.Adaptive(rightSamples, updateRate, listener.AudioQuality);
-                        Stereo1DMix(volume1D);
+                        if (resampledLeft.Length != updateRate) {
+                            resampledLeft = new float[updateRate];
+                            resampledRight = new float[updateRate];
+                        }
+                        if (needsResample) {
+                            (leftResampler ??= new PolyphaseSincResampler()).Process(leftSamples, PitchedUpdateRate, resampledLeft, updateRate, stepRatio);
+                            (rightResampler ??= new PolyphaseSincResampler()).Process(rightSamples, PitchedUpdateRate, resampledRight, updateRate, stepRatio);
+                            wasResamplingStereo = true;
+                        } else {
+                            if (wasResamplingStereo) {
+                                leftResampler?.Reset();
+                                rightResampler?.Reset();
+                                wasResamplingStereo = false;
+                            }
+                            Array.Copy(leftSamples, 0, resampledLeft, 0, updateRate);
+                            Array.Copy(rightSamples, 0, resampledRight, 0, updateRate);
+                        }
+                        Stereo1DMix(resampledLeft, resampledRight, volume1D);
                     }
                 }
 
                 // 3D mix, if the source is in range
-                if (SpatialBlend != 0 && distance < listener.Range) {
+                if (need3D) {
                     Vector3 position = screenLocked
                         ? new Vector3(Listener.ScreenSize.X * Position.X, Listener.ScreenSize.Y * Position.Y, Position.Z + 1)
                         : Position;
                     Vector3 direction = (position - listener.Position).RotateInverse(listener.Rotation);
                     float rolloffDistance = GetRolloff();
-                    samples = Resample.Adaptive(samples, updateRate, listener.AudioQuality);
-                    baseUpdateRate = samples.Length;
+                    baseUpdateRate = updateRate;
                     // Apply filter if set
-                    SpatialFilter?.Process(samples);
+                    SpatialFilter?.Process(resampledSamples);
 
                     // Pure-physics ISO 9613-1 atmospheric air absorption for physical source distances > 5.0 m (unity bypass <= 5.0 m)
                     if (AirAbsorptionFilter.GlobalEnabled && !LFE) {
@@ -304,7 +374,7 @@ namespace Cavern {
                                 listener.SampleRate,
                                 AirAbsorptionFilter.GlobalTemperatureCelsius,
                                 AirAbsorptionFilter.GlobalRelativeHumidityPct);
-                            airAbsorptionFilter.Process(samples, 0, samples.Length);
+                            airAbsorptionFilter.Process(resampledSamples, 0, resampledSamples.Length);
                         } else if (airAbsorptionFilter != null && airAbsorptionFilter.IsActive) {
                             airAbsorptionFilter.ConfigureDirectPath(
                                 0f,
@@ -321,7 +391,7 @@ namespace Cavern {
                         }
                         Vector3 propDelta = (position - listener.Position) * Listener.EnvironmentSizeInverse * AirAbsorptionFilter.PhysicalRoomHalfSize;
                         float propDistMeters = propDelta.Length();
-                        propagationDelayLine.ProcessInPlace(samples, 0, samples.Length, propDistMeters, listener.SampleRate);
+                        propagationDelayLine.ProcessInPlace(resampledSamples, 0, resampledSamples.Length, propDistMeters, listener.SampleRate);
                     } else if (propagationDelayLine != null && propagationDelayLine.ActiveDelayMs > 0f) {
                         propagationDelayLine.Reset();
                     }
@@ -331,11 +401,11 @@ namespace Cavern {
                         distancer ??= new Distancer(this) {
                             trueGain = false
                         };
-                        distancer.Generate(direction.X > 0, samples);
+                        distancer.Generate(direction.X > 0, resampledSamples);
                     }
 
                     // Final mixing
-                    Listener.Renderer.Render(listener, this, direction, samples, rendered, Volume * rolloffDistance * SpatialBlend);
+                    Listener.Renderer.Render(listener, this, direction, resampledSamples, rendered, Volume * rolloffDistance * SpatialBlend);
                 }
             }
             return rendered;
@@ -373,6 +443,18 @@ namespace Cavern {
             sampleRateNumeratorRem = 0;
             lastExpectedTimeSamples = -1;
             CumulativeSourceSamples = 0;
+            ResetResamplers();
+        }
+
+        /// <summary>
+        /// Clears stateful polyphase resampler histories on seek, clip switch, or sample rate change.
+        /// </summary>
+        void ResetResamplers() {
+            monoResampler?.Reset();
+            leftResampler?.Reset();
+            rightResampler?.Reset();
+            wasResamplingMono = false;
+            wasResamplingStereo = false;
         }
 
         /// <summary>
@@ -395,7 +477,7 @@ namespace Cavern {
         /// <summary>
         /// Render the stereo side mix.
         /// </summary>
-        void Stereo1DMix(float volume1D) {
+        void Stereo1DMix(float[] left, float[] right, float volume1D) {
             float leftVolume = volume1D / Listener.LeftChannels,
                 rightVolume = volume1D / Listener.RightChannels;
             if (stereoPan < 0) {
@@ -407,14 +489,14 @@ namespace Cavern {
             for (int channel = 0; channel < Listener.Channels.Length; ++channel) {
                 if (Listener.Channels[channel].LFE) {
                     if (!listener.LFESeparation || LFE) {
-                        WaveformUtils.Mix(leftSamples, rendered, channel, Listener.Channels.Length, halfVolume1D);
-                        WaveformUtils.Mix(rightSamples, rendered, channel, Listener.Channels.Length, halfVolume1D);
+                        WaveformUtils.Mix(left, rendered, channel, Listener.Channels.Length, halfVolume1D);
+                        WaveformUtils.Mix(right, rendered, channel, Listener.Channels.Length, halfVolume1D);
                     }
                 } else if (!LFE) {
                     if (Listener.Channels[channel].Y < 0) {
-                        WaveformUtils.Mix(leftSamples, rendered, channel, Listener.Channels.Length, leftVolume);
+                        WaveformUtils.Mix(left, rendered, channel, Listener.Channels.Length, leftVolume);
                     } else if (Listener.Channels[channel].Y > 0) {
-                        WaveformUtils.Mix(rightSamples, rendered, channel, Listener.Channels.Length, rightVolume);
+                        WaveformUtils.Mix(right, rendered, channel, Listener.Channels.Length, rightVolume);
                     }
                 }
             }

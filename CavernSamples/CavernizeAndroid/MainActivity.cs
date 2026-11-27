@@ -335,7 +335,6 @@ public partial class MainActivity : Activity, ICavernizeApp {
         mediaNotification.Forward10Requested += () => SeekRelative(10);
         mediaNotification.SeekRequestedMs += ms => SeekAbsoluteSeconds(ms / 1000.0);
 
-        BinauralProfileService.ApplySavedProfile(this, store);
         BinauralProfileService.SyncToSceneHub(playerEngine.SceneHub, store, S);
         playerEngine.HeadphoneVirtualizer = store.HeadphoneVirtualizer;
         playerEngine.ApplyExternalizationConfig(store.BuildExternalizationConfig());
@@ -369,8 +368,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
         }
         SyncNeuralRuntimeDiagnostics();
 
-        AutoEqService.EnsureLoaded(this);
-        AutoEqService.ApplySavedToEngine(this, store, playerEngine);
+        StartOffUiSceneAndOnnxWarmupAsync();
         audioDeviceProfileManager = new AudioDeviceProfileManager(this, store, playerEngine);
         audioDeviceProfileManager.ActiveDeviceChanged += OnAudioDeviceRouteChanged;
 
@@ -598,6 +596,7 @@ public partial class MainActivity : Activity, ICavernizeApp {
             isPredictiveBackRegistered = false;
         }
         StopCalibrationTonePlayback();
+        CancelV42BackgroundTasks();
         activeCts?.Cancel();
         activeCts?.Dispose();
         truehdPrepareCts?.Cancel();

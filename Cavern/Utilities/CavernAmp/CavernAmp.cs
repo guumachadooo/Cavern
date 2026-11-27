@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -47,7 +48,8 @@ namespace Cavern.Utilities {
         }
 
         /// <summary>
-        /// When set, <see cref="IsMono"/> will return the value. When null, <see cref="IsMono"/> will return if the running backend is Mono.
+        /// When set, <see cref="IsMono"/> will return the value. When null, <see cref="IsMono"/> returns true only when
+        /// running on a Mono runtime without hardware-accelerated <see cref="Vector{T}"/> SIMD.
         /// </summary>
         public static bool? MonoOverride { get; set; }
 
@@ -67,15 +69,16 @@ namespace Cavern.Utilities {
         static bool tested;
 
         /// <summary>
-        /// The running CLR is Mono.
+        /// Cached detection of legacy Mono without hardware SIMD acceleration.
         /// </summary>
         static bool? mono;
 
         /// <summary>
-        /// The running CLR is Mono, which limits optimization possibilities and for example,
-        /// Vectors run much slower, they should not be used.
+        /// Returns true when the running CLR is legacy Mono lacking hardware-accelerated <see cref="Vector{T}"/> SIMD
+        /// (preferring scalar <c>_Mono</c> paths), or false when hardware SIMD (such as ARM64 NEON on modern .NET/Mono)
+        /// is available unless overridden via <see cref="MonoOverride"/>.
         /// </summary>
-        public static bool IsMono() => MonoOverride ?? (mono ??= Type.GetType("Mono.Runtime") != null);
+        public static bool IsMono() => MonoOverride ?? (mono ??= Type.GetType("Mono.Runtime") != null && !Vector.IsHardwareAccelerated);
 
         /// <summary>
         /// Gets supported CPU instruction sets.

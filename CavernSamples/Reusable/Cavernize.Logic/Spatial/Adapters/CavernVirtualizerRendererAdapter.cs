@@ -20,6 +20,8 @@ public sealed class CavernVirtualizerRendererAdapter : IBinauralRenderer {
 
     PhysicalExternalizationConfig externalizationConfig = PhysicalExternalizationConfig.Default;
     bool externalBrirFlag;
+    Vector3 lastEnvironmentSize = new(4f, 2.8f, 4f);
+    float lastLyricRoomScale = 1f;
     PhysicalExternalizationDiagnostics diagnostics = PhysicalExternalizationDiagnostics.Default;
 
     // Zero-GC scratch buffers for projecting close (< 1.0 m) physical sources onto active virtual HRIR speakers
@@ -71,13 +73,16 @@ public sealed class CavernVirtualizerRendererAdapter : IBinauralRenderer {
         Vector3 environmentSize) {
         externalizationConfig = config;
         externalBrirFlag = isMeasuredBrirProfile;
+        if (environmentSize.X > 0.1f && environmentSize.Y > 0.1f && environmentSize.Z > 0.1f) {
+            lastEnvironmentSize = environmentSize;
+        }
 
         VirtualizerFilter.ConfigureExternalization(
             ismEnabled: config.IsmRoomEnabled && binauralActive,
             preset: config.RoomPreset,
             wallMaterial: config.WallMaterial,
             reflectionOrder: config.ReflectionOrder,
-            reflectionLevel: config.ReflectionLevel,
+            reflectionLevel: Math.Clamp(config.ReflectionLevel * lastLyricRoomScale, 0f, 1.5f),
             nearFieldEnabled: config.NearFieldEnabled && binauralActive,
             airAbsorptionEnabled: config.AirAbsorptionEnabled,
             airTempCelsius: config.AirTemperatureCelsius,
@@ -87,6 +92,33 @@ public sealed class CavernVirtualizerRendererAdapter : IBinauralRenderer {
 
         diagnostics = BuildDiagnosticsSnapshot();
         return diagnostics;
+    }
+
+    /// <summary>
+    /// Modulates live ISM reflection ambience smoothly from distilled <see cref="LyricSpatialResponseFx"/>
+    /// with zero allocations, respecting BRIR double-room bypass guards.
+    /// </summary>
+    public void ApplyLiveLyricRoomModulation(float roomReflectionScale) {
+        float clampedScale = Math.Clamp(roomReflectionScale, 0.45f, 1.45f);
+        if (MathF.Abs(clampedScale - lastLyricRoomScale) < 0.015f) {
+            return;
+        }
+        lastLyricRoomScale = clampedScale;
+        if (!binauralActive || !externalizationConfig.IsmRoomEnabled || externalBrirFlag || VirtualizerFilter.IsMeasuredBrirActive) {
+            return;
+        }
+        VirtualizerFilter.ConfigureExternalization(
+            ismEnabled: true,
+            preset: externalizationConfig.RoomPreset,
+            wallMaterial: externalizationConfig.WallMaterial,
+            reflectionOrder: externalizationConfig.ReflectionOrder,
+            reflectionLevel: Math.Clamp(externalizationConfig.ReflectionLevel * clampedScale, 0f, 1.5f),
+            nearFieldEnabled: externalizationConfig.NearFieldEnabled,
+            airAbsorptionEnabled: AirAbsorptionFilter.GlobalEnabled,
+            airTempCelsius: externalizationConfig.AirTemperatureCelsius,
+            airRelativeHumidityPct: externalizationConfig.AirRelativeHumidityPct,
+            customEnvironmentHalfSize: lastEnvironmentSize,
+            externalBrirGuard: false);
     }
 
     /// <inheritdoc/>

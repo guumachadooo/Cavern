@@ -31,6 +31,10 @@ public sealed class SpatialSceneHub {
     int[] choreoSourceStemIndices = Array.Empty<int>();
     float[] choreoSourceSideSigns = Array.Empty<float>();
     Cavern.Neural.NeuralStemRole[] choreoSourceRoles = Array.Empty<Cavern.Neural.NeuralStemRole>();
+    LyricMoodDigest[] activeLyricMoodDigests = Array.Empty<LyricMoodDigest>();
+    readonly EarCandySpectralDetector earCandyDetector = new();
+    readonly SpatialChoreoRtGate choreoRtGate = new();
+    readonly object earCandyLock = new();
     ComponentBehaviorRegistry componentRegistry;
     ChainGovernancePlan activeChainGovernance;
     readonly OmniscientVocalStateBus vocalStateBus = new();
@@ -390,9 +394,110 @@ public sealed class SpatialSceneHub {
             if (track != null) {
                 activeChoreoMode = track.Mode;
             }
+            choreoRtGate.Reset();
             RebuildChoreoMappingLocked();
         }
         SceneChanged?.Invoke();
+    }
+
+    /// <summary>
+    /// Updates distilled <see cref="LyricMoodDigest"/> cues atomically without exposing any raw lyric text.
+    /// Safe to invoke concurrently with zero-allocation audio rendering.
+    /// </summary>
+    public void SetLyricMoodDigests(IReadOnlyList<LyricMoodDigest> digests) {
+        LyricMoodDigest[] copy;
+        if (digests == null || digests.Count == 0) {
+            copy = Array.Empty<LyricMoodDigest>();
+        } else {
+            copy = new LyricMoodDigest[digests.Count];
+            for (int i = 0; i < digests.Count; i++) {
+                copy[i] = digests[i];
+            }
+        }
+        Volatile.Write(ref activeLyricMoodDigests, copy);
+    }
+
+    /// <summary>
+    /// Active distilled <see cref="LyricMoodDigest"/> timeline driving live spatial and room response modulation.
+    /// </summary>
+    public LyricMoodDigest[] ActiveLyricMoodDigests {
+        get { return Volatile.Read(ref activeLyricMoodDigests); }
+    }
+
+    /// <summary>
+    /// Evaluates smoothly crossfaded lyric spatial/room modulation at <paramref name="playbackTimeSec"/> (0 B RT GC).
+    /// </summary>
+    public LyricSpatialResponseFx EvaluateLyricFxZeroAlloc(double playbackTimeSec, double trackDurationSec) {
+        LyricMoodDigest[] digests = Volatile.Read(ref activeLyricMoodDigests);
+        return LyricMoodSpatialModulator.EvaluateZeroAlloc(digests, playbackTimeSec, trackDurationSec);
+    }
+
+    /// <summary>
+    /// Live zero-allocation DSP spectral/transient ear-candy detector.
+    /// </summary>
+    public EarCandySpectralDetector EarCandyDetector => earCandyDetector;
+
+    /// <summary>
+    /// Live zero-allocation RT RMS motion gate for choreography stems.
+    /// </summary>
+    public SpatialChoreoRtGate ChoreoRtGate => choreoRtGate;
+
+    /// <summary>
+    /// Copies the active 3D ear-candy micro-object telemetry snapshot safely for 120 Hz Room rendering (0 B alloc).
+    /// </summary>
+    public int CopyEarCandySnapshotZeroAlloc(EarCandyMicroNode[] destination, out float sparkle01, out int activeCount) {
+        lock (earCandyLock) {
+            return earCandyDetector.CopySnapshotZeroAlloc(destination, out sparkle01, out activeCount);
+        }
+    }
+
+    internal void AnalyzeEarCandySourcesZeroAlloc(
+        float[][] sourceBuffers,
+        int sourceCount,
+        Vector3[] sourcePositions,
+        bool[] skipSlots,
+        int sampleRate,
+        int frameCount,
+        float moodEnergyGain) {
+        lock (earCandyLock) {
+            earCandyDetector.ProcessSourcesZeroAlloc(sourceBuffers, sourceCount, sourcePositions, skipSlots, sampleRate, frameCount, moodEnergyGain);
+        }
+    }
+
+    internal void AnalyzeEarCandyStereoZeroAlloc(
+        float[] interleavedStereo,
+        int startFloatOffset,
+        int floatCount,
+        int sampleRate,
+        float moodEnergyGain) {
+        lock (earCandyLock) {
+            earCandyDetector.ProcessStereoInterleavedZeroAlloc(interleavedStereo, startFloatOffset, floatCount, sampleRate, moodEnergyGain);
+        }
+    }
+
+    /// <summary>
+    /// Updates live V4.2 mood &amp; ear-candy telemetry scalars in-place with zero heap allocations.
+    /// </summary>
+    public void UpdateV42TelemetryZeroAlloc(in LyricSpatialResponseFx lyricFx, float earCandySparkle01, int earCandyNodeCount) {
+        lock (syncLock) {
+            telemetry.HasActiveLyricMood = lyricFx.HasMood;
+            telemetry.ActiveLyricMoodTag = lyricFx.Tag;
+            telemetry.ActiveLyricMoodArousal01 = lyricFx.Arousal01;
+            telemetry.ActiveLyricMoodValence01 = lyricFx.Valence01;
+            telemetry.ActiveLyricRoomScale = lyricFx.RoomReflectionScale;
+            telemetry.EarCandySparkle01 = earCandySparkle01;
+            telemetry.EarCandyActiveNodeCount = earCandyNodeCount;
+        }
+    }
+
+    /// <summary>
+    /// Resets transient V4.2 ear-candy and choreography gate state on seek, track swap, or stop.
+    /// </summary>
+    public void ResetV42RealtimeTelemetry() {
+        lock (earCandyLock) {
+            earCandyDetector.Reset();
+        }
+        choreoRtGate.Reset();
     }
 
     /// <summary>
@@ -760,7 +865,7 @@ public sealed class SpatialSceneHub {
                 if (applyChoreo && !item.HasCustomPosition && !item.IsLFE && !item.IsBed && !item.Channel.HasValue &&
                     !desc.IsLfe && !desc.BedChannel.HasValue && i < choreoSourceStemIndices.Length) {
                     int stemIdx = choreoSourceStemIndices[i];
-                    if (stemIdx >= 0 && Cavern.Neural.NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(
+                    if (stemIdx >= 0 && track.IsStemAudible(stemIdx) && Cavern.Neural.NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(
                             track,
                             activeChoreoMode,
                             stemIdx,
@@ -809,7 +914,7 @@ public sealed class SpatialSceneHub {
             for (int i = 0; i < count; i++) {
                 SpatialSourceDescriptor desc = sources[i];
                 int stemIdx = choreoSourceStemIndices[i];
-                if (desc == null || desc.HasCustomPosition || desc.IsLfe || desc.BedChannel.HasValue || stemIdx < 0) {
+                if (desc == null || desc.HasCustomPosition || desc.IsLfe || desc.BedChannel.HasValue || stemIdx < 0 || !track.IsStemAudible(stemIdx)) {
                     continue;
                 }
                 if (Cavern.Neural.NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(
@@ -855,7 +960,7 @@ public sealed class SpatialSceneHub {
             }
             SpatialSourceDescriptor desc = sources[sourceIndex];
             int stemIdx = choreoSourceStemIndices[sourceIndex];
-            if (desc == null || desc.HasCustomPosition || desc.IsLfe || desc.BedChannel.HasValue || stemIdx < 0) {
+            if (desc == null || desc.HasCustomPosition || desc.IsLfe || desc.BedChannel.HasValue || stemIdx < 0 || !track.IsStemAudible(stemIdx)) {
                 return false;
             }
             if (!Cavern.Neural.NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(
@@ -963,6 +1068,7 @@ public sealed class SpatialSceneHub {
         for (int i = 0; i < post.Length; i++) {
             post[i].Reset();
         }
+        ResetV42RealtimeTelemetry();
     }
 
     /// <summary>

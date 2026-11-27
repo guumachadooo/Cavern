@@ -83,17 +83,18 @@ namespace Cavern.Filters {
         }
 
         /// <inheritdoc/>
-        protected override void Reset(float cosW0, float alpha, float _) {
-            float a = (float)Math.Pow(10, gain * .025f),
-                slope = 2 * (float)Math.Sqrt(a) * alpha,
-                minCos = (a - 1) * cosW0,
-                addCos = (a + 1) * cosW0;
-            float divisor = 1 / (a + 1 - minCos + slope);
-            a1 = 2 * (a - 1 - addCos) * divisor;
-            a2 = (a + 1 - minCos - slope) * divisor;
-            b0 = a * (a + 1 + minCos + slope) * divisor;
-            b1 = -2 * a * (a - 1 + addCos) * divisor;
-            b2 = a * (a + 1 + minCos - slope) * divisor;
+        protected override void ResetCoefficients(double cosW0, double alpha, double _) {
+            double a = Math.Pow(10.0, gain * 0.025);
+            double slope = 2.0 * Math.Sqrt(a) * alpha;
+            double minCos = (a - 1.0) * cosW0;
+            double addCos = (a + 1.0) * cosW0;
+            double divisor = 1.0 / (a + 1.0 - minCos + slope);
+            SetCoefficients(
+                a * (a + 1.0 + minCos + slope) * divisor,
+                -2.0 * a * (a - 1.0 + addCos) * divisor,
+                a * (a + 1.0 + minCos - slope) * divisor,
+                2.0 * (a - 1.0 - addCos) * divisor,
+                (a + 1.0 - minCos - slope) * divisor);
         }
     }
 }

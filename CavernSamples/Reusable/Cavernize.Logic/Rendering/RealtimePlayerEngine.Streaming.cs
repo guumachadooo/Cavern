@@ -47,6 +47,7 @@ public sealed partial class RealtimePlayerEngine {
             subBlockAvailableFrames = 0;
             subBlockReadOffset = 0;
             hasRenderedAudio = false;
+            hasMeasuredLiveSourceRms = false;
             crossfadeRemaining = 0;
             lastSourceMaskHash = 0;
             telemetryFramesSincePublish = int.MaxValue / 2;
@@ -397,6 +398,8 @@ public sealed partial class RealtimePlayerEngine {
                 }
 
                 ApplyLiveChoreographyPositionsLocked(GetCurrentTrackSecondsLocked());
+                virtualizerRenderer.ApplyLiveLyricRoomModulation(
+                    lastBlockLyricFx.HasMood ? lastBlockLyricFx.RoomReflectionScale : 1f);
                 ApplySourceMutesAndProperties();
 
                 // Refresh live per-block E-AC-3 Coupling / SPX bitstream cutoffs prior to Slot 2 & Pre-HRTF LGSR
@@ -456,6 +459,28 @@ public sealed partial class RealtimePlayerEngine {
                 int blockFrames = renderer.RenderFrame(activeSceneFrame, stereoOutput, outOffset, requestedFrames);
                 if (blockFrames <= 0) {
                     break;
+                }
+
+                // Zero-GC V4.2 Ear-Candy HF/transient micro-object detection on rendered objects or stereo tail
+                int srActive = listener.SampleRate > 0 ? listener.SampleRate : Listener.DefaultSampleRate;
+                float moodGain = lastBlockLyricFx.HasMood ? lastBlockLyricFx.MotionEnergyGain : 1f;
+                if (cachedActiveSources.Length > 1 || isRenderingLiveNeuralSources) {
+                    int slotCount = Math.Min(cachedActiveSources.Length, EarCandySpectralDetector.MaxSlots);
+                    Vector3 envInv = new(
+                        1f / MathF.Max(0.25f, Listener.EnvironmentSize.X),
+                        1f / MathF.Max(0.25f, Listener.EnvironmentSize.Y),
+                        1f / MathF.Max(0.25f, Listener.EnvironmentSize.Z));
+                    for (int s = 0; s < slotCount; s++) {
+                        Source src = cachedActiveSources[s];
+                        TrackSourceItem item = s < sourceItems.Count ? sourceItems[s] : null;
+                        bool skip = src == null || src.Mute || (item != null && (item.IsMuted || item.IsLFE || item.IsDynamicallyFilteredOut));
+                        earCandySkipScratch[s] = skip;
+                        earCandyBufsScratch[s] = skip ? null : src.Rendered?[0];
+                        earCandyPosScratch[s] = src != null ? src.Position * envInv : Vector3.UnitZ;
+                    }
+                    sceneHub.AnalyzeEarCandySourcesZeroAlloc(earCandyBufsScratch, slotCount, earCandyPosScratch, earCandySkipScratch, srActive, blockFrames, moodGain);
+                } else {
+                    sceneHub.AnalyzeEarCandyStereoZeroAlloc(stereoOutput, outOffset, blockFrames * 2, srActive, moodGain);
                 }
 
                 // Direct 2.0 fallback for Slot 2C LGSR and Slot 2B Spatial Karaoke when Headphone Virtualizer is bypassed
@@ -550,6 +575,13 @@ public sealed partial class RealtimePlayerEngine {
                 blockTelemetry.VocalChainCompressorReductionDb = vocalTel.CompressorReductionDb;
                 blockTelemetry.VocalChainSidechainDuckDb = vocalTel.SidechainPocketDuckDb;
                 blockTelemetry.VocalChainBypassed = vocalMixMatchStage.IsBypassed;
+                blockTelemetry.HasActiveLyricMood = lastBlockLyricFx.HasMood;
+                blockTelemetry.ActiveLyricMoodTag = lastBlockLyricFx.Tag;
+                blockTelemetry.ActiveLyricMoodArousal01 = lastBlockLyricFx.Arousal01;
+                blockTelemetry.ActiveLyricMoodValence01 = lastBlockLyricFx.Valence01;
+                blockTelemetry.ActiveLyricRoomScale = lastBlockLyricFx.RoomReflectionScale;
+                blockTelemetry.EarCandySparkle01 = sceneHub.EarCandyDetector.OverallSparkle01;
+                blockTelemetry.EarCandyActiveNodeCount = sceneHub.EarCandyDetector.ActiveNodeCount;
                 activeSceneFrame.Telemetry = blockTelemetry;
 
                 RecordTailLocked(stereoOutput, outOffset, blockFrames);
@@ -578,11 +610,16 @@ public sealed partial class RealtimePlayerEngine {
                 if (telemetryFramesSincePublish >= telemetryIntervalFrames) {
                     telemetryFramesSincePublish = 0;
                     UpdateSourceTelemetry();
+                    hasMeasuredLiveSourceRms = true;
                     if (liveMicBridge.IsActive) {
                         sceneHub.SetLiveMicrophoneDescriptor(liveMicBridge.BuildSceneDescriptor(Listener.EnvironmentSize, sceneHub.Sources.Count));
                     }
                     parametricUpmixerStage.SyncTelemetry(activeSceneFrame);
                     sceneHub.Telemetry = activeSceneFrame.Telemetry;
+                    sceneHub.UpdateV42TelemetryZeroAlloc(
+                        in lastBlockLyricFx,
+                        sceneHub.EarCandyDetector.OverallSparkle01,
+                        sceneHub.EarCandyDetector.ActiveNodeCount);
                     sceneHub.VocalChainDiagnostics = vocalTel;
                     sceneHub.ExternalizationDiagnostics = virtualizerRenderer.Diagnostics;
                     PublishLoudnessDiagnosticsLocked();

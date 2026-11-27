@@ -2183,13 +2183,12 @@ RunSuite("GT-16", "W53_6_WaveF_TransauralXtc_Cancellation_And_BitExactHeadphoneB
     Array.Copy(multiToneLeft, rtBlock, rtBlock.Length);
     rtStage.ProcessInterleaved(rtBlock, 0, 1024, 2, default); // warmup
     long allocBefore = GC.GetAllocatedBytesForCurrentThread();
-    Stopwatch sw = Stopwatch.StartNew();
+    long tStart = Stopwatch.GetTimestamp();
     for (int iter = 0; iter < 50; iter++) {
         rtStage.ProcessInterleaved(rtBlock, 0, 1024, 2, default);
     }
-    sw.Stop();
+    double msPerBlock = ((Stopwatch.GetTimestamp() - tStart) * 1000.0 / Stopwatch.Frequency) / 50.0;
     long rtAllocBytes = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
-    double msPerBlock = sw.Elapsed.TotalMilliseconds / 50.0;
     Assert(rtAllocBytes == 0, $"GT-16 RT XTC must allocate 0 B GC, got {rtAllocBytes} B");
     Assert(msPerBlock < 1.0, $"GT-16 RT XTC block time {msPerBlock:F3} ms >= 1.0 ms budget");
 

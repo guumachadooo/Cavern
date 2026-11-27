@@ -141,6 +141,7 @@ public partial class MainActivity {
                     RefreshPersonalizationUi();
                     RefreshAutoEqUi();
                     refreshBentoTilesUi?.Invoke();
+                    RefreshSpatialChoreoClarifierUi();
                     RefreshMusicPlayerControlsUi();
                     UpdateSpatialBadgePillVisuals();
                     RefreshAbHeaderVisuals();
@@ -468,6 +469,7 @@ public partial class MainActivity {
                     if (res.Lyrics != null && res.Lyrics.HasLyrics) {
                         meta.Lyrics = res.Lyrics;
                         changed = true;
+                        NotifyLyricsMetadataUpdated();
                     }
                     if (changed) {
                         RefreshMusicPlayerUi();
@@ -592,6 +594,7 @@ public partial class MainActivity {
             if (currentMediaMeta != null) {
                 currentMediaMeta.Lyrics = doc;
             }
+            NotifyLyricsMetadataUpdated();
             RefreshMusicPlayerUi();
             SetPlayerStageMode(PlayerStageMode.Lyrics);
             string msg = autoPicked

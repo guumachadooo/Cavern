@@ -68,12 +68,10 @@ namespace Cavern.Filters {
         }
 
         /// <inheritdoc/>
-        protected override void Reset(float cosW0, float alpha, float divisor) {
-            b1 = 0;
-            b2 = -alpha * divisor;
-            b0 = -b2 * (float)QMath.DbToGain(gain);
-            a1 = -2 * cosW0 * divisor;
-            a2 = (1 - alpha) * divisor;
+        protected override void ResetCoefficients(double cosW0, double alpha, double divisor) {
+            double b2Val = -alpha * divisor;
+            double b0Val = -b2Val * (gain == 0.0 ? 1.0 : QMath.DbToGain(gain));
+            SetCoefficients(b0Val, 0.0, b2Val, -2.0 * cosW0 * divisor, (1.0 - alpha) * divisor);
         }
     }
 }

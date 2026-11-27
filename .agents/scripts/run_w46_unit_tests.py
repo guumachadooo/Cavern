@@ -107,9 +107,12 @@ using Cavern.Format.Renderers.BaseClasses;
 using Cavern.Neural;
 using Cavern.ProAudio;
 using Cavern.Remapping;
+using Cavern.Rendering;
 using Cavern.Spatial;
+using Cavern.Utilities;
 using Cavern.Virtualizer;
 using Cavern.VocalChain;
+using Complex = Cavern.Utilities.Complex;
 using Cavernize.Logic.CavernSettings;
 using Cavernize.Logic.Models;
 using Cavernize.Logic.Rendering;
@@ -4081,6 +4084,402 @@ RunTest("T51_W56_4_MemoryBudgetGovernor_TensorMath_Hysteresis_And_PssClamp", () 
     Assert(dOk.HasSufficientMemory && dOk.StatusCode == "OK", $"Expected OK decision for W8A16 quantized RoFormer on 24 GB flagship, got {dOk.StatusCode}: {dOk.DiagnosticMessage}");
 });
 
+// ---------- Test 52 (Wave W57.1 Q1-Q2): CavernAmp SIMD FFT Parity, 64-bit TDF-II Biquad, Cytomic ZDF-SVF, LR4 Crossover ----------
+RunTest("T52_W57_1_SimdFft_Biquad64_CytomicSvf_Lr4Crossover", () => {
+    // 1. CavernAmp.IsMono() SIMD unlock + Measurements.FFT parity <= 1e-4 via MonoOverride A/B
+    Assert(CavernAmp.MonoOverride == null, "MonoOverride must default to null.");
+    if (Vector.IsHardwareAccelerated) {
+        Assert(!CavernAmp.IsMono(), "CavernAmp.IsMono() must return false when hardware SIMD is accelerated.");
+    }
+    float[] fftSig = new float[1024];
+    for (int i = 0; i < fftSig.Length; i++) {
+        fftSig[i] = 0.45f * MathF.Sin(2f * MathF.PI * 17f * i / fftSig.Length) +
+                    0.30f * MathF.Cos(2f * MathF.PI * 83f * i / fftSig.Length) +
+                    0.15f * MathF.Sin(2f * MathF.PI * 211f * i / fftSig.Length);
+    }
+    Complex[] scalarFft, simdFft;
+    try {
+        CavernAmp.MonoOverride = true;
+        Assert(CavernAmp.IsMono(), "MonoOverride=true must force scalar path.");
+        using (FFTCache scalarCache = new(1024)) {
+            scalarFft = fftSig.FFT(scalarCache);
+        }
+        CavernAmp.MonoOverride = false;
+        Assert(!CavernAmp.IsMono(), "MonoOverride=false must force SIMD path.");
+        using (FFTCache simdCache = new(1024)) {
+            simdFft = fftSig.FFT(simdCache);
+        }
+    } finally {
+        CavernAmp.MonoOverride = null;
+    }
+    float maxFftDiff = 0f;
+    for (int i = 0; i < scalarFft.Length; i++) {
+        float dr = MathF.Abs(scalarFft[i].Real - simdFft[i].Real);
+        float di = MathF.Abs(scalarFft[i].Imaginary - simdFft[i].Imaginary);
+        if (dr > maxFftDiff) maxFftDiff = dr;
+        if (di > maxFftDiff) maxFftDiff = di;
+    }
+    Assert(maxFftDiff <= 1e-4f, $"Scalar vs SIMD FFT parity exceeded 1e-4: maxDiff={maxFftDiff:E3}");
+
+    // 2. 64-bit double TDF-II BiquadFilter (PeakingEQ & Lowpass at 20 Hz @ 48 kHz): noise floor <= -110 dBFS
+    const int sr = 48000;
+    PeakingEQ peak20 = new(sr, 20.0, 0.7071067811865476, 6.0);
+    Lowpass lp20 = new(sr, 20.0, 0.7071067811865476);
+    int biquadLen = sr; // 1.0 s
+    float[] sigPeak = new float[biquadLen];
+    float[] sigLp = new float[biquadLen];
+    double pz1 = 0, pz2 = 0, lz1 = 0, lz2 = 0;
+    double pb0 = peak20.b0, pb1 = peak20.b1, pb2 = peak20.b2, pa1 = peak20.a1, pa2 = peak20.a2;
+    // Compute exact 64-bit double reference directly from filter coefficients via reflection on double fields
+    FieldInfo fB0d = typeof(BiquadFilter).GetField("b0d", BindingFlags.Instance | BindingFlags.NonPublic);
+    FieldInfo fB1d = typeof(BiquadFilter).GetField("b1d", BindingFlags.Instance | BindingFlags.NonPublic);
+    FieldInfo fB2d = typeof(BiquadFilter).GetField("b2d", BindingFlags.Instance | BindingFlags.NonPublic);
+    FieldInfo fA1d = typeof(BiquadFilter).GetField("a1d", BindingFlags.Instance | BindingFlags.NonPublic);
+    FieldInfo fA2d = typeof(BiquadFilter).GetField("a2d", BindingFlags.Instance | BindingFlags.NonPublic);
+    Assert(fB0d != null && fA1d != null, "BiquadFilter 64-bit double coefficients must exist.");
+    pb0 = (double)fB0d.GetValue(peak20); pb1 = (double)fB1d.GetValue(peak20); pb2 = (double)fB2d.GetValue(peak20);
+    pa1 = (double)fA1d.GetValue(peak20); pa2 = (double)fA2d.GetValue(peak20);
+    double lb0 = (double)fB0d.GetValue(lp20); double lb1 = (double)fB1d.GetValue(lp20); double lb2 = (double)fB2d.GetValue(lp20);
+    double la1 = (double)fA1d.GetValue(lp20); double la2 = (double)fA2d.GetValue(lp20);
+    double[] refPeak = new double[biquadLen];
+    double[] refLp = new double[biquadLen];
+    for (int i = 0; i < biquadLen; i++) {
+        float inp = 0.5f * MathF.Sin(2f * MathF.PI * 20f * i / sr) + 0.1f * MathF.Sin(2f * MathF.PI * 1000f * i / sr);
+        sigPeak[i] = inp;
+        sigLp[i] = inp;
+        double py = pb0 * inp + pz1;
+        pz1 = pb1 * inp - pa1 * py + pz2;
+        pz2 = pb2 * inp - pa2 * py;
+        refPeak[i] = py;
+        double ly = lb0 * inp + lz1;
+        lz1 = lb1 * inp - la1 * ly + lz2;
+        lz2 = lb2 * inp - la2 * ly;
+        refLp[i] = ly;
+    }
+    peak20.Process(sigPeak);
+    lp20.Process(sigLp);
+    double peakNoiseSq = 0, lpNoiseSq = 0;
+    for (int i = sr / 4; i < biquadLen; i++) {
+        double ep = sigPeak[i] - refPeak[i];
+        double el = sigLp[i] - refLp[i];
+        peakNoiseSq += ep * ep;
+        lpNoiseSq += el * el;
+    }
+    double peakNoiseDbfs = 10.0 * Math.Log10(peakNoiseSq / (biquadLen - sr / 4) + 1e-30);
+    double lpNoiseDbfs = 10.0 * Math.Log10(lpNoiseSq / (biquadLen - sr / 4) + 1e-30);
+    Assert(peakNoiseDbfs <= -110.0 && lpNoiseDbfs <= -110.0,
+        $"20 Hz 64-bit TDF-II noise floor > -110 dBFS: peak={peakNoiseDbfs:F1} dBFS, lp={lpNoiseDbfs:F1} dBFS");
+
+    // 3. CytomicSvfFilter live sweep (<= -80 dBFS zipper, 0 B RT alloc)
+    CytomicSvfFilter svf = new(sr, CytomicSvfType.Lowpass, 400.0, 0.70710678, 0.0, 10.0);
+    float[] svfBuf = new float[256];
+    // Warmup
+    for (int b = 0; b < 4; b++) {
+        for (int i = 0; i < svfBuf.Length; i++) svfBuf[i] = 0.5f * MathF.Sin(2f * MathF.PI * 120f * (b * 256 + i) / sr);
+        svf.Process(svfBuf);
+    }
+    double maxDiffError = 0.0;
+    long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+    double prevOut = svfBuf[^1];
+    for (int b = 4; b < 44; b++) {
+        svf.CenterFreq = 400.0 + (b - 4) * 90.0; // rapid parameter modulation per 256-sample block
+        for (int i = 0; i < svfBuf.Length; i++) {
+            svfBuf[i] = 0.5f * MathF.Sin(2f * MathF.PI * 120f * (b * 256 + i) / sr);
+        }
+        svf.Process(svfBuf);
+        for (int i = 0; i < svfBuf.Length; i++) {
+            Assert(float.IsFinite(svfBuf[i]), "CytomicSvfFilter emitted non-finite sample during sweep.");
+            if (i == 0) {
+                double jump = Math.Abs(svfBuf[0] - prevOut);
+                double expectedSlope = 0.5 * 2.0 * Math.PI * 120.0 / sr;
+                double excess = Math.Max(0.0, jump - expectedSlope * 1.5);
+                if (excess > maxDiffError) maxDiffError = excess;
+            }
+        }
+        prevOut = svfBuf[^1];
+    }
+    long svfAlloc = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+    double zipperDbfs = 20.0 * Math.Log10(maxDiffError + 1e-12);
+    Assert(svfAlloc == 0, $"CytomicSvfFilter allocated {svfAlloc} B during live sweep.");
+    Assert(zipperDbfs <= -80.0, $"CytomicSvfFilter live sweep zipper discontinuity {zipperDbfs:F1} dBFS > -80 dBFS");
+
+    // 4. LR4 Crossover (Order = 2): flat summation <= 0.05 dB ripple across passband
+    Crossover xover = new(sr, 1000.0, 2);
+    int impLen = 4096;
+    float[] imp = new float[impLen];
+    imp[0] = 1f;
+    xover.Process(imp);
+    float[] sum = new float[impLen];
+    for (int i = 0; i < impLen; i++) {
+        sum[i] = xover.LowOutput[i] + xover.HighOutput[i];
+    }
+    Complex[] sumFft = sum.FFT();
+    double maxRippleDb = 0.0;
+    for (int bin = 2; bin < impLen / 2 - 4; bin++) {
+        double mag = Math.Sqrt(sumFft[bin].Real * sumFft[bin].Real + sumFft[bin].Imaginary * sumFft[bin].Imaginary);
+        double db = Math.Abs(20.0 * Math.Log10(Math.Max(mag, 1e-9)));
+        if (db > maxRippleDb) maxRippleDb = db;
+    }
+    Assert(maxRippleDb <= 0.05, $"LR4 Crossover sum ripple {maxRippleDb:F4} dB > 0.05 dB");
+});
+
+// ---------- Test 53 (Wave W57.1 Q1-Q2): PolyphaseSincResampler 44.1->48k, DirectionalRenderer BS.2127 VBAP, JOC Hilbert ----------
+RunTest("T53_W57_1_PolyphaseSincResampler_DirectionalVbap_JocHilbert", () => {
+    // 1. PolyphaseSincResampler 44.1->48 kHz stopband rejection >= 80 dB
+    const int inSr = 44100;
+    const int outSr = 48000;
+    int inN = 4410; // 100 ms
+    int outN = 4800;
+    float[] inTone = new float[inN];
+    // Feed 21 kHz tone (near 44.1k Nyquist): alias/image mirror at 44100 - 21000 = 23100 Hz in 48 kHz output
+    for (int i = 0; i < inN; i++) {
+        inTone[i] = MathF.Sin(2f * MathF.PI * 21000f * i / inSr);
+    }
+    PolyphaseSincResampler resamp = new();
+    float[] outTone = new float[outN];
+    double stepRatio = (double)inSr / outSr;
+    resamp.Process(inTone, inN, outTone, outN, stepRatio);
+    // Steady-state 4096-point FFT skipping initial HalfTaps=32 causal latency
+    float[] steadyOut = new float[4096];
+    Array.Copy(outTone, 64, steadyOut, 0, 4096);
+    for (int i = 0; i < 4096; i++) {
+        // Hann window to avoid spectral leakage
+        steadyOut[i] *= 0.5f * (1f - MathF.Cos(2f * MathF.PI * i / 4095f));
+    }
+    Complex[] spec = steadyOut.FFT();
+    int sigBin = (int)Math.Round(21000.0 * 4096 / outSr);
+    int imgBin = (int)Math.Round(23100.0 * 4096 / outSr);
+    double sigPeak = 0.0, imgPeak = 0.0;
+    for (int b = sigBin - 3; b <= sigBin + 3; b++) {
+        double m = spec[b].Magnitude;
+        if (m > sigPeak) sigPeak = m;
+    }
+    for (int b = imgBin - 3; b <= imgBin + 3; b++) {
+        double m = spec[b].Magnitude;
+        if (m > imgPeak) imgPeak = m;
+    }
+    double stopbandDb = 20.0 * Math.Log10((sigPeak + 1e-12) / (imgPeak + 1e-12));
+    Assert(stopbandDb >= 80.0, $"PolyphaseSincResampler 44.1->48k stopband rejection {stopbandDb:F1} dB < 80 dB");
+
+    // 2. Source 44.1->48 kHz streaming: 0 B steady-state GC, 0 boundary clicks, accounting for HalfTaps=32 causal latency
+    using (VirtualizerFilter.BeginStaticStateScope()) {
+        Listener.HeadphoneVirtualizer = false;
+        Listener.ReplaceChannels(new Channel[] {
+            new Channel(-30f, 0f),
+            new Channel(30f, 0f)
+        });
+        Listener l = new(false) { SampleRate = 48000, UpdateRate = 480, AudioQuality = QualityModes.High };
+        float[] srcPcm = new float[44100];
+        for (int i = 0; i < srcPcm.Length; i++) {
+            srcPcm[i] = 0.5f * MathF.Sin(2f * MathF.PI * 1000f * i / 44100f);
+        }
+        Source src = new() { Clip = new Clip(srcPcm, 1, 44100), Position = new Vector3(0f, 0f, 5f), Volume = 1f, SpatialBlend = 1f, Loop = true };
+        l.AttachSource(src);
+        // Warmup past HalfTaps=32 causal latency + steady buffer growth
+        for (int b = 0; b < 5; b++) l.Render(1);
+        long allocBeforeSrc = GC.GetAllocatedBytesForCurrentThread();
+        float prevL = 0f;
+        double maxBoundaryJump = 0.0;
+        for (int b = 0; b < 10; b++) {
+            float[] ren = l.Render(1);
+            if (b > 0) {
+                double jump = Math.Abs(ren[0] - prevL);
+                if (jump > maxBoundaryJump) maxBoundaryJump = jump;
+            }
+            prevL = ren[ren.Length - 2];
+        }
+        long srcAlloc = GC.GetAllocatedBytesForCurrentThread() - allocBeforeSrc;
+        Assert(srcAlloc == 0, $"Source 44.1->48k allocated {srcAlloc} B in steady state.");
+        Assert(maxBoundaryJump < 0.08, $"Source 44.1->48k boundary jump={maxBoundaryJump:F4} indicates click.");
+
+        // 3. DirectionalRenderer: 0 B steady-state RT GC & UseBs2127Vbap=true
+        DirectionalRenderer dirRen = new() { UseBs2127Vbap = true };
+        float[] dirIn = new float[480];
+        for (int i = 0; i < dirIn.Length; i++) dirIn[i] = 0.4f * MathF.Sin(2f * MathF.PI * 500f * i / 48000f);
+        float[] dirOut = new float[480 * Listener.Channels.Length];
+        Vector3 testDir = new(0.25f, 0.1f, 0.96f);
+        dirRen.Render(l, src, testDir, dirIn, dirOut, 1f); // warmup
+        long allocBeforeDir = GC.GetAllocatedBytesForCurrentThread();
+        Array.Clear(dirOut, 0, dirOut.Length);
+        dirRen.Render(l, src, testDir, dirIn, dirOut, 1f);
+        long dirAlloc = GC.GetAllocatedBytesForCurrentThread() - allocBeforeDir;
+        Assert(dirAlloc == 0, $"DirectionalRenderer(UseBs2127Vbap=true) allocated {dirAlloc} B.");
+        double dirEnergy = 0.0;
+        for (int i = 0; i < dirOut.Length; i++) dirEnergy += dirOut[i] * dirOut[i];
+        Assert(dirEnergy > 1.0, $"DirectionalRenderer(UseBs2127Vbap=true) produced near-zero energy: {dirEnergy}");
+    }
+
+    // 4. JointObjectCodingApplier Hilbert phase shifter (<= 2.5 deg error around 90 deg, 0 B RT alloc, inline loop)
+    Assembly fmtAsm = typeof(AudioReader).Assembly;
+    Type hilbertType = fmtAsm.GetType("Cavern.Format.Decoders.EnhancedAC3.HilbertAllpassBranch");
+    Type jocApplierType = fmtAsm.GetType("Cavern.Format.Decoders.EnhancedAC3.JointObjectCodingApplier");
+    Assert(hilbertType != null && jocApplierType != null, "HilbertAllpassBranch and JointObjectCodingApplier types must exist in Cavern.Format.");
+    Assert(jocApplierType.GetField("taskWaiter", BindingFlags.Instance | BindingFlags.NonPublic) == null,
+        "JointObjectCodingApplier must run inline without ManualResetEventSlim taskWaiter.");
+
+    Filter branchRef = (Filter)Activator.CreateInstance(hilbertType, new object[] { false });
+    Filter branchQuad = (Filter)Activator.CreateInstance(hilbertType, new object[] { true });
+    int hLen = 4096;
+    float[] bufRef = new float[hLen];
+    float[] bufQuad = new float[hLen];
+    double[] testFreqs = { 200.0, 1000.0, 5000.0, 12000.0 };
+    foreach (double fHz in testFreqs) {
+        ((Cavern.Filters.Interfaces.IResettableFilter)branchRef).Reset();
+        ((Cavern.Filters.Interfaces.IResettableFilter)branchQuad).Reset();
+        for (int i = 0; i < hLen; i++) {
+            float s = 0.5f * MathF.Sin(2f * MathF.PI * (float)fHz * i / 48000f);
+            bufRef[i] = s;
+            bufQuad[i] = s;
+        }
+        branchRef.Process(bufRef);
+        branchQuad.Process(bufQuad);
+        // Measure normalized cross-correlation (dot / (normA * normB)) in steady half: cos(deltaPhase) == 0 for 90 deg
+        double dot = 0.0, nA = 0.0, nB = 0.0;
+        for (int i = hLen / 2; i < hLen; i++) {
+            dot += (double)bufRef[i] * bufQuad[i];
+            nA += (double)bufRef[i] * bufRef[i];
+            nB += (double)bufQuad[i] * bufQuad[i];
+        }
+        double cosPhi = Math.Clamp(dot / Math.Sqrt(nA * nB + 1e-24), -1.0, 1.0);
+        double phaseDeg = Math.Acos(cosPhi) * (180.0 / Math.PI);
+        double errDeg = Math.Abs(phaseDeg - 90.0);
+        Assert(errDeg <= 2.5, $"HilbertAllpassBranch phase error at {fHz} Hz = {errDeg:F2} deg > 2.5 deg (measured {phaseDeg:F2} deg)");
+    }
+    long allocBeforeHilbert = GC.GetAllocatedBytesForCurrentThread();
+    branchRef.Process(bufRef);
+    branchQuad.Process(bufQuad);
+    long hilbertAlloc = GC.GetAllocatedBytesForCurrentThread() - allocBeforeHilbert;
+    Assert(hilbertAlloc == 0, $"HilbertAllpassBranch.Process allocated {hilbertAlloc} B.");
+
+    // Exercise JointObjectCodingApplier.Apply inline with LastPairPhaseShift=true & 0 B steady-state alloc
+    Type jocType = fmtAsm.GetType("Cavern.Format.Decoders.EnhancedAC3.JointObjectCoding");
+    object joc = Activator.CreateInstance(jocType, nonPublic: true);
+    jocType.GetProperty("ChannelCount").SetValue(joc, 5);
+    jocType.GetProperty("ObjectCount").SetValue(joc, 2);
+    jocType.GetProperty("LastPairPhaseShift").SetValue(joc, true);
+    jocType.GetProperty("Gain").SetValue(joc, 1f);
+    jocType.GetMethod("UpdateCache").Invoke(joc, null);
+    bool[] objActive = (bool[])jocType.GetField("ObjectActive").GetValue(joc);
+    objActive[0] = true; objActive[1] = true;
+    float[][][][] interpMtx = (float[][][][])jocType.GetField("interpolatedMatrix", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(joc);
+    for (int o = 0; o < 2; o++) {
+        for (int ts = 0; ts < interpMtx[o].Length; ts++) {
+            interpMtx[o][ts] = new float[5][];
+            for (int c = 0; c < 5; c++) {
+                interpMtx[o][ts][c] = new float[64];
+                if (c == o) {
+                    for (int sb = 0; sb < 64; sb++) interpMtx[o][ts][c][sb] = 1f;
+                }
+            }
+        }
+    }
+    using IDisposable applier = (IDisposable)Activator.CreateInstance(jocApplierType, joc, 1536);
+    FieldInfo mixMatrixField = jocApplierType.GetField("mixMatrix", BindingFlags.Instance | BindingFlags.NonPublic);
+    FieldInfo timeslotField = jocApplierType.GetField("timeslot", BindingFlags.Instance | BindingFlags.NonPublic);
+    mixMatrixField.SetValue(applier, interpMtx);
+    MethodInfo applyMethod = jocApplierType.GetMethod("Apply");
+    float[][] jocIn = new float[5][];
+    for (int c = 0; c < 5; c++) {
+        jocIn[c] = new float[64];
+        for (int s = 0; s < 64; s++) jocIn[c][s] = 0.25f * MathF.Sin(2f * MathF.PI * 1000f * s / 48000f);
+    }
+    object[] applyArgs = new object[] { jocIn, joc };
+    for (int w = 0; w < 3; w++) {
+        timeslotField.SetValue(applier, 1);
+        applyMethod.Invoke(applier, applyArgs); // warm up both Apply and .NET 8 MethodInvoker
+    }
+    timeslotField.SetValue(applier, 2);
+    long allocBeforeJoc = GC.GetAllocatedBytesForCurrentThread();
+    float[][] jocOut = (float[][])applyMethod.Invoke(applier, applyArgs);
+    long jocAlloc = GC.GetAllocatedBytesForCurrentThread() - allocBeforeJoc;
+    Assert(jocOut != null && jocOut.Length == 2, "JointObjectCodingApplier.Apply did not return 2 objects.");
+    // Note: reflection Invoke boxes nothing when array args preallocated, expect 0 B managed allocation
+    Assert(jocAlloc == 0, $"JointObjectCodingApplier.Apply allocated {jocAlloc} B in steady state.");
+});
+
+// ---------- Test 54 (Wave W55.2): SpatialChoreoTrack Stem Activity, SpatialChoreoRtGate, LyricMoodSpatialModulator, EarCandySpectralDetector ----------
+RunTest("T54_W55_2_SpatialChoreoActivity_LyricMood_EarCandy", () => {
+    // 1. SpatialChoreoTrack.BuildWithStemActivity: active-only Orbit, dead/silent stems locked static
+    string[] stemNames = { "vocals", "bass", "drums", "other" };
+    float[] homeAz = { 0f, 0f, -55f, 62f };
+    bool[] hasSignal = { true, true, true, false }; // "other" (idx 3) is silent/dead
+    SpatialChoreoTrack track = SpatialChoreoTrack.BuildWithStemActivity(
+        stemNames,
+        Array.Empty<DirectorCue>(),
+        SpatialChoreoMode.Orbit,
+        durationSec: 24.0,
+        stepSec: 0.1,
+        stemHomeAzimuthsDeg: homeAz,
+        stemHasSignal: hasSignal);
+    Assert(track.IsStemAudible(2), "Audible drums stem must be marked audible.");
+    Assert(!track.IsStemAudible(3), "Dead/silent other stem must be marked inaudible.");
+
+    Vector3 activePos0 = Vector3.Zero, activePos1 = Vector3.Zero;
+    Vector3 deadPos0 = Vector3.Zero, deadPos1 = Vector3.Zero;
+    Assert(NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(track, SpatialChoreoMode.Orbit, 2, NeuralStemRole.Drums, -1f, 1.0, out activePos0, true),
+        "EvaluateStemPositionZeroAlloc failed for active drums.");
+    Assert(NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(track, SpatialChoreoMode.Orbit, 2, NeuralStemRole.Drums, -1f, 6.0, out activePos1, true),
+        "EvaluateStemPositionZeroAlloc failed for active drums at t=6s.");
+    Assert(Vector3.Distance(activePos0, activePos1) > 0.05f, "Active non-anchor stem must orbit across time.");
+
+    Assert(NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(track, SpatialChoreoMode.Orbit, 3, NeuralStemRole.Other, 1f, 1.0, out deadPos0, true),
+        "EvaluateStemPositionZeroAlloc failed for dead stem.");
+    Assert(NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(track, SpatialChoreoMode.Orbit, 3, NeuralStemRole.Other, 1f, 6.0, out deadPos1, true),
+        "EvaluateStemPositionZeroAlloc failed for dead stem at t=6s.");
+    Assert(Vector3.Distance(deadPos0, deadPos1) < 1e-4f, "Dead/silent stem must remain locked static at its anchor.");
+
+    // 2. SpatialChoreoRtGate: 0f on silent/anchor stems, smooth >0 on active stems, 0 B RT alloc
+    SpatialChoreoRtGate rtGate = new();
+    rtGate.UpdateAndEvaluateZeroAlloc(0, 0.25f, isAnchorRole: false); // warmup
+    long gateAllocBefore = GC.GetAllocatedBytesForCurrentThread();
+    float anchorGate = rtGate.UpdateAndEvaluateZeroAlloc(1, 0.25f, isAnchorRole: true);
+    float silentGate = rtGate.UpdateAndEvaluateZeroAlloc(2, 0.0005f, isAnchorRole: false);
+    float activeGate = rtGate.UpdateAndEvaluateZeroAlloc(0, 0.10f, isAnchorRole: false);
+    long gateAlloc = GC.GetAllocatedBytesForCurrentThread() - gateAllocBefore;
+    Assert(anchorGate == 0f && silentGate == 0f, $"Anchor/silent RT gate must be 0, got anchor={anchorGate}, silent={silentGate}");
+    Assert(activeGate > 0.05f && activeGate <= 1f, $"Active stem RT gate expected in (0.05, 1], got {activeGate}");
+    Assert(gateAlloc == 0, $"SpatialChoreoRtGate allocated {gateAlloc} B.");
+
+    // 3. LyricMoodSpatialModulator.EvaluateZeroAlloc: arousal/valence/section modulation, zero raw lyric text, 0 B alloc
+    FieldInfo[] digestFields = typeof(LyricMoodDigest).GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+    foreach (FieldInfo f in digestFields) {
+        Assert(f.FieldType != typeof(string), $"LyricMoodDigest must never store raw lyric text strings (found {f.Name}).");
+    }
+    LyricMoodDigest[] digests = {
+        new LyricMoodDigest(LyricMoodTag.Intimate, 0.20f, 0.30f, 0, 0.0),
+        new LyricMoodDigest(LyricMoodTag.Anthem, 0.90f, 0.85f, 1, 10.0)
+    };
+    LyricSpatialResponseFx fxWarmup = LyricMoodSpatialModulator.EvaluateZeroAlloc(digests, 5.0, 20.0); // warmup
+    long moodAllocBefore = GC.GetAllocatedBytesForCurrentThread();
+    LyricSpatialResponseFx fxIntimate = LyricMoodSpatialModulator.EvaluateZeroAlloc(digests, 4.0, 20.0);
+    LyricSpatialResponseFx fxBlend = LyricMoodSpatialModulator.EvaluateZeroAlloc(digests, 11.0, 20.0);
+    LyricSpatialResponseFx fxAnthem = LyricMoodSpatialModulator.EvaluateZeroAlloc(digests, 15.0, 20.0);
+    long moodAlloc = GC.GetAllocatedBytesForCurrentThread() - moodAllocBefore;
+    Assert(moodAlloc == 0, $"LyricMoodSpatialModulator.EvaluateZeroAlloc allocated {moodAlloc} B.");
+    Assert(fxIntimate.StageWidthScale < fxBlend.StageWidthScale && fxBlend.StageWidthScale < fxAnthem.StageWidthScale,
+        $"Expected smooth stage width progression Intimate < Blend < Anthem: {fxIntimate.StageWidthScale:F2}, {fxBlend.StageWidthScale:F2}, {fxAnthem.StageWidthScale:F2}");
+    Assert(fxAnthem.ElevationLiftDeg > fxIntimate.ElevationLiftDeg && fxAnthem.RoomReflectionScale > fxIntimate.RoomReflectionScale,
+        "Anthem mood must elevate stage and expand room reflection scale relative to Intimate.");
+
+    // 4. EarCandySpectralDetector: 0 B RT alloc & transient/spectral micro-object detection
+    EarCandySpectralDetector ec = new();
+    float[] stereoSparkle = new float[512 * 2];
+    for (int i = 0; i < 512; i++) {
+        float chime = 0.35f * MathF.Sin(2f * MathF.PI * 9500f * i / 48000f) * MathF.Exp(-i / 180f);
+        stereoSparkle[i * 2] = chime;
+        stereoSparkle[i * 2 + 1] = -chime * 0.8f;
+    }
+    EarCandyMicroNode[] ecSnap = new EarCandyMicroNode[EarCandySpectralDetector.MaxMicroObjects];
+    ec.ProcessStereoInterleavedZeroAlloc(stereoSparkle, stereoSparkle.Length, 48000, 1.2f); // warmup
+    long ecAllocBefore = GC.GetAllocatedBytesForCurrentThread();
+    ec.ProcessStereoInterleavedZeroAlloc(stereoSparkle, stereoSparkle.Length, 48000, 1.2f);
+    int copied = ec.CopySnapshotZeroAlloc(ecSnap, out float sparkle01, out int activeNodes);
+    long ecAlloc = GC.GetAllocatedBytesForCurrentThread() - ecAllocBefore;
+    Assert(ecAlloc == 0, $"EarCandySpectralDetector allocated {ecAlloc} B on RT thread.");
+    Assert(copied > 0 && activeNodes > 0 && sparkle01 > 0.05f,
+        $"Expected active ear-candy micro-objects for 9.5 kHz chime, got count={activeNodes}, sparkle={sparkle01:F3}");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
@@ -5209,16 +5608,17 @@ def _py_stage9_w51_vocal_cache_ux_loudness_volume_contracts() -> None:
     assert ".ScaleX(1f)" in nav_src and "IsSuspendedForTransition" in nav_src, "W51.4 missing GPU tab pill or blur suspension"
 
     # W51.5: First-3s startup stutter elimination
+    loader_v42_src = loader_src + "\n" + (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.SpatialV42.cs").read_text(encoding="utf-8")
     out_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Audio" / "AndroidAudioOutput.cs").read_text(encoding="utf-8")
     assert "PreFillNativePlaybackRing(" in out_src, "W51.5 missing PreFillNativePlaybackRing in AndroidAudioOutput.cs"
-    assert "startupDelayMs: 1400" in loader_src, "W51.5 missing staggered LGSR startupDelayMs"
+    assert "startupDelayMs: 1400" in loader_v42_src, "W51.5 missing staggered LGSR startupDelayMs"
 
     # W51.6: Next-track loudness pre-scan & sample-0 priming
     tag_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AudioTagReader.cs").read_text(encoding="utf-8")
     assert "TryParseLoudnessTagToLufs" in tag_src and "TrackIntegratedLufs" in tag_src, "W51.6 missing tag loudness parser"
     qa_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AudioQualityAnalyzer.cs").read_text(encoding="utf-8")
     assert "PreScanTrackIntegratedLufsAsync" in qa_src and "track_loudness_lufs_v1.json" in qa_src, "W51.6 missing loudness pre-scanner/cache"
-    assert "ScheduleNextTrackLoudnessPreScan" in loader_src and "PrimeTrackLoudnessLufs" in loader_src, "W51.6 missing next-track pre-scan wiring"
+    assert "ScheduleNextTrackLoudnessPreScan" in loader_v42_src and "PrimeTrackLoudnessLufs" in loader_v42_src, "W51.6 missing next-track pre-scan wiring"
 
     # W51.7: Bidirectional App <-> Android System Media Volume link
     main_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.cs").read_text(encoding="utf-8")
@@ -5531,6 +5931,24 @@ def _py_stage15_w56_4_co_evolve_zero_static_contracts() -> None:
         assert expected_reset in schema_cs, f"W56.4 AppSettingsStore.Schema.cs missing true default reset: {expected_reset}"
 
 
+def _py_stage16_w55_2_collapse_when_disabled_and_w57_1_contracts() -> None:
+    """W55.2 + W57.1: Collapse-when-disabled choreo UI gate & JOC inline zero-ThreadPool invariants."""
+    spatial_v42 = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.SpatialV42.cs").read_text(encoding="utf-8")
+    assert "bool Has3DSpatializationForChoreo()" in spatial_v42, "W55.2 Has3DSpatializationForChoreo() missing in MainActivity.SpatialV42.cs"
+    assert "ViewStates nextVis = has3D ? ViewStates.Visible : ViewStates.Gone;" in spatial_v42, (
+        "W55.2 RefreshSpatialChoreoClarifierV42 must collapse choreography container to Gone when 3D spatialization is disabled"
+    )
+    assert "playerEngine.SceneHub.SetChoreoTrack(null);" in spatial_v42, (
+        "W55.2 RefreshSpatialChoreoClarifierV42 must clear active choreo track when 3D spatialization is disabled"
+    )
+
+    joc_src = (REPO_ROOT / "Cavern.Format" / "Decoders" / "EnhancedAC3" / "JointObjectCodingApplier.cs").read_text(encoding="utf-8")
+    assert "ThreadPool.QueueUserWorkItem" not in joc_src and "ManualResetEventSlim" not in joc_src, (
+        "W57.1 JointObjectCodingApplier.cs must run inline without ThreadPool wakeups or ManualResetEventSlim"
+    )
+    assert "HilbertAllpassBranch" in joc_src, "W57.1 JointObjectCodingApplier.cs must implement HilbertAllpassBranch"
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -5549,6 +5967,7 @@ PYTHON_CHECKS = [
     ("PY_T13_W53_4_W53_5_W53_6_WaveD_WaveE_WaveF_Contracts", _py_stage13_w53_4_to_w53_6_wave_d_e_f_contracts),
     ("PY_T14_W55_1_V4Reform_P0_Contracts", _py_stage14_v4_1_reform_p0_contracts),
     ("PY_T15_W56_4_CoEvolve_BridgeCmd_Packaging_SettingsSchema_DspParity", _py_stage15_w56_4_co_evolve_zero_static_contracts),
+    ("PY_T16_W55_2_CollapseWhenDisabled_And_W57_1_JocInlineContracts", _py_stage16_w55_2_collapse_when_disabled_and_w57_1_contracts),
 ]
 
 

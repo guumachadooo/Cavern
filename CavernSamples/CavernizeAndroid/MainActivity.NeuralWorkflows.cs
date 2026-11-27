@@ -312,10 +312,8 @@ public partial class MainActivity {
                 }
                 Toast.MakeText(this, S["PlayTabAiOffToast"], ToastLength.Short).Show();
             }
-            RefreshLgsrUi();
-            RefreshNeuralAudioUi();
-            RefreshNeuralPrepUi();
-            RefreshBottomActionBarVisuals();
+            RefreshLgsrUi(); RefreshNeuralAudioUi(); RefreshNeuralPrepUi();
+            RefreshSpatialChoreoClarifierUi(); RefreshBottomActionBarVisuals();
             return;
         }
 
@@ -329,9 +327,7 @@ public partial class MainActivity {
         if (currentlyOn) {
             store.NeuralSpatialUpmixModeIndex = (int)Cavernize.Logic.Spatial.NeuralSpatialUpmixMode.Off;
             _ = playerEngine?.ApplyNeuralConfigAsync(store.BuildNeuralAudioConfig());
-            RefreshNeuralAudioUi();
-            RefreshNeuralPrepUi();
-            RefreshBottomActionBarVisuals();
+            RefreshNeuralAudioUi(); RefreshNeuralPrepUi(); RefreshSpatialChoreoClarifierUi(); RefreshBottomActionBarVisuals();
             Toast.MakeText(this, S["PlayTabAiOffToast"], ToastLength.Short).Show();
             return;
         }
@@ -351,9 +347,7 @@ public partial class MainActivity {
         int targetMode = store.LastActiveNeuralSpatialUpmixModeIndex;
         store.NeuralSpatialUpmixModeIndex = targetMode;
         _ = playerEngine?.ApplyNeuralConfigAsync(store.BuildNeuralAudioConfig());
-        RefreshNeuralAudioUi();
-        RefreshNeuralPrepUi();
-        RefreshBottomActionBarVisuals();
+        RefreshNeuralAudioUi(); RefreshNeuralPrepUi(); RefreshSpatialChoreoClarifierUi(); RefreshBottomActionBarVisuals();
 
         if (!(playerEngine?.NeuralStage?.HasPlayableSpatialUpmixStems ?? false)) {
             PrepareActiveTrackNeuralStemsAsync(Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation);
@@ -552,7 +546,7 @@ public partial class MainActivity {
             : Path.GetFileNameWithoutExtension(activePath);
         int sr = activeTrack.SampleRate >= 8000 ? activeTrack.SampleRate : 48000;
         string ffLoc = ffmpeg?.Found == true ? ffmpeg.Location : null;
-        _ = Task.Run(() => {
+        _ = Task.Run(async () => {
             if (!neuralTrackCache.TryLoad(entry.CacheKey, out Cavernize.Logic.Spatial.NeuralSeparatedTrack loaded) || loaded == null) {
                 return;
             }
@@ -564,14 +558,12 @@ public partial class MainActivity {
             if (dna != null && dna.IsExtractedFromSong) {
                 SaveCachedSongVocalDna(activeTrack, dna);
             }
+            if (!uiDestroyed && GetActiveTrack() == activeTrack) {
+                await BindSpatialStemsOffUiThreadAsync(loaded, goal, CancellationToken.None).ConfigureAwait(false);
+            }
             RunOnUiThread(() => {
                 if (uiDestroyed || GetActiveTrack() != activeTrack) {
                     return;
-                }
-                if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
-                    playerEngine.BindKaraokeReferenceTrack(loaded);
-                } else {
-                    playerEngine.BindSpatialUpmixTrack(loaded);
                 }
                 SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                 ApplyExtractedSongDnaOnUiThread(dna);
@@ -579,6 +571,7 @@ public partial class MainActivity {
                 RefreshNeuralAudioUi();
                 RefreshNeuralPrepUi();
                 RefreshLyricsSingDockUi();
+                RefreshSpatialChoreoClarifierUi();
                 RefreshBottomActionBarVisuals();
                 Toast.MakeText(this, string.Format(S["AiCacheVariantActivatedToast"], loaded.Stems.Count), ToastLength.Short).Show();
                 onActivated?.Invoke();
@@ -1202,21 +1195,16 @@ public partial class MainActivity {
                 }
 
                 if (spatialUpmixTrack != null || karaokeTrack != null || extractedDna != null) {
+                    if (spatialUpmixTrack != null && !uiDestroyed && gen == neuralPrepGeneration && GetActiveTrack() == activeTrack) await playerEngine.BindSpatialUpmixTrackAsync(spatialUpmixTrack).ConfigureAwait(false);
+                    if (karaokeTrack != null && !uiDestroyed && gen == neuralPrepGeneration && GetActiveTrack() == activeTrack) playerEngine.BindKaraokeReferenceTrack(karaokeTrack);
                     RunOnUiThread(() => {
-                        if (uiDestroyed || gen != neuralPrepGeneration || GetActiveTrack() != activeTrack) {
-                            return;
-                        }
-                        if (spatialUpmixTrack != null) {
-                            playerEngine.BindSpatialUpmixTrack(spatialUpmixTrack);
-                        }
-                        if (karaokeTrack != null) {
-                            playerEngine.BindKaraokeReferenceTrack(karaokeTrack);
-                        }
+                        if (uiDestroyed || gen != neuralPrepGeneration || GetActiveTrack() != activeTrack) return;
                         SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                         ApplyExtractedSongDnaOnUiThread(extractedDna);
                         RefreshNeuralAudioUi();
                         RefreshNeuralPrepUi();
                         RefreshLyricsSingDockUi();
+                        RefreshSpatialChoreoClarifierUi();
                     });
                 }
             } catch (Exception ex) {
@@ -1501,6 +1489,9 @@ public partial class MainActivity {
                     if (cachedDna != null && cachedDna.IsExtractedFromSong) {
                         SaveCachedSongVocalDna(activeTrack, cachedDna);
                     }
+                    if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation || goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
+                        await BindSpatialStemsOffUiThreadAsync(cachedTrack, goal, ct).ConfigureAwait(false);
+                    }
                     RunOnUiThread(() => {
                         if (uiDestroyed || myGen != neuralPrepGeneration) {
                             return;
@@ -1509,15 +1500,11 @@ public partial class MainActivity {
                         activeNeuralPrepGoal = null;
                         neuralPrepProgress = 1.0;
                         neuralPrepStatusText = "";
-                        if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation) {
-                            playerEngine.BindSpatialUpmixTrack(cachedTrack);
-                        } else if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
-                            playerEngine.BindKaraokeReferenceTrack(cachedTrack);
-                        }
                         SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                         ApplyExtractedSongDnaOnUiThread(cachedDna);
                         RefreshNeuralAudioUi();
                         RefreshNeuralPrepUi();
+                        RefreshSpatialChoreoClarifierUi();
                         string msg = (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna && cachedDna != null && cachedDna.IsExtractedFromSong)
                             ? string.Format(S["VocalDnaReadyToast"], cachedDna.TargetVocalLufs, cachedDna.ReverbRt60Sec, cachedDna.ActiveWindowCount)
                             : string.Format(S["NeuralPrepCacheHitToast"], cachedTrack.Stems.Count);
@@ -1676,18 +1663,12 @@ public partial class MainActivity {
                     }
                     Action<Cavernize.Logic.Spatial.NeuralSeparatedTrack> progressiveCallback =
                         goal != Cavernize.Logic.Spatial.NeuralPipelineGoal.VocalMixDna
-                            ? progressiveTrack => RunOnUiThread(() => {
-                                if (uiDestroyed || myGen != neuralPrepGeneration || progressiveTrack == null) {
-                                    return;
-                                }
-                                if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation) {
-                                    playerEngine.BindSpatialUpmixTrack(progressiveTrack);
-                                } else if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
-                                    playerEngine.BindKaraokeReferenceTrack(progressiveTrack);
-                                }
-                                RefreshNeuralAudioUi();
-                                RefreshNeuralPrepUi();
-                            })
+                            ? progressiveTrack => {
+                                if (uiDestroyed || myGen != neuralPrepGeneration || progressiveTrack == null) return;
+                                if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation) playerEngine.BindSpatialUpmixTrack(progressiveTrack);
+                                else if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) playerEngine.BindKaraokeReferenceTrack(progressiveTrack);
+                                RunOnUiThread(() => { if (!uiDestroyed && myGen == neuralPrepGeneration) { RefreshNeuralAudioUi(); RefreshNeuralPrepUi(); RefreshSpatialChoreoClarifierUi(); } });
+                            }
                             : null;
 
                     try {
@@ -1747,25 +1728,21 @@ public partial class MainActivity {
                     SaveCachedSongVocalDna(activeTrack, extractedDna);
                 }
 
+                if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation || goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
+                    await BindSpatialStemsOffUiThreadAsync(separated, goal, ct).ConfigureAwait(false);
+                }
                 RunOnUiThread(() => {
-                    if (uiDestroyed || myGen != neuralPrepGeneration) {
-                        return;
-                    }
+                    if (uiDestroyed || myGen != neuralPrepGeneration) return;
                     isNeuralPrepRunning = false;
                     activeNeuralPrepGoal = null;
                     neuralPrepProgress = 1.0;
                     neuralPrepStatusText = "";
-                    // VocalMixDna analyzes a smart <=40s excerpt, so never bind it as a full-length playback stem set
-                    if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.StemSeparation) {
-                        playerEngine.BindSpatialUpmixTrack(separated);
-                    } else if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
-                        playerEngine.BindKaraokeReferenceTrack(separated);
-                    }
                     SyncNeuralReferenceOffsetForActiveTrack(activeTrack);
                     ApplyExtractedSongDnaOnUiThread(extractedDna);
                     SyncNeuralRuntimeDiagnostics();
                     RefreshNeuralAudioUi();
                     RefreshNeuralPrepUi();
+                    RefreshSpatialChoreoClarifierUi();
                     string toastMsg;
                     ToastLength toastLen = ToastLength.Short;
                     if (separated.UsedMemorySafeFallback) {

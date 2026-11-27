@@ -71,6 +71,7 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     readonly float[] lastOutputRing = new float[crossfadeFrames * 2];
     int lastOutputRingWrite;
     bool hasRenderedAudio;
+    bool hasMeasuredLiveSourceRms;
     readonly float[] fadeOutSnapshot = new float[crossfadeFrames * 2];
     int crossfadeRemaining;
     int crossfadeTotal;
@@ -80,6 +81,10 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     float[] cachedBaseSourceVolumes = Array.Empty<float>();
     float[] xrayLpLowStates = Array.Empty<float>();
     float[] xrayLpMidStates = Array.Empty<float>();
+    readonly float[][] earCandyBufsScratch = new float[EarCandySpectralDetector.MaxSlots][];
+    readonly Vector3[] earCandyPosScratch = new Vector3[EarCandySpectralDetector.MaxSlots];
+    readonly bool[] earCandySkipScratch = new bool[EarCandySpectralDetector.MaxSlots];
+    LyricSpatialResponseFx lastBlockLyricFx = LyricSpatialResponseFx.Neutral;
     TrackSourceItem[] matchedSourceItemsScratch = Array.Empty<TrackSourceItem>();
     bool[] usedSourceItemsScratch = Array.Empty<bool>();
     Source[] liveNeuralSources = Array.Empty<Source>();
@@ -684,10 +689,24 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     /// <see cref="Source"/>s directly to <see cref="Listener"/> synced to the current playhead.
     /// </summary>
     public void BindSpatialUpmixTrack(NeuralSeparatedTrack separatedTrack) {
+        BindSpatialUpmixTrack(separatedTrack, prebuiltHybridTrack: null, prebuiltHybridBuses: null, prebuiltEffect: float.NaN);
+    }
+
+    void BindSpatialUpmixTrack(
+        NeuralSeparatedTrack separatedTrack,
+        NeuralSeparatedTrack prebuiltHybridTrack,
+        float[][] prebuiltHybridBuses,
+        float prebuiltEffect) {
         bool rebuilt = false;
         lock (renderLock) {
             neuralStemStage.BindSpatialUpmixTrack(separatedTrack);
-            if (!ReferenceEquals(cachedHybridTrack, separatedTrack)) {
+            if (separatedTrack != null && ReferenceEquals(prebuiltHybridTrack, separatedTrack) &&
+                prebuiltHybridBuses != null && prebuiltHybridBuses.Length == 12 &&
+                MathF.Abs(prebuiltEffect - upmixingSettings.Effect) < 0.005f) {
+                cachedHybridTrack = prebuiltHybridTrack;
+                cachedHybrid714Buses = prebuiltHybridBuses;
+                cachedHybridEffect = prebuiltEffect;
+            } else if (!ReferenceEquals(cachedHybridTrack, separatedTrack)) {
                 cachedHybridTrack = null;
                 cachedHybrid714Buses = null;
             }
@@ -697,6 +716,109 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
         if (rebuilt) {
             SourcesRebuilt?.Invoke();
         }
+    }
+
+    /// <summary>
+    /// Updates distilled lyric mood cues for live room-response &amp; choreography FX (zero raw lyric text).
+    /// </summary>
+    public void SetLyricMoodDigests(IReadOnlyList<LyricMoodDigest> digests) {
+        sceneHub.SetLyricMoodDigests(digests);
+    }
+
+    /// <summary>
+    /// Asynchronously precomputes heavy neural upmix buses off-lock and off-UI-thread, then binds atomically.
+    /// </summary>
+    public async Task BindSpatialUpmixTrackAsync(NeuralSeparatedTrack separatedTrack, CancellationToken cancellationToken = default) {
+        cancellationToken.ThrowIfCancellationRequested();
+        bool needHybridPrebuild = false;
+        float capturedEffect = 0f;
+        int capturedSr = Listener.DefaultSampleRate;
+        lock (renderLock) {
+            capturedEffect = upmixingSettings.Effect;
+            capturedSr = currentTrack != null && currentTrack.SampleRate > 0 ? currentTrack.SampleRate : Listener.DefaultSampleRate;
+            needHybridPrebuild = separatedTrack != null &&
+                !separatedTrack.IsProgressiveStreaming &&
+                separatedTrack.Stems != null &&
+                separatedTrack.Stems.Count > 0 &&
+                neuralStemStage.Config.SpatialUpmixMode == NeuralSpatialUpmixMode.HybridNeuralDirAc &&
+                !ReferenceEquals(cachedHybridTrack, separatedTrack);
+        }
+
+        float[][] prebuiltBuses = null;
+        if (needHybridPrebuild) {
+            await Task.Run(() => {
+                cancellationToken.ThrowIfCancellationRequested();
+                StereoStemBuffer[] stemArr = new StereoStemBuffer[separatedTrack.Stems.Count];
+                for (int i = 0; i < separatedTrack.Stems.Count; i++) {
+                    stemArr[i] = separatedTrack.Stems[i];
+                }
+                int stemSr = separatedTrack.SampleRate > 0 ? separatedTrack.SampleRate : capturedSr;
+                float heightExp = Math.Clamp(capturedEffect * 0.5f, 0.10f, 0.65f);
+                prebuiltBuses = NeuralStemSpatializer.BuildHybrid714WithDiscreteLfe(stemArr, stemSr, heightExp, 120f);
+            }, cancellationToken).ConfigureAwait(false);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        await Task.Run(() => {
+            cancellationToken.ThrowIfCancellationRequested();
+            BindSpatialUpmixTrack(
+                separatedTrack,
+                prebuiltBuses != null ? separatedTrack : null,
+                prebuiltBuses,
+                capturedEffect);
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Asynchronously binds a separated neural track (full-mix 3D stems or 2-stem Karaoke) off the UI thread.
+    /// </summary>
+    public Task BindSeparatedNeuralTrackAsync(NeuralSeparatedTrack separatedTrack, CancellationToken cancellationToken = default) {
+        if (separatedTrack != null && NeuralStemSpatializer.IsFullMixSpatialStemSet(separatedTrack.Stems)) {
+            return BindSpatialUpmixTrackAsync(separatedTrack, cancellationToken);
+        }
+        return Task.Run(() => {
+            cancellationToken.ThrowIfCancellationRequested();
+            BindSeparatedNeuralTrack(separatedTrack);
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Loads a <see cref="CavernizeTrack"/> off the UI thread so decoder setup causes zero frame drops.
+    /// </summary>
+    public Task LoadAsync(
+        CavernizeTrack track,
+        UpmixingSettings upmixing = null,
+        RenderingSettings rendering = null,
+        CancellationToken cancellationToken = default) {
+        return Task.Run(() => {
+            cancellationToken.ThrowIfCancellationRequested();
+            Load(track, upmixing, rendering);
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Seamlessly hot-swaps playback tracks off the UI thread without stalling UI frames.
+    /// </summary>
+    public Task HotSwapTrackSeamlessAsync(
+        CavernizeTrack track,
+        double startSeconds,
+        UpmixingSettings upmixing = null,
+        RenderingSettings rendering = null,
+        bool preserveNeuralStems = false,
+        double neuralReferenceOffset = double.NaN,
+        double neuralReferenceDriftPpm = double.NaN,
+        CancellationToken cancellationToken = default) {
+        return Task.Run(() => {
+            cancellationToken.ThrowIfCancellationRequested();
+            HotSwapTrackSeamless(
+                track,
+                startSeconds,
+                upmixing,
+                rendering,
+                preserveNeuralStems,
+                neuralReferenceOffset,
+                neuralReferenceDriftPpm);
+        }, cancellationToken);
     }
 
     /// <summary>

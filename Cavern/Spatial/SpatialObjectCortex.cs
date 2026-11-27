@@ -380,10 +380,13 @@ namespace Cavern.Spatial {
                 return Array.Empty<float>();
             }
             float[] result = new float[stems.Count];
+            bool[] hasSignal = new bool[stems.Count];
             for (int i = 0; i < stems.Count; i++) {
                 StereoPanEstimate est = Estimate(stems[i], stageHalfWidthDeg);
+                hasSignal[i] = est.HasSignal;
                 result[i] = est.HasSignal ? est.PanAzimuthDeg : float.NaN;
             }
+            Layer1AudioForensics.RecordEstimatedHomeSignals(result, hasSignal);
             return result;
         }
     }
@@ -393,7 +396,7 @@ namespace Cavern.Spatial {
     /// Self-Similarity Matrix (SSM) structural section boundaries, and per-stem RMS/spectral centroid
     /// features to produce bounded musical choreography cues (&lt;= 8 cues/min).
     /// </summary>
-    public static class Layer1AudioForensics {
+    public static partial class Layer1AudioForensics {
         /// <summary>Hard ceiling on choreography cues emitted per 60-second window.</summary>
         public const int MaxCuesPerMinute = 8;
 
@@ -497,7 +500,9 @@ namespace Cavern.Spatial {
                 rawCues.Add(new DirectorCue(tSec, role, azDeg, elDeg, radius, energy01));
             }
 
-            return EnforceCueRateBudget(rawCues, durationSec, MaxCuesPerMinute);
+            DirectorCue[] budgeted = EnforceCueRateBudget(rawCues, durationSec, MaxCuesPerMinute);
+            RecordAnalyzedStemActivity(stems, sampleRate, durationSec, budgeted, panEstimates);
+            return budgeted;
         }
 
         /// <summary>
@@ -1584,7 +1589,7 @@ namespace Cavern.Spatial {
     /// Precomputed C2-continuous spherical ring lookup table (ring-LUT) delivering zero-allocation,
     /// sub-0.10 ms/block 3D unit-SLERP shortest-arc object choreography.
     /// </summary>
-    public sealed class SpatialChoreoTrack {
+    public sealed partial class SpatialChoreoTrack {
         readonly NeuralStemRole[] stemRoles;
         readonly string[] stemNames;
         readonly DirectorCue[] directorCues;
@@ -1628,7 +1633,8 @@ namespace Cavern.Spatial {
             string[] stemNames,
             DirectorCue[] directorCues,
             Vector4[] lut,
-            int frameCount) {
+            int frameCount,
+            bool[] stemAudibleFlags = null) {
             Mode = mode;
             StepSec = stepSec;
             DurationSec = durationSec;
@@ -1636,6 +1642,7 @@ namespace Cavern.Spatial {
             this.stemNames = stemNames;
             this.directorCues = directorCues;
             this.lut = lut;
+            this.stemAudibleFlags = stemAudibleFlags;
             StemCount = stemRoles.Length;
             FrameCount = frameCount;
         }
@@ -1664,115 +1671,7 @@ namespace Cavern.Spatial {
             double durationSec,
             double stepSec,
             float[] stemHomeAzimuthsDeg) {
-            if (stemNames == null || stemNames.Count == 0) {
-                return new SpatialChoreoTrack(
-                    mode,
-                    0.05,
-                    0.0,
-                    Array.Empty<NeuralStemRole>(),
-                    Array.Empty<string>(),
-                    Array.Empty<DirectorCue>(),
-                    Array.Empty<Vector4>(),
-                    0);
-            }
-
-            double safeStep = SpatialCortexMath.ClampDouble(stepSec, 0.02, 0.25);
-            double safeDur = SpatialCortexMath.ClampDouble(durationSec, safeStep, 7200.0);
-            int frameCount = Math.Max(2, (int)Math.Ceiling(safeDur / safeStep) + 1);
-            int stemCount = stemNames.Count;
-
-            NeuralStemRole[] roles = new NeuralStemRole[stemCount];
-            string[] names = new string[stemCount];
-            for (int s = 0; s < stemCount; s++) {
-                names[s] = stemNames[s] ?? ("Stem " + (s + 1));
-                roles[s] = NeuralStemSpatializer.ClassifyStemName(names[s]);
-            }
-
-            DirectorCue[] safeCues = cues ?? Array.Empty<DirectorCue>();
-            List<DirectorCue> sortedCues = new List<DirectorCue>(safeCues.Length);
-            for (int i = 0; i < safeCues.Length; i++) {
-                DirectorCue c = safeCues[i];
-                float az = c.TargetAzDeg;
-                float el = c.TargetElDeg;
-                float rad = c.Radius;
-                PsychoacousticGovernor.ClampRoleAngles(c.StemRole, ref az, ref el, ref rad);
-                sortedCues.Add(new DirectorCue(c.TimeSec, c.StemRole, az, el, rad, c.Energy01));
-            }
-            sortedCues.Sort((a, b) => a.TimeSec.CompareTo(b.TimeSec));
-
-            Vector4[] lut = new Vector4[stemCount * frameCount];
-            Vector4[] baseAnchors = new Vector4[stemCount];
-            bool[] hasMeasuredHome = new bool[stemCount];
-            for (int s = 0; s < stemCount; s++) {
-                float measuredAz = (stemHomeAzimuthsDeg != null && s < stemHomeAzimuthsDeg.Length)
-                    ? stemHomeAzimuthsDeg[s]
-                    : float.NaN;
-                hasMeasuredHome[s] = SpatialCortexMath.IsFinite(measuredAz);
-                baseAnchors[s] = GetDefaultStemAnchor(roles[s], s, stemCount, measuredAz);
-            }
-
-            // Step 1: Sample keyframe curves & apply C2 cubic B-spline interpolation per stem
-            int orbitingTotal = 0;
-            for (int s = 0; s < stemCount; s++) {
-                NeuralStemRole r = roles[s];
-                if (r != NeuralStemRole.LeadVocal && r != NeuralStemRole.Vocals && r != NeuralStemRole.Bass) {
-                    orbitingTotal++;
-                }
-            }
-            int orbitingSlot = 0;
-            for (int s = 0; s < stemCount; s++) {
-                NeuralStemRole r = roles[s];
-                bool isAnchored = r == NeuralStemRole.LeadVocal || r == NeuralStemRole.Vocals || r == NeuralStemRole.Bass;
-                float orbitPhaseOffsetDeg = (!isAnchored && orbitingTotal > 0)
-                    ? (orbitingSlot++ * (360f / orbitingTotal))
-                    : 0f;
-                List<DirectorCue> stemCues = CollectStemCues(sortedCues, r, baseAnchors[s], safeDur, mode, orbitPhaseOffsetDeg, hasMeasuredHome[s]);
-                SampleStemC2Curve(stemCues, r, lut, s * frameCount, frameCount, safeStep);
-            }
-
-            // Step 2: Frame-wise 12x6 ERB repulsion across concurrent stems
-            // (Skip in Orbit mode so phase-spaced perimeter sweeps never bounce back at az=0 deg, and skip in Off mode
-            // so stationary objects preserve their exact measured stereo mix pan azimuth without artificial outward push.)
-            if (mode != SpatialChoreoMode.Orbit && mode != SpatialChoreoMode.Off) {
-                Vector3[] frameDirs = new Vector3[stemCount];
-                float[] frameEnergies = new float[stemCount];
-                for (int f = 0; f < frameCount; f++) {
-                    for (int s = 0; s < stemCount; s++) {
-                        Vector4 v = lut[s * frameCount + f];
-                        frameDirs[s] = new Vector3(v.X, v.Y, v.Z);
-                        frameEnergies[s] = v.W;
-                    }
-                    PsychoacousticGovernor.ApplyErb12x6Repulsion(frameDirs, roles, frameEnergies, stemCount);
-                    for (int s = 0; s < stemCount; s++) {
-                        int off = s * frameCount + f;
-                        float rad = lut[off].W;
-                        lut[off] = new Vector4(frameDirs[s].X, frameDirs[s].Y, frameDirs[s].Z, rad);
-                    }
-                }
-            }
-
-            // Step 3: Enforce <= 60 deg/s slew cap and final role angle clamps on the precomputed C2 LUT
-            // (0 deg LUT deadband avoids 2.0 deg staircase stalls at 20 Hz while preserving smooth motion)
-            for (int s = 0; s < stemCount; s++) {
-                int baseIdx = s * frameCount;
-                NeuralStemRole role = roles[s];
-                for (int f = 1; f < frameCount; f++) {
-                    Vector4 prev = lut[baseIdx + f - 1];
-                    Vector4 curr = lut[baseIdx + f];
-                    Vector3 prevDir = new Vector3(prev.X, prev.Y, prev.Z);
-                    Vector3 currDir = new Vector3(curr.X, curr.Y, curr.Z);
-                    Vector3 governed = PsychoacousticGovernor.ApplyAngularHysteresisAndSlew(prevDir, currDir, safeStep, hysteresisDeg: 0f);
-                    float az;
-                    float el;
-                    float rad = curr.W;
-                    PsychoacousticGovernor.CartesianToSphericalDeg(governed, out az, out el);
-                    PsychoacousticGovernor.ClampRoleAngles(role, ref az, ref el, ref rad);
-                    Vector3 finalDir = PsychoacousticGovernor.SphericalToCartesianUnit(az, el);
-                    lut[baseIdx + f] = new Vector4(finalDir.X, finalDir.Y, finalDir.Z, rad);
-                }
-            }
-
-            return new SpatialChoreoTrack(mode, safeStep, safeDur, roles, names, sortedCues.ToArray(), lut, frameCount);
+            return BuildWithStemActivity(stemNames, cues, mode, durationSec, stepSec, stemHomeAzimuthsDeg, stemHasSignal: null);
         }
 
         /// <summary>
@@ -2043,110 +1942,6 @@ namespace Cavern.Spatial {
                 list.Add(new DirectorCue(durationSec, role, last.TargetAzDeg, last.TargetElDeg, last.Radius, 0.4f));
             }
             return list;
-        }
-
-        static void AppendWithArcSubdivision(
-            List<DirectorCue> list,
-            NeuralStemRole role,
-            double targetTimeSec,
-            float targetAzDeg,
-            float targetElDeg,
-            float targetRad,
-            float energy01,
-            float homeSide) {
-            if (list.Count == 0) {
-                list.Add(new DirectorCue(targetTimeSec, role, targetAzDeg, targetElDeg, targetRad, energy01));
-                return;
-            }
-            DirectorCue prev = list[list.Count - 1];
-            double dt = targetTimeSec - prev.TimeSec;
-            if (dt <= 0.05) {
-                list[list.Count - 1] = new DirectorCue(targetTimeSec, role, targetAzDeg, targetElDeg, targetRad, energy01);
-                return;
-            }
-            float deltaAz = SpatialCortexMath.WrapAzimuthDeg(targetAzDeg - prev.TargetAzDeg);
-            // If span exceeds 55 deg, insert intermediate perimeter waypoints so SLERP tracks the outer arc cleanly
-            float absDelta = MathF.Abs(deltaAz);
-            if (absDelta > 55f) {
-                // Prefer sweeping around the outer side rather than cutting across 0 deg front center
-                float midTest = SpatialCortexMath.WrapAzimuthDeg(prev.TargetAzDeg + deltaAz * 0.5f);
-                if (MathF.Abs(midTest) < 25f && MathF.Abs(prev.TargetAzDeg) > 40f && MathF.Abs(targetAzDeg) > 40f) {
-                    deltaAz = deltaAz >= 0f ? deltaAz - 360f : deltaAz + 360f;
-                    absDelta = MathF.Abs(deltaAz);
-                }
-                int segs = Math.Max(2, (int)Math.Ceiling(absDelta / 45f));
-                for (int s = 1; s < segs; s++) {
-                    float frac = s / (float)segs;
-                    double midT = prev.TimeSec + dt * frac;
-                    float midAz = SpatialCortexMath.WrapAzimuthDeg(prev.TargetAzDeg + deltaAz * frac);
-                    float midEl = prev.TargetElDeg + (targetElDeg - prev.TargetElDeg) * frac;
-                    float midRad = prev.Radius + (targetRad - prev.Radius) * frac;
-                    PsychoacousticGovernor.ClampRoleAngles(role, ref midAz, ref midEl, ref midRad);
-                    list.Add(new DirectorCue(midT, role, midAz, midEl, midRad, energy01));
-                }
-            }
-            list.Add(new DirectorCue(targetTimeSec, role, targetAzDeg, targetElDeg, targetRad, energy01));
-        }
-
-        static void SampleStemC2Curve(
-            List<DirectorCue> keyframes,
-            NeuralStemRole role,
-            Vector4[] lut,
-            int baseIdx,
-            int frameCount,
-            double stepSec) {
-            int kCount = keyframes.Count;
-            Vector4[] keyVec = new Vector4[kCount];
-            for (int k = 0; k < kCount; k++) {
-                Vector3 u = PsychoacousticGovernor.SphericalToCartesianUnit(keyframes[k].TargetAzDeg, keyframes[k].TargetElDeg);
-                keyVec[k] = new Vector4(u.X, u.Y, u.Z, keyframes[k].Radius);
-            }
-
-            // Piecewise spherical interpolation followed by C2 uniform cubic B-spline smoothing
-            Vector4[] raw = new Vector4[frameCount];
-            int cursor = 0;
-            for (int f = 0; f < frameCount; f++) {
-                double t = f * stepSec;
-                while (cursor + 1 < kCount - 1 && keyframes[cursor + 1].TimeSec < t) {
-                    cursor++;
-                }
-                int k0 = cursor;
-                int k1 = Math.Min(kCount - 1, cursor + 1);
-                double dt = keyframes[k1].TimeSec - keyframes[k0].TimeSec;
-                float alpha = dt > 1e-6 ? SpatialCortexMath.Clamp01((float)((t - keyframes[k0].TimeSec) / dt)) : 0f;
-                Vector3 u0 = new Vector3(keyVec[k0].X, keyVec[k0].Y, keyVec[k0].Z);
-                Vector3 u1 = new Vector3(keyVec[k1].X, keyVec[k1].Y, keyVec[k1].Z);
-                Vector3 u = SpatialCortexMath.SlerpUnitShortest(u0, u1, alpha);
-                float rad = keyVec[k0].W + (keyVec[k1].W - keyVec[k0].W) * alpha;
-                raw[f] = new Vector4(u.X, u.Y, u.Z, rad);
-            }
-
-            // C2 cubic B-spline kernel [1/6, 4/6, 1/6] on normalized room vectors (2 passes -> C2 smooth tangent & curvature)
-            Vector4[] tmp = new Vector4[frameCount];
-            for (int pass = 0; pass < 2; pass++) {
-                for (int f = 0; f < frameCount; f++) {
-                    Vector4 vPrev = raw[Math.Max(0, f - 1)];
-                    Vector4 vCurr = raw[f];
-                    Vector4 vNext = raw[Math.Min(frameCount - 1, f + 1)];
-                    Vector3 blendedDir = (new Vector3(vPrev.X, vPrev.Y, vPrev.Z) +
-                                          new Vector3(vCurr.X, vCurr.Y, vCurr.Z) * 4f +
-                                          new Vector3(vNext.X, vNext.Y, vNext.Z)) * (1f / 6f);
-                    Vector3 unit = SpatialCortexMath.NormalizeSafe(blendedDir, new Vector3(vCurr.X, vCurr.Y, vCurr.Z));
-                    float rad = (vPrev.W + 4f * vCurr.W + vNext.W) * (1f / 6f);
-                    tmp[f] = new Vector4(unit.X, unit.Y, unit.Z, rad);
-                }
-                Array.Copy(tmp, raw, frameCount);
-            }
-
-            for (int f = 0; f < frameCount; f++) {
-                float az;
-                float el;
-                float rad = raw[f].W;
-                PsychoacousticGovernor.CartesianToSphericalDeg(new Vector3(raw[f].X, raw[f].Y, raw[f].Z), out az, out el);
-                PsychoacousticGovernor.ClampRoleAngles(role, ref az, ref el, ref rad);
-                Vector3 clamped = PsychoacousticGovernor.SphericalToCartesianUnit(az, el);
-                lut[baseIdx + f] = new Vector4(clamped.X, clamped.Y, clamped.Z, rad);
-            }
         }
     }
 }
