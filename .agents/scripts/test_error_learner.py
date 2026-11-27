@@ -194,6 +194,33 @@ class TestErrorLearner(unittest.TestCase):
             self.assertTrue(ok, f"Recorded lesson failed audit: {errs}")
             self.assertIn("XA9998", tmp_lessons.read_text(encoding="utf-8"))
 
+    def test_multi_domain_compounding_lessons_and_relevance_query(self) -> None:
+        domains = {l.domain for l in self.lessons}
+        self.assertTrue({"BL", "UI", "ARCH", "DSP", "AI"}.issubset(domains), f"Missing domains: {domains}")
+        self.assertGreaterEqual(len(self.lessons), 25)
+
+        ui_hits = el.select_relevant_lessons(self.lessons_file, ["ui"], prompt_text="checkbox blur card", max_items=5)
+        self.assertTrue(ui_hits and len(ui_hits) <= 5)
+        self.assertTrue(all(l.domain in ("UI", "ARCH") for l in ui_hits))
+
+        with tempfile.TemporaryDirectory(prefix="cavern_el_md_") as tmp:
+            tmp_lessons = Path(tmp) / "BUILD_LESSONS.md"
+            shutil.copyfile(self.lessons_file, tmp_lessons)
+            rc_bad_guard = el.main(
+                [
+                    "--lessons-file", str(tmp_lessons),
+                    "--record", "--domain", "DSP",
+                    "--title", "No Blocking Calls in RT Audio",
+                    "--root-cause", "Blocking stalls RT audio.",
+                    "--rule", "Keep RT audio lock-free.",
+                    "--lookup", "Check AUDIO_GROUND_TRUTH_PROTOCOL.md.",
+                    "--remediation-hint", "Use lock-free ring buffer.",
+                    "--guard", "manual-review",
+                    "--apply",
+                ]
+            )
+            self.assertNotEqual(rc_bad_guard, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

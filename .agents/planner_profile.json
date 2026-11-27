@@ -1,6 +1,6 @@
 {
   "schema_version": 5,
-  "plugin_version": "2.22.5",
+  "plugin_version": "2.23.0",
   "project_name": "Cavern / CavernizeAndroid",
   "planner_mode": "auto",
   "read_budget": {
@@ -15,8 +15,21 @@
   },
   "code_weight_limits": {
     "enabled": true,
-    "warn_lines": 1200,
-    "warn_lines_all": 2000
+    "ratchet_enabled": true,
+    "warn_lines": 1600,
+    "warn_lines_all": 2000,
+    "fail_lines": 2000,
+    "split_target_lines": 1800,
+    "monolith_baseline": {
+      "CavernSamples/Reusable/Cavernize.Logic/Rendering/StudioBatchExporter.cs": 3578,
+      "CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs": 2383,
+      "CavernSamples/CavernizeAndroid/Audio/AndroidAudioOutput.cs": 2161,
+      "Cavern/Spatial/SpatialObjectCortex.cs": 2152,
+      "CavernSamples/CavernizeAndroid/Views/RoomSimulatorView.cs": 2094,
+      "CavernSamples/CavernizeAndroid/Services/MediaLibraryService.cs": 2046,
+      "CavernSamples/CavernizeAndroid/MainActivity.NeuralWorkflows.cs": 2027,
+      "CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs": 2013
+    }
   },
   "memory_weight_limits": {
     "project_history_max_lines": 150,
@@ -325,6 +338,83 @@
       "forbid_regex": "\\b(?:AppLogger\\.|Console\\.Write)",
       "severity": "warn",
       "message": "RT-audio guard: logging/console I/O detected in `Cavern/VocalChain/`; keep real-time vocal DSP strictly zero-GC, lock-free, and telemetry-via-snapshot only."
+    }
+  ],
+  "fitness_rules": [
+    {
+      "id": "FIT-UI-LEGACY-CHECKBOX",
+      "lesson_id": "UI-001",
+      "path_prefix": "CavernSamples/CavernizeAndroid/",
+      "path_regex": "\\.cs$",
+      "forbid_regex": "\\bnew\\s+(?:Android\\.Widget\\.)?CheckBox\\s*\\(",
+      "severity": "fail",
+      "baseline_max_matches": 0,
+      "baseline_per_file": {
+        "CavernSamples/CavernizeAndroid/MainActivity.ConverterTab.cs": 1,
+        "CavernSamples/CavernizeAndroid/MainActivity.ExtractorTab.cs": 2,
+        "CavernSamples/CavernizeAndroid/Services/LiveBridgeAuthActivity.cs": 1,
+        "CavernSamples/CavernizeAndroid/Views/OneUiFileExplorerDialog.cs": 1
+      },
+      "message": "Legacy Android `CheckBox` violates One UI 9 canonical control grammar.",
+      "remediation_hint": "Use `OneUiSwitch` or `OneUiSelectionChip` instead of `new CheckBox(...)` (UI-001)."
+    },
+    {
+      "id": "FIT-UI-ADHOC-HELP-QMARK",
+      "lesson_id": "UI-002",
+      "path_prefix": "CavernSamples/CavernizeAndroid/",
+      "path_regex": "\\.cs$",
+      "forbid_regex": "(?:PillButton|CreatePillButton|ActionButton|CreateActionButton|Button)\\s*\\(\\s*\"\\?\"|Text\\s*=\\s*\"\\?\"",
+      "severity": "fail",
+      "baseline_max_matches": 0,
+      "baseline_per_file": {
+        "CavernSamples/CavernizeAndroid/MainActivity.Settings.Diagnostics.cs": 2
+      },
+      "message": "Ad-hoc `\"?\"` help button pollutes One UI 9 chrome.",
+      "remediation_hint": "Replace `\"?\"` button with concise subtitle/caption or `OneUiVectorIcons` info glyph (UI-002)."
+    },
+    {
+      "id": "FIT-UI-RAW-SDCARD-PATH",
+      "lesson_id": "UI-003",
+      "path_prefix": "CavernSamples/CavernizeAndroid/",
+      "path_regex": "MainActivity.*\\.cs$",
+      "forbid_regex": "\"/sdcard/|/storage/emulated/0/",
+      "severity": "fail",
+      "baseline_max_matches": 0,
+      "message": "Raw `/sdcard/` or `/storage/emulated/0/` path leaked into consumer UI.",
+      "remediation_hint": "Use SAF/MediaStore/FilesDir abstractions and human localized labels in `AndroidStrings` (UI-003)."
+    },
+    {
+      "id": "FIT-UI-FULLSCREEN-RENDEREFFECT-BLUR",
+      "lesson_id": "UI-005",
+      "path_prefix": "CavernSamples/CavernizeAndroid/",
+      "path_regex": "\\.cs$",
+      "forbid_regex": "EnableFullScreenRenderEffectBlur\\s*=\\s*true",
+      "severity": "fail",
+      "baseline_max_matches": 0,
+      "message": "Re-enabling per-frame full-screen RenderEffect blur regresses 120 Hz jank (H1).",
+      "remediation_hint": "Keep `EnableFullScreenRenderEffectBlur = false`; use translucent cards or `Window.SetBackgroundBlurRadius` (UI-005)."
+    },
+    {
+      "id": "FIT-DSP-RT-BLOCKING-CALL",
+      "lesson_id": "DSP-001",
+      "path_prefix": "Cavern/VocalChain/",
+      "path_regex": "\\.cs$",
+      "forbid_regex": "\\b(?:GC\\.Collect|Thread\\.Sleep)\\s*\\(",
+      "severity": "fail",
+      "baseline_max_matches": 0,
+      "message": "Blocking or GC-triggering call detected inside real-time DSP hot path.",
+      "remediation_hint": "Keep `Cavern/VocalChain/` strictly 0-alloc, lock-free, and non-blocking (DSP-001)."
+    },
+    {
+      "id": "FIT-AI-PSS-CAP-EXCEEDED",
+      "lesson_id": "AI-001",
+      "path_prefix": "CavernSamples/Reusable/Cavernize.Logic/Spatial/",
+      "path_regex": "NeuralAudioModels\\.cs$",
+      "forbid_regex": "MaxSingleProcessModelPssBytes\\s*=\\s*(?:[3-9]\\d{3}|2[7-9]\\d{2}|26[1-9]\\d)",
+      "severity": "fail",
+      "baseline_max_matches": 0,
+      "message": "Single-process ONNX PSS ceiling exceeds 2600 MB LMKD safety invariant (REG-001/H2).",
+      "remediation_hint": "Keep `MaxSingleProcessModelPssBytes <= 2600 MB` via `MemoryBudgetGovernor` + `:worker` isolation (AI-001)."
     }
   ],
   "key_parity_rules": [

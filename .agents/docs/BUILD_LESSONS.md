@@ -163,7 +163,101 @@
 
 ---
 
-## 2. Dynamically Learned Lessons (Auto-Managed by `error_learner.py`)
+## 2. Multi-Domain Structural Lessons (`UI-*`, `ARCH-*`, `DSP-*`, `AI-*`)
+
+### `UI-001` | Canonical One UI 9 Control Grammar (Zero Legacy `CheckBox` / Stock Widgets)
+- `Category`: `ui-ux-contract`
+- `Codes`: `UI_LEGACY_CHECKBOX, FIT_UI_LEGACY_CHECKBOX`
+- `Keywords`: `checkbox, oneui, switch, chip, control grammar, spinner, alertdialog`
+- `RootCause`: Mixing stock Android `CheckBox`, `Spinner`, or `AlertDialog` widgets into One UI 9 surfaces fragments visual hierarchy and breaks touch-target and theme parity.
+- `TimelessRule`: NEVER introduce stock `CheckBox`, `Spinner`, or `AlertDialog` in new UI code; use `OneUiSwitch`, `OneUiSelectionChip`, `OneUiInlineSelector`, and `OneUiModalDialog` consistently across every screen.
+- `DynamicLookup`: Consult `.agents/docs/ONEUI9_REFERENCE.md` and `CavernSamples/CavernizeAndroid/Theme/OneUiComponents.cs` before adding any interactive control.
+- `RemediationHint`: Replace `new CheckBox(...)` with `OneUiSwitch` or `OneUiSelectionChip` (`FIT-UI-LEGACY-CHECKBOX`).
+- `AutoGuard`: `fitness_rules` (`FIT-UI-LEGACY-CHECKBOX`) + `diff_rules` (`AlertDialog`, `Spinner`)
+
+### `UI-002` | Self-Documenting Microcopy (Zero Ad-Hoc `"?"` Help Buttons)
+- `Category`: `ui-ux-contract`
+- `Codes`: `UI_ADHOC_QMARK, FIT_UI_ADHOC_HELP_QMARK`
+- `Keywords`: `help button, question mark, microcopy, modal clutter, subtitle, info glyph`
+- `RootCause`: Sprinkling ad-hoc `"?"` buttons beside technical toggles adds chrome clutter and forces modal detours instead of clear plain-language labels.
+- `TimelessRule`: Keep primary labels and concise 1-line subtitles self-explanatory in plain human language; NEVER add ad-hoc `"?"` pill/text buttons (use `OneUiVectorIcons` info glyphs only when deep reference help is genuinely needed).
+- `DynamicLookup`: Check `.agents/docs/ONEUI9_REFERENCE.md` and `CavernSamples/CavernizeAndroid/Language/AndroidStrings.cs` for existing human-friendly labels and captions.
+- `RemediationHint`: Remove ad-hoc `"?"` button -> use plain human label + concise subtitle or `OneUiVectorIcons` info glyph (`FIT-UI-ADHOC-HELP-QMARK`).
+- `AutoGuard`: `fitness_rules` (`FIT-UI-ADHOC-HELP-QMARK`) + `verify_universal`
+
+### `UI-003` | Consumer UI Storage Hygiene (Zero Raw `/sdcard/` Paths & Essential Progressive Disclosure)
+- `Category`: `ui-ux-contract`
+- `Codes`: `UI_RAW_SDCARD, UI_PROGRESSIVE_DISCLOSURE`
+- `Keywords`: `sdcard, storage, saf, mediastore, essential, pro mode, collapse-when-disabled, developer`
+- `RootCause`: Exposing raw filesystem paths (`/sdcard/...`), uncollapsed disabled sub-controls, or developer diagnostics inside consumer screens overwhelms normal users and violates scoped-storage UX expectations.
+- `TimelessRule`: NEVER hardcode raw `/sdcard/` or `/storage/emulated/0/` strings in consumer UI screens; hide dependent sub-controls (`Gone`) when their master toggle is disabled (`Collapse-When-Disabled`) and isolate engineering/diagnostics controls in Pro/Developer surfaces.
+- `DynamicLookup`: Verify scoped storage/SAF helpers in `MediaLibraryService.cs` and Essential-vs-Pro rules in `BP_V4_REFORM_SPATIAL_AI_ONEUI9.md`.
+- `RemediationHint`: Replace raw `/sdcard/` strings w/ SAF/MediaStore abstractions and collapse disabled control trees (`FIT-UI-RAW-SDCARD-PATH`).
+- `AutoGuard`: `fitness_rules` (`FIT-UI-RAW-SDCARD-PATH`) + `regression_contracts` (`REG-V4-*`)
+
+### `UI-004` | Single Canonical Control Owner & Mandatory 2-Step Destructive Safety
+- `Category`: `ui-ux-contract`
+- `Codes`: `UI_DUP_CONTROL, UI_UNCONFIRMED_DELETE`
+- `Keywords`: `duplicate, single owner, confirm, delete, clear, wipe, destructive, uistatecoordinator`
+- `RootCause`: Duplicating toggles/selectors across tabs causes stale UI sync loops and conflicting audio states; unconfirmed delete/clear actions risk accidental loss of user stems, caches, or presets.
+- `TimelessRule`: Every audio/DSP/AI setting MUST have ONE canonical control owner with explicit anti-conflict arbitration, and EVERY destructive delete/clear/wipe action MUST pass through `ConfirmDestructiveAction` (2-step confirmation with 4-language parity).
+- `DynamicLookup`: Audit existing control bindings in `AppSettingsStore.cs` and `MainActivity.*.cs` before creating any new toggle or destructive button.
+- `RemediationHint`: Reuse the canonical setting owner and wrap all delete/clear actions in `ConfirmDestructiveAction` (`REG-V4-003`).
+- `AutoGuard`: `regression_contracts` (`REG-V4-003`) + `co_evolve` (`AppSettingsStore.Schema.cs`)
+
+### `UI-005` | 120 Hz Zero-Jank Glass Discipline (Zero Full-Screen Per-Frame `RenderEffect` Blur)
+- `Category`: `ui-ux-perf`
+- `Codes`: `UI_FULLSCREEN_BLUR_JANK, FIT_UI_FULLSCREEN_RENDEREFFECT_BLUR`
+- `Keywords`: `rendereffect, blur, 120hz, jank, framemetrics, glass, setbackgroundblurradius`
+- `RootCause`: Applying per-frame full-screen `RenderEffect` blur over scrolling lists drops frame pacing sharply on high-refresh displays.
+- `TimelessRule`: NEVER set `EnableFullScreenRenderEffectBlur = true`; use lightweight translucent surface tokens for scrolling cards and OS-composited `Window.SetBackgroundBlurRadius` strictly for popup/modal glass surfaces.
+- `DynamicLookup`: Verify measured `SystemUI.apk` glass tokens in `.agents/docs/ONEUI9_REFERENCE.md` (`Sec 10`) and frame budgets in `PLANS_HUB.md` (`H1`).
+- `RemediationHint`: Keep `EnableFullScreenRenderEffectBlur = false`; use translucent card tints or modal `Window.SetBackgroundBlurRadius` (`FIT-UI-FULLSCREEN-RENDEREFFECT-BLUR`).
+- `AutoGuard`: `fitness_rules` (`FIT-UI-FULLSCREEN-RENDEREFFECT-BLUR`) + `regression_contracts` (`V6`, `V9`)
+
+### `ARCH-001` | Zero-Accumulation Monolith Ratchet (`<=2,000L` Hard Cap, `<1,800L` Split Target)
+- `Category`: `architecture-weight`
+- `Codes`: `ARCH_MONOLITH_GROWTH, MONOLITH_RATCHET`
+- `Keywords`: `monolith, split, partial, code_weight_limits, ratchet, refactor, file size`
+- `RootCause`: Passive line-count warnings allow god-files to keep growing across waves until merges, reviews, and AI context windows degrade severely.
+- `TimelessRule`: NEVER allow a new source file to exceed `2,000L` or grow any existing `>2,000L` baseline monolith by even `+1L`; whenever touching a file above `1,600L`, extract cohesive helpers/services/partials toward `<1,800L`.
+- `DynamicLookup`: Run `verify_universal.py --all` and inspect `PLANS_HUB.md` (`Sec 4` Oversized Code Files) before adding code to large files.
+- `RemediationHint`: Extract cohesive partial/helper/service modules below `1,800L` before adding new lines (`code_weight_limits` ratchet).
+- `AutoGuard`: `code_weight_limits` (`monolith_ratchet` in `verify_universal` + shift-left `planner_guard_files.py`)
+
+### `ARCH-002` | Zero-Static Cross-Layer SSOT Parity & Deterministic Co-Evolution
+- `Category`: `architecture-state`
+- `Codes`: `ARCH_STATIC_DRIFT, CO_EVOLVE_DRIFT`
+- `Keywords`: `ssot, co_evolve, bridgecmd, settings schema, packaging, federation, parity, reflection`
+- `RootCause`: Duplicating command tables, tab counts, packaging constants, or settings resets across multiple files causes silent runtime drift and fragile reflection crashes (`Activator.CreateInstance`).
+- `TimelessRule`: Derive cross-layer tables (`BridgeCmd` opcodes/hashes, `Packaging`, typed `AppSettingsStore.Schema.cs` resets, `RPE<->SBE` parity, `domains.json`, `@verify_check`) from single declarative SSOTs verified by deterministic out-of-proc checks.
+- `DynamicLookup`: Run `python3 -B .agents/scripts/co_evolve.py --check` and `plan_tool.py coherence check --local` after modifying bridge commands, settings, packaging, or plugin registries.
+- `RemediationHint`: Update the single SSOT and run `co_evolve.py --sync` / `coherence sync` instead of hand-editing mirrors (`co_evolve`).
+- `AutoGuard`: `co_evolve` (`--check`) + `verify_universal` (`coherence_local`)
+
+### `DSP-001` | Zero-GC Real-Time Audio Hot-Path & Discrete-Stem Routing Purity
+- `Category`: `realtime-dsp`
+- `Codes`: `DSP_RT_ALLOC, DSP_STEM_DEDUP, DSP_DISCRETE_KARAOKE`
+- `Keywords`: `zero-gc, lock-free, realtime, vocalchain, karaoke, stem dedup, bs.2127, xtc, aaudio`
+- `RootCause`: Heap allocations, logging, locks, or blocking calls on RT audio threads cause audible xruns; mixing combined `vocals`/`instrumental` alongside separated sub-stems causes phase-cancelling double playback, and post-3D STFT subtraction leaks backing vocals.
+- `TimelessRule`: Keep RT DSP hot paths strictly zero-allocation, lock-free, and non-blocking (`<1.0 ms/blk`); deduplicate redundant combined stems (`FilterRenderableStems`), route discrete-stem Karaoke directly bypassing post-3D STFT, and auto-bypass virtual room ambience whenever Speaker XTC is active.
+- `DynamicLookup`: Validate any DSP change against `.agents/docs/AUDIO_GROUND_TRUTH_PROTOCOL.md`, `run_w46_unit_tests.py`, and `run_audio_ground_truth.py`.
+- `RemediationHint`: Pre-allocate buffers outside RT callback, deduplicate combined stems, and prove invariants via `run_w46_unit_tests.py` (`T50`/`GT-*`).
+- `AutoGuard`: `fitness_rules` (`FIT-DSP-RT-BLOCKING-CALL`) + `diff_rules` (`VocalChain`/`cavernize_proaudio`) + `run_w46_unit_tests` (`T50`) + `run_audio_ground_truth`
+
+### `AI-001` | Deterministic Mobile ONNX Memory Ceiling, Quantized Gate & Manual/Cloud Isolation
+- `Category`: `neural-runtime`
+- `Codes`: `AI_PSS_OOM, AI_BUNDLE_HIJACK, FIT_AI_PSS_CAP_EXCEEDED`
+- `Keywords`: `onnx, pss, lmkd, oom, memorybudgetgovernor, worker, quantization, w8a16, mvsep, manual, cloud`
+- `RootCause`: Exceeding the device single-process PSS envelope triggers fatal LMKD kills; heuristic model-name string checks misestimate quantized memory, and preset bundles silently overwriting Manual/Cloud model selections break user intent.
+- `TimelessRule`: Enforce deterministic `MemoryBudgetGovernor` sizing (`<=2600 MB` hard single-process PSS ceiling + `:worker` isolation + exact ONNX tensor math, zero model-name heuristics), persist neural caches in `FilesDir/neural_tracks` (never volatile `CacheDir`), and isolate Manual/Cloud AI picks from bundle presets.
+- `DynamicLookup`: Inspect `MemoryBudgetGovernor` in `NeuralAudioModels.cs`, `AndroidRuntimeTelemetry.cs`, and `REG-001`/`REG-V4-004` in `.agents/qa/regression_contracts.json`.
+- `RemediationHint`: Size models via `MemoryBudgetGovernor` (`<=2600 MB`), isolate in `:worker`, and guard Manual/Cloud picks (`REG-001`, `REG-V4-004`).
+- `AutoGuard`: `fitness_rules` (`FIT-AI-PSS-CAP-EXCEEDED`) + `regression_contracts` (`REG-001`, `REG-V4-004`) + `run_w46_unit_tests` (`T50`/`T51`)
+
+---
+
+## 3. Dynamically Learned Lessons (Auto-Managed by `error_learner.py`)
 <!-- AUTO-LEARNED-LESSONS:START -->
-(No new uncatalogued structural lessons pending beyond `BL-001`..`BL-017`.)
+(No new uncatalogued structural lessons pending beyond `BL-001`..`BL-017`, `UI-001`..`UI-005`, `ARCH-001`..`ARCH-002`, `DSP-001`, `AI-001`.)
 <!-- AUTO-LEARNED-LESSONS:END -->
