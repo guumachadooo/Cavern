@@ -24,8 +24,8 @@
 - Token diet -> if shell/Python available, run `python3 .agents/plugins/dynamic-fractal-planner/scripts/log_digest.py .agents/device_logs/cavernize_log.txt` (`--errors-only` if large) BEFORE reading raw slices; otherwise search/read targeted slices (`ERROR`, `Exception`, `FATAL`, `FFmpeg`, `AAudio`, `AudioTrack`, `Matrix`, `FLAC`) & tail per `.agents/skills/cavernize-device-debug/SKILL.md`.
 
 ## 3. Code & Manual Static Audit Gates
-<!--AUTO:START:cavern-ecosystem-ssot:sha256=19907f8d0ce2-->
-AUTO_SSOT|plugin=v2.22.0|schema=v5|host_matrix_strict=true|entries=12|fed_repos=cavern,fractal,omniagent
+<!--AUTO:START:cavern-ecosystem-ssot:sha256=5c267539f900-->
+AUTO_SSOT|plugin=v2.22.5|schema=v5|host_matrix_strict=true|entries=12|fed_repos=cavern,fractal,omniagent
 AUTO_CANONICAL_CLI|resume=`flight_recorder.py resume`|learn=`plan_tool.py learn`|coherence=`plan_tool.py coherence check --local`|hub=`.agents/docs/COHERENCE_HUB.md`
 <!--AUTO:END:cavern-ecosystem-ssot-->
 
