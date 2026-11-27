@@ -128,69 +128,155 @@ public static partial class LiveDiagnosticBridgeService {
     static int commandsHandled;
     static string lastEventText = "";
 
-    sealed record CommandDescriptor(string Name, int Tier, string Summary, string ArgsSchema);
+    /// <summary>
+    /// Explicit immutable numeric opcodes for all Live Bridge v3 commands (1..54).
+    /// Kept 1:1 with <see cref="CapabilitiesCatalog"/> and <c>ExecuteSingleCommandAsync</c> by <c>co_evolve.py</c>.
+    /// </summary>
+    public enum BridgeCommandOpcode : ushort {
+        Ping = 1,
+        Capabilities = 2,
+        Help = 3,
+        QuickCheck = 4,
+        FullCheck = 5,
+        Summary = 6,
+        LogTail = 7,
+        LogSearch = 8,
+        AudioRoutes = 9,
+        Memory = 10,
+        AppState = 11,
+        DspTelemetry = 12,
+        SettingsGet = 13,
+        LibraryQuery = 14,
+        FilesList = 15,
+        FileRead = 16,
+        NativeStatus = 17,
+        UiTree = 18,
+        AcousticAudit = 19,
+        GetDesignTokens = 20,
+        LogcatTail = 21,
+        Anomalies = 22,
+        RuntimeTelemetry = 23,
+        SoakSnapshot = 24,
+        CortexProfiles = 25,
+        Batch = 26,
+        UltraCheck = 27,
+        ChaosHunt = 28,
+        UiAudit = 29,
+        UiPerfAudit = 30,
+        AcousticProbe = 31,
+        SettingsSet = 32,
+        TabSwitch = 33,
+        PlaybackControl = 34,
+        OpenFile = 35,
+        UiAction = 36,
+        UiClick = 37,
+        CacheClear = 38,
+        AudioProbe = 39,
+        ScreenshotUi = 40,
+        StrictMode = 41,
+        NativeToolExec = 42,
+        FileDelete = 43,
+        SettingsReset = 44,
+        ReflectTypes = 45,
+        ReflectMembers = 46,
+        ReflectGet = 47,
+        ReflectSet = 48,
+        ReflectInvoke = 49,
+        UiInteract = 50,
+        ShellExec = 51,
+        HotProbeStatus = 52,
+        HotExec = 53,
+        Pipeline = 54
+    }
+
+    /// <summary>Canonical MainActivity bottom-navigation tab names synchronized with <c>.agents/federation.json</c>.</summary>
+    public static readonly string[] CanonicalTabNames = ["player", "room", "studio", "stems", "settings"];
+
+    /// <summary>Upper bound of valid MainActivity tab indices (derived from <see cref="CanonicalTabNames"/>).</summary>
+    public static int MaxTabIndex => CanonicalTabNames.Length - 1;
+
+    sealed record CommandDescriptor(BridgeCommandOpcode Opcode, string Name, int Tier, string Summary, string ArgsSchema);
 
     static readonly CommandDescriptor[] CapabilitiesCatalog = [
         // Tier 0: Read-only diagnostics & deep introspection
-        new("ping", 0, "Online heartbeat, version, device, tier, log counts & host status", "{}"),
-        new("capabilities", 0, "List all supported commands, required tiers & argument schemas", "{}"),
-        new("help", 0, "Alias for capabilities", "{}"),
-        new("quick_check", 0, "Run L1-L4 fast on-device self-diagnostic checkup", "{}"),
-        new("full_check", 0, "Run L1-L5 full on-device self-diagnostic checkup incl. codecs", "{}"),
-        new("summary", 0, "Export structured diagnostic session summary JSON", "{}"),
-        new("log_tail", 0, "Read recent Cavernize log lines", "{lines?:20..1000, errorsOnly?:bool}"),
-        new("log_search", 0, "Search recent log lines by case-insensitive keyword", "{query:string, maxMatches?:1..200}"),
-        new("audio_routes", 0, "Inspect Android AudioManager outputs/inputs & Pro-Audio NDK bridge", "{}"),
-        new("memory", 0, "Inspect Android RAM, lowMemory pressure & managed GC heap", "{}"),
-        new("app_state", 0, "Inspect live MainActivity tab, loaded track, playback state & engines", "{}"),
-        new("dsp_telemetry", 0, "Inspect active Cavern DSP/spatial/head-tracking/neural status", "{}"),
-        new("settings_get", 0, "Read one or all non-secret AppSettingsStore properties via reflection", "{key?:string, filter?:string}"),
-        new("library_query", 0, "Query cached local music library tracks", "{query?:string, limit?:1..100}"),
-        new("files_list", 0, "List files inside confined app/log directories", "{scope?:'logs'|'files'|'cache'|'downloads'|'native', subdir?:string}"),
-        new("file_read", 0, "Read bounded sanitized text snippet from confined app/log file", "{path:string, maxChars?:100..60000, tail?:bool}"),
-        new("native_status", 0, "Verify bundled W^X ARM64 NativeLibraryDir binaries & sizes", "{}"),
-        new("ui_tree", 0, "Dump live Android View hierarchy with Q1 screen geometry, ellipsis, contrast & One UI 9 tokens", "{maxDepth?:1..16, geometry?:bool}"),
-        new("acoustic_audit", 0, "Run L11 Intelligent Acoustic Differential Oracle (HRTF/Upmix/LGSR/ISM/UserConfig fingerprints)", "{quick?:bool, format?:'json'|'markdown'}"),
-        new("get_design_tokens", 0, "Export active Cavernize One UI 9 runtime design tokens JSON for zero-quota companion UI sync", "{}"),
-        new("logcat_tail", 0, "Read Cavernize own-UID Android logcat cleanly (zero shell, filters fork noise)", "{lines?:10..800, minLevel?:'V'|'D'|'I'|'W'|'E'|'F', buffer?:'main'|'system'|'crash'|'events'}"),
-        new("anomalies", 0, "Read live in-memory RuntimeAnomalyRing captured from critical logs & chaos hunts", "{limit?:1..160, clear?:bool}"),
-        new("runtime_telemetry", 0, "Inspect live 120 Hz FrameMetrics, StrictMode violations, ApplicationExitInfo, AAudio/AudioTrack XRuns & thermal QoS", "{resetFrameMetrics?:bool, clearStrictMode?:bool, maxExitReasons?:1..10}"),
-        new("soak_snapshot", 0, "Capture Q3 dirty-state & resource soak snapshot (Total/Native PSS, managed GC, /proc/self/fd, OS threads, View count, dialogs, isOperationRunning)", "{forceGc?:bool}"),
-        new("cortex_profiles", 0, "Auto-characterize & export Phase-A Omniscient Cortex ComponentBehaviorProfile registry & conflict governance JSON", "{sampleRate?:16000..192000}"),
-        new("batch", 0, "Execute up to 15 sequential commands in one round-trip (enforces each command's tier)", "{commands:[{cmd:string, args?:object}]}"),
+        new(BridgeCommandOpcode.Ping, "ping", 0, "Online heartbeat, version, device, tier, log counts & host status", "{}"),
+        new(BridgeCommandOpcode.Capabilities, "capabilities", 0, "List all supported commands, required tiers & argument schemas", "{}"),
+        new(BridgeCommandOpcode.Help, "help", 0, "Alias for capabilities", "{}"),
+        new(BridgeCommandOpcode.QuickCheck, "quick_check", 0, "Run L1-L4 fast on-device self-diagnostic checkup", "{}"),
+        new(BridgeCommandOpcode.FullCheck, "full_check", 0, "Run L1-L5 full on-device self-diagnostic checkup incl. codecs", "{}"),
+        new(BridgeCommandOpcode.Summary, "summary", 0, "Export structured diagnostic session summary JSON", "{}"),
+        new(BridgeCommandOpcode.LogTail, "log_tail", 0, "Read recent Cavernize log lines", "{lines?:20..1000, errorsOnly?:bool}"),
+        new(BridgeCommandOpcode.LogSearch, "log_search", 0, "Search recent log lines by case-insensitive keyword", "{query:string, maxMatches?:1..200}"),
+        new(BridgeCommandOpcode.AudioRoutes, "audio_routes", 0, "Inspect Android AudioManager outputs/inputs & Pro-Audio NDK bridge", "{}"),
+        new(BridgeCommandOpcode.Memory, "memory", 0, "Inspect Android RAM, lowMemory pressure & managed GC heap", "{}"),
+        new(BridgeCommandOpcode.AppState, "app_state", 0, "Inspect live MainActivity tab, loaded track, playback state & engines", "{}"),
+        new(BridgeCommandOpcode.DspTelemetry, "dsp_telemetry", 0, "Inspect active Cavern DSP/spatial/head-tracking/neural status", "{}"),
+        new(BridgeCommandOpcode.SettingsGet, "settings_get", 0, "Read one or all non-secret AppSettingsStore properties via reflection", "{key?:string, filter?:string}"),
+        new(BridgeCommandOpcode.LibraryQuery, "library_query", 0, "Query cached local music library tracks", "{query?:string, limit?:1..100}"),
+        new(BridgeCommandOpcode.FilesList, "files_list", 0, "List files inside confined app/log directories", "{scope?:'logs'|'files'|'cache'|'downloads'|'native', subdir?:string}"),
+        new(BridgeCommandOpcode.FileRead, "file_read", 0, "Read bounded sanitized text snippet from confined app/log file", "{path:string, maxChars?:100..60000, tail?:bool}"),
+        new(BridgeCommandOpcode.NativeStatus, "native_status", 0, "Verify bundled W^X ARM64 NativeLibraryDir binaries & sizes", "{}"),
+        new(BridgeCommandOpcode.UiTree, "ui_tree", 0, "Dump live Android View hierarchy with Q1 screen geometry, ellipsis, contrast & One UI 9 tokens", "{maxDepth?:1..16, geometry?:bool}"),
+        new(BridgeCommandOpcode.AcousticAudit, "acoustic_audit", 0, "Run L11 Intelligent Acoustic Differential Oracle (HRTF/Upmix/LGSR/ISM/UserConfig fingerprints)", "{quick?:bool, format?:'json'|'markdown'}"),
+        new(BridgeCommandOpcode.GetDesignTokens, "get_design_tokens", 0, "Export active Cavernize One UI 9 runtime design tokens JSON for zero-quota companion UI sync", "{}"),
+        new(BridgeCommandOpcode.LogcatTail, "logcat_tail", 0, "Read Cavernize own-UID Android logcat cleanly (zero shell, filters fork noise)", "{lines?:10..800, minLevel?:'V'|'D'|'I'|'W'|'E'|'F', buffer?:'main'|'system'|'crash'|'events'}"),
+        new(BridgeCommandOpcode.Anomalies, "anomalies", 0, "Read live in-memory RuntimeAnomalyRing captured from critical logs & chaos hunts", "{limit?:1..160, clear?:bool}"),
+        new(BridgeCommandOpcode.RuntimeTelemetry, "runtime_telemetry", 0, "Inspect live 120 Hz FrameMetrics, StrictMode violations, ApplicationExitInfo, AAudio/AudioTrack XRuns & thermal QoS", "{resetFrameMetrics?:bool, clearStrictMode?:bool, maxExitReasons?:1..10}"),
+        new(BridgeCommandOpcode.SoakSnapshot, "soak_snapshot", 0, "Capture Q3 dirty-state & resource soak snapshot (Total/Native PSS, managed GC, /proc/self/fd, OS threads, View count, dialogs, isOperationRunning)", "{forceGc?:bool}"),
+        new(BridgeCommandOpcode.CortexProfiles, "cortex_profiles", 0, "Auto-characterize & export Phase-A Omniscient Cortex ComponentBehaviorProfile registry & conflict governance JSON", "{sampleRate?:16000..192000}"),
+        new(BridgeCommandOpcode.Batch, "batch", 0, "Execute up to 15 sequential commands in one round-trip (enforces each command's tier)", "{commands:[{cmd:string, args?:object}]}"),
 
         // Tier 1: Interactive App Control, QA & Total-App Live Audit
-        new("ultra_check", 1, "Run 12-layer Total + Acoustic Differential + Live UI/Modal/Controls/Perf-Jank self-audit", "{}"),
-        new("chaos_hunt", 1, "Run high-speed in-process adversarial chaos & concurrent DSP/RingBuffer/malformed-file bug hunter", "{rounds?:1..20}"),
-        new("ui_audit", 1, "Run L8-L10+L12 Live UI Tabs, 27-Modal Smoke, Controls & Choreographer Perf/Jank audit", "{}"),
-        new("ui_perf_audit", 1, "Run L12 Choreographer UI open-latency, main-thread block & dropped-frame jank profile ranked slowest-first", "{}"),
-        new("acoustic_probe", 1, "Run custom on-demand differential A/B psychoacoustic probe with arbitrary HRTF/ISM/MagLS/ITD/Yaw/Upmix/LGSR flags", "{profileId?:string, minPhase?:bool, magLsOrder?:0..3, bioItd?:bool, headWidthCm?:number, manualItdUs?:number, ismRoom?:bool, ismPreset?:0..4, ismLevel?:number, nearField?:bool, nearFieldDistM?:number, yawDeg?:number, pitchDeg?:number, sourceAzDeg?:number, sourceElDeg?:number, sampleRate?:number, upmix?:bool, lgsr?:bool, compareDirect?:bool, signal?:'white'|'pink'|'sine1k'|'impulse'}"),
-        new("settings_set", 1, "Update non-secret AppSettingsStore property via reflection & refresh UI", "{key:string, value:any} or {values:{k:v}}"),
-        new("tab_switch", 1, "Switch MainActivity bottom navigation tab", "{index?:0..4, name?:'player'|'room'|'studio'|'stems'|'settings'}"),
-        new("playback_control", 1, "Control real-time player playback", "{action:'play'|'pause'|'toggle'|'stop'|'next'|'prev'|'seek'|'seek_rel'|'loop', value?:number}"),
-        new("open_file", 1, "Open a local audio/video file in Cavernize", "{path:string, autoPlay?:bool, tab?:0..4}"),
-        new("ui_action", 1, "Invoke high-level app actions (refresh_ui, rescan_library, sync_logs_cloud, check_updates, reset_head_pose, dismiss_dialogs, bring_to_front, toast)", "{action:string, message?:string}"),
-        new("ui_click", 1, "Find and click a visible clickable View matching text/contentDescription (MainActivity + dialogs)", "{text:string, index?:number}"),
-        new("cache_clear", 1, "Clear temporary app cache files cleanly", "{scope?:'cache'|'logs'}"),
-        new("audio_probe", 1, "Run fast AudioQualityAnalyzer metadata check on a local file", "{path:string}"),
+        new(BridgeCommandOpcode.UltraCheck, "ultra_check", 1, "Run 12-layer Total + Acoustic Differential + Live UI/Modal/Controls/Perf-Jank self-audit", "{}"),
+        new(BridgeCommandOpcode.ChaosHunt, "chaos_hunt", 1, "Run high-speed in-process adversarial chaos & concurrent DSP/RingBuffer/malformed-file bug hunter", "{rounds?:1..20}"),
+        new(BridgeCommandOpcode.UiAudit, "ui_audit", 1, "Run L8-L10+L12 Live UI Tabs, 27-Modal Smoke, Controls & Choreographer Perf/Jank audit", "{}"),
+        new(BridgeCommandOpcode.UiPerfAudit, "ui_perf_audit", 1, "Run L12 Choreographer UI open-latency, main-thread block & dropped-frame jank profile ranked slowest-first", "{}"),
+        new(BridgeCommandOpcode.AcousticProbe, "acoustic_probe", 1, "Run custom on-demand differential A/B psychoacoustic probe with arbitrary HRTF/ISM/MagLS/ITD/Yaw/Upmix/LGSR flags", "{profileId?:string, minPhase?:bool, magLsOrder?:0..3, bioItd?:bool, headWidthCm?:number, manualItdUs?:number, ismRoom?:bool, ismPreset?:0..4, ismLevel?:number, nearField?:bool, nearFieldDistM?:number, yawDeg?:number, pitchDeg?:number, sourceAzDeg?:number, sourceElDeg?:number, sampleRate?:number, upmix?:bool, lgsr?:bool, compareDirect?:bool, signal?:'white'|'pink'|'sine1k'|'impulse'}"),
+        new(BridgeCommandOpcode.SettingsSet, "settings_set", 1, "Update non-secret AppSettingsStore property via reflection & refresh UI", "{key:string, value:any} or {values:{k:v}}"),
+        new(BridgeCommandOpcode.TabSwitch, "tab_switch", 1, "Switch MainActivity bottom navigation tab", "{index?:0..4, name?:'player'|'room'|'studio'|'stems'|'settings'}"),
+        new(BridgeCommandOpcode.PlaybackControl, "playback_control", 1, "Control real-time player playback", "{action:'play'|'pause'|'toggle'|'stop'|'next'|'prev'|'seek'|'seek_rel'|'loop', value?:number}"),
+        new(BridgeCommandOpcode.OpenFile, "open_file", 1, "Open a local audio/video file in Cavernize", "{path:string, autoPlay?:bool, tab?:0..4}"),
+        new(BridgeCommandOpcode.UiAction, "ui_action", 1, "Invoke high-level app actions (refresh_ui, rescan_library, sync_logs_cloud, check_updates, reset_head_pose, dismiss_dialogs, bring_to_front, toast)", "{action:string, message?:string}"),
+        new(BridgeCommandOpcode.UiClick, "ui_click", 1, "Find and click a visible clickable View matching text/contentDescription (MainActivity + dialogs)", "{text:string, index?:number}"),
+        new(BridgeCommandOpcode.CacheClear, "cache_clear", 1, "Clear temporary app cache files cleanly", "{scope?:'cache'|'logs'}"),
+        new(BridgeCommandOpcode.AudioProbe, "audio_probe", 1, "Run fast AudioQualityAnalyzer metadata check on a local file", "{path:string}"),
 
         // Tier 2: Unrestricted Dynamic Programmable Control, Visual & Shell (biometric-gated)
-        new("screenshot_ui", 2, "Capture downscaled JPEG base64 screenshot of active dialog or MainActivity window", "{maxWidth?:360..1080, quality?:40..90}"),
-        new("strict_mode", 2, "Toggle opt-in Q2 QA StrictMode main-thread disk/network/VM leak detector (off by default in production)", "{enable?:bool, detectDisk?:bool, detectNetwork?:bool, detectLeaks?:bool, clear?:bool}"),
-        new("native_tool_exec", 2, "Run bundled NativeLibraryDir libffmpeg.so or libtruehdd.so probe w/ ArgumentList (zero shell)", "{tool:'ffmpeg'|'truehdd', args:[string]}"),
-        new("file_delete", 2, "Delete a single confined file inside CacheDir or Logs directory", "{path:string}"),
-        new("settings_reset", 2, "Reset one specific non-secret setting key or clear temporary bridge cache", "{key:string}"),
-        new("reflect_types", 2, "Search & list any loaded .NET types across all loaded assemblies", "{filter?:string, assembly?:string, limit?:1..200}"),
-        new("reflect_members", 2, "Inspect properties, fields & method signatures of any .NET type or live root", "{type?:string, root?:string, path?:string, filter?:string, includeNonPublic?:bool}"),
-        new("reflect_get", 2, "Dynamically read any static or instance property/field path (secret-redacted)", "{type?:string, root?:'activity'|'store'|'player'|'audiodevice'|'headtracking'|'proaudio'|'dialogs', path:string, uiThread?:bool}"),
-        new("reflect_set", 2, "Dynamically set any non-secret static or instance property/field path", "{type?:string, root?:string, path:string, value:any, uiThread?:bool}"),
-        new("reflect_invoke", 2, "Dynamically invoke any .NET method (static/instance, sync/async Task, $context/$activity/$store/$null tokens)", "{type?:string, root?:string, path?:string, method:string, args?:[any], uiThread?:bool}"),
-        new("ui_interact", 2, "Universal live UI automation across MainActivity & open dialogs (find/click/long_click/rage_click/drag_sweep/reflow_probe/set_text/set_checked/set_progress/select_item/scroll_by/tap_xy/swipe_xy/back/dismiss_dialogs/dump_dialogs)", "{action:string, query?:string, type?:string, index?:number, value?:any, count?:number, intervalMs?:number, steps?:number, stepMs?:number, mode?:string, fontScale?:number, dy?:number, x?:number, y?:number, x1?:number, y1?:number, x2?:number, y2?:number}"),
-        new("shell_exec", 2, "Execute sandboxed /system/bin/sh diagnostic command inside app sandbox (20s timeout, W^X guarded)", "{command:string, cwd?:string, timeoutSec?:1..20}"),
-        new("hot_probe_status", 0, "Inspect W^X-compliant in-memory AssemblyLoadContext hot_exec readiness & HMAC key status", "{}"),
-        new("hot_exec", 2, "Execute HMAC-SHA256 signed C# IL probe purely in RAM via collectible AssemblyLoadContext (zero APK rebuild)", "{requestId:string, timestampUnix:number, signature:string, dllBase64:string, entryType?:string, argsJson?:string, timeoutSec?:2..45}"),
-        new("pipeline", 2, "Execute up to 30 chained arbitrary commands/reflections/UI steps with $prev substitution", "{steps:[{cmd:string, args?:object}], stopOnError?:bool}")
+        new(BridgeCommandOpcode.ScreenshotUi, "screenshot_ui", 2, "Capture downscaled JPEG base64 screenshot of active dialog or MainActivity window", "{maxWidth?:360..1080, quality?:40..90}"),
+        new(BridgeCommandOpcode.StrictMode, "strict_mode", 2, "Toggle opt-in Q2 QA StrictMode main-thread disk/network/VM leak detector (off by default in production)", "{enable?:bool, detectDisk?:bool, detectNetwork?:bool, detectLeaks?:bool, clear?:bool}"),
+        new(BridgeCommandOpcode.NativeToolExec, "native_tool_exec", 2, "Run bundled NativeLibraryDir libffmpeg.so or libtruehdd.so probe w/ ArgumentList (zero shell)", "{tool:'ffmpeg'|'truehdd', args:[string]}"),
+        new(BridgeCommandOpcode.FileDelete, "file_delete", 2, "Delete a single confined file inside CacheDir or Logs directory", "{path:string}"),
+        new(BridgeCommandOpcode.SettingsReset, "settings_reset", 2, "Reset one specific non-secret setting key to its typed schema default", "{key:string}"),
+        new(BridgeCommandOpcode.ReflectTypes, "reflect_types", 2, "Search & list any loaded .NET types across all loaded assemblies", "{filter?:string, assembly?:string, limit?:1..200}"),
+        new(BridgeCommandOpcode.ReflectMembers, "reflect_members", 2, "Inspect properties, fields & method signatures of any .NET type or live root", "{type?:string, root?:string, path?:string, filter?:string, includeNonPublic?:bool}"),
+        new(BridgeCommandOpcode.ReflectGet, "reflect_get", 2, "Dynamically read any static or instance property/field path (secret-redacted)", "{type?:string, root?:'activity'|'store'|'player'|'audiodevice'|'headtracking'|'proaudio'|'dialogs', path:string, uiThread?:bool}"),
+        new(BridgeCommandOpcode.ReflectSet, "reflect_set", 2, "Dynamically set any non-secret static or instance property/field path", "{type?:string, root?:string, path:string, value:any, uiThread?:bool}"),
+        new(BridgeCommandOpcode.ReflectInvoke, "reflect_invoke", 2, "Dynamically invoke any .NET method (static/instance, sync/async Task, $context/$activity/$store/$null tokens)", "{type?:string, root?:string, path?:string, method:string, args?:[any], uiThread?:bool}"),
+        new(BridgeCommandOpcode.UiInteract, "ui_interact", 2, "Universal live UI automation across MainActivity & open dialogs (find/click/long_click/rage_click/drag_sweep/reflow_probe/set_text/set_checked/set_progress/select_item/scroll_by/tap_xy/swipe_xy/back/dismiss_dialogs/dump_dialogs)", "{action:string, query?:string, type?:string, index?:number, value?:any, count?:number, intervalMs?:number, steps?:number, stepMs?:number, mode?:string, fontScale?:number, dy?:number, x?:number, y?:number, x1?:number, y1?:number, x2?:number, y2?:number}"),
+        new(BridgeCommandOpcode.ShellExec, "shell_exec", 2, "Execute sandboxed /system/bin/sh diagnostic command inside app sandbox (20s timeout, W^X guarded)", "{command:string, cwd?:string, timeoutSec?:1..20}"),
+        new(BridgeCommandOpcode.HotProbeStatus, "hot_probe_status", 0, "Inspect W^X-compliant in-memory AssemblyLoadContext hot_exec readiness & HMAC key status", "{}"),
+        new(BridgeCommandOpcode.HotExec, "hot_exec", 2, "Execute HMAC-SHA256 signed C# IL probe purely in RAM via collectible AssemblyLoadContext (zero APK rebuild)", "{requestId:string, timestampUnix:number, signature:string, dllBase64:string, entryType?:string, argsJson?:string, timeoutSec?:2..45}"),
+        new(BridgeCommandOpcode.Pipeline, "pipeline", 2, "Execute up to 30 chained arbitrary commands/reflections/UI steps with $prev substitution", "{steps:[{cmd:string, args?:object}], stopOnError?:bool}")
     ];
+
+    static readonly Dictionary<string, CommandDescriptor> CapabilitiesByName =
+        CapabilitiesCatalog.ToDictionary(c => c.Name, StringComparer.Ordinal);
+
+    /// <summary>Deterministic SHA-256 hash over canonical opcode|name|tier|args schema lines (parity-verified by co_evolve.py).</summary>
+    public static readonly string BridgeCommandSchemaHash = ComputeCatalogSchemaHash();
+
+    static string ComputeCatalogSchemaHash() {
+        StringBuilder sb = new(4096);
+        foreach (CommandDescriptor c in CapabilitiesCatalog.OrderBy(d => (ushort)d.Opcode)) {
+            sb.Append((ushort)c.Opcode)
+              .Append('|').Append(c.Name)
+              .Append('|').Append(c.Tier)
+              .Append('|').Append(c.ArgsSchema)
+              .Append('\n');
+        }
+        byte[] digest = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(digest).ToLowerInvariant();
+    }
 
     public static bool IsActive {
         get {

@@ -642,8 +642,9 @@ public partial class MainActivity : ILiveBridgeAppHost {
                 _ => -1
             };
         }
-        if (target < 0 || target > 4) {
-            return (false, "Invalid tab index/name (valid: 0..4 or player/room/studio/stems/settings).");
+        int maxTab = LiveDiagnosticBridgeService.MaxTabIndex;
+        if (target < 0 || target > maxTab) {
+            return (false, $"Invalid tab index/name (valid: 0..{maxTab} or {string.Join("/", LiveDiagnosticBridgeService.CanonicalTabNames)}).");
         }
         SwitchTab(target);
         SettleActiveUiAnimationsForAudit(target);

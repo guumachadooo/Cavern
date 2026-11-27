@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import hashlib
+import json
 import os
 import platform
 import re
@@ -3942,6 +3943,144 @@ RunTest("T50_W55_1_V4Reform_StemDedup_GainStaging_SymmetricBacking_DiscreteKarao
     Assert(auto150 == NeuralQuantizationMode.W8A16, $"Expected 150 MB model to auto-select W8A16 (>=120 MB threshold), got {auto150}");
 });
 
+// ---------- Test 51 (Wave W56.4.2): Deterministic MemoryBudgetGovernor (Exact Tensor Math, 2600 MB Cap, Hysteresis, Zero Heuristics) ----------
+RunTest("T51_W56_4_MemoryBudgetGovernor_TensorMath_Hysteresis_And_PssClamp", () => {
+    const long MiB = 1024L * 1024L;
+
+    // 1. Exact ONNX tensor dtype byte sizing & overflow-safe product
+    Assert(MemoryBudgetGovernor.GetOnnxElementByteSize(MemoryBudgetGovernor.OnnxTypeFloat32) == 4, "ONNX FLOAT32 must be 4 bytes.");
+    Assert(MemoryBudgetGovernor.GetOnnxElementByteSize(MemoryBudgetGovernor.OnnxTypeFloat16) == 2, "ONNX FLOAT16 must be 2 bytes.");
+    Assert(MemoryBudgetGovernor.GetOnnxElementByteSize(MemoryBudgetGovernor.OnnxTypeUint8) == 1 &&
+           MemoryBudgetGovernor.GetOnnxElementByteSize(MemoryBudgetGovernor.OnnxTypeInt8) == 1, "ONNX UINT8/INT8 must be 1 byte.");
+    Assert(MemoryBudgetGovernor.GetOnnxElementByteSize(MemoryBudgetGovernor.OnnxTypeInt64) == 8, "ONNX INT64 must be 8 bytes.");
+    long tensorBytes = MemoryBudgetGovernor.ComputeTensorBytes([1, 2, 1025, 256], MemoryBudgetGovernor.OnnxTypeFloat32);
+    Assert(tensorBytes == 1L * 2L * 1025L * 256L * 4L, $"Unexpected FP32 tensor byte size: {tensorBytes}");
+    Assert(MemoryBudgetGovernor.ComputeTensorBytes(ReadOnlySpan<long>.Empty, MemoryBudgetGovernor.OnnxTypeFloat32) == 0L, "Empty shape must return 0 safely.");
+    Assert(MemoryBudgetGovernor.ComputeTensorBytes([1, -1, 1025], MemoryBudgetGovernor.OnnxTypeFloat32) == 1025L * 4L, "Dynamic -1 dim must clamp to 1 safely.");
+
+    // 2. Hard 2600 MB single-process PSS cap invariant even on 24 GB RAM flagship
+    DeviceMemorySnapshot snap24Gb = new() {
+        TotalBytes = 24L * 1024L * MiB,
+        AvailableBytes = 16L * 1024L * MiB,
+        LowMemoryThresholdBytes = 512L * MiB,
+        IsLowMemory = false,
+        ThermalStatusCode = 0,
+        HadRecentLowMemoryExit = false,
+        LastLowMemoryExitPssBytes = 0L,
+        Source = "Synthetic"
+    };
+    long cap24Gb = MemoryBudgetGovernor.ComputeEffectivePssCapBytes(snap24Gb);
+    Assert(cap24Gb == MemoryBudgetGovernor.HardSingleProcessPssCeilingBytes,
+        $"Expected hard 2600 MB PSS cap on 24 GB RAM device, got {cap24Gb / MiB} MB");
+
+    // 3. Thermal & own-UID LMK ApplicationExitInfo tightening
+    DeviceMemorySnapshot snapThermal3 = new() {
+        TotalBytes = 12L * 1024L * MiB,
+        AvailableBytes = 6L * 1024L * MiB,
+        LowMemoryThresholdBytes = 512L * MiB,
+        ThermalStatusCode = 3,
+        Source = "Synthetic"
+    };
+    DeviceMemorySnapshot snapThermal4 = new() {
+        TotalBytes = 12L * 1024L * MiB,
+        AvailableBytes = 6L * 1024L * MiB,
+        LowMemoryThresholdBytes = 512L * MiB,
+        ThermalStatusCode = 4,
+        Source = "Synthetic"
+    };
+    DeviceMemorySnapshot snapLmk = new() {
+        TotalBytes = 12L * 1024L * MiB,
+        AvailableBytes = 6L * 1024L * MiB,
+        LowMemoryThresholdBytes = 512L * MiB,
+        HadRecentLowMemoryExit = true,
+        LastLowMemoryExitPssBytes = 1800L * MiB,
+        Source = "Synthetic"
+    };
+    long capT3 = MemoryBudgetGovernor.ComputeEffectivePssCapBytes(snapThermal3);
+    long capT4 = MemoryBudgetGovernor.ComputeEffectivePssCapBytes(snapThermal4);
+    long capLmk = MemoryBudgetGovernor.ComputeEffectivePssCapBytes(snapLmk);
+    Assert(capT3 < cap24Gb && capT4 < capT3, $"Thermal cap should tighten monotonically: t0={cap24Gb / MiB}, t3={capT3 / MiB}, t4={capT4 / MiB}");
+    Assert(capLmk <= (long)(1800L * MiB * 0.85), $"Own-UID LMK exit cap should stay <=85% of lastExitPss (1800 MB), got {capLmk / MiB} MB");
+
+    // 4. ±150 MB anti-flap hysteresis preserves previous cap on small perturbations, but drops immediately on emergency thermal/LMK
+    DeviceMemorySnapshot snapThermal2 = new() {
+        TotalBytes = 12L * 1024L * MiB,
+        AvailableBytes = 6L * 1024L * MiB,
+        LowMemoryThresholdBytes = 512L * MiB,
+        ThermalStatusCode = 2, // -128 MB (<150 MB hysteresis band)
+        Source = "Synthetic"
+    };
+    long capT2Unlatched = MemoryBudgetGovernor.ComputeEffectivePssCapBytes(snapThermal2);
+    long capT2Latched = MemoryBudgetGovernor.ComputeEffectivePssCapBytes(snapThermal2, previousLatchedCapBytes: cap24Gb);
+    Assert(capT2Unlatched == cap24Gb - 128L * MiB, $"Expected unlatched thermal=2 cap {cap24Gb / MiB - 128} MB, got {capT2Unlatched / MiB} MB");
+    Assert(capT2Latched == cap24Gb, "Small <150 MB delta must stay latched to prevent cap flap.");
+    long capT4Emergency = MemoryBudgetGovernor.ComputeEffectivePssCapBytes(snapThermal4, previousLatchedCapBytes: cap24Gb);
+    Assert(capT4Emergency == capT4, "Emergency thermal >=4 must bypass hysteresis and tighten immediately.");
+
+    // 5. ZERO filename heuristics: opaque-named RoFormer/large model classified heavy purely by tensor/weight math; small SCNet stays light
+    NeuralModelCatalogEntry opaqueRoformer = new() {
+        Id = "opaque_model_alpha",
+        DisplayName = "Opaque Alpha",
+        Task = NeuralModelTask.VocalSeparation,
+        ContractKind = NeuralOnnxContractKind.MelBandRoFormerHostStft,
+        FileName = "opaque_alpha.onnx",
+        ApproxSizeMb = 228f,
+        RecommendedChunkSamples = 352800,
+        OutputStemNames = ["vocals", "instrumental"]
+    };
+    OnnxTensorMemoryProfile profRoformer = MemoryBudgetGovernor.ComputeTensorMemoryProfile(228L * MiB, opaqueRoformer, NeuralQuantizationMode.Fp32);
+    Assert(profRoformer.IsMemoryHeavy, "Opaque-named RoFormer must classify heavy purely from tensor/weight profile (zero filename heuristics).");
+    Assert(profRoformer.TotalEstimatedLoadBytes > 950L * MiB, $"Unexpectedly low RoFormer FP32 peak: {profRoformer.TotalEstimatedLoadBytes / MiB} MB");
+
+    OnnxTensorMemoryProfile profQuant = MemoryBudgetGovernor.ComputeTensorMemoryProfile(228L * MiB, opaqueRoformer, NeuralQuantizationMode.W8A16);
+    Assert(profQuant.QuantizedWeightBytes < profRoformer.QuantizedWeightBytes, "W8A16 quantization must reduce effective weight footprint.");
+
+    NeuralModelCatalogEntry tinyScnet = new() {
+        Id = "opaque_tiny_fast",
+        DisplayName = "Opaque Tiny",
+        Task = NeuralModelTask.StemSeparation4,
+        ContractKind = NeuralOnnxContractKind.ScnetStft4Ch,
+        FileName = "opaque_tiny.onnx",
+        ApproxSizeMb = 28f,
+        RecommendedChunkSamples = 132300,
+        StftFftSize = 2048,
+        StftHopSize = 1024,
+        StftDimF = 1025,
+        StftDimT = 128,
+        OutputStemNames = ["drums", "bass", "other", "vocals"]
+    };
+    OnnxTensorMemoryProfile profTiny = MemoryBudgetGovernor.ComputeTensorMemoryProfile(28L * MiB, tinyScnet, NeuralQuantizationMode.Fp32);
+    Assert(!profTiny.IsMemoryHeavy, $"Compact 28 MB SCNet must NOT be classified as memory-heavy (act={profTiny.ActivationWorkingSetBytes / MiB} MB).");
+
+    // 6. End-to-end Evaluate decisions: LOW_MEMORY, PSS_CAP_EXCEEDED, INSUFFICIENT_RAM, OK
+    DeviceMemorySnapshot lowMemSnap = new() {
+        TotalBytes = 8L * 1024L * MiB,
+        AvailableBytes = 400L * MiB,
+        LowMemoryThresholdBytes = 512L * MiB,
+        IsLowMemory = true,
+        Source = "Synthetic"
+    };
+    MemoryBudgetDecision dLow = MemoryBudgetGovernor.Evaluate(lowMemSnap, 228L * MiB, opaqueRoformer, NeuralQuantizationMode.Fp32);
+    Assert(!dLow.HasSufficientMemory && dLow.StatusCode == "LOW_MEMORY", $"Expected LOW_MEMORY rejection, got {dLow.StatusCode}");
+
+    MemoryBudgetDecision dTooBig = MemoryBudgetGovernor.Evaluate(snap24Gb, 780L * MiB, opaqueRoformer, NeuralQuantizationMode.Fp32);
+    Assert(!dTooBig.HasSufficientMemory && dTooBig.StatusCode == "PSS_CAP_EXCEEDED",
+        $"Expected PSS_CAP_EXCEEDED rejection on 780 MB FP32 model, got {dTooBig.StatusCode} (est={dTooBig.EstimatedModelLoadBytes / MiB} MB, cap={dTooBig.EffectivePssCapBytes / MiB} MB)");
+
+    DeviceMemorySnapshot tightAvailSnap = new() {
+        TotalBytes = 8L * 1024L * MiB,
+        AvailableBytes = 900L * MiB,
+        LowMemoryThresholdBytes = 256L * MiB,
+        IsLowMemory = false,
+        Source = "Synthetic"
+    };
+    MemoryBudgetDecision dNoRam = MemoryBudgetGovernor.Evaluate(tightAvailSnap, 228L * MiB, opaqueRoformer, NeuralQuantizationMode.Fp32);
+    Assert(!dNoRam.HasSufficientMemory && dNoRam.StatusCode == "INSUFFICIENT_RAM", $"Expected INSUFFICIENT_RAM rejection, got {dNoRam.StatusCode}");
+
+    MemoryBudgetDecision dOk = MemoryBudgetGovernor.Evaluate(snap24Gb, 228L * MiB, opaqueRoformer, NeuralQuantizationMode.W8A16);
+    Assert(dOk.HasSufficientMemory && dOk.StatusCode == "OK", $"Expected OK decision for W8A16 quantized RoFormer on 24 GB flagship, got {dOk.StatusCode}: {dOk.DiagnosticMessage}");
+});
+
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
     Console.WriteLine($"NO_CS_TESTS_MATCHED filter='{testFilter}'");
     return 0;
@@ -4865,7 +5004,7 @@ def _py_stage6_full_app_sota_audit_and_phase_a_contracts() -> None:
     bridge_main = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "LiveDiagnosticBridgeService.cs").read_text(encoding="utf-8")
     bridge_cmds = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "LiveDiagnosticBridgeService.Commands.cs").read_text(encoding="utf-8")
     assert '"cortex_profiles"' in bridge_main, "cortex_profiles must be registered in LiveDiagnosticBridgeService.cs"
-    assert 'case "cortex_profiles":' in bridge_cmds and "BuildCavernDefaultRegistry" in bridge_cmds and "ToCompactManifestJson" in bridge_cmds, (
+    assert 'case BridgeCommandOpcode.CortexProfiles:' in bridge_cmds and "BuildCavernDefaultRegistry" in bridge_cmds and "ToCompactManifestJson" in bridge_cmds, (
         "cortex_profiles handler missing in LiveDiagnosticBridgeService.Commands.cs"
     )
 
@@ -5094,8 +5233,9 @@ def _py_stage10_onnx_low_ram_discipline_and_qa_contracts() -> None:
     ort_main = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NativeOnnxRuntimeBridge.cs").read_text(encoding="utf-8")
     for tok in (
         "IsMemoryHeavyModel",
-        "RoFormerMemoryExpansionFactor",
-        "HeavyModelSafetyHeadroomBytes",
+        "MaxSingleProcessModelPssBytes",
+        "MemoryBudgetGovernor.Evaluate",
+        "CaptureDeviceMemorySnapshot",
         "fnDisableCpuMemArena",
         "fnDisableMemPattern",
         "session.disable_prepacking",
@@ -5357,6 +5497,39 @@ def _py_stage14_v4_1_reform_p0_contracts() -> None:
             assert f'["{key}"]' in lang_src, f"V4.1 missing L10n key '{key}' in {lang_file}"
 
 
+def _py_stage15_w56_4_co_evolve_zero_static_contracts() -> None:
+    """W56.4: Deterministic co_evolve.py parity across BridgeCmd, Packaging, SettingsSchema & RPE<->SBE DSP."""
+    co_script = REPO_ROOT / ".agents" / "scripts" / "co_evolve.py"
+    assert co_script.is_file(), "W56.4 .agents/scripts/co_evolve.py missing"
+
+    # Run twice and verify deterministic hashes & <=250 ms latency budget
+    p1 = subprocess.run([sys.executable, "-B", str(co_script), "--check", "--json"], cwd=str(REPO_ROOT), capture_output=True, text=True)
+    assert p1.returncode == 0, f"W56.4 co_evolve.py --check failed: {p1.stdout}\n{p1.stderr}"
+    d1 = json.loads(p1.stdout)
+    p2 = subprocess.run([sys.executable, "-B", str(co_script), "--check", "--json"], cwd=str(REPO_ROOT), capture_output=True, text=True)
+    assert p2.returncode == 0, f"W56.4 co_evolve.py second run failed: {p2.stderr}"
+    d2 = json.loads(p2.stdout)
+
+    assert d1["ok"] is True and d2["ok"] is True, f"W56.4 co_evolve returned errors: {d1.get('errors')}"
+    assert d1["elapsedMs"] <= 250.0, f"W56.4 co_evolve exceeded 250 ms budget: {d1['elapsedMs']} ms"
+    assert d1["domains"] == d2["domains"], "W56.4 co_evolve domain hashes/metadata must be bit-identical across runs"
+
+    # BridgeCmd unification: 1:1 opcodes == catalog == switchCases, zero hardcoded tab `4`
+    bc = d1["domains"]["bridge_cmd"]
+    assert bc["opcodes"] == bc["catalog"] == bc["switchCases"] >= 54, f"W56.4 BridgeCmd mismatch: {bc}"
+    assert len(bc["schemaHash"]) == 64, "W56.4 BridgeCmd schemaHash must be 64-char SHA-256 hex"
+
+    # SettingsSchema: zero Activator.CreateInstance, true non-zero defaults preserved in generated AppSettingsStore.Schema.cs
+    cmd_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "LiveDiagnosticBridgeService.Commands.cs").read_text(encoding="utf-8")
+    assert "Activator.CreateInstance" not in cmd_src, "W56.4 Activator.CreateInstance must be removed from settings_reset"
+    schema_cs = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "AppSettingsStore.Schema.cs").read_text(encoding="utf-8")
+    for expected_reset in (
+        'static s => s.PlayerVolume = 1.0f',
+        'static s => s.HeadphoneVirtualizer = true',
+        'static s => s.CloudLogRepo = "guumachadooo/Cavern"',
+    ):
+        assert expected_reset in schema_cs, f"W56.4 AppSettingsStore.Schema.cs missing true default reset: {expected_reset}"
+
 
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
@@ -5375,6 +5548,7 @@ PYTHON_CHECKS = [
     ("PY_T12_W53_2_W53_3_WaveB_WaveC_Contracts", _py_stage12_w53_2_w53_3_wave_b_wave_c_contracts),
     ("PY_T13_W53_4_W53_5_W53_6_WaveD_WaveE_WaveF_Contracts", _py_stage13_w53_4_to_w53_6_wave_d_e_f_contracts),
     ("PY_T14_W55_1_V4Reform_P0_Contracts", _py_stage14_v4_1_reform_p0_contracts),
+    ("PY_T15_W56_4_CoEvolve_BridgeCmd_Packaging_SettingsSchema_DspParity", _py_stage15_w56_4_co_evolve_zero_static_contracts),
 ]
 
 

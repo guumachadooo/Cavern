@@ -143,14 +143,9 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     const int OnnxTensorElementDataTypeDouble = 11;
     const long MaxTensorElements = 64L * 1024L * 1024L; // 256 MB float32 ceiling to prevent mobile OOM / 32-bit length overflow
     const float Float16FiniteMax = 65504f;
-    const long HeavyModelBytesThreshold = 200L * 1024L * 1024L; // 200 MB+ models disable ORT power-of-2 CPU arena & opt-cache duplication
     const long UltraHeavyModelBytesThreshold = 400L * 1024L * 1024L; // 400 MB+ models also disable mem-pattern & weight prepacking
-    const double ModelMemoryExpansionFactor = 2.5; // Standard CNN/MDX protobuf parse + graph opt + EP weight packing multiplier
-    const double RoFormerMemoryExpansionFactor = 3.8; // Transformer/RoFormer axial-attention peak multiplier (Android LMKD-safe)
-    const long SessionBaseOverheadBytes = 32L * 1024L * 1024L; // 32 MB base ORT runtime & activation overhead
-    const long MinimumSafetyHeadroomBytes = 192L * 1024L * 1024L; // 192 MB OS/audio engine LMK safety headroom
-    const long HeavyModelSafetyHeadroomBytes = 640L * 1024L * 1024L; // 640 MB Android LMKD margin for 200+ MB Transformer graphs
-    const long MaxSingleProcessModelPssBytes = 2600L * 1024L * 1024L; // Android LMKD single-process PSS ceiling on <=12 GB phones
+    const long MinimumSafetyHeadroomBytes = 192L * 1024L * 1024L; // 192 MB OS/audio engine LMK safety headroom (fallback when ActivityManager unavailable)
+    const long MaxSingleProcessModelPssBytes = 2600L * 1024L * 1024L; // Android LMKD single-process PSS ceiling on <=12 GB phones (T0 floor ceiling)
 
     [DllImport("libc", EntryPoint = "setenv", CallingConvention = CallingConvention.Cdecl)]
     static extern int NativeSetEnv(
@@ -184,6 +179,7 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     int activeSessionCount;
     bool disposeRequested;
     bool initialized;
+    long latchedPssCapBytes;
 
     // Cached C API delegates
     CreateEnvDelegate fnCreateEnv;
@@ -391,66 +387,76 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     }
 
     /// <summary>
-    /// Evaluates current Android system RAM against the estimated peak native memory required for a model
-    /// of <paramref name="modelBytes"/> bytes without touching disk or initializing a session.
-    /// Accounts for automatic or user-selected W8A16/FP16 mobile quantization before comparing against the 2600 MB PSS cap.
+    /// Evaluates current Android system RAM, thermal status, and own-UID historical LMK exit telemetry via
+    /// <see cref="MemoryBudgetGovernor"/> without touching disk or initializing a session.
+    /// Accounts for automatic or user-selected W8A16/FP16 mobile quantization before enforcing the clamped PSS cap (&lt;= 2600 MB).
     /// </summary>
     public ModelMemoryCheckResult CheckMemoryForModelBytes(
         long modelBytes,
         string modelLabel = "",
         NeuralQuantizationMode? effectiveQuantMode = null) {
         long safeModelBytes = Math.Max(0L, modelBytes);
+        NeuralModelCatalogEntry catalogEntry = NeuralModelCatalog.FindByFileNameOrId(modelLabel);
         NeuralQuantizationMode quantMode = effectiveQuantMode ?? OnnxMobileQuantizer.ResolveEffectiveMode(
             PreferredQuantizationMode,
             safeModelBytes,
             NeuralExecutionProvider.Cpu,
             IsWebGpuOptimalModel(modelLabel));
-        long effectivePayloadBytes = EstimateQuantizedPayloadBytes(safeModelBytes, quantMode);
-        bool memoryHeavy = IsMemoryHeavyModel(modelLabel, effectivePayloadBytes);
-        long estimatedModelBytes = EstimateRequiredModelBytes(effectivePayloadBytes, modelLabel, quantMode);
+        long _ = EstimateQuantizedPayloadBytes(safeModelBytes, quantMode);
 
-        if (!TryReadSystemMemory(out long availBytes, out long totalBytes, out long thresholdBytes, out bool isLowMemory, out string source)) {
-            return new ModelMemoryCheckResult {
-                HasSufficientMemory = true,
-                IsLowMemoryState = false,
-                ModelFileBytes = safeModelBytes,
-                EstimatedRequiredBytes = estimatedModelBytes,
-                AvailableSystemBytes = 0L,
-                TotalSystemBytes = 0L,
-                LowMemoryThresholdBytes = 0L,
-                SafetyHeadroomBytes = memoryHeavy ? HeavyModelSafetyHeadroomBytes : MinimumSafetyHeadroomBytes,
-                Source = "Unavailable",
-                DiagnosticMessage = $"System RAM telemetry unavailable; proceeding with model '{modelLabel}' ({FormatMiB(safeModelBytes)} MB -> {quantMode} {FormatMiB(effectivePayloadBytes)} MB, est. {FormatMiB(estimatedModelBytes)} MB)."
-            };
-        }
-
-        long headroomBytes = ComputeEffectiveSafetyHeadroom(totalBytes, thresholdBytes, memoryHeavy);
-        long requiredBudgetBytes = estimatedModelBytes > long.MaxValue - headroomBytes
-            ? long.MaxValue
-            : estimatedModelBytes + headroomBytes;
-
-        // Android ActivityManager.availMem includes ~1.5-2 GB reclaimable page cache that LMKD will not grant
-        // to a single foreground process; enforce a realistic per-process PSS ceiling while accounting for quantization.
-        long perProcessPssCap = totalBytes > 0
-            ? Math.Min(Math.Max(totalBytes / 4L, 1800L * 1024L * 1024L), MaxSingleProcessModelPssBytes)
-            : MaxSingleProcessModelPssBytes;
-        bool exceedsProcessCap = memoryHeavy && estimatedModelBytes > perProcessPssCap;
-        bool sufficient = !isLowMemory && !exceedsProcessCap && availBytes >= requiredBudgetBytes;
-        string namePart = string.IsNullOrWhiteSpace(modelLabel) ? "ONNX model" : $"'{modelLabel}'";
-        string status = sufficient ? "OK" : (isLowMemory ? "LOW_MEMORY" : (exceedsProcessCap ? "PSS_CAP_EXCEEDED" : "INSUFFICIENT_RAM"));
-        string diag = $"{status} [{source}/{quantMode}] for {namePart}: raw={FormatMiB(safeModelBytes)} MB, eff={FormatMiB(effectivePayloadBytes)} MB, estLoad={FormatMiB(estimatedModelBytes)} MB, pssCap={FormatMiB(perProcessPssCap)} MB, headroom={FormatMiB(headroomBytes)} MB, need={FormatMiB(requiredBudgetBytes)} MB, avail={FormatMiB(availBytes)} MB / total={FormatMiB(totalBytes)} MB (lowMem={isLowMemory})";
+        DeviceMemorySnapshot snapshot = CaptureDeviceMemorySnapshot();
+        long prevLatched = Interlocked.Read(ref latchedPssCapBytes);
+        MemoryBudgetDecision decision = MemoryBudgetGovernor.Evaluate(
+            snapshot,
+            safeModelBytes,
+            catalogEntry,
+            quantMode,
+            prevLatched > 0L ? prevLatched : null,
+            modelLabel);
+        long clampedCap = Math.Min(decision.EffectivePssCapBytes, MaxSingleProcessModelPssBytes);
+        Interlocked.Exchange(ref latchedPssCapBytes, clampedCap);
 
         return new ModelMemoryCheckResult {
-            HasSufficientMemory = sufficient,
-            IsLowMemoryState = isLowMemory,
+            HasSufficientMemory = decision.HasSufficientMemory,
+            IsLowMemoryState = decision.IsLowMemoryState,
             ModelFileBytes = safeModelBytes,
-            EstimatedRequiredBytes = requiredBudgetBytes,
-            AvailableSystemBytes = availBytes,
-            TotalSystemBytes = totalBytes,
+            EstimatedRequiredBytes = decision.RequiredBudgetBytes,
+            AvailableSystemBytes = snapshot.AvailableBytes,
+            TotalSystemBytes = snapshot.TotalBytes,
+            LowMemoryThresholdBytes = snapshot.LowMemoryThresholdBytes,
+            SafetyHeadroomBytes = decision.SafetyHeadroomBytes,
+            Source = snapshot.Source ?? "Unavailable",
+            DiagnosticMessage = decision.DiagnosticMessage
+        };
+    }
+
+    DeviceMemorySnapshot CaptureDeviceMemorySnapshot() {
+        int thermalStatus = AndroidRuntimeTelemetry.GetThermalStatusCode(appContext);
+        AndroidRuntimeTelemetry.TryGetRecentLowMemoryExitInfo(
+            appContext,
+            out bool hadRecentLowMemoryExit,
+            out long lastLowMemoryExitPssBytes);
+        if (!TryReadSystemMemory(out long availBytes, out long totalBytes, out long thresholdBytes, out bool isLowMemory, out string source)) {
+            return new DeviceMemorySnapshot {
+                AvailableBytes = 0L,
+                TotalBytes = 0L,
+                LowMemoryThresholdBytes = 0L,
+                IsLowMemory = false,
+                ThermalStatusCode = thermalStatus,
+                HadRecentLowMemoryExit = hadRecentLowMemoryExit,
+                LastLowMemoryExitPssBytes = lastLowMemoryExitPssBytes,
+                Source = "Unavailable"
+            };
+        }
+        return new DeviceMemorySnapshot {
+            AvailableBytes = availBytes,
+            TotalBytes = totalBytes,
             LowMemoryThresholdBytes = thresholdBytes,
-            SafetyHeadroomBytes = headroomBytes,
-            Source = source,
-            DiagnosticMessage = diag
+            IsLowMemory = isLowMemory,
+            ThermalStatusCode = thermalStatus,
+            HadRecentLowMemoryExit = hadRecentLowMemoryExit,
+            LastLowMemoryExitPssBytes = lastLowMemoryExitPssBytes,
+            Source = source
         };
     }
 
@@ -518,16 +524,11 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     }
 
     /// <summary>
-    /// Returns true for large (&gt;=200 MB) or Transformer/RoFormer/HTDemucs audio models that require
-    /// strict ORT memory-arena discipline to avoid Android LMKD kills.
+    /// Returns true for large (&gt;=200 MB) or multi-branch/axial-attention audio models that require
+    /// strict ORT memory-arena discipline, resolved deterministically via <see cref="MemoryBudgetGovernor"/>.
     /// </summary>
-    internal static bool IsMemoryHeavyModel(string modelPathOrLabel, long modelBytes) {
-        if (modelBytes >= HeavyModelBytesThreshold) {
-            return true;
-        }
-        string name = Path.GetFileName(modelPathOrLabel ?? string.Empty).ToLowerInvariant();
-        return name.Contains("roformer") || name.Contains("demucs");
-    }
+    internal static bool IsMemoryHeavyModel(string modelPathOrLabel, long modelBytes) =>
+        MemoryBudgetGovernor.IsMemoryHeavy(modelBytes, NeuralModelCatalog.FindByFileNameOrId(modelPathOrLabel));
 
     string TryResolveOptimizedCachePath(string modelPath, long modelBytes, NeuralExecutionProvider ep) {
         if (ep == NeuralExecutionProvider.QnnHtp || ep == NeuralExecutionProvider.WebGpu || IsMemoryHeavyModel(modelPath, modelBytes)) {
@@ -851,17 +852,8 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
         AppLogger.Info($"ONNX memory guard passed: {check.DiagnosticMessage}");
     }
 
-    static long EstimateQuantizedPayloadBytes(long rawModelBytes, NeuralQuantizationMode effectiveQuantMode) {
-        if (rawModelBytes <= 0L) {
-            return 0L;
-        }
-        double scale = effectiveQuantMode switch {
-            NeuralQuantizationMode.W8A16 => 0.34,
-            NeuralQuantizationMode.Fp16 => 0.56,
-            _ => 1.0
-        };
-        return Math.Max(64L, (long)Math.Ceiling(rawModelBytes * scale));
-    }
+    static long EstimateQuantizedPayloadBytes(long rawModelBytes, NeuralQuantizationMode effectiveQuantMode) =>
+        MemoryBudgetGovernor.EstimateQuantizedPayloadBytes(rawModelBytes, effectiveQuantMode);
 
     static long ResolveTotalModelSizeBytes(string modelPath, long primaryModelBytes) {
         long total = Math.Max(0L, primaryModelBytes);
@@ -883,37 +875,6 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
             // Best-effort companion external-data inspection
         }
         return total;
-    }
-
-    static long EstimateRequiredModelBytes(
-        long effectiveModelBytes,
-        string modelLabel = "",
-        NeuralQuantizationMode effectiveQuantMode = NeuralQuantizationMode.Fp32) {
-        if (effectiveModelBytes <= 0) {
-            return SessionBaseOverheadBytes;
-        }
-        double factor = effectiveQuantMode == NeuralQuantizationMode.W8A16
-            ? 2.2
-            : (IsMemoryHeavyModel(modelLabel, effectiveModelBytes)
-                ? RoFormerMemoryExpansionFactor
-                : ModelMemoryExpansionFactor);
-        double expanded = effectiveModelBytes * factor;
-        if (!double.IsFinite(expanded) || expanded >= long.MaxValue - SessionBaseOverheadBytes) {
-            return long.MaxValue;
-        }
-        return (long)Math.Ceiling(expanded) + SessionBaseOverheadBytes;
-    }
-
-    static long ComputeEffectiveSafetyHeadroom(long totalSystemBytes, long lowMemoryThresholdBytes, bool memoryHeavy = false) {
-        long cappedThreshold = lowMemoryThresholdBytes > 0 ? lowMemoryThresholdBytes : 0L;
-        if (totalSystemBytes > 0) {
-            long quarterRam = totalSystemBytes / 4L;
-            if (cappedThreshold > quarterRam) {
-                cappedThreshold = quarterRam;
-            }
-        }
-        long floorBytes = memoryHeavy ? HeavyModelSafetyHeadroomBytes : MinimumSafetyHeadroomBytes;
-        return Math.Max(floorBytes, cappedThreshold);
     }
 
     bool TryReadSystemMemory(

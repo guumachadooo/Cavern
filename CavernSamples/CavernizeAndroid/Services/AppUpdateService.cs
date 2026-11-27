@@ -29,9 +29,21 @@ public sealed class UpdateCheckResult {
 /// and <c>/releases/latest</c> HTML redirect resolutions to keep GitHub 403/429 rates &lt;= 1%.
 /// </summary>
 public static class AppUpdateService {
-    const string ReleaseApiUrl = "https://api.github.com/repos/guumachadooo/Cavern/releases/tags/android-latest";
-    const string LatestWebReleaseUrl = "https://github.com/guumachadooo/Cavern/releases/latest";
-    const string TargetAssetName = "Cavernize-Android.apk";
+    internal const string RepoOwnerAndName = "guumachadooo/Cavern";
+    internal const string DisplayVersionPrefix = "2.9";
+    internal const string FallbackDisplayVersion = "2.9.0";
+    internal const string UserAgentProductName = "CavernizeAndroid";
+    internal const string UserAgentProductVersion = "2.9";
+    internal const string TargetAssetName = "Cavernize-Android.apk";
+    internal static readonly string[] RequiredNativeLibs = [
+        "libcavernize_proaudio.so",
+        "libffmpeg.so",
+        "libtruehdd.so",
+        "libonnxruntime.so"
+    ];
+
+    const string ReleaseApiUrl = $"https://api.github.com/repos/{RepoOwnerAndName}/releases/tags/android-latest";
+    const string LatestWebReleaseUrl = $"https://github.com/{RepoOwnerAndName}/releases/latest";
     const string CachePrefsName = "cavernize_github_http_cache_v1";
     const long RedirectCacheTtlSeconds = 600;
     const long RateLimitCooldownSeconds = 300;
@@ -49,7 +61,7 @@ public static class AppUpdateService {
 
     static HttpClient BuildGitHubHttpClient() {
         HttpClient client = new() { Timeout = TimeSpan.FromSeconds(45) };
-        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", "2.1"));
+        client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(UserAgentProductName, UserAgentProductVersion));
         client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         return client;
     }
@@ -123,13 +135,13 @@ public static class AppUpdateService {
     public static (string versionName, long versionCode) GetInstalledVersion(Context context) {
         try {
             PackageInfo info = context.PackageManager.GetPackageInfo(context.PackageName, 0);
-            string name = info?.VersionName ?? "2.1.0";
+            string name = info?.VersionName ?? FallbackDisplayVersion;
 #pragma warning disable CS0618, CA1422
             long code = OperatingSystem.IsAndroidVersionAtLeast(28) ? info.LongVersionCode : info.VersionCode;
 #pragma warning restore CS0618, CA1422
             return (name, code);
         } catch {
-            return ("2.1.0", 1);
+            return (FallbackDisplayVersion, 1);
         }
     }
 
@@ -305,7 +317,7 @@ public static class AppUpdateService {
         }
 
         using HttpClient dlClient = new() { Timeout = TimeSpan.FromMinutes(10) };
-        dlClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("CavernizeAndroid", "2.1"));
+        dlClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(UserAgentProductName, UserAgentProductVersion));
 
         using HttpResponseMessage resp = await dlClient.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();

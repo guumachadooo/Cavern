@@ -18,7 +18,7 @@ namespace CavernizeAndroid.Services;
 /// <summary>
 /// Persists all Cavernize settings to Android SharedPreferences and applies them to <see cref="Listener"/> and <see cref="RenderingSettings"/>.
 /// </summary>
-public sealed class AppSettingsStore {
+public sealed partial class AppSettingsStore {
     const string PrefsName = "cavernize_prefs";
     readonly ISharedPreferences prefs;
 
@@ -86,7 +86,7 @@ public sealed class AppSettingsStore {
     /// </summary>
     public bool DistanceSimulation {
         get => false;
-        set => Edit().PutBoolean("distanceSim", false).Apply();
+        set { }
     }
 
     /// <summary>
@@ -1511,11 +1511,11 @@ public sealed class AppSettingsStore {
             .PutBoolean("smartCleanHideCameraSocialVideo", true)
             .PutBoolean("smartCleanHideStemsAndShort", true)
             .PutInt("smartCleanMinDurationSec", 25);
-        if (clearAllowlistAndHiddenFolders) {
-            ed.PutString("smartCleanAllowlistPaths", "[]")
-              .PutString("smartCleanHiddenFolders", "[]");
-        }
         ed.Apply();
+        if (clearAllowlistAndHiddenFolders) {
+            ClearSmartCleanAllowlist();
+            ClearHiddenLibraryFolders();
+        }
     }
 
     /// <summary>

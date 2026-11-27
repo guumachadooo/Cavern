@@ -62,6 +62,8 @@ public static class AndroidRuntimeTelemetry {
     static HandlerThread metricsThread;
     static Handler metricsHandler;
     static FrameMetricsListenerImpl activeFrameListener;
+    static ThermalStatusListenerImpl activeThermalListener;
+    static int cachedThermalStatus = -1;
     static int lastLoggedThermalLevel = -1;
 
     static int computeBudgetTier = 1; // 0 = Eco, 1 = Balanced (default), 2 = Fast (Max 75%)
@@ -130,6 +132,7 @@ public static class AndroidRuntimeTelemetry {
     public static void InstallGlobalComputeQoSHooks(Context context, int initialBudgetTier = 1) {
         cachedAppContext = context?.ApplicationContext ?? context;
         SetComputeBudgetTier(initialBudgetTier);
+        AttachThermalStatusListener(cachedAppContext);
         MvsepAntiArtifactPipeline.GlobalBackgroundThreadQoSHook = ApplyBackgroundThreadQoS;
         MvsepAntiArtifactPipeline.GlobalThermalExtraYieldMsProvider = GetAdaptiveThermalYieldMs;
     }
@@ -177,20 +180,54 @@ public static class AndroidRuntimeTelemetry {
     }
 
     /// <summary>
-    /// Reads Android's current thermal status level (0=None, 1=Light, 2=Moderate, 3=Severe, 4=Critical, 5=Emergency, 6=Shutdown; -1 if unsupported).
+    /// Attaches Android's sanctioned <see cref="PowerManager.IOnThermalStatusChangedListener"/> (API &gt;= 29)
+    /// once per process so <see cref="GetThermalStatusCode"/> reflects live thermal callbacks with zero IPC overhead.
     /// </summary>
-    public static int GetThermalStatusCode(Context context) {
-        if (!OperatingSystem.IsAndroidVersionAtLeast(29) || context == null) {
-            return -1;
+    public static void AttachThermalStatusListener(Context context) {
+        if (!OperatingSystem.IsAndroidVersionAtLeast(29) || context == null || activeThermalListener != null) {
+            return;
         }
         try {
             if (context.GetSystemService(Context.PowerService) is PowerManager pm) {
-                return (int)pm.CurrentThermalStatus;
+                Volatile.Write(ref cachedThermalStatus, (int)pm.CurrentThermalStatus);
+                ThermalStatusListenerImpl listener = new();
+                pm.AddThermalStatusListener(listener);
+                activeThermalListener = listener;
+            }
+        } catch {
+            // Fall back cleanly to CurrentThermalStatus polling
+        }
+    }
+
+    sealed class ThermalStatusListenerImpl : Java.Lang.Object, PowerManager.IOnThermalStatusChangedListener {
+        public void OnThermalStatusChanged(ThermalStatus status) =>
+            Volatile.Write(ref cachedThermalStatus, (int)status);
+    }
+
+    /// <summary>
+    /// Reads Android's current thermal status level (0=None, 1=Light, 2=Moderate, 3=Severe, 4=Critical, 5=Emergency, 6=Shutdown; -1 if unsupported).
+    /// </summary>
+    public static int GetThermalStatusCode(Context context) {
+        if (!OperatingSystem.IsAndroidVersionAtLeast(29)) {
+            return -1;
+        }
+        int cached = Volatile.Read(ref cachedThermalStatus);
+        if (cached >= 0 && activeThermalListener != null) {
+            return cached;
+        }
+        if (context == null) {
+            return cached;
+        }
+        try {
+            if (context.GetSystemService(Context.PowerService) is PowerManager pm) {
+                int current = (int)pm.CurrentThermalStatus;
+                Volatile.Write(ref cachedThermalStatus, current);
+                return current;
             }
         } catch {
             // Ignore
         }
-        return -1;
+        return cached;
     }
 
     /// <summary>Returns a compact human-readable label for an Android thermal status code.</summary>
@@ -587,6 +624,49 @@ public static class AndroidRuntimeTelemetry {
             AppLogger.Warn($"ReadHistoricalExitReasons: {ex.Message}");
         }
         return list;
+    }
+
+    /// <summary>
+    /// Inspects own-UID historical Android <c>ApplicationExitInfo</c> records (API &gt;= 30, last 72h)
+    /// to detect recent <c>REASON_LOW_MEMORY</c> kills for <see cref="Cavernize.Logic.Spatial.MemoryBudgetGovernor"/>.
+    /// Uses sanctioned ActivityManager API only (zero procfs PSI reads — SELinux API 35 compliant).
+    /// </summary>
+    public static bool TryGetRecentLowMemoryExitInfo(
+        Context context,
+        out bool hadRecentLowMemoryExit,
+        out long lastLowMemoryExitPssBytes,
+        long lookbackWindowMs = 72L * 3600L * 1000L) {
+        hadRecentLowMemoryExit = false;
+        lastLowMemoryExitPssBytes = 0L;
+        if (!OperatingSystem.IsAndroidVersionAtLeast(30) || context == null) {
+            return false;
+        }
+        try {
+            if (context.GetSystemService(Context.ActivityService) is ActivityManager am) {
+                IList<ApplicationExitInfo> reasons = am.GetHistoricalProcessExitReasons(context.PackageName, 0, 5);
+                long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                if (reasons != null) {
+                    for (int i = 0; i < reasons.Count; i++) {
+                        ApplicationExitInfo info = reasons[i];
+                        if (info == null) {
+                            continue;
+                        }
+                        if ((ApplicationExitInfoReason)info.Reason == ApplicationExitInfoReason.LowMemory) {
+                            bool withinWindow = info.Timestamp <= 0L || (nowMs - info.Timestamp) <= lookbackWindowMs;
+                            if (withinWindow) {
+                                hadRecentLowMemoryExit = true;
+                                lastLowMemoryExitPssBytes = info.Pss > 0L ? info.Pss * 1024L : 0L;
+                                return true;
+                            }
+                        }
+                    }
+                }
+                return true;
+            }
+        } catch {
+            // Best-effort own-UID telemetry
+        }
+        return false;
     }
 
     /// <summary>Builds the unified AAudio + AudioTrack XRun telemetry payload.</summary>

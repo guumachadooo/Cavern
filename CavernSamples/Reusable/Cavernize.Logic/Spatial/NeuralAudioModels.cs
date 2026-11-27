@@ -1,3 +1,5 @@
+using System.Globalization;
+
 using Cavern.Neural;
 
 namespace Cavernize.Logic.Spatial;
@@ -294,22 +296,32 @@ public static class NeuralModelCatalog {
 
     /// <summary>
     /// Returns true when <paramref name="entry"/> (or its on-disk byte size) represents a memory-heavy
-    /// Transformer/RoFormer/HTDemucs or &gt;=200 MB checkpoint that requires strict mobile RAM headroom.
+    /// multi-branch/axial-attention graph or &gt;=200 MB checkpoint based on deterministic tensor/weight math.
     /// </summary>
-    public static bool IsMemoryHeavyModel(NeuralModelCatalogEntry entry, long fileSizeBytes = 0L) {
-        if (fileSizeBytes >= (long)(HeavyModelSizeThresholdMb * 1024f * 1024f)) {
-            return true;
+    public static bool IsMemoryHeavyModel(NeuralModelCatalogEntry entry, long fileSizeBytes = 0L) =>
+        MemoryBudgetGovernor.IsMemoryHeavy(fileSizeBytes, entry);
+
+    /// <summary>
+    /// Resolves a curated <see cref="NeuralModelCatalogEntry"/> by exact ID or ONNX filename (case-insensitive),
+    /// or returns <c>null</c> for unrecognized custom checkpoints.
+    /// </summary>
+    public static NeuralModelCatalogEntry FindByFileNameOrId(string fileNameOrId) {
+        if (string.IsNullOrWhiteSpace(fileNameOrId)) {
+            return null;
         }
-        if (entry == null) {
-            return false;
+        string needle = fileNameOrId.Trim();
+        int slash = needle.LastIndexOfAny(['/', '\\']);
+        if (slash >= 0 && slash + 1 < needle.Length) {
+            needle = needle[(slash + 1)..];
         }
-        if (entry.ApproxSizeMb >= HeavyModelSizeThresholdMb) {
-            return true;
+        for (int i = 0; i < Entries.Count; i++) {
+            NeuralModelCatalogEntry e = Entries[i];
+            if (string.Equals(e.Id, needle, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(e.FileName, needle, StringComparison.OrdinalIgnoreCase)) {
+                return e;
+            }
         }
-        string id = (entry.Id ?? string.Empty).ToLowerInvariant();
-        string file = (entry.FileName ?? string.Empty).ToLowerInvariant();
-        return id.Contains("roformer") || id.Contains("demucs") ||
-               file.Contains("roformer") || file.Contains("demucs");
+        return null;
     }
 
     /// <summary>All curated open-source ONNX checkpoints registered in Slot 7A.</summary>
@@ -1249,4 +1261,422 @@ public sealed class NeuralSeparatedTrack {
         }
         return null;
     }
+}
+
+/// <summary>
+/// Pure, platform-agnostic memory, thermal, and historical low-memory-exit telemetry snapshot
+/// injected into <see cref="MemoryBudgetGovernor"/> from sanctioned OS adapters (ActivityManager,
+/// PowerManager.CurrentThermalStatus / IOnThermalStatusChangedListener, own-UID ApplicationExitInfo)
+/// or synthetic unit-test fixtures (zero <c>/proc/pressure</c> SELinux reads).
+/// </summary>
+public readonly struct DeviceMemorySnapshot {
+    /// <summary>Currently available OS RAM in bytes (0 when telemetry is unavailable).</summary>
+    public long AvailableBytes { get; init; }
+
+    /// <summary>Total physical RAM accessible to the OS in bytes (0 when unknown).</summary>
+    public long TotalBytes { get; init; }
+
+    /// <summary>OS low-memory threshold in bytes (e.g., <c>ActivityManager.MemoryInfo.Threshold</c>).</summary>
+    public long LowMemoryThresholdBytes { get; init; }
+
+    /// <summary>True when the OS reports an active low-memory pressure condition.</summary>
+    public bool IsLowMemory { get; init; }
+
+    /// <summary>Android thermal status code (0=None, 1=Light, 2=Moderate, 3=Severe, 4=Critical, 5=Emergency, 6=Shutdown, -1=Unsupported).</summary>
+    public int ThermalStatusCode { get; init; }
+
+    /// <summary>True when own-UID historical <c>ApplicationExitInfo</c> includes a recent <c>REASON_LOW_MEMORY</c> termination.</summary>
+    public bool HadRecentLowMemoryExit { get; init; }
+
+    /// <summary>Recorded PSS in bytes of the most recent own-UID <c>REASON_LOW_MEMORY</c> exit (0 if none/unknown).</summary>
+    public long LastLowMemoryExitPssBytes { get; init; }
+
+    /// <summary>Telemetry backend label ("ActivityManager", "/proc/meminfo", "Synthetic", or "Unavailable").</summary>
+    public string Source { get; init; }
+
+    /// <summary>True when valid positive available RAM telemetry was captured.</summary>
+    public bool HasTelemetry => AvailableBytes > 0L;
+}
+
+/// <summary>
+/// Exact tensor-dtype and shape memory breakdown computed deterministically by <see cref="MemoryBudgetGovernor"/>
+/// without filename string heuristics.
+/// </summary>
+public readonly struct OnnxTensorMemoryProfile {
+    /// <summary>Byte footprint of the primary model input tensor(s) per inference chunk.</summary>
+    public long InputTensorBytes { get; init; }
+
+    /// <summary>Byte footprint of the primary model output tensor(s) per inference chunk.</summary>
+    public long OutputTensorBytes { get; init; }
+
+    /// <summary>Estimated peak intermediate activation working-set bytes during graph execution.</summary>
+    public long ActivationWorkingSetBytes { get; init; }
+
+    /// <summary>Raw on-disk ONNX checkpoint + external tensor data size in bytes.</summary>
+    public long RawWeightBytes { get; init; }
+
+    /// <summary>Effective weight payload bytes after mobile quantization (FP32 / FP16 / W8A16).</summary>
+    public long QuantizedWeightBytes { get; init; }
+
+    /// <summary>True when tensor topology or parameter volume requires strict low-RAM ORT arena discipline.</summary>
+    public bool IsMemoryHeavy { get; init; }
+
+    /// <summary>Estimated peak native RAM load in bytes (weights + graph expansion + tensor activations + ORT base overhead).</summary>
+    public long TotalEstimatedLoadBytes { get; init; }
+}
+
+/// <summary>
+/// Deterministic admission-control verdict produced by <see cref="MemoryBudgetGovernor.Evaluate"/>.
+/// </summary>
+public readonly struct MemoryBudgetDecision {
+    /// <summary>True when loading the model fits safely inside both available RAM and the clamped per-process PSS cap.</summary>
+    public bool HasSufficientMemory { get; init; }
+
+    /// <summary>True when the device snapshot reported active OS low-memory pressure.</summary>
+    public bool IsLowMemoryState { get; init; }
+
+    /// <summary>True when a memory-heavy checkpoint's estimated native footprint exceeds <see cref="EffectivePssCapBytes"/>.</summary>
+    public bool ExceedsProcessCap { get; init; }
+
+    /// <summary>True when tensor topology or weight payload classifies the checkpoint as memory-heavy.</summary>
+    public bool IsMemoryHeavy { get; init; }
+
+    /// <summary>Effective single-process PSS ceiling in bytes after thermal, exit-history, and hysteresis governance (always &lt;= 2600 MB).</summary>
+    public long EffectivePssCapBytes { get; init; }
+
+    /// <summary>Estimated peak native RAM load for this model in bytes (excluding OS safety headroom).</summary>
+    public long EstimatedModelLoadBytes { get; init; }
+
+    /// <summary>Reserved OS + real-time audio engine safety headroom in bytes.</summary>
+    public long SafetyHeadroomBytes { get; init; }
+
+    /// <summary>Combined required budget (<see cref="EstimatedModelLoadBytes"/> + <see cref="SafetyHeadroomBytes"/>) in bytes.</summary>
+    public long RequiredBudgetBytes { get; init; }
+
+    /// <summary>Effective quantized weight payload size in bytes.</summary>
+    public long QuantizedPayloadBytes { get; init; }
+
+    /// <summary>Active weight precision mode evaluated by the governor.</summary>
+    public NeuralQuantizationMode QuantizationMode { get; init; }
+
+    /// <summary>Machine-readable verdict code ("OK", "LOW_MEMORY", "PSS_CAP_EXCEEDED", "INSUFFICIENT_RAM", or "TELEMETRY_UNAVAILABLE").</summary>
+    public string StatusCode { get; init; }
+
+    /// <summary>Structured tensor-level memory breakdown used to reach this decision.</summary>
+    public OnnxTensorMemoryProfile TensorProfile { get; init; }
+
+    /// <summary>Concise diagnostic summary suitable for logs and UI telemetry.</summary>
+    public string DiagnosticMessage { get; init; }
+}
+
+/// <summary>
+/// Pure deterministic neural RAM admission governor replacing filename heuristics and scattered magic constants.
+/// Enforces the immutable T0 single-process PSS floor ceiling (&lt;= 2600 MB), ±150 MB anti-flap hysteresis,
+/// thermal &amp; own-UID low-memory-exit tightening, and exact ONNX tensor-dtype/shape memory math.
+/// </summary>
+public static class MemoryBudgetGovernor {
+    /// <summary>Immutable T0 hard single-process PSS ceiling (2600 MB, matching REG-B11-ROFORMER-PSS-CAP).</summary>
+    public const long HardSingleProcessPssCeilingBytes = 2600L * 1024L * 1024L;
+
+    /// <summary>Lower bound for tightened single-process PSS cap under thermal/LMKD pressure (1280 MB).</summary>
+    public const long MinimumSingleProcessPssCapBytes = 1280L * 1024L * 1024L;
+
+    /// <summary>Baseline floor for nominal per-process PSS cap before thermal/exit tightening (1800 MB).</summary>
+    public const long BaseFloorSingleProcessPssCapBytes = 1800L * 1024L * 1024L;
+
+    /// <summary>Anti-flap hysteresis band (±150 MB) preventing cap oscillation across consecutive checks.</summary>
+    public const long HysteresisBandBytes = 150L * 1024L * 1024L;
+
+    /// <summary>Weight byte threshold (>= 200 MB) classifying a checkpoint as memory-heavy.</summary>
+    public const long HeavyWeightBytesThreshold = 200L * 1024L * 1024L;
+
+    /// <summary>Intermediate activation working-set threshold (>= 96 MB) classifying a graph as memory-heavy.</summary>
+    public const long HeavyActivationWorkingSetThreshold = 96L * 1024L * 1024L;
+
+    /// <summary>Base ONNX Runtime session &amp; graph metadata overhead (32 MB).</summary>
+    public const long SessionBaseOverheadBytes = 32L * 1024L * 1024L;
+
+    /// <summary>Minimum reserved OS &amp; real-time audio headroom (192 MB).</summary>
+    public const long MinimumSafetyHeadroomBytes = 192L * 1024L * 1024L;
+
+    /// <summary>Elevated Android LMKD headroom for memory-heavy checkpoints (640 MB).</summary>
+    public const long HeavyModelSafetyHeadroomBytes = 640L * 1024L * 1024L;
+
+    /// <summary>ONNX <c>TensorProto.DataType</c> constants for exact byte-width math.</summary>
+    public const int OnnxTypeFloat32 = 1;
+    public const int OnnxTypeUint8 = 2;
+    public const int OnnxTypeInt8 = 3;
+    public const int OnnxTypeUint16 = 4;
+    public const int OnnxTypeInt16 = 5;
+    public const int OnnxTypeInt32 = 6;
+    public const int OnnxTypeInt64 = 7;
+    public const int OnnxTypeFloat16 = 10;
+    public const int OnnxTypeFloat64 = 11;
+    public const int OnnxTypeUint32 = 12;
+    public const int OnnxTypeUint64 = 13;
+    public const int OnnxTypeBFloat16 = 16;
+
+    /// <summary>Returns the exact byte size of an ONNX <c>TensorProto.DataType</c> element (defaults to 4 bytes for unknown/float32).</summary>
+    public static int GetOnnxElementByteSize(int onnxElementDataType) => onnxElementDataType switch {
+        OnnxTypeUint8 or OnnxTypeInt8 => 1,
+        OnnxTypeUint16 or OnnxTypeInt16 or OnnxTypeFloat16 or OnnxTypeBFloat16 => 2,
+        OnnxTypeFloat32 or OnnxTypeInt32 or OnnxTypeUint32 => 4,
+        OnnxTypeInt64 or OnnxTypeUint64 or OnnxTypeFloat64 => 8,
+        _ => 4
+    };
+
+    /// <summary>Computes exact byte footprint of a dense ONNX tensor from its dimension shape and ONNX element dtype with overflow protection.</summary>
+    public static long ComputeTensorBytes(ReadOnlySpan<long> shape, int onnxElementDataType) {
+        if (shape.Length == 0) {
+            return 0L;
+        }
+        int elemBytes = GetOnnxElementByteSize(onnxElementDataType);
+        long elements = 1L;
+        for (int i = 0; i < shape.Length; i++) {
+            long dim = shape[i] > 0L ? shape[i] : 1L;
+            if (elements > long.MaxValue / dim) {
+                return long.MaxValue;
+            }
+            elements *= dim;
+        }
+        return elements > long.MaxValue / elemBytes ? long.MaxValue : elements * elemBytes;
+    }
+
+    /// <summary>Estimates quantized on-disk / weight payload size in bytes for the selected mobile quantization mode.</summary>
+    public static long EstimateQuantizedPayloadBytes(long rawModelBytes, NeuralQuantizationMode quantMode) {
+        if (rawModelBytes <= 0L) {
+            return 0L;
+        }
+        double scale = quantMode switch {
+            NeuralQuantizationMode.W8A16 => 0.34,
+            NeuralQuantizationMode.Fp16 => 0.56,
+            _ => 1.0
+        };
+        return Math.Max(64L, (long)Math.Ceiling(rawModelBytes * scale));
+    }
+
+    /// <summary>
+    /// Computes exact input/output tensor bytes, intermediate activation working set, weight expansion,
+    /// and structural memory-heaviness purely from checkpoint byte volume, quantization mode, and tensor I/O contract.
+    /// </summary>
+    public static OnnxTensorMemoryProfile ComputeTensorMemoryProfile(
+        long rawModelBytes,
+        NeuralModelCatalogEntry entry,
+        NeuralQuantizationMode quantMode = NeuralQuantizationMode.Fp32) {
+        long safeRaw = Math.Max(0L, rawModelBytes);
+        if (safeRaw == 0L && entry != null && entry.ApproxSizeMb > 0f) {
+            safeRaw = (long)Math.Ceiling(entry.ApproxSizeMb * 1024.0 * 1024.0);
+        }
+        long quantWeightBytes = EstimateQuantizedPayloadBytes(safeRaw, quantMode);
+        int activationDtype = quantMode == NeuralQuantizationMode.Fp16 ? OnnxTypeFloat16 : OnnxTypeFloat32;
+
+        long inBytes = 0L;
+        long outBytes = 0L;
+        long activationMultiplier = 6L;
+        bool isAttentionOrMultiBandContract = false;
+
+        if (entry != null) {
+            int stems = Math.Max(1, entry.OutputStemNames?.Length ?? 1);
+            int chunkSamples = Math.Max(16384, entry.RecommendedChunkSamples);
+            int hop = entry.StftHopSize > 0 ? entry.StftHopSize : 1024;
+            int frames = entry.StftDimT > 0 ? entry.StftDimT : Math.Max(16, (chunkSamples / hop) + 1);
+            int dimF = entry.StftDimF > 0 ? entry.StftDimF : (entry.StftFftSize > 0 ? (entry.StftFftSize / 2) + 1 : 2049);
+
+            switch (entry.ContractKind) {
+                case NeuralOnnxContractKind.MelBandRoFormerHostStft:
+                    inBytes = ComputeTensorBytes([1, frames, 4100], activationDtype);
+                    outBytes = ComputeTensorBytes([1, stems, 2050, frames, 2], activationDtype);
+                    activationMultiplier = 18L;
+                    isAttentionOrMultiBandContract = true;
+                    break;
+                case NeuralOnnxContractKind.BsRoFormerHostStft:
+                    inBytes = SaturatedAdd(
+                        ComputeTensorBytes([1, 2, dimF, frames], activationDtype),
+                        ComputeTensorBytes([1, 2, dimF, frames], activationDtype));
+                    outBytes = SaturatedAdd(
+                        ComputeTensorBytes([1, stems, 2, dimF, frames], activationDtype),
+                        ComputeTensorBytes([1, stems, 2, dimF, frames], activationDtype));
+                    activationMultiplier = 18L;
+                    isAttentionOrMultiBandContract = true;
+                    break;
+                case NeuralOnnxContractKind.ScnetStft4Ch:
+                    inBytes = ComputeTensorBytes([1, 4, dimF, frames], activationDtype);
+                    outBytes = ComputeTensorBytes([1, stems, 4, dimF, frames], activationDtype);
+                    activationMultiplier = 6L;
+                    break;
+                case NeuralOnnxContractKind.MdxNetStft4Ch:
+                    inBytes = ComputeTensorBytes([1, 4, dimF, frames], activationDtype);
+                    outBytes = ComputeTensorBytes([1, 4, dimF, frames], activationDtype);
+                    activationMultiplier = 5L;
+                    break;
+                case NeuralOnnxContractKind.FlashSr16kTo48k:
+                    inBytes = ComputeTensorBytes([1, chunkSamples], activationDtype);
+                    outBytes = ComputeTensorBytes([1, chunkSamples * 3L], activationDtype);
+                    activationMultiplier = 4L;
+                    break;
+                case NeuralOnnxContractKind.WaveformStereo:
+                default:
+                    inBytes = ComputeTensorBytes([1, 2, chunkSamples], activationDtype);
+                    outBytes = ComputeTensorBytes([1, stems, 2, chunkSamples], activationDtype);
+                    activationMultiplier = stems >= 4 ? 10L : 5L;
+                    isAttentionOrMultiBandContract = stems >= 4 && safeRaw >= 120L * 1024L * 1024L;
+                    break;
+            }
+        }
+
+        long ioSum = SaturatedAdd(inBytes, outBytes);
+        long activationWorkingSet = ioSum > 0L
+            ? (ioSum > long.MaxValue / activationMultiplier ? long.MaxValue : ioSum * activationMultiplier)
+            : 0L;
+
+        bool isHeavy = safeRaw >= HeavyWeightBytesThreshold ||
+                       quantWeightBytes >= HeavyWeightBytesThreshold ||
+                       activationWorkingSet >= HeavyActivationWorkingSetThreshold ||
+                       isAttentionOrMultiBandContract;
+
+        double weightExpansion = quantMode == NeuralQuantizationMode.W8A16
+            ? 2.2
+            : (isAttentionOrMultiBandContract || isHeavy ? 3.2 : 2.3);
+        long expandedWeights = quantWeightBytes <= 0L
+            ? 0L
+            : (quantWeightBytes * weightExpansion >= long.MaxValue ? long.MaxValue : (long)Math.Ceiling(quantWeightBytes * weightExpansion));
+
+        long totalLoad = SaturatedAdd(SaturatedAdd(expandedWeights, activationWorkingSet), SessionBaseOverheadBytes);
+        return new OnnxTensorMemoryProfile {
+            InputTensorBytes = inBytes,
+            OutputTensorBytes = outBytes,
+            ActivationWorkingSetBytes = activationWorkingSet,
+            RawWeightBytes = safeRaw,
+            QuantizedWeightBytes = quantWeightBytes,
+            IsMemoryHeavy = isHeavy,
+            TotalEstimatedLoadBytes = totalLoad
+        };
+    }
+
+    /// <summary>Returns true when a checkpoint requires strict low-RAM ORT arena discipline based on size/tensor math.</summary>
+    public static bool IsMemoryHeavy(long rawModelBytes, NeuralModelCatalogEntry entry = null, NeuralQuantizationMode quantMode = NeuralQuantizationMode.Fp32) {
+        if (rawModelBytes >= HeavyWeightBytesThreshold) {
+            return true;
+        }
+        if (entry == null) {
+            return false;
+        }
+        return ComputeTensorMemoryProfile(rawModelBytes, entry, quantMode).IsMemoryHeavy;
+    }
+
+    /// <summary>
+    /// Computes the effective single-process PSS ceiling in bytes from <paramref name="snapshot"/>,
+    /// applying thermal tightening, own-UID <c>REASON_LOW_MEMORY</c> exit tightening, ±150 MB hysteresis,
+    /// and the immutable T0 &lt;= 2600 MB ceiling clamp.
+    /// </summary>
+    public static long ComputeEffectivePssCapBytes(DeviceMemorySnapshot snapshot, long? previousLatchedCapBytes = null) {
+        long baseCap = snapshot.TotalBytes > 0L
+            ? Math.Min(Math.Max(snapshot.TotalBytes / 4L, BaseFloorSingleProcessPssCapBytes), HardSingleProcessPssCeilingBytes)
+            : HardSingleProcessPssCeilingBytes;
+
+        long thermalPenalty = snapshot.ThermalStatusCode switch {
+            2 => 128L * 1024L * 1024L,  // Moderate
+            3 => 320L * 1024L * 1024L,  // Severe
+            >= 4 => 512L * 1024L * 1024L, // Critical / Emergency / Shutdown
+            _ => 0L
+        };
+        long rawCap = Math.Max(MinimumSingleProcessPssCapBytes, baseCap - thermalPenalty);
+
+        if (snapshot.HadRecentLowMemoryExit) {
+            long exitSafeCap = snapshot.LastLowMemoryExitPssBytes > 0L
+                ? (long)(snapshot.LastLowMemoryExitPssBytes * 0.85)
+                : rawCap - (256L * 1024L * 1024L);
+            rawCap = Math.Min(rawCap, Math.Max(MinimumSingleProcessPssCapBytes, exitSafeCap));
+        }
+
+        rawCap = Math.Clamp(rawCap, MinimumSingleProcessPssCapBytes, HardSingleProcessPssCeilingBytes);
+
+        if (previousLatchedCapBytes.HasValue && previousLatchedCapBytes.Value > 0L) {
+            long prevClamped = Math.Clamp(previousLatchedCapBytes.Value, MinimumSingleProcessPssCapBytes, HardSingleProcessPssCeilingBytes);
+            bool emergencyDrop = (snapshot.ThermalStatusCode >= 4 || snapshot.HadRecentLowMemoryExit) && rawCap < prevClamped;
+            if (!emergencyDrop && Math.Abs(rawCap - prevClamped) < HysteresisBandBytes) {
+                return prevClamped;
+            }
+        }
+
+        return rawCap;
+    }
+
+    /// <summary>Computes reserved OS &amp; real-time audio safety headroom in bytes.</summary>
+    public static long ComputeEffectiveSafetyHeadroom(long totalSystemBytes, long lowMemoryThresholdBytes, bool isMemoryHeavy) {
+        long cappedThreshold = lowMemoryThresholdBytes > 0L ? lowMemoryThresholdBytes : 0L;
+        if (totalSystemBytes > 0L) {
+            long quarterRam = totalSystemBytes / 4L;
+            if (cappedThreshold > quarterRam) {
+                cappedThreshold = quarterRam;
+            }
+        }
+        long floorBytes = isMemoryHeavy ? HeavyModelSafetyHeadroomBytes : MinimumSafetyHeadroomBytes;
+        return Math.Max(floorBytes, cappedThreshold);
+    }
+
+    /// <summary>Evaluates whether loading a neural checkpoint is safe under the supplied <see cref="DeviceMemorySnapshot"/>.</summary>
+    public static MemoryBudgetDecision Evaluate(
+        DeviceMemorySnapshot snapshot,
+        long rawModelBytes,
+        NeuralModelCatalogEntry entry,
+        NeuralQuantizationMode quantMode,
+        long? previousLatchedCapBytes = null,
+        string modelLabel = "") {
+        long safeModelBytes = Math.Max(0L, rawModelBytes);
+        OnnxTensorMemoryProfile profile = ComputeTensorMemoryProfile(safeModelBytes, entry, quantMode);
+        long effectivePssCap = ComputeEffectivePssCapBytes(snapshot, previousLatchedCapBytes);
+        string label = !string.IsNullOrWhiteSpace(modelLabel) ? modelLabel : (entry?.FileName ?? entry?.Id ?? "ONNX model");
+
+        if (!snapshot.HasTelemetry) {
+            long fallbackHeadroom = profile.IsMemoryHeavy ? HeavyModelSafetyHeadroomBytes : MinimumSafetyHeadroomBytes;
+            return new MemoryBudgetDecision {
+                HasSufficientMemory = true,
+                IsLowMemoryState = false,
+                ExceedsProcessCap = false,
+                IsMemoryHeavy = profile.IsMemoryHeavy,
+                EffectivePssCapBytes = effectivePssCap,
+                EstimatedModelLoadBytes = profile.TotalEstimatedLoadBytes,
+                SafetyHeadroomBytes = fallbackHeadroom,
+                RequiredBudgetBytes = SaturatedAdd(profile.TotalEstimatedLoadBytes, fallbackHeadroom),
+                QuantizedPayloadBytes = profile.QuantizedWeightBytes,
+                QuantizationMode = quantMode,
+                StatusCode = "TELEMETRY_UNAVAILABLE",
+                TensorProfile = profile,
+                DiagnosticMessage = $"System RAM telemetry unavailable; proceeding with '{label}' ({FormatMiB(safeModelBytes)} MB -> {quantMode} {FormatMiB(profile.QuantizedWeightBytes)} MB, est. {FormatMiB(profile.TotalEstimatedLoadBytes)} MB, pssCap={FormatMiB(effectivePssCap)} MB)."
+            };
+        }
+
+        long headroomBytes = ComputeEffectiveSafetyHeadroom(snapshot.TotalBytes, snapshot.LowMemoryThresholdBytes, profile.IsMemoryHeavy);
+        long requiredBudgetBytes = SaturatedAdd(profile.TotalEstimatedLoadBytes, headroomBytes);
+        bool exceedsProcessCap = profile.IsMemoryHeavy && profile.TotalEstimatedLoadBytes > effectivePssCap;
+        bool sufficient = !snapshot.IsLowMemory && !exceedsProcessCap && snapshot.AvailableBytes >= requiredBudgetBytes;
+        string status = sufficient
+            ? "OK"
+            : (snapshot.IsLowMemory ? "LOW_MEMORY" : (exceedsProcessCap ? "PSS_CAP_EXCEEDED" : "INSUFFICIENT_RAM"));
+        string src = string.IsNullOrWhiteSpace(snapshot.Source) ? "Unknown" : snapshot.Source;
+        string diag = $"{status} [{src}/{quantMode}/therm={snapshot.ThermalStatusCode}/lmkExit={snapshot.HadRecentLowMemoryExit}] for '{label}': raw={FormatMiB(safeModelBytes)} MB, eff={FormatMiB(profile.QuantizedWeightBytes)} MB, act={FormatMiB(profile.ActivationWorkingSetBytes)} MB, estLoad={FormatMiB(profile.TotalEstimatedLoadBytes)} MB, pssCap={FormatMiB(effectivePssCap)} MB, headroom={FormatMiB(headroomBytes)} MB, need={FormatMiB(requiredBudgetBytes)} MB, avail={FormatMiB(snapshot.AvailableBytes)} MB / total={FormatMiB(snapshot.TotalBytes)} MB (lowMem={snapshot.IsLowMemory})";
+
+        return new MemoryBudgetDecision {
+            HasSufficientMemory = sufficient,
+            IsLowMemoryState = snapshot.IsLowMemory,
+            ExceedsProcessCap = exceedsProcessCap,
+            IsMemoryHeavy = profile.IsMemoryHeavy,
+            EffectivePssCapBytes = effectivePssCap,
+            EstimatedModelLoadBytes = profile.TotalEstimatedLoadBytes,
+            SafetyHeadroomBytes = headroomBytes,
+            RequiredBudgetBytes = requiredBudgetBytes,
+            QuantizedPayloadBytes = profile.QuantizedWeightBytes,
+            QuantizationMode = quantMode,
+            StatusCode = status,
+            TensorProfile = profile,
+            DiagnosticMessage = diag
+        };
+    }
+
+    static long SaturatedAdd(long a, long b) =>
+        a > long.MaxValue - b ? long.MaxValue : a + b;
+
+    static string FormatMiB(long bytes) =>
+        (bytes / (1024.0 * 1024.0)).ToString("0.0", CultureInfo.InvariantCulture);
 }

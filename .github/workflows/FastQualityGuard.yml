@@ -46,10 +46,11 @@ jobs:
           echo "=== 4. OmniAgent & Flight Recorder Python Unit Tests ==="
           python3 -B -m unittest discover -s .agents/agent -p 'test_*.py' -v
 
-          echo "=== 5. Timeless Build Lessons, Local Coherence & Meta-Governance ==="
+          echo "=== 5. Timeless Build Lessons, Local Coherence, Co-Evolution Parity & Meta-Governance ==="
           python3 -B .agents/plugins/dynamic-fractal-planner/scripts/error_learner.py --audit-lessons
           python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py coherence check --local
           python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py coherence gov-audit
+          python3 -B .agents/scripts/co_evolve.py --check
 
           echo "=== 6. Preview Dashboard Node Tests ==="
           node --test .agents/preview/dashboard.test.mjs

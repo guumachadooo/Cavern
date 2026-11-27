@@ -43,8 +43,7 @@ public static partial class LiveDiagnosticBridgeService {
         CancellationToken ct,
         int depth) {
         string cmd = (rawCmd ?? "").Trim().ToLowerInvariant();
-        CommandDescriptor desc = CapabilitiesCatalog.FirstOrDefault(c => c.Name == cmd);
-        if (desc == null) {
+        if (!CapabilitiesByName.TryGetValue(cmd, out CommandDescriptor desc)) {
             return (false, $"Unknown command '{cmd}'. Call 'capabilities' to discover all supported commands.");
         }
         if (desc.Tier > maxTier) {
@@ -53,14 +52,15 @@ public static partial class LiveDiagnosticBridgeService {
 
         ILiveBridgeAppHost host = TryGetHost();
         try {
-            switch (cmd) {
-                case "ping": {
+            switch (desc.Opcode) {
+                case BridgeCommandOpcode.Ping: {
                     (string ver, long build) = AppUpdateService.GetInstalledVersion(context);
                     return (true, JsonSerializer.Serialize(new {
                         status = "online",
                         pid = Android.OS.Process.MyPid(),
                         processStartUtc = AndroidRuntimeTelemetry.ProcessStartUtc.ToString("O", CultureInfo.InvariantCulture),
                         bridgeVersion = 3,
+                        schemaHash = BridgeCommandSchemaHash,
                         supportsDynamicExecution = true,
                         supportsTelemetry = true,
                         activeTier = maxTier,
@@ -81,14 +81,16 @@ public static partial class LiveDiagnosticBridgeService {
                         utc = DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture)
                     }, new JsonSerializerOptions { WriteIndented = true }));
                 }
-                case "capabilities":
-                case "help": {
+                case BridgeCommandOpcode.Capabilities:
+                case BridgeCommandOpcode.Help: {
                     return (true, JsonSerializer.Serialize(new {
                         bridgeVersion = 3,
+                        schemaHash = BridgeCommandSchemaHash,
                         supportsDynamicExecution = true,
                         activeTier = maxTier,
                         uiHostAttached = host != null,
                         commands = CapabilitiesCatalog.Select(c => new {
+                            opcode = (ushort)c.Opcode,
                             cmd = c.Name,
                             tier = c.Tier,
                             allowedInSession = c.Tier <= maxTier,
@@ -97,50 +99,50 @@ public static partial class LiveDiagnosticBridgeService {
                         })
                     }, new JsonSerializerOptions { WriteIndented = true }));
                 }
-                case "get_design_tokens": {
+                case BridgeCommandOpcode.GetDesignTokens: {
                     OneUiTheme.Initialize(context);
                     return (true, OneUiTheme.ExportDesignTokensJson("cavernize-ipc"));
                 }
-                case "quick_check": {
+                case BridgeCommandOpcode.QuickCheck: {
                     SelfCheckReport rep = await SelfDiagnosticEngine.RunAsync(context, store, SelfCheckMode.Quick, ct: ct).ConfigureAwait(false);
                     store.LastSelfCheckUtc = rep.ExecutedAtUtc;
                     store.LastSelfCheckSummary = rep.CompactSummary;
                     return (true, rep.ToMarkdown());
                 }
-                case "full_check": {
+                case BridgeCommandOpcode.FullCheck: {
                     SelfCheckReport rep = await SelfDiagnosticEngine.RunAsync(context, store, SelfCheckMode.Full, ct: ct).ConfigureAwait(false);
                     store.LastSelfCheckUtc = rep.ExecutedAtUtc;
                     store.LastSelfCheckSummary = rep.CompactSummary;
                     return (true, rep.ToMarkdown());
                 }
-                case "ultra_check": {
+                case BridgeCommandOpcode.UltraCheck: {
                     SelfCheckReport rep = await SelfDiagnosticEngine.RunAsync(context, store, SelfCheckMode.Ultra, ct: ct).ConfigureAwait(false);
                     store.LastSelfCheckUtc = rep.ExecutedAtUtc;
                     store.LastSelfCheckSummary = rep.CompactSummary;
                     return (true, rep.ToMarkdown());
                 }
-                case "logcat_tail": {
+                case BridgeCommandOpcode.LogcatTail: {
                     int lines = GetArgInt(argsEl, "lines", 150, 10, 800);
                     string minLevel = GetArgString(argsEl, "minLevel", "W");
                     string buffer = GetArgString(argsEl, "buffer", "main");
                     return await LiveChaosBugHunter.ReadOwnLogcatAsync(lines, minLevel, buffer, ct).ConfigureAwait(false);
                 }
-                case "anomalies": {
+                case BridgeCommandOpcode.Anomalies: {
                     int limit = GetArgInt(argsEl, "limit", 80, 1, 160);
                     bool clear = GetArgBool(argsEl, "clear", false);
                     return (true, LiveChaosBugHunter.GetAnomaliesJson(limit, clear));
                 }
-                case "chaos_hunt": {
+                case BridgeCommandOpcode.ChaosHunt: {
                     int rounds = GetArgInt(argsEl, "rounds", 6, 1, 20);
                     return await LiveChaosBugHunter.RunChaosHuntAsync(context, store, rounds, ct).ConfigureAwait(false);
                 }
-                case "acoustic_audit": {
+                case BridgeCommandOpcode.AcousticAudit: {
                     bool quick = GetArgBool(argsEl, "quick", false);
                     string fmt = GetArgString(argsEl, "format", "json").Trim().ToLowerInvariant();
                     AcousticAuditReport rep = await Task.Run(() => AcousticAuditEngine.RunSuite(context, store, quick, ct), ct).ConfigureAwait(false);
                     return (rep.FailCount == 0, fmt == "markdown" || fmt == "md" ? rep.ToMarkdownTable() : rep.ToJson());
                 }
-                case "acoustic_probe": {
+                case BridgeCommandOpcode.AcousticProbe: {
                     AcousticCustomProbeRequest req = new() {
                         ProfileId = GetArgString(argsEl, "profileId", BinauralProfileService.DefaultProfileId),
                         MinimumPhase = GetArgBool(argsEl, "minPhase", false),
@@ -166,7 +168,7 @@ public static partial class LiveDiagnosticBridgeService {
                     string json = await Task.Run(() => AcousticAuditEngine.RunCustomProbeJson(context, req), ct).ConfigureAwait(false);
                     return (true, json);
                 }
-                case "ui_audit": {
+                case BridgeCommandOpcode.UiAudit: {
                     if (host == null) {
                         return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
                     }
@@ -180,7 +182,7 @@ public static partial class LiveDiagnosticBridgeService {
                             uiPerfSlowest = perfSamples.OrderByDescending(p => p.FirstFrameMs).Take(12).ToList()
                         }, new JsonSerializerOptions { WriteIndented = true }));
                 }
-                case "ui_perf_audit": {
+                case BridgeCommandOpcode.UiPerfAudit: {
                     if (host == null) {
                         return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
                     }
@@ -197,9 +199,9 @@ public static partial class LiveDiagnosticBridgeService {
                             targets = ranked
                         }, new JsonSerializerOptions { WriteIndented = true }));
                 }
-                case "summary":
+                case BridgeCommandOpcode.Summary:
                     return (true, AppLogger.BuildDiagnosticSummaryJson(context, store));
-                case "log_tail": {
+                case BridgeCommandOpcode.LogTail: {
                     int lines = GetArgInt(argsEl, "lines", legacyLines, 20, 1000);
                     bool errorsOnly = GetArgBool(argsEl, "errorsOnly", legacyErrorsOnly);
                     string rawTail = AppLogger.ReadRecentLines(lines);
@@ -217,7 +219,7 @@ public static partial class LiveDiagnosticBridgeService {
                     }
                     return (true, rawTail);
                 }
-                case "log_search": {
+                case BridgeCommandOpcode.LogSearch: {
                     string query = GetArgString(argsEl, "query", "");
                     if (string.IsNullOrWhiteSpace(query)) {
                         return (false, "log_search requires {query: string}.");
@@ -230,11 +232,11 @@ public static partial class LiveDiagnosticBridgeService {
                         .ToArray();
                     return (true, hits.Length > 0 ? string.Join("\n", hits) : $"(No log lines matching '{query}')");
                 }
-                case "audio_routes":
+                case BridgeCommandOpcode.AudioRoutes:
                     return (true, BuildAudioRoutesSnapshot(context));
-                case "memory":
+                case BridgeCommandOpcode.Memory:
                     return (true, BuildMemoryJson(context));
-                case "runtime_telemetry": {
+                case BridgeCommandOpcode.RuntimeTelemetry: {
                     if (GetArgBool(argsEl, "resetFrameMetrics", false)) {
                         AndroidRuntimeTelemetry.ResetFrameMetricsWindow();
                     }
@@ -246,13 +248,13 @@ public static partial class LiveDiagnosticBridgeService {
                         ? (true, await host.GetRuntimeTelemetryJsonAsync().ConfigureAwait(false))
                         : (true, AndroidRuntimeTelemetry.BuildRuntimeTelemetryJson(context, null, maxExits));
                 }
-                case "soak_snapshot": {
+                case BridgeCommandOpcode.SoakSnapshot: {
                     bool forceGc = GetArgBool(argsEl, "forceGc", false);
                     return host != null
                         ? (true, await host.GetSoakSnapshotJsonAsync(forceGc).ConfigureAwait(false))
                         : (true, AndroidRuntimeTelemetry.BuildSoakSnapshotJson(context, forceGc));
                 }
-                case "cortex_profiles": {
+                case BridgeCommandOpcode.CortexProfiles: {
                     int sr = GetArgInt(argsEl, "sampleRate", 48000, 16000, 192000);
                     string json = await Task.Run(() => {
                         var reg = Cavern.Spatial.ComponentBehaviorProfiler.BuildCavernDefaultRegistry(sr);
@@ -262,17 +264,17 @@ public static partial class LiveDiagnosticBridgeService {
                     }, ct).ConfigureAwait(false);
                     return (true, json);
                 }
-                case "native_status":
+                case BridgeCommandOpcode.NativeStatus:
                     return (true, BuildNativeLibsStatusJson(context));
-                case "app_state":
+                case BridgeCommandOpcode.AppState:
                     return host != null
                         ? (true, await host.GetAppStateJsonAsync().ConfigureAwait(false))
                         : (true, JsonSerializer.Serialize(new { uiHostAttached = false, mode = "background_standby", standbyRunning = LiveBridgeWakeService.IsRunning }));
-                case "dsp_telemetry":
+                case BridgeCommandOpcode.DspTelemetry:
                     return host != null
                         ? (true, await host.GetDspTelemetryJsonAsync().ConfigureAwait(false))
                         : (false, "MainActivity UI/DSP host is currently closed (background standby mode). Call ui_action {action:'bring_to_front'} first.");
-                case "library_query": {
+                case BridgeCommandOpcode.LibraryQuery: {
                     string query = GetArgString(argsEl, "query", "");
                     int limit = GetArgInt(argsEl, "limit", 40, 1, 100);
                     bool musicOnly = GetArgBool(argsEl, "musicOnly", false);
@@ -300,7 +302,7 @@ public static partial class LiveDiagnosticBridgeService {
                         .ToList();
                     return (true, JsonSerializer.Serialize(new { totalCached = snap?.Tracks?.Count ?? 0, returned = tracks.Count, musicOnly, tracks }, new JsonSerializerOptions { WriteIndented = true }));
                 }
-                case "ui_tree": {
+                case BridgeCommandOpcode.UiTree: {
                     if (host == null) {
                         return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
                     }
@@ -308,49 +310,43 @@ public static partial class LiveDiagnosticBridgeService {
                     bool includeGeometry = GetArgBool(argsEl, "geometry", true);
                     return (true, await host.DumpUiTreeJsonAsync(maxDepth, includeGeometry).ConfigureAwait(false));
                 }
-                case "settings_get":
+                case BridgeCommandOpcode.SettingsGet:
                     return ExecuteSettingsGet(store, argsEl);
-                case "settings_set": {
+                case BridgeCommandOpcode.SettingsSet: {
                     (bool setOk, string setMsg) = ExecuteSettingsSet(store, argsEl);
                     if (setOk && host != null) {
                         await host.ApplySettingsChangedAsync().ConfigureAwait(false);
                     }
                     return (setOk, setMsg);
                 }
-                case "settings_reset": {
+                case BridgeCommandOpcode.SettingsReset: {
                     string key = GetArgString(argsEl, "key", "");
                     if (string.IsNullOrWhiteSpace(key)) {
                         return (false, "settings_reset requires {key: string}.");
                     }
-                    if (IsSecretSettingName(key)) {
-                        return (false, $"Rejected: '{key}' is a protected secret property.");
+                    if (!store.TryResetSetting(key, out string canonicalName, out string defaultDisplay, out string resetErr)) {
+                        return (false, resetErr);
                     }
-                    PropertyInfo prop = typeof(AppSettingsStore).GetProperty(key, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
-                    if (prop == null || !prop.CanWrite) {
-                        return (false, $"Writable setting '{key}' not found.");
-                    }
-                    object defVal = prop.PropertyType == typeof(string) ? "" : (prop.PropertyType.IsValueType ? Activator.CreateInstance(prop.PropertyType) : null);
-                    prop.SetValue(store, defVal);
                     if (host != null) {
                         await host.ApplySettingsChangedAsync().ConfigureAwait(false);
                     }
-                    return (true, $"Reset '{prop.Name}' to default ({defVal ?? "null"}).");
+                    return (true, $"Reset '{canonicalName}' to default ({defaultDisplay}).");
                 }
-                case "files_list":
+                case BridgeCommandOpcode.FilesList:
                     return ExecuteFilesList(context, argsEl);
-                case "file_read":
+                case BridgeCommandOpcode.FileRead:
                     return ExecuteFileRead(context, argsEl);
-                case "file_delete":
+                case BridgeCommandOpcode.FileDelete:
                     return ExecuteFileDelete(context, argsEl);
-                case "tab_switch": {
+                case BridgeCommandOpcode.TabSwitch: {
                     if (host == null) {
                         return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
                     }
-                    int idx = GetArgInt(argsEl, "index", -1, -1, 4);
+                    int idx = GetArgInt(argsEl, "index", -1, -1, MaxTabIndex);
                     string name = GetArgString(argsEl, "name", "");
                     return await host.SwitchTabAsync(idx, name).ConfigureAwait(false);
                 }
-                case "playback_control": {
+                case BridgeCommandOpcode.PlaybackControl: {
                     if (host == null) {
                         return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
                     }
@@ -358,16 +354,16 @@ public static partial class LiveDiagnosticBridgeService {
                     double? val = GetArgNullableDouble(argsEl, "value");
                     return await host.PlaybackControlAsync(action, val).ConfigureAwait(false);
                 }
-                case "open_file": {
+                case BridgeCommandOpcode.OpenFile: {
                     if (host == null) {
                         return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
                     }
                     string path = GetArgString(argsEl, "path", "");
                     bool autoPlay = GetArgBool(argsEl, "autoPlay", false);
-                    int tab = GetArgInt(argsEl, "tab", -1, -1, 4);
+                    int tab = GetArgInt(argsEl, "tab", -1, -1, MaxTabIndex);
                     return await host.OpenFileAsync(path, autoPlay, tab >= 0 ? tab : null).ConfigureAwait(false);
                 }
-                case "ui_action": {
+                case BridgeCommandOpcode.UiAction: {
                     string action = GetArgString(argsEl, "action", "").Trim().ToLowerInvariant();
                     string msg = GetArgString(argsEl, "message", "");
                     if (action == "bring_to_front") {
@@ -385,7 +381,7 @@ public static partial class LiveDiagnosticBridgeService {
                     }
                     return await host.ExecuteUiActionAsync(action, msg).ConfigureAwait(false);
                 }
-                case "ui_click": {
+                case BridgeCommandOpcode.UiClick: {
                     if (host == null) {
                         return (false, "MainActivity is not open.");
                     }
@@ -393,7 +389,7 @@ public static partial class LiveDiagnosticBridgeService {
                     int idx = GetArgInt(argsEl, "index", 0, 0, 50);
                     return await host.ClickUiElementAsync(text, idx).ConfigureAwait(false);
                 }
-                case "cache_clear": {
+                case BridgeCommandOpcode.CacheClear: {
                     string scope = GetArgString(argsEl, "scope", "cache").ToLowerInvariant();
                     int deleted = 0;
                     if (scope == "logs") {
@@ -413,7 +409,7 @@ public static partial class LiveDiagnosticBridgeService {
                     }
                     return (true, $"Cleared {deleted} temporary cache file(s).");
                 }
-                case "audio_probe": {
+                case BridgeCommandOpcode.AudioProbe: {
                     string path = GetArgString(argsEl, "path", "");
                     if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) {
                         return (false, "File not found.");
@@ -439,7 +435,7 @@ public static partial class LiveDiagnosticBridgeService {
                         bitrateKbps = rep.BitrateKbps
                     }, new JsonSerializerOptions { WriteIndented = true }));
                 }
-                case "screenshot_ui": {
+                case BridgeCommandOpcode.ScreenshotUi: {
                     if (host == null) {
                         return (false, "MainActivity is not open.");
                     }
@@ -447,7 +443,7 @@ public static partial class LiveDiagnosticBridgeService {
                     int quality = GetArgInt(argsEl, "quality", 72, 40, 90);
                     return (true, await host.CaptureUiScreenshotJsonAsync(maxWidth, quality).ConfigureAwait(false));
                 }
-                case "strict_mode": {
+                case BridgeCommandOpcode.StrictMode: {
                     bool enable = GetArgBool(argsEl, "enable", true);
                     bool detectDisk = GetArgBool(argsEl, "detectDisk", true);
                     bool detectNetwork = GetArgBool(argsEl, "detectNetwork", true);
@@ -456,31 +452,31 @@ public static partial class LiveDiagnosticBridgeService {
                     return await AndroidRuntimeTelemetry.ConfigureQaStrictModeAsync(
                         enable, detectDisk, detectNetwork, detectLeaks, clear).ConfigureAwait(false);
                 }
-                case "native_tool_exec":
+                case BridgeCommandOpcode.NativeToolExec:
                     return await ExecuteNativeToolProbeAsync(context, argsEl, ct).ConfigureAwait(false);
-                case "ui_interact": {
+                case BridgeCommandOpcode.UiInteract: {
                     if (host == null) {
                         return (false, "MainActivity is not open. Call ui_action {action:'bring_to_front'} first.");
                     }
                     return await host.UiInteractAsync(argsEl).ConfigureAwait(false);
                 }
-                case "reflect_types":
+                case BridgeCommandOpcode.ReflectTypes:
                     return ExecuteReflectTypes(argsEl);
-                case "reflect_members":
+                case BridgeCommandOpcode.ReflectMembers:
                     return await ExecuteReflectMembersAsync(host, store, argsEl).ConfigureAwait(false);
-                case "reflect_get":
+                case BridgeCommandOpcode.ReflectGet:
                     return await ExecuteReflectGetAsync(host, store, argsEl).ConfigureAwait(false);
-                case "reflect_set":
+                case BridgeCommandOpcode.ReflectSet:
                     return await ExecuteReflectSetAsync(host, store, argsEl).ConfigureAwait(false);
-                case "reflect_invoke":
+                case BridgeCommandOpcode.ReflectInvoke:
                     return await ExecuteReflectInvokeAsync(context, host, store, argsEl).ConfigureAwait(false);
-                case "shell_exec":
+                case BridgeCommandOpcode.ShellExec:
                     return await ExecuteSandboxedShellAsync(context, argsEl, ct).ConfigureAwait(false);
-                case "hot_probe_status":
+                case BridgeCommandOpcode.HotProbeStatus:
                     return (true, LiveHotPatchHost.GetStatusJson(store));
-                case "hot_exec":
+                case BridgeCommandOpcode.HotExec:
                     return await LiveHotPatchHost.ExecuteSignedProbeAsync(context, store, host, argsEl, ct).ConfigureAwait(false);
-                case "pipeline": {
+                case BridgeCommandOpcode.Pipeline: {
                     if (depth > 0) {
                         return (false, "Nested pipeline commands are not allowed.");
                     }
@@ -523,7 +519,7 @@ public static partial class LiveDiagnosticBridgeService {
                     }
                     return (allOk, JsonSerializer.Serialize(new { count = results.Count, allOk, results }, new JsonSerializerOptions { WriteIndented = true }));
                 }
-                case "batch": {
+                case BridgeCommandOpcode.Batch: {
                     if (depth > 0) {
                         return (false, "Nested batch commands are not allowed.");
                     }
@@ -849,7 +845,7 @@ public static partial class LiveDiagnosticBridgeService {
 
     static string BuildNativeLibsStatusJson(Context context) {
         string nativeDir = context.ApplicationInfo?.NativeLibraryDir ?? "";
-        string[] expected = ["libffmpeg.so", "libtruehdd.so", "libonnxruntime.so", "libcavernize_proaudio.so"];
+        string[] expected = AppUpdateService.RequiredNativeLibs;
         var libs = expected.Select(name => {
             string p = string.IsNullOrEmpty(nativeDir) ? "" : Path.Combine(nativeDir, name);
             bool exists = !string.IsNullOrEmpty(p) && File.Exists(p);

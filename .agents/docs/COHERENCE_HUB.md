@@ -26,4 +26,4 @@ COV|host_matrix_strict=true|host_entries=12|auto_blocks=3(drifted=0)|deprecated=
 PARITY|SKIP|local_only
 
 ## 5. CONSTITUTION_AND_META_GOV
-CONSTITUTION|T0=immutable_canary|T1=ssot_parity|T2=observe_telemetry|anchors=8(drifted=0)|plane2_cap=4/wk
+CONSTITUTION|T0=immutable_canary|T1=ssot_parity|T2=observe_telemetry|anchors=13(drifted=0)|plane2_cap=4/wk
