@@ -112,15 +112,20 @@ public partial class MainActivity {
         slot2bCard.AddView(neuralSocCacheStatusText);
 
         neuralClearQnnCacheBtn = PillButton(S["NeuralQnnCacheClearBtn"], () => {
-            _ = Task.Run(() => {
-                int removed = OnnxQnnContextCacheManager.ClearAllCaches(this);
-                if (!uiDestroyed) {
-                    RunOnUiThread(() => {
-                        ShowToast(string.Format(S["NeuralQnnCacheClearedToast"], removed));
-                        RefreshNeuralAudioUi();
+            ConfirmDestructiveAction(
+                S["ConfirmDeleteTitle"],
+                S["ConfirmClearQnnCacheMsg"],
+                () => {
+                    _ = Task.Run(() => {
+                        int removed = OnnxQnnContextCacheManager.ClearAllCaches(this);
+                        if (!uiDestroyed) {
+                            RunOnUiThread(() => {
+                                ShowToast(string.Format(S["NeuralQnnCacheClearedToast"], removed));
+                                RefreshNeuralAudioUi();
+                            });
+                        }
                     });
-                }
-            });
+                });
         });
         slot2bCard.AddView(neuralClearQnnCacheBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(8)
@@ -1013,13 +1018,18 @@ public partial class MainActivity {
                         }
 
                         actionButtons.Add(PillButton(S["NeuralModelDeleteBtn"], () => {
-                            OnnxRuntimeInstallerService.DeleteModel(this, localEntry.Id);
-                            if (inTaskSlot) {
-                                store.ToggleNeuralTaskModelId(localEntry.Task, localEntry.Id);
-                            }
-                            SyncNeuralRuntimeDiagnostics();
-                            RefreshNeuralAudioUi();
-                            RefreshModalInPlace();
+                            ConfirmDestructiveAction(
+                                S["ConfirmDeleteTitle"],
+                                string.Format(S["ConfirmDeleteModelMsgFmt"], localEntry.DisplayName),
+                                () => {
+                                    OnnxRuntimeInstallerService.DeleteModel(this, localEntry.Id);
+                                    if (inTaskSlot) {
+                                        store.ToggleNeuralTaskModelId(localEntry.Task, localEntry.Id);
+                                    }
+                                    SyncNeuralRuntimeDiagnostics();
+                                    RefreshNeuralAudioUi();
+                                    RefreshModalInPlace();
+                                });
                         }));
                     }
 
@@ -1091,11 +1101,16 @@ public partial class MainActivity {
             ShowNeuralTrackCacheBrowserModal();
         });
         Button clearTracksBtn = PillButton(S["NeuralClearTrackCacheBtn"], () => {
-            neuralTrackCache?.Clear();
-            SyncNeuralRuntimeDiagnostics();
-            RefreshNeuralAudioUi();
-            ShowToast(S["NeuralTrackCacheClearedToast"]);
-            RefreshModalInPlace();
+            ConfirmDestructiveAction(
+                S["ConfirmDeleteTitle"],
+                S["ConfirmClearAllTracksMsg"],
+                () => {
+                    neuralTrackCache?.Clear();
+                    SyncNeuralRuntimeDiagnostics();
+                    RefreshNeuralAudioUi();
+                    ShowToast(S["NeuralTrackCacheClearedToast"]);
+                    RefreshModalInPlace();
+                });
         });
         trackCacheBtnRow.AddView(browseTracksBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
         trackCacheBtnRow.AddView(clearTracksBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -1109,12 +1124,17 @@ public partial class MainActivity {
             ShowMessageDialog(S["NeuralLicensesBtn"], Cavernize.Logic.Spatial.NeuralModelCatalog.BuildAttributionNotice(), OneUiIconType.Info);
         });
         Button clearBtn = PillButton(S["NeuralClearCacheBtn"], () => {
-            OnnxRuntimeInstallerService.ClearAllModelsAndCache(this);
-            neuralTrackCache?.Clear();
-            SyncNeuralRuntimeDiagnostics();
-            RefreshNeuralAudioUi();
-            ShowToast(S["NeuralCacheClearedToast"]);
-            dialog?.Dismiss();
+            ConfirmDestructiveAction(
+                S["ConfirmDeleteTitle"],
+                S["ConfirmClearModelsAndCacheMsg"],
+                () => {
+                    OnnxRuntimeInstallerService.ClearAllModelsAndCache(this);
+                    neuralTrackCache?.Clear();
+                    SyncNeuralRuntimeDiagnostics();
+                    RefreshNeuralAudioUi();
+                    ShowToast(S["NeuralCacheClearedToast"]);
+                    dialog?.Dismiss();
+                });
         });
         footerRow.AddView(licBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
         footerRow.AddView(clearBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -1512,14 +1532,19 @@ public partial class MainActivity {
             });
         });
         Button clearTokenBtn = PillButton(S["MvsepClearTokenBtn"], () => {
-            tokenInput.Text = "";
-            store.MvsepApiToken = "";
-            if (store.NeuralExecutionBackendIndex == (int)Cavernize.Logic.Spatial.NeuralExecutionBackend.MvsepCloud) {
-                store.NeuralExecutionBackendIndex = (int)Cavernize.Logic.Spatial.NeuralExecutionBackend.OnDevice;
-            }
-            ApplyAndRefreshNeuralAudio();
-            testStatusTv.Text = S["MvsepTokenClearedToast"];
-            testStatusTv.SetTextColor(OneUiTheme.TextSub);
+            ConfirmDestructiveAction(
+                S["ConfirmDeleteTitle"],
+                S["ConfirmClearMvsepTokenMsg"],
+                () => {
+                    tokenInput.Text = "";
+                    store.MvsepApiToken = "";
+                    if (store.NeuralExecutionBackendIndex == (int)Cavernize.Logic.Spatial.NeuralExecutionBackend.MvsepCloud) {
+                        store.NeuralExecutionBackendIndex = (int)Cavernize.Logic.Spatial.NeuralExecutionBackend.OnDevice;
+                    }
+                    ApplyAndRefreshNeuralAudio();
+                    testStatusTv.Text = S["MvsepTokenClearedToast"];
+                    testStatusTv.SetTextColor(OneUiTheme.TextSub);
+                });
         });
         actionRow.AddView(testBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.15f) { RightMargin = Dp(8) });
         actionRow.AddView(clearTokenBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.85f));
@@ -1640,12 +1665,17 @@ public partial class MainActivity {
                 bottomRow.AddView(sizeTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
 
                 Button delBtn = PillButton(S["NeuralModelDeleteBtn"], () => {
-                    if (neuralTrackCache.DeleteEntry(localEntry.CacheKey)) {
-                        SyncNeuralRuntimeDiagnostics();
-                        RefreshNeuralAudioUi();
-                        ShowToast(S["NeuralCacheEntryDeletedToast"]);
-                        RefreshBrowserInPlace();
-                    }
+                    ConfirmDestructiveAction(
+                        S["ConfirmDeleteTitle"],
+                        string.Format(S["ConfirmDeleteVariantMsgFmt"], headline),
+                        () => {
+                            if (neuralTrackCache.DeleteEntry(localEntry.CacheKey)) {
+                                SyncNeuralRuntimeDiagnostics();
+                                RefreshNeuralAudioUi();
+                                ShowToast(S["NeuralCacheEntryDeletedToast"]);
+                                RefreshBrowserInPlace();
+                            }
+                        });
                 });
                 delBtn.TextSize = 11f;
                 delBtn.SetPadding(Dp(12), Dp(6), Dp(12), Dp(6));
@@ -1663,11 +1693,16 @@ public partial class MainActivity {
         RefreshBrowserInPlace();
 
         Button clearAllBtn = PillButton(S["NeuralClearTrackCacheBtn"], () => {
-            neuralTrackCache.Clear();
-            SyncNeuralRuntimeDiagnostics();
-            RefreshNeuralAudioUi();
-            ShowToast(S["NeuralTrackCacheClearedToast"]);
-            RefreshBrowserInPlace();
+            ConfirmDestructiveAction(
+                S["ConfirmDeleteTitle"],
+                S["ConfirmClearAllTracksMsg"],
+                () => {
+                    neuralTrackCache.Clear();
+                    SyncNeuralRuntimeDiagnostics();
+                    RefreshNeuralAudioUi();
+                    ShowToast(S["NeuralTrackCacheClearedToast"]);
+                    RefreshBrowserInPlace();
+                });
         });
         content.AddView(clearAllBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             TopMargin = Dp(4)

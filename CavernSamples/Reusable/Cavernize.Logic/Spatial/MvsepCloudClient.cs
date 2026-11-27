@@ -204,27 +204,30 @@ public sealed class MvsepAlgorithmPreset {
         return KaraokeVocalsOnlyStage2;
     }
 
-    /// <summary>Selects the best MVSEP preset for a pipeline goal and Pure Instrumental / Backing preference.</summary>
+    /// <summary>Selects the best MVSEP preset for a pipeline goal while strictly honoring explicit user preset choices.</summary>
     public static MvsepAlgorithmPreset ResolveForGoal(NeuralPipelineGoal goal, bool preserveBackingVocals, string preferredPresetId) {
-        MvsepAlgorithmPreset preferred = FindOrDefault(preferredPresetId);
-        if (goal == NeuralPipelineGoal.StemSeparation && !preferred.IsMultiStem) {
-            return FindOrDefault("mvsep_bs_roformer_6stem");
-        }
-        if (goal == NeuralPipelineGoal.SpatialKaraoke) {
-            if (preferred.IsTwoStageCascade) {
-                return preferred;
-            }
-            if (preserveBackingVocals && preferred.SeparationType != 49 && preferred.SeparationType != 30) {
-                return preferred.IsMultiStem
+        if (goal == NeuralPipelineGoal.SpatialKaraoke && preserveBackingVocals) {
+            if (!string.IsNullOrWhiteSpace(preferredPresetId)) {
+                MvsepAlgorithmPreset pref = FindOrDefault(preferredPresetId);
+                if (pref.IsTwoStageCascade || pref.SeparationType == 49 || pref.SeparationType == 30) {
+                    return pref;
+                }
+                return pref.IsMultiStem
                     ? FindOrDefault("mvsep_cascade_6stem_karaoke")
                     : FindOrDefault("mvsep_cascade_roformer124_karaoke");
             }
-            if (!preserveBackingVocals && preferred.SeparationType == 49) {
-                // MVSEP Karaoke (49) with opt2=1 also emits instrum-only + vocals-lead + vocals-back, which supports both!
-                return preferred;
-            }
+            return FindOrDefault("mvsep_cascade_6stem_karaoke");
         }
-        return preferred;
+        if (!string.IsNullOrWhiteSpace(preferredPresetId)) {
+            return FindOrDefault(preferredPresetId);
+        }
+        if (goal == NeuralPipelineGoal.StemSeparation) {
+            return FindOrDefault("mvsep_bs_roformer_6stem");
+        }
+        if (goal == NeuralPipelineGoal.SpatialKaraoke) {
+            return FindOrDefault("mvsep_bs_roformer_vocals");
+        }
+        return FindOrDefault(preferredPresetId);
     }
 }
 
@@ -717,19 +720,12 @@ public sealed class MvsepCloudClient : IDisposable {
             }
         }
 
-        // If MVSEP Karaoke returned lead_vocal + backing_vocals without a combined vocals stem, synthesize combined vocals
-        // so toggling between Lead-Only Karaoke and Pure Instrumental (Remove Backing) is instant!
-        StereoStemBuffer leadStem = stems.FirstOrDefault(s => string.Equals(s.Name, "lead_vocal", StringComparison.OrdinalIgnoreCase));
-        StereoStemBuffer backStem = stems.FirstOrDefault(s => string.Equals(s.Name, "backing_vocals", StringComparison.OrdinalIgnoreCase));
-        bool hasCombinedVocals = stems.Any(s => string.Equals(s.Name, "vocals", StringComparison.OrdinalIgnoreCase));
-        if (leadStem != null && backStem != null && !hasCombinedVocals && leadStem.Length == backStem.Length) {
-            float[] combL = new float[leadStem.Length];
-            float[] combR = new float[leadStem.Length];
-            for (int n = 0; n < leadStem.Length; n++) {
-                combL[n] = leadStem.Left[n] + backStem.Left[n];
-                combR[n] = leadStem.Right[n] + backStem.Right[n];
-            }
-            stems.Add(new StereoStemBuffer("vocals", combL, combR));
+        // Do NOT append a synthetic combined "vocals" stem when lead_vocal + backing_vocals already exist:
+        // NeuralStemStageProcessor.FindVocalTargetStemsZeroAlloc combines lead + backing zero-alloc on the fly for Pure Instrumental,
+        // while keeping discrete lead_vocal + backing_vocals prevents +6 dB duplicate vocal objects in 3D rendering!
+        bool hasSplitLead = stems.Any(s => string.Equals(s.Name, "lead_vocal", StringComparison.OrdinalIgnoreCase));
+        if (hasSplitLead) {
+            stems.RemoveAll(s => string.Equals(s.Name, "vocals", StringComparison.OrdinalIgnoreCase));
         }
 
         // Prune completely silent extra stems (e.g., empty piano/guitar stems from 6-stem models) so UI/3D room stays clean
@@ -870,7 +866,10 @@ public sealed class MvsepCloudClient : IDisposable {
         List<StereoStemBuffer> merged = new(stage1Track.Stems.Count + 2);
         for (int i = 0; i < stage1Track.Stems.Count; i++) {
             StereoStemBuffer st = stage1Track.Stems[i];
-            if (string.Equals(st.Name, "lead_vocal", StringComparison.OrdinalIgnoreCase) ||
+            // Strip Stage-1 combined "vocals" along with prior split vocal stems so lead_vocal + backing_vocals
+            // replace it cleanly with zero duplicate vocal objects!
+            if (string.Equals(st.Name, "vocals", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(st.Name, "lead_vocal", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(st.Name, "backing_vocals", StringComparison.OrdinalIgnoreCase)) {
                 continue;
             }

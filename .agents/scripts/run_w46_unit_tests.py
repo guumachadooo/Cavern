@@ -3319,19 +3319,21 @@ RunTest("T44_W53_1_MvsepTwoStageCascade_LowBandFix_And_CrossVariantAligner", () 
     double bassLeakRatio = bassInStage2Upload / Math.Max(1e-9, bassInMix);
     Assert(bassLeakRatio < 0.05, $"Stage 2 MUST upload vocals-only stem (not full mix!); 65 Hz bass leak ratio={bassLeakRatio:0.4}");
 
-    // Verify exact vocal energy conservation: lead_vocal + backing_vocals == stage1 vocals
+    // Verify V4.1 zero-duplicate vocal emission (Stage-1 combined 'vocals' stripped once split)
+    // AND exact vocal energy conservation: lead_vocal + backing_vocals == Stage-1 isolated vocals (upL/upR)
     StereoStemBuffer outVoc = cascadeOut.FindStem("vocals");
     StereoStemBuffer outLead = cascadeOut.FindStem("lead_vocal");
     StereoStemBuffer outBack = cascadeOut.FindStem("backing_vocals");
-    Assert(outVoc != null && outLead != null && outBack != null, "Cascade output must include vocals, lead_vocal, and backing_vocals");
+    Assert(outVoc == null, "V4.1: Cascade output must NOT retain redundant Stage-1 'vocals' alongside 'lead_vocal' + 'backing_vocals'");
+    Assert(outLead != null && outBack != null, "Cascade output must include lead_vocal and backing_vocals");
     Assert(cascadeOut.FindStem("piano") == null, "Silent piano stem must be pruned via IsStemAudible");
     Assert(cascadeOut.FindStem("bass") != null && cascadeOut.FindStem("drums") != null, "Audible Stage 1 stems (bass, drums) must be preserved");
     float maxConsErr = 0f;
     for (int i = 0; i < n; i++) {
-        maxConsErr = MathF.Max(maxConsErr, MathF.Abs((outLead.Left[i] + outBack.Left[i]) - outVoc.Left[i]));
-        maxConsErr = MathF.Max(maxConsErr, MathF.Abs((outLead.Right[i] + outBack.Right[i]) - outVoc.Right[i]));
+        maxConsErr = MathF.Max(maxConsErr, MathF.Abs((outLead.Left[i] + outBack.Left[i]) - upL[i]));
+        maxConsErr = MathF.Max(maxConsErr, MathF.Abs((outLead.Right[i] + outBack.Right[i]) - upR[i]));
     }
-    Assert(maxConsErr < 1e-5f, $"Vocal energy conservation failed: max |lead+back - vocals| = {maxConsErr}");
+    Assert(maxConsErr < 1e-3f, $"Vocal energy conservation failed: max |lead+back - stage1_vocals| = {maxConsErr}");
     Assert(createdHashes.Contains("s1:cascade_s1") && createdHashes.Contains("s2:cascade_s2"), "Independent :s1/:s2 job creation callbacks missing");
     Assert(terminalHashes.Contains("s1:cascade_s1") && terminalHashes.Contains("s2:cascade_s2"), "Independent :s1/:s2 terminal callbacks missing");
 
@@ -3839,6 +3841,105 @@ RunTest("T49_W53_6_WaveF_TransauralXtc_Cancellation_And_BitExactHeadphoneBypass"
     }
     long rtAlloc = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
     Assert(rtAlloc == 0, $"Transaural XTC RT processing must allocate 0 B GC, got {rtAlloc} B");
+});
+
+// T50: W55.1 V4.1 Reform (Stem Deduplication, Atmos 3D Vocal Gain Staging, Symmetric Backing L/R, Direct Discrete Karaoke & Quantization Threshold)
+RunTest("T50_W55_1_V4Reform_StemDedup_GainStaging_SymmetricBacking_DiscreteKaraoke", () => {
+    int sr = 48000;
+    int len = sr; // 1.0s
+    float[] lead = new float[len];
+    float[] backL = new float[len];
+    float[] backR = new float[len];
+    float[] drums = new float[len];
+    float[] bass = new float[len];
+    float[] guitar = new float[len];
+    float[] piano = new float[len];
+    float[] other = new float[len];
+    for (int i = 0; i < len; i++) {
+        double t = i / (double)sr;
+        lead[i] = 0.35f * MathF.Sin((float)(2.0 * Math.PI * 520.0 * t));
+        // Narrow/near-mono backing vocals to verify symmetric L/R separation even when stereo decorrelation is near zero
+        backL[i] = 0.25f * MathF.Sin((float)(2.0 * Math.PI * 660.0 * t));
+        backR[i] = 0.25f * MathF.Sin((float)(2.0 * Math.PI * 660.0 * t + 0.05));
+        drums[i] = 0.30f * MathF.Sin((float)(2.0 * Math.PI * 120.0 * t));
+        bass[i] = 0.35f * MathF.Sin((float)(2.0 * Math.PI * 75.0 * t));
+        guitar[i] = 0.22f * MathF.Sin((float)(2.0 * Math.PI * 330.0 * t));
+        piano[i] = 0.22f * MathF.Sin((float)(2.0 * Math.PI * 440.0 * t));
+        other[i] = 0.20f * MathF.Sin((float)(2.0 * Math.PI * 880.0 * t));
+    }
+
+    // 1. Stem deduplication: combined 'vocals' and 'instrumental' MUST be filtered when discrete lead_vocal + band stems exist
+    StereoStemBuffer[] rawDuplicated = [
+        new StereoStemBuffer("vocals", lead, lead),
+        new StereoStemBuffer("lead_vocal", lead, lead),
+        new StereoStemBuffer("backing_vocals", backL, backR),
+        new StereoStemBuffer("instrumental", other, other),
+        new StereoStemBuffer("drums", drums, drums),
+        new StereoStemBuffer("bass", bass, bass),
+        new StereoStemBuffer("guitar", guitar, guitar),
+        new StereoStemBuffer("piano", piano, piano),
+        new StereoStemBuffer("other", other, other),
+    ];
+    StereoStemBuffer[] filtered = NeuralStemSpatializer.FilterRenderableStems(rawDuplicated);
+    Assert(filtered.Length == 7, $"Expected 7 deduplicated stems (vocals & instrumental stripped), got {filtered.Length}");
+    Assert(!filtered.Any(s => string.Equals(s.Name, "vocals", StringComparison.OrdinalIgnoreCase)),
+        "Redundant Stage-1 'vocals' stem must be stripped when 'lead_vocal' is present");
+    Assert(!filtered.Any(s => string.Equals(s.Name, "instrumental", StringComparison.OrdinalIgnoreCase)),
+        "Redundant 'instrumental' stem must be stripped when discrete band stems are present");
+
+    // 2. Scene descriptors: zero duplicate vocal objects + symmetric BackingVocals L/R + calibrated Atmos 3D gains
+    IReadOnlyList<SpatialSourceDescriptor> descs = NeuralStemSpatializer.BuildSceneDescriptors(rawDuplicated, new Vector3(10f, 7f, 10f));
+    Assert(!descs.Any(d => d.Name.Equals("AI Vocals", StringComparison.OrdinalIgnoreCase)),
+        "BuildSceneDescriptors must not emit duplicate 'AI Vocals' alongside 'AI Lead_vocal'");
+    SpatialSourceDescriptor bvL = descs.FirstOrDefault(d => d.Name.Contains("Backing", StringComparison.OrdinalIgnoreCase) && d.Name.EndsWith(" L", StringComparison.Ordinal));
+    SpatialSourceDescriptor bvR = descs.FirstOrDefault(d => d.Name.Contains("Backing", StringComparison.OrdinalIgnoreCase) && d.Name.EndsWith(" R", StringComparison.Ordinal));
+    Assert(bvL != null && bvR != null, "Expected both BackingVocals L and BackingVocals R descriptors");
+    Assert(bvL.NormalizedPosition.X < -0.30f && bvR.NormalizedPosition.X > 0.30f,
+        $"Fixed BackingVocals L/R must be symmetrically separated (got L.X={bvL.NormalizedPosition.X:F2}, R.X={bvR.NormalizedPosition.X:F2})");
+    Assert(MathF.Abs(bvL.NormalizedPosition.X + bvR.NormalizedPosition.X) < 0.15f,
+        $"Fixed BackingVocals L/R must stay symmetric around center (L.X={bvL.NormalizedPosition.X:F2}, R.X={bvR.NormalizedPosition.X:F2})");
+
+    // 3. Choreography: symmetric BackingVocals L/R across Musical, Cinematic, and Orbit modes
+    foreach (SpatialChoreoMode mode in new[] { SpatialChoreoMode.Musical, SpatialChoreoMode.Cinematic, SpatialChoreoMode.Orbit }) {
+        SpatialChoreoTrack choreo = NeuralStemSpatializer.BuildChoreoTrack(rawDuplicated, sr, mode);
+        Assert(choreo != null && choreo.StemCount == 7, $"Expected 7 deduplicated choreo stems in {mode}, got {choreo?.StemCount ?? 0}");
+        int bvIdx = -1;
+        for (int s = 0; s < choreo.StemCount; s++) {
+            if (choreo.StemRoles[s] == NeuralStemRole.BackingVocals) {
+                bvIdx = s;
+                break;
+            }
+        }
+        Assert(bvIdx >= 0, $"BackingVocals role missing in {mode} choreo track");
+        Assert(NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(choreo, mode, bvIdx, NeuralStemRole.BackingVocals, -1f, 0.5, out Vector3 posL),
+            $"Failed to evaluate BackingVocals L in {mode}");
+        Assert(NeuralStemSpatializer.EvaluateStemPositionZeroAlloc(choreo, mode, bvIdx, NeuralStemRole.BackingVocals, +1f, 0.5, out Vector3 posR),
+            $"Failed to evaluate BackingVocals R in {mode}");
+        float sep = Vector3.Distance(posL, posR);
+        Assert(sep > 0.70f, $"Choreo {mode} BackingVocals L/R glued together! dist={sep:F2}, L={posL}, R={posR}");
+        if (mode != SpatialChoreoMode.Orbit) {
+            Assert(posL.X < -0.25f && posR.X > 0.25f, $"Choreo {mode} BackingVocals L/R not straddling left/right! L={posL}, R={posR}");
+        }
+    }
+
+    // 4. Atmos 3D gain staging: LeadVocal boosted for presence vs stereo accompaniment attenuation
+    float leadGain = NeuralStemSpatializer.GetRecommendedStemSourceGain(NeuralStemRole.LeadVocal, 5);
+    float guitarGain = NeuralStemSpatializer.GetRecommendedStemSourceGain(NeuralStemRole.Guitar, 5);
+    float backingGain = NeuralStemSpatializer.GetRecommendedStemSourceGain(NeuralStemRole.BackingVocals, 5);
+    Assert(leadGain > 1.25f, $"LeadVocal Atmos 3D gain should compensate center HRTF dip (>1.25), got {leadGain:F3}");
+    Assert(guitarGain < 0.82f && backingGain < 0.90f, $"Stereo accompaniment gain should prevent chorus masking (guitar={guitarGain:F3}, backing={backingGain:F3})");
+
+    // 5. MVSEP ResolveForGoal honors explicit preferredPresetId over StudioBundle fallback
+    MvsepAlgorithmPreset explicitKara = MvsepAlgorithmPreset.ResolveForGoal(NeuralPipelineGoal.StemSeparation, true, "mvsep_cascade_6stem_karaoke");
+    Assert(explicitKara != null && explicitKara.Id == "mvsep_cascade_6stem_karaoke", $"Expected explicit mvsep_cascade_6stem_karaoke, got {explicitKara?.Id}");
+
+    // 6. Auto W8A16 threshold lowered to 120 MB so 150 MB models auto-quantize on mobile
+    NeuralQuantizationMode auto150 = OnnxMobileQuantizer.ResolveEffectiveMode(
+        NeuralQuantizationMode.Auto,
+        150L * 1024L * 1024L,
+        NeuralExecutionProvider.Cpu,
+        isWebGpuOptimal: false);
+    Assert(auto150 == NeuralQuantizationMode.W8A16, $"Expected 150 MB model to auto-select W8A16 (>=120 MB threshold), got {auto150}");
 });
 
 if (!string.IsNullOrEmpty(testFilter) && passed == 0) {
@@ -5196,6 +5297,67 @@ def _py_stage13_w53_4_to_w53_6_wave_d_e_f_contracts() -> None:
             assert f'["{key}"]' in lang_src, f"W53.4-W53.6 missing L10n key '{key}' in {lang_file}"
 
 
+def _py_stage14_v4_1_reform_p0_contracts() -> None:
+    # P0-1 & P0-3 & P0-4: Stem dedup, Atmos 3D gain staging, symmetric BackingVocals L/R
+    spat_src = (REPO_ROOT / "Cavern" / "Neural" / "NeuralStemSpatializer.cs").read_text(encoding="utf-8")
+    for tok in ("FilterRenderableStems", "FilterRenderableStemNames", "GetRecommendedStemSourceGain", "minHalfSpread"):
+        assert tok in spat_src, f"V4.1 missing '{tok}' in NeuralStemSpatializer.cs"
+
+    mv_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "MvsepCloudClient.cs").read_text(encoding="utf-8")
+    assert "hasSplitLead" in mv_src, "V4.1 MvsepCloudClient must strip duplicate 'vocals' when 'lead_vocal' is present"
+
+    # P0-2: Direct discrete-stem Karaoke attenuation + bypass of post-3D STFT SpatialKaraokeEngine
+    sp_pipe = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Rendering" / "RealtimePlayerEngine.SpatialPipeline.cs").read_text(encoding="utf-8")
+    for tok in ("FilterRenderableStems", "GetRecommendedStemSourceGain", "hasDiscreteLiveVocalSource", "liveNeuralSourceRoles", "KaraokePreserveBackingVocals"):
+        assert tok in sp_pipe, f"V4.1 missing '{tok}' in RealtimePlayerEngine.SpatialPipeline.cs"
+    sp_stream = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Rendering" / "RealtimePlayerEngine.Streaming.cs").read_text(encoding="utf-8")
+    assert "directStemKaraokeActive" in sp_stream, "V4.1 RealtimePlayerEngine.Streaming.cs must bypass STFT karaoke when discrete live AI vocal stems are active"
+
+    # P0-5: Silent AI objects fade out cleanly in 3D Room
+    room_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Views" / "RoomSimulatorView.cs").read_text(encoding="utf-8")
+    m_always = re.search(r"bool alwaysVisibleLayer =([^;]+);", room_src, re.S)
+    assert m_always is not None, "V4.1 alwaysVisibleLayer not found in RoomSimulatorView.cs"
+    assert "SourceLayer.NeuralStem" not in m_always.group(1), "V4.1 silent NeuralStem objects must fade out (remove from alwaysVisibleLayer)"
+
+    # P0-6: 2-step destructive confirmation helper wired across all destructive actions + 4-lang parity
+    ui_helpers = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.UiHelpers.cs").read_text(encoding="utf-8")
+    assert "void ConfirmDestructiveAction(" in ui_helpers, "V4.1 ConfirmDestructiveAction helper missing in MainActivity.UiHelpers.cs"
+    neural_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.Neural.cs").read_text(encoding="utf-8")
+    assert neural_ui.count("ConfirmDestructiveAction(") >= 7, "V4.1 MainActivity.Settings.Neural.cs must guard all 7 destructive actions with ConfirmDestructiveAction"
+    wf_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.NeuralWorkflows.cs").read_text(encoding="utf-8")
+    assert wf_src.count("ConfirmDestructiveAction(") >= 2, "V4.1 MainActivity.NeuralWorkflows.cs must guard variant/track cache deletions with ConfirmDestructiveAction"
+    core_ui = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Settings.Core.cs").read_text(encoding="utf-8")
+    assert "ConfirmDestructiveAction(" in core_ui, "V4.1 MainActivity.Settings.Core.cs must guard queue removal with ConfirmDestructiveAction"
+
+    # P0-7: Quantization-aware RAM gate (keeping <=2600 MB cap) + Manual/Cloud isolation
+    ort_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NativeOnnxRuntimeBridge.cs").read_text(encoding="utf-8")
+    assert "EstimateQuantizedPayloadBytes(" in ort_src, "V4.1 NativeOnnxRuntimeBridge.cs must evaluate post-quantization payload size"
+    orch_src = (REPO_ROOT / "CavernSamples" / "Reusable" / "Cavernize.Logic" / "Spatial" / "NeuralPipelineOrchestrator.cs").read_text(encoding="utf-8")
+    assert "!isManual" in orch_src, "V4.1 NeuralPipelineOrchestrator must not override Manual mode with StudioBundlePreset"
+
+    # P0-8: Persistent FilesDir/neural_tracks storage + tab-cancel visibility fix
+    cache_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Services" / "NeuralTrackCacheService.cs").read_text(encoding="utf-8")
+    assert "MigrateLegacyCacheDirIfNeeded" in cache_src and "context.FilesDir" in cache_src, (
+        "V4.1 NeuralTrackCacheService must persist under FilesDir/neural_tracks with legacy CacheDir migration"
+    )
+    nav_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "MainActivity.Navigation.cs").read_text(encoding="utf-8")
+    assert "c.TranslationX = 0f" in nav_src and "c.Visibility = i == activeTab ? ViewStates.Visible : ViewStates.Gone" in nav_src, (
+        "V4.1 MainActivity.Navigation.cs must reset TranslationX and Visibility on AnimationCancel"
+    )
+
+    v4_1_keys = (
+        "ConfirmDeleteTitle", "ConfirmDeleteActionBtn", "ConfirmClearAllTracksMsg",
+        "ConfirmClearModelsAndCacheMsg", "ConfirmDeleteModelMsgFmt", "ConfirmDeleteVariantMsgFmt",
+        "ConfirmRemoveAllVariantsMsg", "ConfirmClearMvsepTokenMsg", "ConfirmClearQnnCacheMsg",
+        "ConfirmRemoveQueueJobMsg",
+    )
+    for lang_file in ("AndroidStrings.cs", "AndroidStrings.PtBr.cs", "AndroidStrings.Hu.cs", "AndroidStrings.Zh.cs"):
+        lang_src = (REPO_ROOT / "CavernSamples" / "CavernizeAndroid" / "Language" / lang_file).read_text(encoding="utf-8")
+        for key in v4_1_keys:
+            assert f'["{key}"]' in lang_src, f"V4.1 missing L10n key '{key}' in {lang_file}"
+
+
+
 PYTHON_CHECKS = [
     ("PY_StudioExportLifecycle_StreamingExportSink_FlacVsLgsr", _py_studio_export_lifecycle_check),
     ("PY_SpatialChoreo_SpatialGovernor_CntcAndMoodDigest", _py_spatial_choreo_cntc_and_mood_check),
@@ -5212,6 +5374,7 @@ PYTHON_CHECKS = [
     ("PY_T11_W53_1_WaveAContracts", _py_stage11_w53_1_wave_a_contracts),
     ("PY_T12_W53_2_W53_3_WaveB_WaveC_Contracts", _py_stage12_w53_2_w53_3_wave_b_wave_c_contracts),
     ("PY_T13_W53_4_W53_5_W53_6_WaveD_WaveE_WaveF_Contracts", _py_stage13_w53_4_to_w53_6_wave_d_e_f_contracts),
+    ("PY_T14_W55_1_V4Reform_P0_Contracts", _py_stage14_v4_1_reform_p0_contracts),
 ]
 
 

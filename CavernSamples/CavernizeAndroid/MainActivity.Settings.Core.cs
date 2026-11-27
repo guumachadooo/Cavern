@@ -1064,11 +1064,19 @@ public partial class MainActivity {
             return;
         }
         if (renderQueue.Jobs.Count > 0) {
-            renderQueue.Jobs.RemoveAt(renderQueue.Jobs.Count - 1);
-            if (renderQueue.Jobs.Count == 0) {
-                protectedQueuePaths.Clear();
-            }
-            RefreshQueueList();
+            ConfirmDestructiveAction(
+                S["ConfirmDeleteTitle"],
+                S["ConfirmRemoveQueueJobMsg"],
+                () => {
+                    if (isOperationRunning || renderQueue.Jobs.Count == 0) {
+                        return;
+                    }
+                    renderQueue.Jobs.RemoveAt(renderQueue.Jobs.Count - 1);
+                    if (renderQueue.Jobs.Count == 0) {
+                        protectedQueuePaths.Clear();
+                    }
+                    RefreshQueueList();
+                });
         }
     }
 

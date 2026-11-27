@@ -1924,12 +1924,12 @@ namespace Cavern.Spatial {
                     rad = 0.95f;
                     break;
                 case NeuralStemRole.Drums:
-                    az = spreadSide * 26f;
+                    az = 0f;
                     el = 2f;
                     rad = 0.95f;
                     break;
                 case NeuralStemRole.BackingVocals:
-                    az = spreadSide * 48f;
+                    az = 0f;
                     el = 18f;
                     rad = 0.92f;
                     break;
@@ -1956,8 +1956,9 @@ namespace Cavern.Spatial {
                     break;
             }
             if (SpatialCortexMath.IsFinite(measuredHomeAzDeg)) {
-                // Anchor directly on measured stereo mix azimuth (vocal/bass still clamped cleanly by governor)
-                if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals || role == NeuralStemRole.Bass || MathF.Abs(measuredHomeAzDeg) >= 3f) {
+                // Anchor directly on measured stereo mix azimuth (preserve symmetric center for BackingVocals/Drums unless strongly panned)
+                float minPanThreshold = (role == NeuralStemRole.BackingVocals || role == NeuralStemRole.Drums) ? 8f : 3f;
+                if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals || role == NeuralStemRole.Bass || MathF.Abs(measuredHomeAzDeg) >= minPanThreshold) {
                     az = measuredHomeAzDeg;
                 }
             }

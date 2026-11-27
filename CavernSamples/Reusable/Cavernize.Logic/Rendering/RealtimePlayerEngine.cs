@@ -83,6 +83,8 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
     TrackSourceItem[] matchedSourceItemsScratch = Array.Empty<TrackSourceItem>();
     bool[] usedSourceItemsScratch = Array.Empty<bool>();
     Source[] liveNeuralSources = Array.Empty<Source>();
+    NeuralStemRole[] liveNeuralSourceRoles = Array.Empty<NeuralStemRole>();
+    bool hasDiscreteLiveVocalSource;
     bool isRenderingLiveNeuralSources;
     bool choreoPositionsApplied;
     NeuralSeparatedTrack cachedHybridTrack;
@@ -1457,6 +1459,8 @@ public sealed partial class RealtimePlayerEngine : IDisposable {
                 VirtualizerFilter.PreHrtfBusProcessor = null;
             }
             liveNeuralSources = Array.Empty<Source>();
+            liveNeuralSourceRoles = Array.Empty<NeuralStemRole>();
+            hasDiscreteLiveVocalSource = false;
             isRenderingLiveNeuralSources = false;
             progressiveNeuralUpdater = null;
             cachedHybridTrack = null;

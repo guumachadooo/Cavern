@@ -188,7 +188,7 @@ public sealed class NeuralPipelineOrchestrator {
             : safeCfg.StudioBundlePreset;
         List<NeuralExecutionStep> steps = [];
 
-        if (bundle != NeuralEnsembleBundlePreset.FastSingle &&
+        if (!isManual && bundle != NeuralEnsembleBundlePreset.FastSingle &&
             (goal == NeuralPipelineGoal.StemSeparation || goal == NeuralPipelineGoal.SpatialKaraoke)) {
             BuildStudioBundleSteps(bundle, safeCfg, installed, installedById, steps);
         }

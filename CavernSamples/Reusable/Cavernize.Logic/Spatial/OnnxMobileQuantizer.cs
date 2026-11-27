@@ -88,7 +88,7 @@ public static class OnnxMobileQuantizer {
     const int TensorDataTypeInt8 = 3;
     const int TensorDataLocationExternal = 1;
     const int MinQuantizableElements = 1024;
-    const long HeavyModelAutoW8A16ThresholdBytes = 200L * 1024L * 1024L;
+    const long HeavyModelAutoW8A16ThresholdBytes = 120L * 1024L * 1024L;
 
     static readonly HashSet<string> EligibleWeightConsumerOps = new(StringComparer.Ordinal) {
         "MatMul",

@@ -132,12 +132,23 @@ public partial class MainActivity {
                 anim.AnimationCancel += (_, _) => {
                     OneUiMotionBlur.ClearHardwareLayer(entering);
                     OneUiMotionBlur.ClearHardwareLayer(leaving);
+                    entering.TranslationX = 0f;
                     entering.ScaleX = 1f;
                     entering.ScaleY = 1f;
                     entering.Alpha = 1f;
+                    leaving.TranslationX = 0f;
                     leaving.ScaleX = 1f;
                     leaving.ScaleY = 1f;
                     leaving.Alpha = 1f;
+                    if (musicNowPlayingScrollView != null) {
+                        musicNowPlayingScrollView.Visibility = isLibrarySectionOpen ? ViewStates.Gone : ViewStates.Visible;
+                    }
+                    if (musicLibraryScrollView != null) {
+                        musicLibraryScrollView.Visibility = isLibrarySectionOpen ? ViewStates.Visible : ViewStates.Gone;
+                    }
+                    if (playLibStripAnimator == anim) {
+                        playLibStripAnimator = null;
+                    }
                     if (navFrostedHost != null) {
                         navFrostedHost.IsSuspendedForTransition = false;
                     }

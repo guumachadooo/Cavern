@@ -236,5 +236,17 @@ public sealed partial class AndroidStrings {
         d["TransauralStatusOff"] = "未启用 — 使用立体声扬声器时可开启";
         d["TransauralStatusHeadphoneBypass"] = "位精确直通已启用（已连接耳机）";
         d["TransauralStatusActive"] = "扬声器已激活 · ±{0:0.0}° · Δτ {1:0} µs · ~{2:0.0} dB XTC";
+
+        // V4.1: 所有删除/清空操作强制二次确认
+        d["ConfirmDeleteTitle"] = "确认删除";
+        d["ConfirmDeleteActionBtn"] = "永久删除";
+        d["ConfirmClearAllTracksMsg"] = "这将永久删除存储中所有已缓存的 AI 分离与转换音轨。确定继续吗？";
+        d["ConfirmClearModelsAndCacheMsg"] = "这将永久删除所有已下载的 AI 模型 (.onnx) 以及所有已缓存的分离音轨。确定继续吗？";
+        d["ConfirmDeleteModelMsgFmt"] = "确定从设备存储中永久删除 AI 模型“{0}”吗？";
+        d["ConfirmDeleteVariantMsgFmt"] = "确定永久删除缓存的 AI 变体“{0}”吗？";
+        d["ConfirmRemoveAllVariantsMsg"] = "确定永久删除当前曲目的所有缓存分轨变体吗？";
+        d["ConfirmClearMvsepTokenMsg"] = "确定移除此设备上保存的 MVSEP Cloud API 令牌吗？";
+        d["ConfirmClearQnnCacheMsg"] = "确定删除已编译的 Qualcomm QNN 与量化 ONNX 优化缓存文件吗？下次运行时会自动重建。";
+        d["ConfirmRemoveQueueJobMsg"] = "确定从批量转换队列中移除最后一个任务吗？";
     }
 }

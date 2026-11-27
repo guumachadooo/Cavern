@@ -1884,6 +1884,18 @@ public sealed partial class AndroidStrings {
         ["TipTransauralAutoBypass"] = "Guarantees 0.0 bit-exact pass-through automatically whenever Bluetooth, USB-C, or wired headphones/IEMs are connected so speaker XTC never colors headphone playback.",
         ["TransauralStatusOff"] = "Inactive — enable when listening on stereo loudspeakers",
         ["TransauralStatusHeadphoneBypass"] = "Bit-Exact Bypassed (Headphones connected)",
-        ["TransauralStatusActive"] = "Active on Speakers · ±{0:0.0}° · Δτ {1:0} µs · ~{2:0.0} dB XTC"
+        ["TransauralStatusActive"] = "Active on Speakers · ±{0:0.0}° · Δτ {1:0} µs · ~{2:0.0} dB XTC",
+
+        // V4.1: Mandatory 2-step confirmation for all destructive delete/clear actions
+        ["ConfirmDeleteTitle"] = "Confirm Deletion",
+        ["ConfirmDeleteActionBtn"] = "Delete Permanently",
+        ["ConfirmClearAllTracksMsg"] = "This will permanently delete ALL cached AI-separated and converted tracks from storage. Are you sure?",
+        ["ConfirmClearModelsAndCacheMsg"] = "This will permanently delete ALL downloaded AI models (.onnx) AND ALL cached separated tracks. Are you sure?",
+        ["ConfirmDeleteModelMsgFmt"] = "Permanently delete the AI model '{0}' from device storage?",
+        ["ConfirmDeleteVariantMsgFmt"] = "Permanently delete the cached AI variant '{0}'?",
+        ["ConfirmRemoveAllVariantsMsg"] = "Permanently delete all cached AI stem variants for the current track?",
+        ["ConfirmClearMvsepTokenMsg"] = "Remove your saved MVSEP Cloud API token from this device?",
+        ["ConfirmClearQnnCacheMsg"] = "Delete compiled Qualcomm QNN and quantized ONNX optimization cache files? They will be rebuilt on next run.",
+        ["ConfirmRemoveQueueJobMsg"] = "Remove the last queued conversion job from the batch queue?"
     };
 }

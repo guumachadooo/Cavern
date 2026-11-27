@@ -1793,5 +1793,17 @@ public sealed partial class AndroidStrings {
         d["TransauralStatusOff"] = "Inativo — ative ao ouvir nos alto-falantes estéreo";
         d["TransauralStatusHeadphoneBypass"] = "Bypass Bit-Exato Ativo (Fones conectados)";
         d["TransauralStatusActive"] = "Ativo nos Alto-Falantes · ±{0:0.0}° · Δτ {1:0} µs · ~{2:0.0} dB XTC";
+
+        // V4.1: Confirmação obrigatória em 2 etapas para todas as ações destrutivas
+        d["ConfirmDeleteTitle"] = "Confirmar Exclusão";
+        d["ConfirmDeleteActionBtn"] = "Excluir Permanentemente";
+        d["ConfirmClearAllTracksMsg"] = "Isso excluirá permanentemente TODAS as músicas separadas/convertidas por IA salvas no cache. Tem certeza?";
+        d["ConfirmClearModelsAndCacheMsg"] = "Isso excluirá permanentemente TODOS os modelos de IA baixados (.onnx) E TODAS as músicas salvas no cache. Tem certeza?";
+        d["ConfirmDeleteModelMsgFmt"] = "Excluir permanentemente o modelo de IA '{0}' do armazenamento do aparelho?";
+        d["ConfirmDeleteVariantMsgFmt"] = "Excluir permanentemente a variante de IA em cache '{0}'?";
+        d["ConfirmRemoveAllVariantsMsg"] = "Excluir permanentemente todas as variantes de stems em cache da música atual?";
+        d["ConfirmClearMvsepTokenMsg"] = "Remover seu token de API MVSEP Cloud salvo neste aparelho?";
+        d["ConfirmClearQnnCacheMsg"] = "Excluir os arquivos compilados de cache QNN e ONNX quantizados? Eles serão recriados na próxima execução.";
+        d["ConfirmRemoveQueueJobMsg"] = "Remover o último trabalho da fila de conversão em lote?";
     }
 }

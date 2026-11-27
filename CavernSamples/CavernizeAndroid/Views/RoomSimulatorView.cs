@@ -817,8 +817,6 @@ public sealed class RoomSimulatorView : View {
             float targetVis;
             bool alwaysVisibleLayer = item.IsBed || !hasPlayedOnce || item.HasCustomPosition ||
                 item.Layer == SourceLayer.VirtualHeight ||
-                item.Layer == SourceLayer.NeuralStem ||
-                item.Layer == SourceLayer.RestoredResidual ||
                 item.Layer == SourceLayer.LiveMicrophone;
             if (alwaysVisibleLayer) {
                 targetVis = 1f;

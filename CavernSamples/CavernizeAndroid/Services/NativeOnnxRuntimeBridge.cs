@@ -393,11 +393,21 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
     /// <summary>
     /// Evaluates current Android system RAM against the estimated peak native memory required for a model
     /// of <paramref name="modelBytes"/> bytes without touching disk or initializing a session.
+    /// Accounts for automatic or user-selected W8A16/FP16 mobile quantization before comparing against the 2600 MB PSS cap.
     /// </summary>
-    public ModelMemoryCheckResult CheckMemoryForModelBytes(long modelBytes, string modelLabel = "") {
+    public ModelMemoryCheckResult CheckMemoryForModelBytes(
+        long modelBytes,
+        string modelLabel = "",
+        NeuralQuantizationMode? effectiveQuantMode = null) {
         long safeModelBytes = Math.Max(0L, modelBytes);
-        bool memoryHeavy = IsMemoryHeavyModel(modelLabel, safeModelBytes);
-        long estimatedModelBytes = EstimateRequiredModelBytes(safeModelBytes, modelLabel);
+        NeuralQuantizationMode quantMode = effectiveQuantMode ?? OnnxMobileQuantizer.ResolveEffectiveMode(
+            PreferredQuantizationMode,
+            safeModelBytes,
+            NeuralExecutionProvider.Cpu,
+            IsWebGpuOptimalModel(modelLabel));
+        long effectivePayloadBytes = EstimateQuantizedPayloadBytes(safeModelBytes, quantMode);
+        bool memoryHeavy = IsMemoryHeavyModel(modelLabel, effectivePayloadBytes);
+        long estimatedModelBytes = EstimateRequiredModelBytes(effectivePayloadBytes, modelLabel, quantMode);
 
         if (!TryReadSystemMemory(out long availBytes, out long totalBytes, out long thresholdBytes, out bool isLowMemory, out string source)) {
             return new ModelMemoryCheckResult {
@@ -410,7 +420,7 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
                 LowMemoryThresholdBytes = 0L,
                 SafetyHeadroomBytes = memoryHeavy ? HeavyModelSafetyHeadroomBytes : MinimumSafetyHeadroomBytes,
                 Source = "Unavailable",
-                DiagnosticMessage = $"System RAM telemetry unavailable; proceeding with model '{modelLabel}' ({FormatMiB(safeModelBytes)} MB, est. {FormatMiB(estimatedModelBytes)} MB)."
+                DiagnosticMessage = $"System RAM telemetry unavailable; proceeding with model '{modelLabel}' ({FormatMiB(safeModelBytes)} MB -> {quantMode} {FormatMiB(effectivePayloadBytes)} MB, est. {FormatMiB(estimatedModelBytes)} MB)."
             };
         }
 
@@ -420,7 +430,7 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
             : estimatedModelBytes + headroomBytes;
 
         // Android ActivityManager.availMem includes ~1.5-2 GB reclaimable page cache that LMKD will not grant
-        // to a single foreground process; enforce a realistic per-process PSS ceiling for heavy FP32 Transformers.
+        // to a single foreground process; enforce a realistic per-process PSS ceiling while accounting for quantization.
         long perProcessPssCap = totalBytes > 0
             ? Math.Min(Math.Max(totalBytes / 4L, 1800L * 1024L * 1024L), MaxSingleProcessModelPssBytes)
             : MaxSingleProcessModelPssBytes;
@@ -428,7 +438,7 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
         bool sufficient = !isLowMemory && !exceedsProcessCap && availBytes >= requiredBudgetBytes;
         string namePart = string.IsNullOrWhiteSpace(modelLabel) ? "ONNX model" : $"'{modelLabel}'";
         string status = sufficient ? "OK" : (isLowMemory ? "LOW_MEMORY" : (exceedsProcessCap ? "PSS_CAP_EXCEEDED" : "INSUFFICIENT_RAM"));
-        string diag = $"{status} [{source}] for {namePart}: file={FormatMiB(safeModelBytes)} MB, estLoad={FormatMiB(estimatedModelBytes)} MB, pssCap={FormatMiB(perProcessPssCap)} MB, headroom={FormatMiB(headroomBytes)} MB, need={FormatMiB(requiredBudgetBytes)} MB, avail={FormatMiB(availBytes)} MB / total={FormatMiB(totalBytes)} MB (lowMem={isLowMemory})";
+        string diag = $"{status} [{source}/{quantMode}] for {namePart}: raw={FormatMiB(safeModelBytes)} MB, eff={FormatMiB(effectivePayloadBytes)} MB, estLoad={FormatMiB(estimatedModelBytes)} MB, pssCap={FormatMiB(perProcessPssCap)} MB, headroom={FormatMiB(headroomBytes)} MB, need={FormatMiB(requiredBudgetBytes)} MB, avail={FormatMiB(availBytes)} MB / total={FormatMiB(totalBytes)} MB (lowMem={isLowMemory})";
 
         return new ModelMemoryCheckResult {
             HasSufficientMemory = sufficient,
@@ -559,7 +569,9 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
             throw new InvalidDataException($"ONNX model file '{Path.GetFileName(modelPath)}' is empty or truncated ({modelBytes} bytes).");
         }
 
-        EnsureSufficientMemoryForModel(modelPath, modelBytes);
+        NeuralQuantizationMode plannedQuant = OnnxMobileQuantizer.ResolveEffectiveMode(
+            PreferredQuantizationMode, modelBytes, preferredProvider, IsWebGpuOptimalModel(modelPath));
+        EnsureSufficientMemoryForModel(modelPath, modelBytes, plannedQuant);
 
         lock (initLock) {
             if (disposeRequested) {
@@ -814,15 +826,18 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
         }
     }
 
-    void EnsureSufficientMemoryForModel(string modelPath, long primaryModelBytes) {
+    void EnsureSufficientMemoryForModel(
+        string modelPath,
+        long primaryModelBytes,
+        NeuralQuantizationMode? effectiveQuantMode = null) {
         long totalModelBytes = ResolveTotalModelSizeBytes(modelPath, primaryModelBytes);
         string fileName = Path.GetFileName(modelPath);
-        ModelMemoryCheckResult check = CheckMemoryForModelBytes(totalModelBytes, fileName);
+        ModelMemoryCheckResult check = CheckMemoryForModelBytes(totalModelBytes, fileName, effectiveQuantMode);
         if (!check.HasSufficientMemory) {
             // Reclaim any lingering managed audio buffers from prior runs once before rejecting load
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, blocking: true, compacting: false);
             GC.WaitForPendingFinalizers();
-            check = CheckMemoryForModelBytes(totalModelBytes, fileName);
+            check = CheckMemoryForModelBytes(totalModelBytes, fileName, effectiveQuantMode);
         }
 
         if (!check.HasSufficientMemory) {
@@ -834,6 +849,18 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
         }
 
         AppLogger.Info($"ONNX memory guard passed: {check.DiagnosticMessage}");
+    }
+
+    static long EstimateQuantizedPayloadBytes(long rawModelBytes, NeuralQuantizationMode effectiveQuantMode) {
+        if (rawModelBytes <= 0L) {
+            return 0L;
+        }
+        double scale = effectiveQuantMode switch {
+            NeuralQuantizationMode.W8A16 => 0.34,
+            NeuralQuantizationMode.Fp16 => 0.56,
+            _ => 1.0
+        };
+        return Math.Max(64L, (long)Math.Ceiling(rawModelBytes * scale));
     }
 
     static long ResolveTotalModelSizeBytes(string modelPath, long primaryModelBytes) {
@@ -858,14 +885,19 @@ public sealed partial class NativeOnnxRuntimeBridge : INeuralInferenceRuntime, I
         return total;
     }
 
-    static long EstimateRequiredModelBytes(long modelBytes, string modelLabel = "") {
-        if (modelBytes <= 0) {
+    static long EstimateRequiredModelBytes(
+        long effectiveModelBytes,
+        string modelLabel = "",
+        NeuralQuantizationMode effectiveQuantMode = NeuralQuantizationMode.Fp32) {
+        if (effectiveModelBytes <= 0) {
             return SessionBaseOverheadBytes;
         }
-        double factor = IsMemoryHeavyModel(modelLabel, modelBytes)
-            ? RoFormerMemoryExpansionFactor
-            : ModelMemoryExpansionFactor;
-        double expanded = modelBytes * factor;
+        double factor = effectiveQuantMode == NeuralQuantizationMode.W8A16
+            ? 2.2
+            : (IsMemoryHeavyModel(modelLabel, effectiveModelBytes)
+                ? RoFormerMemoryExpansionFactor
+                : ModelMemoryExpansionFactor);
+        double expanded = effectiveModelBytes * factor;
         if (!double.IsFinite(expanded) || expanded >= long.MaxValue - SessionBaseOverheadBytes) {
             return long.MaxValue;
         }

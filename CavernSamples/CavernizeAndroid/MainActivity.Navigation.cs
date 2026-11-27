@@ -408,7 +408,12 @@ public partial class MainActivity {
                         c.ScaleX = 1f;
                         c.ScaleY = 1f;
                         c.Alpha = 1f;
+                        c.TranslationX = 0f;
+                        c.Visibility = i == activeTab ? ViewStates.Visible : ViewStates.Gone;
                     }
+                }
+                if (tabStripAnimator == anim) {
+                    tabStripAnimator = null;
                 }
                 if (navFrostedHost != null) {
                     navFrostedHost.IsSuspendedForTransition = false;

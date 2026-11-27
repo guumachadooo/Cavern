@@ -94,6 +94,110 @@ namespace Cavern.Neural {
         }
 
         /// <summary>
+        /// Filters out redundant combined stems (e.g. Stage-1 <c>vocals</c> when discrete <c>lead_vocal</c> is present,
+        /// or combined <c>instrumental</c> when discrete band stems exist) so 3D object rendering never double-plays
+        /// overlapping stems even on legacy cached <c>.ntc</c> bundles.
+        /// </summary>
+        public static StereoStemBuffer[] FilterRenderableStems(IReadOnlyList<StereoStemBuffer> stems) {
+            if (stems == null || stems.Count == 0) {
+                return Array.Empty<StereoStemBuffer>();
+            }
+            bool hasLeadVocal = false;
+            bool hasDiscreteBand = false;
+            for (int i = 0; i < stems.Count; i++) {
+                StereoStemBuffer st = stems[i];
+                if (st == null || st.Length <= 0) {
+                    continue;
+                }
+                NeuralStemRole role = ClassifyStemName(st.Name);
+                if (role == NeuralStemRole.LeadVocal) {
+                    hasLeadVocal = true;
+                } else if (role == NeuralStemRole.Drums || role == NeuralStemRole.Bass ||
+                           role == NeuralStemRole.Guitar || role == NeuralStemRole.Piano ||
+                           role == NeuralStemRole.Other) {
+                    hasDiscreteBand = true;
+                }
+            }
+            List<StereoStemBuffer> filtered = new List<StereoStemBuffer>(stems.Count);
+            for (int i = 0; i < stems.Count; i++) {
+                StereoStemBuffer st = stems[i];
+                if (st == null || st.Length <= 0) {
+                    continue;
+                }
+                NeuralStemRole role = ClassifyStemName(st.Name);
+                if (hasLeadVocal && role == NeuralStemRole.Vocals) {
+                    continue;
+                }
+                if (hasDiscreteBand && role == NeuralStemRole.Instrumental) {
+                    continue;
+                }
+                filtered.Add(st);
+            }
+            return filtered.ToArray();
+        }
+
+        /// <summary>
+        /// Filters redundant combined stem names using the same deduplication rules as
+        /// <see cref="FilterRenderableStems(IReadOnlyList{StereoStemBuffer})"/>.
+        /// </summary>
+        public static string[] FilterRenderableStemNames(IReadOnlyList<string> stemNames) {
+            if (stemNames == null || stemNames.Count == 0) {
+                return Array.Empty<string>();
+            }
+            bool hasLeadVocal = false;
+            bool hasDiscreteBand = false;
+            for (int i = 0; i < stemNames.Count; i++) {
+                NeuralStemRole role = ClassifyStemName(stemNames[i]);
+                if (role == NeuralStemRole.LeadVocal) {
+                    hasLeadVocal = true;
+                } else if (role == NeuralStemRole.Drums || role == NeuralStemRole.Bass ||
+                           role == NeuralStemRole.Guitar || role == NeuralStemRole.Piano ||
+                           role == NeuralStemRole.Other) {
+                    hasDiscreteBand = true;
+                }
+            }
+            List<string> filtered = new List<string>(stemNames.Count);
+            for (int i = 0; i < stemNames.Count; i++) {
+                NeuralStemRole role = ClassifyStemName(stemNames[i]);
+                if (hasLeadVocal && role == NeuralStemRole.Vocals) {
+                    continue;
+                }
+                if (hasDiscreteBand && role == NeuralStemRole.Instrumental) {
+                    continue;
+                }
+                filtered.Add(stemNames[i]);
+            }
+            return filtered.ToArray();
+        }
+
+        /// <summary>
+        /// Computes static physics-calibrated per-role 3D object gain staging compensating for mono center-object
+        /// HRTF pinna incidence versus multi-object lateral stereo band accumulation while preserving full Atmos dynamics.
+        /// </summary>
+        public static float GetRecommendedStemSourceGain(NeuralStemRole role, int stereoAccompanimentStemCount) {
+            switch (role) {
+                case NeuralStemRole.LeadVocal:
+                case NeuralStemRole.Vocals:
+                    // +2.5 dB front-center HRTF presence & mono-object parity against dual-source stereo band stems
+                    return 1.3335214f;
+                case NeuralStemRole.Bass:
+                    return 1.0f;
+                case NeuralStemRole.Drums:
+                    // -1.0 dB per L/R side object
+                    return 0.8912509f;
+                case NeuralStemRole.BackingVocals:
+                    // -1.5 dB per L/R side object so harmonies frame lead vocals without masking
+                    return 0.8413951f;
+                case NeuralStemRole.Residual:
+                    // -2.0 dB per L/R side object
+                    return 0.7943282f;
+                default:
+                    // Mild multi-stem lateral energy conservation (-2.5 dB on dense 6-stem ensembles, -1.5 dB on 2-4 stems)
+                    return stereoAccompanimentStemCount >= 4 ? 0.7498942f : 0.8413951f;
+            }
+        }
+
+        /// <summary>
         /// Builds a governed C2 ring-LUT <see cref="SpatialChoreoTrack"/> without mutating static global state.
         /// </summary>
         public static SpatialChoreoTrack BuildChoreoTrack(
@@ -102,13 +206,14 @@ namespace Cavern.Neural {
             SpatialChoreoMode mode,
             IReadOnlyList<LyricMoodDigest> moodDigests = null,
             ISpatialSemanticDirector director = null) {
-            if (stems == null || stems.Count == 0 || sampleRate < 8000) {
+            StereoStemBuffer[] renderStems = FilterRenderableStems(stems);
+            if (renderStems.Length == 0 || sampleRate < 8000) {
                 return null;
             }
             int maxLen = 0;
-            string[] names = new string[stems.Count];
-            for (int i = 0; i < stems.Count; i++) {
-                StereoStemBuffer st = stems[i];
+            string[] names = new string[renderStems.Length];
+            for (int i = 0; i < renderStems.Length; i++) {
+                StereoStemBuffer st = renderStems[i];
                 names[i] = st != null && !string.IsNullOrWhiteSpace(st.Name) ? st.Name : ("Stem " + (i + 1));
                 if (st != null && st.Length > maxLen) {
                     maxLen = st.Length;
@@ -120,8 +225,8 @@ namespace Cavern.Neural {
             double durationSec = maxLen / (double)sampleRate;
             ISpatialSemanticDirector activeDirector = director ?? new DeterministicRuleDirector();
             bool usedFallback;
-            DirectorCue[] cues = activeDirector.GenerateCues(stems, sampleRate, mode, moodDigests, out usedFallback);
-            float[] homeAzDegs = StereoPanAzimuthEstimator.EstimateAllHomeAzimuthsDeg(stems);
+            DirectorCue[] cues = activeDirector.GenerateCues(renderStems, sampleRate, mode, moodDigests, out usedFallback);
+            float[] homeAzDegs = StereoPanAzimuthEstimator.EstimateAllHomeAzimuthsDeg(renderStems);
             return SpatialChoreoTrack.Build(names, cues, mode, durationSec, 0.05, homeAzDegs);
         }
 
@@ -139,9 +244,29 @@ namespace Cavern.Neural {
             return EvaluateStemPositionZeroAlloc(ActiveChoreoTrack, ActiveChoreoMode, stemIdx, role, sideSign, timeSec, out normalizedPos, loop);
         }
 
+        static float GetChoreoStereoHalfAngleRad(NeuralStemRole role) {
+            float deg;
+            switch (role) {
+                case NeuralStemRole.BackingVocals:
+                    deg = 42f;
+                    break;
+                case NeuralStemRole.Drums:
+                    deg = 28f;
+                    break;
+                case NeuralStemRole.Guitar:
+                case NeuralStemRole.Piano:
+                    deg = 32f;
+                    break;
+                default:
+                    deg = 38f;
+                    break;
+            }
+            return deg * (MathF.PI / 180f);
+        }
+
         /// <summary>
         /// Zero-allocation evaluation of a stem's normalized 3D room position from <paramref name="track"/>
-        /// using 3D unit-SLERP shortest-arc interpolation with stereo pair spread and 0 B GC.
+        /// using 3D unit-SLERP shortest-arc interpolation with symmetric stereo-arc spread and 0 B GC.
         /// </summary>
         public static bool EvaluateStemPositionZeroAlloc(
             SpatialChoreoTrack track,
@@ -158,16 +283,16 @@ namespace Cavern.Neural {
                 return false;
             }
             if (MathF.Abs(sideSign) > 0.01f && role != NeuralStemRole.LeadVocal && role != NeuralStemRole.Vocals && role != NeuralStemRole.Bass) {
-                float horizLenSq = corePos.X * corePos.X + corePos.Z * corePos.Z;
-                if (horizLenSq > 1e-6f) {
-                    float invH = 1f / MathF.Sqrt(horizLenSq);
-                    // Rightward tangent orthogonal to horizontal direction: (+Z, 0, -X)
-                    Vector3 tangent = new Vector3(corePos.Z * invH, 0f, -corePos.X * invH);
-                    corePos += tangent * (0.22f * sideSign);
-                    float len = corePos.Length();
-                    if (len > 1f) {
-                        corePos /= len;
-                    }
+                // Rotate L/R symmetrically around the vertical Y axis so Backing L/R and stereo pairs span a wide balanced arc
+                float angleRad = GetChoreoStereoHalfAngleRad(role) * (sideSign > 0f ? 1f : -1f);
+                float cosA = MathF.Cos(angleRad);
+                float sinA = MathF.Sin(angleRad);
+                float rx = corePos.X * cosA + corePos.Z * sinA;
+                float rz = -corePos.X * sinA + corePos.Z * cosA;
+                corePos = new Vector3(rx, corePos.Y, rz);
+                float len = corePos.Length();
+                if (len > 1f) {
+                    corePos /= len;
                 }
             }
             normalizedPos = corePos;
@@ -220,16 +345,25 @@ namespace Cavern.Neural {
             IReadOnlyList<string> stemNames,
             Vector3 environmentSize,
             int startIndex = 0) {
-            if (stemNames == null || stemNames.Count == 0) {
+            string[] renderNames = FilterRenderableStemNames(stemNames);
+            if (renderNames.Length == 0) {
                 return Array.Empty<SpatialSourceDescriptor>();
             }
-            List<SpatialSourceDescriptor> list = new List<SpatialSourceDescriptor>(stemNames.Count * 2);
+            int stereoAccompCount = 0;
+            for (int i = 0; i < renderNames.Length; i++) {
+                NeuralStemRole r = ClassifyStemName(renderNames[i]);
+                if (r != NeuralStemRole.LeadVocal && r != NeuralStemRole.Vocals && r != NeuralStemRole.Bass) {
+                    stereoAccompCount++;
+                }
+            }
+            List<SpatialSourceDescriptor> list = new List<SpatialSourceDescriptor>(renderNames.Length * 2);
             int idx = startIndex;
 
-            for (int i = 0; i < stemNames.Count; i++) {
-                string rawName = stemNames[i] ?? ("Stem " + (i + 1));
+            for (int i = 0; i < renderNames.Length; i++) {
+                string rawName = renderNames[i] ?? ("Stem " + (i + 1));
                 NeuralStemRole role = ClassifyStemName(rawName);
                 SourceLayer layer = role == NeuralStemRole.Residual ? SourceLayer.RestoredResidual : SourceLayer.NeuralStem;
+                float recGain = GetRecommendedStemSourceGain(role, stereoAccompCount);
 
                 if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals || role == NeuralStemRole.Bass) {
                     Vector3 normPos = GetAnchorPosition(role, sideSign: 0f);
@@ -241,7 +375,7 @@ namespace Cavern.Neural {
                         IsLfe = false,
                         NormalizedPosition = normPos,
                         WorldPositionMeters = normPos * environmentSize,
-                        Gain = 1f,
+                        Gain = recGain,
                         Diffuse = role == NeuralStemRole.Bass ? 0f : 0.05f,
                         Divergence = role == NeuralStemRole.Bass ? 0f : 0.08f,
                         Importance = role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals ? 1f : 0.9f
@@ -258,7 +392,7 @@ namespace Cavern.Neural {
                             IsLfe = false,
                             NormalizedPosition = normPos,
                             WorldPositionMeters = normPos * environmentSize,
-                            Gain = 1f,
+                            Gain = recGain,
                             Diffuse = diffuse,
                             Divergence = diffuse * 0.5f,
                             Importance = 0.75f
@@ -278,18 +412,27 @@ namespace Cavern.Neural {
             IReadOnlyList<StereoStemBuffer> stems,
             Vector3 environmentSize,
             int startIndex = 0) {
-            if (stems == null || stems.Count == 0) {
+            StereoStemBuffer[] renderStems = FilterRenderableStems(stems);
+            if (renderStems.Length == 0) {
                 return Array.Empty<SpatialSourceDescriptor>();
             }
-            List<SpatialSourceDescriptor> list = new List<SpatialSourceDescriptor>(stems.Count * 2);
+            int stereoAccompCount = 0;
+            for (int i = 0; i < renderStems.Length; i++) {
+                NeuralStemRole r = ClassifyStemName(renderStems[i].Name);
+                if (r != NeuralStemRole.LeadVocal && r != NeuralStemRole.Vocals && r != NeuralStemRole.Bass) {
+                    stereoAccompCount++;
+                }
+            }
+            List<SpatialSourceDescriptor> list = new List<SpatialSourceDescriptor>(renderStems.Length * 2);
             int idx = startIndex;
 
-            for (int i = 0; i < stems.Count; i++) {
-                StereoStemBuffer stem = stems[i];
+            for (int i = 0; i < renderStems.Length; i++) {
+                StereoStemBuffer stem = renderStems[i];
                 string rawName = stem != null && !string.IsNullOrWhiteSpace(stem.Name) ? stem.Name : ("Stem " + (i + 1));
                 NeuralStemRole role = ClassifyStemName(rawName);
                 SourceLayer layer = role == NeuralStemRole.Residual ? SourceLayer.RestoredResidual : SourceLayer.NeuralStem;
                 StereoPanEstimate pan = StereoPanAzimuthEstimator.Estimate(stem);
+                float recGain = GetRecommendedStemSourceGain(role, stereoAccompCount);
 
                 if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals || role == NeuralStemRole.Bass) {
                     Vector3 normPos = GetPanPreservedAnchorPosition(role, pan, sideSign: 0f);
@@ -301,7 +444,7 @@ namespace Cavern.Neural {
                         IsLfe = false,
                         NormalizedPosition = normPos,
                         WorldPositionMeters = normPos * environmentSize,
-                        Gain = 1f,
+                        Gain = recGain,
                         Diffuse = role == NeuralStemRole.Bass ? 0f : 0.05f,
                         Divergence = role == NeuralStemRole.Bass ? 0f : 0.08f,
                         Importance = role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals ? 1f : 0.9f
@@ -321,7 +464,7 @@ namespace Cavern.Neural {
                             IsLfe = false,
                             NormalizedPosition = normPos,
                             WorldPositionMeters = normPos * environmentSize,
-                            Gain = 1f,
+                            Gain = recGain,
                             Diffuse = diffuse,
                             Divergence = diffuse * 0.5f,
                             Importance = 0.75f
@@ -347,10 +490,11 @@ namespace Cavern.Neural {
             StereoStemBuffer[] stems,
             int sampleRate,
             float heightExpansion = 0.35f) {
-            if (stems == null || stems.Length == 0) {
+            StereoStemBuffer[] renderStems = FilterRenderableStems(stems);
+            if (renderStems.Length == 0) {
                 return Array.Empty<float[]>();
             }
-            int length = stems[0].Length;
+            int length = renderStems[0].Length;
             const int busCount = 11;
             float[][] buses = new float[busCount][];
             for (int b = 0; b < busCount; b++) {
@@ -373,8 +517,8 @@ namespace Cavern.Neural {
 
             const float invSqrt2 = 0.70710678f;
 
-            for (int s = 0; s < stems.Length; s++) {
-                StereoStemBuffer stem = stems[s];
+            for (int s = 0; s < renderStems.Length; s++) {
+                StereoStemBuffer stem = renderStems[s];
                 if (stem == null || stem.Length != length) {
                     continue;
                 }
@@ -673,12 +817,17 @@ namespace Cavern.Neural {
                 return PsychoacousticGovernor.SphericalToCartesianUnit(az, el) * rad;
             }
 
-            // Compute stereo half-spread proportional to measured inter-channel stereo width (0 for coherent point source)
+            // Compute stereo half-spread proportional to measured inter-channel stereo width,
+            // with role-calibrated spatial separation floors so BackingVocals L/R never collapse
+            // onto a single glued point while preserving the exact power-weighted pan centroid.
             float maxHalfSpread = Math.Min(MathF.Abs(refAz), 58f);
             if (maxHalfSpread < 12f) {
                 maxHalfSpread = 32f;
             }
-            float halfSpreadDeg = maxHalfSpread * SpatialCortexMath.Clamp01(pan.StereoWidth01);
+            float minHalfSpread = role == NeuralStemRole.BackingVocals
+                ? 28f
+                : (role == NeuralStemRole.Other || role == NeuralStemRole.Residual ? 16f : 0f);
+            float halfSpreadDeg = Math.Max(minHalfSpread, maxHalfSpread * SpatialCortexMath.Clamp01(pan.StereoWidth01));
             // Power-balance midpoint compensation: wL*(mid - s) + wR*(mid + s) == pan.PanAzimuthDeg identically
             float midAz = pan.PanAzimuthDeg - pan.PowerBalance * halfSpreadDeg;
             float targetAz = SpatialCortexMath.Clamp(midAz + sideSign * halfSpreadDeg, -110f, 110f);

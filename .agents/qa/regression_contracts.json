@@ -671,6 +671,110 @@
           "message": "TransauralXtcPostProcessingStage must enforce lock-free bit-exact headphone bypass fast path"
         }
       ]
+    },
+    {
+      "id": "REG-V4-001-STEM-DEDUP-AND-GAIN",
+      "bug_ref": "V4.1/W55.1",
+      "title": "Deduplicate overlapping vocals/instrumental stems and apply calibrated Atmos 3D per-role gain staging with symmetric BackingVocals L/R",
+      "domain": "dsp-format",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T50 + PY_T14",
+      "added_date": "2026-11-27",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "Cavern/Neural/NeuralStemSpatializer.cs",
+          "pattern": "public\\s+static\\s+StereoStemBuffer\\[\\]\\s+FilterRenderableStems\\s*\\(",
+          "message": "NeuralStemSpatializer.FilterRenderableStems must remain intact to prevent duplicate AI vocal/instrumental objects"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "Cavern/Neural/NeuralStemSpatializer.cs",
+          "pattern": "public\\s+static\\s+float\\s+GetRecommendedStemSourceGain\\s*\\(",
+          "message": "NeuralStemSpatializer.GetRecommendedStemSourceGain must remain intact for Atmos 3D vocal presence coherence"
+        }
+      ]
+    },
+    {
+      "id": "REG-V4-002-DISCRETE-STEM-KARAOKE",
+      "bug_ref": "V4.1/W55.1",
+      "title": "Bypass post-3D STFT karaoke when discrete live AI vocal stems are active so 2-stage MVSEP backing vocals stay 100% preserved",
+      "domain": "dsp-format",
+      "severity": "CRITICAL",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T50 + PY_T14",
+      "added_date": "2026-11-27",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Rendering/RealtimePlayerEngine.Streaming.cs",
+          "pattern": "directStemKaraokeActive",
+          "message": "RealtimePlayerEngine.Streaming.cs must bypass STFT SpatialKaraokeEngine when discrete live AI vocal sources are active"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/Reusable/Cavernize.Logic/Rendering/RealtimePlayerEngine.SpatialPipeline.cs",
+          "pattern": "hasDiscreteLiveVocalSource",
+          "message": "RealtimePlayerEngine.SpatialPipeline.cs must attenuate discrete LeadVocal/Vocals Source directly while preserving BackingVocals"
+        }
+      ]
+    },
+    {
+      "id": "REG-V4-003-2STEP-DELETE-AND-PERSISTENT-CACHE",
+      "bug_ref": "V4.1/W55.1",
+      "title": "Enforce 2-step confirmation on destructive delete/clear actions and store AI stem caches in persistent FilesDir/neural_tracks",
+      "domain": "ui-oneui9",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:PY_T14",
+      "added_date": "2026-11-27",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.UiHelpers.cs",
+          "pattern": "void\\s+ConfirmDestructiveAction\\s*\\(",
+          "message": "ConfirmDestructiveAction 2-step modal helper must remain in MainActivity.UiHelpers.cs"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/NeuralTrackCacheService.cs",
+          "pattern": "MigrateLegacyCacheDirIfNeeded\\s*\\(",
+          "message": "NeuralTrackCacheService must persist under FilesDir/neural_tracks and migrate legacy CacheDir files"
+        }
+      ]
+    },
+    {
+      "id": "REG-V4-004-QUANT-RAM-GATE-AND-TAB-OVERLAY",
+      "bug_ref": "V4.1/W55.1",
+      "title": "Evaluate ONNX RAM gate against post-quantization payload (keeping <=2600 MB cap) and reset TranslationX/Visibility on cancelled tab transitions",
+      "domain": "ai-ml",
+      "severity": "HIGH",
+      "status": "frozen",
+      "immutable": true,
+      "mode": "offline",
+      "test_ref": "run_w46_unit_tests.py:T50 + PY_T14",
+      "added_date": "2026-11-27",
+      "offline_checks": [
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/Services/NativeOnnxRuntimeBridge.cs",
+          "pattern": "EstimateQuantizedPayloadBytes\\s*\\(",
+          "message": "NativeOnnxRuntimeBridge must evaluate post-quantization payload size before rejecting models"
+        },
+        {
+          "kind": "file_contains_regex",
+          "path": "CavernSamples/CavernizeAndroid/MainActivity.Navigation.cs",
+          "pattern": "c\\.TranslationX\\s*=\\s*0f",
+          "message": "MainActivity.Navigation.cs must reset TranslationX and Visibility on AnimationCancel to prevent stuck semi-transparent overlays"
+        }
+      ]
     }
   ]
 }

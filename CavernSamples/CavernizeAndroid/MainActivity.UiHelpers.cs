@@ -117,6 +117,21 @@ public partial class MainActivity {
         return badge;
     }
 
+    void ConfirmDestructiveAction(string title, string message, Action onConfirmed, string confirmButtonText = null) {
+        if (uiDestroyed || onConfirmed == null) {
+            return;
+        }
+        OneUiModalDialog.Show(
+            this,
+            string.IsNullOrWhiteSpace(title) ? S["ConfirmDeleteTitle"] : title,
+            message,
+            icon: OneUiIconType.Info,
+            iconBadgeColor: OneUiTheme.FunctionalRed,
+            positiveText: string.IsNullOrWhiteSpace(confirmButtonText) ? S["ConfirmDeleteActionBtn"] : confirmButtonText,
+            onPositive: onConfirmed,
+            negativeText: S["CancelBtn"]);
+    }
+
     LinearLayout WrapControlWithHelp(View control, string helpTitle, string helpBody, int bottomMarginDp = 6) {
         LinearLayout row = HRow();
         row.AddView(control, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));

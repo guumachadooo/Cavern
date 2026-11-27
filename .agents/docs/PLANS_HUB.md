@@ -48,7 +48,7 @@
 
 ## 4. Live Machine-Synced Inventory
 <!-- HUB:AUTO_START -->
-HUB_STATS|blueprints=6 (done=1, partial=4, active=0, deferred=1, superseded=0)|archived_done=10|min_score=100/100|open_conflicts=0|monoliths_gt2000=8
+HUB_STATS|blueprints=7 (done=1, partial=5, active=0, deferred=1, superseded=0)|archived_done=10|min_score=100/100|open_conflicts=0|monoliths_gt2000=8
 
 | Blueprint ID | Status | Score | Tier | H2+ Stubs | Hygiene / Lineage Note |
 | :--- | :---: | :---: | :---: | :---: | :--- |
@@ -57,6 +57,7 @@ HUB_STATS|blueprints=6 (done=1, partial=4, active=0, deferred=1, superseded=0)|a
 | `BP_OMNISCIENT_SPATIAL_OBJECT_CORTEX` | `DEFERRED` | `100/100` | `T3` | `2` | resolved=Phase-A W1-W3 shipped in T6; Phase-B W4 local INT4 LLM deferred & MUST execute in isolated :worker p |
 | `BP_SCARLETT_PROAUDIO_STABILITY_AND_LIVE_QA` | `PARTIAL` | `100/100` | `T2` | `1` | W1 native/C# code DONE (v2.9.80); W2-LiveReverify physical Scarlett 2i2 Gen4 S25U test pending. |
 | `BP_V3_AI_SPATIAL_MODULAR_UX_ROADMAP` | `PARTIAL` | `100/100` | `T3` | `1` | ALL H1 slices (`W53.0`, `W53.Q1–Q4`, `W53.1`, `W53.1b`, `W53.2`, `W53.3`, `W53.4`, `W53.5`, `W53.6`) DONE & CI |
+| `BP_V4_REFORM_SPATIAL_AI_ONEUI9` | `PARTIAL` | `100/100` | `T3` | `1` | Initiated per V4 user audit across live Galaxy S25 Ultra (`v2.9.91`): resolves P0 stem duplication (`vocals`+` |
 | `BP_VOCAL_STABILITY_CACHE_UX_LOUDNESS` | `PARTIAL` | `100/100` | `T3` | `1` | W51.1-W51.7 code DONE (v2.9.81) + ONNX low-RAM fixes (v2.9.82); W52 live S25U verification pending. |
 
 ARCHIVED_DONE|count=10|ledger=`.agents/docs/archive/BLUEPRINTS_DONE_LEDGER.md`|tarball=`.agents/docs/archive/blueprints_done.tar.gz`|ids=`BP_AUDIO_AI_SEPARATION_ENSEMBLE_AND_MVSEP`, `BP_CORE_RUNTIME_STABILITY_AND_SCHEDULING`, `BP_DEVICE_LOG_REMEDIATION`, `BP_INSTANT_ZERO_WASTE_RESUME`, `BP_LIVE_QA_BUG_HUNTER_SOTA`, `BP_ONEUI9_UX_MOTION_DISCOVERY_AND_LYRICS`, `BP_PLAN_GOVERNANCE_AND_CENTRAL_HUB`, `BP_STUDIO_EXPORT_METADATA_AND_DYNAMIC_ATMOS`, `BP_STUDIO_SPATIAL_EXPORT_COMPRESSION`, `BP_UI_AI_ORGANIZATION_MOTION_AND_STABILITY`
@@ -67,11 +68,11 @@ ARCHIVED_DONE|count=10|ledger=`.agents/docs/archive/BLUEPRINTS_DONE_LEDGER.md`|t
 | `CavernSamples/Reusable/Cavernize.Logic/Rendering/StudioBatchExporter.cs` | `3578` | `2000` |
 | `CavernSamples/CavernizeAndroid/MainActivity.PlayerTab.cs` | `2383` | `2000` |
 | `CavernSamples/CavernizeAndroid/Audio/AndroidAudioOutput.cs` | `2161` | `2000` |
-| `Cavern/Spatial/SpatialObjectCortex.cs` | `2151` | `2000` |
-| `CavernSamples/CavernizeAndroid/Views/RoomSimulatorView.cs` | `2096` | `2000` |
+| `Cavern/Spatial/SpatialObjectCortex.cs` | `2152` | `2000` |
+| `CavernSamples/CavernizeAndroid/Views/RoomSimulatorView.cs` | `2094` | `2000` |
 | `CavernSamples/CavernizeAndroid/Services/MediaLibraryService.cs` | `2046` | `2000` |
+| `CavernSamples/CavernizeAndroid/MainActivity.NeuralWorkflows.cs` | `2027` | `2000` |
 | `CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs` | `2013` | `2000` |
-| `CavernSamples/CavernizeAndroid/MainActivity.NeuralWorkflows.cs` | `2010` | `2000` |
 <!-- HUB:AUTO_END -->
 
 ## 5. Completed Roadmaps & Archive Index

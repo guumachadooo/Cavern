@@ -28,17 +28,51 @@ public sealed class NeuralTrackCacheService : INeuralTrackCache {
     volatile bool isEnabled = true;
     volatile int compressionModeInt = (int)NeuralTrackCacheCompressionMode.Compact16Bit;
 
-    public NeuralTrackCacheService(Context context, long maxBytes = 512L * 1024L * 1024L) {
+    public NeuralTrackCacheService(Context context, long maxBytes = 1024L * 1024L * 1024L) {
         ArgumentNullException.ThrowIfNull(context);
-        cacheDir = IOPath.Combine(context.CacheDir.AbsolutePath, "neural_tracks");
+        cacheDir = ResolvePersistentCacheDir(context);
         Directory.CreateDirectory(cacheDir);
+        MigrateLegacyCacheDirIfNeeded(context, cacheDir);
         this.maxBytes = ClampBudget(maxBytes);
     }
 
     public static string GetCacheDir(Context context) {
-        string dir = IOPath.Combine(context.CacheDir.AbsolutePath, "neural_tracks");
+        string dir = ResolvePersistentCacheDir(context);
         Directory.CreateDirectory(dir);
         return dir;
+    }
+
+    static string ResolvePersistentCacheDir(Context context) {
+        // Store separated neural stems under FilesDir (permanent app storage immune to OS/Samsung Device Care CacheDir auto-purge)
+        string root = context.FilesDir?.AbsolutePath ?? context.CacheDir?.AbsolutePath ?? string.Empty;
+        return IOPath.Combine(root, "neural_tracks");
+    }
+
+    static void MigrateLegacyCacheDirIfNeeded(Context context, string targetDir) {
+        try {
+            string legacyRoot = context.CacheDir?.AbsolutePath;
+            if (string.IsNullOrWhiteSpace(legacyRoot)) {
+                return;
+            }
+            string legacyDir = IOPath.Combine(legacyRoot, "neural_tracks");
+            if (string.Equals(legacyDir, targetDir, StringComparison.Ordinal) || !Directory.Exists(legacyDir)) {
+                return;
+            }
+            foreach (string srcPath in Directory.GetFiles(legacyDir, "*" + FileExtension)) {
+                try {
+                    string dstPath = IOPath.Combine(targetDir, IOPath.GetFileName(srcPath));
+                    if (!IOFile.Exists(dstPath)) {
+                        IOFile.Move(srcPath, dstPath);
+                    } else {
+                        TryDeleteQuietly(srcPath);
+                    }
+                } catch {
+                    // Best-effort single file migration
+                }
+            }
+        } catch (Exception ex) {
+            AppLogger.Warn($"Slot 7B legacy neural cache migration warning: {ex.Message}");
+        }
     }
 
     /// <summary>Absolute directory path on device where cached <c>*.ntc</c> bundles live.</summary>
@@ -773,7 +807,7 @@ public sealed class NeuralTrackCacheService : INeuralTrackCache {
     }
 
     static long ClampBudget(long bytes) =>
-        Math.Clamp(bytes, 128L * 1024L * 1024L, 4096L * 1024L * 1024L);
+        Math.Clamp(bytes, 128L * 1024L * 1024L, 8192L * 1024L * 1024L);
 
     static void TryDeleteQuietly(string path) {
         try {

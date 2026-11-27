@@ -742,28 +742,34 @@ public partial class MainActivity {
                         }
                         Button delOneBtn = PillButton(S["AiCacheVariantDeleteBtn"], () => {
                             string keyToDelete = entry.CacheKey;
-                            _ = Task.Run(() => {
-                                neuralTrackCache?.DeleteEntry(keyToDelete);
-                                RunOnUiThread(() => {
-                                    if (uiDestroyed) {
-                                        return;
-                                    }
-                                    if (isActiveVariant) {
-                                        if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
-                                            playerEngine?.BindKaraokeReferenceTrack(null);
-                                        } else {
-                                            playerEngine?.BindSpatialUpmixTrack(null);
-                                        }
-                                    }
-                                    SyncNeuralRuntimeDiagnostics();
-                                    RefreshNeuralAudioUi();
-                                    RefreshNeuralPrepUi();
-                                    RefreshLyricsSingDockUi();
-                                    RefreshBottomActionBarVisuals();
-                                    Toast.MakeText(this, S["AiCacheVariantDeletedToast"], ToastLength.Short).Show();
-                                    dismissDialog?.Invoke();
+                            string variantLabel = !string.IsNullOrWhiteSpace(entry.ModelSummary) ? entry.ModelSummary : entry.OriginTag;
+                            ConfirmDestructiveAction(
+                                S["ConfirmDeleteTitle"],
+                                string.Format(S["ConfirmDeleteVariantMsgFmt"], variantLabel),
+                                () => {
+                                    _ = Task.Run(() => {
+                                        neuralTrackCache?.DeleteEntry(keyToDelete);
+                                        RunOnUiThread(() => {
+                                            if (uiDestroyed) {
+                                                return;
+                                            }
+                                            if (isActiveVariant) {
+                                                if (goal == Cavernize.Logic.Spatial.NeuralPipelineGoal.SpatialKaraoke) {
+                                                    playerEngine?.BindKaraokeReferenceTrack(null);
+                                                } else {
+                                                    playerEngine?.BindSpatialUpmixTrack(null);
+                                                }
+                                            }
+                                            SyncNeuralRuntimeDiagnostics();
+                                            RefreshNeuralAudioUi();
+                                            RefreshNeuralPrepUi();
+                                            RefreshLyricsSingDockUi();
+                                            RefreshBottomActionBarVisuals();
+                                            Toast.MakeText(this, S["AiCacheVariantDeletedToast"], ToastLength.Short).Show();
+                                            dismissDialog?.Invoke();
+                                        });
+                                    });
                                 });
-                            });
                         });
                         delOneBtn.TextSize = 11.0f;
                         delOneBtn.SetTextColor(OneUiTheme.FunctionalRed);
@@ -814,21 +820,26 @@ public partial class MainActivity {
                     ? string.Format(S["AiCacheRemoveAllVariantsBtn"], variants.Count)
                     : S["AiCacheRemoveBtn"];
                 Button removeBtn = PillButton(removeLabel, () => {
-                    string activePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
-                    string title = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
-                        ? currentMediaMeta.Title
-                        : Path.GetFileNameWithoutExtension(activePath);
-                    string artist = (currentMediaMeta?.Artist ?? "").Trim();
-                    neuralTrackCache?.DeleteEntriesForTrack(activePath, title, artist);
-                    playerEngine?.NeuralStage?.ClearAllSeparatedTracks();
-                    playerEngine?.BindSeparatedNeuralTrack(null);
-                    SyncNeuralRuntimeDiagnostics();
-                    RefreshNeuralAudioUi();
-                    RefreshNeuralPrepUi();
-                    RefreshLyricsSingDockUi();
-                    RefreshBottomActionBarVisuals();
-                    Toast.MakeText(this, S["AiCacheRemovedToast"], ToastLength.Short).Show();
-                    dismissDialog?.Invoke();
+                    ConfirmDestructiveAction(
+                        S["ConfirmDeleteTitle"],
+                        S["ConfirmRemoveAllVariantsMsg"],
+                        () => {
+                            string activePath = activeTrack.OriginalSourcePath ?? currentMediaMeta?.SourceMediaPath ?? LoadedFile?.Path ?? activeTrack.Path ?? "";
+                            string title = !string.IsNullOrWhiteSpace(currentMediaMeta?.Title)
+                                ? currentMediaMeta.Title
+                                : Path.GetFileNameWithoutExtension(activePath);
+                            string artist = (currentMediaMeta?.Artist ?? "").Trim();
+                            neuralTrackCache?.DeleteEntriesForTrack(activePath, title, artist);
+                            playerEngine?.NeuralStage?.ClearAllSeparatedTracks();
+                            playerEngine?.BindSeparatedNeuralTrack(null);
+                            SyncNeuralRuntimeDiagnostics();
+                            RefreshNeuralAudioUi();
+                            RefreshNeuralPrepUi();
+                            RefreshLyricsSingDockUi();
+                            RefreshBottomActionBarVisuals();
+                            Toast.MakeText(this, S["AiCacheRemovedToast"], ToastLength.Short).Show();
+                            dismissDialog?.Invoke();
+                        });
                 });
                 removeBtn.TextSize = 11.6f;
                 removeBtn.SetTextColor(OneUiTheme.FunctionalRed);
@@ -1278,6 +1289,12 @@ public partial class MainActivity {
     Cavernize.Logic.Spatial.MvsepAlgorithmPreset ResolveMvsepPresetForGoal(
         Cavernize.Logic.Spatial.NeuralPipelineGoal goal,
         Cavernize.Logic.Spatial.NeuralAudioConfig cfg) {
+        if (!string.IsNullOrWhiteSpace(store?.MvsepPresetId)) {
+            return Cavernize.Logic.Spatial.MvsepAlgorithmPreset.ResolveForGoal(
+                goal,
+                cfg?.KaraokePreserveBackingVocals ?? true,
+                store.MvsepPresetId);
+        }
         if (cfg != null && cfg.StudioBundlePreset == Cavernize.Logic.Spatial.NeuralEnsembleBundlePreset.StudioFullBand6Stem) {
             return Cavernize.Logic.Spatial.MvsepAlgorithmPreset.FindOrDefault("mvsep_bs_roformer_6stem");
         }

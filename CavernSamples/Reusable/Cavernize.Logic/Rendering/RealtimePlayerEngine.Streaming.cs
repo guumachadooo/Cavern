@@ -436,7 +436,10 @@ public sealed partial class RealtimePlayerEngine {
                 // Attach Slot 2C LGSR & Slot 2B Multichannel Spatial Karaoke PRE-HRTF on the virtual speaker bus
                 // in Headphone Virtualizer mode (preserving LFE, 0.000° spatial phase, and 3D HRIR cues).
                 bool lgsrActive = lgsrStage.IsActivelyRestoring && !lgsrBypassed;
-                bool karaokeActive = neuralStemStage.IsKaraokeActiveOrRamping;
+                bool directStemKaraokeActive = isRenderingLiveNeuralSources &&
+                    hasDiscreteLiveVocalSource &&
+                    neuralStemStage.Config.SpatialKaraokeEnabled;
+                bool karaokeActive = !directStemKaraokeActive && neuralStemStage.IsKaraokeActiveOrRamping;
                 if (HeadphoneVirtualizer && (lgsrActive || karaokeActive)) {
                     compositePreHrtfBus.First = lgsrActive ? lgsrStage : null;
                     compositePreHrtfBus.Second = karaokeActive ? neuralStemStage : null;

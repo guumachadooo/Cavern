@@ -77,3 +77,20 @@
   - `LyricsWordHighlightStyle` (`SmoothGlow = 0` default, `MinimalClean = 1`, `SoftWordPill = 2`) persisted via `LyricsHighlightStyleIndex`.
   - Default `SmoothGlow` draws **0** white word-box/pill rectangles and allocates **0 B/frame** inside `DrawSyllableSyncedLine`: uses `ComputeSmoothWordProgress` Hermite sweep, 3-band feathered luminance edge (`<=18dp` sweep), and subtle `<=1.4 dp` sinusoidal `ComputeActiveWordBellEnvelope` micro-lift; opt-in `SoftWordPill` modulates pill alpha smoothly via the bell envelope.
 
+## 10. Verified Samsung One UI 9 Quick Panel, Blur, Radii & `SecQSDetail` Popup (`SystemUI.apk`, Direct S25U Extract)
+- **Source:** Direct read-only extraction of `/system_ext/priv-app/SystemUI/SystemUI.apk` (`resources.arsc` 38.7 MB + `classes*.dex` symbol scan on live Galaxy S25 Ultra `SM-S938B`, SDK 37).
+- **Two-Tier Blur Architecture (`SemBlurInfo` + `Window.setBackgroundBlurRadius`):**
+  - **Overall Shade / Panel Backdrop:** `dimen/max_shade_window_blur_radius = 34.00dp`, `color/panel_background_blur_color = #40000000` (Dark) / `#4DFAFAFA` (Light), `dimen/global_actions_blur_radius = 34.00dp`, `dimen/bottomsheet_blur_radius = 30.00dp`, `dimen/notification_background_blur_radius = 25.00dp`, `dimen/volume_dialog_background_blur_radius = 31.00dp` (`surface = 23.00dp`).
+  - **Per-Module Glass Container:** `color/qs_tile_container_bg = #3D000000` (24% dark glass), `color/qs_tile_container_bg_border_color = #0DFFFFFF` (5% hairline), `color/qs_tile_layout_container_bg = #99000000`, `color/basic_token_effect_blur_surface_dark = #CC3A3A3D` / `_light = #CCFCFCFF`, `color/blend_blur_color = #1FFFFFFF`.
+  - **DEX Blur APIs:** `SemBlurInfo` (`BLUR_MODE_WINDOW`, `BLUR_MODE_CANVAS`, `SemBlurInfo$ColorCurve`, `semSetBlurInfo`), `QuickPanelBlur`, `SecPanelBlurBinding`, `SecQSBlurShadowView`, & AOSP `Window.setBackgroundBlurRadius` (`dimen/max_window_blur_radius = 23.00px`). Note: `SemBlurInfo` is hidden Samsung framework API; 3P apps map popups/dialogs via public API 31+ `Window.SetBackgroundBlurRadius` + `WindowManagerFlags.BlurBehind` while keeping `EnableFullScreenRenderEffectBlur=false` (H1 invariant).
+- **Exact Pill & Rounded-Square Radii:**
+  - Quick Panel module container (`rounded square`): `dimen/qs_corner_radius = 28.00dp`, `dimen/qs_media_background_corner_radius = 22.00dp`, `dimen/qs_media_album_radius = 14.00dp`, `dimen/overlay_qs_layout_brightness_rounded_corner = 24.00dp`.
+  - Circular/pill tiles & buttons: `dimen/common_tile_default_inactive_icon_corner_radius = 50.00dp`, `dimen/qs_detail_button_background_radius = 24.00dp`, `dimen/sesl_button_corner_radius = 18.00dp`, `dimen/sesl_button_small_corner_radius = 16.00dp`, `color/qs_tile_round_background_off = #40000000` / `#40FFFFFF`, `color/qs_tile_round_background_on = #FFD5D5D5` / `#FFFCFCFF`.
+- **Long-Press Detail Popup (`SecQSDetail` — e.g., Wi-Fi / QS tile long-press):**
+  - `color/sec_qs_detail_bg_color = #CC2E2E2E` (Dark 80% glass) / `#E6FCFCFC` (Light), `color/sec_qs_detailed_container_background = #4D000000`, `color/sesl_popup_menu_blur_background_dark = #1AFFFFFF`, `color/sesl_dialog_blur_background_color = #0D000000`, `color/qs_edit_popup_background_stroke_color = #26FFFFFF`.
+  - Radii: `dimen/sec_qs_detail_background_radius = 26.00dp` (`corner = 20.00dp`), `dimen/qs_pop_over_corner_radius = 32.00dp`, `dimen/qs_layout_detail_popup_menu_bg_radius = 26.00dp`, `dimen/sesl_menu_popup_corner_radius = 26.00dp`, `dimen/qs_multisim_popup_menu_bg_blur_radius = 16.00dp`.
+- **Modular Edit / Drag-Reorder (`QsEditMode` / `SecQsEdit`):**
+  - `dimen/qs_edit_available_area_corner_radius = 34.00dp`, `dimen/qs_edit_icon_radius = 26.00dp`, `dimen/bubble_bar_expanded_view_corner_radius_dragged = 28.00dp`, `color/qs_edit_ripple_edit_bg_color = #4DB8B8B8`.
+  - Disclosure (Rule 8): `resources.arsc` tokens & DEX class/method symbols (`QsEditMode`, `SecQSDetailController`, `QuickPanelBlur`) extracted directly; compiled Kotlin spring physics constants inside DEX bytecode require `jadx` decompilation (not installed in Termux PRoot).
+
+

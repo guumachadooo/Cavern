@@ -53,6 +53,8 @@ public sealed partial class RealtimePlayerEngine {
             isRenderingLiveNeuralSources = false;
             progressiveNeuralUpdater = null;
             liveNeuralSources = Array.Empty<Source>();
+            liveNeuralSourceRoles = Array.Empty<NeuralStemRole>();
+            hasDiscreteLiveVocalSource = false;
         }
 
         if (isRenderingLiveNeuralSources) {
@@ -138,6 +140,8 @@ public sealed partial class RealtimePlayerEngine {
             progressiveNeuralUpdater = null;
             isRenderingLiveNeuralSources = false;
             liveNeuralSources = Array.Empty<Source>();
+            liveNeuralSourceRoles = Array.Empty<NeuralStemRole>();
+            hasDiscreteLiveVocalSource = false;
             return;
         }
 
@@ -218,13 +222,17 @@ public sealed partial class RealtimePlayerEngine {
             // Stems3DObjects: place each separated neural stem directly as live 3D object Sources in Listener
             // plus a dedicated 120 Hz LR4 ScreenLFE (.1) crossover channel summing BOTH Bass and Drums sub-bass
             // (with automatic fallback to Instrumental/Other/Residual when neither Bass nor Drums is present).
+            // Deduplicate redundant combined stems (e.g. Stage-1 vocals alongside lead_vocal + backing_vocals)
+            // even on legacy cached .ntc bundles so vocal objects never double-play.
+            StereoStemBuffer[] renderStems = NeuralStemSpatializer.FilterRenderableStems(sep.Stems);
             SpatialSourceDescriptor[] stemDescs = neuralStemStage.BuildActiveStemDescriptors(envSize, 0);
             int descCursor = 0;
             const float invSqrt2 = 0.70710678f;
             int maxStemLen = 0;
             bool hasBassOrDrums = false;
-            for (int s = 0; s < sep.Stems.Count; s++) {
-                StereoStemBuffer st = sep.Stems[s];
+            int stereoAccompStemCount = 0;
+            for (int s = 0; s < renderStems.Length; s++) {
+                StereoStemBuffer st = renderStems[s];
                 if (st == null || st.Length <= 0) {
                     continue;
                 }
@@ -235,26 +243,36 @@ public sealed partial class RealtimePlayerEngine {
                 if (r == NeuralStemRole.Bass || r == NeuralStemRole.Drums) {
                     hasBassOrDrums = true;
                 }
+                if (r != NeuralStemRole.LeadVocal && r != NeuralStemRole.Vocals && r != NeuralStemRole.Bass) {
+                    stereoAccompStemCount++;
+                }
             }
             float[] dedicatedLfePcm = maxStemLen > 0 ? new float[maxStemLen] : null;
             bool hasPopulatedLfe = false;
             progressiveNeuralUpdater = isProgressive ? new ProgressiveNeuralStemUpdater(sep, dedicatedLfePcm) : null;
+            List<NeuralStemRole> builtRoles = [];
+            bool foundDiscreteVocal = false;
 
-            for (int s = 0; s < sep.Stems.Count; s++) {
-                StereoStemBuffer stem = sep.Stems[s];
+            for (int s = 0; s < renderStems.Length; s++) {
+                StereoStemBuffer stem = renderStems[s];
                 if (stem == null || stem.Length <= 0) {
                     continue;
                 }
                 NeuralStemRole role = NeuralStemSpatializer.ClassifyStemName(stem.Name);
                 SourceLayer layer = role == NeuralStemRole.Residual ? SourceLayer.RestoredResidual : SourceLayer.NeuralStem;
+                float recStemGain = NeuralStemSpatializer.GetRecommendedStemSourceGain(role, stereoAccompStemCount);
 
                 if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals || role == NeuralStemRole.Bass) {
+                    if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals) {
+                        foundDiscreteVocal = true;
+                    }
                     SpatialSourceDescriptor d = descCursor < stemDescs.Length
                         ? stemDescs[descCursor++]
                         : new SpatialSourceDescriptor {
                             Name = $"AI {stem.Name}",
                             Layer = layer,
                             IsDialogue = role != NeuralStemRole.Bass,
+                            Gain = recStemGain,
                             NormalizedPosition = new Vector3(0f, role == NeuralStemRole.Bass ? -0.15f : 0.08f, 1f)
                         };
 
@@ -287,7 +305,7 @@ public sealed partial class RealtimePlayerEngine {
                         Position = d.NormalizedPosition * envSize,
                         TimeSamples = (int)Math.Clamp(startSample, 0, Math.Max(0, mono.Length - 1)),
                         Loop = Loop,
-                        Volume = 1f
+                        Volume = recStemGain
                     };
                     TrackSourceItem item = new(
                         idx,
@@ -300,9 +318,11 @@ public sealed partial class RealtimePlayerEngine {
                         hasDynamicTrajectory: false,
                         stableKey: TrackSourceItem.CreateStableKey(trackId, idx, layer, null, d.Name));
                     d.Index = idx;
+                    d.Gain = recStemGain;
                     d.NormalizedPosition = item.NormalizedPosition;
                     d.WorldPositionMeters = item.NormalizedPosition * envSize;
                     builtSources.Add(src);
+                    builtRoles.Add(role);
                     builtItems.Add(item);
                     builtDescriptors.Add(d);
                 } else {
@@ -337,6 +357,7 @@ public sealed partial class RealtimePlayerEngine {
                             : new SpatialSourceDescriptor {
                                 Name = $"AI {stem.Name} {(side == 0 ? "L" : "R")}",
                                 Layer = layer,
+                                Gain = recStemGain,
                                 NormalizedPosition = new Vector3(side == 0 ? -0.75f : 0.75f, 0.2f, 0.4f)
                             };
                         float[] pcm = side == 0 ? leftSrc : rightSrc;
@@ -346,7 +367,7 @@ public sealed partial class RealtimePlayerEngine {
                             Position = d.NormalizedPosition * envSize,
                             TimeSamples = (int)Math.Clamp(startSample, 0, Math.Max(0, pcm.Length - 1)),
                             Loop = Loop,
-                            Volume = 1f
+                            Volume = recStemGain
                         };
                         TrackSourceItem item = new(
                             idx,
@@ -359,9 +380,11 @@ public sealed partial class RealtimePlayerEngine {
                             hasDynamicTrajectory: false,
                             stableKey: TrackSourceItem.CreateStableKey(trackId, idx, layer, null, d.Name));
                         d.Index = idx;
+                        d.Gain = recStemGain;
                         d.NormalizedPosition = item.NormalizedPosition;
                         d.WorldPositionMeters = item.NormalizedPosition * envSize;
                         builtSources.Add(src);
+                        builtRoles.Add(role);
                         builtItems.Add(item);
                         builtDescriptors.Add(d);
                     }
@@ -391,6 +414,7 @@ public sealed partial class RealtimePlayerEngine {
                     hasDynamicTrajectory: false,
                     stableKey: TrackSourceItem.CreateStableKey(trackId, lfeIdx, SourceLayer.NeuralStem, ReferenceChannel.ScreenLFE, lfeLabel));
                 builtSources.Add(lfeSrc);
+                builtRoles.Add(NeuralStemRole.Bass);
                 builtItems.Add(lfeItem);
                 builtDescriptors.Add(new SpatialSourceDescriptor {
                     Index = lfeIdx,
@@ -405,12 +429,17 @@ public sealed partial class RealtimePlayerEngine {
                     Importance = 0.9f
                 });
             }
+
+            liveNeuralSourceRoles = [.. builtRoles];
+            hasDiscreteLiveVocalSource = foundDiscreteVocal;
         }
 
         if (builtSources.Count == 0) {
             isRenderingLiveNeuralSources = false;
             progressiveNeuralUpdater = null;
             liveNeuralSources = Array.Empty<Source>();
+            liveNeuralSourceRoles = Array.Empty<NeuralStemRole>();
+            hasDiscreteLiveVocalSource = false;
             return;
         }
 
@@ -435,6 +464,10 @@ public sealed partial class RealtimePlayerEngine {
         }
 
         liveNeuralSources = [.. builtSources];
+        if (liveNeuralSourceRoles.Length != liveNeuralSources.Length) {
+            liveNeuralSourceRoles = Array.Empty<NeuralStemRole>();
+            hasDiscreteLiveVocalSource = false;
+        }
         isRenderingLiveNeuralSources = true;
         listener.SampleRate = stemSr;
         listener.LFESeparation = true;
@@ -934,6 +967,18 @@ public sealed partial class RealtimePlayerEngine {
             out float dialogGain,
             out float ambientGain);
 
+        // Direct discrete-stem Karaoke gain control (0 B GC, 0 STFT artifacts, 100% backing vocal preservation):
+        // When live separated AI stems are already being rendered, attenuate LeadVocal directly (and BackingVocals ONLY
+        // when PreserveBackingVocals is false) instead of running blind/STFT post-3D cancellation over the virtual speakers.
+        NeuralAudioConfig activeNeuralCfg = neuralStemStage.Config;
+        bool directStemKaraoke = isRenderingLiveNeuralSources &&
+            hasDiscreteLiveVocalSource &&
+            liveNeuralSourceRoles.Length == flatSources.Length &&
+            activeNeuralCfg.SpatialKaraokeEnabled &&
+            activeNeuralCfg.KaraokeVocalLevel < 0.9999f;
+        float directKaraokeVocalGain = Math.Clamp(activeNeuralCfg.KaraokeVocalLevel, 0f, 1f);
+        bool preserveBackingInDirect = activeNeuralCfg.KaraokePreserveBackingVocals;
+
         if (flatSources.Length == cachedBaseSourceVolumes.Length) {
             for (int idx = 0; idx < flatSources.Length; idx++) {
                 Source src = flatSources[idx];
@@ -941,16 +986,24 @@ public sealed partial class RealtimePlayerEngine {
                     continue;
                 }
                 float baseVol = cachedBaseSourceVolumes[idx];
-                if (!hasSpatialDialogue || !dialogRequested) {
-                    src.Volume = baseVol;
-                } else {
+                float vol = baseVol;
+                if (hasSpatialDialogue && dialogRequested) {
                     TrackSourceItem item = matchedSourceItemsScratch[idx];
                     bool isCenterBed = item != null && item.Channel == ReferenceChannel.FrontCenter;
                     bool isLfeSrc = (item != null && item.IsLFE) || src.LFE;
                     Vector3 normPos = src.Position * invEnv;
                     bool isDiag = SpatialDialogEnhancer.IsDialogueCandidate(isCenterBed, isLfeSrc, normPos);
-                    src.Volume = baseVol * (isDiag ? dialogGain : (isLfeSrc ? 1f : ambientGain));
+                    vol *= isDiag ? dialogGain : (isLfeSrc ? 1f : ambientGain);
                 }
+                if (directStemKaraoke && !src.LFE) {
+                    NeuralStemRole role = liveNeuralSourceRoles[idx];
+                    if (role == NeuralStemRole.LeadVocal || role == NeuralStemRole.Vocals) {
+                        vol *= directKaraokeVocalGain;
+                    } else if (role == NeuralStemRole.BackingVocals && !preserveBackingInDirect) {
+                        vol *= directKaraokeVocalGain;
+                    }
+                }
+                src.Volume = vol;
             }
         }
 

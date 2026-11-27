@@ -236,5 +236,17 @@ public sealed partial class AndroidStrings {
         d["TransauralStatusOff"] = "Inaktív — kapcsolja be sztereó hangszórókhoz";
         d["TransauralStatusHeadphoneBypass"] = "Bitpontos bypass aktív (Fejhallgató csatlakoztatva)";
         d["TransauralStatusActive"] = "Aktív hangszórón · ±{0:0.0}° · Δτ {1:0} µs · ~{2:0.0} dB XTC";
+
+        // V4.1: Kötelező 2 lépéses megerősítés minden törlési művelethez
+        d["ConfirmDeleteTitle"] = "Törlés megerősítése";
+        d["ConfirmDeleteActionBtn"] = "Végleges törlés";
+        d["ConfirmClearAllTracksMsg"] = "Ez véglegesen törli az ÖSSZES gyorsítótárazott MI-szétválasztott és átalakított számot. Biztos benne?";
+        d["ConfirmClearModelsAndCacheMsg"] = "Ez véglegesen törli az ÖSSZES letöltött MI-modellt (.onnx) ÉS az összes gyorsítótárazott számot. Biztos benne?";
+        d["ConfirmDeleteModelMsgFmt"] = "Véglegesen törli a(z) '{0}' MI-modellt a készülék tárhelyéről?";
+        d["ConfirmDeleteVariantMsgFmt"] = "Véglegesen törli a(z) '{0}' gyorsítótárazott MI-változatot?";
+        d["ConfirmRemoveAllVariantsMsg"] = "Véglegesen törli az aktuális szám összes gyorsítótárazott stem-változatát?";
+        d["ConfirmClearMvsepTokenMsg"] = "Eltávolítja a mentett MVSEP Cloud API tokent erről a készülékről?";
+        d["ConfirmClearQnnCacheMsg"] = "Törli a lefordított Qualcomm QNN és kvantált ONNX cache fájlokat? A következő futtatáskor újra létrejönnek.";
+        d["ConfirmRemoveQueueJobMsg"] = "Eltávolítja az utolsó feladatot a konvertálási sorból?";
     }
 }
