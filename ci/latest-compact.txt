@@ -1,2 +1,2 @@
-VER=v2.9.92|SHA=08b44bcb|COMPILE=SUCCESS|PUBLISH=SUCCESS|ERR=0|WARN=0
-URL=https://github.com/guumachadooo/Cavern/actions/runs/45982515997
+VER=v2.9.93|SHA=21c13405|COMPILE=SUCCESS|PUBLISH=SUCCESS|ERR=0|WARN=0
+URL=https://github.com/guumachadooo/Cavern/actions/runs/46029006012
