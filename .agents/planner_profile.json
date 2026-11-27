@@ -1,6 +1,6 @@
 {
   "schema_version": 5,
-  "plugin_version": "2.20.0",
+  "plugin_version": "2.21.0",
   "project_name": "Cavern / CavernizeAndroid",
   "planner_mode": "auto",
   "read_budget": {
@@ -78,8 +78,6 @@
   ],
   "extra_requests_file": ".agents/docs/EXTRA_REQUESTS.md",
   "archive_docs": [
-    ".agents/docs/archive/SPATIAL_ROADMAP.md",
-    ".agents/docs/archive/PHASE2_ROADMAP.md",
     ".agents/docs/archive/PROJECT_HISTORY_ARCHIVE.md",
     ".agents/docs/archive/EXTERNAL_AI_SYNC_ARCHIVE.md",
     ".agents/docs/archive/BLUEPRINTS_DONE_LEDGER.md"
