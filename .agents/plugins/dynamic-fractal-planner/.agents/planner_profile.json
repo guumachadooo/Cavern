@@ -1,6 +1,6 @@
 {
   "schema_version": 5,
-  "plugin_version": "2.23.0",
+  "plugin_version": "2.24.0",
   "docs_format_version": 1,
   "project_name": "dynamic-fractal-planner",
   "planner_mode": "auto",
@@ -29,6 +29,16 @@
     "warn_files": 850,
     "fail_files": 920,
     "hard_platform_cap": 999
+  },
+  "token_budget": {
+    "enabled": true,
+    "ratchet_enabled": true,
+    "session_start_max_chars": 1200,
+    "pre_invocation_max_chars": 1250,
+    "pre_invocation_t0_max_chars": 0,
+    "pre_invocation_repeat_max_chars": 300,
+    "session_dedup_enabled": true,
+    "max_closeout_pass_lines": 6
   },
   "blueprint": {
     "dir": ".agents/docs/blueprints",

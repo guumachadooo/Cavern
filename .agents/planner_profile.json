@@ -1,6 +1,6 @@
 {
   "schema_version": 5,
-  "plugin_version": "2.23.0",
+  "plugin_version": "2.24.0",
   "project_name": "Cavern / CavernizeAndroid",
   "planner_mode": "auto",
   "read_budget": {
@@ -41,6 +41,31 @@
     "warn_files": 850,
     "fail_files": 920,
     "hard_platform_cap": 999
+  },
+  "token_budget": {
+    "enabled": true,
+    "ratchet_enabled": true,
+    "session_start_max_chars": 1200,
+    "pre_invocation_max_chars": 1250,
+    "pre_invocation_t0_max_chars": 0,
+    "pre_invocation_repeat_max_chars": 300,
+    "session_dedup_enabled": true,
+    "max_closeout_pass_lines": 6,
+    "doc_caps": {
+      "AGENTS.md": 16000,
+      "CavernSamples/CavernizeAndroid/AGENTS.md": 6500,
+      ".agents/docs/HANDOFF.md": 1400,
+      ".agents/docs/PLANS_HUB.md": 16000,
+      ".agents/docs/COHERENCE_HUB.md": 4500,
+      ".agents/plugins/dynamic-fractal-planner/rules/AGENTS.md": 12000,
+      ".agents/plugins/dynamic-fractal-planner/skills/dynamic-planner/SKILL.md": 9500,
+      ".agents/plugins/dynamic-fractal-planner/skills/sota-blueprint/SKILL.md": 9500
+    },
+    "doc_baselines": {
+      "AGENTS.md": 19842,
+      ".agents/docs/PLANS_HUB.md": 19678,
+      ".agents/plugins/dynamic-fractal-planner/rules/AGENTS.md": 15275
+    }
   },
   "blueprint": {
     "dir": ".agents/docs/blueprints",
