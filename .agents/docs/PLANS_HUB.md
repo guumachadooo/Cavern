@@ -81,6 +81,7 @@ ARCHIVED_DONE|count=12|ledger=`.agents/docs/archive/BLUEPRINTS_DONE_LEDGER.md`|t
 | `CavernSamples/CavernizeAndroid/Services/MediaLibraryService.cs` | `2046` | `2000` |
 | `CavernSamples/CavernizeAndroid/MainActivity.NeuralWorkflows.cs` | `2027` | `2000` |
 | `CavernSamples/CavernizeAndroid/Theme/OneUiTheme.cs` | `2013` | `2000` |
+COHERENCE_HUB|.agents/docs/COHERENCE_HUB.md
 <!-- HUB:AUTO_END -->
 
 ## 5. Completed Roadmaps & Archive Index

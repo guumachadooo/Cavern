@@ -918,11 +918,12 @@ jobs:
               with open(summary_path, "a", encoding="utf-8") as sf:
                   sf.write("\n".join(sum_lines) + "\n")
           PYDIAG
-          if [ -f ".agents/scripts/error_learner.py" ] && [ -f "$GITHUB_WORKSPACE/build/diagnostics/build-diagnostics.json" ]; then
-            python3 -B .agents/scripts/error_learner.py \
+          if [ -f ".agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py" ] && [ -f "$GITHUB_WORKSPACE/build/diagnostics/build-diagnostics.json" ]; then
+            python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py learn \
               --from-ci-json "$GITHUB_WORKSPACE/build/diagnostics/build-diagnostics.json" \
               --dry-run \
               --report "$GITHUB_WORKSPACE/build/diagnostics/learned-lessons.md" || true
+            python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py coherence check --local || true
           fi
 
       - name: Upload build diagnostics artifact (errors + warnings)

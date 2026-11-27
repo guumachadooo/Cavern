@@ -1,6 +1,6 @@
 {
   "schema_version": 5,
-  "plugin_version": "2.21.1",
+  "plugin_version": "2.22.0",
   "project_name": "Cavern / CavernizeAndroid",
   "planner_mode": "auto",
   "read_budget": {
@@ -34,12 +34,14 @@
     "hub_file": ".agents/docs/PLANS_HUB.md",
     "require_by_default": true,
     "default_min_tier": 1,
-    "require_pre_resume_hygiene": true
+    "require_pre_resume_hygiene": true,
+    "enforce_hook": "force_ask"
   },
   "adversarial_qa": {
     "enabled": true,
     "contracts_file": ".agents/qa/regression_contracts.json",
     "strict_verify": true,
+    "enforce_stop_contracts": true,
     "require_cold_context_subagent": true,
     "destroyer_model_tier": "flash",
     "gate_command": "python3 -B .agents/agent/cavern_bug_hunter.py --vectors V6,V9,V11,V12 --gate",
@@ -131,6 +133,7 @@
     ],
     "extra_docs": [
       ".agents/docs/PLANS_HUB.md",
+      ".agents/docs/COHERENCE_HUB.md",
       ".agents/docs/BUILD_LESSONS.md",
       ".agents/docs/ONEUI9_REFERENCE.md",
       ".agents/docs/PHASE3_VOCAL_CORTEX_ROADMAP.md"
@@ -146,7 +149,7 @@
       "AGENTS.md",
       "CavernSamples/CavernizeAndroid/AGENTS.md"
     ],
-    "message": "Memory Feedback Reminder: multiple code files are modified in this commit without a recent update to `.agents/docs/PROJECT_HISTORY.md` or `.agents/docs/BUILD_LESSONS.md`. If this cycle fixed a non-obvious bug/build error, prepend a 1–4 line summary in `PROJECT_HISTORY.md` && run `python3 -B .agents/scripts/error_learner.py` to capture any new timeless build lesson (version-agnostic + dynamic lookup) before committing — or retry `git commit` if N/A."
+    "message": "Memory Feedback Reminder: multiple code files are modified in this commit without a recent update to `.agents/docs/PROJECT_HISTORY.md` or `.agents/docs/BUILD_LESSONS.md`. If this cycle fixed a non-obvious bug/build error, prepend a 1–4 line summary in `PROJECT_HISTORY.md` && run `python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py learn` to capture any new timeless build lesson (version-agnostic + dynamic lookup) before committing — or retry `git commit` if N/A."
   },
   "file_guards": [
     {
@@ -776,7 +779,7 @@
       ],
       "checklist": [
         "Read `.agents/docs/EXTRA_REQUESTS.md` FIRST; stop & implement if any pending items exist.",
-        "Review `.agents/docs/BUILD_LESSONS.md` pre-commit; after any new structural CI/build failure run `python3 -B .agents/scripts/error_learner.py --fetch-live-ci --apply` (version-agnostic + dynamic lookup only).",
+        "Review `.agents/docs/BUILD_LESSONS.md` pre-commit; after any new structural CI/build failure run `python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py learn --fetch-live-ci --apply` (version-agnostic + dynamic lookup only).",
         "Keep `ApplicationDisplayVersion` synchronized (`CavernizeAndroid.csproj` & `BuildAndroid.yml`) and preserve all `vX.Y.Z` GitHub releases.",
         "Prepend milestone to `.agents/docs/PROJECT_HISTORY.md` (and update `README.md` if user-facing).",
         "Monitor GitHub Actions to success and deliver signed APK to workspace & `/sdcard/Download/Cavernize-Android.apk`."

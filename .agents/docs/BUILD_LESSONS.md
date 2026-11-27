@@ -2,7 +2,7 @@
 
 > STYLE|lossless symbolic telegraphic EN ONLY (`!articles/copulas/filler`, ops `-> | && || ! w/ w/o`, verbatim diagnostic codes & symbols).
 > LAW|ANTI-OBSOLESCENCE (MANDATORY): NEVER hardcode ephemeral target versions (OS/API level, .NET/TFM, JDK, Actions `@vN`, NDK/lib versions, or calendar dates) as permanent rules. ALWAYS state timeless root cause + version-agnostic rule + dynamic live-lookup instruction (`official docs` / active `.csproj` / workflow / `fetch_live_diagnostics.py --ci`).
-> LEARNER|dynamic auto-learning CLI: `python3 -B .agents/scripts/error_learner.py --fetch-live-ci --apply` (CI JSON) | `--from-log <file> --apply` (local build/check log) | `--record ... --apply` (manual structural lesson) | `--audit-lessons` (enforce timelessness + zero duplicates).
+> LEARNER|dynamic auto-learning CLI: `python3 -B .agents/plugins/dynamic-fractal-planner/scripts/plan_tool.py learn --fetch-live-ci --apply` (CI JSON) | `--from-log <file> --apply` (local build/check log) | `--record ... --apply` (manual structural lesson) | `--audit-lessons` (enforce timelessness + zero duplicates).
 
 ---
 
@@ -148,9 +148,9 @@
 - `Codes`: `UNVERIFIED_PUSH, EXTRA_REQUESTS_PENDING`
 - `Keywords`: `check_android_cs.py, verify_universal.py, fetch_live_diagnostics.py, EXTRA_REQUESTS.md, error_learner.py`
 - `RootCause`: Pushing unverified edits when static/Roslyn checks exist—or fixing a CI failure without encoding its timeless root cause—causes the exact same error classes to recur across sessions and AI models.
-- `TimelessRule`: Clear `.agents/docs/EXTRA_REQUESTS.md` first; run all available local checks (`verify_universal.py`, `check_android_cs.py`, unit tests, syntax/brace/YAML/JSON checks) BEFORE committing/pushing; after ANY new structural CI or build failure is diagnosed, run `error_learner.py` to verify whether a new timeless lesson (or guardrail) should be added.
+- `TimelessRule`: Clear `.agents/docs/EXTRA_REQUESTS.md` first; run all available local checks (`verify_universal.py`, `check_android_cs.py`, unit tests, syntax/brace/YAML/JSON checks) BEFORE committing/pushing; after ANY new structural CI or build failure is diagnosed, run `plan_tool.py learn` to verify whether a new timeless lesson (or guardrail) should be added.
 - `DynamicLookup`: Fetch latest live CI diagnostics (`python3 -B .agents/scripts/fetch_live_diagnostics.py --ci`) && check `ci/latest-learned-lessons.md` before starting follow-up fixes.
-- `AutoGuard`: `planner_stop.py` + `planner_guard_command.py` + CI `error_learner.py` report
+- `AutoGuard`: `planner_stop.py` + `planner_guard_command.py` + CI `plan_tool.py learn` report
 
 ### `BL-017` | Statement-vs-Initializer Syntax & Local Roslyn CI-Parity Verification (`CS1002`, `CS1513`, `CS0019`, `CS1729`)
 - `Category`: `pre-push-ci-parity`

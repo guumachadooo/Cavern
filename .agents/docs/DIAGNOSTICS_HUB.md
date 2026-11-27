@@ -13,12 +13,12 @@
 - **OmniConnect v5/v6 Zero-Paste Auto-Connect (`bridge_auth.py` + `/v1/knock/*`):**
   - Priority: `CLI > Env Secrets (CAVERN_RELAY_URL / CAVERN_BRIDGE_PAIR_SECRET, .env.example) > Gitignored Local Vault (.agents/.bridge_vault.json, chmod 0600, excluded from OmniAgent sync) > Public Non-Secret Repo Profile (.agents/bridge_profile.json)`.
   - **Zero-Secret Ephemeral NIST P-256 ECDH Smart Knock (`/v1/knock/*`):** public `knockId = sha256("knock-channel-v5:" + sha256("wake-channel-v2:" + pairSecret))` contains zero secret material; client generates ephemeral P-256 keypair, displays 6-char SAS (`XXX-XXX`), phone polls/approves/denies using private `X-Device-Hash` (server derives `ownerKnockId` preventing spoofing), rate-limited `3/15m` + single-slot `409` lock + `15m` deny cooldown + native `BiometricPrompt`, & encrypts grant (`session` or biometric-verified `workspace`) E2E via P-256 ECDH + v4 Encrypt-then-MAC.
-  - **Vault Session Persistence:** `live_phone_bridge.py` + plugin `live_bridge_client.py` immediately persist approved wake session tokens to `.bridge_vault.json` via `on_session_acquired` BEFORE running `--cmd`, and only evict tokens on HTTP 404 (`EXIT_SESSION_EXPIRED = 4`, never on transient network timeout).
-  - Zero-flag CLI entrypoints: `python3 -B .agents/scripts/omni_agent.py connect [--status-only|--force-knock|--scope session|workspace]`, `python3 -B .agents/scripts/live_phone_bridge.py --auto --cmd ping`, `python3 -B .agents/scripts/fetch_live_diagnostics.py --cloudflare --all`.
+  - **Vault Session Persistence:** `omni_agent.py` + plugin `live_bridge_client.py` immediately persist approved wake session tokens to `.bridge_vault.json` via `on_session_acquired` BEFORE running commands, and only evict tokens on HTTP 404 (`EXIT_SESSION_EXPIRED = 4`, never on transient network timeout).
+  - Zero-flag CLI entrypoints: `python3 -B .agents/scripts/omni_agent.py connect [--status-only|--force-knock|--scope session|workspace]`, `python3 -B .agents/scripts/omni_agent.py cavernize-cmd ping`, `python3 -B .agents/scripts/fetch_live_diagnostics.py --cloudflare --all`.
 - **Runtime Device Logs, 12-Layer Self-Audit & Live Bridge v3+ (`hot_exec`) (Cloudflare Hub v6):**
   - Worker `.agents/docs/cloudflare_live_relay_worker.js` (v6, 100% backwards-compatible w/ Cavernize v3–v5).
   - Fetch telemetry: `python3 -B .agents/scripts/fetch_live_diagnostics.py --cloudflare --all`
-  - Connect Cavernize Live Bridge v3+: `python3 -B .agents/scripts/live_phone_bridge.py --auto --tier 2 --cmd <cmd> --args '{...}'` OR route locally via OmniAgent same-signature IPC (`omni_agent.py cavernize-cmd <cmd> --args '{...}'`).
+  - Connect Cavernize Live Bridge v3+: route locally via OmniAgent same-signature IPC (`python3 -B .agents/scripts/omni_agent.py cavernize-cmd <cmd> --args '{...}'`).
   - **Live C# RAM Hot-Execution (`hot_exec`, zero APK rebuild):** `LiveHotPatchHost.cs` verifies HMAC-SHA256 against Android Keystore pairing key & runs locally compiled IL `.dll` (`.agents/agent/hot_probe_compiler.py`) purely in RAM via collectible `AssemblyLoadContext.LoadFromStream` (100% W^X compliant; defaults to `include_android=False` + `--via auto` routing over online `android` IPC channel; access `CavernizeAndroid` via reflection on device):
     `python3 -B .agents/scripts/omni_agent.py hot-exec --name MyProbe --code '...'`
 - **OmniAgent v2.0.0 Full-Agent Ecosystem ("Antigravity 2", `/v1/agent/*`, `/v1/blob/*`, `/v1/swarm/*`, `/v1/knock/*`):**
@@ -39,6 +39,6 @@
 - **Commands (`flight_recorder.py` or `omni_agent.py checkpoint`):**
   - `init --session <id> --wave <W> --goal "..."`: captures workspace SHA-256 baseline & initializes seq #1 across all tiers.
   - `save --auto-diff --phase <p> --summary "..." --finding "..." --done "..." --pending "..." --next "..."`: merges incremental session diary, auto-diffs against baseline manifest, packs verified `omni-delta-v1` bundle, & writes to all 3 tiers.
-  - `recover [--json]`: probes all 3 tiers, picks freshest by `(timestampUnix, seq)`, detects exact rolled-back/missing files via SHA-256 (`ROLLBACK_DETECTED`), & prints compact recovery brief + exact `restore` command.
+  - `resume [--auto-restore] [--json]`: probes all 3 tiers in parallel, picks freshest by `(timestampUnix, seq)`, detects exact rolled-back/missing files via SHA-256 (`ROLLBACK_DETECTED`), & prints compact recovery brief + exact `restore` command.
   - `restore [--dry-run] [--source auto|local|cloud|termux] [--allow-delete]`: verifies SHA-256 & reapplies rolled-back workspace edits in 1 command.
   - `close [--commit <sha>] [--note "..."]`: cleanly closes completed session after commit/push.

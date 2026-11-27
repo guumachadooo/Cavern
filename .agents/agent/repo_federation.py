@@ -825,10 +825,11 @@ def push_federated_repo(
                 res["termuxSync"] = _try_sync_termux_repo(spec, branch, timeout_sec=termux_timeout_sec)
             return res
         except RuntimeError as exc:
-            if "HTTP 403" not in str(exc) and "Resource not accessible" not in str(exc):
+            msg_exc = str(exc)
+            if not any(k in msg_exc for k in ("HTTP 401", "HTTP 403", "Bad credentials", "Resource not accessible")):
                 raise
             print(
-                f"WARN: Local GITHUB_TOKEN lacks Contents:Write for {owner_repo} ({exc}). Falling back to OmniAgent phone git push...",
+                f"WARN: Local GITHUB_TOKEN rejected/lacks write for {owner_repo} ({exc}). Falling back to OmniAgent phone git push...",
                 file=sys.stderr,
                 flush=True,
             )

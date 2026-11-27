@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "strict_coverage": false,
+  "strict_coverage": true,
   "note": "Declarative multi-host tool & integration matrix (`antigravity-termux` <-> `ai-studio-cloud` <-> `ci-runner` <-> `local-ide`). Audited by `verify_universal.py` & `plan_tool.py host-audit`.",
   "hosts": {
     "antigravity-termux": {
@@ -128,7 +128,7 @@
       "per_host": {
         "ai-studio-cloud": {
           "mode": "active",
-          "how": "run recover at boot, save -b at milestones, close on ship"
+          "how": "run resume at boot, pin/save -b at milestones, close on ship"
         },
         "antigravity-termux": {
           "mode": "skip_preserve",
@@ -180,7 +180,6 @@
         ".agents/agent/local_capabilities.py",
         ".agents/agent/cavern_bug_hunter.py",
         ".agents/scripts/omni_agent.py",
-        ".agents/scripts/live_phone_bridge.py",
         ".agents/bridge_profile.json"
       ],
       "purpose": "Unified OmniAgent client, E2E crypto, zero-paste auth & live Android Cavernize IPC/bridge controller.",
@@ -323,7 +322,7 @@
         ".agents/scripts/error_learner.py",
         ".agents/scripts/fetch_live_diagnostics.py"
       ],
-      "purpose": "Core static verification, 7-layer CI-parity Roslyn check, W46/W47 audio truth suites, file budget & CI error learning.",
+      "purpose": "Core static verification, 7-layer CI-parity Roslyn check, W46/W47 audio truth suites, file budget & CI error learning (`error_learner.py` deprecated WARN -> `plan_tool.py learn`).",
       "per_host": {
         "ai-studio-cloud": {
           "mode": "active",
