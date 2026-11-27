@@ -321,7 +321,7 @@ public static class OnnxMobileQuantizer {
                 MinTensorSnrDb = minSnr,
                 MeanTensorSnrDb = meanSnr,
                 ElapsedMs = sw.Elapsed.TotalMilliseconds,
-                Message = $"W8A16 quantized {stats.QuantizedTensors} tensors ({stats.QuantizedElements:N0} weights, {minSnr:0.1} dB min SQNR, {(double)modelBytes.Length / w8a16Bytes.Length:0.2}x smaller)."
+                Message = $"W8A16 quantized {stats.QuantizedTensors} tensors ({stats.QuantizedElements:N0} weights, {minSnr:F1} dB min SQNR, {(double)modelBytes.Length / w8a16Bytes.Length:F2}x smaller)."
             };
         } catch (Exception ex) {
             w8a16Bytes = null;

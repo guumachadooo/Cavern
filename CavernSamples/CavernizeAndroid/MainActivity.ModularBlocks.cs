@@ -193,39 +193,16 @@ public partial class MainActivity {
             ? (roomModularLayout ??= ModularQuickPanelLayout.FromJsonOrDefault(store?.ModularRoomLayoutJson, defaults))
             : (playModularLayout ??= ModularQuickPanelLayout.FromJsonOrDefault(store?.ModularPlayLayoutJson, defaults));
 
-        AlertDialog dialog = null;
-
-        LinearLayout root = new(this) { Orientation = Orientation.Vertical };
-        root.SetPadding(Dp(18), Dp(18), Dp(18), Dp(14));
-        root.Background = OneUiTheme.CreateRoundedDrawable(
-            this,
-            OneUiTheme.SurfaceModal,
-            26f,
-            OneUiTheme.BorderSubtle,
-            1f);
-
-        // Header
-        LinearLayout header = HRow();
-        header.BaselineAligned = false;
-        header.SetGravity(GravityFlags.CenterVertical);
-        header.AddView(OneUiTheme.CreateVectorIconBadge(this, OneUiIconType.Sliders, OneUiTheme.IconSpatial, 32));
-        TextView titleTv = SectionTitle(isRoomTab ? S["ModLayoutRoomTitle"] : S["ModLayoutPlayTitle"]);
-        titleTv.SetPadding(Dp(10), 0, 0, 0);
-        header.AddView(titleTv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        root.AddView(header, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
-            BottomMargin = Dp(4)
-        });
+        LinearLayout content = new(this) { Orientation = Orientation.Vertical };
 
         TextView subTv = Label(S["ModLayoutSubtitle"], 12f, OneUiTheme.TextSub);
-        root.AddView(subTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+        content.AddView(subTv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
             BottomMargin = Dp(12)
         });
 
         LinearLayout listHost = new(this) { Orientation = Orientation.Vertical };
-        ScrollView scroll = new(this) { VerticalScrollBarEnabled = false };
-        scroll.AddView(listHost, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        root.AddView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f) {
-            BottomMargin = Dp(12)
+        content.AddView(listHost, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) {
+            BottomMargin = Dp(10)
         });
 
         void PersistAndApply() {
@@ -320,10 +297,6 @@ public partial class MainActivity {
 
         RebuildRows();
 
-        LinearLayout footer = HRow();
-        footer.BaselineAligned = false;
-        footer.SetGravity(GravityFlags.CenterVertical);
-
         Button resetBtn = PillButton(S["ModLayoutResetBtn"], () => {
             active.ResetFrom(defaults);
             PersistAndApply();
@@ -331,20 +304,15 @@ public partial class MainActivity {
             ShowToast(S["ModLayoutResetToast"]);
         });
         resetBtn.SetMinimumHeight(Dp(44));
+        content.AddView(resetBtn, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
 
-        Button doneBtn = PrimaryButton(S["BtnDone"], () => dialog?.Dismiss());
-        doneBtn.SetMinimumHeight(Dp(44));
-
-        footer.AddView(resetBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f) { RightMargin = Dp(8) });
-        footer.AddView(doneBtn, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        root.AddView(footer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-
-        dialog = new AlertDialog.Builder(this)
-            .SetView(root)
-            .SetCancelable(true)
-            .Create();
-        dialog.Window?.SetBackgroundDrawable(new Android.Graphics.Drawables.ColorDrawable(Color.Transparent));
-        dialog.Show();
+        OneUiModalDialog.Show(
+            this,
+            isRoomTab ? S["ModLayoutRoomTitle"] : S["ModLayoutPlayTitle"],
+            customContent: content,
+            icon: OneUiIconType.Sliders,
+            iconBadgeColor: OneUiTheme.IconSpatial,
+            positiveText: S["BtnDone"]);
     }
 
     Button MakeModularMoveBtn(string glyph, bool enabled, Action onClick) {

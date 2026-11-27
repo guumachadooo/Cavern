@@ -292,7 +292,7 @@ public static class OnnxQnnContextCacheManager {
 
             OnnxFp16ConversionResult fpRes = OnnxFp16ModelConverter.TryConvertFileToFp16(sourceModelPath, targetPath);
             if (fpRes.Success && File.Exists(targetPath)) {
-                AppLogger.Info($"Wave E FP16 cached '{Path.GetFileName(targetPath)}': {fpRes.InputBytes / (1024.0 * 1024.0):0.1} MB -> {fpRes.OutputBytes / (1024.0 * 1024.0):0.1} MB");
+                AppLogger.Info($"Wave E FP16 cached '{Path.GetFileName(targetPath)}': {fpRes.InputBytes / (1024.0 * 1024.0):F1} MB -> {fpRes.OutputBytes / (1024.0 * 1024.0):F1} MB");
                 lock (CacheLock) {
                     EvictDirectoryLruLocked(cacheDir, MaxQuantCacheBytes);
                 }
