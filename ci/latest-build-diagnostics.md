@@ -1,8 +1,8 @@
-# Cavernize Android CI Build Diagnostics (`v2.9.92`)
+# Cavernize Android CI Build Diagnostics (`v2.9.93`)
 
-- **Generated (UTC):** `2026-11-27T10:34:11Z`
-- **Commit:** `08b44bcbcd536ad9860c7e9eeb478bd6465d21a7`
-- **Build / Run:** `#92` (https://github.com/guumachadooo/Cavern/actions/runs/45982515997)
+- **Generated (UTC):** `2026-11-27T15:59:49Z`
+- **Commit:** `21c134051ec3fd7d4596e6bc006901b8c042ba54`
+- **Build / Run:** `#93` (https://github.com/guumachadooo/Cavern/actions/runs/46029006012)
 - **Outcome:** `compile=SUCCESS` · `publish=SUCCESS`
 - **Totals:** **0 unique error(s)** · **0 unique warning(s)**
 
